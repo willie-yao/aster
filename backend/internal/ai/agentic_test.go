@@ -86,6 +86,7 @@ type trackingBrowser struct {
 	treeResponses []treeResponse
 	listTreeCalls int
 	tailCalls     []string
+	tailSources   []EvidenceReadSource
 	tailMaxBytes  []int
 	tailErrors    map[string]error
 	emptyTails    map[string]bool
@@ -103,6 +104,7 @@ func (b *trackingBrowser) ListTree(ctx context.Context, maxPaths int) ([]string,
 
 func (b *trackingBrowser) Tail(ctx context.Context, p string, lines, maxBytes int) (*artifacts.TailResult, error) {
 	b.tailCalls = append(b.tailCalls, p)
+	b.tailSources = append(b.tailSources, EvidenceReadSourceFromContext(ctx))
 	b.tailMaxBytes = append(b.tailMaxBytes, maxBytes)
 	if err := b.tailErrors[p]; err != nil {
 		return nil, err
@@ -3463,6 +3465,11 @@ required_evidence:
 	wantCalls := []string{"first/alpha.log", "second/beta.log"}
 	if strings.Join(browser.tailCalls, "\n") != strings.Join(wantCalls, "\n") {
 		t.Fatalf("tail calls = %v, want %v", browser.tailCalls, wantCalls)
+	}
+	for _, source := range browser.tailSources {
+		if source != EvidenceReadSourceRepairInjection {
+			t.Fatalf("tail source = %q, want %q", source, EvidenceReadSourceRepairInjection)
+		}
 	}
 	if strings.Index(injection, "FIRST_MARKER") > strings.Index(injection, "SECOND_MARKER") {
 		t.Fatalf("group order was not preserved: %s", injection)

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 )
 
@@ -20,21 +21,23 @@ type benchmarkEvidenceGroup struct {
 }
 
 type benchmarkEvidenceCoverage struct {
-	hit    []string
-	missed []string
+	hit     []string
+	missed  []string
+	sources map[string][]string
 }
 
 type benchmarkEvidenceRecorder struct {
-	groups []benchmarkEvidenceGroup
-	mu     sync.Mutex
-	hit    map[string]bool
+	groups  []benchmarkEvidenceGroup
+	mu      sync.Mutex
+	hit     map[string]bool
+	sources map[string]map[string]bool
 }
 
 func newBenchmarkEvidenceRecorder(groups []benchmarkEvidenceGroup) *benchmarkEvidenceRecorder {
-	return &benchmarkEvidenceRecorder{groups: groups, hit: map[string]bool{}}
+	return &benchmarkEvidenceRecorder{groups: groups, hit: map[string]bool{}, sources: map[string]map[string]bool{}}
 }
 
-func (r *benchmarkEvidenceRecorder) observe(path string, content []byte) {
+func (r *benchmarkEvidenceRecorder) observe(ctx context.Context, path string, content []byte) {
 	if r == nil || len(r.groups) == 0 {
 		return
 	}
@@ -45,8 +48,16 @@ func (r *benchmarkEvidenceRecorder) observe(path string, content []byte) {
 		if len(group.contentREs) > 0 && !matchesBenchmarkEvidence(group.contentREs, content) {
 			continue
 		}
+		source := string(ai.EvidenceReadSourceFromContext(ctx))
+		if source == "" {
+			source = "unknown"
+		}
 		r.mu.Lock()
 		r.hit[group.id] = true
+		if r.sources[group.id] == nil {
+			r.sources[group.id] = map[string]bool{}
+		}
+		r.sources[group.id][source] = true
 		r.mu.Unlock()
 	}
 }
@@ -66,10 +77,14 @@ func (r *benchmarkEvidenceRecorder) coverage() benchmarkEvidenceCoverage {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := benchmarkEvidenceCoverage{}
+	out := benchmarkEvidenceCoverage{sources: map[string][]string{}}
 	for _, group := range r.groups {
 		if r.hit[group.id] {
 			out.hit = append(out.hit, group.id)
+			for source := range r.sources[group.id] {
+				out.sources[group.id] = append(out.sources[group.id], source)
+			}
+			sort.Strings(out.sources[group.id])
 		} else {
 			out.missed = append(out.missed, group.id)
 		}
@@ -96,7 +111,7 @@ type benchmarkEvidenceBrowser struct {
 func (b *benchmarkEvidenceBrowser) Read(ctx context.Context, file string, offset, length int) ([]byte, int64, error) {
 	content, size, err := b.Browser.Read(ctx, file, offset, length)
 	if err == nil {
-		b.recorder.observe(file, content)
+		b.recorder.observe(ctx, file, content)
 	}
 	return content, size, err
 }
@@ -104,7 +119,7 @@ func (b *benchmarkEvidenceBrowser) Read(ctx context.Context, file string, offset
 func (b *benchmarkEvidenceBrowser) Tail(ctx context.Context, file string, lines, maxBytes int) (*artifacts.TailResult, error) {
 	result, err := b.Browser.Tail(ctx, file, lines, maxBytes)
 	if err == nil && result != nil {
-		b.recorder.observe(file, result.Content)
+		b.recorder.observe(ctx, file, result.Content)
 	}
 	return result, err
 }
@@ -119,7 +134,7 @@ func (b *benchmarkEvidenceBrowser) Grep(ctx context.Context, file string, re *re
 				content.WriteByte('\n')
 			}
 		}
-		b.recorder.observe(file, []byte(content.String()))
+		b.recorder.observe(ctx, file, []byte(content.String()))
 	}
 	return result, err
 }
@@ -180,6 +195,11 @@ func TestBenchmarkEvidenceBrowserPreservesResults(t *testing.T) {
 	if !slices.Equal(coverage.hit, []string{"grep", "read", "tail"}) || len(coverage.missed) != 0 {
 		t.Fatalf("coverage = %+v", coverage)
 	}
+	for _, id := range coverage.hit {
+		if !slices.Equal(coverage.sources[id], []string{"unknown"}) {
+			t.Fatalf("sources[%s] = %v", id, coverage.sources[id])
+		}
+	}
 }
 
 func TestBenchmarkEvidenceBrowserRecordsOnlySuccessfulMatchingReads(t *testing.T) {
@@ -230,10 +250,21 @@ func TestCrossProjectEvidenceGroupsMatchKnownExamples(t *testing.T) {
 	for _, bc := range cases {
 		recorder := newBenchmarkEvidenceRecorder(bc.evidenceGroups)
 		for _, example := range examples[bc.name] {
-			recorder.observe(example.path, []byte(example.content))
+			recorder.observe(t.Context(), example.path, []byte(example.content))
 		}
 		if coverage := recorder.coverage(); len(coverage.missed) != 0 || len(coverage.hit) != len(bc.evidenceGroups) {
 			t.Errorf("case %s coverage = %+v", bc.name, coverage)
 		}
 	}
+}
+
+func cloneBenchmarkEvidenceSources(in map[string][]string) map[string][]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(in))
+	for id, sources := range in {
+		out[id] = append([]string(nil), sources...)
+	}
+	return out
 }

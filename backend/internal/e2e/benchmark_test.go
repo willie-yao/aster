@@ -748,7 +748,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	critiquePolicy := ai.CritiqueCachePolicy(agentic.Critique.EffectiveCachePolicy())
 	evidenceCoverage := evidenceRecorder.coverage()
 	if len(bc.evidenceGroups) > 0 {
-		t.Logf("evidence_groups hit=%v missed=%v", evidenceCoverage.hit, evidenceCoverage.missed)
+		t.Logf("evidence_groups hit=%v missed=%v sources=%v", evidenceCoverage.hit, evidenceCoverage.missed, evidenceCoverage.sources)
 	}
 	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, outcome, elapsed, snapshot, draftObservations, selectedAttempt, toolUsage, traceSummary, requestCap.PerOperation, cacheGeneration, critiquePolicy, cacheVerification, identity, evidenceCoverage)
 	if traceSummary.truncated {
@@ -1459,18 +1459,35 @@ type benchmarkSignalResult struct {
 }
 
 type benchmarkAssessment struct {
-	hits        int
-	total       int
-	missingMust []string
-	results     []benchmarkSignalResult
+	hits             int
+	total            int
+	diagnosisHits    int
+	diagnosisTotal   int
+	transientCorrect *bool
+	forbiddenPassed  int
+	forbiddenTotal   int
+	missingMust      []string
+	results          []benchmarkSignalResult
 }
 
 func assessBenchmarkCase(bc benchCase, tc *models.TestCase) benchmarkAssessment {
-	assessment := benchmarkAssessment{total: len(bc.signals) + len(bc.forbidden)}
+	assessment := benchmarkAssessment{total: len(bc.signals) + len(bc.forbidden), forbiddenTotal: len(bc.forbidden)}
+	for _, signal := range bc.signals {
+		if signal.must {
+			assessment.diagnosisTotal++
+		}
+	}
 	if bc.expectedTransient != nil {
 		assessment.total++
 	}
-	if tc == nil || tc.AISummary == nil || tc.AIAnalysis == nil {
+	if tc == nil || tc.AISummary == nil {
+		return assessment
+	}
+	if bc.expectedTransient != nil {
+		correct := tc.AISummary.IsTransient == *bc.expectedTransient
+		assessment.transientCorrect = &correct
+	}
+	if tc.AIAnalysis == nil {
 		return assessment
 	}
 	scored := strings.ToLower(strings.Join([]string{tc.AISummary.Summary, tc.AIAnalysis.RootCause, tc.AIAnalysis.SuggestedFix}, "\n"))
@@ -1479,12 +1496,15 @@ func assessBenchmarkCase(bc benchCase, tc *models.TestCase) benchmarkAssessment 
 		assessment.results = append(assessment.results, benchmarkSignalResult{name: signal.name, hit: hit, required: signal.must})
 		if hit {
 			assessment.hits++
+			if signal.must {
+				assessment.diagnosisHits++
+			}
 		} else if signal.must {
 			assessment.missingMust = append(assessment.missingMust, signal.name)
 		}
 	}
 	if bc.expectedTransient != nil {
-		hit := tc.AISummary.IsTransient == *bc.expectedTransient
+		hit := assessment.transientCorrect != nil && *assessment.transientCorrect
 		assessment.results = append(assessment.results, benchmarkSignalResult{name: "transient classification", hit: hit, required: true})
 		if hit {
 			assessment.hits++
@@ -1498,6 +1518,7 @@ func assessBenchmarkCase(bc benchCase, tc *models.TestCase) benchmarkAssessment 
 		assessment.results = append(assessment.results, benchmarkSignalResult{name: name, hit: hit, required: true})
 		if hit {
 			assessment.hits++
+			assessment.forbiddenPassed++
 		} else {
 			assessment.missingMust = append(assessment.missingMust, name)
 		}
@@ -1880,5 +1901,26 @@ func TestBenchmarkMinGCSBytesMatchesBuildPolicy(t *testing.T) {
 	}
 	if got := benchmarkMinGCSBytes(benchCase{}, 5_000_000); got != 5_000_000 {
 		t.Fatalf("JUnit floor = %d, want 5000000", got)
+	}
+}
+
+func TestAssessBenchmarkCaseSeparatesDiagnosisAndPolicyChecks(t *testing.T) {
+	expectedTransient := false
+	bc := benchCase{
+		signals: []benchSignal{
+			{name: "cause-a", re: regexp.MustCompile(`cause a`), must: true},
+			{name: "cause-b", re: regexp.MustCompile(`cause b`), must: true},
+			{name: "detail", re: regexp.MustCompile(`detail`)},
+		},
+		expectedTransient: &expectedTransient,
+		forbidden:         []benchSignal{{name: "wrong owner", re: regexp.MustCompile(`wrong owner`)}},
+	}
+	tc := &models.TestCase{
+		AISummary:  &models.AISummary{Summary: "cause a detail", IsTransient: false},
+		AIAnalysis: &models.AIAnalysis{RootCause: "cause a detail"},
+	}
+	got := assessBenchmarkCase(bc, tc)
+	if got.hits != 4 || got.total != 5 || got.diagnosisHits != 1 || got.diagnosisTotal != 2 || got.transientCorrect == nil || !*got.transientCorrect || got.forbiddenPassed != 1 || got.forbiddenTotal != 1 || !slices.Equal(got.missingMust, []string{"cause-b"}) {
+		t.Fatalf("assessment = %+v", got)
 	}
 }

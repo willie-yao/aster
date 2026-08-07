@@ -2182,6 +2182,7 @@ func prependPrompt(prompt, section string) string {
 // one bounded fallback tree walk. Content-aware groups try ranked candidates in
 // order until one artifact provides positive proof or the shared cap is reached.
 func (c *Client) buildEvidenceInjection(ctx context.Context, state *agentState, out critiqueOutcome) string {
+	ctx = withEvidenceReadSource(ctx, EvidenceReadSourceRepairInjection)
 	if state == nil || state.browser == nil {
 		return ""
 	}
@@ -2581,7 +2582,8 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 		RemainingModelBytes: s.modelRemaining(),
 		RemainingGCSBytes:   s.gcsRemaining(),
 	}
-	result := s.registry.Dispatch(ctx, env, tc.Function.Name, json.RawMessage(tc.Function.Arguments))
+	toolCtx := withEvidenceReadSource(ctx, EvidenceReadSourceModelTool)
+	result := s.registry.Dispatch(toolCtx, env, tc.Function.Name, json.RawMessage(tc.Function.Arguments))
 	if !isRepoTool(tc.Function.Name) {
 		s.gcsBytes += result.BytesFetched
 	}
