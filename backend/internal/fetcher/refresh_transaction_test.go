@@ -22,6 +22,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
@@ -421,6 +422,71 @@ func TestSuccessfulOrkaResultPublishesRefresh(t *testing.T) {
 	patternProgress := p.progress.Snapshot().Patterns
 	if patternProgress.Attempts != 2 || patternProgress.Retries != 1 || patternProgress.Completed != 1 || patternProgress.Failed != 0 {
 		t.Fatalf("pattern progress = %+v", patternProgress)
+	}
+}
+
+func TestMissingIssueTokenDoesNotFailPublishedRefresh(t *testing.T) {
+	dataDir, bucketDir := installRefreshLifecycleFixture(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"version":1}`})
+	}))
+	defer server.Close()
+
+	state, err := analysisruntime.NewContainerStateStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analyzer := &resultLifecycleAnalyzer{
+		client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir,
+		result: ai.FailureAnalysisResult{
+			Summary: &models.AISummary{GeneratedAt: "2026-08-07T00:00:00Z", Summary: "analyzed"},
+			Analysis: &models.AIAnalysis{
+				GeneratedAt: "2026-08-07T00:00:00Z", RootCause: "configuration drift", Severity: "High",
+				SuggestedFix: "update the configuration", Mode: "agentic", EvidencePlanCovered: true,
+			},
+		},
+	}
+	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
+	p.cfg.Issues = &project.Issues{Enabled: true}
+	p.cfg.Branding.SourceRepo = project.SourceRepo{Owner: "example", Name: "repo"}
+	configureRefreshLifecycleRuntime(t, p, dataDir)
+	p.progress = fetchprogress.New(dataDir, "sha-test")
+	p.progress.StartPass(fetchprogress.PassOneShot)
+	t.Setenv("ISSUE_TOKEN", "")
+	sender := &countingNotifySender{}
+	oldEmailSender := newEmailSender
+	newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return sender, nil }
+	oldIssueFactory := newBatchIssueManager
+	newBatchIssueManager = func(*issues.Client, string, string, issues.Options) scheduledIssueManager {
+		t.Fatal("automatic issue reconciliation started without ISSUE_TOKEN")
+		return nil
+	}
+	oldPatternAnalysis := analyzePatternsAcrossBuilds
+	analyzePatternsAcrossBuilds = func(_ context.Context, _ *ai.Service, _ []models.JobDetail, options patterns.AnalyzeOptions) error {
+		options.OnPlan(1)
+		options.OnAttempt(patterns.Attempt{Number: 1, Succeeded: true, Final: true})
+		return nil
+	}
+	t.Cleanup(func() {
+		newEmailSender = oldEmailSender
+		newBatchIssueManager = oldIssueFactory
+		analyzePatternsAcrossBuilds = oldPatternAnalysis
+	})
+
+	_, err = p.fullPass(t.Context())
+	finishProgressPass(p.progress, err, false)
+	if err != nil {
+		t.Fatalf("fullPass error = %v", err)
+	}
+	status := p.progress.Snapshot()
+	if status.Outcome != fetchprogress.OutcomeSucceeded || status.PublicationPhase != fetchprogress.StageCompleted ||
+		status.SideEffectPhase != fetchprogress.StageCompleted || status.LastSuccessfulPublicationAt == nil {
+		t.Fatalf("published refresh status = %+v", status)
+	}
+	if status.FollowUp == nil || status.FollowUp.AutomaticIssues == nil ||
+		status.FollowUp.AutomaticIssues.State != fetchprogress.FollowUpSkipped ||
+		status.FollowUp.AutomaticIssues.Reason != fetchprogress.FollowUpReasonNotConfigured {
+		t.Fatalf("automatic issues follow-up = %+v", status.FollowUp)
 	}
 }
 

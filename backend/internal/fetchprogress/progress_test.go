@@ -924,3 +924,79 @@ func TestTrackerPersistsAnalysisMetadataAcrossPasses(t *testing.T) {
 		t.Fatalf("metadata did not survive pass reset: %+v", second.SkillBundle)
 	}
 }
+
+func TestFollowUpProgressRoundTripAndValidation(t *testing.T) {
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	status := testStatus(now)
+	status.FollowUp = &FollowUpProgress{
+		Notifications: &FollowUpComponentStatus{State: FollowUpCompleted},
+		Remediation:   &FollowUpComponentStatus{State: FollowUpCompleted},
+		AutomaticIssues: &FollowUpComponentStatus{
+			State: FollowUpSkipped, Reason: FollowUpReasonNotConfigured,
+		},
+		AutomaticFixPRs: &FollowUpComponentStatus{State: FollowUpDisabled},
+	}
+	path := Path(t.TempDir())
+	if err := Write(path, status); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.FollowUp, status.FollowUp) {
+		t.Fatalf("follow-up round trip = %+v, want %+v", got.FollowUp, status.FollowUp)
+	}
+
+	status.FollowUp.AutomaticIssues = &FollowUpComponentStatus{
+		State: FollowUpFailed, Code: FollowUpFailureAutomaticIssues,
+		Summary: "private provider response",
+	}
+	if err := Write(path, status); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(path); err == nil || !strings.Contains(err.Error(), "unknown state") {
+		t.Fatalf("Read error = %v, want sanitized follow-up validation failure", err)
+	}
+}
+
+func TestTrackerRecordsAndCancelsFollowUpComponents(t *testing.T) {
+	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
+		write:        func(string, Status) error { return nil },
+		writeHistory: func(string, History) error { return nil },
+		logf:         func(string, ...any) {},
+	})
+	tracker.StartPass(PassOneShot)
+	tracker.StartPhase(PhaseSideEffects)
+	tracker.SetFollowUp(FollowUpNotifications, FollowUpFailed, FollowUpReasonNone, FollowUpFailureNotificationDelivery)
+	tracker.SetFollowUp(FollowUpAutomaticIssues, FollowUpSkipped, FollowUpReasonNotConfigured, FollowUpFailureNone)
+	tracker.SetFollowUp(FollowUpAutomaticFixPRs, FollowUpRunning, FollowUpReasonNone, FollowUpFailureNone)
+
+	before := tracker.Snapshot()
+	if before.FollowUp == nil || before.FollowUp.Notifications == nil ||
+		before.FollowUp.Notifications.Summary != "Email notification delivery failed" ||
+		before.FollowUp.AutomaticIssues.Reason != FollowUpReasonNotConfigured {
+		t.Fatalf("follow-up progress = %+v", before.FollowUp)
+	}
+	tracker.FinishCancelled()
+	after := tracker.Snapshot()
+	if after.FollowUp.AutomaticFixPRs.State != FollowUpCancelled {
+		t.Fatalf("cancelled follow-up progress = %+v", after.FollowUp)
+	}
+}
+
+func TestReadAcceptsPreviousFollowUpFreeStatusSchema(t *testing.T) {
+	status := testStatus(time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC))
+	status.SchemaVersion = 11
+	path := filepath.Join(t.TempDir(), "status.json")
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(path); err != nil {
+		t.Fatalf("reading previous follow-up-free schema: %v", err)
+	}
+}

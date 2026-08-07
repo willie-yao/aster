@@ -47,6 +47,15 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 	now := time.Now().UTC()
 	status := serverFetchStatus(now)
 	status.CurrentTasks = []fetchprogress.TaskMapping{{WorkItem: "safe-work", TaskName: "private-task-name", Phase: "Running"}}
+	status.FollowUp = &fetchprogress.FollowUpProgress{
+		Notifications: &fetchprogress.FollowUpComponentStatus{
+			State: fetchprogress.FollowUpFailed, Code: fetchprogress.FollowUpFailureNotificationDelivery,
+			Summary: fetchprogress.FollowUpFailureSummary(fetchprogress.FollowUpFailureNotificationDelivery),
+		},
+		AutomaticIssues: &fetchprogress.FollowUpComponentStatus{
+			State: fetchprogress.FollowUpSkipped, Reason: fetchprogress.FollowUpReasonNotConfigured,
+		},
+	}
 	if err := fetchprogress.Write(fetchprogress.Path(dataDir), status); err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +106,12 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 	}
 	if len(got.Status.CurrentTasks) != 0 || got.HistorySchemaVersion != fetchprogress.HistorySchemaVersion || len(got.History) != 1 || got.History[0].DurationMS != int64(time.Minute/time.Millisecond) || got.History[0].ExactResultsReused != 1 || got.History[0].PotentialTasksSaved != 1 || got.History[0].LargestSameFailureGroup != 2 || got.History[0].SameFailureReused != 1 || got.History[0].NewTasksCreated != 1 || got.History[0].FreshAnalysesCompleted != 1 {
 		t.Fatalf("safe status/history response = %+v", got)
+	}
+	if got.Status.FollowUp == nil || got.Status.FollowUp.Notifications == nil ||
+		got.Status.FollowUp.Notifications.Code != fetchprogress.FollowUpFailureNotificationDelivery ||
+		got.Status.FollowUp.Notifications.Summary != "Email notification delivery failed" ||
+		got.Status.FollowUp.AutomaticIssues == nil || got.Status.FollowUp.AutomaticIssues.Reason != fetchprogress.FollowUpReasonNotConfigured {
+		t.Fatalf("safe follow-up response = %+v", got.Status.FollowUp)
 	}
 	body, _ := json.Marshal(got)
 	for _, sensitive := range []string{"/private/", "token-value", "provider-body", "test-name", "job-name", "build-id", "private-task-name", "previous-pass"} {

@@ -23,7 +23,7 @@ import (
 
 const (
 	// SchemaVersion is the current private fetch status schema.
-	SchemaVersion = 11
+	SchemaVersion = 12
 	// StatusDirectory is hidden from the public /data file server.
 	StatusDirectory = ".fetch-status"
 	// StatusFilename is the current fetch status snapshot.
@@ -103,6 +103,68 @@ const (
 	StageFailed    StageState = "failed"
 	StageCancelled StageState = "cancelled"
 )
+
+// FollowUpComponent identifies one bounded post-publication operation.
+type FollowUpComponent string
+
+const (
+	FollowUpNotifications   FollowUpComponent = "notifications"
+	FollowUpRemediation     FollowUpComponent = "remediation"
+	FollowUpAutomaticIssues FollowUpComponent = "automatic-issues"
+	FollowUpAutomaticFixPRs FollowUpComponent = "automatic-fix-prs"
+)
+
+// FollowUpState is the safe state of one follow-up component.
+type FollowUpState string
+
+const (
+	FollowUpRunning   FollowUpState = "running"
+	FollowUpCompleted FollowUpState = "completed"
+	FollowUpSkipped   FollowUpState = "skipped"
+	FollowUpDisabled  FollowUpState = "disabled"
+	FollowUpFailed    FollowUpState = "failed"
+	FollowUpCancelled FollowUpState = "cancelled"
+)
+
+// FollowUpReason explains a non-error skip without exposing configuration.
+type FollowUpReason string
+
+const (
+	FollowUpReasonNone             FollowUpReason = ""
+	FollowUpReasonNotConfigured    FollowUpReason = "not-configured"
+	FollowUpReasonNoWork           FollowUpReason = "no-work"
+	FollowUpReasonDependencyFailed FollowUpReason = "dependency-failed"
+)
+
+// FollowUpFailureCode identifies one sanitized operational failure.
+type FollowUpFailureCode string
+
+const (
+	FollowUpFailureNone                         FollowUpFailureCode = ""
+	FollowUpFailureNotificationCredentials      FollowUpFailureCode = "notification-credentials"
+	FollowUpFailureNotificationConfiguration    FollowUpFailureCode = "notification-configuration"
+	FollowUpFailureNotificationDelivery         FollowUpFailureCode = "notification-delivery"
+	FollowUpFailureNotificationStatePersistence FollowUpFailureCode = "notification-state-persistence"
+	FollowUpFailureRemediation                  FollowUpFailureCode = "remediation-processing"
+	FollowUpFailureAutomaticIssues              FollowUpFailureCode = "automatic-issues"
+	FollowUpFailureAutomaticFixPRs              FollowUpFailureCode = "automatic-fix-prs"
+)
+
+// FollowUpComponentStatus contains only bounded operator-facing diagnostics.
+type FollowUpComponentStatus struct {
+	State   FollowUpState       `json:"state"`
+	Reason  FollowUpReason      `json:"reason,omitempty"`
+	Code    FollowUpFailureCode `json:"code,omitempty"`
+	Summary string              `json:"summary,omitempty"`
+}
+
+// FollowUpProgress reports post-publication component outcomes.
+type FollowUpProgress struct {
+	Notifications   *FollowUpComponentStatus `json:"notifications,omitempty"`
+	Remediation     *FollowUpComponentStatus `json:"remediation,omitempty"`
+	AutomaticIssues *FollowUpComponentStatus `json:"automatic_issues,omitempty"`
+	AutomaticFixPRs *FollowUpComponentStatus `json:"automatic_fix_prs,omitempty"`
+}
 
 // JobProgress tracks aggregate job completion.
 type JobProgress struct {
@@ -310,9 +372,10 @@ type Status struct {
 	SourceGrounding  SourceGrounding  `json:"source_grounding,omitempty"`
 	SkillBundle      SkillBundle      `json:"skill_bundle,omitempty"`
 
-	PatternPhase     StageState `json:"pattern_phase"`
-	PublicationPhase StageState `json:"publication_phase"`
-	SideEffectPhase  StageState `json:"side_effect_phase"`
+	PatternPhase     StageState        `json:"pattern_phase"`
+	PublicationPhase StageState        `json:"publication_phase"`
+	SideEffectPhase  StageState        `json:"side_effect_phase"`
+	FollowUp         *FollowUpProgress `json:"follow_up,omitempty"`
 
 	NextWatchAt     *time.Time `json:"next_watch_at,omitempty"`
 	NextReconcileAt *time.Time `json:"next_reconcile_at,omitempty"`
@@ -338,7 +401,7 @@ func Read(path string) (Status, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return Status{}, errors.New("fetch status has trailing data")
 	}
-	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != 4 && status.SchemaVersion != 5 && status.SchemaVersion != 6 && status.SchemaVersion != 7 && status.SchemaVersion != 8 && status.SchemaVersion != 9 && status.SchemaVersion != 10 && status.SchemaVersion != SchemaVersion {
+	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != 4 && status.SchemaVersion != 5 && status.SchemaVersion != 6 && status.SchemaVersion != 7 && status.SchemaVersion != 8 && status.SchemaVersion != 9 && status.SchemaVersion != 10 && status.SchemaVersion != 11 && status.SchemaVersion != SchemaVersion {
 		return Status{}, fmt.Errorf("unsupported fetch status schema %d", status.SchemaVersion)
 	}
 	if err := status.validate(); err != nil {
@@ -350,7 +413,7 @@ func Read(path string) (Status, error) {
 func (s Status) validate() error {
 	if !validPassType(s.PassType) || !validPhase(s.Phase) || !validOutcome(s.Outcome) ||
 		!validFailureCategory(s.FailureCategory) || !validStage(s.PatternPhase) ||
-		!validStage(s.PublicationPhase) || !validStage(s.SideEffectPhase) {
+		!validStage(s.PublicationPhase) || !validStage(s.SideEffectPhase) || !validFollowUp(s.FollowUp) {
 		return errors.New("fetch status has unknown state")
 	}
 	if s.RunID == "" || s.PassID == "" || s.RunStartedAt.IsZero() || s.PassStartedAt.IsZero() || s.PhaseStartedAt.IsZero() || s.LastProgressAt.IsZero() {
@@ -485,6 +548,76 @@ func validStage(value StageState) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func validFollowUp(progress *FollowUpProgress) bool {
+	if progress == nil {
+		return true
+	}
+	return validFollowUpComponent(progress.Notifications) &&
+		validFollowUpComponent(progress.Remediation) &&
+		validFollowUpComponent(progress.AutomaticIssues) &&
+		validFollowUpComponent(progress.AutomaticFixPRs)
+}
+
+func validFollowUpComponent(component *FollowUpComponentStatus) bool {
+	if component == nil {
+		return true
+	}
+	switch component.State {
+	case FollowUpRunning, FollowUpCompleted, FollowUpDisabled, FollowUpCancelled:
+		return component.Reason == FollowUpReasonNone && component.Code == FollowUpFailureNone && component.Summary == ""
+	case FollowUpSkipped:
+		return validFollowUpReason(component.Reason) && component.Reason != FollowUpReasonNone &&
+			component.Code == FollowUpFailureNone && component.Summary == ""
+	case FollowUpFailed:
+		return component.Reason == FollowUpReasonNone && validFollowUpFailureCode(component.Code) &&
+			component.Code != FollowUpFailureNone && component.Summary == FollowUpFailureSummary(component.Code)
+	default:
+		return false
+	}
+}
+
+func validFollowUpReason(reason FollowUpReason) bool {
+	switch reason {
+	case FollowUpReasonNone, FollowUpReasonNotConfigured, FollowUpReasonNoWork, FollowUpReasonDependencyFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func validFollowUpFailureCode(code FollowUpFailureCode) bool {
+	switch code {
+	case FollowUpFailureNone, FollowUpFailureNotificationCredentials, FollowUpFailureNotificationConfiguration,
+		FollowUpFailureNotificationDelivery, FollowUpFailureNotificationStatePersistence,
+		FollowUpFailureRemediation, FollowUpFailureAutomaticIssues, FollowUpFailureAutomaticFixPRs:
+		return true
+	default:
+		return false
+	}
+}
+
+// FollowUpFailureSummary returns the fixed safe summary for one failure code.
+func FollowUpFailureSummary(code FollowUpFailureCode) string {
+	switch code {
+	case FollowUpFailureNotificationCredentials:
+		return "Email notification credentials are not configured"
+	case FollowUpFailureNotificationConfiguration:
+		return "Email notification configuration is invalid"
+	case FollowUpFailureNotificationDelivery:
+		return "Email notification delivery failed"
+	case FollowUpFailureNotificationStatePersistence:
+		return "Email notification state could not be saved"
+	case FollowUpFailureRemediation:
+		return "Remediation processing failed"
+	case FollowUpFailureAutomaticIssues:
+		return "Automatic issue reconciliation failed"
+	case FollowUpFailureAutomaticFixPRs:
+		return "Automatic Fix PR processing failed"
+	default:
+		return ""
 	}
 }
 
@@ -625,6 +758,7 @@ func (t *Tracker) recoverInterrupted() {
 	if previous.SideEffectPhase == StageRunning {
 		previous.SideEffectPhase = StageCancelled
 	}
+	cancelRunningFollowUp(previous.FollowUp)
 	t.status = previous
 	if err := t.write(t.path, previous); err != nil {
 		t.logPersistenceFailure("status", err)
@@ -941,6 +1075,34 @@ func (t *Tracker) SkipSideEffects() {
 	t.update(true, func(status *Status) { status.SideEffectPhase = StageSkipped })
 }
 
+// SetFollowUp records one bounded follow-up component outcome.
+func (t *Tracker) SetFollowUp(component FollowUpComponent, state FollowUpState, reason FollowUpReason, code FollowUpFailureCode) {
+	t.update(true, func(status *Status) {
+		switch component {
+		case FollowUpNotifications, FollowUpRemediation, FollowUpAutomaticIssues, FollowUpAutomaticFixPRs:
+		default:
+			return
+		}
+		if status.FollowUp == nil {
+			status.FollowUp = &FollowUpProgress{}
+		}
+		value := &FollowUpComponentStatus{State: state, Reason: reason, Code: code}
+		if state == FollowUpFailed {
+			value.Summary = FollowUpFailureSummary(code)
+		}
+		switch component {
+		case FollowUpNotifications:
+			status.FollowUp.Notifications = value
+		case FollowUpRemediation:
+			status.FollowUp.Remediation = value
+		case FollowUpAutomaticIssues:
+			status.FollowUp.AutomaticIssues = value
+		case FollowUpAutomaticFixPRs:
+			status.FollowUp.AutomaticFixPRs = value
+		}
+	})
+}
+
 // MarkPublished records a successful public snapshot publication.
 func (t *Tracker) MarkPublished() {
 	t.update(true, func(status *Status) {
@@ -1029,6 +1191,7 @@ func (t *Tracker) finishTerminal(phase Phase, outcome Outcome, category FailureC
 	if t.status.SideEffectPhase == StageRunning {
 		t.status.SideEffectPhase = terminalStage(outcome)
 	}
+	cancelRunningFollowUp(t.status.FollowUp)
 	t.persistLocked(true)
 	t.appendHistoryLocked(now)
 	t.logf("fetch pass ended: pass=%s outcome=%s category=%s duration=%s",
@@ -1040,6 +1203,19 @@ func terminalStage(outcome Outcome) StageState {
 		return StageCancelled
 	}
 	return StageFailed
+}
+
+func cancelRunningFollowUp(progress *FollowUpProgress) {
+	if progress == nil {
+		return
+	}
+	for _, component := range []*FollowUpComponentStatus{
+		progress.Notifications, progress.Remediation, progress.AutomaticIssues, progress.AutomaticFixPRs,
+	} {
+		if component != nil && component.State == FollowUpRunning {
+			*component = FollowUpComponentStatus{State: FollowUpCancelled}
+		}
+	}
 }
 
 // Heartbeat writes and logs one rate-limited long-phase heartbeat.
@@ -1092,6 +1268,7 @@ func (t *Tracker) Snapshot() Status {
 	snapshot.PhaseDurationsMS = maps.Clone(t.status.PhaseDurationsMS)
 	snapshot.CurrentTasks = append([]TaskMapping(nil), t.status.CurrentTasks...)
 	snapshot.SkillBundle = cloneSkillBundle(t.status.SkillBundle)
+	snapshot.FollowUp = cloneFollowUp(t.status.FollowUp)
 	return snapshot
 }
 
@@ -1099,6 +1276,26 @@ func cloneSkillBundle(bundle SkillBundle) SkillBundle {
 	bundle.Profiles = append([]string(nil), bundle.Profiles...)
 	bundle.IDs = append([]string(nil), bundle.IDs...)
 	return bundle
+}
+
+func cloneFollowUp(progress *FollowUpProgress) *FollowUpProgress {
+	if progress == nil {
+		return nil
+	}
+	clone := *progress
+	clone.Notifications = cloneFollowUpComponent(progress.Notifications)
+	clone.Remediation = cloneFollowUpComponent(progress.Remediation)
+	clone.AutomaticIssues = cloneFollowUpComponent(progress.AutomaticIssues)
+	clone.AutomaticFixPRs = cloneFollowUpComponent(progress.AutomaticFixPRs)
+	return &clone
+}
+
+func cloneFollowUpComponent(component *FollowUpComponentStatus) *FollowUpComponentStatus {
+	if component == nil {
+		return nil
+	}
+	clone := *component
+	return &clone
 }
 
 func (t *Tracker) update(force bool, mutate func(*Status)) {
