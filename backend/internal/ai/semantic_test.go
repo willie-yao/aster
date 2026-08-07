@@ -833,6 +833,13 @@ func TestSemanticAffirmativeSuccessRejectsNegativeRecoveryAndConditions(t *testi
 		"Widget v1 Registered=False",
 		"Widget v1 Recovery=False",
 		"Widget v1 Reconciliation=False",
+		`{"Ready": false}`,
+		`{"Succeeded":"False"}`,
+		"Widget v1 type=Ready status=False",
+		"Widget v1 type: Available, status: False",
+		"Widget v1 Ready=Unknown",
+		`{"Succeeded":"Unknown"}`,
+		"Widget v1 Available=Pending",
 	} {
 		if semanticAffirmativeSuccess(text) {
 			t.Errorf("negative condition classified as success: %q", text)
@@ -846,5 +853,14 @@ func TestSemanticAffirmativeSuccessRejectsNegativeRecoveryAndConditions(t *testi
 	}
 	if got := semanticLaterSuccessEvidence(evidence, semanticErrorCandidates(evidence, analysisResponse{})); len(got) != 0 {
 		t.Fatalf("negative condition emitted as later success: %+v", got)
+	}
+	for _, text := range []string{
+		"Widget v1 Ready=True",
+		`{"Succeeded":true}`,
+		"Widget v1 type=Ready status=True",
+	} {
+		if !semanticAffirmativeSuccess(text) {
+			t.Errorf("affirmative structured condition was not success: %q", text)
+		}
 	}
 }

@@ -413,16 +413,16 @@ type semanticLineCandidate struct {
 }
 
 var (
-	semanticRecoveryRE        = regexp.MustCompile(`(?i)\b(recovered|recovery|succeeded|successful|healthy|reconciled)\b|\b(?:now|later|eventually|subsequently)\b.{0,40}\b(?:ready|available|completed|connected|running|synced|synchronized)\b`)
-	semanticNegativeSuccessRE = regexp.MustCompile(`(?i)\b(?:not|never)\s+(?:found|ready|available|completed|connected|running|synced|synchronized|recovered|healthy|successful|reconciled)\b|\b(?:recovery|reconciliation)\s+failed\b|\b(?:failed|unable)\b.{0,40}\b(?:become\s+)?(?:ready|available|complete|connect|run|sync|synchronize|recover|reconcile|healthy|successful)\b`)
-	semanticStructuredBoolRE  = regexp.MustCompile(`(?i)\b([a-z][a-z0-9_-]*)\s*[:=]\s*(true|false)\b`)
-	semanticTimestampRE       = regexp.MustCompile(`\b(?:\d{4}-\d{2}-\d{2}[T ][0-2]\d:[0-5]\d:[0-5]\d(?:\.\d+)?Z?|[0-2]\d:[0-5]\d:[0-5](?:\.\d+)?)\b`)
-	semanticTokenRE           = regexp.MustCompile(`[A-Za-z][A-Za-z0-9]*(?:[._/:~-][A-Za-z0-9]+)*|[1-5][0-9]{2}`)
-	semanticWordRE            = regexp.MustCompile(`[a-z0-9]+`)
-	semanticStatusCodeRE      = regexp.MustCompile(`^[45][0-9]{2}$`)
-	semanticAPIVersionRE      = regexp.MustCompile(`^v[0-9]+(?:(?:alpha|beta)[0-9]+)?$`)
-	semanticSentenceRE        = regexp.MustCompile(`[.!?;\n]+`)
-	semanticCausalNegationRE  = regexp.MustCompile(`(?i)\b(?:not|never|unrelated|incidental|noncausal|non-causal)\b.{0,80}\b(?:cause|causal|trigger|responsible|prevent|block|lead)\b|\b(?:did not|does not|was not|were not)\b.{0,80}\b(?:cause|trigger|prevent|block|lead)\b`)
+	semanticRecoveryRE             = regexp.MustCompile(`(?i)\b(recovered|recovery|succeeded|successful|healthy|reconciled)\b|\b(?:now|later|eventually|subsequently)\b.{0,40}\b(?:ready|available|completed|connected|running|synced|synchronized)\b`)
+	semanticNegativeSuccessRE      = regexp.MustCompile(`(?i)\b(?:not|never)\s+(?:found|ready|available|completed|connected|running|synced|synchronized|recovered|healthy|successful|reconciled)\b|\b(?:recovery|reconciliation)\s+failed\b|\b(?:failed|unable)\b.{0,40}\b(?:become\s+)?(?:ready|available|complete|connect|run|sync|synchronize|recover|reconcile|healthy|successful)\b`)
+	semanticStructuredAssignmentRE = regexp.MustCompile(`(?i)(?:"([a-z][a-z0-9_-]*)"|'([a-z][a-z0-9_-]*)'|\b([a-z][a-z0-9_-]*))\s*[:=]\s*(?:"([a-z][a-z0-9_-]*)"|'([a-z][a-z0-9_-]*)'|([a-z][a-z0-9_-]*))`)
+	semanticTimestampRE            = regexp.MustCompile(`\b(?:\d{4}-\d{2}-\d{2}[T ][0-2]\d:[0-5]\d:[0-5]\d(?:\.\d+)?Z?|[0-2]\d:[0-5]\d:[0-5](?:\.\d+)?)\b`)
+	semanticTokenRE                = regexp.MustCompile(`[A-Za-z][A-Za-z0-9]*(?:[._/:~-][A-Za-z0-9]+)*|[1-5][0-9]{2}`)
+	semanticWordRE                 = regexp.MustCompile(`[a-z0-9]+`)
+	semanticStatusCodeRE           = regexp.MustCompile(`^[45][0-9]{2}$`)
+	semanticAPIVersionRE           = regexp.MustCompile(`^v[0-9]+(?:(?:alpha|beta)[0-9]+)?$`)
+	semanticSentenceRE             = regexp.MustCompile(`[.!?;\n]+`)
+	semanticCausalNegationRE       = regexp.MustCompile(`(?i)\b(?:not|never|unrelated|incidental|noncausal|non-causal)\b.{0,80}\b(?:cause|causal|trigger|responsible|prevent|block|lead)\b|\b(?:did not|does not|was not|were not)\b.{0,80}\b(?:cause|trigger|prevent|block|lead)\b`)
 )
 
 var semanticStatusWords = map[string]int{
@@ -582,8 +582,11 @@ func semanticLaterSuccessEvidence(evidence map[string]*analysisChatEvidence, err
 }
 
 func semanticAffirmativeSuccess(text string) bool {
-	if semanticNegativeSuccessRE.MatchString(text) || semanticHasStructuredFalseSuccess(text) {
+	if semanticNegativeSuccessRE.MatchString(text) {
 		return false
+	}
+	if seen, success := semanticStructuredSuccess(text); seen {
+		return success
 	}
 	if semanticRecoveryRE.MatchString(text) {
 		return true
@@ -599,13 +602,57 @@ func semanticAffirmativeSuccess(text string) bool {
 	return false
 }
 
-func semanticHasStructuredFalseSuccess(text string) bool {
-	for _, match := range semanticStructuredBoolRE.FindAllStringSubmatch(text, -1) {
-		if len(match) == 3 && strings.EqualFold(match[2], "false") && semanticSuccessStates[strings.ToLower(match[1])] {
-			return true
+func semanticStructuredSuccess(text string) (bool, bool) {
+	assignments := map[string][]string{}
+	for _, match := range semanticStructuredAssignmentRE.FindAllStringSubmatch(text, -1) {
+		if len(match) != 7 {
+			continue
+		}
+		key := firstSemanticAssignmentPart(match[1], match[2], match[3])
+		value := firstSemanticAssignmentPart(match[4], match[5], match[6])
+		if key != "" && value != "" {
+			assignments[key] = append(assignments[key], value)
 		}
 	}
-	return false
+	seen := false
+	allTrue := true
+	for key, values := range assignments {
+		if !semanticSuccessStates[key] {
+			continue
+		}
+		seen = true
+		for _, value := range values {
+			if value != "true" {
+				allTrue = false
+			}
+		}
+	}
+	for _, conditionType := range assignments["type"] {
+		if !semanticSuccessStates[conditionType] {
+			continue
+		}
+		seen = true
+		statuses := assignments["status"]
+		if len(statuses) == 0 {
+			allTrue = false
+			continue
+		}
+		for _, status := range statuses {
+			if status != "true" {
+				allTrue = false
+			}
+		}
+	}
+	return seen, seen && allTrue
+}
+
+func firstSemanticAssignmentPart(parts ...string) string {
+	for _, part := range parts {
+		if part != "" {
+			return strings.ToLower(part)
+		}
+	}
+	return ""
 }
 
 func semanticStrongIdentityOverlap(left, right map[string]int) bool {
