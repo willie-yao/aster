@@ -485,6 +485,7 @@ export function JobDetailPage() {
               run={selectedRun}
               failure={buildFailure}
               fetchStatus={fetchStatus}
+              appearance="detail"
             />
           )}
 

@@ -53,21 +53,25 @@ function BriefingBody({
 export function AnalysisBriefing({
   id,
   title,
+  icon,
   metadata,
   summary,
   mobileTitle,
   mobileSynopsis,
   mobileMetadata,
+  mobileNotice,
   details,
   actions,
 }: {
   id?: string;
   title: string;
+  icon?: ReactNode;
   metadata?: ReactNode;
   summary: ReactNode;
   mobileTitle?: string;
   mobileSynopsis?: ReactNode;
   mobileMetadata?: ReactNode;
+  mobileNotice?: ReactNode;
   details?: ReactNode;
   actions?: ReactNode;
 }) {
@@ -90,7 +94,7 @@ export function AnalysisBriefing({
           borderColor: "divider",
         }}
       >
-        <DetailSectionBand title={title} metadata={metadata} />
+        <DetailSectionBand title={title} icon={icon} metadata={metadata} />
         <BriefingBody summary={summary} details={details} />
         {actions && (
           <Box sx={{ px: 2, pb: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
@@ -106,11 +110,13 @@ export function AnalysisBriefing({
       <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
         <DetailSectionBand
           title={mobileTitle ?? title}
+          icon={icon}
           metadata={mobileMetadata ?? metadata}
         />
         <Box sx={{ px: 1.5, py: 1.5, ...overviewTypography.primaryBody, overflowWrap: "anywhere" }}>
           {mobileSynopsis ?? summary}
         </Box>
+        {mobileNotice && <Box sx={{ px: 1.5, pb: 1.5 }}>{mobileNotice}</Box>}
       </Box>
 
       <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>

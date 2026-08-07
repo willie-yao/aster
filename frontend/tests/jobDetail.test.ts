@@ -54,6 +54,11 @@ test("job result filter state uses bounded URL values", () => {
 test("job detail uses the approved shared detail composition", () => {
   const page = source("src/pages/JobDetailPage.tsx");
   const pattern = source("src/components/PatternBanner.tsx");
+  const briefing = source("src/components/AnalysisBriefing.tsx");
+  const buildFailure = source("src/components/BuildFailurePanel.tsx");
+  const identity = source("src/components/TechnicalIdentity.tsx");
+  const testTable = source("src/components/TestCaseTable.tsx");
+  const analysis = source("src/components/AiAnalysisPanel.tsx");
   const ledger = source("src/components/ResultLedger.tsx");
 
   assert.match(page, /shortJobName\([\s\S]*manifest\.short_name_prefix/);
@@ -66,6 +71,9 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(page, /updateSearchParam\("test", query \|\| null, \{ replace: true \}\)/);
 
   assert.match(pattern, /<AnalysisBriefing/);
+  assert.match(pattern, /icon=\{<AutoAwesome/);
+  assert.match(pattern, /mobileNotice=\{staleNotice\}/);
+  assert.match(pattern, /Last known good ·/);
   assert.match(pattern, /<AnalysisChat[\s\S]*appearance="detail"/);
   assert.match(pattern, /<FailureActions[\s\S]*appearance="detail"/);
   assert.match(pattern, /label="Root cause"/);
@@ -73,6 +81,19 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(pattern, /label="Source grounding"/);
   assert.match(pattern, /label="Affected builds"/);
   assert.match(pattern, /label="Related files"/);
+
+  assert.match(briefing, /mobileNotice[\s\S]*\{mobileNotice &&/);
+  assert.match(buildFailure, /if \(detailAppearance\)[\s\S]*<AnalysisBriefing/);
+  assert.match(buildFailure, /<AiAnalysisPanel[\s\S]*appearance="detail"/);
+  assert.match(page, /<BuildFailurePanel[\s\S]*appearance="detail"/);
+  assert.match(identity, /display: \{ xs: "none", md: "flex" \}/);
+  assert.match(identity, /desktopInline \? \{ xs: "block", md: "none" \}/);
+  assert.match(testTable, /Evidence/);
+  assert.match(testTable, /Diagnosis →/);
+  assert.match(testTable, /Show inline evidence/);
+  assert.match(testTable, /<AiAnalysisPanel[\s\S]*appearance="detail"/);
+  assert.doesNotMatch(testTable, /<Panel/);
+  assert.match(analysis, /appearance\?: "default" \| "detail"/);
 
   assert.match(ledger, /failed: "Failed"[\s\S]*passed: "Passed"[\s\S]*all: "All executed"/);
   assert.doesNotMatch(ledger, /Skipped"/);

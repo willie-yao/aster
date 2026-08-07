@@ -5,6 +5,7 @@ import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
+import { AutoAwesome } from "@mui/icons-material";
 import type {
   BuildResult,
   PatternAnalysis,
@@ -139,6 +140,12 @@ export function PatternBanner({
       : [];
   const patternLabel = pattern.systemic ? "Recurring pattern" : "No shared root cause";
   const metadata = `${pattern.builds_analyzed} ${pattern.builds_analyzed === 1 ? "build" : "builds"} · ${pattern.confidence} confidence`;
+  const staleNotice = refreshStatus && refreshStatus.state !== "current" ? (
+    <Alert severity="warning" variant="outlined" sx={{ borderRadius: "4px" }}>
+      Last known good pattern from {refreshStatus.last_successful_at ?? "an earlier refresh"}.
+      Current refresh: {refreshStatus.failure_category ?? refreshStatus.state}.
+    </Alert>
+  ) : null;
 
   const details = (
     <>
@@ -202,12 +209,7 @@ export function PatternBanner({
         </BriefingSection>
       )}
 
-      {refreshStatus && refreshStatus.state !== "current" && (
-        <Alert severity="warning" variant="outlined" sx={{ borderRadius: "4px" }}>
-          Last known good pattern from {refreshStatus.last_successful_at ?? "an earlier refresh"}.
-          Current refresh: {refreshStatus.failure_category ?? refreshStatus.state}.
-        </Alert>
-      )}
+      {staleNotice}
 
       {pattern.systemic && pattern.shared_root_cause && (
         <BriefingSection label="Root cause">
@@ -320,8 +322,10 @@ export function PatternBanner({
       id={pattern.id ? `pattern-${pattern.id}` : undefined}
       title="Analysis briefing"
       mobileTitle={patternLabel}
+      icon={<AutoAwesome aria-hidden sx={{ fontSize: 18, color: "primary.main" }} />}
       metadata={`${patternLabel} · ${metadata}`}
-      mobileMetadata={metadata}
+      mobileMetadata={staleNotice ? `Last known good · ${metadata}` : metadata}
+      mobileNotice={staleNotice}
       summary={<RichText text={pattern.summary} steps fileCtx={patternFileCtx} />}
       mobileSynopsis={firstSentence(pattern.shared_root_cause ?? pattern.summary)}
       details={details}

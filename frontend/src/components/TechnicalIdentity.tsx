@@ -109,7 +109,7 @@ export function TechnicalIdentity({
       {desktopInline && (
         <Box
           sx={{
-            display: { xs: "none", sm: "flex" },
+            display: { xs: "none", md: "flex" },
             minWidth: 0,
             alignItems: "center",
             gap: 1,
@@ -140,7 +140,7 @@ export function TechnicalIdentity({
       <Box
         component="section"
         sx={{
-          display: desktopInline ? { xs: "block", sm: "none" } : "block",
+          display: desktopInline ? { xs: "block", md: "none" } : "block",
           bgcolor: "surface.container",
           borderBottom: "1px solid",
           borderColor: "divider",
