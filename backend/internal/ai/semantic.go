@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -134,7 +135,7 @@ type semanticJudgeInput struct {
 	Stage           string                 `json:"stage"`
 	Draft           semanticJudgeDraft     `json:"draft"`
 	PriorDraft      *semanticJudgeDraft    `json:"prior_draft,omitempty"`
-	InitialFindings []semanticFinding      `json:"initial_findings,omitempty"`
+	InitialFindings []string               `json:"initial_finding_classes,omitempty"`
 	Evidence        semanticEvidenceDigest `json:"evidence_digest"`
 }
 
@@ -172,33 +173,41 @@ func (c *Client) semanticCritique(ctx context.Context, state *agentState, stage 
 }
 
 func parseSemanticJudgeResult(stage, output string) (semanticJudgeResult, error) {
-	var result semanticJudgeResult
 	raw, ok := semanticJudgeResponseJSON(output)
 	if !ok {
 		return semanticJudgeResult{}, errSemanticJudgeResponseInvalid
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+	fields, ok := decodeUniqueSemanticObject([]byte(raw), map[string]bool{"findings": true})
+	if !ok || len(fields) != 1 {
 		return semanticJudgeResult{}, errSemanticJudgeResponseInvalid
 	}
-	if len(fields) != 1 || fields["findings"] == nil || string(fields["findings"]) == "null" {
+	findingsRaw := bytes.TrimSpace(fields["findings"])
+	if len(findingsRaw) == 0 || findingsRaw[0] != '[' {
 		return semanticJudgeResult{}, errSemanticJudgeResponseInvalid
 	}
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&result); err != nil {
+	var findingObjects []json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(findingsRaw))
+	if err := decoder.Decode(&findingObjects); err != nil {
 		return semanticJudgeResult{}, errSemanticJudgeResponseInvalid
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return semanticJudgeResult{}, errSemanticJudgeResponseInvalid
 	}
-	if len(result.Findings) > semanticJudgeMaxFindings {
+	if len(findingObjects) > semanticJudgeMaxFindings {
 		return semanticJudgeResult{}, errSemanticJudgeResponseInvalid
 	}
 	seen := map[string]bool{}
-	kept := make([]semanticFinding, 0, len(result.Findings))
-	for _, finding := range result.Findings {
+	kept := make([]semanticFinding, 0, len(findingObjects))
+	for _, rawFinding := range findingObjects {
+		findingFields, ok := decodeUniqueSemanticObject(rawFinding, map[string]bool{"class": true, "detail": true})
+		if !ok || len(findingFields) != 2 {
+			return semanticJudgeResult{}, errSemanticJudgeResponseInvalid
+		}
+		var finding semanticFinding
+		if json.Unmarshal(findingFields["class"], &finding.Class) != nil || json.Unmarshal(findingFields["detail"], &finding.Detail) != nil {
+			return semanticJudgeResult{}, errSemanticJudgeResponseInvalid
+		}
 		finding.Class = strings.TrimSpace(finding.Class)
 		finding.Detail = strings.Join(strings.Fields(finding.Detail), " ")
 		if !semanticFindingClasses[finding.Class] {
@@ -217,8 +226,37 @@ func parseSemanticJudgeResult(stage, output string) (semanticJudgeResult, error)
 		seen[key] = true
 		kept = append(kept, finding)
 	}
-	result.Findings = kept
-	return result, nil
+	return semanticJudgeResult{Findings: kept}, nil
+}
+
+func decodeUniqueSemanticObject(raw []byte, allowed map[string]bool) (map[string]json.RawMessage, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil, false
+	}
+	fields := map[string]json.RawMessage{}
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		key, ok := keyToken.(string)
+		if err != nil || !ok || !allowed[key] || fields[key] != nil {
+			return nil, false
+		}
+		var value json.RawMessage
+		if decoder.Decode(&value) != nil {
+			return nil, false
+		}
+		fields[key] = value
+	}
+	end, err := decoder.Token()
+	if err != nil || end != json.Delim('}') {
+		return nil, false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return nil, false
+	}
+	return fields, true
 }
 
 var semanticJudgeFenceRE = regexp.MustCompile("(?s)^```(?:json)?[ \\t]*\\n?(.*?)\\n?```$")
@@ -248,7 +286,7 @@ func formatSemanticJudgeInput(state *agentState, stage string, parsed analysisRe
 	input := semanticJudgeInput{
 		Stage:           stage,
 		Draft:           boundedSemanticDraft(parsed, state.analysisEvidence),
-		InitialFindings: append([]semanticFinding(nil), initialFindings...),
+		InitialFindings: semanticFindingClassList(initialFindings),
 		Evidence:        buildSemanticEvidenceDigest(state, parsed),
 	}
 	if prior != nil {
@@ -379,6 +417,7 @@ var (
 	semanticTokenRE          = regexp.MustCompile(`[A-Za-z][A-Za-z0-9]*(?:[._/:~-][A-Za-z0-9]+)*|[1-5][0-9]{2}`)
 	semanticWordRE           = regexp.MustCompile(`[a-z0-9]+`)
 	semanticStatusCodeRE     = regexp.MustCompile(`^[45][0-9]{2}$`)
+	semanticAPIVersionRE     = regexp.MustCompile(`^v[0-9]+(?:(?:alpha|beta)[0-9]+)?$`)
 	semanticSentenceRE       = regexp.MustCompile(`[.!?;\n]+`)
 	semanticCausalNegationRE = regexp.MustCompile(`(?i)\b(?:not|never|unrelated|incidental|noncausal|non-causal)\b.{0,80}\b(?:cause|causal|trigger|responsible|prevent|block|lead)\b|\b(?:did not|does not|was not|were not)\b.{0,80}\b(?:cause|trigger|prevent|block|lead)\b`)
 )
@@ -407,7 +446,7 @@ var semanticGenericTokens = map[string]bool{
 
 var semanticWeakIdentityTokens = map[string]bool{
 	"cluster": true, "component": true, "controller": true, "machine": true,
-	"node": true, "operation": true, "pod": true, "podgroup": true, "request": true,
+	"node": true, "operation": true, "pod": true, "request": true,
 	"resource": true, "service": true, "volume": true, "worker": true,
 }
 
@@ -531,23 +570,31 @@ func semanticLaterSuccessEvidence(evidence map[string]*analysisChatEvidence, err
 
 func semanticStrongIdentityOverlap(left, right map[string]int) bool {
 	shared := 0
+	sharedVersion := false
 	for token, leftWeight := range left {
 		rightWeight := right[token]
-		if rightWeight == 0 || semanticWeakIdentityTokens[token] {
+		if rightWeight == 0 {
+			continue
+		}
+		if semanticAPIVersionRE.MatchString(token) {
+			sharedVersion = true
+			continue
+		}
+		if semanticWeakIdentityTokens[token] {
 			continue
 		}
 		weight := min(leftWeight, rightWeight)
-		if weight >= 3 || strings.ContainsAny(token, "._/:~-") || strings.IndexFunc(token, unicode.IsDigit) >= 0 {
+		if strings.ContainsAny(token, "._/:~-") || strings.IndexFunc(token, unicode.IsDigit) >= 0 {
 			return true
 		}
-		if weight >= 2 && len(token) >= 8 {
+		if weight >= 2 && len(token) >= 12 {
 			return true
 		}
 		if weight >= 2 {
 			shared++
 		}
 	}
-	return shared >= 2
+	return shared >= 2 || (shared >= 1 && sharedVersion)
 }
 
 func semanticUnusedMandatoryEvidence(state *agentState, citations []models.EvidenceCitation) []semanticMandatoryEvidence {
@@ -599,7 +646,7 @@ func semanticSpecificTokens(text string) map[string]int {
 	out := map[string]int{}
 	for _, raw := range semanticTokenRE.FindAllString(text, -1) {
 		token := strings.ToLower(raw)
-		if len(token) < 3 || rootCauseStopwords[token] || semanticGenericTokens[token] || semanticStatusWords[token] > 0 || semanticStatusCodeRE.MatchString(token) {
+		if (len(token) < 3 && !semanticAPIVersionRE.MatchString(token)) || rootCauseStopwords[token] || semanticGenericTokens[token] || semanticStatusWords[token] > 0 || semanticStatusCodeRE.MatchString(token) {
 			continue
 		}
 		weight := 1
@@ -635,9 +682,10 @@ func semanticTokenOverlapScore(left, right map[string]int) int {
 }
 
 type supportedCausalFact struct {
-	identity map[string]int
-	statuses map[string]int
-	score    int
+	identity            map[string]int
+	statuses            map[string]int
+	score               int
+	acquisitionRevision int
 }
 
 type supportedCausalFactDelta struct {
@@ -650,9 +698,13 @@ type supportedCausalFactDelta struct {
 // supportedCausalFacts extracts only conservative facts whose validated quote
 // and root cause share both a specific identity and an error or status anchor.
 // The facts stay in memory; traces retain counts only.
-func supportedCausalFacts(parsed analysisResponse, evidence map[string]*analysisChatEvidence) []supportedCausalFact {
+func supportedCausalFacts(parsed analysisResponse, evidence map[string]*analysisChatEvidence, revisionContexts ...map[string]map[int]int) []supportedCausalFact {
 	rootIdentity := semanticSpecificTokens(parsed.RootCause)
 	rootStatuses := semanticStatusAnchors(parsed.RootCause)
+	var revisions map[string]map[int]int
+	if len(revisionContexts) > 0 {
+		revisions = revisionContexts[0]
+	}
 	var out []supportedCausalFact
 	seen := map[string]bool{}
 	for _, citation := range validatedSemanticCitations(parsed, evidence) {
@@ -668,7 +720,11 @@ func supportedCausalFacts(parsed analysisResponse, evidence map[string]*analysis
 			continue
 		}
 		seen[key] = true
-		out = append(out, supportedCausalFact{identity: identity, statuses: statuses, score: semanticSpecificityScore(identity) + semanticSpecificityScore(statuses)})
+		out = append(out, supportedCausalFact{
+			identity: identity, statuses: statuses,
+			score:               semanticSpecificityScore(identity) + semanticSpecificityScore(statuses),
+			acquisitionRevision: semanticCitationAcquisitionRevision(citation, revisions),
+		})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].score != out[j].score {
@@ -679,16 +735,39 @@ func supportedCausalFacts(parsed analysisResponse, evidence map[string]*analysis
 	return out
 }
 
+func semanticCitationAcquisitionRevision(citation models.EvidenceCitation, revisions map[string]map[int]int) int {
+	path := NormalizeArtifactCitation(citation.Path)
+	if revisions[path] == nil {
+		return 0
+	}
+	revision := 0
+	for line := citation.LineStart; line <= citation.LineEnd; line++ {
+		if revisions[path][line] > revision {
+			revision = revisions[path][line]
+		}
+	}
+	return revision
+}
+
 func semanticFactHasStrongIdentity(identity map[string]int) bool {
+	strong := 0
+	hasVersion := false
 	for token, weight := range identity {
+		if semanticAPIVersionRE.MatchString(token) {
+			hasVersion = true
+			continue
+		}
 		if semanticWeakIdentityTokens[token] {
 			continue
 		}
-		if weight >= 2 || strings.ContainsAny(token, "._/:~-") || strings.IndexFunc(token, unicode.IsDigit) >= 0 {
+		if strings.ContainsAny(token, "._/:~-") || strings.IndexFunc(token, unicode.IsDigit) >= 0 || (weight >= 2 && len(token) >= 12) {
 			return true
 		}
+		if weight >= 2 {
+			strong++
+		}
 	}
-	return false
+	return strong >= 2 || (strong >= 1 && hasVersion)
 }
 
 func semanticFactHasSpecificStatus(statuses map[string]int) bool {
@@ -743,7 +822,7 @@ func semanticFactKey(identity, statuses map[string]int) string {
 	return strings.Join(identityValues, "\x00") + "\x01" + strings.Join(statusValues, "\x00")
 }
 
-func compareSupportedCausalFacts(current, candidate []supportedCausalFact, allowSingleUnrelated, newEvidence bool) supportedCausalFactDelta {
+func compareSupportedCausalFacts(current, candidate []supportedCausalFact, allowSingleUnrelated bool, currentDraftRevision int) supportedCausalFactDelta {
 	matchedCandidate := make([]bool, len(candidate))
 	delta := supportedCausalFactDelta{}
 	var droppedFacts []supportedCausalFact
@@ -793,7 +872,7 @@ func compareSupportedCausalFacts(current, candidate []supportedCausalFact, allow
 			}
 		}
 		if match < 0 {
-			if len(droppedFacts) == 1 && len(addedFacts) == 1 && addedFacts[0].score >= dropped.score && (allowSingleUnrelated || newEvidence) {
+			if len(droppedFacts) == 1 && len(addedFacts) == 1 && addedFacts[0].score >= dropped.score && (allowSingleUnrelated || addedFacts[0].acquisitionRevision > currentDraftRevision) {
 				match = 0
 			} else {
 				return delta
@@ -966,11 +1045,13 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 		modelMessage{Role: "user", Content: strPtr(formatSemanticFindings(result.Findings))})
 	revised, revisedProviderItems, safe := c.runFinalizeRoundTracked(ctx, state, msgs, headroom)
 	if !safe {
+		state.judgeRevisionRejected = true
 		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_denied", IssueCount: len(result.Findings)})
 		return state.bestDraft.parsed
 	}
 	rp, ok := tryParseAnalysis(revised)
 	if !ok {
+		state.judgeRevisionRejected = true
 		recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_unparseable", IssueCount: len(result.Findings)})
 		log.Printf("  ✗ semantic judge (post-loop): %d finding(s); refinalize did not parse, keeping draft", len(result.Findings))
 		return state.bestDraft.parsed

@@ -506,8 +506,9 @@ type agentState struct {
 	// It is never copied into caches, traces, manifests, or progress state.
 	evidenceContentByPath map[string][]string
 	// analysisEvidence retains bounded artifact lines for citation validation.
-	analysisEvidence     map[string]*analysisChatEvidence
-	analysisEvidenceFull bool
+	analysisEvidence         map[string]*analysisChatEvidence
+	analysisEvidenceRevision map[string]map[int]int
+	analysisEvidenceFull     bool
 	// sourceContentByPath retains bounded repo-tool snippets for CLI grounding.
 	// Neither map is copied into caches, traces, or public output.
 	sourceContentByPath map[string][]string
@@ -918,6 +919,7 @@ func (c *Client) doAnalyzeAgentic(
 	}
 	state.evidenceArtifactsFull = map[string]bool{}
 	state.analysisEvidence = map[string]*analysisChatEvidence{}
+	state.analysisEvidenceRevision = map[string]map[int]int{}
 
 	fullSysPrompt := sysPrompt + agToolDocs
 	state.initialArtifactTree = listInitialArtifactTree(ctx, in.Browser)
@@ -1158,9 +1160,11 @@ agentLoop:
 										recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_not_selected"})
 									}
 								} else {
+									state.judgeRevisionRejected = true
 									recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_unparseable", IssueCount: len(result.Findings)})
 								}
 							} else {
+								state.judgeRevisionRejected = true
 								recordTrace(loopCtx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_denied", IssueCount: len(result.Findings)})
 							}
 							fallback := state.promoteFallbackDraft()
@@ -1921,7 +1925,7 @@ func (s *agentState) newDraftCandidate(phase, content string, providerItems []js
 		attempt:                 s.observeDraft(phase, parsed, out, publishedOut),
 		evidenceRevision:        s.evidenceRevision,
 		createdEvidenceRevision: s.evidenceRevision,
-		supportedFacts:          supportedCausalFacts(published, s.analysisEvidence),
+		supportedFacts:          supportedCausalFacts(published, s.analysisEvidence, s.analysisEvidenceRevision),
 		semanticRevision:        phase == "semantic_retry",
 	}
 }
@@ -2024,7 +2028,7 @@ func decideDraftReplacement(current, candidate *critiqueDraftCandidate, semantic
 		current.supportedFacts,
 		candidate.supportedFacts,
 		semanticInitialFindingsAllowCauseReplacement(candidate.semanticInitialFindingClasses),
-		candidate.createdEvidenceRevision > current.createdEvidenceRevision,
+		current.createdEvidenceRevision,
 	)
 	decision.currentSupportedFacts = len(current.supportedFacts)
 	decision.candidateSupportedFacts = len(candidate.supportedFacts)
@@ -2662,6 +2666,7 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 		if !toolFailed {
 			if p := extractToolPathArg(tc.Function.Arguments); p != "" && visiblePayload != nil {
 				s.recordSuccessfulRead(p)
+				beforeLines := analysisEvidenceLineSnapshot(s.analysisEvidence, p)
 				if !recordAnalysisChatEvidence(s.analysisEvidence, tc, visiblePayload) {
 					s.analysisEvidenceFull = true
 				}
@@ -2677,6 +2682,7 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 				if contentAdded && !newPath {
 					s.evidenceRevision++
 				}
+				s.recordAnalysisEvidenceRevisions(p, beforeLines)
 			}
 		}
 	}
@@ -2698,6 +2704,37 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 	}
 
 	return envelope, result.Payload
+}
+
+func analysisEvidenceLineSnapshot(evidence map[string]*analysisChatEvidence, rawPath string) map[int]string {
+	path, err := artifacts.SafePath(strings.TrimSpace(rawPath))
+	if err != nil || path == "" || evidence[path] == nil {
+		return nil
+	}
+	out := make(map[int]string, len(evidence[path].Lines))
+	for line, text := range evidence[path].Lines {
+		out[line] = text
+	}
+	return out
+}
+
+func (s *agentState) recordAnalysisEvidenceRevisions(rawPath string, before map[int]string) {
+	path, err := artifacts.SafePath(strings.TrimSpace(rawPath))
+	if err != nil || path == "" || s.analysisEvidence[path] == nil {
+		return
+	}
+	if s.analysisEvidenceRevision == nil {
+		s.analysisEvidenceRevision = map[string]map[int]int{}
+	}
+	if s.analysisEvidenceRevision[path] == nil {
+		s.analysisEvidenceRevision[path] = map[int]int{}
+	}
+	for line, text := range s.analysisEvidence[path].Lines {
+		if previous, ok := before[line]; ok && previous == text {
+			continue
+		}
+		s.analysisEvidenceRevision[path][line] = s.evidenceRevision
+	}
 }
 
 func modelVisibleToolPayload(envelope string) map[string]interface{} {

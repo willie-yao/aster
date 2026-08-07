@@ -129,16 +129,28 @@ func TestAgentic_UnparseableSemanticRepairKeepsSelectedDraft(t *testing.T) {
 	srv.push(200, chatRespFinal("not json"))
 
 	client := newAgenticTestClient(t, srv.URL)
+	key := "agentic:test:semantic-unparseable-fallback"
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
 			MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
 			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
-		}), "agentic:test:semantic-unparseable-fallback", "sys", "user")
+		}), key, "sys", "user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if analysis.RootCause != "control-plane subnet route table missing" || analysis.SuggestedFix == "Unable to parse structured response" {
+	if analysis.RootCause != "control-plane subnet route table missing" || analysis.SuggestedFix == "Unable to parse structured response" || !analysis.JudgeRevisionRejected {
 		t.Fatalf("semantic parse failure discarded selected draft: %+v", analysis)
+	}
+	if _, ok := client.Cache().Get(key); !ok {
+		t.Fatal("preserved semantic draft was not cached")
+	}
+	_, cached, err := client.doAnalyzeAgentic(context.Background(),
+		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+			MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
+		}), key, "sys", "user")
+	if err != nil || !cached.CacheHit || !cached.JudgeRevisionRejected {
+		t.Fatalf("cached semantic resolution = %+v err=%v", cached, err)
 	}
 	if got := atomic.LoadInt32(&srv.calls); got != 3 {
 		t.Fatalf("call count = %d, want 3", got)
@@ -381,6 +393,9 @@ func TestFormatSemanticJudgeInputIncludesBoundedEvidenceAndPriorDraft(t *testing
 	if input.PriorDraft == nil || !strings.Contains(input.PriorDraft.RootCause, "later timeout") || len(input.InitialFindings) != 1 {
 		t.Fatalf("prior review context missing: %+v", input)
 	}
+	if strings.Contains(raw, "Use the specific request error") {
+		t.Fatalf("revision input leaked free-form finding detail: %s", raw)
+	}
 	if len(input.Evidence.ValidatedCitations) != 1 || input.Evidence.ValidatedCitations[0].Quote != state.analysisEvidence["build.log"].Lines[10] {
 		t.Fatalf("validated citation lines = %+v", input.Evidence.ValidatedCitations)
 	}
@@ -437,6 +452,8 @@ func TestParseSemanticJudgeResultStrictContract(t *testing.T) {
 		{name: "too many", stage: semanticJudgeStageDraft, raw: string(encoded)},
 		{name: "trailing json", stage: semanticJudgeStageDraft, raw: `{"findings":[]} {"findings":[]}`},
 		{name: "surrounding text", stage: semanticJudgeStageDraft, raw: `preface {"findings":[]} trailing instruction`},
+		{name: "duplicate root key", stage: semanticJudgeStageRevision, raw: `{"findings":[{"class":"revision_dropped_supported_cause","detail":"dropped"}],"findings":[]}`},
+		{name: "duplicate finding key", stage: semanticJudgeStageDraft, raw: `{"findings":[{"class":"specific_error_ignored","class":"causal_link_unsupported","detail":"bad"}]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := parseSemanticJudgeResult(tc.stage, tc.raw); err == nil {
@@ -518,6 +535,28 @@ func TestSemanticLaterSuccessRequiresStrongSharedIdentity(t *testing.T) {
 	if got := semanticLaterSuccessEvidence(evidence, errors); len(got) != 0 {
 		t.Fatalf("unrelated resource success treated as counterevidence: %+v", got)
 	}
+	versionOnly := map[string]*analysisChatEvidence{
+		"build.log": {Lines: map[int]string{
+			10: "PodGroup v1beta1 request returned 404 NotFound",
+			20: "Widget v1beta1 reconciled successfully",
+		}},
+	}
+	if got := semanticLaterSuccessEvidence(versionOnly, semanticErrorCandidates(versionOnly, analysisResponse{})); len(got) != 0 {
+		t.Fatalf("shared API version treated as resource identity: %+v", got)
+	}
+}
+
+func TestSupportedCausalFactsRejectVersionOnlyIdentity(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{
+		"build.log": {Lines: map[int]string{1: "PodGroup v1beta1 request returned 404 NotFound"}},
+	}
+	parsed := analysisResponse{
+		RootCause:         "The Widget v1beta1 request returned 404 NotFound and blocked startup.",
+		EvidenceCitations: []models.EvidenceCitation{{Path: "build.log", LineStart: 1, LineEnd: 1, Quote: "v1beta1 request returned 404 NotFound"}},
+	}
+	if facts := supportedCausalFacts(parsed, evidence); len(facts) != 0 {
+		t.Fatalf("version-only identity created a supported fact: %+v", facts)
+	}
 }
 
 func TestDraftReplacementRejectsDroppedSupportedCauseWithoutStrongerFact(t *testing.T) {
@@ -573,6 +612,32 @@ func TestDraftReplacementRejectsAggregatedUnrelatedFacts(t *testing.T) {
 	decision := decideDraftReplacement(current, candidate, true, CritiqueCachePolicyStrict)
 	if decision.accepted || decision.reason != draftReasonCandidateDropsSupportedCause || decision.supportedFactsAdded != 2 || decision.supportedFactsDropped != 1 {
 		t.Fatalf("decision = %+v", decision)
+	}
+}
+
+func TestSupportedFactReplacementRequiresFactSpecificNewEvidence(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{
+		"build.log": {Lines: map[int]string{
+			1: "PodGroup v1beta1 request returned 404 NotFound",
+			2: "ImagePull operation for worker-1 returned 404 NotFound",
+		}},
+	}
+	currentParsed := analysisResponse{
+		RootCause:         "The PodGroup v1beta1 request returned 404 NotFound and blocked startup.",
+		EvidenceCitations: []models.EvidenceCitation{{Path: "build.log", LineStart: 1, LineEnd: 1, Quote: "PodGroup v1beta1 request returned 404"}},
+	}
+	candidateParsed := analysisResponse{
+		RootCause:         "ImagePull for worker-1 returned 404 NotFound and blocked startup.",
+		EvidenceCitations: []models.EvidenceCitation{{Path: "build.log", LineStart: 2, LineEnd: 2, Quote: "ImagePull operation for worker-1 returned 404"}},
+	}
+	current := supportedCausalFacts(currentParsed, evidence, map[string]map[int]int{"build.log": {1: 1}})
+	oldCandidate := supportedCausalFacts(candidateParsed, evidence, map[string]map[int]int{"build.log": {2: 1}})
+	if delta := compareSupportedCausalFacts(current, oldCandidate, false, 1); delta.strongerReplacement {
+		t.Fatalf("old candidate evidence authorized replacement: %+v", delta)
+	}
+	newCandidate := supportedCausalFacts(candidateParsed, evidence, map[string]map[int]int{"build.log": {2: 2}})
+	if delta := compareSupportedCausalFacts(current, newCandidate, false, 1); !delta.strongerReplacement {
+		t.Fatalf("fact-specific new evidence did not authorize replacement: %+v", delta)
 	}
 }
 
@@ -650,5 +715,19 @@ func TestAgentic_SemanticRevisionFindingKeepsEarlierDraft(t *testing.T) {
 	}
 	if analysis.RootCause != "the PR broke it" || !analysis.JudgeRevisionRejected || analysis.JudgeRevised {
 		t.Fatalf("revision finding replaced prior draft: %+v", analysis)
+	}
+}
+
+func TestRecordAnalysisEvidenceRevisionsTracksChangedLines(t *testing.T) {
+	state := &agentState{
+		evidenceRevision: 4,
+		analysisEvidence: map[string]*analysisChatEvidence{
+			"build.log": {Lines: map[int]string{1: "existing", 2: "new evidence"}},
+		},
+		analysisEvidenceRevision: map[string]map[int]int{"build.log": {1: 2}},
+	}
+	state.recordAnalysisEvidenceRevisions("build.log", map[int]string{1: "existing"})
+	if state.analysisEvidenceRevision["build.log"][1] != 2 || state.analysisEvidenceRevision["build.log"][2] != 4 {
+		t.Fatalf("evidence revisions = %+v", state.analysisEvidenceRevision)
 	}
 }
