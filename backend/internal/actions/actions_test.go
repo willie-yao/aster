@@ -1851,3 +1851,12 @@ func TestPreviewIssueRecordsUsageOperation(t *testing.T) {
 		t.Fatalf("usage = %+v", snapshot)
 	}
 }
+
+func TestRepositoryTokenExcludedFromAgentSandboxRuntime(t *testing.T) {
+	if got := repositoryToken("agent-sandbox", "github-write-token"); got != "" {
+		t.Fatalf("agent sandbox token = %q, want empty", got)
+	}
+	if got := repositoryToken("orka", "read-token"); got != "read-token" {
+		t.Fatalf("Orka token changed = %q", got)
+	}
+}

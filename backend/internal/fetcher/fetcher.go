@@ -958,6 +958,13 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 	return errors.Join(sideEffectErrs...)
 }
 
+func repositoryToken(runtimeType, token string) string {
+	if runtimeType == "agent-sandbox" {
+		return ""
+	}
+	return token
+}
+
 func fetcherUsageOutcome(err error) aiusage.Outcome {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return aiusage.OutcomeCancelled
@@ -1091,14 +1098,14 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	if err := project.ValidateAIAPI(provider.API); err != nil {
 		return false, fmt.Errorf("fix PRs: %w", err)
 	}
-	if eff.AgentRuntime.Type != "orka" && provider.API == project.AIAPIResponses {
+	if eff.AgentRuntime.Type == "opencode" && provider.API == project.AIAPIResponses {
 		return false, fmt.Errorf("fix PRs: local runtime requires chat_completions or an Orka fix runtime")
 	}
 	var aiClient *ai.Client
 	if aiToken != "" && provider.Endpoint != "" && provider.Model != "" {
 		aiClient = ai.NewClientWithOptions(ai.Options{Token: aiToken, API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model, ExtraHeaders: provider.Headers})
 	}
-	if eff.AgentRuntime.Type != "orka" && aiClient == nil {
+	if eff.AgentRuntime.Type == "opencode" && aiClient == nil {
 		log.Println("Fix PRs: local runtime requires AI_TOKEN, endpoint, and model; skipping")
 		return false, fmt.Errorf("fix PRs: local runtime requires AI_TOKEN, endpoint, and model")
 	}
@@ -1145,6 +1152,10 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		log.Printf("Fix PRs: %v; skipping", err)
 		return false, fmt.Errorf("fix PR runtime: %w", err)
 	}
+	commands, err := ar.RuntimeCommands(ar.ParsedTimeout())
+	if err != nil {
+		return false, fmt.Errorf("fix PR command policy: %w", err)
+	}
 	model := ar.Model
 	if model == "" {
 		model = aiModel(cfg)
@@ -1152,15 +1163,19 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	fixOpts.Agent = &fixpr.AgentConfig{
 		Runtime:             agentRuntime,
 		API:                 aiAPI(cfg),
-		SharedModelEndpoint: ar.Type != "orka",
+		SharedModelEndpoint: ar.Type == "opencode",
 		Model:               model,
 		Endpoint:            aiEndpoint(cfg),
 		ModelToken:          aiToken,
 		MaxTurns:            ar.MaxTurns,
+		MaxFiles:            eff.MaxFiles,
+		ModelGateway:        ar.ModelGateway.RuntimeConfig(),
+		OutputLimitBytes:    ar.OutputLimitBytes,
 		AllowBash:           allowBash,
 		NetworkDomains:      ar.NetworkDomains,
+		CommandPolicy:       runtime.CommandPolicy{AllowShell: allowBash, Commands: commands},
 		Timeout:             ar.ParsedTimeout(),
-		GitToken:            fixToken,
+		GitToken:            repositoryToken(ar.Type, fixToken),
 	}
 	mgr := newBatchFixManager(fixToken, filepath.Join(outDir, "fix_pr_state.json"), fixOpts)
 	ctx, usageOperation := aiusage.Begin(ctx, usageRecorder, aiusage.Metadata{

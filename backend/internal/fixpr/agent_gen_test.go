@@ -12,12 +12,14 @@ import (
 // fakeAgentRuntime is a stand-in AgentRuntime that returns canned results and
 // records the spec it was called with.
 type fakeAgentRuntime struct {
-	res  runtime.GenerateResult
-	err  error
-	spec runtime.GenerateSpec
+	res   runtime.GenerateResult
+	err   error
+	spec  runtime.GenerateSpec
+	calls int
 }
 
 func (f *fakeAgentRuntime) Generate(_ context.Context, spec runtime.GenerateSpec) (runtime.GenerateResult, error) {
+	f.calls++
 	f.spec = spec
 	return f.res, f.err
 }
@@ -41,7 +43,7 @@ func TestGenerateWithAgent_HappyPath(t *testing.T) {
 		Diff:  "--- a/templates/cluster.yaml\n+++ b/templates/cluster.yaml\n",
 	}}
 	observer := func(context.Context, runtime.WorkRef) error { return nil }
-	gp := agentGenParams(&AgentConfig{Runtime: fa, SharedModelEndpoint: true, Model: "m", Endpoint: "e", ModelToken: "t", AllowBash: true, NetworkDomains: []string{"registry.example.test:443"}, ExecutionID: "request-1", WorkObserver: observer})
+	gp := agentGenParams(&AgentConfig{Runtime: fa, SharedModelEndpoint: true, Model: "m", Endpoint: "e", ModelToken: "t", MaxFiles: 3, OutputLimitBytes: 131072, ModelGateway: runtime.ModelGatewayConfig{Endpoint: "https://gateway.internal/v1", Model: "fixture", ProtocolVersion: "openai-chat-completions-v1"}, AllowBash: true, NetworkDomains: []string{"registry.example.test:443"}, CommandPolicy: runtime.CommandPolicy{Commands: []runtime.ExecutionCommand{{Argv: []string{"go", "test", "./..."}}}}, ExecutionID: "request-1", WorkObserver: observer})
 
 	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
 	if err != nil {
@@ -68,6 +70,9 @@ func TestGenerateWithAgent_HappyPath(t *testing.T) {
 	}
 	if fa.spec.ExecutionID != "request-1" || fa.spec.WorkObserver == nil {
 		t.Errorf("runtime work identity not passed: %+v", fa.spec)
+	}
+	if fa.spec.ExpectedBaseSHA != "ref" || fa.spec.MaxSteps != fa.spec.MaxTurns || fa.spec.MaxFiles != 3 || fa.spec.OutputLimitBytes != 131072 || fa.spec.ModelGateway.Model != "fixture" || !fa.spec.CommandPolicy.AllowShell || len(fa.spec.CommandPolicy.Commands) != 1 {
+		t.Errorf("provider-neutral execution policy not passed: %+v", fa.spec)
 	}
 }
 
@@ -101,6 +106,23 @@ func TestGenerateWithAgent_RejectsTooManyFiles(t *testing.T) {
 	_, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
 	if err == nil || !strings.Contains(err.Error(), "exceeding max_files") {
 		t.Errorf("expected a max_files rejection, got %v", err)
+	}
+}
+
+func TestGenerateWithAgent_ValidationFailureIsOneShotAndNotActionable(t *testing.T) {
+	fa := &fakeAgentRuntime{
+		res: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, FailureReason: "validation command 1 failed"},
+		err: errors.New("validation command 1 failed"),
+	}
+	gp := agentGenParams(&AgentConfig{Runtime: fa})
+	gp.critique = &fakeCompleter{critique: `{"issues":["retry"]}`}
+	gp.critiqueRetries = 3
+	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
+	if err == nil || !strings.Contains(err.Error(), "validation command 1 failed") {
+		t.Fatalf("fix=%v error=%v", fix, err)
+	}
+	if fix != nil || fa.calls != 1 {
+		t.Fatalf("actionable fix=%v runtime calls=%d", fix, fa.calls)
 	}
 }
 

@@ -71,8 +71,8 @@ type Options struct {
 	// CritiqueRetries 0) skips the review. May be the same Completer as
 	// generation or a separate provider.
 	Critique Completer
-	// CritiqueRetries bounds re-prompts to resolve a reviewer's objections or a
-	// validation error before the fix is dropped.
+	// CritiqueRetries bounds re-prompts to resolve a reviewer's objections.
+	// Runtime validation failures return before critique and are not retried.
 	CritiqueRetries int
 	// PRFiller, when set, reformats the PR description to follow the repo's PR
 	// template. A nil filler (or one that finds no template) is a pass-through.
@@ -81,8 +81,8 @@ type Options struct {
 	// the PR is opened, recording the verdict in the PR body and preview. nil
 	// skips verification (the verdict is "skipped").
 	Verify *VerifyConfig
-	// Agent generates the fix with a coding-agent CLI in a real workspace clone
-	// (multi-file edits, can build/test). Required: it is the fix generator.
+	// Agent generates the fix with a coding-agent CLI in a real workspace clone.
+	// Runtime-specific validators may run only after generation completes.
 	Agent *AgentConfig
 }
 
@@ -99,10 +99,19 @@ type AgentConfig struct {
 	ModelToken          string
 	// MaxTurns bounds the agent loop; zero uses the CLI default.
 	MaxTurns int
-	// AllowBash lets the agent run build/tests while fixing.
+	// MaxFiles bounds the changed-file result.
+	MaxFiles int
+	// ModelGateway is non-secret consumer gateway configuration.
+	ModelGateway runtime.ModelGatewayConfig
+	// OutputLimitBytes bounds the structured executor result.
+	OutputLimitBytes int64
+	// AllowBash lets runtimes that support it run commands during generation.
+	// Agent Sandbox requires false and runs exact validators afterward.
 	AllowBash bool
 	// NetworkDomains are additional dependency registry destinations.
 	NetworkDomains []string
+	// CommandPolicy is the exact provider-neutral command policy.
+	CommandPolicy runtime.CommandPolicy
 	// Timeout bounds the whole generation. Zero uses the Runtime default.
 	Timeout time.Duration
 	// GitToken authenticates the source clone. Empty clones anonymously, which

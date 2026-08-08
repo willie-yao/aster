@@ -43,9 +43,13 @@ the changelog.
      and attaches the `.tgz` to the release,
    - for a **stable** tag only, fast-forwards the `vMAJOR` alias to the tag.
 
-   In parallel, `.github/workflows/image.yml` builds and pushes the container
-   image (fetcher + server + SPA) to `ghcr.io/<owner>/prow-ai-dashboard` with
-   the version tags.
+   In parallel, `.github/workflows/image.yml` builds and pushes the engine,
+   analyzer, local fixer, and Agent Sandbox executor images with `main`,
+   `sha-<short-commit>`, and applicable semantic-version tags. The Agent Sandbox
+   executor is published for `linux/amd64` at
+   `ghcr.io/<owner>/prow-ai-dashboard/agent-sandbox-fix-executor`. Tags are
+   discovery aliases only; deployed Agent Sandbox configuration requires the
+   resolved OCI digest.
 
 ## Pre-release to stable
 

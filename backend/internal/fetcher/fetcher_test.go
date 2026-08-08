@@ -387,3 +387,12 @@ func TestSetJobCatalogRecordsResolvedTestInfraRevision(t *testing.T) {
 		}
 	})
 }
+
+func TestRepositoryTokenExcludedFromAgentSandboxRuntime(t *testing.T) {
+	if got := repositoryToken("agent-sandbox", "github-write-token"); got != "" {
+		t.Fatalf("agent sandbox token = %q, want empty", got)
+	}
+	if got := repositoryToken("opencode", "write-token"); got != "write-token" {
+		t.Fatalf("local token changed = %q", got)
+	}
+}

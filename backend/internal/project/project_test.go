@@ -1426,3 +1426,211 @@ branding:
 		t.Fatalf("revision = %q, want %q", cfg.Discovery.TestInfraRevision, revision)
 	}
 }
+
+func TestEffectiveFixPRsAgentSandboxDefaults(t *testing.T) {
+	c := &Config{AI: &AI{FixPRs: &FixPRs{AgentRuntime: &FixAgentRuntime{Type: "agent-sandbox"}}}}
+	got := c.EffectiveFixPRs().AgentRuntime
+	if got.Timeout != "10m" || got.MaxTurns != 30 {
+		t.Fatalf("agent-sandbox defaults = %+v", got)
+	}
+	if got.AllowBash == nil || *got.AllowBash {
+		t.Fatalf("agent-sandbox allow_bash default = %v, want false", got.AllowBash)
+	}
+}
+
+func TestValidateAgentSandboxFixRuntime(t *testing.T) {
+	c := validConfig()
+	no := false
+	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{
+		Type: "agent-sandbox", AllowBash: &no, MaxTurns: 30, Timeout: "90s", OutputLimitBytes: 131072,
+		AllowedCommands: []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}},
+		ModelGateway:    FixModelGateway{Endpoint: "https://fixture-gateway.fixture.svc.cluster.local/v1", Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1"},
+	}}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid agent-sandbox runtime rejected: %v", err)
+	}
+	yes := true
+	c.AI.FixPRs.AgentRuntime.AllowBash = &yes
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "allow_bash") {
+		t.Fatalf("agent-sandbox allow_bash error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.AllowBash = &no
+	c.AI.FixPRs.AgentRuntime.Model = "provider/model"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "model applies only") {
+		t.Fatalf("agent-sandbox model error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.Model = ""
+	c.AI.FixPRs.AgentRuntime.NetworkDomains = []string{"example.test:443"}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "network_domains") {
+		t.Fatalf("agent-sandbox network error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.NetworkDomains = nil
+	c.AI.FixPRs.AgentRuntime.AllowedCommands = nil
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "allowed_commands") {
+		t.Fatalf("agent-sandbox command policy error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.AllowedCommands = []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}}
+	c.AI.FixPRs.AgentRuntime.ModelGateway.Endpoint = "https://api.openai.com/v1"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "public CA private DNS") {
+		t.Fatalf("agent-sandbox public gateway error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.ModelGateway.Endpoint = "https://model-gateway.platform.example.com/v1"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "public CA private DNS") {
+		t.Fatalf("agent-sandbox unacknowledged private DNS gateway error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.ModelGateway.PublicCAPrivateDNS = true
+	if err := c.Validate(); err != nil {
+		t.Fatalf("agent-sandbox public CA private DNS gateway rejected: %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.ModelGateway.Endpoint = "https://api.anthropic.com/v1"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "non-provider") {
+		t.Fatalf("agent-sandbox direct provider gateway error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.ModelGateway.Endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "non-provider") {
+		t.Fatalf("agent-sandbox NVIDIA provider gateway error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.ModelGateway.Endpoint = "https://fixture-gateway.fixture.svc.cluster.local/v1"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "applies only") {
+		t.Fatalf("agent-sandbox internal gateway acknowledgement error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.ModelGateway.PublicCAPrivateDNS = false
+	c.AI.FixPRs.AgentRuntime.AllowedCommands = []FixAgentCommand{{Argv: []string{"go", "test", "./..."}, Timeout: "30s"}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "must end with argv [git diff --cached --check]") {
+		t.Fatalf("agent-sandbox final command error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.AllowedCommands = []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}}
+	c.AI.FixPRs.AgentRuntime.OutputLimitBytes = 1024
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "output_limit_bytes") {
+		t.Fatalf("agent-sandbox output limit error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.OutputLimitBytes = 131072
+	c.AI.FixPRs.AgentRuntime.Timeout = "31m"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "at most 30m") {
+		t.Fatalf("agent-sandbox timeout error = %v", err)
+	}
+}
+
+func TestAgentSandboxStructuredCommandsPreserveExactArgv(t *testing.T) {
+	runtime := &FixAgentRuntime{MaxTurns: 3, AllowedCommands: []FixAgentCommand{
+		{Argv: []string{"validator", "argument with spaces"}, Timeout: "30s"},
+		{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "1m"},
+	}}
+	commands, err := runtime.RuntimeCommands(2 * time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultTurns := &FixAgentRuntime{AllowedCommands: []FixAgentCommand{{
+		Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s",
+	}}}
+	if _, err := defaultTurns.RuntimeCommands(2 * time.Minute); err != nil {
+		t.Fatalf("default max_turns rejected: %v", err)
+	}
+	if got := commands[0].Argv[1]; got != "argument with spaces" {
+		t.Fatalf("argv = %q", got)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*FixAgentRuntime)
+		want string
+	}{
+		{name: "timeout", edit: func(r *FixAgentRuntime) { r.AllowedCommands[0].Timeout = "3m" }, want: "execution timeout"},
+		{name: "noncanonical timeout", edit: func(r *FixAgentRuntime) { r.AllowedCommands[0].Timeout = "1000ms" }, want: "whole seconds or minutes"},
+		{name: "path executable", edit: func(r *FixAgentRuntime) { r.AllowedCommands[0].Argv[0] = "/usr/bin/validator" }, want: "PATH-resolved"},
+		{name: "dispatcher", edit: func(r *FixAgentRuntime) { r.AllowedCommands[0].Argv = []string{"busybox", "sh", "-c", "true"} }, want: "command dispatcher"},
+		{name: "coding agent", edit: func(r *FixAgentRuntime) { r.AllowedCommands[0].Argv = []string{"opencode", "run"} }, want: "coding agent"},
+		{name: "git alias shell", edit: func(r *FixAgentRuntime) {
+			r.AllowedCommands[0].Argv = []string{"git", "-c", "alias.probe=!sh -c true", "probe"}
+		}, want: "reserved for the exact final"},
+		{name: "no generation step", edit: func(r *FixAgentRuntime) { r.MaxTurns = len(r.AllowedCommands) }, want: "reserve at least one"},
+		{name: "newline", edit: func(r *FixAgentRuntime) { r.AllowedCommands[0].Argv[1] = "line one\nline two" }, want: "single-line"},
+		{name: "empty", edit: func(r *FixAgentRuntime) { r.AllowedCommands[0].Argv[1] = "" }, want: "empty"},
+		{name: "shell", edit: func(r *FixAgentRuntime) { r.AllowedCommands[0].Argv[0] = "sh" }, want: "must not invoke a shell"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			copy := *runtime
+			copy.AllowedCommands = make([]FixAgentCommand, len(runtime.AllowedCommands))
+			for i, command := range runtime.AllowedCommands {
+				copy.AllowedCommands[i] = FixAgentCommand{Argv: append([]string(nil), command.Argv...), Timeout: command.Timeout}
+			}
+			tc.edit(&copy)
+			if _, err := copy.RuntimeCommands(2 * time.Minute); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseRejectsLegacyAgentSandboxCommandStrings(t *testing.T) {
+	const legacy = `
+id: test
+name: Test
+testgrid:
+  dashboard: test
+storage:
+  provider: local
+  base: /tmp
+branding:
+  title: Test
+  base_path: /
+  site_url: https://example.test
+  source_repo:
+    owner: example
+    name: repo
+ai:
+  fix_prs:
+    enabled: true
+    author_name: Fixture
+    author_email: fixture@example.test
+    critique_retries: 0
+    agent_runtime:
+      type: agent-sandbox
+      max_turns: 2
+      allow_bash: false
+      timeout: 2m
+      output_limit_bytes: 131072
+      allowed_commands:
+        - git diff --cached --check
+      model_gateway:
+        endpoint: https://gateway.fix.svc.cluster.local/v1
+        model: fixture
+        protocol_version: openai-chat-completions-v1
+`
+	if _, err := Parse([]byte(legacy)); err == nil || !strings.Contains(err.Error(), "cannot unmarshal") {
+		t.Fatalf("legacy command error = %v", err)
+	}
+}
+
+func TestAgentSandboxIsOneShotByDefault(t *testing.T) {
+	config := validConfig()
+	config.AI = &AI{FixPRs: &FixPRs{AgentRuntime: &FixAgentRuntime{Type: "agent-sandbox"}}}
+	effective := config.EffectiveFixPRs()
+	if effective.CritiqueRetries == nil || *effective.CritiqueRetries != 0 {
+		t.Fatalf("critique retries = %v, want 0", effective.CritiqueRetries)
+	}
+	two := 2
+	config.AI.FixPRs.CritiqueRetries = &two
+	config.AI.FixPRs.AgentRuntime = &FixAgentRuntime{
+		Type: "agent-sandbox", MaxTurns: 2, Timeout: "2m", OutputLimitBytes: 131072,
+		AllowedCommands: []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}},
+		ModelGateway:    FixModelGateway{Endpoint: "https://gateway.fix.svc.cluster.local/v1", Model: "fixture", ProtocolVersion: "openai-chat-completions-v1"},
+	}
+	no := false
+	config.AI.FixPRs.AgentRuntime.AllowBash = &no
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "one-shot") {
+		t.Fatalf("critique retry validation error = %v", err)
+	}
+}
+
+func TestValidateDisabledFixPRRuntimeStillFailsClosed(t *testing.T) {
+	c := validConfig()
+	no := false
+	c.AI = &AI{FixPRs: &FixPRs{Enabled: false, AgentRuntime: &FixAgentRuntime{
+		Type: "agent-sandbox", AllowBash: &no, MaxTurns: 30, Timeout: "10m", OutputLimitBytes: 131072,
+		AllowedCommands: []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}},
+		ModelGateway:    FixModelGateway{Endpoint: "https://api.openai.com/v1", Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1"},
+	}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "public CA private DNS") {
+		t.Fatalf("disabled on-demand runtime validation error = %v", err)
+	}
+}

@@ -15,6 +15,13 @@ func New(cfg *project.FixAgentRuntime) (runtime.AgentRuntime, error) {
 	if cfg == nil || cfg.Type == "" || cfg.Type == "opencode" {
 		return runtime.NewLocalAgent(), nil
 	}
+	if cfg.Type == "agent-sandbox" {
+		rt, err := NewAgentSandboxRuntimeFromEnv(cfg.ModelGateway.RuntimeConfig(), cfg.ModelGateway.PublicCAPrivateDNS, cfg.ParsedTimeout(), cfg.OutputLimitBytes)
+		if err != nil {
+			return nil, fmt.Errorf("agent sandbox fix backend unavailable: %w", err)
+		}
+		return rt, nil
+	}
 	if cfg.Type != "orka" {
 		return nil, fmt.Errorf("unsupported fix runtime %q", cfg.Type)
 	}

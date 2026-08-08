@@ -43,6 +43,7 @@ backend/                         Go 1.25
     worker/                      Continuous in-cluster watch loop (k8s mode: watch)
     server/                      API server: /data/* read parity, capabilities, actions
     analyzer/                    Runs one failure analysis request (Orka container runtime)
+    fixexecutor/                 Runs one credential-free Agent Sandbox fix workload
   internal/
     -- core pipeline (discover -> analyze -> write) --
     fetcher/                     Orchestration invoked by cmd/fetcher and cmd/worker
@@ -85,6 +86,7 @@ backend/                         Go 1.25
     issues/                      Opens and maintains GitHub issues
     fixpr/                       Drafts minimal code fixes for recurring patterns
     fixruntime/                  Selects the coding-agent runtime for fix PRs
+    fixexecutor/                 Clones, runs OpenCode, validates, and returns one staged patch
     chatfix/                     Bridges one chat response into fix generation
     remediation/                 Lifecycle of dashboard-created fixes
     resolve/                     Admin-marked "resolved" recurring patterns

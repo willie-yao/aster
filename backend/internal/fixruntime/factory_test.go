@@ -1,10 +1,13 @@
 package fixruntime
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"k8s.io/client-go/rest"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
@@ -106,5 +109,95 @@ current-context: test
 	}
 	if _, ok := got.(*orka.AgentRuntime); !ok {
 		t.Fatalf("runtime = %T, want Orka AgentRuntime", got)
+	}
+}
+
+func TestNewAgentSandboxSelectionRequiresIsolatedConfiguration(t *testing.T) {
+	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
+	config := `apiVersion: v1
+kind: Config
+clusters:
+- name: test
+  cluster:
+    server: https://127.0.0.1:65535
+users:
+- name: test
+  user:
+    token: test
+contexts:
+- name: test
+  context:
+    cluster: test
+    user: test
+current-context: test
+`
+	if err := os.WriteFile(kubeconfig, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBECONFIG", kubeconfig)
+	originalInClusterConfig := agentSandboxInClusterConfig
+	t.Cleanup(func() { agentSandboxInClusterConfig = originalInClusterConfig })
+	agentSandboxInClusterConfig = func() (*rest.Config, error) {
+		return &rest.Config{Host: "https://127.0.0.1:65535"}, nil
+	}
+	gateway := project.FixModelGateway{Endpoint: "https://fixture-gateway.fixture.svc.cluster.local/v1", Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1"}
+	t.Setenv("AGENT_SANDBOX_NAMESPACE", "fix-eval")
+	t.Setenv("AGENT_SANDBOX_IMAGE", "registry.example.test/fixer@sha256:"+strings.Repeat("a", 64))
+	t.Setenv("AGENT_SANDBOX_SERVICE_ACCOUNT", "fix-workload")
+	t.Setenv("AGENT_SANDBOX_RUNTIME_CLASS", "kata-vm-isolation")
+	t.Setenv("AGENT_SANDBOX_MODEL_GATEWAY_ENDPOINT", gateway.Endpoint)
+	t.Setenv("AGENT_SANDBOX_MODEL_GATEWAY_MODEL", gateway.Model)
+	t.Setenv("AGENT_SANDBOX_MODEL_GATEWAY_PROTOCOL", gateway.ProtocolVersion)
+	t.Setenv("AGENT_SANDBOX_MODEL_GATEWAY_PUBLIC_CA_PRIVATE_DNS", "false")
+	t.Setenv("AGENT_SANDBOX_TIMEOUT", "10m")
+	t.Setenv("AGENT_SANDBOX_OUTPUT_LIMIT_BYTES", "131072")
+	t.Setenv("AGENT_SANDBOX_CPU_REQUEST", "100m")
+	t.Setenv("AGENT_SANDBOX_CPU_LIMIT", "1")
+	t.Setenv("AGENT_SANDBOX_MEMORY_REQUEST", "128Mi")
+	t.Setenv("AGENT_SANDBOX_MEMORY_LIMIT", "512Mi")
+	t.Setenv("AGENT_SANDBOX_EPHEMERAL_STORAGE_LIMIT", "256Mi")
+	got, err := New(&project.FixAgentRuntime{Type: "agent-sandbox", Timeout: "10m", OutputLimitBytes: 131072, ModelGateway: gateway})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, ok := got.(*AgentSandboxRuntime)
+	if !ok {
+		t.Fatalf("runtime = %T, want AgentSandboxRuntime", got)
+	}
+	if runtime.opts.appArmorCapability != appArmorRuntimeDefault {
+		t.Fatalf("production AppArmor capability = %s", runtime.opts.appArmorCapability)
+	}
+	gateway.Endpoint = "https://model-gateway.platform.example.com/v1"
+	gateway.PublicCAPrivateDNS = true
+	t.Setenv("AGENT_SANDBOX_MODEL_GATEWAY_ENDPOINT", gateway.Endpoint)
+	t.Setenv("AGENT_SANDBOX_MODEL_GATEWAY_PUBLIC_CA_PRIVATE_DNS", "true")
+	got, err = New(&project.FixAgentRuntime{Type: "agent-sandbox", Timeout: "10m", OutputLimitBytes: 131072, ModelGateway: gateway})
+	if err != nil {
+		t.Fatalf("public CA private DNS runtime: %v", err)
+	}
+	if !got.(*AgentSandboxRuntime).opts.PublicCAPrivateDNS {
+		t.Fatal("public CA private DNS setting was not retained")
+	}
+}
+
+func TestNewAgentSandboxSelectionDoesNotUseAmbientKubeconfig(t *testing.T) {
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "ambient-kubeconfig"))
+	originalInClusterConfig := agentSandboxInClusterConfig
+	t.Cleanup(func() { agentSandboxInClusterConfig = originalInClusterConfig })
+	agentSandboxInClusterConfig = func() (*rest.Config, error) { return nil, errors.New("not in cluster") }
+	gateway := project.FixModelGateway{Endpoint: "https://fixture-gateway.fixture.svc.cluster.local/v1", Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1"}
+	for name, value := range map[string]string{
+		"AGENT_SANDBOX_NAMESPACE": "fix-eval", "AGENT_SANDBOX_IMAGE": "registry.example.test/fixer@sha256:" + strings.Repeat("a", 64),
+		"AGENT_SANDBOX_SERVICE_ACCOUNT": "fix-workload", "AGENT_SANDBOX_RUNTIME_CLASS": "kata-vm-isolation",
+		"AGENT_SANDBOX_MODEL_GATEWAY_ENDPOINT": gateway.Endpoint, "AGENT_SANDBOX_MODEL_GATEWAY_MODEL": gateway.Model,
+		"AGENT_SANDBOX_MODEL_GATEWAY_PROTOCOL": gateway.ProtocolVersion, "AGENT_SANDBOX_MODEL_GATEWAY_PUBLIC_CA_PRIVATE_DNS": "false", "AGENT_SANDBOX_TIMEOUT": "10m",
+		"AGENT_SANDBOX_OUTPUT_LIMIT_BYTES": "131072", "AGENT_SANDBOX_CPU_REQUEST": "100m", "AGENT_SANDBOX_CPU_LIMIT": "1",
+		"AGENT_SANDBOX_MEMORY_REQUEST": "128Mi", "AGENT_SANDBOX_MEMORY_LIMIT": "512Mi", "AGENT_SANDBOX_EPHEMERAL_STORAGE_LIMIT": "256Mi",
+	} {
+		t.Setenv(name, value)
+	}
+	_, err := New(&project.FixAgentRuntime{Type: "agent-sandbox", Timeout: "10m", OutputLimitBytes: 131072, ModelGateway: gateway})
+	if err == nil || !strings.Contains(err.Error(), "requires in-cluster Kubernetes configuration") {
+		t.Fatalf("error = %v", err)
 	}
 }
