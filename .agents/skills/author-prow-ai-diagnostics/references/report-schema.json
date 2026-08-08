@@ -234,6 +234,7 @@
       "required": [
         "repository",
         "commit",
+        "commit_status",
         "project_sha256",
         "existing_prompt_sha256",
         "active_skill_set_hash"
@@ -244,7 +245,14 @@
           "minLength": 1
         },
         "commit": {
-          "$ref": "#/$defs/git_sha"
+          "oneOf": [
+            {
+              "$ref": "#/$defs/git_sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "project_sha256": {
           "$ref": "#/$defs/sha256"
@@ -254,6 +262,12 @@
         },
         "active_skill_set_hash": {
           "$ref": "#/$defs/sha256"
+        },
+        "commit_status": {
+          "enum": [
+            "resolved",
+            "not_applicable"
+          ]
         }
       },
       "additionalProperties": false
@@ -1443,7 +1457,14 @@
           "minLength": 1
         },
         "consumer_commit": {
-          "$ref": "#/$defs/git_sha"
+          "oneOf": [
+            {
+              "$ref": "#/$defs/git_sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "project_sha256": {
           "$ref": "#/$defs/sha256"
@@ -2070,7 +2091,14 @@
           ]
         },
         "consumer_commit": {
-          "$ref": "#/$defs/git_sha"
+          "oneOf": [
+            {
+              "$ref": "#/$defs/git_sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "project_sha256": {
           "$ref": "#/$defs/sha256"

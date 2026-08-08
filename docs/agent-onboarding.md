@@ -115,9 +115,11 @@ engine repository the source project.
 
 When exact jobs are named, the agent should use bucket discovery with repeated
 `-exact-job` flags rather than accepting a shared TestGrid dashboard containing
-unrelated jobs. For a Codex evaluation workspace it also records exact engine
-identity and writes `manifest/locations.json`,
-`manifest/consumer-files.sha256`, and `reports/setup-summary.md`.
+unrelated jobs. For a Codex evaluation workspace it records exact engine, source, catalog, and
+job identities and writes canonical `manifest/apply-result.json` and
+`manifest/setup-handoff.json` outputs. Compatibility summaries may also include
+`manifest/locations.json`, `manifest/consumer-files.sha256`, and
+`reports/setup-summary.md`.
 
 The skill should also trigger for requests such as:
 
@@ -133,9 +135,12 @@ The skill should also trigger for requests such as:
 - GitHub Pages or Kubernetes deployment files.
 - TestGrid or bucket-based job discovery.
 - Optional presubmit inclusion.
-- An agent-authored project prompt using the generated handoff and engine-owned
-  prompt-generation skill.
-- A final read-only doctor check.
+- A source-only prompt baseline or preservation of an existing consumer prompt.
+- A read-only artifact-usability smoke check and final doctor report, including
+  a warning when sampled builds have no JUnit and only build-level analysis may
+  be available.
+- A validated machine-readable handoff with first-class artifact location and
+  test-infra identity for `$author-prow-ai-diagnostics`.
 
 Git initialization, GitHub repository creation, pushes, pull requests, Pages
 configuration, Secret writes, Helm installation, and deployment remain separate
@@ -147,27 +152,33 @@ The agent should:
 
 1. Determine the source and intended consumer repository identities.
 2. Run `fetcher onboard discover -json`.
-3. Ask for unresolved placement, deployment, and discovery decisions.
-4. Run a complete non-interactive dry run with `-prompt-mode handoff` and
-   `-plan-out`.
-5. Present every planned create or replace action and the plan digest.
-6. Apply the saved artifact with `-apply-plan` and `-plan-digest` after
-   confirmation.
-7. Follow `PROMPT_HANDOFF.md` and the generated
-   `system-prompt-generation/SKILL.md` to complete `prompts/system.md`.
-8. Run `fetcher onboard doctor`.
+3. Select Pages or Kubernetes from artifact privacy, provider reachability,
+   authentication, persistent state, admin actions, and cluster-local endpoints.
+4. Run a complete non-interactive dry run with `-prompt-mode handoff`,
+   `-artifact-access`, repeated `-deployment-reason`, and `-plan-out`.
+5. Present exact engine/source/catalog/job pins plus every create, replace, or
+   preserve action and the plan digest.
+6. Apply the saved artifact with `-apply-plan`, `-plan-digest`, `-result-out`,
+   `-handoff-out`, and `-artifact-smoke-builds` after confirmation.
+7. Validate `manifest/setup-handoff.json` with the setup skill's bundled script.
+8. Pass the validated handoff to `$author-prow-ai-diagnostics`.
 9. Report remaining checklist and deployment work.
 
-For existing generated files, the first dry run reports conflicts. The agent
-must ask before rerunning with `-update-existing`, then review the complete
-replacement plan. Onboarding's direct `-open-pr` mode is intentionally not used
-because prompt completion and doctor require local files. The temporary plan
-artifact must stay outside the consumer destination.
+For an existing consumer, the first dry run reports conflicts. The agent must
+ask before rerunning with `-update-existing`. Update mode replaces only
+engine-generated files and preserves `prompts/system.md` plus existing
+`skills/*.yaml` or `skills/*.yml`. Replacing the prompt requires a separate
+existing-versus-candidate diff, explicit approval, and a new plan with
+`-replace-consumer-owned`. Existing skills are never replaced by setup.
+
+Onboarding's direct `-open-pr` mode is intentionally not used because local
+doctor, artifact smoke, and handoff validation require local files. The plan and
+result files stay outside the consumer destination.
 
 The skill must use `fetcher onboard` rather than hand-writing `project.yaml`,
 workflows, Helm values, or deployment guides. This keeps agent-driven setup on
-the same discovery, validation, credential, path, and generated-file contracts
-as the wizard.
+the same discovery, validation, credential, path, preservation, and hashing
+contracts as the wizard.
 
 ## Improve diagnostics after setup
 
@@ -181,7 +192,10 @@ under proposals/skills without activating them.
 
 The diagnostic-authoring skill:
 
-- Pins engine, source, test-infra, job, build, prompt, and recipe identities.
+- Validates and consumes `setup-handoff.json` without repeating pinned setup
+  discovery.
+- Pins engine, source, test-infra, artifact location, job, build, prompt, and
+  recipe identities.
 - Uses a representative historical failure corpus rather than tuning to one
   selected failure.
 - Preserves the required nine-section project prompt contract.
@@ -189,6 +203,12 @@ The diagnostic-authoring skill:
 - Validates trigger polarity, evidence groups, collisions, and held-out cases.
 - Writes proposals under `proposals/skills/` and reports under `reports/`.
 - Can abstain when the evidence does not justify a prompt or recipe change.
+- Records a non-Git consumer with null commit and
+  `commit_status: not_applicable`, not an all-zero placeholder.
+- Uses a detached validation worktree or a copy with `.git` fully excluded, so a
+  validation commit cannot modify the pinned engine branch.
+- Labels remote GCS or HTTP blind access `self_reported` unless evidence was
+  first copied into a wrapper-controlled local tree.
 - Never promotes proposals into active `skills/` without later explicit
   approval.
 

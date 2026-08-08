@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/onboard/promptauthor"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"golang.org/x/term"
@@ -24,31 +23,32 @@ import (
 var ErrCancelled = errors.New("onboarding cancelled")
 
 type dependencies struct {
-	repositories repositoryClient
-	catalogs     catalogClient
-	sweeper      jobSweeper
-	remotes      remoteDetector
-	prompts      promptBuilder
-	files        scaffoldWriter
-	pullRequests pullRequestWriter
-	terminal     Terminal
-	wizard       wizardUI
+	repositories   repositoryClient
+	sourceRevision sourceRevisionResolver
+	catalogs       catalogClient
+	sweeper        jobSweeper
+	remotes        remoteDetector
+	prompts        promptBuilder
+	files          scaffoldWriter
+	pullRequests   pullRequestWriter
+	terminal       Terminal
+	wizard         wizardUI
 }
 
 type defaultSweeper struct{}
 
-func (defaultSweeper) Discover(ctx context.Context, cfg *project.Config, includePresubmits bool) ([]models.ProwJob, error) {
+func (defaultSweeper) Discover(ctx context.Context, cfg *project.Config, includePresubmits bool) (JobSweep, error) {
 	return discover(ctx, cfg, includePresubmits)
 }
 
 type localScaffoldWriter struct{}
 
-func (localScaffoldWriter) Inspect(outDir string, files map[string]string) ([]DestinationFilePlan, []string, error) {
-	return inspectFileDestination(outDir, files)
+func (localScaffoldWriter) Inspect(outDir string, files map[string]string, replaceConsumerOwned bool) ([]DestinationFilePlan, []string, error) {
+	return inspectFileDestination(outDir, files, replaceConsumerOwned)
 }
 
-func (localScaffoldWriter) Write(outDir string, files map[string]string, updateExisting bool, expected []DestinationFilePlan) error {
-	return writeFiles(outDir, files, updateExisting, expected)
+func (localScaffoldWriter) Write(outDir string, files map[string]string, updateExisting, replaceConsumerOwned bool, expected []DestinationFilePlan) error {
+	return writeFiles(outDir, files, updateExisting, replaceConsumerOwned, expected)
 }
 
 type githubPullRequestWriter struct {
@@ -69,15 +69,16 @@ func (w githubPullRequestWriter) Open(ctx context.Context, repo Repo, files map[
 func defaultDependencies(opts Options, terminal Terminal) dependencies {
 	client := defaultDiscoveryHTTPClient()
 	return dependencies{
-		repositories: githubRepositoryClient{client: client},
-		catalogs:     prowCatalogClient{client: client},
-		sweeper:      defaultSweeper{},
-		remotes:      gitRemoteDetector{},
-		prompts:      defaultPromptBuilder{err: terminal.Err},
-		files:        localScaffoldWriter{},
-		pullRequests: githubPullRequestWriter{client: &http.Client{Timeout: 30 * time.Second}, token: opts.GitHubToken},
-		terminal:     terminal,
-		wizard:       newWizardUI(terminal),
+		repositories:   githubRepositoryClient{client: client},
+		sourceRevision: githubSourceRevisionResolver{},
+		catalogs:       prowCatalogClient{client: client},
+		sweeper:        defaultSweeper{},
+		remotes:        gitRemoteDetector{},
+		prompts:        defaultPromptBuilder{err: terminal.Err},
+		files:          localScaffoldWriter{},
+		pullRequests:   githubPullRequestWriter{client: &http.Client{Timeout: 30 * time.Second}, token: opts.GitHubToken},
+		terminal:       terminal,
+		wizard:         newWizardUI(terminal),
 	}
 }
 
@@ -224,12 +225,19 @@ func inspectPlanDestination(plan *Plan, deps dependencies) error {
 		plan.Destination.StaleFiles = nil
 		return nil
 	}
-	files, stale, err := deps.files.Inspect(plan.Destination.OutDir, plan.Files)
+	files, stale, err := deps.files.Inspect(plan.Destination.OutDir, plan.Files, plan.Destination.ReplaceConsumerOwned)
 	if err != nil {
 		return err
 	}
 	plan.Destination.Files = files
 	plan.Destination.StaleFiles = stale
+	plan.Prompt.ExistingSHA256 = ""
+	for _, file := range files {
+		if file.Path == "prompts/system.md" && file.Action != destinationActionCreate {
+			plan.Prompt.ExistingSHA256 = file.ReviewedDigest
+			break
+		}
+	}
 	return nil
 }
 
@@ -253,7 +261,7 @@ func applyPlan(ctx context.Context, plan *Plan, githubToken string, deps depende
 		fmt.Fprintf(deps.terminal.Out, "Scaffold pull request opened: %s\n", url)
 		return nil
 	}
-	files, _, err := deps.files.Inspect(plan.Destination.OutDir, plan.Files)
+	files, _, err := deps.files.Inspect(plan.Destination.OutDir, plan.Files, plan.Destination.ReplaceConsumerOwned)
 	if err != nil {
 		return err
 	}
@@ -263,11 +271,11 @@ func applyPlan(ctx context.Context, plan *Plan, githubToken string, deps depende
 	if replacements := destinationReplacementPaths(files); len(replacements) > 0 && !plan.Destination.UpdateExisting {
 		return &destinationConflictError{paths: replacements}
 	}
-	if err := deps.files.Write(plan.Destination.OutDir, plan.Files, plan.Destination.UpdateExisting, plan.Destination.Files); err != nil {
+	if err := deps.files.Write(plan.Destination.OutDir, plan.Files, plan.Destination.UpdateExisting, plan.Destination.ReplaceConsumerOwned, plan.Destination.Files); err != nil {
 		return err
 	}
 	fmt.Fprintf(deps.terminal.Out, "Scaffold written to %s/\n", plan.Destination.OutDir)
-	fmt.Fprintf(deps.terminal.Out, "Next: review prompts/system.md and project.yaml, then follow %s.\n", scaffoldGuide(plan.Deployment.Mode))
+	fmt.Fprintf(deps.terminal.Out, "Next: review project.yaml and the source-only prompts/system.md baseline, follow %s, then run $author-prow-ai-diagnostics.\n", scaffoldGuide(plan.Deployment.Mode))
 	return nil
 }
 
@@ -291,12 +299,61 @@ func validatePlan(planValue *Plan) error {
 	if planValue == nil {
 		return fmt.Errorf("onboarding plan is nil")
 	}
-	normalizedRepo, err := NormalizeGitHubRepo(planValue.DashboardRepo.FullName)
-	if err != nil {
-		return fmt.Errorf("onboarding plan dashboard repo: %w", err)
+	if strings.TrimSpace(planValue.Engine.Path) == "" || strings.TrimSpace(planValue.Engine.Version) == "" {
+		return fmt.Errorf("onboarding plan engine identity is incomplete")
 	}
-	if normalizedRepo.Owner != planValue.DashboardRepo.Owner || normalizedRepo.Name != planValue.DashboardRepo.Name {
-		return fmt.Errorf("onboarding plan dashboard repo fields do not match full_name")
+	for label, repo := range map[string]Repo{"source": planValue.SourceRepo, "dashboard": planValue.DashboardRepo} {
+		normalized, err := NormalizeGitHubRepo(repo.FullName)
+		if err != nil {
+			return fmt.Errorf("onboarding plan %s repo: %w", label, err)
+		}
+		if normalized.Owner != repo.Owner || normalized.Name != repo.Name {
+			return fmt.Errorf("onboarding plan %s repo fields do not match full_name", label)
+		}
+	}
+	switch planValue.SourceRevision.Status {
+	case sourceRevisionResolved:
+		if strings.TrimSpace(planValue.SourceRevision.Ref) == "" {
+			return fmt.Errorf("onboarding plan resolved source revision has no ref")
+		}
+		if planValue.SourceRepo.Branch != "" && planValue.SourceRepo.Branch != planValue.SourceRevision.Ref {
+			return fmt.Errorf("onboarding plan source branch does not match the resolved ref")
+		}
+		if !validGitRevision(planValue.SourceRevision.Revision) {
+			return fmt.Errorf("onboarding plan source revision is invalid")
+		}
+	case sourceRevisionUnresolved:
+		if planValue.SourceRevision.Revision != "" {
+			return fmt.Errorf("onboarding plan unresolved source revision retained a commit")
+		}
+	default:
+		return fmt.Errorf("onboarding plan source revision status %q is invalid", planValue.SourceRevision.Status)
+	}
+	if len(planValue.Deployment.Reasons) == 0 {
+		return fmt.Errorf("onboarding plan deployment reasons are empty")
+	}
+	for _, reason := range planValue.Deployment.Reasons {
+		if strings.TrimSpace(reason) == "" {
+			return fmt.Errorf("onboarding plan deployment reason is empty")
+		}
+	}
+	switch planValue.Deployment.ArtifactAccess {
+	case artifactAccessPublic, artifactAccessAuthenticated, artifactAccessPrivate, artifactAccessUnknown:
+	default:
+		return fmt.Errorf("onboarding plan artifact access %q is invalid", planValue.Deployment.ArtifactAccess)
+	}
+	if planValue.Discovery.TestGrid != "" && !validGitRevision(planValue.Discovery.CatalogRevision) {
+		return fmt.Errorf("onboarding plan TestGrid discovery is missing a valid test-infra revision")
+	}
+	if planValue.Discovery.TestGrid == "" && planValue.Discovery.CatalogRevision != "" {
+		return fmt.Errorf("onboarding plan bucket discovery retained a test-infra revision")
+	}
+	discoveryDigest, err := discoveryPlanDigest(planValue.Discovery)
+	if err != nil {
+		return fmt.Errorf("hashing onboarding plan discovery output: %w", err)
+	}
+	if discoveryDigest != planValue.Discovery.Digest {
+		return fmt.Errorf("onboarding plan discovery digest does not match the selected jobs")
 	}
 	if !planValue.Destination.OpenPR {
 		normalizedOutDir, err := normalizeDashboardConsumerDir(planValue.Destination.OutDir)
@@ -307,7 +364,10 @@ func validatePlan(planValue *Plan) error {
 			return fmt.Errorf("onboarding plan dashboard consumer directory is not normalized")
 		}
 	}
-	if planValue.Destination.OpenPR && planValue.Destination.UpdateExisting {
+	if planValue.Destination.ReplaceConsumerOwned && !planValue.Destination.UpdateExisting {
+		return fmt.Errorf("onboarding plan consumer-owned replacement requires update-existing mode")
+	}
+	if planValue.Destination.OpenPR && (planValue.Destination.UpdateExisting || planValue.Destination.ReplaceConsumerOwned) {
 		return fmt.Errorf("onboarding plan cannot combine open-PR and local update modes")
 	}
 	if planValue.Destination.OpenPR && (len(planValue.Destination.Files) > 0 || len(planValue.Destination.StaleFiles) > 0) {
@@ -344,33 +404,73 @@ func validatePlan(planValue *Plan) error {
 			return err
 		}
 	}
+	if planValue.Prompt.CandidateSHA256 != planArtifactDigest([]byte(planValue.Files["prompts/system.md"])) {
+		return fmt.Errorf("onboarding plan candidate prompt digest does not match prompts/system.md")
+	}
 	if !planValue.Destination.OpenPR {
-		if len(planValue.Destination.Files) != len(expected) {
-			return fmt.Errorf("onboarding plan destination file set is incomplete")
-		}
 		seen := make(map[string]struct{}, len(planValue.Destination.Files))
 		for _, file := range planValue.Destination.Files {
-			if _, ok := expected[file.Path]; !ok {
+			_, generated := expected[file.Path]
+			if !generated && !isConsumerSkillPath(file.Path) {
 				return fmt.Errorf("onboarding plan destination contains unexpected file %q", file.Path)
 			}
 			if _, duplicate := seen[file.Path]; duplicate {
 				return fmt.Errorf("onboarding plan destination duplicates file %q", file.Path)
 			}
 			seen[file.Path] = struct{}{}
-			if file.Action != destinationActionCreate && file.Action != destinationActionReplace {
-				return fmt.Errorf("onboarding plan destination action %q is invalid", file.Action)
+			if err := validateDestinationFilePath(file.Path); err != nil {
+				return err
 			}
-			if file.Action == destinationActionCreate && file.ReviewedDigest != "" {
-				return fmt.Errorf("onboarding plan create action for %q retained a reviewed digest", file.Path)
+			if file.Ownership != destinationFileOwnership(file.Path) {
+				return fmt.Errorf("onboarding plan destination ownership for %q is invalid", file.Path)
 			}
-			if file.Action == destinationActionReplace {
+			switch file.Action {
+			case destinationActionCreate:
+				if file.ReviewedDigest != "" {
+					return fmt.Errorf("onboarding plan create action for %q retained a reviewed digest", file.Path)
+				}
+				if !generated {
+					return fmt.Errorf("onboarding plan cannot create ungenerated consumer file %q", file.Path)
+				}
+			case destinationActionReplace:
 				if _, err := parseSHA256Digest(file.ReviewedDigest, "reviewed destination digest"); err != nil {
 					return fmt.Errorf("onboarding plan replacement for %q has an invalid reviewed digest", file.Path)
 				}
+				if !planValue.Destination.UpdateExisting {
+					return fmt.Errorf("onboarding plan replacement requires update-existing mode")
+				}
+				if file.Ownership == destinationOwnershipConsumer && !planValue.Destination.ReplaceConsumerOwned {
+					return fmt.Errorf("onboarding plan consumer-owned replacement for %q lacks explicit approval", file.Path)
+				}
+				if isConsumerSkillPath(file.Path) {
+					return fmt.Errorf("onboarding plan cannot replace consumer skill %q", file.Path)
+				}
+			case destinationActionPreserve:
+				if file.Ownership != destinationOwnershipConsumer {
+					return fmt.Errorf("onboarding plan preserve action for %q is not consumer-owned", file.Path)
+				}
+				if _, err := parseSHA256Digest(file.ReviewedDigest, "reviewed destination digest"); err != nil {
+					return fmt.Errorf("onboarding plan preservation for %q has an invalid reviewed digest", file.Path)
+				}
+			default:
+				return fmt.Errorf("onboarding plan destination action %q is invalid", file.Action)
 			}
-			if file.Action == destinationActionReplace && !planValue.Destination.UpdateExisting {
-				return fmt.Errorf("onboarding plan replacement requires update-existing mode")
+		}
+		for file := range expected {
+			if _, ok := seen[file]; !ok {
+				return fmt.Errorf("onboarding plan destination file set is incomplete")
 			}
+		}
+		promptDestination := destinationFileByPath(planValue.Destination.Files, "prompts/system.md")
+		if promptDestination == nil {
+			return fmt.Errorf("onboarding plan destination prompt is missing")
+		}
+		if promptDestination.Action == destinationActionCreate {
+			if planValue.Prompt.ExistingSHA256 != "" {
+				return fmt.Errorf("onboarding plan new prompt retained an existing digest")
+			}
+		} else if planValue.Prompt.ExistingSHA256 != promptDestination.ReviewedDigest {
+			return fmt.Errorf("onboarding plan existing prompt digest does not match the reviewed destination")
 		}
 	}
 	for _, stale := range planValue.Destination.StaleFiles {
@@ -409,11 +509,35 @@ func validatePlan(planValue *Plan) error {
 	return nil
 }
 
+func validGitRevision(value string) bool {
+	return len(value) == 40 && strings.IndexFunc(value, func(r rune) bool {
+		return !strings.ContainsRune("0123456789abcdefABCDEF", r)
+	}) < 0
+}
+
+func destinationFileByPath(files []DestinationFilePlan, wanted string) *DestinationFilePlan {
+	for i := range files {
+		if files[i].Path == wanted {
+			return &files[i]
+		}
+	}
+	return nil
+}
+
 func printReview(out io.Writer, plan *Plan) {
 	fmt.Fprintln(out, "\nReview")
+	fmt.Fprintf(out, "  Engine:               %s (%s)\n", safeTerminal(plan.Engine.Path), safeTerminal(plan.Engine.Version))
+	if plan.Engine.Revision != "" {
+		fmt.Fprintf(out, "  Engine revision:      %s\n", safeTerminal(plan.Engine.Revision))
+	}
 	fmt.Fprintf(out, "  Source repository:    %s\n", safeTerminal(plan.SourceRepo.FullName))
 	if source, ok := plan.Provenance["source_repo"]; ok {
 		fmt.Fprintf(out, "    Source: %s (%s confidence)\n", source.Source, source.Confidence)
+	}
+	if plan.SourceRevision.Revision != "" {
+		fmt.Fprintf(out, "  Source revision:      %s (%s)\n", safeTerminal(plan.SourceRevision.Revision), safeTerminal(plan.SourceRevision.Ref))
+	} else {
+		fmt.Fprintf(out, "  Source revision:      unresolved (%s)\n", reviewValue(plan.SourceRevision.Ref))
 	}
 	if plan.Discovery.TestGrid != "" {
 		fmt.Fprintf(out, "  TestGrid dashboard:   %s\n", safeTerminal(plan.Discovery.TestGrid))
@@ -427,7 +551,12 @@ func printReview(out io.Writer, plan *Plan) {
 	if plan.Discovery.CatalogRevision != "" {
 		fmt.Fprintf(out, "  Prow catalog revision: %s\n", safeTerminal(plan.Discovery.CatalogRevision))
 	}
+	fmt.Fprintf(out, "  Discovery digest:     %s\n", safeTerminal(plan.Discovery.Digest))
 	fmt.Fprintf(out, "  Deployment:           %s\n", deploymentLabel(plan.Deployment.Mode))
+	fmt.Fprintf(out, "  Artifact access:      %s\n", safeTerminal(plan.Deployment.ArtifactAccess))
+	for _, reason := range plan.Deployment.Reasons {
+		fmt.Fprintf(out, "    Reason: %s\n", safeTerminal(reason))
+	}
 	fmt.Fprintf(out, "  Dashboard repository: %s\n", safeTerminal(plan.DashboardRepo.FullName))
 	if inferred, ok := plan.Provenance["dashboard_repo"]; ok {
 		fmt.Fprintf(out, "    Source: %s (%s confidence)\n", inferred.Source, inferred.Confidence)
@@ -451,6 +580,11 @@ func printReview(out io.Writer, plan *Plan) {
 		fmt.Fprintln(out, "  AI analysis:          disabled in initial scaffold")
 	}
 	fmt.Fprintf(out, "  Prompt:               %s\n", safeTerminal(plan.Prompt.Source))
+	fmt.Fprintf(out, "  Prompt baseline:      %s\n", safeTerminal(plan.Prompt.BaselineStatus))
+	fmt.Fprintf(out, "  Candidate prompt:     %s\n", safeTerminal(plan.Prompt.CandidateSHA256))
+	if plan.Prompt.ExistingSHA256 != "" {
+		fmt.Fprintf(out, "  Existing prompt:      %s\n", safeTerminal(plan.Prompt.ExistingSHA256))
+	}
 	fmt.Fprintf(out, "  Prompt requested:     %s\n", safeTerminal(plan.Prompt.RequestedMode))
 	if plan.Prompt.RequestedMode == string(promptRequestAgent) {
 		fmt.Fprintf(out, "  Prompt timeout:       %s\n", safeTerminal(plan.Prompt.Timeout))
@@ -471,7 +605,10 @@ func printReview(out io.Writer, plan *Plan) {
 	} else {
 		fmt.Fprintf(out, "  Dashboard consumer directory: %s\n", safeTerminal(filepath.Clean(plan.Destination.OutDir)))
 		if plan.Destination.UpdateExisting {
-			fmt.Fprintln(out, "  Existing scaffold:    update known generated files")
+			fmt.Fprintln(out, "  Existing scaffold:    update known engine-generated files")
+		}
+		if plan.Destination.ReplaceConsumerOwned {
+			fmt.Fprintln(out, "  Consumer prompt:      explicitly approved for replacement")
 		}
 	}
 	fmt.Fprintln(out, "  Files:")
@@ -486,6 +623,9 @@ func printReview(out io.Writer, plan *Plan) {
 	}
 	for _, stale := range plan.Destination.StaleFiles {
 		fmt.Fprintf(out, "  Warning: existing generated file %s is stale for the selected modes and will be left untouched.\n", stale)
+	}
+	for _, warning := range plan.Warnings {
+		fmt.Fprintf(out, "  Warning: %s\n", safeTerminal(warning))
 	}
 	fmt.Fprintln(out, "\nNo files or external resources have been changed.")
 }
@@ -507,7 +647,7 @@ func reviewValue(value string) string {
 }
 
 func printDryRun(out io.Writer, plan *Plan) {
-	fmt.Fprintln(out, "\nDry run complete. The scaffold rendered, project.yaml passed strict validation, and the create/replace plan was reviewed.")
+	fmt.Fprintln(out, "\nDry run complete. The scaffold rendered, project.yaml passed strict validation, and the create/replace plan was reviewed, including explicit preserves.")
 	fmt.Fprintln(out, "No scaffold files were written and no pull request was opened.")
 }
 

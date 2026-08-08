@@ -17,10 +17,11 @@ investigation. If the consumer is missing or invalid, use
 `$setup-prow-ai-consumer` and the engine CLI. Do not recreate scaffold,
 discovery, or doctor logic in this skill.
 
-A request to author diagnostics permits writes only to the selected consumer's
-prompt, proposal, and report paths. It does not authorize deployment, source
-repository changes, upstream comments, Secret access, live-cluster changes, or
-recipe activation.
+A request to author diagnostics permits writes only under the selected authoring
+workspace root. That root may be the consumer repository or a private evaluation
+workspace containing a disposable consumer copy. It does not authorize writes to
+the pinned public consumer, deployment, source repository changes, upstream
+comments, Secret access, live-cluster changes, or recipe activation.
 
 ## Choose the corpus and splits
 

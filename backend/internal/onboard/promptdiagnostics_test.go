@@ -35,6 +35,8 @@ func TestPromptPlanAgentFallbackIsValidated(t *testing.T) {
 		Output:    promptOutputTemplate,
 		Failure:   failure,
 	}).promptPlan(Options{PromptAgentModel: defaultPromptAgentModel, PromptTimeout: 30 * time.Minute})
+	plan.BaselineStatus = promptBaselineSourceOnly
+	plan.CandidateSHA256 = planArtifactDigest([]byte("candidate"))
 	if err := validatePromptPlan(plan); err != nil {
 		t.Fatal(err)
 	}

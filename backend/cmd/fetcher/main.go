@@ -118,6 +118,9 @@ func runOnboard(args []string) {
 	var includePresubmits bool
 	var applyPlanPath string
 	var applyPlanDigest string
+	var applyResultOut string
+	var setupHandoffOut string
+	var artifactSmokeBuilds int
 	fs.StringVar(&opts.TestGrid, "testgrid", "", "testgrid dashboard name to discover jobs from (kubernetes-ecosystem Prow)")
 	fs.StringVar(&opts.Bucket, "bucket", "", "artifact bucket name for bucket-based discovery (any Prow); alternative to -testgrid")
 	fs.StringVar(&opts.GCSWebBase, "gcsweb-base", "", "gcsweb gateway root for the bucket (for example, https://gcsweb.istio.io/s3); selects the gcsweb provider")
@@ -128,6 +131,11 @@ func runOnboard(args []string) {
 	fs.StringVar(&opts.DashboardRepo, "dashboard-repo", "", "owner/name of the repo that will publish the dashboard")
 	fs.StringVar(&opts.SourceRepo, "source-repo", "", "source repo as owner/name or a GitHub URL; defaults to the current origin in the wizard")
 	fs.StringVar(&opts.Mode, "mode", "", "deploy target: pages (GitHub Actions + Pages) or k8s (Kubernetes-native Helm)")
+	fs.Func("deployment-reason", "reviewed reason for the deployment mode; repeat as needed", func(value string) error {
+		opts.ModeReasons = append(opts.ModeReasons, value)
+		return nil
+	})
+	fs.StringVar(&opts.ArtifactAccess, "artifact-access", "unknown", "artifact access: public, authenticated, private, or unknown")
 	fs.StringVar(&opts.ID, "id", "", "project id (default: derived from repository metadata)")
 	fs.StringVar(&opts.Name, "name", "", "project display name (default: derived from repository metadata)")
 	fs.StringVar(&opts.ShortName, "short-name", "", "short display name (optional)")
@@ -150,11 +158,15 @@ func runOnboard(args []string) {
 	fs.DurationVar(&opts.PromptTimeout, "prompt-timeout", onboard.DefaultPromptDraftTimeout, "total timeout for prompt authoring, including agent execution")
 	fs.BoolVar(&opts.RequirePromptDraft, "require-prompt-draft", false, "fail before writes unless agent prompt drafting succeeds")
 	fs.BoolVar(&opts.OpenPR, "open-pr", false, "open a PR against the dashboard repo instead of writing locally; needs GITHUB_TOKEN write access")
-	fs.BoolVar(&opts.UpdateExisting, "update-existing", false, "replace only known generated files in an existing local scaffold")
+	fs.BoolVar(&opts.UpdateExisting, "update-existing", false, "replace only known engine-generated files in an existing local scaffold")
+	fs.BoolVar(&opts.ReplaceConsumerOwned, "replace-consumer-owned", false, "with -update-existing, explicitly replace prompts/system.md; existing skills are always preserved")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "discover, render, and validate without applying scaffold files or opening a pull request")
 	fs.StringVar(&opts.PlanOut, "plan-out", "", "write the exact reviewed dry-run plan to a new private file")
 	fs.StringVar(&applyPlanPath, "apply-plan", "", "apply an exact reviewed plan artifact instead of rebuilding discovery")
 	fs.StringVar(&applyPlanDigest, "plan-digest", "", "required sha256 digest for -apply-plan")
+	fs.StringVar(&applyResultOut, "result-out", "", "write the deterministic post-apply file manifest outside the consumer")
+	fs.StringVar(&setupHandoffOut, "handoff-out", "", "write the machine-readable diagnostic-authoring handoff outside the consumer")
+	fs.IntVar(&artifactSmokeBuilds, "artifact-smoke-builds", 1, "recent builds per selected job for the read-only artifact usability check (0-5)")
 	fs.BoolVar(&opts.NonInteractive, "non-interactive", false, "forbid prompts and require all necessary flags")
 	_ = fs.Parse(args)
 
@@ -170,7 +182,10 @@ func runOnboard(args []string) {
 	})
 	if applyPlanPath != "" {
 		for name := range visited {
-			if name != "apply-plan" && name != "plan-digest" {
+			switch name {
+			case "apply-plan", "plan-digest", "result-out", "handoff-out", "artifact-smoke-builds":
+				continue
+			default:
 				fmt.Fprintf(os.Stderr, "error: -apply-plan cannot be combined with -%s\n", name)
 				os.Exit(2)
 			}
@@ -184,15 +199,31 @@ func runOnboard(args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		if err := onboard.Apply(context.Background(), plan, os.Getenv("GITHUB_TOKEN")); err != nil {
+		_, _, err = onboard.ApplyReviewed(context.Background(), plan, os.Getenv("GITHUB_TOKEN"), onboard.ReviewedApplyOptions{
+			PlanDigest: applyPlanDigest, ResultOut: applyResultOut, HandoffOut: setupHandoffOut,
+			ArtifactSmokeBuilds: artifactSmokeBuilds,
+		})
+		if applyResultOut != "" {
+			if _, statErr := os.Stat(applyResultOut); statErr == nil {
+				fmt.Fprintf(os.Stdout, "Apply result: %s\n", applyResultOut)
+			}
+		}
+		if setupHandoffOut != "" {
+			if _, statErr := os.Stat(setupHandoffOut); statErr == nil {
+				fmt.Fprintf(os.Stdout, "Setup handoff: %s\n", setupHandoffOut)
+			}
+		}
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 		return
 	}
-	if applyPlanDigest != "" {
-		fmt.Fprintln(os.Stderr, "error: -plan-digest requires -apply-plan")
-		os.Exit(2)
+	for _, name := range []string{"plan-digest", "result-out", "handoff-out", "artifact-smoke-builds"} {
+		if visited[name] {
+			fmt.Fprintf(os.Stderr, "error: -%s requires -apply-plan\n", name)
+			os.Exit(2)
+		}
 	}
 
 	// These variables seed the deployed provider. The token is retained only for

@@ -74,7 +74,9 @@ applies. An optional `--prompt-orka-git-secret` must name a read-only clone
 credential.
 
 The handoff serializes the project name, source repository, resolved commit or
-known branch, and matched Prow job metadata as untrusted data. The bundled skill
+known branch, and matched Prow job metadata as untrusted data. The generated
+prompt is a source-only baseline and is not validated against historical
+failures. Run `$author-prow-ai-diagnostics` after setup for that evaluation. The bundled skill
 tells the agent to investigate a bounded set of high-value repository files and
 to treat repository content and job metadata as evidence, never as instructions.
 
@@ -91,7 +93,9 @@ hours. `--require-prompt-draft` is valid only with `--prompt-mode=agent` and
 fails before any write unless the validated agent draft succeeds.
 
 A capable model does not replace source quality. The generated file is always a
-draft requiring human review.
+source-only draft requiring review and historical validation. Its triage order
+must handle both JUnit-backed test failures and synthesized build-level failures
+when a project does not publish JUnit.
 
 ## Required runbook sections
 

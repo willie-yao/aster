@@ -169,6 +169,12 @@ def schema_contract(schema: dict[str, Any]) -> list[str]:
 
 
 def semantic_common(doc: dict[str, Any], errors: list[str], label: str) -> None:
+    consumer = doc["consumer"]
+    if consumer["commit_status"] == "resolved" and consumer["commit"] is None:
+        add(errors, f"{label}.consumer.commit", "resolved consumer requires a commit")
+    if consumer["commit_status"] == "not_applicable" and consumer["commit"] is not None:
+        add(errors, f"{label}.consumer.commit", "non-Git consumer must use null commit")
+
     planes = doc["evidence_planes"]
     for index, item in enumerate(doc["classifications"]):
         path = f"{label}.classifications[{index}]"
@@ -507,6 +513,8 @@ def semantic_benchmark(benchmark: dict[str, Any], cases: dict[str, dict[str, Any
     unique([item["id"] for item in conditions], errors, "benchmark_results.condition_manifests.id")
     for index, item in enumerate(conditions):
         path = f"benchmark_results.condition_manifests[{index}]"
+        if item["consumer_commit"] != benchmark["consumer"]["commit"]:
+            add(errors, f"{path}.consumer_commit", "must match consumer.commit")
         case = cases.get(item["case_id"])
         if item["condition"] in {"A", "B", "C"} and (not case or case["split"] != "final_holdout"):
             add(errors, f"{path}.case_id", "A/B/C condition must reference a final holdout")
@@ -777,6 +785,7 @@ def fixtures() -> tuple[dict[str, Any], dict[str, Any]]:
     consumer = {
         "repository": "example/project",
         "commit": "b" * 40,
+        "commit_status": "resolved",
         "project_sha256": sha("1"),
         "existing_prompt_sha256": sha("2"),
         "active_skill_set_hash": sha("3"),
@@ -1176,6 +1185,17 @@ def self_test(schema: dict[str, Any]) -> None:
     corpus, benchmark = fixtures()
     if errors := validate(corpus, benchmark, schema):
         raise AssertionError(f"valid fixture failed: {errors}")
+
+    nongit_corpus = copy.deepcopy(corpus)
+    nongit_benchmark = copy.deepcopy(benchmark)
+    for document in (nongit_corpus, nongit_benchmark):
+        document["consumer"]["commit"] = None
+        document["consumer"]["commit_status"] = "not_applicable"
+    for condition in nongit_benchmark["condition_manifests"]:
+        condition["consumer_commit"] = None
+    if errors := validate(nongit_corpus, nongit_benchmark, schema):
+        raise AssertionError(f"non-Git consumer fixture failed: {errors}")
+
     mutations = [
         ("holdout", lambda c, b: c["cases"][1].update(pre_freeze_holdout_kind="not_applicable"), "pre-freeze causal hypothesis"),
         ("reclassification", lambda c, b: b["fresh_holdout_trials"][0].update(reclassified_after_reveal=False), "aggregate post-reveal kind changed"),
@@ -1198,6 +1218,8 @@ def self_test(schema: dict[str, Any]) -> None:
         ("provenance-overlap", lambda c, b: b["prompt_regression"].update(baseline_state="existing_prompt", items=[{"id": "retained", "category": "stable_fact", "baseline_rule": "read the build", "disposition": "retained", "evidence_case_ids": ["case-a"], "reason": "still valid"}], baseline_provenance=[{"id": "prior-holdout", "job_name": "periodic-other", "build_id": "456", "test_name": "prior test", "causal_event_id": None, "source_split": "authoring", "source_path": None, "source_sha256": None}], provenance_limitations=[]), "overlaps baseline prompt provenance build"),
         ("stable-removal", lambda c, b: b["prompt_regression"].update(baseline_state="existing_prompt", items=[{"id": "stable", "category": "stable_fact", "baseline_rule": "read pod state", "disposition": "removed", "evidence_case_ids": [], "reason": "not seen"}]), "requires explicit case evidence"),
         ("scoring-protocol", lambda c, b: b["scoring_protocol"].update(mode="same_evaluator_post_hoc", overlay_frozen_before_prompt_access=False, limitations=["post hoc"]), "locked score requires"),
+        ("consumer-commit", lambda c, b: (c["consumer"].update(commit=None), b["consumer"].update(commit=None)), "resolved consumer requires a commit"),
+        ("condition-consumer", lambda c, b: b["condition_manifests"][0].update(consumer_commit="c" * 40), "must match consumer.commit"),
         ("conditions", lambda c, b: b["condition_manifests"].pop(), "exactly one A, B, and C"),
         ("overlay", lambda c, b: [item.update(scoring_overlay_status="not_revealed", scoring_overlay_path=None, scoring_overlay_sha256=None) for item in b["condition_manifests"]], "requires post-reveal scoring overlays"),
         ("exemplar", lambda c, b: (c["recipe_exemplar_policy"].update(existing_consumer_recipes_are_trusted_quality_exemplars=True), b["recipe_exemplar_policy"].update(existing_consumer_recipes_are_trusted_quality_exemplars=True)), "must equal False"),

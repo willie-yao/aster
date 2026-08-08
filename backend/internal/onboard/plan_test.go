@@ -370,3 +370,34 @@ func TestValidatePlanRejectsUnnormalizedDestination(t *testing.T) {
 		t.Fatalf("validatePlan error = %v", err)
 	}
 }
+
+func TestBuildPlanRecordsReproducibleHandoffInputs(t *testing.T) {
+	deps, _, _, _ := wizardDependencies("")
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+		ArtifactAccess: artifactAccessPublic,
+		ModeReasons:    []string{"Artifacts and provider are reachable from GitHub Actions."},
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Engine.Path == "" || plan.Engine.Version == "" || plan.SourceRevision.Status != sourceRevisionResolved || !validGitRevision(plan.SourceRevision.Revision) {
+		t.Fatalf("engine=%+v source_revision=%+v", plan.Engine, plan.SourceRevision)
+	}
+	if plan.Discovery.Digest == "" || len(plan.Discovery.Jobs) == 0 || !validGitRevision(plan.Discovery.CatalogRevision) {
+		t.Fatalf("discovery = %+v", plan.Discovery)
+	}
+	for _, warning := range plan.Warnings {
+		if strings.Contains(warning, "test-infra catalog revision") {
+			t.Fatalf("unexpected catalog warning: %s", warning)
+		}
+	}
+	if plan.Deployment.ArtifactAccess != artifactAccessPublic || !reflect.DeepEqual(plan.Deployment.Reasons, opts.ModeReasons) {
+		t.Fatalf("deployment = %+v", plan.Deployment)
+	}
+	if plan.Prompt.BaselineStatus != promptBaselineSourceOnly || plan.Prompt.CandidateSHA256 != planArtifactDigest([]byte(plan.Files["prompts/system.md"])) {
+		t.Fatalf("prompt = %+v", plan.Prompt)
+	}
+}

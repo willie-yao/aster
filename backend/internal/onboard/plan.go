@@ -27,11 +27,12 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 	}
 
 	discoveryCtx, cancelDiscovery := context.WithTimeout(ctx, onboardingDiscoveryTimeout)
-	jobs, err := deps.sweeper.Discover(discoveryCtx, sweepConfig(opts), includePresubmits(opts))
+	sweep, err := deps.sweeper.Discover(discoveryCtx, sweepConfig(opts), includePresubmits(opts))
 	cancelDiscovery()
 	if err != nil {
 		return nil, fmt.Errorf("job sweep: %w", err)
 	}
+	jobs := sweep.Jobs
 	if len(jobs) == 0 {
 		return nil, fmt.Errorf("discovery found 0 jobs for the given input; check the TestGrid dashboard name or bucket before scaffolding")
 	}
@@ -72,6 +73,21 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 	if err != nil {
 		return nil, fmt.Errorf("--dashboard-repo: %w", err)
 	}
+	warnings := []string{}
+	if planning.discovery != nil {
+		warnings = append(warnings, planning.discovery.Warnings...)
+	}
+	sourceRevision := SourceRevisionPlan{Status: sourceRevisionUnresolved}
+	if deps.sourceRevision != nil {
+		resolved, resolveErr := deps.sourceRevision.Resolve(ctx, sourceRepo, opts.GitHubToken)
+		sourceRevision = resolved
+		if resolveErr != nil {
+			warnings = append(warnings, "Source revision could not be pinned. Treat the source ref as unresolved until it is recorded explicitly.")
+		}
+	}
+	if sourceRevision.Ref != "" {
+		sourceRepo.Branch = sourceRevision.Ref
+	}
 	switch opts.Mode {
 	case modeK8s:
 		if files["deploy/values.yaml"], err = render(k8sValuesTmpl, data); err != nil {
@@ -96,9 +112,11 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 		definitions = planning.discovery.MatchingJobs
 	}
 	promptInput := promptDraftInput{
-		ProjectName: data.Name,
-		SourceRepo:  sourceRepo,
-		Jobs:        buildPromptJobSummaries(jobs, definitions, sourceRepo, opts.TestGrid),
+		ProjectName:          data.Name,
+		SourceRepo:           sourceRepo,
+		SourceRevision:       sourceRevision.Revision,
+		SourceRevisionStatus: sourceRevision.Status,
+		Jobs:                 buildPromptJobSummaries(jobs, definitions, sourceRepo, opts.TestGrid),
 	}
 	prompt, promptResult, err := deps.prompts.Build(ctx, opts, data, promptInput)
 	if err != nil {
@@ -120,34 +138,64 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 		return nil, err
 	}
 
-	catalogRevision := ""
+	catalogRevision := sweep.CatalogRevision
 	var testGridProvenance *Inferred[string]
-	if planning.discovery != nil {
+	if catalogRevision == "" && planning.discovery != nil {
 		catalogRevision = planning.discovery.CatalogRevision
 	}
 	if planning.selected != nil {
 		value := Inferred[string]{Value: planning.selected.Dashboard, Source: "ranked kubernetes/test-infra jobs for " + sourceRepo.FullName, Confidence: candidateConfidence(*planning.selected)}
 		testGridProvenance = &value
 	}
-	deployment := DeploymentPlan{Mode: opts.Mode, AIEnabled: effectiveAIEnabled(opts)}
+	deployment := DeploymentPlan{
+		Mode: opts.Mode, Reasons: deploymentReasons(opts), ArtifactAccess: effectiveArtifactAccess(opts),
+		AIEnabled: effectiveAIEnabled(opts),
+	}
 	if !opts.deferDeploymentAI {
 		deployment.AIAPI = deploymentAIAPI(opts)
 		deployment.Endpoint = deploymentAIEndpoint(opts)
 		deployment.Model = deploymentAIModel(opts)
 	}
+	discoveryPlan := DiscoveryPlan{
+		TestGrid: opts.TestGrid, Bucket: opts.Bucket, GCSWebBase: opts.GCSWebBase, ExactJobs: append([]string(nil), opts.ExactJobs...),
+		CatalogRevision: catalogRevision, Jobs: append([]models.ProwJob(nil), jobs...),
+		SelectedCandidate: copyCandidate(planning.selected), TestGridProvenance: testGridProvenance,
+	}
+	discoveryPlan.Digest, err = discoveryPlanDigest(discoveryPlan)
+	if err != nil {
+		return nil, fmt.Errorf("hashing discovery output: %w", err)
+	}
+	promptPlan := promptResult.promptPlan(opts)
+	promptPlan.BaselineStatus = promptBaselineSourceOnly
+	promptPlan.CandidateSHA256 = planArtifactDigest([]byte(prompt))
+	engine := currentEnginePlan()
+	if engine.Revision == "" {
+		warnings = append(warnings, "Engine revision could not be resolved. Record the resolved module version or commit before treating this setup as reproducible.")
+	}
+	if engine.Modified {
+		warnings = append(warnings, "The onboarding engine checkout has local modifications. The recorded commit does not fully reproduce the generated plan.")
+	}
+	if deployment.ArtifactAccess == artifactAccessUnknown {
+		warnings = append(warnings, "Artifact access is unresolved. Confirm privacy, authentication, and runner reachability before deployment.")
+	}
+	if discoveryPlan.TestGrid != "" && discoveryPlan.CatalogRevision == "" {
+		warnings = append(warnings, "The TestGrid discovery source did not provide a pinned test-infra catalog revision.")
+	}
 	plan := &Plan{
-		SourceRepo:    sourceRepo,
-		DashboardRepo: dashboardRepo,
-		Deployment:    deployment,
-		Discovery: DiscoveryPlan{
-			TestGrid: opts.TestGrid, Bucket: opts.Bucket, GCSWebBase: opts.GCSWebBase, ExactJobs: append([]string(nil), opts.ExactJobs...),
-			CatalogRevision: catalogRevision, Jobs: append([]models.ProwJob(nil), jobs...),
-			SelectedCandidate: copyCandidate(planning.selected), TestGridProvenance: testGridProvenance,
+		Engine:         engine,
+		SourceRepo:     sourceRepo,
+		SourceRevision: sourceRevision,
+		DashboardRepo:  dashboardRepo,
+		Deployment:     deployment,
+		Discovery:      discoveryPlan,
+		Project:        *parsed,
+		Prompt:         promptPlan,
+		Destination: DestinationPlan{
+			OutDir: opts.OutDir, OpenPR: opts.OpenPR, UpdateExisting: opts.UpdateExisting,
+			ReplaceConsumerOwned: opts.ReplaceConsumerOwned,
 		},
-		Project:     *parsed,
-		Prompt:      promptResult.promptPlan(opts),
-		Destination: DestinationPlan{OutDir: opts.OutDir, OpenPR: opts.OpenPR, UpdateExisting: opts.UpdateExisting},
-		Files:       files,
+		Warnings: warnings,
+		Files:    files,
 		Provenance: map[string]Inferred[string]{
 			"source_repo":    {Value: sourceRepo.FullName, Source: "explicit input", Confidence: ConfidenceHigh},
 			"dashboard_repo": {Value: dashboardRepo.FullName, Source: "explicit or confirmed input", Confidence: ConfidenceHigh},
@@ -168,6 +216,45 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 		return nil, fmt.Errorf("planning dashboard consumer directory: %w", err)
 	}
 	return plan, nil
+}
+
+const (
+	promptBaselineSourceOnly    = "source-only-unvalidated"
+	artifactAccessPublic        = "public"
+	artifactAccessAuthenticated = "authenticated"
+	artifactAccessPrivate       = "private"
+	artifactAccessUnknown       = "unknown"
+)
+
+func effectiveArtifactAccess(opts Options) string {
+	value := strings.ToLower(strings.TrimSpace(opts.ArtifactAccess))
+	if value == "" {
+		return artifactAccessUnknown
+	}
+	return value
+}
+
+func deploymentReasons(opts Options) []string {
+	seen := map[string]struct{}{}
+	var reasons []string
+	for _, reason := range opts.ModeReasons {
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			continue
+		}
+		if _, ok := seen[reason]; ok {
+			continue
+		}
+		seen[reason] = struct{}{}
+		reasons = append(reasons, reason)
+	}
+	if len(reasons) > 0 {
+		return reasons
+	}
+	if opts.Mode == modeK8s {
+		return []string{"Kubernetes selected. Confirm this is required by private artifacts, cluster-local provider reachability, persistent state, authenticated admin actions, or cluster-local endpoints."}
+	}
+	return []string{"GitHub Pages selected. Confirm artifacts and the AI provider are reachable from GitHub Actions and that persistent authenticated admin actions are not required."}
 }
 
 func candidateConfidence(candidate DashboardCandidate) Confidence {

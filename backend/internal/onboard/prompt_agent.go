@@ -52,6 +52,9 @@ func buildPromptHandoff(input promptDraftInput, sourceRef, sourceRefKind string)
 }
 
 func resolveAgentSourceRevision(ctx context.Context, input promptDraftInput, token string) (string, string, error) {
+	if input.SourceRevisionStatus == sourceRevisionUnresolved {
+		return strings.TrimSpace(input.SourceRepo.Branch), "", fmt.Errorf("source revision is unresolved")
+	}
 	if revision := strings.TrimSpace(input.SourceRevision); revision != "" {
 		return strings.TrimSpace(input.SourceRepo.Branch), revision, nil
 	}

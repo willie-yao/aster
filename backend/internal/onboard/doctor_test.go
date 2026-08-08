@@ -29,10 +29,10 @@ type doctorFakeSweeper struct {
 	include bool
 }
 
-func (f *doctorFakeSweeper) Discover(_ context.Context, _ *project.Config, include bool) ([]models.ProwJob, error) {
+func (f *doctorFakeSweeper) Discover(_ context.Context, _ *project.Config, include bool) (JobSweep, error) {
 	f.calls++
 	f.include = include
-	return append([]models.ProwJob(nil), f.jobs...), f.err
+	return JobSweep{Jobs: append([]models.ProwJob(nil), f.jobs...)}, f.err
 }
 
 const doctorProjectYAML = `id: project

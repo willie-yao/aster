@@ -493,7 +493,8 @@ https://github.com/willie-yao/prow-ai-dashboard/blob/{{urlPath .EngineRef}}/depl
 ## Review the generated configuration
 
 1. Review ` + "`project.yaml`" + ` and the inferred categories.
-2. Review every claim and TODO in ` + "`prompts/system.md`" + `.
+2. Review every claim and TODO in ` + "`prompts/system.md`" + `. Treat it as a
+   source-only baseline, then run ` + "`$author-prow-ai-diagnostics`" + ` against historical failures.
 3. Edit ` + "`deploy/values.yaml`" + ` and replace
    ` + "`<your-rwx-storage-class>`" + `, or set ` + "`persistence.existingClaim`" + `.
 {{if .AIEnabled}}4. Confirm ` + "`ai.api`" + `, ` + "`ai.endpoint`" + `, and ` + "`ai.model`" + `.
@@ -715,9 +716,11 @@ var systemPromptTmpl = template.Must(template.New("system.md").Parse(
 	`# {{.Name}} AI prompt addendum
 
 This file is concatenated between the engine's universal Prow base prompt and
-its JSON response schema. Replace the TODOs with a grounded diagnostic runbook.
-Use only project documentation, job configuration, source, and observed CI
-artifacts. Leave an item unresolved instead of adding plausible guidance.
+its JSON response schema. It is a source-only baseline and has not been validated
+against historical failures. Replace the TODOs with a grounded diagnostic runbook,
+then run $author-prow-ai-diagnostics to test and improve it against a representative
+historical corpus. Use only project documentation, job configuration, source, and
+observed CI artifacts. Leave an item unresolved instead of adding plausible guidance.
 
 The analyzer can read supplied Prow artifacts. If Kubernetes artifact tools are
 enabled, they navigate Kubernetes-shaped logs and resource dumps already in the
@@ -763,8 +766,9 @@ persistence that makes the failure non-transient. Do not add generic classes. --
 
 ## Triage order
 
-<!-- TODO: provide an artifact-first sequence from failing JUnit detail and
-build-log.txt to resource conditions, component logs, and a passing comparison. -->
+<!-- TODO: provide an artifact-first sequence from failing test detail, or the
+synthesized build-level failure when JUnit is absent, through build-log.txt,
+resource conditions, component logs, and a passing comparison. -->
 
 ## Relevant source repositories
 
@@ -785,8 +789,9 @@ confirmed your discovery config finds jobs. Remaining steps need a human:
 
 ## 1. Review the generated files (required)
 
-- Review the ` + "`prompts/system.md`" + ` draft. Replace any TODOs and confirm its
-  project-specific claims. Prompt quality is the biggest lever on analysis depth.
+- Review the ` + "`prompts/system.md`" + ` source-only baseline. Replace any TODOs and
+  confirm its project-specific claims. It has not been validated against historical
+  failures. Run ` + "`$author-prow-ai-diagnostics`" + ` after setup to validate and improve it.
 - ` + "`project.yaml`" + ` ` + "`categories`" + ` were inferred from job names; reorder,
   rename, or trim them.
 

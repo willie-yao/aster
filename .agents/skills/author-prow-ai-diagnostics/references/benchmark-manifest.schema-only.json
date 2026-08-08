@@ -3,7 +3,7 @@
   "build_id": "0",
   "case_id": "schema-only-case",
   "condition": "B",
-  "consumer_commit": "0000000000000000000000000000000000000000",
+  "consumer_commit": null,
   "document_type": "benchmark_identity_manifest",
   "identity_only": true,
   "job_name": "periodic-schema-only-example",

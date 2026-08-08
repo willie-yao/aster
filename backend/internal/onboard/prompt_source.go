@@ -20,10 +20,11 @@ type promptJobSummary struct {
 }
 
 type promptDraftInput struct {
-	ProjectName    string
-	SourceRepo     Repo
-	SourceRevision string
-	Jobs           []promptJobSummary
+	ProjectName          string
+	SourceRepo           Repo
+	SourceRevision       string
+	SourceRevisionStatus string
+	Jobs                 []promptJobSummary
 }
 
 func defaultBranch(ctx context.Context, client *http.Client, owner, repo, token string) (string, error) {

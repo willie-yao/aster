@@ -1,4 +1,4 @@
 interface:
   display_name: "Prow AI Consumer Setup"
-  short_description: "Safely scaffold a prow-ai-dashboard consumer"
-  default_prompt: "Use $setup-prow-ai-consumer for the source repository named or linked in my request. Fill supplied values directly, infer safe local defaults, run read-only discovery before asking for remaining choices, and do not present unresolved template placeholders as a questionnaire."
+  short_description: "Create a reproducible consumer and diagnostic handoff"
+  default_prompt: "Use $setup-prow-ai-consumer for the source repository named or linked in my request. infer safe local defaults, run read-only discovery, explain the Pages or Kubernetes decision, preserve consumer-owned prompts and skills, apply only a reviewed plan, and produce the validated setup handoff without treating template placeholders as questions."

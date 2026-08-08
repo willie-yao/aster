@@ -145,15 +145,15 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 	}
 
 	discoveryCtx, cancel := context.WithTimeout(ctx, onboardingDiscoveryTimeout)
-	jobs, err := deps.sweeper.Discover(discoveryCtx, cfg, includePresubmits)
+	sweep, err := deps.sweeper.Discover(discoveryCtx, cfg, includePresubmits)
 	cancel()
 	if err != nil {
 		action := "Verify the TestGrid dashboard or artifact bucket, GitHub access, and network connectivity, then rerun doctor."
 		add("Prow discovery", DoctorFail, err.Error(), action)
-	} else if len(jobs) == 0 {
+	} else if len(sweep.Jobs) == 0 {
 		add("Prow discovery", DoctorFail, "the real discovery sweep found zero jobs", "Correct testgrid.dashboard or discovery/storage settings until at least one job is found.")
 	} else {
-		add("Prow discovery", DoctorPass, fmt.Sprintf("the real discovery sweep found %d job(s)", len(jobs)), "")
+		add("Prow discovery", DoctorPass, fmt.Sprintf("the real discovery sweep found %d job(s)", len(sweep.Jobs)), "")
 	}
 	return report
 }

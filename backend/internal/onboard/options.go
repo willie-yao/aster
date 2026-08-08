@@ -29,6 +29,12 @@ type Options struct {
 	// Helm). It changes which deploy files are emitted and the branding
 	// defaults; project.yaml and prompts/system.md are the same either way.
 	Mode string
+	// ModeReasons records the reviewed constraints that selected the deployment
+	// mode. Values must not contain credentials.
+	ModeReasons []string
+	// ArtifactAccess records whether the selected Prow artifacts are public,
+	// authenticated, private, or not yet established.
+	ArtifactAccess string
 
 	// ID, Name, and ShortName override the derived project identity. Optional.
 	ID        string
@@ -100,6 +106,10 @@ type Options struct {
 	OpenPR bool
 	// UpdateExisting permits replacement of known local scaffold files only.
 	UpdateExisting bool
+	// ReplaceConsumerOwned permits prompts/system.md replacement during a local
+	// update. It requires UpdateExisting. Existing skills/*.yaml files are always
+	// preserved.
+	ReplaceConsumerOwned bool
 
 	// DryRun performs discovery, planning, rendering, and validation without
 	// applying scaffold files or opening a pull request.

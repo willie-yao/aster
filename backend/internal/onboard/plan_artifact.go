@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	planArtifactSchemaVersion = 1
+	planArtifactSchemaVersion = 2
 	maxPlanArtifactBytes      = 4 << 20
 )
 
@@ -90,7 +90,9 @@ func WritePlanArtifact(path string, plan *Plan) (string, error) {
 		return "", fmt.Errorf("close onboarding plan artifact: %w", err)
 	}
 	complete = true
-	return planArtifactDigest(data), nil
+	digest := planArtifactDigest(data)
+	plan.reviewedDigest = digest
+	return digest, nil
 }
 
 // ReadPlanArtifact loads and validates an exact reviewed plan artifact.
@@ -146,6 +148,7 @@ func ReadPlanArtifact(path, expectedDigest string) (*Plan, error) {
 		return nil, fmt.Errorf("onboarding plan artifact schema %d is unsupported", artifact.SchemaVersion)
 	}
 	artifact.Plan.Files = copyPlanFiles(artifact.Files)
+	artifact.Plan.reviewedDigest = planArtifactDigest(data)
 	if artifact.Plan.Destination.OpenPR {
 		return nil, fmt.Errorf("onboarding plan artifacts do not support open-PR destinations")
 	}

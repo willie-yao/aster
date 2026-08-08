@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -31,7 +32,7 @@ func (e *destinationConflictError) Error() string {
 	return fmt.Sprintf("refusing to replace existing scaffold files without --update-existing: %s", strings.Join(e.paths, ", "))
 }
 
-func inspectFileDestination(outDir string, files map[string]string) ([]DestinationFilePlan, []string, error) {
+func inspectFileDestination(outDir string, files map[string]string, replaceConsumerOwned bool) ([]DestinationFilePlan, []string, error) {
 	var err error
 	outDir, err = normalizeDashboardConsumerDir(outDir)
 	if err != nil {
@@ -49,6 +50,7 @@ func inspectFileDestination(outDir string, files map[string]string) ([]Destinati
 		if err := inspectDestinationParents(outDir, rel); err != nil {
 			return nil, nil, err
 		}
+		ownership := destinationFileOwnership(rel)
 		full := filepath.Join(outDir, filepath.FromSlash(rel))
 		info, err := os.Lstat(full)
 		switch {
@@ -60,13 +62,24 @@ func inspectFileDestination(outDir string, files map[string]string) ([]Destinati
 			if err != nil {
 				return nil, nil, fmt.Errorf("hashing %s: %w", full, err)
 			}
-			actions = append(actions, DestinationFilePlan{Path: rel, Action: destinationActionReplace, ReviewedDigest: digest})
+			action := destinationActionReplace
+			if ownership == destinationOwnershipConsumer && !replaceConsumerOwned {
+				action = destinationActionPreserve
+			}
+			actions = append(actions, DestinationFilePlan{Path: rel, Action: action, Ownership: ownership, ReviewedDigest: digest})
 		case os.IsNotExist(err):
-			actions = append(actions, DestinationFilePlan{Path: rel, Action: destinationActionCreate})
+			actions = append(actions, DestinationFilePlan{Path: rel, Action: destinationActionCreate, Ownership: ownership})
 		default:
 			return nil, nil, fmt.Errorf("checking %s: %w", full, err)
 		}
 	}
+
+	preservedSkills, err := inspectConsumerSkills(outDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	actions = append(actions, preservedSkills...)
+	sort.Slice(actions, func(i, j int) bool { return actions[i].Path < actions[j].Path })
 
 	planned := make(map[string]struct{}, len(files))
 	for rel := range files {
@@ -84,6 +97,61 @@ func inspectFileDestination(outDir string, files map[string]string) ([]Destinati
 		}
 	}
 	return actions, stale, nil
+}
+
+func destinationFileOwnership(rel string) string {
+	if rel == "prompts/system.md" || isConsumerSkillPath(rel) {
+		return destinationOwnershipConsumer
+	}
+	return destinationOwnershipGenerated
+}
+
+func isConsumerSkillPath(rel string) bool {
+	if path.Dir(rel) != "skills" {
+		return false
+	}
+	ext := strings.ToLower(path.Ext(rel))
+	return ext == ".yaml" || ext == ".yml"
+}
+
+func inspectConsumerSkills(outDir string) ([]DestinationFilePlan, error) {
+	dir := filepath.Join(outDir, "skills")
+	info, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("checking consumer skills directory %s: %w", dir, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return nil, fmt.Errorf("consumer skills directory %s conflicts with a non-directory filesystem entry", dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("reading consumer skills directory %s: %w", dir, err)
+	}
+	var actions []DestinationFilePlan
+	for _, entry := range entries {
+		rel := path.Join("skills", entry.Name())
+		if !isConsumerSkillPath(rel) {
+			continue
+		}
+		entryInfo, err := entry.Info()
+		if err != nil {
+			return nil, fmt.Errorf("checking consumer skill %s: %w", rel, err)
+		}
+		if entryInfo.Mode()&os.ModeSymlink != 0 || !entryInfo.Mode().IsRegular() {
+			return nil, fmt.Errorf("consumer skill path %s conflicts with a non-regular filesystem entry", rel)
+		}
+		digest, err := digestDestinationFile(filepath.Join(outDir, filepath.FromSlash(rel)))
+		if err != nil {
+			return nil, fmt.Errorf("hashing %s: %w", rel, err)
+		}
+		actions = append(actions, DestinationFilePlan{
+			Path: rel, Action: destinationActionPreserve, Ownership: destinationOwnershipConsumer, ReviewedDigest: digest,
+		})
+	}
+	return actions, nil
 }
 
 func normalizeDashboardConsumerDir(outDir string) (string, error) {
@@ -159,13 +227,13 @@ func destinationReplacementPaths(files []DestinationFilePlan) []string {
 	return paths
 }
 
-func writeFiles(outDir string, files map[string]string, updateExisting bool, expected []DestinationFilePlan) error {
+func writeFiles(outDir string, files map[string]string, updateExisting, replaceConsumerOwned bool, expected []DestinationFilePlan) error {
 	var err error
 	outDir, err = normalizeDashboardConsumerDir(outDir)
 	if err != nil {
 		return err
 	}
-	actions, _, err := inspectFileDestination(outDir, files)
+	actions, _, err := inspectFileDestination(outDir, files, replaceConsumerOwned)
 	if err != nil {
 		return err
 	}
@@ -187,7 +255,11 @@ func writeFiles(outDir string, files map[string]string, updateExisting bool, exp
 	}
 	defer root.Close()
 	for _, action := range actions {
-		if err := writeReviewedFileAtRoot(root, action, []byte(files[action.Path])); err != nil {
+		content, ok := files[action.Path]
+		if action.Action != destinationActionPreserve && !ok {
+			return fmt.Errorf("reviewed destination file %s has no generated content", action.Path)
+		}
+		if err := writeReviewedFileAtRoot(root, action, []byte(content)); err != nil {
 			return err
 		}
 	}
@@ -214,23 +286,32 @@ func writeReviewedFile(outDir string, reviewed DestinationFilePlan, content []by
 }
 
 func writeReviewedFileAtRoot(root *os.Root, reviewed DestinationFilePlan, content []byte) error {
-	if err := ensureDestinationParents(root, reviewed.Path); err != nil {
-		return err
+	if reviewed.Action != destinationActionPreserve {
+		if err := ensureDestinationParents(root, reviewed.Path); err != nil {
+			return err
+		}
 	}
 	actual, err := currentDestinationAction(root, reviewed.Path)
 	if err != nil {
 		return err
 	}
-	if actual != reviewed.Action {
+	expectedActual := reviewed.Action
+	if reviewed.Action == destinationActionPreserve {
+		expectedActual = destinationActionReplace
+	}
+	if actual != expectedActual {
 		return fmt.Errorf("dashboard consumer directory changed after review; %s is now %s instead of %s", reviewed.Path, actual, reviewed.Action)
 	}
-	if reviewed.Action == destinationActionReplace {
+	if reviewed.Action == destinationActionReplace || reviewed.Action == destinationActionPreserve {
 		actualDigest, err := digestDestinationFileAtRoot(root, reviewed.Path)
 		if err != nil {
-			return fmt.Errorf("hashing %s before replacement: %w", reviewed.Path, err)
+			return fmt.Errorf("hashing %s before %s: %w", reviewed.Path, reviewed.Action, err)
 		}
 		if actualDigest != reviewed.ReviewedDigest {
 			return fmt.Errorf("dashboard consumer directory changed after review; %s content no longer matches the reviewed digest", reviewed.Path)
+		}
+		if reviewed.Action == destinationActionPreserve {
+			return nil
 		}
 		if err := replaceFileAtomic(root, reviewed.Path, content); err != nil {
 			return fmt.Errorf("replacing %s: %w", reviewed.Path, err)
