@@ -130,6 +130,7 @@ export function Layout() {
           <MuiLink
             component={RouterLink}
             to="/"
+            aria-label={`${manifest.branding.title} home`}
             underline="none"
             color="inherit"
             sx={{

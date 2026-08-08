@@ -11,10 +11,10 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import Fuse from "fuse.js";
 import { useSearchIndex } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import { jobPath, testPath } from "../lib/routes";
+import { createSearchFuse } from "../lib/search";
 import { shortJobName, shortTestName } from "../lib/utils";
 import { soft } from "../theme";
 import { Panel } from "./Panel";
@@ -146,11 +146,7 @@ export function SearchBar() {
 
   const fuse = useMemo(() => {
     if (!data?.entries) return null;
-    return new Fuse(data.entries, {
-      keys: ["test_name", "job_name", "tab_name"],
-      threshold: 0.4,
-      includeScore: true,
-    });
+    return createSearchFuse(data.entries);
   }, [data]);
 
   const results = useMemo(() => {
@@ -225,7 +221,7 @@ export function SearchBar() {
           setMobileExpanded(true);
           setTimeout(() => inputRef.current?.focus(), 50);
         }}
-        aria-label="Search"
+        aria-label="Search jobs and tests"
         size="small"
         sx={{
           display: { xs: "inline-flex", md: "none" },
@@ -283,11 +279,12 @@ export function SearchBar() {
               setActivated(true);
               setOpen(true);
             }}
-            placeholder="Search tests…"
+            placeholder="Search jobs and tests…"
             size="small"
             variant="outlined"
             fullWidth
             slotProps={{
+              htmlInput: { "aria-label": "Search jobs and tests" },
               input: {
                 startAdornment: (
                   <InputAdornment position="start">
