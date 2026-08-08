@@ -44,8 +44,11 @@ type OAuthConfig struct {
 	// RedirectURL is the callback registered on the OAuth App, e.g.
 	// https://dashboard.example.com/api/auth/callback.
 	RedirectURL string
-	// Scope granted at login. Callers derive it from the repository access policy.
+	// Scope granted at login. OAuth login uses identity-only access.
 	Scope string
+	// WriteToken is the bot credential used by GitHub write actions. It stays on
+	// the server and is never stored in the browser session.
+	WriteToken string
 	// Admins is the allowlist of GitHub logins (case-insensitive).
 	Admins []string
 	// SessionKey seeds the session cookie encryption.
@@ -59,13 +62,14 @@ type OAuthConfig struct {
 }
 
 // OAuth implements the GitHub OAuth App login flow and a session-cookie
-// Authenticator. The admin's own OAuth token performs GitHub writes, so actions
-// are attributed to them.
+// Authenticator. OAuth identifies the admin; a separate bot token performs
+// optional GitHub writes.
 type OAuth struct {
-	cfg    OAuthConfig
-	codec  *sessionCodec
-	admins map[string]struct{}
-	client *http.Client
+	cfg        OAuthConfig
+	codec      *sessionCodec
+	admins     map[string]struct{}
+	client     *http.Client
+	writeToken string
 }
 
 // NewOAuth validates config and builds the flow.
@@ -92,7 +96,10 @@ func NewOAuth(cfg OAuthConfig) (*OAuth, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
-	return &OAuth{cfg: cfg, codec: codec, admins: adminSet(cfg.Admins), client: client}, nil
+	return &OAuth{
+		cfg: cfg, codec: codec, admins: adminSet(cfg.Admins), client: client,
+		writeToken: strings.TrimSpace(cfg.WriteToken),
+	}, nil
 }
 
 // Authenticate reads the session cookie and returns the admin identity. It is
@@ -105,7 +112,7 @@ func (o *OAuth) Authenticate(ctx context.Context, r *http.Request) (*Identity, e
 	if _, ok := o.admins[strings.ToLower(s.Login)]; !ok {
 		return nil, fmt.Errorf("%w: %s", ErrNotAdmin, s.Login)
 	}
-	return &Identity{Login: s.Login, Token: s.Token}, nil
+	return &Identity{Login: s.Login, Token: o.writeToken}, nil
 }
 
 // Register mounts the auth routes on mux.
@@ -175,7 +182,7 @@ func (o *OAuth) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not an admin", http.StatusForbidden)
 		return
 	}
-	if err := o.codec.write(w, login, token); err != nil {
+	if err := o.codec.write(w, login, ""); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

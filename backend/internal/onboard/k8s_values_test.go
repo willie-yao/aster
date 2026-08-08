@@ -95,6 +95,7 @@ func TestK8sValuesDocumentsOptionalConfiguration(t *testing.T) {
 		`# namespace: ""`,
 		`#   existingSecret: "<model-secret-in-analysis-namespace>"`,
 		"# oauth:",
+		`#   # Include OAUTH_CLIENT_SECRET, SESSION_KEY, and BOT_TOKEN when actions are enabled.`,
 		`#   existingSecret: "<oauth-secret>"`,
 		"# proxy:",
 		"# hosts:",

@@ -201,7 +201,7 @@ server:
     # oauth:
     #   clientId: "<oauth-client-id>"
     #   redirectUrl: "https://dashboard.example.com/api/auth/callback"
-    #   privateRepositories: false
+    #   # Include OAUTH_CLIENT_SECRET, SESSION_KEY, and BOT_TOKEN when actions are enabled.
     #   existingSecret: "<oauth-secret>"
     # proxy:
     #   header: X-Auth-Request-Email

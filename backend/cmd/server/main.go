@@ -253,28 +253,21 @@ func configureAuthenticator(opts *server.Options, actionsEnabled bool) error {
 	switch mode := os.Getenv("AUTH_MODE"); mode {
 	case "oauth":
 		if strings.TrimSpace(os.Getenv("OAUTH_SCOPE")) != "" {
-			return fmt.Errorf("OAUTH_SCOPE is no longer supported; use OAUTH_PRIVATE_REPOSITORIES=true for private action targets")
+			return fmt.Errorf("OAUTH_SCOPE is no longer supported; OAuth login uses read:user and BOT_TOKEN performs writes")
 		}
-		privateRepositories, err := optionalBoolEnv("OAUTH_PRIVATE_REPOSITORIES", false)
-		if err != nil {
-			return err
+		if strings.TrimSpace(os.Getenv("OAUTH_PRIVATE_REPOSITORIES")) != "" {
+			return fmt.Errorf("OAUTH_PRIVATE_REPOSITORIES is no longer supported; grant repository access to BOT_TOKEN instead")
 		}
-		if privateRepositories && !actionsEnabled {
-			return fmt.Errorf("OAUTH_PRIVATE_REPOSITORIES requires actions to be enabled")
-		}
-		scope := "read:user"
-		if actionsEnabled {
-			scope = "public_repo"
-			if privateRepositories {
-				scope = "repo"
-				log.Printf("⚠️ OAuth private-repository access enabled; requesting the broad GitHub repo scope")
-			}
+		botToken := os.Getenv("BOT_TOKEN")
+		if actionsEnabled && botToken == "" {
+			return fmt.Errorf("oauth auth mode requires BOT_TOKEN when actions are enabled")
 		}
 		o, err := auth.NewOAuth(auth.OAuthConfig{
 			ClientID:      os.Getenv("OAUTH_CLIENT_ID"),
 			ClientSecret:  os.Getenv("OAUTH_CLIENT_SECRET"),
 			RedirectURL:   os.Getenv("OAUTH_REDIRECT_URL"),
-			Scope:         scope,
+			Scope:         "read:user",
+			WriteToken:    botToken,
 			Admins:        admins,
 			SessionKey:    os.Getenv("SESSION_KEY"),
 			SecureCookies: os.Getenv("COOKIE_INSECURE") != "1",

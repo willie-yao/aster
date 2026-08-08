@@ -956,6 +956,10 @@
           "type": "object",
           "description": "Local development-only server settings.",
           "properties": {
+            "allowInsecureHTTP": {
+              "type": "boolean",
+              "description": "Explicitly acknowledge direct local HTTP serving when HSTS is disabled."
+            },
             "allowInsecureCookies": {
               "type": "boolean",
               "description": "Allow OAuth cookies over local HTTP. Never enable in a deployed dashboard."
@@ -963,6 +967,7 @@
           },
           "additionalProperties": false,
           "required": [
+            "allowInsecureHTTP",
             "allowInsecureCookies"
           ]
         },
@@ -1154,21 +1159,25 @@
                   "type": "string",
                   "description": "Inline session encryption key. Prefer existingSecret."
                 },
+                "botToken": {
+                  "type": "string",
+                  "description": "Inline bot token for GitHub writes. Prefer existingSecret."
+                },
                 "privateRepositories": {
                   "type": "boolean",
-                  "description": "Request private-repository write access."
+                  "description": "Deprecated OAuth repository access switch. Remove this field and grant access to botToken instead."
                 },
                 "existingSecret": {
                   "type": "string",
-                  "description": "Existing Secret containing OAuth credentials."
+                  "description": "Existing Secret containing OAuth credentials and BOT_TOKEN when actions are enabled."
                 },
                 "scope": {
                   "type": "string",
-                  "description": "Deprecated OAuth scope override. Remove this field and use privateRepositories."
+                  "description": "Deprecated OAuth scope override. OAuth now uses read:user and botToken performs writes."
                 },
                 "chatScope": {
                   "type": "string",
-                  "description": "Deprecated chat OAuth scope override. Remove this field and use privateRepositories."
+                  "description": "Deprecated chat OAuth scope override. OAuth now uses read:user and botToken performs writes."
                 }
               },
               "additionalProperties": false,
@@ -1177,7 +1186,7 @@
                 "clientSecret",
                 "redirectUrl",
                 "sessionKey",
-                "privateRepositories",
+                "botToken",
                 "existingSecret"
               ]
             },

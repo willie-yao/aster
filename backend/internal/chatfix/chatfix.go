@@ -19,7 +19,7 @@ type chatStore interface {
 
 type fixPreviewer interface {
 	PreviewFixWithContext(
-		context.Context, models.PatternAnalysis, string, string, actions.FixTarget, fixpr.GenerationContext,
+		context.Context, models.PatternAnalysis, string, string, string, actions.FixTarget, fixpr.GenerationContext,
 	) (actions.PreviewResult, error)
 }
 
@@ -74,6 +74,7 @@ func (s *Service) PreviewChatFix(
 	return s.fixes.PreviewFixWithContext(
 		ctx,
 		candidate.Pattern,
+		owner,
 		userToken,
 		instruction,
 		actions.FixTarget{JobID: candidate.Analysis.JobID, BuildID: candidate.Analysis.BuildID},

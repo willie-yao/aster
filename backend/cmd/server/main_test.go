@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -154,15 +153,14 @@ func TestConfigureAuthenticatorChatOnlyDoesNotRequireBotToken(t *testing.T) {
 	}
 }
 
-func TestConfigureAuthenticatorOAuthScopeByFeature(t *testing.T) {
+func TestConfigureAuthenticatorOAuthUsesIdentityOnlyScope(t *testing.T) {
 	for _, testCase := range []struct {
 		name           string
 		actionsEnabled bool
-		wantScope      string
+		botToken       string
 	}{
-		{name: "chat only", wantScope: "read:user"},
-		{name: "public actions", actionsEnabled: true, wantScope: "public_repo"},
-		{name: "private actions", actionsEnabled: true, wantScope: "repo"},
+		{name: "chat only"},
+		{name: "actions", actionsEnabled: true, botToken: "bot-token"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Setenv("AUTH_MODE", "oauth")
@@ -170,7 +168,8 @@ func TestConfigureAuthenticatorOAuthScopeByFeature(t *testing.T) {
 			t.Setenv("OAUTH_CLIENT_SECRET", "secret")
 			t.Setenv("OAUTH_REDIRECT_URL", "https://dashboard.test/api/auth/callback")
 			t.Setenv("OAUTH_SCOPE", "")
-			t.Setenv("OAUTH_PRIVATE_REPOSITORIES", strconv.FormatBool(testCase.name == "private actions"))
+			t.Setenv("OAUTH_PRIVATE_REPOSITORIES", "")
+			t.Setenv("BOT_TOKEN", testCase.botToken)
 			t.Setenv("SESSION_KEY", strings.Repeat("k", 32))
 			t.Setenv("ADMIN_LOGINS", "alice")
 			var opts server.Options
@@ -189,10 +188,18 @@ func TestConfigureAuthenticatorOAuthScopeByFeature(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := location.Query().Get("scope"); got != testCase.wantScope {
-				t.Fatalf("scope = %q, want %q", got, testCase.wantScope)
+			if got := location.Query().Get("scope"); got != "read:user" {
+				t.Fatalf("scope = %q, want read:user", got)
 			}
 		})
+	}
+
+	t.Setenv("AUTH_MODE", "oauth")
+	t.Setenv("OAUTH_SCOPE", "")
+	t.Setenv("OAUTH_PRIVATE_REPOSITORIES", "")
+	t.Setenv("BOT_TOKEN", "")
+	if err := configureAuthenticator(&server.Options{}, true); err == nil || !strings.Contains(err.Error(), "BOT_TOKEN") {
+		t.Fatalf("missing bot token error = %v", err)
 	}
 }
 
@@ -306,10 +313,16 @@ func TestAnalysisChatTimeoutFromEnv(t *testing.T) {
 	}
 }
 
-func TestConfigureAuthenticatorRejectsLegacyOAuthScope(t *testing.T) {
-	t.Setenv("AUTH_MODE", "oauth")
-	t.Setenv("OAUTH_SCOPE", "repo")
-	if err := configureAuthenticator(&server.Options{}, true); err == nil || !strings.Contains(err.Error(), "OAUTH_SCOPE") {
-		t.Fatalf("legacy scope error = %v", err)
+func TestConfigureAuthenticatorRejectsLegacyOAuthRepositoryControls(t *testing.T) {
+	for _, name := range []string{"OAUTH_SCOPE", "OAUTH_PRIVATE_REPOSITORIES"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("AUTH_MODE", "oauth")
+			t.Setenv("OAUTH_SCOPE", "")
+			t.Setenv("OAUTH_PRIVATE_REPOSITORIES", "")
+			t.Setenv(name, "repo")
+			if err := configureAuthenticator(&server.Options{}, true); err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("legacy repository control error = %v", err)
+			}
+		})
 	}
 }

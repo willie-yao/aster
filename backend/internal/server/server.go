@@ -35,9 +35,9 @@ import (
 // posting, then Confirm posts the previewed draft. Resolve/Unresolve hide or
 // restore a systemic pattern in the published view. actions.Service satisfies it.
 type ActionRunner interface {
-	PreviewIssue(ctx context.Context, failureID, userToken, instruction string) (actions.PreviewResult, error)
-	PreviewFix(ctx context.Context, failureID, userToken, instruction string) (actions.PreviewResult, error)
-	Confirm(ctx context.Context, token, userToken string) (string, error)
+	PreviewIssue(ctx context.Context, failureID, owner, writeToken, instruction string) (actions.PreviewResult, error)
+	PreviewFix(ctx context.Context, failureID, owner, writeToken, instruction string) (actions.PreviewResult, error)
+	Confirm(ctx context.Context, token, owner, writeToken string) (string, error)
 	Resolve(failureID, login, note string) error
 	Unresolve(failureID string) error
 }
@@ -323,6 +323,11 @@ func Handler(opts Options) (http.Handler, error) {
 	}
 	mux.Handle("/api/capabilities", readOnly(capabilitiesHandler(caps)))
 
+	// Keep unknown API paths out of the SPA fallback. Registered method-specific
+	// routes remain more specific than these catch-all patterns.
+	mux.Handle("/api", http.NotFoundHandler())
+	mux.Handle("/api/", http.NotFoundHandler())
+
 	// /data/* serves the fetcher output tree (manifest.json, dashboard.json,
 	// jobs/*.json, flakiness.json, search-index.json) at read parity. Directory
 	// listings are disabled so it serves files, not a browsable tree. The data
@@ -434,7 +439,7 @@ func trustedOriginSet(origins []string) map[string]struct{} {
 }
 
 // previewFunc renders a draft (issue or fix) for a failure id without posting.
-type previewFunc func(ctx context.Context, failureID, userToken, instruction string) (actions.PreviewResult, error)
+type previewFunc func(ctx context.Context, failureID, owner, writeToken, instruction string) (actions.PreviewResult, error)
 
 // previewHandler runs an authed preview and returns the draft JSON. The admin
 // identity is set by auth.Middleware. Errors map to 404 (unknown failure) or
@@ -451,7 +456,7 @@ func previewHandler(timeout time.Duration, run previewFunc) http.Handler {
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 
-		res, err := run(ctx, id, identity.Token, instruction)
+		res, err := run(ctx, id, identity.Login, identity.Token, instruction)
 		if err != nil {
 			writeActionError(w, id, identity.Login, err)
 			return
@@ -462,7 +467,7 @@ func previewHandler(timeout time.Duration, run previewFunc) http.Handler {
 }
 
 // confirmFunc posts the draft previously cached under a token.
-type confirmFunc func(ctx context.Context, token, userToken string) (string, error)
+type confirmFunc func(ctx context.Context, token, owner, writeToken string) (string, error)
 
 // confirmHandler posts the previewed draft named by {"token": ...} and returns
 // {"url": ...}. The admin identity is set by auth.Middleware.
@@ -483,7 +488,7 @@ func confirmHandler(timeout time.Duration, run confirmFunc) http.Handler {
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 
-		url, err := run(ctx, strings.TrimSpace(body.Token), identity.Token)
+		url, err := run(ctx, strings.TrimSpace(body.Token), identity.Login, identity.Token)
 		if err != nil {
 			writeActionError(w, "confirm", identity.Login, err)
 			return

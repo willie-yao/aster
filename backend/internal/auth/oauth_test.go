@@ -29,12 +29,17 @@ func testOAuth(t *testing.T, admins []string) *OAuth {
 }
 
 func testOAuthWithSecureCookies(t *testing.T, admins []string, secure bool) *OAuth {
+	return testOAuthWithWriteToken(t, admins, secure, "")
+}
+
+func testOAuthWithWriteToken(t *testing.T, admins []string, secure bool, writeToken string) *OAuth {
 	t.Helper()
 	o, err := NewOAuth(OAuthConfig{
 		ClientID:      "cid",
 		ClientSecret:  "secret",
 		RedirectURL:   "http://localhost/api/auth/callback",
 		Scope:         "read:user",
+		WriteToken:    writeToken,
 		Admins:        admins,
 		SessionKey:    "k",
 		SecureCookies: secure,
@@ -148,8 +153,27 @@ func TestOAuth_AuthenticateSessionAndAllowlist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authenticate: %v", err)
 	}
-	if id.Login != "alice" || id.Token != "user-tok" {
+	if id.Login != "alice" || id.Token != "" {
 		t.Errorf("identity = %+v", id)
+	}
+
+	// The OAuth token in a legacy session is ignored in favor of the configured
+	// server-side bot credential.
+	botOAuth := testOAuthWithWriteToken(t, []string{"alice"}, false, "bot-token")
+	botRecorder := httptest.NewRecorder()
+	if err := botOAuth.codec.write(botRecorder, "alice", "legacy-user-token"); err != nil {
+		t.Fatal(err)
+	}
+	botRequest := httptest.NewRequest("GET", "/api/auth/user", nil)
+	for _, c := range botRecorder.Result().Cookies() {
+		botRequest.AddCookie(c)
+	}
+	botIdentity, err := botOAuth.Authenticate(context.Background(), botRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if botIdentity.Login != "alice" || botIdentity.Token != "bot-token" {
+		t.Errorf("bot identity = %+v", botIdentity)
 	}
 
 	// A non-admin session is rejected even if the cookie is valid.
@@ -281,26 +305,23 @@ func TestOAuth_LoginRejectsExternalReturn(t *testing.T) {
 }
 
 func TestValidateGrantedScope(t *testing.T) {
-	if err := validateGrantedScope("public_repo", "public_repo"); err != nil {
+	if err := validateGrantedScope("read:user", "read:user"); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateGrantedScope("public_repo", "repo"); err == nil {
-		t.Fatal("broad repo grant was accepted for public-only policy")
+	if err := validateGrantedScope("read:user", "public_repo"); err == nil {
+		t.Fatal("repository grant was accepted for identity-only policy")
 	}
-	if err := validateGrantedScope("repo", "public_repo"); err == nil {
-		t.Fatal("missing private repo grant was accepted")
-	}
-	if err := validateGrantedScope("public_repo", "public_repo,gist"); err == nil {
+	if err := validateGrantedScope("read:user", "read:user,gist"); err == nil {
 		t.Fatal("unrelated retained grant was accepted")
 	}
 }
 
 func TestOAuthRejectsSessionFromDifferentPolicy(t *testing.T) {
-	old, err := newSessionCodec("k", false, time.Hour, "oauth:repo")
+	old, err := newSessionCodec("k", false, time.Hour, "oauth:public_repo")
 	if err != nil {
 		t.Fatal(err)
 	}
-	current, err := newSessionCodec("k", false, time.Hour, "oauth:public_repo")
+	current, err := newSessionCodec("k", false, time.Hour, "oauth:read:user")
 	if err != nil {
 		t.Fatal(err)
 	}

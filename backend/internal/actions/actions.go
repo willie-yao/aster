@@ -120,6 +120,8 @@ type previewEntry struct {
 	targetRepo          string
 	targetConfig        string
 	verificationVersion int
+	initiatedBy         string
+	initiatedAt         string
 	spec                issues.IssueSpec    // issue drafts
 	fix                 *fixpr.GeneratedFix // fix drafts
 }
@@ -181,6 +183,7 @@ type Service struct {
 
 	previewStore        *previewStore
 	issueManagerFactory issueManagerFactory
+	writeAudit          func(botWriteAuditRecord) error
 
 	rmu                  sync.Mutex
 	requests             *actionRequestState
@@ -205,6 +208,7 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 	s := &Service{
 		cfg: cfg, dataDir: dataDir, ai: ai,
 		previewStore: newPreviewStore(dataDir),
+		writeAudit:   newBotWriteAuditStore(dataDir).record,
 		issueManagerFactory: func(token, owner, repo string) issuePreviewManager {
 			return issues.NewManager(issues.NewClient(token, owner, repo), filepath.Join(dataDir, "issue_state.json"), owner+"/"+repo, issues.Options{MaxNewPerRun: 1})
 		},
@@ -726,8 +730,8 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 
 // PreviewIssue renders the exact issue that would be filed for the failure,
 // without filing it, and caches it for confirmation.
-func (s *Service) PreviewIssue(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, error) {
-	preview, entry, err := s.generateIssuePreview(ctx, failureID, userToken, instruction, nil, "", "")
+func (s *Service) PreviewIssue(ctx context.Context, failureID, owner, writeToken, instruction string) (PreviewResult, error) {
+	preview, entry, err := s.generateIssuePreview(ctx, failureID, writeToken, instruction, nil, "", "")
 	if err != nil {
 		return PreviewResult{}, err
 	}
@@ -735,7 +739,7 @@ func (s *Service) PreviewIssue(ctx context.Context, failureID, userToken, instru
 	if err != nil {
 		return PreviewResult{}, fmt.Errorf("%w: generated draft did not pass safety validation", ErrPreviewRejected)
 	}
-	token, err := s.stash(userToken, entry)
+	token, err := s.stash(owner, entry)
 	if err != nil {
 		return PreviewResult{}, err
 	}
@@ -876,8 +880,8 @@ func safeFixPreviewError(err error) error {
 const gfKind = "fix"
 
 // PreviewFix generates the exact fix PR preview and caches it for confirmation.
-func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruction string) (PreviewResult, error) {
-	preview, entry, err := s.generateFixPreview(ctx, failureID, userToken, instruction)
+func (s *Service) PreviewFix(ctx context.Context, failureID, owner, writeToken, instruction string) (PreviewResult, error) {
+	preview, entry, err := s.generateFixPreview(ctx, failureID, writeToken, instruction)
 	if err != nil {
 		return PreviewResult{}, err
 	}
@@ -885,7 +889,7 @@ func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruct
 	if err != nil {
 		return PreviewResult{}, fmt.Errorf("%w: generated draft did not pass safety validation", ErrPreviewRejected)
 	}
-	token, err := s.stash(userToken, entry)
+	token, err := s.stash(owner, entry)
 	if err != nil {
 		return PreviewResult{}, err
 	}
@@ -895,7 +899,7 @@ func (s *Service) PreviewFix(ctx context.Context, failureID, userToken, instruct
 
 // PreviewFixWithContext generates a fix from one validated selected chat response.
 func (s *Service) PreviewFixWithContext(
-	ctx context.Context, pattern models.PatternAnalysis, userToken, instruction string, target FixTarget, generationContext fixpr.GenerationContext,
+	ctx context.Context, pattern models.PatternAnalysis, owner, writeToken, instruction string, target FixTarget, generationContext fixpr.GenerationContext,
 ) (_ PreviewResult, resultErr error) {
 	logicalID := actionRequestID(ctx)
 	if logicalID == "" {
@@ -909,7 +913,7 @@ func (s *Service) PreviewFixWithContext(
 		pattern.JobID != target.JobID || !slices.Contains(pattern.SharedBuilds, target.BuildID) {
 		return PreviewResult{}, ErrPatternMismatch
 	}
-	preview, entry, err := s.generateFixPreviewForPattern(ctx, pattern, userToken, instruction, &generationContext)
+	preview, entry, err := s.generateFixPreviewForPattern(ctx, pattern, writeToken, instruction, &generationContext)
 	if err != nil {
 		return PreviewResult{}, err
 	}
@@ -917,7 +921,7 @@ func (s *Service) PreviewFixWithContext(
 	if err != nil {
 		return PreviewResult{}, fmt.Errorf("%w: generated draft did not pass safety validation", ErrPreviewRejected)
 	}
-	token, err := s.stash(userToken, entry)
+	token, err := s.stash(owner, entry)
 	if err != nil {
 		return PreviewResult{}, err
 	}
@@ -926,57 +930,65 @@ func (s *Service) PreviewFixWithContext(
 }
 
 // Confirm files the issue or opens the PR previously cached under token.
-func (s *Service) Confirm(ctx context.Context, token, userToken string) (string, error) {
+func (s *Service) Confirm(ctx context.Context, token, owner, writeToken string) (string, error) {
 	lease := s.requestTimeout + 30*time.Second
-	entry, resultURL, attemptID, reconcile, err := s.beginConfirm(userToken, token, lease)
+	entry, resultURL, attemptID, reconcile, err := s.beginConfirm(owner, token, lease)
 	if err != nil || resultURL != "" {
 		return resultURL, err
 	}
 	if !reconcile && entry.failureID != "" && entry.verificationVersion != sourceVerificationVersion {
-		_ = s.previewStore.discard(userToken, token, attemptID)
+		_ = s.previewStore.discard(owner, token, attemptID)
 		return "", ErrPreviewTargetChanged
 	}
 	if !reconcile {
 		if _, validateErr := validatedPreviewEntry(entry); validateErr != nil {
-			_ = s.previewStore.discard(userToken, token, attemptID)
+			_ = s.previewStore.discard(owner, token, attemptID)
 			return "", fmt.Errorf("%w: saved draft did not pass safety validation", ErrPreviewRejected)
 		}
 	}
 	if !reconcile && (entry.failureID != "" || entry.patternHash != "") {
 		if err := s.validateSubjectSnapshot(entry.failureID, entry.patternHash, entry.kind); err != nil {
-			_ = s.previewStore.discard(userToken, token, attemptID)
+			_ = s.previewStore.discard(owner, token, attemptID)
 			return "", err
 		}
 	}
 	if reconcile {
-		resultURL, found, reconcileErr := s.reconcileEntry(ctx, entry, userToken)
+		resultURL, found, reconcileErr := s.reconcileEntry(ctx, entry, writeToken)
 		if reconcileErr != nil {
 			if errors.Is(reconcileErr, ErrPreviewTargetChanged) {
-				_ = s.previewStore.discard(userToken, token, attemptID)
+				_ = s.previewStore.discard(owner, token, attemptID)
 				return "", reconcileErr
 			}
-			_ = s.finishConfirm(userToken, token, attemptID, "", reconcileErr)
+			_ = s.finishConfirm(owner, token, attemptID, "", reconcileErr)
 			return "", reconcileErr
 		}
 		if !found {
-			_ = s.finishConfirm(userToken, token, attemptID, "", ErrPreviewOutcomeUnknown)
+			_ = s.finishConfirm(owner, token, attemptID, "", ErrPreviewOutcomeUnknown)
 			return "", ErrPreviewOutcomeUnknown
 		}
-		if err := s.finishConfirm(userToken, token, attemptID, resultURL, nil); err != nil {
+		if err := s.recordBotWrite(token, owner, entry, resultURL, botWriteReconciled); err != nil {
+			_ = s.finishConfirm(owner, token, attemptID, "", err)
+			return resultURL, err
+		}
+		if err := s.finishConfirm(owner, token, attemptID, resultURL, nil); err != nil {
 			return resultURL, err
 		}
 		return resultURL, nil
 	}
-	resultURL, confirmErr := s.confirmEntry(ctx, entry, userToken)
+	resultURL, confirmErr := s.confirmEntry(ctx, entry, writeToken)
 	if errors.Is(confirmErr, ErrPreviewTargetChanged) {
-		_ = s.previewStore.discard(userToken, token, attemptID)
+		_ = s.previewStore.discard(owner, token, attemptID)
 		return "", confirmErr
 	}
 	finishInputErr := confirmErr
 	if resultURL != "" {
+		if err := s.recordBotWrite(token, owner, entry, resultURL, botWriteConfirmed); err != nil {
+			_ = s.finishConfirm(owner, token, attemptID, "", err)
+			return resultURL, err
+		}
 		finishInputErr = nil
 	}
-	finishErr := s.finishConfirm(userToken, token, attemptID, resultURL, finishInputErr)
+	finishErr := s.finishConfirm(owner, token, attemptID, resultURL, finishInputErr)
 	if resultURL != "" && finishErr == nil {
 		return resultURL, nil
 	}
@@ -989,12 +1001,12 @@ func (s *Service) Confirm(ctx context.Context, token, userToken string) (string,
 	return resultURL, nil
 }
 
-func (s *Service) beginConfirm(userToken, token string, lease time.Duration) (*previewEntry, string, string, bool, error) {
-	return s.previewStore.begin(userToken, token, lease)
+func (s *Service) beginConfirm(owner, token string, lease time.Duration) (*previewEntry, string, string, bool, error) {
+	return s.previewStore.begin(owner, token, lease)
 }
 
-func (s *Service) finishConfirm(userToken, token, attemptID, resultURL string, confirmErr error) error {
-	return s.previewStore.finish(userToken, token, attemptID, resultURL, confirmErr)
+func (s *Service) finishConfirm(owner, token, attemptID, resultURL string, confirmErr error) error {
+	return s.previewStore.finish(owner, token, attemptID, resultURL, confirmErr)
 }
 
 func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userToken string) (string, bool, error) {
@@ -1194,17 +1206,17 @@ func (s *Service) unresolveUnlocked(failureID string) error {
 }
 
 // stash persists a draft under a fresh token bound to the admin identity.
-func (s *Service) stash(userToken string, entry *previewEntry) (string, error) {
-	return s.previewStore.stash(userToken, entry)
+func (s *Service) stash(owner string, entry *previewEntry) (string, error) {
+	return s.previewStore.stash(owner, entry)
 }
 
 // take removes one persisted preview for compatibility with direct callers.
-func (s *Service) take(userToken, token string) (*previewEntry, error) {
-	return s.previewStore.take(userToken, token)
+func (s *Service) take(owner, token string) (*previewEntry, error) {
+	return s.previewStore.take(owner, token)
 }
 
 // tokenHash binds a preview to the admin who generated it without retaining the
-// raw token.
+// raw owner identifier.
 func tokenHash(t string) string {
 	sum := sha256.Sum256([]byte(t))
 	return hex.EncodeToString(sum[:])

@@ -170,6 +170,9 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 chmod 700 "$tmp"
 current_values=$tmp/current-values.json
+merged_values=$tmp/merged-values.yaml
+candidate_values=$tmp/candidate-values.json
+merge_chart=$tmp/value-merge
 current_manifest=$tmp/current-manifest.yaml
 candidate_manifest=$tmp/candidate-manifest.yaml
 deployed_manifest=$tmp/deployed-manifest.yaml
@@ -186,6 +189,73 @@ umask 077
   --kube-context "$context" \
   --namespace "$namespace" \
   -o json > "$current_values"
+
+mkdir -p "$merge_chart/templates"
+cat > "$merge_chart/Chart.yaml" <<'CHART'
+apiVersion: v2
+name: value-merge
+version: 0.1.0
+CHART
+cat > "$merge_chart/templates/values.json" <<'TEMPLATE'
+{{ toJson .Values }}
+TEMPLATE
+
+merge_args=(template value-merge "$merge_chart" --values "$current_values")
+for values_file in ${values_files[@]+"${values_files[@]}"}; do
+  merge_args+=(--values "$values_file")
+done
+"$helm_bin" "${merge_args[@]}" > "$merged_values"
+
+"$python_bin" - "$merged_values" "$candidate_values" <<'PY'
+import json
+import sys
+
+merged_path, candidate_path = sys.argv[1:]
+with open(merged_path, encoding="utf-8") as merged_file:
+    merged = merged_file.read()
+start = merged.find("{")
+if start < 0:
+    raise SystemExit("Helm value merge did not produce a JSON object")
+try:
+    values, end = json.JSONDecoder().raw_decode(merged[start:])
+except json.JSONDecodeError as err:
+    raise SystemExit(f"could not decode merged Helm values: {err}") from err
+if not isinstance(values, dict):
+    raise SystemExit("merged Helm values must be an object")
+
+removed = []
+server = values.get("server")
+if isinstance(server, dict):
+    actions = server.get("actions")
+    if isinstance(actions, dict):
+        oauth = actions.get("oauth")
+        if isinstance(oauth, dict):
+            for key in ("scope", "chatScope", "privateRepositories"):
+                if key in oauth:
+                    del oauth[key]
+                    removed.append(f"server.actions.oauth.{key}")
+    extra_env = server.get("extraEnv")
+    if isinstance(extra_env, list):
+        kept = []
+        for entry in extra_env:
+            if isinstance(entry, dict) and entry.get("name") in {"OAUTH_SCOPE", "OAUTH_PRIVATE_REPOSITORIES"}:
+                removed.append(f"server.extraEnv[{entry['name']}]")
+                continue
+            kept.append(entry)
+        server["extraEnv"] = kept
+
+with open(candidate_path, "w", encoding="utf-8") as candidate_file:
+    json.dump(values, candidate_file, indent=2, sort_keys=True)
+    candidate_file.write("\n")
+
+if removed:
+    print("Removed deprecated OAuth controls from the candidate values:")
+    for path in removed:
+        print(f"  - {path}")
+else:
+    print("No deprecated OAuth controls were present in the candidate values.")
+PY
+chmod 600 "$candidate_values"
 
 cache_generation=$("$python_bin" - "$current_values" <<'PY'
 import json
@@ -212,17 +282,14 @@ fi
   --kube-context "$context" \
   --namespace "$namespace" > "$current_manifest"
 
-value_args=(-f "$current_values")
+value_args=(--values "$candidate_values")
 upgrade_args=(
   upgrade "$release" "$chart"
   --kube-context "$context"
   --namespace "$namespace"
-  --reuse-values
+  --reset-values
+  --values "$candidate_values"
 )
-for values_file in ${values_files[@]+"${values_files[@]}"}; do
-  value_args+=(-f "$values_file")
-  upgrade_args+=(--values "$values_file")
-done
 set_args=(
   --set-string "global.imageTag=$version"
   --set-string "analysisCache.generation=$cache_generation"
