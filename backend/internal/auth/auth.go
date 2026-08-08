@@ -12,8 +12,8 @@ import (
 	"strings"
 )
 
-// Identity is an authenticated admin. Token is the GitHub token used to perform
-// writes as this user, so actions are attributed to a real person.
+// Identity is an authenticated admin. Token is the configured GitHub write
+// credential. The login records which admin initiated the action.
 type Identity struct {
 	Login string
 	Token string

@@ -36,6 +36,7 @@ func (f *fakeChatStore) FixCandidate(sessionID, owner, requestID, patternID, pat
 
 type fakeFixPreviewer struct {
 	pattern           models.PatternAnalysis
+	owner             string
 	userToken         string
 	instruction       string
 	target            actions.FixTarget
@@ -44,9 +45,9 @@ type fakeFixPreviewer struct {
 }
 
 func (f *fakeFixPreviewer) PreviewFixWithContext(
-	_ context.Context, pattern models.PatternAnalysis, userToken, instruction string, target actions.FixTarget, generationContext fixpr.GenerationContext,
+	_ context.Context, pattern models.PatternAnalysis, owner, userToken, instruction string, target actions.FixTarget, generationContext fixpr.GenerationContext,
 ) (actions.PreviewResult, error) {
-	f.pattern, f.userToken, f.instruction = pattern, userToken, instruction
+	f.pattern, f.owner, f.userToken, f.instruction = pattern, owner, userToken, instruction
 	f.target, f.generationContext, f.called = target, generationContext, true
 	return actions.PreviewResult{Token: "preview", Kind: "fix"}, nil
 }
@@ -79,7 +80,7 @@ func TestPreviewChatFixBuildsSelectedContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preview.Token != "preview" || !fixes.called || fixes.pattern.ID != "pattern" || fixes.userToken != "user-token" {
+	if preview.Token != "preview" || !fixes.called || fixes.pattern.ID != "pattern" || fixes.owner != "Alice" || fixes.userToken != "user-token" {
 		t.Fatalf("preview=%+v fixes=%+v", preview, fixes)
 	}
 	if chat.sessionID != "session" || chat.owner != "Alice" || chat.requestID != "chat-request" ||

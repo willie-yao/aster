@@ -17,8 +17,8 @@ import (
 // sessionCookieName is the cookie holding the encrypted admin session.
 const sessionCookieName = "pad_session"
 
-// session is the authenticated state sealed into the cookie. Token is the
-// admin's OAuth token, used to perform GitHub writes as them.
+// session is the authenticated state sealed into the cookie. Token is retained
+// for session-format compatibility; current OAuth sessions leave it empty.
 type session struct {
 	Login  string `json:"login"`
 	Token  string `json:"token"`
@@ -27,7 +27,7 @@ type session struct {
 }
 
 // sessionCodec seals and opens sessions with authenticated encryption so the
-// cookie is tamper-proof and its contents (the token) stay confidential.
+// cookie is tamper-proof and its contents stay confidential.
 type sessionCodec struct {
 	aead   cipher.AEAD
 	secure bool

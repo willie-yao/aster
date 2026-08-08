@@ -263,7 +263,7 @@ server:
   port: 8080
   # Extra environment variables for the server container. Standard core/v1
   # EnvVar entries. Add EMAIL_SMTP_PASSWORD here for async draft-ready emails.
-  # COOKIE_INSECURE is reserved by the chart.
+  # HSTS_ENABLED and COOKIE_INSECURE are reserved by the chart.
   extraEnv: []
   security:
     hsts:
@@ -271,7 +271,10 @@ server:
       # serving the chart directly over local HTTP.
       enabled: true
   development:
-    # Allows OAuth cookies over local HTTP. This requires HSTS to be disabled
+    # Explicitly acknowledges direct local HTTP serving when HSTS is disabled.
+    # Never enable this on a deployed dashboard.
+    allowInsecureHTTP: false
+    # Allows OAuth cookies over local HTTP. This also acknowledges local HTTP
     # and must never be enabled on a deployed dashboard.
     allowInsecureCookies: false
   # Admin-gated read-only conversations about a published AI analysis.
@@ -315,8 +318,8 @@ server:
   actions:
     # enabled turns the write endpoints on. mode selects how admins authenticate.
     enabled: false
-    # mode: "oauth" (each admin signs in with GitHub; their token performs the
-    # write) or "proxy" (an upstream SSO proxy authenticates; a bot token writes).
+    # mode: "oauth" (each admin signs in with GitHub) or "proxy" (an upstream
+    # SSO proxy authenticates). BOT_TOKEN performs enabled writes in either mode.
     mode: oauth
     # admins is the GitHub login allowlist (case-insensitive).
     admins: []
@@ -336,9 +339,9 @@ server:
       redirectUrl: ""
       # sessionKey seeds the session-cookie encryption; use a long random value.
       sessionKey: ""
-      # Request GitHub private-repository access for write actions. Keep false
-      # for public targets. Chat-only OAuth always uses read:user.
-      privateRepositories: false
+      # OAuth authenticates the admin with read:user only. When actions are
+      # enabled, this bot token performs GitHub writes. Prefer existingSecret.
+      botToken: ""
       existingSecret: ""
     # proxy mode settings.
     proxy:

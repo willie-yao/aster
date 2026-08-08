@@ -198,8 +198,14 @@ The engine repository includes a helper for a published `sha-<commit>` snapshot:
 
 The helper requires an existing release, preserves
 `analysisCache.generation`, validates the chart, shows image changes, and uses
-Helm rollback support. When an image inspection tool is available, it also
-checks the rendered image manifests.
+Helm rollback support. It asks Helm to merge the installed values with every
+explicit `--values` overlay into one private temporary candidate, removes only
+the known deprecated OAuth controls, and then uses that same candidate for
+lint, render, and `helm upgrade --reset-values`. This prevents stale
+`scope`, `chatScope`, `privateRepositories`, `OAUTH_SCOPE`, or
+`OAUTH_PRIVATE_REPOSITORIES` settings from blocking a guarded upgrade while
+preserving all other installed and consumer-owned values. When an image
+inspection tool is available, it also checks the rendered image manifests.
 
 Do not use the snapshot helper for a stable release upgrade. Prefer the bundle
 wrapper and a published chart version.
@@ -269,6 +275,7 @@ main operator controls.
 | `server.replicaCount` | Server replicas. Persistent private state requires a suitable shared filesystem. |
 | `server.chat.*` | Authenticated analysis conversation settings. |
 | `server.security.hsts.enabled` | Helm HSTS behavior. Keep enabled for deployed HTTPS origins. |
+| `server.development.allowInsecureHTTP` | Explicit local HTTP acknowledgement required to disable HSTS outside OAuth cookie testing. |
 | `server.development.allowInsecureCookies` | Local HTTP OAuth testing only. Never enable on a deployed dashboard. |
 | `server.actions.*` | OAuth or proxy authentication and guarded GitHub writes. |
 | `server.service.*` | ClusterIP, NodePort, or LoadBalancer exposure. |
@@ -347,10 +354,16 @@ The public read endpoints `/data/*`, `/api/capabilities`, and `/healthz` remain
 unauthenticated. Authentication protects chat, private traces, and write
 actions.
 
-The chart rejects `COOKIE_INSECURE` in `server.extraEnv`. For local OAuth testing
-over HTTP only, disable HSTS and set
-`server.development.allowInsecureCookies=true`. Deployed dashboards should keep
-the secure defaults.
+The chart rejects `HSTS_ENABLED` and `COOKIE_INSECURE` in `server.extraEnv`.
+HSTS is enabled by default. Disabling it requires explicit local HTTP
+acknowledgement with `server.development.allowInsecureHTTP=true`; local OAuth
+may instead use `server.development.allowInsecureCookies=true`. Deployed
+dashboards should keep both development values false. After deployment, verify
+that the public reverse proxy preserves the header:
+
+```bash
+curl -fsSI https://dashboard.example.com/ | grep -i '^strict-transport-security:'
+```
 
 ## Analysis chat
 
@@ -380,11 +393,22 @@ Write actions are disabled by default. Enable them only after configuring:
 - Existing Secrets for OAuth or proxy credentials.
 - A secure origin topology.
 
-OAuth attributes writes to the signed-in user. Proxy mode trusts an upstream SSO
-identity and uses a bot token for writes. Keep credentials in existing
-Kubernetes Secrets rather than inline values.
+OAuth and proxy modes authenticate the initiating admin separately from the
+GitHub write credential. OAuth uses `read:user`; `BOT_TOKEN` performs enabled
+writes in both modes. Keep credentials in existing Kubernetes Secrets rather
+than inline values.
 
 See [Server mode](server.md) for setup and threat boundaries.
+
+The bot-token split changes `action_preview_state.json` to version 5. During an
+upgrade, every version 1 through 4 synchronous preview is invalidated because
+its owner was bound to a credential hash rather than the initiating login.
+Admins must generate a new preview. A rollback to a pre-v5 server fails closed
+on v5 preview state; roll forward, or move the private preview state aside and
+regenerate previews after confirming no action is in progress. The separate
+`.action-write-audit/state.json` ledger remains private and must be retained
+across upgrades and rollbacks. Its dot-prefixed directory is rejected by both
+pre-v5 and current data-serving rules, so rollback does not expose the ledger.
 
 ## Email notification integration
 

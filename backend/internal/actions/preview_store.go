@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -18,7 +19,7 @@ import (
 )
 
 const (
-	previewStateVersion     = 4
+	previewStateVersion     = 5
 	maxPreviewStateBytes    = 64 << 20
 	maxPersistedPreviews    = 128
 	previewStatusReady      = "ready"
@@ -30,6 +31,8 @@ const (
 
 type persistedPreview struct {
 	Owner               string                      `json:"owner"`
+	InitiatedBy         string                      `json:"initiated_by"`
+	InitiatedAt         string                      `json:"initiated_at"`
 	Kind                string                      `json:"kind"`
 	FailureID           string                      `json:"failure_id,omitempty"`
 	PatternHash         string                      `json:"pattern_hash,omitempty"`
@@ -64,13 +67,17 @@ func newPreviewStore(dataDir string) *previewStore {
 	}
 }
 
-func (s *previewStore) stash(userToken string, entry *previewEntry) (string, error) {
+func (s *previewStore) stash(owner string, entry *previewEntry) (string, error) {
+	owner = normalizeActionOwner(owner)
+	if owner == "" {
+		return "", fmt.Errorf("preview owner is required")
+	}
 	token, err := newToken()
 	if err != nil {
 		return "", fmt.Errorf("generating preview token: %w", err)
 	}
 	key := tokenHash(token)
-	record, err := persistPreview(entry, tokenHash(userToken), time.Now().UTC())
+	record, err := persistPreview(entry, owner, time.Now().UTC())
 	if err != nil {
 		return "", err
 	}
@@ -91,7 +98,8 @@ func (s *previewStore) stash(userToken string, entry *previewEntry) (string, err
 	return token, nil
 }
 
-func (s *previewStore) begin(userToken, token string, lease time.Duration) (*previewEntry, string, string, bool, error) {
+func (s *previewStore) begin(owner, token string, lease time.Duration) (*previewEntry, string, string, bool, error) {
+	owner = normalizeActionOwner(owner)
 	if lease <= 0 {
 		lease = defaultRequestTimeout
 	}
@@ -104,7 +112,7 @@ func (s *previewStore) begin(userToken, token string, lease time.Duration) (*pre
 	var reconcile bool
 	err = s.update(func(state *previewState, now time.Time) (bool, error) {
 		record := state.Previews[tokenHash(token)]
-		if record == nil || record.Owner != tokenHash(userToken) {
+		if record == nil || record.Owner != tokenHash(owner) {
 			return false, ErrPreviewNotFound
 		}
 		if record.Status == previewStatusDone && record.ResultURL != "" {
@@ -143,10 +151,11 @@ func (s *previewStore) begin(userToken, token string, lease time.Duration) (*pre
 	return entry, resultURL, attemptID, reconcile, err
 }
 
-func (s *previewStore) finish(userToken, token, attemptID, resultURL string, confirmErr error) error {
+func (s *previewStore) finish(owner, token, attemptID, resultURL string, confirmErr error) error {
+	owner = normalizeActionOwner(owner)
 	return s.update(func(state *previewState, now time.Time) (bool, error) {
 		record := state.Previews[tokenHash(token)]
-		if record == nil || record.Owner != tokenHash(userToken) {
+		if record == nil || record.Owner != tokenHash(owner) {
 			return false, ErrPreviewNotFound
 		}
 		if record.Status != previewStatusRunning || record.AttemptID != attemptID {
@@ -177,12 +186,13 @@ func (s *previewStore) finish(userToken, token, attemptID, resultURL string, con
 	})
 }
 
-func (s *previewStore) take(userToken, token string) (*previewEntry, error) {
+func (s *previewStore) take(owner, token string) (*previewEntry, error) {
+	owner = normalizeActionOwner(owner)
 	var entry *previewEntry
 	err := s.update(func(state *previewState, now time.Time) (bool, error) {
 		key := tokenHash(token)
 		record := state.Previews[key]
-		if record == nil || record.Owner != tokenHash(userToken) {
+		if record == nil || record.Owner != tokenHash(owner) {
 			return false, ErrPreviewNotFound
 		}
 		var err error
@@ -196,11 +206,12 @@ func (s *previewStore) take(userToken, token string) (*previewEntry, error) {
 	return entry, err
 }
 
-func (s *previewStore) discard(userToken, token, attemptID string) error {
+func (s *previewStore) discard(owner, token, attemptID string) error {
+	owner = normalizeActionOwner(owner)
 	return s.update(func(state *previewState, _ time.Time) (bool, error) {
 		key := tokenHash(token)
 		record := state.Previews[key]
-		if record == nil || record.Owner != tokenHash(userToken) || record.AttemptID != attemptID {
+		if record == nil || record.Owner != tokenHash(owner) || record.AttemptID != attemptID {
 			return false, ErrPreviewSuperseded
 		}
 		delete(state.Previews, key)
@@ -227,12 +238,12 @@ func (s *previewStore) updateProtected(protectedKey string, fn func(*previewStat
 	}
 	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
 
-	state, err := s.load()
+	state, migrated, err := s.load()
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC()
-	changed := evictPersistedPreviews(state, now)
+	changed := migrated || evictPersistedPreviews(state, now)
 	opChanged, opErr := fn(state, now)
 	changed = changed || opChanged
 	if changed {
@@ -247,13 +258,13 @@ func (s *previewStore) updateProtected(protectedKey string, fn func(*previewStat
 	return opErr
 }
 
-func (s *previewStore) load() (*previewState, error) {
+func (s *previewStore) load() (*previewState, bool, error) {
 	file, err := os.Open(s.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return freshPreviewState(), nil
+		return freshPreviewState(), false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("opening preview state: %w", err)
+		return nil, false, fmt.Errorf("opening preview state: %w", err)
 	}
 	defer file.Close()
 	maxBytes := s.maxBytes
@@ -262,36 +273,28 @@ func (s *previewStore) load() (*previewState, error) {
 	}
 	data, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+1))
 	if err != nil {
-		return nil, fmt.Errorf("reading preview state: %w", err)
+		return nil, false, fmt.Errorf("reading preview state: %w", err)
 	}
 	if len(data) > maxBytes {
-		return nil, fmt.Errorf("preview state exceeds %d bytes", maxBytes)
+		return nil, false, fmt.Errorf("preview state exceeds %d bytes", maxBytes)
 	}
 	state := freshPreviewState()
 	if err := json.Unmarshal(data, state); err != nil {
-		return nil, fmt.Errorf("decoding preview state: %w", err)
+		return nil, false, fmt.Errorf("decoding preview state: %w", err)
 	}
-	if state.Previews == nil || (state.Version != 1 && state.Version != 2 && state.Version != 3 && state.Version != previewStateVersion) {
-		return nil, fmt.Errorf("unsupported preview state version %d", state.Version)
+	if state.Previews == nil || state.Version < 1 || state.Version > previewStateVersion {
+		return nil, false, fmt.Errorf("unsupported preview state version %d", state.Version)
 	}
-	if state.Version == 1 {
-		for key, record := range state.Previews {
-			if record != nil && (record.FailureID == "" || record.PatternHash == "") && (record.Status == previewStatusReady || record.Status == previewStatusRunning) {
-				delete(state.Previews, key)
-			}
-		}
-		state.Version = 2
+	if state.Version < previewStateVersion {
+		// Versions through v4 bound previews to a GitHub credential hash. V5
+		// binds them to the initiating login, so every legacy preview is invalid.
+		return freshPreviewState(), true, nil
 	}
-	if state.Version == 2 || state.Version == 3 {
-		for key, record := range state.Previews {
-			if record != nil && record.VerificationVersion != sourceVerificationVersion &&
-				(record.Status == previewStatusReady || record.Status == previewStatusRunning) {
-				delete(state.Previews, key)
-			}
-		}
-		state.Version = previewStateVersion
-	}
-	return state, nil
+	return state, false, nil
+}
+
+func normalizeActionOwner(owner string) string {
+	return strings.ToLower(strings.TrimSpace(owner))
 }
 
 func freshPreviewState() *previewState {
@@ -302,9 +305,10 @@ func persistPreview(entry *previewEntry, owner string, now time.Time) (*persiste
 	if entry == nil {
 		return nil, ErrPreviewNotFound
 	}
+	initiatedAt := now.Format(time.RFC3339Nano)
 	record := &persistedPreview{
-		Owner: owner, Kind: entry.kind, FailureID: entry.failureID, PatternHash: entry.patternHash, TargetRepo: entry.targetRepo, TargetConfig: entry.targetConfig, VerificationVersion: entry.verificationVersion,
-		CreatedAt: now.Format(time.RFC3339Nano), Status: previewStatusReady,
+		Owner: tokenHash(owner), InitiatedBy: owner, InitiatedAt: initiatedAt, Kind: entry.kind, FailureID: entry.failureID, PatternHash: entry.patternHash, TargetRepo: entry.targetRepo, TargetConfig: entry.targetConfig, VerificationVersion: entry.verificationVersion,
+		CreatedAt: initiatedAt, Status: previewStatusReady,
 	}
 	switch entry.kind {
 	case "issue":
@@ -325,7 +329,14 @@ func restorePreview(record *persistedPreview) (*previewEntry, error) {
 	if record == nil {
 		return nil, ErrPreviewNotFound
 	}
-	entry := &previewEntry{failureID: record.FailureID, patternHash: record.PatternHash, kind: record.Kind, targetRepo: record.TargetRepo, targetConfig: record.TargetConfig, verificationVersion: record.VerificationVersion}
+	initiatedBy := normalizeActionOwner(record.InitiatedBy)
+	if initiatedBy == "" || record.Owner != tokenHash(initiatedBy) {
+		return nil, fmt.Errorf("persisted preview has invalid owner binding")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, record.InitiatedAt); err != nil {
+		return nil, fmt.Errorf("persisted preview has invalid initiation time: %w", err)
+	}
+	entry := &previewEntry{failureID: record.FailureID, patternHash: record.PatternHash, kind: record.Kind, targetRepo: record.TargetRepo, targetConfig: record.TargetConfig, verificationVersion: record.VerificationVersion, initiatedBy: initiatedBy, initiatedAt: record.InitiatedAt}
 	switch record.Kind {
 	case "issue":
 		if record.Issue == nil {

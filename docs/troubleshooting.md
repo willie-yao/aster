@@ -25,8 +25,12 @@ cases below.
 | Cached analysis came from the old provider | Existing reusable entries retain their provider provenance after a provider change. | Set a new cache generation for a reversible full rebaseline. |
 | `Propose fix` reports unavailable | The process cannot use git, OpenCode, or the pinned `srt` sandbox, or a required domain is not allowed. | Use the fixer image or install the pinned tools, set `SRT_BIN`, and configure only the required `agent_runtime.network_domains`. |
 | Agent shadow does not run or records a failed status | The exact comparison was already claimed, Task RBAC or admission denied creation, result authentication failed, output or citations were invalid, the private ledger claim was unavailable, or cleanup remains pending. | Inspect worker or fetcher logs, the shadow Task status, admission denial, Orka result API authorization for the dedicated shadow ServiceAccount, and the private `analysis_shadow.json` ledger. Do not clear authoritative cache or public data. |
-| Helm rejects `server.actions.oauth.scope` or `chatScope` | The chart now derives a least-privilege OAuth scope. | Remove both legacy keys. Keep `server.actions.oauth.privateRepositories=false` for public targets or set it to `true` only for private action targets. |
-| OAuth actions cannot access a private repository | The public-only default requested `public_repo`. | Set `server.actions.oauth.privateRepositories=true`, upgrade, then sign out and authorize the OAuth App again. |
+| Helm rejects `server.actions.oauth.scope`, `chatScope`, or `privateRepositories` | OAuth is identity-only and no longer carries repository access. | Use the guarded `deploy/helm/upgrade.sh`; it removes only known deprecated OAuth controls from its reviewed candidate. For a manual upgrade, remove the legacy keys and grant required repository access to `BOT_TOKEN`. |
+| OAuth actions report that `BOT_TOKEN` is missing or cannot access a repository | OAuth identifies the admin, but the bot credential performs writes. | Add `BOT_TOKEN` to the OAuth auth Secret and scope it to the configured action repositories and operations. |
+| Helm rejects `server.security.hsts.enabled=false` | HSTS cannot be disabled accidentally. | Keep HSTS enabled for deployments. For direct local HTTP only, set `server.development.allowInsecureHTTP=true`. |
+| A synchronous preview returns not found immediately after the bot-token upgrade | Preview state versions 1 through 4 used credential-derived ownership and are intentionally invalidated by v5. | Generate a new preview. Do not restore the legacy preview file. |
+| A pre-v5 rollback cannot read `action_preview_state.json` | Version 5 is intentionally outside the legacy reader's accepted range. | Prefer rolling forward. If rollback is required, move the private preview state aside only after confirming no action is in progress, then regenerate previews. Preserve `.action-write-audit/state.json`; its dot-prefixed directory remains hidden by pre-v5 servers. |
+| A confirmed bot write reports an audit persistence error | The external write may have succeeded, but the private audit could not be durably recorded. | Restore storage access and retry confirmation. The server reconciles the external result and records it as recovered before reporting success. |
 
 ## Useful checks
 
@@ -49,18 +53,16 @@ curl -fsS http://localhost:8080/api/capabilities
 For deeper AI-loop behavior, see the troubleshooting section in
 [Agentic analysis](agentic.md#troubleshooting).
 
-## OAuth access after a scope change
+## OAuth access after the bot-token split
 
-Chat-only OAuth always requests `read:user`. OAuth actions request
-`public_repo` by default and request `repo` only when
-`server.actions.oauth.privateRepositories=true`.
+OAuth always requests `read:user` and does not retain the user access token in
+the dashboard session. Enabled actions use the server-held `BOT_TOKEN`.
 
-After changing private-repository access in either direction, sign out of the
-dashboard and sign in again so the session matches the configured policy. When
-reducing from `repo` to `public_repo`, revoke the OAuth App in GitHub before
-reauthorizing if GitHub retains the previous broad grant. The chart rejects
-legacy `scope`, `chatScope`, and `OAUTH_SCOPE` overrides instead of silently
-continuing with broader access.
+When upgrading from per-user `public_repo` or `repo` access, add `BOT_TOKEN` to
+the OAuth auth Secret before enabling actions. Then have every admin sign out,
+revoke the old OAuth App grant, and sign in again. The chart rejects legacy
+`scope`, `chatScope`, `privateRepositories`, `OAUTH_SCOPE`, and
+`OAUTH_PRIVATE_REPOSITORIES` controls instead of retaining broad access.
 
 ## No jobs were published
 

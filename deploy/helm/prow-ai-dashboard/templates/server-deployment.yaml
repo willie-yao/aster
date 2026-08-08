@@ -7,11 +7,15 @@
 {{- $source := .Values.server.chat.sourceInvestigation.enabled -}}
 {{- $interactive := or $actions $chat -}}
 {{- $a := .Values.server.actions -}}
+{{- $extraHSTS := false -}}
 {{- $extraInsecureCookies := false -}}
 {{- $extraOAuthScope := false -}}
 {{- $extraOAuthPrivateRepositories := false -}}
 {{- $extraOrkaDelegation := "" -}}
 {{- range .Values.server.extraEnv -}}
+{{- if eq (default "" .name) "HSTS_ENABLED" -}}
+{{- $extraHSTS = true -}}
+{{- end -}}
 {{- if eq (default "" .name) "COOKIE_INSECURE" -}}
 {{- $extraInsecureCookies = true -}}
 {{- end -}}
@@ -25,23 +29,29 @@
 {{- $extraOrkaDelegation = .name -}}
 {{- end -}}
 {{- end -}}
+{{- if $extraHSTS -}}
+{{- fail "server.extraEnv must not set HSTS_ENABLED; use server.security.hsts.enabled" -}}
+{{- end -}}
 {{- if $extraInsecureCookies -}}
 {{- fail "server.extraEnv must not set COOKIE_INSECURE; use server.development.allowInsecureCookies for local OAuth testing" -}}
 {{- end -}}
-{{- if or (hasKey $a.oauth "scope") (hasKey $a.oauth "chatScope") -}}
-{{- fail "server.actions.oauth.scope and server.actions.oauth.chatScope are no longer supported; remove them and set server.actions.oauth.privateRepositories=true only when OAuth actions must access private repositories" -}}
+{{- if or (hasKey $a.oauth "scope") (hasKey $a.oauth "chatScope") (hasKey $a.oauth "privateRepositories") -}}
+{{- fail "server.actions.oauth.scope, chatScope, and privateRepositories are no longer supported; OAuth uses read:user and BOT_TOKEN performs writes" -}}
 {{- end -}}
 {{- if $extraOAuthScope -}}
-{{- fail "server.extraEnv must not set OAUTH_SCOPE; remove it and use server.actions.oauth.privateRepositories" -}}
+{{- fail "server.extraEnv must not set OAUTH_SCOPE; OAuth uses read:user and BOT_TOKEN performs writes" -}}
 {{- end -}}
 {{- if $extraOAuthPrivateRepositories -}}
-{{- fail "server.extraEnv must not set OAUTH_PRIVATE_REPOSITORIES; use server.actions.oauth.privateRepositories" -}}
+{{- fail "server.extraEnv must not set OAUTH_PRIVATE_REPOSITORIES; grant repository access to BOT_TOKEN instead" -}}
 {{- end -}}
 {{- if $extraOrkaDelegation -}}
 {{- fail (printf "server.extraEnv must not set reserved Orka delegation variable %s" $extraOrkaDelegation) -}}
 {{- end -}}
-{{- if and $a.oauth.privateRepositories (not $actions) -}}
-{{- fail "server.actions.oauth.privateRepositories=true requires server.actions.enabled=true; chat-only OAuth uses read:user" -}}
+{{- if and (not .Values.server.security.hsts.enabled) (not (or .Values.server.development.allowInsecureHTTP .Values.server.development.allowInsecureCookies)) -}}
+{{- fail "server.security.hsts.enabled=false requires explicit local HTTP acknowledgement through server.development.allowInsecureHTTP=true" -}}
+{{- end -}}
+{{- if and .Values.server.development.allowInsecureHTTP .Values.server.security.hsts.enabled -}}
+{{- fail "server.development.allowInsecureHTTP requires server.security.hsts.enabled=false" -}}
 {{- end -}}
 {{- if and .Values.server.development.allowInsecureCookies (not (and $interactive (eq $a.mode "oauth"))) -}}
 {{- fail "server.development.allowInsecureCookies requires interactive OAuth mode" -}}
@@ -236,8 +246,6 @@ spec:
               value: {{ $a.oauth.clientId | quote }}
             - name: OAUTH_REDIRECT_URL
               value: {{ $a.oauth.redirectUrl | quote }}
-            - name: OAUTH_PRIVATE_REPOSITORIES
-              value: {{ $a.oauth.privateRepositories | quote }}
             - name: OAUTH_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
@@ -248,6 +256,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "prow-ai-dashboard.authSecret" . }}
                   key: SESSION_KEY
+            {{- if $actions }}
+            - name: BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "prow-ai-dashboard.authSecret" . }}
+                  key: BOT_TOKEN
+            {{- end }}
             {{- else if eq $a.mode "proxy" }}
             - name: AUTH_PROXY_HEADER
               value: {{ $a.proxy.header | quote }}

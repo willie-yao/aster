@@ -463,20 +463,30 @@ The synchronous `*/preview` and `/api/actions/confirm` endpoints expose the same
 two-phase contract for direct API clients. Their preview token is single-use,
 expires after 15 minutes, and is bound to the admin who generated it.
 
-Two auth modes, both keeping the admin allowlist (`ADMIN_LOGINS`):
+Two auth modes, both keeping the admin allowlist (`ADMIN_LOGINS`) and
+using a server-held `BOT_TOKEN` for optional GitHub writes:
 
-- **`oauth`** (per-user attribution): the operator registers a GitHub OAuth App.
-  Admins sign in with GitHub; the server holds each admin's own OAuth token in
-  an encrypted, httpOnly session cookie and performs the write as them, so the
-  issue or PR is attributed to the real user. No token is ever entered in the
-  browser. Needs `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_REDIRECT_URL`
-  (the App's callback), and `SESSION_KEY`. Public issue and fix targets use the
-  least-privilege `public_repo` scope by default. Set
-  `OAUTH_PRIVATE_REPOSITORIES=true` only when an action target is private.
-- **`proxy`** (bot attribution): an upstream SSO proxy (oauth2-proxy, IAP, ...)
-  authenticates the user and passes their identity in a trusted header
-  (`AUTH_PROXY_HEADER`, e.g. `X-Auth-Request-Email`); a single `BOT_TOKEN`
-  performs the write. Simplest when you already run an authenticating proxy.
+- **`oauth`**: the operator registers a GitHub OAuth App. Admins sign in with
+  GitHub using the identity-only `read:user` scope. The encrypted, httpOnly
+  session cookie stores the login but not the OAuth access token. A separate
+  `BOT_TOKEN` performs issue and pull request writes when actions are enabled.
+- **`proxy`**: an upstream SSO proxy (oauth2-proxy, IAP, ...) authenticates the
+  user and passes their identity in a trusted header (`AUTH_PROXY_HEADER`, e.g.
+  `X-Auth-Request-Email`). The same bot-token write model is used.
+
+The dashboard audit state records the initiating admin login. GitHub records the
+bot account as the issue or pull request actor. Scope the bot credential to only
+the repositories and operations required by the configured action targets.
+
+Successful synchronous issue and fix confirmations append a durable private
+record to `.action-write-audit/state.json`. Each record links the initiating and
+confirming login, action kind, failure and target repository, result URL,
+initiation and confirmation timestamps, and whether the result was written in
+the initial attempt or recovered through reconciliation. The file uses private
+permissions and contains no OAuth or bot token. Its dot-prefixed parent directory
+is rejected by both pre-v5 and current no-list handlers before basename checks,
+so the ledger remains private during a server rollback. Chat-to-fix uses the
+same preview and confirmation path, so it receives the same audit coverage.
 
 The `Authenticator` is a seam, so the two modes share one code path and a third
 mechanism can be added without touching the handlers. Sessions are stateless
@@ -512,19 +522,11 @@ oauth mode the `OAUTH_REDIRECT_URL` host is trusted automatically, and
    the client ID and secret.
 3. Generate a session key (any long random string), e.g.
    `openssl rand -base64 32`.
-4. Choose repository access. The server derives the GitHub scope instead of
-   accepting an arbitrary scope:
-
-   | Features | `OAUTH_PRIVATE_REPOSITORIES` | GitHub scope |
-   | --- | --- | --- |
-   | Chat only | `false` | `read:user` |
-   | Actions against public repositories | `false` | `public_repo` |
-   | Actions against private repositories | `true` | `repo` |
-
-   Keep the default `false` for public targets. The `repo` scope grants broad
-   access to both public and private repositories available to the signed-in
-   admin. Chat-only OAuth always uses `read:user` and rejects private-repository
-   access.
+4. If actions are enabled, create a bot credential for `BOT_TOKEN`. Use the
+   narrowest token supported by the configured issue and fix modes. Fine-grained
+   tokens work for many direct-repository deployments; fork-based fixes may need
+   a classic PAT as described in [Fix PRs](fix-prs.md#identity-cla-and-the-token-read-this-first).
+   Chat only does not require this credential.
 5. Run the server with these env vars:
 
    | Variable | Purpose |
@@ -535,7 +537,7 @@ oauth mode the `OAUTH_REDIRECT_URL` host is trusted automatically, and
    | `OAUTH_REDIRECT_URL` | The callback URL registered above. |
    | `SESSION_KEY` | Random secret seeding the session-cookie encryption. |
    | `ADMIN_LOGINS` | Comma-separated GitHub logins allowed to act. |
-   | `OAUTH_PRIVATE_REPOSITORIES` | Optional boolean. Defaults to `false`; set `true` only for actions against private repositories. |
+   | `BOT_TOKEN` | Required when actions are enabled. Server-held GitHub credential that performs writes. |
    | `HSTS_ENABLED=1` | Optional; send `Strict-Transport-Security: max-age=31536000` when HTTPS is deployed. |
    | `COOKIE_INSECURE=1` | Optional; allow the cookie over plain http for local testing only. |
    | `TRUSTED_ORIGINS` | Optional; extra public origins the CSRF guard accepts (comma-separated) when behind a proxy. The `OAUTH_REDIRECT_URL` host is trusted automatically. |
@@ -546,7 +548,7 @@ oauth mode the `OAUTH_REDIRECT_URL` host is trusted automatically, and
    OAUTH_CLIENT_ID=<client-id> OAUTH_CLIENT_SECRET=<client-secret> \
    OAUTH_REDIRECT_URL=http://localhost:8080/api/auth/callback \
    SESSION_KEY="$(openssl rand -base64 32)" ADMIN_LOGINS=your-login \
-   OAUTH_PRIVATE_REPOSITORIES=false \
+   BOT_TOKEN=<write-token> \
    ./bin/server -data-dir=frontend/public/data -static-dir=frontend/dist \
      -project-dir=../myproject-dashboard
    ```
@@ -557,13 +559,24 @@ oauth mode the `OAUTH_REDIRECT_URL` host is trusted automatically, and
    Helm deployments enable HSTS and secure OAuth cookies by default. The chart
    accepts insecure cookies only through its explicit local-development value.
 
-`OAUTH_SCOPE` is no longer supported. Remove it and choose repository access
-with `OAUTH_PRIVATE_REPOSITORIES`. After reducing access from `repo` to
-`public_repo`, every admin must sign out of the dashboard and sign in again.
-For certainty that GitHub does not reuse the previous broad authorization,
-revoke the OAuth App under the admin's GitHub application settings before
-signing in again. The OAuth client ID, secret, callback URL, and admin allowlist
-do not otherwise change.
+`OAUTH_SCOPE` and `OAUTH_PRIVATE_REPOSITORIES` are no longer supported. OAuth
+always requests `read:user`; grant repository access only to `BOT_TOKEN`. After
+upgrading from per-user repository scopes, every admin must sign out, revoke the
+old OAuth App grant, and sign in again. For a Helm `oauth.existingSecret`, add a
+`BOT_TOKEN` key before enabling actions.
+
+Helm enables HSTS by default and rejects `HSTS_ENABLED` in `server.extraEnv`.
+Disabling HSTS requires an explicit local HTTP acknowledgement through
+`server.development.allowInsecureHTTP=true` or the local OAuth cookie setting.
+The standalone server remains HSTS-off by default so plain HTTP development
+continues to work.
+
+
+The owner-binding change invalidates synchronous preview state versions 1
+through 4 and writes version 5. Generate new previews after upgrading. Rolling
+back to a pre-v5 server is fail-closed because that binary cannot read v5; roll
+forward or move the private `action_preview_state.json` aside before generating
+new previews. Do not reuse old previews after changing OAuth write credentials.
 
 ### Setting up proxy mode
 

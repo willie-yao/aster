@@ -34,6 +34,49 @@ func writeFile(t *testing.T, dir, rel, content string) {
 	}
 }
 
+// preV5NoListFS models the rollback server's hiding rules. Its basename list
+// intentionally does not know about the new action-write audit ledger.
+type preV5NoListFS struct{ fs http.FileSystem }
+
+func (f preV5NoListFS) Open(name string) (http.File, error) {
+	if invalidDataPath(name) || hiddenDataPath(name) || hiddenDataBasename(name) {
+		return nil, os.ErrNotExist
+	}
+	file, err := f.fs.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	if info.IsDir() {
+		file.Close()
+		return nil, os.ErrNotExist
+	}
+	return file, nil
+}
+
+func TestActionWriteAuditPathIsHiddenByPreV5Rules(t *testing.T) {
+	dataDir := t.TempDir()
+	writeFile(t, dataDir, ".action-write-audit/state.json", `{"records":{}}`)
+	writeFile(t, dataDir, "action_write_audit.json", `{"legacy":"exposed"}`)
+	legacy := preV5NoListFS{fs: http.Dir(dataDir)}
+
+	if file, err := legacy.Open("/.action-write-audit/state.json"); !errors.Is(err, os.ErrNotExist) {
+		if file != nil {
+			file.Close()
+		}
+		t.Fatalf("dot-prefixed audit path was visible to pre-v5 rules: %v", err)
+	}
+	file, err := legacy.Open("/action_write_audit.json")
+	if err != nil {
+		t.Fatalf("root audit fixture should demonstrate the old exposure: %v", err)
+	}
+	file.Close()
+}
+
 // TestHandler_DataReadParity verifies that /data/* returns the fetcher output
 // files byte-for-byte, including the jobs/ subdirectory.
 func TestHandler_DataReadParity(t *testing.T) {
@@ -187,6 +230,7 @@ func TestHandler_HidesOperationalFiles(t *testing.T) {
 	writeFile(t, dataDir, "fix_pr_state.json", `{"tracked":{}}`)
 	writeFile(t, dataDir, "action_request_state.json", `{"requests":{}}`)
 	writeFile(t, dataDir, "action_preview_state.json", `{"previews":{}}`)
+	writeFile(t, dataDir, ".action-write-audit/state.json", `{"records":{}}`)
 	writeFile(t, dataDir, "remediation_state.json", `{"version":1,"remediations":{}}`)
 	writeFile(t, dataDir, "remediation_prow_catalog.json", `{"tests":{}}`)
 	writeFile(t, dataDir, "analysis_correction_state.json", `{"corrections":{}}`)
@@ -203,7 +247,7 @@ func TestHandler_HidesOperationalFiles(t *testing.T) {
 	if resp, _ := http.Get(srv.URL + "/data/dashboard.json"); resp.StatusCode != http.StatusOK {
 		t.Errorf("dashboard.json status = %d, want 200", resp.StatusCode)
 	}
-	for _, name := range []string{"ai_cache.json", "ai_traces.json", "issue_state.json", "fix_pr_state.json", "orka_analysis.json", "action_request_state.json", "action_preview_state.json", "remediation_state.json", "remediation_prow_catalog.json", "analysis_correction_state.json", ".analysis-chat/sessions.json"} {
+	for _, name := range []string{"ai_cache.json", "ai_traces.json", "issue_state.json", "fix_pr_state.json", "orka_analysis.json", "action_request_state.json", "action_preview_state.json", ".action-write-audit/state.json", "remediation_state.json", "remediation_prow_catalog.json", "analysis_correction_state.json", ".analysis-chat/sessions.json"} {
 		resp, err := http.Get(srv.URL + "/data/" + name)
 		if err != nil {
 			t.Fatalf("GET %s: %v", name, err)
@@ -579,6 +623,33 @@ func TestHandler_SPAFallback(t *testing.T) {
 	if got := resp.Header.Get("Cache-Control"); got != "no-cache" {
 		t.Errorf("index fallback Cache-Control = %q, want no-cache", got)
 	}
+
+	// Unknown API routes return a real 404 instead of the SPA document.
+	for _, testCase := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/api"},
+		{method: http.MethodGet, path: "/api/not-a-real-endpoint"},
+		{method: http.MethodGet, path: "/api/auth/not-a-real-endpoint"},
+		{method: http.MethodPost, path: "/api/not-a-real-endpoint"},
+	} {
+		req, err := http.NewRequest(testCase.method, srv.URL+testCase.path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err = http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", testCase.method, testCase.path, err)
+		}
+		body := readBody(t, resp)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s %s: status = %d, want 404", testCase.method, testCase.path, resp.StatusCode)
+		}
+		if strings.Contains(body, "<title>app</title>") {
+			t.Errorf("%s %s returned index.html", testCase.method, testCase.path)
+		}
+	}
 }
 
 // TestHandler_DataNoCache verifies the frequently-rewritten data files are
@@ -717,27 +788,27 @@ func (fakeAuth) Authenticate(ctx context.Context, r *http.Request) (*auth.Identi
 // fakeRunner records calls and returns canned drafts/URLs, or a not-found error
 // for the "missing" id/token.
 type fakeRunner struct {
-	gotID, gotToken, gotInstruction, gotConfirmToken string
-	gotResolveID, gotResolveLogin, gotResolveNote    string
-	gotUnresolveID                                   string
+	gotID, gotOwner, gotToken, gotInstruction, gotConfirmToken string
+	gotResolveID, gotResolveLogin, gotResolveNote              string
+	gotUnresolveID                                             string
 }
 
-func (f *fakeRunner) PreviewIssue(ctx context.Context, id, token, instruction string) (actions.PreviewResult, error) {
+func (f *fakeRunner) PreviewIssue(ctx context.Context, id, owner, token, instruction string) (actions.PreviewResult, error) {
 	if id == "missing" {
 		return actions.PreviewResult{}, actions.ErrNotFound
 	}
-	f.gotID, f.gotToken, f.gotInstruction = id, token, instruction
+	f.gotID, f.gotOwner, f.gotToken, f.gotInstruction = id, owner, token, instruction
 	return actions.PreviewResult{Token: "ptok", Kind: "issue", Title: "T", Body: "B"}, nil
 }
-func (f *fakeRunner) PreviewFix(ctx context.Context, id, token, instruction string) (actions.PreviewResult, error) {
-	f.gotID, f.gotToken, f.gotInstruction = id, token, instruction
+func (f *fakeRunner) PreviewFix(ctx context.Context, id, owner, token, instruction string) (actions.PreviewResult, error) {
+	f.gotID, f.gotOwner, f.gotToken, f.gotInstruction = id, owner, token, instruction
 	return actions.PreviewResult{Token: "ptok", Kind: "fix", Title: "T", Body: "B", Diff: "d"}, nil
 }
-func (f *fakeRunner) Confirm(ctx context.Context, token, userToken string) (string, error) {
+func (f *fakeRunner) Confirm(ctx context.Context, token, owner, userToken string) (string, error) {
 	if token == "missing" {
 		return "", actions.ErrPreviewNotFound
 	}
-	f.gotConfirmToken, f.gotToken = token, userToken
+	f.gotConfirmToken, f.gotOwner, f.gotToken = token, owner, userToken
 	return "https://github.com/o/r/issues/1", nil
 }
 func (f *fakeRunner) Resolve(id, login, note string) error {
@@ -933,8 +1004,8 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 	if draft["token"] == "" {
 		t.Error("expected token in preview response")
 	}
-	if runner.gotID != "abc" || runner.gotToken != "tok" || runner.gotInstruction != "tighten it" {
-		t.Errorf("runner got id=%q token=%q instruction=%q, want abc/tok/tighten it", runner.gotID, runner.gotToken, runner.gotInstruction)
+	if runner.gotID != "abc" || runner.gotOwner != "alice" || runner.gotToken != "tok" || runner.gotInstruction != "tighten it" {
+		t.Errorf("runner got id=%q owner=%q token=%q instruction=%q, want abc/alice/tok/tighten it", runner.gotID, runner.gotOwner, runner.gotToken, runner.gotInstruction)
 	}
 	if r := do("/api/failures/missing/create-issue/preview", "ok", ""); r.StatusCode != http.StatusNotFound {
 		t.Errorf("not-found status = %d, want 404", r.StatusCode)
@@ -949,8 +1020,8 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 	if confirmed["url"] == "" {
 		t.Error("expected url in confirm response")
 	}
-	if runner.gotConfirmToken != "ptok" {
-		t.Errorf("confirm got token=%q, want ptok", runner.gotConfirmToken)
+	if runner.gotConfirmToken != "ptok" || runner.gotOwner != "alice" || runner.gotToken != "tok" {
+		t.Errorf("confirm got preview=%q owner=%q write token=%q", runner.gotConfirmToken, runner.gotOwner, runner.gotToken)
 	}
 	if r := do("/api/actions/confirm", "ok", `{}`); r.StatusCode != http.StatusBadRequest {
 		t.Errorf("blank-token status = %d, want 400", r.StatusCode)

@@ -49,19 +49,23 @@ Service origin:
 
 {{- if and (or .Values.server.actions.enabled .Values.server.chat.enabled) (eq .Values.server.actions.mode "oauth") }}
 OAuth access:
+  GitHub OAuth uses the identity-only read:user scope.
 {{- if .Values.server.actions.enabled }}
-{{- if .Values.server.actions.oauth.privateRepositories }}
-  Private-repository access is enabled. GitHub OAuth requests the broad repo
-  scope. Use this only when an issue or fix target is private.
+  BOT_TOKEN performs issue and pull request writes. Scope that credential only
+  to the configured action repositories and operations.
 {{- else }}
-  Actions use the public_repo scope. Set
-  server.actions.oauth.privateRepositories=true only for private targets.
+  Chat-only OAuth does not mount BOT_TOKEN.
 {{- end }}
+  If this release previously requested repository access, every admin must sign
+  out, revoke the old OAuth grant, and authorize the identity-only access.
+{{- end }}
+
+HTTP transport policy:
+{{- if .Values.server.security.hsts.enabled }}
+  HSTS is enabled with a one-year max age.
 {{- else }}
-  Chat-only OAuth uses the read:user scope.
-{{- end }}
-  If this release previously requested repo and now uses public-only access,
-  every admin must sign out and authorize the OAuth App again.
+  WARNING: HSTS is disabled through an explicit local HTTP acknowledgement.
+  Do not expose this release as a deployed dashboard.
 {{- end }}
 
 {{- if .Values.ingress.enabled }}

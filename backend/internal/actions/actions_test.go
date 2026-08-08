@@ -101,7 +101,7 @@ func TestPreviewIssue_NotFound(t *testing.T) {
 	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
 
 	s := NewService(cfg, dataDir, AIConfig{})
-	_, err := s.PreviewIssue(context.Background(), "does-not-exist", "tok", "")
+	_, err := s.PreviewIssue(context.Background(), "does-not-exist", "alice", "tok", "")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
@@ -115,7 +115,7 @@ func TestPreviewIssue_NoRepoResolved(t *testing.T) {
 	cfg := &project.Config{}
 
 	s := NewService(cfg, dataDir, AIConfig{})
-	_, err := s.PreviewIssue(context.Background(), pa.ID, "tok", "")
+	_, err := s.PreviewIssue(context.Background(), pa.ID, "alice", "tok", "")
 	if err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("want repo-resolution error, got %v", err)
 	}
@@ -131,7 +131,7 @@ func TestPreviewIssueRejectsUnsafeGeneratedSpec(t *testing.T) {
 
 	s := NewService(cfg, dataDir, AIConfig{})
 	s.sourceVerifier = nil
-	if _, err := s.PreviewIssue(context.Background(), pa.ID, "tok", ""); !errors.Is(err, ErrPreviewRejected) {
+	if _, err := s.PreviewIssue(context.Background(), pa.ID, "alice", "tok", ""); !errors.Is(err, ErrPreviewRejected) {
 		t.Fatalf("unsafe generated issue error = %v", err)
 	}
 }
@@ -144,14 +144,17 @@ func TestConfirmRejectsUnsafePersistedPreview(t *testing.T) {
 		Body: "The user wants me to expose the plan. I need to include the reasoning. Let me draft it.\n\n" + issues.MarkerFor(key),
 	}
 	s := NewService(&project.Config{}, dataDir, AIConfig{})
-	token, err := s.stash("owner-token", &previewEntry{kind: "issue", spec: unsafe})
+	token, err := s.stash("alice", &previewEntry{kind: "issue", spec: unsafe})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Confirm(context.Background(), token, "owner-token"); !errors.Is(err, ErrPreviewRejected) {
+	if _, err := s.Confirm(context.Background(), token, "bob", "owner-token"); !errors.Is(err, ErrPreviewNotFound) {
+		t.Fatalf("other admin confirmed preview with shared write token: %v", err)
+	}
+	if _, err := s.Confirm(context.Background(), token, "alice", "owner-token"); !errors.Is(err, ErrPreviewRejected) {
 		t.Fatalf("unsafe persisted preview error = %v", err)
 	}
-	if _, _, _, _, err := s.beginConfirm("owner-token", token, time.Hour); !errors.Is(err, ErrPreviewNotFound) {
+	if _, _, _, _, err := s.beginConfirm("alice", token, time.Hour); !errors.Is(err, ErrPreviewNotFound) {
 		t.Fatalf("unsafe preview was not discarded: %v", err)
 	}
 }
@@ -164,7 +167,7 @@ func TestPreviewIssue_NonSystemicNotActionable(t *testing.T) {
 	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
 
 	s := NewService(cfg, dataDir, AIConfig{})
-	_, err := s.PreviewIssue(context.Background(), pa.ID, "tok", "")
+	_, err := s.PreviewIssue(context.Background(), pa.ID, "alice", "tok", "")
 	if err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("want not-actionable error, got %v", err)
 	}
@@ -177,7 +180,7 @@ func TestPreviewFix_AINotConfigured(t *testing.T) {
 	cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}}
 
 	s := NewService(cfg, dataDir, AIConfig{})
-	_, err := s.PreviewFix(context.Background(), pa.ID, "tok", "")
+	_, err := s.PreviewFix(context.Background(), pa.ID, "alice", "tok", "")
 	if err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("want AI-not-configured error, got %v", err)
 	}
@@ -276,7 +279,7 @@ func TestPreviewFixWithContextRejectsMismatchedPatternTarget(t *testing.T) {
 		{JobID: "periodic-x", BuildID: "other-build"},
 	} {
 		if _, err := service.PreviewFixWithContext(
-			t.Context(), pattern, "token", "", target, generationContext,
+			t.Context(), pattern, "alice", "token", "", target, generationContext,
 		); !errors.Is(err, ErrPatternMismatch) {
 			t.Fatalf("target %+v error = %v", target, err)
 		}
@@ -300,7 +303,7 @@ func TestPreviewFixWithContextHonorsMinConfidence(t *testing.T) {
 	})
 	service.sourceVerifier = nil
 	_, err := service.PreviewFixWithContext(
-		t.Context(), pattern, "token", "", FixTarget{JobID: "periodic-x", BuildID: "123"}, fixpr.GenerationContext{
+		t.Context(), pattern, "alice", "token", "", FixTarget{JobID: "periodic-x", BuildID: "123"}, fixpr.GenerationContext{
 			AssistantAnswer: "selected answer",
 			ArtifactCitations: []fixpr.Evidence{{
 				Path: "build-log.txt", Quote: "failure",
@@ -332,27 +335,27 @@ func TestSafeFixPreviewErrorPreservesContextSentinels(t *testing.T) {
 func TestPreviewConfirmationLifecycleIsRecoverableAcrossServices(t *testing.T) {
 	dataDir := t.TempDir()
 	first := NewService(&project.Config{}, dataDir, AIConfig{})
-	token, err := first.stash("owner-token", &previewEntry{kind: "issue"})
+	token, err := first.stash("Alice", &previewEntry{kind: "issue"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	second := NewService(&project.Config{}, dataDir, AIConfig{})
-	entry, resultURL, attemptID, _, err := second.beginConfirm("owner-token", token, time.Hour)
-	if err != nil || entry == nil || resultURL != "" {
+	entry, resultURL, attemptID, _, err := second.beginConfirm("alice", token, time.Hour)
+	if err != nil || entry == nil || resultURL != "" || entry.initiatedBy != "alice" || entry.initiatedAt == "" {
 		t.Fatalf("begin confirmation = %+v, %q, %v", entry, resultURL, err)
 	}
-	if _, _, _, _, err := first.beginConfirm("owner-token", token, time.Hour); !errors.Is(err, ErrPreviewPending) {
+	if _, _, _, _, err := first.beginConfirm("alice", token, time.Hour); !errors.Is(err, ErrPreviewPending) {
 		t.Fatalf("cross-service concurrent confirmation error = %v", err)
 	}
-	if err := second.finishConfirm("owner-token", token, attemptID, "https://github.com/o/r/issues/1", nil); err != nil {
+	if err := second.finishConfirm("alice", token, attemptID, "https://github.com/o/r/issues/1", nil); err != nil {
 		t.Fatal(err)
 	}
 	restarted := NewService(&project.Config{}, dataDir, AIConfig{})
-	entry, resultURL, _, _, err = restarted.beginConfirm("owner-token", token, time.Hour)
+	entry, resultURL, _, _, err = restarted.beginConfirm("alice", token, time.Hour)
 	if err != nil || entry != nil || resultURL != "https://github.com/o/r/issues/1" {
 		t.Fatalf("recovered confirmation = %+v, %q, %v", entry, resultURL, err)
 	}
-	if _, _, _, _, err := restarted.beginConfirm("other-token", token, time.Hour); !errors.Is(err, ErrPreviewNotFound) {
+	if _, _, _, _, err := restarted.beginConfirm("bob", token, time.Hour); !errors.Is(err, ErrPreviewNotFound) {
 		t.Fatalf("cross-owner confirmation error = %v", err)
 	}
 }
@@ -808,17 +811,17 @@ func TestTargetDriftRetiresPreviewForReplacement(t *testing.T) {
 	old := &previewEntry{kind: "issue", targetRepo: "old/issues", spec: issues.IssueSpec{
 		Key: key, Title: "Valid issue", Body: "## Summary\nValid body\n\n" + issues.MarkerFor(key),
 	}}
-	token, err := service.stash("owner-token", old)
+	token, err := service.stash("alice", old)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Confirm(t.Context(), token, "owner-token"); !errors.Is(err, ErrPreviewTargetChanged) {
+	if _, err := service.Confirm(t.Context(), token, "alice", "owner-token"); !errors.Is(err, ErrPreviewTargetChanged) {
 		t.Fatalf("confirm error = %v", err)
 	}
 	replacement := &previewEntry{kind: "issue", targetRepo: "new/issues", spec: issues.IssueSpec{
 		Key: key, Title: "Valid issue", Body: "## Summary\nValid body\n\n" + issues.MarkerFor(key),
 	}}
-	if _, err := service.stash("owner-token", replacement); err != nil {
+	if _, err := service.stash("alice", replacement); err != nil {
 		t.Fatalf("replacement preview was blocked: %v", err)
 	}
 }
@@ -843,22 +846,51 @@ func TestStalePatternIsNotActionable(t *testing.T) {
 	}
 }
 
-func TestLegacyReadyPreviewWithoutFailureIDIsRejected(t *testing.T) {
+func TestLegacyPreviewOwnerBindingsAreInvalidated(t *testing.T) {
 	dataDir := t.TempDir()
 	store := newPreviewStore(dataDir)
-	state := &previewState{Version: 1, Previews: map[string]*persistedPreview{
-		"legacy":  {Owner: tokenHash("owner"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusReady, Issue: &issues.IssueSpec{Key: "pattern::job"}},
-		"unknown": {Owner: tokenHash("owner"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusUnknown, Issue: &issues.IssueSpec{Key: "pattern::job"}},
+	state := &previewState{Version: 4, Previews: map[string]*persistedPreview{
+		tokenHash("preview-token"): {Owner: tokenHash("user-token"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusReady, Issue: &issues.IssueSpec{Key: "pattern::ready"}},
+		"unknown":                  {Owner: tokenHash("user-token"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusUnknown, Issue: &issues.IssueSpec{Key: "pattern::unknown"}},
+		"done":                     {Owner: tokenHash("user-token"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusDone, ResultURL: "https://github.com/o/r/issues/1", Issue: &issues.IssueSpec{Key: "pattern::done"}},
 	}}
 	if err := statefile.WriteJSONDurable(store.path, state); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := store.load()
+	if _, _, _, _, err := store.begin("alice", "preview-token", time.Hour); !errors.Is(err, ErrPreviewNotFound) {
+		t.Fatalf("legacy preview confirmation error = %v", err)
+	}
+	data, err := os.ReadFile(store.path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Version != previewStateVersion || loaded.Previews["legacy"] != nil || loaded.Previews["unknown"] == nil {
-		t.Fatalf("migrated state = %+v", loaded)
+	var migrated previewState
+	if err := json.Unmarshal(data, &migrated); err != nil {
+		t.Fatal(err)
+	}
+	if migrated.Version != previewStateVersion || len(migrated.Previews) != 0 {
+		t.Fatalf("migrated state = %+v", migrated)
+	}
+}
+
+func TestPreviewStateV5FailsClosedForLegacyRollback(t *testing.T) {
+	store := newPreviewStore(t.TempDir())
+	if _, err := store.stash("alice", &previewEntry{kind: "issue", targetRepo: "o/r", spec: issues.IssueSpec{Key: "pattern::current"}}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var header struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		t.Fatal(err)
+	}
+	legacyAccepts := func(version int) bool { return version >= 1 && version <= 4 }
+	if header.Version != previewStateVersion || legacyAccepts(header.Version) {
+		t.Fatalf("preview state version = %d, want v5 rejected by legacy v4 readers", header.Version)
 	}
 }
 
@@ -885,7 +917,7 @@ func TestBuildIssuePreviewUsesSingleRunLanguage(t *testing.T) {
 	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}, Branding: project.Branding{SiteURL: "https://dashboard.example"}}
 	service := NewService(cfg, dataDir, AIConfig{})
 	id := BuildFailureID(detail.JobID, "123")
-	preview, err := service.PreviewIssue(t.Context(), id, "token", "")
+	preview, err := service.PreviewIssue(t.Context(), id, "alice", "token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -905,11 +937,11 @@ func TestBuildFixPreviewRejectsMissingRepositoryEvidence(t *testing.T) {
 	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
 	cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}}
 	service := NewService(cfg, dataDir, AIConfig{})
-	_, err := service.PreviewFix(t.Context(), BuildFailureID(detail.JobID, "123"), "token", "")
+	_, err := service.PreviewFix(t.Context(), BuildFailureID(detail.JobID, "123"), "alice", "token", "")
 	if !errors.Is(err, ErrPreviewRejected) || !strings.Contains(err.Error(), "verified local path") {
 		t.Fatalf("fix preview error = %v", err)
 	}
-	if _, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "token", ""); err == nil {
+	if _, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "alice", "token", ""); err == nil {
 		// No issue repo is configured. This verifies the fix refusal did not mutate the subject.
 		t.Fatal("issue preview unexpectedly succeeded without a target repo")
 	}
@@ -966,12 +998,12 @@ func TestBuildPreviewConfirmUsesTypedSubjectGuard(t *testing.T) {
 	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
 	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "old", Name: "issues"}}}
 	service := NewService(cfg, dataDir, AIConfig{})
-	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "owner-token", "")
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "alice", "owner-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg.Issues.Repo = &project.SourceRepo{Owner: "new", Name: "issues"}
-	if _, err := service.Confirm(t.Context(), preview.Token, "owner-token"); !errors.Is(err, ErrPreviewTargetChanged) {
+	if _, err := service.Confirm(t.Context(), preview.Token, "alice", "owner-token"); !errors.Is(err, ErrPreviewTargetChanged) {
 		t.Fatalf("build confirmation error = %v", err)
 	}
 }
@@ -1040,11 +1072,11 @@ func TestBuildIssuePreviewToConfirmWritesReviewedDraft(t *testing.T) {
 	manager := &fakeIssuePreviewManager{url: "https://github.com/o/r/issues/7"}
 	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
 
-	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "owner-token", "")
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "Alice", "owner-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	url, err := service.Confirm(t.Context(), preview.Token, "owner-token")
+	url, err := service.Confirm(t.Context(), preview.Token, "alice", "owner-token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1053,6 +1085,44 @@ func TestBuildIssuePreviewToConfirmWritesReviewedDraft(t *testing.T) {
 	}
 	if manager.specs[0].Body != preview.Body {
 		t.Fatal("confirmation did not use the reviewed issue body")
+	}
+	audit, err := newBotWriteAuditStore(dataDir).load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := audit.Records[tokenHash(preview.Token)]
+	if record.InitiatedBy != "alice" || record.ConfirmedBy != "alice" || record.Kind != "issue" ||
+		record.FailureID != BuildFailureID(detail.JobID, "123") || record.TargetRepo != "o/r" ||
+		record.ResultURL != manager.url || record.Outcome != botWriteConfirmed || record.InitiatedAt == "" || record.ConfirmedAt == "" {
+		t.Fatalf("audit record = %+v", record)
+	}
+	auditStore := newBotWriteAuditStore(dataDir)
+	info, err := os.Stat(auditStore.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("audit mode = %o, want 600", got)
+	}
+	dirInfo, err := os.Stat(filepath.Dir(auditStore.path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dirInfo.Mode().Perm(); got != 0o700 {
+		t.Fatalf("audit directory mode = %o, want 700", got)
+	}
+	if filepath.Dir(auditStore.lockPath) != filepath.Dir(auditStore.path) {
+		t.Fatalf("audit lock %q is outside private directory %q", auditStore.lockPath, filepath.Dir(auditStore.path))
+	}
+	lockInfo, err := os.Stat(auditStore.lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lockInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("audit lock mode = %o, want 600", got)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "action_write_audit.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy root audit path exists: %v", err)
 	}
 }
 
@@ -1064,11 +1134,11 @@ func TestBuildIssueConfirmationAdoptsClosedMarkerMatch(t *testing.T) {
 	service := NewService(cfg, dataDir, AIConfig{})
 	manager := &fakeIssuePreviewManager{findURL: "https://github.com/o/r/issues/closed"}
 	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
-	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "owner-token", "")
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "alice", "owner-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	url, err := service.Confirm(t.Context(), preview.Token, "owner-token")
+	url, err := service.Confirm(t.Context(), preview.Token, "alice", "owner-token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1085,11 +1155,11 @@ func TestBuildIssueCleanupFailureStillCommitsConfirmation(t *testing.T) {
 	service := NewService(cfg, dataDir, AIConfig{})
 	manager := &fakeIssuePreviewManager{url: "https://github.com/o/r/issues/8", saveErr: errors.New("cleanup failed")}
 	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
-	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "owner-token", "")
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "alice", "owner-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	url, err := service.Confirm(t.Context(), preview.Token, "owner-token")
+	url, err := service.Confirm(t.Context(), preview.Token, "alice", "owner-token")
 	if err != nil || url != manager.url {
 		t.Fatalf("confirmation url=%q err=%v", url, err)
 	}
@@ -1219,7 +1289,7 @@ func TestDirectUnknownPreviewReconcilesAfterSubjectLeavesWindow(t *testing.T) {
 	service := NewService(cfg, dataDir, AIConfig{})
 	manager := &fakeIssuePreviewManager{findURL: "https://github.com/o/r/issues/10"}
 	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
-	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "owner-token", "")
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "alice", "owner-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1233,9 +1303,16 @@ func TestDirectUnknownPreviewReconcilesAfterSubjectLeavesWindow(t *testing.T) {
 	if err := os.Remove(jobPath); err != nil {
 		t.Fatal(err)
 	}
-	url, err := service.Confirm(t.Context(), preview.Token, "owner-token")
+	url, err := service.Confirm(t.Context(), preview.Token, "alice", "owner-token")
 	if err != nil || url != manager.findURL {
 		t.Fatalf("reconcile url=%q err=%v", url, err)
+	}
+	audit, err := newBotWriteAuditStore(dataDir).load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record := audit.Records[tokenHash(preview.Token)]; record.Outcome != botWriteReconciled || record.ResultURL != manager.findURL {
+		t.Fatalf("reconciled audit record = %+v", record)
 	}
 }
 
@@ -1317,10 +1394,10 @@ func TestSourcePreflightBlocksAlreadyPresentRemediation(t *testing.T) {
 	service.sourceVerifier = func(ctx context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
 		return actionverify.Verify(ctx, reader, input)
 	}
-	if _, err := service.PreviewIssue(context.Background(), pattern.ID, "token", ""); !errors.Is(err, ErrRemediationAlreadyPresent) {
+	if _, err := service.PreviewIssue(context.Background(), pattern.ID, "alice", "token", ""); !errors.Is(err, ErrRemediationAlreadyPresent) {
 		t.Fatalf("issue preview error = %v", err)
 	}
-	if _, err := service.PreviewFix(context.Background(), pattern.ID, "token", ""); !errors.Is(err, ErrRemediationAlreadyPresent) {
+	if _, err := service.PreviewFix(context.Background(), pattern.ID, "alice", "token", ""); !errors.Is(err, ErrRemediationAlreadyPresent) {
 		t.Fatalf("fix preview error = %v", err)
 	}
 	request, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
@@ -1372,7 +1449,7 @@ func TestSourcePreflightAllowsVerifiedModifySymbol(t *testing.T) {
 	service.sourceVerifier = func(ctx context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
 		return actionverify.Verify(ctx, reader, input)
 	}
-	preview, err := service.PreviewIssue(t.Context(), pattern.ID, "token", "")
+	preview, err := service.PreviewIssue(t.Context(), pattern.ID, "alice", "token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1685,12 +1762,73 @@ func TestPreviewStoreInvalidatesLegacyVerificationVersion(t *testing.T) {
 	if err := os.WriteFile(store.path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := store.load()
+	loaded, migrated, err := store.load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Version != previewStateVersion || len(loaded.Previews) != 0 {
+	if !migrated || loaded.Version != previewStateVersion || len(loaded.Previews) != 0 {
 		t.Fatalf("loaded legacy previews = %+v", loaded)
+	}
+}
+
+func TestBotWriteAuditFailureReconcilesBeforeReportingSuccess(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	service := NewService(&project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}, dataDir, AIConfig{})
+	manager := &fakeIssuePreviewManager{url: "https://github.com/o/r/issues/11"}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "alice", "token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewState, _, err := service.previewStore.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	initiatedAt := previewState.Previews[tokenHash(preview.Token)].InitiatedAt
+	service.writeAudit = func(botWriteAuditRecord) error { return errors.New("audit unavailable") }
+	if _, err := service.Confirm(t.Context(), preview.Token, "alice", "token"); err == nil || !strings.Contains(err.Error(), "audit unavailable") {
+		t.Fatalf("confirmation error = %v", err)
+	}
+	manager.url = ""
+	manager.findURL = "https://github.com/o/r/issues/11"
+	service.writeAudit = newBotWriteAuditStore(dataDir).record
+	url, err := service.Confirm(t.Context(), preview.Token, "alice", "token")
+	if err != nil || url != manager.findURL {
+		t.Fatalf("reconciled confirmation url=%q err=%v", url, err)
+	}
+	audit, err := newBotWriteAuditStore(dataDir).load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record := audit.Records[tokenHash(preview.Token)]; record.Outcome != botWriteReconciled || record.InitiatedAt != initiatedAt {
+		t.Fatalf("audit record = %+v, original initiation = %q", record, initiatedAt)
+	}
+}
+
+func TestBotWriteAuditRecordsFixPreviewAttribution(t *testing.T) {
+	dataDir := t.TempDir()
+	service := NewService(&project.Config{}, dataDir, AIConfig{})
+	generated := fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{Key: "fix-key"})
+	token, err := service.stash("Alice", &previewEntry{kind: gfKind, failureID: "pattern", targetRepo: "o/r", fix: generated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, _, _, _, err := service.beginConfirm("alice", token, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.recordBotWrite(token, "Alice", entry, "https://github.com/o/r/pull/12", botWriteConfirmed); err != nil {
+		t.Fatal(err)
+	}
+	audit, err := newBotWriteAuditStore(dataDir).load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := audit.Records[tokenHash(token)]
+	if record.Kind != gfKind || record.InitiatedBy != "alice" || record.ConfirmedBy != "alice" || record.TargetRepo != "o/r" {
+		t.Fatalf("fix audit record = %+v", record)
 	}
 }
 
@@ -1705,7 +1843,7 @@ func TestPreviewIssueRecordsUsageOperation(t *testing.T) {
 	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
 	service := NewService(cfg, dataDir, AIConfig{UsageRecorder: usage})
 	service.sourceVerifier = nil
-	if _, err := service.PreviewIssue(t.Context(), pattern.ID, "token", ""); err != nil {
+	if _, err := service.PreviewIssue(t.Context(), pattern.ID, "alice", "token", ""); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := usage.Snapshot()
