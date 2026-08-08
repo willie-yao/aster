@@ -303,7 +303,7 @@ func TestScaffold_LoadsViaLoadDir(t *testing.T) {
 		"project.yaml":      projectYAML,
 		"prompts/system.md": prompt,
 	}
-	if err := writeFiles(dir, files, false, nil); err != nil {
+	if err := writeFiles(dir, files, false, false, nil); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -318,7 +318,7 @@ func TestScaffold_LoadsViaLoadDir(t *testing.T) {
 		t.Error("prompt draft must be non-empty (LoadDir requires it)")
 	}
 
-	if err := writeFiles(dir, files, false, nil); err == nil {
+	if err := writeFiles(dir, files, false, false, nil); err == nil {
 		t.Error("expected writeFiles to refuse overwriting existing files")
 	}
 }
@@ -460,7 +460,7 @@ func TestScaffold_K8sMode(t *testing.T) {
 		"prompts/system.md":  prompt,
 		"deploy/values.yaml": values,
 		"deploy/README.md":   readme,
-	}, false, nil); err != nil {
+	}, false, false, nil); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -761,5 +761,33 @@ func TestSweepConfigPreservesExactBucketJobs(t *testing.T) {
 	opts.ExactJobs[0] = "changed"
 	if cfg.Discovery.ExactJobs[0] != "periodic-a" {
 		t.Fatal("sweep config retained the caller's mutable exact-job slice")
+	}
+}
+
+func TestValidateOptionsConsumerOwnedReplacementAndArtifactAccess(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*Options)
+		want   string
+	}{
+		{name: "replacement needs update", mutate: func(opts *Options) { opts.ReplaceConsumerOwned = true }, want: "requires --update-existing"},
+		{name: "invalid artifact access", mutate: func(opts *Options) { opts.ArtifactAccess = "sometimes" }, want: "--artifact-access"},
+		{name: "empty deployment reason", mutate: func(opts *Options) { opts.ModeReasons = []string{" "} }, want: "--deployment-reason"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			opts := testOpts()
+			test.mutate(&opts)
+			if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+	opts := testOpts()
+	opts.UpdateExisting = true
+	opts.ReplaceConsumerOwned = true
+	opts.ArtifactAccess = artifactAccessAuthenticated
+	opts.ModeReasons = []string{"Authenticated artifacts require reviewed access."}
+	if err := validateOptions(&opts); err != nil {
+		t.Fatal(err)
 	}
 }

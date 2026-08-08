@@ -48,6 +48,11 @@ Determine or request:
 - Whether fresh isolated LLM CLI sessions are available.
 - Whether dashboard-provider benchmark execution is available.
 
+When `setup-handoff.json` is available, validate it with the setup skill's
+`validate_setup_handoff.py` and use its pinned engine, source, test-infra, job,
+artifact-location, deployment, prompt, doctor, and smoke fields. Do not repeat
+setup discovery merely to reconstruct fields already present in a valid handoff.
+
 Use one current engine CLI consistently:
 
 ```bash
@@ -65,9 +70,14 @@ engine command and output digest in `reports/diagnostic-authoring.md`.
 ## 2. Create a write-safe evidence workspace
 
 Do not modify the pinned engine checkout, public baseline consumers, or
-investigated source repositories. Create a disposable detached clone of the
+investigated source repositories. Create a disposable detached checkout of the
 exact engine commit outside those directories and call it `<validation-engine>`.
-Run generated Go validation tests only in that clone. Verify and record its HEAD.
+Prefer `git worktree add --detach <validation-engine> <commit>`. If copying files
+instead, exclude `.git` itself, not only `.git/`, verify the copy has no `.git`
+entry before `git init`, and then verify its Git directory resolves inside the
+copy. Never run `git init` or commit in a copied tree that still points at the
+pinned engine's worktree metadata. Run generated Go validation tests only in the
+disposable checkout. Verify and record its detached HEAD.
 When evaluating an uncommitted skill, snapshot both the skill directory and every
 companion test or schema file that defines its validation contract. Record
 `evaluation_snapshot.mode` and hashes. Do not combine a new skill with stale
@@ -80,7 +90,11 @@ require an exact comparison. A plain later `git diff` is not an equivalent
 baseline. Use separate disposable consumer copies for validation and benchmark
 conditions.
 
-Keep the selected consumer as the only destination for authoring output:
+Choose one authoring workspace root and call it `<authoring-root>`. It may be the
+selected consumer repository or a private evaluation workspace containing a
+disposable consumer copy. Keep all
+authoring output under that one root and never write to the pinned public
+consumer. Paths in the reports are relative to this root:
 
 ```text
 prompts/system.md
@@ -92,8 +106,11 @@ reports/validation/*.log
 ```
 
 Write both JSON reports with `schema_version: 2` and the shared report schema.
-Record the original prompt hash, active recipe state, Git identities, selected
-profiles, and the engine-computed merged skill-set hash before editing.
+Record the original prompt hash, active recipe state, Git identities when they
+exist, selected profiles, and the engine-computed merged skill-set hash before
+editing. For a consumer that is intentionally not a Git repository, record
+`consumer.commit: null` and `consumer.commit_status: not_applicable`; never use an
+all-zero placeholder commit.
 
 ## 3. Build and split a representative failure corpus
 
@@ -120,9 +137,12 @@ recurrence and generalization events coexist.
 Follow [references/failure-corpus.md](references/failure-corpus.md) for coverage
 targets, counterexamples, passing neighbors, split integrity, and stop conditions.
 Before authoring, create the required pre-freeze denylist and access log. Use
-`scripts/blind_access.py` for filesystem reads when strong blind-boundary evidence
-is required, and record whether access is `wrapper_enforced` or `self_reported`.
-Block locked manifests, answer-bearing benchmark tests, prior diagnoses, scoring
+`scripts/blind_access.py` for local filesystem reads when strong blind-boundary
+evidence is required, and record whether access is `wrapper_enforced` or
+`self_reported`. Remote GCS or HTTP reads are not wrapper-enforced by this script.
+Unless remote evidence is first copied into a wrapper-controlled local tree, mark
+that boundary `self_reported` and state the limitation. Block locked manifests,
+answer-bearing benchmark tests, prior diagnoses, scoring
 and forbidden files, manual recipes, and previous evaluation output. Use the
 bundled schema-only benchmark fixture instead of reading an answer-bearing test
 for field shape. A self-reported log must disclose that it cannot prove all reads.
@@ -306,10 +326,10 @@ git -C <engine> diff --check
 git -C <validation-engine> diff --check
 python3 <skill>/scripts/write_validation_file_manifest.py \
   --root <validation-engine> \
-  --output <consumer>/reports/validation/validation-files-final.json
+  --output <authoring-root>/reports/validation/validation-files-final.json
 python3 <skill>/scripts/write_validation_file_manifest.py --compare \
-  <consumer>/reports/validation/validation-files-baseline.json \
-  <consumer>/reports/validation/validation-files-final.json
+  <authoring-root>/reports/validation/validation-files-baseline.json \
+  <authoring-root>/reports/validation/validation-files-final.json
 
 go -C <validation-engine>/backend test ./internal/ai/skills -count=1
 go -C <validation-engine>/backend test ./internal/onboard/promptauthor -count=1
@@ -322,13 +342,13 @@ python3 <skill>/scripts/blind_access.py --self-test
 go -C <validation-engine>/backend run ./cmd/fetcher onboard doctor \
   -project-dir <disposable-consumer>
 
-mkdir -p <consumer>/reports/validation
-<command> 2>&1 | tee <consumer>/reports/validation/<check>.log
-shasum -a 256 <consumer>/reports/validation/<check>.log
+mkdir -p <authoring-root>/reports/validation
+<command> 2>&1 | tee <authoring-root>/reports/validation/<check>.log
+shasum -a 256 <authoring-root>/reports/validation/<check>.log
 
 python3 <skill>/scripts/validate_reports.py \
-  <consumer>/reports/failure-corpus.json \
-  <consumer>/reports/benchmark-results.json \
+  <authoring-root>/reports/failure-corpus.json \
+  <authoring-root>/reports/benchmark-results.json \
   --evidence-root <private-evidence-dir>
 ```
 

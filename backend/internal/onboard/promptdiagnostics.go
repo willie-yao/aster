@@ -165,6 +165,17 @@ func (r promptPreparationResult) promptPlan(opts Options) PromptPlan {
 }
 
 func validatePromptPlan(plan PromptPlan) error {
+	if plan.BaselineStatus != promptBaselineSourceOnly {
+		return fmt.Errorf("onboarding plan prompt baseline status is invalid")
+	}
+	if _, err := parseSHA256Digest(plan.CandidateSHA256, "candidate prompt digest"); err != nil {
+		return fmt.Errorf("onboarding plan candidate prompt digest is invalid")
+	}
+	if plan.ExistingSHA256 != "" {
+		if _, err := parseSHA256Digest(plan.ExistingSHA256, "existing prompt digest"); err != nil {
+			return fmt.Errorf("onboarding plan existing prompt digest is invalid")
+		}
+	}
 	switch plan.RequestedMode {
 	case string(promptRequestTemplate), string(promptRequestAgent), string(promptRequestHandoff):
 	default:

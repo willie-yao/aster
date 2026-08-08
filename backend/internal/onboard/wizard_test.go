@@ -61,14 +61,15 @@ func (f *wizardFakeCatalogClient) Catalog(_ context.Context) (*jobconfig.Catalog
 }
 
 type fakeSweeper struct {
-	jobs  []models.ProwJob
-	err   error
-	calls int
+	jobs            []models.ProwJob
+	catalogRevision string
+	err             error
+	calls           int
 }
 
-func (f *fakeSweeper) Discover(_ context.Context, _ *project.Config, _ bool) ([]models.ProwJob, error) {
+func (f *fakeSweeper) Discover(_ context.Context, _ *project.Config, _ bool) (JobSweep, error) {
 	f.calls++
-	return append([]models.ProwJob(nil), f.jobs...), f.err
+	return JobSweep{Jobs: append([]models.ProwJob(nil), f.jobs...), CatalogRevision: f.catalogRevision}, f.err
 }
 
 type fakeRemoteDetector struct {
@@ -90,6 +91,18 @@ func (f fakeRemoteDetector) Root(context.Context) (string, error) {
 		return f.root, nil
 	}
 	return os.Getwd()
+}
+
+type fakeSourceRevisionResolver struct {
+	plan SourceRevisionPlan
+	err  error
+}
+
+func (f fakeSourceRevisionResolver) Resolve(context.Context, Repo, string) (SourceRevisionPlan, error) {
+	if f.plan.Status == "" {
+		f.plan = SourceRevisionPlan{Revision: strings.Repeat("a", 40), Ref: "main", Status: sourceRevisionResolved}
+	}
+	return f.plan, f.err
 }
 
 type fakePromptBuilder struct {
@@ -138,7 +151,7 @@ type fakeScaffoldWriter struct {
 	updateExisting bool
 }
 
-func (f *fakeScaffoldWriter) Inspect(outDir string, files map[string]string) ([]DestinationFilePlan, []string, error) {
+func (f *fakeScaffoldWriter) Inspect(outDir string, files map[string]string, _ bool) ([]DestinationFilePlan, []string, error) {
 	f.validates++
 	f.inspectOutDirs = append(f.inspectOutDirs, outDir)
 	if f.validateErr != nil {
@@ -152,7 +165,7 @@ func (f *fakeScaffoldWriter) Inspect(outDir string, files map[string]string) ([]
 	}
 	actions := make([]DestinationFilePlan, 0, len(files))
 	for _, path := range sortedFilePaths(files) {
-		actions = append(actions, DestinationFilePlan{Path: path, Action: destinationActionCreate})
+		actions = append(actions, DestinationFilePlan{Path: path, Action: destinationActionCreate, Ownership: destinationFileOwnership(path)})
 	}
 	return actions, append([]string(nil), f.staleFiles...), nil
 }
@@ -160,14 +173,17 @@ func (f *fakeScaffoldWriter) Inspect(outDir string, files map[string]string) ([]
 func reviewedTestActions(actions []DestinationFilePlan) []DestinationFilePlan {
 	out := append([]DestinationFilePlan(nil), actions...)
 	for i := range out {
-		if out[i].Action == destinationActionReplace && out[i].ReviewedDigest == "" {
+		if out[i].Ownership == "" {
+			out[i].Ownership = destinationFileOwnership(out[i].Path)
+		}
+		if (out[i].Action == destinationActionReplace || out[i].Action == destinationActionPreserve) && out[i].ReviewedDigest == "" {
 			out[i].ReviewedDigest = planArtifactDigest([]byte("reviewed test content"))
 		}
 	}
 	return out
 }
 
-func (f *fakeScaffoldWriter) Write(outDir string, files map[string]string, updateExisting bool, _ []DestinationFilePlan) error {
+func (f *fakeScaffoldWriter) Write(outDir string, files map[string]string, updateExisting, _ bool, _ []DestinationFilePlan) error {
 	f.writes++
 	f.outDir = outDir
 	f.files = cloneFiles(files)
@@ -201,7 +217,7 @@ func cloneFiles(files map[string]string) map[string]string {
 func wizardDependencies(input string) (dependencies, *bytes.Buffer, *fakeScaffoldWriter, *fakeSweeper) {
 	out := &bytes.Buffer{}
 	writer := &fakeScaffoldWriter{}
-	sweeper := &fakeSweeper{jobs: []models.ProwJob{
+	sweeper := &fakeSweeper{catalogRevision: "0123456789abcdef0123456789abcdef01234567", jobs: []models.ProwJob{
 		{Name: "periodic-project-main", JobType: models.JobTypePeriodic},
 		{Name: "periodic-project-release-1", JobType: models.JobTypePeriodic},
 	}}
@@ -217,12 +233,13 @@ func wizardDependencies(input string) (dependencies, *bytes.Buffer, *fakeScaffol
 			Owner: "example", Name: "project", FullName: "example/project",
 			Branch: "main", Visibility: "public",
 		}}},
-		catalogs:     &wizardFakeCatalogClient{catalog: catalog},
-		sweeper:      sweeper,
-		remotes:      fakeRemoteDetector{err: errNoGitOrigin},
-		prompts:      &fakePromptBuilder{},
-		files:        writer,
-		pullRequests: &fakePullRequestWriter{},
+		sourceRevision: fakeSourceRevisionResolver{},
+		catalogs:       &wizardFakeCatalogClient{catalog: catalog},
+		sweeper:        sweeper,
+		remotes:        fakeRemoteDetector{err: errNoGitOrigin},
+		prompts:        &fakePromptBuilder{},
+		files:          writer,
+		pullRequests:   &fakePullRequestWriter{},
 		terminal: Terminal{
 			In: strings.NewReader(input), Out: out, Err: out, Interactive: true,
 		},

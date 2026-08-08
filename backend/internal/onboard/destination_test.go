@@ -16,13 +16,13 @@ func TestInspectFileDestinationExistingDirectoryWithoutConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := map[string]string{"project.yaml": "new", "prompts/system.md": "prompt"}
-	actions, stale, err := inspectFileDestination(dir, files)
+	actions, stale, err := inspectFileDestination(dir, files, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []DestinationFilePlan{
-		{Path: "project.yaml", Action: destinationActionCreate},
-		{Path: "prompts/system.md", Action: destinationActionCreate},
+		{Path: "project.yaml", Action: destinationActionCreate, Ownership: destinationOwnershipGenerated},
+		{Path: "prompts/system.md", Action: destinationActionCreate, Ownership: destinationOwnershipConsumer},
 	}
 	if !reflect.DeepEqual(actions, want) || len(stale) != 0 {
 		t.Fatalf("actions=%+v stale=%v", actions, stale)
@@ -39,7 +39,7 @@ func TestWriteFilesRequiresExplicitUpdate(t *testing.T) {
 	if err := os.WriteFile(filename, []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := writeFiles(dir, map[string]string{"project.yaml": "new"}, false, nil)
+	err := writeFiles(dir, map[string]string{"project.yaml": "new"}, false, false, nil)
 	var conflict *destinationConflictError
 	if !errors.As(err, &conflict) {
 		t.Fatalf("error = %v", err)
@@ -59,7 +59,7 @@ func TestWriteFilesUpdatePreservesUnrelatedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := map[string]string{"project.yaml": "new", "prompts/system.md": "prompt"}
-	if err := writeFiles(dir, files, true, nil); err != nil {
+	if err := writeFiles(dir, files, true, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	for filename, want := range map[string]string{"project.yaml": "new", "prompts/system.md": "prompt", "notes.txt": "keep"} {
@@ -84,7 +84,7 @@ func TestInspectFileDestinationWarnsAboutStaleDeploymentFiles(t *testing.T) {
 		"prompts/system.md":            "prompt",
 		".github/workflows/deploy.yml": "workflow",
 		"CHECKLIST.md":                 "checklist",
-	})
+	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestInspectFileDestinationWarnsAboutStaleDeploymentFiles(t *testing.T) {
 		"prompts/system.md":            "prompt",
 		".github/workflows/deploy.yml": "workflow",
 		"CHECKLIST.md":                 "checklist",
-	}, false, nil); err != nil {
+	}, false, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(stale)
@@ -121,7 +121,7 @@ func TestInspectFileDestinationWarnsAboutStaleHandoffFiles(t *testing.T) {
 		}
 	}
 	planned := map[string]string{"project.yaml": "new", "prompts/system.md": "prompt"}
-	_, staleFiles, err := inspectFileDestination(dir, planned)
+	_, staleFiles, err := inspectFileDestination(dir, planned, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestInspectFileDestinationWarnsAboutStaleHandoffFiles(t *testing.T) {
 	if !reflect.DeepEqual(staleFiles, want) {
 		t.Fatalf("stale files = %v, want %v", staleFiles, want)
 	}
-	if err := writeFiles(dir, planned, true, nil); err != nil {
+	if err := writeFiles(dir, planned, true, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	for rel, want := range staleContents {
@@ -145,7 +145,7 @@ func TestInspectFileDestinationRejectsPartialPathConflict(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".github"), []byte("not a directory"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := inspectFileDestination(dir, map[string]string{".github/workflows/deploy.yml": "workflow"})
+	_, _, err := inspectFileDestination(dir, map[string]string{".github/workflows/deploy.yml": "workflow"}, false)
 	if err == nil || !strings.Contains(err.Error(), "non-directory") {
 		t.Fatalf("error = %v", err)
 	}
@@ -154,7 +154,7 @@ func TestInspectFileDestinationRejectsPartialPathConflict(t *testing.T) {
 func TestInspectFileDestinationRejectsPathTraversal(t *testing.T) {
 	dir := t.TempDir()
 	outside := filepath.Join(dir, "..", "outside")
-	_, _, err := inspectFileDestination(dir, map[string]string{"../outside": "unsafe"})
+	_, _, err := inspectFileDestination(dir, map[string]string{"../outside": "unsafe"}, false)
 	if err == nil || !strings.Contains(err.Error(), "safe repo-relative path") {
 		t.Fatalf("error = %v", err)
 	}
@@ -177,7 +177,7 @@ func TestInspectFileDestinationRejectsSymlinkedGeneratedParent(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(dir, ".github")); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := inspectFileDestination(dir, map[string]string{".github/workflows/deploy.yml": "workflow"})
+	_, _, err := inspectFileDestination(dir, map[string]string{".github/workflows/deploy.yml": "workflow"}, false)
 	if err == nil || !strings.Contains(err.Error(), "non-directory") {
 		t.Fatalf("error = %v", err)
 	}
@@ -192,7 +192,7 @@ func TestWriteFilesRejectsUnreviewedReplacement(t *testing.T) {
 	if err := os.WriteFile(filename, []byte("appeared later"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := writeFiles(dir, map[string]string{"project.yaml": "new"}, true, []DestinationFilePlan{{Path: "project.yaml", Action: destinationActionCreate}})
+	err := writeFiles(dir, map[string]string{"project.yaml": "new"}, true, false, []DestinationFilePlan{{Path: "project.yaml", Action: destinationActionCreate}})
 	if err == nil || !strings.Contains(err.Error(), "changed after review") {
 		t.Fatalf("error = %v", err)
 	}
@@ -209,8 +209,8 @@ func TestWriteFilesUsesTheInspectedNormalizedDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	outDir := "  " + dir + "  "
-	expected := []DestinationFilePlan{{Path: "project.yaml", Action: destinationActionReplace, ReviewedDigest: planArtifactDigest([]byte("old"))}}
-	if err := writeFiles(outDir, map[string]string{"project.yaml": "new"}, true, expected); err != nil {
+	expected := []DestinationFilePlan{{Path: "project.yaml", Action: destinationActionReplace, Ownership: destinationOwnershipGenerated, ReviewedDigest: planArtifactDigest([]byte("old"))}}
+	if err := writeFiles(outDir, map[string]string{"project.yaml": "new"}, true, false, expected); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(filename)
@@ -228,14 +228,14 @@ func TestWriteFilesRejectsReviewedReplacementContentDrift(t *testing.T) {
 	if err := os.WriteFile(filename, []byte("reviewed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	actions, _, err := inspectFileDestination(dir, map[string]string{"project.yaml": "generated"})
+	actions, _, err := inspectFileDestination(dir, map[string]string{"project.yaml": "generated"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filename, []byte("edited after review"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeFiles(dir, map[string]string{"project.yaml": "generated"}, true, actions); err == nil || !strings.Contains(err.Error(), "changed after review") {
+	if err := writeFiles(dir, map[string]string{"project.yaml": "generated"}, true, false, actions); err == nil || !strings.Contains(err.Error(), "changed after review") {
 		t.Fatalf("error = %v", err)
 	}
 	content, err := os.ReadFile(filename)
@@ -280,4 +280,115 @@ func TestWriteReviewedFileCreatesParentsWithoutBulkMkdir(t *testing.T) {
 	if err != nil || string(content) != "workflow" {
 		t.Fatalf("content = %q, %v", content, err)
 	}
+}
+
+func TestWriteFilesPreservesConsumerPromptAndSkillsDuringUpdate(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	originalPrompt := "# Existing prompt\n\nStable project knowledge.\n"
+	originalSkill := "apiVersion: prow-ai-dashboard/v1alpha1\nkind: DiagnosticSkill\n"
+	for path, content := range map[string]string{
+		"project.yaml":         "old project",
+		"prompts/system.md":    originalPrompt,
+		"skills/existing.yaml": originalSkill,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(path)), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{"project.yaml": "new project", "prompts/system.md": "# Source-only candidate\n"}
+	actions, _, err := inspectFileDestination(dir, files, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDestinationAction(t, actions, "project.yaml", destinationActionReplace, destinationOwnershipGenerated)
+	assertDestinationAction(t, actions, "prompts/system.md", destinationActionPreserve, destinationOwnershipConsumer)
+	assertDestinationAction(t, actions, "skills/existing.yaml", destinationActionPreserve, destinationOwnershipConsumer)
+	if err := writeFiles(dir, files, true, false, actions); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{
+		"project.yaml":         "new project",
+		"prompts/system.md":    originalPrompt,
+		"skills/existing.yaml": originalSkill,
+	} {
+		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(path)))
+		if err != nil || string(got) != want {
+			t.Fatalf("%s = %q, %v", path, got, err)
+		}
+	}
+}
+
+func TestWriteFilesRequiresExplicitConsumerPromptReplacement(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "prompts", "system.md"), []byte("old prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "skills", "existing.yml"), []byte("old skill"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{"prompts/system.md": "new source-only prompt"}
+	actions, _, err := inspectFileDestination(dir, files, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDestinationAction(t, actions, "prompts/system.md", destinationActionReplace, destinationOwnershipConsumer)
+	assertDestinationAction(t, actions, "skills/existing.yml", destinationActionPreserve, destinationOwnershipConsumer)
+	if err := writeFiles(dir, files, true, true, actions); err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := os.ReadFile(filepath.Join(dir, "prompts", "system.md"))
+	if err != nil || string(prompt) != files["prompts/system.md"] {
+		t.Fatalf("prompt = %q, %v", prompt, err)
+	}
+	skill, err := os.ReadFile(filepath.Join(dir, "skills", "existing.yml"))
+	if err != nil || string(skill) != "old skill" {
+		t.Fatalf("skill = %q, %v", skill, err)
+	}
+}
+
+func TestWriteFilesRejectsPreservedPromptDrift(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(dir, "prompts", "system.md")
+	if err := os.WriteFile(promptPath, []byte("reviewed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{"prompts/system.md": "candidate"}
+	actions, _, err := inspectFileDestination(dir, files, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(promptPath, []byte("edited after review"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFiles(dir, files, true, false, actions); err == nil || !strings.Contains(err.Error(), "changed after review") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func assertDestinationAction(t *testing.T, actions []DestinationFilePlan, path, action, ownership string) {
+	t.Helper()
+	for _, item := range actions {
+		if item.Path == path {
+			if item.Action != action || item.Ownership != ownership {
+				t.Fatalf("%s = %+v", path, item)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing destination action %s: %+v", path, actions)
 }

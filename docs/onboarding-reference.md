@@ -231,30 +231,35 @@ checkout, the interactive default is the sibling
 detected checkout, the default remains a safe relative directory in the current
 working directory. `--out` always wins and may point to an existing checkout.
 
-Every local plan classifies its generated files as `create` or `replace` before
-the final confirmation. Without `--update-existing`, non-interactive onboarding
-refuses any replacement. Interactive onboarding offers:
+Every local plan records `create`, `replace`, or `preserve` plus
+`engine_generated` or `consumer_owned` ownership before final confirmation.
+Without `--update-existing`, non-interactive onboarding refuses replacement of
+engine-generated files. Interactive onboarding offers:
 
 1. Choose another directory.
 2. Update known scaffold files.
 3. Cancel.
 
-Choosing another directory is the default. Update mode replaces only files in
-the validated plan. It preserves unrelated files, never deletes the destination,
-and never removes stale files from another deployment or prompt mode. Existing
-stale generated files are reported and left untouched. Partial
-path conflicts, symbolic links in generated paths, and unsafe plan paths are
-rejected.
+Choosing another directory is the default. Update mode replaces only
+engine-generated files in the validated plan. Existing `prompts/system.md` and
+`skills/*.yaml` or `skills/*.yml` are consumer-owned and preserved by default.
+The plan records the existing prompt hash and the generated source-only candidate
+hash. Existing skills are always preserved.
 
-`--update-existing` is local-only and cannot be combined with `--open-pr`.
-Open-PR mode continues to submit the generated file map as a GitHub diff.
+`--replace-consumer-owned` requires `--update-existing` and permits only an
+explicitly reviewed `prompts/system.md` replacement. It does not replace skills.
+Update mode preserves unrelated files, never deletes the destination, and leaves
+stale generated files untouched. Partial path conflicts, symbolic links, and
+unsafe paths are rejected. Local update flags cannot be combined with
+`--open-pr`.
 
 ## Dry-run behavior
 
-`-dry-run` performs discovery, the real job sweep, planning, rendering,
-destination checks, and strict configuration validation. It prints the same
-create/replace plan and stale-file warnings without writing scaffold files or
-opening a pull request.
+`-dry-run` performs discovery, the real job sweep, source revision pinning,
+planning, rendering, destination checks, and strict configuration validation.
+It prints engine/source/catalog identities, the discovery digest, deployment
+rationale, prompt hashes, and the same create/replace/preserve plan without
+writing scaffold files or opening a pull request.
 
 ```bash
 go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
@@ -279,17 +284,27 @@ Apply the exact reviewed artifact with no discovery or scaffold flags:
 ```bash
 fetcher onboard \
   -apply-plan /private/path/onboard-plan.json \
-  -plan-digest 'sha256:<reviewed-digest>'
+  -plan-digest 'sha256:<reviewed-digest>' \
+  -result-out /private/path/manifest/apply-result.json \
+  -handoff-out /private/path/manifest/setup-handoff.json \
+  -artifact-smoke-builds 1
 ```
 
 The command rejects a changed digest, malformed artifact, unsupported schema,
-symlinked plan file, invalid plan, or destination whose create/replace state or
-reviewed replacement content no longer matches the review.
+symlinked plan file, invalid plan, or destination whose reviewed create, replace,
+preserve, ownership, or content state changed. After writing, it emits a
+deterministic file manifest, runs doctor, and performs a read-only artifact
+usability check for recent builds, `prowjob.json`, `started.json`,
+`build-log.txt`, JUnit, and `artifacts/`. When every sampled build lacks JUnit,
+the handoff warns that test-level granularity may be unavailable. The setup
+handoff also records first-class artifact-location and test-infra identities for
+diagnostic authoring without diagnosing failures.
 
 For an existing scaffold, the first non-interactive run without
-`-update-existing` stops and lists conflicts. After the user authorizes those
-replacement paths, rerun the dry run with `-update-existing` and `-plan-out`,
-then review and apply that artifact.
+`-update-existing` stops and lists engine-generated conflicts. After approval,
+rerun with `-update-existing` and `-plan-out`. Confirm that the prompt and skills
+are preserved. A prompt replacement needs a reviewed diff, separate approval,
+and a new plan with `-replace-consumer-owned`.
 
 ## Non-interactive automation
 
@@ -305,6 +320,8 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
   -source-repo "<owner>/<source-repo>" \
+  -artifact-access public \
+  -deployment-reason "Artifacts and provider are reachable from GitHub Actions." \
   -out ./my-dashboard
 ```
 
@@ -317,6 +334,8 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
   -dashboard-repo "<owner>/<dashboard-repo>" \
   -source-repo "<owner>/<source-repo>" \
   -mode k8s \
+  -artifact-access private \
+  -deployment-reason "Artifacts require in-cluster authenticated access." \
   -out ./my-dashboard
 ```
 

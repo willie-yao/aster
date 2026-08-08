@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
 	"time"
@@ -187,6 +188,7 @@ func validateOptions(opts *Options) error {
 		}
 		seenExactJobs[name] = true
 	}
+	sort.Strings(opts.ExactJobs)
 	if _, _, err := parseRepo(opts.DashboardRepo); err != nil {
 		return fmt.Errorf("--dashboard-repo %w", err)
 	}
@@ -201,6 +203,12 @@ func validateOptions(opts *Options) error {
 	if opts.OpenPR && opts.UpdateExisting {
 		return fmt.Errorf("--update-existing applies only to local output and cannot be combined with --open-pr")
 	}
+	if opts.ReplaceConsumerOwned && !opts.UpdateExisting {
+		return fmt.Errorf("--replace-consumer-owned requires --update-existing")
+	}
+	if opts.ReplaceConsumerOwned && opts.OpenPR {
+		return fmt.Errorf("--replace-consumer-owned applies only to reviewed local updates")
+	}
 	if opts.RequirePromptDraft && effectivePromptMode(*opts) != promptModeAgent {
 		return fmt.Errorf("--require-prompt-draft is valid only with --prompt-mode=%s", promptModeAgent)
 	}
@@ -213,6 +221,19 @@ func validateOptions(opts *Options) error {
 	case modePages, modeK8s:
 	default:
 		return fmt.Errorf("--mode must be %q or %q, got %q", modePages, modeK8s, opts.Mode)
+	}
+	opts.ArtifactAccess = effectiveArtifactAccess(*opts)
+	switch opts.ArtifactAccess {
+	case artifactAccessPublic, artifactAccessAuthenticated, artifactAccessPrivate, artifactAccessUnknown:
+	default:
+		return fmt.Errorf("--artifact-access must be public, authenticated, private, or unknown")
+	}
+	for i, reason := range opts.ModeReasons {
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			return fmt.Errorf("--deployment-reason value %d is empty", i+1)
+		}
+		opts.ModeReasons[i] = reason
 	}
 	if opts.OutDir == "" {
 		_, name, _ := parseRepo(opts.DashboardRepo)
@@ -254,7 +275,8 @@ func validatePromptOrkaAPI(raw string) error {
 func validateCredentialSeparation(opts Options) error {
 	values := []string{
 		opts.TestGrid, opts.Bucket, opts.GCSWebBase, opts.DashboardRepo, opts.SourceRepo,
-		opts.ID, opts.Name, opts.ShortName, opts.EngineRef, opts.OutDir, opts.PlanOut,
+		opts.ID, opts.Name, opts.ShortName, opts.EngineRef, opts.OutDir, opts.PlanOut, opts.ArtifactAccess,
+		strings.Join(opts.ModeReasons, ","),
 		opts.PromptAgentModel,
 		opts.PromptAgentRuntime, opts.PromptOrkaAPI, opts.PromptOrkaAgentRef, opts.PromptOrkaNamespace, opts.PromptOrkaGitSecret,
 		strings.Join(opts.PromptNetworkDomains, ","),
@@ -354,32 +376,35 @@ func sweepConfig(opts Options) *project.Config {
 }
 
 // discover runs the same job discovery the fetcher uses, by source.
-func discover(ctx context.Context, cfg *project.Config, includePresubmits bool) ([]models.ProwJob, error) {
+func discover(ctx context.Context, cfg *project.Config, includePresubmits bool) (JobSweep, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	if cfg.EffectiveDiscoverySource() == project.DiscoveryBucket {
 		backend, err := storage.New(cfg.StorageConfig(), client)
 		if err != nil {
-			return nil, fmt.Errorf("configuring storage: %w", err)
+			return JobSweep{}, fmt.Errorf("configuring storage: %w", err)
 		}
+		var jobs []models.ProwJob
 		if len(cfg.Discovery.ExactJobs) > 0 {
-			return prowbuild.DiscoverExactJobs(ctx, backend, includePresubmits, cfg.Discovery.ExactJobs)
+			jobs, err = prowbuild.DiscoverExactJobs(ctx, backend, includePresubmits, cfg.Discovery.ExactJobs)
+		} else {
+			jobs, err = prowbuild.DiscoverJobs(ctx, backend, includePresubmits, cfg.Discovery.JobFilters)
 		}
-		return prowbuild.DiscoverJobs(ctx, backend, includePresubmits, cfg.Discovery.JobFilters)
+		return JobSweep{Jobs: jobs}, err
 	}
-	jobs, err := jobconfig.FetchJobConfigs(ctx, client, cfg)
+	jobs, catalog, err := jobconfig.FetchJobConfigsAndCatalog(ctx, client, cfg, "")
 	if err != nil {
-		return nil, err
+		return JobSweep{}, err
 	}
-	if includePresubmits {
-		return jobs, nil
-	}
-	periodic := jobs[:0]
-	for _, j := range jobs {
-		if j.JobType == models.JobTypePeriodic {
-			periodic = append(periodic, j)
+	if !includePresubmits {
+		periodic := jobs[:0]
+		for _, job := range jobs {
+			if job.JobType == models.JobTypePeriodic {
+				periodic = append(periodic, job)
+			}
 		}
+		jobs = periodic
 	}
-	return periodic, nil
+	return JobSweep{Jobs: jobs, CatalogRevision: catalog.Revision}, nil
 }
 
 func includePresubmits(opts Options) bool {

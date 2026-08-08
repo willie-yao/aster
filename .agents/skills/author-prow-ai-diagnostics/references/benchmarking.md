@@ -15,7 +15,9 @@
 
 Before authoring, create a denylist and append-only access log. Use
 `scripts/blind_access.py` to mediate local filesystem reads when the package will
-claim wrapper enforcement. Record `wrapper_enforced` or `self_reported`; the
+claim wrapper enforcement. It does not mediate remote GCS or HTTP reads. Treat
+those as `self_reported` unless the evidence was first copied into the controlled
+local tree. Record `wrapper_enforced` or `self_reported`; the
 latter must state that it cannot prove all reads. The denylist must cover locked
 benchmark manifests, benchmark tests that name cases or signals, prior diagnoses,
 scoring and forbidden files, manual recipes, and previous evaluation outputs. Any pre-freeze request for those categories must be blocked
@@ -58,9 +60,10 @@ Before any final-holdout result is revealed, record SHA-256 hashes for:
 - Existing active recipe files and the engine-computed merged skill-set hash.
 - Every proposal file.
 - The authoring report and applicability matrix snapshot.
-- Engine commit, consumer commit, source commit, test-infra revision, selected
-  jobs, authoring builds, validation builds, final-holdout builds, and artifact
-  manifests.
+- Engine commit, consumer commit when the consumer is a Git repository, source
+  commit, test-infra revision, selected jobs, authoring builds, validation builds,
+  final-holdout builds, and artifact manifests. Record a non-Git consumer with
+  null commit and `commit_status: not_applicable`.
 - A deterministic validation-engine file manifest whose entries contain relative
   path, file mode, Git blob ID, and SHA-256.
 - An identity-only A/B/C manifest for every final holdout.
@@ -189,8 +192,8 @@ corpus using:
 
 ```bash
 python3 <skill>/scripts/validate_reports.py \
-  <consumer>/reports/failure-corpus.json \
-  <consumer>/reports/benchmark-results.json \
+  <authoring-root>/reports/failure-corpus.json \
+  <authoring-root>/reports/benchmark-results.json \
   --evidence-root <private-evidence-dir>
 ```
 
