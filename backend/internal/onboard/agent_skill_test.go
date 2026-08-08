@@ -2,6 +2,7 @@ package onboard
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -135,7 +136,7 @@ func TestDiagnosticAuthoringAgentSkill(t *testing.T) {
 	}
 	for _, anchor := range []string{
 		"onboard doctor", "<validation-engine>", "pinned engine checkout", "proposals/skills/", "reports/failure-corpus.json", "reports/diagnostic-authoring.md",
-		"reports/benchmark-results.json", "python3 -m json.tool", "fresh isolated LLM CLI", "private source or artifacts to a provider", "repeated prompt-only misses", "final holdout",
+		"reports/benchmark-results.json", "reports/validation/*.log", "schema_version: 2", "report-schema.json", "validate_reports.py", "--evidence-root", "source_revision_status", "competing hypotheses", "open handoff", "same_author_review", "identity manifest", "Git blob ID", "write_validation_file_manifest.py", "locked lexical score", "manual semantic score", "fresh isolated LLM CLI", "private source or artifacts to a provider", "repeated prompt-only misses", "pre_freeze_holdout_kind", "post_reveal_causal_kind", "holdout_event_scope", "aggregate the holdout as `mixed`", "pre-freeze denylist", "blind_access.py", "schema-only benchmark fixture", "scoring overlay", "scoring_protocol", "prompt_regression", "baseline_provenance", "informed the baseline prompt cannot be an independent final holdout", "Prow pod actually started", "VolumeBinding", "companion test", "same volume, PVC, pod, node, and time", "untrusted inputs", "recurrence", "generalization",
 		"recommended", "experimental", "rejected", "unresolved",
 		"Never write them to the authoring consumer's active `skills/`", "without a later explicit approval",
 	} {
@@ -171,13 +172,13 @@ func TestDiagnosticAuthoringAgentSkill(t *testing.T) {
 	}
 
 	references := map[string][]string{
-		"failure-corpus.md": {"## Build a representative corpus", "At least six diagnosed failures", "authorized Prow artifact indexes", "same-wrapper, different-cause counterexample", "## Diagnose each failure", "reports/failure-corpus.json", `"split": "authoring"`, "## Validate the prompt with fresh sessions", "two bounded revision rounds", "## Apply the prompt quality rubric"},
-		"decisions.md":      {"## Choose the corpus and splits", "prompt-only validation cases", "## Classify prompt and recipe outcomes", "## Promotion boundary"},
+		"failure-corpus.md": {"## Build a representative corpus", "At least six diagnosed failures", "authorized Prow artifact indexes", "same-wrapper, different-cause counterexample", "## Diagnose each failure", "reports/failure-corpus.json", `"pre_freeze_holdout_kind": "not_applicable"`, `"holdout_event_scope": "not_applicable"`, `"actor": "scheduler"`, "storage_identity_correlation", "cross_run_evidence_ids", "recurrence_signatures", "prompt_regression", "baseline_provenance", "different test name in the same build remains", "Prow pod started", "VolumeBinding", "aggregate the holdout", "trusted quality exemplars", "## Validate the prompt with fresh sessions", "two bounded revision rounds", "## Apply the prompt quality rubric"},
+		"decisions.md":      {"## Choose the corpus and splits", "prompt-only validation cases", "event-specific holdout", "aggregates to `mixed`", "prompt_regression", "pre-freeze denylist", "schema-only identity fixture", "untrusted candidates", "Deterministic or same-author behavior checks only", "post-reveal generalization holdout", "## Promotion boundary"},
 		"recipe-authoring.md": {
-			"second-line intervention", "at least two independent prompt-only misses", "## Design triggers", "## Build the applicability matrix", "## Run deterministic engine validation",
+			"second-line intervention", "separate validation-set causal events", "fresh sessions for the same evidence relationship", "## Design triggers", "## Build the applicability matrix", "## Run deterministic engine validation",
 			"bounded failure signal", "final-draft-only trigger", "positive successful-operation evidence", "competing initiating cause", "slash-normalizes and lowercases", "Doctor does not validate recipe YAML", "ParseAndValidate",
 		},
-		"benchmarking.md": {"## Protect the blind boundary", "## Record prompt-authoring validation", "authoring_validation", "## Validate derived manifests without a provider", "validateBenchmarkProjectDir", "## Run the benchmark matrix", "## Write deterministic results", "BENCH_REPETITIONS=3", "quality floors failed"},
+		"benchmarking.md": {"## Protect the blind boundary", "blind_access.py", "wrapper_enforced", "benchmark-manifest.schema-only.json", "prompt_regression", "baseline_provenance", "same build is still excluded", "companion anchor-test", "## Record prompt-authoring validation", "authoring_validation", "fresh_holdout_trials", "dashboard_trials", "freeze_manifest", "## Validate derived manifests without a provider", "identity-only A/B/C manifest", "post-reveal scoring-overlay", "scoring_protocol: same_evaluator_post_hoc", "## Run the benchmark matrix", "every final holdout", "aggregate recurrence plus", "## Write deterministic results", "BENCH_REPETITIONS=3", "Git blob IDs", "quality floors failed"},
 	}
 	for name, anchors := range references {
 		raw, err := os.ReadFile(filepath.Join(skillDir, "references", name))
@@ -187,6 +188,70 @@ func TestDiagnosticAuthoringAgentSkill(t *testing.T) {
 		for _, anchor := range anchors {
 			if !strings.Contains(string(raw), anchor) {
 				t.Errorf("%s missing %q", name, anchor)
+			}
+		}
+	}
+
+	providerSpecificTerms := []string{
+		"PodGroup", "cluster-api-provider-azure", "CAPZ", "Azure", "AzureManaged", "AKS", "ASO",
+		"gcp-compute-persistent-disk-csi-driver", "GCP PD CSI", "Kueue", "Secrets Store CSI",
+	}
+	providerAgnosticFiles := []string{
+		"SKILL.md", "agents/openai.yaml",
+		"references/benchmarking.md", "references/decisions.md", "references/failure-corpus.md",
+		"references/recipe-authoring.md", "references/report-schema.json",
+		"references/benchmark-manifest.schema-only.json",
+		"scripts/blind_access.py", "scripts/validate_reports.py", "scripts/write_validation_file_manifest.py",
+	}
+	for _, name := range providerAgnosticFiles {
+		raw, err := os.ReadFile(filepath.Join(skillDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, term := range providerSpecificTerms {
+			if strings.Contains(string(raw), term) {
+				t.Errorf("%s contains provider-specific term %q", name, term)
+			}
+		}
+	}
+}
+
+func TestDiagnosticAuthoringReportValidator(t *testing.T) {
+	root := onboardingRepoRoot(t)
+	scripts := map[string]string{
+		"validate_reports.py":               "report validator self-test passed",
+		"write_validation_file_manifest.py": "validation file manifest self-test passed",
+		"blind_access.py":                   "blind access self-test passed",
+	}
+	for name, expected := range scripts {
+		script := filepath.Join(root, ".agents", "skills", "author-prow-ai-diagnostics", "scripts", name)
+		output, err := exec.Command("python3", script, "--self-test").CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s self-test: %v\n%s", name, err, output)
+		}
+		if !strings.Contains(string(output), expected) {
+			t.Fatalf("unexpected %s output: %s", name, output)
+		}
+	}
+
+	schema := filepath.Join(root, ".agents", "skills", "author-prow-ai-diagnostics", "references", "report-schema.json")
+	if raw, err := os.ReadFile(schema); err != nil {
+		t.Fatal(err)
+	} else {
+		for _, anchor := range []string{"report-schema-v2.json", `"schema_version"`, `"same_author_review"`, `"source_revision_status"`, `"competing_hypotheses"`, `"assignment_strength"`, `"storage_identity_correlation"`, `"transient_assessment"`, `"pre_freeze_holdout_kind"`, `"post_reveal_causal_kind"`, `"holdout_event_scope"`, `"post_reveal_event"`, `"prompt_regression"`, `"baseline_provenance_item"`, `"baseline_provenance"`, `"scoring_protocol"`, `"evaluation_snapshot"`, `"fresh_holdout_diagnosis"`, `"blind_access_control"`, `"validation_file_manifest"`, `"benchmark_identity_manifest"`, `"benchmark_scoring_overlay"`, `"condition_manifests"`, `"scope"`, `"fresh_holdout_trials"`, `"dashboard_trials"`, `"prompt_only_misses"`, `"locked_score"`, `"semantic_score"`} {
+			if !strings.Contains(string(raw), anchor) {
+				t.Errorf("report schema missing %q", anchor)
+			}
+		}
+	}
+
+	fixture := filepath.Join(root, ".agents", "skills", "author-prow-ai-diagnostics", "references", "benchmark-manifest.schema-only.json")
+	if raw, err := os.ReadFile(fixture); err != nil {
+		t.Fatal(err)
+	} else {
+		for _, anchor := range []string{`"document_type": "benchmark_identity_manifest"`, `"identity_only": true`, `"case_id": "schema-only-case"`, `"test_name": "schema-only-test-event"`} {
+			if !strings.Contains(string(raw), anchor) {
+				t.Errorf("schema-only benchmark fixture missing %q", anchor)
 			}
 		}
 	}

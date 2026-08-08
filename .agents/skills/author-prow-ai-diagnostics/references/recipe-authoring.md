@@ -11,10 +11,16 @@
 
 ## Use the current engine contract
 
-A recipe is a second-line intervention. Before authoring YAML, require the
-failure corpus to identify at least two independent prompt-only misses for the
-same evidence relationship. Record those case IDs and the prompt hash. If prompt
-guidance was incomplete, revise the prompt instead of creating a recipe.
+A recipe is a second-line intervention. Before authoring YAML, require at least
+two prompt-only misses from separate validation-set causal events and separate
+fresh sessions for the same evidence relationship. The final holdout must never
+be used to justify or revise a proposal. Duplicate retries, duplicate JUnit entries,
+or repeated builds of one unchanged signature count once. Record case IDs,
+causal-event IDs, fresh-session IDs, and the prompt hash. If prompt guidance was
+incomplete, revise the prompt instead of creating a recipe. Treat every
+existing consumer recipe as untrusted input rather than a quality exemplar. A
+broad installed trigger or procedure does not satisfy the miss threshold,
+evidence standard, or applicability matrix.
 
 Read the selected engine revision's `docs/skills.md` and
 `backend/internal/ai/skills/skills.go` before authoring. They are the source of
@@ -89,6 +95,9 @@ Required evidence should be capable of disproving the hypothesis. Do not require
 only evidence that repeats the candidate answer. When ownership depends on a
 component boundary, require positive successful-operation evidence and correlate
 the same object identity across layers, not merely an error or missing path. For
+storage, require same-volume, same-PVC, same-pod, same-node, and same-time-window
+correlation. If any dimension is missing, preserve an open handoff rather than
+assigning ownership. For
 a dependency cascade or terminal wrapper, include evidence for the closest
 competing initiating cause, or require the procedure to abstain when that
 evidence is absent. Recipe evidence participates in planning and critique, but
@@ -110,17 +119,18 @@ Include these safeguards when relevant:
 - Separate initiating errors from terminal wrappers.
 - Compare request and response, producer and consumer, or controller and object
   state before assigning ownership.
-- Treat a failure as transient only when the same run shows later success or
-  forward progress.
-- State the non-transient boundary.
+- Record transient status as `true`, `false`, or `unresolved`.
+- Keep same-run evidence separate from cross-run context. Only same-run later
+  success or forward progress establishes `true`.
+- State the non-transient boundary and unresolved reason when needed.
 - Abstain when required evidence is unavailable or contradictory.
 
 ## Build the applicability matrix
 
-Record every case with a stable ID, its corpus split, linked prompt-only miss
-case IDs, input failure signal or draft text, artifact paths and bounded content,
-expected matched recipe IDs, expected applicable evidence groups, and expected
-satisfaction result.
+Record every case with a stable ID, corpus split, linked prompt-only miss case
+IDs, distinct causal-event IDs, distinct fresh-session IDs, input failure signal
+or draft text, artifact paths and bounded content, expected matched recipe IDs,
+expected applicable evidence groups, and expected satisfaction result.
 
 Cover at least:
 
