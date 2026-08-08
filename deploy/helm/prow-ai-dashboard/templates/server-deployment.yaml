@@ -1,11 +1,13 @@
 {{- include "prow-ai-dashboard.validateSourceInvestigation" . -}}
 {{- include "prow-ai-dashboard.validateFixRuntime" . -}}
+{{- include "prow-ai-dashboard.validateAgentSandboxFixRuntime" . -}}
 {{- include "prow-ai-dashboard.validateNetworkSecurity" . -}}
 {{- $actions := .Values.server.actions.enabled -}}
 {{- $chat := .Values.server.chat.enabled -}}
 {{- $corrections := .Values.server.chat.correctionsEnabled -}}
 {{- $source := .Values.server.chat.sourceInvestigation.enabled -}}
 {{- $interactive := or $actions $chat -}}
+{{- $agentSandboxActions := and .Values.agentSandbox.fixRuntime.enabled $actions -}}
 {{- $a := .Values.server.actions -}}
 {{- $extraHSTS := false -}}
 {{- $extraInsecureCookies := false -}}
@@ -128,6 +130,9 @@ spec:
       {{- else if and .Values.orka.fixRuntime.enabled $actions }}
       serviceAccountName: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
       automountServiceAccountToken: true
+      {{- else if $agentSandboxActions }}
+      serviceAccountName: {{ include "prow-ai-dashboard.agentSandboxClientServiceAccountName" . }}
+      automountServiceAccountToken: true
       {{- else }}
       automountServiceAccountToken: false
       {{- end }}
@@ -160,6 +165,9 @@ spec:
             {{- if $actions }}
             - name: ACTIONS_ENABLED
               value: "true"
+            {{- end }}
+            {{- if $agentSandboxActions }}
+            {{- include "prow-ai-dashboard.agentSandboxEnv" . | nindent 12 }}
             {{- end }}
             {{- if or $source (and .Values.orka.fixRuntime.enabled $actions) }}
             - name: ORKA_API_TOKEN_FILE

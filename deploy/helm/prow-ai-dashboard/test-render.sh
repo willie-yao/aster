@@ -1710,4 +1710,176 @@ for invalid_origin in ranges-on-clusterip universal-ipv4-range zero-padded-unive
   validation_error_contains "$tmp/origin-${invalid_origin}.yaml" "$want"
 done
 
+
+# Agent Sandbox is disabled by default and never installs its controller or CRD.
+if grep -Fq 'app.kubernetes.io/component: agent-sandbox-fix-runtime' "$tmp/default.yaml" || grep -Fq 'sandboxes.agents.x-k8s.io' "$tmp/default.yaml"; then
+  echo 'default render enabled Agent Sandbox resources' >&2
+  exit 1
+fi
+
+cat > "$tmp/agent-sandbox.yaml" <<'VALUES'
+mode: watch
+project:
+  config: |
+    id: test
+    name: Test
+    testgrid:
+      dashboard: test
+    storage:
+      provider: local
+      base: /tmp
+    branding:
+      title: Test
+      base_path: /
+      site_url: https://example.test
+      source_repo:
+        owner: octocat
+        name: Hello-World
+    ai:
+      fix_prs:
+        enabled: true
+        author_name: Fixture
+        author_email: fixture@example.test
+        max_files: 3
+        critique_retries: 0
+        agent_runtime:
+          type: agent-sandbox
+          max_turns: 30
+          allow_bash: false
+          timeout: 10m
+          output_limit_bytes: 524288
+          allowed_commands:
+            - argv: [git, diff, --cached, --check]
+              timeout: 30s
+          model_gateway:
+            endpoint: https://fake-gateway.fix-eval.svc.cluster.local/v1
+            model: fixture-model
+            protocol_version: openai-chat-completions-v1
+  systemPrompt: test prompt
+agentSandbox:
+  fixRuntime:
+    enabled: true
+    namespace: fix-eval
+    runtimeClassName: kata-vm-isolation
+    image:
+      repository: local/agent-sandbox-fix-executor
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      pullPolicy: IfNotPresent
+    workloadServiceAccount:
+      create: true
+      name: fix-workload
+    modelGateway:
+      endpoint: https://fake-gateway.fix-eval.svc.cluster.local/v1
+      model: fixture-model
+      protocolVersion: openai-chat-completions-v1
+      publicCAPrivateDNS: false
+    maxSteps: 30
+    maxFiles: 3
+    timeout: 10m
+    outputLimitBytes: 524288
+    allowedCommands:
+      - argv: [git, diff, --cached, --check]
+        timeout: 30s
+    pollInterval: 250ms
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+        ephemeral-storage: 256Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+        ephemeral-storage: 256Mi
+  rbac:
+    create: true
+    clientServiceAccountName: ""
+VALUES
+
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" > "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'kind: ValidatingAdmissionPolicy' "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'apiGroups: ["agents.x-k8s.io"]' "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'resources: ["sandboxes"]' "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'verbs: ["create", "get", "list", "watch", "delete"]' "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'resources: ["pods/log"]' "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'automountServiceAccountToken: false' "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'serviceAccountName: test-prow-ai-dashboard-agent-sandbox-client' "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'name: AGENT_SANDBOX_MODEL_GATEWAY_ENDPOINT' "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'local/agent-sandbox-fix-executor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$tmp/agent-sandbox-render.yaml"
+grep -Fq "variables.pod.securityContext.appArmorProfile.type == 'RuntimeDefault'" "$tmp/agent-sandbox-render.yaml"
+grep -Fq "variables.container.securityContext.appArmorProfile.type == 'RuntimeDefault'" "$tmp/agent-sandbox-render.yaml"
+grep -Fq "variables.container.securityContext.procMount == 'Default'" "$tmp/agent-sandbox-render.yaml"
+if grep -Fq 'unavailable-for-kind-test' "$tmp/agent-sandbox-render.yaml"; then
+  echo 'production Helm render exposed the local kind AppArmor capability' >&2
+  exit 1
+fi
+grep -Fq '!has(object.metadata.finalizers)' "$tmp/agent-sandbox-render.yaml"
+grep -Fq '!has(variables.pod.priorityClassName)' "$tmp/agent-sandbox-render.yaml"
+grep -Fq '!has(variables.pod.schedulingGroup)' "$tmp/agent-sandbox-render.yaml"
+grep -Fq '!has(variables.pod.resourceClaims)' "$tmp/agent-sandbox-render.yaml"
+grep -Fq '!has(variables.container.resources.claims)' "$tmp/agent-sandbox-render.yaml"
+grep -Fq '!has(v.secret)' "$tmp/agent-sandbox-render.yaml"
+grep -Fq '!has(variables.container.livenessProbe)' "$tmp/agent-sandbox-render.yaml"
+if grep -Eq 'resources: \["(secrets|services|persistentvolumeclaims|pods/exec|pods/attach|nodes)"\]' "$tmp/agent-sandbox-render.yaml"; then
+  echo 'Agent Sandbox RBAC rendered a forbidden resource' >&2
+  exit 1
+fi
+if grep -Fq 'kind: CustomResourceDefinition' "$tmp/agent-sandbox-render.yaml" || grep -Fq 'agent-sandbox-controller' "$tmp/agent-sandbox-render.yaml"; then
+  echo 'dashboard chart attempted to install Agent Sandbox' >&2
+  exit 1
+fi
+
+python3 - "$tmp/agent-sandbox.yaml" "$tmp/agent-sandbox-public-ca.yaml" <<'PYGATEWAY'
+from pathlib import Path
+import sys
+text=Path(sys.argv[1]).read_text().replace('https://fake-gateway.fix-eval.svc.cluster.local/v1','https://model-gateway.platform.example.com/v1')
+text=text.replace('            protocol_version: openai-chat-completions-v1\n','            protocol_version: openai-chat-completions-v1\n            public_ca_private_dns: true\n')
+text=text.replace('      publicCAPrivateDNS: false\n','      publicCAPrivateDNS: true\n')
+Path(sys.argv[2]).write_text(text)
+PYGATEWAY
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-public-ca.yaml" > "$tmp/agent-sandbox-public-ca-render.yaml"
+grep -A1 -F 'name: AGENT_SANDBOX_MODEL_GATEWAY_PUBLIC_CA_PRIVATE_DNS' "$tmp/agent-sandbox-public-ca-render.yaml" | grep -Fq 'value: "true"'
+
+expect_agent_sandbox_fail() {
+  local name=$1 expected=$2
+  shift 2
+  if helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" "$@" > "$tmp/agent-sandbox-$name.out" 2>&1; then
+    echo "invalid Agent Sandbox configuration was accepted: $name" >&2
+    exit 1
+  fi
+  validation_error_contains "$tmp/agent-sandbox-$name.out" "$expected"
+}
+
+expect_agent_sandbox_fail runtime-class 'runtimeClassName is required' --set-string agentSandbox.fixRuntime.runtimeClassName=
+expect_agent_sandbox_fail mutable-image 'image.digest must be an immutable sha256 digest' --set agentSandbox.fixRuntime.image.digest=sha-deadbeef
+expect_agent_sandbox_fail public-gateway 'must be an internal HTTPS service URL or publicCAPrivateDNS must be true' --set agentSandbox.fixRuntime.modelGateway.endpoint=https://api.openai.com/v1
+if helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-public-ca.yaml" --set agentSandbox.fixRuntime.modelGateway.endpoint=https://api.anthropic.com/v1 > "$tmp/agent-sandbox-direct-provider.out" 2>&1; then
+  echo 'direct provider endpoint was accepted with public CA private DNS enabled' >&2
+  exit 1
+fi
+validation_error_contains "$tmp/agent-sandbox-direct-provider.out" 'must not be a direct model-provider endpoint'
+python3 - "$tmp/agent-sandbox-public-ca.yaml" "$tmp/agent-sandbox-nvidia.yaml" <<'PYNVIDIA'
+from pathlib import Path
+import sys
+text=Path(sys.argv[1]).read_text().replace('https://model-gateway.platform.example.com/v1','https://integrate.api.nvidia.com/v1/chat/completions')
+Path(sys.argv[2]).write_text(text)
+PYNVIDIA
+if helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-nvidia.yaml" > "$tmp/agent-sandbox-nvidia.out" 2>&1; then
+  echo 'NVIDIA direct provider endpoint was accepted' >&2
+  exit 1
+fi
+validation_error_contains "$tmp/agent-sandbox-nvidia.out" 'must not be a direct model-provider endpoint'
+expect_agent_sandbox_fail orka-combination 'cannot be combined with Orka runtimes' --set orka.fixRuntime.enabled=true
+expect_agent_sandbox_fail command-mismatch 'must end with argv [git diff --cached --check]' --set-string agentSandbox.fixRuntime.allowedCommands[0].argv[0]=go
+expect_agent_sandbox_fail command-timeout 'timeout exceeds the execution timeout' --set-string agentSandbox.fixRuntime.allowedCommands[0].timeout=11m
+expect_agent_sandbox_fail command-timeout-syntax 'timeout must use positive whole seconds or minutes' --set-string agentSandbox.fixRuntime.allowedCommands[0].timeout=1000ms
+expect_agent_sandbox_fail command-timeout-overflow 'timeout exceeds the execution timeout' --set-string agentSandbox.fixRuntime.allowedCommands[0].timeout=999999999999999999999999999999s
+expect_agent_sandbox_fail command-path 'must use a PATH-resolved executable' --set-string agentSandbox.fixRuntime.allowedCommands[0].argv[0]=/usr/bin/git
+expect_agent_sandbox_fail command-shell 'must not invoke a shell' --set-string agentSandbox.fixRuntime.allowedCommands[0].argv[0]=sh
+expect_agent_sandbox_fail command-dispatcher 'must not use a command dispatcher' --set-string agentSandbox.fixRuntime.allowedCommands[0].argv[0]=busybox
+expect_agent_sandbox_fail command-dispatcher-case 'must not use a command dispatcher' --set-string agentSandbox.fixRuntime.allowedCommands[0].argv[0]=BusyBox
+expect_agent_sandbox_fail command-agent 'must not invoke a coding agent or executor' --set-string agentSandbox.fixRuntime.allowedCommands[0].argv[0]=opencode
+expect_agent_sandbox_fail command-git-alias 'git is reserved for the exact final diff check' --set-json 'agentSandbox.fixRuntime.allowedCommands[0].argv=["git","-c","alias.probe=!sh -c true","probe"]'
+expect_agent_sandbox_fail command-no-agent-step 'must reserve at least one coding-agent step' --set agentSandbox.fixRuntime.maxSteps=1
+expect_agent_sandbox_fail reserved-env 'must not override reserved Agent Sandbox variable' --set server.extraEnv[0].name=AGENT_SANDBOX_IMAGE --set server.extraEnv[0].value=attacker
+
 echo 'Helm render checks passed.'

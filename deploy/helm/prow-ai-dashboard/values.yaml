@@ -86,6 +86,57 @@ analysisRuntime:
     tolerations: []
     affinity: {}
 
+# Agent Sandbox is a consumer-installed execution backend for Fix PR previews.
+# The chart never installs the Agent Sandbox CRD/controller, a secure RuntimeClass,
+# execution namespace, model gateway, network policy, or node infrastructure.
+agentSandbox:
+  fixRuntime:
+    enabled: false
+    # Existing consumer-owned namespace containing the Sandbox workloads.
+    namespace: ""
+    # Required secure runtime for deployed configurations, for example kata-vm-isolation.
+    runtimeClassName: ""
+    image:
+      repository: ""
+      # Required sha256 digest without an image tag.
+      digest: ""
+      pullPolicy: IfNotPresent
+    workloadServiceAccount:
+      # Create only the tokenless workload identity, never the namespace.
+      create: false
+      name: ""
+    modelGateway:
+      # Consumer-operated HTTPS OpenAI-compatible gateway. Internal service
+      # names require a consumer-derived executor image containing the gateway CA.
+      endpoint: ""
+      model: ""
+      protocolVersion: openai-chat-completions-v1
+      # A privately resolved public FQDN with a publicly trusted certificate.
+      # Direct model-provider endpoints remain forbidden.
+      publicCAPrivateDNS: false
+    # These duplicate project.yaml security bounds and must match exactly.
+    maxSteps: 30
+    maxFiles: 3
+    timeout: 10m
+    outputLimitBytes: 524288
+    allowedCommands:
+      - argv: [git, diff, --cached, --check]
+        timeout: 1m
+    pollInterval: 250ms
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+        ephemeral-storage: 256Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+        ephemeral-storage: 256Mi
+  rbac:
+    # Creates the namespace-scoped Role/RoleBinding and optionally the client SA.
+    create: true
+    clientServiceAccountName: ""
+
 # Orka Agent integrations are independent from the analysis runtime selector.
 orka:
   namespace: orka-system

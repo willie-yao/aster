@@ -374,10 +374,9 @@ image whose CA bundle trusts the consumer gateway certificate. A privately
 resolved public FQDN with a publicly trusted certificate requires
 `public_ca_private_dns: true`. Known direct provider endpoints, embedded
 credentials, queries, fragments, raw provider tokens, and local OpenCode model
-fields are rejected. The deployed Agent Sandbox adapter must match these fields exactly and use a
-consumer-owned namespace, immutable image digest, workload ServiceAccount,
-resources, and secure RuntimeClass. Kubernetes chart wiring is delivered in a
-separate stacked integration change.
+fields are rejected. The Helm `agentSandbox` values must match these fields
+exactly and supply the consumer-owned namespace, immutable image digest,
+workload ServiceAccount, resources, and secure RuntimeClass.
 
 AppArmor is engine-owned rather than project-configurable. Production requests
 `RuntimeDefault`; no `agent_runtime` field can disable it or select

@@ -38,6 +38,7 @@ These references are for isolated evaluation and maintainer work. They are not
 part of standard onboarding.
 
 - [Experimental Fix PR generation](fix-prs.md)
+- [Agent Sandbox Fix Runtime spike](agent-sandbox-fix-runtime-spike.md)
 - [Experimental Orka maintainer reference](orka.md)
 - [Local OpenCode sandbox](local-opencode-sandbox.md)
 
