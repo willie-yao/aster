@@ -7,6 +7,19 @@ function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
 }
 
+test("mobile branding link keeps an accessible home name", () => {
+  const layout = source("src/components/Layout.tsx");
+
+  assert.match(
+    layout,
+    /<MuiLink[\s\S]*?aria-label=\{`\$\{manifest\.branding\.title\} home`\}[\s\S]*?>/,
+  );
+  assert.match(
+    layout,
+    /<Typography[\s\S]*?display: \{ xs: "none", sm: "block" \}/,
+  );
+});
+
 test("run history remains contained on narrow detail pages", () => {
   const timeline = source("src/components/RunHistory.tsx");
   const jobDetail = source("src/pages/JobDetailPage.tsx");

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { test } from "node:test";
 import { ThemeProvider, type Theme } from "@mui/material/styles";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer } from "vite";
 
-import { searchIndexPath } from "../src/lib/search.js";
+import { createSearchFuse, searchIndexPath } from "../src/lib/search.js";
 import type { SearchEntry } from "../src/types/dashboard.js";
 
 const vite = await createServer({
@@ -56,6 +58,53 @@ function testEntry(overrides: Partial<SearchEntry> = {}): SearchEntry {
 test("search index stays disabled until search activation", () => {
   assert.equal(searchIndexPath(false), null);
   assert.equal(searchIndexPath(true), "search-index.json");
+});
+
+test("SearchBar finds exact terms later in indexed test names", () => {
+  const entries = [
+    testEntry({
+      job_id: "vmss",
+      test_name:
+        "[It] Workload cluster creation Creating a VMSS cluster [REQUIRED] with a single control plane node and an AzureMachinePool with 2 nodes",
+    }),
+    testEntry({
+      job_id: "azure-linux-3",
+      test_name:
+        "[It] Workload cluster creation Creating an Azure Linux 3 cluster with a managed machine pool",
+    }),
+    testEntry({
+      job_id: "highly-available",
+      test_name:
+        "[It] Workload cluster creation Creating a highly-available cluster",
+    }),
+  ];
+  const fuse = createSearchFuse(entries);
+
+  for (const [query, jobID] of [
+    ["vmss", "vmss"],
+    ["Azure Linux 3", "azure-linux-3"],
+    ["Highly-available", "highly-available"],
+  ] as const) {
+    assert.deepEqual(
+      fuse.search(query).map((result) => result.item.job_id),
+      [jobID],
+      query,
+    );
+  }
+});
+
+test("SearchBar names its controls for jobs and tests", () => {
+  const source = readFileSync(
+    resolve(process.cwd(), "src/components/SearchBar.tsx"),
+    "utf8",
+  );
+
+  assert.match(source, /aria-label="Search jobs and tests"/);
+  assert.match(source, /placeholder="Search jobs and tests…"/);
+  assert.match(
+    source,
+    /htmlInput: \{ "aria-label": "Search jobs and tests" \}/,
+  );
 });
 
 test("SearchBar gives repeated conformance results unique job and branch context", () => {
