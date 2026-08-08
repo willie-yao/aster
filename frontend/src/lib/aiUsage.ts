@@ -16,3 +16,22 @@ export function totalTokens(t: AIUsageTotals): number { return t.input_tokens + 
 export function usageQuery(start: string, end: string, feature?: AIUsageFeature): string {
   const query = new URLSearchParams({ start, end }); if (feature) query.append("feature", feature); return query.toString();
 }
+
+export function formatCoverage(covered: number, total: number): string {
+  const percent = total > 0 ? Math.round((covered / total) * 100) : 0;
+  return `${covered.toLocaleString()} of ${total.toLocaleString()} (${percent}%)`;
+}
+
+export function pricedRequestCoverageNote(
+  pricedRequests: number | undefined,
+  reportedRequests: number,
+  pricingCoverage: "complete" | "partial" | "unavailable" | "unknown",
+): string {
+  if (pricedRequests === undefined) {
+    return "Priced-request coverage is unavailable for legacy records";
+  }
+  if (pricingCoverage === "unknown") {
+    return "Pricing coverage is unavailable for some legacy records";
+  }
+  return `${formatCoverage(pricedRequests, reportedRequests)} reported requests priced`;
+}

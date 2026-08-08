@@ -24,7 +24,6 @@ import { formatDuration, highlightStackTrace } from "../lib/utils";
 import { RichText } from "./RichText";
 import { soft } from "../theme";
 import { AiAnalysisPanel } from "./AiAnalysisPanel";
-import { junitTestCases } from "../lib/buildFailures";
 import { parseTestDisplayName } from "../lib/detailTitles";
 import { overviewTypography } from "../theme/overview";
 import { hasInlineTestEvidence } from "../lib/jobDetail";
@@ -37,12 +36,6 @@ interface TestCaseTableProps {
   webUrl?: string;
 }
 
-const statusOrder: Record<string, number> = {
-  failed: 0,
-  passed: 1,
-  skipped: 2,
-};
-
 function testStatusPresentation(status: TestCase["status"]) {
   switch (status) {
     case "passed":
@@ -53,10 +46,6 @@ function testStatusPresentation(status: TestCase["status"]) {
       return { label: "Skipped", color: "text.disabled" } as const;
   }
 }
-
-// Hide Ginkgo setup/teardown entries unless they failed.
-const setupPatterns = /synchronizedbeforesuite|synchronizedaftersuite|beforesuite|aftersuite/i;
-
 
 export function EvidenceSourceLink({
   href,
@@ -109,14 +98,6 @@ const externalLinkSx = {
 export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }: TestCaseTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
 
-  const filtered = junitTestCases(testCases).filter(
-    (tc) => tc.status !== "skipped" && (tc.status === "failed" || !setupPatterns.test(tc.name)),
-  );
-
-  const sorted = [...filtered].sort(
-    (a, b) => (statusOrder[a.status] ?? 3) - (statusOrder[b.status] ?? 3),
-  );
-
   function toggleRow(idx: number) {
     setExpandedRows((prev) => {
       const next = new Set(prev);
@@ -161,7 +142,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
           </Typography>
         </Box>
 
-        {sorted.map((tc, idx) => {
+        {testCases.map((tc, idx) => {
           const isExpanded = expandedRows.has(idx);
           const hasEvidence = hasInlineTestEvidence(tc);
           const stripeBg = idx % 2 === 0 ? "surface.container" : "surface.containerHigh";
