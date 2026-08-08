@@ -12,14 +12,13 @@ import (
 )
 
 // generateWithAgent produces a fix by running a coding-agent CLI in a real clone
-// of the source repo. The agent can touch multiple files and (when allowed) run
-// the build and tests while fixing. A reviewer model gates the result; a
-// rejected change re-runs the agent with the objections, up to critiqueRetries.
-// The accepted fix flows through the verify / open-PR / preview path.
+// of the source repo. Runtime errors, including post-generation validation
+// failures, return before critique and are never retried here. Other runtimes may
+// use the existing critique retry policy after successful generation.
 func generateWithAgent(ctx context.Context, gp genParams, p models.PatternAnalysis) (*proposedFix, error) {
 	a := gp.agent
 	if a != nil && a.SharedModelEndpoint && a.API == "responses" {
-		return nil, fmt.Errorf("agent fix generation with the local OpenCode runtime requires Chat Completions; use ai.api=chat_completions or select the Orka fix runtime")
+		return nil, fmt.Errorf("agent fix generation with the local OpenCode runtime requires Chat Completions; use ai.api=chat_completions or select a remote agent runtime")
 	}
 	if a == nil || a.Runtime == nil {
 		return nil, fmt.Errorf("agent fix generation: no agent runtime configured")
@@ -67,10 +66,16 @@ func generateWithAgent(ctx context.Context, gp genParams, p models.PatternAnalys
 }
 
 func agentRuntimeSpec(a *AgentConfig, repo runtime.RepoRef, instruction string) runtime.GenerateSpec {
+	policy := a.CommandPolicy
+	policy.AllowShell = a.AllowBash
 	spec := runtime.GenerateSpec{
 		Repo: repo, Instruction: instruction,
-		MaxTurns: a.MaxTurns, AllowBash: a.AllowBash, Timeout: a.Timeout,
-		ExecutionID: a.ExecutionID, WorkObserver: a.WorkObserver,
+		MaxTurns: a.MaxTurns, MaxSteps: a.MaxTurns, MaxFiles: a.MaxFiles, AllowBash: a.AllowBash, Timeout: a.Timeout,
+		ExpectedBaseSHA:  repo.Ref,
+		ModelGateway:     a.ModelGateway,
+		CommandPolicy:    policy,
+		OutputLimitBytes: a.OutputLimitBytes,
+		ExecutionID:      a.ExecutionID, WorkObserver: a.WorkObserver,
 	}
 	if a.SharedModelEndpoint {
 		spec.Model = a.Model

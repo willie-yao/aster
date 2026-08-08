@@ -59,6 +59,18 @@ type GenerateSpec struct {
 	NetworkDomains []string
 	// Timeout bounds the whole run (clone plus agent). Zero uses defaultTimeout.
 	Timeout time.Duration
+	// ExpectedBaseSHA is the immutable base the caller will independently verify.
+	ExpectedBaseSHA string
+	// MaxSteps bounds provider-neutral executor actions. Zero uses MaxTurns.
+	MaxSteps int
+	// MaxFiles bounds the changed-file result.
+	MaxFiles int
+	// ModelGateway is non-secret configuration for the consumer gateway.
+	ModelGateway ModelGatewayConfig
+	// CommandPolicy lists the exact commands an external executor may run.
+	CommandPolicy CommandPolicy
+	// OutputLimitBytes bounds the structured executor result.
+	OutputLimitBytes int64
 	// ExecutionID scopes externally managed work to one action request.
 	ExecutionID string
 	// WorkObserver records planned and observed external runtime identities.
@@ -90,21 +102,6 @@ type GenerateTelemetry struct {
 	TokenUsageAvailable bool
 	CostAvailable       bool
 	UsageStatus         string
-}
-
-// GenerateResult is the outcome of a generative run.
-type GenerateResult struct {
-	// Files maps repo-relative path to full new content for every file the agent
-	// added or modified. Deletions are not represented.
-	Files map[string]string
-	// Diff is the unified diff of the change, for the PR body and preview.
-	Diff string
-	// Output is the tail of the CLI's own output, redacted and bounded, for
-	// debugging.
-	Output string
-	// Attempts is the number of external Task attempts when the backend reports it.
-	Attempts  int
-	Telemetry GenerateTelemetry
 }
 
 // AgentRuntime materializes a disposable workspace and runs a coding agent that

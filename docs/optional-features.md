@@ -16,7 +16,7 @@ runtime.
 | Mark Resolved | Kubernetes with authenticated actions | Writes dashboard resolution state, but does not change source code | [Admin-gated actions](server.md#admin-gated-actions) |
 | Email notifications | Pages or Kubernetes | Sends failure summaries to configured recipients | [Email notifications](notifications.md) |
 | Automatic GitHub issues | Pages or Kubernetes | Creates and updates GitHub issues during fetches | [GitHub issues](github-issues.md) |
-| Fix PR generation | Custom Pages runner or Kubernetes runtime | Experimental, highest-risk code-writing automation | [Experimental Fix PR generation](fix-prs.md) |
+| Fix PR generation | Custom Pages runner, local sandbox, Orka, or consumer-installed Agent Sandbox | Experimental, highest-risk code-writing automation | [Experimental Fix PR generation](fix-prs.md) |
 | Source investigation | Kubernetes plus a separate Orka evaluation deployment | Experimental read-only external Agent workflow | [Source investigation](server.md#source-investigation-api) |
 
 Static Pages sites do not serve authenticated interactive APIs. They can run

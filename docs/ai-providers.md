@@ -265,3 +265,25 @@ fields plus cached-input and reasoning detail fields when present. The
 Responses adapter reads input, output, cached-input, and reasoning token fields.
 Providers may omit usage. The dashboard does not substitute a tokenizer
 estimate and does not ship vendor price tables.
+
+## Agent Sandbox model gateway
+
+The Agent Sandbox Fix executor does not receive a provider credential. It calls
+a consumer-operated internal OpenAI-compatible Chat Completions gateway using
+only a non-secret endpoint, model identifier, and protocol version. The gateway
+owns and attaches the real provider credential outside the Sandbox process.
+
+OpenCode 1.18.2 supports this boundary without an API key in its executor
+configuration. The executor omits `apiKey` and credential headers entirely.
+Deployed runtime configuration requires an internal HTTPS service URL. The
+engine does not install or configure the gateway. Local tests use a deterministic streaming
+record/replay gateway that rejects `Authorization`, `api-key`, and `x-api-key`
+headers and makes no provider request.
+
+## Agent Sandbox model gateway TLS
+
+The Agent Sandbox executor never receives a provider credential. An internal
+service endpoint requires an executor image whose CA bundle trusts the gateway.
+A privately resolved public FQDN with a publicly trusted certificate may set
+`ai.fix_prs.agent_runtime.model_gateway.public_ca_private_dns: true`; direct
+known provider endpoints remain forbidden.

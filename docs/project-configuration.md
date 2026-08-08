@@ -341,3 +341,44 @@ Then inspect the job count:
 ```bash
 python3 -c "import json; print(len(json.load(open('data/dashboard.json'))['jobs']))"
 ```
+
+### Experimental Agent Sandbox fix runtime
+
+`ai.fix_prs.agent_runtime.type: agent-sandbox` selects the credential-free
+OpenCode executor described in [Fix PR generation](fix-prs.md#agent-sandbox-credential-free-executor).
+The project owns generation bounds and non-secret gateway identity:
+
+- `max_turns`: total execution step budget;
+- `allow_bash`: must be `false`;
+- `timeout`: positive and at most 30 minutes;
+- `output_limit_bytes`: 4096 through 1048576;
+- `allowed_commands`: structured post-generation validators with exact `argv`
+  arrays and explicit timeouts, ending with `argv: [git, diff, --cached,
+  --check]`;
+- `model_gateway.endpoint`, `model`, and `protocol_version`; and
+- `model_gateway.public_ca_private_dns`, which must be `true` only for a
+  privately resolved public FQDN with a publicly trusted certificate.
+
+Command strings are not accepted. Executables must be resolved through `PATH`;
+shells, generic command dispatchers, and coding-agent re-entry are rejected.
+Git is reserved for the exact final diff check. Arguments are passed directly
+without shell interpretation, so quoting syntax has no special meaning and an
+argument that contains spaces remains one `argv` element. The generic executor supports only
+commands whose binaries are installed in that image.
+
+The Agent Sandbox runtime is one-shot generation followed by validation. A
+validator failure cannot trigger model repair, and `critique_retries` must be 0.
+
+The gateway endpoint must use HTTPS. Internal service names require an executor
+image whose CA bundle trusts the consumer gateway certificate. A privately
+resolved public FQDN with a publicly trusted certificate requires
+`public_ca_private_dns: true`. Known direct provider endpoints, embedded
+credentials, queries, fragments, raw provider tokens, and local OpenCode model
+fields are rejected. The deployed Agent Sandbox adapter must match these fields exactly and use a
+consumer-owned namespace, immutable image digest, workload ServiceAccount,
+resources, and secure RuntimeClass. Kubernetes chart wiring is delivered in a
+separate stacked integration change.
+
+AppArmor is engine-owned rather than project-configurable. Production requests
+`RuntimeDefault`; no `agent_runtime` field can disable it or select
+`Unconfined`.

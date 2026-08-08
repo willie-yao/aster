@@ -28,10 +28,11 @@ suggested fix, the engine:
    pinned commit. The agent investigates the tree and makes the **minimal
    change** that addresses the root cause; it can touch several files coherently
    and, when `allow_bash` is set, build and test its own change while fixing.
-2. **Reviews** the change with a second LLM call (a skeptical reviewer that flags
-   wrong logic, undefined symbols, or a change that doesn't address the root
-   cause). On objections it re-runs the agent with the feedback up to
-   `critique_retries` times, then drops the fix.
+2. For local OpenCode and Orka generation, **reviews** the change with a second
+   LLM call and may re-run the agent with feedback up to `critique_retries`
+   times. Agent Sandbox instead requires `critique_retries: 0`: it performs one
+   generation request, then exact post-generation validation with no repair
+   retry.
 3. Optionally **verifies** the change (build + vet) when `verify` is set,
    stamping the verdict on the PR without ever blocking the draft.
 4. Opens a **draft PR** via fork-and-PR with the change, the diff, and a review
@@ -50,9 +51,11 @@ Task, or send a draft-ready notification. Draft generation repeats verification
 and remains authoritative.
 
 > **Note on correctness.** The engine bounds the change (minimal scope, at most
-> `max_files`), runs an LLM review, and optionally builds it, but it does not
-> guarantee the change fixes the failure. A fix PR is a reviewed **draft starting
-> point**, not a verified patch; Prow CI and a human reviewer are the correctness
+> `max_files`). Local OpenCode and Orka can run an LLM review; Agent Sandbox runs
+> exact post-generation validators with no repair retry. Optional verification
+> may also build the patch, but none of these guarantees the change fixes the
+> failure. A fix PR is a **draft starting point**, not a verified patch; Prow CI
+> and a human reviewer are the correctness
 > gate (a draft PR won't run CI or merge without a maintainer's approval).
 
 ## Two modes: fork-and-PR vs direct
@@ -433,8 +436,9 @@ the template uses `FIX_TOKEN`, which already has Contents read on the source rep
 
 - **Opt-in** per project; **draft-only** PRs; never pushes to a protected branch.
 - Only **systemic**, at-or-above-`min_confidence` patterns with a concrete fix.
-- A **coding agent** makes the change in a real clone; bounded by `max_files` and
-  gated by the LLM review.
+- A **coding agent** makes the change in a real clone and is bounded by
+  `max_files`. Local OpenCode and Orka can use the LLM review gate; Agent Sandbox
+  is one-shot and uses exact post-generation validators instead.
 - Dedicated **`FIX_TOKEN`** with a CLA-signed author and DCO sign-off.
 - **Idempotent**: a hidden marker keyed by job + root-cause fingerprint (local
   state plus an open-PR search) means a pattern is never proposed twice, and a
@@ -476,3 +480,92 @@ A completed failed run that has an accepted `source: "build"` analysis can use t
 - Build issues and fixes use GitHub markers for deduplication and are removed from the recurring-pattern tracking files after confirmation. They do not create a one-build pattern or participate in recurring-pattern remediation state.
 
 The server advertises its current analysis critique version with the action capability. The frontend hides build action controls when the published analysis predates that contract, while analyses produced by a newer compatible engine remain visible during a rollback or rolling upgrade.
+
+### `agent-sandbox` credential-free executor
+
+The experimental `agent-sandbox` runtime creates one cold Kubernetes SIG Agent
+Sandbox `v1beta1` resource per Fix PR request. The consumer installs and upgrades
+the Agent Sandbox controller separately. The dashboard chart never installs the
+controller, CRD, a secure RuntimeClass, node infrastructure, egress policy, or a
+model gateway.
+
+The executor uses OpenCode through a consumer-operated internal
+OpenAI-compatible gateway. The Sandbox receives only the gateway URL, model
+identifier, and protocol version. It never receives the gateway's provider
+token, a GitHub write token, dashboard OAuth credentials, or a Kubernetes
+credential. The gateway attaches any provider credential outside the Sandbox
+process.
+
+A project configuration is explicit and fail closed:
+
+```yaml
+ai:
+  fix_prs:
+    enabled: true
+    author_name: "Jane Maintainer"
+    author_email: "jane@example.com"
+    max_files: 3
+    critique_retries: 0
+    agent_runtime:
+      type: agent-sandbox
+      max_turns: 30
+      allow_bash: false
+      timeout: 10m
+      output_limit_bytes: 524288
+      allowed_commands:
+        - argv: [git, diff, --cached, --check]
+          timeout: 1m
+      model_gateway:
+        endpoint: https://model-gateway.platform.example.com/v1
+        model: coding-model
+        protocol_version: openai-chat-completions-v1
+        public_ca_private_dns: true
+```
+
+The gateway has two supported TLS trust models:
+
+- An internal service name such as `.svc` or `.internal`. Its certificate must
+  chain to a CA already present in the selected immutable executor image. A
+  consumer using a private CA must derive and publish its own executor image
+  with that non-secret CA certificate installed.
+- A privately resolved public FQDN with a publicly trusted certificate. Set
+  `public_ca_private_dns: true` to acknowledge this design. Direct known model
+  provider endpoints remain rejected, and consumer egress policy must ensure the
+  name resolves and routes only to the internal gateway.
+
+Generation is one-shot. OpenCode Bash, web fetch, task delegation, external
+skills, and external-directory access are disabled. After OpenCode finishes,
+the executor stages the patch and runs the configured exact argv validators. A
+validator failure returns a terminal failed result. OpenCode does not observe
+that failure, issue a second model request, or repair the patch. Iterative
+test-feedback repair is a possible future feature, not current behavior.
+
+Each `allowed_commands` item contains an exact `argv` list and an explicit
+whole-second or whole-minute timeout. Legacy command strings, shell
+executables, generic command dispatchers, coding-agent re-entry, empty or
+multiline arguments, and per-command timeouts above the overall execution
+timeout are rejected. Git is reserved for the final command, which must be
+exactly
+`["git", "diff", "--cached", "--check"]`.
+
+The published generic executor contains OpenCode, Git, and CA certificates. It
+does not include Go, `make`, or repository-specific build tools. Configure only
+validators whose executables exist in the selected image. A missing executable
+produces a bounded terminal failure and no actionable Fix PR preview. Projects
+such as CAPZ must build and digest-pin a consumer-derived executor image before
+enabling Fix PR. A derived image must retain UID/GID 65532, the
+`/usr/local/bin/fixexecutor` entrypoint, the credential-free OpenCode setup, and
+the same runtime security contract. The README fixture proves patch generation
+and `git diff --cached --check`; it does not prove CAPZ tests can run.
+
+A deployed adapter must use the same project timeout, turn, file, output,
+command, and gateway settings. It also requires an immutable executor image
+digest, explicit execution namespace, tokenless workload ServiceAccount, and
+non-empty secure RuntimeClass. Public repositories only are supported because
+no Git credential enters the Sandbox.
+
+Production constructors request `RuntimeDefault` AppArmor and seccomp at both
+Pod and container scope. There is no project, environment, or execution-request
+field that can disable AppArmor or select `Unconfined`. Kubernetes chart wiring,
+RBAC, admission, and lifecycle evaluation are delivered in a separate stacked
+integration change.

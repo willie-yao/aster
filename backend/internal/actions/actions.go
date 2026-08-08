@@ -577,10 +577,10 @@ func (s *Service) buildFixManager(ctx context.Context, userToken string) (*fixpr
 	}
 	aiClient := s.aiClient()
 	ar := eff.AgentRuntime
-	if ar.Type != "orka" && s.ai.API == ai.APIResponses {
-		return nil, fmt.Errorf("local fix runtime requires chat_completions or an Orka fix runtime")
+	if ar.Type == "opencode" && s.ai.API == ai.APIResponses {
+		return nil, fmt.Errorf("local fix runtime requires chat_completions; select a remote runtime to avoid the shared model endpoint")
 	}
-	if aiClient == nil && ar.Type != "orka" {
+	if aiClient == nil && ar.Type == "opencode" {
 		return nil, fmt.Errorf("AI is not configured on the server; cannot draft a local fix")
 	}
 
@@ -622,6 +622,10 @@ func (s *Service) buildFixManager(ctx context.Context, userToken string) (*fixpr
 	if err != nil {
 		return nil, err
 	}
+	commands, err := ar.RuntimeCommands(ar.ParsedTimeout())
+	if err != nil {
+		return nil, fmt.Errorf("agent command policy: %w", err)
+	}
 	model := ar.Model
 	if model == "" {
 		model = s.ai.Model
@@ -629,15 +633,19 @@ func (s *Service) buildFixManager(ctx context.Context, userToken string) (*fixpr
 	opts.Agent = &fixpr.AgentConfig{
 		Runtime:             agentRuntime,
 		API:                 s.ai.API,
-		SharedModelEndpoint: ar.Type != "orka",
+		SharedModelEndpoint: ar.Type == "opencode",
 		Model:               model,
 		Endpoint:            s.ai.Endpoint,
 		ModelToken:          s.ai.Token,
 		MaxTurns:            ar.MaxTurns,
+		MaxFiles:            eff.MaxFiles,
+		ModelGateway:        ar.ModelGateway.RuntimeConfig(),
+		OutputLimitBytes:    ar.OutputLimitBytes,
 		AllowBash:           allowBash,
 		NetworkDomains:      ar.NetworkDomains,
+		CommandPolicy:       runtime.CommandPolicy{AllowShell: allowBash, Commands: commands},
 		Timeout:             ar.ParsedTimeout(),
-		GitToken:            userToken,
+		GitToken:            repositoryToken(ar.Type, userToken),
 		ExecutionID:         actionRequestID(ctx),
 	}
 	if opts.Agent.ExecutionID != "" {
@@ -646,6 +654,13 @@ func (s *Service) buildFixManager(ctx context.Context, userToken string) (*fixpr
 	mgr := fixpr.NewManager(prClient,
 		filepath.Join(s.dataDir, "fix_pr_state.json"), opts)
 	return mgr, nil
+}
+
+func repositoryToken(runtimeType, token string) string {
+	if runtimeType == "agent-sandbox" {
+		return ""
+	}
+	return token
 }
 
 func actionUsageOutcome(err error) aiusage.Outcome {
