@@ -4,11 +4,25 @@ This is the guided quickstart for a first deployment. For every flag, discovery
 rule, prompt-authoring mode, update behavior, and automation contract, use the
 [complete onboarding reference](onboarding-reference.md).
 
+## Choose an onboarding method
+
+Every method creates the same small consumer configuration and can target either
+GitHub Pages or Kubernetes. Choose the workflow that best matches how you want
+to make and review the files.
+
+| Method | Best for | Start here |
+| --- | --- | --- |
+| Interactive wizard | A first setup where you want the CLI to discover jobs and walk through each decision | [Run the interactive wizard](#interactive-wizard) |
+| Coding agent-assisted | A conversational setup where a coding agent runs the reviewed discovery, plan, apply, and handoff workflow | [Use a coding agent](#coding-agent-assisted-onboarding) or open the [complete agent guide](agent-onboarding.md) |
+| Non-interactive CLI | Scripts, repeatable automation, or operators who already know the required inputs | [Use the flagged CLI](#non-interactive-cli-onboarding) |
+| Manual setup | Full control over each consumer file without using the scaffold generator | [Create the files manually](#manual-setup) |
+
 ## What onboarding creates
 
-`fetcher onboard` discovers the jobs that test your source repository, validates
-the result, and creates a small consumer repository. The consumer points at the
-shared engine instead of copying engine code.
+The wizard, coding-agent, and non-interactive paths use `fetcher onboard` to
+discover jobs, validate the result, and create a small consumer repository.
+Manual setup creates the same file contract directly. In every case, the
+consumer points at the shared engine instead of copying engine code.
 
 The common files are:
 
@@ -24,7 +38,7 @@ The generated scaffold also includes a short deployment guide. Pages receives
 `CHECKLIST.md`. Kubernetes receives `deploy/README.md`. Prompt handoff mode may
 add agent instructions for completing `prompts/system.md`.
 
-## Run the wizard
+## Interactive wizard
 
 From the source repository checkout:
 
@@ -46,6 +60,52 @@ used for GitHub API reads and is not written to the scaffold.
 
 Review the final plan before confirming. The default final answer is no, and
 cancellation leaves the filesystem unchanged.
+
+## Coding agent-assisted onboarding
+
+Use a coding agent when you want the same engine-owned discovery and plan/apply
+workflow with conversational help resolving inputs, reviewing changes, and
+preparing the diagnostic-authoring handoff. The agent does not replace the
+engine CLI or hand-write scaffold files.
+
+Install the portable setup and diagnostic-authoring skills:
+
+```bash
+npx --yes skills@latest add willie-yao/prow-ai-dashboard \
+  --skill setup-prow-ai-consumer author-prow-ai-diagnostics \
+  --agent codex \
+  --global \
+  --yes
+```
+
+Then ask the agent to use `$setup-prow-ai-consumer`, for example:
+
+```text
+Use $setup-prow-ai-consumer to create a Pages consumer for
+https://github.com/kubernetes-sigs/kueue.
+```
+
+The setup skill runs read-only discovery, reviews an exact dry-run plan,
+preserves consumer-owned files during updates, applies only the reviewed plan,
+and validates the resulting consumer. It leaves template placeholders in the
+source-only prompt for review. After setup, `$author-prow-ai-diagnostics` can improve
+the prompt from historical failures and propose inactive diagnostic recipes.
+
+See [Agent-driven setup and diagnostic authoring](agent-onboarding.md) for
+installation scopes, example requests, safety boundaries, update behavior, and
+the complete setup-to-authoring workflow.
+
+## Non-interactive CLI onboarding
+
+Use the flagged CLI when the source, discovery selector, consumer repository,
+deployment mode, and destination are already known. This is the direct path for
+scripts and repeatable automation without the interactive wizard or a coding
+agent.
+
+Start with a dry run and save the exact reviewed plan before applying it. See
+[Non-interactive automation](onboarding-reference.md#non-interactive-automation)
+and [Dry-run behavior](onboarding-reference.md#dry-run-behavior) for the required
+flags, plan digest, update safeguards, and machine-readable handoff outputs.
 
 ## Review the generated files
 
@@ -77,7 +137,7 @@ Start with the smallest working deployment. Add authenticated chat, File Issue,
 Mark Resolved, notifications, or other optional features only after the expected
 jobs and analyses are visible. See [Optional features](optional-features.md).
 
-## Set up the files manually
+## Manual setup
 
 Manual setup is a supported alternative when you prefer to create the consumer
 files yourself.
@@ -119,7 +179,7 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest \
 
 ## Validate with `onboard doctor`
 
-Run the same doctor command after wizard or manual setup. It checks:
+Run the same doctor command after any onboarding method. It checks:
 
 - Strict `project.yaml` parsing.
 - A non-empty `prompts/system.md`.
@@ -153,29 +213,10 @@ Use the [onboarding reference](onboarding-reference.md) for:
 - Prompt-authoring modes, timeouts, and fallback behavior.
 - Complete doctor behavior and command contracts.
 
-For a conversational agent workflow over the same engine commands, install the
-setup and diagnostic-authoring skills:
+For coding agent-assisted onboarding, use the
+[Coding agent-assisted onboarding](#coding-agent-assisted-onboarding) section or
+the [complete agent guide](agent-onboarding.md). For scripts and repeatable
+automation, use the [non-interactive CLI section](#non-interactive-cli-onboarding).
 
-```bash
-npx --yes skills@latest add willie-yao/prow-ai-dashboard \
-  --skill setup-prow-ai-consumer author-prow-ai-diagnostics \
-  --agent codex \
-  --global \
-  --yes
-```
-
-Then ask the agent to use `$setup-prow-ai-consumer`, for example:
-
-```text
-Use $setup-prow-ai-consumer to create a Pages consumer for
-https://github.com/kubernetes-sigs/kueue.
-```
-
-The setup skill uses the engine CLI and should leave prompt template placeholders
-for review instead of turning them into a long questionnaire. After the baseline
-passes `onboard doctor`, `$author-prow-ai-diagnostics` can improve the prompt and
-propose inactive diagnostic recipes.
-
-See [Agent-driven setup and diagnostic authoring](agent-onboarding.md) for the
-complete workflow. The [documentation map](README.md) links the remaining
+The [documentation map](README.md) links the remaining
 deployment, analysis, operator, experimental, and contributor references.

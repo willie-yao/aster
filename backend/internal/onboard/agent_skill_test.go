@@ -316,6 +316,11 @@ func TestAgentOnboardingDocsAdvertiseInstallableSkills(t *testing.T) {
 			"docs/agent-onboarding.md",
 		},
 		"docs/onboarding-a-new-project.md": {
+			"## Choose an onboarding method",
+			"Interactive wizard", "#interactive-wizard",
+			"Coding agent-assisted", "#coding-agent-assisted-onboarding",
+			"Non-interactive CLI", "#non-interactive-cli-onboarding",
+			"Manual setup", "#manual-setup",
 			"npx --yes skills@latest add willie-yao/prow-ai-dashboard",
 			"https://github.com/kubernetes-sigs/kueue", "template placeholders",
 			"$author-prow-ai-diagnostics",
