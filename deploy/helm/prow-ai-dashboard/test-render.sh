@@ -1747,7 +1747,7 @@ project:
           max_turns: 30
           allow_bash: false
           timeout: 10m
-          output_limit_bytes: 524288
+          output_limit_bytes: 1048576
           allowed_commands:
             - argv: [git, diff, --cached, --check]
               timeout: 30s
@@ -1776,7 +1776,7 @@ agentSandbox:
     maxSteps: 30
     maxFiles: 3
     timeout: 10m
-    outputLimitBytes: 524288
+    outputLimitBytes: 1048576
     allowedCommands:
       - argv: [git, diff, --cached, --check]
         timeout: 30s
@@ -1804,6 +1804,7 @@ grep -Fq 'resources: ["pods/log"]' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'automountServiceAccountToken: false' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'serviceAccountName: test-prow-ai-dashboard-agent-sandbox-client' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'name: AGENT_SANDBOX_MODEL_GATEWAY_ENDPOINT' "$tmp/agent-sandbox-render.yaml"
+grep -A1 -F 'name: AGENT_SANDBOX_OUTPUT_LIMIT_BYTES' "$tmp/agent-sandbox-render.yaml" | grep -Fq 'value: "1048576"'
 grep -Fq 'local/agent-sandbox-fix-executor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$tmp/agent-sandbox-render.yaml"
 grep -Fq "variables.pod.securityContext.appArmorProfile.type == 'RuntimeDefault'" "$tmp/agent-sandbox-render.yaml"
 grep -Fq "variables.container.securityContext.appArmorProfile.type == 'RuntimeDefault'" "$tmp/agent-sandbox-render.yaml"

@@ -522,7 +522,7 @@ key, or bot token).
 - name: AGENT_SANDBOX_TIMEOUT
   value: {{ .Values.agentSandbox.fixRuntime.timeout | quote }}
 - name: AGENT_SANDBOX_OUTPUT_LIMIT_BYTES
-  value: {{ printf "%v" .Values.agentSandbox.fixRuntime.outputLimitBytes | quote }}
+  value: {{ printf "%d" (int64 .Values.agentSandbox.fixRuntime.outputLimitBytes) | quote }}
 - name: AGENT_SANDBOX_POLL_INTERVAL
   value: {{ .Values.agentSandbox.fixRuntime.pollInterval | quote }}
 - name: AGENT_SANDBOX_CPU_REQUEST

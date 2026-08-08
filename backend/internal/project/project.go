@@ -857,6 +857,9 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 	}
 	if out.AgentRuntime == nil {
 		out.AgentRuntime = &FixAgentRuntime{}
+	} else {
+		agentRuntime := *out.AgentRuntime
+		out.AgentRuntime = &agentRuntime
 	}
 	out.AgentRuntime.Type = strings.TrimSpace(out.AgentRuntime.Type)
 	if out.AgentRuntime.Type == "" {
@@ -870,10 +873,11 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 		out.AgentRuntime.AllowBash = &value
 	}
 	out.AgentRuntime.NetworkDomains = append([]string(nil), out.AgentRuntime.NetworkDomains...)
-	out.AgentRuntime.AllowedCommands = make([]FixAgentCommand, len(out.AgentRuntime.AllowedCommands))
+	commands := make([]FixAgentCommand, len(out.AgentRuntime.AllowedCommands))
 	for index, command := range out.AgentRuntime.AllowedCommands {
-		out.AgentRuntime.AllowedCommands[index] = FixAgentCommand{Argv: append([]string(nil), command.Argv...), Timeout: command.Timeout}
+		commands[index] = FixAgentCommand{Argv: append([]string(nil), command.Argv...), Timeout: command.Timeout}
 	}
+	out.AgentRuntime.AllowedCommands = commands
 	if domains, err := agentruntime.NormalizeNetworkDomains(out.AgentRuntime.NetworkDomains); err == nil {
 		out.AgentRuntime.NetworkDomains = domains
 	}
