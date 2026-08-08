@@ -331,6 +331,113 @@
         "orkaContainer"
       ]
     },
+    "agentSandbox": {
+      "type": "object",
+      "description": "Consumer-installed Kubernetes SIG Agent Sandbox integration for Fix PR execution.",
+      "properties": {
+        "fixRuntime": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "namespace": {"type": "string"},
+            "runtimeClassName": {"type": "string"},
+            "image": {
+              "type": "object",
+              "properties": {
+                "repository": {"type": "string"},
+                "digest": {"type": "string"},
+                "pullPolicy": {"type": "string", "enum": ["IfNotPresent"]}
+              },
+              "required": ["repository", "digest", "pullPolicy"],
+              "additionalProperties": false
+            },
+            "workloadServiceAccount": {
+              "type": "object",
+              "properties": {
+                "create": {"type": "boolean"},
+                "name": {"type": "string"}
+              },
+              "required": ["create", "name"],
+              "additionalProperties": false
+            },
+            "modelGateway": {
+              "type": "object",
+              "properties": {
+                "endpoint": {"type": "string"},
+                "model": {"type": "string"},
+                "protocolVersion": {"type": "string", "enum": ["openai-chat-completions-v1"]},
+                "publicCAPrivateDNS": {"type": "boolean"}
+              },
+              "required": ["endpoint", "model", "protocolVersion", "publicCAPrivateDNS"],
+              "additionalProperties": false
+            },
+            "maxSteps": {"type": "integer", "minimum": 1, "maximum": 1000},
+            "maxFiles": {"type": "integer", "minimum": 1, "maximum": 100},
+            "timeout": {"type": "string"},
+            "outputLimitBytes": {"type": "integer", "minimum": 4096, "maximum": 1048576},
+            "allowedCommands": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "argv": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[^\r\n\u0000]+$"}
+                  },
+                  "timeout": {"type": "string", "minLength": 2, "maxLength": 5, "pattern": "^[1-9][0-9]*(s|m)$"}
+                },
+                "required": ["argv", "timeout"],
+                "additionalProperties": false
+              }
+            },
+            "pollInterval": {"type": "string"},
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": {"type": "string"},
+                    "memory": {"type": "string"},
+                    "ephemeral-storage": {"type": "string"}
+                  },
+                  "required": ["cpu", "memory", "ephemeral-storage"],
+                  "additionalProperties": false
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": {"type": "string"},
+                    "memory": {"type": "string"},
+                    "ephemeral-storage": {"type": "string"}
+                  },
+                  "required": ["cpu", "memory", "ephemeral-storage"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["requests", "limits"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["enabled", "namespace", "runtimeClassName", "image", "workloadServiceAccount", "modelGateway", "maxSteps", "maxFiles", "timeout", "outputLimitBytes", "allowedCommands", "pollInterval", "resources"],
+          "additionalProperties": false
+        },
+        "rbac": {
+          "type": "object",
+          "properties": {
+            "create": {"type": "boolean"},
+            "clientServiceAccountName": {"type": "string"}
+          },
+          "required": ["create", "clientServiceAccountName"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["fixRuntime", "rbac"],
+      "additionalProperties": false
+    },
     "orka": {
       "type": "object",
       "description": "Orka integration shared by analysis, source investigation, and fix generation.",
@@ -1561,6 +1668,7 @@
     "mode",
     "analysisCache",
     "analysisRuntime",
+    "agentSandbox",
     "orka",
     "persistence",
     "project",

@@ -392,6 +392,7 @@ Validate AI provider configuration.
 
 {{/* Validate the fail-closed Orka fix Task contract. */}}
 {{- define "prow-ai-dashboard.validateFixRuntime" -}}
+{{- if and .Values.orka.fixRuntime.enabled .Values.agentSandbox.fixRuntime.enabled -}}{{- fail "agentSandbox.fixRuntime cannot be combined with Orka runtimes or source investigation" -}}{{- end -}}
 {{- if .Values.orka.fixRuntime.enabled -}}
   {{- $cfg := .Values.orka.fixRuntime.admission -}}
   {{- if not .Values.orka.namespace -}}{{- fail "orka.namespace is required when orka.fixRuntime.enabled=true" -}}{{- end -}}
@@ -474,4 +475,166 @@ key, or bot token).
 {{- else -}}
 {{- if $a.proxy.existingSecret -}}{{ $a.proxy.existingSecret }}{{- else -}}{{ printf "%s-auth" (include "prow-ai-dashboard.fullname" .) }}{{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{/* Immutable Agent Sandbox executor image reference. */}}
+{{- define "prow-ai-dashboard.agentSandboxExecutorImage" -}}
+{{- printf "%s@%s" .Values.agentSandbox.fixRuntime.image.repository .Values.agentSandbox.fixRuntime.image.digest -}}
+{{- end -}}
+
+{{/* Dashboard ServiceAccount allowed to manage only Fix Sandboxes. */}}
+{{- define "prow-ai-dashboard.agentSandboxClientServiceAccountName" -}}
+{{- if .Values.agentSandbox.rbac.clientServiceAccountName -}}
+{{- .Values.agentSandbox.rbac.clientServiceAccountName -}}
+{{- else -}}
+{{- printf "%s-agent-sandbox-client" (include "prow-ai-dashboard.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Tokenless ServiceAccount used inside the executor Sandbox. */}}
+{{- define "prow-ai-dashboard.agentSandboxWorkloadServiceAccountName" -}}
+{{- .Values.agentSandbox.fixRuntime.workloadServiceAccount.name -}}
+{{- end -}}
+
+{{/* Cluster-scoped admission policy name, unique to the release. */}}
+{{- define "prow-ai-dashboard.agentSandboxAdmissionName" -}}
+{{- printf "%s-agent-sandbox-%s" (include "prow-ai-dashboard.fullname" .) (include "prow-ai-dashboard.orkaReleaseScope" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/* Non-secret Agent Sandbox runtime environment shared by server and fetcher. */}}
+{{- define "prow-ai-dashboard.agentSandboxEnv" -}}
+- name: AGENT_SANDBOX_NAMESPACE
+  value: {{ .Values.agentSandbox.fixRuntime.namespace | quote }}
+- name: AGENT_SANDBOX_IMAGE
+  value: {{ include "prow-ai-dashboard.agentSandboxExecutorImage" . | quote }}
+- name: AGENT_SANDBOX_SERVICE_ACCOUNT
+  value: {{ include "prow-ai-dashboard.agentSandboxWorkloadServiceAccountName" . | quote }}
+- name: AGENT_SANDBOX_RUNTIME_CLASS
+  value: {{ .Values.agentSandbox.fixRuntime.runtimeClassName | quote }}
+- name: AGENT_SANDBOX_MODEL_GATEWAY_ENDPOINT
+  value: {{ .Values.agentSandbox.fixRuntime.modelGateway.endpoint | quote }}
+- name: AGENT_SANDBOX_MODEL_GATEWAY_MODEL
+  value: {{ .Values.agentSandbox.fixRuntime.modelGateway.model | quote }}
+- name: AGENT_SANDBOX_MODEL_GATEWAY_PROTOCOL
+  value: {{ .Values.agentSandbox.fixRuntime.modelGateway.protocolVersion | quote }}
+- name: AGENT_SANDBOX_MODEL_GATEWAY_PUBLIC_CA_PRIVATE_DNS
+  value: {{ ternary "true" "false" .Values.agentSandbox.fixRuntime.modelGateway.publicCAPrivateDNS | quote }}
+- name: AGENT_SANDBOX_TIMEOUT
+  value: {{ .Values.agentSandbox.fixRuntime.timeout | quote }}
+- name: AGENT_SANDBOX_OUTPUT_LIMIT_BYTES
+  value: {{ printf "%v" .Values.agentSandbox.fixRuntime.outputLimitBytes | quote }}
+- name: AGENT_SANDBOX_POLL_INTERVAL
+  value: {{ .Values.agentSandbox.fixRuntime.pollInterval | quote }}
+- name: AGENT_SANDBOX_CPU_REQUEST
+  value: {{ index .Values.agentSandbox.fixRuntime.resources.requests "cpu" | quote }}
+- name: AGENT_SANDBOX_CPU_LIMIT
+  value: {{ index .Values.agentSandbox.fixRuntime.resources.limits "cpu" | quote }}
+- name: AGENT_SANDBOX_MEMORY_REQUEST
+  value: {{ index .Values.agentSandbox.fixRuntime.resources.requests "memory" | quote }}
+- name: AGENT_SANDBOX_MEMORY_LIMIT
+  value: {{ index .Values.agentSandbox.fixRuntime.resources.limits "memory" | quote }}
+- name: AGENT_SANDBOX_EPHEMERAL_STORAGE_LIMIT
+  value: {{ index .Values.agentSandbox.fixRuntime.resources.limits "ephemeral-storage" | quote }}
+{{- end -}}
+
+{{/* Validate the disabled-by-default consumer-installed Agent Sandbox runtime. */}}
+{{- define "prow-ai-dashboard.validateAgentSandboxFixRuntime" -}}
+{{- if .Values.agentSandbox.fixRuntime.enabled -}}
+  {{- $cfg := .Values.agentSandbox.fixRuntime -}}
+  {{- if .Values.project.existingConfigMap -}}{{- fail "agentSandbox.fixRuntime requires inline project.config so security-sensitive values can be compared" -}}{{- end -}}
+  {{- if not .Values.project.config -}}{{- fail "agentSandbox.fixRuntime requires project.config" -}}{{- end -}}
+  {{- $project := fromYaml .Values.project.config -}}
+  {{- $projectAI := get $project "ai" | default dict -}}
+  {{- $projectFix := get $projectAI "fix_prs" | default dict -}}
+  {{- $projectRuntime := get $projectFix "agent_runtime" | default dict -}}
+  {{- $projectGateway := get $projectRuntime "model_gateway" | default dict -}}
+  {{- if ne (default "opencode" (get $projectRuntime "type")) "agent-sandbox" -}}{{- fail "agentSandbox.fixRuntime requires project ai.fix_prs.agent_runtime.type=agent-sandbox" -}}{{- end -}}
+  {{- if not (or .Values.server.actions.enabled (default false (get $projectFix "enabled"))) -}}{{- fail "agentSandbox.fixRuntime requires server.actions.enabled=true or project ai.fix_prs.enabled=true" -}}{{- end -}}
+  {{- if .Values.server.actions.oauth.privateRepositories -}}{{- fail "agentSandbox.fixRuntime supports public repositories only; OAuth privateRepositories must be false" -}}{{- end -}}
+  {{- if or .Values.orka.fixRuntime.enabled .Values.orka.agentAnalysisShadow.enabled .Values.server.chat.sourceInvestigation.enabled (eq .Values.analysisRuntime.type "orka-container") -}}{{- fail "agentSandbox.fixRuntime cannot be combined with Orka runtimes or source investigation" -}}{{- end -}}
+  {{- if not $cfg.namespace -}}{{- fail "agentSandbox.fixRuntime.namespace is required" -}}{{- end -}}
+  {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "agentSandbox.fixRuntime.namespace must differ from the dashboard release namespace" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.namespace) -}}{{- fail "agentSandbox.fixRuntime.namespace must be a lowercase DNS label" -}}{{- end -}}
+  {{- if not $cfg.runtimeClassName -}}{{- fail "agentSandbox.fixRuntime.runtimeClassName is required" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.runtimeClassName) -}}{{- fail "agentSandbox.fixRuntime.runtimeClassName must be a lowercase RuntimeClass name" -}}{{- end -}}
+  {{- if not $cfg.image.repository -}}{{- fail "agentSandbox.fixRuntime.image.repository is required" -}}{{- end -}}
+  {{- if not (regexMatch "^[^[:space:]@]+$" $cfg.image.repository) -}}{{- fail "agentSandbox.fixRuntime.image.repository must not contain whitespace, credentials, or a digest" -}}{{- end -}}
+  {{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $cfg.image.digest) -}}{{- fail "agentSandbox.fixRuntime.image.digest must be an immutable sha256 digest" -}}{{- end -}}
+  {{- if ne $cfg.image.pullPolicy "IfNotPresent" -}}{{- fail "agentSandbox.fixRuntime.image.pullPolicy must be IfNotPresent" -}}{{- end -}}
+  {{- $workloadSA := include "prow-ai-dashboard.agentSandboxWorkloadServiceAccountName" . -}}
+  {{- if not $workloadSA -}}{{- fail "agentSandbox.fixRuntime.workloadServiceAccount.name is required" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $workloadSA) -}}{{- fail "agentSandbox.fixRuntime.workloadServiceAccount.name must be a lowercase Kubernetes object name" -}}{{- end -}}
+  {{- $clientSA := include "prow-ai-dashboard.agentSandboxClientServiceAccountName" . -}}
+  {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.clientServiceAccountName) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
+  {{- $publicCAPrivateDNS := default false $cfg.modelGateway.publicCAPrivateDNS -}}
+  {{- if $publicCAPrivateDNS -}}
+    {{- if not (regexMatch "^https://([A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?[.])+[A-Za-z]{2,}(:[0-9]+)?(/[^?#]*)?$" $cfg.modelGateway.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.endpoint must be a credential-free HTTPS DNS FQDN when publicCAPrivateDNS=true" -}}{{- end -}}
+    {{- if regexMatch "^https://([^/@?#]+[.])?(openai[.]com|openai[.]azure[.]com|services[.]ai[.]azure[.]com|anthropic[.]com|githubcopilot[.]com|copilot[.]microsoft[.]com|moonshot[.]cn|kimi[.]com|generativelanguage[.]googleapis[.]com|api[.]nvidia[.]com|mistral[.]ai|cohere[.]ai|groq[.]com|together[.]xyz|deepseek[.]com|x[.]ai)(:[0-9]+)?(/|$)" (lower $cfg.modelGateway.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.endpoint must not be a direct model-provider endpoint" -}}{{- end -}}
+    {{- if regexMatch "[.](svc([.]cluster[.]local)?|internal)(:[0-9]+)?(/|$)" (lower $cfg.modelGateway.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.publicCAPrivateDNS applies only to a privately resolved public FQDN" -}}{{- end -}}
+  {{- else -}}
+    {{- if not (regexMatch "^https://[^/@?#]+[.](svc([.]cluster[.]local)?|internal)(:[0-9]+)?(/[^?#]*)?$" $cfg.modelGateway.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.endpoint must be an internal HTTPS service URL or publicCAPrivateDNS must be true" -}}{{- end -}}
+  {{- end -}}
+  {{- if not $cfg.modelGateway.model -}}{{- fail "agentSandbox.fixRuntime.modelGateway.model is required" -}}{{- end -}}
+  {{- if ne $cfg.modelGateway.protocolVersion "openai-chat-completions-v1" -}}{{- fail "agentSandbox.fixRuntime.modelGateway.protocolVersion must be openai-chat-completions-v1" -}}{{- end -}}
+  {{- if not (regexMatch "^([1-9]|[12][0-9]|30)m$" (printf "%v" $cfg.timeout)) -}}{{- fail "agentSandbox.fixRuntime.timeout must use whole minutes from 1m through 30m" -}}{{- end -}}
+  {{- $poll := printf "%v" $cfg.pollInterval -}}
+  {{- if or (not (regexMatch "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ms|s)$" $poll)) (not (regexMatch "[1-9]" $poll)) -}}{{- fail "agentSandbox.fixRuntime.pollInterval must be a positive duration below 30s" -}}{{- end -}}
+  {{- if regexMatch "^([3-9][0-9]|[1-9][0-9]{2,})s$" (durationRound $poll) -}}{{- fail "agentSandbox.fixRuntime.pollInterval must be below 30s" -}}{{- end -}}
+  {{- if or (lt (int64 $cfg.outputLimitBytes) 4096) (gt (int64 $cfg.outputLimitBytes) 1048576) -}}{{- fail "agentSandbox.fixRuntime.outputLimitBytes must be between 4096 and 1048576" -}}{{- end -}}
+  {{- $overallSeconds := mul (trimSuffix "m" (printf "%v" $cfg.timeout) | int) 60 -}}
+  {{- if ge (len $cfg.allowedCommands) (int $cfg.maxSteps) -}}{{- fail "agentSandbox.fixRuntime.maxSteps must reserve at least one coding-agent step after allowedCommands" -}}{{- end -}}
+  {{- range $index, $command := $cfg.allowedCommands -}}
+    {{- $argv := get $command "argv" | default list -}}
+    {{- if eq (len $argv) 0 -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d].argv must be non-empty" $index) -}}{{- end -}}
+    {{- $totalBytes := 0 -}}
+    {{- range $argIndex, $arg := $argv -}}
+      {{- if or (eq $arg "") (gt (len $arg) 1024) (regexMatch "[\r\n]" $arg) -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d].argv[%d] must be a bounded non-empty single-line string" $index $argIndex) -}}{{- end -}}
+      {{- $totalBytes = add $totalBytes (len $arg) -}}
+    {{- end -}}
+    {{- if gt $totalBytes 4096 -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d].argv exceeds 4096 bytes" $index) -}}{{- end -}}
+    {{- $executable := lower (trim (first $argv)) -}}
+    {{- if or (contains "/" (first $argv)) (contains "\\" (first $argv)) -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d] must use a PATH-resolved executable" $index) -}}{{- end -}}
+    {{- if has $executable (list "sh" "bash" "dash" "zsh" "ksh" "fish" "cmd" "cmd.exe" "powershell" "pwsh") -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d] must not invoke a shell" $index) -}}{{- end -}}
+    {{- if has $executable (list "env" "busybox" "toybox") -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d] must not use a command dispatcher" $index) -}}{{- end -}}
+    {{- if has $executable (list "opencode" "fixexecutor") -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d] must not invoke a coding agent or executor" $index) -}}{{- end -}}
+    {{- if and (eq $executable "git") (ne (toJson $argv) (toJson (list "git" "diff" "--cached" "--check"))) -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d] git is reserved for the exact final diff check" $index) -}}{{- end -}}
+    {{- $commandTimeout := printf "%v" (get $command "timeout") -}}
+    {{- $commandSeconds := 0 -}}
+    {{- if regexMatch "^[1-9][0-9]*s$" $commandTimeout -}}
+      {{- if gt (len $commandTimeout) 5 -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d].timeout exceeds the execution timeout" $index) -}}{{- end -}}
+      {{- $commandSeconds = trimSuffix "s" $commandTimeout | int -}}
+    {{- else if regexMatch "^[1-9][0-9]*m$" $commandTimeout -}}
+      {{- if gt (len $commandTimeout) 3 -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d].timeout exceeds the execution timeout" $index) -}}{{- end -}}
+      {{- $commandSeconds = mul (trimSuffix "m" $commandTimeout | int) 60 -}}
+    {{- else -}}
+      {{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d].timeout must use positive whole seconds or minutes" $index) -}}
+    {{- end -}}
+    {{- if gt $commandSeconds $overallSeconds -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d].timeout exceeds the execution timeout" $index) -}}{{- end -}}
+  {{- end -}}
+  {{- if ne (toJson (get (last $cfg.allowedCommands) "argv")) (toJson (list "git" "diff" "--cached" "--check")) -}}{{- fail "agentSandbox.fixRuntime.allowedCommands must end with argv [git diff --cached --check]" -}}{{- end -}}
+  {{- if ne (toJson $cfg.allowedCommands) (toJson (get $projectRuntime "allowed_commands" | default list)) -}}{{- fail "agentSandbox.fixRuntime.allowedCommands must exactly match project agent_runtime.allowed_commands" -}}{{- end -}}
+  {{- if ne (int $cfg.maxSteps) (int (default 30 (get $projectRuntime "max_turns"))) -}}{{- fail "agentSandbox.fixRuntime.maxSteps must match project agent_runtime.max_turns" -}}{{- end -}}
+  {{- if ne (int $cfg.maxFiles) (int (default 3 (get $projectFix "max_files"))) -}}{{- fail "agentSandbox.fixRuntime.maxFiles must match project ai.fix_prs.max_files" -}}{{- end -}}
+  {{- if ne (printf "%v" $cfg.timeout) (printf "%v" (default "10m" (get $projectRuntime "timeout"))) -}}{{- fail "agentSandbox.fixRuntime.timeout must match project agent_runtime.timeout" -}}{{- end -}}
+  {{- if ne (int64 $cfg.outputLimitBytes) (int64 (default 524288 (get $projectRuntime "output_limit_bytes"))) -}}{{- fail "agentSandbox.fixRuntime.outputLimitBytes must match project agent_runtime.output_limit_bytes" -}}{{- end -}}
+  {{- if ne $cfg.modelGateway.endpoint (default "" (get $projectGateway "endpoint")) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.endpoint must match project agent_runtime.model_gateway.endpoint" -}}{{- end -}}
+  {{- if ne $cfg.modelGateway.model (default "" (get $projectGateway "model")) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.model must match project agent_runtime.model_gateway.model" -}}{{- end -}}
+  {{- if ne $cfg.modelGateway.protocolVersion (default "openai-chat-completions-v1" (get $projectGateway "protocol_version")) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.protocolVersion must match project agent_runtime.model_gateway.protocol_version" -}}{{- end -}}
+  {{- if ne $publicCAPrivateDNS (default false (get $projectGateway "public_ca_private_dns")) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.publicCAPrivateDNS must match project agent_runtime.model_gateway.public_ca_private_dns" -}}{{- end -}}
+  {{- if (default false (get $projectRuntime "allow_bash")) -}}{{- fail "agentSandbox.fixRuntime requires project agent_runtime.allow_bash=false" -}}{{- end -}}
+  {{- range $env := concat .Values.server.extraEnv .Values.fetcher.extraEnv -}}
+    {{- if hasPrefix "AGENT_SANDBOX_" (default "" $env.name) -}}{{- fail (printf "extraEnv must not override reserved Agent Sandbox variable %s" $env.name) -}}{{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Whether scheduled/watch Fix PR reconciliation is enabled in project.yaml. */}}
+{{- define "prow-ai-dashboard.agentSandboxScheduledEnabled" -}}
+{{- if and .Values.agentSandbox.fixRuntime.enabled .Values.project.config -}}
+  {{- $project := fromYaml .Values.project.config -}}
+  {{- $projectAI := get $project "ai" | default dict -}}
+  {{- $projectFix := get $projectAI "fix_prs" | default dict -}}
+  {{- if (default false (get $projectFix "enabled")) -}}true{{- else -}}false{{- end -}}
+{{- else -}}false{{- end -}}
 {{- end -}}

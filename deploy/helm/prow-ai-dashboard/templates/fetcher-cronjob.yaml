@@ -1,4 +1,5 @@
 {{- include "prow-ai-dashboard.validateFixRuntime" . -}}
+{{- include "prow-ai-dashboard.validateAgentSandboxFixRuntime" . -}}
 {{- include "prow-ai-dashboard.validateAnalysisRuntime" . -}}
 {{- include "prow-ai-dashboard.validateAgentAnalysisShadow" . -}}
 {{- include "prow-ai-dashboard.validateAI" . -}}
@@ -8,6 +9,7 @@
 {{- if eq .Values.mode "cron" }}
 {{- $containerAnalysis := eq .Values.analysisRuntime.type "orka-container" }}
 {{- $shadow := .Values.orka.agentAnalysisShadow.enabled }}
+{{- $agentSandboxScheduled := eq (include "prow-ai-dashboard.agentSandboxScheduledEnabled" .) "true" }}
 {{- $defaultRestartPolicy := ternary "Never" "OnFailure" $containerAnalysis }}
 {{- $restartPolicy := .Values.fetcher.restartPolicy | default $defaultRestartPolicy }}
 {{- if not (or (eq $restartPolicy "Never") (eq $restartPolicy "OnFailure")) }}
@@ -58,8 +60,10 @@ spec:
           serviceAccountName: {{ include "prow-ai-dashboard.agentAnalysisShadowServiceAccountName" . }}
           {{- else if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
           serviceAccountName: {{ include "prow-ai-dashboard.orkaServiceAccountName" . }}
+          {{- else if $agentSandboxScheduled }}
+          serviceAccountName: {{ include "prow-ai-dashboard.agentSandboxClientServiceAccountName" . }}
           {{- end }}
-          automountServiceAccountToken: false
+          automountServiceAccountToken: {{ ternary "true" "false" $agentSandboxScheduled }}
           {{- with .Values.imagePullSecrets }}
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
@@ -156,6 +160,9 @@ spec:
                 - -agent-analysis-shadow-retries={{ .Values.orka.agentAnalysisShadow.admission.retries }}
                 {{- end }}
               env:
+                {{- if $agentSandboxScheduled }}
+                {{- include "prow-ai-dashboard.agentSandboxEnv" . | nindent 16 }}
+                {{- end }}
                 {{- if .Values.ai.enabled }}
                 - name: AI_TOKEN
                   valueFrom:

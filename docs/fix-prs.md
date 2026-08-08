@@ -541,11 +541,9 @@ that failure, issue a second model request, or repair the patch. Iterative
 test-feedback repair is a possible future feature, not current behavior.
 
 Each `allowed_commands` item contains an exact `argv` list and an explicit
-whole-second or whole-minute timeout. Legacy command strings, shell
-executables, generic command dispatchers, coding-agent re-entry, empty or
-multiline arguments, and per-command timeouts above the overall execution
-timeout are rejected. Git is reserved for the final command, which must be
-exactly
+whole-second or whole-minute timeout. Legacy command strings, shell executables, generic command dispatchers,
+coding-agent re-entry, empty or multiline arguments, and per-command timeouts above the overall
+execution timeout are rejected. Git is reserved for the final command, which must be exactly
 `["git", "diff", "--cached", "--check"]`.
 
 The published generic executor contains OpenCode, Git, and CA certificates. It
@@ -558,14 +556,17 @@ enabling Fix PR. A derived image must retain UID/GID 65532, the
 the same runtime security contract. The README fixture proves patch generation
 and `git diff --cached --check`; it does not prove CAPZ tests can run.
 
-A deployed adapter must use the same project timeout, turn, file, output,
-command, and gateway settings. It also requires an immutable executor image
-digest, explicit execution namespace, tokenless workload ServiceAccount, and
-non-empty secure RuntimeClass. Public repositories only are supported because
-no Git credential enters the Sandbox.
+The Helm values under `agentSandbox` must exactly match the project timeout,
+turn, file, output, command, and gateway settings. Deployed configurations
+require an immutable executor image digest, explicit execution namespace,
+tokenless workload ServiceAccount, and non-empty secure RuntimeClass. Public
+repositories only are supported because no Git credential enters the Sandbox.
 
-Production constructors request `RuntimeDefault` AppArmor and seccomp at both
-Pod and container scope. There is no project, environment, or execution-request
-field that can disable AppArmor or select `Unconfined`. Kubernetes chart wiring,
-RBAC, admission, and lifecycle evaluation are delivered in a separate stacked
-integration change.
+Production Sandboxes request `RuntimeDefault` AppArmor and seccomp at both Pod
+and container scope. There is no project, Helm, environment, or request field
+that can disable AppArmor or select `Unconfined`. The Docker Desktop kind
+evaluation omits AppArmor only through an internal Go test capability and does
+not validate AppArmor enforcement or hostile-code isolation.
+
+See [Agent Sandbox Fix Runtime Spike](agent-sandbox-fix-runtime-spike.md) and
+[Kubernetes operator reference](kubernetes-reference.md#agent-sandbox-fix-runtime).

@@ -149,10 +149,12 @@ export VERSION="vX.Y.Z"
 make image IMAGE="$IMAGE" VERSION="$VERSION"
 make analyzer-image IMAGE="$IMAGE" VERSION="$VERSION"
 make fixer-image IMAGE="$IMAGE" VERSION="$VERSION"
+make agent-sandbox-fix-executor-image IMAGE="$IMAGE" VERSION="$VERSION"
 
 docker push "${IMAGE}:${VERSION}"
 docker push "${IMAGE}/analyzer:${VERSION}"
 docker push "${IMAGE}/fixer:${VERSION}"
+docker push "${IMAGE}/agent-sandbox-fix-executor:${VERSION}"
 ```
 
 Pushes to `main` and `vX.Y.Z` tags in the engine repository publish images
@@ -160,8 +162,10 @@ through `.github/workflows/image.yml`. A release tag also publishes the Helm
 chart and attaches the packaged chart to the GitHub release. See
 [Releasing](releasing.md).
 
-Do not use a mutable tag for a production rollback target. Record the chart
-version and resolved image references before changing a live release.
+Do not use a mutable tag for a production rollback target. Agent Sandbox
+consumers must resolve the executor tag to its OCI digest and configure
+`agentSandbox.fixRuntime.image.digest`; a tag alone is rejected. Record the
+chart version and resolved image references before changing a live release.
 
 ## Upgrade behavior
 
@@ -488,3 +492,46 @@ ledgers.
 - [Project configuration](project-configuration.md)
 - [Troubleshooting](troubleshooting.md)
 - [Releasing](releasing.md)
+
+## Agent Sandbox Fix runtime
+
+The `agentSandbox.fixRuntime` chart section is disabled by default. It wires the
+dashboard to a consumer-installed Kubernetes SIG Agent Sandbox controller but
+never installs that controller or its CRD.
+
+When enabled, the chart can create:
+
+- one dashboard client ServiceAccount in the release namespace;
+- one namespace-scoped Role and RoleBinding in the consumer-owned execution
+  namespace;
+- one tokenless workload ServiceAccount in that namespace; and
+- one fail-closed ValidatingAdmissionPolicy and binding for dashboard-created
+  v1beta1 Sandboxes.
+
+The Role permits only Sandbox create/get/list/watch/delete, Pod
+get/list/watch, and Pod-log get. It grants no Secret, direct Pod creation, exec,
+attach, port-forward, Service, PVC, node, or cluster-admin access.
+
+The admission policy pins the requester, namespace, content-addressed identity,
+immutable executor image, RuntimeClass, workload ServiceAccount, Pod and
+container security contexts, `RuntimeDefault` AppArmor and seccomp, resource
+bounds, request-only environment, emptyDir-only storage, disabled Service/PVC
+behavior, and Delete policy and Pod deadline. AppArmor has no chart override and cannot be
+set to `Unconfined`.
+The request payload remains opaque base64 data to Kubernetes admission, so the
+engine separately validates its version, immutable SHA, gateway, commands,
+bounds, and result contract before creation and after retrieval.
+
+A deployed configuration requires a consumer-operated HTTPS model gateway, a
+secure Kata, gVisor, or equivalent RuntimeClass, and nodes that support the
+requested AppArmor policy. Internal service certificates must chain to a CA in
+the immutable executor image. Alternatively, a privately resolved public FQDN
+with a publicly trusted certificate can be explicitly acknowledged with
+`modelGateway.publicCAPrivateDNS: true`. Standard `runc` is supported only by
+the disposable local
+lifecycle evaluation and is not a hostile-code boundary. Docker Desktop kind
+omits AppArmor through test-only code in both the canonical preflight and
+Sandbox shapes; it does not validate production AppArmor enforcement.
+The consumer separately owns the execution namespace, Agent Sandbox release,
+RuntimeClass, node pools, model gateway, image publication, registry access,
+egress enforcement, quotas, LimitRanges, and NetworkPolicies.

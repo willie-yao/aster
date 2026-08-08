@@ -302,4 +302,123 @@ persistence:
 VALUES
 expect_fail invalid-access-mode "$tmp/invalid-access-mode.yaml" /persistence/accessMode
 
+
+cat > "$tmp/agent-sandbox.yaml" <<'VALUES'
+project:
+  config: |
+    id: schema-test
+    name: Schema Test
+    testgrid:
+      dashboard: schema-test
+    storage:
+      provider: local
+      base: /tmp
+    branding:
+      title: Schema Test
+      base_path: /
+      site_url: https://schema.example.test
+      source_repo:
+        owner: octocat
+        name: Hello-World
+    ai:
+      fix_prs:
+        enabled: true
+        author_name: Fixture
+        author_email: fixture@example.test
+        max_files: 3
+        critique_retries: 0
+        agent_runtime:
+          type: agent-sandbox
+          max_turns: 30
+          allow_bash: false
+          timeout: 10m
+          output_limit_bytes: 524288
+          allowed_commands:
+            - argv: [git, diff, --cached, --check]
+              timeout: 30s
+          model_gateway:
+            endpoint: https://fake-gateway.fix-eval.svc.cluster.local/v1
+            model: fixture-model
+            protocol_version: openai-chat-completions-v1
+  systemPrompt: schema test prompt
+agentSandbox:
+  fixRuntime:
+    enabled: true
+    namespace: fix-eval
+    runtimeClassName: kata-vm-isolation
+    image:
+      repository: local/fixexecutor
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      pullPolicy: IfNotPresent
+    workloadServiceAccount:
+      create: true
+      name: fix-workload
+    modelGateway:
+      endpoint: https://fake-gateway.fix-eval.svc.cluster.local/v1
+      model: fixture-model
+      protocolVersion: openai-chat-completions-v1
+      publicCAPrivateDNS: false
+    maxSteps: 30
+    maxFiles: 3
+    timeout: 10m
+    outputLimitBytes: 524288
+    allowedCommands:
+      - argv: [git, diff, --cached, --check]
+        timeout: 30s
+    pollInterval: 250ms
+    resources:
+      requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
+      limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 256Mi}
+  rbac:
+    create: true
+    clientServiceAccountName: ""
+VALUES
+expect_pass agent-sandbox "$tmp/agent-sandbox.yaml"
+
+cat > "$tmp/invalid-agent-sandbox-legacy-command.yaml" <<'VALUES'
+agentSandbox:
+  fixRuntime:
+    allowedCommands:
+      - git diff --cached --check
+VALUES
+expect_fail invalid-agent-sandbox-legacy-command "$tmp/invalid-agent-sandbox-legacy-command.yaml" /agentSandbox/fixRuntime/allowedCommands/0
+
+cat > "$tmp/invalid-agent-sandbox-command-timeout.yaml" <<'VALUES'
+agentSandbox:
+  fixRuntime:
+    allowedCommands:
+      - argv: [git, diff, --cached, --check]
+        timeout: 999999999999999999999999999999s
+VALUES
+expect_fail invalid-agent-sandbox-command-timeout "$tmp/invalid-agent-sandbox-command-timeout.yaml" /agentSandbox/fixRuntime/allowedCommands/0/timeout
+
+cat > "$tmp/invalid-agent-sandbox-output.yaml" <<'VALUES'
+agentSandbox:
+  fixRuntime:
+    outputLimitBytes: 1024
+VALUES
+expect_fail invalid-agent-sandbox-output "$tmp/invalid-agent-sandbox-output.yaml" /agentSandbox/fixRuntime/outputLimitBytes
+
+cat > "$tmp/invalid-agent-sandbox-pull.yaml" <<'VALUES'
+agentSandbox:
+  fixRuntime:
+    image:
+      pullPolicy: Always
+VALUES
+expect_fail invalid-agent-sandbox-pull "$tmp/invalid-agent-sandbox-pull.yaml" /agentSandbox/fixRuntime/image/pullPolicy
+
+cat > "$tmp/invalid-agent-sandbox-apparmor.yaml" <<'VALUES'
+agentSandbox:
+  fixRuntime:
+    appArmorProfile: Unconfined
+VALUES
+expect_fail invalid-agent-sandbox-apparmor "$tmp/invalid-agent-sandbox-apparmor.yaml" /agentSandbox/fixRuntime
+
+cat > "$tmp/invalid-agent-sandbox-key.yaml" <<'VALUES'
+agentSandbox:
+  controller:
+    install: true
+VALUES
+expect_fail invalid-agent-sandbox-key "$tmp/invalid-agent-sandbox-key.yaml" /agentSandbox
+
 echo 'Helm values schema checks passed.'

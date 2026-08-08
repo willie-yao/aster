@@ -275,10 +275,11 @@ owns and attaches the real provider credential outside the Sandbox process.
 
 OpenCode 1.18.2 supports this boundary without an API key in its executor
 configuration. The executor omits `apiKey` and credential headers entirely.
-Deployed runtime configuration requires an internal HTTPS service URL. The
-engine does not install or configure the gateway. Local tests use a deterministic streaming
+Production Helm configuration requires an internal HTTPS service URL and does
+not install or configure the gateway. Local tests use a deterministic streaming
 record/replay gateway that rejects `Authorization`, `api-key`, and `x-api-key`
 headers and makes no provider request.
+
 
 ## Agent Sandbox model gateway TLS
 
