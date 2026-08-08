@@ -9,6 +9,7 @@ import "./spaRedirect.test.js";
 import "./search.test.js";
 import "./fetchStatus.test.js";
 import "./testResults.test.js";
+import "./resultsPerformance.test.js";
 import "./buildFailures.test.js";
 import "./actionRequests.test.js";
 import "./actionEligibility.test.js";

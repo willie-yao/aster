@@ -130,7 +130,7 @@ test("job detail uses the approved shared detail composition", () => {
   assert.doesNotMatch(testTable, /<Panel/);
   assert.match(analysis, /appearance\?: "default" \| "detail"/);
 
-  assert.match(ledger, /failed: "Failed"[\s\S]*passed: "Passed"[\s\S]*all: "All executed"/);
+  assert.match(ledger, /failed: "Failed"[\s\S]*passed: "Passed"[\s\S]*all: "All statuses"/);
   assert.doesNotMatch(ledger, /Skipped"/);
   assert.doesNotMatch(page, /virtual/i);
 });

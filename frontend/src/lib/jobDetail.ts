@@ -12,12 +12,29 @@ export function normalizeResultLedgerFilter(
   return value === "passed" || value === "all" ? value : "failed";
 }
 
-export function executedResultTests(testCases: TestCase[]): TestCase[] {
-  return junitTestCases(testCases).filter(
-    (testCase) =>
-      testCase.status !== "skipped" &&
-      (testCase.status === "failed" || !setupPatterns.test(testCase.name)),
+export interface ResultTestSummary {
+  executed: TestCase[];
+  visible: TestCase[];
+  hiddenSuccessfulSetupTeardown: number;
+}
+
+export function summarizeResultTests(testCases: TestCase[]): ResultTestSummary {
+  const executed = junitTestCases(testCases).filter(
+    (testCase) => testCase.status !== "skipped",
   );
+  const visible = executed.filter(
+    (testCase) =>
+      testCase.status === "failed" || !setupPatterns.test(testCase.name),
+  );
+  return {
+    executed,
+    visible,
+    hiddenSuccessfulSetupTeardown: executed.length - visible.length,
+  };
+}
+
+export function executedResultTests(testCases: TestCase[]): TestCase[] {
+  return summarizeResultTests(testCases).visible;
 }
 
 export function filterResultTests(
@@ -42,6 +59,17 @@ export function filterResultTests(
   });
 }
 
+const resultStatusOrder: Record<TestCase["status"], number> = {
+  failed: 0,
+  passed: 1,
+  skipped: 2,
+};
+
+export function sortResultTests(testCases: TestCase[]): TestCase[] {
+  return [...testCases].sort(
+    (a, b) => resultStatusOrder[a.status] - resultStatusOrder[b.status],
+  );
+}
 
 export function hasInlineTestEvidence(testCase: TestCase): boolean {
   return Boolean(

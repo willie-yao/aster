@@ -42,8 +42,11 @@ import {
   executedResultTests,
   filterResultTests,
   normalizeResultLedgerFilter,
+  sortResultTests,
+  summarizeResultTests,
   withJobDetailParam,
 } from "../lib/jobDetail";
+import { initialProgressiveCount, nextProgressiveCount } from "../lib/progressive";
 
 function passRateColor(
   rate: number,
@@ -105,10 +108,11 @@ export function JobDetailPage() {
     () => runs.find((run) => run.build_id === selectedBuildId),
     [runs, selectedBuildId],
   );
-  const selectedTestCases = useMemo(
-    () => executedResultTests(selectedRun?.test_cases ?? []),
+  const resultSummary = useMemo(
+    () => summarizeResultTests(selectedRun?.test_cases ?? []),
     [selectedRun],
   );
+  const selectedTestCases = resultSummary.visible;
   const buildFailure = findBuildFailure(selectedRun?.test_cases ?? []);
   const hasJUnitCases = runs.some(
     (run) => executedResultTests(run.test_cases).length > 0,
@@ -137,9 +141,31 @@ export function JobDetailPage() {
   const selectedFilter = normalizeResultLedgerFilter(searchParams.get("results"));
   const resultQuery = searchParams.get("test") ?? "";
   const visibleTestCases = useMemo(
-    () => filterResultTests(selectedTestCases, selectedFilter, resultQuery),
+    () =>
+      sortResultTests(
+        filterResultTests(selectedTestCases, selectedFilter, resultQuery),
+      ),
     [resultQuery, selectedFilter, selectedTestCases],
   );
+  const resultWindowKey = `${selectedBuildId ?? ""}:${selectedFilter}:${resultQuery}`;
+  const resultBatchSize = 50;
+  const [resultWindow, setResultWindow] = useState({ key: "", count: resultBatchSize });
+  const renderedResultCount =
+    resultWindow.key === resultWindowKey
+      ? Math.min(visibleTestCases.length, resultWindow.count)
+      : initialProgressiveCount(visibleTestCases.length, resultBatchSize);
+  const renderedTestCases = visibleTestCases.slice(0, renderedResultCount);
+
+  function showMoreResults() {
+    setResultWindow({
+      key: resultWindowKey,
+      count: nextProgressiveCount(
+        renderedResultCount,
+        visibleTestCases.length,
+        resultBatchSize,
+      ),
+    });
+  }
 
   function updateSearchParam(
     name: string,
@@ -490,21 +516,33 @@ export function JobDetailPage() {
             />
           )}
 
-          {selectedRun && selectedTestCases.length > 0 ? (
+          {selectedRun && resultSummary.executed.length > 0 ? (
             <ResultLedger
               filter={selectedFilter}
               query={resultQuery}
-              executedCount={selectedRun.tests_passed + selectedRun.tests_failed}
+              executedCount={resultSummary.executed.length}
               skippedCount={selectedRun.tests_skipped}
-              shownCount={visibleTestCases.length}
+              hiddenSuccessfulSetupTeardown={resultSummary.hiddenSuccessfulSetupTeardown}
+              matchedCount={visibleTestCases.length}
+              renderedCount={renderedResultCount}
               onFilterChange={(filter) => updateSearchParam("results", filter)}
               onQueryChange={(query) =>
                 updateSearchParam("test", query || null, { replace: true })
               }
+              onShowMore={
+                renderedResultCount < visibleTestCases.length
+                  ? showMoreResults
+                  : undefined
+              }
+              showMoreCount={Math.min(
+                resultBatchSize,
+                visibleTestCases.length - renderedResultCount,
+              )}
             >
               {visibleTestCases.length > 0 ? (
                 <TestCaseTable
-                  testCases={visibleTestCases}
+                  key={resultWindowKey}
+                  testCases={renderedTestCases}
                   jobID={canonicalJobID}
                   buildId={selectedRun.build_id}
                   buildLogUrl={selectedRun.build_log_url}

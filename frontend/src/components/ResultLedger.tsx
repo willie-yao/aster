@@ -1,4 +1,5 @@
 import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
 import ButtonBase from "@mui/material/ButtonBase";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
@@ -12,7 +13,7 @@ export type { ResultLedgerFilter } from "../lib/jobDetail";
 const filterLabels: Record<ResultLedgerFilter, string> = {
   failed: "Failed",
   passed: "Passed",
-  all: "All executed",
+  all: "All statuses",
 };
 
 export function ResultLedger({
@@ -20,26 +21,45 @@ export function ResultLedger({
   query,
   executedCount,
   skippedCount,
-  shownCount,
+  hiddenSuccessfulSetupTeardown,
+  matchedCount,
+  renderedCount,
   onFilterChange,
   onQueryChange,
+  onShowMore,
+  showMoreCount,
   children,
 }: {
   filter: ResultLedgerFilter;
   query: string;
   executedCount: number;
   skippedCount: number;
-  shownCount: number;
+  hiddenSuccessfulSetupTeardown: number;
+  matchedCount: number;
+  renderedCount: number;
   onFilterChange: (filter: ResultLedgerFilter) => void;
   onQueryChange: (query: string) => void;
+  onShowMore?: () => void;
+  showMoreCount?: number;
   children: ReactNode;
 }) {
+  const metadata = [
+    `${executedCount.toLocaleString()} executed`,
+    hiddenSuccessfulSetupTeardown > 0
+      ? `${hiddenSuccessfulSetupTeardown.toLocaleString()} successful setup/teardown hidden`
+      : null,
+    skippedCount > 0 ? `${skippedCount.toLocaleString()} skipped hidden` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const shownLabel =
+    renderedCount < matchedCount
+      ? `${renderedCount.toLocaleString()} of ${matchedCount.toLocaleString()} matching shown`
+      : `${matchedCount.toLocaleString()} matched`;
+
   return (
     <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
-      <DetailSectionBand
-        title="Test results"
-        metadata={`${executedCount.toLocaleString()} executed · ${skippedCount.toLocaleString()} skipped not shown`}
-      />
+      <DetailSectionBand title="Test results" metadata={metadata} />
       <Box
         sx={{
           minHeight: 58,
@@ -113,13 +133,21 @@ export function ResultLedger({
             );
           })}
         </Box>
-        <Typography
-          component="div"
-          color="text.secondary"
-          sx={{ ...overviewTypography.data, whiteSpace: "nowrap" }}
-        >
-          {shownCount.toLocaleString()} shown
-        </Typography>
+        <Box sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 1 }}>
+          <Typography
+            component="div"
+            role="status"
+            color="text.secondary"
+            sx={{ ...overviewTypography.data, whiteSpace: "nowrap" }}
+          >
+            {shownLabel}
+          </Typography>
+          {onShowMore && (
+            <Button size="small" variant="outlined" onClick={onShowMore}>
+              Show {showMoreCount?.toLocaleString() ?? "more"} more
+            </Button>
+          )}
+        </Box>
       </Box>
       {children}
       <Typography
@@ -127,7 +155,7 @@ export function ResultLedger({
         color="text.secondary"
         sx={{ m: 0, px: 1.5, py: 1, borderTop: "1px solid", borderColor: "divider", ...overviewTypography.description }}
       >
-        Skipped tests are summarized above and are not included in this ledger.
+        Skipped tests and successful setup/teardown cases are summarized above and are not included in this ledger.
       </Typography>
     </Box>
   );
