@@ -772,6 +772,36 @@ func TestEffectiveFixPRs_AgentRuntimeDefaults(t *testing.T) {
 	}
 }
 
+func TestEffectiveFixPRsPreservesAgentSandboxCommands(t *testing.T) {
+	allowBash := false
+	config := &Config{AI: &AI{FixPRs: &FixPRs{AgentRuntime: &FixAgentRuntime{
+		Type: "agent-sandbox", MaxTurns: 30, AllowBash: &allowBash, Timeout: "30m",
+		AllowedCommands: []FixAgentCommand{
+			{Argv: []string{"go", "test", "./...", "-run", "^$"}, Timeout: "15m"},
+			{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "1m"},
+		},
+	}}}}
+
+	effective := config.EffectiveFixPRs().AgentRuntime
+	commands, err := effective.RuntimeCommands(effective.ParsedTimeout())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 2 || commands[0].TimeoutSeconds != 15*60 || commands[1].TimeoutSeconds != 60 {
+		t.Fatalf("commands = %+v", commands)
+	}
+	if got := commands[0].Argv; len(got) != 5 || got[3] != "-run" || got[4] != "^$" {
+		t.Fatalf("argv = %v", got)
+	}
+	if original := config.AI.FixPRs.AgentRuntime.AllowedCommands[0]; original.Timeout != "15m" || original.Argv[0] != "go" {
+		t.Fatalf("source config mutated: %+v", original)
+	}
+	effective.AllowedCommands[0].Argv[0] = "changed"
+	if got := config.AI.FixPRs.AgentRuntime.AllowedCommands[0].Argv[0]; got != "go" {
+		t.Fatalf("effective argv aliases source config: %q", got)
+	}
+}
+
 func TestEffectiveFixPRs_NilAgentRuntimeDefaultsToOpencode(t *testing.T) {
 	// A nil agent_runtime block means "opencode with defaults": the coding-agent
 	// generator is the only fix path, so the effective config always resolves.
