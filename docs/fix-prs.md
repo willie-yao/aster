@@ -113,6 +113,9 @@ ai:
     #     name: test-infra
     #     path_prefixes:
     #       - config/jobs/kubernetes-sigs/cluster-api-provider-azure/
+    #     allowed_commands:
+    #       - argv: [git, diff, --cached, --check]
+    #         timeout: 1m
     #     fork: true
     author_name: "Jane Maintainer"     # required: CLA-signed identity
     author_email: "jane@example.com"   # required: must match that GitHub account
@@ -143,6 +146,9 @@ prefixes. Prow environment changes additionally pin the exact
 `kubernetes/test-infra` discovery revision, job, container, variable name, and
 replacement value. The engine parses the YAML and fails closed on duplicate
 jobs, duplicate variables, `valueFrom`, or ambiguous containers.
+Agent Sandbox destinations also require their own exact `allowed_commands`;
+validators from the default repository are never reused implicitly for a
+different repository.
 
 ### The LLM review (`critique_retries`)
 

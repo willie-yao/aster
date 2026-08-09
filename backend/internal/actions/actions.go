@@ -715,6 +715,11 @@ func (s *Service) buildFixManagerFor(ctx context.Context, userToken string, dest
 		return nil, err
 	}
 	commands, err := ar.RuntimeCommands(ar.ParsedTimeout())
+	if len(destination.AllowedCommands) > 0 {
+		copyRuntime := *ar
+		copyRuntime.AllowedCommands = destination.AllowedCommands
+		commands, err = copyRuntime.RuntimeCommands(copyRuntime.ParsedTimeout())
+	}
 	if err != nil {
 		return nil, fmt.Errorf("agent command policy: %w", err)
 	}
@@ -1296,12 +1301,13 @@ func fixTargetFingerprint(eff project.FixPRs) string {
 
 func fixDestinationFingerprint(eff project.FixPRs, destination project.FixDestination) string {
 	payload, _ := json.Marshal(struct {
-		Repository  string   `json:"repository"`
-		Fork        bool     `json:"fork"`
-		AuthorName  string   `json:"author_name"`
-		AuthorEmail string   `json:"author_email"`
-		Labels      []string `json:"labels"`
-	}{destination.Repo.Owner + "/" + destination.Repo.Name, destination.Fork, eff.AuthorName, eff.AuthorEmail, eff.Labels})
+		Repository  string                    `json:"repository"`
+		Fork        bool                      `json:"fork"`
+		AuthorName  string                    `json:"author_name"`
+		AuthorEmail string                    `json:"author_email"`
+		Labels      []string                  `json:"labels"`
+		Commands    []project.FixAgentCommand `json:"commands,omitempty"`
+	}{destination.Repo.Owner + "/" + destination.Repo.Name, destination.Fork, eff.AuthorName, eff.AuthorEmail, eff.Labels, destination.AllowedCommands})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
 }

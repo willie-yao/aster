@@ -16,6 +16,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -667,16 +668,18 @@ type FixPRs struct {
 
 // FixRepository is one explicitly allowlisted cross-repository Fix PR target.
 type FixRepository struct {
-	Owner        string   `yaml:"owner" json:"owner"`
-	Name         string   `yaml:"name" json:"name"`
-	PathPrefixes []string `yaml:"path_prefixes" json:"path_prefixes"`
-	Fork         *bool    `yaml:"fork,omitempty" json:"-"`
+	Owner           string            `yaml:"owner" json:"owner"`
+	Name            string            `yaml:"name" json:"name"`
+	PathPrefixes    []string          `yaml:"path_prefixes" json:"path_prefixes"`
+	AllowedCommands []FixAgentCommand `yaml:"allowed_commands,omitempty" json:"-"`
+	Fork            *bool             `yaml:"fork,omitempty" json:"-"`
 }
 
 // FixDestination is the resolved repository and branch-routing policy.
 type FixDestination struct {
-	Repo SourceRepo
-	Fork bool
+	Repo            SourceRepo
+	Fork            bool
+	AllowedCommands []FixAgentCommand
 }
 
 // FixAgentRuntime configures the coding-agent generator for fix PRs.
@@ -894,6 +897,11 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 	out.AllowedRepositories = append([]FixRepository(nil), out.AllowedRepositories...)
 	for index := range out.AllowedRepositories {
 		out.AllowedRepositories[index].PathPrefixes = append([]string(nil), out.AllowedRepositories[index].PathPrefixes...)
+		commands := make([]FixAgentCommand, len(out.AllowedRepositories[index].AllowedCommands))
+		for commandIndex, command := range out.AllowedRepositories[index].AllowedCommands {
+			commands[commandIndex] = FixAgentCommand{Argv: append([]string(nil), command.Argv...), Timeout: command.Timeout}
+		}
+		out.AllowedRepositories[index].AllowedCommands = commands
 	}
 	commands := make([]FixAgentCommand, len(out.AgentRuntime.AllowedCommands))
 	for index, command := range out.AgentRuntime.AllowedCommands {
@@ -968,7 +976,7 @@ func (c *Config) ResolveFixDestination(repository, targetPath string) (FixDestin
 		if allowed.Fork != nil {
 			fork = *allowed.Fork
 		}
-		return FixDestination{Repo: SourceRepo{Owner: allowed.Owner, Name: allowed.Name}, Fork: fork}, nil
+		return FixDestination{Repo: SourceRepo{Owner: allowed.Owner, Name: allowed.Name}, Fork: fork, AllowedCommands: allowed.AllowedCommands}, nil
 	}
 	return FixDestination{}, fmt.Errorf("target repository %q is not allowlisted", requested)
 }
@@ -1526,6 +1534,20 @@ func (c *Config) Validate() error {
 				clean := path.Clean(strings.TrimSpace(prefix))
 				if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || !strings.HasSuffix(prefix, "/") || clean+"/" != prefix {
 					return fmt.Errorf("ai.fix_prs.allowed_repositories[%d].path_prefixes contains invalid prefix %q", index, prefix)
+				}
+			}
+			if f.AgentRuntime != nil && strings.TrimSpace(f.AgentRuntime.Type) == "agent-sandbox" {
+				if len(repo.AllowedCommands) == 0 {
+					return fmt.Errorf("ai.fix_prs.allowed_repositories[%d].allowed_commands is required for agent-sandbox", index)
+				}
+				copyRuntime := *f.AgentRuntime
+				copyRuntime.AllowedCommands = repo.AllowedCommands
+				commands, err := copyRuntime.RuntimeCommands(copyRuntime.ParsedTimeout())
+				if err != nil {
+					return fmt.Errorf("ai.fix_prs.allowed_repositories[%d].allowed_commands: %w", index, err)
+				}
+				if len(commands) == 0 || !slices.Equal(commands[len(commands)-1].Argv, []string{"git", "diff", "--cached", "--check"}) {
+					return fmt.Errorf("ai.fix_prs.allowed_repositories[%d].allowed_commands must end with argv [git diff --cached --check]", index)
 				}
 			}
 		}
