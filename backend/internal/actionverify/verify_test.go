@@ -430,8 +430,7 @@ func TestVerifyProwJobEnvironment(t *testing.T) {
 - name: periodic-capz
   spec:
     containers:
-    - name: test
-      env:
+    - env:
       - name: AKS_MGMT_KUBERNETES_VERSION
         value: v1.33.2
 `
@@ -474,6 +473,13 @@ func TestVerifyProwJobEnvironmentFailsClosed(t *testing.T) {
     containers:
     - name: test
       env: [{name: VERSION, value: v1}, {name: VERSION, value: v1}]
+`,
+		"multiple unnamed containers": `periodics:
+- name: periodic-capz
+  spec:
+    containers:
+    - env: [{name: VERSION, value: v1}]
+    - env: [{name: VERSION, value: v1}]
 `,
 		"value from": `periodics:
 - name: periodic-capz

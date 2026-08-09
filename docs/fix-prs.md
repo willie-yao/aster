@@ -145,7 +145,10 @@ is listed in `allowed_repositories` and every changed path is under one of its
 prefixes. Prow environment changes additionally pin the exact
 `kubernetes/test-infra` discovery revision, job, container, variable name, and
 replacement value. The engine parses the YAML and fails closed on duplicate
-jobs, duplicate variables, `valueFrom`, or ambiguous containers.
+jobs, duplicate variables, `valueFrom`, or ambiguous containers. Prow assigns
+the effective name `test` to a job with one container, including when the source
+YAML omits the container name, so remediation targets use `container: test` for
+that common form.
 Agent Sandbox destinations also require their own exact `allowed_commands`;
 validators from the default repository are never reused implicitly for a
 different repository.
