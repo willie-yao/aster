@@ -1879,3 +1879,20 @@ func TestFixDestinationForPatternAllowsPinnedTestInfraTarget(t *testing.T) {
 		t.Fatal("path outside allowlist was accepted")
 	}
 }
+
+func TestValidateFixFilesEnforcesDestinationPrefixes(t *testing.T) {
+	cfg := &project.Config{Branding: project.Branding{SourceRepo: project.SourceRepo{Owner: "example", Name: "source"}}, AI: &project.AI{FixPRs: &project.FixPRs{
+		AllowedRepositories: []project.FixRepository{{Owner: "kubernetes", Name: "test-infra", PathPrefixes: []string{"config/jobs/capz/"}}},
+	}}}
+	service := NewService(cfg, t.TempDir(), AIConfig{})
+	destination, err := cfg.ResolveFixDestination("kubernetes/test-infra", "config/jobs/capz/periodics.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.validateFixFiles(destination, map[string]string{"config/jobs/capz/periodics.yaml": "content"}); err != nil {
+		t.Fatalf("allowed files rejected: %v", err)
+	}
+	if err := service.validateFixFiles(destination, map[string]string{"config/jobs/other/periodics.yaml": "content"}); err == nil {
+		t.Fatal("generated file outside prefix was accepted")
+	}
+}

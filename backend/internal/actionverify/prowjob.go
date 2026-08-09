@@ -57,10 +57,10 @@ func verifyJobEnvironment(ctx context.Context, reader Reader, archive Archive, t
 	if value == nil || value.Kind != yaml.ScalarNode {
 		return inconclusive(fmt.Sprintf("environment variable %s has no scalar value in container %s", target.Name, target.Container)), nil
 	}
-	if scalarValue(value) == target.Value {
+	if scalarExactValue(value) == target.Value {
 		return Result{State: StateAlreadyPresent, Reason: fmt.Sprintf("Prow job %s already sets %s=%s in container %s", target.Job, target.Name, target.Value, target.Container)}, nil
 	}
-	return unresolvedJobEnvironment(target, fmt.Sprintf("is %q", scalarValue(value))), nil
+	return unresolvedJobEnvironment(target, fmt.Sprintf("is %q", scalarExactValue(value))), nil
 }
 
 func unresolvedJobEnvironment(target models.RemediationTarget, current string) Result {
@@ -135,6 +135,14 @@ func scalarValue(node *yaml.Node) string {
 		return ""
 	}
 	return strings.TrimSpace(node.Value)
+}
+
+func scalarExactValue(node *yaml.Node) string {
+	node = dereferenceYAML(node)
+	if node == nil || node.Kind != yaml.ScalarNode {
+		return ""
+	}
+	return node.Value
 }
 func dereferenceYAML(node *yaml.Node) *yaml.Node {
 	for node != nil && node.Kind == yaml.AliasNode {

@@ -515,3 +515,26 @@ func TestVerifyProwJobEnvironmentDoesNotDownloadRepositoryArchive(t *testing.T) 
 		t.Fatalf("result = %+v", result)
 	}
 }
+
+func TestVerifyProwJobEnvironmentPreservesExactScalarWhitespace(t *testing.T) {
+	const file = "config/jobs/example/periodics.yaml"
+	config := `periodics:
+- name: periodic-capz
+  spec:
+    containers:
+    - name: test
+      env:
+      - name: VERSION
+        value: " v2 "
+`
+	target := models.RemediationTarget{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: strings.Repeat("a", 40), Path: file, Job: "periodic-capz", Container: "test", Name: "VERSION", Value: "v2"}
+	result := verify(t, fakeReader{archive: archive(map[string]string{file: config})}, Input{Targets: []models.RemediationTarget{target}})
+	if result.State != StateUnresolved {
+		t.Fatalf("trimmed value was treated as exact: %+v", result)
+	}
+	target.Value = " v2 "
+	result = verify(t, fakeReader{archive: archive(map[string]string{file: config})}, Input{Targets: []models.RemediationTarget{target}})
+	if result.State != StateAlreadyPresent {
+		t.Fatalf("exact spaced value was not recognized: %+v", result)
+	}
+}

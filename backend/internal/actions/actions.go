@@ -505,7 +505,27 @@ func (s *Service) fixDestinationForEntry(entry *previewEntry) (project.FixDestin
 		return s.cfg.ResolveFixDestination("", "")
 	}
 	destination, _, err := s.fixDestinationForPattern(entry.fix.Snapshot().Pattern)
-	return destination, err
+	if err != nil {
+		return project.FixDestination{}, err
+	}
+	if err := s.validateFixFiles(destination, entry.fix.Snapshot().Files); err != nil {
+		return project.FixDestination{}, err
+	}
+	return destination, nil
+}
+
+func (s *Service) validateFixFiles(destination project.FixDestination, files map[string]string) error {
+	repository := destination.Repo.Owner + "/" + destination.Repo.Name
+	for file := range files {
+		resolved, err := s.cfg.ResolveFixDestination(repository, file)
+		if err != nil {
+			return fmt.Errorf("generated file %q is not allowed for %s: %w", file, repository, err)
+		}
+		if resolved.Repo != destination.Repo || resolved.Fork != destination.Fork {
+			return fmt.Errorf("generated file %q changed the selected fix destination", file)
+		}
+	}
+	return nil
 }
 
 func (s *Service) verifyOptionalRemediation(ctx context.Context, subject *ActionSubject, proposal string) error {
@@ -868,6 +888,10 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if len(sourceFiles) == 0 {
 		return PreviewResult{}, nil, fmt.Errorf("%w: repository source investigation did not identify a verified local path; create an issue or investigate source before proposing a fix", ErrPreviewRejected)
 	}
+	destination, err := s.cfg.ResolveFixDestination("", "")
+	if err != nil {
+		return PreviewResult{}, nil, err
+	}
 	mgr, err := s.buildFixManager(ctx, userToken)
 	if err != nil {
 		return PreviewResult{}, nil, err
@@ -879,6 +903,9 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	}, instruction)
 	if err != nil {
 		return PreviewResult{}, nil, safeFixPreviewError(err)
+	}
+	if err := s.validateFixFiles(destination, gf.Preview.Files); err != nil {
+		return PreviewResult{}, nil, fmt.Errorf("%w: %v", ErrPreviewRejected, err)
 	}
 	if err := s.verifyOptionalRemediation(ctx, subject, gf.Title+"\n"+gf.Description); err != nil {
 		return PreviewResult{}, nil, err
@@ -950,6 +977,9 @@ func (s *Service) generateFixPreviewForPattern(
 	}
 	if err != nil {
 		return PreviewResult{}, nil, safeFixPreviewError(err)
+	}
+	if err := s.validateFixFiles(destination, gf.Preview.Files); err != nil {
+		return PreviewResult{}, nil, fmt.Errorf("%w: %v", ErrPreviewRejected, err)
 	}
 	if err := s.verifyOptionalRemediation(ctx, subject, gf.Title+"\n"+gf.Description); err != nil {
 		return PreviewResult{}, nil, err
