@@ -1896,3 +1896,17 @@ func TestValidateFixFilesEnforcesDestinationPrefixes(t *testing.T) {
 		t.Fatal("generated file outside prefix was accepted")
 	}
 }
+
+func TestFixStateFilePartitionsCrossRepositoryState(t *testing.T) {
+	eff := project.FixPRs{Repo: &project.SourceRepo{Owner: "example", Name: "source"}}
+	defaultPath := fixStateFile("/data", eff, project.FixDestination{Repo: *eff.Repo})
+	if defaultPath != "/data/fix_pr_state.json" {
+		t.Fatalf("default path = %q", defaultPath)
+	}
+	other := project.FixDestination{Repo: project.SourceRepo{Owner: "kubernetes", Name: "test-infra"}}
+	first := fixStateFile("/data", eff, other)
+	second := fixStateFile("/data", eff, other)
+	if first == defaultPath || first != second || !strings.Contains(first, "/.fix-pr-state/") {
+		t.Fatalf("partitioned paths default=%q first=%q second=%q", defaultPath, first, second)
+	}
+}

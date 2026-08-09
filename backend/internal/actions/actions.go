@@ -744,8 +744,16 @@ func (s *Service) buildFixManagerFor(ctx context.Context, userToken string, dest
 		opts.Agent.WorkObserver = s.observeRuntimeWork(opts.Agent.ExecutionID)
 	}
 	mgr := fixpr.NewManager(prClient,
-		filepath.Join(s.dataDir, "fix_pr_state.json"), opts)
+		fixStateFile(s.dataDir, eff, destination), opts)
 	return mgr, nil
+}
+
+func fixStateFile(dataDir string, eff project.FixPRs, destination project.FixDestination) string {
+	if eff.Repo != nil && strings.EqualFold(destination.Repo.Owner, eff.Repo.Owner) && strings.EqualFold(destination.Repo.Name, eff.Repo.Name) {
+		return filepath.Join(dataDir, "fix_pr_state.json")
+	}
+	sum := sha256.Sum256([]byte(strings.ToLower(destination.Repo.Owner + "/" + destination.Repo.Name)))
+	return filepath.Join(dataDir, ".fix-pr-state", hex.EncodeToString(sum[:8])+".json")
 }
 
 func repositoryToken(runtimeType, token string) string {
