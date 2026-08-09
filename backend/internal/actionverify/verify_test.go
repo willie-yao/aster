@@ -567,3 +567,19 @@ periodics:
 		})
 	}
 }
+
+func TestVerifyProwJobEnvironmentRejectsNonStringValue(t *testing.T) {
+	const file = "config/jobs/example/periodics.yaml"
+	config := `periodics:
+- name: periodic-capz
+  spec:
+    containers:
+    - name: test
+      env: [{name: VERSION, value: 123}]
+`
+	target := models.RemediationTarget{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: strings.Repeat("a", 40), Path: file, Job: "periodic-capz", Container: "test", Name: "VERSION", Value: "123"}
+	result := verify(t, fakeReader{archive: archive(map[string]string{file: config})}, Input{Targets: []models.RemediationTarget{target}})
+	if result.State != StateInconclusive {
+		t.Fatalf("result = %+v", result)
+	}
+}

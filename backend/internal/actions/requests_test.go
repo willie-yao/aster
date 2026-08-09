@@ -1282,3 +1282,21 @@ func TestLoadActionRequestsInvalidatesLegacyVerifiedPreview(t *testing.T) {
 		t.Fatalf("legacy view = %+v, %v", view, err)
 	}
 }
+
+func TestReadyRequestMatchesCurrentCrossRepositoryDestination(t *testing.T) {
+	cfg := &project.Config{Branding: project.Branding{SourceRepo: project.SourceRepo{Owner: "example", Name: "source"}}, AI: &project.AI{FixPRs: &project.FixPRs{
+		AllowedRepositories: []project.FixRepository{{Owner: "kubernetes", Name: "test-infra", PathPrefixes: []string{"config/jobs/capz/"}}},
+	}}}
+	service := NewService(cfg, t.TempDir(), AIConfig{})
+	pattern := models.PatternAnalysis{ContentHash: "hash", RemediationTargets: []models.RemediationTarget{{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: strings.Repeat("a", 40), Path: "config/jobs/capz/periodics.yaml", Job: "periodic-capz", Container: "test", Name: "VERSION", Value: "v2"}}}
+	destination, _, err := service.fixDestinationForPattern(pattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eff := cfg.EffectiveFixPRs()
+	request := &actionRequest{ActionRequestView: ActionRequestView{Kind: "propose-fix", PatternHash: pattern.ContentHash}, TargetRepo: "kubernetes/test-infra", TargetConfig: fixDestinationFingerprint(eff, destination)}
+	subject := &ActionSubject{Kind: actionSubjectPattern, ContentHash: pattern.ContentHash, Pattern: &pattern}
+	if !service.readyRequestMatchesCurrent(request, subject) {
+		t.Fatal("equivalent cross-repository ready request was not reused")
+	}
+}

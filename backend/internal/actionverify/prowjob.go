@@ -57,7 +57,7 @@ func verifyJobEnvironment(ctx context.Context, reader Reader, archive Archive, t
 		return inconclusive(fmt.Sprintf("environment variable %s uses valueFrom in container %s", target.Name, target.Container)), nil
 	}
 	value := dereferenceYAML(mappingValue(entry, "value"))
-	if value == nil || value.Kind != yaml.ScalarNode {
+	if value == nil || value.Kind != yaml.ScalarNode || value.ShortTag() != "!!str" {
 		return inconclusive(fmt.Sprintf("environment variable %s has no scalar value in container %s", target.Name, target.Container)), nil
 	}
 	if scalarExactValue(value) == target.Value {
