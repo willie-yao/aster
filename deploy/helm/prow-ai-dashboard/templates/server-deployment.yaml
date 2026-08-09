@@ -143,6 +143,9 @@ spec:
           {{- if and .Values.orka.fixRuntime.enabled $actions }}
           image: {{ include "prow-ai-dashboard.fixerImage" . }}
           imagePullPolicy: {{ .Values.orka.fixRuntime.image.pullPolicy }}
+          {{- else if $agentSandboxActions }}
+          image: {{ include "prow-ai-dashboard.agentSandboxDashboardImage" . }}
+          imagePullPolicy: {{ .Values.agentSandbox.fixRuntime.dashboardImage.pullPolicy }}
           {{- else }}
           image: {{ include "prow-ai-dashboard.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}

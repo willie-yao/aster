@@ -1765,6 +1765,10 @@ agentSandbox:
       repository: local/agent-sandbox-fix-executor
       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       pullPolicy: IfNotPresent
+    dashboardImage:
+      repository: local/remote-fixer
+      tag: sha-abcdef0
+      pullPolicy: IfNotPresent
     workloadServiceAccount:
       create: true
       name: fix-workload
@@ -1793,6 +1797,14 @@ agentSandbox:
   rbac:
     create: true
     clientServiceAccountName: ""
+server:
+  actions:
+    enabled: true
+    mode: proxy
+    admins: [fixture]
+    proxy:
+      header: X-Authenticated-User
+      botToken: test-token
 VALUES
 
 helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" > "$tmp/agent-sandbox-render.yaml"
@@ -1806,6 +1818,30 @@ grep -Fq 'serviceAccountName: test-prow-ai-dashboard-agent-sandbox-client' "$tmp
 grep -Fq 'name: AGENT_SANDBOX_MODEL_GATEWAY_ENDPOINT' "$tmp/agent-sandbox-render.yaml"
 grep -A1 -F 'name: AGENT_SANDBOX_OUTPUT_LIMIT_BYTES' "$tmp/agent-sandbox-render.yaml" | grep -Fq 'value: "1048576"'
 grep -Fq 'local/agent-sandbox-fix-executor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$tmp/agent-sandbox-render.yaml"
+if [ "$(grep -Fc 'image: local/remote-fixer:sha-abcdef0' "$tmp/agent-sandbox-render.yaml")" -ne 2 ]; then
+  echo 'Agent Sandbox did not select the remote fixer for server and worker' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" --set mode=cron > "$tmp/agent-sandbox-cron-render.yaml"
+if [ "$(grep -Fc 'image: local/remote-fixer:sha-abcdef0' "$tmp/agent-sandbox-cron-render.yaml")" -ne 2 ]; then
+  echo 'Agent Sandbox did not select the remote fixer for server and CronJob' >&2
+  exit 1
+fi
+
+python3 - "$tmp/agent-sandbox.yaml" "$tmp/agent-sandbox-actions-only.yaml" <<'PYACTIONS'
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text()
+old = "      fix_prs:\n        enabled: true\n"
+assert text.count(old) == 1
+Path(sys.argv[2]).write_text(text.replace(old, "      fix_prs:\n        enabled: false\n"))
+PYACTIONS
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-actions-only.yaml" > "$tmp/agent-sandbox-actions-only-render.yaml"
+if [ "$(grep -Fc 'image: local/remote-fixer:sha-abcdef0' "$tmp/agent-sandbox-actions-only-render.yaml")" -ne 1 ]; then
+  echo 'interactive-only Agent Sandbox did not limit the remote fixer to the server' >&2
+  exit 1
+fi
 grep -Fq "variables.pod.securityContext.appArmorProfile.type == 'RuntimeDefault'" "$tmp/agent-sandbox-render.yaml"
 grep -Fq "variables.container.securityContext.appArmorProfile.type == 'RuntimeDefault'" "$tmp/agent-sandbox-render.yaml"
 grep -Fq "variables.container.securityContext.procMount == 'Default'" "$tmp/agent-sandbox-render.yaml"
@@ -1852,6 +1888,8 @@ expect_agent_sandbox_fail() {
 
 expect_agent_sandbox_fail runtime-class 'runtimeClassName is required' --set-string agentSandbox.fixRuntime.runtimeClassName=
 expect_agent_sandbox_fail mutable-image 'image.digest must be an immutable sha256 digest' --set agentSandbox.fixRuntime.image.digest=sha-deadbeef
+expect_agent_sandbox_fail mutable-dashboard-image 'dashboardImage tag must be an immutable' --set-string agentSandbox.fixRuntime.dashboardImage.tag=latest
+expect_agent_sandbox_fail dashboard-image-digest 'dashboardImage.repository must not contain' --set-string agentSandbox.fixRuntime.dashboardImage.repository=local/remote-fixer@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 expect_agent_sandbox_fail public-gateway 'must be an internal HTTPS service URL or publicCAPrivateDNS must be true' --set agentSandbox.fixRuntime.modelGateway.endpoint=https://api.openai.com/v1
 if helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-public-ca.yaml" --set agentSandbox.fixRuntime.modelGateway.endpoint=https://api.anthropic.com/v1 > "$tmp/agent-sandbox-direct-provider.out" 2>&1; then
   echo 'direct provider endpoint was accepted with public CA private DNS enabled' >&2

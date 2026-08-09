@@ -149,11 +149,13 @@ export VERSION="vX.Y.Z"
 make image IMAGE="$IMAGE" VERSION="$VERSION"
 make analyzer-image IMAGE="$IMAGE" VERSION="$VERSION"
 make fixer-image IMAGE="$IMAGE" VERSION="$VERSION"
+make remote-fixer-image IMAGE="$IMAGE" VERSION="$VERSION"
 make agent-sandbox-fix-executor-image IMAGE="$IMAGE" VERSION="$VERSION"
 
 docker push "${IMAGE}:${VERSION}"
 docker push "${IMAGE}/analyzer:${VERSION}"
 docker push "${IMAGE}/fixer:${VERSION}"
+docker push "${IMAGE}/remote-fixer:${VERSION}"
 docker push "${IMAGE}/agent-sandbox-fix-executor:${VERSION}"
 ```
 
@@ -498,6 +500,13 @@ ledgers.
 The `agentSandbox.fixRuntime` chart section is disabled by default. It wires the
 dashboard to a consumer-installed Kubernetes SIG Agent Sandbox controller but
 never installs that controller or its CRD.
+
+The Sandbox returns a patch rather than writing GitHub directly. The dashboard
+independently reapplies it to the pinned source revision, so the server and any
+scheduled fix reconciler use `agentSandbox.fixRuntime.dashboardImage`. The
+published `remote-fixer` image contains the normal engine binaries, SPA, CA
+certificates, and git. It intentionally omits OpenCode, srt, and model
+credentials.
 
 When enabled, the chart can create:
 

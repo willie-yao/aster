@@ -440,10 +440,10 @@ endpoint returns `actionable`, `investigation_required`, `already_present`, or
 an action request, or send draft-ready email. Draft endpoints repeat verification
 and remain authoritative.
 
-File issue and Mark resolved work in the standard server image. Propose fix
-starts the local OpenCode runtime and also needs git plus the pinned `srt`
-sandbox. The standard distroless image omits those tools, so fix previews report
-unavailable unless you deploy the fixer image or an equivalent custom image.
+File issue and Mark resolved work in the standard server image. Local OpenCode
+uses the full fixer image because it needs git and the pinned `srt` sandbox.
+Agent Sandbox uses the smaller `remote-fixer` image because the dashboard needs
+git only to reconstruct and validate the returned patch.
 
 Systemic-pattern email links can deep-link into this flow with the public pattern
 id and requested action. The link itself is an inert GET. After authentication,

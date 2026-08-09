@@ -350,6 +350,10 @@ agentSandbox:
       repository: local/fixexecutor
       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       pullPolicy: IfNotPresent
+    dashboardImage:
+      repository: local/remote-fixer
+      tag: sha-abcdef0
+      pullPolicy: IfNotPresent
     workloadServiceAccount:
       create: true
       name: fix-workload
@@ -406,6 +410,14 @@ agentSandbox:
       pullPolicy: Always
 VALUES
 expect_fail invalid-agent-sandbox-pull "$tmp/invalid-agent-sandbox-pull.yaml" /agentSandbox/fixRuntime/image/pullPolicy
+
+cat > "$tmp/invalid-agent-sandbox-dashboard-pull.yaml" <<'VALUES'
+agentSandbox:
+  fixRuntime:
+    dashboardImage:
+      pullPolicy: Always
+VALUES
+expect_fail invalid-agent-sandbox-dashboard-pull "$tmp/invalid-agent-sandbox-dashboard-pull.yaml" /agentSandbox/fixRuntime/dashboardImage/pullPolicy
 
 cat > "$tmp/invalid-agent-sandbox-apparmor.yaml" <<'VALUES'
 agentSandbox:

@@ -44,12 +44,15 @@ the changelog.
    - for a **stable** tag only, fast-forwards the `vMAJOR` alias to the tag.
 
    In parallel, `.github/workflows/image.yml` builds and pushes the engine,
-   analyzer, local fixer, and Agent Sandbox executor images with `main`,
+   analyzer, local fixer, remote fixer, and Agent Sandbox executor images with `main`,
    `sha-<short-commit>`, and applicable semantic-version tags. The Agent Sandbox
    executor is published for `linux/amd64` at
    `ghcr.io/<owner>/prow-ai-dashboard/agent-sandbox-fix-executor`. Tags are
    discovery aliases only; deployed Agent Sandbox configuration requires the
    resolved OCI digest.
+   The git-only remote fixer is published at
+   `ghcr.io/<owner>/prow-ai-dashboard/remote-fixer` for dashboard-side patch
+   reconstruction and contains neither OpenCode nor srt.
 
 ## Pre-release to stable
 
