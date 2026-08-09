@@ -8,6 +8,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const prowTestContainerName = "test"
+
 func verifyJobEnvironment(ctx context.Context, reader Reader, archive Archive, target models.RemediationTarget) (Result, error) {
 	content, ok, err := readSourceFile(ctx, reader, archive, target.Path)
 	if err != nil {
@@ -107,6 +109,13 @@ func matchingContainers(job *yaml.Node, name string) []*yaml.Node {
 	spec := dereferenceYAML(mappingValue(job, "spec"))
 	containers := dereferenceYAML(mappingValue(spec, "containers"))
 	if containers == nil || containers.Kind != yaml.SequenceNode {
+		return nil
+	}
+	if len(containers.Content) == 1 {
+		item := dereferenceYAML(containers.Content[0])
+		if item != nil && item.Kind == yaml.MappingNode && name == prowTestContainerName {
+			return []*yaml.Node{item}
+		}
 		return nil
 	}
 	var out []*yaml.Node
