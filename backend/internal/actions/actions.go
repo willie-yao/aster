@@ -934,6 +934,7 @@ func (s *Service) generateFixPreviewForPattern(
 ) (PreviewResult, *previewEntry, error) {
 	verificationPattern := pattern
 	sourceFiles := []string(nil)
+	sourceRepository := ""
 	if generationContext != nil {
 		if generationContext.ProposedRevision != nil {
 			verificationPattern.SuggestedFix = generationContext.ProposedRevision.SuggestedFix
@@ -942,10 +943,7 @@ func (s *Service) generateFixPreviewForPattern(
 			}
 		}
 		if generationContext.Source != nil {
-			eff := s.cfg.EffectiveFixPRs()
-			if eff.Repo == nil || !strings.EqualFold(generationContext.Source.Repository, eff.Repo.Owner+"/"+eff.Repo.Name) {
-				return PreviewResult{}, nil, fmt.Errorf("%w: investigated repository does not match the configured fix target", ErrPreviewRejected)
-			}
+			sourceRepository = generationContext.Source.Repository
 			verificationPattern.RemediationTargets = []models.RemediationTarget{generationContext.Source.Target}
 			verificationPattern.SourceRef = generationContext.Source.Repository + "@" + generationContext.Source.Revision
 			verificationPattern.RelevantFiles = nil
@@ -954,6 +952,13 @@ func (s *Service) generateFixPreviewForPattern(
 				sourceFiles = append(sourceFiles, citation.Path)
 			}
 		}
+	}
+	destination, targetRevision, err := s.fixDestinationForPattern(verificationPattern)
+	if err != nil {
+		return PreviewResult{}, nil, err
+	}
+	if sourceRepository != "" && !strings.EqualFold(sourceRepository, destination.Repo.Owner+"/"+destination.Repo.Name) {
+		return PreviewResult{}, nil, fmt.Errorf("%w: investigated repository does not match the configured fix target", ErrPreviewRejected)
 	}
 	subject := &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern, SourceFiles: sourceFiles}
 	if err := s.verifyRemediation(ctx, subject); err != nil {
@@ -965,16 +970,12 @@ func (s *Service) generateFixPreviewForPattern(
 	if err := s.setRequestStage(ctx, RequestStageDrafting); err != nil {
 		return PreviewResult{}, nil, err
 	}
-	destination, targetRevision, err := s.fixDestinationForPattern(pattern)
-	if err != nil {
-		return PreviewResult{}, nil, err
-	}
-	generationPattern := pattern
+	generationPattern := verificationPattern
 	if targetRevision != "" {
 		generationPattern.SourceRef = destination.Repo.Owner + "/" + destination.Repo.Name + "@" + targetRevision
 		generationPattern.RelevantFiles = nil
 		generationPattern.FileLinks = nil
-		for _, target := range pattern.RemediationTargets {
+		for _, target := range verificationPattern.RemediationTargets {
 			generationPattern.RelevantFiles = append(generationPattern.RelevantFiles, target.Path)
 		}
 	}
