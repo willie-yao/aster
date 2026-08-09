@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 func newPatternTestService(t *testing.T, serverURL string) *Service {
@@ -818,7 +819,46 @@ func TestPatternResponseFormatRequiresAllStrictTargetFields(t *testing.T) {
 	targets := properties["remediation_targets"].(map[string]any)
 	item := targets["items"].(map[string]any)
 	required := item["required"].([]string)
-	if strings.Join(required, ",") != "intent,symbol,path,value" {
+	if strings.Join(required, ",") != "intent,symbol,path,value,repository,revision,job,container,name" {
 		t.Fatalf("target required fields = %v", required)
+	}
+}
+
+func TestPatternTargetsMatchPinnedProwContext(t *testing.T) {
+	target := models.RemediationTarget{
+		Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: strings.Repeat("a", 40),
+		Path: "config/jobs/example/periodics.yaml", Job: "periodic-capz", Container: "test", Name: "VERSION", Value: "v2",
+	}
+	failures := []PatternFailure{{ProwJobName: target.Job, ProwConfigFile: target.Path, ProwConfigRevision: target.Revision}}
+	if !patternTargetsMatchProwContext([]models.RemediationTarget{target}, failures) {
+		t.Fatal("matching Prow target was rejected")
+	}
+	target.Revision = strings.Repeat("b", 40)
+	if patternTargetsMatchProwContext([]models.RemediationTarget{target}, failures) {
+		t.Fatal("stale Prow revision was accepted")
+	}
+}
+
+func TestPatternPromptIncludesPinnedProwContext(t *testing.T) {
+	prompt := buildPatternUserPrompt("periodic-capz", []PatternFailure{{BuildID: "1", ProwJobName: "periodic-capz", ProwConfigFile: "config/jobs/example/periodics.yaml", ProwConfigRevision: strings.Repeat("a", 40)}})
+	for _, want := range []string{"prow_job_name: periodic-capz", "test_infra_config_file: config/jobs/example/periodics.yaml", "test_infra_revision: " + strings.Repeat("a", 40)} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestParsePatternResultPreservesStrictProwEnvironmentValue(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	failure := PatternFailure{BuildID: "1", ProwJobName: "periodic-capz", ProwConfigFile: "config/jobs/example/periodics.yaml", ProwConfigRevision: revision}
+	raw := `{"systemic":true,"confidence":"high","shared_root_cause":"configured version","shared_builds":["1","2"],"suggested_fix":"set the job environment","remediation_targets":[{"intent":"set_job_environment","symbol":"","path":"config/jobs/example/periodics.yaml","value":" v2 ","repository":"kubernetes/test-infra","revision":"` + revision + `","job":"periodic-capz","container":"test","name":"VERSION"}],"summary":"shared"}`
+	second := failure
+	second.BuildID = "2"
+	pattern, err := ParsePatternResult("periodic-capz", []PatternFailure{failure, second}, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pattern.RemediationTargets[0].Value; got != " v2 " {
+		t.Fatalf("value = %q", got)
 	}
 }

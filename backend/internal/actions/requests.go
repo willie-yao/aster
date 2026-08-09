@@ -18,6 +18,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patternstate"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
@@ -721,7 +722,15 @@ func (s *Service) readyRequestMatchesCurrent(request *actionRequest, subject *Ac
 		return eff.Repo != nil && request.TargetRepo == eff.Repo.Owner+"/"+eff.Repo.Name
 	case "propose-fix":
 		eff := s.cfg.EffectiveFixPRs()
-		return eff.Repo != nil && request.TargetRepo == eff.Repo.Owner+"/"+eff.Repo.Name && request.TargetConfig == fixTargetFingerprint(eff)
+		var destination project.FixDestination
+		var err error
+		if subject.Kind == actionSubjectPattern && subject.Pattern != nil {
+			destination, _, err = s.fixDestinationForPattern(*subject.Pattern)
+		} else {
+			destination, err = s.cfg.ResolveFixDestination("", "")
+		}
+		return err == nil && request.Fix != nil && request.TargetRepo == destination.Repo.Owner+"/"+destination.Repo.Name &&
+			request.TargetConfig == fixDestinationFingerprint(eff, destination) && s.validateFixFiles(destination, request.Fix.Files) == nil
 	default:
 		return false
 	}

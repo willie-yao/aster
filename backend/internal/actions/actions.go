@@ -452,6 +452,82 @@ func (s *Service) verifyRemediation(ctx context.Context, subject *ActionSubject)
 	return s.verifyRemediationProposal(ctx, subject, "")
 }
 
+func (s *Service) fixDestinationForPattern(pattern models.PatternAnalysis) (project.FixDestination, string, error) {
+	repository, revision := "", ""
+	explicit, implicit := false, false
+	for _, target := range pattern.RemediationTargets {
+		if target.Repository == "" {
+			if explicit {
+				return project.FixDestination{}, "", fmt.Errorf("remediation targets cannot mix default and explicit repositories")
+			}
+			implicit = true
+			continue
+		}
+		if implicit {
+			return project.FixDestination{}, "", fmt.Errorf("remediation targets cannot mix default and explicit repositories")
+		}
+		if repository == "" {
+			repository, revision, explicit = target.Repository, target.Revision, true
+		} else if !strings.EqualFold(repository, target.Repository) || revision != target.Revision {
+			return project.FixDestination{}, "", fmt.Errorf("remediation targets must use one repository and revision")
+		}
+		if _, err := s.cfg.ResolveFixDestination(target.Repository, target.Path); err != nil {
+			return project.FixDestination{}, "", err
+		}
+	}
+	if !explicit {
+		destination, err := s.cfg.ResolveFixDestination("", "")
+		if err != nil {
+			repo := s.cfg.EffectiveAnalysisSourceRepo()
+			if repo.Owner != "" && repo.Name != "" {
+				return project.FixDestination{Repo: repo, Fork: true}, "", nil
+			}
+		}
+		return destination, "", err
+	}
+	destination, err := s.cfg.ResolveFixDestination(repository, pattern.RemediationTargets[0].Path)
+	if err != nil {
+		for _, target := range pattern.RemediationTargets {
+			if target.Repository != "" {
+				destination, err = s.cfg.ResolveFixDestination(repository, target.Path)
+				break
+			}
+		}
+	}
+	return destination, revision, err
+}
+
+func (s *Service) fixDestinationForEntry(entry *previewEntry) (project.FixDestination, error) {
+	if entry == nil || entry.fix == nil {
+		return project.FixDestination{}, fmt.Errorf("fix preview is missing")
+	}
+	if strings.HasPrefix(entry.failureID, "build::") {
+		return s.cfg.ResolveFixDestination("", "")
+	}
+	destination, _, err := s.fixDestinationForPattern(entry.fix.Snapshot().Pattern)
+	if err != nil {
+		return project.FixDestination{}, err
+	}
+	if err := s.validateFixFiles(destination, entry.fix.Snapshot().Files); err != nil {
+		return project.FixDestination{}, err
+	}
+	return destination, nil
+}
+
+func (s *Service) validateFixFiles(destination project.FixDestination, files map[string]string) error {
+	repository := destination.Repo.Owner + "/" + destination.Repo.Name
+	for file := range files {
+		resolved, err := s.cfg.ResolveFixDestination(repository, file)
+		if err != nil {
+			return fmt.Errorf("generated file %q is not allowed for %s: %w", file, repository, err)
+		}
+		if resolved.Repo != destination.Repo || resolved.Fork != destination.Fork {
+			return fmt.Errorf("generated file %q changed the selected fix destination", file)
+		}
+	}
+	return nil
+}
+
 func (s *Service) verifyOptionalRemediation(ctx context.Context, subject *ActionSubject, proposal string) error {
 	proposal = strings.TrimSpace(proposal)
 	if proposal == "" || !actionverify.HasImplementationSymbols(proposal) {
@@ -517,15 +593,23 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 	if subject.Kind == actionSubjectPattern && subject.Pattern != nil {
 		revision, proposal = subject.Pattern.SourceRef, subject.Pattern.SuggestedFix
 		targets = append([]models.RemediationTarget(nil), subject.Pattern.RemediationTargets...)
-		if sourceRepo, sourceRevision, ok := strings.Cut(revision, "@"); ok {
-			if !strings.EqualFold(sourceRepo, repo.Owner+"/"+repo.Name) {
-				return inconclusive("grounded repository does not match configured source", nil)
-			}
-			revision = sourceRevision
+		destination, targetRevision, destinationErr := s.fixDestinationForPattern(*subject.Pattern)
+		if destinationErr != nil {
+			return inconclusive("remediation repository is not allowed", destinationErr)
 		}
-		files = append(files, subject.SourceFiles...)
-		if len(files) == 0 {
-			files = verifiedSourceFiles(subject.Pattern.FileLinks, repo.Owner, repo.Name, revision)
+		if targetRevision != "" {
+			repo, revision = destination.Repo, targetRevision
+		} else {
+			if sourceRepo, sourceRevision, ok := strings.Cut(revision, "@"); ok {
+				if !strings.EqualFold(sourceRepo, repo.Owner+"/"+repo.Name) {
+					return inconclusive("grounded repository does not match configured source", nil)
+				}
+				revision = sourceRevision
+			}
+			files = append(files, subject.SourceFiles...)
+			if len(files) == 0 {
+				files = verifiedSourceFiles(subject.Pattern.FileLinks, repo.Owner, repo.Name, revision)
+			}
 		}
 	} else if subject.Build != nil && subject.Build.Failure.AIAnalysis != nil {
 		source, ok := ai.ResolveBuildSource(subject.Build.Build, repo.Owner, repo.Name)
@@ -571,8 +655,16 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 // userToken. It does not resolve a failure; callers that need the pattern look
 // it up separately.
 func (s *Service) buildFixManager(ctx context.Context, userToken string) (*fixpr.Manager, error) {
+	destination, err := s.cfg.ResolveFixDestination("", "")
+	if err != nil {
+		return nil, err
+	}
+	return s.buildFixManagerFor(ctx, userToken, destination)
+}
+
+func (s *Service) buildFixManagerFor(ctx context.Context, userToken string, destination project.FixDestination) (*fixpr.Manager, error) {
 	eff := s.cfg.EffectiveFixPRs()
-	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
+	if destination.Repo.Owner == "" || destination.Repo.Name == "" {
 		return nil, fmt.Errorf("no source repo resolved (set ai.fix_prs.repo or branding.source_repo)")
 	}
 	aiClient := s.aiClient()
@@ -591,13 +683,13 @@ func (s *Service) buildFixManager(ctx context.Context, userToken string) (*fixpr
 
 	var prFiller fixpr.PRBodyFiller
 	if aiClient != nil {
-		prFiller = repotemplate.NewPRFiller(userToken, aiClient, eff.Repo.Owner, eff.Repo.Name)
+		prFiller = repotemplate.NewPRFiller(userToken, aiClient, destination.Repo.Owner, destination.Repo.Name)
 	}
 	prClient := fixpr.NewClients(userToken)
 	opts := fixpr.Options{
-		SourceOwner:     eff.Repo.Owner,
-		SourceName:      eff.Repo.Name,
-		Fork:            eff.Fork == nil || *eff.Fork,
+		SourceOwner:     destination.Repo.Owner,
+		SourceName:      destination.Repo.Name,
+		Fork:            destination.Fork,
 		AuthorName:      eff.AuthorName,
 		AuthorEmail:     eff.AuthorEmail,
 		MinConfidence:   eff.MinConfidence,
@@ -623,6 +715,11 @@ func (s *Service) buildFixManager(ctx context.Context, userToken string) (*fixpr
 		return nil, err
 	}
 	commands, err := ar.RuntimeCommands(ar.ParsedTimeout())
+	if len(destination.AllowedCommands) > 0 {
+		copyRuntime := *ar
+		copyRuntime.AllowedCommands = destination.AllowedCommands
+		commands, err = copyRuntime.RuntimeCommands(copyRuntime.ParsedTimeout())
+	}
 	if err != nil {
 		return nil, fmt.Errorf("agent command policy: %w", err)
 	}
@@ -652,8 +749,16 @@ func (s *Service) buildFixManager(ctx context.Context, userToken string) (*fixpr
 		opts.Agent.WorkObserver = s.observeRuntimeWork(opts.Agent.ExecutionID)
 	}
 	mgr := fixpr.NewManager(prClient,
-		filepath.Join(s.dataDir, "fix_pr_state.json"), opts)
+		fixStateFile(s.dataDir, eff, destination), opts)
 	return mgr, nil
+}
+
+func fixStateFile(dataDir string, eff project.FixPRs, destination project.FixDestination) string {
+	if eff.Repo != nil && strings.EqualFold(destination.Repo.Owner, eff.Repo.Owner) && strings.EqualFold(destination.Repo.Name, eff.Repo.Name) {
+		return filepath.Join(dataDir, "fix_pr_state.json")
+	}
+	sum := sha256.Sum256([]byte(strings.ToLower(destination.Repo.Owner + "/" + destination.Repo.Name)))
+	return filepath.Join(dataDir, ".fix-pr-state", hex.EncodeToString(sum[:8])+".json")
 }
 
 func repositoryToken(runtimeType, token string) string {
@@ -796,6 +901,10 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if len(sourceFiles) == 0 {
 		return PreviewResult{}, nil, fmt.Errorf("%w: repository source investigation did not identify a verified local path; create an issue or investigate source before proposing a fix", ErrPreviewRejected)
 	}
+	destination, err := s.cfg.ResolveFixDestination("", "")
+	if err != nil {
+		return PreviewResult{}, nil, err
+	}
 	mgr, err := s.buildFixManager(ctx, userToken)
 	if err != nil {
 		return PreviewResult{}, nil, err
@@ -807,6 +916,9 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	}, instruction)
 	if err != nil {
 		return PreviewResult{}, nil, safeFixPreviewError(err)
+	}
+	if err := s.validateFixFiles(destination, gf.Preview.Files); err != nil {
+		return PreviewResult{}, nil, fmt.Errorf("%w: %v", ErrPreviewRejected, err)
 	}
 	if err := s.verifyOptionalRemediation(ctx, subject, gf.Title+"\n"+gf.Description); err != nil {
 		return PreviewResult{}, nil, err
@@ -822,6 +934,7 @@ func (s *Service) generateFixPreviewForPattern(
 ) (PreviewResult, *previewEntry, error) {
 	verificationPattern := pattern
 	sourceFiles := []string(nil)
+	sourceRepository := ""
 	if generationContext != nil {
 		if generationContext.ProposedRevision != nil {
 			verificationPattern.SuggestedFix = generationContext.ProposedRevision.SuggestedFix
@@ -830,10 +943,7 @@ func (s *Service) generateFixPreviewForPattern(
 			}
 		}
 		if generationContext.Source != nil {
-			eff := s.cfg.EffectiveFixPRs()
-			if eff.Repo == nil || !strings.EqualFold(generationContext.Source.Repository, eff.Repo.Owner+"/"+eff.Repo.Name) {
-				return PreviewResult{}, nil, fmt.Errorf("%w: investigated repository does not match the configured fix target", ErrPreviewRejected)
-			}
+			sourceRepository = generationContext.Source.Repository
 			verificationPattern.RemediationTargets = []models.RemediationTarget{generationContext.Source.Target}
 			verificationPattern.SourceRef = generationContext.Source.Repository + "@" + generationContext.Source.Revision
 			verificationPattern.RelevantFiles = nil
@@ -842,6 +952,13 @@ func (s *Service) generateFixPreviewForPattern(
 				sourceFiles = append(sourceFiles, citation.Path)
 			}
 		}
+	}
+	destination, targetRevision, err := s.fixDestinationForPattern(verificationPattern)
+	if err != nil {
+		return PreviewResult{}, nil, err
+	}
+	if sourceRepository != "" && !strings.EqualFold(sourceRepository, destination.Repo.Owner+"/"+destination.Repo.Name) {
+		return PreviewResult{}, nil, fmt.Errorf("%w: investigated repository does not match the configured fix target", ErrPreviewRejected)
 	}
 	subject := &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern, SourceFiles: sourceFiles}
 	if err := s.verifyRemediation(ctx, subject); err != nil {
@@ -853,18 +970,30 @@ func (s *Service) generateFixPreviewForPattern(
 	if err := s.setRequestStage(ctx, RequestStageDrafting); err != nil {
 		return PreviewResult{}, nil, err
 	}
-	mgr, err := s.buildFixManager(ctx, userToken)
+	generationPattern := verificationPattern
+	if targetRevision != "" {
+		generationPattern.SourceRef = destination.Repo.Owner + "/" + destination.Repo.Name + "@" + targetRevision
+		generationPattern.RelevantFiles = nil
+		generationPattern.FileLinks = nil
+		for _, target := range verificationPattern.RemediationTargets {
+			generationPattern.RelevantFiles = append(generationPattern.RelevantFiles, target.Path)
+		}
+	}
+	mgr, err := s.buildFixManagerFor(ctx, userToken, destination)
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
 	var gf *fixpr.GeneratedFix
 	if generationContext == nil {
-		gf, err = mgr.GeneratePreview(ctx, pattern, instruction)
+		gf, err = mgr.GeneratePreview(ctx, generationPattern, instruction)
 	} else {
-		gf, err = mgr.GeneratePreviewWithContext(ctx, pattern, instruction, *generationContext)
+		gf, err = mgr.GeneratePreviewWithContext(ctx, generationPattern, instruction, *generationContext)
 	}
 	if err != nil {
 		return PreviewResult{}, nil, safeFixPreviewError(err)
+	}
+	if err := s.validateFixFiles(destination, gf.Preview.Files); err != nil {
+		return PreviewResult{}, nil, fmt.Errorf("%w: %v", ErrPreviewRejected, err)
 	}
 	if err := s.verifyOptionalRemediation(ctx, subject, gf.Title+"\n"+gf.Description); err != nil {
 		return PreviewResult{}, nil, err
@@ -873,14 +1002,21 @@ func (s *Service) generateFixPreviewForPattern(
 		Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
 		VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
 		VerifyOutput: gf.Preview.Verify.Output,
-	}, s.patternFixPreviewEntry(pattern, gf), nil
+	}, s.patternFixPreviewEntry(pattern, gf, destination), nil
 }
 
-func (s *Service) patternFixPreviewEntry(pattern models.PatternAnalysis, fix *fixpr.GeneratedFix) *previewEntry {
+func (s *Service) patternFixPreviewEntry(pattern models.PatternAnalysis, fix *fixpr.GeneratedFix, destinations ...project.FixDestination) *previewEntry {
 	eff := s.cfg.EffectiveFixPRs()
+	destination := project.FixDestination{Fork: eff.Fork == nil || *eff.Fork}
+	if eff.Repo != nil {
+		destination.Repo = *eff.Repo
+	}
+	if len(destinations) > 0 {
+		destination = destinations[0]
+	}
 	return &previewEntry{
 		failureID: pattern.ID, patternHash: pattern.ContentHash, kind: gfKind,
-		targetRepo: eff.Repo.Owner + "/" + eff.Repo.Name, targetConfig: fixTargetFingerprint(eff),
+		targetRepo: destination.Repo.Owner + "/" + destination.Repo.Name, targetConfig: fixDestinationFingerprint(eff, destination),
 		verificationVersion: sourceVerificationVersion, fix: fix,
 	}
 }
@@ -1041,22 +1177,23 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 		return mgr.FindOpen(ctx, entry.spec.Key)
 	case gfKind:
 		eff := s.cfg.EffectiveFixPRs()
-		if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" || entry.fix == nil {
+		if entry.fix == nil {
 			return "", false, fmt.Errorf("no source repo resolved (set ai.fix_prs.repo or branding.source_repo)")
 		}
-		if entry.targetRepo != eff.Repo.Owner+"/"+eff.Repo.Name {
+		destination, err := s.fixDestinationForEntry(entry)
+		if err != nil || entry.targetRepo != destination.Repo.Owner+"/"+destination.Repo.Name {
 			return "", false, ErrPreviewTargetChanged
 		}
-		if entry.targetConfig != fixTargetFingerprint(eff) {
+		if entry.targetConfig != fixDestinationFingerprint(eff, destination) {
 			return "", false, ErrPreviewTargetChanged
 		}
 		key := entry.fix.Snapshot().Key
 		client := fixpr.NewClients(userToken)
 		if strings.HasPrefix(entry.failureID, "build::") {
-			_, url, found, err := client.SearchAnyPR(ctx, eff.Repo.Owner, eff.Repo.Name, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
+			_, url, found, err := client.SearchAnyPR(ctx, destination.Repo.Owner, destination.Repo.Name, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
 			return url, found, err
 		}
-		_, url, found, err := client.SearchOpenPR(ctx, eff.Repo.Owner, eff.Repo.Name, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
+		_, url, found, err := client.SearchOpenPR(ctx, destination.Repo.Owner, destination.Repo.Name, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
 		return url, found, err
 	default:
 		return "", false, ErrPreviewNotFound
@@ -1122,13 +1259,14 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 		return url, nil
 	case gfKind:
 		eff := s.cfg.EffectiveFixPRs()
-		if eff.Repo == nil || entry.targetRepo != eff.Repo.Owner+"/"+eff.Repo.Name {
+		destination, err := s.fixDestinationForEntry(entry)
+		if err != nil || entry.targetRepo != destination.Repo.Owner+"/"+destination.Repo.Name {
 			return "", ErrPreviewTargetChanged
 		}
-		if entry.targetConfig != fixTargetFingerprint(eff) {
+		if entry.targetConfig != fixDestinationFingerprint(eff, destination) {
 			return "", ErrPreviewTargetChanged
 		}
-		mgr, err := s.buildFixManager(ctx, userToken)
+		mgr, err := s.buildFixManagerFor(ctx, userToken, destination)
 		if err != nil {
 			return "", err
 		}
@@ -1155,13 +1293,22 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 }
 
 func fixTargetFingerprint(eff project.FixPRs) string {
-	fork := eff.Fork == nil || *eff.Fork
+	destination := project.FixDestination{Fork: eff.Fork == nil || *eff.Fork}
+	if eff.Repo != nil {
+		destination.Repo = *eff.Repo
+	}
+	return fixDestinationFingerprint(eff, destination)
+}
+
+func fixDestinationFingerprint(eff project.FixPRs, destination project.FixDestination) string {
 	payload, _ := json.Marshal(struct {
-		Fork        bool     `json:"fork"`
-		AuthorName  string   `json:"author_name"`
-		AuthorEmail string   `json:"author_email"`
-		Labels      []string `json:"labels"`
-	}{fork, eff.AuthorName, eff.AuthorEmail, eff.Labels})
+		Repository  string                    `json:"repository"`
+		Fork        bool                      `json:"fork"`
+		AuthorName  string                    `json:"author_name"`
+		AuthorEmail string                    `json:"author_email"`
+		Labels      []string                  `json:"labels"`
+		Commands    []project.FixAgentCommand `json:"commands,omitempty"`
+	}{destination.Repo.Owner + "/" + destination.Repo.Name, destination.Fork, eff.AuthorName, eff.AuthorEmail, eff.Labels, destination.AllowedCommands})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
 }

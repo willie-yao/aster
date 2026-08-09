@@ -1530,6 +1530,46 @@ func TestContextSourceRepositoryMustMatchFixTarget(t *testing.T) {
 	}
 }
 
+func TestContextSourceRoutesAllowlistedProwTarget(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	pattern := systemicPattern()
+	path := "config/jobs/kubernetes-sigs/cluster-api-provider-azure/periodics.yaml"
+	cfg := &project.Config{AI: &project.AI{
+		SourceRepo: &project.SourceRepo{Owner: "example", Name: "source"},
+		FixPRs: &project.FixPRs{
+			Enabled: true,
+			Repo:    &project.SourceRepo{Owner: "example", Name: "source"},
+			AllowedRepositories: []project.FixRepository{{
+				Owner: "kubernetes", Name: "test-infra", PathPrefixes: []string{"config/jobs/kubernetes-sigs/cluster-api-provider-azure/"},
+			}},
+		},
+	}}
+	service := NewService(cfg, t.TempDir(), AIConfig{})
+	var got actionverify.Input
+	service.sourceVerifier = func(_ context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+		got = input
+		return actionverify.Result{State: actionverify.StateInconclusive, Reason: "stop after routing"}, nil
+	}
+	target := models.RemediationTarget{
+		Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: revision,
+		Path: path, Job: "periodic-capz", Container: "test", Name: "VERSION", Value: "v2",
+	}
+	_, _, err := service.generateFixPreviewForPattern(t.Context(), pattern, "token", "", &fixpr.GenerationContext{
+		AssistantAnswer: "answer", ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", Quote: "failure"}},
+		Source: &fixpr.SourceContext{
+			Repository: "kubernetes/test-infra", State: sourceinvestigation.StateActionableConfigurationChange,
+			Target: target, Revision: revision, Finding: "update the pinned job environment",
+			Citations: []fixpr.Evidence{{Path: path, Quote: "name: VERSION"}},
+		},
+	})
+	if !errors.Is(err, ErrRemediationInconclusive) {
+		t.Fatalf("error = %v, want verification stop after allowlisted routing", err)
+	}
+	if len(got.Targets) != 1 || got.Targets[0] != target {
+		t.Fatalf("verification input = %+v", got)
+	}
+}
+
 func TestBuildSourceVerificationUsesOnlyPinnedLinks(t *testing.T) {
 	const revision = "0123456789abcdef0123456789abcdef01234567"
 	detail := analyzedBuildDetail(false)
@@ -1858,5 +1898,55 @@ func TestRepositoryTokenExcludedFromAgentSandboxRuntime(t *testing.T) {
 	}
 	if got := repositoryToken("orka", "read-token"); got != "read-token" {
 		t.Fatalf("Orka token changed = %q", got)
+	}
+}
+
+func TestFixDestinationForPatternAllowsPinnedTestInfraTarget(t *testing.T) {
+	cfg := &project.Config{Branding: project.Branding{SourceRepo: project.SourceRepo{Owner: "example", Name: "source"}}, AI: &project.AI{FixPRs: &project.FixPRs{
+		AllowedRepositories: []project.FixRepository{{Owner: "kubernetes", Name: "test-infra", PathPrefixes: []string{"config/jobs/kubernetes-sigs/cluster-api-provider-azure/"}}},
+	}}}
+	service := NewService(cfg, t.TempDir(), AIConfig{})
+	pattern := models.PatternAnalysis{RemediationTargets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: strings.Repeat("a", 40),
+		Path: "config/jobs/kubernetes-sigs/cluster-api-provider-azure/periodics.yaml", Job: "periodic-capz", Container: "test", Name: "VERSION", Value: "v2",
+	}}}
+	destination, revision, err := service.fixDestinationForPattern(pattern)
+	if err != nil || destination.Repo.Owner != "kubernetes" || destination.Repo.Name != "test-infra" || revision != strings.Repeat("a", 40) {
+		t.Fatalf("destination=%+v revision=%q err=%v", destination, revision, err)
+	}
+	pattern.RemediationTargets[0].Path = "config/jobs/other/periodics.yaml"
+	if _, _, err := service.fixDestinationForPattern(pattern); err == nil {
+		t.Fatal("path outside allowlist was accepted")
+	}
+}
+
+func TestValidateFixFilesEnforcesDestinationPrefixes(t *testing.T) {
+	cfg := &project.Config{Branding: project.Branding{SourceRepo: project.SourceRepo{Owner: "example", Name: "source"}}, AI: &project.AI{FixPRs: &project.FixPRs{
+		AllowedRepositories: []project.FixRepository{{Owner: "kubernetes", Name: "test-infra", PathPrefixes: []string{"config/jobs/capz/"}}},
+	}}}
+	service := NewService(cfg, t.TempDir(), AIConfig{})
+	destination, err := cfg.ResolveFixDestination("kubernetes/test-infra", "config/jobs/capz/periodics.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.validateFixFiles(destination, map[string]string{"config/jobs/capz/periodics.yaml": "content"}); err != nil {
+		t.Fatalf("allowed files rejected: %v", err)
+	}
+	if err := service.validateFixFiles(destination, map[string]string{"config/jobs/other/periodics.yaml": "content"}); err == nil {
+		t.Fatal("generated file outside prefix was accepted")
+	}
+}
+
+func TestFixStateFilePartitionsCrossRepositoryState(t *testing.T) {
+	eff := project.FixPRs{Repo: &project.SourceRepo{Owner: "example", Name: "source"}}
+	defaultPath := fixStateFile("/data", eff, project.FixDestination{Repo: *eff.Repo})
+	if defaultPath != "/data/fix_pr_state.json" {
+		t.Fatalf("default path = %q", defaultPath)
+	}
+	other := project.FixDestination{Repo: project.SourceRepo{Owner: "kubernetes", Name: "test-infra"}}
+	first := fixStateFile("/data", eff, other)
+	second := fixStateFile("/data", eff, other)
+	if first == defaultPath || first != second || !strings.Contains(first, "/.fix-pr-state/") {
+		t.Fatalf("partitioned paths default=%q first=%q second=%q", defaultPath, first, second)
 	}
 }

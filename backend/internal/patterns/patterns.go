@@ -311,15 +311,18 @@ func GatherFailures(d *models.JobDetail) []ai.PatternFailure {
 			continue
 		}
 		out = append(out, ai.PatternFailure{
-			BuildID:        run.BuildID,
-			FailingTest:    rep.Name,
-			FailureMessage: rep.FailureMessage,
-			RootCause:      rep.AIAnalysis.RootCause,
-			SuggestedFix:   rep.AIAnalysis.SuggestedFix,
-			RelevantFiles:  rep.AIAnalysis.RelevantFiles,
-			LocationFile:   FailureLocationFile(rep.FailureLocation),
-			IsTransient:    rep.AISummary != nil && rep.AISummary.IsTransient,
-			Severity:       rep.AIAnalysis.Severity,
+			BuildID:            run.BuildID,
+			FailingTest:        rep.Name,
+			FailureMessage:     rep.FailureMessage,
+			RootCause:          rep.AIAnalysis.RootCause,
+			SuggestedFix:       rep.AIAnalysis.SuggestedFix,
+			RelevantFiles:      rep.AIAnalysis.RelevantFiles,
+			LocationFile:       FailureLocationFile(rep.FailureLocation),
+			ProwJobName:        d.Name,
+			ProwConfigFile:     d.ConfigFile,
+			ProwConfigRevision: d.ConfigRevision,
+			IsTransient:        rep.AISummary != nil && rep.AISummary.IsTransient,
+			Severity:           rep.AIAnalysis.Severity,
 		})
 	}
 	return out

@@ -423,3 +423,163 @@ func TestVerifyIgnoresBacktickedArtifactNames(t *testing.T) {
 		t.Fatalf("result = %+v", result)
 	}
 }
+
+func TestVerifyProwJobEnvironment(t *testing.T) {
+	const file = "config/jobs/kubernetes-sigs/cluster-api-provider-azure/periodics.yaml"
+	config := `periodics:
+- name: periodic-capz
+  spec:
+    containers:
+    - name: test
+      env:
+      - name: AKS_MGMT_KUBERNETES_VERSION
+        value: v1.33.2
+`
+	base := models.RemediationTarget{
+		Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra",
+		Revision: strings.Repeat("a", 40), Path: file, Job: "periodic-capz", Container: "test",
+		Name: "AKS_MGMT_KUBERNETES_VERSION",
+	}
+	for name, test := range map[string]struct {
+		value string
+		want  string
+	}{
+		"different value is unresolved": {value: "v1.34.1", want: StateUnresolved},
+		"same value is present":         {value: "v1.33.2", want: StateAlreadyPresent},
+	} {
+		t.Run(name, func(t *testing.T) {
+			target := base
+			target.Value = test.value
+			result := verify(t, fakeReader{archive: archive(map[string]string{file: config})}, Input{Targets: []models.RemediationTarget{target}})
+			if result.State != test.want {
+				t.Fatalf("result = %+v", result)
+			}
+		})
+	}
+}
+
+func TestVerifyProwJobEnvironmentFailsClosed(t *testing.T) {
+	const file = "config/jobs/example/periodics.yaml"
+	base := models.RemediationTarget{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: strings.Repeat("a", 40), Path: file, Job: "periodic-capz", Container: "test", Name: "VERSION", Value: "v2"}
+	for name, config := range map[string]string{
+		"duplicate job": `periodics:
+- name: periodic-capz
+  spec: {containers: [{name: test}]}
+- name: periodic-capz
+  spec: {containers: [{name: test}]}
+`,
+		"duplicate env": `periodics:
+- name: periodic-capz
+  spec:
+    containers:
+    - name: test
+      env: [{name: VERSION, value: v1}, {name: VERSION, value: v1}]
+`,
+		"value from": `periodics:
+- name: periodic-capz
+  spec:
+    containers:
+    - name: test
+      env: [{name: VERSION, valueFrom: {secretKeyRef: {name: version, key: value}}}]
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := verify(t, fakeReader{archive: archive(map[string]string{file: config})}, Input{Targets: []models.RemediationTarget{base}})
+			if result.State != StateInconclusive {
+				t.Fatalf("result = %+v", result)
+			}
+		})
+	}
+}
+
+type fileOnlyReader struct{ fakeReader }
+
+func (fileOnlyReader) ReadSourceArchive(context.Context) (Archive, error) {
+	return Archive{}, errors.New("archive should not be read")
+}
+
+func TestVerifyProwJobEnvironmentDoesNotDownloadRepositoryArchive(t *testing.T) {
+	const file = "config/jobs/example/periodics.yaml"
+	reader := fileOnlyReader{fakeReader{archive: archive(map[string]string{file: `periodics:
+- name: periodic-capz
+  spec:
+    containers:
+    - name: test
+      env: [{name: VERSION, value: v1}]
+`})}}
+	result := verify(t, reader, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: strings.Repeat("a", 40),
+		Path: file, Job: "periodic-capz", Container: "test", Name: "VERSION", Value: "v2",
+	}}})
+	if result.State != StateUnresolved {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyProwJobEnvironmentPreservesExactScalarWhitespace(t *testing.T) {
+	const file = "config/jobs/example/periodics.yaml"
+	config := `periodics:
+- name: periodic-capz
+  spec:
+    containers:
+    - name: test
+      env:
+      - name: VERSION
+        value: " v2 "
+`
+	target := models.RemediationTarget{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: strings.Repeat("a", 40), Path: file, Job: "periodic-capz", Container: "test", Name: "VERSION", Value: "v2"}
+	result := verify(t, fakeReader{archive: archive(map[string]string{file: config})}, Input{Targets: []models.RemediationTarget{target}})
+	if result.State != StateUnresolved {
+		t.Fatalf("trimmed value was treated as exact: %+v", result)
+	}
+	target.Value = " v2 "
+	result = verify(t, fakeReader{archive: archive(map[string]string{file: config})}, Input{Targets: []models.RemediationTarget{target}})
+	if result.State != StateAlreadyPresent {
+		t.Fatalf("exact spaced value was not recognized: %+v", result)
+	}
+}
+
+func TestVerifyProwJobEnvironmentRejectsDuplicateYAMLKeys(t *testing.T) {
+	const file = "config/jobs/example/periodics.yaml"
+	target := models.RemediationTarget{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: strings.Repeat("a", 40), Path: file, Job: "periodic-capz", Container: "test", Name: "VERSION", Value: "v2"}
+	for name, config := range map[string]string{
+		"top-level section": `periodics: []
+periodics:
+- name: periodic-capz
+  spec: {containers: [{name: test}]}
+`,
+		"nested env value": `periodics:
+- name: periodic-capz
+  spec:
+    containers:
+    - name: test
+      env:
+      - name: VERSION
+        value: v1
+        value: v2
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := verify(t, fakeReader{archive: archive(map[string]string{file: config})}, Input{Targets: []models.RemediationTarget{target}})
+			if result.State != StateInconclusive || !strings.Contains(result.Reason, "duplicate key") {
+				t.Fatalf("result = %+v", result)
+			}
+		})
+	}
+}
+
+func TestVerifyProwJobEnvironmentRejectsNonStringValue(t *testing.T) {
+	const file = "config/jobs/example/periodics.yaml"
+	config := `periodics:
+- name: periodic-capz
+  spec:
+    containers:
+    - name: test
+      env: [{name: VERSION, value: 123}]
+`
+	target := models.RemediationTarget{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: strings.Repeat("a", 40), Path: file, Job: "periodic-capz", Container: "test", Name: "VERSION", Value: "123"}
+	result := verify(t, fakeReader{archive: archive(map[string]string{file: config})}, Input{Targets: []models.RemediationTarget{target}})
+	if result.State != StateInconclusive {
+		t.Fatalf("result = %+v", result)
+	}
+}

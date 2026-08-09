@@ -1664,3 +1664,32 @@ func TestValidateDisabledFixPRRuntimeStillFailsClosed(t *testing.T) {
 		t.Fatalf("disabled on-demand runtime validation error = %v", err)
 	}
 }
+
+func TestResolveFixDestinationAllowlist(t *testing.T) {
+	fork := false
+	cfg := &Config{Branding: Branding{SourceRepo: SourceRepo{Owner: "example", Name: "source"}}, AI: &AI{FixPRs: &FixPRs{
+		AllowedRepositories: []FixRepository{{Owner: "kubernetes", Name: "test-infra", PathPrefixes: []string{"config/jobs/kubernetes-sigs/cluster-api-provider-azure/"}, Fork: &fork}},
+	}}}
+	destination, err := cfg.ResolveFixDestination("kubernetes/test-infra", "config/jobs/kubernetes-sigs/cluster-api-provider-azure/periodics.yaml")
+	if err != nil || destination.Repo.Owner != "kubernetes" || destination.Repo.Name != "test-infra" || destination.Fork {
+		t.Fatalf("destination=%+v err=%v", destination, err)
+	}
+	if _, err := cfg.ResolveFixDestination("kubernetes/test-infra", "config/jobs/other/periodics.yaml"); err == nil {
+		t.Fatal("path outside allowlist was accepted")
+	}
+	if _, err := cfg.ResolveFixDestination("other/repo", "config/jobs/example.yaml"); err == nil {
+		t.Fatal("repository outside allowlist was accepted")
+	}
+}
+
+func TestValidateFixRepositoryAllowlist(t *testing.T) {
+	cfg := validConfig()
+	cfg.AI = &AI{FixPRs: &FixPRs{AllowedRepositories: []FixRepository{{Owner: "kubernetes", Name: "test-infra"}}}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "path_prefixes") {
+		t.Fatalf("missing prefixes error = %v", err)
+	}
+	cfg.AI.FixPRs.AllowedRepositories[0].PathPrefixes = []string{"../config/"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "invalid prefix") {
+		t.Fatalf("unsafe prefix error = %v", err)
+	}
+}

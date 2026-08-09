@@ -76,3 +76,30 @@ func TestActionEligibilityClassifiesStructuredTargets(t *testing.T) {
 		})
 	}
 }
+
+func TestActionEligibilityAllowsPinnedTestInfraEnvironmentTarget(t *testing.T) {
+	const revision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	target := models.RemediationTarget{
+		Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: revision,
+		Path: "config/jobs/kubernetes-sigs/cluster-api-provider-azure/periodics.yaml", Job: "periodic-capz", Container: "test",
+		Name: "AKS_MGMT_KUBERNETES_VERSION", Value: "v1.34.1",
+	}
+	pattern := models.PatternAnalysis{JobID: "periodic-capz", Systemic: true, SuggestedFix: "update the Prow job environment", RemediationTargets: []models.RemediationTarget{target}}
+	models.AssignPatternIdentity(&pattern)
+	dataDir := t.TempDir()
+	writeJobDetail(t, dataDir, "periodic-capz.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
+	cfg := &project.Config{Branding: project.Branding{SourceRepo: project.SourceRepo{Owner: "example", Name: "source"}}, AI: &project.AI{SourceRepo: &project.SourceRepo{Owner: "example", Name: "source"}, FixPRs: &project.FixPRs{
+		AllowedRepositories: []project.FixRepository{{Owner: "kubernetes", Name: "test-infra", PathPrefixes: []string{"config/jobs/kubernetes-sigs/cluster-api-provider-azure/"}}},
+	}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	service.sourceVerifier = func(_ context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+		if len(input.Targets) != 1 || input.Targets[0] != target {
+			t.Fatalf("targets = %+v", input.Targets)
+		}
+		return actionverify.Result{State: actionverify.StateUnresolved, Reason: "verified"}, nil
+	}
+	got, err := service.ActionEligibility(t.Context(), pattern.ID)
+	if err != nil || got.State != EligibilityActionable {
+		t.Fatalf("eligibility=%+v err=%v", got, err)
+	}
+}

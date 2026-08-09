@@ -129,9 +129,20 @@ func verifyTargets(ctx context.Context, reader Reader, input Input) (Result, err
 	if reader == nil {
 		return inconclusive("source reader is unavailable"), nil
 	}
-	archive, err := reader.ReadSourceArchive(ctx)
-	if err != nil {
-		return Result{}, fmt.Errorf("read pinned source archive: %w", err)
+	archive := Archive{Paths: map[string]bool{}, GoFiles: map[string]string{}, Files: map[string]string{}}
+	requiresArchive := false
+	for _, target := range input.Targets {
+		if target.Intent != models.RemediationIntentSetJobEnvironment {
+			requiresArchive = true
+			break
+		}
+	}
+	if requiresArchive {
+		var err error
+		archive, err = reader.ReadSourceArchive(ctx)
+		if err != nil {
+			return Result{}, fmt.Errorf("read pinned source archive: %w", err)
+		}
 	}
 	results := make([]Result, 0, len(input.Targets))
 	for _, target := range input.Targets {
@@ -155,6 +166,8 @@ func verifyTarget(ctx context.Context, reader Reader, archive Archive, target mo
 		return verifyModifySymbol(ctx, reader, archive, target)
 	case models.RemediationIntentSetConfiguration, models.RemediationIntentRemoveConfiguration:
 		return verifyConfiguration(ctx, reader, archive, target)
+	case models.RemediationIntentSetJobEnvironment:
+		return verifyJobEnvironment(ctx, reader, archive, target)
 	case models.RemediationIntentInvestigate:
 		return inconclusive("proposal identifies investigation work but no implementation-ready source target"), nil
 	default:
@@ -464,17 +477,28 @@ func InvalidTargetReason(target models.RemediationTarget) string {
 	}
 	switch target.Intent {
 	case models.RemediationIntentAddSymbol, models.RemediationIntentModifySymbol:
-		if !token.IsIdentifier(target.Symbol) || !validPath(target.Path) || !strings.HasSuffix(target.Path, ".go") || target.Value != "" {
+		if !token.IsIdentifier(target.Symbol) || !validPath(target.Path) || !strings.HasSuffix(target.Path, ".go") || target.Value != "" ||
+			target.Repository != "" || target.Revision != "" || target.Job != "" || target.Container != "" || target.Name != "" {
 			return "symbol remediation metadata is invalid"
 		}
 	case models.RemediationIntentSetConfiguration, models.RemediationIntentRemoveConfiguration:
 		key, expected, assignment := strings.Cut(target.Value, "=")
-		if target.Symbol != "" || !validPath(target.Path) || !assignment || strings.TrimSpace(key) == "" || strings.TrimSpace(expected) == "" ||
+		if target.Symbol != "" || target.Repository != "" || target.Revision != "" || target.Job != "" || target.Container != "" || target.Name != "" ||
+			!validPath(target.Path) || !assignment || strings.TrimSpace(key) == "" || strings.TrimSpace(expected) == "" ||
 			len(target.Value) > 256 || strings.ContainsAny(target.Value, "\r\n\x00") {
 			return "configuration remediation metadata is invalid"
 		}
+	case models.RemediationIntentSetJobEnvironment:
+		if target.Symbol != "" || target.Repository != "kubernetes/test-infra" ||
+			!regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(target.Revision) || !validPath(target.Path) ||
+			!strings.HasPrefix(target.Path, "config/jobs/") || !(strings.HasSuffix(target.Path, ".yaml") || strings.HasSuffix(target.Path, ".yml")) ||
+			strings.TrimSpace(target.Job) == "" || strings.TrimSpace(target.Container) == "" ||
+			!regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(target.Name) || strings.TrimSpace(target.Value) == "" ||
+			len(target.Value) > 512 || strings.ContainsAny(target.Value, "\r\n\x00") {
+			return "Prow job environment remediation metadata is invalid"
+		}
 	case models.RemediationIntentInvestigate:
-		if target.Symbol != "" || target.Path != "" || target.Value != "" {
+		if target.Symbol != "" || target.Path != "" || target.Value != "" || target.Repository != "" || target.Revision != "" || target.Job != "" || target.Container != "" || target.Name != "" {
 			return "investigation remediation metadata must not claim a source target"
 		}
 	default:

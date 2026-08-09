@@ -14,6 +14,16 @@ test("pattern action eligibility handles deterministic blocked states", () => {
   assert.equal(patternActionEligibilityHint([{ intent: "investigate" }])?.state, "investigation_required");
   assert.equal(patternActionEligibilityHint([{ intent: "add_symbol", path: "main.go" }])?.state, "more_evidence_required");
   assert.equal(patternActionEligibilityHint([actionableTarget]), null);
+  assert.equal(patternActionEligibilityHint([{
+    intent: "set_job_environment",
+    repository: "kubernetes/test-infra",
+    revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    path: "config/jobs/kubernetes-sigs/cluster-api-provider-azure/periodics.yaml",
+    job: "periodic-capz",
+    container: "test",
+    name: "AKS_MGMT_KUBERNETES_VERSION",
+    value: "v1.34.1",
+  }]), null);
   const existing = patternActionEligibilityHint([actionableTarget], "open");
   assert.equal(existing?.state, "already_present");
   assert.match(existing?.reason ?? "", /attempt already exists/);
