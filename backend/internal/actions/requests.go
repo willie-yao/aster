@@ -729,7 +729,8 @@ func (s *Service) readyRequestMatchesCurrent(request *actionRequest, subject *Ac
 		} else {
 			destination, err = s.cfg.ResolveFixDestination("", "")
 		}
-		return err == nil && request.TargetRepo == destination.Repo.Owner+"/"+destination.Repo.Name && request.TargetConfig == fixDestinationFingerprint(eff, destination)
+		return err == nil && request.Fix != nil && request.TargetRepo == destination.Repo.Owner+"/"+destination.Repo.Name &&
+			request.TargetConfig == fixDestinationFingerprint(eff, destination) && s.validateFixFiles(destination, request.Fix.Files) == nil
 	default:
 		return false
 	}

@@ -1294,9 +1294,13 @@ func TestReadyRequestMatchesCurrentCrossRepositoryDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 	eff := cfg.EffectiveFixPRs()
-	request := &actionRequest{ActionRequestView: ActionRequestView{Kind: "propose-fix", PatternHash: pattern.ContentHash}, TargetRepo: "kubernetes/test-infra", TargetConfig: fixDestinationFingerprint(eff, destination)}
+	request := &actionRequest{ActionRequestView: ActionRequestView{Kind: "propose-fix", PatternHash: pattern.ContentHash}, Fix: &fixpr.GeneratedFixSnapshot{Files: map[string]string{"config/jobs/capz/periodics.yaml": "content"}}, TargetRepo: "kubernetes/test-infra", TargetConfig: fixDestinationFingerprint(eff, destination)}
 	subject := &ActionSubject{Kind: actionSubjectPattern, ContentHash: pattern.ContentHash, Pattern: &pattern}
 	if !service.readyRequestMatchesCurrent(request, subject) {
 		t.Fatal("equivalent cross-repository ready request was not reused")
+	}
+	request.Fix.Files["config/jobs/other/periodics.yaml"] = "content"
+	if service.readyRequestMatchesCurrent(request, subject) {
+		t.Fatal("ready request with a newly disallowed generated file was reused")
 	}
 }
