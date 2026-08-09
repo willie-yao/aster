@@ -538,3 +538,32 @@ func TestVerifyProwJobEnvironmentPreservesExactScalarWhitespace(t *testing.T) {
 		t.Fatalf("exact spaced value was not recognized: %+v", result)
 	}
 }
+
+func TestVerifyProwJobEnvironmentRejectsDuplicateYAMLKeys(t *testing.T) {
+	const file = "config/jobs/example/periodics.yaml"
+	target := models.RemediationTarget{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: strings.Repeat("a", 40), Path: file, Job: "periodic-capz", Container: "test", Name: "VERSION", Value: "v2"}
+	for name, config := range map[string]string{
+		"top-level section": `periodics: []
+periodics:
+- name: periodic-capz
+  spec: {containers: [{name: test}]}
+`,
+		"nested env value": `periodics:
+- name: periodic-capz
+  spec:
+    containers:
+    - name: test
+      env:
+      - name: VERSION
+        value: v1
+        value: v2
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := verify(t, fakeReader{archive: archive(map[string]string{file: config})}, Input{Targets: []models.RemediationTarget{target}})
+			if result.State != StateInconclusive || !strings.Contains(result.Reason, "duplicate key") {
+				t.Fatalf("result = %+v", result)
+			}
+		})
+	}
+}

@@ -21,6 +21,9 @@ func verifyJobEnvironment(ctx context.Context, reader Reader, archive Archive, t
 	if err := yaml.Unmarshal([]byte(content), &document); err != nil {
 		return inconclusive(fmt.Sprintf("Prow config %s could not be parsed", target.Path)), nil
 	}
+	if err := rejectDuplicateYAMLKeys(&document, map[*yaml.Node]bool{}); err != nil {
+		return inconclusive(fmt.Sprintf("Prow config %s is ambiguous: %v", target.Path, err)), nil
+	}
 	jobs := matchingProwJobs(&document, target.Job)
 	if len(jobs) != 1 {
 		return inconclusive(fmt.Sprintf("Prow job %s matched %d definitions in %s", target.Job, len(jobs), target.Path)), nil
@@ -149,4 +152,37 @@ func dereferenceYAML(node *yaml.Node) *yaml.Node {
 		node = node.Alias
 	}
 	return node
+}
+
+func rejectDuplicateYAMLKeys(node *yaml.Node, visiting map[*yaml.Node]bool) error {
+	node = dereferenceYAML(node)
+	if node == nil || visiting[node] {
+		return nil
+	}
+	visiting[node] = true
+	defer delete(visiting, node)
+	if node.Kind == yaml.MappingNode {
+		seen := map[string]bool{}
+		for index := 0; index+1 < len(node.Content); index += 2 {
+			key := dereferenceYAML(node.Content[index])
+			if key == nil || key.Kind != yaml.ScalarNode {
+				return fmt.Errorf("mapping contains a non-scalar key")
+			}
+			identity := key.Tag + "\x00" + key.Value
+			if seen[identity] {
+				return fmt.Errorf("duplicate key %q", key.Value)
+			}
+			seen[identity] = true
+			if err := rejectDuplicateYAMLKeys(node.Content[index+1], visiting); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, child := range node.Content {
+		if err := rejectDuplicateYAMLKeys(child, visiting); err != nil {
+			return err
+		}
+	}
+	return nil
 }
