@@ -920,7 +920,11 @@ func canonicalizePatternResponse(parsed patternResponse) patternResponse {
 		parsed.RemediationTargets[i].Intent = strings.ToLower(strings.TrimSpace(parsed.RemediationTargets[i].Intent))
 		parsed.RemediationTargets[i].Symbol = strings.TrimSpace(parsed.RemediationTargets[i].Symbol)
 		parsed.RemediationTargets[i].Path = strings.TrimPrefix(strings.TrimSpace(parsed.RemediationTargets[i].Path), "./")
-		parsed.RemediationTargets[i].Value = strings.TrimSpace(parsed.RemediationTargets[i].Value)
+		if parsed.RemediationTargets[i].Intent != models.RemediationIntentSetJobEnvironment {
+			parsed.RemediationTargets[i].Value = strings.TrimSpace(parsed.RemediationTargets[i].Value)
+		}
+		parsed.RemediationTargets[i].Repository = strings.ToLower(strings.TrimSpace(parsed.RemediationTargets[i].Repository))
+		parsed.RemediationTargets[i].Revision = strings.ToLower(strings.TrimSpace(parsed.RemediationTargets[i].Revision))
 	}
 	return parsed
 }
@@ -1056,11 +1060,11 @@ func decodeRemediationTargets(raw json.RawMessage, targets *[]models.Remediation
 			return false
 		}
 		fields, category, _ := decodePatternObject(string(item))
-		if category != "" || len(fields) == 0 || len(fields) > 4 {
+		if category != "" || len(fields) == 0 || (len(fields) > 4 && len(fields) != 9) {
 			return false
 		}
 		for name, value := range fields {
-			if name != "intent" && name != "symbol" && name != "path" && name != "value" {
+			if name != "intent" && name != "symbol" && name != "path" && name != "value" && name != "repository" && name != "revision" && name != "job" && name != "container" && name != "name" {
 				return false
 			}
 			if strings.TrimSpace(string(value)) == "null" {
@@ -1069,6 +1073,13 @@ func decodeRemediationTargets(raw json.RawMessage, targets *[]models.Remediation
 		}
 		if _, ok := fields["intent"]; !ok {
 			return false
+		}
+		if len(fields) == 9 {
+			for _, required := range []string{"symbol", "path", "value", "repository", "revision", "job", "container", "name"} {
+				if _, ok := fields[required]; !ok {
+					return false
+				}
+			}
 		}
 		var target models.RemediationTarget
 		if err := json.Unmarshal(item, &target); err != nil {

@@ -3,7 +3,6 @@ package actionverify
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"gopkg.in/yaml.v3"
@@ -137,7 +136,7 @@ func scalarValue(node *yaml.Node) string {
 	if node == nil || node.Kind != yaml.ScalarNode {
 		return ""
 	}
-	return strings.TrimSpace(node.Value)
+	return node.Value
 }
 
 func scalarExactValue(node *yaml.Node) string {
