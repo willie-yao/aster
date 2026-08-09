@@ -209,7 +209,8 @@ func ValidateResult(result Result) error {
 	}
 	totalBytes := len(result.Finding) + len(result.Direction)
 	if result.Target != nil {
-		totalBytes += len(result.Target.Intent) + len(result.Target.Path) + len(result.Target.Symbol) + len(result.Target.Value)
+		totalBytes += len(result.Target.Intent) + len(result.Target.Path) + len(result.Target.Symbol) + len(result.Target.Value) +
+			len(result.Target.Repository) + len(result.Target.Revision) + len(result.Target.Job) + len(result.Target.Container) + len(result.Target.Name)
 	}
 	for _, citation := range result.Citations {
 		totalBytes += len(citation.Path) + len(citation.Quote)
