@@ -851,8 +851,10 @@ func TestPatternPromptIncludesPinnedProwContext(t *testing.T) {
 func TestParsePatternResultPreservesStrictProwEnvironmentValue(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	failure := PatternFailure{BuildID: "1", ProwJobName: "periodic-capz", ProwConfigFile: "config/jobs/example/periodics.yaml", ProwConfigRevision: revision}
-	raw := `{"systemic":true,"confidence":"high","shared_root_cause":"configured version","shared_builds":["1"],"suggested_fix":"set the job environment","remediation_targets":[{"intent":"set_job_environment","symbol":"","path":"config/jobs/example/periodics.yaml","value":" v2 ","repository":"kubernetes/test-infra","revision":"` + revision + `","job":"periodic-capz","container":"test","name":"VERSION"}],"summary":"shared"}`
-	pattern, err := ParsePatternResult("periodic-capz", []PatternFailure{failure}, raw)
+	raw := `{"systemic":true,"confidence":"high","shared_root_cause":"configured version","shared_builds":["1","2"],"suggested_fix":"set the job environment","remediation_targets":[{"intent":"set_job_environment","symbol":"","path":"config/jobs/example/periodics.yaml","value":" v2 ","repository":"kubernetes/test-infra","revision":"` + revision + `","job":"periodic-capz","container":"test","name":"VERSION"}],"summary":"shared"}`
+	second := failure
+	second.BuildID = "2"
+	pattern, err := ParsePatternResult("periodic-capz", []PatternFailure{failure, second}, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
