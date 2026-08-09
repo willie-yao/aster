@@ -25,7 +25,7 @@ import (
 
 // patternPromptVersion is bumped when the pattern prompt or output contract
 // changes, so cached verdicts from an older contract are re-run.
-const patternPromptVersion = 4
+const patternPromptVersion = 5
 
 const patternCacheVersion = 2
 
@@ -61,8 +61,13 @@ type PatternFailure struct {
 	// failure location). It seeds the fix harness but is deliberately kept out
 	// of the correlation prompt so it never perturbs the pattern cache key.
 	LocationFile string
-	IsTransient  bool
-	Severity     string
+	// Prow job source metadata identifies the exact test-infra snapshot that
+	// selected and configured the failing job.
+	ProwJobName        string
+	ProwConfigFile     string
+	ProwConfigRevision string
+	IsTransient        bool
+	Severity           string
 }
 
 // PatternInput is the bounded, deterministic model input for one job-level
@@ -272,7 +277,9 @@ Describe every proposed source change in remediation_targets. Use one object per
 - modify_symbol: {"intent":"modify_symbol","symbol":"GoIdentifier","path":"verified/repo/file.go"}
 - set_configuration: {"intent":"set_configuration","path":"verified/repo/file.yaml","value":"ExactKey=ExactValue"}
 - remove_configuration: {"intent":"remove_configuration","path":"verified/repo/file.yaml","value":"ExactKey=ExactValue"}
+- set_job_environment: {"intent":"set_job_environment","repository":"kubernetes/test-infra","revision":"full discovery commit","path":"config/jobs/.../file.yaml","job":"exact Prow job name","container":"exact container name","name":"ENV_NAME","value":"ExactValue"}
 - investigate: {"intent":"investigate"} only when the evidence does not identify an implementation-ready target
+Use set_job_environment only when the Prow job source context identifies the exact test-infra file and full discovery revision. Never use modify_symbol for a shell variable. If the exact job, container, variable, and replacement value are not known, use investigate.
 Do not claim verification state. The engine independently checks these targets against the pinned source.
 
 Decide:
@@ -286,7 +293,7 @@ Respond with ONLY a JSON object, no prose, no code fences:
   "shared_root_cause": "the one underlying MECHANISM (empty if not systemic); not a restated symptom",
   "shared_builds": ["buildID", ...],   // builds you judge to share the cause
   "suggested_fix": "the concrete, actionable cross-cutting fix naming the change and target (empty if not systemic)",
-	"remediation_targets": [{"intent":"add_symbol|modify_symbol|set_configuration|remove_configuration|investigate","symbol":"optional","path":"optional","value":"optional"}],
+	"remediation_targets": [{"intent":"add_symbol|modify_symbol|set_configuration|remove_configuration|set_job_environment|investigate","symbol":"optional","path":"optional","value":"optional","repository":"optional","revision":"optional","job":"optional","container":"optional","name":"optional"}],
   "summary": "one short paragraph: the verdict and the evidence for it"
 }`
 
@@ -324,11 +331,14 @@ func patternResponseFormat() ResponseFormat {
 							"intent": map[string]any{"type": "string", "enum": []string{
 								models.RemediationIntentAddSymbol, models.RemediationIntentModifySymbol,
 								models.RemediationIntentSetConfiguration, models.RemediationIntentRemoveConfiguration,
+								models.RemediationIntentSetJobEnvironment,
 								models.RemediationIntentInvestigate,
 							}},
 							"symbol": stringProperty(), "path": stringProperty(), "value": stringProperty(),
+							"repository": stringProperty(), "revision": stringProperty(), "job": stringProperty(),
+							"container": stringProperty(), "name": stringProperty(),
 						},
-						"required": []string{"intent", "symbol", "path", "value"}, "additionalProperties": false,
+						"required": []string{"intent", "symbol", "path", "value", "repository", "revision", "job", "container", "name"}, "additionalProperties": false,
 					},
 				},
 				"summary": stringProperty(),
@@ -431,6 +441,9 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 	if err != nil {
 		return nil, err
 	}
+	if !patternTargetsMatchProwContext(parsed.RemediationTargets, failures) {
+		return nil, &patternValidationError{category: patternValidationSchema, issue: "prow_job_context"}
+	}
 
 	var fileLinks map[string]string
 	var sourceRef string
@@ -471,10 +484,32 @@ func ParsePatternResult(subject string, failures []PatternFailure, result string
 	if err != nil {
 		return nil, err
 	}
+	if !patternTargetsMatchProwContext(parsed.RemediationTargets, failures) {
+		return nil, &patternValidationError{category: patternValidationSchema, issue: "prow_job_context"}
+	}
 	// The Orka correlation task has no source-repository tools. Mark every path
 	// it introduces as unverified rather than presenting a guessed target as fact.
 	parsed.SuggestedFix = annotateUnverifiedPaths(parsed.SuggestedFix, func(string) bool { return false })
 	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures), nil, ""), nil
+}
+
+func patternTargetsMatchProwContext(targets []models.RemediationTarget, failures []PatternFailure) bool {
+	for _, target := range targets {
+		if target.Intent != models.RemediationIntentSetJobEnvironment {
+			continue
+		}
+		matched := false
+		for _, failure := range failures {
+			if target.Job == failure.ProwJobName && target.Path == failure.ProwConfigFile && target.Revision == failure.ProwConfigRevision {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 type trackingPatternRepo struct {
@@ -554,6 +589,9 @@ func patternTargetsWereRead(targets []models.RemediationTarget, reads []string) 
 		read[value] = true
 	}
 	for _, target := range targets {
+		if target.Intent == models.RemediationIntentSetJobEnvironment {
+			continue
+		}
 		if target.Path != "" && !read[target.Path] {
 			return false
 		}
@@ -565,6 +603,9 @@ func (s *Service) patternTargetsExist(ctx context.Context, targets []models.Reme
 	exists := s.patternPathVerifier(ctx)
 	if exists == nil {
 		for _, target := range targets {
+			if target.Intent == models.RemediationIntentSetJobEnvironment {
+				continue
+			}
 			if target.Path != "" {
 				return false
 			}
@@ -572,6 +613,9 @@ func (s *Service) patternTargetsExist(ctx context.Context, targets []models.Reme
 		return true
 	}
 	for _, target := range targets {
+		if target.Intent == models.RemediationIntentSetJobEnvironment {
+			continue
+		}
 		if target.Path != "" && !exists(target.Path) {
 			return false
 		}
@@ -627,7 +671,7 @@ func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string,
 	}
 
 	extract := "Extract the correlation verdict this investigation reached as JSON with exactly these keys: " +
-		`{"systemic": true|false, "confidence": "high"|"medium"|"low", "shared_root_cause": "...", "shared_builds": ["..."], "suggested_fix": "...", "remediation_targets": [{"intent":"...","symbol":"...","path":"...","value":"..."}], "summary": "..."}. ` +
+		`{"systemic": true|false, "confidence": "high"|"medium"|"low", "shared_root_cause": "...", "shared_builds": ["..."], "suggested_fix": "...", "remediation_targets": [{"intent":"...","symbol":"...","path":"...","value":"...","repository":"...","revision":"...","job":"...","container":"...","name":"..."}], "summary": "..."}. ` +
 		"Reply with ONLY the JSON.\n\nInvestigation:\n" + out
 	started = time.Now()
 	out2, err := s.client.Complete(ctx, "You output only a JSON object.", extract)
@@ -707,7 +751,7 @@ func (s *Service) repairPatternValidation(ctx context.Context, output string, bu
 
 func (s *Service) repairPatternAmbiguity(ctx context.Context, output string, buildIDs map[string]struct{}, observe func(PatternRepairAttempt)) (patternResponse, error) {
 	prompt := fmt.Sprintf("Repair contract version %d. The prior bounded investigation produced multiple distinct candidate contracts. Resolve them into exactly one verdict supported by that investigation. Do not add a draft, alternative, explanation, or code fence. Reply with only one JSON object using exactly these keys: "+
-		`{"systemic": true|false, "confidence": "high"|"medium"|"low", "shared_root_cause": "...", "shared_builds": ["..."], "suggested_fix": "...", "remediation_targets": [{"intent":"...","symbol":"...","path":"...","value":"..."}], "summary": "..."}.`+"\n\nInvestigation output:\n%s", patternRepairVersion, output)
+		`{"systemic": true|false, "confidence": "high"|"medium"|"low", "shared_root_cause": "...", "shared_builds": ["..."], "suggested_fix": "...", "remediation_targets": [{"intent":"...","symbol":"...","path":"...","value":"...","repository":"...","revision":"...","job":"...","container":"...","name":"..."}], "summary": "..."}.`+"\n\nInvestigation output:\n%s", patternRepairVersion, output)
 	started := time.Now()
 	repaired, err := s.client.Complete(ctx, "Return exactly one final recurring-pattern JSON contract and no other content.", prompt)
 	if err != nil {
@@ -1057,11 +1101,20 @@ func validRemediationTarget(target models.RemediationTarget) bool {
 	}
 	switch target.Intent {
 	case models.RemediationIntentAddSymbol, models.RemediationIntentModifySymbol:
-		return gotoken.IsIdentifier(target.Symbol) && validPath(target.Path) && target.Value == ""
+		return gotoken.IsIdentifier(target.Symbol) && validPath(target.Path) && target.Value == "" &&
+			target.Repository == "" && target.Revision == "" && target.Job == "" && target.Container == "" && target.Name == ""
 	case models.RemediationIntentSetConfiguration, models.RemediationIntentRemoveConfiguration:
-		return target.Symbol == "" && validPath(target.Path) && validValue(target.Value)
+		return target.Symbol == "" && target.Repository == "" && target.Revision == "" && target.Job == "" && target.Container == "" && target.Name == "" &&
+			validPath(target.Path) && validValue(target.Value)
+	case models.RemediationIntentSetJobEnvironment:
+		return target.Symbol == "" && target.Repository == "kubernetes/test-infra" &&
+			regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(target.Revision) && validPath(target.Path) &&
+			strings.HasPrefix(target.Path, "config/jobs/") && (strings.HasSuffix(target.Path, ".yaml") || strings.HasSuffix(target.Path, ".yml")) &&
+			strings.TrimSpace(target.Job) != "" && strings.TrimSpace(target.Container) != "" &&
+			regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(target.Name) && strings.TrimSpace(target.Value) != "" &&
+			len(target.Value) <= 512 && !strings.ContainsAny(target.Value, "\r\n\x00")
 	case models.RemediationIntentInvestigate:
-		return target.Symbol == "" && target.Path == "" && target.Value == ""
+		return target.Symbol == "" && target.Path == "" && target.Value == "" && target.Repository == "" && target.Revision == "" && target.Job == "" && target.Container == "" && target.Name == ""
 	default:
 		return false
 	}
@@ -1163,6 +1216,11 @@ func buildPatternUserPrompt(subject string, failures []PatternFailure) string {
 		}
 		if len(f.RelevantFiles) > 0 {
 			fmt.Fprintf(&b, "relevant_files: %s\n", clampPattern(strings.Join(f.RelevantFiles, ", "), 400))
+		}
+		if f.ProwConfigFile != "" || f.ProwConfigRevision != "" {
+			fmt.Fprintf(&b, "prow_job_name: %s\n", f.ProwJobName)
+			fmt.Fprintf(&b, "test_infra_config_file: %s\n", f.ProwConfigFile)
+			fmt.Fprintf(&b, "test_infra_revision: %s\n", f.ProwConfigRevision)
 		}
 		if f.FailureMessage != "" {
 			fmt.Fprintf(&b, "failure_message: %s\n", clampPattern(f.FailureMessage, 600))

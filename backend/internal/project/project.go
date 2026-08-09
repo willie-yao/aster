@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"net/mail"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -621,6 +622,9 @@ type FixPRs struct {
 	// Repo is the source repo to open fix PRs against. Defaults to
 	// branding.source_repo.
 	Repo *SourceRepo `yaml:"repo,omitempty" json:"repo,omitempty"`
+	// AllowedRepositories permits explicit remediation targets outside Repo.
+	// Every entry must constrain writes to one or more repo-relative prefixes.
+	AllowedRepositories []FixRepository `yaml:"allowed_repositories,omitempty" json:"-"`
 	// Fork controls how the fix branch reaches the source repo. true (default)
 	// uses fork-and-PR (for a repo you don't own); false pushes the branch
 	// directly and opens a same-repo PR (for a repo you own). Excluded from
@@ -659,6 +663,20 @@ type FixPRs struct {
 	// real workspace clone). A nil block uses opencode with defaults. Excluded
 	// from manifest.json.
 	AgentRuntime *FixAgentRuntime `yaml:"agent_runtime,omitempty" json:"-"`
+}
+
+// FixRepository is one explicitly allowlisted cross-repository Fix PR target.
+type FixRepository struct {
+	Owner        string   `yaml:"owner" json:"owner"`
+	Name         string   `yaml:"name" json:"name"`
+	PathPrefixes []string `yaml:"path_prefixes" json:"path_prefixes"`
+	Fork         *bool    `yaml:"fork,omitempty" json:"-"`
+}
+
+// FixDestination is the resolved repository and branch-routing policy.
+type FixDestination struct {
+	Repo SourceRepo
+	Fork bool
 }
 
 // FixAgentRuntime configures the coding-agent generator for fix PRs.
@@ -873,6 +891,10 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 		out.AgentRuntime.AllowBash = &value
 	}
 	out.AgentRuntime.NetworkDomains = append([]string(nil), out.AgentRuntime.NetworkDomains...)
+	out.AllowedRepositories = append([]FixRepository(nil), out.AllowedRepositories...)
+	for index := range out.AllowedRepositories {
+		out.AllowedRepositories[index].PathPrefixes = append([]string(nil), out.AllowedRepositories[index].PathPrefixes...)
+	}
 	commands := make([]FixAgentCommand, len(out.AgentRuntime.AllowedCommands))
 	for index, command := range out.AgentRuntime.AllowedCommands {
 		commands[index] = FixAgentCommand{Argv: append([]string(nil), command.Argv...), Timeout: command.Timeout}
@@ -913,6 +935,42 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 		}
 	}
 	return out
+}
+
+// ResolveFixDestination checks one repository-qualified target against the
+// configured allowlist. Empty repository selects the default Fix PR repo.
+func (c *Config) ResolveFixDestination(repository, targetPath string) (FixDestination, error) {
+	eff := c.EffectiveFixPRs()
+	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
+		return FixDestination{}, fmt.Errorf("no default fix repository is configured")
+	}
+	defaultFork := eff.Fork == nil || *eff.Fork
+	requested := strings.TrimSpace(repository)
+	defaultName := eff.Repo.Owner + "/" + eff.Repo.Name
+	if requested == "" || strings.EqualFold(requested, defaultName) {
+		return FixDestination{Repo: *eff.Repo, Fork: defaultFork}, nil
+	}
+	for _, allowed := range eff.AllowedRepositories {
+		if !strings.EqualFold(requested, allowed.Owner+"/"+allowed.Name) {
+			continue
+		}
+		pathAllowed := false
+		for _, prefix := range allowed.PathPrefixes {
+			if strings.HasPrefix(targetPath, prefix) {
+				pathAllowed = true
+				break
+			}
+		}
+		if !pathAllowed {
+			return FixDestination{}, fmt.Errorf("target path %q is outside the allowlist for %s", targetPath, requested)
+		}
+		fork := defaultFork
+		if allowed.Fork != nil {
+			fork = *allowed.Fork
+		}
+		return FixDestination{Repo: SourceRepo{Owner: allowed.Owner, Name: allowed.Name}, Fork: fork}, nil
+	}
+	return FixDestination{}, fmt.Errorf("target repository %q is not allowlisted", requested)
 }
 
 // AnalysisConcurrency returns the number of failures to analyze in parallel,
@@ -1449,6 +1507,26 @@ func (c *Config) Validate() error {
 			}
 			if r := f.Repo; r != nil && (r.Owner == "" || r.Name == "") {
 				return fmt.Errorf("ai.fix_prs.repo requires both owner and name (omit it to default to branding.source_repo)")
+			}
+		}
+		seenFixRepos := map[string]bool{}
+		for index, repo := range f.AllowedRepositories {
+			key := strings.ToLower(strings.TrimSpace(repo.Owner) + "/" + strings.TrimSpace(repo.Name))
+			if repo.Owner == "" || repo.Name == "" {
+				return fmt.Errorf("ai.fix_prs.allowed_repositories[%d] requires owner and name", index)
+			}
+			if seenFixRepos[key] {
+				return fmt.Errorf("ai.fix_prs.allowed_repositories contains duplicate repository %q", key)
+			}
+			seenFixRepos[key] = true
+			if len(repo.PathPrefixes) == 0 {
+				return fmt.Errorf("ai.fix_prs.allowed_repositories[%d].path_prefixes requires at least one prefix", index)
+			}
+			for _, prefix := range repo.PathPrefixes {
+				clean := path.Clean(strings.TrimSpace(prefix))
+				if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || !strings.HasSuffix(prefix, "/") || clean+"/" != prefix {
+					return fmt.Errorf("ai.fix_prs.allowed_repositories[%d].path_prefixes contains invalid prefix %q", index, prefix)
+				}
 			}
 		}
 		if f.CritiqueRetries != nil && *f.CritiqueRetries < 0 {

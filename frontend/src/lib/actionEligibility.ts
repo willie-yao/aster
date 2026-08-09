@@ -47,6 +47,17 @@ function targetIsComplete(target: RemediationTarget): boolean {
     case "set_configuration":
     case "remove_configuration":
       return Boolean(target.path?.trim() && target.value?.includes("=") && !target.symbol);
+    case "set_job_environment":
+      return Boolean(
+        target.repository === "kubernetes/test-infra" &&
+        /^[0-9a-f]{40}$/.test(target.revision ?? "") &&
+        target.path?.startsWith("config/jobs/") &&
+        target.job?.trim() &&
+        target.container?.trim() &&
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(target.name ?? "") &&
+        target.value?.trim() &&
+        !target.symbol,
+      );
     case "investigate":
       return !target.path && !target.symbol && !target.value;
   }

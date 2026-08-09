@@ -272,6 +272,12 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 	}
 
 	for _, p := range work {
+		if !patternTargetsRepository(p, m.opts.SourceOwner, m.opts.SourceName) {
+			reason := fmt.Sprintf("remediation targets belong to a different repository than %s/%s", m.opts.SourceOwner, m.opts.SourceName)
+			stats.Failures = append(stats.Failures, Failure{Subject: p.Subject, Reason: reason})
+			reconcileErrs = append(reconcileErrs, fmt.Errorf("generate fix for %q: %s", p.Subject, reason))
+			continue
+		}
 		key := KeyFor(p)
 
 		// Dry-run: propose without GitHub writes or state, capped per run.
@@ -535,6 +541,9 @@ func (m *Manager) generatePreview(ctx context.Context, p models.PatternAnalysis,
 	if len(eligible([]models.PatternAnalysis{p}, m.opts.MinConfidence)) == 0 {
 		return nil, fmt.Errorf("this failure is not auto-fixable (needs a systemic pattern with a suggested fix)")
 	}
+	if !patternTargetsRepository(p, m.opts.SourceOwner, m.opts.SourceName) {
+		return nil, fmt.Errorf("remediation targets do not match fix repository %s/%s", m.opts.SourceOwner, m.opts.SourceName)
+	}
 	base, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName)
 	if err != nil {
 		return nil, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
@@ -555,6 +564,16 @@ func (m *Manager) generatePreview(ctx context.Context, p models.PatternAnalysis,
 		key:         key,
 		base:        base,
 	}, nil
+}
+
+func patternTargetsRepository(pattern models.PatternAnalysis, owner, repo string) bool {
+	want := owner + "/" + repo
+	for _, target := range pattern.RemediationTargets {
+		if target.Repository != "" && !strings.EqualFold(target.Repository, want) {
+			return false
+		}
+	}
+	return true
 }
 
 // OpenFromPreview opens the draft PR for a previously generated fix, applying

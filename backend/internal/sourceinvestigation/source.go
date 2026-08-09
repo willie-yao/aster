@@ -198,7 +198,7 @@ func ValidateResult(result Result) error {
 		if result.State == StateActionableCodeChange && result.Target.Intent != models.RemediationIntentAddSymbol && result.Target.Intent != models.RemediationIntentModifySymbol {
 			return fmt.Errorf("%w: actionable_code_change requires a symbol target", ErrInvalidResult)
 		}
-		if result.State == StateActionableConfigurationChange && result.Target.Intent != models.RemediationIntentSetConfiguration && result.Target.Intent != models.RemediationIntentRemoveConfiguration {
+		if result.State == StateActionableConfigurationChange && result.Target.Intent != models.RemediationIntentSetConfiguration && result.Target.Intent != models.RemediationIntentRemoveConfiguration && result.Target.Intent != models.RemediationIntentSetJobEnvironment {
 			return fmt.Errorf("%w: actionable_configuration_change requires a configuration target", ErrInvalidResult)
 		}
 	default:

@@ -108,6 +108,12 @@ ai:
     # repo:                       # defaults to branding.source_repo
     #   owner: "kubernetes-sigs"
     #   name: "cluster-api-provider-azure"
+    # allowed_repositories:       # explicit cross-repository destinations
+    #   - owner: kubernetes
+    #     name: test-infra
+    #     path_prefixes:
+    #       - config/jobs/kubernetes-sigs/cluster-api-provider-azure/
+    #     fork: true
     author_name: "Jane Maintainer"     # required: CLA-signed identity
     author_email: "jane@example.com"   # required: must match that GitHub account
     # fork: true                  # true (default): fork-and-PR for a repo you don't own;
@@ -130,6 +136,13 @@ ai:
 The feature is active only when **all** of `enabled: true`, a non-empty
 `FIX_TOKEN`, and a resolved source repo are present; any missing piece is a
 no-op, never a deploy failure.
+
+Repository-qualified remediation targets are rejected unless the destination
+is listed in `allowed_repositories` and every changed path is under one of its
+prefixes. Prow environment changes additionally pin the exact
+`kubernetes/test-infra` discovery revision, job, container, variable name, and
+replacement value. The engine parses the YAML and fails closed on duplicate
+jobs, duplicate variables, `valueFrom`, or ambiguous containers.
 
 ### The LLM review (`critique_retries`)
 

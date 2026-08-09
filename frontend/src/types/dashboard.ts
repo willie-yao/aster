@@ -225,10 +225,16 @@ export interface RemediationTarget {
     | "modify_symbol"
     | "set_configuration"
     | "remove_configuration"
+    | "set_job_environment"
     | "investigate";
   symbol?: string;
   path?: string;
   value?: string;
+  repository?: string;
+  revision?: string;
+  job?: string;
+  container?: string;
+  name?: string;
 }
 
 export interface JobDetail {

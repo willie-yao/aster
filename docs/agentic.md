@@ -975,11 +975,18 @@ public repositories:
 Systemic verdicts also include `remediation_targets`, a strict structured list
 used by the actions preflight. Each target declares an intent (`add_symbol` for
 package-level Go symbols,
-`modify_symbol`, `set_configuration`, `remove_configuration`, or `investigate`)
+`modify_symbol`, `set_configuration`, `remove_configuration`,
+`set_job_environment`, or `investigate`)
 plus the applicable verified path and symbol or configuration value. The model
 does not decide whether a remediation is present. File issue and Propose fix
 independently verify the metadata against the exact pinned source revision and
 remain fail-closed when the target is missing or inconclusive.
+
+`set_job_environment` is repository-qualified and limited to pinned
+`kubernetes/test-infra` job configuration. It records the discovery revision,
+config path, job, container, environment-variable name, and exact desired
+value. Fix PR routing separately requires an explicit repository and path-prefix
+allowlist.
 
 - **Repo tool loop.** With a reader wired, the correlation runs as a repotree
   loop (`list_repo_tree` / `read_repo_file` / `grep_repo` over the source repo

@@ -1860,3 +1860,22 @@ func TestRepositoryTokenExcludedFromAgentSandboxRuntime(t *testing.T) {
 		t.Fatalf("Orka token changed = %q", got)
 	}
 }
+
+func TestFixDestinationForPatternAllowsPinnedTestInfraTarget(t *testing.T) {
+	cfg := &project.Config{Branding: project.Branding{SourceRepo: project.SourceRepo{Owner: "example", Name: "source"}}, AI: &project.AI{FixPRs: &project.FixPRs{
+		AllowedRepositories: []project.FixRepository{{Owner: "kubernetes", Name: "test-infra", PathPrefixes: []string{"config/jobs/kubernetes-sigs/cluster-api-provider-azure/"}}},
+	}}}
+	service := NewService(cfg, t.TempDir(), AIConfig{})
+	pattern := models.PatternAnalysis{RemediationTargets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: strings.Repeat("a", 40),
+		Path: "config/jobs/kubernetes-sigs/cluster-api-provider-azure/periodics.yaml", Job: "periodic-capz", Container: "test", Name: "VERSION", Value: "v2",
+	}}}
+	destination, revision, err := service.fixDestinationForPattern(pattern)
+	if err != nil || destination.Repo.Owner != "kubernetes" || destination.Repo.Name != "test-infra" || revision != strings.Repeat("a", 40) {
+		t.Fatalf("destination=%+v revision=%q err=%v", destination, revision, err)
+	}
+	pattern.RemediationTargets[0].Path = "config/jobs/other/periodics.yaml"
+	if _, _, err := service.fixDestinationForPattern(pattern); err == nil {
+		t.Fatal("path outside allowlist was accepted")
+	}
+}
