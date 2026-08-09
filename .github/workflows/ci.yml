@@ -62,3 +62,12 @@ jobs:
       - uses: azure/setup-helm@v4
       - name: Lint and render
         run: make helm-check
+
+  remote-fixer-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build --target remote-fixer-runtime -t prow-ai-dashboard/remote-fixer:ci .
+      - name: Test git-only runtime
+        run: hack/test-remote-fixer-image.sh prow-ai-dashboard/remote-fixer:ci

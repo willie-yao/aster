@@ -351,6 +351,16 @@
               "required": ["repository", "digest", "pullPolicy"],
               "additionalProperties": false
             },
+            "dashboardImage": {
+              "type": "object",
+              "properties": {
+                "repository": {"type": "string"},
+                "tag": {"type": "string"},
+                "pullPolicy": {"type": "string", "enum": ["IfNotPresent"]}
+              },
+              "required": ["repository", "tag", "pullPolicy"],
+              "additionalProperties": false
+            },
             "workloadServiceAccount": {
               "type": "object",
               "properties": {
@@ -422,7 +432,7 @@
               "additionalProperties": false
             }
           },
-          "required": ["enabled", "namespace", "runtimeClassName", "image", "workloadServiceAccount", "modelGateway", "maxSteps", "maxFiles", "timeout", "outputLimitBytes", "allowedCommands", "pollInterval", "resources"],
+          "required": ["enabled", "namespace", "runtimeClassName", "image", "dashboardImage", "workloadServiceAccount", "modelGateway", "maxSteps", "maxFiles", "timeout", "outputLimitBytes", "allowedCommands", "pollInterval", "resources"],
           "additionalProperties": false
         },
         "rbac": {

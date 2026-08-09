@@ -71,6 +71,13 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s:%s" .Values.orka.fixRuntime.image.repository $tag -}}
 {{- end -}}
 
+{{/* Minimal git-capable engine image used with Agent Sandbox. */}}
+{{- define "prow-ai-dashboard.agentSandboxDashboardImage" -}}
+{{- $image := .Values.agentSandbox.fixRuntime.dashboardImage -}}
+{{- $tag := include "prow-ai-dashboard.resolvedImageTag" (list . $image.tag) -}}
+{{- printf "%s:%s" $image.repository $tag -}}
+{{- end -}}
+
 {{/*
 Small image used to materialize ConfigMap project files for container analysis.
 */}}
@@ -561,6 +568,12 @@ key, or bot token).
   {{- if not (regexMatch "^[^[:space:]@]+$" $cfg.image.repository) -}}{{- fail "agentSandbox.fixRuntime.image.repository must not contain whitespace, credentials, or a digest" -}}{{- end -}}
   {{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $cfg.image.digest) -}}{{- fail "agentSandbox.fixRuntime.image.digest must be an immutable sha256 digest" -}}{{- end -}}
   {{- if ne $cfg.image.pullPolicy "IfNotPresent" -}}{{- fail "agentSandbox.fixRuntime.image.pullPolicy must be IfNotPresent" -}}{{- end -}}
+  {{- $dashboardImage := $cfg.dashboardImage -}}
+  {{- if not $dashboardImage.repository -}}{{- fail "agentSandbox.fixRuntime.dashboardImage.repository is required" -}}{{- end -}}
+  {{- if not (regexMatch "^[^[:space:]@]+$" $dashboardImage.repository) -}}{{- fail "agentSandbox.fixRuntime.dashboardImage.repository must not contain whitespace, credentials, or a digest" -}}{{- end -}}
+  {{- $dashboardTag := include "prow-ai-dashboard.resolvedImageTag" (list . $dashboardImage.tag) -}}
+  {{- if not (regexMatch "^(sha-[0-9a-fA-F]{7,64}|v?[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?)$" $dashboardTag) -}}{{- fail "agentSandbox.fixRuntime.dashboardImage tag must be an immutable sha-<hex> or full semantic version" -}}{{- end -}}
+  {{- if ne $dashboardImage.pullPolicy "IfNotPresent" -}}{{- fail "agentSandbox.fixRuntime.dashboardImage.pullPolicy must be IfNotPresent" -}}{{- end -}}
   {{- $workloadSA := include "prow-ai-dashboard.agentSandboxWorkloadServiceAccountName" . -}}
   {{- if not $workloadSA -}}{{- fail "agentSandbox.fixRuntime.workloadServiceAccount.name is required" -}}{{- end -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $workloadSA) -}}{{- fail "agentSandbox.fixRuntime.workloadServiceAccount.name must be a lowercase Kubernetes object name" -}}{{- end -}}

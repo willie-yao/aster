@@ -4,7 +4,7 @@
 # and serves the SPA, /data/*.json, and /api/capabilities.
 
 global:
-  # Shared snapshot tag for the engine, analyzer, and fixer images. Each
+  # Shared snapshot tag for engine, analyzer, and fixer images. Each
   # image-specific tag takes precedence; empty falls back to Chart.appVersion.
   imageTag: ""
 
@@ -100,6 +100,13 @@ agentSandbox:
       repository: ""
       # Required sha256 digest without an image tag.
       digest: ""
+      pullPolicy: IfNotPresent
+    # Minimal git-capable dashboard image used only to reconstruct and validate
+    # patches returned by Agent Sandbox. It does not contain OpenCode or srt.
+    dashboardImage:
+      repository: ghcr.io/willie-yao/prow-ai-dashboard/remote-fixer
+      # Defaults to global.imageTag, then .Chart.AppVersion, when empty.
+      tag: ""
       pullPolicy: IfNotPresent
     workloadServiceAccount:
       # Create only the tokenless workload identity, never the namespace.

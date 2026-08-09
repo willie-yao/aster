@@ -1,6 +1,6 @@
-# Multi-stage build producing the default minimal engine image plus an optional
-# fixer-runtime target with git, OpenCode, and pinned local srt sandboxing. Both
-# targets include the server, fetcher, worker, and SPA.
+# Multi-stage build producing the default minimal engine image plus optional
+# git-capable remote-fix and local OpenCode runtimes. All targets include the
+# server, fetcher, worker, and SPA.
 
 # Stage 1: build the SPA. Default base path "/" suits server mode.
 FROM node:20-alpine AS web
@@ -63,6 +63,23 @@ ENV HOME=/tmp/home \
 USER 65532:65532
 WORKDIR /workspace
 ENTRYPOINT ["/usr/local/bin/fixexecutor"]
+
+# Minimal git-capable engine for reconstructing patches returned by remote fix
+# runtimes such as Agent Sandbox. It intentionally omits OpenCode and srt.
+FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce AS remote-fixer-runtime
+RUN apk add --no-cache ca-certificates git \
+ && addgroup -g 65532 padnonroot \
+ && adduser -D -H -u 65532 -G padnonroot padnonroot \
+ && git --version
+COPY --from=build /out/fetcher /usr/local/bin/fetcher
+COPY --from=build /out/worker /usr/local/bin/worker
+COPY --from=build /out/server /usr/local/bin/server
+COPY --from=web /src/frontend/dist /app/web
+ENV HOME=/tmp \
+    GIT_TERMINAL_PROMPT=0 \
+    GIT_CONFIG_NOSYSTEM=1
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/server"]
 
 # Stage 3: minimal runtime. distroless/static ships CA certs for HTTPS to GCS,
 # GitHub, and the AI endpoint, and runs as a non-root user.

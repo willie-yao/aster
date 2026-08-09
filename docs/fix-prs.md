@@ -144,6 +144,11 @@ The fix generator is selected by `agent_runtime.type`. The reviewer, verificatio
 dry-run preview, scope limits, and PR-opening path remain engine-owned for both
 backends.
 
+Remote backends return a patch to the dashboard. Kubernetes deployments use the
+minimal `remote-fixer` engine image to reapply that patch to the pinned source
+revision and reconstruct the exact changed-file map. This image contains git but
+does not contain OpenCode or srt.
+
 #### `opencode` (default)
 
 The local backend runs the `opencode` CLI in a real clone on the runner. It uses

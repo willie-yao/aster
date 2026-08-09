@@ -1,4 +1,4 @@
-.PHONY: all build build-server build-worker serve dev-actions image analyzer-image fixer-image agent-sandbox-fix-executor-image test test-v e2e lint fmt tidy helm-check check-repo-map \
+.PHONY: all build build-server build-worker serve dev-actions image analyzer-image fixer-image remote-fixer-image agent-sandbox-fix-executor-image test test-v e2e lint fmt tidy helm-check check-repo-map \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check fe-test fe-lint \
        dist dist-ai clean clean-cache clean-all help
@@ -60,6 +60,10 @@ analyzer-image:
 # Build the sandboxed local OpenCode image for fix generation.
 fixer-image:
 	docker build --target fixer-runtime --build-arg VERSION=$(VERSION) -t $(IMAGE)/fixer:$(VERSION) .
+
+# Build the minimal git-capable image for remote fix runtimes.
+remote-fixer-image:
+	docker build --target remote-fixer-runtime --build-arg VERSION=$(VERSION) -t $(IMAGE)/remote-fixer:$(VERSION) .
 
 # Build the credential-free OpenCode executor image for Agent Sandbox.
 agent-sandbox-fix-executor-image:
@@ -203,6 +207,7 @@ help:
 	@echo "  image              Build the container image (fetcher + server + SPA)"
 	@echo "  analyzer-image     Build the one-shot Orka container analyzer image"
 	@echo "  fixer-image        Build the sandboxed local OpenCode fix image"
+	@echo "  remote-fixer-image Build the minimal git-capable remote fix image"
 	@echo "  agent-sandbox-fix-executor-image  Build the credential-free Agent Sandbox executor"
 	@echo "  clean              Remove build artifacts and data"
 	@echo "  clean-cache        Clear AI analysis cache"
