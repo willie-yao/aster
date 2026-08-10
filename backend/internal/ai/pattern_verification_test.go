@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ type verificationRepo struct {
 	repo    string
 	ref     string
 	reads   int
+	tree    []string
 }
 
 func TestVerifyPatternRemediationProvesAbsentAtFailureRevisions(t *testing.T) {
@@ -36,23 +38,39 @@ import "example.com/migration"
 func reconcile() {}
 `
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/repos/example/repo/git/trees/") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"tree":[{"path":"controllers/reconcile.go","type":"blob"},{"path":"go.mod","type":"blob"},{"path":"migration/fix.go","type":"blob"}]}`))
+			return
+		}
 		switch r.URL.Path {
 		case "/example/repo/" + oldRevisionOne + "/controllers/reconcile.go", "/example/repo/" + oldRevisionTwo + "/controllers/reconcile.go":
 			_, _ = w.Write([]byte(historical))
 		case "/example/repo/" + passRevisionOne + "/controllers/reconcile.go", "/example/repo/" + passRevisionTwo + "/controllers/reconcile.go":
 			_, _ = w.Write([]byte(current))
+		case "/example/repo/" + oldRevisionOne + "/go.mod", "/example/repo/" + oldRevisionTwo + "/go.mod",
+			"/example/repo/" + passRevisionOne + "/go.mod", "/example/repo/" + passRevisionTwo + "/go.mod":
+			_, _ = w.Write([]byte("module example.com\n"))
+		case "/example/repo/" + oldRevisionOne + "/migration/fix.go", "/example/repo/" + oldRevisionTwo + "/migration/fix.go",
+			"/example/repo/" + passRevisionOne + "/migration/fix.go", "/example/repo/" + passRevisionTwo + "/migration/fix.go":
+			_, _ = w.Write([]byte("package migration\nfunc ApplyFix() {}\n"))
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer srv.Close()
-	oldRaw := rawContentBase
-	rawContentBase = srv.URL
-	t.Cleanup(func() { rawContentBase = oldRaw })
+	oldRaw, oldAPI := rawContentBase, githubAPIBase
+	rawContentBase, githubAPIBase = srv.URL, srv.URL
+	t.Cleanup(func() { rawContentBase, githubAPIBase = oldRaw, oldAPI })
 
 	repo := &verificationRepo{
 		owner: "example", repo: "repo", ref: currentRevision,
-		archive: actionverify.Archive{Paths: map[string]bool{"controllers/reconcile.go": true}, GoFiles: map[string]string{"controllers/reconcile.go": current}},
+		tree: []string{"controllers/reconcile.go", "go.mod", "migration/fix.go"},
+		archive: actionverify.Archive{
+			Paths:   map[string]bool{"controllers/reconcile.go": true, "go.mod": true, "migration/fix.go": true},
+			GoFiles: map[string]string{"controllers/reconcile.go": current, "migration/fix.go": "package migration\nfunc ApplyFix() {}\n"},
+			Files:   map[string]string{"go.mod": "module example.com\n"},
+		},
 	}
 	service := &Service{patternRepo: repo, sourceRepoOwner: "example", sourceRepoName: "repo"}
 	pattern := models.PatternAnalysis{
@@ -74,8 +92,10 @@ func reconcile() {}
 	}
 }
 
-func (r *verificationRepo) SourceIdentity() (string, string, string)   { return r.owner, r.repo, r.ref }
-func (r *verificationRepo) ListTree(context.Context) ([]string, error) { return nil, nil }
+func (r *verificationRepo) SourceIdentity() (string, string, string) { return r.owner, r.repo, r.ref }
+func (r *verificationRepo) ListTree(context.Context) ([]string, error) {
+	return append([]string(nil), r.tree...), nil
+}
 func (r *verificationRepo) ReadFile(_ context.Context, path string) (string, bool, error) {
 	if value, ok := r.archive.GoFiles[path]; ok {
 		return value, true, nil

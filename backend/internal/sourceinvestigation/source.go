@@ -15,6 +15,8 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
+const targetVerificationVersion = 1
+
 var (
 	// ErrUnavailable means the source runtime cannot run in this deployment.
 	ErrUnavailable = errors.New("source investigation unavailable")
@@ -84,14 +86,15 @@ type Citation struct {
 
 // Result is the structured source investigation result.
 type Result struct {
-	State        string                    `json:"state,omitempty"`
-	Target       *models.RemediationTarget `json:"target,omitempty"`
-	Finding      string                    `json:"finding"`
-	Confidence   string                    `json:"confidence"`
-	Relationship string                    `json:"relationship"`
-	Direction    string                    `json:"direction"`
-	Citations    []Citation                `json:"citations,omitempty"`
-	ElapsedMs    int                       `json:"elapsed_ms,omitempty"`
+	State                     string                    `json:"state,omitempty"`
+	Target                    *models.RemediationTarget `json:"target,omitempty"`
+	Finding                   string                    `json:"finding"`
+	Confidence                string                    `json:"confidence"`
+	Relationship              string                    `json:"relationship"`
+	Direction                 string                    `json:"direction"`
+	Citations                 []Citation                `json:"citations,omitempty"`
+	TargetVerificationVersion int                       `json:"target_verification_version,omitempty"`
+	ElapsedMs                 int                       `json:"elapsed_ms,omitempty"`
 }
 
 // View is the owner-safe persisted request representation.
@@ -137,6 +140,12 @@ type Runner interface {
 // Reader reads one file from an exact repository revision.
 type Reader interface {
 	ReadFile(context.Context, Repository, string) (string, error)
+}
+
+// TreeReader lists the regular files at one exact repository revision.
+type TreeReader interface {
+	Reader
+	ListFiles(context.Context, Repository) ([]string, error)
 }
 
 // ValidPhase reports whether phase is safe to expose to an owner.
@@ -192,7 +201,7 @@ func ValidateResult(result Result) error {
 		if result.Target == nil {
 			return fmt.Errorf("%w: state %s requires a remediation target", ErrInvalidResult, result.State)
 		}
-		if reason := actionverify.InvalidTargetReason(*result.Target); reason != "" {
+		if reason := actionverify.PatternTargetReason(*result.Target); reason != "" {
 			return fmt.Errorf("%w: %s", ErrInvalidResult, reason)
 		}
 		if result.State == StateActionableCodeChange && result.Target.Intent != models.RemediationIntentAddSymbol && result.Target.Intent != models.RemediationIntentModifySymbol {
@@ -209,7 +218,7 @@ func ValidateResult(result Result) error {
 	}
 	totalBytes := len(result.Finding) + len(result.Direction)
 	if result.Target != nil {
-		totalBytes += len(result.Target.Intent) + len(result.Target.Path) + len(result.Target.Symbol) + len(result.Target.Value) +
+		totalBytes += len(result.Target.Intent) + len(result.Target.Path) + len(result.Target.Symbol) + len(result.Target.RequiredCall) + len(result.Target.Value) +
 			len(result.Target.Repository) + len(result.Target.Revision) + len(result.Target.Job) + len(result.Target.Container) + len(result.Target.Name)
 	}
 	for _, citation := range result.Citations {
@@ -293,6 +302,62 @@ func VerifyCitations(ctx context.Context, reader Reader, repo Repository, citati
 	return verified, nil
 }
 
+type repositoryBoundedSource struct {
+	reader TreeReader
+	repo   Repository
+}
+
+func (s repositoryBoundedSource) ListFiles(ctx context.Context) ([]string, error) {
+	return s.reader.ListFiles(ctx, s.repo)
+}
+
+func (s repositoryBoundedSource) ReadFile(ctx context.Context, file string) (string, bool, error) {
+	content, err := s.reader.ReadFile(ctx, s.repo, file)
+	return content, err == nil, err
+}
+
+type targetVerificationReader struct {
+	archive actionverify.Archive
+	source  repositoryBoundedSource
+}
+
+func (r targetVerificationReader) ReadSourceArchive(context.Context) (actionverify.Archive, error) {
+	return r.archive, nil
+}
+
+func (r targetVerificationReader) ReadFile(ctx context.Context, file string) (string, bool, error) {
+	return r.source.ReadFile(ctx, file)
+}
+
+// VerifyResultTarget proves an actionable result against its pinned repository.
+func VerifyResultTarget(ctx context.Context, reader Reader, repo Repository, result *Result) error {
+	if result == nil || result.Target == nil {
+		return nil
+	}
+	tree, ok := reader.(TreeReader)
+	if !ok {
+		return fmt.Errorf("%w: bounded source tree is unavailable", ErrInvalidResult)
+	}
+	source := repositoryBoundedSource{reader: tree, repo: repo}
+	archive, err := actionverify.BuildTargetArchive(ctx, source, []models.RemediationTarget{*result.Target})
+	if err != nil {
+		return fmt.Errorf("%w: remediation target source is unavailable", ErrInvalidResult)
+	}
+	verification, err := actionverify.Verify(ctx, targetVerificationReader{archive: archive, source: source}, actionverify.Input{Targets: []models.RemediationTarget{*result.Target}})
+	if err != nil {
+		return fmt.Errorf("%w: remediation target could not be verified", ErrInvalidResult)
+	}
+	want := actionverify.StateUnresolved
+	if result.State == StateAlreadyPresent {
+		want = actionverify.StateAlreadyPresent
+	}
+	if verification.State != want {
+		return fmt.Errorf("%w: remediation target behavior is not proven", ErrInvalidResult)
+	}
+	result.TargetVerificationVersion = targetVerificationVersion
+	return nil
+}
+
 // ValidateVerifiedResult requires every citation to match the pinned source.
 func ValidateVerifiedResult(result Result) error {
 	if err := ValidateResult(result); err != nil {
@@ -302,6 +367,9 @@ func ValidateVerifiedResult(result Result) error {
 		if !citation.Verified {
 			return fmt.Errorf("%w: citation %d is not verified", ErrInvalidResult, i)
 		}
+	}
+	if result.Target != nil && result.TargetVerificationVersion != targetVerificationVersion {
+		return fmt.Errorf("%w: remediation target behavior is not verified", ErrInvalidResult)
 	}
 	return nil
 }

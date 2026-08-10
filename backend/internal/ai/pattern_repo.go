@@ -129,13 +129,17 @@ func (r *githubRepoReader) ListTree(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("listing %s/%s tree: %s", r.owner, r.repo, resp.Status)
 	}
 	var out struct {
-		Tree []struct {
+		Truncated bool `json:"truncated"`
+		Tree      []struct {
 			Path string `json:"path"`
 			Type string `json:"type"`
 		} `json:"tree"`
 	}
 	if err := json.Unmarshal(rb, &out); err != nil {
 		return nil, fmt.Errorf("decoding %s/%s tree: %w", r.owner, r.repo, err)
+	}
+	if out.Truncated {
+		return nil, fmt.Errorf("listing %s/%s tree: response is truncated", r.owner, r.repo)
 	}
 	paths := make([]string, 0, len(out.Tree))
 	for _, e := range out.Tree {

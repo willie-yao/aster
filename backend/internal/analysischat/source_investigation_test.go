@@ -47,12 +47,13 @@ func (f *fakeSourceInvestigator) Investigate(ctx context.Context, request source
 
 func sourceResult() sourceinvestigation.Result {
 	return sourceinvestigation.Result{
-		State:        sourceinvestigation.StateActionableCodeChange,
-		Target:       &models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "pkg/retry.go", Symbol: "retry"},
-		Finding:      "The retry loop returns only after the terminal condition.",
-		Confidence:   sourceinvestigation.ConfidenceHigh,
-		Relationship: sourceinvestigation.RelationshipSupports,
-		Direction:    "Inspect the terminal retry branch.",
+		State:                     sourceinvestigation.StateActionableCodeChange,
+		Target:                    &models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "pkg/retry.go", Symbol: "retry", RequiredCall: "applyFix"},
+		TargetVerificationVersion: 1,
+		Finding:                   "The retry loop returns only after the terminal condition.",
+		Confidence:                sourceinvestigation.ConfidenceHigh,
+		Relationship:              sourceinvestigation.RelationshipSupports,
+		Direction:                 "Inspect the terminal retry branch.",
 		Citations: []sourceinvestigation.Citation{{
 			Path: "pkg/retry.go", LineStart: 10, LineEnd: 12, Quote: "terminal", Verified: true,
 		}},

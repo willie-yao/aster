@@ -68,7 +68,7 @@ func (c GenerationContext) Validate() error {
 		}
 	}
 	if c.Source != nil {
-		if strings.TrimSpace(c.Source.Repository) == "" || (c.Source.State != "actionable_code_change" && c.Source.State != "actionable_configuration_change") || actionverify.InvalidTargetReason(c.Source.Target) != "" {
+		if strings.TrimSpace(c.Source.Repository) == "" || (c.Source.State != "actionable_code_change" && c.Source.State != "actionable_configuration_change") || actionverify.PatternTargetReason(c.Source.Target) != "" {
 			return fmt.Errorf("source investigation identity and actionable target are required")
 		}
 		if !regexp.MustCompile(`^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`).MatchString(strings.TrimSpace(c.Source.Revision)) {

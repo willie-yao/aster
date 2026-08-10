@@ -45,8 +45,11 @@ partial or speculative changes are ever pushed.
 The authenticated action controls run a deterministic eligibility check before
 draft generation. Investigation-only targets direct the maintainer to source
 investigation, missing or malformed targets show that more evidence is required,
-and pinned-source verification reports when the remediation already exists. A
-blocked state does not create an action request, call a model, start an Orka
+and pinned-source verification reports when the remediation already exists.
+Behavior targets are actionable only when the target function and the proposed
+package-level callee both exist in bounded pinned source. An external dependency
+or an incomplete or ambiguous package remains investigation-only. A blocked
+state does not create an action request, call a model, start an Orka
 Task, or send a draft-ready notification. Draft generation repeats verification
 and remains authoritative.
 

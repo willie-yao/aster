@@ -17,7 +17,7 @@ func validGenerationContext() GenerationContext {
 		ArtifactCitations: []Evidence{{Path: "build-log.txt", LineStart: 10, LineEnd: 12, Quote: "bootstrap failed"}},
 		Source: &SourceContext{
 			Repository: "example/repo", State: "actionable_code_change",
-			Target:    models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "controllers/machine.go", Symbol: "reconcile"},
+			Target:    models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "controllers/machine.go", Symbol: "reconcile", RequiredCall: "applyFix"},
 			Revision:  "0123456789abcdef0123456789abcdef01234567",
 			Finding:   "The reconciliation branch returns a requeue while NodeRef is nil.",
 			Citations: []Evidence{{Path: "controllers/machine.go", LineStart: 40, LineEnd: 44, Quote: "return requeue"}},
@@ -37,6 +37,7 @@ func TestGenerationContextValidate(t *testing.T) {
 		{name: "artifact evidence", mutate: func(c *GenerationContext) { c.ArtifactCitations = nil }},
 		{name: "revision", mutate: func(c *GenerationContext) { c.ProposedRevision.SuggestedFix = "" }},
 		{name: "source evidence", mutate: func(c *GenerationContext) { c.Source.Citations = nil }},
+		{name: "source required call", mutate: func(c *GenerationContext) { c.Source.Target.RequiredCall = "" }},
 		{name: "line range", mutate: func(c *GenerationContext) { c.ArtifactCitations[0].LineStart = 12; c.ArtifactCitations[0].LineEnd = 10 }},
 		{name: "oversized", mutate: func(c *GenerationContext) { c.AssistantAnswer = strings.Repeat("x", maxContextTextBytes+1) }},
 	} {

@@ -290,7 +290,19 @@ func (s *previewStore) load() (*previewState, bool, error) {
 		// binds them to the initiating login, so every legacy preview is invalid.
 		return freshPreviewState(), true, nil
 	}
-	return state, false, nil
+	changed := false
+	for key, preview := range state.Previews {
+		if preview == nil || preview.Status != previewStatusReady {
+			continue
+		}
+		invalidVersion := preview.Kind == gfKind && preview.VerificationVersion != sourceVerificationVersion
+		missingFixIdentity := preview.Kind == gfKind && (preview.FailureID == "" || preview.PatternHash == "")
+		if invalidVersion || missingFixIdentity {
+			delete(state.Previews, key)
+			changed = true
+		}
+	}
+	return state, changed, nil
 }
 
 func normalizeActionOwner(owner string) string {

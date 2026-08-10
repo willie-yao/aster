@@ -39,7 +39,7 @@ func TestValidateResultRejectsUnsafeCitations(t *testing.T) {
 func TestValidateResultRequiresStateTargetAlignment(t *testing.T) {
 	base := Result{
 		State:   StateActionableCodeChange,
-		Target:  &models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "pkg/retry.go", Symbol: "retry"},
+		Target:  &models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "pkg/retry.go", Symbol: "retry", RequiredCall: "applyFix"},
 		Finding: "The retry loop masks the original error.", Confidence: ConfidenceHigh,
 		Relationship: RelationshipRefines, Direction: "Inspect the retry termination path.",
 		Citations: []Citation{{Path: "pkg/retry.go", LineStart: 10, LineEnd: 12, Quote: "return err"}},
@@ -51,6 +51,13 @@ func TestValidateResultRequiresStateTargetAlignment(t *testing.T) {
 	invalid.State = StateActionableConfigurationChange
 	if err := ValidateResult(invalid); !errors.Is(err, ErrInvalidResult) {
 		t.Fatalf("ValidateResult(mismatched state) = %v", err)
+	}
+	missingCall := base
+	missingTarget := *base.Target
+	missingTarget.RequiredCall = ""
+	missingCall.Target = &missingTarget
+	if err := ValidateResult(missingCall); !errors.Is(err, ErrInvalidResult) {
+		t.Fatalf("ValidateResult(missing required call) = %v", err)
 	}
 	inconclusive := base
 	inconclusive.State = StateInconclusive
@@ -114,5 +121,92 @@ func TestVerifyCitationsDoesNotPartiallyVerifyOnFailure(t *testing.T) {
 	}
 	if input[0].Verified || input[1].Verified {
 		t.Fatalf("input was mutated: %+v", input)
+	}
+}
+
+func (r *countingSourceReader) ListFiles(_ context.Context, _ Repository) ([]string, error) {
+	files := make([]string, 0, len(r.files))
+	for file := range r.files {
+		files = append(files, file)
+	}
+	return files, nil
+}
+
+func TestVerifyResultTargetProvesRequiredCall(t *testing.T) {
+	repo := Repository{Owner: "example", Name: "repo", Revision: strings.Repeat("a", 40)}
+	for _, testCase := range []struct {
+		name   string
+		result Result
+		files  map[string]string
+		wantOK bool
+	}{
+		{
+			name: "same package missing call",
+			result: Result{State: StateActionableCodeChange, Target: &models.RemediationTarget{
+				Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "applyFix", Path: "controllers/reconcile.go",
+			}},
+			files: map[string]string{
+				"controllers/reconcile.go": "package controllers\nfunc reconcile() {}\n",
+				"controllers/fix.go":       "package controllers\nfunc applyFix() {}\n",
+			},
+			wantOK: true,
+		},
+		{
+			name: "same package fabricated call",
+			result: Result{State: StateActionableCodeChange, Target: &models.RemediationTarget{
+				Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "fabricatedFix", Path: "controllers/reconcile.go",
+			}},
+			files: map[string]string{"controllers/reconcile.go": "package controllers\nfunc reconcile() {}\n"},
+		},
+		{
+			name: "nested module imported helper",
+			result: Result{State: StateActionableCodeChange, Target: &models.RemediationTarget{
+				Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/tools/migration.ApplyFix", Path: "tools/controllers/reconcile.go",
+			}},
+			files: map[string]string{
+				"go.mod":                         "module example.com/root\n",
+				"tools/go.mod":                   "module example.com/tools\n",
+				"tools/controllers/reconcile.go": "package controllers\nfunc reconcile() {}\n",
+				"tools/migration/fix.go":         "package migration\nfunc ApplyFix() {}\n",
+			},
+			wantOK: true,
+		},
+		{
+			name: "existing call",
+			result: Result{State: StateAlreadyPresent, Target: &models.RemediationTarget{
+				Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "applyFix", Path: "controllers/reconcile.go",
+			}},
+			files: map[string]string{
+				"controllers/reconcile.go": "package controllers\nfunc reconcile() { applyFix() }\n",
+				"controllers/fix.go":       "package controllers\nfunc applyFix() {}\n",
+			},
+			wantOK: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := VerifyResultTarget(t.Context(), &countingSourceReader{files: testCase.files}, repo, &testCase.result)
+			if (err == nil) != testCase.wantOK {
+				t.Fatalf("VerifyResultTarget error = %v, wantOK=%t", err, testCase.wantOK)
+			}
+			if err != nil && !errors.Is(err, ErrInvalidResult) {
+				t.Fatalf("VerifyResultTarget error = %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateVerifiedResultRequiresTargetVerification(t *testing.T) {
+	result := Result{
+		State:   StateActionableCodeChange,
+		Target:  &models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "applyFix", Path: "controllers/reconcile.go"},
+		Finding: "finding", Confidence: ConfidenceHigh, Relationship: RelationshipSupports, Direction: "direction",
+		Citations: []Citation{{Path: "controllers/reconcile.go", LineStart: 1, LineEnd: 1, Quote: "reconcile", Verified: true}},
+	}
+	if err := ValidateVerifiedResult(result); !errors.Is(err, ErrInvalidResult) {
+		t.Fatalf("unverified target error = %v", err)
+	}
+	result.TargetVerificationVersion = targetVerificationVersion
+	if err := ValidateVerifiedResult(result); err != nil {
+		t.Fatalf("verified target error = %v", err)
 	}
 }
