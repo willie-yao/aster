@@ -170,14 +170,14 @@ func TestAgentSandboxCausalCriticBenchmark(t *testing.T) {
 				PublicDir: publicDir, LedgerPath: ledgerPath, Metadata: metadata, Input: input, ExecutionID: executionID,
 				RuntimeIdentity: runtime.RuntimeIdentity(),
 			})
-			if record.AttemptHash != "" && record.Status != causalcritic.TrialPending {
+			if record.AttemptHash != "" && record.Status != causalcritic.TrialPending && !errors.Is(runErr, causalcritic.ErrTrialPersistence) {
 				failureCode := record.FailureCode
 				if failureCode == "" {
 					failureCode = record.ErrorCode
 				}
 				completePreflight(causalcritic.PreflightSubmitted, failureCode, record.AttemptHash)
 			}
-			if errors.Is(runErr, causalcritic.ErrTrialDetailsPruned) {
+			if errors.Is(runErr, causalcritic.ErrTrialPersistence) || errors.Is(runErr, causalcritic.ErrTrialDetailsPruned) {
 				t.Fatal(runErr)
 			}
 			if errors.Is(runErr, causalcritic.ErrTrialAlreadyAttempted) {
@@ -207,6 +207,9 @@ func causalCriticBenchmarkExistingPreflight(publicDir, ledgerPath string, prefli
 	}
 	if !found {
 		return causalcritic.TrialRecord{}, false, fmt.Errorf("%w: %s", causalcritic.ErrTrialDetailsPruned, preflight.TrialAttemptHash)
+	}
+	if record.Status == causalcritic.TrialPending {
+		return causalcritic.TrialRecord{}, false, nil
 	}
 	return record, true, nil
 }
@@ -379,55 +382,125 @@ func scoreCausalCriticRecord(bc benchCase, condition string, authoritative bench
 
 func writeCausalCriticBenchmarkJSONL(t *testing.T, path string, record causalCriticBenchmarkRecord) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(filepath.Clean(path)), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if causalCriticBenchmarkJSONLContainsAttempt(t, path, record.Trial.AttemptHash) {
-		return
-	}
-	file, err := os.OpenFile(filepath.Clean(path), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer file.Close()
-	if err := json.NewEncoder(file).Encode(record); err != nil {
+	if err := upsertCausalCriticBenchmarkJSONL(path, record); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func causalCriticBenchmarkJSONLContainsAttempt(t *testing.T, path, attemptHash string) bool {
-	t.Helper()
-	if attemptHash == "" {
-		return false
+func upsertCausalCriticBenchmarkJSONL(path string, record causalCriticBenchmarkRecord) error {
+	if strings.TrimSpace(record.Trial.AttemptHash) == "" {
+		return fmt.Errorf("causal critic benchmark attempt hash is required")
 	}
+	records, err := readCausalCriticBenchmarkJSONL(path)
+	if err != nil {
+		return err
+	}
+	changed := false
+	found := false
+	for index, existing := range records {
+		if existing.Trial.AttemptHash != record.Trial.AttemptHash {
+			continue
+		}
+		found = true
+		left, _ := json.Marshal(existing)
+		right, _ := json.Marshal(record)
+		if string(left) == string(right) {
+			return nil
+		}
+		existingRank := causalCriticBenchmarkRecordRank(existing)
+		newRank := causalCriticBenchmarkRecordRank(record)
+		switch {
+		case existingRank < 2 && newRank >= existingRank:
+			records[index] = record
+			changed = true
+		case newRank < existingRank:
+			return nil
+		default:
+			return fmt.Errorf("conflicting terminal causal critic benchmark record for %s", record.Trial.AttemptHash)
+		}
+		break
+	}
+	if !found {
+		records = append(records, record)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	cleanPath := filepath.Clean(path)
+	parent := filepath.Dir(cleanPath)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(parent, filepath.Base(cleanPath)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	encoder := json.NewEncoder(tmp)
+	for _, item := range records {
+		if err := encoder.Encode(item); err != nil {
+			_ = tmp.Close()
+			return err
+		}
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, cleanPath)
+}
+
+func readCausalCriticBenchmarkJSONL(path string) ([]causalCriticBenchmarkRecord, error) {
 	file, err := os.Open(filepath.Clean(path))
 	if errors.Is(err, os.ErrNotExist) {
-		return false
+		return nil, nil
 	}
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	defer file.Close()
+	var records []causalCriticBenchmarkRecord
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64<<10), 4<<20)
 	for scanner.Scan() {
-		var existing causalCriticBenchmarkRecord
-		if err := json.Unmarshal(scanner.Bytes(), &existing); err != nil {
-			t.Fatal(err)
+		var record causalCriticBenchmarkRecord
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			return nil, err
 		}
-		if existing.Trial.AttemptHash == attemptHash {
-			return true
-		}
+		records = append(records, record)
 	}
 	if err := scanner.Err(); err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	return false
+	return records, nil
+}
+
+func causalCriticBenchmarkRecordRank(record causalCriticBenchmarkRecord) int {
+	trial := record.Trial
+	if trial.Status == "" || trial.Status == causalcritic.TrialPending {
+		return 0
+	}
+	if trial.Status == causalcritic.TrialCleanupPending || trial.CleanupWork != nil {
+		return 1
+	}
+	if trial.Status == causalcritic.TrialSucceeded && (!trial.Finalized || trial.Review == nil || !trial.Telemetry.CleanupCompleted) {
+		return 1
+	}
+	return 2
 }
 
 func TestWriteCausalCriticBenchmarkJSONLIsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "critic.jsonl")
-	record := causalCriticBenchmarkRecord{Version: causalCriticBenchmarkRecordVersion, Trial: causalcritic.TrialRecord{AttemptHash: strings.Repeat("a", 64)}}
+	record := causalCriticBenchmarkRecord{Version: causalCriticBenchmarkRecordVersion, Trial: causalcritic.TrialRecord{AttemptHash: strings.Repeat("a", 64), PairHash: strings.Repeat("b", 64), Status: causalcritic.TrialPending}}
 	writeCausalCriticBenchmarkJSONL(t, path, record)
 	writeCausalCriticBenchmarkJSONL(t, path, record)
 	data, err := os.ReadFile(path)
@@ -688,5 +761,69 @@ func TestCausalCriticBenchmarkExistingPreflightStopsActiveStatuses(t *testing.T)
 	preflight := causalcritic.PreflightAttempt{Status: causalcritic.PreflightSubmitted, TrialAttemptHash: strings.Repeat("a", 64)}
 	if _, recovered, err := causalCriticBenchmarkExistingPreflight(t.TempDir(), filepath.Join(t.TempDir(), "critic.json"), preflight); !errors.Is(err, causalcritic.ErrTrialDetailsPruned) || recovered {
 		t.Fatalf("recovered=%v err=%v", recovered, err)
+	}
+	root := t.TempDir()
+	publicDir, ledgerPath := filepath.Join(root, "public"), filepath.Join(root, "private", "critic.json")
+	created := time.Unix(6000, 0).UTC().Format(time.RFC3339Nano)
+	pending := causalcritic.TrialRecord{
+		ID: "critic-pending", CreatedAt: created, AttemptHash: preflight.TrialAttemptHash, RuntimeIdentity: strings.Repeat("b", 64),
+		Status: causalcritic.TrialPending, Metadata: causalcritic.TrialMetadata{CaseID: "case", StableID: "0123456789abcdef0123", Repetition: 1, Arm: "agent-sandbox-independent-critic", AuthoritativeArm: "baseline"},
+		EvidenceHash: strings.Repeat("c", 64), DraftHash: strings.Repeat("d", 64), PairHash: strings.Repeat("e", 64),
+		Usage: causalcritic.GatewayUsage{Status: "unavailable", Source: "gateway_response"},
+	}
+	ledger := map[string]any{
+		"schema_version": causalcritic.LedgerSchemaVersion,
+		"attempts":       []causalcritic.TrialAttempt{{Hash: preflight.TrialAttemptHash, CreatedAt: created, Status: causalcritic.TrialPending}},
+		"records":        []causalcritic.TrialRecord{pending},
+	}
+	data, err := json.MarshalIndent(ledger, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(ledgerPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ledgerPath, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, recovered, err := causalCriticBenchmarkExistingPreflight(publicDir, ledgerPath, preflight); err != nil || recovered {
+		t.Fatalf("pending submitted recovered=%v err=%v", recovered, err)
+	}
+}
+
+func TestUpsertCausalCriticBenchmarkJSONLReplacesIncompleteRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "critic.jsonl")
+	attemptHash := strings.Repeat("c", 64)
+	pairHash := strings.Repeat("d", 64)
+	pending := causalCriticBenchmarkRecord{
+		Version: causalCriticBenchmarkRecordVersion,
+		Trial:   causalcritic.TrialRecord{AttemptHash: attemptHash, PairHash: pairHash, Status: causalcritic.TrialPending},
+	}
+	review := &causalcritic.Review{Verdict: "pass"}
+	terminal := pending
+	terminal.Trial.Status = causalcritic.TrialSucceeded
+	terminal.Trial.Review = review
+	terminal.Trial.Telemetry.CleanupCompleted = true
+	terminal.Trial.Finalized = true
+	if err := upsertCausalCriticBenchmarkJSONL(path, pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertCausalCriticBenchmarkJSONL(path, terminal); err != nil {
+		t.Fatal(err)
+	}
+	records, err := readCausalCriticBenchmarkJSONL(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Trial.Status != causalcritic.TrialSucceeded || !records[0].Trial.Finalized {
+		t.Fatalf("records=%+v", records)
+	}
+	if err := upsertCausalCriticBenchmarkJSONL(path, terminal); err != nil {
+		t.Fatal(err)
+	}
+	conflict := terminal
+	conflict.Trial.RuntimeDurationMs = 99
+	if err := upsertCausalCriticBenchmarkJSONL(path, conflict); err == nil {
+		t.Fatal("conflicting terminal row was accepted")
 	}
 }

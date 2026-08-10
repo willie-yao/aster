@@ -503,3 +503,26 @@ func TestRunTrialPersistsNULFailureReasonAsContractViolation(t *testing.T) {
 		t.Fatalf("ledger=%+v err=%v", ledger, loadErr)
 	}
 }
+
+func TestRunTrialMarksPersistenceFailure(t *testing.T) {
+	input := criticInput(t)
+	review := Review{SchemaVersion: ReviewSchemaVersion, ContractVersion: ContractVersion, PairHash: input.PairHash, Verdict: "pass", Findings: []Finding{}, Confidence: "medium"}
+	root := t.TempDir()
+	publicDir, ledgerPath := filepath.Join(root, "public"), filepath.Join(root, "private", "critic.json")
+	reviewer := trialReviewerFunc(func(context.Context, Input, string, engineruntime.WorkObserver) (Result, error) {
+		if err := os.WriteFile(ledgerPath, []byte("{"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Result{
+			Execution: ExecutionResult{Review: &review, Usage: GatewayUsage{Status: "unavailable", Source: "gateway_response"}},
+			Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true, FinalizationChecked: true, FinalizationValid: true},
+		}, nil
+	})
+	record, err := RunTrial(t.Context(), reviewer, TrialSpec{
+		PublicDir: publicDir, LedgerPath: ledgerPath, Metadata: trialMetadata(), Input: input,
+		ExecutionID: "critic-persistence-failure", RuntimeIdentity: testCriticRuntimeIdentity(),
+	})
+	if !errors.Is(err, ErrTrialPersistence) || record.Status != TrialSucceeded || record.AttemptHash == "" {
+		t.Fatalf("record=%+v err=%v", record, err)
+	}
+}

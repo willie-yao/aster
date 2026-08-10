@@ -36,6 +36,7 @@ const (
 var (
 	ErrTrialAlreadyAttempted = errors.New("causal critic trial already attempted")
 	ErrTrialDetailsPruned    = errors.New("causal critic trial details pruned")
+	ErrTrialPersistence      = errors.New("causal critic trial persistence failed")
 )
 
 // TrialStatus classifies one independent critic execution without granting authority.
@@ -229,7 +230,7 @@ func RunTrial(ctx context.Context, reviewer Reviewer, spec TrialSpec) (TrialReco
 	record.Status, record.ErrorCode = classifyTrialResult(result, runErr)
 	record.Finalized = record.Status == TrialSucceeded && record.Review != nil && record.Telemetry.CleanupCompleted
 	if appendErr := appendTrial(spec.PublicDir, spec.LedgerPath, record); appendErr != nil {
-		return record, errors.Join(runErr, appendErr)
+		return record, errors.Join(runErr, ErrTrialPersistence, appendErr)
 	}
 	return record, runErr
 }
