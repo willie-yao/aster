@@ -117,16 +117,28 @@ func citationOccurrences(citation models.EvidenceCitation, excerpts []agentanaly
 }
 
 func citationGroundedInCompleteExcerpt(citation models.EvidenceCitation, excerpts []agentanalysis.EvidenceExcerpt) bool {
-	matches := 0
-	complete := false
+	anchor, lineOffset := firstQuoteLine(citation.Quote)
+	targetLine := citation.LineStart + lineOffset
 	for _, excerpt := range excerpts {
-		count := citationOccurrences(citation, []agentanalysis.EvidenceExcerpt{excerpt})
-		matches += count
-		if count > 0 && !excerpt.Truncated {
-			complete = true
+		if excerpt.Path != citation.Path || excerpt.Truncated {
+			continue
+		}
+		switch excerpt.Kind {
+		case "grep":
+			prefix := fmt.Sprintf("> %d:", targetLine)
+			for _, line := range strings.Split(excerpt.Content, "\n") {
+				if strings.HasPrefix(line, prefix) && strings.Contains(line, anchor) && citationOccurrences(citation, []agentanalysis.EvidenceExcerpt{excerpt}) > 0 {
+					return true
+				}
+			}
+		case "tail":
+			_, start, _, matches := locateCitation(citation, agentanalysis.EvidenceBundle{Excerpts: []agentanalysis.EvidenceExcerpt{excerpt}})
+			if matches == 1 && start+lineOffset == targetLine {
+				return true
+			}
 		}
 	}
-	return matches == 1 && complete
+	return false
 }
 
 func firstQuoteLine(quote string) (string, int) {
