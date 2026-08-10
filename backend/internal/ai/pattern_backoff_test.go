@@ -108,7 +108,8 @@ func TestPatternFailureBackoffIdentityChangesCallProvider(t *testing.T) {
 		{
 			name: "model",
 			change: func(service *Service, failures []PatternFailure) (*Service, []PatternFailure) {
-				return newPatternBackoffService(t, service.client.Endpoint(), service.client.cache.dir, "claude-changed"), failures
+				service.client.model = "claude-changed"
+				return service, failures
 			},
 		},
 		{
@@ -127,6 +128,12 @@ func TestPatternFailureBackoffIdentityChangesCallProvider(t *testing.T) {
 			failures := patternFailures(3)
 			if _, err := service.AnalyzePattern(t.Context(), "job", "job", failures); err == nil {
 				t.Fatal("first call unexpectedly succeeded")
+			}
+			if _, err := service.AnalyzePattern(t.Context(), "job", "job", failures); !IsPatternFailureSuppressed(err) {
+				t.Fatalf("unchanged identity error = %v, want suppressed", err)
+			}
+			if got := atomic.LoadInt32(&srv.calls); got != 1 {
+				t.Fatalf("unchanged identity model calls = %d, want 1", got)
 			}
 			service, failures = testCase.change(service, failures)
 			if _, err := service.AnalyzePattern(t.Context(), "job", "job", failures); err == nil || IsPatternFailureSuppressed(err) {
