@@ -26,21 +26,31 @@ func EnsureCitedEvidence(ctx context.Context, browser artifacts.Browser, bundle 
 	}
 	excerpts := append([]agentanalysis.EvidenceExcerpt(nil), bundle.Excerpts...)
 	for index, citation := range citations {
-		if citationOccurrences(citation, excerpts) > 0 {
+		if citationGroundedInCompleteExcerpt(citation, excerpts) {
 			continue
 		}
-		anchor := firstQuoteLine(citation.Quote)
+		anchor, lineOffset := firstQuoteLine(citation.Quote)
 		if anchor == "" {
 			return agentanalysis.EvidenceBundle{}, fmt.Errorf("citation %d has no searchable quote", index)
 		}
-		result, err := browser.Grep(ctx, citation.Path, regexp.MustCompile(regexp.QuoteMeta(anchor)), 8, 2, 2048, criticCitationScanBytes)
+		result, err := browser.Grep(ctx, citation.Path, regexp.MustCompile(regexp.QuoteMeta(anchor)), 8, 256, 2048, criticCitationScanBytes)
 		if err != nil {
 			return agentanalysis.EvidenceBundle{}, fmt.Errorf("freeze cited evidence %s: %w", citation.Path, err)
 		}
-		if result == nil || len(result.Matches) != 1 {
-			return agentanalysis.EvidenceBundle{}, fmt.Errorf("citation %d quote was not uniquely found in %s", index, citation.Path)
+		targetLine := citation.LineStart + lineOffset
+		var matched []string
+		if result != nil {
+			for _, candidate := range result.Matches {
+				if candidate.LineNo == targetLine {
+					matched = candidate.Context
+					break
+				}
+			}
 		}
-		content := strings.Join(result.Matches[0].Context, "\n")
+		if len(matched) == 0 {
+			return agentanalysis.EvidenceBundle{}, fmt.Errorf("citation %d quote was not found at line %d in %s", index, targetLine, citation.Path)
+		}
+		content := strings.Join(matched, "\n")
 		if strings.TrimSpace(content) == "" {
 			return agentanalysis.EvidenceBundle{}, fmt.Errorf("citation %d produced empty evidence", index)
 		}
@@ -54,7 +64,7 @@ func fitCriticEvidenceBundle(original agentanalysis.EvidenceBundle, excerpts []a
 	protected := make([]bool, len(base))
 	for index, excerpt := range base {
 		for _, citation := range citations {
-			if citationOccurrences(citation, []agentanalysis.EvidenceExcerpt{excerpt}) > 0 {
+			if citationOccurrences(citation, []agentanalysis.EvidenceExcerpt{excerpt}) > 0 && !excerpt.Truncated {
 				protected[index] = true
 			}
 		}
@@ -106,11 +116,24 @@ func citationOccurrences(citation models.EvidenceCitation, excerpts []agentanaly
 	return count
 }
 
-func firstQuoteLine(quote string) string {
-	for _, line := range strings.Split(strings.ReplaceAll(quote, "\r\n", "\n"), "\n") {
-		if value := strings.TrimSpace(line); value != "" {
-			return value
+func citationGroundedInCompleteExcerpt(citation models.EvidenceCitation, excerpts []agentanalysis.EvidenceExcerpt) bool {
+	matches := 0
+	complete := false
+	for _, excerpt := range excerpts {
+		count := citationOccurrences(citation, []agentanalysis.EvidenceExcerpt{excerpt})
+		matches += count
+		if count > 0 && !excerpt.Truncated {
+			complete = true
 		}
 	}
-	return ""
+	return matches == 1 && complete
+}
+
+func firstQuoteLine(quote string) (string, int) {
+	for index, line := range strings.Split(strings.ReplaceAll(quote, "\r\n", "\n"), "\n") {
+		if value := strings.TrimSpace(line); value != "" {
+			return value, index
+		}
+	}
+	return "", 0
 }

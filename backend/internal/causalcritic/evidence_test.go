@@ -26,7 +26,10 @@ func (criticEvidenceBrowser) Tail(context.Context, string, int, int) (*artifacts
 	return nil, nil
 }
 func (criticEvidenceBrowser) Grep(_ context.Context, file string, re *regexp.Regexp, _, _, _, _ int) (*artifacts.GrepResult, error) {
-	return &artifacts.GrepResult{Matches: []artifacts.GrepMatch{{LineNo: 50, Context: []string{"  before", "> exact cited error", "  after"}}}}, nil
+	return &artifacts.GrepResult{Matches: []artifacts.GrepMatch{
+		{LineNo: 10, Context: []string{"  before", "> exact cited error", "  after"}},
+		{LineNo: 50, Context: []string{"  before", "> exact cited error", "  after"}},
+	}}, nil
 }
 
 func TestEnsureCitedEvidenceAddsMissingBoundedExcerpt(t *testing.T) {
