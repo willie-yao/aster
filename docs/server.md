@@ -439,9 +439,12 @@ Before rendering File issue or Propose fix, the frontend calls the authenticated
 eligibility endpoint. The server resolves the current published subject and runs
 the same deterministic pinned-source verification used by draft generation. The
 endpoint returns `actionable`, `investigation_required`, `already_present`, or
-`more_evidence_required`. It does not call a model, create an Orka Task, persist
-an action request, or send draft-ready email. Draft endpoints repeat verification
-and remain authoritative.
+`more_evidence_required`. A shared remediation policy also blocks destructive CRD
+conversion changes and any recommendation that falsely claims admission webhook
+cleanup disables or bypasses CRD conversion. Safe admission cleanup must preserve
+conversion availability. The endpoint does not call a model, create an Orka Task,
+persist an action request, or send draft-ready email. Draft endpoints, restored
+previews, and confirmation repeat the policy and remain authoritative.
 
 File issue and Mark resolved work in the standard server image. Local OpenCode
 uses the full fixer image because it needs git and the pinned `srt` sandbox.

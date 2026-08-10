@@ -19,6 +19,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patternstate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
@@ -370,6 +371,14 @@ func validatedPreviewEntry(entry *previewEntry) (PreviewResult, error) {
 		}
 		if err := actiondraft.ValidateTitleBody(entry.fix.Title, entry.fix.Description); err != nil {
 			return PreviewResult{}, err
+		}
+		snapshot := entry.fix.Snapshot()
+		policyText := strings.Join([]string{
+			snapshot.Pattern.SuggestedFix, snapshot.Pattern.SharedRootCause, snapshot.Pattern.Summary,
+			entry.fix.Title, entry.fix.Description,
+		}, "\n")
+		if remediationpolicy.Reason(policyText, snapshot.Pattern.RemediationTargets) != "" {
+			return PreviewResult{}, fmt.Errorf("fix preview violates remediation safety policy")
 		}
 		return PreviewResult{
 			Kind: gfKind, Title: entry.fix.Title, Body: entry.fix.Description, Diff: entry.fix.Preview.Diff,
@@ -1198,6 +1207,12 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 	if !reconcileOnly && entry.kind == gfKind && (entry.failureID == "" || entry.patternHash == "") {
 		s.rmu.Unlock()
 		return "", ErrPreviewTargetChanged
+	}
+	if !reconcileOnly {
+		if _, err := validatedPreviewEntry(entry); err != nil {
+			s.rmu.Unlock()
+			return "", fmt.Errorf("%w: saved draft did not pass safety validation", ErrPreviewRejected)
+		}
 	}
 	if !reconcileOnly && entry.failureID != "" {
 		if err := s.validateSubjectSnapshot(entry.failureID, entry.patternHash, entry.kind); err != nil {

@@ -19,6 +19,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
@@ -365,6 +366,10 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 // an optional maintainer directive that steers the edit; empty for the batch
 // path.
 func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, instruction string, generationContext *GenerationContext) (*proposedFix, error) {
+	policyText := strings.Join([]string{p.SuggestedFix, p.SharedRootCause, p.Summary, instruction}, "\n")
+	if remediationpolicy.Reason(policyText, p.RemediationTargets) != "" {
+		return nil, fmt.Errorf("remediation safety policy requires investigation")
+	}
 	if m.opts.Agent != nil && m.opts.Agent.ModelGateway.Model != "" {
 		aiusage.MarkModelGatewayExcluded(ctx, m.opts.Agent.ModelGateway.Model)
 	} else {

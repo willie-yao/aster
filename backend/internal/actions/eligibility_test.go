@@ -189,3 +189,48 @@ func TestActionEligibilityRequiresProvenRequiredCall(t *testing.T) {
 		})
 	}
 }
+
+func TestActionEligibilityEnforcesAdmissionConversionPolicy(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	target := models.RemediationTarget{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "getPreUpgradeFunc",
+		RequiredCall: "example/asomigration.DeleteWebhookConfigurations", Path: "test/e2e/capi_test.go",
+	}
+	for _, testCase := range []struct {
+		name   string
+		fix    string
+		want   string
+		called bool
+	}{
+		{
+			name: "unsafe causal claim",
+			fix:  "Delete the ASO mutating and validating webhook configurations so CRD conversion no longer calls ASO.",
+			want: EligibilityMoreEvidenceRequired,
+		},
+		{
+			name: "safe cleanup",
+			fix:  "Delete the obsolete admission webhook configurations while keeping the CRD conversion webhook available until provider deletion completes.",
+			want: EligibilityActionable, called: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			pattern := models.PatternAnalysis{
+				JobID: "periodic-x", Systemic: true, SuggestedFix: testCase.fix,
+				SourceRef: "example/repo@" + revision, RemediationTargets: []models.RemediationTarget{target},
+			}
+			models.AssignPatternIdentity(&pattern)
+			dataDir := t.TempDir()
+			writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
+			service := NewService(&project.Config{AI: &project.AI{SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"}}}, dataDir, AIConfig{})
+			called := false
+			service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
+				called = true
+				return actionverify.Result{State: actionverify.StateUnresolved}, nil
+			}
+			got, err := service.ActionEligibility(t.Context(), pattern.ID)
+			if err != nil || got.State != testCase.want || called != testCase.called {
+				t.Fatalf("eligibility=%+v called=%t err=%v", got, called, err)
+			}
+		})
+	}
+}

@@ -33,6 +33,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patternstate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
@@ -74,7 +75,7 @@ var ErrPreviewNotFound = errors.New("preview not found or expired")
 
 // previewTTL bounds how long a generated draft is held for confirmation.
 const previewTTL = 15 * time.Minute
-const sourceVerificationVersion = 3
+const sourceVerificationVersion = 4
 
 // AIConfig is the resolved chat-completions configuration used to draft fixes.
 type AIConfig struct {
@@ -141,6 +142,7 @@ type ActionSubject struct {
 	Pattern     *models.PatternAnalysis
 	Build       *BuildActionSubject
 	SourceFiles []string
+	PolicyText  string
 }
 
 // BuildActionSubject is one analyzed build failure without a JUnit assertion.
@@ -574,6 +576,18 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 		}
 		return fmt.Errorf("%w: %s", ErrRemediationAlreadyPresent, reason)
 	}
+	if patternSubject {
+		policyText := strings.Join([]string{
+			subject.Pattern.SuggestedFix, subject.Pattern.SharedRootCause, subject.Pattern.Summary,
+			subject.PolicyText, override,
+		}, "\n")
+		if reason := remediationpolicy.Reason(policyText, subject.Pattern.RemediationTargets); reason != "" {
+			if err := s.setRequestVerification(ctx, actionverify.StateInconclusive, reason); err != nil {
+				return fmt.Errorf("%w: remediation policy result could not be persisted: %v", ErrRemediationInconclusive, err)
+			}
+			return fmt.Errorf("%w: %s", ErrRemediationInconclusive, reason)
+		}
+	}
 	if subject == nil || s.sourceVerifier == nil {
 		return nil
 	}
@@ -983,8 +997,19 @@ func (s *Service) generateFixPreviewForPattern(
 	if sourceRepository != "" && !strings.EqualFold(sourceRepository, destination.Repo.Owner+"/"+destination.Repo.Name) {
 		return PreviewResult{}, nil, fmt.Errorf("%w: investigated repository does not match the configured fix target", ErrPreviewRejected)
 	}
+	policyText := ""
+	if generationContext != nil {
+		parts := []string{generationContext.AssistantAnswer}
+		if generationContext.ProposedRevision != nil {
+			parts = append(parts, generationContext.ProposedRevision.RootCause, generationContext.ProposedRevision.SuggestedFix)
+		}
+		if generationContext.Source != nil {
+			parts = append(parts, generationContext.Source.Finding)
+		}
+		policyText = strings.Join(parts, "\n")
+	}
 	subject := &ActionSubject{
-		Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern, SourceFiles: sourceFiles,
+		Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern, SourceFiles: sourceFiles, PolicyText: policyText,
 	}
 	if err := s.verifyRemediation(ctx, subject); err != nil {
 		return PreviewResult{}, nil, err

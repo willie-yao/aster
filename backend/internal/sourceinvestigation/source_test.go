@@ -210,3 +210,23 @@ func TestValidateVerifiedResultRequiresTargetVerification(t *testing.T) {
 		t.Fatalf("verified target error = %v", err)
 	}
 }
+
+func TestValidateResultEnforcesAdmissionConversionPolicy(t *testing.T) {
+	target := &models.RemediationTarget{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "getPreUpgradeFunc",
+		RequiredCall: "example/asomigration.DeleteWebhookConfigurations", Path: "test/e2e/capi_test.go",
+	}
+	base := Result{
+		State: StateActionableCodeChange, Target: target,
+		Finding:    "Delete the ASO mutating and validating webhook configurations so CRD conversion no longer calls ASO.",
+		Confidence: ConfidenceHigh, Relationship: RelationshipSupports, Direction: "Apply the cleanup.",
+		Citations: []Citation{{Path: target.Path, LineStart: 1, LineEnd: 1, Quote: "getPreUpgradeFunc"}},
+	}
+	if err := ValidateResult(base); !errors.Is(err, ErrInvalidResult) {
+		t.Fatalf("unsafe result error = %v", err)
+	}
+	base.Finding = "Delete the obsolete admission webhook configurations while keeping the CRD conversion webhook available."
+	if err := ValidateResult(base); err != nil {
+		t.Fatalf("safe result error = %v", err)
+	}
+}

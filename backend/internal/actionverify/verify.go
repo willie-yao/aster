@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -119,6 +120,9 @@ func UnexpectedImplementationSymbols(proposal string, allowed []string) []string
 }
 
 func Verify(ctx context.Context, reader Reader, input Input) (Result, error) {
+	if reason := remediationpolicy.Reason(input.Proposal, input.Targets); reason != "" {
+		return inconclusive(reason), nil
+	}
 	if len(input.Targets) > 0 {
 		return verifyTargets(ctx, reader, input)
 	}
