@@ -2019,6 +2019,7 @@ long_critic_model=$(printf '%0257d' 0 | tr ' ' x)
 expect_causal_critic_fail model-too-long 'modelGateway.model must be non-empty, at most 256 bytes, and single-line' --set-string agentSandbox.causalCritic.modelGateway.model="$long_critic_model"
 expect_causal_critic_fail network-disabled 'networkPolicy.enabled must be true' --set agentSandbox.causalCritic.networkPolicy.enabled=false
 expect_causal_critic_fail missing-ledger 'ledger.existingClaim is required' --set-string agentSandbox.causalCritic.ledger.existingClaim=
+expect_causal_critic_fail shared-ledger-pvc 'must use a PVC distinct from public dashboard data' --set persistence.existingClaim=critic-ledger
 expect_causal_critic_fail public-ledger 'ledger.mountPath must be under /private' --set-string agentSandbox.causalCritic.ledger.mountPath=/data/critic
 expect_causal_critic_fail noncanonical-ledger 'ledger.mountPath must be canonical' --set-string agentSandbox.causalCritic.ledger.mountPath=/private/../data
 expect_causal_critic_fail mutable-image 'image.digest must be an immutable sha256 digest' --set-string agentSandbox.causalCritic.image.digest=latest

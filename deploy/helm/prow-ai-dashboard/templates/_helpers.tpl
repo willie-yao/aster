@@ -721,6 +721,7 @@ key, or bot token).
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
   {{- if not $cfg.ledger.existingClaim -}}{{- fail "agentSandbox.causalCritic.ledger.existingClaim is required" -}}{{- end -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.ledger.existingClaim) -}}{{- fail "agentSandbox.causalCritic.ledger.existingClaim must be a lowercase object name" -}}{{- end -}}
+  {{- if eq $cfg.ledger.existingClaim (include "prow-ai-dashboard.pvcName" .) -}}{{- fail "agentSandbox.causalCritic must use a PVC distinct from public dashboard data" -}}{{- end -}}
   {{- if not (hasPrefix "/private/" $cfg.ledger.mountPath) -}}{{- fail "agentSandbox.causalCritic.ledger.mountPath must be under /private" -}}{{- end -}}
   {{- if or (contains ".." $cfg.ledger.mountPath) (contains "//" $cfg.ledger.mountPath) -}}{{- fail "agentSandbox.causalCritic.ledger.mountPath must be canonical" -}}{{- end -}}
   {{- if or (hasPrefix .Values.persistence.mountPath $cfg.ledger.mountPath) (hasPrefix $cfg.ledger.mountPath .Values.persistence.mountPath) -}}{{- fail "agentSandbox.causalCritic ledger must be separate from public dashboard persistence" -}}{{- end -}}
