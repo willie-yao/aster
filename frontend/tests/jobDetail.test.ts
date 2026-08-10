@@ -107,7 +107,7 @@ test("job detail uses the approved shared detail composition", () => {
 
   assert.match(pattern, /<AnalysisBriefing/);
   assert.match(pattern, /icon=\{<AutoAwesome/);
-  assert.match(pattern, /mobileNotice=\{staleNotice\}/);
+  assert.match(pattern, /mobileNotice=\{mobileNotice\}/);
   assert.match(pattern, /Last known good ·/);
   assert.match(pattern, /<AnalysisChat[\s\S]*appearance="detail"/);
   assert.match(pattern, /<FailureActions[\s\S]*appearance="detail"/);
@@ -116,6 +116,10 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(pattern, /label="Source grounding"/);
   assert.match(pattern, /label="Affected builds"/);
   assert.match(pattern, /label="Related files"/);
+  assert.match(pattern, /Remediation present, verifying the fix/);
+  assert.match(pattern, /Verified passing runs:/);
+  assert.match(pattern, /Verified remediation source:/);
+  assert.match(pattern, /lifecycleActive/);
 
   assert.match(briefing, /mobileNotice[\s\S]*\{mobileNotice &&/);
   assert.match(buildFailure, /if \(detailAppearance\)[\s\S]*<AnalysisBriefing/);

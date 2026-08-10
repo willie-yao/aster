@@ -9,6 +9,13 @@ const minVerifiedFixedPasses = 2
 
 var immutableSourceRevision = regexp.MustCompile(`^[0-9a-f]{40}(?:[0-9a-f]{24})?$`)
 
+// PatternLifecycleActive reports whether a pattern belongs in active recurring
+// surfaces and may start actions. Legacy patterns without lifecycle metadata
+// remain active until refreshed under the current engine contract.
+func PatternIsActive(pattern PatternAnalysis) bool {
+	return pattern.Lifecycle == nil || pattern.Lifecycle.State == PatternLifecycleActive
+}
+
 // ApplyPatternLifecycle derives active, observing, or verified-fixed state from
 // pinned-source verification and revision-verified post-fix runs.
 func ApplyPatternLifecycle(_ JobDetail, pattern *PatternAnalysis) {

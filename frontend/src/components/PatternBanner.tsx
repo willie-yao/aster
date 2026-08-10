@@ -26,7 +26,7 @@ import { soft } from "../theme";
 import { AnalysisChat } from "./AnalysisChat";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { patternChatAvailability } from "../lib/patternChat";
-import { patternActionEligibilityHint } from "../lib/actionEligibility";
+import { patternActionEligibilityHint, patternLifecycleActive } from "../lib/actionEligibility";
 import { jobRunPath } from "../lib/routes";
 import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
@@ -130,19 +130,27 @@ export function PatternBanner({
     fileLinks: pattern.file_links,
   } satisfies FileToUrlContext;
   const isCurrent = !refreshStatus || refreshStatus.state === "current";
+  const lifecycle = pattern.lifecycle;
+  const lifecycleActive = patternLifecycleActive(lifecycle);
   const actionEligibility = patternActionEligibilityHint(
     pattern.remediation_targets,
     attempt?.status,
+    lifecycle,
   );
   const fixPatterns =
     isCurrent &&
+    lifecycleActive &&
     pattern.id &&
     pattern.content_hash &&
     pattern.suggested_fix &&
     meetsConfidenceFloor(pattern.confidence, features.chat_fix_min_confidence ?? "high")
       ? [pattern]
       : [];
-  const patternLabel = pattern.systemic ? "Recurring pattern" : "No shared root cause";
+  const patternLabel = lifecycle?.state === "verified_fixed"
+    ? "Verified fixed"
+    : lifecycle?.state === "observing"
+      ? "Fix verification"
+      : pattern.systemic ? "Recurring pattern" : "No shared root cause";
   const metadata = `${pattern.builds_analyzed} ${pattern.builds_analyzed === 1 ? "build" : "builds"} · ${pattern.confidence} confidence`;
   const staleNotice = refreshStatus && refreshStatus.state !== "current" ? (
     <Alert severity="warning" variant="outlined" sx={{ borderRadius: "4px" }}>
@@ -150,6 +158,43 @@ export function PatternBanner({
       Current refresh: {refreshStatus.failure_category ?? refreshStatus.state}.
     </Alert>
   ) : null;
+  const lifecycleNotice = lifecycle && !lifecycleActive ? (
+    <Alert
+      severity={lifecycle.state === "verified_fixed" ? "success" : "info"}
+      variant="outlined"
+      sx={{ borderRadius: "4px" }}
+    >
+      <Typography variant="body2" sx={{ fontWeight: 700 }}>
+        {lifecycle.state === "verified_fixed"
+          ? "Verified fixed"
+          : "Remediation present, verifying the fix"}
+      </Typography>
+      <Typography variant="body2">{lifecycle.reason}</Typography>
+      {lifecycle.source_revision && (
+        <Typography component="div" variant="caption" sx={{ mt: 0.75, overflowWrap: "anywhere" }}>
+          Verified remediation source: <code>{pattern.remediation_verification?.repository
+            ? `${pattern.remediation_verification.repository}@${lifecycle.source_revision}`
+            : lifecycle.source_revision}</code>
+        </Typography>
+      )}
+      {jobID && lifecycle.passing_builds && lifecycle.passing_builds.length > 0 && (
+        <Stack direction="row" spacing={1} sx={{ mt: 0.75, alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}>
+          <Typography variant="caption" color="text.secondary">Verified passing runs:</Typography>
+          {lifecycle.passing_builds.map((buildID) => (
+            <Link key={buildID} component={RouterLink} to={jobRunPath(jobID, buildID)} sx={overviewTypography.data}>
+              {buildID}
+            </Link>
+          ))}
+        </Stack>
+      )}
+    </Alert>
+  ) : null;
+  const mobileNotice = staleNotice || lifecycleNotice ? (
+    <Stack spacing={1}>
+      {staleNotice}
+      {lifecycleNotice}
+    </Stack>
+  ) : undefined;
 
   const details = (
     <>
@@ -214,6 +259,7 @@ export function PatternBanner({
       )}
 
       {staleNotice}
+      {lifecycleNotice}
 
       {pattern.systemic && pattern.shared_root_cause && (
         <BriefingSection label="Root cause">
@@ -300,7 +346,7 @@ export function PatternBanner({
     </>
   );
 
-  const actions = chatRef || (isCurrent && pattern.systemic && pattern.id) ? (
+  const actions = chatRef || (isCurrent && lifecycleActive && pattern.systemic && pattern.id) ? (
     <Stack spacing={1.25}>
       {chatRef && (
         <AnalysisChat
@@ -311,7 +357,7 @@ export function PatternBanner({
           appearance="detail"
         />
       )}
-      {isCurrent && pattern.systemic && pattern.id && (
+      {isCurrent && lifecycleActive && pattern.systemic && pattern.id && (
         <FailureActions
           failureID={pattern.id}
           eligibilityHint={actionEligibility}
@@ -329,7 +375,7 @@ export function PatternBanner({
       icon={<AutoAwesome aria-hidden sx={{ fontSize: 18, color: "primary.main" }} />}
       metadata={`${patternLabel} · ${metadata}`}
       mobileMetadata={staleNotice ? `Last known good · ${metadata}` : metadata}
-      mobileNotice={staleNotice}
+      mobileNotice={mobileNotice}
       summary={<RichText text={pattern.summary} steps fileCtx={patternFileCtx} />}
       mobileSynopsis={firstSentence(pattern.shared_root_cause ?? pattern.summary)}
       details={details}

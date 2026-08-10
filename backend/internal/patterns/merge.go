@@ -86,7 +86,7 @@ func CurrentRecurring(details []models.JobDetail) []models.PatternAnalysis {
 			continue
 		}
 		for _, pattern := range detail.PatternAnalyses {
-			if pattern.Systemic {
+			if pattern.Systemic && models.PatternIsActive(pattern) {
 				out = append(out, pattern)
 			}
 		}

@@ -79,3 +79,19 @@ func TestMergeLastGoodRejectsNonCanonicalPriorID(t *testing.T) {
 		t.Fatal("non-canonical prior ID was accepted")
 	}
 }
+
+func TestCurrentRecurringExcludesInactiveLifecycle(t *testing.T) {
+	details := []models.JobDetail{{
+		JobID: "job", PatternRefresh: &models.PatternRefreshStatus{State: models.PatternRefreshCurrent},
+		PatternAnalyses: []models.PatternAnalysis{
+			{Systemic: true},
+			{Systemic: true, Lifecycle: &models.PatternLifecycle{State: models.PatternLifecycleActive}},
+			{Systemic: true, Lifecycle: &models.PatternLifecycle{State: models.PatternLifecycleObserving}},
+			{Systemic: true, Lifecycle: &models.PatternLifecycle{State: models.PatternLifecycleVerifiedFixed}},
+		},
+	}}
+	got := CurrentRecurring(details)
+	if len(got) != 2 {
+		t.Fatalf("current recurring = %+v", got)
+	}
+}

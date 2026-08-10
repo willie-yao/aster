@@ -118,3 +118,22 @@ func TestActionEligibilityAllowsPinnedTestInfraEnvironmentTarget(t *testing.T) {
 		t.Fatalf("eligibility=%+v err=%v", got, err)
 	}
 }
+
+func TestActionEligibilityBlocksInactivePatternLifecycle(t *testing.T) {
+	for _, state := range []models.PatternLifecycleState{models.PatternLifecycleObserving, models.PatternLifecycleVerifiedFixed} {
+		t.Run(string(state), func(t *testing.T) {
+			pattern := models.PatternAnalysis{
+				JobID: "periodic-x", Systemic: true, SuggestedFix: "fix", Lifecycle: &models.PatternLifecycle{State: state, Reason: "remediation present"},
+				RemediationTargets: []models.RemediationTarget{{Intent: models.RemediationIntentAddSymbol, Symbol: "Fix", Path: "fix.go"}},
+			}
+			models.AssignPatternIdentity(&pattern)
+			dataDir := t.TempDir()
+			writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
+			service := NewService(&project.Config{}, dataDir, AIConfig{})
+			got, err := service.ActionEligibility(t.Context(), pattern.ID)
+			if err != nil || got.State != EligibilityAlreadyPresent || got.Reason != "remediation present" {
+				t.Fatalf("eligibility=%+v err=%v", got, err)
+			}
+		})
+	}
+}

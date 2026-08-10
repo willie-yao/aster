@@ -1985,3 +1985,56 @@ func TestFixStateFilePartitionsCrossRepositoryState(t *testing.T) {
 		t.Fatalf("partitioned paths default=%q first=%q second=%q", defaultPath, first, second)
 	}
 }
+
+func TestInactivePatternLifecycleCannotStartAction(t *testing.T) {
+	dataDir := t.TempDir()
+	pattern := models.PatternAnalysis{
+		JobID: "periodic-x", Systemic: true, SuggestedFix: "fix",
+		Lifecycle:          &models.PatternLifecycle{State: models.PatternLifecycleObserving, Reason: "remediation present; observing passes"},
+		RemediationTargets: []models.RemediationTarget{{Intent: models.RemediationIntentAddSymbol, Symbol: "Fix", Path: "fix.go"}},
+		SourceRef:          "example/repo@0123456789abcdef0123456789abcdef01234567",
+	}
+	models.AssignPatternIdentity(&pattern)
+	writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
+	service := NewService(&project.Config{AI: &project.AI{SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"}}}, dataDir, AIConfig{})
+	service.sourceVerifier = nil
+	if _, err := service.PreviewIssue(t.Context(), pattern.ID, "alice", "token", ""); !errors.Is(err, ErrRemediationAlreadyPresent) {
+		t.Fatalf("PreviewIssue error = %v", err)
+	}
+	request, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := waitRequest(t, service, request.ID, "alice", RequestFailed)
+	if view.Verification == nil || view.Verification.State != actionverify.StateAlreadyPresent || view.Preview != nil {
+		t.Fatalf("inactive lifecycle started action: view=%+v", view)
+	}
+}
+
+func TestInactivePatternLifecycleBlocksInvestigatedSourceOverride(t *testing.T) {
+	pattern := models.PatternAnalysis{
+		Systemic: true, SuggestedFix: "fix", Lifecycle: &models.PatternLifecycle{State: models.PatternLifecycleVerifiedFixed, Reason: "verified fixed"},
+		RemediationTargets: []models.RemediationTarget{{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", Path: "main.go"}},
+		SourceRef:          "example/repo@0123456789abcdef0123456789abcdef01234567",
+	}
+	service := NewService(&project.Config{AI: &project.AI{SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"}}}, t.TempDir(), AIConfig{})
+	service.sourceVerifier = nil
+	subject := &ActionSubject{Kind: actionSubjectPattern, Pattern: &pattern, EnforcePublishedContract: false}
+	if err := service.verifyRemediation(t.Context(), subject); !errors.Is(err, ErrRemediationAlreadyPresent) {
+		t.Fatalf("verifyRemediation error=%v", err)
+	}
+}
+
+func TestResolveRejectsInactivePatternLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	pattern := models.PatternAnalysis{
+		JobID: "periodic-x", Subject: "periodic-x", Systemic: true, SharedBuilds: []string{"1", "2"},
+		Lifecycle: &models.PatternLifecycle{State: models.PatternLifecycleVerifiedFixed, Reason: "verified fixed"},
+	}
+	models.AssignPatternIdentity(&pattern)
+	writeJobDetail(t, dir, "periodic-x.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
+	service := NewService(&project.Config{}, dir, AIConfig{})
+	if err := service.Resolve(pattern.ID, "alice", ""); err == nil || !strings.Contains(err.Error(), "inactive") {
+		t.Fatalf("Resolve error = %v", err)
+	}
+}

@@ -73,3 +73,14 @@ func TestApplyPatternLifecycleSkipsNonSystemic(t *testing.T) {
 		t.Fatalf("lifecycle = %+v", pattern.Lifecycle)
 	}
 }
+
+func TestPatternIsActive(t *testing.T) {
+	if !PatternIsActive(PatternAnalysis{}) || !PatternIsActive(PatternAnalysis{Lifecycle: &PatternLifecycle{State: PatternLifecycleActive}}) {
+		t.Fatal("active or legacy pattern was rejected")
+	}
+	for _, state := range []PatternLifecycleState{PatternLifecycleObserving, PatternLifecycleVerifiedFixed} {
+		if PatternIsActive(PatternAnalysis{Lifecycle: &PatternLifecycle{State: state}}) {
+			t.Fatalf("state %q remained active", state)
+		}
+	}
+}

@@ -216,7 +216,26 @@ export interface PatternAnalysis {
   relevant_files?: string[];
   file_links?: Record<string, string>;
   source_ref?: string;
+  remediation_verification?: PatternRemediationVerification;
+  lifecycle?: PatternLifecycle;
   summary: string;
+}
+
+export interface PatternRemediationVerification {
+  state: "unresolved" | "already_present" | "inconclusive";
+  reason: string;
+  repository?: string;
+  revision?: string;
+  failure_state?: "unresolved" | "already_present" | "inconclusive";
+  failure_builds?: string[];
+  passing_builds?: string[];
+}
+
+export interface PatternLifecycle {
+  state: "active" | "observing" | "verified_fixed";
+  reason: string;
+  source_revision?: string;
+  passing_builds?: string[];
 }
 
 export interface RemediationTarget {

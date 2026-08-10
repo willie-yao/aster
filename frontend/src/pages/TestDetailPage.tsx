@@ -34,6 +34,7 @@ import {
 import { parseTestDisplayName } from "../lib/detailTitles";
 import { withJobDetailParam } from "../lib/jobDetail";
 import { summarizeTestHistory } from "../lib/testDetail";
+import { patternLifecycleActive } from "../lib/actionEligibility";
 import { RichText } from "../components/RichText";
 import { RunHistory } from "../components/RunHistory";
 import { DetailSectionBand } from "../components/DetailSectionBand";
@@ -277,6 +278,7 @@ export function TestDetailPage() {
     ? (data.pattern_analyses ?? []).filter(
         (pattern) =>
           (!data.pattern_refresh || data.pattern_refresh.state === "current") &&
+          patternLifecycleActive(pattern.lifecycle) &&
           pattern.systemic &&
           Boolean(pattern.id) &&
           Boolean(pattern.content_hash) &&

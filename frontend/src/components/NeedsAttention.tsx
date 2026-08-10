@@ -19,6 +19,7 @@ import {
   readOverviewHistoryState,
 } from "../lib/dashboardOverview";
 import { jobPath, testPath, testRunPath } from "../lib/routes";
+import { patternLifecycleActive } from "../lib/actionEligibility";
 import { shortJobName, shortTestName } from "../lib/utils";
 import { statusToMuiColor } from "../theme";
 import type {
@@ -555,7 +556,9 @@ export function NeedsAttention({
       (report?.recurring_patterns ?? [])
         .filter(
           (pattern) =>
-            pattern.job_id && !(pattern.id && resolved.resolved[pattern.id]),
+            pattern.job_id &&
+            patternLifecycleActive(pattern.lifecycle) &&
+            !(pattern.id && resolved.resolved[pattern.id]),
         )
         .slice(0, MAX_OVERVIEW_PATTERNS),
     [report, resolved],
@@ -565,7 +568,9 @@ export function NeedsAttention({
     () =>
       (report?.recurring_patterns ?? []).filter(
         (pattern) =>
-          pattern.job_id && pattern.id && resolved.resolved[pattern.id],
+          pattern.job_id &&
+          patternLifecycleActive(pattern.lifecycle) &&
+          pattern.id && resolved.resolved[pattern.id],
       ),
     [report, resolved],
   );

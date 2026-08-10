@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -28,6 +29,9 @@ func (s *Service) ActionEligibility(ctx context.Context, failureID string) (Elig
 		return Eligibility{}, err
 	}
 	if subject.Kind == actionSubjectPattern && subject.Pattern != nil {
+		if !models.PatternIsActive(*subject.Pattern) {
+			return Eligibility{State: EligibilityAlreadyPresent, Reason: inactivePatternReason(subject.Pattern)}, nil
+		}
 		targets := subject.Pattern.RemediationTargets
 		if len(targets) == 0 {
 			return moreEvidenceEligibility(), nil
@@ -70,6 +74,13 @@ func (s *Service) ActionEligibility(ctx context.Context, failureID string) (Elig
 		State:  EligibilityActionable,
 		Reason: "A verified implementation target remains at the pinned source commit.",
 	}, nil
+}
+
+func inactivePatternReason(pattern *models.PatternAnalysis) string {
+	if pattern != nil && pattern.Lifecycle != nil && strings.TrimSpace(pattern.Lifecycle.Reason) != "" {
+		return pattern.Lifecycle.Reason
+	}
+	return "The grounded remediation is present and this recurring pattern is no longer active."
 }
 
 func moreEvidenceEligibility() Eligibility {
