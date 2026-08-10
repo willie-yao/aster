@@ -246,11 +246,13 @@ func TestBuildUsageReportIncludesSuppressedOperations(t *testing.T) {
 func TestBuildUsageReportIgnoresUnappliedPricingHash(t *testing.T) {
 	start, _ := time.Parse(time.DateOnly, "2026-08-01")
 	end, _ := time.Parse(time.DateOnly, "2026-08-03")
-	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{
-		Date:               "2026-08-02",
-		PricingCountsKnown: true,
-		Totals:             aiusage.UsageTotals{Operations: 2, ModelRequests: 1, ReportedRequests: 1},
-		PricingHashes:      []string{"unused-price"},
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: aiusage.LedgerVersion, Currency: "USD", Days: []aiusage.DailyUsage{{
+		Date:                "2026-08-02",
+		PricingCountsKnown:  true,
+		CoverageCountsKnown: true,
+		ModelCountsKnown:    true,
+		Totals:              aiusage.UsageTotals{Operations: 2, ModelRequests: 1, ReportedRequests: 1},
+		PricingHashes:       []string{"unused-price"},
 	}}}}, start, end, nil, end, false)
 	if report.PricingCoverage != "unavailable" || report.RangePriced {
 		t.Fatalf("report = %+v", report)
@@ -260,10 +262,12 @@ func TestBuildUsageReportIgnoresUnappliedPricingHash(t *testing.T) {
 func TestBuildUsageReportRetainsPricingCoverageCounts(t *testing.T) {
 	start, _ := time.Parse(time.DateOnly, "2026-08-01")
 	end, _ := time.Parse(time.DateOnly, "2026-08-03")
-	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{
-		Date:               "2026-08-02",
-		PricingCountsKnown: true,
-		Totals:             aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 2, PricedReportedRequests: 1, EstimatedCostNanos: 100},
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: aiusage.LedgerVersion, Currency: "USD", Days: []aiusage.DailyUsage{{
+		Date:                "2026-08-02",
+		PricingCountsKnown:  true,
+		CoverageCountsKnown: true,
+		ModelCountsKnown:    true,
+		Totals:              aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 2, PricedReportedRequests: 1, EstimatedCostNanos: 100},
 		Features: map[aiusage.Feature]aiusage.UsageTotals{
 			aiusage.FeatureFailureAnalysis: {Operations: 1, ModelRequests: 1, ReportedRequests: 1, PricedReportedRequests: 1, EstimatedCostNanos: 100},
 			aiusage.FeatureAnalysisChat:    {Operations: 1, ModelRequests: 1, ReportedRequests: 1},

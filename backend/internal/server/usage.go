@@ -335,10 +335,14 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 	pricingCoverage := "unavailable"
 	if totals.ReportedRequests > 0 {
 		switch {
-		case pricingCountsUnknown:
+		case pricingCountsUnknown || coverageCountsUnknown:
 			pricingCoverage = "unknown"
 		case totals.PricedReportedRequests == totals.ReportedRequests:
 			pricingCoverage = "complete"
+			if totals.CacheWriteUnreportedRequests > 0 ||
+				totals.CacheWriteInputTokens > 0 && totals.CacheWriteReportedRequests > totals.CacheWritePricedRequests {
+				pricingCoverage = "partial"
+			}
 		case totals.PricedReportedRequests > 0:
 			pricingCoverage = "partial"
 		}
