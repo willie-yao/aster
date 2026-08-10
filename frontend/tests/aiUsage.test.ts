@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import {
-  formatCost, formatCoverage, formatExactCost, formatExactTokens, formatTokens,
+  chartDateTickIndexes, chartTickValues, formatChartCost, formatCost, formatCoverage,
+  formatExactCost, formatExactTokens, formatTokens, nearestChartDataIndex,
   pricedRequestCoverageNote, totalTokens, uncachedInputTokens, usageQuery,
 } from "../src/lib/aiUsage.js";
 import type { AIUsageReport, AIUsageTotals } from "../src/types/usage.js";
@@ -13,6 +14,11 @@ test("AI usage helpers format values and filters", () => {
   assert.equal(formatCost("1250000000", "USD"), "$1.25");
   assert.equal(formatExactCost("1250000001", "USD"), "USD 1.25");
   assert.equal(formatExactCost("1255000000", "USD"), "USD 1.26");
+  assert.equal(formatChartCost(23.1, "USD"), "$23.10");
+  assert.equal(formatChartCost(23.1), "23.10");
+  assert.deepEqual(chartTickValues(50.28), [0, 20, 40, 60]);
+  assert.deepEqual(chartDateTickIndexes(30), [0, 6, 12, 17, 23, 29]);
+  assert.equal(nearestChartDataIndex(7, [0, 5, 8, 12]), 8);
   assert.equal(formatExactTokens(1234567), "1,234,567");
   assert.equal(totalTokens({ input_tokens: 2, output_tokens: 3 } as never), 5);
   assert.equal(uncachedInputTokens({ input_tokens: 20, cached_input_tokens: 5, cache_write_input_tokens: 3 } as never), 12);
