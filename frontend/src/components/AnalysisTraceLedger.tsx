@@ -98,20 +98,17 @@ export function TraceNotice({
   );
 }
 
-function CopyIdentifier({ label, value }: { label: string; value: string }) {
-  const [copied, setCopied] = useState(false);
-
-  async function copy() {
-    if (!navigator.clipboard) return;
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    } catch {
-      setCopied(false);
-    }
-  }
-
+export function CopyIdentifierAction({
+  label,
+  value,
+  copied,
+  onCopy,
+}: {
+  label: string;
+  value: string;
+  copied: boolean;
+  onCopy: () => void;
+}) {
   return (
     <Box
       sx={{
@@ -132,8 +129,8 @@ function CopyIdentifier({ label, value }: { label: string; value: string }) {
       </Typography>
       <Button
         type="button"
-        onClick={() => void copy()}
-        aria-label={`Copy ${label.toLowerCase()} ${value}`}
+        onClick={onCopy}
+        aria-label={copied ? `${label} ${value} copied` : `Copy ${label.toLowerCase()} ${value}`}
         sx={{
           alignSelf: "stretch",
           minWidth: { xs: 44, md: 36 },
@@ -148,7 +145,49 @@ function CopyIdentifier({ label, value }: { label: string; value: string }) {
       >
         {copied ? "Copied" : "Copy"}
       </Button>
+      <Box
+        component="span"
+        role="status"
+        aria-live="polite"
+        sx={{
+          position: "absolute",
+          width: 1,
+          height: 1,
+          p: 0,
+          m: -1,
+          overflow: "hidden",
+          clip: "rect(0 0 0 0)",
+          whiteSpace: "nowrap",
+          border: 0,
+        }}
+      >
+        {copied ? `${label} copied` : ""}
+      </Box>
     </Box>
+  );
+}
+
+function CopyIdentifier({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    if (!navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <CopyIdentifierAction
+      label={label}
+      value={value}
+      copied={copied}
+      onCopy={() => void copy()}
+    />
   );
 }
 

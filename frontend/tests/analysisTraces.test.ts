@@ -25,7 +25,7 @@ const vite = await createServer({
   logLevel: "silent",
   ssr: { noExternal: [/^@mui\//, /^react-transition-group/] },
 });
-const { AnalysisTraceLedger, TraceEventRow } = (await vite.ssrLoadModule(
+const { AnalysisTraceLedger, CopyIdentifierAction, TraceEventRow } = (await vite.ssrLoadModule(
   "/src/components/AnalysisTraceLedger.tsx",
 )) as {
   AnalysisTraceLedger: (props: { items: Array<{
@@ -35,6 +35,12 @@ const { AnalysisTraceLedger, TraceEventRow } = (await vite.ssrLoadModule(
     testHref: string;
     responseIDs: string[];
   }> }) => ReturnType<typeof createElement>;
+  CopyIdentifierAction: (props: {
+    label: string;
+    value: string;
+    copied: boolean;
+    onCopy: () => void;
+  }) => ReturnType<typeof createElement>;
   TraceEventRow: (props: { event: AnalysisTraceEvent }) => ReturnType<typeof createElement>;
 };
 const { AnalysisTraceFilters } = (await vite.ssrLoadModule(
@@ -269,6 +275,20 @@ test("mobile event rows keep sequence elapsed kind outcome and details visible",
   assert.match(html, />model_request</);
   assert.match(html, />Completed</);
   assert.match(html, /response resp-one · request 3\.86 s/);
+});
+
+test("copy completion is exposed through the button name and a polite status", () => {
+  const html = render(createElement(CopyIdentifierAction, {
+    label: "Build",
+    value: "20134789654",
+    copied: true,
+    onCopy: () => undefined,
+  }));
+
+  assert.match(html, /aria-label="Build 20134789654 copied"/);
+  assert.match(html, /role="status"/);
+  assert.match(html, /aria-live="polite"/);
+  assert.match(html, />Build copied</);
 });
 
 test("Analysis Traces page preserves private gates query downloads and operator-console structure", () => {
