@@ -3,8 +3,10 @@ package criticexecutor
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +57,21 @@ func executorRequest(t *testing.T, endpoint string) causalcritic.ExecutionReques
 	return request
 }
 
+func internalGatewayTestClient(t *testing.T, server *httptest.Server) *http.Client {
+	t.Helper()
+	target, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := server.Client().Transport.(*http.Transport).Clone()
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, target.Host)
+	}
+	transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+	transport.TLSClientConfig.ServerName = target.Hostname()
+	return &http.Client{Transport: transport}
+}
+
 func TestExecuteUsesCredentialFreeGatewayAndReportedUsage(t *testing.T) {
 	var request causalcritic.ExecutionRequest
 	var sawAuthorization, sawAPIKey bool
@@ -74,8 +91,8 @@ func TestExecuteUsesCredentialFreeGatewayAndReportedUsage(t *testing.T) {
 		})
 	}))
 	defer server.Close()
-	request = executorRequest(t, server.URL+"/v1")
-	result := Execute(t.Context(), request, Options{HTTPClient: server.Client()})
+	request = executorRequest(t, "https://gateway.models.svc.cluster.local/v1")
+	result := Execute(t.Context(), request, Options{HTTPClient: internalGatewayTestClient(t, server)})
 	if result.TerminalState != engineruntime.TerminalSucceeded || result.Review == nil || result.Usage.Status != "reported" || result.Usage.Model != "gateway-reported-model" || result.Usage.Provider != "github-copilot" || result.Usage.NanoAIU != 12345 || result.Usage.InputTokens != 120 || result.Usage.CachedInputTokens != 20 || result.Usage.CostUSD != "0.0012" {
 		t.Fatalf("result = %+v", result)
 	}
@@ -92,15 +109,15 @@ func TestExecuteRejectsMalformedReview(t *testing.T) {
 		})
 	}))
 	defer server.Close()
-	request := executorRequest(t, server.URL+"/v1")
-	result := Execute(t.Context(), request, Options{HTTPClient: server.Client()})
+	request := executorRequest(t, "https://gateway.models.svc.cluster.local/v1")
+	result := Execute(t.Context(), request, Options{HTTPClient: internalGatewayTestClient(t, server)})
 	if result.TerminalState != engineruntime.TerminalFailed || result.Review != nil || !strings.Contains(result.FailureReason, "deterministic validation") {
 		t.Fatalf("result = %+v", result)
 	}
 }
 
 func TestExecuteCancellation(t *testing.T) {
-	request := executorRequest(t, "https://127.0.0.1:1/v1")
+	request := executorRequest(t, "https://gateway.models.svc.cluster.local/v1")
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	result := Execute(ctx, request, Options{HTTPClient: &http.Client{Timeout: time.Second}})
@@ -117,8 +134,8 @@ func TestExecuteRejectsGatewayRedirect(t *testing.T) {
 		http.Redirect(w, &http.Request{}, target.URL, http.StatusTemporaryRedirect)
 	}))
 	defer redirect.Close()
-	request := executorRequest(t, redirect.URL+"/v1")
-	result := Execute(t.Context(), request, Options{HTTPClient: redirect.Client()})
+	request := executorRequest(t, "https://gateway.models.svc.cluster.local/v1")
+	result := Execute(t.Context(), request, Options{HTTPClient: internalGatewayTestClient(t, redirect)})
 	if result.TerminalState != engineruntime.TerminalFailed || targetCalled {
 		t.Fatalf("result=%+v targetCalled=%v", result, targetCalled)
 	}
