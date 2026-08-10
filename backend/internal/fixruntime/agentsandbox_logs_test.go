@@ -65,6 +65,30 @@ func TestDescribePodLogLifecycle(t *testing.T) {
 	}
 }
 
+func TestDescribePodLogLifecycleReportsStagerState(t *testing.T) {
+	cases := []struct {
+		name  string
+		state map[string]any
+		want  string
+	}{
+		{name: "image pull", state: map[string]any{"waiting": map[string]any{"reason": "ImagePullBackOff"}}, want: "stager image pull failure"},
+		{name: "waiting", state: map[string]any{"waiting": map[string]any{"reason": "PodInitializing"}}, want: "stager container waiting"},
+		{name: "failed", state: map[string]any{"terminated": map[string]any{"reason": "Error", "exitCode": int64(2), "startedAt": "2026-08-10T00:00:00Z"}}, want: "stager container failed with exit code 2"},
+		{name: "never started", state: map[string]any{"terminated": map[string]any{"reason": "StartError", "exitCode": int64(128)}}, want: "stager container never started"},
+		{name: "running", state: map[string]any{"running": map[string]any{"startedAt": "2026-08-10T00:00:00Z"}}, want: "stager container is running"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := testExecutorPod("analysis", "analysis-1", map[string]any{
+				"initContainerStatuses": []any{map[string]any{"name": agentSandboxStagerName, "state": tc.state}},
+			})
+			if got := describePodLogLifecycle(pod.Object); !strings.Contains(got, tc.want) {
+				t.Fatalf("lifecycle=%q want=%q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestKubeAgentSandboxPodLogsReportsNotFound(t *testing.T) {
 	body, _ := json.Marshal(metav1.Status{Reason: metav1.StatusReasonNotFound, Message: "pod not found"})
 	api := testPodLogAPI(t, http.StatusNotFound, body, func(context.Context, string, string) string { return "Pod not found" })

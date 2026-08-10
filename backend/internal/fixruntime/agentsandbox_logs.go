@@ -68,6 +68,9 @@ func describePodLogLifecycle(pod map[string]any) string {
 	if pod == nil {
 		return "Pod status is unavailable"
 	}
+	if detail := describeStagerLifecycle(pod); detail != "" {
+		return detail
+	}
 	statuses, _, _ := unstructured.NestedSlice(pod, "status", "containerStatuses")
 	var status map[string]any
 	for _, raw := range statuses {
@@ -112,6 +115,48 @@ func describePodLogLifecycle(pod map[string]any) string {
 		return "executor container is running but logs are unavailable"
 	}
 	return "executor container never started"
+}
+
+func describeStagerLifecycle(pod map[string]any) string {
+	statuses, _, _ := unstructured.NestedSlice(pod, "status", "initContainerStatuses")
+	for _, raw := range statuses {
+		status, ok := raw.(map[string]any)
+		if !ok || status["name"] != agentSandboxStagerName {
+			continue
+		}
+		state, _, _ := unstructured.NestedMap(status, "state")
+		if waiting, ok := state["waiting"].(map[string]any); ok {
+			reason, _ := waiting["reason"].(string)
+			message, _ := waiting["message"].(string)
+			detail := lifecycleDetail(reason, message)
+			switch reason {
+			case "ErrImagePull", "ImagePullBackOff", "ImageInspectError", "InvalidImageName", "RegistryUnavailable":
+				return "stager image pull failure" + detail
+			case "ContainerCreating", "CreateContainerConfigError", "RunContainerError", "StartError":
+				return "stager container never started" + detail
+			default:
+				return "stager container waiting" + detail
+			}
+		}
+		if terminated, ok := state["terminated"].(map[string]any); ok {
+			exitCode := int64Value(terminated["exitCode"])
+			if exitCode == 0 {
+				return ""
+			}
+			reason, _ := terminated["reason"].(string)
+			message, _ := terminated["message"].(string)
+			detail := lifecycleDetail(reason, message)
+			startedAt, _ := terminated["startedAt"].(string)
+			if strings.TrimSpace(startedAt) == "" {
+				return fmt.Sprintf("stager container never started and terminated with exit code %d%s", exitCode, detail)
+			}
+			return fmt.Sprintf("stager container failed with exit code %d%s", exitCode, detail)
+		}
+		if _, ok := state["running"].(map[string]any); ok {
+			return "stager container is running"
+		}
+	}
+	return ""
 }
 
 func podScheduled(pod map[string]any) bool {

@@ -12,12 +12,25 @@ import (
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
-const Backend = "agent-sandbox"
+const (
+	Backend = "agent-sandbox"
+
+	StagedWorkspaceRoot          = "/workspace"
+	StagedWorkspaceSourcePath    = "/workspace/source"
+	StagedWorkspaceArtifactsPath = "/workspace/artifacts"
+	StagedWorkspaceResultPath    = "/workspace/result"
+)
 
 var (
 	purposePattern = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,29}[a-z0-9])?$`)
 	envNamePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,127}$`)
 )
+
+// StagedWorkspace describes one init-populated workspace with fixed mount boundaries.
+type StagedWorkspace struct {
+	RequestEnv string
+	Request    []byte
+}
 
 // Spec describes one credential-free workload executed through Agent Sandbox.
 type Spec struct {
@@ -28,6 +41,7 @@ type Spec struct {
 	Timeout           time.Duration
 	OutputLimitBytes  int64
 	WritableWorkspace bool
+	StagedWorkspace   *StagedWorkspace
 	WorkObserver      engineruntime.WorkObserver
 }
 
@@ -70,6 +84,18 @@ func ValidateSpec(spec Spec) error {
 	}
 	if spec.ExecutionID != "" && (!utf8.ValidString(spec.ExecutionID) || len(spec.ExecutionID) > 128 || strings.ContainsAny(spec.ExecutionID, "\r\n\x00")) {
 		return fmt.Errorf("agent sandbox execution id is invalid or oversized")
+	}
+	if spec.StagedWorkspace != nil {
+		if spec.WritableWorkspace {
+			return fmt.Errorf("agent sandbox staged and writable workspaces are mutually exclusive")
+		}
+		stage := spec.StagedWorkspace
+		if stage.RequestEnv != strings.TrimSpace(stage.RequestEnv) || !envNamePattern.MatchString(stage.RequestEnv) || stage.RequestEnv == spec.RequestEnv {
+			return fmt.Errorf("agent sandbox stage request environment name is invalid")
+		}
+		if len(stage.Request) == 0 || len(stage.Request) > 95<<10 || !utf8.Valid(stage.Request) || strings.IndexByte(string(stage.Request), 0) >= 0 {
+			return fmt.Errorf("agent sandbox stage request is invalid or oversized")
+		}
 	}
 	return nil
 }

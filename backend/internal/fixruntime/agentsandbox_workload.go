@@ -51,6 +51,21 @@ func (r *AgentSandboxRuntime) sandboxWorkloadPodSpec(spec agentsandbox.Spec) map
 		podSecurity["appArmorProfile"] = map[string]any{"type": "RuntimeDefault"}
 		containerSecurity["appArmorProfile"] = map[string]any{"type": "RuntimeDefault"}
 	}
+	resources := map[string]any{
+		"requests": map[string]any{"cpu": r.opts.Resources.CPURequest, "memory": r.opts.Resources.MemoryRequest, "ephemeral-storage": r.opts.Resources.EphemeralStorage},
+		"limits":   map[string]any{"cpu": r.opts.Resources.CPULimit, "memory": r.opts.Resources.MemoryLimit, "ephemeral-storage": r.opts.Resources.EphemeralStorage},
+	}
+	container := map[string]any{
+		"name":            agentSandboxContainerName,
+		"image":           r.opts.Image,
+		"imagePullPolicy": "IfNotPresent",
+		"env": []any{map[string]any{
+			"name":  spec.RequestEnv,
+			"value": base64.StdEncoding.EncodeToString(spec.Request),
+		}},
+		"securityContext": containerSecurity,
+		"resources":       resources,
+	}
 	podSpec := map[string]any{
 		"serviceAccountName":            r.opts.ServiceAccountName,
 		"automountServiceAccountToken":  false,
@@ -59,36 +74,59 @@ func (r *AgentSandboxRuntime) sandboxWorkloadPodSpec(spec agentsandbox.Spec) map
 		"terminationGracePeriodSeconds": int64(5),
 		"enableServiceLinks":            false,
 		"securityContext":               podSecurity,
-		"containers": []any{map[string]any{
-			"name":            agentSandboxContainerName,
-			"image":           r.opts.Image,
+		"containers":                    []any{container},
+	}
+	switch {
+	case spec.StagedWorkspace != nil:
+		stage := spec.StagedWorkspace
+		container["volumeMounts"] = []any{
+			map[string]any{"name": "workspace", "mountPath": agentsandbox.StagedWorkspaceSourcePath, "subPath": "source", "readOnly": true},
+			map[string]any{"name": "workspace", "mountPath": agentsandbox.StagedWorkspaceArtifactsPath, "subPath": "artifacts", "readOnly": true},
+			map[string]any{"name": "workspace", "mountPath": agentsandbox.StagedWorkspaceResultPath, "subPath": "result"},
+			map[string]any{"name": "executor-tmp", "mountPath": "/tmp"},
+		}
+		podSpec["initContainers"] = []any{map[string]any{
+			"name":            agentSandboxStagerName,
+			"image":           r.opts.StagerImage,
 			"imagePullPolicy": "IfNotPresent",
 			"env": []any{map[string]any{
-				"name":  spec.RequestEnv,
-				"value": base64.StdEncoding.EncodeToString(spec.Request),
+				"name":  stage.RequestEnv,
+				"value": base64.StdEncoding.EncodeToString(stage.Request),
 			}},
-			"securityContext": containerSecurity,
-			"resources": map[string]any{
-				"requests": map[string]any{"cpu": r.opts.Resources.CPURequest, "memory": r.opts.Resources.MemoryRequest, "ephemeral-storage": r.opts.Resources.EphemeralStorage},
-				"limits":   map[string]any{"cpu": r.opts.Resources.CPULimit, "memory": r.opts.Resources.MemoryLimit, "ephemeral-storage": r.opts.Resources.EphemeralStorage},
+			"securityContext": k8sruntime.DeepCopyJSONValue(containerSecurity),
+			"resources":       k8sruntime.DeepCopyJSONValue(resources),
+			"volumeMounts": []any{
+				map[string]any{"name": "workspace", "mountPath": agentsandbox.StagedWorkspaceRoot},
+				map[string]any{"name": "stager-tmp", "mountPath": "/tmp"},
 			},
-		}},
-	}
-	if spec.WritableWorkspace {
-		container := podSpec["containers"].([]any)[0].(map[string]any)
+		}}
+		podSpec["volumes"] = stagedReadOnlyWorkspaceVolumes(r.opts.Resources.EphemeralStorage)
+	case spec.WritableWorkspace:
 		container["volumeMounts"] = []any{
-			map[string]any{"name": "workspace", "mountPath": "/workspace"},
+			map[string]any{"name": "workspace", "mountPath": agentsandbox.StagedWorkspaceRoot},
 			map[string]any{"name": "tmp", "mountPath": "/tmp"},
 		}
-		podSpec["volumes"] = []any{
-			map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": r.opts.Resources.EphemeralStorage}},
-			map[string]any{"name": "tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
-		}
+		podSpec["volumes"] = writableWorkspaceVolumes(r.opts.Resources.EphemeralStorage)
 	}
 	if r.opts.RuntimeClassName != "" {
 		podSpec["runtimeClassName"] = r.opts.RuntimeClassName
 	}
 	return podSpec
+}
+
+func writableWorkspaceVolumes(sizeLimit string) []any {
+	return []any{
+		map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": sizeLimit}},
+		map[string]any{"name": "tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
+	}
+}
+
+func stagedReadOnlyWorkspaceVolumes(sizeLimit string) []any {
+	return []any{
+		map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": sizeLimit}},
+		map[string]any{"name": "executor-tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
+		map[string]any{"name": "stager-tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
+	}
 }
 
 func (r *AgentSandboxRuntime) workloadPodSpec(requestJSON []byte, request engineruntime.ExecutionRequest) map[string]any {

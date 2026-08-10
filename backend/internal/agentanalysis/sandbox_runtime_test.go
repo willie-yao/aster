@@ -1,0 +1,197 @@
+package agentanalysis
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentsandbox"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+)
+
+type fakeWorkspaceSandbox struct {
+	identity string
+	run      func(agentsandbox.Spec) (agentsandbox.Result, error)
+}
+
+func (f fakeWorkspaceSandbox) Run(_ context.Context, spec agentsandbox.Spec) (agentsandbox.Result, error) {
+	return f.run(spec)
+}
+func (fakeWorkspaceSandbox) Cleanup(context.Context, engineruntime.WorkRef) error { return nil }
+func (f fakeWorkspaceSandbox) RuntimeIdentity() string                            { return f.identity }
+
+func TestWorkspaceSandboxRuntimeValidatesOneResult(t *testing.T) {
+	runtime, spec := workspaceSandboxFixture(t)
+	calls := 0
+	runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64), run: func(got agentsandbox.Spec) (agentsandbox.Result, error) {
+		calls++
+		if got.Purpose != "analysis" || got.RequestEnv != WorkspaceExecutionRequestEnv || got.StagedWorkspace == nil || got.StagedWorkspace.RequestEnv != WorkspaceStageRequestEnv || string(got.StagedWorkspace.Request) != `{"stage":1}` {
+			t.Fatalf("spec=%+v", got)
+		}
+		var request WorkspaceExecutionRequest
+		if err := json.Unmarshal(got.Request, &request); err != nil || request.Hash != spec.Request.Hash {
+			t.Fatalf("request=%+v err=%v", request, err)
+		}
+		data, _ := json.Marshal(validWorkspaceExecution(spec.Request))
+		return agentsandbox.Result{
+			Output: string(data), FinishedReason: "PodSucceeded",
+			Resources: engineruntime.ResourceMetadata{Backend: agentsandbox.Backend, Namespace: "analysis", Name: "analysis-1"},
+			Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true, ResultAvailable: true, CleanupCompleted: true},
+		}, nil
+	}}
+	result, err := runtime.Analyze(t.Context(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || result.Execution.Analysis == nil || !result.Telemetry.FinalizationChecked || !result.Telemetry.FinalizationValid || result.CleanupWork != nil {
+		t.Fatalf("result=%+v calls=%d", result, calls)
+	}
+}
+
+func TestWorkspaceSandboxRuntimePreservesValidResultWhenCleanupIsPending(t *testing.T) {
+	runtime, spec := workspaceSandboxFixture(t)
+	work := &engineruntime.WorkRef{Backend: agentsandbox.Backend, Namespace: "analysis", Name: "analysis-1", UID: "uid-1"}
+	runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64), run: func(agentsandbox.Spec) (agentsandbox.Result, error) {
+		data, _ := json.Marshal(validWorkspaceExecution(spec.Request))
+		return agentsandbox.Result{Output: string(data), FinishedReason: "PodSucceeded", Work: work, Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: false}}, engineruntime.ErrCleanupPending
+	}}
+	result, err := runtime.Analyze(t.Context(), spec)
+	if !errors.Is(err, engineruntime.ErrCleanupPending) || result.Execution.Analysis == nil || result.CleanupWork == nil || result.CleanupWork.UID != "uid-1" || !result.Telemetry.FinalizationValid {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestWorkspaceSandboxRuntimeRejectsPodResultMismatch(t *testing.T) {
+	runtime, spec := workspaceSandboxFixture(t)
+	runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64), run: func(agentsandbox.Spec) (agentsandbox.Result, error) {
+		data, _ := json.Marshal(validWorkspaceExecution(spec.Request))
+		return agentsandbox.Result{Output: string(data), FinishedReason: "PodFailed", Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true}}, nil
+	}}
+	_, err := runtime.Analyze(t.Context(), spec)
+	if !errors.Is(err, engineruntime.ErrResultContract) {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestWorkspaceSandboxRuntimeRejectsMalformedResult(t *testing.T) {
+	runtime, spec := workspaceSandboxFixture(t)
+	runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64), run: func(agentsandbox.Spec) (agentsandbox.Result, error) {
+		return agentsandbox.Result{Output: `{"version":`, FinishedReason: "PodFailed", Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true}}, nil
+	}}
+	result, err := runtime.Analyze(t.Context(), spec)
+	if !errors.Is(err, engineruntime.ErrMalformedResult) || !result.Telemetry.FinalizationChecked || result.Telemetry.FinalizationValid {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestWorkspaceSandboxRuntimeMapsTerminalStates(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state engineruntime.TerminalState
+		want  error
+	}{
+		{name: "cancelled", state: engineruntime.TerminalCancelled, want: engineruntime.ErrCancelled},
+		{name: "timed out", state: engineruntime.TerminalTimedOut, want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime, spec := workspaceSandboxFixture(t)
+			runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64), run: func(agentsandbox.Spec) (agentsandbox.Result, error) {
+				execution := WorkspaceExecutionResult{
+					Version: WorkspaceResultVersion, ContractVersion: WorkspaceContractVersion, RequestHash: spec.Request.Hash,
+					TerminalState: tc.state, FailureReason: "stopped", DurationMs: 100, Usage: WorkspaceUsage{},
+				}
+				data, _ := json.Marshal(execution)
+				return agentsandbox.Result{Output: string(data), FinishedReason: "PodFailed", Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true}}, nil
+			}}
+			result, err := runtime.Analyze(t.Context(), spec)
+			if err == nil || result.Execution.TerminalState != tc.state || !result.Telemetry.FinalizationValid {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			if tc.want != nil && !errors.Is(err, tc.want) {
+				t.Fatalf("error=%v want=%v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestWorkspaceSandboxRuntimeRejectsInvalidStageRequest(t *testing.T) {
+	runtime, spec := workspaceSandboxFixture(t)
+	runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64), run: func(agentsandbox.Spec) (agentsandbox.Result, error) {
+		t.Fatal("sandbox should not run for invalid stage request")
+		return agentsandbox.Result{}, nil
+	}}
+	spec.StageRequest = nil
+	if _, err := runtime.Analyze(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "stage request") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestWorkspaceSandboxRuntimeIdentityIncludesConfiguration(t *testing.T) {
+	runtime, _ := workspaceSandboxFixture(t)
+	runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64)}
+	base := runtime.RuntimeIdentity()
+	if base == "" {
+		t.Fatal("runtime identity is empty")
+	}
+	changed := *runtime
+	changed.OutputLimitBytes++
+	if changed.RuntimeIdentity() == base {
+		t.Fatal("output limit did not affect runtime identity")
+	}
+	changed = *runtime
+	changed.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("d", 64)}
+	if changed.RuntimeIdentity() == base {
+		t.Fatal("Sandbox identity did not affect runtime identity")
+	}
+}
+
+func TestWorkspaceSandboxRuntimeRejectsConfigurationMismatch(t *testing.T) {
+	runtime, spec := workspaceSandboxFixture(t)
+	runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64), run: func(agentsandbox.Spec) (agentsandbox.Result, error) {
+		t.Fatal("sandbox should not run for configuration mismatch")
+		return agentsandbox.Result{}, nil
+	}}
+	runtime.Gateway.Model = "other-model"
+	if _, err := runtime.Analyze(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "configured gateway") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func workspaceSandboxFixture(t *testing.T) (*WorkspaceSandboxRuntime, WorkspaceSandboxSpec) {
+	t.Helper()
+	sourceRoot, artifactRoot, failure, source := workspaceTestInputs(t)
+	files, err := SnapshotArtifactWorkspace(artifactRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := NewWorkspaceManifest(failure, source, "Inspect this project.", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := engineruntime.ModelGatewayConfig{Endpoint: "https://model-gateway.platform.svc.cluster.local:8443/v1", Model: "test-model", ProtocolVersion: "openai-chat-completions-v1"}
+	request, err := NewWorkspaceExecutionRequest(manifest, gateway, time.Minute, 20, 128<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &WorkspaceSandboxRuntime{Gateway: gateway, Timeout: time.Minute, OutputLimitBytes: 128 << 10}
+	spec := WorkspaceSandboxSpec{Request: request, StageRequest: []byte(`{"stage":1}`), SourceRoot: sourceRoot, ArtifactRoot: artifactRoot, ExecutionID: "analysis-1"}
+	return runtime, spec
+}
+
+func validWorkspaceExecution(request WorkspaceExecutionRequest) WorkspaceExecutionResult {
+	analysis := WorkspaceAnalysis{
+		Summary: "The controller rejected the request.", RootCause: "The specific failure occurred before cleanup.", Severity: "High",
+		SuggestedFix: "Correct the request before retrying.", RelevantFiles: []string{"pkg/controller.go"},
+		EvidenceCitations: []models.EvidenceCitation{{Path: "logs/build.log", LineStart: 2, LineEnd: 2, Quote: "artifact-only-marker specific failure"}},
+		SourceCitations:   []sourceinvestigation.Citation{{Path: "pkg/controller.go", LineStart: 3, LineEnd: 3, Quote: "func reconcile()", Verified: true}},
+	}
+	return WorkspaceExecutionResult{
+		Version: WorkspaceResultVersion, ContractVersion: WorkspaceContractVersion, RequestHash: request.Hash,
+		TerminalState: engineruntime.TerminalSucceeded, Analysis: &analysis, DurationMs: 100, Usage: WorkspaceUsage{},
+	}
+}
