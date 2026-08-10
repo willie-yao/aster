@@ -82,6 +82,27 @@ func TestRunTrialPreservesReviewWhenCleanupPending(t *testing.T) {
 	}
 }
 
+func TestRunTrialContractViolationOutranksCleanupPending(t *testing.T) {
+	input := criticInput(t)
+	review := Review{SchemaVersion: ReviewSchemaVersion, ContractVersion: ContractVersion, PairHash: input.PairHash, Verdict: "pass", Findings: []Finding{}, Confidence: "medium"}
+	reviewer := &trialReviewer{
+		result: Result{
+			Execution:   ExecutionResult{Review: &review},
+			CleanupWork: &engineruntime.WorkRef{Backend: "agent-sandbox", Namespace: "critic", Name: "critic-run", UID: "uid-1"},
+			Telemetry:   engineruntime.GenerateTelemetry{CleanupCompleted: false, FinalizationChecked: true},
+		},
+		err: errors.Join(engineruntime.ErrResultContract, engineruntime.ErrCleanupPending),
+	}
+	root := t.TempDir()
+	record, err := RunTrial(t.Context(), reviewer, TrialSpec{
+		PublicDir: filepath.Join(root, "public"), LedgerPath: filepath.Join(root, "private", "critic.json"),
+		Metadata: trialMetadata(), Input: input, ExecutionID: "critic-contract-cleanup", RuntimeIdentity: testCriticRuntimeIdentity(),
+	})
+	if !errors.Is(err, engineruntime.ErrResultContract) || record.Status != TrialContractViolation || record.CleanupWork == nil || record.Finalized {
+		t.Fatalf("record=%+v err=%v", record, err)
+	}
+}
+
 func TestRunTrialRejectsLedgerInsidePublicOutput(t *testing.T) {
 	root := t.TempDir()
 	publicDir := filepath.Join(root, "public")
