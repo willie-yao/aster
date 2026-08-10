@@ -1051,10 +1051,14 @@ plus the applicable verified path and symbol or configuration value.
 `modify_symbol` also names the required package-level Go call that represents
 the intended behavior inside the target function or method. Imported calls use
 their full import path and function name; same-package calls use a bare function
-name. The model
-does not decide whether a remediation is present. File issue and Propose fix
-independently verify the metadata against the exact pinned source revision and
-remain fail-closed when the target is missing or inconclusive.
+name. The verifier proves that the target function is unique and that the callee
+is a unique package-level function in the bounded pinned source. Repository-local
+import paths are resolved through the pinned `go.mod`, including import aliases
+and package names that differ from the path basename. External dependencies,
+receiver methods, shadowed identifiers, ambiguous imports, dot imports, duplicate
+declarations, and incomplete package source remain inconclusive. The model does
+not decide whether a remediation is present. File issue and Propose fix
+independently repeat this verification at the exact pinned source revision.
 
 After correlation, the engine verifies structured targets against the pinned
 source and publishes `remediation_verification`. For configuration, Prow job,
@@ -1079,6 +1083,13 @@ Only `active` patterns are published in the home-page recurring list, passed to
 automatic issue or Fix PR side effects, or accepted by action endpoints.
 `observing` and `verified_fixed` patterns remain in the per-job history with the
 source revision, explanation, and revision-verified passing build links.
+
+Source-investigation code targets use the same behavior-complete contract.
+`modify_symbol` without `required_call` is rejected before persistence, and the
+source runner loads only the target package and any repository-local callee
+package before marking a result actionable. Persisted source results and Fix PR
+previews carry versioned verification identity; entries produced before the current
+behavior verifier are not restorable or confirmable.
 
 `set_job_environment` is repository-qualified and limited to pinned
 `kubernetes/test-infra` job configuration. It records the discovery revision,

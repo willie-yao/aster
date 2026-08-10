@@ -241,6 +241,22 @@ func (s *Service) loadActionRequests() {
 	changed := migrated || s.expireRequestsLocked(now)
 	nowText := now.Format(time.RFC3339)
 	for _, request := range state.Requests {
+		if request == nil || request.Status != RequestReady {
+			continue
+		}
+		invalidVersion := request.Kind == "propose-fix" && request.VerificationVersion != sourceVerificationVersion
+		missingFixIdentity := request.Kind == "propose-fix" && (request.FailureID == "" || request.PatternHash == "")
+		if invalidVersion || missingFixIdentity {
+			request.Status = RequestFailed
+			request.Error = "saved preview requires regeneration after source verification upgrade"
+			request.Preview = nil
+			request.Issue = nil
+			request.Fix = nil
+			request.UpdatedAt = nowText
+			changed = true
+		}
+	}
+	for _, request := range state.Requests {
 		if request.Status != RequestReady && request.Status != RequestUnknown {
 			continue
 		}
@@ -1175,7 +1191,11 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request has invalid preview kind %q", entry.kind)
 	}
-	if !reconcileOnly && entry.failureID != "" && entry.verificationVersion != sourceVerificationVersion {
+	if !reconcileOnly && entry.kind == gfKind && entry.verificationVersion != sourceVerificationVersion {
+		s.rmu.Unlock()
+		return "", ErrPreviewTargetChanged
+	}
+	if !reconcileOnly && entry.kind == gfKind && (entry.failureID == "" || entry.patternHash == "") {
 		s.rmu.Unlock()
 		return "", ErrPreviewTargetChanged
 	}

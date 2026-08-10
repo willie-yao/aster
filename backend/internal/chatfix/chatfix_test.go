@@ -65,9 +65,9 @@ func TestPreviewChatFixBuildsSelectedContext(t *testing.T) {
 		SourceRepository:  sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567"},
 		SourceRevision:    "0123456789abcdef0123456789abcdef01234567",
 		SourceResult: &sourceinvestigation.Result{
-			State:   sourceinvestigation.StateActionableCodeChange,
-			Target:  &models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "pkg/retry.go", Symbol: "retry"},
-			Finding: "source finding", Confidence: sourceinvestigation.ConfidenceHigh,
+			State:                     sourceinvestigation.StateActionableCodeChange,
+			Target:                    &models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "pkg/retry.go", Symbol: "retry", RequiredCall: "applyFix"},
+			TargetVerificationVersion: 1, Finding: "source finding", Confidence: sourceinvestigation.ConfidenceHigh,
 			Relationship: sourceinvestigation.RelationshipSupports, Direction: "modify retry",
 			Citations: []sourceinvestigation.Citation{{Path: "pkg/retry.go", LineStart: 10, LineEnd: 12, Quote: "retry", Verified: true}},
 		},
@@ -161,7 +161,7 @@ func TestPreviewChatFixKeepsAtomicPatternSnapshotAfterPublishedReplacement(t *te
 			SourceRequestID:   "source-request",
 			SourceRepository:  sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567"},
 			SourceRevision:    "0123456789abcdef0123456789abcdef01234567",
-			SourceResult:      &sourceinvestigation.Result{State: sourceinvestigation.StateActionableCodeChange, Target: &models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "pkg/retry.go", Symbol: "retry"}, Finding: "source", Confidence: sourceinvestigation.ConfidenceHigh, Relationship: sourceinvestigation.RelationshipSupports, Direction: "modify retry", Citations: []sourceinvestigation.Citation{{Path: "pkg/retry.go", LineStart: 1, LineEnd: 1, Quote: "retry", Verified: true}}},
+			SourceResult:      &sourceinvestigation.Result{State: sourceinvestigation.StateActionableCodeChange, TargetVerificationVersion: 1, Target: &models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "pkg/retry.go", Symbol: "retry", RequiredCall: "applyFix"}, Finding: "source", Confidence: sourceinvestigation.ConfidenceHigh, Relationship: sourceinvestigation.RelationshipSupports, Direction: "modify retry", Citations: []sourceinvestigation.Citation{{Path: "pkg/retry.go", LineStart: 1, LineEnd: 1, Quote: "retry", Verified: true}}},
 		},
 		onReturn: func() {
 			published.SharedRootCause = "replacement cause"

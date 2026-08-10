@@ -439,7 +439,7 @@ func verifyModifySymbol(ctx context.Context, reader Reader, archive Archive, tar
 		return inconclusive(fmt.Sprintf("%s is not defined in the proposed path %s", target.Symbol, target.Path)), nil
 	}
 	if target.RequiredCall != "" {
-		called, matches, uncertain, err := symbolCalls(archive, content, target.Path, target.Symbol, target.RequiredCall)
+		matches, err := targetFunctionMatches(content, target.Symbol)
 		if err != nil {
 			return inconclusive(fmt.Sprintf("remediation source %s could not be parsed", target.Path)), nil
 		}
@@ -448,6 +448,17 @@ func verifyModifySymbol(ctx context.Context, reader Reader, archive Archive, tar
 		}
 		if matches > 1 {
 			return inconclusive(fmt.Sprintf("%s identifies multiple methods in %s", target.Symbol, target.Path)), nil
+		}
+		requiredPackage, reason, err := proveRequiredCall(ctx, reader, archive, target.Path, target.RequiredCall)
+		if err != nil {
+			return Result{}, err
+		}
+		if reason != "" {
+			return inconclusive(reason), nil
+		}
+		called, _, uncertain, err := symbolCalls(archive, content, target.Path, target.Symbol, target.RequiredCall, requiredPackage)
+		if err != nil {
+			return inconclusive(fmt.Sprintf("remediation source %s could not be parsed", target.Path)), nil
 		}
 		if uncertain {
 			return inconclusive(fmt.Sprintf("%s call identity cannot be proven in %s", target.RequiredCall, target.Path)), nil
@@ -460,17 +471,33 @@ func verifyModifySymbol(ctx context.Context, reader Reader, archive Archive, tar
 	return Result{State: StateUnresolved, Reason: fmt.Sprintf("verified %s in %s requires the proposed behavior change", target.Symbol, target.Path)}, nil
 }
 
-func symbolCalls(archive Archive, content, filePath, symbol, requiredCall string) (called bool, matches int, uncertain bool, err error) {
+func targetFunctionMatches(content, symbol string) (int, error) {
+	file, err := parser.ParseFile(token.NewFileSet(), "", content, 0)
+	if err != nil {
+		return 0, err
+	}
+	matches := 0
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if ok && function.Name.Name == symbol && function.Body != nil {
+			matches++
+		}
+	}
+	return matches, nil
+}
+
+func symbolCalls(archive Archive, content, filePath, symbol, requiredCall, requiredPackageName string) (called bool, matches int, uncertain bool, err error) {
 	file, err := parser.ParseFile(token.NewFileSet(), filePath, content, 0)
 	if err != nil {
 		return false, 0, false, err
 	}
-	requiredImport, requiredName, ok := parseRequiredCall(requiredCall)
+	requiredImport, requiredName, ok := RequiredCallParts(requiredCall)
 	if !ok {
 		return false, 0, false, fmt.Errorf("invalid required call")
 	}
 	imports := map[string]string{}
-	defaultImport := false
+	ambiguousImports := map[string]bool{}
+	ambiguousRequiredImport := false
 	dotImport := false
 	for _, spec := range file.Imports {
 		importPath, unquoteErr := strconv.Unquote(spec.Path.Value)
@@ -483,13 +510,20 @@ func symbolCalls(archive Archive, content, filePath, symbol, requiredCall string
 			if alias == "." && importPath == requiredImport {
 				dotImport = true
 			}
-		} else if importPath == requiredImport {
-			defaultImport = true
+		} else if importPath == requiredImport && requiredPackageName != "" {
+			alias = requiredPackageName
 		}
 		if alias != "" && alias != "." && alias != "_" {
+			if existing, found := imports[alias]; found {
+				ambiguousImports[alias] = true
+				if existing == requiredImport || importPath == requiredImport {
+					ambiguousRequiredImport = true
+				}
+			}
 			imports[alias] = importPath
 		}
 	}
+	uncertain = ambiguousRequiredImport
 	for _, declaration := range file.Decls {
 		function, ok := declaration.(*ast.FuncDecl)
 		if !ok || function.Name.Name != symbol || function.Body == nil {
@@ -522,11 +556,12 @@ func symbolCalls(archive Archive, content, filePath, symbol, requiredCall string
 				if !identifier || qualifier.Obj != nil || requiredImport == "" || function.Sel.Name != requiredName {
 					break
 				}
-				importPath, found := imports[qualifier.Name]
-				if found && importPath == requiredImport {
-					called = true
-				} else if !found && defaultImport {
+				if ambiguousImports[qualifier.Name] {
 					uncertain = true
+					break
+				}
+				if importPath, found := imports[qualifier.Name]; found && importPath == requiredImport {
+					called = true
 				}
 			}
 			return !called
@@ -535,34 +570,125 @@ func symbolCalls(archive Archive, content, filePath, symbol, requiredCall string
 	return called, matches, uncertain, nil
 }
 
-func packageDefinesFunction(archive Archive, targetPath, packageName, symbol string) bool {
-	targetDir := path.Dir(targetPath)
-	for filePath, source := range archive.GoFiles {
-		if path.Dir(filePath) != targetDir {
+func proveRequiredCall(ctx context.Context, reader Reader, archive Archive, targetPath, requiredCall string) (string, string, error) {
+	requiredImport, requiredName, ok := RequiredCallParts(requiredCall)
+	if !ok {
+		return "", "required call metadata is invalid", nil
+	}
+	targetContent, found, err := readSourceFile(ctx, reader, archive, targetPath)
+	if err != nil {
+		return "", "", fmt.Errorf("read pinned source file %s: %w", targetPath, err)
+	}
+	if !found {
+		return "", "required call package cannot be proven from pinned source", nil
+	}
+	targetFile, err := parser.ParseFile(token.NewFileSet(), targetPath, targetContent, 0)
+	if err != nil {
+		return "", fmt.Sprintf("remediation source %s could not be parsed", targetPath), nil
+	}
+	if requiredImport == "" {
+		proof := packageFunctionDeclaration(archive, path.Dir(targetPath), targetFile.Name.Name, requiredName, strings.HasSuffix(targetPath, "_test.go"))
+		if !proof.proven {
+			return "", "required same-package call is not a unique package-level function in pinned source", nil
+		}
+		return targetFile.Name.Name, "", nil
+	}
+	if !ast.IsExported(requiredName) {
+		return "", "required imported call is not an exported package-level function", nil
+	}
+	goModPath := nearestModuleFile(archive.Paths, targetPath)
+	if goModPath == "" {
+		return "", "required imported call cannot be proven from the pinned repository", nil
+	}
+	goMod, found, err := readSourceFile(ctx, reader, archive, goModPath)
+	if err != nil {
+		return "", "", fmt.Errorf("read pinned module identity: %w", err)
+	}
+	if !found {
+		return "", "required imported call cannot be proven from the pinned repository", nil
+	}
+	modulePath := modulePathFromGoMod(goMod)
+	packageDir, ok := repositoryPackageDir(goModPath, modulePath, requiredImport)
+	if !ok || crossesNestedModule(archive.Paths, goModPath, packageDir) {
+		return "", "required imported call cannot be proven from the pinned repository", nil
+	}
+	proof := packageFunctionDeclaration(archive, packageDir, "", requiredName, false)
+	if !proof.proven {
+		return "", "required imported call is not a unique package-level function in pinned source", nil
+	}
+	return proof.packageName, "", nil
+}
+
+type functionDeclarationProof struct {
+	proven      bool
+	packageName string
+}
+
+func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, symbol string, includeTests bool) functionDeclarationProof {
+	paths := make([]string, 0)
+	for filePath := range archive.Paths {
+		if path.Dir(filePath) != packageDir || !strings.HasSuffix(filePath, ".go") || !includeTests && strings.HasSuffix(filePath, "_test.go") {
 			continue
+		}
+		paths = append(paths, filePath)
+	}
+	sort.Strings(paths)
+	if len(paths) == 0 || len(paths) > maxMatchingFiles {
+		return functionDeclarationProof{}
+	}
+	packageNames := map[string]bool{}
+	declarations := 0
+	bytesRead := 0
+	for _, filePath := range paths {
+		source, ok := archive.GoFiles[filePath]
+		if !ok {
+			return functionDeclarationProof{}
+		}
+		bytesRead += len(source)
+		if bytesRead > maxMatchingBytes {
+			return functionDeclarationProof{}
 		}
 		file, err := parser.ParseFile(token.NewFileSet(), filePath, source, 0)
-		if err != nil || file.Name.Name != packageName {
+		if err != nil {
+			return functionDeclarationProof{}
+		}
+		if expectedPackage != "" && file.Name.Name != expectedPackage {
 			continue
 		}
+		packageNames[file.Name.Name] = true
 		for _, declaration := range file.Decls {
 			function, ok := declaration.(*ast.FuncDecl)
-			if ok && function.Recv == nil && function.Name.Name == symbol {
-				return true
+			if !ok || function.Recv != nil || function.Name.Name != symbol {
+				continue
 			}
+			if isBuildConstrained(filePath, source) && !strings.HasSuffix(filePath, "_test.go") {
+				return functionDeclarationProof{}
+			}
+			declarations++
 		}
 	}
-	return false
+	if declarations != 1 || len(packageNames) != 1 {
+		return functionDeclarationProof{}
+	}
+	for packageName := range packageNames {
+		return functionDeclarationProof{proven: true, packageName: packageName}
+	}
+	return functionDeclarationProof{}
+}
+
+func packageDefinesFunction(archive Archive, targetPath, packageName, symbol string) bool {
+	return packageFunctionDeclaration(archive, path.Dir(targetPath), packageName, symbol, strings.HasSuffix(targetPath, "_test.go")).proven
 }
 
 // ValidRequiredCall reports whether value is a direct function name or an
 // import-path-qualified function name.
 func ValidRequiredCall(value string) bool {
-	_, _, ok := parseRequiredCall(value)
+	_, _, ok := RequiredCallParts(value)
 	return ok
 }
 
-func parseRequiredCall(value string) (importPath, name string, ok bool) {
+// RequiredCallParts parses a direct or import-path-qualified function identity.
+func RequiredCallParts(value string) (importPath, name string, ok bool) {
 	value = strings.TrimSpace(value)
 	if token.IsIdentifier(value) {
 		return "", value, true

@@ -30,6 +30,17 @@ func (r errorSourceResultAPI) Result(context.Context, string, string) (string, b
 	return "", false, r.err
 }
 
+func (f fakeSourceReader) ListFiles(_ context.Context, _ sourceinvestigation.Repository) ([]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	files := make([]string, 0, len(f.files))
+	for file := range f.files {
+		files = append(files, file)
+	}
+	return files, nil
+}
+
 func (f fakeSourceReader) ReadFile(_ context.Context, _ sourceinvestigation.Repository, file string) (string, error) {
 	if f.err != nil {
 		return "", f.err
@@ -136,12 +147,12 @@ func TestSourceInvestigatorPreservesPollingContextErrors(t *testing.T) {
 func TestSourceInvestigatorHappyPath(t *testing.T) {
 	inner, err := json.Marshal(map[string]any{
 		"version": 1, "state": "actionable_code_change",
-		"target":     map[string]any{"intent": "modify_symbol", "path": "pkg/retry.go", "symbol": "retry"},
+		"target":     map[string]any{"intent": "modify_symbol", "path": "pkg/retry.go", "symbol": "retry", "required_call": "applyFix"},
 		"finding":    "The loop retries the same terminal error.",
 		"confidence": "high", "relationship": "supports",
 		"direction": "Stop retrying after the terminal error.",
 		"citations": []map[string]any{{
-			"path": "pkg/retry.go", "line_start": 2, "line_end": 3,
+			"path": "pkg/retry.go", "line_start": 4, "line_end": 5,
 			"quote": "if terminal(err)",
 		}},
 	})
@@ -153,7 +164,7 @@ func TestSourceInvestigatorHappyPath(t *testing.T) {
 	kube := &fakeTaskAPI{phases: []string{"Running", "Succeeded"}}
 	runner := &SourceInvestigator{
 		kube: kube, results: results,
-		reader: fakeSourceReader{files: map[string]string{"pkg/retry.go": "func retry(err error) {\n\tif terminal(err) {\n\t\treturn\n\t}\n}\n"}},
+		reader: fakeSourceReader{files: map[string]string{"pkg/retry.go": "package pkg\nfunc applyFix() {}\nfunc retry(err error) {\n\tif terminal(err) {\n\t\treturn\n\t}\n}\n"}},
 		opts:   SourceInvestigationOptions{Namespace: "orka-system", AgentRef: "source-reader", MaxTurns: 20, PollEvery: time.Millisecond},
 	}
 
@@ -190,7 +201,7 @@ func TestSourceInvestigatorHappyPath(t *testing.T) {
 }
 
 func TestSourceInvestigatorRejectsUnverifiedCitationAndWorkspaceChanges(t *testing.T) {
-	inner := `{"version":1,"state":"actionable_code_change","target":{"intent":"modify_symbol","path":"pkg/retry.go","symbol":"retry"},"finding":"finding","confidence":"medium","relationship":"refines","direction":"inspect","citations":[{"path":"pkg/retry.go","line_start":1,"line_end":1,"quote":"missing"}]}`
+	inner := `{"version":1,"state":"actionable_code_change","target":{"intent":"modify_symbol","path":"pkg/retry.go","symbol":"retry","required_call":"applyFix"},"finding":"finding","confidence":"medium","relationship":"refines","direction":"inspect","citations":[{"path":"pkg/retry.go","line_start":1,"line_end":1,"quote":"missing"}]}`
 	for _, tc := range []struct {
 		name   string
 		outer  StructuredResult
@@ -257,7 +268,7 @@ func TestSourceInvestigatorRecordsCleanupFailure(t *testing.T) {
 }
 
 func TestSourceInvestigatorRecordsVerifiedResultCleanupFailure(t *testing.T) {
-	inner := `{"version":1,"state":"actionable_code_change","target":{"intent":"modify_symbol","path":"pkg/retry.go","symbol":"retry"},"finding":"finding","confidence":"medium","relationship":"refines","direction":"inspect","citations":[{"path":"pkg/retry.go","line_start":1,"line_end":1,"quote":"retry"}]}`
+	inner := `{"version":1,"state":"actionable_code_change","target":{"intent":"modify_symbol","path":"pkg/retry.go","symbol":"retry","required_call":"applyFix"},"finding":"finding","confidence":"medium","relationship":"refines","direction":"inspect","citations":[{"path":"pkg/retry.go","line_start":3,"line_end":3,"quote":"retry"}]}`
 	results, done := resultServer(t, sourceOuterResult(t, inner))
 	defer done()
 	deleteErrs := make([]error, 10)
@@ -266,7 +277,7 @@ func TestSourceInvestigatorRecordsVerifiedResultCleanupFailure(t *testing.T) {
 	}
 	kube := &fakeTaskAPI{phases: []string{"Running", "Succeeded"}, deleteErrs: deleteErrs}
 	runner := &SourceInvestigator{
-		kube: kube, results: results, reader: fakeSourceReader{files: map[string]string{"pkg/retry.go": "retry\n"}},
+		kube: kube, results: results, reader: fakeSourceReader{files: map[string]string{"pkg/retry.go": "package pkg\nfunc applyFix() {}\nfunc retry() {}\n"}},
 		opts: SourceInvestigationOptions{AgentRef: "reader", PollEvery: time.Millisecond},
 	}
 	result, err := runner.Investigate(t.Context(), sourceRequest())
@@ -355,5 +366,44 @@ func TestBuildSourcePromptUsesTypedFailureSubject(t *testing.T) {
 	}
 	if strings.Contains(prompt, `"test_name"`) {
 		t.Fatalf("build source prompt used test-only label: %s", prompt)
+	}
+	if !strings.Contains(prompt, `"required_call":"packageFunction"`) || !strings.Contains(prompt, "Never use a receiver method or an external dependency") {
+		t.Fatalf("source prompt lacks behavior-complete target contract: %s", prompt)
+	}
+}
+
+func TestGitHubSourceReaderListsPinnedTree(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	var authorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get("Authorization")
+		if r.URL.Path != "/repos/example/repo/git/trees/"+revision || r.URL.Query().Get("recursive") != "1" {
+			t.Fatalf("tree request = %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"tree":[{"path":"pkg/retry.go","type":"blob"},{"path":"pkg","type":"tree"}]}`))
+	}))
+	defer server.Close()
+	reader := NewGitHubSourceReader(server.URL, "read-token")
+	files, err := reader.ListFiles(t.Context(), sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: revision})
+	if err != nil || len(files) != 1 || files[0] != "pkg/retry.go" {
+		t.Fatalf("files=%v err=%v", files, err)
+	}
+	if authorization != "Bearer read-token" {
+		t.Fatalf("authorization = %q", authorization)
+	}
+}
+
+func TestGitHubSourceReaderRejectsTruncatedTree(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"truncated":true,"tree":[{"path":"pkg/fix.go","type":"blob"}]}`))
+	}))
+	defer srv.Close()
+	reader := NewGitHubSourceReader(srv.URL, "")
+	_, err := reader.ListFiles(t.Context(), sourceinvestigation.Repository{
+		Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567",
+	})
+	if err == nil {
+		t.Fatal("truncated source tree was accepted")
 	}
 }

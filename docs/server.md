@@ -420,8 +420,11 @@ The dashboard exposes **Use this finding in a fix proposal** only for completed
 evidence-backed responses whose selected build belongs to an actionable recurring
 pattern. Before generation, the user reviews the selected pattern, assistant
 answer, proposed revision, artifact citations, required actionable source result,
-and maintainer instruction. The generated draft then uses the existing preview and
-confirmation UI.
+and maintainer instruction. Actionable source code results must identify both the
+function to modify and a uniquely proven package-level `required_call` at the
+pinned commit. Missing, fabricated, external, method-only, or ambiguous callees
+fail closed before fix generation. The generated draft then uses the existing
+preview and confirmation UI.
 
 ## Admin-gated actions
 

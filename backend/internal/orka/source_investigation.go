@@ -25,6 +25,9 @@ const (
 	orkaAgentReadOnlyAnnotation      = "orka.ai/agent-read-only"
 	maxSourceResultBytes             = 1 << 20
 	maxSourceFileBytes               = 4 << 20
+	maxSourceTreeBytes               = 8 << 20
+	maxSourceTreeEntries             = 100000
+	sourceInvestigationPromptVersion = 2
 )
 
 // SourceInvestigationOptions configures read-only Orka agent Tasks.
@@ -210,6 +213,11 @@ func (r *SourceInvestigator) Investigate(
 		return sourceinvestigation.Result{}, fmt.Errorf("source investigation Task %s: %w", name, err)
 	}
 	result.Citations = verified
+	if result.Target != nil {
+		if err := sourceinvestigation.VerifyResultTarget(ctx, r.reader, request.Subject.Repository, &result); err != nil {
+			return sourceinvestigation.Result{}, err
+		}
+	}
 	if err := sourceinvestigation.ValidateVerifiedResult(result); err != nil {
 		return sourceinvestigation.Result{}, err
 	}
@@ -368,7 +376,7 @@ This is read-only. Do not edit files. Do not use the network. Inspect only repos
 Return only one JSON object with exactly this shape:
 {"version":1,"state":"already_present|actionable_code_change|actionable_configuration_change|inconclusive","target":null,"finding":"...","confidence":"high|medium|low","relationship":"supports|refines|contradicts|inconclusive","direction":"...","citations":[{"path":"safe/relative/path.go","line_start":1,"line_end":2,"quote":"exact text contained within those lines"}]}
 
-For actionable_code_change, replace target with exactly {"intent":"add_symbol|modify_symbol","path":"safe/relative/path.go","symbol":"Name"}. For actionable_configuration_change, use exactly {"intent":"set_configuration|remove_configuration","path":"safe/relative/path.yaml","value":"Key=Value"}. For already_present, use the matching symbol or configuration target shape.
+For actionable_code_change, use {"intent":"add_symbol","path":"safe/relative/path.go","symbol":"Name"} only for a new package-level symbol. For an existing function or method that needs a behavior change, use exactly {"intent":"modify_symbol","path":"safe/relative/path.go","symbol":"ExistingFunction","required_call":"packageFunction"}. required_call must name a uniquely declared package-level function proven in this checkout. Use a bare function name for the same package or the full module import path plus function name for another package in this repository. Never use a receiver method or an external dependency. If no exact callable function is proven, return inconclusive. For actionable_configuration_change, use exactly {"intent":"set_configuration|remove_configuration","path":"safe/relative/path.yaml","value":"Key=Value"}. For already_present, use the matching behavior-complete symbol or configuration target shape.
 
 The dashboard validates the state, target metadata, target path, and citations. Use null target only for inconclusive. Cite the target path for every non-inconclusive state. Citations must use exact case-sensitive repository-relative paths, bounded line ranges, and verbatim quotes. Include at least one citation. Do not use Markdown fences or add prose outside the JSON object.
 
@@ -390,6 +398,7 @@ func SourceInvestigationTaskName(request sourceinvestigation.Request, opts Sourc
 	subject, _ := json.Marshal(request.Subject)
 	data := strings.Join([]string{
 		request.ID, string(subject), opts.AgentRef, opts.GitSecret, opts.Version, opts.AdmissionIdentity,
+		fmt.Sprintf("prompt-v%d", sourceInvestigationPromptVersion),
 		fmt.Sprintf("%d", opts.MaxRetries), fmt.Sprintf("%d", opts.MaxTurns), request.Timeout.String(),
 	}, "\x00")
 	sum := sha256.Sum256([]byte(data))
@@ -529,6 +538,7 @@ func (r *SourceInvestigator) cleanupSourceTask(name string) error {
 // GitHubSourceReader reads exact public or token-authenticated GitHub source.
 type GitHubSourceReader struct {
 	base  *url.URL
+	api   *url.URL
 	token string
 	http  *http.Client
 }
@@ -540,6 +550,12 @@ func NewGitHubSourceReader(base, token string) *GitHubSourceReader {
 		base = "https://raw.githubusercontent.com"
 	}
 	parsed, _ := url.Parse(strings.TrimRight(base, "/"))
+	api, _ := url.Parse("https://api.github.com")
+	if parsed != nil && !strings.EqualFold(parsed.Hostname(), "raw.githubusercontent.com") {
+		copy := *parsed
+		copy.Path = strings.TrimRight(copy.Path, "/")
+		api = &copy
+	}
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -549,7 +565,58 @@ func NewGitHubSourceReader(base, token string) *GitHubSourceReader {
 			return nil
 		},
 	}
-	return &GitHubSourceReader{base: parsed, token: strings.TrimSpace(token), http: client}
+	return &GitHubSourceReader{base: parsed, api: api, token: strings.TrimSpace(token), http: client}
+}
+
+// ListFiles lists regular files at the pinned revision.
+func (r *GitHubSourceReader) ListFiles(ctx context.Context, repo sourceinvestigation.Repository) ([]string, error) {
+	if r == nil || r.api == nil || r.http == nil {
+		return nil, fmt.Errorf("source reader is not configured")
+	}
+	endpoint := *r.api
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/repos/" + repo.Owner + "/" + repo.Name + "/git/trees/" + repo.Revision
+	query := endpoint.Query()
+	query.Set("recursive", "1")
+	endpoint.RawQuery = query.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	if r.token != "" {
+		req.Header.Set("Authorization", "Bearer "+r.token)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := r.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSourceTreeBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK || len(body) > maxSourceTreeBytes {
+		return nil, fmt.Errorf("GitHub source tree is unavailable")
+	}
+	var payload struct {
+		Truncated bool `json:"truncated"`
+		Tree      []struct {
+			Path string `json:"path"`
+			Type string `json:"type"`
+		} `json:"tree"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil || payload.Truncated || len(payload.Tree) > maxSourceTreeEntries {
+		return nil, fmt.Errorf("GitHub source tree is invalid")
+	}
+	files := make([]string, 0, len(payload.Tree))
+	for _, entry := range payload.Tree {
+		clean := path.Clean(strings.TrimSpace(entry.Path))
+		if entry.Type != "blob" || clean == "." || clean == ".." || clean != entry.Path || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || strings.Contains(clean, "\\") {
+			continue
+		}
+		files = append(files, clean)
+	}
+	return files, nil
 }
 
 // ReadFile fetches one path at the pinned revision.

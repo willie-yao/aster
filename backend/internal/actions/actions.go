@@ -74,7 +74,7 @@ var ErrPreviewNotFound = errors.New("preview not found or expired")
 
 // previewTTL bounds how long a generated draft is held for confirmation.
 const previewTTL = 15 * time.Minute
-const sourceVerificationVersion = 2
+const sourceVerificationVersion = 3
 
 // AIConfig is the resolved chat-completions configuration used to draft fixes.
 type AIConfig struct {
@@ -135,13 +135,12 @@ const (
 
 // ActionSubject is one current published analysis eligible for a preview.
 type ActionSubject struct {
-	Kind                     actionSubjectKind
-	ID                       string
-	ContentHash              string
-	Pattern                  *models.PatternAnalysis
-	Build                    *BuildActionSubject
-	SourceFiles              []string
-	EnforcePublishedContract bool
+	Kind        actionSubjectKind
+	ID          string
+	ContentHash string
+	Pattern     *models.PatternAnalysis
+	Build       *BuildActionSubject
+	SourceFiles []string
 }
 
 // BuildActionSubject is one analyzed build failure without a JUnit assertion.
@@ -301,7 +300,7 @@ func (s *Service) resolveSubject(id string) (*ActionSubject, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: pattern, EnforcePublishedContract: true}, nil
+		return &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: pattern}, nil
 	}
 	parts := strings.Split(id, "::")
 	if len(parts) != 3 || parts[0] != "build" {
@@ -588,7 +587,7 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 	if patternSubject && len(subject.Pattern.RemediationTargets) == 0 {
 		return inconclusive("recurring pattern does not include structured remediation targets", nil)
 	}
-	if patternSubject && subject.EnforcePublishedContract {
+	if patternSubject {
 		for _, target := range subject.Pattern.RemediationTargets {
 			if reason := actionverify.PatternTargetReason(target); reason != "" {
 				return inconclusive(reason, nil)
@@ -980,7 +979,6 @@ func (s *Service) generateFixPreviewForPattern(
 	}
 	subject := &ActionSubject{
 		Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern, SourceFiles: sourceFiles,
-		EnforcePublishedContract: generationContext == nil || generationContext.Source == nil,
 	}
 	if err := s.verifyRemediation(ctx, subject); err != nil {
 		return PreviewResult{}, nil, err
@@ -1108,7 +1106,11 @@ func (s *Service) Confirm(ctx context.Context, token, owner, writeToken string) 
 	if err != nil || resultURL != "" {
 		return resultURL, err
 	}
-	if !reconcile && entry.failureID != "" && entry.verificationVersion != sourceVerificationVersion {
+	if !reconcile && entry.kind == gfKind && entry.verificationVersion != sourceVerificationVersion {
+		_ = s.previewStore.discard(owner, token, attemptID)
+		return "", ErrPreviewTargetChanged
+	}
+	if !reconcile && entry.kind == gfKind && (entry.failureID == "" || entry.patternHash == "") {
 		_ = s.previewStore.discard(owner, token, attemptID)
 		return "", ErrPreviewTargetChanged
 	}

@@ -3,7 +3,6 @@ package ai
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -160,26 +159,17 @@ type targetArchiveReader struct {
 }
 
 func (r *targetArchiveReader) ReadSourceArchive(ctx context.Context) (actionverify.Archive, error) {
-	archive := actionverify.Archive{Paths: map[string]bool{}, GoFiles: map[string]string{}, Files: map[string]string{}}
-	for _, target := range r.targets {
-		if archive.Paths[target.Path] {
-			continue
-		}
-		content, found, err := r.reader.ReadFile(ctx, target.Path)
-		if err != nil {
-			return actionverify.Archive{}, err
-		}
-		if !found {
-			continue
-		}
-		archive.Paths[target.Path] = true
-		if filepath.Ext(target.Path) == ".go" {
-			archive.GoFiles[target.Path] = content
-		} else {
-			archive.Files[target.Path] = content
-		}
+	return actionverify.BuildTargetArchive(ctx, r, r.targets)
+}
+
+func (r *targetArchiveReader) ListFiles(ctx context.Context) ([]string, error) {
+	tree, ok := r.reader.(interface {
+		ListTree(context.Context) ([]string, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("pinned source tree is unavailable")
 	}
-	return archive, nil
+	return tree.ListTree(ctx)
 }
 
 func (r *targetArchiveReader) ReadFile(ctx context.Context, path string) (string, bool, error) {

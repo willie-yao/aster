@@ -1260,16 +1260,14 @@ func TestShutdownRejectsNewRequests(t *testing.T) {
 func TestLoadActionRequestsInvalidatesLegacyVerifiedPreview(t *testing.T) {
 	service, pattern := requestTestService(t)
 	now := time.Now().UTC()
-	key := issues.KeyPrefixPattern + pattern.JobID
-	spec := &issues.IssueSpec{Key: key, Title: "Ready", Body: "## Summary\nBody\n\n" + issues.MarkerFor(key)}
-	state := actionRequestState{Version: 3, Requests: map[string]*actionRequest{
+	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"legacy": {
 			ActionRequestView: ActionRequestView{
-				ID: "legacy", FailureID: pattern.ID, PatternHash: pattern.ContentHash, Owner: "alice", Kind: "create-issue", Status: RequestReady,
+				ID: "legacy", FailureID: pattern.ID, PatternHash: pattern.ContentHash, Owner: "alice", Kind: "propose-fix", Status: RequestReady,
 				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
-				Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
+				Preview: &PreviewResult{Kind: gfKind, Title: "Legacy"},
 			},
-			Issue: spec, VerificationVersion: sourceVerificationVersion - 1,
+			Fix: &fixpr.GeneratedFixSnapshot{Key: "legacy-fix"}, VerificationVersion: sourceVerificationVersion - 1,
 		},
 	}}
 	data, _ := json.Marshal(state)
@@ -1302,5 +1300,57 @@ func TestReadyRequestMatchesCurrentCrossRepositoryDestination(t *testing.T) {
 	request.Fix.Files["config/jobs/other/periodics.yaml"] = "content"
 	if service.readyRequestMatchesCurrent(request, subject) {
 		t.Fatal("ready request with a newly disallowed generated file was reused")
+	}
+}
+
+func TestLoadActionRequestsRejectsUnidentifiedOrUnverifiedFix(t *testing.T) {
+	for _, testCase := range []struct {
+		name                string
+		verificationVersion int
+	}{
+		{name: "old verification", verificationVersion: sourceVerificationVersion - 1},
+		{name: "missing identity", verificationVersion: sourceVerificationVersion},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service, _ := requestTestService(t)
+			now := time.Now().UTC()
+			state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
+				"legacy-fix": {
+					ActionRequestView: ActionRequestView{
+						ID: "legacy-fix", Owner: "alice", Kind: "propose-fix", Status: RequestReady,
+						CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+						Preview: &PreviewResult{Kind: gfKind, Title: "Legacy"},
+					},
+					Fix: &fixpr.GeneratedFixSnapshot{Key: "legacy-fix"}, VerificationVersion: testCase.verificationVersion,
+				},
+			}}
+			data, _ := json.Marshal(state)
+			if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+			view, err := reloaded.GetRequest("legacy-fix", "alice")
+			if err != nil || view.Status != RequestFailed || view.Preview != nil {
+				t.Fatalf("view=%+v err=%v", view, err)
+			}
+		})
+	}
+}
+
+func TestConfirmRequestRejectsUnidentifiedFix(t *testing.T) {
+	service, _ := requestTestService(t)
+	now := time.Now().UTC()
+	service.rmu.Lock()
+	service.requests.Requests["unidentified-fix"] = &actionRequest{
+		ActionRequestView: ActionRequestView{
+			ID: "unidentified-fix", Owner: "alice", Kind: "propose-fix", Status: RequestReady,
+			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+			Preview: &PreviewResult{Kind: gfKind, Title: "Unidentified"},
+		},
+		Fix: &fixpr.GeneratedFixSnapshot{Key: "unidentified-fix"}, VerificationVersion: sourceVerificationVersion,
+	}
+	service.rmu.Unlock()
+	if _, err := service.ConfirmRequest(t.Context(), "unidentified-fix", "alice", "token"); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("ConfirmRequest unidentified fix error = %v", err)
 	}
 }

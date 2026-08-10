@@ -137,3 +137,48 @@ func TestActionEligibilityBlocksInactivePatternLifecycle(t *testing.T) {
 		})
 	}
 }
+
+func TestActionEligibilityRequiresProvenRequiredCall(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		files map[string]string
+		call  string
+		want  string
+	}{
+		{
+			name:  "fabricated helper",
+			files: map[string]string{"controllers/reconcile.go": "package controllers\nfunc reconcile() {}\n"},
+			call:  "fabricatedHelper", want: EligibilityMoreEvidenceRequired,
+		},
+		{
+			name: "existing helper missing call",
+			files: map[string]string{
+				"controllers/reconcile.go": "package controllers\nfunc reconcile() {}\n",
+				"controllers/fix.go":       "package controllers\nfunc applyFix() {}\n",
+			},
+			call: "applyFix", want: EligibilityActionable,
+		},
+		{
+			name: "existing call",
+			files: map[string]string{
+				"controllers/reconcile.go": "package controllers\nfunc reconcile() { applyFix() }\n",
+				"controllers/fix.go":       "package controllers\nfunc applyFix() {}\n",
+			},
+			call: "applyFix", want: EligibilityAlreadyPresent,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service, id := eligibilityService(t, []models.RemediationTarget{{
+				Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: testCase.call, Path: "controllers/reconcile.go",
+			}})
+			reader := fakeActionSourceReader(testCase.files)
+			service.sourceVerifier = func(ctx context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+				return actionverify.Verify(ctx, reader, input)
+			}
+			got, err := service.ActionEligibility(t.Context(), id)
+			if err != nil || got.State != testCase.want {
+				t.Fatalf("eligibility=%+v err=%v", got, err)
+			}
+		})
+	}
+}

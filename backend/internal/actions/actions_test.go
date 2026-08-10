@@ -393,7 +393,7 @@ func TestFixPreviewSnapshotPersistsAcrossServices(t *testing.T) {
 		Key:     "fix-key", Base: ghpr.Base{Branch: "main", HeadSHA: "abc", TreeSHA: "tree"},
 	})
 	first := NewService(&project.Config{}, dataDir, AIConfig{})
-	token, err := first.stash("owner-token", &previewEntry{kind: gfKind, fix: generated})
+	token, err := first.stash("owner-token", &previewEntry{kind: gfKind, failureID: "pattern", patternHash: "hash", verificationVersion: sourceVerificationVersion, fix: generated})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1360,6 +1360,101 @@ func (f fakeActionSourceReader) ReadFile(_ context.Context, path string) (string
 	return content, ok, nil
 }
 
+func sourceOverrideVerificationSubject(t *testing.T, target models.RemediationTarget, files map[string]string) (*Service, *ActionSubject, *bool) {
+	t.Helper()
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	pattern := &models.PatternAnalysis{
+		Systemic: true, SuggestedFix: "Apply the investigated source change.", SourceRef: "example/repo@" + revision,
+		RemediationTargets: []models.RemediationTarget{target},
+	}
+	cfg := &project.Config{AI: &project.AI{
+		SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"},
+		FixPRs:     &project.FixPRs{Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"}},
+	}}
+	service := NewService(cfg, t.TempDir(), AIConfig{})
+	called := false
+	reader := fakeActionSourceReader(files)
+	service.sourceVerifier = func(ctx context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
+		called = true
+		return actionverify.Verify(ctx, reader, input)
+	}
+	return service, &ActionSubject{Kind: actionSubjectPattern, Pattern: pattern, SourceFiles: []string{target.Path}}, &called
+}
+
+func TestSourceOverrideModifyWithoutRequiredCallIsRejected(t *testing.T) {
+	target := models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", Path: "controllers/reconcile.go"}
+	service, subject, called := sourceOverrideVerificationSubject(t, target, map[string]string{
+		"controllers/reconcile.go": "package controllers\nfunc reconcile() {}\n",
+	})
+	if err := service.verifyRemediation(t.Context(), subject); !errors.Is(err, ErrRemediationInconclusive) || *called {
+		t.Fatalf("error=%v verifier_called=%t", err, *called)
+	}
+}
+
+func TestSourceOverrideFabricatedRequiredCallsAreRejected(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		target models.RemediationTarget
+		files  map[string]string
+	}{
+		{
+			name:   "same package",
+			target: models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "fabricatedHelper", Path: "controllers/reconcile.go"},
+			files:  map[string]string{"controllers/reconcile.go": "package controllers\nfunc reconcile() {}\n"},
+		},
+		{
+			name:   "imported package",
+			target: models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/project/migration.FabricatedHelper", Path: "controllers/reconcile.go"},
+			files: map[string]string{
+				"go.mod":                   "module example.com/project\n",
+				"controllers/reconcile.go": "package controllers\nfunc reconcile() {}\n",
+				"migration/doc.go":         "package migration\n",
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service, subject, called := sourceOverrideVerificationSubject(t, testCase.target, testCase.files)
+			err := service.verifyRemediation(t.Context(), subject)
+			if !errors.Is(err, ErrRemediationInconclusive) || !*called {
+				t.Fatalf("error=%v verifier_called=%t", err, *called)
+			}
+		})
+	}
+}
+
+func TestSourceOverrideProvenRequiredCallsRemainSupported(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		target models.RemediationTarget
+		files  map[string]string
+	}{
+		{
+			name:   "same package",
+			target: models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "applyFix", Path: "controllers/reconcile.go"},
+			files: map[string]string{
+				"controllers/reconcile.go": "package controllers\nfunc reconcile() {}\n",
+				"controllers/fix.go":       "package controllers\nfunc applyFix() {}\n",
+			},
+		},
+		{
+			name:   "imported package",
+			target: models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/project/migration.ApplyFix", Path: "controllers/reconcile.go"},
+			files: map[string]string{
+				"go.mod":                   "module example.com/project\n",
+				"controllers/reconcile.go": "package controllers\nfunc reconcile() {}\n",
+				"migration/fix.go":         "package migration\nfunc ApplyFix() {}\n",
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service, subject, called := sourceOverrideVerificationSubject(t, testCase.target, testCase.files)
+			if err := service.verifyRemediation(t.Context(), subject); err != nil || !*called {
+				t.Fatalf("error=%v verifier_called=%t", err, *called)
+			}
+		})
+	}
+}
+
 func TestSourcePreflightBlocksAlreadyPresentRemediation(t *testing.T) {
 	dataDir := t.TempDir()
 	const revision = "0123456789abcdef0123456789abcdef01234567"
@@ -1539,7 +1634,7 @@ func TestContextSourceVerificationDropsPatternPathsFromAnotherRevision(t *testin
 		ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", Quote: "failure"}},
 		Source: &fixpr.SourceContext{
 			Repository: "example/repo", State: sourceinvestigation.StateActionableCodeChange,
-			Target:    models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "new.go", Symbol: "ExistingFix"},
+			Target:    models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "new.go", Symbol: "ExistingFix", RequiredCall: "ApplyFix"},
 			Revision:  newRevision,
 			Citations: []fixpr.Evidence{{Path: "new.go", LineStart: 1, LineEnd: 1, Quote: "package source"}},
 		},
@@ -1558,7 +1653,7 @@ func TestContextSourceRepositoryMustMatchFixTarget(t *testing.T) {
 	service := NewService(cfg, t.TempDir(), AIConfig{})
 	_, _, err := service.generateFixPreviewForPattern(t.Context(), pattern, "token", "", &fixpr.GenerationContext{
 		AssistantAnswer: "answer", ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", Quote: "failure"}},
-		Source: &fixpr.SourceContext{Repository: "source/repo", State: sourceinvestigation.StateActionableCodeChange, Target: models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "main.go", Symbol: "Fix"}, Revision: "0123456789abcdef0123456789abcdef01234567", Finding: "finding", Citations: []fixpr.Evidence{{Path: "main.go", Quote: "Fix"}}},
+		Source: &fixpr.SourceContext{Repository: "source/repo", State: sourceinvestigation.StateActionableCodeChange, Target: models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "main.go", Symbol: "Fix", RequiredCall: "ApplyFix"}, Revision: "0123456789abcdef0123456789abcdef01234567", Finding: "finding", Citations: []fixpr.Evidence{{Path: "main.go", Quote: "Fix"}}},
 	})
 	if !errors.Is(err, ErrPreviewRejected) {
 		t.Fatalf("repository mismatch error = %v", err)
@@ -1823,14 +1918,30 @@ func TestSourcePreflightUsesBrandingRepositoryFallback(t *testing.T) {
 	}
 }
 
+func TestConfirmRejectsLegacyBehaviorVerification(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	entry := &previewEntry{
+		failureID: "pattern", patternHash: "hash", kind: gfKind, targetRepo: "example/repo",
+		verificationVersion: sourceVerificationVersion - 1,
+		fix:                 fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{Key: "legacy-fix"}),
+	}
+	token, err := service.stash("alice", entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Confirm(t.Context(), token, "alice", "token"); !errors.Is(err, ErrPreviewNotFound) {
+		t.Fatalf("Confirm legacy preview error = %v", err)
+	}
+}
+
 func TestPreviewStoreInvalidatesLegacyVerificationVersion(t *testing.T) {
 	store := newPreviewStore(t.TempDir())
-	state := previewState{Version: 3, Previews: map[string]*persistedPreview{
+	state := previewState{Version: previewStateVersion, Previews: map[string]*persistedPreview{
 		"legacy": {
-			Owner: "owner", Kind: "issue", FailureID: "failure", PatternHash: "hash",
-			TargetRepo: "example/issues", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: previewStatusReady,
+			Owner: "owner", Kind: gfKind, FailureID: "failure", PatternHash: "hash",
+			TargetRepo: "example/repo", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: previewStatusReady,
 			VerificationVersion: sourceVerificationVersion - 1,
-			Issue:               &issues.IssueSpec{Key: "pattern::legacy", Title: "Legacy", Body: "## Summary\nBody\n\n" + issues.MarkerFor("pattern::legacy")},
+			Fix:                 &fixpr.GeneratedFixSnapshot{Key: "legacy-fix"},
 		},
 	}}
 	data, _ := json.Marshal(state)
@@ -1886,7 +1997,7 @@ func TestBotWriteAuditRecordsFixPreviewAttribution(t *testing.T) {
 	dataDir := t.TempDir()
 	service := NewService(&project.Config{}, dataDir, AIConfig{})
 	generated := fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{Key: "fix-key"})
-	token, err := service.stash("Alice", &previewEntry{kind: gfKind, failureID: "pattern", targetRepo: "o/r", fix: generated})
+	token, err := service.stash("Alice", &previewEntry{kind: gfKind, failureID: "pattern", patternHash: "hash", targetRepo: "o/r", verificationVersion: sourceVerificationVersion, fix: generated})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2019,7 +2130,7 @@ func TestInactivePatternLifecycleBlocksInvestigatedSourceOverride(t *testing.T) 
 	}
 	service := NewService(&project.Config{AI: &project.AI{SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"}}}, t.TempDir(), AIConfig{})
 	service.sourceVerifier = nil
-	subject := &ActionSubject{Kind: actionSubjectPattern, Pattern: &pattern, EnforcePublishedContract: false}
+	subject := &ActionSubject{Kind: actionSubjectPattern, Pattern: &pattern}
 	if err := service.verifyRemediation(t.Context(), subject); !errors.Is(err, ErrRemediationAlreadyPresent) {
 		t.Fatalf("verifyRemediation error=%v", err)
 	}
@@ -2036,5 +2147,51 @@ func TestResolveRejectsInactivePatternLifecycle(t *testing.T) {
 	service := NewService(&project.Config{}, dir, AIConfig{})
 	if err := service.Resolve(pattern.ID, "alice", ""); err == nil || !strings.Contains(err.Error(), "inactive") {
 		t.Fatalf("Resolve error = %v", err)
+	}
+}
+
+func TestPreviewStoreRejectsUnidentifiedOrUnverifiedFix(t *testing.T) {
+	for _, testCase := range []struct {
+		name                string
+		verificationVersion int
+		failureID           string
+		patternHash         string
+	}{
+		{name: "old verification", verificationVersion: sourceVerificationVersion - 1},
+		{name: "missing identity", verificationVersion: sourceVerificationVersion},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := newPreviewStore(t.TempDir())
+			state := previewState{Version: previewStateVersion, Previews: map[string]*persistedPreview{
+				"legacy": {
+					Kind: gfKind, Status: previewStatusReady, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+					FailureID: testCase.failureID, PatternHash: testCase.patternHash, VerificationVersion: testCase.verificationVersion,
+					Fix: &fixpr.GeneratedFixSnapshot{Key: "legacy-fix"},
+				},
+			}}
+			data, _ := json.Marshal(state)
+			if err := os.WriteFile(store.path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			loaded, changed, err := store.load()
+			if err != nil || !changed || len(loaded.Previews) != 0 {
+				t.Fatalf("loaded=%+v changed=%t err=%v", loaded, changed, err)
+			}
+		})
+	}
+}
+
+func TestConfirmRejectsUnidentifiedFixPreview(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	entry := &previewEntry{
+		kind: gfKind, verificationVersion: sourceVerificationVersion,
+		fix: fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{Key: "unidentified-fix"}),
+	}
+	token, err := service.stash("alice", entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Confirm(t.Context(), token, "alice", "token"); !errors.Is(err, ErrPreviewNotFound) {
+		t.Fatalf("Confirm unidentified fix error = %v", err)
 	}
 }
