@@ -119,6 +119,19 @@ func MarkExternalUnmetered(ctx context.Context) {
 	}
 }
 
+// MarkCooldownRetry records that this operation retried after a persisted cooldown.
+func MarkCooldownRetry(ctx context.Context) {
+	op, _ := ctx.Value(operationContextKey{}).(*Operation)
+	if op == nil {
+		return
+	}
+	op.mu.Lock()
+	defer op.mu.Unlock()
+	if !op.finished {
+		op.usage.CooldownRetry = true
+	}
+}
+
 // Finish persists the completed operation once and returns its snapshot.
 func (o *Operation) Finish(outcome Outcome) OperationUsage {
 	if o == nil {

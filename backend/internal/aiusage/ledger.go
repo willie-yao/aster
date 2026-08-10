@@ -383,6 +383,12 @@ func operationTotals(operation OperationUsage) UsageTotals {
 	if operation.Outcome == OutcomeCacheHit {
 		totals.CacheHits = 1
 	}
+	if operation.Outcome == OutcomeSuppressed {
+		totals.SuppressedOperations = 1
+	}
+	if operation.CooldownRetry {
+		totals.CooldownRetries = 1
+	}
 	if operation.Outcome == OutcomeError || operation.Outcome == OutcomeCancelled || operation.Outcome == OutcomeUnavailable {
 		totals.Failures = 1
 	}
@@ -395,6 +401,8 @@ func operationTotals(operation OperationUsage) UsageTotals {
 func applyTotals(target *UsageTotals, value UsageTotals, direction int64) {
 	target.Operations += int(int64(value.Operations) * direction)
 	target.CacheHits += int(int64(value.CacheHits) * direction)
+	target.SuppressedOperations += int(int64(value.SuppressedOperations) * direction)
+	target.CooldownRetries += int(int64(value.CooldownRetries) * direction)
 	target.Failures += int(int64(value.Failures) * direction)
 	target.ExternalUnmeteredOperations += int(int64(value.ExternalUnmeteredOperations) * direction)
 	target.ModelRequests += int(int64(value.ModelRequests) * direction)

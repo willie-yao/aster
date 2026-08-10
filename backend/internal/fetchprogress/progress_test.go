@@ -517,11 +517,13 @@ func TestTrackerPatternAttemptAccounting(t *testing.T) {
 	tracker.RecordPatternAttempt(false, true, false, false, true, PatternFailureSchema)
 	tracker.RecordPatternAttempt(false, false, true, true, true, PatternFailureNone)
 	tracker.RecordPatternAttempt(false, false, false, false, true, PatternFailureSchema)
+	tracker.RecordPatternSuppressed()
 	tracker.RecordPatternAttempt(false, false, false, false, true, PatternFailureBuilds)
+	tracker.RecordPatternFreshRetry()
 
 	got := tracker.Snapshot().Patterns
 	want := PatternProgress{
-		Eligible: 3, Completed: 1, Failed: 2, Attempts: 4, Retries: 1,
+		Eligible: 3, Completed: 1, Failed: 2, Attempts: 4, Retries: 1, Suppressed: 1, FreshRetries: 1,
 		Repairs: 1, RepairFailed: 1, RepairFailureCategory: PatternFailureSchema,
 		FailureCategory: PatternFailureMultiple,
 	}

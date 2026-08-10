@@ -107,6 +107,8 @@ export interface FetchProgressStatus {
     attempts: number;
     retries: number;
     cache_hits?: number;
+    suppressed?: number;
+    fresh_retries?: number;
     repairs?: number;
     repair_succeeded?: number;
     repair_failed?: number;

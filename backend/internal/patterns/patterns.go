@@ -30,13 +30,15 @@ const maxPatternAttempts = 2
 
 // AnalyzeStats records eligible jobs and completed or failed correlations.
 type AnalyzeStats struct {
-	Eligible  int
-	Completed int
-	Failed    int
-	Attempts  int
-	Retries   int
-	Repairs   int
-	CacheHits int
+	Eligible     int
+	Completed    int
+	Failed       int
+	Attempts     int
+	Retries      int
+	Repairs      int
+	CacheHits    int
+	Suppressed   int
+	FreshRetries int
 }
 
 // JobOutcome is one privacy-safe eligible-job correlation result.
@@ -48,6 +50,8 @@ type JobOutcome struct {
 	Attempts        int
 	Repairs         int
 	CacheHits       int
+	Suppressed      bool
+	FreshRetries    int
 }
 
 // AnalyzeResult contains aggregate stats and deterministic job outcomes.
@@ -61,6 +65,8 @@ type Attempt struct {
 	Number          int
 	Repair          bool
 	CacheHit        bool
+	Suppressed      bool
+	FreshRetry      bool
 	Retry           bool
 	Succeeded       bool
 	Final           bool
@@ -102,12 +108,14 @@ func AnalyzeDetailedWithOptions(ctx context.Context, analyzer Analyzer, details 
 	}
 	var errs []error
 	for _, item := range work {
-		pa, attempts, retries, repairs, cacheHits, err := analyzeOne(ctx, analyzer, item, options.OnAttempt)
+		pa, attempts, retries, repairs, cacheHits, suppressed, freshRetries, err := analyzeOne(ctx, analyzer, item, options.OnAttempt)
 		result.Stats.Attempts += attempts
 		result.Stats.Retries += retries
 		result.Stats.Repairs += repairs
 		result.Stats.CacheHits += cacheHits
-		outcome := JobOutcome{JobID: item.jobID, Succeeded: err == nil, Attempts: attempts, Repairs: repairs, CacheHits: cacheHits}
+		result.Stats.Suppressed += suppressed
+		result.Stats.FreshRetries += freshRetries
+		outcome := JobOutcome{JobID: item.jobID, Succeeded: err == nil, Attempts: attempts, Repairs: repairs, CacheHits: cacheHits, Suppressed: suppressed > 0, FreshRetries: freshRetries}
 		if pa != nil {
 			outcome.Systemic = pa.Systemic
 		}
@@ -136,21 +144,23 @@ func AnalyzeDetailedWithOptions(ctx context.Context, analyzer Analyzer, details 
 // results, so one slow job cannot consume the finalization budget for the rest.
 func AnalyzeConcurrent(ctx context.Context, analyzer Analyzer, details []models.JobDetail) AnalyzeStats {
 	type result struct {
-		index     int
-		pa        *models.PatternAnalysis
-		err       error
-		attempts  int
-		retries   int
-		repairs   int
-		cacheHits int
+		index        int
+		pa           *models.PatternAnalysis
+		err          error
+		attempts     int
+		retries      int
+		repairs      int
+		cacheHits    int
+		suppressed   int
+		freshRetries int
 	}
 	work := eligibleWork(details)
 	results := make(chan result, len(work))
 	stats := AnalyzeStats{Eligible: len(work)}
 	for _, item := range work {
 		go func(item analysisWork) {
-			pa, attempts, retries, repairs, cacheHits, err := analyzeOne(ctx, analyzer, item, nil)
-			results <- result{index: item.index, pa: pa, err: err, attempts: attempts, retries: retries, repairs: repairs, cacheHits: cacheHits}
+			pa, attempts, retries, repairs, cacheHits, suppressed, freshRetries, err := analyzeOne(ctx, analyzer, item, nil)
+			results <- result{index: item.index, pa: pa, err: err, attempts: attempts, retries: retries, repairs: repairs, cacheHits: cacheHits, suppressed: suppressed, freshRetries: freshRetries}
 		}(item)
 	}
 	for range stats.Eligible {
@@ -159,6 +169,8 @@ func AnalyzeConcurrent(ctx context.Context, analyzer Analyzer, details []models.
 		stats.Retries += result.retries
 		stats.Repairs += result.repairs
 		stats.CacheHits += result.cacheHits
+		stats.Suppressed += result.suppressed
+		stats.FreshRetries += result.freshRetries
 		d := &details[result.index]
 		if result.err != nil {
 			stats.Failed++
@@ -190,18 +202,28 @@ func eligibleWork(details []models.JobDetail) []analysisWork {
 	return work
 }
 
-func analyzeOne(ctx context.Context, analyzer Analyzer, work analysisWork, observe func(Attempt)) (*models.PatternAnalysis, int, int, int, int, error) {
+func analyzeOne(ctx context.Context, analyzer Analyzer, work analysisWork, observe func(Attempt)) (*models.PatternAnalysis, int, int, int, int, int, int, error) {
 	repairUsed := false
 	repairs := 0
 	cacheHits := 0
+	suppressed := 0
+	freshRetries := 0
 	for attempt := 1; attempt <= maxPatternAttempts; attempt++ {
 		var pa *models.PatternAnalysis
 		var err error
+		freshRetryThisAttempt := false
 		if observed, ok := analyzer.(observedAnalyzer); ok {
 			pa, err = observed.AnalyzePatternWithOptions(ctx, work.jobID, work.subject, work.failures, ai.PatternAnalyzeOptions{
 				AllowAmbiguityRepair:  !repairUsed,
 				AllowValidationRepair: !repairUsed,
 				OnCacheHit:            func() { cacheHits++ },
+				OnFailureSuppressed: func(PatternFailureCategory ai.PatternFailureCategory) {
+					suppressed++
+				},
+				OnFreshRetry: func() {
+					freshRetries++
+					freshRetryThisAttempt = true
+				},
 				OnRepair: func(result ai.PatternRepairAttempt) {
 					repairUsed = true
 					repairs++
@@ -219,15 +241,16 @@ func analyzeOne(ctx context.Context, analyzer Analyzer, work analysisWork, obser
 		retry := err != nil && attempt < maxPatternAttempts && ai.IsRetryablePatternError(err)
 		if observe != nil {
 			observe(Attempt{
-				Number: attempt, CacheHit: cacheHits > 0, Retry: attempt > 1, Succeeded: err == nil, Final: err == nil || !retry,
+				Number: attempt, CacheHit: cacheHits > 0, Suppressed: ai.IsPatternFailureSuppressed(err), FreshRetry: freshRetryThisAttempt,
+				Retry: attempt > 1, Succeeded: err == nil, Final: err == nil || !retry,
 				FailureCategory: ai.PatternFailureCategoryOf(err),
 			})
 		}
 		if err == nil {
-			return pa, attempt, attempt - 1, repairs, cacheHits, nil
+			return pa, attempt, attempt - 1, repairs, cacheHits, suppressed, freshRetries, nil
 		}
 		if !retry {
-			return nil, attempt, attempt - 1, repairs, cacheHits, err
+			return nil, attempt, attempt - 1, repairs, cacheHits, suppressed, freshRetries, err
 		}
 		log.Printf("  ↻ retrying pattern analysis for %s: category=%s", work.subject, ai.PatternFailureCategoryOf(err))
 	}

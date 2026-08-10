@@ -23,7 +23,7 @@ import (
 
 const (
 	// SchemaVersion is the current private fetch status schema.
-	SchemaVersion = 12
+	SchemaVersion = 13
 	// StatusDirectory is hidden from the public /data file server.
 	StatusDirectory = ".fetch-status"
 	// StatusFilename is the current fetch status snapshot.
@@ -314,6 +314,8 @@ type PatternProgress struct {
 	Attempts              int                    `json:"attempts"`
 	Retries               int                    `json:"retries"`
 	CacheHits             int                    `json:"cache_hits,omitempty"`
+	Suppressed            int                    `json:"suppressed,omitempty"`
+	FreshRetries          int                    `json:"fresh_retries,omitempty"`
 	Repairs               int                    `json:"repairs,omitempty"`
 	RepairSucceeded       int                    `json:"repair_succeeded,omitempty"`
 	RepairFailed          int                    `json:"repair_failed,omitempty"`
@@ -401,7 +403,7 @@ func Read(path string) (Status, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return Status{}, errors.New("fetch status has trailing data")
 	}
-	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != 4 && status.SchemaVersion != 5 && status.SchemaVersion != 6 && status.SchemaVersion != 7 && status.SchemaVersion != 8 && status.SchemaVersion != 9 && status.SchemaVersion != 10 && status.SchemaVersion != 11 && status.SchemaVersion != SchemaVersion {
+	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != 4 && status.SchemaVersion != 5 && status.SchemaVersion != 6 && status.SchemaVersion != 7 && status.SchemaVersion != 8 && status.SchemaVersion != 9 && status.SchemaVersion != 10 && status.SchemaVersion != 11 && status.SchemaVersion != 12 && status.SchemaVersion != SchemaVersion {
 		return Status{}, fmt.Errorf("unsupported fetch status schema %d", status.SchemaVersion)
 	}
 	if err := status.validate(); err != nil {
@@ -435,11 +437,12 @@ func (s Status) validate() error {
 		s.Analyses.BuildSubjects.AcceptedCacheHits < 0 || s.Analyses.BuildSubjects.ExactResultsReused < 0 || s.Analyses.BuildSubjects.ExistingTasksAdopted < 0 ||
 		s.Analyses.BuildSubjects.NewTasksCreated < 0 || s.Analyses.BuildSubjects.FreshAnalysesCompleted < 0 ||
 		s.Patterns.Eligible < 0 || s.Patterns.Completed < 0 || s.Patterns.Failed < 0 ||
-		s.Patterns.Attempts < 0 || s.Patterns.Retries < 0 || s.Patterns.CacheHits < 0 ||
+		s.Patterns.Attempts < 0 || s.Patterns.Retries < 0 || s.Patterns.CacheHits < 0 || s.Patterns.Suppressed < 0 || s.Patterns.FreshRetries < 0 ||
 		s.Patterns.Repairs < 0 || s.Patterns.RepairSucceeded < 0 || s.Patterns.RepairFailed < 0 ||
 		s.Patterns.Current < 0 || s.Patterns.Retained < 0 || s.Patterns.Unavailable < 0 ||
 		s.Patterns.Completed+s.Patterns.Failed > s.Patterns.Eligible || s.Patterns.Retries > s.Patterns.Attempts ||
-		s.Patterns.CacheHits > s.Patterns.Completed || s.Patterns.RepairSucceeded+s.Patterns.RepairFailed != s.Patterns.Repairs ||
+		s.Patterns.CacheHits > s.Patterns.Completed || s.Patterns.Suppressed > s.Patterns.Failed || s.Patterns.FreshRetries > s.Patterns.Attempts ||
+		s.Patterns.RepairSucceeded+s.Patterns.RepairFailed != s.Patterns.Repairs ||
 		!validPatternFailureCategory(s.Patterns.FailureCategory) || !validPatternFailureCategory(s.Patterns.RepairFailureCategory) {
 		return errors.New("fetch status has invalid counters")
 	}
@@ -1053,6 +1056,20 @@ func (t *Tracker) RecordPatternAttempt(cacheHit, repair, retry, succeeded, final
 		case status.Patterns.FailureCategory != category:
 			status.Patterns.FailureCategory = PatternFailureMultiple
 		}
+	})
+}
+
+// RecordPatternSuppressed records one deterministic failure skipped by cooldown.
+func (t *Tracker) RecordPatternSuppressed() {
+	t.update(true, func(status *Status) {
+		status.Patterns.Suppressed++
+	})
+}
+
+// RecordPatternFreshRetry records one retry after a deterministic cooldown expires.
+func (t *Tracker) RecordPatternFreshRetry() {
+	t.update(true, func(status *Status) {
+		status.Patterns.FreshRetries++
 	})
 }
 

@@ -568,6 +568,12 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 					attempt.Final,
 					fetchprogress.PatternFailureCategory(attempt.FailureCategory),
 				)
+				if attempt.Suppressed {
+					p.progress.RecordPatternSuppressed()
+				}
+				if attempt.FreshRetry {
+					p.progress.RecordPatternFreshRetry()
+				}
 			}
 		},
 	}
