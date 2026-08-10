@@ -43,6 +43,7 @@ backend/                         Go 1.25
     worker/                      Continuous in-cluster watch loop (k8s mode: watch)
     server/                      API server: /data/* read parity, capabilities, actions
     analyzer/                    Runs one failure analysis request (Orka container runtime)
+    analysisexecutor/            Runs one file-backed OpenCode analysis workload
     fixexecutor/                 Runs one credential-free Agent Sandbox fix workload
     criticexecutor/              Runs one credential-free causal review workload
   internal/
@@ -74,6 +75,7 @@ backend/                         Go 1.25
       modules/universal/         Builds the per-failure seed prompt
     aiusage/                     Private token usage and cost accounting
     agentanalysis/               Private experimental Agent failure-analysis adapter
+    analysisexecutor/            File-backed OpenCode analysis executor
     agentsandbox/                Business-neutral Agent Sandbox lifecycle contract
     causalcritic/                Private independent causal-review contracts and runtime
     criticexecutor/              Purpose-built read-only model-gateway critic executor
