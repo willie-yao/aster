@@ -30,8 +30,9 @@ type FailureInfo struct {
 // ComputeJobSummary computes a JobSummary from newest-first build results.
 func ComputeJobSummary(job models.ProwJob, runs []models.BuildResult) models.JobSummary {
 	summary := models.JobSummary{
-		ProwJob:    job,
-		RecentRuns: []models.RunSummary{},
+		ProwJob:       job,
+		CurrentStatus: CurrentJobStatus(runs),
+		RecentRuns:    []models.RunSummary{},
 	}
 
 	if len(runs) == 0 {
@@ -55,6 +56,20 @@ func ComputeJobSummary(job models.ProwJob, runs []models.BuildResult) models.Job
 	summary.PassRateRecent = recentPassRate(runs, passRateRecentRuns)
 
 	return summary
+}
+
+// CurrentJobStatus reports the newest observed run independently of rolling reliability.
+func CurrentJobStatus(runs []models.BuildResult) models.JobCurrentStatus {
+	if len(runs) == 0 {
+		return models.JobCurrentUnknown
+	}
+	if runs[0].Result == "PENDING" {
+		return models.JobCurrentRunning
+	}
+	if runs[0].Passed {
+		return models.JobCurrentPassing
+	}
+	return models.JobCurrentFailing
 }
 
 // computeOverallStatus classifies a job from its most recent runs using the

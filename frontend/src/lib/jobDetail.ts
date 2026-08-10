@@ -1,4 +1,4 @@
-import type { TestCase } from "../types/dashboard";
+import type { BuildResult, JobCurrentStatus, TestCase } from "../types/dashboard";
 import { junitTestCases } from "./buildFailures.js";
 
 export type ResultLedgerFilter = "failed" | "passed" | "all";
@@ -90,4 +90,21 @@ export function withJobDetailParam(
   if (value) next.set(name, value);
   else next.delete(name);
   return next;
+}
+
+export function currentJobStatus(
+  published: JobCurrentStatus | undefined,
+  runs: BuildResult[],
+): JobCurrentStatus {
+  if (published) return published;
+  const latest = runs[0];
+  if (!latest) return "UNKNOWN";
+  if (latest.result === "PENDING") return "RUNNING";
+  return latest.passed ? "PASSING" : "FAILING";
+}
+
+export function recentJobPassRate(runs: BuildResult[], limit = 10): number | null {
+  if (runs.length === 0) return null;
+  const recent = runs.slice(0, limit);
+  return recent.filter((run) => run.passed).length / recent.length;
 }

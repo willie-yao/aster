@@ -231,12 +231,23 @@ type BuildResult struct {
 	TestsSkipped int        `json:"tests_skipped"`
 }
 
+type JobCurrentStatus string
+
+const (
+	JobCurrentUnknown JobCurrentStatus = "UNKNOWN"
+	JobCurrentRunning JobCurrentStatus = "RUNNING"
+	JobCurrentPassing JobCurrentStatus = "PASSING"
+	JobCurrentFailing JobCurrentStatus = "FAILING"
+)
+
 // JobSummary represents aggregated data for a job on the landing page.
 type JobSummary struct {
 	ProwJob
-	OverallStatus string       `json:"overall_status"` // "PASSING", "FAILING", "FLAKY"
-	LastRun       *RunSummary  `json:"last_run,omitempty"`
-	RecentRuns    []RunSummary `json:"recent_runs"`
+	// CurrentStatus describes the newest observed run independently of rolling reliability.
+	CurrentStatus JobCurrentStatus `json:"current_status"`
+	OverallStatus string           `json:"overall_status"` // "PASSING", "FAILING", "FLAKY"
+	LastRun       *RunSummary      `json:"last_run,omitempty"`
+	RecentRuns    []RunSummary     `json:"recent_runs"`
 	// PassRateRecent is the fraction of passing runs over the most recent runs.
 	PassRateRecent float64 `json:"pass_rate_recent"`
 }
@@ -262,13 +273,15 @@ type Dashboard struct {
 
 // JobDetail is the per-job detail structure for jobs/{job-id}.json.
 type JobDetail struct {
-	Name           string        `json:"name"`
-	JobID          string        `json:"job_id"`
-	JobType        string        `json:"job_type"`
-	Repo           string        `json:"repo"`
-	ConfigFile     string        `json:"config_file,omitempty"`
-	ConfigRevision string        `json:"config_revision,omitempty"`
-	Runs           []BuildResult `json:"runs"`
+	Name           string           `json:"name"`
+	JobID          string           `json:"job_id"`
+	JobType        string           `json:"job_type"`
+	Repo           string           `json:"repo"`
+	ConfigFile     string           `json:"config_file,omitempty"`
+	ConfigRevision string           `json:"config_revision,omitempty"`
+	CurrentStatus  JobCurrentStatus `json:"current_status"`
+	PassRateRecent float64          `json:"pass_rate_recent"`
+	Runs           []BuildResult    `json:"runs"`
 	// PatternAnalyses holds cross-build correlations for this job.
 	// Empty unless the job failed in enough builds for pattern analysis.
 	PatternAnalyses []PatternAnalysis     `json:"pattern_analyses,omitempty"`
@@ -394,6 +407,7 @@ type PatternLifecycleState string
 
 const (
 	PatternLifecycleActive        PatternLifecycleState = "active"
+	PatternLifecycleRecovered     PatternLifecycleState = "recovered"
 	PatternLifecycleObserving     PatternLifecycleState = "observing"
 	PatternLifecycleVerifiedFixed PatternLifecycleState = "verified_fixed"
 )
@@ -404,6 +418,8 @@ type PatternLifecycle struct {
 	Reason         string                `json:"reason"`
 	SourceRevision string                `json:"source_revision,omitempty"`
 	PassingBuilds  []string              `json:"passing_builds,omitempty"`
+	RecoveryStreak int                   `json:"recovery_streak,omitempty"`
+	RecoveryBuilds []string              `json:"recovery_builds,omitempty"`
 }
 
 // FailureClassification indicates the type of failure.

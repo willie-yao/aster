@@ -577,9 +577,14 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 	if err := json.Unmarshal(jobData, &published); err != nil {
 		t.Fatal(err)
 	}
-	if published.PatternRefresh == nil || published.PatternRefresh.State != models.PatternRefreshRetained ||
-		len(published.PatternAnalyses) != 1 || !reflect.DeepEqual(published.PatternAnalyses[0], priorPattern) {
+	if published.PatternRefresh == nil || published.PatternRefresh.State != models.PatternRefreshRetained || len(published.PatternAnalyses) != 1 {
 		t.Fatalf("published pattern refresh = %+v patterns=%+v", published.PatternRefresh, published.PatternAnalyses)
+	}
+	publishedPattern := published.PatternAnalyses[0]
+	if publishedPattern.ID != priorPattern.ID || publishedPattern.SharedRootCause != priorPattern.SharedRootCause ||
+		publishedPattern.SuggestedFix != priorPattern.SuggestedFix || publishedPattern.ContentHash != models.PatternHash(publishedPattern) ||
+		publishedPattern.Lifecycle == nil || publishedPattern.Lifecycle.State != models.PatternLifecycleActive {
+		t.Fatalf("retained pattern = %+v", publishedPattern)
 	}
 	var flakiness models.FlakinessReport
 	flakinessData, err := os.ReadFile(filepath.Join(dataDir, "flakiness.json"))

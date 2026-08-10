@@ -2195,3 +2195,29 @@ func TestConfirmRejectsUnidentifiedFixPreview(t *testing.T) {
 		t.Fatalf("Confirm unidentified fix error = %v", err)
 	}
 }
+func TestRecoveredPatternBlocksIssueAndFixActionsWithoutClaimingSourceRemediation(t *testing.T) {
+	for _, kind := range []string{"create-issue", "propose-fix"} {
+		t.Run(kind, func(t *testing.T) {
+			dataDir := t.TempDir()
+			pattern := models.PatternAnalysis{
+				JobID: "periodic-x", Systemic: true, SuggestedFix: "fix",
+				Lifecycle: &models.PatternLifecycle{
+					State: models.PatternLifecycleRecovered, Reason: "three consecutive observed passes; recovery not source-verified as a fix",
+				},
+				RemediationTargets: []models.RemediationTarget{{Intent: models.RemediationIntentAddSymbol, Symbol: "Fix", Path: "fix.go"}},
+				SourceRef:          "example/repo@0123456789abcdef0123456789abcdef01234567",
+			}
+			models.AssignPatternIdentity(&pattern)
+			writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
+			service := NewService(&project.Config{AI: &project.AI{SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"}}}, dataDir, AIConfig{})
+			request, err := service.CreateRequest(pattern.ID, kind, "alice", "token", "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			view := waitRequest(t, service, request.ID, "alice", RequestFailed)
+			if view.Verification == nil || view.Verification.State != actionverify.StateInconclusive || view.Preview != nil || !strings.Contains(view.Verification.Reason, "not source-verified") {
+				t.Fatalf("recovered lifecycle started %s: view=%+v", kind, view)
+			}
+		})
+	}
+}

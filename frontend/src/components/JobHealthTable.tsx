@@ -23,7 +23,7 @@ const desktopBreakpoint = "@media (min-width: 1024px)";
 const wideBreakpoint = "@media (min-width: 1200px)";
 const compactColumns = "minmax(210px, 2fr) 76px 174px 56px 78px 58px 82px";
 const wideColumns = "minmax(280px, 2.4fr) 104px 192px 64px 96px 64px 88px";
-const headers = ["Job", "Branch", "Recent runs", "Pass", "Last run", "Duration", "Status"];
+const headers = ["Job", "Branch", "Recent runs", "Last 10", "Last run", "Duration", "Current"];
 
 function jobValues(job: JobSummary) {
   return {
@@ -135,7 +135,7 @@ function DesktopJobRow({ job }: { job: JobSummary }) {
       <Typography role="cell" variant="data" color="text.secondary" sx={{ gridArea: "last", ...overviewTypography.data }}>{lastRun}</Typography>
       <Typography role="cell" variant="data" color="text.secondary" sx={{ gridArea: "duration", ...overviewTypography.data }}>{duration}</Typography>
       <Box role="cell" sx={{ gridArea: "status", justifySelf: "end" }}>
-        <StatusChip status={job.overall_status} sx={{ height: 26, fontSize: "13px" }} />
+        <StatusChip status={job.current_status} sx={{ height: 26, fontSize: "13px" }} />
       </Box>
     </Box>
   );
@@ -165,11 +165,11 @@ function MobileJobRow({ job }: { job: JobSummary }) {
     >
       <Box sx={{ gridArea: "job", minWidth: 0 }}><JobLink job={job} compact /></Box>
       <Box sx={{ gridArea: "status", justifySelf: "end" }}>
-        <StatusChip status={job.overall_status} sx={{ height: 26, fontSize: "13px" }} />
+        <StatusChip status={job.current_status} sx={{ height: 26, fontSize: "13px" }} />
       </Box>
       <Box sx={{ gridArea: "meta", display: "flex", minWidth: 0, alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
         <Metric label="Branch" value={job.branch || "Not set"} />
-        <Metric label="Pass" value={formatPercent(job.pass_rate_recent)} />
+        <Metric label="Last 10" value={formatPercent(job.pass_rate_recent)} />
         <Metric label="Last" value={lastRun} />
         <Metric label="Duration" value={duration} />
       </Box>

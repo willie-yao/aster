@@ -13,6 +13,7 @@ const (
 	EligibilityActionable            = "actionable"
 	EligibilityInvestigationRequired = "investigation_required"
 	EligibilityAlreadyPresent        = "already_present"
+	EligibilityRecovered             = "recovered"
 	EligibilityMoreEvidenceRequired  = "more_evidence_required"
 )
 
@@ -30,7 +31,11 @@ func (s *Service) ActionEligibility(ctx context.Context, failureID string) (Elig
 	}
 	if subject.Kind == actionSubjectPattern && subject.Pattern != nil {
 		if !models.PatternIsActive(*subject.Pattern) {
-			return Eligibility{State: EligibilityAlreadyPresent, Reason: inactivePatternReason(subject.Pattern)}, nil
+			state := EligibilityAlreadyPresent
+			if models.PatternIsRecovered(*subject.Pattern) {
+				state = EligibilityRecovered
+			}
+			return Eligibility{State: state, Reason: inactivePatternReason(subject.Pattern)}, nil
 		}
 		targets := subject.Pattern.RemediationTargets
 		if len(targets) == 0 {
@@ -80,7 +85,7 @@ func inactivePatternReason(pattern *models.PatternAnalysis) string {
 	if pattern != nil && pattern.Lifecycle != nil && strings.TrimSpace(pattern.Lifecycle.Reason) != "" {
 		return pattern.Lifecycle.Reason
 	}
-	return "The grounded remediation is present and this recurring pattern is no longer active."
+	return "This recurring pattern is not currently actionable."
 }
 
 func moreEvidenceEligibility() Eligibility {

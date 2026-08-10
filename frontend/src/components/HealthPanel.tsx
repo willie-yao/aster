@@ -69,7 +69,7 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
           color="text.secondary"
           sx={overviewTypography.subsectionHeading}
         >
-          Job health
+          Last 10 run reliability
         </Typography>
         <Typography variant="stat" component="span" sx={{ mt: 0.25, fontSize: "21px", lineHeight: "28px" }}>
           {countLabel(total, "job")}

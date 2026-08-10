@@ -36,6 +36,10 @@ test("pattern action eligibility handles deterministic blocked states", () => {
   assert.equal(patternLifecycleActive(observing), false);
   assert.equal(patternActionEligibilityHint([actionableTarget], undefined, observing)?.state, "already_present");
   assert.equal(patternActionEligibilityHint([actionableTarget], undefined, observing)?.reason, "remediation present");
+  const recovered = { state: "recovered" as const, reason: "three observed passes", recovery_streak: 3 };
+  assert.equal(patternLifecycleActive(recovered), false);
+  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, recovered)?.state, "recovered");
+  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, recovered)?.reason, "three observed passes");
   assert.equal(patternLifecycleActive(undefined), true);
 });
 
@@ -51,6 +55,7 @@ test("build action eligibility requires current quality and verified files", () 
 
 test("action eligibility titles explain each state", () => {
   assert.equal(actionEligibilityTitle(eligibilityForState("already_present"), false), "Remediation already exists");
+  assert.equal(actionEligibilityTitle(eligibilityForState("recovered"), false), "Watching recovery");
   assert.equal(actionEligibilityTitle(eligibilityForState("more_evidence_required"), false), "More source evidence required");
   assert.equal(actionEligibilityTitle(eligibilityForState("investigation_required"), true), "Investigate source");
   assert.equal(actionEligibilityTitle(eligibilityForState("investigation_required"), false), "Source investigation is not configured");

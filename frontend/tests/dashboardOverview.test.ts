@@ -93,6 +93,7 @@ function job(overrides: Partial<JobSummary> = {}): JobSummary {
     minimum_interval: "1h",
     timeout: "2h",
     config_file: "config/jobs.yaml",
+    current_status: "PASSING",
     overall_status: "PASSING",
     last_run: {
       build_id: "123",
@@ -127,7 +128,7 @@ test("health summary exposes counts and pressed filter state", () => {
   ];
   const html = render(createElement(HealthPanel, { jobs, activeFilter: "FLAKY", onFilterClick: () => undefined }));
 
-  assert.match(html, /Job health/);
+  assert.match(html, /Last 10 run reliability/);
   assert.match(html, /3 jobs/);
   assert.match(html, /aria-label="Passing: 1 job, 33%"/);
   assert.match(html, /aria-label="Flaky: 1 job, 33%"/);
@@ -144,6 +145,8 @@ test("job health ledger keeps job and run links separate", () => {
   assert.match(html, /href="\/job\/capz-periodic-e2e-main"/);
   assert.match(html, /href="\/job\/capz-periodic-e2e-main\?run=123"/);
   assert.match(html, /aria-label="Run 123, passed, Aug 5, 2026"/);
+  assert.match(html, />Last 10</);
+  assert.match(html, />Current</);
   assert.match(html, />Passing</);
   assert.doesNotMatch(html, /<a\b[^>]*>(?:(?!<\/a>)[\s\S])*<a\b/);
 });

@@ -150,7 +150,9 @@ export function PatternBanner({
     ? "Verified fixed"
     : lifecycle?.state === "observing"
       ? "Fix verification"
-      : pattern.systemic ? "Recurring pattern" : "No shared root cause";
+      : lifecycle?.state === "recovered"
+        ? "Watching recovery"
+        : pattern.systemic ? "Recurring pattern" : "No shared root cause";
   const metadata = `${pattern.builds_analyzed} ${pattern.builds_analyzed === 1 ? "build" : "builds"} · ${pattern.confidence} confidence`;
   const staleNotice = refreshStatus && refreshStatus.state !== "current" ? (
     <Alert severity="warning" variant="outlined" sx={{ borderRadius: "4px" }}>
@@ -167,7 +169,9 @@ export function PatternBanner({
       <Typography variant="body2" sx={{ fontWeight: 700 }}>
         {lifecycle.state === "verified_fixed"
           ? "Verified fixed"
-          : "Remediation present, verifying the fix"}
+          : lifecycle.state === "recovered"
+            ? "Watching recovery"
+            : "Remediation present, verifying the fix"}
       </Typography>
       <Typography variant="body2">{lifecycle.reason}</Typography>
       {lifecycle.source_revision && (
@@ -181,6 +185,16 @@ export function PatternBanner({
         <Stack direction="row" spacing={1} sx={{ mt: 0.75, alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}>
           <Typography variant="caption" color="text.secondary">Verified passing runs:</Typography>
           {lifecycle.passing_builds.map((buildID) => (
+            <Link key={buildID} component={RouterLink} to={jobRunPath(jobID, buildID)} sx={overviewTypography.data}>
+              {buildID}
+            </Link>
+          ))}
+        </Stack>
+      )}
+      {jobID && lifecycle.recovery_builds && lifecycle.recovery_builds.length > 0 && (
+        <Stack direction="row" spacing={1} sx={{ mt: 0.75, alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}>
+          <Typography variant="caption" color="text.secondary">Observed passing runs:</Typography>
+          {lifecycle.recovery_builds.map((buildID) => (
             <Link key={buildID} component={RouterLink} to={jobRunPath(jobID, buildID)} sx={overviewTypography.data}>
               {buildID}
             </Link>

@@ -563,6 +563,12 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 	patternSubject := subject != nil && subject.Kind == actionSubjectPattern && subject.Pattern != nil
 	if patternSubject && !models.PatternIsActive(*subject.Pattern) {
 		reason := inactivePatternReason(subject.Pattern)
+		if models.PatternIsRecovered(*subject.Pattern) {
+			if err := s.setRequestVerification(ctx, actionverify.StateInconclusive, reason); err != nil {
+				return fmt.Errorf("%w: lifecycle verification result could not be persisted: %v", ErrRemediationInconclusive, err)
+			}
+			return fmt.Errorf("%w: %s", ErrRemediationInconclusive, reason)
+		}
 		if err := s.setRequestVerification(ctx, actionverify.StateAlreadyPresent, reason); err != nil {
 			return fmt.Errorf("%w: lifecycle verification result could not be persisted: %v", ErrRemediationAlreadyPresent, err)
 		}

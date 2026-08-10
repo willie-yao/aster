@@ -32,6 +32,7 @@ export function statusToMuiColor(
     case "FAILED":
       return "error";
     case "FLAKY":
+    case "RUNNING":
       return "warning";
     default:
       return "default";
