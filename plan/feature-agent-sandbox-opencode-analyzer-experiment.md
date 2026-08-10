@@ -77,13 +77,33 @@ Exit gate:
 - no more than one OpenCode invocation exists in the execution path;
 - net analyzer-specific non-test Go lines remain within the simplicity target.
 
-### Phase 2: Agent Sandbox lifecycle and security
+### Phase 2A: Agent Sandbox lifecycle and workspace shape
 
 - Reuse `agentsandbox.Runner` and the existing Kubernetes lifecycle adapter.
-- Add only the read-only source, read-only artifact, temporary state, and
-  result-only mount contract needed by the analyzer.
-- Add purpose-specific admission, RBAC, network policy, immutable image, and
-  workload identity.
+- Add one immutable stager init-container request.
+- Mount `source/` and `artifacts/` read-only, `result/` read-write, and temporary
+  state separately in the executor.
+- Bind both requests, both images, resources, and the complete Pod shape to the
+  execution identity.
+- Add the private analyzer adapter and preserve validated results when cleanup is
+  pending.
+- Do not add Helm, credentials, image publication, or live deployment.
+
+Exit gate:
+
+- hostile workspace shapes are rejected;
+- stage request changes alter the workload identity;
+- result validation, timeout, cancellation, and UID-checked cleanup semantics
+  pass locally;
+- the existing Fix PR and critic workload shapes do not change.
+
+### Phase 2B: Deployment and security
+
+- Add the concrete immutable stager and analyzer executor images.
+- Add disabled Helm values, narrow RBAC, admission, network policy, quotas, and
+  RuntimeClass enforcement.
+- Keep source and storage credentials in the stager only and model credentials in
+  the gateway only.
 - Keep the runtime private, disabled, sampled, and non-authoritative.
 
 Exit gate:

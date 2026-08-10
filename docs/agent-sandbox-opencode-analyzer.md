@@ -1,7 +1,7 @@
 # Agent Sandbox OpenCode analyzer
 
-Status: private prototype contract. It is not wired to Kubernetes, the fetcher,
-the worker, public output, or cache acceptance.
+Status: private lifecycle prototype. It is not wired to Helm, the fetcher, the
+worker, public output, or cache acceptance.
 
 ## Goal
 
@@ -28,6 +28,33 @@ There is no semantic evidence ranking or excerpt selection.
 The Agent Sandbox deployment phase must mount both trees read-only. OpenCode may
 write only runtime state under temporary storage and exactly one result file at
 `result/analysis.json`.
+
+## Staged Agent Sandbox lifecycle
+
+The shared Agent Sandbox runner supports one optional staged workspace:
+
+- one immutable stager init-container image;
+- one bounded, content-addressed stager request that must exactly match the
+  execution manifest, source revision, build prefix, and artifact identities;
+- one shared `emptyDir` workspace;
+- read-only `source/` and `artifacts/` subPath mounts in the executor;
+- one writable `result/` subPath mount;
+- separate writable temporary storage for the stager and executor so staging
+  credentials or state cannot cross the container boundary.
+
+The stager receives the complete workspace mount read-write and must finish
+successfully before the executor starts. The executor receives only its analysis
+request. Both containers run non-root with a read-only root filesystem, dropped
+capabilities, RuntimeDefault seccomp and AppArmor when available, bounded
+resources, and no automatic ServiceAccount token.
+
+The stage request, stager image, executor request, resource bounds, and workload
+shape all participate in the Sandbox identity. UID-checked cleanup and bounded
+Pod-log retrieval remain owned by the existing shared lifecycle.
+
+This phase defines the workload shape and private analyzer adapter only. It does
+not define source or artifact credentials, a staging implementation, Helm values,
+admission policy, network policy, or a live deployment.
 
 ## Native OpenCode boundary
 
@@ -69,8 +96,8 @@ The runtime remains private, disabled, and non-authoritative. It cannot affect:
 - remediation;
 - resolution state.
 
-Kubernetes lifecycle, mounts, admission, network policy, and shadow orchestration
-are intentionally deferred to the next focused change.
+Helm wiring, the concrete stager, admission, network policy, and shadow
+orchestration are intentionally deferred to the next focused change.
 
 ## Validation
 

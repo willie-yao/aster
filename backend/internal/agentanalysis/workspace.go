@@ -26,7 +26,9 @@ const (
 	WorkspaceManifestVersion = 1
 	WorkspaceRequestVersion  = 1
 	WorkspaceResultVersion   = 1
+	WorkspaceStageVersion    = 1
 	WorkspaceContractVersion = "agent-analysis-workspace-v1"
+	WorkspaceStageContract   = "agent-analysis-stage-v1"
 	WorkspacePromptVersion   = "agent-analysis-workspace-prompt-v1"
 
 	WorkspaceSourceDir    = "source"
@@ -39,6 +41,7 @@ const (
 	maxWorkspaceTotalBytes   = int64(32 << 20)
 	maxWorkspacePromptBytes  = 32 << 10
 	maxWorkspaceRequestBytes = 88 << 10
+	maxWorkspaceStageBytes   = 95 << 10
 )
 
 // WorkspaceFile identifies one immutable artifact file exposed to OpenCode.
@@ -56,6 +59,17 @@ type WorkspaceManifest struct {
 	Request         ai.FailureAnalysisRequest      `json:"request"`
 	Source          sourceinvestigation.Repository `json:"source"`
 	ConsumerPrompt  string                         `json:"consumer_prompt"`
+	Artifacts       []WorkspaceFile                `json:"artifacts"`
+}
+
+// WorkspaceStageRequest binds staging to the sealed source and artifact snapshot.
+type WorkspaceStageRequest struct {
+	Version         int                            `json:"version"`
+	ContractVersion string                         `json:"contract_version"`
+	Hash            string                         `json:"hash"`
+	ManifestHash    string                         `json:"manifest_hash"`
+	BuildPrefix     string                         `json:"build_prefix"`
+	Source          sourceinvestigation.Repository `json:"source"`
 	Artifacts       []WorkspaceFile                `json:"artifacts"`
 }
 
@@ -141,6 +155,49 @@ func ValidateWorkspaceManifest(manifest WorkspaceManifest) error {
 	digest, err := workspaceManifestDigest(manifest)
 	if err != nil || digest != manifest.Hash {
 		return fmt.Errorf("%w: workspace manifest hash changed", ErrInvalidBundle)
+	}
+	return nil
+}
+
+// NewWorkspaceStageRequest creates the exact stager input for one manifest.
+func NewWorkspaceStageRequest(manifest WorkspaceManifest) (WorkspaceStageRequest, error) {
+	if err := ValidateWorkspaceManifest(manifest); err != nil {
+		return WorkspaceStageRequest{}, err
+	}
+	stage := WorkspaceStageRequest{
+		Version: WorkspaceStageVersion, ContractVersion: WorkspaceStageContract,
+		ManifestHash: manifest.Hash, BuildPrefix: manifest.Request.BuildPrefix,
+		Source: manifest.Source, Artifacts: slices.Clone(manifest.Artifacts),
+	}
+	hash, err := workspaceStageDigest(stage)
+	if err != nil {
+		return WorkspaceStageRequest{}, err
+	}
+	stage.Hash = hash
+	if err := ValidateWorkspaceStageRequest(stage, manifest); err != nil {
+		return WorkspaceStageRequest{}, err
+	}
+	return stage, nil
+}
+
+// ValidateWorkspaceStageRequest requires exact manifest and artifact identity.
+func ValidateWorkspaceStageRequest(stage WorkspaceStageRequest, manifest WorkspaceManifest) error {
+	if err := ValidateWorkspaceManifest(manifest); err != nil {
+		return err
+	}
+	if stage.Version != WorkspaceStageVersion || stage.ContractVersion != WorkspaceStageContract || stage.ManifestHash != manifest.Hash || stage.BuildPrefix != manifest.Request.BuildPrefix || stage.Source != manifest.Source || !slices.Equal(stage.Artifacts, manifest.Artifacts) {
+		return fmt.Errorf("workspace stage request does not match the sealed manifest")
+	}
+	if !validSHA256(stage.Hash) {
+		return fmt.Errorf("workspace stage request hash is invalid")
+	}
+	digest, err := workspaceStageDigest(stage)
+	if err != nil || digest != stage.Hash {
+		return fmt.Errorf("workspace stage request hash changed")
+	}
+	data, err := json.Marshal(stage)
+	if err != nil || len(data) > maxWorkspaceStageBytes {
+		return fmt.Errorf("workspace stage request exceeds %d bytes", maxWorkspaceStageBytes)
 	}
 	return nil
 }
@@ -349,6 +406,15 @@ func ValidateWorkspaceExecutionRequest(request WorkspaceExecutionRequest) error 
 func workspaceManifestDigest(manifest WorkspaceManifest) (string, error) {
 	manifest.Hash = ""
 	data, err := json.Marshal(manifest)
+	if err != nil {
+		return "", err
+	}
+	return hashString(string(data)), nil
+}
+
+func workspaceStageDigest(stage WorkspaceStageRequest) (string, error) {
+	stage.Hash = ""
+	data, err := json.Marshal(stage)
 	if err != nil {
 		return "", err
 	}

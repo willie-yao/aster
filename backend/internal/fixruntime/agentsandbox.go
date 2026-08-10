@@ -39,6 +39,7 @@ const (
 	agentSandboxIDAnnotation       = "prow-ai-dashboard/execution-id"
 	agentSandboxPodAnnotation      = "agents.x-k8s.io/pod-name"
 	agentSandboxContainerName      = "executor"
+	agentSandboxStagerName         = "stager"
 	defaultSandboxPollEvery        = 250 * time.Millisecond
 	defaultSandboxCleanupTimeout   = 30 * time.Second
 	agentSandboxResultGrace        = 15 * time.Second
@@ -75,12 +76,13 @@ func (r *AgentSandboxRuntime) RuntimeIdentity() string {
 		PollEvery          string                           `json:"poll_every"`
 		Resources          AgentSandboxResources            `json:"resources"`
 		AppArmorCapability string                           `json:"app_armor_capability"`
+		StagerImage        string                           `json:"stager_image,omitempty"`
 	}{
 		Backend: agentSandboxBackend, Namespace: opts.Namespace, Image: opts.Image,
 		ServiceAccountName: opts.ServiceAccountName, RuntimeClassName: opts.RuntimeClassName,
 		ModelGateway: opts.ModelGateway, PublicCAPrivateDNS: opts.PublicCAPrivateDNS,
 		Timeout: opts.Timeout.String(), OutputLimitBytes: opts.OutputLimitBytes, PollEvery: opts.PollEvery.String(),
-		Resources: opts.Resources, AppArmorCapability: opts.appArmorCapability.String(),
+		Resources: opts.Resources, AppArmorCapability: opts.appArmorCapability.String(), StagerImage: opts.StagerImage,
 	})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
@@ -98,6 +100,7 @@ type AgentSandboxResources struct {
 type AgentSandboxOptions struct {
 	Namespace          string
 	Image              string
+	StagerImage        string
 	ServiceAccountName string
 	RuntimeClassName   string
 	ModelGateway       engineruntime.ModelGatewayConfig
@@ -281,6 +284,9 @@ func validateAgentSandboxOptions(opts AgentSandboxOptions) error {
 	if !opts.testOnly && !immutableExecutorImage.MatchString(opts.Image) {
 		return fmt.Errorf("agent sandbox executor image must use an immutable sha256 digest")
 	}
+	if !opts.testOnly && opts.StagerImage != "" && !immutableExecutorImage.MatchString(opts.StagerImage) {
+		return fmt.Errorf("agent sandbox stager image must use an immutable sha256 digest")
+	}
 	if !opts.testOnly && strings.TrimSpace(opts.RuntimeClassName) == "" {
 		return fmt.Errorf("agent sandbox secure runtime class is required")
 	}
@@ -427,6 +433,9 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	}
 	if err := agentsandbox.ValidateSpec(spec); err != nil {
 		return result, err
+	}
+	if spec.StagedWorkspace != nil && strings.TrimSpace(r.opts.StagerImage) == "" {
+		return result, fmt.Errorf("agent sandbox staged workspace requires a stager image")
 	}
 	if spec.Timeout != r.opts.Timeout || spec.OutputLimitBytes != r.opts.OutputLimitBytes {
 		return result, fmt.Errorf("agent sandbox workload does not match configured timeout or output limit")
@@ -823,23 +832,37 @@ func boundedSummary(values ...string) string {
 }
 
 func agentSandboxWorkloadHash(spec agentsandbox.Spec, opts AgentSandboxOptions) [sha256.Size]byte {
+	stageEnv := ""
+	if spec.StagedWorkspace != nil {
+		stageEnv = spec.StagedWorkspace.RequestEnv
+	}
 	metadata, _ := json.Marshal(struct {
 		Purpose           string `json:"purpose"`
 		RequestEnv        string `json:"request_env"`
 		Timeout           string `json:"timeout"`
 		OutputLimitBytes  int64  `json:"output_limit_bytes"`
 		WritableWorkspace bool   `json:"writable_workspace"`
-	}{spec.Purpose, spec.RequestEnv, spec.Timeout.String(), spec.OutputLimitBytes, spec.WritableWorkspace})
-	return agentSandboxContractHash(append(append(append([]byte(nil), metadata...), 0), spec.Request...), opts)
+		StageRequestEnv   string `json:"stage_request_env,omitempty"`
+	}{spec.Purpose, spec.RequestEnv, spec.Timeout.String(), spec.OutputLimitBytes, spec.WritableWorkspace, stageEnv})
+	request := append(append(append([]byte(nil), metadata...), 0), spec.Request...)
+	if spec.StagedWorkspace != nil {
+		request = append(request, 0)
+		request = append(request, spec.StagedWorkspace.Request...)
+	}
+	return agentSandboxContractHash(request, opts)
 }
 
 func agentSandboxContractHash(requestJSON []byte, opts AgentSandboxOptions) [sha256.Size]byte {
 	hash := sha256.New()
-	for _, value := range [][]byte{
+	values := [][]byte{
 		requestJSON, []byte(opts.Image), []byte(opts.ServiceAccountName), []byte(opts.RuntimeClassName),
 		[]byte(opts.Resources.CPURequest), []byte(opts.Resources.CPULimit), []byte(opts.Resources.MemoryRequest),
 		[]byte(opts.Resources.MemoryLimit), []byte(opts.Resources.EphemeralStorage), []byte(opts.appArmorCapability.String()), strconv.AppendBool(nil, opts.PublicCAPrivateDNS),
-	} {
+	}
+	if opts.StagerImage != "" {
+		values = append(values, []byte(opts.StagerImage))
+	}
+	for _, value := range values {
 		_, _ = hash.Write([]byte{0})
 		_, _ = hash.Write(value)
 	}

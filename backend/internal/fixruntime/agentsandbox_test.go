@@ -255,6 +255,9 @@ func TestAgentSandboxRunUsesPurposeBoundResultChannelWithoutWorkspace(t *testing
 	if _, ok := pod["volumes"]; ok {
 		t.Fatal("read-only critic workload received writable volumes")
 	}
+	if _, ok := pod["initContainers"]; ok {
+		t.Fatal("read-only critic workload received a stager")
+	}
 	container := pod["containers"].([]any)[0].(map[string]any)
 	if _, ok := container["volumeMounts"]; ok {
 		t.Fatal("read-only critic workload received writable volume mounts")
@@ -262,6 +265,103 @@ func TestAgentSandboxRunUsesPurposeBoundResultChannelWithoutWorkspace(t *testing
 	env := container["env"].([]any)[0].(map[string]any)
 	if env["name"] != "PROW_AI_CAUSAL_CRITIC_REQUEST_B64" {
 		t.Fatalf("env = %+v", env)
+	}
+}
+
+func TestAgentSandboxRunUsesStagedReadOnlyWorkspace(t *testing.T) {
+	api := &fakeAgentSandboxAPI{
+		state: sandboxState{Exists: true, UID: "uid-1", PodName: "analysis-request-1", Finished: true, FinishedReason: "PodSucceeded"},
+		logs:  `{"terminal_state":"succeeded"}`,
+	}
+	opts := testAgentSandboxOptions()
+	opts.StagerImage = "stager:test"
+	runtime := newAgentSandboxRuntimeForTest(api, opts)
+	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
+		Purpose: "analysis", ExecutionID: "request-1", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64",
+		Request: []byte(`{"version":1}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"manifest":"abc"}`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != `{"terminal_state":"succeeded"}` || !result.Telemetry.CleanupCompleted {
+		t.Fatalf("result=%+v", result)
+	}
+	pod := api.object["spec"].(map[string]any)["podTemplate"].(map[string]any)["spec"].(map[string]any)
+	containers := pod["containers"].([]any)
+	if len(containers) != 1 {
+		t.Fatalf("containers=%+v", containers)
+	}
+	container := containers[0].(map[string]any)
+	mounts := container["volumeMounts"].([]any)
+	wantMounts := map[string]bool{
+		agentsandbox.StagedWorkspaceSourcePath:    true,
+		agentsandbox.StagedWorkspaceArtifactsPath: true,
+		agentsandbox.StagedWorkspaceResultPath:    false,
+		"/tmp":                                    false,
+	}
+	if len(mounts) != len(wantMounts) {
+		t.Fatalf("mounts=%+v", mounts)
+	}
+	for _, value := range mounts {
+		mount := value.(map[string]any)
+		path := mount["mountPath"].(string)
+		wantReadOnly, ok := wantMounts[path]
+		if !ok || (mount["readOnly"] == true) != wantReadOnly {
+			t.Fatalf("mount=%+v", mount)
+		}
+		if path == agentsandbox.StagedWorkspaceSourcePath && mount["subPath"] != "source" || path == agentsandbox.StagedWorkspaceArtifactsPath && mount["subPath"] != "artifacts" || path == agentsandbox.StagedWorkspaceResultPath && mount["subPath"] != "result" {
+			t.Fatalf("mount=%+v", mount)
+		}
+	}
+	initContainers := pod["initContainers"].([]any)
+	if len(initContainers) != 1 {
+		t.Fatalf("init containers=%+v", initContainers)
+	}
+	stager := initContainers[0].(map[string]any)
+	if stager["name"] != agentSandboxStagerName || stager["image"] != "stager:test" {
+		t.Fatalf("stager=%+v", stager)
+	}
+	stageEnv := stager["env"].([]any)[0].(map[string]any)
+	if stageEnv["name"] != "PROW_AI_ANALYSIS_STAGE_REQUEST_B64" {
+		t.Fatalf("stage env=%+v", stageEnv)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(stageEnv["value"].(string))
+	if err != nil || string(decoded) != `{"manifest":"abc"}` {
+		t.Fatalf("stage request=%q err=%v", decoded, err)
+	}
+	if pod["automountServiceAccountToken"] != false || len(pod["volumes"].([]any)) != 3 {
+		t.Fatalf("pod=%+v", pod)
+	}
+	if mounts[3].(map[string]any)["name"] != "executor-tmp" || stager["volumeMounts"].([]any)[1].(map[string]any)["name"] != "stager-tmp" {
+		t.Fatalf("temporary mounts are not isolated: executor=%+v stager=%+v", mounts, stager["volumeMounts"])
+	}
+}
+
+func TestAgentSandboxStagedWorkspaceRequiresStagerImage(t *testing.T) {
+	runtime := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, testAgentSandboxOptions())
+	_, err := runtime.Run(t.Context(), agentsandbox.Spec{
+		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{}`),
+		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{}`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "stager image") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestAgentSandboxWorkloadIdentityIncludesStageRequest(t *testing.T) {
+	opts := testAgentSandboxOptions()
+	opts.StagerImage = "stager:test"
+	left := agentsandbox.Spec{
+		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{"request":1}`),
+		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"stage":1}`)},
+	}
+	right := left
+	right.StagedWorkspace = &agentsandbox.StagedWorkspace{RequestEnv: left.StagedWorkspace.RequestEnv, Request: []byte(`{"stage":2}`)}
+	if agentSandboxWorkloadHash(left, opts) == agentSandboxWorkloadHash(right, opts) {
+		t.Fatal("stage request did not affect workload identity")
 	}
 }
 
@@ -294,6 +394,7 @@ func TestAgentSandboxRuntimeIdentityIncludesWorkloadConfiguration(t *testing.T) 
 		func(opts *AgentSandboxOptions) { opts.ServiceAccountName = "other-workload" },
 		func(opts *AgentSandboxOptions) { opts.RuntimeClassName = "other-runtime" },
 		func(opts *AgentSandboxOptions) { opts.Resources.MemoryLimit = "1Gi" },
+		func(opts *AgentSandboxOptions) { opts.StagerImage = "stager:test" },
 	} {
 		changed := base
 		mutate(&changed)
@@ -614,6 +715,7 @@ func TestAgentSandboxProductionOptionsFailClosed(t *testing.T) {
 		want string
 	}{
 		{name: "mutable image", edit: func(o *AgentSandboxOptions) { o.Image = "registry.internal.example/fixer:latest" }, want: "immutable sha256"},
+		{name: "mutable stager image", edit: func(o *AgentSandboxOptions) { o.StagerImage = "registry.internal.example/stager:latest" }, want: "stager image"},
 		{name: "runtime class", edit: func(o *AgentSandboxOptions) { o.RuntimeClassName = "" }, want: "runtime class"},
 		{name: "insecure gateway", edit: func(o *AgentSandboxOptions) { o.ModelGateway.Endpoint = "http://gateway.fix-eval.svc/v1" }, want: "absolute https"},
 		{name: "public gateway", edit: func(o *AgentSandboxOptions) { o.ModelGateway.Endpoint = "https://api.openai.com/v1" }, want: "public CA private DNS"},
