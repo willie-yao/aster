@@ -64,10 +64,11 @@ func TestRunTrialPersistsFinalizedPrivateRecord(t *testing.T) {
 	if info.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("ledger mode = %o", info.Mode().Perm())
 	}
-	if _, err := RunTrial(t.Context(), reviewer, TrialSpec{
+	duplicate, err := RunTrial(t.Context(), reviewer, TrialSpec{
 		PublicDir: publicDir, LedgerPath: ledgerPath, Metadata: trialMetadata(), Input: input,
 		ExecutionID: "critic-case-1", RuntimeIdentity: testCriticRuntimeIdentity(), Now: func() time.Time { return time.Unix(101, 0) },
-	}); err == nil || reviewer.calls != 1 {
+	})
+	if err == nil || reviewer.calls != 1 || duplicate.AttemptHash != record.AttemptHash || !duplicate.Finalized {
 		t.Fatalf("duplicate err=%v calls=%d", err, reviewer.calls)
 	}
 }

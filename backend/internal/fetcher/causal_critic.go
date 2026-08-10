@@ -111,12 +111,12 @@ func (p *pipeline) runCausalCriticCandidate(ctx context.Context, candidate shado
 	}
 	if err != nil {
 		log.Printf("🧪 causal critic shadow: evidence failed job=%s build=%s test=%s", candidate.subject.JobID, candidate.subject.BuildID, candidate.subject.TestName)
-		return true
+		return false
 	}
 	input, err := causalcritic.NewInput(bundle, candidate.authoritative)
 	if err != nil {
 		log.Printf("🧪 causal critic shadow: paired input invalid job=%s build=%s test=%s: %v", candidate.subject.JobID, candidate.subject.BuildID, candidate.subject.TestName, err)
-		return true
+		return false
 	}
 	reviewer, err := p.ensureCausalCriticReviewer()
 	if err != nil {
@@ -127,10 +127,9 @@ func (p *pipeline) runCausalCriticCandidate(ctx context.Context, candidate shado
 	if p.criticNow != nil {
 		now = p.criticNow
 	}
-	caseID := strings.Join([]string{candidate.subject.JobID, candidate.subject.BuildID, candidate.subject.TestName}, "/")
-	stable := sha256.Sum256([]byte(caseID))
+	caseID, stableID := causalCriticCaseIdentity(candidate.subject)
 	metadata := causalcritic.TrialMetadata{
-		CaseID: caseID, StableID: hex.EncodeToString(stable[:10]), Repetition: 1, Arm: "agent-sandbox-independent-critic", AuthoritativeArm: "published",
+		CaseID: caseID, StableID: stableID, Repetition: 1, Arm: "agent-sandbox-independent-critic", AuthoritativeArm: "published",
 		AuthoritativeElapsedMs: candidate.authoritative.ElapsedMs, AuthoritativeInputTokens: candidate.authoritative.InputTokens,
 		AuthoritativeOutputTokens: candidate.authoritative.OutputTokens, AuthoritativeModelRequests: candidate.authoritative.ModelRequests,
 		SameModelJudgeObjected: candidate.authoritative.JudgeObjected, SameModelJudgeRevised: candidate.authoritative.JudgeRevised,
@@ -149,6 +148,16 @@ func (p *pipeline) runCausalCriticCandidate(ctx context.Context, candidate shado
 	}
 	log.Printf("🧪 causal critic shadow: status=%s verdict=%s job=%s build=%s test=%s", record.Status, record.Review.Verdict, candidate.subject.JobID, candidate.subject.BuildID, candidate.subject.TestName)
 	return true
+}
+
+func causalCriticCaseIdentity(subject agentanalysis.Subject) (string, string) {
+	caseID := strings.Join([]string{subject.JobID, subject.BuildID, subject.TestName}, "/")
+	stable := sha256.Sum256([]byte(caseID))
+	stableID := hex.EncodeToString(stable[:10])
+	if len(caseID) > 160 || strings.ContainsAny(caseID, "\r\n\x00") {
+		caseID = "critic-" + stableID
+	}
+	return caseID, stableID
 }
 
 func (p *pipeline) ensureCausalCriticReviewer() (causalcritic.Reviewer, error) {

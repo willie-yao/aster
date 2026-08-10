@@ -122,10 +122,11 @@ func TestAgentSandboxCausalCriticBenchmark(t *testing.T) {
 				RuntimeIdentity: causalcritic.RuntimeIdentity(gateway, os.Getenv("AGENT_SANDBOX_CRITIC_IMAGE"), timeout, outputLimit),
 			})
 			if errors.Is(runErr, causalcritic.ErrTrialAlreadyAttempted) {
-				t.Log("critic trial already exists in the private ledger; skipping resumed result write")
-				return
-			}
-			if runErr != nil {
+				if record.AttemptHash == "" {
+					t.Fatal("critic trial already exists but its detailed ledger record was pruned")
+				}
+				t.Log("critic trial already exists in the private ledger; recovering its result row")
+			} else if runErr != nil {
 				t.Logf("critic runtime: %v", runErr)
 			}
 			benchmarkRecord := scoreCausalCriticRecord(bc, condition, authoritative, record)
@@ -297,6 +298,9 @@ func writeCausalCriticBenchmarkJSONL(t *testing.T, path string, record causalCri
 	if err := os.MkdirAll(filepath.Dir(filepath.Clean(path)), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if causalCriticBenchmarkJSONLContainsAttempt(t, path, record.Trial.AttemptHash) {
+		return
+	}
 	file, err := os.OpenFile(filepath.Clean(path), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		t.Fatal(err)
@@ -304,6 +308,50 @@ func writeCausalCriticBenchmarkJSONL(t *testing.T, path string, record causalCri
 	defer file.Close()
 	if err := json.NewEncoder(file).Encode(record); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func causalCriticBenchmarkJSONLContainsAttempt(t *testing.T, path, attemptHash string) bool {
+	t.Helper()
+	if attemptHash == "" {
+		return false
+	}
+	file, err := os.Open(filepath.Clean(path))
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64<<10), 4<<20)
+	for scanner.Scan() {
+		var existing causalCriticBenchmarkRecord
+		if err := json.Unmarshal(scanner.Bytes(), &existing); err != nil {
+			t.Fatal(err)
+		}
+		if existing.Trial.AttemptHash == attemptHash {
+			return true
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return false
+}
+
+func TestWriteCausalCriticBenchmarkJSONLIsIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "critic.jsonl")
+	record := causalCriticBenchmarkRecord{Version: causalCriticBenchmarkRecordVersion, Trial: causalcritic.TrialRecord{AttemptHash: strings.Repeat("a", 64)}}
+	writeCausalCriticBenchmarkJSONL(t, path, record)
+	writeCausalCriticBenchmarkJSONL(t, path, record)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(strings.TrimSpace(string(data)), "\n") + 1; got != 1 {
+		t.Fatalf("rows=%d data=%q", got, data)
 	}
 }
 

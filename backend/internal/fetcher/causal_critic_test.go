@@ -3,6 +3,7 @@ package fetcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/causalcritic"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
@@ -110,5 +112,25 @@ func TestValidateCausalCriticOptions(t *testing.T) {
 	orka.ShadowAnalysis.Enabled = true
 	if err := validateCausalCriticOptions(orka); err == nil || !strings.Contains(err.Error(), "cannot run") {
 		t.Fatalf("dual shadow error = %v", err)
+	}
+}
+
+func TestRunCausalCriticCandidateDoesNotConsumeQuotaBeforeClaim(t *testing.T) {
+	p := shadowTestPipeline(t)
+	p.opts.CausalCritic = CausalCriticOptions{Enabled: true, MaxPerRun: 1, Timeout: time.Minute, OutputLimitBytes: causalcritic.DefaultOutputLimit}
+	p.criticFreeze = func(context.Context, artifacts.Browser, ai.FailureAnalysisRequest, sourceinvestigation.Repository, *skills.Set) (agentanalysis.EvidenceBundle, error) {
+		return agentanalysis.EvidenceBundle{}, errors.New("fixture evidence failure")
+	}
+	candidate := p.selectShadowCandidates(shadowTestDetails("TestFailure"), models.FlakinessReport{})[0]
+	if p.runCausalCriticCandidate(t.Context(), candidate) {
+		t.Fatal("unclaimed evidence failure consumed critic quota")
+	}
+}
+
+func TestCausalCriticCaseIdentityBoundsLongTestNames(t *testing.T) {
+	subject := agentanalysis.Subject{JobID: "periodic::job", BuildID: "1", TestName: strings.Repeat("long-test-name", 20)}
+	caseID, stableID := causalCriticCaseIdentity(subject)
+	if caseID != "critic-"+stableID || len(caseID) > 160 || len(stableID) != 20 {
+		t.Fatalf("caseID=%q stableID=%q", caseID, stableID)
 	}
 }

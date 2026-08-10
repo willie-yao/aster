@@ -166,7 +166,14 @@ func RunTrial(ctx context.Context, reviewer Reviewer, spec TrialSpec) (TrialReco
 		return TrialRecord{}, err
 	}
 	if !claimed {
-		return TrialRecord{}, fmt.Errorf("%w: %s repetition %d", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition)
+		existing, found, lookupErr := loadTrialByAttempt(spec.PublicDir, spec.LedgerPath, attemptHash)
+		if lookupErr != nil {
+			return TrialRecord{}, errors.Join(fmt.Errorf("%w: %s repetition %d", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition), lookupErr)
+		}
+		if found {
+			return existing, fmt.Errorf("%w: %s repetition %d", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition)
+		}
+		return TrialRecord{}, fmt.Errorf("%w: %s repetition %d detailed record was pruned", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition)
 	}
 	started := now()
 	observer := func(observerCtx context.Context, work engineruntime.WorkRef) error {
@@ -202,6 +209,26 @@ func RunTrial(ctx context.Context, reviewer Reviewer, spec TrialSpec) (TrialReco
 		return record, errors.Join(runErr, appendErr)
 	}
 	return record, runErr
+}
+
+func loadTrialByAttempt(publicDir, path, attemptHash string) (TrialRecord, bool, error) {
+	var found TrialRecord
+	ok := false
+	err := withLedgerLock(publicDir, path, func(resolved string) error {
+		ledger, err := loadLedger(resolved)
+		if err != nil {
+			return err
+		}
+		for _, record := range ledger.Records {
+			if record.AttemptHash == attemptHash {
+				found = record
+				ok = true
+				break
+			}
+		}
+		return nil
+	})
+	return found, ok, err
 }
 
 func trialTelemetry(value engineruntime.GenerateTelemetry) TrialTelemetry {
