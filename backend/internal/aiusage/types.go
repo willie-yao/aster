@@ -35,6 +35,7 @@ const (
 	OutcomeSuccess     Outcome = "success"
 	OutcomeError       Outcome = "error"
 	OutcomeCacheHit    Outcome = "cache_hit"
+	OutcomeSuppressed  Outcome = "suppressed"
 	OutcomeCancelled   Outcome = "cancelled"
 	OutcomeUnavailable Outcome = "unavailable"
 )
@@ -71,6 +72,8 @@ type Metadata struct {
 type UsageTotals struct {
 	Operations                  int   `json:"operations,omitempty"`
 	CacheHits                   int   `json:"cache_hits,omitempty"`
+	SuppressedOperations        int   `json:"suppressed_operations,omitempty"`
+	CooldownRetries             int   `json:"cooldown_retries,omitempty"`
 	Failures                    int   `json:"failures,omitempty"`
 	ExternalUnmeteredOperations int   `json:"external_unmetered_operations,omitempty"`
 	ModelRequests               int   `json:"model_requests,omitempty"`
@@ -105,6 +108,7 @@ type OperationUsage struct {
 	ReasoningTokens    int64       `json:"reasoning_tokens,omitempty"`
 	EstimatedCostNanos int64       `json:"estimated_cost_nanos,omitempty"`
 	ExternalUnmetered  bool        `json:"external_unmetered,omitempty"`
+	CooldownRetry      bool        `json:"cooldown_retry,omitempty"`
 	UsageInvalid       bool        `json:"usage_invalid,omitempty"`
 	Correlation        Correlation `json:"correlation,omitempty"`
 }
@@ -158,7 +162,7 @@ func validOrigin(value Origin) bool {
 
 func validOutcome(value Outcome) bool {
 	switch value {
-	case OutcomeSuccess, OutcomeError, OutcomeCacheHit, OutcomeCancelled, OutcomeUnavailable:
+	case OutcomeSuccess, OutcomeError, OutcomeCacheHit, OutcomeSuppressed, OutcomeCancelled, OutcomeUnavailable:
 		return true
 	default:
 		return false

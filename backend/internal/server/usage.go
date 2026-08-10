@@ -56,6 +56,8 @@ type usageReportCoverage struct {
 type usageReportTotals struct {
 	Operations                  int    `json:"operations"`
 	CacheHits                   int    `json:"cache_hits"`
+	SuppressedOperations        int    `json:"suppressed_operations"`
+	CooldownRetries             int    `json:"cooldown_retries"`
 	Failures                    int    `json:"failures"`
 	ExternalUnmeteredOperations int    `json:"external_unmetered_operations"`
 	ModelRequests               int    `json:"model_requests"`
@@ -311,6 +313,8 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 func addUsageTotals(target *aiusage.UsageTotals, value aiusage.UsageTotals) {
 	target.Operations += value.Operations
 	target.CacheHits += value.CacheHits
+	target.SuppressedOperations += value.SuppressedOperations
+	target.CooldownRetries += value.CooldownRetries
 	target.Failures += value.Failures
 	target.ExternalUnmeteredOperations += value.ExternalUnmeteredOperations
 	target.ModelRequests += value.ModelRequests
@@ -326,7 +330,7 @@ func addUsageTotals(target *aiusage.UsageTotals, value aiusage.UsageTotals) {
 
 func reportTotals(value aiusage.UsageTotals) usageReportTotals {
 	return usageReportTotals{
-		Operations: value.Operations, CacheHits: value.CacheHits, Failures: value.Failures,
+		Operations: value.Operations, CacheHits: value.CacheHits, SuppressedOperations: value.SuppressedOperations, CooldownRetries: value.CooldownRetries, Failures: value.Failures,
 		ExternalUnmeteredOperations: value.ExternalUnmeteredOperations,
 		ModelRequests:               value.ModelRequests, ReportedRequests: value.ReportedRequests, PricedReportedRequests: value.PricedReportedRequests, UnreportedRequests: value.UnreportedRequests,
 		InputTokens: value.InputTokens, CachedInputTokens: value.CachedInputTokens,

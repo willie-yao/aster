@@ -950,6 +950,26 @@ job page: a "recurring failure pattern" callout with the shared cause and fix
 when systemic, or a quiet "no shared root cause" note when the failures are
 genuinely independent.
 
+Deterministic final failures in JSON parsing, required-field validation, build
+references, and bounded ambiguity repair use the same identity as the success
+cache. The private cache stores only a failure category, version, failure time,
+and retry time. It never stores the response, prompt, repository content, or
+provider body. An unchanged failure is suppressed for six hours, while a
+changed input, prompt or repair version, model fingerprint, cache generation,
+or source identity retries immediately. Cancellation does not create a failure
+entry. HTTP 408, HTTP 429, and provider 5xx failures keep the shorter transient
+retry behavior.
+
+For the August 10, 2026 cost audit, one unchanged validation failure used six
+provider requests, about 11,800 input tokens, and about 1,400 output tokens per
+watch pass. At the observed 5.34 minute median pass interval, a six-hour
+cooldown suppresses about 66 repeated passes after the first failure. That is
+about 396 provider requests, 778,800 input tokens, and 92,400 output tokens
+avoided per unchanged key before the next bounded retry. The job that repeated
+147 times over the observed 31 hours would instead make about six attempts,
+avoiding roughly 846 provider requests, 1.66 million input tokens, and 197,000
+output tokens if its input identity stayed unchanged.
+
 The **systemic** verdicts are also aggregated across all jobs into
 `flakiness.json` (`recurring_patterns`) and surfaced on the landing page inside
 the **Needs Attention** box, ranked by confidence then build span, so a

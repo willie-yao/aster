@@ -30,6 +30,10 @@ const patternPromptVersion = 6
 
 const patternCacheVersion = 2
 
+const patternFailureCacheVersion = 1
+
+const defaultPatternFailureCooldown = 6 * time.Hour
+
 // patternRepairVersion is included in pattern cache keys so repair contract
 // changes invalidate verdicts produced by an older repair prompt.
 const patternRepairVersion = 1
@@ -97,6 +101,13 @@ type patternCacheData struct {
 	SourceRef string            `json:"source_ref,omitempty"`
 }
 
+type patternFailureCacheData struct {
+	Version    int                    `json:"version"`
+	Category   PatternFailureCategory `json:"category"`
+	FailedAt   time.Time              `json:"failed_at"`
+	RetryAfter time.Time              `json:"retry_after"`
+}
+
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
 type patternValidationCategory string
@@ -136,6 +147,8 @@ type PatternAnalyzeOptions struct {
 	AllowValidationRepair bool
 	OnRepair              func(PatternRepairAttempt)
 	OnCacheHit            func()
+	OnFailureSuppressed   func(PatternFailureCategory)
+	OnFreshRetry          func()
 }
 
 // PatternFailureCategory is a privacy-safe pattern-attempt outcome.
@@ -163,6 +176,14 @@ const (
 // the response body.
 type PatternProviderError struct {
 	StatusCode int
+}
+
+type patternFailureSuppressedError struct {
+	category PatternFailureCategory
+}
+
+func (e *patternFailureSuppressedError) Error() string {
+	return fmt.Sprintf("pattern analysis: deterministic failure suppressed by cooldown (%s)", e.category)
 }
 
 func (e *PatternProviderError) Error() string {
@@ -198,6 +219,10 @@ func PatternFailureCategoryOf(err error) PatternFailureCategory {
 	if category := patternValidationCategoryOf(err); category != "" {
 		return PatternFailureCategory(category)
 	}
+	var suppressedErr *patternFailureSuppressedError
+	if errors.As(err, &suppressedErr) {
+		return suppressedErr.category
+	}
 	var providerErr *PatternProviderError
 	if errors.As(err, &providerErr) {
 		return patternProviderFailureCategory(providerErr.StatusCode)
@@ -214,6 +239,13 @@ func PatternFailureCategoryOf(err error) PatternFailureCategory {
 	default:
 		return PatternFailureUnknown
 	}
+}
+
+// IsPatternFailureSuppressed reports whether a deterministic failure was
+// skipped because its exact input identity is still cooling down.
+func IsPatternFailureSuppressed(err error) bool {
+	var suppressedErr *patternFailureSuppressedError
+	return errors.As(err, &suppressedErr)
 }
 
 // IsRetryablePatternError reports whether one fresh correlation attempt is
@@ -364,7 +396,9 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 		ctx = withAnalysisTrace(ctx, trace)
 		defer func() {
 			outcome := "pattern_success"
-			if resultErr != nil {
+			if IsPatternFailureSuppressed(resultErr) {
+				outcome = "pattern_suppressed"
+			} else if resultErr != nil {
 				outcome = "pattern_error"
 			}
 			trace.Finish(outcome, resultErr)
@@ -383,7 +417,9 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 		Correlation: aiusage.Correlation{JobID: jobID, TestName: subject},
 	})
 	defer func() {
-		if errors.Is(resultErr, context.Canceled) || errors.Is(resultErr, context.DeadlineExceeded) {
+		if IsPatternFailureSuppressed(resultErr) {
+			usageOutcome = aiusage.OutcomeSuppressed
+		} else if errors.Is(resultErr, context.Canceled) || errors.Is(resultErr, context.DeadlineExceeded) {
 			usageOutcome = aiusage.OutcomeCancelled
 		} else if resultErr != nil {
 			usageOutcome = aiusage.OutcomeError
@@ -409,6 +445,7 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 	}
 
 	key := patternCacheKey(s.module.Name(), s.cacheGeneration, jobID, subject, userPrompt, groundKey, s.client.modelFingerprint())
+	failureKey := patternFailureCacheKey(key)
 	buildIDs := patternBuildIDs(failures)
 	if raw, ok := s.client.cache.Get(key); ok {
 		var cachedData patternCacheData
@@ -417,6 +454,7 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 				if options.OnCacheHit != nil {
 					options.OnCacheHit()
 				}
+				s.client.cache.Delete(failureKey)
 				usageOutcome = aiusage.OutcomeCacheHit
 				return buildPatternAnalysis(subject, len(failures), cachedData.Response, collectRelevantFiles(failures), cachedData.FileLinks, cachedData.SourceRef), nil
 			}
@@ -425,11 +463,34 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 			if options.OnCacheHit != nil {
 				options.OnCacheHit()
 			}
+			s.client.cache.Delete(failureKey)
 			usageOutcome = aiusage.OutcomeCacheHit
 			recordPatternParseTrace(ctx, "cache", stats, nil)
 			return buildPatternAnalysis(subject, len(failures), cached, collectRelevantFiles(failures), nil, ""), nil
 		}
 	}
+
+	if failure, ok := s.patternFailureBackoff(failureKey); ok {
+		now := s.patternFailureNow()
+		if now.Before(failure.RetryAfter) {
+			if options.OnFailureSuppressed != nil {
+				options.OnFailureSuppressed(failure.Category)
+			}
+			return nil, &patternFailureSuppressedError{category: failure.Category}
+		}
+		s.client.cache.Delete(failureKey)
+		aiusage.MarkCooldownRetry(ctx)
+		if options.OnFreshRetry != nil {
+			options.OnFreshRetry()
+		}
+	}
+	defer func() {
+		if resultErr == nil {
+			s.client.cache.Delete(failureKey)
+			return
+		}
+		s.persistPatternFailureBackoff(failureKey, resultErr)
+	}()
 
 	var parsed patternResponse
 	var sourceReads []string
@@ -462,6 +523,59 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 	}
 	_ = s.client.cache.Set(key, patternCacheData{Version: patternCacheVersion, Response: parsed, FileLinks: fileLinks, SourceRef: sourceRef})
 	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures), fileLinks, sourceRef), nil
+}
+
+func (s *Service) patternFailureNow() time.Time {
+	if s.patternNow == nil {
+		return time.Now().UTC()
+	}
+	return s.patternNow().UTC()
+}
+
+func (s *Service) patternFailureBackoff(key string) (patternFailureCacheData, bool) {
+	raw, ok := s.client.cache.Get(key)
+	if !ok {
+		return patternFailureCacheData{}, false
+	}
+	var failure patternFailureCacheData
+	now := s.patternFailureNow()
+	if json.Unmarshal(raw, &failure) != nil || failure.Version != patternFailureCacheVersion ||
+		!isDeterministicPatternFailureCategory(failure.Category) || failure.FailedAt.IsZero() ||
+		failure.FailedAt.After(now.Add(cacheMaxFutureSkew)) || failure.RetryAfter.IsZero() ||
+		!failure.RetryAfter.After(failure.FailedAt) || failure.RetryAfter.Sub(failure.FailedAt) > defaultPatternFailureCooldown {
+		s.client.cache.Delete(key)
+		return patternFailureCacheData{}, false
+	}
+	return failure, true
+}
+
+func (s *Service) persistPatternFailureBackoff(key string, err error) {
+	category := PatternFailureCategoryOf(err)
+	if !isDeterministicPatternFailureCategory(category) {
+		return
+	}
+	cooldown := s.patternFailureCooldown
+	if cooldown <= 0 {
+		cooldown = defaultPatternFailureCooldown
+	}
+	now := s.patternFailureNow()
+	_ = s.client.cache.Set(key, patternFailureCacheData{
+		Version: patternFailureCacheVersion, Category: category,
+		FailedAt: now, RetryAfter: now.Add(cooldown),
+	})
+}
+
+func isDeterministicPatternFailureCategory(category PatternFailureCategory) bool {
+	switch category {
+	case PatternFailureJSON, PatternFailureMissing, PatternFailureSchema, PatternFailureBuilds, PatternFailureAmbiguous:
+		return true
+	default:
+		return false
+	}
+}
+
+func patternFailureCacheKey(patternKey string) string {
+	return "pattern-failure:" + strings.TrimPrefix(patternKey, "pattern:")
 }
 
 // BuildPatternInput renders the pattern-analysis contract.
@@ -1251,8 +1365,12 @@ func buildPatternUserPrompt(subject string, failures []PatternFailure) string {
 // rendered model input, so the verdict is reused only while the exact evidence
 // the model saw is unchanged.
 func patternCacheKey(module, generation, jobID, subject, userPrompt, groundKey, modelFingerprint string) string {
+	return patternCacheKeyForVersions(patternPromptVersion, patternRepairVersion, module, generation, jobID, subject, userPrompt, groundKey, modelFingerprint)
+}
+
+func patternCacheKeyForVersions(promptVersion, repairVersion int, module, generation, jobID, subject, userPrompt, groundKey, modelFingerprint string) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "v%d:r%d\x00%s\x00%s\x00%s\x00%s\x00%s", patternPromptVersion, patternRepairVersion, groundKey, modelFingerprint, jobID, subject, userPrompt)
+	fmt.Fprintf(h, "v%d:r%d\x00%s\x00%s\x00%s\x00%s\x00%s", promptVersion, repairVersion, groundKey, modelFingerprint, jobID, subject, userPrompt)
 	digest := hex.EncodeToString(h.Sum(nil)[:12])
 	if generation == "" {
 		return fmt.Sprintf("pattern:%s:%s", module, digest)

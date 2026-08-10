@@ -3,7 +3,7 @@ export type AIUsageFeature =
   | "fix_preview" | "fix_critique" | "pr_template" | "source_investigation";
 
 export interface AIUsageTotals {
-  operations: number; cache_hits: number; failures: number;
+  operations: number; cache_hits: number; suppressed_operations?: number; cooldown_retries?: number; failures: number;
   external_unmetered_operations: number; model_requests: number;
   reported_requests: number; priced_reported_requests?: number; unreported_requests: number;
   input_tokens: number; cached_input_tokens: number; output_tokens: number;
@@ -15,6 +15,7 @@ export interface AIUsageOperation {
   model_requests?: number; reported_requests?: number; unreported_requests?: number;
   input_tokens?: number; cached_input_tokens?: number; output_tokens?: number;
   reasoning_tokens?: number; estimated_cost_nanos?: number; external_unmetered?: boolean;
+  cooldown_retry?: boolean;
 }
 export interface AIUsageReport {
   version: number; generated_at: string; range: { start: string; end: string };

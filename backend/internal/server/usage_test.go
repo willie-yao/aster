@@ -163,6 +163,21 @@ func TestBuildUsageReportSeparatesCoverageFromPricing(t *testing.T) {
 	}
 }
 
+func TestBuildUsageReportIncludesSuppressedOperations(t *testing.T) {
+	start, _ := time.Parse(time.DateOnly, "2026-08-10")
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Days: []aiusage.DailyUsage{{
+		Date:   "2026-08-10",
+		Totals: aiusage.UsageTotals{Operations: 2, SuppressedOperations: 1, CooldownRetries: 1},
+		Features: map[aiusage.Feature]aiusage.UsageTotals{
+			aiusage.FeaturePatternAnalysis: {Operations: 2, SuppressedOperations: 1, CooldownRetries: 1},
+		},
+	}}}}, start, start, nil, start)
+	if report.Totals.Operations != 2 || report.Totals.SuppressedOperations != 1 || report.Totals.CooldownRetries != 1 ||
+		len(report.Daily) != 1 || report.Daily[0].Totals.SuppressedOperations != 1 || report.Daily[0].Totals.CooldownRetries != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
 func TestBuildUsageReportIgnoresUnappliedPricingHash(t *testing.T) {
 	start, _ := time.Parse(time.DateOnly, "2026-08-01")
 	end, _ := time.Parse(time.DateOnly, "2026-08-03")

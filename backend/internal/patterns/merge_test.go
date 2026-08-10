@@ -12,12 +12,12 @@ func TestMergeLastGoodMatrix(t *testing.T) {
 	models.AssignPatternIdentity(&priorPattern)
 	prior := map[string]models.JobDetail{"job": {JobID: "job", PatternAnalyses: []models.PatternAnalysis{priorPattern}}}
 	details := []models.JobDetail{eligibleJob("job")}
-	result := AnalyzeResult{Outcomes: map[string]JobOutcome{"job": {JobID: "job", Attempts: 2}}}
+	result := AnalyzeResult{Outcomes: map[string]JobOutcome{"job": {JobID: "job", Attempts: 1, Suppressed: true}}}
 	report, err := MergeLastGood(details, prior, result)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Retained != 1 || details[0].PatternRefresh.State != models.PatternRefreshRetained || !reflect.DeepEqual(details[0].PatternAnalyses, prior["job"].PatternAnalyses) {
+	if report.Retained != 1 || details[0].PatternRefresh.State != models.PatternRefreshRetained || details[0].PatternRefresh.Attempts != 1 || !reflect.DeepEqual(details[0].PatternAnalyses, prior["job"].PatternAnalyses) {
 		t.Fatalf("report=%+v detail=%+v", report, details[0])
 	}
 }

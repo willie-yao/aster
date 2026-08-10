@@ -168,6 +168,21 @@ func TestRecorderWritesPrivateFile(t *testing.T) {
 	}
 }
 
+func TestRecorderCountsSuppressedOperationsWithoutProviderRequests(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	recorder := testRecorder(t, "", now, 10)
+	stamp := now.Format(time.RFC3339Nano)
+	recorder.Record(OperationUsage{
+		ID: "0011223344556677", Origin: OriginFetcher, Feature: FeaturePatternAnalysis,
+		StartedAt: stamp, CompletedAt: stamp, Outcome: OutcomeSuppressed,
+	})
+	snapshot := recorder.Snapshot()
+	if len(snapshot.Days) != 1 || snapshot.Days[0].Totals.Operations != 1 || snapshot.Days[0].Totals.SuppressedOperations != 1 ||
+		snapshot.Days[0].Totals.ModelRequests != 0 || snapshot.Days[0].Totals.Failures != 0 {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+}
+
 func TestRecorderWriteFailureIsNonFatal(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	want := errors.New("write failed")

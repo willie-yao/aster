@@ -83,6 +83,9 @@ type Service struct {
 	usageRecorder *aiusage.Recorder
 	usageOrigin   aiusage.Origin
 
+	patternNow             func() time.Time
+	patternFailureCooldown time.Duration
+
 	// draftObserver is an optional in-memory hook used only by the quality
 	// benchmark to compare parseable drafts from the same investigation.
 	draftObserver DraftObserver
@@ -98,10 +101,12 @@ func NewService(client *Client, module Module, systemPrompt string, consecutiveM
 		consecutiveMap = map[string]int{}
 	}
 	return &Service{
-		client:         client,
-		module:         module,
-		systemPrompt:   systemPrompt,
-		consecutiveMap: consecutiveMap,
+		client:                 client,
+		module:                 module,
+		systemPrompt:           systemPrompt,
+		consecutiveMap:         consecutiveMap,
+		patternNow:             time.Now,
+		patternFailureCooldown: defaultPatternFailureCooldown,
 	}
 }
 
