@@ -44,6 +44,7 @@ backend/                         Go 1.25
     server/                      API server: /data/* read parity, capabilities, actions
     analyzer/                    Runs one failure analysis request (Orka container runtime)
     fixexecutor/                 Runs one credential-free Agent Sandbox fix workload
+    criticexecutor/              Runs one credential-free causal review workload
   internal/
     -- core pipeline (discover -> analyze -> write) --
     fetcher/                     Orchestration invoked by cmd/fetcher and cmd/worker
@@ -73,6 +74,9 @@ backend/                         Go 1.25
       modules/universal/         Builds the per-failure seed prompt
     aiusage/                     Private token usage and cost accounting
     agentanalysis/               Private experimental Agent failure-analysis adapter
+    agentsandbox/                Business-neutral Agent Sandbox lifecycle contract
+    causalcritic/                Private independent causal-review contracts and runtime
+    criticexecutor/              Purpose-built read-only model-gateway critic executor
     analysisruntime/             Selects the failure-analysis runtime (in-process default)
     analysischat/                Bounded conversations about a published analysis
     corrections/                 Promotes reviewed chat revisions without mutating output

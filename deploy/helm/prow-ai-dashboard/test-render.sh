@@ -1921,4 +1921,97 @@ expect_agent_sandbox_fail command-git-alias 'git is reserved for the exact final
 expect_agent_sandbox_fail command-no-agent-step 'must reserve at least one coding-agent step' --set agentSandbox.fixRuntime.maxSteps=1
 expect_agent_sandbox_fail reserved-env 'must not override reserved Agent Sandbox variable' --set server.extraEnv[0].name=AGENT_SANDBOX_IMAGE --set server.extraEnv[0].value=attacker
 
+cat > "$tmp/causal-critic.yaml" <<'CRITIC_VALUES'
+image:
+  tag: sha-test
+ai:
+  enabled: true
+  existingSecret: ai-secret
+project:
+  config: |
+    id: test
+    name: Test
+    testgrid:
+      dashboard: test
+    storage:
+      provider: local
+      base: /tmp
+    branding:
+      title: Test
+      base_path: /
+      site_url: https://example.test
+  systemPrompt: test prompt
+agentSandbox:
+  causalCritic:
+    enabled: true
+    namespace: critic-eval
+    runtimeClassName: kata-vm
+    image:
+      repository: local/critic
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      pullPolicy: IfNotPresent
+    workloadServiceAccount:
+      create: true
+      name: critic-workload
+    modelGateway:
+      endpoint: https://gateway.models.svc.cluster.local/v1
+      model: critic-model
+      protocolVersion: openai-chat-completions-v1
+    ledger:
+      existingClaim: critic-ledger
+      mountPath: /private/causal-critic
+    networkPolicy:
+      mode: kubernetes
+      enabled: true
+      gatewayNamespaceSelector:
+        kubernetes.io/metadata.name: models
+      gatewayPodSelector:
+        app: gateway
+      gatewayPort: 443
+      dnsNamespaceSelector:
+        kubernetes.io/metadata.name: kube-system
+      dnsPodSelector:
+        k8s-app: kube-dns
+CRITIC_VALUES
+helm template test "$chart" -n dashboard-test -f "$tmp/causal-critic.yaml" > "$tmp/causal-critic-render.yaml"
+grep -Fq 'prow-ai-dashboard/purpose: critic' "$tmp/causal-critic-render.yaml"
+grep -Fq 'name: AGENT_SANDBOX_CRITIC_IMAGE' "$tmp/causal-critic-render.yaml"
+grep -Fq -- '-causal-critic-shadow' "$tmp/causal-critic-render.yaml"
+grep -Fq 'claimName: critic-ledger' "$tmp/causal-critic-render.yaml"
+grep -Fq 'kind: NetworkPolicy' "$tmp/causal-critic-render.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/causal-critic.yaml" --set agentSandbox.causalCritic.networkPolicy.mode=cilium > "$tmp/causal-critic-cilium-render.yaml"
+grep -Fq 'kind: CiliumNetworkPolicy' "$tmp/causal-critic-cilium-render.yaml"
+grep -Fq 'toEntities: [cluster]' "$tmp/causal-critic-cilium-render.yaml"
+grep -Fq "variables.container.env[0].name == 'PROW_AI_CAUSAL_CRITIC_REQUEST_B64'" "$tmp/causal-critic-render.yaml"
+critic_resources=$(awk '
+  /app.kubernetes.io\/component: agent-sandbox-causal-critic$/ { component=1 }
+  component && /kind: Role$/ { in_role=1 }
+  in_role && /resources:/ { count++ }
+  in_role && /^---$/ { exit }
+  END { print count+0 }
+' "$tmp/causal-critic-render.yaml")
+if [[ "$critic_resources" -ne 3 ]]; then
+  echo "critic Role resource declarations = $critic_resources, want 3" >&2
+  exit 1
+fi
+
+expect_causal_critic_fail() {
+  local name=$1 expected=$2
+  shift 2
+  if helm template test "$chart" -n dashboard-test -f "$tmp/causal-critic.yaml" "$@" > "$tmp/causal-critic-$name.out" 2>&1; then
+    echo "invalid causal critic configuration was accepted: $name" >&2
+    exit 1
+  fi
+  validation_error_contains "$tmp/causal-critic-$name.out" "$expected"
+}
+expect_causal_critic_fail direct-provider 'must use internal service DNS' --set agentSandbox.causalCritic.modelGateway.endpoint=https://api.openai.com/v1
+expect_causal_critic_fail gateway-query 'absolute credential-free HTTPS URL' --set-string 'agentSandbox.causalCritic.modelGateway.endpoint=https://gateway.models.svc.cluster.local/v1?token=x'
+expect_causal_critic_fail network-disabled 'networkPolicy.enabled must be true' --set agentSandbox.causalCritic.networkPolicy.enabled=false
+expect_causal_critic_fail missing-ledger 'ledger.existingClaim is required' --set-string agentSandbox.causalCritic.ledger.existingClaim=
+expect_causal_critic_fail public-ledger 'ledger.mountPath must be under /private' --set-string agentSandbox.causalCritic.ledger.mountPath=/data/critic
+expect_causal_critic_fail noncanonical-ledger 'ledger.mountPath must be canonical' --set-string agentSandbox.causalCritic.ledger.mountPath=/private/../data
+expect_causal_critic_fail mutable-image 'image.digest must be an immutable sha256 digest' --set-string agentSandbox.causalCritic.image.digest=latest
+expect_causal_critic_fail orka-shadow 'cannot run with orka.agentAnalysisShadow' --set orka.agentAnalysisShadow.enabled=true
+expect_causal_critic_fail reserved-env 'must not override reserved critic variable' --set fetcher.extraEnv[0].name=AGENT_SANDBOX_CRITIC_IMAGE --set fetcher.extraEnv[0].value=attacker
+
 echo 'Helm render checks passed.'

@@ -1,0 +1,78 @@
+{{- include "prow-ai-dashboard.validateAgentSandboxCausalCritic" . -}}
+{{- if and .Values.agentSandbox.causalCritic.enabled .Values.agentSandbox.causalCritic.networkPolicy.enabled }}
+{{- $cfg := .Values.agentSandbox.causalCritic.networkPolicy -}}
+{{- if eq $cfg.mode "cilium" }}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "prow-ai-dashboard.agentSandboxCriticAdmissionName" . }}
+  namespace: {{ .Values.agentSandbox.causalCritic.namespace }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-causal-critic
+spec:
+  endpointSelector:
+    matchLabels:
+      prow-ai-dashboard/purpose: critic
+  ingress: []
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: {{ index $cfg.dnsNamespaceSelector "kubernetes.io/metadata.name" | quote }}
+            {{- toYaml $cfg.dnsPodSelector | nindent 12 }}
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    # The gateway must independently authorize the critic ServiceAccount. This
+    # rule permits only the configured high port to cluster-internal identities.
+    - toEntities: [cluster]
+      toPorts:
+        - ports:
+            - port: {{ $cfg.gatewayPort | quote }}
+              protocol: TCP
+{{- else }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "prow-ai-dashboard.agentSandboxCriticAdmissionName" . }}
+  namespace: {{ .Values.agentSandbox.causalCritic.namespace }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-causal-critic
+spec:
+  podSelector:
+    matchLabels:
+      prow-ai-dashboard/purpose: critic
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $cfg.dnsNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $cfg.dnsPodSelector | nindent 14 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $cfg.gatewayNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $cfg.gatewayPodSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $cfg.gatewayPort }}
+{{- end }}
+{{- end }}

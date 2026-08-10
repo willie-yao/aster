@@ -98,3 +98,25 @@ func TestParseOptionsAgentAnalysisShadow(t *testing.T) {
 		t.Fatalf("shadow options = %+v", cfg)
 	}
 }
+
+func TestParseOptionsCausalCriticShadow(t *testing.T) {
+	opts, _, _, err := parseOptions([]string{
+		"-ai", "-analysis-runtime=inprocess", "-causal-critic-shadow",
+		"-causal-critic-shadow-ledger=/private/critic.json",
+		"-causal-critic-shadow-max-per-run=2",
+		"-causal-critic-shadow-timeout=4m",
+		"-causal-critic-shadow-output-limit-bytes=32768",
+		"-causal-critic-shadow-gateway-endpoint=https://gateway.models.svc.cluster.local/v1",
+		"-causal-critic-shadow-gateway-model=critic-model",
+		"-causal-critic-shadow-gateway-protocol=openai-chat-completions-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := opts.CausalCritic
+	if !cfg.Enabled || cfg.LedgerPath != "/private/critic.json" || cfg.MaxPerRun != 2 || cfg.Timeout != 4*time.Minute ||
+		cfg.OutputLimitBytes != 32768 || cfg.ModelGateway.Endpoint != "https://gateway.models.svc.cluster.local/v1" ||
+		cfg.ModelGateway.Model != "critic-model" || cfg.ModelGateway.ProtocolVersion != "openai-chat-completions-v1" {
+		t.Fatalf("critic options = %+v", cfg)
+	}
+}

@@ -91,3 +91,10 @@ git push origin -f refs/tags/v1
 ```
 
 Consumers pinned to an exact tag are unaffected.
+
+## Causal critic executor image
+
+The `agent-sandbox-critic-executor` Docker target is currently CI-buildable but
+is intentionally absent from the publishing workflow. Do not add it to
+`.github/workflows/image.yml` until cold critic evaluation, secure gateway
+identity validation, and an explicit publication decision are complete.

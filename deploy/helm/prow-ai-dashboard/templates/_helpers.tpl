@@ -642,12 +642,118 @@ key, or bot token).
 {{- end -}}
 {{- end -}}
 
+
+{{/* Immutable causal critic executor image. */}}
+{{- define "prow-ai-dashboard.agentSandboxCriticExecutorImage" -}}
+{{- printf "%s@%s" .Values.agentSandbox.causalCritic.image.repository .Values.agentSandbox.causalCritic.image.digest -}}
+{{- end -}}
+
+{{/* Tokenless ServiceAccount used inside critic Sandboxes. */}}
+{{- define "prow-ai-dashboard.agentSandboxCriticWorkloadServiceAccountName" -}}
+{{- .Values.agentSandbox.causalCritic.workloadServiceAccount.name -}}
+{{- end -}}
+
+{{/* Cluster-scoped critic admission policy name. */}}
+{{- define "prow-ai-dashboard.agentSandboxCriticAdmissionName" -}}
+{{- printf "%s-agent-sandbox-critic-%s" (include "prow-ai-dashboard.fullname" .) (include "prow-ai-dashboard.orkaReleaseScope" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "prow-ai-dashboard.causalCriticLedgerPath" -}}
+{{- printf "%s/causal_critic.json" (trimSuffix "/" .Values.agentSandbox.causalCritic.ledger.mountPath) -}}
+{{- end -}}
+
+{{/* Non-secret critic runtime environment for scheduled fetcher or worker. */}}
+{{- define "prow-ai-dashboard.agentSandboxCriticEnv" -}}
+- name: AGENT_SANDBOX_CRITIC_NAMESPACE
+  value: {{ .Values.agentSandbox.causalCritic.namespace | quote }}
+- name: AGENT_SANDBOX_CRITIC_IMAGE
+  value: {{ include "prow-ai-dashboard.agentSandboxCriticExecutorImage" . | quote }}
+- name: AGENT_SANDBOX_CRITIC_SERVICE_ACCOUNT
+  value: {{ include "prow-ai-dashboard.agentSandboxCriticWorkloadServiceAccountName" . | quote }}
+- name: AGENT_SANDBOX_CRITIC_RUNTIME_CLASS
+  value: {{ .Values.agentSandbox.causalCritic.runtimeClassName | quote }}
+- name: AGENT_SANDBOX_CRITIC_MODEL_GATEWAY_ENDPOINT
+  value: {{ .Values.agentSandbox.causalCritic.modelGateway.endpoint | quote }}
+- name: AGENT_SANDBOX_CRITIC_MODEL_GATEWAY_MODEL
+  value: {{ .Values.agentSandbox.causalCritic.modelGateway.model | quote }}
+- name: AGENT_SANDBOX_CRITIC_MODEL_GATEWAY_PROTOCOL
+  value: {{ .Values.agentSandbox.causalCritic.modelGateway.protocolVersion | quote }}
+- name: AGENT_SANDBOX_CRITIC_MODEL_GATEWAY_PUBLIC_CA_PRIVATE_DNS
+  value: "false"
+- name: AGENT_SANDBOX_CRITIC_TIMEOUT
+  value: {{ .Values.agentSandbox.causalCritic.timeout | quote }}
+- name: AGENT_SANDBOX_CRITIC_OUTPUT_LIMIT_BYTES
+  value: {{ printf "%d" (int64 .Values.agentSandbox.causalCritic.outputLimitBytes) | quote }}
+- name: AGENT_SANDBOX_CRITIC_POLL_INTERVAL
+  value: {{ .Values.agentSandbox.causalCritic.pollInterval | quote }}
+- name: AGENT_SANDBOX_CRITIC_CPU_REQUEST
+  value: {{ index .Values.agentSandbox.causalCritic.resources.requests "cpu" | quote }}
+- name: AGENT_SANDBOX_CRITIC_CPU_LIMIT
+  value: {{ index .Values.agentSandbox.causalCritic.resources.limits "cpu" | quote }}
+- name: AGENT_SANDBOX_CRITIC_MEMORY_REQUEST
+  value: {{ index .Values.agentSandbox.causalCritic.resources.requests "memory" | quote }}
+- name: AGENT_SANDBOX_CRITIC_MEMORY_LIMIT
+  value: {{ index .Values.agentSandbox.causalCritic.resources.limits "memory" | quote }}
+- name: AGENT_SANDBOX_CRITIC_EPHEMERAL_STORAGE_LIMIT
+  value: {{ index .Values.agentSandbox.causalCritic.resources.limits "ephemeral-storage" | quote }}
+{{- end -}}
+
+{{/* Validate the disabled-by-default private Agent Sandbox critic. */}}
+{{- define "prow-ai-dashboard.validateAgentSandboxCausalCritic" -}}
+{{- if .Values.agentSandbox.causalCritic.enabled -}}
+  {{- $cfg := .Values.agentSandbox.causalCritic -}}
+  {{- if not .Values.ai.enabled -}}{{- fail "agentSandbox.causalCritic requires ai.enabled=true" -}}{{- end -}}
+  {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "agentSandbox.causalCritic requires analysisRuntime.type=inprocess" -}}{{- end -}}
+  {{- if .Values.orka.agentAnalysisShadow.enabled -}}{{- fail "agentSandbox.causalCritic cannot run with orka.agentAnalysisShadow" -}}{{- end -}}
+  {{- if not $cfg.namespace -}}{{- fail "agentSandbox.causalCritic.namespace is required" -}}{{- end -}}
+  {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "agentSandbox.causalCritic.namespace must differ from the dashboard release namespace" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.namespace) -}}{{- fail "agentSandbox.causalCritic.namespace must be a lowercase DNS label" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.runtimeClassName) -}}{{- fail "agentSandbox.causalCritic.runtimeClassName is required and must be a lowercase RuntimeClass name" -}}{{- end -}}
+  {{- if not (regexMatch "^[^[:space:]@]+$" $cfg.image.repository) -}}{{- fail "agentSandbox.causalCritic.image.repository is required without whitespace, credentials, or a digest" -}}{{- end -}}
+  {{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $cfg.image.digest) -}}{{- fail "agentSandbox.causalCritic.image.digest must be an immutable sha256 digest" -}}{{- end -}}
+  {{- if ne $cfg.image.pullPolicy "IfNotPresent" -}}{{- fail "agentSandbox.causalCritic.image.pullPolicy must be IfNotPresent" -}}{{- end -}}
+  {{- $workloadSA := include "prow-ai-dashboard.agentSandboxCriticWorkloadServiceAccountName" . -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $workloadSA) -}}{{- fail "agentSandbox.causalCritic.workloadServiceAccount.name is required and must be a lowercase object name" -}}{{- end -}}
+  {{- $clientSA := include "prow-ai-dashboard.agentSandboxClientServiceAccountName" . -}}
+  {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.clientServiceAccountName) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
+  {{- if not $cfg.ledger.existingClaim -}}{{- fail "agentSandbox.causalCritic.ledger.existingClaim is required" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.ledger.existingClaim) -}}{{- fail "agentSandbox.causalCritic.ledger.existingClaim must be a lowercase object name" -}}{{- end -}}
+  {{- if not (hasPrefix "/private/" $cfg.ledger.mountPath) -}}{{- fail "agentSandbox.causalCritic.ledger.mountPath must be under /private" -}}{{- end -}}
+  {{- if or (contains ".." $cfg.ledger.mountPath) (contains "//" $cfg.ledger.mountPath) -}}{{- fail "agentSandbox.causalCritic.ledger.mountPath must be canonical" -}}{{- end -}}
+  {{- if or (hasPrefix .Values.persistence.mountPath $cfg.ledger.mountPath) (hasPrefix $cfg.ledger.mountPath .Values.persistence.mountPath) -}}{{- fail "agentSandbox.causalCritic ledger must be separate from public dashboard persistence" -}}{{- end -}}
+  {{- $gateway := $cfg.modelGateway -}}
+  {{- if not (regexMatch "^https://[a-zA-Z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $gateway.endpoint) -}}{{- fail "agentSandbox.causalCritic.modelGateway.endpoint must be an absolute credential-free HTTPS URL" -}}{{- end -}}
+  {{- if not (regexMatch "^https://[^/]+[.](svc|svc[.]cluster[.]local|internal)(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $gateway.endpoint) -}}{{- fail "agentSandbox.causalCritic.modelGateway.endpoint must use internal service DNS" -}}{{- end -}}
+  {{- if or (not $gateway.model) (contains "\n" $gateway.model) (contains "\r" $gateway.model) -}}{{- fail "agentSandbox.causalCritic.modelGateway.model is required and single-line" -}}{{- end -}}
+  {{- if ne $gateway.protocolVersion "openai-chat-completions-v1" -}}{{- fail "agentSandbox.causalCritic.modelGateway.protocolVersion must be openai-chat-completions-v1" -}}{{- end -}}
+  {{- if not (regexMatch "^[1-9][0-9]*(s|m)$" (printf "%v" $cfg.timeout)) -}}{{- fail "agentSandbox.causalCritic.timeout must use positive whole seconds or minutes" -}}{{- end -}}
+  {{- if or (lt (int64 $cfg.outputLimitBytes) 4096) (gt (int64 $cfg.outputLimitBytes) 1048576) -}}{{- fail "agentSandbox.causalCritic.outputLimitBytes must be between 4096 and 1048576" -}}{{- end -}}
+  {{- if or (lt (int $cfg.maxPerRun) 1) (gt (int $cfg.maxPerRun) 10) -}}{{- fail "agentSandbox.causalCritic.maxPerRun must be between 1 and 10" -}}{{- end -}}
+  {{- if not $cfg.networkPolicy.enabled -}}{{- fail "agentSandbox.causalCritic.networkPolicy.enabled must be true" -}}{{- end -}}
+  {{- if not (has $cfg.networkPolicy.mode (list "kubernetes" "cilium")) -}}{{- fail "agentSandbox.causalCritic.networkPolicy.mode must be kubernetes or cilium" -}}{{- end -}}
+  {{- if eq (len $cfg.networkPolicy.gatewayNamespaceSelector) 0 -}}{{- fail "agentSandbox.causalCritic.networkPolicy.gatewayNamespaceSelector is required" -}}{{- end -}}
+  {{- if eq (len $cfg.networkPolicy.gatewayPodSelector) 0 -}}{{- fail "agentSandbox.causalCritic.networkPolicy.gatewayPodSelector is required" -}}{{- end -}}
+  {{- if or (lt (int $cfg.networkPolicy.gatewayPort) 1) (gt (int $cfg.networkPolicy.gatewayPort) 65535) -}}{{- fail "agentSandbox.causalCritic.networkPolicy.gatewayPort is invalid" -}}{{- end -}}
+  {{- if or (eq (len $cfg.networkPolicy.dnsNamespaceSelector) 0) (eq (len $cfg.networkPolicy.dnsPodSelector) 0) -}}{{- fail "agentSandbox.causalCritic DNS network selectors are required" -}}{{- end -}}
+  {{- range $env := concat .Values.server.extraEnv .Values.fetcher.extraEnv -}}
+    {{- if hasPrefix "AGENT_SANDBOX_CRITIC_" (default "" $env.name) -}}{{- fail (printf "extraEnv must not override reserved critic variable %s" $env.name) -}}{{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Whether scheduled/watch Fix PR reconciliation is enabled in project.yaml. */}}
-{{- define "prow-ai-dashboard.agentSandboxScheduledEnabled" -}}
+{{- define "prow-ai-dashboard.agentSandboxFixScheduledEnabled" -}}
 {{- if and .Values.agentSandbox.fixRuntime.enabled .Values.project.config -}}
   {{- $project := fromYaml .Values.project.config -}}
   {{- $projectAI := get $project "ai" | default dict -}}
   {{- $projectFix := get $projectAI "fix_prs" | default dict -}}
   {{- if (default false (get $projectFix "enabled")) -}}true{{- else -}}false{{- end -}}
 {{- else -}}false{{- end -}}
+{{- end -}}
+
+{{/* Whether any scheduled Agent Sandbox lifecycle needs the dashboard client identity. */}}
+{{- define "prow-ai-dashboard.agentSandboxScheduledEnabled" -}}
+{{- if .Values.agentSandbox.causalCritic.enabled -}}true
+{{- else -}}{{ include "prow-ai-dashboard.agentSandboxFixScheduledEnabled" . }}{{- end -}}
 {{- end -}}

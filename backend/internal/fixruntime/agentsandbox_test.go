@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentsandbox"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
@@ -214,6 +215,47 @@ func assertAppArmorMode(t *testing.T, podSpec map[string]any, required bool) {
 		if required && profile.(map[string]any)["type"] != "RuntimeDefault" {
 			t.Fatalf("%s AppArmor = %v", name, profile)
 		}
+	}
+}
+
+func TestAgentSandboxRunUsesPurposeBoundResultChannelWithoutWorkspace(t *testing.T) {
+	api := &fakeAgentSandboxAPI{
+		state: sandboxState{Exists: true, UID: "uid-1", PodName: "critic-request-1", Finished: true, FinishedReason: "PodSucceeded"},
+		logs:  `{"review":"pass"}`,
+	}
+	runtime := newAgentSandboxRuntimeForTest(api, testAgentSandboxOptions())
+	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
+		Purpose: "critic", ExecutionID: "request-1", RequestEnv: "PROW_AI_CAUSAL_CRITIC_REQUEST_B64",
+		Request: []byte(`{"version":1}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != `{"review":"pass"}` || result.FinishedReason != "PodSucceeded" || !result.Telemetry.CleanupCompleted {
+		t.Fatalf("result = %+v", result)
+	}
+	metadata := api.object["metadata"].(map[string]any)
+	if name := metadata["name"].(string); !strings.HasPrefix(name, "critic-") {
+		t.Fatalf("name = %q", name)
+	}
+	if labels := metadata["labels"].(map[string]any); labels["prow-ai-dashboard/purpose"] != "critic" || len(labels) != 4 {
+		t.Fatalf("labels = %+v", labels)
+	}
+	podTemplate := api.object["spec"].(map[string]any)["podTemplate"].(map[string]any)
+	if labels := podTemplate["metadata"].(map[string]any)["labels"].(map[string]any); labels["prow-ai-dashboard/purpose"] != "critic" || len(labels) != 2 {
+		t.Fatalf("pod labels = %+v", labels)
+	}
+	pod := podTemplate["spec"].(map[string]any)
+	if _, ok := pod["volumes"]; ok {
+		t.Fatal("read-only critic workload received writable volumes")
+	}
+	container := pod["containers"].([]any)[0].(map[string]any)
+	if _, ok := container["volumeMounts"]; ok {
+		t.Fatal("read-only critic workload received writable volume mounts")
+	}
+	env := container["env"].([]any)[0].(map[string]any)
+	if env["name"] != "PROW_AI_CAUSAL_CRITIC_REQUEST_B64" {
+		t.Fatalf("env = %+v", env)
 	}
 }
 

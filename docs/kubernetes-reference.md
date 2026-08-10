@@ -544,3 +544,27 @@ Sandbox shapes; it does not validate production AppArmor enforcement.
 The consumer separately owns the execution namespace, Agent Sandbox release,
 RuntimeClass, node pools, model gateway, image publication, registry access,
 egress enforcement, quotas, LimitRanges, and NetworkPolicies.
+
+## Agent Sandbox causal critic
+
+The `agentSandbox.causalCritic` chart section is independent from Fix PR
+execution and defaults to disabled. It runs a private sampled review only after
+in-process authoritative analysis. It does not publish a replacement diagnosis
+or participate in any write action.
+
+The chart creates separate critic RBAC and a separate fail-closed admission
+policy. Critic Sandboxes use an immutable purpose-built image, a tokenless
+workload ServiceAccount, a secure RuntimeClass, no volumes, one request
+environment value, one container, and no public repository access. A required network policy denies ingress and public egress. Standard Kubernetes
+peer selection is the default. `mode: cilium` is available for AKS Cilium/Kata
+and limits egress to cluster DNS plus the configured cluster-internal gateway
+port; the gateway must separately authorize the critic ServiceAccount.
+
+The consumer must provide a separate private ledger PVC. The worker or fetcher
+mounts this claim, but the server and public data path do not. The gateway must
+authorize the critic workload through an infrastructure identity outside the
+executor process. Network reachability alone is not authentication.
+
+See [Agent Sandbox causal critic](agent-sandbox-causal-critic.md) for the result
+contract, finalization rules, cold benchmark workflow, and remaining promotion
+gates.

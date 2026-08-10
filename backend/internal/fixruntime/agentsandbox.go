@@ -27,11 +27,12 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentsandbox"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
 const (
-	agentSandboxBackend            = "agent-sandbox"
+	agentSandboxBackend            = agentsandbox.Backend
 	agentSandboxRequestEnv         = "PROW_AI_FIX_EXECUTION_REQUEST_B64"
 	agentSandboxExecutionLabel     = "prow-ai-dashboard/execution"
 	agentSandboxContractAnnotation = "prow-ai-dashboard/execution-contract-sha256"
@@ -114,6 +115,7 @@ type AgentSandboxRuntime struct {
 var (
 	_ engineruntime.AgentRuntime        = (*AgentSandboxRuntime)(nil)
 	_ engineruntime.ManagedAgentRuntime = (*AgentSandboxRuntime)(nil)
+	_ agentsandbox.Runner               = (*AgentSandboxRuntime)(nil)
 )
 
 // NewAgentSandboxRuntime constructs the production adapter.
@@ -131,38 +133,57 @@ func newAgentSandboxRuntimeForTest(api agentSandboxAPI, opts AgentSandboxOptions
 	return &AgentSandboxRuntime{api: api, opts: opts, now: time.Now}
 }
 
-// NewAgentSandboxRuntimeFromEnv constructs the adapter from deployment environment and Kubernetes config.
+// NewAgentSandboxRuntimeFromEnv constructs the Fix PR adapter from deployment environment and Kubernetes config.
 func NewAgentSandboxRuntimeFromEnv(expectedGateway engineruntime.ModelGatewayConfig, expectedPublicCAPrivateDNS bool, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
-	outputLimit, err := parseInt64Env("AGENT_SANDBOX_OUTPUT_LIMIT_BYTES")
+	return NewAgentSandboxRunnerFromEnv("AGENT_SANDBOX_", expectedGateway, expectedPublicCAPrivateDNS, expectedTimeout, expectedOutputLimit)
+}
+
+// NewAgentSandboxRunnerFromEnv constructs a shared lifecycle runner from one reserved environment prefix.
+func NewAgentSandboxRunnerFromEnv(prefix string, expectedGateway engineruntime.ModelGatewayConfig, expectedPublicCAPrivateDNS bool, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
+	return newAgentSandboxRunnerFromEnv(prefix, "", true, expectedGateway, expectedPublicCAPrivateDNS, expectedTimeout, expectedOutputLimit)
+}
+
+// NewAgentSandboxRunnerForBenchmarkFromEnv allows an explicit disposable kubeconfig context for opt-in benchmarks.
+func NewAgentSandboxRunnerForBenchmarkFromEnv(prefix, kubeContext string, expectedGateway engineruntime.ModelGatewayConfig, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
+	if strings.TrimSpace(kubeContext) == "" {
+		return nil, fmt.Errorf("agent sandbox benchmark kube context is required")
+	}
+	return newAgentSandboxRunnerFromEnv(prefix, kubeContext, false, expectedGateway, false, expectedTimeout, expectedOutputLimit)
+}
+
+func newAgentSandboxRunnerFromEnv(prefix, kubeContext string, inClusterOnly bool, expectedGateway engineruntime.ModelGatewayConfig, expectedPublicCAPrivateDNS bool, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
+	prefix = strings.TrimSpace(prefix)
+	if !regexp.MustCompile(`^[A-Z][A-Z0-9_]*_$`).MatchString(prefix) {
+		return nil, fmt.Errorf("agent sandbox environment prefix is invalid")
+	}
+	env := func(name string) string { return strings.TrimSpace(os.Getenv(prefix + name)) }
+	outputLimit, err := parseInt64Value(prefix+"OUTPUT_LIMIT_BYTES", env("OUTPUT_LIMIT_BYTES"))
 	if err != nil {
 		return nil, err
 	}
-	timeout, err := time.ParseDuration(strings.TrimSpace(os.Getenv("AGENT_SANDBOX_TIMEOUT")))
+	timeout, err := time.ParseDuration(env("TIMEOUT"))
 	if err != nil {
 		return nil, fmt.Errorf("agent sandbox timeout: %w", err)
 	}
 	publicCAPrivateDNS := false
-	if value := strings.TrimSpace(os.Getenv("AGENT_SANDBOX_MODEL_GATEWAY_PUBLIC_CA_PRIVATE_DNS")); value != "" {
+	if value := env("MODEL_GATEWAY_PUBLIC_CA_PRIVATE_DNS"); value != "" {
 		publicCAPrivateDNS, err = strconv.ParseBool(value)
 		if err != nil {
 			return nil, fmt.Errorf("agent sandbox public CA private DNS setting is invalid")
 		}
 	}
 	opts := AgentSandboxOptions{
-		Namespace: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_NAMESPACE")), Image: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_IMAGE")),
-		ServiceAccountName: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_SERVICE_ACCOUNT")), RuntimeClassName: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_RUNTIME_CLASS")),
+		Namespace: env("NAMESPACE"), Image: env("IMAGE"), ServiceAccountName: env("SERVICE_ACCOUNT"), RuntimeClassName: env("RUNTIME_CLASS"),
 		ModelGateway: engineruntime.ModelGatewayConfig{
-			Endpoint: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_MODEL_GATEWAY_ENDPOINT")), Model: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_MODEL_GATEWAY_MODEL")),
-			ProtocolVersion: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_MODEL_GATEWAY_PROTOCOL")),
+			Endpoint: env("MODEL_GATEWAY_ENDPOINT"), Model: env("MODEL_GATEWAY_MODEL"), ProtocolVersion: env("MODEL_GATEWAY_PROTOCOL"),
 		},
 		PublicCAPrivateDNS: publicCAPrivateDNS, Timeout: timeout, OutputLimitBytes: outputLimit,
 		Resources: AgentSandboxResources{
-			CPURequest: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_CPU_REQUEST")), CPULimit: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_CPU_LIMIT")),
-			MemoryRequest: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_MEMORY_REQUEST")), MemoryLimit: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_MEMORY_LIMIT")),
-			EphemeralStorage: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_EPHEMERAL_STORAGE_LIMIT")),
+			CPURequest: env("CPU_REQUEST"), CPULimit: env("CPU_LIMIT"), MemoryRequest: env("MEMORY_REQUEST"),
+			MemoryLimit: env("MEMORY_LIMIT"), EphemeralStorage: env("EPHEMERAL_STORAGE_LIMIT"),
 		},
 	}
-	if value := strings.TrimSpace(os.Getenv("AGENT_SANDBOX_POLL_INTERVAL")); value != "" {
+	if value := env("POLL_INTERVAL"); value != "" {
 		poll, err := time.ParseDuration(value)
 		if err != nil || poll <= 0 {
 			return nil, fmt.Errorf("agent sandbox poll interval %q is invalid", value)
@@ -171,14 +192,22 @@ func NewAgentSandboxRuntimeFromEnv(expectedGateway engineruntime.ModelGatewayCon
 	}
 	opts = normalizeAgentSandboxOptions(opts)
 	if opts.ModelGateway != expectedGateway || opts.PublicCAPrivateDNS != expectedPublicCAPrivateDNS || opts.Timeout != expectedTimeout || opts.OutputLimitBytes != expectedOutputLimit {
-		return nil, fmt.Errorf("agent sandbox deployment values do not match project runtime configuration")
+		return nil, fmt.Errorf("agent sandbox deployment values do not match runtime configuration")
 	}
 	if err := validateAgentSandboxOptions(opts); err != nil {
 		return nil, err
 	}
-	cfg, err := agentSandboxInClusterConfig()
-	if err != nil {
-		return nil, fmt.Errorf("agent sandbox requires in-cluster Kubernetes configuration: %w", err)
+	var cfg *rest.Config
+	if inClusterOnly {
+		cfg, err = agentSandboxInClusterConfig()
+		if err != nil {
+			return nil, fmt.Errorf("agent sandbox requires in-cluster Kubernetes configuration: %w", err)
+		}
+	} else {
+		cfg, err = agentSandboxRESTConfig(kubeContext)
+		if err != nil {
+			return nil, fmt.Errorf("agent sandbox benchmark Kubernetes configuration: %w", err)
+		}
 	}
 	api, err := newKubeAgentSandboxAPI(cfg)
 	if err != nil {
@@ -256,8 +285,7 @@ func validateAgentSandboxOptions(opts AgentSandboxOptions) error {
 	return nil
 }
 
-func parseInt64Env(name string) (int64, error) {
-	value := strings.TrimSpace(os.Getenv(name))
+func parseInt64Value(name, value string) (int64, error) {
 	if value == "" {
 		return 0, fmt.Errorf("%s is required", name)
 	}
@@ -268,8 +296,7 @@ func parseInt64Env(name string) (int64, error) {
 	return parsed, nil
 }
 
-// Generate creates one cold-start Sandbox, retrieves its structured result,
-// independently reconstructs the patch, and deletes the Sandbox before return.
+// Generate adapts the shared Sandbox lifecycle to the Fix PR contract.
 func (r *AgentSandboxRuntime) Generate(ctx context.Context, spec engineruntime.GenerateSpec) (result engineruntime.GenerateResult, retErr error) {
 	if r == nil || r.api == nil {
 		return result, fmt.Errorf("%w: agent sandbox runtime is not configured", engineruntime.ErrUnavailable)
@@ -288,12 +315,95 @@ func (r *AgentSandboxRuntime) Generate(ctx context.Context, spec engineruntime.G
 	if err != nil {
 		return result, fmt.Errorf("agent sandbox encode request: %w", err)
 	}
-	contractHash := agentSandboxContractHash(requestJSON, r.opts)
+	raw, runErr := r.Run(ctx, agentsandbox.Spec{
+		Purpose: "fix", ExecutionID: spec.ExecutionID, RequestEnv: agentSandboxRequestEnv, Request: requestJSON,
+		Timeout: spec.Timeout, OutputLimitBytes: request.OutputLimitBytes, WritableWorkspace: true, WorkObserver: spec.WorkObserver,
+	})
+	result.Resources = raw.Resources
+	result.Telemetry = raw.Telemetry
+	result.DurationMs = max(raw.Duration.Milliseconds(), 0)
+	if strings.TrimSpace(raw.Output) == "" {
+		result.Version = engineruntime.ExecutionContractVersion
+		result.BaseSHA = request.ExpectedBaseSHA
+		result.Files = map[string]string{}
+		switch {
+		case errors.Is(runErr, context.DeadlineExceeded):
+			result.TerminalState = engineruntime.TerminalTimedOut
+			result.FailureReason = "execution deadline exceeded"
+		case errors.Is(runErr, engineruntime.ErrCancelled), errors.Is(runErr, context.Canceled):
+			result.TerminalState = engineruntime.TerminalCancelled
+			result.FailureReason = "execution cancelled"
+		default:
+			result.TerminalState = engineruntime.TerminalFailed
+			if runErr != nil {
+				result.FailureReason = safeKubernetesDiagnostic(runErr.Error())
+			}
+		}
+		result.Output = boundedSummary(result.FailureReason)
+		return result, runErr
+	}
+	result.Telemetry.FinalizationChecked = true
+	parsed, err := decodeExecutionResult(raw.Output)
+	if err != nil {
+		return result, errors.Join(fmt.Errorf("%w: agent Sandbox result: %v", engineruntime.ErrMalformedResult, err), runErr)
+	}
+	parsed.Resources = raw.Resources
+	parsed.Telemetry = result.Telemetry
+	parsed.Output = boundedSummary(parsed.StdoutSummary, parsed.StderrSummary, parsed.FailureReason)
+	if err := parsed.Validate(request); err != nil {
+		return parsed, errors.Join(fmt.Errorf("%w: agent Sandbox result: %v", engineruntime.ErrResultContract, err), runErr)
+	}
+	if raw.FinishedReason == "PodSucceeded" && parsed.TerminalState != engineruntime.TerminalSucceeded {
+		return parsed, errors.Join(fmt.Errorf("%w: succeeded Pod reported %q", engineruntime.ErrResultContract, parsed.TerminalState), runErr)
+	}
+	if raw.FinishedReason == "PodFailed" && parsed.TerminalState == engineruntime.TerminalSucceeded {
+		return parsed, errors.Join(fmt.Errorf("%w: failed Pod reported success", engineruntime.ErrResultContract), runErr)
+	}
+	parsed.Telemetry.FinalizationValid = true
+	if parsed.TerminalState != engineruntime.TerminalSucceeded {
+		if parsed.TerminalState == engineruntime.TerminalCancelled {
+			return parsed, errors.Join(fmt.Errorf("%w: %s", engineruntime.ErrCancelled, parsed.FailureReason), runErr)
+		}
+		return parsed, errors.Join(fmt.Errorf("agent Sandbox execution %s: %s", parsed.TerminalState, parsed.FailureReason), runErr)
+	}
+
+	apply := r.applyDiff
+	if apply == nil {
+		apply = engineruntime.ApplyDiff
+	}
+	files, diff, err := apply(ctx, spec.Repo, parsed.Diff)
+	if err != nil {
+		return parsed, errors.Join(fmt.Errorf("reconstructing agent Sandbox files: %w", err), runErr)
+	}
+	if err := compareExecutionFiles(parsed, files); err != nil {
+		return parsed, errors.Join(fmt.Errorf("%w: %v", engineruntime.ErrResultExtraFile, err), runErr)
+	}
+	parsed.Files = files
+	parsed.ChangedFiles = sortedFileNames(files)
+	parsed.Diff = diff
+	return parsed, runErr
+}
+
+// Run owns the business-neutral Agent Sandbox lifecycle and bounded result channel.
+func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (result agentsandbox.Result, retErr error) {
+	if r == nil || r.api == nil {
+		return result, fmt.Errorf("%w: agent sandbox runtime is not configured", engineruntime.ErrUnavailable)
+	}
+	if err := validateAgentSandboxOptions(normalizeAgentSandboxOptions(r.opts)); err != nil {
+		return result, fmt.Errorf("%w: %v", engineruntime.ErrUnavailable, err)
+	}
+	if err := agentsandbox.ValidateSpec(spec); err != nil {
+		return result, err
+	}
+	if spec.Timeout != r.opts.Timeout || spec.OutputLimitBytes != r.opts.OutputLimitBytes {
+		return result, fmt.Errorf("agent sandbox workload does not match configured timeout or output limit")
+	}
+	contractHash := agentSandboxWorkloadHash(spec, r.opts)
 	executionID := strings.TrimSpace(spec.ExecutionID)
 	if executionID == "" {
 		executionID = "contract-" + hex.EncodeToString(contractHash[:8])
 	}
-	name := agentSandboxName(executionID, contractHash[:])
+	name := agentSandboxPurposeName(spec.Purpose, executionID, contractHash[:])
 	work := engineruntime.WorkRef{Backend: agentSandboxBackend, Namespace: r.opts.Namespace, Name: name, ExecutionID: executionID}
 	if spec.WorkObserver != nil {
 		if err := spec.WorkObserver(ctx, work); err != nil {
@@ -303,9 +413,9 @@ func (r *AgentSandboxRuntime) Generate(ctx context.Context, spec engineruntime.G
 
 	started := r.now()
 	result.Telemetry.UsageStatus = "unavailable_from_agent_runtime"
-	runCtx, cancel := context.WithTimeout(ctx, time.Duration(request.TimeoutSeconds)*time.Second+agentSandboxResultGrace+5*time.Second)
+	runCtx, cancel := context.WithTimeout(ctx, spec.Timeout+agentSandboxResultGrace+5*time.Second)
 	defer cancel()
-	object := r.sandboxObject(name, requestJSON, contractHash[:], request, executionID)
+	object := r.sandboxObjectForSpec(name, spec, contractHash[:], executionID)
 	desiredState := sandboxStateFromObject(&unstructured.Unstructured{Object: object})
 	state, err := r.api.Create(runCtx, r.opts.Namespace, object)
 	if err != nil {
@@ -320,6 +430,10 @@ func (r *AgentSandboxRuntime) Generate(ctx context.Context, spec engineruntime.G
 		return result, errors.Join(fmt.Errorf("%w: create agent Sandbox: %v", engineruntime.ErrUnavailable, err), cleanupErr)
 	}
 	work.UID = state.UID
+	if work.UID != "" {
+		observed := work
+		result.Work = &observed
+	}
 	result.Resources = r.resourceMetadata(name, state)
 	if work.UID == "" {
 		cleanupErr := r.recoverAmbiguousCreate(work, desiredState)
@@ -342,83 +456,29 @@ func (r *AgentSandboxRuntime) Generate(ctx context.Context, spec engineruntime.G
 	}()
 
 	terminal, err := r.waitTerminal(runCtx, work)
+	result.Duration = r.now().Sub(started)
 	if err != nil {
-		result.Version = engineruntime.ExecutionContractVersion
-		result.BaseSHA = request.ExpectedBaseSHA
-		result.DurationMs = r.now().Sub(started).Milliseconds()
 		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-			result.TerminalState = engineruntime.TerminalTimedOut
-			result.FailureReason = "execution deadline exceeded"
 			return result, fmt.Errorf("agent Sandbox %s timed out: %w", name, context.DeadlineExceeded)
 		}
 		if errors.Is(runCtx.Err(), context.Canceled) {
-			result.TerminalState = engineruntime.TerminalCancelled
-			result.FailureReason = "execution cancelled"
 			return result, fmt.Errorf("%w: agent Sandbox %s", engineruntime.ErrCancelled, name)
 		}
 		return result, err
 	}
+	result.Resources = r.resourceMetadata(name, terminal)
+	result.FinishedReason = terminal.FinishedReason
 	result.Telemetry.TaskFinalized = true
-	result.Telemetry.TaskFinalizedMs = r.now().Sub(started).Milliseconds()
+	result.Telemetry.TaskFinalizedMs = result.Duration.Milliseconds()
 
-	logs, err := r.api.PodLogs(runCtx, r.opts.Namespace, terminal.PodName, request.OutputLimitBytes)
+	logs, err := r.api.PodLogs(runCtx, r.opts.Namespace, terminal.PodName, spec.OutputLimitBytes)
 	if err != nil {
-		result.Version = engineruntime.ExecutionContractVersion
-		result.BaseSHA = request.ExpectedBaseSHA
-		result.Files = map[string]string{}
-		result.TerminalState = engineruntime.TerminalFailed
-		result.DurationMs = max(r.now().Sub(started).Milliseconds(), 0)
-		result.Resources = r.resourceMetadata(name, terminal)
-		result.FailureReason = safeKubernetesDiagnostic(err.Error())
-		result.Output = boundedSummary(result.FailureReason)
-		if validationErr := result.Validate(request); validationErr != nil {
-			result.FailureReason = "agent Sandbox result logs are unavailable"
-			result.Output = result.FailureReason
-		}
 		return result, fmt.Errorf("%w: read agent Sandbox result: %v", engineruntime.ErrMalformedResult, err)
 	}
+	result.Output = logs
 	result.Telemetry.ResultAvailable = true
 	result.Telemetry.ResultAvailableMs = r.now().Sub(started).Milliseconds()
-	result.Telemetry.FinalizationChecked = true
-	parsed, err := decodeExecutionResult(logs)
-	if err != nil {
-		return result, fmt.Errorf("%w: agent Sandbox result: %v", engineruntime.ErrMalformedResult, err)
-	}
-	parsed.Resources = r.resourceMetadata(name, terminal)
-	parsed.Output = boundedSummary(parsed.StdoutSummary, parsed.StderrSummary, parsed.FailureReason)
-	if err := parsed.Validate(request); err != nil {
-		return parsed, fmt.Errorf("%w: agent Sandbox result: %v", engineruntime.ErrResultContract, err)
-	}
-	if terminal.FinishedReason == "PodSucceeded" && parsed.TerminalState != engineruntime.TerminalSucceeded {
-		return parsed, fmt.Errorf("%w: succeeded Pod reported %q", engineruntime.ErrResultContract, parsed.TerminalState)
-	}
-	if terminal.FinishedReason == "PodFailed" && parsed.TerminalState == engineruntime.TerminalSucceeded {
-		return parsed, fmt.Errorf("%w: failed Pod reported success", engineruntime.ErrResultContract)
-	}
-	parsed.Telemetry = result.Telemetry
-	parsed.Telemetry.FinalizationValid = true
-	if parsed.TerminalState != engineruntime.TerminalSucceeded {
-		if parsed.TerminalState == engineruntime.TerminalCancelled {
-			return parsed, fmt.Errorf("%w: %s", engineruntime.ErrCancelled, parsed.FailureReason)
-		}
-		return parsed, fmt.Errorf("agent Sandbox execution %s: %s", parsed.TerminalState, parsed.FailureReason)
-	}
-
-	apply := r.applyDiff
-	if apply == nil {
-		apply = engineruntime.ApplyDiff
-	}
-	files, diff, err := apply(runCtx, spec.Repo, parsed.Diff)
-	if err != nil {
-		return parsed, fmt.Errorf("reconstructing agent Sandbox files: %w", err)
-	}
-	if err := compareExecutionFiles(parsed, files); err != nil {
-		return parsed, fmt.Errorf("%w: %v", engineruntime.ErrResultExtraFile, err)
-	}
-	parsed.Files = files
-	parsed.ChangedFiles = sortedFileNames(files)
-	parsed.Diff = diff
-	return parsed, nil
+	return result, nil
 }
 
 // Cleanup deletes one exact Sandbox identity and waits for its Pod to disappear.
@@ -553,18 +613,24 @@ func (r *AgentSandboxRuntime) waitTerminal(ctx context.Context, work enginerunti
 	}
 }
 
-func (r *AgentSandboxRuntime) sandboxObject(name string, requestJSON, contractHash []byte, request engineruntime.ExecutionRequest, executionID string) map[string]any {
-	shutdown := r.now().Add(time.Duration(request.TimeoutSeconds)*time.Second + defaultSandboxCleanupTimeout).UTC().Format(time.RFC3339)
+func (r *AgentSandboxRuntime) sandboxObjectForSpec(name string, spec agentsandbox.Spec, contractHash []byte, executionID string) map[string]any {
+	shutdown := r.now().Add(spec.Timeout + defaultSandboxCleanupTimeout).UTC().Format(time.RFC3339)
+	labels := map[string]any{
+		"app.kubernetes.io/managed-by": "prow-ai-dashboard",
+		"agents.x-k8s.io/created-by":   "prow-ai-dashboard",
+		agentSandboxExecutionLabel:     name,
+	}
+	podLabels := map[string]any{agentSandboxExecutionLabel: name}
+	if spec.Purpose != "fix" {
+		labels["prow-ai-dashboard/purpose"] = spec.Purpose
+		podLabels["prow-ai-dashboard/purpose"] = spec.Purpose
+	}
 	return map[string]any{
 		"apiVersion": "agents.x-k8s.io/v1beta1",
 		"kind":       "Sandbox",
 		"metadata": map[string]any{
-			"name": name,
-			"labels": map[string]any{
-				"app.kubernetes.io/managed-by": "prow-ai-dashboard",
-				"agents.x-k8s.io/created-by":   "prow-ai-dashboard",
-				agentSandboxExecutionLabel:     name,
-			},
+			"name":   name,
+			"labels": labels,
 			"annotations": map[string]any{
 				agentSandboxContractAnnotation: hex.EncodeToString(contractHash),
 				agentSandboxIDAnnotation:       strings.TrimSpace(executionID),
@@ -576,11 +642,18 @@ func (r *AgentSandboxRuntime) sandboxObject(name string, requestJSON, contractHa
 			"shutdownTime":   shutdown,
 			"shutdownPolicy": "Delete",
 			"podTemplate": map[string]any{
-				"metadata": map[string]any{"labels": map[string]any{agentSandboxExecutionLabel: name}},
-				"spec":     r.workloadPodSpec(requestJSON, request),
+				"metadata": map[string]any{"labels": podLabels},
+				"spec":     r.sandboxWorkloadPodSpec(spec),
 			},
 		},
 	}
+}
+
+func (r *AgentSandboxRuntime) sandboxObject(name string, requestJSON, contractHash []byte, request engineruntime.ExecutionRequest, executionID string) map[string]any {
+	return r.sandboxObjectForSpec(name, agentsandbox.Spec{
+		Purpose: "fix", RequestEnv: agentSandboxRequestEnv, Request: requestJSON,
+		Timeout: time.Duration(request.TimeoutSeconds) * time.Second, OutputLimitBytes: request.OutputLimitBytes, WritableWorkspace: true,
+	}, contractHash, executionID)
 }
 
 func (r *AgentSandboxRuntime) resourceMetadata(name string, state sandboxState) engineruntime.ResourceMetadata {
@@ -700,6 +773,17 @@ func boundedSummary(values ...string) string {
 	return value
 }
 
+func agentSandboxWorkloadHash(spec agentsandbox.Spec, opts AgentSandboxOptions) [sha256.Size]byte {
+	metadata, _ := json.Marshal(struct {
+		Purpose           string `json:"purpose"`
+		RequestEnv        string `json:"request_env"`
+		Timeout           string `json:"timeout"`
+		OutputLimitBytes  int64  `json:"output_limit_bytes"`
+		WritableWorkspace bool   `json:"writable_workspace"`
+	}{spec.Purpose, spec.RequestEnv, spec.Timeout.String(), spec.OutputLimitBytes, spec.WritableWorkspace})
+	return agentSandboxContractHash(append(append(append([]byte(nil), metadata...), 0), spec.Request...), opts)
+}
+
 func agentSandboxContractHash(requestJSON []byte, opts AgentSandboxOptions) [sha256.Size]byte {
 	hash := sha256.New()
 	for _, value := range [][]byte{
@@ -716,6 +800,10 @@ func agentSandboxContractHash(requestJSON []byte, opts AgentSandboxOptions) [sha
 }
 
 func agentSandboxName(executionID string, requestHash []byte) string {
+	return agentSandboxPurposeName("fix", executionID, requestHash)
+}
+
+func agentSandboxPurposeName(purpose, executionID string, requestHash []byte) string {
 	prefix := strings.ToLower(strings.TrimSpace(executionID))
 	var b strings.Builder
 	for _, r := range prefix {
@@ -725,12 +813,13 @@ func agentSandboxName(executionID string, requestHash []byte) string {
 	}
 	prefix = strings.Trim(b.String(), "-")
 	if prefix == "" {
-		prefix = "fix"
+		prefix = purpose
 	}
-	if len(prefix) > 32 {
-		prefix = strings.Trim(prefix[:32], "-")
+	maxPrefix := min(32, 63-len(purpose)-14)
+	if len(prefix) > maxPrefix {
+		prefix = strings.Trim(prefix[:maxPrefix], "-")
 	}
-	return "fix-" + prefix + "-" + hex.EncodeToString(requestHash[:6])
+	return purpose + "-" + prefix + "-" + hex.EncodeToString(requestHash[:6])
 }
 
 type kubeAgentSandboxAPI struct {

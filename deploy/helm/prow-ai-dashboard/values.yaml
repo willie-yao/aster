@@ -88,7 +88,8 @@ analysisRuntime:
 
 # Agent Sandbox is a consumer-installed execution backend for Fix PR previews.
 # The chart never installs the Agent Sandbox CRD/controller, a secure RuntimeClass,
-# execution namespace, model gateway, network policy, or node infrastructure.
+# execution namespace, model gateway, Fix PR network policy, or node infrastructure.
+# The optional causal critic can create only its own restrictive NetworkPolicy.
 agentSandbox:
   fixRuntime:
     enabled: false
@@ -139,6 +140,52 @@ agentSandbox:
         cpu: "1"
         memory: 512Mi
         ephemeral-storage: 256Mi
+  causalCritic:
+    enabled: false
+    # Existing consumer-owned namespace containing private critic Sandboxes.
+    namespace: ""
+    runtimeClassName: ""
+    image:
+      repository: ""
+      digest: ""
+      pullPolicy: IfNotPresent
+    workloadServiceAccount:
+      create: false
+      name: ""
+    modelGateway:
+      # Internal HTTPS gateway only. Direct provider endpoints are rejected.
+      endpoint: ""
+      model: ""
+      protocolVersion: openai-chat-completions-v1
+    timeout: 5m
+    outputLimitBytes: 65536
+    maxPerRun: 1
+    pollInterval: 250ms
+    ledger:
+      # Existing private PVC. The chart does not create or share it with public data.
+      existingClaim: ""
+      mountPath: /private/causal-critic
+    networkPolicy:
+      # Required when enabled. Use cilium on AKS Cilium/Kata, where the
+      # Kubernetes NetworkPolicy service peer does not admit cross-node Kata traffic.
+      mode: kubernetes
+      enabled: false
+      gatewayNamespaceSelector: {}
+      gatewayPodSelector: {}
+      gatewayPort: 443
+      dnsNamespaceSelector:
+        kubernetes.io/metadata.name: kube-system
+      dnsPodSelector:
+        k8s-app: kube-dns
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+        ephemeral-storage: 32Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+        ephemeral-storage: 32Mi
   rbac:
     # Creates the namespace-scoped Role/RoleBinding and optionally the client SA.
     create: true

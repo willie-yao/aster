@@ -25,6 +25,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/causalcritic"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
@@ -92,6 +93,16 @@ type ShadowAnalysisOptions struct {
 	Retries      int
 }
 
+// CausalCriticOptions configure the private sampled Agent Sandbox review path.
+type CausalCriticOptions struct {
+	Enabled          bool
+	LedgerPath       string
+	MaxPerRun        int
+	Timeout          time.Duration
+	OutputLimitBytes int64
+	ModelGateway     runtime.ModelGatewayConfig
+}
+
 // AnalysisRuntimeOptions select where single-failure analysis runs.
 type AnalysisRuntimeOptions struct {
 	Type          string
@@ -106,6 +117,7 @@ type Options struct {
 	Timeout         time.Duration
 	AnalysisRuntime AnalysisRuntimeOptions
 	ShadowAnalysis  ShadowAnalysisOptions
+	CausalCritic    CausalCriticOptions
 	// IncludePresubmits fetches presubmit jobs in addition to periodics.
 	// It is combined with cfg.Source.IncludePresubmits, so either source can
 	// enable presubmits.
@@ -149,6 +161,9 @@ type pipeline struct {
 	shadowAppend         shadowLedgerAppender
 	shadowClaim          shadowLedgerClaimer
 	shadowNow            func() time.Time
+	criticReviewer       causalcritic.Reviewer
+	criticFreeze         shadowEvidenceFreezer
+	criticNow            func() time.Time
 }
 
 // refreshResult carries the outputs a pass needs for its side effects.
@@ -189,6 +204,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		opts.AnalysisRuntime.Type = AnalysisRuntimeInProcess
 	}
 	normalizeShadowAnalysisOptions(&opts.ShadowAnalysis)
+	normalizeCausalCriticOptions(&opts.CausalCritic)
 	if err := validateAnalysisRuntimeOptions(opts); err != nil {
 		return nil, err
 	}
@@ -213,6 +229,9 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	if enableAI && aiToken == "" {
 		if opts.ShadowAnalysis.Enabled {
 			return nil, fmt.Errorf("agent analysis shadow requires AI_TOKEN for authoritative in-process analysis")
+		}
+		if opts.CausalCritic.Enabled {
+			return nil, fmt.Errorf("causal critic shadow requires AI_TOKEN for authoritative in-process analysis")
 		}
 		if opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
 			return nil, fmt.Errorf("orka-container analysis requires AI_TOKEN for the in-process cross-build pattern pass")
@@ -312,6 +331,7 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 		return nil, err
 	}
 	defer p.runShadowAnalysis(ctx, res)
+	defer p.runCausalCritic(ctx, res)
 	if p.opts.SkipSideEffects {
 		p.skipProgressSideEffects()
 		return jobs, nil
@@ -334,6 +354,9 @@ func passExecutionContexts(root, bounded context.Context, runtimeType string) (c
 
 func validateAnalysisRuntimeOptions(opts Options) error {
 	if err := validateShadowAnalysisOptions(opts); err != nil {
+		return err
+	}
+	if err := validateCausalCriticOptions(opts); err != nil {
 		return err
 	}
 	switch opts.AnalysisRuntime.Type {

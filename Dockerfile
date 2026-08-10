@@ -1,6 +1,5 @@
-# Multi-stage build producing the default minimal engine image plus optional
-# git-capable remote-fix and local OpenCode runtimes. All targets include the
-# server, fetcher, worker, and SPA.
+# Multi-stage build producing the default engine image plus specialized local
+# fixer, remote-fix, Agent Sandbox fix, and causal-critic targets.
 
 # Stage 1: build the SPA. Default base path "/" suits server mode.
 FROM node:20-alpine AS web
@@ -22,7 +21,8 @@ ARG IMAGE_TAG=dev
 RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/fetcher ./cmd/fetcher \
  && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/worker ./cmd/worker \
  && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/server ./cmd/server \
- && CGO_ENABLED=0 go build -o /out/fixexecutor ./cmd/fixexecutor
+ && CGO_ENABLED=0 go build -o /out/fixexecutor ./cmd/fixexecutor \
+ && CGO_ENABLED=0 go build -o /out/criticexecutor ./cmd/criticexecutor
 
 # Optional full engine image for local sandboxed OpenCode fix generation.
 FROM node:20-slim AS fixer-runtime
@@ -63,6 +63,13 @@ ENV HOME=/tmp/home \
 USER 65532:65532
 WORKDIR /workspace
 ENTRYPOINT ["/usr/local/bin/fixexecutor"]
+
+# Purpose-built credential-free causal critic for consumer-installed Agent Sandbox.
+# It contains no shell, Git, coding-agent harness, package manager, or write tools.
+FROM gcr.io/distroless/static-debian12:nonroot AS agent-sandbox-critic-executor
+COPY --from=build /out/criticexecutor /usr/local/bin/criticexecutor
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/criticexecutor"]
 
 # Minimal git-capable engine for reconstructing patches returned by remote fix
 # runtimes such as Agent Sandbox. It intentionally omits OpenCode and srt.

@@ -1,0 +1,90 @@
+{{- include "prow-ai-dashboard.validateAgentSandboxCausalCritic" . -}}
+{{- if .Values.agentSandbox.causalCritic.enabled }}
+{{- $cfg := .Values.agentSandbox.causalCritic -}}
+{{- $clientSA := include "prow-ai-dashboard.agentSandboxClientServiceAccountName" . -}}
+{{- $requester := printf "system:serviceaccount:%s:%s" .Release.Namespace $clientSA -}}
+{{- $image := include "prow-ai-dashboard.agentSandboxCriticExecutorImage" . -}}
+{{- $workloadSA := include "prow-ai-dashboard.agentSandboxCriticWorkloadServiceAccountName" . -}}
+{{- $timeoutText := printf "%v" $cfg.timeout -}}
+{{- $timeoutSeconds := 0 -}}
+{{- if hasSuffix "m" $timeoutText -}}
+  {{- $timeoutSeconds = mul (trimSuffix "m" $timeoutText | int) 60 -}}
+{{- else -}}
+  {{- $timeoutSeconds = trimSuffix "s" $timeoutText | int -}}
+{{- end -}}
+{{- $activeDeadline := add $timeoutSeconds 15 -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "prow-ai-dashboard.agentSandboxCriticAdmissionName" . }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-causal-critic
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["agents.x-k8s.io"]
+        apiVersions: ["v1beta1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["sandboxes"]
+        scope: Namespaced
+  matchConditions:
+    - name: execution-namespace
+      expression: {{ printf "object.metadata.namespace == %s" (toJson $cfg.namespace) | quote }}
+    - name: dashboard-created-critic
+      expression: {{ printf "request.operation == 'CREATE' ? request.userInfo.username == %s : (has(oldObject.metadata.labels) && oldObject.metadata.labels['prow-ai-dashboard/purpose'] == 'critic')" (toJson $requester) | quote }}
+  variables:
+    - name: pod
+      expression: "object.spec.podTemplate.spec"
+    - name: container
+      expression: "object.spec.podTemplate.spec.containers[0]"
+  validations:
+    - expression: "request.operation != 'UPDATE' || object.spec == oldObject.spec"
+      message: "dashboard critic Sandbox workload specs are immutable"
+    - expression: "request.operation != 'UPDATE' || object.metadata.labels == oldObject.metadata.labels"
+      message: "dashboard critic Sandbox labels are immutable"
+    - expression: "request.operation != 'UPDATE' || (object.metadata.annotations['prow-ai-dashboard/execution-contract-sha256'] == oldObject.metadata.annotations['prow-ai-dashboard/execution-contract-sha256'] && object.metadata.annotations['prow-ai-dashboard/execution-id'] == oldObject.metadata.annotations['prow-ai-dashboard/execution-id'])"
+      message: "dashboard critic execution identity is immutable"
+    - expression: "request.operation != 'CREATE' || (object.metadata.name.matches('^critic-[a-z0-9-]+-[0-9a-f]{12}$') && has(object.metadata.labels) && size(object.metadata.labels) == 4 && object.metadata.labels['app.kubernetes.io/managed-by'] == 'prow-ai-dashboard' && object.metadata.labels['agents.x-k8s.io/created-by'] == 'prow-ai-dashboard' && object.metadata.labels['prow-ai-dashboard/execution'] == object.metadata.name && object.metadata.labels['prow-ai-dashboard/purpose'] == 'critic' && (!has(object.metadata.finalizers) || size(object.metadata.finalizers) == 0))"
+      message: "dashboard critic Sandboxes require exact content-addressed metadata"
+    - expression: "request.operation != 'CREATE' || (has(object.metadata.annotations) && size(object.metadata.annotations) == 2 && object.metadata.annotations['prow-ai-dashboard/execution-contract-sha256'].matches('^[0-9a-f]{64}$') && size(object.metadata.annotations['prow-ai-dashboard/execution-id']) > 0)"
+      message: "dashboard critic Sandboxes require exact execution annotations"
+    - expression: "has(object.spec.shutdownTime) && object.spec.shutdownPolicy == 'Delete' && object.spec.service == false && (!has(object.spec.volumeClaimTemplates) || size(object.spec.volumeClaimTemplates) == 0)"
+      message: "dashboard critic Sandboxes require bounded delete lifecycle without Services or PVCs"
+    - expression: "has(object.spec.podTemplate.metadata.labels) && size(object.spec.podTemplate.metadata.labels) == 2 && object.spec.podTemplate.metadata.labels['prow-ai-dashboard/execution'] == object.metadata.name && object.spec.podTemplate.metadata.labels['prow-ai-dashboard/purpose'] == 'critic' && (!has(object.spec.podTemplate.metadata.annotations) || size(object.spec.podTemplate.metadata.annotations) == 0)"
+      message: "dashboard critic Pod metadata is fixed"
+    - expression: {{ printf "variables.pod.serviceAccountName == %s && variables.pod.automountServiceAccountToken == false && variables.pod.runtimeClassName == %s" (toJson $workloadSA) (toJson $cfg.runtimeClassName) | quote }}
+      message: "dashboard critic workload identity and RuntimeClass must match configuration"
+    - expression: {{ printf "variables.pod.restartPolicy == 'Never' && variables.pod.activeDeadlineSeconds == %d && variables.pod.terminationGracePeriodSeconds == 5 && variables.pod.enableServiceLinks == false" $activeDeadline | quote }}
+      message: "dashboard critic Pod lifecycle must match configured bounds"
+    - expression: "variables.pod.securityContext.runAsNonRoot == true && variables.pod.securityContext.runAsUser == 65532 && variables.pod.securityContext.runAsGroup == 65532 && variables.pod.securityContext.fsGroup == 65532 && variables.pod.securityContext.seccompProfile.type == 'RuntimeDefault' && variables.pod.securityContext.appArmorProfile.type == 'RuntimeDefault'"
+      message: "dashboard critic Pod security context is fixed"
+    - expression: "size(variables.pod.containers) == 1 && variables.container.name == 'executor'"
+      message: "dashboard critic Sandboxes allow exactly one executor container"
+    - expression: {{ printf "variables.container.image == %s && variables.container.imagePullPolicy == 'IfNotPresent'" (toJson $image) | quote }}
+      message: "dashboard critic image must match the immutable configured digest"
+    - expression: "variables.container.securityContext.allowPrivilegeEscalation == false && variables.container.securityContext.readOnlyRootFilesystem == true && variables.container.securityContext.runAsNonRoot == true && variables.container.securityContext.runAsUser == 65532 && variables.container.securityContext.runAsGroup == 65532 && variables.container.securityContext.seccompProfile.type == 'RuntimeDefault' && variables.container.securityContext.appArmorProfile.type == 'RuntimeDefault' && variables.container.securityContext.capabilities.drop == ['ALL']"
+      message: "dashboard critic container security context is fixed"
+    - expression: "size(variables.container.env) == 1 && variables.container.env[0].name == 'PROW_AI_CAUSAL_CRITIC_REQUEST_B64' && has(variables.container.env[0].value) && size(variables.container.env[0].value) > 0 && size(variables.container.env[0].value) <= 131072 && !has(variables.container.env[0].valueFrom)"
+      message: "dashboard critic accepts only one bounded non-secret request value"
+    - expression: {{ printf "size(variables.container.resources.requests) == 3 && size(variables.container.resources.limits) == 3 && variables.container.resources.requests['cpu'] == %s && variables.container.resources.requests['memory'] == %s && variables.container.resources.requests['ephemeral-storage'] == %s && variables.container.resources.limits['cpu'] == %s && variables.container.resources.limits['memory'] == %s && variables.container.resources.limits['ephemeral-storage'] == %s" (toJson (index $cfg.resources.requests "cpu")) (toJson (index $cfg.resources.requests "memory")) (toJson (index $cfg.resources.requests "ephemeral-storage")) (toJson (index $cfg.resources.limits "cpu")) (toJson (index $cfg.resources.limits "memory")) (toJson (index $cfg.resources.limits "ephemeral-storage")) | quote }}
+      message: "dashboard critic resources must match configured bounds"
+    - expression: "(!has(variables.container.volumeMounts) || size(variables.container.volumeMounts) == 0) && (!has(variables.pod.volumes) || size(variables.pod.volumes) == 0)"
+      message: "dashboard critic Sandboxes must not receive writable filesystems"
+    - expression: "(!has(variables.pod.imagePullSecrets) || size(variables.pod.imagePullSecrets) == 0) && (!has(variables.pod.hostAliases) || size(variables.pod.hostAliases) == 0) && (!has(variables.pod.hostNetwork) || variables.pod.hostNetwork == false) && (!has(variables.pod.hostPID) || variables.pod.hostPID == false) && (!has(variables.pod.hostIPC) || variables.pod.hostIPC == false) && (!has(variables.pod.initContainers) || size(variables.pod.initContainers) == 0) && (!has(variables.pod.ephemeralContainers) || size(variables.pod.ephemeralContainers) == 0)"
+      message: "dashboard critic Sandboxes must not add host access or extra containers"
+    - expression: "(!has(variables.pod.nodeSelector) || size(variables.pod.nodeSelector) == 0) && (!has(variables.pod.tolerations) || size(variables.pod.tolerations) == 0) && !has(variables.pod.nodeName) && !has(variables.pod.affinity) && !has(variables.pod.schedulerName) && !has(variables.pod.priorityClassName) && (!has(variables.pod.topologySpreadConstraints) || size(variables.pod.topologySpreadConstraints) == 0)"
+      message: "dashboard critic Sandboxes must not override placement"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "prow-ai-dashboard.agentSandboxCriticAdmissionName" . }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-causal-critic
+spec:
+  policyName: {{ include "prow-ai-dashboard.agentSandboxCriticAdmissionName" . }}
+  validationActions: [Deny]
+{{- end }}

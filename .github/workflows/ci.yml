@@ -71,3 +71,12 @@ jobs:
         run: docker build --target remote-fixer-runtime -t prow-ai-dashboard/remote-fixer:ci .
       - name: Test git-only runtime
         run: hack/test-remote-fixer-image.sh prow-ai-dashboard/remote-fixer:ci
+
+  agent-sandbox-critic-executor-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build --target agent-sandbox-critic-executor -t prow-ai-dashboard/agent-sandbox-critic-executor:ci .
+      - name: Test credential-free runtime
+        run: hack/test-agent-sandbox-critic-image.sh prow-ai-dashboard/agent-sandbox-critic-executor:ci

@@ -288,3 +288,17 @@ service endpoint requires an executor image whose CA bundle trusts the gateway.
 A privately resolved public FQDN with a publicly trusted certificate may set
 `ai.fix_prs.agent_runtime.model_gateway.public_ca_private_dns: true`; direct
 known provider endpoints remain forbidden.
+
+## Independent critic gateway
+
+The Agent Sandbox causal critic uses a stricter form of the model-gateway
+boundary. It accepts only internal HTTPS service DNS, follows no redirects, and
+sends no provider or gateway credential header. Model identity, provider
+identity, token counts, and cost are recorded only when the gateway response
+reports them.
+
+The target gateway must authenticate and authorize the critic through an
+infrastructure mechanism unavailable to the executor process, such as ambient
+service-mesh workload identity. A required NetworkPolicy limits critic egress to
+DNS and selected gateway pods, but that policy does not replace gateway-side
+authorization.

@@ -7,6 +7,7 @@ import (
 
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentsandbox"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
@@ -28,8 +29,8 @@ func (c appArmorCapability) String() string {
 	}
 }
 
-func (r *AgentSandboxRuntime) workloadPodSpec(requestJSON []byte, request engineruntime.ExecutionRequest) map[string]any {
-	activeDeadline := request.TimeoutSeconds + int64(agentSandboxResultGrace/time.Second)
+func (r *AgentSandboxRuntime) sandboxWorkloadPodSpec(spec agentsandbox.Spec) map[string]any {
+	activeDeadline := int64(spec.Timeout.Round(time.Second)/time.Second) + int64(agentSandboxResultGrace/time.Second)
 	podSecurity := map[string]any{
 		"runAsNonRoot":   true,
 		"runAsUser":      int64(65532),
@@ -63,28 +64,38 @@ func (r *AgentSandboxRuntime) workloadPodSpec(requestJSON []byte, request engine
 			"image":           r.opts.Image,
 			"imagePullPolicy": "IfNotPresent",
 			"env": []any{map[string]any{
-				"name":  agentSandboxRequestEnv,
-				"value": base64.StdEncoding.EncodeToString(requestJSON),
+				"name":  spec.RequestEnv,
+				"value": base64.StdEncoding.EncodeToString(spec.Request),
 			}},
 			"securityContext": containerSecurity,
 			"resources": map[string]any{
 				"requests": map[string]any{"cpu": r.opts.Resources.CPURequest, "memory": r.opts.Resources.MemoryRequest, "ephemeral-storage": r.opts.Resources.EphemeralStorage},
 				"limits":   map[string]any{"cpu": r.opts.Resources.CPULimit, "memory": r.opts.Resources.MemoryLimit, "ephemeral-storage": r.opts.Resources.EphemeralStorage},
 			},
-			"volumeMounts": []any{
-				map[string]any{"name": "workspace", "mountPath": "/workspace"},
-				map[string]any{"name": "tmp", "mountPath": "/tmp"},
-			},
 		}},
-		"volumes": []any{
+	}
+	if spec.WritableWorkspace {
+		container := podSpec["containers"].([]any)[0].(map[string]any)
+		container["volumeMounts"] = []any{
+			map[string]any{"name": "workspace", "mountPath": "/workspace"},
+			map[string]any{"name": "tmp", "mountPath": "/tmp"},
+		}
+		podSpec["volumes"] = []any{
 			map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": r.opts.Resources.EphemeralStorage}},
 			map[string]any{"name": "tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
-		},
+		}
 	}
 	if r.opts.RuntimeClassName != "" {
 		podSpec["runtimeClassName"] = r.opts.RuntimeClassName
 	}
 	return podSpec
+}
+
+func (r *AgentSandboxRuntime) workloadPodSpec(requestJSON []byte, request engineruntime.ExecutionRequest) map[string]any {
+	return r.sandboxWorkloadPodSpec(agentsandbox.Spec{
+		Purpose: "fix", RequestEnv: agentSandboxRequestEnv, Request: requestJSON,
+		Timeout: time.Duration(request.TimeoutSeconds) * time.Second, OutputLimitBytes: request.OutputLimitBytes, WritableWorkspace: true,
+	})
 }
 
 func (r *AgentSandboxRuntime) preflightPodObject(namespace, name string, requestJSON []byte, request engineruntime.ExecutionRequest) map[string]any {
