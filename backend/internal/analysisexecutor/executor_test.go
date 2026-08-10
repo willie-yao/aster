@@ -3,6 +3,7 @@ package analysisexecutor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,7 +52,7 @@ func TestExecuteRejectsWorkspaceMutation(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(root, agentanalysis.WorkspaceArtifactsDir, "logs", "build.log"), []byte("changed\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			return writeExecutorAnalysis(root, false)
+			return errors.New("agent failed after mutation")
 		},
 	})
 	if result.TerminalState != engineruntime.TerminalFailed || !strings.Contains(result.FailureReason, "workspace changed") {

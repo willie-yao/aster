@@ -114,11 +114,15 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	if bin == "" {
 		bin = defaultOpenCodeBin
 	}
-	if err := run(ctx, OpenCodeSpec{Bin: bin, WorkDir: workspaceRoot, HomeDir: home, TempDir: temp, Gateway: request.ModelGateway, Prompt: prompt, MaxSteps: request.MaxSteps}); err != nil {
-		return fail(stateForContext(ctx), fmt.Sprintf("run OpenCode analyzer: %v", err))
+	runErr := run(ctx, OpenCodeSpec{Bin: bin, WorkDir: workspaceRoot, HomeDir: home, TempDir: temp, Gateway: request.ModelGateway, Prompt: prompt, MaxSteps: request.MaxSteps})
+	verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	verifyErr := verifyInputs(verifyCtx, request, sourceRoot, artifactRoot)
+	verifyCancel()
+	if verifyErr != nil {
+		return fail(engineruntime.TerminalFailed, fmt.Sprintf("workspace changed during analysis: %v", verifyErr))
 	}
-	if err := verifyInputs(ctx, request, sourceRoot, artifactRoot); err != nil {
-		return fail(stateForContext(ctx), fmt.Sprintf("workspace changed during analysis: %v", err))
+	if runErr != nil {
+		return fail(stateForContext(ctx), fmt.Sprintf("run OpenCode analyzer: %v", runErr))
 	}
 	raw, err := readSingleResult(resultRoot, request.OutputLimitBytes)
 	if err != nil {
