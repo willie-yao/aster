@@ -94,7 +94,7 @@ func TestExecuteUsesCredentialFreeGatewayAndReportedUsage(t *testing.T) {
 	defer server.Close()
 	request = executorRequest(t, "https://gateway.models.svc.cluster.local/v1")
 	result := Execute(t.Context(), request, Options{HTTPClient: internalGatewayTestClient(t, server)})
-	if result.TerminalState != engineruntime.TerminalSucceeded || result.Review == nil || result.Usage.Status != "reported" || result.Usage.Model != "gateway-reported-model" || result.Usage.Provider != "github-copilot" || result.Usage.NanoAIU != 12345 || result.Usage.InputTokens != 120 || result.Usage.CachedInputTokens != 20 || result.Usage.CostUSD != "0.0012" {
+	if result.TerminalState != engineruntime.TerminalSucceeded || result.FailureCode != "" || result.Review == nil || result.Usage.Status != "reported" || result.Usage.Model != "gateway-reported-model" || result.Usage.Provider != "github-copilot" || result.Usage.NanoAIU != 12345 || result.Usage.InputTokens != 120 || result.Usage.CachedInputTokens != 20 || result.Usage.CostUSD != "0.0012" {
 		t.Fatalf("result = %+v", result)
 	}
 	if sawAuthorization || sawAPIKey {
@@ -112,7 +112,7 @@ func TestExecuteRejectsMalformedReview(t *testing.T) {
 	defer server.Close()
 	request := executorRequest(t, "https://gateway.models.svc.cluster.local/v1")
 	result := Execute(t.Context(), request, Options{HTTPClient: internalGatewayTestClient(t, server)})
-	if result.TerminalState != engineruntime.TerminalFailed || result.Review != nil || !strings.Contains(result.FailureReason, "deterministic validation") {
+	if result.TerminalState != engineruntime.TerminalFailed || result.FailureCode != "validation_review_identity" || result.Review != nil || !strings.Contains(result.FailureReason, "deterministic validation") {
 		t.Fatalf("result = %+v", result)
 	}
 }
@@ -122,7 +122,7 @@ func TestExecuteCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	result := Execute(ctx, request, Options{HTTPClient: &http.Client{Timeout: time.Second}})
-	if result.TerminalState != engineruntime.TerminalCancelled {
+	if result.TerminalState != engineruntime.TerminalCancelled || result.FailureCode != "execution_cancelled" {
 		t.Fatalf("result = %+v", result)
 	}
 }
@@ -137,7 +137,7 @@ func TestExecuteRejectsGatewayRedirect(t *testing.T) {
 	defer redirect.Close()
 	request := executorRequest(t, "https://gateway.models.svc.cluster.local/v1")
 	result := Execute(t.Context(), request, Options{HTTPClient: internalGatewayTestClient(t, redirect)})
-	if result.TerminalState != engineruntime.TerminalFailed || targetCalled {
+	if result.TerminalState != engineruntime.TerminalFailed || result.FailureCode != "gateway_request" || targetCalled {
 		t.Fatalf("result=%+v targetCalled=%v", result, targetCalled)
 	}
 }
@@ -170,7 +170,7 @@ func TestExecutionResultFitsConfiguredOutputLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bounded.TerminalState != engineruntime.TerminalFailed || !strings.Contains(bounded.FailureReason, "output bound") || int64(len(data)+1) > request.OutputLimit {
+	if bounded.TerminalState != engineruntime.TerminalFailed || bounded.FailureCode != "output_bound" || !strings.Contains(bounded.FailureReason, "output bound") || int64(len(data)+1) > request.OutputLimit {
 		t.Fatalf("bounded=%+v bytes=%d", bounded, len(data)+1)
 	}
 }

@@ -22,16 +22,22 @@ import (
 )
 
 const (
-	LedgerSchemaVersion = 2
-	maxLedgerRecords    = 100
-	maxLedgerAttempts   = 4096
-	maxLedgerBytes      = 4 << 20
-	ledgerRetention     = 30 * 24 * time.Hour
-	pendingRetention    = time.Hour
-	pendingRecoveryAge  = 35 * time.Minute
+	LedgerSchemaVersion         = 3
+	previousLedgerSchemaVersion = 2
+	maxLedgerRecords            = 100
+	maxLedgerAttempts           = 4096
+	maxLedgerPreflights         = 4096
+	maxLedgerBytes              = 4 << 20
+	ledgerRetention             = 30 * 24 * time.Hour
+	pendingRetention            = time.Hour
+	pendingRecoveryAge          = 35 * time.Minute
 )
 
-var ErrTrialAlreadyAttempted = errors.New("causal critic trial already attempted")
+var (
+	ErrTrialAlreadyAttempted = errors.New("causal critic trial already attempted")
+	ErrTrialDetailsPruned    = errors.New("causal critic trial details pruned")
+	ErrTrialPersistence      = errors.New("causal critic trial persistence failed")
+)
 
 // TrialStatus classifies one independent critic execution without granting authority.
 type TrialStatus string
@@ -86,6 +92,7 @@ type TrialRecord struct {
 	RuntimeIdentity   string                         `json:"runtime_identity"`
 	Status            TrialStatus                    `json:"status"`
 	ErrorCode         string                         `json:"error_code,omitempty"`
+	FailureCode       string                         `json:"failure_code,omitempty"`
 	FailureReason     string                         `json:"failure_reason,omitempty"`
 	Metadata          TrialMetadata                  `json:"metadata"`
 	EvidenceHash      string                         `json:"evidence_hash"`
@@ -109,10 +116,11 @@ type TrialAttempt struct {
 
 // Ledger stores bounded private critic comparisons.
 type Ledger struct {
-	SchemaVersion int            `json:"schema_version"`
-	UpdatedAt     string         `json:"updated_at,omitempty"`
-	Attempts      []TrialAttempt `json:"attempts,omitempty"`
-	Records       []TrialRecord  `json:"records"`
+	SchemaVersion int                `json:"schema_version"`
+	UpdatedAt     string             `json:"updated_at,omitempty"`
+	Preflights    []PreflightAttempt `json:"preflight_attempts,omitempty"`
+	Attempts      []TrialAttempt     `json:"attempts,omitempty"`
+	Records       []TrialRecord      `json:"records"`
 }
 
 // TrialSpec configures one persisted private critic run.
@@ -167,14 +175,23 @@ func RunTrial(ctx context.Context, reviewer Reviewer, spec TrialSpec) (TrialReco
 		return TrialRecord{}, err
 	}
 	if !claimed {
-		existing, found, lookupErr := loadTrialByAttempt(spec.PublicDir, spec.LedgerPath, attemptHash)
+		existing, detailed, found, lookupErr := loadTrialByAttempt(spec.PublicDir, spec.LedgerPath, attemptHash, record)
 		if lookupErr != nil {
 			return TrialRecord{}, errors.Join(fmt.Errorf("%w: %s repetition %d", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition), lookupErr)
 		}
-		if found {
+		if found && detailed {
 			return existing, fmt.Errorf("%w: %s repetition %d", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition)
 		}
-		return TrialRecord{}, fmt.Errorf("%w: %s repetition %d detailed record was pruned", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition)
+		if found {
+			return existing, errors.Join(
+				fmt.Errorf("%w: %s repetition %d", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition),
+				fmt.Errorf("%w: %s", ErrTrialDetailsPruned, attemptHash),
+			)
+		}
+		return record, errors.Join(
+			fmt.Errorf("%w: %s repetition %d", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition),
+			fmt.Errorf("%w: %s", ErrTrialDetailsPruned, attemptHash),
+		)
 	}
 	started := now()
 	observer := func(observerCtx context.Context, work engineruntime.WorkRef) error {
@@ -196,24 +213,46 @@ func RunTrial(ctx context.Context, reviewer Reviewer, spec TrialSpec) (TrialReco
 		record.CleanupWork = &work
 	}
 	record.Telemetry = trialTelemetry(result.Telemetry)
-	if result.Execution.Usage.Source != "" {
-		record.Usage = result.Execution.Usage
+	if result.Telemetry.FinalizationValid {
+		if result.Execution.Usage.Source != "" {
+			record.Usage = result.Execution.Usage
+		}
+		record.FailureReason = strings.TrimSpace(result.Execution.FailureReason)
+		record.FailureCode = strings.TrimSpace(result.Execution.FailureCode)
+		if result.Execution.Review != nil {
+			review := *result.Execution.Review
+			record.Review = &review
+		}
 	}
-	record.FailureReason = strings.TrimSpace(result.Execution.FailureReason)
-	if result.Execution.Review != nil {
-		review := *result.Execution.Review
-		record.Review = &review
+	if code := ValidationCodeOf(runErr); code != "" {
+		record.FailureCode = "validation_" + string(code)
 	}
 	record.Status, record.ErrorCode = classifyTrialResult(result, runErr)
 	record.Finalized = record.Status == TrialSucceeded && record.Review != nil && record.Telemetry.CleanupCompleted
 	if appendErr := appendTrial(spec.PublicDir, spec.LedgerPath, record); appendErr != nil {
-		return record, errors.Join(runErr, appendErr)
+		return record, errors.Join(runErr, ErrTrialPersistence, appendErr)
 	}
 	return record, runErr
 }
 
-func loadTrialByAttempt(publicDir, path, attemptHash string) (TrialRecord, bool, error) {
+// LoadTrialByAttempt returns one retained detailed trial record.
+func LoadTrialByAttempt(publicDir, path, attemptHash string) (TrialRecord, bool, error) {
+	if !validSHA256(attemptHash) {
+		return TrialRecord{}, false, fmt.Errorf("causal critic trial attempt hash is invalid")
+	}
+	record, detailed, found, err := loadTrialByAttempt(publicDir, path, attemptHash, TrialRecord{})
+	if err != nil {
+		return TrialRecord{}, false, err
+	}
+	if found && !detailed {
+		return record, false, fmt.Errorf("%w: %s", ErrTrialDetailsPruned, attemptHash)
+	}
+	return record, found, nil
+}
+
+func loadTrialByAttempt(publicDir, path, attemptHash string, fallback TrialRecord) (TrialRecord, bool, bool, error) {
 	var found TrialRecord
+	detailed := false
 	ok := false
 	err := withLedgerLock(publicDir, path, func(resolved string) error {
 		ledger, err := loadLedger(resolved)
@@ -223,13 +262,22 @@ func loadTrialByAttempt(publicDir, path, attemptHash string) (TrialRecord, bool,
 		for _, record := range ledger.Records {
 			if record.AttemptHash == attemptHash {
 				found = record
+				detailed = true
+				ok = true
+				return nil
+			}
+		}
+		for _, attempt := range ledger.Attempts {
+			if attempt.Hash == attemptHash {
+				found = fallback
+				found.Status = attempt.Status
 				ok = true
 				break
 			}
 		}
 		return nil
 	})
-	return found, ok, err
+	return found, detailed, ok, err
 }
 
 func trialTelemetry(value engineruntime.GenerateTelemetry) TrialTelemetry {
@@ -407,8 +455,11 @@ func validateTrialRecord(record TrialRecord) error {
 	if len(record.FailureReason) > 2<<10 || strings.ContainsRune(record.FailureReason, '\x00') {
 		return fmt.Errorf("causal critic failure reason is invalid or oversized")
 	}
-	if record.Status == TrialSucceeded && record.FailureReason != "" {
-		return fmt.Errorf("successful causal critic record has a failure reason")
+	if record.FailureCode != "" && !failureCodeRE.MatchString(record.FailureCode) {
+		return fmt.Errorf("causal critic failure code is invalid")
+	}
+	if record.Status == TrialSucceeded && (record.ErrorCode != "" || record.FailureReason != "" || record.FailureCode != "") {
+		return fmt.Errorf("successful causal critic record has a failure")
 	}
 	if record.Finalized != (record.Status == TrialSucceeded && record.Review != nil && record.Telemetry.CleanupCompleted) {
 		return fmt.Errorf("causal critic finalized state is inconsistent")
@@ -423,7 +474,7 @@ func validateTrialRecord(record TrialRecord) error {
 }
 
 func loadLedger(path string) (Ledger, error) {
-	ledger := Ledger{SchemaVersion: LedgerSchemaVersion, Attempts: []TrialAttempt{}, Records: []TrialRecord{}}
+	ledger := Ledger{SchemaVersion: LedgerSchemaVersion, Preflights: []PreflightAttempt{}, Attempts: []TrialAttempt{}, Records: []TrialRecord{}}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return ledger, nil
@@ -442,8 +493,14 @@ func loadLedger(path string) (Ledger, error) {
 	if decoder.Decode(&struct{}{}) != io.EOF {
 		return ledger, fmt.Errorf("causal critic ledger contains trailing data")
 	}
-	if ledger.SchemaVersion != LedgerSchemaVersion {
+	if ledger.SchemaVersion != previousLedgerSchemaVersion && ledger.SchemaVersion != LedgerSchemaVersion {
 		return ledger, fmt.Errorf("unsupported causal critic ledger schema %d", ledger.SchemaVersion)
+	}
+	ledger.SchemaVersion = LedgerSchemaVersion
+	for _, attempt := range ledger.Preflights {
+		if err := validatePreflightAttempt(attempt); err != nil {
+			return ledger, err
+		}
 	}
 	for _, attempt := range ledger.Attempts {
 		if !validSHA256(attempt.Hash) {
@@ -466,6 +523,15 @@ func loadLedger(path string) (Ledger, error) {
 
 func writeLedger(path string, ledger Ledger) error {
 	ledger.SchemaVersion = LedgerSchemaVersion
+	slices.SortFunc(ledger.Preflights, func(left, right PreflightAttempt) int {
+		if left.UpdatedAt != right.UpdatedAt {
+			return strings.Compare(left.UpdatedAt, right.UpdatedAt)
+		}
+		return strings.Compare(left.Hash, right.Hash)
+	})
+	if len(ledger.Preflights) > maxLedgerPreflights {
+		ledger.Preflights = slices.Clone(ledger.Preflights[len(ledger.Preflights)-maxLedgerPreflights:])
+	}
 	slices.SortFunc(ledger.Attempts, func(left, right TrialAttempt) int {
 		if left.CreatedAt != right.CreatedAt {
 			return strings.Compare(left.CreatedAt, right.CreatedAt)
@@ -483,11 +549,11 @@ func writeLedger(path string, ledger Ledger) error {
 	})
 	ledger.Records = trimDetailedRecords(ledger.Records, maxLedgerRecords)
 	for {
-		data, err := json.Marshal(ledger)
+		data, err := json.MarshalIndent(ledger, "", "  ")
 		if err != nil {
 			return err
 		}
-		if len(data) <= maxLedgerBytes {
+		if len(data)+1 <= maxLedgerBytes {
 			break
 		}
 		removed := false
@@ -562,6 +628,13 @@ func createdAtOrNow(value string) time.Time {
 }
 
 func pruneLedger(ledger *Ledger, reference time.Time) {
+	preflights := ledger.Preflights[:0]
+	for _, attempt := range ledger.Preflights {
+		if preflightActive(attempt, reference) {
+			preflights = append(preflights, attempt)
+		}
+	}
+	ledger.Preflights = preflights
 	kept := ledger.Records[:0]
 	for _, record := range ledger.Records {
 		if record.CleanupWork != nil {

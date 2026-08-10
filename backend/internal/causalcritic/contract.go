@@ -132,15 +132,15 @@ func NewInput(bundle agentanalysis.EvidenceBundle, authoritative agentanalysis.A
 
 func buildInput(bundle agentanalysis.EvidenceBundle, draft Draft) (Input, error) {
 	if err := agentanalysis.ValidateEvidenceBundle(bundle); err != nil {
-		return Input{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+		return Input{}, validationError(ValidationInputEvidence, ErrInvalidInput, "%v", err)
 	}
 	draft = canonicalDraft(draft)
 	if err := validateDraft(draft, bundle); err != nil {
-		return Input{}, err
+		return Input{}, withValidationCode(ValidationInputDraft, err)
 	}
 	draftHash, err := digest(draft)
 	if err != nil {
-		return Input{}, fmt.Errorf("%w: hash draft: %v", ErrInvalidInput, err)
+		return Input{}, validationError(ValidationInputIdentity, ErrInvalidInput, "hash draft: %v", err)
 	}
 	input := Input{
 		SchemaVersion: InputSchemaVersion, ContractVersion: ContractVersion,
@@ -152,7 +152,7 @@ func buildInput(bundle agentanalysis.EvidenceBundle, draft Draft) (Input, error)
 	input.SuccessCounterevidence = selectEvidenceLines(bundle, successLineRE, negativeRE, 6)
 	data, err := json.Marshal(input)
 	if err != nil || len(data) > maxInputBytes {
-		return Input{}, fmt.Errorf("%w: encoded input exceeds %d bytes", ErrInvalidInput, maxInputBytes)
+		return Input{}, validationError(ValidationInputSize, ErrInvalidInput, "encoded input exceeds %d bytes", maxInputBytes)
 	}
 	return input, nil
 }
@@ -160,7 +160,7 @@ func buildInput(bundle agentanalysis.EvidenceBundle, draft Draft) (Input, error)
 // ValidateInput verifies all hashes, citations, and dashboard-selected digests.
 func ValidateInput(input Input) error {
 	if input.SchemaVersion != InputSchemaVersion || input.ContractVersion != ContractVersion {
-		return fmt.Errorf("%w: unsupported schema or contract version", ErrInvalidInput)
+		return validationError(ValidationInputSchema, ErrInvalidInput, "unsupported schema or contract version")
 	}
 	rebuilt, err := buildInput(input.Bundle, input.Draft)
 	if err != nil {
@@ -169,7 +169,7 @@ func ValidateInput(input Input) error {
 	left, _ := json.Marshal(input)
 	right, _ := json.Marshal(rebuilt)
 	if string(left) != string(right) {
-		return fmt.Errorf("%w: paired input identity or evidence digest changed", ErrInvalidInput)
+		return validationError(ValidationInputIdentity, ErrInvalidInput, "paired input identity or evidence digest changed")
 	}
 	return nil
 }
@@ -180,48 +180,48 @@ func ValidateReview(review Review, input Input) error {
 		return err
 	}
 	if review.SchemaVersion != ReviewSchemaVersion || review.ContractVersion != ContractVersion || review.PairHash != input.PairHash {
-		return fmt.Errorf("%w: schema, contract, or pair identity mismatch", ErrInvalidReview)
+		return validationError(ValidationReviewIdentity, ErrInvalidReview, "schema, contract, or pair identity mismatch")
 	}
 	if review.Verdict != "pass" && review.Verdict != "object" {
-		return fmt.Errorf("%w: unsupported verdict %q", ErrInvalidReview, review.Verdict)
+		return validationError(ValidationReviewVerdict, ErrInvalidReview, "unsupported verdict %q", review.Verdict)
 	}
 	if review.Findings == nil || len(review.Findings) > maxFindings || review.Verdict == "pass" && len(review.Findings) != 0 || review.Verdict == "object" && len(review.Findings) == 0 {
-		return fmt.Errorf("%w: verdict and findings disagree", ErrInvalidReview)
+		return validationError(ValidationReviewFindings, ErrInvalidReview, "verdict and findings disagree")
 	}
 	if review.Verdict == "pass" && (review.AlternativeExplanation != "" || review.RevisionGuidance != "") {
-		return fmt.Errorf("%w: passing review must not include alternative or revision guidance", ErrInvalidReview)
+		return validationError(ValidationReviewGuidance, ErrInvalidReview, "passing review must not include alternative or revision guidance")
 	}
 	seen := map[string]bool{}
 	for index, finding := range review.Findings {
 		class := strings.TrimSpace(finding.Class)
 		detail := strings.TrimSpace(finding.Detail)
 		if class != finding.Class || detail != finding.Detail || !allowedFindingClasses[class] || detail == "" || !utf8.ValidString(finding.Detail) || len(finding.Detail) > maxFindingDetailBytes {
-			return fmt.Errorf("%w: finding %d is invalid", ErrInvalidReview, index)
+			return validationError(ValidationReviewFinding, ErrInvalidReview, "finding %d is invalid", index)
 		}
 		if len(finding.References) == 0 || len(finding.References) > maxFindingRefs {
-			return fmt.Errorf("%w: finding %d references are invalid", ErrInvalidReview, index)
+			return validationError(ValidationReviewReference, ErrInvalidReview, "finding %d references are invalid", index)
 		}
 		for _, reference := range finding.References {
 			if err := validateReference(reference, input.Bundle); err != nil {
-				return fmt.Errorf("%w: finding %d: %v", ErrInvalidReview, index, err)
+				return validationError(ValidationReviewReference, ErrInvalidReview, "finding %d: %v", index, err)
 			}
 		}
 		keyData, _ := json.Marshal(finding)
 		key := string(keyData)
 		if seen[key] {
-			return fmt.Errorf("%w: duplicate finding %d", ErrInvalidReview, index)
+			return validationError(ValidationReviewDuplicate, ErrInvalidReview, "duplicate finding %d", index)
 		}
 		seen[key] = true
 	}
 	for name, value := range map[string]string{"alternative explanation": review.AlternativeExplanation, "revision guidance": review.RevisionGuidance} {
 		if value != strings.TrimSpace(value) || !utf8.ValidString(value) || len(value) > maxGuidanceBytes {
-			return fmt.Errorf("%w: %s is invalid or oversized", ErrInvalidReview, name)
+			return validationError(ValidationReviewGuidance, ErrInvalidReview, "%s is invalid or oversized", name)
 		}
 	}
 	switch review.Confidence {
 	case "low", "medium", "high":
 	default:
-		return fmt.Errorf("%w: unsupported confidence %q", ErrInvalidReview, review.Confidence)
+		return validationError(ValidationReviewConfidence, ErrInvalidReview, "unsupported confidence %q", review.Confidence)
 	}
 	return nil
 }
@@ -261,7 +261,7 @@ func validateDraft(draft Draft, bundle agentanalysis.EvidenceBundle) error {
 	}
 	for index, citation := range draft.EvidenceCitations {
 		if err := validateCitation(citation, bundle); err != nil {
-			return fmt.Errorf("%w: citation %d: %v", ErrInvalidInput, index, err)
+			return validationError(ValidationInputCitation, ErrInvalidInput, "citation %d: %v", index, err)
 		}
 	}
 	return nil

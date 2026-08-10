@@ -144,7 +144,7 @@ func TestRuntimePreservesCleanupIdentityOnContractFailure(t *testing.T) {
 		}
 		execution := ExecutionResult{
 			SchemaVersion: ExecutionSchemaVersion, ContractVersion: ContractVersion, PairHash: strings.Repeat("0", 64),
-			TerminalState: engineruntime.TerminalFailed, FailureReason: "invalid pair",
+			TerminalState: engineruntime.TerminalFailed, FailureCode: "invalid_pair", FailureReason: "invalid pair",
 			Usage: GatewayUsage{Status: "unavailable", Source: "gateway_response"}, DurationMs: 100,
 		}
 		data, _ := json.Marshal(execution)
@@ -228,7 +228,7 @@ func TestRuntimeReturnsExecutorFailure(t *testing.T) {
 		}
 		execution := ExecutionResult{
 			SchemaVersion: ExecutionSchemaVersion, ContractVersion: ContractVersion, PairHash: request.Input.PairHash,
-			TerminalState: engineruntime.TerminalFailed, FailureReason: "model gateway request failed",
+			TerminalState: engineruntime.TerminalFailed, FailureCode: "gateway_request", FailureReason: "model gateway request failed",
 			Usage: GatewayUsage{Status: "unavailable", Source: "gateway_response"}, DurationMs: 100,
 		}
 		data, _ := json.Marshal(execution)
@@ -239,7 +239,57 @@ func TestRuntimeReturnsExecutorFailure(t *testing.T) {
 		Timeout: time.Minute, OutputLimitBytes: DefaultOutputLimit,
 	}
 	result, err := runtime.Review(t.Context(), input, "critic-run", nil)
-	if err == nil || result.Execution.FailureReason != "model gateway request failed" {
+	if err == nil || result.Execution.FailureCode != "gateway_request" || result.Execution.FailureReason != "model gateway request failed" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestRuntimeNormalizesLegacyFailedResultCode(t *testing.T) {
+	input := criticInput(t)
+	runner := fakeSandboxRunner{run: func(spec agentsandbox.Spec) (agentsandbox.Result, error) {
+		var request ExecutionRequest
+		if err := json.Unmarshal(spec.Request, &request); err != nil {
+			t.Fatal(err)
+		}
+		execution := ExecutionResult{
+			SchemaVersion: ExecutionSchemaVersion, ContractVersion: ContractVersion, PairHash: request.Input.PairHash,
+			TerminalState: engineruntime.TerminalFailed, FailureReason: "model gateway request failed",
+			Usage: GatewayUsage{Status: "unavailable", Source: "gateway_response"}, DurationMs: 100,
+		}
+		data, _ := json.Marshal(execution)
+		return agentsandbox.Result{Output: string(data), FinishedReason: "PodFailed", Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true}}, nil
+	}}
+	runtime := &Runtime{
+		Sandbox: runner, Gateway: engineruntime.ModelGatewayConfig{Endpoint: "https://gateway.platform.svc.cluster.local/v1", Model: "critic-model", ProtocolVersion: "openai-chat-completions-v1"},
+		Timeout: time.Minute, OutputLimitBytes: DefaultOutputLimit,
+	}
+	result, err := runtime.Review(t.Context(), input, "critic-legacy-failure", nil)
+	if err == nil || result.Execution.FailureCode != "legacy_executor_failure" || !result.Telemetry.FinalizationValid {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestRuntimePreservesValidationCodeOnInvalidFailureCode(t *testing.T) {
+	input := criticInput(t)
+	runner := fakeSandboxRunner{run: func(spec agentsandbox.Spec) (agentsandbox.Result, error) {
+		var request ExecutionRequest
+		if err := json.Unmarshal(spec.Request, &request); err != nil {
+			t.Fatal(err)
+		}
+		execution := ExecutionResult{
+			SchemaVersion: ExecutionSchemaVersion, ContractVersion: ContractVersion, PairHash: request.Input.PairHash,
+			TerminalState: engineruntime.TerminalFailed, FailureCode: "INVALID-CODE", FailureReason: "model gateway request failed",
+			Usage: GatewayUsage{Status: "unavailable", Source: "gateway_response"}, DurationMs: 100,
+		}
+		data, _ := json.Marshal(execution)
+		return agentsandbox.Result{Output: string(data), FinishedReason: "PodFailed", Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true}}, nil
+	}}
+	runtime := &Runtime{
+		Sandbox: runner, Gateway: engineruntime.ModelGatewayConfig{Endpoint: "https://gateway.platform.svc.cluster.local/v1", Model: "critic-model", ProtocolVersion: "openai-chat-completions-v1"},
+		Timeout: time.Minute, OutputLimitBytes: DefaultOutputLimit,
+	}
+	result, err := runtime.Review(t.Context(), input, "critic-invalid-code", nil)
+	if !errors.Is(err, engineruntime.ErrResultContract) || ValidationCodeOf(err) != ValidationResultTerminal || result.Execution.FailureCode != "" || result.Telemetry.FinalizationValid {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }

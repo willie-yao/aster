@@ -96,6 +96,37 @@ func (p *pipeline) runCausalCritic(ctx context.Context, result *refreshResult) {
 
 func (p *pipeline) runCausalCriticCandidate(ctx context.Context, candidate shadowCandidate) bool {
 	cfg := p.opts.CausalCritic
+	reviewer, err := p.ensureCausalCriticReviewer()
+	if err != nil {
+		log.Printf("🧪 causal critic shadow: runtime unavailable: %v", err)
+		return false
+	}
+	now := time.Now
+	if p.criticNow != nil {
+		now = p.criticNow
+	}
+	preflightIdentity, err := causalcritic.PreflightIdentity(causalcritic.PreflightIdentityInput{
+		RequestHash: candidate.requestHash, AuthoritativeHash: candidate.authoritativeHash,
+		SourceRevision: candidate.source.Revision, SkillHash: p.aiProject.SkillSet.Hash(), RuntimeIdentity: reviewer.RuntimeIdentity(),
+	})
+	if err != nil {
+		log.Printf("🧪 causal critic shadow: preflight identity invalid job=%s build=%s test=%s: %v", candidate.subject.JobID, candidate.subject.BuildID, candidate.subject.TestName, err)
+		return false
+	}
+	preflight, claimed, err := causalcritic.ClaimPreflightAttempt(p.opts.OutDir, cfg.LedgerPath, preflightIdentity, now())
+	if err != nil {
+		log.Printf("⚠ causal critic shadow preflight claim failed job=%s build=%s test=%s: %v", candidate.subject.JobID, candidate.subject.BuildID, candidate.subject.TestName, err)
+		return false
+	}
+	if !claimed {
+		log.Printf("🧪 causal critic shadow: preflight already recorded status=%s job=%s build=%s test=%s", preflight.Status, candidate.subject.JobID, candidate.subject.BuildID, candidate.subject.TestName)
+		return false
+	}
+	completePreflight := func(status causalcritic.PreflightStatus, failureCode, trialAttemptHash string) {
+		if err := causalcritic.CompletePreflightAttempt(p.opts.OutDir, cfg.LedgerPath, preflightIdentity, status, failureCode, trialAttemptHash, now()); err != nil {
+			log.Printf("⚠ causal critic shadow preflight completion failed job=%s build=%s test=%s: %v", candidate.subject.JobID, candidate.subject.BuildID, candidate.subject.TestName, err)
+		}
+	}
 	evidenceTimeout := min(cfg.Timeout, 2*time.Minute)
 	evidenceCtx, cancel := context.WithTimeout(ctx, evidenceTimeout)
 	defer cancel()
@@ -105,26 +136,25 @@ func (p *pipeline) runCausalCriticCandidate(ctx context.Context, candidate shado
 	}
 	browser := artifacts.NewUncachedBackendBrowser(p.backend, p.cfg.Storage.Bucket, candidate.request.BuildPrefix, candidate.request.Build.JobName+"/"+candidate.request.Build.BuildID)
 	bundle, err := freeze(evidenceCtx, browser, candidate.request, candidate.source, p.aiProject.SkillSet)
+	failureCode := "evidence_freeze"
 	if err == nil {
 		bundle, err = causalcritic.EnsureCitedEvidence(evidenceCtx, browser, bundle, candidate.authoritative.EvidenceCitations)
+		failureCode = "evidence_citation"
 	}
 	if err != nil {
+		completePreflight(causalcritic.PreflightEvidenceFailed, failureCode, "")
 		log.Printf("🧪 causal critic shadow: evidence failed job=%s build=%s test=%s", candidate.subject.JobID, candidate.subject.BuildID, candidate.subject.TestName)
 		return false
 	}
 	input, err := causalcritic.NewInput(bundle, candidate.authoritative)
 	if err != nil {
+		failureCode := "input_invalid"
+		if code := causalcritic.ValidationCodeOf(err); code != "" {
+			failureCode = "validation_" + string(code)
+		}
+		completePreflight(causalcritic.PreflightInputInvalid, failureCode, "")
 		log.Printf("🧪 causal critic shadow: paired input invalid job=%s build=%s test=%s: %v", candidate.subject.JobID, candidate.subject.BuildID, candidate.subject.TestName, err)
 		return false
-	}
-	reviewer, err := p.ensureCausalCriticReviewer()
-	if err != nil {
-		log.Printf("🧪 causal critic shadow: runtime unavailable: %v", err)
-		return true
-	}
-	now := time.Now
-	if p.criticNow != nil {
-		now = p.criticNow
 	}
 	caseID, stableID := causalCriticCaseIdentity(candidate.subject)
 	metadata := causalcritic.TrialMetadata{
@@ -138,6 +168,13 @@ func (p *pipeline) runCausalCriticCandidate(ctx context.Context, candidate shado
 		PublicDir: p.opts.OutDir, LedgerPath: cfg.LedgerPath, Metadata: metadata, Input: input,
 		ExecutionID: executionID, RuntimeIdentity: reviewer.RuntimeIdentity(), Now: now,
 	})
+	preflightFailureCode := record.FailureCode
+	if preflightFailureCode == "" {
+		preflightFailureCode = record.ErrorCode
+	}
+	if record.AttemptHash != "" && record.Status != causalcritic.TrialPending && !errors.Is(runErr, causalcritic.ErrTrialPersistence) {
+		completePreflight(causalcritic.PreflightSubmitted, preflightFailureCode, record.AttemptHash)
+	}
 	if errors.Is(runErr, causalcritic.ErrTrialAlreadyAttempted) {
 		return false
 	}

@@ -48,26 +48,32 @@ func Execute(parent context.Context, request causalcritic.ExecutionRequest, opts
 		SchemaVersion: causalcritic.ExecutionSchemaVersion, ContractVersion: causalcritic.ContractVersion,
 		PairHash: request.Input.PairHash, Usage: causalcritic.GatewayUsage{Status: "unavailable", Source: "gateway_response"},
 	}
-	finish := func(state engineruntime.TerminalState, reason string) causalcritic.ExecutionResult {
+	finish := func(state engineruntime.TerminalState, code, reason string) causalcritic.ExecutionResult {
 		result.TerminalState = state
+		result.FailureCode = code
 		result.FailureReason = strings.TrimSpace(reason)
 		result.DurationMs = max(now().Sub(started).Milliseconds(), 0)
 		if state == engineruntime.TerminalSucceeded {
+			result.FailureCode = ""
 			result.FailureReason = ""
 		}
 		if err := causalcritic.ValidateExecutionResult(result, request); err != nil {
-			return failedExecutionResult(request, max(now().Sub(started).Milliseconds(), 0), "critic executor result validation failed")
+			return failedExecutionResult(request, max(now().Sub(started).Milliseconds(), 0), "result_validation", "critic executor result validation failed")
 		}
 		return enforceExecutionOutputBound(result, request)
 	}
 	if err := causalcritic.ValidateExecutionRequest(request); err != nil {
-		return finish(engineruntime.TerminalFailed, err.Error())
+		code := "request_invalid"
+		if validationCode := causalcritic.ValidationCodeOf(err); validationCode != "" {
+			code = "validation_" + string(validationCode)
+		}
+		return finish(engineruntime.TerminalFailed, code, err.Error())
 	}
 	ctx, cancel := context.WithTimeout(parent, time.Duration(request.TimeoutSeconds)*time.Second)
 	defer cancel()
 	inputJSON, err := json.Marshal(request.Input)
 	if err != nil {
-		return finish(engineruntime.TerminalFailed, "encode critic input")
+		return finish(engineruntime.TerminalFailed, "input_encode", "encode critic input")
 	}
 	body, err := json.Marshal(chatRequest{
 		Model:       request.ModelGateway.Model,
@@ -76,12 +82,12 @@ func Execute(parent context.Context, request causalcritic.ExecutionRequest, opts
 		ResponseFormat: map[string]string{"type": "json_object"},
 	})
 	if err != nil {
-		return finish(engineruntime.TerminalFailed, "encode gateway request")
+		return finish(engineruntime.TerminalFailed, "gateway_request_encode", "encode gateway request")
 	}
 	endpoint := chatCompletionsEndpoint(request.ModelGateway.Endpoint)
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return finish(engineruntime.TerminalFailed, "construct gateway request")
+		return finish(engineruntime.TerminalFailed, "gateway_request_construct", "construct gateway request")
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
 	client := opts.HTTPClient
@@ -100,50 +106,54 @@ func Execute(parent context.Context, request causalcritic.ExecutionRequest, opts
 	response, err := client.Do(httpRequest)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return finish(engineruntime.TerminalTimedOut, "model gateway request timed out")
+			return finish(engineruntime.TerminalTimedOut, "gateway_timeout", "model gateway request timed out")
 		}
 		if ctx.Err() == context.Canceled {
-			return finish(engineruntime.TerminalCancelled, "critic execution cancelled")
+			return finish(engineruntime.TerminalCancelled, "execution_cancelled", "critic execution cancelled")
 		}
-		return finish(engineruntime.TerminalFailed, "model gateway request failed")
+		return finish(engineruntime.TerminalFailed, "gateway_request", "model gateway request failed")
 	}
 	defer response.Body.Close() //nolint:errcheck
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxGatewayErrorBytes))
-		return finish(engineruntime.TerminalFailed, fmt.Sprintf("model gateway returned HTTP %d", response.StatusCode))
+		return finish(engineruntime.TerminalFailed, "gateway_http", fmt.Sprintf("model gateway returned HTTP %d", response.StatusCode))
 	}
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, request.OutputLimit+maxGatewayErrorBytes+1))
 	if err != nil {
-		return finish(engineruntime.TerminalFailed, "read model gateway response")
+		return finish(engineruntime.TerminalFailed, "gateway_response_read", "read model gateway response")
 	}
 	if int64(len(responseBody)) > request.OutputLimit+maxGatewayErrorBytes {
-		return finish(engineruntime.TerminalFailed, "model gateway response exceeded the output bound")
+		return finish(engineruntime.TerminalFailed, "gateway_response_size", "model gateway response exceeded the output bound")
 	}
 	parsed, err := decodeChatResponse(responseBody)
 	if err != nil {
-		return finish(engineruntime.TerminalFailed, "parse model gateway response")
+		return finish(engineruntime.TerminalFailed, "gateway_response_parse", "parse model gateway response")
 	}
 	result.Usage = gatewayUsage(parsed)
 	if len(parsed.Choices) != 1 || strings.TrimSpace(parsed.Choices[0].Message.Content) == "" || hasToolCalls(parsed.Choices[0].Message.ToolCalls) {
-		return finish(engineruntime.TerminalFailed, "model gateway returned an invalid critic choice")
+		return finish(engineruntime.TerminalFailed, "gateway_choice", "model gateway returned an invalid critic choice")
 	}
 	review, err := decodeReview(parsed.Choices[0].Message.Content)
 	if err != nil {
-		return finish(engineruntime.TerminalFailed, "parse causal critic review")
+		return finish(engineruntime.TerminalFailed, "review_parse", "parse causal critic review")
 	}
 	if err := causalcritic.ValidateReview(review, request.Input); err != nil {
-		return finish(engineruntime.TerminalFailed, "causal critic review failed deterministic validation")
+		code := "review_validation"
+		if validationCode := causalcritic.ValidationCodeOf(err); validationCode != "" {
+			code = "validation_" + string(validationCode)
+		}
+		return finish(engineruntime.TerminalFailed, code, "causal critic review failed deterministic validation")
 	}
 	result.Review = &review
-	return finish(engineruntime.TerminalSucceeded, "")
+	return finish(engineruntime.TerminalSucceeded, "", "")
 }
 
-func failedExecutionResult(request causalcritic.ExecutionRequest, durationMs int64, reason string) causalcritic.ExecutionResult {
+func failedExecutionResult(request causalcritic.ExecutionRequest, durationMs int64, code, reason string) causalcritic.ExecutionResult {
 	return causalcritic.ExecutionResult{
 		SchemaVersion: causalcritic.ExecutionSchemaVersion, ContractVersion: causalcritic.ContractVersion,
 		PairHash: request.Input.PairHash, TerminalState: engineruntime.TerminalFailed,
 		Usage:      causalcritic.GatewayUsage{Status: "unavailable", Source: "gateway_response"},
-		DurationMs: durationMs, FailureReason: reason,
+		DurationMs: durationMs, FailureCode: code, FailureReason: reason,
 	}
 }
 
@@ -152,7 +162,7 @@ func enforceExecutionOutputBound(result causalcritic.ExecutionResult, request ca
 	if err == nil && (request.OutputLimit < 4<<10 || int64(len(data)+1) <= request.OutputLimit) {
 		return result
 	}
-	return failedExecutionResult(request, result.DurationMs, "critic executor result exceeded the output bound")
+	return failedExecutionResult(request, result.DurationMs, "output_bound", "critic executor result exceeded the output bound")
 }
 
 type chatRequest struct {
