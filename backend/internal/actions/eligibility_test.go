@@ -55,6 +55,21 @@ func TestActionEligibilityClassifiesStructuredTargets(t *testing.T) {
 		}
 	})
 
+	t.Run("modify symbol without required call", func(t *testing.T) {
+		service, id := eligibilityService(t, []models.RemediationTarget{{
+			Intent: models.RemediationIntentModifySymbol, Symbol: "Reconcile", Path: "controllers/reconcile.go",
+		}})
+		called := false
+		service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
+			called = true
+			return actionverify.Result{}, nil
+		}
+		got, err := service.ActionEligibility(t.Context(), id)
+		if err != nil || got.State != EligibilityMoreEvidenceRequired || called {
+			t.Fatalf("eligibility = %+v, called=%t, err=%v", got, called, err)
+		}
+	})
+
 	for _, test := range []struct {
 		name  string
 		state string

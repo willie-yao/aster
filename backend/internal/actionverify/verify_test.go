@@ -177,6 +177,137 @@ func TestVerifyStructuredModifyExistingSymbolIsActionable(t *testing.T) {
 	}
 }
 
+func TestVerifyStructuredModifyChecksRequiredCall(t *testing.T) {
+	const source = `package e2e
+import "example/asomigration"
+func getPreUpgradeFunc() func() {
+	return func() { asomigration.LabelCRDsForClusterctlUpgrade() }
+}
+`
+	for name, test := range map[string]struct {
+		requiredCall string
+		want         string
+	}{
+		"already present": {requiredCall: "example/asomigration.LabelCRDsForClusterctlUpgrade", want: StateAlreadyPresent},
+		"still missing":   {requiredCall: "example/asomigration.DeleteWebhookConfigurations", want: StateUnresolved},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := verify(t, fakeReader{archive: archive(map[string]string{"test/e2e/capi_test.go": source})}, Input{Targets: []models.RemediationTarget{{
+				Intent: models.RemediationIntentModifySymbol, Symbol: "getPreUpgradeFunc", RequiredCall: test.requiredCall, Path: "test/e2e/capi_test.go",
+			}}})
+			if result.State != test.want {
+				t.Fatalf("result = %+v", result)
+			}
+		})
+	}
+}
+
+func TestVerifyStructuredModifyDoesNotMatchUnrelatedReceiver(t *testing.T) {
+	const source = `package controllers
+import migration "example/migration"
+type worker struct{}
+func (worker) ApplyFix() {}
+func reconcile(value worker) { value.ApplyFix() }
+var _ = migration.ApplyFix
+`
+	result := verify(t, fakeReader{archive: archive(map[string]string{"controllers/reconcile.go": source})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example/migration.ApplyFix", Path: "controllers/reconcile.go",
+	}}})
+	if result.State != StateUnresolved {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyDoesNotMatchShadowedDirectCall(t *testing.T) {
+	const source = `package controllers
+func ApplyFix() {}
+func reconcile(ApplyFix func()) { ApplyFix() }
+`
+	result := verify(t, fakeReader{archive: archive(map[string]string{"controllers/reconcile.go": source})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "ApplyFix", Path: "controllers/reconcile.go",
+	}}})
+	if result.State != StateUnresolved {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyDefaultImportNameMismatchIsInconclusive(t *testing.T) {
+	const source = `package controllers
+import "example.com/migration/v2"
+func reconcile() { migration.ApplyFix() }
+`
+	result := verify(t, fakeReader{archive: archive(map[string]string{"controllers/reconcile.go": source})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/migration/v2.ApplyFix", Path: "controllers/reconcile.go",
+	}}})
+	if result.State != StateInconclusive || !strings.Contains(result.Reason, "identity cannot be proven") {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyDotImportIsInconclusive(t *testing.T) {
+	const source = `package controllers
+import . "example.com/migration"
+func reconcile() { ApplyFix() }
+`
+	result := verify(t, fakeReader{archive: archive(map[string]string{"controllers/reconcile.go": source})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/migration.ApplyFix", Path: "controllers/reconcile.go",
+	}}})
+	if result.State != StateInconclusive || !strings.Contains(result.Reason, "identity cannot be proven") {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyDifferentImportIsUnresolved(t *testing.T) {
+	const source = `package controllers
+import (
+	"example.com/migration"
+	other "example.com/other"
+)
+func reconcile() { other.ApplyFix() }
+var _ = migration.Other
+`
+	result := verify(t, fakeReader{archive: archive(map[string]string{"controllers/reconcile.go": source})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/migration.ApplyFix", Path: "controllers/reconcile.go",
+	}}})
+	if result.State != StateUnresolved {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyResolvesSamePackageCallAcrossFiles(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"controllers/reconcile.go": "package controllers\nfunc reconcile() { ApplyFix() }\n",
+		"controllers/fix.go":       "package controllers\nfunc ApplyFix() {}\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "ApplyFix", Path: "controllers/reconcile.go",
+	}}})
+	if result.State != StateAlreadyPresent {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyRequiredCallNeedsFunction(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"pkg/value.go": "package pkg\nvar Existing = true\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "Existing", RequiredCall: "Apply", Path: "pkg/value.go",
+	}}})
+	if result.State != StateInconclusive || !strings.Contains(result.Reason, "not a function or method") {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyRequiredCallRejectsAmbiguousMethods(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"pkg/method.go": "package pkg\ntype first struct{}\ntype second struct{}\nfunc (first) reconcile() { ApplyFix() }\nfunc (second) reconcile() {}\nfunc ApplyFix() {}\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "ApplyFix", Path: "pkg/method.go",
+	}}})
+	if result.State != StateInconclusive || !strings.Contains(result.Reason, "multiple methods") {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestVerifyStructuredConfigurationStates(t *testing.T) {
 	const template = "templates/test/e2e/data/shared/v1beta1/cluster-template-dra.yaml"
 	for name, test := range map[string]struct {
@@ -587,5 +718,23 @@ func TestVerifyProwJobEnvironmentRejectsNonStringValue(t *testing.T) {
 	result := verify(t, fakeReader{archive: archive(map[string]string{file: config})}, Input{Targets: []models.RemediationTarget{target}})
 	if result.State != StateInconclusive {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestInvalidTargetReasonRejectsRequiredCallOutsideModify(t *testing.T) {
+	for name, target := range map[string]models.RemediationTarget{
+		"add symbol":    {Intent: models.RemediationIntentAddSymbol, Symbol: "Fix", RequiredCall: "Apply", Path: "fix.go"},
+		"configuration": {Intent: models.RemediationIntentSetConfiguration, RequiredCall: "Apply", Path: "config.yaml", Value: "Enabled=true"},
+		"Prow job": {
+			Intent: models.RemediationIntentSetJobEnvironment, RequiredCall: "Apply", Repository: "kubernetes/test-infra",
+			Revision: strings.Repeat("a", 40), Path: "config/jobs/example/jobs.yaml", Job: "periodic-example", Container: "test", Name: "VERSION", Value: "v2",
+		},
+		"investigate": {Intent: models.RemediationIntentInvestigate, RequiredCall: "Apply"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if reason := InvalidTargetReason(target); reason == "" {
+				t.Fatalf("target was accepted: %+v", target)
+			}
+		})
 	}
 }

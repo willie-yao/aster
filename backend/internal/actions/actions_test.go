@@ -1429,9 +1429,10 @@ func TestSourcePreflightAllowsVerifiedModifySymbol(t *testing.T) {
 		JobID: "periodic-machinepool", Systemic: true,
 		SuggestedFix: "Fix the MachinePoolModelHasChanged predicate in controllers/helpers.go to properly detect when the AzureMachinePool model has changed.",
 		RemediationTargets: []models.RemediationTarget{{
-			Intent: models.RemediationIntentModifySymbol,
-			Symbol: "MachinePoolModelHasChanged",
-			Path:   "controllers/helpers.go",
+			Intent:       models.RemediationIntentModifySymbol,
+			Symbol:       "MachinePoolModelHasChanged",
+			RequiredCall: "ApplyMachinePoolModelChange",
+			Path:         "controllers/helpers.go",
 		}},
 		SourceRef: revision,
 	}
@@ -1444,7 +1445,7 @@ func TestSourcePreflightAllowsVerifiedModifySymbol(t *testing.T) {
 	}
 	service := NewService(cfg, dataDir, AIConfig{})
 	reader := fakeActionSourceReader{
-		"controllers/helpers.go": "package controllers\nfunc MachinePoolModelHasChanged() bool { return false }\n",
+		"controllers/helpers.go": "package controllers\nfunc ApplyMachinePoolModelChange() {}\nfunc MachinePoolModelHasChanged() bool { return false }\n",
 	}
 	service.sourceVerifier = func(ctx context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
 		return actionverify.Verify(ctx, reader, input)
@@ -1463,6 +1464,40 @@ func TestSourcePreflightAllowsVerifiedModifySymbol(t *testing.T) {
 	view := waitRequest(t, service, request.ID, "alice", RequestReady)
 	if view.Stage != RequestStageDrafting || view.Verification == nil || view.Verification.State != actionverify.StateUnresolved || view.Preview == nil {
 		t.Fatalf("actionable request = %+v", view)
+	}
+}
+
+func TestPublishedPatternModifyWithoutRequiredCallCannotStartAction(t *testing.T) {
+	dataDir := t.TempDir()
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	pattern := models.PatternAnalysis{
+		JobID: "periodic-machinepool", Systemic: true, SuggestedFix: "modify the predicate",
+		RemediationTargets: []models.RemediationTarget{{Intent: models.RemediationIntentModifySymbol, Symbol: "MachinePoolModelHasChanged", Path: "controllers/helpers.go"}},
+		SourceRef:          revision,
+	}
+	models.AssignPatternIdentity(&pattern)
+	writeJobDetail(t, dataDir, "periodic-machinepool.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
+	cfg := &project.Config{
+		Branding: project.Branding{SourceRepo: project.SourceRepo{Owner: "example", Name: "repo"}},
+		Issues:   &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}},
+		AI:       &project.AI{SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"}},
+	}
+	service := NewService(cfg, dataDir, AIConfig{})
+	called := false
+	service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
+		called = true
+		return actionverify.Result{State: actionverify.StateUnresolved}, nil
+	}
+	if _, err := service.PreviewIssue(t.Context(), pattern.ID, "alice", "token", ""); !errors.Is(err, ErrRemediationInconclusive) {
+		t.Fatalf("PreviewIssue error = %v", err)
+	}
+	request, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := waitRequest(t, service, request.ID, "alice", RequestFailed)
+	if called || view.Verification == nil || view.Verification.State != actionverify.StateInconclusive || view.Preview != nil {
+		t.Fatalf("request bypassed published target contract: called=%t view=%+v", called, view)
 	}
 }
 

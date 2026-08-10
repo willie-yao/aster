@@ -135,12 +135,13 @@ const (
 
 // ActionSubject is one current published analysis eligible for a preview.
 type ActionSubject struct {
-	Kind        actionSubjectKind
-	ID          string
-	ContentHash string
-	Pattern     *models.PatternAnalysis
-	Build       *BuildActionSubject
-	SourceFiles []string
+	Kind                     actionSubjectKind
+	ID                       string
+	ContentHash              string
+	Pattern                  *models.PatternAnalysis
+	Build                    *BuildActionSubject
+	SourceFiles              []string
+	EnforcePublishedContract bool
 }
 
 // BuildActionSubject is one analyzed build failure without a JUnit assertion.
@@ -300,7 +301,7 @@ func (s *Service) resolveSubject(id string) (*ActionSubject, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: pattern}, nil
+		return &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: pattern, EnforcePublishedContract: true}, nil
 	}
 	parts := strings.Split(id, "::")
 	if len(parts) != 3 || parts[0] != "build" {
@@ -539,6 +540,9 @@ func (s *Service) verifyOptionalRemediation(ctx context.Context, subject *Action
 			if target.Symbol != "" {
 				allowed = append(allowed, target.Symbol)
 			}
+			if target.RequiredCall != "" {
+				allowed = append(allowed, target.RequiredCall)
+			}
 			if key, _, ok := strings.Cut(target.Value, "="); ok && regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(strings.TrimSpace(key)) {
 				allowed = append(allowed, strings.TrimSpace(key))
 			}
@@ -576,6 +580,13 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 	patternSubject := subject != nil && subject.Kind == actionSubjectPattern && subject.Pattern != nil
 	if patternSubject && len(subject.Pattern.RemediationTargets) == 0 {
 		return inconclusive("recurring pattern does not include structured remediation targets", nil)
+	}
+	if patternSubject && subject.EnforcePublishedContract {
+		for _, target := range subject.Pattern.RemediationTargets {
+			if reason := actionverify.PatternTargetReason(target); reason != "" {
+				return inconclusive(reason, nil)
+			}
+		}
 	}
 	structured := patternSubject
 	if repo.Owner == "" && repo.Name == "" {
@@ -960,7 +971,10 @@ func (s *Service) generateFixPreviewForPattern(
 	if sourceRepository != "" && !strings.EqualFold(sourceRepository, destination.Repo.Owner+"/"+destination.Repo.Name) {
 		return PreviewResult{}, nil, fmt.Errorf("%w: investigated repository does not match the configured fix target", ErrPreviewRejected)
 	}
-	subject := &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern, SourceFiles: sourceFiles}
+	subject := &ActionSubject{
+		Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern, SourceFiles: sourceFiles,
+		EnforcePublishedContract: generationContext == nil || generationContext.Source == nil,
+	}
 	if err := s.verifyRemediation(ctx, subject); err != nil {
 		return PreviewResult{}, nil, err
 	}

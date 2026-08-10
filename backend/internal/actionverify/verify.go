@@ -438,7 +438,144 @@ func verifyModifySymbol(ctx context.Context, reader Reader, archive Archive, tar
 	if !declared {
 		return inconclusive(fmt.Sprintf("%s is not defined in the proposed path %s", target.Symbol, target.Path)), nil
 	}
+	if target.RequiredCall != "" {
+		called, matches, uncertain, err := symbolCalls(archive, content, target.Path, target.Symbol, target.RequiredCall)
+		if err != nil {
+			return inconclusive(fmt.Sprintf("remediation source %s could not be parsed", target.Path)), nil
+		}
+		if matches == 0 {
+			return inconclusive(fmt.Sprintf("%s in %s is not a function or method", target.Symbol, target.Path)), nil
+		}
+		if matches > 1 {
+			return inconclusive(fmt.Sprintf("%s identifies multiple methods in %s", target.Symbol, target.Path)), nil
+		}
+		if uncertain {
+			return inconclusive(fmt.Sprintf("%s call identity cannot be proven in %s", target.RequiredCall, target.Path)), nil
+		}
+		if called {
+			return Result{State: StateAlreadyPresent, Reason: fmt.Sprintf("%s already calls %s in %s at the grounded commit", target.Symbol, target.RequiredCall, target.Path)}, nil
+		}
+		return Result{State: StateUnresolved, Reason: fmt.Sprintf("%s does not call %s in %s at the grounded commit", target.Symbol, target.RequiredCall, target.Path)}, nil
+	}
 	return Result{State: StateUnresolved, Reason: fmt.Sprintf("verified %s in %s requires the proposed behavior change", target.Symbol, target.Path)}, nil
+}
+
+func symbolCalls(archive Archive, content, filePath, symbol, requiredCall string) (called bool, matches int, uncertain bool, err error) {
+	file, err := parser.ParseFile(token.NewFileSet(), filePath, content, 0)
+	if err != nil {
+		return false, 0, false, err
+	}
+	requiredImport, requiredName, ok := parseRequiredCall(requiredCall)
+	if !ok {
+		return false, 0, false, fmt.Errorf("invalid required call")
+	}
+	imports := map[string]string{}
+	defaultImport := false
+	dotImport := false
+	for _, spec := range file.Imports {
+		importPath, unquoteErr := strconv.Unquote(spec.Path.Value)
+		if unquoteErr != nil {
+			continue
+		}
+		alias := path.Base(importPath)
+		if spec.Name != nil {
+			alias = spec.Name.Name
+			if alias == "." && importPath == requiredImport {
+				dotImport = true
+			}
+		} else if importPath == requiredImport {
+			defaultImport = true
+		}
+		if alias != "" && alias != "." && alias != "_" {
+			imports[alias] = importPath
+		}
+	}
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Name.Name != symbol || function.Body == nil {
+			continue
+		}
+		matches++
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			switch function := call.Fun.(type) {
+			case *ast.Ident:
+				if function.Name != requiredName {
+					break
+				}
+				if requiredImport != "" {
+					if dotImport && function.Obj == nil {
+						uncertain = true
+					}
+					break
+				}
+				if function.Obj != nil {
+					called = function.Obj.Kind == ast.Fun
+					break
+				}
+				called = packageDefinesFunction(archive, filePath, file.Name.Name, requiredName)
+			case *ast.SelectorExpr:
+				qualifier, identifier := function.X.(*ast.Ident)
+				if !identifier || qualifier.Obj != nil || requiredImport == "" || function.Sel.Name != requiredName {
+					break
+				}
+				importPath, found := imports[qualifier.Name]
+				if found && importPath == requiredImport {
+					called = true
+				} else if !found && defaultImport {
+					uncertain = true
+				}
+			}
+			return !called
+		})
+	}
+	return called, matches, uncertain, nil
+}
+
+func packageDefinesFunction(archive Archive, targetPath, packageName, symbol string) bool {
+	targetDir := path.Dir(targetPath)
+	for filePath, source := range archive.GoFiles {
+		if path.Dir(filePath) != targetDir {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), filePath, source, 0)
+		if err != nil || file.Name.Name != packageName {
+			continue
+		}
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if ok && function.Recv == nil && function.Name.Name == symbol {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ValidRequiredCall reports whether value is a direct function name or an
+// import-path-qualified function name.
+func ValidRequiredCall(value string) bool {
+	_, _, ok := parseRequiredCall(value)
+	return ok
+}
+
+func parseRequiredCall(value string) (importPath, name string, ok bool) {
+	value = strings.TrimSpace(value)
+	if token.IsIdentifier(value) {
+		return "", value, true
+	}
+	dot := strings.LastIndex(value, ".")
+	if dot <= 0 || dot == len(value)-1 {
+		return "", "", false
+	}
+	importPath, name = value[:dot], value[dot+1:]
+	if !token.IsIdentifier(name) || strings.ContainsAny(importPath, "\\\r\n\x00 \t") || strings.HasPrefix(importPath, "/") || path.Clean(importPath) != importPath || importPath == "." || importPath == ".." || strings.HasPrefix(importPath, "../") {
+		return "", "", false
+	}
+	return importPath, name, true
 }
 
 func verifyConfiguration(ctx context.Context, reader Reader, archive Archive, target models.RemediationTarget) (Result, error) {
@@ -476,20 +613,25 @@ func InvalidTargetReason(target models.RemediationTarget) string {
 			path.Clean(value) == value && value != "." && value != ".." && !strings.HasPrefix(value, "../")
 	}
 	switch target.Intent {
-	case models.RemediationIntentAddSymbol, models.RemediationIntentModifySymbol:
-		if !token.IsIdentifier(target.Symbol) || !validPath(target.Path) || !strings.HasSuffix(target.Path, ".go") || target.Value != "" ||
+	case models.RemediationIntentAddSymbol:
+		if !token.IsIdentifier(target.Symbol) || target.RequiredCall != "" || !validPath(target.Path) || !strings.HasSuffix(target.Path, ".go") || target.Value != "" ||
+			target.Repository != "" || target.Revision != "" || target.Job != "" || target.Container != "" || target.Name != "" {
+			return "symbol remediation metadata is invalid"
+		}
+	case models.RemediationIntentModifySymbol:
+		if !token.IsIdentifier(target.Symbol) || (target.RequiredCall != "" && (!ValidRequiredCall(target.RequiredCall) || target.RequiredCall == target.Symbol)) || !validPath(target.Path) || !strings.HasSuffix(target.Path, ".go") || target.Value != "" ||
 			target.Repository != "" || target.Revision != "" || target.Job != "" || target.Container != "" || target.Name != "" {
 			return "symbol remediation metadata is invalid"
 		}
 	case models.RemediationIntentSetConfiguration, models.RemediationIntentRemoveConfiguration:
 		key, expected, assignment := strings.Cut(target.Value, "=")
-		if target.Symbol != "" || target.Repository != "" || target.Revision != "" || target.Job != "" || target.Container != "" || target.Name != "" ||
+		if target.Symbol != "" || target.RequiredCall != "" || target.Repository != "" || target.Revision != "" || target.Job != "" || target.Container != "" || target.Name != "" ||
 			!validPath(target.Path) || !assignment || strings.TrimSpace(key) == "" || strings.TrimSpace(expected) == "" ||
 			len(target.Value) > 256 || strings.ContainsAny(target.Value, "\r\n\x00") {
 			return "configuration remediation metadata is invalid"
 		}
 	case models.RemediationIntentSetJobEnvironment:
-		if target.Symbol != "" || target.Repository != "kubernetes/test-infra" ||
+		if target.Symbol != "" || target.RequiredCall != "" || target.Repository != "kubernetes/test-infra" ||
 			!regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(target.Revision) || !validPath(target.Path) ||
 			!strings.HasPrefix(target.Path, "config/jobs/") || !(strings.HasSuffix(target.Path, ".yaml") || strings.HasSuffix(target.Path, ".yml")) ||
 			strings.TrimSpace(target.Job) == "" || strings.TrimSpace(target.Container) == "" ||
@@ -498,11 +640,22 @@ func InvalidTargetReason(target models.RemediationTarget) string {
 			return "Prow job environment remediation metadata is invalid"
 		}
 	case models.RemediationIntentInvestigate:
-		if target.Symbol != "" || target.Path != "" || target.Value != "" || target.Repository != "" || target.Revision != "" || target.Job != "" || target.Container != "" || target.Name != "" {
+		if target.Symbol != "" || target.RequiredCall != "" || target.Path != "" || target.Value != "" || target.Repository != "" || target.Revision != "" || target.Job != "" || target.Container != "" || target.Name != "" {
 			return "investigation remediation metadata must not claim a source target"
 		}
 	default:
 		return fmt.Sprintf("remediation intent %q is unsupported", target.Intent)
+	}
+	return ""
+}
+
+// PatternTargetReason returns why a pattern target is not implementation-ready.
+func PatternTargetReason(target models.RemediationTarget) string {
+	if reason := InvalidTargetReason(target); reason != "" {
+		return reason
+	}
+	if target.Intent == models.RemediationIntentModifySymbol && target.RequiredCall == "" {
+		return "modify_symbol remediation is missing required_call"
 	}
 	return ""
 }

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
@@ -25,7 +26,7 @@ import (
 
 // patternPromptVersion is bumped when the pattern prompt or output contract
 // changes, so cached verdicts from an older contract are re-run.
-const patternPromptVersion = 5
+const patternPromptVersion = 6
 
 const patternCacheVersion = 2
 
@@ -274,12 +275,12 @@ The suggested_fix must be ACTIONABLE: name the specific change, the mechanism it
 
 Describe every proposed source change in remediation_targets. Use one object per target with exactly these fields:
 - add_symbol: {"intent":"add_symbol","symbol":"PackageLevelGoIdentifier","path":"verified/repo/file.go"}
-- modify_symbol: {"intent":"modify_symbol","symbol":"GoIdentifier","path":"verified/repo/file.go"}
+- modify_symbol: {"intent":"modify_symbol","symbol":"GoFunctionOrMethod","required_call":"full/import/path.CalledGoIdentifier","path":"verified/repo/file.go"}
 - set_configuration: {"intent":"set_configuration","path":"verified/repo/file.yaml","value":"ExactKey=ExactValue"}
 - remove_configuration: {"intent":"remove_configuration","path":"verified/repo/file.yaml","value":"ExactKey=ExactValue"}
 - set_job_environment: {"intent":"set_job_environment","repository":"kubernetes/test-infra","revision":"full discovery commit","path":"config/jobs/.../file.yaml","job":"exact Prow job name","container":"exact container name","name":"ENV_NAME","value":"ExactValue"}
 - investigate: {"intent":"investigate"} only when the evidence does not identify an implementation-ready target
-Use set_job_environment only when the Prow job source context identifies the exact test-infra file and full discovery revision. Never use modify_symbol for a shell variable. If the exact job, container, variable, and replacement value are not known, use investigate.
+For modify_symbol, required_call identifies the exact package-level function call that represents the proposed behavior. Use the full Go import path plus function name for imported calls, for example "example.com/project/internal/migration.Apply", or a bare function name only for a same-package direct call. Method calls on arbitrary receivers are not supported; use investigate when the change cannot be represented by one exact package-level call. Read the target function and its imports before choosing required_call. Use set_job_environment only when the Prow job source context identifies the exact test-infra file and full discovery revision. Never use modify_symbol for a shell variable. If the exact job, container, variable, and replacement value are not known, use investigate.
 Do not claim verification state. The engine independently checks these targets against the pinned source.
 
 Decide:
@@ -293,7 +294,7 @@ Respond with ONLY a JSON object, no prose, no code fences:
   "shared_root_cause": "the one underlying MECHANISM (empty if not systemic); not a restated symptom",
   "shared_builds": ["buildID", ...],   // builds you judge to share the cause
   "suggested_fix": "the concrete, actionable cross-cutting fix naming the change and target (empty if not systemic)",
-	"remediation_targets": [{"intent":"add_symbol|modify_symbol|set_configuration|remove_configuration|set_job_environment|investigate","symbol":"optional","path":"optional","value":"optional","repository":"optional","revision":"optional","job":"optional","container":"optional","name":"optional"}],
+	"remediation_targets": [{"intent":"add_symbol|modify_symbol|set_configuration|remove_configuration|set_job_environment|investigate","symbol":"optional","required_call":"optional","path":"optional","value":"optional","repository":"optional","revision":"optional","job":"optional","container":"optional","name":"optional"}],
   "summary": "one short paragraph: the verdict and the evidence for it"
 }`
 
@@ -334,11 +335,11 @@ func patternResponseFormat() ResponseFormat {
 								models.RemediationIntentSetJobEnvironment,
 								models.RemediationIntentInvestigate,
 							}},
-							"symbol": stringProperty(), "path": stringProperty(), "value": stringProperty(),
+							"symbol": stringProperty(), "required_call": stringProperty(), "path": stringProperty(), "value": stringProperty(),
 							"repository": stringProperty(), "revision": stringProperty(), "job": stringProperty(),
 							"container": stringProperty(), "name": stringProperty(),
 						},
-						"required": []string{"intent", "symbol", "path", "value", "repository", "revision", "job", "container", "name"}, "additionalProperties": false,
+						"required": []string{"intent", "symbol", "required_call", "path", "value", "repository", "revision", "job", "container", "name"}, "additionalProperties": false,
 					},
 				},
 				"summary": stringProperty(),
@@ -671,7 +672,7 @@ func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string,
 	}
 
 	extract := "Extract the correlation verdict this investigation reached as JSON with exactly these keys: " +
-		`{"systemic": true|false, "confidence": "high"|"medium"|"low", "shared_root_cause": "...", "shared_builds": ["..."], "suggested_fix": "...", "remediation_targets": [{"intent":"...","symbol":"...","path":"...","value":"...","repository":"...","revision":"...","job":"...","container":"...","name":"..."}], "summary": "..."}. ` +
+		`{"systemic": true|false, "confidence": "high"|"medium"|"low", "shared_root_cause": "...", "shared_builds": ["..."], "suggested_fix": "...", "remediation_targets": [{"intent":"...","symbol":"...","required_call":"...","path":"...","value":"...","repository":"...","revision":"...","job":"...","container":"...","name":"..."}], "summary": "..."}. ` +
 		"Reply with ONLY the JSON.\n\nInvestigation:\n" + out
 	started = time.Now()
 	out2, err := s.client.Complete(ctx, "You output only a JSON object.", extract)
@@ -751,7 +752,7 @@ func (s *Service) repairPatternValidation(ctx context.Context, output string, bu
 
 func (s *Service) repairPatternAmbiguity(ctx context.Context, output string, buildIDs map[string]struct{}, observe func(PatternRepairAttempt)) (patternResponse, error) {
 	prompt := fmt.Sprintf("Repair contract version %d. The prior bounded investigation produced multiple distinct candidate contracts. Resolve them into exactly one verdict supported by that investigation. Do not add a draft, alternative, explanation, or code fence. Reply with only one JSON object using exactly these keys: "+
-		`{"systemic": true|false, "confidence": "high"|"medium"|"low", "shared_root_cause": "...", "shared_builds": ["..."], "suggested_fix": "...", "remediation_targets": [{"intent":"...","symbol":"...","path":"...","value":"...","repository":"...","revision":"...","job":"...","container":"...","name":"..."}], "summary": "..."}.`+"\n\nInvestigation output:\n%s", patternRepairVersion, output)
+		`{"systemic": true|false, "confidence": "high"|"medium"|"low", "shared_root_cause": "...", "shared_builds": ["..."], "suggested_fix": "...", "remediation_targets": [{"intent":"...","symbol":"...","required_call":"...","path":"...","value":"...","repository":"...","revision":"...","job":"...","container":"...","name":"..."}], "summary": "..."}.`+"\n\nInvestigation output:\n%s", patternRepairVersion, output)
 	started := time.Now()
 	repaired, err := s.client.Complete(ctx, "Return exactly one final recurring-pattern JSON contract and no other content.", prompt)
 	if err != nil {
@@ -919,6 +920,7 @@ func canonicalizePatternResponse(parsed patternResponse) patternResponse {
 	for i := range parsed.RemediationTargets {
 		parsed.RemediationTargets[i].Intent = strings.ToLower(strings.TrimSpace(parsed.RemediationTargets[i].Intent))
 		parsed.RemediationTargets[i].Symbol = strings.TrimSpace(parsed.RemediationTargets[i].Symbol)
+		parsed.RemediationTargets[i].RequiredCall = strings.TrimSpace(parsed.RemediationTargets[i].RequiredCall)
 		parsed.RemediationTargets[i].Path = strings.TrimPrefix(strings.TrimSpace(parsed.RemediationTargets[i].Path), "./")
 		if parsed.RemediationTargets[i].Intent != models.RemediationIntentSetJobEnvironment {
 			parsed.RemediationTargets[i].Value = strings.TrimSpace(parsed.RemediationTargets[i].Value)
@@ -1060,11 +1062,11 @@ func decodeRemediationTargets(raw json.RawMessage, targets *[]models.Remediation
 			return false
 		}
 		fields, category, _ := decodePatternObject(string(item))
-		if category != "" || len(fields) == 0 || (len(fields) > 4 && len(fields) != 9) {
+		if category != "" || len(fields) == 0 || (len(fields) > 5 && len(fields) != 10) {
 			return false
 		}
 		for name, value := range fields {
-			if name != "intent" && name != "symbol" && name != "path" && name != "value" && name != "repository" && name != "revision" && name != "job" && name != "container" && name != "name" {
+			if name != "intent" && name != "symbol" && name != "required_call" && name != "path" && name != "value" && name != "repository" && name != "revision" && name != "job" && name != "container" && name != "name" {
 				return false
 			}
 			if strings.TrimSpace(string(value)) == "null" {
@@ -1074,8 +1076,8 @@ func decodeRemediationTargets(raw json.RawMessage, targets *[]models.Remediation
 		if _, ok := fields["intent"]; !ok {
 			return false
 		}
-		if len(fields) == 9 {
-			for _, required := range []string{"symbol", "path", "value", "repository", "revision", "job", "container", "name"} {
+		if len(fields) == 10 {
+			for _, required := range []string{"symbol", "required_call", "path", "value", "repository", "revision", "job", "container", "name"} {
 				if _, ok := fields[required]; !ok {
 					return false
 				}
@@ -1111,21 +1113,24 @@ func validRemediationTarget(target models.RemediationTarget) bool {
 			len(value) <= 256 && !strings.ContainsAny(value, "\r\n\x00")
 	}
 	switch target.Intent {
-	case models.RemediationIntentAddSymbol, models.RemediationIntentModifySymbol:
-		return gotoken.IsIdentifier(target.Symbol) && validPath(target.Path) && target.Value == "" &&
+	case models.RemediationIntentAddSymbol:
+		return gotoken.IsIdentifier(target.Symbol) && target.RequiredCall == "" && validPath(target.Path) && target.Value == "" &&
+			target.Repository == "" && target.Revision == "" && target.Job == "" && target.Container == "" && target.Name == ""
+	case models.RemediationIntentModifySymbol:
+		return gotoken.IsIdentifier(target.Symbol) && actionverify.ValidRequiredCall(target.RequiredCall) && target.RequiredCall != target.Symbol && validPath(target.Path) && target.Value == "" &&
 			target.Repository == "" && target.Revision == "" && target.Job == "" && target.Container == "" && target.Name == ""
 	case models.RemediationIntentSetConfiguration, models.RemediationIntentRemoveConfiguration:
-		return target.Symbol == "" && target.Repository == "" && target.Revision == "" && target.Job == "" && target.Container == "" && target.Name == "" &&
+		return target.Symbol == "" && target.RequiredCall == "" && target.Repository == "" && target.Revision == "" && target.Job == "" && target.Container == "" && target.Name == "" &&
 			validPath(target.Path) && validValue(target.Value)
 	case models.RemediationIntentSetJobEnvironment:
-		return target.Symbol == "" && target.Repository == "kubernetes/test-infra" &&
+		return target.Symbol == "" && target.RequiredCall == "" && target.Repository == "kubernetes/test-infra" &&
 			regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(target.Revision) && validPath(target.Path) &&
 			strings.HasPrefix(target.Path, "config/jobs/") && (strings.HasSuffix(target.Path, ".yaml") || strings.HasSuffix(target.Path, ".yml")) &&
 			strings.TrimSpace(target.Job) != "" && strings.TrimSpace(target.Container) != "" &&
 			regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(target.Name) && strings.TrimSpace(target.Value) != "" &&
 			len(target.Value) <= 512 && !strings.ContainsAny(target.Value, "\r\n\x00")
 	case models.RemediationIntentInvestigate:
-		return target.Symbol == "" && target.Path == "" && target.Value == "" && target.Repository == "" && target.Revision == "" && target.Job == "" && target.Container == "" && target.Name == ""
+		return target.Symbol == "" && target.RequiredCall == "" && target.Path == "" && target.Value == "" && target.Repository == "" && target.Revision == "" && target.Job == "" && target.Container == "" && target.Name == ""
 	default:
 		return false
 	}
