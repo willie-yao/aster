@@ -25,6 +25,7 @@ func TestPreflightIdentityIncludesAllImmutableInputs(t *testing.T) {
 		{RequestHash: base.RequestHash, AuthoritativeHash: base.AuthoritativeHash, SourceRevision: strings.Repeat("b", 40), SkillHash: base.SkillHash, RuntimeIdentity: base.RuntimeIdentity},
 		{RequestHash: base.RequestHash, AuthoritativeHash: base.AuthoritativeHash, SourceRevision: base.SourceRevision, SkillHash: hashString("skills-2"), RuntimeIdentity: base.RuntimeIdentity},
 		{RequestHash: base.RequestHash, AuthoritativeHash: base.AuthoritativeHash, SourceRevision: base.SourceRevision, SkillHash: base.SkillHash, RuntimeIdentity: hashString("runtime-2")},
+		{RequestHash: base.RequestHash, AuthoritativeHash: base.AuthoritativeHash, SourceRevision: base.SourceRevision, SkillHash: base.SkillHash, RuntimeIdentity: base.RuntimeIdentity, TrialDiscriminator: "arm/2"},
 	}
 	for index, changed := range changes {
 		got, err := PreflightIdentity(changed)

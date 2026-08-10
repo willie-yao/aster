@@ -172,7 +172,7 @@ func (p *pipeline) runCausalCriticCandidate(ctx context.Context, candidate shado
 	if preflightFailureCode == "" {
 		preflightFailureCode = record.ErrorCode
 	}
-	if record.AttemptHash != "" {
+	if record.AttemptHash != "" && record.Status != causalcritic.TrialPending {
 		completePreflight(causalcritic.PreflightSubmitted, preflightFailureCode, record.AttemptHash)
 	}
 	if errors.Is(runErr, causalcritic.ErrTrialAlreadyAttempted) {

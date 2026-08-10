@@ -36,11 +36,12 @@ type PreflightAttempt struct {
 
 // PreflightIdentityInput contains immutable values available before artifact I/O.
 type PreflightIdentityInput struct {
-	RequestHash       string
-	AuthoritativeHash string
-	SourceRevision    string
-	SkillHash         string
-	RuntimeIdentity   string
+	RequestHash        string
+	AuthoritativeHash  string
+	SourceRevision     string
+	SkillHash          string
+	RuntimeIdentity    string
+	TrialDiscriminator string
 }
 
 // PreflightIdentity seals one candidate before evidence retrieval.
@@ -57,6 +58,9 @@ func PreflightIdentity(input PreflightIdentityInput) (string, error) {
 			return "", fmt.Errorf("causal critic preflight %s hash is invalid", name)
 		}
 	}
+	if input.TrialDiscriminator != strings.TrimSpace(input.TrialDiscriminator) || len(input.TrialDiscriminator) > 160 || strings.ContainsAny(input.TrialDiscriminator, "\r\n\x00") {
+		return "", fmt.Errorf("causal critic preflight trial discriminator is invalid")
+	}
 	if len(input.SourceRevision) != 40 || input.SourceRevision != strings.ToLower(input.SourceRevision) {
 		return "", fmt.Errorf("causal critic preflight source revision is invalid")
 	}
@@ -64,13 +68,14 @@ func PreflightIdentity(input PreflightIdentityInput) (string, error) {
 		return "", fmt.Errorf("causal critic preflight source revision is invalid")
 	}
 	data, _ := json.Marshal(struct {
-		ContractVersion   string `json:"contract_version"`
-		RequestHash       string `json:"request_hash"`
-		AuthoritativeHash string `json:"authoritative_hash"`
-		SourceRevision    string `json:"source_revision"`
-		SkillHash         string `json:"skill_hash"`
-		RuntimeIdentity   string `json:"runtime_identity"`
-	}{ContractVersion, input.RequestHash, input.AuthoritativeHash, input.SourceRevision, skillHash, input.RuntimeIdentity})
+		ContractVersion    string `json:"contract_version"`
+		RequestHash        string `json:"request_hash"`
+		AuthoritativeHash  string `json:"authoritative_hash"`
+		SourceRevision     string `json:"source_revision"`
+		SkillHash          string `json:"skill_hash"`
+		RuntimeIdentity    string `json:"runtime_identity"`
+		TrialDiscriminator string `json:"trial_discriminator,omitempty"`
+	}{ContractVersion, input.RequestHash, input.AuthoritativeHash, input.SourceRevision, skillHash, input.RuntimeIdentity, input.TrialDiscriminator})
 	return hashString(string(data)), nil
 }
 

@@ -171,7 +171,7 @@ func RunTrial(ctx context.Context, reviewer Reviewer, spec TrialSpec) (TrialReco
 		return TrialRecord{}, err
 	}
 	if !claimed {
-		existing, found, lookupErr := loadTrialByAttempt(spec.PublicDir, spec.LedgerPath, attemptHash)
+		existing, found, lookupErr := loadTrialByAttempt(spec.PublicDir, spec.LedgerPath, attemptHash, record)
 		if lookupErr != nil {
 			return TrialRecord{}, errors.Join(fmt.Errorf("%w: %s repetition %d", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition), lookupErr)
 		}
@@ -222,7 +222,7 @@ func RunTrial(ctx context.Context, reviewer Reviewer, spec TrialSpec) (TrialReco
 	return record, runErr
 }
 
-func loadTrialByAttempt(publicDir, path, attemptHash string) (TrialRecord, bool, error) {
+func loadTrialByAttempt(publicDir, path, attemptHash string, fallback TrialRecord) (TrialRecord, bool, error) {
 	var found TrialRecord
 	ok := false
 	err := withLedgerLock(publicDir, path, func(resolved string) error {
@@ -233,6 +233,14 @@ func loadTrialByAttempt(publicDir, path, attemptHash string) (TrialRecord, bool,
 		for _, record := range ledger.Records {
 			if record.AttemptHash == attemptHash {
 				found = record
+				ok = true
+				return nil
+			}
+		}
+		for _, attempt := range ledger.Attempts {
+			if attempt.Hash == attemptHash {
+				found = fallback
+				found.Status = attempt.Status
 				ok = true
 				break
 			}

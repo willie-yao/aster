@@ -456,7 +456,7 @@ func TestRunTrialReturnsIdentityForAttemptTombstone(t *testing.T) {
 		PublicDir: publicDir, LedgerPath: ledgerPath, Metadata: metadata, Input: input, ExecutionID: executionID, RuntimeIdentity: runtimeIdentity,
 		Now: func() time.Time { return created.Add(time.Minute) },
 	})
-	if !errors.Is(err, ErrTrialAlreadyAttempted) || record.AttemptHash != attemptHash || record.PairHash != input.PairHash || reviewer.calls != 0 {
+	if !errors.Is(err, ErrTrialAlreadyAttempted) || record.AttemptHash != attemptHash || record.PairHash != input.PairHash || record.Status != TrialSucceeded || reviewer.calls != 0 {
 		t.Fatalf("record=%+v reviewer=%d err=%v", record, reviewer.calls, err)
 	}
 }

@@ -91,7 +91,6 @@ func TestAgentSandboxCausalCriticBenchmark(t *testing.T) {
 	for _, authoritative := range inputRecords {
 		authoritative := authoritative
 		t.Run(fmt.Sprintf("rep-%02d", authoritative.Repetition), func(t *testing.T) {
-			bundle := causalCriticEvidenceBundle(t, bc, condition, projectSkills)
 			snapshot := agentanalysis.AuthoritativeSnapshot{
 				Summary: authoritative.Summary, IsTransient: authoritative.IsTransient != nil && *authoritative.IsTransient,
 				RootCause: authoritative.RootCause, Severity: authoritative.Severity, SuggestedFix: authoritative.SuggestedFix,
@@ -101,12 +100,47 @@ func TestAgentSandboxCausalCriticBenchmark(t *testing.T) {
 				JudgeObjected: slices.ContainsFunc(authoritative.SemanticJudgeOutcomes, func(value string) bool { return strings.Contains(value, "objected") }),
 				JudgeRevised:  authoritative.SemanticRevisionSelected,
 			}
-			bundle, err := causalcritic.EnsureCitedEvidence(t.Context(), causalCriticBrowser(t, bc), bundle, snapshot.EvidenceCitations)
+			request, repository := causalCriticBenchmarkCandidate(t, bc)
+			preflightIdentity, err := causalcritic.PreflightIdentity(causalcritic.PreflightIdentityInput{
+				RequestHash: agentanalysis.FailureRequestHash(request), AuthoritativeHash: causalCriticAuthoritativeHash(t, snapshot),
+				SourceRevision: repository.Revision, SkillHash: projectSkills.Hash(), RuntimeIdentity: runtime.RuntimeIdentity(),
+				TrialDiscriminator: fmt.Sprintf("%s/%d", authoritative.Arm, authoritative.Repetition),
+			})
 			if err != nil {
+				t.Fatal(err)
+			}
+			preflight, claimed, err := causalcritic.ClaimPreflightAttempt(publicDir, ledgerPath, preflightIdentity, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !claimed {
+				t.Logf("critic benchmark preflight already exists: %s", preflight.Status)
+			}
+			completePreflight := func(status causalcritic.PreflightStatus, failureCode, trialAttemptHash string) {
+				if !claimed {
+					return
+				}
+				if err := causalcritic.CompletePreflightAttempt(publicDir, ledgerPath, preflightIdentity, status, failureCode, trialAttemptHash, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			bundle, err := causalCriticEvidenceBundle(t, bc, condition, projectSkills, request, repository)
+			if err != nil {
+				completePreflight(causalcritic.PreflightEvidenceFailed, "evidence_freeze", "")
+				t.Fatal(err)
+			}
+			bundle, err = causalcritic.EnsureCitedEvidence(t.Context(), causalCriticBrowser(t, bc), bundle, snapshot.EvidenceCitations)
+			if err != nil {
+				completePreflight(causalcritic.PreflightEvidenceFailed, "evidence_citation", "")
 				t.Fatal(err)
 			}
 			input, err := causalcritic.NewInput(bundle, snapshot)
 			if err != nil {
+				failureCode := "input_invalid"
+				if code := causalcritic.ValidationCodeOf(err); code != "" {
+					failureCode = "validation_" + string(code)
+				}
+				completePreflight(causalcritic.PreflightInputInvalid, failureCode, "")
 				t.Fatal(err)
 			}
 			metadata := causalcritic.TrialMetadata{
@@ -121,6 +155,13 @@ func TestAgentSandboxCausalCriticBenchmark(t *testing.T) {
 				PublicDir: publicDir, LedgerPath: ledgerPath, Metadata: metadata, Input: input, ExecutionID: executionID,
 				RuntimeIdentity: runtime.RuntimeIdentity(),
 			})
+			if record.AttemptHash != "" && record.Status != causalcritic.TrialPending {
+				failureCode := record.FailureCode
+				if failureCode == "" {
+					failureCode = record.ErrorCode
+				}
+				completePreflight(causalcritic.PreflightSubmitted, failureCode, record.AttemptHash)
+			}
 			if errors.Is(runErr, causalcritic.ErrTrialAlreadyAttempted) {
 				if record.AttemptHash == "" {
 					t.Fatal("critic trial already exists but its detailed ledger record was pruned")
@@ -145,9 +186,8 @@ func causalCriticBrowser(t *testing.T, bc benchCase) artifacts.Browser {
 	return artifactsBrowser(backend, bucketLabel, loc.BuildPath(), bc.jobName+"/"+bc.buildID)
 }
 
-func causalCriticEvidenceBundle(t *testing.T, bc benchCase, condition string, projectSkills *skills.Set) agentanalysis.EvidenceBundle {
+func causalCriticBenchmarkCandidate(t *testing.T, bc benchCase) (ai.FailureAnalysisRequest, sourceinvestigation.Repository) {
 	t.Helper()
-	backend, bucketLabel := benchStorage(t, bc)
 	loc := prowbuildLocation(bc)
 	build := models.BuildInfo{
 		BuildID: bc.buildID, JobName: bc.jobName, PullNumber: bc.pullNumber, WebURL: bc.webURL,
@@ -161,28 +201,40 @@ func causalCriticEvidenceBundle(t *testing.T, bc benchCase, condition string, pr
 		JobID: models.JobIDFor(bc.jobType, bc.repo, bc.jobName), BuildPrefix: loc.BuildPath(), Build: build,
 		TestCase: *benchTestCase(bc), ConsecutiveFailures: bc.consecutiveFailures,
 	}
-	repository := sourceinvestigation.Repository{Owner: source.Owner, Name: source.Name, Revision: source.Revision}
+	return request, sourceinvestigation.Repository{Owner: source.Owner, Name: source.Name, Revision: source.Revision}
+}
+
+func causalCriticAuthoritativeHash(t *testing.T, snapshot agentanalysis.AuthoritativeSnapshot) string {
+	t.Helper()
+	_, hash, err := agentanalysis.NewAuthoritativeSnapshot(
+		&models.AISummary{Summary: snapshot.Summary, IsTransient: snapshot.IsTransient},
+		&models.AIAnalysis{
+			RootCause: snapshot.RootCause, Severity: snapshot.Severity, SuggestedFix: snapshot.SuggestedFix,
+			RelevantFiles: slices.Clone(snapshot.RelevantFiles), EvidenceCitations: slices.Clone(snapshot.EvidenceCitations),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hash
+}
+
+func causalCriticEvidenceBundle(t *testing.T, bc benchCase, condition string, projectSkills *skills.Set, request ai.FailureAnalysisRequest, repository sourceinvestigation.Repository) (agentanalysis.EvidenceBundle, error) {
+	t.Helper()
+	backend, bucketLabel := benchStorage(t, bc)
 	browser := artifactsBrowser(backend, bucketLabel, request.BuildPrefix, bc.jobName+"/"+bc.buildID)
 	if condition == benchmarkEvidenceConditionOracle {
 		preparation, err := prepareBenchmarkEvidence(context.Background(), browser, bc, condition, newBenchmarkEvidenceRecorder(bc.evidenceGroups))
 		if err != nil {
-			t.Fatal(err)
+			return agentanalysis.EvidenceBundle{}, err
 		}
 		excerpts := make([]agentanalysis.EvidenceExcerpt, 0, len(preparation.oracleExcerpts))
 		for _, excerpt := range preparation.oracleExcerpts {
 			excerpts = append(excerpts, agentanalysis.EvidenceExcerpt{Path: excerpt.Path, Kind: "grep", Content: excerpt.Content})
 		}
-		bundle, err := agentanalysis.NewEvidenceBundle(request, repository, agentanalysis.ArtifactScan{PathCount: len(excerpts), Digest: preparation.frozenSHA256}, nil, excerpts, projectSkills.Hash())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return bundle
+		return agentanalysis.NewEvidenceBundle(request, repository, agentanalysis.ArtifactScan{PathCount: len(excerpts), Digest: preparation.frozenSHA256}, nil, excerpts, projectSkills.Hash())
 	}
-	bundle, err := agentanalysis.FreezeEvidence(t.Context(), browser, request, repository, projectSkills)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return bundle
+	return agentanalysis.FreezeEvidence(t.Context(), browser, request, repository, projectSkills)
 }
 
 func verifyCausalCriticBenchmarkCluster(t *testing.T, contextName string) {
