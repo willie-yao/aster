@@ -97,7 +97,22 @@ test("AI usage labels cost and token coverage accurately", () => {
   assert.match(page, /Recorded estimates use the price stored with each operation/);
   assert.match(page, /Current-rate estimates apply the rates configured now/);
   assert.match(page, /aria-label="Historical daily AI usage and cost"/);
-  assert.match(page, /role="img" aria-labelledby="daily-cost-chart-title daily-cost-chart-desc"/);
+  assert.match(page, /role="img"/);
+  assert.match(page, /aria-labelledby="daily-cost-chart-title daily-cost-chart-desc"/);
+  assert.match(page, /onPointerMove=\{selectPointerDay\}/);
+  assert.match(page, /onKeyDown=\{selectKeyboardDay\}/);
+  assert.match(page, /Recorded estimate \(solid\)/);
+  assert.match(page, /Current-rate estimate \(dashed\)/);
+  assert.match(page, /\{recordedPath && <Typography/);
+  assert.match(page, /\{currentPath && <Typography/);
+  assert.match(page, /role="status" aria-live="polite"/);
+  assert.match(page, /Coverage: \{activeDay\.coverage\.status\}/);
+  assert.match(page, /var\(--mui-palette-warning-main\)/);
+  assert.match(page, /chartScale\(rawMax, availableIndexes\.length > 0\)/);
+  assert.match(page, /chartCurrencyPolicy\(recordedCurrency, currentCurrency, mixedCurrency\)/);
+  assert.match(page, /chartSeriesDescription\(Boolean\(recordedPath\), Boolean\(currentPath\)\)/);
+  assert.match(page, /chartDateTickIndexes\(days\.length\)/);
+  assert.doesNotMatch(page, /`\$\{exact\} partial`/);
   assert.match(page, /Partial UTC day/);
   assert.match(page, /No usage recorded/);
   assert.match(page, /TableSortLabel/);
@@ -106,4 +121,6 @@ test("AI usage labels cost and token coverage accurately", () => {
     assert.match(page, new RegExp(`>${mobileMetric}<`));
   }
   assert.match(page, /Not reported/);
+  assert.match(page, /overflowX: "auto"/);
+  assert.match(page, /minWidth: 200/);
 });

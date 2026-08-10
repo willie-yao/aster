@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState, type KeyboardEvent, type PointerEvent } from "react";
 import Download from "@mui/icons-material/Download";
 import KeyboardArrowDown from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowRight from "@mui/icons-material/KeyboardArrowRight";
@@ -26,12 +26,18 @@ import { Panel } from "../components/Panel";
 import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
 import {
+  chartCurrencyPolicy,
+  chartDateTickIndexes,
+  chartScale,
+  chartSeriesDescription,
   featureLabels,
+  formatChartCost,
   formatCost,
   formatCoverage,
   formatExactCost,
   formatExactTokens,
   formatTokens,
+  nearestChartDataIndex,
   pricedRequestCoverageNote,
   totalTokens,
   uncachedInputTokens,
@@ -132,33 +138,103 @@ function linePath(values: Array<number | null>, width: number, height: number, m
   return path;
 }
 
+function chartDateLabel(date: string): string {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  return Number.isNaN(parsed.valueOf()) ? date : new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(parsed);
+}
+
 function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCurrency: boolean }) {
-  const width = 960; const height = 210; const inset = 12;
-  const recorded = days.map((day) => !mixedCurrency && (day.recorded_cost_status === "available" || day.recorded_cost_status === "partial") ? costNumber(day.totals.estimated_cost_nanos) : null);
-  const current = days.map((day) => day.current_rate_status !== "unavailable" ? costNumber(day.current_rate_estimated_cost_nanos) : null);
-  const max = Math.max(0, ...recorded.map((v) => v ?? 0), ...current.map((v) => v ?? 0));
-  const recordedPath = linePath(recorded, width - inset * 2, height - inset * 2, max);
-  const currentPath = linePath(current, width - inset * 2, height - inset * 2, max);
-  if (max === 0) return <Box sx={{ py: 5, textAlign: "center" }}><Typography color="text.secondary">No priced daily cost values are available in this range.</Typography></Box>;
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const width = 960; const height = 270;
+  const plot = { left: 70, right: 18, top: 24, bottom: 42 };
+  const plotWidth = width - plot.left - plot.right; const plotHeight = height - plot.top - plot.bottom;
+  const recordedCandidates = days.map((day) => day.recorded_currency && (day.recorded_cost_status === "available" || day.recorded_cost_status === "partial") ? costNumber(day.totals.estimated_cost_nanos) : null);
+  const currentCandidates = days.map((day) => day.current_rate_currency && day.current_rate_status !== "unavailable" ? costNumber(day.current_rate_estimated_cost_nanos) : null);
+  const recordedCurrency = days.find((_, index) => recordedCandidates[index] !== null)?.recorded_currency;
+  const currentCurrency = days.find((_, index) => currentCandidates[index] !== null)?.current_rate_currency;
+  const currencyPolicy = chartCurrencyPolicy(recordedCurrency, currentCurrency, mixedCurrency);
+  const recorded = currencyPolicy.showRecorded ? recordedCandidates : recordedCandidates.map(() => null);
+  const current = currencyPolicy.showCurrent ? currentCandidates : currentCandidates.map(() => null);
+  const availableIndexes = days.flatMap((_, index) => recorded[index] !== null || current[index] !== null ? [index] : []);
+  const rawMax = Math.max(0, ...recorded.map((value) => value ?? 0), ...current.map((value) => value ?? 0));
+  const scale = chartScale(rawMax, availableIndexes.length > 0); const ticks = scale.ticks; const axisMax = scale.max;
+  const recordedPath = linePath(recorded, plotWidth, plotHeight, axisMax);
+  const currentPath = linePath(current, plotWidth, plotHeight, axisMax);
+  const xForIndex = (index: number) => plot.left + (days.length === 1 ? plotWidth / 2 : index / (days.length - 1) * plotWidth);
+  const yForValue = (value: number) => plot.top + plotHeight - value / axisMax * plotHeight;
+  const chartCurrency = current.some((value) => value !== null) ? currentCurrency : recordedCurrency;
+  const seriesDescription = chartSeriesDescription(Boolean(recordedPath), Boolean(currentPath));
+  const selectedIndex = activeIndex !== null && availableIndexes.includes(activeIndex) ? activeIndex : null;
+  const activeDay = selectedIndex === null ? null : days[selectedIndex];
+  const activeX = selectedIndex === null ? null : xForIndex(selectedIndex);
+  const tooltipTransform = selectedIndex !== null && selectedIndex <= Math.max(1, days.length * .2) ? "translateX(0)" : selectedIndex !== null && selectedIndex >= days.length * .8 ? "translateX(-100%)" : "translateX(-50%)";
+  const selectPointerDay = (event: PointerEvent<SVGSVGElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const svgX = (event.clientX - bounds.left) / bounds.width * width;
+    const target = days.length <= 1 ? 0 : Math.round(Math.max(0, Math.min(plotWidth, svgX - plot.left)) / plotWidth * (days.length - 1));
+    setActiveIndex(nearestChartDataIndex(target, availableIndexes));
+  };
+  const selectKeyboardDay = (event: KeyboardEvent<SVGSVGElement>) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const position = selectedIndex === null ? -1 : availableIndexes.indexOf(selectedIndex);
+    if (event.key === "Home") setActiveIndex(availableIndexes[0] ?? null);
+    else if (event.key === "End") setActiveIndex(availableIndexes.at(-1) ?? null);
+    else if (event.key === "ArrowLeft") setActiveIndex(availableIndexes[Math.max(0, position < 0 ? availableIndexes.length - 1 : position - 1)] ?? null);
+    else setActiveIndex(availableIndexes[Math.min(availableIndexes.length - 1, position < 0 ? 0 : position + 1)] ?? null);
+  };
+  if (availableIndexes.length === 0) return <Box sx={{ py: 5, textAlign: "center" }}><Typography color="text.secondary">No comparable single-currency daily cost values are available in this range.</Typography>{currencyPolicy.note && <Typography variant="caption" color="text.secondary">{currencyPolicy.note}</Typography>}</Box>;
   return <Box>
-    <Box component="svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-labelledby="daily-cost-chart-title daily-cost-chart-desc" sx={{ width: "100%", height: { xs: 190, md: 240 }, display: "block", color: "primary.main" }}>
-      <title id="daily-cost-chart-title">Daily AI cost estimates</title>
-      <desc id="daily-cost-chart-desc">Recorded estimates use rates stored with each operation. Dashed current-rate estimates reprice historical token totals using the rates configured now. Exact daily values are listed in the table below.</desc>
-      {[0, .25, .5, .75, 1].map((fraction) => <line key={fraction} x1={inset} x2={width - inset} y1={inset + (height - inset * 2) * fraction} y2={inset + (height - inset * 2) * fraction} stroke="currentColor" opacity="0.09" />)}
-      <g transform={`translate(${inset} ${inset})`}>
-        {recordedPath && <path d={recordedPath} fill="none" stroke="currentColor" strokeWidth="3" />}
-        {currentPath && <path d={currentPath} fill="none" stroke="var(--mui-palette-primary-main)" strokeWidth="3" strokeDasharray="9 7" />}
-        {days.map((day, index) => {
-          const x = days.length === 1 ? (width - inset * 2) / 2 : index / (days.length - 1) * (width - inset * 2);
-          const value = current[index]; if (value === null) return null;
-          const y = (height - inset * 2) - value / max * (height - inset * 2);
-          return <rect key={day.date} x={x - 3.5} y={y - 3.5} width="7" height="7" fill="currentColor" stroke="#0f172a" strokeWidth="2"><title>{day.date}: current-rate {day.current_rate_currency} {value.toFixed(2)}</title></rect>;
+    <Box sx={{ overflowX: "auto", pb: .5 }}>
+      <Box sx={{ position: "relative", minWidth: { xs: 720, md: 0 } }}>
+        <Box
+          component="svg"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        tabIndex={0}
+        aria-labelledby="daily-cost-chart-title daily-cost-chart-desc"
+        onPointerMove={selectPointerDay}
+        onPointerLeave={() => setActiveIndex(null)}
+        onFocus={() => setActiveIndex((currentIndex) => currentIndex !== null && availableIndexes.includes(currentIndex) ? currentIndex : availableIndexes.at(-1) ?? null)}
+        onBlur={() => setActiveIndex(null)}
+        onKeyDown={selectKeyboardDay}
+        sx={{ width: "100%", height: { xs: 230, md: 285 }, display: "block", borderRadius: 1, outline: "none", "&:focus-visible": { boxShadow: "0 0 0 2px var(--mui-palette-primary-main)" } }}
+      >
+        <title id="daily-cost-chart-title">Daily AI cost estimates</title>
+        <desc id="daily-cost-chart-desc">{seriesDescription}{currencyPolicy.note ? ` ${currencyPolicy.note}` : ""}</desc>
+        <text x={plot.left} y="13" fill="var(--mui-palette-text-secondary)" fontSize="11">{chartCurrency ? `${chartCurrency} per UTC day` : "Cost per UTC day"}</text>
+        {ticks.map((tick) => {
+          const y = yForValue(tick);
+          return <g key={tick}>
+            <line x1={plot.left} x2={plot.left + plotWidth} y1={y} y2={y} stroke="var(--mui-palette-divider)" opacity="0.7" />
+            <text x={plot.left - 10} y={y + 4} textAnchor="end" fill="var(--mui-palette-text-secondary)" fontSize="11">{formatChartCost(tick, chartCurrency)}</text>
+          </g>;
         })}
-      </g>
+        {chartDateTickIndexes(days.length).map((index) => <text key={days[index].date} x={xForIndex(index)} y={plot.top + plotHeight + 27} textAnchor={index === 0 ? "start" : index === days.length - 1 ? "end" : "middle"} fill="var(--mui-palette-text-secondary)" fontSize="11">{chartDateLabel(days[index].date)}</text>)}
+        <g transform={`translate(${plot.left} ${plot.top})`}>
+          {recordedPath && <path d={recordedPath} fill="none" stroke="var(--mui-palette-primary-main)" strokeWidth="3" strokeLinecap="round" />}
+          {currentPath && <path d={currentPath} fill="none" stroke="var(--mui-palette-warning-main)" strokeWidth="3" strokeDasharray="9 7" strokeLinecap="round" />}
+          {recorded.map((value, index) => value === null ? null : <circle key={`recorded-${days[index].date}`} cx={xForIndex(index) - plot.left} cy={yForValue(value) - plot.top} r="3.5" fill="var(--mui-palette-primary-main)" stroke="var(--mui-palette-background-default)" strokeWidth="1.5" />)}
+          {current.map((value, index) => value === null ? null : <rect key={`current-${days[index].date}`} x={xForIndex(index) - plot.left - 3.5} y={yForValue(value) - plot.top - 3.5} width="7" height="7" fill="var(--mui-palette-warning-main)" stroke="var(--mui-palette-background-default)" strokeWidth="1.5" />)}
+        </g>
+        {activeX !== null && <line x1={activeX} x2={activeX} y1={plot.top} y2={plot.top + plotHeight} stroke="var(--mui-palette-text-secondary)" strokeDasharray="3 5" opacity="0.7" />}
+        {selectedIndex !== null && recorded[selectedIndex] !== null && <circle cx={activeX ?? 0} cy={yForValue(recorded[selectedIndex] ?? 0)} r="7" fill="var(--mui-palette-background-paper)" stroke="var(--mui-palette-primary-main)" strokeWidth="3" />}
+        {selectedIndex !== null && current[selectedIndex] !== null && <rect x={(activeX ?? 0) - 6.5} y={yForValue(current[selectedIndex] ?? 0) - 6.5} width="13" height="13" fill="var(--mui-palette-background-paper)" stroke="var(--mui-palette-warning-main)" strokeWidth="3" />}
+        </Box>
+        {activeDay && activeX !== null && <Box role="status" aria-live="polite" sx={{ position: "absolute", top: 22, left: `${activeX / width * 100}%`, transform: tooltipTransform, minWidth: 210, maxWidth: 270, p: 1.25, borderRadius: 1.25, border: "1px solid", borderColor: "divider", bgcolor: "background.paper", boxShadow: 6, pointerEvents: "none", zIndex: 1 }}>
+        <Typography variant="subtitle2" sx={{ fontFamily: "monospace" }}>{activeDay.date} UTC{activeDay.current_partial_utc ? " · Partial UTC day" : ""}</Typography>
+        {recordedPath && <Typography variant="caption" component="div" sx={{ mt: .5 }}><Box component="span" sx={{ color: "primary.main" }}>●</Box> Recorded: {recordedCost(activeDay)}</Typography>}
+        {currentPath && <Typography variant="caption" component="div"><Box component="span" sx={{ color: "warning.main" }}>■</Box> Current rate: {currentRateCost(activeDay)}</Typography>}
+        <Typography variant="caption" component="div" color="text.secondary">Coverage: {activeDay.coverage.status}{activeDay.coverage.states?.length ? ` · ${activeDay.coverage.states.map((state) => coverageLabels[state] ?? state.replaceAll("_", " ")).join(", ")}` : ""}</Typography>
+        </Box>}
+      </Box>
     </Box>
-    <Stack direction="row" sx={{ gap: 2, flexWrap: "wrap" }}>
-      <Typography variant="caption"><Box component="span" sx={{ display: "inline-block", width: 22, borderTop: "3px solid", mr: .8, verticalAlign: "middle" }} />Recorded estimate</Typography>
-      <Typography variant="caption"><Box component="span" sx={{ display: "inline-block", width: 22, borderTop: "3px dashed", borderColor: "primary.main", mr: .8, verticalAlign: "middle" }} />Current-rate estimate</Typography>
+    <Stack direction="row" sx={{ gap: 2, flexWrap: "wrap", alignItems: "center", mt: .5 }}>
+      {recordedPath && <Typography variant="caption"><Box component="span" sx={{ display: "inline-block", width: 22, borderTop: "3px solid", borderColor: "primary.main", mr: .8, verticalAlign: "middle" }} />Recorded estimate (solid)</Typography>}
+      {currentPath && <Typography variant="caption"><Box component="span" sx={{ display: "inline-block", width: 22, borderTop: "3px dashed", borderColor: "warning.main", mr: .8, verticalAlign: "middle" }} />Current-rate estimate (dashed)</Typography>}
+      <Typography variant="caption" color="text.secondary">Hover to inspect. Keyboard: focus chart, then use ← and →.</Typography>
+      {rawMax === 0 && <Typography variant="caption" color="text.secondary">All reported values in this chart are {formatChartCost(0, chartCurrency)}.</Typography>}
+      {currencyPolicy.note && <Typography variant="caption" color="text.secondary" sx={{ flexBasis: "100%" }}>{currencyPolicy.note}</Typography>}
     </Stack>
   </Box>;
 }
@@ -167,13 +243,11 @@ function recordedCost(day: AIUsageDaily): string {
   if (day.recorded_cost_status === "mixed_currency") return "Mixed currencies";
   if (day.recorded_cost_status === "unavailable") return "Unavailable";
   if (day.recorded_cost_status === "unknown") return "Unknown";
-  const exact = formatExactCost(day.totals.estimated_cost_nanos, day.recorded_currency);
-  return day.recorded_cost_status === "partial" ? `${exact} partial` : exact;
+  return formatExactCost(day.totals.estimated_cost_nanos, day.recorded_currency);
 }
 function currentRateCost(day: AIUsageDaily): string {
   if (day.current_rate_status === "unavailable") return "Unavailable";
-  const exact = formatExactCost(day.current_rate_estimated_cost_nanos, day.current_rate_currency);
-  return day.current_rate_status === "partial" ? `${exact} partial` : exact;
+  return formatExactCost(day.current_rate_estimated_cost_nanos, day.current_rate_currency);
 }
 
 function FeatureBreakdown({ day, currency }: { day: AIUsageDaily; currency?: string }) {
@@ -196,19 +270,19 @@ function HistoricalTable({ days }: { days: AIUsageDaily[] }) {
   const sorted = useMemo(() => [...days].sort((a, b) => ascending ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)), [ascending, days]);
   const toggle = (date: string) => setExpanded((current) => { const next = new Set(current); if (next.has(date)) next.delete(date); else next.add(date); return next; });
   return <>
-    <TableContainer sx={{ display: { xs: "none", md: "block" } }}>
-      <Table size="small" aria-label="Historical daily AI usage and cost">
+    <TableContainer sx={{ display: { xs: "none", md: "block" }, overflowX: "auto" }}>
+      <Table size="small" aria-label="Historical daily AI usage and cost" sx={{ minWidth: 1320, "& .MuiTableCell-root": { px: 1 } }}>
         <TableHead><TableRow>
           <TableCell padding="checkbox" />
           <TableCell sortDirection={ascending ? "asc" : "desc"}><TableSortLabel active direction={ascending ? "asc" : "desc"} onClick={() => setAscending((v) => !v)}>UTC date</TableSortLabel></TableCell>
-          {['Operations','Requests','Cache hits','Uncached input','Cached read','Cache write','Output','Recorded estimate','Current-rate estimate','Coverage'].map((label) => <TableCell key={label} align={label === 'Coverage' ? 'left' : 'right'}>{label}</TableCell>)}
+          {['Operations','Requests','Cache hits','Uncached input','Cached read','Cache write','Output','Recorded estimate','Current-rate estimate','Coverage'].map((label) => <TableCell key={label} align={label === 'Coverage' ? 'left' : 'right'} sx={{ minWidth: label === 'Coverage' ? 200 : label.includes('estimate') ? 120 : undefined }}>{label}</TableCell>)}
         </TableRow></TableHead>
         <TableBody>{sorted.map((day) => {
           const open = expanded.has(day.date);
           return <Fragment key={day.date}>
             <TableRow hover sx={{ opacity: day.has_usage ? 1 : .66 }}>
               <TableCell padding="checkbox"><IconButton size="small" onClick={() => toggle(day.date)} aria-label={`${open ? "Collapse" : "Expand"} feature breakdown for ${day.date}`} aria-expanded={open}>{open ? <KeyboardArrowDown /> : <KeyboardArrowRight />}</IconButton></TableCell>
-              <TableCell component="th" scope="row" sx={{ ...numericCell, fontFamily: "monospace", fontWeight: 700 }}>{day.date}{day.current_partial_utc && <Chip size="small" label="Partial UTC day" sx={{ ml: 1 }} />}</TableCell>
+              <TableCell component="th" scope="row" sx={{ ...numericCell, minWidth: 185, fontFamily: "monospace", fontWeight: 700 }}>{day.date}{day.current_partial_utc && <Chip size="small" label="Partial UTC day" sx={{ ml: 1 }} />}</TableCell>
               <TableCell align="right" sx={numericCell}>{formatExactTokens(day.totals.operations)}</TableCell>
               <TableCell align="right" sx={numericCell}>{formatExactTokens(day.totals.model_requests)}</TableCell>
               <TableCell align="right" sx={numericCell}>{formatExactTokens(day.totals.cache_hits)}</TableCell>
@@ -218,7 +292,7 @@ function HistoricalTable({ days }: { days: AIUsageDaily[] }) {
               <TableCell align="right" sx={numericCell}>{formatExactTokens(day.totals.output_tokens)}</TableCell>
               <TableCell align="right" sx={numericCell}>{recordedCost(day)}</TableCell>
               <TableCell align="right" sx={numericCell}>{currentRateCost(day)}</TableCell>
-              <TableCell><CoverageBadges coverage={day.coverage} /></TableCell>
+              <TableCell sx={{ minWidth: 200, maxWidth: 240 }}><CoverageBadges coverage={day.coverage} /></TableCell>
             </TableRow>
             <TableRow><TableCell colSpan={12} sx={{ py: 0, bgcolor: "action.hover" }}><Collapse in={open} timeout="auto" unmountOnExit><Box sx={{ py: 2, px: 1 }}><FeatureBreakdown day={day} currency={day.recorded_currency} /></Box></Collapse></TableCell></TableRow>
           </Fragment>;
@@ -284,7 +358,7 @@ export function AIUsagePage() {
         <Stat label="Model requests" value={formatTokens(totals.model_requests)} note={`${totals.cache_hits.toLocaleString()} cache hits · ${totals.unreported_requests.toLocaleString()} without usage`} />
       </Box>
       <Panel sx={{ p: { xs: 1.5, md: 2.5 } }}><Stack direction={{ xs: "column", md: "row" }} sx={{ justifyContent: "space-between", gap: 1, mb: 2 }}><Box><Typography component="h2" variant="h6">Historical daily cost</Typography><Typography variant="body2" color="text.secondary">UTC day boundaries. The current UTC day is partial until 23:59:59 UTC.</Typography></Box><Typography variant="caption" color="text.secondary">Chart: chronological · Table: newest first</Typography></Stack><DailyCostChart days={days} mixedCurrency={Boolean(data.mixed_currency)} /></Panel>
-      <Panel sx={{ p: { xs: 1, md: 2 }, overflow: "hidden" }}><Typography component="h2" variant="h6" sx={{ px: { xs: .5, md: 0 }, mb: 1.5 }}>Daily ledger</Typography><HistoricalTable days={days} /></Panel>
+      <Panel sx={{ p: { xs: 1, md: 2 }, minWidth: 0 }}><Typography component="h2" variant="h6" sx={{ px: { xs: .5, md: 0 }, mb: 1.5 }}>Daily ledger</Typography><HistoricalTable days={days} /></Panel>
       <Panel sx={{ p: 2.5 }}><Typography component="h2" variant="h6" sx={{ mb: 2 }}>Selected-range feature mix</Typography><Stack spacing={1.6}>{data.features.map((row) => <Box key={row.feature}><Stack direction="row" sx={{ justifyContent: "space-between" }}><Typography variant="body2" sx={{ fontWeight: 700 }}>{featureLabels[row.feature]}</Typography><Typography variant="caption">{formatTokens(totalTokens(row.totals))}</Typography></Stack><Bar value={totalTokens(row.totals)} max={Math.max(...data.features.map((item) => totalTokens(item.totals)), 1)} /></Box>)}{data.features.length === 0 && <Typography color="text.secondary">No feature activity in this range.</Typography>}</Stack></Panel>
     </>}
   </Stack>;
