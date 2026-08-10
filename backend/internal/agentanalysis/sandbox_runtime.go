@@ -20,7 +20,7 @@ const (
 // WorkspaceSandboxSpec describes one private staged-workspace analysis.
 type WorkspaceSandboxSpec struct {
 	Request      WorkspaceExecutionRequest
-	StageRequest []byte
+	StageRequest WorkspaceStageRequest
 	SourceRoot   string
 	ArtifactRoot string
 	ExecutionID  string
@@ -70,6 +70,9 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 	if spec.Request.ModelGateway != r.Gateway || time.Duration(spec.Request.TimeoutSeconds)*time.Second != r.Timeout || spec.Request.OutputLimitBytes != r.OutputLimitBytes {
 		return result, fmt.Errorf("workspace analysis request does not match configured gateway, timeout, or output limit")
 	}
+	if err := ValidateWorkspaceStageRequest(spec.StageRequest, spec.Request.Manifest); err != nil {
+		return result, err
+	}
 	if err := VerifySourceWorkspace(ctx, spec.SourceRoot, spec.Request.Manifest.Source.Revision); err != nil {
 		return result, err
 	}
@@ -80,11 +83,15 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 	if err != nil {
 		return result, fmt.Errorf("encode workspace analysis request: %w", err)
 	}
+	stageJSON, err := json.Marshal(spec.StageRequest)
+	if err != nil {
+		return result, fmt.Errorf("encode workspace stage request: %w", err)
+	}
 	sandboxSpec := agentsandbox.Spec{
 		Purpose: "analysis", ExecutionID: spec.ExecutionID,
 		RequestEnv: WorkspaceExecutionRequestEnv, Request: requestJSON,
 		Timeout: r.Timeout, OutputLimitBytes: r.OutputLimitBytes, WorkObserver: spec.WorkObserver,
-		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: WorkspaceStageRequestEnv, Request: spec.StageRequest},
+		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: WorkspaceStageRequestEnv, Request: stageJSON},
 	}
 	if err := agentsandbox.ValidateSpec(sandboxSpec); err != nil {
 		return result, err
@@ -112,11 +119,17 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 		return result, errors.Join(fmt.Errorf("%w: workspace analysis result: %v", engineruntime.ErrResultContract, err), runErr)
 	}
 	result.Execution = parsed
-	if raw.FinishedReason == "PodSucceeded" && parsed.TerminalState != engineruntime.TerminalSucceeded {
-		return result, errors.Join(fmt.Errorf("%w: succeeded Pod reported %q", engineruntime.ErrResultContract, parsed.TerminalState), runErr)
-	}
-	if raw.FinishedReason == "PodFailed" && parsed.TerminalState == engineruntime.TerminalSucceeded {
-		return result, errors.Join(fmt.Errorf("%w: failed Pod reported success", engineruntime.ErrResultContract), runErr)
+	switch raw.FinishedReason {
+	case "PodSucceeded":
+		if parsed.TerminalState != engineruntime.TerminalSucceeded {
+			return result, errors.Join(fmt.Errorf("%w: succeeded Pod reported %q", engineruntime.ErrResultContract, parsed.TerminalState), runErr)
+		}
+	case "PodFailed":
+		if parsed.TerminalState == engineruntime.TerminalSucceeded {
+			return result, errors.Join(fmt.Errorf("%w: failed Pod reported success", engineruntime.ErrResultContract), runErr)
+		}
+	default:
+		return result, errors.Join(fmt.Errorf("%w: unsupported Pod finished reason %q", engineruntime.ErrResultContract, raw.FinishedReason), runErr)
 	}
 	result.Telemetry.FinalizationValid = true
 	if parsed.TerminalState != engineruntime.TerminalSucceeded {

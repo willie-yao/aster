@@ -30,8 +30,12 @@ func TestWorkspaceSandboxRuntimeValidatesOneResult(t *testing.T) {
 	calls := 0
 	runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64), run: func(got agentsandbox.Spec) (agentsandbox.Result, error) {
 		calls++
-		if got.Purpose != "analysis" || got.RequestEnv != WorkspaceExecutionRequestEnv || got.StagedWorkspace == nil || got.StagedWorkspace.RequestEnv != WorkspaceStageRequestEnv || string(got.StagedWorkspace.Request) != `{"stage":1}` {
+		if got.Purpose != "analysis" || got.RequestEnv != WorkspaceExecutionRequestEnv || got.StagedWorkspace == nil || got.StagedWorkspace.RequestEnv != WorkspaceStageRequestEnv {
 			t.Fatalf("spec=%+v", got)
+		}
+		var stage WorkspaceStageRequest
+		if err := json.Unmarshal(got.StagedWorkspace.Request, &stage); err != nil || stage.Hash != spec.StageRequest.Hash {
+			t.Fatalf("stage=%+v err=%v", stage, err)
 		}
 		var request WorkspaceExecutionRequest
 		if err := json.Unmarshal(got.Request, &request); err != nil || request.Hash != spec.Request.Hash {
@@ -125,7 +129,7 @@ func TestWorkspaceSandboxRuntimeRejectsInvalidStageRequest(t *testing.T) {
 		t.Fatal("sandbox should not run for invalid stage request")
 		return agentsandbox.Result{}, nil
 	}}
-	spec.StageRequest = nil
+	spec.StageRequest.ManifestHash = strings.Repeat("0", 64)
 	if _, err := runtime.Analyze(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "stage request") {
 		t.Fatalf("error=%v", err)
 	}
@@ -147,6 +151,22 @@ func TestWorkspaceSandboxRuntimeIdentityIncludesConfiguration(t *testing.T) {
 	changed.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("d", 64)}
 	if changed.RuntimeIdentity() == base {
 		t.Fatal("Sandbox identity did not affect runtime identity")
+	}
+}
+
+func TestWorkspaceSandboxRuntimeRejectsUnknownPodReason(t *testing.T) {
+	for _, reason := range []string{"", "Evicted"} {
+		t.Run(reason, func(t *testing.T) {
+			runtime, spec := workspaceSandboxFixture(t)
+			runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64), run: func(agentsandbox.Spec) (agentsandbox.Result, error) {
+				data, _ := json.Marshal(validWorkspaceExecution(spec.Request))
+				return agentsandbox.Result{Output: string(data), FinishedReason: reason, Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true}}, nil
+			}}
+			_, err := runtime.Analyze(t.Context(), spec)
+			if !errors.Is(err, engineruntime.ErrResultContract) {
+				t.Fatalf("reason=%q error=%v", reason, err)
+			}
+		})
 	}
 }
 
@@ -178,8 +198,12 @@ func workspaceSandboxFixture(t *testing.T) (*WorkspaceSandboxRuntime, WorkspaceS
 	if err != nil {
 		t.Fatal(err)
 	}
+	stage, err := NewWorkspaceStageRequest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	runtime := &WorkspaceSandboxRuntime{Gateway: gateway, Timeout: time.Minute, OutputLimitBytes: 128 << 10}
-	spec := WorkspaceSandboxSpec{Request: request, StageRequest: []byte(`{"stage":1}`), SourceRoot: sourceRoot, ArtifactRoot: artifactRoot, ExecutionID: "analysis-1"}
+	spec := WorkspaceSandboxSpec{Request: request, StageRequest: stage, SourceRoot: sourceRoot, ArtifactRoot: artifactRoot, ExecutionID: "analysis-1"}
 	return runtime, spec
 }
 

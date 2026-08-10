@@ -34,7 +34,8 @@ write only runtime state under temporary storage and exactly one result file at
 The shared Agent Sandbox runner supports one optional staged workspace:
 
 - one immutable stager init-container image;
-- one bounded, content-addressed stager request;
+- one bounded, content-addressed stager request that must exactly match the
+  execution manifest, source revision, build prefix, and artifact identities;
 - one shared `emptyDir` workspace;
 - read-only `source/` and `artifacts/` subPath mounts in the executor;
 - one writable `result/` subPath mount;

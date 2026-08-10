@@ -50,6 +50,40 @@ func TestWorkspaceManifestIsDeterministicAndVerifiable(t *testing.T) {
 	}
 }
 
+func TestWorkspaceStageRequestBindsManifest(t *testing.T) {
+	_, artifactRoot, request, source := workspaceTestInputs(t)
+	files, err := SnapshotArtifactWorkspace(artifactRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := NewWorkspaceManifest(request, source, "Inspect this project.", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, err := NewWorkspaceStageRequest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateWorkspaceStageRequest(stage, manifest); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*WorkspaceStageRequest){
+		"manifest":     func(value *WorkspaceStageRequest) { value.ManifestHash = strings.Repeat("0", 64) },
+		"source":       func(value *WorkspaceStageRequest) { value.Source.Revision = strings.Repeat("1", 40) },
+		"artifacts":    func(value *WorkspaceStageRequest) { value.Artifacts[0].SHA256 = strings.Repeat("2", 64) },
+		"build prefix": func(value *WorkspaceStageRequest) { value.BuildPrefix = "other/" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := stage
+			candidate.Artifacts = slices.Clone(stage.Artifacts)
+			mutate(&candidate)
+			if err := ValidateWorkspaceStageRequest(candidate, manifest); err == nil {
+				t.Fatal("tampered stage request was accepted")
+			}
+		})
+	}
+}
+
 func TestSnapshotArtifactWorkspaceRejectsSymlink(t *testing.T) {
 	root := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.log")
