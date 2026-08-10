@@ -32,14 +32,16 @@ spec:
   matchConditions:
     - name: execution-namespace
       expression: {{ printf "object.metadata.namespace == %s" (toJson $cfg.namespace) | quote }}
-    - name: dashboard-created-critic
-      expression: {{ printf "request.operation == 'CREATE' ? request.userInfo.username == %s : (has(oldObject.metadata.labels) && oldObject.metadata.labels['prow-ai-dashboard/purpose'] == 'critic')" (toJson $requester) | quote }}
+    - name: critic-create-or-update
+      expression: "request.operation == 'CREATE' || (has(oldObject.metadata.labels) && oldObject.metadata.labels['prow-ai-dashboard/purpose'] == 'critic')"
   variables:
     - name: pod
       expression: "object.spec.podTemplate.spec"
     - name: container
       expression: "object.spec.podTemplate.spec.containers[0]"
   validations:
+    - expression: {{ printf "request.operation != 'CREATE' || request.userInfo.username == %s" (toJson $requester) | quote }}
+      message: "only the dashboard Agent Sandbox client may create critic workloads"
     - expression: "request.operation != 'UPDATE' || object.spec == oldObject.spec"
       message: "dashboard critic Sandbox workload specs are immutable"
     - expression: "request.operation != 'UPDATE' || object.metadata.labels == oldObject.metadata.labels"

@@ -1989,6 +1989,7 @@ grep -Fq "size(variables.container.envFrom) == 0" "$tmp/causal-critic-render.yam
 grep -Fq "size(variables.container.command) == 0" "$tmp/causal-critic-render.yaml"
 grep -Fq "size(variables.pod.resourceClaims) == 0" "$tmp/causal-critic-render.yaml"
 grep -Fq "size(variables.pod.schedulingGates) == 0" "$tmp/causal-critic-render.yaml"
+grep -Fq "request.operation != 'CREATE' || request.userInfo.username ==" "$tmp/causal-critic-render.yaml"
 critic_resources=$(awk '
   /app.kubernetes.io\/component: agent-sandbox-causal-critic$/ { component=1 }
   component && /kind: Role$/ { in_role=1 }
