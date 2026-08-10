@@ -53,9 +53,13 @@ export function nearestChartDataIndex(target: number, available: number[]): numb
 }
 export function chartScale(max: number, hasData: boolean): { ticks: number[]; max: number } {
   if (!hasData) return { ticks: [], max: 0 };
-  if (!Number.isFinite(max) || max <= 0) return { ticks: [0], max: 1 };
-  const ticks = chartTickValues(max);
-  return { ticks, max: ticks.at(-1) ?? max };
+  if (!Number.isFinite(max) || max <= 0) return { ticks: [0, 0.01], max: 0.01 };
+  const maxCents = Math.max(1, Math.ceil(max * 100));
+  const initialTicks = chartTickValues(maxCents);
+  const stepCents = Math.max(1, Math.ceil((initialTicks[1] ?? maxCents) - initialTicks[0]));
+  const axisMaxCents = Math.ceil(maxCents / stepCents) * stepCents;
+  const ticks = Array.from({ length: Math.round(axisMaxCents / stepCents) + 1 }, (_, index) => index * stepCents / 100);
+  return { ticks, max: axisMaxCents / 100 };
 }
 export function chartCurrencyPolicy(recordedCurrency?: string, currentCurrency?: string, mixedRecorded = false): { showRecorded: boolean; showCurrent: boolean; note?: string } {
   if (mixedRecorded) {

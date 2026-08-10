@@ -29,8 +29,12 @@ test("AI usage helpers format values and filters", () => {
 
 test("daily cost chart preserves zero values and separates currencies", () => {
   assert.deepEqual(chartScale(0, false), { ticks: [], max: 0 });
-  assert.deepEqual(chartScale(0, true), { ticks: [0], max: 1 });
+  assert.deepEqual(chartScale(0, true), { ticks: [0, 0.01], max: 0.01 });
   assert.deepEqual(chartScale(50.28, true), { ticks: [0, 20, 40, 60], max: 60 });
+  assert.deepEqual(chartScale(0.001, true), { ticks: [0, 0.01], max: 0.01 });
+  assert.deepEqual(chartScale(0.005, true), { ticks: [0, 0.01], max: 0.01 });
+  assert.deepEqual(chartScale(0.009, true), { ticks: [0, 0.01], max: 0.01 });
+  assert.deepEqual(chartScale(0.011, true), { ticks: [0, 0.01, 0.02], max: 0.02 });
   assert.deepEqual(chartCurrencyPolicy("USD", "EUR"), {
     showRecorded: true,
     showCurrent: false,
