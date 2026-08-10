@@ -127,6 +127,34 @@ func TestParseWorkspaceAnalysisRejectsUngroundedPaths(t *testing.T) {
 	}
 }
 
+func TestParseWorkspaceAnalysisRejectsGitMetadataCitation(t *testing.T) {
+	sourceRoot, artifactRoot, request, source := workspaceTestInputs(t)
+	files, err := SnapshotArtifactWorkspace(artifactRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := NewWorkspaceManifest(request, source, "Inspect this project.", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := `{
+  "version": 1,
+  "contract_version": "agent-analysis-workspace-v1",
+  "summary": "summary",
+  "is_transient": false,
+  "root_cause": "cause",
+  "severity": "High",
+  "suggested_fix": "fix",
+  "relevant_files": [".git/config"],
+  "evidence_citations": [{"path":"logs/build.log","line_start":2,"line_end":2,"quote":"artifact-only-marker specific failure"}],
+  "source_citations": [{"path":".git/config","line_start":1,"line_end":1,"quote":"core"}],
+  "unresolved_details": []
+}`
+	if _, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot); err == nil {
+		t.Fatal("Git metadata citation was accepted")
+	}
+}
+
 func TestWorkspaceExecutionRequestBindsPromptAndRuntime(t *testing.T) {
 	_, artifactRoot, request, source := workspaceTestInputs(t)
 	files, err := SnapshotArtifactWorkspace(artifactRoot)

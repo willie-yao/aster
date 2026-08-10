@@ -316,6 +316,9 @@ func verifyWorkspaceSourceCitations(citations []sourceinvestigation.Citation, ro
 	out := slices.Clone(citations)
 	for index := range out {
 		citation := &out[index]
+		if !safeWorkspaceSourcePath(citation.Path) {
+			return nil, fmt.Errorf("%w: source citation %d path is unsafe", ErrInvalidResult, index)
+		}
 		content, err := readWorkspaceText(root, citation.Path, maxWorkspaceFileBytes)
 		if err != nil {
 			return nil, fmt.Errorf("%w: source citation %d: %v", ErrInvalidResult, index, err)
@@ -341,7 +344,7 @@ func workspaceRelevantFiles(files []string, citations []sourceinvestigation.Cita
 	out := make([]string, 0, len(files))
 	for index, file := range files {
 		clean, err := artifacts.SafePath(file)
-		if err != nil || clean != file || seen[file] || !grounded[file] {
+		if err != nil || clean != file || !safeWorkspaceSourcePath(file) || seen[file] || !grounded[file] {
 			return nil, fmt.Errorf("%w: relevant file %d is unsafe, duplicated, or uncited", ErrInvalidResult, index)
 		}
 		seen[file] = true
@@ -349,6 +352,11 @@ func workspaceRelevantFiles(files []string, citations []sourceinvestigation.Cita
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+func safeWorkspaceSourcePath(value string) bool {
+	clean, err := artifacts.SafePath(value)
+	return err == nil && clean == value && clean != ".git" && !strings.HasPrefix(clean, ".git/")
 }
 
 func readWorkspaceText(root, relative string, expectedMax int64) (string, error) {
