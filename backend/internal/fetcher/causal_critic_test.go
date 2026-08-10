@@ -23,6 +23,8 @@ import (
 
 type fakeCausalCriticReviewer struct{ calls int }
 
+func (f *fakeCausalCriticReviewer) RuntimeIdentity() string { return strings.Repeat("d", 64) }
+
 func (f *fakeCausalCriticReviewer) Review(_ context.Context, input causalcritic.Input, _ string, _ engineruntime.WorkObserver) (causalcritic.Result, error) {
 	f.calls++
 	review := causalcritic.Review{

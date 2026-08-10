@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -137,7 +136,7 @@ func (p *pipeline) runCausalCriticCandidate(ctx context.Context, candidate shado
 	executionID := "critic-" + input.PairHash[:16]
 	record, runErr := causalcritic.RunTrial(ctx, reviewer, causalcritic.TrialSpec{
 		PublicDir: p.opts.OutDir, LedgerPath: cfg.LedgerPath, Metadata: metadata, Input: input,
-		ExecutionID: executionID, RuntimeIdentity: causalcritic.RuntimeIdentity(cfg.ModelGateway, os.Getenv("AGENT_SANDBOX_CRITIC_IMAGE"), cfg.Timeout, cfg.OutputLimitBytes), Now: now,
+		ExecutionID: executionID, RuntimeIdentity: reviewer.RuntimeIdentity(), Now: now,
 	})
 	if errors.Is(runErr, causalcritic.ErrTrialAlreadyAttempted) {
 		return false

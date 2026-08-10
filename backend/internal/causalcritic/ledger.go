@@ -130,6 +130,7 @@ type TrialSpec struct {
 // Reviewer is the causal critic runtime seam used by the private orchestrator.
 type Reviewer interface {
 	Review(context.Context, Input, string, engineruntime.WorkObserver) (Result, error)
+	RuntimeIdentity() string
 }
 
 // RunTrial claims, executes, and persists one exact paired critic comparison.

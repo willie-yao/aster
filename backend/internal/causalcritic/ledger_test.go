@@ -25,10 +25,14 @@ func (f trialReviewerFunc) Review(ctx context.Context, input Input, executionID 
 	return f(ctx, input, executionID, observer)
 }
 
+func (trialReviewerFunc) RuntimeIdentity() string { return testCriticRuntimeIdentity() }
+
 func (r *trialReviewer) Review(context.Context, Input, string, engineruntime.WorkObserver) (Result, error) {
 	r.calls++
 	return r.result, r.err
 }
+
+func (r *trialReviewer) RuntimeIdentity() string { return testCriticRuntimeIdentity() }
 
 func TestRunTrialPersistsFinalizedPrivateRecord(t *testing.T) {
 	input := criticInput(t)
@@ -160,7 +164,7 @@ func TestRunTrialRejectsLedgerInsidePublicOutput(t *testing.T) {
 }
 
 func testCriticRuntimeIdentity() string {
-	return RuntimeIdentity(engineruntime.ModelGatewayConfig{Endpoint: "https://gateway.models.svc.cluster.local/v1", Model: "critic", ProtocolVersion: "openai-chat-completions-v1"}, "example/critic@sha256:"+strings.Repeat("a", 64), time.Minute, DefaultOutputLimit)
+	return RuntimeIdentity(engineruntime.ModelGatewayConfig{Endpoint: "https://gateway.models.svc.cluster.local/v1", Model: "critic", ProtocolVersion: "openai-chat-completions-v1"}, strings.Repeat("a", 64), time.Minute, DefaultOutputLimit)
 }
 
 func trialMetadata() TrialMetadata {

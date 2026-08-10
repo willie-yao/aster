@@ -286,6 +286,23 @@ func TestAgentSandboxRuntimeDerivesStableExecutionIdentity(t *testing.T) {
 	}
 }
 
+func TestAgentSandboxRuntimeIdentityIncludesWorkloadConfiguration(t *testing.T) {
+	base := testAgentSandboxOptions()
+	baseIdentity := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, base).RuntimeIdentity()
+	for _, mutate := range []func(*AgentSandboxOptions){
+		func(opts *AgentSandboxOptions) { opts.Namespace = "other-exec" },
+		func(opts *AgentSandboxOptions) { opts.ServiceAccountName = "other-workload" },
+		func(opts *AgentSandboxOptions) { opts.RuntimeClassName = "other-runtime" },
+		func(opts *AgentSandboxOptions) { opts.Resources.MemoryLimit = "1Gi" },
+	} {
+		changed := base
+		mutate(&changed)
+		if got := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, changed).RuntimeIdentity(); got == baseIdentity {
+			t.Fatalf("runtime identity did not change for %+v", changed)
+		}
+	}
+}
+
 func TestAgentSandboxBenchmarkConfigUsesExplicitKubeContext(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "kubeconfig")
 	data := []byte(`apiVersion: v1

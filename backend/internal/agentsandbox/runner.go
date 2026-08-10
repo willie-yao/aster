@@ -45,6 +45,7 @@ type Result struct {
 type Runner interface {
 	Run(context.Context, Spec) (Result, error)
 	Cleanup(context.Context, engineruntime.WorkRef) error
+	RuntimeIdentity() string
 }
 
 // ValidateSpec checks the generic workload boundary before Kubernetes writes.

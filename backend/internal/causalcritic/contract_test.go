@@ -106,6 +106,7 @@ func (f fakeSandboxRunner) Run(_ context.Context, spec agentsandbox.Spec) (agent
 	return f.run(spec)
 }
 func (fakeSandboxRunner) Cleanup(context.Context, engineruntime.WorkRef) error { return nil }
+func (fakeSandboxRunner) RuntimeIdentity() string                              { return strings.Repeat("c", 64) }
 
 func TestRuntimePreservesValidatedReviewWhenCleanupIsPending(t *testing.T) {
 	input := criticInput(t)
@@ -190,11 +191,11 @@ func TestExecutionRequestRequiresInternalGateway(t *testing.T) {
 
 func TestRuntimeIdentityIncludesImageAndGateway(t *testing.T) {
 	gateway := engineruntime.ModelGatewayConfig{Endpoint: "https://gateway.models.svc.cluster.local/v1", Model: "critic-a", ProtocolVersion: "openai-chat-completions-v1"}
-	base := RuntimeIdentity(gateway, "example/critic@sha256:"+strings.Repeat("a", 64), time.Minute, DefaultOutputLimit)
+	base := RuntimeIdentity(gateway, strings.Repeat("a", 64), time.Minute, DefaultOutputLimit)
 	for _, changed := range []string{
-		RuntimeIdentity(gateway, "example/critic@sha256:"+strings.Repeat("b", 64), time.Minute, DefaultOutputLimit),
-		RuntimeIdentity(engineruntime.ModelGatewayConfig{Endpoint: gateway.Endpoint, Model: "critic-b", ProtocolVersion: gateway.ProtocolVersion}, "example/critic@sha256:"+strings.Repeat("a", 64), time.Minute, DefaultOutputLimit),
-		RuntimeIdentity(gateway, "example/critic@sha256:"+strings.Repeat("a", 64), 2*time.Minute, DefaultOutputLimit),
+		RuntimeIdentity(gateway, strings.Repeat("b", 64), time.Minute, DefaultOutputLimit),
+		RuntimeIdentity(engineruntime.ModelGatewayConfig{Endpoint: gateway.Endpoint, Model: "critic-b", ProtocolVersion: gateway.ProtocolVersion}, strings.Repeat("a", 64), time.Minute, DefaultOutputLimit),
+		RuntimeIdentity(gateway, strings.Repeat("a", 64), 2*time.Minute, DefaultOutputLimit),
 	} {
 		if changed == base {
 			t.Fatal("runtime identity did not change")

@@ -56,6 +56,36 @@ var (
 	agentSandboxInClusterConfig = rest.InClusterConfig
 )
 
+// RuntimeIdentity fingerprints the normalized non-secret Sandbox workload configuration.
+func (r *AgentSandboxRuntime) RuntimeIdentity() string {
+	if r == nil {
+		return ""
+	}
+	opts := normalizeAgentSandboxOptions(r.opts)
+	payload, _ := json.Marshal(struct {
+		Backend            string                           `json:"backend"`
+		Namespace          string                           `json:"namespace"`
+		Image              string                           `json:"image"`
+		ServiceAccountName string                           `json:"service_account_name"`
+		RuntimeClassName   string                           `json:"runtime_class_name"`
+		ModelGateway       engineruntime.ModelGatewayConfig `json:"model_gateway"`
+		PublicCAPrivateDNS bool                             `json:"public_ca_private_dns"`
+		Timeout            string                           `json:"timeout"`
+		OutputLimitBytes   int64                            `json:"output_limit_bytes"`
+		PollEvery          string                           `json:"poll_every"`
+		Resources          AgentSandboxResources            `json:"resources"`
+		AppArmorCapability string                           `json:"app_armor_capability"`
+	}{
+		Backend: agentSandboxBackend, Namespace: opts.Namespace, Image: opts.Image,
+		ServiceAccountName: opts.ServiceAccountName, RuntimeClassName: opts.RuntimeClassName,
+		ModelGateway: opts.ModelGateway, PublicCAPrivateDNS: opts.PublicCAPrivateDNS,
+		Timeout: opts.Timeout.String(), OutputLimitBytes: opts.OutputLimitBytes, PollEvery: opts.PollEvery.String(),
+		Resources: opts.Resources, AppArmorCapability: opts.appArmorCapability.String(),
+	})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
 // AgentSandboxOptions configure the experimental Agent Sandbox adapter.
 type AgentSandboxResources struct {
 	CPURequest       string

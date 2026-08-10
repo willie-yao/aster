@@ -25,14 +25,14 @@ const (
 var decimalCostRE = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]{1,9})?$`)
 
 // RuntimeIdentity fingerprints the immutable executor and non-secret model route.
-func RuntimeIdentity(gateway engineruntime.ModelGatewayConfig, image string, timeout time.Duration, outputLimit int64) string {
+func RuntimeIdentity(gateway engineruntime.ModelGatewayConfig, sandboxIdentity string, timeout time.Duration, outputLimit int64) string {
 	data, _ := json.Marshal(struct {
 		ContractVersion string                           `json:"contract_version"`
 		Gateway         engineruntime.ModelGatewayConfig `json:"gateway"`
-		Image           string                           `json:"image"`
+		SandboxIdentity string                           `json:"sandbox_identity"`
 		Timeout         string                           `json:"timeout"`
 		OutputLimit     int64                            `json:"output_limit"`
-	}{ContractVersion, gateway, strings.TrimSpace(image), timeout.String(), outputLimit})
+	}{ContractVersion, gateway, strings.TrimSpace(sandboxIdentity), timeout.String(), outputLimit})
 	return hashString(string(data))
 }
 
@@ -85,6 +85,18 @@ type Runtime struct {
 	Gateway          engineruntime.ModelGatewayConfig
 	Timeout          time.Duration
 	OutputLimitBytes int64
+}
+
+// RuntimeIdentity seals the critic contract to the full Sandbox workload configuration.
+func (r *Runtime) RuntimeIdentity() string {
+	if r == nil || r.Sandbox == nil {
+		return ""
+	}
+	limit := r.OutputLimitBytes
+	if limit == 0 {
+		limit = DefaultOutputLimit
+	}
+	return RuntimeIdentity(r.Gateway, r.Sandbox.RuntimeIdentity(), r.Timeout, limit)
 }
 
 // Review runs one exact evidence-and-draft pair without publication authority.

@@ -119,7 +119,7 @@ func TestAgentSandboxCausalCriticBenchmark(t *testing.T) {
 			executionID := fmt.Sprintf("critic-%s-%s-rep-%02d", input.PairHash[:10], sha256Hex([]byte(authoritative.Arm))[:6], authoritative.Repetition)
 			record, runErr := causalcritic.RunTrial(t.Context(), runtime, causalcritic.TrialSpec{
 				PublicDir: publicDir, LedgerPath: ledgerPath, Metadata: metadata, Input: input, ExecutionID: executionID,
-				RuntimeIdentity: causalcritic.RuntimeIdentity(gateway, os.Getenv("AGENT_SANDBOX_CRITIC_IMAGE"), timeout, outputLimit),
+				RuntimeIdentity: runtime.RuntimeIdentity(),
 			})
 			if errors.Is(runErr, causalcritic.ErrTrialAlreadyAttempted) {
 				if record.AttemptHash == "" {
