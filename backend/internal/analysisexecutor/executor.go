@@ -153,6 +153,10 @@ func prepareResultRoot(root string) error {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return fmt.Errorf("create result directory: %w", err)
 	}
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("result directory is unsafe")
+	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return fmt.Errorf("read result directory: %w", err)
@@ -164,27 +168,7 @@ func prepareResultRoot(root string) error {
 }
 
 func readSingleResult(root string, limit int64) (string, error) {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return "", err
-	}
-	if len(entries) != 1 || entries[0].Name() != agentanalysis.WorkspaceResultFile || entries[0].Type()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("OpenCode must write exactly %s", filepath.Join(agentanalysis.WorkspaceResultDir, agentanalysis.WorkspaceResultFile))
-	}
-	path := filepath.Join(root, agentanalysis.WorkspaceResultFile)
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, limit+1))
-	if err != nil {
-		return "", err
-	}
-	if int64(len(data)) > limit {
-		return "", fmt.Errorf("analysis result exceeds %d bytes", limit)
-	}
-	return string(data), nil
+	return readSingleResultFile(root, agentanalysis.WorkspaceResultFile, limit)
 }
 
 func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) error {
@@ -223,7 +207,7 @@ func writeOpenCodeConfig(home string, gateway engineruntime.ModelGatewayConfig, 
 		}},
 		"agent": map[string]any{"build": map[string]any{"steps": maxSteps}},
 		"permission": map[string]any{
-			"edit": "allow", "bash": "allow", "webfetch": "deny", "task": "deny", "skill": "deny", "external_directory": "deny",
+			"edit": "allow", "bash": "deny", "webfetch": "deny", "task": "deny", "skill": "deny", "external_directory": "deny",
 		},
 	}
 	data, err := json.MarshalIndent(config, "", "  ")

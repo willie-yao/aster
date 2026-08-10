@@ -24,7 +24,7 @@ The in-process analyzer remains authoritative throughout this plan.
 
 ## 2. Hard boundaries
 
-- One OpenCode session and one result per trial.
+- One OpenCode session and one result per trial. Bash, delegation, and web tools are denied.
 - No critic, semantic judge, digest, repair, revision, or planner request.
 - No case-specific rules or answer-bearing artifact selection.
 - No provider credential in the Sandbox.

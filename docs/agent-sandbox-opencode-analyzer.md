@@ -32,8 +32,8 @@ write only runtime state under temporary storage and exactly one result file at
 ## Native OpenCode boundary
 
 OpenCode receives the pinned workspace, failure metadata, consumer guidance,
-and one engine-owned output contract. Its native file reading, search, edit,
-and Bash tools remain available. Network access, web fetching, delegation, and
+and one engine-owned output contract. Its native file reading, search, and edit tools remain available. Bash is denied
+in the initial prototype so the executor can enforce one OpenCode session. Network access, web fetching, delegation, and
 external skills are denied. Filesystem mounts and admission policy, not a
 second dashboard tool loop, enforce the source and artifact boundary.
 

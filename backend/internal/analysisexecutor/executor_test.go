@@ -87,6 +87,21 @@ func TestExecuteRejectsExtraResultFile(t *testing.T) {
 	}
 }
 
+func TestExecuteRejectsSymlinkResult(t *testing.T) {
+	root, request := executorTestFixture(t)
+	result := Execute(context.Background(), request, Options{
+		WorkspaceRoot: root, TempRoot: t.TempDir(),
+		RunOpenCode: func(context.Context, OpenCodeSpec) error {
+			target := filepath.Join(root, agentanalysis.WorkspaceArtifactsDir, "logs", "build.log")
+			path := filepath.Join(root, agentanalysis.WorkspaceResultDir, agentanalysis.WorkspaceResultFile)
+			return os.Symlink(target, path)
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalFailed || result.Analysis != nil {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 func TestExecuteReportsCancellationWithoutSecondRun(t *testing.T) {
 	root, request := executorTestFixture(t)
 	parent, cancel := context.WithCancel(context.Background())
@@ -120,7 +135,7 @@ func TestWriteOpenCodeConfigKeepsNativeHarnessButDeniesNetworkTools(t *testing.T
 		t.Fatal(err)
 	}
 	permissions := config["permission"].(map[string]any)
-	if permissions["bash"] != "allow" || permissions["edit"] != "allow" || permissions["webfetch"] != "deny" || permissions["task"] != "deny" {
+	if permissions["bash"] != "deny" || permissions["edit"] != "allow" || permissions["webfetch"] != "deny" || permissions["task"] != "deny" {
 		t.Fatalf("permissions=%v", permissions)
 	}
 	if strings.Contains(strings.ToLower(string(data)), "token") || strings.Contains(string(data), "/chat/completions") {

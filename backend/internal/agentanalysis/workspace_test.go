@@ -194,6 +194,27 @@ func TestVerifySourceWorkspaceRejectsDirtyCheckout(t *testing.T) {
 	}
 }
 
+func TestVerifySourceWorkspaceRejectsIgnoredFile(t *testing.T) {
+	sourceRoot, _, _, source := workspaceTestInputs(t)
+	if err := os.WriteFile(filepath.Join(sourceRoot, "ignored.txt"), []byte("ignored\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifySourceWorkspace(context.Background(), sourceRoot, source.Revision); err == nil {
+		t.Fatal("ignored source file was accepted")
+	}
+}
+
+func TestVerifySourceWorkspaceRejectsAssumeUnchangedModification(t *testing.T) {
+	sourceRoot, _, _, source := workspaceTestInputs(t)
+	runWorkspaceGit(t, sourceRoot, "update-index", "--assume-unchanged", "pkg/controller.go")
+	if err := os.WriteFile(filepath.Join(sourceRoot, "pkg", "controller.go"), []byte("package changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifySourceWorkspace(context.Background(), sourceRoot, source.Revision); err == nil {
+		t.Fatal("assume-unchanged source modification was accepted")
+	}
+}
+
 func workspaceTestInputs(t *testing.T) (string, string, ai.FailureAnalysisRequest, sourceinvestigation.Repository) {
 	t.Helper()
 	sourceRoot := t.TempDir()
@@ -201,6 +222,9 @@ func workspaceTestInputs(t *testing.T) (string, string, ai.FailureAnalysisReques
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(sourceRoot, "pkg", "controller.go"), []byte("package controller\n\nfunc reconcile() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, ".gitignore"), []byte("ignored.txt\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	runWorkspaceGit(t, sourceRoot, "init", "-q")

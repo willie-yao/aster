@@ -230,7 +230,7 @@ func VerifyArtifactWorkspace(root string, manifest WorkspaceManifest) error {
 	return nil
 }
 
-// VerifySourceWorkspace confirms the checkout is pinned and clean.
+// VerifySourceWorkspace confirms the checkout exactly matches the pinned commit.
 func VerifySourceWorkspace(ctx context.Context, root, revision string) error {
 	if !immutableSourceRevision.MatchString(revision) {
 		return fmt.Errorf("source revision is invalid")
@@ -240,22 +240,55 @@ func VerifySourceWorkspace(ctx context.Context, root, revision string) error {
 	if err != nil || !info.IsDir() {
 		return fmt.Errorf("source workspace root is not a directory")
 	}
-	headCommand := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "HEAD")
-	headCommand.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
-	head, err := headCommand.CombinedOutput()
+	head, err := gitWorkspaceOutput(ctx, root, "rev-parse", "HEAD")
 	if err != nil || strings.TrimSpace(string(head)) != revision {
 		return fmt.Errorf("source workspace does not match the pinned revision")
 	}
-	statusCommand := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain=v1", "--untracked-files=all")
-	statusCommand.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
-	status, err := statusCommand.CombinedOutput()
+	tracked, err := gitWorkspaceOutput(ctx, root, "ls-files", "-v", "-z")
 	if err != nil {
-		return fmt.Errorf("inspect source workspace: %w", err)
+		return fmt.Errorf("inspect source index flags: %w", err)
 	}
-	if strings.TrimSpace(string(status)) != "" {
-		return fmt.Errorf("source workspace is not clean")
+	for _, record := range bytes.Split(tracked, []byte{0}) {
+		if len(record) == 0 {
+			continue
+		}
+		if len(record) < 3 || record[0] != 'H' || record[1] != ' ' {
+			return fmt.Errorf("source workspace uses unsupported index flags")
+		}
+	}
+	staged, err := gitWorkspaceOutput(ctx, root, "ls-files", "--stage", "-z")
+	if err != nil {
+		return fmt.Errorf("inspect source index modes: %w", err)
+	}
+	for _, record := range bytes.Split(staged, []byte{0}) {
+		if len(record) == 0 {
+			continue
+		}
+		if !bytes.HasPrefix(record, []byte("100644 ")) && !bytes.HasPrefix(record, []byte("100755 ")) {
+			return fmt.Errorf("source workspace contains unsupported links or submodules")
+		}
+	}
+	for _, args := range [][]string{{"diff-index", "--cached", "--quiet", revision, "--"}, {"diff-files", "--quiet", "--"}} {
+		if _, err := gitWorkspaceOutput(ctx, root, args...); err != nil {
+			return fmt.Errorf("source workspace tracked files changed")
+		}
+	}
+	for _, args := range [][]string{{"ls-files", "--others", "--exclude-standard", "-z"}, {"ls-files", "--others", "--ignored", "--exclude-standard", "-z"}} {
+		output, err := gitWorkspaceOutput(ctx, root, args...)
+		if err != nil {
+			return fmt.Errorf("inspect source workspace extras: %w", err)
+		}
+		if len(output) != 0 {
+			return fmt.Errorf("source workspace contains untracked or ignored files")
+		}
 	}
 	return nil
+}
+
+func gitWorkspaceOutput(ctx context.Context, root string, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
+	command.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
+	return command.CombinedOutput()
 }
 
 // NewWorkspaceExecutionRequest seals runtime bounds and gateway identity.
