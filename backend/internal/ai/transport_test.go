@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -129,6 +130,14 @@ func TestChatTokenUsageRecognizesCacheCreationFields(t *testing.T) {
 	got = chatTokenUsage(&chatCompletionsUsage{CacheCreationInputTokens: &zero})
 	if !got.CacheWriteInputTokensReported || got.CacheWriteInputTokens != 0 {
 		t.Fatalf("present zero cache write usage = %+v", got)
+	}
+}
+
+func TestChatTokenUsageMarksOverflowInvalid(t *testing.T) {
+	cacheWrite := 1
+	got := chatTokenUsage(&chatCompletionsUsage{InputTokens: math.MaxInt, CacheCreationInputTokens: &cacheWrite})
+	if got.InputTokens != -1 || !got.CacheWriteInputTokensReported {
+		t.Fatalf("overflow usage = %+v", got)
 	}
 }
 

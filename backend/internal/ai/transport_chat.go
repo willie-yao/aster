@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -236,7 +237,7 @@ func chatTokenUsage(usage *chatCompletionsUsage) aiusage.TokenUsage {
 		if usage.CacheCreationInputTokens != nil {
 			cacheWrite = *usage.CacheCreationInputTokens
 		}
-		input += cached + cacheWrite
+		input = checkedWireTokenSum(input, cached, cacheWrite)
 	}
 	output := usage.OutputTokens
 	if output == 0 {
@@ -247,6 +248,17 @@ func chatTokenUsage(usage *chatCompletionsUsage) aiusage.TokenUsage {
 		CacheWriteInputTokens: cacheWrite, CacheWriteInputTokensReported: cacheWriteReported,
 		OutputTokens: output, ReasoningTokens: usage.CompletionTokensDetails.ReasoningTokens,
 	}
+}
+
+func checkedWireTokenSum(values ...int) int {
+	total := 0
+	for _, value := range values {
+		if value < 0 || total > math.MaxInt-value {
+			return -1
+		}
+		total += value
+	}
+	return total
 }
 
 func decodeChatToolCalls(calls []chatCompletionsToolCall) []modelToolCall {
