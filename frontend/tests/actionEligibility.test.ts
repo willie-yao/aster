@@ -5,6 +5,7 @@ import {
   buildActionEligibilityHint,
   eligibilityForState,
   patternActionEligibilityHint,
+  patternLifecycleActive,
 } from "../src/lib/actionEligibility.js";
 
 const actionableTarget = { intent: "add_symbol" as const, path: "main.go", symbol: "MissingHelper" };
@@ -31,6 +32,11 @@ test("pattern action eligibility handles deterministic blocked states", () => {
   const existing = patternActionEligibilityHint([actionableTarget], "open");
   assert.equal(existing?.state, "already_present");
   assert.match(existing?.reason ?? "", /attempt already exists/);
+  const observing = { state: "observing" as const, reason: "remediation present" };
+  assert.equal(patternLifecycleActive(observing), false);
+  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, observing)?.state, "already_present");
+  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, observing)?.reason, "remediation present");
+  assert.equal(patternLifecycleActive(undefined), true);
 });
 
 test("build action eligibility requires current quality and verified files", () => {

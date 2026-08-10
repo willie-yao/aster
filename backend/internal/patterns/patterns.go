@@ -310,7 +310,7 @@ func CollectRecurring(details []models.JobDetail) []models.PatternAnalysis {
 	var out []models.PatternAnalysis
 	for i := range details {
 		for _, pa := range details[i].PatternAnalyses {
-			if pa.Systemic {
+			if pa.Systemic && models.PatternIsActive(pa) {
 				out = append(out, pa)
 			}
 		}

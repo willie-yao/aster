@@ -561,6 +561,14 @@ func (s *Service) verifyOptionalRemediation(ctx context.Context, subject *Action
 }
 
 func (s *Service) verifyRemediationProposal(ctx context.Context, subject *ActionSubject, override string) error {
+	patternSubject := subject != nil && subject.Kind == actionSubjectPattern && subject.Pattern != nil
+	if patternSubject && !models.PatternIsActive(*subject.Pattern) {
+		reason := inactivePatternReason(subject.Pattern)
+		if err := s.setRequestVerification(ctx, actionverify.StateAlreadyPresent, reason); err != nil {
+			return fmt.Errorf("%w: lifecycle verification result could not be persisted: %v", ErrRemediationAlreadyPresent, err)
+		}
+		return fmt.Errorf("%w: %s", ErrRemediationAlreadyPresent, reason)
+	}
 	if subject == nil || s.sourceVerifier == nil {
 		return nil
 	}
@@ -577,7 +585,6 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 		return fmt.Errorf("%w: %s", ErrRemediationInconclusive, reason)
 	}
 	repo := s.cfg.EffectiveAnalysisSourceRepo()
-	patternSubject := subject != nil && subject.Kind == actionSubjectPattern && subject.Pattern != nil
 	if patternSubject && len(subject.Pattern.RemediationTargets) == 0 {
 		return inconclusive("recurring pattern does not include structured remediation targets", nil)
 	}
@@ -1341,6 +1348,9 @@ func (s *Service) resolveUnlocked(failureID, login, note string) error {
 	}
 	if !pa.Systemic {
 		return fmt.Errorf("only systemic recurring patterns can be resolved")
+	}
+	if !models.PatternIsActive(*pa) {
+		return fmt.Errorf("inactive recurring patterns cannot be manually resolved")
 	}
 	watermark := resolve.Watermark(*pa)
 	if watermark == "" {

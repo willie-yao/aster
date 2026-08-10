@@ -1043,6 +1043,11 @@ The lifecycle uses immutable repository revisions and retains the passing build
 IDs as public verification evidence. A later correlated failure at the same
 revision immediately returns the pattern to `active`.
 
+Only `active` patterns are published in the home-page recurring list, passed to
+automatic issue or Fix PR side effects, or accepted by action endpoints.
+`observing` and `verified_fixed` patterns remain in the per-job history with the
+source revision, explanation, and revision-verified passing build links.
+
 `set_job_environment` is repository-qualified and limited to pinned
 `kubernetes/test-infra` job configuration. It records the discovery revision,
 config path, job, container, environment-variable name, and exact desired

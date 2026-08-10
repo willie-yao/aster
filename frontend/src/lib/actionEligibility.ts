@@ -1,5 +1,5 @@
 import type { ActionEligibility } from "../types/actions";
-import type { AIAnalysis, RemediationTarget } from "../types/dashboard";
+import type { AIAnalysis, PatternLifecycle, RemediationTarget } from "../types/dashboard";
 import { buildActionsReady } from "./buildFailures.js";
 
 const remediationExistsStatuses = new Set([
@@ -11,6 +11,10 @@ const remediationExistsStatuses = new Set([
   "observing",
   "verified_fixed",
 ]);
+
+export function patternLifecycleActive(lifecycle: PatternLifecycle | undefined): boolean {
+  return !lifecycle || lifecycle.state === "active";
+}
 
 export function eligibilityForState(
   state: ActionEligibility["state"],
@@ -67,7 +71,11 @@ function targetIsComplete(target: RemediationTarget): boolean {
 export function patternActionEligibilityHint(
   targets: RemediationTarget[] | undefined,
   remediationStatus?: string,
+  lifecycle?: PatternLifecycle,
 ): ActionEligibility | null {
+  if (!patternLifecycleActive(lifecycle)) {
+    return { state: "already_present", reason: lifecycle?.reason ?? "The remediation is already present." };
+  }
   if (remediationStatus && remediationExistsStatuses.has(remediationStatus)) {
     return {
       state: "already_present",

@@ -193,6 +193,8 @@ func TestCollectRecurringPatterns_FiltersAndRanks(t *testing.T) {
 		jd("high-3builds", &models.PatternAnalysis{Systemic: true, Confidence: "high", BuildsAnalyzed: 3}),
 		jd("high-6builds", &models.PatternAnalysis{Systemic: true, Confidence: "high", BuildsAnalyzed: 6}),
 		jd("no-pattern", nil),
+		jd("observing", &models.PatternAnalysis{Systemic: true, Confidence: "high", BuildsAnalyzed: 10, Lifecycle: &models.PatternLifecycle{State: models.PatternLifecycleObserving}}),
+		jd("verified-fixed", &models.PatternAnalysis{Systemic: true, Confidence: "high", BuildsAnalyzed: 10, Lifecycle: &models.PatternLifecycle{State: models.PatternLifecycleVerifiedFixed}}),
 	}
 
 	got := collectRecurringPatterns(details)
