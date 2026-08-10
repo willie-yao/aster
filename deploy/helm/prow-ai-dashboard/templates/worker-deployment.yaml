@@ -1,11 +1,13 @@
 {{- include "prow-ai-dashboard.validateFixRuntime" . -}}
 {{- include "prow-ai-dashboard.validateAgentSandboxFixRuntime" . -}}
+{{- include "prow-ai-dashboard.validateAgentSandboxCausalCritic" . -}}
 {{- include "prow-ai-dashboard.validateAnalysisRuntime" . -}}
 {{- include "prow-ai-dashboard.validateAgentAnalysisShadow" . -}}
 {{- if eq .Values.mode "watch" }}
 {{- $containerAnalysis := eq .Values.analysisRuntime.type "orka-container" }}
 {{- $shadow := .Values.orka.agentAnalysisShadow.enabled }}
 {{- $agentSandboxScheduled := eq (include "prow-ai-dashboard.agentSandboxScheduledEnabled" .) "true" }}
+{{- $agentSandboxFixScheduled := eq (include "prow-ai-dashboard.agentSandboxFixScheduledEnabled" .) "true" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -89,7 +91,7 @@ spec:
           {{- if .Values.orka.fixRuntime.enabled }}
           image: {{ include "prow-ai-dashboard.fixerImage" . }}
           imagePullPolicy: {{ .Values.orka.fixRuntime.image.pullPolicy }}
-          {{- else if $agentSandboxScheduled }}
+          {{- else if $agentSandboxFixScheduled }}
           image: {{ include "prow-ai-dashboard.agentSandboxDashboardImage" . }}
           imagePullPolicy: {{ .Values.agentSandbox.fixRuntime.dashboardImage.pullPolicy }}
           {{- else }}
@@ -147,9 +149,22 @@ spec:
             - -agent-analysis-shadow-timeout={{ .Values.orka.agentAnalysisShadow.admission.timeout }}
             - -agent-analysis-shadow-retries={{ .Values.orka.agentAnalysisShadow.admission.retries }}
             {{- end }}
+            {{- if .Values.agentSandbox.causalCritic.enabled }}
+            - -causal-critic-shadow
+            - -causal-critic-shadow-ledger={{ include "prow-ai-dashboard.causalCriticLedgerPath" . }}
+            - -causal-critic-shadow-max-per-run={{ .Values.agentSandbox.causalCritic.maxPerRun }}
+            - -causal-critic-shadow-timeout={{ .Values.agentSandbox.causalCritic.timeout }}
+            - -causal-critic-shadow-output-limit-bytes={{ .Values.agentSandbox.causalCritic.outputLimitBytes }}
+            - -causal-critic-shadow-gateway-endpoint={{ .Values.agentSandbox.causalCritic.modelGateway.endpoint }}
+            - -causal-critic-shadow-gateway-model={{ .Values.agentSandbox.causalCritic.modelGateway.model }}
+            - -causal-critic-shadow-gateway-protocol={{ .Values.agentSandbox.causalCritic.modelGateway.protocolVersion }}
+            {{- end }}
           env:
-            {{- if $agentSandboxScheduled }}
+            {{- if $agentSandboxFixScheduled }}
             {{- include "prow-ai-dashboard.agentSandboxEnv" . | nindent 12 }}
+            {{- end }}
+            {{- if .Values.agentSandbox.causalCritic.enabled }}
+            {{- include "prow-ai-dashboard.agentSandboxCriticEnv" . | nindent 12 }}
             {{- end }}
             {{- if .Values.ai.enabled }}
             - name: AI_TOKEN
@@ -228,6 +243,10 @@ spec:
             - name: agent-analysis-shadow-ledger
               mountPath: {{ include "prow-ai-dashboard.agentAnalysisShadowLedgerMountPath" . }}
             {{- end }}
+            {{- if .Values.agentSandbox.causalCritic.enabled }}
+            - name: causal-critic-ledger
+              mountPath: {{ .Values.agentSandbox.causalCritic.ledger.mountPath }}
+            {{- end }}
             {{- if $containerAnalysis }}
             - name: project-runtime
               mountPath: {{ .Values.project.mountPath }}
@@ -266,6 +285,11 @@ spec:
         - name: agent-analysis-shadow-ledger
           persistentVolumeClaim:
             claimName: {{ include "prow-ai-dashboard.agentAnalysisShadowPVCName" . }}
+        {{- end }}
+        {{- if .Values.agentSandbox.causalCritic.enabled }}
+        - name: causal-critic-ledger
+          persistentVolumeClaim:
+            claimName: {{ .Values.agentSandbox.causalCritic.ledger.existingClaim }}
         {{- end }}
         - name: project
           configMap:

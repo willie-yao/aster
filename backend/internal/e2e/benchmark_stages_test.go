@@ -37,6 +37,7 @@ type benchmarkEvidencePreparation struct {
 	fixtureContains map[string]bool
 	excerptContains map[string]bool
 	prompt          string
+	oracleExcerpts  []benchmarkOracleExcerpt
 }
 
 type benchmarkEvidenceStage struct {
@@ -174,6 +175,7 @@ func prepareBenchmarkEvidence(ctx context.Context, browser artifacts.Browser, bc
 	if bc.oracleEvidenceSHA256 == "" || out.frozenSHA256 != bc.oracleEvidenceSHA256 {
 		return out, fmt.Errorf("benchmark oracle evidence SHA-256 = %s, want %s", out.frozenSHA256, bc.oracleEvidenceSHA256)
 	}
+	out.oracleExcerpts = append([]benchmarkOracleExcerpt(nil), excerpts...)
 	out.prompt = renderBenchmarkOraclePrompt(excerpts)
 	if len(out.prompt) > benchmarkOraclePromptMaxBytes {
 		return out, fmt.Errorf("benchmark oracle prompt exceeds %d bytes", benchmarkOraclePromptMaxBytes)

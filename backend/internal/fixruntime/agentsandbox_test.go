@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -15,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentsandbox"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
@@ -25,6 +28,7 @@ type fakeAgentSandboxAPI struct {
 	logs                     string
 	createErr                error
 	logsErr                  error
+	deleteErr                error
 	deleted                  bool
 	keepStateIdentity        bool
 	returnStateOnCreateError bool
@@ -70,6 +74,9 @@ func (f *fakeAgentSandboxAPI) Delete(_ context.Context, _, _, uid string) error 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.deleteUID = uid
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	f.deleted = true
 	return nil
 }
@@ -217,6 +224,47 @@ func assertAppArmorMode(t *testing.T, podSpec map[string]any, required bool) {
 	}
 }
 
+func TestAgentSandboxRunUsesPurposeBoundResultChannelWithoutWorkspace(t *testing.T) {
+	api := &fakeAgentSandboxAPI{
+		state: sandboxState{Exists: true, UID: "uid-1", PodName: "critic-request-1", Finished: true, FinishedReason: "PodSucceeded"},
+		logs:  `{"review":"pass"}`,
+	}
+	runtime := newAgentSandboxRuntimeForTest(api, testAgentSandboxOptions())
+	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
+		Purpose: "critic", ExecutionID: "request-1", RequestEnv: "PROW_AI_CAUSAL_CRITIC_REQUEST_B64",
+		Request: []byte(`{"version":1}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != `{"review":"pass"}` || result.FinishedReason != "PodSucceeded" || !result.Telemetry.CleanupCompleted {
+		t.Fatalf("result = %+v", result)
+	}
+	metadata := api.object["metadata"].(map[string]any)
+	if name := metadata["name"].(string); !strings.HasPrefix(name, "critic-") {
+		t.Fatalf("name = %q", name)
+	}
+	if labels := metadata["labels"].(map[string]any); labels["prow-ai-dashboard/purpose"] != "critic" || len(labels) != 4 {
+		t.Fatalf("labels = %+v", labels)
+	}
+	podTemplate := api.object["spec"].(map[string]any)["podTemplate"].(map[string]any)
+	if labels := podTemplate["metadata"].(map[string]any)["labels"].(map[string]any); labels["prow-ai-dashboard/purpose"] != "critic" || len(labels) != 2 {
+		t.Fatalf("pod labels = %+v", labels)
+	}
+	pod := podTemplate["spec"].(map[string]any)
+	if _, ok := pod["volumes"]; ok {
+		t.Fatal("read-only critic workload received writable volumes")
+	}
+	container := pod["containers"].([]any)[0].(map[string]any)
+	if _, ok := container["volumeMounts"]; ok {
+		t.Fatal("read-only critic workload received writable volume mounts")
+	}
+	env := container["env"].([]any)[0].(map[string]any)
+	if env["name"] != "PROW_AI_CAUSAL_CRITIC_REQUEST_B64" {
+		t.Fatalf("env = %+v", env)
+	}
+}
+
 func TestAgentSandboxRuntimeDerivesStableExecutionIdentity(t *testing.T) {
 	spec := agentSandboxSpec()
 	spec.ExecutionID = ""
@@ -235,6 +283,65 @@ func TestAgentSandboxRuntimeDerivesStableExecutionIdentity(t *testing.T) {
 	executionID := annotations[agentSandboxIDAnnotation].(string)
 	if !strings.HasPrefix(executionID, "contract-") || len(executionID) != len("contract-")+16 {
 		t.Fatalf("execution ID = %q", executionID)
+	}
+}
+
+func TestAgentSandboxRuntimeIdentityIncludesWorkloadConfiguration(t *testing.T) {
+	base := testAgentSandboxOptions()
+	baseIdentity := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, base).RuntimeIdentity()
+	for _, mutate := range []func(*AgentSandboxOptions){
+		func(opts *AgentSandboxOptions) { opts.Namespace = "other-exec" },
+		func(opts *AgentSandboxOptions) { opts.ServiceAccountName = "other-workload" },
+		func(opts *AgentSandboxOptions) { opts.RuntimeClassName = "other-runtime" },
+		func(opts *AgentSandboxOptions) { opts.Resources.MemoryLimit = "1Gi" },
+	} {
+		changed := base
+		mutate(&changed)
+		if got := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, changed).RuntimeIdentity(); got == baseIdentity {
+			t.Fatalf("runtime identity did not change for %+v", changed)
+		}
+	}
+}
+
+func TestAgentSandboxBenchmarkConfigUsesExplicitKubeContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kubeconfig")
+	data := []byte(`apiVersion: v1
+kind: Config
+clusters:
+- name: benchmark-cluster
+  cluster:
+    server: https://benchmark.example.test
+- name: other-cluster
+  cluster:
+    server: https://other.example.test
+contexts:
+- name: benchmark
+  context:
+    cluster: benchmark-cluster
+    user: benchmark
+- name: other
+  context:
+    cluster: other-cluster
+    user: other
+current-context: other
+users:
+- name: benchmark
+  user:
+    token: benchmark
+- name: other
+  user:
+    token: other
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBECONFIG", path)
+	cfg, err := agentSandboxKubeconfigContextConfig("benchmark")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Host != "https://benchmark.example.test" {
+		t.Fatalf("host=%q", cfg.Host)
 	}
 }
 
@@ -258,6 +365,17 @@ func TestAgentSandboxRuntimeSuccessAndSecurityContract(t *testing.T) {
 		t.Fatalf("cleanup = %+v deleted=%v", result.Telemetry, api.deleted)
 	}
 	assertSandboxSecurity(t, api.object)
+}
+
+func TestAgentSandboxRuntimeRejectsEmptySuccessfulLogs(t *testing.T) {
+	api := &fakeAgentSandboxAPI{
+		state: sandboxState{Exists: true, UID: "uid-1", PodName: "fix-request-1", Finished: true, FinishedReason: "PodSucceeded"},
+	}
+	runtime := newAgentSandboxRuntimeForTest(api, testAgentSandboxOptions())
+	result, err := runtime.Generate(context.Background(), agentSandboxSpec())
+	if !errors.Is(err, engineruntime.ErrMalformedResult) || result.TerminalState != engineruntime.TerminalFailed || !result.Telemetry.CleanupCompleted {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
 }
 
 func TestAgentSandboxRuntimeRejectsCredentialsBeforeCreate(t *testing.T) {
@@ -552,6 +670,28 @@ func TestAgentSandboxCreateAmbiguityCleansAcceptedWork(t *testing.T) {
 	_, err := runtime.Generate(context.Background(), agentSandboxSpec())
 	if err == nil || !errors.Is(err, engineruntime.ErrUnavailable) || !api.deleted || api.deleteUID != "uid-1" {
 		t.Fatalf("error=%v deleted=%v deleteUID=%q", err, api.deleted, api.deleteUID)
+	}
+}
+
+func TestAgentSandboxCreateAmbiguityReturnsObservedWorkWhenCleanupIsPending(t *testing.T) {
+	api := &fakeAgentSandboxAPI{
+		createErr: errors.New("connection reset after create"), deleteErr: engineruntime.ErrCleanupPending,
+		state: sandboxState{Exists: true, UID: "uid-1", PodName: "critic-request-1"},
+	}
+	runtime := newAgentSandboxRuntimeForTest(api, testAgentSandboxOptions())
+	var observed engineruntime.WorkRef
+	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
+		Purpose: "critic", ExecutionID: "request-1", RequestEnv: "PROW_AI_CAUSAL_CRITIC_REQUEST_B64",
+		Request: []byte(`{"version":1}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+		WorkObserver: func(_ context.Context, work engineruntime.WorkRef) error {
+			if work.UID != "" {
+				observed = work
+			}
+			return nil
+		},
+	})
+	if !errors.Is(err, engineruntime.ErrCleanupPending) || result.Work == nil || result.Work.UID != "uid-1" || observed.UID != "uid-1" {
+		t.Fatalf("result=%+v observed=%+v err=%v", result, observed, err)
 	}
 }
 
