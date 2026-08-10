@@ -148,20 +148,38 @@ func (p PriceTable) Estimate(usage TokenUsage) (int64, error) {
 	if !p.configured || !usage.Reported {
 		return 0, nil
 	}
-	if usage.InputTokens < 0 || usage.CachedInputTokens < 0 || usage.CacheWriteInputTokens < 0 || usage.OutputTokens < 0 || usage.ReasoningTokens < 0 {
+	return p.estimateCounts(
+		int64(usage.InputTokens), int64(usage.CachedInputTokens), int64(usage.CacheWriteInputTokens), int64(usage.OutputTokens),
+		usage.CacheWriteInputTokensReported,
+	)
+}
+
+// EstimateTotals reprices aggregate provider tokens with the current table.
+func (p PriceTable) EstimateTotals(usage UsageTotals) (int64, error) {
+	if !p.configured {
+		return 0, nil
+	}
+	return p.estimateCounts(
+		usage.InputTokens, usage.CachedInputTokens, usage.CacheWriteInputTokens, usage.OutputTokens,
+		usage.CacheWriteReportedRequests > 0,
+	)
+}
+
+func (p PriceTable) estimateCounts(inputTokens, cachedInputTokens, cacheWriteInputTokens, outputTokens int64, cacheWriteReported bool) (int64, error) {
+	if inputTokens < 0 || cachedInputTokens < 0 || cacheWriteInputTokens < 0 || outputTokens < 0 {
 		return 0, fmt.Errorf("token counts must be non-negative")
 	}
-	if usage.CachedInputTokens > usage.InputTokens || usage.CacheWriteInputTokens > usage.InputTokens-usage.CachedInputTokens {
+	if cachedInputTokens > inputTokens || cacheWriteInputTokens > inputTokens-cachedInputTokens {
 		return 0, fmt.Errorf("cached and cache write input tokens exceed input tokens")
 	}
-	uncached := int64(usage.InputTokens - usage.CachedInputTokens - usage.CacheWriteInputTokens)
+	uncached := inputTokens - cachedInputTokens - cacheWriteInputTokens
 	cost := new(big.Rat)
 	cost.Add(cost, scaledTokenCost(uncached, p.input))
-	cost.Add(cost, scaledTokenCost(int64(usage.CachedInputTokens), p.cachedInput))
-	if usage.CacheWriteInputTokensReported && p.cacheWriteInput != nil {
-		cost.Add(cost, scaledTokenCost(int64(usage.CacheWriteInputTokens), p.cacheWriteInput))
+	cost.Add(cost, scaledTokenCost(cachedInputTokens, p.cachedInput))
+	if cacheWriteReported && p.cacheWriteInput != nil {
+		cost.Add(cost, scaledTokenCost(cacheWriteInputTokens, p.cacheWriteInput))
 	}
-	cost.Add(cost, scaledTokenCost(int64(usage.OutputTokens), p.output))
+	cost.Add(cost, scaledTokenCost(outputTokens, p.output))
 	return roundPositiveRat(cost)
 }
 

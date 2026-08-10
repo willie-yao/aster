@@ -1,7 +1,7 @@
 import type { AIUsageFeature, AIUsageTotals } from "../types/usage";
 export const featureLabels: Record<AIUsageFeature, string> = {
   failure_analysis: "Failure analysis", pattern_analysis: "Pattern analysis",
-  analysis_chat: "Analysis chat", issue_draft: "Issue drafts", fix_preview: "Fix previews",
+  analysis_chat: "Analysis chat", issue_draft: "Issue drafts", fix_preview: "Fix PR preview",
   fix_critique: "Fix critique", pr_template: "PR templates", source_investigation: "Source investigation",
 };
 export function formatTokens(value: number): string {
@@ -10,9 +10,21 @@ export function formatTokens(value: number): string {
 export function formatCost(nanos: string, currency?: string): string {
   if (!currency) return "Not priced";
   const value = Number(nanos) / 1_000_000_000;
-  return new Intl.NumberFormat("en-US", { style: "currency", currency, minimumFractionDigits: value < 1 ? 4 : 2, maximumFractionDigits: value < 1 ? 6 : 2 }).format(value);
+  return new Intl.NumberFormat("en-US", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
 }
 export function totalTokens(t: AIUsageTotals): number { return t.input_tokens + t.output_tokens; }
+export function uncachedInputTokens(t: AIUsageTotals): number {
+  return Math.max(0, t.input_tokens - t.cached_input_tokens - (t.cache_write_input_tokens ?? 0));
+}
+export function formatExactTokens(value: number): string { return value.toLocaleString("en-US"); }
+export function formatExactCost(nanos: string | undefined, currency?: string): string {
+  if (!nanos || !currency) return "Unavailable";
+  try {
+    const cents = (BigInt(nanos) + 5_000_000n) / 10_000_000n;
+    const whole = cents / 100n; const fraction = (cents % 100n).toString().padStart(2, "0");
+    return `${currency} ${whole.toLocaleString("en-US")}.${fraction}`;
+  } catch { return "Unavailable"; }
+}
 export function usageQuery(start: string, end: string, feature?: AIUsageFeature): string {
   const query = new URLSearchParams({ start, end }); if (feature) query.append("feature", feature); return query.toString();
 }

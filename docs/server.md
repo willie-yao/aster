@@ -641,6 +641,15 @@ model-gateway exclusions, legacy coverage gaps, and pricing added after an
 operation. Reports also include safe historical model totals when the source
 ledger recorded them.
 
+The report includes one row for every UTC day in the selected range, including
+explicit empty days. Daily rows carry exact token and request totals, per-feature
+breakdowns, recorded-cost status, current-rate repricing, coverage, and a marker
+for the current partial UTC day. Recorded estimates use the pricing stored with
+each operation. Current-rate estimates use the operator pricing configured when
+the report is requested. Mixed-currency recorded values are not added together;
+their status is `mixed_currency`, while current-rate repricing remains available
+in the current configured currency when token coverage permits it.
+
 
 ## AI usage observability
 
@@ -651,3 +660,10 @@ remain inaccessible through `/data/*`. The JSON response and download preserve
 absent versus reported-zero cache-write counts, keep fetcher and server writers
 separate on disk, and never expose endpoints, prompts, model responses, or
 credentials.
+
+The authenticated Usage page renders the daily cost history as an accessible
+time-series chart plus an exact-value table. The chart is chronological. The
+table defaults to newest-first, can sort by UTC date, and expands each day into
+its feature totals. Narrow layouts use stacked daily cards rather than a clipped
+wide table. Empty and unavailable ranges render terminal messages rather than a
+permanent spinner.
