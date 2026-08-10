@@ -30,7 +30,7 @@ export interface AIUsageReport {
     model_requests: number; reported_requests: number; priced_reported_requests?: number;
     cache_write_reported_requests?: number; cache_write_priced_requests?: number; cache_write_unreported_requests?: number;
     invalid_usage_requests?: number; unreported_requests: number; external_unmetered_operations: number;
-    model_gateway_excluded_operations?: number; pricing_added_after_requests?: number; legacy_coverage_unknown?: boolean;
+    model_gateway_excluded_operations?: number; pricing_added_after_requests?: number; legacy_coverage_unknown?: boolean; aggregate_overflow?: boolean;
   };
   totals: AIUsageTotals;
   daily: Array<{ date: string; totals: AIUsageTotals }>;

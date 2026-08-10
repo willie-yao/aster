@@ -75,17 +75,40 @@ func TestOperationRejectsInvalidAndOverflowingUsage(t *testing.T) {
 	}
 }
 
+func TestRecorderClassifiesAggregateTokenOverflow(t *testing.T) {
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	recorder := testRecorder(t, "", now, 10)
+	stamp := now.Format(time.RFC3339Nano)
+	recorder.Record(OperationUsage{
+		ID: "0011223344556677", Origin: OriginFetcher, Feature: FeatureFailureAnalysis,
+		StartedAt: stamp, CompletedAt: stamp, Outcome: OutcomeSuccess, Model: "model",
+		ModelRequests: 1, ReportedRequests: 1, InputTokens: math.MaxInt64, CoverageCountsKnown: true,
+	})
+	second := recorder.Record(OperationUsage{
+		ID: "1122334455667788", Origin: OriginFetcher, Feature: FeatureFailureAnalysis,
+		StartedAt: stamp, CompletedAt: stamp, Outcome: OutcomeSuccess, Model: "model",
+		ModelRequests: 1, ReportedRequests: 1, InputTokens: 1, CoverageCountsKnown: true,
+	})
+	if !second.UsageInvalid || second.ReportedRequests != 0 || second.UnreportedRequests != 1 || second.InvalidUsageRequests != 1 || second.InputTokens != 0 {
+		t.Fatalf("overflow operation = %+v", second)
+	}
+	totals := recorder.Snapshot().Days[0].Totals
+	if totals.InputTokens != math.MaxInt64 || totals.InputTokens < 0 || totals.Operations != 2 || totals.ReportedRequests != 1 || totals.UnreportedRequests != 1 || totals.InvalidUsageRequests != 1 {
+		t.Fatalf("overflow totals = %+v", totals)
+	}
+}
+
 func TestModelGatewayExclusionIsSpecific(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
 	recorder := testRecorder(t, "", now, 10)
 	ctx, operation := Begin(context.Background(), recorder, Metadata{LogicalID: "operation", Origin: OriginServer, Feature: FeatureFixPreview, StartedAt: now})
 	MarkModelGatewayExcluded(ctx, "gateway-model")
 	got := operation.Finish(OutcomeSuccess)
-	if !got.ExternalUnmetered || !got.ModelGatewayExcluded || got.UsageSource != UsageSourceModelGateway || got.Model != "gateway-model" || !got.CoverageCountsKnown {
+	if got.ExternalUnmetered || !got.ModelGatewayExcluded || got.UsageSource != UsageSourceModelGateway || got.Model != "gateway-model" || !got.CoverageCountsKnown {
 		t.Fatalf("operation = %+v", got)
 	}
 	totals := recorder.Snapshot().Days[0].Totals
-	if totals.ExternalUnmeteredOperations != 1 || totals.ModelGatewayExcludedOperations != 1 || totals.ModelRequests != 0 {
+	if totals.ExternalUnmeteredOperations != 0 || totals.ModelGatewayExcludedOperations != 1 || totals.ModelRequests != 0 {
 		t.Fatalf("totals = %+v", totals)
 	}
 }

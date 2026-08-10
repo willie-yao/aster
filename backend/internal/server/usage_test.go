@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -106,18 +107,20 @@ func TestBuildUsageReportCoverageStatesAndModels(t *testing.T) {
 	day := aiusage.DailyUsage{
 		Date: "2026-08-10", PricingCountsKnown: true, CoverageCountsKnown: true, ModelCountsKnown: true,
 		Totals: aiusage.UsageTotals{
-			Operations: 3, ModelRequests: 2, ReportedRequests: 2, PricedReportedRequests: 1,
+			Operations: 4, ModelRequests: 2, ReportedRequests: 2, PricedReportedRequests: 1,
 			CacheWriteReportedRequests: 1, CacheWritePricedRequests: 1, CacheWriteUnreportedRequests: 1,
 			ExternalUnmeteredOperations: 1, ModelGatewayExcludedOperations: 1,
 			InputTokens: 100, CachedInputTokens: 30, CacheWriteInputTokens: 10, OutputTokens: 20,
 		},
 		Features: map[aiusage.Feature]aiusage.UsageTotals{
 			aiusage.FeatureFailureAnalysis: {Operations: 2, ModelRequests: 2, ReportedRequests: 2, PricedReportedRequests: 1, CacheWriteReportedRequests: 1, CacheWritePricedRequests: 1, CacheWriteUnreportedRequests: 1},
-			aiusage.FeatureFixPreview:      {Operations: 1, ExternalUnmeteredOperations: 1, ModelGatewayExcludedOperations: 1},
+			aiusage.FeatureFixPreview:      {Operations: 1, ModelGatewayExcludedOperations: 1},
+			aiusage.FeatureFixCritique:     {Operations: 1, ExternalUnmeteredOperations: 1},
 		},
 		Models: map[string]aiusage.UsageTotals{
 			"claude-sonnet-4.6": {Operations: 2, ModelRequests: 2, ReportedRequests: 2, InputTokens: 100, OutputTokens: 20},
-			"gateway-model":     {Operations: 1, ExternalUnmeteredOperations: 1, ModelGatewayExcludedOperations: 1},
+			"gateway-model":     {Operations: 1, ModelGatewayExcludedOperations: 1},
+			"unknown":           {Operations: 1, ExternalUnmeteredOperations: 1},
 		},
 		PricingHashes: []string{"price-a"},
 	}
@@ -128,9 +131,21 @@ func TestBuildUsageReportCoverageStatesAndModels(t *testing.T) {
 			t.Fatalf("coverage states = %v, missing %s", report.Coverage.States, state)
 		}
 	}
-	if report.Coverage.Status != "partial" || report.Coverage.PricingAddedAfterRequests != 1 || report.ModelCoverage != "complete" || len(report.Models) != 2 ||
+	if report.Coverage.Status != "partial" || report.Coverage.PricingAddedAfterRequests != 1 || report.ModelCoverage != "complete" || len(report.Models) != 3 ||
 		report.Totals.CacheWriteInputTokens != 10 || report.Totals.ModelGatewayExcludedOperations != 1 {
 		t.Fatalf("report = %+v", report)
+	}
+}
+
+func TestBuildUsageReportRejectsAggregateOverflow(t *testing.T) {
+	start, _ := time.Parse(time.DateOnly, "2026-08-09")
+	ledgers := []aiusage.UsageLedger{{Version: aiusage.LedgerVersion, Days: []aiusage.DailyUsage{
+		{Date: "2026-08-09", CoverageCountsKnown: true, ModelCountsKnown: true, Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, InputTokens: math.MaxInt64}},
+		{Date: "2026-08-10", CoverageCountsKnown: true, ModelCountsKnown: true, Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, InputTokens: 1}},
+	}}}
+	report := buildUsageReport(ledgers, start, start.AddDate(0, 0, 1), nil, start, false)
+	if !report.Coverage.AggregateOverflow || report.Totals.InputTokens != math.MaxInt64 || report.Totals.InputTokens < 0 || !slices.Contains(report.Coverage.States, "aggregate_overflow") || report.PricingCoverage != "unknown" {
+		t.Fatalf("overflow report = %+v", report)
 	}
 }
 

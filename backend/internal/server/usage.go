@@ -61,6 +61,7 @@ type usageReportCoverage struct {
 	ModelGatewayExcludedOperations int      `json:"model_gateway_excluded_operations"`
 	PricingAddedAfterRequests      int      `json:"pricing_added_after_requests"`
 	LegacyCoverageUnknown          bool     `json:"legacy_coverage_unknown"`
+	AggregateOverflow              bool     `json:"aggregate_overflow"`
 }
 
 type usageReportTotals struct {
@@ -218,6 +219,7 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 	pricingCountsUnknown := false
 	coverageCountsUnknown := false
 	modelCountsUnknown := false
+	aggregateOverflow := false
 	var recent []aiusage.OperationUsage
 	for _, ledger := range ledgers {
 		for _, day := range ledger.Days {
@@ -244,12 +246,18 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 					}
 				}
 				totals := dayTotals[day.Date]
-				addUsageTotals(&totals, day.Totals)
-				dayTotals[day.Date] = totals
+				if addUsageTotals(&totals, day.Totals) {
+					dayTotals[day.Date] = totals
+				} else {
+					aggregateOverflow = true
+				}
 				for model, values := range day.Models {
 					modelTotal := modelTotals[model]
-					addUsageTotals(&modelTotal, values)
-					modelTotals[model] = modelTotal
+					if addUsageTotals(&modelTotal, values) {
+						modelTotals[model] = modelTotal
+					} else {
+						aggregateOverflow = true
+					}
 				}
 			}
 			for feature, values := range day.Features {
@@ -257,8 +265,11 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 					continue
 				}
 				featureTotal := featureTotals[feature]
-				addUsageTotals(&featureTotal, values)
-				featureTotals[feature] = featureTotal
+				if addUsageTotals(&featureTotal, values) {
+					featureTotals[feature] = featureTotal
+				} else {
+					aggregateOverflow = true
+				}
 				if len(featureFilter) > 0 {
 					if !day.CoverageCountsKnown && values.Operations > 0 {
 						coverageCountsUnknown = true
@@ -270,8 +281,11 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 						currencies[ledger.Currency] = true
 					}
 					dayTotal := dayTotals[day.Date]
-					addUsageTotals(&dayTotal, values)
-					dayTotals[day.Date] = dayTotal
+					if addUsageTotals(&dayTotal, values) {
+						dayTotals[day.Date] = dayTotal
+					} else {
+						aggregateOverflow = true
+					}
 				}
 			}
 		}
@@ -296,11 +310,18 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 	}
 	var totals aiusage.UsageTotals
 	days := make([]usageReportDay, 0, len(dayTotals))
-	for date, values := range dayTotals {
-		addUsageTotals(&totals, values)
+	dates := make([]string, 0, len(dayTotals))
+	for date := range dayTotals {
+		dates = append(dates, date)
+	}
+	sort.Strings(dates)
+	for _, date := range dates {
+		values := dayTotals[date]
+		if !addUsageTotals(&totals, values) {
+			aggregateOverflow = true
+		}
 		days = append(days, usageReportDay{Date: date, Totals: reportTotals(values)})
 	}
-	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
 	features := make([]usageReportFeature, 0, len(featureTotals))
 	for feature, values := range featureTotals {
 		features = append(features, usageReportFeature{Feature: feature, Totals: reportTotals(values)})
@@ -335,7 +356,7 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 	pricingCoverage := "unavailable"
 	if totals.ReportedRequests > 0 {
 		switch {
-		case pricingCountsUnknown || coverageCountsUnknown:
+		case pricingCountsUnknown || coverageCountsUnknown || aggregateOverflow:
 			pricingCoverage = "unknown"
 		case totals.PricedReportedRequests == totals.ReportedRequests:
 			pricingCoverage = "complete"
@@ -347,7 +368,7 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 			pricingCoverage = "partial"
 		}
 	}
-	coverage := reportCoverage(totals, coverageCountsUnknown, pricingConfigured)
+	coverage := reportCoverage(totals, coverageCountsUnknown, aggregateOverflow, pricingConfigured)
 	modelCoverage := "complete"
 	if len(featureFilter) > 0 {
 		modelCoverage = "unavailable_for_feature_filter"
@@ -367,14 +388,14 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 	}
 }
 
-func reportCoverage(totals aiusage.UsageTotals, legacyUnknown, pricingConfigured bool) usageReportCoverage {
+func reportCoverage(totals aiusage.UsageTotals, legacyUnknown, aggregateOverflow, pricingConfigured bool) usageReportCoverage {
 	coverage := usageReportCoverage{
 		Status: "complete", States: []string{}, ModelRequests: totals.ModelRequests, ReportedRequests: totals.ReportedRequests,
 		PricedReportedRequests: totals.PricedReportedRequests, CacheWriteReportedRequests: totals.CacheWriteReportedRequests,
 		CacheWritePricedRequests: totals.CacheWritePricedRequests, CacheWriteUnreportedRequests: totals.CacheWriteUnreportedRequests,
 		InvalidUsageRequests: totals.InvalidUsageRequests, UnreportedRequests: totals.UnreportedRequests,
 		ExternalUnmeteredOperations: totals.ExternalUnmeteredOperations, ModelGatewayExcludedOperations: totals.ModelGatewayExcludedOperations,
-		LegacyCoverageUnknown: legacyUnknown,
+		LegacyCoverageUnknown: legacyUnknown, AggregateOverflow: aggregateOverflow,
 	}
 	addState := func(state string) { coverage.States = append(coverage.States, state) }
 	if totals.Operations == 0 {
@@ -382,7 +403,7 @@ func reportCoverage(totals aiusage.UsageTotals, legacyUnknown, pricingConfigured
 		addState("no_usage_records")
 		return coverage
 	}
-	if totals.ModelRequests == 0 && totals.ExternalUnmeteredOperations == 0 {
+	if totals.ModelRequests == 0 && totals.ExternalUnmeteredOperations == 0 && totals.ModelGatewayExcludedOperations == 0 && !aggregateOverflow {
 		addState("no_provider_usage")
 		return coverage
 	}
@@ -411,6 +432,10 @@ func reportCoverage(totals aiusage.UsageTotals, legacyUnknown, pricingConfigured
 		partial = true
 		addState("legacy_coverage_unknown")
 	}
+	if aggregateOverflow {
+		partial = true
+		addState("aggregate_overflow")
+	}
 	unpriced := max(totals.ReportedRequests-totals.PricedReportedRequests, 0)
 	if unpriced > 0 {
 		partial = true
@@ -423,7 +448,7 @@ func reportCoverage(totals aiusage.UsageTotals, legacyUnknown, pricingConfigured
 	}
 	if totals.ModelRequests > 0 && totals.ReportedRequests == totals.ModelRequests && !partial {
 		addState("fully_priced_provider_reported")
-	} else if totals.ReportedRequests == 0 && totals.ExternalUnmeteredOperations > 0 {
+	} else if totals.ReportedRequests == 0 && (totals.ExternalUnmeteredOperations > 0 || totals.ModelGatewayExcludedOperations > 0) {
 		coverage.Status = "unavailable"
 		return coverage
 	}
@@ -433,28 +458,8 @@ func reportCoverage(totals aiusage.UsageTotals, legacyUnknown, pricingConfigured
 	return coverage
 }
 
-func addUsageTotals(target *aiusage.UsageTotals, value aiusage.UsageTotals) {
-	target.Operations += value.Operations
-	target.CacheHits += value.CacheHits
-	target.SuppressedOperations += value.SuppressedOperations
-	target.CooldownRetries += value.CooldownRetries
-	target.Failures += value.Failures
-	target.ExternalUnmeteredOperations += value.ExternalUnmeteredOperations
-	target.ModelGatewayExcludedOperations += value.ModelGatewayExcludedOperations
-	target.ModelRequests += value.ModelRequests
-	target.ReportedRequests += value.ReportedRequests
-	target.PricedReportedRequests += value.PricedReportedRequests
-	target.CacheWriteReportedRequests += value.CacheWriteReportedRequests
-	target.CacheWritePricedRequests += value.CacheWritePricedRequests
-	target.CacheWriteUnreportedRequests += value.CacheWriteUnreportedRequests
-	target.InvalidUsageRequests += value.InvalidUsageRequests
-	target.UnreportedRequests += value.UnreportedRequests
-	target.InputTokens += value.InputTokens
-	target.CachedInputTokens += value.CachedInputTokens
-	target.CacheWriteInputTokens += value.CacheWriteInputTokens
-	target.OutputTokens += value.OutputTokens
-	target.ReasoningTokens += value.ReasoningTokens
-	target.EstimatedCostNanos += value.EstimatedCostNanos
+func addUsageTotals(target *aiusage.UsageTotals, value aiusage.UsageTotals) bool {
+	return aiusage.AddTotals(target, value)
 }
 
 func reportTotals(value aiusage.UsageTotals) usageReportTotals {

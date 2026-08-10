@@ -76,46 +76,81 @@ func ObserveModelRequestWithModel(ctx context.Context, usage TokenUsage, model, 
 	if op.finished {
 		return
 	}
-	if op.usage.ModelRequests < math.MaxInt {
-		op.usage.ModelRequests++
-	}
 	op.usage.CoverageCountsKnown = true
 	op.setModelLocked(model, fingerprint)
 	op.setUsageSourceLocked(UsageSourceProviderResponse)
+	accumulateModelRequest(&op.usage, usage)
+}
+
+// AccumulateModelRequest adds one provider request to a detached operation.
+// It is used when encrypted analyzer traces are merged into the fetcher ledger.
+func AccumulateModelRequest(operation *OperationUsage, usage TokenUsage) {
+	if operation == nil {
+		return
+	}
+	operation.CoverageCountsKnown = true
+	if operation.UsageSource == "" {
+		operation.UsageSource = UsageSourceProviderResponse
+	} else if operation.UsageSource != UsageSourceProviderResponse {
+		operation.UsageSource = UsageSourceMixed
+	}
+	accumulateModelRequest(operation, usage)
+}
+
+func accumulateModelRequest(operation *OperationUsage, usage TokenUsage) {
+	if operation.ModelRequests == math.MaxInt {
+		incrementInvalidCount(&operation.UnreportedRequests)
+		incrementInvalidCount(&operation.InvalidUsageRequests)
+		operation.UsageInvalid = true
+		return
+	}
+	operation.ModelRequests++
 	if !usage.Reported {
-		op.usage.UnreportedRequests++
+		incrementInvalidCount(&operation.UnreportedRequests)
 		return
 	}
 	if usage.InputTokens < 0 || usage.CachedInputTokens < 0 || usage.CacheWriteInputTokens < 0 ||
 		usage.CachedInputTokens > usage.InputTokens || usage.CacheWriteInputTokens > usage.InputTokens-usage.CachedInputTokens ||
 		usage.OutputTokens < 0 || usage.ReasoningTokens < 0 || usage.ReasoningTokens > usage.OutputTokens {
-		op.usage.UnreportedRequests++
-		op.usage.InvalidUsageRequests++
-		op.usage.UsageInvalid = true
+		incrementInvalidCount(&operation.UnreportedRequests)
+		incrementInvalidCount(&operation.InvalidUsageRequests)
+		operation.UsageInvalid = true
 		return
 	}
-	input, inputOK := checkedTokenAdd(op.usage.InputTokens, usage.InputTokens)
-	cached, cachedOK := checkedTokenAdd(op.usage.CachedInputTokens, usage.CachedInputTokens)
-	cacheWrite, cacheWriteOK := checkedTokenAdd(op.usage.CacheWriteInputTokens, usage.CacheWriteInputTokens)
-	output, outputOK := checkedTokenAdd(op.usage.OutputTokens, usage.OutputTokens)
-	reasoning, reasoningOK := checkedTokenAdd(op.usage.ReasoningTokens, usage.ReasoningTokens)
+	input, inputOK := checkedTokenAdd(operation.InputTokens, usage.InputTokens)
+	cached, cachedOK := checkedTokenAdd(operation.CachedInputTokens, usage.CachedInputTokens)
+	cacheWrite, cacheWriteOK := checkedTokenAdd(operation.CacheWriteInputTokens, usage.CacheWriteInputTokens)
+	output, outputOK := checkedTokenAdd(operation.OutputTokens, usage.OutputTokens)
+	reasoning, reasoningOK := checkedTokenAdd(operation.ReasoningTokens, usage.ReasoningTokens)
 	if !inputOK || !cachedOK || !cacheWriteOK || !outputOK || !reasoningOK {
-		op.usage.UnreportedRequests++
-		op.usage.InvalidUsageRequests++
-		op.usage.UsageInvalid = true
+		incrementInvalidCount(&operation.UnreportedRequests)
+		incrementInvalidCount(&operation.InvalidUsageRequests)
+		operation.UsageInvalid = true
 		return
 	}
-	op.usage.ReportedRequests++
-	if usage.CacheWriteInputTokensReported {
-		op.usage.CacheWriteReportedRequests++
-	} else {
-		op.usage.CacheWriteUnreportedRequests++
+	if operation.ReportedRequests == math.MaxInt {
+		incrementInvalidCount(&operation.UnreportedRequests)
+		incrementInvalidCount(&operation.InvalidUsageRequests)
+		operation.UsageInvalid = true
+		return
 	}
-	op.usage.InputTokens = input
-	op.usage.CachedInputTokens = cached
-	op.usage.CacheWriteInputTokens = cacheWrite
-	op.usage.OutputTokens = output
-	op.usage.ReasoningTokens = reasoning
+	operation.ReportedRequests++
+	if usage.CacheWriteInputTokensReported {
+		incrementInvalidCount(&operation.CacheWriteReportedRequests)
+	} else {
+		incrementInvalidCount(&operation.CacheWriteUnreportedRequests)
+	}
+	operation.InputTokens = input
+	operation.CachedInputTokens = cached
+	operation.CacheWriteInputTokens = cacheWrite
+	operation.OutputTokens = output
+	operation.ReasoningTokens = reasoning
+}
+
+func incrementInvalidCount(value *int) {
+	if *value < math.MaxInt {
+		*value++
+	}
 }
 
 func checkedTokenAdd(current int64, value int) (int64, bool) {
@@ -150,7 +185,6 @@ func MarkModelGatewayExcluded(ctx context.Context, model string) {
 	op.mu.Lock()
 	defer op.mu.Unlock()
 	if !op.finished {
-		op.usage.ExternalUnmetered = true
 		op.usage.ModelGatewayExcluded = true
 		op.usage.CoverageCountsKnown = true
 		op.setModelLocked(model, "")

@@ -39,7 +39,7 @@ func TestManagerGenerateMarksModelGatewayExclusion(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := operation.Finish(aiusage.OutcomeSuccess)
-	if !got.ModelGatewayExcluded || !got.ExternalUnmetered || got.Model != "gateway-model" || got.UsageSource != aiusage.UsageSourceModelGateway {
+	if !got.ModelGatewayExcluded || got.ExternalUnmetered || got.Model != "gateway-model" || got.UsageSource != aiusage.UsageSourceModelGateway {
 		t.Fatalf("operation = %+v", got)
 	}
 }
