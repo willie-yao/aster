@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -133,6 +134,14 @@ func main() {
 	}
 }
 
+func formatPricingRate(value string) string {
+	rate, ok := new(big.Rat).SetString(value)
+	if !ok {
+		return value
+	}
+	return rate.FloatString(2)
+}
+
 // enableInteractiveFeatures loads the project config and authenticated services.
 func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projectDir, dataDir string) error {
 	cfg, err := project.Load(filepath.Join(projectDir, "project.yaml"))
@@ -164,11 +173,11 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 				return fmt.Errorf("configuring AI usage pricing: %w", priceErr)
 			}
 			opts.AIUsagePricing = table
-			parts := []string{fmt.Sprintf("%s input=%s", pricing.Currency, pricing.InputPerMillion), "cached_input=" + pricing.CachedInputPerMillion}
+			parts := []string{fmt.Sprintf("%s input=%s", pricing.Currency, formatPricingRate(pricing.InputPerMillion)), "cached_input=" + formatPricingRate(pricing.CachedInputPerMillion)}
 			if pricing.CacheWriteInputPerMillion != "" {
-				parts = append(parts, "cache_write_input="+pricing.CacheWriteInputPerMillion)
+				parts = append(parts, "cache_write_input="+formatPricingRate(pricing.CacheWriteInputPerMillion))
 			}
-			parts = append(parts, "output="+pricing.OutputPerMillion, "per million tokens")
+			parts = append(parts, "output="+formatPricingRate(pricing.OutputPerMillion), "per million tokens")
 			opts.AIUsagePricingRule = strings.Join(parts, " ")
 		}
 	}

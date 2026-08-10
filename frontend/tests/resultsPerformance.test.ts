@@ -102,4 +102,8 @@ test("AI usage labels cost and token coverage accurately", () => {
   assert.match(page, /No usage recorded/);
   assert.match(page, /TableSortLabel/);
   assert.match(page, /FeatureBreakdown/);
+  for (const mobileMetric of ["Cache hits", "Uncached input", "Cached read", "Cache write", "Output"]) {
+    assert.match(page, new RegExp(`>${mobileMetric}<`));
+  }
+  assert.match(page, /Not reported/);
 });

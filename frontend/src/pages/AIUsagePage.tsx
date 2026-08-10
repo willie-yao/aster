@@ -232,9 +232,12 @@ function HistoricalTable({ days }: { days: AIUsageDaily[] }) {
           {day.current_partial_utc && <Chip size="small" label="Partial" />}
         </Button>
         <Box sx={{ px: 1.5, pb: 1.5, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
-          <Box><Typography variant="caption" color="text.secondary">Recorded</Typography><Typography variant="body2" sx={numericCell}>{recordedCost(day)}</Typography></Box>
-          <Box><Typography variant="caption" color="text.secondary">Current rate</Typography><Typography variant="body2" sx={numericCell}>{currentRateCost(day)}</Typography></Box>
-          <Box><Typography variant="caption" color="text.secondary">Input</Typography><Typography variant="body2" sx={numericCell}>{formatExactTokens(day.totals.input_tokens)}</Typography></Box>
+          <Box><Typography variant="caption" color="text.secondary">Recorded estimate</Typography><Typography variant="body2" sx={numericCell}>{recordedCost(day)}</Typography></Box>
+          <Box><Typography variant="caption" color="text.secondary">Current-rate estimate</Typography><Typography variant="body2" sx={numericCell}>{currentRateCost(day)}</Typography></Box>
+          <Box><Typography variant="caption" color="text.secondary">Cache hits</Typography><Typography variant="body2" sx={numericCell}>{formatExactTokens(day.totals.cache_hits)}</Typography></Box>
+          <Box><Typography variant="caption" color="text.secondary">Uncached input</Typography><Typography variant="body2" sx={numericCell}>{formatExactTokens(uncachedInputTokens(day.totals))}</Typography></Box>
+          <Box><Typography variant="caption" color="text.secondary">Cached read</Typography><Typography variant="body2" sx={numericCell}>{formatExactTokens(day.totals.cached_input_tokens)}</Typography></Box>
+          <Box><Typography variant="caption" color="text.secondary">Cache write</Typography><Typography variant="body2" sx={numericCell}>{(day.totals.cache_write_reported_requests ?? 0) > 0 || (day.totals.cache_write_input_tokens ?? 0) > 0 ? formatExactTokens(day.totals.cache_write_input_tokens ?? 0) : "Not reported"}</Typography></Box>
           <Box><Typography variant="caption" color="text.secondary">Output</Typography><Typography variant="body2" sx={numericCell}>{formatExactTokens(day.totals.output_tokens)}</Typography></Box>
           <Box sx={{ gridColumn: "1 / -1" }}><CoverageBadges coverage={day.coverage} /></Box>
         </Box>
