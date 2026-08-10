@@ -238,7 +238,7 @@ func ValidateExecutionResult(result ExecutionResult, request ExecutionRequest) e
 		}
 	case engineruntime.TerminalFailed, engineruntime.TerminalTimedOut, engineruntime.TerminalCancelled:
 		failureCode := strings.TrimSpace(result.FailureCode)
-		if result.Review != nil || strings.TrimSpace(result.FailureReason) == "" || len(result.FailureReason) > 2<<10 || failureCode != result.FailureCode || failureCode != "" && !failureCodeRE.MatchString(failureCode) {
+		if result.Review != nil || strings.TrimSpace(result.FailureReason) == "" || len(result.FailureReason) > 2<<10 || strings.ContainsRune(result.FailureReason, '\x00') || failureCode != result.FailureCode || failureCode != "" && !failureCodeRE.MatchString(failureCode) {
 			return validationError(ValidationResultTerminal, ErrInvalidReview, "failed critic result must contain a bounded reason and optional schema-1 failure code")
 		}
 	default:

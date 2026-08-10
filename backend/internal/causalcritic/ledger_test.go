@@ -2,6 +2,7 @@ package causalcritic
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentsandbox"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
@@ -60,6 +62,10 @@ func TestRunTrialPersistsFinalizedPrivateRecord(t *testing.T) {
 	}
 	if len(ledger.Records) != 1 || !ledger.Records[0].Finalized {
 		t.Fatalf("ledger = %+v", ledger)
+	}
+	loaded, found, err := LoadTrialByAttempt(publicDir, ledgerPath, record.AttemptHash)
+	if err != nil || !found || loaded.ID != record.ID {
+		t.Fatalf("loaded=%+v found=%v err=%v", loaded, found, err)
 	}
 	info, err := os.Stat(ledgerPath)
 	if err != nil {
@@ -456,7 +462,44 @@ func TestRunTrialReturnsIdentityForAttemptTombstone(t *testing.T) {
 		PublicDir: publicDir, LedgerPath: ledgerPath, Metadata: metadata, Input: input, ExecutionID: executionID, RuntimeIdentity: runtimeIdentity,
 		Now: func() time.Time { return created.Add(time.Minute) },
 	})
-	if !errors.Is(err, ErrTrialAlreadyAttempted) || record.AttemptHash != attemptHash || record.PairHash != input.PairHash || record.Status != TrialSucceeded || reviewer.calls != 0 {
+	if !errors.Is(err, ErrTrialAlreadyAttempted) || !errors.Is(err, ErrTrialDetailsPruned) || record.AttemptHash != attemptHash || record.PairHash != input.PairHash || record.Status != TrialSucceeded || reviewer.calls != 0 {
 		t.Fatalf("record=%+v reviewer=%d err=%v", record, reviewer.calls, err)
+	}
+	if _, found, err := LoadTrialByAttempt(publicDir, ledgerPath, attemptHash); !errors.Is(err, ErrTrialDetailsPruned) || found {
+		t.Fatalf("found=%v err=%v", found, err)
+	}
+}
+
+func TestRunTrialPersistsNULFailureReasonAsContractViolation(t *testing.T) {
+	input := criticInput(t)
+	runner := fakeSandboxRunner{run: func(spec agentsandbox.Spec) (agentsandbox.Result, error) {
+		var request ExecutionRequest
+		if err := json.Unmarshal(spec.Request, &request); err != nil {
+			t.Fatal(err)
+		}
+		execution := ExecutionResult{
+			SchemaVersion: ExecutionSchemaVersion, ContractVersion: ContractVersion, PairHash: request.Input.PairHash,
+			TerminalState: engineruntime.TerminalFailed, FailureCode: "gateway_request", FailureReason: "gateway\x00failed",
+			Usage: GatewayUsage{Status: "unavailable", Source: "gateway_response"}, DurationMs: 100,
+		}
+		data, _ := json.Marshal(execution)
+		return agentsandbox.Result{Output: string(data), FinishedReason: "PodFailed", Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true}}, nil
+	}}
+	runtime := &Runtime{
+		Sandbox: runner, Gateway: engineruntime.ModelGatewayConfig{Endpoint: "https://gateway.platform.svc.cluster.local/v1", Model: "critic-model", ProtocolVersion: "openai-chat-completions-v1"},
+		Timeout: time.Minute, OutputLimitBytes: DefaultOutputLimit,
+	}
+	root := t.TempDir()
+	publicDir, ledgerPath := filepath.Join(root, "public"), filepath.Join(root, "private", "critic.json")
+	record, err := RunTrial(t.Context(), runtime, TrialSpec{
+		PublicDir: publicDir, LedgerPath: ledgerPath, Metadata: trialMetadata(), Input: input,
+		ExecutionID: "critic-nul-reason", RuntimeIdentity: runtime.RuntimeIdentity(),
+	})
+	if !errors.Is(err, engineruntime.ErrResultContract) || ValidationCodeOf(err) != ValidationResultTerminal || record.Status != TrialContractViolation || record.FailureCode != "validation_result_terminal" || record.FailureReason != "" {
+		t.Fatalf("record=%+v err=%v", record, err)
+	}
+	ledger, loadErr := loadLedger(ledgerPath)
+	if loadErr != nil || len(ledger.Records) != 1 || ledger.Records[0].Status != TrialContractViolation {
+		t.Fatalf("ledger=%+v err=%v", ledger, loadErr)
 	}
 }

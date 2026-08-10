@@ -33,7 +33,10 @@ const (
 	pendingRecoveryAge          = 35 * time.Minute
 )
 
-var ErrTrialAlreadyAttempted = errors.New("causal critic trial already attempted")
+var (
+	ErrTrialAlreadyAttempted = errors.New("causal critic trial already attempted")
+	ErrTrialDetailsPruned    = errors.New("causal critic trial details pruned")
+)
 
 // TrialStatus classifies one independent critic execution without granting authority.
 type TrialStatus string
@@ -171,14 +174,23 @@ func RunTrial(ctx context.Context, reviewer Reviewer, spec TrialSpec) (TrialReco
 		return TrialRecord{}, err
 	}
 	if !claimed {
-		existing, found, lookupErr := loadTrialByAttempt(spec.PublicDir, spec.LedgerPath, attemptHash, record)
+		existing, detailed, found, lookupErr := loadTrialByAttempt(spec.PublicDir, spec.LedgerPath, attemptHash, record)
 		if lookupErr != nil {
 			return TrialRecord{}, errors.Join(fmt.Errorf("%w: %s repetition %d", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition), lookupErr)
 		}
-		if found {
+		if found && detailed {
 			return existing, fmt.Errorf("%w: %s repetition %d", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition)
 		}
-		return record, fmt.Errorf("%w: %s repetition %d detailed record was pruned", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition)
+		if found {
+			return existing, errors.Join(
+				fmt.Errorf("%w: %s repetition %d", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition),
+				fmt.Errorf("%w: %s", ErrTrialDetailsPruned, attemptHash),
+			)
+		}
+		return record, errors.Join(
+			fmt.Errorf("%w: %s repetition %d", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition),
+			fmt.Errorf("%w: %s", ErrTrialDetailsPruned, attemptHash),
+		)
 	}
 	started := now()
 	observer := func(observerCtx context.Context, work engineruntime.WorkRef) error {
@@ -222,8 +234,24 @@ func RunTrial(ctx context.Context, reviewer Reviewer, spec TrialSpec) (TrialReco
 	return record, runErr
 }
 
-func loadTrialByAttempt(publicDir, path, attemptHash string, fallback TrialRecord) (TrialRecord, bool, error) {
+// LoadTrialByAttempt returns one retained detailed trial record.
+func LoadTrialByAttempt(publicDir, path, attemptHash string) (TrialRecord, bool, error) {
+	if !validSHA256(attemptHash) {
+		return TrialRecord{}, false, fmt.Errorf("causal critic trial attempt hash is invalid")
+	}
+	record, detailed, found, err := loadTrialByAttempt(publicDir, path, attemptHash, TrialRecord{})
+	if err != nil {
+		return TrialRecord{}, false, err
+	}
+	if found && !detailed {
+		return record, false, fmt.Errorf("%w: %s", ErrTrialDetailsPruned, attemptHash)
+	}
+	return record, found, nil
+}
+
+func loadTrialByAttempt(publicDir, path, attemptHash string, fallback TrialRecord) (TrialRecord, bool, bool, error) {
 	var found TrialRecord
+	detailed := false
 	ok := false
 	err := withLedgerLock(publicDir, path, func(resolved string) error {
 		ledger, err := loadLedger(resolved)
@@ -233,6 +261,7 @@ func loadTrialByAttempt(publicDir, path, attemptHash string, fallback TrialRecor
 		for _, record := range ledger.Records {
 			if record.AttemptHash == attemptHash {
 				found = record
+				detailed = true
 				ok = true
 				return nil
 			}
@@ -247,7 +276,7 @@ func loadTrialByAttempt(publicDir, path, attemptHash string, fallback TrialRecor
 		}
 		return nil
 	})
-	return found, ok, err
+	return found, detailed, ok, err
 }
 
 func trialTelemetry(value engineruntime.GenerateTelemetry) TrialTelemetry {

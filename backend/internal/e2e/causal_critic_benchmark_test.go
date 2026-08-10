@@ -100,11 +100,18 @@ func TestAgentSandboxCausalCriticBenchmark(t *testing.T) {
 				JudgeObjected: slices.ContainsFunc(authoritative.SemanticJudgeOutcomes, func(value string) bool { return strings.Contains(value, "objected") }),
 				JudgeRevised:  authoritative.SemanticRevisionSelected,
 			}
+			writeRecord := func(record causalcritic.TrialRecord) {
+				benchmarkRecord := scoreCausalCriticRecord(bc, condition, authoritative, record)
+				writeCausalCriticBenchmarkJSONL(t, resultsPath, benchmarkRecord)
+				if record.Status != causalcritic.TrialSucceeded {
+					t.Errorf("critic trial status = %s", record.Status)
+				}
+			}
 			request, repository := causalCriticBenchmarkCandidate(t, bc)
 			preflightIdentity, err := causalcritic.PreflightIdentity(causalcritic.PreflightIdentityInput{
 				RequestHash: agentanalysis.FailureRequestHash(request), AuthoritativeHash: causalCriticAuthoritativeHash(t, snapshot),
 				SourceRevision: repository.Revision, SkillHash: projectSkills.Hash(), RuntimeIdentity: runtime.RuntimeIdentity(),
-				TrialDiscriminator: fmt.Sprintf("%s/%d", authoritative.Arm, authoritative.Repetition),
+				TrialDiscriminator: causalCriticBenchmarkPreflightDiscriminator(condition, authoritative.Arm, authoritative.Repetition),
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -114,7 +121,15 @@ func TestAgentSandboxCausalCriticBenchmark(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !claimed {
-				t.Logf("critic benchmark preflight already exists: %s", preflight.Status)
+				recovered, ok, err := causalCriticBenchmarkExistingPreflight(publicDir, ledgerPath, preflight)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ok {
+					writeRecord(recovered)
+					return
+				}
+				t.Skipf("critic benchmark preflight remains active: %s", preflight.Status)
 			}
 			completePreflight := func(status causalcritic.PreflightStatus, failureCode, trialAttemptHash string) {
 				if !claimed {
@@ -162,21 +177,38 @@ func TestAgentSandboxCausalCriticBenchmark(t *testing.T) {
 				}
 				completePreflight(causalcritic.PreflightSubmitted, failureCode, record.AttemptHash)
 			}
+			if errors.Is(runErr, causalcritic.ErrTrialDetailsPruned) {
+				t.Fatal(runErr)
+			}
 			if errors.Is(runErr, causalcritic.ErrTrialAlreadyAttempted) {
-				if record.AttemptHash == "" {
-					t.Fatal("critic trial already exists but its detailed ledger record was pruned")
+				if record.Status == causalcritic.TrialPending {
+					t.Skip("critic trial claim remains pending")
 				}
 				t.Log("critic trial already exists in the private ledger; recovering its result row")
 			} else if runErr != nil {
 				t.Logf("critic runtime: %v", runErr)
 			}
-			benchmarkRecord := scoreCausalCriticRecord(bc, condition, authoritative, record)
-			writeCausalCriticBenchmarkJSONL(t, resultsPath, benchmarkRecord)
-			if record.Status != causalcritic.TrialSucceeded {
-				t.Errorf("critic trial status = %s", record.Status)
-			}
+			writeRecord(record)
 		})
 	}
+}
+
+func causalCriticBenchmarkPreflightDiscriminator(condition, authoritativeArm string, repetition int) string {
+	return fmt.Sprintf("agent-sandbox-independent-critic/%s/%s/%d", condition, authoritativeArm, repetition)
+}
+
+func causalCriticBenchmarkExistingPreflight(publicDir, ledgerPath string, preflight causalcritic.PreflightAttempt) (causalcritic.TrialRecord, bool, error) {
+	if preflight.Status != causalcritic.PreflightSubmitted {
+		return causalcritic.TrialRecord{}, false, nil
+	}
+	record, found, err := causalcritic.LoadTrialByAttempt(publicDir, ledgerPath, preflight.TrialAttemptHash)
+	if err != nil {
+		return causalcritic.TrialRecord{}, false, err
+	}
+	if !found {
+		return causalcritic.TrialRecord{}, false, fmt.Errorf("%w: %s", causalcritic.ErrTrialDetailsPruned, preflight.TrialAttemptHash)
+	}
+	return record, true, nil
 }
 
 func causalCriticBrowser(t *testing.T, bc benchCase) artifacts.Browser {
@@ -632,5 +664,29 @@ func TestSummarizeCausalCriticBenchmarkSeparatesQualityAndLifecycle(t *testing.T
 	}
 	if summary.PreflightStatuses[string(causalcritic.PreflightEvidenceFailed)] != 1 || summary.PreflightStatuses[string(causalcritic.PreflightSubmitted)] != 1 || summary.PreflightFailureCodes["review_parse"] != 1 {
 		t.Fatalf("preflight summary = %+v", summary)
+	}
+}
+
+func TestCausalCriticBenchmarkPreflightDiscriminatorSeparatesEvidenceConditions(t *testing.T) {
+	fixture := causalCriticBenchmarkPreflightDiscriminator(benchmarkEvidenceConditionFixture, "baseline", 1)
+	oracle := causalCriticBenchmarkPreflightDiscriminator(benchmarkEvidenceConditionOracle, "baseline", 1)
+	otherArm := causalCriticBenchmarkPreflightDiscriminator(benchmarkEvidenceConditionFixture, "same-model-judge", 1)
+	otherRepetition := causalCriticBenchmarkPreflightDiscriminator(benchmarkEvidenceConditionFixture, "baseline", 2)
+	if fixture == oracle || fixture == otherArm || fixture == otherRepetition {
+		t.Fatalf("discriminators collided: fixture=%q oracle=%q arm=%q repetition=%q", fixture, oracle, otherArm, otherRepetition)
+	}
+}
+
+func TestCausalCriticBenchmarkExistingPreflightStopsActiveStatuses(t *testing.T) {
+	for _, status := range []causalcritic.PreflightStatus{causalcritic.PreflightPending, causalcritic.PreflightEvidenceFailed, causalcritic.PreflightInputInvalid} {
+		t.Run(string(status), func(t *testing.T) {
+			if record, recovered, err := causalCriticBenchmarkExistingPreflight(t.TempDir(), filepath.Join(t.TempDir(), "critic.json"), causalcritic.PreflightAttempt{Status: status}); err != nil || recovered || record.AttemptHash != "" {
+				t.Fatalf("record=%+v recovered=%v err=%v", record, recovered, err)
+			}
+		})
+	}
+	preflight := causalcritic.PreflightAttempt{Status: causalcritic.PreflightSubmitted, TrialAttemptHash: strings.Repeat("a", 64)}
+	if _, recovered, err := causalCriticBenchmarkExistingPreflight(t.TempDir(), filepath.Join(t.TempDir(), "critic.json"), preflight); !errors.Is(err, causalcritic.ErrTrialDetailsPruned) || recovered {
+		t.Fatalf("recovered=%v err=%v", recovered, err)
 	}
 }
