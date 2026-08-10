@@ -977,7 +977,11 @@ used by the actions preflight. Each target declares an intent (`add_symbol` for
 package-level Go symbols,
 `modify_symbol`, `set_configuration`, `remove_configuration`,
 `set_job_environment`, or `investigate`)
-plus the applicable verified path and symbol or configuration value. The model
+plus the applicable verified path and symbol or configuration value.
+`modify_symbol` also names the required package-level Go call that represents
+the intended behavior inside the target function or method. Imported calls use
+their full import path and function name; same-package calls use a bare function
+name. The model
 does not decide whether a remediation is present. File issue and Propose fix
 independently verify the metadata against the exact pinned source revision and
 remain fail-closed when the target is missing or inconclusive.

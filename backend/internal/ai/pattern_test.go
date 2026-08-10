@@ -383,11 +383,12 @@ func TestParsePatternResponseValidatesRemediationTargets(t *testing.T) {
 		targets string
 		wantErr bool
 	}{
-		{name: "modify symbol", targets: `[{"intent":"modify_symbol","symbol":"MachinePoolModelHasChanged","path":"controllers/helpers.go"}]`},
+		{name: "modify symbol", targets: `[{"intent":"modify_symbol","symbol":"MachinePoolModelHasChanged","required_call":"Equal","path":"controllers/helpers.go"}]`},
+		{name: "modify symbol missing required call", targets: `[{"intent":"modify_symbol","symbol":"MachinePoolModelHasChanged","path":"controllers/helpers.go"}]`, wantErr: true},
 		{name: "configuration", targets: `[{"intent":"set_configuration","path":"templates/dra.yaml","value":"GenericWorkload=true"}]`},
 		{name: "unknown field", targets: `[{"intent":"investigate","verified":true}]`, wantErr: true},
 		{name: "duplicate field", targets: `[{"intent":"investigate","intent":"add_symbol"}]`, wantErr: true},
-		{name: "unsafe path", targets: `[{"intent":"modify_symbol","symbol":"Fix","path":"../helpers.go"}]`, wantErr: true},
+		{name: "unsafe path", targets: `[{"intent":"modify_symbol","symbol":"Fix","required_call":"Apply","path":"../helpers.go"}]`, wantErr: true},
 		{name: "invalid configuration value", targets: `[{"intent":"set_configuration","path":"templates/dra.yaml","value":"GenericWorkload=true\nOther=true"}]`, wantErr: true},
 		{name: "configuration missing assignment", targets: `[{"intent":"set_configuration","path":"templates/dra.yaml","value":"GenericWorkload"}]`, wantErr: true},
 	}
@@ -819,7 +820,7 @@ func TestPatternResponseFormatRequiresAllStrictTargetFields(t *testing.T) {
 	targets := properties["remediation_targets"].(map[string]any)
 	item := targets["items"].(map[string]any)
 	required := item["required"].([]string)
-	if strings.Join(required, ",") != "intent,symbol,path,value,repository,revision,job,container,name" {
+	if strings.Join(required, ",") != "intent,symbol,required_call,path,value,repository,revision,job,container,name" {
 		t.Fatalf("target required fields = %v", required)
 	}
 }
@@ -851,7 +852,7 @@ func TestPatternPromptIncludesPinnedProwContext(t *testing.T) {
 func TestParsePatternResultPreservesStrictProwEnvironmentValue(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	failure := PatternFailure{BuildID: "1", ProwJobName: "periodic-capz", ProwConfigFile: "config/jobs/example/periodics.yaml", ProwConfigRevision: revision}
-	raw := `{"systemic":true,"confidence":"high","shared_root_cause":"configured version","shared_builds":["1","2"],"suggested_fix":"set the job environment","remediation_targets":[{"intent":"set_job_environment","symbol":"","path":"config/jobs/example/periodics.yaml","value":" v2 ","repository":"kubernetes/test-infra","revision":"` + revision + `","job":"periodic-capz","container":"test","name":"VERSION"}],"summary":"shared"}`
+	raw := `{"systemic":true,"confidence":"high","shared_root_cause":"configured version","shared_builds":["1","2"],"suggested_fix":"set the job environment","remediation_targets":[{"intent":"set_job_environment","symbol":"","required_call":"","path":"config/jobs/example/periodics.yaml","value":" v2 ","repository":"kubernetes/test-infra","revision":"` + revision + `","job":"periodic-capz","container":"test","name":"VERSION"}],"summary":"shared"}`
 	second := failure
 	second.BuildID = "2"
 	pattern, err := ParsePatternResult("periodic-capz", []PatternFailure{failure, second}, raw)

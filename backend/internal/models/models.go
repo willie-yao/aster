@@ -317,15 +317,16 @@ const (
 
 // RemediationTarget identifies one source change proposed by a recurring pattern.
 type RemediationTarget struct {
-	Intent     string `json:"intent"`
-	Symbol     string `json:"symbol,omitempty"`
-	Path       string `json:"path,omitempty"`
-	Value      string `json:"value,omitempty"`
-	Repository string `json:"repository,omitempty"`
-	Revision   string `json:"revision,omitempty"`
-	Job        string `json:"job,omitempty"`
-	Container  string `json:"container,omitempty"`
-	Name       string `json:"name,omitempty"`
+	Intent       string `json:"intent"`
+	Symbol       string `json:"symbol,omitempty"`
+	RequiredCall string `json:"required_call,omitempty"`
+	Path         string `json:"path,omitempty"`
+	Value        string `json:"value,omitempty"`
+	Repository   string `json:"repository,omitempty"`
+	Revision     string `json:"revision,omitempty"`
+	Job          string `json:"job,omitempty"`
+	Container    string `json:"container,omitempty"`
+	Name         string `json:"name,omitempty"`
 }
 
 // PatternAnalysis is a job-level correlation across recent failed builds.

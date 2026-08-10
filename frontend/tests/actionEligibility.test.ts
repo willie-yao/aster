@@ -13,6 +13,10 @@ test("pattern action eligibility handles deterministic blocked states", () => {
   assert.equal(patternActionEligibilityHint(undefined)?.state, "more_evidence_required");
   assert.equal(patternActionEligibilityHint([{ intent: "investigate" }])?.state, "investigation_required");
   assert.equal(patternActionEligibilityHint([{ intent: "add_symbol", path: "main.go" }])?.state, "more_evidence_required");
+  assert.equal(patternActionEligibilityHint([{ intent: "modify_symbol", path: "main.go", symbol: "reconcile" }])?.state, "more_evidence_required");
+  assert.equal(patternActionEligibilityHint([{
+    intent: "modify_symbol", path: "main.go", symbol: "reconcile", required_call: "ApplyFix",
+  }]), null);
   assert.equal(patternActionEligibilityHint([actionableTarget]), null);
   assert.equal(patternActionEligibilityHint([{
     intent: "set_job_environment",

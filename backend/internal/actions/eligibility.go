@@ -33,7 +33,7 @@ func (s *Service) ActionEligibility(ctx context.Context, failureID string) (Elig
 			return moreEvidenceEligibility(), nil
 		}
 		for _, target := range targets {
-			if actionverify.InvalidTargetReason(target) != "" {
+			if actionverify.PatternTargetReason(target) != "" {
 				return moreEvidenceEligibility(), nil
 			}
 		}

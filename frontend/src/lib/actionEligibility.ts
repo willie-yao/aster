@@ -42,8 +42,9 @@ export function eligibilityForState(
 function targetIsComplete(target: RemediationTarget): boolean {
   switch (target.intent) {
     case "add_symbol":
-    case "modify_symbol":
       return Boolean(target.path?.trim() && target.symbol?.trim() && !target.value);
+    case "modify_symbol":
+      return Boolean(target.path?.trim() && target.symbol?.trim() && target.required_call?.trim() && !target.value);
     case "set_configuration":
     case "remove_configuration":
       return Boolean(target.path?.trim() && target.value?.includes("=") && !target.symbol);

@@ -228,6 +228,7 @@ export interface RemediationTarget {
     | "set_job_environment"
     | "investigate";
   symbol?: string;
+  required_call?: string;
   path?: string;
   value?: string;
   repository?: string;
