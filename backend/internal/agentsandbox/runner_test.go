@@ -14,6 +14,7 @@ func TestValidateSpec(t *testing.T) {
 	for _, mutate := range []func(*Spec){
 		func(s *Spec) { s.Purpose = "Fix Critic" },
 		func(s *Spec) { s.Purpose = " causal-critic" },
+		func(s *Spec) { s.Purpose = "causal-critic-" },
 		func(s *Spec) { s.RequestEnv = "bad-name" },
 		func(s *Spec) { s.RequestEnv = "PROW_AI_CRITIC_REQUEST_B64 " },
 		func(s *Spec) { s.Request = nil },

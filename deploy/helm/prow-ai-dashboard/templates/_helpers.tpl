@@ -729,7 +729,7 @@ key, or bot token).
   {{- $gateway := $cfg.modelGateway -}}
   {{- if not (regexMatch "^https://[a-zA-Z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $gateway.endpoint) -}}{{- fail "agentSandbox.causalCritic.modelGateway.endpoint must be an absolute credential-free HTTPS URL" -}}{{- end -}}
   {{- if not (regexMatch "^https://[^/]+[.](svc|svc[.]cluster[.]local|internal)(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $gateway.endpoint) -}}{{- fail "agentSandbox.causalCritic.modelGateway.endpoint must use internal service DNS" -}}{{- end -}}
-  {{- if or (not $gateway.model) (contains "\n" $gateway.model) (contains "\r" $gateway.model) -}}{{- fail "agentSandbox.causalCritic.modelGateway.model is required and single-line" -}}{{- end -}}
+  {{- if or (not $gateway.model) (gt (len $gateway.model) 256) (contains "\n" $gateway.model) (contains "\r" $gateway.model) -}}{{- fail "agentSandbox.causalCritic.modelGateway.model must be non-empty, at most 256 bytes, and single-line" -}}{{- end -}}
   {{- if ne $gateway.protocolVersion "openai-chat-completions-v1" -}}{{- fail "agentSandbox.causalCritic.modelGateway.protocolVersion must be openai-chat-completions-v1" -}}{{- end -}}
   {{- $timeoutText := printf "%v" $cfg.timeout -}}
   {{- $timeoutSeconds := 0 -}}

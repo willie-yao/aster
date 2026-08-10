@@ -15,7 +15,7 @@ import (
 const Backend = "agent-sandbox"
 
 var (
-	purposePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
+	purposePattern = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,29}[a-z0-9])?$`)
 	envNamePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,127}$`)
 )
 

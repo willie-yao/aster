@@ -2013,6 +2013,8 @@ expect_causal_critic_fail() {
 }
 expect_causal_critic_fail direct-provider 'must use internal service DNS' --set agentSandbox.causalCritic.modelGateway.endpoint=https://api.openai.com/v1
 expect_causal_critic_fail gateway-query 'absolute credential-free HTTPS URL' --set-string 'agentSandbox.causalCritic.modelGateway.endpoint=https://gateway.models.svc.cluster.local/v1?token=x'
+long_critic_model=$(printf '%0257d' 0 | tr ' ' x)
+expect_causal_critic_fail model-too-long 'modelGateway.model must be non-empty, at most 256 bytes, and single-line' --set-string agentSandbox.causalCritic.modelGateway.model="$long_critic_model"
 expect_causal_critic_fail network-disabled 'networkPolicy.enabled must be true' --set agentSandbox.causalCritic.networkPolicy.enabled=false
 expect_causal_critic_fail missing-ledger 'ledger.existingClaim is required' --set-string agentSandbox.causalCritic.ledger.existingClaim=
 expect_causal_critic_fail public-ledger 'ledger.mountPath must be under /private' --set-string agentSandbox.causalCritic.ledger.mountPath=/data/critic
