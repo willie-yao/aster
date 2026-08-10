@@ -130,10 +130,13 @@ func (r *Runtime) Review(ctx context.Context, input Input, executionID string, o
 	if err != nil {
 		return result, errors.Join(fmt.Errorf("%w: causal critic result: %v", engineruntime.ErrMalformedResult, err), runErr)
 	}
-	result.Execution = parsed
 	if err := ValidateExecutionResult(parsed, request); err != nil {
-		return result, errors.Join(fmt.Errorf("%w: causal critic result: %v", engineruntime.ErrResultContract, err), runErr)
+		return result, errors.Join(fmt.Errorf("%w: causal critic result", engineruntime.ErrResultContract), err, runErr)
 	}
+	if parsed.TerminalState != engineruntime.TerminalSucceeded && parsed.FailureCode == "" {
+		parsed.FailureCode = "legacy_executor_failure"
+	}
+	result.Execution = parsed
 	if parsed.Usage.Status == "reported" || parsed.Usage.Status == "partial" {
 		result.Telemetry.TokenUsageAvailable = parsed.Usage.InputTokens != 0 || parsed.Usage.OutputTokens != 0
 		result.Telemetry.CostAvailable = parsed.Usage.CostUSD != "" || parsed.Usage.NanoAIU != 0
@@ -234,8 +237,9 @@ func ValidateExecutionResult(result ExecutionResult, request ExecutionRequest) e
 			return err
 		}
 	case engineruntime.TerminalFailed, engineruntime.TerminalTimedOut, engineruntime.TerminalCancelled:
-		if result.Review != nil || strings.TrimSpace(result.FailureReason) == "" || len(result.FailureReason) > 2<<10 || !failureCodeRE.MatchString(result.FailureCode) {
-			return validationError(ValidationResultTerminal, ErrInvalidReview, "failed critic result must contain a bounded failure code and reason")
+		failureCode := strings.TrimSpace(result.FailureCode)
+		if result.Review != nil || strings.TrimSpace(result.FailureReason) == "" || len(result.FailureReason) > 2<<10 || failureCode != result.FailureCode || failureCode != "" && !failureCodeRE.MatchString(failureCode) {
+			return validationError(ValidationResultTerminal, ErrInvalidReview, "failed critic result must contain a bounded reason and optional schema-1 failure code")
 		}
 	default:
 		return validationError(ValidationResultTerminal, ErrInvalidReview, "unsupported critic terminal state %q", result.TerminalState)

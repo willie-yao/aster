@@ -374,7 +374,7 @@ func TestRunTrialSeparatesLifecycleAndFailureCodes(t *testing.T) {
 		result: Result{Execution: ExecutionResult{
 			FailureCode: "gateway_request", FailureReason: "model gateway request failed",
 			Usage: GatewayUsage{Status: "unavailable", Source: "gateway_response"},
-		}, Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true}},
+		}, Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true, FinalizationChecked: true, FinalizationValid: true}},
 		err: errors.New("causal critic execution failed"),
 	}
 	root := t.TempDir()
@@ -413,5 +413,50 @@ func TestLoadLedgerMigratesPreviousSchema(t *testing.T) {
 	}
 	if ledger.SchemaVersion != LedgerSchemaVersion || len(ledger.Preflights) != 0 || len(ledger.Records) != 0 {
 		t.Fatalf("ledger=%+v", ledger)
+	}
+}
+
+func TestRunTrialPersistsDashboardValidationCode(t *testing.T) {
+	input := criticInput(t)
+	reviewer := &trialReviewer{
+		result: Result{
+			Execution: ExecutionResult{FailureCode: "INVALID-CODE", FailureReason: "untrusted failure"},
+			Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true, FinalizationChecked: true},
+		},
+		err: errors.Join(engineruntime.ErrResultContract, validationError(ValidationResultTerminal, ErrInvalidReview, "invalid failure code")),
+	}
+	root := t.TempDir()
+	record, err := RunTrial(t.Context(), reviewer, TrialSpec{
+		PublicDir: filepath.Join(root, "public"), LedgerPath: filepath.Join(root, "private", "critic.json"),
+		Metadata: trialMetadata(), Input: input, ExecutionID: "critic-invalid-code", RuntimeIdentity: testCriticRuntimeIdentity(),
+	})
+	if !errors.Is(err, engineruntime.ErrResultContract) || record.Status != TrialContractViolation || record.FailureCode != "validation_result_terminal" || record.FailureReason != "" {
+		t.Fatalf("record=%+v err=%v", record, err)
+	}
+}
+
+func TestRunTrialReturnsIdentityForAttemptTombstone(t *testing.T) {
+	input := criticInput(t)
+	metadata := trialMetadata()
+	runtimeIdentity := testCriticRuntimeIdentity()
+	executionID := "critic-tombstone"
+	attemptHash := trialAttemptHash(metadata, input, executionID, runtimeIdentity)
+	created := time.Unix(5000, 0).UTC()
+	root := t.TempDir()
+	publicDir, ledgerPath := filepath.Join(root, "public"), filepath.Join(root, "private", "critic.json")
+	if err := writeLedger(ledgerPath, Ledger{
+		SchemaVersion: LedgerSchemaVersion,
+		Attempts:      []TrialAttempt{{Hash: attemptHash, CreatedAt: created.Format(time.RFC3339Nano), Status: TrialSucceeded}},
+		Records:       []TrialRecord{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reviewer := &trialReviewer{}
+	record, err := RunTrial(t.Context(), reviewer, TrialSpec{
+		PublicDir: publicDir, LedgerPath: ledgerPath, Metadata: metadata, Input: input, ExecutionID: executionID, RuntimeIdentity: runtimeIdentity,
+		Now: func() time.Time { return created.Add(time.Minute) },
+	})
+	if !errors.Is(err, ErrTrialAlreadyAttempted) || record.AttemptHash != attemptHash || record.PairHash != input.PairHash || reviewer.calls != 0 {
+		t.Fatalf("record=%+v reviewer=%d err=%v", record, reviewer.calls, err)
 	}
 }

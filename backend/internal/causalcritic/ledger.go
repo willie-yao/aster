@@ -178,7 +178,7 @@ func RunTrial(ctx context.Context, reviewer Reviewer, spec TrialSpec) (TrialReco
 		if found {
 			return existing, fmt.Errorf("%w: %s repetition %d", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition)
 		}
-		return TrialRecord{}, fmt.Errorf("%w: %s repetition %d detailed record was pruned", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition)
+		return record, fmt.Errorf("%w: %s repetition %d detailed record was pruned", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition)
 	}
 	started := now()
 	observer := func(observerCtx context.Context, work engineruntime.WorkRef) error {
@@ -200,14 +200,19 @@ func RunTrial(ctx context.Context, reviewer Reviewer, spec TrialSpec) (TrialReco
 		record.CleanupWork = &work
 	}
 	record.Telemetry = trialTelemetry(result.Telemetry)
-	if result.Execution.Usage.Source != "" {
-		record.Usage = result.Execution.Usage
+	if result.Telemetry.FinalizationValid {
+		if result.Execution.Usage.Source != "" {
+			record.Usage = result.Execution.Usage
+		}
+		record.FailureReason = strings.TrimSpace(result.Execution.FailureReason)
+		record.FailureCode = strings.TrimSpace(result.Execution.FailureCode)
+		if result.Execution.Review != nil {
+			review := *result.Execution.Review
+			record.Review = &review
+		}
 	}
-	record.FailureReason = strings.TrimSpace(result.Execution.FailureReason)
-	record.FailureCode = strings.TrimSpace(result.Execution.FailureCode)
-	if result.Execution.Review != nil {
-		review := *result.Execution.Review
-		record.Review = &review
+	if code := ValidationCodeOf(runErr); code != "" {
+		record.FailureCode = "validation_" + string(code)
 	}
 	record.Status, record.ErrorCode = classifyTrialResult(result, runErr)
 	record.Finalized = record.Status == TrialSucceeded && record.Review != nil && record.Telemetry.CleanupCompleted

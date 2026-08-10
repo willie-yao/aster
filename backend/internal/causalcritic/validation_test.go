@@ -162,6 +162,7 @@ func TestValidationCodesRemainStable(t *testing.T) {
 			candidate := successResult
 			candidate.TerminalState = engineruntime.TerminalFailed
 			candidate.Review = nil
+			candidate.FailureCode = "INVALID-CODE"
 			candidate.FailureReason = "gateway failed"
 			return ValidateExecutionResult(candidate, request)
 		}},
