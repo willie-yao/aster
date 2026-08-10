@@ -4,15 +4,17 @@ version: 1.0
 date_created: 2026-08-10
 last_updated: 2026-08-10
 owner: prow-ai-dashboard maintainers
-status: 'In progress'
+status: 'Stopped'
 tags: [feature, experiment, ai, agent-sandbox, causal-critic, benchmark]
 ---
 
 # Introduction
 
-![Status: In progress](https://img.shields.io/badge/status-In%20progress-yellow)
+![Status: Stopped](https://img.shields.io/badge/status-Stopped-red)
 
 This plan defines the private experimental program for measuring whether an independent Agent Sandbox critic detects and helps repair causal gaps that remain after the authoritative in-process analyzer and same-model semantic judge. The critic remains disabled by default, private, sampled, and non-authoritative. No phase may change public dashboard output, cache acceptance, issues, fixes, notifications, remediation, corrections, or resolution state.
+
+The experiment stopped on August 10, 2026 before the digest phase merged. The critic roadmap was producing a second dashboard-owned analysis framework without directly testing whether OpenCode's native harness could replace the in-process analyzer more simply. No structural-repair, expanded cold-matrix, revision, or activation phase is authorized. The replacement roadmap is [`feature-agent-sandbox-opencode-analyzer-experiment.md`](feature-agent-sandbox-opencode-analyzer-experiment.md).
 
 ## 1. Requirements & Constraints
 

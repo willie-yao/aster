@@ -1,6 +1,11 @@
 # Agent Sandbox causal critic
 
-Status: private, disabled-by-default experimental implementation. It is wired to
+Status: stopped on August 10, 2026. The private implementation remains disabled
+and non-authoritative, but no critic digest, structural repair, revision, or
+activation work is planned. The replacement experiment tests a direct OpenCode
+analyzer instead. See [Agent Sandbox OpenCode analyzer](agent-sandbox-opencode-analyzer.md).
+
+Historical status: private, disabled-by-default experimental implementation. It is wired to
 the scheduled fetcher and worker only when explicitly enabled. A public
 immutable test image and an AKS evaluation exist, but the image is not part of
 the release workflow and the critic is not approved for production use.
