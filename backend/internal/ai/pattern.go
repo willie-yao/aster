@@ -26,7 +26,7 @@ import (
 
 // patternPromptVersion is bumped when the pattern prompt or output contract
 // changes, so cached verdicts from an older contract are re-run.
-const patternPromptVersion = 7
+const patternPromptVersion = 8
 
 const patternCacheVersion = 2
 
@@ -47,6 +47,12 @@ const maxPatternBuilds = 10
 const patternMaxIters = 6
 
 const maxPatternResponseBytes = 1 << 20
+
+var (
+	destructiveConversionObjectRe = regexp.MustCompile(`(?i)(?:\b(?:delete|remove|disable|drop)\b\s+(?:the\s+)?(?:kubernetes\s+)?(?:crd\s+)?conversion(?:\s+webhook)?\s+strategy\b|\b(?:delete|remove|disable|drop)\b\s+(?:the\s+)?(?:kubernetes\s+)?(?:crd\s+)?conversion\s+webhooks?\b(?:\s*(?:[.,;:]|$)|\s+(?:from|in|on)\b))`)
+	destructiveConversionFieldRe  = regexp.MustCompile(`(?i)\b(?:delete|remove|disable|drop)\b\s+(?:the\s+)?(?:spec\.)?conversion\.(?:strategy|webhook(?:\.clientconfig)?)\b`)
+	conversionStrategyNoneRe      = regexp.MustCompile(`(?i)(?:\b(?:set|change|switch|replace)\b[^.!?\n]{0,80}\b(?:crd\s+)?conversion(?:\s+webhook)?\s+strategy\b[^.!?\n]{0,80}\bnone\b|\bwebhook\s+conversion\b[^.!?\n]{0,80}\bnone\s+strategy\b|\b(?:conversion\.)?strategy\s*(?:to|:|=)\s*none\b)`)
+)
 
 // PatternFailure is one build's analyzed job failure, used as input to
 // cross-failure correlation. FailingTest is the specific test or spec that
@@ -73,6 +79,16 @@ type PatternFailure struct {
 	ProwConfigRevision string
 	IsTransient        bool
 	Severity           string
+	RecentRuns         []PatternRun
+}
+
+// PatternRun is one completed run in the recent correlation window.
+type PatternRun struct {
+	BuildID        string
+	Result         string
+	Passed         bool
+	StartedAt      time.Time
+	SourceRevision string
 }
 
 // PatternInput is the bounded, deterministic model input for one job-level
@@ -298,11 +314,15 @@ const patternSystemPrompt = `You correlate multiple failed builds of the SAME CI
 
 You are given N independent per-build failure analyses from recent failed builds of one job. Each build was analyzed in isolation, so each may have called its own failure "transient". The specific test or spec that failed may differ from build to build. Each per-build analysis may also carry its own root_cause, suggested_fix, and the source files it implicated. Your job is the cross-build view those single analyses cannot have.
 
-Key principle: a failure mode that recurs across most builds is NOT a flake, it is a systemic bug. "Transient" infrastructure errors (timeouts, resource exhaustion, slow disk, quota, image-pull) that appear in the majority of recent runs almost always have a fixable systemic cause (e.g. an undersized VM, a tight timeout, a missing image, a misconfigured template). Weigh the underlying MECHANISM, not the surface symptom: the same root cause can present as different-looking failures (different test flavors, different failing specs, different error strings).
+Key principle: recurrence among failed builds is evidence, not proof, of a systemic bug. Compare matching failures with the complete recent run window, including passes. Interleaved passes can indicate a recurring flake even when the terminal phase is identical. Set systemic=true only when the evidence supports one causal defect or deterministic misconfiguration, not merely a repeated timeout or stalled phase. Weigh the underlying MECHANISM, not the surface symptom: the same root cause can present as different-looking failures, while the same terminal symptom can have different initiating causes.
 
 Preserve signal, do not flatten it. The per-build analyses often already pinpoint the mechanism (a specific error, a named operation, an implicated file). Carry the MOST SPECIFIC evidence-backed cause and fix forward; do NOT regress to the lowest-common-denominator symptom that every build merely shares. If one build identified a concrete mechanism (e.g. "concurrent agent-pool update -> Azure OperationNotAllowed") and another only saw the symptom, the shared cause is the concrete mechanism, not the symptom.
 
 Distinguish symptom from root cause. "VM bootstrapping failed", "test timed out", "node never joined" are SYMPTOMS. The root cause is WHY: the specific operation, condition, config, or code path that produced them.
+
+Do not infer network policy, firewall rules, regional latency, resource sizing, or timeout configuration as the cause unless artifacts or source directly support that mechanism. Before proposing a missing wait, retry, timeout, gate, or helper call, read the target source and confirm the behavior is not already present.
+
+Kubernetes CRD conversion webhooks are configured on the CRD, not by mutating or validating admission webhook configurations. Never claim that deleting admission webhook configurations disables CRD conversion. Do not propose deleting, disabling, or setting CRD conversion to None as an implementation-ready change. Use investigate so stored-version migration, conversion requirements, and rollback safety can be reviewed first.
 
 The suggested_fix must be ACTIONABLE: name the specific change, the mechanism it addresses, and the component / file / config to change (cite a relevant_file when one is implicated). Do NOT emit non-fixes like "investigate the logs", "check why X fails", or "look into Y" - those are next steps, not fixes. If the evidence genuinely does not determine a concrete fix, say so plainly in suggested_fix AND lower confidence accordingly (do not claim high confidence on an undetermined fix).
 
@@ -317,7 +337,7 @@ For modify_symbol, required_call identifies the exact package-level function cal
 Do not claim verification state. The engine independently checks these targets against the pinned source.
 
 Decide:
-- systemic=true when most builds share one underlying cause. Name it precisely and give the concrete cross-cutting fix.
+- systemic=true when the run-window prevalence and evidence support one underlying causal defect. Name it precisely and give the concrete cross-cutting fix.
 - systemic=false when the failures are genuinely unrelated or independently one-off.
 
 Respond with ONLY a JSON object, no prose, no code fences:
@@ -1191,6 +1211,9 @@ func patternResponseValidation(p patternResponse, buildIDs map[string]struct{}) 
 	if category, issue := patternRemediationTargetsValidation(p.RemediationTargets); category != "" {
 		return category, issue
 	}
+	if unsafeConversionRemediation(p.SuggestedFix, p.RemediationTargets) {
+		return patternValidationSchema, "unsafe_conversion_remediation"
+	}
 	for _, buildID := range p.SharedBuilds {
 		buildID = strings.TrimSpace(buildID)
 		if buildID == "" {
@@ -1203,6 +1226,145 @@ func patternResponseValidation(p patternResponse, buildIDs map[string]struct{}) 
 		}
 	}
 	return "", ""
+}
+
+func unsafeConversionRemediation(suggestedFix string, targets []models.RemediationTarget) bool {
+	actionable := false
+	for _, target := range targets {
+		if target.Intent == models.RemediationIntentInvestigate {
+			continue
+		}
+		actionable = true
+		if unsafeConversionTarget(target) {
+			return true
+		}
+	}
+	if !actionable {
+		return false
+	}
+	fix := strings.TrimSpace(suggestedFix)
+	return destructiveConversionObjectRe.MatchString(fix) || destructiveConversionFieldRe.MatchString(fix) || conversionStrategyNoneRe.MatchString(fix)
+}
+
+func unsafeConversionTarget(target models.RemediationTarget) bool {
+	switch target.Intent {
+	case models.RemediationIntentAddSymbol, models.RemediationIntentModifySymbol:
+		return destructiveConversionIdentifier(target.Symbol) || destructiveConversionIdentifier(target.RequiredCall)
+	case models.RemediationIntentRemoveConfiguration:
+		key, _, _ := strings.Cut(target.Value, "=")
+		isConversion, qualified := conversionObjectSetting(key)
+		return isConversion && !qualified
+	case models.RemediationIntentSetConfiguration:
+		key, value, _ := strings.Cut(target.Value, "=")
+		isConversion, qualified := conversionObjectSetting(key)
+		return isConversion && !qualified && conversionFalseValue(value)
+	case models.RemediationIntentSetJobEnvironment:
+		isConversion, qualified := conversionObjectSetting(target.Name)
+		if !isConversion || qualified {
+			return false
+		}
+		name := normalizeConversionToken(target.Name)
+		for _, action := range []string{"disable", "delete", "remove", "drop", "skip", "stop", "omit"} {
+			if strings.Contains(name, action) {
+				return conversionTrueValue(target.Value)
+			}
+		}
+		return conversionFalseValue(target.Value)
+	default:
+		return false
+	}
+}
+
+func destructiveConversionIdentifier(value string) bool {
+	full := normalizeConversionToken(value)
+	tail := value
+	if index := strings.LastIndex(value, "."); index >= 0 {
+		tail = value[index+1:]
+	}
+	tail = normalizeConversionToken(tail)
+	conversion := strings.Index(full, "conversion")
+	if conversion < 0 || !strings.Contains(full[conversion:], "webhook") && !strings.Contains(full[conversion:], "strategy") {
+		return false
+	}
+	tailHasConversion, qualified := conversionObjectSetting(tail)
+	if qualified || !tailHasConversion && safeConversionIdentifierQualifier(tail) {
+		return false
+	}
+	for _, action := range []string{"delete", "remove", "disable", "drop"} {
+		if strings.Contains(tail, action) {
+			return true
+		}
+	}
+	return strings.Contains(full[conversion:], "strategy") && strings.Contains(tail, "none")
+}
+
+func safeConversionIdentifierQualifier(value string) bool {
+	for _, qualifier := range []string{
+		"timeout", "certificatedependency", "certificaterotation", "shutdowndependency",
+		"shutdowncoordination", "retrybehavior", "retrypolicy", "backoff", "override",
+	} {
+		if strings.Contains(value, qualifier) {
+			return true
+		}
+	}
+	return false
+}
+
+func conversionObjectSetting(value string) (bool, bool) {
+	name := normalizeConversionToken(value)
+	objects := []string{"conversionwebhook", "conversionstrategy", "specconversion"}
+	for _, object := range objects {
+		index := strings.Index(name, object)
+		if index < 0 {
+			continue
+		}
+		suffix := name[index+len(object):]
+		if object == "specconversion" && (strings.HasPrefix(suffix, "webhook") || strings.HasPrefix(suffix, "strategy")) {
+			continue
+		}
+		return true, safeConversionQualifier(suffix)
+	}
+	return false, false
+}
+
+func safeConversionQualifier(suffix string) bool {
+	for _, qualifier := range []string{
+		"timeout", "certificatedependency", "certificaterotation", "dependency",
+		"shutdowncoordination", "shutdowndependency", "retrybehavior", "retrypolicy", "backoff", "override",
+	} {
+		if strings.HasPrefix(suffix, qualifier) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeConversionToken(value string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func conversionFalseValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "0", "false", "n", "no", "off", "disable", "disabled", "none":
+		return true
+	default:
+		return false
+	}
+}
+
+func conversionTrueValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "y", "yes", "on", "enable", "enabled":
+		return true
+	default:
+		return false
+	}
 }
 
 func decodeRemediationTargets(raw json.RawMessage, targets *[]models.RemediationTarget) bool {
@@ -1368,7 +1530,30 @@ func buildPatternAnalysis(subject string, builds int, p patternResponse, relevan
 func buildPatternUserPrompt(subject string, failures []PatternFailure) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Job: %s\n", subject)
-	fmt.Fprintf(&b, "It failed in %d recent builds. The per-build analyses follow (the failing test/spec may differ between builds).\n\n", len(failures))
+	runs := patternRecentRuns(failures)
+	totalRuns, failedRuns, passingRuns := patternRunWindow(runs, len(failures))
+	fmt.Fprintf(&b, "Recent completed run window: %d total, %d failed, %d passed.\n", totalRuns, failedRuns, passingRuns)
+	if len(runs) > 0 {
+		b.WriteString("Recent completed runs (newest first):\n")
+		for _, run := range runs {
+			outcome := "failed"
+			if run.Passed {
+				outcome = "passed"
+			}
+			fmt.Fprintf(&b, "- build %s: %s", run.BuildID, outcome)
+			if result := strings.TrimSpace(run.Result); result != "" {
+				fmt.Fprintf(&b, " (%s)", result)
+			}
+			if !run.StartedAt.IsZero() {
+				fmt.Fprintf(&b, ", started %s", run.StartedAt.UTC().Format(time.RFC3339))
+			}
+			if revision := strings.TrimSpace(run.SourceRevision); revision != "" {
+				fmt.Fprintf(&b, ", source revision %s", revision)
+			}
+			b.WriteString("\n")
+		}
+	}
+	fmt.Fprintf(&b, "This correlation includes %d analyzed failed builds. The per-build analyses follow (the failing test/spec may differ between builds).\n\n", len(failures))
 	for i, f := range failures {
 		fmt.Fprintf(&b, "--- Build %d (id %s) ---\n", i+1, f.BuildID)
 		if f.FailingTest != "" {
@@ -1400,6 +1585,43 @@ func buildPatternUserPrompt(subject string, failures []PatternFailure) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func patternRecentRuns(failures []PatternFailure) []PatternRun {
+	for _, failure := range failures {
+		if len(failure.RecentRuns) == 0 {
+			continue
+		}
+		runs := append([]PatternRun(nil), failure.RecentRuns...)
+		sort.SliceStable(runs, func(i, j int) bool {
+			if !runs[i].StartedAt.Equal(runs[j].StartedAt) {
+				if runs[i].StartedAt.IsZero() {
+					return false
+				}
+				if runs[j].StartedAt.IsZero() {
+					return true
+				}
+				return runs[i].StartedAt.After(runs[j].StartedAt)
+			}
+			return runs[i].BuildID > runs[j].BuildID
+		})
+		return runs
+	}
+	return nil
+}
+
+func patternRunWindow(runs []PatternRun, fallbackFailures int) (total, failed, passed int) {
+	if len(runs) == 0 {
+		return fallbackFailures, fallbackFailures, 0
+	}
+	for _, run := range runs {
+		if run.Passed {
+			passed++
+		} else {
+			failed++
+		}
+	}
+	return len(runs), failed, passed
 }
 
 // patternCacheKey keys a verdict by the project module, job, prompt version,

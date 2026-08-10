@@ -922,9 +922,11 @@ correlation attempt plus at most one retry for the narrow failures below.
 
 For each job, the engine:
 
-1. Counts the job's **completed failed builds** (pending builds are skipped).
-   The job qualifies only with at least 3 such builds, matching the
-   persistent-failure convention. This is the "recurring" gate.
+1. Counts the job's complete recent run window, with pending builds skipped.
+   The job qualifies only with at least 3 completed failed builds, matching the
+   persistent-failure convention. The correlation also receives the total,
+   failed, and passing counts plus a compact newest-first sequence containing
+   each build ID, outcome, start time, and source revision when available.
 2. Picks **one representative failure per failed build**: the failed test case
    with the highest-severity per-build analysis (`Critical` > `High` > `Medium`
    > `Low` > `Transient-Ignore`). The transient classification is carried
@@ -934,6 +936,9 @@ For each job, the engine:
    mechanism across builds and decide `systemic` (one shared, fixable cause) vs
    not, with a confidence, the shared root cause, the cross-cutting fix, and the
    builds it judges to share the cause. The newest 10 representatives are sent.
+   Recurrence among failures is evidence, not proof. The ordered run sequence
+   lets the model distinguish interleaved failures from older failures followed
+   by consecutive passes before classifying one deterministic defect.
    When a source repo is wired (see grounding below), this attempt is a repotree
    tool loop; otherwise it is a single tool-free chat call. Strictly valid
    candidates are canonicalized by trimming field boundaries, lowercasing
@@ -955,9 +960,12 @@ transactional publication and retains the previously published generation.
 
 The verdict is cached under `pattern:<module>:<hash>`, where the hash covers the
 prompt version, the grounding mode (grounded vs tool-free), plus the exact
-rendered model input (every representative's build ID, failing test, root cause,
-and failure message), so the pass only re-runs when that evidence changes. The
-result is stored on the `JobDetail` and surfaces as a banner at the top of the
+rendered model input. That input includes every representative's build ID,
+failing test, root cause, and failure message, along with the complete ordered
+recent run window. The pass re-runs when analyzed failures change or when any
+recent build, outcome, timestamp, or available source revision changes. The
+result is stored on the
+`JobDetail` and surfaces as a banner at the top of the
 job page: a "recurring failure pattern" callout with the shared cause and fix
 when systemic, or a quiet "no shared root cause" note when the failures are
 genuinely independent.
@@ -973,6 +981,18 @@ normalization occurred and how many candidates were affected. The prompt
 contract version changed for this behavior, so prior deterministic failure keys
 retry once under the new parser without changing the configured cache
 generation. The normalized result is then a normal reusable success cache entry.
+
+Implementation-ready remediation also has a deterministic CRD conversion guard.
+A systemic contract is rejected when it pairs an actionable target with deleting,
+disabling, or removing a CRD conversion webhook or strategy, or with setting the
+conversion strategy to `None`. Validation checks both the proposed prose and
+structured symbol, configuration, or environment targets, so neutral wording
+cannot hide a destructive target. The same conclusion is accepted with an `investigate`
+target so the operator can review stored versions, conversion requirements, and
+rollback safety without launching a Fix PR. Qualified changes that preserve
+conversion, such as removing a timeout, certificate, retry, or shutdown
+dependency, remain valid in both prose and structured targets. Admission webhook
+cleanup also remains distinct.
 
 In the release-1.25 audit sequence, the grounded investigation produced prose,
 extraction produced a safe non-systemic verdict with an individual fix, and the

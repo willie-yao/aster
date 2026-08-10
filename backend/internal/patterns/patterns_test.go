@@ -333,3 +333,35 @@ func TestAnalyzeReportsPatternCacheHits(t *testing.T) {
 		t.Fatalf("attempts = %+v", attempts)
 	}
 }
+
+func TestGatherFailuresIncludesCompleteRunWindow(t *testing.T) {
+	detail := eligibleJob("job")
+	started := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	for i := range detail.Runs {
+		detail.Runs[i].Started = started.Add(-time.Duration(i) * time.Hour)
+		detail.Runs[i].Revision = "failure-" + detail.Runs[i].BuildID
+	}
+	detail.Runs = append(detail.Runs,
+		models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "pass-1", Passed: true, Result: "SUCCESS", Started: started.Add(time.Hour), Revision: "pass-new"}},
+		models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "pass-2", Passed: true, Result: "SUCCESS", Started: started.Add(-4 * time.Hour), Commit: "pass-old"}},
+		models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "pending", Result: "PENDING", Started: started.Add(2 * time.Hour)}},
+	)
+	failures := GatherFailures(&detail)
+	if len(failures) != 3 {
+		t.Fatalf("failures = %+v", failures)
+	}
+	wantIDs := []string{"pass-1", "3", "2", "1", "pass-2"}
+	for _, failure := range failures {
+		if len(failure.RecentRuns) != len(wantIDs) {
+			t.Fatalf("window = %+v", failure.RecentRuns)
+		}
+		for i, want := range wantIDs {
+			if failure.RecentRuns[i].BuildID != want {
+				t.Fatalf("window[%d] = %+v, want build %s", i, failure.RecentRuns[i], want)
+			}
+		}
+		if failure.RecentRuns[0].SourceRevision != "pass-new" || failure.RecentRuns[4].SourceRevision != "pass-old" {
+			t.Fatalf("window revisions = %+v", failure.RecentRuns)
+		}
+	}
+}

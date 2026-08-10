@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -31,6 +32,25 @@ func patternFailures(n int) []PatternFailure {
 		})
 	}
 	return out
+}
+
+func withPatternRuns(failures []PatternFailure, runs []PatternRun) []PatternFailure {
+	out := append([]PatternFailure(nil), failures...)
+	for i := range out {
+		out[i].RecentRuns = append([]PatternRun(nil), runs...)
+	}
+	return out
+}
+
+func patternRunWindowForTest() []PatternRun {
+	started := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	return []PatternRun{
+		{BuildID: "10", Result: "SUCCESS", Passed: true, StartedAt: started, SourceRevision: strings.Repeat("a", 40)},
+		{BuildID: "9", Result: "FAILURE", StartedAt: started.Add(-time.Hour), SourceRevision: strings.Repeat("b", 40)},
+		{BuildID: "8", Result: "SUCCESS", Passed: true, StartedAt: started.Add(-2 * time.Hour), SourceRevision: strings.Repeat("c", 40)},
+		{BuildID: "7", Result: "FAILURE", StartedAt: started.Add(-3 * time.Hour), SourceRevision: strings.Repeat("d", 40)},
+		{BuildID: "6", Result: "FAILURE", StartedAt: started.Add(-4 * time.Hour), SourceRevision: strings.Repeat("e", 40)},
+	}
 }
 
 func TestAnalyzePattern_TooFewBuilds_NoCall(t *testing.T) {
@@ -197,9 +217,41 @@ func TestPatternCacheKey_TracksModelInput(t *testing.T) {
 		t.Error("expected cache key to change when a failure message changes")
 	}
 
+	windowChanged := withPatternRuns(patternFailures(3), patternRunWindowForTest())
+	windowKey := patternCacheKey("kubernetes", "", "job", "job", buildPatternUserPrompt("job", windowChanged), "toolfree", "model-fingerprint")
+	if k1 == windowKey {
+		t.Error("expected cache key to change when the run window changes")
+	}
+	rotatedRuns := patternRunWindowForTest()
+	rotatedRuns[0].BuildID = "11"
+	rotatedRuns[0].SourceRevision = strings.Repeat("f", 40)
+	rotated := withPatternRuns(patternFailures(3), rotatedRuns)
+	if windowKey == patternCacheKey("kubernetes", "", "job", "job", buildPatternUserPrompt("job", rotated), "toolfree", "model-fingerprint") {
+		t.Error("expected cache key to change when a passing run is replaced")
+	}
+
 	// Same inputs produce a stable key.
 	if patternCacheKey("kubernetes", "", "job", "job", p1, "toolfree", "model-fingerprint") != k1 {
 		t.Error("expected stable cache key for identical inputs")
+	}
+}
+
+func TestBuildPatternUserPromptIncludesCompleteRunWindow(t *testing.T) {
+	failures := withPatternRuns(patternFailures(3), patternRunWindowForTest())
+	prompt := buildPatternUserPrompt("job", failures)
+	for _, want := range []string{
+		"Recent completed run window: 5 total, 3 failed, 2 passed.",
+		"Recent completed runs (newest first):",
+		"- build 10: passed (SUCCESS), started 2026-08-10T12:00:00Z, source revision " + strings.Repeat("a", 40),
+		"- build 9: failed (FAILURE), started 2026-08-10T11:00:00Z, source revision " + strings.Repeat("b", 40),
+		"This correlation includes 3 analyzed failed builds.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q\n---\n%s", want, prompt)
+		}
+	}
+	if strings.Index(prompt, "- build 10:") > strings.Index(prompt, "- build 9:") {
+		t.Fatalf("run window is not newest first:\n%s", prompt)
 	}
 }
 
@@ -399,6 +451,92 @@ func TestParsePatternResponseValidatesRemediationTargets(t *testing.T) {
 				t.Fatalf("error = %v, wantErr = %t", err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestPatternResponseRejectsUnsafeConversionRemediation(t *testing.T) {
+	base := `{"systemic":true,"confidence":"high","shared_root_cause":"conversion calls fail after provider shutdown","shared_builds":["abuild","bbuild"],"suggested_fix":FIX,"remediation_targets":TARGETS,"summary":"shared failure"}`
+	actionable := `[{"intent":"modify_symbol","symbol":"preUpgrade","required_call":"example/migration.Apply","path":"upgrade.go"}]`
+	investigate := `[{"intent":"investigate"}]`
+	for _, fix := range []string{
+		"Delete the admission webhook configurations and remove the CRD conversion webhook strategy by setting it to None.",
+		"Disable the Kubernetes CRD conversion webhook.",
+		"Change the conversion strategy from Webhook to None.",
+		"Drop the CRD conversion webhook.",
+		"Replace webhook conversion with the None strategy.",
+		"Remove spec.conversion.webhook.clientConfig.",
+	} {
+		unsafeFix, _ := json.Marshal(fix)
+		response := strings.Replace(strings.Replace(base, "FIX", string(unsafeFix), 1), "TARGETS", actionable, 1)
+		if _, err := parsePatternResponse(response, patternBuildIDs(patternFailures(2))); patternValidationCategoryOf(err) != patternValidationSchema {
+			t.Fatalf("unsafe remediation %q error = %v", fix, err)
+		}
+		response = strings.Replace(strings.Replace(base, "FIX", string(unsafeFix), 1), "TARGETS", investigate, 1)
+		if _, err := parsePatternResponse(response, patternBuildIDs(patternFailures(2))); err != nil {
+			t.Fatalf("investigation-only remediation %q was rejected: %v", fix, err)
+		}
+	}
+	neutralFix, _ := json.Marshal("Preserve conversion availability throughout provider shutdown.")
+	for _, targets := range []string{
+		`[{"intent":"modify_symbol","symbol":"getPreUpgradeFunc","required_call":"DeleteConversionWebhook","path":"test/e2e/capi_test.go"}]`,
+		`[{"intent":"modify_symbol","symbol":"getPreUpgradeFunc","required_call":"example.com/project/conversionwebhook.Delete","path":"test/e2e/capi_test.go"}]`,
+		`[{"intent":"modify_symbol","symbol":"getPreUpgradeFunc","required_call":"DeleteConversionWebhookAfterTimeout","path":"test/e2e/capi_test.go"}]`,
+		`[{"intent":"remove_configuration","path":"config/crd.yaml","value":"spec.conversion=Webhook"}]`,
+		`[{"intent":"remove_configuration","path":"config/crd.yaml","value":"spec.conversion.strategy=Webhook"}]`,
+		`[{"intent":"remove_configuration","path":"config/crd.yaml","value":"spec.conversion.webhook.clientConfig=service"}]`,
+		`[{"intent":"set_configuration","path":"config/crd.yaml","value":"spec.conversion=None"}]`,
+		`[{"intent":"set_configuration","path":"config/crd.yaml","value":"spec.conversion.strategy=None"}]`,
+		`[{"intent":"set_configuration","path":"config/crd.yaml","value":"conversionWebhook.enabled=false"}]`,
+		`[{"intent":"set_configuration","path":"config/crd.yaml","value":"conversionWebhook.enabled=0"}]`,
+		`[{"intent":"set_job_environment","symbol":"","required_call":"","path":"config/jobs/example.yaml","value":"true","repository":"kubernetes/test-infra","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","job":"periodic-example","container":"test","name":"DISABLE_CONVERSION_WEBHOOK"}]`,
+		`[{"intent":"set_job_environment","symbol":"","required_call":"","path":"config/jobs/example.yaml","value":"0","repository":"kubernetes/test-infra","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","job":"periodic-example","container":"test","name":"ENABLE_CONVERSION_WEBHOOK"}]`,
+		`[{"intent":"set_job_environment","symbol":"","required_call":"","path":"config/jobs/example.yaml","value":"true","repository":"kubernetes/test-infra","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","job":"periodic-example","container":"test","name":"DELETE_CONVERSION_WEBHOOK"}]`,
+		`[{"intent":"set_job_environment","symbol":"","required_call":"","path":"config/jobs/example.yaml","value":"1","repository":"kubernetes/test-infra","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","job":"periodic-example","container":"test","name":"SKIP_CONVERSION_WEBHOOK"}]`,
+	} {
+		response := strings.Replace(strings.Replace(base, "FIX", string(neutralFix), 1), "TARGETS", targets, 1)
+		if _, err := parsePatternResponse(response, patternBuildIDs(patternFailures(2))); patternValidationCategoryOf(err) != patternValidationSchema {
+			t.Fatalf("unsafe target %s error = %v", targets, err)
+		}
+	}
+	for _, fix := range []string{
+		"Keep the conversion webhook available until provider deletion no longer requires it.",
+		"Delete the admission webhook configurations while keeping the CRD conversion webhook available.",
+		"Remove the CRD conversion webhook certificate dependency by serving conversion independently.",
+		"Disable the CRD conversion webhook timeout override.",
+		"Remove the CRD conversion webhook shutdown dependency.",
+		"Keep the conversion strategy Webhook, not None.",
+	} {
+		safeFix, _ := json.Marshal(fix)
+		if _, err := parsePatternResponse(strings.Replace(strings.Replace(base, "FIX", string(safeFix), 1), "TARGETS", actionable, 1), patternBuildIDs(patternFailures(2))); err != nil {
+			t.Fatalf("non-destructive remediation %q was rejected: %v", fix, err)
+		}
+	}
+	for _, safeTarget := range []string{
+		`[{"intent":"modify_symbol","symbol":"getPreUpgradeFunc","required_call":"RemoveConversionWebhookCertificateDependency","path":"test/e2e/capi_test.go"}]`,
+		`[{"intent":"modify_symbol","symbol":"getPreUpgradeFunc","required_call":"example.com/project/conversionwebhook.RemoveTimeoutOverride","path":"test/e2e/capi_test.go"}]`,
+		`[{"intent":"set_configuration","path":"config/crd.yaml","value":"spec.conversion=Webhook"}]`,
+		`[{"intent":"set_configuration","path":"config/crd.yaml","value":"spec.conversion.strategy=Webhook"}]`,
+		`[{"intent":"remove_configuration","path":"config/crd.yaml","value":"conversionWebhook.timeout=30s"}]`,
+		`[{"intent":"remove_configuration","path":"config/crd.yaml","value":"conversionWebhook.certificateDependency=cert-manager"}]`,
+		`[{"intent":"remove_configuration","path":"config/crd.yaml","value":"conversionWebhook.shutdownCoordination=provider"}]`,
+		`[{"intent":"set_job_environment","symbol":"","required_call":"","path":"config/jobs/example.yaml","value":"true","repository":"kubernetes/test-infra","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","job":"periodic-example","container":"test","name":"DISABLE_CONVERSION_WEBHOOK_TIMEOUT"}]`,
+	} {
+		if _, err := parsePatternResponse(strings.Replace(strings.Replace(base, "FIX", string(neutralFix), 1), "TARGETS", safeTarget, 1), patternBuildIDs(patternFailures(2))); err != nil {
+			t.Fatalf("safe conversion target %s was rejected: %v", safeTarget, err)
+		}
+	}
+}
+
+func TestPatternSystemPromptCalibratesRecurringRecommendations(t *testing.T) {
+	for _, want := range []string{
+		"recurrence among failed builds is evidence, not proof",
+		"complete recent run window, including passes",
+		"Never claim that deleting admission webhook configurations disables CRD conversion",
+		"Use investigate so stored-version migration, conversion requirements, and rollback safety can be reviewed first",
+	} {
+		if !strings.Contains(patternSystemPrompt, want) {
+			t.Errorf("pattern system prompt missing %q", want)
+		}
 	}
 }
 
