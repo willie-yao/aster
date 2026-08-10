@@ -26,7 +26,7 @@ import (
 
 // patternPromptVersion is bumped when the pattern prompt or output contract
 // changes, so cached verdicts from an older contract are re-run.
-const patternPromptVersion = 6
+const patternPromptVersion = 7
 
 const patternCacheVersion = 2
 
@@ -121,12 +121,13 @@ const (
 )
 
 type patternParseStats struct {
-	CandidateCount            int
-	ValidCount                int
-	UniqueValidCount          int
-	IncompleteCount           int
-	ContractLikeRejectedCount int
-	ScanTruncated             bool
+	CandidateCount             int
+	ValidCount                 int
+	UniqueValidCount           int
+	NonSystemicNormalizedCount int
+	IncompleteCount            int
+	ContractLikeRejectedCount  int
+	ScanTruncated              bool
 }
 
 type patternValidationError struct {
@@ -910,6 +911,16 @@ func recordPatternParseTrace(ctx context.Context, stage string, stats patternPar
 		ContractLikeRejectedCount: stats.ContractLikeRejectedCount, ScanTruncated: stats.ScanTruncated,
 		ErrorCode: patternTraceErrorCode(err), ValidationCode: patternValidationIssueOf(err),
 	})
+	if stats.NonSystemicNormalizedCount > 0 {
+		normalizationOutcome := "applied"
+		if err != nil {
+			normalizationOutcome = "discarded"
+		}
+		recordTrace(ctx, TraceEvent{
+			Kind: "pattern_normalization", Status: stage, Outcome: normalizationOutcome,
+			NormalizedCount: stats.NonSystemicNormalizedCount,
+		})
+	}
 }
 
 func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResponse, error) {
@@ -951,16 +962,13 @@ func parsePatternResponseWithStats(raw string, buildIDs map[string]struct{}) (pa
 	bestIssue := "invalid_json"
 	unique := map[string]patternResponse{}
 	for _, candidate := range scan.candidates {
-		parsed, category, issue := decodePatternCandidate(candidate.value, buildIDs)
+		decoded, category, issue := decodePatternCandidate(candidate.value, buildIDs)
 		if category == "" {
-			parsed = canonicalizePatternResponse(parsed)
-			canonical, err := json.Marshal(parsed)
-			if err != nil {
-				return validationError(patternValidationJSON, "canonical_json")
+			if decoded.nonSystemicNormalized {
+				stats.NonSystemicNormalizedCount++
 			}
-			key := string(canonical)
-			valid = append(valid, validCandidate{response: parsed, start: candidate.start, end: candidate.end})
-			unique[key] = parsed
+			valid = append(valid, validCandidate{response: decoded.response, start: candidate.start, end: candidate.end})
+			unique[decoded.identity] = decoded.response
 			continue
 		}
 		contractLike := patternCandidateIsContractLike(candidate.value)
@@ -1014,6 +1022,12 @@ func parsePatternResponseWithStats(raw string, buildIDs map[string]struct{}) (pa
 	panic("unreachable canonical pattern response")
 }
 
+type decodedPatternCandidate struct {
+	response              patternResponse
+	identity              string
+	nonSystemicNormalized bool
+}
+
 func canonicalizePatternResponse(parsed patternResponse) patternResponse {
 	parsed.Confidence = strings.ToLower(strings.TrimSpace(parsed.Confidence))
 	parsed.SharedRootCause = strings.TrimSpace(parsed.SharedRootCause)
@@ -1045,33 +1059,66 @@ func canonicalizePatternResponse(parsed patternResponse) patternResponse {
 	return parsed
 }
 
-func decodePatternCandidate(raw string, buildIDs map[string]struct{}) (patternResponse, patternValidationCategory, string) {
+func decodePatternCandidate(raw string, buildIDs map[string]struct{}) (decodedPatternCandidate, patternValidationCategory, string) {
 	fields, category, issue := decodePatternObject(raw)
 	if category != "" {
-		return patternResponse{}, category, issue
+		return decodedPatternCandidate{}, category, issue
 	}
 	required := []string{"systemic", "confidence", "shared_root_cause", "shared_builds", "suggested_fix", "remediation_targets", "summary"}
 	if len(fields) != len(required) {
-		return patternResponse{}, patternValidationSchema, "required_fields"
+		return decodedPatternCandidate{}, patternValidationSchema, "required_fields"
 	}
 	for _, field := range required {
 		value, ok := fields[field]
 		if !ok || strings.TrimSpace(string(value)) == "null" {
-			return patternResponse{}, patternValidationSchema, "required_fields"
+			return decodedPatternCandidate{}, patternValidationSchema, "required_fields"
 		}
 	}
 	var parsed patternResponse
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		return patternResponse{}, patternValidationSchema, "field_types"
+		return decodedPatternCandidate{}, patternValidationSchema, "field_types"
 	}
 	if !decodeRemediationTargets(fields["remediation_targets"], &parsed.RemediationTargets) {
-		return patternResponse{}, patternValidationSchema, "remediation_targets"
+		return decodedPatternCandidate{}, patternValidationSchema, "remediation_targets"
 	}
 	parsed = canonicalizePatternResponse(parsed)
-	if category, issue := patternResponseValidation(parsed, buildIDs); category != "" {
-		return patternResponse{}, category, issue
+	identity, err := json.Marshal(parsed)
+	if err != nil {
+		return decodedPatternCandidate{}, patternValidationJSON, "canonical_json"
 	}
-	return parsed, "", ""
+	if !parsed.Systemic {
+		if category, issue := patternRemediationTargetsValidation(parsed.RemediationTargets); category != "" {
+			return decodedPatternCandidate{}, category, issue
+		}
+	}
+	normalized := normalizeNonSystemicPatternResponse(&parsed)
+	if category, issue := patternResponseValidation(parsed, buildIDs); category != "" {
+		return decodedPatternCandidate{}, category, issue
+	}
+	return decodedPatternCandidate{response: parsed, identity: string(identity), nonSystemicNormalized: normalized}, "", ""
+}
+
+func normalizeNonSystemicPatternResponse(parsed *patternResponse) bool {
+	if parsed == nil || parsed.Systemic {
+		return false
+	}
+	normalized := parsed.SharedRootCause != "" || parsed.SuggestedFix != "" || len(parsed.RemediationTargets) > 0
+	parsed.SharedRootCause = ""
+	parsed.SuggestedFix = ""
+	parsed.RemediationTargets = []models.RemediationTarget{}
+	return normalized
+}
+
+func patternRemediationTargetsValidation(targets []models.RemediationTarget) (patternValidationCategory, string) {
+	if len(targets) > 8 {
+		return patternValidationSchema, "remediation_target_limit"
+	}
+	for _, target := range targets {
+		if !validRemediationTarget(target) {
+			return patternValidationSchema, "remediation_target"
+		}
+	}
+	return "", ""
 }
 
 func decodePatternObject(raw string) (map[string]json.RawMessage, patternValidationCategory, string) {
@@ -1141,13 +1188,8 @@ func patternResponseValidation(p patternResponse, buildIDs map[string]struct{}) 
 	} else if strings.TrimSpace(p.SharedRootCause) != "" || strings.TrimSpace(p.SuggestedFix) != "" || len(p.RemediationTargets) != 0 {
 		return patternValidationSchema, "non_systemic_contract"
 	}
-	if len(p.RemediationTargets) > 8 {
-		return patternValidationSchema, "remediation_target_limit"
-	}
-	for _, target := range p.RemediationTargets {
-		if !validRemediationTarget(target) {
-			return patternValidationSchema, "remediation_target"
-		}
+	if category, issue := patternRemediationTargetsValidation(p.RemediationTargets); category != "" {
+		return category, issue
 	}
 	for _, buildID := range p.SharedBuilds {
 		buildID = strings.TrimSpace(buildID)

@@ -118,6 +118,7 @@ type TraceEvent struct {
 	UniqueCandidateCount      int                 `json:"unique_candidate_count,omitempty"`
 	IncompleteCount           int                 `json:"incomplete_count,omitempty"`
 	ContractLikeRejectedCount int                 `json:"contract_like_rejected_count,omitempty"`
+	NormalizedCount           int                 `json:"normalized_count,omitempty"`
 	ScanTruncated             bool                `json:"scan_truncated,omitempty"`
 	Bytes                     int                 `json:"bytes,omitempty"`
 	Elided                    int                 `json:"elided,omitempty"`
