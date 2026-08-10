@@ -745,11 +745,17 @@ key, or bot token).
   {{- if gt $timeoutSeconds 1800 -}}{{- fail "agentSandbox.causalCritic.timeout must be at most 30m" -}}{{- end -}}
   {{- if or (lt (int64 $cfg.outputLimitBytes) 4096) (gt (int64 $cfg.outputLimitBytes) 1048576) -}}{{- fail "agentSandbox.causalCritic.outputLimitBytes must be between 4096 and 1048576" -}}{{- end -}}
   {{- if or (lt (int $cfg.maxPerRun) 1) (gt (int $cfg.maxPerRun) 10) -}}{{- fail "agentSandbox.causalCritic.maxPerRun must be between 1 and 10" -}}{{- end -}}
+  {{- if ne (index $cfg.resources.requests "ephemeral-storage") (index $cfg.resources.limits "ephemeral-storage") -}}{{- fail "agentSandbox.causalCritic ephemeral-storage request must equal its limit" -}}{{- end -}}
   {{- if not $cfg.networkPolicy.enabled -}}{{- fail "agentSandbox.causalCritic.networkPolicy.enabled must be true" -}}{{- end -}}
   {{- if not (has $cfg.networkPolicy.mode (list "kubernetes" "cilium")) -}}{{- fail "agentSandbox.causalCritic.networkPolicy.mode must be kubernetes or cilium" -}}{{- end -}}
   {{- if eq (len $cfg.networkPolicy.gatewayNamespaceSelector) 0 -}}{{- fail "agentSandbox.causalCritic.networkPolicy.gatewayNamespaceSelector is required" -}}{{- end -}}
   {{- if eq (len $cfg.networkPolicy.gatewayPodSelector) 0 -}}{{- fail "agentSandbox.causalCritic.networkPolicy.gatewayPodSelector is required" -}}{{- end -}}
   {{- if or (lt (int $cfg.networkPolicy.gatewayPort) 1) (gt (int $cfg.networkPolicy.gatewayPort) 65535) -}}{{- fail "agentSandbox.causalCritic.networkPolicy.gatewayPort is invalid" -}}{{- end -}}
+  {{- $gatewayAuthority := regexFind "^https://[^/]+" $gateway.endpoint -}}
+  {{- $explicitGatewayPort := regexFind ":[0-9]+$" $gatewayAuthority -}}
+  {{- $endpointGatewayPort := 443 -}}
+  {{- if $explicitGatewayPort -}}{{- $endpointGatewayPort = trimPrefix ":" $explicitGatewayPort | int -}}{{- end -}}
+  {{- if ne (int $cfg.networkPolicy.gatewayPort) $endpointGatewayPort -}}{{- fail "agentSandbox.causalCritic.networkPolicy.gatewayPort must match modelGateway.endpoint" -}}{{- end -}}
   {{- if or (eq (len $cfg.networkPolicy.dnsNamespaceSelector) 0) (eq (len $cfg.networkPolicy.dnsPodSelector) 0) -}}{{- fail "agentSandbox.causalCritic DNS network selectors are required" -}}{{- end -}}
   {{- if and (eq $cfg.networkPolicy.mode "cilium") (or (not (hasKey $cfg.networkPolicy.dnsNamespaceSelector "kubernetes.io/metadata.name")) (not (get $cfg.networkPolicy.dnsNamespaceSelector "kubernetes.io/metadata.name"))) -}}{{- fail "agentSandbox.causalCritic cilium mode requires dnsNamespaceSelector.kubernetes.io/metadata.name" -}}{{- end -}}
   {{- range $env := concat .Values.server.extraEnv .Values.fetcher.extraEnv -}}

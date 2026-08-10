@@ -3,6 +3,7 @@ package causalcritic
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -283,5 +284,60 @@ func TestRecoverPendingCleanupWaitsForStalePendingWork(t *testing.T) {
 				t.Fatalf("recovered pending record=%+v", ledger.Records[0])
 			}
 		})
+	}
+}
+
+func TestLedgerRetainsAttemptTombstonesAndCleanupRecords(t *testing.T) {
+	input := criticInput(t)
+	created := time.Now().UTC().Add(-time.Hour)
+	ledger := Ledger{SchemaVersion: LedgerSchemaVersion}
+	for index := 0; index <= maxLedgerRecords; index++ {
+		when := created.Add(time.Duration(index) * time.Second)
+		attemptHash := hashString(fmt.Sprintf("attempt-%d", index))
+		record := TrialRecord{
+			ID: fmt.Sprintf("critic-%020d", index), CreatedAt: when.Format(time.RFC3339Nano), AttemptHash: attemptHash,
+			RuntimeIdentity: testCriticRuntimeIdentity(), Status: TrialRuntimeFailure, ErrorCode: "runtime_failure",
+			Metadata: trialMetadata(), EvidenceHash: input.EvidenceHash, DraftHash: input.DraftHash, PairHash: input.PairHash,
+			Usage: GatewayUsage{Status: "unavailable", Source: "gateway_response"},
+		}
+		if index == 0 {
+			record.CleanupWork = &engineruntime.WorkRef{Backend: "agent-sandbox", Namespace: "critic", Name: "critic-old", UID: "uid-old"}
+		}
+		ledger.Records = append(ledger.Records, record)
+		ledger.Attempts = append(ledger.Attempts, TrialAttempt{Hash: attemptHash, CreatedAt: record.CreatedAt, Status: record.Status})
+	}
+	path := filepath.Join(t.TempDir(), "critic.json")
+	if err := writeLedger(path, ledger); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadLedger(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Records) != maxLedgerRecords || len(got.Attempts) != maxLedgerRecords+1 {
+		t.Fatalf("records=%d attempts=%d", len(got.Records), len(got.Attempts))
+	}
+	oldAttempt := ledger.Attempts[0].Hash
+	foundRecord, foundAttempt := false, false
+	for _, record := range got.Records {
+		if record.AttemptHash == oldAttempt && record.CleanupWork != nil {
+			foundRecord = true
+		}
+	}
+	for _, attempt := range got.Attempts {
+		if attempt.Hash == oldAttempt {
+			foundAttempt = true
+		}
+	}
+	if !foundRecord || !foundAttempt {
+		t.Fatalf("old cleanup record=%v attempt=%v", foundRecord, foundAttempt)
+	}
+	publicDir := filepath.Join(t.TempDir(), "public")
+	claimed, err := claimTrial(publicDir, path, ledger.Records[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed {
+		t.Fatal("retained attempt tombstone was reclaimed")
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -277,6 +279,48 @@ func TestAgentSandboxRuntimeDerivesStableExecutionIdentity(t *testing.T) {
 	executionID := annotations[agentSandboxIDAnnotation].(string)
 	if !strings.HasPrefix(executionID, "contract-") || len(executionID) != len("contract-")+16 {
 		t.Fatalf("execution ID = %q", executionID)
+	}
+}
+
+func TestAgentSandboxBenchmarkConfigUsesExplicitKubeContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kubeconfig")
+	data := []byte(`apiVersion: v1
+kind: Config
+clusters:
+- name: benchmark-cluster
+  cluster:
+    server: https://benchmark.example.test
+- name: other-cluster
+  cluster:
+    server: https://other.example.test
+contexts:
+- name: benchmark
+  context:
+    cluster: benchmark-cluster
+    user: benchmark
+- name: other
+  context:
+    cluster: other-cluster
+    user: other
+current-context: other
+users:
+- name: benchmark
+  user:
+    token: benchmark
+- name: other
+  user:
+    token: other
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBECONFIG", path)
+	cfg, err := agentSandboxKubeconfigContextConfig("benchmark")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Host != "https://benchmark.example.test" {
+		t.Fatalf("host=%q", cfg.Host)
 	}
 }
 

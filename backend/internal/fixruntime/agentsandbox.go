@@ -204,7 +204,7 @@ func newAgentSandboxRunnerFromEnv(prefix, kubeContext string, inClusterOnly bool
 			return nil, fmt.Errorf("agent sandbox requires in-cluster Kubernetes configuration: %w", err)
 		}
 	} else {
-		cfg, err = agentSandboxRESTConfig(kubeContext)
+		cfg, err = agentSandboxKubeconfigContextConfig(kubeContext)
 		if err != nil {
 			return nil, fmt.Errorf("agent sandbox benchmark Kubernetes configuration: %w", err)
 		}
@@ -836,6 +836,10 @@ func agentSandboxRESTConfig(contextName string) (*rest.Config, error) {
 	if cfg, err := rest.InClusterConfig(); err == nil {
 		return cfg, nil
 	}
+	return agentSandboxKubeconfigContextConfig(contextName)
+}
+
+func agentSandboxKubeconfigContextConfig(contextName string) (*rest.Config, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	overrides := &clientcmd.ConfigOverrides{}
 	if contextName != "" {

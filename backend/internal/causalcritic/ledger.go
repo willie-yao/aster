@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	LedgerSchemaVersion = 1
+	LedgerSchemaVersion = 2
 	maxLedgerRecords    = 100
+	maxLedgerAttempts   = 4096
 	maxLedgerBytes      = 4 << 20
 	ledgerRetention     = 30 * 24 * time.Hour
 	pendingRetention    = time.Hour
@@ -99,11 +100,19 @@ type TrialRecord struct {
 	Finalized         bool                           `json:"finalized"`
 }
 
+// TrialAttempt retains a compact duplicate identity after detailed records are pruned.
+type TrialAttempt struct {
+	Hash      string      `json:"hash"`
+	CreatedAt string      `json:"created_at"`
+	Status    TrialStatus `json:"status"`
+}
+
 // Ledger stores bounded private critic comparisons.
 type Ledger struct {
-	SchemaVersion int           `json:"schema_version"`
-	UpdatedAt     string        `json:"updated_at,omitempty"`
-	Records       []TrialRecord `json:"records"`
+	SchemaVersion int            `json:"schema_version"`
+	UpdatedAt     string         `json:"updated_at,omitempty"`
+	Attempts      []TrialAttempt `json:"attempts,omitempty"`
+	Records       []TrialRecord  `json:"records"`
 }
 
 // TrialSpec configures one persisted private critic run.
@@ -276,11 +285,17 @@ func claimTrial(publicDir, path string, record TrialRecord) (bool, error) {
 			return err
 		}
 		pruneLedger(&ledger, createdAtOrNow(record.CreatedAt))
+		for _, attempt := range ledger.Attempts {
+			if attempt.Hash == record.AttemptHash {
+				return nil
+			}
+		}
 		for _, existing := range ledger.Records {
 			if existing.AttemptHash == record.AttemptHash {
 				return nil
 			}
 		}
+		upsertAttempt(&ledger, TrialAttempt{Hash: record.AttemptHash, CreatedAt: record.CreatedAt, Status: TrialPending})
 		ledger.Records = append(ledger.Records, record)
 		ledger.UpdatedAt = record.CreatedAt
 		if err := writeLedger(resolved, ledger); err != nil {
@@ -312,6 +327,7 @@ func appendTrial(publicDir, path string, record TrialRecord) error {
 		if !updated {
 			return fmt.Errorf("causal critic trial claim is missing")
 		}
+		upsertAttempt(&ledger, TrialAttempt{Hash: record.AttemptHash, CreatedAt: record.CreatedAt, Status: record.Status})
 		ledger.UpdatedAt = record.CreatedAt
 		pruneLedger(&ledger, createdAtOrNow(record.CreatedAt))
 		return writeLedger(resolved, ledger)
@@ -357,9 +373,7 @@ func validateTrialRecord(record TrialRecord) error {
 	if err := validateTrialMetadata(record.Metadata); err != nil {
 		return err
 	}
-	switch record.Status {
-	case TrialPending, TrialSucceeded, TrialCleanupPending, TrialMalformedResult, TrialContractViolation, TrialTimeout, TrialCancellation, TrialUnavailable, TrialRuntimeFailure:
-	default:
+	if !validTrialStatus(record.Status) {
 		return fmt.Errorf("unsupported causal critic status %q", record.Status)
 	}
 	if len(record.FailureReason) > 2<<10 || strings.ContainsRune(record.FailureReason, '\x00') {
@@ -381,7 +395,7 @@ func validateTrialRecord(record TrialRecord) error {
 }
 
 func loadLedger(path string) (Ledger, error) {
-	ledger := Ledger{SchemaVersion: LedgerSchemaVersion, Records: []TrialRecord{}}
+	ledger := Ledger{SchemaVersion: LedgerSchemaVersion, Attempts: []TrialAttempt{}, Records: []TrialRecord{}}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return ledger, nil
@@ -403,6 +417,17 @@ func loadLedger(path string) (Ledger, error) {
 	if ledger.SchemaVersion != LedgerSchemaVersion {
 		return ledger, fmt.Errorf("unsupported causal critic ledger schema %d", ledger.SchemaVersion)
 	}
+	for _, attempt := range ledger.Attempts {
+		if !validSHA256(attempt.Hash) {
+			return ledger, fmt.Errorf("invalid causal critic attempt hash")
+		}
+		if _, err := time.Parse(time.RFC3339Nano, attempt.CreatedAt); err != nil {
+			return ledger, fmt.Errorf("invalid causal critic attempt time: %w", err)
+		}
+		if !validTrialStatus(attempt.Status) {
+			return ledger, fmt.Errorf("unsupported causal critic attempt status %q", attempt.Status)
+		}
+	}
 	for _, record := range ledger.Records {
 		if err := validateTrialRecord(record); err != nil {
 			return ledger, err
@@ -413,15 +438,22 @@ func loadLedger(path string) (Ledger, error) {
 
 func writeLedger(path string, ledger Ledger) error {
 	ledger.SchemaVersion = LedgerSchemaVersion
+	slices.SortFunc(ledger.Attempts, func(left, right TrialAttempt) int {
+		if left.CreatedAt != right.CreatedAt {
+			return strings.Compare(left.CreatedAt, right.CreatedAt)
+		}
+		return strings.Compare(left.Hash, right.Hash)
+	})
+	if len(ledger.Attempts) > maxLedgerAttempts {
+		ledger.Attempts = slices.Clone(ledger.Attempts[len(ledger.Attempts)-maxLedgerAttempts:])
+	}
 	slices.SortFunc(ledger.Records, func(left, right TrialRecord) int {
 		if left.CreatedAt != right.CreatedAt {
 			return strings.Compare(left.CreatedAt, right.CreatedAt)
 		}
 		return strings.Compare(left.ID, right.ID)
 	})
-	if len(ledger.Records) > maxLedgerRecords {
-		ledger.Records = slices.Clone(ledger.Records[len(ledger.Records)-maxLedgerRecords:])
-	}
+	ledger.Records = trimDetailedRecords(ledger.Records, maxLedgerRecords)
 	for {
 		data, err := json.Marshal(ledger)
 		if err != nil {
@@ -430,12 +462,68 @@ func writeLedger(path string, ledger Ledger) error {
 		if len(data) <= maxLedgerBytes {
 			break
 		}
-		if len(ledger.Records) <= 1 {
+		removed := false
+		for index := range ledger.Records {
+			if ledger.Records[index].CleanupWork != nil {
+				continue
+			}
+			ledger.Records = append(ledger.Records[:index], ledger.Records[index+1:]...)
+			removed = true
+			break
+		}
+		if !removed {
 			return fmt.Errorf("causal critic ledger record exceeds %d bytes", maxLedgerBytes)
 		}
-		ledger.Records = slices.Clone(ledger.Records[1:])
 	}
 	return statefile.WritePrivateJSONDurable(path, ledger)
+}
+
+func trimDetailedRecords(records []TrialRecord, limit int) []TrialRecord {
+	if len(records) <= limit {
+		return records
+	}
+	keep := make([]bool, len(records))
+	protected := 0
+	for index := range records {
+		if records[index].CleanupWork != nil {
+			keep[index] = true
+			protected++
+		}
+	}
+	remaining := max(limit-protected, 0)
+	for index := len(records) - 1; index >= 0 && remaining > 0; index-- {
+		if keep[index] {
+			continue
+		}
+		keep[index] = true
+		remaining--
+	}
+	trimmed := make([]TrialRecord, 0, min(len(records), max(limit, protected)))
+	for index, record := range records {
+		if keep[index] {
+			trimmed = append(trimmed, record)
+		}
+	}
+	return trimmed
+}
+
+func upsertAttempt(ledger *Ledger, attempt TrialAttempt) {
+	for index := range ledger.Attempts {
+		if ledger.Attempts[index].Hash == attempt.Hash {
+			ledger.Attempts[index] = attempt
+			return
+		}
+	}
+	ledger.Attempts = append(ledger.Attempts, attempt)
+}
+
+func validTrialStatus(status TrialStatus) bool {
+	switch status {
+	case TrialPending, TrialSucceeded, TrialCleanupPending, TrialMalformedResult, TrialContractViolation, TrialTimeout, TrialCancellation, TrialUnavailable, TrialRuntimeFailure:
+		return true
+	default:
+		return false
+	}
 }
 
 func createdAtOrNow(value string) time.Time {
@@ -448,6 +536,10 @@ func createdAtOrNow(value string) time.Time {
 func pruneLedger(ledger *Ledger, reference time.Time) {
 	kept := ledger.Records[:0]
 	for _, record := range ledger.Records {
+		if record.CleanupWork != nil {
+			kept = append(kept, record)
+			continue
+		}
 		created, err := time.Parse(time.RFC3339Nano, record.CreatedAt)
 		retention := ledgerRetention
 		if record.Status == TrialPending {
@@ -458,6 +550,18 @@ func pruneLedger(ledger *Ledger, reference time.Time) {
 		}
 	}
 	ledger.Records = kept
+	attempts := ledger.Attempts[:0]
+	for _, attempt := range ledger.Attempts {
+		created, err := time.Parse(time.RFC3339Nano, attempt.CreatedAt)
+		retention := ledgerRetention
+		if attempt.Status == TrialPending {
+			retention = pendingRetention
+		}
+		if err == nil && !created.Before(reference.Add(-retention)) {
+			attempts = append(attempts, attempt)
+		}
+	}
+	ledger.Attempts = attempts
 }
 
 func withLedgerLock(publicDir, ledgerPath string, fn func(string) error) error {
@@ -570,6 +674,7 @@ func RecoverPendingCleanup(ctx context.Context, cleaner PendingCleaner, publicDi
 				recovery, ok := byAttempt[ledger.Records[index].AttemptHash]
 				if ok && ledger.Records[index].Status == recovery.priorStatus && ledger.Records[index].CleanupWork != nil && *ledger.Records[index].CleanupWork == recovery.work {
 					ledger.Records[index] = recovery.record
+					upsertAttempt(&ledger, TrialAttempt{Hash: recovery.record.AttemptHash, CreatedAt: recovery.record.CreatedAt, Status: recovery.record.Status})
 				}
 			}
 			ledger.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)

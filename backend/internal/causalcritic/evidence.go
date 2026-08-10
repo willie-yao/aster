@@ -33,7 +33,7 @@ func EnsureCitedEvidence(ctx context.Context, browser artifacts.Browser, bundle 
 		if anchor == "" {
 			return agentanalysis.EvidenceBundle{}, fmt.Errorf("citation %d has no searchable quote", index)
 		}
-		result, err := browser.Grep(ctx, citation.Path, regexp.MustCompile(regexp.QuoteMeta(anchor)), 4, 2, 2048, criticCitationScanBytes)
+		result, err := browser.Grep(ctx, citation.Path, regexp.MustCompile(regexp.QuoteMeta(anchor)), 8, 2, 2048, criticCitationScanBytes)
 		if err != nil {
 			return agentanalysis.EvidenceBundle{}, fmt.Errorf("freeze cited evidence %s: %w", citation.Path, err)
 		}

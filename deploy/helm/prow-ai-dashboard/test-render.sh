@@ -2019,6 +2019,8 @@ expect_causal_critic_fail orka-shadow 'cannot run with orka.agentAnalysisShadow'
 expect_causal_critic_fail orka-fix 'cannot run with orka.fixRuntime' --set orka.fixRuntime.enabled=true "${fix_admission_args[@]}" --set orka.fixRuntime.image.tag=sha-test
 expect_causal_critic_fail shared-fix-identity 'must not share its namespace and workload ServiceAccount' -f "$tmp/agent-sandbox.yaml" --set agentSandbox.causalCritic.namespace=fix-eval --set agentSandbox.causalCritic.workloadServiceAccount.name=fix-workload
 expect_causal_critic_fail timeout-over-limit 'timeout must be at most 30m' --set-string agentSandbox.causalCritic.timeout=31m
+expect_causal_critic_fail ephemeral-storage-mismatch 'ephemeral-storage request must equal its limit' --set-string agentSandbox.causalCritic.resources.requests.ephemeral-storage=16Mi
+expect_causal_critic_fail gateway-port-mismatch 'networkPolicy.gatewayPort must match modelGateway.endpoint' --set-string agentSandbox.causalCritic.modelGateway.endpoint=https://gateway.models.svc.cluster.local:8443/v1
 expect_causal_critic_fail cilium-dns-namespace 'cilium mode requires dnsNamespaceSelector.kubernetes.io/metadata.name' --set agentSandbox.causalCritic.networkPolicy.mode=cilium --set-string 'agentSandbox.causalCritic.networkPolicy.dnsNamespaceSelector.kubernetes\.io/metadata\.name='
 expect_causal_critic_fail reserved-env 'must not override reserved critic variable' --set fetcher.extraEnv[0].name=AGENT_SANDBOX_CRITIC_IMAGE --set fetcher.extraEnv[0].value=attacker
 

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -120,6 +121,10 @@ func TestAgentSandboxCausalCriticBenchmark(t *testing.T) {
 				PublicDir: publicDir, LedgerPath: ledgerPath, Metadata: metadata, Input: input, ExecutionID: executionID,
 				RuntimeIdentity: causalcritic.RuntimeIdentity(gateway, os.Getenv("AGENT_SANDBOX_CRITIC_IMAGE"), timeout, outputLimit),
 			})
+			if errors.Is(runErr, causalcritic.ErrTrialAlreadyAttempted) {
+				t.Log("critic trial already exists in the private ledger; skipping resumed result write")
+				return
+			}
 			if runErr != nil {
 				t.Logf("critic runtime: %v", runErr)
 			}
