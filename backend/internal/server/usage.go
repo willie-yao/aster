@@ -31,6 +31,8 @@ type usageReport struct {
 	Totals            usageReportTotals        `json:"totals"`
 	Daily             []usageReportDay         `json:"daily"`
 	Features          []usageReportFeature     `json:"features"`
+	Models            []usageReportModel       `json:"models,omitempty"`
+	ModelCoverage     string                   `json:"model_coverage"`
 	RecentOperations  []aiusage.OperationUsage `json:"recent_operations"`
 	SelectedModel     string                   `json:"selected_model,omitempty"`
 	PricingRule       string                   `json:"pricing_rule,omitempty"`
@@ -45,30 +47,45 @@ type usageReportRange struct {
 }
 
 type usageReportCoverage struct {
-	Status                      string `json:"status"`
-	ModelRequests               int    `json:"model_requests"`
-	ReportedRequests            int    `json:"reported_requests"`
-	PricedReportedRequests      int    `json:"priced_reported_requests"`
-	UnreportedRequests          int    `json:"unreported_requests"`
-	ExternalUnmeteredOperations int    `json:"external_unmetered_operations"`
+	Status                         string   `json:"status"`
+	States                         []string `json:"states"`
+	ModelRequests                  int      `json:"model_requests"`
+	ReportedRequests               int      `json:"reported_requests"`
+	PricedReportedRequests         int      `json:"priced_reported_requests"`
+	CacheWriteReportedRequests     int      `json:"cache_write_reported_requests"`
+	CacheWritePricedRequests       int      `json:"cache_write_priced_requests"`
+	CacheWriteUnreportedRequests   int      `json:"cache_write_unreported_requests"`
+	InvalidUsageRequests           int      `json:"invalid_usage_requests"`
+	UnreportedRequests             int      `json:"unreported_requests"`
+	ExternalUnmeteredOperations    int      `json:"external_unmetered_operations"`
+	ModelGatewayExcludedOperations int      `json:"model_gateway_excluded_operations"`
+	PricingAddedAfterRequests      int      `json:"pricing_added_after_requests"`
+	LegacyCoverageUnknown          bool     `json:"legacy_coverage_unknown"`
+	AggregateOverflow              bool     `json:"aggregate_overflow"`
 }
 
 type usageReportTotals struct {
-	Operations                  int    `json:"operations"`
-	CacheHits                   int    `json:"cache_hits"`
-	SuppressedOperations        int    `json:"suppressed_operations"`
-	CooldownRetries             int    `json:"cooldown_retries"`
-	Failures                    int    `json:"failures"`
-	ExternalUnmeteredOperations int    `json:"external_unmetered_operations"`
-	ModelRequests               int    `json:"model_requests"`
-	ReportedRequests            int    `json:"reported_requests"`
-	PricedReportedRequests      int    `json:"priced_reported_requests"`
-	UnreportedRequests          int    `json:"unreported_requests"`
-	InputTokens                 int64  `json:"input_tokens"`
-	CachedInputTokens           int64  `json:"cached_input_tokens"`
-	OutputTokens                int64  `json:"output_tokens"`
-	ReasoningTokens             int64  `json:"reasoning_tokens"`
-	EstimatedCostNanos          string `json:"estimated_cost_nanos"`
+	Operations                     int    `json:"operations"`
+	CacheHits                      int    `json:"cache_hits"`
+	SuppressedOperations           int    `json:"suppressed_operations"`
+	CooldownRetries                int    `json:"cooldown_retries"`
+	Failures                       int    `json:"failures"`
+	ExternalUnmeteredOperations    int    `json:"external_unmetered_operations"`
+	ModelGatewayExcludedOperations int    `json:"model_gateway_excluded_operations"`
+	ModelRequests                  int    `json:"model_requests"`
+	ReportedRequests               int    `json:"reported_requests"`
+	PricedReportedRequests         int    `json:"priced_reported_requests"`
+	CacheWriteReportedRequests     int    `json:"cache_write_reported_requests"`
+	CacheWritePricedRequests       int    `json:"cache_write_priced_requests"`
+	CacheWriteUnreportedRequests   int    `json:"cache_write_unreported_requests"`
+	InvalidUsageRequests           int    `json:"invalid_usage_requests"`
+	UnreportedRequests             int    `json:"unreported_requests"`
+	InputTokens                    int64  `json:"input_tokens"`
+	CachedInputTokens              int64  `json:"cached_input_tokens"`
+	CacheWriteInputTokens          int64  `json:"cache_write_input_tokens"`
+	OutputTokens                   int64  `json:"output_tokens"`
+	ReasoningTokens                int64  `json:"reasoning_tokens"`
+	EstimatedCostNanos             string `json:"estimated_cost_nanos"`
 }
 
 type usageReportDay struct {
@@ -79,6 +96,11 @@ type usageReportDay struct {
 type usageReportFeature struct {
 	Feature aiusage.Feature   `json:"feature"`
 	Totals  usageReportTotals `json:"totals"`
+}
+
+type usageReportModel struct {
+	Model  string            `json:"model"`
+	Totals usageReportTotals `json:"totals"`
 }
 
 func aiUsageHandler(dataDir string, attachment bool, now func() time.Time, model, pricingRule string) http.Handler {
@@ -99,10 +121,11 @@ func aiUsageHandler(dataDir string, attachment bool, now func() time.Time, model
 			http.Error(w, "AI usage unavailable", http.StatusInternalServerError)
 			return
 		}
-		report := buildUsageReport(ledgers, start, end, features, now().UTC())
+		pricingConfigured := strings.TrimSpace(pricingRule) != ""
+		report := buildUsageReport(ledgers, start, end, features, now().UTC(), pricingConfigured)
 		report.SelectedModel = strings.TrimSpace(model)
 		report.PricingRule = strings.TrimSpace(pricingRule)
-		report.PricingConfigured = report.PricingRule != ""
+		report.PricingConfigured = pricingConfigured
 		w.Header().Set("Content-Type", "application/json")
 		if attachment {
 			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="ai-usage-%s-to-%s.json"`, report.Range.Start, report.Range.End))
@@ -181,18 +204,22 @@ func readUsageLedger(path string) (aiusage.UsageLedger, error) {
 	if err := json.Unmarshal(data, &ledger); err != nil {
 		return aiusage.UsageLedger{}, fmt.Errorf("decode usage file: %w", err)
 	}
-	if ledger.Version > aiusage.LedgerVersion {
-		return aiusage.UsageLedger{}, fmt.Errorf("usage version %d is newer than supported version %d", ledger.Version, aiusage.LedgerVersion)
+	if ledger.Version < 1 || ledger.Version > aiusage.LedgerVersion {
+		return aiusage.UsageLedger{}, fmt.Errorf("usage version %d is unsupported; current version is %d", ledger.Version, aiusage.LedgerVersion)
 	}
 	return ledger, nil
 }
 
-func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featureFilter map[aiusage.Feature]bool, generatedAt time.Time) usageReport {
+func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featureFilter map[aiusage.Feature]bool, generatedAt time.Time, pricingConfigured bool) usageReport {
 	dayTotals := map[string]aiusage.UsageTotals{}
 	featureTotals := map[aiusage.Feature]aiusage.UsageTotals{}
+	modelTotals := map[string]aiusage.UsageTotals{}
 	currencies := map[string]bool{}
 	pricingHashes := map[string]bool{}
 	pricingCountsUnknown := false
+	coverageCountsUnknown := false
+	modelCountsUnknown := false
+	aggregateOverflow := false
 	var recent []aiusage.OperationUsage
 	for _, ledger := range ledgers {
 		for _, day := range ledger.Days {
@@ -201,6 +228,12 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 				continue
 			}
 			if len(featureFilter) == 0 {
+				if !day.CoverageCountsKnown && day.Totals.Operations > 0 {
+					coverageCountsUnknown = true
+				}
+				if !day.ModelCountsKnown && day.Totals.Operations > 0 {
+					modelCountsUnknown = true
+				}
 				if !day.PricingCountsKnown && day.Totals.ReportedRequests > 0 && (day.Totals.EstimatedCostNanos > 0 || len(day.PricingHashes) > 0) {
 					pricingCountsUnknown = true
 				}
@@ -213,17 +246,34 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 					}
 				}
 				totals := dayTotals[day.Date]
-				addUsageTotals(&totals, day.Totals)
-				dayTotals[day.Date] = totals
+				if addUsageTotals(&totals, day.Totals) {
+					dayTotals[day.Date] = totals
+				} else {
+					aggregateOverflow = true
+				}
+				for model, values := range day.Models {
+					modelTotal := modelTotals[model]
+					if addUsageTotals(&modelTotal, values) {
+						modelTotals[model] = modelTotal
+					} else {
+						aggregateOverflow = true
+					}
+				}
 			}
 			for feature, values := range day.Features {
 				if len(featureFilter) > 0 && !featureFilter[feature] {
 					continue
 				}
 				featureTotal := featureTotals[feature]
-				addUsageTotals(&featureTotal, values)
-				featureTotals[feature] = featureTotal
+				if addUsageTotals(&featureTotal, values) {
+					featureTotals[feature] = featureTotal
+				} else {
+					aggregateOverflow = true
+				}
 				if len(featureFilter) > 0 {
+					if !day.CoverageCountsKnown && values.Operations > 0 {
+						coverageCountsUnknown = true
+					}
 					if !day.PricingCountsKnown && values.ReportedRequests > 0 && (values.EstimatedCostNanos > 0 || len(day.PricingHashes) > 0) {
 						pricingCountsUnknown = true
 					}
@@ -231,8 +281,11 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 						currencies[ledger.Currency] = true
 					}
 					dayTotal := dayTotals[day.Date]
-					addUsageTotals(&dayTotal, values)
-					dayTotals[day.Date] = dayTotal
+					if addUsageTotals(&dayTotal, values) {
+						dayTotals[day.Date] = dayTotal
+					} else {
+						aggregateOverflow = true
+					}
 				}
 			}
 		}
@@ -257,11 +310,18 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 	}
 	var totals aiusage.UsageTotals
 	days := make([]usageReportDay, 0, len(dayTotals))
-	for date, values := range dayTotals {
-		addUsageTotals(&totals, values)
+	dates := make([]string, 0, len(dayTotals))
+	for date := range dayTotals {
+		dates = append(dates, date)
+	}
+	sort.Strings(dates)
+	for _, date := range dates {
+		values := dayTotals[date]
+		if !addUsageTotals(&totals, values) {
+			aggregateOverflow = true
+		}
 		days = append(days, usageReportDay{Date: date, Totals: reportTotals(values)})
 	}
-	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
 	features := make([]usageReportFeature, 0, len(featureTotals))
 	for feature, values := range featureTotals {
 		features = append(features, usageReportFeature{Feature: feature, Totals: reportTotals(values)})
@@ -273,6 +333,16 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 			return left > right
 		}
 		return features[i].Feature < features[j].Feature
+	})
+	models := make([]usageReportModel, 0, len(modelTotals))
+	for model, values := range modelTotals {
+		models = append(models, usageReportModel{Model: model, Totals: reportTotals(values)})
+	}
+	sort.Slice(models, func(i, j int) bool {
+		if models[i].Totals.ModelRequests != models[j].Totals.ModelRequests {
+			return models[i].Totals.ModelRequests > models[j].Totals.ModelRequests
+		}
+		return models[i].Model < models[j].Model
 	})
 	sort.Slice(recent, func(i, j int) bool { return recent[i].CompletedAt > recent[j].CompletedAt })
 	if len(recent) > aiusage.DefaultRecentOperations {
@@ -286,54 +356,120 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 	pricingCoverage := "unavailable"
 	if totals.ReportedRequests > 0 {
 		switch {
-		case pricingCountsUnknown:
+		case pricingCountsUnknown || coverageCountsUnknown || aggregateOverflow:
 			pricingCoverage = "unknown"
 		case totals.PricedReportedRequests == totals.ReportedRequests:
 			pricingCoverage = "complete"
+			if totals.CacheWriteUnreportedRequests > 0 ||
+				totals.CacheWriteInputTokens > 0 && totals.CacheWriteReportedRequests > totals.CacheWritePricedRequests {
+				pricingCoverage = "partial"
+			}
 		case totals.PricedReportedRequests > 0:
 			pricingCoverage = "partial"
 		}
 	}
-	status := "complete"
-	if totals.ModelRequests == 0 || totals.ReportedRequests == 0 {
-		status = "unavailable"
-	} else if totals.UnreportedRequests > 0 || totals.ExternalUnmeteredOperations > 0 {
-		status = "partial"
+	coverage := reportCoverage(totals, coverageCountsUnknown, aggregateOverflow, pricingConfigured)
+	modelCoverage := "complete"
+	if len(featureFilter) > 0 {
+		modelCoverage = "unavailable_for_feature_filter"
+		models = nil
+	} else if modelCountsUnknown {
+		modelCoverage = "partial"
+	} else if totals.Operations == 0 {
+		modelCoverage = "unavailable"
 	}
 	return usageReport{
 		Version: aiusage.LedgerVersion, GeneratedAt: generatedAt.Format(time.RFC3339Nano),
 		Range:    usageReportRange{Start: start.Format(time.DateOnly), End: end.Format(time.DateOnly)},
 		Currency: currency, MixedCurrency: len(currencies) > 1, MixedPricing: len(pricingHashes) > 1,
 		RangePriced: pricingCoverage == "complete", PricingCoverage: pricingCoverage,
-		Coverage: usageReportCoverage{Status: status, ModelRequests: totals.ModelRequests, ReportedRequests: totals.ReportedRequests, PricedReportedRequests: totals.PricedReportedRequests, UnreportedRequests: totals.UnreportedRequests, ExternalUnmeteredOperations: totals.ExternalUnmeteredOperations},
-		Totals:   reportTotals(totals), Daily: days, Features: features, RecentOperations: recent,
+		Coverage: coverage, Totals: reportTotals(totals), Daily: days, Features: features,
+		Models: models, ModelCoverage: modelCoverage, RecentOperations: recent,
 	}
 }
 
-func addUsageTotals(target *aiusage.UsageTotals, value aiusage.UsageTotals) {
-	target.Operations += value.Operations
-	target.CacheHits += value.CacheHits
-	target.SuppressedOperations += value.SuppressedOperations
-	target.CooldownRetries += value.CooldownRetries
-	target.Failures += value.Failures
-	target.ExternalUnmeteredOperations += value.ExternalUnmeteredOperations
-	target.ModelRequests += value.ModelRequests
-	target.ReportedRequests += value.ReportedRequests
-	target.PricedReportedRequests += value.PricedReportedRequests
-	target.UnreportedRequests += value.UnreportedRequests
-	target.InputTokens += value.InputTokens
-	target.CachedInputTokens += value.CachedInputTokens
-	target.OutputTokens += value.OutputTokens
-	target.ReasoningTokens += value.ReasoningTokens
-	target.EstimatedCostNanos += value.EstimatedCostNanos
+func reportCoverage(totals aiusage.UsageTotals, legacyUnknown, aggregateOverflow, pricingConfigured bool) usageReportCoverage {
+	coverage := usageReportCoverage{
+		Status: "complete", States: []string{}, ModelRequests: totals.ModelRequests, ReportedRequests: totals.ReportedRequests,
+		PricedReportedRequests: totals.PricedReportedRequests, CacheWriteReportedRequests: totals.CacheWriteReportedRequests,
+		CacheWritePricedRequests: totals.CacheWritePricedRequests, CacheWriteUnreportedRequests: totals.CacheWriteUnreportedRequests,
+		InvalidUsageRequests: totals.InvalidUsageRequests, UnreportedRequests: totals.UnreportedRequests,
+		ExternalUnmeteredOperations: totals.ExternalUnmeteredOperations, ModelGatewayExcludedOperations: totals.ModelGatewayExcludedOperations,
+		LegacyCoverageUnknown: legacyUnknown, AggregateOverflow: aggregateOverflow,
+	}
+	addState := func(state string) { coverage.States = append(coverage.States, state) }
+	if totals.Operations == 0 {
+		coverage.Status = "unavailable"
+		addState("no_usage_records")
+		return coverage
+	}
+	if totals.ModelRequests == 0 && totals.ExternalUnmeteredOperations == 0 && totals.ModelGatewayExcludedOperations == 0 && !aggregateOverflow {
+		addState("no_provider_usage")
+		return coverage
+	}
+	partial := false
+	if totals.UnreportedRequests > 0 || totals.InvalidUsageRequests > 0 {
+		partial = true
+		addState("partial_token_usage")
+	}
+	if totals.CacheWriteUnreportedRequests > 0 {
+		partial = true
+		addState("cache_write_unreported")
+	}
+	if totals.CacheWriteInputTokens > 0 && totals.CacheWriteReportedRequests > totals.CacheWritePricedRequests {
+		partial = true
+		addState("cache_write_pricing_missing")
+	}
+	if totals.ExternalUnmeteredOperations > 0 {
+		partial = true
+		addState("external_unmetered")
+	}
+	if totals.ModelGatewayExcludedOperations > 0 {
+		partial = true
+		addState("model_gateway_excluded")
+	}
+	if legacyUnknown {
+		partial = true
+		addState("legacy_coverage_unknown")
+	}
+	if aggregateOverflow {
+		partial = true
+		addState("aggregate_overflow")
+	}
+	unpriced := max(totals.ReportedRequests-totals.PricedReportedRequests, 0)
+	if unpriced > 0 {
+		partial = true
+		if pricingConfigured {
+			coverage.PricingAddedAfterRequests = unpriced
+			addState("pricing_added_after_operation")
+		} else {
+			addState("pricing_unavailable")
+		}
+	}
+	if totals.ModelRequests > 0 && totals.ReportedRequests == totals.ModelRequests && !partial {
+		addState("fully_priced_provider_reported")
+	} else if totals.ReportedRequests == 0 && (totals.ExternalUnmeteredOperations > 0 || totals.ModelGatewayExcludedOperations > 0) {
+		coverage.Status = "unavailable"
+		return coverage
+	}
+	if partial {
+		coverage.Status = "partial"
+	}
+	return coverage
+}
+
+func addUsageTotals(target *aiusage.UsageTotals, value aiusage.UsageTotals) bool {
+	return aiusage.AddTotals(target, value)
 }
 
 func reportTotals(value aiusage.UsageTotals) usageReportTotals {
 	return usageReportTotals{
 		Operations: value.Operations, CacheHits: value.CacheHits, SuppressedOperations: value.SuppressedOperations, CooldownRetries: value.CooldownRetries, Failures: value.Failures,
-		ExternalUnmeteredOperations: value.ExternalUnmeteredOperations,
-		ModelRequests:               value.ModelRequests, ReportedRequests: value.ReportedRequests, PricedReportedRequests: value.PricedReportedRequests, UnreportedRequests: value.UnreportedRequests,
-		InputTokens: value.InputTokens, CachedInputTokens: value.CachedInputTokens,
+		ExternalUnmeteredOperations: value.ExternalUnmeteredOperations, ModelGatewayExcludedOperations: value.ModelGatewayExcludedOperations,
+		ModelRequests: value.ModelRequests, ReportedRequests: value.ReportedRequests, PricedReportedRequests: value.PricedReportedRequests, UnreportedRequests: value.UnreportedRequests,
+		CacheWriteReportedRequests: value.CacheWriteReportedRequests, CacheWritePricedRequests: value.CacheWritePricedRequests,
+		CacheWriteUnreportedRequests: value.CacheWriteUnreportedRequests, InvalidUsageRequests: value.InvalidUsageRequests,
+		InputTokens: value.InputTokens, CachedInputTokens: value.CachedInputTokens, CacheWriteInputTokens: value.CacheWriteInputTokens,
 		OutputTokens: value.OutputTokens, ReasoningTokens: value.ReasoningTokens,
 		EstimatedCostNanos: strconv.FormatInt(value.EstimatedCostNanos, 10),
 	}

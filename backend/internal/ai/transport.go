@@ -140,11 +140,13 @@ func (c *Client) callModelRequest(ctx context.Context, request modelRequest) (*m
 		event.UsageReported = resp.Usage.Reported
 		event.InputTokens = resp.Usage.InputTokens
 		event.CachedInputTokens = resp.Usage.CachedInputTokens
+		event.CacheWriteInputTokens = resp.Usage.CacheWriteInputTokens
+		event.CacheWriteInputTokensReported = resp.Usage.CacheWriteInputTokensReported
 		event.OutputTokens = resp.Usage.OutputTokens
 		event.ReasoningTokens = resp.Usage.ReasoningTokens
 		event.ToolCallCount = len(resp.Message.ToolCalls)
 	}
-	aiusage.ObserveModelRequest(ctx, usage)
+	aiusage.ObserveModelRequestWithModel(ctx, usage, c.model, c.modelFingerprint())
 	if err != nil {
 		event.Outcome = "error"
 		event.ErrorCode = traceErrorCode(err)

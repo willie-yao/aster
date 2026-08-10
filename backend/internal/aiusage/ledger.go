@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"slices"
 	"sort"
@@ -107,9 +108,10 @@ func loadLedger(path string, retentionDays int) (UsageLedger, bool, error) {
 	if err := json.Unmarshal(data, &ledger); err != nil {
 		return UsageLedger{}, false, fmt.Errorf("decode usage ledger: %w", err)
 	}
-	if ledger.Version > LedgerVersion {
-		return UsageLedger{}, false, fmt.Errorf("usage ledger version %d is newer than supported version %d", ledger.Version, LedgerVersion)
+	if ledger.Version < 1 || ledger.Version > LedgerVersion {
+		return UsageLedger{}, false, fmt.Errorf("usage ledger version %d is unsupported; current version is %d", ledger.Version, LedgerVersion)
 	}
+	legacyVersion := ledger.Version
 	ledger.Version = LedgerVersion
 	ledger.RetentionDays = retentionDays
 	if ledger.Days == nil {
@@ -122,6 +124,13 @@ func loadLedger(path string, retentionDays int) (UsageLedger, bool, error) {
 		ledger.DedupeOperations = map[string]DedupeEntry{}
 		for _, operation := range ledger.RecentOperations {
 			ledger.DedupeOperations[operation.ID] = dedupeEntry(operation)
+		}
+	}
+	if legacyVersion >= 2 {
+		for i := range ledger.Days {
+			if ledger.Days[i].Models == nil && ledger.Days[i].ModelCountsKnown {
+				ledger.Days[i].Models = map[string]UsageTotals{}
+			}
 		}
 	}
 	return ledger, true, nil
@@ -156,6 +165,7 @@ func (r *Recorder) Record(operation OperationUsage) OperationUsage {
 		cost, err := r.pricing.Estimate(TokenUsage{
 			Reported:    true,
 			InputTokens: boundedInt(operation.InputTokens), CachedInputTokens: boundedInt(operation.CachedInputTokens),
+			CacheWriteInputTokens: boundedInt(operation.CacheWriteInputTokens), CacheWriteInputTokensReported: operation.CacheWriteReportedRequests > 0,
 			OutputTokens: boundedInt(operation.OutputTokens), ReasoningTokens: boundedInt(operation.ReasoningTokens),
 		})
 		if err != nil {
@@ -164,9 +174,14 @@ func (r *Recorder) Record(operation OperationUsage) OperationUsage {
 		} else {
 			operation.Currency = r.pricing.Currency()
 			operation.EstimatedCostNanos = cost
+			if r.pricing.CacheWriteConfigured() {
+				operation.CacheWritePricedRequests = operation.CacheWriteReportedRequests
+			}
 		}
 	}
-	if !r.recordLocked(operation) {
+	var recorded bool
+	operation, recorded = r.recordLocked(operation)
+	if !recorded {
 		return operation
 	}
 	r.ledger.UpdatedAt = r.now().UTC().Format(time.RFC3339Nano)
@@ -178,15 +193,23 @@ func (r *Recorder) Record(operation OperationUsage) OperationUsage {
 	return operation
 }
 
-func (r *Recorder) recordLocked(operation OperationUsage) bool {
+func (r *Recorder) recordLocked(operation OperationUsage) (OperationUsage, bool) {
 	entry := dedupeEntry(operation)
 	if existing, ok := r.ledger.DedupeOperations[operation.ID]; ok {
 		if existing.Digest != entry.Digest {
 			r.logf("⚠ AI usage execution ID %q was reused with different accounting data", operation.ID)
 		}
-		return false
+		return operation, false
 	}
-	r.applyLocked(operation, 1)
+	if !r.applyLocked(operation) {
+		operation = aggregateOverflowOperation(operation)
+		entry = dedupeEntry(operation)
+		if !r.applyLocked(operation) {
+			r.logf("⚠ AI usage aggregate overflow prevented operation %q from being recorded", operation.ID)
+			return operation, false
+		}
+		r.logf("⚠ AI usage aggregate overflow recorded operation %q as invalid and unreported", operation.ID)
+	}
 	r.ledger.DedupeOperations[operation.ID] = entry
 	for i, existing := range r.ledger.RecentOperations {
 		if existing.ID == operation.ID {
@@ -199,7 +222,7 @@ func (r *Recorder) recordLocked(operation OperationUsage) bool {
 	}
 	r.truncateRecentLocked()
 	r.pruneLocked()
-	return true
+	return operation, true
 }
 
 func dedupeEntry(operation OperationUsage) DedupeEntry {
@@ -234,40 +257,60 @@ func (r *Recorder) truncateRecentLocked() {
 	}
 }
 
-func (r *Recorder) applyLocked(operation OperationUsage, direction int64) {
+func (r *Recorder) applyLocked(operation OperationUsage) bool {
 	completed, err := time.Parse(time.RFC3339Nano, operation.CompletedAt)
 	if err != nil {
-		return
+		return false
 	}
 	date := completed.UTC().Format(time.DateOnly)
 	index := sort.Search(len(r.ledger.Days), func(i int) bool { return r.ledger.Days[i].Date >= date })
-	if index == len(r.ledger.Days) || r.ledger.Days[index].Date != date {
-		if direction < 0 {
-			return
+	exists := index < len(r.ledger.Days) && r.ledger.Days[index].Date == date
+	current := DailyUsage{Date: date, Features: map[Feature]UsageTotals{}, Models: map[string]UsageTotals{}, PricingCountsKnown: true, CoverageCountsKnown: operationCoverageKnown(operation), ModelCountsKnown: operationModelKnown(operation)}
+	if exists {
+		current = r.ledger.Days[index]
+		current.CoverageCountsKnown = current.CoverageCountsKnown && operationCoverageKnown(operation)
+		current.ModelCountsKnown = current.ModelCountsKnown && operationModelKnown(operation)
+	}
+	if current.Features == nil {
+		current.Features = map[Feature]UsageTotals{}
+	}
+	if current.Models == nil && current.ModelCountsKnown {
+		current.Models = map[string]UsageTotals{}
+	}
+	delta := operationTotals(operation)
+	dayTotals := current.Totals
+	if !AddTotals(&dayTotals, delta) {
+		return false
+	}
+	feature := current.Features[operation.Feature]
+	if !AddTotals(&feature, delta) {
+		return false
+	}
+	modelKey := ""
+	var modelTotals UsageTotals
+	if current.ModelCountsKnown {
+		modelKey = operationModelKey(operation)
+		modelTotals = current.Models[modelKey]
+		if !AddTotals(&modelTotals, delta) {
+			return false
 		}
+	}
+	if !exists {
 		r.ledger.Days = append(r.ledger.Days, DailyUsage{})
 		copy(r.ledger.Days[index+1:], r.ledger.Days[index:])
-		r.ledger.Days[index] = DailyUsage{Date: date, Features: map[Feature]UsageTotals{}, PricingCountsKnown: true}
 	}
 	day := &r.ledger.Days[index]
-	if day.Features == nil {
-		day.Features = map[Feature]UsageTotals{}
+	*day = current
+	day.Totals = dayTotals
+	day.Features[operation.Feature] = feature
+	if current.ModelCountsKnown {
+		day.Models[modelKey] = modelTotals
 	}
-	if direction > 0 && operation.PricingHash != "" && !slices.Contains(day.PricingHashes, operation.PricingHash) {
+	if operation.PricingHash != "" && !slices.Contains(day.PricingHashes, operation.PricingHash) {
 		day.PricingHashes = append(day.PricingHashes, operation.PricingHash)
 		sort.Strings(day.PricingHashes)
 	}
-	applyTotals(&day.Totals, operationTotals(operation), direction)
-	feature := day.Features[operation.Feature]
-	applyTotals(&feature, operationTotals(operation), direction)
-	if emptyTotals(feature) {
-		delete(day.Features, operation.Feature)
-	} else {
-		day.Features[operation.Feature] = feature
-	}
-	if emptyTotals(day.Totals) {
-		r.ledger.Days = append(r.ledger.Days[:index], r.ledger.Days[index+1:]...)
-	}
+	return true
 }
 
 func (r *Recorder) pruneLocked() {
@@ -343,16 +386,35 @@ func normalizeOperation(operation OperationUsage, now time.Time) OperationUsage 
 		operation.Outcome = OutcomeError
 	}
 	operation.ModelFingerprint = safeFingerprint(operation.ModelFingerprint)
+	operation.Model = safeModelID(operation.Model)
+	if !validUsageSource(operation.UsageSource) {
+		operation.UsageSource = ""
+	}
+	if operation.ModelGatewayExcluded {
+		if operation.UsageSource == "" {
+			operation.UsageSource = UsageSourceModelGateway
+		}
+	} else if operation.ExternalUnmetered && operation.UsageSource == "" {
+		operation.UsageSource = UsageSourceExternalRuntime
+	}
 	if !validCurrency(operation.Currency) {
 		operation.Currency = ""
 	}
 	operation.ModelRequests = max(operation.ModelRequests, 0)
 	operation.ReportedRequests = max(operation.ReportedRequests, 0)
+	operation.CacheWriteReportedRequests = min(max(operation.CacheWriteReportedRequests, 0), operation.ReportedRequests)
+	operation.CacheWriteUnreportedRequests = min(max(operation.CacheWriteUnreportedRequests, 0), operation.ReportedRequests-operation.CacheWriteReportedRequests)
+	operation.CacheWritePricedRequests = min(max(operation.CacheWritePricedRequests, 0), operation.CacheWriteReportedRequests)
 	operation.UnreportedRequests = max(operation.UnreportedRequests, 0)
+	operation.InvalidUsageRequests = min(max(operation.InvalidUsageRequests, 0), operation.UnreportedRequests)
 	operation.InputTokens = max(operation.InputTokens, 0)
 	operation.CachedInputTokens = max(operation.CachedInputTokens, 0)
 	if operation.CachedInputTokens > operation.InputTokens {
 		operation.CachedInputTokens = operation.InputTokens
+	}
+	operation.CacheWriteInputTokens = max(operation.CacheWriteInputTokens, 0)
+	if operation.CacheWriteInputTokens > operation.InputTokens-operation.CachedInputTokens {
+		operation.CacheWriteInputTokens = operation.InputTokens - operation.CachedInputTokens
 	}
 	operation.OutputTokens = max(operation.OutputTokens, 0)
 	operation.ReasoningTokens = max(operation.ReasoningTokens, 0)
@@ -372,9 +434,12 @@ func normalizeOperation(operation OperationUsage, now time.Time) OperationUsage 
 func operationTotals(operation OperationUsage) UsageTotals {
 	totals := UsageTotals{
 		Operations: 1, ModelRequests: operation.ModelRequests,
-		ReportedRequests: operation.ReportedRequests, UnreportedRequests: operation.UnreportedRequests,
+		ReportedRequests: operation.ReportedRequests, CacheWriteReportedRequests: operation.CacheWriteReportedRequests,
+		CacheWritePricedRequests: operation.CacheWritePricedRequests, CacheWriteUnreportedRequests: operation.CacheWriteUnreportedRequests,
+		InvalidUsageRequests: operation.InvalidUsageRequests, UnreportedRequests: operation.UnreportedRequests,
 		InputTokens: operation.InputTokens, CachedInputTokens: operation.CachedInputTokens,
-		OutputTokens: operation.OutputTokens, ReasoningTokens: operation.ReasoningTokens,
+		CacheWriteInputTokens: operation.CacheWriteInputTokens,
+		OutputTokens:          operation.OutputTokens, ReasoningTokens: operation.ReasoningTokens,
 		EstimatedCostNanos: operation.EstimatedCostNanos,
 	}
 	if operation.PricingHash != "" && operation.Currency != "" {
@@ -395,29 +460,102 @@ func operationTotals(operation OperationUsage) UsageTotals {
 	if operation.ExternalUnmetered {
 		totals.ExternalUnmeteredOperations = 1
 	}
+	if operation.ModelGatewayExcluded {
+		totals.ModelGatewayExcludedOperations = 1
+	}
 	return totals
 }
 
-func applyTotals(target *UsageTotals, value UsageTotals, direction int64) {
-	target.Operations += int(int64(value.Operations) * direction)
-	target.CacheHits += int(int64(value.CacheHits) * direction)
-	target.SuppressedOperations += int(int64(value.SuppressedOperations) * direction)
-	target.CooldownRetries += int(int64(value.CooldownRetries) * direction)
-	target.Failures += int(int64(value.Failures) * direction)
-	target.ExternalUnmeteredOperations += int(int64(value.ExternalUnmeteredOperations) * direction)
-	target.ModelRequests += int(int64(value.ModelRequests) * direction)
-	target.ReportedRequests += int(int64(value.ReportedRequests) * direction)
-	target.PricedReportedRequests += int(int64(value.PricedReportedRequests) * direction)
-	target.UnreportedRequests += int(int64(value.UnreportedRequests) * direction)
-	target.InputTokens += value.InputTokens * direction
-	target.CachedInputTokens += value.CachedInputTokens * direction
-	target.OutputTokens += value.OutputTokens * direction
-	target.ReasoningTokens += value.ReasoningTokens * direction
-	target.EstimatedCostNanos += value.EstimatedCostNanos * direction
+// AddTotals adds value without mutating target when any counter would overflow.
+func AddTotals(target *UsageTotals, value UsageTotals) bool {
+	next := *target
+	ints := []struct {
+		target *int
+		value  int
+	}{
+		{&next.Operations, value.Operations}, {&next.CacheHits, value.CacheHits},
+		{&next.SuppressedOperations, value.SuppressedOperations}, {&next.CooldownRetries, value.CooldownRetries},
+		{&next.Failures, value.Failures}, {&next.ExternalUnmeteredOperations, value.ExternalUnmeteredOperations},
+		{&next.ModelGatewayExcludedOperations, value.ModelGatewayExcludedOperations}, {&next.ModelRequests, value.ModelRequests},
+		{&next.ReportedRequests, value.ReportedRequests}, {&next.PricedReportedRequests, value.PricedReportedRequests},
+		{&next.CacheWriteReportedRequests, value.CacheWriteReportedRequests}, {&next.CacheWritePricedRequests, value.CacheWritePricedRequests},
+		{&next.CacheWriteUnreportedRequests, value.CacheWriteUnreportedRequests}, {&next.InvalidUsageRequests, value.InvalidUsageRequests},
+		{&next.UnreportedRequests, value.UnreportedRequests},
+	}
+	for _, field := range ints {
+		if field.value < 0 || *field.target > math.MaxInt-field.value {
+			return false
+		}
+		*field.target += field.value
+	}
+	int64s := []struct {
+		target *int64
+		value  int64
+	}{
+		{&next.InputTokens, value.InputTokens}, {&next.CachedInputTokens, value.CachedInputTokens},
+		{&next.CacheWriteInputTokens, value.CacheWriteInputTokens}, {&next.OutputTokens, value.OutputTokens},
+		{&next.ReasoningTokens, value.ReasoningTokens}, {&next.EstimatedCostNanos, value.EstimatedCostNanos},
+	}
+	for _, field := range int64s {
+		if field.value < 0 || *field.target > math.MaxInt64-field.value {
+			return false
+		}
+		*field.target += field.value
+	}
+	*target = next
+	return true
 }
 
-func emptyTotals(t UsageTotals) bool {
-	return t == (UsageTotals{})
+func aggregateOverflowOperation(operation OperationUsage) OperationUsage {
+	affected := operation.ReportedRequests
+	operation.ReportedRequests = 0
+	operation.CacheWriteReportedRequests = 0
+	operation.CacheWritePricedRequests = 0
+	operation.CacheWriteUnreportedRequests = 0
+	operation.InputTokens = 0
+	operation.CachedInputTokens = 0
+	operation.CacheWriteInputTokens = 0
+	operation.OutputTokens = 0
+	operation.ReasoningTokens = 0
+	operation.EstimatedCostNanos = 0
+	operation.PricingHash = ""
+	operation.UnreportedRequests = saturatingCountAdd(operation.UnreportedRequests, affected)
+	operation.InvalidUsageRequests = saturatingCountAdd(operation.InvalidUsageRequests, max(affected, 1))
+	operation.UsageInvalid = true
+	operation.CoverageCountsKnown = true
+	return operation
+}
+
+func saturatingCountAdd(current, value int) int {
+	if value <= 0 {
+		return current
+	}
+	if current > math.MaxInt-value {
+		return math.MaxInt
+	}
+	return current + value
+}
+
+func operationModelKey(operation OperationUsage) string {
+	if operation.MixedModels {
+		return "mixed"
+	}
+	if operation.Model != "" {
+		return operation.Model
+	}
+	if operation.ModelFingerprint != "" {
+		return "fingerprint:" + operation.ModelFingerprint
+	}
+	return "unknown"
+}
+
+func operationCoverageKnown(operation OperationUsage) bool {
+	return operation.CoverageCountsKnown || operation.ModelRequests == 0
+}
+
+func operationModelKnown(operation OperationUsage) bool {
+	return operation.MixedModels || operation.Model != "" || operation.ModelFingerprint != "" ||
+		(operation.ModelRequests == 0 && !operation.ExternalUnmetered)
 }
 
 func boundedInt(value int64) int {

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
@@ -16,6 +18,30 @@ type fakeAgentRuntime struct {
 	err   error
 	spec  runtime.GenerateSpec
 	calls int
+}
+
+func TestManagerGenerateMarksModelGatewayExclusion(t *testing.T) {
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	recorder, err := aiusage.NewRecorder("", aiusage.RecorderOptions{RetentionDays: 30, RecentOperations: 10, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, operation := aiusage.Begin(t.Context(), recorder, aiusage.Metadata{
+		LogicalID: "fix", Origin: aiusage.OriginServer, Feature: aiusage.FeatureFixPreview, StartedAt: now,
+	})
+	manager := &Manager{opts: Options{
+		SourceOwner: "o", SourceName: "r", MaxFiles: 3,
+		Agent: &AgentConfig{Runtime: goodAgent(), MaxFiles: 3, ModelGateway: runtime.ModelGatewayConfig{
+			Endpoint: "https://gateway.internal/v1", Model: "gateway-model", ProtocolVersion: "openai-chat-completions-v1",
+		}},
+	}}
+	if _, err := manager.generate(ctx, systemicPattern("etcd"), "ref", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	got := operation.Finish(aiusage.OutcomeSuccess)
+	if !got.ModelGatewayExcluded || got.ExternalUnmetered || got.Model != "gateway-model" || got.UsageSource != aiusage.UsageSourceModelGateway {
+		t.Fatalf("operation = %+v", got)
+	}
 }
 
 func (f *fakeAgentRuntime) Generate(_ context.Context, spec runtime.GenerateSpec) (runtime.GenerateResult, error) {

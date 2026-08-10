@@ -155,7 +155,12 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 		opts.AIUsageModel = cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Model
 		pricing := cfg.AI.EffectiveUsage().Pricing
 		if pricing.Currency != "" {
-			opts.AIUsagePricingRule = fmt.Sprintf("%s input=%s cached_input=%s output=%s per million tokens", pricing.Currency, pricing.InputPerMillion, pricing.CachedInputPerMillion, pricing.OutputPerMillion)
+			parts := []string{fmt.Sprintf("%s input=%s", pricing.Currency, pricing.InputPerMillion), "cached_input=" + pricing.CachedInputPerMillion}
+			if pricing.CacheWriteInputPerMillion != "" {
+				parts = append(parts, "cache_write_input="+pricing.CacheWriteInputPerMillion)
+			}
+			parts = append(parts, "output="+pricing.OutputPerMillion, "per million tokens")
+			opts.AIUsagePricingRule = strings.Join(parts, " ")
 		}
 	}
 	opts.TrustedOrigins = trustedOrigins(os.Getenv("OAUTH_REDIRECT_URL"), os.Getenv("TRUSTED_ORIGINS"))

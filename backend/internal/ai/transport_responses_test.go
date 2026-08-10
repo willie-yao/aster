@@ -74,7 +74,7 @@ func TestResponsesTokenUsageDistinguishesAbsentAndZero(t *testing.T) {
 	if got := responsesTokenUsage(nil); got.Reported {
 		t.Fatalf("absent usage = %+v", got)
 	}
-	if got := responsesTokenUsage(&responsesUsage{}); !got.Reported || got.InputTokens != 0 || got.OutputTokens != 0 {
+	if got := responsesTokenUsage(&responsesUsage{}); !got.Reported || got.InputTokens != 0 || got.OutputTokens != 0 || got.CacheWriteInputTokensReported {
 		t.Fatalf("present zero usage = %+v", got)
 	}
 }

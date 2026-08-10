@@ -393,7 +393,7 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject string, failures []PatternFailure, options PatternAnalyzeOptions) (_ *models.PatternAnalysis, resultErr error) {
 	var trace *TraceSession
 	if s.traceStore != nil {
-		trace = s.traceStore.Start(TraceMetadata{JobID: jobID, TestName: subject, APIMode: s.client.APIMode()})
+		trace = s.traceStore.Start(TraceMetadata{JobID: jobID, TestName: subject, APIMode: s.client.APIMode(), Model: s.client.ModelName()})
 		ctx = withAnalysisTrace(ctx, trace)
 		defer func() {
 			outcome := "pattern_success"
@@ -414,7 +414,7 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 	usageOutcome := aiusage.OutcomeSuccess
 	ctx, usageOperation := aiusage.Begin(ctx, s.usageRecorder, aiusage.Metadata{
 		LogicalID: jobID + "\x00" + subject, Origin: s.usageOrigin,
-		Feature: aiusage.FeaturePatternAnalysis, ModelFingerprint: s.client.modelFingerprint(),
+		Feature: aiusage.FeaturePatternAnalysis, ModelFingerprint: s.client.modelFingerprint(), Model: s.client.ModelName(),
 		Correlation: aiusage.Correlation{JobID: jobID, TestName: subject},
 	})
 	defer func() {

@@ -492,6 +492,7 @@ func (s *ContainerStateStore) recordUsageLocked(state ContainerAnalysisState) {
 			LogicalID: state.CacheKey, Origin: aiusage.OriginAnalyzer, Feature: aiusage.FeatureFailureAnalysis,
 			StartedAt: trace.StartedAt, CompletedAt: completedAt,
 			Outcome:     aiusage.OutcomeSuccess,
+			Model:       trace.Model,
 			Correlation: aiusage.Correlation{JobID: trace.JobID, BuildID: trace.BuildID, TestName: trace.TestName},
 		}
 		switch trace.Outcome {
@@ -508,16 +509,11 @@ func (s *ContainerStateStore) recordUsageLocked(state ContainerAnalysisState) {
 			if event.Kind != "model_request" {
 				continue
 			}
-			operation.ModelRequests++
-			if event.UsageReported {
-				operation.ReportedRequests++
-				operation.InputTokens += int64(max(event.InputTokens, 0))
-				operation.CachedInputTokens += int64(max(event.CachedInputTokens, 0))
-				operation.OutputTokens += int64(max(event.OutputTokens, 0))
-				operation.ReasoningTokens += int64(max(event.ReasoningTokens, 0))
-			} else {
-				operation.UnreportedRequests++
-			}
+			aiusage.AccumulateModelRequest(&operation, aiusage.TokenUsage{
+				Reported: event.UsageReported, InputTokens: event.InputTokens, CachedInputTokens: event.CachedInputTokens,
+				CacheWriteInputTokens: event.CacheWriteInputTokens, CacheWriteInputTokensReported: event.CacheWriteInputTokensReported,
+				OutputTokens: event.OutputTokens, ReasoningTokens: event.ReasoningTokens,
+			})
 		}
 		s.usage.Record(operation)
 	}

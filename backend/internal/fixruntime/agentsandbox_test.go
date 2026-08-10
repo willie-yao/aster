@@ -237,7 +237,7 @@ func TestAgentSandboxRunUsesPurposeBoundResultChannelWithoutWorkspace(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Output != `{"review":"pass"}` || result.FinishedReason != "PodSucceeded" || !result.Telemetry.CleanupCompleted {
+	if result.Output != `{"review":"pass"}` || result.FinishedReason != "PodSucceeded" || !result.Telemetry.CleanupCompleted || result.Telemetry.UsageStatus != "unavailable_from_model_gateway" {
 		t.Fatalf("result = %+v", result)
 	}
 	metadata := api.object["metadata"].(map[string]any)

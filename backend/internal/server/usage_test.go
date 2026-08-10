@@ -2,9 +2,11 @@ package server
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -71,6 +73,24 @@ func TestAIUsageHandlerAuthenticatedMergedAndFiltered(t *testing.T) {
 		t.Fatalf("filtered report = %+v", got)
 	}
 
+	downloadReq := httptest.NewRequest(http.MethodGet, "/api/ai-usage/download?start=2026-08-01&end=2026-08-03", nil)
+	downloadReq.Header.Set("Authorization", "ok")
+	downloadRes := httptest.NewRecorder()
+	h.ServeHTTP(downloadRes, downloadReq)
+	var downloaded usageReport
+	if downloadRes.Code != http.StatusOK || !strings.Contains(downloadRes.Header().Get("Content-Disposition"), "attachment") || json.NewDecoder(downloadRes.Body).Decode(&downloaded) != nil {
+		t.Fatalf("download status=%d headers=%v body=%s", downloadRes.Code, downloadRes.Header(), downloadRes.Body.String())
+	}
+	if downloaded.Version != aiusage.LedgerVersion || downloaded.Totals.Operations != 2 || downloaded.Coverage.Status != "partial" {
+		t.Fatalf("downloaded report = %+v", downloaded)
+	}
+
+	publicRes := httptest.NewRecorder()
+	h.ServeHTTP(publicRes, httptest.NewRequest(http.MethodGet, "/data/"+output.AIUsageFetcherFilename, nil))
+	if publicRes.Code != http.StatusNotFound {
+		t.Fatalf("public ledger status = %d, want 404", publicRes.Code)
+	}
+
 	capsReq := httptest.NewRequest(http.MethodGet, "/api/capabilities", nil)
 	capsRes := httptest.NewRecorder()
 	h.ServeHTTP(capsRes, capsReq)
@@ -80,6 +100,64 @@ func TestAIUsageHandlerAuthenticatedMergedAndFiltered(t *testing.T) {
 	}
 	if !caps.Features.AIUsage {
 		t.Fatalf("capabilities = %+v", caps)
+	}
+}
+
+func TestBuildUsageReportCoverageStatesAndModels(t *testing.T) {
+	day := aiusage.DailyUsage{
+		Date: "2026-08-10", PricingCountsKnown: true, CoverageCountsKnown: true, ModelCountsKnown: true,
+		Totals: aiusage.UsageTotals{
+			Operations: 4, ModelRequests: 2, ReportedRequests: 2, PricedReportedRequests: 1,
+			CacheWriteReportedRequests: 1, CacheWritePricedRequests: 1, CacheWriteUnreportedRequests: 1,
+			ExternalUnmeteredOperations: 1, ModelGatewayExcludedOperations: 1,
+			InputTokens: 100, CachedInputTokens: 30, CacheWriteInputTokens: 10, OutputTokens: 20,
+		},
+		Features: map[aiusage.Feature]aiusage.UsageTotals{
+			aiusage.FeatureFailureAnalysis: {Operations: 2, ModelRequests: 2, ReportedRequests: 2, PricedReportedRequests: 1, CacheWriteReportedRequests: 1, CacheWritePricedRequests: 1, CacheWriteUnreportedRequests: 1},
+			aiusage.FeatureFixPreview:      {Operations: 1, ModelGatewayExcludedOperations: 1},
+			aiusage.FeatureFixCritique:     {Operations: 1, ExternalUnmeteredOperations: 1},
+		},
+		Models: map[string]aiusage.UsageTotals{
+			"claude-sonnet-4.6": {Operations: 2, ModelRequests: 2, ReportedRequests: 2, InputTokens: 100, OutputTokens: 20},
+			"gateway-model":     {Operations: 1, ModelGatewayExcludedOperations: 1},
+			"unknown":           {Operations: 1, ExternalUnmeteredOperations: 1},
+		},
+		PricingHashes: []string{"price-a"},
+	}
+	start, _ := time.Parse(time.DateOnly, "2026-08-10")
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: aiusage.LedgerVersion, Currency: "USD", Days: []aiusage.DailyUsage{day}}}, start, start, nil, start, true)
+	for _, state := range []string{"cache_write_unreported", "external_unmetered", "model_gateway_excluded", "pricing_added_after_operation"} {
+		if !slices.Contains(report.Coverage.States, state) {
+			t.Fatalf("coverage states = %v, missing %s", report.Coverage.States, state)
+		}
+	}
+	if report.Coverage.Status != "partial" || report.Coverage.PricingAddedAfterRequests != 1 || report.ModelCoverage != "complete" || len(report.Models) != 3 ||
+		report.Totals.CacheWriteInputTokens != 10 || report.Totals.ModelGatewayExcludedOperations != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
+func TestBuildUsageReportRejectsAggregateOverflow(t *testing.T) {
+	start, _ := time.Parse(time.DateOnly, "2026-08-09")
+	ledgers := []aiusage.UsageLedger{{Version: aiusage.LedgerVersion, Days: []aiusage.DailyUsage{
+		{Date: "2026-08-09", CoverageCountsKnown: true, ModelCountsKnown: true, Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, InputTokens: math.MaxInt64}},
+		{Date: "2026-08-10", CoverageCountsKnown: true, ModelCountsKnown: true, Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, InputTokens: 1}},
+	}}}
+	report := buildUsageReport(ledgers, start, start.AddDate(0, 0, 1), nil, start, false)
+	if !report.Coverage.AggregateOverflow || report.Totals.InputTokens != math.MaxInt64 || report.Totals.InputTokens < 0 || !slices.Contains(report.Coverage.States, "aggregate_overflow") || report.PricingCoverage != "unknown" {
+		t.Fatalf("overflow report = %+v", report)
+	}
+}
+
+func TestBuildUsageReportFullyPricedProviderUsage(t *testing.T) {
+	start, _ := time.Parse(time.DateOnly, "2026-08-10")
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: aiusage.LedgerVersion, Currency: "USD", Days: []aiusage.DailyUsage{{
+		Date: "2026-08-10", PricingCountsKnown: true, CoverageCountsKnown: true, ModelCountsKnown: true,
+		Totals:   aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, PricedReportedRequests: 1, CacheWriteReportedRequests: 1, CacheWritePricedRequests: 1},
+		Features: map[aiusage.Feature]aiusage.UsageTotals{}, Models: map[string]aiusage.UsageTotals{"model": {Operations: 1, ModelRequests: 1, ReportedRequests: 1}},
+	}}}}, start, start, nil, start, true)
+	if report.Coverage.Status != "complete" || !slices.Contains(report.Coverage.States, "fully_priced_provider_reported") {
+		t.Fatalf("coverage = %+v", report.Coverage)
 	}
 }
 
@@ -129,8 +207,8 @@ func TestBuildUsageReportScopesProvenanceToFilters(t *testing.T) {
 		{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{Date: "2026-08-02", Totals: aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 2}, Features: map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureFailureAnalysis: {Operations: 1, ModelRequests: 1, ReportedRequests: 1}, aiusage.FeatureAnalysisChat: {Operations: 1, ModelRequests: 1, ReportedRequests: 1}}, PricingHashes: []string{"failure-price"}}}, RecentOperations: []aiusage.OperationUsage{{ID: "chat", Feature: aiusage.FeatureAnalysisChat, Currency: "USD", PricingHash: "chat-price", CompletedAt: "2026-08-02T12:00:00Z"}}},
 		{Version: 1, Currency: "EUR", Days: []aiusage.DailyUsage{{Date: "2026-07-01", Totals: aiusage.UsageTotals{Operations: 1}, Features: map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureFailureAnalysis: {Operations: 1}}, PricingHashes: []string{"eur-price"}}}},
 	}
-	report := buildUsageReport(ledgers, start, end, map[aiusage.Feature]bool{aiusage.FeatureAnalysisChat: true}, end)
-	if report.Currency != "USD" || report.MixedCurrency || report.MixedPricing || report.Coverage.Status != "complete" {
+	report := buildUsageReport(ledgers, start, end, map[aiusage.Feature]bool{aiusage.FeatureAnalysisChat: true}, end, false)
+	if report.Currency != "USD" || report.MixedCurrency || report.MixedPricing {
 		t.Fatalf("report = %+v", report)
 	}
 }
@@ -146,7 +224,7 @@ func TestBuildUsageReportMarksFilteredLegacyPricingUnknown(t *testing.T) {
 			aiusage.FeatureAnalysisChat:    {Operations: 1, ModelRequests: 1, ReportedRequests: 1},
 		},
 		PricingHashes: []string{"zero-price"},
-	}}}}, start, end, map[aiusage.Feature]bool{aiusage.FeatureAnalysisChat: true}, end)
+	}}}}, start, end, map[aiusage.Feature]bool{aiusage.FeatureAnalysisChat: true}, end, false)
 	if report.PricingCoverage != "unknown" || report.RangePriced {
 		t.Fatalf("report = %+v", report)
 	}
@@ -155,23 +233,25 @@ func TestBuildUsageReportMarksFilteredLegacyPricingUnknown(t *testing.T) {
 func TestBuildUsageReportSeparatesCoverageFromPricing(t *testing.T) {
 	start, _ := time.Parse(time.DateOnly, "2026-08-01")
 	end, _ := time.Parse(time.DateOnly, "2026-08-03")
-	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Days: []aiusage.DailyUsage{{
-		Date: "2026-08-02", Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, InputTokens: 10},
-	}}}}, start, end, nil, end)
-	if report.Coverage.Status != "complete" || report.RangePriced || report.PricingCoverage != "unavailable" {
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: aiusage.LedgerVersion, Days: []aiusage.DailyUsage{{
+		Date: "2026-08-02", CoverageCountsKnown: true, ModelCountsKnown: true,
+		Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, CacheWriteReportedRequests: 1, CacheWritePricedRequests: 1, InputTokens: 10},
+	}}}}, start, end, nil, end, false)
+	if report.Coverage.Status != "partial" || !slices.Contains(report.Coverage.States, "pricing_unavailable") || report.RangePriced || report.PricingCoverage != "unavailable" {
 		t.Fatalf("report = %+v", report)
 	}
 }
 
 func TestBuildUsageReportIncludesSuppressedOperations(t *testing.T) {
 	start, _ := time.Parse(time.DateOnly, "2026-08-10")
-	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Days: []aiusage.DailyUsage{{
-		Date:   "2026-08-10",
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: aiusage.LedgerVersion, Days: []aiusage.DailyUsage{{
+		Date:                "2026-08-10",
+		CoverageCountsKnown: true, ModelCountsKnown: true,
 		Totals: aiusage.UsageTotals{Operations: 2, SuppressedOperations: 1, CooldownRetries: 1},
 		Features: map[aiusage.Feature]aiusage.UsageTotals{
 			aiusage.FeaturePatternAnalysis: {Operations: 2, SuppressedOperations: 1, CooldownRetries: 1},
 		},
-	}}}}, start, start, nil, start)
+	}}}}, start, start, nil, start, false)
 	if report.Totals.Operations != 2 || report.Totals.SuppressedOperations != 1 || report.Totals.CooldownRetries != 1 ||
 		len(report.Daily) != 1 || report.Daily[0].Totals.SuppressedOperations != 1 || report.Daily[0].Totals.CooldownRetries != 1 {
 		t.Fatalf("report = %+v", report)
@@ -181,12 +261,14 @@ func TestBuildUsageReportIncludesSuppressedOperations(t *testing.T) {
 func TestBuildUsageReportIgnoresUnappliedPricingHash(t *testing.T) {
 	start, _ := time.Parse(time.DateOnly, "2026-08-01")
 	end, _ := time.Parse(time.DateOnly, "2026-08-03")
-	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{
-		Date:               "2026-08-02",
-		PricingCountsKnown: true,
-		Totals:             aiusage.UsageTotals{Operations: 2, ModelRequests: 1, ReportedRequests: 1},
-		PricingHashes:      []string{"unused-price"},
-	}}}}, start, end, nil, end)
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: aiusage.LedgerVersion, Currency: "USD", Days: []aiusage.DailyUsage{{
+		Date:                "2026-08-02",
+		PricingCountsKnown:  true,
+		CoverageCountsKnown: true,
+		ModelCountsKnown:    true,
+		Totals:              aiusage.UsageTotals{Operations: 2, ModelRequests: 1, ReportedRequests: 1},
+		PricingHashes:       []string{"unused-price"},
+	}}}}, start, end, nil, end, false)
 	if report.PricingCoverage != "unavailable" || report.RangePriced {
 		t.Fatalf("report = %+v", report)
 	}
@@ -195,16 +277,18 @@ func TestBuildUsageReportIgnoresUnappliedPricingHash(t *testing.T) {
 func TestBuildUsageReportRetainsPricingCoverageCounts(t *testing.T) {
 	start, _ := time.Parse(time.DateOnly, "2026-08-01")
 	end, _ := time.Parse(time.DateOnly, "2026-08-03")
-	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{
-		Date:               "2026-08-02",
-		PricingCountsKnown: true,
-		Totals:             aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 2, PricedReportedRequests: 1, EstimatedCostNanos: 100},
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: aiusage.LedgerVersion, Currency: "USD", Days: []aiusage.DailyUsage{{
+		Date:                "2026-08-02",
+		PricingCountsKnown:  true,
+		CoverageCountsKnown: true,
+		ModelCountsKnown:    true,
+		Totals:              aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 2, PricedReportedRequests: 1, EstimatedCostNanos: 100},
 		Features: map[aiusage.Feature]aiusage.UsageTotals{
 			aiusage.FeatureFailureAnalysis: {Operations: 1, ModelRequests: 1, ReportedRequests: 1, PricedReportedRequests: 1, EstimatedCostNanos: 100},
 			aiusage.FeatureAnalysisChat:    {Operations: 1, ModelRequests: 1, ReportedRequests: 1},
 		},
 		PricingHashes: []string{"price"},
-	}}}}, start, end, nil, end)
+	}}}}, start, end, nil, end, false)
 	if report.PricingCoverage != "partial" || report.RangePriced || report.Totals.PricedReportedRequests != 1 || report.Coverage.PricedReportedRequests != 1 {
 		t.Fatalf("report = %+v", report)
 	}
@@ -226,7 +310,7 @@ func TestBuildUsageReportMarksMixedLegacyPricingUnknown(t *testing.T) {
 	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{
 		{Date: "2026-08-01", Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, EstimatedCostNanos: 100}, PricingHashes: []string{"legacy-price"}},
 		{Date: "2026-08-02", PricingCountsKnown: true, Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, PricedReportedRequests: 1, EstimatedCostNanos: 100}, PricingHashes: []string{"current-price"}},
-	}}}, start, end, nil, end)
+	}}}, start, end, nil, end, false)
 	if report.PricingCoverage != "unknown" || report.RangePriced {
 		t.Fatalf("report = %+v", report)
 	}

@@ -365,7 +365,11 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 // an optional maintainer directive that steers the edit; empty for the batch
 // path.
 func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, instruction string, generationContext *GenerationContext) (*proposedFix, error) {
-	aiusage.MarkExternalUnmetered(ctx)
+	if m.opts.Agent != nil && m.opts.Agent.ModelGateway.Model != "" {
+		aiusage.MarkModelGatewayExcluded(ctx, m.opts.Agent.ModelGateway.Model)
+	} else {
+		aiusage.MarkExternalUnmetered(ctx)
+	}
 	return generateWithAgent(ctx, genParams{
 		critique:        m.opts.Critique,
 		owner:           m.opts.SourceOwner,

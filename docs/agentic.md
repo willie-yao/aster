@@ -829,12 +829,24 @@ contract, and configuration identity owned by the dashboard.
 
 ### Private token and cost accounting
 
-The shared model transport records provider-reported input, cached-input,
-output, and reasoning token metadata. Separate private ledgers cover scheduled
-analysis and authenticated server features. Cache hits record zero new token
-usage. Missing provider metadata remains unreported, and coding-agent work is
-marked external and unmetered rather than estimated from bytes or elapsed time.
-Cost estimates use only operator-configured rates and are not provider invoices.
+The shared model transport records provider-reported input, cached-read input,
+cache-write input when a recognized field is present, output, and reasoning
+token metadata. Absent cache-write metadata remains distinct from a reported
+zero. Separate private ledgers cover scheduled analysis and authenticated server
+features. Cache hits record zero new token usage. Missing provider metadata
+remains unreported, and coding-agent work is marked external and unmetered
+rather than estimated from bytes or elapsed time. Agent Sandbox work that calls
+a consumer model gateway is reported as `model_gateway_excluded`, not as a
+generic external operation, because its runtime contract currently returns no
+gateway token counts to the server. Cost estimates use only operator-configured
+rates and are not provider invoices.
+
+Coverage states distinguish fully priced provider-reported usage, partial token
+usage, missing cache-write counts, missing cache-write pricing, external runtime
+work, model-gateway exclusions, legacy coverage gaps, and operations recorded
+before pricing was configured. Daily ledger model breakdowns store only a safe
+model identifier or a one-way fingerprint. They never store provider endpoints,
+prompts, responses, credentials, or repository content.
 
 ### Cache semantics
 
