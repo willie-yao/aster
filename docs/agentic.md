@@ -1024,6 +1024,25 @@ does not decide whether a remediation is present. File issue and Propose fix
 independently verify the metadata against the exact pinned source revision and
 remain fail-closed when the target is missing or inconclusive.
 
+After correlation, the engine verifies structured targets against the pinned
+source and publishes `remediation_verification`. For configuration, Prow job,
+and import-qualified `modify_symbol` targets, it also verifies that the target
+was unresolved at every correlated failure revision. Other target shapes remain
+active because the historical transition cannot be proven with bounded file
+reads. Systemic patterns receive a source-aware lifecycle:
+
+- `active`: the target remains unresolved, verification is inconclusive, or a
+  correlated failure occurred at the revision containing the remediation.
+- `observing`: the remediation is present, was absent at the correlated failure
+  revisions, but fewer than two later comparable runs have passed at revisions
+  independently verified to contain it.
+- `verified_fixed`: the remediation is present and at least two later comparable
+  runs passed at revisions independently verified to contain it.
+
+The lifecycle uses immutable repository revisions and retains the passing build
+IDs as public verification evidence. A later correlated failure at the same
+revision immediately returns the pattern to `active`.
+
 `set_job_environment` is repository-qualified and limited to pinned
 `kubernetes/test-infra` job configuration. It records the discovery revision,
 config path, job, container, environment-variable name, and exact desired

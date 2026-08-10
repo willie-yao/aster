@@ -34,6 +34,11 @@ type githubRepoReader struct {
 	token  string
 	client *http.Client
 	mu     sync.Mutex
+
+	archiveMu   sync.Mutex
+	archive     actionverify.Archive
+	archiveErr  error
+	archiveDone bool
 }
 
 func (r *githubRepoReader) SourceIdentity() (string, string, string) {
@@ -198,6 +203,19 @@ const (
 
 // ReadSourceArchive fetches bounded Go source and the complete regular-file path set.
 func (r *githubRepoReader) ReadSourceArchive(ctx context.Context) (actionverify.Archive, error) {
+	r.archiveMu.Lock()
+	defer r.archiveMu.Unlock()
+	if r.archiveDone {
+		return r.archive, r.archiveErr
+	}
+	archive, err := r.readSourceArchive(ctx)
+	if err == nil {
+		r.archive, r.archiveErr, r.archiveDone = archive, err, true
+	}
+	return archive, err
+}
+
+func (r *githubRepoReader) readSourceArchive(ctx context.Context) (actionverify.Archive, error) {
 	ref := r.resolvedRef()
 	u := fmt.Sprintf("%s/repos/%s/%s/tarball/%s", githubAPIBase, r.owner, r.repo, url.PathEscape(ref))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)

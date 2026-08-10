@@ -32,6 +32,12 @@ func TestPatternHashBindsReviewedContent(t *testing.T) {
 		"summary":        func(pattern *PatternAnalysis) { pattern.Summary = "replacement summary" },
 		"relevant files": func(pattern *PatternAnalysis) { pattern.RelevantFiles = []string{"pkg/other.go"} },
 		"shared builds":  func(pattern *PatternAnalysis) { pattern.SharedBuilds = []string{"2", "3"} },
+		"source verification": func(pattern *PatternAnalysis) {
+			pattern.RemediationVerification = &PatternRemediationVerification{State: PatternRemediationAlreadyPresent, Repository: "example/repo", Revision: lifecycleRevision}
+		},
+		"lifecycle": func(pattern *PatternAnalysis) {
+			pattern.Lifecycle = &PatternLifecycle{State: PatternLifecycleObserving, PassingBuilds: []string{"4"}}
+		},
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {

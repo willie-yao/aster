@@ -210,3 +210,27 @@ func TestGitHubRepoReaderRejectsUnexpectedPrivateArchiveRedirect(t *testing.T) {
 		t.Fatal("unexpected redirect received authenticated request")
 	}
 }
+
+func TestGitHubRepoReaderMemoizesSuccessfulSourceArchive(t *testing.T) {
+	body := sourceArchive(t, map[string]string{"go.mod": "module example/repo\n", "pkg/fix.go": "package fix\n"})
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	oldAPI := githubAPIBase
+	githubAPIBase = srv.URL
+	t.Cleanup(func() { githubAPIBase = oldAPI })
+
+	reader := NewGitHubRepoReader("owner", "repo", "commit-sha", "").(*githubRepoReader)
+	for range 2 {
+		archive, err := reader.ReadSourceArchive(t.Context())
+		if err != nil || !archive.Paths["pkg/fix.go"] {
+			t.Fatalf("archive=%v err=%v", archive, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("archive calls = %d, want 1", calls)
+	}
+}

@@ -362,8 +362,48 @@ type PatternAnalysis struct {
 	RelevantFiles []string          `json:"relevant_files,omitempty"`
 	FileLinks     map[string]string `json:"file_links,omitempty"`
 	SourceRef     string            `json:"source_ref,omitempty"`
+	// RemediationVerification records whether the structured target remains
+	// unresolved at SourceRef or is already present there.
+	RemediationVerification *PatternRemediationVerification `json:"remediation_verification,omitempty"`
+	// Lifecycle combines source verification with post-fix run evidence.
+	Lifecycle *PatternLifecycle `json:"lifecycle,omitempty"`
 	// Summary is a one-paragraph human-readable verdict.
 	Summary string `json:"summary"`
+}
+
+type PatternRemediationState string
+
+const (
+	PatternRemediationUnresolved     PatternRemediationState = "unresolved"
+	PatternRemediationAlreadyPresent PatternRemediationState = "already_present"
+	PatternRemediationInconclusive   PatternRemediationState = "inconclusive"
+)
+
+// PatternRemediationVerification is the pinned-source target result.
+type PatternRemediationVerification struct {
+	State         PatternRemediationState `json:"state"`
+	Reason        string                  `json:"reason"`
+	Repository    string                  `json:"repository,omitempty"`
+	Revision      string                  `json:"revision,omitempty"`
+	FailureState  PatternRemediationState `json:"failure_state,omitempty"`
+	FailureBuilds []string                `json:"failure_builds,omitempty"`
+	PassingBuilds []string                `json:"passing_builds,omitempty"`
+}
+
+type PatternLifecycleState string
+
+const (
+	PatternLifecycleActive        PatternLifecycleState = "active"
+	PatternLifecycleObserving     PatternLifecycleState = "observing"
+	PatternLifecycleVerifiedFixed PatternLifecycleState = "verified_fixed"
+)
+
+// PatternLifecycle describes whether a recurring cause remains active.
+type PatternLifecycle struct {
+	State          PatternLifecycleState `json:"state"`
+	Reason         string                `json:"reason"`
+	SourceRevision string                `json:"source_revision,omitempty"`
+	PassingBuilds  []string              `json:"passing_builds,omitempty"`
 }
 
 // FailureClassification indicates the type of failure.
