@@ -49,10 +49,10 @@ type Runner interface {
 
 // ValidateSpec checks the generic workload boundary before Kubernetes writes.
 func ValidateSpec(spec Spec) error {
-	if !purposePattern.MatchString(strings.TrimSpace(spec.Purpose)) {
+	if spec.Purpose != strings.TrimSpace(spec.Purpose) || !purposePattern.MatchString(spec.Purpose) {
 		return fmt.Errorf("agent sandbox purpose is invalid")
 	}
-	if !envNamePattern.MatchString(strings.TrimSpace(spec.RequestEnv)) {
+	if spec.RequestEnv != strings.TrimSpace(spec.RequestEnv) || !envNamePattern.MatchString(spec.RequestEnv) {
 		return fmt.Errorf("agent sandbox request environment name is invalid")
 	}
 	if len(spec.Request) == 0 || len(spec.Request) > 256<<10 {

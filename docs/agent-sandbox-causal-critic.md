@@ -1,8 +1,9 @@
 # Agent Sandbox causal critic
 
 Status: private, disabled-by-default experimental implementation. It is wired to
-the scheduled fetcher and worker only when explicitly enabled. No critic image
-has been published and no production cluster evaluation has been completed.
+the scheduled fetcher and worker only when explicitly enabled. A public
+immutable test image and an AKS evaluation exist, but the image is not part of
+the release workflow and the critic is not approved for production use.
 
 ## Authority boundary
 
@@ -175,12 +176,23 @@ a promotion signal. The independent critic must catch meaningful causal gaps
 beyond the same-model judge without unacceptable malformed, unavailable,
 timeout, cost, latency, or cleanup regressions.
 
-## Remaining external blockers
+## Evaluation status
 
-- Publish authorization and an immutable critic image are still absent.
-- Infrastructure-level gateway identity authorization must be proven in the
-  target environment.
-- The secure RuntimeClass, AppArmor enforcement, egress enforcement, and
-  gateway policy need an AKS-specific validation.
-- Repeated cold critic comparisons have not been run.
-- Production enablement requires a separate decision after benchmark review.
+The August 9, 2026 AKS evaluation validated immutable digest execution, Kata
+isolation, RuntimeDefault AppArmor and seccomp, tokenless workload identity,
+admission denial cases, identity-gated gateway ingress, public-egress denial,
+UID-checked cleanup, and no leaked Sandboxes. The public test image was
+published manually for that evaluation. It remains intentionally absent from
+the release workflow.
+
+The first cold comparison matrix produced 10 valid and finalized reviews from
+15 trials, with cleanup succeeding in all 15. The Flatcar control produced no
+valid reviews, and the Kueue oracle did not reliably recover the complete
+initiating API-version chain. Fixture requests also consumed roughly 20K to 29K
+input tokens and commonly took 30 to 60 seconds.
+
+These results validate the runtime boundary, not diagnostic promotion. The
+critic remains disabled, private, sampled, and non-authoritative. Further work
+must improve structured validity, reduce critic-specific evidence size, and
+show repeated causal gains over the in-process analyzer before a separate
+production-enablement decision.

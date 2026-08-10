@@ -2,6 +2,7 @@ package causalcritic
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -15,6 +16,13 @@ import (
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
+
+func TestExecutionRequestBoundFitsSingleEnvironmentEntry(t *testing.T) {
+	encoded := base64.StdEncoding.EncodedLen(maxExecutionRequest)
+	if got := len(RequestEnv) + 1 + encoded + 1; got >= 128<<10 {
+		t.Fatalf("environment entry bytes = %d, want below %d", got, 128<<10)
+	}
+}
 
 func criticInput(t *testing.T) Input {
 	t.Helper()
@@ -122,6 +130,45 @@ func TestRuntimePreservesValidatedReviewWhenCleanupIsPending(t *testing.T) {
 	result, err := runtime.Review(t.Context(), input, "critic-run", nil)
 	if !errors.Is(err, engineruntime.ErrCleanupPending) || result.Execution.Review == nil || result.Execution.Review.Verdict != "pass" {
 		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestRuntimePreservesCleanupIdentityOnContractFailure(t *testing.T) {
+	input := criticInput(t)
+	work := &engineruntime.WorkRef{Backend: agentsandbox.Backend, Namespace: "critic", Name: "critic-run", UID: "uid-1"}
+	runner := fakeSandboxRunner{run: func(spec agentsandbox.Spec) (agentsandbox.Result, error) {
+		var request ExecutionRequest
+		if err := json.Unmarshal(spec.Request, &request); err != nil {
+			t.Fatal(err)
+		}
+		execution := ExecutionResult{
+			SchemaVersion: ExecutionSchemaVersion, ContractVersion: ContractVersion, PairHash: strings.Repeat("0", 64),
+			TerminalState: engineruntime.TerminalFailed, FailureReason: "invalid pair",
+			Usage: GatewayUsage{Status: "unavailable", Source: "gateway_response"}, DurationMs: 100,
+		}
+		data, _ := json.Marshal(execution)
+		return agentsandbox.Result{Output: string(data), FinishedReason: "PodFailed", Work: work, Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: false}}, engineruntime.ErrCleanupPending
+	}}
+	runtime := &Runtime{
+		Sandbox: runner, Gateway: engineruntime.ModelGatewayConfig{Endpoint: "https://gateway.platform.svc.cluster.local/v1", Model: "critic-model", ProtocolVersion: "openai-chat-completions-v1"},
+		Timeout: time.Minute, OutputLimitBytes: DefaultOutputLimit,
+	}
+	result, err := runtime.Review(t.Context(), input, "critic-run", nil)
+	if !errors.Is(err, engineruntime.ErrResultContract) || !errors.Is(err, engineruntime.ErrCleanupPending) || result.CleanupWork == nil || result.CleanupWork.UID != work.UID {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestRuntimeRejectsEmptyResult(t *testing.T) {
+	runtime := &Runtime{
+		Sandbox: fakeSandboxRunner{run: func(agentsandbox.Spec) (agentsandbox.Result, error) {
+			return agentsandbox.Result{Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true}}, nil
+		}},
+		Gateway: engineruntime.ModelGatewayConfig{Endpoint: "https://gateway.platform.svc.cluster.local/v1", Model: "critic-model", ProtocolVersion: "openai-chat-completions-v1"},
+		Timeout: time.Minute, OutputLimitBytes: DefaultOutputLimit,
+	}
+	if _, err := runtime.Review(t.Context(), criticInput(t), "critic-run", nil); !errors.Is(err, engineruntime.ErrMalformedResult) {
+		t.Fatalf("err=%v", err)
 	}
 }
 

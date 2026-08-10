@@ -473,7 +473,7 @@ func RecoverPendingCleanup(ctx context.Context, cleaner PendingCleaner, publicDi
 			return err
 		}
 		for _, record := range ledger.Records {
-			if record.Status == TrialCleanupPending && record.CleanupWork != nil {
+			if record.CleanupWork != nil {
 				pending = append(pending, record)
 			}
 		}
@@ -481,22 +481,32 @@ func RecoverPendingCleanup(ctx context.Context, cleaner PendingCleaner, publicDi
 	}); err != nil {
 		return err
 	}
-	var recovered []TrialRecord
+	type recoveredCleanup struct {
+		record      TrialRecord
+		priorStatus TrialStatus
+		work        engineruntime.WorkRef
+	}
+	var recovered []recoveredCleanup
 	var failures []error
 	for _, record := range pending {
+		priorStatus := record.Status
+		work := *record.CleanupWork
 		started := time.Now()
-		err := cleaner.Cleanup(ctx, *record.CleanupWork)
+		err := cleaner.Cleanup(ctx, work)
 		record.Telemetry.CleanupDurationMs += max(time.Since(started).Milliseconds(), 0)
 		if err != nil {
 			failures = append(failures, err)
 			continue
 		}
 		record.Telemetry.CleanupCompleted = true
-		record.Status = TrialSucceeded
-		record.ErrorCode = ""
-		record.Finalized = record.Review != nil && record.Telemetry.ValidationValid
 		record.CleanupWork = nil
-		recovered = append(recovered, record)
+		if priorStatus == TrialCleanupPending && record.Review != nil && record.Telemetry.ValidationValid {
+			record.Status = TrialSucceeded
+			record.ErrorCode = ""
+			record.FailureReason = ""
+		}
+		record.Finalized = record.Status == TrialSucceeded && record.Review != nil && record.Telemetry.CleanupCompleted
+		recovered = append(recovered, recoveredCleanup{record: record, priorStatus: priorStatus, work: work})
 	}
 	if len(recovered) > 0 {
 		if err := withLedgerLock(publicDir, ledgerPath, func(path string) error {
@@ -504,13 +514,14 @@ func RecoverPendingCleanup(ctx context.Context, cleaner PendingCleaner, publicDi
 			if err != nil {
 				return err
 			}
-			byAttempt := make(map[string]TrialRecord, len(recovered))
-			for _, record := range recovered {
-				byAttempt[record.AttemptHash] = record
+			byAttempt := make(map[string]recoveredCleanup, len(recovered))
+			for _, recovery := range recovered {
+				byAttempt[recovery.record.AttemptHash] = recovery
 			}
 			for index := range ledger.Records {
-				if record, ok := byAttempt[ledger.Records[index].AttemptHash]; ok && ledger.Records[index].Status == TrialCleanupPending {
-					ledger.Records[index] = record
+				recovery, ok := byAttempt[ledger.Records[index].AttemptHash]
+				if ok && ledger.Records[index].Status == recovery.priorStatus && ledger.Records[index].CleanupWork != nil && *ledger.Records[index].CleanupWork == recovery.work {
+					ledger.Records[index] = recovery.record
 				}
 			}
 			ledger.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)

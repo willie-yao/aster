@@ -2012,6 +2012,9 @@ expect_causal_critic_fail public-ledger 'ledger.mountPath must be under /private
 expect_causal_critic_fail noncanonical-ledger 'ledger.mountPath must be canonical' --set-string agentSandbox.causalCritic.ledger.mountPath=/private/../data
 expect_causal_critic_fail mutable-image 'image.digest must be an immutable sha256 digest' --set-string agentSandbox.causalCritic.image.digest=latest
 expect_causal_critic_fail orka-shadow 'cannot run with orka.agentAnalysisShadow' --set orka.agentAnalysisShadow.enabled=true
+expect_causal_critic_fail orka-fix 'cannot run with orka.fixRuntime' --set orka.fixRuntime.enabled=true "${fix_admission_args[@]}" --set orka.fixRuntime.image.tag=sha-test
+expect_causal_critic_fail shared-fix-identity 'must not share its namespace and workload ServiceAccount' -f "$tmp/agent-sandbox.yaml" --set agentSandbox.causalCritic.namespace=fix-eval --set agentSandbox.causalCritic.workloadServiceAccount.name=fix-workload
+expect_causal_critic_fail timeout-over-limit 'timeout must be at most 30m' --set-string agentSandbox.causalCritic.timeout=31m
 expect_causal_critic_fail reserved-env 'must not override reserved critic variable' --set fetcher.extraEnv[0].name=AGENT_SANDBOX_CRITIC_IMAGE --set fetcher.extraEnv[0].value=attacker
 
 echo 'Helm render checks passed.'

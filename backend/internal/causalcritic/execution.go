@@ -19,6 +19,7 @@ const (
 	ExecutionSchemaVersion = 1
 	RequestEnv             = "PROW_AI_CAUSAL_CRITIC_REQUEST_B64"
 	DefaultOutputLimit     = int64(64 << 10)
+	maxExecutionRequest    = 95 << 10
 )
 
 var decimalCostRE = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]{1,9})?$`)
@@ -107,15 +108,16 @@ func (r *Runtime) Review(ctx context.Context, input Input, executionID string, o
 	result.Telemetry = raw.Telemetry
 	result.CleanupWork = raw.Work
 	if strings.TrimSpace(raw.Output) == "" {
-		return result, runErr
+		return result, errors.Join(fmt.Errorf("%w: causal critic result is empty", engineruntime.ErrMalformedResult), runErr)
 	}
 	result.Telemetry.FinalizationChecked = true
 	parsed, err := DecodeExecutionResult(raw.Output)
 	if err != nil {
 		return result, errors.Join(fmt.Errorf("%w: causal critic result: %v", engineruntime.ErrMalformedResult, err), runErr)
 	}
+	result.Execution = parsed
 	if err := ValidateExecutionResult(parsed, request); err != nil {
-		return Result{Execution: parsed, Resources: raw.Resources, Telemetry: result.Telemetry}, errors.Join(fmt.Errorf("%w: causal critic result: %v", engineruntime.ErrResultContract, err), runErr)
+		return result, errors.Join(fmt.Errorf("%w: causal critic result: %v", engineruntime.ErrResultContract, err), runErr)
 	}
 	if parsed.Usage.Status == "reported" || parsed.Usage.Status == "partial" {
 		result.Telemetry.TokenUsageAvailable = parsed.Usage.InputTokens != 0 || parsed.Usage.OutputTokens != 0
@@ -125,13 +127,12 @@ func (r *Runtime) Review(ctx context.Context, input Input, executionID string, o
 		result.Telemetry.UsageStatus = "unavailable_from_gateway"
 	}
 	if raw.FinishedReason == "PodSucceeded" && parsed.TerminalState != engineruntime.TerminalSucceeded {
-		return Result{Execution: parsed, Resources: raw.Resources, Telemetry: result.Telemetry}, errors.Join(fmt.Errorf("%w: succeeded Pod reported %q", engineruntime.ErrResultContract, parsed.TerminalState), runErr)
+		return result, errors.Join(fmt.Errorf("%w: succeeded Pod reported %q", engineruntime.ErrResultContract, parsed.TerminalState), runErr)
 	}
 	if raw.FinishedReason == "PodFailed" && parsed.TerminalState == engineruntime.TerminalSucceeded {
-		return Result{Execution: parsed, Resources: raw.Resources, Telemetry: result.Telemetry}, errors.Join(fmt.Errorf("%w: failed Pod reported success", engineruntime.ErrResultContract), runErr)
+		return result, errors.Join(fmt.Errorf("%w: failed Pod reported success", engineruntime.ErrResultContract), runErr)
 	}
 	result.Telemetry.FinalizationValid = true
-	result.Execution = parsed
 	if parsed.TerminalState != engineruntime.TerminalSucceeded {
 		switch parsed.TerminalState {
 		case engineruntime.TerminalTimedOut:
@@ -192,8 +193,8 @@ func ValidateExecutionRequest(request ExecutionRequest) error {
 		return fmt.Errorf("causal critic output limit must be between 4096 and 1048576")
 	}
 	data, err := json.Marshal(request)
-	if err != nil || len(data) > 96<<10 {
-		return fmt.Errorf("causal critic execution request exceeds 98304 bytes")
+	if err != nil || len(data) > maxExecutionRequest {
+		return fmt.Errorf("causal critic execution request exceeds %d bytes", maxExecutionRequest)
 	}
 	return nil
 }

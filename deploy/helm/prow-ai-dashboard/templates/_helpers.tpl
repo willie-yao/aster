@@ -705,6 +705,7 @@ key, or bot token).
   {{- if not .Values.ai.enabled -}}{{- fail "agentSandbox.causalCritic requires ai.enabled=true" -}}{{- end -}}
   {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "agentSandbox.causalCritic requires analysisRuntime.type=inprocess" -}}{{- end -}}
   {{- if .Values.orka.agentAnalysisShadow.enabled -}}{{- fail "agentSandbox.causalCritic cannot run with orka.agentAnalysisShadow" -}}{{- end -}}
+  {{- if .Values.orka.fixRuntime.enabled -}}{{- fail "agentSandbox.causalCritic cannot run with orka.fixRuntime" -}}{{- end -}}
   {{- if not $cfg.namespace -}}{{- fail "agentSandbox.causalCritic.namespace is required" -}}{{- end -}}
   {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "agentSandbox.causalCritic.namespace must differ from the dashboard release namespace" -}}{{- end -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.namespace) -}}{{- fail "agentSandbox.causalCritic.namespace must be a lowercase DNS label" -}}{{- end -}}
@@ -714,6 +715,9 @@ key, or bot token).
   {{- if ne $cfg.image.pullPolicy "IfNotPresent" -}}{{- fail "agentSandbox.causalCritic.image.pullPolicy must be IfNotPresent" -}}{{- end -}}
   {{- $workloadSA := include "prow-ai-dashboard.agentSandboxCriticWorkloadServiceAccountName" . -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $workloadSA) -}}{{- fail "agentSandbox.causalCritic.workloadServiceAccount.name is required and must be a lowercase object name" -}}{{- end -}}
+  {{- if and .Values.agentSandbox.fixRuntime.enabled (eq $cfg.namespace .Values.agentSandbox.fixRuntime.namespace) (eq $workloadSA (include "prow-ai-dashboard.agentSandboxWorkloadServiceAccountName" .)) -}}
+    {{- fail "agentSandbox.causalCritic must not share its namespace and workload ServiceAccount with agentSandbox.fixRuntime" -}}
+  {{- end -}}
   {{- $clientSA := include "prow-ai-dashboard.agentSandboxClientServiceAccountName" . -}}
   {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.clientServiceAccountName) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
@@ -727,7 +731,18 @@ key, or bot token).
   {{- if not (regexMatch "^https://[^/]+[.](svc|svc[.]cluster[.]local|internal)(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $gateway.endpoint) -}}{{- fail "agentSandbox.causalCritic.modelGateway.endpoint must use internal service DNS" -}}{{- end -}}
   {{- if or (not $gateway.model) (contains "\n" $gateway.model) (contains "\r" $gateway.model) -}}{{- fail "agentSandbox.causalCritic.modelGateway.model is required and single-line" -}}{{- end -}}
   {{- if ne $gateway.protocolVersion "openai-chat-completions-v1" -}}{{- fail "agentSandbox.causalCritic.modelGateway.protocolVersion must be openai-chat-completions-v1" -}}{{- end -}}
-  {{- if not (regexMatch "^[1-9][0-9]*(s|m)$" (printf "%v" $cfg.timeout)) -}}{{- fail "agentSandbox.causalCritic.timeout must use positive whole seconds or minutes" -}}{{- end -}}
+  {{- $timeoutText := printf "%v" $cfg.timeout -}}
+  {{- $timeoutSeconds := 0 -}}
+  {{- if regexMatch "^[1-9][0-9]*s$" $timeoutText -}}
+    {{- if gt (len $timeoutText) 5 -}}{{- fail "agentSandbox.causalCritic.timeout must be at most 30m" -}}{{- end -}}
+    {{- $timeoutSeconds = trimSuffix "s" $timeoutText | int -}}
+  {{- else if regexMatch "^[1-9][0-9]*m$" $timeoutText -}}
+    {{- if gt (len $timeoutText) 3 -}}{{- fail "agentSandbox.causalCritic.timeout must be at most 30m" -}}{{- end -}}
+    {{- $timeoutSeconds = mul (trimSuffix "m" $timeoutText | int) 60 -}}
+  {{- else -}}
+    {{- fail "agentSandbox.causalCritic.timeout must use positive whole seconds or minutes" -}}
+  {{- end -}}
+  {{- if gt $timeoutSeconds 1800 -}}{{- fail "agentSandbox.causalCritic.timeout must be at most 30m" -}}{{- end -}}
   {{- if or (lt (int64 $cfg.outputLimitBytes) 4096) (gt (int64 $cfg.outputLimitBytes) 1048576) -}}{{- fail "agentSandbox.causalCritic.outputLimitBytes must be between 4096 and 1048576" -}}{{- end -}}
   {{- if or (lt (int $cfg.maxPerRun) 1) (gt (int $cfg.maxPerRun) 10) -}}{{- fail "agentSandbox.causalCritic.maxPerRun must be between 1 and 10" -}}{{- end -}}
   {{- if not $cfg.networkPolicy.enabled -}}{{- fail "agentSandbox.causalCritic.networkPolicy.enabled must be true" -}}{{- end -}}

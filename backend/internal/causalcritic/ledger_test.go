@@ -145,3 +145,35 @@ func TestRecoverPendingCleanupFinalizesWithoutRerunningReview(t *testing.T) {
 		t.Fatalf("cleaner=%+v ledger=%+v reviewer calls=%d", cleaner, ledger, reviewer.calls)
 	}
 }
+
+func TestRecoverPendingCleanupPreservesFailedReviewStatus(t *testing.T) {
+	input := criticInput(t)
+	reviewer := &trialReviewer{
+		result: Result{
+			CleanupWork: &engineruntime.WorkRef{Backend: "agent-sandbox", Namespace: "critic", Name: "critic-run", UID: "uid-1"},
+			Telemetry:   engineruntime.GenerateTelemetry{CleanupCompleted: false, FinalizationChecked: true},
+		},
+		err: errors.Join(engineruntime.ErrMalformedResult, engineruntime.ErrCleanupPending),
+	}
+	root := t.TempDir()
+	publicDir, ledgerPath := filepath.Join(root, "public"), filepath.Join(root, "private", "critic.json")
+	record, err := RunTrial(t.Context(), reviewer, TrialSpec{
+		PublicDir: publicDir, LedgerPath: ledgerPath, Metadata: trialMetadata(), Input: input,
+		ExecutionID: "critic-cleanup-failure", RuntimeIdentity: testCriticRuntimeIdentity(), Now: func() time.Time { return time.Now().UTC() },
+	})
+	if !errors.Is(err, engineruntime.ErrMalformedResult) || record.Status != TrialMalformedResult || record.CleanupWork == nil {
+		t.Fatalf("record=%+v err=%v", record, err)
+	}
+	cleaner := &trialCleaner{}
+	if err := RecoverPendingCleanup(t.Context(), cleaner, publicDir, ledgerPath); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := loadLedger(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ledger.Records[0]
+	if cleaner.calls != 1 || got.Status != TrialMalformedResult || got.Finalized || !got.Telemetry.CleanupCompleted || got.CleanupWork != nil {
+		t.Fatalf("cleaner=%+v record=%+v", cleaner, got)
+	}
+}
