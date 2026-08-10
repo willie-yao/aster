@@ -84,6 +84,9 @@ type chatCompletionsUsage struct {
 	OutputTokens            int                    `json:"output_tokens"`
 	PromptTokensDetails     chatPromptTokenDetails `json:"prompt_tokens_details"`
 	CompletionTokensDetails chatOutputTokenDetails `json:"completion_tokens_details"`
+	// These Anthropic usage fields may be forwarded by compatible chat gateways.
+	CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
 }
 
 type chatPromptTokenDetails struct {
@@ -223,12 +226,25 @@ func chatTokenUsage(usage *chatCompletionsUsage) aiusage.TokenUsage {
 	if input == 0 {
 		input = usage.PromptTokens
 	}
+	cached := usage.PromptTokensDetails.CachedTokens
+	cacheWrite := 0
+	cacheWriteReported := usage.CacheCreationInputTokens != nil
+	if usage.CacheReadInputTokens != nil || usage.CacheCreationInputTokens != nil {
+		if usage.CacheReadInputTokens != nil {
+			cached = *usage.CacheReadInputTokens
+		}
+		if usage.CacheCreationInputTokens != nil {
+			cacheWrite = *usage.CacheCreationInputTokens
+		}
+		input += cached + cacheWrite
+	}
 	output := usage.OutputTokens
 	if output == 0 {
 		output = usage.CompletionTokens
 	}
 	return aiusage.TokenUsage{
-		Reported: true, InputTokens: input, CachedInputTokens: usage.PromptTokensDetails.CachedTokens,
+		Reported: true, InputTokens: input, CachedInputTokens: cached,
+		CacheWriteInputTokens: cacheWrite, CacheWriteInputTokensReported: cacheWriteReported,
 		OutputTokens: output, ReasoningTokens: usage.CompletionTokensDetails.ReasoningTokens,
 	}
 }

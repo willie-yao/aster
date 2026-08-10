@@ -54,6 +54,7 @@ func Begin(ctx context.Context, recorder *Recorder, metadata Metadata) (context.
 		ID: executionID, LogicalID: logicalID, Origin: origin, Feature: feature,
 		StartedAt:        started.Format(time.RFC3339Nano),
 		ModelFingerprint: safeFingerprint(metadata.ModelFingerprint),
+		Model:            safeModelID(metadata.Model),
 		Correlation:      metadata.Correlation,
 	}}
 	return context.WithValue(ctx, operationContextKey{}, op), op
@@ -61,6 +62,11 @@ func Begin(ctx context.Context, recorder *Recorder, metadata Metadata) (context.
 
 // ObserveModelRequest adds one logical provider request to the active operation.
 func ObserveModelRequest(ctx context.Context, usage TokenUsage) {
+	ObserveModelRequestWithModel(ctx, usage, "", "")
+}
+
+// ObserveModelRequestWithModel adds one provider request and safe model provenance.
+func ObserveModelRequestWithModel(ctx context.Context, usage TokenUsage, model, fingerprint string) {
 	op, _ := ctx.Value(operationContextKey{}).(*Operation)
 	if op == nil {
 		return
@@ -73,28 +79,41 @@ func ObserveModelRequest(ctx context.Context, usage TokenUsage) {
 	if op.usage.ModelRequests < math.MaxInt {
 		op.usage.ModelRequests++
 	}
+	op.usage.CoverageCountsKnown = true
+	op.setModelLocked(model, fingerprint)
+	op.setUsageSourceLocked(UsageSourceProviderResponse)
 	if !usage.Reported {
 		op.usage.UnreportedRequests++
 		return
 	}
-	if usage.InputTokens < 0 || usage.CachedInputTokens < 0 || usage.CachedInputTokens > usage.InputTokens ||
+	if usage.InputTokens < 0 || usage.CachedInputTokens < 0 || usage.CacheWriteInputTokens < 0 ||
+		usage.CachedInputTokens > usage.InputTokens || usage.CacheWriteInputTokens > usage.InputTokens-usage.CachedInputTokens ||
 		usage.OutputTokens < 0 || usage.ReasoningTokens < 0 || usage.ReasoningTokens > usage.OutputTokens {
 		op.usage.UnreportedRequests++
+		op.usage.InvalidUsageRequests++
 		op.usage.UsageInvalid = true
 		return
 	}
 	input, inputOK := checkedTokenAdd(op.usage.InputTokens, usage.InputTokens)
 	cached, cachedOK := checkedTokenAdd(op.usage.CachedInputTokens, usage.CachedInputTokens)
+	cacheWrite, cacheWriteOK := checkedTokenAdd(op.usage.CacheWriteInputTokens, usage.CacheWriteInputTokens)
 	output, outputOK := checkedTokenAdd(op.usage.OutputTokens, usage.OutputTokens)
 	reasoning, reasoningOK := checkedTokenAdd(op.usage.ReasoningTokens, usage.ReasoningTokens)
-	if !inputOK || !cachedOK || !outputOK || !reasoningOK {
+	if !inputOK || !cachedOK || !cacheWriteOK || !outputOK || !reasoningOK {
 		op.usage.UnreportedRequests++
+		op.usage.InvalidUsageRequests++
 		op.usage.UsageInvalid = true
 		return
 	}
 	op.usage.ReportedRequests++
+	if usage.CacheWriteInputTokensReported {
+		op.usage.CacheWriteReportedRequests++
+	} else {
+		op.usage.CacheWriteUnreportedRequests++
+	}
 	op.usage.InputTokens = input
 	op.usage.CachedInputTokens = cached
+	op.usage.CacheWriteInputTokens = cacheWrite
 	op.usage.OutputTokens = output
 	op.usage.ReasoningTokens = reasoning
 }
@@ -116,6 +135,26 @@ func MarkExternalUnmetered(ctx context.Context) {
 	defer op.mu.Unlock()
 	if !op.finished {
 		op.usage.ExternalUnmetered = true
+		op.usage.CoverageCountsKnown = true
+		op.setUsageSourceLocked(UsageSourceExternalRuntime)
+	}
+}
+
+// MarkModelGatewayExcluded records external model work whose gateway does not
+// return token counts through the runtime contract.
+func MarkModelGatewayExcluded(ctx context.Context, model string) {
+	op, _ := ctx.Value(operationContextKey{}).(*Operation)
+	if op == nil {
+		return
+	}
+	op.mu.Lock()
+	defer op.mu.Unlock()
+	if !op.finished {
+		op.usage.ExternalUnmetered = true
+		op.usage.ModelGatewayExcluded = true
+		op.usage.CoverageCountsKnown = true
+		op.setModelLocked(model, "")
+		op.setUsageSourceLocked(UsageSourceModelGateway)
 	}
 }
 
@@ -196,4 +235,57 @@ func safeFingerprint(value string) string {
 		}
 	}
 	return value
+}
+
+func safeModelID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 160 || strings.Contains(value, "://") || strings.ContainsAny(value, "?#") {
+		return ""
+	}
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("-._:/", r) {
+			continue
+		}
+		return ""
+	}
+	return value
+}
+
+func (o *Operation) setModelLocked(model, fingerprint string) {
+	model = safeModelID(model)
+	fingerprint = safeFingerprint(fingerprint)
+	if o.usage.MixedModels {
+		return
+	}
+	if o.usage.Model == "" && o.usage.ModelFingerprint == "" {
+		o.usage.Model = model
+		o.usage.ModelFingerprint = fingerprint
+		return
+	}
+	if model != "" && o.usage.Model != "" && model != o.usage.Model ||
+		fingerprint != "" && o.usage.ModelFingerprint != "" && fingerprint != o.usage.ModelFingerprint {
+		o.usage.Model = ""
+		o.usage.ModelFingerprint = ""
+		o.usage.MixedModels = true
+		return
+	}
+	if o.usage.Model == "" {
+		o.usage.Model = model
+	}
+	if o.usage.ModelFingerprint == "" {
+		o.usage.ModelFingerprint = fingerprint
+	}
+}
+
+func (o *Operation) setUsageSourceLocked(source UsageSource) {
+	if source == "" || o.usage.UsageSource == UsageSourceMixed {
+		return
+	}
+	if o.usage.UsageSource == "" {
+		o.usage.UsageSource = source
+		return
+	}
+	if o.usage.UsageSource != source {
+		o.usage.UsageSource = UsageSourceMixed
+	}
 }

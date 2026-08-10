@@ -1267,12 +1267,12 @@ func TestEffectiveAIUsage(t *testing.T) {
 	zero := 0
 	configured := (&AI{Usage: &AIUsage{
 		Enabled: &falseValue, RetentionDays: 30, RecentOperations: &zero,
-		Pricing: &AIUsagePricing{Currency: " USD ", InputPerMillion: " 1.25 ", OutputPerMillion: " 10 "},
+		Pricing: &AIUsagePricing{Currency: " USD ", InputPerMillion: " 1.25 ", CacheWriteInputPerMillion: " 1.5 ", OutputPerMillion: " 10 "},
 	}}).EffectiveUsage()
 	if configured.Enabled || configured.RetentionDays != 30 || configured.RecentOperations != 0 {
 		t.Fatalf("configured = %+v", configured)
 	}
-	if configured.Pricing.Currency != "USD" || configured.Pricing.CachedInputPerMillion != "1.25" {
+	if configured.Pricing.Currency != "USD" || configured.Pricing.CachedInputPerMillion != "1.25" || configured.Pricing.CacheWriteInputPerMillion != "1.5" {
 		t.Fatalf("pricing = %+v", configured.Pricing)
 	}
 }
@@ -1292,7 +1292,7 @@ func TestValidateAIUsage(t *testing.T) {
 		wantErr string
 	}{
 		{name: "defaults"},
-		{name: "valid", usage: &AIUsage{RetentionDays: 30, RecentOperations: intPtr(0), Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "1.25", CachedInputPerMillion: "0.125", OutputPerMillion: "10"}}},
+		{name: "valid", usage: &AIUsage{RetentionDays: 30, RecentOperations: intPtr(0), Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "1.25", CachedInputPerMillion: "0.125", CacheWriteInputPerMillion: "1.5", OutputPerMillion: "10"}}},
 		{name: "retention", usage: &AIUsage{RetentionDays: 3651}, wantErr: "retention_days"},
 		{name: "recent negative", usage: &AIUsage{RecentOperations: intPtr(-1)}, wantErr: "recent_operations"},
 		{name: "recent large", usage: &AIUsage{RecentOperations: intPtr(5001)}, wantErr: "recent_operations"},
@@ -1303,6 +1303,7 @@ func TestValidateAIUsage(t *testing.T) {
 		{name: "negative", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "-1", OutputPerMillion: "2"}}, wantErr: "non-negative decimal"},
 		{name: "exponent", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "1e2", OutputPerMillion: "2"}}, wantErr: "non-negative decimal"},
 		{name: "too large", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "1000000.1", OutputPerMillion: "2"}}, wantErr: "at most"},
+		{name: "negative cache write", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "1", CacheWriteInputPerMillion: "-1", OutputPerMillion: "2"}}, wantErr: "cache_write_input_per_million"},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {

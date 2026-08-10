@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -47,7 +48,11 @@ func TestClientCallModelRecordsTrace(t *testing.T) {
 	transport := &recordingTransport{result: &modelResponse{
 		HasMessage: true, Message: modelMessage{Role: "assistant", ToolCalls: []modelToolCall{{ID: "call"}}},
 		ResponseID: "resp-1", Status: "completed", FinishReason: "tool_calls",
-		Attempts: 2, HTTPStatus: 200, Usage: aiusage.TokenUsage{Reported: true, InputTokens: 11, CachedInputTokens: 3, OutputTokens: 7, ReasoningTokens: 2},
+		Attempts: 2, HTTPStatus: 200, Usage: aiusage.TokenUsage{
+			Reported: true, InputTokens: 11, CachedInputTokens: 3,
+			CacheWriteInputTokens: 2, CacheWriteInputTokensReported: true,
+			OutputTokens: 7, ReasoningTokens: 2,
+		},
 	}}
 	client := &Client{model: "model-a", transport: transport}
 	store := NewTraceStore()
@@ -58,7 +63,7 @@ func TestClientCallModelRecordsTrace(t *testing.T) {
 	}
 	trace.Finish("success", nil)
 	event := store.Snapshot().Traces[0].Events[0]
-	if event.Kind != "model_request" || event.ResponseID != "resp-1" || event.Attempts != 2 || !event.UsageReported || event.InputTokens != 11 || event.CachedInputTokens != 3 || event.OutputTokens != 7 || event.ReasoningTokens != 2 || event.ToolCallCount != 1 {
+	if event.Kind != "model_request" || event.ResponseID != "resp-1" || event.Attempts != 2 || !event.UsageReported || event.InputTokens != 11 || event.CachedInputTokens != 3 || !event.CacheWriteInputTokensReported || event.CacheWriteInputTokens != 2 || event.OutputTokens != 7 || event.ReasoningTokens != 2 || event.ToolCallCount != 1 {
 		t.Fatalf("event = %+v", event)
 	}
 }
@@ -77,7 +82,7 @@ func TestClientCallModelRecordsUsageOperation(t *testing.T) {
 	}
 	operation.Finish(aiusage.OutcomeSuccess)
 	got := recorder.Snapshot().Days[0].Totals
-	if got.ModelRequests != 1 || got.ReportedRequests != 1 || got.InputTokens != 9 || got.OutputTokens != 4 {
+	if got.ModelRequests != 1 || got.ReportedRequests != 1 || got.CacheWriteUnreportedRequests != 1 || got.InputTokens != 9 || got.OutputTokens != 4 {
 		t.Fatalf("usage totals = %+v", got)
 	}
 }
@@ -107,6 +112,23 @@ func TestChatTokenUsageDistinguishesAbsentAndZero(t *testing.T) {
 	}
 	if got := chatTokenUsage(&chatCompletionsUsage{}); !got.Reported || got.InputTokens != 0 || got.OutputTokens != 0 {
 		t.Fatalf("present zero usage = %+v", got)
+	}
+}
+
+func TestChatTokenUsageRecognizesCacheCreationFields(t *testing.T) {
+	var wire chatCompletionsResponse
+	if err := json.Unmarshal([]byte(`{"usage":{"input_tokens":11,"output_tokens":3,"cache_read_input_tokens":5,"cache_creation_input_tokens":7}}`), &wire); err != nil {
+		t.Fatal(err)
+	}
+	got := chatTokenUsage(wire.Usage)
+	if !got.Reported || got.InputTokens != 23 || got.CachedInputTokens != 5 ||
+		!got.CacheWriteInputTokensReported || got.CacheWriteInputTokens != 7 || got.OutputTokens != 3 {
+		t.Fatalf("usage = %+v", got)
+	}
+	zero := 0
+	got = chatTokenUsage(&chatCompletionsUsage{CacheCreationInputTokens: &zero})
+	if !got.CacheWriteInputTokensReported || got.CacheWriteInputTokens != 0 {
+		t.Fatalf("present zero cache write usage = %+v", got)
 	}
 }
 

@@ -45,6 +45,7 @@ type AnalysisTrace struct {
 	BuildID    string       `json:"build_id"`
 	TestName   string       `json:"test_name"`
 	APIMode    string       `json:"api_mode"`
+	Model      string       `json:"model,omitempty"`
 	StartedAt  string       `json:"started_at"`
 	RecordedAt string       `json:"recorded_at,omitempty"`
 	ElapsedMs  int          `json:"elapsed_ms"`
@@ -91,70 +92,73 @@ type DraftDecisionTrace struct {
 
 // TraceEvent is one bounded, content-free analysis event.
 type TraceEvent struct {
-	Sequence                  int                 `json:"sequence"`
-	ElapsedMs                 int                 `json:"elapsed_ms"`
-	Kind                      string              `json:"kind"`
-	Outcome                   string              `json:"outcome,omitempty"`
-	ResponseID                string              `json:"response_id,omitempty"`
-	Status                    string              `json:"status,omitempty"`
-	FinishReason              string              `json:"finish_reason,omitempty"`
-	Tool                      string              `json:"tool,omitempty"`
-	DurationMs                int                 `json:"duration_ms,omitempty"`
-	Attempts                  int                 `json:"attempts,omitempty"`
-	HTTPStatus                int                 `json:"http_status,omitempty"`
-	UsageReported             bool                `json:"usage_reported,omitempty"`
-	InputTokens               int                 `json:"input_tokens,omitempty"`
-	CachedInputTokens         int                 `json:"cached_input_tokens,omitempty"`
-	OutputTokens              int                 `json:"output_tokens,omitempty"`
-	ReasoningTokens           int                 `json:"reasoning_tokens,omitempty"`
-	EstimatedPromptTokens     int                 `json:"estimated_prompt_tokens,omitempty"`
-	ContextLimitTokens        int                 `json:"context_limit_tokens,omitempty"`
-	ReservedTokens            int                 `json:"reserved_tokens,omitempty"`
-	MessageCount              int                 `json:"message_count,omitempty"`
-	ModelCallCount            int                 `json:"model_call_count,omitempty"`
-	ToolCallCount             int                 `json:"tool_call_count,omitempty"`
-	CandidateCount            int                 `json:"candidate_count,omitempty"`
-	ValidCount                int                 `json:"valid_count,omitempty"`
-	UniqueCandidateCount      int                 `json:"unique_candidate_count,omitempty"`
-	IncompleteCount           int                 `json:"incomplete_count,omitempty"`
-	ContractLikeRejectedCount int                 `json:"contract_like_rejected_count,omitempty"`
-	NormalizedCount           int                 `json:"normalized_count,omitempty"`
-	ScanTruncated             bool                `json:"scan_truncated,omitempty"`
-	Bytes                     int                 `json:"bytes,omitempty"`
-	Elided                    int                 `json:"elided,omitempty"`
-	Retry                     int                 `json:"retry,omitempty"`
-	IssueCount                int                 `json:"issue_count,omitempty"`
-	CritiquePunts             int                 `json:"critique_punts,omitempty"`
-	CritiqueUnread            int                 `json:"critique_unread,omitempty"`
-	CritiqueCitations         int                 `json:"critique_citations,omitempty"`
-	CritiqueSkills            int                 `json:"critique_skills,omitempty"`
-	CritiqueGroups            int                 `json:"critique_groups,omitempty"`
-	CritiqueTransient         int                 `json:"critique_transient,omitempty"`
-	CritiqueRules             []string            `json:"critique_rules,omitempty"`
-	CritiqueHardRules         []string            `json:"critique_hard_rules,omitempty"`
-	CritiqueSoftRules         []string            `json:"critique_soft_rules,omitempty"`
-	SemanticFindings          []string            `json:"semantic_findings,omitempty"`
-	CacheRejectionReason      string              `json:"cache_rejection_reason,omitempty"`
-	DraftDecision             *DraftDecisionTrace `json:"draft_decision,omitempty"`
-	RetryAdmitted             bool                `json:"retry_admitted,omitempty"`
-	RetryDeniedReason         string              `json:"retry_denied_reason,omitempty"`
-	InitialIssueCount         int                 `json:"initial_issue_count,omitempty"`
-	RevisedIssueCount         int                 `json:"revised_issue_count,omitempty"`
-	NewEvidenceReads          int                 `json:"new_evidence_reads,omitempty"`
-	RootCauseChanged          bool                `json:"root_cause_changed,omitempty"`
-	SelectedAttempt           int                 `json:"selected_attempt,omitempty"`
-	RetryDurationMs           int                 `json:"retry_duration_ms,omitempty"`
-	RemainingTimeMs           int                 `json:"remaining_time_ms,omitempty"`
-	ErrorCode                 string              `json:"error_code,omitempty"`
-	ValidationCode            string              `json:"validation_code,omitempty"`
+	Sequence                      int                 `json:"sequence"`
+	ElapsedMs                     int                 `json:"elapsed_ms"`
+	Kind                          string              `json:"kind"`
+	Outcome                       string              `json:"outcome,omitempty"`
+	ResponseID                    string              `json:"response_id,omitempty"`
+	Status                        string              `json:"status,omitempty"`
+	FinishReason                  string              `json:"finish_reason,omitempty"`
+	Tool                          string              `json:"tool,omitempty"`
+	DurationMs                    int                 `json:"duration_ms,omitempty"`
+	Attempts                      int                 `json:"attempts,omitempty"`
+	HTTPStatus                    int                 `json:"http_status,omitempty"`
+	UsageReported                 bool                `json:"usage_reported,omitempty"`
+	InputTokens                   int                 `json:"input_tokens,omitempty"`
+	CachedInputTokens             int                 `json:"cached_input_tokens,omitempty"`
+	CacheWriteInputTokens         int                 `json:"cache_write_input_tokens,omitempty"`
+	CacheWriteInputTokensReported bool                `json:"cache_write_input_tokens_reported,omitempty"`
+	OutputTokens                  int                 `json:"output_tokens,omitempty"`
+	ReasoningTokens               int                 `json:"reasoning_tokens,omitempty"`
+	EstimatedPromptTokens         int                 `json:"estimated_prompt_tokens,omitempty"`
+	ContextLimitTokens            int                 `json:"context_limit_tokens,omitempty"`
+	ReservedTokens                int                 `json:"reserved_tokens,omitempty"`
+	MessageCount                  int                 `json:"message_count,omitempty"`
+	ModelCallCount                int                 `json:"model_call_count,omitempty"`
+	ToolCallCount                 int                 `json:"tool_call_count,omitempty"`
+	CandidateCount                int                 `json:"candidate_count,omitempty"`
+	ValidCount                    int                 `json:"valid_count,omitempty"`
+	UniqueCandidateCount          int                 `json:"unique_candidate_count,omitempty"`
+	IncompleteCount               int                 `json:"incomplete_count,omitempty"`
+	ContractLikeRejectedCount     int                 `json:"contract_like_rejected_count,omitempty"`
+	NormalizedCount               int                 `json:"normalized_count,omitempty"`
+	ScanTruncated                 bool                `json:"scan_truncated,omitempty"`
+	Bytes                         int                 `json:"bytes,omitempty"`
+	Elided                        int                 `json:"elided,omitempty"`
+	Retry                         int                 `json:"retry,omitempty"`
+	IssueCount                    int                 `json:"issue_count,omitempty"`
+	CritiquePunts                 int                 `json:"critique_punts,omitempty"`
+	CritiqueUnread                int                 `json:"critique_unread,omitempty"`
+	CritiqueCitations             int                 `json:"critique_citations,omitempty"`
+	CritiqueSkills                int                 `json:"critique_skills,omitempty"`
+	CritiqueGroups                int                 `json:"critique_groups,omitempty"`
+	CritiqueTransient             int                 `json:"critique_transient,omitempty"`
+	CritiqueRules                 []string            `json:"critique_rules,omitempty"`
+	CritiqueHardRules             []string            `json:"critique_hard_rules,omitempty"`
+	CritiqueSoftRules             []string            `json:"critique_soft_rules,omitempty"`
+	SemanticFindings              []string            `json:"semantic_findings,omitempty"`
+	CacheRejectionReason          string              `json:"cache_rejection_reason,omitempty"`
+	DraftDecision                 *DraftDecisionTrace `json:"draft_decision,omitempty"`
+	RetryAdmitted                 bool                `json:"retry_admitted,omitempty"`
+	RetryDeniedReason             string              `json:"retry_denied_reason,omitempty"`
+	InitialIssueCount             int                 `json:"initial_issue_count,omitempty"`
+	RevisedIssueCount             int                 `json:"revised_issue_count,omitempty"`
+	NewEvidenceReads              int                 `json:"new_evidence_reads,omitempty"`
+	RootCauseChanged              bool                `json:"root_cause_changed,omitempty"`
+	SelectedAttempt               int                 `json:"selected_attempt,omitempty"`
+	RetryDurationMs               int                 `json:"retry_duration_ms,omitempty"`
+	RemainingTimeMs               int                 `json:"remaining_time_ms,omitempty"`
+	ErrorCode                     string              `json:"error_code,omitempty"`
+	ValidationCode                string              `json:"validation_code,omitempty"`
 }
 
-// TraceMetadata identifies one analysis without model or endpoint details.
+// TraceMetadata identifies one analysis without endpoint details.
 type TraceMetadata struct {
 	JobID    string
 	BuildID  string
 	TestName string
 	APIMode  string
+	Model    string
 }
 
 // TraceStore collects completed traces for one fetch run.
@@ -207,6 +211,7 @@ func (s *TraceStore) Start(meta TraceMetadata) *TraceSession {
 			BuildID:   traceText(meta.BuildID),
 			TestName:  traceText(meta.TestName),
 			APIMode:   traceText(meta.APIMode),
+			Model:     traceText(meta.Model),
 			StartedAt: now.Format(time.RFC3339Nano),
 			Events:    []TraceEvent{},
 		},

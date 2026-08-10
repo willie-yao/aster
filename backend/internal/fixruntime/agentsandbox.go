@@ -445,7 +445,7 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	}
 
 	started := r.now()
-	result.Telemetry.UsageStatus = "unavailable_from_agent_runtime"
+	result.Telemetry.UsageStatus = "unavailable_from_model_gateway"
 	runCtx, cancel := context.WithTimeout(ctx, spec.Timeout+agentSandboxResultGrace+5*time.Second)
 	defer cancel()
 	object := r.sandboxObjectForSpec(name, spec, contractHash[:], executionID)

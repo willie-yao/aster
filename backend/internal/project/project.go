@@ -440,10 +440,11 @@ type AIUsage struct {
 
 // AIUsagePricing is one operator-supplied price table per million tokens.
 type AIUsagePricing struct {
-	Currency              string `yaml:"currency,omitempty" json:"-"`
-	InputPerMillion       string `yaml:"input_per_million,omitempty" json:"-"`
-	CachedInputPerMillion string `yaml:"cached_input_per_million,omitempty" json:"-"`
-	OutputPerMillion      string `yaml:"output_per_million,omitempty" json:"-"`
+	Currency                  string `yaml:"currency,omitempty" json:"-"`
+	InputPerMillion           string `yaml:"input_per_million,omitempty" json:"-"`
+	CachedInputPerMillion     string `yaml:"cached_input_per_million,omitempty" json:"-"`
+	CacheWriteInputPerMillion string `yaml:"cache_write_input_per_million,omitempty" json:"-"`
+	OutputPerMillion          string `yaml:"output_per_million,omitempty" json:"-"`
 }
 
 // ResolvedAIUsage contains usage defaults ready for runtime wiring.
@@ -475,10 +476,11 @@ func (a *AI) EffectiveUsage() ResolvedAIUsage {
 	}
 	if a.Usage.Pricing != nil {
 		out.Pricing = AIUsagePricing{
-			Currency:              strings.TrimSpace(a.Usage.Pricing.Currency),
-			InputPerMillion:       strings.TrimSpace(a.Usage.Pricing.InputPerMillion),
-			CachedInputPerMillion: strings.TrimSpace(a.Usage.Pricing.CachedInputPerMillion),
-			OutputPerMillion:      strings.TrimSpace(a.Usage.Pricing.OutputPerMillion),
+			Currency:                  strings.TrimSpace(a.Usage.Pricing.Currency),
+			InputPerMillion:           strings.TrimSpace(a.Usage.Pricing.InputPerMillion),
+			CachedInputPerMillion:     strings.TrimSpace(a.Usage.Pricing.CachedInputPerMillion),
+			CacheWriteInputPerMillion: strings.TrimSpace(a.Usage.Pricing.CacheWriteInputPerMillion),
+			OutputPerMillion:          strings.TrimSpace(a.Usage.Pricing.OutputPerMillion),
 		}
 		if out.Pricing.CachedInputPerMillion == "" {
 			out.Pricing.CachedInputPerMillion = out.Pricing.InputPerMillion
@@ -1142,8 +1144,9 @@ func validateAIUsagePricing(pricing *AIUsagePricing) error {
 	currency := strings.TrimSpace(pricing.Currency)
 	input := strings.TrimSpace(pricing.InputPerMillion)
 	cached := strings.TrimSpace(pricing.CachedInputPerMillion)
+	cacheWrite := strings.TrimSpace(pricing.CacheWriteInputPerMillion)
 	output := strings.TrimSpace(pricing.OutputPerMillion)
-	if currency == "" && input == "" && cached == "" && output == "" {
+	if currency == "" && input == "" && cached == "" && cacheWrite == "" && output == "" {
 		return nil
 	}
 	if !validAIUsageCurrency(currency) {
@@ -1158,10 +1161,11 @@ func validateAIUsagePricing(pricing *AIUsagePricing) error {
 	}{
 		{name: "input_per_million", value: input},
 		{name: "cached_input_per_million", value: cached},
+		{name: "cache_write_input_per_million", value: cacheWrite},
 		{name: "output_per_million", value: output},
 	}
 	for _, field := range fields {
-		if field.value == "" && field.name == "cached_input_per_million" {
+		if field.value == "" && (field.name == "cached_input_per_million" || field.name == "cache_write_input_per_million") {
 			continue
 		}
 		if err := validateAIUsageRate(field.value); err != nil {

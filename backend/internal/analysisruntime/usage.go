@@ -17,10 +17,11 @@ func NewUsageRecorder(dataDir, filename string, cfg *project.Config) (*aiusage.R
 		return nil, nil
 	}
 	pricing, err := aiusage.NewPriceTable(aiusage.Rates{
-		Currency:              effective.Pricing.Currency,
-		InputPerMillion:       effective.Pricing.InputPerMillion,
-		CachedInputPerMillion: effective.Pricing.CachedInputPerMillion,
-		OutputPerMillion:      effective.Pricing.OutputPerMillion,
+		Currency:                  effective.Pricing.Currency,
+		InputPerMillion:           effective.Pricing.InputPerMillion,
+		CachedInputPerMillion:     effective.Pricing.CachedInputPerMillion,
+		CacheWriteInputPerMillion: effective.Pricing.CacheWriteInputPerMillion,
+		OutputPerMillion:          effective.Pricing.OutputPerMillion,
 	})
 	if err != nil {
 		return nil, err

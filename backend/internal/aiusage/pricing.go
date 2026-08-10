@@ -12,20 +12,22 @@ const maxRatePerMillion = "1000000"
 
 // Rates are normalized currency prices per one million tokens.
 type Rates struct {
-	Currency              string
-	InputPerMillion       string
-	CachedInputPerMillion string
-	OutputPerMillion      string
+	Currency                  string
+	InputPerMillion           string
+	CachedInputPerMillion     string
+	CacheWriteInputPerMillion string
+	OutputPerMillion          string
 }
 
 // PriceTable applies one immutable pricing snapshot to operations.
 type PriceTable struct {
-	currency    string
-	input       *big.Rat
-	cachedInput *big.Rat
-	output      *big.Rat
-	hash        string
-	configured  bool
+	currency        string
+	input           *big.Rat
+	cachedInput     *big.Rat
+	cacheWriteInput *big.Rat
+	output          *big.Rat
+	hash            string
+	configured      bool
 }
 
 // NewPriceTable validates and normalizes a pricing table. An entirely empty
@@ -34,8 +36,9 @@ func NewPriceTable(rates Rates) (PriceTable, error) {
 	rates.Currency = strings.TrimSpace(rates.Currency)
 	rates.InputPerMillion = strings.TrimSpace(rates.InputPerMillion)
 	rates.CachedInputPerMillion = strings.TrimSpace(rates.CachedInputPerMillion)
+	rates.CacheWriteInputPerMillion = strings.TrimSpace(rates.CacheWriteInputPerMillion)
 	rates.OutputPerMillion = strings.TrimSpace(rates.OutputPerMillion)
-	if rates.Currency == "" && rates.InputPerMillion == "" && rates.CachedInputPerMillion == "" && rates.OutputPerMillion == "" {
+	if rates.Currency == "" && rates.InputPerMillion == "" && rates.CachedInputPerMillion == "" && rates.CacheWriteInputPerMillion == "" && rates.OutputPerMillion == "" {
 		return PriceTable{}, nil
 	}
 	if !validCurrency(rates.Currency) {
@@ -55,14 +58,25 @@ func NewPriceTable(rates Rates) (PriceTable, error) {
 	if err != nil {
 		return PriceTable{}, fmt.Errorf("cached input rate: %w", err)
 	}
+	var cacheWrite *big.Rat
+	normalizedCacheWrite := ""
+	if rates.CacheWriteInputPerMillion != "" {
+		cacheWrite, normalizedCacheWrite, err = parseRate(rates.CacheWriteInputPerMillion)
+		if err != nil {
+			return PriceTable{}, fmt.Errorf("cache write input rate: %w", err)
+		}
+	}
 	output, normalizedOutput, err := parseRate(rates.OutputPerMillion)
 	if err != nil {
 		return PriceTable{}, fmt.Errorf("output rate: %w", err)
 	}
 	normalized := strings.Join([]string{rates.Currency, normalizedInput, normalizedCached, normalizedOutput}, "\x00")
+	if normalizedCacheWrite != "" {
+		normalized += "\x00cache_write\x00" + normalizedCacheWrite
+	}
 	digest := sha256.Sum256([]byte(normalized))
 	return PriceTable{
-		currency: rates.Currency, input: input, cachedInput: cached, output: output,
+		currency: rates.Currency, input: input, cachedInput: cached, cacheWriteInput: cacheWrite, output: output,
 		hash: hex.EncodeToString(digest[:8]), configured: true,
 	}, nil
 }
@@ -123,9 +137,10 @@ func normalizeDecimal(value string) string {
 	return integer + "." + decimal
 }
 
-func (p PriceTable) Configured() bool { return p.configured }
-func (p PriceTable) Currency() string { return p.currency }
-func (p PriceTable) Hash() string     { return p.hash }
+func (p PriceTable) Configured() bool           { return p.configured }
+func (p PriceTable) Currency() string           { return p.currency }
+func (p PriceTable) Hash() string               { return p.hash }
+func (p PriceTable) CacheWriteConfigured() bool { return p.cacheWriteInput != nil }
 
 // Estimate returns the provider-token cost rounded half-up to currency
 // nanounits. Reasoning tokens are already included in output tokens.
@@ -133,16 +148,19 @@ func (p PriceTable) Estimate(usage TokenUsage) (int64, error) {
 	if !p.configured || !usage.Reported {
 		return 0, nil
 	}
-	if usage.InputTokens < 0 || usage.CachedInputTokens < 0 || usage.OutputTokens < 0 || usage.ReasoningTokens < 0 {
+	if usage.InputTokens < 0 || usage.CachedInputTokens < 0 || usage.CacheWriteInputTokens < 0 || usage.OutputTokens < 0 || usage.ReasoningTokens < 0 {
 		return 0, fmt.Errorf("token counts must be non-negative")
 	}
-	if usage.CachedInputTokens > usage.InputTokens {
-		return 0, fmt.Errorf("cached input tokens exceed input tokens")
+	if usage.CachedInputTokens > usage.InputTokens || usage.CacheWriteInputTokens > usage.InputTokens-usage.CachedInputTokens {
+		return 0, fmt.Errorf("cached and cache write input tokens exceed input tokens")
 	}
-	uncached := int64(usage.InputTokens - usage.CachedInputTokens)
+	uncached := int64(usage.InputTokens - usage.CachedInputTokens - usage.CacheWriteInputTokens)
 	cost := new(big.Rat)
 	cost.Add(cost, scaledTokenCost(uncached, p.input))
 	cost.Add(cost, scaledTokenCost(int64(usage.CachedInputTokens), p.cachedInput))
+	if usage.CacheWriteInputTokensReported && p.cacheWriteInput != nil {
+		cost.Add(cost, scaledTokenCost(int64(usage.CacheWriteInputTokens), p.cacheWriteInput))
+	}
 	cost.Add(cost, scaledTokenCost(int64(usage.OutputTokens), p.output))
 	return roundPositiveRat(cost)
 }

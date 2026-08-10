@@ -492,6 +492,7 @@ func (s *ContainerStateStore) recordUsageLocked(state ContainerAnalysisState) {
 			LogicalID: state.CacheKey, Origin: aiusage.OriginAnalyzer, Feature: aiusage.FeatureFailureAnalysis,
 			StartedAt: trace.StartedAt, CompletedAt: completedAt,
 			Outcome:     aiusage.OutcomeSuccess,
+			Model:       trace.Model,
 			Correlation: aiusage.Correlation{JobID: trace.JobID, BuildID: trace.BuildID, TestName: trace.TestName},
 		}
 		switch trace.Outcome {
@@ -509,10 +510,26 @@ func (s *ContainerStateStore) recordUsageLocked(state ContainerAnalysisState) {
 				continue
 			}
 			operation.ModelRequests++
+			operation.CoverageCountsKnown = true
+			operation.UsageSource = aiusage.UsageSourceProviderResponse
 			if event.UsageReported {
+				if event.InputTokens < 0 || event.CachedInputTokens < 0 || event.CacheWriteInputTokens < 0 ||
+					event.CachedInputTokens > event.InputTokens || event.CacheWriteInputTokens > event.InputTokens-event.CachedInputTokens ||
+					event.OutputTokens < 0 || event.ReasoningTokens < 0 || event.ReasoningTokens > event.OutputTokens {
+					operation.UnreportedRequests++
+					operation.InvalidUsageRequests++
+					operation.UsageInvalid = true
+					continue
+				}
 				operation.ReportedRequests++
+				if event.CacheWriteInputTokensReported {
+					operation.CacheWriteReportedRequests++
+				} else {
+					operation.CacheWriteUnreportedRequests++
+				}
 				operation.InputTokens += int64(max(event.InputTokens, 0))
 				operation.CachedInputTokens += int64(max(event.CachedInputTokens, 0))
+				operation.CacheWriteInputTokens += int64(max(event.CacheWriteInputTokens, 0))
 				operation.OutputTokens += int64(max(event.OutputTokens, 0))
 				operation.ReasoningTokens += int64(max(event.ReasoningTokens, 0))
 			} else {

@@ -263,6 +263,7 @@ ai:
       currency: USD
       input_per_million: "1.25"
       cached_input_per_million: "0.125"
+      cache_write_input_per_million: "1.50"
       output_per_million: "10"
 ```
 
@@ -277,12 +278,24 @@ but does not assign a cost. `currency` must contain exactly three ASCII uppercas
 letters. Rates are decimal currency units per one million tokens. Omit
 `cached_input_per_million` to price cached input at the regular input rate. Rates
 must be non-negative decimal strings no greater than `1000000`.
+`cache_write_input_per_million` is optional and has no inferred default. The
+dashboard charges that rate only when a recognized provider response reports
+cache-creation input tokens. When the provider omits cache-write counts, the
+report marks cache-write coverage missing rather than estimating from total
+input tokens.
 
 Cost values are estimates, not provider invoices. Providers may omit usage or
 apply discounts, retries, minimum charges, or non-token fees that are not present
 in the model response. Usage files are private operational state and are removed
 from Pages artifacts. A currency change is rejected while retained nonzero cost
 estimates still use the previous currency.
+
+Ledger version 2 adds cache-write counts, coverage provenance, and model
+breakdowns while loading version 1 files without dropping their token or cost
+totals. Legacy days remain explicitly coverage-unknown because cache-write and
+historical model counts cannot be reconstructed. Model identifiers are stored
+only when they pass a bounded safe identifier check. Endpoints and credentials
+are never persisted.
 
 ## Custom skills
 

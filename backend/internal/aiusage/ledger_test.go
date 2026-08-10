@@ -131,7 +131,7 @@ func TestNewRecorderRejectsMalformedAndNewerLedgers(t *testing.T) {
 		t.Fatal("expected malformed-ledger error")
 	}
 	newer := filepath.Join(dir, "newer.json")
-	if err := os.WriteFile(newer, []byte(`{"version":2,"days":[],"recent_operations":[]}`), 0o600); err != nil {
+	if err := os.WriteFile(newer, []byte(`{"version":3,"days":[],"recent_operations":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := NewRecorder(newer, RecorderOptions{RetentionDays: 30, RecentOperations: 10}); err == nil {

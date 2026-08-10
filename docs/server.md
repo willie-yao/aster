@@ -635,7 +635,11 @@ merges the private fetcher and server ledgers. The default range is the latest
 30 UTC days. `start` and `end` use `YYYY-MM-DD`, and repeated `feature`
 parameters filter AI features. `GET /api/ai-usage/download` downloads the same
 filtered report. Cost nanounits are serialized as strings. Coverage is
-`complete`, `partial`, or `unavailable`.
+`complete`, `partial`, or `unavailable`. Additive coverage states identify
+partial token metadata, unreported or unpriced cache writes, external runtimes,
+model-gateway exclusions, legacy coverage gaps, and pricing added after an
+operation. Reports also include safe historical model totals when the source
+ledger recorded them.
 
 
 ## AI usage observability
@@ -643,4 +647,7 @@ filtered report. Cost nanounits are serialized as strings. Coverage is
 The authenticated report includes the selected model and operator-supplied
 `ai.usage.pricing` rule. Complete, partial, and unavailable coverage distinguish
 fully reported, incompletely reported, and absent token accounting. Raw ledgers
-remain inaccessible through `/data/*`.
+remain inaccessible through `/data/*`. The JSON response and download preserve
+absent versus reported-zero cache-write counts, keep fetcher and server writers
+separate on disk, and never expose endpoints, prompts, model responses, or
+credentials.
