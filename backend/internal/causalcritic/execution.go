@@ -24,6 +24,7 @@ const (
 )
 
 var decimalCostRE = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]{1,9})?$`)
+var failureCodeRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 // RuntimeIdentity fingerprints the immutable executor and non-secret model route.
 func RuntimeIdentity(gateway engineruntime.ModelGatewayConfig, sandboxIdentity string, timeout time.Duration, outputLimit int64) string {
@@ -69,6 +70,7 @@ type ExecutionResult struct {
 	Review          *Review                     `json:"review,omitempty"`
 	Usage           GatewayUsage                `json:"usage"`
 	DurationMs      int64                       `json:"duration_ms"`
+	FailureCode     string                      `json:"failure_code,omitempty"`
 	FailureReason   string                      `json:"failure_reason,omitempty"`
 }
 
@@ -188,26 +190,26 @@ func (r *Runtime) request(input Input) (ExecutionRequest, error) {
 // ValidateExecutionRequest enforces an internal credential-free gateway and bounded input.
 func ValidateExecutionRequest(request ExecutionRequest) error {
 	if request.SchemaVersion != ExecutionSchemaVersion || request.ContractVersion != ContractVersion {
-		return fmt.Errorf("unsupported causal critic execution contract")
+		return validationError(ValidationExecutionContract, ErrInvalidInput, "unsupported causal critic execution contract")
 	}
 	if err := ValidateInput(request.Input); err != nil {
 		return err
 	}
 	if err := ValidateGatewayConfig(request.ModelGateway); err != nil {
-		return err
+		return withValidationCode(ValidationExecutionGateway, err)
 	}
 	if err := engineruntime.ValidateModelGatewayTrust(request.ModelGateway.Endpoint, false); err != nil {
-		return fmt.Errorf("causal critic gateway: %w", err)
+		return withValidationCode(ValidationExecutionGateway, fmt.Errorf("causal critic gateway: %w", err))
 	}
 	if request.TimeoutSeconds < 1 || request.TimeoutSeconds > int64((30*time.Minute)/time.Second) {
-		return fmt.Errorf("causal critic timeout must be between 1 and 1800 seconds")
+		return validationError(ValidationExecutionTimeout, ErrInvalidInput, "causal critic timeout must be between 1 and 1800 seconds")
 	}
 	if request.OutputLimit < 4<<10 || request.OutputLimit > 1<<20 {
-		return fmt.Errorf("causal critic output limit must be between 4096 and 1048576")
+		return validationError(ValidationExecutionOutput, ErrInvalidInput, "causal critic output limit must be between 4096 and 1048576")
 	}
 	data, err := json.Marshal(request)
 	if err != nil || len(data) > maxExecutionRequest {
-		return fmt.Errorf("causal critic execution request exceeds %d bytes", maxExecutionRequest)
+		return validationError(ValidationExecutionSize, ErrInvalidInput, "causal critic execution request exceeds %d bytes", maxExecutionRequest)
 	}
 	return nil
 }
@@ -215,28 +217,28 @@ func ValidateExecutionRequest(request ExecutionRequest) error {
 // ValidateExecutionResult applies only deterministic schema and evidence-reference checks.
 func ValidateExecutionResult(result ExecutionResult, request ExecutionRequest) error {
 	if result.SchemaVersion != ExecutionSchemaVersion || result.ContractVersion != ContractVersion || result.PairHash != request.Input.PairHash {
-		return fmt.Errorf("execution result identity mismatch")
+		return validationError(ValidationResultIdentity, ErrInvalidReview, "execution result identity mismatch")
 	}
 	if result.DurationMs < 0 || result.DurationMs > request.TimeoutSeconds*1000+5000 {
-		return fmt.Errorf("execution duration is outside the request bound")
+		return validationError(ValidationResultDuration, ErrInvalidReview, "execution duration is outside the request bound")
 	}
 	if err := validateGatewayUsage(result.Usage); err != nil {
-		return err
+		return withValidationCode(ValidationResultUsage, err)
 	}
 	switch result.TerminalState {
 	case engineruntime.TerminalSucceeded:
-		if result.Review == nil || strings.TrimSpace(result.FailureReason) != "" {
-			return fmt.Errorf("successful critic result requires one review and no failure reason")
+		if result.Review == nil || strings.TrimSpace(result.FailureReason) != "" || result.FailureCode != "" {
+			return validationError(ValidationResultTerminal, ErrInvalidReview, "successful critic result requires one review and no failure")
 		}
 		if err := ValidateReview(*result.Review, request.Input); err != nil {
 			return err
 		}
 	case engineruntime.TerminalFailed, engineruntime.TerminalTimedOut, engineruntime.TerminalCancelled:
-		if result.Review != nil || strings.TrimSpace(result.FailureReason) == "" || len(result.FailureReason) > 2<<10 {
-			return fmt.Errorf("failed critic result must contain only a bounded failure reason")
+		if result.Review != nil || strings.TrimSpace(result.FailureReason) == "" || len(result.FailureReason) > 2<<10 || !failureCodeRE.MatchString(result.FailureCode) {
+			return validationError(ValidationResultTerminal, ErrInvalidReview, "failed critic result must contain a bounded failure code and reason")
 		}
 	default:
-		return fmt.Errorf("unsupported critic terminal state %q", result.TerminalState)
+		return validationError(ValidationResultTerminal, ErrInvalidReview, "unsupported critic terminal state %q", result.TerminalState)
 	}
 	return nil
 }

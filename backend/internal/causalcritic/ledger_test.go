@@ -367,3 +367,51 @@ func TestLedgerRetainsAttemptTombstonesAndCleanupRecords(t *testing.T) {
 		t.Fatal("retained attempt tombstone was reclaimed")
 	}
 }
+
+func TestRunTrialSeparatesLifecycleAndFailureCodes(t *testing.T) {
+	input := criticInput(t)
+	reviewer := &trialReviewer{
+		result: Result{Execution: ExecutionResult{
+			FailureCode: "gateway_request", FailureReason: "model gateway request failed",
+			Usage: GatewayUsage{Status: "unavailable", Source: "gateway_response"},
+		}, Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true}},
+		err: errors.New("causal critic execution failed"),
+	}
+	root := t.TempDir()
+	record, err := RunTrial(t.Context(), reviewer, TrialSpec{
+		PublicDir: filepath.Join(root, "public"), LedgerPath: filepath.Join(root, "private", "critic.json"),
+		Metadata: trialMetadata(), Input: input, ExecutionID: "critic-failure-code", RuntimeIdentity: testCriticRuntimeIdentity(),
+	})
+	if err == nil || record.Status != TrialRuntimeFailure || record.ErrorCode != "runtime_failure" || record.FailureCode != "gateway_request" {
+		t.Fatalf("record=%+v err=%v", record, err)
+	}
+}
+
+func TestTrialRecordRejectsFailureCodeOnSuccess(t *testing.T) {
+	input := criticInput(t)
+	created := time.Unix(4000, 0).UTC()
+	review := Review{SchemaVersion: ReviewSchemaVersion, ContractVersion: ContractVersion, PairHash: input.PairHash, Verdict: "pass", Findings: []Finding{}, Confidence: "medium"}
+	record := TrialRecord{
+		ID: "critic-success", CreatedAt: created.Format(time.RFC3339Nano), AttemptHash: hashString("attempt"),
+		RuntimeIdentity: testCriticRuntimeIdentity(), Status: TrialSucceeded, FailureCode: "stale_failure", Metadata: trialMetadata(),
+		EvidenceHash: input.EvidenceHash, DraftHash: input.DraftHash, PairHash: input.PairHash, Review: &review,
+		Usage: GatewayUsage{Status: "unavailable", Source: "gateway_response"}, Telemetry: TrialTelemetry{CleanupCompleted: true}, Finalized: true,
+	}
+	if err := validateTrialRecord(record); err == nil {
+		t.Fatal("successful trial retained a failure code")
+	}
+}
+
+func TestLoadLedgerMigratesPreviousSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "critic.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version":2,"records":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := loadLedger(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ledger.SchemaVersion != LedgerSchemaVersion || len(ledger.Preflights) != 0 || len(ledger.Records) != 0 {
+		t.Fatalf("ledger=%+v", ledger)
+	}
+}

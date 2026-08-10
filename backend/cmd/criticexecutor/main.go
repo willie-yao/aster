@@ -20,7 +20,7 @@ func main() {
 		emit(causalcritic.ExecutionResult{
 			SchemaVersion: causalcritic.ExecutionSchemaVersion, ContractVersion: causalcritic.ContractVersion,
 			PairHash: request.Input.PairHash, TerminalState: "failed",
-			Usage: causalcritic.GatewayUsage{Status: "unavailable", Source: "gateway_response"}, FailureReason: err.Error(),
+			Usage: causalcritic.GatewayUsage{Status: "unavailable", Source: "gateway_response"}, FailureCode: "request_decode", FailureReason: err.Error(),
 		})
 		os.Exit(1)
 	}
@@ -58,7 +58,7 @@ func readRequest() (causalcritic.ExecutionRequest, error) {
 func emit(result causalcritic.ExecutionResult) {
 	data, err := json.Marshal(result)
 	if err != nil {
-		fmt.Println(`{"schema_version":1,"contract_version":"causal-critic-v1","terminal_state":"failed","usage":{"status":"unavailable","source":"gateway_response"},"failure_reason":"encode critic result"}`)
+		fmt.Println(`{"schema_version":1,"contract_version":"causal-critic-v1","terminal_state":"failed","usage":{"status":"unavailable","source":"gateway_response"},"failure_code":"result_encode","failure_reason":"encode critic result"}`)
 		return
 	}
 	fmt.Println(string(data))

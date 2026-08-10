@@ -49,7 +49,9 @@ func TestRunCausalCriticPersistsPrivateNonAuthoritativeReview(t *testing.T) {
 	reviewer := &fakeCausalCriticReviewer{}
 	p.criticReviewer = reviewer
 	p.criticNow = func() time.Time { return time.Unix(100, 0) }
+	freezeCalls := 0
 	p.criticFreeze = func(_ context.Context, _ artifacts.Browser, request ai.FailureAnalysisRequest, source sourceinvestigation.Repository, _ *skills.Set) (agentanalysis.EvidenceBundle, error) {
+		freezeCalls++
 		return shadowTestBundle(t, request, source), nil
 	}
 	details := shadowTestDetails("TestFailure")
@@ -70,8 +72,8 @@ func TestRunCausalCriticPersistsPrivateNonAuthoritativeReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(before, after) || reviewer.calls != 1 {
-		t.Fatalf("authoritative details changed or duplicate reran: before=%s after=%s calls=%d", before, after, reviewer.calls)
+	if !reflect.DeepEqual(before, after) || reviewer.calls != 1 || freezeCalls != 1 {
+		t.Fatalf("authoritative details changed or duplicate reran: before=%s after=%s reviewer=%d freeze=%d", before, after, reviewer.calls, freezeCalls)
 	}
 	if got, err := os.ReadFile(publicPath); err != nil || string(got) != "public-sentinel" {
 		t.Fatalf("public output changed: %q err=%v", got, err)
@@ -119,13 +121,28 @@ func TestValidateCausalCriticOptions(t *testing.T) {
 
 func TestRunCausalCriticCandidateDoesNotConsumeQuotaBeforeClaim(t *testing.T) {
 	p := shadowTestPipeline(t)
-	p.opts.CausalCritic = CausalCriticOptions{Enabled: true, MaxPerRun: 1, Timeout: time.Minute, OutputLimitBytes: causalcritic.DefaultOutputLimit}
+	root := t.TempDir()
+	p.opts.OutDir = filepath.Join(root, "public")
+	p.opts.CausalCritic = CausalCriticOptions{
+		Enabled: true, LedgerPath: filepath.Join(root, "private", "critic.json"), MaxPerRun: 1,
+		Timeout: time.Minute, OutputLimitBytes: causalcritic.DefaultOutputLimit,
+	}
+	p.criticReviewer = &fakeCausalCriticReviewer{}
+	p.criticNow = func() time.Time { return time.Unix(100, 0) }
+	freezeCalls := 0
 	p.criticFreeze = func(context.Context, artifacts.Browser, ai.FailureAnalysisRequest, sourceinvestigation.Repository, *skills.Set) (agentanalysis.EvidenceBundle, error) {
+		freezeCalls++
 		return agentanalysis.EvidenceBundle{}, errors.New("fixture evidence failure")
 	}
 	candidate := p.selectShadowCandidates(shadowTestDetails("TestFailure"), models.FlakinessReport{})[0]
 	if p.runCausalCriticCandidate(t.Context(), candidate) {
-		t.Fatal("unclaimed evidence failure consumed critic quota")
+		t.Fatal("evidence failure consumed critic quota")
+	}
+	if p.runCausalCriticCandidate(t.Context(), candidate) {
+		t.Fatal("duplicate evidence failure consumed critic quota")
+	}
+	if freezeCalls != 1 {
+		t.Fatalf("evidence freezes=%d, want 1", freezeCalls)
 	}
 }
 

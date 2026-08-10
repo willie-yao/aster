@@ -144,7 +144,7 @@ func TestRuntimePreservesCleanupIdentityOnContractFailure(t *testing.T) {
 		}
 		execution := ExecutionResult{
 			SchemaVersion: ExecutionSchemaVersion, ContractVersion: ContractVersion, PairHash: strings.Repeat("0", 64),
-			TerminalState: engineruntime.TerminalFailed, FailureReason: "invalid pair",
+			TerminalState: engineruntime.TerminalFailed, FailureCode: "invalid_pair", FailureReason: "invalid pair",
 			Usage: GatewayUsage{Status: "unavailable", Source: "gateway_response"}, DurationMs: 100,
 		}
 		data, _ := json.Marshal(execution)
@@ -228,7 +228,7 @@ func TestRuntimeReturnsExecutorFailure(t *testing.T) {
 		}
 		execution := ExecutionResult{
 			SchemaVersion: ExecutionSchemaVersion, ContractVersion: ContractVersion, PairHash: request.Input.PairHash,
-			TerminalState: engineruntime.TerminalFailed, FailureReason: "model gateway request failed",
+			TerminalState: engineruntime.TerminalFailed, FailureCode: "gateway_request", FailureReason: "model gateway request failed",
 			Usage: GatewayUsage{Status: "unavailable", Source: "gateway_response"}, DurationMs: 100,
 		}
 		data, _ := json.Marshal(execution)
@@ -239,7 +239,7 @@ func TestRuntimeReturnsExecutorFailure(t *testing.T) {
 		Timeout: time.Minute, OutputLimitBytes: DefaultOutputLimit,
 	}
 	result, err := runtime.Review(t.Context(), input, "critic-run", nil)
-	if err == nil || result.Execution.FailureReason != "model gateway request failed" {
+	if err == nil || result.Execution.FailureCode != "gateway_request" || result.Execution.FailureReason != "model gateway request failed" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }

@@ -378,6 +378,8 @@ func artifactsBrowser(backend storage.Backend, bucketLabel, buildPrefix, buildID
 type causalCriticCaseSummary struct {
 	Trials                      int            `json:"trials"`
 	Statuses                    map[string]int `json:"statuses"`
+	ErrorCodes                  map[string]int `json:"error_codes"`
+	FailureCodes                map[string]int `json:"failure_codes"`
 	Finalized                   int            `json:"finalized"`
 	ValidReviews                int            `json:"valid_reviews"`
 	CleanupSucceeded            int            `json:"cleanup_succeeded"`
@@ -399,8 +401,15 @@ type causalCriticCaseSummary struct {
 }
 
 type causalCriticBenchmarkSummary struct {
-	Version int                                `json:"version"`
-	Cases   map[string]causalCriticCaseSummary `json:"cases"`
+	Version               int                                `json:"version"`
+	PreflightStatuses     map[string]int                     `json:"preflight_statuses"`
+	PreflightFailureCodes map[string]int                     `json:"preflight_failure_codes"`
+	Cases                 map[string]causalCriticCaseSummary `json:"cases"`
+}
+
+type causalCriticPreflightLedger struct {
+	SchemaVersion int                             `json:"schema_version"`
+	Preflights    []causalcritic.PreflightAttempt `json:"preflight_attempts"`
 }
 
 func TestAgentSandboxCausalCriticBenchmarkReport(t *testing.T) {
@@ -408,7 +417,11 @@ func TestAgentSandboxCausalCriticBenchmarkReport(t *testing.T) {
 		t.Skip("set RUN_AGENT_SANDBOX_CAUSAL_CRITIC_REPORT=1 to summarize private critic records")
 	}
 	records := loadCausalCriticBenchmarkRecords(t, requireBenchmarkEnv(t, "CRITIC_BENCH_RESULTS_JSONL"))
-	summary := summarizeCausalCriticBenchmark(records)
+	var preflights []causalcritic.PreflightAttempt
+	if ledgerPath := strings.TrimSpace(os.Getenv("CRITIC_BENCH_LEDGER_PATH")); ledgerPath != "" {
+		preflights = loadCausalCriticBenchmarkPreflights(t, ledgerPath)
+	}
+	summary := summarizeCausalCriticBenchmark(records, preflights)
 	output := requireBenchmarkEnv(t, "CRITIC_BENCH_SUMMARY_JSON")
 	if err := os.MkdirAll(filepath.Dir(filepath.Clean(output)), 0o700); err != nil {
 		t.Fatal(err)
@@ -420,6 +433,22 @@ func TestAgentSandboxCausalCriticBenchmarkReport(t *testing.T) {
 	if err := os.WriteFile(filepath.Clean(output), append(data, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func loadCausalCriticBenchmarkPreflights(t *testing.T, path string) []causalcritic.PreflightAttempt {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ledger causalCriticPreflightLedger
+	if err := json.Unmarshal(data, &ledger); err != nil {
+		t.Fatal(err)
+	}
+	if ledger.SchemaVersion != 2 && ledger.SchemaVersion != causalcritic.LedgerSchemaVersion {
+		t.Fatalf("unsupported causal critic ledger schema %d", ledger.SchemaVersion)
+	}
+	return ledger.Preflights
 }
 
 func loadCausalCriticBenchmarkRecords(t *testing.T, path string) []causalCriticBenchmarkRecord {
@@ -451,17 +480,34 @@ func loadCausalCriticBenchmarkRecords(t *testing.T, path string) []causalCriticB
 	return records
 }
 
-func summarizeCausalCriticBenchmark(records []causalCriticBenchmarkRecord) causalCriticBenchmarkSummary {
-	summary := causalCriticBenchmarkSummary{Version: causalCriticBenchmarkRecordVersion, Cases: map[string]causalCriticCaseSummary{}}
+func summarizeCausalCriticBenchmark(records []causalCriticBenchmarkRecord, preflights []causalcritic.PreflightAttempt) causalCriticBenchmarkSummary {
+	summary := causalCriticBenchmarkSummary{
+		Version: causalCriticBenchmarkRecordVersion, PreflightStatuses: map[string]int{}, PreflightFailureCodes: map[string]int{},
+		Cases: map[string]causalCriticCaseSummary{},
+	}
+	for _, preflight := range preflights {
+		summary.PreflightStatuses[string(preflight.Status)]++
+		if preflight.FailureCode != "" {
+			summary.PreflightFailureCodes[preflight.FailureCode]++
+		}
+	}
 	for _, record := range records {
 		key := record.CaseID + "/" + record.EvidenceCondition + "/" + record.AuthoritativeArm
 		item := summary.Cases[key]
 		if item.Statuses == nil {
 			item.Statuses = map[string]int{}
+			item.ErrorCodes = map[string]int{}
+			item.FailureCodes = map[string]int{}
 			item.FindingClasses = map[string]int{}
 		}
 		item.Trials++
 		item.Statuses[string(record.Trial.Status)]++
+		if record.Trial.ErrorCode != "" {
+			item.ErrorCodes[record.Trial.ErrorCode]++
+		}
+		if record.Trial.FailureCode != "" {
+			item.FailureCodes[record.Trial.FailureCode]++
+		}
 		if record.Trial.Finalized {
 			item.Finalized++
 		}
@@ -520,11 +566,19 @@ func TestSummarizeCausalCriticBenchmarkSeparatesQualityAndLifecycle(t *testing.T
 		},
 		{
 			Version: causalCriticBenchmarkRecordVersion, CaseID: "case", EvidenceCondition: "fixture-v1",
-			Trial: causalcritic.TrialRecord{Status: causalcritic.TrialMalformedResult},
+			Trial: causalcritic.TrialRecord{Status: causalcritic.TrialMalformedResult, ErrorCode: "malformed_result", FailureCode: "review_parse"},
 		},
 	}
-	item := summarizeCausalCriticBenchmark(records).Cases["case/fixture-v1/"]
-	if item.Trials != 2 || item.Finalized != 1 || item.ValidReviews != 1 || item.MalformedOrContractFailures != 1 || item.CriticObjections != 1 || item.FindingClasses[causalcritic.FindingSpecificErrorIgnored] != 1 || item.PublicationRegressions != 0 {
+	preflights := []causalcritic.PreflightAttempt{
+		{Status: causalcritic.PreflightEvidenceFailed, FailureCode: "evidence_freeze"},
+		{Status: causalcritic.PreflightSubmitted, FailureCode: "review_parse"},
+	}
+	summary := summarizeCausalCriticBenchmark(records, preflights)
+	item := summary.Cases["case/fixture-v1/"]
+	if item.Trials != 2 || item.Finalized != 1 || item.ValidReviews != 1 || item.MalformedOrContractFailures != 1 || item.CriticObjections != 1 || item.FindingClasses[causalcritic.FindingSpecificErrorIgnored] != 1 || item.ErrorCodes["malformed_result"] != 1 || item.FailureCodes["review_parse"] != 1 || item.PublicationRegressions != 0 {
 		t.Fatalf("summary = %+v", item)
+	}
+	if summary.PreflightStatuses[string(causalcritic.PreflightEvidenceFailed)] != 1 || summary.PreflightStatuses[string(causalcritic.PreflightSubmitted)] != 1 || summary.PreflightFailureCodes["review_parse"] != 1 {
+		t.Fatalf("preflight summary = %+v", summary)
 	}
 }
