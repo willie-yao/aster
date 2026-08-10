@@ -3,6 +3,7 @@ package criticexecutor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -138,5 +139,38 @@ func TestExecuteRejectsGatewayRedirect(t *testing.T) {
 	result := Execute(t.Context(), request, Options{HTTPClient: internalGatewayTestClient(t, redirect)})
 	if result.TerminalState != engineruntime.TerminalFailed || targetCalled {
 		t.Fatalf("result=%+v targetCalled=%v", result, targetCalled)
+	}
+}
+
+func TestExecutionResultFitsConfiguredOutputLimit(t *testing.T) {
+	request := executorRequest(t, "https://gateway.models.svc.cluster.local/v1")
+	request.OutputLimit = 4 << 10
+	reference := request.Input.HighSpecificityErrors[0].Reference
+	findings := make([]causalcritic.Finding, 0, 6)
+	for index := 0; index < 6; index++ {
+		findings = append(findings, causalcritic.Finding{
+			Class:  causalcritic.FindingCausalLinkUnsupported,
+			Detail: fmt.Sprintf("finding-%d-%s", index, strings.Repeat("x", 470)), References: []causalcritic.EvidenceReference{reference},
+		})
+	}
+	review := causalcritic.Review{
+		SchemaVersion: causalcritic.ReviewSchemaVersion, ContractVersion: causalcritic.ContractVersion, PairHash: request.Input.PairHash,
+		Verdict: "object", Findings: findings, AlternativeExplanation: strings.Repeat("a", 2000), RevisionGuidance: strings.Repeat("b", 2000), Confidence: "high",
+	}
+	result := causalcritic.ExecutionResult{
+		SchemaVersion: causalcritic.ExecutionSchemaVersion, ContractVersion: causalcritic.ContractVersion, PairHash: request.Input.PairHash,
+		TerminalState: engineruntime.TerminalSucceeded, Review: &review,
+		Usage: causalcritic.GatewayUsage{Status: "unavailable", Source: "gateway_response"}, DurationMs: 10,
+	}
+	if err := causalcritic.ValidateExecutionResult(result, request); err != nil {
+		t.Fatal(err)
+	}
+	bounded := enforceExecutionOutputBound(result, request)
+	data, err := json.Marshal(bounded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bounded.TerminalState != engineruntime.TerminalFailed || !strings.Contains(bounded.FailureReason, "output bound") || int64(len(data)+1) > request.OutputLimit {
+		t.Fatalf("bounded=%+v bytes=%d", bounded, len(data)+1)
 	}
 }

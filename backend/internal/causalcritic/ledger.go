@@ -250,7 +250,7 @@ func classifyTrialResult(result Result, err error) (TrialStatus, string) {
 		return TrialMalformedResult, "malformed_result"
 	case errors.Is(err, engineruntime.ErrResultContract):
 		return TrialContractViolation, "contract_violation"
-	case errors.Is(err, engineruntime.ErrCleanupPending) && result.Execution.Review != nil:
+	case result.Execution.Review != nil && result.Telemetry.FinalizationValid && !result.Telemetry.CleanupCompleted && result.CleanupWork != nil:
 		return TrialCleanupPending, "cleanup_pending"
 	case errors.Is(err, context.DeadlineExceeded):
 		return TrialTimeout, "timeout"

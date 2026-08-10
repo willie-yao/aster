@@ -56,14 +56,9 @@ func Execute(parent context.Context, request causalcritic.ExecutionRequest, opts
 			result.FailureReason = ""
 		}
 		if err := causalcritic.ValidateExecutionResult(result, request); err != nil {
-			return causalcritic.ExecutionResult{
-				SchemaVersion: causalcritic.ExecutionSchemaVersion, ContractVersion: causalcritic.ContractVersion,
-				PairHash: request.Input.PairHash, TerminalState: engineruntime.TerminalFailed,
-				Usage:      causalcritic.GatewayUsage{Status: "unavailable", Source: "gateway_response"},
-				DurationMs: max(now().Sub(started).Milliseconds(), 0), FailureReason: "critic executor result validation failed",
-			}
+			return failedExecutionResult(request, max(now().Sub(started).Milliseconds(), 0), "critic executor result validation failed")
 		}
-		return result
+		return enforceExecutionOutputBound(result, request)
 	}
 	if err := causalcritic.ValidateExecutionRequest(request); err != nil {
 		return finish(engineruntime.TerminalFailed, err.Error())
@@ -141,6 +136,23 @@ func Execute(parent context.Context, request causalcritic.ExecutionRequest, opts
 	}
 	result.Review = &review
 	return finish(engineruntime.TerminalSucceeded, "")
+}
+
+func failedExecutionResult(request causalcritic.ExecutionRequest, durationMs int64, reason string) causalcritic.ExecutionResult {
+	return causalcritic.ExecutionResult{
+		SchemaVersion: causalcritic.ExecutionSchemaVersion, ContractVersion: causalcritic.ContractVersion,
+		PairHash: request.Input.PairHash, TerminalState: engineruntime.TerminalFailed,
+		Usage:      causalcritic.GatewayUsage{Status: "unavailable", Source: "gateway_response"},
+		DurationMs: durationMs, FailureReason: reason,
+	}
+}
+
+func enforceExecutionOutputBound(result causalcritic.ExecutionResult, request causalcritic.ExecutionRequest) causalcritic.ExecutionResult {
+	data, err := json.Marshal(result)
+	if err == nil && (request.OutputLimit < 4<<10 || int64(len(data)+1) <= request.OutputLimit) {
+		return result
+	}
+	return failedExecutionResult(request, result.DurationMs, "critic executor result exceeded the output bound")
 }
 
 type chatRequest struct {

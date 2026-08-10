@@ -743,6 +743,9 @@ key, or bot token).
     {{- fail "agentSandbox.causalCritic.timeout must use positive whole seconds or minutes" -}}
   {{- end -}}
   {{- if gt $timeoutSeconds 1800 -}}{{- fail "agentSandbox.causalCritic.timeout must be at most 30m" -}}{{- end -}}
+  {{- $poll := printf "%v" $cfg.pollInterval -}}
+  {{- if or (not (regexMatch "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ms|s)$" $poll)) (not (regexMatch "[1-9]" $poll)) -}}{{- fail "agentSandbox.causalCritic.pollInterval must be a positive duration below 30s" -}}{{- end -}}
+  {{- if regexMatch "^([3-9][0-9]|[1-9][0-9]{2,})s$" (durationRound $poll) -}}{{- fail "agentSandbox.causalCritic.pollInterval must be below 30s" -}}{{- end -}}
   {{- if or (lt (int64 $cfg.outputLimitBytes) 4096) (gt (int64 $cfg.outputLimitBytes) 1048576) -}}{{- fail "agentSandbox.causalCritic.outputLimitBytes must be between 4096 and 1048576" -}}{{- end -}}
   {{- if or (lt (int $cfg.maxPerRun) 1) (gt (int $cfg.maxPerRun) 10) -}}{{- fail "agentSandbox.causalCritic.maxPerRun must be between 1 and 10" -}}{{- end -}}
   {{- if ne (index $cfg.resources.requests "ephemeral-storage") (index $cfg.resources.limits "ephemeral-storage") -}}{{- fail "agentSandbox.causalCritic ephemeral-storage request must equal its limit" -}}{{- end -}}
