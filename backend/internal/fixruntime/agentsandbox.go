@@ -424,12 +424,21 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	if err != nil {
 		if state.Exists && state.UID != "" {
 			work.UID = state.UID
-			return result, errors.Join(err, r.cleanupWork(work))
+			observed := work
+			result.Work = &observed
+			var observerErr error
+			if spec.WorkObserver != nil {
+				observerErr = spec.WorkObserver(runCtx, work)
+			}
+			return result, errors.Join(err, observerErr, r.cleanupWork(work))
 		}
 		if errors.Is(err, engineruntime.ErrWorkIdentityChanged) {
 			return result, err
 		}
-		cleanupErr := r.recoverAmbiguousCreate(work, desiredState)
+		recovered, cleanupErr := r.recoverAmbiguousCreate(work, desiredState, spec.WorkObserver)
+		if recovered.UID != "" {
+			result.Work = &recovered
+		}
 		return result, errors.Join(fmt.Errorf("%w: create agent Sandbox: %v", engineruntime.ErrUnavailable, err), cleanupErr)
 	}
 	work.UID = state.UID
@@ -439,7 +448,10 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	}
 	result.Resources = r.resourceMetadata(name, state)
 	if work.UID == "" {
-		cleanupErr := r.recoverAmbiguousCreate(work, desiredState)
+		recovered, cleanupErr := r.recoverAmbiguousCreate(work, desiredState, spec.WorkObserver)
+		if recovered.UID != "" {
+			result.Work = &recovered
+		}
 		return result, errors.Join(fmt.Errorf("%w: created agent Sandbox identity is unavailable", engineruntime.ErrUnavailable), cleanupErr)
 	}
 	if spec.WorkObserver != nil {
@@ -563,23 +575,27 @@ func (r *AgentSandboxRuntime) Cleanup(ctx context.Context, work engineruntime.Wo
 	}
 }
 
-func (r *AgentSandboxRuntime) recoverAmbiguousCreate(work engineruntime.WorkRef, desired sandboxState) error {
+func (r *AgentSandboxRuntime) recoverAmbiguousCreate(work engineruntime.WorkRef, desired sandboxState, observer engineruntime.WorkObserver) (engineruntime.WorkRef, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultSandboxCleanupTimeout)
 	defer cancel()
 	state, err := r.api.State(ctx, work.Namespace, work.Name)
 	if err != nil {
-		return fmt.Errorf("recover ambiguous agent Sandbox create: %w", err)
+		return work, fmt.Errorf("recover ambiguous agent Sandbox create: %w", err)
 	}
 	if state.Exists {
 		if !compatibleSandboxState(state, desired) {
-			return fmt.Errorf("%w: ambiguous agent Sandbox %s/%s has incompatible execution identity or workload shape", engineruntime.ErrWorkIdentityChanged, work.Namespace, work.Name)
+			return work, fmt.Errorf("%w: ambiguous agent Sandbox %s/%s has incompatible execution identity or workload shape", engineruntime.ErrWorkIdentityChanged, work.Namespace, work.Name)
 		}
 		if state.UID == "" {
-			return fmt.Errorf("%w: ambiguous agent Sandbox %s/%s has no UID", engineruntime.ErrWorkIdentityChanged, work.Namespace, work.Name)
+			return work, fmt.Errorf("%w: ambiguous agent Sandbox %s/%s has no UID", engineruntime.ErrWorkIdentityChanged, work.Namespace, work.Name)
 		}
 		work.UID = state.UID
 	}
-	return r.Cleanup(ctx, work)
+	var observerErr error
+	if work.UID != "" && observer != nil {
+		observerErr = observer(ctx, work)
+	}
+	return work, errors.Join(observerErr, r.Cleanup(ctx, work))
 }
 
 func (r *AgentSandboxRuntime) cleanupWork(work engineruntime.WorkRef) error {

@@ -2017,7 +2017,7 @@ expect_causal_critic_fail noncanonical-ledger 'ledger.mountPath must be canonica
 expect_causal_critic_fail mutable-image 'image.digest must be an immutable sha256 digest' --set-string agentSandbox.causalCritic.image.digest=latest
 expect_causal_critic_fail orka-shadow 'cannot run with orka.agentAnalysisShadow' --set orka.agentAnalysisShadow.enabled=true
 expect_causal_critic_fail orka-fix 'cannot run with orka.fixRuntime' --set orka.fixRuntime.enabled=true "${fix_admission_args[@]}" --set orka.fixRuntime.image.tag=sha-test
-expect_causal_critic_fail shared-fix-identity 'must not share its namespace and workload ServiceAccount' -f "$tmp/agent-sandbox.yaml" --set agentSandbox.causalCritic.namespace=fix-eval --set agentSandbox.causalCritic.workloadServiceAccount.name=fix-workload
+expect_causal_critic_fail shared-fix-namespace 'must not share its execution namespace' -f "$tmp/agent-sandbox.yaml" --set agentSandbox.causalCritic.namespace=fix-eval --set agentSandbox.causalCritic.workloadServiceAccount.name=critic-workload
 expect_causal_critic_fail timeout-over-limit 'timeout must be at most 30m' --set-string agentSandbox.causalCritic.timeout=31m
 expect_causal_critic_fail ephemeral-storage-mismatch 'ephemeral-storage request must equal its limit' --set-string agentSandbox.causalCritic.resources.requests.ephemeral-storage=16Mi
 expect_causal_critic_fail gateway-port-mismatch 'networkPolicy.gatewayPort must match modelGateway.endpoint' --set-string agentSandbox.causalCritic.modelGateway.endpoint=https://gateway.models.svc.cluster.local:8443/v1

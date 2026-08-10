@@ -28,6 +28,7 @@ type fakeAgentSandboxAPI struct {
 	logs                     string
 	createErr                error
 	logsErr                  error
+	deleteErr                error
 	deleted                  bool
 	keepStateIdentity        bool
 	returnStateOnCreateError bool
@@ -73,6 +74,9 @@ func (f *fakeAgentSandboxAPI) Delete(_ context.Context, _, _, uid string) error 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.deleteUID = uid
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	f.deleted = true
 	return nil
 }
@@ -649,6 +653,28 @@ func TestAgentSandboxCreateAmbiguityCleansAcceptedWork(t *testing.T) {
 	_, err := runtime.Generate(context.Background(), agentSandboxSpec())
 	if err == nil || !errors.Is(err, engineruntime.ErrUnavailable) || !api.deleted || api.deleteUID != "uid-1" {
 		t.Fatalf("error=%v deleted=%v deleteUID=%q", err, api.deleted, api.deleteUID)
+	}
+}
+
+func TestAgentSandboxCreateAmbiguityReturnsObservedWorkWhenCleanupIsPending(t *testing.T) {
+	api := &fakeAgentSandboxAPI{
+		createErr: errors.New("connection reset after create"), deleteErr: engineruntime.ErrCleanupPending,
+		state: sandboxState{Exists: true, UID: "uid-1", PodName: "critic-request-1"},
+	}
+	runtime := newAgentSandboxRuntimeForTest(api, testAgentSandboxOptions())
+	var observed engineruntime.WorkRef
+	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
+		Purpose: "critic", ExecutionID: "request-1", RequestEnv: "PROW_AI_CAUSAL_CRITIC_REQUEST_B64",
+		Request: []byte(`{"version":1}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+		WorkObserver: func(_ context.Context, work engineruntime.WorkRef) error {
+			if work.UID != "" {
+				observed = work
+			}
+			return nil
+		},
+	})
+	if !errors.Is(err, engineruntime.ErrCleanupPending) || result.Work == nil || result.Work.UID != "uid-1" || observed.UID != "uid-1" {
+		t.Fatalf("result=%+v observed=%+v err=%v", result, observed, err)
 	}
 }
 

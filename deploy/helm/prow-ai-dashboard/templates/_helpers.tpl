@@ -715,8 +715,8 @@ key, or bot token).
   {{- if ne $cfg.image.pullPolicy "IfNotPresent" -}}{{- fail "agentSandbox.causalCritic.image.pullPolicy must be IfNotPresent" -}}{{- end -}}
   {{- $workloadSA := include "prow-ai-dashboard.agentSandboxCriticWorkloadServiceAccountName" . -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $workloadSA) -}}{{- fail "agentSandbox.causalCritic.workloadServiceAccount.name is required and must be a lowercase object name" -}}{{- end -}}
-  {{- if and .Values.agentSandbox.fixRuntime.enabled (eq $cfg.namespace .Values.agentSandbox.fixRuntime.namespace) (eq $workloadSA (include "prow-ai-dashboard.agentSandboxWorkloadServiceAccountName" .)) -}}
-    {{- fail "agentSandbox.causalCritic must not share its namespace and workload ServiceAccount with agentSandbox.fixRuntime" -}}
+  {{- if and .Values.agentSandbox.fixRuntime.enabled (eq $cfg.namespace .Values.agentSandbox.fixRuntime.namespace) -}}
+    {{- fail "agentSandbox.causalCritic must not share its execution namespace with agentSandbox.fixRuntime" -}}
   {{- end -}}
   {{- $clientSA := include "prow-ai-dashboard.agentSandboxClientServiceAccountName" . -}}
   {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.clientServiceAccountName) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
