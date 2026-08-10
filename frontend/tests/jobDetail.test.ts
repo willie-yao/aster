@@ -3,13 +3,15 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import {
+  currentJobStatus,
   executedResultTests,
   filterResultTests,
   hasInlineTestEvidence,
   normalizeResultLedgerFilter,
+  recentJobPassRate,
   withJobDetailParam,
 } from "../src/lib/jobDetail.js";
-import type { TestCase } from "../src/types/dashboard.js";
+import type { BuildResult, TestCase } from "../src/types/dashboard.js";
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
@@ -21,6 +23,27 @@ function testCase(overrides: Partial<TestCase>): TestCase {
     status: "passed",
     duration_seconds: 1,
     ...overrides,
+  };
+}
+
+function build(buildID: string, passed: boolean): BuildResult {
+  return {
+    build_id: buildID,
+    job_name: "job",
+    started: "2026-08-10T00:00:00Z",
+    finished: "2026-08-10T01:00:00Z",
+    passed,
+    result: passed ? "SUCCESS" : "FAILURE",
+    duration_seconds: 3600,
+    commit: "0123456789abcdef0123456789abcdef01234567",
+    prow_url: "https://prow.example/build",
+    web_url: "https://storage.example/build",
+    build_log_url: "https://storage.example/build-log.txt",
+    test_cases: [],
+    tests_total: 0,
+    tests_passed: 0,
+    tests_failed: 0,
+    tests_skipped: 0,
   };
 }
 
@@ -86,6 +109,16 @@ test("job result filter state uses bounded URL values", () => {
   assert.equal(cleared.toString(), "run=456&results=passed&failure=pattern-1");
 });
 
+test("job detail separates current observation from rolling reliability", () => {
+  const runs = [
+    ...Array.from({ length: 5 }, (_, index) => build(`pass-${5 - index}`, true)),
+    ...Array.from({ length: 5 }, (_, index) => build(`failure-${5 - index}`, false)),
+  ];
+  assert.equal(currentJobStatus(undefined, runs), "PASSING");
+  assert.equal(recentJobPassRate(runs), 0.5);
+  assert.equal(currentJobStatus("FAILING", runs), "FAILING");
+});
+
 test("job detail uses the approved shared detail composition", () => {
   const page = source("src/pages/JobDetailPage.tsx");
   const pattern = source("src/components/PatternBanner.tsx");
@@ -99,6 +132,9 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(page, /shortJobName\([\s\S]*manifest\.short_name_prefix/);
   assert.match(page, /<TechnicalIdentity[\s\S]*Canonical job ID[\s\S]*Copy canonical job ID/);
   assert.match(page, /<MetricStrip items=\{metricItems\} label="Job metrics"/);
+  assert.match(page, /label: "Current"/);
+  assert.match(page, /label: "Last 10 runs"/);
+  assert.match(page, /label: "Recovery streak"/);
   assert.match(page, /<RunMetadata[\s\S]*View in Prow[\s\S]*Build log/);
   assert.match(page, /<TestResultsGrid runs=\{runs\}/);
   assert.match(page, /<ResultLedger[\s\S]*executedCount[\s\S]*skippedCount/);
@@ -117,6 +153,8 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(pattern, /label="Affected builds"/);
   assert.match(pattern, /label="Related files"/);
   assert.match(pattern, /Remediation present, verifying the fix/);
+  assert.match(pattern, /Watching recovery/);
+  assert.match(pattern, /Observed passing runs:/);
   assert.match(pattern, /Verified passing runs:/);
   assert.match(pattern, /Verified remediation source:/);
   assert.match(pattern, /lifecycleActive/);

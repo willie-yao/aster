@@ -5,6 +5,7 @@ export interface ActionEligibility {
     | "actionable"
     | "investigation_required"
     | "already_present"
+    | "recovered"
     | "more_evidence_required";
   reason: string;
 }

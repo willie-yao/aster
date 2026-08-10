@@ -6,15 +6,24 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
-// MergeLastGood applies fresh outcomes and retains exact prior verdicts on failure.
+// MergeLastGood applies fresh outcomes and retains prior model verdicts on failure.
 func MergeLastGood(details []models.JobDetail, prior map[string]models.JobDetail, result AnalyzeResult) (models.PatternRefreshReport, error) {
 	report := models.PatternRefreshReport{Jobs: map[string]models.PatternRefreshStatus{}}
 	for i := range details {
 		detail := &details[i]
 		status := models.PatternRefreshStatus{State: models.PatternRefreshNotApplicable}
 		if !IsEligible(detail) {
-			detail.PatternAnalyses = nil
-			report.NotApplicable++
+			previous := prior[detail.JobID]
+			if len(previous.PatternAnalyses) == 0 {
+				detail.PatternAnalyses = nil
+				report.NotApplicable++
+			} else {
+				status.State = models.PatternRefreshRetained
+				if err := retainPriorPattern(detail, previous, &status); err != nil {
+					return report, err
+				}
+				report.Retained++
+			}
 			detail.PatternRefresh = &status
 			report.Jobs[detail.JobID] = status
 			continue
@@ -74,6 +83,10 @@ func retainPriorPattern(detail *models.JobDetail, previous models.JobDetail, sta
 	}
 	status.LastSuccessfulAt = previous.PatternAnalyses[0].GeneratedAt
 	detail.PatternAnalyses = append([]models.PatternAnalysis(nil), previous.PatternAnalyses...)
+	for index := range detail.PatternAnalyses {
+		models.RefreshRetainedPatternLifecycle(*detail, &detail.PatternAnalyses[index])
+		models.AssignPatternIdentity(&detail.PatternAnalyses[index])
+	}
 	status.EvidenceAvailable = models.PatternEvidenceAvailable(*detail, detail.PatternAnalyses[0])
 	return nil
 }

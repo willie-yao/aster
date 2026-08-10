@@ -388,3 +388,37 @@ func TestHashError_DifferentInput(t *testing.T) {
 		t.Errorf("different inputs should (almost certainly) produce different hashes: %s", h1)
 	}
 }
+
+func TestComputeJobSummarySeparatesCurrentStatusFromRollingReliability(t *testing.T) {
+	runs := make([]models.BuildResult, 0, 10)
+	for index := 0; index < 5; index++ {
+		runs = append(runs, makeBuild(fmt.Sprintf("pass-%d", 5-index), hoursAgo(index), true, nil))
+	}
+	for index := 0; index < 5; index++ {
+		runs = append(runs, makeBuild(fmt.Sprintf("failure-%d", 5-index), hoursAgo(index+5), false, nil))
+	}
+
+	summary := ComputeJobSummary(models.ProwJob{Name: "recovered"}, runs)
+	if summary.CurrentStatus != models.JobCurrentPassing || summary.OverallStatus != "FLAKY" || summary.PassRateRecent != 0.5 {
+		t.Fatalf("summary = %+v", summary)
+	}
+}
+
+func TestCurrentJobStatus(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		runs []models.BuildResult
+		want models.JobCurrentStatus
+	}{
+		{name: "unknown", want: models.JobCurrentUnknown},
+		{name: "running", runs: []models.BuildResult{{BuildInfo: models.BuildInfo{Result: "PENDING"}}}, want: models.JobCurrentRunning},
+		{name: "passing", runs: []models.BuildResult{makeBuild("1", baseTime, true, nil)}, want: models.JobCurrentPassing},
+		{name: "failing", runs: []models.BuildResult{makeBuild("1", baseTime, false, nil)}, want: models.JobCurrentFailing},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := CurrentJobStatus(test.runs); got != test.want {
+				t.Fatalf("status = %q, want %q", got, test.want)
+			}
+		})
+	}
+}

@@ -1065,24 +1065,35 @@ source and publishes `remediation_verification`. For configuration, Prow job,
 and import-qualified `modify_symbol` targets, it also verifies that the target
 was unresolved at every correlated failure revision. Other target shapes remain
 active because the historical transition cannot be proven with bounded file
-reads. Systemic patterns receive a source-aware lifecycle:
+reads. Systemic patterns receive a lifecycle that keeps observation recovery
+separate from source-verified remediation:
 
 - `active`: the target remains unresolved, verification is inconclusive, or a
   correlated failure occurred at the revision containing the remediation.
+- `recovered`: at least three consecutive completed job runs have passed after
+  the last correlated failure, but source verification has not proven a fix.
 - `observing`: the remediation is present, was absent at the correlated failure
   revisions, but fewer than two later comparable runs have passed at revisions
   independently verified to contain it.
 - `verified_fixed`: the remediation is present and at least two later comparable
   runs passed at revisions independently verified to contain it.
 
-The lifecycle uses immutable repository revisions and retains the passing build
-IDs as public verification evidence. A later correlated failure at the same
-revision immediately returns the pattern to `active`.
+Observation recovery counts completed runs rather than elapsed time, so sparse
+job schedules use the same three-pass threshold. Pending runs do not count or
+break the streak. A newer completed failure immediately returns an
+observation-recovered pattern to `active`. Retained last-known-good patterns keep
+this deterministic observation state even after the original failures leave the
+current fetch window.
+
+The source-aware states use immutable repository revisions and retain passing
+build IDs as public verification evidence. A later correlated failure at the
+same revision returns the pattern to `active`.
 
 Only `active` patterns are published in the home-page recurring list, passed to
 automatic issue or Fix PR side effects, or accepted by action endpoints.
-`observing` and `verified_fixed` patterns remain in the per-job history with the
-source revision, explanation, and revision-verified passing build links.
+`recovered`, `observing`, and `verified_fixed` patterns remain in the per-job
+history with their explanation and applicable passing build links. Job output
+also publishes `current_status` separately from the rolling `pass_rate_recent`.
 
 Source-investigation code targets use the same behavior-complete contract.
 `modify_symbol` without `required_call` is rejected before persistence, and the

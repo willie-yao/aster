@@ -12,6 +12,8 @@ export interface RunSummary {
   tests_skipped?: number;
 }
 
+export type JobCurrentStatus = "UNKNOWN" | "RUNNING" | "PASSING" | "FAILING";
+
 export interface JobSummary {
   name: string;
   job_id: string;
@@ -24,6 +26,7 @@ export interface JobSummary {
   minimum_interval: string;
   timeout: string;
   config_file: string;
+  current_status: JobCurrentStatus;
   overall_status: "PASSING" | "FAILING" | "FLAKY";
   last_run: RunSummary | null;
   recent_runs: RunSummary[];
@@ -232,10 +235,12 @@ export interface PatternRemediationVerification {
 }
 
 export interface PatternLifecycle {
-  state: "active" | "observing" | "verified_fixed";
+  state: "active" | "recovered" | "observing" | "verified_fixed";
   reason: string;
   source_revision?: string;
   passing_builds?: string[];
+  recovery_streak?: number;
+  recovery_builds?: string[];
 }
 
 export interface RemediationTarget {
@@ -264,6 +269,8 @@ export interface JobDetail {
   repo: string;
   config_file?: string;
   config_revision?: string;
+  current_status?: JobCurrentStatus;
+  pass_rate_recent?: number;
   runs: BuildResult[];
   pattern_analyses?: PatternAnalysis[];
   pattern_refresh?: PatternRefreshStatus;

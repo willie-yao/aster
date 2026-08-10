@@ -585,7 +585,8 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 		if r.job.Name == "" {
 			continue // skipped due to fetch error
 		}
-		dashboard.Jobs = append(dashboard.Jobs, aggregator.ComputeJobSummary(r.job, r.runs))
+		summary := aggregator.ComputeJobSummary(r.job, r.runs)
+		dashboard.Jobs = append(dashboard.Jobs, summary)
 		details = append(details, models.JobDetail{
 			Name:           r.job.Name,
 			JobID:          r.job.JobID,
@@ -593,6 +594,8 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 			Repo:           r.job.Repo,
 			ConfigFile:     r.job.ConfigFile,
 			ConfigRevision: configRevision,
+			CurrentStatus:  summary.CurrentStatus,
+			PassRateRecent: summary.PassRateRecent,
 			Runs:           r.runs,
 		})
 	}

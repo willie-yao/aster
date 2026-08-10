@@ -53,7 +53,7 @@ export function OverviewFilters({
         onChange={(_, value: OverviewStatusFilter | null) => {
           if (value) onStatusChange(value);
         }}
-        aria-label="Status filter"
+        aria-label="Last 10 run reliability filter"
         sx={{
           display: "grid",
           gridTemplateColumns: "repeat(4, minmax(0, 1fr))",

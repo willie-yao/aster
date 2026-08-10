@@ -35,6 +35,11 @@ export function eligibilityForState(
         state,
         reason: "The grounded source already contains the proposed remediation.",
       };
+    case "recovered":
+      return {
+        state,
+        reason: "Observed passing runs have recovered, but source verification has not proven a fix.",
+      };
     case "more_evidence_required":
       return {
         state,
@@ -74,7 +79,10 @@ export function patternActionEligibilityHint(
   lifecycle?: PatternLifecycle,
 ): ActionEligibility | null {
   if (!patternLifecycleActive(lifecycle)) {
-    return { state: "already_present", reason: lifecycle?.reason ?? "The remediation is already present." };
+    return {
+      state: lifecycle?.state === "recovered" ? "recovered" : "already_present",
+      reason: lifecycle?.reason ?? "This recurring pattern is not currently actionable.",
+    };
   }
   if (remediationStatus && remediationExistsStatuses.has(remediationStatus)) {
     return {
@@ -112,6 +120,8 @@ export function actionEligibilityTitle(
       return "Actions available";
     case "already_present":
       return "Remediation already exists";
+    case "recovered":
+      return "Watching recovery";
     case "more_evidence_required":
       return "More source evidence required";
     case "investigation_required":

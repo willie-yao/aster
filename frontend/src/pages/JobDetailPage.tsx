@@ -39,9 +39,11 @@ import { RunMetadata } from "../components/RunMetadata";
 import { ResultLedger } from "../components/ResultLedger";
 import { overviewTypography } from "../theme/overview";
 import {
+  currentJobStatus,
   executedResultTests,
   filterResultTests,
   normalizeResultLedgerFilter,
+  recentJobPassRate,
   sortResultTests,
   summarizeResultTests,
   withJobDetailParam,
@@ -56,23 +58,16 @@ function passRateColor(
   return "warning.main";
 }
 
-function deriveJobStatus(
-  rate: number | null,
-): "PASSING" | "FLAKY" | "FAILING" | null {
-  if (rate === null) return null;
-  if (rate >= 0.9) return "PASSING";
-  if (rate <= 0.3) return "FAILING";
-  return "FLAKY";
-}
-
-function statusPresentation(status: "PASSING" | "FLAKY" | "FAILING") {
+function statusPresentation(status: "UNKNOWN" | "RUNNING" | "PASSING" | "FAILING") {
   switch (status) {
     case "PASSING":
       return { label: "Passing", color: "success.main" } as const;
-    case "FLAKY":
-      return { label: "Flaky", color: "warning.main" } as const;
+    case "RUNNING":
+      return { label: "Running", color: "warning.main" } as const;
     case "FAILING":
       return { label: "Failing", color: "error.main" } as const;
+    case "UNKNOWN":
+      return { label: "Unknown", color: "text.primary" } as const;
   }
 }
 
@@ -121,11 +116,10 @@ export function JobDetailPage() {
     ? emptyTestResultsPresentation(selectedRun)
     : null;
 
-  const passRateRecent = useMemo(() => {
-    if (runs.length === 0) return null;
-    const recent = runs.slice(0, 10);
-    return recent.filter((run) => run.passed).length / recent.length;
-  }, [runs]);
+  const passRateRecent = useMemo(
+    () => data?.pass_rate_recent ?? recentJobPassRate(runs),
+    [data?.pass_rate_recent, runs],
+  );
 
   const avgDuration = useMemo(() => {
     const completed = runs.filter(
@@ -196,14 +190,22 @@ export function JobDetailPage() {
   const lastRun = runs[0] ?? null;
   const pattern = data.pattern_analyses?.[0];
   const hasRuns = runs.length > 0;
-  const jobStatus = deriveJobStatus(passRateRecent);
-  const jobStatusView = jobStatus ? statusPresentation(jobStatus) : null;
+  const currentStatusView = statusPresentation(currentJobStatus(data.current_status, runs));
+  const recoveryStreak = pattern?.lifecycle?.recovery_streak;
   const metricItems: MetricStripItem[] = [
     {
-      label: "Pass rate",
+      label: "Current",
+      value: currentStatusView.label,
+      color: currentStatusView.color,
+    },
+    {
+      label: "Last 10 runs",
       value: passRateRecent !== null ? formatPercent(passRateRecent) : "Not available",
       color: passRateRecent !== null ? passRateColor(passRateRecent) : "text.primary",
     },
+    ...(recoveryStreak !== undefined
+      ? [{ label: "Recovery streak", value: recoveryStreak.toLocaleString() } satisfies MetricStripItem]
+      : []),
     { label: "Runs", value: runs.length.toLocaleString() },
     {
       label: "Average duration",
@@ -386,7 +388,7 @@ export function JobDetailPage() {
             {data.job_type} job
           </Typography>
         </Box>
-        {jobStatusView && (
+        {currentStatusView && (
           <Box
             role="status"
             sx={{
@@ -394,7 +396,7 @@ export function JobDetailPage() {
               display: "inline-flex",
               alignItems: "center",
               gap: 1,
-              color: jobStatusView.color,
+              color: currentStatusView.color,
               fontSize: "14px",
               lineHeight: "20px",
               fontWeight: 700,
@@ -402,7 +404,7 @@ export function JobDetailPage() {
             }}
           >
             <Box component="span" sx={{ width: 8, height: 8, borderRadius: "2px", bgcolor: "currentColor" }} />
-            {jobStatusView.label}
+            {currentStatusView.label}
           </Box>
         )}
       </Box>
