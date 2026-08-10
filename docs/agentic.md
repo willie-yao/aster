@@ -950,6 +950,24 @@ job page: a "recurring failure pattern" callout with the shared cause and fix
 when systemic, or a quiet "no shared root cause" note when the failures are
 genuinely independent.
 
+An explicit `systemic: false` verdict is normalized before contract validation.
+The engine preserves confidence, summary, and valid shared build IDs, while
+clearing `shared_root_cause`, `suggested_fix`, and `remediation_targets` because
+those fields are not publishable for a non-systemic result. Required top-level
+fields, JSON structure, confidence, build references, target structure, and
+multiple-contract ambiguity remain strict. Systemic contracts use the unchanged
+validation path. A private `pattern_normalization` trace event reports only that
+normalization occurred and how many candidates were affected. The prompt
+contract version changed for this behavior, so prior deterministic failure keys
+retry once under the new parser without changing the configured cache
+generation. The normalized result is then a normal reusable success cache entry.
+
+In the release-1.25 audit sequence, the grounded investigation produced prose,
+extraction produced a safe non-systemic verdict with an individual fix, and the
+old path entered validation repair. The normalized path accepts that extraction
+directly, skips the repair request, and serves later unchanged passes from the
+success cache instead of repeating the six-request failure sequence.
+
 Deterministic final failures in JSON parsing, required-field validation, build
 references, and bounded ambiguity repair use the same identity as the success
 cache. The private cache stores only a failure category, version, failure time,
