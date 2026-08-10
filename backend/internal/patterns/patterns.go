@@ -340,6 +340,29 @@ func CountFailedBuilds(d *models.JobDetail) int {
 // GatherFailures picks the most severe analyzed failure from each failed build.
 func GatherFailures(d *models.JobDetail) []ai.PatternFailure {
 	var out []ai.PatternFailure
+	recentRuns := make([]ai.PatternRun, 0, len(d.Runs))
+	for i := range d.Runs {
+		run := &d.Runs[i]
+		if run.Result == "PENDING" {
+			continue
+		}
+		recentRuns = append(recentRuns, ai.PatternRun{
+			BuildID: run.BuildID, Result: run.Result, Passed: run.Passed,
+			StartedAt: run.Started, SourceRevision: patternRunSourceRevision(run.BuildInfo),
+		})
+	}
+	sort.SliceStable(recentRuns, func(i, j int) bool {
+		if !recentRuns[i].StartedAt.Equal(recentRuns[j].StartedAt) {
+			if recentRuns[i].StartedAt.IsZero() {
+				return false
+			}
+			if recentRuns[j].StartedAt.IsZero() {
+				return true
+			}
+			return recentRuns[i].StartedAt.After(recentRuns[j].StartedAt)
+		}
+		return recentRuns[i].BuildID > recentRuns[j].BuildID
+	})
 	for i := range d.Runs {
 		run := &d.Runs[i]
 		if run.Passed || run.Result == "PENDING" {
@@ -371,9 +394,25 @@ func GatherFailures(d *models.JobDetail) []ai.PatternFailure {
 			ProwConfigRevision: d.ConfigRevision,
 			IsTransient:        rep.AISummary != nil && rep.AISummary.IsTransient,
 			Severity:           rep.AIAnalysis.Severity,
+			RecentRuns:         recentRuns,
 		})
 	}
 	return out
+}
+
+func patternRunSourceRevision(build models.BuildInfo) string {
+	if revision := strings.TrimSpace(build.Revision); revision != "" {
+		return revision
+	}
+	if commit := strings.TrimSpace(build.Commit); commit != "" {
+		return commit
+	}
+	if len(build.RepoRefs) == 1 {
+		for _, revision := range build.RepoRefs {
+			return strings.TrimSpace(revision)
+		}
+	}
+	return ""
 }
 
 func confidenceRank(c string) int {
