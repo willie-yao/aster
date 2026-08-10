@@ -130,24 +130,8 @@ func ValidateWorkspaceManifest(manifest WorkspaceManifest) error {
 	if manifest.ConsumerPrompt == "" || manifest.ConsumerPrompt != strings.TrimSpace(manifest.ConsumerPrompt) || !utf8StringWithin(manifest.ConsumerPrompt, maxWorkspacePromptBytes) {
 		return fmt.Errorf("%w: consumer prompt is empty, invalid, or oversized", ErrInvalidBundle)
 	}
-	if len(manifest.Artifacts) < 1 || len(manifest.Artifacts) > maxWorkspaceFiles {
-		return fmt.Errorf("%w: artifact count must be between 1 and %d", ErrInvalidBundle, maxWorkspaceFiles)
-	}
-	var total int64
-	previous := ""
-	for index, file := range manifest.Artifacts {
-		clean, err := artifacts.SafePath(file.Path)
-		if err != nil || clean != file.Path || file.Path <= previous {
-			return fmt.Errorf("%w: artifact %d path is unsafe, duplicated, or unsorted", ErrInvalidBundle, index)
-		}
-		if file.Size < 0 || file.Size > maxWorkspaceFileBytes || !validSHA256(file.SHA256) {
-			return fmt.Errorf("%w: artifact %d metadata is invalid", ErrInvalidBundle, index)
-		}
-		total += file.Size
-		if total > maxWorkspaceTotalBytes {
-			return fmt.Errorf("%w: artifact bytes exceed %d", ErrInvalidBundle, maxWorkspaceTotalBytes)
-		}
-		previous = file.Path
+	if err := validateWorkspaceFiles(manifest.Artifacts); err != nil {
+		return err
 	}
 	if !validSHA256(manifest.Hash) {
 		return fmt.Errorf("%w: workspace manifest hash is invalid", ErrInvalidBundle)
@@ -180,13 +164,16 @@ func NewWorkspaceStageRequest(manifest WorkspaceManifest) (WorkspaceStageRequest
 	return stage, nil
 }
 
-// ValidateWorkspaceStageRequest requires exact manifest and artifact identity.
-func ValidateWorkspaceStageRequest(stage WorkspaceStageRequest, manifest WorkspaceManifest) error {
-	if err := ValidateWorkspaceManifest(manifest); err != nil {
-		return err
+// ValidateWorkspaceStageRequestIdentity validates one self-contained stager request.
+func ValidateWorkspaceStageRequestIdentity(stage WorkspaceStageRequest) error {
+	if stage.Version != WorkspaceStageVersion || stage.ContractVersion != WorkspaceStageContract || !validSHA256(stage.ManifestHash) || strings.TrimSpace(stage.BuildPrefix) == "" || stage.BuildPrefix != strings.TrimSpace(stage.BuildPrefix) || strings.IndexByte(stage.BuildPrefix, 0) >= 0 || len(stage.BuildPrefix) > maxFailureStringBytes {
+		return fmt.Errorf("workspace stage request identity is invalid")
 	}
-	if stage.Version != WorkspaceStageVersion || stage.ContractVersion != WorkspaceStageContract || stage.ManifestHash != manifest.Hash || stage.BuildPrefix != manifest.Request.BuildPrefix || stage.Source != manifest.Source || !slices.Equal(stage.Artifacts, manifest.Artifacts) {
-		return fmt.Errorf("workspace stage request does not match the sealed manifest")
+	if err := sourceinvestigation.ValidateRepository(stage.Source); err != nil || !immutableSourceRevision.MatchString(stage.Source.Revision) {
+		return fmt.Errorf("workspace stage source identity is invalid")
+	}
+	if err := validateWorkspaceFiles(stage.Artifacts); err != nil {
+		return err
 	}
 	if !validSHA256(stage.Hash) {
 		return fmt.Errorf("workspace stage request hash is invalid")
@@ -198,6 +185,20 @@ func ValidateWorkspaceStageRequest(stage WorkspaceStageRequest, manifest Workspa
 	data, err := json.Marshal(stage)
 	if err != nil || len(data) > maxWorkspaceStageBytes {
 		return fmt.Errorf("workspace stage request exceeds %d bytes", maxWorkspaceStageBytes)
+	}
+	return nil
+}
+
+// ValidateWorkspaceStageRequest requires exact manifest and artifact identity.
+func ValidateWorkspaceStageRequest(stage WorkspaceStageRequest, manifest WorkspaceManifest) error {
+	if err := ValidateWorkspaceStageRequestIdentity(stage); err != nil {
+		return err
+	}
+	if err := ValidateWorkspaceManifest(manifest); err != nil {
+		return err
+	}
+	if stage.ManifestHash != manifest.Hash || stage.BuildPrefix != manifest.Request.BuildPrefix || stage.Source != manifest.Source || !slices.Equal(stage.Artifacts, manifest.Artifacts) {
+		return fmt.Errorf("workspace stage request does not match the sealed manifest")
 	}
 	return nil
 }
@@ -270,9 +271,9 @@ func SnapshotArtifactWorkspace(root string) ([]WorkspaceFile, error) {
 	return files, nil
 }
 
-// VerifyArtifactWorkspace confirms the mounted files match the sealed manifest.
-func VerifyArtifactWorkspace(root string, manifest WorkspaceManifest) error {
-	if err := ValidateWorkspaceManifest(manifest); err != nil {
+// VerifyArtifactFiles confirms a directory matches exact artifact identities.
+func VerifyArtifactFiles(root string, expected []WorkspaceFile) error {
+	if err := validateWorkspaceFiles(expected); err != nil {
 		return err
 	}
 	files, err := SnapshotArtifactWorkspace(root)
@@ -280,11 +281,19 @@ func VerifyArtifactWorkspace(root string, manifest WorkspaceManifest) error {
 		return err
 	}
 	left, _ := json.Marshal(files)
-	right, _ := json.Marshal(manifest.Artifacts)
+	right, _ := json.Marshal(expected)
 	if !bytes.Equal(left, right) {
 		return fmt.Errorf("artifact workspace does not match the sealed manifest")
 	}
 	return nil
+}
+
+// VerifyArtifactWorkspace confirms the mounted files match the sealed manifest.
+func VerifyArtifactWorkspace(root string, manifest WorkspaceManifest) error {
+	if err := ValidateWorkspaceManifest(manifest); err != nil {
+		return err
+	}
+	return VerifyArtifactFiles(root, manifest.Artifacts)
 }
 
 // VerifySourceWorkspace confirms the checkout exactly matches the pinned commit.
@@ -399,6 +408,29 @@ func ValidateWorkspaceExecutionRequest(request WorkspaceExecutionRequest) error 
 	data, err := json.Marshal(request)
 	if err != nil || len(data) > maxWorkspaceRequestBytes {
 		return fmt.Errorf("workspace analysis request exceeds %d bytes", maxWorkspaceRequestBytes)
+	}
+	return nil
+}
+
+func validateWorkspaceFiles(files []WorkspaceFile) error {
+	if len(files) < 1 || len(files) > maxWorkspaceFiles {
+		return fmt.Errorf("%w: artifact count must be between 1 and %d", ErrInvalidBundle, maxWorkspaceFiles)
+	}
+	var total int64
+	previous := ""
+	for index, file := range files {
+		clean, err := artifacts.SafePath(file.Path)
+		if err != nil || clean != file.Path || file.Path <= previous {
+			return fmt.Errorf("%w: artifact %d path is unsafe, duplicated, or unsorted", ErrInvalidBundle, index)
+		}
+		if file.Size < 0 || file.Size > maxWorkspaceFileBytes || !validSHA256(file.SHA256) {
+			return fmt.Errorf("%w: artifact %d metadata is invalid", ErrInvalidBundle, index)
+		}
+		total += file.Size
+		if total > maxWorkspaceTotalBytes {
+			return fmt.Errorf("%w: artifact bytes exceed %d", ErrInvalidBundle, maxWorkspaceTotalBytes)
+		}
+		previous = file.Path
 	}
 	return nil
 }

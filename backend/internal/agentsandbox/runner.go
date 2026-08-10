@@ -16,6 +16,7 @@ const (
 	Backend = "agent-sandbox"
 
 	StagedWorkspaceRoot          = "/workspace"
+	StagedWorkspaceInputPath     = "/input"
 	StagedWorkspaceSourcePath    = "/workspace/source"
 	StagedWorkspaceArtifactsPath = "/workspace/artifacts"
 	StagedWorkspaceResultPath    = "/workspace/result"

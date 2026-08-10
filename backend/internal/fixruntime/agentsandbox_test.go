@@ -275,6 +275,7 @@ func TestAgentSandboxRunUsesStagedReadOnlyWorkspace(t *testing.T) {
 	}
 	opts := testAgentSandboxOptions()
 	opts.StagerImage = "stager:test"
+	opts.StagerInputClaim = "analysis-input"
 	runtime := newAgentSandboxRuntimeForTest(api, opts)
 	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
 		Purpose: "analysis", ExecutionID: "request-1", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64",
@@ -330,11 +331,16 @@ func TestAgentSandboxRunUsesStagedReadOnlyWorkspace(t *testing.T) {
 	if err != nil || string(decoded) != `{"manifest":"abc"}` {
 		t.Fatalf("stage request=%q err=%v", decoded, err)
 	}
-	if pod["automountServiceAccountToken"] != false || len(pod["volumes"].([]any)) != 3 {
+	if pod["automountServiceAccountToken"] != false || len(pod["volumes"].([]any)) != 4 {
 		t.Fatalf("pod=%+v", pod)
 	}
-	if mounts[3].(map[string]any)["name"] != "executor-tmp" || stager["volumeMounts"].([]any)[1].(map[string]any)["name"] != "stager-tmp" {
-		t.Fatalf("temporary mounts are not isolated: executor=%+v stager=%+v", mounts, stager["volumeMounts"])
+	inputVolume := pod["volumes"].([]any)[0].(map[string]any)["persistentVolumeClaim"].(map[string]any)
+	if inputVolume["claimName"] != "analysis-input" || inputVolume["readOnly"] != true {
+		t.Fatalf("input volume=%+v", inputVolume)
+	}
+	stagerMounts := stager["volumeMounts"].([]any)
+	if mounts[3].(map[string]any)["name"] != "executor-tmp" || stagerMounts[0].(map[string]any)["name"] != "input" || stagerMounts[0].(map[string]any)["readOnly"] != true || stagerMounts[2].(map[string]any)["name"] != "stager-tmp" {
+		t.Fatalf("staged mounts are invalid: executor=%+v stager=%+v", mounts, stagerMounts)
 	}
 }
 
@@ -353,6 +359,7 @@ func TestAgentSandboxStagedWorkspaceRequiresStagerImage(t *testing.T) {
 func TestAgentSandboxWorkloadIdentityIncludesStageRequest(t *testing.T) {
 	opts := testAgentSandboxOptions()
 	opts.StagerImage = "stager:test"
+	opts.StagerInputClaim = "analysis-input"
 	left := agentsandbox.Spec{
 		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{"request":1}`),
 		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
@@ -394,7 +401,10 @@ func TestAgentSandboxRuntimeIdentityIncludesWorkloadConfiguration(t *testing.T) 
 		func(opts *AgentSandboxOptions) { opts.ServiceAccountName = "other-workload" },
 		func(opts *AgentSandboxOptions) { opts.RuntimeClassName = "other-runtime" },
 		func(opts *AgentSandboxOptions) { opts.Resources.MemoryLimit = "1Gi" },
-		func(opts *AgentSandboxOptions) { opts.StagerImage = "stager:test" },
+		func(opts *AgentSandboxOptions) {
+			opts.StagerImage = "stager:test"
+			opts.StagerInputClaim = "analysis-input"
+		},
 	} {
 		changed := base
 		mutate(&changed)
@@ -716,6 +726,13 @@ func TestAgentSandboxProductionOptionsFailClosed(t *testing.T) {
 	}{
 		{name: "mutable image", edit: func(o *AgentSandboxOptions) { o.Image = "registry.internal.example/fixer:latest" }, want: "immutable sha256"},
 		{name: "mutable stager image", edit: func(o *AgentSandboxOptions) { o.StagerImage = "registry.internal.example/stager:latest" }, want: "stager image"},
+		{name: "stager without claim", edit: func(o *AgentSandboxOptions) {
+			o.StagerImage = "registry.internal.example/stager@sha256:" + strings.Repeat("b", 64)
+		}, want: "configured together"},
+		{name: "invalid stager claim", edit: func(o *AgentSandboxOptions) {
+			o.StagerImage = "registry.internal.example/stager@sha256:" + strings.Repeat("b", 64)
+			o.StagerInputClaim = "Invalid_Claim"
+		}, want: "input claim"},
 		{name: "runtime class", edit: func(o *AgentSandboxOptions) { o.RuntimeClassName = "" }, want: "runtime class"},
 		{name: "insecure gateway", edit: func(o *AgentSandboxOptions) { o.ModelGateway.Endpoint = "http://gateway.fix-eval.svc/v1" }, want: "absolute https"},
 		{name: "public gateway", edit: func(o *AgentSandboxOptions) { o.ModelGateway.Endpoint = "https://api.openai.com/v1" }, want: "public CA private DNS"},

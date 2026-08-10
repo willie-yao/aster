@@ -72,6 +72,17 @@ jobs:
       - name: Test git-only runtime
         run: hack/test-remote-fixer-image.sh prow-ai-dashboard/remote-fixer:ci
 
+  agent-sandbox-analysis-images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build executor
+        run: docker build --target agent-sandbox-analysis-executor -t prow-ai-dashboard/agent-sandbox-analysis-executor:ci .
+      - name: Build stager
+        run: docker build --target agent-sandbox-analysis-stager -t prow-ai-dashboard/agent-sandbox-analysis-stager:ci .
+      - name: Test credential-free runtimes
+        run: hack/test-agent-sandbox-analysis-images.sh prow-ai-dashboard/agent-sandbox-analysis-executor:ci prow-ai-dashboard/agent-sandbox-analysis-stager:ci
+
   agent-sandbox-critic-executor-image:
     runs-on: ubuntu-latest
     steps:

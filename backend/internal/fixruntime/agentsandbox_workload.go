@@ -96,11 +96,12 @@ func (r *AgentSandboxRuntime) sandboxWorkloadPodSpec(spec agentsandbox.Spec) map
 			"securityContext": k8sruntime.DeepCopyJSONValue(containerSecurity),
 			"resources":       k8sruntime.DeepCopyJSONValue(resources),
 			"volumeMounts": []any{
+				map[string]any{"name": "input", "mountPath": agentsandbox.StagedWorkspaceInputPath, "readOnly": true},
 				map[string]any{"name": "workspace", "mountPath": agentsandbox.StagedWorkspaceRoot},
 				map[string]any{"name": "stager-tmp", "mountPath": "/tmp"},
 			},
 		}}
-		podSpec["volumes"] = stagedReadOnlyWorkspaceVolumes(r.opts.Resources.EphemeralStorage)
+		podSpec["volumes"] = stagedReadOnlyWorkspaceVolumes(r.opts.Resources.EphemeralStorage, r.opts.StagerInputClaim)
 	case spec.WritableWorkspace:
 		container["volumeMounts"] = []any{
 			map[string]any{"name": "workspace", "mountPath": agentsandbox.StagedWorkspaceRoot},
@@ -121,8 +122,9 @@ func writableWorkspaceVolumes(sizeLimit string) []any {
 	}
 }
 
-func stagedReadOnlyWorkspaceVolumes(sizeLimit string) []any {
+func stagedReadOnlyWorkspaceVolumes(sizeLimit, inputClaim string) []any {
 	return []any{
+		map[string]any{"name": "input", "persistentVolumeClaim": map[string]any{"claimName": inputClaim, "readOnly": true}},
 		map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": sizeLimit}},
 		map[string]any{"name": "executor-tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
 		map[string]any{"name": "stager-tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},

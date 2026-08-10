@@ -52,9 +52,14 @@ The stage request, stager image, executor request, resource bounds, and workload
 shape all participate in the Sandbox identity. UID-checked cleanup and bounded
 Pod-log retrieval remain owned by the existing shared lifecycle.
 
-This phase defines the workload shape and private analyzer adapter only. It does
-not define source or artifact credentials, a staging implementation, Helm values,
-admission policy, network policy, or a live deployment.
+The credential-free stager now reads one pre-populated, read-only PVC snapshot at
+`/<manifest-hash>/source` and `/<manifest-hash>/artifacts`. It validates the
+source revision and artifact identities, fetches only the pinned commit into a
+shallow local checkout, copies the bounded artifacts, and creates an empty result
+directory. The Sandbox receives no source, storage, or model credential.
+
+This phase does not define PVC population, Helm values, admission policy,
+network policy, image publication, or a live deployment.
 
 ## Native OpenCode boundary
 
@@ -103,7 +108,7 @@ orchestration are intentionally deferred to the next focused change.
 
 ```bash
 cd backend
-go test ./internal/agentanalysis ./internal/analysisexecutor ./cmd/analysisexecutor -count=1
+go test ./internal/agentanalysis ./internal/analysisexecutor ./internal/analysisstager ./cmd/analysisexecutor ./cmd/analysisstager -count=1
 go test ./... -count=1
 go vet ./...
 staticcheck ./...
