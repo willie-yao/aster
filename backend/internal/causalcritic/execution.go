@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -265,6 +266,10 @@ func ValidateGatewayConfig(gateway engineruntime.ModelGatewayConfig) error {
 	}
 	if gateway.ProtocolVersion != "openai-chat-completions-v1" {
 		return fmt.Errorf("causal critic gateway protocol %q is unsupported", gateway.ProtocolVersion)
+	}
+	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	if net.ParseIP(host) != nil || !strings.HasSuffix(host, ".svc") && !strings.HasSuffix(host, ".svc.cluster.local") && !strings.HasSuffix(host, ".internal") {
+		return fmt.Errorf("causal critic gateway must use internal service DNS")
 	}
 	return nil
 }

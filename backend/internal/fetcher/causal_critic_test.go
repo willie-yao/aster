@@ -107,7 +107,7 @@ func TestValidateCausalCriticOptions(t *testing.T) {
 	}
 	direct := valid
 	direct.CausalCritic.ModelGateway.Endpoint = "https://api.openai.com/v1"
-	if err := validateAnalysisRuntimeOptions(direct); err == nil || !strings.Contains(err.Error(), "public CA private DNS") {
+	if err := validateAnalysisRuntimeOptions(direct); err == nil || !strings.Contains(err.Error(), "internal service DNS") {
 		t.Fatalf("direct provider error = %v", err)
 	}
 	orka := valid

@@ -187,6 +187,10 @@ func TestExecutionRequestRequiresInternalGateway(t *testing.T) {
 	if err := ValidateExecutionRequest(request); err != nil {
 		t.Fatal(err)
 	}
+	request.ModelGateway.Endpoint = "https://127.0.0.1/v1"
+	if err := ValidateExecutionRequest(request); err == nil || !strings.Contains(err.Error(), "internal service DNS") {
+		t.Fatalf("loopback gateway err=%v", err)
+	}
 }
 
 func TestRuntimeIdentityIncludesImageAndGateway(t *testing.T) {
