@@ -108,7 +108,9 @@ test("AI usage labels cost and token coverage accurately", () => {
   assert.match(page, /role="status" aria-live="polite"/);
   assert.match(page, /Coverage: \{activeDay\.coverage\.status\}/);
   assert.match(page, /var\(--mui-palette-warning-main\)/);
-  assert.match(page, /chartTickValues\(rawMax\)/);
+  assert.match(page, /chartScale\(rawMax, availableIndexes\.length > 0\)/);
+  assert.match(page, /chartCurrencyPolicy\(recordedCurrency, currentCurrency, mixedCurrency\)/);
+  assert.match(page, /chartSeriesDescription\(Boolean\(recordedPath\), Boolean\(currentPath\)\)/);
   assert.match(page, /chartDateTickIndexes\(days\.length\)/);
   assert.doesNotMatch(page, /`\$\{exact\} partial`/);
   assert.match(page, /Partial UTC day/);

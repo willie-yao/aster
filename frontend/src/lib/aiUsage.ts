@@ -51,6 +51,27 @@ export function nearestChartDataIndex(target: number, available: number[]): numb
   if (available.length === 0) return null;
   return available.reduce((nearest, index) => Math.abs(index - target) < Math.abs(nearest - target) ? index : nearest, available[0]);
 }
+export function chartScale(max: number, hasData: boolean): { ticks: number[]; max: number } {
+  if (!hasData) return { ticks: [], max: 0 };
+  if (!Number.isFinite(max) || max <= 0) return { ticks: [0], max: 1 };
+  const ticks = chartTickValues(max);
+  return { ticks, max: ticks.at(-1) ?? max };
+}
+export function chartCurrencyPolicy(recordedCurrency?: string, currentCurrency?: string, mixedRecorded = false): { showRecorded: boolean; showCurrent: boolean; note?: string } {
+  if (mixedRecorded) {
+    return { showRecorded: false, showCurrent: true, note: "Recorded series omitted because recorded estimates contain multiple currencies." };
+  }
+  if (recordedCurrency && currentCurrency && recordedCurrency !== currentCurrency) {
+    return { showRecorded: true, showCurrent: false, note: `Current-rate series omitted because current rates use ${currentCurrency} while recorded estimates use ${recordedCurrency}.` };
+  }
+  return { showRecorded: true, showCurrent: true };
+}
+export function chartSeriesDescription(hasRecorded: boolean, hasCurrent: boolean): string {
+  const series = [];
+  if (hasRecorded) series.push("Solid blue shows recorded estimates.");
+  if (hasCurrent) series.push("Dashed amber shows current-rate estimates.");
+  return `${series.join(" ")} Hover over the chart or focus it and use the left and right arrow keys to inspect dates. Exact daily values are listed in the table below.`.trim();
+}
 export function usageQuery(start: string, end: string, feature?: AIUsageFeature): string {
   const query = new URLSearchParams({ start, end }); if (feature) query.append("feature", feature); return query.toString();
 }

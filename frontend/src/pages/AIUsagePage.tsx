@@ -26,8 +26,10 @@ import { Panel } from "../components/Panel";
 import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
 import {
+  chartCurrencyPolicy,
   chartDateTickIndexes,
-  chartTickValues,
+  chartScale,
+  chartSeriesDescription,
   featureLabels,
   formatChartCost,
   formatCost,
@@ -146,16 +148,22 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
   const width = 960; const height = 270;
   const plot = { left: 70, right: 18, top: 24, bottom: 42 };
   const plotWidth = width - plot.left - plot.right; const plotHeight = height - plot.top - plot.bottom;
-  const recorded = days.map((day) => !mixedCurrency && (day.recorded_cost_status === "available" || day.recorded_cost_status === "partial") ? costNumber(day.totals.estimated_cost_nanos) : null);
-  const current = days.map((day) => day.current_rate_status !== "unavailable" ? costNumber(day.current_rate_estimated_cost_nanos) : null);
+  const recordedCandidates = days.map((day) => day.recorded_currency && (day.recorded_cost_status === "available" || day.recorded_cost_status === "partial") ? costNumber(day.totals.estimated_cost_nanos) : null);
+  const currentCandidates = days.map((day) => day.current_rate_currency && day.current_rate_status !== "unavailable" ? costNumber(day.current_rate_estimated_cost_nanos) : null);
+  const recordedCurrency = days.find((_, index) => recordedCandidates[index] !== null)?.recorded_currency;
+  const currentCurrency = days.find((_, index) => currentCandidates[index] !== null)?.current_rate_currency;
+  const currencyPolicy = chartCurrencyPolicy(recordedCurrency, currentCurrency, mixedCurrency);
+  const recorded = currencyPolicy.showRecorded ? recordedCandidates : recordedCandidates.map(() => null);
+  const current = currencyPolicy.showCurrent ? currentCandidates : currentCandidates.map(() => null);
+  const availableIndexes = days.flatMap((_, index) => recorded[index] !== null || current[index] !== null ? [index] : []);
   const rawMax = Math.max(0, ...recorded.map((value) => value ?? 0), ...current.map((value) => value ?? 0));
-  const ticks = chartTickValues(rawMax); const axisMax = ticks.at(-1) ?? rawMax;
+  const scale = chartScale(rawMax, availableIndexes.length > 0); const ticks = scale.ticks; const axisMax = scale.max;
   const recordedPath = linePath(recorded, plotWidth, plotHeight, axisMax);
   const currentPath = linePath(current, plotWidth, plotHeight, axisMax);
-  const availableIndexes = days.flatMap((_, index) => recorded[index] !== null || current[index] !== null ? [index] : []);
   const xForIndex = (index: number) => plot.left + (days.length === 1 ? plotWidth / 2 : index / (days.length - 1) * plotWidth);
   const yForValue = (value: number) => plot.top + plotHeight - value / axisMax * plotHeight;
-  const chartCurrency = days.find((day) => day.current_rate_currency)?.current_rate_currency ?? days.find((day) => day.recorded_currency)?.recorded_currency;
+  const chartCurrency = current.some((value) => value !== null) ? currentCurrency : recordedCurrency;
+  const seriesDescription = chartSeriesDescription(Boolean(recordedPath), Boolean(currentPath));
   const selectedIndex = activeIndex !== null && availableIndexes.includes(activeIndex) ? activeIndex : null;
   const activeDay = selectedIndex === null ? null : days[selectedIndex];
   const activeX = selectedIndex === null ? null : xForIndex(selectedIndex);
@@ -175,7 +183,7 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
     else if (event.key === "ArrowLeft") setActiveIndex(availableIndexes[Math.max(0, position < 0 ? availableIndexes.length - 1 : position - 1)] ?? null);
     else setActiveIndex(availableIndexes[Math.min(availableIndexes.length - 1, position < 0 ? 0 : position + 1)] ?? null);
   };
-  if (rawMax === 0) return <Box sx={{ py: 5, textAlign: "center" }}><Typography color="text.secondary">No priced daily cost values are available in this range.</Typography></Box>;
+  if (availableIndexes.length === 0) return <Box sx={{ py: 5, textAlign: "center" }}><Typography color="text.secondary">No comparable single-currency daily cost values are available in this range.</Typography>{currencyPolicy.note && <Typography variant="caption" color="text.secondary">{currencyPolicy.note}</Typography>}</Box>;
   return <Box>
     <Box sx={{ overflowX: "auto", pb: .5 }}>
       <Box sx={{ position: "relative", minWidth: { xs: 720, md: 0 } }}>
@@ -193,7 +201,7 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
         sx={{ width: "100%", height: { xs: 230, md: 285 }, display: "block", borderRadius: 1, outline: "none", "&:focus-visible": { boxShadow: "0 0 0 2px var(--mui-palette-primary-main)" } }}
       >
         <title id="daily-cost-chart-title">Daily AI cost estimates</title>
-        <desc id="daily-cost-chart-desc">Solid blue shows recorded estimates. Dashed amber shows current-rate estimates. Hover over the chart or focus it and use the left and right arrow keys to inspect dates. Exact daily values are listed in the table below.</desc>
+        <desc id="daily-cost-chart-desc">{seriesDescription}{currencyPolicy.note ? ` ${currencyPolicy.note}` : ""}</desc>
         <text x={plot.left} y="13" fill="var(--mui-palette-text-secondary)" fontSize="11">{chartCurrency ? `${chartCurrency} per UTC day` : "Cost per UTC day"}</text>
         {ticks.map((tick) => {
           const y = yForValue(tick);
@@ -225,6 +233,8 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
       {recordedPath && <Typography variant="caption"><Box component="span" sx={{ display: "inline-block", width: 22, borderTop: "3px solid", borderColor: "primary.main", mr: .8, verticalAlign: "middle" }} />Recorded estimate (solid)</Typography>}
       {currentPath && <Typography variant="caption"><Box component="span" sx={{ display: "inline-block", width: 22, borderTop: "3px dashed", borderColor: "warning.main", mr: .8, verticalAlign: "middle" }} />Current-rate estimate (dashed)</Typography>}
       <Typography variant="caption" color="text.secondary">Hover to inspect. Keyboard: focus chart, then use ← and →.</Typography>
+      {rawMax === 0 && <Typography variant="caption" color="text.secondary">All reported values in this chart are {formatChartCost(0, chartCurrency)}.</Typography>}
+      {currencyPolicy.note && <Typography variant="caption" color="text.secondary" sx={{ flexBasis: "100%" }}>{currencyPolicy.note}</Typography>}
     </Stack>
   </Box>;
 }
