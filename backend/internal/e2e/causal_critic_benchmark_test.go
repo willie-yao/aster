@@ -492,7 +492,13 @@ func causalCriticBenchmarkRecordRank(record causalCriticBenchmarkRecord) int {
 	if trial.Status == causalcritic.TrialCleanupPending || trial.CleanupWork != nil {
 		return 1
 	}
-	if trial.Status == causalcritic.TrialSucceeded && (!trial.Finalized || trial.Review == nil || !trial.Telemetry.CleanupCompleted) {
+	if trial.Status == causalcritic.TrialSucceeded {
+		if !trial.Finalized || trial.Review == nil || !trial.Telemetry.CleanupCompleted {
+			return 1
+		}
+		return 2
+	}
+	if trial.ErrorCode != string(trial.Status) {
 		return 1
 	}
 	return 2
@@ -825,5 +831,32 @@ func TestUpsertCausalCriticBenchmarkJSONLReplacesIncompleteRecord(t *testing.T) 
 	conflict.Trial.RuntimeDurationMs = 99
 	if err := upsertCausalCriticBenchmarkJSONL(path, conflict); err == nil {
 		t.Fatal("conflicting terminal row was accepted")
+	}
+}
+
+func TestUpsertCausalCriticBenchmarkJSONLReplacesIncompleteFailedRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "critic.jsonl")
+	attemptHash := strings.Repeat("f", 64)
+	pairHash := strings.Repeat("1", 64)
+	tombstone := causalCriticBenchmarkRecord{
+		Version: causalCriticBenchmarkRecordVersion,
+		Trial:   causalcritic.TrialRecord{AttemptHash: attemptHash, PairHash: pairHash, Status: causalcritic.TrialRuntimeFailure},
+	}
+	detailed := tombstone
+	detailed.Trial.ErrorCode = "runtime_failure"
+	detailed.Trial.FailureCode = "gateway_request"
+	detailed.Trial.FailureReason = "model gateway request failed"
+	if err := upsertCausalCriticBenchmarkJSONL(path, tombstone); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertCausalCriticBenchmarkJSONL(path, detailed); err != nil {
+		t.Fatal(err)
+	}
+	records, err := readCausalCriticBenchmarkJSONL(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Trial.ErrorCode != "runtime_failure" || records[0].Trial.FailureCode != "gateway_request" {
+		t.Fatalf("records=%+v", records)
 	}
 }
