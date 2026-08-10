@@ -23,18 +23,19 @@ contain one JSON object with exactly this shape:
   "root_cause": "grounded causal explanation",
   "severity": "Critical|High|Medium|Low|Transient-Ignore",
   "suggested_fix": "bounded remediation based on verified evidence",
-  "relevant_files": ["source/path.go"],
+  "relevant_files": ["pkg/path.go"],
   "evidence_citations": [
-    {"path": "artifact/path.log", "line_start": 1, "line_end": 2, "quote": "exact artifact text"}
+    {"path": "logs/artifact.log", "line_start": 1, "line_end": 2, "quote": "exact artifact text"}
   ],
   "source_citations": [
-    {"path": "source/path.go", "line_start": 1, "line_end": 2, "quote": "exact source text"}
+    {"path": "pkg/path.go", "line_start": 1, "line_end": 2, "quote": "exact source text"}
   ],
   "unresolved_details": ["important unknown"]
 }
 ```
 
-Use paths relative to `artifacts/` and `source/`. Copy short quote lines
+Use paths relative to `artifacts/` and `source/`. Omit the leading `artifacts/`
+and `source/` mount-directory components from every result path. Copy short quote lines
 verbatim from consecutive lines. Include at least one artifact citation. List a
 source path in `relevant_files` only when a source citation verifies it. Do not
 add Markdown fences or prose outside the JSON object.

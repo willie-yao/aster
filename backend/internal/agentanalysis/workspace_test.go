@@ -127,6 +127,17 @@ func TestParseWorkspaceAnalysisRejectsUngroundedPaths(t *testing.T) {
 	}
 }
 
+func TestSafeWorkspaceSourcePathRejectsGitMetadataCaseInsensitive(t *testing.T) {
+	for _, path := range []string{".git/config", ".GIT/config", ".Git/config", ".gIt"} {
+		if safeWorkspaceSourcePath(path) {
+			t.Fatalf("Git metadata path %q was accepted", path)
+		}
+	}
+	if !safeWorkspaceSourcePath("pkg/controller.go") {
+		t.Fatal("regular source path was rejected")
+	}
+}
+
 func TestParseWorkspaceAnalysisRejectsGitMetadataCitation(t *testing.T) {
 	sourceRoot, artifactRoot, request, source := workspaceTestInputs(t)
 	files, err := SnapshotArtifactWorkspace(artifactRoot)
@@ -174,7 +185,7 @@ func TestWorkspaceExecutionRequestBindsPromptAndRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(prompt, "logs/build.log") || !strings.Contains(prompt, "Inspect this project.") || strings.Contains(prompt, "artifact-only-marker") {
+	if !strings.Contains(prompt, "logs/build.log") || !strings.Contains(prompt, "Inspect this project.") || !strings.Contains(prompt, "Omit the leading `artifacts/`") || strings.Contains(prompt, "artifact-only-marker") || strings.Contains(prompt, `"source/path.go"`) {
 		t.Fatalf("unexpected prompt: %s", prompt)
 	}
 	tampered := execution

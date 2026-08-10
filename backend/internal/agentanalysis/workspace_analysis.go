@@ -356,7 +356,8 @@ func workspaceRelevantFiles(files []string, citations []sourceinvestigation.Cita
 
 func safeWorkspaceSourcePath(value string) bool {
 	clean, err := artifacts.SafePath(value)
-	return err == nil && clean == value && clean != ".git" && !strings.HasPrefix(clean, ".git/")
+	parts := strings.Split(clean, "/")
+	return err == nil && clean == value && len(parts) > 0 && !strings.EqualFold(parts[0], ".git")
 }
 
 func readWorkspaceText(root, relative string, expectedMax int64) (string, error) {
