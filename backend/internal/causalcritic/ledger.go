@@ -27,6 +27,7 @@ const (
 	maxLedgerBytes      = 4 << 20
 	ledgerRetention     = 30 * 24 * time.Hour
 	pendingRetention    = time.Hour
+	pendingRecoveryAge  = 35 * time.Minute
 )
 
 var ErrTrialAlreadyAttempted = errors.New("causal critic trial already attempted")
@@ -159,7 +160,18 @@ func RunTrial(ctx context.Context, reviewer Reviewer, spec TrialSpec) (TrialReco
 		return TrialRecord{}, fmt.Errorf("%w: %s repetition %d", ErrTrialAlreadyAttempted, spec.Metadata.CaseID, spec.Metadata.Repetition)
 	}
 	started := now()
-	result, runErr := reviewer.Review(ctx, spec.Input, spec.ExecutionID, spec.Observer)
+	observer := func(observerCtx context.Context, work engineruntime.WorkRef) error {
+		if work.UID != "" {
+			if err := persistPendingCleanupWork(spec.PublicDir, spec.LedgerPath, attemptHash, work); err != nil {
+				return err
+			}
+		}
+		if spec.Observer != nil {
+			return spec.Observer(observerCtx, work)
+		}
+		return nil
+	}
+	result, runErr := reviewer.Review(ctx, spec.Input, spec.ExecutionID, observer)
 	record.RuntimeDurationMs = max(now().Sub(started).Milliseconds(), 0)
 	record.Resources = result.Resources
 	if result.CleanupWork != nil && !result.Telemetry.CleanupCompleted {
@@ -303,6 +315,35 @@ func appendTrial(publicDir, path string, record TrialRecord) error {
 		ledger.UpdatedAt = record.CreatedAt
 		pruneLedger(&ledger, createdAtOrNow(record.CreatedAt))
 		return writeLedger(resolved, ledger)
+	})
+}
+
+func persistPendingCleanupWork(publicDir, path, attemptHash string, work engineruntime.WorkRef) error {
+	if strings.TrimSpace(work.Backend) == "" || strings.TrimSpace(work.Namespace) == "" || strings.TrimSpace(work.Name) == "" || strings.TrimSpace(work.UID) == "" {
+		return fmt.Errorf("causal critic observed work identity is incomplete")
+	}
+	return withLedgerLock(publicDir, path, func(resolved string) error {
+		ledger, err := loadLedger(resolved)
+		if err != nil {
+			return err
+		}
+		for index := range ledger.Records {
+			record := &ledger.Records[index]
+			if record.AttemptHash != attemptHash {
+				continue
+			}
+			if record.Status != TrialPending {
+				return fmt.Errorf("causal critic observed work arrived after trial completion")
+			}
+			if record.CleanupWork != nil && *record.CleanupWork != work {
+				return fmt.Errorf("%w: causal critic observed work identity changed", engineruntime.ErrWorkIdentityChanged)
+			}
+			observed := work
+			record.CleanupWork = &observed
+			ledger.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			return writeLedger(resolved, ledger)
+		}
+		return fmt.Errorf("causal critic trial claim is missing")
 	})
 }
 
@@ -473,9 +514,16 @@ func RecoverPendingCleanup(ctx context.Context, cleaner PendingCleaner, publicDi
 			return err
 		}
 		for _, record := range ledger.Records {
-			if record.CleanupWork != nil {
-				pending = append(pending, record)
+			if record.CleanupWork == nil {
+				continue
 			}
+			if record.Status == TrialPending {
+				created, _ := time.Parse(time.RFC3339Nano, record.CreatedAt)
+				if created.After(time.Now().UTC().Add(-pendingRecoveryAge)) {
+					continue
+				}
+			}
+			pending = append(pending, record)
 		}
 		return nil
 	}); err != nil {

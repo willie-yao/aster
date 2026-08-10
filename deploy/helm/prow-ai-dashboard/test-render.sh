@@ -1983,6 +1983,10 @@ helm template test "$chart" -n dashboard-test -f "$tmp/causal-critic.yaml" --set
 grep -Fq 'kind: CiliumNetworkPolicy' "$tmp/causal-critic-cilium-render.yaml"
 grep -Fq 'toEntities: [cluster]' "$tmp/causal-critic-cilium-render.yaml"
 grep -Fq "variables.container.env[0].name == 'PROW_AI_CAUSAL_CRITIC_REQUEST_B64'" "$tmp/causal-critic-render.yaml"
+grep -Fq "variables.container.securityContext.privileged == false" "$tmp/causal-critic-render.yaml"
+grep -Fq "variables.container.securityContext.procMount == 'Default'" "$tmp/causal-critic-render.yaml"
+grep -Fq "size(variables.container.envFrom) == 0" "$tmp/causal-critic-render.yaml"
+grep -Fq "size(variables.container.command) == 0" "$tmp/causal-critic-render.yaml"
 critic_resources=$(awk '
   /app.kubernetes.io\/component: agent-sandbox-causal-critic$/ { component=1 }
   component && /kind: Role$/ { in_role=1 }
@@ -2015,6 +2019,7 @@ expect_causal_critic_fail orka-shadow 'cannot run with orka.agentAnalysisShadow'
 expect_causal_critic_fail orka-fix 'cannot run with orka.fixRuntime' --set orka.fixRuntime.enabled=true "${fix_admission_args[@]}" --set orka.fixRuntime.image.tag=sha-test
 expect_causal_critic_fail shared-fix-identity 'must not share its namespace and workload ServiceAccount' -f "$tmp/agent-sandbox.yaml" --set agentSandbox.causalCritic.namespace=fix-eval --set agentSandbox.causalCritic.workloadServiceAccount.name=fix-workload
 expect_causal_critic_fail timeout-over-limit 'timeout must be at most 30m' --set-string agentSandbox.causalCritic.timeout=31m
+expect_causal_critic_fail cilium-dns-namespace 'cilium mode requires dnsNamespaceSelector.kubernetes.io/metadata.name' --set agentSandbox.causalCritic.networkPolicy.mode=cilium --set-string 'agentSandbox.causalCritic.networkPolicy.dnsNamespaceSelector.kubernetes\.io/metadata\.name='
 expect_causal_critic_fail reserved-env 'must not override reserved critic variable' --set fetcher.extraEnv[0].name=AGENT_SANDBOX_CRITIC_IMAGE --set fetcher.extraEnv[0].value=attacker
 
 echo 'Helm render checks passed.'

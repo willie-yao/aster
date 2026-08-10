@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -44,6 +45,9 @@ func readRequest() (causalcritic.ExecutionRequest, error) {
 	var request causalcritic.ExecutionRequest
 	if err := decoder.Decode(&request); err != nil {
 		return request, fmt.Errorf("parse critic request: %w", err)
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return request, fmt.Errorf("parse critic request: trailing data")
 	}
 	if err := causalcritic.ValidateExecutionRequest(request); err != nil {
 		return request, err

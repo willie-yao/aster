@@ -751,6 +751,7 @@ key, or bot token).
   {{- if eq (len $cfg.networkPolicy.gatewayPodSelector) 0 -}}{{- fail "agentSandbox.causalCritic.networkPolicy.gatewayPodSelector is required" -}}{{- end -}}
   {{- if or (lt (int $cfg.networkPolicy.gatewayPort) 1) (gt (int $cfg.networkPolicy.gatewayPort) 65535) -}}{{- fail "agentSandbox.causalCritic.networkPolicy.gatewayPort is invalid" -}}{{- end -}}
   {{- if or (eq (len $cfg.networkPolicy.dnsNamespaceSelector) 0) (eq (len $cfg.networkPolicy.dnsPodSelector) 0) -}}{{- fail "agentSandbox.causalCritic DNS network selectors are required" -}}{{- end -}}
+  {{- if and (eq $cfg.networkPolicy.mode "cilium") (or (not (hasKey $cfg.networkPolicy.dnsNamespaceSelector "kubernetes.io/metadata.name")) (not (get $cfg.networkPolicy.dnsNamespaceSelector "kubernetes.io/metadata.name"))) -}}{{- fail "agentSandbox.causalCritic cilium mode requires dnsNamespaceSelector.kubernetes.io/metadata.name" -}}{{- end -}}
   {{- range $env := concat .Values.server.extraEnv .Values.fetcher.extraEnv -}}
     {{- if hasPrefix "AGENT_SANDBOX_CRITIC_" (default "" $env.name) -}}{{- fail (printf "extraEnv must not override reserved critic variable %s" $env.name) -}}{{- end -}}
   {{- end -}}

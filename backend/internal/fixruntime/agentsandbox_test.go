@@ -302,6 +302,17 @@ func TestAgentSandboxRuntimeSuccessAndSecurityContract(t *testing.T) {
 	assertSandboxSecurity(t, api.object)
 }
 
+func TestAgentSandboxRuntimeRejectsEmptySuccessfulLogs(t *testing.T) {
+	api := &fakeAgentSandboxAPI{
+		state: sandboxState{Exists: true, UID: "uid-1", PodName: "fix-request-1", Finished: true, FinishedReason: "PodSucceeded"},
+	}
+	runtime := newAgentSandboxRuntimeForTest(api, testAgentSandboxOptions())
+	result, err := runtime.Generate(context.Background(), agentSandboxSpec())
+	if !errors.Is(err, engineruntime.ErrMalformedResult) || result.TerminalState != engineruntime.TerminalFailed || !result.Telemetry.CleanupCompleted {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
 func TestAgentSandboxRuntimeRejectsCredentialsBeforeCreate(t *testing.T) {
 	cases := []struct {
 		name string

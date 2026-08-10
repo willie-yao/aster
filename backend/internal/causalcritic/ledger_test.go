@@ -18,6 +18,12 @@ type trialReviewer struct {
 	calls  int
 }
 
+type trialReviewerFunc func(context.Context, Input, string, engineruntime.WorkObserver) (Result, error)
+
+func (f trialReviewerFunc) Review(ctx context.Context, input Input, executionID string, observer engineruntime.WorkObserver) (Result, error) {
+	return f(ctx, input, executionID, observer)
+}
+
 func (r *trialReviewer) Review(context.Context, Input, string, engineruntime.WorkObserver) (Result, error) {
 	r.calls++
 	return r.result, r.err
@@ -79,6 +85,42 @@ func TestRunTrialPreservesReviewWhenCleanupPending(t *testing.T) {
 	})
 	if !errors.Is(err, engineruntime.ErrCleanupPending) || record.Status != TrialCleanupPending || record.Finalized || record.Review == nil {
 		t.Fatalf("record=%+v err=%v", record, err)
+	}
+}
+
+func TestRunTrialPersistsObservedWorkWhilePending(t *testing.T) {
+	root := t.TempDir()
+	publicDir, ledgerPath := filepath.Join(root, "public"), filepath.Join(root, "private", "critic.json")
+	externalCalls := 0
+	reviewer := trialReviewerFunc(func(ctx context.Context, _ Input, _ string, observer engineruntime.WorkObserver) (Result, error) {
+		planned := engineruntime.WorkRef{Backend: "agent-sandbox", Namespace: "critic", Name: "critic-run"}
+		if err := observer(ctx, planned); err != nil {
+			return Result{}, err
+		}
+		observed := planned
+		observed.UID = "uid-1"
+		if err := observer(ctx, observed); err != nil {
+			return Result{}, err
+		}
+		ledger, err := loadLedger(ledgerPath)
+		if err != nil {
+			return Result{}, err
+		}
+		if len(ledger.Records) != 1 || ledger.Records[0].Status != TrialPending || ledger.Records[0].CleanupWork == nil || ledger.Records[0].CleanupWork.UID != observed.UID {
+			t.Fatalf("pending ledger=%+v", ledger)
+		}
+		return Result{Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true}}, engineruntime.ErrMalformedResult
+	})
+	_, err := RunTrial(t.Context(), reviewer, TrialSpec{
+		PublicDir: publicDir, LedgerPath: ledgerPath, Metadata: trialMetadata(), Input: criticInput(t),
+		ExecutionID: "critic-observed", RuntimeIdentity: testCriticRuntimeIdentity(),
+		Observer: func(context.Context, engineruntime.WorkRef) error {
+			externalCalls++
+			return nil
+		},
+	})
+	if !errors.Is(err, engineruntime.ErrMalformedResult) || externalCalls != 2 {
+		t.Fatalf("err=%v external calls=%d", err, externalCalls)
 	}
 }
 
@@ -196,5 +238,50 @@ func TestRecoverPendingCleanupPreservesFailedReviewStatus(t *testing.T) {
 	got := ledger.Records[0]
 	if cleaner.calls != 1 || got.Status != TrialMalformedResult || got.Finalized || !got.Telemetry.CleanupCompleted || got.CleanupWork != nil {
 		t.Fatalf("cleaner=%+v record=%+v", cleaner, got)
+	}
+}
+
+func TestRecoverPendingCleanupWaitsForStalePendingWork(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		age       time.Duration
+		wantCalls int
+	}{
+		{name: "recent", age: time.Minute},
+		{name: "stale", age: pendingRecoveryAge + time.Minute, wantCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := criticInput(t)
+			metadata := trialMetadata()
+			created := time.Now().UTC().Add(-tc.age)
+			attemptHash := trialAttemptHash(metadata, input, "critic-stale", testCriticRuntimeIdentity())
+			record := TrialRecord{
+				ID: trialRecordID(created, attemptHash), CreatedAt: created.Format(time.RFC3339Nano), AttemptHash: attemptHash,
+				RuntimeIdentity: testCriticRuntimeIdentity(), Status: TrialPending, Metadata: metadata,
+				EvidenceHash: input.EvidenceHash, DraftHash: input.DraftHash, PairHash: input.PairHash,
+				Usage:       GatewayUsage{Status: "unavailable", Source: "gateway_response"},
+				CleanupWork: &engineruntime.WorkRef{Backend: "agent-sandbox", Namespace: "critic", Name: "critic-run", UID: "uid-1"},
+			}
+			root := t.TempDir()
+			publicDir, ledgerPath := filepath.Join(root, "public"), filepath.Join(root, "private", "critic.json")
+			claimed, err := claimTrial(publicDir, ledgerPath, record)
+			if err != nil || !claimed {
+				t.Fatalf("claim=%v err=%v", claimed, err)
+			}
+			cleaner := &trialCleaner{}
+			if err := RecoverPendingCleanup(t.Context(), cleaner, publicDir, ledgerPath); err != nil {
+				t.Fatal(err)
+			}
+			ledger, err := loadLedger(ledgerPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cleaner.calls != tc.wantCalls {
+				t.Fatalf("cleanup calls=%d, want %d", cleaner.calls, tc.wantCalls)
+			}
+			if tc.wantCalls == 1 && (ledger.Records[0].CleanupWork != nil || !ledger.Records[0].Telemetry.CleanupCompleted || ledger.Records[0].Status != TrialPending) {
+				t.Fatalf("recovered pending record=%+v", ledger.Records[0])
+			}
+		})
 	}
 }

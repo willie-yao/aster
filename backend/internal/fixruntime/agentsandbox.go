@@ -323,6 +323,9 @@ func (r *AgentSandboxRuntime) Generate(ctx context.Context, spec engineruntime.G
 	result.Telemetry = raw.Telemetry
 	result.DurationMs = max(raw.Duration.Milliseconds(), 0)
 	if strings.TrimSpace(raw.Output) == "" {
+		if runErr == nil {
+			runErr = fmt.Errorf("%w: agent Sandbox result is empty", engineruntime.ErrMalformedResult)
+		}
 		result.Version = engineruntime.ExecutionContractVersion
 		result.BaseSHA = request.ExpectedBaseSHA
 		result.Files = map[string]string{}
