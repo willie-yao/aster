@@ -1990,6 +1990,8 @@ grep -Fq "size(variables.container.command) == 0" "$tmp/causal-critic-render.yam
 grep -Fq "size(variables.pod.resourceClaims) == 0" "$tmp/causal-critic-render.yaml"
 grep -Fq "size(variables.pod.schedulingGates) == 0" "$tmp/causal-critic-render.yaml"
 grep -Fq "request.operation != 'CREATE' || request.userInfo.username ==" "$tmp/causal-critic-render.yaml"
+grep -Fq "object.spec.operatingMode == 'Running'" "$tmp/causal-critic-render.yaml"
+grep -Fq "size(object.spec.podTemplate.metadata.finalizers) == 0" "$tmp/causal-critic-render.yaml"
 critic_resources=$(awk '
   /app.kubernetes.io\/component: agent-sandbox-causal-critic$/ { component=1 }
   component && /kind: Role$/ { in_role=1 }
@@ -2022,7 +2024,7 @@ expect_causal_critic_fail noncanonical-ledger 'ledger.mountPath must be canonica
 expect_causal_critic_fail mutable-image 'image.digest must be an immutable sha256 digest' --set-string agentSandbox.causalCritic.image.digest=latest
 expect_causal_critic_fail orka-shadow 'cannot run with orka.agentAnalysisShadow' --set orka.agentAnalysisShadow.enabled=true
 expect_causal_critic_fail orka-fix 'cannot run with orka.fixRuntime' --set orka.fixRuntime.enabled=true "${fix_admission_args[@]}" --set orka.fixRuntime.image.tag=sha-test
-expect_causal_critic_fail shared-fix-namespace 'must not share its execution namespace' -f "$tmp/agent-sandbox.yaml" --set agentSandbox.causalCritic.namespace=fix-eval --set agentSandbox.causalCritic.workloadServiceAccount.name=critic-workload
+expect_causal_critic_fail agent-sandbox-fix 'cannot run with agentSandbox.fixRuntime' -f "$tmp/agent-sandbox.yaml"
 expect_causal_critic_fail timeout-over-limit 'timeout must be at most 30m' --set-string agentSandbox.causalCritic.timeout=31m
 expect_causal_critic_fail poll-invalid 'pollInterval must be a positive duration below 30s' --set-string agentSandbox.causalCritic.pollInterval=garbage
 expect_causal_critic_fail poll-too-slow 'pollInterval must be below 30s' --set-string agentSandbox.causalCritic.pollInterval=30s

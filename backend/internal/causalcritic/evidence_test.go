@@ -3,6 +3,7 @@ package causalcritic
 import (
 	"context"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
@@ -27,8 +28,8 @@ func (criticEvidenceBrowser) Tail(context.Context, string, int, int) (*artifacts
 }
 func (criticEvidenceBrowser) Grep(_ context.Context, file string, re *regexp.Regexp, _, _, _, _ int) (*artifacts.GrepResult, error) {
 	return &artifacts.GrepResult{Matches: []artifacts.GrepMatch{
-		{LineNo: 10, Context: []string{"  before", "> exact cited error", "  after"}},
-		{LineNo: 50, Context: []string{"  before", "> exact cited error", "  after"}},
+		{LineNo: 10, Context: []string{"  9: before", "> 10: exact cited error", "  11: after"}},
+		{LineNo: 50, Context: []string{"  49: before", "> 50: exact cited error", "  51: after"}},
 	}}, nil
 }
 
@@ -49,5 +50,9 @@ func TestEnsureCitedEvidenceAddsMissingBoundedExcerpt(t *testing.T) {
 	}
 	if len(got.Excerpts) != 2 || citationOccurrences(citation, got.Excerpts) != 1 {
 		t.Fatalf("bundle = %+v", got.Excerpts)
+	}
+	excerpt, _, _, ok := locateGroundedCitation(citation, got)
+	if !ok || excerpt.Kind != "grep" || !strings.Contains(excerpt.Content, "> 50: exact cited error") {
+		t.Fatalf("grounded excerpt = %+v ok=%v", excerpt, ok)
 	}
 }

@@ -304,6 +304,41 @@ func locateCitation(citation models.EvidenceCitation, bundle agentanalysis.Evide
 	return matched, matchedStart, matchedEnd, count
 }
 
+func locateGroundedCitation(citation models.EvidenceCitation, bundle agentanalysis.EvidenceBundle) (agentanalysis.EvidenceExcerpt, int, int, bool) {
+	quoteLines := strings.Split(strings.ReplaceAll(citation.Quote, "\r\n", "\n"), "\n")
+	_, lineOffset := firstQuoteLine(citation.Quote)
+	targetLine := citation.LineStart + lineOffset
+	for _, excerpt := range bundle.Excerpts {
+		if excerpt.Path != citation.Path || excerpt.Truncated {
+			continue
+		}
+		lines := strings.Split(strings.ReplaceAll(excerpt.Content, "\r\n", "\n"), "\n")
+		for start := 0; start+len(quoteLines) <= len(lines); start++ {
+			matched := true
+			for offset, quoteLine := range quoteLines {
+				if !strings.Contains(lines[start+offset], quoteLine) {
+					matched = false
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+			switch excerpt.Kind {
+			case "grep":
+				if strings.HasPrefix(lines[start+lineOffset], fmt.Sprintf("> %d:", targetLine)) {
+					return excerpt, start + 1, start + len(quoteLines), true
+				}
+			case "tail":
+				if start+lineOffset+1 == targetLine {
+					return excerpt, start + 1, start + len(quoteLines), true
+				}
+			}
+		}
+	}
+	return agentanalysis.EvidenceExcerpt{}, 0, 0, false
+}
+
 func validateReference(reference EvidenceReference, bundle agentanalysis.EvidenceBundle) error {
 	if reference.ExcerptID == "" || reference.Path == "" || reference.LineStart < 1 || reference.LineEnd < reference.LineStart || reference.LineEnd-reference.LineStart >= 8 {
 		return fmt.Errorf("evidence reference shape is invalid")
@@ -322,8 +357,8 @@ func citedEvidenceLines(bundle agentanalysis.EvidenceBundle, citations []models.
 	seen := map[string]bool{}
 	var out []EvidenceLine
 	for _, citation := range citations {
-		excerpt, start, end, matches := locateCitation(citation, bundle)
-		if matches < 1 {
+		excerpt, start, end, ok := locateGroundedCitation(citation, bundle)
+		if !ok {
 			continue
 		}
 		lines := strings.Split(strings.ReplaceAll(excerpt.Content, "\r\n", "\n"), "\n")

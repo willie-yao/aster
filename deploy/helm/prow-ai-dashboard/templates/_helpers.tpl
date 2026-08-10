@@ -706,6 +706,7 @@ key, or bot token).
   {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "agentSandbox.causalCritic requires analysisRuntime.type=inprocess" -}}{{- end -}}
   {{- if .Values.orka.agentAnalysisShadow.enabled -}}{{- fail "agentSandbox.causalCritic cannot run with orka.agentAnalysisShadow" -}}{{- end -}}
   {{- if .Values.orka.fixRuntime.enabled -}}{{- fail "agentSandbox.causalCritic cannot run with orka.fixRuntime" -}}{{- end -}}
+  {{- if .Values.agentSandbox.fixRuntime.enabled -}}{{- fail "agentSandbox.causalCritic cannot run with agentSandbox.fixRuntime" -}}{{- end -}}
   {{- if not $cfg.namespace -}}{{- fail "agentSandbox.causalCritic.namespace is required" -}}{{- end -}}
   {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "agentSandbox.causalCritic.namespace must differ from the dashboard release namespace" -}}{{- end -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.namespace) -}}{{- fail "agentSandbox.causalCritic.namespace must be a lowercase DNS label" -}}{{- end -}}
@@ -715,9 +716,6 @@ key, or bot token).
   {{- if ne $cfg.image.pullPolicy "IfNotPresent" -}}{{- fail "agentSandbox.causalCritic.image.pullPolicy must be IfNotPresent" -}}{{- end -}}
   {{- $workloadSA := include "prow-ai-dashboard.agentSandboxCriticWorkloadServiceAccountName" . -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $workloadSA) -}}{{- fail "agentSandbox.causalCritic.workloadServiceAccount.name is required and must be a lowercase object name" -}}{{- end -}}
-  {{- if and .Values.agentSandbox.fixRuntime.enabled (eq $cfg.namespace .Values.agentSandbox.fixRuntime.namespace) -}}
-    {{- fail "agentSandbox.causalCritic must not share its execution namespace with agentSandbox.fixRuntime" -}}
-  {{- end -}}
   {{- $clientSA := include "prow-ai-dashboard.agentSandboxClientServiceAccountName" . -}}
   {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.clientServiceAccountName) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
