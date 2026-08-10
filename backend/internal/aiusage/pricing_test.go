@@ -140,3 +140,17 @@ func TestPriceTableEstimateValidation(t *testing.T) {
 		t.Fatal("expected cost overflow error")
 	}
 }
+
+func TestPriceTableEstimateTotalsUsesInt64Counts(t *testing.T) {
+	table, err := NewPriceTable(Rates{Currency: "USD", InputPerMillion: "1", CachedInputPerMillion: "0.1", CacheWriteInputPerMillion: "1.25", OutputPerMillion: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := table.EstimateTotals(UsageTotals{InputTokens: 1_000_000, CachedInputTokens: 100_000, CacheWriteInputTokens: 200_000, CacheWriteReportedRequests: 1, OutputTokens: 50_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1_060_000_000 {
+		t.Fatalf("cost nanos = %d, want 1060000000", got)
+	}
+}

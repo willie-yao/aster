@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,7 +34,11 @@ func TestAIUsageHandlerAuthenticatedMergedAndFiltered(t *testing.T) {
 	if err := statefile.WritePrivateJSONDurable(filepath.Join(dataDir, output.AIUsageServerFilename), serverLedger); err != nil {
 		t.Fatal(err)
 	}
-	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev", AIUsageEnabled: true, AIUsageModel: "provider/model", AIUsagePricingRule: "USD input=1 output=2 per million tokens"})
+	pricing, err := aiusage.NewPriceTable(aiusage.Rates{Currency: "USD", InputPerMillion: "1", CachedInputPerMillion: "1", OutputPerMillion: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev", AIUsageEnabled: true, AIUsageModel: "provider/model", AIUsagePricingRule: "USD input=1 output=2 per million tokens", AIUsagePricing: pricing})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +63,7 @@ func TestAIUsageHandlerAuthenticatedMergedAndFiltered(t *testing.T) {
 	if got.SelectedModel != "provider/model" || !got.PricingConfigured || !strings.Contains(got.PricingRule, "USD") {
 		t.Fatalf("usage metadata = %+v", got)
 	}
-	if got.Currency != "USD" || got.Coverage.Status != "partial" || got.Totals.Operations != 2 || got.Totals.InputTokens != 100 || got.Totals.EstimatedCostNanos != "1200" || len(got.Daily) != 2 || len(got.RecentOperations) != 2 {
+	if got.Currency != "USD" || got.Coverage.Status != "partial" || got.Totals.Operations != 2 || got.Totals.InputTokens != 100 || got.Totals.EstimatedCostNanos != "1200" || len(got.Daily) != 3 || len(got.RecentOperations) != 2 || got.CurrentRateEstimatedCostNanos == "" {
 		t.Fatalf("report = %+v", got)
 	}
 
@@ -292,7 +297,13 @@ func TestBuildUsageReportRetainsPricingCoverageCounts(t *testing.T) {
 	if report.PricingCoverage != "partial" || report.RangePriced || report.Totals.PricedReportedRequests != 1 || report.Coverage.PricedReportedRequests != 1 {
 		t.Fatalf("report = %+v", report)
 	}
-	if len(report.Daily) != 1 || report.Daily[0].Totals.PricedReportedRequests != 1 {
+	var pricedDay *usageReportDay
+	for index := range report.Daily {
+		if report.Daily[index].Date == "2026-08-02" {
+			pricedDay = &report.Daily[index]
+		}
+	}
+	if len(report.Daily) != 3 || pricedDay == nil || pricedDay.Totals.PricedReportedRequests != 1 {
 		t.Fatalf("daily = %+v", report.Daily)
 	}
 	pricedByFeature := map[aiusage.Feature]int{}
@@ -313,5 +324,74 @@ func TestBuildUsageReportMarksMixedLegacyPricingUnknown(t *testing.T) {
 	}}}, start, end, nil, end, false)
 	if report.PricingCoverage != "unknown" || report.RangePriced {
 		t.Fatalf("report = %+v", report)
+	}
+}
+
+func TestBuildUsageReportHistoricalDaysAndCurrentRepricing(t *testing.T) {
+	pricing, err := aiusage.NewPriceTable(aiusage.Rates{
+		Currency: "USD", InputPerMillion: "1", CachedInputPerMillion: "0.1", CacheWriteInputPerMillion: "1.25", OutputPerMillion: "2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := func(date string, totals aiusage.UsageTotals, features map[aiusage.Feature]aiusage.UsageTotals) aiusage.DailyUsage {
+		return aiusage.DailyUsage{Date: date, Totals: totals, Features: features, PricingCountsKnown: true, CoverageCountsKnown: true, ModelCountsKnown: true}
+	}
+	ledgers := []aiusage.UsageLedger{{Version: aiusage.LedgerVersion, Currency: "USD", Days: []aiusage.DailyUsage{
+		day("2026-08-04", aiusage.UsageTotals{Operations: 10, ModelRequests: 10, ReportedRequests: 10, PricedReportedRequests: 10, CacheWriteReportedRequests: 10, CacheWritePricedRequests: 10, InputTokens: 1_000_000, CachedInputTokens: 100_000, CacheWriteInputTokens: 200_000, OutputTokens: 50_000, EstimatedCostNanos: 1_000_000_000}, map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureFailureAnalysis: {Operations: 10, ModelRequests: 10, ReportedRequests: 10, InputTokens: 1_000_000, OutputTokens: 50_000}}),
+		day("2026-08-05", aiusage.UsageTotals{Operations: 20, CacheHits: 18, ModelRequests: 2, ReportedRequests: 2, PricedReportedRequests: 2, CacheWriteReportedRequests: 2, CacheWritePricedRequests: 2, InputTokens: 100_000, CachedInputTokens: 80_000, OutputTokens: 5_000, EstimatedCostNanos: 40_000_000}, map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureFailureAnalysis: {Operations: 20, CacheHits: 18, ModelRequests: 2}}),
+		day("2026-08-06", aiusage.UsageTotals{Operations: 6, Failures: 5, ModelRequests: 6, ReportedRequests: 6, PricedReportedRequests: 6, CacheWriteUnreportedRequests: 6, InputTokens: 11_800, OutputTokens: 1_400, EstimatedCostNanos: 20_000_000}, map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeaturePatternAnalysis: {Operations: 6, Failures: 5, ModelRequests: 6, ReportedRequests: 6, InputTokens: 11_800, OutputTokens: 1_400}}),
+		day("2026-08-07", aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, CacheWriteReportedRequests: 1, InputTokens: 30_000, OutputTokens: 2_000}, map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureAnalysisChat: {Operations: 1, ModelRequests: 1, ReportedRequests: 1}}),
+		day("2026-08-08", aiusage.UsageTotals{Operations: 1, ExternalUnmeteredOperations: 1}, map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureSourceInvestigation: {Operations: 1, ExternalUnmeteredOperations: 1}}),
+		day("2026-08-09", aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, PricedReportedRequests: 1, CacheWriteReportedRequests: 1, CacheWritePricedRequests: 1, InputTokens: 50_000, CacheWriteInputTokens: 10_000, OutputTokens: 1_000, EstimatedCostNanos: 60_000_000}, map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureFixPreview: {Operations: 1, ModelRequests: 1, ReportedRequests: 1, CacheWriteInputTokens: 10_000}}),
+		day("2026-08-10", aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 1, PricedReportedRequests: 1, CacheWriteReportedRequests: 1, UnreportedRequests: 1, InputTokens: 20_000, OutputTokens: 1_000, EstimatedCostNanos: 25_000_000}, map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureFailureAnalysis: {Operations: 2, ModelRequests: 2, ReportedRequests: 1, UnreportedRequests: 1}}),
+	}}}
+	start := time.Date(2026, time.August, 3, 0, 0, 0, 0, time.UTC)
+	generated := time.Date(2026, time.August, 10, 14, 0, 0, 0, time.UTC)
+	report := buildUsageReport(ledgers, start, generated.Truncate(24*time.Hour), nil, generated, true, pricing)
+	if len(report.Daily) != 8 || report.Daily[0].Date != "2026-08-03" || report.Daily[0].HasUsage || report.Daily[7].Date != "2026-08-10" || !report.Daily[7].CurrentPartialUTC {
+		t.Fatalf("daily range = %+v", report.Daily)
+	}
+	if report.Daily[4].RecordedCostStatus != "unavailable" || report.Daily[7].RecordedCostStatus != "partial" || report.Daily[6].CurrentRateEstimatedCostNanos == "" {
+		t.Fatalf("cost statuses = %+v", report.Daily)
+	}
+	if len(report.Daily[3].Features) != 1 || report.Daily[3].Features[0].Feature != aiusage.FeaturePatternAnalysis {
+		t.Fatalf("pattern day features = %+v", report.Daily[3].Features)
+	}
+	var reconciled aiusage.UsageTotals
+	for _, value := range report.Daily {
+		parsedCost, err := strconv.ParseInt(value.Totals.EstimatedCostNanos, 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !aiusage.AddTotals(&reconciled, aiusage.UsageTotals{
+			Operations: value.Totals.Operations, ModelRequests: value.Totals.ModelRequests, ReportedRequests: value.Totals.ReportedRequests,
+			InputTokens: value.Totals.InputTokens, CachedInputTokens: value.Totals.CachedInputTokens, CacheWriteInputTokens: value.Totals.CacheWriteInputTokens,
+			OutputTokens: value.Totals.OutputTokens, EstimatedCostNanos: parsedCost,
+		}) {
+			t.Fatal("fixture totals overflowed")
+		}
+	}
+	if reconciled.Operations != report.Totals.Operations || reconciled.ModelRequests != report.Totals.ModelRequests || reconciled.InputTokens != report.Totals.InputTokens || strconv.FormatInt(reconciled.EstimatedCostNanos, 10) != report.Totals.EstimatedCostNanos {
+		t.Fatalf("daily totals do not reconcile: daily=%+v report=%+v", reconciled, report.Totals)
+	}
+}
+
+func TestBuildUsageReportKeepsMixedCurrenciesSafe(t *testing.T) {
+	pricing, err := aiusage.NewPriceTable(aiusage.Rates{Currency: "USD", InputPerMillion: "1", OutputPerMillion: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := func(currency string, cost int64) aiusage.UsageLedger {
+		return aiusage.UsageLedger{Version: aiusage.LedgerVersion, Currency: currency, Days: []aiusage.DailyUsage{{
+			Date: "2026-08-10", PricingCountsKnown: true, CoverageCountsKnown: true, ModelCountsKnown: true,
+			Totals:   aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, PricedReportedRequests: 1, CacheWriteReportedRequests: 1, CacheWritePricedRequests: 1, InputTokens: 10, OutputTokens: 2, EstimatedCostNanos: cost},
+			Features: map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureFailureAnalysis: {Operations: 1, EstimatedCostNanos: cost}},
+		}}}
+	}
+	date := time.Date(2026, time.August, 10, 0, 0, 0, 0, time.UTC)
+	report := buildUsageReport([]aiusage.UsageLedger{day("USD", 100), day("EUR", 200)}, date, date, nil, date, true, pricing)
+	if !report.MixedCurrency || report.RecordedCostStatus != "mixed_currency" || report.Totals.EstimatedCostNanos != "0" || report.Daily[0].RecordedCostStatus != "mixed_currency" || report.Daily[0].RecordedCurrency != "" || report.Daily[0].Totals.EstimatedCostNanos != "0" || report.CurrentRateStatus != "available" {
+		t.Fatalf("mixed-currency report = %+v", report)
 	}
 }

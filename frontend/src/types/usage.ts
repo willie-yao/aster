@@ -22,6 +22,14 @@ export interface AIUsageOperation {
   model_gateway_excluded?: boolean; coverage_counts_known?: boolean;
   cooldown_retry?: boolean;
 }
+export type AIUsageRecordedCostStatus = "available" | "partial" | "unavailable" | "unknown" | "mixed_currency";
+export type AIUsageCurrentRateStatus = "available" | "partial" | "unavailable";
+export interface AIUsageDaily {
+  date: string; totals: AIUsageTotals; features: Array<{ feature: AIUsageFeature; totals: AIUsageTotals }>;
+  coverage: AIUsageReport["coverage"]; has_usage: boolean; current_partial_utc: boolean;
+  recorded_cost_status: AIUsageRecordedCostStatus; recorded_currency?: string; current_rate_status: AIUsageCurrentRateStatus;
+  current_rate_currency?: string; current_rate_estimated_cost_nanos?: string;
+}
 export interface AIUsageReport {
   version: number; generated_at: string; range: { start: string; end: string };
   currency?: string; mixed_currency?: boolean; mixed_pricing?: boolean;
@@ -33,10 +41,12 @@ export interface AIUsageReport {
     model_gateway_excluded_operations?: number; pricing_added_after_requests?: number; legacy_coverage_unknown?: boolean; aggregate_overflow?: boolean;
   };
   totals: AIUsageTotals;
-  daily: Array<{ date: string; totals: AIUsageTotals }>;
+  daily: AIUsageDaily[];
   features: Array<{ feature: AIUsageFeature; totals: AIUsageTotals }>;
   models?: Array<{ model: string; totals: AIUsageTotals }>;
   model_coverage?: "complete" | "partial" | "unavailable" | "unavailable_for_feature_filter";
   recent_operations: AIUsageOperation[];
   selected_model?: string; pricing_rule?: string; pricing_configured: boolean; range_priced: boolean; pricing_coverage: "complete" | "partial" | "unavailable" | "unknown";
+  recorded_cost_status: AIUsageRecordedCostStatus; current_rate_status: AIUsageCurrentRateStatus;
+  current_rate_currency?: string; current_rate_estimated_cost_nanos?: string;
 }

@@ -21,24 +21,28 @@ import (
 const maxAIUsageFileBytes = 64 << 20
 
 type usageReport struct {
-	Version           int                      `json:"version"`
-	GeneratedAt       string                   `json:"generated_at"`
-	Range             usageReportRange         `json:"range"`
-	Currency          string                   `json:"currency,omitempty"`
-	MixedCurrency     bool                     `json:"mixed_currency,omitempty"`
-	MixedPricing      bool                     `json:"mixed_pricing,omitempty"`
-	Coverage          usageReportCoverage      `json:"coverage"`
-	Totals            usageReportTotals        `json:"totals"`
-	Daily             []usageReportDay         `json:"daily"`
-	Features          []usageReportFeature     `json:"features"`
-	Models            []usageReportModel       `json:"models,omitempty"`
-	ModelCoverage     string                   `json:"model_coverage"`
-	RecentOperations  []aiusage.OperationUsage `json:"recent_operations"`
-	SelectedModel     string                   `json:"selected_model,omitempty"`
-	PricingRule       string                   `json:"pricing_rule,omitempty"`
-	PricingConfigured bool                     `json:"pricing_configured"`
-	RangePriced       bool                     `json:"range_priced"`
-	PricingCoverage   string                   `json:"pricing_coverage"`
+	Version                       int                      `json:"version"`
+	GeneratedAt                   string                   `json:"generated_at"`
+	Range                         usageReportRange         `json:"range"`
+	Currency                      string                   `json:"currency,omitempty"`
+	MixedCurrency                 bool                     `json:"mixed_currency,omitempty"`
+	MixedPricing                  bool                     `json:"mixed_pricing,omitempty"`
+	Coverage                      usageReportCoverage      `json:"coverage"`
+	Totals                        usageReportTotals        `json:"totals"`
+	Daily                         []usageReportDay         `json:"daily"`
+	Features                      []usageReportFeature     `json:"features"`
+	Models                        []usageReportModel       `json:"models,omitempty"`
+	ModelCoverage                 string                   `json:"model_coverage"`
+	RecentOperations              []aiusage.OperationUsage `json:"recent_operations"`
+	SelectedModel                 string                   `json:"selected_model,omitempty"`
+	PricingRule                   string                   `json:"pricing_rule,omitempty"`
+	PricingConfigured             bool                     `json:"pricing_configured"`
+	RangePriced                   bool                     `json:"range_priced"`
+	PricingCoverage               string                   `json:"pricing_coverage"`
+	RecordedCostStatus            string                   `json:"recorded_cost_status"`
+	CurrentRateStatus             string                   `json:"current_rate_status"`
+	CurrentRateCurrency           string                   `json:"current_rate_currency,omitempty"`
+	CurrentRateEstimatedCostNanos string                   `json:"current_rate_estimated_cost_nanos,omitempty"`
 }
 
 type usageReportRange struct {
@@ -89,8 +93,17 @@ type usageReportTotals struct {
 }
 
 type usageReportDay struct {
-	Date   string            `json:"date"`
-	Totals usageReportTotals `json:"totals"`
+	Date                          string               `json:"date"`
+	Totals                        usageReportTotals    `json:"totals"`
+	Features                      []usageReportFeature `json:"features"`
+	Coverage                      usageReportCoverage  `json:"coverage"`
+	HasUsage                      bool                 `json:"has_usage"`
+	CurrentPartialUTC             bool                 `json:"current_partial_utc"`
+	RecordedCostStatus            string               `json:"recorded_cost_status"`
+	RecordedCurrency              string               `json:"recorded_currency,omitempty"`
+	CurrentRateStatus             string               `json:"current_rate_status"`
+	CurrentRateCurrency           string               `json:"current_rate_currency,omitempty"`
+	CurrentRateEstimatedCostNanos string               `json:"current_rate_estimated_cost_nanos,omitempty"`
 }
 
 type usageReportFeature struct {
@@ -103,7 +116,7 @@ type usageReportModel struct {
 	Totals usageReportTotals `json:"totals"`
 }
 
-func aiUsageHandler(dataDir string, attachment bool, now func() time.Time, model, pricingRule string) http.Handler {
+func aiUsageHandler(dataDir string, attachment bool, now func() time.Time, model, pricingRule string, pricing aiusage.PriceTable) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth.SetPrivateResponseHeaders(w.Header())
 		start, end, features, err := parseUsageQuery(r, now().UTC())
@@ -122,7 +135,7 @@ func aiUsageHandler(dataDir string, attachment bool, now func() time.Time, model
 			return
 		}
 		pricingConfigured := strings.TrimSpace(pricingRule) != ""
-		report := buildUsageReport(ledgers, start, end, features, now().UTC(), pricingConfigured)
+		report := buildUsageReport(ledgers, start, end, features, now().UTC(), pricingConfigured, pricing)
 		report.SelectedModel = strings.TrimSpace(model)
 		report.PricingRule = strings.TrimSpace(pricingRule)
 		report.PricingConfigured = pricingConfigured
@@ -210,8 +223,17 @@ func readUsageLedger(path string) (aiusage.UsageLedger, error) {
 	return ledger, nil
 }
 
-func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featureFilter map[aiusage.Feature]bool, generatedAt time.Time, pricingConfigured bool) usageReport {
+func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featureFilter map[aiusage.Feature]bool, generatedAt time.Time, pricingConfigured bool, priceTables ...aiusage.PriceTable) usageReport {
+	var pricing aiusage.PriceTable
+	if len(priceTables) > 0 {
+		pricing = priceTables[0]
+	}
 	dayTotals := map[string]aiusage.UsageTotals{}
+	dayFeatureTotals := map[string]map[aiusage.Feature]aiusage.UsageTotals{}
+	dayCurrencies := map[string]map[string]bool{}
+	dayPricingUnknown := map[string]bool{}
+	dayCoverageUnknown := map[string]bool{}
+	dayAggregateOverflow := map[string]bool{}
 	featureTotals := map[aiusage.Feature]aiusage.UsageTotals{}
 	modelTotals := map[string]aiusage.UsageTotals{}
 	currencies := map[string]bool{}
@@ -230,15 +252,21 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 			if len(featureFilter) == 0 {
 				if !day.CoverageCountsKnown && day.Totals.Operations > 0 {
 					coverageCountsUnknown = true
+					dayCoverageUnknown[day.Date] = true
 				}
 				if !day.ModelCountsKnown && day.Totals.Operations > 0 {
 					modelCountsUnknown = true
 				}
 				if !day.PricingCountsKnown && day.Totals.ReportedRequests > 0 && (day.Totals.EstimatedCostNanos > 0 || len(day.PricingHashes) > 0) {
 					pricingCountsUnknown = true
+					dayPricingUnknown[day.Date] = true
 				}
 				if day.Totals.Operations > 0 && ledger.Currency != "" {
 					currencies[ledger.Currency] = true
+					if dayCurrencies[day.Date] == nil {
+						dayCurrencies[day.Date] = map[string]bool{}
+					}
+					dayCurrencies[day.Date][ledger.Currency] = true
 				}
 				for _, hash := range day.PricingHashes {
 					if hash != "" {
@@ -250,6 +278,7 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 					dayTotals[day.Date] = totals
 				} else {
 					aggregateOverflow = true
+					dayAggregateOverflow[day.Date] = true
 				}
 				for model, values := range day.Models {
 					modelTotal := modelTotals[model]
@@ -270,21 +299,38 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 				} else {
 					aggregateOverflow = true
 				}
+				if dayFeatureTotals[day.Date] == nil {
+					dayFeatureTotals[day.Date] = map[aiusage.Feature]aiusage.UsageTotals{}
+				}
+				dayFeature := dayFeatureTotals[day.Date][feature]
+				if addUsageTotals(&dayFeature, values) {
+					dayFeatureTotals[day.Date][feature] = dayFeature
+				} else {
+					aggregateOverflow = true
+					dayAggregateOverflow[day.Date] = true
+				}
 				if len(featureFilter) > 0 {
 					if !day.CoverageCountsKnown && values.Operations > 0 {
 						coverageCountsUnknown = true
+						dayCoverageUnknown[day.Date] = true
 					}
 					if !day.PricingCountsKnown && values.ReportedRequests > 0 && (values.EstimatedCostNanos > 0 || len(day.PricingHashes) > 0) {
 						pricingCountsUnknown = true
+						dayPricingUnknown[day.Date] = true
 					}
 					if values.Operations > 0 && ledger.Currency != "" {
 						currencies[ledger.Currency] = true
+						if dayCurrencies[day.Date] == nil {
+							dayCurrencies[day.Date] = map[string]bool{}
+						}
+						dayCurrencies[day.Date][ledger.Currency] = true
 					}
 					dayTotal := dayTotals[day.Date]
 					if addUsageTotals(&dayTotal, values) {
 						dayTotals[day.Date] = dayTotal
 					} else {
 						aggregateOverflow = true
+						dayAggregateOverflow[day.Date] = true
 					}
 				}
 			}
@@ -309,34 +355,34 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 		}
 	}
 	var totals aiusage.UsageTotals
-	days := make([]usageReportDay, 0, len(dayTotals))
-	dates := make([]string, 0, len(dayTotals))
-	for date := range dayTotals {
-		dates = append(dates, date)
-	}
-	sort.Strings(dates)
-	for _, date := range dates {
+	days := make([]usageReportDay, 0, int(end.Sub(start)/(24*time.Hour))+1)
+	for dateCursor := start; !dateCursor.After(end); dateCursor = dateCursor.AddDate(0, 0, 1) {
+		date := dateCursor.Format(time.DateOnly)
 		values := dayTotals[date]
 		if !addUsageTotals(&totals, values) {
 			aggregateOverflow = true
 		}
-		days = append(days, usageReportDay{Date: date, Totals: reportTotals(values)})
-	}
-	features := make([]usageReportFeature, 0, len(featureTotals))
-	for feature, values := range featureTotals {
-		features = append(features, usageReportFeature{Feature: feature, Totals: reportTotals(values)})
-	}
-	sort.Slice(features, func(i, j int) bool {
-		left, _ := strconv.ParseInt(features[i].Totals.EstimatedCostNanos, 10, 64)
-		right, _ := strconv.ParseInt(features[j].Totals.EstimatedCostNanos, 10, 64)
-		if left != right {
-			return left > right
+		dayCoverage := reportCoverage(values, dayCoverageUnknown[date], dayAggregateOverflow[date], pricingConfigured)
+		currentRateStatus, currentRateCurrency, currentRateCost := currentRateEstimate(pricing, values, dayCoverage)
+		recordedCurrency := ""
+		if len(dayCurrencies[date]) == 1 {
+			for value := range dayCurrencies[date] {
+				recordedCurrency = value
+			}
 		}
-		return features[i].Feature < features[j].Feature
-	})
+		days = append(days, usageReportDay{
+			Date: date, Totals: reportTotalsWithCost(values, len(dayCurrencies[date]) <= 1), Features: reportFeatureRows(dayFeatureTotals[date], len(dayCurrencies[date]) <= 1), Coverage: dayCoverage,
+			HasUsage: values.Operations > 0, CurrentPartialUTC: date == generatedAt.UTC().Format(time.DateOnly),
+			RecordedCostStatus: recordedCostStatus(values, len(dayCurrencies[date]), dayPricingUnknown[date], dayCoverageUnknown[date], dayAggregateOverflow[date]),
+			RecordedCurrency:   recordedCurrency,
+			CurrentRateStatus:  currentRateStatus, CurrentRateCurrency: currentRateCurrency, CurrentRateEstimatedCostNanos: currentRateCost,
+		})
+	}
+	mixedCurrency := len(currencies) > 1
+	features := reportFeatureRows(featureTotals, !mixedCurrency)
 	models := make([]usageReportModel, 0, len(modelTotals))
 	for model, values := range modelTotals {
-		models = append(models, usageReportModel{Model: model, Totals: reportTotals(values)})
+		models = append(models, usageReportModel{Model: model, Totals: reportTotalsWithCost(values, !mixedCurrency)})
 	}
 	sort.Slice(models, func(i, j int) bool {
 		if models[i].Totals.ModelRequests != models[j].Totals.ModelRequests {
@@ -349,9 +395,10 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 		recent = recent[:aiusage.DefaultRecentOperations]
 	}
 	currency := ""
-	for value := range currencies {
-		currency = value
-		break
+	if len(currencies) == 1 {
+		for value := range currencies {
+			currency = value
+		}
 	}
 	pricingCoverage := "unavailable"
 	if totals.ReportedRequests > 0 {
@@ -369,6 +416,7 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 		}
 	}
 	coverage := reportCoverage(totals, coverageCountsUnknown, aggregateOverflow, pricingConfigured)
+	currentRateStatus, currentRateCurrency, currentRateCost := currentRateEstimate(pricing, totals, coverage)
 	modelCoverage := "complete"
 	if len(featureFilter) > 0 {
 		modelCoverage = "unavailable_for_feature_filter"
@@ -381,11 +429,75 @@ func buildUsageReport(ledgers []aiusage.UsageLedger, start, end time.Time, featu
 	return usageReport{
 		Version: aiusage.LedgerVersion, GeneratedAt: generatedAt.Format(time.RFC3339Nano),
 		Range:    usageReportRange{Start: start.Format(time.DateOnly), End: end.Format(time.DateOnly)},
-		Currency: currency, MixedCurrency: len(currencies) > 1, MixedPricing: len(pricingHashes) > 1,
+		Currency: currency, MixedCurrency: mixedCurrency, MixedPricing: len(pricingHashes) > 1,
 		RangePriced: pricingCoverage == "complete", PricingCoverage: pricingCoverage,
-		Coverage: coverage, Totals: reportTotals(totals), Daily: days, Features: features,
+		RecordedCostStatus: recordedCostStatus(totals, len(currencies), pricingCountsUnknown, coverageCountsUnknown, aggregateOverflow),
+		CurrentRateStatus:  currentRateStatus, CurrentRateCurrency: currentRateCurrency, CurrentRateEstimatedCostNanos: currentRateCost,
+		Coverage: coverage, Totals: reportTotalsWithCost(totals, !mixedCurrency), Daily: days, Features: features,
 		Models: models, ModelCoverage: modelCoverage, RecentOperations: recent,
 	}
+}
+
+func reportFeatureRows(totals map[aiusage.Feature]aiusage.UsageTotals, includeCost bool) []usageReportFeature {
+	rows := make([]usageReportFeature, 0, len(totals))
+	for feature, values := range totals {
+		rows = append(rows, usageReportFeature{Feature: feature, Totals: reportTotalsWithCost(values, includeCost)})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		left, _ := strconv.ParseInt(rows[i].Totals.EstimatedCostNanos, 10, 64)
+		right, _ := strconv.ParseInt(rows[j].Totals.EstimatedCostNanos, 10, 64)
+		if left != right {
+			return left > right
+		}
+		return rows[i].Feature < rows[j].Feature
+	})
+	return rows
+}
+
+func reportTotalsWithCost(value aiusage.UsageTotals, includeCost bool) usageReportTotals {
+	if !includeCost {
+		value.EstimatedCostNanos = 0
+	}
+	return reportTotals(value)
+}
+
+func recordedCostStatus(totals aiusage.UsageTotals, currencyCount int, pricingUnknown, coverageUnknown, aggregateOverflow bool) string {
+	if aggregateOverflow {
+		return "unavailable"
+	}
+	if currencyCount > 1 {
+		return "mixed_currency"
+	}
+	if totals.ModelRequests == 0 && totals.ExternalUnmeteredOperations == 0 && totals.ModelGatewayExcludedOperations == 0 {
+		return "available"
+	}
+	if pricingUnknown || coverageUnknown {
+		return "unknown"
+	}
+	if totals.ReportedRequests == 0 || totals.PricedReportedRequests == 0 {
+		return "unavailable"
+	}
+	if totals.PricedReportedRequests < totals.ReportedRequests || totals.UnreportedRequests > 0 || totals.InvalidUsageRequests > 0 ||
+		totals.ExternalUnmeteredOperations > 0 || totals.ModelGatewayExcludedOperations > 0 || totals.CacheWriteUnreportedRequests > 0 ||
+		totals.CacheWriteInputTokens > 0 && totals.CacheWritePricedRequests < totals.CacheWriteReportedRequests {
+		return "partial"
+	}
+	return "available"
+}
+
+func currentRateEstimate(pricing aiusage.PriceTable, totals aiusage.UsageTotals, coverage usageReportCoverage) (string, string, string) {
+	if !pricing.Configured() || coverage.AggregateOverflow || totals.ReportedRequests == 0 && (totals.ExternalUnmeteredOperations > 0 || totals.ModelGatewayExcludedOperations > 0) {
+		return "unavailable", "", ""
+	}
+	cost, err := pricing.EstimateTotals(totals)
+	if err != nil {
+		return "unavailable", pricing.Currency(), ""
+	}
+	status := "available"
+	if coverage.Status != "complete" || totals.CacheWriteInputTokens > 0 && !pricing.CacheWriteConfigured() {
+		status = "partial"
+	}
+	return status, pricing.Currency(), strconv.FormatInt(cost, 10)
 }
 
 func reportCoverage(totals aiusage.UsageTotals, legacyUnknown, aggregateOverflow, pricingConfigured bool) usageReportCoverage {

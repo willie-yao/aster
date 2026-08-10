@@ -25,6 +25,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/redact"
@@ -101,6 +102,7 @@ type Options struct {
 	AIUsageEnabled     bool
 	AIUsageModel       string
 	AIUsagePricingRule string
+	AIUsagePricing     aiusage.PriceTable
 }
 
 // Capabilities tells the frontend which deploy mode it is talking to and which
@@ -210,8 +212,8 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, true)))
 		if opts.AIUsageEnabled {
 			caps.Features.AIUsage = true
-			mux.Handle("GET /api/ai-usage", auth.Middleware(opts.Auth, aiUsageHandler(opts.DataDir, false, time.Now, opts.AIUsageModel, opts.AIUsagePricingRule)))
-			mux.Handle("GET /api/ai-usage/download", auth.Middleware(opts.Auth, aiUsageHandler(opts.DataDir, true, time.Now, opts.AIUsageModel, opts.AIUsagePricingRule)))
+			mux.Handle("GET /api/ai-usage", auth.Middleware(opts.Auth, aiUsageHandler(opts.DataDir, false, time.Now, opts.AIUsageModel, opts.AIUsagePricingRule, opts.AIUsagePricing)))
+			mux.Handle("GET /api/ai-usage/download", auth.Middleware(opts.Auth, aiUsageHandler(opts.DataDir, true, time.Now, opts.AIUsageModel, opts.AIUsagePricingRule, opts.AIUsagePricing)))
 		}
 		mux.Handle("/api/fetch-status",
 			readOnly(auth.Middleware(opts.Auth, fetchStatusHandler(opts.DataDir))))

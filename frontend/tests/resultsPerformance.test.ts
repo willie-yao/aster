@@ -93,4 +93,13 @@ test("AI usage labels cost and token coverage accurately", () => {
   assert.match(page, /Provider-reported tokens/);
   assert.match(page, /priced_reported_requests/);
   assert.match(page, /model requests reported usage/);
+  assert.match(page, /Historical daily cost/);
+  assert.match(page, /Recorded estimates use the price stored with each operation/);
+  assert.match(page, /Current-rate estimates apply the rates configured now/);
+  assert.match(page, /aria-label="Historical daily AI usage and cost"/);
+  assert.match(page, /role="img" aria-labelledby="daily-cost-chart-title daily-cost-chart-desc"/);
+  assert.match(page, /Partial UTC day/);
+  assert.match(page, /No usage recorded/);
+  assert.match(page, /TableSortLabel/);
+  assert.match(page, /FeatureBreakdown/);
 });
