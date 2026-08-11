@@ -154,3 +154,162 @@ go test ./... -count=1
 go vet ./...
 staticcheck ./...
 ```
+
+## Repeated cold comparison
+
+The opt-in benchmark uses the same pinned case manifest, consumer prompt,
+artifact fixture, source revision, provider path, model, and repetition number
+for both runtimes. The in-process arm remains `TestAIBenchmark`. The Agent
+Sandbox arm is `TestAgentSandboxAnalyzerBenchmark`.
+
+Prepare one case before writing the input PVC:
+
+```bash
+cd backend
+RUN_AGENT_SANDBOX_ANALYZER_BENCHMARK=1 \
+ANALYZER_BENCH_PREPARE_ONLY=1 \
+ANALYZER_BENCH_SOURCE_ROOT=<clean-source-checkout> \
+ANALYZER_BENCH_PREPARED_JSON=<private-prepared.json> \
+ANALYZER_BENCH_ARM_LABEL=arm-b \
+BENCH_MANIFEST=internal/e2e/testdata/benchmarks/cross-project-eval.json \
+BENCH_CASE=<case-id> \
+BENCH_PROJECT_DIR=<pinned-consumer> \
+BENCH_MODEL_LABEL=model-a \
+BENCH_PROVIDER_PATH=<provider-path> \
+BENCH_TRANSPORT_ID=<stable-transport-id> \
+AGENT_SANDBOX_ANALYSIS_MODEL_GATEWAY_ENDPOINT=<internal-https-endpoint> \
+AGENT_SANDBOX_ANALYSIS_MODEL_GATEWAY_MODEL=<model> \
+AGENT_SANDBOX_ANALYSIS_MODEL_GATEWAY_PROTOCOL=openai-chat-completions-v1 \
+AGENT_SANDBOX_ANALYSIS_TIMEOUT=15m \
+AGENT_SANDBOX_ANALYSIS_OUTPUT_LIMIT_BYTES=262144 \
+go test ./internal/e2e -run '^TestAgentSandboxAnalyzerBenchmark$' -v -count=1
+```
+
+The prepared JSON contains the manifest hash plus the exact local source and
+artifact roots. Populate the analyzer input PVC at:
+
+```text
+/<manifest-hash>/source
+/<manifest-hash>/artifacts
+```
+
+Use a short-lived operator populator, then remove it before applying the
+one-Pod analyzer quota. The source checkout must remain at the recorded commit
+with a clean index and working tree. The artifact tree must remain byte-for-byte
+identical to the prepared snapshot.
+
+Run the cold Agent Sandbox repetitions with the dedicated analyzer client
+kubeconfig and the immutable deployment values:
+
+```bash
+cd backend
+RUN_AGENT_SANDBOX_ANALYZER_BENCHMARK=1 \
+ANALYZER_BENCH_KUBE_CONTEXT=<short-lived-client-context> \
+ANALYZER_BENCH_SOURCE_ROOT=<clean-source-checkout> \
+ANALYZER_BENCH_PREPARED_JSON=<private-prepared.json> \
+ANALYZER_BENCH_RESULTS_JSONL=<private-sandbox-results.jsonl> \
+ANALYZER_BENCH_ARM_LABEL=arm-b \
+BENCH_REPETITIONS=3 \
+BENCH_MANIFEST=internal/e2e/testdata/benchmarks/cross-project-eval.json \
+BENCH_CASE=<case-id> \
+BENCH_PROJECT_DIR=<pinned-consumer> \
+BENCH_MODEL_LABEL=model-a \
+BENCH_PROVIDER_PATH=<provider-path> \
+BENCH_TRANSPORT_ID=<stable-transport-id> \
+AGENT_SANDBOX_ANALYSIS_NAMESPACE=<execution-namespace> \
+AGENT_SANDBOX_ANALYSIS_IMAGE=<executor@sha256:digest> \
+AGENT_SANDBOX_ANALYSIS_STAGER_IMAGE=<stager@sha256:digest> \
+AGENT_SANDBOX_ANALYSIS_STAGER_INPUT_CLAIM=<input-pvc> \
+AGENT_SANDBOX_ANALYSIS_SERVICE_ACCOUNT=<tokenless-workload-sa> \
+AGENT_SANDBOX_ANALYSIS_RUNTIME_CLASS=<secure-runtime-class> \
+AGENT_SANDBOX_ANALYSIS_MODEL_GATEWAY_ENDPOINT=<internal-https-endpoint> \
+AGENT_SANDBOX_ANALYSIS_MODEL_GATEWAY_MODEL=<model> \
+AGENT_SANDBOX_ANALYSIS_MODEL_GATEWAY_PROTOCOL=openai-chat-completions-v1 \
+AGENT_SANDBOX_ANALYSIS_TIMEOUT=15m \
+AGENT_SANDBOX_ANALYSIS_OUTPUT_LIMIT_BYTES=262144 \
+AGENT_SANDBOX_ANALYSIS_CPU_REQUEST=250m \
+AGENT_SANDBOX_ANALYSIS_CPU_LIMIT=2 \
+AGENT_SANDBOX_ANALYSIS_MEMORY_REQUEST=512Mi \
+AGENT_SANDBOX_ANALYSIS_MEMORY_LIMIT=2Gi \
+AGENT_SANDBOX_ANALYSIS_EPHEMERAL_STORAGE_LIMIT=2Gi \
+go test ./internal/e2e -run '^TestAgentSandboxAnalyzerBenchmark$' -v -count=1 -timeout 60m
+```
+
+Run the in-process arm with `TestAIBenchmark`, the same case, consumer,
+provider, model, and three fresh cold caches. Keep the two JSONL files private.
+Then generate a content-free comparison plus separate blinded scoring packets:
+
+```bash
+python3 hack/compare-agent-sandbox-analyzer-benchmark.py \
+  --inprocess <private-inprocess-results.jsonl> \
+  --sandbox <private-sandbox-results.jsonl> \
+  --repo . \
+  --expected-pairs 9 \
+  --holdout-case <case-a> \
+  --holdout-case <case-b> \
+  --holdout-case <case-c> \
+  --blind-packets <private-blind-packets.json> \
+  --blind-map <private-blind-map.json> \
+  --output-json <private-comparison.json>
+```
+
+Keep the blind map from the evaluator until scores are frozen. Give the
+evaluator only the blind packet document. The evaluator copies its top-level
+`packet_set_sha256` into one private score file with the recorded rubric identity
+and one `0` to `2` integer for every dimension:
+
+```json
+{
+  "version": 1,
+  "packet_set_sha256": "<copied-from-private-blind-packets>",
+  "rubric_version": 1,
+  "score_max": 10,
+  "dimensions": [
+    "diagnosis",
+    "artifact_evidence",
+    "claim_discipline",
+    "remediation",
+    "source_grounding"
+  ],
+  "scores": [
+    {
+      "packet_id": "case-id-rep-01",
+      "arm": "A",
+      "scores": {
+        "diagnosis": 2,
+        "artifact_evidence": 2,
+        "claim_discipline": 2,
+        "remediation": 2,
+        "source_grounding": 2
+      }
+    }
+  ]
+}
+```
+
+After scores are frozen, unblind them in a separate report invocation:
+
+```bash
+python3 hack/compare-agent-sandbox-analyzer-benchmark.py \
+  --inprocess <private-inprocess-results.jsonl> \
+  --sandbox <private-sandbox-results.jsonl> \
+  --repo . \
+  --expected-pairs 9 \
+  --holdout-case <case-a> \
+  --holdout-case <case-b> \
+  --holdout-case <case-c> \
+  --blind-map-input <private-blind-map.json> \
+  --blind-scores <private-blind-scores.json> \
+  --output-json <private-scored-comparison.json>
+```
+
+Automatic signal scoring and independent blind scoring remain separate. The
+replacement quality gate stays incomplete until the blind score set is complete.
+The report also keeps validity, invalid and no-result trials, citations,
+lifecycle, cleanup, latency, requests, tokens, and cost availability separate.
+
+The simplicity criterion is explicit. The direct analyzer must retain one model
+session, contain none of the forbidden critic, digest, revision, evidence
+planner, or case-specific phases, and keep its dashboard-owned production lines
+at or below half of the in-process analyzer's production lines. Similar quality
+without this reduction is not a successful replacement.

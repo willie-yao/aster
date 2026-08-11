@@ -390,3 +390,12 @@ attempts, and cleanup state. It never stores prompts or frozen artifact excerpt
 contents. Orka OpenCode token usage and cost are marked unavailable because the
 current `StructuredResult` does not report provider usage. Do not estimate cost
 from bytes or latency.
+
+## Agent Sandbox analyzer benchmark
+
+`TestAgentSandboxAnalyzerBenchmark` is an opt-in repeated cold benchmark for the
+private OpenCode workspace analyzer. It requires one pinned external benchmark
+case, a clean source checkout, a pre-populated analyzer input PVC, and the
+short-lived analyzer client kubeconfig. Use
+`hack/compare-agent-sandbox-analyzer-benchmark.py` to pair its private JSONL with
+`TestAIBenchmark` output and generate the content-free comparison.
