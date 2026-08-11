@@ -180,7 +180,11 @@ agentSandbox:
       enabled: true
       gatewayNamespaceSelector: {}
       gatewayPodSelector: {}
+      # HTTPS port exposed by the gateway Service and used by modelGateway.endpoint.
       gatewayPort: 443
+      # Backend Pod port enforced after Service translation. This may differ
+      # from gatewayPort, for example Service port 443 targeting Pod port 8443.
+      gatewayTargetPort: null
       dnsNamespaceSelector:
         kubernetes.io/metadata.name: kube-system
       dnsPodSelector:

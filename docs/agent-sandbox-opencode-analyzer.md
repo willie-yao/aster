@@ -82,8 +82,16 @@ workspace read-only, a separate writable result volume, and separate temporary
 storage.
 
 The network policy denies ingress and permits only DNS plus the configured
-internal gateway. The gateway must separately authenticate the analyzer
+internal gateway. `networkPolicy.gatewayPort` is the HTTPS Service port in the
+gateway URL. `networkPolicy.gatewayTargetPort` is the backend Pod port enforced
+after Service translation. It defaults to `gatewayPort` for existing values and
+must be set to `8443` when Service port `443` targets Pod port `8443`. The gateway
+must separately authenticate the analyzer
 ServiceAccount. The ResourceQuota assumes the analyzer namespace is dedicated.
+
+A gateway-side `CiliumNetworkPolicy` that selects the analyzer namespace uses
+the raw `io.kubernetes.pod.namespace` label key. The `k8s:` prefix shown by
+Cilium identity inspection is not part of a policy selector key.
 
 No chart Deployment or CronJob receives analyzer environment variables or the
 client ServiceAccount. Installation therefore grants no scheduled analyzer
