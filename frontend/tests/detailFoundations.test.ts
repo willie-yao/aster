@@ -49,6 +49,14 @@ const { DaySummaryButton, HistoricalTable } = (await vite.ssrLoadModule("/src/co
   }) => ReturnType<typeof createElement>;
   HistoricalTable: (props: { days: AIUsageDaily[] }) => ReturnType<typeof createElement>;
 };
+const { JobDetailPrimaryLayout } = (await vite.ssrLoadModule("/src/pages/JobDetailPage.tsx")) as {
+  JobDetailPrimaryLayout: (props: {
+    patternAnalysis?: ReturnType<typeof createElement>;
+    buildFailureAnalysis?: ReturnType<typeof createElement>;
+    runHistory: ReturnType<typeof createElement>;
+    runMetadata: ReturnType<typeof createElement>;
+  }) => ReturnType<typeof createElement>;
+};
 const { BuildFailurePanel } = (await vite.ssrLoadModule("/src/components/BuildFailurePanel.tsx")) as {
   BuildFailurePanel: (props: {
     jobID: string;
@@ -358,6 +366,34 @@ test("metric strip retains qualification notes without changing its shared geome
   assert.match(html, />USD 1\.25</);
   assert.match(html, />Stored per-operation prices</);
   assert.match(html, />Requests</);
+});
+
+test("job detail primary layout keeps analysis before the run rail in every state", () => {
+  const cases = [
+    { name: "pattern and build", pattern: true, build: true, order: ["Pattern analysis", "Build analysis", "Run history", "Run metadata"] },
+    { name: "pattern only", pattern: true, build: false, order: ["Pattern analysis", "Run history", "Run metadata"] },
+    { name: "build only", pattern: false, build: true, order: ["Build analysis", "Run history", "Run metadata"] },
+    { name: "neither", pattern: false, build: false, order: ["Run history", "Run metadata"] },
+  ];
+
+  for (const tc of cases) {
+    const html = render(createElement(JobDetailPrimaryLayout, {
+      patternAnalysis: tc.pattern ? createElement("section", null, "Pattern analysis") : undefined,
+      buildFailureAnalysis: tc.build ? createElement("section", null, "Build analysis") : undefined,
+      runHistory: createElement("section", null, "Run history"),
+      runMetadata: createElement("section", null, "Run metadata"),
+    }));
+
+    let previous = -1;
+    for (const label of tc.order) {
+      const current = html.indexOf(label);
+      assert.ok(current > previous, `${tc.name}: ${label}`);
+      assert.equal(html.indexOf(label, current + 1), -1, `${tc.name}: duplicate ${label}`);
+      previous = current;
+    }
+    if (!tc.pattern) assert.doesNotMatch(html, /Pattern analysis/, tc.name);
+    if (!tc.build) assert.doesNotMatch(html, /Build analysis/, tc.name);
+  }
 });
 
 test("standalone non-success build states avoid empty mobile diagnosis and action surfaces", () => {

@@ -74,10 +74,9 @@ test("job detail keeps build failure analysis in the primary analysis column", (
   const job = source("src/pages/JobDetailPage.tsx");
 
   assert.match(job, /const buildFailureBriefing = selectedRun && buildFailure/);
-  assert.match(job, /gridTemplateAreas/);
-  assert.match(job, /'"pattern rail" "buildFailure rail"'/);
-  assert.match(job, /gridArea: "rail"/);
-  assert.match(job, /gridArea: "buildFailure"/);
+  assert.match(job, /export function JobDetailPrimaryLayout/);
+  assert.match(job, /\{patternAnalysis\}[\s\S]*\{buildFailureAnalysis\}[\s\S]*\{runHistory\}[\s\S]*\{runMetadata\}/);
+  assert.match(job, /<JobDetailPrimaryLayout/);
   assert.equal(job.match(/<BuildFailurePanel/g)?.length, 1);
   assert.doesNotMatch(job, /\{crossRunGrid\}[\s\S]*<BuildFailurePanel/);
 });
