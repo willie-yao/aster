@@ -729,6 +729,11 @@ key, or bot token).
   {{- if eq (len $cfg.networkPolicy.gatewayNamespaceSelector) 0 -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayNamespaceSelector is required" -}}{{- end -}}
   {{- if eq (len $cfg.networkPolicy.gatewayPodSelector) 0 -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayPodSelector is required" -}}{{- end -}}
   {{- if or (lt (int $cfg.networkPolicy.gatewayPort) 1) (gt (int $cfg.networkPolicy.gatewayPort) 65535) -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayPort is invalid" -}}{{- end -}}
+  {{- $gatewayTargetPort := int $cfg.networkPolicy.gatewayPort -}}
+  {{- if and (hasKey $cfg.networkPolicy "gatewayTargetPort") (ne (index $cfg.networkPolicy "gatewayTargetPort") nil) -}}
+    {{- $gatewayTargetPort = int (index $cfg.networkPolicy "gatewayTargetPort") -}}
+  {{- end -}}
+  {{- if or (lt $gatewayTargetPort 1) (gt $gatewayTargetPort 65535) -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayTargetPort is invalid" -}}{{- end -}}
   {{- $gatewayAuthority := regexFind "^https://[^/]+" $gateway.endpoint -}}
   {{- $explicitGatewayPort := regexFind ":[0-9]+$" $gatewayAuthority -}}
   {{- $endpointGatewayPort := 443 -}}

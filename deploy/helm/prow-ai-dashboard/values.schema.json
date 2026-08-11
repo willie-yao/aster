@@ -724,6 +724,14 @@
                   "minimum": 1,
                   "maximum": 65535
                 },
+                "gatewayTargetPort": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 1,
+                  "maximum": 65535
+                },
                 "dnsNamespaceSelector": {
                   "type": "object",
                   "additionalProperties": {

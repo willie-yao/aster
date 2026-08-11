@@ -1,6 +1,10 @@
 {{- include "prow-ai-dashboard.validateAgentSandboxAnalyzer" . -}}
 {{- if and .Values.agentSandbox.analyzer.enabled .Values.agentSandbox.analyzer.networkPolicy.enabled }}
 {{- $cfg := .Values.agentSandbox.analyzer.networkPolicy -}}
+{{- $gatewayTargetPort := int $cfg.gatewayPort -}}
+{{- if and (hasKey $cfg "gatewayTargetPort") (ne (index $cfg "gatewayTargetPort") nil) -}}
+  {{- $gatewayTargetPort = int (index $cfg "gatewayTargetPort") -}}
+{{- end -}}
 {{- if eq $cfg.mode "cilium" }}
 {{- $gatewayAuthority := trimPrefix "https://" (regexFind "^https://[^/]+" .Values.agentSandbox.analyzer.modelGateway.endpoint) -}}
 {{- $gatewayHost := regexReplaceAll ":[0-9]+$" $gatewayAuthority "" -}}
@@ -38,7 +42,7 @@ spec:
             namespace: {{ index $gatewayParts 1 | quote }}
       toPorts:
         - ports:
-            - port: {{ $cfg.gatewayPort | quote }}
+            - port: {{ $gatewayTargetPort | quote }}
               protocol: TCP
 {{- else }}
 apiVersion: networking.k8s.io/v1
@@ -77,6 +81,6 @@ spec:
               {{- toYaml $cfg.gatewayPodSelector | nindent 14 }}
       ports:
         - protocol: TCP
-          port: {{ $cfg.gatewayPort }}
+          port: {{ $gatewayTargetPort }}
 {{- end }}
 {{- end }}
