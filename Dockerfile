@@ -22,7 +22,9 @@ RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=$
  && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/worker ./cmd/worker \
  && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/server ./cmd/server \
  && CGO_ENABLED=0 go build -o /out/fixexecutor ./cmd/fixexecutor \
- && CGO_ENABLED=0 go build -o /out/criticexecutor ./cmd/criticexecutor
+ && CGO_ENABLED=0 go build -o /out/criticexecutor ./cmd/criticexecutor \
+ && CGO_ENABLED=0 go build -o /out/analysisexecutor ./cmd/analysisexecutor \
+ && CGO_ENABLED=0 go build -o /out/analysisstager ./cmd/analysisstager
 
 # Optional full engine image for local sandboxed OpenCode fix generation.
 FROM node:20-slim AS fixer-runtime
@@ -63,6 +65,36 @@ ENV HOME=/tmp/home \
 USER 65532:65532
 WORKDIR /workspace
 ENTRYPOINT ["/usr/local/bin/fixexecutor"]
+
+# File-backed OpenCode analyzer for a staged Agent Sandbox workspace.
+FROM ghcr.io/anomalyco/opencode:1.18.2@sha256:ef9257b3246e9be63d5050924c07f7e6d8d9f135fdfcd8422fc873a408c367af AS agent-sandbox-analysis-executor
+USER root
+RUN apk add --no-cache ca-certificates git \
+ && addgroup -g 65532 padnonroot \
+ && adduser -D -H -u 65532 -G padnonroot padnonroot \
+ && opencode --version \
+ && git --version
+COPY --from=build /out/analysisexecutor /usr/local/bin/analysisexecutor
+ENV HOME=/tmp/home \
+    GIT_TERMINAL_PROMPT=0 \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_OPTIONAL_LOCKS=0
+USER 65532:65532
+WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/analysisexecutor"]
+
+# Credential-free local snapshot copier for the analyzer init container.
+FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce AS agent-sandbox-analysis-stager
+RUN apk add --no-cache ca-certificates git \
+ && addgroup -g 65532 padnonroot \
+ && adduser -D -H -u 65532 -G padnonroot padnonroot \
+ && git --version
+COPY --from=build /out/analysisstager /usr/local/bin/analysisstager
+ENV HOME=/tmp/home \
+    GIT_TERMINAL_PROMPT=0 \
+    GIT_CONFIG_NOSYSTEM=1
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/analysisstager"]
 
 # Purpose-built credential-free causal critic for consumer-installed Agent Sandbox.
 # It contains no shell, Git, coding-agent harness, package manager, or write tools.

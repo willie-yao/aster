@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -77,12 +78,13 @@ func (r *AgentSandboxRuntime) RuntimeIdentity() string {
 		Resources          AgentSandboxResources            `json:"resources"`
 		AppArmorCapability string                           `json:"app_armor_capability"`
 		StagerImage        string                           `json:"stager_image,omitempty"`
+		StagerInputClaim   string                           `json:"stager_input_claim,omitempty"`
 	}{
 		Backend: agentSandboxBackend, Namespace: opts.Namespace, Image: opts.Image,
 		ServiceAccountName: opts.ServiceAccountName, RuntimeClassName: opts.RuntimeClassName,
 		ModelGateway: opts.ModelGateway, PublicCAPrivateDNS: opts.PublicCAPrivateDNS,
 		Timeout: opts.Timeout.String(), OutputLimitBytes: opts.OutputLimitBytes, PollEvery: opts.PollEvery.String(),
-		Resources: opts.Resources, AppArmorCapability: opts.appArmorCapability.String(), StagerImage: opts.StagerImage,
+		Resources: opts.Resources, AppArmorCapability: opts.appArmorCapability.String(), StagerImage: opts.StagerImage, StagerInputClaim: opts.StagerInputClaim,
 	})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
@@ -101,6 +103,7 @@ type AgentSandboxOptions struct {
 	Namespace          string
 	Image              string
 	StagerImage        string
+	StagerInputClaim   string
 	ServiceAccountName string
 	RuntimeClassName   string
 	ModelGateway       engineruntime.ModelGatewayConfig
@@ -287,6 +290,12 @@ func validateAgentSandboxOptions(opts AgentSandboxOptions) error {
 	if !opts.testOnly && opts.StagerImage != "" && !immutableExecutorImage.MatchString(opts.StagerImage) {
 		return fmt.Errorf("agent sandbox stager image must use an immutable sha256 digest")
 	}
+	if (opts.StagerImage == "") != (opts.StagerInputClaim == "") {
+		return fmt.Errorf("agent sandbox stager image and input claim must be configured together")
+	}
+	if opts.StagerInputClaim != "" && len(k8svalidation.IsDNS1123Subdomain(opts.StagerInputClaim)) > 0 {
+		return fmt.Errorf("agent sandbox stager input claim is invalid")
+	}
 	if !opts.testOnly && strings.TrimSpace(opts.RuntimeClassName) == "" {
 		return fmt.Errorf("agent sandbox secure runtime class is required")
 	}
@@ -434,8 +443,8 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	if err := agentsandbox.ValidateSpec(spec); err != nil {
 		return result, err
 	}
-	if spec.StagedWorkspace != nil && strings.TrimSpace(r.opts.StagerImage) == "" {
-		return result, fmt.Errorf("agent sandbox staged workspace requires a stager image")
+	if spec.StagedWorkspace != nil && (strings.TrimSpace(r.opts.StagerImage) == "" || strings.TrimSpace(r.opts.StagerInputClaim) == "") {
+		return result, fmt.Errorf("agent sandbox staged workspace requires a stager image and input claim")
 	}
 	if spec.Timeout != r.opts.Timeout || spec.OutputLimitBytes != r.opts.OutputLimitBytes {
 		return result, fmt.Errorf("agent sandbox workload does not match configured timeout or output limit")
@@ -860,7 +869,7 @@ func agentSandboxContractHash(requestJSON []byte, opts AgentSandboxOptions) [sha
 		[]byte(opts.Resources.MemoryLimit), []byte(opts.Resources.EphemeralStorage), []byte(opts.appArmorCapability.String()), strconv.AppendBool(nil, opts.PublicCAPrivateDNS),
 	}
 	if opts.StagerImage != "" {
-		values = append(values, []byte(opts.StagerImage))
+		values = append(values, []byte(opts.StagerImage), []byte(opts.StagerInputClaim))
 	}
 	for _, value := range values {
 		_, _ = hash.Write([]byte{0})

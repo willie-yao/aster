@@ -97,6 +97,22 @@ Exit gate:
   pass locally;
 - the existing Fix PR and critic workload shapes do not change.
 
+### Phase 2B: Credential-free staging and runtime images
+
+- Require one fixed pre-populated read-only PVC.
+- Verify and copy one manifest-addressed source and artifact snapshot without
+  network access or credentials in the Sandbox.
+- Materialize only the pinned commit with shallow Git history.
+- Build separate immutable analyzer executor and stager image targets.
+- Keep Helm, image publication, and live deployment out of this phase.
+
+Exit gate:
+
+- changed, extra, linked, or oversized input files fail staging;
+- the executor never mounts the input claim;
+- source history is limited to the pinned commit;
+- both runtime images build and run as UID 65532 without credentials.
+
 ### Phase 2B: Deployment and security
 
 - Add the concrete immutable stager and analyzer executor images.
