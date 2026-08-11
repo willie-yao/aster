@@ -459,7 +459,7 @@ func benignServingComplement(words []string, persistent bool) bool {
 	}
 	if !temporalWordsAllowed(words,
 		"a", "an", "the", "all", "every", "and",
-		"api", "incoming", "request", "requests", "read", "reads", "write", "writes", "traffic", "conversion", "conversions",
+		"api", "incoming", "request", "requests", "read", "reads", "write", "writes", "traffic", "conversion", "conversions", "review",
 		"without", "with", "no", "zero", "error", "errors", "failure", "failures", "downtime", "outage", "outages", "disruption",
 		"successfully", "reliably", "seamlessly", "cleanly", "safely", "continuously", "correctly",
 	) {
@@ -479,7 +479,7 @@ func benignCompletionComplement(words []string) bool {
 		return false
 	}
 	if !temporalWordsAllowed(words,
-		"a", "an", "the", "full", "entire", "complete", "stored", "version", "versions", "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts",
+		"a", "an", "the", "crd", "full", "entire", "complete", "stored", "version", "versions", "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts",
 		"without", "with", "no", "zero", "error", "errors", "failure", "failures", "downtime", "outage", "outages", "disruption",
 		"successfully", "reliably", "seamlessly", "cleanly", "safely",
 	) {
@@ -495,7 +495,7 @@ func benignFailoverComplement(words []string) bool {
 		return false
 	}
 	if !temporalWordsAllowed(words,
-		"a", "an", "the", "to", "named", "designated", "api", "server", "backup", "secondary", "standby", "healthy", "available", "replica", "endpoint", "service", "node",
+		"a", "an", "the", "to", "named", "designated", "api", "webhook", "server", "backup", "secondary", "standby", "healthy", "available", "replica", "endpoint", "service", "node",
 		"without", "with", "no", "zero", "error", "errors", "failure", "failures", "downtime", "outage", "outages", "disruption",
 		"successfully", "reliably", "seamlessly", "cleanly", "safely",
 	) {
@@ -508,7 +508,7 @@ func benignFailoverComplement(words []string) bool {
 		if word != "to" {
 			continue
 		}
-		return containsWord(words[i+1:], "backup", "secondary", "standby", "healthy", "available", "replica")
+		return containsWord(words[i+1:], "backup", "secondary", "standby", "replica", "service", "node", "server", "endpoint")
 	}
 	return false
 }
