@@ -184,7 +184,7 @@ func deliveryLossPreventedBefore(words []string, loss int) bool {
 		}
 		if containsWord([]string{word}, "prevent", "prevents", "prevented", "preventing", "avoid", "avoids", "avoided", "avoiding") {
 			between := words[i+1 : loss]
-			return len(between) == 0 || containsWord(between, "from")
+			return len(between) == 0 || containsWord(between, "from") || safeLossPreventionModifiers(between)
 		}
 		if containsWord([]string{word}, "ensure", "ensures", "ensured", "ensuring") {
 			between := words[i+1 : loss]
@@ -192,6 +192,18 @@ func deliveryLossPreventedBefore(words []string, loss int) bool {
 		}
 	}
 	return false
+}
+
+func safeLossPreventionModifiers(words []string) bool {
+	if len(words) == 0 {
+		return false
+	}
+	for _, word := range words {
+		if !containsWord([]string{word}, "accidental", "accidentally", "unintended", "unintentionally", "inadvertent", "inadvertently") {
+			return false
+		}
+	}
+	return true
 }
 
 func conversionReviewDeliveryPreserved(value string) bool {
@@ -400,17 +412,33 @@ func conversionStateTransition(words []string) int {
 }
 
 func benignTemporalCondition(words []string) int {
-	if len(words) == 0 {
+	if len(words) == 0 || negativeTemporalComplement(words) {
 		return 0
 	}
 	word := words[0]
 	if containsWord([]string{word}, "complete", "completes", "completed", "finish", "finishes", "finished", "migrate", "migrates", "migrated", "serve", "serves", "served", "serving", "failover") {
 		return 1
 	}
+	if containsWord([]string{word}, "keep", "keeps", "keeping") && len(words) > 1 && containsWord([]string{words[1]}, "serve", "serves", "served", "serving") {
+		return 2
+	}
 	if strings.HasPrefix(word, "fail") && len(words) > 1 && words[1] == "over" {
 		return 2
 	}
 	return 0
+}
+
+func negativeTemporalComplement(words []string) bool {
+	end := len(words)
+	if end > 8 {
+		end = 8
+	}
+	for _, word := range words[:end] {
+		if containsWord([]string{word}, "no", "none", "not", "nothing", "nowhere", "never", "without", "zero", "unavailable", "unreachable", "offline") {
+			return true
+		}
+	}
+	return false
 }
 
 func conversionStatePredicate(word string) bool {
