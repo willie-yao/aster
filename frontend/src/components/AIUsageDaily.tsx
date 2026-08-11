@@ -243,7 +243,7 @@ function coverageDetails(day: AIUsageDaily): string {
     : day.coverage.status.charAt(0).toUpperCase() + day.coverage.status.slice(1);
 }
 
-function DaySummaryButton({
+export function DaySummaryButton({
   day,
   open,
   controls,
@@ -254,13 +254,28 @@ function DaySummaryButton({
   controls: string;
   onToggle: () => void;
 }) {
+  const usageSummary = day.has_usage
+    ? `${formatExactTokens(day.totals.operations)} operations. ${formatExactTokens(day.totals.model_requests)} requests. ${formatExactTokens(day.totals.cache_hits)} cache hits.`
+    : "No usage recorded.";
+  const coverageSummary = day.coverage.status === "unavailable"
+    ? "Coverage unavailable."
+    : `${day.coverage.status.charAt(0).toUpperCase() + day.coverage.status.slice(1)} coverage.`;
+  const accessibleName = [
+    `${open ? "Collapse" : "Expand"} feature breakdown for ${day.date}.`,
+    usageSummary,
+    `Recorded estimate ${recordedCost(day)}.`,
+    `Current-rate reprice ${currentRateCost(day)}.`,
+    coverageSummary,
+    day.current_partial_utc ? "Partial UTC day." : "",
+  ].filter(Boolean).join(" ");
+
   return (
     <ButtonBase
       type="button"
       onClick={onToggle}
       aria-expanded={open}
       aria-controls={controls}
-      aria-label={`${open ? "Collapse" : "Expand"} feature breakdown for ${day.date}`}
+      aria-label={accessibleName}
       sx={{
         width: "100%",
         minHeight: 44,
@@ -305,7 +320,7 @@ function DaySummaryButton({
   );
 }
 
-function HistoricalTable({ days }: { days: AIUsageDaily[] }) {
+export function HistoricalTable({ days }: { days: AIUsageDaily[] }) {
   const [ascending, setAscending] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const sorted = useMemo(
@@ -374,15 +389,17 @@ function HistoricalTable({ days }: { days: AIUsageDaily[] }) {
                       <Typography color="text.secondary" sx={{ mt: 0.25, ...overviewTypography.description }}>{coverageDetails(day)}</Typography>
                     </TableCell>
                   </TableRow>
-                  <TableRow>
-                    <TableCell colSpan={12} sx={{ py: 0, bgcolor: "surface.containerLow" }}>
-                      <Collapse in={open} timeout="auto" unmountOnExit>
-                        <Box id={contentID} sx={{ px: 1.5, py: 1.5 }}>
-                          <FeatureBreakdown day={day} currency={day.recorded_currency} />
-                        </Box>
-                      </Collapse>
-                    </TableCell>
-                  </TableRow>
+                  {open && (
+                    <TableRow>
+                      <TableCell colSpan={12} sx={{ py: 0, bgcolor: "surface.containerLow" }}>
+                        <Collapse in timeout="auto">
+                          <Box id={contentID} sx={{ px: 1.5, py: 1.5 }}>
+                            <FeatureBreakdown day={day} currency={day.recorded_currency} />
+                          </Box>
+                        </Collapse>
+                      </TableCell>
+                    </TableRow>
+                  )}
                 </Fragment>
               );
             })}
@@ -463,7 +480,7 @@ export function AIUsageDailySections({ data, days }: { data: AIUsageReport; days
         <DetailSectionBand title="Daily cost chart" metadata={rangeMetadata} />
         <Box sx={{ px: { xs: 1.5, md: 2 }, py: 1.5 }}>
           <Typography id="daily-cost-chart-summary" color="text.secondary" sx={{ mb: 1, ...overviewTypography.description }}>
-            UTC day boundaries. Solid Azure shows recorded-price estimates. Dashed amber shows current-rate repricing. The daily ledger below contains the same range newest first.
+            UTC day boundaries for the selected range. The daily usage ledger below presents the same dates in newest-first order.
           </Typography>
           <DailyCostChart days={days} mixedCurrency={Boolean(data.mixed_currency)} />
         </Box>

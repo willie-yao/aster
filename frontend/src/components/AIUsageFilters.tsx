@@ -12,6 +12,7 @@ import useMediaQuery from "@mui/material/useMediaQuery";
 import { useTheme } from "@mui/material/styles";
 import {
   aiUsageFilterSummary,
+  compactAIUsageFilterSummary,
   featureLabels,
   type AIUsageFilterValues,
 } from "../lib/aiUsage";
@@ -146,6 +147,7 @@ export function AIUsageFilters({
   const generatedID = useId();
   const contentID = `ai-usage-filters-${generatedID.replaceAll(":", "")}`;
   const summary = aiUsageFilterSummary(values);
+  const compactSummary = compactAIUsageFilterSummary(values);
 
   if (desktop) {
     return (
@@ -191,14 +193,14 @@ export function AIUsageFilters({
           title={summary}
           color="text.secondary"
           sx={{
-            maxWidth: 160,
+            maxWidth: 190,
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
             ...overviewTypography.data,
           }}
         >
-          {custom ? `${values.feature ? featureLabels[values.feature] : "Custom range"}` : "30 days · All features"}
+          {compactSummary}
         </Typography>
         <ChevronRight
           aria-hidden="true"

@@ -91,7 +91,7 @@ export function chartSeriesDescription(hasRecorded: boolean, hasCurrent: boolean
   const series = [];
   if (hasRecorded) series.push("Solid blue shows recorded estimates.");
   if (hasCurrent) series.push("Dashed amber shows current-rate estimates.");
-  return `${series.join(" ")} Hover over the chart or focus it and use the left and right arrow keys to inspect dates. Exact daily values are listed in the table below.`.trim();
+  return `${series.join(" ")} Hover over the chart or focus it and use the left and right arrow keys to inspect dates. Exact daily values are listed in the ledger below.`.trim();
 }
 export function usageQuery(start: string, end: string, feature?: AIUsageFeature): string {
   const query = new URLSearchParams({ start, end }); if (feature) query.append("feature", feature); return query.toString();
@@ -158,6 +158,36 @@ export function aiUsageFiltersAreCustom(params: URLSearchParams): boolean {
 
 export function aiUsageFilterSummary(values: AIUsageFilterValues): string {
   return `${values.start} to ${values.end} · ${values.feature ? featureLabels[values.feature] : "All features"}`;
+}
+
+function parseFilterDate(value: string): { date: Date; year: number; month: number; day: number } | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return { date, year, month, day };
+}
+
+function compactFilterRange(start: string, end: string): string {
+  const startDate = parseFilterDate(start);
+  const endDate = parseFilterDate(end);
+  if (!startDate || !endDate) return start === end ? start : `${start}–${end}`;
+
+  const month = (date: Date) => new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" }).format(date);
+  if (startDate.year === endDate.year && startDate.month === endDate.month) {
+    return startDate.day === endDate.day
+      ? `${month(startDate.date)} ${startDate.day}`
+      : `${month(startDate.date)} ${startDate.day}–${endDate.day}`;
+  }
+  if (startDate.year === endDate.year) {
+    return `${month(startDate.date)} ${startDate.day}–${month(endDate.date)} ${endDate.day}`;
+  }
+  return `${month(startDate.date)} ${startDate.day}, ${startDate.year}–${month(endDate.date)} ${endDate.day}, ${endDate.year}`;
+}
+
+export function compactAIUsageFilterSummary(values: AIUsageFilterValues): string {
+  const feature = values.feature ? featureLabels[values.feature] : "All features";
+  return `${compactFilterRange(values.start, values.end)} · ${feature}`;
 }
 
 export function coverageStateLabel(value: string): string {

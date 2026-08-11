@@ -10,6 +10,7 @@ import { MemoryRouter } from "react-router-dom";
 import { parseTestDisplayName } from "../src/lib/detailTitles.js";
 import type { BuildResult, TestCase } from "../src/types/dashboard.js";
 import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetchStatus.js";
+import type { AIUsageDaily } from "../src/types/usage.js";
 
 const vite = await createServer({
   root: process.cwd(),
@@ -38,6 +39,15 @@ const { MetricStrip } = (await vite.ssrLoadModule("/src/components/MetricStrip.t
     label: string;
     items: Array<{ label: string; value: string; note?: string }>;
   }) => ReturnType<typeof createElement>;
+};
+const { DaySummaryButton, HistoricalTable } = (await vite.ssrLoadModule("/src/components/AIUsageDaily.tsx")) as {
+  DaySummaryButton: (props: {
+    day: AIUsageDaily;
+    open: boolean;
+    controls: string;
+    onToggle: () => void;
+  }) => ReturnType<typeof createElement>;
+  HistoricalTable: (props: { days: AIUsageDaily[] }) => ReturnType<typeof createElement>;
 };
 const { BuildFailurePanel } = (await vite.ssrLoadModule("/src/components/BuildFailurePanel.tsx")) as {
   BuildFailurePanel: (props: {
@@ -94,6 +104,43 @@ function run(overrides: Partial<BuildResult> = {}): BuildResult {
     tests_passed: 0,
     tests_failed: 1,
     tests_skipped: 0,
+    ...overrides,
+  };
+}
+
+function usageDay(overrides: Partial<AIUsageDaily> = {}): AIUsageDaily {
+  return {
+    date: "2026-08-10",
+    totals: {
+      operations: 10094,
+      cache_hits: 9841,
+      failures: 2,
+      external_unmetered_operations: 0,
+      model_requests: 1417,
+      reported_requests: 1400,
+      unreported_requests: 17,
+      input_tokens: 100000,
+      cached_input_tokens: 70000,
+      cache_write_input_tokens: 5000,
+      output_tokens: 20000,
+      reasoning_tokens: 3000,
+      estimated_cost_nanos: "0",
+    },
+    features: [],
+    coverage: {
+      status: "partial",
+      states: ["partial_token_usage"],
+      model_requests: 1417,
+      reported_requests: 1400,
+      unreported_requests: 17,
+      external_unmetered_operations: 0,
+    },
+    has_usage: true,
+    current_partial_utc: true,
+    recorded_cost_status: "unknown",
+    current_rate_status: "available",
+    current_rate_currency: "USD",
+    current_rate_estimated_cost_nanos: "23470000000",
     ...overrides,
   };
 }
@@ -276,6 +323,25 @@ test("run history exposes square selected runs with date and result context", ()
   assert.match(html, /aria-pressed="true"/);
   assert.match(html, /aria-label="#124 · Passed · Aug 6, 2026"/);
   assert.match(html, />Selected #123 · Failed</);
+});
+
+test("mobile usage day disclosure names the accounting summary", () => {
+  const html = render(createElement(DaySummaryButton, {
+    day: usageDay(),
+    open: false,
+    controls: "usage-mobile-day-2026-08-10",
+    onToggle: () => undefined,
+  }));
+
+  assert.match(
+    html,
+    /aria-label="Expand feature breakdown for 2026-08-10\. 10,094 operations\. 1,417 requests\. 9,841 cache hits\. Recorded estimate Unknown\. Current-rate reprice USD 23\.47\. Partial coverage\. Partial UTC day\."/,
+  );
+});
+
+test("collapsed desktop usage days do not add empty table rows", () => {
+  const html = render(createElement(HistoricalTable, { days: [usageDay()] }));
+  assert.equal(html.match(/<tr(?:\s|>)/g)?.length, 2);
 });
 
 test("metric strip retains qualification notes without changing its shared geometry", () => {

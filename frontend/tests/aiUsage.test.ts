@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 import {
   aiUsageFilterParams, aiUsageFilterSummary, aiUsageFiltersAreCustom, aiUsageFiltersFromParams,
+  compactAIUsageFilterSummary,
   chartCurrencyPolicy, chartDateTickIndexes, chartScale, chartSeriesDescription, chartViewBoxLayout,
   chartViewBoxPoint, chartViewportX,
   chartTickValues, coverageStateLabel, defaultAIUsageFilters, featureTokenPercentage,
@@ -34,6 +35,10 @@ test("AI usage helpers format values and filters", () => {
   assert.deepEqual(filters, { start: "2026-08-01", end: "2026-08-10", feature: "analysis_chat" });
   assert.equal(aiUsageFilterParams(filters).toString(), "start=2026-08-01&end=2026-08-10&feature=analysis_chat");
   assert.equal(aiUsageFilterSummary(filters), "2026-08-01 to 2026-08-10 · Analysis chat");
+  assert.equal(compactAIUsageFilterSummary(filters), "Aug 1–10 · Analysis chat");
+  assert.equal(compactAIUsageFilterSummary({ start: "2026-07-30", end: "2026-08-02", feature: "" }), "Jul 30–Aug 2 · All features");
+  assert.equal(compactAIUsageFilterSummary({ start: "2025-12-31", end: "2026-01-01", feature: "failure_analysis" }), "Dec 31, 2025–Jan 1, 2026 · Failure analysis");
+  assert.equal(compactAIUsageFilterSummary({ start: "not-a-date", end: "2026-08-10", feature: "" }), "not-a-date–2026-08-10 · All features");
   assert.equal(aiUsageFiltersAreCustom(new URLSearchParams()), false);
   assert.equal(aiUsageFiltersAreCustom(new URLSearchParams("feature=analysis_chat")), true);
   assert.equal(coverageStateLabel("model_gateway_excluded"), "Model gateway excluded operations");
@@ -85,6 +90,8 @@ test("daily cost chart descriptions match visible series", () => {
   assert.match(chartSeriesDescription(false, true), /^Dashed amber shows current-rate estimates\./);
   assert.doesNotMatch(chartSeriesDescription(false, true), /recorded estimates/);
   assert.match(chartSeriesDescription(true, true), /Solid blue.*Dashed amber/);
+  assert.match(chartSeriesDescription(true, true), /ledger below/);
+  assert.doesNotMatch(chartSeriesDescription(true, true), /table below/);
 });
 
 test("legacy AI usage reports tolerate omitted priced request counts", () => {
