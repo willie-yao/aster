@@ -185,7 +185,7 @@ export function DashboardPage() {
         }}
       >
         <Typography variant="h4" component="h1" sx={overviewTypography.pageHeadline}>
-          Test health overview
+          Test Health Overview
         </Typography>
         <Typography variant="data" color="text.secondary" sx={{ justifySelf: "end", ...overviewTypography.data }}>
           Updated {timeAgo(data.generated_at)}
