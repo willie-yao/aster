@@ -399,3 +399,18 @@ case, a clean source checkout, a pre-populated analyzer input PVC, and the
 short-lived analyzer client kubeconfig. Use
 `hack/compare-agent-sandbox-analyzer-benchmark.py` to pair its private JSONL with
 `TestAIBenchmark` output and generate the content-free comparison.
+
+Blinded packets require
+`--reference-manifest backend/internal/e2e/testdata/benchmarks/agent-sandbox-causal-references.json`.
+The packet set includes one runtime-neutral causal reference and full-credit rubric
+per case. Keep `blind-map.json` withheld until `blind-scores.json` is frozen. A
+score file uses version 2 and must include the packet and reference set hashes,
+plus a causal assessment for every arm. Diagnosis score 2 is rejected unless the
+assessment marks the initiating cause found, covers every required causal link,
+does not promote downstream noise to primary cause, and is reference-aligned.
+Automatic signals, structured validity, citation verification, lifecycle, and
+blinded causal scores remain separate metrics.
+Freeze the blinded score file with
+`hack/freeze-agent-sandbox-blind-scores.py` before reading the runtime map, then
+pass the resulting `--score-freeze` file to the scored comparison. The comparison
+rejects a changed post-unblinding score file.

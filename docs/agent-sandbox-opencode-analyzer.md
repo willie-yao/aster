@@ -215,7 +215,7 @@ ANALYZER_BENCH_SOURCE_ROOT=<clean-source-checkout> \
 ANALYZER_BENCH_PREPARED_JSON=<private-prepared.json> \
 ANALYZER_BENCH_RESULTS_JSONL=<private-sandbox-results.jsonl> \
 ANALYZER_BENCH_ARM_LABEL=arm-b \
-BENCH_REPETITIONS=3 \
+BENCH_REPETITIONS=2 \
 BENCH_MANIFEST=internal/e2e/testdata/benchmarks/cross-project-eval.json \
 BENCH_CASE=<case-id> \
 BENCH_PROJECT_DIR=<pinned-consumer> \
@@ -241,7 +241,7 @@ go test ./internal/e2e -run '^TestAgentSandboxAnalyzerBenchmark$' -v -count=1 -t
 ```
 
 Run the in-process arm with `TestAIBenchmark`, the same case, consumer,
-provider, model, and three fresh cold caches. Keep the two JSONL files private.
+provider, model, and two fresh cold trials. Keep the two JSONL files private.
 Then generate a content-free comparison plus separate blinded scoring packets:
 
 ```bash
@@ -249,25 +249,29 @@ python3 hack/compare-agent-sandbox-analyzer-benchmark.py \
   --inprocess <private-inprocess-results.jsonl> \
   --sandbox <private-sandbox-results.jsonl> \
   --repo . \
-  --expected-pairs 9 \
+  --expected-pairs 6 \
   --holdout-case <case-a> \
   --holdout-case <case-b> \
   --holdout-case <case-c> \
+  --required-repetitions 2 \
   --blind-packets <private-blind-packets.json> \
   --blind-map <private-blind-map.json> \
+  --reference-manifest backend/internal/e2e/testdata/benchmarks/agent-sandbox-causal-references.json \
   --output-json <private-comparison.json>
 ```
 
-Keep the blind map from the evaluator until scores are frozen. Give the
-evaluator only the blind packet document. The evaluator copies its top-level
-`packet_set_sha256` into one private score file with the recorded rubric identity
-and one `0` to `2` integer for every dimension:
+Keep the blind map from the evaluator until scores and their digest are frozen.
+Give the evaluator only the blind packet document. Each packet contains the
+runtime-neutral causal reference and full-credit requirements for that case. The
+evaluator copies both set hashes into a version 2 score file, provides one `0` to
+`2` integer per dimension, and records the causal assessment:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "packet_set_sha256": "<copied-from-private-blind-packets>",
-  "rubric_version": 1,
+  "reference_set_sha256": "<copied-from-private-blind-packets>",
+  "rubric_version": 2,
   "score_max": 10,
   "dimensions": [
     "diagnosis",
@@ -286,27 +290,50 @@ and one `0` to `2` integer for every dimension:
         "claim_discipline": 2,
         "remediation": 2,
         "source_grounding": 2
+      },
+      "causal_assessment": {
+        "alignment": "aligned",
+        "initiating_cause_found": true,
+        "downstream_treated_as_primary": false,
+        "required_chain_coverage": ["required-link-a", "required-link-b"]
       }
     }
   ]
 }
 ```
 
-After scores are frozen, unblind them in a separate report invocation:
+Freeze the exact score digest before disclosing the runtime map:
+
+```bash
+python3 hack/freeze-agent-sandbox-blind-scores.py \
+  --blind-packets <private-blind-packets.json> \
+  --blind-scores <private-blind-scores.json> \
+  --output <private-score-freeze.json>
+```
+
+Only after the freeze file exists should the evaluator's scores be unblinded:
 
 ```bash
 python3 hack/compare-agent-sandbox-analyzer-benchmark.py \
   --inprocess <private-inprocess-results.jsonl> \
   --sandbox <private-sandbox-results.jsonl> \
   --repo . \
-  --expected-pairs 9 \
+  --expected-pairs 6 \
   --holdout-case <case-a> \
   --holdout-case <case-b> \
   --holdout-case <case-c> \
+  --required-repetitions 2 \
   --blind-map-input <private-blind-map.json> \
   --blind-scores <private-blind-scores.json> \
+  --score-freeze <private-score-freeze.json> \
+  --reference-manifest backend/internal/e2e/testdata/benchmarks/agent-sandbox-causal-references.json \
   --output-json <private-scored-comparison.json>
 ```
+
+Diagnosis score 2 is rejected unless every required causal link is covered, the
+initiating cause is found, the assessment is reference-aligned, and downstream
+noise is not presented as primary. The scored report retains packet, reference,
+and score set hashes.
 
 Automatic signal scoring and independent blind scoring remain separate. The
 replacement quality gate stays incomplete until the blind score set is complete.
