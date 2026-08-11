@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,8 +69,12 @@ type openCodeMessage struct {
 			} `json:"cache"`
 		} `json:"tokens"`
 		State struct {
-			Status string `json:"status"`
-			Error  string `json:"error"`
+			Status   string          `json:"status"`
+			Error    string          `json:"error"`
+			Input    json.RawMessage `json:"input"`
+			Metadata struct {
+				Matches *int `json:"matches"`
+			} `json:"metadata"`
 		} `json:"state"`
 	} `json:"parts"`
 }
@@ -79,26 +85,39 @@ type toolAggregate struct {
 	denied   int
 }
 
+type openCodeEvidenceFacts struct {
+	ArtifactToolCalls      int
+	SourceToolCalls        int
+	NonStructuredToolCalls int
+	StructuredOutputCalls  int
+}
+
 func parseOpenCodeTelemetry(raw []byte) (agentanalysis.WorkspaceUsage, agentanalysis.WorkspaceOpenCodeTelemetry, error) {
+	usage, telemetry, _, err := parseOpenCodeTelemetryForWorkspace(raw, "")
+	return usage, telemetry, err
+}
+
+func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalysis.WorkspaceUsage, agentanalysis.WorkspaceOpenCodeTelemetry, openCodeEvidenceFacts, error) {
 	started := time.Now()
 	unavailable := agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryMalformed}
 	telemetry := agentanalysis.WorkspaceOpenCodeTelemetry{
 		Status: agentanalysis.WorkspaceTelemetryMalformed, StructuredOutputRetriesKnown: true,
 	}
+	facts := openCodeEvidenceFacts{}
 	if len(raw) == 0 || len(raw) > maxOpenCodeTelemetryBytes {
-		return unavailable, telemetry, fmt.Errorf("telemetry payload is empty or oversized")
+		return unavailable, telemetry, facts, fmt.Errorf("telemetry payload is empty or oversized")
 	}
 	var messages []openCodeMessage
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	if err := decoder.Decode(&messages); err != nil {
-		return unavailable, telemetry, fmt.Errorf("decode telemetry")
+		return unavailable, telemetry, facts, fmt.Errorf("decode telemetry")
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
-		return unavailable, telemetry, fmt.Errorf("telemetry contains trailing data")
+		return unavailable, telemetry, facts, fmt.Errorf("telemetry contains trailing data")
 	}
 	if len(messages) > maxOpenCodeTelemetryEvents {
-		return unavailable, telemetry, fmt.Errorf("telemetry event count exceeds the bound")
+		return unavailable, telemetry, facts, fmt.Errorf("telemetry event count exceeds the bound")
 	}
 	tools := map[string]*toolAggregate{}
 	usage := agentanalysis.WorkspaceUsage{Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable}
@@ -110,19 +129,19 @@ func parseOpenCodeTelemetry(raw []byte) (agentanalysis.WorkspaceUsage, agentanal
 	for messageIndex, message := range messages {
 		events++
 		if events > maxOpenCodeTelemetryEvents || time.Since(started) > maxTelemetryParseTime {
-			return unavailable, telemetry, fmt.Errorf("telemetry parsing exceeded the bound")
+			return unavailable, telemetry, facts, fmt.Errorf("telemetry parsing exceeded the bound")
 		}
 		if message.Info.Role != "assistant" && message.Info.Role != "user" {
-			return unavailable, telemetry, fmt.Errorf("telemetry message role is invalid")
+			return unavailable, telemetry, facts, fmt.Errorf("telemetry message role is invalid")
 		}
 		if message.Info.Role != "assistant" && message.Info.Error != nil {
-			return unavailable, telemetry, fmt.Errorf("telemetry error is attached to a non-assistant message")
+			return unavailable, telemetry, facts, fmt.Errorf("telemetry error is attached to a non-assistant message")
 		}
 		messageFailure := false
 		if message.Info.Role == "assistant" && message.Info.Error != nil {
 			sanitized, err := sanitizeOpenCodeError(message.Info.Error)
 			if err != nil {
-				return unavailable, telemetry, fmt.Errorf("telemetry error field is invalid")
+				return unavailable, telemetry, facts, fmt.Errorf("telemetry error field is invalid")
 			}
 			telemetry.Error = sanitized
 			messageFailure = true
@@ -137,13 +156,13 @@ func parseOpenCodeTelemetry(raw []byte) (agentanalysis.WorkspaceUsage, agentanal
 		for _, part := range message.Parts {
 			events++
 			if events > maxOpenCodeTelemetryEvents || time.Since(started) > maxTelemetryParseTime {
-				return unavailable, telemetry, fmt.Errorf("telemetry parsing exceeded the bound")
+				return unavailable, telemetry, facts, fmt.Errorf("telemetry parsing exceeded the bound")
 			}
 			if (part.Type == "step-start" || part.Type == "step-finish" || part.Type == "tool") && message.Info.Role != "assistant" {
-				return unavailable, telemetry, fmt.Errorf("assistant telemetry part is attached to a non-assistant message")
+				return unavailable, telemetry, facts, fmt.Errorf("assistant telemetry part is attached to a non-assistant message")
 			}
 			if part.Type == "compaction" && message.Info.Role != "user" {
-				return unavailable, telemetry, fmt.Errorf("compaction telemetry part is attached to a non-user message")
+				return unavailable, telemetry, facts, fmt.Errorf("compaction telemetry part is attached to a non-user message")
 			}
 			switch part.Type {
 			case "step-start":
@@ -152,11 +171,11 @@ func parseOpenCodeTelemetry(raw []byte) (agentanalysis.WorkspaceUsage, agentanal
 			case "step-finish":
 				messageFinishes++
 				if part.Tokens == nil || part.Tokens.Input == nil || part.Tokens.Output == nil || part.Tokens.Cache == nil || part.Tokens.Cache.Read == nil || part.Cost == nil {
-					return unavailable, telemetry, fmt.Errorf("telemetry step usage is incomplete")
+					return unavailable, telemetry, facts, fmt.Errorf("telemetry step usage is incomplete")
 				}
 				usage.ModelRequests++
 				if !addTelemetryCount(&usage.InputTokens, *part.Tokens.Input) || !addTelemetryCount(&usage.CachedInputTokens, *part.Tokens.Cache.Read) || !addTelemetryCount(&usage.OutputTokens, *part.Tokens.Output) {
-					return unavailable, telemetry, fmt.Errorf("telemetry token count is invalid")
+					return unavailable, telemetry, facts, fmt.Errorf("telemetry token count is invalid")
 				}
 				if *part.Cost < 0 {
 					costKnown = false
@@ -166,22 +185,30 @@ func parseOpenCodeTelemetry(raw []byte) (agentanalysis.WorkspaceUsage, agentanal
 				}
 			case "tool":
 				if !validTelemetryToolName(part.Tool) {
-					return unavailable, telemetry, fmt.Errorf("telemetry tool name is invalid")
+					return unavailable, telemetry, facts, fmt.Errorf("telemetry tool name is invalid")
 				}
 				aggregate := tools[part.Tool]
 				if aggregate == nil {
 					if len(tools) >= maxOpenCodeToolNames {
-						return unavailable, telemetry, fmt.Errorf("telemetry tool count exceeds the bound")
+						return unavailable, telemetry, facts, fmt.Errorf("telemetry tool count exceeds the bound")
 					}
 					aggregate = &toolAggregate{}
 					tools[part.Tool] = aggregate
 				}
 				aggregate.count++
+				if part.Tool == "StructuredOutput" {
+					facts.StructuredOutputCalls++
+				} else {
+					facts.NonStructuredToolCalls++
+				}
 				switch part.State.Status {
 				case "completed":
+					if err := recordOpenCodeEvidenceTool(&facts, part.Tool, part.State.Input, part.State.Metadata.Matches, workDir); err != nil {
+						return unavailable, telemetry, facts, err
+					}
 				case "error":
 					if len(part.State.Error) > maxOpenCodeFieldBytes {
-						return unavailable, telemetry, fmt.Errorf("telemetry tool error exceeds the bound")
+						return unavailable, telemetry, facts, fmt.Errorf("telemetry tool error exceeds the bound for %s (%d bytes)", part.Tool, len(part.State.Error))
 					}
 					aggregate.failures++
 					telemetry.ToolFailureCount++
@@ -193,18 +220,18 @@ func parseOpenCodeTelemetry(raw []byte) (agentanalysis.WorkspaceUsage, agentanal
 					aggregate.failures++
 					telemetry.ToolFailureCount++
 				default:
-					return unavailable, telemetry, fmt.Errorf("telemetry tool state is invalid")
+					return unavailable, telemetry, facts, fmt.Errorf("telemetry tool state is invalid")
 				}
 			}
 		}
 		if message.Info.Role == "assistant" {
 			if messageFinishes > messageStarts {
-				return unavailable, telemetry, fmt.Errorf("telemetry step usage is inconsistent")
+				return unavailable, telemetry, facts, fmt.Errorf("telemetry step usage is inconsistent")
 			}
 			if messageStarts > messageFinishes {
 				autoCompaction := messageStarts-messageFinishes == 1 && nextMessageIsOverflowCompaction(messages, messageIndex)
 				if messageStarts-messageFinishes != 1 || (!messageFailure && !autoCompaction) {
-					return unavailable, telemetry, fmt.Errorf("telemetry step usage is inconsistent")
+					return unavailable, telemetry, facts, fmt.Errorf("telemetry step usage is inconsistent")
 				}
 				incompleteUsage = true
 				if autoCompaction {
@@ -214,7 +241,7 @@ func parseOpenCodeTelemetry(raw []byte) (agentanalysis.WorkspaceUsage, agentanal
 		}
 	}
 	if usage.ModelRequests > telemetry.StepsUsed || (telemetry.StepsUsed == 0 && !telemetry.Error.Available) {
-		return unavailable, telemetry, fmt.Errorf("telemetry step usage is inconsistent")
+		return unavailable, telemetry, facts, fmt.Errorf("telemetry step usage is inconsistent")
 	}
 	telemetry.ProviderRequests = telemetry.StepsUsed
 	if telemetry.Error.Available && telemetry.ProviderRequests == 0 {
@@ -240,7 +267,73 @@ func parseOpenCodeTelemetry(raw []byte) (agentanalysis.WorkspaceUsage, agentanal
 	telemetry.Available = true
 	telemetry.Status = agentanalysis.WorkspaceTelemetryAvailable
 	telemetry.EventCount = events
-	return usage, telemetry, nil
+	return usage, telemetry, facts, nil
+}
+
+func recordOpenCodeEvidenceTool(facts *openCodeEvidenceFacts, tool string, raw json.RawMessage, matches *int, workDir string) error {
+	if tool == "StructuredOutput" {
+		return nil
+	}
+	if workDir == "" || (tool != "read" && tool != "grep") {
+		return nil
+	}
+	if len(raw) == 0 || len(raw) > 16<<10 {
+		return fmt.Errorf("telemetry tool input is invalid or oversized")
+	}
+	var input struct {
+		FilePath string `json:"filePath"`
+		Path     string `json:"path"`
+	}
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return fmt.Errorf("telemetry tool input is invalid")
+	}
+	candidate := input.FilePath
+	if tool == "grep" {
+		candidate = input.Path
+		if matches == nil || *matches < 1 {
+			return nil
+		}
+	}
+	root, ok := openCodeEvidenceRoot(workDir, candidate)
+	if !ok {
+		return nil
+	}
+	if tool == "read" {
+		path := candidate
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(workDir, path)
+		}
+		info, err := os.Stat(filepath.Clean(path))
+		if err != nil || !info.Mode().IsRegular() {
+			return nil
+		}
+	}
+	switch root {
+	case agentanalysis.WorkspaceArtifactsDir:
+		facts.ArtifactToolCalls++
+	case agentanalysis.WorkspaceSourceDir:
+		facts.SourceToolCalls++
+	}
+	return nil
+}
+
+func openCodeEvidenceRoot(workDir, candidate string) (string, bool) {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(workDir, candidate)
+	}
+	candidate = filepath.Clean(candidate)
+	for _, root := range []string{agentanalysis.WorkspaceArtifactsDir, agentanalysis.WorkspaceSourceDir} {
+		base := filepath.Clean(filepath.Join(workDir, root))
+		relative, err := filepath.Rel(base, candidate)
+		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return root, true
+		}
+	}
+	return "", false
 }
 
 func nextMessageIsOverflowCompaction(messages []openCodeMessage, index int) bool {

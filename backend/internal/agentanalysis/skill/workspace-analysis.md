@@ -11,9 +11,11 @@ under `artifacts/`. Inspect those files directly. Do not assume that a timeout o
 cleanup symptom is the initiating cause when an earlier specific error explains
 the sequence. Keep material unknowns in `unresolved_details`.
 
-Return exactly one schema-constrained structured result through OpenCode's
-StructuredOutput tool. Do not create or edit `result/analysis.json`; the executor
-creates the canonical result after validation. The result contract is
+Investigate first with native read and search tools. StructuredOutput is not
+available during that evidence phase. After at least one artifact read or focused
+grep succeeds, the executor will request finalization in the same OpenCode
+session. Do not create or edit `result/analysis.json`; the executor creates the
+canonical result after validation. The result contract is
 `agent-analysis-workspace-v5`. Citation entries contain only an exact path and
 1-based inclusive line range. Do not include quotation text. The executor reads
 the sealed file range and constructs the authoritative exact quotation.

@@ -38,16 +38,12 @@ type digestToolSchema struct {
 }
 
 func newOpenCodeRequestShape(spec OpenCodeSpec, version string) agentanalysis.WorkspaceOpenCodeRequestShape {
-	shape := agentanalysis.WorkspaceOpenCodeRequestShape{
-		Available:            true,
-		StreamingMode:        "streaming",
-		ModelID:              spec.Gateway.Model,
-		UserPromptBytes:      len(spec.Prompt),
-		ResponseSchemaSHA256: agentanalysis.WorkspaceResultSchemaHash(),
-		ToolChoiceMode:       "required",
-		ContextLimit:         spec.ModelContextTokens,
-		OutputTokenLimit:     spec.ModelOutputTokens,
-		OpenCodeVersion:      version,
+	shape := baseOpenCodeRequestShape(spec, version, spec.Prompt+agentanalysis.WorkspaceFinalizationInstruction(), "required")
+	shape.ResponseSchemaSHA256 = agentanalysis.WorkspaceResultSchemaHash()
+	if count, digest, err := structuredOutputToolSchemaDigest(); err == nil {
+		shape.ToolSchemaAvailable = true
+		shape.ToolCount = count
+		shape.ToolSchemaSHA256 = digest
 	}
 	if count, err := openCodeSystemPromptBytes(spec, time.Now()); err == nil {
 		shape.SystemPromptBytesAvailable = true
@@ -56,7 +52,37 @@ func newOpenCodeRequestShape(spec OpenCodeSpec, version string) agentanalysis.Wo
 	return shape
 }
 
+func newOpenCodeEvidenceRequestShape(spec OpenCodeSpec, version string) agentanalysis.WorkspaceOpenCodeRequestShape {
+	shape := baseOpenCodeRequestShape(spec, version, spec.Prompt, "auto")
+	if count, err := openCodeEvidenceSystemPromptBytes(spec, time.Now()); err == nil {
+		shape.SystemPromptBytesAvailable = true
+		shape.SystemPromptBytes = count
+	}
+	return shape
+}
+
+func baseOpenCodeRequestShape(spec OpenCodeSpec, version, prompt, toolChoice string) agentanalysis.WorkspaceOpenCodeRequestShape {
+	return agentanalysis.WorkspaceOpenCodeRequestShape{
+		Available:        true,
+		StreamingMode:    "streaming",
+		ModelID:          spec.Gateway.Model,
+		UserPromptBytes:  len(prompt),
+		ToolChoiceMode:   toolChoice,
+		ContextLimit:     spec.ModelContextTokens,
+		OutputTokenLimit: spec.ModelOutputTokens,
+		OpenCodeVersion:  version,
+	}
+}
+
 func openCodeSystemPromptBytes(spec OpenCodeSpec, now time.Time) (int, error) {
+	return openCodePhaseSystemPromptBytes(spec, now, agentanalysis.WorkspaceFinalizerPrompt(), true)
+}
+
+func openCodeEvidenceSystemPromptBytes(spec OpenCodeSpec, now time.Time) (int, error) {
+	return openCodePhaseSystemPromptBytes(spec, now, agentanalysis.WorkspaceAgentPrompt(), false)
+}
+
+func openCodePhaseSystemPromptBytes(spec OpenCodeSpec, now time.Time, agentPrompt string, structured bool) (int, error) {
 	directory, err := filepath.Abs(spec.WorkDir)
 	if err != nil {
 		return 0, err
@@ -85,11 +111,14 @@ func openCodeSystemPromptBytes(spec OpenCodeSpec, now time.Time) (int, error) {
 		"  Today's date: " + now.Format("Mon Jan 2 2006"),
 		"</env>",
 	}, "\n")
-	system := strings.Join([]string{agentanalysis.WorkspaceAgentPrompt(), environment, openCodeStructuredOutputSystemPrompt}, "\n")
-	return len([]byte(system)), nil
+	parts := []string{agentPrompt, environment}
+	if structured {
+		parts = append(parts, openCodeStructuredOutputSystemPrompt)
+	}
+	return len([]byte(strings.Join(parts, "\n"))), nil
 }
 
-func fetchOpenCodeToolSchemaDigest(ctx context.Context, client *http.Client, baseURL string, spec OpenCodeSpec) (int, string, error) {
+func fetchOpenCodeNativeToolSchemaDigest(ctx context.Context, client *http.Client, baseURL string, spec OpenCodeSpec) (int, string, error) {
 	query := url.Values{
 		"directory": {spec.WorkDir},
 		"provider":  {"engine"},
@@ -125,6 +154,16 @@ func fetchOpenCodeToolSchemaDigest(ctx context.Context, client *http.Client, bas
 	if len(seen) != len(wanted) {
 		return 0, "", fmt.Errorf("OpenCode tool schema set is incomplete")
 	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
+	data, err := json.Marshal(tools)
+	if err != nil {
+		return 0, "", err
+	}
+	digest := sha256.Sum256(data)
+	return len(tools), hex.EncodeToString(digest[:]), nil
+}
+
+func structuredOutputToolSchemaDigest() (int, string, error) {
 	structuredSchema := agentanalysis.WorkspaceResultSchema()
 	delete(structuredSchema, "$schema")
 	structured, err := json.Marshal(structuredSchema)
@@ -135,14 +174,12 @@ func fetchOpenCodeToolSchemaDigest(ctx context.Context, client *http.Client, bas
 	if err != nil {
 		return 0, "", err
 	}
-	tools = append(tools, digestToolSchema{Name: "StructuredOutput", Schema: structured})
-	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
-	data, err := json.Marshal(tools)
+	data, err := json.Marshal([]digestToolSchema{{Name: "StructuredOutput", Schema: structured}})
 	if err != nil {
 		return 0, "", err
 	}
 	digest := sha256.Sum256(data)
-	return len(tools), hex.EncodeToString(digest[:]), nil
+	return 1, hex.EncodeToString(digest[:]), nil
 }
 
 func canonicalJSON(raw []byte) ([]byte, error) {
