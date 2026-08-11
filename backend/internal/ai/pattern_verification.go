@@ -140,7 +140,7 @@ func historicalPatternTargetsSupported(targets []models.RemediationTarget) bool 
 	for _, target := range targets {
 		switch target.Intent {
 		case models.RemediationIntentModifySymbol:
-			if !strings.Contains(target.RequiredCall, "/") {
+			if _, _, ok := actionverify.RequiredCallParts(target.RequiredCall); !ok {
 				return false
 			}
 		case models.RemediationIntentSetConfiguration, models.RemediationIntentRemoveConfiguration, models.RemediationIntentSetJobEnvironment:
