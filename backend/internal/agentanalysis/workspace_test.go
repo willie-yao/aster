@@ -344,3 +344,152 @@ func runWorkspaceGit(t *testing.T, root string, args ...string) string {
 	}
 	return string(output)
 }
+
+func TestVerifySourceWorkspaceAcceptsTrackedInternalSymlink(t *testing.T) {
+	sourceRoot, _, _, source := workspaceTestInputs(t)
+	if err := os.Symlink(filepath.Join("pkg", "controller.go"), filepath.Join(sourceRoot, "controller-link.go")); err != nil {
+		t.Fatal(err)
+	}
+	runWorkspaceGit(t, sourceRoot, "add", "controller-link.go")
+	runWorkspaceGit(t, sourceRoot, "commit", "-qm", "add safe symlink")
+	source.Revision = strings.TrimSpace(runWorkspaceGit(t, sourceRoot, "rev-parse", "HEAD"))
+	if err := VerifySourceWorkspace(t.Context(), sourceRoot, source.Revision); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifySourceWorkspaceRejectsUnsafeTrackedSymlinks(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(*testing.T, string)
+	}{
+		{
+			name: "absolute",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.Symlink(filepath.Join(string(filepath.Separator), "tmp", "outside"), filepath.Join(root, "unsafe")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "escaping",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.Symlink(filepath.Join("..", "outside"), filepath.Join(root, "unsafe")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "chained escape",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.Symlink("inner", filepath.Join(root, "unsafe")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join("..", "outside"), filepath.Join(root, "inner")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sourceRoot, _, _, source := workspaceTestInputs(t)
+			test.setup(t, sourceRoot)
+			runWorkspaceGit(t, sourceRoot, "add", "unsafe")
+			if test.name == "chained escape" {
+				runWorkspaceGit(t, sourceRoot, "add", "inner")
+			}
+			runWorkspaceGit(t, sourceRoot, "commit", "-qm", "add unsafe symlink")
+			source.Revision = strings.TrimSpace(runWorkspaceGit(t, sourceRoot, "rev-parse", "HEAD"))
+			if err := VerifySourceWorkspace(t.Context(), sourceRoot, source.Revision); err == nil {
+				t.Fatal("unsafe tracked symlink was accepted")
+			}
+		})
+	}
+}
+
+func TestVerifySourceWorkspaceRejectsDirectorySymlinkCycles(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(*testing.T, string) []string
+	}{
+		{
+			name: "self directory",
+			setup: func(t *testing.T, root string) []string {
+				t.Helper()
+				if err := os.Symlink(".", filepath.Join(root, "loop")); err != nil {
+					t.Fatal(err)
+				}
+				return []string{"loop"}
+			},
+		},
+		{
+			name: "parent directory",
+			setup: func(t *testing.T, root string) []string {
+				t.Helper()
+				if err := os.Symlink("..", filepath.Join(root, "pkg", "up")); err != nil {
+					t.Fatal(err)
+				}
+				return []string{"pkg/up"}
+			},
+		},
+		{
+			name: "direct symlink cycle",
+			setup: func(t *testing.T, root string) []string {
+				t.Helper()
+				if err := os.Symlink("b", filepath.Join(root, "a")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("a", filepath.Join(root, "b")); err != nil {
+					t.Fatal(err)
+				}
+				return []string{"a", "b"}
+			},
+		},
+		{
+			name: "long directory cycle",
+			setup: func(t *testing.T, root string) []string {
+				t.Helper()
+				for _, directory := range []string{"a-dir", "b-dir"} {
+					if err := os.Mkdir(filepath.Join(root, directory), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(root, directory, "keep"), []byte("keep\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.Symlink(filepath.Join("..", "b-dir"), filepath.Join(root, "a-dir", "to-b")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join("..", "a-dir"), filepath.Join(root, "b-dir", "to-a")); err != nil {
+					t.Fatal(err)
+				}
+				return []string{"a-dir", "b-dir"}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sourceRoot, _, _, source := workspaceTestInputs(t)
+			paths := test.setup(t, sourceRoot)
+			runWorkspaceGit(t, sourceRoot, append([]string{"add"}, paths...)...)
+			runWorkspaceGit(t, sourceRoot, "commit", "-qm", "add directory symlink cycle")
+			source.Revision = strings.TrimSpace(runWorkspaceGit(t, sourceRoot, "rev-parse", "HEAD"))
+			if err := VerifySourceWorkspace(t.Context(), sourceRoot, source.Revision); err == nil {
+				t.Fatal("directory symlink cycle was accepted")
+			}
+		})
+	}
+}
+
+func TestVerifySourceWorkspaceRejectsSubmoduleMode(t *testing.T) {
+	sourceRoot, _, _, source := workspaceTestInputs(t)
+	head := strings.TrimSpace(runWorkspaceGit(t, sourceRoot, "rev-parse", "HEAD"))
+	runWorkspaceGit(t, sourceRoot, "update-index", "--add", "--cacheinfo", "160000,"+head+",submodule")
+	runWorkspaceGit(t, sourceRoot, "commit", "-qm", "add gitlink")
+	source.Revision = strings.TrimSpace(runWorkspaceGit(t, sourceRoot, "rev-parse", "HEAD"))
+	if err := VerifySourceWorkspace(t.Context(), sourceRoot, source.Revision); err == nil {
+		t.Fatal("submodule index mode was accepted")
+	}
+}

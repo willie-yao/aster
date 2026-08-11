@@ -34,6 +34,32 @@ func TestExecuteStagesVerifiedWorkspace(t *testing.T) {
 	}
 }
 
+func TestExecuteStagesTrackedInternalSourceSymlink(t *testing.T) {
+	inputRoot, workspaceRoot, request := stagerFixtureWithSourceSetup(t, func(root string) {
+		if err := os.Symlink(filepath.Join("pkg", "controller.go"), filepath.Join(root, "controller-link.go")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err := Execute(t.Context(), request, Options{InputRoot: inputRoot, WorkspaceRoot: workspaceRoot}); err != nil {
+		t.Fatal(err)
+	}
+	target, err := os.Readlink(filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir, "controller-link.go"))
+	if err != nil || target != filepath.Join("pkg", "controller.go") {
+		t.Fatalf("staged symlink target=%q err=%v", target, err)
+	}
+}
+
+func TestExecuteRejectsDirectorySymlinkCycle(t *testing.T) {
+	inputRoot, workspaceRoot, request := stagerFixtureWithSourceSetup(t, func(root string) {
+		if err := os.Symlink(".", filepath.Join(root, "loop")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err := Execute(t.Context(), request, Options{InputRoot: inputRoot, WorkspaceRoot: workspaceRoot}); err == nil || !strings.Contains(err.Error(), "directory symlinks contain a cycle") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestExecuteRejectsChangedArtifactInput(t *testing.T) {
 	inputRoot, workspaceRoot, request := stagerFixture(t)
 	path := filepath.Join(inputRoot, request.ManifestHash, agentanalysis.WorkspaceArtifactsDir, "logs", "build.log")
@@ -56,6 +82,17 @@ func TestExecuteRejectsSourceSymlink(t *testing.T) {
 	}
 }
 
+func TestExecuteRejectsSourceGitMetadataSymlink(t *testing.T) {
+	inputRoot, workspaceRoot, request := stagerFixture(t)
+	sourceRoot := filepath.Join(inputRoot, request.ManifestHash, agentanalysis.WorkspaceSourceDir)
+	if err := os.Symlink(filepath.Join("..", "..", "pkg", "controller.go"), filepath.Join(sourceRoot, ".git", "unsafe-link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Execute(t.Context(), request, Options{InputRoot: inputRoot, WorkspaceRoot: workspaceRoot}); err == nil || !strings.Contains(err.Error(), "Git metadata contains a symlink") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestExecuteRequiresEmptyWorkspace(t *testing.T) {
 	inputRoot, workspaceRoot, request := stagerFixture(t)
 	if err := os.WriteFile(filepath.Join(workspaceRoot, "existing"), []byte("x"), 0o600); err != nil {
@@ -67,6 +104,11 @@ func TestExecuteRequiresEmptyWorkspace(t *testing.T) {
 }
 
 func stagerFixture(t *testing.T) (string, string, agentanalysis.WorkspaceStageRequest) {
+	t.Helper()
+	return stagerFixtureWithSourceSetup(t, nil)
+}
+
+func stagerFixtureWithSourceSetup(t *testing.T, setup func(string)) (string, string, agentanalysis.WorkspaceStageRequest) {
 	t.Helper()
 	inputRoot := t.TempDir()
 	pending := filepath.Join(inputRoot, "pending")
@@ -83,6 +125,9 @@ func stagerFixture(t *testing.T) (string, string, agentanalysis.WorkspaceStageRe
 	}
 	if err := os.WriteFile(filepath.Join(sourceRoot, ".gitignore"), []byte("ignored.txt\n"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if setup != nil {
+		setup(sourceRoot)
 	}
 	runStagerGit(t, sourceRoot, "init", "-q")
 	runStagerGit(t, sourceRoot, "config", "user.name", "Test")
