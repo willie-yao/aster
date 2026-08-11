@@ -556,8 +556,10 @@ When enabled, the chart can create a dedicated analyzer client ServiceAccount,
 narrow Sandbox and Pod-log RBAC in a dedicated existing execution namespace, a
 tokenless workload ServiceAccount, a fail-closed admission policy, a
 deny-by-default network policy, and a one-Sandbox, one-Pod ResourceQuota. The
-chart never creates the namespace, controller, RuntimeClass, pre-populated input
-PVC, internal model gateway, or runtime images.
+quota does not duplicate cluster-owned RuntimeClass overhead. Admission pins the
+container resource bounds instead. The chart never creates the namespace,
+controller, RuntimeClass, pre-populated input PVC, internal model gateway, or
+runtime images.
 
 The analyzer executor and stager images must use immutable SHA-256 digests. The
 admission policy pins both images, the exact read-only input PVC, the secure

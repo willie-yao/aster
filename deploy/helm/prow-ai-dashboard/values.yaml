@@ -187,7 +187,7 @@ agentSandbox:
         k8s-app: kube-dns
     quota:
       # The analyzer namespace must be dedicated. The quota permits one Sandbox
-      # and one Pod at a time with exactly the configured resource ceiling.
+      # and one Pod at a time. Admission pins container resources separately.
       enabled: true
     resources:
       requests:
