@@ -239,6 +239,37 @@ func TestVerifySourceWorkspaceRejectsDirtyCheckout(t *testing.T) {
 	}
 }
 
+func TestVerifySourceWorkspaceAcceptsMetadataOnlyChanges(t *testing.T) {
+	sourceRoot, _, _, source := workspaceTestInputs(t)
+	path := filepath.Join(sourceRoot, "pkg", "controller.go")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := info.ModTime().Add(2 * time.Hour)
+	if err := os.Chtimes(path, changed, changed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitWorkspaceOutput(t.Context(), sourceRoot, "diff-files", "--quiet", "--"); err == nil {
+		t.Fatal("metadata-only fixture did not invalidate the index stat cache")
+	}
+	if err := VerifySourceWorkspace(t.Context(), sourceRoot, source.Revision); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifySourceWorkspaceRejectsStagedCheckout(t *testing.T) {
+	sourceRoot, _, _, source := workspaceTestInputs(t)
+	path := filepath.Join(sourceRoot, "pkg", "controller.go")
+	if err := os.WriteFile(path, []byte("package changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runWorkspaceGit(t, sourceRoot, "add", "pkg/controller.go")
+	if err := VerifySourceWorkspace(t.Context(), sourceRoot, source.Revision); err == nil {
+		t.Fatal("staged source modification was accepted")
+	}
+}
+
 func TestVerifySourceWorkspaceRejectsIgnoredFile(t *testing.T) {
 	sourceRoot, _, _, source := workspaceTestInputs(t)
 	if err := os.WriteFile(filepath.Join(sourceRoot, "ignored.txt"), []byte("ignored\n"), 0o600); err != nil {
