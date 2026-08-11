@@ -1050,6 +1050,12 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 	if keepOpen == nil {
 		keepOpen = map[string]bool{}
 	}
+	for _, pattern := range report.RecurringPatterns {
+		if models.PatternAllowsActions(pattern) || !pattern.Systemic || pattern.JobID == "" || !models.PatternIsCurrent(details, pattern.JobID) {
+			continue
+		}
+		keepOpen[issues.KeyPrefixPattern+pattern.JobID] = true
+	}
 	for _, detail := range details {
 		if detail.PatternRefresh == nil || detail.PatternRefresh.State == models.PatternRefreshCurrent ||
 			detail.PatternRefresh.State == models.PatternRefreshNotApplicable {

@@ -736,3 +736,30 @@ func TestRunSideEffectsSkipsFixAutomationWithoutStaticToken(t *testing.T) {
 		t.Fatalf("follow-up status = %+v", status.FollowUp)
 	}
 }
+
+func TestProcessIssuesKeepsCurrentAnalysisOnlyPatternOpen(t *testing.T) {
+	t.Setenv("ISSUE_TOKEN", "test-token")
+	manager := &recordingScheduledIssueManager{}
+	var gotOptions issues.Options
+	oldFactory := newBatchIssueManager
+	newBatchIssueManager = func(_ *issues.Client, _, _ string, opts issues.Options) scheduledIssueManager {
+		gotOptions = opts
+		return manager
+	}
+	t.Cleanup(func() { newBatchIssueManager = oldFactory })
+
+	pattern := models.PatternAnalysis{
+		JobID: "job", Systemic: true, Recurrence: models.PatternRecurrenceSharedCause,
+		SharedRootCause: "active cause", SharedBuilds: []string{"2", "1"}, Summary: "still active",
+	}
+	report := models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{pattern}}
+	details := []models.JobDetail{{
+		JobID: "job", PatternRefresh: &models.PatternRefreshStatus{State: models.PatternRefreshCurrent},
+	}}
+	if err := processIssues(t.Context(), automaticIssueTestConfig(), report, details, "", false, t.TempDir(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if !gotOptions.KeepOpenKeys[issues.KeyPrefixPattern+"job"] {
+		t.Fatalf("keep-open keys=%v", gotOptions.KeepOpenKeys)
+	}
+}
