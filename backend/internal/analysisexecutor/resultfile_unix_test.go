@@ -19,15 +19,18 @@ func TestExecuteRejectsFIFOResultWithoutBlocking(t *testing.T) {
 	started := time.Now()
 	result := Execute(context.Background(), request, Options{
 		WorkspaceRoot: root, TempRoot: t.TempDir(),
-		RunOpenCode: func(context.Context, OpenCodeSpec) error {
+		RunOpenCode: func(context.Context, OpenCodeSpec) ([]byte, error) {
 			path := filepath.Join(root, agentanalysis.WorkspaceResultDir, agentanalysis.WorkspaceResultFile)
-			return unix.Mkfifo(path, 0o600)
+			if err := unix.Mkfifo(path, 0o600); err != nil {
+				return nil, err
+			}
+			return executorAnalysisJSON(), nil
 		},
 	})
 	if time.Since(started) > 2*time.Second {
 		t.Fatal("FIFO result blocked executor finalization")
 	}
-	if result.TerminalState != engineruntime.TerminalFailed || !strings.Contains(result.FailureReason, "regular file") {
+	if result.TerminalState != engineruntime.TerminalFailed || !strings.Contains(result.FailureReason, "modified") {
 		t.Fatalf("result=%+v", result)
 	}
 }

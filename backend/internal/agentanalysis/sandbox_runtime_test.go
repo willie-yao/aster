@@ -212,7 +212,7 @@ func validWorkspaceExecution(request WorkspaceExecutionRequest) WorkspaceExecuti
 		Summary: "The controller rejected the request.", RootCause: "The specific failure occurred before cleanup.", Severity: "High",
 		SuggestedFix: "Correct the request before retrying.", RelevantFiles: []string{"pkg/controller.go"},
 		EvidenceCitations: []models.EvidenceCitation{{Path: "logs/build.log", LineStart: 2, LineEnd: 2, Quote: "artifact-only-marker specific failure"}},
-		SourceCitations:   []sourceinvestigation.Citation{{Path: "pkg/controller.go", LineStart: 3, LineEnd: 3, Quote: "func reconcile()", Verified: true}},
+		SourceCitations:   []sourceinvestigation.Citation{{Path: "pkg/controller.go", LineStart: 3, LineEnd: 3, Quote: "func reconcile() {}", Verified: true}},
 	}
 	return WorkspaceExecutionResult{
 		Version: WorkspaceResultVersion, ContractVersion: WorkspaceContractVersion, RequestHash: request.Hash,

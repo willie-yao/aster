@@ -27,9 +27,9 @@ const (
 	WorkspaceRequestVersion  = 1
 	WorkspaceResultVersion   = 1
 	WorkspaceStageVersion    = 1
-	WorkspaceContractVersion = "agent-analysis-workspace-v1"
+	WorkspaceContractVersion = "agent-analysis-workspace-v2"
 	WorkspaceStageContract   = "agent-analysis-stage-v1"
-	WorkspacePromptVersion   = "agent-analysis-workspace-prompt-v1"
+	WorkspacePromptVersion   = "agent-analysis-workspace-prompt-v2"
 
 	WorkspaceSourceDir    = "source"
 	WorkspaceArtifactsDir = "artifacts"
@@ -80,6 +80,7 @@ type WorkspaceExecutionRequest struct {
 	Hash             string                           `json:"hash"`
 	PromptVersion    string                           `json:"prompt_version"`
 	PromptHash       string                           `json:"prompt_hash"`
+	ResultSchemaHash string                           `json:"result_schema_hash"`
 	Manifest         WorkspaceManifest                `json:"manifest"`
 	ModelGateway     engineruntime.ModelGatewayConfig `json:"model_gateway"`
 	TimeoutSeconds   int64                            `json:"timeout_seconds"`
@@ -382,7 +383,7 @@ func gitWorkspaceOutput(ctx context.Context, root string, args ...string) ([]byt
 func NewWorkspaceExecutionRequest(manifest WorkspaceManifest, gateway engineruntime.ModelGatewayConfig, timeout time.Duration, maxSteps int, outputLimit int64) (WorkspaceExecutionRequest, error) {
 	request := WorkspaceExecutionRequest{
 		Version: WorkspaceRequestVersion, ContractVersion: WorkspaceContractVersion, PromptVersion: WorkspacePromptVersion,
-		PromptHash: WorkspaceSkillHash(), Manifest: manifest, ModelGateway: gateway, TimeoutSeconds: int64(timeout.Round(time.Second) / time.Second),
+		PromptHash: WorkspaceSkillHash(), ResultSchemaHash: WorkspaceResultSchemaHash(), Manifest: manifest, ModelGateway: gateway, TimeoutSeconds: int64(timeout.Round(time.Second) / time.Second),
 		MaxSteps: maxSteps, OutputLimitBytes: outputLimit,
 	}
 	hash, err := workspaceRequestDigest(request)
@@ -398,7 +399,7 @@ func NewWorkspaceExecutionRequest(manifest WorkspaceManifest, gateway enginerunt
 
 // ValidateWorkspaceExecutionRequest validates one credential-free analyzer request.
 func ValidateWorkspaceExecutionRequest(request WorkspaceExecutionRequest) error {
-	if request.Version != WorkspaceRequestVersion || request.ContractVersion != WorkspaceContractVersion || request.PromptVersion != WorkspacePromptVersion || request.PromptHash != WorkspaceSkillHash() {
+	if request.Version != WorkspaceRequestVersion || request.ContractVersion != WorkspaceContractVersion || request.PromptVersion != WorkspacePromptVersion || request.PromptHash != WorkspaceSkillHash() || request.ResultSchemaHash != WorkspaceResultSchemaHash() {
 		return fmt.Errorf("workspace analysis request version is invalid")
 	}
 	if err := ValidateWorkspaceManifest(request.Manifest); err != nil {
