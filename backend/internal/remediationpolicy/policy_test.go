@@ -77,6 +77,10 @@ func TestReasonAdmissionConversionClaims(t *testing.T) {
 		"The conversion webhook remains available until it serves zero requests.",
 		"The conversion webhook remains available until it completes no migrations.",
 		"The conversion webhook remains available until it fails over to nowhere.",
+		"The conversion webhook remains available until it serves neither reads nor writes.",
+		"The conversion webhook remains available until it serves hardly any requests.",
+		"The conversion webhook remains available until it fails over to a dead endpoint.",
+		"The conversion webhook remains available until it completes an invalid migration.",
 	} {
 		if got := Reason(text, actionable); got != UnsafeConversionReason {
 			t.Errorf("unsafe recommendation accepted: %q -> %q", text, got)
@@ -137,6 +141,10 @@ func TestReasonPreservesSafeWebhookChanges(t *testing.T) {
 		"Prevent accidental blocking of ConversionReview delivery.",
 		"Prevent unintended disabling of ConversionReview delivery.",
 		"The conversion webhook remains available until it keeps serving requests.",
+		"The conversion webhook remains available until it serves requests without error.",
+		"The conversion webhook remains available until it completes migration without failure.",
+		"The conversion webhook remains available until it completes migration with no errors.",
+		"The conversion webhook remains available until it fails over without downtime.",
 	} {
 		if got := Reason(text, actionable); got != "" {
 			t.Errorf("safe recommendation rejected: %q -> %q", text, got)
