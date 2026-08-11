@@ -2221,3 +2221,86 @@ func TestRecoveredPatternBlocksIssueAndFixActionsWithoutClaimingSourceRemediatio
 		})
 	}
 }
+func conversionPolicyPattern(fix string) models.PatternAnalysis {
+	pattern := models.PatternAnalysis{
+		JobID: "periodic-conversion", Systemic: true, SharedBuilds: []string{"1", "2"},
+		SuggestedFix: fix, SourceRef: "example/repo@0123456789abcdef0123456789abcdef01234567",
+		RemediationTargets: []models.RemediationTarget{{
+			Intent: models.RemediationIntentModifySymbol, Symbol: "getPreUpgradeFunc",
+			RequiredCall: "example/asomigration.DeleteWebhookConfigurations", Path: "test/e2e/capi_test.go",
+		}},
+	}
+	models.AssignPatternIdentity(&pattern)
+	return pattern
+}
+
+func conversionPolicyService(t *testing.T, pattern models.PatternAnalysis) *Service {
+	t.Helper()
+	dataDir := t.TempDir()
+	writeJobDetail(t, dataDir, "periodic-conversion.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
+	cfg := &project.Config{AI: &project.AI{
+		SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"},
+		FixPRs:     &project.FixPRs{Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"}},
+	}}
+	return NewService(cfg, dataDir, AIConfig{})
+}
+
+func TestConversionPolicyBlocksPreviewAndAsyncRequest(t *testing.T) {
+	pattern := conversionPolicyPattern("Delete the ASO mutating and validating webhook configurations so CRD conversion no longer calls ASO.")
+	service := conversionPolicyService(t, pattern)
+	called := false
+	service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
+		called = true
+		return actionverify.Result{State: actionverify.StateUnresolved}, nil
+	}
+	if _, err := service.PreviewFix(t.Context(), pattern.ID, "alice", "token", ""); !errors.Is(err, ErrRemediationInconclusive) || called {
+		t.Fatalf("PreviewFix error=%v verifier_called=%t", err, called)
+	}
+	request, err := service.CreateRequest(pattern.ID, "propose-fix", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := waitRequest(t, service, request.ID, "alice", RequestFailed)
+	if view.Verification == nil || view.Verification.State != actionverify.StateInconclusive || view.Preview != nil || called {
+		t.Fatalf("request=%+v verifier_called=%t", view, called)
+	}
+}
+
+func TestConversionPolicyAllowsSafeCleanupToReachVerification(t *testing.T) {
+	pattern := conversionPolicyPattern("Delete the obsolete admission webhook configurations while keeping the CRD conversion webhook available until provider deletion completes.")
+	service := conversionPolicyService(t, pattern)
+	called := false
+	service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
+		called = true
+		return actionverify.Result{State: actionverify.StateInconclusive, Reason: "bounded test stop"}, nil
+	}
+	if _, err := service.PreviewFix(t.Context(), pattern.ID, "alice", "token", ""); !errors.Is(err, ErrRemediationInconclusive) || !called {
+		t.Fatalf("PreviewFix error=%v verifier_called=%t", err, called)
+	}
+}
+
+func unsafeConversionGeneratedFix() *fixpr.GeneratedFix {
+	pattern := conversionPolicyPattern("Delete the ASO mutating and validating webhook configurations so CRD conversion no longer calls ASO.")
+	return fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{
+		Key: "unsafe-conversion-fix", Title: "Unsafe conversion cleanup", Description: "Delete admission webhooks so conversion no longer calls ASO.",
+		Pattern: pattern,
+	})
+}
+
+func TestConversionPolicyRejectsPersistedPreviewAndConfirmation(t *testing.T) {
+	entry := &previewEntry{
+		kind: gfKind, failureID: "pattern", patternHash: "hash", verificationVersion: sourceVerificationVersion,
+		fix: unsafeConversionGeneratedFix(),
+	}
+	if _, err := validatedPreviewEntry(entry); err == nil {
+		t.Fatal("unsafe persisted preview was accepted")
+	}
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	token, err := service.stash("alice", entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Confirm(t.Context(), token, "alice", "token"); !errors.Is(err, ErrPreviewRejected) {
+		t.Fatalf("Confirm unsafe preview error = %v", err)
+	}
+}

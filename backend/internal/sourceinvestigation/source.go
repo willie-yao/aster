@@ -13,6 +13,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
 )
 
 const targetVerificationVersion = 1
@@ -212,6 +213,11 @@ func ValidateResult(result Result) error {
 		}
 	default:
 		return fmt.Errorf("%w: unsupported state %q", ErrInvalidResult, result.State)
+	}
+	if result.Target != nil {
+		if reason := remediationpolicy.Reason(result.Finding+"\n"+result.Direction, []models.RemediationTarget{*result.Target}); reason != "" {
+			return fmt.Errorf("%w: remediation safety policy requires investigation", ErrInvalidResult)
+		}
 	}
 	if err := ValidateCitations(result.Citations, 1, 10); err != nil {
 		return err

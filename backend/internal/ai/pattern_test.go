@@ -196,6 +196,30 @@ func TestAnalyzePattern_IncompleteVerdictRejected(t *testing.T) {
 	}
 }
 
+func TestAnalyzePatternRejectsUnsafeCachedConversionRecommendation(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(`{"systemic":false,"confidence":"low","shared_root_cause":"","shared_builds":[],"suggested_fix":"","remediation_targets":[],"summary":"fresh safe verdict"}`))
+	s := newPatternTestService(t, srv.URL)
+	failures := patternFailures(3)
+	input := BuildPatternInput("job", failures)
+	key := patternCacheKey("kubernetes", "", "job", "job", input.UserPrompt, "toolfree", s.client.modelFingerprint())
+	unsafe := patternResponse{
+		Systemic: true, Confidence: "high", SharedRootCause: "shared failure", SharedBuilds: []string{"abuild", "bbuild"},
+		SuggestedFix:       "Delete the ASO mutating and validating webhook configurations so CRD conversion no longer calls ASO.",
+		RemediationTargets: []models.RemediationTarget{{Intent: models.RemediationIntentModifySymbol, Symbol: "preUpgrade", RequiredCall: "example/asomigration.DeleteWebhookConfigurations", Path: "upgrade.go"}},
+		Summary:            "unsafe cached verdict",
+	}
+	if err := s.client.cache.Set(key, patternCacheData{Version: patternCacheVersion, Response: unsafe}); err != nil {
+		t.Fatal(err)
+	}
+	cacheHits := 0
+	pattern, err := s.AnalyzePatternWithOptions(t.Context(), "job", "job", failures, PatternAnalyzeOptions{OnCacheHit: func() { cacheHits++ }})
+	if err != nil || pattern == nil || pattern.Systemic || cacheHits != 0 || atomic.LoadInt32(&srv.calls) != 1 {
+		t.Fatalf("pattern=%+v cacheHits=%d calls=%d err=%v", pattern, cacheHits, srv.calls, err)
+	}
+}
+
 func TestPatternCacheKey_TracksModelInput(t *testing.T) {
 	base := patternFailures(3)
 	p1 := buildPatternUserPrompt("job", base)
@@ -465,6 +489,8 @@ func TestPatternResponseRejectsUnsafeConversionRemediation(t *testing.T) {
 		"Drop the CRD conversion webhook.",
 		"Replace webhook conversion with the None strategy.",
 		"Remove spec.conversion.webhook.clientConfig.",
+		"Delete the ASO mutating and validating webhook configurations so CRD conversion no longer calls ASO.",
+		"Remove the admission webhook configuration to bypass conversion.",
 	} {
 		unsafeFix, _ := json.Marshal(fix)
 		response := strings.Replace(strings.Replace(base, "FIX", string(unsafeFix), 1), "TARGETS", actionable, 1)
@@ -505,6 +531,8 @@ func TestPatternResponseRejectsUnsafeConversionRemediation(t *testing.T) {
 		"Disable the CRD conversion webhook timeout override.",
 		"Remove the CRD conversion webhook shutdown dependency.",
 		"Keep the conversion strategy Webhook, not None.",
+		"Delete the obsolete admission webhook configurations while keeping the CRD conversion webhook available until provider deletion completes.",
+		"Add shutdown coordination so conversion remains available until all stored objects are migrated.",
 	} {
 		safeFix, _ := json.Marshal(fix)
 		if _, err := parsePatternResponse(strings.Replace(strings.Replace(base, "FIX", string(safeFix), 1), "TARGETS", actionable, 1), patternBuildIDs(patternFailures(2))); err != nil {

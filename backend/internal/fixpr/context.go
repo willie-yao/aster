@@ -8,6 +8,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
 )
 
 const (
@@ -73,6 +74,13 @@ func (c GenerationContext) Validate() error {
 		}
 		if !regexp.MustCompile(`^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`).MatchString(strings.TrimSpace(c.Source.Revision)) {
 			return fmt.Errorf("source revision must be a full commit SHA")
+		}
+		policyText := c.AssistantAnswer + "\n" + c.Source.Finding
+		if c.ProposedRevision != nil {
+			policyText += "\n" + c.ProposedRevision.RootCause + "\n" + c.ProposedRevision.SuggestedFix
+		}
+		if remediationpolicy.Reason(policyText, []models.RemediationTarget{c.Source.Target}) != "" {
+			return fmt.Errorf("source investigation remediation requires further investigation")
 		}
 		if strings.TrimSpace(c.Source.Finding) == "" || len(c.Source.Finding) > maxContextTextBytes {
 			return fmt.Errorf("source finding must be 1-%d bytes", maxContextTextBytes)

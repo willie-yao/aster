@@ -1354,3 +1354,45 @@ func TestConfirmRequestRejectsUnidentifiedFix(t *testing.T) {
 		t.Fatalf("ConfirmRequest unidentified fix error = %v", err)
 	}
 }
+
+func TestConversionPolicyRejectsRestoredAndConfirmedAsyncFix(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		restore bool
+	}{
+		{name: "restoration", restore: true},
+		{name: "confirmation"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service, _ := requestTestService(t)
+			now := time.Now().UTC()
+			request := &actionRequest{
+				ActionRequestView: ActionRequestView{
+					ID: "unsafe-fix", FailureID: "pattern", PatternHash: "hash", Owner: "alice", Kind: "propose-fix", Status: RequestReady,
+					CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+					Preview: &PreviewResult{Kind: gfKind, Title: "Unsafe conversion cleanup"},
+				},
+				Fix: unsafeConversionGeneratedFix().Snapshot(), VerificationVersion: sourceVerificationVersion,
+			}
+			if testCase.restore {
+				state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{"unsafe-fix": request}}
+				data, _ := json.Marshal(state)
+				if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				service = NewService(service.cfg, service.dataDir, AIConfig{})
+				view, err := service.GetRequest("unsafe-fix", "alice")
+				if err != nil || view.Status != RequestFailed || view.Preview != nil {
+					t.Fatalf("view=%+v err=%v", view, err)
+				}
+				return
+			}
+			service.rmu.Lock()
+			service.requests.Requests["unsafe-fix"] = request
+			service.rmu.Unlock()
+			if _, err := service.ConfirmRequest(t.Context(), "unsafe-fix", "alice", "token"); !errors.Is(err, ErrPreviewRejected) {
+				t.Fatalf("ConfirmRequest unsafe fix error = %v", err)
+			}
+		})
+	}
+}

@@ -48,8 +48,11 @@ investigation, missing or malformed targets show that more evidence is required,
 and pinned-source verification reports when the remediation already exists.
 Behavior targets are actionable only when the target function and the proposed
 package-level callee both exist in bounded pinned source. An external dependency
-or an incomplete or ambiguous package remains investigation-only. A blocked
-state does not create an action request, call a model, start an Orka
+or an incomplete or ambiguous package remains investigation-only. The shared
+remediation policy additionally rejects destructive CRD conversion changes and
+false claims that admission webhook cleanup disables conversion. The same policy
+runs before generation and when a persisted preview is restored or confirmed. A
+blocked state does not create an action request, call a model, start an Orka
 Task, or send a draft-ready notification. Draft generation repeats verification
 and remains authoritative.
 

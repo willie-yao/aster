@@ -97,6 +97,7 @@ backend/                         Go 1.25
     fixexecutor/                 Clones, runs OpenCode, validates, and returns one staged patch
     chatfix/                     Bridges one chat response into fix generation
     remediation/                 Lifecycle of dashboard-created fixes
+    remediationpolicy/           Shared deterministic remediation safety policy
     resolve/                     Admin-marked "resolved" recurring patterns
     patternstate/                Pattern publication + write-side validation
     ghpr/                        Opens PRs that add/update files in one commit

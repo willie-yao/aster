@@ -70,3 +70,19 @@ func TestAgentInstructionIncludesOnlySelectedContext(t *testing.T) {
 		t.Fatalf("instruction unexpectedly referenced a transcript: %s", instruction)
 	}
 }
+
+func TestGenerationContextEnforcesAdmissionConversionPolicy(t *testing.T) {
+	context := validGenerationContext()
+	context.Source.Target = models.RemediationTarget{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "getPreUpgradeFunc",
+		RequiredCall: "example/asomigration.DeleteWebhookConfigurations", Path: "controllers/machine.go",
+	}
+	context.Source.Finding = "Delete the ASO mutating and validating webhook configurations so CRD conversion no longer calls ASO."
+	if err := context.Validate(); err == nil {
+		t.Fatal("unsafe source context was accepted")
+	}
+	context.Source.Finding = "Delete the obsolete admission webhook configurations while keeping the CRD conversion webhook available."
+	if err := context.Validate(); err != nil {
+		t.Fatalf("safe source context error = %v", err)
+	}
+}

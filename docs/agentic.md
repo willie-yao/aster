@@ -982,17 +982,25 @@ contract version changed for this behavior, so prior deterministic failure keys
 retry once under the new parser without changing the configured cache
 generation. The normalized result is then a normal reusable success cache entry.
 
-Implementation-ready remediation also has a deterministic CRD conversion guard.
-A systemic contract is rejected when it pairs an actionable target with deleting,
-disabling, or removing a CRD conversion webhook or strategy, or with setting the
-conversion strategy to `None`. Validation checks both the proposed prose and
-structured symbol, configuration, or environment targets, so neutral wording
-cannot hide a destructive target. The same conclusion is accepted with an `investigate`
-target so the operator can review stored versions, conversion requirements, and
-rollback safety without launching a Fix PR. Qualified changes that preserve
-conversion, such as removing a timeout, certificate, retry, or shutdown
-dependency, remain valid in both prose and structured targets. Admission webhook
-cleanup also remains distinct.
+Implementation-ready remediation also has a shared deterministic CRD conversion
+policy. A systemic contract is rejected when it pairs an actionable target with
+deleting, disabling, clearing, unsetting, bypassing, or removing a CRD conversion
+webhook or strategy, or with setting the conversion strategy to `None`. The
+policy also rejects the false causal claim that deleting mutating, validating, or
+admission webhook configurations disables or bypasses CRD conversion or prevents
+the API server from calling conversion. Admission webhook cleanup remains valid
+when the recommendation explicitly preserves conversion. Validation checks both
+prose and structured symbol, configuration, or environment targets, so neutral
+wording cannot hide a destructive target. The same conclusion is accepted with
+an `investigate` target so the operator can review stored versions, conversion
+requirements, and rollback safety without launching a Fix PR. Qualified changes
+that preserve conversion, such as removing a timeout, certificate, retry, or
+shutdown dependency, remain valid.
+
+The same policy runs during pattern parsing and cache restoration, eligibility,
+synchronous and asynchronous generation, source-investigation validation, Fix PR
+generation, preview restoration, and confirmation. Ready Fix PR previews carry a
+new verification version, so older persisted previews fail closed.
 
 In the release-1.25 audit sequence, the grounded investigation produced prose,
 extraction produced a safe non-systemic verdict with an individual fix, and the

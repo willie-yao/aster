@@ -547,3 +547,20 @@ func TestBuildFixReportsAmbiguousPRCreate(t *testing.T) {
 		t.Fatalf("ambiguous PR error = %v", err)
 	}
 }
+
+func TestGeneratePreviewRejectsUnsafeAdmissionConversionClaimBeforeAgent(t *testing.T) {
+	agent := goodAgent()
+	manager := newManager(t, &fakePR{}, agent, Options{})
+	pattern := systemicPattern("conversion")
+	pattern.SuggestedFix = "Delete the ASO mutating and validating webhook configurations so CRD conversion no longer calls ASO."
+	pattern.RemediationTargets = []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "getPreUpgradeFunc",
+		RequiredCall: "example/asomigration.DeleteWebhookConfigurations", Path: "test/e2e/capi_test.go",
+	}}
+	if _, err := manager.GeneratePreview(t.Context(), pattern, ""); err == nil {
+		t.Fatal("unsafe conversion recommendation was accepted")
+	}
+	if agent.spec.Instruction != "" {
+		t.Fatal("agent ran before remediation policy")
+	}
+}

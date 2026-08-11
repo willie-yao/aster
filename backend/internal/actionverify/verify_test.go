@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
 )
 
 type fakeReader struct {
@@ -903,5 +904,19 @@ func TestVerifyStructuredModifyRejectsCrossModulePackage(t *testing.T) {
 				t.Fatalf("result = %+v", result)
 			}
 		})
+	}
+}
+
+func TestVerifyEnforcesAdmissionConversionPolicyBeforeSourceRead(t *testing.T) {
+	target := models.RemediationTarget{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "getPreUpgradeFunc",
+		RequiredCall: "example/asomigration.DeleteWebhookConfigurations", Path: "test/e2e/capi_test.go",
+	}
+	result, err := Verify(t.Context(), fakeReader{err: errors.New("source should not be read")}, Input{
+		Proposal: "Delete the ASO mutating and validating webhook configurations so CRD conversion no longer calls ASO.",
+		Targets:  []models.RemediationTarget{target},
+	})
+	if err != nil || result.State != StateInconclusive || result.Reason != remediationpolicy.UnsafeConversionReason {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }

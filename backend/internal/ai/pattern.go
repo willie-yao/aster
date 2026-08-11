@@ -21,12 +21,13 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
 
 // patternPromptVersion is bumped when the pattern prompt or output contract
 // changes, so cached verdicts from an older contract are re-run.
-const patternPromptVersion = 8
+const patternPromptVersion = 9
 
 const patternCacheVersion = 2
 
@@ -47,12 +48,6 @@ const maxPatternBuilds = 10
 const patternMaxIters = 6
 
 const maxPatternResponseBytes = 1 << 20
-
-var (
-	destructiveConversionObjectRe = regexp.MustCompile(`(?i)(?:\b(?:delete|remove|disable|drop)\b\s+(?:the\s+)?(?:kubernetes\s+)?(?:crd\s+)?conversion(?:\s+webhook)?\s+strategy\b|\b(?:delete|remove|disable|drop)\b\s+(?:the\s+)?(?:kubernetes\s+)?(?:crd\s+)?conversion\s+webhooks?\b(?:\s*(?:[.,;:]|$)|\s+(?:from|in|on)\b))`)
-	destructiveConversionFieldRe  = regexp.MustCompile(`(?i)\b(?:delete|remove|disable|drop)\b\s+(?:the\s+)?(?:spec\.)?conversion\.(?:strategy|webhook(?:\.clientconfig)?)\b`)
-	conversionStrategyNoneRe      = regexp.MustCompile(`(?i)(?:\b(?:set|change|switch|replace)\b[^.!?\n]{0,80}\b(?:crd\s+)?conversion(?:\s+webhook)?\s+strategy\b[^.!?\n]{0,80}\bnone\b|\bwebhook\s+conversion\b[^.!?\n]{0,80}\bnone\s+strategy\b|\b(?:conversion\.)?strategy\s*(?:to|:|=)\s*none\b)`)
-)
 
 // PatternFailure is one build's analyzed job failure, used as input to
 // cross-failure correlation. FailingTest is the specific test or spec that
@@ -322,7 +317,7 @@ Distinguish symptom from root cause. "VM bootstrapping failed", "test timed out"
 
 Do not infer network policy, firewall rules, regional latency, resource sizing, or timeout configuration as the cause unless artifacts or source directly support that mechanism. Before proposing a missing wait, retry, timeout, gate, or helper call, read the target source and confirm the behavior is not already present.
 
-Kubernetes CRD conversion webhooks are configured on the CRD, not by mutating or validating admission webhook configurations. Never claim that deleting admission webhook configurations disables CRD conversion. Do not propose deleting, disabling, or setting CRD conversion to None as an implementation-ready change. Use investigate so stored-version migration, conversion requirements, and rollback safety can be reviewed first.
+Kubernetes CRD conversion webhooks are configured on the CRD, not by mutating or validating admission webhook configurations. Never claim that deleting admission webhook configurations disables CRD conversion, removes or bypasses conversion, prevents the API server from calling conversion, or changes the CRD conversion strategy. Admission webhook cleanup is implementation-ready only when conversion remains explicitly available. Do not propose deleting, disabling, or setting CRD conversion to None as an implementation-ready change. Use investigate so stored-version migration, conversion requirements, and rollback safety can be reviewed first.
 
 The suggested_fix must be ACTIONABLE: name the specific change, the mechanism it addresses, and the component / file / config to change (cite a relevant_file when one is implicated). Do NOT emit non-fixes like "investigate the logs", "check why X fails", or "look into Y" - those are next steps, not fixes. If the evidence genuinely does not determine a concrete fix, say so plainly in suggested_fix AND lower confidence accordingly (do not claim high confidence on an undetermined fix).
 
@@ -1211,7 +1206,8 @@ func patternResponseValidation(p patternResponse, buildIDs map[string]struct{}) 
 	if category, issue := patternRemediationTargetsValidation(p.RemediationTargets); category != "" {
 		return category, issue
 	}
-	if unsafeConversionRemediation(p.SuggestedFix, p.RemediationTargets) {
+	policyText := strings.Join([]string{p.SuggestedFix, p.SharedRootCause, p.Summary}, "\n")
+	if remediationpolicy.Reason(policyText, p.RemediationTargets) != "" {
 		return patternValidationSchema, "unsafe_conversion_remediation"
 	}
 	for _, buildID := range p.SharedBuilds {
@@ -1226,145 +1222,6 @@ func patternResponseValidation(p patternResponse, buildIDs map[string]struct{}) 
 		}
 	}
 	return "", ""
-}
-
-func unsafeConversionRemediation(suggestedFix string, targets []models.RemediationTarget) bool {
-	actionable := false
-	for _, target := range targets {
-		if target.Intent == models.RemediationIntentInvestigate {
-			continue
-		}
-		actionable = true
-		if unsafeConversionTarget(target) {
-			return true
-		}
-	}
-	if !actionable {
-		return false
-	}
-	fix := strings.TrimSpace(suggestedFix)
-	return destructiveConversionObjectRe.MatchString(fix) || destructiveConversionFieldRe.MatchString(fix) || conversionStrategyNoneRe.MatchString(fix)
-}
-
-func unsafeConversionTarget(target models.RemediationTarget) bool {
-	switch target.Intent {
-	case models.RemediationIntentAddSymbol, models.RemediationIntentModifySymbol:
-		return destructiveConversionIdentifier(target.Symbol) || destructiveConversionIdentifier(target.RequiredCall)
-	case models.RemediationIntentRemoveConfiguration:
-		key, _, _ := strings.Cut(target.Value, "=")
-		isConversion, qualified := conversionObjectSetting(key)
-		return isConversion && !qualified
-	case models.RemediationIntentSetConfiguration:
-		key, value, _ := strings.Cut(target.Value, "=")
-		isConversion, qualified := conversionObjectSetting(key)
-		return isConversion && !qualified && conversionFalseValue(value)
-	case models.RemediationIntentSetJobEnvironment:
-		isConversion, qualified := conversionObjectSetting(target.Name)
-		if !isConversion || qualified {
-			return false
-		}
-		name := normalizeConversionToken(target.Name)
-		for _, action := range []string{"disable", "delete", "remove", "drop", "skip", "stop", "omit"} {
-			if strings.Contains(name, action) {
-				return conversionTrueValue(target.Value)
-			}
-		}
-		return conversionFalseValue(target.Value)
-	default:
-		return false
-	}
-}
-
-func destructiveConversionIdentifier(value string) bool {
-	full := normalizeConversionToken(value)
-	tail := value
-	if index := strings.LastIndex(value, "."); index >= 0 {
-		tail = value[index+1:]
-	}
-	tail = normalizeConversionToken(tail)
-	conversion := strings.Index(full, "conversion")
-	if conversion < 0 || !strings.Contains(full[conversion:], "webhook") && !strings.Contains(full[conversion:], "strategy") {
-		return false
-	}
-	tailHasConversion, qualified := conversionObjectSetting(tail)
-	if qualified || !tailHasConversion && safeConversionIdentifierQualifier(tail) {
-		return false
-	}
-	for _, action := range []string{"delete", "remove", "disable", "drop"} {
-		if strings.Contains(tail, action) {
-			return true
-		}
-	}
-	return strings.Contains(full[conversion:], "strategy") && strings.Contains(tail, "none")
-}
-
-func safeConversionIdentifierQualifier(value string) bool {
-	for _, qualifier := range []string{
-		"timeout", "certificatedependency", "certificaterotation", "shutdowndependency",
-		"shutdowncoordination", "retrybehavior", "retrypolicy", "backoff", "override",
-	} {
-		if strings.Contains(value, qualifier) {
-			return true
-		}
-	}
-	return false
-}
-
-func conversionObjectSetting(value string) (bool, bool) {
-	name := normalizeConversionToken(value)
-	objects := []string{"conversionwebhook", "conversionstrategy", "specconversion"}
-	for _, object := range objects {
-		index := strings.Index(name, object)
-		if index < 0 {
-			continue
-		}
-		suffix := name[index+len(object):]
-		if object == "specconversion" && (strings.HasPrefix(suffix, "webhook") || strings.HasPrefix(suffix, "strategy")) {
-			continue
-		}
-		return true, safeConversionQualifier(suffix)
-	}
-	return false, false
-}
-
-func safeConversionQualifier(suffix string) bool {
-	for _, qualifier := range []string{
-		"timeout", "certificatedependency", "certificaterotation", "dependency",
-		"shutdowncoordination", "shutdowndependency", "retrybehavior", "retrypolicy", "backoff", "override",
-	} {
-		if strings.HasPrefix(suffix, qualifier) {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeConversionToken(value string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
-		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
-func conversionFalseValue(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "0", "false", "n", "no", "off", "disable", "disabled", "none":
-		return true
-	default:
-		return false
-	}
-}
-
-func conversionTrueValue(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "y", "yes", "on", "enable", "enabled":
-		return true
-	default:
-		return false
-	}
 }
 
 func decodeRemediationTargets(raw json.RawMessage, targets *[]models.RemediationTarget) bool {
