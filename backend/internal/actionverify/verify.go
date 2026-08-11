@@ -642,6 +642,7 @@ func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, sy
 	}
 	files := make(map[string]*ast.File, len(paths))
 	nonTestPackages := map[string]bool{}
+	testPackages := map[string]bool{}
 	bytesRead := 0
 	for _, filePath := range paths {
 		source, ok := archive.GoFiles[filePath]
@@ -657,7 +658,9 @@ func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, sy
 			return functionDeclarationProof{}
 		}
 		files[filePath] = file
-		if !strings.HasSuffix(filePath, "_test.go") {
+		if strings.HasSuffix(filePath, "_test.go") {
+			testPackages[file.Name.Name] = true
+		} else {
 			nonTestPackages[file.Name.Name] = true
 		}
 	}
@@ -668,12 +671,31 @@ func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, sy
 	for packageName := range nonTestPackages {
 		nonTestPackage = packageName
 	}
+	testOnlyCompanion := ""
+	if includeTests && nonTestPackage == "" && expectedPackage != "" {
+		for packageName := range testPackages {
+			if packageName == expectedPackage {
+				continue
+			}
+			if testOnlyCompanion != "" && testOnlyCompanion != packageName {
+				return functionDeclarationProof{}
+			}
+			testOnlyCompanion = packageName
+		}
+		validCompanion := testOnlyCompanion == "" || testOnlyCompanion == expectedPackage+"_test"
+		if strings.HasSuffix(expectedPackage, "_test") && testOnlyCompanion == strings.TrimSuffix(expectedPackage, "_test") {
+			validCompanion = true
+		}
+		if !validCompanion {
+			return functionDeclarationProof{}
+		}
+	}
 	packageNames := map[string]bool{}
 	declarations := 0
 	for _, filePath := range paths {
 		file := files[filePath]
 		if expectedPackage != "" && file.Name.Name != expectedPackage {
-			if !allowedTestPackageCompanion(filePath, file.Name.Name, expectedPackage, nonTestPackage, includeTests) {
+			if !allowedTestPackageCompanion(filePath, file.Name.Name, expectedPackage, nonTestPackage, testOnlyCompanion, includeTests) {
 				return functionDeclarationProof{}
 			}
 			continue
@@ -699,15 +721,12 @@ func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, sy
 	return functionDeclarationProof{}
 }
 
-func allowedTestPackageCompanion(filePath, packageName, expectedPackage, nonTestPackage string, includeTests bool) bool {
+func allowedTestPackageCompanion(filePath, packageName, expectedPackage, nonTestPackage, testOnlyCompanion string, includeTests bool) bool {
 	if !includeTests {
 		return false
 	}
 	if nonTestPackage == "" {
-		if strings.HasSuffix(expectedPackage, "_test") {
-			return packageName == strings.TrimSuffix(expectedPackage, "_test")
-		}
-		return strings.HasSuffix(filePath, "_test.go") && packageName == expectedPackage+"_test"
+		return testOnlyCompanion != "" && strings.HasSuffix(filePath, "_test.go") && packageName == testOnlyCompanion
 	}
 	if expectedPackage == nonTestPackage+"_test" {
 		return packageName == nonTestPackage
