@@ -14,7 +14,7 @@ the sequence. Keep material unknowns in `unresolved_details`.
 Return exactly one schema-constrained structured result through OpenCode's
 StructuredOutput tool. Do not create or edit `result/analysis.json`; the executor
 creates the canonical result after validation. The result contract is
-`agent-analysis-workspace-v3`. Citation entries contain only an exact path and
+`agent-analysis-workspace-v4`. Citation entries contain only an exact path and
 1-based inclusive line range. Do not include quotation text. The executor reads
 the sealed file range and constructs the authoritative exact quotation.
 

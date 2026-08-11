@@ -194,7 +194,7 @@ func workspaceSandboxFixture(t *testing.T) (*WorkspaceSandboxRuntime, WorkspaceS
 		t.Fatal(err)
 	}
 	gateway := engineruntime.ModelGatewayConfig{Endpoint: "https://model-gateway.platform.svc.cluster.local:8443/v1", Model: "test-model", ProtocolVersion: "openai-chat-completions-v1"}
-	request, err := NewWorkspaceExecutionRequest(manifest, gateway, time.Minute, 20, 128<<10)
+	request, err := NewWorkspaceExecutionRequest(manifest, gateway, time.Minute, 20, 200000, 8192, 128<<10)
 	if err != nil {
 		t.Fatal(err)
 	}

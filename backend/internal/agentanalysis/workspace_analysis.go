@@ -24,8 +24,16 @@ import (
 //go:embed skill/workspace-analysis.md
 var workspaceAnalysisSkill string
 
+//go:embed skill/analysis-agent.md
+var workspaceAnalysisAgent string
+
 // WorkspaceSkillHash returns the file-backed analyzer prompt fingerprint.
-func WorkspaceSkillHash() string { return hashString(workspaceAnalysisSkill) }
+func WorkspaceSkillHash() string {
+	return hashString(workspaceAnalysisSkill + "\n" + workspaceAnalysisAgent)
+}
+
+// WorkspaceAgentPrompt returns the static read-only OpenCode agent guidance.
+func WorkspaceAgentPrompt() string { return strings.TrimSpace(workspaceAnalysisAgent) }
 
 // WorkspaceCitationReference is a model-authored path and exact line range.
 type WorkspaceCitationReference struct {
