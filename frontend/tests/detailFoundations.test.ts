@@ -33,6 +33,12 @@ const { RunHistory } = (await vite.ssrLoadModule("/src/components/RunHistory.tsx
     metadata?: string;
   }) => ReturnType<typeof createElement>;
 };
+const { MetricStrip } = (await vite.ssrLoadModule("/src/components/MetricStrip.tsx")) as {
+  MetricStrip: (props: {
+    label: string;
+    items: Array<{ label: string; value: string; note?: string }>;
+  }) => ReturnType<typeof createElement>;
+};
 const { BuildFailurePanel } = (await vite.ssrLoadModule("/src/components/BuildFailurePanel.tsx")) as {
   BuildFailurePanel: (props: {
     jobID: string;
@@ -270,6 +276,22 @@ test("run history exposes square selected runs with date and result context", ()
   assert.match(html, /aria-pressed="true"/);
   assert.match(html, /aria-label="#124 · Passed · Aug 6, 2026"/);
   assert.match(html, />Selected #123 · Failed</);
+});
+
+test("metric strip retains qualification notes without changing its shared geometry", () => {
+  const html = render(createElement(MetricStrip, {
+    label: "Usage metrics",
+    items: [
+      { label: "Recorded estimate", value: "USD 1.25", note: "Stored per-operation prices" },
+      { label: "Requests", value: "7" },
+    ],
+  }));
+
+  assert.match(html, /aria-label="Usage metrics"/);
+  assert.match(html, />Recorded estimate</);
+  assert.match(html, />USD 1\.25</);
+  assert.match(html, />Stored per-operation prices</);
+  assert.match(html, />Requests</);
 });
 
 test("standalone non-success build states avoid empty mobile diagnosis and action surfaces", () => {

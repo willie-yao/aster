@@ -7,6 +7,7 @@ export interface MetricStripItem {
   label: string;
   value: ReactNode;
   color?: "error.main" | "warning.main" | "success.main" | "text.primary";
+  note?: ReactNode;
 }
 
 export function MetricStrip({
@@ -37,7 +38,7 @@ export function MetricStrip({
           key={item.label}
           sx={{
             minWidth: 0,
-            minHeight: { xs: 68, sm: 72 },
+            minHeight: item.note ? { xs: 92, sm: 96 } : { xs: 68, sm: 72 },
             px: { xs: 1.5, sm: 2 },
             py: 1.25,
             display: "flex",
@@ -76,6 +77,15 @@ export function MetricStrip({
           >
             {item.value}
           </Typography>
+          {item.note && (
+            <Typography
+              component="span"
+              color="text.secondary"
+              sx={{ mt: 0.25, ...overviewTypography.description, fontSize: "12.5px" }}
+            >
+              {item.note}
+            </Typography>
+          )}
         </Box>
       ))}
     </Box>
