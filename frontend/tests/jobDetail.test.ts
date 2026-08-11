@@ -154,6 +154,9 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(pattern, /label="Source grounding"/);
   assert.match(pattern, /label="Affected builds"/);
   assert.match(pattern, /label="Related files"/);
+  assert.match(pattern, /<PatternRemediation/);
+  assert.match(pattern, /followUp=\{analysisOnly/);
+  assert.match(pattern, /investigations=\{pattern\.remediation_investigations\}/);
   assert.match(pattern, /Remediation present, verifying the fix/);
   assert.match(pattern, /Watching recovery/);
   assert.match(pattern, /Observed passing runs:/);

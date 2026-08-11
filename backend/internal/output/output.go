@@ -62,6 +62,7 @@ func WriteDashboard(dir string, dashboard models.Dashboard) error {
 // Keying by JobID prevents same-named jobs from overwriting each other.
 func WriteJobDetail(dir string, detail models.JobDetail) error {
 	detail.PatternAnalyses, _ = models.BackfillPatternIdentities(detail.PatternAnalyses)
+	detail.PatternAnalyses = models.WithDefaultPatternRemediationInvestigations(detail.PatternAnalyses)
 	return writeJSON(filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID)), detail)
 }
 
@@ -71,6 +72,7 @@ func WriteFlakinessReport(dir string, report models.FlakinessReport) error {
 		report.BuildFailures = []models.BuildFailureSummary{}
 	}
 	report.RecurringPatterns, _ = models.BackfillPatternIdentities(report.RecurringPatterns)
+	report.RecurringPatterns = models.WithDefaultPatternRemediationInvestigations(report.RecurringPatterns)
 	return writeJSON(filepath.Join(dir, "flakiness.json"), report)
 }
 

@@ -913,227 +913,53 @@ missing or invalid correlations rerun.
 
 ### Pattern analysis
 
-The engine always runs one job-level correlation pass after every per-failure
-analysis in the run is complete (so all per-build root causes are available).
-Like artifact-tree seeding, it is not configurable: it is self-gating (a no-op
-for any job that didn't fail in enough builds) and cached, so it costs nothing
-on a healthy dashboard. A genuinely recurring job gets one initial bounded
-correlation attempt plus at most one retry for the narrow failures below.
+After all individual analyses reach an accepted or unavailable terminal state,
+the engine runs one cached job-level causal-group correlation pass. A job
+qualifies only when at least three completed recent builds failed. Pending builds
+are skipped. The input contains one representative analyzed failure per failed
+build plus the ordered recent run window and available source revisions.
 
-For each job, the engine:
+Pattern prompt version 10 is analysis-only. The model must make exactly one
+`submit_causal_groups` function call containing only:
 
-1. Counts the job's complete recent run window, with pending builds skipped.
-   The job qualifies only with at least 3 completed failed builds, matching the
-   persistent-failure convention. The correlation also receives the total,
-   failed, and passing counts plus a compact newest-first sequence containing
-   each build ID, outcome, start time, and source revision when available.
-2. Picks **one representative failure per failed build**: the failed test case
-   with the highest-severity per-build analysis (`Critical` > `High` > `Medium`
-   > `Low` > `Transient-Ignore`). The transient classification is carried
-   through deliberately, because an all-transient set is exactly what the pass
-   reconsiders.
-3. Makes **one correlation attempt** that asks the model to weigh the underlying
-   mechanism across builds and decide `systemic` (one shared, fixable cause) vs
-   not, with a confidence, the shared root cause, the cross-cutting fix, and the
-   builds it judges to share the cause. The newest 10 representatives are sent.
-   Recurrence among failures is evidence, not proof. The ordered run sequence
-   lets the model distinguish interleaved failures from older failures followed
-   by consecutive passes before classifying one deterministic defect.
-   When a source repo is wired (see grounding below), this attempt is a repotree
-   tool loop; otherwise it is a single tool-free chat call. Strictly valid
-   candidates are canonicalized by trimming field boundaries, lowercasing
-   confidence, and sorting and deduplicating `shared_builds`. Repeated candidates
-   are accepted only when their canonical JSON is identical. Distinct valid
-   candidates trigger one no-tools ambiguity-repair completion, whose result must
-   pass the same strict parser. HTTP 408, HTTP 429, and retryable provider 5xx
-   responses permit one fresh full attempt. Ambiguity alone never repeats the
-   grounded investigation.
+- causal groups with exact build IDs, one root-cause summary, and confidence;
+- build IDs that remain unclassified; and
+- a concise overall summary.
 
-Each job is bounded at two full attempts and one ambiguity-repair completion.
-A tool-free correlation therefore makes at most three logical model calls. Since
-transport permits up to two internal retries for HTTP 429, that path makes at
-most nine HTTP requests. A grounded full attempt remains bounded at six tool-loop
-turns, one forced finalization, and one extraction call. Including the single
-repair completion, grounded mode has a hard limit of 51 HTTP requests across two
-full attempts. Successful correlations are not rerun. A final failure aborts
-transactional publication and retains the previously published generation.
+The contract rejects duplicate or unknown builds, incomplete coverage, empty
+causes, invalid confidence, unknown fields, and any remediation, suggested-fix,
+target, action, issue, or Fix PR field. Dashboard code derives
+`shared_cause`, `mixed_causes`, `unrelated`, or `insufficient_evidence`
+deterministically. It also derives the compatibility `systemic`, confidence,
+shared-root-cause, and shared-build fields without inventing remediation.
 
-The verdict is cached under `pattern:<module>:<hash>`, where the hash covers the
-prompt version, the grounding mode (grounded vs tool-free), plus the exact
-rendered model input. That input includes every representative's build ID,
-failing test, root cause, and failure message, along with the complete ordered
-recent run window. The pass re-runs when analyzed failures change or when any
-recent build, outcome, timestamp, or available source revision changes. The
-result is stored on the
-`JobDetail` and surfaces as a banner at the top of the
-job page: a "recurring failure pattern" callout with the shared cause and fix
-when systemic, or a quiet "no shared root cause" note when the failures are
-genuinely independent.
+The correlation cache key covers the prompt version, model input, representatives,
+ordered run window, and source identity. A final pattern failure aborts public
+publication and retains the prior successful generation. The causal result is
+published in each job detail and repeated active groups are aggregated into
+`flakiness.json` for **Needs Attention**. Observation-only recovery remains a
+separate recurring-pattern lifecycle and does not prove a source fix.
 
-An explicit `systemic: false` verdict is normalized before contract validation.
-The engine preserves confidence, summary, and valid shared build IDs, while
-clearing `shared_root_cause`, `suggested_fix`, and `remediation_targets` because
-those fields are not publishable for a non-systemic result. Required top-level
-fields, JSON structure, confidence, build references, target structure, and
-multiple-contract ambiguity remain strict. Systemic contracts use the unchanged
-validation path. A private `pattern_normalization` trace event reports only that
-normalization occurred and how many candidates were affected. The prompt
-contract version changed for this behavior, so prior deterministic failure keys
-retry once under the new parser without changing the configured cache
-generation. The normalized result is then a normal reusable success cache entry.
+Each published causal group receives an engine-derived ID and content hash. The
+hash covers the exact causal content and canonical build set, not remediation
+state. Repeated groups also receive a separate safe public remediation summary.
+New groups start at `not_investigated` with the explanation that no
+source-grounded implementation target has been verified. The job page shows this
+state in an always-visible **Remediation** section while keeping technical detail
+collapsed.
 
-Implementation-ready remediation also has a shared deterministic CRD conversion
-policy. A systemic contract is rejected when it pairs an actionable target with
-deleting, disabling, clearing, unsetting, bypassing, or removing a CRD conversion
-webhook or strategy, or with setting the conversion strategy to `None`. The
-policy also rejects the false causal claim that deleting mutating, validating, or
-admission webhook configurations disables or bypasses CRD conversion or prevents
-the API server from calling conversion. Admission webhook cleanup remains valid
-when the recommendation explicitly preserves conversion. Validation checks both
-prose and structured symbol, configuration, or environment targets, so neutral
-wording cannot hide a destructive target. The same conclusion is accepted with
-an `investigate` target so the operator can review stored versions, conversion
-requirements, and rollback safety without launching a Fix PR. Qualified changes
-that preserve conversion, such as removing a timeout, certificate, retry, or
-shutdown dependency, remain valid.
+The causal-group analyzer never investigates or proposes a fix. A later,
+explicitly initiated read-only remediation investigation may inspect pinned source
+and classify the result, but it must bind to the published pattern and group
+hashes. Until that operation is implemented and deterministically verified, no
+**Investigate possible fix** control is rendered. Causal-group results remain
+blocked from File Issue, Fix PR, remediation tracking, resolution, and chat-fix
+paths by `models.PatternAllowsActions` and their existing independent gates.
 
-The same policy runs during pattern parsing and cache restoration, eligibility,
-synchronous and asynchronous generation, source-investigation validation, Fix PR
-generation, preview restoration, and confirmation. Ready Fix PR previews carry a
-new verification version, so older persisted previews fail closed.
-
-In the release-1.25 audit sequence, the grounded investigation produced prose,
-extraction produced a safe non-systemic verdict with an individual fix, and the
-old path entered validation repair. The normalized path accepts that extraction
-directly, skips the repair request, and serves later unchanged passes from the
-success cache instead of repeating the six-request failure sequence.
-
-Deterministic final failures in JSON parsing, required-field validation, build
-references, and bounded ambiguity repair use the same identity as the success
-cache. The private cache stores only a failure category, version, failure time,
-and retry time. It never stores the response, prompt, repository content, or
-provider body. An unchanged failure is suppressed for six hours, while a
-changed input, prompt or repair version, model fingerprint, cache generation,
-or source identity retries immediately. Cancellation does not create a failure
-entry. HTTP 408, HTTP 429, and provider 5xx failures keep the shorter transient
-retry behavior.
-
-For the August 10, 2026 cost audit, one unchanged validation failure used six
-provider requests, about 11,800 input tokens, and about 1,400 output tokens per
-watch pass. At the observed 5.34 minute median pass interval, a six-hour
-cooldown suppresses about 66 repeated passes after the first failure. That is
-about 396 provider requests, 778,800 input tokens, and 92,400 output tokens
-avoided per unchanged key before the next bounded retry. The job that repeated
-147 times over the observed 31 hours would instead make about six attempts,
-avoiding roughly 846 provider requests, 1.66 million input tokens, and 197,000
-output tokens if its input identity stayed unchanged.
-
-The **systemic** verdicts are also aggregated across all jobs into
-`flakiness.json` (`recurring_patterns`) and surfaced on the landing page inside
-the **Needs Attention** box, ranked by confidence then build span, so a
-confirmed recurring bug is visible without opening each job. Non-systemic
-verdicts are not aggregated there.
-
-#### Grounding the correlation on the source tree
-
-Individual failure analysis receives repository tools when build metadata
-identifies the configured `ai.source_repo` at one immutable commit. Source tools
-are bound server-side to that repository and commit. Missing, mutable, composite,
-or mismatched revisions keep the analysis artifact-only. Repository bytes do not
-count toward GCS evidence floors. Verified individual source links use the same
-commit rather than the repository default branch.
-
-The per-build analyses fed into this pass are already grounded (each cites real
-artifact files and line numbers from its own agentic loop), but the correlation
-step names the source **file or config to change** in `suggested_fix`. To keep
-that from being a plausible-sounding guess, the pass grounds itself on the real
-repository when the effective `ai.source_repo` is set. A token is optional for
-public repositories:
-
-Systemic verdicts also include `remediation_targets`, a strict structured list
-used by the actions preflight. Each target declares an intent (`add_symbol` for
-package-level Go symbols,
-`modify_symbol`, `set_configuration`, `remove_configuration`,
-`set_job_environment`, or `investigate`)
-plus the applicable verified path and symbol or configuration value.
-`modify_symbol` also names the required package-level Go call that represents
-the intended behavior inside the target function or method. Imported calls use
-their full import path and function name; same-package calls use a bare function
-name. The verifier proves that the target function is unique and that the callee
-is a unique package-level function in the bounded pinned source. Repository-local
-import paths are resolved through the pinned `go.mod`, including import aliases
-and package names that differ from the path basename. External dependencies,
-receiver methods, shadowed identifiers, ambiguous imports, dot imports, duplicate
-declarations, and incomplete package source remain inconclusive. The model does
-not decide whether a remediation is present. File issue and Propose fix
-independently repeat this verification at the exact pinned source revision.
-
-After correlation, the engine verifies structured targets against the pinned
-source and publishes `remediation_verification`. For configuration, Prow job,
-and import-qualified `modify_symbol` targets, it also verifies that the target
-was unresolved at every correlated failure revision. Other target shapes remain
-active because the historical transition cannot be proven with bounded file
-reads. Systemic patterns receive a lifecycle that keeps observation recovery
-separate from source-verified remediation:
-
-- `active`: the target remains unresolved, verification is inconclusive, or a
-  correlated failure occurred at the revision containing the remediation.
-- `recovered`: at least three consecutive completed job runs have passed after
-  the last correlated failure, but source verification has not proven a fix.
-- `observing`: the remediation is present, was absent at the correlated failure
-  revisions, but fewer than two later comparable runs have passed at revisions
-  independently verified to contain it.
-- `verified_fixed`: the remediation is present and at least two later comparable
-  runs passed at revisions independently verified to contain it.
-
-Observation recovery counts completed runs rather than elapsed time, so sparse
-job schedules use the same three-pass threshold. Pending runs do not count or
-break the streak. A newer completed failure immediately returns an
-observation-recovered pattern to `active`. Retained last-known-good patterns keep
-this deterministic observation state even after the original failures leave the
-current fetch window.
-
-The source-aware states use immutable repository revisions and retain passing
-build IDs as public verification evidence. A later correlated failure at the
-same revision returns the pattern to `active`.
-
-Only `active` patterns are published in the home-page recurring list, passed to
-automatic issue or Fix PR side effects, or accepted by action endpoints.
-`recovered`, `observing`, and `verified_fixed` patterns remain in the per-job
-history with their explanation and applicable passing build links. Job output
-also publishes `current_status` separately from the rolling `pass_rate_recent`.
-
-Source-investigation code targets use the same behavior-complete contract.
-`modify_symbol` without `required_call` is rejected before persistence, and the
-source runner loads only the target package and any repository-local callee
-package before marking a result actionable. Persisted source results and Fix PR
-previews carry versioned verification identity; entries produced before the current
-behavior verifier are not restorable or confirmable.
-
-`set_job_environment` is repository-qualified and limited to pinned
-`kubernetes/test-infra` job configuration. It records the discovery revision,
-config path, job, container, environment-variable name, and exact desired
-value. Fix PR routing separately requires an explicit repository and path-prefix
-allowlist.
-
-- **Repo tool loop.** With a reader wired, the correlation runs as a repotree
-  loop (`list_repo_tree` / `read_repo_file` / `grep_repo` over the source repo
-  at `HEAD`), so the model verifies a path exists before naming it. The
-  recursive tree listing and file reads are memoized once per run across every
-  job. Without a token, public repositories use anonymous tree and raw-file
-  reads. Set `GITHUB_READ_TOKEN` for sustained use or private repositories.
-  `FIX_TOKEN` and the Actions-provided `GITHUB_TOKEN` remain compatibility
-  fallbacks outside Helm. Authenticated file reads use the GitHub contents API.
-- **Path guard (always on).** Independent of the tool loop, any path named in
-  `suggested_fix` that does not exist in the source repo is annotated
-  `(unverified path)` rather than asserted as fact. When no reader is wired the
-  guard verifies against the raw CDN (no token). Only `suggested_fix` is
-  guarded, because `shared_root_cause` and `summary` legitimately cite GCS
-  artifact paths that are not in the source tree.
-
-Without a source repo, the pass falls back to the single tool-free completion
-plus the path guard. A configured public repository remains grounded even when
-no token exists.
+Individual failure source grounding remains unchanged. Per-build analysis may use
+read-only repository tools at an immutable revision and may publish source links.
+Those `relevant_files` are evidence only. They are not proven modification
+targets and are never promoted into causal-group remediation.
 
 ## Troubleshooting
 

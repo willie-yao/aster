@@ -12,9 +12,11 @@ import { overviewTypography } from "../theme/overview";
 
 function BriefingBody({
   summary,
+  followUp,
   details,
 }: {
   summary: ReactNode;
+  followUp?: ReactNode;
   details?: ReactNode;
 }) {
   return (
@@ -31,6 +33,12 @@ function BriefingBody({
       >
         {summary}
       </Box>
+      {followUp && (
+        <>
+          <Divider sx={{ my: 2.25, borderColor: "divider" }} />
+          <Box sx={{ maxWidth: "68ch", overflowWrap: "anywhere" }}>{followUp}</Box>
+        </>
+      )}
       {details && (
         <>
           <Divider sx={{ my: 2.25, borderColor: "divider" }} />
@@ -62,6 +70,7 @@ export function AnalysisBriefing({
   mobileMetadata,
   mobileNotice,
   details,
+  followUp,
   actions,
   collapseDetailsOnMobile = true,
 }: {
@@ -75,6 +84,7 @@ export function AnalysisBriefing({
   mobileMetadata?: ReactNode;
   mobileNotice?: ReactNode;
   details?: ReactNode;
+  followUp?: ReactNode;
   actions?: ReactNode;
   collapseDetailsOnMobile?: boolean;
 }) {
@@ -98,7 +108,7 @@ export function AnalysisBriefing({
         }}
       >
         <DetailSectionBand title={title} icon={icon} metadata={metadata} />
-        <BriefingBody summary={summary} details={details} />
+        <BriefingBody summary={summary} followUp={followUp} details={details} />
         {actions && (
           <Box sx={{ px: 2, pb: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
             {actions}
@@ -127,7 +137,7 @@ export function AnalysisBriefing({
           metadata={mobileMetadata ?? metadata}
         />
         {mobileNotice && <Box sx={{ px: 1.5, pt: 1.5 }}>{mobileNotice}</Box>}
-        <BriefingBody summary={summary} details={details} />
+        <BriefingBody summary={summary} followUp={followUp} details={details} />
         {actions && (
           <Box sx={{ px: 1.5, pb: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
             {actions}
@@ -149,6 +159,11 @@ export function AnalysisBriefing({
           {mobileSynopsis ?? summary}
         </Box>
         {mobileNotice && <Box sx={{ px: 1.5, pb: 1.5 }}>{mobileNotice}</Box>}
+        {followUp && (
+          <Box sx={{ px: 1.5, pb: 1.5, pt: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
+            {followUp}
+          </Box>
+        )}
       </Box>
 
       <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>

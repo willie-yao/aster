@@ -12,7 +12,13 @@ func TestPatternAllowsActionsRejectsCausalGroupResults(t *testing.T) {
 		PatternRecurrenceUnrelated,
 		PatternRecurrenceInsufficientEvidence,
 	} {
-		if PatternAllowsActions(PatternAnalysis{Recurrence: recurrence}) {
+		pattern := PatternAnalysis{
+			Recurrence: recurrence,
+			RemediationInvestigations: []PatternRemediationInvestigationSummary{{
+				CausalGroupID: "group", CausalGroupHash: "hash", State: PatternRemediationActionable,
+			}},
+		}
+		if PatternAllowsActions(pattern) {
 			t.Fatalf("recurrence %q allowed actions", recurrence)
 		}
 	}
