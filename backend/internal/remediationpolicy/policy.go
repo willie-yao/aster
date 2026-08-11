@@ -445,7 +445,7 @@ func benignTemporalCondition(words []string) int {
 
 func positiveTemporalAdverbPrefix(words []string) int {
 	offset := 0
-	for offset < len(words) && offset < 2 && containsWord([]string{words[offset]}, "successfully", "reliably", "seamlessly", "cleanly", "safely", "continuously") {
+	for offset < len(words) && offset < 2 && containsWord([]string{words[offset]}, "successfully", "reliably", "seamlessly", "cleanly", "safely", "continuously", "correctly") {
 		offset++
 	}
 	return offset
@@ -459,9 +459,9 @@ func benignServingComplement(words []string, persistent bool) bool {
 	}
 	if !temporalWordsAllowed(words,
 		"a", "an", "the", "all", "every", "and",
-		"request", "requests", "read", "reads", "write", "writes", "traffic", "conversion", "conversions",
+		"api", "request", "requests", "read", "reads", "write", "writes", "traffic", "conversion", "conversions",
 		"without", "with", "no", "zero", "error", "errors", "failure", "failures", "downtime", "outage", "outages", "disruption",
-		"successfully", "reliably", "seamlessly", "cleanly", "safely", "continuously",
+		"successfully", "reliably", "seamlessly", "cleanly", "safely", "continuously", "correctly",
 	) {
 		return false
 	}
@@ -479,7 +479,7 @@ func benignCompletionComplement(words []string) bool {
 		return false
 	}
 	if !temporalWordsAllowed(words,
-		"a", "an", "the", "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts",
+		"a", "an", "the", "full", "entire", "complete", "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts",
 		"without", "with", "no", "zero", "error", "errors", "failure", "failures", "downtime", "outage", "outages", "disruption",
 		"successfully", "reliably", "seamlessly", "cleanly", "safely",
 	) {
@@ -494,7 +494,7 @@ func benignFailoverComplement(words []string) bool {
 		return false
 	}
 	if !temporalWordsAllowed(words,
-		"a", "an", "the", "to", "named", "backup", "secondary", "standby", "healthy", "available", "replica", "endpoint", "service", "node",
+		"a", "an", "the", "to", "named", "designated", "backup", "secondary", "standby", "healthy", "available", "replica", "endpoint", "service", "node",
 		"without", "with", "no", "zero", "error", "errors", "failure", "failures", "downtime", "outage", "outages", "disruption",
 		"successfully", "reliably", "seamlessly", "cleanly", "safely",
 	) {
@@ -533,7 +533,7 @@ func negativeOutcomeQuality(words []string) bool {
 
 func containsPositiveTemporalAdverb(words []string) bool {
 	for _, word := range words {
-		if containsWord([]string{word}, "successfully", "reliably", "seamlessly", "cleanly", "safely", "continuously") {
+		if containsWord([]string{word}, "successfully", "reliably", "seamlessly", "cleanly", "safely", "continuously", "correctly") {
 			return true
 		}
 	}
@@ -550,16 +550,15 @@ func temporalWordsAllowed(words []string, allowed ...string) bool {
 }
 
 func boundedTemporalWords(words []string) []string {
-	end := len(words)
-	if end > 10 {
-		end = 10
-	}
-	for i, word := range words[:end] {
+	for i, word := range words {
 		if containsWord([]string{word}, "then", "until", "while", "during", "after", "before") {
 			return words[:i]
 		}
+		if i == 10 {
+			return nil
+		}
 	}
-	return words[:end]
+	return words
 }
 
 func negativeObjectQuantifier(words []string, objects ...string) bool {
