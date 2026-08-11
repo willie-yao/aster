@@ -253,6 +253,9 @@ func TestVerifySourceWorkspaceAcceptsMetadataOnlyChanges(t *testing.T) {
 	if _, err := gitWorkspaceOutput(t.Context(), sourceRoot, "diff-files", "--quiet", "--"); err == nil {
 		t.Fatal("metadata-only fixture did not invalidate the index stat cache")
 	}
+	if _, err := gitWorkspaceOutput(t.Context(), sourceRoot, "diff", "--no-ext-diff", "--no-textconv", "--quiet", "--"); err != nil {
+		t.Fatalf("content-aware diff rejected metadata-only change: %v", err)
+	}
 	if err := VerifySourceWorkspace(t.Context(), sourceRoot, source.Revision); err != nil {
 		t.Fatal(err)
 	}
@@ -265,8 +268,11 @@ func TestVerifySourceWorkspaceRejectsStagedCheckout(t *testing.T) {
 		t.Fatal(err)
 	}
 	runWorkspaceGit(t, sourceRoot, "add", "pkg/controller.go")
+	if err := os.WriteFile(path, []byte("package controller\n\nfunc reconcile() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := VerifySourceWorkspace(t.Context(), sourceRoot, source.Revision); err == nil {
-		t.Fatal("staged source modification was accepted")
+		t.Fatal("staged source modification hidden by restored working-tree content was accepted")
 	}
 }
 
