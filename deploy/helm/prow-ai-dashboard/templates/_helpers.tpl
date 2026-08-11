@@ -648,11 +648,6 @@ key, or bot token).
 {{- printf "%s@%s" .Values.agentSandbox.analyzer.executorImage.repository .Values.agentSandbox.analyzer.executorImage.digest -}}
 {{- end -}}
 
-{{/* Immutable analyzer stager image. */}}
-{{- define "prow-ai-dashboard.agentSandboxAnalyzerStagerImage" -}}
-{{- printf "%s@%s" .Values.agentSandbox.analyzer.stagerImage.repository .Values.agentSandbox.analyzer.stagerImage.digest -}}
-{{- end -}}
-
 {{/* Dedicated ServiceAccount allowed to manage only analyzer Sandboxes. */}}
 {{- define "prow-ai-dashboard.agentSandboxAnalyzerClientServiceAccountName" -}}
 {{- if .Values.agentSandbox.analyzer.clientServiceAccount.name -}}
@@ -684,11 +679,8 @@ key, or bot token).
   {{- if and .Values.agentSandbox.causalCritic.enabled (eq $cfg.namespace .Values.agentSandbox.causalCritic.namespace) -}}{{- fail "agentSandbox.analyzer.namespace must differ from agentSandbox.causalCritic.namespace" -}}{{- end -}}
   {{- if or (gt (len $cfg.namespace) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.namespace)) -}}{{- fail "agentSandbox.analyzer.namespace must be a lowercase DNS label" -}}{{- end -}}
   {{- if or (gt (len $cfg.runtimeClassName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.runtimeClassName)) -}}{{- fail "agentSandbox.analyzer.runtimeClassName is required and must be a lowercase RuntimeClass name" -}}{{- end -}}
-  {{- range $name, $image := dict "executorImage" $cfg.executorImage "stagerImage" $cfg.stagerImage -}}
-    {{- if not (regexMatch "^[^[:space:]@]+$" $image.repository) -}}{{- fail (printf "agentSandbox.analyzer.%s.repository is required without whitespace, credentials, or a digest" $name) -}}{{- end -}}
-    {{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $image.digest) -}}{{- fail (printf "agentSandbox.analyzer.%s.digest must be an immutable sha256 digest" $name) -}}{{- end -}}
-  {{- end -}}
-  {{- if eq (include "prow-ai-dashboard.agentSandboxAnalyzerExecutorImage" .) (include "prow-ai-dashboard.agentSandboxAnalyzerStagerImage" .) -}}{{- fail "agentSandbox.analyzer executor and stager images must be distinct" -}}{{- end -}}
+  {{- if not (regexMatch "^[^[:space:]@]+$" $cfg.executorImage.repository) -}}{{- fail "agentSandbox.analyzer.executorImage.repository is required without whitespace, credentials, or a digest" -}}{{- end -}}
+  {{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $cfg.executorImage.digest) -}}{{- fail "agentSandbox.analyzer.executorImage.digest must be an immutable sha256 digest" -}}{{- end -}}
   {{- if or (gt (len $cfg.input.existingClaim) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.input.existingClaim)) -}}{{- fail "agentSandbox.analyzer.input.existingClaim is required and must be a lowercase PVC name" -}}{{- end -}}
   {{- if and .Values.persistence.existingClaim (eq $cfg.input.existingClaim .Values.persistence.existingClaim) -}}{{- fail "agentSandbox.analyzer.input.existingClaim must differ from the public dashboard data PVC" -}}{{- end -}}
   {{- $workloadSA := include "prow-ai-dashboard.agentSandboxAnalyzerWorkloadServiceAccountName" . -}}

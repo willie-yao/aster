@@ -83,15 +83,11 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 	if err != nil {
 		return result, fmt.Errorf("encode workspace analysis request: %w", err)
 	}
-	stageJSON, err := json.Marshal(spec.StageRequest)
-	if err != nil {
-		return result, fmt.Errorf("encode workspace stage request: %w", err)
-	}
 	sandboxSpec := agentsandbox.Spec{
 		Purpose: "analysis", ExecutionID: spec.ExecutionID,
 		RequestEnv: WorkspaceExecutionRequestEnv, Request: requestJSON,
 		Timeout: r.Timeout, OutputLimitBytes: r.OutputLimitBytes, WorkObserver: spec.WorkObserver,
-		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: WorkspaceStageRequestEnv, Request: stageJSON},
+		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: spec.Request.Manifest.Hash},
 	}
 	if err := agentsandbox.ValidateSpec(sandboxSpec); err != nil {
 		return result, err

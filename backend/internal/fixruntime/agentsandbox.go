@@ -38,6 +38,7 @@ const (
 	agentSandboxExecutionLabel     = "prow-ai-dashboard/execution"
 	agentSandboxContractAnnotation = "prow-ai-dashboard/execution-contract-sha256"
 	agentSandboxIDAnnotation       = "prow-ai-dashboard/execution-id"
+	agentSandboxPreparedAnnotation = "prow-ai-dashboard/prepared-manifest-sha256"
 	agentSandboxPodAnnotation      = "agents.x-k8s.io/pod-name"
 	agentSandboxContainerName      = "executor"
 	agentSandboxStagerName         = "stager"
@@ -117,16 +118,23 @@ type AgentSandboxOptions struct {
 }
 
 type sandboxState struct {
-	Exists         bool
-	UID            string
-	PodName        string
-	NodeName       string
-	ContractHash   string
-	ExecutionID    string
-	ShapeHash      string
-	ShutdownTime   string
-	Finished       bool
-	FinishedReason string
+	Exists              bool
+	UID                 string
+	PodName             string
+	NodeName            string
+	ContractHash        string
+	ExecutionID         string
+	ShapeHash           string
+	ShutdownTime        string
+	Finished            bool
+	FinishedReason      string
+	PodCreatedAt        time.Time
+	ScheduledAt         time.Time
+	StageStartedAt      time.Time
+	StageFinishedAt     time.Time
+	ExecutionStartedAt  time.Time
+	ExecutionFinishedAt time.Time
+	TimingStatus        string
 }
 
 // agentSandboxAPI is the low-level lifecycle seam intended for a future shared
@@ -291,8 +299,8 @@ func validateAgentSandboxOptions(opts AgentSandboxOptions) error {
 	if !opts.testOnly && opts.StagerImage != "" && !immutableExecutorImage.MatchString(opts.StagerImage) {
 		return fmt.Errorf("agent sandbox stager image must use an immutable sha256 digest")
 	}
-	if (opts.StagerImage == "") != (opts.StagerInputClaim == "") {
-		return fmt.Errorf("agent sandbox stager image and input claim must be configured together")
+	if opts.StagerImage != "" && opts.StagerInputClaim == "" {
+		return fmt.Errorf("agent sandbox stager image requires an input claim")
 	}
 	if opts.StagerInputClaim != "" && len(k8svalidation.IsDNS1123Subdomain(opts.StagerInputClaim)) > 0 {
 		return fmt.Errorf("agent sandbox stager input claim is invalid")
@@ -447,6 +455,9 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	if spec.StagedWorkspace != nil && (strings.TrimSpace(r.opts.StagerImage) == "" || strings.TrimSpace(r.opts.StagerInputClaim) == "") {
 		return result, fmt.Errorf("agent sandbox staged workspace requires a stager image and input claim")
 	}
+	if spec.PreparedWorkspace != nil && strings.TrimSpace(r.opts.StagerInputClaim) == "" {
+		return result, fmt.Errorf("agent sandbox prepared workspace requires an input claim")
+	}
 	if spec.Timeout != r.opts.Timeout || spec.OutputLimitBytes != r.opts.OutputLimitBytes {
 		return result, fmt.Errorf("agent sandbox workload does not match configured timeout or output limit")
 	}
@@ -534,6 +545,16 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	result.FinishedReason = terminal.FinishedReason
 	result.Telemetry.TaskFinalized = true
 	result.Telemetry.TaskFinalizedMs = result.Duration.Milliseconds()
+	result.Telemetry.SchedulingAvailable = !terminal.PodCreatedAt.IsZero() && !terminal.ScheduledAt.IsZero()
+	result.Telemetry.SchedulingMs = durationMilliseconds(terminal.PodCreatedAt, terminal.ScheduledAt)
+	result.Telemetry.StagingAvailable = spec.PreparedWorkspace != nil || (!terminal.StageStartedAt.IsZero() && !terminal.StageFinishedAt.IsZero())
+	result.Telemetry.StagingMs = durationMilliseconds(terminal.StageStartedAt, terminal.StageFinishedAt)
+	result.Telemetry.ExecutionAvailable = !terminal.ExecutionStartedAt.IsZero() && !terminal.ExecutionFinishedAt.IsZero()
+	result.Telemetry.ExecutionMs = durationMilliseconds(terminal.ExecutionStartedAt, terminal.ExecutionFinishedAt)
+	result.Telemetry.PhaseTimingStatus = terminal.TimingStatus
+	if result.Telemetry.SchedulingAvailable && result.Telemetry.StagingAvailable && result.Telemetry.ExecutionAvailable {
+		result.Telemetry.PhaseTimingStatus = "available"
+	}
 
 	logs, err := r.api.PodLogs(runCtx, r.opts.Namespace, terminal.PodName, spec.OutputLimitBytes)
 	if err != nil {
@@ -542,6 +563,8 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	result.Output = logs
 	result.Telemetry.ResultAvailable = true
 	result.Telemetry.ResultAvailableMs = r.now().Sub(started).Milliseconds()
+	result.Telemetry.PublicationMs = max(result.Telemetry.ResultAvailableMs-result.Telemetry.TaskFinalizedMs, 0)
+	result.Telemetry.PublicationAvailable = true
 	return result, nil
 }
 
@@ -693,16 +716,20 @@ func (r *AgentSandboxRuntime) sandboxObjectForSpec(name string, spec agentsandbo
 		labels["prow-ai-dashboard/purpose"] = spec.Purpose
 		podLabels["prow-ai-dashboard/purpose"] = spec.Purpose
 	}
+	annotations := map[string]any{
+		agentSandboxContractAnnotation: hex.EncodeToString(contractHash),
+		agentSandboxIDAnnotation:       strings.TrimSpace(executionID),
+	}
+	if spec.PreparedWorkspace != nil {
+		annotations[agentSandboxPreparedAnnotation] = spec.PreparedWorkspace.ManifestHash
+	}
 	return map[string]any{
 		"apiVersion": "agents.x-k8s.io/v1beta1",
 		"kind":       "Sandbox",
 		"metadata": map[string]any{
-			"name":   name,
-			"labels": labels,
-			"annotations": map[string]any{
-				agentSandboxContractAnnotation: hex.EncodeToString(contractHash),
-				agentSandboxIDAnnotation:       strings.TrimSpace(executionID),
-			},
+			"name":        name,
+			"labels":      labels,
+			"annotations": annotations,
 		},
 		"spec": map[string]any{
 			"service":        false,
@@ -846,14 +873,19 @@ func agentSandboxWorkloadHash(spec agentsandbox.Spec, opts AgentSandboxOptions) 
 	if spec.StagedWorkspace != nil {
 		stageEnv = spec.StagedWorkspace.RequestEnv
 	}
+	preparedHash := ""
+	if spec.PreparedWorkspace != nil {
+		preparedHash = spec.PreparedWorkspace.ManifestHash
+	}
 	metadata, _ := json.Marshal(struct {
-		Purpose           string `json:"purpose"`
-		RequestEnv        string `json:"request_env"`
-		Timeout           string `json:"timeout"`
-		OutputLimitBytes  int64  `json:"output_limit_bytes"`
-		WritableWorkspace bool   `json:"writable_workspace"`
-		StageRequestEnv   string `json:"stage_request_env,omitempty"`
-	}{spec.Purpose, spec.RequestEnv, spec.Timeout.String(), spec.OutputLimitBytes, spec.WritableWorkspace, stageEnv})
+		Purpose              string `json:"purpose"`
+		RequestEnv           string `json:"request_env"`
+		Timeout              string `json:"timeout"`
+		OutputLimitBytes     int64  `json:"output_limit_bytes"`
+		WritableWorkspace    bool   `json:"writable_workspace"`
+		StageRequestEnv      string `json:"stage_request_env,omitempty"`
+		PreparedManifestHash string `json:"prepared_manifest_hash,omitempty"`
+	}{spec.Purpose, spec.RequestEnv, spec.Timeout.String(), spec.OutputLimitBytes, spec.WritableWorkspace, stageEnv, preparedHash})
 	request := append(append(append([]byte(nil), metadata...), 0), spec.Request...)
 	if spec.StagedWorkspace != nil {
 		request = append(request, 0)
@@ -870,7 +902,10 @@ func agentSandboxContractHash(requestJSON []byte, opts AgentSandboxOptions) [sha
 		[]byte(opts.Resources.MemoryLimit), []byte(opts.Resources.EphemeralStorage), []byte(opts.appArmorCapability.String()), strconv.AppendBool(nil, opts.PublicCAPrivateDNS),
 	}
 	if opts.StagerImage != "" {
-		values = append(values, []byte(opts.StagerImage), []byte(opts.StagerInputClaim))
+		values = append(values, []byte(opts.StagerImage))
+	}
+	if opts.StagerInputClaim != "" {
+		values = append(values, []byte(opts.StagerInputClaim))
 	}
 	for _, value := range values {
 		_, _ = hash.Write([]byte{0})
@@ -972,7 +1007,18 @@ func (k *kubeAgentSandboxAPI) State(ctx context.Context, namespace, name string)
 	if err != nil {
 		return sandboxState{}, err
 	}
-	return sandboxStateFromObject(object), nil
+	state := sandboxStateFromObject(object)
+	if state.Finished && state.PodName != "" {
+		podsGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+		if pod, podErr := k.dynamic.Resource(podsGVR).Namespace(namespace).Get(ctx, state.PodName, metav1.GetOptions{}); podErr == nil {
+			enrichSandboxStateWithPod(&state, pod.Object)
+		} else {
+			state.TimingStatus = "pod_status_unavailable"
+		}
+	} else if state.Finished {
+		state.TimingStatus = "pod_name_unavailable"
+	}
+	return state, nil
 }
 
 func (k *kubeAgentSandboxAPI) Delete(ctx context.Context, namespace, name, uid string) error {
@@ -1038,6 +1084,58 @@ func (k *kubeAgentSandboxAPI) ExecutionPods(ctx context.Context, namespace, exec
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+func enrichSandboxStateWithPod(state *sandboxState, pod map[string]any) {
+	if state == nil || pod == nil {
+		return
+	}
+	if value, found, _ := unstructured.NestedString(pod, "metadata", "creationTimestamp"); found {
+		state.PodCreatedAt, _ = time.Parse(time.RFC3339, value)
+	}
+	conditions, _, _ := unstructured.NestedSlice(pod, "status", "conditions")
+	for _, raw := range conditions {
+		condition, _ := raw.(map[string]any)
+		if condition["type"] == "PodScheduled" && condition["status"] == "True" {
+			state.ScheduledAt, _ = time.Parse(time.RFC3339, stringValue(condition["lastTransitionTime"]))
+		}
+	}
+	state.StageStartedAt, state.StageFinishedAt = containerTiming(pod, "initContainerStatuses", agentSandboxStagerName)
+	state.ExecutionStartedAt, state.ExecutionFinishedAt = containerTiming(pod, "containerStatuses", agentSandboxContainerName)
+	state.TimingStatus = "timestamps_incomplete"
+}
+
+func containerTiming(pod map[string]any, field, name string) (time.Time, time.Time) {
+	statuses, _, _ := unstructured.NestedSlice(pod, "status", field)
+	for _, raw := range statuses {
+		status, _ := raw.(map[string]any)
+		if status["name"] != name {
+			continue
+		}
+		state, _, _ := unstructured.NestedMap(status, "state")
+		if terminated, ok := state["terminated"].(map[string]any); ok {
+			started, _ := time.Parse(time.RFC3339, stringValue(terminated["startedAt"]))
+			finished, _ := time.Parse(time.RFC3339, stringValue(terminated["finishedAt"]))
+			return started, finished
+		}
+		if running, ok := state["running"].(map[string]any); ok {
+			started, _ := time.Parse(time.RFC3339, stringValue(running["startedAt"]))
+			return started, time.Time{}
+		}
+	}
+	return time.Time{}, time.Time{}
+}
+
+func durationMilliseconds(start, finish time.Time) int64 {
+	if start.IsZero() || finish.IsZero() || finish.Before(start) {
+		return 0
+	}
+	return finish.Sub(start).Milliseconds()
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 func compatibleSandboxState(existing, desired sandboxState) bool {

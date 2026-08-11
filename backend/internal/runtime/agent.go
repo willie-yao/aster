@@ -91,17 +91,26 @@ type WorkObserver func(context.Context, WorkRef) error
 
 // GenerateTelemetry records lifecycle facts observable through the runtime contract.
 type GenerateTelemetry struct {
-	TaskFinalized       bool
-	TaskFinalizedMs     int64
-	ResultAvailable     bool
-	ResultAvailableMs   int64
-	FinalizationChecked bool
-	FinalizationValid   bool
-	CleanupCompleted    bool
-	CleanupDurationMs   int64
-	TokenUsageAvailable bool
-	CostAvailable       bool
-	UsageStatus         string
+	TaskFinalized        bool
+	TaskFinalizedMs      int64
+	ResultAvailable      bool
+	ResultAvailableMs    int64
+	SchedulingMs         int64
+	SchedulingAvailable  bool
+	StagingMs            int64
+	StagingAvailable     bool
+	ExecutionMs          int64
+	ExecutionAvailable   bool
+	PublicationMs        int64
+	PublicationAvailable bool
+	PhaseTimingStatus    string
+	FinalizationChecked  bool
+	FinalizationValid    bool
+	CleanupCompleted     bool
+	CleanupDurationMs    int64
+	TokenUsageAvailable  bool
+	CostAvailable        bool
+	UsageStatus          string
 }
 
 // AgentRuntime materializes a disposable workspace and runs a coding agent that

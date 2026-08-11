@@ -149,10 +149,6 @@ agentSandbox:
       repository: ""
       digest: ""
       pullPolicy: IfNotPresent
-    stagerImage:
-      repository: ""
-      digest: ""
-      pullPolicy: IfNotPresent
     input:
       # Existing read-only PVC populated outside the Sandbox. The chart never
       # creates, writes, or mounts it into dashboard workloads.

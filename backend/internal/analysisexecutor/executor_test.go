@@ -26,7 +26,7 @@ func TestExecuteRunsOneNativeSessionAndReturnsAnalysis(t *testing.T) {
 	calls := 0
 	times := []time.Time{time.Unix(100, 0), time.Unix(102, 0)}
 	result := Execute(context.Background(), request, Options{
-		WorkspaceRoot: root, TempRoot: t.TempDir(),
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
 		Now: func() time.Time {
 			value := times[min(calls, len(times)-1)]
 			return value
@@ -57,7 +57,7 @@ func TestExecuteRunsOneNativeSessionAndReturnsAnalysis(t *testing.T) {
 func TestExecuteRejectsWorkspaceMutation(t *testing.T) {
 	root, request := executorTestFixture(t)
 	result := Execute(context.Background(), request, Options{
-		WorkspaceRoot: root, TempRoot: t.TempDir(),
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
 		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
 			if err := os.WriteFile(filepath.Join(root, agentanalysis.WorkspaceArtifactsDir, "logs", "build.log"), []byte("changed\n"), 0o600); err != nil {
 				t.Fatal(err)
@@ -73,7 +73,7 @@ func TestExecuteRejectsWorkspaceMutation(t *testing.T) {
 func TestExecuteRejectsSourceMutation(t *testing.T) {
 	root, request := executorTestFixture(t)
 	result := Execute(context.Background(), request, Options{
-		WorkspaceRoot: root, TempRoot: t.TempDir(),
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
 		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
 			if err := os.WriteFile(filepath.Join(root, agentanalysis.WorkspaceSourceDir, "pkg", "controller.go"), []byte("package changed\n"), 0o600); err != nil {
 				t.Fatal(err)
@@ -89,7 +89,7 @@ func TestExecuteRejectsSourceMutation(t *testing.T) {
 func TestExecuteRejectsExtraResultFile(t *testing.T) {
 	root, request := executorTestFixture(t)
 	result := Execute(context.Background(), request, Options{
-		WorkspaceRoot: root, TempRoot: t.TempDir(),
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
 		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
 			if err := os.WriteFile(filepath.Join(root, agentanalysis.WorkspaceResultDir, "extra.txt"), []byte("extra\n"), 0o600); err != nil {
 				return OpenCodeRunResult{}, err
@@ -105,7 +105,7 @@ func TestExecuteRejectsExtraResultFile(t *testing.T) {
 func TestExecuteRejectsSymlinkResult(t *testing.T) {
 	root, request := executorTestFixture(t)
 	result := Execute(context.Background(), request, Options{
-		WorkspaceRoot: root, TempRoot: t.TempDir(),
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
 		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
 			target := filepath.Join(root, agentanalysis.WorkspaceArtifactsDir, "logs", "build.log")
 			path := filepath.Join(root, agentanalysis.WorkspaceResultDir, agentanalysis.WorkspaceResultFile)
@@ -125,7 +125,7 @@ func TestExecuteReportsCancellationWithoutSecondRun(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
 	calls := 0
 	result := Execute(parent, request, Options{
-		WorkspaceRoot: root, TempRoot: t.TempDir(),
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
 		RunOpenCode: func(ctx context.Context, _ OpenCodeSpec) (OpenCodeRunResult, error) {
 			calls++
 			cancel()
@@ -341,7 +341,7 @@ func TestExecuteReportsTimeoutTelemetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := Execute(t.Context(), request, Options{
-		WorkspaceRoot: root, TempRoot: t.TempDir(),
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
 		RunOpenCode: func(ctx context.Context, _ OpenCodeSpec) (OpenCodeRunResult, error) {
 			<-ctx.Done()
 			return OpenCodeRunResult{}, ctx.Err()
@@ -359,7 +359,7 @@ func TestExecuteRejectsResultReturnedAfterDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := Execute(t.Context(), request, Options{
-		WorkspaceRoot: root, TempRoot: t.TempDir(),
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
 		RunOpenCode: func(ctx context.Context, _ OpenCodeSpec) (OpenCodeRunResult, error) {
 			<-ctx.Done()
 			return testOpenCodeResult(), nil
@@ -373,5 +373,30 @@ func TestExecuteRejectsResultReturnedAfterDeadline(t *testing.T) {
 func TestOpenCodeFailureCodePrefersContextLimit(t *testing.T) {
 	if got := openCodeFailureCode(errors.New("OpenCode structured output failed: ContextOverflowError")); got != "context_limit" {
 		t.Fatalf("failure code = %q", got)
+	}
+}
+
+func TestVerifyPreparedMountInfoRequiresExactReadOnlyManifestPaths(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	valid := "36 25 0:32 /" + hash + "/source /workspace/source ro,relatime - ext4 /dev/sda ro\n" +
+		"37 25 0:32 /" + hash + "/artifacts /workspace/artifacts ro,relatime - ext4 /dev/sda ro\n"
+	if err := verifyPreparedMountInfo(valid, "/workspace", hash); err != nil {
+		t.Fatal(err)
+	}
+	kata := "129 120 0:40 / /workspace/source ro,relatime - virtiofs none rw\n" +
+		"131 120 0:41 / /workspace/artifacts ro,relatime - virtiofs none rw\n"
+	if err := verifyPreparedMountInfo(kata, "/workspace", hash); err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range map[string]string{
+		"writable":   strings.Replace(valid, "ro,relatime", "rw,relatime", 1),
+		"wrong hash": strings.Replace(valid, hash+"/artifacts", strings.Repeat("b", 64)+"/artifacts", 1),
+		"missing":    strings.Split(valid, "\n")[0] + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := verifyPreparedMountInfo(raw, "/workspace", hash); err == nil {
+				t.Fatal("unsafe mountinfo was accepted")
+			}
+		})
 	}
 }

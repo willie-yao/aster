@@ -1947,10 +1947,6 @@ agentSandbox:
       repository: local/analyzer
       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       pullPolicy: IfNotPresent
-    stagerImage:
-      repository: local/stager
-      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-      pullPolicy: IfNotPresent
     input:
       existingClaim: analyzer-input
     clientServiceAccount:
@@ -2003,19 +1999,24 @@ grep -Fq 'count/pods: "1"' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq 'kind: NetworkPolicy' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq 'prow-ai-dashboard/purpose: analysis' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq 'local/analyzer@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$tmp/agent-sandbox-analyzer-render.yaml"
-grep -Fq 'local/stager@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq 'system:serviceaccount:dashboard-test:test-prow-ai-dashboard-agent-sandbox-analyzer-client' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq 'variables.pod.runtimeClassName ==' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq 'kata-vm-isolation' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq 'variables.pod.activeDeadlineSeconds == 915' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq "variables.container.env[0].name == 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64'" "$tmp/agent-sandbox-analyzer-render.yaml"
-grep -Fq "variables.stager.env[0].name == 'PROW_AI_ANALYSIS_STAGE_REQUEST_B64'" "$tmp/agent-sandbox-analyzer-render.yaml"
+if [ "$(grep -Fc 'expression: "object.spec.podTemplate.spec.containers[0]"' "$tmp/agent-sandbox-analyzer-render.yaml")" -ne 1 ] || grep -Fq 'expression: "object.spec.podTemplate.spec.initContainers[0]"' "$tmp/agent-sandbox-analyzer-render.yaml"; then
+  echo 'analyzer admission rendered an invalid container variable' >&2
+  exit 1
+fi
 grep -Fq 'v.persistentVolumeClaim.claimName ==' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq 'analyzer-input' "$tmp/agent-sandbox-analyzer-render.yaml"
-grep -Fq "v.name == 'workspace' && v.mountPath == '/workspace' && v.readOnly == true" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "(!has(variables.pod.initContainers) || size(variables.pod.initContainers) == 0)" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "v.name == 'input' && v.mountPath == '/workspace/source' && v.readOnly == true" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "v.subPath == object.metadata.annotations['prow-ai-dashboard/prepared-manifest-sha256'] + '/source'" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "v.name == 'input' && v.mountPath == '/workspace/artifacts' && v.readOnly == true" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "v.subPath == object.metadata.annotations['prow-ai-dashboard/prepared-manifest-sha256'] + '/artifacts'" "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq "v.name == 'result' && v.mountPath == '/workspace/result' && (!has(v.readOnly) || v.readOnly == false)" "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq "v.name == 'result' && has(v.emptyDir) && v.emptyDir.sizeLimit == '4Mi'" "$tmp/agent-sandbox-analyzer-render.yaml"
-grep -Fq "variables.stager.securityContext.appArmorProfile.type == 'RuntimeDefault'" "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq "variables.container.securityContext.seccompProfile.type == 'RuntimeDefault'" "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq '!has(variables.pod.imagePullSecrets)' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq '!has(variables.container.volumeDevices)' "$tmp/agent-sandbox-analyzer-render.yaml"
@@ -2078,8 +2079,6 @@ expect_agent_sandbox_analyzer_fail() {
 }
 expect_agent_sandbox_analyzer_fail direct-provider 'must use internal service DNS' --set agentSandbox.analyzer.modelGateway.endpoint=https://api.openai.com/v1
 expect_agent_sandbox_analyzer_fail mutable-executor 'executorImage.digest must be an immutable sha256 digest' --set-string agentSandbox.analyzer.executorImage.digest=latest
-expect_agent_sandbox_analyzer_fail mutable-stager 'stagerImage.digest must be an immutable sha256 digest' --set-string agentSandbox.analyzer.stagerImage.digest=latest
-expect_agent_sandbox_analyzer_fail shared-image 'executor and stager images must be distinct' --set agentSandbox.analyzer.stagerImage.repository=local/analyzer --set-string agentSandbox.analyzer.stagerImage.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 expect_agent_sandbox_analyzer_fail missing-input 'input.existingClaim is required' --set-string agentSandbox.analyzer.input.existingClaim=
 expect_agent_sandbox_analyzer_fail public-data-input 'input.existingClaim must differ from the public dashboard data PVC' --set persistence.existingClaim=analyzer-input
 expect_agent_sandbox_analyzer_fail unmanaged-client 'clientServiceAccount.name is required when create=false' --set agentSandbox.analyzer.clientServiceAccount.create=false

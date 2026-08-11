@@ -126,6 +126,15 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	FinalizationChecked          bool                                   `json:"finalization_checked"`
 	FinalizationValid            bool                                   `json:"finalization_valid"`
 	CleanupCompleted             bool                                   `json:"cleanup_completed"`
+	SchedulingAvailable          bool                                   `json:"scheduling_available"`
+	SchedulingMS                 int64                                  `json:"scheduling_ms"`
+	StagingAvailable             bool                                   `json:"staging_available"`
+	StagingMS                    int64                                  `json:"staging_ms"`
+	ExecutionAvailable           bool                                   `json:"execution_available"`
+	ExecutionMS                  int64                                  `json:"execution_ms"`
+	PublicationAvailable         bool                                   `json:"publication_available"`
+	PublicationMS                int64                                  `json:"publication_ms"`
+	PhaseTimingStatus            string                                 `json:"phase_timing_status"`
 	CleanupDurationMS            int64                                  `json:"cleanup_duration_ms,omitempty"`
 	AnalysisValid                bool                                   `json:"analysis_valid"`
 	ArtifactCitationCount        int                                    `json:"artifact_citation_count"`
@@ -429,6 +438,11 @@ func agentSandboxAnalyzerRecordForResult(
 		ResultAvailable: result.Telemetry.ResultAvailable, ResultAvailableMS: result.Telemetry.ResultAvailableMs,
 		FinalizationChecked: result.Telemetry.FinalizationChecked, FinalizationValid: result.Telemetry.FinalizationValid,
 		CleanupCompleted: result.Telemetry.CleanupCompleted, CleanupDurationMS: result.Telemetry.CleanupDurationMs,
+		SchedulingAvailable: result.Telemetry.SchedulingAvailable, SchedulingMS: result.Telemetry.SchedulingMs,
+		StagingAvailable: result.Telemetry.StagingAvailable, StagingMS: result.Telemetry.StagingMs,
+		ExecutionAvailable: result.Telemetry.ExecutionAvailable, ExecutionMS: result.Telemetry.ExecutionMs,
+		PublicationAvailable: result.Telemetry.PublicationAvailable, PublicationMS: result.Telemetry.PublicationMs,
+		PhaseTimingStatus:   result.Telemetry.PhaseTimingStatus,
 		TokenUsageAvailable: result.Telemetry.TokenUsageAvailable, CostAvailable: result.Telemetry.CostAvailable,
 		UsageStatus: result.Telemetry.UsageStatus, Resources: result.Resources,
 		HumanScoreRubricVersion: benchmarkHumanScoreRubricVersion, HumanScoreMax: benchmarkHumanScoreMax,

@@ -23,14 +23,20 @@ const (
 )
 
 var (
-	purposePattern = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,29}[a-z0-9])?$`)
-	envNamePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,127}$`)
+	purposePattern      = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,29}[a-z0-9])?$`)
+	envNamePattern      = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,127}$`)
+	manifestHashPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 // StagedWorkspace describes one init-populated workspace with fixed mount boundaries.
 type StagedWorkspace struct {
 	RequestEnv string
 	Request    []byte
+}
+
+// PreparedWorkspace mounts one immutable content-addressed input snapshot directly.
+type PreparedWorkspace struct {
+	ManifestHash string
 }
 
 // Spec describes one credential-free workload executed through Agent Sandbox.
@@ -43,6 +49,7 @@ type Spec struct {
 	OutputLimitBytes  int64
 	WritableWorkspace bool
 	StagedWorkspace   *StagedWorkspace
+	PreparedWorkspace *PreparedWorkspace
 	WorkObserver      engineruntime.WorkObserver
 }
 
@@ -85,6 +92,14 @@ func ValidateSpec(spec Spec) error {
 	}
 	if spec.ExecutionID != "" && (!utf8.ValidString(spec.ExecutionID) || len(spec.ExecutionID) > 128 || strings.ContainsAny(spec.ExecutionID, "\r\n\x00")) {
 		return fmt.Errorf("agent sandbox execution id is invalid or oversized")
+	}
+	if spec.StagedWorkspace != nil && spec.PreparedWorkspace != nil {
+		return fmt.Errorf("agent sandbox staged and prepared workspaces are mutually exclusive")
+	}
+	if spec.PreparedWorkspace != nil {
+		if spec.WritableWorkspace || !manifestHashPattern.MatchString(spec.PreparedWorkspace.ManifestHash) {
+			return fmt.Errorf("agent sandbox prepared workspace is invalid")
+		}
 	}
 	if spec.StagedWorkspace != nil {
 		if spec.WritableWorkspace {
