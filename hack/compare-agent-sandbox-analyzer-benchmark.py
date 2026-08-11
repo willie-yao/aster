@@ -131,9 +131,10 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
         "job_name",
         "build_id",
         "test_name",
-        "test_source",
     ):
         require_string(record, field, runtime)
+    if not isinstance(record.get("test_source"), str):
+        raise ReportError(f"{runtime} line {record['_line']} field test_source must be a string")
     require_integer(record, "human_score_rubric_version", runtime, 1)
     require_integer(record, "human_score_max", runtime, 1)
     dimensions = record.get("human_score_dimensions")
