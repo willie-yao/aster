@@ -85,6 +85,16 @@ test("result views progressively render rows and grid cells", () => {
   assert.match(ledger, /showMoreCount/);
 });
 
+test("AI usage coverage dividers follow the responsive grid columns", () => {
+  const coverage = source("src/components/AIUsageCoverage.tsx");
+  const mobileDivider = coverage.indexOf('"&:nth-of-type(even)"');
+  const desktopDivider = coverage.indexOf('"&:not(:nth-of-type(3n + 1))"');
+
+  assert.match(coverage, /"&:nth-of-type\(even\)": \{ borderInlineStart: \{ xs: "1px solid", md: 0 \}/);
+  assert.match(coverage, /"&:not\(:nth-of-type\(3n \+ 1\)\)": \{ borderInlineStart: \{ md: "1px solid" \}/);
+  assert.ok(mobileDivider >= 0 && mobileDivider < desktopDivider);
+});
+
 test("AI usage preserves accounting semantics in the operator-ledger composition", () => {
   const page = source("src/pages/AIUsagePage.tsx");
   const filters = source("src/components/AIUsageFilters.tsx");

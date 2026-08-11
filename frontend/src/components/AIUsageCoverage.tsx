@@ -35,8 +35,8 @@ function CoverageItem({ label, children }: { label: string; children: ReactNode 
         py: 1.1,
         borderTop: "1px solid",
         borderColor: "divider",
+        "&:nth-of-type(even)": { borderInlineStart: { xs: "1px solid", md: 0 }, borderInlineStartColor: "divider" },
         "&:not(:nth-of-type(3n + 1))": { borderInlineStart: { md: "1px solid" }, borderInlineStartColor: { md: "divider" } },
-        "&:nth-of-type(even)": { borderInlineStart: { xs: "1px solid", md: "1px solid" }, borderInlineStartColor: "divider" },
       }}
     >
       <Typography color="text.secondary" sx={overviewTypography.tableHeading}>{label}</Typography>
