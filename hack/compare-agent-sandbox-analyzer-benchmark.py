@@ -72,11 +72,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo", required=True)
     parser.add_argument("--holdout-case", action="append", default=[])
     parser.add_argument("--expected-pairs", type=int, default=9)
+    parser.add_argument("--required-repetitions", type=int, default=3)
     parser.add_argument("--output-json")
     parser.add_argument("--blind-packets")
     parser.add_argument("--blind-map")
     parser.add_argument("--blind-map-input")
     parser.add_argument("--blind-scores")
+    parser.add_argument("--score-freeze")
+    parser.add_argument("--reference-manifest")
     return parser.parse_args()
 
 
@@ -452,7 +455,7 @@ def evaluate_criteria(inprocess: dict[str, Any], sandbox: dict[str, Any], simpli
         and (inprocess["cost_coverage"] or 0) >= 0.95
         and (sandbox["cost_coverage"] or 0) >= 0.95
     )
-    evidence = pairs >= expected_pairs and holdouts_ok
+    evidence = pairs == expected_pairs and holdouts_ok
     blind_complete = blind_quality.get("complete") is True
     blind_passed = blind_quality.get("passed") is True
     quality = automatic_quality and blind_complete and blind_passed
@@ -482,9 +485,11 @@ def evaluate_criteria(inprocess: dict[str, Any], sandbox: dict[str, Any], simpli
     }
 
 
-def validate_holdouts(keys: list[tuple[str, int]], holdouts: list[str]) -> tuple[bool, dict[str, int]]:
+def validate_holdouts(keys: list[tuple[str, int]], holdouts: list[str], required_repetitions: int) -> tuple[bool, dict[str, int]]:
     counts = {case_id: sum(key[0] == case_id for key in keys) for case_id in holdouts}
-    return bool(holdouts) and all(count >= 3 for count in counts.values()), counts
+    if required_repetitions < 1:
+        raise ReportError("required repetitions must be positive")
+    return bool(holdouts) and all(count == required_repetitions for count in counts.values()), counts
 
 
 def write_private_json(path: str, value: Any) -> None:
@@ -547,18 +552,53 @@ def blind_analysis_sha256(record: dict[str, Any]) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def load_case_references(path: str | None, case_ids: set[str]) -> tuple[dict[str, dict[str, Any]], str]:
+    if not path:
+        raise ReportError("--reference-manifest is required for blinded packets and scores")
+    document = json.loads(Path(path).read_text())
+    if document.get("version") != 1 or not isinstance(document.get("cases"), dict):
+        raise ReportError("causal reference manifest is invalid")
+    references: dict[str, dict[str, Any]] = {}
+    for case_id in sorted(case_ids):
+        value = document["cases"].get(case_id)
+        if not isinstance(value, dict) or not isinstance(value.get("reference_diagnosis"), str):
+            raise ReportError(f"causal reference is missing for {case_id}")
+        chain = value.get("required_chain")
+        if not isinstance(chain, list) or not chain:
+            raise ReportError(f"causal reference required_chain is missing for {case_id}")
+        ids = set()
+        for item in chain:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not isinstance(item.get("text"), str) or item["id"] in ids:
+                raise ReportError(f"causal reference required_chain is invalid for {case_id}")
+            ids.add(item["id"])
+        noise = value.get("downstream_noise", [])
+        if not isinstance(noise, list) or not all(isinstance(item, str) for item in noise):
+            raise ReportError(f"causal reference downstream_noise is invalid for {case_id}")
+        references[case_id] = {"reference_diagnosis": value["reference_diagnosis"], "required_chain": chain, "downstream_noise": noise}
+    encoded = json.dumps({"version": 1, "cases": references}, sort_keys=True, separators=(",", ":")).encode()
+    return references, hashlib.sha256(encoded).hexdigest()
+
+
+def causal_scoring_rubric(reference: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "diagnosis_full_credit_requires": [item["id"] for item in reference["required_chain"]],
+        "full_credit_rule": "Diagnosis score 2 requires the initiating cause, every required causal link, and no downstream-only symptom presented as primary.",
+        "alignment_values": ["aligned", "partial", "missing", "contradicted"],
+    }
+
+
 def packet_set_sha256(packets: list[dict[str, Any]]) -> str:
-    data = json.dumps({"version": 1, "packets": packets}, sort_keys=True, separators=(",", ":")).encode()
+    data = json.dumps({"version": 2, "packets": packets}, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(data).hexdigest()
 
 
-def blind_packet(packet_id: str, case_id: str, repetition: int, arm: str, record: dict[str, Any]) -> dict[str, Any]:
-    packet = {"packet_id": packet_id, "case_id": case_id, "repetition": repetition, "arm": arm}
+def blind_packet(packet_id: str, case_id: str, repetition: int, arm: str, record: dict[str, Any], reference: dict[str, Any]) -> dict[str, Any]:
+    packet = {"packet_id": packet_id, "case_id": case_id, "repetition": repetition, "arm": arm, "causal_reference": reference, "scoring_rubric": causal_scoring_rubric(reference)}
     packet.update(normalized_blind_analysis(record))
     return packet
 
 
-def write_blind_packets(path: str, map_path: str, keys: list[tuple[str, int]], inprocess: dict[tuple[str, int], dict[str, Any]], sandbox: dict[tuple[str, int], dict[str, Any]]) -> None:
+def write_blind_packets(path: str, map_path: str, references: dict[str, dict[str, Any]], reference_hash: str, keys: list[tuple[str, int]], inprocess: dict[tuple[str, int], dict[str, Any]], sandbox: dict[tuple[str, int], dict[str, Any]]) -> None:
     packets: list[dict[str, Any]] = []
     mapping: list[dict[str, Any]] = []
     chooser = secrets.SystemRandom()
@@ -568,18 +608,24 @@ def write_blind_packets(path: str, map_path: str, keys: list[tuple[str, int]], i
         packet_id = f"{case_id}-rep-{repetition:02d}"
         for index, (runtime, record) in enumerate(rows):
             blind_arm = chr(ord("A") + index)
-            packets.append(blind_packet(packet_id, case_id, repetition, blind_arm, record))
+            packets.append(blind_packet(packet_id, case_id, repetition, blind_arm, record, references[case_id]))
             mapping.append({"packet_id": packet_id, "arm": blind_arm, "runtime": runtime, "analysis_sha256": blind_analysis_sha256(record)})
     packet_hash = packet_set_sha256(packets)
-    write_private_json(path, {"version": 1, "packet_set_sha256": packet_hash, "packets": packets})
-    write_private_json(map_path, {"version": 1, "packet_set_sha256": packet_hash, "mapping": mapping})
+    write_private_json(path, {"version": 2, "packet_set_sha256": packet_hash, "reference_set_sha256": reference_hash, "packets": packets})
+    write_private_json(map_path, {"version": 2, "packet_set_sha256": packet_hash, "reference_set_sha256": reference_hash, "mapping": mapping})
 
 
-def load_blind_quality(map_path: str, scores_path: str, keys: list[tuple[str, int]], inprocess: dict[tuple[str, int], dict[str, Any]], sandbox: dict[tuple[str, int], dict[str, Any]], rubric_version: int, score_max: int, dimensions: list[str]) -> dict[str, Any]:
-    mapping_doc = json.loads(Path(map_path).read_text())
+def load_blind_quality(map_path: str, scores_path: str, freeze_path: str, references: dict[str, dict[str, Any]], reference_hash: str, keys: list[tuple[str, int]], inprocess: dict[tuple[str, int], dict[str, Any]], sandbox: dict[tuple[str, int], dict[str, Any]], rubric_version: int, score_max: int, dimensions: list[str]) -> dict[str, Any]:
     scores_doc = json.loads(Path(scores_path).read_text())
-    if mapping_doc.get("version") != 1 or scores_doc.get("version") != 1:
-        raise ReportError("blind map and score versions must be 1")
+    freeze_doc = json.loads(Path(freeze_path).read_text())
+    score_hash = hashlib.sha256(json.dumps(scores_doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if freeze_doc.get("version") != 1 or freeze_doc.get("score_set_sha256") != score_hash or freeze_doc.get("packet_set_sha256") != scores_doc.get("packet_set_sha256") or freeze_doc.get("reference_set_sha256") != scores_doc.get("reference_set_sha256"):
+        raise ReportError("blind scores do not match the pre-unblinding score freeze")
+    mapping_doc = json.loads(Path(map_path).read_text())
+    if mapping_doc.get("version") != 2 or scores_doc.get("version") != 2:
+        raise ReportError("blind map and score versions must be 2")
+    if mapping_doc.get("reference_set_sha256") != reference_hash or scores_doc.get("reference_set_sha256") != reference_hash:
+        raise ReportError("blind scores are not bound to this causal reference set")
     packet_hash = mapping_doc.get("packet_set_sha256")
     if not isinstance(packet_hash, str) or len(packet_hash) != 64 or scores_doc.get("packet_set_sha256") != packet_hash:
         raise ReportError("blind scores are not bound to this packet set")
@@ -592,6 +638,7 @@ def load_blind_quality(map_path: str, scores_path: str, keys: list[tuple[str, in
     if not isinstance(mapping, list) or not isinstance(scores, list):
         raise ReportError("blind map and scores must contain arrays")
     expected_packets = {f"{case_id}-rep-{repetition:02d}" for case_id, repetition in keys}
+    case_by_packet = {f"{case_id}-rep-{repetition:02d}": case_id for case_id, repetition in keys}
     record_hashes: dict[tuple[str, str], str] = {}
     for case_id, repetition in keys:
         packet_id = f"{case_id}-rep-{repetition:02d}"
@@ -620,7 +667,7 @@ def load_blind_quality(map_path: str, scores_path: str, keys: list[tuple[str, in
         for arm in ("A", "B"):
             runtime = runtime_by_key[(packet_id, arm)]
             record = inprocess[(case_id, repetition)] if runtime == "inprocess" else sandbox[(case_id, repetition)]
-            reconstructed_packets.append(blind_packet(packet_id, case_id, repetition, arm, record))
+            reconstructed_packets.append(blind_packet(packet_id, case_id, repetition, arm, record, references[case_id]))
     if packet_set_sha256(reconstructed_packets) != packet_hash:
         raise ReportError("blind map packet_set_sha256 does not match its randomized assignment")
     totals = {"inprocess": [], "agent_sandbox": []}
@@ -635,6 +682,17 @@ def load_blind_quality(map_path: str, scores_path: str, keys: list[tuple[str, in
         values = item.get("scores")
         if not isinstance(values, dict) or set(values) != set(dimensions):
             raise ReportError("blind score dimensions are incomplete")
+        assessment = item.get("causal_assessment")
+        reference = references[case_by_packet[key[0]]]
+        required_ids = {entry["id"] for entry in reference["required_chain"]}
+        if not isinstance(assessment, dict) or assessment.get("alignment") not in ("aligned", "partial", "missing", "contradicted") or not isinstance(assessment.get("initiating_cause_found"), bool) or not isinstance(assessment.get("downstream_treated_as_primary"), bool) or not isinstance(assessment.get("required_chain_coverage"), list) or not all(isinstance(value, str) for value in assessment["required_chain_coverage"]):
+            raise ReportError("blind score causal assessment is incomplete")
+        coverage = set(assessment["required_chain_coverage"])
+        if not coverage.issubset(required_ids):
+            raise ReportError("blind score causal coverage contains an unknown reference id")
+        diagnosis_value = values.get("diagnosis")
+        if diagnosis_value == 2 and (assessment["alignment"] != "aligned" or not assessment["initiating_cause_found"] or assessment["downstream_treated_as_primary"] or coverage != required_ids):
+            raise ReportError("full diagnosis credit requires complete reference-aligned causal coverage")
         total = 0
         runtime = runtime_by_key[key]
         for dimension in dimensions:
@@ -665,7 +723,7 @@ def load_blind_quality(map_path: str, scores_path: str, keys: list[tuple[str, in
         and summary["agent_sandbox"]["dimension_averages"]["diagnosis"] + 0.2
         >= summary["inprocess"]["dimension_averages"]["diagnosis"]
     )
-    return {"status": "scored", "complete": True, "passed": passed, "rubric_version": rubric_version, "score_max": score_max, "dimensions": dimensions, "arms": summary}
+    return {"status": "scored", "complete": True, "passed": passed, "rubric_version": rubric_version, "score_max": score_max, "dimensions": dimensions, "packet_set_sha256": packet_hash, "reference_set_sha256": reference_hash, "score_set_sha256": score_hash, "arms": summary}
 
 
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
@@ -674,18 +732,24 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     inprocess = index_records(inprocess_records, "inprocess")
     sandbox = index_records(sandbox_records, "sandbox")
     keys = validate_pairs(inprocess, sandbox)
-    holdouts_ok, holdout_counts = validate_holdouts(keys, args.holdout_case)
+    holdouts_ok, holdout_counts = validate_holdouts(keys, args.holdout_case, args.required_repetitions)
     inprocess_summary = inprocess_metrics([inprocess[key] for key in keys])
     sandbox_summary = sandbox_metrics([sandbox[key] for key in keys])
     simplicity = simplicity_metrics(args.repo)
     rubric_version = inprocess[keys[0]]["human_score_rubric_version"]
     score_max = inprocess[keys[0]]["human_score_max"]
     dimensions = inprocess[keys[0]]["human_score_dimensions"]
+    references: dict[str, dict[str, Any]] = {}
+    reference_hash = ""
+    if args.blind_packets or args.blind_map or args.blind_scores:
+        references, reference_hash = load_case_references(args.reference_manifest, {key[0] for key in keys})
     blind_quality = {"status": "not_scored", "complete": False, "passed": False, "rubric_version": rubric_version, "score_max": score_max, "dimensions": dimensions}
     if args.blind_scores:
-        if not args.blind_map_input:
-            raise ReportError("--blind-scores requires --blind-map-input")
-        blind_quality = load_blind_quality(args.blind_map_input, args.blind_scores, keys, inprocess, sandbox, rubric_version, score_max, dimensions)
+        if not args.blind_map_input or not args.score_freeze:
+            raise ReportError("--blind-scores requires --blind-map-input and --score-freeze")
+        if args.blind_map:
+            raise ReportError("blind map generation and score unblinding must be separate operations")
+        blind_quality = load_blind_quality(args.blind_map_input, args.blind_scores, args.score_freeze, references, reference_hash, keys, inprocess, sandbox, rubric_version, score_max, dimensions)
     criteria = evaluate_criteria(inprocess_summary, sandbox_summary, simplicity, len(keys), args.expected_pairs, holdouts_ok, blind_quality)
     report = {
         "version": 1,
@@ -713,7 +777,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     if args.blind_packets or args.blind_map:
         if not args.blind_packets or not args.blind_map:
             raise ReportError("--blind-packets and --blind-map must be provided together")
-        write_blind_packets(args.blind_packets, args.blind_map, keys, inprocess, sandbox)
+        write_blind_packets(args.blind_packets, args.blind_map, references, reference_hash, keys, inprocess, sandbox)
         report["blind_packets_written"] = True
     return report
 

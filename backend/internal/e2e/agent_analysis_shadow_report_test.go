@@ -226,7 +226,7 @@ func TestAgentAnalysisShadowReportRejectsPairMismatches(t *testing.T) {
 		{name: "stable id", field: "stable_id", value: strings.Repeat("b", 20)},
 		{name: "evidence stage hash", field: "evidence_stage_sha256", value: strings.Repeat("c", 64)},
 		{name: "source revision", field: "source_revision", value: strings.Repeat("a", 40)},
-		{name: "rubric version", field: "human_score_rubric_version", value: 2},
+		{name: "rubric version", field: "human_score_rubric_version", value: benchmarkHumanScoreRubricVersion + 1},
 		{name: "rubric maximum", field: "human_score_max", value: 20},
 		{name: "rubric dimensions", field: "human_score_dimensions", value: []string{"diagnosis", "remediation"}},
 		{name: "signal total", field: "signal_total", value: 4},
@@ -472,7 +472,7 @@ func validShadowReportRecords() (map[string]any, map[string]any) {
 		"evidence_stage_ids":         benchmarkEvidenceStageIDs(stageGroups),
 		"source_revision":            "456789abcdef0123456789abcdef0123456789ab",
 		"signal_total":               3,
-		"human_score_rubric_version": 1,
+		"human_score_rubric_version": benchmarkHumanScoreRubricVersion,
 		"human_score_max":            10,
 		"human_score_dimensions":     dimensions,
 	}
