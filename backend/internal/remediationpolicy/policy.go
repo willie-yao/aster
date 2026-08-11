@@ -139,7 +139,7 @@ func hasUnnegatedHardDeliveryLoss(value string) bool {
 	if strings.Contains(value, "not a single") {
 		return true
 	}
-	if strings.Contains(value, "no longer") && !containsAny(value, "no longer blocked", "no longer disabled", "no longer prevented") {
+	if strings.Contains(value, "no longer") && !noLongerDeliveryRestoration(words) {
 		return true
 	}
 	for i, word := range words {
@@ -155,9 +155,27 @@ func hasUnnegatedHardDeliveryLoss(value string) bool {
 	return false
 }
 
+func noLongerDeliveryRestoration(words []string) bool {
+	for i := 0; i+1 < len(words); i++ {
+		if words[i] != "no" || words[i+1] != "longer" {
+			continue
+		}
+		end := i + 6
+		if end > len(words) {
+			end = len(words)
+		}
+		for _, word := range words[i+2 : end] {
+			if containsAny(word, "block", "disabl", "prevent", "suppress") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func deliveryLossPreventedBefore(words []string, loss int) bool {
 	for i := loss - 1; i >= 0; i-- {
-		if containsWord([]string{words[i]}, "and", "but", "then", "while", "after", "before") {
+		if containsWord([]string{words[i]}, "and", "but", "then", "while", "after", "before", "by") {
 			return false
 		}
 		if containsWord([]string{words[i]},
@@ -253,8 +271,9 @@ func nearAny(left, right []int, distance int) bool {
 func unsafeDirectConversionOperation(clause string) bool {
 	for _, match := range directConversionOperationRe.FindAllStringSubmatchIndex(clause, -1) {
 		operation := strings.ToLower(clause[match[2]:match[3]])
-		if negatedDirectConversionOperation(clause[:match[0]]) {
-			if destructiveActionWord(operation) {
+		prefix := clause[:match[0]]
+		if negatedDirectConversionOperation(prefix) {
+			if destructiveActionWord(operation) || preservingOperationWord(operation) && negatedPreservationInterruption(prefix) {
 				continue
 			}
 			return true
@@ -334,6 +353,9 @@ func safeConversionStatePhrase(words []string) bool {
 			if i+1 < len(words) && (safeAvailabilityWord(words[i+1]) || safeQualifierWord(words[i+1])) {
 				continue
 			}
+			if transition := conversionStateTransition(words[i+1:]); transition >= 0 && transition <= 1 {
+				return safe && safeConversionStatePhrase(words[i+1+transition:])
+			}
 			break
 		}
 		if containsWord([]string{word}, "unavailable", "unreachable", "offline", "purged", "decommissioned", "erased", "disabled", "removed", "bypassed", "none") {
@@ -353,7 +375,13 @@ func safeConversionStatePhrase(words []string) bool {
 
 func conversionStateTransition(words []string) int {
 	for i, word := range words {
-		if containsWord([]string{word}, "becomes", "gets", "get", "turns", "remains", "stays", "continues", "will") {
+		if word == "then" && i+1 < len(words) {
+			return i + 1
+		}
+		if word == "it" && i+1 < len(words) {
+			return i + 1
+		}
+		if containsWord([]string{word}, "becomes", "gets", "get", "turns", "remains", "stays", "continues", "will") || strings.HasPrefix(word, "fail") || strings.HasPrefix(word, "crash") {
 			return i
 		}
 	}
@@ -380,6 +408,25 @@ func negatedDirectConversionOperation(prefix string) bool {
 			return false
 		}
 		if containsWord([]string{words[i]}, "avoid", "avoiding", "without", "not", "never") {
+			return true
+		}
+	}
+	return false
+}
+
+func negatedPreservationInterruption(prefix string) bool {
+	words := identifierWords(prefix)
+	start := len(words) - 6
+	if start < 0 {
+		start = 0
+	}
+	negated := false
+	for _, word := range words[start:] {
+		if containsWord([]string{word}, "not", "never") {
+			negated = true
+			continue
+		}
+		if negated && containsWord([]string{word}, "fail", "fails", "failed", "failing", "stop", "stops", "stopped", "stopping") {
 			return true
 		}
 	}
