@@ -334,7 +334,10 @@ func VerifySourceWorkspace(ctx context.Context, root, revision string) error {
 			return fmt.Errorf("source workspace contains unsupported links or submodules")
 		}
 	}
-	for _, args := range [][]string{{"diff-index", "--cached", "--quiet", revision, "--"}, {"diff-files", "--quiet", "--"}} {
+	for _, args := range [][]string{
+		{"diff", "--cached", "--no-ext-diff", "--no-textconv", "--quiet", revision, "--"},
+		{"diff", "--no-ext-diff", "--no-textconv", "--quiet", "--"},
+	} {
 		if _, err := gitWorkspaceOutput(ctx, root, args...); err != nil {
 			return fmt.Errorf("source workspace tracked files changed")
 		}
