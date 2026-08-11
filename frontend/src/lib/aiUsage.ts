@@ -51,6 +51,23 @@ export function nearestChartDataIndex(target: number, available: number[]): numb
   if (available.length === 0) return null;
   return available.reduce((nearest, index) => Math.abs(index - target) < Math.abs(nearest - target) ? index : nearest, available[0]);
 }
+export function chartViewBoxLayout(viewportWidth: number, viewportHeight: number, viewBoxWidth: number, viewBoxHeight: number): { scale: number; offsetX: number; offsetY: number } {
+  if (viewportWidth <= 0 || viewportHeight <= 0 || viewBoxWidth <= 0 || viewBoxHeight <= 0) {
+    return { scale: 1, offsetX: 0, offsetY: 0 };
+  }
+  const scale = Math.min(viewportWidth / viewBoxWidth, viewportHeight / viewBoxHeight);
+  return {
+    scale,
+    offsetX: (viewportWidth - viewBoxWidth * scale) / 2,
+    offsetY: (viewportHeight - viewBoxHeight * scale) / 2,
+  };
+}
+export function chartViewBoxPoint(viewportX: number, viewportY: number, layout: ReturnType<typeof chartViewBoxLayout>): { x: number; y: number } {
+  return { x: (viewportX - layout.offsetX) / layout.scale, y: (viewportY - layout.offsetY) / layout.scale };
+}
+export function chartViewportX(viewBoxX: number, layout: ReturnType<typeof chartViewBoxLayout>): number {
+  return layout.offsetX + viewBoxX * layout.scale;
+}
 export function chartScale(max: number, hasData: boolean): { ticks: number[]; max: number } {
   if (!hasData) return { ticks: [], max: 0 };
   if (!Number.isFinite(max) || max <= 0) return { ticks: [0, 0.01], max: 0.01 };

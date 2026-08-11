@@ -30,6 +30,9 @@ import {
   chartDateTickIndexes,
   chartScale,
   chartSeriesDescription,
+  chartViewBoxLayout,
+  chartViewBoxPoint,
+  chartViewportX,
   featureLabels,
   formatChartCost,
   formatCost,
@@ -145,6 +148,7 @@ function chartDateLabel(date: string): string {
 
 function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCurrency: boolean }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [tooltipLeft, setTooltipLeft] = useState<number | null>(null);
   const width = 960; const height = 270;
   const plot = { left: 70, right: 18, top: 24, bottom: 42 };
   const plotWidth = width - plot.left - plot.right; const plotHeight = height - plot.top - plot.bottom;
@@ -168,20 +172,39 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
   const activeDay = selectedIndex === null ? null : days[selectedIndex];
   const activeX = selectedIndex === null ? null : xForIndex(selectedIndex);
   const tooltipTransform = selectedIndex !== null && selectedIndex <= Math.max(1, days.length * .2) ? "translateX(0)" : selectedIndex !== null && selectedIndex >= days.length * .8 ? "translateX(-100%)" : "translateX(-50%)";
+  const clearActiveDay = () => {
+    setActiveIndex(null);
+    setTooltipLeft(null);
+  };
+  const selectDay = (index: number | null, svg: SVGSVGElement) => {
+    setActiveIndex(index);
+    if (index === null) {
+      setTooltipLeft(null);
+      return;
+    }
+    const bounds = svg.getBoundingClientRect();
+    const layout = chartViewBoxLayout(bounds.width, bounds.height, width, height);
+    setTooltipLeft(chartViewportX(xForIndex(index), layout));
+  };
   const selectPointerDay = (event: PointerEvent<SVGSVGElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
-    const svgX = (event.clientX - bounds.left) / bounds.width * width;
+    const layout = chartViewBoxLayout(bounds.width, bounds.height, width, height);
+    const { x: svgX, y: svgY } = chartViewBoxPoint(event.clientX - bounds.left, event.clientY - bounds.top, layout);
+    if (svgX < 0 || svgX > width || svgY < 0 || svgY > height) {
+      clearActiveDay();
+      return;
+    }
     const target = days.length <= 1 ? 0 : Math.round(Math.max(0, Math.min(plotWidth, svgX - plot.left)) / plotWidth * (days.length - 1));
-    setActiveIndex(nearestChartDataIndex(target, availableIndexes));
+    selectDay(nearestChartDataIndex(target, availableIndexes), event.currentTarget);
   };
   const selectKeyboardDay = (event: KeyboardEvent<SVGSVGElement>) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const position = selectedIndex === null ? -1 : availableIndexes.indexOf(selectedIndex);
-    if (event.key === "Home") setActiveIndex(availableIndexes[0] ?? null);
-    else if (event.key === "End") setActiveIndex(availableIndexes.at(-1) ?? null);
-    else if (event.key === "ArrowLeft") setActiveIndex(availableIndexes[Math.max(0, position < 0 ? availableIndexes.length - 1 : position - 1)] ?? null);
-    else setActiveIndex(availableIndexes[Math.min(availableIndexes.length - 1, position < 0 ? 0 : position + 1)] ?? null);
+    if (event.key === "Home") selectDay(availableIndexes[0] ?? null, event.currentTarget);
+    else if (event.key === "End") selectDay(availableIndexes.at(-1) ?? null, event.currentTarget);
+    else if (event.key === "ArrowLeft") selectDay(availableIndexes[Math.max(0, position < 0 ? availableIndexes.length - 1 : position - 1)] ?? null, event.currentTarget);
+    else selectDay(availableIndexes[Math.min(availableIndexes.length - 1, position < 0 ? 0 : position + 1)] ?? null, event.currentTarget);
   };
   if (availableIndexes.length === 0) return <Box sx={{ py: 5, textAlign: "center" }}><Typography color="text.secondary">No comparable single-currency daily cost values are available in this range.</Typography>{currencyPolicy.note && <Typography variant="caption" color="text.secondary">{currencyPolicy.note}</Typography>}</Box>;
   return <Box>
@@ -190,13 +213,14 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
         <Box
           component="svg"
         viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="xMidYMid meet"
         role="img"
         tabIndex={0}
         aria-labelledby="daily-cost-chart-title daily-cost-chart-desc"
         onPointerMove={selectPointerDay}
-        onPointerLeave={() => setActiveIndex(null)}
-        onFocus={() => setActiveIndex((currentIndex) => currentIndex !== null && availableIndexes.includes(currentIndex) ? currentIndex : availableIndexes.at(-1) ?? null)}
-        onBlur={() => setActiveIndex(null)}
+        onPointerLeave={clearActiveDay}
+        onFocus={(event) => selectDay(activeIndex !== null && availableIndexes.includes(activeIndex) ? activeIndex : availableIndexes.at(-1) ?? null, event.currentTarget)}
+        onBlur={clearActiveDay}
         onKeyDown={selectKeyboardDay}
         sx={{ width: "100%", height: { xs: 230, md: 285 }, display: "block", borderRadius: 1, outline: "none", "&:focus-visible": { boxShadow: "0 0 0 2px var(--mui-palette-primary-main)" } }}
       >
@@ -221,7 +245,7 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
         {selectedIndex !== null && recorded[selectedIndex] !== null && <circle cx={activeX ?? 0} cy={yForValue(recorded[selectedIndex] ?? 0)} r="7" fill="var(--mui-palette-background-paper)" stroke="var(--mui-palette-primary-main)" strokeWidth="3" />}
         {selectedIndex !== null && current[selectedIndex] !== null && <rect x={(activeX ?? 0) - 6.5} y={yForValue(current[selectedIndex] ?? 0) - 6.5} width="13" height="13" fill="var(--mui-palette-background-paper)" stroke="var(--mui-palette-warning-main)" strokeWidth="3" />}
         </Box>
-        {activeDay && activeX !== null && <Box role="status" aria-live="polite" sx={{ position: "absolute", top: 22, left: `${activeX / width * 100}%`, transform: tooltipTransform, minWidth: 210, maxWidth: 270, p: 1.25, borderRadius: 1.25, border: "1px solid", borderColor: "divider", bgcolor: "background.paper", boxShadow: 6, pointerEvents: "none", zIndex: 1 }}>
+        {activeDay && tooltipLeft !== null && <Box role="status" aria-live="polite" sx={{ position: "absolute", top: 22, left: tooltipLeft, transform: tooltipTransform, minWidth: 210, maxWidth: 270, p: 1.25, borderRadius: 1.25, border: "1px solid", borderColor: "divider", bgcolor: "background.paper", boxShadow: 6, pointerEvents: "none", zIndex: 1 }}>
         <Typography variant="subtitle2" sx={{ fontFamily: "monospace" }}>{activeDay.date} UTC{activeDay.current_partial_utc ? " · Partial UTC day" : ""}</Typography>
         {recordedPath && <Typography variant="caption" component="div" sx={{ mt: .5 }}><Box component="span" sx={{ color: "primary.main" }}>●</Box> Recorded: {recordedCost(activeDay)}</Typography>}
         {currentPath && <Typography variant="caption" component="div"><Box component="span" sx={{ color: "warning.main" }}>■</Box> Current rate: {currentRateCost(activeDay)}</Typography>}

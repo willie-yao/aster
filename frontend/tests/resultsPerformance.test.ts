@@ -100,6 +100,9 @@ test("AI usage labels cost and token coverage accurately", () => {
   assert.match(page, /role="img"/);
   assert.match(page, /aria-labelledby="daily-cost-chart-title daily-cost-chart-desc"/);
   assert.match(page, /onPointerMove=\{selectPointerDay\}/);
+  assert.match(page, /preserveAspectRatio="xMidYMid meet"/);
+  assert.match(page, /chartViewBoxLayout\(bounds\.width, bounds\.height, width, height\)/);
+  assert.match(page, /chartViewBoxPoint\(event\.clientX - bounds\.left, event\.clientY - bounds\.top, layout\)/);
   assert.match(page, /onKeyDown=\{selectKeyboardDay\}/);
   assert.match(page, /Recorded estimate \(solid\)/);
   assert.match(page, /Current-rate estimate \(dashed\)/);

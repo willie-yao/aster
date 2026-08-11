@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import {
-  chartCurrencyPolicy, chartDateTickIndexes, chartScale, chartSeriesDescription,
+  chartCurrencyPolicy, chartDateTickIndexes, chartScale, chartSeriesDescription, chartViewBoxLayout,
+  chartViewBoxPoint, chartViewportX,
   chartTickValues, formatChartCost, formatCost, formatCoverage, formatExactCost,
   formatExactTokens, formatTokens, nearestChartDataIndex,
   pricedRequestCoverageNote, totalTokens, uncachedInputTokens, usageQuery,
@@ -46,6 +47,14 @@ test("daily cost chart preserves zero values and separates currencies", () => {
     showCurrent: true,
     note: "Recorded series omitted because recorded estimates contain multiple currencies.",
   });
+});
+
+test("daily cost chart maps the rendered view box inside letterboxed containers", () => {
+  const wideLayout = chartViewBoxLayout(1600, 270, 960, 270);
+  assert.deepEqual(wideLayout, { scale: 1, offsetX: 320, offsetY: 0 });
+  assert.deepEqual(chartViewBoxPoint(560, 135, wideLayout), { x: 240, y: 135 });
+  assert.equal(chartViewportX(240, wideLayout), 560);
+  assert.deepEqual(chartViewBoxLayout(960, 540, 960, 270), { scale: 1, offsetX: 0, offsetY: 135 });
 });
 
 test("daily cost chart descriptions match visible series", () => {
