@@ -1,5 +1,20 @@
 export type Action = "create-issue" | "propose-fix";
 
+export type ActionReasonCode =
+  | "actionable"
+  | "recovered"
+  | "observing"
+  | "verified_fixed"
+  | "retained_stale"
+  | "non_systemic"
+  | "evidence_unavailable"
+  | "investigation_required"
+  | "contract_generation_failed"
+  | "unsafe_remediation"
+  | "already_present"
+  | "source_verification_inconclusive"
+  | "generation_failed";
+
 export interface ActionEligibility {
   state:
     | "actionable"
@@ -7,6 +22,7 @@ export interface ActionEligibility {
     | "already_present"
     | "recovered"
     | "more_evidence_required";
+  code?: ActionReasonCode;
   reason: string;
 }
 
@@ -24,6 +40,7 @@ export type RequestStage = "verifying_remediation" | "drafting";
 
 export interface ActionVerification {
   state: "unresolved" | "already_present" | "inconclusive";
+  code?: ActionReasonCode;
   reason: string;
 }
 
@@ -49,6 +66,7 @@ export interface ActionRequest {
   updated_at: string;
   expires_at: string;
   error?: string;
+  reason_code?: ActionReasonCode;
   warning?: string;
   result_url?: string;
   superseded_by?: string;

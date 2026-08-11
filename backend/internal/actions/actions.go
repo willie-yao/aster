@@ -136,13 +136,14 @@ const (
 
 // ActionSubject is one current published analysis eligible for a preview.
 type ActionSubject struct {
-	Kind        actionSubjectKind
-	ID          string
-	ContentHash string
-	Pattern     *models.PatternAnalysis
-	Build       *BuildActionSubject
-	SourceFiles []string
-	PolicyText  string
+	Kind           actionSubjectKind
+	ID             string
+	ContentHash    string
+	Pattern        *models.PatternAnalysis
+	PatternRefresh *models.PatternRefreshStatus
+	Build          *BuildActionSubject
+	SourceFiles    []string
+	PolicyText     string
 }
 
 // BuildActionSubject is one analyzed build failure without a JUnit assertion.
@@ -261,16 +262,26 @@ func (s *Service) aiCompleter() repotemplate.Completer {
 	return c
 }
 
-// findPattern resolves a failure id to its PatternAnalysis by scanning the
-// published per-job details.
+// findPattern resolves a current failure id to its PatternAnalysis.
 func (s *Service) findPattern(id string) (*models.PatternAnalysis, error) {
+	pattern, refresh, err := s.findPatternRecord(id)
+	if err != nil {
+		return nil, err
+	}
+	if code := patternRefreshReasonCode(refresh); code != "" {
+		return nil, withReason(code, ErrRemediationInconclusive, "")
+	}
+	return pattern, nil
+}
+
+func (s *Service) findPatternRecord(id string) (*models.PatternAnalysis, *models.PatternRefreshStatus, error) {
 	if strings.TrimSpace(id) == "" {
-		return nil, ErrNotFound
+		return nil, nil, ErrNotFound
 	}
 	jobsDir := filepath.Join(s.dataDir, "jobs")
 	entries, err := os.ReadDir(jobsDir)
 	if err != nil {
-		return nil, fmt.Errorf("reading job details: %w", err)
+		return nil, nil, fmt.Errorf("reading job details: %w", err)
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
@@ -286,23 +297,48 @@ func (s *Service) findPattern(id string) (*models.PatternAnalysis, error) {
 		}
 		for i := range detail.PatternAnalyses {
 			if detail.PatternAnalyses[i].ID != "" && detail.PatternAnalyses[i].ID == id {
-				if detail.PatternRefresh != nil && (detail.PatternRefresh.State != models.PatternRefreshCurrent || !detail.PatternRefresh.EvidenceAvailable) {
-					return nil, fmt.Errorf("failure %s is not actionable with stale pattern evidence", id)
+				pattern := detail.PatternAnalyses[i]
+				var refresh *models.PatternRefreshStatus
+				if detail.PatternRefresh != nil {
+					copy := *detail.PatternRefresh
+					refresh = &copy
 				}
-				return &detail.PatternAnalyses[i], nil
+				return &pattern, refresh, nil
 			}
 		}
 	}
-	return nil, ErrNotFound
+	return nil, nil, ErrNotFound
+}
+
+func patternRefreshReasonCode(refresh *models.PatternRefreshStatus) ReasonCode {
+	if refresh == nil {
+		return ""
+	}
+	switch refresh.State {
+	case models.PatternRefreshCurrent:
+		if !refresh.EvidenceAvailable {
+			return ReasonEvidenceUnavailable
+		}
+		return ""
+	case models.PatternRefreshRetained:
+		return ReasonRetainedStale
+	case models.PatternRefreshFailed, models.PatternRefreshUnavailable:
+		return ReasonContractGenerationFailed
+	default:
+		return ReasonEvidenceUnavailable
+	}
 }
 
 func (s *Service) resolveSubject(id string) (*ActionSubject, error) {
 	if !strings.HasPrefix(id, "build::") {
-		pattern, err := s.findPattern(id)
+		pattern, refresh, err := s.findPatternRecord(id)
 		if err != nil {
 			return nil, err
 		}
-		return &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: pattern}, nil
+		if code := patternRefreshReasonCode(refresh); code != "" {
+			return nil, withReason(code, ErrRemediationInconclusive, "")
+		}
+		return &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: pattern, PatternRefresh: refresh}, nil
 	}
 	parts := strings.Split(id, "::")
 	if len(parts) != 3 || parts[0] != "build" {
@@ -349,6 +385,17 @@ func (s *Service) resolveSubject(id string) (*ActionSubject, error) {
 		}
 	}
 	return nil, ErrNotFound
+}
+
+func (s *Service) resolveSubjectForEligibility(id string) (*ActionSubject, error) {
+	if strings.HasPrefix(id, "build::") {
+		return s.resolveSubject(id)
+	}
+	pattern, refresh, err := s.findPatternRecord(id)
+	if err != nil {
+		return nil, err
+	}
+	return &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: pattern, PatternRefresh: refresh}, nil
 }
 
 func buildSubjectHash(subject *BuildActionSubject) string {
@@ -563,66 +610,55 @@ func (s *Service) verifyOptionalRemediation(ctx context.Context, subject *Action
 
 func (s *Service) verifyRemediationProposal(ctx context.Context, subject *ActionSubject, override string) error {
 	patternSubject := subject != nil && subject.Kind == actionSubjectPattern && subject.Pattern != nil
-	if patternSubject && !models.PatternIsActive(*subject.Pattern) {
-		reason := inactivePatternReason(subject.Pattern)
-		if models.PatternIsRecovered(*subject.Pattern) {
-			if err := s.setRequestVerification(ctx, actionverify.StateInconclusive, reason); err != nil {
-				return fmt.Errorf("%w: lifecycle verification result could not be persisted: %v", ErrRemediationInconclusive, err)
-			}
-			return fmt.Errorf("%w: %s", ErrRemediationInconclusive, reason)
+	if code, reason := subjectEligibilityReason(subject); code != "" {
+		if strings.TrimSpace(reason) == "" {
+			reason = ReasonMessage(code)
 		}
-		if err := s.setRequestVerification(ctx, actionverify.StateAlreadyPresent, reason); err != nil {
-			return fmt.Errorf("%w: lifecycle verification result could not be persisted: %v", ErrRemediationAlreadyPresent, err)
+		state := verificationStateForCode(code)
+		if err := s.setRequestVerification(ctx, state, code, reason); err != nil {
+			return withReason(ReasonGenerationFailed, ErrRemediationInconclusive, "eligibility result could not be persisted")
 		}
-		return fmt.Errorf("%w: %s", ErrRemediationAlreadyPresent, reason)
+		cause := ErrRemediationInconclusive
+		if state == actionverify.StateAlreadyPresent {
+			cause = ErrRemediationAlreadyPresent
+		}
+		return withReason(code, cause, reason)
 	}
-	if patternSubject {
+	if patternSubject && strings.TrimSpace(override) != "" {
 		policyText := strings.Join([]string{
 			subject.Pattern.SuggestedFix, subject.Pattern.SharedRootCause, subject.Pattern.Summary,
 			subject.PolicyText, override,
 		}, "\n")
-		if reason := remediationpolicy.Reason(policyText, subject.Pattern.RemediationTargets); reason != "" {
-			if err := s.setRequestVerification(ctx, actionverify.StateInconclusive, reason); err != nil {
-				return fmt.Errorf("%w: remediation policy result could not be persisted: %v", ErrRemediationInconclusive, err)
+		if remediationpolicy.Reason(policyText, subject.Pattern.RemediationTargets) != "" {
+			reason := ReasonMessage(ReasonUnsafeRemediation)
+			if err := s.setRequestVerification(ctx, actionverify.StateInconclusive, ReasonUnsafeRemediation, reason); err != nil {
+				return withReason(ReasonGenerationFailed, ErrRemediationInconclusive, "remediation policy result could not be persisted")
 			}
-			return fmt.Errorf("%w: %s", ErrRemediationInconclusive, reason)
+			return withReason(ReasonUnsafeRemediation, ErrRemediationInconclusive, reason)
 		}
 	}
-	if subject == nil || s.sourceVerifier == nil {
+	if subject == nil || s.sourceVerifier == nil || s.cfg == nil {
 		return nil
 	}
-	if s.cfg == nil {
-		return nil
-	}
-	inconclusive := func(reason string, cause error) error {
-		if err := s.setRequestVerification(ctx, actionverify.StateInconclusive, reason); err != nil {
-			return fmt.Errorf("%w: source verification result could not be persisted: %v", ErrRemediationInconclusive, err)
+	inconclusive := func(code ReasonCode, reason string, cause error) error {
+		if strings.TrimSpace(reason) == "" {
+			reason = ReasonMessage(code)
 		}
-		if cause != nil {
-			return fmt.Errorf("%w: %s: %w", ErrRemediationInconclusive, reason, cause)
+		if err := s.setRequestVerification(ctx, actionverify.StateInconclusive, code, reason); err != nil {
+			return withReason(ReasonGenerationFailed, ErrRemediationInconclusive, "source verification result could not be persisted")
 		}
-		return fmt.Errorf("%w: %s", ErrRemediationInconclusive, reason)
+		return withReason(code, ErrRemediationInconclusive, reason)
 	}
 	repo := s.cfg.EffectiveAnalysisSourceRepo()
-	if patternSubject && len(subject.Pattern.RemediationTargets) == 0 {
-		return inconclusive("recurring pattern does not include structured remediation targets", nil)
-	}
-	if patternSubject {
-		for _, target := range subject.Pattern.RemediationTargets {
-			if reason := actionverify.PatternTargetReason(target); reason != "" {
-				return inconclusive(reason, nil)
-			}
-		}
-	}
 	structured := patternSubject
 	if repo.Owner == "" && repo.Name == "" {
 		if structured {
-			return inconclusive("configured source repository is unavailable for structured remediation verification", nil)
+			return inconclusive(ReasonSourceVerificationInconclusive, "", nil)
 		}
 		return nil
 	}
 	if repo.Owner == "" || repo.Name == "" {
-		return inconclusive("configured source repository is incomplete", nil)
+		return inconclusive(ReasonSourceVerificationInconclusive, "", nil)
 	}
 	var revision, proposal string
 	var files []string
@@ -632,14 +668,14 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 		targets = append([]models.RemediationTarget(nil), subject.Pattern.RemediationTargets...)
 		destination, targetRevision, destinationErr := s.fixDestinationForPattern(*subject.Pattern)
 		if destinationErr != nil {
-			return inconclusive("remediation repository is not allowed", destinationErr)
+			return inconclusive(ReasonSourceVerificationInconclusive, "remediation repository is not allowed", destinationErr)
 		}
 		if targetRevision != "" {
 			repo, revision = destination.Repo, targetRevision
 		} else {
 			if sourceRepo, sourceRevision, ok := strings.Cut(revision, "@"); ok {
 				if !strings.EqualFold(sourceRepo, repo.Owner+"/"+repo.Name) {
-					return inconclusive("grounded repository does not match configured source", nil)
+					return inconclusive(ReasonSourceVerificationInconclusive, "grounded repository does not match configured source", nil)
 				}
 				revision = sourceRevision
 			}
@@ -651,7 +687,7 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 	} else if subject.Build != nil && subject.Build.Failure.AIAnalysis != nil {
 		source, ok := ai.ResolveBuildSource(subject.Build.Build, repo.Owner, repo.Name)
 		if !ok {
-			return inconclusive("build source repository revision could not be resolved", nil)
+			return inconclusive(ReasonSourceVerificationInconclusive, "build source repository revision could not be resolved", nil)
 		}
 		revision, proposal = source.Revision, subject.Build.Failure.AIAnalysis.SuggestedFix
 		files = verifiedSourceFiles(subject.Build.Failure.AIAnalysis.FileLinks, repo.Owner, repo.Name, revision)
@@ -661,7 +697,7 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 		targets = nil
 	}
 	if !regexp.MustCompile(`^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`).MatchString(strings.TrimSpace(revision)) {
-		return inconclusive("source revision is not an immutable full commit", nil)
+		return inconclusive(ReasonSourceVerificationInconclusive, "source revision is not an immutable full commit", nil)
 	}
 	revision = strings.ToLower(revision)
 	slices.Sort(files)
@@ -669,22 +705,29 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 	rawReader := ai.NewGitHubRepoReader(repo.Owner, repo.Name, revision, s.ai.SourceToken)
 	reader, ok := rawReader.(actionverify.Reader)
 	if !ok {
-		return inconclusive("pinned source archive reader is unavailable", nil)
+		return inconclusive(ReasonSourceVerificationInconclusive, "pinned source archive reader is unavailable", nil)
 	}
 	result, err := s.sourceVerifier(ctx, reader, actionverify.Input{Proposal: proposal, RelevantFiles: files, Targets: targets})
 	if err != nil {
-		return inconclusive("pinned source could not be checked", err)
+		return inconclusive(ReasonSourceVerificationInconclusive, "pinned source could not be checked", err)
 	}
-	if err := s.setRequestVerification(ctx, result.State, result.Reason); err != nil {
-		return fmt.Errorf("%w: source verification result could not be persisted: %v", ErrRemediationInconclusive, err)
+	code := ReasonActionable
+	switch result.State {
+	case actionverify.StateAlreadyPresent:
+		code = ReasonAlreadyPresent
+	case actionverify.StateInconclusive:
+		code = ReasonSourceVerificationInconclusive
+	}
+	if err := s.setRequestVerification(ctx, result.State, code, result.Reason); err != nil {
+		return withReason(ReasonGenerationFailed, ErrRemediationInconclusive, "source verification result could not be persisted")
 	}
 	switch result.State {
 	case actionverify.StateUnresolved:
 		return nil
 	case actionverify.StateAlreadyPresent:
-		return fmt.Errorf("%w: %s; check whether the pattern is stale, regressed, or misclassified", ErrRemediationAlreadyPresent, result.Reason)
+		return withReason(ReasonAlreadyPresent, ErrRemediationAlreadyPresent, result.Reason)
 	default:
-		return fmt.Errorf("%w: %s; investigate the pinned source before filing", ErrRemediationInconclusive, result.Reason)
+		return withReason(ReasonSourceVerificationInconclusive, ErrRemediationInconclusive, result.Reason)
 	}
 }
 
@@ -894,7 +937,7 @@ func (s *Service) PreviewIssue(ctx context.Context, failureID, owner, writeToken
 	}
 	preview, err = validatedPreviewEntry(entry)
 	if err != nil {
-		return PreviewResult{}, fmt.Errorf("%w: generated draft did not pass safety validation", ErrPreviewRejected)
+		return PreviewResult{}, withReason(previewValidationReasonCode(err), ErrPreviewRejected, "")
 	}
 	token, err := s.stash(owner, entry)
 	if err != nil {
@@ -1088,7 +1131,7 @@ func (s *Service) PreviewFix(ctx context.Context, failureID, owner, writeToken, 
 	}
 	preview, err = validatedPreviewEntry(entry)
 	if err != nil {
-		return PreviewResult{}, fmt.Errorf("%w: generated draft did not pass safety validation", ErrPreviewRejected)
+		return PreviewResult{}, withReason(previewValidationReasonCode(err), ErrPreviewRejected, "")
 	}
 	token, err := s.stash(owner, entry)
 	if err != nil {
@@ -1120,7 +1163,7 @@ func (s *Service) PreviewFixWithContext(
 	}
 	preview, err = validatedPreviewEntry(entry)
 	if err != nil {
-		return PreviewResult{}, fmt.Errorf("%w: generated draft did not pass safety validation", ErrPreviewRejected)
+		return PreviewResult{}, withReason(previewValidationReasonCode(err), ErrPreviewRejected, "")
 	}
 	token, err := s.stash(owner, entry)
 	if err != nil {
@@ -1148,7 +1191,7 @@ func (s *Service) Confirm(ctx context.Context, token, owner, writeToken string) 
 	if !reconcile {
 		if _, validateErr := validatedPreviewEntry(entry); validateErr != nil {
 			_ = s.previewStore.discard(owner, token, attemptID)
-			return "", fmt.Errorf("%w: saved draft did not pass safety validation", ErrPreviewRejected)
+			return "", withReason(previewValidationReasonCode(validateErr), ErrPreviewRejected, "")
 		}
 	}
 	if !reconcile && (entry.failureID != "" || entry.patternHash != "") {

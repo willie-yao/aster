@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
@@ -1394,5 +1395,72 @@ func TestConversionPolicyRejectsRestoredAndConfirmedAsyncFix(t *testing.T) {
 				t.Fatalf("ConfirmRequest unsafe fix error = %v", err)
 			}
 		})
+	}
+}
+
+func TestAsyncRequestPersistsStructuredReasonCode(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	dataDir := t.TempDir()
+	pattern := models.PatternAnalysis{
+		JobID: "periodic-inconclusive", Systemic: true, SuggestedFix: "Add Fix.", SourceRef: "example/repo@" + revision,
+		RemediationTargets: []models.RemediationTarget{{Intent: models.RemediationIntentAddSymbol, Symbol: "Fix", Path: "fix.go"}},
+		FileLinks:          map[string]string{"fix.go": "https://github.com/example/repo/blob/" + revision + "/fix.go"},
+	}
+	models.AssignPatternIdentity(&pattern)
+	writeJobDetail(t, dataDir, "periodic-inconclusive.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
+	service := NewService(&project.Config{
+		Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}},
+		AI:     &project.AI{SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"}},
+	}, dataDir, AIConfig{})
+	service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
+		return actionverify.Result{State: actionverify.StateInconclusive, Reason: "not proven"}, nil
+	}
+	created, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := waitRequest(t, service, created.ID, "alice", RequestFailed)
+	if failed.ReasonCode != ReasonSourceVerificationInconclusive || failed.Error != ReasonMessage(ReasonSourceVerificationInconclusive) || failed.Verification == nil || failed.Verification.Code != ReasonSourceVerificationInconclusive {
+		t.Fatalf("failed=%+v", failed)
+	}
+	reloaded := NewService(service.cfg, dataDir, AIConfig{})
+	got, err := reloaded.GetRequest(created.ID, "alice")
+	if err != nil || got.ReasonCode != ReasonSourceVerificationInconclusive || got.Verification == nil || got.Verification.Code != ReasonSourceVerificationInconclusive {
+		t.Fatalf("reloaded=%+v err=%v", got, err)
+	}
+}
+
+func TestCreateRequestRejectsDeterministicBlockedReasonBeforePersistence(t *testing.T) {
+	dataDir := t.TempDir()
+	pattern := models.PatternAnalysis{JobID: "periodic-investigate", Systemic: true, RemediationTargets: []models.RemediationTarget{{Intent: models.RemediationIntentInvestigate}}}
+	models.AssignPatternIdentity(&pattern)
+	writeJobDetail(t, dataDir, "periodic-investigate.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
+	service := NewService(&project.Config{}, dataDir, AIConfig{})
+	if _, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", ""); ReasonCodeOf(err) != ReasonInvestigationRequired {
+		t.Fatalf("error=%v code=%s", err, ReasonCodeOf(err))
+	}
+	if len(service.requests.Requests) != 0 {
+		t.Fatalf("blocked request persisted: %+v", service.requests.Requests)
+	}
+}
+
+func TestLegacyFailedRequestReasonCodesAreBackfilled(t *testing.T) {
+	dataDir := t.TempDir()
+	now := time.Now().UTC()
+	state := actionRequestState{Version: 5, Requests: map[string]*actionRequest{
+		"unsafe":  {ActionRequestView: ActionRequestView{ID: "unsafe", FailureID: "pattern", Kind: "propose-fix", Owner: "alice", Status: RequestFailed, CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339), Error: "saved draft did not pass current safety validation"}},
+		"present": {ActionRequestView: ActionRequestView{ID: "present", FailureID: "pattern", Kind: "propose-fix", Owner: "alice", Status: RequestFailed, CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339), Verification: &ActionVerificationView{State: actionverify.StateAlreadyPresent, Reason: "present"}}},
+	}}
+	if err := statefile.WritePrivateJSONDurable(filepath.Join(dataDir, "action_request_state.json"), state); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(&project.Config{}, dataDir, AIConfig{})
+	unsafe, err := service.GetRequest("unsafe", "alice")
+	if err != nil || unsafe.ReasonCode != ReasonUnsafeRemediation {
+		t.Fatalf("unsafe=%+v err=%v", unsafe, err)
+	}
+	present, err := service.GetRequest("present", "alice")
+	if err != nil || present.ReasonCode != ReasonAlreadyPresent || present.Verification == nil || present.Verification.Code != ReasonAlreadyPresent {
+		t.Fatalf("present=%+v err=%v", present, err)
 	}
 }

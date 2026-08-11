@@ -3,15 +3,18 @@ import test from "node:test";
 import {
   actionEligibilityTitle,
   buildActionEligibilityHint,
+  eligibilityForCode,
   eligibilityForState,
+  normalizeActionEligibility,
   patternActionEligibilityHint,
   patternLifecycleActive,
+  selectActionEligibility,
 } from "../src/lib/actionEligibility.js";
 
 const actionableTarget = { intent: "add_symbol" as const, path: "main.go", symbol: "MissingHelper" };
 
 test("pattern action eligibility handles deterministic blocked states", () => {
-  assert.equal(patternActionEligibilityHint(undefined)?.state, "more_evidence_required");
+  assert.equal(patternActionEligibilityHint(undefined)?.code, "contract_generation_failed");
   assert.equal(patternActionEligibilityHint([{ intent: "investigate" }])?.state, "investigation_required");
   assert.equal(patternActionEligibilityHint([{ intent: "add_symbol", path: "main.go" }])?.state, "more_evidence_required");
   assert.equal(patternActionEligibilityHint([{ intent: "modify_symbol", path: "main.go", symbol: "reconcile" }])?.state, "more_evidence_required");
@@ -56,7 +59,50 @@ test("build action eligibility requires current quality and verified files", () 
 test("action eligibility titles explain each state", () => {
   assert.equal(actionEligibilityTitle(eligibilityForState("already_present"), false), "Remediation already exists");
   assert.equal(actionEligibilityTitle(eligibilityForState("recovered"), false), "Watching recovery");
-  assert.equal(actionEligibilityTitle(eligibilityForState("more_evidence_required"), false), "More source evidence required");
+  assert.equal(actionEligibilityTitle(eligibilityForState("more_evidence_required"), false), "Current evidence unavailable");
   assert.equal(actionEligibilityTitle(eligibilityForState("investigation_required"), true), "Investigate source");
   assert.equal(actionEligibilityTitle(eligibilityForState("investigation_required"), false), "Source investigation is not configured");
+});
+
+
+test("structured action reasons distinguish safe blocked states", () => {
+  assert.equal(actionEligibilityTitle(eligibilityForCode("retained_stale"), false), "Using a retained analysis");
+  assert.equal(actionEligibilityTitle(eligibilityForCode("non_systemic"), false), "Not a recurring systemic pattern");
+  assert.equal(actionEligibilityTitle(eligibilityForCode("unsafe_remediation"), false), "Unsafe remediation blocked");
+  assert.equal(actionEligibilityTitle(eligibilityForCode("observing"), false), "Observing verified remediation");
+  assert.equal(actionEligibilityTitle(eligibilityForCode("verified_fixed"), false), "Verified fixed");
+  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, undefined, true, { state: "retained", evidence_available: true })?.code, "retained_stale");
+  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, undefined, false)?.code, "non_systemic");
+});
+
+test("legacy eligibility payloads derive a compatible reason code", () => {
+  const legacy = normalizeActionEligibility({ state: "investigation_required", reason: "legacy reason" });
+  assert.equal(legacy.code, "investigation_required");
+  assert.equal(legacy.reason, "legacy reason");
+});
+
+test("action eligibility explanations use a polite status surface", async () => {
+  const source = await import("node:fs/promises").then((fs) => fs.readFile("src/components/FailureActions.tsx", "utf8"));
+  assert.match(source, /<Alert role="status" severity=\{eligibility\.state/);
+  assert.match(source, /actionEligibilityTitle\(eligibility/);
+});
+
+
+test("component eligibility selection preserves structured hint codes", () => {
+  for (const code of ["retained_stale", "non_systemic", "unsafe_remediation"] as const) {
+    const hint = eligibilityForCode(code);
+    assert.equal(selectActionEligibility(hint, null, "pattern")?.code, code);
+  }
+  const fetched = eligibilityForCode("source_verification_inconclusive");
+  assert.equal(selectActionEligibility(undefined, { failureID: "pattern", value: fetched }, "pattern")?.code, "source_verification_inconclusive");
+});
+
+
+test("actionable null hints fall through to authoritative fetched eligibility", () => {
+  const actionable = eligibilityForCode("actionable");
+  const fetched = { failureID: "pattern", value: actionable };
+  assert.equal(selectActionEligibility(undefined, fetched, "pattern")?.code, "actionable");
+  assert.equal(selectActionEligibility(null, fetched, "pattern")?.code, "actionable");
+  assert.equal(selectActionEligibility(eligibilityForCode("retained_stale"), fetched, "pattern")?.code, "retained_stale");
+  assert.equal(selectActionEligibility(null, fetched, "other"), null);
 });

@@ -10,10 +10,12 @@ import {
   actionRequestIsTerminal,
   actionRequestProgressDetail,
   actionRequestProgressTitle,
+  actionRequestReasonTitle,
   actionRequestStorageKey,
   actionRequestStorageOwner,
   actionRequestVerificationDetail,
   actionRequestVerificationTitle,
+  actionErrorMessage,
   cancelActionRequest,
   loadLatestActionRequest,
   readStoredActionRequestID,
@@ -320,4 +322,18 @@ test("request IDs are URL encoded for reads and cancellation", async () => {
   );
   assert.equal(calls[1]?.init?.method, "POST");
   assert.equal(calls[1]?.init?.credentials, "same-origin");
+});
+
+
+test("action request reason codes produce concise operator labels", () => {
+  assert.equal(actionRequestReasonTitle(request("unsafe", "failed", { reason_code: "unsafe_remediation" })), "Unsafe remediation blocked");
+  assert.equal(actionRequestReasonTitle(request("stale", "failed", { reason_code: "retained_stale" })), "Retained analysis cannot start an action");
+  assert.equal(actionRequestReasonTitle(request("legacy", "failed")), null);
+});
+
+test("action errors support structured and legacy server payloads", async () => {
+  const structured = new Response(JSON.stringify({ code: "unsafe_remediation", message: "Unsafe remediation blocked." }), { status: 422, headers: { "content-type": "application/json" } });
+  assert.equal(await actionErrorMessage(structured), "Unsafe remediation blocked.");
+  const legacy = new Response("legacy action error", { status: 422, headers: { "content-type": "text/plain" } });
+  assert.equal(await actionErrorMessage(legacy), "legacy action error");
 });

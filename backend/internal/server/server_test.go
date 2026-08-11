@@ -830,7 +830,7 @@ func (f *fakeRunner) ActionEligibility(_ context.Context, id string) (actions.El
 		return actions.Eligibility{}, actions.ErrNotFound
 	}
 	f.gotID = id
-	return actions.Eligibility{State: actions.EligibilityActionable, Reason: "verified"}, nil
+	return actions.Eligibility{State: actions.EligibilityActionable, Code: actions.ReasonActionable, Reason: "verified"}, nil
 }
 
 func TestHandler_ActionsDisabledByDefault(t *testing.T) {
@@ -936,8 +936,8 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 	if caps.Features.AnalysisCritiqueVersion != ai.CurrentCritiqueVersion() {
 		t.Fatalf("critique version = %d, want %d", caps.Features.AnalysisCritiqueVersion, ai.CurrentCritiqueVersion())
 	}
-	if !caps.Features.ActionEligibility {
-		t.Fatal("action eligibility must be advertised when configured")
+	if !caps.Features.ActionEligibility || len(caps.Features.ActionEligibilityReasonCodes) != len(actions.ReasonCodes()) {
+		t.Fatalf("action eligibility contract = %+v", caps.Features)
 	}
 
 	do := func(path, authz, body string) *http.Response {
@@ -987,7 +987,7 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = eligibilityResp.Body.Close()
-	if eligibilityResp.StatusCode != http.StatusOK || eligibility.State != actions.EligibilityActionable || !strings.Contains(eligibilityResp.Header.Get("Cache-Control"), "no-store") {
+	if eligibilityResp.StatusCode != http.StatusOK || eligibility.State != actions.EligibilityActionable || eligibility.Code != actions.ReasonActionable || !strings.Contains(eligibilityResp.Header.Get("Cache-Control"), "no-store") {
 		t.Fatalf("eligibility response = %d %+v cache=%q", eligibilityResp.StatusCode, eligibility, eligibilityResp.Header.Get("Cache-Control"))
 	}
 
@@ -1310,5 +1310,34 @@ func TestWriteActionErrorLogsSanitizedInconclusiveCause(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "source verification inconclusive") || strings.Contains(logs.String(), "private.example") {
 		t.Fatalf("operator log = %q", logs.String())
+	}
+}
+
+func TestWriteActionErrorUsesStructuredReasonContract(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		err    error
+		status int
+		code   actions.ReasonCode
+	}{
+		{name: "already present", err: actions.ErrRemediationAlreadyPresent, status: http.StatusConflict, code: actions.ReasonAlreadyPresent},
+		{name: "source inconclusive", err: actions.ErrRemediationInconclusive, status: http.StatusConflict, code: actions.ReasonSourceVerificationInconclusive},
+		{name: "unsafe draft", err: actions.ErrPreviewRejected, status: http.StatusUnprocessableEntity, code: actions.ReasonContractGenerationFailed},
+		{name: "restored preview unavailable", err: actions.ErrPreviewNotFound, status: http.StatusNotFound, code: actions.ReasonEvidenceUnavailable},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			writeActionError(recorder, "id", "alice", testCase.err)
+			if recorder.Code != testCase.status || recorder.Header().Get("Content-Type") != "application/json" {
+				t.Fatalf("status=%d headers=%v", recorder.Code, recorder.Header())
+			}
+			var response actionReasonResponse
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != testCase.code || response.Message != actions.ReasonMessage(testCase.code) {
+				t.Fatalf("response=%+v", response)
+			}
+		})
 	}
 }

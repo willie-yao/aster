@@ -42,7 +42,10 @@ func writeJobDetail(t *testing.T, dataDir, name string, detail models.JobDetail)
 }
 
 func systemicPattern() models.PatternAnalysis {
-	pa := models.PatternAnalysis{JobID: "periodic-x", Systemic: true, SharedRootCause: "etcd timeout"}
+	pa := models.PatternAnalysis{
+		JobID: "periodic-x", Systemic: true, SharedRootCause: "etcd timeout", SuggestedFix: "Add MissingHelper.",
+		RemediationTargets: []models.RemediationTarget{{Intent: models.RemediationIntentAddSymbol, Symbol: "MissingHelper", Path: "fix.go"}},
+	}
 	models.AssignPatternIdentity(&pa)
 	return pa
 }
@@ -838,11 +841,11 @@ func TestStalePatternIsNotActionable(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := NewService(&project.Config{}, dataDir, AIConfig{})
-	if err := s.Resolve(pa.ID, "alice", ""); err == nil || !strings.Contains(err.Error(), "stale pattern evidence") {
-		t.Fatalf("Resolve error = %v", err)
+	if err := s.Resolve(pa.ID, "alice", ""); ReasonCodeOf(err) != ReasonRetainedStale {
+		t.Fatalf("Resolve error = %v code=%s", err, ReasonCodeOf(err))
 	}
-	if err := s.Unresolve(pa.ID); err == nil || !strings.Contains(err.Error(), "stale pattern evidence") {
-		t.Fatalf("Unresolve error = %v", err)
+	if err := s.Unresolve(pa.ID); ReasonCodeOf(err) != ReasonRetainedStale {
+		t.Fatalf("Unresolve error = %v code=%s", err, ReasonCodeOf(err))
 	}
 }
 
@@ -1586,13 +1589,11 @@ func TestPublishedPatternModifyWithoutRequiredCallCannotStartAction(t *testing.T
 	if _, err := service.PreviewIssue(t.Context(), pattern.ID, "alice", "token", ""); !errors.Is(err, ErrRemediationInconclusive) {
 		t.Fatalf("PreviewIssue error = %v", err)
 	}
-	request, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
-	if err != nil {
-		t.Fatal(err)
+	if _, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", ""); ReasonCodeOf(err) != ReasonContractGenerationFailed {
+		t.Fatalf("CreateRequest error=%v code=%s", err, ReasonCodeOf(err))
 	}
-	view := waitRequest(t, service, request.ID, "alice", RequestFailed)
-	if called || view.Verification == nil || view.Verification.State != actionverify.StateInconclusive || view.Preview != nil {
-		t.Fatalf("request bypassed published target contract: called=%t view=%+v", called, view)
+	if called || len(service.requests.Requests) != 0 {
+		t.Fatalf("request bypassed published target contract: called=%t requests=%v", called, service.requests.Requests)
 	}
 }
 
@@ -1832,7 +1833,7 @@ func TestPatternWithoutRemediationTargetsIsInconclusive(t *testing.T) {
 func TestChatRevisedPatternWithoutTargetsIsInconclusive(t *testing.T) {
 	const revision = "0123456789abcdef0123456789abcdef01234567"
 	pattern := models.PatternAnalysis{
-		ID: "pattern", ContentHash: "hash", SuggestedFix: "Fix MachinePoolModelHasChanged.",
+		ID: "pattern", ContentHash: "hash", Systemic: true, SuggestedFix: "Fix MachinePoolModelHasChanged.",
 		SourceRef: "example/repo@" + revision,
 		RemediationTargets: []models.RemediationTarget{{
 			Intent: models.RemediationIntentModifySymbol,
@@ -1852,8 +1853,8 @@ func TestChatRevisedPatternWithoutTargetsIsInconclusive(t *testing.T) {
 	_, _, err := service.generateFixPreviewForPattern(t.Context(), pattern, "token", "", &fixpr.GenerationContext{
 		ProposedRevision: &fixpr.RevisionContext{RootCause: "new cause", SuggestedFix: "Use a different remediation."},
 	})
-	if !errors.Is(err, ErrRemediationInconclusive) || len(got.Targets) != 1 || got.Targets[0].Intent != models.RemediationIntentInvestigate {
-		t.Fatalf("error=%v input=%+v", err, got)
+	if !errors.Is(err, ErrRemediationInconclusive) || ReasonCodeOf(err) != ReasonInvestigationRequired || len(got.Targets) != 0 {
+		t.Fatalf("error=%v code=%s input=%+v", err, ReasonCodeOf(err), got)
 	}
 }
 
@@ -2112,13 +2113,11 @@ func TestInactivePatternLifecycleCannotStartAction(t *testing.T) {
 	if _, err := service.PreviewIssue(t.Context(), pattern.ID, "alice", "token", ""); !errors.Is(err, ErrRemediationAlreadyPresent) {
 		t.Fatalf("PreviewIssue error = %v", err)
 	}
-	request, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
-	if err != nil {
-		t.Fatal(err)
+	if _, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", ""); ReasonCodeOf(err) != ReasonObserving {
+		t.Fatalf("CreateRequest error=%v code=%s", err, ReasonCodeOf(err))
 	}
-	view := waitRequest(t, service, request.ID, "alice", RequestFailed)
-	if view.Verification == nil || view.Verification.State != actionverify.StateAlreadyPresent || view.Preview != nil {
-		t.Fatalf("inactive lifecycle started action: view=%+v", view)
+	if len(service.requests.Requests) != 0 {
+		t.Fatalf("inactive lifecycle persisted request: %v", service.requests.Requests)
 	}
 }
 
@@ -2210,13 +2209,11 @@ func TestRecoveredPatternBlocksIssueAndFixActionsWithoutClaimingSourceRemediatio
 			models.AssignPatternIdentity(&pattern)
 			writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
 			service := NewService(&project.Config{AI: &project.AI{SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"}}}, dataDir, AIConfig{})
-			request, err := service.CreateRequest(pattern.ID, kind, "alice", "token", "", "")
-			if err != nil {
-				t.Fatal(err)
+			if _, err := service.CreateRequest(pattern.ID, kind, "alice", "token", "", ""); ReasonCodeOf(err) != ReasonRecovered {
+				t.Fatalf("CreateRequest error=%v code=%s", err, ReasonCodeOf(err))
 			}
-			view := waitRequest(t, service, request.ID, "alice", RequestFailed)
-			if view.Verification == nil || view.Verification.State != actionverify.StateInconclusive || view.Preview != nil || !strings.Contains(view.Verification.Reason, "not source-verified") {
-				t.Fatalf("recovered lifecycle started %s: view=%+v", kind, view)
+			if len(service.requests.Requests) != 0 {
+				t.Fatalf("recovered lifecycle persisted %s: %v", kind, service.requests.Requests)
 			}
 		})
 	}
@@ -2256,13 +2253,11 @@ func TestConversionPolicyBlocksPreviewAndAsyncRequest(t *testing.T) {
 	if _, err := service.PreviewFix(t.Context(), pattern.ID, "alice", "token", ""); !errors.Is(err, ErrRemediationInconclusive) || called {
 		t.Fatalf("PreviewFix error=%v verifier_called=%t", err, called)
 	}
-	request, err := service.CreateRequest(pattern.ID, "propose-fix", "alice", "token", "", "")
-	if err != nil {
-		t.Fatal(err)
+	if _, err := service.CreateRequest(pattern.ID, "propose-fix", "alice", "token", "", ""); ReasonCodeOf(err) != ReasonUnsafeRemediation {
+		t.Fatalf("CreateRequest error=%v code=%s", err, ReasonCodeOf(err))
 	}
-	view := waitRequest(t, service, request.ID, "alice", RequestFailed)
-	if view.Verification == nil || view.Verification.State != actionverify.StateInconclusive || view.Preview != nil || called {
-		t.Fatalf("request=%+v verifier_called=%t", view, called)
+	if len(service.requests.Requests) != 0 || called {
+		t.Fatalf("requests=%v verifier_called=%t", service.requests.Requests, called)
 	}
 }
 
@@ -2300,7 +2295,7 @@ func TestConversionPolicyRejectsPersistedPreviewAndConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Confirm(t.Context(), token, "alice", "token"); !errors.Is(err, ErrPreviewRejected) {
-		t.Fatalf("Confirm unsafe preview error = %v", err)
+	if _, err := service.Confirm(t.Context(), token, "alice", "token"); !errors.Is(err, ErrPreviewRejected) || ReasonCodeOf(err) != ReasonUnsafeRemediation {
+		t.Fatalf("Confirm unsafe preview error = %v code=%s", err, ReasonCodeOf(err))
 	}
 }

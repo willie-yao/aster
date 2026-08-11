@@ -138,11 +138,34 @@ export function actionRequestProgressDetail(
   return "Generation continues in the background. You can leave this page and return later.";
 }
 
+export function actionRequestReasonTitle(request: ActionRequest): string | null {
+  switch (request.reason_code) {
+    case "recovered": return "Watching recovery";
+    case "observing": return "Observing verified remediation";
+    case "verified_fixed": return "Verified fixed";
+    case "retained_stale": return "Retained analysis cannot start an action";
+    case "non_systemic": return "Not a recurring systemic pattern";
+    case "evidence_unavailable": return "Current evidence unavailable";
+    case "investigation_required": return "Source investigation required";
+    case "contract_generation_failed": return "Implementation contract unavailable";
+    case "unsafe_remediation": return "Unsafe remediation blocked";
+    case "already_present": return "Remediation already exists";
+    case "source_verification_inconclusive": return "Source verification inconclusive";
+    case "generation_failed": return "Draft generation failed";
+    default: return null;
+  }
+}
+
 export function actionRequestVerificationTitle(
   request: ActionRequest,
 ): string | null {
   const verification = request.verification;
   if (!verification) return null;
+  if (verification.code === "unsafe_remediation") return "Unsafe remediation blocked";
+  if (verification.code === "investigation_required") return "Source investigation required";
+  if (verification.code === "recovered") return "Watching recovery";
+  if (verification.code === "observing") return "Observing verified remediation";
+  if (verification.code === "verified_fixed") return "Verified fixed";
   if (verification.state === "already_present") {
     const reason = verification.reason.toLowerCase();
     if (reason.startsWith("configuration ")) {
@@ -208,6 +231,15 @@ export async function actionErrorMessage(response: Response): Promise<string> {
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("text/html") || /^<!doctype\s+html/i.test(text)) {
     return `Request failed with HTTP ${response.status}. The gateway returned an HTML error page.`;
+  }
+  if (contentType.includes("application/json") && text) {
+    try {
+      const value = JSON.parse(text) as { message?: unknown; error?: unknown };
+      if (typeof value.message === "string" && value.message.trim()) return value.message.trim();
+      if (typeof value.error === "string" && value.error.trim()) return value.error.trim();
+    } catch {
+      // Older and intermediary servers may return non-JSON error text.
+    }
   }
   return text || `HTTP ${response.status}`;
 }

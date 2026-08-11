@@ -146,6 +146,8 @@ type Features struct {
 	ActionRequests bool `json:"action_requests,omitempty"`
 	// ActionEligibility enables deterministic preflight before draft generation.
 	ActionEligibility bool `json:"action_eligibility,omitempty"`
+	// ActionEligibilityReasonCodes lists the stable machine-readable reason contract.
+	ActionEligibilityReasonCodes []string `json:"action_eligibility_reason_codes,omitempty"`
 	// AnalysisTraces enables the private analysis-trace API and UI.
 	AnalysisTraces bool `json:"analysis_traces,omitempty"`
 	// FetchStatus enables the private aggregate fetch progress API and banner.
@@ -313,6 +315,7 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, guard(unresolveHandler(opts.Actions.Unresolve))))
 		if eligibility, ok := opts.Actions.(ActionEligibilityRunner); ok {
 			caps.Features.ActionEligibility = true
+			caps.Features.ActionEligibilityReasonCodes = actions.ReasonCodes()
 			mux.Handle("GET /api/failures/{id}/eligibility",
 				auth.Middleware(opts.Auth, actionEligibilityHandler(timeout, eligibility.ActionEligibility)))
 		}
@@ -515,11 +518,23 @@ func decodeInstruction(r *http.Request) string {
 	return strings.TrimSpace(body.Instruction)
 }
 
+type actionReasonResponse struct {
+	Code    actions.ReasonCode `json:"code"`
+	Message string             `json:"message"`
+}
+
+func writeActionReason(w http.ResponseWriter, status int, code actions.ReasonCode) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(actionReasonResponse{Code: code, Message: actions.ReasonMessage(code)})
+}
+
 // writeActionError maps an action error to a status code without leaking the
 // token: an unknown failure or expired preview is 404, everything else is 422.
 func writeActionError(w http.ResponseWriter, id, login string, err error) {
 	if errors.Is(err, actions.ErrNotFound) || errors.Is(err, actions.ErrPreviewNotFound) || errors.Is(err, actions.ErrRequestNotFound) {
-		http.Error(w, "not found", http.StatusNotFound)
+		writeActionReason(w, http.StatusNotFound, actions.ReasonCodeOf(err))
 		return
 	}
 	if errors.Is(err, actions.ErrPreviewPending) {
@@ -534,21 +549,22 @@ func writeActionError(w http.ResponseWriter, id, login string, err error) {
 		http.Error(w, "GitHub action outcome is unknown", http.StatusConflict)
 		return
 	}
-	if errors.Is(err, actions.ErrPreviewTargetChanged) {
-		http.Error(w, "action target changed; generate a new preview", http.StatusConflict)
+	code := actions.ReasonCodeOf(err)
+	switch code {
+	case actions.ReasonAlreadyPresent, actions.ReasonRecovered, actions.ReasonObserving, actions.ReasonVerifiedFixed,
+		actions.ReasonRetainedStale, actions.ReasonEvidenceUnavailable, actions.ReasonSourceVerificationInconclusive:
+		if code == actions.ReasonSourceVerificationInconclusive {
+			log.Printf("action source verification inconclusive for %s (by %s): %s", id, login, safeOperatorError(err))
+		}
+		writeActionReason(w, http.StatusConflict, code)
 		return
-	}
-	if errors.Is(err, actions.ErrRemediationAlreadyPresent) {
-		http.Error(w, "the proposed remediation already exists at the grounded commit; check whether the finding is stale, regressed, or misclassified", http.StatusConflict)
+	case actions.ReasonNonSystemic, actions.ReasonInvestigationRequired, actions.ReasonContractGenerationFailed, actions.ReasonUnsafeRemediation:
+		writeActionReason(w, http.StatusUnprocessableEntity, code)
 		return
+	default:
+		log.Printf("action failed for %s (by %s): %s", id, login, safeOperatorError(err))
+		writeActionReason(w, http.StatusUnprocessableEntity, actions.ReasonGenerationFailed)
 	}
-	if errors.Is(err, actions.ErrRemediationInconclusive) {
-		log.Printf("action source verification inconclusive for %s (by %s): %s", id, login, safeOperatorError(err))
-		http.Error(w, "source verification was inconclusive; investigate the grounded source before filing", http.StatusConflict)
-		return
-	}
-	log.Printf("action failed for %s (by %s): %s", id, login, safeOperatorError(err))
-	http.Error(w, "action request could not be completed", http.StatusUnprocessableEntity)
 }
 
 func safeOperatorError(err error) string {
@@ -579,11 +595,11 @@ func actionEligibilityHandler(timeout time.Duration, run actionEligibilityFunc) 
 		eligibility, err := run(ctx, r.PathValue("id"))
 		if err != nil {
 			if errors.Is(err, actions.ErrNotFound) {
-				http.Error(w, "not found", http.StatusNotFound)
+				writeActionReason(w, http.StatusNotFound, actions.ReasonEvidenceUnavailable)
 				return
 			}
 			log.Printf("action eligibility failed for %s: %s", r.PathValue("id"), safeOperatorError(err))
-			http.Error(w, "action eligibility could not be determined", http.StatusUnprocessableEntity)
+			writeActionReason(w, http.StatusUnprocessableEntity, actions.ReasonCodeOf(err))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

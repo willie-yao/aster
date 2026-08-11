@@ -2,6 +2,9 @@ package actions
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
@@ -232,5 +235,85 @@ func TestActionEligibilityEnforcesAdmissionConversionPolicy(t *testing.T) {
 				t.Fatalf("eligibility=%+v called=%t err=%v", got, called, err)
 			}
 		})
+	}
+}
+
+func TestActionEligibilityStableReasonCodes(t *testing.T) {
+	basePattern := func() models.PatternAnalysis {
+		pattern := models.PatternAnalysis{
+			JobID: "periodic-x", Systemic: true, SuggestedFix: "Add Fix.",
+			RemediationTargets: []models.RemediationTarget{{Intent: models.RemediationIntentAddSymbol, Symbol: "Fix", Path: "fix.go"}},
+		}
+		models.AssignPatternIdentity(&pattern)
+		return pattern
+	}
+	for _, testCase := range []struct {
+		name    string
+		mutate  func(*models.PatternAnalysis, *models.PatternRefreshStatus)
+		refresh *models.PatternRefreshStatus
+		want    ReasonCode
+	}{
+		{name: "recovered", mutate: func(p *models.PatternAnalysis, _ *models.PatternRefreshStatus) {
+			p.Lifecycle = &models.PatternLifecycle{State: models.PatternLifecycleRecovered}
+		}, want: ReasonRecovered},
+		{name: "observing", mutate: func(p *models.PatternAnalysis, _ *models.PatternRefreshStatus) {
+			p.Lifecycle = &models.PatternLifecycle{State: models.PatternLifecycleObserving}
+		}, want: ReasonObserving},
+		{name: "verified fixed", mutate: func(p *models.PatternAnalysis, _ *models.PatternRefreshStatus) {
+			p.Lifecycle = &models.PatternLifecycle{State: models.PatternLifecycleVerifiedFixed}
+		}, want: ReasonVerifiedFixed},
+		{name: "retained", refresh: &models.PatternRefreshStatus{State: models.PatternRefreshRetained, EvidenceAvailable: true}, want: ReasonRetainedStale},
+		{name: "evidence unavailable", refresh: &models.PatternRefreshStatus{State: models.PatternRefreshCurrent, EvidenceAvailable: false}, want: ReasonEvidenceUnavailable},
+		{name: "non systemic", mutate: func(p *models.PatternAnalysis, _ *models.PatternRefreshStatus) { p.Systemic = false }, want: ReasonNonSystemic},
+		{name: "contract failed", mutate: func(p *models.PatternAnalysis, _ *models.PatternRefreshStatus) { p.RemediationTargets = nil }, want: ReasonContractGenerationFailed},
+		{name: "investigate", mutate: func(p *models.PatternAnalysis, _ *models.PatternRefreshStatus) {
+			p.RemediationTargets = []models.RemediationTarget{{Intent: models.RemediationIntentInvestigate}}
+		}, want: ReasonInvestigationRequired},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			pattern := basePattern()
+			if testCase.mutate != nil {
+				testCase.mutate(&pattern, testCase.refresh)
+			}
+			models.AssignPatternIdentity(&pattern)
+			dataDir := t.TempDir()
+			writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}, PatternRefresh: testCase.refresh})
+			service := NewService(&project.Config{}, dataDir, AIConfig{})
+			got, err := service.ActionEligibility(t.Context(), pattern.ID)
+			if err != nil || got.Code != testCase.want || got.State != eligibilityStateForCode(testCase.want) {
+				t.Fatalf("eligibility=%+v err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestActionEligibilitySafetyAndSourceReasonCodes(t *testing.T) {
+	unsafeService, _ := eligibilityService(t, []models.RemediationTarget{{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example/migration.DeleteWebhookConfigurations", Path: "main.go"}})
+	data, _ := os.ReadFile(filepath.Join(unsafeService.dataDir, "jobs", "periodic-x.json"))
+	var detail models.JobDetail
+	_ = json.Unmarshal(data, &detail)
+	detail.PatternAnalyses[0].SuggestedFix = "Delete admission webhooks to bypass CRD conversion."
+	models.AssignPatternIdentity(&detail.PatternAnalyses[0])
+	unsafeID := detail.PatternAnalyses[0].ID
+	writeJobDetail(t, unsafeService.dataDir, "periodic-x.json", detail)
+	got, err := unsafeService.ActionEligibility(t.Context(), unsafeID)
+	if err != nil || got.Code != ReasonUnsafeRemediation {
+		t.Fatalf("unsafe=%+v err=%v", got, err)
+	}
+
+	service, id := eligibilityService(t, []models.RemediationTarget{{Intent: models.RemediationIntentAddSymbol, Symbol: "Fix", Path: "main.go"}})
+	service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
+		return actionverify.Result{State: actionverify.StateInconclusive, Reason: "not proven"}, nil
+	}
+	got, err = service.ActionEligibility(t.Context(), id)
+	if err != nil || got.Code != ReasonSourceVerificationInconclusive {
+		t.Fatalf("inconclusive=%+v err=%v", got, err)
+	}
+	service.sourceVerifier = func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error) {
+		return actionverify.Result{State: actionverify.StateAlreadyPresent, Reason: "present"}, nil
+	}
+	got, err = service.ActionEligibility(t.Context(), id)
+	if err != nil || got.Code != ReasonAlreadyPresent {
+		t.Fatalf("present=%+v err=%v", got, err)
 	}
 }
