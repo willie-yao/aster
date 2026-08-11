@@ -39,8 +39,15 @@ type OpenCodeSpec struct {
 	MaxSteps int
 }
 
+// OpenCodeRunResult contains the structured result and sanitized aggregates only.
+type OpenCodeRunResult struct {
+	Structured []byte
+	Usage      agentanalysis.WorkspaceUsage
+	Telemetry  agentanalysis.WorkspaceOpenCodeTelemetry
+}
+
 // OpenCodeRunner runs one native OpenCode session and returns its structured result.
-type OpenCodeRunner func(context.Context, OpenCodeSpec) ([]byte, error)
+type OpenCodeRunner func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error)
 
 // Options configure one executor process.
 type Options struct {
@@ -60,7 +67,8 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	started := now()
 	result := agentanalysis.WorkspaceExecutionResult{
 		Version: agentanalysis.WorkspaceResultVersion, ContractVersion: agentanalysis.WorkspaceContractVersion,
-		RequestHash: request.Hash, Usage: agentanalysis.WorkspaceUsage{},
+		RequestHash: request.Hash, Usage: agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable},
+		OpenCodeTelemetry: agentanalysis.WorkspaceOpenCodeTelemetry{Status: agentanalysis.WorkspaceTelemetryUnavailable, StructuredOutputRetriesKnown: true},
 	}
 	fail := func(state engineruntime.TerminalState, reason string) agentanalysis.WorkspaceExecutionResult {
 		result.TerminalState = state
@@ -118,14 +126,33 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	if bin == "" {
 		bin = defaultOpenCodeBin
 	}
-	structured, runErr := run(ctx, OpenCodeSpec{Bin: bin, WorkDir: workspaceRoot, HomeDir: home, TempDir: temp, Gateway: request.ModelGateway, Prompt: prompt, MaxSteps: request.MaxSteps})
+	runResult, runErr := run(ctx, OpenCodeSpec{Bin: bin, WorkDir: workspaceRoot, HomeDir: home, TempDir: temp, Gateway: request.ModelGateway, Prompt: prompt, MaxSteps: request.MaxSteps})
+	if runResult.Usage.Status == "" {
+		runResult.Usage.Status = agentanalysis.WorkspaceTelemetryUnavailable
+	}
+	if runResult.Telemetry.Status == "" {
+		runResult.Telemetry.Status = agentanalysis.WorkspaceTelemetryUnavailable
+	}
+	runResult.Telemetry.StructuredOutputRetriesKnown = true
+	result.Usage = runResult.Usage
+	result.OpenCodeTelemetry = runResult.Telemetry
+	if ctx.Err() != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			result.OpenCodeTelemetry.TimedOut = true
+			result.OpenCodeTelemetry.FailureCode = "timeout"
+		}
+		return fail(stateForContext(ctx), fmt.Sprintf("run OpenCode analyzer: %v", ctx.Err()))
+	}
 	if err := verifyInputsBounded(request, sourceRoot, artifactRoot); err != nil {
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("workspace changed during analysis: %v", err))
 	}
 	if runErr != nil {
+		if result.OpenCodeTelemetry.FailureCode == "" {
+			result.OpenCodeTelemetry.FailureCode = openCodeFailureCode(runErr)
+		}
 		return fail(stateForContext(ctx), fmt.Sprintf("run OpenCode analyzer: %v", runErr))
 	}
-	analysis, err := agentanalysis.ParseWorkspaceAnalysis(string(structured), request.Manifest, artifactRoot, sourceRoot)
+	analysis, err := agentanalysis.ParseWorkspaceAnalysis(string(runResult.Structured), request.Manifest, artifactRoot, sourceRoot)
 	if err != nil {
 		return fail(engineruntime.TerminalFailed, err.Error())
 	}
@@ -213,33 +240,39 @@ func readSingleResult(root string, limit int64) (string, error) {
 	return readSingleResultFile(root, agentanalysis.WorkspaceResultFile, limit)
 }
 
-func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) ([]byte, error) {
+func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (result OpenCodeRunResult, retErr error) {
+	result.Usage = agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable}
+	result.Telemetry = agentanalysis.WorkspaceOpenCodeTelemetry{Status: agentanalysis.WorkspaceTelemetryUnavailable, StructuredOutputRetriesKnown: true}
 	if err := writeOpenCodeConfig(spec.HomeDir, spec.Gateway, spec.MaxSteps); err != nil {
-		return nil, err
+		return result, err
 	}
 	bin, err := exec.LookPath(spec.Bin)
 	if err != nil {
-		return nil, fmt.Errorf("OpenCode executable: %w", err)
+		return result, fmt.Errorf("OpenCode executable: %w", err)
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, fmt.Errorf("reserve OpenCode port: %w", err)
+		return result, fmt.Errorf("reserve OpenCode port: %w", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	if err := listener.Close(); err != nil {
-		return nil, fmt.Errorf("release OpenCode port: %w", err)
+		return result, fmt.Errorf("release OpenCode port: %w", err)
 	}
 	cmd := exec.CommandContext(ctx, bin, "serve", "--hostname", "127.0.0.1", "--port", fmt.Sprint(port))
 	cmd.Dir = spec.WorkDir
 	cmd.Env = openCodeEnvironment(spec.HomeDir, spec.TempDir)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	stdout := newBoundedCapture(maxOpenCodeStreamBytes)
+	stderr := newBoundedCapture(maxOpenCodeStreamBytes)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
-		return nil, err
+		return result, err
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	defer func() {
+		result.Telemetry.StdoutTruncated = stdout.Truncated()
+		result.Telemetry.StderrTruncated = stderr.Truncated()
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
@@ -251,13 +284,25 @@ func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) ([]byte, error) 
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 	client := &http.Client{}
 	if err := waitForOpenCode(ctx, client, baseURL, done); err != nil {
-		return nil, err
+		return result, err
 	}
 	sessionID, err := createOpenCodeSession(ctx, client, baseURL, spec.WorkDir)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
-	return promptOpenCode(ctx, client, baseURL, sessionID, spec)
+	structured, promptErr := promptOpenCode(ctx, client, baseURL, sessionID, spec)
+	result.Structured = structured
+	usage, telemetry, telemetryErr := fetchOpenCodeTelemetry(ctx, client, baseURL, sessionID, spec.WorkDir)
+	if telemetryErr == nil {
+		result.Usage, result.Telemetry = usage, telemetry
+	} else {
+		result.Usage.Status = telemetryStatusForError(telemetryErr)
+		result.Telemetry.Status = result.Usage.Status
+	}
+	if promptErr != nil {
+		result.Telemetry.FailureCode = openCodeFailureCode(promptErr)
+	}
+	return result, promptErr
 }
 
 const maxOpenCodeAPIResponseBytes = 1 << 20
@@ -336,27 +381,67 @@ func promptOpenCode(ctx context.Context, client *http.Client, baseURL, sessionID
 	return slices.Clone(response.Info.Structured), nil
 }
 
-func openCodeJSON(ctx context.Context, client *http.Client, method, endpoint string, body []byte, target any) error {
+func fetchOpenCodeTelemetry(ctx context.Context, client *http.Client, baseURL, sessionID, workDir string) (agentanalysis.WorkspaceUsage, agentanalysis.WorkspaceOpenCodeTelemetry, error) {
+	endpoint := baseURL + "/session/" + url.PathEscape(sessionID) + "/message?directory=" + url.QueryEscape(workDir)
+	raw, err := openCodeResponse(ctx, client, http.MethodGet, endpoint, nil, maxOpenCodeTelemetryBytes)
+	if err != nil {
+		return agentanalysis.WorkspaceUsage{}, agentanalysis.WorkspaceOpenCodeTelemetry{}, err
+	}
+	return parseOpenCodeTelemetry(raw)
+}
+
+func telemetryStatusForError(err error) string {
+	if strings.Contains(err.Error(), "exceeded the bound") {
+		return agentanalysis.WorkspaceTelemetryTruncated
+	}
+	if strings.Contains(err.Error(), "decode") || strings.Contains(err.Error(), "telemetry") {
+		return agentanalysis.WorkspaceTelemetryMalformed
+	}
+	return agentanalysis.WorkspaceTelemetryUnavailable
+}
+
+func openCodeFailureCode(err error) string {
+	value := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(value, "context"):
+		return "context_limit"
+	case strings.Contains(value, "structured output"):
+		return "structured_output"
+	case strings.Contains(value, "http"):
+		return "http_error"
+	default:
+		return "opencode_error"
+	}
+}
+
+func openCodeResponse(ctx context.Context, client *http.Client, method, endpoint string, body []byte, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
-	limited := io.LimitReader(resp.Body, maxOpenCodeAPIResponseBytes+1)
-	data, err := io.ReadAll(limited)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if len(data) > maxOpenCodeAPIResponseBytes {
-		return fmt.Errorf("OpenCode API response exceeded the bound")
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("OpenCode API response exceeded the bound")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("OpenCode API returned HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("OpenCode API returned HTTP %d", resp.StatusCode)
+	}
+	return data, nil
+}
+
+func openCodeJSON(ctx context.Context, client *http.Client, method, endpoint string, body []byte, target any) error {
+	data, err := openCodeResponse(ctx, client, method, endpoint, body, maxOpenCodeAPIResponseBytes)
+	if err != nil {
+		return err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := decoder.Decode(target); err != nil {

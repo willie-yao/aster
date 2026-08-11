@@ -47,26 +47,63 @@ type WorkspaceAnalysis struct {
 	UnresolvedDetails []string                       `json:"unresolved_details,omitempty"`
 }
 
+const (
+	WorkspaceTelemetryAvailable   = "available"
+	WorkspaceTelemetryUnavailable = "unavailable"
+	WorkspaceTelemetryMalformed   = "malformed"
+	WorkspaceTelemetryTruncated   = "truncated"
+)
+
 // WorkspaceUsage records provider telemetry when the runtime exposes it.
 type WorkspaceUsage struct {
 	Available         bool   `json:"available"`
+	Status            string `json:"status"`
 	ModelRequests     int    `json:"model_requests,omitempty"`
 	InputTokens       int    `json:"input_tokens,omitempty"`
 	CachedInputTokens int    `json:"cached_input_tokens,omitempty"`
 	OutputTokens      int    `json:"output_tokens,omitempty"`
+	CostAvailable     bool   `json:"cost_available"`
 	CostUSD           string `json:"cost_usd,omitempty"`
+}
+
+// WorkspaceToolTelemetry is one sanitized OpenCode tool aggregate.
+type WorkspaceToolTelemetry struct {
+	Name     string `json:"name"`
+	Count    int    `json:"count"`
+	Failures int    `json:"failures,omitempty"`
+	Denied   int    `json:"denied,omitempty"`
+}
+
+// WorkspaceOpenCodeTelemetry contains no prompts, responses, evidence, or raw events.
+type WorkspaceOpenCodeTelemetry struct {
+	Available                    bool                     `json:"available"`
+	Status                       string                   `json:"status"`
+	EventCount                   int                      `json:"event_count,omitempty"`
+	Tools                        []WorkspaceToolTelemetry `json:"tools,omitempty"`
+	DeniedToolCount              int                      `json:"denied_tool_count,omitempty"`
+	ToolFailureCount             int                      `json:"tool_failure_count,omitempty"`
+	StepsUsed                    int                      `json:"steps_used,omitempty"`
+	StructuredOutputRetriesKnown bool                     `json:"structured_output_retries_known"`
+	StructuredOutputRetries      int                      `json:"structured_output_retries,omitempty"`
+	StructuredOutputErrors       int                      `json:"structured_output_errors,omitempty"`
+	ContextLimit                 bool                     `json:"context_limit,omitempty"`
+	TimedOut                     bool                     `json:"timed_out,omitempty"`
+	FailureCode                  string                   `json:"failure_code,omitempty"`
+	StdoutTruncated              bool                     `json:"stdout_truncated,omitempty"`
+	StderrTruncated              bool                     `json:"stderr_truncated,omitempty"`
 }
 
 // WorkspaceExecutionResult is the single executor result read from Pod logs.
 type WorkspaceExecutionResult struct {
-	Version         int                         `json:"version"`
-	ContractVersion string                      `json:"contract_version"`
-	RequestHash     string                      `json:"request_hash"`
-	TerminalState   engineruntime.TerminalState `json:"terminal_state"`
-	FailureReason   string                      `json:"failure_reason,omitempty"`
-	Analysis        *WorkspaceAnalysis          `json:"analysis,omitempty"`
-	DurationMs      int64                       `json:"duration_ms"`
-	Usage           WorkspaceUsage              `json:"usage"`
+	Version           int                         `json:"version"`
+	ContractVersion   string                      `json:"contract_version"`
+	RequestHash       string                      `json:"request_hash"`
+	TerminalState     engineruntime.TerminalState `json:"terminal_state"`
+	FailureReason     string                      `json:"failure_reason,omitempty"`
+	Analysis          *WorkspaceAnalysis          `json:"analysis,omitempty"`
+	DurationMs        int64                       `json:"duration_ms"`
+	Usage             WorkspaceUsage              `json:"usage"`
+	OpenCodeTelemetry WorkspaceOpenCodeTelemetry  `json:"opencode_telemetry"`
 }
 
 type workspaceAnalysisEnvelope struct {
@@ -243,6 +280,9 @@ func ValidateWorkspaceExecutionResult(result WorkspaceExecutionResult, request W
 		return result, fmt.Errorf("workspace execution duration is outside the request bound")
 	}
 	if err := validateWorkspaceUsage(result.Usage); err != nil {
+		return result, err
+	}
+	if err := validateWorkspaceOpenCodeTelemetry(result.OpenCodeTelemetry); err != nil {
 		return result, err
 	}
 	switch result.TerminalState {
@@ -512,8 +552,63 @@ func validateWorkspaceUsage(usage WorkspaceUsage) error {
 	if usage.ModelRequests < 0 || usage.InputTokens < 0 || usage.CachedInputTokens < 0 || usage.OutputTokens < 0 || len(usage.CostUSD) > 64 {
 		return fmt.Errorf("workspace execution usage is invalid")
 	}
-	if !usage.Available && (usage.ModelRequests != 0 || usage.InputTokens != 0 || usage.CachedInputTokens != 0 || usage.OutputTokens != 0 || usage.CostUSD != "") {
+	if usage.Available {
+		if usage.Status != WorkspaceTelemetryAvailable || usage.ModelRequests < 1 {
+			return fmt.Errorf("available workspace usage is invalid")
+		}
+		if usage.CostAvailable != (usage.CostUSD != "") {
+			return fmt.Errorf("workspace execution cost availability is invalid")
+		}
+		return nil
+	}
+	if usage.Status != WorkspaceTelemetryUnavailable && usage.Status != WorkspaceTelemetryMalformed && usage.Status != WorkspaceTelemetryTruncated {
+		return fmt.Errorf("unavailable workspace usage status is invalid")
+	}
+	if usage.ModelRequests != 0 || usage.InputTokens != 0 || usage.CachedInputTokens != 0 || usage.OutputTokens != 0 || usage.CostAvailable || usage.CostUSD != "" {
 		return fmt.Errorf("unavailable workspace usage must not contain inferred values")
 	}
 	return nil
+}
+
+func validateWorkspaceOpenCodeTelemetry(telemetry WorkspaceOpenCodeTelemetry) error {
+	if telemetry.EventCount < 0 || telemetry.DeniedToolCount < 0 || telemetry.ToolFailureCount < 0 || telemetry.StepsUsed < 0 || telemetry.StructuredOutputRetries < 0 || telemetry.StructuredOutputErrors < 0 || !validWorkspaceFailureCode(telemetry.FailureCode) {
+		return fmt.Errorf("workspace OpenCode telemetry is invalid")
+	}
+	if telemetry.Available {
+		if telemetry.Status != WorkspaceTelemetryAvailable || telemetry.EventCount < 1 || !telemetry.StructuredOutputRetriesKnown {
+			return fmt.Errorf("available workspace OpenCode telemetry is invalid")
+		}
+	} else if telemetry.Status != WorkspaceTelemetryUnavailable && telemetry.Status != WorkspaceTelemetryMalformed && telemetry.Status != WorkspaceTelemetryTruncated {
+		return fmt.Errorf("unavailable workspace OpenCode telemetry status is invalid")
+	}
+	seen := map[string]bool{}
+	toolFailures, toolDenied := 0, 0
+	for _, tool := range telemetry.Tools {
+		if tool.Name == "" || len(tool.Name) > 64 || tool.Count < 1 || tool.Failures < 0 || tool.Denied < 0 || tool.Failures > tool.Count || tool.Denied > tool.Failures || seen[tool.Name] {
+			return fmt.Errorf("workspace OpenCode tool telemetry is invalid")
+		}
+		seen[tool.Name] = true
+		toolFailures += tool.Failures
+		toolDenied += tool.Denied
+	}
+	if toolFailures != telemetry.ToolFailureCount || toolDenied != telemetry.DeniedToolCount {
+		return fmt.Errorf("workspace OpenCode tool telemetry totals are invalid")
+	}
+	if !telemetry.Available && (telemetry.EventCount != 0 || len(telemetry.Tools) != 0 || telemetry.DeniedToolCount != 0 || telemetry.ToolFailureCount != 0 || telemetry.StepsUsed != 0 || telemetry.StructuredOutputRetries != 0 || telemetry.StructuredOutputErrors != 0 || telemetry.ContextLimit) {
+		return fmt.Errorf("unavailable workspace OpenCode telemetry must not contain inferred values")
+	}
+	return nil
+}
+
+func validWorkspaceFailureCode(value string) bool {
+	if len(value) > 64 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }

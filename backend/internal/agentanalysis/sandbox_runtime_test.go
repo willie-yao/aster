@@ -107,7 +107,7 @@ func TestWorkspaceSandboxRuntimeMapsTerminalStates(t *testing.T) {
 			runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64), run: func(agentsandbox.Spec) (agentsandbox.Result, error) {
 				execution := WorkspaceExecutionResult{
 					Version: WorkspaceResultVersion, ContractVersion: WorkspaceContractVersion, RequestHash: spec.Request.Hash,
-					TerminalState: tc.state, FailureReason: "stopped", DurationMs: 100, Usage: WorkspaceUsage{},
+					TerminalState: tc.state, FailureReason: "stopped", DurationMs: 100, Usage: WorkspaceUsage{Status: WorkspaceTelemetryUnavailable}, OpenCodeTelemetry: WorkspaceOpenCodeTelemetry{Status: WorkspaceTelemetryUnavailable, StructuredOutputRetriesKnown: true},
 				}
 				data, _ := json.Marshal(execution)
 				return agentsandbox.Result{Output: string(data), FinishedReason: "PodFailed", Telemetry: engineruntime.GenerateTelemetry{CleanupCompleted: true}}, nil
@@ -216,6 +216,6 @@ func validWorkspaceExecution(request WorkspaceExecutionRequest) WorkspaceExecuti
 	}
 	return WorkspaceExecutionResult{
 		Version: WorkspaceResultVersion, ContractVersion: WorkspaceContractVersion, RequestHash: request.Hash,
-		TerminalState: engineruntime.TerminalSucceeded, Analysis: &analysis, DurationMs: 100, Usage: WorkspaceUsage{},
+		TerminalState: engineruntime.TerminalSucceeded, Analysis: &analysis, DurationMs: 100, Usage: WorkspaceUsage{Status: WorkspaceTelemetryUnavailable}, OpenCodeTelemetry: WorkspaceOpenCodeTelemetry{Status: WorkspaceTelemetryUnavailable, StructuredOutputRetriesKnown: true},
 	}
 }
