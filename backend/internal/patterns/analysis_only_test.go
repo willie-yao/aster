@@ -23,7 +23,7 @@ func (v *analysisOnlyVerifier) VerifyPatternRemediation(context.Context, models.
 
 func TestApplyRemediationVerificationSkipsAnalysisOnlyCausalGroups(t *testing.T) {
 	verifier := &analysisOnlyVerifier{}
-	pattern := &models.PatternAnalysis{Systemic: true, Recurrence: models.PatternRecurrenceSharedCause}
+	pattern := &models.PatternAnalysis{Systemic: true, Recurrence: models.PatternRecurrenceSharedCause, RemediationInvestigations: []models.PatternRemediationInvestigationSummary{{CausalGroupID: "group", CausalGroupHash: "hash", State: models.PatternRemediationNotInvestigated}}}
 	applyRemediationVerification(t.Context(), verifier, pattern, models.JobDetail{})
 	if verifier.calls != 0 || pattern.RemediationVerification != nil {
 		t.Fatalf("calls=%d pattern=%+v", verifier.calls, pattern)

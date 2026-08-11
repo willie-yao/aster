@@ -643,6 +643,14 @@ the request.
 
 Each job detail includes additive `pattern_refresh` metadata with `current`, `retained`, `failed`, `not_applicable`, or `unavailable` state. `flakiness.json` carries aggregate counts and a job-status map. Freshness is outside `PatternAnalysis` and does not change pattern identity. Server write actions require `current` state and current evidence. Read-only pattern chat may use retained evidence only while every referenced build remains available.
 
+Analysis-only causal groups publish engine-derived group IDs and content hashes
+plus safe `remediation_investigations` summaries for repeated groups. The initial
+state is `not_investigated`. These summaries contain no raw source excerpts,
+prompts, traces, model responses, or action eligibility and are excluded from
+causal content hashes. There is no causal-group remediation-investigation API or
+capability yet, so the frontend renders status only and existing action endpoints
+continue to reject these patterns.
+
 ## AI usage reporting
 
 When `ai.usage.enabled` and authentication are configured, `GET /api/ai-usage`

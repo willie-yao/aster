@@ -440,3 +440,55 @@ func TestWriteManifestPublishesOnlyAggregateSkillMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestPublicPatternOutputDefaultsRepeatedCausalGroupRemediation(t *testing.T) {
+	dir := t.TempDir()
+	pattern := models.PatternAnalysis{
+		JobID: "job-causal", Subject: "job-causal", BuildsAnalyzed: 3,
+		Recurrence: models.PatternRecurrenceMixedCauses, Systemic: true, Confidence: "medium",
+		CausalGroups: []models.PatternCausalGroup{
+			{Builds: []string{"2", "1"}, RootCause: "missing call", Confidence: "high"},
+			{Builds: []string{"3"}, RootCause: "one-off environment failure", Confidence: "medium"},
+		},
+		Summary: "mixed causes",
+	}
+	detail := sampleJobDetail(pattern.JobID)
+	detail.PatternAnalyses = []models.PatternAnalysis{pattern}
+	report := models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{pattern}}
+	if err := WriteAll(dir, sampleConfig(), sampleDashboard(), []models.JobDetail{detail}, report, models.SearchIndex{}); err != nil {
+		t.Fatal(err)
+	}
+
+	jobData, err := os.ReadFile(filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	flakinessData, err := os.ReadFile(filepath.Join(dir, "flakiness.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var writtenDetail models.JobDetail
+	var writtenReport models.FlakinessReport
+	if err := json.Unmarshal(jobData, &writtenDetail); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(flakinessData, &writtenReport); err != nil {
+		t.Fatal(err)
+	}
+	jobPattern := writtenDetail.PatternAnalyses[0]
+	reportPattern := writtenReport.RecurringPatterns[0]
+	if len(jobPattern.RemediationInvestigations) != 1 || len(reportPattern.RemediationInvestigations) != 1 {
+		t.Fatalf("job summaries=%+v report summaries=%+v", jobPattern.RemediationInvestigations, reportPattern.RemediationInvestigations)
+	}
+	jobSummary := jobPattern.RemediationInvestigations[0]
+	reportSummary := reportPattern.RemediationInvestigations[0]
+	if jobSummary != reportSummary || jobSummary.State != models.PatternRemediationNotInvestigated {
+		t.Fatalf("job summary=%+v report summary=%+v", jobSummary, reportSummary)
+	}
+	if jobSummary.CausalGroupID != jobPattern.CausalGroups[0].ID || jobSummary.CausalGroupHash != jobPattern.CausalGroups[0].ContentHash {
+		t.Fatalf("summary=%+v group=%+v", jobSummary, jobPattern.CausalGroups[0])
+	}
+	if len(pattern.RemediationInvestigations) != 0 || pattern.CausalGroups[0].ID != "" || pattern.CausalGroups[0].Builds[0] != "2" {
+		t.Fatalf("input pattern mutated: %+v", pattern)
+	}
+}

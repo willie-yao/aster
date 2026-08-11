@@ -18,6 +18,22 @@ interactive fix generation require `opencode` and git in the process that runs
 the feature. File Issue and Mark Resolved work in the standard server image and
 do not have this requirement.
 
+## Analysis-only causal groups
+
+Causal-group correlation remains analysis-only. It does not emit a suggested fix,
+remediation target, source target, or action field. The public pattern instead
+carries separate remediation-investigation summaries keyed to engine-derived
+causal-group IDs and content hashes. Repeated groups start at `not_investigated`
+with the message that no source-grounded implementation target has been verified.
+
+The job detail view shows this state in a concise, always-visible
+**Remediation** section. The **Investigate possible fix** label is reserved for
+the later authenticated read-only operation; no control is rendered before that
+endpoint exists. Technical failure details remain collapsed. Existing File Issue
+and Fix PR gates continue to reject causal-group results, and remediation state is
+excluded from causal-group and pattern content hashes so an investigation cannot
+rewrite the published analysis identity.
+
 ## What it does
 
 After each fetch, for every **systemic** recurring pattern (the same ones

@@ -3,6 +3,7 @@ import "./analysisTraces.test.js";
 import "./analysisChat.test.js";
 import "./aiUsage.test.js";
 import "./patternChat.test.js";
+import "./patternRemediation.test.js";
 import "./pageMetadata.test.js";
 import "./routes.test.js";
 import "./securityMarkup.test.js";

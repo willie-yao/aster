@@ -205,6 +205,8 @@ export interface FlakinessReport {
 }
 
 export interface PatternCausalGroup {
+  id?: string;
+  content_hash?: string;
   builds: string[];
   root_cause: string;
   confidence: "high" | "medium" | "low";
@@ -212,6 +214,24 @@ export interface PatternCausalGroup {
 
 export type PatternRecurrence =
   "shared_cause" | "mixed_causes" | "unrelated" | "insufficient_evidence";
+
+export type PatternRemediationInvestigationState =
+  | "not_investigated"
+  | "investigating"
+  | "actionable"
+  | "already_fixed"
+  | "external_dependency"
+  | "environment_or_infrastructure"
+  | "mitigation_only"
+  | "insufficient_evidence"
+  | "failed";
+
+export interface PatternRemediationInvestigationSummary {
+  causal_group_id: string;
+  causal_group_hash: string;
+  state: PatternRemediationInvestigationState;
+  reason?: string;
+}
 
 export interface PatternAnalysis {
   id?: string;
@@ -233,6 +253,7 @@ export interface PatternAnalysis {
   file_links?: Record<string, string>;
   source_ref?: string;
   remediation_verification?: PatternRemediationVerification;
+  remediation_investigations?: PatternRemediationInvestigationSummary[];
   lifecycle?: PatternLifecycle;
   summary: string;
 }

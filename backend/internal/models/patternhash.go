@@ -6,6 +6,27 @@ import (
 	"encoding/json"
 )
 
+type patternCausalGroupContent struct {
+	Builds     []string `json:"builds"`
+	RootCause  string   `json:"root_cause"`
+	Confidence string   `json:"confidence"`
+}
+
+func patternCausalGroupContents(groups []PatternCausalGroup) []patternCausalGroupContent {
+	if groups == nil {
+		return nil
+	}
+	out := make([]patternCausalGroupContent, len(groups))
+	for index, group := range groups {
+		out[index] = patternCausalGroupContent{
+			Builds:     group.Builds,
+			RootCause:  group.RootCause,
+			Confidence: group.Confidence,
+		}
+	}
+	return out
+}
+
 // PatternHash identifies the complete published pattern context.
 func PatternHash(p PatternAnalysis) string {
 	snapshot := struct {
@@ -13,7 +34,7 @@ func PatternHash(p PatternAnalysis) string {
 		JobID                   string                          `json:"job_id"`
 		BuildsAnalyzed          int                             `json:"builds_analyzed"`
 		Recurrence              PatternRecurrence               `json:"recurrence_classification,omitempty"`
-		CausalGroups            []PatternCausalGroup            `json:"causal_groups,omitempty"`
+		CausalGroups            []patternCausalGroupContent     `json:"causal_groups,omitempty"`
 		UnclassifiedBuilds      []string                        `json:"unclassified_builds,omitempty"`
 		Systemic                bool                            `json:"systemic"`
 		Confidence              string                          `json:"confidence"`
@@ -32,7 +53,7 @@ func PatternHash(p PatternAnalysis) string {
 		JobID:                   p.JobID,
 		BuildsAnalyzed:          p.BuildsAnalyzed,
 		Recurrence:              p.Recurrence,
-		CausalGroups:            p.CausalGroups,
+		CausalGroups:            patternCausalGroupContents(p.CausalGroups),
 		UnclassifiedBuilds:      p.UnclassifiedBuilds,
 		Systemic:                p.Systemic,
 		Confidence:              p.Confidence,
@@ -59,6 +80,7 @@ func AssignPatternIdentity(pattern *PatternAnalysis) {
 		return
 	}
 	pattern.ID = PatternID(*pattern)
+	assignPatternCausalGroupIdentities(pattern)
 	pattern.ContentHash = PatternHash(*pattern)
 }
 
@@ -69,11 +91,13 @@ func BackfillPatternIdentity(pattern *PatternAnalysis) bool {
 		return false
 	}
 	beforeID, beforeHash := pattern.ID, pattern.ContentHash
+	changed := false
 	if pattern.ID == "" {
 		pattern.ID = PatternID(*pattern)
 	}
+	changed = assignPatternCausalGroupIdentities(pattern) || changed
 	pattern.ContentHash = PatternHash(*pattern)
-	return pattern.ID != beforeID || pattern.ContentHash != beforeHash
+	return changed || pattern.ID != beforeID || pattern.ContentHash != beforeHash
 }
 
 // BackfillPatternIdentities returns a normalized copy of the pattern list.
@@ -81,7 +105,7 @@ func BackfillPatternIdentities(patterns []PatternAnalysis) ([]PatternAnalysis, b
 	if patterns == nil {
 		return nil, false
 	}
-	out := append([]PatternAnalysis(nil), patterns...)
+	out := clonePatternAnalyses(patterns)
 	changed := false
 	for index := range out {
 		changed = BackfillPatternIdentity(&out[index]) || changed

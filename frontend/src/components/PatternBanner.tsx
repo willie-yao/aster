@@ -30,6 +30,7 @@ import { patternActionEligibilityHint, patternLifecycleActive } from "../lib/act
 import { jobRunPath } from "../lib/routes";
 import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
+import { PatternRemediation } from "./PatternRemediation";
 
 function remediationStatusLabel(status: string): string {
   const label = status.replaceAll("_", " ");
@@ -440,6 +441,12 @@ export function PatternBanner({
       summary={<RichText text={pattern.summary} steps fileCtx={patternFileCtx} />}
       mobileSynopsis={firstSentence(pattern.shared_root_cause ?? pattern.summary)}
       details={details}
+      followUp={analysisOnly ? (
+        <PatternRemediation
+          groups={pattern.causal_groups ?? []}
+          investigations={pattern.remediation_investigations}
+        />
+      ) : undefined}
       actions={actions}
     />
   );

@@ -353,9 +353,11 @@ const (
 
 // PatternCausalGroup is one evidence-backed cause and its failed builds.
 type PatternCausalGroup struct {
-	Builds     []string `json:"builds"`
-	RootCause  string   `json:"root_cause"`
-	Confidence string   `json:"confidence"`
+	ID          string   `json:"id,omitempty"`
+	ContentHash string   `json:"content_hash,omitempty"`
+	Builds      []string `json:"builds"`
+	RootCause   string   `json:"root_cause"`
+	Confidence  string   `json:"confidence"`
 }
 
 // PatternAnalysis is a job-level correlation across recent failed builds.
@@ -395,13 +397,39 @@ type PatternAnalysis struct {
 	RelevantFiles []string          `json:"relevant_files,omitempty"`
 	FileLinks     map[string]string `json:"file_links,omitempty"`
 	SourceRef     string            `json:"source_ref,omitempty"`
-	// RemediationVerification records whether the structured target remains
+	// RemediationVerification records whether the legacy structured target remains
 	// unresolved at SourceRef or is already present there.
 	RemediationVerification *PatternRemediationVerification `json:"remediation_verification,omitempty"`
+	// RemediationInvestigations are safe public projections keyed to exact
+	// recurring causal groups. Private investigation evidence is stored separately.
+	RemediationInvestigations []PatternRemediationInvestigationSummary `json:"remediation_investigations,omitempty"`
 	// Lifecycle combines source verification with post-fix run evidence.
 	Lifecycle *PatternLifecycle `json:"lifecycle,omitempty"`
 	// Summary is a one-paragraph human-readable verdict.
 	Summary string `json:"summary"`
+}
+
+type PatternRemediationInvestigationState string
+
+const (
+	PatternRemediationNotInvestigated             PatternRemediationInvestigationState = "not_investigated"
+	PatternRemediationInvestigating               PatternRemediationInvestigationState = "investigating"
+	PatternRemediationActionable                  PatternRemediationInvestigationState = "actionable"
+	PatternRemediationAlreadyFixed                PatternRemediationInvestigationState = "already_fixed"
+	PatternRemediationExternalDependency          PatternRemediationInvestigationState = "external_dependency"
+	PatternRemediationEnvironmentOrInfrastructure PatternRemediationInvestigationState = "environment_or_infrastructure"
+	PatternRemediationMitigationOnly              PatternRemediationInvestigationState = "mitigation_only"
+	PatternRemediationInsufficientEvidence        PatternRemediationInvestigationState = "insufficient_evidence"
+	PatternRemediationInvestigationFailed         PatternRemediationInvestigationState = "failed"
+)
+
+// PatternRemediationInvestigationSummary is the safe public state for one
+// recurring causal group. Private evidence and model output are never embedded.
+type PatternRemediationInvestigationSummary struct {
+	CausalGroupID   string                               `json:"causal_group_id"`
+	CausalGroupHash string                               `json:"causal_group_hash"`
+	State           PatternRemediationInvestigationState `json:"state"`
+	Reason          string                               `json:"reason,omitempty"`
 }
 
 type PatternRemediationState string
