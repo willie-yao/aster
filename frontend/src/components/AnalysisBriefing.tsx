@@ -82,7 +82,7 @@ export function AnalysisBriefing({
   const desktop = useMediaQuery(theme.breakpoints.up("md"));
   const [open, setOpen] = useState(false);
   const generatedID = useId();
-  const contentID = `full-diagnosis-${generatedID.replaceAll(":", "")}`;
+  const contentID = `full-analysis-${generatedID.replaceAll(":", "")}`;
 
   if (desktop) {
     return (
@@ -152,7 +152,7 @@ export function AnalysisBriefing({
       </Box>
 
       <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
-        <DetailSectionBand title="Full diagnosis" metadata={open ? "Expanded" : "Collapsed"} />
+        <DetailSectionBand title="Full analysis" metadata={open ? "Expanded" : "Collapsed"} />
         <ButtonBase
           type="button"
           onClick={() => setOpen((value) => !value)}

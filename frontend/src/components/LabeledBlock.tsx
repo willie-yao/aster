@@ -5,7 +5,7 @@ import { soft } from "../theme";
 
 /**
  * LabeledBlock is a soft-bordered inset with a left accent bar and an
- * uppercase label. Used for AI Root Cause / Suggested Fix sections.
+ * uppercase label. Used for AI root-cause and remediation sections.
  */
 export function LabeledBlock({
   label,

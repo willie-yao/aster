@@ -20,24 +20,28 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
     status: "PASSING" | "FLAKY" | "FAILING";
     count: number;
     color: Extract<SoftColor, "success" | "warning" | "error">;
+    description: string;
   }[] = [
     {
       label: "Passing",
       status: "PASSING",
       count: jobs.filter((job) => job.overall_status === "PASSING").length,
       color: "success",
+      description: "Jobs with at least a 90% pass rate across up to the last 10 published runs.",
     },
     {
       label: "Flaky",
       status: "FLAKY",
       count: jobs.filter((job) => job.overall_status === "FLAKY").length,
       color: "warning",
+      description: "Jobs with a mix of passing and failing results across up to the last 10 published runs.",
     },
     {
       label: "Failing",
       status: "FAILING",
       count: jobs.filter((job) => job.overall_status === "FAILING").length,
       color: "error",
+      description: "Jobs with a pass rate of 30% or less across up to the last 10 published runs.",
     },
   ];
 
@@ -69,7 +73,7 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
           color="text.secondary"
           sx={overviewTypography.subsectionHeading}
         >
-          Last 10 run reliability
+          Reliability over the last 10 runs
         </Typography>
         <Typography variant="stat" component="span" sx={{ mt: 0.25, fontSize: "21px", lineHeight: "28px" }}>
           {countLabel(total, "job")}
@@ -85,7 +89,8 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
             onClick={() => onFilterClick?.(active ? "ALL" : row.status)}
             disabled={!onFilterClick}
             aria-pressed={active}
-            aria-label={`${row.label}: ${countLabel(row.count, "job")}, ${percentage}%`}
+            aria-label={`${row.label}: ${countLabel(row.count, "job")}, ${percentage}% of jobs. ${row.description}`}
+            title={row.description}
             sx={{
               position: "relative",
               minWidth: 0,
@@ -121,7 +126,7 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
                 {active && <Check aria-hidden="true" sx={{ fontSize: 15, color: "primary.main" }} />}
               </Box>
               <Typography variant="data" component="span" color="text.secondary" sx={overviewTypography.data}>
-                {percentage}%
+                {percentage}% of jobs
               </Typography>
             </Box>
             <Typography variant="stat" component="span" sx={{ fontSize: "19px", color: `${row.color}.main` }}>

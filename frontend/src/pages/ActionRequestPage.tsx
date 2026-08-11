@@ -55,7 +55,7 @@ function ActionRequestPageFrame({
           sx={{ color: "text.secondary", fontSize: "0.875rem" }}
         >
           <Link component={RouterLink} to="/" color="inherit" underline="hover">
-            Dashboard
+            Overview
           </Link>
           <Typography variant="inherit" color="text.primary">
             Draft review
@@ -63,7 +63,7 @@ function ActionRequestPageFrame({
         </Breadcrumbs>
       )}
       <Typography variant="h4" component="h1">
-        Action Request
+        Draft review
       </Typography>
       {children}
     </Stack>
@@ -363,7 +363,7 @@ export function ActionRequestPage() {
           </Box>
           <Box sx={{ minWidth: 0, flex: 1 }}>
             <Typography variant="h5" component="h2">
-              {isFix ? "Review draft fix PR" : "Review issue"}
+              {isFix ? "Review draft fix PR" : "Review issue draft"}
             </Typography>
             <Typography variant="body2" color="text.secondary">
               Requested by {request.owner}

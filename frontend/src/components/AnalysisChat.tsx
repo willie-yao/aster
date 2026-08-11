@@ -350,7 +350,7 @@ function AssistantMessage({
               <RichText text={message.proposed_revision.root_cause} steps fileCtx={fileCtx} />
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontWeight: 700, mt: 1.25 }}>
-              Revised fix
+              Revised remediation
             </Typography>
             <Typography variant="body2" sx={{ mt: 0.25, lineHeight: 1.6 }}>
               <RichText text={message.proposed_revision.suggested_fix} steps fileCtx={fileCtx} />

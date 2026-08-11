@@ -41,7 +41,7 @@ export function AnalysisCorrectionDialog({ preview, open, busy, error, onClose, 
             <Typography variant="label" color="warning.main">Corrected root cause</Typography>
             <Typography variant="body2" sx={{ mt: 0.5, whiteSpace: "pre-line" }}>{preview.proposed.root_cause}</Typography>
             <Divider sx={{ my: 1.5 }} />
-            <Typography variant="label" color="warning.main">Corrected fix</Typography>
+            <Typography variant="label" color="warning.main">Corrected remediation</Typography>
             <Typography variant="body2" sx={{ mt: 0.5, whiteSpace: "pre-line" }}>{preview.proposed.suggested_fix}</Typography>
           </Box>
           <Box>

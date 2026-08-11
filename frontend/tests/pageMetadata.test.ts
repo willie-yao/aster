@@ -9,22 +9,22 @@ import {
 test("known routes receive route-specific page titles", () => {
   const cases = [
     ["/", "Overview"],
-    ["/flaky", "Failure Analysis"],
-    ["/flaky/", "Failure Analysis"],
-    ["/FLAKY", "Failure Analysis"],
-    ["/analysis-traces", "Analysis Traces"],
-    ["/ANALYSIS-TRACES", "Analysis Traces"],
-    ["/ai-usage", "AI Usage"],
-    ["/AI-USAGE", "AI Usage"],
-    ["/job/periodic-capz", "Job Details"],
-    ["/JOB/periodic-capz", "Job Details"],
-    ["/job/periodic-capz/test/TestCluster", "Test Details"],
-    ["/job/periodic%2Fcapz/test/Test%20Cluster", "Test Details"],
-    ["/JOB/periodic-capz/TEST/TestCluster", "Test Details"],
-    ["/job/periodic-capz/build/123/failure", "Build Failure"],
-    ["/action-request/request-1", "Action Request"],
-    ["/action-request/request%2Fwith%20spaces", "Action Request"],
-    ["/ACTION-REQUEST/request-1", "Action Request"],
+    ["/flaky", "Failure trends"],
+    ["/flaky/", "Failure trends"],
+    ["/FLAKY", "Failure trends"],
+    ["/analysis-traces", "Analysis traces"],
+    ["/ANALYSIS-TRACES", "Analysis traces"],
+    ["/ai-usage", "AI usage"],
+    ["/AI-USAGE", "AI usage"],
+    ["/job/periodic-capz", "Job details"],
+    ["/JOB/periodic-capz", "Job details"],
+    ["/job/periodic-capz/test/TestCluster", "Test details"],
+    ["/job/periodic%2Fcapz/test/Test%20Cluster", "Test details"],
+    ["/JOB/periodic-capz/TEST/TestCluster", "Test details"],
+    ["/job/periodic-capz/build/123/failure", "Build failure"],
+    ["/action-request/request-1", "Draft review"],
+    ["/action-request/request%2Fwith%20spaces", "Draft review"],
+    ["/ACTION-REQUEST/request-1", "Draft review"],
   ] as const;
 
   for (const [pathname, expected] of cases) {
@@ -45,17 +45,17 @@ test("unknown and malformed routes receive the Not Found title", () => {
     "//evil.example/path",
     "/\\evil.example/path",
   ]) {
-    assert.equal(pageTitleForPath(pathname), "Page Not Found", pathname);
+    assert.equal(pageTitleForPath(pathname), "Page not found", pathname);
   }
 });
 
 test("document titles combine the route title with dashboard branding", () => {
   assert.equal(
     documentTitleForPath("/flaky", "CAPZ Prow Dashboard"),
-    "Failure Analysis | CAPZ Prow Dashboard",
+    "Failure trends | CAPZ Prow Dashboard",
   );
   assert.equal(
     documentTitleForPath("/does-not-exist", "CAPZ Prow Dashboard"),
-    "Page Not Found | CAPZ Prow Dashboard",
+    "Page not found | CAPZ Prow Dashboard",
   );
 });

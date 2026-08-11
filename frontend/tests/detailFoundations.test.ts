@@ -439,13 +439,13 @@ test("test result navigation names include status duration and source context", 
 
   assert.match(
     html,
-    /aria-label="Open diagnosis for Fails cluster\. Failed\. Duration 5s"/,
+    /aria-label="Open analysis for Fails cluster\. Failed\. Duration 5s"/,
   );
-  const diagnosis = html.match(
-    /<a[^>]*aria-label="Open diagnosis[^"]*"[^>]*>([\s\S]*?)<\/a>/,
+  const analysis = html.match(
+    /<a[^>]*aria-label="Open analysis[^"]*"[^>]*>([\s\S]*?)<\/a>/,
   );
-  assert.ok(diagnosis);
-  assert.doesNotMatch(diagnosis[1], /<a|<button/);
+  assert.ok(analysis);
+  assert.doesNotMatch(analysis[1], /<a|<button/);
 });
 
 test("expanded evidence source links keep context and a 44px target", () => {

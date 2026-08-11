@@ -128,12 +128,14 @@ test("health summary exposes counts and pressed filter state", () => {
   ];
   const html = render(createElement(HealthPanel, { jobs, activeFilter: "FLAKY", onFilterClick: () => undefined }));
 
-  assert.match(html, /Last 10 run reliability/);
+  assert.match(html, /Reliability over the last 10 runs/);
   assert.match(html, /3 jobs/);
-  assert.match(html, /aria-label="Passing: 1 job, 33%"/);
-  assert.match(html, /aria-label="Flaky: 1 job, 33%"/);
+  assert.match(html, /aria-label="Passing: 1 job, 33% of jobs\./);
+  assert.match(html, /aria-label="Flaky: 1 job, 33% of jobs\./);
+  assert.match(html, /mix of passing and failing results/);
   assert.match(html, /aria-pressed="true"/);
-  assert.match(html, /aria-label="Failing: 1 job, 33%"/);
+  assert.match(html, /aria-label="Failing: 1 job, 33% of jobs\./);
+  assert.match(html, />33% of jobs</);
   assert.match(html, /inset 0 -3px 0/);
 });
 
@@ -145,7 +147,7 @@ test("job health ledger keeps job and run links separate", () => {
   assert.match(html, /href="\/job\/capz-periodic-e2e-main"/);
   assert.match(html, /href="\/job\/capz-periodic-e2e-main\?run=123"/);
   assert.match(html, /aria-label="Run 123, passed, Aug 5, 2026"/);
-  assert.match(html, />Last 10</);
+  assert.match(html, />Last 10 pass</);
   assert.match(html, />Current</);
   assert.match(html, />Passing</);
   assert.doesNotMatch(html, /<a\b[^>]*>(?:(?!<\/a>)[\s\S])*<a\b/);
@@ -183,11 +185,11 @@ test("detail run controls include result build and date context", () => {
 test("overview count labels place dynamic counts in Needs attention", () => {
   assert.equal(countLabel(1, "job"), "1 job");
   assert.equal(countLabel(2, "job"), "2 jobs");
-  assert.equal(needsAttentionSummary(5, 12, false, false), "5 recurring patterns · 12 active items");
-  assert.equal(needsAttentionSummary(null, null, true, false), "recurring patterns loading · active items loading");
-  assert.equal(needsAttentionSummary(null, null, false, true), "recurring patterns unavailable · active items unavailable");
+  assert.equal(needsAttentionSummary(5, 12, false, false), "5 recurring patterns · 12 test alerts");
+  assert.equal(needsAttentionSummary(null, null, true, false), "recurring patterns loading · test alerts loading");
+  assert.equal(needsAttentionSummary(null, null, false, true), "recurring patterns unavailable · test alerts unavailable");
   assert.equal(attentionSignal("high", false), "high confidence");
-  assert.equal(attentionSignal("medium", true), "medium confidence · Last known good");
+  assert.equal(attentionSignal("medium", true), "medium confidence · Last successful refresh");
 });
 
 test("disclosure labels pluralize and expose expansion state", () => {
@@ -243,7 +245,7 @@ test("attention rows use one full-row destination link", () => {
   assert.match(html, />Failing</);
 });
 
-test("featured diagnosis link precedes separate recent-run links", () => {
+test("featured analysis link precedes separate recent-run links", () => {
   const recurring: PatternAnalysis = {
     id: "pattern-1",
     subject: "capz-periodic-e2e-main",
@@ -269,8 +271,8 @@ test("featured diagnosis link precedes separate recent-run links", () => {
     "/job/capz-periodic-e2e-main?run=122",
     "/job/capz-periodic-e2e-main?run=123",
   ]);
-  assert.match(html, /aria-label="View diagnosis for capz-periodic-e2e-main"/);
-  assert.match(html, />View diagnosis →</);
+  assert.match(html, /aria-label="View analysis for capz-periodic-e2e-main"/);
+  assert.match(html, />View analysis →</);
   assert.doesNotMatch(html, /<a\b[^>]*>(?:(?!<\/a>)[\s\S])*<a\b/);
   assert.doesNotMatch(html, /tabindex="[1-9]/);
 });
@@ -354,7 +356,14 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(attention, /jobPath\(pattern\.job_id/);
   assert.match(attention, /testRunPath\(item\.job_id, item\.test_name, item\.last_failure\.build_id\)/);
   assert.match(attention, /"additional recurring pattern"/);
-  assert.match(attention, /"resolved patterns"/);
+  assert.match(attention, /"dismissed patterns"/);
+  assert.match(attention, /No active test alerts/);
+  assert.match(attention, /No published test-level or recurring-pattern alerts need attention/);
+  assert.match(attention, /const hasActiveItems = recurring\.length > 0 \|\| groups\.length > 0/);
+  assert.match(attention, /const noActiveAlerts = Boolean\(report && !hasActiveItems\)/);
+  assert.match(attention, /report && resolvedPatterns\.length > 0/);
+  assert.doesNotMatch(attention, /const allClear/);
+  assert.doesNotMatch(attention, /New regressions/);
   assert.match(attention, /color: lead \? "error\.main" : "text\.secondary"/);
   assert.match(attention, /fontWeight: lead \? 700 : 600/);
   assert.doesNotMatch(attention, /background: "transparent"/);
@@ -364,13 +373,15 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.doesNotMatch(dashboard, /failingJobs/);
   assert.match(attention, /needsAttentionSummary\(/);
   assert.match(attention, /destinationLabel=/);
-  assert.match(attention, /data-featured-diagnosis-link/);
+  assert.match(attention, /data-featured-analysis-link/);
   assert.match(attention, /fontSize: "18px"/);
   assert.match(attention, /maxInlineSize: "56ch"/);
   assert.match(attention, /persistOverviewHistoryState/);
   assert.match(attention, /scrollMarginTop: \{ xs: "128px", lg: "72px" \}/);
   assert.doesNotMatch(attention, /fontSize: lead \? "24px" : "16px"/);
   assert.match(filters, /minHeight: 44/);
+  assert.match(filters, />\s*Reliability\s*</);
+  assert.match(filters, /aria-label="Reliability over the last 10 runs"/);
   assert.match(filters, /height: 44/);
   assert.match(filters, /boxShadow: "inset 0 -3px 0/);
   assert.match(filters, /color: "text.primary"/);
@@ -379,6 +390,8 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(filters, /borderRadius: "0 4px 4px 0 !important"/);
   assert.match(health, /onFilterClick\?\.\(active \? "ALL" : row\.status\)/);
   assert.match(health, /borderLeft: "1px solid"/);
+  assert.match(health, /% of jobs/);
+  assert.match(health, /mix of passing and failing results/);
   assert.doesNotMatch(health, /borderRight:/);
   assert.match(search, /width: 44[\s\S]*height: 44[\s\S]*p: 0/);
   assert.match(sparkline, /repeat\(4, 44px\)/);

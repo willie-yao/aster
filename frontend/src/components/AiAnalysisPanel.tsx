@@ -164,7 +164,7 @@ export function AiAnalysisPanel({
         <>
           <AutoAwesome sx={{ fontSize: 20, color: "primary.main" }} />
           <Typography variant="label" sx={{ fontWeight: 600 }} color="primary.main">
-            AI Analysis
+            AI analysis
           </Typography>
         </>
       )}
@@ -324,8 +324,8 @@ export function AiAnalysisPanel({
                 sx={{ display: "block", mt: 1 }}
               >
                 {correctionActive
-                  ? "Original suggested fix"
-                  : "Corrected suggested fix"}
+                  ? "Original suggested remediation"
+                  : "Corrected suggested remediation"}
               </Typography>
               <Typography
                 variant="body2"
@@ -347,7 +347,7 @@ export function AiAnalysisPanel({
       <RichText text={displayedAnalysis.root_cause} steps fileCtx={fileCtx} />
     </DetailAnalysisSection>
   ) : (
-    <LabeledBlock label="Root Cause" accent={severityColor}>
+    <LabeledBlock label="Root cause" accent={severityColor}>
       <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
         <RichText text={displayedAnalysis.root_cause} steps fileCtx={fileCtx} />
       </Typography>
@@ -359,7 +359,7 @@ export function AiAnalysisPanel({
       <RichText text={displayedAnalysis.suggested_fix} steps fileCtx={fileCtx} />
     </DetailAnalysisSection>
   ) : (
-    <LabeledBlock label="Suggested Fix" accent="primary">
+    <LabeledBlock label="Suggested remediation" accent="primary">
       <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
         <RichText text={displayedAnalysis.suggested_fix} steps fileCtx={fileCtx} />
       </Typography>
@@ -400,7 +400,7 @@ export function AiAnalysisPanel({
           color="text.secondary"
           sx={{ fontWeight: 600, display: "block", mb: 0.5 }}
         >
-          Files to Check
+          Related files
         </Typography>
         <Stack spacing={0.5}>
           {[...analysis.relevant_files]

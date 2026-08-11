@@ -208,7 +208,7 @@ export function TestDetailPage() {
   if (error) {
     return (
       <ErrorState
-        title="Failed to load job details"
+        title="Failed to load test details"
         message={error}
         onRetry={() => window.location.reload()}
       />

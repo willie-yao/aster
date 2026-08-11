@@ -144,7 +144,9 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(pattern, /<AnalysisBriefing/);
   assert.match(pattern, /icon=\{<AutoAwesome/);
   assert.match(pattern, /mobileNotice=\{mobileNotice\}/);
-  assert.match(pattern, /Last known good ·/);
+  assert.match(pattern, /Last successful refresh ·/);
+  assert.match(pattern, /label="Dismissed"/);
+  assert.match(pattern, /Dismissed by/);
   assert.match(pattern, /<AnalysisChat[\s\S]*appearance="detail"/);
   assert.match(pattern, /<FailureActions[\s\S]*appearance="detail"/);
   assert.match(pattern, /label="Root cause"/);
@@ -168,11 +170,15 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(identity, /display: \{ xs: "none", md: "flex" \}/);
   assert.match(identity, /desktopInline \? \{ xs: "block", md: "none" \}/);
   assert.match(testTable, /Evidence/);
-  assert.match(testTable, /Diagnosis →/);
+  assert.match(testTable, /Analysis →/);
   assert.match(testTable, /Show inline evidence/);
   assert.match(testTable, /<AiAnalysisPanel[\s\S]*appearance="detail"/);
   assert.doesNotMatch(testTable, /<Panel/);
   assert.match(analysis, /appearance\?: "default" \| "detail"/);
+  assert.match(analysis, /label="Root cause"/);
+  assert.match(analysis, /label="Suggested remediation"/);
+  assert.match(analysis, />\s*Related files\s*</);
+  assert.doesNotMatch(analysis, /Suggested Fix/);
 
   assert.match(ledger, /failed: "Failed"[\s\S]*passed: "Passed"[\s\S]*all: "All statuses"/);
   assert.doesNotMatch(ledger, /Skipped"/);

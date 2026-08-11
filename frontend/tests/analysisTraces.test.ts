@@ -291,7 +291,7 @@ test("copy completion is exposed through the button name and a polite status", (
   assert.match(html, />Build copied</);
 });
 
-test("Analysis Traces page preserves private gates query downloads and operator-console structure", () => {
+test("Analysis traces page preserves private gates query downloads and operator-console structure", () => {
   const source = readFileSync(resolve(process.cwd(), "src/pages/AnalysisTracesPage.tsx"), "utf8");
   const filters = readFileSync(resolve(process.cwd(), "src/components/AnalysisTraceFilters.tsx"), "utf8");
   const ledger = readFileSync(resolve(process.cwd(), "src/components/AnalysisTraceLedger.tsx"), "utf8");

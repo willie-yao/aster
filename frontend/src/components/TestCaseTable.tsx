@@ -131,7 +131,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
             Duration
           </Typography>
           <Typography component="div" color="text.secondary" sx={{ px: 1.5, ...overviewTypography.tableHeading }}>
-            Diagnosis
+            Analysis
           </Typography>
           <Typography
             component="div"
@@ -149,7 +149,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
           const displayName = parseTestDisplayName(tc.name).displayName;
           const status = testStatusPresentation(tc.status);
           const duration = formatDuration(tc.duration_seconds);
-          const diagnosisPath = jobID
+          const analysisPath = jobID
             ? buildId
               ? testRunPath(jobID, tc.name, buildId)
               : testPath(jobID, tc.name)
@@ -178,12 +178,12 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                   borderBottomColor: "divider",
                 }}
               >
-                {diagnosisPath ? (
+                {analysisPath ? (
                   <Link
                     component={RouterLink}
-                    to={diagnosisPath}
+                    to={analysisPath}
                     underline="none"
-                    aria-label={`Open diagnosis for ${displayName}. ${status.label}. Duration ${duration}`}
+                    aria-label={`Open analysis for ${displayName}. ${status.label}. Duration ${duration}`}
                     sx={{
                       gridColumn: { xs: "1", md: "1 / 5" },
                       display: "grid",
@@ -192,8 +192,8 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                         md: "110px minmax(0, 1fr) 90px 110px",
                       },
                       gridTemplateAreas: {
-                        xs: '"name diagnosis" "status duration"',
-                        md: '"status name duration diagnosis"',
+                        xs: '"name analysis" "status duration"',
+                        md: '"status name duration analysis"',
                       },
                       minWidth: 0,
                       minHeight: 54,
@@ -292,7 +292,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                       component="span"
                       color="primary.main"
                       sx={{
-                        gridArea: "diagnosis",
+                        gridArea: "analysis",
                         minHeight: 44,
                         display: "inline-flex",
                         alignItems: "center",
@@ -303,7 +303,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                         whiteSpace: "nowrap",
                       }}
                     >
-                      Diagnosis →
+                      Analysis →
                     </Typography>
                   </Link>
                 ) : (
@@ -464,7 +464,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                           }}
                         >
                           <Typography variant="label" color="text.secondary">
-                            Stack Trace
+                            Stack trace
                           </Typography>
                         </AccordionSummary>
                         <AccordionDetails sx={{ pt: 0 }}>
@@ -515,7 +515,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                         }}
                       >
                         <Typography variant="label" color="text.primary" sx={{ fontWeight: 700 }}>
-                          Debug Artifacts: {tc.cluster_artifacts.cluster_name}
+                          Debug artifacts: {tc.cluster_artifacts.cluster_name}
                         </Typography>
 
                         <Box sx={{ display: "flex", flexWrap: "wrap", columnGap: 2, rowGap: 0.75 }}>
@@ -527,7 +527,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                               onClick={(e) => e.stopPropagation()}
                               sx={externalLinkSx}
                             >
-                              <Cloud sx={{ fontSize: 16 }} /> Provider Activity Log
+                              <Cloud sx={{ fontSize: 16 }} /> Provider activity log
                             </Link>
                           )}
                           {tc.cluster_artifacts.bootstrap_resources_url && (
@@ -538,7 +538,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                               onClick={(e) => e.stopPropagation()}
                               sx={externalLinkSx}
                             >
-                              <Assignment sx={{ fontSize: 16 }} /> Cluster Resources
+                              <Assignment sx={{ fontSize: 16 }} /> Cluster resources
                             </Link>
                           )}
                           {tc.cluster_artifacts.pod_log_dirs &&
@@ -562,7 +562,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                               onClick={(e) => e.stopPropagation()}
                               sx={externalLinkSx}
                             >
-                              <Dns sx={{ fontSize: 16 }} /> Controller Logs
+                              <Dns sx={{ fontSize: 16 }} /> Controller logs
                             </Link>
                           )}
                         </Box>
@@ -591,7 +591,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                               <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
                                 <Dns sx={{ fontSize: 16, color: "text.secondary" }} />
                                 <Typography variant="label" color="text.secondary">
-                                  Machine Logs ({tc.cluster_artifacts.machines.length} machines)
+                                  Machine logs ({tc.cluster_artifacts.machines.length} machines)
                                 </Typography>
                               </Box>
                             </AccordionSummary>
