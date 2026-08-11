@@ -20,6 +20,7 @@ import { buildActionEligibilityHint } from "../lib/actionEligibility";
 import { buildFailurePath } from "../lib/routes";
 import { FailureActions } from "./FailureActions";
 import { useCapabilities } from "../hooks/useCapabilities";
+import { useAuth } from "../hooks/useAuth";
 import { AiAnalysisPanel } from "./AiAnalysisPanel";
 import { RichText } from "./RichText";
 import { AnalysisBriefing } from "./AnalysisBriefing";
@@ -65,6 +66,7 @@ export function BuildFailurePanel({
 }) {
   const state = buildAnalysisState(failure, fetchStatus);
   const { features } = useCapabilities();
+  const auth = useAuth();
   const fileCtx = {
     buildLogUrl: run.build_log_url,
     webUrl: run.web_url,
@@ -133,9 +135,12 @@ export function BuildFailurePanel({
     failure.ai_summary?.summary ??
     "This build failed before a failed JUnit test case was reported.";
   const hasMobileDetails = showDetailLink || telemetry.length > 0 || Boolean(failure.ai_analysis);
-  const details = (
+  const desktopStateNotice = stateNotice && (
+    <Box sx={{ display: { xs: "none", md: "block" } }}>{stateNotice}</Box>
+  );
+  const details = hasMobileDetails ? (
     <Stack spacing={1.75}>
-      {stateNotice && <Box sx={{ display: { xs: "none", md: "block" } }}>{stateNotice}</Box>}
+      {desktopStateNotice}
       {showDetailLink && (
         <Link
           component={RouterLink}
@@ -159,7 +164,8 @@ export function BuildFailurePanel({
         />
       )}
     </Stack>
-  );
+  ) : undefined;
+  const showActions = features.actions && auth.status !== "loading" && auth.status !== "unavailable";
   const actions = (
     <FailureActions
       failureID={buildFailureActionID(jobID, run.build_id)}
@@ -176,9 +182,14 @@ export function BuildFailurePanel({
       metadata={`Build ${run.build_id} · ${state === "succeeded" ? `${failure.ai_analysis?.severity ?? "Unknown"} severity` : stateText[pendingState].title}`}
       mobileMetadata={`Build ${run.build_id}`}
       mobileNotice={stateNotice}
-      summary={<RichText text={summary} fileCtx={fileCtx} />}
+      summary={(
+        <Stack spacing={1.5}>
+          {!hasMobileDetails && desktopStateNotice}
+          <RichText text={summary} fileCtx={fileCtx} />
+        </Stack>
+      )}
       details={details}
-      actions={beforeActions ? undefined : actions}
+      actions={beforeActions || !showActions ? undefined : actions}
       collapseDetailsOnMobile={hasMobileDetails}
     />
   );
@@ -189,17 +200,21 @@ export function BuildFailurePanel({
     <Stack spacing={2} sx={{ minWidth: 0 }}>
       {briefing}
       {beforeActions}
-      <Box
-        sx={{
-          bgcolor: "surface.container",
-          borderBlock: "1px solid",
-          borderColor: "divider",
-          px: { xs: 1.5, sm: 2 },
-          py: 1,
-        }}
-      >
-        {actions}
-      </Box>
+      {showActions && (
+        <Box
+          component="section"
+          aria-label="Build failure actions"
+          sx={{
+            bgcolor: "surface.container",
+            borderBlock: "1px solid",
+            borderColor: "divider",
+            px: { xs: 1.5, sm: 2 },
+            py: 1,
+          }}
+        >
+          {actions}
+        </Box>
+      )}
     </Stack>
   );
 }

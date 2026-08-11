@@ -63,4 +63,7 @@ test("build failure panel has one canonical analysis presentation", () => {
   assert.match(panel, /\{stateText\[pendingState\]\.detail\}/);
   assert.doesNotMatch(panel, /failure\.ai_summary\?\.summary \?\? stateText\[pendingState\]\.detail/);
   assert.match(panel, /beforeActions[\s\S]*\{actions\}/);
+  assert.match(panel, /const showActions = features\.actions/);
+  assert.match(panel, /showActions && \(/);
+  assert.match(panel, /const details = hasMobileDetails \?/);
 });
