@@ -142,15 +142,21 @@ authority. Manual validation must use the client identity explicitly.
 ## Native OpenCode boundary
 
 OpenCode receives the pinned workspace, failure metadata, consumer guidance,
-and one engine-owned output contract. Its native file reading, search, and edit tools remain available. Bash is denied
-in the initial prototype so the executor can enforce one OpenCode session. Network access, web fetching, delegation, and
-external skills are denied. Filesystem mounts and admission policy, not a
-second dashboard tool loop, enforce the source and artifact boundary.
+and one engine-owned output contract. One server process and one session carry
+the evidence and finalization messages. The evidence agent has bounded native
+read and search access. The finalization agent has only StructuredOutput. Network
+access, web fetching, delegation, writes, project configuration, and external
+skills remain denied. Filesystem mounts and admission policy, not a second
+dashboard tool loop, enforce the source and artifact boundary.
 
-The executor runs OpenCode once. It verifies source and artifact identity before
-and after the session, requires exactly one result file, and emits one bounded
-result through stdout. Provider usage remains unavailable unless the runtime or
-gateway reports it explicitly.
+The executor verifies source and artifact identity before and after the session,
+requires exactly one result file, and emits one bounded result through stdout.
+Sanitized telemetry retains full-session requests, tokens, cost availability,
+steps, tool counts, failures, and denials plus the bounded phase counters. The
+final synchronous structured message is combined with evidence-phase session
+telemetry because OpenCode 1.18.2 does not expose the completed structured message
+through the session message-list endpoint. No prompt, output, file content, raw
+event, response body, or provider message is retained.
 
 ## Result contract
 
@@ -377,19 +383,31 @@ planner, or case-specific phases, and keep its dashboard-owned production lines
 at or below half of the in-process analyzer's production lines. Similar quality
 without this reduction is not a successful replacement.
 
-## Purpose-built OpenCode agent
+## Purpose-built OpenCode agents
 
-The executor configures one private primary agent named `analysis`; it does not
-use OpenCode's generic coding-oriented `build` agent. The agent receives static
-engine-owned diagnostic guidance and uses native glob and grep for both sealed
-input trees. Native read is limited to `artifacts/*`; source reads remain denied
-because OpenCode 1.18.2 can load nearby `AGENTS.md`, `CLAUDE.md`, or `CONTEXT.md`
-files into privileged reminders. Prepared artifacts containing one of those
-instruction filenames are rejected before OpenCode starts. Shell access is limited to the exact read-only
-commands `git status --short`, `git log -1 --oneline`, and
-`git diff --no-ext-diff --stat`. Edit, write, patch, arbitrary shell, network,
-delegation, external skills, and external-directory access remain denied. The
-executor, not the model, writes the canonical result file.
+The executor configures two private primary agents and uses them in one OpenCode
+session. It does not use OpenCode's generic coding-oriented `build` agent. The
+`analysis-evidence` agent receives static engine-owned diagnostic guidance and
+can use native glob, grep, and read against the sealed `source/` and `artifacts/`
+trees. StructuredOutput is denied and no response format is attached during this
+phase. Shell access is limited to the exact read-only commands
+`git status --short`, `git log -1 --oneline`, and
+`git diff --no-ext-diff --stat`.
+
+The executor fetches sanitized session telemetry after the evidence message and
+requires at least one successful artifact file read or matching artifact grep.
+It records successful source evidence separately. If that gate passes, the
+`analysis-finalize` agent receives a second message in the same session. Its only
+allowed tool is the exact schema-backed StructuredOutput function. Any native
+tool attempt or any result other than exactly one StructuredOutput call fails
+closed. Source citations or relevant files are rejected unless the evidence phase
+recorded a successful source read or matching source grep.
+
+Tracked or artifact `AGENTS.md`, `CLAUDE.md`, and `CONTEXT.md` files are rejected
+before OpenCode starts, so nearby instruction discovery cannot elevate workspace
+content. Edit, write, patch, arbitrary shell, network, delegation, external
+skills, project configuration, and external-directory access remain denied in
+both phases. The executor, not the model, writes the canonical result file.
 
 The execution request seals the configured model context and output limits and
 passes those exact values to OpenCode. The analyzer has no hard-coded context

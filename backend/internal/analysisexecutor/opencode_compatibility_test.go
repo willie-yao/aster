@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -119,7 +120,11 @@ func parseSyntheticProviderRequest(raw []byte) (syntheticProviderRequestShape, e
 	if err := json.Unmarshal(raw, &request); err != nil {
 		return syntheticProviderRequestShape{}, err
 	}
-	shape := syntheticProviderRequestShape{model: request.Model, toolChoiceMode: request.ToolChoice, outputTokenLimit: request.MaxTokens}
+	toolChoice := request.ToolChoice
+	if toolChoice == "" {
+		toolChoice = "auto"
+	}
+	shape := syntheticProviderRequestShape{model: request.Model, toolChoiceMode: toolChoice, outputTokenLimit: request.MaxTokens}
 	if request.Stream {
 		shape.streamingMode = "streaming"
 	}
@@ -173,4 +178,162 @@ func providerMessageTextBytes(raw json.RawMessage) (int, error) {
 		}
 	}
 	return total, nil
+}
+
+func TestOpenCode1182TwoPhaseCompatibility(t *testing.T) {
+	bin := os.Getenv("OPENCODE_1_18_2_BIN")
+	if bin == "" {
+		t.Skip("set OPENCODE_1_18_2_BIN to the exact OpenCode 1.18.2 executable")
+	}
+	workDir := t.TempDir()
+	for _, dir := range []string{"source", "artifacts", "result"} {
+		if err := os.Mkdir(filepath.Join(workDir, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifactPath := filepath.Join(workDir, "artifacts", "failure.log")
+	sourcePath := filepath.Join(workDir, "source", "main.go")
+	if err := os.WriteFile(artifactPath, []byte("synthetic failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	var toolSets [][]string
+	var providerShapes []syntheticProviderRequestShape
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, err := io.ReadAll(io.LimitReader(r.Body, maxOpenCodeAPIResponseBytes+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		shape, err := parseSyntheticProviderRequest(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		providerShapes = append(providerShapes, shape)
+		var request struct {
+			Tools []struct {
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			} `json:"tools"`
+		}
+		if err := json.Unmarshal(data, &request); err != nil {
+			t.Fatal(err)
+		}
+		names := make([]string, 0, len(request.Tools))
+		for _, tool := range request.Tools {
+			names = append(names, tool.Function.Name)
+		}
+		sort.Strings(names)
+		toolSets = append(toolSets, names)
+		calls++
+		switch calls {
+		case 1:
+			writeSyntheticOpenAIToolCalls(t, w, []syntheticOpenAIToolCall{
+				{Name: "read", Arguments: map[string]any{"filePath": "artifacts/failure.log"}},
+				{Name: "read", Arguments: map[string]any{"filePath": "source/main.go"}},
+			})
+		case 2:
+			writeSyntheticOpenAIText(t, w, "Evidence inspected.")
+		case 3:
+			var structured any
+			if err := json.Unmarshal(executorAnalysisJSON(), &structured); err != nil {
+				t.Fatal(err)
+			}
+			writeSyntheticOpenAIStream(t, w, "StructuredOutput", structured)
+		default:
+			t.Fatalf("unexpected provider request %d", calls)
+		}
+	}))
+	defer gateway.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	defer cancel()
+	spec := OpenCodeSpec{
+		Bin: bin, WorkDir: workDir, HomeDir: t.TempDir(), TempDir: t.TempDir(),
+		Gateway: engineruntime.ModelGatewayConfig{Endpoint: gateway.URL + "/v1/chat/completions", Model: "synthetic-model", ProtocolVersion: "openai-chat-completions-v1"},
+		Prompt:  "Read artifacts/failure.log, inspect source/main.go if relevant, and investigate the failure.", MaxSteps: 6,
+		ModelContextTokens: 200000, ModelOutputTokens: 8192,
+	}
+	result, err := defaultRunOpenCode(ctx, spec)
+	if err != nil {
+		t.Fatalf("err=%v result=%+v", err, result)
+	}
+	if calls != 3 || len(toolSets) != 3 || slices.Contains(toolSets[0], "StructuredOutput") || slices.Contains(toolSets[1], "StructuredOutput") || !slices.Equal(toolSets[2], []string{"StructuredOutput"}) {
+		t.Fatalf("calls=%d toolSets=%v", calls, toolSets)
+	}
+	finalShape := providerShapes[2]
+	if finalShape.toolCount != result.Telemetry.RequestShape.ToolCount || finalShape.toolSchemaSHA256 != result.Telemetry.RequestShape.ToolSchemaSHA256 || finalShape.toolChoiceMode != result.Telemetry.RequestShape.ToolChoiceMode || finalShape.userPromptBytes != result.Telemetry.RequestShape.UserPromptBytes || finalShape.systemPromptBytes != result.Telemetry.RequestShape.SystemPromptBytes {
+		t.Fatalf("provider shape=%+v telemetry=%+v", finalShape, result.Telemetry.RequestShape)
+	}
+	if result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Telemetry.EvidencePhaseSteps != 2 || result.Telemetry.FinalizationPhaseSteps != 1 || result.Telemetry.StepsUsed != 3 || result.Usage.ModelRequests != 3 || !result.Telemetry.EvidencePhaseCompleted || !result.Telemetry.FinalizationPhaseCompleted || len(result.Structured) == 0 {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+type syntheticOpenAIToolCall struct {
+	Name      string
+	Arguments any
+}
+
+func writeSyntheticOpenAIStream(t *testing.T, w http.ResponseWriter, toolName string, arguments any) {
+	t.Helper()
+	writeSyntheticOpenAIToolCalls(t, w, []syntheticOpenAIToolCall{{Name: toolName, Arguments: arguments}})
+}
+
+func writeSyntheticOpenAIToolCalls(t *testing.T, w http.ResponseWriter, calls []syntheticOpenAIToolCall) {
+	t.Helper()
+	toolCalls := make([]any, 0, len(calls))
+	for index, call := range calls {
+		args, err := json.Marshal(call.Arguments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		toolCalls = append(toolCalls, map[string]any{
+			"index": index, "id": fmt.Sprintf("call-synthetic-%d", index), "type": "function",
+			"function": map[string]any{"name": call.Name, "arguments": string(args)},
+		})
+	}
+	chunks := []any{
+		map[string]any{
+			"id": "chatcmpl-synthetic", "object": "chat.completion.chunk", "created": 1, "model": "synthetic-model",
+			"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant", "tool_calls": toolCalls}, "finish_reason": nil}},
+		},
+		map[string]any{
+			"id": "chatcmpl-synthetic", "object": "chat.completion.chunk", "created": 1, "model": "synthetic-model",
+			"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "tool_calls"}},
+			"usage":   map[string]any{"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+		},
+	}
+	writeSyntheticSSE(t, w, chunks)
+}
+
+func writeSyntheticOpenAIText(t *testing.T, w http.ResponseWriter, text string) {
+	t.Helper()
+	chunks := []any{
+		map[string]any{
+			"id": "chatcmpl-synthetic", "object": "chat.completion.chunk", "created": 1, "model": "synthetic-model",
+			"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant", "content": text}, "finish_reason": nil}},
+		},
+		map[string]any{
+			"id": "chatcmpl-synthetic", "object": "chat.completion.chunk", "created": 1, "model": "synthetic-model",
+			"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}},
+			"usage":   map[string]any{"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+		},
+	}
+	writeSyntheticSSE(t, w, chunks)
+}
+
+func writeSyntheticSSE(t *testing.T, w http.ResponseWriter, chunks []any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "text/event-stream")
+	for _, chunk := range chunks {
+		data, err := json.Marshal(chunk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(w, "data: %s\n\n", data)
+	}
+	fmt.Fprint(w, "data: [DONE]\n\n")
 }

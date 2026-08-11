@@ -24,7 +24,19 @@ func TestNewOpenCodeRequestShapeRecordsBoundedFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Available || got.StreamingMode != "streaming" || got.ModelID != spec.Gateway.Model || !got.SystemPromptBytesAvailable || got.SystemPromptBytes != wantSystemBytes || got.UserPromptBytes != len(spec.Prompt) || got.ResponseSchemaSHA256 != agentanalysis.WorkspaceResultSchemaHash() || got.ToolChoiceMode != "required" || got.ContextLimit != 200000 || got.OutputTokenLimit != 8192 || got.OpenCodeVersion != "1.18.2" || got.ToolSchemaAvailable {
+	if !got.Available || got.StreamingMode != "streaming" || got.ModelID != spec.Gateway.Model || !got.SystemPromptBytesAvailable || got.SystemPromptBytes != wantSystemBytes || got.UserPromptBytes != len(spec.Prompt)+len(agentanalysis.WorkspaceFinalizationInstruction()) || got.ResponseSchemaSHA256 != agentanalysis.WorkspaceResultSchemaHash() || got.ToolChoiceMode != "required" || got.ContextLimit != 200000 || got.OutputTokenLimit != 8192 || got.OpenCodeVersion != "1.18.2" || !got.ToolSchemaAvailable || got.ToolCount != 1 {
+		t.Fatalf("shape=%+v", got)
+	}
+}
+
+func TestNewOpenCodeEvidenceRequestShapeHasNoResponseSchema(t *testing.T) {
+	spec := OpenCodeSpec{Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}, Prompt: "investigate", ModelContextTokens: 200000, ModelOutputTokens: 8192}
+	got := newOpenCodeEvidenceRequestShape(spec, "1.18.2")
+	wantSystemBytes, err := openCodeEvidenceSystemPromptBytes(spec, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ToolChoiceMode != "auto" || got.ResponseSchemaSHA256 != "" || got.UserPromptBytes != len(spec.Prompt) || got.SystemPromptBytes != wantSystemBytes || got.ToolSchemaAvailable {
 		t.Fatalf("shape=%+v", got)
 	}
 }
@@ -48,15 +60,15 @@ func TestFetchOpenCodeToolSchemaDigestUsesOnlyAnalysisTools(t *testing.T) {
 	}))
 	defer server.Close()
 	spec := OpenCodeSpec{WorkDir: "/workspace", Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}}
-	count, digest, err := fetchOpenCodeToolSchemaDigest(t.Context(), server.Client(), server.URL, spec)
+	count, digest, err := fetchOpenCodeNativeToolSchemaDigest(t.Context(), server.Client(), server.URL, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 5 || len(digest) != 64 {
+	if count != 4 || len(digest) != 64 {
 		t.Fatalf("count=%d digest=%q", count, digest)
 	}
 	response[0], response[4] = response[4], response[0]
-	count2, digest2, err := fetchOpenCodeToolSchemaDigest(t.Context(), server.Client(), server.URL, spec)
+	count2, digest2, err := fetchOpenCodeNativeToolSchemaDigest(t.Context(), server.Client(), server.URL, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +82,7 @@ func TestFetchOpenCodeToolSchemaDigestRejectsMissingAnalysisTool(t *testing.T) {
 		fmt.Fprint(w, `[{"id":"read","parameters":{"type":"object"}}]`)
 	}))
 	defer server.Close()
-	_, _, err := fetchOpenCodeToolSchemaDigest(t.Context(), server.Client(), server.URL, OpenCodeSpec{Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}})
+	_, _, err := fetchOpenCodeNativeToolSchemaDigest(t.Context(), server.Client(), server.URL, OpenCodeSpec{Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}})
 	if err == nil {
 		t.Fatal("incomplete tool schema set was accepted")
 	}

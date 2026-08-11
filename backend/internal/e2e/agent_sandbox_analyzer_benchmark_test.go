@@ -210,6 +210,15 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	StructuredOutputRetriesKnown bool                                   `json:"structured_output_retries_known"`
 	StructuredOutputRetries      int                                    `json:"structured_output_retries"`
 	StructuredOutputErrors       int                                    `json:"structured_output_errors"`
+	EvidencePhaseCompleted       bool                                   `json:"evidence_phase_completed"`
+	EvidencePhaseSteps           int                                    `json:"evidence_phase_steps"`
+	EvidencePhaseRequests        int                                    `json:"evidence_phase_requests"`
+	ArtifactEvidenceToolCalls    int                                    `json:"artifact_evidence_tool_calls"`
+	SourceEvidenceToolCalls      int                                    `json:"source_evidence_tool_calls"`
+	FinalizationPhaseCompleted   bool                                   `json:"finalization_phase_completed"`
+	FinalizationPhaseSteps       int                                    `json:"finalization_phase_steps"`
+	FinalizationPhaseRequests    int                                    `json:"finalization_phase_requests"`
+	StructuredOutputToolCalls    int                                    `json:"structured_output_tool_calls"`
 	ContextLimit                 bool                                   `json:"context_limit"`
 	OpenCodeTimedOut             bool                                   `json:"opencode_timed_out"`
 	OpenCodeFailureCode          string                                 `json:"opencode_failure_code,omitempty"`
@@ -540,6 +549,15 @@ func agentSandboxAnalyzerRecordForResult(
 	record.StructuredOutputRetriesKnown = telemetry.StructuredOutputRetriesKnown
 	record.StructuredOutputRetries = telemetry.StructuredOutputRetries
 	record.StructuredOutputErrors = telemetry.StructuredOutputErrors
+	record.EvidencePhaseCompleted = telemetry.EvidencePhaseCompleted
+	record.EvidencePhaseSteps = telemetry.EvidencePhaseSteps
+	record.EvidencePhaseRequests = telemetry.EvidencePhaseRequests
+	record.ArtifactEvidenceToolCalls = telemetry.ArtifactEvidenceToolCalls
+	record.SourceEvidenceToolCalls = telemetry.SourceEvidenceToolCalls
+	record.FinalizationPhaseCompleted = telemetry.FinalizationPhaseCompleted
+	record.FinalizationPhaseSteps = telemetry.FinalizationPhaseSteps
+	record.FinalizationPhaseRequests = telemetry.FinalizationPhaseRequests
+	record.StructuredOutputToolCalls = telemetry.StructuredOutputToolCalls
 	record.ContextLimit = telemetry.ContextLimit
 	record.OpenCodeTimedOut = telemetry.TimedOut
 	record.OpenCodeFailureCode = telemetry.FailureCode

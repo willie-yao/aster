@@ -2,6 +2,9 @@ package analysisexecutor
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -241,6 +244,77 @@ func TestParseOpenCodeTelemetryValidatesToolStates(t *testing.T) {
 		}
 		if len(telemetry.Tools) != 1 || telemetry.Tools[0].Failures != test.failures || telemetry.Tools[0].Denied != test.denied || telemetry.ToolFailureCount != test.failures || telemetry.DeniedToolCount != test.denied {
 			t.Fatalf("state=%s telemetry=%+v", test.state, telemetry)
+		}
+	}
+}
+
+func TestParseOpenCodeTelemetryClassifiesBoundedEvidenceTools(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sourceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(artifactDir, "failure.log")
+	sourcePath := filepath.Join(sourceDir, "main.go")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(fmt.Sprintf(`[{
+		"info":{"role":"assistant"},"parts":[
+		{"type":"step-start"},
+		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%q}}},
+		{"type":"tool","tool":"grep","state":{"status":"completed","input":{"path":%q},"metadata":{"matches":1}}},
+		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":"/etc/passwd"}}},
+		{"type":"tool","tool":"write","state":{"status":"error","error":"Permission denied by policy","input":{"filePath":"result/out"}}},
+		{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},
+		{"type":"step-finish","cost":0.1,"tokens":{"input":1,"output":1,"cache":{"read":0}}}
+	]}]`, artifactPath, sourcePath))
+	_, _, facts, err := parseOpenCodeTelemetryForWorkspace(raw, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if facts.ArtifactToolCalls != 1 || facts.SourceToolCalls != 1 || facts.NonStructuredToolCalls != 4 || facts.StructuredOutputCalls != 1 {
+		t.Fatalf("facts=%+v", facts)
+	}
+}
+
+func TestParseOpenCodeTelemetryDoesNotCountZeroMatchGrep(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"grep","state":{"status":"completed","input":{"path":%q},"metadata":{"matches":0}}},{"type":"step-finish","cost":0.1,"tokens":{"input":1,"output":1,"cache":{"read":0}}}]}]`, artifactDir))
+	_, _, facts, err := parseOpenCodeTelemetryForWorkspace(raw, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if facts.ArtifactToolCalls != 0 {
+		t.Fatalf("facts=%+v", facts)
+	}
+}
+
+func TestParseOpenCodeTelemetryCountsMatchingRootGrep(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range []string{agentanalysis.WorkspaceArtifactsDir, artifactDir} {
+		raw := []byte(fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"grep","state":{"status":"completed","input":{"path":%q},"metadata":{"matches":1}}},{"type":"step-finish","cost":0.1,"tokens":{"input":1,"output":1,"cache":{"read":0}}}]}]`, candidate))
+		_, _, facts, err := parseOpenCodeTelemetryForWorkspace(raw, workDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if facts.ArtifactToolCalls != 1 {
+			t.Fatalf("candidate=%q facts=%+v", candidate, facts)
 		}
 	}
 }

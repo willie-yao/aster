@@ -27,13 +27,24 @@ var workspaceAnalysisSkill string
 //go:embed skill/analysis-agent.md
 var workspaceAnalysisAgent string
 
+//go:embed skill/analysis-finalizer.md
+var workspaceAnalysisFinalizer string
+
 // WorkspaceSkillHash returns the file-backed analyzer prompt fingerprint.
 func WorkspaceSkillHash() string {
-	return hashString(workspaceAnalysisSkill + "\n" + workspaceAnalysisAgent)
+	return hashString(workspaceAnalysisSkill + "\n" + workspaceAnalysisAgent + "\n" + workspaceAnalysisFinalizer)
 }
 
-// WorkspaceAgentPrompt returns the static read-only OpenCode agent guidance.
+// WorkspaceAgentPrompt returns the static read-only evidence-agent guidance.
 func WorkspaceAgentPrompt() string { return strings.TrimSpace(workspaceAnalysisAgent) }
+
+// WorkspaceFinalizerPrompt returns the static StructuredOutput-only guidance.
+func WorkspaceFinalizerPrompt() string { return strings.TrimSpace(workspaceAnalysisFinalizer) }
+
+// WorkspaceFinalizationInstruction requests the authoritative result after evidence succeeds.
+func WorkspaceFinalizationInstruction() string {
+	return "Finalize the analysis now from evidence already inspected in this session. Use StructuredOutput exactly once. Include source citations or relevant files only if source evidence was successfully read or grepped during the evidence phase."
+}
 
 // WorkspaceCitationReference is a model-authored path and exact line range.
 type WorkspaceCitationReference struct {
@@ -133,6 +144,15 @@ type WorkspaceOpenCodeTelemetry struct {
 	StructuredOutputRetriesKnown bool                            `json:"structured_output_retries_known"`
 	StructuredOutputRetries      int                             `json:"structured_output_retries,omitempty"`
 	StructuredOutputErrors       int                             `json:"structured_output_errors,omitempty"`
+	EvidencePhaseCompleted       bool                            `json:"evidence_phase_completed,omitempty"`
+	EvidencePhaseSteps           int                             `json:"evidence_phase_steps,omitempty"`
+	EvidencePhaseRequests        int                             `json:"evidence_phase_requests,omitempty"`
+	ArtifactEvidenceToolCalls    int                             `json:"artifact_evidence_tool_calls,omitempty"`
+	SourceEvidenceToolCalls      int                             `json:"source_evidence_tool_calls,omitempty"`
+	FinalizationPhaseCompleted   bool                            `json:"finalization_phase_completed,omitempty"`
+	FinalizationPhaseSteps       int                             `json:"finalization_phase_steps,omitempty"`
+	FinalizationPhaseRequests    int                             `json:"finalization_phase_requests,omitempty"`
+	StructuredOutputToolCalls    int                             `json:"structured_output_tool_calls,omitempty"`
 	ContextLimit                 bool                            `json:"context_limit,omitempty"`
 	TimedOut                     bool                            `json:"timed_out,omitempty"`
 	FailureCode                  string                          `json:"failure_code,omitempty"`
@@ -336,6 +356,12 @@ func ValidateWorkspaceExecutionResult(result WorkspaceExecutionResult, request W
 	case engineruntime.TerminalSucceeded:
 		if strings.TrimSpace(result.FailureReason) != "" || result.Analysis == nil {
 			return result, fmt.Errorf("successful workspace execution must contain only an analysis")
+		}
+		if !result.OpenCodeTelemetry.EvidencePhaseCompleted || !result.OpenCodeTelemetry.FinalizationPhaseCompleted || result.OpenCodeTelemetry.ArtifactEvidenceToolCalls < 1 || result.OpenCodeTelemetry.StructuredOutputToolCalls != 1 {
+			return result, fmt.Errorf("successful workspace execution is missing required phase telemetry")
+		}
+		if (len(result.Analysis.SourceCitations) > 0 || len(result.Analysis.RelevantFiles) > 0) && result.OpenCodeTelemetry.SourceEvidenceToolCalls < 1 {
+			return result, fmt.Errorf("successful workspace execution contains source claims without source evidence telemetry")
 		}
 		if err := VerifyPreparedSourceWorkspace(context.Background(), sourceRoot, request.Manifest.Source.Revision, request.SourceModePolicy); err != nil {
 			return result, err
@@ -618,7 +644,7 @@ func validateWorkspaceUsage(usage WorkspaceUsage) error {
 }
 
 func validateWorkspaceOpenCodeTelemetry(telemetry WorkspaceOpenCodeTelemetry) error {
-	if telemetry.EventCount < 0 || telemetry.ProviderRequests < 0 || telemetry.DeniedToolCount < 0 || telemetry.ToolFailureCount < 0 || telemetry.StepsUsed < 0 || telemetry.StructuredOutputRetries < 0 || telemetry.StructuredOutputErrors < 0 || !validWorkspaceFailureCode(telemetry.FailureCode) {
+	if telemetry.EventCount < 0 || telemetry.ProviderRequests < 0 || telemetry.DeniedToolCount < 0 || telemetry.ToolFailureCount < 0 || telemetry.StepsUsed < 0 || telemetry.StructuredOutputRetries < 0 || telemetry.StructuredOutputErrors < 0 || telemetry.EvidencePhaseSteps < 0 || telemetry.EvidencePhaseRequests < 0 || telemetry.ArtifactEvidenceToolCalls < 0 || telemetry.SourceEvidenceToolCalls < 0 || telemetry.FinalizationPhaseSteps < 0 || telemetry.FinalizationPhaseRequests < 0 || telemetry.StructuredOutputToolCalls < 0 || !validWorkspaceFailureCode(telemetry.FailureCode) {
 		return fmt.Errorf("workspace OpenCode telemetry is invalid")
 	}
 	if err := validateWorkspaceOpenCodeRequestShape(telemetry.RequestShape); err != nil {
@@ -656,7 +682,24 @@ func validateWorkspaceOpenCodeTelemetry(telemetry WorkspaceOpenCodeTelemetry) er
 	if telemetry.ProviderRequests < telemetry.StepsUsed {
 		return fmt.Errorf("workspace OpenCode provider request telemetry is inconsistent")
 	}
-	if !telemetry.Available && (telemetry.EventCount != 0 || len(telemetry.Tools) != 0 || telemetry.DeniedToolCount != 0 || telemetry.ToolFailureCount != 0 || telemetry.StepsUsed != 0 || telemetry.StructuredOutputRetries != 0 || telemetry.StructuredOutputErrors != 0) {
+	if telemetry.EvidencePhaseCompleted {
+		if telemetry.EvidencePhaseSteps < 1 || telemetry.EvidencePhaseRequests < 1 || telemetry.ArtifactEvidenceToolCalls < 1 {
+			return fmt.Errorf("workspace OpenCode evidence phase telemetry is invalid")
+		}
+	} else if telemetry.EvidencePhaseSteps != 0 || telemetry.EvidencePhaseRequests != 0 || telemetry.ArtifactEvidenceToolCalls != 0 || telemetry.SourceEvidenceToolCalls != 0 {
+		return fmt.Errorf("workspace OpenCode evidence phase telemetry is inconsistent")
+	}
+	if telemetry.FinalizationPhaseCompleted {
+		if !telemetry.EvidencePhaseCompleted || telemetry.FinalizationPhaseSteps < 1 || telemetry.FinalizationPhaseRequests < 1 {
+			return fmt.Errorf("workspace OpenCode finalization phase telemetry is invalid")
+		}
+	} else if telemetry.FinalizationPhaseSteps != 0 || telemetry.FinalizationPhaseRequests != 0 || telemetry.StructuredOutputToolCalls != 0 {
+		return fmt.Errorf("workspace OpenCode finalization phase telemetry is inconsistent")
+	}
+	if telemetry.EvidencePhaseSteps+telemetry.FinalizationPhaseSteps > telemetry.StepsUsed || telemetry.EvidencePhaseRequests+telemetry.FinalizationPhaseRequests > telemetry.ProviderRequests {
+		return fmt.Errorf("workspace OpenCode phase telemetry exceeds totals")
+	}
+	if !telemetry.Available && (telemetry.EventCount != 0 || len(telemetry.Tools) != 0 || telemetry.DeniedToolCount != 0 || telemetry.ToolFailureCount != 0 || telemetry.StepsUsed != 0 || telemetry.StructuredOutputRetries != 0 || telemetry.StructuredOutputErrors != 0 || telemetry.EvidencePhaseCompleted || telemetry.EvidencePhaseSteps != 0 || telemetry.EvidencePhaseRequests != 0 || telemetry.ArtifactEvidenceToolCalls != 0 || telemetry.SourceEvidenceToolCalls != 0 || telemetry.FinalizationPhaseCompleted || telemetry.FinalizationPhaseSteps != 0 || telemetry.FinalizationPhaseRequests != 0 || telemetry.StructuredOutputToolCalls != 0) {
 		return fmt.Errorf("unavailable workspace OpenCode telemetry must not contain event-derived values")
 	}
 	return nil
@@ -669,8 +712,15 @@ func validateWorkspaceOpenCodeRequestShape(shape WorkspaceOpenCodeRequestShape) 
 		}
 		return nil
 	}
-	if shape.StreamingMode != "streaming" || strings.TrimSpace(shape.ModelID) == "" || len(shape.ModelID) > 256 || shape.UserPromptBytes < 1 || shape.UserPromptBytes > 1<<20 || !validSHA256(shape.ResponseSchemaSHA256) || shape.ToolChoiceMode != "required" || shape.ContextLimit < 1 || shape.OutputTokenLimit < 1 || strings.TrimSpace(shape.OpenCodeVersion) == "" || len(shape.OpenCodeVersion) > 64 {
+	if shape.StreamingMode != "streaming" || strings.TrimSpace(shape.ModelID) == "" || len(shape.ModelID) > 256 || shape.UserPromptBytes < 1 || shape.UserPromptBytes > 1<<20 || (shape.ToolChoiceMode != "auto" && shape.ToolChoiceMode != "required") || shape.ContextLimit < 1 || shape.OutputTokenLimit < 1 || strings.TrimSpace(shape.OpenCodeVersion) == "" || len(shape.OpenCodeVersion) > 64 {
 		return fmt.Errorf("workspace OpenCode request shape is invalid")
+	}
+	if shape.ToolChoiceMode == "required" {
+		if !validSHA256(shape.ResponseSchemaSHA256) {
+			return fmt.Errorf("workspace OpenCode response schema telemetry is invalid")
+		}
+	} else if shape.ResponseSchemaSHA256 != "" {
+		return fmt.Errorf("workspace OpenCode evidence request must not contain a response schema")
 	}
 	if shape.SystemPromptBytesAvailable {
 		if shape.SystemPromptBytes < 1 || shape.SystemPromptBytes > 1<<20 {
