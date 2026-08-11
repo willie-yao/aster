@@ -314,3 +314,17 @@ session, contain none of the forbidden critic, digest, revision, evidence
 planner, or case-specific phases, and keep its dashboard-owned production lines
 at or below half of the in-process analyzer's production lines. Similar quality
 without this reduction is not a successful replacement.
+
+## Purpose-built OpenCode agent
+
+The executor configures one private primary agent named `analysis`; it does not
+use OpenCode's generic coding-oriented `build` agent. The agent receives static
+engine-owned diagnostic guidance and may use only native glob, grep, and StructuredOutput tools. The native read tool is disabled because OpenCode 1.18.2 can load nearby `AGENTS.md`, `CLAUDE.md`, or `CONTEXT.md` files into privileged system reminders. The agent uses bounded grep results for file content and line inspection. Shell, read, edit, write, patch, network, delegation, external skills, and external-directory access are denied by tool selection and permission rules. The executor, not the model, writes the canonical result file.
+
+The execution request seals the configured model context and output limits and
+passes those exact values to OpenCode. The analyzer has no hard-coded context
+window. Benchmarks must set `ANALYZER_BENCH_MODEL_CONTEXT_TOKENS` and
+`ANALYZER_BENCH_MODEL_OUTPUT_TOKENS` from the configured model. The existing
+20-step bound remains the default benchmark bound; a 40-step arm is the only
+larger bound planned for the corrected experiment and does not change any
+production default.

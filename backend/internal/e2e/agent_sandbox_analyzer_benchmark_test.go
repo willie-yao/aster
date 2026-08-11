@@ -24,26 +24,28 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
-const agentSandboxAnalyzerBenchmarkRecordVersion = 1
+const agentSandboxAnalyzerBenchmarkRecordVersion = 2
 
 type agentSandboxAnalyzerBenchmarkConfig struct {
-	KubeContext    string
-	SourceRoot     string
-	ProjectDir     string
-	ResultsPath    string
-	PreparedPath   string
-	ArmLabel       string
-	ModelLabel     string
-	ProviderPath   string
-	TransportID    string
-	EngineCommit   string
-	Gateway        engineruntime.ModelGatewayConfig
-	Timeout        time.Duration
-	OutputLimit    int64
-	MaxSteps       int
-	Repetitions    int
-	RepetitionBase int
-	PrepareOnly    bool
+	KubeContext        string
+	SourceRoot         string
+	ProjectDir         string
+	ResultsPath        string
+	PreparedPath       string
+	ArmLabel           string
+	ModelLabel         string
+	ProviderPath       string
+	TransportID        string
+	EngineCommit       string
+	Gateway            engineruntime.ModelGatewayConfig
+	Timeout            time.Duration
+	OutputLimit        int64
+	MaxSteps           int
+	ModelContextTokens int
+	ModelOutputTokens  int
+	Repetitions        int
+	RepetitionBase     int
+	PrepareOnly        bool
 }
 
 type agentSandboxAnalyzerPrepared struct {
@@ -65,6 +67,9 @@ type agentSandboxAnalyzerPrepared struct {
 	ArtifactBytes          int64    `json:"artifact_bytes"`
 	ArtifactPaths          []string `json:"artifact_paths"`
 	WorkspacePromptHash    string   `json:"workspace_prompt_hash"`
+	ModelContextTokens     int      `json:"model_context_tokens"`
+	ModelOutputTokens      int      `json:"model_output_tokens"`
+	MaxSteps               int      `json:"max_steps"`
 	ModelLabel             string   `json:"model_label"`
 	ArmLabel               string   `json:"arm_label"`
 }
@@ -99,6 +104,9 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	TestSource                   string                                 `json:"test_source"`
 	ContractVersion              string                                 `json:"contract_version"`
 	WorkspacePromptHash          string                                 `json:"workspace_prompt_hash"`
+	ModelContextTokens           int                                    `json:"model_context_tokens"`
+	ModelOutputTokens            int                                    `json:"model_output_tokens"`
+	MaxSteps                     int                                    `json:"max_steps"`
 	ManifestHash                 string                                 `json:"manifest_hash"`
 	RequestHash                  string                                 `json:"request_hash"`
 	RuntimeIdentityHash          string                                 `json:"runtime_identity_hash"`
@@ -242,9 +250,17 @@ func loadAgentSandboxAnalyzerBenchmarkConfig(t *testing.T) agentSandboxAnalyzerB
 		PreparedPath: strings.TrimSpace(os.Getenv("ANALYZER_BENCH_PREPARED_JSON")),
 		ArmLabel:     arm, ModelLabel: modelLabel, ProviderPath: require("BENCH_PROVIDER_PATH"), TransportID: transportID,
 		EngineCommit: benchmarkEngineCommit(t, !prepareOnly), Gateway: gateway, Timeout: timeout, OutputLimit: outputLimit,
-		MaxSteps:       agentSandboxAnalyzerBenchmarkInt(t, "ANALYZER_BENCH_MAX_STEPS", 20, 1, 100),
-		Repetitions:    agentSandboxAnalyzerBenchmarkInt(t, "BENCH_REPETITIONS", 1, 1, 10),
-		RepetitionBase: benchmarkRepetitionStart(t), PrepareOnly: prepareOnly,
+		MaxSteps:           agentSandboxAnalyzerBenchmarkInt(t, "ANALYZER_BENCH_MAX_STEPS", 20, 1, 100),
+		ModelContextTokens: agentSandboxAnalyzerBenchmarkInt(t, "ANALYZER_BENCH_MODEL_CONTEXT_TOKENS", 0, 8192, 2_000_000),
+		ModelOutputTokens:  agentSandboxAnalyzerBenchmarkInt(t, "ANALYZER_BENCH_MODEL_OUTPUT_TOKENS", 0, 1024, 131072),
+		Repetitions:        agentSandboxAnalyzerBenchmarkInt(t, "BENCH_REPETITIONS", 1, 1, 10),
+		RepetitionBase:     benchmarkRepetitionStart(t), PrepareOnly: prepareOnly,
+	}
+	if cfg.ModelContextTokens == 0 || cfg.ModelOutputTokens == 0 {
+		t.Fatal("ANALYZER_BENCH_MODEL_CONTEXT_TOKENS and ANALYZER_BENCH_MODEL_OUTPUT_TOKENS are required from the configured model")
+	}
+	if cfg.ModelOutputTokens > cfg.ModelContextTokens {
+		t.Fatal("ANALYZER_BENCH_MODEL_OUTPUT_TOKENS must not exceed the configured model context")
 	}
 	if !prepareOnly {
 		cfg.KubeContext = require("ANALYZER_BENCH_KUBE_CONTEXT")
@@ -317,7 +333,7 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 	if err != nil {
 		t.Fatal(err)
 	}
-	execution, err := agentanalysis.NewWorkspaceExecutionRequest(manifest, cfg.Gateway, cfg.Timeout, cfg.MaxSteps, cfg.OutputLimit)
+	execution, err := agentanalysis.NewWorkspaceExecutionRequest(manifest, cfg.Gateway, cfg.Timeout, cfg.MaxSteps, cfg.ModelContextTokens, cfg.ModelOutputTokens, cfg.OutputLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,13 +352,13 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 		artifactPaths = append(artifactPaths, file.Path)
 	}
 	prepared := agentSandboxAnalyzerPrepared{
-		Version: 1, CaseID: bc.name, StableID: bc.stableID, EngineCommit: cfg.EngineCommit,
+		Version: 2, CaseID: bc.name, StableID: bc.stableID, EngineCommit: cfg.EngineCommit,
 		FixtureSHA256: bc.fixtureSHA256, BaselineConsumerCommit: bc.consumerCommit,
 		BaselinePromptSHA256: bc.promptSHA256, ProjectSHA256: sha256Hex(projectData),
 		SourceRevision: source.Revision, SourceRoot: filepath.Clean(cfg.SourceRoot), ArtifactRoot: artifactRoot,
 		ManifestHash: manifest.Hash, RequestHash: execution.Hash, StageHash: stage.Hash,
 		ArtifactFiles: len(files), ArtifactBytes: artifactBytes, ArtifactPaths: artifactPaths,
-		WorkspacePromptHash: agentanalysis.WorkspaceSkillHash(), ModelLabel: cfg.ModelLabel, ArmLabel: cfg.ArmLabel,
+		WorkspacePromptHash: agentanalysis.WorkspaceSkillHash(), ModelContextTokens: cfg.ModelContextTokens, ModelOutputTokens: cfg.ModelOutputTokens, MaxSteps: cfg.MaxSteps, ModelLabel: cfg.ModelLabel, ArmLabel: cfg.ArmLabel,
 	}
 	return agentSandboxAnalyzerPreparedCase{prepared: prepared, request: execution, stage: stage, bc: bc}
 }
@@ -403,6 +419,7 @@ func agentSandboxAnalyzerRecordForResult(
 		APIMode: ai.APIChatCompletions, EvidenceCondition: benchmarkEvidenceConditionFixture,
 		JobName: prepared.bc.jobName, BuildID: prepared.bc.buildID, TestName: prepared.bc.testName, TestSource: prepared.bc.testSource,
 		ContractVersion: agentanalysis.WorkspaceContractVersion, WorkspacePromptHash: agentanalysis.WorkspaceSkillHash(),
+		ModelContextTokens: prepared.request.ModelContextTokens, ModelOutputTokens: prepared.request.ModelOutputTokens, MaxSteps: prepared.request.MaxSteps,
 		ManifestHash: prepared.prepared.ManifestHash, RequestHash: prepared.prepared.RequestHash,
 		RuntimeIdentityHash: runtimeIdentity, ExecutionID: executionID, SourceRevision: prepared.prepared.SourceRevision,
 		ArtifactFiles: prepared.prepared.ArtifactFiles, ArtifactBytes: prepared.prepared.ArtifactBytes,

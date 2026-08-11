@@ -27,9 +27,9 @@ const (
 	WorkspaceRequestVersion  = 1
 	WorkspaceResultVersion   = 1
 	WorkspaceStageVersion    = 1
-	WorkspaceContractVersion = "agent-analysis-workspace-v3"
+	WorkspaceContractVersion = "agent-analysis-workspace-v4"
 	WorkspaceStageContract   = "agent-analysis-stage-v1"
-	WorkspacePromptVersion   = "agent-analysis-workspace-prompt-v3"
+	WorkspacePromptVersion   = "agent-analysis-workspace-prompt-v4"
 
 	WorkspaceSourceDir    = "source"
 	WorkspaceArtifactsDir = "artifacts"
@@ -75,17 +75,19 @@ type WorkspaceStageRequest struct {
 
 // WorkspaceExecutionRequest is the non-secret request passed to one analyzer Sandbox.
 type WorkspaceExecutionRequest struct {
-	Version          int                              `json:"version"`
-	ContractVersion  string                           `json:"contract_version"`
-	Hash             string                           `json:"hash"`
-	PromptVersion    string                           `json:"prompt_version"`
-	PromptHash       string                           `json:"prompt_hash"`
-	ResultSchemaHash string                           `json:"result_schema_hash"`
-	Manifest         WorkspaceManifest                `json:"manifest"`
-	ModelGateway     engineruntime.ModelGatewayConfig `json:"model_gateway"`
-	TimeoutSeconds   int64                            `json:"timeout_seconds"`
-	MaxSteps         int                              `json:"max_steps"`
-	OutputLimitBytes int64                            `json:"output_limit_bytes"`
+	Version            int                              `json:"version"`
+	ContractVersion    string                           `json:"contract_version"`
+	Hash               string                           `json:"hash"`
+	PromptVersion      string                           `json:"prompt_version"`
+	PromptHash         string                           `json:"prompt_hash"`
+	ResultSchemaHash   string                           `json:"result_schema_hash"`
+	Manifest           WorkspaceManifest                `json:"manifest"`
+	ModelGateway       engineruntime.ModelGatewayConfig `json:"model_gateway"`
+	TimeoutSeconds     int64                            `json:"timeout_seconds"`
+	MaxSteps           int                              `json:"max_steps"`
+	ModelContextTokens int                              `json:"model_context_tokens"`
+	ModelOutputTokens  int                              `json:"model_output_tokens"`
+	OutputLimitBytes   int64                            `json:"output_limit_bytes"`
 }
 
 // NewWorkspaceManifest creates one deterministic file-backed analyzer input.
@@ -380,11 +382,11 @@ func gitWorkspaceOutput(ctx context.Context, root string, args ...string) ([]byt
 }
 
 // NewWorkspaceExecutionRequest seals runtime bounds and gateway identity.
-func NewWorkspaceExecutionRequest(manifest WorkspaceManifest, gateway engineruntime.ModelGatewayConfig, timeout time.Duration, maxSteps int, outputLimit int64) (WorkspaceExecutionRequest, error) {
+func NewWorkspaceExecutionRequest(manifest WorkspaceManifest, gateway engineruntime.ModelGatewayConfig, timeout time.Duration, maxSteps, modelContextTokens, modelOutputTokens int, outputLimit int64) (WorkspaceExecutionRequest, error) {
 	request := WorkspaceExecutionRequest{
 		Version: WorkspaceRequestVersion, ContractVersion: WorkspaceContractVersion, PromptVersion: WorkspacePromptVersion,
 		PromptHash: WorkspaceSkillHash(), ResultSchemaHash: WorkspaceResultSchemaHash(), Manifest: manifest, ModelGateway: gateway, TimeoutSeconds: int64(timeout.Round(time.Second) / time.Second),
-		MaxSteps: maxSteps, OutputLimitBytes: outputLimit,
+		MaxSteps: maxSteps, ModelContextTokens: modelContextTokens, ModelOutputTokens: modelOutputTokens, OutputLimitBytes: outputLimit,
 	}
 	hash, err := workspaceRequestDigest(request)
 	if err != nil {
@@ -416,6 +418,9 @@ func ValidateWorkspaceExecutionRequest(request WorkspaceExecutionRequest) error 
 	}
 	if request.MaxSteps < 1 || request.MaxSteps > 100 {
 		return fmt.Errorf("workspace analysis max steps must be between 1 and 100")
+	}
+	if request.ModelContextTokens < 8192 || request.ModelContextTokens > 2_000_000 || request.ModelOutputTokens < 1024 || request.ModelOutputTokens > request.ModelContextTokens || request.ModelOutputTokens > 131072 {
+		return fmt.Errorf("workspace analysis model limits are invalid")
 	}
 	if request.OutputLimitBytes < 4<<10 || request.OutputLimitBytes > 1<<20 {
 		return fmt.Errorf("workspace analysis output limit must be between 4096 and 1048576 bytes")

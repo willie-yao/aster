@@ -110,7 +110,7 @@ func TestParseWorkspaceAnalysisValidatesCitationsAndMapsResult(t *testing.T) {
 	}
 	raw := `{
   "version": 1,
-  "contract_version": "agent-analysis-workspace-v3",
+  "contract_version": "agent-analysis-workspace-v4",
   "summary": "The controller rejected the request.",
   "is_transient": false,
   "root_cause": "The specific failure occurred before cleanup.",
@@ -184,7 +184,7 @@ func TestParseWorkspaceAnalysisRejectsGitMetadataCitation(t *testing.T) {
 	}
 	raw := `{
   "version": 1,
-  "contract_version": "agent-analysis-workspace-v3",
+  "contract_version": "agent-analysis-workspace-v4",
   "summary": "summary",
   "is_transient": false,
   "root_cause": "cause",
@@ -211,7 +211,7 @@ func TestWorkspaceExecutionRequestBindsPromptAndRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	gateway := engineruntime.ModelGatewayConfig{Endpoint: "https://model-gateway.prow-ai.svc.cluster.local:8443/v1", Model: "test-model", ProtocolVersion: "openai-chat-completions-v1"}
-	execution, err := NewWorkspaceExecutionRequest(manifest, gateway, 5*time.Minute, 20, 128<<10)
+	execution, err := NewWorkspaceExecutionRequest(manifest, gateway, 5*time.Minute, 20, 200000, 8192, 128<<10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,6 +231,18 @@ func TestWorkspaceExecutionRequestBindsPromptAndRuntime(t *testing.T) {
 	tampered.ResultSchemaHash = strings.Repeat("0", 64)
 	if err := ValidateWorkspaceExecutionRequest(tampered); err == nil {
 		t.Fatal("tampered result schema was accepted")
+	}
+	for name, mutate := range map[string]func(*WorkspaceExecutionRequest){
+		"context": func(value *WorkspaceExecutionRequest) { value.ModelContextTokens++ },
+		"output":  func(value *WorkspaceExecutionRequest) { value.ModelOutputTokens++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := execution
+			mutate(&candidate)
+			if err := ValidateWorkspaceExecutionRequest(candidate); err == nil {
+				t.Fatal("tampered model limit was accepted")
+			}
+		})
 	}
 }
 

@@ -147,6 +147,19 @@ func TestPromptOpenCodeUsesStructuredOutputSchema(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
+		if payload["agent"] != "analysis" {
+			t.Fatalf("agent = %v", payload["agent"])
+		}
+		tools := payload["tools"].(map[string]any)
+		if tools["read"] != false || tools["bash"] != false || tools["edit"] != false || tools["task"] != false || tools["webfetch"] != false {
+			t.Fatalf("tools = %v", tools)
+		}
+		if _, ok := tools["glob"]; ok {
+			t.Fatal("session tool overrides must not replace agent glob permission")
+		}
+		if _, ok := tools["grep"]; ok {
+			t.Fatal("session tool overrides must not replace agent grep permission")
+		}
 		format := payload["format"].(map[string]any)
 		if format["type"] != "json_schema" {
 			t.Fatalf("format = %v", format)
@@ -194,7 +207,7 @@ func TestOpenCodeJSONRejectsTrailingData(t *testing.T) {
 func TestWriteOpenCodeConfigKeepsNativeHarnessButDeniesNetworkTools(t *testing.T) {
 	home := t.TempDir()
 	gateway := engineruntime.ModelGatewayConfig{Endpoint: "https://model-gateway.prow-ai.svc.cluster.local:8443/v1/chat/completions", Model: "test-model", ProtocolVersion: "openai-chat-completions-v1"}
-	if err := writeOpenCodeConfig(home, gateway, 20); err != nil {
+	if err := writeOpenCodeConfig(home, gateway, 20, 200000, 8192); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
@@ -206,8 +219,31 @@ func TestWriteOpenCodeConfigKeepsNativeHarnessButDeniesNetworkTools(t *testing.T
 		t.Fatal(err)
 	}
 	permissions := config["permission"].(map[string]any)
-	if permissions["bash"] != "deny" || permissions["edit"] != "allow" || permissions["webfetch"] != "deny" || permissions["task"] != "deny" {
-		t.Fatalf("permissions=%v", permissions)
+	if len(permissions) != 1 || permissions["*"] != "deny" {
+		t.Fatalf("global permissions=%v", permissions)
+	}
+	agents := config["agent"].(map[string]any)
+	if _, ok := agents["build"]; ok || len(agents) != 1 {
+		t.Fatalf("agents=%v", agents)
+	}
+	analysis := agents["analysis"].(map[string]any)
+	if analysis["mode"] != "primary" || analysis["steps"].(float64) != 20 || !strings.Contains(analysis["prompt"].(string), "read-only Prow failure analyst") {
+		t.Fatalf("analysis agent=%v", analysis)
+	}
+	agentPermissions := analysis["permission"].(map[string]any)
+	for _, denied := range []string{"bash", "edit", "write", "apply_patch", "webfetch", "websearch", "task", "skill", "external_directory"} {
+		if agentPermissions[denied] != "deny" {
+			t.Fatalf("permission %s=%v", denied, agentPermissions[denied])
+		}
+	}
+	if agentPermissions["read"] != nil || agentPermissions["glob"] != "allow" || agentPermissions["grep"] != "allow" || agentPermissions["StructuredOutput"] != "allow" {
+		t.Fatalf("analysis permissions=%v", agentPermissions)
+	}
+	provider := config["provider"].(map[string]any)["engine"].(map[string]any)
+	model := provider["models"].(map[string]any)["test-model"].(map[string]any)
+	limits := model["limit"].(map[string]any)
+	if limits["context"].(float64) != 200000 || limits["output"].(float64) != 8192 {
+		t.Fatalf("model limits=%v", limits)
 	}
 	if strings.Contains(strings.ToLower(string(data)), "token") || strings.Contains(string(data), "/chat/completions") {
 		t.Fatalf("config contains credential or non-base endpoint: %s", data)
@@ -252,7 +288,7 @@ func executorTestFixture(t *testing.T) (string, agentanalysis.WorkspaceExecution
 		t.Fatal(err)
 	}
 	gateway := engineruntime.ModelGatewayConfig{Endpoint: "https://model-gateway.prow-ai.svc.cluster.local:8443/v1", Model: "test-model", ProtocolVersion: "openai-chat-completions-v1"}
-	execution, err := agentanalysis.NewWorkspaceExecutionRequest(manifest, gateway, 5*time.Minute, 20, 128<<10)
+	execution, err := agentanalysis.NewWorkspaceExecutionRequest(manifest, gateway, 5*time.Minute, 20, 200000, 8192, 128<<10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +306,7 @@ func testOpenCodeResult() OpenCodeRunResult {
 func executorAnalysisJSON() []byte {
 	return []byte(`{
   "version": 1,
-  "contract_version": "agent-analysis-workspace-v3",
+  "contract_version": "agent-analysis-workspace-v4",
   "summary": "The controller rejected the request.",
   "is_transient": false,
   "root_cause": "The specific failure occurred before cleanup.",
@@ -300,7 +336,7 @@ func TestExecuteReportsTimeoutTelemetry(t *testing.T) {
 	data, _ := json.Marshal(request)
 	_ = data
 	// Rebuild through the constructor so the request hash remains canonical.
-	request, err := agentanalysis.NewWorkspaceExecutionRequest(request.Manifest, request.ModelGateway, time.Second, request.MaxSteps, request.OutputLimitBytes)
+	request, err := agentanalysis.NewWorkspaceExecutionRequest(request.Manifest, request.ModelGateway, time.Second, request.MaxSteps, request.ModelContextTokens, request.ModelOutputTokens, request.OutputLimitBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +354,7 @@ func TestExecuteReportsTimeoutTelemetry(t *testing.T) {
 
 func TestExecuteRejectsResultReturnedAfterDeadline(t *testing.T) {
 	root, base := executorTestFixture(t)
-	request, err := agentanalysis.NewWorkspaceExecutionRequest(base.Manifest, base.ModelGateway, time.Second, base.MaxSteps, base.OutputLimitBytes)
+	request, err := agentanalysis.NewWorkspaceExecutionRequest(base.Manifest, base.ModelGateway, time.Second, base.MaxSteps, base.ModelContextTokens, base.ModelOutputTokens, base.OutputLimitBytes)
 	if err != nil {
 		t.Fatal(err)
 	}

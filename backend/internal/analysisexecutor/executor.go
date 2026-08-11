@@ -30,13 +30,15 @@ const (
 
 // OpenCodeSpec is the non-secret analyzer invocation.
 type OpenCodeSpec struct {
-	Bin      string
-	WorkDir  string
-	HomeDir  string
-	TempDir  string
-	Gateway  engineruntime.ModelGatewayConfig
-	Prompt   string
-	MaxSteps int
+	Bin                string
+	WorkDir            string
+	HomeDir            string
+	TempDir            string
+	Gateway            engineruntime.ModelGatewayConfig
+	Prompt             string
+	MaxSteps           int
+	ModelContextTokens int
+	ModelOutputTokens  int
 }
 
 // OpenCodeRunResult contains the structured result and sanitized aggregates only.
@@ -126,7 +128,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	if bin == "" {
 		bin = defaultOpenCodeBin
 	}
-	runResult, runErr := run(ctx, OpenCodeSpec{Bin: bin, WorkDir: workspaceRoot, HomeDir: home, TempDir: temp, Gateway: request.ModelGateway, Prompt: prompt, MaxSteps: request.MaxSteps})
+	runResult, runErr := run(ctx, OpenCodeSpec{Bin: bin, WorkDir: workspaceRoot, HomeDir: home, TempDir: temp, Gateway: request.ModelGateway, Prompt: prompt, MaxSteps: request.MaxSteps, ModelContextTokens: request.ModelContextTokens, ModelOutputTokens: request.ModelOutputTokens})
 	if runResult.Usage.Status == "" {
 		runResult.Usage.Status = agentanalysis.WorkspaceTelemetryUnavailable
 	}
@@ -243,7 +245,7 @@ func readSingleResult(root string, limit int64) (string, error) {
 func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (result OpenCodeRunResult, retErr error) {
 	result.Usage = agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable}
 	result.Telemetry = agentanalysis.WorkspaceOpenCodeTelemetry{Status: agentanalysis.WorkspaceTelemetryUnavailable, StructuredOutputRetriesKnown: true}
-	if err := writeOpenCodeConfig(spec.HomeDir, spec.Gateway, spec.MaxSteps); err != nil {
+	if err := writeOpenCodeConfig(spec.HomeDir, spec.Gateway, spec.MaxSteps, spec.ModelContextTokens, spec.ModelOutputTokens); err != nil {
 		return result, err
 	}
 	bin, err := exec.LookPath(spec.Bin)
@@ -350,10 +352,14 @@ func createOpenCodeSession(ctx context.Context, client *http.Client, baseURL, wo
 
 func promptOpenCode(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec) ([]byte, error) {
 	payload := map[string]any{
-		"agent":  "build",
+		"agent":  "analysis",
 		"model":  map[string]any{"providerID": "engine", "modelID": spec.Gateway.Model},
 		"format": map[string]any{"type": "json_schema", "schema": agentanalysis.WorkspaceResultSchema()},
-		"parts":  []any{map[string]any{"type": "text", "text": spec.Prompt}},
+		"tools": map[string]bool{
+			"read": false, "bash": false, "edit": false, "write": false, "apply_patch": false,
+			"webfetch": false, "websearch": false, "task": false, "skill": false,
+		},
+		"parts": []any{map[string]any{"type": "text", "text": spec.Prompt}},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -454,22 +460,28 @@ func openCodeJSON(ctx context.Context, client *http.Client, method, endpoint str
 	return nil
 }
 
-func writeOpenCodeConfig(home string, gateway engineruntime.ModelGatewayConfig, maxSteps int) error {
+func writeOpenCodeConfig(home string, gateway engineruntime.ModelGatewayConfig, maxSteps, contextTokens, outputTokens int) error {
 	dir := filepath.Join(home, ".config", "opencode")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
+	}
+	analysisPermissions := map[string]any{
+		"*":    "deny",
+		"glob": "allow", "grep": "allow", "StructuredOutput": "allow",
+		"bash": "deny", "edit": "deny", "write": "deny", "apply_patch": "deny",
+		"webfetch": "deny", "websearch": "deny", "task": "deny", "skill": "deny", "external_directory": "deny",
 	}
 	config := map[string]any{
 		"$schema": "https://opencode.ai/config.json", "share": "disabled", "autoupdate": false, "snapshot": false,
 		"provider": map[string]any{"engine": map[string]any{
 			"npm": "@ai-sdk/openai-compatible", "name": "engine",
 			"options": map[string]any{"baseURL": openAIBase(gateway.Endpoint)},
-			"models":  map[string]any{gateway.Model: map[string]any{"limit": map[string]any{"context": 128000, "output": 8192}}},
+			"models":  map[string]any{gateway.Model: map[string]any{"limit": map[string]any{"context": contextTokens, "output": outputTokens}}},
 		}},
-		"agent": map[string]any{"build": map[string]any{"steps": maxSteps}},
-		"permission": map[string]any{
-			"edit": "allow", "bash": "deny", "webfetch": "deny", "task": "deny", "skill": "deny", "external_directory": "deny",
-		},
+		"agent": map[string]any{"analysis": map[string]any{
+			"mode": "primary", "steps": maxSteps, "prompt": agentanalysis.WorkspaceAgentPrompt(), "permission": analysisPermissions,
+		}},
+		"permission": map[string]any{"*": "deny"},
 	}
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
