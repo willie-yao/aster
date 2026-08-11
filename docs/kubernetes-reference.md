@@ -565,7 +565,8 @@ The analyzer executor and stager images must use immutable SHA-256 digests. The
 admission policy pins both images, the exact read-only input PVC, the secure
 RuntimeClass and workload identity, resource bounds, AppArmor and seccomp, the
 single stager and executor shape, read-only source and artifact mounts, and the
-result-only writable mount. The executor never mounts the input PVC directly.
+separate result-only writable volume. The executor never mounts the input PVC
+directly.
 
 Network policy denies ingress and public egress. Kubernetes policy mode selects
 the gateway with namespace and Pod labels. Cilium mode permits only DNS and the

@@ -38,8 +38,8 @@ The shared Agent Sandbox runner supports one optional staged workspace:
 - one bounded, content-addressed stager request that must exactly match the
   execution manifest, source revision, build prefix, and artifact identities;
 - one shared `emptyDir` workspace;
-- read-only `source/` and `artifacts/` subPath mounts in the executor;
-- one writable `result/` subPath mount;
+- one read-only staged workspace mount in the executor;
+- one separate writable volume overlaid at `result/`;
 - separate writable temporary storage for the stager and executor so staging
   credentials or state cannot cross the container boundary.
 
@@ -77,8 +77,9 @@ The chart does not create the namespace, RuntimeClass, Agent Sandbox controller,
 input PVC, gateway, or images. Both images require immutable SHA-256 digests.
 The admission policy pins the requester, namespace, RuntimeClass, ServiceAccount,
 executor and stager images, input claim, container count, mounts, resources,
-AppArmor, seccomp, and delete lifecycle. The executor receives read-only source
-and artifact mounts, one writable result mount, and separate temporary storage.
+AppArmor, seccomp, and delete lifecycle. The executor receives the staged
+workspace read-only, a separate writable result volume, and separate temporary
+storage.
 
 The network policy denies ingress and permits only DNS plus the configured
 internal gateway. The gateway must separately authenticate the analyzer

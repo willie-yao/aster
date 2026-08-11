@@ -296,10 +296,9 @@ func TestAgentSandboxRunUsesStagedReadOnlyWorkspace(t *testing.T) {
 	container := containers[0].(map[string]any)
 	mounts := container["volumeMounts"].([]any)
 	wantMounts := map[string]bool{
-		agentsandbox.StagedWorkspaceSourcePath:    true,
-		agentsandbox.StagedWorkspaceArtifactsPath: true,
-		agentsandbox.StagedWorkspaceResultPath:    false,
-		"/tmp":                                    false,
+		agentsandbox.StagedWorkspaceRoot:       true,
+		agentsandbox.StagedWorkspaceResultPath: false,
+		"/tmp":                                 false,
 	}
 	if len(mounts) != len(wantMounts) {
 		t.Fatalf("mounts=%+v", mounts)
@@ -311,7 +310,7 @@ func TestAgentSandboxRunUsesStagedReadOnlyWorkspace(t *testing.T) {
 		if !ok || (mount["readOnly"] == true) != wantReadOnly {
 			t.Fatalf("mount=%+v", mount)
 		}
-		if path == agentsandbox.StagedWorkspaceSourcePath && mount["subPath"] != "source" || path == agentsandbox.StagedWorkspaceArtifactsPath && mount["subPath"] != "artifacts" || path == agentsandbox.StagedWorkspaceResultPath && mount["subPath"] != "result" {
+		if _, ok := mount["subPath"]; ok {
 			t.Fatalf("mount=%+v", mount)
 		}
 	}
@@ -331,7 +330,7 @@ func TestAgentSandboxRunUsesStagedReadOnlyWorkspace(t *testing.T) {
 	if err != nil || string(decoded) != `{"manifest":"abc"}` {
 		t.Fatalf("stage request=%q err=%v", decoded, err)
 	}
-	if pod["automountServiceAccountToken"] != false || len(pod["volumes"].([]any)) != 4 {
+	if pod["automountServiceAccountToken"] != false || len(pod["volumes"].([]any)) != 5 {
 		t.Fatalf("pod=%+v", pod)
 	}
 	inputVolume := pod["volumes"].([]any)[0].(map[string]any)["persistentVolumeClaim"].(map[string]any)
@@ -339,7 +338,8 @@ func TestAgentSandboxRunUsesStagedReadOnlyWorkspace(t *testing.T) {
 		t.Fatalf("input volume=%+v", inputVolume)
 	}
 	stagerMounts := stager["volumeMounts"].([]any)
-	if mounts[3].(map[string]any)["name"] != "executor-tmp" || stagerMounts[0].(map[string]any)["name"] != "input" || stagerMounts[0].(map[string]any)["readOnly"] != true || stagerMounts[2].(map[string]any)["name"] != "stager-tmp" {
+	volumes := pod["volumes"].([]any)
+	if mounts[0].(map[string]any)["name"] != "workspace" || mounts[1].(map[string]any)["name"] != "result" || mounts[2].(map[string]any)["name"] != "executor-tmp" || volumes[2].(map[string]any)["name"] != "result" || volumes[2].(map[string]any)["emptyDir"].(map[string]any)["sizeLimit"] != agentSandboxResultVolumeLimit || stagerMounts[0].(map[string]any)["name"] != "input" || stagerMounts[0].(map[string]any)["readOnly"] != true || stagerMounts[2].(map[string]any)["name"] != "stager-tmp" {
 		t.Fatalf("staged mounts are invalid: executor=%+v stager=%+v", mounts, stagerMounts)
 	}
 }
