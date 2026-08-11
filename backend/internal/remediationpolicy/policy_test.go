@@ -37,6 +37,9 @@ func TestReasonAdmissionConversionClaims(t *testing.T) {
 		"Delete the admission webhook configuration so no ConversionReview objects are sent to ASO.",
 		"Delete the admission webhook configuration so the API server no longer posts ConversionReview objects to ASO.",
 		"Delete the admission webhook configuration to prevent the API server from posting ConversionReview objects to ASO.",
+		"Delete the admission webhook configuration so the API server stops posting ConversionReview objects to ASO.",
+		"Delete the admission webhook configuration so zero ConversionReview objects are sent to ASO.",
+		"Delete the admission webhook configuration so none of the ConversionReview objects are sent to ASO.",
 	} {
 		if got := Reason(text, actionable); got != UnsafeConversionReason {
 			t.Errorf("unsafe recommendation accepted: %q -> %q", text, got)
@@ -65,6 +68,8 @@ func TestReasonPreservesSafeWebhookChanges(t *testing.T) {
 		"Delete the obsolete admission webhook configuration while preserving conversion availability so API server conversion calls cannot fail.",
 		"Delete the obsolete admission webhook configuration while keeping conversion available so ConversionReview requests cannot fail to reach ASO.",
 		"Delete the obsolete admission webhook configuration while preserving conversion to prevent ConversionReview requests from failing to reach ASO.",
+		"Delete the obsolete admission webhook configuration to prevent the API server from failing to post ConversionReview objects to ASO while preserving conversion.",
+		"Delete the obsolete admission webhook configuration to prevent failures when posting ConversionReview objects to ASO while keeping conversion available.",
 	} {
 		if got := Reason(text, actionable); got != "" {
 			t.Errorf("safe recommendation rejected: %q -> %q", text, got)
@@ -91,6 +96,12 @@ func TestReasonRejectsDestructiveStructuredTargets(t *testing.T) {
 		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/project/conversionwebhook.Teardown", Path: "reconcile.go"},
 		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/project/conversionwebhook.Destroy", Path: "reconcile.go"},
 		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/project/conversionwebhook.EnsureDeleted", Path: "reconcile.go"},
+		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "PurgeConversionWebhook", Path: "reconcile.go"},
+		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "DecommissionConversionWebhook", Path: "reconcile.go"},
+		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "EraseConversionWebhook", Path: "reconcile.go"},
+		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/project/conversionwebhook.Purge", Path: "reconcile.go"},
+		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/project/conversionwebhook/v1.Delete", Path: "reconcile.go"},
+		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/project/conversion/webhook.Delete", Path: "reconcile.go"},
 		{Intent: models.RemediationIntentRemoveConfiguration, Path: "crd.yaml", Value: "spec.conversion.webhook.clientConfig=service"},
 		{Intent: models.RemediationIntentSetConfiguration, Path: "crd.yaml", Value: "spec.conversion.strategy=None"},
 		{Intent: models.RemediationIntentSetConfiguration, Path: "crd.yaml", Value: "conversionWebhook.enabled=0"},
@@ -121,6 +132,9 @@ func TestReasonPreservesSafeStructuredDependencies(t *testing.T) {
 		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/project/conversionwebhook.RemoveCertificateDependencies", Path: "reconcile.go"},
 		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/project/conversionwebhook.EnsureCertificateDeleted", Path: "reconcile.go"},
 		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/project/conversion/cache.DeleteEntry", Path: "reconcile.go"},
+		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "RotateConversionWebhookCertificate", Path: "reconcile.go"},
+		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "EnsureConversionWebhookAvailable", Path: "reconcile.go"},
+		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/project/conversionwebhook/v1.RotateCertificate", Path: "reconcile.go"},
 		{Intent: models.RemediationIntentSetConfiguration, Path: "crd.yaml", Value: "conversionRetry.enabled=false"},
 		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "DISABLE_CONVERSION_TIMEOUT_OVERRIDE", Value: "true"},
 		{Intent: models.RemediationIntentSetConfiguration, Path: "crd.yaml", Value: "retry.conversionWebhook.enabled=false"},
