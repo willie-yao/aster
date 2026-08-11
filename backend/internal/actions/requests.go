@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actiondraft"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patternstate"
@@ -47,7 +48,7 @@ const (
 const (
 	RequestStageVerifying     = "verifying_remediation"
 	RequestStageDrafting      = "drafting"
-	actionRequestStateVersion = 5
+	actionRequestStateVersion = 6
 )
 
 const draftRefinementWarning = "The revised draft could not be generated or did not pass safety validation. The safe fallback draft is shown below, but this replacement request cannot be confirmed."
@@ -59,8 +60,9 @@ type RequestReadyNotifier func(context.Context, ActionRequestView) error
 
 // ActionVerificationView reports the deterministic pinned-source preflight.
 type ActionVerificationView struct {
-	State  string `json:"state"`
-	Reason string `json:"reason"`
+	State  string     `json:"state"`
+	Code   ReasonCode `json:"code,omitempty"`
+	Reason string     `json:"reason"`
 }
 
 // ActionRequestView is the API-safe representation of a persisted request.
@@ -77,6 +79,7 @@ type ActionRequestView struct {
 	UpdatedAt    string                  `json:"updated_at"`
 	ExpiresAt    string                  `json:"expires_at"`
 	Error        string                  `json:"error,omitempty"`
+	ReasonCode   ReasonCode              `json:"reason_code,omitempty"`
 	Warning      string                  `json:"warning,omitempty"`
 	ResultURL    string                  `json:"result_url,omitempty"`
 	SupersededBy string                  `json:"superseded_by,omitempty"`
@@ -126,7 +129,7 @@ func actionRequestID(ctx context.Context) string {
 	return id
 }
 
-func (s *Service) setRequestVerification(ctx context.Context, state, reason string) error {
+func (s *Service) setRequestVerification(ctx context.Context, state string, code ReasonCode, reason string) error {
 	id := actionRequestID(ctx)
 	if id == "" {
 		return nil
@@ -138,13 +141,47 @@ func (s *Service) setRequestVerification(ctx context.Context, state, reason stri
 		return nil
 	}
 	previous, previousUpdatedAt := request.Verification, request.UpdatedAt
-	request.Verification = &ActionVerificationView{State: state, Reason: reason}
+	request.Verification = &ActionVerificationView{State: state, Code: code, Reason: reason}
 	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := s.saveRequestsLocked(); err != nil {
 		request.Verification, request.UpdatedAt = previous, previousUpdatedAt
 		return err
 	}
 	return nil
+}
+
+func normalizeRequestReason(request *actionRequest) bool {
+	if request == nil {
+		return false
+	}
+	changed := false
+	if request.Verification != nil && !validReasonCode(request.Verification.Code) {
+		switch request.Verification.State {
+		case actionverify.StateAlreadyPresent:
+			request.Verification.Code = ReasonAlreadyPresent
+		case actionverify.StateInconclusive:
+			request.Verification.Code = ReasonSourceVerificationInconclusive
+		case actionverify.StateUnresolved:
+			request.Verification.Code = ReasonActionable
+		}
+		changed = request.Verification.Code != ""
+	}
+	if validReasonCode(request.ReasonCode) || request.Status != RequestFailed {
+		return changed
+	}
+	switch {
+	case request.Verification != nil && request.Verification.Code != "":
+		request.ReasonCode = request.Verification.Code
+	case strings.Contains(request.Error, "pattern changed"):
+		request.ReasonCode = ReasonEvidenceUnavailable
+	case strings.Contains(request.Error, "requires regeneration"):
+		request.ReasonCode = ReasonContractGenerationFailed
+	case strings.Contains(request.Error, "safety validation"):
+		request.ReasonCode = ReasonUnsafeRemediation
+	default:
+		request.ReasonCode = ReasonGenerationFailed
+	}
+	return true
 }
 
 func (s *Service) setRequestStage(ctx context.Context, stage string) error {
@@ -203,6 +240,7 @@ func (s *Service) loadActionRequests() {
 			if request != nil && request.Status == RequestReady && request.PatternHash == "" {
 				request.Status = RequestFailed
 				request.Error = "pattern changed before confirmation"
+				request.ReasonCode = ReasonEvidenceUnavailable
 			}
 		}
 		state.Version = 2
@@ -215,6 +253,7 @@ func (s *Service) loadActionRequests() {
 			if request != nil && request.Status == RequestReady && request.VerificationVersion != sourceVerificationVersion {
 				request.Status = RequestFailed
 				request.Error = "saved preview requires regeneration after source verification upgrade"
+				request.ReasonCode = ReasonContractGenerationFailed
 				request.Preview = nil
 				request.Issue = nil
 				request.Fix = nil
@@ -227,11 +266,15 @@ func (s *Service) loadActionRequests() {
 			if request != nil && request.Status == RequestReady && request.VerificationVersion != sourceVerificationVersion {
 				request.Status = RequestFailed
 				request.Error = "saved preview requires regeneration after source verification upgrade"
+				request.ReasonCode = ReasonContractGenerationFailed
 				request.Preview = nil
 				request.Issue = nil
 				request.Fix = nil
 			}
 		}
+		state.Version = 5
+	}
+	if state.Version == 5 {
 		state.Version = actionRequestStateVersion
 	}
 	if state.Requests == nil {
@@ -250,6 +293,7 @@ func (s *Service) loadActionRequests() {
 		if invalidVersion || missingFixIdentity {
 			request.Status = RequestFailed
 			request.Error = "saved preview requires regeneration after source verification upgrade"
+			request.ReasonCode = ReasonContractGenerationFailed
 			request.Preview = nil
 			request.Issue = nil
 			request.Fix = nil
@@ -271,7 +315,8 @@ func (s *Service) loadActionRequests() {
 				continue
 			}
 			request.Status = RequestFailed
-			request.Error = "saved draft did not pass current safety validation"
+			request.ReasonCode = previewValidationReasonCode(err)
+			request.Error = ReasonMessage(request.ReasonCode)
 			request.Warning = ""
 			request.Preview = nil
 			request.Issue = nil
@@ -301,9 +346,11 @@ func (s *Service) loadActionRequests() {
 						request.Preview = &preview
 					} else {
 						request.Error = "saved fallback draft did not pass current safety validation"
+						request.ReasonCode = ReasonUnsafeRemediation
 					}
 				} else {
 					request.Error = "server restarted before draft generation completed"
+					request.ReasonCode = ReasonGenerationFailed
 				}
 			}
 			request.BaseIssue = nil
@@ -317,6 +364,11 @@ func (s *Service) loadActionRequests() {
 				request.UpdatedAt = nowText
 				changed = true
 			}
+		}
+	}
+	for _, request := range state.Requests {
+		if normalizeRequestReason(request) {
+			changed = true
 		}
 	}
 	if changed {
@@ -378,7 +430,7 @@ func validatedPreviewEntry(entry *previewEntry) (PreviewResult, error) {
 			entry.fix.Title, entry.fix.Description,
 		}, "\n")
 		if remediationpolicy.Reason(policyText, snapshot.Pattern.RemediationTargets) != "" {
-			return PreviewResult{}, fmt.Errorf("fix preview violates remediation safety policy")
+			return PreviewResult{}, withReason(ReasonUnsafeRemediation, ErrPreviewRejected, "")
 		}
 		return PreviewResult{
 			Kind: gfKind, Title: entry.fix.Title, Body: entry.fix.Description, Diff: entry.fix.Preview.Diff,
@@ -608,8 +660,10 @@ func (s *Service) finalizeCleanup(id string) (ActionRequestView, error) {
 	request.EmailError = ""
 	if finalStatus == RequestFailed {
 		request.Error = reason
+		request.ReasonCode = ReasonGenerationFailed
 	} else {
 		request.Error = ""
+		request.ReasonCode = ""
 	}
 	if err := s.saveRequestsLocked(); err != nil {
 		*request = previous
@@ -773,6 +827,9 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	subject, err := s.resolveSubject(failureID)
 	if err != nil {
 		return ActionRequestView{}, err
+	}
+	if code, reason := subjectEligibilityReason(subject); code != "" {
+		return ActionRequestView{}, reasonErrorForCode(code, reason)
 	}
 
 	id, err := newToken()
@@ -975,7 +1032,7 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 			err = validateErr
 			fallbackPreview = false
 		} else if validated, validateErr := validatedPreviewEntry(entry); validateErr != nil {
-			err = fmt.Errorf("%w: generated draft did not pass safety validation", ErrPreviewRejected)
+			err = withReason(previewValidationReasonCode(validateErr), ErrPreviewRejected, "")
 			fallbackPreview = false
 		} else {
 			preview = validated
@@ -1009,14 +1066,16 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 	request.BasePatternHash = ""
 	if err != nil {
 		request.Status = RequestFailed
+		request.ReasonCode = ReasonCodeOf(err)
 		if fallbackPreview {
 			request.Warning = draftRefinementWarning
 			request.Preview = &preview
 		} else {
-			request.Error = safeReason(err.Error())
+			request.Error = ReasonMessage(request.ReasonCode)
 		}
 	} else {
 		request.Status = RequestReady
+		request.ReasonCode = ""
 		request.Preview = &preview
 		request.TargetRepo = entry.targetRepo
 		request.TargetConfig = entry.targetConfig
@@ -1211,7 +1270,7 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 	if !reconcileOnly {
 		if _, err := validatedPreviewEntry(entry); err != nil {
 			s.rmu.Unlock()
-			return "", fmt.Errorf("%w: saved draft did not pass safety validation", ErrPreviewRejected)
+			return "", withReason(previewValidationReasonCode(err), ErrPreviewRejected, "")
 		}
 	}
 	if !reconcileOnly && entry.failureID != "" {

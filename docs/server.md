@@ -441,8 +441,14 @@ runner supports persistent drafts, which enables the issue and fix controls.
 Before rendering File issue or Propose fix, the frontend calls the authenticated
 eligibility endpoint. The server resolves the current published subject and runs
 the same deterministic pinned-source verification used by draft generation. The
-endpoint returns `actionable`, `investigation_required`, `already_present`, or
-`more_evidence_required`. A shared remediation policy also blocks destructive CRD
+endpoint retains the coarse `state` field for older clients and adds a stable
+`code` explaining the decision. Codes include `recovered`, `observing`,
+`verified_fixed`, `retained_stale`, `non_systemic`, `evidence_unavailable`,
+`investigation_required`, `contract_generation_failed`, `unsafe_remediation`,
+`already_present`, and `source_verification_inconclusive`. The capability
+response advertises the supported code list. Synchronous action errors and
+persisted asynchronous requests use the same code contract, while older payloads
+without a code remain readable. A shared remediation policy also blocks destructive CRD
 conversion changes and any recommendation that falsely claims admission webhook
 cleanup disables or bypasses CRD conversion. Safe admission cleanup must preserve
 conversion availability. The endpoint does not call a model, create an Orka Task,

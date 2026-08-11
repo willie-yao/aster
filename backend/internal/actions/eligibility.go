@@ -7,6 +7,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
 )
 
 const (
@@ -19,78 +20,87 @@ const (
 
 // Eligibility describes whether a new issue or fix draft can start.
 type Eligibility struct {
-	State  string `json:"state"`
-	Reason string `json:"reason"`
+	State  string     `json:"state"`
+	Code   ReasonCode `json:"code"`
+	Reason string     `json:"reason"`
 }
 
 // ActionEligibility verifies the current published subject without generating a draft.
 func (s *Service) ActionEligibility(ctx context.Context, failureID string) (Eligibility, error) {
-	subject, err := s.resolveSubject(failureID)
+	subject, err := s.resolveSubjectForEligibility(failureID)
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Eligibility{}, err
+		}
+		if code := ReasonCodeOf(err); code != ReasonGenerationFailed {
+			return eligibilityForCode(code, ""), nil
+		}
 		return Eligibility{}, err
 	}
-	if subject.Kind == actionSubjectPattern && subject.Pattern != nil {
-		if !models.PatternIsActive(*subject.Pattern) {
-			state := EligibilityAlreadyPresent
-			if models.PatternIsRecovered(*subject.Pattern) {
-				state = EligibilityRecovered
-			}
-			return Eligibility{State: state, Reason: inactivePatternReason(subject.Pattern)}, nil
-		}
-		targets := subject.Pattern.RemediationTargets
-		if len(targets) == 0 {
-			return moreEvidenceEligibility(), nil
-		}
-		for _, target := range targets {
-			if actionverify.PatternTargetReason(target) != "" {
-				return moreEvidenceEligibility(), nil
-			}
-		}
-		for _, target := range targets {
-			if target.Intent == models.RemediationIntentInvestigate {
-				return Eligibility{
-					State:  EligibilityInvestigationRequired,
-					Reason: "The published remediation requires source investigation before an issue or fix can be drafted.",
-				}, nil
-			}
-		}
+	if code, reason := subjectEligibilityReason(subject); code != "" {
+		return eligibilityForCode(code, reason), nil
 	}
 	if s.cfg == nil || s.sourceVerifier == nil {
-		return moreEvidenceEligibility(), nil
+		return eligibilityForCode(ReasonSourceVerificationInconclusive, ""), nil
 	}
 	repo := s.cfg.EffectiveAnalysisSourceRepo()
 	if repo.Owner == "" || repo.Name == "" {
-		return moreEvidenceEligibility(), nil
+		return eligibilityForCode(ReasonSourceVerificationInconclusive, ""), nil
 	}
 	if err := s.verifyRemediation(ctx, subject); err != nil {
 		switch {
 		case errors.Is(err, ErrRemediationAlreadyPresent):
-			return Eligibility{
-				State:  EligibilityAlreadyPresent,
-				Reason: "The grounded source already contains the proposed remediation.",
-			}, nil
+			return eligibilityForCode(ReasonCodeOf(err), ""), nil
 		case errors.Is(err, ErrRemediationInconclusive):
-			return moreEvidenceEligibility(), nil
+			return eligibilityForCode(ReasonCodeOf(err), ""), nil
 		default:
 			return Eligibility{}, err
 		}
 	}
-	return Eligibility{
-		State:  EligibilityActionable,
-		Reason: "A verified implementation target remains at the pinned source commit.",
-	}, nil
+	return eligibilityForCode(ReasonActionable, ""), nil
 }
 
-func inactivePatternReason(pattern *models.PatternAnalysis) string {
-	if pattern != nil && pattern.Lifecycle != nil && strings.TrimSpace(pattern.Lifecycle.Reason) != "" {
-		return pattern.Lifecycle.Reason
+func subjectEligibilityReason(subject *ActionSubject) (ReasonCode, string) {
+	if subject == nil {
+		return ReasonEvidenceUnavailable, ""
 	}
-	return "This recurring pattern is not currently actionable."
-}
-
-func moreEvidenceEligibility() Eligibility {
-	return Eligibility{
-		State:  EligibilityMoreEvidenceRequired,
-		Reason: "The published analysis does not contain enough verified source evidence for an implementation-ready action.",
+	if subject.Kind != actionSubjectPattern || subject.Pattern == nil {
+		return "", ""
 	}
+	pattern := subject.Pattern
+	published := strings.TrimSpace(pattern.ID) != ""
+	if code := patternRefreshReasonCode(subject.PatternRefresh); code != "" {
+		return code, ""
+	}
+	if published && !pattern.Systemic {
+		return ReasonNonSystemic, ""
+	}
+	if pattern.Lifecycle != nil && pattern.Lifecycle.State != models.PatternLifecycleActive {
+		switch pattern.Lifecycle.State {
+		case models.PatternLifecycleRecovered:
+			return ReasonRecovered, pattern.Lifecycle.Reason
+		case models.PatternLifecycleObserving:
+			return ReasonObserving, pattern.Lifecycle.Reason
+		case models.PatternLifecycleVerifiedFixed:
+			return ReasonVerifiedFixed, pattern.Lifecycle.Reason
+		default:
+			return ReasonEvidenceUnavailable, pattern.Lifecycle.Reason
+		}
+	}
+	if published && len(pattern.RemediationTargets) == 0 {
+		return ReasonContractGenerationFailed, ""
+	}
+	for _, target := range pattern.RemediationTargets {
+		if actionverify.PatternTargetReason(target) != "" {
+			return ReasonContractGenerationFailed, ""
+		}
+		if target.Intent == models.RemediationIntentInvestigate {
+			return ReasonInvestigationRequired, ""
+		}
+	}
+	policyText := strings.Join([]string{pattern.SuggestedFix, pattern.SharedRootCause, pattern.Summary, subject.PolicyText}, "\n")
+	if remediationpolicy.Reason(policyText, pattern.RemediationTargets) != "" {
+		return ReasonUnsafeRemediation, ""
+	}
+	return "", ""
 }

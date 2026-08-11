@@ -136,6 +136,8 @@ export function PatternBanner({
     pattern.remediation_targets,
     attempt?.status,
     lifecycle,
+    pattern.systemic,
+    refreshStatus,
   );
   const fixPatterns =
     isCurrent &&

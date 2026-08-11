@@ -47,6 +47,7 @@ import {
   actionRequestStorageOwner,
   actionRequestProgressDetail,
   actionRequestProgressTitle,
+  actionRequestReasonTitle,
   actionRequestVerificationDetail,
   actionRequestVerificationTitle,
   cancelActionRequest,
@@ -54,7 +55,7 @@ import {
   readStoredActionRequestID,
   syncStoredActionRequest,
 } from "../lib/actionRequests";
-import { actionEligibilityTitle, eligibilityForState } from "../lib/actionEligibility";
+import { actionEligibilityTitle, eligibilityForState, selectActionEligibility } from "../lib/actionEligibility";
 
 function requestedAction(value: string | null): Action | null {
   return value === "create-issue" || value === "propose-fix" ? value : null;
@@ -63,7 +64,9 @@ function requestedAction(value: string | null): Action | null {
 function requestStateError(request: ActionRequest): string | null {
   if (actionRequestHasBlockingVerification(request)) return null;
   if (request.status === "failed" && !request.warning) {
-    return request.error || "Draft generation failed.";
+    const title = actionRequestReasonTitle(request);
+    const detail = request.error || "Draft generation failed.";
+    return title && !detail.startsWith(title) ? `${title}: ${detail}` : detail;
   }
   if (request.status === "expired") return "This draft expired.";
 
@@ -164,14 +167,11 @@ export function FailureActions({
     failureID: string;
     value: ActionEligibility;
   } | null>(null);
-  const eligibilityHintState = eligibilityHint?.state;
-  const eligibilityHintReason = eligibilityHint?.reason;
-  const hasEligibilityHint = eligibilityHintState !== undefined;
-  const eligibility = useMemo(() => (hasEligibilityHint
-    ? { state: eligibilityHintState, reason: eligibilityHintReason ?? "" }
-    : fetchedEligibility?.failureID === failureID
-      ? fetchedEligibility.value
-      : null), [eligibilityHintReason, eligibilityHintState, failureID, fetchedEligibility, hasEligibilityHint]);
+  const hasEligibilityHint = eligibilityHint != null;
+  const eligibility = useMemo(
+    () => selectActionEligibility(eligibilityHint, fetchedEligibility, failureID),
+    [eligibilityHint, failureID, fetchedEligibility],
+  );
   const eligibilityLoading =
     status === "authenticated" && features.actions && !hasEligibilityHint && eligibility === null;
   const requestID = request?.id;
@@ -787,7 +787,7 @@ export function FailureActions({
       )}
 
       {!eligibilityLoading && eligibility && eligibility.state !== "actionable" && (
-        <Alert severity={eligibility.state === "already_present" || eligibility.state === "recovered" ? "info" : "warning"} variant="outlined" sx={{ mt: 1 }}>
+        <Alert role="status" severity={eligibility.state === "already_present" || eligibility.state === "recovered" ? "info" : "warning"} variant="outlined" sx={{ mt: 1 }}>
           <Typography variant="body2" sx={{ fontWeight: 650 }}>
             {actionEligibilityTitle(eligibility, Boolean(features.source_investigation))}
           </Typography>

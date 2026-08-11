@@ -42,6 +42,8 @@ A fix that can't be produced (the agent makes no change, touches more than
 `max_files`, or the reviewer keeps rejecting it) is dropped and logged. No
 partial or speculative changes are ever pushed.
 
+Action availability uses a stable machine-readable reason code in addition to an operator-facing explanation. Retained or inactive patterns, non-systemic results, incomplete contracts, unsafe remediation, and inconclusive source verification remain distinct. The same code is used by eligibility checks, synchronous action errors, asynchronous requests, restored drafts, and confirmation-time revalidation. Older payloads without a code remain supported.
+
 The authenticated action controls run a deterministic eligibility check before
 draft generation. Investigation-only targets direct the maintainer to source
 investigation, missing or malformed targets show that more evidence is required,
