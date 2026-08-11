@@ -114,9 +114,11 @@ type patternCacheData struct {
 
 type patternFailureCacheData struct {
 	Version    int                    `json:"version"`
+	JobID      string                 `json:"job_id,omitempty"`
 	Category   PatternFailureCategory `json:"category"`
 	FailedAt   time.Time              `json:"failed_at"`
 	RetryAfter time.Time              `json:"retry_after"`
+	PatternFailureDiagnostics
 }
 
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
@@ -161,6 +163,7 @@ type PatternAnalyzeOptions struct {
 	OnCacheHit            func()
 	OnFailureSuppressed   func(PatternFailureCategory)
 	OnFreshRetry          func()
+	diagnostics           *patternFailureDiagnosticsRecorder
 }
 
 // PatternFailureCategory is a privacy-safe pattern-attempt outcome.
@@ -227,6 +230,10 @@ func patternValidationIssueOf(err error) string {
 func PatternFailureCategoryOf(err error) PatternFailureCategory {
 	if err == nil {
 		return PatternFailureNone
+	}
+	var classifiedErr *patternClassifiedError
+	if errors.As(err, &classifiedErr) {
+		return classifiedErr.category
 	}
 	if category := patternValidationCategoryOf(err); category != "" {
 		return PatternFailureCategory(category)
@@ -406,6 +413,8 @@ func (s *Service) AnalyzePattern(ctx context.Context, jobID, subject string, fai
 
 // AnalyzePatternWithOptions runs one full correlation attempt.
 func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject string, failures []PatternFailure, options PatternAnalyzeOptions) (_ *models.PatternAnalysis, resultErr error) {
+	diagnostics := &patternFailureDiagnosticsRecorder{}
+	options.diagnostics = diagnostics
 	var trace *TraceSession
 	if s.traceStore != nil {
 		trace = s.traceStore.Start(TraceMetadata{JobID: jobID, TestName: subject, APIMode: s.client.APIMode(), Model: s.client.ModelName()})
@@ -505,7 +514,12 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 			s.client.cache.Delete(failureKey)
 			return
 		}
-		s.persistPatternFailureBackoff(failureKey, resultErr)
+		details := diagnostics.snapshot()
+		category := patternFailureCategoryWithDiagnostics(resultErr, details)
+		if category != PatternFailureCategoryOf(resultErr) {
+			resultErr = &patternClassifiedError{cause: resultErr, category: category}
+		}
+		s.persistPatternFailureBackoff(failureKey, jobID, resultErr, details)
 	}()
 
 	var parsed patternResponse
@@ -520,7 +534,9 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 		return nil, err
 	}
 	if !patternTargetsMatchProwContext(parsed.RemediationTargets, failures) {
-		return nil, &patternValidationError{category: patternValidationSchema, issue: "prow_job_context"}
+		err := &patternValidationError{category: patternValidationSchema, issue: "prow_job_context"}
+		diagnostics.recordValidation("post_validation", patternParseStats{}, err)
+		return nil, err
 	}
 
 	var fileLinks map[string]string
@@ -528,13 +544,17 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 	if grounded {
 		parsed.SuggestedFix = removeUnreadPatternPaths(parsed.SuggestedFix, sourceReads)
 		if !patternTargetsWereRead(parsed.RemediationTargets, sourceReads) {
-			return nil, &patternValidationError{category: patternValidationSchema}
+			err := &patternValidationError{category: patternValidationSchema, issue: "target_source_unread"}
+			diagnostics.recordValidation("post_validation", patternParseStats{}, err)
+			return nil, err
 		}
 		fileLinks, sourceRef = s.patternFileLinks(parsed, sourceReads)
 	} else {
 		s.guardPatternPaths(ctx, &parsed)
 		if !s.patternTargetsExist(ctx, parsed.RemediationTargets) {
-			return nil, &patternValidationError{category: patternValidationSchema}
+			err := &patternValidationError{category: patternValidationSchema, issue: "target_source_missing"}
+			diagnostics.recordValidation("post_validation", patternParseStats{}, err)
+			return nil, err
 		}
 	}
 	_ = s.client.cache.Set(key, patternCacheData{Version: patternCacheVersion, Response: parsed, FileLinks: fileLinks, SourceRef: sourceRef})
@@ -555,17 +575,22 @@ func (s *Service) patternFailureBackoff(key string) (patternFailureCacheData, bo
 	}
 	var failure patternFailureCacheData
 	now := s.patternFailureNow()
-	if json.Unmarshal(raw, &failure) != nil || failure.Version != patternFailureCacheVersion ||
-		!isDeterministicPatternFailureCategory(failure.Category) || failure.FailedAt.IsZero() ||
-		failure.FailedAt.After(now.Add(cacheMaxFutureSkew)) || failure.RetryAfter.IsZero() ||
-		!failure.RetryAfter.After(failure.FailedAt) || failure.RetryAfter.Sub(failure.FailedAt) > defaultPatternFailureCooldown {
+	if json.Unmarshal(raw, &failure) != nil || !validPatternFailureCacheData(failure, now) {
 		s.client.cache.Delete(key)
 		return patternFailureCacheData{}, false
 	}
+	failure.PatternFailureDiagnostics = sanitizePatternFailureDiagnostics(failure.PatternFailureDiagnostics)
 	return failure, true
 }
 
-func (s *Service) persistPatternFailureBackoff(key string, err error) {
+func validPatternFailureCacheData(failure patternFailureCacheData, now time.Time) bool {
+	return failure.Version == patternFailureCacheVersion &&
+		isDeterministicPatternFailureCategory(failure.Category) && !failure.FailedAt.IsZero() &&
+		!failure.FailedAt.After(now.Add(cacheMaxFutureSkew)) && !failure.RetryAfter.IsZero() &&
+		failure.RetryAfter.After(failure.FailedAt) && failure.RetryAfter.Sub(failure.FailedAt) <= defaultPatternFailureCooldown
+}
+
+func (s *Service) persistPatternFailureBackoff(key, jobID string, err error, diagnostics PatternFailureDiagnostics) {
 	category := PatternFailureCategoryOf(err)
 	if !isDeterministicPatternFailureCategory(category) {
 		return
@@ -575,9 +600,14 @@ func (s *Service) persistPatternFailureBackoff(key string, err error) {
 		cooldown = defaultPatternFailureCooldown
 	}
 	now := s.patternFailureNow()
+	jobID = strings.TrimSpace(jobID)
+	if !patternDiagnosticJobRE.MatchString(jobID) {
+		jobID = ""
+	}
 	_ = s.client.cache.Set(key, patternFailureCacheData{
-		Version: patternFailureCacheVersion, Category: category,
+		Version: patternFailureCacheVersion, JobID: jobID, Category: category,
 		FailedAt: now, RetryAfter: now.Add(cooldown),
+		PatternFailureDiagnostics: sanitizePatternFailureDiagnostics(diagnostics),
 	})
 }
 
@@ -769,7 +799,9 @@ func (s *Service) toolFreePatternVerdict(ctx context.Context, userPrompt string,
 	}
 	recordTrace(ctx, TraceEvent{Kind: "pattern_request", Status: "tool_free", Outcome: "success", DurationMs: int(time.Since(started) / time.Millisecond)})
 	if !resp.HasMessage || resp.Message.Content == nil {
-		return patternResponse{}, &patternValidationError{category: patternValidationMissing}
+		err := &patternValidationError{category: patternValidationMissing, issue: "missing_message"}
+		options.diagnostics.recordValidation("tool_free", patternParseStats{}, err)
+		return patternResponse{}, err
 	}
 	return s.parsePatternOutput(ctx, "tool_free", *resp.Message.Content, buildIDs, options)
 }
@@ -794,7 +826,9 @@ func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string,
 	}
 	recordTrace(ctx, TraceEvent{Kind: "pattern_request", Status: "grounded", Outcome: "success", DurationMs: int(time.Since(started) / time.Millisecond)})
 	if strings.TrimSpace(out) == "" {
-		return patternResponse{}, nil, &patternValidationError{category: patternValidationMissing}
+		err := &patternValidationError{category: patternValidationMissing, issue: "empty_output"}
+		options.diagnostics.recordValidation("grounded", patternParseStats{}, err)
+		return patternResponse{}, nil, err
 	}
 	parsed, perr := s.parsePatternOutput(ctx, "grounded", out, buildIDs, options)
 	if perr == nil || patternValidationCategoryOf(perr) != patternValidationMissing {
@@ -819,23 +853,26 @@ func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string,
 func (s *Service) parsePatternOutput(ctx context.Context, stage, output string, buildIDs map[string]struct{}, options PatternAnalyzeOptions) (patternResponse, error) {
 	parsed, stats, err := parsePatternResponseWithStats(output, buildIDs)
 	recordPatternParseTrace(ctx, stage, stats, err)
+	options.diagnostics.recordValidation(stage, stats, err)
 	if err == nil || stats.ScanTruncated {
 		return parsed, err
 	}
 	switch patternValidationCategoryOf(err) {
 	case patternValidationAmbiguous:
 		if options.AllowAmbiguityRepair {
-			return s.repairPatternAmbiguity(ctx, output, buildIDs, options.OnRepair)
+			return s.repairPatternAmbiguity(ctx, output, buildIDs, options)
 		}
 	case patternValidationSchema, patternValidationBuilds:
 		if options.AllowValidationRepair && len(output) <= int(defaultStructuredResponseBytes) {
-			return s.repairPatternValidation(ctx, output, buildIDs, err, options.OnRepair)
+			return s.repairPatternValidation(ctx, output, buildIDs, err, options)
 		}
 	}
 	return parsed, err
 }
 
-func (s *Service) repairPatternValidation(ctx context.Context, output string, buildIDs map[string]struct{}, validationErr error, observe func(PatternRepairAttempt)) (patternResponse, error) {
+func (s *Service) repairPatternValidation(ctx context.Context, output string, buildIDs map[string]struct{}, validationErr error, options PatternAnalyzeOptions) (patternResponse, error) {
+	options.diagnostics.beginRepair("validation")
+	observe := options.OnRepair
 	category := patternValidationCategoryOf(validationErr)
 	issue := patternValidationIssueOf(validationErr)
 	if issue == "" {
@@ -851,6 +888,7 @@ func (s *Service) repairPatternValidation(ctx context.Context, output string, bu
 		candidate, stats, err := parsePatternResponseWithStats(string(raw), buildIDs)
 		if err != nil {
 			parseStats, parseErr = stats, err
+			options.diagnostics.recordRepair("validation", stats, err)
 			return err
 		}
 		parsed, acceptedStats = candidate, stats
@@ -860,10 +898,15 @@ func (s *Service) repairPatternValidation(ctx context.Context, output string, bu
 	if err != nil {
 		var structuredErr *structuredCompletionError
 		validationOnly := errors.As(err, &structuredErr) && structuredErr.cause == nil
-		if parseErr != nil && validationOnly {
+		switch {
+		case parseErr != nil && validationOnly:
 			err = parseErr
 			recordPatternParseTrace(ctx, "repair", parseStats, err)
-		} else {
+		case validationOnly:
+			err = &patternValidationError{category: patternValidationMissing, issue: "repair_no_contract"}
+			options.diagnostics.recordRepair("validation", patternParseStats{}, err)
+			recordPatternParseTrace(ctx, "repair", patternParseStats{}, err)
+		default:
 			err = safePatternProviderError(err)
 		}
 		recordTrace(ctx, TraceEvent{Kind: "pattern_repair", Status: "validation", Outcome: "rejected", DurationMs: int(time.Since(started) / time.Millisecond), ErrorCode: patternTraceErrorCode(err), ValidationCode: patternValidationIssueOf(err)})
@@ -880,7 +923,9 @@ func (s *Service) repairPatternValidation(ctx context.Context, output string, bu
 	return parsed, nil
 }
 
-func (s *Service) repairPatternAmbiguity(ctx context.Context, output string, buildIDs map[string]struct{}, observe func(PatternRepairAttempt)) (patternResponse, error) {
+func (s *Service) repairPatternAmbiguity(ctx context.Context, output string, buildIDs map[string]struct{}, options PatternAnalyzeOptions) (patternResponse, error) {
+	options.diagnostics.beginRepair("ambiguity")
+	observe := options.OnRepair
 	prompt := fmt.Sprintf("Repair contract version %d. The prior bounded investigation produced multiple distinct candidate contracts. Resolve them into exactly one verdict supported by that investigation. Do not add a draft, alternative, explanation, or code fence. Reply with only one JSON object using exactly these keys: "+
 		`{"systemic": true|false, "confidence": "high"|"medium"|"low", "shared_root_cause": "...", "shared_builds": ["..."], "suggested_fix": "...", "remediation_targets": [{"intent":"...","symbol":"...","required_call":"...","path":"...","value":"...","repository":"...","revision":"...","job":"...","container":"...","name":"..."}], "summary": "..."}.`+"\n\nInvestigation output:\n%s", patternRepairVersion, output)
 	started := time.Now()
@@ -895,6 +940,7 @@ func (s *Service) repairPatternAmbiguity(ctx context.Context, output string, bui
 	}
 	parsed, stats, err := parsePatternResponseWithStats(repaired, buildIDs)
 	recordPatternParseTrace(ctx, "repair", stats, err)
+	options.diagnostics.recordRepair("ambiguity", stats, err)
 	outcome := "success"
 	if err != nil {
 		outcome = "validation_error"

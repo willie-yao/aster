@@ -41,6 +41,7 @@ remains identical.
 | `GET /api/capabilities` | Deploy descriptor with feature flags and safe engine version, commit, and image-tag identity. |
 | `GET /api/analysis-traces` | Admin-gated private trace snapshot. Exact filters: `job_id`, `build_id`, `test_name`, `outcome`, and `response_id`. |
 | `GET /api/fetch-status` | Admin-gated aggregate fetch progress, freshness, and next scheduled pass. `HEAD` is also supported. |
+| `GET /api/pattern-diagnostics` | Admin-gated sanitized recurring-pattern cooldown diagnostics. Contains only validation stages, fixed reason codes, counters, and hashed input identities. |
 | `GET /api/analysis-traces/download` | Admin-gated attachment form of the same filtered trace snapshot. |
 | `POST /api/analysis-chat/sessions` | Start an owner-bound conversation for one published test analysis. |
 | `POST /api/analysis-chat/sessions/lookup` | Restore the latest non-expired conversation owned by the signed-in admin for an exact analysis reference. |
@@ -70,6 +71,8 @@ remains identical.
 | `POST /api/failures/{id}/unresolve` | Admin-gated: remove the resolved marker. |
 
 ## Capability seam
+
+Recurring-pattern deterministic failures are retained in the private AI cache under an exact-input identity. Authenticated servers expose only the sanitized subset through `/api/pattern-diagnostics`: the final category, fixed validation stage and code, bounded parser counters, repair stage and count, and cooldown times. The endpoint never returns prompts, model responses, citations, artifact paths, repository source, or model prose. Legacy cooldown entries remain valid and appear without diagnostics until a new exact-input failure is recorded.
 
 The fetcher writes aggregate progress to `.fetch-status/status.json` and the last 20 terminal pass summaries to `.fetch-status/history.json` on the shared data volume. On POSIX filesystems the directory is mode `0700` and both files are mode `0600`. Some RWX filesystems enforce permissions at mount level, so an unsupported per-file `chmod` does not invalidate a successful atomic write. Private HTTP filtering remains mandatory, and the `/data/*` file server rejects the hidden directory. Authenticated servers expose the versioned aggregate status and an identity-free summary of the latest 10 passes through `/api/fetch-status`, with `Cache-Control: no-store`.
 

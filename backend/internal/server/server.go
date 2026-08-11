@@ -150,6 +150,8 @@ type Features struct {
 	AnalysisTraces bool `json:"analysis_traces,omitempty"`
 	// FetchStatus enables the private aggregate fetch progress API and banner.
 	FetchStatus bool `json:"fetch_status,omitempty"`
+	// PatternDiagnostics enables private sanitized recurring-pattern rejection metadata.
+	PatternDiagnostics bool `json:"pattern_diagnostics,omitempty"`
 	// AIUsage enables the private token and cost API.
 	AIUsage bool `json:"ai_usage,omitempty"`
 	// AnalysisChat enables authenticated conversations about one published analysis.
@@ -203,6 +205,7 @@ func Handler(opts Options) (http.Handler, error) {
 		caps.Auth = &AuthInfo{Mode: opts.AuthMode, LoginURL: opts.LoginURL}
 		caps.Features.AnalysisTraces = true
 		caps.Features.FetchStatus = true
+		caps.Features.PatternDiagnostics = true
 		if reg, ok := opts.Auth.(authRegistrar); ok {
 			reg.Register(mux)
 		}
@@ -217,6 +220,8 @@ func Handler(opts Options) (http.Handler, error) {
 		}
 		mux.Handle("/api/fetch-status",
 			readOnly(auth.Middleware(opts.Auth, fetchStatusHandler(opts.DataDir))))
+		mux.Handle("GET /api/pattern-diagnostics",
+			auth.Middleware(opts.Auth, patternDiagnosticsHandler(opts.DataDir, time.Now)))
 	}
 
 	if opts.Auth != nil && opts.AnalysisChat != nil {

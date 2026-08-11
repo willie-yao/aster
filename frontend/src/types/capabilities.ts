@@ -11,6 +11,7 @@ export interface CapabilityFeatures {
   analysis_traces?: boolean;
   ai_usage?: boolean;
   fetch_status?: boolean;
+  pattern_diagnostics?: boolean;
   analysis_chat?: boolean;
   analysis_corrections?: boolean;
   source_investigation?: boolean;
