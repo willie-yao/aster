@@ -31,18 +31,18 @@ func TestExecuteRunsOneNativeSessionAndReturnsAnalysis(t *testing.T) {
 			value := times[min(calls, len(times)-1)]
 			return value
 		},
-		RunOpenCode: func(_ context.Context, spec OpenCodeSpec) ([]byte, error) {
+		RunOpenCode: func(_ context.Context, spec OpenCodeSpec) (OpenCodeRunResult, error) {
 			calls++
 			if spec.WorkDir != root || spec.MaxSteps != request.MaxSteps || !strings.Contains(spec.Prompt, "logs/build.log") || strings.Contains(spec.Prompt, "artifact-only-marker") {
 				t.Fatalf("spec=%+v", spec)
 			}
-			return executorAnalysisJSON(), nil
+			return testOpenCodeResult(), nil
 		},
 	})
 	if result.TerminalState != engineruntime.TerminalSucceeded || result.Analysis == nil || calls != 1 {
 		t.Fatalf("result=%+v calls=%d", result, calls)
 	}
-	if result.Analysis.EvidenceCitations[0].Path != "logs/build.log" || result.Analysis.EvidenceCitations[0].Quote != "artifact-only-marker specific failure" || result.Usage.Available {
+	if result.Analysis.EvidenceCitations[0].Path != "logs/build.log" || result.Analysis.EvidenceCitations[0].Quote != "artifact-only-marker specific failure" || !result.Usage.Available || result.Usage.ModelRequests != 1 {
 		t.Fatalf("result=%+v", result)
 	}
 	data, err := os.ReadFile(filepath.Join(root, agentanalysis.WorkspaceResultDir, agentanalysis.WorkspaceResultFile))
@@ -58,11 +58,11 @@ func TestExecuteRejectsWorkspaceMutation(t *testing.T) {
 	root, request := executorTestFixture(t)
 	result := Execute(context.Background(), request, Options{
 		WorkspaceRoot: root, TempRoot: t.TempDir(),
-		RunOpenCode: func(context.Context, OpenCodeSpec) ([]byte, error) {
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
 			if err := os.WriteFile(filepath.Join(root, agentanalysis.WorkspaceArtifactsDir, "logs", "build.log"), []byte("changed\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			return nil, errors.New("agent failed after mutation")
+			return OpenCodeRunResult{}, errors.New("agent failed after mutation")
 		},
 	})
 	if result.TerminalState != engineruntime.TerminalFailed || !strings.Contains(result.FailureReason, "workspace changed") {
@@ -74,11 +74,11 @@ func TestExecuteRejectsSourceMutation(t *testing.T) {
 	root, request := executorTestFixture(t)
 	result := Execute(context.Background(), request, Options{
 		WorkspaceRoot: root, TempRoot: t.TempDir(),
-		RunOpenCode: func(context.Context, OpenCodeSpec) ([]byte, error) {
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
 			if err := os.WriteFile(filepath.Join(root, agentanalysis.WorkspaceSourceDir, "pkg", "controller.go"), []byte("package changed\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			return executorAnalysisJSON(), nil
+			return testOpenCodeResult(), nil
 		},
 	})
 	if result.TerminalState != engineruntime.TerminalFailed || !strings.Contains(result.FailureReason, "workspace changed") {
@@ -90,11 +90,11 @@ func TestExecuteRejectsExtraResultFile(t *testing.T) {
 	root, request := executorTestFixture(t)
 	result := Execute(context.Background(), request, Options{
 		WorkspaceRoot: root, TempRoot: t.TempDir(),
-		RunOpenCode: func(context.Context, OpenCodeSpec) ([]byte, error) {
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
 			if err := os.WriteFile(filepath.Join(root, agentanalysis.WorkspaceResultDir, "extra.txt"), []byte("extra\n"), 0o600); err != nil {
-				return nil, err
+				return OpenCodeRunResult{}, err
 			}
-			return executorAnalysisJSON(), nil
+			return testOpenCodeResult(), nil
 		},
 	})
 	if result.TerminalState != engineruntime.TerminalFailed || !strings.Contains(result.FailureReason, "modified") {
@@ -106,13 +106,13 @@ func TestExecuteRejectsSymlinkResult(t *testing.T) {
 	root, request := executorTestFixture(t)
 	result := Execute(context.Background(), request, Options{
 		WorkspaceRoot: root, TempRoot: t.TempDir(),
-		RunOpenCode: func(context.Context, OpenCodeSpec) ([]byte, error) {
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
 			target := filepath.Join(root, agentanalysis.WorkspaceArtifactsDir, "logs", "build.log")
 			path := filepath.Join(root, agentanalysis.WorkspaceResultDir, agentanalysis.WorkspaceResultFile)
 			if err := os.Symlink(target, path); err != nil {
-				return nil, err
+				return OpenCodeRunResult{}, err
 			}
-			return executorAnalysisJSON(), nil
+			return testOpenCodeResult(), nil
 		},
 	})
 	if result.TerminalState != engineruntime.TerminalFailed || result.Analysis != nil {
@@ -126,11 +126,11 @@ func TestExecuteReportsCancellationWithoutSecondRun(t *testing.T) {
 	calls := 0
 	result := Execute(parent, request, Options{
 		WorkspaceRoot: root, TempRoot: t.TempDir(),
-		RunOpenCode: func(ctx context.Context, _ OpenCodeSpec) ([]byte, error) {
+		RunOpenCode: func(ctx context.Context, _ OpenCodeSpec) (OpenCodeRunResult, error) {
 			calls++
 			cancel()
 			<-ctx.Done()
-			return nil, ctx.Err()
+			return OpenCodeRunResult{}, ctx.Err()
 		},
 	})
 	if result.TerminalState != engineruntime.TerminalCancelled || calls != 1 {
@@ -259,10 +259,18 @@ func executorTestFixture(t *testing.T) (string, agentanalysis.WorkspaceExecution
 	return root, execution
 }
 
+func testOpenCodeResult() OpenCodeRunResult {
+	return OpenCodeRunResult{
+		Structured: executorAnalysisJSON(),
+		Usage:      agentanalysis.WorkspaceUsage{Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable, ModelRequests: 1, InputTokens: 10, OutputTokens: 5, CostAvailable: true, CostUSD: "0.01000000"},
+		Telemetry:  agentanalysis.WorkspaceOpenCodeTelemetry{Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable, EventCount: 2, StepsUsed: 1, StructuredOutputRetriesKnown: true},
+	}
+}
+
 func executorAnalysisJSON() []byte {
 	return []byte(`{
   "version": 1,
-  "contract_version": "agent-analysis-workspace-v2",
+  "contract_version": "agent-analysis-workspace-v3",
   "summary": "The controller rejected the request.",
   "is_transient": false,
   "root_cause": "The specific failure occurred before cleanup.",
@@ -283,4 +291,51 @@ func runExecutorGit(t *testing.T, root string, args ...string) string {
 		t.Fatalf("git %v: %v: %s", args, err, output)
 	}
 	return string(output)
+}
+
+func TestExecuteReportsTimeoutTelemetry(t *testing.T) {
+	root, request := executorTestFixture(t)
+	request.TimeoutSeconds = 1
+	request.Hash = ""
+	data, _ := json.Marshal(request)
+	_ = data
+	// Rebuild through the constructor so the request hash remains canonical.
+	request, err := agentanalysis.NewWorkspaceExecutionRequest(request.Manifest, request.ModelGateway, time.Second, request.MaxSteps, request.OutputLimitBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: root, TempRoot: t.TempDir(),
+		RunOpenCode: func(ctx context.Context, _ OpenCodeSpec) (OpenCodeRunResult, error) {
+			<-ctx.Done()
+			return OpenCodeRunResult{}, ctx.Err()
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalTimedOut || !result.OpenCodeTelemetry.TimedOut || result.OpenCodeTelemetry.FailureCode != "timeout" || result.Usage.Status != agentanalysis.WorkspaceTelemetryUnavailable {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestExecuteRejectsResultReturnedAfterDeadline(t *testing.T) {
+	root, base := executorTestFixture(t)
+	request, err := agentanalysis.NewWorkspaceExecutionRequest(base.Manifest, base.ModelGateway, time.Second, base.MaxSteps, base.OutputLimitBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: root, TempRoot: t.TempDir(),
+		RunOpenCode: func(ctx context.Context, _ OpenCodeSpec) (OpenCodeRunResult, error) {
+			<-ctx.Done()
+			return testOpenCodeResult(), nil
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalTimedOut || result.Analysis != nil || !result.OpenCodeTelemetry.TimedOut || result.OpenCodeTelemetry.FailureCode != "timeout" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestOpenCodeFailureCodePrefersContextLimit(t *testing.T) {
+	if got := openCodeFailureCode(errors.New("OpenCode structured output failed: ContextOverflowError")); got != "context_limit" {
+		t.Fatalf("failure code = %q", got)
+	}
 }

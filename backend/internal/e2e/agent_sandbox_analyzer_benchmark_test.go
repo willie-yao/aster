@@ -77,81 +77,96 @@ type agentSandboxAnalyzerCitation struct {
 }
 
 type agentSandboxAnalyzerBenchmarkRecord struct {
-	Version                 int                            `json:"version"`
-	CaseID                  string                         `json:"case_id"`
-	StableID                string                         `json:"stable_id"`
-	Repetition              int                            `json:"repetition"`
-	Runtime                 string                         `json:"runtime"`
-	Arm                     string                         `json:"arm"`
-	ModelLabel              string                         `json:"model_label"`
-	EngineCommit            string                         `json:"engine_commit"`
-	FixtureSHA256           string                         `json:"fixture_sha256"`
-	BaselineConsumerCommit  string                         `json:"baseline_consumer_commit"`
-	BaselinePromptSHA256    string                         `json:"baseline_prompt_sha256"`
-	ProjectSHA256           string                         `json:"project_sha256"`
-	ProviderPath            string                         `json:"provider_path"`
-	TransportID             string                         `json:"transport_id"`
-	APIMode                 string                         `json:"api_mode"`
-	EvidenceCondition       string                         `json:"evidence_condition"`
-	JobName                 string                         `json:"job_name"`
-	BuildID                 string                         `json:"build_id"`
-	TestName                string                         `json:"test_name"`
-	TestSource              string                         `json:"test_source"`
-	ContractVersion         string                         `json:"contract_version"`
-	WorkspacePromptHash     string                         `json:"workspace_prompt_hash"`
-	ManifestHash            string                         `json:"manifest_hash"`
-	RequestHash             string                         `json:"request_hash"`
-	RuntimeIdentityHash     string                         `json:"runtime_identity_hash"`
-	ExecutionID             string                         `json:"execution_id"`
-	SourceRevision          string                         `json:"source_revision"`
-	ArtifactFiles           int                            `json:"artifact_files"`
-	ArtifactBytes           int64                          `json:"artifact_bytes"`
-	Status                  string                         `json:"status"`
-	ErrorCode               string                         `json:"error_code,omitempty"`
-	FailureReason           string                         `json:"failure_reason,omitempty"`
-	ElapsedMS               int64                          `json:"elapsed_ms"`
-	RuntimeDurationMS       int64                          `json:"runtime_duration_ms"`
-	TaskFinalized           bool                           `json:"task_finalized"`
-	TaskFinalizedMS         int64                          `json:"task_finalized_ms,omitempty"`
-	ResultAvailable         bool                           `json:"result_available"`
-	ResultAvailableMS       int64                          `json:"result_available_ms,omitempty"`
-	FinalizationChecked     bool                           `json:"finalization_checked"`
-	FinalizationValid       bool                           `json:"finalization_valid"`
-	CleanupCompleted        bool                           `json:"cleanup_completed"`
-	CleanupDurationMS       int64                          `json:"cleanup_duration_ms,omitempty"`
-	AnalysisValid           bool                           `json:"analysis_valid"`
-	ArtifactCitationCount   int                            `json:"artifact_citation_count"`
-	SourceCitationCount     int                            `json:"source_citation_count"`
-	SourceVerified          bool                           `json:"source_verified"`
-	EvidenceCitations       []agentSandboxAnalyzerCitation `json:"evidence_citations,omitempty"`
-	SourceCitations         []agentSandboxAnalyzerCitation `json:"source_citations,omitempty"`
-	SignalHits              int                            `json:"signal_hits"`
-	SignalTotal             int                            `json:"signal_total"`
-	DiagnosisSignalHits     int                            `json:"diagnosis_signal_hits"`
-	DiagnosisSignalTotal    int                            `json:"diagnosis_signal_total"`
-	TransientCorrect        *bool                          `json:"transient_classification_correct,omitempty"`
-	ForbiddenChecksPassed   int                            `json:"forbidden_checks_passed"`
-	ForbiddenChecksTotal    int                            `json:"forbidden_checks_total"`
-	MissingMust             []string                       `json:"missing_must,omitempty"`
-	IsTransient             *bool                          `json:"is_transient,omitempty"`
-	Summary                 string                         `json:"summary,omitempty"`
-	RootCause               string                         `json:"root_cause,omitempty"`
-	SuggestedFix            string                         `json:"suggested_fix,omitempty"`
-	Severity                string                         `json:"severity,omitempty"`
-	RelevantFiles           []string                       `json:"relevant_files,omitempty"`
-	UnresolvedDetails       []string                       `json:"unresolved_details,omitempty"`
-	ModelRequests           int                            `json:"model_requests"`
-	InputTokens             int                            `json:"input_tokens"`
-	CachedInputTokens       int                            `json:"cached_input_tokens"`
-	OutputTokens            int                            `json:"output_tokens"`
-	CostUSD                 string                         `json:"cost_usd,omitempty"`
-	TokenUsageAvailable     bool                           `json:"token_usage_available"`
-	CostAvailable           bool                           `json:"cost_available"`
-	UsageStatus             string                         `json:"usage_status"`
-	Resources               engineruntime.ResourceMetadata `json:"resources"`
-	HumanScoreRubricVersion int                            `json:"human_score_rubric_version"`
-	HumanScoreMax           int                            `json:"human_score_max"`
-	HumanScoreDimensions    []string                       `json:"human_score_dimensions"`
+	Version                      int                                    `json:"version"`
+	CaseID                       string                                 `json:"case_id"`
+	StableID                     string                                 `json:"stable_id"`
+	Repetition                   int                                    `json:"repetition"`
+	Runtime                      string                                 `json:"runtime"`
+	Arm                          string                                 `json:"arm"`
+	ModelLabel                   string                                 `json:"model_label"`
+	EngineCommit                 string                                 `json:"engine_commit"`
+	FixtureSHA256                string                                 `json:"fixture_sha256"`
+	BaselineConsumerCommit       string                                 `json:"baseline_consumer_commit"`
+	BaselinePromptSHA256         string                                 `json:"baseline_prompt_sha256"`
+	ProjectSHA256                string                                 `json:"project_sha256"`
+	ProviderPath                 string                                 `json:"provider_path"`
+	TransportID                  string                                 `json:"transport_id"`
+	APIMode                      string                                 `json:"api_mode"`
+	EvidenceCondition            string                                 `json:"evidence_condition"`
+	JobName                      string                                 `json:"job_name"`
+	BuildID                      string                                 `json:"build_id"`
+	TestName                     string                                 `json:"test_name"`
+	TestSource                   string                                 `json:"test_source"`
+	ContractVersion              string                                 `json:"contract_version"`
+	WorkspacePromptHash          string                                 `json:"workspace_prompt_hash"`
+	ManifestHash                 string                                 `json:"manifest_hash"`
+	RequestHash                  string                                 `json:"request_hash"`
+	RuntimeIdentityHash          string                                 `json:"runtime_identity_hash"`
+	ExecutionID                  string                                 `json:"execution_id"`
+	SourceRevision               string                                 `json:"source_revision"`
+	ArtifactFiles                int                                    `json:"artifact_files"`
+	ArtifactBytes                int64                                  `json:"artifact_bytes"`
+	Status                       string                                 `json:"status"`
+	ErrorCode                    string                                 `json:"error_code,omitempty"`
+	FailureReason                string                                 `json:"failure_reason,omitempty"`
+	ElapsedMS                    int64                                  `json:"elapsed_ms"`
+	RuntimeDurationMS            int64                                  `json:"runtime_duration_ms"`
+	TaskFinalized                bool                                   `json:"task_finalized"`
+	TaskFinalizedMS              int64                                  `json:"task_finalized_ms,omitempty"`
+	ResultAvailable              bool                                   `json:"result_available"`
+	ResultAvailableMS            int64                                  `json:"result_available_ms,omitempty"`
+	FinalizationChecked          bool                                   `json:"finalization_checked"`
+	FinalizationValid            bool                                   `json:"finalization_valid"`
+	CleanupCompleted             bool                                   `json:"cleanup_completed"`
+	CleanupDurationMS            int64                                  `json:"cleanup_duration_ms,omitempty"`
+	AnalysisValid                bool                                   `json:"analysis_valid"`
+	ArtifactCitationCount        int                                    `json:"artifact_citation_count"`
+	SourceCitationCount          int                                    `json:"source_citation_count"`
+	SourceVerified               bool                                   `json:"source_verified"`
+	EvidenceCitations            []agentSandboxAnalyzerCitation         `json:"evidence_citations,omitempty"`
+	SourceCitations              []agentSandboxAnalyzerCitation         `json:"source_citations,omitempty"`
+	SignalHits                   int                                    `json:"signal_hits"`
+	SignalTotal                  int                                    `json:"signal_total"`
+	DiagnosisSignalHits          int                                    `json:"diagnosis_signal_hits"`
+	DiagnosisSignalTotal         int                                    `json:"diagnosis_signal_total"`
+	TransientCorrect             *bool                                  `json:"transient_classification_correct,omitempty"`
+	ForbiddenChecksPassed        int                                    `json:"forbidden_checks_passed"`
+	ForbiddenChecksTotal         int                                    `json:"forbidden_checks_total"`
+	MissingMust                  []string                               `json:"missing_must,omitempty"`
+	IsTransient                  *bool                                  `json:"is_transient,omitempty"`
+	Summary                      string                                 `json:"summary,omitempty"`
+	RootCause                    string                                 `json:"root_cause,omitempty"`
+	SuggestedFix                 string                                 `json:"suggested_fix,omitempty"`
+	Severity                     string                                 `json:"severity,omitempty"`
+	RelevantFiles                []string                               `json:"relevant_files,omitempty"`
+	UnresolvedDetails            []string                               `json:"unresolved_details,omitempty"`
+	ModelRequests                int                                    `json:"model_requests"`
+	InputTokens                  int                                    `json:"input_tokens"`
+	CachedInputTokens            int                                    `json:"cached_input_tokens"`
+	OutputTokens                 int                                    `json:"output_tokens"`
+	CostUSD                      string                                 `json:"cost_usd,omitempty"`
+	TokenUsageAvailable          bool                                   `json:"token_usage_available"`
+	CostAvailable                bool                                   `json:"cost_available"`
+	UsageStatus                  string                                 `json:"usage_status"`
+	OpenCodeTelemetryAvailable   bool                                   `json:"opencode_telemetry_available"`
+	OpenCodeTelemetryStatus      string                                 `json:"opencode_telemetry_status"`
+	OpenCodeEventCount           int                                    `json:"opencode_event_count"`
+	OpenCodeTools                []agentanalysis.WorkspaceToolTelemetry `json:"opencode_tools,omitempty"`
+	DeniedToolCount              int                                    `json:"denied_tool_count"`
+	ToolFailureCount             int                                    `json:"tool_failure_count"`
+	StepsUsed                    int                                    `json:"steps_used"`
+	StructuredOutputRetriesKnown bool                                   `json:"structured_output_retries_known"`
+	StructuredOutputRetries      int                                    `json:"structured_output_retries"`
+	StructuredOutputErrors       int                                    `json:"structured_output_errors"`
+	ContextLimit                 bool                                   `json:"context_limit"`
+	OpenCodeTimedOut             bool                                   `json:"opencode_timed_out"`
+	OpenCodeFailureCode          string                                 `json:"opencode_failure_code,omitempty"`
+	OpenCodeStdoutTruncated      bool                                   `json:"opencode_stdout_truncated"`
+	OpenCodeStderrTruncated      bool                                   `json:"opencode_stderr_truncated"`
+	Resources                    engineruntime.ResourceMetadata         `json:"resources"`
+	HumanScoreRubricVersion      int                                    `json:"human_score_rubric_version"`
+	HumanScoreMax                int                                    `json:"human_score_max"`
+	HumanScoreDimensions         []string                               `json:"human_score_dimensions"`
 }
 
 type agentSandboxAnalyzerPreparedCase struct {
@@ -406,14 +421,29 @@ func agentSandboxAnalyzerRecordForResult(
 	record.ModelRequests, record.InputTokens = usage.ModelRequests, usage.InputTokens
 	record.CachedInputTokens, record.OutputTokens, record.CostUSD = usage.CachedInputTokens, usage.OutputTokens, usage.CostUSD
 	record.TokenUsageAvailable = usage.Available
-	record.CostAvailable = usage.Available && strings.TrimSpace(usage.CostUSD) != ""
-	switch {
-	case usage.Available:
-		record.UsageStatus = "reported_by_executor"
-	case result.Telemetry.TokenUsageAvailable || result.Telemetry.CostAvailable:
-		record.UsageStatus = "runtime_reported_usage_without_values"
-	case record.UsageStatus == "":
-		record.UsageStatus = "unavailable_from_model_gateway"
+	record.CostAvailable = usage.CostAvailable
+	record.UsageStatus = usage.Status
+	telemetry := result.Execution.OpenCodeTelemetry
+	record.OpenCodeTelemetryAvailable = telemetry.Available
+	record.OpenCodeTelemetryStatus = telemetry.Status
+	record.OpenCodeEventCount = telemetry.EventCount
+	record.OpenCodeTools = append([]agentanalysis.WorkspaceToolTelemetry(nil), telemetry.Tools...)
+	record.DeniedToolCount = telemetry.DeniedToolCount
+	record.ToolFailureCount = telemetry.ToolFailureCount
+	record.StepsUsed = telemetry.StepsUsed
+	record.StructuredOutputRetriesKnown = telemetry.StructuredOutputRetriesKnown
+	record.StructuredOutputRetries = telemetry.StructuredOutputRetries
+	record.StructuredOutputErrors = telemetry.StructuredOutputErrors
+	record.ContextLimit = telemetry.ContextLimit
+	record.OpenCodeTimedOut = telemetry.TimedOut
+	record.OpenCodeFailureCode = telemetry.FailureCode
+	record.OpenCodeStdoutTruncated = telemetry.StdoutTruncated
+	record.OpenCodeStderrTruncated = telemetry.StderrTruncated
+	if record.UsageStatus == "" {
+		record.UsageStatus = agentanalysis.WorkspaceTelemetryUnavailable
+	}
+	if record.OpenCodeTelemetryStatus == "" {
+		record.OpenCodeTelemetryStatus = agentanalysis.WorkspaceTelemetryUnavailable
 	}
 	analysis := result.Execution.Analysis
 	record.AnalysisValid = analysis != nil && result.Telemetry.FinalizationValid
@@ -639,7 +669,7 @@ func TestAgentSandboxAnalyzerRecordRetainsFailureUsage(t *testing.T) {
 		},
 	}
 	usage := agentanalysis.WorkspaceUsage{
-		Available: true, ModelRequests: 3, InputTokens: 100, CachedInputTokens: 20, OutputTokens: 40, CostUSD: "0.42",
+		Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable, ModelRequests: 3, InputTokens: 100, CachedInputTokens: 20, OutputTokens: 40, CostAvailable: true, CostUSD: "0.42",
 	}
 	for _, test := range []struct {
 		name       string
@@ -653,7 +683,7 @@ func TestAgentSandboxAnalyzerRecordRetainsFailureUsage(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			record := agentSandboxAnalyzerRecordForResult(cfg, prepared, 1, "execution", "runtime", test.result, time.Second, test.err)
-			if record.AnalysisValid || record.Status != test.wantStatus || record.ModelRequests != 3 || record.InputTokens != 100 || record.CachedInputTokens != 20 || record.OutputTokens != 40 || record.CostUSD != "0.42" || !record.TokenUsageAvailable || !record.CostAvailable || record.UsageStatus != "reported_by_executor" {
+			if record.AnalysisValid || record.Status != test.wantStatus || record.ModelRequests != 3 || record.InputTokens != 100 || record.CachedInputTokens != 20 || record.OutputTokens != 40 || record.CostUSD != "0.42" || !record.TokenUsageAvailable || !record.CostAvailable || record.UsageStatus != agentanalysis.WorkspaceTelemetryAvailable {
 				t.Fatalf("record = %+v", record)
 			}
 		})
