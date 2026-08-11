@@ -136,7 +136,7 @@ func (a *scriptedPatternAnalyzer) AnalyzePattern(_ context.Context, jobID, subje
 func TestAnalyzeRetriesOnlyEligiblePatternFailures(t *testing.T) {
 	valid := validPatternResult("3", "2")
 	ambiguous := valid + "\n" + strings.Replace(valid, "shared cause", "different cause", 1)
-	trailingContract := valid + `\n{"systemic":true}`
+	trailingContract := valid + `\n{"groups":[]}`
 	tests := []struct {
 		name          string
 		results       []scriptedPatternResult
@@ -175,7 +175,7 @@ func TestAnalyzeRetriesOnlyEligiblePatternFailures(t *testing.T) {
 			wantCalls: 1, wantCompleted: 1,
 		},
 		{
-			name: "schema invalid", results: []scriptedPatternResult{{raw: `{"systemic":true}`}, {raw: valid}},
+			name: "schema invalid", results: []scriptedPatternResult{{raw: `{"groups":[]}`}, {raw: valid}},
 			wantCalls: 1, wantFailed: 1, wantCategory: ai.PatternFailureSchema,
 		},
 		{
@@ -244,8 +244,18 @@ func TestAnalyzeDoesNotRerunSuccessfulJobWhenAnotherFails(t *testing.T) {
 }
 
 func validPatternResult(builds ...string) string {
-	return fmt.Sprintf(`{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":%s,"suggested_fix":"update configuration","remediation_targets":[{"intent":"investigate"}],"summary":"shared failure"}`,
-		mustJSON(builds))
+	seen := map[string]bool{}
+	for _, build := range builds {
+		seen[build] = true
+	}
+	unclassified := make([]string, 0, 3)
+	for _, build := range []string{"3", "2", "1"} {
+		if !seen[build] {
+			unclassified = append(unclassified, build)
+		}
+	}
+	return fmt.Sprintf(`{"groups":[{"builds":%s,"root_cause":"shared cause","confidence":"high"}],"unclassified_builds":%s,"summary":"shared failure"}`,
+		mustJSON(builds), mustJSON(unclassified))
 }
 
 func mustJSON(value any) string {

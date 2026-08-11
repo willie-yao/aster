@@ -45,7 +45,7 @@ func TestPatternRejectionReplayFixtures(t *testing.T) {
 			if err := json.Unmarshal(raw, &fixture); err != nil {
 				t.Fatal(err)
 			}
-			if fixture.Version != 1 || fixture.CaseName == "" || fixture.CaseClass == "" || len(fixture.ContractShape) != 7 || fixture.ObservedAttempts != 1 || fixture.ObservedRepairs != 2 || fixture.EvidenceComplete {
+			if fixture.Version != 1 || fixture.CaseName == "" || fixture.CaseClass == "" || len(fixture.ContractShape) != 3 || fixture.ObservedAttempts != 1 || fixture.ObservedRepairs != 2 || fixture.EvidenceComplete {
 				t.Fatalf("invalid fixture: %+v", fixture)
 			}
 			recorder := &patternFailureDiagnosticsRecorder{}
@@ -182,11 +182,9 @@ func TestReadPatternFailureDiagnosticsSupportsLegacyAndBoundsOutput(t *testing.T
 func TestPatternFailureDiagnosticsPersistSpecificReasonAfterRepairFailure(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	unsafe := `{"systemic":true,"confidence":"high","shared_root_cause":"conversion unavailable","shared_builds":["abuild","bbuild"],"suggested_fix":"Delete admission webhooks so CRD conversion no longer calls ASO.","remediation_targets":[{"intent":"modify_symbol","symbol":"preUpgrade","required_call":"example/asomigration.DeleteWebhookConfigurations","path":"upgrade.go"}],"summary":"unsafe conversion recommendation"}`
-	srv.push(200, chatRespFinal(unsafe))
-	for range 3 {
-		srv.push(200, chatRespFinal("PRIVATE_REPAIR_OUTPUT without a contract"))
-	}
+	const privateOutput = "PRIVATE_REPAIR_OUTPUT"
+	srv.push(200, patternToolRaw(`{"groups":[],"unclassified_builds":["abuild","bbuild","cbuild"],"summary":"invalid","suggested_fix":"private"}`))
+	srv.push(200, chatRespFinal(privateOutput))
 	cacheDir := t.TempDir()
 	now := time.Now().UTC()
 	service := newPatternBackoffService(t, srv.URL, cacheDir, "claude-test")
@@ -195,8 +193,8 @@ func TestPatternFailureDiagnosticsPersistSpecificReasonAfterRepairFailure(t *tes
 	if PatternFailureCategoryOf(err) != PatternFailureSchema {
 		t.Fatalf("error=%v category=%s", err, PatternFailureCategoryOf(err))
 	}
-	if got := atomic.LoadInt32(&srv.calls); got != 4 {
-		t.Fatalf("model calls=%d, want 4", got)
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("model calls=%d, want 2", got)
 	}
 	if err := service.client.Cache().Save(); err != nil {
 		t.Fatal(err)
@@ -206,38 +204,22 @@ func TestPatternFailureDiagnosticsPersistSpecificReasonAfterRepairFailure(t *tes
 		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
 	}
 	entry := snapshot.Entries[0]
-	if entry.JobID != "periodic-api-upgrade" || entry.Category != PatternFailureSchema || entry.Stage != "tool_free" || entry.ValidationCode != "unsafe_conversion_remediation" || entry.RepairStage != "validation" || entry.RepairValidationCode != "repair_no_contract" || entry.RepairCount != 1 {
+	if entry.JobID != "periodic-api-upgrade" || entry.Category != PatternFailureSchema || entry.Stage != "tool_free" || entry.ValidationCode != "required_fields" || entry.RepairStage != "validation" || entry.RepairValidationCode != "repair_no_contract" || entry.RepairCount != 1 {
 		t.Fatalf("entry=%+v", entry)
-	}
-	beforeSuppression, err := os.ReadFile(filepath.Join(cacheDir, CacheFilename))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = service.AnalyzePattern(t.Context(), "periodic-api-upgrade", "periodic-api-upgrade", patternFailures(3))
-	if !IsPatternFailureSuppressed(err) || PatternFailureCategoryOf(err) != PatternFailureSchema || atomic.LoadInt32(&srv.calls) != 4 {
-		t.Fatalf("suppressed error=%v category=%s calls=%d", err, PatternFailureCategoryOf(err), srv.calls)
-	}
-	if err := service.client.Cache().Save(); err != nil {
-		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join(cacheDir, CacheFilename))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(raw) != string(beforeSuppression) {
-		t.Fatal("suppressed pass changed exact persisted diagnostics")
-	}
-	for _, private := range []string{"PRIVATE_REPAIR_OUTPUT", "Delete admission webhooks", "unsafe conversion recommendation"} {
-		if strings.Contains(string(raw), private) {
-			t.Fatalf("cache leaked private output %q", private)
-		}
+	if strings.Contains(string(raw), privateOutput) || strings.Contains(string(raw), "suggested_fix") {
+		t.Fatalf("cache leaked private output: %s", raw)
 	}
 }
 
 func TestPatternFailureDiagnosticsPositiveResultDoesNotPersistCooldown(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(`{"systemic":false,"confidence":"low","shared_root_cause":"","shared_builds":[],"suggested_fix":"","remediation_targets":[],"summary":"independent"}`))
+	srv.push(200, patternToolResponse(sharedPatternResponse()))
 	cacheDir := t.TempDir()
 	service := newPatternBackoffService(t, srv.URL, cacheDir, "claude-test")
 	if _, err := service.AnalyzePattern(t.Context(), "job", "job", patternFailures(3)); err != nil {

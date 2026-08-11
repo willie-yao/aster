@@ -20,12 +20,17 @@ import (
 
 func TestSuccessfulPatternCacheSurvivesAnotherJobFailure(t *testing.T) {
 	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "65536")
-	valid := `{"systemic":true,"confidence":"high","shared_root_cause":"shared cause","shared_builds":["3","2"],"suggested_fix":"update configuration","remediation_targets":[{"intent":"investigate"}],"summary":"shared failure"}`
+	valid := `{"groups":[{"builds":["3","2"],"root_cause":"shared cause","confidence":"high"}],"unclassified_builds":["1"],"summary":"shared failure"}`
 	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if calls.Add(1) == 1 {
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"role": "assistant", "content": valid}}},
+				"choices": []any{map[string]any{
+					"finish_reason": "tool_calls",
+					"message": map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{map[string]any{
+						"id": "pattern", "type": "function", "function": map[string]any{"name": "submit_causal_groups", "arguments": valid},
+					}}},
+				}},
 			})
 			return
 		}

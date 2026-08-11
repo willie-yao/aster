@@ -12,6 +12,9 @@ func PatternHash(p PatternAnalysis) string {
 		Subject                 string                          `json:"subject"`
 		JobID                   string                          `json:"job_id"`
 		BuildsAnalyzed          int                             `json:"builds_analyzed"`
+		Recurrence              PatternRecurrence               `json:"recurrence_classification,omitempty"`
+		CausalGroups            []PatternCausalGroup            `json:"causal_groups,omitempty"`
+		UnclassifiedBuilds      []string                        `json:"unclassified_builds,omitempty"`
 		Systemic                bool                            `json:"systemic"`
 		Confidence              string                          `json:"confidence"`
 		SharedRootCause         string                          `json:"shared_root_cause"`
@@ -28,6 +31,9 @@ func PatternHash(p PatternAnalysis) string {
 		Subject:                 p.Subject,
 		JobID:                   p.JobID,
 		BuildsAnalyzed:          p.BuildsAnalyzed,
+		Recurrence:              p.Recurrence,
+		CausalGroups:            p.CausalGroups,
+		UnclassifiedBuilds:      p.UnclassifiedBuilds,
 		Systemic:                p.Systemic,
 		Confidence:              p.Confidence,
 		SharedRootCause:         p.SharedRootCause,

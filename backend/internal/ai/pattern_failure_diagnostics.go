@@ -28,8 +28,11 @@ var knownPatternDiagnosticCodes = map[string]bool{
 	"contract_validation":           true,
 	"duplicate_field":               true,
 	"empty_output":                  true,
+	"duplicate_build":               true,
 	"field_types":                   true,
+	"groups":                        true,
 	"invalid_json":                  true,
+	"missing_build":                 true,
 	"missing_message":               true,
 	"no_contract":                   true,
 	"non_systemic_contract":         true,
@@ -47,6 +50,7 @@ var knownPatternDiagnosticCodes = map[string]bool{
 	"target_source_unread":          true,
 	"trailing_incomplete_json":      true,
 	"trailing_json":                 true,
+	"unknown_build":                 true,
 	"unsafe_conversion_remediation": true,
 }
 

@@ -158,7 +158,8 @@ export interface TestFlakiness {
   }[];
 }
 
-export type PatternRefreshState = "current" | "retained" | "failed" | "not_applicable" | "unavailable";
+export type PatternRefreshState =
+  "current" | "retained" | "failed" | "not_applicable" | "unavailable";
 
 export interface PatternRefreshStatus {
   state: PatternRefreshState;
@@ -203,6 +204,15 @@ export interface FlakinessReport {
   pattern_refresh?: PatternRefreshReport;
 }
 
+export interface PatternCausalGroup {
+  builds: string[];
+  root_cause: string;
+  confidence: "high" | "medium" | "low";
+}
+
+export type PatternRecurrence =
+  "shared_cause" | "mixed_causes" | "unrelated" | "insufficient_evidence";
+
 export interface PatternAnalysis {
   id?: string;
   content_hash?: string;
@@ -210,6 +220,9 @@ export interface PatternAnalysis {
   job_id?: string;
   generated_at: string;
   builds_analyzed: number;
+  recurrence_classification?: PatternRecurrence;
+  causal_groups?: PatternCausalGroup[];
+  unclassified_builds?: string[];
   systemic: boolean;
   confidence: "high" | "medium" | "low";
   shared_root_cause?: string;

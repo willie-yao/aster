@@ -90,8 +90,9 @@ export function PatternBanner({
   const { data: resolved } = useResolved();
   const { data: remediations } = useRemediations();
   const { features } = useCapabilities();
-  const resolvedEntry = pattern.id ? resolved.resolved[pattern.id] : undefined;
-  const remediation = pattern.id ? remediations.remediations[pattern.id] : undefined;
+  const analysisOnly = Boolean(pattern.recurrence_classification);
+  const resolvedEntry = !analysisOnly && pattern.id ? resolved.resolved[pattern.id] : undefined;
+  const remediation = !analysisOnly && pattern.id ? remediations.remediations[pattern.id] : undefined;
   const attempt = remediation?.attempt;
   const latestObservation = attempt?.observations?.reduce((latest, observation) => {
     if (!latest) return observation;
@@ -141,6 +142,7 @@ export function PatternBanner({
     refreshStatus,
   );
   const fixPatterns =
+    !analysisOnly &&
     isCurrent &&
     lifecycleActive &&
     pattern.id &&
@@ -149,13 +151,22 @@ export function PatternBanner({
     meetsConfidenceFloor(pattern.confidence, features.chat_fix_min_confidence ?? "high")
       ? [pattern]
       : [];
+  const recurrenceLabel = pattern.recurrence_classification === "shared_cause"
+    ? "Recurring shared cause"
+    : pattern.recurrence_classification === "mixed_causes"
+      ? "Multiple recurring causes"
+      : pattern.recurrence_classification === "unrelated"
+        ? "Unrelated failures"
+        : pattern.recurrence_classification === "insufficient_evidence"
+          ? "Insufficient evidence"
+          : pattern.systemic ? "Recurring pattern" : "No shared root cause";
   const patternLabel = lifecycle?.state === "verified_fixed"
     ? "Verified fixed"
     : lifecycle?.state === "observing"
       ? "Fix verification"
       : lifecycle?.state === "recovered"
         ? "Watching recovery"
-        : pattern.systemic ? "Recurring pattern" : "No shared root cause";
+        : recurrenceLabel;
   const metadata = `${pattern.builds_analyzed} ${pattern.builds_analyzed === 1 ? "build" : "builds"} · ${pattern.confidence} confidence`;
   const staleNotice = refreshStatus && refreshStatus.state !== "current" ? (
     <Alert severity="warning" variant="outlined" sx={{ borderRadius: "4px" }}>
@@ -278,19 +289,52 @@ export function PatternBanner({
       {staleNotice}
       {lifecycleNotice}
 
-      {pattern.systemic && pattern.shared_root_cause && (
+      {pattern.causal_groups && pattern.causal_groups.length > 0 && (
+        <BriefingSection label="Causal groups">
+          <Stack spacing={1.5}>
+            {pattern.causal_groups.map((group) => (
+              <Box key={`${group.builds.join("-")}-${group.root_cause}`}>
+                <RichText text={group.root_cause} steps fileCtx={patternFileCtx} />
+                <Typography color="text.secondary" sx={{ mt: 0.25, ...overviewTypography.data }}>
+                  {group.confidence} confidence · {group.builds.length === 1 ? "Build" : "Builds"}{" "}
+                  {group.builds.map((buildID, index) => (
+                    <span key={buildID}>
+                      {index > 0 ? ", " : ""}
+                      <Link component={RouterLink} to={jobID ? jobRunPath(jobID, buildID) : "#"}>{buildID}</Link>
+                    </span>
+                  ))}
+                </Typography>
+              </Box>
+            ))}
+          </Stack>
+        </BriefingSection>
+      )}
+
+      {pattern.unclassified_builds && pattern.unclassified_builds.length > 0 && (
+        <BriefingSection label="Unclassified builds">
+          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
+            {pattern.unclassified_builds.map((buildID) => (
+              <Link key={buildID} component={RouterLink} to={jobID ? jobRunPath(jobID, buildID) : "#"}>
+                {buildID}
+              </Link>
+            ))}
+          </Stack>
+        </BriefingSection>
+      )}
+
+      {!pattern.causal_groups?.length && pattern.systemic && pattern.shared_root_cause && (
         <BriefingSection label="Root cause">
           <RichText text={pattern.shared_root_cause} steps fileCtx={patternFileCtx} />
         </BriefingSection>
       )}
 
-      {pattern.systemic && pattern.suggested_fix && (
+      {!analysisOnly && pattern.systemic && pattern.suggested_fix && (
         <BriefingSection label="Suggested remediation">
           <RichText text={pattern.suggested_fix} steps fileCtx={patternFileCtx} />
         </BriefingSection>
       )}
 
-      {pattern.source_ref && (
+      {!analysisOnly && pattern.source_ref && (
         <BriefingSection label="Source grounding">
           <Typography component="code" sx={{ ...overviewTypography.data, overflowWrap: "anywhere" }}>
             {pattern.source_ref}
@@ -298,7 +342,7 @@ export function PatternBanner({
         </BriefingSection>
       )}
 
-      {pattern.systemic && pattern.shared_builds && pattern.shared_builds.length > 0 && (
+      {!pattern.causal_groups?.length && pattern.systemic && pattern.shared_builds && pattern.shared_builds.length > 0 && (
         <BriefingSection label="Affected builds">
           <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
             {pattern.shared_builds.map((buildID) => (
@@ -363,7 +407,7 @@ export function PatternBanner({
     </>
   );
 
-  const actions = chatRef || (isCurrent && lifecycleActive && pattern.systemic && pattern.id) ? (
+  const actions = chatRef || (!analysisOnly && isCurrent && lifecycleActive && pattern.systemic && pattern.id) ? (
     <Stack spacing={1.25}>
       {chatRef && (
         <AnalysisChat
@@ -374,7 +418,7 @@ export function PatternBanner({
           appearance="detail"
         />
       )}
-      {isCurrent && lifecycleActive && pattern.systemic && pattern.id && (
+      {!analysisOnly && isCurrent && lifecycleActive && pattern.systemic && pattern.id && (
         <FailureActions
           failureID={pattern.id}
           eligibilityHint={actionEligibility}

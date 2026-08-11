@@ -342,9 +342,24 @@ type RemediationTarget struct {
 	Name         string `json:"name,omitempty"`
 }
 
+type PatternRecurrence string
+
+const (
+	PatternRecurrenceSharedCause          PatternRecurrence = "shared_cause"
+	PatternRecurrenceMixedCauses          PatternRecurrence = "mixed_causes"
+	PatternRecurrenceUnrelated            PatternRecurrence = "unrelated"
+	PatternRecurrenceInsufficientEvidence PatternRecurrence = "insufficient_evidence"
+)
+
+// PatternCausalGroup is one evidence-backed cause and its failed builds.
+type PatternCausalGroup struct {
+	Builds     []string `json:"builds"`
+	RootCause  string   `json:"root_cause"`
+	Confidence string   `json:"confidence"`
+}
+
 // PatternAnalysis is a job-level correlation across recent failed builds.
-// It captures whether varied-looking failures share one recurring, fixable
-// cause. The specific failing test may differ between builds.
+// The model supplies causal groups and the engine derives recurrence.
 type PatternAnalysis struct {
 	// ID is a stable, URL-safe identifier for this pattern, used to address it
 	// from the frontend and the actions API. See models.PatternID.
@@ -357,14 +372,19 @@ type PatternAnalysis struct {
 	JobID          string `json:"job_id,omitempty"`
 	GeneratedAt    string `json:"generated_at"`
 	BuildsAnalyzed int    `json:"builds_analyzed"`
-	// Systemic is true when most failures share one underlying cause.
+	// Recurrence is derived from repeated causal groups.
+	Recurrence PatternRecurrence `json:"recurrence_classification,omitempty"`
+	// CausalGroups preserve each distinct cause and its builds.
+	CausalGroups []PatternCausalGroup `json:"causal_groups,omitempty"`
+	// UnclassifiedBuilds lack enough evidence for a causal assignment.
+	UnclassifiedBuilds []string `json:"unclassified_builds,omitempty"`
+	// Systemic is retained for compatibility and is true for shared or mixed causes.
 	Systemic bool `json:"systemic"`
-	// Confidence is the model's confidence in the systemic verdict:
-	// "high", "medium", or "low".
+	// Confidence is the lowest confidence among the recurring groups.
 	Confidence string `json:"confidence"`
-	// SharedRootCause describes the common cause when Systemic is true.
+	// SharedRootCause summarizes the recurring causal groups.
 	SharedRootCause string `json:"shared_root_cause,omitempty"`
-	// SharedBuilds lists the build IDs the model judged to share the cause.
+	// SharedBuilds is the union of builds in repeated causal groups.
 	SharedBuilds []string `json:"shared_builds,omitempty"`
 	// SuggestedFix is the cross-cutting fix for the shared cause.
 	SuggestedFix string `json:"suggested_fix,omitempty"`

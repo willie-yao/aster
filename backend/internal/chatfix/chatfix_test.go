@@ -177,3 +177,16 @@ func TestPreviewChatFixKeepsAtomicPatternSnapshotAfterPublishedReplacement(t *te
 		t.Fatalf("published=%+v generated=%+v", published, fixes.pattern)
 	}
 }
+
+func TestPreviewChatFixRejectsAnalysisOnlyCausalGroup(t *testing.T) {
+	chat := &fakeChatStore{candidate: analysischat.FixCandidate{Pattern: models.PatternAnalysis{
+		Recurrence: models.PatternRecurrenceSharedCause,
+	}}}
+	fixes := &fakeFixPreviewer{}
+	_, err := NewService(chat, fixes).PreviewChatFix(
+		t.Context(), "session", "Alice", "chat-request", "pattern", "pattern-hash", "source-request", "user-token", "",
+	)
+	if !errors.Is(err, analysischat.ErrInvalidRequest) || fixes.called {
+		t.Fatalf("error=%v called=%t", err, fixes.called)
+	}
+}

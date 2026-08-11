@@ -287,7 +287,7 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 
 	if n.actionLinks {
 		for _, pattern := range report.RecurringPatterns {
-			if !pattern.Systemic || !models.PatternIsCurrent(jobDetails, pattern.JobID) {
+			if !models.PatternAllowsActions(pattern) || !pattern.Systemic || !models.PatternIsCurrent(jobDetails, pattern.JobID) {
 				continue
 			}
 			if pattern.ID == "" {
@@ -324,7 +324,7 @@ func (n *Notifier) reconcilePatternState(current []models.PatternAnalysis, jobDe
 	}
 	currentJobs := make(map[string]bool, len(current))
 	for _, pattern := range current {
-		if !pattern.Systemic {
+		if !models.PatternAllowsActions(pattern) || !pattern.Systemic {
 			continue
 		}
 		currentJobs[patternJobID(pattern)] = true

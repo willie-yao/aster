@@ -7,29 +7,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	gotoken "go/token"
 	"io"
 	"net/http"
-	"path"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
 
 // patternPromptVersion is bumped when the pattern prompt or output contract
 // changes, so cached verdicts from an older contract are re-run.
-const patternPromptVersion = 9
+const patternPromptVersion = 10
 
-const patternCacheVersion = 2
+const patternCacheVersion = 3
 
 const patternFailureCacheVersion = 1
 
@@ -43,10 +36,6 @@ const patternRepairVersion = 1
 // call, keeping the prompt bounded for a test that failed in many builds.
 const maxPatternBuilds = 10
 
-// patternMaxIters bounds the repotree tool rounds the grounded correlation loop
-// spends verifying file and config paths against the real source repo.
-const patternMaxIters = 6
-
 const maxPatternResponseBytes = 1 << 20
 
 // PatternFailure is one build's analyzed job failure, used as input to
@@ -57,15 +46,12 @@ type PatternFailure struct {
 	FailingTest    string
 	FailureMessage string
 	RootCause      string
-	// SuggestedFix is this build's per-failure remediation. The correlation
-	// preserves the most specific one rather than regressing to the symptom.
+	// SuggestedFix is per-build evidence that can help distinguish mechanisms.
 	SuggestedFix string
-	// RelevantFiles are the source files this build's analysis implicated,
-	// so the correlation can name concrete targets in the cross-cutting fix.
+	// RelevantFiles are the source files this build's analysis implicated.
 	RelevantFiles []string
-	// LocationFile is the failing test's own source file (from the JUnit
-	// failure location). It seeds the fix harness but is deliberately kept out
-	// of the correlation prompt so it never perturbs the pattern cache key.
+	// LocationFile is the failing test's source file. It is published as
+	// supporting context but kept out of the prompt and pattern cache key.
 	LocationFile string
 	// Prow job source metadata identifies the exact test-infra snapshot that
 	// selected and configured the failing job.
@@ -94,22 +80,22 @@ type PatternInput struct {
 	Failures     []PatternFailure
 }
 
-// patternResponse is the model's JSON contract for the correlation verdict.
+type patternCausalGroup struct {
+	Builds     []string `json:"builds"`
+	RootCause  string   `json:"root_cause"`
+	Confidence string   `json:"confidence"`
+}
+
+// patternResponse is the model's analysis-only causal-group contract.
 type patternResponse struct {
-	Systemic           bool                       `json:"systemic"`
-	Confidence         string                     `json:"confidence"`
-	SharedRootCause    string                     `json:"shared_root_cause"`
-	SharedBuilds       []string                   `json:"shared_builds"`
-	SuggestedFix       string                     `json:"suggested_fix"`
-	RemediationTargets []models.RemediationTarget `json:"remediation_targets"`
-	Summary            string                     `json:"summary"`
+	Groups             []patternCausalGroup `json:"groups"`
+	UnclassifiedBuilds []string             `json:"unclassified_builds"`
+	Summary            string               `json:"summary"`
 }
 
 type patternCacheData struct {
-	Version   int               `json:"version"`
-	Response  patternResponse   `json:"response"`
-	FileLinks map[string]string `json:"file_links,omitempty"`
-	SourceRef string            `json:"source_ref,omitempty"`
+	Version  int             `json:"version"`
+	Response patternResponse `json:"response"`
 }
 
 type patternFailureCacheData struct {
@@ -134,13 +120,12 @@ const (
 )
 
 type patternParseStats struct {
-	CandidateCount             int
-	ValidCount                 int
-	UniqueValidCount           int
-	NonSystemicNormalizedCount int
-	IncompleteCount            int
-	ContractLikeRejectedCount  int
-	ScanTruncated              bool
+	CandidateCount            int
+	ValidCount                int
+	UniqueValidCount          int
+	IncompleteCount           int
+	ContractLikeRejectedCount int
+	ScanTruncated             bool
 }
 
 type patternValidationError struct {
@@ -310,96 +295,33 @@ func safePatternProviderError(err error) error {
 	return &PatternProviderError{}
 }
 
-// patternSystemPrompt instructs the model to correlate several per-build
-// analyses of the same job into one systemic-vs-transient verdict.
-const patternSystemPrompt = `You correlate multiple failed builds of the SAME CI job to decide whether they share one underlying root cause.
-
-You are given N independent per-build failure analyses from recent failed builds of one job. Each build was analyzed in isolation, so each may have called its own failure "transient". The specific test or spec that failed may differ from build to build. Each per-build analysis may also carry its own root_cause, suggested_fix, and the source files it implicated. Your job is the cross-build view those single analyses cannot have.
-
-Key principle: recurrence among failed builds is evidence, not proof, of a systemic bug. Compare matching failures with the complete recent run window, including passes. Interleaved passes can indicate a recurring flake even when the terminal phase is identical. Set systemic=true only when the evidence supports one causal defect or deterministic misconfiguration, not merely a repeated timeout or stalled phase. Weigh the underlying MECHANISM, not the surface symptom: the same root cause can present as different-looking failures, while the same terminal symptom can have different initiating causes.
-
-Preserve signal, do not flatten it. The per-build analyses often already pinpoint the mechanism (a specific error, a named operation, an implicated file). Carry the MOST SPECIFIC evidence-backed cause and fix forward; do NOT regress to the lowest-common-denominator symptom that every build merely shares. If one build identified a concrete mechanism (e.g. "concurrent agent-pool update -> Azure OperationNotAllowed") and another only saw the symptom, the shared cause is the concrete mechanism, not the symptom.
-
-Distinguish symptom from root cause. "VM bootstrapping failed", "test timed out", "node never joined" are SYMPTOMS. The root cause is WHY: the specific operation, condition, config, or code path that produced them.
-
-Do not infer network policy, firewall rules, regional latency, resource sizing, or timeout configuration as the cause unless artifacts or source directly support that mechanism. Before proposing a missing wait, retry, timeout, gate, or helper call, read the target source and confirm the behavior is not already present.
-
-Kubernetes CRD conversion webhooks are configured on the CRD, not by mutating or validating admission webhook configurations. Never claim that deleting admission webhook configurations disables CRD conversion, removes or bypasses conversion, prevents the API server from calling conversion, or changes the CRD conversion strategy. Admission webhook cleanup is implementation-ready only when conversion remains explicitly available. Do not propose deleting, disabling, or setting CRD conversion to None as an implementation-ready change. Use investigate so stored-version migration, conversion requirements, and rollback safety can be reviewed first.
-
-The suggested_fix must be ACTIONABLE: name the specific change, the mechanism it addresses, and the component / file / config to change (cite a relevant_file when one is implicated). Do NOT emit non-fixes like "investigate the logs", "check why X fails", or "look into Y" - those are next steps, not fixes. If the evidence genuinely does not determine a concrete fix, say so plainly in suggested_fix AND lower confidence accordingly (do not claim high confidence on an undetermined fix).
-
-Describe every proposed source change in remediation_targets. Use one object per target with exactly these fields:
-- add_symbol: {"intent":"add_symbol","symbol":"PackageLevelGoIdentifier","path":"verified/repo/file.go"}
-- modify_symbol: {"intent":"modify_symbol","symbol":"GoFunctionOrMethod","required_call":"full/import/path.CalledGoIdentifier","path":"verified/repo/file.go"}
-- set_configuration: {"intent":"set_configuration","path":"verified/repo/file.yaml","value":"ExactKey=ExactValue"}
-- remove_configuration: {"intent":"remove_configuration","path":"verified/repo/file.yaml","value":"ExactKey=ExactValue"}
-- set_job_environment: {"intent":"set_job_environment","repository":"kubernetes/test-infra","revision":"full discovery commit","path":"config/jobs/.../file.yaml","job":"exact Prow job name","container":"exact container name","name":"ENV_NAME","value":"ExactValue"}
-- investigate: {"intent":"investigate"} only when the evidence does not identify an implementation-ready target
-For modify_symbol, required_call identifies the exact package-level function call that represents the proposed behavior. Use the full Go import path plus function name for imported calls, for example "example.com/project/internal/migration.Apply", or a bare function name only for a same-package direct call. Method calls on arbitrary receivers are not supported; use investigate when the change cannot be represented by one exact package-level call. Read the target function and its imports before choosing required_call. Use set_job_environment only when the Prow job source context identifies the exact test-infra file and full discovery revision. Never use modify_symbol for a shell variable. If the exact job, container, variable, and replacement value are not known, use investigate.
-Do not claim verification state. The engine independently checks these targets against the pinned source.
-
-Decide:
-- systemic=true when the run-window prevalence and evidence support one underlying causal defect. Name it precisely and give the concrete cross-cutting fix.
-- systemic=false when the failures are genuinely unrelated or independently one-off.
-
-Respond with ONLY a JSON object, no prose, no code fences:
-{
-  "systemic": true|false,
-  "confidence": "high"|"medium"|"low",  // high only when the cause is specific AND the fix is concrete
-  "shared_root_cause": "the one underlying MECHANISM (empty if not systemic); not a restated symptom",
-  "shared_builds": ["buildID", ...],   // builds you judge to share the cause
-  "suggested_fix": "the concrete, actionable cross-cutting fix naming the change and target (empty if not systemic)",
-	"remediation_targets": [{"intent":"add_symbol|modify_symbol|set_configuration|remove_configuration|set_job_environment|investigate","symbol":"optional","required_call":"optional","path":"optional","value":"optional","repository":"optional","revision":"optional","job":"optional","container":"optional","name":"optional"}],
-  "summary": "one short paragraph: the verdict and the evidence for it"
-}`
-
-// patternGroundedSystemPrompt is patternSystemPrompt plus the repotree tool
-// contract. It is used when a source-repo reader is wired, so the model
-// verifies every file, template, or config path it names against the real
-// repository instead of guessing one.
-const patternGroundedSystemPrompt = patternSystemPrompt + `
-
-You also have read-only tools over the source repository:
-- list_repo_tree(path): immediate children of a directory
-- read_repo_file(path, offset, len): byte-range read of one file
-- grep_repo(pattern, path_glob?): RE2 search over a bounded file set
-
-Ground every path you cite. BEFORE naming any file, template, manifest, or config in shared_root_cause, suggested_fix, or remediation_targets, confirm it exists by grepping for its name or the symbols/keys involved, listing the directory, and reading the file. NEVER invent or guess a path: an unread path is a hallucination. If you cannot find a real file that fits, use the investigate intent and lower confidence accordingly. When you are done investigating, respond with ONLY the JSON object described above and nothing else.`
+// patternSystemPrompt is frozen from the promoted causal-group evaluation.
+const patternSystemPrompt = `You analyze failed builds of one CI job and return causal groups, not a product recurrence label. Put every failed build exactly once in one causal group or unclassified_builds. Group builds only when they share the same specific causal mechanism. Use singleton groups for failures whose individual cause is supported but does not repeat. Use unclassified_builds only when the evidence is insufficient to assign a cause. Recent passing runs are prevalence and lifecycle context and never group members. Root causes must be specific and non-empty. Call submit_causal_groups exactly once. Return no remediation, suggested fix, target, action, source-change, issue, or Fix PR field.`
 
 func patternResponseFormat() ResponseFormat {
 	stringProperty := func() map[string]any { return map[string]any{"type": "string"} }
 	return ResponseFormat{
-		Name:        "return_pattern",
-		Description: "Return one validated recurring-pattern verdict.",
+		Name:        "submit_causal_groups",
+		Description: "Submit causal groups only.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"systemic":          map[string]any{"type": "boolean"},
-				"confidence":        map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
-				"shared_root_cause": stringProperty(),
-				"shared_builds":     map[string]any{"type": "array", "items": stringProperty()},
-				"suggested_fix":     stringProperty(),
-				"remediation_targets": map[string]any{
-					"type": "array", "maxItems": 8,
+				"groups": map[string]any{
+					"type": "array",
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"intent": map[string]any{"type": "string", "enum": []string{
-								models.RemediationIntentAddSymbol, models.RemediationIntentModifySymbol,
-								models.RemediationIntentSetConfiguration, models.RemediationIntentRemoveConfiguration,
-								models.RemediationIntentSetJobEnvironment,
-								models.RemediationIntentInvestigate,
-							}},
-							"symbol": stringProperty(), "required_call": stringProperty(), "path": stringProperty(), "value": stringProperty(),
-							"repository": stringProperty(), "revision": stringProperty(), "job": stringProperty(),
-							"container": stringProperty(), "name": stringProperty(),
+							"builds":     map[string]any{"type": "array", "minItems": 1, "items": stringProperty()},
+							"root_cause": stringProperty(),
+							"confidence": map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
 						},
-						"required": []string{"intent", "symbol", "required_call", "path", "value", "repository", "revision", "job", "container", "name"}, "additionalProperties": false,
+						"required": []string{"builds", "root_cause", "confidence"}, "additionalProperties": false,
 					},
 				},
-				"summary": stringProperty(),
+				"unclassified_builds": map[string]any{"type": "array", "items": stringProperty()},
+				"summary":             stringProperty(),
 			},
-			"required":             []string{"systemic", "confidence", "shared_root_cause", "shared_builds", "suggested_fix", "remediation_targets", "summary"},
+			"required":             []string{"groups", "unclassified_builds", "summary"},
 			"additionalProperties": false,
 		},
 	}
@@ -452,22 +374,7 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 		usageOperation.Finish(usageOutcome)
 	}()
 	userPrompt := input.UserPrompt
-	grounded := s.patternRepo != nil
-	groundKey := "toolfree"
-	if grounded {
-		if resolver, ok := s.patternRepo.(interface{ ResolveRef(context.Context) error }); ok {
-			if err := resolver.ResolveRef(ctx); err != nil {
-				return nil, err
-			}
-		}
-		groundKey = "grounded:" + s.sourceRepoOwner + "/" + s.sourceRepoName
-		if identity, ok := s.patternRepo.(interface {
-			SourceIdentity() (string, string, string)
-		}); ok {
-			_, _, ref := identity.SourceIdentity()
-			groundKey += "@" + ref
-		}
-	}
+	groundKey := "causal-groups"
 
 	key := patternCacheKey(s.module.Name(), s.cacheGeneration, jobID, subject, userPrompt, groundKey, s.client.modelFingerprint())
 	failureKey := patternFailureCacheKey(key)
@@ -481,7 +388,7 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 				}
 				s.client.cache.Delete(failureKey)
 				usageOutcome = aiusage.OutcomeCacheHit
-				return buildPatternAnalysis(subject, len(failures), cachedData.Response, collectRelevantFiles(failures), cachedData.FileLinks, cachedData.SourceRef), nil
+				return buildPatternAnalysis(subject, len(failures), cachedData.Response, collectRelevantFiles(failures)), nil
 			}
 		}
 		if cached, stats, err := parsePatternResponseWithStats(string(raw), buildIDs); err == nil {
@@ -491,7 +398,7 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 			s.client.cache.Delete(failureKey)
 			usageOutcome = aiusage.OutcomeCacheHit
 			recordPatternParseTrace(ctx, "cache", stats, nil)
-			return buildPatternAnalysis(subject, len(failures), cached, collectRelevantFiles(failures), nil, ""), nil
+			return buildPatternAnalysis(subject, len(failures), cached, collectRelevantFiles(failures)), nil
 		}
 	}
 
@@ -523,42 +430,12 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 	}()
 
 	var parsed patternResponse
-	var sourceReads []string
-	var err error
-	if grounded {
-		parsed, sourceReads, err = s.groundedPatternVerdict(ctx, userPrompt, buildIDs, options)
-	} else {
-		parsed, err = s.toolFreePatternVerdict(ctx, userPrompt, buildIDs, options)
-	}
+	parsed, err := s.toolFreePatternVerdict(ctx, userPrompt, buildIDs, options)
 	if err != nil {
 		return nil, err
 	}
-	if !patternTargetsMatchProwContext(parsed.RemediationTargets, failures) {
-		err := &patternValidationError{category: patternValidationSchema, issue: "prow_job_context"}
-		diagnostics.recordValidation("post_validation", patternParseStats{}, err)
-		return nil, err
-	}
-
-	var fileLinks map[string]string
-	var sourceRef string
-	if grounded {
-		parsed.SuggestedFix = removeUnreadPatternPaths(parsed.SuggestedFix, sourceReads)
-		if !patternTargetsWereRead(parsed.RemediationTargets, sourceReads) {
-			err := &patternValidationError{category: patternValidationSchema, issue: "target_source_unread"}
-			diagnostics.recordValidation("post_validation", patternParseStats{}, err)
-			return nil, err
-		}
-		fileLinks, sourceRef = s.patternFileLinks(parsed, sourceReads)
-	} else {
-		s.guardPatternPaths(ctx, &parsed)
-		if !s.patternTargetsExist(ctx, parsed.RemediationTargets) {
-			err := &patternValidationError{category: patternValidationSchema, issue: "target_source_missing"}
-			diagnostics.recordValidation("post_validation", patternParseStats{}, err)
-			return nil, err
-		}
-	}
-	_ = s.client.cache.Set(key, patternCacheData{Version: patternCacheVersion, Response: parsed, FileLinks: fileLinks, SourceRef: sourceRef})
-	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures), fileLinks, sourceRef), nil
+	_ = s.client.cache.Set(key, patternCacheData{Version: patternCacheVersion, Response: parsed})
+	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures)), nil
 }
 
 func (s *Service) patternFailureNow() time.Time {
@@ -645,229 +522,56 @@ func ParsePatternResult(subject string, failures []PatternFailure, result string
 	if err != nil {
 		return nil, err
 	}
-	if !patternTargetsMatchProwContext(parsed.RemediationTargets, failures) {
-		return nil, &patternValidationError{category: patternValidationSchema, issue: "prow_job_context"}
-	}
-	// The Orka correlation task has no source-repository tools. Mark every path
-	// it introduces as unverified rather than presenting a guessed target as fact.
-	parsed.SuggestedFix = annotateUnverifiedPaths(parsed.SuggestedFix, func(string) bool { return false })
-	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures), nil, ""), nil
+	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures)), nil
 }
 
-func patternTargetsMatchProwContext(targets []models.RemediationTarget, failures []PatternFailure) bool {
-	for _, target := range targets {
-		if target.Intent != models.RemediationIntentSetJobEnvironment {
-			continue
-		}
-		matched := false
-		for _, failure := range failures {
-			if target.Job == failure.ProwJobName && target.Path == failure.ProwConfigFile && target.Revision == failure.ProwConfigRevision {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
-	}
-	return true
-}
-
-type trackingPatternRepo struct {
-	inner    tools.RepoReader
-	reads    map[string]bool
-	listTree func(context.Context) ([]string, error)
-}
-
-func (r *trackingPatternRepo) ListTree(ctx context.Context) ([]string, error) {
-	if r.listTree != nil {
-		return r.listTree(ctx)
-	}
-	return r.inner.ListTree(ctx)
-}
-func (r *trackingPatternRepo) ReadFile(ctx context.Context, path string) (string, bool, error) {
-	content, found, err := r.inner.ReadFile(ctx, path)
-	if err == nil && found {
-		r.reads[path] = true
-	}
-	return content, found, err
-}
-func (r *trackingPatternRepo) Paths() []string {
-	paths := make([]string, 0, len(r.reads))
-	for p := range r.reads {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
-	return paths
-}
-
-func removeUnreadPatternPaths(text string, reads []string) string {
-	read := map[string]bool{}
-	for _, p := range reads {
-		read[p] = true
-	}
-	return patternPathRe.ReplaceAllStringFunc(text, func(match string) string {
-		if read[strings.TrimPrefix(match, "./")] {
-			return match
-		}
-		return "the verified source location"
-	})
-}
-
-func (s *Service) patternFileLinks(p patternResponse, reads []string) (map[string]string, string) {
-	links := map[string]string{}
-	owner, repo, ref := s.sourceRepoOwner, s.sourceRepoName, "HEAD"
-	if identity, ok := s.patternRepo.(interface {
-		SourceIdentity() (string, string, string)
-	}); ok {
-		owner, repo, ref = identity.SourceIdentity()
-	}
-	read := map[string]bool{}
-	for _, path := range reads {
-		read[path] = true
-	}
-	text := p.SharedRootCause + "\n" + p.SuggestedFix + "\n" + p.Summary
-	for _, match := range patternPathRe.FindAllString(text, -1) {
-		clean := strings.TrimPrefix(match, "./")
-		if read[clean] {
-			links[clean] = blobURLAtRef(owner, repo, ref, clean)
-		}
-	}
-	for _, target := range p.RemediationTargets {
-		if target.Path != "" && read[target.Path] {
-			links[target.Path] = blobURLAtRef(owner, repo, ref, target.Path)
-		}
-	}
-	if len(links) == 0 {
-		return nil, owner + "/" + repo + "@" + ref
-	}
-	return links, owner + "/" + repo + "@" + ref
-}
-
-func patternTargetsWereRead(targets []models.RemediationTarget, reads []string) bool {
-	read := make(map[string]bool, len(reads))
-	for _, value := range reads {
-		read[value] = true
-	}
-	for _, target := range targets {
-		if target.Intent == models.RemediationIntentSetJobEnvironment {
-			continue
-		}
-		if target.Path != "" && !read[target.Path] {
-			return false
-		}
-	}
-	return true
-}
-
-func (s *Service) patternTargetsExist(ctx context.Context, targets []models.RemediationTarget) bool {
-	exists := s.patternPathVerifier(ctx)
-	if exists == nil {
-		for _, target := range targets {
-			if target.Intent == models.RemediationIntentSetJobEnvironment {
-				continue
-			}
-			if target.Path != "" {
-				return false
-			}
-		}
-		return true
-	}
-	for _, target := range targets {
-		if target.Intent == models.RemediationIntentSetJobEnvironment {
-			continue
-		}
-		if target.Path != "" && !exists(target.Path) {
-			return false
-		}
-	}
-	return true
-}
-
-// toolFreePatternVerdict makes one correlation call without tools.
+// toolFreePatternVerdict forces one exact causal-group function call.
 func (s *Service) toolFreePatternVerdict(ctx context.Context, userPrompt string, buildIDs map[string]struct{}, options PatternAnalyzeOptions) (patternResponse, error) {
 	started := time.Now()
-	messages := []modelMessage{
-		{Role: "system", Content: strPtr(patternSystemPrompt)},
-		{Role: "user", Content: strPtr(userPrompt)},
+	var parsed patternResponse
+	var parseStats patternParseStats
+	var parseErr error
+	var rawOutput string
+	validate := func(raw json.RawMessage) error {
+		rawOutput = string(raw)
+		candidate, stats, err := parsePatternResponseWithStats(rawOutput, buildIDs)
+		parseStats, parseErr = stats, err
+		if err != nil {
+			options.diagnostics.recordValidation("tool_free", stats, err)
+			return err
+		}
+		parsed = candidate
+		return nil
 	}
-	resp, err := s.client.callModel(ctx, messages, nil, nil)
+	err := s.client.completeForcedFunction(ctx, patternSystemPrompt, userPrompt, patternResponseFormat(), validate)
 	if err != nil {
-		err = safePatternProviderError(err)
+		var structuredErr *structuredCompletionError
+		if parseErr != nil && errors.As(err, &structuredErr) && structuredErr.cause == nil {
+			err = parseErr
+			recordPatternParseTrace(ctx, "tool_free", parseStats, err)
+			recordTrace(ctx, TraceEvent{Kind: "pattern_request", Status: "tool_free", Outcome: "success", DurationMs: int(time.Since(started) / time.Millisecond)})
+			switch patternValidationCategoryOf(err) {
+			case patternValidationAmbiguous:
+				if options.AllowAmbiguityRepair {
+					return s.repairPatternAmbiguity(ctx, rawOutput, buildIDs, options)
+				}
+			case patternValidationSchema, patternValidationBuilds:
+				if options.AllowValidationRepair {
+					return s.repairPatternValidation(ctx, rawOutput, buildIDs, err, options)
+				}
+			}
+		} else if errors.As(err, &structuredErr) && structuredErr.cause == nil {
+			err = &patternValidationError{category: patternValidationMissing, issue: "missing_message"}
+			options.diagnostics.recordValidation("tool_free", patternParseStats{}, err)
+		} else {
+			err = safePatternProviderError(err)
+		}
 		recordTrace(ctx, TraceEvent{Kind: "pattern_request", Status: "tool_free", Outcome: "error", DurationMs: int(time.Since(started) / time.Millisecond), ErrorCode: patternTraceErrorCode(err)})
 		return patternResponse{}, err
 	}
 	recordTrace(ctx, TraceEvent{Kind: "pattern_request", Status: "tool_free", Outcome: "success", DurationMs: int(time.Since(started) / time.Millisecond)})
-	if !resp.HasMessage || resp.Message.Content == nil {
-		err := &patternValidationError{category: patternValidationMissing, issue: "missing_message"}
-		options.diagnostics.recordValidation("tool_free", patternParseStats{}, err)
-		return patternResponse{}, err
-	}
-	return s.parsePatternOutput(ctx, "tool_free", *resp.Message.Content, buildIDs, options)
-}
-
-// groundedPatternVerdict runs one correlation as a repotree tool loop.
-func (s *Service) groundedPatternVerdict(ctx context.Context, userPrompt string, buildIDs map[string]struct{}, options PatternAnalyzeOptions) (patternResponse, []string, error) {
-	reg := tools.NewRegistry()
-	repotree.Register(reg)
-	enabled, err := reg.Enable([]string{repotree.Group})
-	if err != nil {
-		return patternResponse{}, nil, fmt.Errorf("enabling repo tools: %w", err)
-	}
-	tracker := &trackingPatternRepo{inner: s.patternRepo, reads: map[string]bool{}, listTree: s.patternRepoTree}
-	env := &tools.Env{Repo: tracker, Cache: tools.NewBoundedCache(128, 16<<20)}
-	started := time.Now()
-	out, err := s.client.ToolLoop(ctx, patternGroundedSystemPrompt, userPrompt, reg, enabled, env,
-		ToolLoopOptions{MaxIters: patternMaxIters, MinToolCalls: 1, SingleToolCall: true, PropagateFinalizeError: true})
-	if err != nil {
-		err = safePatternProviderError(err)
-		recordTrace(ctx, TraceEvent{Kind: "pattern_request", Status: "grounded", Outcome: "error", DurationMs: int(time.Since(started) / time.Millisecond), ErrorCode: patternTraceErrorCode(err)})
-		return patternResponse{}, nil, err
-	}
-	recordTrace(ctx, TraceEvent{Kind: "pattern_request", Status: "grounded", Outcome: "success", DurationMs: int(time.Since(started) / time.Millisecond)})
-	if strings.TrimSpace(out) == "" {
-		err := &patternValidationError{category: patternValidationMissing, issue: "empty_output"}
-		options.diagnostics.recordValidation("grounded", patternParseStats{}, err)
-		return patternResponse{}, nil, err
-	}
-	parsed, perr := s.parsePatternOutput(ctx, "grounded", out, buildIDs, options)
-	if perr == nil || patternValidationCategoryOf(perr) != patternValidationMissing {
-		return parsed, tracker.Paths(), perr
-	}
-
-	extract := "Extract the correlation verdict this investigation reached as JSON with exactly these keys: " +
-		`{"systemic": true|false, "confidence": "high"|"medium"|"low", "shared_root_cause": "...", "shared_builds": ["..."], "suggested_fix": "...", "remediation_targets": [{"intent":"...","symbol":"...","required_call":"...","path":"...","value":"...","repository":"...","revision":"...","job":"...","container":"...","name":"..."}], "summary": "..."}. ` +
-		"Reply with ONLY the JSON.\n\nInvestigation:\n" + out
-	started = time.Now()
-	out2, err := s.client.Complete(ctx, "You output only a JSON object.", extract)
-	if err != nil {
-		err = safePatternProviderError(err)
-		recordTrace(ctx, TraceEvent{Kind: "pattern_request", Status: "extraction", Outcome: "error", DurationMs: int(time.Since(started) / time.Millisecond), ErrorCode: patternTraceErrorCode(err)})
-		return patternResponse{}, nil, err
-	}
-	recordTrace(ctx, TraceEvent{Kind: "pattern_request", Status: "extraction", Outcome: "success", DurationMs: int(time.Since(started) / time.Millisecond)})
-	parsed, err = s.parsePatternOutput(ctx, "extraction", out2, buildIDs, options)
-	return parsed, tracker.Paths(), err
-}
-
-func (s *Service) parsePatternOutput(ctx context.Context, stage, output string, buildIDs map[string]struct{}, options PatternAnalyzeOptions) (patternResponse, error) {
-	parsed, stats, err := parsePatternResponseWithStats(output, buildIDs)
-	recordPatternParseTrace(ctx, stage, stats, err)
-	options.diagnostics.recordValidation(stage, stats, err)
-	if err == nil || stats.ScanTruncated {
-		return parsed, err
-	}
-	switch patternValidationCategoryOf(err) {
-	case patternValidationAmbiguous:
-		if options.AllowAmbiguityRepair {
-			return s.repairPatternAmbiguity(ctx, output, buildIDs, options)
-		}
-	case patternValidationSchema, patternValidationBuilds:
-		if options.AllowValidationRepair && len(output) <= int(defaultStructuredResponseBytes) {
-			return s.repairPatternValidation(ctx, output, buildIDs, err, options)
-		}
-	}
-	return parsed, err
+	recordPatternParseTrace(ctx, "tool_free", parseStats, nil)
+	return parsed, nil
 }
 
 func (s *Service) repairPatternValidation(ctx context.Context, output string, buildIDs map[string]struct{}, validationErr error, options PatternAnalyzeOptions) (patternResponse, error) {
@@ -894,7 +598,7 @@ func (s *Service) repairPatternValidation(ctx context.Context, output string, bu
 		parsed, acceptedStats = candidate, stats
 		return nil
 	}
-	err := s.client.CompleteStructured(ctx, "Return exactly one valid recurring-pattern contract.", prompt, patternResponseFormat(), validate)
+	err := s.client.completeForcedFunction(ctx, "Return exactly one valid causal-group contract.", prompt, patternResponseFormat(), validate)
 	if err != nil {
 		var structuredErr *structuredCompletionError
 		validationOnly := errors.As(err, &structuredErr) && structuredErr.cause == nil
@@ -926,19 +630,33 @@ func (s *Service) repairPatternValidation(ctx context.Context, output string, bu
 func (s *Service) repairPatternAmbiguity(ctx context.Context, output string, buildIDs map[string]struct{}, options PatternAnalyzeOptions) (patternResponse, error) {
 	options.diagnostics.beginRepair("ambiguity")
 	observe := options.OnRepair
-	prompt := fmt.Sprintf("Repair contract version %d. The prior bounded investigation produced multiple distinct candidate contracts. Resolve them into exactly one verdict supported by that investigation. Do not add a draft, alternative, explanation, or code fence. Reply with only one JSON object using exactly these keys: "+
-		`{"systemic": true|false, "confidence": "high"|"medium"|"low", "shared_root_cause": "...", "shared_builds": ["..."], "suggested_fix": "...", "remediation_targets": [{"intent":"...","symbol":"...","required_call":"...","path":"...","value":"...","repository":"...","revision":"...","job":"...","container":"...","name":"..."}], "summary": "..."}.`+"\n\nInvestigation output:\n%s", patternRepairVersion, output)
+	prompt := fmt.Sprintf("Repair contract version %d. Resolve the prior conflicting causal-group candidates into exactly one contract with groups, unclassified_builds, and summary. Preserve exact build coverage and add no remediation or action fields.\n\nInvestigation output:\n%s", patternRepairVersion, output)
 	started := time.Now()
-	repaired, err := s.client.Complete(ctx, "Return exactly one final recurring-pattern JSON contract and no other content.", prompt)
+	var parsed patternResponse
+	var stats patternParseStats
+	var parseErr error
+	validate := func(raw json.RawMessage) error {
+		candidate, candidateStats, err := parsePatternResponseWithStats(string(raw), buildIDs)
+		stats, parseErr = candidateStats, err
+		if err == nil {
+			parsed = candidate
+		}
+		return err
+	}
+	err := s.client.completeForcedFunction(ctx, "Return one final causal-group contract.", prompt, patternResponseFormat(), validate)
 	if err != nil {
-		err = safePatternProviderError(err)
+		var structuredErr *structuredCompletionError
+		if parseErr != nil && errors.As(err, &structuredErr) && structuredErr.cause == nil {
+			err = parseErr
+		} else {
+			err = safePatternProviderError(err)
+		}
 		recordTrace(ctx, TraceEvent{Kind: "pattern_repair", Status: "ambiguity", Outcome: "error", DurationMs: int(time.Since(started) / time.Millisecond), ErrorCode: patternTraceErrorCode(err)})
 		if observe != nil {
 			observe(PatternRepairAttempt{FailureCategory: PatternFailureCategoryOf(err)})
 		}
 		return patternResponse{}, err
 	}
-	parsed, stats, err := parsePatternResponseWithStats(repaired, buildIDs)
 	recordPatternParseTrace(ctx, "repair", stats, err)
 	options.diagnostics.recordRepair("ambiguity", stats, err)
 	outcome := "success"
@@ -972,16 +690,6 @@ func recordPatternParseTrace(ctx context.Context, stage string, stats patternPar
 		ContractLikeRejectedCount: stats.ContractLikeRejectedCount, ScanTruncated: stats.ScanTruncated,
 		ErrorCode: patternTraceErrorCode(err), ValidationCode: patternValidationIssueOf(err),
 	})
-	if stats.NonSystemicNormalizedCount > 0 {
-		normalizationOutcome := "applied"
-		if err != nil {
-			normalizationOutcome = "discarded"
-		}
-		recordTrace(ctx, TraceEvent{
-			Kind: "pattern_normalization", Status: stage, Outcome: normalizationOutcome,
-			NormalizedCount: stats.NonSystemicNormalizedCount,
-		})
-	}
 }
 
 func parsePatternResponse(raw string, buildIDs map[string]struct{}) (patternResponse, error) {
@@ -1025,9 +733,6 @@ func parsePatternResponseWithStats(raw string, buildIDs map[string]struct{}) (pa
 	for _, candidate := range scan.candidates {
 		decoded, category, issue := decodePatternCandidate(candidate.value, buildIDs)
 		if category == "" {
-			if decoded.nonSystemicNormalized {
-				stats.NonSystemicNormalizedCount++
-			}
 			valid = append(valid, validCandidate{response: decoded.response, start: candidate.start, end: candidate.end})
 			unique[decoded.identity] = decoded.response
 			continue
@@ -1084,40 +789,39 @@ func parsePatternResponseWithStats(raw string, buildIDs map[string]struct{}) (pa
 }
 
 type decodedPatternCandidate struct {
-	response              patternResponse
-	identity              string
-	nonSystemicNormalized bool
+	response patternResponse
+	identity string
 }
 
 func canonicalizePatternResponse(parsed patternResponse) patternResponse {
-	parsed.Confidence = strings.ToLower(strings.TrimSpace(parsed.Confidence))
-	parsed.SharedRootCause = strings.TrimSpace(parsed.SharedRootCause)
-	parsed.SuggestedFix = strings.TrimSpace(parsed.SuggestedFix)
 	parsed.Summary = strings.TrimSpace(parsed.Summary)
-	builds := make([]string, 0, len(parsed.SharedBuilds))
-	seen := make(map[string]struct{}, len(parsed.SharedBuilds))
-	for _, buildID := range parsed.SharedBuilds {
-		buildID = strings.TrimSpace(buildID)
-		if _, ok := seen[buildID]; ok {
-			continue
-		}
-		seen[buildID] = struct{}{}
-		builds = append(builds, buildID)
+	for index := range parsed.Groups {
+		group := &parsed.Groups[index]
+		group.RootCause = strings.TrimSpace(group.RootCause)
+		group.Confidence = strings.ToLower(strings.TrimSpace(group.Confidence))
+		group.Builds = canonicalBuildIDs(group.Builds)
 	}
-	sort.Strings(builds)
-	parsed.SharedBuilds = builds
-	for i := range parsed.RemediationTargets {
-		parsed.RemediationTargets[i].Intent = strings.ToLower(strings.TrimSpace(parsed.RemediationTargets[i].Intent))
-		parsed.RemediationTargets[i].Symbol = strings.TrimSpace(parsed.RemediationTargets[i].Symbol)
-		parsed.RemediationTargets[i].RequiredCall = strings.TrimSpace(parsed.RemediationTargets[i].RequiredCall)
-		parsed.RemediationTargets[i].Path = strings.TrimPrefix(strings.TrimSpace(parsed.RemediationTargets[i].Path), "./")
-		if parsed.RemediationTargets[i].Intent != models.RemediationIntentSetJobEnvironment {
-			parsed.RemediationTargets[i].Value = strings.TrimSpace(parsed.RemediationTargets[i].Value)
+	sort.Slice(parsed.Groups, func(i, j int) bool {
+		left, right := strings.Join(parsed.Groups[i].Builds, "\x00"), strings.Join(parsed.Groups[j].Builds, "\x00")
+		if left != right {
+			return left < right
 		}
-		parsed.RemediationTargets[i].Repository = strings.ToLower(strings.TrimSpace(parsed.RemediationTargets[i].Repository))
-		parsed.RemediationTargets[i].Revision = strings.ToLower(strings.TrimSpace(parsed.RemediationTargets[i].Revision))
-	}
+		if parsed.Groups[i].RootCause != parsed.Groups[j].RootCause {
+			return parsed.Groups[i].RootCause < parsed.Groups[j].RootCause
+		}
+		return parsed.Groups[i].Confidence < parsed.Groups[j].Confidence
+	})
+	parsed.UnclassifiedBuilds = canonicalBuildIDs(parsed.UnclassifiedBuilds)
 	return parsed
+}
+
+func canonicalBuildIDs(values []string) []string {
+	out := make([]string, len(values))
+	for index, value := range values {
+		out[index] = strings.TrimSpace(value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func decodePatternCandidate(raw string, buildIDs map[string]struct{}) (decodedPatternCandidate, patternValidationCategory, string) {
@@ -1125,7 +829,7 @@ func decodePatternCandidate(raw string, buildIDs map[string]struct{}) (decodedPa
 	if category != "" {
 		return decodedPatternCandidate{}, category, issue
 	}
-	required := []string{"systemic", "confidence", "shared_root_cause", "shared_builds", "suggested_fix", "remediation_targets", "summary"}
+	required := []string{"groups", "unclassified_builds", "summary"}
 	if len(fields) != len(required) {
 		return decodedPatternCandidate{}, patternValidationSchema, "required_fields"
 	}
@@ -1139,47 +843,56 @@ func decodePatternCandidate(raw string, buildIDs map[string]struct{}) (decodedPa
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return decodedPatternCandidate{}, patternValidationSchema, "field_types"
 	}
-	if !decodeRemediationTargets(fields["remediation_targets"], &parsed.RemediationTargets) {
-		return decodedPatternCandidate{}, patternValidationSchema, "remediation_targets"
+	if !decodePatternGroups(fields["groups"], &parsed.Groups) {
+		return decodedPatternCandidate{}, patternValidationSchema, "groups"
 	}
 	parsed = canonicalizePatternResponse(parsed)
+	if category, issue := patternResponseValidation(parsed, buildIDs); category != "" {
+		return decodedPatternCandidate{}, category, issue
+	}
 	identity, err := json.Marshal(parsed)
 	if err != nil {
 		return decodedPatternCandidate{}, patternValidationJSON, "canonical_json"
 	}
-	if !parsed.Systemic {
-		if category, issue := patternRemediationTargetsValidation(parsed.RemediationTargets); category != "" {
-			return decodedPatternCandidate{}, category, issue
-		}
-	}
-	normalized := normalizeNonSystemicPatternResponse(&parsed)
-	if category, issue := patternResponseValidation(parsed, buildIDs); category != "" {
-		return decodedPatternCandidate{}, category, issue
-	}
-	return decodedPatternCandidate{response: parsed, identity: string(identity), nonSystemicNormalized: normalized}, "", ""
+	return decodedPatternCandidate{response: parsed, identity: string(identity)}, "", ""
 }
 
-func normalizeNonSystemicPatternResponse(parsed *patternResponse) bool {
-	if parsed == nil || parsed.Systemic {
+func decodePatternGroups(raw json.RawMessage, groups *[]patternCausalGroup) bool {
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('[') {
 		return false
 	}
-	normalized := parsed.SharedRootCause != "" || parsed.SuggestedFix != "" || len(parsed.RemediationTargets) > 0
-	parsed.SharedRootCause = ""
-	parsed.SuggestedFix = ""
-	parsed.RemediationTargets = []models.RemediationTarget{}
-	return normalized
-}
-
-func patternRemediationTargetsValidation(targets []models.RemediationTarget) (patternValidationCategory, string) {
-	if len(targets) > 8 {
-		return patternValidationSchema, "remediation_target_limit"
-	}
-	for _, target := range targets {
-		if !validRemediationTarget(target) {
-			return patternValidationSchema, "remediation_target"
+	parsed := make([]patternCausalGroup, 0)
+	for decoder.More() {
+		var item json.RawMessage
+		if err := decoder.Decode(&item); err != nil {
+			return false
 		}
+		fields, category, _ := decodePatternObject(string(item))
+		if category != "" || len(fields) != 3 {
+			return false
+		}
+		for _, name := range []string{"builds", "root_cause", "confidence"} {
+			value, ok := fields[name]
+			if !ok || strings.TrimSpace(string(value)) == "null" {
+				return false
+			}
+		}
+		var group patternCausalGroup
+		if err := json.Unmarshal(item, &group); err != nil {
+			return false
+		}
+		parsed = append(parsed, group)
 	}
-	return "", ""
+	if token, err := decoder.Token(); err != nil || token != json.Delim(']') {
+		return false
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return false
+	}
+	*groups = parsed
+	return true
 }
 
 func decodePatternObject(raw string) (map[string]json.RawMessage, patternValidationCategory, string) {
@@ -1188,7 +901,7 @@ func decodePatternObject(raw string) (map[string]json.RawMessage, patternValidat
 	if err != nil || token != json.Delim('{') {
 		return nil, patternValidationJSON, "invalid_json"
 	}
-	fields := make(map[string]json.RawMessage, 7)
+	fields := make(map[string]json.RawMessage)
 	for decoder.More() {
 		token, err := decoder.Token()
 		if err != nil {
@@ -1219,14 +932,14 @@ func decodePatternObject(raw string) (map[string]json.RawMessage, patternValidat
 func patternCandidateIsContractLike(raw string) bool {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal([]byte(raw), &fields) == nil {
-		for _, field := range []string{"systemic", "confidence", "shared_root_cause", "shared_builds", "suggested_fix", "remediation_targets", "summary"} {
+		for _, field := range []string{"groups", "unclassified_builds", "summary"} {
 			if _, ok := fields[field]; ok {
 				return true
 			}
 		}
 		return false
 	}
-	for _, field := range []string{"systemic", "confidence", "shared_root_cause", "shared_builds", "suggested_fix", "remediation_targets", "summary"} {
+	for _, field := range []string{"groups", "unclassified_builds", "summary"} {
 		if strings.Contains(raw, `"`+field+`"`) {
 			return true
 		}
@@ -1235,126 +948,51 @@ func patternCandidateIsContractLike(raw string) bool {
 }
 
 func patternResponseValidation(p patternResponse, buildIDs map[string]struct{}) (patternValidationCategory, string) {
-	confidence := strings.ToLower(strings.TrimSpace(p.Confidence))
-	if confidence != "high" && confidence != "medium" && confidence != "low" {
-		return patternValidationSchema, "confidence"
-	}
 	if strings.TrimSpace(p.Summary) == "" {
 		return patternValidationSchema, "summary"
 	}
-	if p.Systemic {
-		if strings.TrimSpace(p.SharedRootCause) == "" || strings.TrimSpace(p.SuggestedFix) == "" || len(p.SharedBuilds) < 2 || len(p.RemediationTargets) == 0 {
-			return patternValidationSchema, "systemic_contract"
+	seen := make(map[string]struct{}, len(buildIDs))
+	for _, group := range p.Groups {
+		if len(group.Builds) == 0 || strings.TrimSpace(group.RootCause) == "" {
+			return patternValidationSchema, "groups"
 		}
-	} else if strings.TrimSpace(p.SharedRootCause) != "" || strings.TrimSpace(p.SuggestedFix) != "" || len(p.RemediationTargets) != 0 {
-		return patternValidationSchema, "non_systemic_contract"
-	}
-	if category, issue := patternRemediationTargetsValidation(p.RemediationTargets); category != "" {
-		return category, issue
-	}
-	policyText := strings.Join([]string{p.SuggestedFix, p.SharedRootCause, p.Summary}, "\n")
-	if remediationpolicy.Reason(policyText, p.RemediationTargets) != "" {
-		return patternValidationSchema, "unsafe_conversion_remediation"
-	}
-	for _, buildID := range p.SharedBuilds {
-		buildID = strings.TrimSpace(buildID)
-		if buildID == "" {
-			return patternValidationBuilds, "shared_builds"
+		switch strings.ToLower(strings.TrimSpace(group.Confidence)) {
+		case "high", "medium", "low":
+		default:
+			return patternValidationSchema, "confidence"
 		}
-		if buildIDs != nil {
-			if _, ok := buildIDs[buildID]; !ok {
-				return patternValidationBuilds, "shared_builds"
+		for _, buildID := range group.Builds {
+			if category, issue := validatePatternBuild(buildID, buildIDs, seen); category != "" {
+				return category, issue
 			}
 		}
+	}
+	for _, buildID := range p.UnclassifiedBuilds {
+		if category, issue := validatePatternBuild(buildID, buildIDs, seen); category != "" {
+			return category, issue
+		}
+	}
+	if buildIDs != nil && len(seen) != len(buildIDs) {
+		return patternValidationBuilds, "missing_build"
 	}
 	return "", ""
 }
 
-func decodeRemediationTargets(raw json.RawMessage, targets *[]models.RemediationTarget) bool {
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
-	token, err := decoder.Token()
-	if err != nil || token != json.Delim('[') {
-		return false
+func validatePatternBuild(buildID string, buildIDs, seen map[string]struct{}) (patternValidationCategory, string) {
+	buildID = strings.TrimSpace(buildID)
+	if buildID == "" {
+		return patternValidationBuilds, "unknown_build"
 	}
-	parsed := make([]models.RemediationTarget, 0)
-	for decoder.More() {
-		var item json.RawMessage
-		if err := decoder.Decode(&item); err != nil {
-			return false
+	if buildIDs != nil {
+		if _, ok := buildIDs[buildID]; !ok {
+			return patternValidationBuilds, "unknown_build"
 		}
-		fields, category, _ := decodePatternObject(string(item))
-		if category != "" || len(fields) == 0 || (len(fields) > 5 && len(fields) != 10) {
-			return false
-		}
-		for name, value := range fields {
-			if name != "intent" && name != "symbol" && name != "required_call" && name != "path" && name != "value" && name != "repository" && name != "revision" && name != "job" && name != "container" && name != "name" {
-				return false
-			}
-			if strings.TrimSpace(string(value)) == "null" {
-				return false
-			}
-		}
-		if _, ok := fields["intent"]; !ok {
-			return false
-		}
-		if len(fields) == 10 {
-			for _, required := range []string{"symbol", "required_call", "path", "value", "repository", "revision", "job", "container", "name"} {
-				if _, ok := fields[required]; !ok {
-					return false
-				}
-			}
-		}
-		var target models.RemediationTarget
-		if err := json.Unmarshal(item, &target); err != nil {
-			return false
-		}
-		parsed = append(parsed, target)
 	}
-	if token, err := decoder.Token(); err != nil || token != json.Delim(']') {
-		return false
+	if _, duplicate := seen[buildID]; duplicate {
+		return patternValidationBuilds, "duplicate_build"
 	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return false
-	}
-	*targets = parsed
-	return true
-}
-
-func validRemediationTarget(target models.RemediationTarget) bool {
-	validPath := func(value string) bool {
-		if value == "" || len(value) > 512 || strings.HasPrefix(value, "/") || strings.Contains(value, "\\") {
-			return false
-		}
-		clean := path.Clean(value)
-		return clean == value && clean != "." && clean != ".." && !strings.HasPrefix(clean, "../")
-	}
-	validValue := func(value string) bool {
-		key, expected, ok := strings.Cut(value, "=")
-		return ok && strings.TrimSpace(key) != "" && strings.TrimSpace(expected) != "" &&
-			len(value) <= 256 && !strings.ContainsAny(value, "\r\n\x00")
-	}
-	switch target.Intent {
-	case models.RemediationIntentAddSymbol:
-		return gotoken.IsIdentifier(target.Symbol) && target.RequiredCall == "" && validPath(target.Path) && target.Value == "" &&
-			target.Repository == "" && target.Revision == "" && target.Job == "" && target.Container == "" && target.Name == ""
-	case models.RemediationIntentModifySymbol:
-		return gotoken.IsIdentifier(target.Symbol) && actionverify.ValidRequiredCall(target.RequiredCall) && target.RequiredCall != target.Symbol && validPath(target.Path) && target.Value == "" &&
-			target.Repository == "" && target.Revision == "" && target.Job == "" && target.Container == "" && target.Name == ""
-	case models.RemediationIntentSetConfiguration, models.RemediationIntentRemoveConfiguration:
-		return target.Symbol == "" && target.RequiredCall == "" && target.Repository == "" && target.Revision == "" && target.Job == "" && target.Container == "" && target.Name == "" &&
-			validPath(target.Path) && validValue(target.Value)
-	case models.RemediationIntentSetJobEnvironment:
-		return target.Symbol == "" && target.RequiredCall == "" && target.Repository == "kubernetes/test-infra" &&
-			regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(target.Revision) && validPath(target.Path) &&
-			strings.HasPrefix(target.Path, "config/jobs/") && (strings.HasSuffix(target.Path, ".yaml") || strings.HasSuffix(target.Path, ".yml")) &&
-			strings.TrimSpace(target.Job) != "" && strings.TrimSpace(target.Container) != "" &&
-			regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(target.Name) && strings.TrimSpace(target.Value) != "" &&
-			len(target.Value) <= 512 && !strings.ContainsAny(target.Value, "\r\n\x00")
-	case models.RemediationIntentInvestigate:
-		return target.Symbol == "" && target.RequiredCall == "" && target.Path == "" && target.Value == "" && target.Repository == "" && target.Revision == "" && target.Job == "" && target.Container == "" && target.Name == ""
-	default:
-		return false
-	}
+	seen[buildID] = struct{}{}
+	return "", ""
 }
 
 func patternBuildIDs(failures []PatternFailure) map[string]struct{} {
@@ -1404,28 +1042,77 @@ func collectRelevantFiles(failures []PatternFailure) []string {
 	return out
 }
 
-// buildPatternAnalysis converts a parsed verdict into the published model.
-func buildPatternAnalysis(subject string, builds int, p patternResponse, relevantFiles []string, fileLinks map[string]string, sourceRef string) *models.PatternAnalysis {
-	conf := strings.ToLower(strings.TrimSpace(p.Confidence))
-	switch conf {
-	case "high", "medium", "low":
-	default:
-		conf = "low"
+// buildPatternAnalysis converts causal groups into the published model.
+func buildPatternAnalysis(subject string, builds int, p patternResponse, relevantFiles []string) *models.PatternAnalysis {
+	groups := make([]models.PatternCausalGroup, 0, len(p.Groups))
+	repeated := make([]patternCausalGroup, 0, len(p.Groups))
+	sharedBuilds := make([]string, 0, builds)
+	for _, group := range p.Groups {
+		groups = append(groups, models.PatternCausalGroup{
+			Builds: append([]string(nil), group.Builds...), RootCause: group.RootCause, Confidence: group.Confidence,
+		})
+		if len(group.Builds) < 2 {
+			continue
+		}
+		repeated = append(repeated, group)
+		sharedBuilds = append(sharedBuilds, group.Builds...)
 	}
+	sort.Strings(sharedBuilds)
+
+	recurrence := models.PatternRecurrenceUnrelated
+	if len(repeated) == 0 && len(p.UnclassifiedBuilds) == builds {
+		recurrence = models.PatternRecurrenceInsufficientEvidence
+	} else if len(repeated) == 1 {
+		recurrence = models.PatternRecurrenceSharedCause
+	} else if len(repeated) > 1 {
+		recurrence = models.PatternRecurrenceMixedCauses
+	}
+	systemic := recurrence == models.PatternRecurrenceSharedCause || recurrence == models.PatternRecurrenceMixedCauses
+
+	confidenceGroups := repeated
+	if len(confidenceGroups) == 0 {
+		confidenceGroups = p.Groups
+	}
+	confidence := "low"
+	if len(confidenceGroups) > 0 {
+		confidence = "high"
+		for _, group := range confidenceGroups {
+			if patternConfidenceRank(group.Confidence) < patternConfidenceRank(confidence) {
+				confidence = group.Confidence
+			}
+		}
+	}
+
+	rootCause := ""
+	if len(repeated) == 1 {
+		rootCause = repeated[0].RootCause
+	} else if len(repeated) > 1 {
+		causes := make([]string, 0, len(repeated))
+		for _, group := range repeated {
+			causes = append(causes, group.RootCause)
+		}
+		rootCause = "Multiple recurring causes: " + strings.Join(causes, "; ")
+	}
+
 	return &models.PatternAnalysis{
-		Subject:            subject,
-		GeneratedAt:        time.Now().UTC().Format(time.RFC3339),
-		BuildsAnalyzed:     builds,
-		Systemic:           p.Systemic,
-		Confidence:         conf,
-		SharedRootCause:    strings.TrimSpace(p.SharedRootCause),
-		SharedBuilds:       p.SharedBuilds,
-		SuggestedFix:       strings.TrimSpace(p.SuggestedFix),
-		RemediationTargets: append([]models.RemediationTarget(nil), p.RemediationTargets...),
-		Summary:            strings.TrimSpace(p.Summary),
-		RelevantFiles:      relevantFiles,
-		FileLinks:          fileLinks,
-		SourceRef:          sourceRef,
+		Subject: subject, GeneratedAt: time.Now().UTC().Format(time.RFC3339), BuildsAnalyzed: builds,
+		Recurrence: recurrence, CausalGroups: groups,
+		UnclassifiedBuilds: append([]string(nil), p.UnclassifiedBuilds...),
+		Systemic:           systemic, Confidence: confidence, SharedRootCause: rootCause, SharedBuilds: sharedBuilds,
+		Summary: strings.TrimSpace(p.Summary), RelevantFiles: relevantFiles,
+	}
+}
+
+func patternConfidenceRank(confidence string) int {
+	switch confidence {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
 	}
 }
 
@@ -1527,10 +1214,8 @@ func patternRunWindow(runs []PatternRun, fallbackFailures int) (total, failed, p
 	return len(runs), failed, passed
 }
 
-// patternCacheKey keys a verdict by the project module, job, prompt version,
-// the grounding namespace (mode plus, when grounded, the source repo), and the
-// rendered model input, so the verdict is reused only while the exact evidence
-// the model saw is unchanged.
+// patternCacheKey keys a verdict by the project module, job, contract version,
+// model identity, and rendered input.
 func patternCacheKey(module, generation, jobID, subject, userPrompt, groundKey, modelFingerprint string) string {
 	return patternCacheKeyForVersions(patternPromptVersion, patternRepairVersion, module, generation, jobID, subject, userPrompt, groundKey, modelFingerprint)
 }
@@ -1549,91 +1234,4 @@ func patternCacheKeyForVersions(promptVersion, repairVersion int, module, genera
 // the pattern prompt budget.
 func clampPattern(s string, max int) string {
 	return textutil.Truncate(strings.TrimSpace(s), max)
-}
-
-// patternPathRe matches repo-relative-looking file paths embedded in prose,
-// with or without a directory prefix, ending in a source or config extension.
-// Bounded to real file references so it does not flag incidental words. Runtime
-// artifact extensions are excluded because suggested_fix names files to change.
-var patternPathRe = regexp.MustCompile(`(?:[A-Za-z0-9_.\-]+/)*[A-Za-z0-9_.\-]+\.(?:go|ya?ml|sh|json|tpl|star|bzl|toml|cfg|conf|mod|sum|md|py|js|jsx|ts|tsx|java|rs|c|cc|cpp|h|hpp|proto|sql)\b`)
-
-// guardPatternPaths annotates any file path in the verdict's suggested fix that
-// does not exist in the source repo, so a fabricated citation is marked
-// "(unverified path)" rather than asserted as fact. It is a no-op when no repo
-// is available to verify against. Only suggested_fix is guarded: shared_root_cause
-// and summary describe evidence and legitimately cite GCS artifact paths that are
-// not in the source tree.
-func (s *Service) guardPatternPaths(ctx context.Context, p *patternResponse) {
-	exists := s.patternPathVerifier(ctx)
-	if exists == nil {
-		return
-	}
-	p.SuggestedFix = annotateUnverifiedPaths(p.SuggestedFix, exists)
-}
-
-// patternPathVerifier returns a func reporting whether a cited path exists, or
-// nil when nothing can verify. The memoized repo tree verifies both full paths
-// and bare basenames; if the tree is unavailable it falls back to a raw-CDN
-// existence check against the configured analysis source so the guard stays active rather
-// than silently disabling. The CDN fallback verifies only explicit repo-relative
-// paths, leaving bare names unflagged since it cannot locate them to a subdir.
-func (s *Service) patternPathVerifier(ctx context.Context) func(string) bool {
-	if s.patternRepo != nil {
-		if tree, err := s.patternRepoTree(ctx); err == nil && len(tree) > 0 {
-			full := make(map[string]bool, len(tree))
-			base := make(map[string]bool, len(tree))
-			for _, t := range tree {
-				full[t] = true
-				base[path.Base(t)] = true
-			}
-			return func(p string) bool {
-				if strings.Contains(p, "/") {
-					return full[p]
-				}
-				return base[p]
-			}
-		}
-	}
-	if s.sourceRepoOwner != "" && s.sourceRepoName != "" {
-		client := &http.Client{Timeout: 10 * time.Second}
-		return func(p string) bool {
-			if !strings.Contains(p, "/") {
-				return true
-			}
-			return s.verifyGitHubFile(ctx, client, s.sourceRepoOwner, s.sourceRepoName, p)
-		}
-	}
-	return nil
-}
-
-// annotateUnverifiedPaths marks each path-like token that fails exists with a
-// trailing "(unverified path)" note, once per distinct token.
-func annotateUnverifiedPaths(text string, exists func(string) bool) string {
-	if strings.TrimSpace(text) == "" {
-		return text
-	}
-	seen := map[string]bool{}
-	for _, m := range patternPathRe.FindAllString(text, -1) {
-		clean := strings.TrimPrefix(m, "./")
-		if seen[m] || exists(clean) {
-			seen[m] = true
-			continue
-		}
-		seen[m] = true
-		text = strings.ReplaceAll(text, m, m+" (unverified path)")
-	}
-	return text
-}
-
-// patternRepoTree returns the source repo's blob paths, memoized for the run so
-// the recursive tree listing costs one API call across every job.
-func (s *Service) patternRepoTree(ctx context.Context) ([]string, error) {
-	s.patternTreeMu.Lock()
-	defer s.patternTreeMu.Unlock()
-	if s.patternTreeDone {
-		return s.patternTree, s.patternTreeErr
-	}
-	s.patternTree, s.patternTreeErr = s.patternRepo.ListTree(ctx)
-	s.patternTreeDone = true
-	return s.patternTree, s.patternTreeErr
 }

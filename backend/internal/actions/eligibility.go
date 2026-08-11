@@ -69,6 +69,9 @@ func subjectEligibilityReason(subject *ActionSubject) (ReasonCode, string) {
 	}
 	pattern := subject.Pattern
 	published := strings.TrimSpace(pattern.ID) != ""
+	if !models.PatternAllowsActions(*pattern) {
+		return ReasonContractGenerationFailed, "This causal-group result is analysis-only and cannot start an action."
+	}
 	if code := patternRefreshReasonCode(subject.PatternRefresh); code != "" {
 		return code, ""
 	}
