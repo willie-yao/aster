@@ -10,6 +10,7 @@ function source(path: string): string {
 test("detail headings use the enlarged readable scale", () => {
   const job = source("src/pages/JobDetailPage.tsx");
   const testDetail = source("src/pages/TestDetailPage.tsx");
+  const buildFailure = source("src/pages/BuildFailurePage.tsx");
 
   assert.match(job, /fontSize: \{ xs: "26px", sm: "30px" \}/);
   assert.match(job, /lineHeight: \{ xs: "33px", sm: "38px" \}/);
@@ -17,6 +18,9 @@ test("detail headings use the enlarged readable scale", () => {
   assert.match(testDetail, /: \{ xs: "26px", sm: "30px" \}/);
   assert.match(testDetail, /: \{ xs: "33px", sm: "38px" \}/);
   assert.match(testDetail, /fontWeight: 720/);
+  assert.match(buildFailure, /fontSize: \{ xs: "26px", sm: "30px" \}/);
+  assert.match(buildFailure, /lineHeight: \{ xs: "33px", sm: "38px" \}/);
+  assert.match(buildFailure, /fontWeight: 720/);
 });
 
 test("analysis briefing uses a calmer prose measure and rhythm", () => {

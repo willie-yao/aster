@@ -160,9 +160,11 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(pattern, /lifecycleActive/);
 
   assert.match(briefing, /mobileNotice[\s\S]*\{mobileNotice &&/);
-  assert.match(buildFailure, /if \(detailAppearance\)[\s\S]*<AnalysisBriefing/);
+  assert.match(buildFailure, /<AnalysisBriefing/);
   assert.match(buildFailure, /<AiAnalysisPanel[\s\S]*appearance="detail"/);
-  assert.match(page, /<BuildFailurePanel[\s\S]*appearance="detail"/);
+  assert.match(buildFailure, /<FailureActions[\s\S]*appearance="detail"/);
+  assert.match(buildFailure, /Open build failure details/);
+  assert.doesNotMatch(buildFailure, /detailAppearance/);
   assert.match(identity, /display: \{ xs: "none", md: "flex" \}/);
   assert.match(identity, /desktopInline \? \{ xs: "block", md: "none" \}/);
   assert.match(testTable, /Evidence/);
