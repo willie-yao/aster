@@ -330,6 +330,15 @@ export function JobDetailPage() {
     </Box>
   ) : null;
 
+  const buildFailureBriefing = selectedRun && buildFailure ? (
+    <BuildFailurePanel
+      jobID={canonicalJobID}
+      run={selectedRun}
+      failure={buildFailure}
+      fetchStatus={fetchStatus}
+    />
+  ) : null;
+
   return (
     <Box
       sx={{
@@ -454,7 +463,7 @@ export function JobDetailPage() {
         </>
       ) : (
         <>
-          {pattern ? (
+          {pattern || buildFailureBriefing ? (
             <Box
               sx={{
                 display: "grid",
@@ -462,19 +471,36 @@ export function JobDetailPage() {
                   xs: "minmax(0, 1fr)",
                   lg: "minmax(0, 1.5fr) minmax(360px, 0.85fr)",
                 },
+                gridTemplateAreas: {
+                  xs: pattern && buildFailureBriefing
+                    ? '"pattern" "rail" "buildFailure"'
+                    : pattern
+                      ? '"pattern" "rail"'
+                      : '"rail" "buildFailure"',
+                  lg: pattern && buildFailureBriefing
+                    ? '"pattern rail" "buildFailure rail"'
+                    : pattern
+                      ? '"pattern rail"'
+                      : '"buildFailure rail"',
+                },
                 gap: 2,
                 minWidth: 0,
                 alignItems: "start",
               }}
             >
-              <PatternBanner
-                pattern={pattern}
-                jobID={canonicalJobID}
-                runs={runs}
-                refreshStatus={data.pattern_refresh}
-              />
+              {pattern && (
+                <Box sx={{ gridArea: "pattern", minWidth: 0 }}>
+                  <PatternBanner
+                    pattern={pattern}
+                    jobID={canonicalJobID}
+                    runs={runs}
+                    refreshStatus={data.pattern_refresh}
+                  />
+                </Box>
+              )}
               <Box
                 sx={{
+                  gridArea: "rail",
                   display: "flex",
                   flexDirection: "column",
                   gap: 2,
@@ -487,6 +513,11 @@ export function JobDetailPage() {
                 {runHistory}
                 {runMetadata}
               </Box>
+              {buildFailureBriefing && (
+                <Box sx={{ gridArea: "buildFailure", minWidth: 0 }}>
+                  {buildFailureBriefing}
+                </Box>
+              )}
             </Box>
           ) : (
             <Box
@@ -507,15 +538,6 @@ export function JobDetailPage() {
           )}
 
           {crossRunGrid}
-
-          {selectedRun && buildFailure && (
-            <BuildFailurePanel
-              jobID={canonicalJobID}
-              run={selectedRun}
-              failure={buildFailure}
-              fetchStatus={fetchStatus}
-            />
-          )}
 
           {selectedRun && resultSummary.executed.length > 0 ? (
             <ResultLedger

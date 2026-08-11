@@ -21,11 +21,13 @@ export function RunMetadata({
   links,
   status,
   statusColor = "text.secondary",
+  stacked = false,
 }: {
   items: RunMetadataItem[];
   links: RunMetadataLink[];
   status: string;
   statusColor?: "warning.main" | "success.main" | "error.main" | "text.secondary";
+  stacked?: boolean;
 }) {
   return (
     <Box component="section" sx={{ minWidth: 0, bgcolor: "surface.container" }}>
@@ -36,7 +38,9 @@ export function RunMetadata({
       <Box
         sx={{
           display: "grid",
-          gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "repeat(2, minmax(0, 1fr))" },
+          gridTemplateColumns: stacked
+            ? "minmax(0, 1fr)"
+            : { xs: "minmax(0, 1fr)", sm: "repeat(2, minmax(0, 1fr))" },
         }}
       >
         {items.map((item, index) => (
@@ -50,10 +54,12 @@ export function RunMetadata({
               borderTopWidth: "1px",
               borderTopStyle: "solid",
               borderTopColor: "var(--mui-palette-divider)",
-              borderInlineStartWidth: {
-                xs: 0,
-                sm: index % 2 === 1 ? "1px" : 0,
-              },
+              borderInlineStartWidth: stacked
+                ? 0
+                : {
+                    xs: 0,
+                    sm: index % 2 === 1 ? "1px" : 0,
+                  },
               borderInlineStartStyle: "solid",
               borderInlineStartColor: "var(--mui-palette-divider)",
             }}

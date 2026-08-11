@@ -197,24 +197,37 @@ export function BuildFailurePanel({
   if (!beforeActions) return briefing;
 
   return (
-    <Stack spacing={2} sx={{ minWidth: 0 }}>
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: {
+          xs: "minmax(0, 1fr)",
+          lg: "minmax(0, 1fr) minmax(360px, 420px)",
+        },
+        gap: 2,
+        minWidth: 0,
+        alignItems: "start",
+      }}
+    >
       {briefing}
-      {beforeActions}
-      {showActions && (
-        <Box
-          component="section"
-          aria-label="Build failure actions"
-          sx={{
-            bgcolor: "surface.container",
-            borderBlock: "1px solid",
-            borderColor: "divider",
-            px: { xs: 1.5, sm: 2 },
-            py: 1,
-          }}
-        >
-          {actions}
-        </Box>
-      )}
-    </Stack>
+      <Stack spacing={2} sx={{ minWidth: 0 }}>
+        {beforeActions}
+        {showActions && (
+          <Box
+            component="section"
+            aria-label="Build failure actions"
+            sx={{
+              bgcolor: "surface.container",
+              borderBlock: "1px solid",
+              borderColor: "divider",
+              px: { xs: 1.5, sm: 2 },
+              py: 1,
+            }}
+          >
+            {actions}
+          </Box>
+        )}
+      </Stack>
+    </Box>
   );
 }

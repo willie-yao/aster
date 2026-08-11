@@ -111,6 +111,7 @@ export function BuildFailurePage() {
   const status = runStatus(run);
   const runMetadata = (
     <RunMetadata
+      stacked
       status={status.label}
       statusColor={status.color}
       items={[
