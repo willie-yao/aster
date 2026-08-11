@@ -122,10 +122,7 @@ func conversionReviewDelivery(value string) bool {
 }
 
 func hardConversionReviewLoss(value string) bool {
-	if containsAny(value,
-		"stop", "cease", "no longer", "zero", "none", "not a single", "eliminat", "abolish", "suppress",
-		"block", "bypass", "remove", "disable", "unable",
-	) {
+	if hasUnnegatedHardDeliveryLoss(value) {
 		return true
 	}
 	if conversionReviewFailurePreserved(value) {
@@ -137,14 +134,53 @@ func hardConversionReviewLoss(value string) bool {
 	)
 }
 
+func hasUnnegatedHardDeliveryLoss(value string) bool {
+	words := identifierWords(value)
+	if containsAny(value, "no longer", "not a single") {
+		return true
+	}
+	for i, word := range words {
+		loss := containsAny(word, "stop", "ceas", "zero", "none", "eliminat", "abolish", "suppress", "block", "bypass", "remov", "disabl", "unable")
+		if !loss {
+			continue
+		}
+		start := i - 3
+		if start < 0 {
+			start = 0
+		}
+		if containsWord(words[start:i], "prevent", "prevents", "prevented", "preventing", "avoid", "avoids", "avoided", "avoiding", "without", "not", "never") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func conversionReviewDeliveryPreserved(value string) bool {
-	if conversionReviewFailurePreserved(value) {
+	if conversionReviewFailurePreserved(value) || conversionReviewLossPrevented(value) {
 		return true
 	}
 	return containsAny(value,
 		"keep", "preserv", "maintain", "remain available", "remains available", "stay available", "stays available",
 		"continue", "succeed", "successful", "working", "reachable",
 	)
+}
+
+func conversionReviewLossPrevented(value string) bool {
+	words := identifierWords(value)
+	for i, word := range words {
+		if !containsAny(word, "stop", "ceas", "eliminat", "abolish", "suppress", "block", "bypass", "remov", "disabl") {
+			continue
+		}
+		start := i - 3
+		if start < 0 {
+			start = 0
+		}
+		if containsWord(words[start:i], "prevent", "prevents", "prevented", "preventing", "avoid", "avoids", "avoided", "avoiding", "without", "not", "never") {
+			return true
+		}
+	}
+	return false
 }
 
 func conversionReviewFailurePreserved(value string) bool {
@@ -208,7 +244,10 @@ func unsafeDirectConversionOperation(clause string) bool {
 	for _, match := range directConversionOperationRe.FindAllStringSubmatchIndex(clause, -1) {
 		operation := strings.ToLower(clause[match[2]:match[3]])
 		if negatedDirectConversionOperation(clause[:match[0]]) {
-			continue
+			if destructiveActionWord(operation) {
+				continue
+			}
+			return true
 		}
 		if ignoredDirectConversionWord(operation) {
 			continue
@@ -268,7 +307,7 @@ func safeNaturalOperationSuffix(words []string) bool {
 }
 
 func safeConversionStatePhrase(words []string) bool {
-	if len(words) == 0 {
+	if len(words) == 0 || unsafeConversionStateWords(words) {
 		return false
 	}
 	safe := false
@@ -297,16 +336,25 @@ func safeConversionStatePhrase(words []string) bool {
 	return safe
 }
 
+func unsafeConversionStateWords(words []string) bool {
+	for i, word := range words {
+		if !containsWord([]string{word}, "unavailable", "unreachable", "offline", "purged", "decommissioned", "erased", "disabled", "removed", "bypassed", "none") {
+			continue
+		}
+		if i > 0 && containsWord([]string{words[i-1]}, "not", "never") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func negatedDirectConversionOperation(prefix string) bool {
 	words := identifierWords(prefix)
 	if len(words) == 0 {
 		return false
 	}
-	start := len(words) - 3
-	if start < 0 {
-		start = 0
-	}
-	return containsWord(words[start:], "avoid", "avoiding", "without", "not", "never")
+	return containsWord([]string{words[len(words)-1]}, "avoid", "avoiding", "without", "not", "never")
 }
 
 func ignoredDirectConversionWord(word string) bool {
@@ -386,7 +434,7 @@ func unsafeConversionTarget(target models.RemediationTarget) bool {
 		if !conversionIdentifierPresent(target.Name) {
 			return false
 		}
-		if conversionAvailabilityToggle(target.Name) {
+		if conversionAvailabilityToggle(target.Name) || conversionPreservationToggle(target.Name) {
 			return !conversionTrueValue(target.Value)
 		}
 		return destructiveConversionIdentifier(target.Name)
@@ -699,6 +747,23 @@ func conversionAvailabilityToggle(value string) bool {
 		}
 	}
 	return toggle
+}
+
+func conversionPreservationToggle(value string) bool {
+	words := expandedIdentifierWords(value)
+	start, end, count := conversionIdentifierSpan(words)
+	if count != 1 {
+		return false
+	}
+	remaining := make([]string, 0, len(words)-(end-start))
+	remaining = append(remaining, words[:start]...)
+	remaining = append(remaining, words[end:]...)
+	for _, word := range remaining {
+		if preservingOperationWord(word) {
+			return true
+		}
+	}
+	return false
 }
 
 func conversionObjectSetting(value string) (bool, bool) {
