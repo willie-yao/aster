@@ -412,46 +412,62 @@ func conversionStateTransition(words []string) int {
 }
 
 func benignTemporalCondition(words []string) int {
-	if len(words) == 0 {
+	offset := positiveTemporalAdverbPrefix(words)
+	if offset == len(words) {
 		return 0
 	}
+	words = words[offset:]
 	word := words[0]
 	switch {
 	case containsWord([]string{word}, "complete", "completes", "completed", "finish", "finishes", "finished", "migrate", "migrates", "migrated"):
 		if benignCompletionComplement(words[1:]) {
-			return 1
+			return offset + 1
 		}
 	case containsWord([]string{word}, "serve", "serves", "served", "serving"):
-		if benignServingComplement(words[1:]) {
-			return 1
+		if benignServingComplement(words[1:], false) {
+			return offset + 1
 		}
 	case containsWord([]string{word}, "keep", "keeps", "keeping") && len(words) > 1 && containsWord([]string{words[1]}, "serve", "serves", "served", "serving"):
-		if benignServingComplement(words[2:]) {
-			return 2
+		if benignServingComplement(words[2:], true) {
+			return offset + 2
 		}
 	case word == "failover":
 		if benignFailoverComplement(words[1:]) {
-			return 1
+			return offset + 1
 		}
 	case strings.HasPrefix(word, "fail") && len(words) > 1 && words[1] == "over":
 		if benignFailoverComplement(words[2:]) {
-			return 2
+			return offset + 2
 		}
 	}
 	return 0
 }
 
-func benignServingComplement(words []string) bool {
+func positiveTemporalAdverbPrefix(words []string) int {
+	offset := 0
+	for offset < len(words) && offset < 2 && containsWord([]string{words[offset]}, "successfully", "reliably", "seamlessly", "cleanly", "safely", "continuously") {
+		offset++
+	}
+	return offset
+}
+
+func benignServingComplement(words []string, persistent bool) bool {
 	words = boundedTemporalWords(words)
-	if containsWord(words, "neither", "nor", "hardly", "zero", "none") || negativeObjectQuantifier(words, "request", "requests", "read", "reads", "write", "writes", "traffic", "conversion", "conversions") {
+	objects := []string{"request", "requests", "read", "reads", "write", "writes", "traffic", "conversion", "conversions"}
+	if containsWord(words, "neither", "nor", "hardly", "few", "failed", "zero", "none", "only") || negativeObjectQuantifier(words, objects...) {
 		return false
 	}
-	return containsWord(words, "request", "requests", "read", "reads", "write", "writes", "traffic", "conversion", "conversions")
+	hasObject := containsWord(words, objects...)
+	if !hasObject {
+		return false
+	}
+	completeSet := containsWord(words, "all", "every") || containsWord(words, "read", "reads") && containsWord(words, "write", "writes")
+	return persistent || completeSet || positiveSafetyComplement(words)
 }
 
 func benignCompletionComplement(words []string) bool {
 	words = boundedTemporalWords(words)
-	if containsWord(words, "invalid", "aborted", "failed", "broken", "neither", "hardly", "zero", "none") || negativeObjectQuantifier(words, "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts") {
+	if containsWord(words, "invalid", "aborted", "failed", "broken", "corrupted", "incomplete", "partial", "neither", "hardly", "zero", "none") || negativeObjectQuantifier(words, "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts") {
 		return false
 	}
 	return containsWord(words, "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts")
@@ -459,7 +475,7 @@ func benignCompletionComplement(words []string) bool {
 
 func benignFailoverComplement(words []string) bool {
 	words = boundedTemporalWords(words)
-	if containsWord(words, "dead", "unavailable", "unreachable", "nowhere", "none", "null", "invalid", "blackhole") {
+	if containsWord(words, "dead", "broken", "unavailable", "unreachable", "nowhere", "none", "null", "invalid", "blackhole") {
 		return false
 	}
 	if positiveSafetyComplement(words) {
@@ -469,7 +485,7 @@ func benignFailoverComplement(words []string) bool {
 		if word != "to" {
 			continue
 		}
-		return containsWord(words[i+1:], "backup", "secondary", "standby", "healthy", "available", "endpoint", "service", "replica", "node")
+		return containsWord(words[i+1:], "backup", "secondary", "standby", "healthy", "available", "replica")
 	}
 	return false
 }
