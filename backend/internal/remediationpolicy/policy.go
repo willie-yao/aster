@@ -454,7 +454,7 @@ func positiveTemporalAdverbPrefix(words []string) int {
 func benignServingComplement(words []string, persistent bool) bool {
 	words = boundedTemporalWords(words)
 	objects := []string{"request", "requests", "read", "reads", "write", "writes", "traffic", "conversion", "conversions"}
-	if containsWord(words, "neither", "nor", "hardly", "few", "failed", "zero", "none", "only") || negativeObjectQuantifier(words, objects...) {
+	if negativeOutcomeQuality(words) || containsWord(words, "neither", "nor", "hardly", "few", "failed", "zero", "none", "only") || negativeObjectQuantifier(words, objects...) {
 		return false
 	}
 	hasObject := containsWord(words, objects...)
@@ -462,12 +462,12 @@ func benignServingComplement(words []string, persistent bool) bool {
 		return false
 	}
 	completeSet := containsWord(words, "all", "every") || containsWord(words, "read", "reads") && containsWord(words, "write", "writes")
-	return persistent || completeSet || positiveSafetyComplement(words)
+	return persistent || completeSet || positiveSafetyComplement(words) || containsPositiveTemporalAdverb(words)
 }
 
 func benignCompletionComplement(words []string) bool {
 	words = boundedTemporalWords(words)
-	if containsWord(words, "invalid", "aborted", "failed", "broken", "corrupted", "incomplete", "partial", "neither", "hardly", "zero", "none") || negativeObjectQuantifier(words, "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts") {
+	if negativeOutcomeQuality(words) || containsWord(words, "invalid", "aborted", "failed", "broken", "corrupted", "incomplete", "partial", "neither", "hardly", "zero", "none") || negativeObjectQuantifier(words, "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts") {
 		return false
 	}
 	return containsWord(words, "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts")
@@ -475,7 +475,7 @@ func benignCompletionComplement(words []string) bool {
 
 func benignFailoverComplement(words []string) bool {
 	words = boundedTemporalWords(words)
-	if containsWord(words, "dead", "broken", "unavailable", "unreachable", "nowhere", "none", "null", "invalid", "blackhole") {
+	if negativeOutcomeQuality(words) || containsWord(words, "dead", "broken", "unavailable", "unreachable", "nowhere", "none", "null", "invalid", "blackhole") {
 		return false
 	}
 	if positiveSafetyComplement(words) {
@@ -486,6 +486,34 @@ func benignFailoverComplement(words []string) bool {
 			continue
 		}
 		return containsWord(words[i+1:], "backup", "secondary", "standby", "healthy", "available", "replica")
+	}
+	return false
+}
+
+func negativeOutcomeQuality(words []string) bool {
+	for i, word := range words {
+		if containsWord([]string{word}, "incorrectly", "unsuccessful", "unhealthy", "degraded", "unreliable", "unstable", "corrupted", "invalid") {
+			return true
+		}
+		if !containsWord([]string{word}, "error", "errors", "failure", "failures") {
+			continue
+		}
+		if i > 0 && words[i-1] == "without" {
+			continue
+		}
+		if i > 1 && words[i-1] == "no" && words[i-2] == "with" {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func containsPositiveTemporalAdverb(words []string) bool {
+	for _, word := range words {
+		if containsWord([]string{word}, "successfully", "reliably", "seamlessly", "cleanly", "safely", "continuously") {
+			return true
+		}
 	}
 	return false
 }
