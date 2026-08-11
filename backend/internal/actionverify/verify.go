@@ -640,8 +640,9 @@ func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, sy
 	if len(paths) == 0 || len(paths) > maxMatchingFiles {
 		return functionDeclarationProof{}
 	}
-	packageNames := map[string]bool{}
-	declarations := 0
+	files := make(map[string]*ast.File, len(paths))
+	nonTestPackages := map[string]bool{}
+	testPackages := map[string]bool{}
 	bytesRead := 0
 	for _, filePath := range paths {
 		source, ok := archive.GoFiles[filePath]
@@ -656,7 +657,47 @@ func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, sy
 		if err != nil {
 			return functionDeclarationProof{}
 		}
+		files[filePath] = file
+		if strings.HasSuffix(filePath, "_test.go") {
+			testPackages[file.Name.Name] = true
+		} else {
+			nonTestPackages[file.Name.Name] = true
+		}
+	}
+	if len(nonTestPackages) > 1 {
+		return functionDeclarationProof{}
+	}
+	nonTestPackage := ""
+	for packageName := range nonTestPackages {
+		nonTestPackage = packageName
+	}
+	testOnlyCompanion := ""
+	if includeTests && nonTestPackage == "" && expectedPackage != "" {
+		for packageName := range testPackages {
+			if packageName == expectedPackage {
+				continue
+			}
+			if testOnlyCompanion != "" && testOnlyCompanion != packageName {
+				return functionDeclarationProof{}
+			}
+			testOnlyCompanion = packageName
+		}
+		validCompanion := testOnlyCompanion == "" || testOnlyCompanion == expectedPackage+"_test"
+		if strings.HasSuffix(expectedPackage, "_test") && testOnlyCompanion == strings.TrimSuffix(expectedPackage, "_test") {
+			validCompanion = true
+		}
+		if !validCompanion {
+			return functionDeclarationProof{}
+		}
+	}
+	packageNames := map[string]bool{}
+	declarations := 0
+	for _, filePath := range paths {
+		file := files[filePath]
 		if expectedPackage != "" && file.Name.Name != expectedPackage {
+			if !allowedTestPackageCompanion(filePath, file.Name.Name, expectedPackage, nonTestPackage, testOnlyCompanion, includeTests) {
+				return functionDeclarationProof{}
+			}
 			continue
 		}
 		packageNames[file.Name.Name] = true
@@ -665,7 +706,7 @@ func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, sy
 			if !ok || function.Recv != nil || function.Name.Name != symbol {
 				continue
 			}
-			if isBuildConstrained(filePath, source) && !strings.HasSuffix(filePath, "_test.go") {
+			if isBuildConstrained(filePath, archive.GoFiles[filePath]) && !strings.HasSuffix(filePath, "_test.go") {
 				return functionDeclarationProof{}
 			}
 			declarations++
@@ -678,6 +719,19 @@ func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, sy
 		return functionDeclarationProof{proven: true, packageName: packageName}
 	}
 	return functionDeclarationProof{}
+}
+
+func allowedTestPackageCompanion(filePath, packageName, expectedPackage, nonTestPackage, testOnlyCompanion string, includeTests bool) bool {
+	if !includeTests {
+		return false
+	}
+	if nonTestPackage == "" {
+		return testOnlyCompanion != "" && strings.HasSuffix(filePath, "_test.go") && packageName == testOnlyCompanion
+	}
+	if expectedPackage == nonTestPackage+"_test" {
+		return packageName == nonTestPackage
+	}
+	return expectedPackage == nonTestPackage && strings.HasSuffix(filePath, "_test.go") && packageName == expectedPackage+"_test"
 }
 
 func packageDefinesFunction(archive Archive, targetPath, packageName, symbol string) bool {

@@ -293,6 +293,134 @@ var _ = migration.Other
 	}
 }
 
+func TestVerifyStructuredModifyMixedPackageIsInconclusive(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"controllers/reconcile.go": "package controllers\nfunc reconcile() {}\n",
+		"controllers/helpers.go":   "package controllers\nfunc waitForReady() {}\n",
+		"controllers/other.go":     "package other\nfunc unrelated() {}\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "waitForReady", Path: "controllers/reconcile.go",
+	}}})
+	if result.State != StateInconclusive || !strings.Contains(result.Reason, "same-package") {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyExternalTestPackageCompanion(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"controllers/controllers.go":    "package controllers\nfunc production() {}\n",
+		"controllers/reconcile_test.go": "package controllers_test\nfunc reconcile() { waitForReady() }\n",
+		"controllers/helpers_test.go":   "package controllers_test\nfunc waitForReady() {}\n",
+		"controllers/internal_test.go":  "package controllers\nfunc internalHelper() {}\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "waitForReady", Path: "controllers/reconcile_test.go",
+	}}})
+	if result.State != StateAlreadyPresent {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyTestOnlyInternalPackageCompanion(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"pkg/reconcile_test.go": "package pkg\nfunc reconcile() { waitForReady() }\nfunc waitForReady() {}\n",
+		"pkg/external_test.go":  "package pkg_test\nfunc external() {}\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "waitForReady", Path: "pkg/reconcile_test.go",
+	}}})
+	if result.State != StateAlreadyPresent {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyTestOnlyExternalPackageCompanion(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"pkg/internal_test.go":  "package pkg\nfunc internal() {}\n",
+		"pkg/reconcile_test.go": "package pkg_test\nfunc reconcile() { waitForReady() }\nfunc waitForReady() {}\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "waitForReady", Path: "pkg/reconcile_test.go",
+	}}})
+	if result.State != StateAlreadyPresent {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyTestOnlyThirdPackageIsInconclusive(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"pkg/reconcile_test.go": "package pkg\nfunc reconcile() { waitForReady() }\nfunc waitForReady() {}\n",
+		"pkg/external_test.go":  "package pkg_test\nfunc external() {}\n",
+		"pkg/other_test.go":     "package other\nfunc other() {}\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "waitForReady", Path: "pkg/reconcile_test.go",
+	}}})
+	if result.State != StateInconclusive || !strings.Contains(result.Reason, "same-package") {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyTestOnlyBasePackageEndingTest(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"pkg/reconcile_test.go": "package pkg_test\nfunc reconcile() { waitForReady() }\nfunc waitForReady() {}\n",
+		"pkg/external_test.go":  "package pkg_test_test\nfunc external() {}\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "waitForReady", Path: "pkg/reconcile_test.go",
+	}}})
+	if result.State != StateAlreadyPresent {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyTestOnlyExternalForBaseEndingTest(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"pkg/internal_test.go":  "package pkg_test\nfunc internal() {}\n",
+		"pkg/reconcile_test.go": "package pkg_test_test\nfunc reconcile() { waitForReady() }\nfunc waitForReady() {}\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "waitForReady", Path: "pkg/reconcile_test.go",
+	}}})
+	if result.State != StateAlreadyPresent {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyTestOnlyAmbiguousAdjacentPackages(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"pkg/reconcile_test.go": "package pkg_test\nfunc reconcile() { waitForReady() }\nfunc waitForReady() {}\n",
+		"pkg/base_test.go":      "package pkg\nfunc base() {}\n",
+		"pkg/external_test.go":  "package pkg_test_test\nfunc external() {}\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "waitForReady", Path: "pkg/reconcile_test.go",
+	}}})
+	if result.State != StateInconclusive || !strings.Contains(result.Reason, "same-package") {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyProductionPackageEndingTest(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"controllers/production.go":     "package controllers_test\nfunc production() {}\n",
+		"controllers/reconcile_test.go": "package controllers_test\nfunc reconcile() { waitForReady() }\n",
+		"controllers/helpers_test.go":   "package controllers_test\nfunc waitForReady() {}\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "waitForReady", Path: "controllers/reconcile_test.go",
+	}}})
+	if result.State != StateAlreadyPresent {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyProductionPackageEndingTestRejectsUnexpectedBase(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"controllers/production.go":     "package controllers_test\nfunc production() {}\n",
+		"controllers/unexpected.go":     "package controllers\nfunc unexpected() {}\n",
+		"controllers/reconcile_test.go": "package controllers_test\nfunc reconcile() { waitForReady() }\n",
+		"controllers/helpers_test.go":   "package controllers_test\nfunc waitForReady() {}\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "waitForReady", Path: "controllers/reconcile_test.go",
+	}}})
+	if result.State != StateInconclusive || !strings.Contains(result.Reason, "same-package") {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestVerifyStructuredModifyMissingSamePackageCalleeIsInconclusive(t *testing.T) {
 	result := verify(t, fakeReader{archive: archive(map[string]string{
 		"controllers/reconcile.go": "package controllers\nfunc reconcile() {}\n",
