@@ -107,7 +107,11 @@ func TestApplyPatternLifecycleObservationRecovery(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			pattern := PatternAnalysis{
-				Systemic:     true,
+				Systemic: true, Recurrence: PatternRecurrenceSharedCause,
+				CausalGroups: []PatternCausalGroup{{
+					Builds:    []string{"failure-5", "failure-4", "failure-3", "failure-2", "failure-1"},
+					RootCause: "shared cause", Confidence: "high",
+				}},
 				SharedBuilds: []string{"failure-5", "failure-4", "failure-3", "failure-2", "failure-1"},
 			}
 			detail := observedRecoveryDetail(test.passingRuns, test.newerFailure, test.sparse)

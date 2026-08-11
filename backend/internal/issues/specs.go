@@ -28,7 +28,7 @@ func BuildSpecs(in BuildInput) []IssueSpec {
 
 	if hasTrigger(in.Triggers, project.IssueTriggerPatterns) {
 		for _, pa := range in.Report.RecurringPatterns {
-			if !pa.Systemic || pa.JobID == "" || (len(in.JobDetails) > 0 && !models.PatternIsCurrent(in.JobDetails, pa.JobID)) {
+			if !models.PatternAllowsActions(pa) || !pa.Systemic || pa.JobID == "" || (len(in.JobDetails) > 0 && !models.PatternIsCurrent(in.JobDetails, pa.JobID)) {
 				continue
 			}
 			specs = append(specs, patternSpec(pa, site, in.Labels))

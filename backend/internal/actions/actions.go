@@ -1422,6 +1422,9 @@ func (s *Service) resolveUnlocked(failureID, login, note string) error {
 	if err != nil {
 		return err
 	}
+	if !models.PatternAllowsActions(*pa) {
+		return withReason(ReasonContractGenerationFailed, ErrRemediationInconclusive, "This causal-group result is analysis-only and cannot start an action.")
+	}
 	if !pa.Systemic {
 		return fmt.Errorf("only systemic recurring patterns can be resolved")
 	}
@@ -1453,8 +1456,12 @@ func (s *Service) unresolveUnlocked(failureID string) error {
 	if !resolve.Load(s.dataDir).IsResolved(failureID) {
 		return ErrNotFound
 	}
-	if _, err := s.findPattern(failureID); err != nil {
+	pattern, err := s.findPattern(failureID)
+	if err != nil {
 		return err
+	}
+	if !models.PatternAllowsActions(*pattern) {
+		return withReason(ReasonContractGenerationFailed, ErrRemediationInconclusive, "This causal-group result is analysis-only and cannot start an action.")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

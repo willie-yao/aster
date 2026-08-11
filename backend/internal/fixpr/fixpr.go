@@ -631,7 +631,7 @@ func eligible(patterns []models.PatternAnalysis, minConfidence string) []models.
 	floor := confidenceRank(minConfidence)
 	var out []models.PatternAnalysis
 	for _, p := range patterns {
-		if !p.Systemic || strings.TrimSpace(p.SuggestedFix) == "" {
+		if !models.PatternAllowsActions(p) || !p.Systemic || strings.TrimSpace(p.SuggestedFix) == "" {
 			continue
 		}
 		if confidenceRank(p.Confidence) < floor {

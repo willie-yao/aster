@@ -102,6 +102,46 @@ func (c *Client) CompleteStructured(ctx context.Context, system, user string, fo
 	return structuredFailureAt("no valid structured response", structuredAttemptName(len(attempts)-1), nil)
 }
 
+// completeForcedFunction accepts only one call to the exact named function.
+func (c *Client) completeForcedFunction(ctx context.Context, system, user string, format ResponseFormat, validate StructuredValidator) error {
+	if validate == nil {
+		return fmt.Errorf("structured completion validator is required")
+	}
+	if strings.TrimSpace(format.Name) == "" || len(format.Schema) == 0 {
+		return fmt.Errorf("structured completion schema is required")
+	}
+	parallel := false
+	request := modelRequest{
+		Model: c.model,
+		Messages: []modelMessage{
+			{Role: "system", Content: strPtr(system)},
+			{Role: "user", Content: strPtr(user)},
+		},
+		Tools: []tools.Schema{{
+			Type: "function",
+			Function: tools.FunctionDecl{
+				Name: format.Name, Description: format.Description,
+				Parameters: format.Schema, Strict: true,
+			},
+		}},
+		ToolChoice: &ToolChoice{Name: format.Name}, ParallelToolCalls: &parallel,
+		MaxResponseBytes: defaultStructuredResponseBytes, OmitReasoning: true,
+	}
+	resp, err := c.callModelRequest(ctx, request)
+	if err != nil {
+		return structuredFailureAt("provider request failed", "forced-function", err)
+	}
+	if resp == nil || !resp.HasMessage || len(resp.Message.ToolCalls) != 1 ||
+		resp.Message.ToolCalls[0].Function.Name != format.Name {
+		return structuredFailureAt("exact forced function was not returned", "forced-function", nil)
+	}
+	raw := json.RawMessage(resp.Message.ToolCalls[0].Function.Arguments)
+	if !json.Valid(raw) || validate(raw) != nil {
+		return structuredFailureAt("forced function arguments failed validation", "forced-function", nil)
+	}
+	return nil
+}
+
 func structuredFallbackAllowed(err error) bool {
 	var httpErr *modelHTTPError
 	if !errors.As(err, &httpErr) {

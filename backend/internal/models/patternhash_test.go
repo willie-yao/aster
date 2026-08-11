@@ -21,7 +21,7 @@ func TestPatternHashBindsReviewedContent(t *testing.T) {
 	if got := PatternHash(timestampOnly); got != want {
 		t.Fatalf("generated timestamp changed hash: %q != %q", got, want)
 	}
-	emptySlices := PatternAnalysis{SharedBuilds: []string{}, RelevantFiles: []string{}}
+	emptySlices := PatternAnalysis{SharedBuilds: []string{}, RelevantFiles: []string{}, CausalGroups: []PatternCausalGroup{}, UnclassifiedBuilds: []string{}}
 	if PatternHash(emptySlices) != PatternHash(PatternAnalysis{}) {
 		t.Fatal("empty and omitted slices produced different hashes")
 	}
@@ -32,6 +32,11 @@ func TestPatternHashBindsReviewedContent(t *testing.T) {
 		"summary":        func(pattern *PatternAnalysis) { pattern.Summary = "replacement summary" },
 		"relevant files": func(pattern *PatternAnalysis) { pattern.RelevantFiles = []string{"pkg/other.go"} },
 		"shared builds":  func(pattern *PatternAnalysis) { pattern.SharedBuilds = []string{"2", "3"} },
+		"recurrence":     func(pattern *PatternAnalysis) { pattern.Recurrence = PatternRecurrenceSharedCause },
+		"causal groups": func(pattern *PatternAnalysis) {
+			pattern.CausalGroups = []PatternCausalGroup{{Builds: []string{"1", "2"}, RootCause: "terminal failures retry", Confidence: "high"}}
+		},
+		"unclassified": func(pattern *PatternAnalysis) { pattern.UnclassifiedBuilds = []string{"3"} },
 		"source verification": func(pattern *PatternAnalysis) {
 			pattern.RemediationVerification = &PatternRemediationVerification{State: PatternRemediationAlreadyPresent, Repository: "example/repo", Revision: lifecycleRevision}
 		},

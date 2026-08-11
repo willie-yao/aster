@@ -279,7 +279,7 @@ func applyAnalysis(detail *models.JobDetail, pa *models.PatternAnalysis) bool {
 }
 
 func applyRemediationVerification(ctx context.Context, analyzer Analyzer, pattern *models.PatternAnalysis, detail models.JobDetail) {
-	if pattern == nil || !pattern.Systemic {
+	if pattern == nil || !models.PatternAllowsActions(*pattern) || !pattern.Systemic {
 		return
 	}
 	verifier, ok := analyzer.(remediationVerifier)

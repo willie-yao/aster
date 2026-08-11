@@ -50,6 +50,9 @@ func (s *Service) PreviewChatFix(
 	if err != nil {
 		return actions.PreviewResult{}, err
 	}
+	if !models.PatternAllowsActions(candidate.Pattern) {
+		return actions.PreviewResult{}, fmt.Errorf("%w: causal-group results are analysis-only", analysischat.ErrInvalidRequest)
+	}
 	if candidate.SourceRequestID != sourceRequestID || candidate.SourceResult == nil || candidate.SourceResult.Target == nil ||
 		sourceinvestigation.ValidateVerifiedResult(*candidate.SourceResult) != nil ||
 		(candidate.SourceResult.State != sourceinvestigation.StateActionableCodeChange && candidate.SourceResult.State != sourceinvestigation.StateActionableConfigurationChange) ||

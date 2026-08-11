@@ -135,6 +135,9 @@ func runsForTestIdentity(runs []models.BuildResult, identity string) []models.Bu
 func UntrackedPatterns(state *State, patterns []models.PatternAnalysis, details []models.JobDetail) []models.PatternAnalysis {
 	out := make([]models.PatternAnalysis, 0, len(patterns))
 	for _, pattern := range patterns {
+		if !models.PatternAllowsActions(pattern) {
+			continue
+		}
 		if len(details) > 0 && !models.PatternIsCurrent(details, pattern.JobID) {
 			continue
 		}

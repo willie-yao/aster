@@ -62,16 +62,8 @@ type Service struct {
 	sourceRepoName  string
 	githubReadToken string
 
-	// patternRepo is the source-tree reader that grounds the recurring-pattern
-	// agent's repotree tools. nil disables tool grounding, leaving the tool-free
-	// correlation call plus the path-verification guard.
+	// patternRepo supports source verification for legacy remediation contracts.
 	patternRepo tools.RepoReader
-
-	// patternTreeMu guards the per-run source-tree memo used by pattern loops and path verification.
-	patternTreeMu   sync.Mutex
-	patternTree     []string
-	patternTreeErr  error
-	patternTreeDone bool
 
 	// linkVerifyCache memoizes GitHub file-existence checks across all
 	// analyses in a run, keyed by "owner/repo/path" to existence.
@@ -144,10 +136,8 @@ func (s *Service) SetSourceRepo(owner, name string) {
 // SetGitHubReadToken installs the optional read-only source credential.
 func (s *Service) SetGitHubReadToken(token string) { s.githubReadToken = token }
 
-// SetPatternRepoReader installs the source-tree reader that grounds the
-// recurring-pattern agent. When set, AnalyzePattern runs a repotree tool loop
-// so the model verifies file and config paths against the real repo before
-// naming them. Safe to call once at fetcher startup.
+// SetPatternRepoReader installs the source-tree reader used by legacy
+// remediation verification. Safe to call once at fetcher startup.
 func (s *Service) SetPatternRepoReader(reader tools.RepoReader) {
 	s.patternRepo = reader
 }
