@@ -2018,6 +2018,10 @@ grep -Fq "variables.stager.securityContext.appArmorProfile.type == 'RuntimeDefau
 grep -Fq "variables.container.securityContext.seccompProfile.type == 'RuntimeDefault'" "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq '!has(variables.pod.imagePullSecrets)' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq '!has(variables.container.volumeDevices)' "$tmp/agent-sandbox-analyzer-render.yaml"
+if grep -Eq 'object[.]spec[.]podTemplate[.]metadata[.](finalizers|ownerReferences)' "$tmp/agent-sandbox-analyzer-render.yaml"; then
+  echo 'analyzer admission referenced PodTemplate metadata fields outside the Sandbox CRD schema' >&2
+  exit 1
+fi
 if grep -Eq 'resources: \["(secrets|services|persistentvolumeclaims|pods/exec|pods/attach|nodes)"\]' "$tmp/agent-sandbox-analyzer-render.yaml"; then
   echo 'analyzer RBAC rendered a forbidden resource' >&2
   exit 1
