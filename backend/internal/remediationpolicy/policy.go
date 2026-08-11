@@ -20,7 +20,7 @@ var (
 	conversionBypassRe            = regexp.MustCompile(`(?is)(?:\b(?:disable|remove|bypass|eliminate|clear|unset)\b\s+(?:the\s+)?(?:crd\s+)?conversion\b(?:\s*(?:[.,;:]|$)|\s+(?:entirely|calls?|requests?)\b)|\b(?:crd\s+)?conversion\b[^.!?\n]{0,80}\b(?:disabled|removed|bypassed|eliminated|cleared|unset)\b|\bturn\s+off\b\s+(?:the\s+)?(?:crd\s+)?conversion\b|\bstop\b\s+(?:the\s+)?(?:crd\s+)?conversion\b(?:\s*(?:[.,;:]|$)|\s+(?:calls?|requests?)\b))`)
 	negatedConversionActionRe     = regexp.MustCompile(`(?is)\b(?:do|must|should)\s+not\s+(?:disable|remove|bypass|eliminate|clear|unset|delete|drop|turn\s+off|stop|prevent|skip)\s+(?:the\s+)?(?:kubernetes\s+)?(?:crd\s+)?conversion(?:\s+(?:webhook|strategy))?\b|\bnever\s+(?:disable|remove|bypass|eliminate|clear|unset|delete|drop|stop|prevent|skip)\s+(?:the\s+)?(?:kubernetes\s+)?(?:crd\s+)?conversion(?:\s+(?:webhook|strategy))?\b`)
 	negatedConversionStateRe      = regexp.MustCompile(`(?is)\b(?:crd\s+)?conversion(?:\s+webhook)?\s+(?:is|remains|stays|will\s+be|must\s+be|should\s+be)\s+not\s+(?:disabled|removed|bypassed|eliminated|cleared|unset|stopped)\b`)
-	negatedConversionPreserveRe   = regexp.MustCompile(`(?is)(?:\bavoid(?:ing)?\s+|\bwithout\s+)(?:delet(?:e|ing)|remov(?:e|ing)|disabl(?:e|ing)|drop(?:ping)?|clear(?:ing)?|unset(?:ting)?|bypass(?:ing)?|stop(?:ping)?)\s+(?:the\s+)?(?:kubernetes\s+)?(?:crd\s+)?conversion(?:\s+(?:webhook|strategy))?\b`)
+	negatedConversionPreserveRe   = regexp.MustCompile(`(?is)(?:\bavoid(?:ing)?\s+|\bwithout\s+|\bnever\s+|\bdo\s+not\s+)(?:[a-z-]+\s+){0,3}(?:delet(?:e|ing)|remov(?:e|ing)|disabl(?:e|ing)|drop(?:ping)?|clear(?:ing)?|unset(?:ting)?|bypass(?:ing)?|stop(?:ping)?)\s+(?:the\s+)?(?:kubernetes\s+)?(?:crd\s+)?conversion(?:\s+(?:webhook|strategy))?\b`)
 	preventCallFailureRe          = regexp.MustCompile(`(?is)\bprevent(?:s|ed|ing)?\b[^.!?\n,;]{0,100}\b(?:api\s*server\s+)?conversion(?:\s+webhook)?\s+(?:calls?|invocations?)\b[^.!?\n,;]{0,40}\bfrom\s+fail(?:ing|ure)?\b`)
 	callFailureAvoidanceRe        = regexp.MustCompile(`(?is)\b(?:api\s*server\s+)?conversion(?:\s+webhook)?\s+(?:calls?|invocations?|requests?)\b[^.!?\n,;]{0,40}\b(?:will\s+not|cannot|can\s+not|do\s+not|does\s+not|never)\s+fail\b`)
 	conversionReviewFailureRe     = regexp.MustCompile(`(?is)\bconversion\s*review(?:\s+(?:objects?|requests?))?\b[^.!?\n,;]{0,50}\b(?:will\s+not|cannot|can\s+not|do\s+not|does\s+not|never)\s+fail\s+to\s+(?:reach|send|post|deliver|forward|submit|receive)\b`)
@@ -136,7 +136,10 @@ func hardConversionReviewLoss(value string) bool {
 
 func hasUnnegatedHardDeliveryLoss(value string) bool {
 	words := identifierWords(value)
-	if containsAny(value, "no longer", "not a single") {
+	if strings.Contains(value, "not a single") {
+		return true
+	}
+	if strings.Contains(value, "no longer") && !containsAny(value, "no longer blocked", "no longer disabled", "no longer prevented") {
 		return true
 	}
 	for i, word := range words {
@@ -144,14 +147,25 @@ func hasUnnegatedHardDeliveryLoss(value string) bool {
 		if !loss {
 			continue
 		}
-		start := i - 3
-		if start < 0 {
-			start = 0
-		}
-		if containsWord(words[start:i], "prevent", "prevents", "prevented", "preventing", "avoid", "avoids", "avoided", "avoiding", "without", "not", "never") {
+		if deliveryLossPreventedBefore(words, i) {
 			continue
 		}
 		return true
+	}
+	return false
+}
+
+func deliveryLossPreventedBefore(words []string, loss int) bool {
+	for i := loss - 1; i >= 0; i-- {
+		if containsWord([]string{words[i]}, "and", "but", "then", "while", "after", "before") {
+			return false
+		}
+		if containsWord([]string{words[i]},
+			"prevent", "prevents", "prevented", "preventing", "avoid", "avoids", "avoided", "avoiding",
+			"ensure", "ensures", "ensured", "ensuring", "without", "not", "never",
+		) {
+			return true
+		}
 	}
 	return false
 }
@@ -172,11 +186,7 @@ func conversionReviewLossPrevented(value string) bool {
 		if !containsAny(word, "stop", "ceas", "eliminat", "abolish", "suppress", "block", "bypass", "remov", "disabl") {
 			continue
 		}
-		start := i - 3
-		if start < 0 {
-			start = 0
-		}
-		if containsWord(words[start:i], "prevent", "prevents", "prevented", "preventing", "avoid", "avoids", "avoided", "avoiding", "without", "not", "never") {
+		if deliveryLossPreventedBefore(words, i) {
 			return true
 		}
 	}
@@ -313,6 +323,11 @@ func safeConversionStatePhrase(words []string) bool {
 	safe := false
 	for i, word := range words {
 		if containsWord([]string{word}, "before", "after", "by", "so", "until", "while", "when", "during", "throughout") {
+			if containsWord([]string{word}, "until", "while", "during", "throughout") {
+				if transition := conversionStateTransition(words[i+1:]); transition >= 0 {
+					return safe && safeConversionStatePhrase(words[i+1+transition:])
+				}
+			}
 			break
 		}
 		if word == "and" {
@@ -336,6 +351,15 @@ func safeConversionStatePhrase(words []string) bool {
 	return safe
 }
 
+func conversionStateTransition(words []string) int {
+	for i, word := range words {
+		if containsWord([]string{word}, "becomes", "gets", "get", "turns", "remains", "stays", "continues", "will") {
+			return i
+		}
+	}
+	return -1
+}
+
 func unsafeConversionStateWords(words []string) bool {
 	for i, word := range words {
 		if !containsWord([]string{word}, "unavailable", "unreachable", "offline", "purged", "decommissioned", "erased", "disabled", "removed", "bypassed", "none") {
@@ -351,10 +375,15 @@ func unsafeConversionStateWords(words []string) bool {
 
 func negatedDirectConversionOperation(prefix string) bool {
 	words := identifierWords(prefix)
-	if len(words) == 0 {
-		return false
+	for i, checked := len(words)-1, 0; i >= 0 && checked < 5; i, checked = i-1, checked+1 {
+		if containsWord([]string{words[i]}, "and", "but", "then", "while", "after", "before") {
+			return false
+		}
+		if containsWord([]string{words[i]}, "avoid", "avoiding", "without", "not", "never") {
+			return true
+		}
 	}
-	return containsWord([]string{words[len(words)-1]}, "avoid", "avoiding", "without", "not", "never")
+	return false
 }
 
 func ignoredDirectConversionWord(word string) bool {
@@ -758,12 +787,18 @@ func conversionPreservationToggle(value string) bool {
 	remaining := make([]string, 0, len(words)-(end-start))
 	remaining = append(remaining, words[:start]...)
 	remaining = append(remaining, words[end:]...)
+	preserving := false
 	for _, word := range remaining {
 		if preservingOperationWord(word) {
-			return true
+			preserving = true
+			continue
 		}
+		if safeAvailabilityWord(word) || containsWord([]string{word}, "and", "for", "from", "on", "to") {
+			continue
+		}
+		return false
 	}
-	return false
+	return preserving
 }
 
 func conversionObjectSetting(value string) (bool, bool) {

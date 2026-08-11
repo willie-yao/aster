@@ -60,6 +60,8 @@ func TestReasonAdmissionConversionClaims(t *testing.T) {
 		"Do not ensure the conversion webhook remains available.",
 		"The conversion webhook remains available until it becomes unavailable.",
 		"The conversion webhook remains available during migration and becomes unavailable afterward.",
+		"The conversion webhook remains available until it becomes broken.",
+		"The conversion webhook remains available during migration and gets torn down afterward.",
 	} {
 		if got := Reason(text, actionable); got != UnsafeConversionReason {
 			t.Errorf("unsafe recommendation accepted: %q -> %q", text, got)
@@ -105,6 +107,11 @@ func TestReasonPreservesSafeWebhookChanges(t *testing.T) {
 		"The conversion webhook can continue serving.",
 		"Prevent blocking ConversionReview delivery.",
 		"Avoid blocking ConversionReview delivery.",
+		"Prevent the API server from blocking ConversionReview delivery.",
+		"Take steps to prevent any component from blocking ConversionReview delivery.",
+		"Ensure ConversionReview delivery is no longer blocked.",
+		"Do not ever delete the conversion webhook.",
+		"Do not accidentally delete the conversion webhook.",
 	} {
 		if got := Reason(text, actionable); got != "" {
 			t.Errorf("safe recommendation rejected: %q -> %q", text, got)
@@ -158,6 +165,9 @@ func TestReasonRejectsDestructiveStructuredTargets(t *testing.T) {
 		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "PRESERVE_CONVERSION_WEBHOOK", Value: "false"},
 		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "KEEP_CONVERSION_WEBHOOK_AVAILABLE", Value: "false"},
 		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "ENSURE_CONVERSION_WEBHOOK_AVAILABLE", Value: "false"},
+		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "PRESERVE_AND_DELETE_CONVERSION_WEBHOOK", Value: "true"},
+		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "KEEP_CONVERSION_WEBHOOK_AVAILABLE_AND_DISABLE", Value: "true"},
+		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "ENSURE_CONVERSION_WEBHOOK_AVAILABLE_AND_DELETE", Value: "true"},
 	} {
 		if got := Reason("neutral wording", []models.RemediationTarget{target}); got != UnsafeConversionReason {
 			t.Errorf("unsafe target accepted: %+v -> %q", target, got)
