@@ -175,14 +175,20 @@ func noLongerDeliveryRestoration(words []string) bool {
 
 func deliveryLossPreventedBefore(words []string, loss int) bool {
 	for i := loss - 1; i >= 0; i-- {
-		if containsWord([]string{words[i]}, "and", "but", "then", "while", "after", "before", "by") {
+		word := words[i]
+		if containsWord([]string{word}, "and", "but", "then", "while", "after", "before", "by", "through", "with") {
 			return false
 		}
-		if containsWord([]string{words[i]},
-			"prevent", "prevents", "prevented", "preventing", "avoid", "avoids", "avoided", "avoiding",
-			"ensure", "ensures", "ensured", "ensuring", "without", "not", "never",
-		) {
-			return true
+		if containsWord([]string{word}, "not", "never", "without") {
+			return loss-i <= 3
+		}
+		if containsWord([]string{word}, "prevent", "prevents", "prevented", "preventing", "avoid", "avoids", "avoided", "avoiding") {
+			between := words[i+1 : loss]
+			return len(between) == 0 || containsWord(between, "from")
+		}
+		if containsWord([]string{word}, "ensure", "ensures", "ensured", "ensuring") {
+			between := words[i+1 : loss]
+			return containsWord(between, "from", "not", "never", "no", "longer")
 		}
 	}
 	return false
@@ -378,14 +384,18 @@ func conversionStateTransition(words []string) int {
 		if word == "then" && i+1 < len(words) {
 			return i + 1
 		}
-		if word == "it" && i+1 < len(words) {
+		if word == "it" && i+1 < len(words) && conversionStatePredicate(words[i+1]) {
 			return i + 1
 		}
-		if containsWord([]string{word}, "becomes", "gets", "get", "turns", "remains", "stays", "continues", "will") || strings.HasPrefix(word, "fail") || strings.HasPrefix(word, "crash") {
+		if conversionStatePredicate(word) && (i == 0 || containsWord([]string{words[i-1]}, "and", "then")) {
 			return i
 		}
 	}
 	return -1
+}
+
+func conversionStatePredicate(word string) bool {
+	return containsWord([]string{word}, "is", "are", "becomes", "gets", "get", "turns", "remains", "stays", "continues", "will", "stops", "stopped") || strings.HasPrefix(word, "fail") || strings.HasPrefix(word, "crash") || strings.HasPrefix(word, "break")
 }
 
 func unsafeConversionStateWords(words []string) bool {

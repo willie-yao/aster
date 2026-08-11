@@ -64,6 +64,9 @@ func TestReasonAdmissionConversionClaims(t *testing.T) {
 		"The conversion webhook remains available during migration and gets torn down afterward.",
 		"Prevent failures by stopping ConversionReview delivery.",
 		"Avoid failures by disabling ConversionReview delivery.",
+		"To prevent failures, stop ConversionReview delivery.",
+		"Prevent failures through stopping ConversionReview delivery.",
+		"Prevent failures with stopped ConversionReview delivery.",
 		"The conversion webhook remains available until it fails.",
 		"The conversion webhook remains available until it crashes.",
 		"The conversion webhook remains available and then fails.",
@@ -121,6 +124,9 @@ func TestReasonPreservesSafeWebhookChanges(t *testing.T) {
 		"Do not accidentally delete the conversion webhook.",
 		"Never fail to preserve the conversion webhook.",
 		"Do not stop preserving the conversion webhook.",
+		"The conversion webhook remains available until it completes migration.",
+		"The conversion webhook remains available until it serves all requests.",
+		"Verify the conversion webhook remains available until it completes migration.",
 	} {
 		if got := Reason(text, actionable); got != "" {
 			t.Errorf("safe recommendation rejected: %q -> %q", text, got)
