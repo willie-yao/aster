@@ -27,12 +27,11 @@ var workspaceAnalysisSkill string
 // WorkspaceSkillHash returns the file-backed analyzer prompt fingerprint.
 func WorkspaceSkillHash() string { return hashString(workspaceAnalysisSkill) }
 
-// WorkspaceSourceCitation is a model-authored source reference.
-type WorkspaceSourceCitation struct {
+// WorkspaceCitationReference is a model-authored path and exact line range.
+type WorkspaceCitationReference struct {
 	Path      string `json:"path"`
 	LineStart int    `json:"line_start"`
 	LineEnd   int    `json:"line_end"`
-	Quote     string `json:"quote"`
 }
 
 // WorkspaceAnalysis is one validated file-backed OpenCode result.
@@ -71,20 +70,60 @@ type WorkspaceExecutionResult struct {
 }
 
 type workspaceAnalysisEnvelope struct {
-	Version           int                       `json:"version"`
-	ContractVersion   string                    `json:"contract_version"`
-	Summary           string                    `json:"summary"`
-	IsTransient       *bool                     `json:"is_transient"`
-	RootCause         string                    `json:"root_cause"`
-	Severity          string                    `json:"severity"`
-	SuggestedFix      string                    `json:"suggested_fix"`
-	RelevantFiles     []string                  `json:"relevant_files"`
-	EvidenceCitations []models.EvidenceCitation `json:"evidence_citations"`
-	SourceCitations   []WorkspaceSourceCitation `json:"source_citations"`
-	UnresolvedDetails []string                  `json:"unresolved_details"`
+	Version           int                          `json:"version"`
+	ContractVersion   string                       `json:"contract_version"`
+	Summary           string                       `json:"summary"`
+	IsTransient       *bool                        `json:"is_transient"`
+	RootCause         string                       `json:"root_cause"`
+	Severity          string                       `json:"severity"`
+	SuggestedFix      string                       `json:"suggested_fix"`
+	RelevantFiles     []string                     `json:"relevant_files"`
+	EvidenceCitations []WorkspaceCitationReference `json:"evidence_citations"`
+	SourceCitations   []WorkspaceCitationReference `json:"source_citations"`
+	UnresolvedDetails []string                     `json:"unresolved_details"`
 }
 
-// ParseWorkspaceAnalysis validates one model-authored analysis against mounted files.
+// WorkspaceResultSchema returns the exact schema passed to OpenCode.
+func WorkspaceResultSchema() map[string]any {
+	citation := map[string]any{
+		"type": "object", "additionalProperties": false,
+		"properties": map[string]any{
+			"path":       map[string]any{"type": "string"},
+			"line_start": map[string]any{"type": "integer", "minimum": 1},
+			"line_end":   map[string]any{"type": "integer", "minimum": 1},
+		},
+		"required": []string{"path", "line_start", "line_end"},
+	}
+	return map[string]any{
+		"$schema": "https://json-schema.org/draft/2020-12/schema",
+		"type":    "object", "additionalProperties": false,
+		"properties": map[string]any{
+			"version":            map[string]any{"type": "integer", "const": WorkspaceResultVersion},
+			"contract_version":   map[string]any{"type": "string", "const": WorkspaceContractVersion},
+			"summary":            map[string]any{"type": "string"},
+			"is_transient":       map[string]any{"type": "boolean"},
+			"root_cause":         map[string]any{"type": "string"},
+			"severity":           map[string]any{"type": "string", "enum": []string{"Critical", "High", "Medium", "Low", "Transient-Ignore"}},
+			"suggested_fix":      map[string]any{"type": "string"},
+			"relevant_files":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": maxRelevantFiles},
+			"evidence_citations": map[string]any{"type": "array", "items": citation, "minItems": 1, "maxItems": maxEvidenceCitations},
+			"source_citations":   map[string]any{"type": "array", "items": citation, "maxItems": maxSourceCitations},
+			"unresolved_details": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": maxUnresolvedDetails},
+		},
+		"required": []string{"version", "contract_version", "summary", "is_transient", "root_cause", "severity", "suggested_fix", "relevant_files", "evidence_citations", "source_citations", "unresolved_details"},
+	}
+}
+
+// WorkspaceResultSchemaHash returns the schema fingerprint sealed into each request.
+func WorkspaceResultSchemaHash() string {
+	data, err := json.Marshal(WorkspaceResultSchema())
+	if err != nil {
+		panic(err)
+	}
+	return hashString(string(data))
+}
+
+// ParseWorkspaceAnalysis validates one schema-constrained result against mounted files.
 func ParseWorkspaceAnalysis(raw string, manifest WorkspaceManifest, artifactRoot, sourceRoot string) (WorkspaceAnalysis, error) {
 	if err := ValidateWorkspaceManifest(manifest); err != nil {
 		return WorkspaceAnalysis{}, err
@@ -112,36 +151,38 @@ func ParseWorkspaceAnalysis(raw string, manifest WorkspaceManifest, artifactRoot
 		Summary: strings.TrimSpace(parsed.Summary), IsTransient: *parsed.IsTransient,
 		RootCause: strings.TrimSpace(parsed.RootCause), Severity: strings.TrimSpace(parsed.Severity),
 		SuggestedFix: strings.TrimSpace(parsed.SuggestedFix), RelevantFiles: slices.Clone(parsed.RelevantFiles),
-		EvidenceCitations: slices.Clone(parsed.EvidenceCitations), UnresolvedDetails: slices.Clone(parsed.UnresolvedDetails),
+		UnresolvedDetails: slices.Clone(parsed.UnresolvedDetails),
 	}
 	for index := range analysis.UnresolvedDetails {
 		analysis.UnresolvedDetails[index] = strings.TrimSpace(analysis.UnresolvedDetails[index])
 	}
-	for _, citation := range parsed.SourceCitations {
-		analysis.SourceCitations = append(analysis.SourceCitations, sourceinvestigation.Citation{
-			Path: strings.TrimSpace(citation.Path), LineStart: citation.LineStart, LineEnd: citation.LineEnd, Quote: citation.Quote,
-		})
+	for _, citation := range parsed.EvidenceCitations {
+		analysis.EvidenceCitations = append(analysis.EvidenceCitations, models.EvidenceCitation{Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd})
 	}
-	return ValidateWorkspaceAnalysis(analysis, manifest, artifactRoot, sourceRoot)
+	for _, citation := range parsed.SourceCitations {
+		analysis.SourceCitations = append(analysis.SourceCitations, sourceinvestigation.Citation{Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd})
+	}
+	return canonicalizeWorkspaceAnalysis(analysis, manifest, artifactRoot, sourceRoot, false)
 }
 
-// ValidateWorkspaceAnalysis rechecks model output against the sealed workspace.
+// ValidateWorkspaceAnalysis rechecks canonical output against the sealed workspace.
 func ValidateWorkspaceAnalysis(analysis WorkspaceAnalysis, manifest WorkspaceManifest, artifactRoot, sourceRoot string) (WorkspaceAnalysis, error) {
+	return canonicalizeWorkspaceAnalysis(analysis, manifest, artifactRoot, sourceRoot, true)
+}
+
+func canonicalizeWorkspaceAnalysis(analysis WorkspaceAnalysis, manifest WorkspaceManifest, artifactRoot, sourceRoot string, requireCanonical bool) (WorkspaceAnalysis, error) {
 	if err := ValidateWorkspaceManifest(manifest); err != nil {
 		return WorkspaceAnalysis{}, err
 	}
-	text := Analysis{
-		Summary: analysis.Summary, IsTransient: analysis.IsTransient, RootCause: analysis.RootCause,
-		Severity: analysis.Severity, SuggestedFix: analysis.SuggestedFix, UnresolvedDetails: slices.Clone(analysis.UnresolvedDetails),
-	}
+	text := Analysis{Summary: analysis.Summary, IsTransient: analysis.IsTransient, RootCause: analysis.RootCause, Severity: analysis.Severity, SuggestedFix: analysis.SuggestedFix, UnresolvedDetails: slices.Clone(analysis.UnresolvedDetails)}
 	if err := validateAnalysisText(text); err != nil {
 		return WorkspaceAnalysis{}, err
 	}
-	artifactCitations, err := verifyWorkspaceArtifactCitations(analysis.EvidenceCitations, manifest, artifactRoot)
+	artifactCitations, err := verifyWorkspaceArtifactCitations(analysis.EvidenceCitations, manifest, artifactRoot, requireCanonical)
 	if err != nil {
 		return WorkspaceAnalysis{}, err
 	}
-	sourceCitations, err := verifyWorkspaceSourceCitations(analysis.SourceCitations, sourceRoot)
+	sourceCitations, err := verifyWorkspaceSourceCitations(analysis.SourceCitations, sourceRoot, requireCanonical)
 	if err != nil {
 		return WorkspaceAnalysis{}, err
 	}
@@ -157,6 +198,16 @@ func ValidateWorkspaceAnalysis(analysis WorkspaceAnalysis, manifest WorkspaceMan
 	analysis.SourceCitations = sourceCitations
 	analysis.RelevantFiles = relevantFiles
 	return analysis, nil
+}
+
+// MarshalWorkspaceAnalysis encodes one canonical result file.
+func MarshalWorkspaceAnalysis(analysis WorkspaceAnalysis) ([]byte, error) {
+	envelope := struct {
+		Version         int    `json:"version"`
+		ContractVersion string `json:"contract_version"`
+		WorkspaceAnalysis
+	}{Version: WorkspaceResultVersion, ContractVersion: WorkspaceContractVersion, WorkspaceAnalysis: analysis}
+	return json.Marshal(envelope)
 }
 
 // DecodeWorkspaceExecutionResult decodes one strict executor log result.
@@ -275,7 +326,7 @@ func (analysis WorkspaceAnalysis) FailureAnalysisResult(generatedAt, model strin
 	}
 }
 
-func verifyWorkspaceArtifactCitations(citations []models.EvidenceCitation, manifest WorkspaceManifest, root string) ([]models.EvidenceCitation, error) {
+func verifyWorkspaceArtifactCitations(citations []models.EvidenceCitation, manifest WorkspaceManifest, root string, requireCanonical bool) ([]models.EvidenceCitation, error) {
 	if len(citations) < 1 || len(citations) > maxEvidenceCitations {
 		return nil, fmt.Errorf("%w: artifact citations must contain 1-%d entries", ErrInvalidResult, maxEvidenceCitations)
 	}
@@ -284,52 +335,91 @@ func verifyWorkspaceArtifactCitations(citations []models.EvidenceCitation, manif
 		known[file.Path] = file
 	}
 	out := slices.Clone(citations)
-	seen := map[string]bool{}
+	seen := map[string][][2]int{}
 	for index := range out {
 		citation := &out[index]
 		file, ok := known[citation.Path]
-		if !ok {
+		if !ok || strings.TrimSpace(citation.Path) != citation.Path {
 			return nil, fmt.Errorf("%w: artifact citation %d references an unknown path", ErrInvalidResult, index)
 		}
 		content, err := readWorkspaceText(root, citation.Path, file.Size)
 		if err != nil {
 			return nil, fmt.Errorf("%w: artifact citation %d: %v", ErrInvalidResult, index, err)
 		}
-		lineStart, lineEnd, ok := findEvidenceQuoteRange(strings.Split(content, "\n"), strings.Split(strings.ReplaceAll(citation.Quote, "\r\n", "\n"), "\n"), citation.LineStart, citation.LineEnd)
-		if !ok || strings.TrimSpace(citation.Quote) == "" || len(citation.Quote) > maxCitationQuoteBytes {
-			return nil, fmt.Errorf("%w: artifact citation %d quote does not match", ErrInvalidResult, index)
+		quote, err := canonicalWorkspaceQuote(content, citation.LineStart, citation.LineEnd)
+		if err != nil {
+			return nil, fmt.Errorf("%w: artifact citation %d: %v", ErrInvalidResult, index, err)
 		}
-		citation.LineStart, citation.LineEnd = lineStart, lineEnd
-		key, _ := json.Marshal(citation)
-		if seen[string(key)] {
-			return nil, fmt.Errorf("%w: duplicate artifact citation %d", ErrInvalidResult, index)
+		if requireCanonical && citation.Quote != quote {
+			return nil, fmt.Errorf("%w: artifact citation %d quote is not canonical", ErrInvalidResult, index)
 		}
-		seen[string(key)] = true
+		if overlapsWorkspaceCitation(seen[citation.Path], citation.LineStart, citation.LineEnd) {
+			return nil, fmt.Errorf("%w: artifact citation %d duplicates or overlaps another citation", ErrInvalidResult, index)
+		}
+		seen[citation.Path] = append(seen[citation.Path], [2]int{citation.LineStart, citation.LineEnd})
+		citation.Quote = quote
 	}
 	return out, nil
 }
 
-func verifyWorkspaceSourceCitations(citations []sourceinvestigation.Citation, root string) ([]sourceinvestigation.Citation, error) {
-	if err := sourceinvestigation.ValidateCitations(citations, 0, maxSourceCitations); err != nil {
-		return nil, err
+func verifyWorkspaceSourceCitations(citations []sourceinvestigation.Citation, root string, requireCanonical bool) ([]sourceinvestigation.Citation, error) {
+	if len(citations) > maxSourceCitations {
+		return nil, fmt.Errorf("%w: source citations exceed %d", ErrInvalidResult, maxSourceCitations)
 	}
 	out := slices.Clone(citations)
+	seen := map[string][][2]int{}
 	for index := range out {
 		citation := &out[index]
-		if !safeWorkspaceSourcePath(citation.Path) {
+		if !safeWorkspaceSourcePath(citation.Path) || strings.TrimSpace(citation.Path) != citation.Path {
 			return nil, fmt.Errorf("%w: source citation %d path is unsafe", ErrInvalidResult, index)
 		}
 		content, err := readWorkspaceText(root, citation.Path, maxWorkspaceFileBytes)
 		if err != nil {
 			return nil, fmt.Errorf("%w: source citation %d: %v", ErrInvalidResult, index, err)
 		}
-		lineStart, lineEnd, ok := findEvidenceQuoteRange(strings.Split(content, "\n"), strings.Split(strings.ReplaceAll(citation.Quote, "\r\n", "\n"), "\n"), citation.LineStart, citation.LineEnd)
-		if !ok {
-			return nil, fmt.Errorf("%w: source citation %d quote does not match", ErrInvalidResult, index)
+		identity, err := resolvedWorkspaceIdentity(root, citation.Path)
+		if err != nil {
+			return nil, fmt.Errorf("%w: source citation %d: %v", ErrInvalidResult, index, err)
 		}
-		citation.LineStart, citation.LineEnd, citation.Verified = lineStart, lineEnd, true
+		quote, err := canonicalWorkspaceQuote(content, citation.LineStart, citation.LineEnd)
+		if err != nil {
+			return nil, fmt.Errorf("%w: source citation %d: %v", ErrInvalidResult, index, err)
+		}
+		if requireCanonical && (!citation.Verified || citation.Quote != quote) {
+			return nil, fmt.Errorf("%w: source citation %d is not canonical", ErrInvalidResult, index)
+		}
+		if overlapsWorkspaceCitation(seen[identity], citation.LineStart, citation.LineEnd) {
+			return nil, fmt.Errorf("%w: source citation %d duplicates or overlaps another citation", ErrInvalidResult, index)
+		}
+		seen[identity] = append(seen[identity], [2]int{citation.LineStart, citation.LineEnd})
+		citation.Quote = quote
+		citation.Verified = true
 	}
 	return out, nil
+}
+
+func canonicalWorkspaceQuote(content string, lineStart, lineEnd int) (string, error) {
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if lineStart < 1 || lineEnd < lineStart || lineEnd-lineStart+1 > maxCitationLines || lineEnd > len(lines) {
+		return "", fmt.Errorf("citation has invalid line range")
+	}
+	quote := strings.Join(lines[lineStart-1:lineEnd], "\n")
+	if strings.TrimSpace(quote) == "" || len(quote) > maxCitationQuoteBytes {
+		return "", fmt.Errorf("citation range is empty or oversized")
+	}
+	return quote, nil
+}
+
+func overlapsWorkspaceCitation(ranges [][2]int, lineStart, lineEnd int) bool {
+	for _, current := range ranges {
+		if lineStart <= current[1] && current[0] <= lineEnd {
+			return true
+		}
+	}
+	return false
 }
 
 func workspaceRelevantFiles(files []string, citations []sourceinvestigation.Citation) ([]string, error) {
@@ -358,6 +448,26 @@ func safeWorkspaceSourcePath(value string) bool {
 	clean, err := artifacts.SafePath(value)
 	parts := strings.Split(clean, "/")
 	return err == nil && clean == value && len(parts) > 0 && !strings.EqualFold(parts[0], ".git")
+}
+
+func resolvedWorkspaceIdentity(root, relative string) (string, error) {
+	clean, err := artifacts.SafePath(relative)
+	if err != nil || clean != relative {
+		return "", fmt.Errorf("workspace path is unsafe")
+	}
+	realRoot, err := filepath.EvalSymlinks(filepath.Clean(root))
+	if err != nil {
+		return "", err
+	}
+	candidate, err := filepath.EvalSymlinks(filepath.Join(realRoot, filepath.FromSlash(relative)))
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(realRoot, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("workspace path escapes the root")
+	}
+	return filepath.ToSlash(rel), nil
 }
 
 func readWorkspaceText(root, relative string, expectedMax int64) (string, error) {

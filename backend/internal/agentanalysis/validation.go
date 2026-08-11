@@ -22,6 +22,7 @@ const (
 	maxRelevantFiles      = 20
 	maxEvidenceCitations  = 20
 	maxSourceCitations    = 10
+	maxUnresolvedDetails  = 20
 	maxCitationQuoteBytes = 2 << 10
 	maxCitationLines      = 200
 )
@@ -215,8 +216,8 @@ func validateAnalysisText(analysis Analysis) error {
 	if analysis.IsTransient != (analysis.Severity == "Transient-Ignore") {
 		return fmt.Errorf("%w: transient classification and severity disagree", ErrInvalidResult)
 	}
-	if len(analysis.UnresolvedDetails) > 20 {
-		return fmt.Errorf("%w: unresolved details exceed 20", ErrInvalidResult)
+	if len(analysis.UnresolvedDetails) > maxUnresolvedDetails {
+		return fmt.Errorf("%w: unresolved details exceed %d", ErrInvalidResult, maxUnresolvedDetails)
 	}
 	for i, detail := range analysis.UnresolvedDetails {
 		if strings.TrimSpace(detail) == "" || !utf8.ValidString(detail) || len(detail) > maxUnresolvedBytes {

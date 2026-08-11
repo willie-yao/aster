@@ -31,9 +31,7 @@ most 8 MiB, the snapshot contains at most 512 files, and total bytes are at most
 32 MiB. Every artifact path, size, and SHA-256 digest is sealed in the request.
 There is no semantic evidence ranking or excerpt selection.
 
-The Agent Sandbox deployment phase must mount both trees read-only. OpenCode may
-write only runtime state under temporary storage and exactly one result file at
-`result/analysis.json`.
+The Agent Sandbox deployment phase must mount both trees read-only. OpenCode may write only isolated runtime state under temporary storage. It returns one schema-constrained structured object. OpenCode 1.18.2 does not implement structured-output retries, so the executor does not request or infer them. The executor validates path and line ranges, reconstructs exact quotations from the sealed workspace, and writes exactly one canonical result file at `result/analysis.json`.
 
 ## Staged Agent Sandbox lifecycle
 
