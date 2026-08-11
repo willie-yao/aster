@@ -1,6 +1,4 @@
 import Box from "@mui/material/Box";
-import Button from "@mui/material/Button";
-import Chip from "@mui/material/Chip";
 import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
@@ -8,9 +6,8 @@ import {
   AutoAwesome,
   ErrorOutlined,
   HourglassEmpty,
-  OpenInNew,
-  Troubleshoot,
 } from "@mui/icons-material";
+import type { ReactNode } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import type { BuildResult, TestCase } from "../types/dashboard";
 import type { FetchStatusResponse } from "../types/fetchStatus";
@@ -23,11 +20,9 @@ import { buildActionEligibilityHint } from "../lib/actionEligibility";
 import { buildFailurePath } from "../lib/routes";
 import { FailureActions } from "./FailureActions";
 import { useCapabilities } from "../hooks/useCapabilities";
+import { useAuth } from "../hooks/useAuth";
 import { AiAnalysisPanel } from "./AiAnalysisPanel";
-import { LabeledBlock } from "./LabeledBlock";
-import { Panel } from "./Panel";
 import { RichText } from "./RichText";
-import { soft } from "../theme";
 import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
 
@@ -56,18 +51,22 @@ export function BuildFailurePanel({
   failure,
   fetchStatus,
   showDetailLink = true,
-  appearance = "default",
+  briefingTitle = "Build failure analysis",
+  mobileBriefingTitle = "Build failure",
+  beforeActions,
 }: {
   jobID: string;
   run: BuildResult;
   failure: TestCase;
   fetchStatus: FetchStatusResponse | null;
   showDetailLink?: boolean;
-  appearance?: "default" | "detail";
+  briefingTitle?: string;
+  mobileBriefingTitle?: string;
+  beforeActions?: ReactNode;
 }) {
   const state = buildAnalysisState(failure, fetchStatus);
   const { features } = useCapabilities();
-  const detailAppearance = appearance === "detail";
+  const auth = useAuth();
   const fileCtx = {
     buildLogUrl: run.build_log_url,
     webUrl: run.web_url,
@@ -104,203 +103,118 @@ export function BuildFailurePanel({
       ].filter((value): value is string => Boolean(value))
     : [];
 
-  if (detailAppearance) {
-    const stateNotice = state !== "succeeded" ? (
-      <Box
-        role="status"
-        sx={{
-          border: "1px solid",
-          borderColor: "divider",
-          borderRadius: "4px",
-          p: 1.5,
-          bgcolor: "surface.containerHigh",
-        }}
-      >
-        <Stack direction="row" spacing={1.25} sx={{ alignItems: "flex-start" }}>
-          {pendingState === "unavailable" || pendingState === "stale" ? (
-            <ErrorOutlined color="warning" />
-          ) : (
-            <HourglassEmpty color="primary" />
-          )}
-          <Box>
-            <Typography sx={{ ...overviewTypography.subsectionHeading }}>
-              {stateText[pendingState].title}
-            </Typography>
-            <Typography color="text.secondary" sx={overviewTypography.secondaryBody}>
-              {failure.ai_summary?.summary ?? stateText[pendingState].detail}
-            </Typography>
-          </Box>
-        </Stack>
-      </Box>
-    ) : null;
-    const summary =
-      failure.ai_summary?.summary ??
-      "This build failed before a failed JUnit test case was reported.";
-    const details = (
-      <Stack spacing={1.75}>
-        {stateNotice}
-        <Stack direction="row" spacing={2} sx={{ flexWrap: "wrap", rowGap: 1 }}>
-          {showDetailLink && (
-            <Link component={RouterLink} to={buildFailurePath(jobID, run.build_id)}>
-              Open build failure details
-            </Link>
-          )}
-          {run.build_log_url && (
-            <Link
-              href={run.build_log_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}
-            >
-              Build log <OpenInNew sx={{ fontSize: 15 }} />
-            </Link>
-          )}
-        </Stack>
-        {telemetry.length > 0 && (
-          <Typography color="text.secondary" sx={overviewTypography.data}>
-            {telemetry.join(" · ")}
+  const stateNotice = state !== "succeeded" ? (
+    <Box
+      role="status"
+      sx={{
+        border: "1px solid",
+        borderColor: "divider",
+        borderRadius: "4px",
+        p: 1.5,
+        bgcolor: "surface.containerHigh",
+      }}
+    >
+      <Stack direction="row" spacing={1.25} sx={{ alignItems: "flex-start" }}>
+        {pendingState === "unavailable" || pendingState === "stale" ? (
+          <ErrorOutlined color="warning" />
+        ) : (
+          <HourglassEmpty color="primary" />
+        )}
+        <Box>
+          <Typography sx={overviewTypography.subsectionHeading}>
+            {stateText[pendingState].title}
           </Typography>
-        )}
-        {failure.ai_analysis && (
-          <AiAnalysisPanel
-            analysis={failure.ai_analysis}
-            fileCtx={fileCtx}
-            chatRef={chatRef}
-            appearance="detail"
-          />
-        )}
+          <Typography color="text.secondary" sx={overviewTypography.secondaryBody}>
+            {stateText[pendingState].detail}
+          </Typography>
+        </Box>
       </Stack>
-    );
+    </Box>
+  ) : null;
+  const summary =
+    failure.ai_summary?.summary ??
+    "This build failed before a failed JUnit test case was reported.";
+  const hasMobileDetails = showDetailLink || telemetry.length > 0 || Boolean(failure.ai_analysis);
+  const desktopStateNotice = stateNotice && (
+    <Box sx={{ display: { xs: "none", md: "block" } }}>{stateNotice}</Box>
+  );
+  const details = hasMobileDetails ? (
+    <Stack spacing={1.75}>
+      {desktopStateNotice}
+      {showDetailLink && (
+        <Link
+          component={RouterLink}
+          to={buildFailurePath(jobID, run.build_id)}
+          sx={{ minHeight: { xs: 44, sm: 36 }, display: "inline-flex", alignItems: "center", alignSelf: "flex-start", fontWeight: 650 }}
+        >
+          Open build failure details
+        </Link>
+      )}
+      {telemetry.length > 0 && (
+        <Typography color="text.secondary" sx={overviewTypography.data}>
+          {telemetry.join(" · ")}
+        </Typography>
+      )}
+      {failure.ai_analysis && (
+        <AiAnalysisPanel
+          analysis={failure.ai_analysis}
+          fileCtx={fileCtx}
+          chatRef={chatRef}
+          appearance="detail"
+        />
+      )}
+    </Stack>
+  ) : undefined;
+  const showActions = features.actions && auth.status !== "loading" && auth.status !== "unavailable";
+  const actions = (
+    <FailureActions
+      failureID={buildFailureActionID(jobID, run.build_id)}
+      resolvable={false}
+      eligibilityHint={actionEligibility}
+      appearance="detail"
+    />
+  );
+  const briefing = (
+    <AnalysisBriefing
+      title={briefingTitle}
+      mobileTitle={mobileBriefingTitle}
+      icon={<AutoAwesome aria-hidden sx={{ fontSize: 18, color: "primary.main" }} />}
+      metadata={`Build ${run.build_id} · ${state === "succeeded" ? `${failure.ai_analysis?.severity ?? "Unknown"} severity` : stateText[pendingState].title}`}
+      mobileMetadata={`Build ${run.build_id}`}
+      mobileNotice={stateNotice}
+      summary={(
+        <Stack spacing={1.5}>
+          {!hasMobileDetails && desktopStateNotice}
+          <RichText text={summary} fileCtx={fileCtx} />
+        </Stack>
+      )}
+      details={details}
+      actions={beforeActions || !showActions ? undefined : actions}
+      collapseDetailsOnMobile={hasMobileDetails}
+    />
+  );
 
-    return (
-      <AnalysisBriefing
-        title="Build failure analysis"
-        mobileTitle="Build failure"
-        icon={<AutoAwesome aria-hidden sx={{ fontSize: 18, color: "primary.main" }} />}
-        metadata={`Build ${run.build_id} · ${state === "succeeded" ? `${failure.ai_analysis?.severity ?? "Unknown"} severity` : stateText[pendingState].title}`}
-        mobileMetadata={`Build ${run.build_id}`}
-        mobileNotice={stateNotice}
-        summary={<RichText text={summary} fileCtx={fileCtx} />}
-        details={details}
-        actions={(
-          <FailureActions
-            failureID={buildFailureActionID(jobID, run.build_id)}
-            resolvable={false}
-            eligibilityHint={actionEligibility}
-            appearance="detail"
-          />
-        )}
-      />
-    );
-  }
+  if (!beforeActions) return briefing;
 
   return (
-    <Panel component="section" sx={{ borderRadius: 3, p: { xs: 2, sm: 3 } }}>
-      <Stack spacing={2.5}>
-        <Stack
-          direction={{ xs: "column", sm: "row" }}
-          spacing={1.5}
-          sx={{ alignItems: { sm: "center" } }}
+    <Stack spacing={2} sx={{ minWidth: 0 }}>
+      {briefing}
+      {beforeActions}
+      {showActions && (
+        <Box
+          component="section"
+          aria-label="Build failure actions"
+          sx={{
+            bgcolor: "surface.container",
+            borderBlock: "1px solid",
+            borderColor: "divider",
+            px: { xs: 1.5, sm: 2 },
+            py: 1,
+          }}
         >
-          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-            <Troubleshoot color="error" />
-            <Typography component="h2" variant="headline">
-              Build Failure
-            </Typography>
-          </Stack>
-          <Chip
-            size="small"
-            color="error"
-            variant="outlined"
-            label={`Build ${run.build_id}`}
-          />
-          <Stack
-            direction="row"
-            spacing={1}
-            sx={{ ml: { sm: "auto" }, flexWrap: "wrap" }}
-          >
-            {showDetailLink && (
-              <Button
-                component={RouterLink}
-                to={buildFailurePath(jobID, run.build_id)}
-                size="small"
-              >
-                Open details
-              </Button>
-            )}
-            {run.build_log_url && (
-              <Link
-                href={run.build_log_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}
-              >
-                Build log <OpenInNew sx={{ fontSize: 16 }} />
-              </Link>
-            )}
-          </Stack>
-        </Stack>
-
-        {failure.ai_summary?.summary && (
-          <LabeledBlock label="Summary" accent="primary">
-            <Typography variant="body2">
-              <RichText text={failure.ai_summary.summary} fileCtx={fileCtx} />
-            </Typography>
-          </LabeledBlock>
-        )}
-
-        {failure.ai_analysis ? (
-          <>
-            {telemetry.length > 0 && (
-              <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }}>
-                {telemetry.map((item) => (
-                  <Chip key={item} size="small" label={item} />
-                ))}
-              </Stack>
-            )}
-            <AiAnalysisPanel
-              analysis={failure.ai_analysis}
-              fileCtx={fileCtx}
-              chatRef={chatRef}
-            />
-          </>
-        ) : (
-          <Box
-            role="status"
-            sx={{
-              borderRadius: 2,
-              p: 2,
-              bgcolor: (theme) =>
-                soft(
-                  theme,
-                  pendingState === "unavailable" ? "warning" : "primary",
-                  0.08,
-                ),
-            }}
-          >
-            <Stack direction="row" spacing={1.25} sx={{ alignItems: "flex-start" }}>
-              {pendingState === "unavailable" || pendingState === "stale" ? (
-                <ErrorOutlined color="warning" />
-              ) : (
-                <HourglassEmpty color="primary" />
-              )}
-              <Box>
-                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-                  {stateText[pendingState].title}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {failure.ai_summary?.summary ?? stateText[pendingState].detail}
-                </Typography>
-              </Box>
-            </Stack>
-          </Box>
-        )}
-        <FailureActions
-          failureID={buildFailureActionID(jobID, run.build_id)}
-          resolvable={false}
-          eligibilityHint={actionEligibility}
-        />
-      </Stack>
-    </Panel>
+          {actions}
+        </Box>
+      )}
+    </Stack>
   );
 }

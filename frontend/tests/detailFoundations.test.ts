@@ -9,6 +9,7 @@ import { createServer } from "vite";
 import { MemoryRouter } from "react-router-dom";
 import { parseTestDisplayName } from "../src/lib/detailTitles.js";
 import type { BuildResult, TestCase } from "../src/types/dashboard.js";
+import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetchStatus.js";
 
 const vite = await createServer({
   root: process.cwd(),
@@ -30,6 +31,18 @@ const { RunHistory } = (await vite.ssrLoadModule("/src/components/RunHistory.tsx
     selectedBuildId?: string;
     onSelect: (buildId: string) => void;
     metadata?: string;
+  }) => ReturnType<typeof createElement>;
+};
+const { BuildFailurePanel } = (await vite.ssrLoadModule("/src/components/BuildFailurePanel.tsx")) as {
+  BuildFailurePanel: (props: {
+    jobID: string;
+    run: BuildResult;
+    failure: TestCase;
+    fetchStatus: FetchStatusResponse | null;
+    showDetailLink?: boolean;
+    briefingTitle?: string;
+    mobileBriefingTitle?: string;
+    beforeActions?: ReturnType<typeof createElement>;
   }) => ReturnType<typeof createElement>;
 };
 const { TestCaseTable, EvidenceSourceLink } = (await vite.ssrLoadModule("/src/components/TestCaseTable.tsx")) as {
@@ -78,6 +91,51 @@ function run(overrides: Partial<BuildResult> = {}): BuildResult {
     ...overrides,
   };
 }
+
+const buildFetchProgress: FetchProgressStatus = {
+  schema_version: 6,
+  run_id: "run",
+  pass_id: "pass",
+  pass_type: "initial-watch",
+  phase: "analysis",
+  run_started_at: "2026-08-11T00:00:00Z",
+  pass_started_at: "2026-08-11T00:00:00Z",
+  phase_started_at: "2026-08-11T00:00:00Z",
+  last_progress_at: "2026-08-11T00:00:00Z",
+  outcome: "running",
+  jobs: { total: 1, completed: 1 },
+  builds: { cached: 0, fetched: 1 },
+  analyses: {
+    logical_total: 1,
+    accepted_cache_hits: 0,
+    compatible_results_reused: 0,
+    new_work: 1,
+    stale_work: 0,
+    queued: 1,
+    running: 0,
+    completed: 0,
+    failed: 0,
+    cancelled: 0,
+    task_attempts: 0,
+    retries: 0,
+    existing_tasks_adopted: 0,
+    results_retrieved: 0,
+    result_retrieval_retries: 0,
+    build_subjects: {
+      logical_total: 1,
+      queued: 1,
+      running: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+      accepted_cache_hits: 0,
+      existing_tasks_adopted: 0,
+    },
+  },
+  pattern_phase: "pending",
+  publication_phase: "pending",
+  side_effect_phase: "pending",
+};
 
 const titleCases = [
   {
@@ -212,6 +270,63 @@ test("run history exposes square selected runs with date and result context", ()
   assert.match(html, /aria-pressed="true"/);
   assert.match(html, /aria-label="#124 · Passed · Aug 6, 2026"/);
   assert.match(html, />Selected #123 · Failed</);
+});
+
+test("standalone non-success build states avoid empty mobile diagnosis and action surfaces", () => {
+  const failure: TestCase = {
+    name: "Prow job execution",
+    source: "build",
+    status: "failed",
+    duration_seconds: 1,
+    ai_summary: {
+      generated_at: "2026-08-11T00:00:00Z",
+      summary: "Published build summary",
+      is_transient: false,
+    },
+  };
+  const states: Array<{
+    name: string;
+    fetchStatus: FetchStatusResponse | null;
+    notice: string;
+  }> = [
+    {
+      name: "pending",
+      fetchStatus: { available: true, state: "active", status: buildFetchProgress },
+      notice: "Build analysis pending",
+    },
+    {
+      name: "stale",
+      fetchStatus: { available: true, state: "stale", status: buildFetchProgress },
+      notice: "Build analysis status stale",
+    },
+    { name: "unavailable", fetchStatus: null, notice: "Build analysis unavailable" },
+  ];
+
+  for (const state of states) {
+    const html = render(
+      createElement(
+        MemoryRouter,
+        { initialEntries: ["/"] },
+        createElement(BuildFailurePanel, {
+          jobID: "capz-periodic-e2e-main",
+          run: run(),
+          failure,
+          fetchStatus: state.fetchStatus,
+          showDetailLink: false,
+          briefingTitle: "Analysis briefing",
+          mobileBriefingTitle: "Analysis briefing",
+          beforeActions: createElement("div", null, "Run metadata sentinel"),
+        }),
+      ),
+    );
+
+    assert.match(html, new RegExp(state.notice), state.name);
+    assert.match(html, />Published build summary</, state.name);
+    assert.match(html, />Run metadata sentinel</, state.name);
+    assert.doesNotMatch(html, /Full diagnosis/, state.name);
+    assert.doesNotMatch(html, /<hr/, state.name);
+    assert.doesNotMatch(html, /aria-label="Build failure actions"/, state.name);
+  }
 });
 
 test("test result navigation names include status duration and source context", () => {
