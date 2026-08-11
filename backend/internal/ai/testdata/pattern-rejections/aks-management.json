@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "case_name": "aks-management",
+  "case_class": "grounded recurring-pattern contract failure",
+  "contract_shape": [
+    "systemic",
+    "confidence",
+    "shared_root_cause",
+    "shared_builds",
+    "suggested_fix",
+    "remediation_targets",
+    "summary"
+  ],
+  "observed_attempts": 1,
+  "observed_repairs": 2,
+  "validation_transitions": [
+    {"kind": "terminal", "category": "missing"}
+  ],
+  "expected_persisted_category": "missing",
+  "evidence_complete": false
+}
