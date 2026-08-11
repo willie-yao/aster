@@ -3,11 +3,14 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import {
+  aiUsageFilterParams, aiUsageFilterSummary, aiUsageFiltersAreCustom, aiUsageFiltersFromParams,
+  compactAIUsageFilterSummary,
   chartCurrencyPolicy, chartDateTickIndexes, chartScale, chartSeriesDescription, chartViewBoxLayout,
   chartViewBoxPoint, chartViewportX,
-  chartTickValues, formatChartCost, formatCost, formatCoverage, formatExactCost,
+  chartTickValues, coverageStateLabel, defaultAIUsageFilters, featureTokenPercentage,
+  formatChartCost, formatCost, formatCoverage, formatCurrentRateReprice, formatExactCost,
   formatExactTokens, formatTokens, nearestChartDataIndex,
-  pricedRequestCoverageNote, totalTokens, uncachedInputTokens, usageQuery,
+  formatRecordedUsageEstimate, pricedRequestCoverageNote, totalTokens, uncachedInputTokens, usageQuery,
 } from "../src/lib/aiUsage.js";
 import type { AIUsageReport, AIUsageTotals } from "../src/types/usage.js";
 
@@ -26,6 +29,30 @@ test("AI usage helpers format values and filters", () => {
   assert.equal(uncachedInputTokens({ input_tokens: 20, cached_input_tokens: 5, cache_write_input_tokens: 3 } as never), 12);
   assert.equal(formatCoverage(7, 10), "7 of 10 (70%)");
   assert.equal(usageQuery("2026-08-01", "2026-08-03", "analysis_chat"), "start=2026-08-01&end=2026-08-03&feature=analysis_chat");
+  const defaults = defaultAIUsageFilters(new Date("2026-08-11T12:00:00Z"));
+  assert.deepEqual(defaults, { start: "2026-07-13", end: "2026-08-11", feature: "" });
+  const filters = aiUsageFiltersFromParams(new URLSearchParams("start=2026-08-01&end=2026-08-10&feature=analysis_chat"), defaults);
+  assert.deepEqual(filters, { start: "2026-08-01", end: "2026-08-10", feature: "analysis_chat" });
+  assert.equal(aiUsageFilterParams(filters).toString(), "start=2026-08-01&end=2026-08-10&feature=analysis_chat");
+  assert.equal(aiUsageFilterSummary(filters), "2026-08-01 to 2026-08-10 · Analysis chat");
+  assert.equal(compactAIUsageFilterSummary(filters), "Aug 1–10 · Analysis chat");
+  assert.equal(compactAIUsageFilterSummary({ start: "2026-07-30", end: "2026-08-02", feature: "" }), "Jul 30–Aug 2 · All features");
+  assert.equal(compactAIUsageFilterSummary({ start: "2025-12-31", end: "2026-01-01", feature: "failure_analysis" }), "Dec 31, 2025–Jan 1, 2026 · Failure analysis");
+  assert.equal(compactAIUsageFilterSummary({ start: "not-a-date", end: "2026-08-10", feature: "" }), "not-a-date–2026-08-10 · All features");
+  assert.equal(aiUsageFiltersAreCustom(new URLSearchParams()), false);
+  assert.equal(aiUsageFiltersAreCustom(new URLSearchParams("feature=analysis_chat")), true);
+  assert.equal(coverageStateLabel("model_gateway_excluded"), "Model gateway excluded operations");
+  assert.equal(featureTokenPercentage(25, 100), 25);
+  assert.equal(featureTokenPercentage(0, 0), 0);
+});
+
+test("usage estimates preserve exact nanos and absent versus present zero", () => {
+  assert.equal(formatRecordedUsageEstimate({ status: "available", nanos: "9007199254740993", currency: "USD" }), "USD 9,007,199.25");
+  assert.equal(formatRecordedUsageEstimate({ status: "mixed_currency", nanos: "0" }), "Mixed currencies");
+  assert.equal(formatRecordedUsageEstimate({ status: "unavailable", nanos: "0", currency: "USD" }), "Not priced");
+  assert.equal(formatCurrentRateReprice({ status: "available", nanos: undefined, currency: "USD" }), "Unavailable");
+  assert.equal(formatCurrentRateReprice({ status: "available", nanos: "0", currency: "USD" }), "USD 0.00");
+  assert.equal(formatCurrentRateReprice({ status: "unavailable", nanos: "0", currency: "USD" }), "Unavailable");
 });
 
 test("daily cost chart preserves zero values and separates currencies", () => {
@@ -63,6 +90,8 @@ test("daily cost chart descriptions match visible series", () => {
   assert.match(chartSeriesDescription(false, true), /^Dashed amber shows current-rate estimates\./);
   assert.doesNotMatch(chartSeriesDescription(false, true), /recorded estimates/);
   assert.match(chartSeriesDescription(true, true), /Solid blue.*Dashed amber/);
+  assert.match(chartSeriesDescription(true, true), /ledger below/);
+  assert.doesNotMatch(chartSeriesDescription(true, true), /table below/);
 });
 
 test("legacy AI usage reports tolerate omitted priced request counts", () => {
@@ -80,6 +109,7 @@ test("legacy AI usage reports tolerate omitted priced request counts", () => {
   assert.equal(legacyCoverage.priced_reported_requests, undefined);
   assert.equal(pricedRequestCoverageNote(legacyTotals.priced_reported_requests ?? legacyCoverage.priced_reported_requests, legacyTotals.reported_requests, "partial"), "Priced-request coverage is unavailable for legacy records");
   assert.equal(pricedRequestCoverageNote(4, 7, "partial"), "4 of 7 (57%) reported requests priced");
+  assert.equal(pricedRequestCoverageNote(0, 0, "unavailable"), "Pricing coverage is unavailable");
 });
 
 test("historical usage fixture covers required cost and coverage scenarios", () => {

@@ -85,45 +85,71 @@ test("result views progressively render rows and grid cells", () => {
   assert.match(ledger, /showMoreCount/);
 });
 
-test("AI usage labels cost and token coverage accurately", () => {
-  const page = source("src/pages/AIUsagePage.tsx");
+test("AI usage coverage dividers follow the responsive grid columns", () => {
+  const coverage = source("src/components/AIUsageCoverage.tsx");
+  const mobileDivider = coverage.indexOf('"&:nth-of-type(even)"');
+  const desktopDivider = coverage.indexOf('"&:not(:nth-of-type(3n + 1))"');
 
-  assert.match(page, /Estimated cost for priced records/);
-  assert.match(page, /Estimated cost covers priced records only/);
+  assert.match(coverage, /"&:nth-of-type\(even\)": \{ borderInlineStart: \{ xs: "1px solid", md: 0 \}/);
+  assert.match(coverage, /"&:not\(:nth-of-type\(3n \+ 1\)\)": \{ borderInlineStart: \{ md: "1px solid" \}/);
+  assert.ok(mobileDivider >= 0 && mobileDivider < desktopDivider);
+});
+
+test("AI usage preserves accounting semantics in the operator-ledger composition", () => {
+  const page = source("src/pages/AIUsagePage.tsx");
+  const filters = source("src/components/AIUsageFilters.tsx");
+  const coverage = source("src/components/AIUsageCoverage.tsx");
+  const daily = source("src/components/AIUsageDaily.tsx");
+  const metrics = source("src/components/MetricStrip.tsx");
+
+  assert.match(page, /useSearchParams/);
+  assert.match(page, /aiUsageFiltersFromParams/);
+  assert.match(page, /setSearchParams\(aiUsageFilterParams\(values\)\)/);
+  assert.match(page, /api\/ai-usage\?\$\{query\}/);
+  assert.match(page, /api\/ai-usage\/download\?\$\{query\}/);
+  assert.match(page, /formatRecordedUsageEstimate/);
+  assert.match(page, /formatCurrentRateReprice/);
+  assert.doesNotMatch(page, /current_rate_estimated_cost_nanos \?\? "0"/);
   assert.match(page, /Provider-reported tokens/);
-  assert.match(page, /priced_reported_requests/);
   assert.match(page, /model requests reported usage/);
-  assert.match(page, /Historical daily cost/);
-  assert.match(page, /Recorded estimates use the price stored with each operation/);
-  assert.match(page, /Current-rate estimates apply the rates configured now/);
-  assert.match(page, /aria-label="Historical daily AI usage and cost"/);
-  assert.match(page, /role="img"/);
-  assert.match(page, /aria-labelledby="daily-cost-chart-title daily-cost-chart-desc"/);
-  assert.match(page, /onPointerMove=\{selectPointerDay\}/);
-  assert.match(page, /preserveAspectRatio="xMidYMid meet"/);
-  assert.match(page, /chartViewBoxLayout\(bounds\.width, bounds\.height, width, height\)/);
-  assert.match(page, /chartViewBoxPoint\(event\.clientX - bounds\.left, event\.clientY - bounds\.top, layout\)/);
-  assert.match(page, /onKeyDown=\{selectKeyboardDay\}/);
-  assert.match(page, /Recorded estimate \(solid\)/);
-  assert.match(page, /Current-rate estimate \(dashed\)/);
-  assert.match(page, /\{recordedPath && <Typography/);
-  assert.match(page, /\{currentPath && <Typography/);
-  assert.match(page, /role="status" aria-live="polite"/);
-  assert.match(page, /Coverage: \{activeDay\.coverage\.status\}/);
-  assert.match(page, /var\(--mui-palette-warning-main\)/);
-  assert.match(page, /chartScale\(rawMax, availableIndexes\.length > 0\)/);
-  assert.match(page, /chartCurrencyPolicy\(recordedCurrency, currentCurrency, mixedCurrency\)/);
-  assert.match(page, /chartSeriesDescription\(Boolean\(recordedPath\), Boolean\(currentPath\)\)/);
-  assert.match(page, /chartDateTickIndexes\(days\.length\)/);
-  assert.doesNotMatch(page, /`\$\{exact\} partial`/);
-  assert.match(page, /Partial UTC day/);
-  assert.match(page, /No usage recorded/);
-  assert.match(page, /TableSortLabel/);
-  assert.match(page, /FeatureBreakdown/);
-  for (const mobileMetric of ["Cache hits", "Uncached input", "Cached read", "Cache write", "Output"]) {
-    assert.match(page, new RegExp(`>${mobileMetric}<`));
-  }
-  assert.match(page, /Not reported/);
-  assert.match(page, /overflowX: "auto"/);
-  assert.match(page, /minWidth: 200/);
+  assert.match(page, /<MetricStrip items=\{metricItems\} label="AI usage metrics"/);
+  assert.match(metrics, /note\?: ReactNode/);
+
+  assert.match(filters, /aria-expanded=\{open\}/);
+  assert.match(filters, /minHeight: 48/);
+  assert.match(filters, />\s*Apply\s*</);
+  assert.match(filters, />\s*Reset\s*</);
+  assert.match(filters, /Download JSON uses the current URL filters/);
+
+  assert.match(coverage, /Coverage and pricing/);
+  assert.match(coverage, /Provider-reported requests/);
+  assert.match(coverage, /Cache-write coverage/);
+  assert.match(coverage, /External unmetered/);
+  assert.match(coverage, /Model gateway excluded/);
+  assert.match(coverage, /About coverage and estimates/);
+  assert.match(coverage, /Current-rate repricing is not actual spend/);
+  assert.match(coverage, /do not form a meaningful delta/);
+
+  assert.match(daily, /Daily cost chart/);
+  assert.match(daily, /role="img"/);
+  assert.match(daily, /aria-labelledby="daily-cost-chart-title"/);
+  assert.match(daily, /aria-describedby="daily-cost-chart-desc daily-cost-chart-summary daily-usage-ledger-summary"/);
+  assert.match(daily, /onPointerMove=\{selectPointerDay\}/);
+  assert.match(daily, /onKeyDown=\{selectKeyboardDay\}/);
+  assert.match(daily, /Recorded estimate \(solid\)/);
+  assert.match(daily, /Current-rate estimate \(dashed\)/);
+  assert.match(daily, /chartCurrencyPolicy\(recordedCurrency, currentCurrency, mixedCurrency\)/);
+  assert.match(daily, /Selected-range feature mix/);
+  assert.match(daily, /featureTokenPercentage\(tokens, selectedTokens\)/);
+  assert.match(daily, /Daily usage ledger/);
+  assert.match(daily, /aria-label="Historical daily AI usage and cost"/);
+  assert.match(daily, /TableSortLabel/);
+  assert.match(daily, /Partial UTC day/);
+  assert.match(daily, /Not reported/);
+  assert.match(daily, /FeatureBreakdown/);
+  assert.match(daily, /display: \{ xs: "none", lg: "block" \}/);
+
+  assert.doesNotMatch(page + filters + coverage + daily, /<Panel/);
+  assert.doesNotMatch(page + filters + coverage + daily, /<Chip/);
+  assert.doesNotMatch(page, /<Paid/);
 });

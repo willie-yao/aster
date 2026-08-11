@@ -1,4 +1,4 @@
-import type { AIUsageFeature, AIUsageTotals } from "../types/usage";
+import type { AIUsageDaily, AIUsageFeature, AIUsageTotals } from "../types/usage";
 export const featureLabels: Record<AIUsageFeature, string> = {
   failure_analysis: "Failure analysis", pattern_analysis: "Pattern analysis",
   analysis_chat: "Analysis chat", issue_draft: "Issue drafts", fix_preview: "Fix PR preview",
@@ -91,7 +91,7 @@ export function chartSeriesDescription(hasRecorded: boolean, hasCurrent: boolean
   const series = [];
   if (hasRecorded) series.push("Solid blue shows recorded estimates.");
   if (hasCurrent) series.push("Dashed amber shows current-rate estimates.");
-  return `${series.join(" ")} Hover over the chart or focus it and use the left and right arrow keys to inspect dates. Exact daily values are listed in the table below.`.trim();
+  return `${series.join(" ")} Hover over the chart or focus it and use the left and right arrow keys to inspect dates. Exact daily values are listed in the ledger below.`.trim();
 }
 export function usageQuery(start: string, end: string, feature?: AIUsageFeature): string {
   const query = new URLSearchParams({ start, end }); if (feature) query.append("feature", feature); return query.toString();
@@ -110,8 +110,154 @@ export function pricedRequestCoverageNote(
   if (pricedRequests === undefined) {
     return "Priced-request coverage is unavailable for legacy records";
   }
+  if (pricingCoverage === "unavailable") {
+    return "Pricing coverage is unavailable";
+  }
   if (pricingCoverage === "unknown") {
     return "Pricing coverage is unavailable for some legacy records";
   }
   return `${formatCoverage(pricedRequests, reportedRequests)} reported requests priced`;
+}
+
+export interface AIUsageFilterValues {
+  start: string;
+  end: string;
+  feature: AIUsageFeature | "";
+}
+
+export function defaultAIUsageFilters(now = new Date()): AIUsageFilterValues {
+  const end = new Date(now);
+  const start = new Date(now);
+  start.setUTCDate(start.getUTCDate() - 29);
+  return {
+    start: start.toISOString().slice(0, 10),
+    end: end.toISOString().slice(0, 10),
+    feature: "",
+  };
+}
+
+export function aiUsageFiltersFromParams(
+  params: URLSearchParams,
+  defaults: AIUsageFilterValues,
+): AIUsageFilterValues {
+  const feature = params.get("feature") ?? "";
+  return {
+    start: params.get("start") || defaults.start,
+    end: params.get("end") || defaults.end,
+    feature: Object.hasOwn(featureLabels, feature) ? feature as AIUsageFeature : "",
+  };
+}
+
+export function aiUsageFilterParams(values: AIUsageFilterValues): URLSearchParams {
+  return new URLSearchParams(usageQuery(values.start, values.end, values.feature || undefined));
+}
+
+export function aiUsageFiltersAreCustom(params: URLSearchParams): boolean {
+  return ["start", "end", "feature"].some((key) => params.has(key));
+}
+
+export function aiUsageFilterSummary(values: AIUsageFilterValues): string {
+  return `${values.start} to ${values.end} · ${values.feature ? featureLabels[values.feature] : "All features"}`;
+}
+
+function parseFilterDate(value: string): { date: Date; year: number; month: number; day: number } | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return { date, year, month, day };
+}
+
+function compactFilterRange(start: string, end: string): string {
+  const startDate = parseFilterDate(start);
+  const endDate = parseFilterDate(end);
+  if (!startDate || !endDate) return start === end ? start : `${start}–${end}`;
+
+  const month = (date: Date) => new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" }).format(date);
+  if (startDate.year === endDate.year && startDate.month === endDate.month) {
+    return startDate.day === endDate.day
+      ? `${month(startDate.date)} ${startDate.day}`
+      : `${month(startDate.date)} ${startDate.day}–${endDate.day}`;
+  }
+  if (startDate.year === endDate.year) {
+    return `${month(startDate.date)} ${startDate.day}–${month(endDate.date)} ${endDate.day}`;
+  }
+  return `${month(startDate.date)} ${startDate.day}, ${startDate.year}–${month(endDate.date)} ${endDate.day}, ${endDate.year}`;
+}
+
+export function compactAIUsageFilterSummary(values: AIUsageFilterValues): string {
+  const feature = values.feature ? featureLabels[values.feature] : "All features";
+  return `${compactFilterRange(values.start, values.end)} · ${feature}`;
+}
+
+export function coverageStateLabel(value: string): string {
+  const labels: Record<string, string> = {
+    fully_priced_provider_reported: "Fully priced provider usage",
+    partial_token_usage: "Partial token usage",
+    cache_write_unreported: "Missing cache-write usage",
+    cache_write_pricing_missing: "Missing cache-write rate",
+    external_unmetered: "External unmetered operations",
+    model_gateway_excluded: "Model gateway excluded operations",
+    pricing_added_after_operation: "Pricing added after operation",
+    pricing_unavailable: "Pricing unavailable",
+    legacy_coverage_unknown: "Legacy coverage unknown",
+    aggregate_overflow: "Aggregate overflow blocked",
+    no_provider_usage: "No provider usage",
+    no_usage_records: "No usage records",
+  };
+  return labels[value] ?? value.replaceAll("_", " ");
+}
+
+export function featureTokenPercentage(featureTokens: number, selectedTokens: number): number {
+  if (selectedTokens <= 0 || featureTokens <= 0) return 0;
+  return Math.min(100, featureTokens / selectedTokens * 100);
+}
+
+export function normalizeAIUsageDay(day: AIUsageDaily): AIUsageDaily {
+  return {
+    ...day,
+    features: day.features ?? [],
+    coverage: day.coverage ?? {
+      status: "unavailable",
+      states: ["legacy_coverage_unknown"],
+      model_requests: day.totals.model_requests,
+      reported_requests: day.totals.reported_requests,
+      unreported_requests: day.totals.unreported_requests,
+      external_unmetered_operations: day.totals.external_unmetered_operations,
+    },
+    has_usage: day.has_usage ?? day.totals.operations > 0,
+    current_partial_utc: day.current_partial_utc ?? false,
+    recorded_cost_status: day.recorded_cost_status ?? "unknown",
+    current_rate_status: day.current_rate_status ?? "unavailable",
+  };
+}
+
+export function formatRecordedUsageEstimate({
+  status,
+  mixedCurrency,
+  nanos,
+  currency,
+}: {
+  status: "available" | "partial" | "unavailable" | "unknown" | "mixed_currency";
+  mixedCurrency?: boolean;
+  nanos: string | undefined;
+  currency?: string;
+}): string {
+  if (mixedCurrency || status === "mixed_currency") return "Mixed currencies";
+  if (status === "unavailable") return "Not priced";
+  if (status === "unknown") return "Unknown";
+  return formatExactCost(nanos, currency);
+}
+
+export function formatCurrentRateReprice({
+  status,
+  nanos,
+  currency,
+}: {
+  status: "available" | "partial" | "unavailable";
+  nanos: string | undefined;
+  currency?: string;
+}): string {
+  if (status === "unavailable") return "Unavailable";
+  return formatExactCost(nanos, currency);
 }
