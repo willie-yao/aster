@@ -320,6 +320,43 @@ func TestVerifyStructuredModifyExternalTestPackageCompanion(t *testing.T) {
 	}
 }
 
+func TestVerifyStructuredModifyTestOnlyInternalPackageCompanion(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"pkg/reconcile_test.go": "package pkg\nfunc reconcile() { waitForReady() }\nfunc waitForReady() {}\n",
+		"pkg/external_test.go":  "package pkg_test\nfunc external() {}\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "waitForReady", Path: "pkg/reconcile_test.go",
+	}}})
+	if result.State != StateAlreadyPresent {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyTestOnlyExternalPackageCompanion(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"pkg/internal_test.go":  "package pkg\nfunc internal() {}\n",
+		"pkg/reconcile_test.go": "package pkg_test\nfunc reconcile() { waitForReady() }\nfunc waitForReady() {}\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "waitForReady", Path: "pkg/reconcile_test.go",
+	}}})
+	if result.State != StateAlreadyPresent {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestVerifyStructuredModifyTestOnlyThirdPackageIsInconclusive(t *testing.T) {
+	result := verify(t, fakeReader{archive: archive(map[string]string{
+		"pkg/reconcile_test.go": "package pkg\nfunc reconcile() { waitForReady() }\nfunc waitForReady() {}\n",
+		"pkg/external_test.go":  "package pkg_test\nfunc external() {}\n",
+		"pkg/other_test.go":     "package other\nfunc other() {}\n",
+	})}, Input{Targets: []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "waitForReady", Path: "pkg/reconcile_test.go",
+	}}})
+	if result.State != StateInconclusive || !strings.Contains(result.Reason, "same-package") {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestVerifyStructuredModifyProductionPackageEndingTest(t *testing.T) {
 	result := verify(t, fakeReader{archive: archive(map[string]string{
 		"controllers/production.go":     "package controllers_test\nfunc production() {}\n",

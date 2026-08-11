@@ -700,8 +700,14 @@ func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, sy
 }
 
 func allowedTestPackageCompanion(filePath, packageName, expectedPackage, nonTestPackage string, includeTests bool) bool {
-	if !includeTests || nonTestPackage == "" {
+	if !includeTests {
 		return false
+	}
+	if nonTestPackage == "" {
+		if strings.HasSuffix(expectedPackage, "_test") {
+			return packageName == strings.TrimSuffix(expectedPackage, "_test")
+		}
+		return strings.HasSuffix(filePath, "_test.go") && packageName == expectedPackage+"_test"
 	}
 	if expectedPackage == nonTestPackage+"_test" {
 		return packageName == nonTestPackage
