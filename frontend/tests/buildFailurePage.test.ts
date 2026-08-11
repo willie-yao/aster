@@ -21,6 +21,7 @@ test("standalone build failure uses the shared detail composition", () => {
   assert.match(page, /briefingTitle="Analysis briefing"/);
   assert.match(page, /mobileBriefingTitle="Analysis briefing"/);
   assert.match(page, /beforeActions=\{runMetadata\}/);
+  assert.match(page, /<RunMetadata[\s\S]*stacked/);
 });
 
 test("standalone build failure exposes complete run metadata with one build log link", () => {
@@ -66,4 +67,16 @@ test("build failure panel has one canonical analysis presentation", () => {
   assert.match(panel, /const showActions = features\.actions/);
   assert.match(panel, /showActions && \(/);
   assert.match(panel, /const details = hasMobileDetails \?/);
+  assert.match(panel, /lg: "minmax\(0, 1fr\) minmax\(360px, 420px\)"/);
+});
+
+test("job detail keeps build failure analysis in the primary analysis column", () => {
+  const job = source("src/pages/JobDetailPage.tsx");
+
+  assert.match(job, /const buildFailureBriefing = selectedRun && buildFailure/);
+  assert.match(job, /export function JobDetailPrimaryLayout/);
+  assert.match(job, /\{patternAnalysis\}[\s\S]*\{buildFailureAnalysis\}[\s\S]*\{runHistory\}[\s\S]*\{runMetadata\}/);
+  assert.match(job, /<JobDetailPrimaryLayout/);
+  assert.equal(job.match(/<BuildFailurePanel/g)?.length, 1);
+  assert.doesNotMatch(job, /\{crossRunGrid\}[\s\S]*<BuildFailurePanel/);
 });

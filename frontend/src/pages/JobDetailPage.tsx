@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import Box from "@mui/material/Box";
 import Breadcrumbs from "@mui/material/Breadcrumbs";
 import ButtonBase from "@mui/material/ButtonBase";
 import Collapse from "@mui/material/Collapse";
 import Link from "@mui/material/Link";
+import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import {
   ChevronRight,
@@ -81,6 +82,71 @@ function runResultColor(run: BuildResult): "warning.main" | "success.main" | "er
   return run.passed ? "success.main" : "error.main";
 }
 
+export function JobDetailPrimaryLayout({
+  patternAnalysis,
+  buildFailureAnalysis,
+  runHistory,
+  runMetadata,
+}: {
+  patternAnalysis?: ReactNode;
+  buildFailureAnalysis?: ReactNode;
+  runHistory: ReactNode;
+  runMetadata: ReactNode;
+}) {
+  if (!patternAnalysis && !buildFailureAnalysis) {
+    return (
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: {
+            xs: "minmax(0, 1fr)",
+            lg: "minmax(0, 1fr) minmax(360px, 0.8fr)",
+          },
+          gap: 2,
+          minWidth: 0,
+          alignItems: "start",
+        }}
+      >
+        {runHistory}
+        {runMetadata}
+      </Box>
+    );
+  }
+
+  return (
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: {
+          xs: "minmax(0, 1fr)",
+          lg: "minmax(0, 1.5fr) minmax(360px, 0.85fr)",
+        },
+        gap: 2,
+        minWidth: 0,
+        alignItems: "start",
+      }}
+    >
+      <Stack spacing={2} sx={{ minWidth: 0 }}>
+        {patternAnalysis}
+        {buildFailureAnalysis}
+      </Stack>
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 2,
+          minWidth: 0,
+          position: { lg: "sticky" },
+          top: { lg: 80 },
+          alignSelf: "start",
+        }}
+      >
+        {runHistory}
+        {runMetadata}
+      </Box>
+    </Box>
+  );
+}
 
 export function JobDetailPage() {
   const { jobName: jobID } = useParams<{ jobName: string }>();
@@ -330,6 +396,24 @@ export function JobDetailPage() {
     </Box>
   ) : null;
 
+  const buildFailureBriefing = selectedRun && buildFailure ? (
+    <BuildFailurePanel
+      jobID={canonicalJobID}
+      run={selectedRun}
+      failure={buildFailure}
+      fetchStatus={fetchStatus}
+    />
+  ) : null;
+
+  const patternAnalysis = pattern ? (
+    <PatternBanner
+      pattern={pattern}
+      jobID={canonicalJobID}
+      runs={runs}
+      refreshStatus={data.pattern_refresh}
+    />
+  ) : null;
+
   return (
     <Box
       sx={{
@@ -454,68 +538,14 @@ export function JobDetailPage() {
         </>
       ) : (
         <>
-          {pattern ? (
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns: {
-                  xs: "minmax(0, 1fr)",
-                  lg: "minmax(0, 1.5fr) minmax(360px, 0.85fr)",
-                },
-                gap: 2,
-                minWidth: 0,
-                alignItems: "start",
-              }}
-            >
-              <PatternBanner
-                pattern={pattern}
-                jobID={canonicalJobID}
-                runs={runs}
-                refreshStatus={data.pattern_refresh}
-              />
-              <Box
-                sx={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 2,
-                  minWidth: 0,
-                  position: { lg: "sticky" },
-                  top: { lg: 80 },
-                  alignSelf: "start",
-                }}
-              >
-                {runHistory}
-                {runMetadata}
-              </Box>
-            </Box>
-          ) : (
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns: {
-                  xs: "minmax(0, 1fr)",
-                  lg: "minmax(0, 1fr) minmax(360px, 0.8fr)",
-                },
-                gap: 2,
-                minWidth: 0,
-                alignItems: "start",
-              }}
-            >
-              {runHistory}
-              {runMetadata}
-            </Box>
-          )}
+          <JobDetailPrimaryLayout
+            patternAnalysis={patternAnalysis}
+            buildFailureAnalysis={buildFailureBriefing}
+            runHistory={runHistory}
+            runMetadata={runMetadata}
+          />
 
           {crossRunGrid}
-
-          {selectedRun && buildFailure && (
-            <BuildFailurePanel
-              jobID={canonicalJobID}
-              run={selectedRun}
-              failure={buildFailure}
-              fetchStatus={fetchStatus}
-            />
-          )}
 
           {selectedRun && resultSummary.executed.length > 0 ? (
             <ResultLedger

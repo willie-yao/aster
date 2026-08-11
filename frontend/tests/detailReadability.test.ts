@@ -45,6 +45,9 @@ test("detail strip dividers always use the quiet divider token", () => {
   assert.match(metrics, /borderInlineStartColor: "var\(--mui-palette-divider\)"/);
   assert.match(metrics, /borderTopColor: "var\(--mui-palette-divider\)"/);
   assert.doesNotMatch(metadata, /borderLeft:/);
+  assert.match(metadata, /stacked = false/);
+  assert.match(metadata, /gridTemplateColumns: stacked/);
+  assert.match(metadata, /borderInlineStartWidth: stacked/);
   assert.match(metadata, /borderInlineStartColor: "var\(--mui-palette-divider\)"/);
   assert.match(metadata, /borderTopColor: "var\(--mui-palette-divider\)"/);
 });
