@@ -40,6 +40,14 @@ func TestReasonAdmissionConversionClaims(t *testing.T) {
 		"Delete the admission webhook configuration so the API server stops posting ConversionReview objects to ASO.",
 		"Delete the admission webhook configuration so zero ConversionReview objects are sent to ASO.",
 		"Delete the admission webhook configuration so none of the ConversionReview objects are sent to ASO.",
+		"Delete the admission webhook configuration so none of these ConversionReview objects are sent to ASO.",
+		"Delete the admission webhook configuration so not a single ConversionReview object is sent to ASO.",
+		"Delete the admission webhook configuration so ConversionReview delivery is eliminated.",
+		"Purge the CRD conversion webhook before upgrade.",
+		"Decommission the CRD conversion webhook before upgrade.",
+		"Erase the CRD conversion webhook configuration before upgrade.",
+		"The CRD conversion webhook is purged before upgrade.",
+		"The CRD conversion webhook becomes decommissioned before upgrade.",
 	} {
 		if got := Reason(text, actionable); got != UnsafeConversionReason {
 			t.Errorf("unsafe recommendation accepted: %q -> %q", text, got)
@@ -60,6 +68,7 @@ func TestReasonPreservesSafeWebhookChanges(t *testing.T) {
 		"Delete the obsolete admission webhook configurations while keeping conversion available. Do not skip conversion.",
 		"Remove the conversion webhook certificate dependency while preserving the Webhook conversion strategy.",
 		"Add shutdown coordination so conversion remains available until all stored objects are migrated.",
+		"Keep the CRD conversion webhook available until all stored objects are migrated.",
 		"Keep conversion available and prevent conversion outages during shutdown.",
 		"Delete the obsolete admission webhook configurations. Add shutdown coordination to prevent conversion calls from failing during provider deletion.",
 		"Delete the obsolete admission webhook configurations while keeping conversion available and preventing API server conversion calls from failing.",
@@ -70,6 +79,9 @@ func TestReasonPreservesSafeWebhookChanges(t *testing.T) {
 		"Delete the obsolete admission webhook configuration while preserving conversion to prevent ConversionReview requests from failing to reach ASO.",
 		"Delete the obsolete admission webhook configuration to prevent the API server from failing to post ConversionReview objects to ASO while preserving conversion.",
 		"Delete the obsolete admission webhook configuration to prevent failures when posting ConversionReview objects to ASO while keeping conversion available.",
+		"Delete the obsolete admission webhook configuration to prevent failed delivery of ConversionReview objects to ASO while keeping conversion available.",
+		"Delete the obsolete admission webhook configuration to prevent ConversionReview delivery from failing while keeping conversion available.",
+		"Delete the obsolete admission webhook configuration while ensuring ConversionReview delivery does not fail and keeping conversion available.",
 	} {
 		if got := Reason(text, actionable); got != "" {
 			t.Errorf("safe recommendation rejected: %q -> %q", text, got)
@@ -112,6 +124,10 @@ func TestReasonRejectsDestructiveStructuredTargets(t *testing.T) {
 		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "RETRY_DELETE_CONVERSION_WEBHOOK", Value: "true"},
 		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "RETRY_CONVERSION_WEBHOOK_DELETE", Value: "true"},
 		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "SHUTDOWN_CONVERSION_WEBHOOK_REMOVE", Value: "true"},
+		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "DELETE_CONVERSION_WEBHOOK_CERTIFICATE_AND_CONFIGURATION", Value: "true"},
+		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "DISABLE_CONVERSION_WEBHOOK_RETRY_AND_WEBHOOK", Value: "true"},
+		{Intent: models.RemediationIntentSetConfiguration, Path: "crd.yaml", Value: "conversionWebhook.certificateAndEnabled=false"},
+		{Intent: models.RemediationIntentSetConfiguration, Path: "crd.yaml", Value: "conversionWebhook.retryAndEnabled=false"},
 	} {
 		if got := Reason("neutral wording", []models.RemediationTarget{target}); got != UnsafeConversionReason {
 			t.Errorf("unsafe target accepted: %+v -> %q", target, got)
@@ -135,6 +151,12 @@ func TestReasonPreservesSafeStructuredDependencies(t *testing.T) {
 		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "RotateConversionWebhookCertificate", Path: "reconcile.go"},
 		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "EnsureConversionWebhookAvailable", Path: "reconcile.go"},
 		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/project/conversionwebhook/v1.RotateCertificate", Path: "reconcile.go"},
+		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "PreserveConversionWebhook", Path: "reconcile.go"},
+		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "MaintainConversionWebhook", Path: "reconcile.go"},
+		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "KeepConversionWebhook", Path: "reconcile.go"},
+		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/project/conversionwebhook.Preserve", Path: "reconcile.go"},
+		{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "example.com/project/conversionwebhook.IsAvailable", Path: "reconcile.go"},
+		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "CONVERSION_WEBHOOK_ENABLED", Value: "true"},
 		{Intent: models.RemediationIntentSetConfiguration, Path: "crd.yaml", Value: "conversionRetry.enabled=false"},
 		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "DISABLE_CONVERSION_TIMEOUT_OVERRIDE", Value: "true"},
 		{Intent: models.RemediationIntentSetConfiguration, Path: "crd.yaml", Value: "retry.conversionWebhook.enabled=false"},

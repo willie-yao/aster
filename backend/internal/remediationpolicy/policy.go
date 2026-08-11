@@ -24,6 +24,8 @@ var (
 	callFailureAvoidanceRe        = regexp.MustCompile(`(?is)\b(?:api\s*server\s+)?conversion(?:\s+webhook)?\s+(?:calls?|invocations?|requests?)\b[^.!?\n,;]{0,40}\b(?:will\s+not|cannot|can\s+not|do\s+not|does\s+not|never)\s+fail\b`)
 	conversionReviewFailureRe     = regexp.MustCompile(`(?is)\bconversion\s*review(?:\s+(?:objects?|requests?))?\b[^.!?\n,;]{0,50}\b(?:will\s+not|cannot|can\s+not|do\s+not|does\s+not|never)\s+fail\s+to\s+(?:reach|send|post|deliver|forward|submit|receive)\b`)
 	preventConversionReviewFailRe = regexp.MustCompile(`(?is)\bprevent(?:s|ed|ing)?\b(?:[^.!?\n,;]{0,100}\bconversion\s*review(?:\s+(?:objects?|requests?))?\b[^.!?\n,;]{0,50}(?:\bfrom\s+fail(?:ing|ure)?\s+to\s+(?:reach|send|post|deliver|forward|submit|receive)\b|\bdelivery\s+failures?\b)|[^.!?\n,;]{0,100}\bfail(?:ing|ures?)?\b[^.!?\n,;]{0,50}\b(?:to|when|while)?\s*(?:reach(?:ing)?|send(?:ing)?|post(?:ing)?|deliver(?:ing)?|forward(?:ing)?|submit(?:ting)?|receiv(?:e|ing))\b[^.!?\n,;]{0,40}\bconversion\s*review\b)`)
+	directConversionOperationRe   = regexp.MustCompile(`(?i)\b([a-z][a-z-]*)\s+(?:the\s+)?(?:kubernetes\s+)?(?:(?:crd\s+)?conversion(?:\s+webhook)?|webhook\s+conversion)(?:\s+(?:configuration|strategy))?\b`)
+	directConversionStateRe       = regexp.MustCompile(`(?i)\b(?:(?:crd\s+)?conversion(?:\s+webhook)?|webhook\s+conversion)(?:\s+(?:configuration|strategy))?\s+(?:(?:is|are|will\s+be|must\s+be|should\s+be|gets?|becomes?)\s+)?([a-z][a-z-]*)\b`)
 )
 
 // Reason returns a privacy-safe reason when an actionable remediation is unsafe.
@@ -48,7 +50,7 @@ func Reason(recommendation string, targets []models.RemediationTarget) string {
 		if clause == "" {
 			continue
 		}
-		if destructiveConversionObjectRe.MatchString(clause) || destructiveConversionFieldRe.MatchString(clause) || conversionStrategyNoneRe.MatchString(clause) || conversionBypassRe.MatchString(clause) {
+		if destructiveConversionObjectRe.MatchString(clause) || destructiveConversionFieldRe.MatchString(clause) || conversionStrategyNoneRe.MatchString(clause) || conversionBypassRe.MatchString(clause) || unsafeDirectConversionOperation(clause) || unsafeDirectConversionState(clause) {
 			return UnsafeConversionReason
 		}
 		if admissionCleanup && conversionInvocationLoss(clause) {
@@ -91,31 +93,204 @@ func conversionInvocationLoss(clause string) bool {
 	if !strings.Contains(text, "conversion") {
 		return false
 	}
-	if preventCallFailureRe.MatchString(text) || callFailureAvoidanceRe.MatchString(text) || conversionReviewFailureRe.MatchString(text) || preventConversionReviewFailRe.MatchString(text) {
+	if preventCallFailureRe.MatchString(text) || callFailureAvoidanceRe.MatchString(text) {
 		return false
+	}
+	if conversionReviewDelivery(text) {
+		if hardConversionReviewLoss(text) {
+			return true
+		}
+		return !conversionReviewDeliveryPreserved(text)
 	}
 	if strings.Contains(text, "skip") {
 		return true
 	}
-	delivery := conversionReviewDelivery(text)
-	deliveryLoss := delivery && conversionReviewDeliveryLoss(text)
 	if strings.Contains(text, "prevent") {
-		return containsAny(text, "call", "invok") || delivery
+		return containsAny(text, "call", "invok")
 	}
 	loss := containsAny(text, "stop", "cease", "no longer", "will not", "does not", "cannot", "can no longer", "fail to", "not available", "unavailable", "never")
-	return loss && (containsAny(text, "call", "invok", "available", "reach", "request") || delivery) || deliveryLoss
+	return loss && containsAny(text, "call", "invok", "available", "reach", "request")
 }
 
 func conversionReviewDelivery(value string) bool {
 	return containsAny(value, "conversionreview", "conversion review") && containsAny(value, "send", "sent", "post", "deliver", "forward", "submit", "receive", "reach")
 }
 
-func conversionReviewDeliveryLoss(value string) bool {
+func hardConversionReviewLoss(value string) bool {
+	if conversionReviewFailurePreserved(value) {
+		return false
+	}
 	return containsAny(value,
-		"no conversionreview", "no conversion review", "zero conversionreview", "zero conversion review",
-		"none of the conversionreview", "none of the conversion review", "no longer", "cannot", "will not", "does not", "unable", "never",
-		"not sent", "not posted", "not delivered", "not forwarded", "not submitted", "not received",
+		"stop", "cease", "no longer", "zero", "none", "not a single", "eliminat", "abolish", "suppress",
+		"block", "bypass", "remove", "disable", "unable", "cannot", "will not", "does not", "never", "not sent",
+		"not posted", "not delivered", "not forwarded", "not submitted", "not received",
 	)
+}
+
+func conversionReviewDeliveryPreserved(value string) bool {
+	if conversionReviewFailurePreserved(value) {
+		return true
+	}
+	return containsAny(value,
+		"keep", "preserv", "maintain", "remain available", "remains available", "stay available", "stays available",
+		"continue", "succeed", "successful", "working", "reachable",
+	)
+}
+
+func conversionReviewFailurePreserved(value string) bool {
+	if conversionReviewFailureRe.MatchString(value) || preventConversionReviewFailRe.MatchString(value) {
+		return true
+	}
+	words := identifierWords(value)
+	failureIndexes := wordIndexesWithPrefix(words, "fail")
+	deliveryIndexes := deliveryWordIndexes(words)
+	if len(failureIndexes) == 0 || len(deliveryIndexes) == 0 || !nearAny(failureIndexes, deliveryIndexes, 7) {
+		return false
+	}
+	for _, failure := range failureIndexes {
+		start := failure - 4
+		if start < 0 {
+			start = 0
+		}
+		if containsWord(words[start:failure], "prevent", "prevents", "prevented", "preventing", "ensure", "ensures", "ensuring", "cannot", "never", "not") {
+			return true
+		}
+	}
+	return false
+}
+
+func wordIndexesWithPrefix(words []string, prefix string) []int {
+	indexes := make([]int, 0, 2)
+	for i, word := range words {
+		if strings.HasPrefix(word, prefix) {
+			indexes = append(indexes, i)
+		}
+	}
+	return indexes
+}
+
+func deliveryWordIndexes(words []string) []int {
+	indexes := make([]int, 0, 2)
+	for i, word := range words {
+		if containsAny(word, "send", "sent", "post", "deliver", "forward", "submit", "receiv", "reach") {
+			indexes = append(indexes, i)
+		}
+	}
+	return indexes
+}
+
+func nearAny(left, right []int, distance int) bool {
+	for _, a := range left {
+		for _, b := range right {
+			delta := a - b
+			if delta < 0 {
+				delta = -delta
+			}
+			if delta <= distance {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func unsafeDirectConversionOperation(clause string) bool {
+	for _, match := range directConversionOperationRe.FindAllStringSubmatchIndex(clause, -1) {
+		operation := strings.ToLower(clause[match[2]:match[3]])
+		if ignoredDirectConversionWord(operation) {
+			continue
+		}
+		suffix := identifierWords(clause[match[1]:])
+		if preservingOperationWord(operation) && !unsafePreservationSuffix(suffix) {
+			continue
+		}
+		if operation == "prevent" && directConversionFailurePrevention(suffix) {
+			continue
+		}
+		if destructiveActionWord(operation) && leadingSafeQualifierPhrase(suffix) {
+			continue
+		}
+		if containsWord([]string{operation}, "set", "change", "switch", "replace") && startsWithWords(suffix, "to", "webhook") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func unsafePreservationSuffix(words []string) bool {
+	if containsWord(words, "disabled", "removed", "bypassed", "unavailable") {
+		return true
+	}
+	for i, word := range words {
+		if word != "none" {
+			continue
+		}
+		if i == 0 || !containsWord([]string{words[i-1]}, "not", "never") {
+			return true
+		}
+	}
+	return false
+}
+
+func unsafeDirectConversionState(clause string) bool {
+	for _, match := range directConversionStateRe.FindAllStringSubmatchIndex(clause, -1) {
+		state := strings.ToLower(clause[match[2]:match[3]])
+		if containsWord([]string{state},
+			"available", "availability", "calls", "continues", "failures", "outage", "outages", "preserved",
+			"independently", "maintained", "ready", "reachable", "remains", "requests", "retry", "serving", "stays", "strategy", "webhook",
+		) || safeQualifierWord(state) || ignoredDirectConversionWord(state) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func ignoredDirectConversionWord(word string) bool {
+	return containsWord([]string{word}, "a", "an", "and", "api", "as", "before", "after", "because", "crd", "for", "if", "of", "on", "server", "so", "that", "the", "to", "until", "webhook", "when", "while", "with")
+}
+
+func directConversionFailurePrevention(words []string) bool {
+	hasFailure := containsWord(words, "fail", "fails", "failed", "failing", "failure", "failures", "outage", "outages")
+	hasSubject := containsWord(words, "call", "calls", "invocation", "invocations", "request", "requests", "outage", "outages")
+	return hasFailure && hasSubject
+}
+
+func preservingOperationWord(word string) bool {
+	return containsWord([]string{word}, "keep", "keeping", "maintain", "maintaining", "preserve", "preserving", "ensure", "ensuring", "serve", "serving")
+}
+
+func leadingSafeQualifierPhrase(words []string) bool {
+	qualified := false
+	for i, word := range words {
+		if containsWord([]string{word}, "while", "until", "so", "to", "before", "after", "by") {
+			return qualified
+		}
+		if word == "and" {
+			if i+1 >= len(words) || !safeQualifierWord(words[i+1]) {
+				return false
+			}
+			continue
+		}
+		if !safeQualifierWord(word) {
+			return false
+		}
+		qualified = true
+	}
+	return qualified
+}
+
+func startsWithWords(words []string, expected ...string) bool {
+	if len(words) < len(expected) {
+		return false
+	}
+	for i, word := range expected {
+		if words[i] != word {
+			return false
+		}
+	}
+	return true
 }
 
 func containsAny(value string, candidates ...string) bool {
@@ -140,17 +315,16 @@ func unsafeConversionTarget(target models.RemediationTarget) bool {
 		isConversion, qualified := conversionObjectSetting(key)
 		return isConversion && !qualified && conversionFalseValue(value)
 	case models.RemediationIntentSetJobEnvironment:
-		isConversion, qualified := conversionObjectSetting(target.Name)
-		if !isConversion || qualified {
+		if !conversionIdentifierPresent(target.Name) {
 			return false
 		}
-		name := normalizeConversionToken(target.Name)
-		for _, action := range []string{"disable", "delete", "remove", "drop", "clear", "unset", "bypass", "turnoff", "skip", "stop", "omit"} {
-			if strings.Contains(name, action) {
-				return conversionTrueValue(target.Value)
-			}
+		if conversionAvailabilityToggle(target.Name) {
+			return conversionFalseValue(target.Value)
 		}
-		return conversionFalseValue(target.Value)
+		if !destructiveConversionIdentifier(target.Name) {
+			return false
+		}
+		return conversionFalseValue(target.Value) || conversionTrueValue(target.Value)
 	default:
 		return false
 	}
@@ -245,21 +419,26 @@ func safeExplicitConversionOperation(words []string) bool {
 		return false
 	}
 	qualified := false
+	preserving := false
 	for _, word := range words {
 		if safeQualifierWord(word) || safeAvailabilityWord(word) {
 			qualified = true
+			continue
+		}
+		if preservingOperationWord(word) {
+			preserving = true
 			continue
 		}
 		if !safeConversionOperationWord(word) {
 			return false
 		}
 	}
-	return qualified
+	return qualified || preserving
 }
 
 func safeConversionOperationWord(word string) bool {
 	switch word {
-	case "add", "configure", "coordinate", "ensure", "keep", "maintain", "patch", "preserve",
+	case "add", "configure", "coordinate", "ensure", "is", "keep", "maintain", "patch", "preserve",
 		"renew", "replace", "rotate", "set", "update", "verify", "wait", "check",
 		"for", "from", "of", "on", "to", "until", "while", "and":
 		return true
@@ -426,90 +605,80 @@ func containsWord(words []string, candidates ...string) bool {
 	return false
 }
 
-func safeConversionIdentifierQualifier(value string) bool {
-	for _, qualifier := range []string{
-		"timeout", "certificate", "certificatedependency", "certificaterotation", "shutdowndependency",
-		"shutdown", "shutdowncoordination", "retry", "retrybehavior", "retrypolicy", "backoff", "override",
-	} {
-		if strings.Contains(value, qualifier) {
-			return true
+func conversionIdentifierPresent(value string) bool {
+	words := expandedIdentifierWords(value)
+	_, _, count := conversionIdentifierSpan(words)
+	return count > 0 || strings.Contains(normalizeConversionToken(value), "conversion")
+}
+
+func conversionAvailabilityToggle(value string) bool {
+	words := expandedIdentifierWords(value)
+	start, end, count := conversionIdentifierSpan(words)
+	if count != 1 {
+		return false
+	}
+	remaining := make([]string, 0, len(words)-(end-start))
+	remaining = append(remaining, words[:start]...)
+	remaining = append(remaining, words[end:]...)
+	if len(remaining) == 0 {
+		return false
+	}
+	for _, word := range remaining {
+		if !containsWord([]string{word}, "enable", "enabled", "available", "availability") {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func conversionObjectSetting(value string) (bool, bool) {
-	return conversionObjectSettingWithPrefix(value, true)
-}
-
-func conversionObjectSettingWithPrefix(value string, allowPrefix bool) (bool, bool) {
-	name := normalizeConversionToken(value)
-	objects := []string{"conversionwebhook", "webhookconversion", "conversionstrategy", "strategyconversion", "specconversion", "crdconversion"}
-	for _, object := range objects {
-		index := strings.Index(name, object)
-		if index < 0 {
-			continue
-		}
-		suffix := name[index+len(object):]
-		if object == "specconversion" && (strings.HasPrefix(suffix, "webhook") || strings.HasPrefix(suffix, "strategy")) {
-			continue
-		}
-		qualified := safeConversionQualifier(suffix)
-		if allowPrefix && (safeQualifierBeforeConversionObject(name, index) || safeQualifierAfterConversionAction(name, index+len(object))) {
+	words := expandedIdentifierWords(value)
+	start, end, count := conversionIdentifierSpan(words)
+	if count == 0 {
+		return strings.Contains(normalizeConversionToken(value), "conversion"), false
+	}
+	if count != 1 {
+		return true, false
+	}
+	remaining := make([]string, 0, len(words)-(end-start))
+	remaining = append(remaining, words[:start]...)
+	remaining = append(remaining, words[end:]...)
+	if containsWord(remaining, "and") {
+		return true, false
+	}
+	qualified := false
+	for _, word := range remaining {
+		if safeQualifierWord(word) {
 			qualified = true
-		}
-		return true, qualified
-	}
-	return strings.Contains(name, "conversion"), safeConversionIdentifierQualifier(name)
-}
-
-func safeQualifierBeforeConversionObject(value string, conversion int) bool {
-	action := firstDestructiveAction(value)
-	for _, qualifier := range []string{"timeout", "certificate", "dependency", "retry", "shutdown", "backoff", "override"} {
-		index := strings.Index(value, qualifier)
-		if index < 0 || index >= conversion {
 			continue
 		}
-		if action < 0 || action < index {
-			return true
+		if !containsWord([]string{word}, "spec", "enable", "enabled", "disable", "disabled", "value", "name") {
+			return true, false
 		}
 	}
-	return false
+	return true, qualified
 }
 
-func safeQualifierAfterConversionAction(value string, conversionEnd int) bool {
-	action := firstDestructiveAction(value)
-	if action < conversionEnd {
-		return false
-	}
-	for _, qualifier := range []string{"timeout", "certificate", "dependency", "retry", "shutdown", "backoff", "override"} {
-		if index := strings.Index(value[action+1:], qualifier); index >= 0 {
-			return true
+func expandedIdentifierWords(value string) []string {
+	words := identifierWords(value)
+	expanded := make([]string, 0, len(words)+2)
+	for _, word := range words {
+		switch word {
+		case "conversionwebhook":
+			expanded = append(expanded, "conversion", "webhook")
+		case "webhookconversion":
+			expanded = append(expanded, "webhook", "conversion")
+		case "conversionstrategy":
+			expanded = append(expanded, "conversion", "strategy")
+		case "strategyconversion":
+			expanded = append(expanded, "strategy", "conversion")
+		case "crdconversion":
+			expanded = append(expanded, "crd", "conversion")
+		default:
+			expanded = append(expanded, word)
 		}
 	}
-	return false
-}
-
-func firstDestructiveAction(value string) int {
-	action := -1
-	for _, candidate := range []string{"delete", "remove", "disable", "drop", "clear", "unset", "bypass", "turnoff", "stop"} {
-		if index := strings.Index(value, candidate); index >= 0 && (action < 0 || index < action) {
-			action = index
-		}
-	}
-	return action
-}
-
-func safeConversionQualifier(suffix string) bool {
-	for _, qualifier := range []string{
-		"timeout", "certificate", "certificatedependency", "certificaterotation", "dependency",
-		"shutdown", "shutdowncoordination", "shutdowndependency", "retry", "retrybehavior", "retrypolicy", "backoff", "override",
-	} {
-		if strings.HasPrefix(suffix, qualifier) {
-			return true
-		}
-	}
-	return false
+	return expanded
 }
 
 func normalizeConversionToken(value string) string {
