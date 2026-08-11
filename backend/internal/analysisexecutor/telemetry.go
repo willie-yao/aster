@@ -55,28 +55,30 @@ type openCodeMessage struct {
 		Role  string                 `json:"role"`
 		Error *openCodeErrorEnvelope `json:"error"`
 	} `json:"info"`
-	Parts []struct {
-		Type     string   `json:"type"`
-		Tool     string   `json:"tool"`
-		Cost     *float64 `json:"cost"`
-		Auto     *bool    `json:"auto"`
-		Overflow *bool    `json:"overflow"`
-		Tokens   *struct {
-			Input  *int `json:"input"`
-			Output *int `json:"output"`
-			Cache  *struct {
-				Read *int `json:"read"`
-			} `json:"cache"`
-		} `json:"tokens"`
-		State struct {
-			Status   string          `json:"status"`
-			Error    string          `json:"error"`
-			Input    json.RawMessage `json:"input"`
-			Metadata struct {
-				Matches *int `json:"matches"`
-			} `json:"metadata"`
-		} `json:"state"`
-	} `json:"parts"`
+	Parts []openCodePart `json:"parts"`
+}
+
+type openCodePart struct {
+	Type     string   `json:"type"`
+	Tool     string   `json:"tool"`
+	Cost     *float64 `json:"cost"`
+	Auto     *bool    `json:"auto"`
+	Overflow *bool    `json:"overflow"`
+	Tokens   *struct {
+		Input  *int `json:"input"`
+		Output *int `json:"output"`
+		Cache  *struct {
+			Read *int `json:"read"`
+		} `json:"cache"`
+	} `json:"tokens"`
+	State struct {
+		Status   string          `json:"status"`
+		Error    string          `json:"error"`
+		Input    json.RawMessage `json:"input"`
+		Metadata struct {
+			Matches *int `json:"matches"`
+		} `json:"metadata"`
+	} `json:"state"`
 }
 
 type toolAggregate struct {
@@ -120,12 +122,14 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 		return unavailable, telemetry, facts, fmt.Errorf("telemetry event count exceeds the bound")
 	}
 	tools := map[string]*toolAggregate{}
+	telemetry.ProviderRequestsKnown = true
 	usage := agentanalysis.WorkspaceUsage{Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable}
 	costKnown := true
 	cost := 0.0
 	positiveCost := false
 	incompleteUsage := false
 	events := 0
+	toolParts := 0
 	for messageIndex, message := range messages {
 		events++
 		if events > maxOpenCodeTelemetryEvents || time.Since(started) > maxTelemetryParseTime {
@@ -152,7 +156,7 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 				telemetry.ContextLimit = true
 			}
 		}
-		messageStarts, messageFinishes := 0, 0
+		messageStarts, messageFinishes, messageToolParts, messageActiveTools := 0, 0, 0, 0
 		for _, part := range message.Parts {
 			events++
 			if events > maxOpenCodeTelemetryEvents || time.Since(started) > maxTelemetryParseTime {
@@ -167,6 +171,7 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 			switch part.Type {
 			case "step-start":
 				telemetry.StepsUsed++
+				telemetry.ProviderRequests++
 				messageStarts++
 			case "step-finish":
 				messageFinishes++
@@ -184,6 +189,8 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 					positiveCost = positiveCost || *part.Cost > 0
 				}
 			case "tool":
+				toolParts++
+				messageToolParts++
 				if !validTelemetryToolName(part.Tool) {
 					return unavailable, telemetry, facts, fmt.Errorf("telemetry tool name is invalid")
 				}
@@ -217,12 +224,25 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 						telemetry.DeniedToolCount++
 					}
 				case "pending", "running":
+					messageActiveTools++
 					aggregate.failures++
 					telemetry.ToolFailureCount++
 				default:
 					return unavailable, telemetry, facts, fmt.Errorf("telemetry tool state is invalid")
 				}
 			}
+		}
+		if messageFailure {
+			streamProven := unknownErrorProvesResponseStream(telemetry.Error.Classification)
+			if messageStarts == 0 {
+				incompleteUsage = true
+				if telemetry.Error.Name != "UnknownError" || streamProven {
+					telemetry.ProviderRequests++
+				} else {
+					telemetry.ProviderRequestsKnown = false
+				}
+			}
+			applyOpenCodeErrorLifecycle(&telemetry.Error, telemetry.ProviderRequests, toolParts, messageStarts, messageToolParts, messageActiveTools)
 		}
 		if message.Info.Role == "assistant" {
 			if messageFinishes > messageStarts {
@@ -242,10 +262,6 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 	}
 	if usage.ModelRequests > telemetry.StepsUsed || (telemetry.StepsUsed == 0 && !telemetry.Error.Available) {
 		return unavailable, telemetry, facts, fmt.Errorf("telemetry step usage is inconsistent")
-	}
-	telemetry.ProviderRequests = telemetry.StepsUsed
-	if telemetry.Error.Available && telemetry.ProviderRequests == 0 {
-		telemetry.ProviderRequests = 1
 	}
 	if incompleteUsage || telemetry.StepsUsed == 0 {
 		usage = agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable}
@@ -268,6 +284,43 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 	telemetry.Status = agentanalysis.WorkspaceTelemetryAvailable
 	telemetry.EventCount = events
 	return usage, telemetry, facts, nil
+}
+
+func applyOpenCodeErrorLifecycle(value *agentanalysis.WorkspaceOpenCodeErrorTelemetry, observedProviderRequests, observedToolParts, messageStarts, messageToolParts, activeTools int) {
+	if value == nil || value.Name != "UnknownError" {
+		return
+	}
+	streamObserved := unknownErrorProvesResponseStream(value.Classification)
+	providerObserved := observedProviderRequests > 0 || streamObserved
+	if providerObserved {
+		value.BeforeProviderRequest = openCodeTelemetryBool(false)
+	}
+	if observedToolParts > 0 {
+		value.BeforeFirstTool = openCodeTelemetryBool(false)
+	} else if providerObserved {
+		value.BeforeFirstTool = openCodeTelemetryBool(true)
+	}
+	if activeTools > 0 {
+		value.DuringToolExecution = openCodeTelemetryBool(true)
+	} else if streamObserved || messageStarts > 0 && messageToolParts == 0 {
+		value.DuringToolExecution = openCodeTelemetryBool(false)
+	}
+	if streamObserved {
+		value.DuringStreamProcessing = openCodeTelemetryBool(true)
+	} else if activeTools > 0 {
+		value.DuringStreamProcessing = openCodeTelemetryBool(false)
+	}
+	if value.DuringSessionPersistence == nil && (streamObserved || activeTools > 0) {
+		value.DuringSessionPersistence = openCodeTelemetryBool(false)
+	}
+}
+
+func unknownErrorProvesResponseStream(classification string) bool {
+	return classification == "response_stream"
+}
+
+func openCodeTelemetryBool(value bool) *bool {
+	return &value
 }
 
 func recordOpenCodeEvidenceTool(facts *openCodeEvidenceFacts, tool string, raw json.RawMessage, matches *int, workDir string) error {

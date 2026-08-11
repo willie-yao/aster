@@ -151,6 +151,9 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	}
 	if runResult.Telemetry.ProviderRequests == 0 && runResult.Telemetry.StepsUsed > 0 {
 		runResult.Telemetry.ProviderRequests = runResult.Telemetry.StepsUsed
+		if !runResult.Telemetry.Error.Available {
+			runResult.Telemetry.ProviderRequestsKnown = true
+		}
 	}
 	runResult.Telemetry.StructuredOutputRetriesKnown = true
 	result.Usage = runResult.Usage
@@ -347,7 +350,7 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 		result.Telemetry.Status = result.Usage.Status
 		result.Telemetry.RequestShape = evidenceShape
 	}
-	applyOpenCodePromptError(&result, evidenceErr)
+	applyOpenCodePromptError(&result, evidenceErr, 0, true, false)
 	if evidenceErr != nil {
 		return result, evidenceErr
 	}
@@ -362,17 +365,33 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 	result.Telemetry.SourceEvidenceToolCalls = evidenceFacts.SourceToolCalls
 
 	finalShape := newOpenCodeRequestShape(spec, version)
-	structured, finalMessage, finalErr := promptOpenCodeFinalization(ctx, client, baseURL, sessionID, spec)
+	structured, finalErr := promptOpenCodeFinalization(ctx, client, baseURL, sessionID, spec)
 	result.Structured = structured
-	combined, telemetryErr := appendOpenCodeTelemetryMessage(evidenceRaw, finalMessage)
-	if telemetryErr != nil {
+	finalRaw, finalRawErr := fetchOpenCodeTelemetryRaw(ctx, client, baseURL, sessionID, spec.WorkDir)
+	if finalRawErr != nil {
 		result.Telemetry.RequestShape = finalShape
+		applyOpenCodePromptError(&result, finalErr, evidenceTelemetry.ProviderRequests, evidenceTelemetry.ProviderRequestsKnown, true)
+		result.Usage = agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable}
+		if finalErr != nil {
+			return result, finalErr
+		}
+		result.Telemetry.Error = agentanalysis.WorkspaceOpenCodeErrorTelemetry{}
+		result.Telemetry.ProviderRequests = max(result.Telemetry.ProviderRequests, evidenceTelemetry.ProviderRequests+1)
+		result.Telemetry.ProviderRequestsKnown = evidenceTelemetry.ProviderRequestsKnown
 		result.Telemetry.FailureCode = "telemetry_unavailable"
-		return result, fmt.Errorf("OpenCode finalization telemetry unavailable: %w", telemetryErr)
+		return result, fmt.Errorf("OpenCode finalization telemetry unavailable: %w", finalRawErr)
 	}
-	usage, telemetry, facts, telemetryErr := parseOpenCodeTelemetryForWorkspace(combined, spec.WorkDir)
+	usage, telemetry, facts, telemetryErr := parseOpenCodeTelemetryForWorkspace(finalRaw, spec.WorkDir)
 	if telemetryErr != nil {
 		result.Telemetry.RequestShape = finalShape
+		applyOpenCodePromptError(&result, finalErr, evidenceTelemetry.ProviderRequests, evidenceTelemetry.ProviderRequestsKnown, true)
+		result.Usage = agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable}
+		if finalErr != nil {
+			return result, finalErr
+		}
+		result.Telemetry.Error = agentanalysis.WorkspaceOpenCodeErrorTelemetry{}
+		result.Telemetry.ProviderRequests = max(result.Telemetry.ProviderRequests, evidenceTelemetry.ProviderRequests+1)
+		result.Telemetry.ProviderRequestsKnown = evidenceTelemetry.ProviderRequestsKnown
 		result.Telemetry.FailureCode = "telemetry_unavailable"
 		return result, fmt.Errorf("OpenCode finalization telemetry unavailable: %w", telemetryErr)
 	}
@@ -388,7 +407,11 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 	result.Telemetry.StructuredOutputToolCalls = max(facts.StructuredOutputCalls-evidenceFacts.StructuredOutputCalls, 0)
 	result.Telemetry.FinalizationPhaseCompleted = result.Telemetry.FinalizationPhaseSteps > 0 && result.Telemetry.FinalizationPhaseRequests > 0
 	finalizationNativeTools := max(facts.NonStructuredToolCalls-evidenceFacts.NonStructuredToolCalls, 0)
-	applyOpenCodePromptError(&result, finalErr)
+	replaceEvidenceError := finalErr != nil && sameOpenCodeErrorIdentity(telemetry.Error, evidenceTelemetry.Error)
+	applyOpenCodePromptError(&result, finalErr, evidenceTelemetry.ProviderRequests, evidenceTelemetry.ProviderRequestsKnown, replaceEvidenceError)
+	if replaceEvidenceError {
+		result.Usage = agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable}
+	}
 	if finalErr != nil {
 		return result, finalErr
 	}
@@ -420,17 +443,59 @@ func validateOpenCodeFinalizationPhase(structuredOutputCalls, nativeToolCalls in
 	return nil
 }
 
-func applyOpenCodePromptError(result *OpenCodeRunResult, err error) {
+func sameOpenCodeErrorIdentity(left, right agentanalysis.WorkspaceOpenCodeErrorTelemetry) bool {
+	left.BeforeProviderRequest = nil
+	left.BeforeFirstTool = nil
+	left.DuringStreamProcessing = nil
+	left.DuringToolExecution = nil
+	left.DuringSessionPersistence = nil
+	right.BeforeProviderRequest = nil
+	right.BeforeFirstTool = nil
+	right.DuringStreamProcessing = nil
+	right.DuringToolExecution = nil
+	right.DuringSessionPersistence = nil
+	return left == right
+}
+
+func applyOpenCodePromptError(result *OpenCodeRunResult, err error, priorProviderRequests int, priorProviderRequestsKnown, replaceExistingError bool) {
 	if err == nil {
 		return
 	}
 	var sessionErr *openCodePromptError
-	if errors.As(err, &sessionErr) {
-		result.Telemetry.Error = sessionErr.telemetry
-		result.Telemetry.ProviderRequests = max(result.Telemetry.ProviderRequests, 1)
-		result.Telemetry.ContextLimit = result.Telemetry.ContextLimit || sessionErr.telemetry.ContextOverflow
+	if replaceExistingError && !errors.As(err, &sessionErr) {
+		result.Telemetry.Error = agentanalysis.WorkspaceOpenCodeErrorTelemetry{}
+		result.Telemetry.ProviderRequests = max(result.Telemetry.ProviderRequests, priorProviderRequests)
+		result.Telemetry.ProviderRequestsKnown = false
+		result.Telemetry.FailureCode = openCodeFailureCode(err)
+		return
 	}
-	result.Telemetry.FailureCode = openCodeFailureCode(err)
+	if errors.As(err, &sessionErr) {
+		if replaceExistingError || !result.Telemetry.Error.Available {
+			result.Telemetry.Error = sessionErr.telemetry
+			providerProven := sessionErr.telemetry.Name != "UnknownError" || unknownErrorProvesResponseStream(sessionErr.telemetry.Classification)
+			if providerProven {
+				result.Telemetry.ProviderRequests = max(result.Telemetry.ProviderRequests, priorProviderRequests+1)
+				result.Telemetry.ProviderRequestsKnown = priorProviderRequestsKnown
+			} else {
+				result.Telemetry.ProviderRequests = max(result.Telemetry.ProviderRequests, priorProviderRequests)
+				result.Telemetry.ProviderRequestsKnown = false
+			}
+			if result.Telemetry.ProviderRequests > 0 {
+				result.Telemetry.Error.BeforeProviderRequest = openCodeTelemetryBool(false)
+				if len(result.Telemetry.Tools) > 0 {
+					result.Telemetry.Error.BeforeFirstTool = openCodeTelemetryBool(false)
+				} else {
+					result.Telemetry.Error.BeforeFirstTool = openCodeTelemetryBool(true)
+				}
+			}
+		}
+		result.Telemetry.ContextLimit = result.Telemetry.ContextLimit || result.Telemetry.Error.ContextOverflow
+	}
+	if result.Telemetry.Error.Available {
+		result.Telemetry.FailureCode = result.Telemetry.Error.Classification
+	} else {
+		result.Telemetry.FailureCode = openCodeFailureCode(err)
+	}
 }
 
 const maxOpenCodeAPIResponseBytes = 1 << 20
@@ -484,23 +549,18 @@ func promptOpenCodeEvidence(ctx context.Context, client *http.Client, baseURL, s
 }
 
 func promptOpenCode(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec) ([]byte, error) {
-	structured, _, err := promptOpenCodeFinalization(ctx, client, baseURL, sessionID, spec)
-	return structured, err
+	return promptOpenCodeFinalization(ctx, client, baseURL, sessionID, spec)
 }
 
-func promptOpenCodeFinalization(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec) ([]byte, []byte, error) {
+func promptOpenCodeFinalization(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec) ([]byte, error) {
 	response, err := promptOpenCodeMessage(ctx, client, baseURL, sessionID, spec, openCodeFinalizationAgent, agentanalysis.WorkspaceFinalizationInstruction(), true)
-	message, marshalErr := json.Marshal(response)
-	if marshalErr != nil {
-		return nil, nil, marshalErr
-	}
 	if err != nil {
-		return nil, message, err
+		return nil, err
 	}
 	if response.Info.Role != "assistant" || len(response.Info.Structured) == 0 || bytes.Equal(bytes.TrimSpace(response.Info.Structured), []byte("null")) {
-		return nil, message, fmt.Errorf("OpenCode did not return structured output")
+		return nil, fmt.Errorf("OpenCode did not return structured output")
 	}
-	return slices.Clone(response.Info.Structured), message, nil
+	return slices.Clone(response.Info.Structured), nil
 }
 
 type openCodePromptResponse struct {
@@ -547,34 +607,6 @@ func promptOpenCodeMessage(ctx context.Context, client *http.Client, baseURL, se
 func fetchOpenCodeTelemetryRaw(ctx context.Context, client *http.Client, baseURL, sessionID, workDir string) ([]byte, error) {
 	endpoint := baseURL + "/session/" + url.PathEscape(sessionID) + "/message?directory=" + url.QueryEscape(workDir)
 	return openCodeResponse(ctx, client, http.MethodGet, endpoint, nil, maxOpenCodeTelemetryBytes)
-}
-
-func appendOpenCodeTelemetryMessage(messagesRaw, messageRaw []byte) ([]byte, error) {
-	if len(messagesRaw) == 0 || len(messageRaw) == 0 {
-		return nil, fmt.Errorf("OpenCode phase telemetry is missing")
-	}
-	var messages []json.RawMessage
-	decoder := json.NewDecoder(bytes.NewReader(messagesRaw))
-	if err := decoder.Decode(&messages); err != nil {
-		return nil, fmt.Errorf("decode OpenCode evidence telemetry")
-	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return nil, fmt.Errorf("OpenCode evidence telemetry has trailing data")
-	}
-	var message json.RawMessage
-	decoder = json.NewDecoder(bytes.NewReader(messageRaw))
-	if err := decoder.Decode(&message); err != nil {
-		return nil, fmt.Errorf("decode OpenCode finalization telemetry")
-	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return nil, fmt.Errorf("OpenCode finalization telemetry has trailing data")
-	}
-	messages = append(messages, slices.Clone(message))
-	data, err := json.Marshal(messages)
-	if err != nil || len(data) > maxOpenCodeTelemetryBytes {
-		return nil, fmt.Errorf("combined OpenCode telemetry exceeds the bound")
-	}
-	return data, nil
 }
 
 func telemetryStatusForError(err error) string {

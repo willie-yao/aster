@@ -28,7 +28,7 @@ func TestParseOpenCodeTelemetrySanitizesSuccessfulUsage(t *testing.T) {
 	if !usage.Available || usage.ModelRequests != 1 || usage.InputTokens != 100 || usage.CachedInputTokens != 40 || usage.OutputTokens != 25 || !usage.CostAvailable || usage.CostUSD != "0.12500000" {
 		t.Fatalf("usage=%+v", usage)
 	}
-	if !telemetry.Available || telemetry.ProviderRequests != 1 || telemetry.StepsUsed != 1 || telemetry.ToolFailureCount != 1 || telemetry.DeniedToolCount != 1 || len(telemetry.Tools) != 2 {
+	if !telemetry.Available || telemetry.ProviderRequests != 1 || !telemetry.ProviderRequestsKnown || telemetry.StepsUsed != 1 || telemetry.ToolFailureCount != 1 || telemetry.DeniedToolCount != 1 || len(telemetry.Tools) != 2 {
 		t.Fatalf("telemetry=%+v", telemetry)
 	}
 	encoded, err := json.Marshal(struct {
