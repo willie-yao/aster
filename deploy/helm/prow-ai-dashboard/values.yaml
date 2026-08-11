@@ -86,10 +86,9 @@ analysisRuntime:
     tolerations: []
     affinity: {}
 
-# Agent Sandbox is a consumer-installed execution backend for Fix PR previews.
+# Agent Sandbox is a consumer-installed execution backend for private workloads.
 # The chart never installs the Agent Sandbox CRD/controller, a secure RuntimeClass,
-# execution namespace, model gateway, Fix PR network policy, or node infrastructure.
-# The optional causal critic can create only its own restrictive NetworkPolicy.
+# execution namespace, model gateway, input PVC, or node infrastructure.
 agentSandbox:
   fixRuntime:
     enabled: false
@@ -140,6 +139,65 @@ agentSandbox:
         cpu: "1"
         memory: 512Mi
         ephemeral-storage: 256Mi
+  analyzer:
+    enabled: false
+    # Existing dedicated namespace for private analyzer Sandboxes. Enabling this
+    # section does not wire the fetcher or worker to create analyzer workloads.
+    namespace: ""
+    runtimeClassName: ""
+    executorImage:
+      repository: ""
+      digest: ""
+      pullPolicy: IfNotPresent
+    stagerImage:
+      repository: ""
+      digest: ""
+      pullPolicy: IfNotPresent
+    input:
+      # Existing read-only PVC populated outside the Sandbox. The chart never
+      # creates, writes, or mounts it into dashboard workloads.
+      existingClaim: ""
+    clientServiceAccount:
+      # Kept separate from Fix and critic clients so scheduled workloads never
+      # inherit analyzer RBAC.
+      create: true
+      name: ""
+    workloadServiceAccount:
+      create: false
+      name: ""
+    modelGateway:
+      # Internal HTTPS gateway only. Direct provider endpoints are rejected.
+      endpoint: ""
+      model: ""
+      protocolVersion: openai-chat-completions-v1
+    timeout: 15m
+    outputLimitBytes: 262144
+    pollInterval: 250ms
+    networkPolicy:
+      # Use cilium on AKS Cilium/Kata when Kubernetes NetworkPolicy does not
+      # admit cross-node VM-isolated traffic to the gateway.
+      mode: kubernetes
+      enabled: true
+      gatewayNamespaceSelector: {}
+      gatewayPodSelector: {}
+      gatewayPort: 443
+      dnsNamespaceSelector:
+        kubernetes.io/metadata.name: kube-system
+      dnsPodSelector:
+        k8s-app: kube-dns
+    quota:
+      # The analyzer namespace must be dedicated. The quota permits one Sandbox
+      # and one Pod at a time with exactly the configured resource ceiling.
+      enabled: true
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+        ephemeral-storage: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+        ephemeral-storage: 2Gi
   causalCritic:
     enabled: false
     # Existing consumer-owned namespace containing private critic Sandboxes.

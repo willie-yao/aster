@@ -545,6 +545,35 @@ The consumer separately owns the execution namespace, Agent Sandbox release,
 RuntimeClass, node pools, model gateway, image publication, registry access,
 egress enforcement, quotas, LimitRanges, and NetworkPolicies.
 
+## Agent Sandbox OpenCode analyzer
+
+The `agentSandbox.analyzer` chart section is a private, disabled-by-default
+deployment boundary for the thin OpenCode analyzer experiment. It does not wire
+the fetcher, worker, or server to create analyzer Sandboxes. The in-process
+analyzer remains authoritative.
+
+When enabled, the chart can create a dedicated analyzer client ServiceAccount,
+narrow Sandbox and Pod-log RBAC in a dedicated existing execution namespace, a
+tokenless workload ServiceAccount, a fail-closed admission policy, a
+deny-by-default network policy, and a one-Sandbox, one-Pod ResourceQuota. The
+chart never creates the namespace, controller, RuntimeClass, pre-populated input
+PVC, internal model gateway, or runtime images.
+
+The analyzer executor and stager images must use immutable SHA-256 digests. The
+admission policy pins both images, the exact read-only input PVC, the secure
+RuntimeClass and workload identity, resource bounds, AppArmor and seccomp, the
+single stager and executor shape, read-only source and artifact mounts, and the
+result-only writable mount. The executor never mounts the input PVC directly.
+
+Network policy denies ingress and public egress. Kubernetes policy mode selects
+the gateway with namespace and Pod labels. Cilium mode permits only DNS and the
+configured Kubernetes gateway Service and port, so the gateway must
+independently authenticate the analyzer ServiceAccount. The quota assumes the
+namespace is dedicated to this experiment.
+
+See [Agent Sandbox OpenCode analyzer](agent-sandbox-opencode-analyzer.md) for
+the workspace, result, authority, and benchmark boundaries.
+
 ## Agent Sandbox causal critic
 
 The `agentSandbox.causalCritic` chart section is independent from Fix PR

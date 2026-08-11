@@ -379,6 +379,51 @@ agentSandbox:
 VALUES
 expect_pass agent-sandbox "$tmp/agent-sandbox.yaml"
 
+cat > "$tmp/agent-sandbox-analyzer.yaml" <<'VALUES'
+agentSandbox:
+  analyzer:
+    enabled: true
+    namespace: analyzer-eval
+    runtimeClassName: kata-vm-isolation
+    executorImage:
+      repository: local/analyzer
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      pullPolicy: IfNotPresent
+    stagerImage:
+      repository: local/stager
+      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      pullPolicy: IfNotPresent
+    input:
+      existingClaim: analyzer-input
+    clientServiceAccount:
+      create: true
+      name: ""
+    workloadServiceAccount:
+      create: true
+      name: analyzer-workload
+    modelGateway:
+      endpoint: https://model-gateway.platform.svc.cluster.local:8443/v1
+      model: fixture-model
+      protocolVersion: openai-chat-completions-v1
+    timeout: 15m
+    outputLimitBytes: 262144
+    pollInterval: 250ms
+    networkPolicy:
+      mode: kubernetes
+      enabled: true
+      gatewayNamespaceSelector: {kubernetes.io/metadata.name: platform}
+      gatewayPodSelector: {app: model-gateway}
+      gatewayPort: 8443
+      dnsNamespaceSelector: {kubernetes.io/metadata.name: kube-system}
+      dnsPodSelector: {k8s-app: kube-dns}
+    quota:
+      enabled: true
+    resources:
+      requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 2Gi}
+      limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 2Gi}
+VALUES
+expect_pass agent-sandbox-analyzer "$tmp/agent-sandbox-analyzer.yaml"
+
 cat > "$tmp/invalid-agent-sandbox-legacy-command.yaml" <<'VALUES'
 agentSandbox:
   fixRuntime:
@@ -418,6 +463,14 @@ agentSandbox:
       pullPolicy: Always
 VALUES
 expect_fail invalid-agent-sandbox-dashboard-pull "$tmp/invalid-agent-sandbox-dashboard-pull.yaml" /agentSandbox/fixRuntime/dashboardImage/pullPolicy
+
+cat > "$tmp/invalid-agent-sandbox-analyzer-pull.yaml" <<'VALUES'
+agentSandbox:
+  analyzer:
+    executorImage:
+      pullPolicy: Always
+VALUES
+expect_fail invalid-agent-sandbox-analyzer-pull "$tmp/invalid-agent-sandbox-analyzer-pull.yaml" /agentSandbox/analyzer/executorImage/pullPolicy
 
 cat > "$tmp/invalid-agent-sandbox-apparmor.yaml" <<'VALUES'
 agentSandbox:

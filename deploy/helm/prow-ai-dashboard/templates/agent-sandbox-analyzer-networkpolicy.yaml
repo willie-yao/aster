@@ -1,0 +1,82 @@
+{{- include "prow-ai-dashboard.validateAgentSandboxAnalyzer" . -}}
+{{- if and .Values.agentSandbox.analyzer.enabled .Values.agentSandbox.analyzer.networkPolicy.enabled }}
+{{- $cfg := .Values.agentSandbox.analyzer.networkPolicy -}}
+{{- if eq $cfg.mode "cilium" }}
+{{- $gatewayAuthority := trimPrefix "https://" (regexFind "^https://[^/]+" .Values.agentSandbox.analyzer.modelGateway.endpoint) -}}
+{{- $gatewayHost := regexReplaceAll ":[0-9]+$" $gatewayAuthority "" -}}
+{{- $gatewayParts := splitList "." $gatewayHost -}}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "prow-ai-dashboard.agentSandboxAnalyzerAdmissionName" . }}
+  namespace: {{ .Values.agentSandbox.analyzer.namespace }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analyzer
+spec:
+  endpointSelector:
+    matchLabels:
+      prow-ai-dashboard/purpose: analysis
+  ingress: []
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: {{ index $cfg.dnsNamespaceSelector "kubernetes.io/metadata.name" | quote }}
+            {{- toYaml $cfg.dnsPodSelector | nindent 12 }}
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toServices:
+        - k8sService:
+            serviceName: {{ index $gatewayParts 0 | quote }}
+            namespace: {{ index $gatewayParts 1 | quote }}
+      toPorts:
+        - ports:
+            - port: {{ $cfg.gatewayPort | quote }}
+              protocol: TCP
+{{- else }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "prow-ai-dashboard.agentSandboxAnalyzerAdmissionName" . }}
+  namespace: {{ .Values.agentSandbox.analyzer.namespace }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analyzer
+spec:
+  podSelector:
+    matchLabels:
+      prow-ai-dashboard/purpose: analysis
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $cfg.dnsNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $cfg.dnsPodSelector | nindent 14 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $cfg.gatewayNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $cfg.gatewayPodSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $cfg.gatewayPort }}
+{{- end }}
+{{- end }}

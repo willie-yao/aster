@@ -1921,6 +1921,164 @@ expect_agent_sandbox_fail command-git-alias 'git is reserved for the exact final
 expect_agent_sandbox_fail command-no-agent-step 'must reserve at least one coding-agent step' --set agentSandbox.fixRuntime.maxSteps=1
 expect_agent_sandbox_fail reserved-env 'must not override reserved Agent Sandbox variable' --set server.extraEnv[0].name=AGENT_SANDBOX_IMAGE --set server.extraEnv[0].value=attacker
 
+cat > "$tmp/agent-sandbox-analyzer.yaml" <<'ANALYZER_VALUES'
+image:
+  tag: sha-test
+project:
+  config: |
+    id: test
+    name: Test
+    testgrid:
+      dashboard: test
+    storage:
+      provider: local
+      base: /tmp
+    branding:
+      title: Test
+      base_path: /
+      site_url: https://example.test
+  systemPrompt: test prompt
+agentSandbox:
+  analyzer:
+    enabled: true
+    namespace: analyzer-eval
+    runtimeClassName: kata-vm-isolation
+    executorImage:
+      repository: local/analyzer
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      pullPolicy: IfNotPresent
+    stagerImage:
+      repository: local/stager
+      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      pullPolicy: IfNotPresent
+    input:
+      existingClaim: analyzer-input
+    clientServiceAccount:
+      create: true
+      name: ""
+    workloadServiceAccount:
+      create: true
+      name: analyzer-workload
+    modelGateway:
+      endpoint: https://model-gateway.platform.svc.cluster.local:8443/v1
+      model: analyzer-model
+      protocolVersion: openai-chat-completions-v1
+    timeout: 15m
+    outputLimitBytes: 262144
+    pollInterval: 250ms
+    networkPolicy:
+      mode: kubernetes
+      enabled: true
+      gatewayNamespaceSelector:
+        kubernetes.io/metadata.name: platform
+      gatewayPodSelector:
+        app: model-gateway
+      gatewayPort: 8443
+      dnsNamespaceSelector:
+        kubernetes.io/metadata.name: kube-system
+      dnsPodSelector:
+        k8s-app: kube-dns
+    quota:
+      enabled: true
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+        ephemeral-storage: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+        ephemeral-storage: 2Gi
+  rbac:
+    create: true
+    clientServiceAccountName: ""
+ANALYZER_VALUES
+
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-analyzer.yaml" > "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq 'app.kubernetes.io/component: agent-sandbox-analyzer' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq 'kind: ResourceQuota' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq 'count/sandboxes.agents.x-k8s.io: "1"' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq 'count/pods: "1"' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq 'kind: NetworkPolicy' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq 'prow-ai-dashboard/purpose: analysis' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq 'local/analyzer@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq 'local/stager@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq 'system:serviceaccount:dashboard-test:test-prow-ai-dashboard-agent-sandbox-analyzer-client' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq 'variables.pod.runtimeClassName ==' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq 'kata-vm-isolation' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq 'variables.pod.activeDeadlineSeconds == 915' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "variables.container.env[0].name == 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64'" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "variables.stager.env[0].name == 'PROW_AI_ANALYSIS_STAGE_REQUEST_B64'" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq 'v.persistentVolumeClaim.claimName ==' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq 'analyzer-input' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "v.mountPath == '/workspace/source' && v.subPath == 'source' && v.readOnly == true" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "v.mountPath == '/workspace/artifacts' && v.subPath == 'artifacts' && v.readOnly == true" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "v.mountPath == '/workspace/result' && v.subPath == 'result' && (!has(v.readOnly) || v.readOnly == false)" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "variables.stager.securityContext.appArmorProfile.type == 'RuntimeDefault'" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "variables.container.securityContext.seccompProfile.type == 'RuntimeDefault'" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq '!has(variables.pod.imagePullSecrets)' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq '!has(variables.container.volumeDevices)' "$tmp/agent-sandbox-analyzer-render.yaml"
+if grep -Eq 'resources: \["(secrets|services|persistentvolumeclaims|pods/exec|pods/attach|nodes)"\]' "$tmp/agent-sandbox-analyzer-render.yaml"; then
+  echo 'analyzer RBAC rendered a forbidden resource' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-analyzer.yaml" \
+  --show-only templates/worker-deployment.yaml > "$tmp/agent-sandbox-analyzer-worker.yaml"
+if grep -Fq 'AGENT_SANDBOX_ANALYSIS_' "$tmp/agent-sandbox-analyzer-worker.yaml" || grep -Fq 'test-prow-ai-dashboard-agent-sandbox-analyzer-client' "$tmp/agent-sandbox-analyzer-worker.yaml"; then
+  echo 'private analyzer configuration granted scheduled worker authority' >&2
+  exit 1
+fi
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-analyzer.yaml" --set mode=cron \
+  --show-only templates/fetcher-cronjob.yaml > "$tmp/agent-sandbox-analyzer-cron.yaml"
+if grep -Fq 'AGENT_SANDBOX_ANALYSIS_' "$tmp/agent-sandbox-analyzer-cron.yaml" || grep -Fq 'test-prow-ai-dashboard-agent-sandbox-analyzer-client' "$tmp/agent-sandbox-analyzer-cron.yaml"; then
+  echo 'private analyzer configuration granted scheduled fetcher authority' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-analyzer.yaml" \
+  --set agentSandbox.analyzer.networkPolicy.mode=cilium > "$tmp/agent-sandbox-analyzer-cilium.yaml"
+grep -Fq 'kind: CiliumNetworkPolicy' "$tmp/agent-sandbox-analyzer-cilium.yaml"
+grep -Fq 'toServices:' "$tmp/agent-sandbox-analyzer-cilium.yaml"
+grep -Fq 'serviceName: "model-gateway"' "$tmp/agent-sandbox-analyzer-cilium.yaml"
+grep -Fq 'namespace: "platform"' "$tmp/agent-sandbox-analyzer-cilium.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-analyzer.yaml" -f "$tmp/agent-sandbox.yaml" > "$tmp/agent-sandbox-combined.yaml"
+if [[ $(grep -Fc 'app.kubernetes.io/component: agent-sandbox-fix-client' "$tmp/agent-sandbox-combined.yaml") -ne 1 ]] || [[ $(grep -Fc 'app.kubernetes.io/component: agent-sandbox-analyzer-client' "$tmp/agent-sandbox-combined.yaml") -ne 1 ]]; then
+  echo 'combined Fix and analyzer render did not create distinct client ServiceAccounts' >&2
+  exit 1
+fi
+
+expect_agent_sandbox_analyzer_fail() {
+  local name=$1 expected=$2
+  shift 2
+  if helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-analyzer.yaml" "$@" > "$tmp/agent-sandbox-analyzer-$name.out" 2>&1; then
+    echo "invalid analyzer configuration was accepted: $name" >&2
+    exit 1
+  fi
+  validation_error_contains "$tmp/agent-sandbox-analyzer-$name.out" "$expected"
+}
+expect_agent_sandbox_analyzer_fail direct-provider 'must use internal service DNS' --set agentSandbox.analyzer.modelGateway.endpoint=https://api.openai.com/v1
+expect_agent_sandbox_analyzer_fail mutable-executor 'executorImage.digest must be an immutable sha256 digest' --set-string agentSandbox.analyzer.executorImage.digest=latest
+expect_agent_sandbox_analyzer_fail mutable-stager 'stagerImage.digest must be an immutable sha256 digest' --set-string agentSandbox.analyzer.stagerImage.digest=latest
+expect_agent_sandbox_analyzer_fail shared-image 'executor and stager images must be distinct' --set agentSandbox.analyzer.stagerImage.repository=local/analyzer --set-string agentSandbox.analyzer.stagerImage.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+expect_agent_sandbox_analyzer_fail missing-input 'input.existingClaim is required' --set-string agentSandbox.analyzer.input.existingClaim=
+expect_agent_sandbox_analyzer_fail public-data-input 'input.existingClaim must differ from the public dashboard data PVC' --set persistence.existingClaim=analyzer-input
+expect_agent_sandbox_analyzer_fail unmanaged-client 'clientServiceAccount.name is required when create=false' --set agentSandbox.analyzer.clientServiceAccount.create=false
+expect_agent_sandbox_analyzer_fail client-without-rbac 'clientServiceAccount.create requires agentSandbox.rbac.create=true' --set agentSandbox.rbac.create=false
+expect_agent_sandbox_analyzer_fail release-namespace 'namespace must differ from the dashboard release namespace' --set agentSandbox.analyzer.namespace=dashboard-test
+expect_agent_sandbox_analyzer_fail non-inprocess 'requires analysisRuntime.type=inprocess' "${container_args[@]}"
+expect_agent_sandbox_analyzer_fail orka-shadow 'cannot run with orka.agentAnalysisShadow' "${shadow_args[@]}"
+expect_agent_sandbox_analyzer_fail network-disabled 'networkPolicy.enabled must be true' --set agentSandbox.analyzer.networkPolicy.enabled=false
+expect_agent_sandbox_analyzer_fail quota-disabled 'quota.enabled must be true' --set agentSandbox.analyzer.quota.enabled=false
+expect_agent_sandbox_analyzer_fail timeout-over-limit 'timeout must be at most 30m' --set-string agentSandbox.analyzer.timeout=31m
+expect_agent_sandbox_analyzer_fail poll-too-slow 'pollInterval must be below 30s' --set-string agentSandbox.analyzer.pollInterval=30s
+expect_agent_sandbox_analyzer_fail ephemeral-storage-mismatch 'ephemeral-storage request must equal its limit' --set-string agentSandbox.analyzer.resources.requests.ephemeral-storage=1Gi
+expect_agent_sandbox_analyzer_fail gateway-port-mismatch 'networkPolicy.gatewayPort must match modelGateway.endpoint' --set agentSandbox.analyzer.networkPolicy.gatewayPort=443
+expect_agent_sandbox_analyzer_fail cilium-gateway-service 'cilium mode requires a Kubernetes Service gateway endpoint' --set agentSandbox.analyzer.networkPolicy.mode=cilium --set agentSandbox.analyzer.modelGateway.endpoint=https://gateway.models.internal:8443/v1
+expect_agent_sandbox_analyzer_fail cilium-dns-namespace 'cilium mode requires dnsNamespaceSelector.kubernetes.io/metadata.name' --set agentSandbox.analyzer.networkPolicy.mode=cilium --set-string 'agentSandbox.analyzer.networkPolicy.dnsNamespaceSelector.kubernetes\.io/metadata\.name='
+expect_agent_sandbox_analyzer_fail reserved-env 'must not override reserved analyzer variable' --set fetcher.extraEnv[0].name=AGENT_SANDBOX_ANALYSIS_IMAGE --set fetcher.extraEnv[0].value=attacker
+
 cat > "$tmp/causal-critic.yaml" <<'CRITIC_VALUES'
 image:
   tag: sha-test

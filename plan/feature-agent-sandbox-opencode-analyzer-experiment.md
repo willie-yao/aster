@@ -113,14 +113,14 @@ Exit gate:
 - source history is limited to the pinned commit;
 - both runtime images build and run as UID 65532 without credentials.
 
-### Phase 2B: Deployment and security
+### Phase 2C: Deployment and security
 
-- Add the concrete immutable stager and analyzer executor images.
+- Add disabled Helm references for immutable stager and analyzer executor images.
 - Add disabled Helm values, narrow RBAC, admission, network policy, quotas, and
   RuntimeClass enforcement.
-- Keep source and storage credentials in the stager only and model credentials in
-  the gateway only.
-- Keep the runtime private, disabled, sampled, and non-authoritative.
+- Keep source and storage credentials outside the Sandbox and model credentials
+  in the gateway only.
+- Keep the runtime private, disabled, and non-authoritative.
 
 Exit gate:
 

@@ -333,7 +333,7 @@
     },
     "agentSandbox": {
       "type": "object",
-      "description": "Consumer-installed Kubernetes SIG Agent Sandbox integrations for Fix PR execution and private causal review.",
+      "description": "Consumer-installed Kubernetes SIG Agent Sandbox integrations for Fix PR execution and private analysis experiments.",
       "properties": {
         "fixRuntime": {
           "type": "object",
@@ -557,19 +557,276 @@
           ],
           "additionalProperties": false
         },
-        "rbac": {
+        "analyzer": {
           "type": "object",
+          "description": "Private disabled-by-default OpenCode analyzer deployment guardrails without scheduled authority.",
           "properties": {
-            "create": {
+            "enabled": {
               "type": "boolean"
             },
-            "clientServiceAccountName": {
+            "namespace": {
               "type": "string"
+            },
+            "runtimeClassName": {
+              "type": "string"
+            },
+            "executorImage": {
+              "type": "object",
+              "properties": {
+                "repository": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "IfNotPresent"
+                  ]
+                }
+              },
+              "required": [
+                "repository",
+                "digest",
+                "pullPolicy"
+              ],
+              "additionalProperties": false
+            },
+            "stagerImage": {
+              "type": "object",
+              "properties": {
+                "repository": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "IfNotPresent"
+                  ]
+                }
+              },
+              "required": [
+                "repository",
+                "digest",
+                "pullPolicy"
+              ],
+              "additionalProperties": false
+            },
+            "input": {
+              "type": "object",
+              "properties": {
+                "existingClaim": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "existingClaim"
+              ],
+              "additionalProperties": false
+            },
+            "clientServiceAccount": {
+              "type": "object",
+              "properties": {
+                "create": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "create",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "workloadServiceAccount": {
+              "type": "object",
+              "properties": {
+                "create": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "create",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "modelGateway": {
+              "type": "object",
+              "properties": {
+                "endpoint": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "protocolVersion": {
+                  "type": "string",
+                  "enum": [
+                    "openai-chat-completions-v1"
+                  ]
+                }
+              },
+              "required": [
+                "endpoint",
+                "model",
+                "protocolVersion"
+              ],
+              "additionalProperties": false
+            },
+            "timeout": {
+              "type": "string"
+            },
+            "outputLimitBytes": {
+              "type": "integer",
+              "minimum": 4096,
+              "maximum": 1048576
+            },
+            "pollInterval": {
+              "type": "string"
+            },
+            "networkPolicy": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "kubernetes",
+                    "cilium"
+                  ]
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "gatewayNamespaceSelector": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "gatewayPodSelector": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "gatewayPort": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "dnsNamespaceSelector": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "dnsPodSelector": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "mode",
+                "enabled",
+                "gatewayNamespaceSelector",
+                "gatewayPodSelector",
+                "gatewayPort",
+                "dnsNamespaceSelector",
+                "dnsPodSelector"
+              ],
+              "additionalProperties": false
+            },
+            "quota": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "enabled"
+              ],
+              "additionalProperties": false
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    },
+                    "ephemeral-storage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory",
+                    "ephemeral-storage"
+                  ],
+                  "additionalProperties": false
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    },
+                    "ephemeral-storage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory",
+                    "ephemeral-storage"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "requests",
+                "limits"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [
-            "create",
-            "clientServiceAccountName"
+            "enabled",
+            "namespace",
+            "runtimeClassName",
+            "executorImage",
+            "stagerImage",
+            "input",
+            "clientServiceAccount",
+            "workloadServiceAccount",
+            "modelGateway",
+            "timeout",
+            "outputLimitBytes",
+            "pollInterval",
+            "networkPolicy",
+            "quota",
+            "resources"
           ],
           "additionalProperties": false
         },
@@ -800,10 +1057,27 @@
             "resources"
           ],
           "additionalProperties": false
+        },
+        "rbac": {
+          "type": "object",
+          "properties": {
+            "create": {
+              "type": "boolean"
+            },
+            "clientServiceAccountName": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "create",
+            "clientServiceAccountName"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
         "fixRuntime",
+        "analyzer",
         "causalCritic",
         "rbac"
       ],

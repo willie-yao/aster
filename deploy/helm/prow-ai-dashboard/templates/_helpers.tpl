@@ -643,6 +643,108 @@ key, or bot token).
 {{- end -}}
 
 
+{{/* Immutable analyzer executor image. */}}
+{{- define "prow-ai-dashboard.agentSandboxAnalyzerExecutorImage" -}}
+{{- printf "%s@%s" .Values.agentSandbox.analyzer.executorImage.repository .Values.agentSandbox.analyzer.executorImage.digest -}}
+{{- end -}}
+
+{{/* Immutable analyzer stager image. */}}
+{{- define "prow-ai-dashboard.agentSandboxAnalyzerStagerImage" -}}
+{{- printf "%s@%s" .Values.agentSandbox.analyzer.stagerImage.repository .Values.agentSandbox.analyzer.stagerImage.digest -}}
+{{- end -}}
+
+{{/* Dedicated ServiceAccount allowed to manage only analyzer Sandboxes. */}}
+{{- define "prow-ai-dashboard.agentSandboxAnalyzerClientServiceAccountName" -}}
+{{- if .Values.agentSandbox.analyzer.clientServiceAccount.name -}}
+{{- .Values.agentSandbox.analyzer.clientServiceAccount.name -}}
+{{- else -}}
+{{- printf "%s-agent-sandbox-analyzer-client" (include "prow-ai-dashboard.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Tokenless ServiceAccount used inside analyzer Sandboxes. */}}
+{{- define "prow-ai-dashboard.agentSandboxAnalyzerWorkloadServiceAccountName" -}}
+{{- .Values.agentSandbox.analyzer.workloadServiceAccount.name -}}
+{{- end -}}
+
+{{/* Cluster-scoped analyzer admission policy name. */}}
+{{- define "prow-ai-dashboard.agentSandboxAnalyzerAdmissionName" -}}
+{{- printf "%s-agent-sandbox-analyzer-%s" (include "prow-ai-dashboard.fullname" .) (include "prow-ai-dashboard.orkaReleaseScope" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/* Validate the disabled-by-default private Agent Sandbox analyzer. */}}
+{{- define "prow-ai-dashboard.validateAgentSandboxAnalyzer" -}}
+{{- if .Values.agentSandbox.analyzer.enabled -}}
+  {{- $cfg := .Values.agentSandbox.analyzer -}}
+  {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "agentSandbox.analyzer requires analysisRuntime.type=inprocess" -}}{{- end -}}
+  {{- if .Values.orka.agentAnalysisShadow.enabled -}}{{- fail "agentSandbox.analyzer cannot run with orka.agentAnalysisShadow" -}}{{- end -}}
+  {{- if not $cfg.namespace -}}{{- fail "agentSandbox.analyzer.namespace is required" -}}{{- end -}}
+  {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "agentSandbox.analyzer.namespace must differ from the dashboard release namespace" -}}{{- end -}}
+  {{- if and .Values.agentSandbox.fixRuntime.enabled (eq $cfg.namespace .Values.agentSandbox.fixRuntime.namespace) -}}{{- fail "agentSandbox.analyzer.namespace must differ from agentSandbox.fixRuntime.namespace" -}}{{- end -}}
+  {{- if and .Values.agentSandbox.causalCritic.enabled (eq $cfg.namespace .Values.agentSandbox.causalCritic.namespace) -}}{{- fail "agentSandbox.analyzer.namespace must differ from agentSandbox.causalCritic.namespace" -}}{{- end -}}
+  {{- if or (gt (len $cfg.namespace) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.namespace)) -}}{{- fail "agentSandbox.analyzer.namespace must be a lowercase DNS label" -}}{{- end -}}
+  {{- if or (gt (len $cfg.runtimeClassName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.runtimeClassName)) -}}{{- fail "agentSandbox.analyzer.runtimeClassName is required and must be a lowercase RuntimeClass name" -}}{{- end -}}
+  {{- range $name, $image := dict "executorImage" $cfg.executorImage "stagerImage" $cfg.stagerImage -}}
+    {{- if not (regexMatch "^[^[:space:]@]+$" $image.repository) -}}{{- fail (printf "agentSandbox.analyzer.%s.repository is required without whitespace, credentials, or a digest" $name) -}}{{- end -}}
+    {{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $image.digest) -}}{{- fail (printf "agentSandbox.analyzer.%s.digest must be an immutable sha256 digest" $name) -}}{{- end -}}
+  {{- end -}}
+  {{- if eq (include "prow-ai-dashboard.agentSandboxAnalyzerExecutorImage" .) (include "prow-ai-dashboard.agentSandboxAnalyzerStagerImage" .) -}}{{- fail "agentSandbox.analyzer executor and stager images must be distinct" -}}{{- end -}}
+  {{- if or (gt (len $cfg.input.existingClaim) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.input.existingClaim)) -}}{{- fail "agentSandbox.analyzer.input.existingClaim is required and must be a lowercase PVC name" -}}{{- end -}}
+  {{- if and .Values.persistence.existingClaim (eq $cfg.input.existingClaim .Values.persistence.existingClaim) -}}{{- fail "agentSandbox.analyzer.input.existingClaim must differ from the public dashboard data PVC" -}}{{- end -}}
+  {{- $workloadSA := include "prow-ai-dashboard.agentSandboxAnalyzerWorkloadServiceAccountName" . -}}
+  {{- if or (gt (len $workloadSA) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $workloadSA)) -}}{{- fail "agentSandbox.analyzer.workloadServiceAccount.name is required and must be a lowercase object name" -}}{{- end -}}
+  {{- if and (not .Values.agentSandbox.rbac.create) $cfg.clientServiceAccount.create -}}{{- fail "agentSandbox.analyzer.clientServiceAccount.create requires agentSandbox.rbac.create=true" -}}{{- end -}}
+  {{- if and (not $cfg.clientServiceAccount.create) (not $cfg.clientServiceAccount.name) -}}{{- fail "agentSandbox.analyzer.clientServiceAccount.name is required when create=false" -}}{{- end -}}
+  {{- $clientSA := include "prow-ai-dashboard.agentSandboxAnalyzerClientServiceAccountName" . -}}
+  {{- if or (gt (len $clientSA) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA)) -}}{{- fail "agentSandbox.analyzer.clientServiceAccount.name must be a lowercase Kubernetes object name" -}}{{- end -}}
+  {{- $gateway := $cfg.modelGateway -}}
+  {{- if not (regexMatch "^https://[^/@?#]+(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $gateway.endpoint) -}}{{- fail "agentSandbox.analyzer.modelGateway.endpoint must be an absolute credential-free HTTPS URL" -}}{{- end -}}
+  {{- if not (regexMatch "^https://[^/]+[.](svc|svc[.]cluster[.]local|internal)(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $gateway.endpoint) -}}{{- fail "agentSandbox.analyzer.modelGateway.endpoint must use internal service DNS" -}}{{- end -}}
+  {{- if or (not $gateway.model) (gt (len $gateway.model) 256) (contains "\n" $gateway.model) (contains "\r" $gateway.model) -}}{{- fail "agentSandbox.analyzer.modelGateway.model must be non-empty, at most 256 bytes, and single-line" -}}{{- end -}}
+  {{- if ne $gateway.protocolVersion "openai-chat-completions-v1" -}}{{- fail "agentSandbox.analyzer.modelGateway.protocolVersion must be openai-chat-completions-v1" -}}{{- end -}}
+  {{- $timeoutText := printf "%v" $cfg.timeout -}}
+  {{- $timeoutSeconds := 0 -}}
+  {{- if regexMatch "^[1-9][0-9]*s$" $timeoutText -}}
+    {{- if gt (len $timeoutText) 5 -}}{{- fail "agentSandbox.analyzer.timeout must be at most 30m" -}}{{- end -}}
+    {{- $timeoutSeconds = trimSuffix "s" $timeoutText | int -}}
+  {{- else if regexMatch "^[1-9][0-9]*m$" $timeoutText -}}
+    {{- if gt (len $timeoutText) 3 -}}{{- fail "agentSandbox.analyzer.timeout must be at most 30m" -}}{{- end -}}
+    {{- $timeoutSeconds = mul (trimSuffix "m" $timeoutText | int) 60 -}}
+  {{- else -}}
+    {{- fail "agentSandbox.analyzer.timeout must use positive whole seconds or minutes" -}}
+  {{- end -}}
+  {{- if gt $timeoutSeconds 1800 -}}{{- fail "agentSandbox.analyzer.timeout must be at most 30m" -}}{{- end -}}
+  {{- $poll := printf "%v" $cfg.pollInterval -}}
+  {{- if or (not (regexMatch "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ms|s)$" $poll)) (not (regexMatch "[1-9]" $poll)) -}}{{- fail "agentSandbox.analyzer.pollInterval must be a positive duration below 30s" -}}{{- end -}}
+  {{- if regexMatch "^([3-9][0-9]|[1-9][0-9]{2,})s$" (durationRound $poll) -}}{{- fail "agentSandbox.analyzer.pollInterval must be below 30s" -}}{{- end -}}
+  {{- if or (lt (int64 $cfg.outputLimitBytes) 4096) (gt (int64 $cfg.outputLimitBytes) 1048576) -}}{{- fail "agentSandbox.analyzer.outputLimitBytes must be between 4096 and 1048576" -}}{{- end -}}
+  {{- range $scope, $resources := $cfg.resources -}}
+    {{- range $resource := list "cpu" "memory" "ephemeral-storage" -}}
+      {{- if not (index $resources $resource) -}}{{- fail (printf "agentSandbox.analyzer.resources.%s.%s is required" $scope $resource) -}}{{- end -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if ne (index $cfg.resources.requests "ephemeral-storage") (index $cfg.resources.limits "ephemeral-storage") -}}{{- fail "agentSandbox.analyzer ephemeral-storage request must equal its limit" -}}{{- end -}}
+  {{- if not $cfg.networkPolicy.enabled -}}{{- fail "agentSandbox.analyzer.networkPolicy.enabled must be true" -}}{{- end -}}
+  {{- if not (has $cfg.networkPolicy.mode (list "kubernetes" "cilium")) -}}{{- fail "agentSandbox.analyzer.networkPolicy.mode must be kubernetes or cilium" -}}{{- end -}}
+  {{- if eq (len $cfg.networkPolicy.gatewayNamespaceSelector) 0 -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayNamespaceSelector is required" -}}{{- end -}}
+  {{- if eq (len $cfg.networkPolicy.gatewayPodSelector) 0 -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayPodSelector is required" -}}{{- end -}}
+  {{- if or (lt (int $cfg.networkPolicy.gatewayPort) 1) (gt (int $cfg.networkPolicy.gatewayPort) 65535) -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayPort is invalid" -}}{{- end -}}
+  {{- $gatewayAuthority := regexFind "^https://[^/]+" $gateway.endpoint -}}
+  {{- $explicitGatewayPort := regexFind ":[0-9]+$" $gatewayAuthority -}}
+  {{- $endpointGatewayPort := 443 -}}
+  {{- if $explicitGatewayPort -}}{{- $endpointGatewayPort = trimPrefix ":" $explicitGatewayPort | int -}}{{- end -}}
+  {{- if ne (int $cfg.networkPolicy.gatewayPort) $endpointGatewayPort -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayPort must match modelGateway.endpoint" -}}{{- end -}}
+  {{- if or (eq (len $cfg.networkPolicy.dnsNamespaceSelector) 0) (eq (len $cfg.networkPolicy.dnsPodSelector) 0) -}}{{- fail "agentSandbox.analyzer DNS network selectors are required" -}}{{- end -}}
+  {{- if and (eq $cfg.networkPolicy.mode "cilium") (or (not (hasKey $cfg.networkPolicy.dnsNamespaceSelector "kubernetes.io/metadata.name")) (not (get $cfg.networkPolicy.dnsNamespaceSelector "kubernetes.io/metadata.name"))) -}}{{- fail "agentSandbox.analyzer cilium mode requires dnsNamespaceSelector.kubernetes.io/metadata.name" -}}{{- end -}}
+  {{- if and (eq $cfg.networkPolicy.mode "cilium") (not (regexMatch "^https://[a-z0-9]([-a-z0-9]*[a-z0-9])?[.][a-z0-9]([-a-z0-9]*[a-z0-9])?[.]svc([.]cluster[.]local)?(:[0-9]+)?(/[^?#]*)?$" $gateway.endpoint)) -}}{{- fail "agentSandbox.analyzer cilium mode requires a Kubernetes Service gateway endpoint" -}}{{- end -}}
+  {{- if not $cfg.quota.enabled -}}{{- fail "agentSandbox.analyzer.quota.enabled must be true" -}}{{- end -}}
+  {{- range $env := concat .Values.server.extraEnv .Values.fetcher.extraEnv -}}
+    {{- if hasPrefix "AGENT_SANDBOX_ANALYSIS_" (default "" $env.name) -}}{{- fail (printf "extraEnv must not override reserved analyzer variable %s" $env.name) -}}{{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+
 {{/* Immutable causal critic executor image. */}}
 {{- define "prow-ai-dashboard.agentSandboxCriticExecutorImage" -}}
 {{- printf "%s@%s" .Values.agentSandbox.causalCritic.image.repository .Values.agentSandbox.causalCritic.image.digest -}}

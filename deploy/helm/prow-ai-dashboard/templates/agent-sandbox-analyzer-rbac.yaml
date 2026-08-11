@@ -1,0 +1,65 @@
+{{- include "prow-ai-dashboard.validateAgentSandboxAnalyzer" . -}}
+{{- if .Values.agentSandbox.analyzer.enabled }}
+{{- $clientSA := include "prow-ai-dashboard.agentSandboxAnalyzerClientServiceAccountName" . -}}
+{{- $workloadSA := include "prow-ai-dashboard.agentSandboxAnalyzerWorkloadServiceAccountName" . -}}
+{{- if and .Values.agentSandbox.rbac.create .Values.agentSandbox.analyzer.clientServiceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $clientSA }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analyzer-client
+---
+{{- end }}
+{{- if .Values.agentSandbox.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "prow-ai-dashboard.agentSandboxAnalyzerAdmissionName" . }}
+  namespace: {{ .Values.agentSandbox.analyzer.namespace }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analyzer
+rules:
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "prow-ai-dashboard.agentSandboxAnalyzerAdmissionName" . }}
+  namespace: {{ .Values.agentSandbox.analyzer.namespace }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analyzer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "prow-ai-dashboard.agentSandboxAnalyzerAdmissionName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $clientSA }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- if .Values.agentSandbox.analyzer.workloadServiceAccount.create }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $workloadSA }}
+  namespace: {{ .Values.agentSandbox.analyzer.namespace }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analyzer-workload
+automountServiceAccountToken: false
+{{- end }}
+{{- end }}

@@ -209,7 +209,8 @@ func newAgentSandboxRunnerFromEnv(prefix, kubeContext string, inClusterOnly bool
 		}
 	}
 	opts := AgentSandboxOptions{
-		Namespace: env("NAMESPACE"), Image: env("IMAGE"), ServiceAccountName: env("SERVICE_ACCOUNT"), RuntimeClassName: env("RUNTIME_CLASS"),
+		Namespace: env("NAMESPACE"), Image: env("IMAGE"), StagerImage: env("STAGER_IMAGE"), StagerInputClaim: env("STAGER_INPUT_CLAIM"),
+		ServiceAccountName: env("SERVICE_ACCOUNT"), RuntimeClassName: env("RUNTIME_CLASS"),
 		ModelGateway: engineruntime.ModelGatewayConfig{
 			Endpoint: env("MODEL_GATEWAY_ENDPOINT"), Model: env("MODEL_GATEWAY_MODEL"), ProtocolVersion: env("MODEL_GATEWAY_PROTOCOL"),
 		},

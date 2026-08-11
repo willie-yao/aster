@@ -1,7 +1,8 @@
 # Agent Sandbox OpenCode analyzer
 
-Status: private lifecycle prototype. It is not wired to Helm, the fetcher, the
-worker, public output, or cache acceptance.
+Status: private deployment prototype. Helm can install its security boundary,
+but the fetcher and worker cannot create analyzer workloads. It has no public
+output or cache authority.
 
 ## Goal
 
@@ -58,8 +59,34 @@ source revision and artifact identities, fetches only the pinned commit into a
 shallow local checkout, copies the bounded artifacts, and creates an empty result
 directory. The Sandbox receives no source, storage, or model credential.
 
-This phase does not define PVC population, Helm values, admission policy,
-network policy, image publication, or a live deployment.
+PVC population and image publication remain manual operator responsibilities.
+
+## Deployment boundary
+
+`agentSandbox.analyzer.enabled` defaults to `false`. Enabling it creates only
+the analyzer security boundary:
+
+- one dedicated analyzer client ServiceAccount when chart-managed RBAC is enabled;
+- one narrow Role and RoleBinding in a dedicated existing execution namespace;
+- one tokenless analyzer workload ServiceAccount when requested;
+- one fail-closed ValidatingAdmissionPolicy and binding;
+- one deny-by-default network policy; and
+- one ResourceQuota permitting one Sandbox and one Pod at a time.
+
+The chart does not create the namespace, RuntimeClass, Agent Sandbox controller,
+input PVC, gateway, or images. Both images require immutable SHA-256 digests.
+The admission policy pins the requester, namespace, RuntimeClass, ServiceAccount,
+executor and stager images, input claim, container count, mounts, resources,
+AppArmor, seccomp, and delete lifecycle. The executor receives read-only source
+and artifact mounts, one writable result mount, and separate temporary storage.
+
+The network policy denies ingress and permits only DNS plus the configured
+internal gateway. The gateway must separately authenticate the analyzer
+ServiceAccount. The ResourceQuota assumes the analyzer namespace is dedicated.
+
+No chart Deployment or CronJob receives analyzer environment variables or the
+client ServiceAccount. Installation therefore grants no scheduled analyzer
+authority. Manual validation must use the client identity explicitly.
 
 ## Native OpenCode boundary
 
@@ -101,8 +128,8 @@ The runtime remains private, disabled, and non-authoritative. It cannot affect:
 - remediation;
 - resolution state.
 
-Helm wiring, the concrete stager, admission, network policy, and shadow
-orchestration are intentionally deferred to the next focused change.
+Shadow orchestration and comparison storage remain deferred to the repeated
+cold benchmark phase.
 
 ## Validation
 
