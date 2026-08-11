@@ -175,6 +175,7 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	OpenCodeTelemetryStatus      string                                 `json:"opencode_telemetry_status"`
 	OpenCodeEventCount           int                                    `json:"opencode_event_count"`
 	ProviderRequests             int                                    `json:"provider_requests"`
+	ProviderRequestsKnown        bool                                   `json:"provider_requests_known"`
 	RequestShapeAvailable        bool                                   `json:"request_shape_available"`
 	StreamingMode                string                                 `json:"streaming_mode,omitempty"`
 	RequestModelID               string                                 `json:"request_model_id,omitempty"`
@@ -196,6 +197,16 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	OpenCodeRetryable            bool                                   `json:"opencode_retryable"`
 	OpenCodeErrorClassification  string                                 `json:"opencode_error_classification,omitempty"`
 	OpenCodeMetadataCode         string                                 `json:"opencode_metadata_code,omitempty"`
+	OpenCodeCauseName            string                                 `json:"opencode_cause_name,omitempty"`
+	OpenCodeCauseCode            string                                 `json:"opencode_cause_code,omitempty"`
+	OpenCodeMessagePresent       bool                                   `json:"opencode_message_present"`
+	OpenCodeMessageBytes         int                                    `json:"opencode_message_bytes,omitempty"`
+	OpenCodeMessageSHA256        string                                 `json:"opencode_redacted_message_sha256,omitempty"`
+	BeforeProviderRequest        *bool                                  `json:"before_provider_request,omitempty"`
+	BeforeFirstTool              *bool                                  `json:"before_first_tool,omitempty"`
+	DuringStreamProcessing       *bool                                  `json:"during_stream_processing,omitempty"`
+	DuringToolExecution          *bool                                  `json:"during_tool_execution,omitempty"`
+	DuringSessionPersistence     *bool                                  `json:"during_session_persistence,omitempty"`
 	OpenCodeHeaderTimeout        bool                                   `json:"opencode_header_timeout"`
 	OpenCodeResponseStreamError  bool                                   `json:"opencode_response_stream_error"`
 	OpenCodeContextOverflow      bool                                   `json:"opencode_context_overflow"`
@@ -512,6 +523,7 @@ func agentSandboxAnalyzerRecordForResult(
 	record.OpenCodeTelemetryStatus = telemetry.Status
 	record.OpenCodeEventCount = telemetry.EventCount
 	record.ProviderRequests = telemetry.ProviderRequests
+	record.ProviderRequestsKnown = telemetry.ProviderRequestsKnown
 	shape := telemetry.RequestShape
 	record.RequestShapeAvailable = shape.Available
 	record.StreamingMode = shape.StreamingMode
@@ -535,6 +547,16 @@ func agentSandboxAnalyzerRecordForResult(
 	record.OpenCodeRetryable = errorTelemetry.Retryable
 	record.OpenCodeErrorClassification = errorTelemetry.Classification
 	record.OpenCodeMetadataCode = errorTelemetry.MetadataCode
+	record.OpenCodeCauseName = errorTelemetry.CauseName
+	record.OpenCodeCauseCode = errorTelemetry.CauseCode
+	record.OpenCodeMessagePresent = errorTelemetry.MessagePresent
+	record.OpenCodeMessageBytes = errorTelemetry.MessageBytes
+	record.OpenCodeMessageSHA256 = errorTelemetry.RedactedMessageSHA256
+	record.BeforeProviderRequest = errorTelemetry.BeforeProviderRequest
+	record.BeforeFirstTool = errorTelemetry.BeforeFirstTool
+	record.DuringStreamProcessing = errorTelemetry.DuringStreamProcessing
+	record.DuringToolExecution = errorTelemetry.DuringToolExecution
+	record.DuringSessionPersistence = errorTelemetry.DuringSessionPersistence
 	record.OpenCodeHeaderTimeout = errorTelemetry.HeaderTimeout
 	record.OpenCodeResponseStreamError = errorTelemetry.ResponseStreamError
 	record.OpenCodeContextOverflow = errorTelemetry.ContextOverflow

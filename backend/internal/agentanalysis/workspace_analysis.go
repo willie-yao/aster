@@ -120,6 +120,16 @@ type WorkspaceOpenCodeErrorTelemetry struct {
 	Retryable                  bool   `json:"retryable"`
 	Classification             string `json:"classification,omitempty"`
 	MetadataCode               string `json:"metadata_code,omitempty"`
+	CauseName                  string `json:"cause_name,omitempty"`
+	CauseCode                  string `json:"cause_code,omitempty"`
+	MessagePresent             bool   `json:"message_present,omitempty"`
+	MessageBytes               int    `json:"message_bytes,omitempty"`
+	RedactedMessageSHA256      string `json:"redacted_message_sha256,omitempty"`
+	BeforeProviderRequest      *bool  `json:"before_provider_request,omitempty"`
+	BeforeFirstTool            *bool  `json:"before_first_tool,omitempty"`
+	DuringStreamProcessing     *bool  `json:"during_stream_processing,omitempty"`
+	DuringToolExecution        *bool  `json:"during_tool_execution,omitempty"`
+	DuringSessionPersistence   *bool  `json:"during_session_persistence,omitempty"`
 	HeaderTimeout              bool   `json:"header_timeout,omitempty"`
 	ResponseStreamError        bool   `json:"response_stream_error,omitempty"`
 	ContextOverflow            bool   `json:"context_overflow,omitempty"`
@@ -135,6 +145,7 @@ type WorkspaceOpenCodeTelemetry struct {
 	Status                       string                          `json:"status"`
 	EventCount                   int                             `json:"event_count,omitempty"`
 	ProviderRequests             int                             `json:"provider_requests,omitempty"`
+	ProviderRequestsKnown        bool                            `json:"provider_requests_known"`
 	RequestShape                 WorkspaceOpenCodeRequestShape   `json:"request_shape"`
 	Error                        WorkspaceOpenCodeErrorTelemetry `json:"error"`
 	Tools                        []WorkspaceToolTelemetry        `json:"tools,omitempty"`
@@ -682,6 +693,25 @@ func validateWorkspaceOpenCodeTelemetry(telemetry WorkspaceOpenCodeTelemetry) er
 	if telemetry.ProviderRequests < telemetry.StepsUsed {
 		return fmt.Errorf("workspace OpenCode provider request telemetry is inconsistent")
 	}
+	if !telemetry.ProviderRequestsKnown && telemetry.Available {
+		if telemetry.Error.Available && telemetry.Error.Name != "UnknownError" || !telemetry.Error.Available && telemetry.FailureCode == "" {
+			return fmt.Errorf("workspace OpenCode provider request telemetry is inconsistent")
+		}
+	}
+	if telemetryBoolTrue(telemetry.Error.BeforeProviderRequest) && (!telemetry.ProviderRequestsKnown || telemetry.ProviderRequests != 0) {
+		return fmt.Errorf("workspace OpenCode error request lifecycle is inconsistent")
+	}
+	if telemetry.Error.BeforeProviderRequest != nil && !*telemetry.Error.BeforeProviderRequest && telemetry.ProviderRequests == 0 {
+		return fmt.Errorf("workspace OpenCode error request lifecycle is inconsistent")
+	}
+	if (telemetryBoolTrue(telemetry.Error.DuringStreamProcessing) || telemetryBoolTrue(telemetry.Error.DuringToolExecution)) && telemetry.ProviderRequests == 0 {
+		return fmt.Errorf("workspace OpenCode error request lifecycle is inconsistent")
+	}
+	if telemetry.Available && telemetry.Error.BeforeFirstTool != nil {
+		if *telemetry.Error.BeforeFirstTool && len(telemetry.Tools) != 0 || !*telemetry.Error.BeforeFirstTool && len(telemetry.Tools) == 0 {
+			return fmt.Errorf("workspace OpenCode error tool lifecycle is inconsistent")
+		}
+	}
 	if telemetry.EvidencePhaseCompleted {
 		if telemetry.EvidencePhaseSteps < 1 || telemetry.EvidencePhaseRequests < 1 || telemetry.ArtifactEvidenceToolCalls < 1 {
 			return fmt.Errorf("workspace OpenCode evidence phase telemetry is invalid")
@@ -741,12 +771,12 @@ func validateWorkspaceOpenCodeRequestShape(shape WorkspaceOpenCodeRequestShape) 
 
 func validateWorkspaceOpenCodeErrorTelemetry(value WorkspaceOpenCodeErrorTelemetry) error {
 	if !value.Available {
-		if value.Name != "" || value.HTTPStatusCode != 0 || value.RetryableKnown || value.Retryable || value.Classification != "" || value.MetadataCode != "" || value.HeaderTimeout || value.ResponseStreamError || value.ContextOverflow || value.ResponseContentTypePresent || value.ResponseBodyPresent || value.ResponseBodyBytesBounded != 0 || value.ResponseBodySHA256 != "" {
+		if value.Name != "" || value.HTTPStatusCode != 0 || value.RetryableKnown || value.Retryable || value.Classification != "" || value.MetadataCode != "" || value.CauseName != "" || value.CauseCode != "" || value.MessagePresent || value.MessageBytes != 0 || value.RedactedMessageSHA256 != "" || value.BeforeProviderRequest != nil || value.BeforeFirstTool != nil || value.DuringStreamProcessing != nil || value.DuringToolExecution != nil || value.DuringSessionPersistence != nil || value.HeaderTimeout || value.ResponseStreamError || value.ContextOverflow || value.ResponseContentTypePresent || value.ResponseBodyPresent || value.ResponseBodyBytesBounded != 0 || value.ResponseBodySHA256 != "" {
 			return fmt.Errorf("unavailable workspace OpenCode error telemetry must be empty")
 		}
 		return nil
 	}
-	if !validOpenCodeErrorName(value.Name) || !validOpenCodeErrorClassification(value.Classification) || !validOpenCodeMetadataCode(value.MetadataCode) {
+	if !validOpenCodeErrorName(value.Name) || !validOpenCodeErrorClassification(value.Classification) || !validOpenCodeMetadataCode(value.MetadataCode) || !validOpenCodeCauseName(value.CauseName) || !validOpenCodeCauseCode(value.CauseCode) {
 		return fmt.Errorf("workspace OpenCode error telemetry is invalid")
 	}
 	if value.HTTPStatusCode != 0 && (value.HTTPStatusCode < 100 || value.HTTPStatusCode > 599) {
@@ -764,10 +794,34 @@ func validateWorkspaceOpenCodeErrorTelemetry(value WorkspaceOpenCodeErrorTelemet
 	if value.ResponseBodySHA256 != "" && !validSHA256(value.ResponseBodySHA256) {
 		return fmt.Errorf("workspace OpenCode response body digest is invalid")
 	}
+	if value.Name == "UnknownError" {
+		if value.Classification == "malformed_error" {
+			if value.CauseName != "" || value.CauseCode != "" || value.MessagePresent || value.MessageBytes != 0 || value.RedactedMessageSHA256 != "" {
+				return fmt.Errorf("workspace OpenCode malformed unknown error telemetry is inconsistent")
+			}
+		} else if !value.MessagePresent || value.MessageBytes < 0 || value.MessageBytes > 1<<20 || !validSHA256(value.RedactedMessageSHA256) {
+			return fmt.Errorf("workspace OpenCode unknown error message telemetry is invalid")
+		}
+		if telemetryBoolTrue(value.BeforeProviderRequest) && (!telemetryBoolTrue(value.BeforeFirstTool) || telemetryBoolTrue(value.DuringStreamProcessing) || telemetryBoolTrue(value.DuringToolExecution)) {
+			return fmt.Errorf("workspace OpenCode unknown error lifecycle is inconsistent")
+		}
+		if telemetryBoolTrue(value.DuringToolExecution) && telemetryBoolTrue(value.BeforeFirstTool) {
+			return fmt.Errorf("workspace OpenCode unknown error tool lifecycle is inconsistent")
+		}
+		if value.Classification != "database" && value.Classification != "serialization" && telemetryBoolTrue(value.DuringSessionPersistence) {
+			return fmt.Errorf("workspace OpenCode unknown error persistence lifecycle is inconsistent")
+		}
+	} else if value.CauseName != "" || value.CauseCode != "" || value.MessagePresent || value.MessageBytes != 0 || value.RedactedMessageSHA256 != "" || value.BeforeProviderRequest != nil || value.BeforeFirstTool != nil || value.DuringStreamProcessing != nil || value.DuringToolExecution != nil || value.DuringSessionPersistence != nil {
+		return fmt.Errorf("workspace OpenCode unknown error telemetry is attached to another error")
+	}
 	if value.HeaderTimeout != (value.Classification == "header_timeout") || value.ResponseStreamError != (value.Classification == "response_stream") || value.ContextOverflow != (value.Classification == "context_overflow") {
 		return fmt.Errorf("workspace OpenCode error classification is inconsistent")
 	}
 	return nil
+}
+
+func telemetryBoolTrue(value *bool) bool {
+	return value != nil && *value
 }
 
 func validOpenCodeErrorName(value string) bool {
@@ -781,7 +835,25 @@ func validOpenCodeErrorName(value string) bool {
 
 func validOpenCodeErrorClassification(value string) bool {
 	switch value {
-	case "api_bad_request", "api_unauthorized", "api_forbidden", "api_timeout", "api_request_too_large", "api_rate_limited", "api_server_error", "api_error", "malformed_error", "header_timeout", "response_stream", "context_overflow", "structured_output", "provider_auth", "output_length", "aborted", "content_filter", "unknown":
+	case "api_bad_request", "api_unauthorized", "api_forbidden", "api_timeout", "api_request_too_large", "api_rate_limited", "api_server_error", "api_error", "malformed_error", "header_timeout", "response_stream", "context_overflow", "structured_output", "provider_auth", "output_length", "aborted", "content_filter", "tls", "dns", "connection_reset", "connection_refused", "invalid_tool_schema", "permission_denied", "filesystem", "database", "serialization", "provider_api", "unknown":
+		return true
+	default:
+		return false
+	}
+}
+
+func validOpenCodeCauseName(value string) bool {
+	switch value {
+	case "", "Error", "TypeError", "DOMException", "SystemError", "FetchError", "ConnectTimeoutError", "HeadersTimeoutError", "SocketError", "ProviderResponseStreamError", "PermissionError", "FilesystemError", "DatabaseError", "SqliteError", "SerializationError", "APICallError":
+		return true
+	default:
+		return false
+	}
+}
+
+func validOpenCodeCauseCode(value string) bool {
+	switch value {
+	case "", "ECONNRESET", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "UND_ERR_HEADERS_TIMEOUT", "CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "EACCES", "EPERM", "EROFS", "ENOENT", "ENOSPC", "SQLITE_READONLY", "SQLITE_CANTOPEN", "SQLITE_IOERR", "SQLITE_BUSY", "SQLITE_FULL", "ERR_INVALID_ARG_TYPE":
 		return true
 	default:
 		return false

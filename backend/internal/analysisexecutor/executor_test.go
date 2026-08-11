@@ -340,7 +340,7 @@ func testOpenCodeResult() OpenCodeRunResult {
 		Structured: executorAnalysisJSON(),
 		Usage:      agentanalysis.WorkspaceUsage{Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable, ModelRequests: 2, InputTokens: 10, OutputTokens: 5, CostAvailable: true, CostUSD: "0.01000000"},
 		Telemetry: agentanalysis.WorkspaceOpenCodeTelemetry{
-			Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable, EventCount: 4, ProviderRequests: 2, StepsUsed: 2, StructuredOutputRetriesKnown: true,
+			Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable, EventCount: 4, ProviderRequests: 2, ProviderRequestsKnown: true, StepsUsed: 2, StructuredOutputRetriesKnown: true,
 			EvidencePhaseCompleted: true, EvidencePhaseSteps: 1, EvidencePhaseRequests: 1, ArtifactEvidenceToolCalls: 1, SourceEvidenceToolCalls: 1,
 			FinalizationPhaseCompleted: true, FinalizationPhaseSteps: 1, FinalizationPhaseRequests: 1, StructuredOutputToolCalls: 1,
 		},
@@ -511,7 +511,7 @@ func TestExecutePreservesSanitizedFailureTelemetryWithoutUsage(t *testing.T) {
 			return OpenCodeRunResult{
 				Usage: agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable},
 				Telemetry: agentanalysis.WorkspaceOpenCodeTelemetry{
-					Status: agentanalysis.WorkspaceTelemetryUnavailable, ProviderRequests: 1, RequestShape: shape,
+					Status: agentanalysis.WorkspaceTelemetryUnavailable, ProviderRequests: 1, ProviderRequestsKnown: true, RequestShape: shape,
 					Error: errorTelemetry, StructuredOutputRetriesKnown: true,
 				},
 			}, &openCodePromptError{name: "APIError", telemetry: errorTelemetry}
@@ -519,6 +519,132 @@ func TestExecutePreservesSanitizedFailureTelemetryWithoutUsage(t *testing.T) {
 	})
 	if result.TerminalState != engineruntime.TerminalFailed || result.Usage.Available || result.Usage.Status != agentanalysis.WorkspaceTelemetryUnavailable || result.OpenCodeTelemetry.ProviderRequests != 1 || result.OpenCodeTelemetry.Error != errorTelemetry || result.OpenCodeTelemetry.FailureCode != "api_rate_limited" || !result.OpenCodeTelemetry.RequestShape.Available {
 		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestExecutePreservesUnknownErrorWithUnknownProviderStage(t *testing.T) {
+	root, request := executorTestFixture(t)
+	errorTelemetry := agentanalysis.WorkspaceOpenCodeErrorTelemetry{
+		Available: true, Name: "UnknownError", Classification: "database",
+		MessagePresent: true, MessageBytes: 20, RedactedMessageSHA256: strings.Repeat("a", 64),
+	}
+	shape := newOpenCodeEvidenceRequestShape(OpenCodeSpec{
+		Gateway: request.ModelGateway, Prompt: "synthetic", ModelContextTokens: request.ModelContextTokens, ModelOutputTokens: request.ModelOutputTokens,
+	}, "1.18.2")
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: root,
+		TempRoot:      t.TempDir(),
+		MountVerifier: func(string, string) error { return nil },
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
+			return OpenCodeRunResult{
+				Usage: agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable},
+				Telemetry: agentanalysis.WorkspaceOpenCodeTelemetry{
+					Status: agentanalysis.WorkspaceTelemetryUnavailable, RequestShape: shape,
+					Error: errorTelemetry, StructuredOutputRetriesKnown: true,
+				},
+			}, &openCodePromptError{name: "UnknownError", telemetry: errorTelemetry}
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalFailed || result.Usage.Available || result.OpenCodeTelemetry.ProviderRequestsKnown || result.OpenCodeTelemetry.ProviderRequests != 0 || result.OpenCodeTelemetry.Error != errorTelemetry || result.OpenCodeTelemetry.FailureCode != "database" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestExecutePreservesObservedProviderRequestLowerBound(t *testing.T) {
+	root, request := executorTestFixture(t)
+	beforeProvider := false
+	beforeTool := false
+	errorTelemetry := agentanalysis.WorkspaceOpenCodeErrorTelemetry{
+		Available: true, Name: "UnknownError", Classification: "dns", CauseCode: "ENOTFOUND",
+		MessagePresent: true, MessageBytes: 24, RedactedMessageSHA256: strings.Repeat("a", 64),
+		BeforeProviderRequest: &beforeProvider, BeforeFirstTool: &beforeTool,
+	}
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: root,
+		TempRoot:      t.TempDir(),
+		MountVerifier: func(string, string) error { return nil },
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
+			return OpenCodeRunResult{
+				Usage: agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable},
+				Telemetry: agentanalysis.WorkspaceOpenCodeTelemetry{
+					Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable, EventCount: 4,
+					ProviderRequests: 1, ProviderRequestsKnown: false, StepsUsed: 1,
+					Error: errorTelemetry, Tools: []agentanalysis.WorkspaceToolTelemetry{{Name: "read", Count: 1}},
+					StructuredOutputRetriesKnown: true,
+				},
+			}, &openCodePromptError{name: "UnknownError", telemetry: errorTelemetry}
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalFailed || result.OpenCodeTelemetry.ProviderRequests != 1 || result.OpenCodeTelemetry.ProviderRequestsKnown || result.OpenCodeTelemetry.Error.Classification != "dns" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestExecuteGenericFailureLowerBoundSatisfiesResultContract(t *testing.T) {
+	root, request := executorTestFixture(t)
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: root,
+		TempRoot:      t.TempDir(),
+		MountVerifier: func(string, string) error { return nil },
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
+			return OpenCodeRunResult{
+				Usage: agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable},
+				Telemetry: agentanalysis.WorkspaceOpenCodeTelemetry{
+					Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable, EventCount: 4,
+					ProviderRequests: 1, ProviderRequestsKnown: false, StepsUsed: 1,
+					Tools:                        []agentanalysis.WorkspaceToolTelemetry{{Name: "read", Count: 1}},
+					StructuredOutputRetriesKnown: true, FailureCode: "http_error",
+				},
+			}, fmt.Errorf("OpenCode API returned HTTP 502")
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalFailed || result.OpenCodeTelemetry.FailureCode != "http_error" || result.OpenCodeTelemetry.Error.Available || result.OpenCodeTelemetry.ProviderRequestsKnown {
+		t.Fatalf("result=%+v", result)
+	}
+	validated, err := agentanalysis.ValidateWorkspaceExecutionResult(result, request, filepath.Join(root, agentanalysis.WorkspaceArtifactsDir), filepath.Join(root, agentanalysis.WorkspaceSourceDir))
+	if err != nil {
+		t.Fatalf("generic lower-bound result failed validation: %v", err)
+	}
+	if validated.OpenCodeTelemetry.ProviderRequests != 1 || validated.OpenCodeTelemetry.ProviderRequestsKnown {
+		t.Fatalf("validated=%+v", validated.OpenCodeTelemetry)
+	}
+}
+
+func TestApplyOpenCodePromptErrorReplacesStaleErrorForGenericFailure(t *testing.T) {
+	result := OpenCodeRunResult{Telemetry: agentanalysis.WorkspaceOpenCodeTelemetry{
+		ProviderRequests: 1, ProviderRequestsKnown: true,
+		Error: agentanalysis.WorkspaceOpenCodeErrorTelemetry{
+			Available: true, Name: "APIError", Classification: "api_rate_limited",
+			HTTPStatusCode: 429, RetryableKnown: true, Retryable: true,
+		},
+		Tools: []agentanalysis.WorkspaceToolTelemetry{{Name: "read", Count: 1}},
+	}}
+	applyOpenCodePromptError(&result, fmt.Errorf("OpenCode API returned HTTP 502"), 1, true, true)
+	if result.Telemetry.Error.Available || result.Telemetry.FailureCode != "http_error" || result.Telemetry.ProviderRequests != 1 || result.Telemetry.ProviderRequestsKnown {
+		t.Fatalf("stale error was retained: %+v", result.Telemetry)
+	}
+}
+
+func TestApplyOpenCodePromptErrorPreservesCompleteSessionLifecycle(t *testing.T) {
+	beforeFirstTool := false
+	promptBeforeFirstTool := true
+	result := OpenCodeRunResult{Telemetry: agentanalysis.WorkspaceOpenCodeTelemetry{
+		ProviderRequests: 2, ProviderRequestsKnown: true,
+		Error: agentanalysis.WorkspaceOpenCodeErrorTelemetry{
+			Available: true, Name: "UnknownError", Classification: "unknown",
+			MessagePresent: true, RedactedMessageSHA256: strings.Repeat("a", 64),
+			BeforeFirstTool: &beforeFirstTool,
+		},
+		Tools: []agentanalysis.WorkspaceToolTelemetry{{Name: "read", Count: 1}},
+	}}
+	promptTelemetry := agentanalysis.WorkspaceOpenCodeErrorTelemetry{
+		Available: true, Name: "UnknownError", Classification: "response_stream",
+		MessagePresent: true, RedactedMessageSHA256: strings.Repeat("b", 64),
+		BeforeFirstTool: &promptBeforeFirstTool,
+	}
+	applyOpenCodePromptError(&result, &openCodePromptError{name: "UnknownError", telemetry: promptTelemetry}, 1, true, false)
+	if result.Telemetry.Error.BeforeFirstTool == nil || *result.Telemetry.Error.BeforeFirstTool || result.Telemetry.Error.Classification != "unknown" || result.Telemetry.FailureCode != "unknown" {
+		t.Fatalf("complete session telemetry was overwritten: %+v", result.Telemetry)
 	}
 }
 
@@ -573,6 +699,7 @@ func TestRunOpenCodePhasesUsesOneSessionAndGatesFinalization(t *testing.T) {
 		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%q}}},
 		{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}
 	]}]`, artifactPath, sourcePath)
+	finalTelemetry := strings.TrimSuffix(evidenceTelemetry, "]") + fmt.Sprintf(`,{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},{"type":"step-finish","cost":0.2,"tokens":{"input":20,"output":4,"cache":{"read":2}}}]}]`, executorAnalysisJSON())
 	posts := 0
 	gets := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -599,11 +726,15 @@ func TestRunOpenCodePhasesUsesOneSessionAndGatesFinalization(t *testing.T) {
 			if payload["agent"] != openCodeFinalizationAgent || payload["format"].(map[string]any)["type"] != "json_schema" {
 				t.Fatalf("final payload=%v", payload)
 			}
-			fmt.Fprintf(w, `{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},{"type":"step-finish","cost":0.2,"tokens":{"input":20,"output":4,"cache":{"read":2}}}]}`, executorAnalysisJSON())
+			fmt.Fprintf(w, `{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"running","input":{"filePath":"unpersisted"}}}]}`, executorAnalysisJSON())
 		case http.MethodGet:
 			gets++
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, evidenceTelemetry)
+			if gets == 1 {
+				fmt.Fprint(w, evidenceTelemetry)
+				return
+			}
+			fmt.Fprint(w, finalTelemetry)
 		default:
 			t.Fatalf("method=%s", r.Method)
 		}
@@ -614,8 +745,62 @@ func TestRunOpenCodePhasesUsesOneSessionAndGatesFinalization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if posts != 2 || gets != 1 || len(result.Structured) == 0 || !result.Telemetry.EvidencePhaseCompleted || !result.Telemetry.FinalizationPhaseCompleted || result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Telemetry.StepsUsed != 2 || result.Usage.ModelRequests != 2 {
+	if posts != 2 || gets != 2 || len(result.Structured) == 0 || !result.Telemetry.EvidencePhaseCompleted || !result.Telemetry.FinalizationPhaseCompleted || result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Telemetry.StepsUsed != 2 || result.Usage.ModelRequests != 2 {
 		t.Fatalf("posts=%d gets=%d result=%+v", posts, gets, result)
+	}
+	for _, tool := range result.Telemetry.Tools {
+		if tool.Name == "read" && tool.Count != 2 {
+			t.Fatalf("unpersisted response parts were counted: %+v", result.Telemetry.Tools)
+		}
+	}
+}
+
+func TestRunOpenCodePhasesPreservesPromptErrorWhenFinalTranscriptMalformed(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(artifactDir, "failure.log")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	evidenceTelemetry := fmt.Sprintf(`[{"info":{"role":"assistant","error":{"name":"APIError","data":{"message":"retry","statusCode":429,"isRetryable":true}}},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%q}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
+	posts := 0
+	gets := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			posts++
+			if posts == 1 {
+				fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
+				return
+			}
+			fmt.Fprint(w, `{"info":{"role":"assistant","error":{"name":"UnknownError","data":{"message":"getaddrinfo ENOTFOUND synthetic.invalid"}}},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"running","input":{"filePath":"unpersisted"}}}]}`)
+		case http.MethodGet:
+			gets++
+			if gets == 1 {
+				fmt.Fprint(w, evidenceTelemetry)
+				return
+			}
+			fmt.Fprint(w, `[{`)
+		default:
+			t.Fatalf("method=%s", r.Method)
+		}
+	}))
+	defer server.Close()
+	spec := OpenCodeSpec{WorkDir: workDir, Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}, Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192}
+	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
+	if err == nil || result.Usage.Status != agentanalysis.WorkspaceTelemetryUnavailable || result.Telemetry.Error.Name != "UnknownError" || result.Telemetry.Error.Classification != "dns" || result.Telemetry.ProviderRequests != 1 || result.Telemetry.ProviderRequestsKnown {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if result.Telemetry.Error.BeforeProviderRequest == nil || *result.Telemetry.Error.BeforeProviderRequest || result.Telemetry.Error.BeforeFirstTool == nil || *result.Telemetry.Error.BeforeFirstTool {
+		t.Fatalf("session progress=%+v", result.Telemetry.Error)
+	}
+	for _, tool := range result.Telemetry.Tools {
+		if tool.Name == "read" && tool.Count != 1 {
+			t.Fatalf("unpersisted response parts were counted: %+v", result.Telemetry.Tools)
+		}
 	}
 }
 

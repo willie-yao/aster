@@ -237,7 +237,7 @@ func validWorkspaceExecution(request WorkspaceExecutionRequest) WorkspaceExecuti
 		Version: WorkspaceResultVersion, ContractVersion: WorkspaceContractVersion, RequestHash: request.Hash,
 		TerminalState: engineruntime.TerminalSucceeded, Analysis: &analysis, DurationMs: 100, Usage: WorkspaceUsage{Status: WorkspaceTelemetryUnavailable},
 		OpenCodeTelemetry: WorkspaceOpenCodeTelemetry{
-			Available: true, Status: WorkspaceTelemetryAvailable, EventCount: 4, ProviderRequests: 2, StepsUsed: 2, StructuredOutputRetriesKnown: true,
+			Available: true, Status: WorkspaceTelemetryAvailable, EventCount: 4, ProviderRequests: 2, ProviderRequestsKnown: true, StepsUsed: 2, StructuredOutputRetriesKnown: true,
 			EvidencePhaseCompleted: true, EvidencePhaseSteps: 1, EvidencePhaseRequests: 1, ArtifactEvidenceToolCalls: 1, SourceEvidenceToolCalls: 1,
 			FinalizationPhaseCompleted: true, FinalizationPhaseSteps: 1, FinalizationPhaseRequests: 1, StructuredOutputToolCalls: 1,
 		},
