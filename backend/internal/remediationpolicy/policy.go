@@ -459,7 +459,7 @@ func benignServingComplement(words []string, persistent bool) bool {
 	}
 	if !temporalWordsAllowed(words,
 		"a", "an", "the", "all", "every", "and",
-		"api", "request", "requests", "read", "reads", "write", "writes", "traffic", "conversion", "conversions",
+		"api", "incoming", "request", "requests", "read", "reads", "write", "writes", "traffic", "conversion", "conversions",
 		"without", "with", "no", "zero", "error", "errors", "failure", "failures", "downtime", "outage", "outages", "disruption",
 		"successfully", "reliably", "seamlessly", "cleanly", "safely", "continuously", "correctly",
 	) {
@@ -479,7 +479,7 @@ func benignCompletionComplement(words []string) bool {
 		return false
 	}
 	if !temporalWordsAllowed(words,
-		"a", "an", "the", "full", "entire", "complete", "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts",
+		"a", "an", "the", "full", "entire", "complete", "stored", "version", "versions", "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts",
 		"without", "with", "no", "zero", "error", "errors", "failure", "failures", "downtime", "outage", "outages", "disruption",
 		"successfully", "reliably", "seamlessly", "cleanly", "safely",
 	) {
@@ -490,11 +490,12 @@ func benignCompletionComplement(words []string) bool {
 
 func benignFailoverComplement(words []string) bool {
 	words = boundedTemporalWords(words)
-	if negativeOutcomeQuality(words) || containsWord(words, "dead", "broken", "unavailable", "unreachable", "nowhere", "none", "null", "invalid", "blackhole") {
+	destinations := []string{"backup", "secondary", "standby", "replica", "service", "node", "server", "endpoint"}
+	if negativeOutcomeQuality(words) || containsWord(words, "dead", "broken", "unavailable", "unreachable", "nowhere", "none", "null", "invalid", "blackhole") || negativeObjectQuantifier(words, destinations...) {
 		return false
 	}
 	if !temporalWordsAllowed(words,
-		"a", "an", "the", "to", "named", "designated", "backup", "secondary", "standby", "healthy", "available", "replica", "endpoint", "service", "node",
+		"a", "an", "the", "to", "named", "designated", "api", "server", "backup", "secondary", "standby", "healthy", "available", "replica", "endpoint", "service", "node",
 		"without", "with", "no", "zero", "error", "errors", "failure", "failures", "downtime", "outage", "outages", "disruption",
 		"successfully", "reliably", "seamlessly", "cleanly", "safely",
 	) {
