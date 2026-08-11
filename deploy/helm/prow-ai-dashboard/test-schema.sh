@@ -389,10 +389,6 @@ agentSandbox:
       repository: local/analyzer
       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       pullPolicy: IfNotPresent
-    stagerImage:
-      repository: local/stager
-      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-      pullPolicy: IfNotPresent
     input:
       existingClaim: analyzer-input
     clientServiceAccount:

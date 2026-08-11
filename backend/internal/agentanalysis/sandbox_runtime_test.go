@@ -30,12 +30,8 @@ func TestWorkspaceSandboxRuntimeValidatesOneResult(t *testing.T) {
 	calls := 0
 	runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64), run: func(got agentsandbox.Spec) (agentsandbox.Result, error) {
 		calls++
-		if got.Purpose != "analysis" || got.RequestEnv != WorkspaceExecutionRequestEnv || got.StagedWorkspace == nil || got.StagedWorkspace.RequestEnv != WorkspaceStageRequestEnv {
+		if got.Purpose != "analysis" || got.RequestEnv != WorkspaceExecutionRequestEnv || got.PreparedWorkspace == nil || got.PreparedWorkspace.ManifestHash != spec.Request.Manifest.Hash || got.StagedWorkspace != nil {
 			t.Fatalf("spec=%+v", got)
-		}
-		var stage WorkspaceStageRequest
-		if err := json.Unmarshal(got.StagedWorkspace.Request, &stage); err != nil || stage.Hash != spec.StageRequest.Hash {
-			t.Fatalf("stage=%+v err=%v", stage, err)
 		}
 		var request WorkspaceExecutionRequest
 		if err := json.Unmarshal(got.Request, &request); err != nil || request.Hash != spec.Request.Hash {

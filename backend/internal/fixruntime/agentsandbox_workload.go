@@ -7,6 +7,7 @@ import (
 
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentsandbox"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
@@ -78,6 +79,15 @@ func (r *AgentSandboxRuntime) sandboxWorkloadPodSpec(spec agentsandbox.Spec) map
 		"containers":                    []any{container},
 	}
 	switch {
+	case spec.PreparedWorkspace != nil:
+		manifestHash := spec.PreparedWorkspace.ManifestHash
+		container["volumeMounts"] = []any{
+			map[string]any{"name": "input", "mountPath": agentsandbox.StagedWorkspaceSourcePath, "subPath": manifestHash + "/" + agentanalysis.WorkspaceSourceDir, "readOnly": true},
+			map[string]any{"name": "input", "mountPath": agentsandbox.StagedWorkspaceArtifactsPath, "subPath": manifestHash + "/" + agentanalysis.WorkspaceArtifactsDir, "readOnly": true},
+			map[string]any{"name": "result", "mountPath": agentsandbox.StagedWorkspaceResultPath},
+			map[string]any{"name": "executor-tmp", "mountPath": "/tmp"},
+		}
+		podSpec["volumes"] = preparedReadOnlyWorkspaceVolumes(r.opts.StagerInputClaim)
 	case spec.StagedWorkspace != nil:
 		stage := spec.StagedWorkspace
 		container["volumeMounts"] = []any{
@@ -119,6 +129,14 @@ func writableWorkspaceVolumes(sizeLimit string) []any {
 	return []any{
 		map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": sizeLimit}},
 		map[string]any{"name": "tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
+	}
+}
+
+func preparedReadOnlyWorkspaceVolumes(inputClaim string) []any {
+	return []any{
+		map[string]any{"name": "input", "persistentVolumeClaim": map[string]any{"claimName": inputClaim, "readOnly": true}},
+		map[string]any{"name": "result", "emptyDir": map[string]any{"sizeLimit": agentSandboxResultVolumeLimit}},
+		map[string]any{"name": "executor-tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
 	}
 }
 

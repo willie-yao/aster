@@ -593,29 +593,6 @@
               ],
               "additionalProperties": false
             },
-            "stagerImage": {
-              "type": "object",
-              "properties": {
-                "repository": {
-                  "type": "string"
-                },
-                "digest": {
-                  "type": "string"
-                },
-                "pullPolicy": {
-                  "type": "string",
-                  "enum": [
-                    "IfNotPresent"
-                  ]
-                }
-              },
-              "required": [
-                "repository",
-                "digest",
-                "pullPolicy"
-              ],
-              "additionalProperties": false
-            },
             "input": {
               "type": "object",
               "properties": {
@@ -824,7 +801,6 @@
             "namespace",
             "runtimeClassName",
             "executorImage",
-            "stagerImage",
             "input",
             "clientServiceAccount",
             "workloadServiceAccount",

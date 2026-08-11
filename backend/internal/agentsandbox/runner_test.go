@@ -16,6 +16,11 @@ func TestValidateSpec(t *testing.T) {
 	if err := ValidateSpec(staged); err != nil {
 		t.Fatal(err)
 	}
+	prepared := valid
+	prepared.PreparedWorkspace = &PreparedWorkspace{ManifestHash: strings.Repeat("a", 64)}
+	if err := ValidateSpec(prepared); err != nil {
+		t.Fatal(err)
+	}
 	for _, mutate := range []func(*Spec){
 		func(s *Spec) { s.Purpose = "Fix Critic" },
 		func(s *Spec) { s.Purpose = " causal-critic" },
@@ -33,6 +38,11 @@ func TestValidateSpec(t *testing.T) {
 		},
 		func(s *Spec) {
 			s.WritableWorkspace = true
+			s.StagedWorkspace = &StagedWorkspace{RequestEnv: "PROW_AI_STAGE_REQUEST_B64", Request: []byte(`{}`)}
+		},
+		func(s *Spec) { s.PreparedWorkspace = &PreparedWorkspace{ManifestHash: "main"} },
+		func(s *Spec) {
+			s.PreparedWorkspace = &PreparedWorkspace{ManifestHash: strings.Repeat("a", 64)}
 			s.StagedWorkspace = &StagedWorkspace{RequestEnv: "PROW_AI_STAGE_REQUEST_B64", Request: []byte(`{}`)}
 		},
 	} {

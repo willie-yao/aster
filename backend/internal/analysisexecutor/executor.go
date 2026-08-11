@@ -58,6 +58,7 @@ type Options struct {
 	OpenCodeBin   string
 	RunOpenCode   OpenCodeRunner
 	Now           func() time.Time
+	MountVerifier func(string, string) error
 }
 
 // Execute validates a sealed workspace, runs OpenCode once, and returns one analysis.
@@ -93,6 +94,13 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	sourceRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir)
 	artifactRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceArtifactsDir)
 	resultRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceResultDir)
+	mountVerifier := opts.MountVerifier
+	if mountVerifier == nil {
+		mountVerifier = verifyPreparedMounts
+	}
+	if err := mountVerifier(workspaceRoot, request.Manifest.Hash); err != nil {
+		return fail(engineruntime.TerminalFailed, fmt.Sprintf("verify prepared mounts: %v", err))
+	}
 	if err := prepareResultRoot(resultRoot); err != nil {
 		return fail(engineruntime.TerminalFailed, err.Error())
 	}
@@ -138,6 +146,9 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	runResult.Telemetry.StructuredOutputRetriesKnown = true
 	result.Usage = runResult.Usage
 	result.OpenCodeTelemetry = runResult.Telemetry
+	if err := mountVerifier(workspaceRoot, request.Manifest.Hash); err != nil {
+		return fail(engineruntime.TerminalFailed, fmt.Sprintf("prepared mounts changed during analysis: %v", err))
+	}
 	if ctx.Err() != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			result.OpenCodeTelemetry.TimedOut = true
@@ -157,6 +168,9 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	analysis, err := agentanalysis.ParseWorkspaceAnalysis(string(runResult.Structured), request.Manifest, artifactRoot, sourceRoot)
 	if err != nil {
 		return fail(engineruntime.TerminalFailed, err.Error())
+	}
+	if err := mountVerifier(workspaceRoot, request.Manifest.Hash); err != nil {
+		return fail(engineruntime.TerminalFailed, fmt.Sprintf("prepared mounts changed during result canonicalization: %v", err))
 	}
 	if err := verifyInputsBounded(request, sourceRoot, artifactRoot); err != nil {
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("workspace changed during result canonicalization: %v", err))
@@ -458,6 +472,67 @@ func openCodeJSON(ctx context.Context, client *http.Client, method, endpoint str
 		return fmt.Errorf("decode OpenCode API response: trailing data")
 	}
 	return nil
+}
+
+func verifyPreparedMounts(workspaceRoot, manifestHash string) error {
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return err
+	}
+	if len(data) > 1<<20 {
+		return fmt.Errorf("mountinfo exceeds the bound")
+	}
+	return verifyPreparedMountInfo(string(data), workspaceRoot, manifestHash)
+}
+
+func verifyPreparedMountInfo(raw, workspaceRoot, manifestHash string) error {
+	expected := map[string]string{
+		filepath.Clean(filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir)):    "/" + manifestHash + "/source",
+		filepath.Clean(filepath.Join(workspaceRoot, agentanalysis.WorkspaceArtifactsDir)): "/" + manifestHash + "/artifacts",
+	}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(raw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 10 {
+			continue
+		}
+		separator := slices.Index(fields, "-")
+		if separator < 0 || separator+3 >= len(fields) {
+			continue
+		}
+		mountPoint := unescapeMountInfo(fields[4])
+		identity, ok := expected[mountPoint]
+		if !ok {
+			continue
+		}
+		root := unescapeMountInfo(fields[3])
+		filesystem := fields[separator+1]
+		identityVisible := strings.HasSuffix(root, identity)
+		kataVirtioFS := root == "/" && filesystem == "virtiofs"
+		if (!identityVisible && !kataVirtioFS) || !mountOption(fields[5], "ro") {
+			return fmt.Errorf("mount %s is not the expected read-only prepared input", mountPoint)
+		}
+		seen[mountPoint] = true
+	}
+	for mountPoint := range expected {
+		if !seen[mountPoint] {
+			return fmt.Errorf("mount %s is unavailable", mountPoint)
+		}
+	}
+	return nil
+}
+
+func mountOption(value, want string) bool {
+	for _, option := range strings.Split(value, ",") {
+		if option == want {
+			return true
+		}
+	}
+	return false
+}
+
+func unescapeMountInfo(value string) string {
+	return strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`).Replace(value)
 }
 
 func writeOpenCodeConfig(home string, gateway engineruntime.ModelGatewayConfig, maxSteps, contextTokens, outputTokens int) error {

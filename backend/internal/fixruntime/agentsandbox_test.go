@@ -728,7 +728,7 @@ func TestAgentSandboxProductionOptionsFailClosed(t *testing.T) {
 		{name: "mutable stager image", edit: func(o *AgentSandboxOptions) { o.StagerImage = "registry.internal.example/stager:latest" }, want: "stager image"},
 		{name: "stager without claim", edit: func(o *AgentSandboxOptions) {
 			o.StagerImage = "registry.internal.example/stager@sha256:" + strings.Repeat("b", 64)
-		}, want: "configured together"},
+		}, want: "requires an input claim"},
 		{name: "invalid stager claim", edit: func(o *AgentSandboxOptions) {
 			o.StagerImage = "registry.internal.example/stager@sha256:" + strings.Repeat("b", 64)
 			o.StagerInputClaim = "Invalid_Claim"
@@ -843,5 +843,114 @@ func TestAgentSandboxCleanupDetectsOrphanedPod(t *testing.T) {
 	err := runtime.Cleanup(ctx, engineruntime.WorkRef{Backend: agentSandboxBackend, Namespace: "fix-eval", Name: "orphan"})
 	if !errors.Is(err, engineruntime.ErrCleanupPending) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestAgentSandboxPreparedWorkspaceUsesImmutableInputMounts(t *testing.T) {
+	runtime := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, testAgentSandboxOptions())
+	runtime.opts.StagerImage = "stager:test"
+	runtime.opts.StagerInputClaim = "analysis-input"
+	manifestHash := strings.Repeat("a", 64)
+	pod := runtime.sandboxWorkloadPodSpec(agentsandbox.Spec{
+		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{}`),
+		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: manifestHash},
+	})
+	object := runtime.sandboxObjectForSpec("analysis-test", agentsandbox.Spec{
+		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{}`),
+		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: manifestHash},
+	}, []byte(strings.Repeat("b", 32)), "execution-1")
+	annotations := object["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if annotations[agentSandboxPreparedAnnotation] != manifestHash {
+		t.Fatalf("annotations=%+v", annotations)
+	}
+	if _, ok := pod["initContainers"]; ok {
+		t.Fatalf("prepared workspace unexpectedly has init containers: %+v", pod)
+	}
+	mounts := pod["containers"].([]any)[0].(map[string]any)["volumeMounts"].([]any)
+	if len(mounts) != 4 {
+		t.Fatalf("mounts=%+v", mounts)
+	}
+	want := map[string]string{
+		agentsandbox.StagedWorkspaceSourcePath:    manifestHash + "/source",
+		agentsandbox.StagedWorkspaceArtifactsPath: manifestHash + "/artifacts",
+	}
+	for _, raw := range mounts {
+		mount := raw.(map[string]any)
+		if subPath, ok := want[mount["mountPath"].(string)]; ok {
+			if mount["name"] != "input" || mount["readOnly"] != true || mount["subPath"] != subPath {
+				t.Fatalf("input mount=%+v", mount)
+			}
+		}
+	}
+	volumes := pod["volumes"].([]any)
+	if len(volumes) != 3 || volumes[0].(map[string]any)["name"] != "input" {
+		t.Fatalf("volumes=%+v", volumes)
+	}
+}
+
+func TestAgentSandboxWorkloadIdentityIncludesPreparedManifest(t *testing.T) {
+	opts := testAgentSandboxOptions()
+	opts.StagerImage = "stager:test"
+	opts.StagerInputClaim = "analysis-input"
+	left := agentsandbox.Spec{
+		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{"request":1}`),
+		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64)},
+	}
+	right := left
+	right.PreparedWorkspace = &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("b", 64)}
+	if agentSandboxWorkloadHash(left, opts) == agentSandboxWorkloadHash(right, opts) {
+		t.Fatal("prepared manifest did not affect workload identity")
+	}
+}
+
+func TestEnrichSandboxStateWithPodTiming(t *testing.T) {
+	state := sandboxState{}
+	pod := map[string]any{
+		"metadata": map[string]any{"creationTimestamp": "2026-08-11T10:00:00Z"},
+		"status": map[string]any{
+			"conditions":            []any{map[string]any{"type": "PodScheduled", "status": "True", "lastTransitionTime": "2026-08-11T10:00:02Z"}},
+			"initContainerStatuses": []any{map[string]any{"name": agentSandboxStagerName, "state": map[string]any{"terminated": map[string]any{"startedAt": "2026-08-11T10:00:03Z", "finishedAt": "2026-08-11T10:00:08Z"}}}},
+			"containerStatuses":     []any{map[string]any{"name": agentSandboxContainerName, "state": map[string]any{"terminated": map[string]any{"startedAt": "2026-08-11T10:00:09Z", "finishedAt": "2026-08-11T10:00:19Z"}}}},
+		},
+	}
+	enrichSandboxStateWithPod(&state, pod)
+	if durationMilliseconds(state.PodCreatedAt, state.ScheduledAt) != 2000 || durationMilliseconds(state.StageStartedAt, state.StageFinishedAt) != 5000 || durationMilliseconds(state.ExecutionStartedAt, state.ExecutionFinishedAt) != 10000 {
+		t.Fatalf("state=%+v", state)
+	}
+}
+
+func TestAgentSandboxPreparedWorkspaceRequiresOnlyInputClaim(t *testing.T) {
+	opts := testAgentSandboxOptions()
+	opts.testOnly = true
+	opts.StagerInputClaim = "analysis-input"
+	opts = normalizeAgentSandboxOptions(opts)
+	if err := validateAgentSandboxOptions(opts); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, opts)
+	runtime.api.(*fakeAgentSandboxAPI).state = sandboxState{Exists: true, UID: "uid-1", PodName: "analysis-1", Finished: true, FinishedReason: "PodSucceeded"}
+	runtime.api.(*fakeAgentSandboxAPI).logs = agentSandboxResult(t, engineruntime.TerminalSucceeded, "")
+	_, err := runtime.Run(t.Context(), agentsandbox.Spec{
+		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{}`),
+		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAgentSandboxPreparedWorkspaceRejectsMissingInputClaim(t *testing.T) {
+	runtime := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, testAgentSandboxOptions())
+	_, err := runtime.Run(t.Context(), agentsandbox.Spec{
+		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{}`),
+		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "prepared workspace requires an input claim") {
+		t.Fatalf("error=%v", err)
 	}
 }

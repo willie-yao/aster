@@ -36,34 +36,39 @@ The executor also reads the bounded local OpenCode session result to aggregate p
 
 The Agent Sandbox deployment phase must mount both trees read-only. OpenCode may write only isolated runtime state under temporary storage. It returns one schema-constrained structured object. OpenCode 1.18.2 does not implement structured-output retries, so the executor does not request or infer them. The executor validates path and line ranges, reconstructs exact quotations from the sealed workspace, and writes exactly one canonical result file at `result/analysis.json`.
 
-## Staged Agent Sandbox lifecycle
+## Content-addressed prepared workspace lifecycle
 
-The shared Agent Sandbox runner supports one optional staged workspace:
+The analyzer mounts the already prepared input PVC snapshot directly:
 
-- one immutable stager init-container image;
-- one bounded, content-addressed stager request that must exactly match the
-  execution manifest, source revision, build prefix, and artifact identities;
-- one shared `emptyDir` workspace;
-- one read-only staged workspace mount in the executor;
-- one separate writable volume overlaid at `result/`;
-- separate writable temporary storage for the stager and executor so staging
-  credentials or state cannot cross the container boundary.
+- `/<manifest-hash>/source` is mounted read-only at `/workspace/source`;
+- `/<manifest-hash>/artifacts` is mounted read-only at `/workspace/artifacts`;
+- each trial receives fresh bounded `result` and executor temporary `emptyDir` volumes;
+- the executor verifies source revision, artifact hashes, expected effective mount points, and read-only mount options before and after OpenCode runs. Admission binds both PVC subpaths to one immutable manifest annotation. On AKS Kata the guest exposes each subPath as a separate read-only virtiofs root, so content hashes provide the final manifest identity check.
 
-The stager receives the complete workspace mount read-write and must finish
-successfully before the executor starts. The executor receives only its analysis
-request. Both containers run non-root with a read-only root filesystem, dropped
-capabilities, RuntimeDefault seccomp and AppArmor when available, bounded
-resources, and no automatic ServiceAccount token.
+There is no analyzer init container and no per-trial clone or artifact copy. The
+manifest hash participates in the Sandbox workload identity, and admission
+allows only exact 64-hex content-addressed source and artifact subpaths on the
+configured read-only input claim. A wrong, missing, mutable, or mismatched
+snapshot fails executor verification. OpenCode state, result files, caches, and
+temporary files are never shared across trials. UID-checked cleanup and bounded
+Pod-log retrieval remain unchanged.
 
-The stage request, stager image, executor request, resource bounds, and workload
-shape all participate in the Sandbox identity. UID-checked cleanup and bounded
-Pod-log retrieval remain owned by the existing shared lifecycle.
+The preserved benchmark showed a content-size-dependent pre-executor gap on
+three repeated cold trials per case:
 
-The credential-free stager now reads one pre-populated, read-only PVC snapshot at
-`/<manifest-hash>/source` and `/<manifest-hash>/artifacts`. It validates the
-source revision and artifact identities, fetches only the pinned commit into a
-shallow local checkout, copies the bounded artifacts, and creates an empty result
-directory. The Sandbox receives no source, storage, or model credential.
+| Case | Prepared bytes | Median pre-executor gap |
+|---|---:|---:|
+| Secrets Store CSI | 256,763 | 20,866 ms |
+| Kueue | 20,270,997 | 270,474 ms |
+| GCP PD CSI | 9,772,598 | 170,985 ms |
+
+Publication after task finalization was 29-102 ms and cleanup was 338-1,154 ms.
+The old harness did not expose separate scheduling and init-container timestamps,
+so the preserved record can only prove the combined scheduling-plus-staging gap.
+The strong repeated size relationship and the stager's per-trial shallow clone
+and copy path support repeated materialization as the leading hypothesis for that gap. The
+runtime now records scheduling, staging, executor, publication, and cleanup
+phases separately for the corrected benchmark.
 
 PVC population and image publication remain manual operator responsibilities.
 
@@ -82,7 +87,7 @@ the analyzer security boundary:
 The chart does not create the namespace, RuntimeClass, Agent Sandbox controller,
 input PVC, gateway, or images. Both images require immutable SHA-256 digests.
 The admission policy pins the requester, namespace, RuntimeClass, ServiceAccount,
-executor and stager images, input claim, container count, mounts, resources,
+executor image, input claim, container count, mounts, resources,
 AppArmor, seccomp, and delete lifecycle. The executor receives the staged
 workspace read-only, a separate writable result volume, and separate temporary
 storage.
@@ -150,7 +155,7 @@ cold benchmark phase.
 
 ```bash
 cd backend
-go test ./internal/agentanalysis ./internal/analysisexecutor ./internal/analysisstager ./cmd/analysisexecutor ./cmd/analysisstager -count=1
+go test ./internal/agentanalysis ./internal/analysisexecutor ./internal/agentsandbox ./internal/fixruntime ./cmd/analysisexecutor -count=1
 go test ./... -count=1
 go vet ./...
 staticcheck ./...
@@ -219,7 +224,6 @@ BENCH_PROVIDER_PATH=<provider-path> \
 BENCH_TRANSPORT_ID=<stable-transport-id> \
 AGENT_SANDBOX_ANALYSIS_NAMESPACE=<execution-namespace> \
 AGENT_SANDBOX_ANALYSIS_IMAGE=<executor@sha256:digest> \
-AGENT_SANDBOX_ANALYSIS_STAGER_IMAGE=<stager@sha256:digest> \
 AGENT_SANDBOX_ANALYSIS_STAGER_INPUT_CLAIM=<input-pvc> \
 AGENT_SANDBOX_ANALYSIS_SERVICE_ACCOUNT=<tokenless-workload-sa> \
 AGENT_SANDBOX_ANALYSIS_RUNTIME_CLASS=<secure-runtime-class> \
@@ -328,3 +332,16 @@ window. Benchmarks must set `ANALYZER_BENCH_MODEL_CONTEXT_TOKENS` and
 20-step bound remains the default benchmark bound; a 40-step arm is the only
 larger bound planned for the corrected experiment and does not change any
 production default.
+
+### AKS Kata prepared-mount smoke test
+
+On August 11, 2026, a temporary `prow-dashboard-demo` Sandbox using
+`kata-vm-isolation` successfully mounted both content-addressed PVC subpaths.
+UID 65532 read both inputs, writes to each input failed with `Read-only file
+system`, fresh result and temporary volumes were writable, and the Pod completed
+successfully. Kata exposed the mounts as separate read-only `virtiofs` roots at
+`/workspace/source` and `/workspace/artifacts`; it did not expose the host-side
+subPath in the guest mountinfo root. The verifier accepts this exact Kata shape
+while admission and content verification bind the mounted data to the manifest.
+The temporary Sandbox, Pod, PVC, NetworkPolicy, and namespace were deleted and
+namespace absence was verified. Private operator evidence retains the Sandbox, Pod, mountinfo, write-denial, and cleanup records.
