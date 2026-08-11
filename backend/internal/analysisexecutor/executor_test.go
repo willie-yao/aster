@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -51,6 +52,22 @@ func TestExecuteRunsOneNativeSessionAndReturnsAnalysis(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"quote":"artifact-only-marker specific failure"`) || !strings.Contains(string(data), `"verified":true`) {
 		t.Fatalf("canonical result = %s", data)
+	}
+}
+
+func TestExecuteVerifiesReadOnlyPreparedSource(t *testing.T) {
+	root, request := executorTestFixture(t)
+	sourceRoot := filepath.Join(root, agentanalysis.WorkspaceSourceDir)
+	restore := makeExecutorTreeReadOnly(t, sourceRoot)
+	defer restore()
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
+			return testOpenCodeResult(), nil
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalSucceeded || result.Analysis == nil {
+		t.Fatalf("result=%+v", result)
 	}
 }
 
@@ -483,5 +500,34 @@ func TestExecutePreservesSanitizedFailureTelemetryWithoutUsage(t *testing.T) {
 	})
 	if result.TerminalState != engineruntime.TerminalFailed || result.Usage.Available || result.Usage.Status != agentanalysis.WorkspaceTelemetryUnavailable || result.OpenCodeTelemetry.ProviderRequests != 1 || result.OpenCodeTelemetry.Error != errorTelemetry || result.OpenCodeTelemetry.FailureCode != "api_rate_limited" || !result.OpenCodeTelemetry.RequestShape.Available {
 		t.Fatalf("result=%+v", result)
+	}
+}
+
+func makeExecutorTreeReadOnly(t *testing.T, root string) func() {
+	t.Helper()
+	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if entry.IsDir() {
+			return os.Chmod(path, 0o555)
+		}
+		return os.Chmod(path, 0o444)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.Type()&os.ModeSymlink != 0 {
+				return nil
+			}
+			if entry.IsDir() {
+				return os.Chmod(path, 0o700)
+			}
+			return os.Chmod(path, 0o600)
+		})
 	}
 }

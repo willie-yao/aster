@@ -2012,6 +2012,8 @@ grep -Fq 'v.persistentVolumeClaim.claimName ==' "$tmp/agent-sandbox-analyzer-ren
 grep -Fq 'analyzer-input' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq "(!has(variables.pod.initContainers) || size(variables.pod.initContainers) == 0)" "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq "v.name == 'input' && v.mountPath == '/workspace/source' && v.readOnly == true" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "object.metadata.annotations['prow-ai-dashboard/prepared-workspace-sha256'].matches('^[0-9a-f]{64}$')" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "object.metadata.annotations['prow-ai-dashboard/prepared-workspace-sha256'] == oldObject.metadata.annotations['prow-ai-dashboard/prepared-workspace-sha256']" "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq "v.subPath == object.metadata.annotations['prow-ai-dashboard/prepared-manifest-sha256'] + '/source'" "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq "v.name == 'input' && v.mountPath == '/workspace/artifacts' && v.readOnly == true" "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq "v.subPath == object.metadata.annotations['prow-ai-dashboard/prepared-manifest-sha256'] + '/artifacts'" "$tmp/agent-sandbox-analyzer-render.yaml"

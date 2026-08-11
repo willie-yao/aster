@@ -33,24 +33,25 @@ import (
 )
 
 const (
-	agentSandboxBackend            = agentsandbox.Backend
-	agentSandboxRequestEnv         = "PROW_AI_FIX_EXECUTION_REQUEST_B64"
-	agentSandboxExecutionLabel     = "prow-ai-dashboard/execution"
-	agentSandboxContractAnnotation = "prow-ai-dashboard/execution-contract-sha256"
-	agentSandboxIDAnnotation       = "prow-ai-dashboard/execution-id"
-	agentSandboxPreparedAnnotation = "prow-ai-dashboard/prepared-manifest-sha256"
-	agentSandboxPodAnnotation      = "agents.x-k8s.io/pod-name"
-	agentSandboxContainerName      = "executor"
-	agentSandboxStagerName         = "stager"
-	defaultSandboxPollEvery        = 250 * time.Millisecond
-	defaultSandboxCleanupTimeout   = 30 * time.Second
-	agentSandboxResultGrace        = 15 * time.Second
-	defaultSandboxOutputLimit      = int64(512 << 10)
-	defaultSandboxCPURequest       = "100m"
-	defaultSandboxCPULimit         = "1"
-	defaultSandboxMemoryRequest    = "128Mi"
-	defaultSandboxMemoryLimit      = "512Mi"
-	defaultSandboxDiskLimit        = "256Mi"
+	agentSandboxBackend                    = agentsandbox.Backend
+	agentSandboxRequestEnv                 = "PROW_AI_FIX_EXECUTION_REQUEST_B64"
+	agentSandboxExecutionLabel             = "prow-ai-dashboard/execution"
+	agentSandboxContractAnnotation         = "prow-ai-dashboard/execution-contract-sha256"
+	agentSandboxIDAnnotation               = "prow-ai-dashboard/execution-id"
+	agentSandboxPreparedAnnotation         = "prow-ai-dashboard/prepared-manifest-sha256"
+	agentSandboxPreparedIdentityAnnotation = "prow-ai-dashboard/prepared-workspace-sha256"
+	agentSandboxPodAnnotation              = "agents.x-k8s.io/pod-name"
+	agentSandboxContainerName              = "executor"
+	agentSandboxStagerName                 = "stager"
+	defaultSandboxPollEvery                = 250 * time.Millisecond
+	defaultSandboxCleanupTimeout           = 30 * time.Second
+	agentSandboxResultGrace                = 15 * time.Second
+	defaultSandboxOutputLimit              = int64(512 << 10)
+	defaultSandboxCPURequest               = "100m"
+	defaultSandboxCPULimit                 = "1"
+	defaultSandboxMemoryRequest            = "128Mi"
+	defaultSandboxMemoryLimit              = "512Mi"
+	defaultSandboxDiskLimit                = "256Mi"
 )
 
 var (
@@ -722,6 +723,7 @@ func (r *AgentSandboxRuntime) sandboxObjectForSpec(name string, spec agentsandbo
 	}
 	if spec.PreparedWorkspace != nil {
 		annotations[agentSandboxPreparedAnnotation] = spec.PreparedWorkspace.ManifestHash
+		annotations[agentSandboxPreparedIdentityAnnotation] = spec.PreparedWorkspace.IdentityHash
 	}
 	return map[string]any{
 		"apiVersion": "agents.x-k8s.io/v1beta1",
@@ -874,8 +876,10 @@ func agentSandboxWorkloadHash(spec agentsandbox.Spec, opts AgentSandboxOptions) 
 		stageEnv = spec.StagedWorkspace.RequestEnv
 	}
 	preparedHash := ""
+	preparedIdentity := ""
 	if spec.PreparedWorkspace != nil {
 		preparedHash = spec.PreparedWorkspace.ManifestHash
+		preparedIdentity = spec.PreparedWorkspace.IdentityHash
 	}
 	metadata, _ := json.Marshal(struct {
 		Purpose              string `json:"purpose"`
@@ -885,7 +889,8 @@ func agentSandboxWorkloadHash(spec agentsandbox.Spec, opts AgentSandboxOptions) 
 		WritableWorkspace    bool   `json:"writable_workspace"`
 		StageRequestEnv      string `json:"stage_request_env,omitempty"`
 		PreparedManifestHash string `json:"prepared_manifest_hash,omitempty"`
-	}{spec.Purpose, spec.RequestEnv, spec.Timeout.String(), spec.OutputLimitBytes, spec.WritableWorkspace, stageEnv, preparedHash})
+		PreparedIdentityHash string `json:"prepared_identity_hash,omitempty"`
+	}{spec.Purpose, spec.RequestEnv, spec.Timeout.String(), spec.OutputLimitBytes, spec.WritableWorkspace, stageEnv, preparedHash, preparedIdentity})
 	request := append(append(append([]byte(nil), metadata...), 0), spec.Request...)
 	if spec.StagedWorkspace != nil {
 		request = append(request, 0)

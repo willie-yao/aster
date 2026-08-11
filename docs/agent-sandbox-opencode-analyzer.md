@@ -45,12 +45,39 @@ The analyzer mounts the already prepared input PVC snapshot directly:
 - the executor verifies source revision, artifact hashes, expected effective mount points, and read-only mount options before and after OpenCode runs. Admission binds both PVC subpaths to one immutable manifest annotation. On AKS Kata the guest exposes each subPath as a separate read-only virtiofs root, so content hashes provide the final manifest identity check.
 
 There is no analyzer init container and no per-trial clone or artifact copy. The
-manifest hash participates in the Sandbox workload identity, and admission
-allows only exact 64-hex content-addressed source and artifact subpaths on the
-configured read-only input claim. A wrong, missing, mutable, or mismatched
-snapshot fails executor verification. OpenCode state, result files, caches, and
-temporary files are never shared across trials. UID-checked cleanup and bounded
-Pod-log retrieval remain unchanged.
+manifest hash remains the content address for the source and artifact subpaths.
+A separate prepared-workspace identity seals the destination filesystem mode
+policy and participates in the Sandbox workload identity. Admission requires
+and freezes both identities. A wrong, missing, mutable, or mismatched snapshot
+fails executor verification. OpenCode state, result files, caches, and temporary
+files are never shared across trials. UID-checked cleanup and bounded Pod-log
+retrieval remain unchanged.
+
+Prepared-workspace population has a fixed sealing order:
+
+1. Populate the source and artifact trees on the final destination filesystem.
+2. Verify the exact revision, tree, index modes, tracked bytes, symlink targets,
+   and absence of staged, untracked, ignored, unsupported, or linked Git data.
+3. Probe whether the destination can represent executable and non-executable
+   regular files distinctly.
+4. Keep repository-local `core.filemode=true` when it can. Otherwise set only
+   repository-local `core.filemode=false` and seal
+   `ignore_executable_bit` as the source mode policy.
+5. Reverify the populated source, then calculate the stage, execution,
+   prepared-workspace, workload, and runtime identities.
+6. Mount the sealed source and artifacts read-only for analyzer execution.
+
+The direct prepared path seals the same derived policy as its input and execution
+policy. The copy-based stager seals input and output policies separately so an
+Azure Files input can be cloned into a mode-preserving execution workspace.
+
+The mode policy never changes `HEAD`, the Git index, Git tree modes, tracked
+bytes, symlink targets, source revision, artifact manifest, manifest hash, or
+PVC subpaths. A policy or local Git configuration change after sealing is an
+identity mismatch. A mode-only mismatch on a filesystem that can preserve modes
+is rejected rather than reclassified. Content changes, index-mode changes,
+staged files, untracked or ignored files, unsupported modes, submodules,
+escaping symlinks, and Git metadata links remain fatal.
 
 The preserved benchmark showed a content-size-dependent pre-executor gap on
 three repeated cold trials per case:
@@ -70,6 +97,11 @@ runtime now records scheduling, staging, executor, publication, and cleanup
 phases separately for the corrected benchmark.
 
 PVC population and image publication remain manual operator responsibilities.
+The benchmark preparation step probes and seals `ANALYZER_BENCH_SOURCE_ROOT` on
+the final target filesystem before generating the prepared JSON. The mode policy
+is derived from that probe and cannot be selected independently by an operator.
+Normal execution loads that prepared JSON and verifies the sealed policy without
+rewriting repository configuration or regenerating prepared identities.
 
 ## Deployment boundary
 

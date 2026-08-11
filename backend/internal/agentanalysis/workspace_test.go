@@ -68,10 +68,12 @@ func TestWorkspaceStageRequestBindsManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*WorkspaceStageRequest){
-		"manifest":     func(value *WorkspaceStageRequest) { value.ManifestHash = strings.Repeat("0", 64) },
-		"source":       func(value *WorkspaceStageRequest) { value.Source.Revision = strings.Repeat("1", 40) },
-		"artifacts":    func(value *WorkspaceStageRequest) { value.Artifacts[0].SHA256 = strings.Repeat("2", 64) },
-		"build prefix": func(value *WorkspaceStageRequest) { value.BuildPrefix = "other/" },
+		"manifest":           func(value *WorkspaceStageRequest) { value.ManifestHash = strings.Repeat("0", 64) },
+		"source":             func(value *WorkspaceStageRequest) { value.Source.Revision = strings.Repeat("1", 40) },
+		"artifacts":          func(value *WorkspaceStageRequest) { value.Artifacts[0].SHA256 = strings.Repeat("2", 64) },
+		"build prefix":       func(value *WorkspaceStageRequest) { value.BuildPrefix = "other/" },
+		"input mode policy":  func(value *WorkspaceStageRequest) { value.InputSourceModePolicy = WorkspaceSourceModeIgnoreExecutable },
+		"output mode policy": func(value *WorkspaceStageRequest) { value.OutputSourceModePolicy = WorkspaceSourceModeIgnoreExecutable },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := stage
@@ -233,8 +235,9 @@ func TestWorkspaceExecutionRequestBindsPromptAndRuntime(t *testing.T) {
 		t.Fatal("tampered result schema was accepted")
 	}
 	for name, mutate := range map[string]func(*WorkspaceExecutionRequest){
-		"context": func(value *WorkspaceExecutionRequest) { value.ModelContextTokens++ },
-		"output":  func(value *WorkspaceExecutionRequest) { value.ModelOutputTokens++ },
+		"context":     func(value *WorkspaceExecutionRequest) { value.ModelContextTokens++ },
+		"output":      func(value *WorkspaceExecutionRequest) { value.ModelOutputTokens++ },
+		"mode policy": func(value *WorkspaceExecutionRequest) { value.SourceModePolicy = WorkspaceSourceModeIgnoreExecutable },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := execution

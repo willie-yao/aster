@@ -17,7 +17,7 @@ func TestValidateSpec(t *testing.T) {
 		t.Fatal(err)
 	}
 	prepared := valid
-	prepared.PreparedWorkspace = &PreparedWorkspace{ManifestHash: strings.Repeat("a", 64)}
+	prepared.PreparedWorkspace = &PreparedWorkspace{ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)}
 	if err := ValidateSpec(prepared); err != nil {
 		t.Fatal(err)
 	}
@@ -40,9 +40,14 @@ func TestValidateSpec(t *testing.T) {
 			s.WritableWorkspace = true
 			s.StagedWorkspace = &StagedWorkspace{RequestEnv: "PROW_AI_STAGE_REQUEST_B64", Request: []byte(`{}`)}
 		},
-		func(s *Spec) { s.PreparedWorkspace = &PreparedWorkspace{ManifestHash: "main"} },
+		func(s *Spec) {
+			s.PreparedWorkspace = &PreparedWorkspace{ManifestHash: "main", IdentityHash: strings.Repeat("b", 64)}
+		},
 		func(s *Spec) {
 			s.PreparedWorkspace = &PreparedWorkspace{ManifestHash: strings.Repeat("a", 64)}
+		},
+		func(s *Spec) {
+			s.PreparedWorkspace = &PreparedWorkspace{ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)}
 			s.StagedWorkspace = &StagedWorkspace{RequestEnv: "PROW_AI_STAGE_REQUEST_B64", Request: []byte(`{}`)}
 		},
 	} {

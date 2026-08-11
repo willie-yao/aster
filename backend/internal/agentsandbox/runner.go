@@ -37,6 +37,7 @@ type StagedWorkspace struct {
 // PreparedWorkspace mounts one immutable content-addressed input snapshot directly.
 type PreparedWorkspace struct {
 	ManifestHash string
+	IdentityHash string
 }
 
 // Spec describes one credential-free workload executed through Agent Sandbox.
@@ -97,7 +98,7 @@ func ValidateSpec(spec Spec) error {
 		return fmt.Errorf("agent sandbox staged and prepared workspaces are mutually exclusive")
 	}
 	if spec.PreparedWorkspace != nil {
-		if spec.WritableWorkspace || !manifestHashPattern.MatchString(spec.PreparedWorkspace.ManifestHash) {
+		if spec.WritableWorkspace || !manifestHashPattern.MatchString(spec.PreparedWorkspace.ManifestHash) || !manifestHashPattern.MatchString(spec.PreparedWorkspace.IdentityHash) {
 			return fmt.Errorf("agent sandbox prepared workspace is invalid")
 		}
 	}

@@ -30,7 +30,7 @@ func TestWorkspaceSandboxRuntimeValidatesOneResult(t *testing.T) {
 	calls := 0
 	runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64), run: func(got agentsandbox.Spec) (agentsandbox.Result, error) {
 		calls++
-		if got.Purpose != "analysis" || got.RequestEnv != WorkspaceExecutionRequestEnv || got.PreparedWorkspace == nil || got.PreparedWorkspace.ManifestHash != spec.Request.Manifest.Hash || got.StagedWorkspace != nil {
+		if got.Purpose != "analysis" || got.RequestEnv != WorkspaceExecutionRequestEnv || got.PreparedWorkspace == nil || got.PreparedWorkspace.ManifestHash != spec.Request.Manifest.Hash || got.PreparedWorkspace.IdentityHash != spec.StageRequest.Hash || got.StagedWorkspace != nil {
 			t.Fatalf("spec=%+v", got)
 		}
 		var request WorkspaceExecutionRequest
@@ -148,6 +148,11 @@ func TestWorkspaceSandboxRuntimeIdentityIncludesConfiguration(t *testing.T) {
 	if changed.RuntimeIdentity() == base {
 		t.Fatal("Sandbox identity did not affect runtime identity")
 	}
+	changed = *runtime
+	changed.SourceModePolicy = WorkspaceSourceModeIgnoreExecutable
+	if changed.RuntimeIdentity() == base {
+		t.Fatal("source mode policy did not affect runtime identity")
+	}
 }
 
 func TestWorkspaceSandboxRuntimeRejectsUnknownPodReason(t *testing.T) {
@@ -174,6 +179,24 @@ func TestWorkspaceSandboxRuntimeRejectsConfigurationMismatch(t *testing.T) {
 	}}
 	runtime.Gateway.Model = "other-model"
 	if _, err := runtime.Analyze(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "configured gateway") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestWorkspaceSandboxRuntimeRejectsSourceModePolicyMismatch(t *testing.T) {
+	runtime, spec := workspaceSandboxFixture(t)
+	runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64), run: func(agentsandbox.Spec) (agentsandbox.Result, error) {
+		t.Fatal("sandbox should not run for source mode policy mismatch")
+		return agentsandbox.Result{}, nil
+	}}
+	runtime.SourceModePolicy = WorkspaceSourceModeIgnoreExecutable
+	if _, err := runtime.Analyze(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "configured source mode policy") {
+		t.Fatalf("error=%v", err)
+	}
+
+	runtime.SourceModePolicy = WorkspaceSourceModePreserve
+	spec.StageRequest, _ = NewWorkspaceStageRequestWithSourceModePolicies(spec.Request.Manifest, WorkspaceSourceModePreserve, WorkspaceSourceModeIgnoreExecutable)
+	if _, err := runtime.Analyze(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "stage and execution source mode policies differ") {
 		t.Fatalf("error=%v", err)
 	}
 }

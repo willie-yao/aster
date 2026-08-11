@@ -1,14 +1,18 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -24,7 +28,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
-const agentSandboxAnalyzerBenchmarkRecordVersion = 2
+const agentSandboxAnalyzerBenchmarkRecordVersion = 3
 
 type agentSandboxAnalyzerBenchmarkConfig struct {
 	KubeContext        string
@@ -58,6 +62,7 @@ type agentSandboxAnalyzerPrepared struct {
 	BaselinePromptSHA256   string   `json:"baseline_prompt_sha256"`
 	ProjectSHA256          string   `json:"project_sha256"`
 	SourceRevision         string   `json:"source_revision"`
+	SourceModePolicy       string   `json:"source_mode_policy"`
 	SourceRoot             string   `json:"source_root"`
 	ArtifactRoot           string   `json:"artifact_root"`
 	ManifestHash           string   `json:"manifest_hash"`
@@ -112,6 +117,7 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	RuntimeIdentityHash          string                                 `json:"runtime_identity_hash"`
 	ExecutionID                  string                                 `json:"execution_id"`
 	SourceRevision               string                                 `json:"source_revision"`
+	SourceModePolicy             string                                 `json:"source_mode_policy"`
 	ArtifactFiles                int                                    `json:"artifact_files"`
 	ArtifactBytes                int64                                  `json:"artifact_bytes"`
 	Status                       string                                 `json:"status"`
@@ -228,9 +234,14 @@ func TestAgentSandboxAnalyzerBenchmark(t *testing.T) {
 	}
 	cfg := loadAgentSandboxAnalyzerBenchmarkConfig(t)
 	bc := agentSandboxAnalyzerBenchmarkCase(t)
-	prepared := prepareAgentSandboxAnalyzerBenchmarkCase(t, cfg, bc)
-	writeAgentSandboxAnalyzerPrepared(t, cfg.PreparedPath, prepared.prepared)
+	var sealed *agentSandboxAnalyzerPrepared
+	if !cfg.PrepareOnly {
+		value := readAgentSandboxAnalyzerPrepared(t, cfg.PreparedPath)
+		sealed = &value
+	}
+	prepared := prepareAgentSandboxAnalyzerBenchmarkCase(t, cfg, bc, sealed)
 	if cfg.PrepareOnly {
+		writeAgentSandboxAnalyzerPrepared(t, cfg.PreparedPath, prepared.prepared)
 		t.Logf("prepared analyzer input manifest %s", prepared.prepared.ManifestHash)
 		return
 	}
@@ -241,7 +252,7 @@ func TestAgentSandboxAnalyzerBenchmark(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := &agentanalysis.WorkspaceSandboxRuntime{
-		Sandbox: runner, Gateway: cfg.Gateway, Timeout: cfg.Timeout, OutputLimitBytes: cfg.OutputLimit,
+		Sandbox: runner, Gateway: cfg.Gateway, SourceModePolicy: prepared.request.SourceModePolicy, Timeout: cfg.Timeout, OutputLimitBytes: cfg.OutputLimit,
 	}
 	for index := 0; index < cfg.Repetitions; index++ {
 		repetition := cfg.RepetitionBase + index
@@ -285,7 +296,7 @@ func loadAgentSandboxAnalyzerBenchmarkConfig(t *testing.T) agentSandboxAnalyzerB
 	}
 	cfg := agentSandboxAnalyzerBenchmarkConfig{
 		SourceRoot: require("ANALYZER_BENCH_SOURCE_ROOT"), ProjectDir: require("BENCH_PROJECT_DIR"),
-		PreparedPath: strings.TrimSpace(os.Getenv("ANALYZER_BENCH_PREPARED_JSON")),
+		PreparedPath: require("ANALYZER_BENCH_PREPARED_JSON"),
 		ArmLabel:     arm, ModelLabel: modelLabel, ProviderPath: require("BENCH_PROVIDER_PATH"), TransportID: transportID,
 		EngineCommit: benchmarkEngineCommit(t, !prepareOnly), Gateway: gateway, Timeout: timeout, OutputLimit: outputLimit,
 		MaxSteps:           agentSandboxAnalyzerBenchmarkInt(t, "ANALYZER_BENCH_MAX_STEPS", 20, 1, 100),
@@ -331,7 +342,7 @@ func agentSandboxAnalyzerBenchmarkCase(t *testing.T) benchCase {
 	return cases[0]
 }
 
-func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnalyzerBenchmarkConfig, bc benchCase) agentSandboxAnalyzerPreparedCase {
+func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnalyzerBenchmarkConfig, bc benchCase, sealed *agentSandboxAnalyzerPrepared) agentSandboxAnalyzerPreparedCase {
 	t.Helper()
 	if err := validateBenchmarkProjectDir(cfg.ProjectDir, bc); err != nil {
 		t.Fatalf("BENCH_PROJECT_DIR=%s: %v", cfg.ProjectDir, err)
@@ -348,8 +359,9 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 	if !ok || len(source.Revision) != 40 {
 		t.Fatal("benchmark case does not resolve one lowercase 40-character source SHA")
 	}
-	if err := agentanalysis.VerifySourceWorkspace(t.Context(), cfg.SourceRoot, source.Revision); err != nil {
-		t.Fatalf("ANALYZER_BENCH_SOURCE_ROOT=%s: %v", cfg.SourceRoot, err)
+	sourceModePolicy, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), cfg.SourceRoot, source.Revision, sealed)
+	if err != nil {
+		t.Fatalf("verify ANALYZER_BENCH_SOURCE_ROOT=%s: %v", cfg.SourceRoot, err)
 	}
 	loc := prowbuild.BuildLocation{
 		JobLocation: prowbuild.JobLocation{JobType: bc.jobType, Repo: bc.repo},
@@ -371,11 +383,11 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 	if err != nil {
 		t.Fatal(err)
 	}
-	execution, err := agentanalysis.NewWorkspaceExecutionRequest(manifest, cfg.Gateway, cfg.Timeout, cfg.MaxSteps, cfg.ModelContextTokens, cfg.ModelOutputTokens, cfg.OutputLimit)
+	execution, err := agentanalysis.NewWorkspaceExecutionRequestWithSourceModePolicy(manifest, sourceModePolicy, cfg.Gateway, cfg.Timeout, cfg.MaxSteps, cfg.ModelContextTokens, cfg.ModelOutputTokens, cfg.OutputLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stage, err := agentanalysis.NewWorkspaceStageRequest(manifest)
+	stage, err := agentanalysis.NewWorkspaceStageRequestWithSourceModePolicies(manifest, sourceModePolicy, sourceModePolicy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,13 +402,16 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 		artifactPaths = append(artifactPaths, file.Path)
 	}
 	prepared := agentSandboxAnalyzerPrepared{
-		Version: 2, CaseID: bc.name, StableID: bc.stableID, EngineCommit: cfg.EngineCommit,
+		Version: 3, CaseID: bc.name, StableID: bc.stableID, EngineCommit: cfg.EngineCommit,
 		FixtureSHA256: bc.fixtureSHA256, BaselineConsumerCommit: bc.consumerCommit,
 		BaselinePromptSHA256: bc.promptSHA256, ProjectSHA256: sha256Hex(projectData),
-		SourceRevision: source.Revision, SourceRoot: filepath.Clean(cfg.SourceRoot), ArtifactRoot: artifactRoot,
+		SourceRevision: source.Revision, SourceModePolicy: string(sourceModePolicy), SourceRoot: filepath.Clean(cfg.SourceRoot), ArtifactRoot: artifactRoot,
 		ManifestHash: manifest.Hash, RequestHash: execution.Hash, StageHash: stage.Hash,
 		ArtifactFiles: len(files), ArtifactBytes: artifactBytes, ArtifactPaths: artifactPaths,
 		WorkspacePromptHash: agentanalysis.WorkspaceSkillHash(), ModelContextTokens: cfg.ModelContextTokens, ModelOutputTokens: cfg.ModelOutputTokens, MaxSteps: cfg.MaxSteps, ModelLabel: cfg.ModelLabel, ArmLabel: cfg.ArmLabel,
+	}
+	if sealed != nil && !reflect.DeepEqual(prepared, *sealed) {
+		t.Fatal("prepared analyzer identity changed")
 	}
 	return agentSandboxAnalyzerPreparedCase{prepared: prepared, request: execution, stage: stage, bc: bc}
 }
@@ -459,7 +474,7 @@ func agentSandboxAnalyzerRecordForResult(
 		ContractVersion: agentanalysis.WorkspaceContractVersion, WorkspacePromptHash: agentanalysis.WorkspaceSkillHash(),
 		ModelContextTokens: prepared.request.ModelContextTokens, ModelOutputTokens: prepared.request.ModelOutputTokens, MaxSteps: prepared.request.MaxSteps,
 		ManifestHash: prepared.prepared.ManifestHash, RequestHash: prepared.prepared.RequestHash,
-		RuntimeIdentityHash: runtimeIdentity, ExecutionID: executionID, SourceRevision: prepared.prepared.SourceRevision,
+		RuntimeIdentityHash: runtimeIdentity, ExecutionID: executionID, SourceRevision: prepared.prepared.SourceRevision, SourceModePolicy: prepared.prepared.SourceModePolicy,
 		ArtifactFiles: prepared.prepared.ArtifactFiles, ArtifactBytes: prepared.prepared.ArtifactBytes,
 		Status: status, ErrorCode: code, FailureReason: boundedBenchmarkFailure(runErr),
 		ElapsedMS: max(elapsed.Milliseconds(), 0), RuntimeDurationMS: max(result.Execution.DurationMs, 0),
@@ -640,6 +655,41 @@ func agentSandboxAnalyzerBenchmarkExecutionID(requestHash, runtimeIdentity, arm 
 	return fmt.Sprintf("analysis-bench-%x", sum[:10])
 }
 
+func sealOrVerifyAgentSandboxAnalyzerSource(ctx context.Context, root, revision string, sealed *agentSandboxAnalyzerPrepared) (agentanalysis.WorkspaceSourceModePolicy, error) {
+	if sealed == nil {
+		return agentanalysis.ConfigurePreparedSourceModePolicy(ctx, root, revision)
+	}
+	policy := agentanalysis.WorkspaceSourceModePolicy(sealed.SourceModePolicy)
+	if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, root, revision, policy); err != nil {
+		return "", err
+	}
+	return policy, nil
+}
+
+func readAgentSandboxAnalyzerPrepared(t *testing.T, path string) agentSandboxAnalyzerPrepared {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) == 0 || len(data) > 256<<10 {
+		t.Fatal("prepared analyzer record is empty or oversized")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var prepared agentSandboxAnalyzerPrepared
+	if err := decoder.Decode(&prepared); err != nil {
+		t.Fatal(err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		t.Fatal("prepared analyzer record has trailing data")
+	}
+	if prepared.Version != 3 {
+		t.Fatal("prepared analyzer record version is invalid")
+	}
+	return prepared
+}
+
 func writeAgentSandboxAnalyzerPrepared(t *testing.T, path string, prepared agentSandboxAnalyzerPrepared) {
 	t.Helper()
 	if strings.TrimSpace(path) == "" {
@@ -707,6 +757,44 @@ func boundedBenchmarkFailure(err error) string {
 		value = value[:512]
 	}
 	return value
+}
+
+func TestAgentSandboxAnalyzerExecutionRejectsChangedSourceModePolicy(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "source.go"), []byte("package fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) string {
+		t.Helper()
+		command := exec.Command("git", append([]string{"-C", root}, args...)...)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	run("init", "-q")
+	run("config", "user.name", "Test")
+	run("config", "user.email", "test@example.com")
+	run("config", "commit.gpgsign", "false")
+	run("add", "source.go")
+	run("commit", "-qm", "fixture")
+	revision := run("rev-parse", "HEAD")
+	policy, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), root, revision, nil)
+	if err != nil || policy != agentanalysis.WorkspaceSourceModePreserve {
+		t.Fatalf("policy=%q err=%v", policy, err)
+	}
+	sealed := agentSandboxAnalyzerPrepared{Version: 3, SourceModePolicy: string(policy)}
+	run("config", "--local", "core.filemode", "false")
+	if _, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), root, revision, &sealed); err == nil || !strings.Contains(err.Error(), "mode policy changed") {
+		t.Fatalf("error=%v", err)
+	}
+	if mode := run("config", "--local", "--bool", "--get", "core.filemode"); mode != "false" {
+		t.Fatalf("execution rewrote core.filemode=%s", mode)
+	}
+	if sealed.SourceModePolicy != string(agentanalysis.WorkspaceSourceModePreserve) {
+		t.Fatalf("sealed record changed: %+v", sealed)
+	}
 }
 
 func TestWithoutCleanupPending(t *testing.T) {

@@ -203,7 +203,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 }
 
 func verifyInputs(ctx context.Context, request agentanalysis.WorkspaceExecutionRequest, sourceRoot, artifactRoot string) error {
-	if err := agentanalysis.VerifySourceWorkspace(ctx, sourceRoot, request.Manifest.Source.Revision); err != nil {
+	if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceRoot, request.Manifest.Source.Revision, request.SourceModePolicy); err != nil {
 		return err
 	}
 	return agentanalysis.VerifyArtifactWorkspace(artifactRoot, request.Manifest)
