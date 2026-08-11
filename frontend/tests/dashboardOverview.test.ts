@@ -368,7 +368,7 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(attention, /fontWeight: lead \? 700 : 600/);
   assert.doesNotMatch(attention, /background: "transparent"/);
   assert.match(attention, /<DisclosureButton[\s\S]*<Collapse id=\{controls\}/);
-  assert.match(dashboard, />\s*Test health overview\s*</);
+  assert.match(dashboard, />\s*Test Health Overview\s*</);
   assert.doesNotMatch(dashboard, /Incident briefing/);
   assert.doesNotMatch(dashboard, /failingJobs/);
   assert.match(attention, /needsAttentionSummary\(/);
@@ -380,7 +380,7 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(attention, /scrollMarginTop: \{ xs: "128px", lg: "72px" \}/);
   assert.doesNotMatch(attention, /fontSize: lead \? "24px" : "16px"/);
   assert.match(filters, /minHeight: 44/);
-  assert.match(filters, />\s*Reliability\s*</);
+  assert.doesNotMatch(filters, />\s*Reliability\s*</);
   assert.match(filters, /aria-label="Reliability over the last 10 runs"/);
   assert.match(filters, /height: 44/);
   assert.match(filters, /boxShadow: "inset 0 -3px 0/);

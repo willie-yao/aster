@@ -47,63 +47,54 @@ export function OverviewFilters({
         borderColor: "divider",
       }}
     >
-      <Box sx={{ minWidth: 0 }}>
-        <Typography
-          component="div"
-          color="text.secondary"
-          sx={{ mb: 0.5, ...overviewTypography.tableHeading }}
-        >
-          Reliability
-        </Typography>
-        <ToggleButtonGroup
-          exclusive
-          value={statusFilter}
-          onChange={(_, value: OverviewStatusFilter | null) => {
-            if (value) onStatusChange(value);
-          }}
-          aria-label="Reliability over the last 10 runs"
-          sx={{
-            display: "grid",
-            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-            "& .MuiToggleButtonGroup-grouped": {
-              minWidth: 0,
-              minHeight: 44,
-              px: 1.25,
-              py: 0.5,
-              border: "1px solid !important",
-              borderColor: "divider !important",
-              borderRadius: "0 !important",
-              color: "text.secondary",
-              textTransform: "none",
-              ...overviewTypography.tableHeading,
-              "&:first-of-type": { borderRadius: "4px 0 0 4px !important" },
-              "&:last-of-type": { borderRadius: "0 4px 4px 0 !important" },
-              "&:not(:first-of-type)": { ml: "-1px" },
-              "&:hover": { bgcolor: "surface.containerHigh", color: "text.primary" },
-              "&.Mui-selected": {
-                position: "relative",
-                zIndex: 1,
-                color: "text.primary",
-                borderColor: "primary.main !important",
-                bgcolor: (theme) => soft(theme, "primary", 0.12),
-                boxShadow: "inset 0 -3px 0 var(--mui-palette-primary-main)",
-                "&:hover": { bgcolor: (theme) => soft(theme, "primary", 0.16) },
-              },
-              "&.Mui-focusVisible": {
-                outline: "2px solid",
-                outlineColor: "primary.main",
-                outlineOffset: 1,
-              },
+      <ToggleButtonGroup
+        exclusive
+        value={statusFilter}
+        onChange={(_, value: OverviewStatusFilter | null) => {
+          if (value) onStatusChange(value);
+        }}
+        aria-label="Reliability over the last 10 runs"
+        sx={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+          "& .MuiToggleButtonGroup-grouped": {
+            minWidth: 0,
+            minHeight: 44,
+            px: 1.25,
+            py: 0.5,
+            border: "1px solid !important",
+            borderColor: "divider !important",
+            borderRadius: "0 !important",
+            color: "text.secondary",
+            textTransform: "none",
+            ...overviewTypography.tableHeading,
+            "&:first-of-type": { borderRadius: "4px 0 0 4px !important" },
+            "&:last-of-type": { borderRadius: "0 4px 4px 0 !important" },
+            "&:not(:first-of-type)": { ml: "-1px" },
+            "&:hover": { bgcolor: "surface.containerHigh", color: "text.primary" },
+            "&.Mui-selected": {
+              position: "relative",
+              zIndex: 1,
+              color: "text.primary",
+              borderColor: "primary.main !important",
+              bgcolor: (theme) => soft(theme, "primary", 0.12),
+              boxShadow: "inset 0 -3px 0 var(--mui-palette-primary-main)",
+              "&:hover": { bgcolor: (theme) => soft(theme, "primary", 0.16) },
             },
-          }}
-        >
-          {statusFilters.map((filter) => (
-            <ToggleButton key={filter.value} value={filter.value}>
-              {filter.label}
-            </ToggleButton>
-          ))}
-        </ToggleButtonGroup>
-      </Box>
+            "&.Mui-focusVisible": {
+              outline: "2px solid",
+              outlineColor: "primary.main",
+              outlineOffset: 1,
+            },
+          },
+        }}
+      >
+        {statusFilters.map((filter) => (
+          <ToggleButton key={filter.value} value={filter.value}>
+            {filter.label}
+          </ToggleButton>
+        ))}
+      </ToggleButtonGroup>
 
       <FormControl size="small" fullWidth>
         <Select
