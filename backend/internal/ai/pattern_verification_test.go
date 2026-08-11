@@ -178,6 +178,8 @@ func TestVerifyPatternRemediationSamePackageLifecycle(t *testing.T) {
 	buildConstrainedFiles["controllers/helpers.go"] = "//go:build linux\n\npackage controllers\nfunc waitForReady() {}\n"
 	malformedFiles := samePackageRevisionFiles(false, true, false)
 	malformedFiles["controllers/helpers.go"] = "package controllers\nfunc waitForReady( {}\n"
+	mixedPackageFiles := samePackageRevisionFiles(false, true, false)
+	mixedPackageFiles["controllers/other.go"] = "package other\nfunc unrelated() {}\n"
 	missingTargetFiles := samePackageRevisionFiles(false, true, false)
 	delete(missingTargetFiles, "controllers/reconcile.go")
 	for _, test := range []struct {
@@ -219,6 +221,15 @@ func TestVerifyPatternRemediationSamePackageLifecycle(t *testing.T) {
 			name: "ambiguous package at a failure revision fails closed",
 			revisions: map[string]map[string]string{
 				failureOne: samePackageRevisionFiles(false, true, false), failureTwo: samePackageRevisionFiles(false, true, true),
+				passOne: currentFiles, passTwo: currentFiles,
+			},
+			passingRevisions: []string{passOne, passTwo}, wantFailureState: models.PatternRemediationInconclusive,
+			wantLifecycle: models.PatternLifecycleActive,
+		},
+		{
+			name: "mixed package declarations fail closed",
+			revisions: map[string]map[string]string{
+				failureOne: samePackageRevisionFiles(false, true, false), failureTwo: mixedPackageFiles,
 				passOne: currentFiles, passTwo: currentFiles,
 			},
 			passingRevisions: []string{passOne, passTwo}, wantFailureState: models.PatternRemediationInconclusive,

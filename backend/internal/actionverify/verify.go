@@ -657,6 +657,9 @@ func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, sy
 			return functionDeclarationProof{}
 		}
 		if expectedPackage != "" && file.Name.Name != expectedPackage {
+			if !allowedTestPackageCompanion(filePath, file.Name.Name, expectedPackage, includeTests) {
+				return functionDeclarationProof{}
+			}
 			continue
 		}
 		packageNames[file.Name.Name] = true
@@ -678,6 +681,16 @@ func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, sy
 		return functionDeclarationProof{proven: true, packageName: packageName}
 	}
 	return functionDeclarationProof{}
+}
+
+func allowedTestPackageCompanion(filePath, packageName, expectedPackage string, includeTests bool) bool {
+	if !includeTests {
+		return false
+	}
+	if strings.HasSuffix(expectedPackage, "_test") {
+		return packageName == strings.TrimSuffix(expectedPackage, "_test")
+	}
+	return strings.HasSuffix(filePath, "_test.go") && packageName == expectedPackage+"_test"
 }
 
 func packageDefinesFunction(archive Archive, targetPath, packageName, symbol string) bool {
