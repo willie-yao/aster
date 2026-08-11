@@ -640,8 +640,8 @@ func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, sy
 	if len(paths) == 0 || len(paths) > maxMatchingFiles {
 		return functionDeclarationProof{}
 	}
-	packageNames := map[string]bool{}
-	declarations := 0
+	files := make(map[string]*ast.File, len(paths))
+	nonTestPackages := map[string]bool{}
 	bytesRead := 0
 	for _, filePath := range paths {
 		source, ok := archive.GoFiles[filePath]
@@ -656,8 +656,24 @@ func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, sy
 		if err != nil {
 			return functionDeclarationProof{}
 		}
+		files[filePath] = file
+		if !strings.HasSuffix(filePath, "_test.go") {
+			nonTestPackages[file.Name.Name] = true
+		}
+	}
+	if len(nonTestPackages) > 1 {
+		return functionDeclarationProof{}
+	}
+	nonTestPackage := ""
+	for packageName := range nonTestPackages {
+		nonTestPackage = packageName
+	}
+	packageNames := map[string]bool{}
+	declarations := 0
+	for _, filePath := range paths {
+		file := files[filePath]
 		if expectedPackage != "" && file.Name.Name != expectedPackage {
-			if !allowedTestPackageCompanion(filePath, file.Name.Name, expectedPackage, includeTests) {
+			if !allowedTestPackageCompanion(filePath, file.Name.Name, expectedPackage, nonTestPackage, includeTests) {
 				return functionDeclarationProof{}
 			}
 			continue
@@ -668,7 +684,7 @@ func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, sy
 			if !ok || function.Recv != nil || function.Name.Name != symbol {
 				continue
 			}
-			if isBuildConstrained(filePath, source) && !strings.HasSuffix(filePath, "_test.go") {
+			if isBuildConstrained(filePath, archive.GoFiles[filePath]) && !strings.HasSuffix(filePath, "_test.go") {
 				return functionDeclarationProof{}
 			}
 			declarations++
@@ -683,14 +699,14 @@ func packageFunctionDeclaration(archive Archive, packageDir, expectedPackage, sy
 	return functionDeclarationProof{}
 }
 
-func allowedTestPackageCompanion(filePath, packageName, expectedPackage string, includeTests bool) bool {
-	if !includeTests {
+func allowedTestPackageCompanion(filePath, packageName, expectedPackage, nonTestPackage string, includeTests bool) bool {
+	if !includeTests || nonTestPackage == "" {
 		return false
 	}
-	if strings.HasSuffix(expectedPackage, "_test") {
-		return packageName == strings.TrimSuffix(expectedPackage, "_test")
+	if expectedPackage == nonTestPackage+"_test" {
+		return packageName == nonTestPackage
 	}
-	return strings.HasSuffix(filePath, "_test.go") && packageName == expectedPackage+"_test"
+	return expectedPackage == nonTestPackage && strings.HasSuffix(filePath, "_test.go") && packageName == expectedPackage+"_test"
 }
 
 func packageDefinesFunction(archive Archive, targetPath, packageName, symbol string) bool {
