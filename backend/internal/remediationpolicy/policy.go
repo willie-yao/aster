@@ -20,6 +20,7 @@ var (
 	conversionBypassRe            = regexp.MustCompile(`(?is)(?:\b(?:disable|remove|bypass|eliminate|clear|unset)\b\s+(?:the\s+)?(?:crd\s+)?conversion\b(?:\s*(?:[.,;:]|$)|\s+(?:entirely|calls?|requests?)\b)|\b(?:crd\s+)?conversion\b[^.!?\n]{0,80}\b(?:disabled|removed|bypassed|eliminated|cleared|unset)\b|\bturn\s+off\b\s+(?:the\s+)?(?:crd\s+)?conversion\b|\bstop\b\s+(?:the\s+)?(?:crd\s+)?conversion\b(?:\s*(?:[.,;:]|$)|\s+(?:calls?|requests?)\b))`)
 	negatedConversionActionRe     = regexp.MustCompile(`(?is)\b(?:do|must|should)\s+not\s+(?:disable|remove|bypass|eliminate|clear|unset|delete|drop|turn\s+off|stop|prevent|skip)\s+(?:the\s+)?(?:kubernetes\s+)?(?:crd\s+)?conversion(?:\s+(?:webhook|strategy))?\b|\bnever\s+(?:disable|remove|bypass|eliminate|clear|unset|delete|drop|stop|prevent|skip)\s+(?:the\s+)?(?:kubernetes\s+)?(?:crd\s+)?conversion(?:\s+(?:webhook|strategy))?\b`)
 	negatedConversionStateRe      = regexp.MustCompile(`(?is)\b(?:crd\s+)?conversion(?:\s+webhook)?\s+(?:is|remains|stays|will\s+be|must\s+be|should\s+be)\s+not\s+(?:disabled|removed|bypassed|eliminated|cleared|unset|stopped)\b`)
+	negatedConversionPreserveRe   = regexp.MustCompile(`(?is)(?:\bavoid(?:ing)?\s+|\bwithout\s+)(?:delet(?:e|ing)|remov(?:e|ing)|disabl(?:e|ing)|drop(?:ping)?|clear(?:ing)?|unset(?:ting)?|bypass(?:ing)?|stop(?:ping)?)\s+(?:the\s+)?(?:kubernetes\s+)?(?:crd\s+)?conversion(?:\s+(?:webhook|strategy))?\b`)
 	preventCallFailureRe          = regexp.MustCompile(`(?is)\bprevent(?:s|ed|ing)?\b[^.!?\n,;]{0,100}\b(?:api\s*server\s+)?conversion(?:\s+webhook)?\s+(?:calls?|invocations?)\b[^.!?\n,;]{0,40}\bfrom\s+fail(?:ing|ure)?\b`)
 	callFailureAvoidanceRe        = regexp.MustCompile(`(?is)\b(?:api\s*server\s+)?conversion(?:\s+webhook)?\s+(?:calls?|invocations?|requests?)\b[^.!?\n,;]{0,40}\b(?:will\s+not|cannot|can\s+not|do\s+not|does\s+not|never)\s+fail\b`)
 	conversionReviewFailureRe     = regexp.MustCompile(`(?is)\bconversion\s*review(?:\s+(?:objects?|requests?))?\b[^.!?\n,;]{0,50}\b(?:will\s+not|cannot|can\s+not|do\s+not|does\s+not|never)\s+fail\s+to\s+(?:reach|send|post|deliver|forward|submit|receive)\b`)
@@ -53,7 +54,7 @@ func Reason(recommendation string, targets []models.RemediationTarget) string {
 		if destructiveConversionObjectRe.MatchString(clause) || destructiveConversionFieldRe.MatchString(clause) || conversionStrategyNoneRe.MatchString(clause) || conversionBypassRe.MatchString(clause) || unsafeDirectConversionOperation(clause) || unsafeDirectConversionState(clause) {
 			return UnsafeConversionReason
 		}
-		if admissionCleanup && conversionInvocationLoss(clause) {
+		if conversionInvocationLoss(clause, admissionCleanup) {
 			return UnsafeConversionReason
 		}
 	}
@@ -84,10 +85,11 @@ func isPolicySpace(value byte) bool {
 
 func stripNegatedConversionSafety(clause string) string {
 	clause = negatedConversionActionRe.ReplaceAllString(clause, "")
-	return negatedConversionStateRe.ReplaceAllString(clause, "")
+	clause = negatedConversionStateRe.ReplaceAllString(clause, "")
+	return negatedConversionPreserveRe.ReplaceAllString(clause, "")
 }
 
-func conversionInvocationLoss(clause string) bool {
+func conversionInvocationLoss(clause string, admissionCleanup bool) bool {
 	text := strings.ToLower(strings.Join(strings.Fields(clause), " "))
 	text = strings.NewReplacer("won't", "will not", "won’t", "will not", "can't", "cannot", "can’t", "cannot", "doesn't", "does not", "doesn’t", "does not").Replace(text)
 	if !strings.Contains(text, "conversion") {
@@ -101,6 +103,9 @@ func conversionInvocationLoss(clause string) bool {
 			return true
 		}
 		return !conversionReviewDeliveryPreserved(text)
+	}
+	if !admissionCleanup {
+		return false
 	}
 	if strings.Contains(text, "skip") {
 		return true
@@ -117,13 +122,18 @@ func conversionReviewDelivery(value string) bool {
 }
 
 func hardConversionReviewLoss(value string) bool {
+	if containsAny(value,
+		"stop", "cease", "no longer", "zero", "none", "not a single", "eliminat", "abolish", "suppress",
+		"block", "bypass", "remove", "disable", "unable",
+	) {
+		return true
+	}
 	if conversionReviewFailurePreserved(value) {
 		return false
 	}
 	return containsAny(value,
-		"stop", "cease", "no longer", "zero", "none", "not a single", "eliminat", "abolish", "suppress",
-		"block", "bypass", "remove", "disable", "unable", "cannot", "will not", "does not", "never", "not sent",
-		"not posted", "not delivered", "not forwarded", "not submitted", "not received",
+		"cannot", "will not", "does not", "never", "not sent", "not posted", "not delivered",
+		"not forwarded", "not submitted", "not received",
 	)
 }
 
@@ -197,6 +207,9 @@ func nearAny(left, right []int, distance int) bool {
 func unsafeDirectConversionOperation(clause string) bool {
 	for _, match := range directConversionOperationRe.FindAllStringSubmatchIndex(clause, -1) {
 		operation := strings.ToLower(clause[match[2]:match[3]])
+		if negatedDirectConversionOperation(clause[:match[0]]) {
+			continue
+		}
 		if ignoredDirectConversionWord(operation) {
 			continue
 		}
@@ -208,6 +221,9 @@ func unsafeDirectConversionOperation(clause string) bool {
 			continue
 		}
 		if destructiveActionWord(operation) && leadingSafeQualifierPhrase(suffix) {
+			continue
+		}
+		if safeConversionOperationWord(operation) && safeNaturalOperationSuffix(suffix) {
 			continue
 		}
 		if containsWord([]string{operation}, "set", "change", "switch", "replace") && startsWithWords(suffix, "to", "webhook") {
@@ -236,15 +252,61 @@ func unsafePreservationSuffix(words []string) bool {
 func unsafeDirectConversionState(clause string) bool {
 	for _, match := range directConversionStateRe.FindAllStringSubmatchIndex(clause, -1) {
 		state := strings.ToLower(clause[match[2]:match[3]])
-		if containsWord([]string{state},
-			"available", "availability", "calls", "continues", "failures", "outage", "outages", "preserved",
-			"independently", "maintained", "ready", "reachable", "remains", "requests", "retry", "serving", "stays", "strategy", "webhook",
-		) || safeQualifierWord(state) || ignoredDirectConversionWord(state) {
+		if containsWord([]string{state}, "calls", "requests", "outage", "outages", "failures", "certificate", "retry", "strategy", "webhook") || safeQualifierWord(state) || ignoredDirectConversionWord(state) {
 			continue
 		}
-		return true
+		stateWords := identifierWords(clause[match[2]:])
+		if !safeConversionStatePhrase(stateWords) {
+			return true
+		}
 	}
 	return false
+}
+
+func safeNaturalOperationSuffix(words []string) bool {
+	return leadingSafeQualifierPhrase(words) || safeConversionStatePhrase(words)
+}
+
+func safeConversionStatePhrase(words []string) bool {
+	if len(words) == 0 {
+		return false
+	}
+	safe := false
+	for i, word := range words {
+		if containsWord([]string{word}, "before", "after", "by", "so", "until", "while", "when", "during", "throughout") {
+			break
+		}
+		if word == "and" {
+			if i+1 < len(words) && (safeAvailabilityWord(words[i+1]) || safeQualifierWord(words[i+1])) {
+				continue
+			}
+			break
+		}
+		if containsWord([]string{word}, "unavailable", "unreachable", "offline", "purged", "decommissioned", "erased", "disabled", "removed", "bypassed", "none") {
+			return false
+		}
+		if containsWord([]string{word}, "is", "are", "will", "be", "must", "should", "gets", "get", "becomes", "remains", "stays", "continues", "can", "continue") {
+			continue
+		}
+		if containsWord([]string{word}, "available", "availability", "calls", "failures", "healthy", "independently", "maintained", "preserved", "ready", "reachable", "requests", "serving", "strategy", "webhook", "working") || safeQualifierWord(word) {
+			safe = true
+			continue
+		}
+		return false
+	}
+	return safe
+}
+
+func negatedDirectConversionOperation(prefix string) bool {
+	words := identifierWords(prefix)
+	if len(words) == 0 {
+		return false
+	}
+	start := len(words) - 3
+	if start < 0 {
+		start = 0
+	}
+	return containsWord(words[start:], "avoid", "avoiding", "without", "not", "never")
 }
 
 func ignoredDirectConversionWord(word string) bool {
@@ -313,18 +375,21 @@ func unsafeConversionTarget(target models.RemediationTarget) bool {
 	case models.RemediationIntentSetConfiguration:
 		key, value, _ := strings.Cut(target.Value, "=")
 		isConversion, qualified := conversionObjectSetting(key)
-		return isConversion && !qualified && conversionFalseValue(value)
+		if !isConversion || qualified {
+			return false
+		}
+		if conversionAvailabilityToggle(key) {
+			return !conversionTrueValue(value)
+		}
+		return conversionFalseValue(value)
 	case models.RemediationIntentSetJobEnvironment:
 		if !conversionIdentifierPresent(target.Name) {
 			return false
 		}
 		if conversionAvailabilityToggle(target.Name) {
-			return conversionFalseValue(target.Value)
+			return !conversionTrueValue(target.Value)
 		}
-		if !destructiveConversionIdentifier(target.Name) {
-			return false
-		}
-		return conversionFalseValue(target.Value) || conversionTrueValue(target.Value)
+		return destructiveConversionIdentifier(target.Name)
 	default:
 		return false
 	}
@@ -623,12 +688,17 @@ func conversionAvailabilityToggle(value string) bool {
 	if len(remaining) == 0 {
 		return false
 	}
+	toggle := false
 	for _, word := range remaining {
-		if !containsWord([]string{word}, "enable", "enabled", "available", "availability") {
+		if containsWord([]string{word}, "enable", "enabled", "available", "availability") {
+			toggle = true
+			continue
+		}
+		if word != "spec" {
 			return false
 		}
 	}
-	return true
+	return toggle
 }
 
 func conversionObjectSetting(value string) (bool, bool) {

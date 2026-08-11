@@ -48,6 +48,13 @@ func TestReasonAdmissionConversionClaims(t *testing.T) {
 		"Erase the CRD conversion webhook configuration before upgrade.",
 		"The CRD conversion webhook is purged before upgrade.",
 		"The CRD conversion webhook becomes decommissioned before upgrade.",
+		"Delete the admission webhook configuration to stop ConversionReview delivery and prevent failures.",
+		"Eliminate ConversionReview delivery to prevent failures.",
+		"Block ConversionReview delivery to avoid failures.",
+		"The conversion webhook remains unavailable.",
+		"The conversion webhook remains unreachable.",
+		"The conversion webhook remains purged.",
+		"The conversion webhook stays offline.",
 	} {
 		if got := Reason(text, actionable); got != UnsafeConversionReason {
 			t.Errorf("unsafe recommendation accepted: %q -> %q", text, got)
@@ -82,6 +89,15 @@ func TestReasonPreservesSafeWebhookChanges(t *testing.T) {
 		"Delete the obsolete admission webhook configuration to prevent failed delivery of ConversionReview objects to ASO while keeping conversion available.",
 		"Delete the obsolete admission webhook configuration to prevent ConversionReview delivery from failing while keeping conversion available.",
 		"Delete the obsolete admission webhook configuration while ensuring ConversionReview delivery does not fail and keeping conversion available.",
+		"Rotate the conversion webhook certificate before upgrade.",
+		"Update the conversion webhook certificate before upgrade.",
+		"Renew the conversion webhook certificate before upgrade.",
+		"Verify the conversion webhook remains available after cleanup.",
+		"Check the conversion webhook availability after cleanup.",
+		"Avoid deleting the conversion webhook.",
+		"Without deleting the conversion webhook, remove the admission configuration.",
+		"The conversion webhook is healthy and available.",
+		"The conversion webhook can continue serving.",
 	} {
 		if got := Reason(text, actionable); got != "" {
 			t.Errorf("safe recommendation rejected: %q -> %q", text, got)
@@ -128,6 +144,10 @@ func TestReasonRejectsDestructiveStructuredTargets(t *testing.T) {
 		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "DISABLE_CONVERSION_WEBHOOK_RETRY_AND_WEBHOOK", Value: "true"},
 		{Intent: models.RemediationIntentSetConfiguration, Path: "crd.yaml", Value: "conversionWebhook.certificateAndEnabled=false"},
 		{Intent: models.RemediationIntentSetConfiguration, Path: "crd.yaml", Value: "conversionWebhook.retryAndEnabled=false"},
+		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "DELETE_CONVERSION_WEBHOOK", Value: "force"},
+		{Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "config/jobs/example.yaml", Job: "job", Container: "test", Name: "CONVERSION_WEBHOOK_ENABLED", Value: "maybe"},
+		{Intent: models.RemediationIntentSetConfiguration, Path: "crd.yaml", Value: "conversionWebhook.enabled=never"},
+		{Intent: models.RemediationIntentSetConfiguration, Path: "crd.yaml", Value: "conversionWebhook.enabled=maybe"},
 	} {
 		if got := Reason("neutral wording", []models.RemediationTarget{target}); got != UnsafeConversionReason {
 			t.Errorf("unsafe target accepted: %+v -> %q", target, got)
