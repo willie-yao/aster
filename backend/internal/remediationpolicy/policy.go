@@ -454,7 +454,15 @@ func positiveTemporalAdverbPrefix(words []string) int {
 func benignServingComplement(words []string, persistent bool) bool {
 	words = boundedTemporalWords(words)
 	objects := []string{"request", "requests", "read", "reads", "write", "writes", "traffic", "conversion", "conversions"}
-	if negativeOutcomeQuality(words) || containsWord(words, "neither", "nor", "hardly", "few", "failed", "zero", "none", "only") || negativeObjectQuantifier(words, objects...) {
+	if negativeOutcomeQuality(words) || containsWord(words, "neither", "nor", "hardly", "few", "failed", "none", "only") || negativeObjectQuantifier(words, objects...) {
+		return false
+	}
+	if !temporalWordsAllowed(words,
+		"a", "an", "the", "all", "every", "and",
+		"request", "requests", "read", "reads", "write", "writes", "traffic", "conversion", "conversions",
+		"without", "with", "no", "zero", "error", "errors", "failure", "failures", "downtime", "outage", "outages", "disruption",
+		"successfully", "reliably", "seamlessly", "cleanly", "safely", "continuously",
+	) {
 		return false
 	}
 	hasObject := containsWord(words, objects...)
@@ -467,7 +475,14 @@ func benignServingComplement(words []string, persistent bool) bool {
 
 func benignCompletionComplement(words []string) bool {
 	words = boundedTemporalWords(words)
-	if negativeOutcomeQuality(words) || containsWord(words, "invalid", "aborted", "failed", "broken", "corrupted", "incomplete", "partial", "neither", "hardly", "zero", "none") || negativeObjectQuantifier(words, "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts") {
+	if negativeOutcomeQuality(words) || containsWord(words, "invalid", "aborted", "failed", "broken", "corrupted", "incomplete", "partial", "neither", "hardly", "none") || negativeObjectQuantifier(words, "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts") {
+		return false
+	}
+	if !temporalWordsAllowed(words,
+		"a", "an", "the", "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts",
+		"without", "with", "no", "zero", "error", "errors", "failure", "failures", "downtime", "outage", "outages", "disruption",
+		"successfully", "reliably", "seamlessly", "cleanly", "safely",
+	) {
 		return false
 	}
 	return containsWord(words, "migration", "migrations", "upgrade", "upgrades", "rollout", "rollouts")
@@ -476,6 +491,13 @@ func benignCompletionComplement(words []string) bool {
 func benignFailoverComplement(words []string) bool {
 	words = boundedTemporalWords(words)
 	if negativeOutcomeQuality(words) || containsWord(words, "dead", "broken", "unavailable", "unreachable", "nowhere", "none", "null", "invalid", "blackhole") {
+		return false
+	}
+	if !temporalWordsAllowed(words,
+		"a", "an", "the", "to", "named", "backup", "secondary", "standby", "healthy", "available", "replica", "endpoint", "service", "node",
+		"without", "with", "no", "zero", "error", "errors", "failure", "failures", "downtime", "outage", "outages", "disruption",
+		"successfully", "reliably", "seamlessly", "cleanly", "safely",
+	) {
 		return false
 	}
 	if positiveSafetyComplement(words) {
@@ -501,7 +523,7 @@ func negativeOutcomeQuality(words []string) bool {
 		if i > 0 && words[i-1] == "without" {
 			continue
 		}
-		if i > 1 && words[i-1] == "no" && words[i-2] == "with" {
+		if i > 1 && containsWord([]string{words[i-1]}, "no", "zero") && words[i-2] == "with" {
 			continue
 		}
 		return true
@@ -516,6 +538,15 @@ func containsPositiveTemporalAdverb(words []string) bool {
 		}
 	}
 	return false
+}
+
+func temporalWordsAllowed(words []string, allowed ...string) bool {
+	for _, word := range words {
+		if !containsWord([]string{word}, allowed...) {
+			return false
+		}
+	}
+	return true
 }
 
 func boundedTemporalWords(words []string) []string {
@@ -552,7 +583,7 @@ func positiveSafetyComplement(words []string) bool {
 		if word == "without" && i+1 < len(words) && containsWord([]string{words[i+1]}, "error", "errors", "failure", "failures", "downtime", "outage", "outages", "disruption") {
 			return true
 		}
-		if word == "no" && i > 0 && words[i-1] == "with" && i+1 < len(words) && containsWord([]string{words[i+1]}, "error", "errors", "failure", "failures", "downtime", "outage", "outages", "disruption") {
+		if containsWord([]string{word}, "no", "zero") && i > 0 && words[i-1] == "with" && i+1 < len(words) && containsWord([]string{words[i+1]}, "error", "errors", "failure", "failures", "downtime", "outage", "outages", "disruption") {
 			return true
 		}
 	}
