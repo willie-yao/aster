@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/client-go/rest"
 
@@ -177,6 +178,35 @@ current-context: test
 	}
 	if !got.(*AgentSandboxRuntime).opts.PublicCAPrivateDNS {
 		t.Fatal("public CA private DNS setting was not retained")
+	}
+}
+
+func TestAgentSandboxRunnerFromEnvIncludesStagerConfiguration(t *testing.T) {
+	originalInClusterConfig := agentSandboxInClusterConfig
+	t.Cleanup(func() { agentSandboxInClusterConfig = originalInClusterConfig })
+	agentSandboxInClusterConfig = func() (*rest.Config, error) {
+		return &rest.Config{Host: "https://127.0.0.1:65535"}, nil
+	}
+	prefix := "AGENT_SANDBOX_ANALYSIS_"
+	gateway := runtime.ModelGatewayConfig{
+		Endpoint: "https://fixture-gateway.fixture.svc.cluster.local/v1", Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1",
+	}
+	for name, value := range map[string]string{
+		"NAMESPACE": "analysis-eval", "IMAGE": "registry.example.test/analyzer@sha256:" + strings.Repeat("a", 64),
+		"STAGER_IMAGE": "registry.example.test/stager@sha256:" + strings.Repeat("b", 64), "STAGER_INPUT_CLAIM": "analysis-input",
+		"SERVICE_ACCOUNT": "analysis-workload", "RUNTIME_CLASS": "kata-vm-isolation",
+		"MODEL_GATEWAY_ENDPOINT": gateway.Endpoint, "MODEL_GATEWAY_MODEL": gateway.Model, "MODEL_GATEWAY_PROTOCOL": gateway.ProtocolVersion,
+		"MODEL_GATEWAY_PUBLIC_CA_PRIVATE_DNS": "false", "TIMEOUT": "1m", "OUTPUT_LIMIT_BYTES": "131072",
+		"CPU_REQUEST": "100m", "CPU_LIMIT": "1", "MEMORY_REQUEST": "128Mi", "MEMORY_LIMIT": "512Mi", "EPHEMERAL_STORAGE_LIMIT": "256Mi",
+	} {
+		t.Setenv(prefix+name, value)
+	}
+	runtime, err := NewAgentSandboxRunnerFromEnv(prefix, gateway, false, time.Minute, 131072)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.opts.StagerImage != "registry.example.test/stager@sha256:"+strings.Repeat("b", 64) || runtime.opts.StagerInputClaim != "analysis-input" {
+		t.Fatalf("stager options = %q %q", runtime.opts.StagerImage, runtime.opts.StagerInputClaim)
 	}
 }
 

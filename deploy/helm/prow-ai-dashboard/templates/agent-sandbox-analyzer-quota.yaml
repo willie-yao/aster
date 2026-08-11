@@ -1,0 +1,15 @@
+{{- include "prow-ai-dashboard.validateAgentSandboxAnalyzer" . -}}
+{{- if and .Values.agentSandbox.analyzer.enabled .Values.agentSandbox.analyzer.quota.enabled }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "prow-ai-dashboard.agentSandboxAnalyzerAdmissionName" . }}
+  namespace: {{ .Values.agentSandbox.analyzer.namespace }}
+  labels:
+    {{- include "prow-ai-dashboard.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analyzer
+spec:
+  hard:
+    count/sandboxes.agents.x-k8s.io: "1"
+    count/pods: "1"
+{{- end }}
