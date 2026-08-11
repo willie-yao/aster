@@ -21,6 +21,11 @@ The dashboard prepares two immutable trees:
 - `source/`: a Git checkout pinned to one full commit SHA;
 - `artifacts/`: the bounded failure artifact snapshot.
 
+The source verifier accepts regular tracked files and tracked relative symlinks
+whose complete symlink chain remains inside the checkout. It rejects absolute
+or escaping symlinks, unsupported index flags, submodules, dirty tracked files,
+and untracked or ignored files.
+
 Artifact bounding is mechanical. Paths are safe and sorted, each file is at
 most 8 MiB, the snapshot contains at most 512 files, and total bytes are at most
 32 MiB. Every artifact path, size, and SHA-256 digest is sealed in the request.

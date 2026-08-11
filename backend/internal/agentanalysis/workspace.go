@@ -302,9 +302,9 @@ func VerifySourceWorkspace(ctx context.Context, root, revision string) error {
 		return fmt.Errorf("source revision is invalid")
 	}
 	root = filepath.Clean(root)
-	info, err := os.Stat(root)
-	if err != nil || !info.IsDir() {
-		return fmt.Errorf("source workspace root is not a directory")
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("source workspace root is not a safe directory")
 	}
 	head, err := gitWorkspaceOutput(ctx, root, "rev-parse", "HEAD")
 	if err != nil || strings.TrimSpace(string(head)) != revision {
@@ -326,13 +326,31 @@ func VerifySourceWorkspace(ctx context.Context, root, revision string) error {
 	if err != nil {
 		return fmt.Errorf("inspect source index modes: %w", err)
 	}
+	var directorySymlinks []sourceDirectorySymlink
 	for _, record := range bytes.Split(staged, []byte{0}) {
 		if len(record) == 0 {
 			continue
 		}
-		if !bytes.HasPrefix(record, []byte("100644 ")) && !bytes.HasPrefix(record, []byte("100755 ")) {
-			return fmt.Errorf("source workspace contains unsupported links or submodules")
+		mode, path, err := sourceIndexEntry(record)
+		if err != nil {
+			return err
 		}
+		switch mode {
+		case "100644", "100755":
+		case "120000":
+			target, info, exists, err := validateSourceSymlink(root, path)
+			if err != nil {
+				return err
+			}
+			if exists && info.IsDir() {
+				directorySymlinks = append(directorySymlinks, sourceDirectorySymlink{Path: path, Target: target})
+			}
+		default:
+			return fmt.Errorf("source workspace contains an unsupported index mode %s", mode)
+		}
+	}
+	if err := validateSourceDirectoryGraph(root, directorySymlinks); err != nil {
+		return err
 	}
 	for _, args := range [][]string{
 		{"diff", "--cached", "--no-ext-diff", "--no-textconv", "--quiet", revision, "--"},
@@ -411,6 +429,149 @@ func ValidateWorkspaceExecutionRequest(request WorkspaceExecutionRequest) error 
 	data, err := json.Marshal(request)
 	if err != nil || len(data) > maxWorkspaceRequestBytes {
 		return fmt.Errorf("workspace analysis request exceeds %d bytes", maxWorkspaceRequestBytes)
+	}
+	return nil
+}
+
+func sourceIndexEntry(record []byte) (string, string, error) {
+	tab := bytes.IndexByte(record, '\t')
+	if tab < 0 || tab == len(record)-1 {
+		return "", "", fmt.Errorf("source workspace index entry is malformed")
+	}
+	fields := bytes.Fields(record[:tab])
+	if len(fields) != 3 || len(fields[0]) != 6 {
+		return "", "", fmt.Errorf("source workspace index entry is malformed")
+	}
+	path := filepath.Clean(filepath.FromSlash(string(record[tab+1:])))
+	if filepath.IsAbs(path) || path == "." || path == ".." || strings.HasPrefix(path, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("source workspace index path is unsafe")
+	}
+	return string(fields[0]), path, nil
+}
+
+func validateSourceSymlink(root, path string) (string, os.FileInfo, bool, error) {
+	info, err := os.Lstat(filepath.Join(root, path))
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return "", nil, false, fmt.Errorf("source workspace symlink %s is not materialized safely", filepath.ToSlash(path))
+	}
+	target, targetInfo, exists, err := resolveSourcePathWithinRoot(root, path, map[string]bool{}, 0)
+	if err != nil {
+		return "", nil, false, fmt.Errorf("source workspace symlink %s is unsafe: %w", filepath.ToSlash(path), err)
+	}
+	if target == ".git" || strings.HasPrefix(target, ".git"+string(filepath.Separator)) {
+		return "", nil, false, fmt.Errorf("source workspace symlink %s targets Git metadata", filepath.ToSlash(path))
+	}
+	return target, targetInfo, exists, nil
+}
+
+func resolveSourcePathWithinRoot(root, relative string, seen map[string]bool, depth int) (string, os.FileInfo, bool, error) {
+	if depth > 64 {
+		return "", nil, false, fmt.Errorf("symlink chain is too deep")
+	}
+	relative = filepath.Clean(relative)
+	if filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", nil, false, fmt.Errorf("target escapes the source root")
+	}
+	if relative == "." {
+		info, err := os.Lstat(root)
+		return relative, info, err == nil, err
+	}
+	parts := strings.Split(relative, string(filepath.Separator))
+	resolved := ""
+	var finalInfo os.FileInfo
+	for index, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		resolved = filepath.Join(resolved, part)
+		info, err := os.Lstat(filepath.Join(root, resolved))
+		if os.IsNotExist(err) {
+			return relative, nil, false, nil
+		}
+		if err != nil {
+			return "", nil, false, err
+		}
+		finalInfo = info
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		if seen[resolved] {
+			return "", nil, false, fmt.Errorf("symlink chain contains a cycle")
+		}
+		seen[resolved] = true
+		target, err := os.Readlink(filepath.Join(root, resolved))
+		if err != nil {
+			return "", nil, false, err
+		}
+		if target == "" || filepath.IsAbs(target) || strings.IndexByte(target, 0) >= 0 {
+			return "", nil, false, fmt.Errorf("target must be a non-empty relative path")
+		}
+		remaining := filepath.Join(parts[index+1:]...)
+		next := filepath.Join(filepath.Dir(resolved), filepath.FromSlash(target), remaining)
+		return resolveSourcePathWithinRoot(root, next, seen, depth+1)
+	}
+	return relative, finalInfo, finalInfo != nil, nil
+}
+
+type sourceDirectorySymlink struct {
+	Path   string
+	Target string
+}
+
+func validateSourceDirectoryGraph(root string, symlinks []sourceDirectorySymlink) error {
+	graph := map[string][]string{".": {}}
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if relative == ".git" {
+			return filepath.SkipDir
+		}
+		if path == root || !entry.IsDir() {
+			return nil
+		}
+		parent := filepath.Dir(relative)
+		graph[parent] = append(graph[parent], relative)
+		if _, ok := graph[relative]; !ok {
+			graph[relative] = nil
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("inspect source directory graph: %w", err)
+	}
+	for _, symlink := range symlinks {
+		parent := filepath.Dir(symlink.Path)
+		graph[parent] = append(graph[parent], symlink.Target)
+		if _, ok := graph[symlink.Target]; !ok {
+			graph[symlink.Target] = nil
+		}
+	}
+	state := make(map[string]uint8, len(graph))
+	var visit func(string) error
+	visit = func(node string) error {
+		switch state[node] {
+		case 1:
+			return fmt.Errorf("source workspace directory symlinks contain a cycle")
+		case 2:
+			return nil
+		}
+		state[node] = 1
+		for _, next := range graph[node] {
+			if err := visit(next); err != nil {
+				return err
+			}
+		}
+		state[node] = 2
+		return nil
+	}
+	for node := range graph {
+		if err := visit(node); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -148,7 +148,20 @@ func inspectTree(ctx context.Context, source string, maxFiles int, maxFileBytes,
 			return nil
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("input tree contains symlink %s", path)
+			relative, err := filepath.Rel(source, path)
+			if err != nil || relative == ".git" || strings.HasPrefix(relative, ".git"+string(filepath.Separator)) {
+				return fmt.Errorf("source Git metadata contains a symlink")
+			}
+			target, err := os.Readlink(path)
+			if err != nil || int64(len(target)) > maxFileBytes {
+				return fmt.Errorf("input tree contains an unsupported or oversized symlink")
+			}
+			files++
+			total += int64(len(target))
+			if files > maxFiles || total > maxTotalBytes {
+				return fmt.Errorf("input tree exceeds file or byte bounds")
+			}
+			return nil
 		}
 		fileInfo, err := entry.Info()
 		if err != nil {
