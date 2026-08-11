@@ -380,11 +380,16 @@ func safeConversionStatePhrase(words []string) bool {
 }
 
 func conversionStateTransition(words []string) int {
-	for i, word := range words {
+	for i := 0; i < len(words); i++ {
+		word := words[i]
 		if word == "then" && i+1 < len(words) {
 			return i + 1
 		}
-		if word == "it" && i+1 < len(words) && conversionStatePredicate(words[i+1]) {
+		if word == "it" && i+1 < len(words) {
+			if consumed := benignTemporalCondition(words[i+1:]); consumed > 0 {
+				i += consumed
+				continue
+			}
 			return i + 1
 		}
 		if conversionStatePredicate(word) && (i == 0 || containsWord([]string{words[i-1]}, "and", "then")) {
@@ -394,8 +399,23 @@ func conversionStateTransition(words []string) int {
 	return -1
 }
 
+func benignTemporalCondition(words []string) int {
+	if len(words) == 0 {
+		return 0
+	}
+	word := words[0]
+	if containsWord([]string{word}, "complete", "completes", "completed", "finish", "finishes", "finished", "migrate", "migrates", "migrated", "serve", "serves", "served", "serving", "failover") {
+		return 1
+	}
+	if strings.HasPrefix(word, "fail") && len(words) > 1 && words[1] == "over" {
+		return 2
+	}
+	return 0
+}
+
 func conversionStatePredicate(word string) bool {
-	return containsWord([]string{word}, "is", "are", "becomes", "gets", "get", "turns", "remains", "stays", "continues", "will", "stops", "stopped") || strings.HasPrefix(word, "fail") || strings.HasPrefix(word, "crash") || strings.HasPrefix(word, "break")
+	failed := strings.HasPrefix(word, "fail") && word != "failover"
+	return containsWord([]string{word}, "is", "are", "becomes", "gets", "get", "turns", "remains", "stays", "continues", "will", "stops", "stopped") || failed || strings.HasPrefix(word, "crash") || strings.HasPrefix(word, "break")
 }
 
 func unsafeConversionStateWords(words []string) bool {
