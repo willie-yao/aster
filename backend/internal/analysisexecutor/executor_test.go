@@ -150,15 +150,8 @@ func TestPromptOpenCodeUsesStructuredOutputSchema(t *testing.T) {
 		if payload["agent"] != "analysis" {
 			t.Fatalf("agent = %v", payload["agent"])
 		}
-		tools := payload["tools"].(map[string]any)
-		if tools["read"] != false || tools["bash"] != false || tools["edit"] != false || tools["task"] != false || tools["webfetch"] != false {
-			t.Fatalf("tools = %v", tools)
-		}
-		if _, ok := tools["glob"]; ok {
-			t.Fatal("session tool overrides must not replace agent glob permission")
-		}
-		if _, ok := tools["grep"]; ok {
-			t.Fatal("session tool overrides must not replace agent grep permission")
+		if _, ok := payload["tools"]; ok {
+			t.Fatalf("message request must not install session permissions: %v", payload["tools"])
 		}
 		format := payload["format"].(map[string]any)
 		if format["type"] != "json_schema" {
@@ -230,14 +223,38 @@ func TestWriteOpenCodeConfigKeepsNativeHarnessButDeniesNetworkTools(t *testing.T
 	if analysis["mode"] != "primary" || analysis["steps"].(float64) != 20 || !strings.Contains(analysis["prompt"].(string), "read-only Prow failure analyst") {
 		t.Fatalf("analysis agent=%v", analysis)
 	}
+	if config["default_agent"] != "analysis" {
+		t.Fatalf("default agent=%v", config["default_agent"])
+	}
 	agentPermissions := analysis["permission"].(map[string]any)
-	for _, denied := range []string{"bash", "edit", "write", "apply_patch", "webfetch", "websearch", "task", "skill", "external_directory"} {
+	for _, denied := range []string{"edit", "write", "apply_patch", "webfetch", "websearch", "task", "skill", "external_directory"} {
 		if agentPermissions[denied] != "deny" {
 			t.Fatalf("permission %s=%v", denied, agentPermissions[denied])
 		}
 	}
-	if agentPermissions["read"] != nil || agentPermissions["glob"] != "allow" || agentPermissions["grep"] != "allow" || agentPermissions["StructuredOutput"] != "allow" {
+	if agentPermissions["*"] != "deny" || agentPermissions["glob"] != "allow" || agentPermissions["grep"] != "allow" || agentPermissions["StructuredOutput"] != "allow" {
 		t.Fatalf("analysis permissions=%v", agentPermissions)
+	}
+	read := agentPermissions["read"].(map[string]any)
+	if read["*"] != "deny" || read["artifacts/*"] != "allow" || len(read) != 2 {
+		t.Fatalf("read permissions=%v", read)
+	}
+	readBlock := string(data[strings.Index(string(data), `"read"`):])
+	if strings.Index(readBlock, `"*": "deny"`) > strings.Index(readBlock, `"artifacts/*": "allow"`) {
+		t.Fatalf("read permission order can hide the tool: %s", readBlock)
+	}
+	bash := agentPermissions["bash"].(map[string]any)
+	if bash["*"] != "deny" || bash["git status --short"] != "allow" || bash["git log -1 --oneline"] != "allow" || bash["git diff --no-ext-diff --stat"] != "allow" || len(bash) != 4 {
+		t.Fatalf("bash permissions=%v", bash)
+	}
+	bashBlock := string(data[strings.Index(string(data), `"bash"`):])
+	if strings.Index(bashBlock, `"*": "deny"`) > strings.Index(bashBlock, `"git status --short": "allow"`) {
+		t.Fatalf("bash permission order can hide the tool: %s", bashBlock)
+	}
+	for _, command := range []string{"git status", "git show HEAD", "cat source/main.go", "curl https://example.com", "rm -f result/analysis.json"} {
+		if bash[command] == "allow" {
+			t.Fatalf("arbitrary command is allowed: %s", command)
+		}
 	}
 	provider := config["provider"].(map[string]any)["engine"].(map[string]any)
 	model := provider["models"].(map[string]any)["test-model"].(map[string]any)
@@ -306,7 +323,7 @@ func testOpenCodeResult() OpenCodeRunResult {
 func executorAnalysisJSON() []byte {
 	return []byte(`{
   "version": 1,
-  "contract_version": "agent-analysis-workspace-v4",
+  "contract_version": "agent-analysis-workspace-v5",
   "summary": "The controller rejected the request.",
   "is_transient": false,
   "root_cause": "The specific failure occurred before cleanup.",
@@ -398,5 +415,73 @@ func TestVerifyPreparedMountInfoRequiresExactReadOnlyManifestPaths(t *testing.T)
 				t.Fatal("unsafe mountinfo was accepted")
 			}
 		})
+	}
+}
+
+type pinnedPermissionRule struct {
+	permission string
+	action     string
+}
+
+func pinnedOpenCodePermission(permission string, rules ...pinnedPermissionRule) string {
+	for i := len(rules) - 1; i >= 0; i-- {
+		if rules[i].permission == permission || rules[i].permission == "*" {
+			return rules[i].action
+		}
+	}
+	return "ask"
+}
+
+func TestPinnedOpenCodeSessionPermissionPrecedence(t *testing.T) {
+	agent := []pinnedPermissionRule{{permission: "*", action: "deny"}, {permission: "read", action: "allow"}, {permission: "bash", action: "deny"}}
+	denySession := []pinnedPermissionRule{{permission: "read", action: "deny"}}
+	if got := pinnedOpenCodePermission("read", append(agent, denySession...)...); got != "deny" {
+		t.Fatalf("session denial did not override agent allow: %s", got)
+	}
+	allowSession := []pinnedPermissionRule{{permission: "bash", action: "allow"}}
+	if got := pinnedOpenCodePermission("bash", append(agent, allowSession...)...); got != "allow" {
+		t.Fatalf("session allow did not broaden agent denial: %s", got)
+	}
+	if got := pinnedOpenCodePermission("read", agent...); got != "allow" {
+		t.Fatalf("agent permission changed without a session override: %s", got)
+	}
+}
+
+func TestVerifyReadSafeArtifactsRejectsInstructionFiles(t *testing.T) {
+	for _, name := range []string{"AGENTS.md", "nested/CLAUDE.md", "logs/CONTEXT.md"} {
+		if err := verifyReadSafeArtifacts([]agentanalysis.WorkspaceFile{{Path: name}}); err == nil {
+			t.Fatalf("instruction file was accepted: %s", name)
+		}
+	}
+	if err := verifyReadSafeArtifacts([]agentanalysis.WorkspaceFile{{Path: "logs/build.log"}, {Path: "nested/agents.md"}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecutePreservesSanitizedFailureTelemetryWithoutUsage(t *testing.T) {
+	root, request := executorTestFixture(t)
+	errorTelemetry := agentanalysis.WorkspaceOpenCodeErrorTelemetry{
+		Available: true, Name: "APIError", HTTPStatusCode: 429, RetryableKnown: true, Retryable: true,
+		Classification: "api_rate_limited",
+	}
+	shape := newOpenCodeRequestShape(OpenCodeSpec{
+		Gateway: request.ModelGateway, Prompt: "synthetic", ModelContextTokens: request.ModelContextTokens, ModelOutputTokens: request.ModelOutputTokens,
+	}, "1.18.2")
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: root,
+		TempRoot:      t.TempDir(),
+		MountVerifier: func(string, string) error { return nil },
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
+			return OpenCodeRunResult{
+				Usage: agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable},
+				Telemetry: agentanalysis.WorkspaceOpenCodeTelemetry{
+					Status: agentanalysis.WorkspaceTelemetryUnavailable, ProviderRequests: 1, RequestShape: shape,
+					Error: errorTelemetry, StructuredOutputRetriesKnown: true,
+				},
+			}, &openCodePromptError{name: "APIError", telemetry: errorTelemetry}
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalFailed || result.Usage.Available || result.Usage.Status != agentanalysis.WorkspaceTelemetryUnavailable || result.OpenCodeTelemetry.ProviderRequests != 1 || result.OpenCodeTelemetry.Error != errorTelemetry || result.OpenCodeTelemetry.FailureCode != "api_rate_limited" || !result.OpenCodeTelemetry.RequestShape.Available {
+		t.Fatalf("result=%+v", result)
 	}
 }

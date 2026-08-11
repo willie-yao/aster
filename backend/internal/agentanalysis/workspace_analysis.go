@@ -82,23 +82,62 @@ type WorkspaceToolTelemetry struct {
 	Denied   int    `json:"denied,omitempty"`
 }
 
+// WorkspaceOpenCodeRequestShape records bounded engine-owned request facts.
+type WorkspaceOpenCodeRequestShape struct {
+	Available                  bool   `json:"available"`
+	StreamingMode              string `json:"streaming_mode,omitempty"`
+	ModelID                    string `json:"model_id,omitempty"`
+	SystemPromptBytesAvailable bool   `json:"system_prompt_bytes_available"`
+	SystemPromptBytes          int    `json:"system_prompt_bytes,omitempty"`
+	UserPromptBytes            int    `json:"user_prompt_bytes,omitempty"`
+	ToolSchemaAvailable        bool   `json:"tool_schema_available"`
+	ToolCount                  int    `json:"tool_count,omitempty"`
+	ToolSchemaSHA256           string `json:"tool_schema_sha256,omitempty"`
+	ResponseSchemaSHA256       string `json:"response_schema_sha256,omitempty"`
+	ToolChoiceMode             string `json:"tool_choice_mode,omitempty"`
+	ContextLimit               int    `json:"context_limit,omitempty"`
+	OutputTokenLimit           int    `json:"output_token_limit,omitempty"`
+	OpenCodeVersion            string `json:"opencode_version,omitempty"`
+}
+
+// WorkspaceOpenCodeErrorTelemetry contains only allowlisted failure facts.
+type WorkspaceOpenCodeErrorTelemetry struct {
+	Available                  bool   `json:"available"`
+	Name                       string `json:"name,omitempty"`
+	HTTPStatusCode             int    `json:"http_status_code,omitempty"`
+	RetryableKnown             bool   `json:"retryable_known"`
+	Retryable                  bool   `json:"retryable"`
+	Classification             string `json:"classification,omitempty"`
+	MetadataCode               string `json:"metadata_code,omitempty"`
+	HeaderTimeout              bool   `json:"header_timeout,omitempty"`
+	ResponseStreamError        bool   `json:"response_stream_error,omitempty"`
+	ContextOverflow            bool   `json:"context_overflow,omitempty"`
+	ResponseContentTypePresent bool   `json:"response_content_type_present,omitempty"`
+	ResponseBodyPresent        bool   `json:"response_body_present,omitempty"`
+	ResponseBodyBytesBounded   int    `json:"response_body_bytes_bounded,omitempty"`
+	ResponseBodySHA256         string `json:"response_body_sha256,omitempty"`
+}
+
 // WorkspaceOpenCodeTelemetry contains no prompts, responses, evidence, or raw events.
 type WorkspaceOpenCodeTelemetry struct {
-	Available                    bool                     `json:"available"`
-	Status                       string                   `json:"status"`
-	EventCount                   int                      `json:"event_count,omitempty"`
-	Tools                        []WorkspaceToolTelemetry `json:"tools,omitempty"`
-	DeniedToolCount              int                      `json:"denied_tool_count,omitempty"`
-	ToolFailureCount             int                      `json:"tool_failure_count,omitempty"`
-	StepsUsed                    int                      `json:"steps_used,omitempty"`
-	StructuredOutputRetriesKnown bool                     `json:"structured_output_retries_known"`
-	StructuredOutputRetries      int                      `json:"structured_output_retries,omitempty"`
-	StructuredOutputErrors       int                      `json:"structured_output_errors,omitempty"`
-	ContextLimit                 bool                     `json:"context_limit,omitempty"`
-	TimedOut                     bool                     `json:"timed_out,omitempty"`
-	FailureCode                  string                   `json:"failure_code,omitempty"`
-	StdoutTruncated              bool                     `json:"stdout_truncated,omitempty"`
-	StderrTruncated              bool                     `json:"stderr_truncated,omitempty"`
+	Available                    bool                            `json:"available"`
+	Status                       string                          `json:"status"`
+	EventCount                   int                             `json:"event_count,omitempty"`
+	ProviderRequests             int                             `json:"provider_requests,omitempty"`
+	RequestShape                 WorkspaceOpenCodeRequestShape   `json:"request_shape"`
+	Error                        WorkspaceOpenCodeErrorTelemetry `json:"error"`
+	Tools                        []WorkspaceToolTelemetry        `json:"tools,omitempty"`
+	DeniedToolCount              int                             `json:"denied_tool_count,omitempty"`
+	ToolFailureCount             int                             `json:"tool_failure_count,omitempty"`
+	StepsUsed                    int                             `json:"steps_used,omitempty"`
+	StructuredOutputRetriesKnown bool                            `json:"structured_output_retries_known"`
+	StructuredOutputRetries      int                             `json:"structured_output_retries,omitempty"`
+	StructuredOutputErrors       int                             `json:"structured_output_errors,omitempty"`
+	ContextLimit                 bool                            `json:"context_limit,omitempty"`
+	TimedOut                     bool                            `json:"timed_out,omitempty"`
+	FailureCode                  string                          `json:"failure_code,omitempty"`
+	StdoutTruncated              bool                            `json:"stdout_truncated,omitempty"`
+	StderrTruncated              bool                            `json:"stderr_truncated,omitempty"`
 }
 
 // WorkspaceExecutionResult is the single executor result read from Pod logs.
@@ -579,12 +618,21 @@ func validateWorkspaceUsage(usage WorkspaceUsage) error {
 }
 
 func validateWorkspaceOpenCodeTelemetry(telemetry WorkspaceOpenCodeTelemetry) error {
-	if telemetry.EventCount < 0 || telemetry.DeniedToolCount < 0 || telemetry.ToolFailureCount < 0 || telemetry.StepsUsed < 0 || telemetry.StructuredOutputRetries < 0 || telemetry.StructuredOutputErrors < 0 || !validWorkspaceFailureCode(telemetry.FailureCode) {
+	if telemetry.EventCount < 0 || telemetry.ProviderRequests < 0 || telemetry.DeniedToolCount < 0 || telemetry.ToolFailureCount < 0 || telemetry.StepsUsed < 0 || telemetry.StructuredOutputRetries < 0 || telemetry.StructuredOutputErrors < 0 || !validWorkspaceFailureCode(telemetry.FailureCode) {
 		return fmt.Errorf("workspace OpenCode telemetry is invalid")
+	}
+	if err := validateWorkspaceOpenCodeRequestShape(telemetry.RequestShape); err != nil {
+		return err
+	}
+	if err := validateWorkspaceOpenCodeErrorTelemetry(telemetry.Error); err != nil {
+		return err
 	}
 	if telemetry.Available {
 		if telemetry.Status != WorkspaceTelemetryAvailable || telemetry.EventCount < 1 || !telemetry.StructuredOutputRetriesKnown {
 			return fmt.Errorf("available workspace OpenCode telemetry is invalid")
+		}
+		if telemetry.StepsUsed == 0 && !telemetry.Error.Available {
+			return fmt.Errorf("zero-step workspace OpenCode telemetry requires an error")
 		}
 	} else if telemetry.Status != WorkspaceTelemetryUnavailable && telemetry.Status != WorkspaceTelemetryMalformed && telemetry.Status != WorkspaceTelemetryTruncated {
 		return fmt.Errorf("unavailable workspace OpenCode telemetry status is invalid")
@@ -602,10 +650,101 @@ func validateWorkspaceOpenCodeTelemetry(telemetry WorkspaceOpenCodeTelemetry) er
 	if toolFailures != telemetry.ToolFailureCount || toolDenied != telemetry.DeniedToolCount {
 		return fmt.Errorf("workspace OpenCode tool telemetry totals are invalid")
 	}
-	if !telemetry.Available && (telemetry.EventCount != 0 || len(telemetry.Tools) != 0 || telemetry.DeniedToolCount != 0 || telemetry.ToolFailureCount != 0 || telemetry.StepsUsed != 0 || telemetry.StructuredOutputRetries != 0 || telemetry.StructuredOutputErrors != 0 || telemetry.ContextLimit) {
-		return fmt.Errorf("unavailable workspace OpenCode telemetry must not contain inferred values")
+	if telemetry.Error.ContextOverflow && !telemetry.ContextLimit {
+		return fmt.Errorf("workspace OpenCode context telemetry is inconsistent")
+	}
+	if telemetry.ProviderRequests < telemetry.StepsUsed {
+		return fmt.Errorf("workspace OpenCode provider request telemetry is inconsistent")
+	}
+	if !telemetry.Available && (telemetry.EventCount != 0 || len(telemetry.Tools) != 0 || telemetry.DeniedToolCount != 0 || telemetry.ToolFailureCount != 0 || telemetry.StepsUsed != 0 || telemetry.StructuredOutputRetries != 0 || telemetry.StructuredOutputErrors != 0) {
+		return fmt.Errorf("unavailable workspace OpenCode telemetry must not contain event-derived values")
 	}
 	return nil
+}
+
+func validateWorkspaceOpenCodeRequestShape(shape WorkspaceOpenCodeRequestShape) error {
+	if !shape.Available {
+		if shape.StreamingMode != "" || shape.ModelID != "" || shape.SystemPromptBytesAvailable || shape.SystemPromptBytes != 0 || shape.UserPromptBytes != 0 || shape.ToolSchemaAvailable || shape.ToolCount != 0 || shape.ToolSchemaSHA256 != "" || shape.ResponseSchemaSHA256 != "" || shape.ToolChoiceMode != "" || shape.ContextLimit != 0 || shape.OutputTokenLimit != 0 || shape.OpenCodeVersion != "" {
+			return fmt.Errorf("unavailable workspace OpenCode request shape must be empty")
+		}
+		return nil
+	}
+	if shape.StreamingMode != "streaming" || strings.TrimSpace(shape.ModelID) == "" || len(shape.ModelID) > 256 || shape.UserPromptBytes < 1 || shape.UserPromptBytes > 1<<20 || !validSHA256(shape.ResponseSchemaSHA256) || shape.ToolChoiceMode != "required" || shape.ContextLimit < 1 || shape.OutputTokenLimit < 1 || strings.TrimSpace(shape.OpenCodeVersion) == "" || len(shape.OpenCodeVersion) > 64 {
+		return fmt.Errorf("workspace OpenCode request shape is invalid")
+	}
+	if shape.SystemPromptBytesAvailable {
+		if shape.SystemPromptBytes < 1 || shape.SystemPromptBytes > 1<<20 {
+			return fmt.Errorf("workspace OpenCode system prompt telemetry is invalid")
+		}
+	} else if shape.SystemPromptBytes != 0 {
+		return fmt.Errorf("unavailable workspace OpenCode system prompt telemetry must be empty")
+	}
+	if shape.ToolSchemaAvailable {
+		if shape.ToolCount < 1 || shape.ToolCount > 128 || !validSHA256(shape.ToolSchemaSHA256) {
+			return fmt.Errorf("workspace OpenCode tool schema telemetry is invalid")
+		}
+	} else if shape.ToolCount != 0 || shape.ToolSchemaSHA256 != "" {
+		return fmt.Errorf("unavailable workspace OpenCode tool schema telemetry must be empty")
+	}
+	return nil
+}
+
+func validateWorkspaceOpenCodeErrorTelemetry(value WorkspaceOpenCodeErrorTelemetry) error {
+	if !value.Available {
+		if value.Name != "" || value.HTTPStatusCode != 0 || value.RetryableKnown || value.Retryable || value.Classification != "" || value.MetadataCode != "" || value.HeaderTimeout || value.ResponseStreamError || value.ContextOverflow || value.ResponseContentTypePresent || value.ResponseBodyPresent || value.ResponseBodyBytesBounded != 0 || value.ResponseBodySHA256 != "" {
+			return fmt.Errorf("unavailable workspace OpenCode error telemetry must be empty")
+		}
+		return nil
+	}
+	if !validOpenCodeErrorName(value.Name) || !validOpenCodeErrorClassification(value.Classification) || !validOpenCodeMetadataCode(value.MetadataCode) {
+		return fmt.Errorf("workspace OpenCode error telemetry is invalid")
+	}
+	if value.HTTPStatusCode != 0 && (value.HTTPStatusCode < 100 || value.HTTPStatusCode > 599) {
+		return fmt.Errorf("workspace OpenCode HTTP status is invalid")
+	}
+	if !value.RetryableKnown && value.Retryable {
+		return fmt.Errorf("workspace OpenCode retryability is invalid")
+	}
+	if value.ResponseBodyBytesBounded < 0 || value.ResponseBodyBytesBounded > 1<<20 {
+		return fmt.Errorf("workspace OpenCode response body telemetry is invalid")
+	}
+	if value.ResponseBodyPresent != (value.ResponseBodySHA256 != "") || value.ResponseBodyPresent != (value.ResponseBodyBytesBounded > 0) {
+		return fmt.Errorf("workspace OpenCode response body telemetry is inconsistent")
+	}
+	if value.ResponseBodySHA256 != "" && !validSHA256(value.ResponseBodySHA256) {
+		return fmt.Errorf("workspace OpenCode response body digest is invalid")
+	}
+	if value.HeaderTimeout != (value.Classification == "header_timeout") || value.ResponseStreamError != (value.Classification == "response_stream") || value.ContextOverflow != (value.Classification == "context_overflow") {
+		return fmt.Errorf("workspace OpenCode error classification is inconsistent")
+	}
+	return nil
+}
+
+func validOpenCodeErrorName(value string) bool {
+	switch value {
+	case "ProviderAuthError", "UnknownError", "MessageOutputLengthError", "MessageAbortedError", "StructuredOutputError", "ContextOverflowError", "ContentFilterError", "APIError":
+		return true
+	default:
+		return false
+	}
+}
+
+func validOpenCodeErrorClassification(value string) bool {
+	switch value {
+	case "api_bad_request", "api_unauthorized", "api_forbidden", "api_timeout", "api_request_too_large", "api_rate_limited", "api_server_error", "api_error", "malformed_error", "header_timeout", "response_stream", "context_overflow", "structured_output", "provider_auth", "output_length", "aborted", "content_filter", "unknown":
+		return true
+	default:
+		return false
+	}
+}
+
+func validOpenCodeMetadataCode(value string) bool {
+	switch value {
+	case "", "ProviderHeaderTimeoutError", "ProviderResponseStreamError", "ECONNRESET", "ZlibError":
+		return true
+	default:
+		return false
+	}
 }
 
 func validWorkspaceFailureCode(value string) bool {

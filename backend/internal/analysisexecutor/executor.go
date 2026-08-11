@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -107,6 +108,9 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	if err := verifyInputs(ctx, request, sourceRoot, artifactRoot); err != nil {
 		return fail(stateForContext(ctx), err.Error())
 	}
+	if err := verifyReadSafeArtifacts(request.Manifest.Artifacts); err != nil {
+		return fail(engineruntime.TerminalFailed, err.Error())
+	}
 
 	tempRoot := strings.TrimSpace(opts.TempRoot)
 	if tempRoot == "" {
@@ -142,6 +146,9 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	}
 	if runResult.Telemetry.Status == "" {
 		runResult.Telemetry.Status = agentanalysis.WorkspaceTelemetryUnavailable
+	}
+	if runResult.Telemetry.ProviderRequests == 0 && runResult.Telemetry.StepsUsed > 0 {
+		runResult.Telemetry.ProviderRequests = runResult.Telemetry.StepsUsed
 	}
 	runResult.Telemetry.StructuredOutputRetriesKnown = true
 	result.Usage = runResult.Usage
@@ -299,8 +306,15 @@ func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (result OpenCode
 	}()
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 	client := &http.Client{}
-	if err := waitForOpenCode(ctx, client, baseURL, done); err != nil {
+	version, err := waitForOpenCode(ctx, client, baseURL, done)
+	if err != nil {
 		return result, err
+	}
+	result.Telemetry.RequestShape = newOpenCodeRequestShape(spec, version)
+	if toolCount, digest, schemaErr := fetchOpenCodeToolSchemaDigest(ctx, client, baseURL, spec); schemaErr == nil {
+		result.Telemetry.RequestShape.ToolSchemaAvailable = true
+		result.Telemetry.RequestShape.ToolCount = toolCount
+		result.Telemetry.RequestShape.ToolSchemaSHA256 = digest
 	}
 	sessionID, err := createOpenCodeSession(ctx, client, baseURL, spec.WorkDir)
 	if err != nil {
@@ -308,12 +322,20 @@ func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (result OpenCode
 	}
 	structured, promptErr := promptOpenCode(ctx, client, baseURL, sessionID, spec)
 	result.Structured = structured
+	requestShape := result.Telemetry.RequestShape
 	usage, telemetry, telemetryErr := fetchOpenCodeTelemetry(ctx, client, baseURL, sessionID, spec.WorkDir)
 	if telemetryErr == nil {
 		result.Usage, result.Telemetry = usage, telemetry
 	} else {
 		result.Usage.Status = telemetryStatusForError(telemetryErr)
 		result.Telemetry.Status = result.Usage.Status
+	}
+	result.Telemetry.RequestShape = requestShape
+	var sessionErr *openCodePromptError
+	if errors.As(promptErr, &sessionErr) {
+		result.Telemetry.Error = sessionErr.telemetry
+		result.Telemetry.ProviderRequests = max(result.Telemetry.ProviderRequests, 1)
+		result.Telemetry.ContextLimit = result.Telemetry.ContextLimit || sessionErr.telemetry.ContextOverflow
 	}
 	if promptErr != nil {
 		result.Telemetry.FailureCode = openCodeFailureCode(promptErr)
@@ -323,29 +345,25 @@ func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (result OpenCode
 
 const maxOpenCodeAPIResponseBytes = 1 << 20
 
-func waitForOpenCode(ctx context.Context, client *http.Client, baseURL string, done <-chan error) error {
+func waitForOpenCode(ctx context.Context, client *http.Client, baseURL string, done <-chan error) (string, error) {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		requestCtx, cancel := context.WithTimeout(ctx, time.Second)
-		req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, baseURL+"/global/health", nil)
-		if err == nil {
-			resp, requestErr := client.Do(req)
-			if requestErr == nil {
-				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
-				_ = resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					cancel()
-					return nil
-				}
-			}
+		var health struct {
+			Healthy bool   `json:"healthy"`
+			Version string `json:"version"`
 		}
+		err := openCodeJSON(requestCtx, client, http.MethodGet, baseURL+"/global/health", nil, &health)
 		cancel()
+		if err == nil && health.Healthy && strings.TrimSpace(health.Version) != "" && len(health.Version) <= 64 {
+			return health.Version, nil
+		}
 		select {
 		case err := <-done:
-			return fmt.Errorf("OpenCode server exited before readiness: %v", err)
+			return "", fmt.Errorf("OpenCode server exited before readiness: %v", err)
 		case <-ctx.Done():
-			return ctx.Err()
+			return "", ctx.Err()
 		case <-ticker.C:
 		}
 	}
@@ -369,11 +387,7 @@ func promptOpenCode(ctx context.Context, client *http.Client, baseURL, sessionID
 		"agent":  "analysis",
 		"model":  map[string]any{"providerID": "engine", "modelID": spec.Gateway.Model},
 		"format": map[string]any{"type": "json_schema", "schema": agentanalysis.WorkspaceResultSchema()},
-		"tools": map[string]bool{
-			"read": false, "bash": false, "edit": false, "write": false, "apply_patch": false,
-			"webfetch": false, "websearch": false, "task": false, "skill": false,
-		},
-		"parts": []any{map[string]any{"type": "text", "text": spec.Prompt}},
+		"parts":  []any{map[string]any{"type": "text", "text": spec.Prompt}},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -381,11 +395,9 @@ func promptOpenCode(ctx context.Context, client *http.Client, baseURL, sessionID
 	}
 	var response struct {
 		Info struct {
-			Role       string          `json:"role"`
-			Structured json.RawMessage `json:"structured"`
-			Error      *struct {
-				Name string `json:"name"`
-			} `json:"error"`
+			Role       string                 `json:"role"`
+			Structured json.RawMessage        `json:"structured"`
+			Error      *openCodeErrorEnvelope `json:"error"`
 		} `json:"info"`
 	}
 	endpoint := baseURL + "/session/" + url.PathEscape(sessionID) + "/message?directory=" + url.QueryEscape(spec.WorkDir)
@@ -393,7 +405,15 @@ func promptOpenCode(ctx context.Context, client *http.Client, baseURL, sessionID
 		return nil, fmt.Errorf("prompt OpenCode session: %w", err)
 	}
 	if response.Info.Error != nil {
-		return nil, fmt.Errorf("OpenCode structured output failed: %s", boundedReason(response.Info.Error.Name))
+		telemetry, sanitizeErr := sanitizeOpenCodeError(response.Info.Error)
+		if sanitizeErr != nil {
+			if recognizedOpenCodeError(response.Info.Error.Name) {
+				telemetry = agentanalysis.WorkspaceOpenCodeErrorTelemetry{Available: true, Name: response.Info.Error.Name, Classification: "malformed_error"}
+				return nil, &openCodePromptError{name: response.Info.Error.Name, telemetry: telemetry}
+			}
+			return nil, fmt.Errorf("OpenCode structured output failed: malformed error data")
+		}
+		return nil, &openCodePromptError{name: response.Info.Error.Name, telemetry: telemetry}
 	}
 	if response.Info.Role != "assistant" || len(response.Info.Structured) == 0 || bytes.Equal(bytes.TrimSpace(response.Info.Structured), []byte("null")) {
 		return nil, fmt.Errorf("OpenCode did not return structured output")
@@ -421,10 +441,19 @@ func telemetryStatusForError(err error) string {
 }
 
 func openCodeFailureCode(err error) string {
+	var sessionErr *openCodePromptError
+	if errors.As(err, &sessionErr) {
+		if sessionErr.telemetry.ContextOverflow {
+			return "context_limit"
+		}
+		return sessionErr.telemetry.Classification
+	}
 	value := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(value, "context"):
 		return "context_limit"
+	case strings.Contains(value, "malformed error data"):
+		return "malformed_error"
 	case strings.Contains(value, "structured output"):
 		return "structured_output"
 	case strings.Contains(value, "http"):
@@ -470,6 +499,16 @@ func openCodeJSON(ctx context.Context, client *http.Client, method, endpoint str
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return fmt.Errorf("decode OpenCode API response: trailing data")
+	}
+	return nil
+}
+
+func verifyReadSafeArtifacts(files []agentanalysis.WorkspaceFile) error {
+	for _, file := range files {
+		switch path.Base(file.Path) {
+		case "AGENTS.md", "CLAUDE.md", "CONTEXT.md":
+			return fmt.Errorf("artifact workspace contains an OpenCode instruction file")
+		}
 	}
 	return nil
 }
@@ -541,13 +580,23 @@ func writeOpenCodeConfig(home string, gateway engineruntime.ModelGatewayConfig, 
 		return err
 	}
 	analysisPermissions := map[string]any{
-		"*":    "deny",
+		"*": "deny",
+		"read": map[string]any{
+			"*": "deny", "artifacts/*": "allow",
+		},
 		"glob": "allow", "grep": "allow", "StructuredOutput": "allow",
-		"bash": "deny", "edit": "deny", "write": "deny", "apply_patch": "deny",
+		"bash": map[string]any{
+			"*":                             "deny",
+			"git diff --no-ext-diff --stat": "allow",
+			"git log -1 --oneline":          "allow",
+			"git status --short":            "allow",
+		},
+		"edit": "deny", "write": "deny", "apply_patch": "deny",
 		"webfetch": "deny", "websearch": "deny", "task": "deny", "skill": "deny", "external_directory": "deny",
 	}
 	config := map[string]any{
 		"$schema": "https://opencode.ai/config.json", "share": "disabled", "autoupdate": false, "snapshot": false,
+		"default_agent": "analysis",
 		"provider": map[string]any{"engine": map[string]any{
 			"npm": "@ai-sdk/openai-compatible", "name": "engine",
 			"options": map[string]any{"baseURL": openAIBase(gateway.Endpoint)},
