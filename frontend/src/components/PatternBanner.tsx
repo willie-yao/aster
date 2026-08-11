@@ -32,7 +32,8 @@ import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
 
 function remediationStatusLabel(status: string): string {
-  return status.replaceAll("_", " ");
+  const label = status.replaceAll("_", " ");
+  return label ? label[0].toUpperCase() + label.slice(1) : label;
 }
 
 function remediationStatusColor(status: string): "success" | "warning" | "error" | "info" {
@@ -158,8 +159,8 @@ export function PatternBanner({
   const metadata = `${pattern.builds_analyzed} ${pattern.builds_analyzed === 1 ? "build" : "builds"} · ${pattern.confidence} confidence`;
   const staleNotice = refreshStatus && refreshStatus.state !== "current" ? (
     <Alert severity="warning" variant="outlined" sx={{ borderRadius: "4px" }}>
-      Last known good pattern from {refreshStatus.last_successful_at ?? "an earlier refresh"}.
-      Current refresh: {refreshStatus.failure_category ?? refreshStatus.state}.
+      Pattern from the last successful refresh at {refreshStatus.last_successful_at ?? "an earlier time"}.
+      Current refresh status: {refreshStatus.failure_category ?? refreshStatus.state}.
     </Alert>
   ) : null;
   const lifecycleNotice = lifecycle && !lifecycleActive ? (
@@ -219,12 +220,12 @@ export function PatternBanner({
           {resolvedEntry && (
             <Chip
               size="small"
-              label="Resolved"
+              label="Dismissed"
               sx={{
                 borderRadius: "4px",
                 fontWeight: 650,
-                bgcolor: (theme) => soft(theme, "success", 0.16),
-                color: "success.main",
+                bgcolor: "action.selected",
+                color: "text.secondary",
               }}
             />
           )}
@@ -245,8 +246,8 @@ export function PatternBanner({
 
       {resolvedEntry && (
         <Typography color="text.secondary" sx={overviewTypography.description}>
-          Marked resolved by {resolvedEntry.resolved_by}
-          {resolvedEntry.note ? `. ${resolvedEntry.note}` : ""}. It reopens automatically if it recurs.
+          Dismissed by {resolvedEntry.resolved_by}
+          {resolvedEntry.note ? `. ${resolvedEntry.note}` : ""}. It returns to the active view automatically if it recurs.
         </Typography>
       )}
 
@@ -390,7 +391,7 @@ export function PatternBanner({
       mobileTitle={patternLabel}
       icon={<AutoAwesome aria-hidden sx={{ fontSize: 18, color: "primary.main" }} />}
       metadata={`${patternLabel} · ${metadata}`}
-      mobileMetadata={staleNotice ? `Last known good · ${metadata}` : metadata}
+      mobileMetadata={staleNotice ? `Last successful refresh · ${metadata}` : metadata}
       mobileNotice={mobileNotice}
       summary={<RichText text={pattern.summary} steps fileCtx={patternFileCtx} />}
       mobileSynopsis={firstSentence(pattern.shared_root_cause ?? pattern.summary)}

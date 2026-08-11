@@ -96,15 +96,15 @@ export function countLabel(count: number, singular: string, plural = `${singular
 
 export function needsAttentionSummary(
   recurringPatterns: number | null,
-  activeItems: number | null,
+  testAlerts: number | null,
   loading: boolean,
   failed: boolean,
 ): string {
-  if (loading) return "recurring patterns loading · active items loading";
-  if (failed || recurringPatterns === null || activeItems === null) {
-    return "recurring patterns unavailable · active items unavailable";
+  if (loading) return "recurring patterns loading · test alerts loading";
+  if (failed || recurringPatterns === null || testAlerts === null) {
+    return "recurring patterns unavailable · test alerts unavailable";
   }
-  return `${countLabel(recurringPatterns, "recurring pattern")} · ${countLabel(activeItems, "active item")}`;
+  return `${countLabel(recurringPatterns, "recurring pattern")} · ${countLabel(testAlerts, "test alert")}`;
 }
 
 export function disclosureLabel(
@@ -117,7 +117,7 @@ export function disclosureLabel(
 }
 
 export function attentionSignal(confidence: string, stale: boolean): string {
-  return `${confidence} confidence${stale ? " · Last known good" : ""}`;
+  return `${confidence} confidence${stale ? " · Last successful refresh" : ""}`;
 }
 
 export function orderedDashboardBranches(jobs: JobSummary[]): string[] {

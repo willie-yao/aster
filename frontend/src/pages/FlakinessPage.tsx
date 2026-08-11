@@ -38,25 +38,25 @@ type TabDefinition = {
 
 const tabs: TabDefinition[] = [
   {
-    label: "Most Flaky",
+    label: "Flakiest tests",
     value: "most_flaky",
     tooltip:
       "Tests that alternate between passing and failing. Sorted by flip rate, the percentage of runs where the result changed from the previous run.",
   },
   {
-    label: "Persistent Failures",
+    label: "Persistent failures",
     value: "persistent",
     tooltip:
-      "Tests that have failed 3 or more times in a row with the same error. These are consistently broken, not flaky.",
+      "Tests with at least 3 consecutive failures, sorted by current streak length.",
   },
   {
-    label: "Recently Broken",
+    label: "Recent failures",
     value: "recently_broken",
     tooltip:
-      "Tests that started a new failure streak within the last 48 hours. These are likely new regressions.",
+      "Tests whose current failure streak began within 48 hours of this published snapshot.",
   },
   {
-    label: "Build Failures",
+    label: "Build failures",
     value: "build_failures",
     tooltip:
       "Build-level failures that were not reported as JUnit test cases. These remain separate from test flakiness and pass-rate calculations.",
@@ -66,6 +66,7 @@ const tabs: TabDefinition[] = [
 function classificationLabel(
   classification: TestFlakiness["classification"],
 ): string {
+  if (classification === "one-off") return "New failure streak";
   return classification.charAt(0).toUpperCase() + classification.slice(1);
 }
 
@@ -149,7 +150,7 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: TestTab }) {
   const [expanded, setExpanded] = useState(false);
   const detailsId = useId();
   const lastFailureMessage = item.last_failure?.failure_message;
-  const diagnosisPath = item.last_failure?.build_id
+  const analysisPath = item.last_failure?.build_id
     ? testRunPath(item.job_id, item.test_name, item.last_failure.build_id)
     : testPath(item.job_id, item.test_name);
   const testTitle = shortTestName(item.test_name);
@@ -191,10 +192,10 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: TestTab }) {
         <Box sx={{ gridArea: "primary", minWidth: 0, px: 1.5, py: 1.25 }}>
           <Link
             component={RouterLink}
-            to={diagnosisPath}
+            to={analysisPath}
             underline="none"
             title={item.test_name}
-            aria-label={`Open diagnosis for ${testTitle} in ${jobTitle}`}
+            aria-label={`Open analysis for ${testTitle} in ${jobTitle}`}
             sx={{
               minHeight: { xs: 44, md: 28 },
               display: "flex",
@@ -615,7 +616,7 @@ export function FlakinessPage() {
             fontWeight: 720,
           }}
         >
-          Failure Analysis
+          Failure trends
         </Typography>
         <Stack
           direction={{ xs: "column", sm: "row" }}
@@ -676,7 +677,7 @@ export function FlakinessPage() {
           onChange={(_, value: FailureTab) => setActiveTab(value)}
           variant="scrollable"
           scrollButtons="auto"
-          aria-label="Failure analysis categories"
+          aria-label="Failure trend views"
           sx={{
             minHeight: 44,
             bgcolor: "surface.container",
@@ -716,7 +717,7 @@ export function FlakinessPage() {
             <Tab
               key={tab.value}
               value={tab.value}
-              aria-describedby={`failure-analysis-${tab.value}-description`}
+              aria-describedby={`failure-trends-${tab.value}-description`}
               label={<TabLabel label={tab.label} count={tabCounts[tab.value]} />}
               title={tab.tooltip}
             />
@@ -726,7 +727,7 @@ export function FlakinessPage() {
         {tabs.map((tab) => (
           <Box
             component="span"
-            id={`failure-analysis-${tab.value}-description`}
+            id={`failure-trends-${tab.value}-description`}
             key={`${tab.value}-description`}
             sx={{
               border: 0,

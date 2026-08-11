@@ -22,8 +22,8 @@ import {
   BugReport,
   Build,
   GitHub,
-  CheckCircleOutlined,
   Replay,
+  VisibilityOffOutlined,
 } from "@mui/icons-material";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useAuth } from "../hooks/useAuth";
@@ -89,7 +89,7 @@ function DialogHeader({
   subtitle,
 }: {
   icon: ReactNode;
-  accent: "warning" | "success";
+  accent: "primary" | "warning";
   title: string;
   subtitle?: string;
 }) {
@@ -737,7 +737,7 @@ export function FailureActions({
               disabled={action !== null}
               onClick={() => open("create-issue")}
             >
-              File issue
+              Draft issue
             </Button>
             <Button
               size="small"
@@ -747,7 +747,7 @@ export function FailureActions({
               disabled={action !== null}
               onClick={() => open("propose-fix")}
             >
-              Propose fix
+              Draft fix PR
             </Button>
           </>
         )}
@@ -755,26 +755,26 @@ export function FailureActions({
           <Button
             size="small"
             variant={detailAppearance ? "text" : "outlined"}
-            color={detailAppearance ? "primary" : "success"}
+            color="primary"
             startIcon={<Replay sx={{ fontSize: 18 }} />}
             disabled={resolveBusy}
             onClick={unresolve}
           >
-            Unresolve
+            Restore pattern
           </Button>
         ) : (
           <Button
             size="small"
             variant={detailAppearance ? "text" : "outlined"}
-            color={detailAppearance ? "primary" : "success"}
-            startIcon={<CheckCircleOutlined sx={{ fontSize: 18 }} />}
+            color="primary"
+            startIcon={<VisibilityOffOutlined sx={{ fontSize: 18 }} />}
             disabled={resolveBusy}
             onClick={() => {
               setResolveError(null);
               setResolveOpen(true);
             }}
           >
-            Mark resolved
+            Dismiss pattern
           </Button>
         ))}
       </Stack>
@@ -862,18 +862,18 @@ export function FailureActions({
         slotProps={{ paper: { sx: dialogPaperSx } }}
       >
         <DialogHeader
-          icon={<CheckCircleOutlined sx={{ fontSize: 20 }} />}
-          accent="success"
-          title="Mark pattern resolved"
+          icon={<VisibilityOffOutlined sx={{ fontSize: 20 }} />}
+          accent="primary"
+          title="Dismiss pattern"
         />
         <DialogContent dividers>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Hides this recurring pattern from the active view. It re-appears
+            Hides this recurring pattern from the active view. It reappears
             automatically if a newer failing build recurs.
           </Typography>
           <TextField
             label="Note (optional)"
-            placeholder="e.g. fixed by kubernetes/test-infra #12345"
+            placeholder="For example, fixed by kubernetes/test-infra #12345"
             fullWidth
             multiline
             minRows={2}
@@ -893,7 +893,7 @@ export function FailureActions({
           </Button>
           <Button
             variant="contained"
-            color="success"
+            color="primary"
             disableElevation
             disabled={resolveBusy}
             startIcon={
@@ -903,7 +903,7 @@ export function FailureActions({
             }
             onClick={submitResolve}
           >
-            Mark resolved
+            Dismiss pattern
           </Button>
         </DialogActions>
       </Dialog>
@@ -933,7 +933,7 @@ export function FailureActions({
             )
           }
           accent="warning"
-          title={isFix ? "Review draft fix PR" : "Review issue"}
+          title={isFix ? "Review draft fix PR" : "Review issue draft"}
           subtitle={`Review the exact ${isFix ? "pull request" : "issue"} before it is opened on GitHub`}
         />
         <DialogContent dividers sx={{ px: 3, py: 2.5 }}>

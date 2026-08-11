@@ -95,13 +95,19 @@ test("mobile rows stack identity metrics and disclosure without clipping", () =>
 });
 
 test("focusable tabs own their visible names and descriptions", () => {
-  assert.match(source, /label: "Most Flaky"/);
-  assert.match(source, /label: "Persistent Failures"/);
-  assert.match(source, /label: "Recently Broken"/);
-  assert.match(source, /label: "Build Failures"/);
+  assert.match(source, /label: "Flakiest tests"/);
+  assert.match(source, /label: "Persistent failures"/);
+  assert.match(source, /label: "Recent failures"/);
+  assert.match(source, /label: "Build failures"/);
+  assert.match(source, /at least 3 consecutive failures/);
+  assert.match(source, /within 48 hours of this published snapshot/);
+  assert.match(source, /classification === "one-off"\) return "New failure streak"/);
+  assert.doesNotMatch(source, /same error/);
+  assert.doesNotMatch(source, /consistently broken/);
+  assert.doesNotMatch(source, /new regressions/i);
   assert.match(
     source,
-    /aria-describedby={`failure-analysis-\$\{tab\.value\}-description`}/,
+    /aria-describedby={`failure-trends-\$\{tab\.value\}-description`}/,
   );
   assert.match(
     source,
@@ -127,7 +133,7 @@ test("published freshness stays separate from background refresh progress", () =
 
 
 test("build failures use a bounded summary surface and canonical links", () => {
-  assert.match(source, />\s*Failure Analysis\s*</);
+  assert.match(source, />\s*Failure trends\s*</);
   assert.match(source, /function BuildFailureRow/);
   assert.match(source, /to={item\.job_detail_url}/);
   assert.match(source, /aria-label={`Open details for \$\{item\.job_name\} build \$\{item\.build_id\}`}/);
@@ -140,7 +146,7 @@ test("build failures use a bounded summary surface and canonical links", () => {
   assert.doesNotMatch(source, /item\.suggested_fix/);
 });
 
-test("failure analysis uses continuous operator-console structure", () => {
+test("failure trends use continuous operator-console structure", () => {
   assert.match(source, /<DetailSectionBand/);
   assert.match(source, /borderRadius: 0/);
   assert.match(

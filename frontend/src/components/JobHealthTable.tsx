@@ -21,9 +21,9 @@ interface JobHealthTableProps {
 
 const desktopBreakpoint = "@media (min-width: 1024px)";
 const wideBreakpoint = "@media (min-width: 1200px)";
-const compactColumns = "minmax(210px, 2fr) 76px 174px 56px 78px 58px 82px";
-const wideColumns = "minmax(280px, 2.4fr) 104px 192px 64px 96px 64px 88px";
-const headers = ["Job", "Branch", "Recent runs", "Last 10", "Last run", "Duration", "Current"];
+const compactColumns = "minmax(210px, 2fr) 76px 174px 76px 78px 58px 82px";
+const wideColumns = "minmax(280px, 2.4fr) 104px 192px 88px 96px 64px 88px";
+const headers = ["Job", "Branch", "Recent runs", "Last 10 pass", "Last run", "Duration", "Current"];
 
 function jobValues(job: JobSummary) {
   return {
@@ -169,7 +169,7 @@ function MobileJobRow({ job }: { job: JobSummary }) {
       </Box>
       <Box sx={{ gridArea: "meta", display: "flex", minWidth: 0, alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
         <Metric label="Branch" value={job.branch || "Not set"} />
-        <Metric label="Last 10" value={formatPercent(job.pass_rate_recent)} />
+        <Metric label="Last 10 pass" value={formatPercent(job.pass_rate_recent)} />
         <Metric label="Last" value={lastRun} />
         <Metric label="Duration" value={duration} />
       </Box>

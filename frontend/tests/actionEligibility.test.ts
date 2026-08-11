@@ -85,6 +85,12 @@ test("action eligibility explanations use a polite status surface", async () => 
   const source = await import("node:fs/promises").then((fs) => fs.readFile("src/components/FailureActions.tsx", "utf8"));
   assert.match(source, /<Alert role="status" severity=\{eligibility\.state/);
   assert.match(source, /actionEligibilityTitle\(eligibility/);
+  assert.match(source, />\s*Draft issue\s*</);
+  assert.match(source, />\s*Draft fix PR\s*</);
+  assert.match(source, />\s*Dismiss pattern\s*</);
+  assert.match(source, />\s*Restore pattern\s*</);
+  assert.match(source, /Review issue draft/);
+  assert.doesNotMatch(source, />\s*Mark resolved\s*</);
 });
 
 

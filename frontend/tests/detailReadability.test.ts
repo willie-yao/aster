@@ -49,16 +49,16 @@ test("detail strip dividers always use the quiet divider token", () => {
   assert.match(metadata, /borderTopColor: "var\(--mui-palette-divider\)"/);
 });
 
-test("test rows provide a large diagnosis link and separate evidence controls", () => {
+test("test rows provide a large analysis link and separate evidence controls", () => {
   const table = source("src/components/TestCaseTable.tsx");
-  const linkStart = table.indexOf("component={RouterLink}", table.indexOf("diagnosisPath ?"));
+  const linkStart = table.indexOf("component={RouterLink}", table.indexOf("analysisPath ?"));
   const linkEnd = table.indexOf("</Link>", linkStart);
 
   assert.notEqual(linkStart, -1);
   assert.notEqual(linkEnd, -1);
   assert.match(table, /gridColumn: \{ xs: "1", md: "1 \/ 5" \}/);
   assert.match(table, /minHeight: 54/);
-  assert.match(table, /Diagnosis →/);
+  assert.match(table, /Analysis →/);
   assert.match(table, /gridColumn: \{ xs: "1", md: "5" \}/);
   assert.match(table, /Show inline evidence/);
   assert.match(table, /overflowX: "clip"/);

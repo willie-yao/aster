@@ -7,7 +7,7 @@ export function NotFoundPage() {
   return (
     <Box sx={{ maxWidth: 720, mx: "auto", py: { xs: 4, sm: 8 } }}>
       <Typography variant="h4" component="h1">
-        Page Not Found
+        Page not found
       </Typography>
       <Typography color="text.secondary" sx={{ mt: 1.5 }}>
         The requested dashboard page does not exist.

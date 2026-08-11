@@ -148,7 +148,7 @@ export function FeaturedPatternRow({
       sx={{
         display: "grid",
         gridTemplateColumns: "minmax(0, 1fr)",
-        gridTemplateAreas: '"diagnosis" "evidence"',
+        gridTemplateAreas: '"analysis" "evidence"',
         alignItems: "stretch",
         minHeight: lead ? 156 : 92,
         borderTop: "1px solid",
@@ -160,7 +160,7 @@ export function FeaturedPatternRow({
         "&:hover, &:focus-within": { bgcolor: "surface.containerHigh" },
         [attentionDesktopBreakpoint]: {
           gridTemplateColumns: "minmax(0, 1fr) 190px",
-          gridTemplateAreas: '"diagnosis evidence"',
+          gridTemplateAreas: '"analysis evidence"',
           minHeight: lead ? 126 : 96,
         },
       }}
@@ -168,11 +168,11 @@ export function FeaturedPatternRow({
       <Link
         component={RouterLink}
         to={jobPath(pattern.job_id ?? "")}
-        data-featured-diagnosis-link
-        aria-label={`View diagnosis for ${jobName}`}
+        data-featured-analysis-link
+        aria-label={`View analysis for ${jobName}`}
         underline="none"
         sx={{
-          gridArea: "diagnosis",
+          gridArea: "analysis",
           minWidth: 0,
           minHeight: 44,
           display: "grid",
@@ -186,7 +186,7 @@ export function FeaturedPatternRow({
           color: "text.primary",
           cursor: "pointer",
           borderRadius: "2px",
-          "&:hover .diagnosis-action": {
+          "&:hover .analysis-action": {
             color: "primary.main",
             textDecoration: "underline",
           },
@@ -271,7 +271,7 @@ export function FeaturedPatternRow({
             {pattern.shared_root_cause || pattern.summary}
           </Typography>
           <Typography
-            className="diagnosis-action"
+            className="analysis-action"
             component="span"
             sx={{
               display: "block",
@@ -282,7 +282,7 @@ export function FeaturedPatternRow({
               fontWeight: 700,
             }}
           >
-            View diagnosis →
+            View analysis →
           </Typography>
         </Box>
       </Link>
@@ -587,7 +587,7 @@ export function NeedsAttention({
       const result: ItemGroup[] = [];
       if (broken.length > 0) {
         const items = broken.slice(0, remaining);
-        result.push({ label: "New regressions", items });
+        result.push({ label: "Recent failures", items });
         remaining -= items.length;
       }
       if (persistent.length > 0 && remaining > 0) {
@@ -603,23 +603,19 @@ export function NeedsAttention({
       : [];
   }, [report]);
 
-  const totalItems = report
-    ? recurring.length + groups.reduce((sum, group) => sum + group.items.length, 0)
+  const testAlerts = report
+    ? groups.reduce((sum, group) => sum + group.items.length, 0)
     : null;
   const summary = needsAttentionSummary(
     report ? recurring.length : null,
-    totalItems,
+    testAlerts,
     loading,
     Boolean(error) || (!loading && !report),
   );
   const featured = recurring.slice(0, FEATURED_PATTERNS);
   const additional = recurring.slice(FEATURED_PATTERNS);
-  const allClear = Boolean(
-    report &&
-      recurring.length === 0 &&
-      groups.length === 0 &&
-      resolvedPatterns.length === 0,
-  );
+  const hasActiveItems = recurring.length > 0 || groups.length > 0;
+  const noActiveAlerts = Boolean(report && !hasActiveItems);
 
   return (
     <Box
@@ -682,7 +678,7 @@ export function NeedsAttention({
         </Typography>
       )}
 
-      {allClear && (
+      {noActiveAlerts && (
         <Box sx={{ py: 5, textAlign: "center" }}>
           <CheckCircleOutlined sx={{ fontSize: 28, color: "success.main" }} />
           <Typography
@@ -690,19 +686,19 @@ export function NeedsAttention({
             component="h3"
             sx={{ mt: 1, ...overviewTypography.majorHeading }}
           >
-            All clear
+            No active test alerts
           </Typography>
           <Typography
             variant="body2"
             color="text.secondary"
             sx={overviewTypography.primaryBody}
           >
-            No tests currently need attention.
+            No published test-level or recurring-pattern alerts need attention.
           </Typography>
         </Box>
       )}
 
-      {report && !allClear && (
+      {report && hasActiveItems && (
         <>
           {featured.map((pattern, index) => {
             const refreshStatus = report.pattern_refresh?.jobs?.[pattern.job_id ?? ""];
@@ -745,7 +741,7 @@ export function NeedsAttention({
                     <AttentionRow
                       key={pattern.id ?? pattern.job_id ?? pattern.subject}
                       to={jobPath(pattern.job_id ?? "")}
-                      destinationLabel={`View diagnosis for ${subject}`}
+                      destinationLabel={`View analysis for ${subject}`}
                       subject={subject}
                       summary={pattern.shared_root_cause || pattern.summary}
                       count={countLabel(pattern.builds_analyzed, "build")}
@@ -839,41 +835,41 @@ export function NeedsAttention({
             );
           })}
 
-          {resolvedPatterns.length > 0 && (
-            <Box component="section">
-              <DisclosureButton
-                label={disclosureLabel(
-                  resolvedOpen,
-                  resolvedPatterns.length,
-                  "resolved pattern",
-                  "resolved patterns",
-                )}
-                open={resolvedOpen}
-                controls="resolved-patterns"
-                onClick={() => setResolvedOpen((open) => !open)}
-              />
-              <Collapse id="resolved-patterns" in={resolvedOpen} timeout="auto" unmountOnExit>
-                {resolvedPatterns.map((pattern) => {
-                  const entry = pattern.id ? resolved.resolved[pattern.id] : undefined;
-                  const subject = shortJobName(pattern.subject, filePrefix);
-                  return (
-                    <AttentionRow
-                      key={pattern.id ?? pattern.job_id ?? pattern.subject}
-                      to={jobPath(pattern.job_id ?? "")}
-                      destinationLabel={`View resolved diagnosis for ${subject}`}
-                      subject={subject}
-                      summary={pattern.shared_root_cause || pattern.summary}
-                      detail={entry?.note}
-                      signal="Resolved"
-                      statusColor="success"
-                      muted
-                    />
-                  );
-                })}
-              </Collapse>
-            </Box>
-          )}
         </>
+      )}
+
+      {report && resolvedPatterns.length > 0 && (
+        <Box component="section">
+          <DisclosureButton
+            label={disclosureLabel(
+              resolvedOpen,
+              resolvedPatterns.length,
+              "dismissed pattern",
+              "dismissed patterns",
+            )}
+            open={resolvedOpen}
+            controls="dismissed-patterns"
+            onClick={() => setResolvedOpen((open) => !open)}
+          />
+          <Collapse id="dismissed-patterns" in={resolvedOpen} timeout="auto" unmountOnExit>
+            {resolvedPatterns.map((pattern) => {
+              const entry = pattern.id ? resolved.resolved[pattern.id] : undefined;
+              const subject = shortJobName(pattern.subject, filePrefix);
+              return (
+                <AttentionRow
+                  key={pattern.id ?? pattern.job_id ?? pattern.subject}
+                  to={jobPath(pattern.job_id ?? "")}
+                  destinationLabel={`View dismissed analysis for ${subject}`}
+                  subject={subject}
+                  summary={pattern.shared_root_cause || pattern.summary}
+                  detail={entry?.note}
+                  signal="Dismissed"
+                  muted
+                />
+              );
+            })}
+          </Collapse>
+        </Box>
       )}
     </Box>
   );
