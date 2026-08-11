@@ -213,6 +213,9 @@ func validAgentSandboxAnalyzerReportRecords(t *testing.T) ([]map[string]any, []m
 			"diagnosis_signal_hits": 3, "diagnosis_signal_total": 3,
 			"transient_classification_correct": true, "forbidden_checks_passed": 0, "forbidden_checks_total": 0,
 		}
+		if repetition == 1 {
+			common["test_source"] = ""
+		}
 		left := cloneReportRecord(common)
 		left["arm"] = "baseline"
 		left["trial_status"] = "usable"

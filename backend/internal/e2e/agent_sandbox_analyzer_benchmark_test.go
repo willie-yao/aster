@@ -492,6 +492,8 @@ func agentSandboxAnalyzerBenchmarkStatus(result agentanalysis.WorkspaceSandboxRe
 		return "no_result", "no_result"
 	case result.Telemetry.ResultAvailable && !result.Telemetry.FinalizationValid:
 		return "invalid_result", "invalid_result"
+	case result.Execution.TerminalState == engineruntime.TerminalFailed && strings.Contains(result.Execution.FailureReason, "invalid agent analysis result:"):
+		return "invalid_result", "invalid_result"
 	case errors.Is(err, engineruntime.ErrMalformedResult) || errors.Is(err, engineruntime.ErrResultContract):
 		return "invalid_result", "invalid_result"
 	default:
@@ -694,6 +696,7 @@ func TestAgentSandboxAnalyzerBenchmarkStatus(t *testing.T) {
 		}(), err: engineruntime.ErrCleanupPending, want: "cleanup_pending"},
 		{name: "no result", result: agentanalysis.WorkspaceSandboxResult{Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true}}, err: errors.New("missing"), want: "no_result"},
 		{name: "invalid", result: agentanalysis.WorkspaceSandboxResult{Telemetry: engineruntime.GenerateTelemetry{ResultAvailable: true}}, err: engineruntime.ErrMalformedResult, want: "invalid_result"},
+		{name: "validated failure envelope", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{TerminalState: engineruntime.TerminalFailed, FailureReason: "invalid agent analysis result: artifact citation 0 quote does not match"}, Telemetry: engineruntime.GenerateTelemetry{ResultAvailable: true, FinalizationValid: true}}, err: errors.New("workspace analysis failed"), want: "invalid_result"},
 		{name: "timeout", result: agentanalysis.WorkspaceSandboxResult{}, err: context.DeadlineExceeded, want: "timeout"},
 		{name: "runtime", result: agentanalysis.WorkspaceSandboxResult{}, err: errors.New("failed"), want: "runtime_failure"},
 	} {
