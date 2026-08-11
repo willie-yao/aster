@@ -50,10 +50,8 @@ func (b *boundedCapture) Truncated() bool {
 
 type openCodeMessage struct {
 	Info struct {
-		Role  string `json:"role"`
-		Error *struct {
-			Name string `json:"name"`
-		} `json:"error"`
+		Role  string                 `json:"role"`
+		Error *openCodeErrorEnvelope `json:"error"`
 	} `json:"info"`
 	Parts []struct {
 		Type     string   `json:"type"`
@@ -122,9 +120,11 @@ func parseOpenCodeTelemetry(raw []byte) (agentanalysis.WorkspaceUsage, agentanal
 		}
 		messageFailure := false
 		if message.Info.Role == "assistant" && message.Info.Error != nil {
-			if len(message.Info.Error.Name) > maxOpenCodeFieldBytes || !recognizedOpenCodeError(message.Info.Error.Name) {
+			sanitized, err := sanitizeOpenCodeError(message.Info.Error)
+			if err != nil {
 				return unavailable, telemetry, fmt.Errorf("telemetry error field is invalid")
 			}
+			telemetry.Error = sanitized
 			messageFailure = true
 			switch message.Info.Error.Name {
 			case "StructuredOutputError":
@@ -213,10 +213,14 @@ func parseOpenCodeTelemetry(raw []byte) (agentanalysis.WorkspaceUsage, agentanal
 			}
 		}
 	}
-	if telemetry.StepsUsed == 0 || usage.ModelRequests > telemetry.StepsUsed {
+	if usage.ModelRequests > telemetry.StepsUsed || (telemetry.StepsUsed == 0 && !telemetry.Error.Available) {
 		return unavailable, telemetry, fmt.Errorf("telemetry step usage is inconsistent")
 	}
-	if incompleteUsage {
+	telemetry.ProviderRequests = telemetry.StepsUsed
+	if telemetry.Error.Available && telemetry.ProviderRequests == 0 {
+		telemetry.ProviderRequests = 1
+	}
+	if incompleteUsage || telemetry.StepsUsed == 0 {
 		usage = agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable}
 	} else {
 		usage.CostAvailable = costKnown && positiveCost

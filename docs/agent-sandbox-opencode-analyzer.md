@@ -31,8 +31,7 @@ most 8 MiB, the snapshot contains at most 512 files, and total bytes are at most
 32 MiB. Every artifact path, size, and SHA-256 digest is sealed in the request.
 There is no semantic evidence ranking or excerpt selection.
 
-
-The executor also reads the bounded local OpenCode session result to aggregate private telemetry. It records request, token, cost-availability, step, tool, denial, failure, context-limit, timeout, and structured-output status only. Prompts, responses, reasoning, file contents, quotations, credentials, and raw OpenCode payloads are never persisted or printed. Missing, malformed, and truncated telemetry remain distinct from a valid zero count.
+The executor also reads the bounded local OpenCode session result to aggregate private telemetry. It records request, token, cost-availability, step, tool, denial, failure, context-limit, timeout, and structured-output status only. Request-shape telemetry includes the model, pinned outbound system-prompt bytes verified by the OpenCode 1.18.2 compatibility test, user-prompt bytes, the selected native tool-schema digest, response-schema digest, streaming and tool-choice modes, model limits, and the running OpenCode version. API failures retain only the error name, HTTP status, retryability, an engine-owned classification, an allowlisted metadata code, and bounded body-presence, size, and digest facts. Prompts, provider messages, response bodies, response-header values, URLs, model output, reasoning, file contents, quotations, credentials, and raw OpenCode payloads are never persisted or printed. Missing, malformed, and truncated telemetry remain distinct from a valid zero count.
 
 The Agent Sandbox deployment phase must mount both trees read-only. OpenCode may write only isolated runtime state under temporary storage. It returns one schema-constrained structured object. OpenCode 1.18.2 does not implement structured-output retries, so the executor does not request or infer them. The executor validates path and line ranges, reconstructs exact quotations from the sealed workspace, and writes exactly one canonical result file at `result/analysis.json`.
 
@@ -350,7 +349,15 @@ without this reduction is not a successful replacement.
 
 The executor configures one private primary agent named `analysis`; it does not
 use OpenCode's generic coding-oriented `build` agent. The agent receives static
-engine-owned diagnostic guidance and may use only native glob, grep, and StructuredOutput tools. The native read tool is disabled because OpenCode 1.18.2 can load nearby `AGENTS.md`, `CLAUDE.md`, or `CONTEXT.md` files into privileged system reminders. The agent uses bounded grep results for file content and line inspection. Shell, read, edit, write, patch, network, delegation, external skills, and external-directory access are denied by tool selection and permission rules. The executor, not the model, writes the canonical result file.
+engine-owned diagnostic guidance and uses native glob and grep for both sealed
+input trees. Native read is limited to `artifacts/*`; source reads remain denied
+because OpenCode 1.18.2 can load nearby `AGENTS.md`, `CLAUDE.md`, or `CONTEXT.md`
+files into privileged reminders. Prepared artifacts containing one of those
+instruction filenames are rejected before OpenCode starts. Shell access is limited to the exact read-only
+commands `git status --short`, `git log -1 --oneline`, and
+`git diff --no-ext-diff --stat`. Edit, write, patch, arbitrary shell, network,
+delegation, external skills, and external-directory access remain denied. The
+executor, not the model, writes the canonical result file.
 
 The execution request seals the configured model context and output limits and
 passes those exact values to OpenCode. The analyzer has no hard-coded context

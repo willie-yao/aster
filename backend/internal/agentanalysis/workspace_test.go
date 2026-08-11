@@ -110,7 +110,7 @@ func TestParseWorkspaceAnalysisValidatesCitationsAndMapsResult(t *testing.T) {
 	}
 	raw := `{
   "version": 1,
-  "contract_version": "agent-analysis-workspace-v4",
+  "contract_version": "agent-analysis-workspace-v5",
   "summary": "The controller rejected the request.",
   "is_transient": false,
   "root_cause": "The specific failure occurred before cleanup.",
@@ -184,7 +184,7 @@ func TestParseWorkspaceAnalysisRejectsGitMetadataCitation(t *testing.T) {
 	}
 	raw := `{
   "version": 1,
-  "contract_version": "agent-analysis-workspace-v4",
+  "contract_version": "agent-analysis-workspace-v5",
   "summary": "summary",
   "is_transient": false,
   "root_cause": "cause",

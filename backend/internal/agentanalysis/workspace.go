@@ -27,9 +27,9 @@ const (
 	WorkspaceRequestVersion  = 1
 	WorkspaceResultVersion   = 1
 	WorkspaceStageVersion    = 1
-	WorkspaceContractVersion = "agent-analysis-workspace-v4"
+	WorkspaceContractVersion = "agent-analysis-workspace-v5"
 	WorkspaceStageContract   = "agent-analysis-stage-v1"
-	WorkspacePromptVersion   = "agent-analysis-workspace-prompt-v4"
+	WorkspacePromptVersion   = "agent-analysis-workspace-prompt-v5"
 
 	WorkspaceSourceDir    = "source"
 	WorkspaceArtifactsDir = "artifacts"

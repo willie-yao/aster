@@ -168,6 +168,35 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	OpenCodeTelemetryAvailable   bool                                   `json:"opencode_telemetry_available"`
 	OpenCodeTelemetryStatus      string                                 `json:"opencode_telemetry_status"`
 	OpenCodeEventCount           int                                    `json:"opencode_event_count"`
+	ProviderRequests             int                                    `json:"provider_requests"`
+	RequestShapeAvailable        bool                                   `json:"request_shape_available"`
+	StreamingMode                string                                 `json:"streaming_mode,omitempty"`
+	RequestModelID               string                                 `json:"request_model_id,omitempty"`
+	SystemPromptBytesAvailable   bool                                   `json:"system_prompt_bytes_available"`
+	SystemPromptBytes            int                                    `json:"system_prompt_bytes,omitempty"`
+	UserPromptBytes              int                                    `json:"user_prompt_bytes,omitempty"`
+	ToolSchemaAvailable          bool                                   `json:"tool_schema_available"`
+	ToolSchemaCount              int                                    `json:"tool_schema_count,omitempty"`
+	ToolSchemaSHA256             string                                 `json:"tool_schema_sha256,omitempty"`
+	ResponseSchemaSHA256         string                                 `json:"response_schema_sha256,omitempty"`
+	ToolChoiceMode               string                                 `json:"tool_choice_mode,omitempty"`
+	RequestContextLimit          int                                    `json:"request_context_limit,omitempty"`
+	RequestOutputTokenLimit      int                                    `json:"request_output_token_limit,omitempty"`
+	OpenCodeVersion              string                                 `json:"opencode_version,omitempty"`
+	OpenCodeErrorAvailable       bool                                   `json:"opencode_error_available"`
+	OpenCodeErrorName            string                                 `json:"opencode_error_name,omitempty"`
+	OpenCodeHTTPStatusCode       int                                    `json:"opencode_http_status_code,omitempty"`
+	OpenCodeRetryableKnown       bool                                   `json:"opencode_retryable_known"`
+	OpenCodeRetryable            bool                                   `json:"opencode_retryable"`
+	OpenCodeErrorClassification  string                                 `json:"opencode_error_classification,omitempty"`
+	OpenCodeMetadataCode         string                                 `json:"opencode_metadata_code,omitempty"`
+	OpenCodeHeaderTimeout        bool                                   `json:"opencode_header_timeout"`
+	OpenCodeResponseStreamError  bool                                   `json:"opencode_response_stream_error"`
+	OpenCodeContextOverflow      bool                                   `json:"opencode_context_overflow"`
+	ResponseContentTypePresent   bool                                   `json:"response_content_type_present"`
+	ResponseBodyPresent          bool                                   `json:"response_body_present"`
+	ResponseBodyBytesBounded     int                                    `json:"response_body_bytes_bounded,omitempty"`
+	ResponseBodySHA256           string                                 `json:"response_body_sha256,omitempty"`
 	OpenCodeTools                []agentanalysis.WorkspaceToolTelemetry `json:"opencode_tools,omitempty"`
 	DeniedToolCount              int                                    `json:"denied_tool_count"`
 	ToolFailureCount             int                                    `json:"tool_failure_count"`
@@ -458,6 +487,37 @@ func agentSandboxAnalyzerRecordForResult(
 	record.OpenCodeTelemetryAvailable = telemetry.Available
 	record.OpenCodeTelemetryStatus = telemetry.Status
 	record.OpenCodeEventCount = telemetry.EventCount
+	record.ProviderRequests = telemetry.ProviderRequests
+	shape := telemetry.RequestShape
+	record.RequestShapeAvailable = shape.Available
+	record.StreamingMode = shape.StreamingMode
+	record.RequestModelID = shape.ModelID
+	record.SystemPromptBytesAvailable = shape.SystemPromptBytesAvailable
+	record.SystemPromptBytes = shape.SystemPromptBytes
+	record.UserPromptBytes = shape.UserPromptBytes
+	record.ToolSchemaAvailable = shape.ToolSchemaAvailable
+	record.ToolSchemaCount = shape.ToolCount
+	record.ToolSchemaSHA256 = shape.ToolSchemaSHA256
+	record.ResponseSchemaSHA256 = shape.ResponseSchemaSHA256
+	record.ToolChoiceMode = shape.ToolChoiceMode
+	record.RequestContextLimit = shape.ContextLimit
+	record.RequestOutputTokenLimit = shape.OutputTokenLimit
+	record.OpenCodeVersion = shape.OpenCodeVersion
+	errorTelemetry := telemetry.Error
+	record.OpenCodeErrorAvailable = errorTelemetry.Available
+	record.OpenCodeErrorName = errorTelemetry.Name
+	record.OpenCodeHTTPStatusCode = errorTelemetry.HTTPStatusCode
+	record.OpenCodeRetryableKnown = errorTelemetry.RetryableKnown
+	record.OpenCodeRetryable = errorTelemetry.Retryable
+	record.OpenCodeErrorClassification = errorTelemetry.Classification
+	record.OpenCodeMetadataCode = errorTelemetry.MetadataCode
+	record.OpenCodeHeaderTimeout = errorTelemetry.HeaderTimeout
+	record.OpenCodeResponseStreamError = errorTelemetry.ResponseStreamError
+	record.OpenCodeContextOverflow = errorTelemetry.ContextOverflow
+	record.ResponseContentTypePresent = errorTelemetry.ResponseContentTypePresent
+	record.ResponseBodyPresent = errorTelemetry.ResponseBodyPresent
+	record.ResponseBodyBytesBounded = errorTelemetry.ResponseBodyBytesBounded
+	record.ResponseBodySHA256 = errorTelemetry.ResponseBodySHA256
 	record.OpenCodeTools = append([]agentanalysis.WorkspaceToolTelemetry(nil), telemetry.Tools...)
 	record.DeniedToolCount = telemetry.DeniedToolCount
 	record.ToolFailureCount = telemetry.ToolFailureCount

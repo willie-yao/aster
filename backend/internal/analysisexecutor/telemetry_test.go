@@ -25,7 +25,7 @@ func TestParseOpenCodeTelemetrySanitizesSuccessfulUsage(t *testing.T) {
 	if !usage.Available || usage.ModelRequests != 1 || usage.InputTokens != 100 || usage.CachedInputTokens != 40 || usage.OutputTokens != 25 || !usage.CostAvailable || usage.CostUSD != "0.12500000" {
 		t.Fatalf("usage=%+v", usage)
 	}
-	if !telemetry.Available || telemetry.StepsUsed != 1 || telemetry.ToolFailureCount != 1 || telemetry.DeniedToolCount != 1 || len(telemetry.Tools) != 2 {
+	if !telemetry.Available || telemetry.ProviderRequests != 1 || telemetry.StepsUsed != 1 || telemetry.ToolFailureCount != 1 || telemetry.DeniedToolCount != 1 || len(telemetry.Tools) != 2 {
 		t.Fatalf("telemetry=%+v", telemetry)
 	}
 	encoded, err := json.Marshal(struct {
@@ -45,7 +45,7 @@ func TestParseOpenCodeTelemetrySanitizesSuccessfulUsage(t *testing.T) {
 func TestParseOpenCodeTelemetryRecordsStructuredAndContextErrors(t *testing.T) {
 	raw := []byte(`[
 		{"info":{"role":"assistant","cost":0,"tokens":{"input":10,"output":2,"cache":{"read":0}},"error":{"name":"StructuredOutputError"}},"parts":[{"type":"step-start"},{"type":"step-finish","cost":0,"tokens":{"input":10,"output":2,"cache":{"read":0}}}]},
-		{"info":{"role":"assistant","cost":0,"tokens":{"input":12,"output":1,"cache":{"read":3}},"error":{"name":"ContextOverflowError"}},"parts":[{"type":"step-start"},{"type":"step-finish","cost":0,"tokens":{"input":12,"output":1,"cache":{"read":3}}}]}
+		{"info":{"role":"assistant","cost":0,"tokens":{"input":12,"output":1,"cache":{"read":3}},"error":{"name":"ContextOverflowError","data":{"message":"context full"}}},"parts":[{"type":"step-start"},{"type":"step-finish","cost":0,"tokens":{"input":12,"output":1,"cache":{"read":3}}}]}
 	]`)
 	usage, telemetry, err := parseOpenCodeTelemetry(raw)
 	if err != nil {
@@ -133,14 +133,14 @@ func TestParseOpenCodeTelemetryRejectsMissingStepUsageFields(t *testing.T) {
 func TestParseOpenCodeTelemetryPreservesRecognizedIncompleteFailures(t *testing.T) {
 	for _, test := range []struct {
 		name         string
-		errorName    string
+		errorJSON    string
 		contextLimit bool
 	}{
-		{name: "context overflow", errorName: "ContextOverflowError", contextLimit: true},
-		{name: "provider failure", errorName: "APIError"},
+		{name: "context overflow", errorJSON: `{"name":"ContextOverflowError","data":{"message":"context full"}}`, contextLimit: true},
+		{name: "provider failure", errorJSON: `{"name":"APIError","data":{"message":"provider failed","isRetryable":true}}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			raw := []byte(`[{"info":{"role":"assistant","error":{"name":"` + test.errorName + `"}},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed"}}]}]`)
+			raw := []byte(`[{"info":{"role":"assistant","error":` + test.errorJSON + `},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed"}}]}]`)
 			usage, telemetry, err := parseOpenCodeTelemetry(raw)
 			if err != nil {
 				t.Fatal(err)
