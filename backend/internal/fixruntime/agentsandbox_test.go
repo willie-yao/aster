@@ -851,18 +851,19 @@ func TestAgentSandboxPreparedWorkspaceUsesImmutableInputMounts(t *testing.T) {
 	runtime.opts.StagerImage = "stager:test"
 	runtime.opts.StagerInputClaim = "analysis-input"
 	manifestHash := strings.Repeat("a", 64)
+	identityHash := strings.Repeat("b", 64)
 	pod := runtime.sandboxWorkloadPodSpec(agentsandbox.Spec{
 		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{}`),
 		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: manifestHash},
+		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: manifestHash, IdentityHash: identityHash},
 	})
 	object := runtime.sandboxObjectForSpec("analysis-test", agentsandbox.Spec{
 		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{}`),
 		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: manifestHash},
+		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: manifestHash, IdentityHash: identityHash},
 	}, []byte(strings.Repeat("b", 32)), "execution-1")
 	annotations := object["metadata"].(map[string]any)["annotations"].(map[string]any)
-	if annotations[agentSandboxPreparedAnnotation] != manifestHash {
+	if annotations[agentSandboxPreparedAnnotation] != manifestHash || annotations[agentSandboxPreparedIdentityAnnotation] != identityHash {
 		t.Fatalf("annotations=%+v", annotations)
 	}
 	if _, ok := pod["initContainers"]; ok {
@@ -897,12 +898,26 @@ func TestAgentSandboxWorkloadIdentityIncludesPreparedManifest(t *testing.T) {
 	left := agentsandbox.Spec{
 		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{"request":1}`),
 		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64)},
+		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("c", 64)},
 	}
 	right := left
-	right.PreparedWorkspace = &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("b", 64)}
+	right.PreparedWorkspace = &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("b", 64), IdentityHash: strings.Repeat("c", 64)}
 	if agentSandboxWorkloadHash(left, opts) == agentSandboxWorkloadHash(right, opts) {
 		t.Fatal("prepared manifest did not affect workload identity")
+	}
+}
+
+func TestAgentSandboxWorkloadIdentityIncludesPreparedWorkspaceIdentity(t *testing.T) {
+	opts := testAgentSandboxOptions()
+	left := agentsandbox.Spec{
+		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{"request":1}`),
+		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)},
+	}
+	right := left
+	right.PreparedWorkspace = &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("c", 64)}
+	if agentSandboxWorkloadHash(left, opts) == agentSandboxWorkloadHash(right, opts) {
+		t.Fatal("prepared workspace identity did not affect workload identity")
 	}
 }
 
@@ -936,7 +951,7 @@ func TestAgentSandboxPreparedWorkspaceRequiresOnlyInputClaim(t *testing.T) {
 	_, err := runtime.Run(t.Context(), agentsandbox.Spec{
 		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{}`),
 		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64)},
+		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("c", 64)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -948,7 +963,7 @@ func TestAgentSandboxPreparedWorkspaceRejectsMissingInputClaim(t *testing.T) {
 	_, err := runtime.Run(t.Context(), agentsandbox.Spec{
 		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{}`),
 		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64)},
+		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("c", 64)},
 	})
 	if err == nil || !strings.Contains(err.Error(), "prepared workspace requires an input claim") {
 		t.Fatalf("error=%v", err)

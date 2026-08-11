@@ -52,7 +52,7 @@ func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, o
 	if err != nil || !gitDir.IsDir() || gitDir.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("staged source must contain a standalone Git directory")
 	}
-	if err := agentanalysis.VerifySourceWorkspace(ctx, sourceInput, request.Source.Revision); err != nil {
+	if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceInput, request.Source.Revision, request.InputSourceModePolicy); err != nil {
 		return fmt.Errorf("verify staged source: %w", err)
 	}
 	if err := agentanalysis.VerifyArtifactFiles(artifactInput, request.Artifacts); err != nil {
@@ -67,13 +67,20 @@ func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, o
 	if err := cloneSource(ctx, sourceInput, sourceOutput, request.Source.Revision); err != nil {
 		return fmt.Errorf("clone staged source: %w", err)
 	}
+	modePolicy, err := agentanalysis.ConfigurePreparedSourceModePolicy(ctx, sourceOutput, request.Source.Revision)
+	if err != nil {
+		return fmt.Errorf("configure copied source mode policy: %w", err)
+	}
+	if modePolicy != request.OutputSourceModePolicy {
+		return fmt.Errorf("copied source mode policy does not match the sealed request")
+	}
 	if _, _, err := copyTree(ctx, artifactInput, artifactOutput, len(request.Artifacts), 8<<20, 32<<20); err != nil {
 		return fmt.Errorf("copy staged artifacts: %w", err)
 	}
 	if err := os.Mkdir(resultOutput, 0o700); err != nil {
 		return fmt.Errorf("create analysis result directory: %w", err)
 	}
-	if err := agentanalysis.VerifySourceWorkspace(ctx, sourceOutput, request.Source.Revision); err != nil {
+	if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceOutput, request.Source.Revision, request.OutputSourceModePolicy); err != nil {
 		return fmt.Errorf("verify copied source: %w", err)
 	}
 	if err := agentanalysis.VerifyArtifactFiles(artifactOutput, request.Artifacts); err != nil {

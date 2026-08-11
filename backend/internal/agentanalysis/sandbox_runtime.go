@@ -39,8 +39,16 @@ type WorkspaceSandboxResult struct {
 type WorkspaceSandboxRuntime struct {
 	Sandbox          agentsandbox.Runner
 	Gateway          engineruntime.ModelGatewayConfig
+	SourceModePolicy WorkspaceSourceModePolicy
 	Timeout          time.Duration
 	OutputLimitBytes int64
+}
+
+func (r *WorkspaceSandboxRuntime) sourceModePolicy() WorkspaceSourceModePolicy {
+	if r == nil || r.SourceModePolicy == "" {
+		return WorkspaceSourceModePreserve
+	}
+	return r.SourceModePolicy
 }
 
 // RuntimeIdentity seals the analysis contract to the Sandbox workload configuration.
@@ -49,13 +57,14 @@ func (r *WorkspaceSandboxRuntime) RuntimeIdentity() string {
 		return ""
 	}
 	data, _ := json.Marshal(struct {
-		ContractVersion string                           `json:"contract_version"`
-		PromptHash      string                           `json:"prompt_hash"`
-		Gateway         engineruntime.ModelGatewayConfig `json:"gateway"`
-		Timeout         string                           `json:"timeout"`
-		OutputLimit     int64                            `json:"output_limit_bytes"`
-		SandboxIdentity string                           `json:"sandbox_identity"`
-	}{WorkspaceContractVersion, WorkspaceSkillHash(), r.Gateway, r.Timeout.String(), r.OutputLimitBytes, r.Sandbox.RuntimeIdentity()})
+		ContractVersion  string                           `json:"contract_version"`
+		PromptHash       string                           `json:"prompt_hash"`
+		Gateway          engineruntime.ModelGatewayConfig `json:"gateway"`
+		SourceModePolicy WorkspaceSourceModePolicy        `json:"source_mode_policy"`
+		Timeout          string                           `json:"timeout"`
+		OutputLimit      int64                            `json:"output_limit_bytes"`
+		SandboxIdentity  string                           `json:"sandbox_identity"`
+	}{WorkspaceContractVersion, WorkspaceSkillHash(), r.Gateway, r.sourceModePolicy(), r.Timeout.String(), r.OutputLimitBytes, r.Sandbox.RuntimeIdentity()})
 	return hashString(string(data))
 }
 
@@ -67,13 +76,19 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 	if err := ValidateWorkspaceExecutionRequest(spec.Request); err != nil {
 		return result, err
 	}
+	if spec.Request.SourceModePolicy != r.sourceModePolicy() {
+		return result, fmt.Errorf("workspace analysis request does not match configured source mode policy")
+	}
 	if spec.Request.ModelGateway != r.Gateway || time.Duration(spec.Request.TimeoutSeconds)*time.Second != r.Timeout || spec.Request.OutputLimitBytes != r.OutputLimitBytes {
 		return result, fmt.Errorf("workspace analysis request does not match configured gateway, timeout, or output limit")
 	}
 	if err := ValidateWorkspaceStageRequest(spec.StageRequest, spec.Request.Manifest); err != nil {
 		return result, err
 	}
-	if err := VerifySourceWorkspace(ctx, spec.SourceRoot, spec.Request.Manifest.Source.Revision); err != nil {
+	if spec.StageRequest.InputSourceModePolicy != spec.Request.SourceModePolicy || spec.StageRequest.OutputSourceModePolicy != spec.Request.SourceModePolicy {
+		return result, fmt.Errorf("workspace stage and execution source mode policies differ")
+	}
+	if err := VerifyPreparedSourceWorkspace(ctx, spec.SourceRoot, spec.Request.Manifest.Source.Revision, spec.Request.SourceModePolicy); err != nil {
 		return result, err
 	}
 	if err := VerifyArtifactWorkspace(spec.ArtifactRoot, spec.Request.Manifest); err != nil {
@@ -87,7 +102,7 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 		Purpose: "analysis", ExecutionID: spec.ExecutionID,
 		RequestEnv: WorkspaceExecutionRequestEnv, Request: requestJSON,
 		Timeout: r.Timeout, OutputLimitBytes: r.OutputLimitBytes, WorkObserver: spec.WorkObserver,
-		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: spec.Request.Manifest.Hash},
+		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: spec.Request.Manifest.Hash, IdentityHash: spec.StageRequest.Hash},
 	}
 	if err := agentsandbox.ValidateSpec(sandboxSpec); err != nil {
 		return result, err

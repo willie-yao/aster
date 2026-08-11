@@ -24,11 +24,11 @@ import (
 
 const (
 	WorkspaceManifestVersion = 1
-	WorkspaceRequestVersion  = 1
+	WorkspaceRequestVersion  = 2
 	WorkspaceResultVersion   = 1
-	WorkspaceStageVersion    = 1
+	WorkspaceStageVersion    = 2
 	WorkspaceContractVersion = "agent-analysis-workspace-v5"
-	WorkspaceStageContract   = "agent-analysis-stage-v1"
+	WorkspaceStageContract   = "agent-analysis-stage-v2"
 	WorkspacePromptVersion   = "agent-analysis-workspace-prompt-v5"
 
 	WorkspaceSourceDir    = "source"
@@ -64,13 +64,15 @@ type WorkspaceManifest struct {
 
 // WorkspaceStageRequest binds staging to the sealed source and artifact snapshot.
 type WorkspaceStageRequest struct {
-	Version         int                            `json:"version"`
-	ContractVersion string                         `json:"contract_version"`
-	Hash            string                         `json:"hash"`
-	ManifestHash    string                         `json:"manifest_hash"`
-	BuildPrefix     string                         `json:"build_prefix"`
-	Source          sourceinvestigation.Repository `json:"source"`
-	Artifacts       []WorkspaceFile                `json:"artifacts"`
+	Version                int                            `json:"version"`
+	ContractVersion        string                         `json:"contract_version"`
+	Hash                   string                         `json:"hash"`
+	ManifestHash           string                         `json:"manifest_hash"`
+	BuildPrefix            string                         `json:"build_prefix"`
+	Source                 sourceinvestigation.Repository `json:"source"`
+	InputSourceModePolicy  WorkspaceSourceModePolicy      `json:"input_source_mode_policy"`
+	OutputSourceModePolicy WorkspaceSourceModePolicy      `json:"output_source_mode_policy"`
+	Artifacts              []WorkspaceFile                `json:"artifacts"`
 }
 
 // WorkspaceExecutionRequest is the non-secret request passed to one analyzer Sandbox.
@@ -82,6 +84,7 @@ type WorkspaceExecutionRequest struct {
 	PromptHash         string                           `json:"prompt_hash"`
 	ResultSchemaHash   string                           `json:"result_schema_hash"`
 	Manifest           WorkspaceManifest                `json:"manifest"`
+	SourceModePolicy   WorkspaceSourceModePolicy        `json:"source_mode_policy"`
 	ModelGateway       engineruntime.ModelGatewayConfig `json:"model_gateway"`
 	TimeoutSeconds     int64                            `json:"timeout_seconds"`
 	MaxSteps           int                              `json:"max_steps"`
@@ -146,15 +149,20 @@ func ValidateWorkspaceManifest(manifest WorkspaceManifest) error {
 	return nil
 }
 
-// NewWorkspaceStageRequest creates the exact stager input for one manifest.
+// NewWorkspaceStageRequest creates the default mode-preserving stager input.
 func NewWorkspaceStageRequest(manifest WorkspaceManifest) (WorkspaceStageRequest, error) {
+	return NewWorkspaceStageRequestWithSourceModePolicies(manifest, WorkspaceSourceModePreserve, WorkspaceSourceModePreserve)
+}
+
+// NewWorkspaceStageRequestWithSourceModePolicies seals the input and execution filesystem mode policies.
+func NewWorkspaceStageRequestWithSourceModePolicies(manifest WorkspaceManifest, inputPolicy, outputPolicy WorkspaceSourceModePolicy) (WorkspaceStageRequest, error) {
 	if err := ValidateWorkspaceManifest(manifest); err != nil {
 		return WorkspaceStageRequest{}, err
 	}
 	stage := WorkspaceStageRequest{
 		Version: WorkspaceStageVersion, ContractVersion: WorkspaceStageContract,
 		ManifestHash: manifest.Hash, BuildPrefix: manifest.Request.BuildPrefix,
-		Source: manifest.Source, Artifacts: slices.Clone(manifest.Artifacts),
+		Source: manifest.Source, InputSourceModePolicy: inputPolicy, OutputSourceModePolicy: outputPolicy, Artifacts: slices.Clone(manifest.Artifacts),
 	}
 	hash, err := workspaceStageDigest(stage)
 	if err != nil {
@@ -174,6 +182,9 @@ func ValidateWorkspaceStageRequestIdentity(stage WorkspaceStageRequest) error {
 	}
 	if err := sourceinvestigation.ValidateRepository(stage.Source); err != nil || !immutableSourceRevision.MatchString(stage.Source.Revision) {
 		return fmt.Errorf("workspace stage source identity is invalid")
+	}
+	if !validWorkspaceSourceModePolicy(stage.InputSourceModePolicy) || !validWorkspaceSourceModePolicy(stage.OutputSourceModePolicy) {
+		return fmt.Errorf("workspace stage source mode policy is invalid")
 	}
 	if err := validateWorkspaceFiles(stage.Artifacts); err != nil {
 		return err
@@ -299,8 +310,17 @@ func VerifyArtifactWorkspace(root string, manifest WorkspaceManifest) error {
 	return VerifyArtifactFiles(root, manifest.Artifacts)
 }
 
-// VerifySourceWorkspace confirms the checkout exactly matches the pinned commit.
+// VerifySourceWorkspace confirms a mode-preserving checkout exactly matches the pinned commit.
 func VerifySourceWorkspace(ctx context.Context, root, revision string) error {
+	return verifySourceWorkspace(ctx, root, revision, WorkspaceSourceModePreserve)
+}
+
+// VerifyPreparedSourceWorkspace confirms a prepared checkout matches its sealed filesystem mode policy.
+func VerifyPreparedSourceWorkspace(ctx context.Context, root, revision string, modePolicy WorkspaceSourceModePolicy) error {
+	return verifySourceWorkspace(ctx, root, revision, modePolicy)
+}
+
+func verifySourceWorkspace(ctx context.Context, root, revision string, modePolicy WorkspaceSourceModePolicy) error {
 	if !immutableSourceRevision.MatchString(revision) {
 		return fmt.Errorf("source revision is invalid")
 	}
@@ -308,6 +328,23 @@ func VerifySourceWorkspace(ctx context.Context, root, revision string) error {
 	info, err := os.Lstat(root)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("source workspace root is not a safe directory")
+	}
+	if !validWorkspaceSourceModePolicy(modePolicy) {
+		return fmt.Errorf("source workspace mode policy is invalid")
+	}
+	if err := validateSourceGitMetadata(root); err != nil {
+		return err
+	}
+	configuredMode, err := gitWorkspaceOutput(ctx, root, "config", "--local", "--bool", "--get", "core.filemode")
+	if err != nil {
+		return fmt.Errorf("inspect source workspace mode policy: %w", err)
+	}
+	wantFileMode := "true"
+	if modePolicy == WorkspaceSourceModeIgnoreExecutable {
+		wantFileMode = "false"
+	}
+	if strings.TrimSpace(string(configuredMode)) != wantFileMode {
+		return fmt.Errorf("source workspace mode policy changed")
 	}
 	head, err := gitWorkspaceOutput(ctx, root, "rev-parse", "HEAD")
 	if err != nil || strings.TrimSpace(string(head)) != revision {
@@ -375,17 +412,39 @@ func VerifySourceWorkspace(ctx context.Context, root, revision string) error {
 	return nil
 }
 
+func validateSourceGitMetadata(root string) error {
+	gitRoot := filepath.Join(root, ".git")
+	info, err := os.Lstat(gitRoot)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("source workspace Git metadata is not a safe directory")
+	}
+	return filepath.WalkDir(gitRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path != gitRoot && entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("source workspace Git metadata contains a symlink")
+		}
+		return nil
+	})
+}
+
 func gitWorkspaceOutput(ctx context.Context, root string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
 	command.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
 	return command.CombinedOutput()
 }
 
-// NewWorkspaceExecutionRequest seals runtime bounds and gateway identity.
+// NewWorkspaceExecutionRequest seals default mode-preserving runtime bounds and gateway identity.
 func NewWorkspaceExecutionRequest(manifest WorkspaceManifest, gateway engineruntime.ModelGatewayConfig, timeout time.Duration, maxSteps, modelContextTokens, modelOutputTokens int, outputLimit int64) (WorkspaceExecutionRequest, error) {
+	return NewWorkspaceExecutionRequestWithSourceModePolicy(manifest, WorkspaceSourceModePreserve, gateway, timeout, maxSteps, modelContextTokens, modelOutputTokens, outputLimit)
+}
+
+// NewWorkspaceExecutionRequestWithSourceModePolicy seals the prepared filesystem mode policy.
+func NewWorkspaceExecutionRequestWithSourceModePolicy(manifest WorkspaceManifest, modePolicy WorkspaceSourceModePolicy, gateway engineruntime.ModelGatewayConfig, timeout time.Duration, maxSteps, modelContextTokens, modelOutputTokens int, outputLimit int64) (WorkspaceExecutionRequest, error) {
 	request := WorkspaceExecutionRequest{
 		Version: WorkspaceRequestVersion, ContractVersion: WorkspaceContractVersion, PromptVersion: WorkspacePromptVersion,
-		PromptHash: WorkspaceSkillHash(), ResultSchemaHash: WorkspaceResultSchemaHash(), Manifest: manifest, ModelGateway: gateway, TimeoutSeconds: int64(timeout.Round(time.Second) / time.Second),
+		PromptHash: WorkspaceSkillHash(), ResultSchemaHash: WorkspaceResultSchemaHash(), Manifest: manifest, SourceModePolicy: modePolicy, ModelGateway: gateway, TimeoutSeconds: int64(timeout.Round(time.Second) / time.Second),
 		MaxSteps: maxSteps, ModelContextTokens: modelContextTokens, ModelOutputTokens: modelOutputTokens, OutputLimitBytes: outputLimit,
 	}
 	hash, err := workspaceRequestDigest(request)
@@ -406,6 +465,9 @@ func ValidateWorkspaceExecutionRequest(request WorkspaceExecutionRequest) error 
 	}
 	if err := ValidateWorkspaceManifest(request.Manifest); err != nil {
 		return err
+	}
+	if !validWorkspaceSourceModePolicy(request.SourceModePolicy) {
+		return fmt.Errorf("workspace analysis source mode policy is invalid")
 	}
 	if strings.TrimSpace(request.ModelGateway.Model) == "" || request.ModelGateway.ProtocolVersion != "openai-chat-completions-v1" {
 		return fmt.Errorf("workspace analysis model gateway is invalid")

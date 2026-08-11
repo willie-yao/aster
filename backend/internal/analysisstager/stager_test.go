@@ -34,6 +34,31 @@ func TestExecuteStagesVerifiedWorkspace(t *testing.T) {
 	}
 }
 
+func TestExecuteStagesIgnorePolicyInputToPreservePolicyOutput(t *testing.T) {
+	inputRoot, workspaceRoot, request := stagerFixtureWithSourceSetupAndPolicies(t, func(root string) {
+		if err := os.WriteFile(filepath.Join(root, "script.sh"), []byte("#!/bin/sh\necho fixture\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}, agentanalysis.WorkspaceSourceModeIgnoreExecutable, agentanalysis.WorkspaceSourceModePreserve)
+	inputSource := filepath.Join(inputRoot, request.ManifestHash, agentanalysis.WorkspaceSourceDir)
+	if mode := strings.Fields(runStagerGit(t, inputSource, "ls-files", "--stage", "script.sh"))[0]; mode != "100755" {
+		t.Fatalf("input index mode=%s", mode)
+	}
+	if info, err := os.Stat(filepath.Join(inputSource, "script.sh")); err != nil || info.Mode().Perm()&0o111 != 0 {
+		t.Fatalf("input worktree mode=%v err=%v", info, err)
+	}
+	if err := Execute(t.Context(), request, Options{InputRoot: inputRoot, WorkspaceRoot: workspaceRoot}); err != nil {
+		t.Fatal(err)
+	}
+	outputSource := filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir)
+	if err := agentanalysis.VerifyPreparedSourceWorkspace(t.Context(), outputSource, request.Source.Revision, agentanalysis.WorkspaceSourceModePreserve); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(outputSource, "script.sh")); err != nil || info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("output worktree mode=%v err=%v", info, err)
+	}
+}
+
 func TestExecuteStagesTrackedInternalSourceSymlink(t *testing.T) {
 	inputRoot, workspaceRoot, request := stagerFixtureWithSourceSetup(t, func(root string) {
 		if err := os.Symlink(filepath.Join("pkg", "controller.go"), filepath.Join(root, "controller-link.go")); err != nil {
@@ -110,6 +135,11 @@ func stagerFixture(t *testing.T) (string, string, agentanalysis.WorkspaceStageRe
 
 func stagerFixtureWithSourceSetup(t *testing.T, setup func(string)) (string, string, agentanalysis.WorkspaceStageRequest) {
 	t.Helper()
+	return stagerFixtureWithSourceSetupAndPolicies(t, setup, agentanalysis.WorkspaceSourceModePreserve, agentanalysis.WorkspaceSourceModePreserve)
+}
+
+func stagerFixtureWithSourceSetupAndPolicies(t *testing.T, setup func(string), inputPolicy, outputPolicy agentanalysis.WorkspaceSourceModePolicy) (string, string, agentanalysis.WorkspaceStageRequest) {
+	t.Helper()
 	inputRoot := t.TempDir()
 	pending := filepath.Join(inputRoot, "pending")
 	sourceRoot := filepath.Join(pending, agentanalysis.WorkspaceSourceDir)
@@ -136,6 +166,14 @@ func stagerFixtureWithSourceSetup(t *testing.T, setup func(string)) (string, str
 	runStagerGit(t, sourceRoot, "add", ".")
 	runStagerGit(t, sourceRoot, "commit", "-qm", "fixture")
 	revision := strings.TrimSpace(runStagerGit(t, sourceRoot, "rev-parse", "HEAD"))
+	if inputPolicy == agentanalysis.WorkspaceSourceModeIgnoreExecutable {
+		if err := os.Chmod(filepath.Join(sourceRoot, "script.sh"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := agentanalysis.SetPreparedSourceModePolicy(t.Context(), sourceRoot, inputPolicy); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(artifactRoot, "logs", "build.log"), []byte("setup\nartifact-only-marker specific failure\ncleanup\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +190,7 @@ func stagerFixtureWithSourceSetup(t *testing.T, setup func(string)) (string, str
 	if err != nil {
 		t.Fatal(err)
 	}
-	stage, err := agentanalysis.NewWorkspaceStageRequest(manifest)
+	stage, err := agentanalysis.NewWorkspaceStageRequestWithSourceModePolicies(manifest, inputPolicy, outputPolicy)
 	if err != nil {
 		t.Fatal(err)
 	}

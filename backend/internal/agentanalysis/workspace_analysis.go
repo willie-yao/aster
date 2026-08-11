@@ -337,7 +337,7 @@ func ValidateWorkspaceExecutionResult(result WorkspaceExecutionResult, request W
 		if strings.TrimSpace(result.FailureReason) != "" || result.Analysis == nil {
 			return result, fmt.Errorf("successful workspace execution must contain only an analysis")
 		}
-		if err := VerifySourceWorkspace(context.Background(), sourceRoot, request.Manifest.Source.Revision); err != nil {
+		if err := VerifyPreparedSourceWorkspace(context.Background(), sourceRoot, request.Manifest.Source.Revision, request.SourceModePolicy); err != nil {
 			return result, err
 		}
 		if err := VerifyArtifactWorkspace(artifactRoot, request.Manifest); err != nil {
