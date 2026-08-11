@@ -16,6 +16,7 @@ type appArmorCapability uint8
 const (
 	appArmorRuntimeDefault appArmorCapability = iota
 	appArmorUnavailableForKindTest
+	agentSandboxResultVolumeLimit = "4Mi"
 )
 
 func (c appArmorCapability) String() string {
@@ -80,9 +81,8 @@ func (r *AgentSandboxRuntime) sandboxWorkloadPodSpec(spec agentsandbox.Spec) map
 	case spec.StagedWorkspace != nil:
 		stage := spec.StagedWorkspace
 		container["volumeMounts"] = []any{
-			map[string]any{"name": "workspace", "mountPath": agentsandbox.StagedWorkspaceSourcePath, "subPath": "source", "readOnly": true},
-			map[string]any{"name": "workspace", "mountPath": agentsandbox.StagedWorkspaceArtifactsPath, "subPath": "artifacts", "readOnly": true},
-			map[string]any{"name": "workspace", "mountPath": agentsandbox.StagedWorkspaceResultPath, "subPath": "result"},
+			map[string]any{"name": "workspace", "mountPath": agentsandbox.StagedWorkspaceRoot, "readOnly": true},
+			map[string]any{"name": "result", "mountPath": agentsandbox.StagedWorkspaceResultPath},
 			map[string]any{"name": "executor-tmp", "mountPath": "/tmp"},
 		}
 		podSpec["initContainers"] = []any{map[string]any{
@@ -126,6 +126,7 @@ func stagedReadOnlyWorkspaceVolumes(sizeLimit, inputClaim string) []any {
 	return []any{
 		map[string]any{"name": "input", "persistentVolumeClaim": map[string]any{"claimName": inputClaim, "readOnly": true}},
 		map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": sizeLimit}},
+		map[string]any{"name": "result", "emptyDir": map[string]any{"sizeLimit": agentSandboxResultVolumeLimit}},
 		map[string]any{"name": "executor-tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
 		map[string]any{"name": "stager-tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
 	}

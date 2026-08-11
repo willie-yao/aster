@@ -81,8 +81,8 @@ Exit gate:
 
 - Reuse `agentsandbox.Runner` and the existing Kubernetes lifecycle adapter.
 - Add one immutable stager init-container request.
-- Mount `source/` and `artifacts/` read-only, `result/` read-write, and temporary
-  state separately in the executor.
+- Mount the staged workspace read-only, overlay a separate writable `result/`
+  volume, and keep temporary state separate in the executor.
 - Bind both requests, both images, resources, and the complete Pod shape to the
   execution identity.
 - Add the private analyzer adapter and preserve validated results when cleanup is
