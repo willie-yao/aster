@@ -197,8 +197,8 @@ payloads, or source excerpts.
 The committed manifest is:
 
 ```text
-backend/internal/e2e/testdata/benchmarks/remediation-investigation-v2.json
-SHA-256: b051b3151c74bcf526626241580b82f256b626b661123d3ed044a79133c691ec
+backend/internal/e2e/testdata/benchmarks/remediation-investigation-v3.json
+SHA-256: 84620efb7e127207d6891bdfaa8614cb9454213d0f1155d32b60a2cc97dace72
 ```
 
 It freezes 12 categories:
@@ -220,8 +220,9 @@ The external-dependency and wrong-repository cases expect
 `insufficient_evidence` until a typed ownership identity can be independently
 verified.
 
-Hermetic tests validate the manifest, hashes, exact category coverage, two
-distinct positive target kinds, discriminated candidate contracts, evidence ID
+Hermetic tests validate the manifest, hashes, exact category coverage, frozen
+Prow job identity, two distinct positive target kinds, discriminated candidate
+contracts, evidence ID
 reconstruction, cache preservation, read floors, deterministic source-state
 checks, and scoring controls.
 

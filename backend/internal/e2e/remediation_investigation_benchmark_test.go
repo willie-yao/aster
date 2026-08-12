@@ -21,13 +21,14 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationinvestigation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
 const (
-	remediationInvestigationManifest       = "testdata/benchmarks/remediation-investigation-v2.json"
-	remediationInvestigationManifestSHA256 = "b051b3151c74bcf526626241580b82f256b626b661123d3ed044a79133c691ec"
+	remediationInvestigationManifest       = "testdata/benchmarks/remediation-investigation-v3.json"
+	remediationInvestigationManifestSHA256 = "84620efb7e127207d6891bdfaa8614cb9454213d0f1155d32b60a2cc97dace72"
 )
 
 type remediationBenchmarkManifest struct {
@@ -38,6 +39,8 @@ type remediationBenchmarkManifest struct {
 type remediationBenchmarkCase struct {
 	ID                   string                                     `json:"id"`
 	Category             string                                     `json:"category"`
+	JobID                string                                     `json:"job_id"`
+	JobName              string                                     `json:"job_name"`
 	RootCause            string                                     `json:"root_cause"`
 	Confidence           string                                     `json:"confidence"`
 	Repository           sourceinvestigation.Repository             `json:"repository"`
@@ -103,7 +106,7 @@ func TestRemediationInvestigationBenchmarkManifest(t *testing.T) {
 	if got := hex.EncodeToString(sum[:]); got != remediationInvestigationManifestSHA256 {
 		t.Fatalf("manifest hash=%s want=%s", got, remediationInvestigationManifestSHA256)
 	}
-	if manifest.Version != 2 || len(manifest.Cases) != 12 {
+	if manifest.Version != 3 || len(manifest.Cases) != 12 {
 		t.Fatalf("version=%d cases=%d", manifest.Version, len(manifest.Cases))
 	}
 	wantCategories := map[string]bool{
@@ -131,6 +134,9 @@ func TestRemediationInvestigationBenchmarkManifest(t *testing.T) {
 		if len(benchmarkCase.SourceFiles) == 0 || len(benchmarkCase.FailureSourceFiles) == 0 {
 			t.Fatalf("case %s must freeze current and failure source trees", benchmarkCase.ID)
 		}
+		if strings.TrimSpace(benchmarkCase.JobID) == "" || strings.TrimSpace(benchmarkCase.JobName) == "" {
+			t.Fatalf("case %s must freeze exact job identity", benchmarkCase.ID)
+		}
 		input := remediationCaseInput(benchmarkCase, strings.Repeat("d", 16))
 		if err := remediationinvestigation.ValidateFrozenInput(input); err != nil {
 			t.Fatalf("case %s frozen input: %v", benchmarkCase.ID, err)
@@ -151,6 +157,25 @@ func TestRemediationInvestigationBenchmarkManifest(t *testing.T) {
 				t.Fatalf("case %s actionable expectation has incomplete proposal identity", benchmarkCase.ID)
 			}
 			actionableKinds[benchmarkCase.Expected.Target.Intent] = true
+			if benchmarkCase.Expected.Target.Intent == models.RemediationIntentSetJobEnvironment {
+				if benchmarkCase.JobName != benchmarkCase.Expected.Target.Job || benchmarkCase.JobID != benchmarkCase.Expected.Target.Job {
+					t.Fatalf("case %s Prow job identity does not match expected target", benchmarkCase.ID)
+				}
+				content := benchmarkCase.SourceFiles[benchmarkCase.Expected.Target.Path]
+				definitions, err := jobconfig.ParseCatalog([]byte(content), benchmarkCase.Expected.Target.Path)
+				if err != nil {
+					t.Fatalf("case %s Prow catalog: %v", benchmarkCase.ID, err)
+				}
+				matches := 0
+				for _, definition := range definitions {
+					if definition.Name == benchmarkCase.JobName && definition.ID() == benchmarkCase.JobID {
+						matches++
+					}
+				}
+				if matches != 1 {
+					t.Fatalf("case %s frozen Prow job identity matched %d definitions", benchmarkCase.ID, matches)
+				}
+			}
 			wrongRepository := *benchmarkCase.Expected.Repository
 			wrongRepository.Owner = "wrong-owner"
 			if scoreRemediationBenchmark(benchmarkCase.Expected, remediationBenchmarkActual{
@@ -424,8 +449,8 @@ func remediationCaseInput(benchmarkCase remediationBenchmarkCase, providerFinger
 	consumerPrompt := "Use pinned source and recurring-build evidence. Prefer a safe non-actionable classification over an invented target."
 	return remediationinvestigation.FrozenInput{
 		PatternID: patternID, PatternHash: strings.Repeat(benchmarkShortHash("pattern-hash\x00"+benchmarkCase.ID), 4),
-		CausalGroupID: group.ID, CausalGroupHash: group.ContentHash, JobID: "benchmark-" + benchmarkCase.ID,
-		JobName:    "benchmark-" + benchmarkCase.ID,
+		CausalGroupID: group.ID, CausalGroupHash: group.ContentHash, JobID: benchmarkCase.JobID,
+		JobName:    benchmarkCase.JobName,
 		Recurrence: models.PatternRecurrenceSharedCause, Group: group,
 		Builds: buildRefs, Analyses: analyses, RelevantFiles: benchmarkCase.RelevantFiles,
 		InvestigationSource: benchmarkCase.Repository, DestinationPolicy: benchmarkCase.DestinationPolicy,
