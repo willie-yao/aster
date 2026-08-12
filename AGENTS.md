@@ -86,6 +86,7 @@ backend/                         Go 1.25
     analysischat/                Bounded conversations about a published analysis
     corrections/                 Promotes reviewed chat revisions without mutating output
     sourceinvestigation/         Read-only source investigation contracts
+    remediationinvestigation/    Frozen causal-group remediation investigation + private cache
     aitest/                      Record/replay chat-completions server for tests
 
     -- write actions (issues, fix PRs, resolution) --
@@ -362,6 +363,7 @@ live deploy.
 - `docs/github-pages.md` - GitHub Actions and Pages deployment.
 - `docs/troubleshooting.md` - first-deploy failures and checks.
 - `docs/agentic.md` - agentic mode, tool docs, floors, critique gate.
+- `docs/remediation-investigation.md` - private causal-group investigation contracts, cache, and benchmark.
 - `docs/skills.md` - consumer-side recipe registry format + hashing.
 - `docs/writing-prompts.md` - how `prompts/system.md` slots into the
   composed prompt and what makes a good project addendum.

@@ -11,6 +11,15 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
 )
 
+// ToolLoopEvent is content-free telemetry for one dispatched tool call.
+type ToolLoopEvent struct {
+	Name            string
+	Path            string
+	BytesFetched    int
+	Error           bool
+	BudgetExhausted bool
+}
+
 // ToolLoopOptions tunes the generic tool loop. All fields are optional; a zero
 // MaxIters falls back to a small default.
 type ToolLoopOptions struct {
@@ -30,6 +39,8 @@ type ToolLoopOptions struct {
 	// PropagateFinalizeError returns a forced-finalization model error instead
 	// of preserving the generic tool loop's best-effort empty result.
 	PropagateFinalizeError bool
+	// Observe receives content-free telemetry after each tool dispatch.
+	Observe func(ToolLoopEvent)
 }
 
 // toolLoopBudget is a large per-dispatch budget handed to tools that gate on
@@ -131,12 +142,20 @@ func (c *Client) ToolLoop(
 		messages = append(messages, skippedOutputs...)
 
 		for _, tc := range toolCalls {
-			result := dispatchToolLoop(ctx, reg, env, tc)
+			payload, result := dispatchToolLoop(ctx, reg, env, tc)
 			calls++
+			if opts.Observe != nil {
+				_, hasError := result.Payload["error"]
+				opts.Observe(ToolLoopEvent{
+					Name: tc.Function.Name, Path: toolLoopPath(tc.Function.Arguments),
+					BytesFetched: result.BytesFetched, Error: hasError,
+					BudgetExhausted: result.BudgetExhausted,
+				})
+			}
 			messages = append(messages, modelMessage{
 				Role:       "tool",
 				ToolCallID: tc.ID,
-				Content:    strPtr(result),
+				Content:    strPtr(payload),
 			})
 		}
 	}
@@ -184,10 +203,20 @@ func (c *Client) runToolLoopFinalizeRound(ctx context.Context, messages []modelM
 	return *resp.Message.Content, nil
 }
 
+func toolLoopPath(arguments string) string {
+	var value struct {
+		Path string `json:"path"`
+	}
+	if json.Unmarshal([]byte(arguments), &value) != nil {
+		return ""
+	}
+	return value.Path
+}
+
 // dispatchToolLoop routes one tool call through the registry and returns the
 // capped JSON payload to hand back to the model. Tools that gate on remaining
 // bytes see a large budget since the loop bounds work by iteration count.
-func dispatchToolLoop(ctx context.Context, reg *tools.Registry, env *tools.Env, tc modelToolCall) string {
+func dispatchToolLoop(ctx context.Context, reg *tools.Registry, env *tools.Env, tc modelToolCall) (string, tools.Result) {
 	env.RemainingModelBytes = toolLoopBudget
 	env.RemainingGCSBytes = toolLoopBudget
 	result := reg.Dispatch(ctx, env, tc.Function.Name, json.RawMessage(tc.Function.Arguments))
@@ -202,5 +231,5 @@ func dispatchToolLoop(ctx context.Context, reg *tools.Registry, env *tools.Env, 
 		log.Printf("    🔧 %s(%s) [%s]", tc.Function.Name, textutil.Truncate(tc.Function.Arguments, 140), flag)
 	}
 	out, _ := json.Marshal(result.Payload)
-	return capJSON(string(out))
+	return capJSON(string(out)), result
 }
