@@ -37,6 +37,56 @@ func TestBuildWorkspaceEvidenceHandlesUsesObservedLinesOnly(t *testing.T) {
 	}
 }
 
+func TestBuildWorkspaceEvidenceHandlesReportsBoundedDiagnostics(t *testing.T) {
+	sourceRoot, artifactRoot, _, _ := workspaceTestInputs(t)
+	workspaceRoot := t.TempDir()
+	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
+		t.Fatal(err)
+	}
+	ranges := make([]WorkspaceEvidenceRange, maxWorkspaceEvidenceRanges+1)
+	for index := range ranges {
+		ranges[index] = WorkspaceEvidenceRange{Root: WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 1, LineEnd: 1}
+	}
+	_, diagnostics, err := BuildWorkspaceEvidenceHandles(workspaceRoot, ranges)
+	if err == nil {
+		t.Fatal("overflowing ranges were accepted")
+	}
+	if diagnostics.Status != WorkspaceEvidenceHandlesRejected || diagnostics.ObservedRangeCount != maxWorkspaceEvidenceRanges+1 || diagnostics.DroppedRangeCount != maxWorkspaceEvidenceRanges+1 || !diagnostics.Truncated || !slices.Equal(diagnostics.Codes, []string{WorkspaceEvidenceRangeOverflow}) {
+		t.Fatalf("diagnostics=%+v", diagnostics)
+	}
+}
+
+func TestBuildWorkspaceEvidenceHandlesClassifiesRejectedRanges(t *testing.T) {
+	sourceRoot, artifactRoot, _, _ := workspaceTestInputs(t)
+	workspaceRoot := t.TempDir()
+	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name       string
+		rangeValue WorkspaceEvidenceRange
+		code       string
+	}{
+		{name: "root", rangeValue: WorkspaceEvidenceRange{Root: "other", Path: "logs/build.log", LineStart: 1, LineEnd: 1}, code: WorkspaceEvidenceRangeRootInvalid},
+		{name: "path", rangeValue: WorkspaceEvidenceRange{Root: WorkspaceArtifactsDir, Path: "../escape.log", LineStart: 1, LineEnd: 1}, code: WorkspaceEvidenceRangePathInvalid},
+		{name: "unreadable", rangeValue: WorkspaceEvidenceRange{Root: WorkspaceArtifactsDir, Path: "missing.log", LineStart: 1, LineEnd: 1}, code: WorkspaceEvidenceRangeUnreadable},
+		{name: "line", rangeValue: WorkspaceEvidenceRange{Root: WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 99, LineEnd: 99}, code: WorkspaceEvidenceRangeLineInvalid},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, diagnostics, err := BuildWorkspaceEvidenceHandles(workspaceRoot, []WorkspaceEvidenceRange{test.rangeValue})
+			if err == nil || diagnostics.Status != WorkspaceEvidenceHandlesRejected || !slices.Equal(diagnostics.Codes, []string{test.code}) {
+				t.Fatalf("err=%v diagnostics=%+v", err, diagnostics)
+			}
+		})
+	}
+}
+
 func TestBuildWorkspaceEvidenceHandlesPrioritizesFocusedRanges(t *testing.T) {
 	sourceRoot, artifactRoot, _, _ := workspaceTestInputs(t)
 	var content strings.Builder
@@ -71,7 +121,7 @@ func TestBuildWorkspaceEvidenceHandlesRejectsUnsafeRanges(t *testing.T) {
 		{{Root: WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 0, LineEnd: 1}},
 		{{Root: WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 1, LineEnd: 99}},
 	} {
-		if _, err := BuildWorkspaceEvidenceHandles(workspaceRoot, ranges); err == nil {
+		if _, _, err := BuildWorkspaceEvidenceHandles(workspaceRoot, ranges); err == nil {
 			t.Fatalf("ranges were accepted: %+v", ranges)
 		}
 	}
@@ -94,7 +144,7 @@ func workspaceTestHandles(t *testing.T, sourceRoot, artifactRoot string, ranges 
 	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
 		t.Fatal(err)
 	}
-	handles, err := BuildWorkspaceEvidenceHandles(workspaceRoot, ranges)
+	handles, _, err := BuildWorkspaceEvidenceHandles(workspaceRoot, ranges)
 	if err != nil {
 		t.Fatal(err)
 	}

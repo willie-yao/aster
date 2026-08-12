@@ -292,7 +292,8 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 		telemetry.Tools = append(telemetry.Tools, agentanalysis.WorkspaceToolTelemetry{Name: name, Count: value.count, Failures: value.failures, Denied: value.denied})
 	}
 	if workDir != "" {
-		handles, err := agentanalysis.BuildWorkspaceEvidenceHandles(workDir, facts.EvidenceRanges)
+		handles, diagnostics, err := agentanalysis.BuildWorkspaceEvidenceHandles(workDir, facts.EvidenceRanges)
+		telemetry.EvidenceHandles = diagnostics
 		if err != nil {
 			return unavailable, telemetry, facts, fmt.Errorf("telemetry evidence handles are invalid")
 		}

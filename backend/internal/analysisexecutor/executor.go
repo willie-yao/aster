@@ -451,6 +451,7 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 		result.Usage.Status = telemetryStatusForError(evidenceTelemetryErr)
 		result.Telemetry.Status = result.Usage.Status
 		result.Telemetry.RequestShape = evidenceShape
+		result.Telemetry.EvidenceHandles = evidenceTelemetry.EvidenceHandles
 	}
 	applyOpenCodePromptError(&result, evidenceErr, 0, true, false)
 	if evidenceErr != nil {

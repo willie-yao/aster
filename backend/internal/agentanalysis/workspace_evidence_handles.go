@@ -13,10 +13,35 @@ const (
 	WorkspaceEvidenceArtifact = "artifact"
 	WorkspaceEvidenceSource   = "source"
 
+	WorkspaceEvidenceHandlesAccepted             = "accepted"
+	WorkspaceEvidenceHandlesAcceptedWithWarnings = "accepted_with_warnings"
+	WorkspaceEvidenceHandlesRejected             = "rejected"
+
+	WorkspaceEvidenceRangeOverflow          = "evidence_range_overflow"
+	WorkspaceEvidenceRangeRootInvalid       = "evidence_range_root_invalid"
+	WorkspaceEvidenceRangePathInvalid       = "evidence_range_path_invalid"
+	WorkspaceEvidenceRangeUnreadable        = "evidence_range_unreadable"
+	WorkspaceEvidenceRangeLineInvalid       = "evidence_range_line_invalid"
+	WorkspaceEvidenceHandleNoncanonical     = "evidence_handle_noncanonical"
+	WorkspaceEvidenceHandleDuplicate        = "evidence_handle_duplicate"
+	WorkspaceEvidenceHandleTruncated        = "evidence_handle_truncated"
+	WorkspaceEvidenceArtifactHandlesMissing = "evidence_artifact_handles_missing"
+
 	maxWorkspaceEvidenceRanges     = 512
 	maxWorkspaceEvidencePerRoot    = 64
 	maxWorkspaceFinalizationPrompt = 64 << 10
 )
+
+// WorkspaceEvidenceHandleDiagnostics contains bounded content-free build facts.
+type WorkspaceEvidenceHandleDiagnostics struct {
+	Status                      string   `json:"status,omitempty"`
+	ObservedRangeCount          int      `json:"observed_range_count,omitempty"`
+	AcceptedArtifactHandleCount int      `json:"accepted_artifact_handle_count,omitempty"`
+	AcceptedSourceHandleCount   int      `json:"accepted_source_handle_count,omitempty"`
+	DroppedRangeCount           int      `json:"dropped_range_count,omitempty"`
+	Truncated                   bool     `json:"truncated,omitempty"`
+	Codes                       []string `json:"codes,omitempty"`
+}
 
 // WorkspaceEvidenceRange is one exact file range observed by a successful tool.
 type WorkspaceEvidenceRange struct {
@@ -36,15 +61,31 @@ type WorkspaceEvidenceHandle struct {
 }
 
 // BuildWorkspaceEvidenceHandles derives bounded line handles from observed ranges.
-func BuildWorkspaceEvidenceHandles(workspaceRoot string, ranges []WorkspaceEvidenceRange) ([]WorkspaceEvidenceHandle, error) {
+func BuildWorkspaceEvidenceHandles(workspaceRoot string, ranges []WorkspaceEvidenceRange) ([]WorkspaceEvidenceHandle, WorkspaceEvidenceHandleDiagnostics, error) {
+	diagnostics := WorkspaceEvidenceHandleDiagnostics{ObservedRangeCount: min(len(ranges), maxWorkspaceEvidenceRanges+1)}
 	if len(ranges) > maxWorkspaceEvidenceRanges {
-		return nil, fmt.Errorf("workspace evidence ranges exceed the bound")
+		diagnostics.Status = WorkspaceEvidenceHandlesRejected
+		diagnostics.DroppedRangeCount = diagnostics.ObservedRangeCount
+		diagnostics.Truncated = true
+		diagnostics.Codes = []string{WorkspaceEvidenceRangeOverflow}
+		return nil, diagnostics, fmt.Errorf("workspace evidence ranges exceed the bound")
 	}
 	ranges = slices.Clone(ranges)
 	for index := range ranges {
 		ranges[index].Path = strings.TrimSpace(ranges[index].Path)
-		if !validWorkspaceEvidenceRoot(ranges[index].Root) || !safeWorkspaceSourcePath(ranges[index].Path) || ranges[index].LineStart < 1 || ranges[index].LineEnd < ranges[index].LineStart {
-			return nil, fmt.Errorf("workspace evidence range is invalid")
+		switch {
+		case !validWorkspaceEvidenceRoot(ranges[index].Root):
+			diagnostics.Status = WorkspaceEvidenceHandlesRejected
+			diagnostics.Codes = []string{WorkspaceEvidenceRangeRootInvalid}
+			return nil, diagnostics, fmt.Errorf("workspace evidence range root is invalid")
+		case !safeWorkspaceSourcePath(ranges[index].Path):
+			diagnostics.Status = WorkspaceEvidenceHandlesRejected
+			diagnostics.Codes = []string{WorkspaceEvidenceRangePathInvalid}
+			return nil, diagnostics, fmt.Errorf("workspace evidence range path is invalid")
+		case ranges[index].LineStart < 1 || ranges[index].LineEnd < ranges[index].LineStart:
+			diagnostics.Status = WorkspaceEvidenceHandlesRejected
+			diagnostics.Codes = []string{WorkspaceEvidenceRangeLineInvalid}
+			return nil, diagnostics, fmt.Errorf("workspace evidence range line is invalid")
 		}
 	}
 	sort.Slice(ranges, func(i, j int) bool {
@@ -71,14 +112,18 @@ func BuildWorkspaceEvidenceHandles(workspaceRoot string, ranges []WorkspaceEvide
 		root := filepath.Join(workspaceRoot, observed.Root)
 		content, err := readWorkspaceText(root, observed.Path, maxWorkspaceFileBytes)
 		if err != nil {
-			return nil, fmt.Errorf("workspace evidence range path is invalid")
+			diagnostics.Status = WorkspaceEvidenceHandlesRejected
+			diagnostics.Codes = []string{WorkspaceEvidenceRangeUnreadable}
+			return nil, diagnostics, fmt.Errorf("workspace evidence range path is unreadable")
 		}
 		lines := strings.Split(content, "\n")
 		if len(lines) > 0 && lines[len(lines)-1] == "" {
 			lines = lines[:len(lines)-1]
 		}
 		if observed.LineEnd > len(lines) {
-			return nil, fmt.Errorf("workspace evidence range line is invalid")
+			diagnostics.Status = WorkspaceEvidenceHandlesRejected
+			diagnostics.Codes = []string{WorkspaceEvidenceRangeLineInvalid}
+			return nil, diagnostics, fmt.Errorf("workspace evidence range line is invalid")
 		}
 		for line := observed.LineStart; line <= observed.LineEnd; line++ {
 			if counts[observed.Root] == maxWorkspaceEvidencePerRoot {
@@ -114,7 +159,15 @@ func BuildWorkspaceEvidenceHandles(workspaceRoot string, ranges []WorkspaceEvide
 		counters[prefix]++
 		handles[index].ID = fmt.Sprintf("%s-%03d", prefix, counters[prefix])
 	}
-	return handles, validateWorkspaceEvidenceHandles(handles)
+	if err := validateWorkspaceEvidenceHandles(handles); err != nil {
+		diagnostics.Status = WorkspaceEvidenceHandlesRejected
+		diagnostics.Codes = []string{WorkspaceEvidenceHandleNoncanonical}
+		return nil, diagnostics, err
+	}
+	diagnostics.Status = WorkspaceEvidenceHandlesAccepted
+	diagnostics.AcceptedArtifactHandleCount = counters[WorkspaceEvidenceArtifact]
+	diagnostics.AcceptedSourceHandleCount = counters[WorkspaceEvidenceSource]
+	return handles, diagnostics, nil
 }
 
 // WorkspaceFinalizationInstruction binds citation IDs to evidence already seen.
