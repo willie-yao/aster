@@ -51,63 +51,44 @@ The trusted in-process model client runs two bounded phases:
    the same bounded conversation and iteration budget. Successful grep matches
    become supplemental private source evidence, but never replace the mandatory
    file read.
-2. **Structured finalization.** Read tools are removed. The engine supplies a
-   private evidence catalog with deterministic IDs. The model may return only a
-   cause assessment, concise reason, optional typed candidate target, selected
-   evidence IDs, and a typed non-actionable reason when no candidate exists. A
-   candidate is a verification subject, not authorization to modify source. The
-   model returns an exact candidate even when it appears present, and dashboard
-   code derives `actionable`, `already_fixed`, or `insufficient_evidence`.
+2. **Target extraction.** Read tools are removed. The model returns version 1
+   with zero to three typed target hypotheses. Each hypothesis contains one
+   target identity, selected engine-issued evidence IDs, and a concise
+   relationship reason. A hypothesis is a verification subject, including when
+   the target appears already present. It contains no lifecycle, repository,
+   revision, policy, command, source-state, or action fields.
+3. **Deterministic hypothesis verification.** Dashboard code validates and
+   independently verifies every hypothesis. Exactly one verified identity may
+   produce `actionable` or `already_fixed`. No verified identity remains
+   `insufficient_evidence`; multiple distinct verified identities become
+   `ambiguous` and cannot enable an action.
+4. **Non-actionable assessment.** Only when no hypothesis verifies, a separate
+   structured model call returns a cause assessment, one typed non-actionable
+   reason, a concise safe explanation, and evidence IDs. This stage cannot
+   introduce a target.
 
 If either required source tool cannot complete, the generic loop returns a
-typed, content-free failure and target finalization does not run. The evidence ledger
-also keeps the source and artifact floors as defense in depth. No workspace,
-shell, branch, issue, pull request, or write tool is available. The experimental
-Agent Sandbox analyzer is not used. Agent Sandbox/OpenCode remains the later
-patch-generation stage after deterministic target verification.
+typed, content-free failure and target extraction does not run. The evidence
+ledger also keeps the source and artifact floors as defense in depth. No
+workspace, shell, branch, issue, pull request, or write tool is available. The
+experimental Agent Sandbox analyzer is not used. Agent Sandbox/OpenCode remains
+the later patch-generation stage after deterministic target verification.
 
-## Minimal model result
+## Two-stage model contracts
 
-Result version 3 contains exactly:
+Target extraction version 1 contains exactly `version` and `hypotheses`. Each
+hypothesis contains `target`, `evidence_ids`, and `relationship_reason`. At most
+three hypotheses are accepted. Supported target variants remain required calls,
+Prow environment entries, and diagnostic-only symbol or configuration targets.
 
-```text
-version
-cause_assessment
-reason
-candidate
-engine-issued evidence_ids
-non_actionable_reason
-```
+Non-actionable assessment version 1 contains exactly `version`,
+`cause_assessment`, `reason`, `evidence_ids`, and `non_actionable_reason`. The
+reason is one of environment or infrastructure, mitigation only, insufficient
+evidence, or unverified dependency ownership. It has no target field.
 
-The model does not author a final lifecycle classification. It also does not
-author repository or revision identity, current-source state, failure-revision
-state, allowed paths, validation commands, verification requirements, or action
-eligibility.
-
-`candidate` is a discriminated union. Each variant contains only relevant
-fields:
-
-- `required_call`: `path`, `containing_symbol`, and `required_call`;
-- `symbol_addition`: `path` and `symbol`;
-- `prow_environment_entry`: `config_path`, `job`, `container`, `name`, and
-  `value`; and
-- `configuration_field`: `path`, typed `field_path` segments, and `value`.
-
-General configuration fields are represented without a universal bag of empty
-fields, but they remain non-actionable until a deterministic field-state
-predicate exists.
-
-A result with no candidate must use exactly one typed reason:
-
-- `environment_or_infrastructure`;
-- `mitigation_only`;
-- `insufficient_evidence`; or
-- `dependency_ownership_unverified`.
-
-Candidate and non-actionable reason are mutually exclusive. The model is not
-asked to return `already_fixed`. When evidence identifies an exact candidate,
-the engine checks that candidate at failure and current revisions and derives
-`actionable` or `already_fixed`.
+The private engine result is version 4 and combines the extracted hypotheses
+with an optional non-actionable assessment. The model never authors final
+lifecycle classification or action eligibility.
 
 ## Engine-issued evidence ledger
 
@@ -135,7 +116,7 @@ can pass deterministic verification.
 
 ## Deterministic verification
 
-Verification version 4 rechecks one accepted private cache entry before it can
+Verification version 5 rechecks one accepted private cache entry before it can
 be considered actionable. The verifier binds the model-result digest, evidence
 catalog digest, and full provenance to the current frozen input, then
 independently:
@@ -154,6 +135,7 @@ independently:
   available failure revision;
 - proves required calls are actually missing and rejects already-present calls;
 - resolves Prow job, container, environment name, and desired value uniquely;
+- requires selected source evidence for the exact Prow environment value;
 - keeps repository-local call resolution within module boundaries;
 - reapplies conversion and destructive-remediation policy; and
 - rejects mutated, duplicate, unknown, fabricated, unlinked, ambiguous,
@@ -174,6 +156,7 @@ The engine derives the terminal classification:
   `insufficient_evidence`;
 - only a target proven unresolved in current source and all failure sources
   becomes `actionable`;
+- multiple distinct verified hypotheses become `ambiguous` with no proposal;
 - environment and mitigation reasons retain their typed non-actionable
   classifications; and
 - dependency ownership that cannot be independently verified remains

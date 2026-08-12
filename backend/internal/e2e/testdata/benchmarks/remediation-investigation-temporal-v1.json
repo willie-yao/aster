@@ -348,7 +348,9 @@
     "memo_mentions_target_container",
     "memo_mentions_target_name",
     "memo_mentions_target_value",
-    "final_result_contains_candidate"
+    "target_hypotheses_emitted",
+    "exact_hypothesis_identity_present",
+    "deterministic_verification_outcome"
   ],
   "public_evidence": {
     "job_config_commit_api_uri": "https://api.github.com/repos/kubernetes/test-infra/commits/b0a07a0d6592017a2745223d5d259646fb30c48d",
@@ -369,7 +371,7 @@
   },
   "scorer": {
     "path": "hack/summarize-remediation-model-capability.py",
-    "sha256": "f5fec6ca3f1482d36bed7a6c3b0bf0bce31ed040b528f07829fb1db85128a9b1"
+    "sha256": "9705332d30a135be0d907f792eb412c78cfecb5d2efa016b52a6e152a5cd616a"
   },
   "transport": {
     "api": "responses",
@@ -380,9 +382,9 @@
   },
   "version": 1,
   "versions": {
-    "prompt": 6,
+    "prompt": 7,
     "result": 3,
-    "schema": 3,
-    "verification": 4
+    "schema": 4,
+    "verification": 5
   }
 }

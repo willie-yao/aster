@@ -3,6 +3,7 @@ package remediationinvestigation
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -60,12 +61,13 @@ func verificationFixture(t *testing.T, current, failure string) (*Verifier, Froz
 	}}
 	catalog := evidenceCatalogForFixture(input, "controllers/reconcile.go", current, browser.files)
 	result := Result{
-		Version: ResultVersion, CauseAssessment: CauseSupports,
-		Reason: "the reconcile path omits applyFix",
-		Candidate: &RequiredCallCandidate{
-			Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
-		},
-		EvidenceIDs: evidenceIDs(catalog),
+		Version: ResultVersion,
+		Hypotheses: []TargetHypothesis{{
+			Target: &RequiredCallCandidate{
+				Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
+			},
+			EvidenceIDs: evidenceIDs(catalog), RelationshipReason: "the reconcile path omits applyFix",
+		}},
 	}
 	reader := revisionSource{files: map[string]map[string]string{
 		sourceKey(input.InvestigationSource): {"controllers/reconcile.go": current},
@@ -141,6 +143,13 @@ func evidenceIDs(catalog EvidenceCatalog) []string {
 	return ids
 }
 
+func hypothesisResult(target CandidateTarget, evidenceIDs []string, reason string) Result {
+	return Result{
+		Version:    ResultVersion,
+		Hypotheses: []TargetHypothesis{{Target: target, EvidenceIDs: slices.Clone(evidenceIDs), RelationshipReason: reason}},
+	}
+}
+
 func TestVerifierAcceptsOnlyMissingCurrentAndFailureTarget(t *testing.T) {
 	missing := "package controllers\nfunc reconcile() error { return nil }\nfunc applyFix() {}\n"
 	verifier, input, entry, browser := verificationFixture(t, missing, missing)
@@ -186,9 +195,9 @@ func TestVerifierAcceptsAndReconstructsSelectedSourceGrepEvidence(t *testing.T) 
 		}
 		grepRecord.ID = evidenceRecordID(grepRecord)
 		entry.EvidenceCatalog.Records[index] = grepRecord
-		for evidenceIndex, id := range entry.Result.EvidenceIDs {
+		for evidenceIndex, id := range entry.Result.Hypotheses[0].EvidenceIDs {
 			if id == record.ID {
-				entry.Result.EvidenceIDs[evidenceIndex] = grepRecord.ID
+				entry.Result.Hypotheses[0].EvidenceIDs[evidenceIndex] = grepRecord.ID
 			}
 		}
 		break
@@ -211,9 +220,9 @@ func TestVerifierAcceptsAndReconstructsSelectedSourceGrepEvidence(t *testing.T) 
 		oldID := record.ID
 		record.SourceGrep.Match = "fabricated match"
 		record.ID = evidenceRecordID(*record)
-		for evidenceIndex, id := range entry.Result.EvidenceIDs {
+		for evidenceIndex, id := range entry.Result.Hypotheses[0].EvidenceIDs {
 			if id == oldID {
-				entry.Result.EvidenceIDs[evidenceIndex] = record.ID
+				entry.Result.Hypotheses[0].EvidenceIDs[evidenceIndex] = record.ID
 			}
 		}
 	}
@@ -246,7 +255,7 @@ func TestVerifierRejectsMutatedResultCatalogAndPolicy(t *testing.T) {
 	verifier, input, entry, browser := verificationFixture(t, missing, missing)
 
 	mutatedResult := entry
-	mutatedResult.Result.Reason = "mutated"
+	mutatedResult.Result.Hypotheses[0].RelationshipReason = "mutated"
 	if _, err := verifier.Verify(t.Context(), input, mutatedResult, browser); err == nil {
 		t.Fatal("mutated result digest accepted")
 	}
@@ -267,7 +276,7 @@ func TestVerifierRejectsMutatedResultCatalogAndPolicy(t *testing.T) {
 func TestVerifierRejectsCandidateOutsidePolicyAndUnknownEvidence(t *testing.T) {
 	missing := "package controllers\nfunc reconcile() error { return nil }\nfunc applyFix() {}\n"
 	verifier, input, entry, browser := verificationFixture(t, missing, missing)
-	entry.Result.Candidate = &RequiredCallCandidate{
+	entry.Result.Hypotheses[0].Target = &RequiredCallCandidate{
 		Kind: CandidateRequiredCall, Path: "pkg/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
 	}
 	entry.Result.ResultEvidenceForTestReplaceSource(t, input, &entry.EvidenceCatalog, "pkg/reconcile.go", missing)
@@ -282,7 +291,7 @@ func TestVerifierRejectsCandidateOutsidePolicyAndUnknownEvidence(t *testing.T) {
 	}
 
 	_, _, unknownEntry, unknownBrowser := verificationFixture(t, missing, missing)
-	unknownEntry.Result.EvidenceIDs[0] = "source:" + strings.Repeat("f", 64)
+	unknownEntry.Result.Hypotheses[0].EvidenceIDs[0] = "source:" + strings.Repeat("f", 64)
 	unknownEntry.ResultDigest = ResultDigest(unknownEntry.Result)
 	verified, err = verifier.Verify(t.Context(), input, unknownEntry, unknownBrowser)
 	if err != nil {
@@ -308,9 +317,9 @@ func (result *Result) ResultEvidenceForTestReplaceSource(t *testing.T, input Fro
 		record.ID = evidenceRecordID(record)
 		oldID := catalog.Records[index].ID
 		catalog.Records[index] = record
-		for evidenceIndex, id := range result.EvidenceIDs {
+		for evidenceIndex, id := range result.Hypotheses[0].EvidenceIDs {
 			if id == oldID {
-				result.EvidenceIDs[evidenceIndex] = record.ID
+				result.Hypotheses[0].EvidenceIDs[evidenceIndex] = record.ID
 			}
 		}
 		return
@@ -321,7 +330,7 @@ func (result *Result) ResultEvidenceForTestReplaceSource(t *testing.T, input Fro
 func TestVerifierRejectsUnsafeConversionAndUnsupportedTargetKinds(t *testing.T) {
 	missing := "package controllers\nfunc reconcile() error { return nil }\nfunc applyFix() {}\n"
 	verifier, input, entry, browser := verificationFixture(t, missing, missing)
-	entry.Result.Reason = "Delete conversion webhook configurations to disable conversion."
+	entry.Result.Hypotheses[0].RelationshipReason = "Delete conversion webhook configurations to disable conversion."
 	entry.ResultDigest = ResultDigest(entry.Result)
 	verified, err := verifier.Verify(t.Context(), input, entry, browser)
 	if err != nil {
@@ -331,8 +340,8 @@ func TestVerifierRejectsUnsafeConversionAndUnsupportedTargetKinds(t *testing.T) 
 		t.Fatalf("unsafe conversion verified=%+v", verified)
 	}
 
-	entry.Result.Reason = "set one exact configuration field"
-	entry.Result.Candidate = &ConfigurationFieldCandidate{
+	entry.Result.Hypotheses[0].RelationshipReason = "set one exact configuration field"
+	entry.Result.Hypotheses[0].Target = &ConfigurationFieldCandidate{
 		Kind: CandidateConfigurationField, Path: "controllers/reconcile.go", FieldPath: []string{"feature", "enabled"}, Value: "true",
 	}
 	entry.ResultDigest = ResultDigest(entry.Result)
@@ -362,9 +371,8 @@ func TestVerifierDerivesNonActionableClassificationsWithoutOwnershipClaims(t *te
 	} {
 		t.Run(string(reason), func(t *testing.T) {
 			candidate := cloneCacheEntry(entry)
-			candidate.Result.Candidate = nil
-			candidate.Result.NonActionableReason = &reason
-			candidate.Result.Reason = "no verified repository target"
+			candidate.Result.Hypotheses = nil
+			candidate.Result.NonActionable = &NonActionableAssessment{Version: NonActionableAssessmentVersion, CauseAssessment: CauseInconclusive, Reason: "non-actionable", EvidenceIDs: evidenceIDs(candidate.EvidenceCatalog), NonActionableReason: reason}
 			candidate.ResultDigest = ResultDigest(candidate.Result)
 			verified, err := verifier.Verify(t.Context(), input, candidate, browser)
 			if err != nil {
@@ -400,13 +408,9 @@ func TestVerifierProwTargetRequiresExactFrozenJobID(t *testing.T) {
 		"builds/2/log.txt": "periodic-capz FEATURE_FLAG is missing\n",
 	}
 	catalog := evidenceCatalogForFixture(input, configPath, config, artifacts)
-	result := Result{
-		Version: ResultVersion, CauseAssessment: CauseSupports, Reason: "the job omits FEATURE_FLAG",
-		Candidate: &ProwEnvironmentEntryCandidate{
-			Kind: CandidateProwEnvironmentEntry, ConfigPath: configPath, Job: "periodic-capz", Container: "test", Name: "FEATURE_FLAG", Value: "enabled",
-		},
-		EvidenceIDs: evidenceIDs(catalog),
-	}
+	result := hypothesisResult(&ProwEnvironmentEntryCandidate{
+		Kind: CandidateProwEnvironmentEntry, ConfigPath: configPath, Job: "periodic-capz", Container: "test", Name: "FEATURE_FLAG", Value: "enabled",
+	}, evidenceIDs(catalog), "the job omits FEATURE_FLAG")
 	reader := revisionSource{files: map[string]map[string]string{
 		sourceKey(input.InvestigationSource): {configPath: config},
 		sourceKey(*input.Builds[0].Source):   {configPath: config},
@@ -441,14 +445,10 @@ func TestVerifierProwEvidenceRequiresExactEnvironmentName(t *testing.T) {
 		"builds/2/log.txt": "periodic-capz failed during startup\n",
 	}
 	catalog := evidenceCatalogForFixture(input, proposal.Target.Path, "periodic-capz\n", artifacts)
-	result := Result{
-		Version: ResultVersion, CauseAssessment: CauseSupports, Reason: "the job failed",
-		Candidate: &ProwEnvironmentEntryCandidate{
-			Kind: CandidateProwEnvironmentEntry, ConfigPath: proposal.Target.Path, Job: "periodic-capz", Container: "test", Name: "FABRICATED_FLAG", Value: "enabled",
-		},
-		EvidenceIDs: evidenceIDs(catalog),
-	}
-	if err := verifyStructuralRelationship(t.Context(), fakeBrowser{files: artifacts}, input, result, catalog, proposal); err == nil {
+	result := hypothesisResult(&ProwEnvironmentEntryCandidate{
+		Kind: CandidateProwEnvironmentEntry, ConfigPath: proposal.Target.Path, Job: "periodic-capz", Container: "test", Name: "FABRICATED_FLAG", Value: "enabled",
+	}, evidenceIDs(catalog), "the job failed")
+	if err := verifyStructuralRelationship(t.Context(), revisionSource{files: map[string]map[string]string{sourceKey(input.InvestigationSource): {proposal.Target.Path: "periodic-capz\n"}}}, fakeBrowser{files: artifacts}, input, result.Hypotheses[0], catalog, proposal); err == nil {
 		t.Fatal("job-name-only evidence accepted a fabricated environment variable")
 	}
 }
@@ -471,14 +471,9 @@ func TestVerifierRejectsFabricatedSymbolAdditionDespiteRecurringText(t *testing.
 		"builds/2/log.txt": "analysis suggested fabricatedFix without source support\n",
 	}
 	catalog := evidenceCatalogForFixture(input, "controllers/reconcile.go", missing, artifacts)
-	result := Result{
-		Version: ResultVersion, CauseAssessment: CauseSupports,
-		Reason: "the repeated analysis mentions fabricatedFix",
-		Candidate: &SymbolAdditionCandidate{
-			Kind: CandidateSymbolAddition, Path: "controllers/reconcile.go", Symbol: "fabricatedFix",
-		},
-		EvidenceIDs: evidenceIDs(catalog),
-	}
+	result := hypothesisResult(&SymbolAdditionCandidate{
+		Kind: CandidateSymbolAddition, Path: "controllers/reconcile.go", Symbol: "fabricatedFix",
+	}, evidenceIDs(catalog), "the repeated analysis mentions fabricatedFix")
 	key, err := CacheKey(input)
 	if err != nil {
 		t.Fatal(err)
@@ -497,5 +492,92 @@ func TestVerifierRejectsFabricatedSymbolAdditionDespiteRecurringText(t *testing.
 	}
 	if deterministicallyVerifiableTargetKind(TargetAddSymbol) {
 		t.Fatal("symbol addition lacks a deterministic behavioral-role predicate")
+	}
+}
+
+func TestVerifierMultipleHypothesesAcceptsOnlyVerifiedIdentity(t *testing.T) {
+	missing := "package controllers\nfunc reconcile() error { return nil }\nfunc applyFix() {}\n"
+	verifier, input, entry, browser := verificationFixture(t, missing, missing)
+	entry.Result.Hypotheses = append(entry.Result.Hypotheses, TargetHypothesis{
+		Target:      &SymbolAdditionCandidate{Kind: CandidateSymbolAddition, Path: "controllers/reconcile.go", Symbol: "unsupportedSymbol"},
+		EvidenceIDs: slices.Clone(entry.Result.Hypotheses[0].EvidenceIDs), RelationshipReason: "diagnostic unsupported symbol",
+	})
+	entry.ResultDigest = ResultDigest(entry.Result)
+	verified, err := verifier.Verify(t.Context(), input, entry, browser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Classification != ClassificationActionable || verified.Proposal == nil || verified.Proposal.Target.RequiredCall != "applyFix" {
+		t.Fatalf("verified=%+v", verified)
+	}
+}
+
+func TestVerifierMultipleDistinctVerifiedHypothesesAreAmbiguous(t *testing.T) {
+	input := testFrozenInput()
+	path := "config/jobs/example/periodics.yaml"
+	input.JobID = "periodic-test"
+	input.JobName = "periodic-test"
+	input.InvestigationSource = sourceinvestigation.Repository{Owner: "kubernetes", Name: "test-infra", Revision: currentRevision}
+	input.DestinationPolicy.Repositories = []RepositoryPolicy{{Repository: "kubernetes/test-infra", AllowedPaths: []string{path}}}
+	input.RelevantFiles = []string{path}
+	for index := range input.Builds {
+		input.Builds[index].Source = &sourceinvestigation.Repository{Owner: "kubernetes", Name: "test-infra", Revision: testRevision}
+		input.Analyses[index].SourceRepository = input.Builds[index].Source
+		input.Analyses[index].RelevantFiles = []string{path}
+		input.Analyses[index].RootCause = "periodic-test is missing FLAG_ONE and FLAG_TWO"
+	}
+	config := "# expected FLAG_ONE=enabled FLAG_TWO=enabled\nperiodics:\n- name: periodic-test\n  spec:\n    containers:\n    - name: test\n"
+	artifactFiles := map[string]string{
+		"builds/1/log.txt": "periodic-test FLAG_ONE FLAG_TWO missing\n",
+		"builds/2/log.txt": "periodic-test FLAG_ONE FLAG_TWO missing\n",
+	}
+	catalog := evidenceCatalogForFixture(input, path, config, artifactFiles)
+	hypotheses := []TargetHypothesis{
+		{Target: &ProwEnvironmentEntryCandidate{Kind: CandidateProwEnvironmentEntry, ConfigPath: path, Job: "periodic-test", Container: "test", Name: "FLAG_ONE", Value: "enabled"}, EvidenceIDs: evidenceIDs(catalog), RelationshipReason: "FLAG_ONE is missing"},
+		{Target: &ProwEnvironmentEntryCandidate{Kind: CandidateProwEnvironmentEntry, ConfigPath: path, Job: "periodic-test", Container: "test", Name: "FLAG_TWO", Value: "enabled"}, EvidenceIDs: evidenceIDs(catalog), RelationshipReason: "FLAG_TWO is missing"},
+	}
+	result := Result{Version: ResultVersion, Hypotheses: hypotheses}
+	reader := revisionSource{files: map[string]map[string]string{
+		sourceKey(input.InvestigationSource): {path: config},
+		sourceKey(*input.Builds[0].Source):   {path: config},
+	}}
+	verifier, _ := NewVerifier(reader)
+	key, _ := CacheKey(input)
+	entry := CacheEntry{Key: key, Result: result, ResultDigest: ResultDigest(result), EvidenceCatalog: catalog, EvidenceCatalogDigest: EvidenceCatalogDigest(catalog), Provenance: NewProvenance(input, "model", "responses", "", EvidenceStats{}, Metrics{}, time.Now())}
+	verified, err := verifier.Verify(t.Context(), input, entry, fakeBrowser{files: artifactFiles})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Classification != ClassificationAmbiguous || verified.Proposal != nil {
+		t.Fatalf("verified=%+v", verified)
+	}
+}
+
+func TestVerifierRejectsFabricatedProwEnvironmentValue(t *testing.T) {
+	input := testFrozenInput()
+	path := "config/jobs/example/periodics.yaml"
+	input.JobID = "periodic-test"
+	input.JobName = "periodic-test"
+	input.InvestigationSource = sourceinvestigation.Repository{Owner: "kubernetes", Name: "test-infra", Revision: currentRevision}
+	input.DestinationPolicy.Repositories = []RepositoryPolicy{{Repository: "kubernetes/test-infra", AllowedPaths: []string{path}}}
+	input.RelevantFiles = []string{path}
+	for index := range input.Builds {
+		input.Builds[index].Source = &sourceinvestigation.Repository{Owner: "kubernetes", Name: "test-infra", Revision: testRevision}
+		input.Analyses[index].SourceRepository = input.Builds[index].Source
+		input.Analyses[index].RelevantFiles = []string{path}
+		input.Analyses[index].RootCause = "periodic-test is missing FEATURE_FLAG"
+	}
+	config := "# expected FEATURE_FLAG=enabled\nperiodics:\n- name: periodic-test\n  spec:\n    containers:\n    - name: test\n"
+	artifacts := map[string]string{"builds/1/log.txt": "periodic-test FEATURE_FLAG missing\n", "builds/2/log.txt": "periodic-test FEATURE_FLAG missing\n"}
+	catalog := evidenceCatalogForFixture(input, path, config, artifacts)
+	hypothesis := TargetHypothesis{Target: &ProwEnvironmentEntryCandidate{Kind: CandidateProwEnvironmentEntry, ConfigPath: path, Job: "periodic-test", Container: "test", Name: "FEATURE_FLAG", Value: "fabricated"}, EvidenceIDs: evidenceIDs(catalog), RelationshipReason: "fabricated value"}
+	reader := revisionSource{files: map[string]map[string]string{sourceKey(input.InvestigationSource): {path: config}, sourceKey(*input.Builds[0].Source): {path: config}}}
+	verifier, _ := NewVerifier(reader)
+	results, err := verifier.VerifyHypotheses(t.Context(), input, []TargetHypothesis{hypothesis}, catalog, fakeBrowser{files: artifacts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Classification != ClassificationInsufficientEvidence {
+		t.Fatalf("results=%+v", results)
 	}
 }

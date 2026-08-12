@@ -88,36 +88,43 @@ func TestFrozenInputDigestCanonicalizesOrderAndSealsSemanticFields(t *testing.T)
 	}
 }
 
-func TestDecodeResultUsesMinimalDiscriminatedContract(t *testing.T) {
+func TestDecodeTwoStageContracts(t *testing.T) {
 	evidenceID := "analysis:" + strings.Repeat("a", 64)
-	valid := `{"version":3,"cause_assessment":"inconclusive","reason":"the source relationship is ambiguous","candidate":null,"evidence_ids":["` + evidenceID + `"],"non_actionable_reason":"insufficient_evidence"}`
-	if _, err := DecodeResult(json.RawMessage(valid)); err != nil {
-		t.Fatal(err)
-	}
-	candidate := `{"version":3,"cause_assessment":"supports","reason":"the recurring path omits applyFix","candidate":{"kind":"required_call","path":"controllers/reconcile.go","containing_symbol":"reconcile","required_call":"applyFix"},"evidence_ids":["` + evidenceID + `"],"non_actionable_reason":null}`
-	decoded, err := DecodeResult(json.RawMessage(candidate))
+	extraction := `{"version":1,"hypotheses":[{"target":{"kind":"required_call","path":"controllers/reconcile.go","containing_symbol":"reconcile","required_call":"applyFix"},"evidence_ids":["` + evidenceID + `"],"relationship_reason":"the recurring path omits applyFix"}]}`
+	decoded, err := DecodeTargetExtraction(json.RawMessage(extraction))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := decoded.Candidate.(*RequiredCallCandidate); !ok {
-		t.Fatalf("candidate type=%T", decoded.Candidate)
+	if len(decoded.Hypotheses) != 1 {
+		t.Fatalf("hypotheses=%d", len(decoded.Hypotheses))
+	}
+	if _, ok := decoded.Hypotheses[0].Target.(*RequiredCallCandidate); !ok {
+		t.Fatalf("target type=%T", decoded.Hypotheses[0].Target)
+	}
+	assessment := `{"version":1,"cause_assessment":"inconclusive","reason":"the source relationship is ambiguous","evidence_ids":["` + evidenceID + `"],"non_actionable_reason":"insufficient_evidence"}`
+	if _, err := DecodeNonActionableAssessment(json.RawMessage(assessment)); err != nil {
+		t.Fatal(err)
 	}
 	for name, raw := range map[string]string{
-		"unknown top level":       strings.Replace(valid, `"version":3`, `"version":3,"extra":true`, 1),
-		"duplicate":               strings.Replace(valid, `"version":3`, `"version":3,"version":3`, 1),
-		"irrelevant target field": strings.Replace(candidate, `"required_call":"applyFix"`, `"required_call":"applyFix","job":"periodic-test"`, 1),
-		"candidate and reason":    strings.Replace(candidate, `"non_actionable_reason":null`, `"non_actionable_reason":"insufficient_evidence"`, 1),
-		"no candidate reason":     strings.Replace(valid, `"non_actionable_reason":"insufficient_evidence"`, `"non_actionable_reason":null`, 1),
+		"too many hypotheses":    `{"version":1,"hypotheses":[` + strings.Repeat(`{"target":{"kind":"symbol_addition","path":"p.go","symbol":"S"},"evidence_ids":["`+evidenceID+`"],"relationship_reason":"reason"},`, 3) + `{"target":{"kind":"symbol_addition","path":"q.go","symbol":"Q"},"evidence_ids":["` + evidenceID + `"],"relationship_reason":"reason"}]}`,
+		"target in stage two":    strings.Replace(assessment, `"reason":`, `"target":null,"reason":`, 1),
+		"lifecycle in stage one": strings.Replace(extraction, `"hypotheses":`, `"classification":"actionable","hypotheses":`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := DecodeResult(json.RawMessage(raw)); err == nil {
-				t.Fatal("invalid result accepted")
+			if strings.Contains(name, "stage two") {
+				if _, err := DecodeNonActionableAssessment(json.RawMessage(raw)); err == nil {
+					t.Fatal("invalid assessment accepted")
+				}
+				return
+			}
+			if _, err := DecodeTargetExtraction(json.RawMessage(raw)); err == nil {
+				t.Fatal("invalid extraction accepted")
 			}
 		})
 	}
 }
 
-func TestCandidateVariantsDoNotRequireIrrelevantFields(t *testing.T) {
+func TestTargetHypothesisVariantsDoNotRequireIrrelevantFields(t *testing.T) {
 	evidenceIDs := []string{"source:" + strings.Repeat("a", 64), "analysis:" + strings.Repeat("b", 64)}
 	candidates := []CandidateTarget{
 		&RequiredCallCandidate{Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix"},
@@ -126,16 +133,20 @@ func TestCandidateVariantsDoNotRequireIrrelevantFields(t *testing.T) {
 		&ConfigurationFieldCandidate{Kind: CandidateConfigurationField, Path: "config/defaults.yaml", FieldPath: []string{"feature", "enabled"}, Value: "true"},
 	}
 	for _, candidate := range candidates {
-		result := Result{Version: ResultVersion, CauseAssessment: CauseSupports, Reason: "bounded evidence identifies one target", Candidate: candidate, EvidenceIDs: evidenceIDs}
-		if err := ValidateResult(result); err != nil {
+		extraction := TargetExtraction{Version: TargetExtractionVersion, Hypotheses: []TargetHypothesis{{
+			Target: candidate, EvidenceIDs: evidenceIDs, RelationshipReason: "bounded evidence identifies one target",
+		}}}
+		if err := ValidateTargetExtraction(extraction); err != nil {
 			t.Fatalf("%T: %v", candidate, err)
 		}
-		encoded, err := json.Marshal(result)
+		encoded, err := json.Marshal(extraction)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(string(encoded), `"repository"`) || strings.Contains(string(encoded), `"revision"`) || strings.Contains(string(encoded), `"allowed_changed_paths"`) {
-			t.Fatalf("model result contains engine-owned fields: %s", encoded)
+		for _, forbidden := range []string{`"repository"`, `"revision"`, `"allowed_changed_paths"`, `"classification"`} {
+			if strings.Contains(string(encoded), forbidden) {
+				t.Fatalf("target extraction contains engine-owned field %s: %s", forbidden, encoded)
+			}
 		}
 	}
 }
@@ -181,28 +192,35 @@ func TestSourceGrepEvidenceIDsBindCanonicalPrivateIdentity(t *testing.T) {
 	}
 }
 
-func TestResultFormatExcludesEngineOwnedFields(t *testing.T) {
-	encoded, err := json.Marshal(resultFormat().Schema)
+func TestTwoStageFormatsExcludeEngineOwnedAndCrossStageFields(t *testing.T) {
+	extraction, err := json.Marshal(targetExtractionFormat().Schema)
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(encoded)
-	for _, forbidden := range []string{
-		`"classification"`, `"repository"`, `"revision"`, `"current_source"`,
-		`"allowed_changed_paths"`, `"allowed_validation_commands"`, `"verification_requirements"`,
-		`"line_start"`, `"line_end"`, `"quote"`, `"build_id"`, `"generated_at"`,
-	} {
-		if strings.Contains(text, forbidden) {
-			t.Fatalf("model schema contains engine-owned field %s: %s", forbidden, text)
+	extractionText := string(extraction)
+	for _, forbidden := range []string{`"classification"`, `"repository"`, `"revision"`, `"current_source"`, `"non_actionable_reason"`, `"cause_assessment"`, `"allowed_changed_paths"`, `"commands"`} {
+		if strings.Contains(extractionText, forbidden) {
+			t.Fatalf("target extraction schema contains forbidden field %s", forbidden)
 		}
 	}
-	for _, required := range []string{
-		string(CandidateRequiredCall), string(CandidateSymbolAddition),
-		string(CandidateProwEnvironmentEntry), string(CandidateConfigurationField),
-		`"evidence_ids"`, `"non_actionable_reason"`,
-	} {
-		if !strings.Contains(text, required) {
-			t.Fatalf("model schema is missing %s: %s", required, text)
+	for _, required := range []string{string(CandidateRequiredCall), string(CandidateProwEnvironmentEntry), `"hypotheses"`, `"relationship_reason"`, `"evidence_ids"`} {
+		if !strings.Contains(extractionText, required) {
+			t.Fatalf("target extraction schema is missing %s", required)
+		}
+	}
+	assessment, err := json.Marshal(nonActionableAssessmentFormat().Schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assessmentText := string(assessment)
+	for _, forbidden := range []string{`"target"`, `"hypotheses"`, `"repository"`, `"revision"`, `"classification"`, `"commands"`} {
+		if strings.Contains(assessmentText, forbidden) {
+			t.Fatalf("non-actionable schema contains forbidden field %s", forbidden)
+		}
+	}
+	for _, required := range []string{`"cause_assessment"`, `"non_actionable_reason"`, `"reason"`, `"evidence_ids"`} {
+		if !strings.Contains(assessmentText, required) {
+			t.Fatalf("non-actionable schema is missing %s", required)
 		}
 	}
 }
@@ -216,16 +234,25 @@ func TestEvidencePromptRequiresContentBearingSourceRead(t *testing.T) {
 	}
 }
 
-func TestFinalPromptTreatsCandidateAsVerificationSubject(t *testing.T) {
-	prompt := finalSystemPrompt()
+func TestTargetExtractionPromptTreatsHypothesisAsVerificationSubject(t *testing.T) {
+	prompt := targetExtractionSystemPrompt()
 	for _, anchor := range []string{
-		"A candidate is a verification subject, not authorization to modify source",
+		"target hypothesis is a verification subject, not authorization to modify source",
 		"including when it already appears present",
-		"derives actionable, already_fixed, or insufficient_evidence",
-		"Do not author or withhold a candidate based on a lifecycle classification",
+		"derives actionable, already_fixed, insufficient_evidence, or ambiguous",
+		"zero to three hypotheses",
 	} {
+		if !strings.Contains(strings.ToLower(prompt), strings.ToLower(anchor)) {
+			t.Fatalf("target extraction prompt is missing %q", anchor)
+		}
+	}
+}
+
+func TestNonActionablePromptCannotIntroduceTarget(t *testing.T) {
+	prompt := nonActionableSystemPrompt()
+	for _, anchor := range []string{"only because dashboard code found no deterministically verified target hypothesis", "Do not introduce, suggest, or encode a target"} {
 		if !strings.Contains(prompt, anchor) {
-			t.Fatalf("final prompt is missing %q", anchor)
+			t.Fatalf("non-actionable prompt is missing %q", anchor)
 		}
 	}
 }

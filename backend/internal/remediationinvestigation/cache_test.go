@@ -28,11 +28,11 @@ func testEvidenceCatalog() EvidenceCatalog {
 
 func testNonActionableResult() Result {
 	catalog := testEvidenceCatalog()
-	reason := NonActionableInsufficientEvidence
-	return Result{
-		Version: ResultVersion, Reason: "the evidence is ambiguous", CauseAssessment: CauseInconclusive,
-		EvidenceIDs: []string{catalog.Records[0].ID}, NonActionableReason: &reason,
+	assessment := NonActionableAssessment{
+		Version: NonActionableAssessmentVersion, CauseAssessment: CauseInconclusive, Reason: "the evidence is ambiguous",
+		EvidenceIDs: []string{catalog.Records[0].ID}, NonActionableReason: NonActionableInsufficientEvidence,
 	}
+	return Result{Version: ResultVersion, NonActionable: &assessment}
 }
 
 func testProvenance(now time.Time) Provenance {
@@ -97,7 +97,7 @@ func TestCachePersistsPrivateAcceptedResultAndPreservesItOnFailure(t *testing.T)
 	if err != nil || !ok {
 		t.Fatalf("lookup ok=%v err=%v", ok, err)
 	}
-	if entry.Result.NonActionableReason == nil || *entry.Result.NonActionableReason != NonActionableInsufficientEvidence || entry.LastFailure == nil || entry.LastFailure.Category != FailureProvider {
+	if entry.Result.NonActionable == nil || entry.Result.NonActionable.NonActionableReason != NonActionableInsufficientEvidence || entry.LastFailure == nil || entry.LastFailure.Category != FailureProvider {
 		t.Fatalf("entry=%+v", entry)
 	}
 	if entry.EvidenceCatalogDigest != EvidenceCatalogDigest(entry.EvidenceCatalog) {
@@ -273,11 +273,13 @@ func TestCacheLookupDeepClonesCandidateAndEvidenceCatalog(t *testing.T) {
 	grepRecord.ID = evidenceRecordID(grepRecord)
 	catalog.Records = append(catalog.Records, grepRecord)
 	result := Result{
-		Version: ResultVersion, CauseAssessment: CauseSupports, Reason: "one configuration identity",
-		Candidate: &ConfigurationFieldCandidate{
-			Kind: CandidateConfigurationField, Path: "config/defaults.yaml", FieldPath: []string{"feature", "enabled"}, Value: "true",
-		},
-		EvidenceIDs: []string{catalog.Records[0].ID},
+		Version: ResultVersion,
+		Hypotheses: []TargetHypothesis{{
+			Target: &ConfigurationFieldCandidate{
+				Kind: CandidateConfigurationField, Path: "config/defaults.yaml", FieldPath: []string{"feature", "enabled"}, Value: "true",
+			},
+			EvidenceIDs: []string{catalog.Records[0].ID}, RelationshipReason: "one configuration identity",
+		}},
 	}
 	provenance := testProvenance(time.Now())
 	key := cacheKeyForDigest(provenance.InputDigest)
@@ -295,7 +297,7 @@ func TestCacheLookupDeepClonesCandidateAndEvidenceCatalog(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("second lookup ok=%v err=%v", ok, err)
 	}
-	candidate := second.Result.Candidate.(*ConfigurationFieldCandidate)
+	candidate := second.Result.Hypotheses[0].Target.(*ConfigurationFieldCandidate)
 	if candidate.FieldPath[0] != "feature" || second.EvidenceCatalog.Records[0].Analysis.BuildID == "mutated" ||
 		second.EvidenceCatalog.Records[1].SourceGrep.Match == "mutated" || second.ResultDigest != ResultDigest(second.Result) {
 		t.Fatalf("cached private state mutated: %+v", second)
@@ -303,5 +305,5 @@ func TestCacheLookupDeepClonesCandidateAndEvidenceCatalog(t *testing.T) {
 }
 
 func (entry *CacheEntry) CandidateFieldPathForTest() []string {
-	return entry.Result.Candidate.(*ConfigurationFieldCandidate).FieldPath
+	return entry.Result.Hypotheses[0].Target.(*ConfigurationFieldCandidate).FieldPath
 }

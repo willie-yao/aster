@@ -96,9 +96,13 @@ def validate_rows(rows, expected_models):
             "memo_mentions_target_name",
             "memo_mentions_target_value",
             "final_result_contains_candidate",
+            "target_hypotheses_emitted",
+            "exact_hypothesis_identity_present",
         ):
             if not isinstance(row.get(field), bool):
                 raise SystemExit(f"{row['_source']}: missing boolean diagnostic {field}")
+        if not isinstance(row.get("deterministic_verification_outcome"), str) or not row.get("deterministic_verification_outcome"):
+            raise SystemExit(f"{row['_source']}: missing deterministic_verification_outcome")
         effective_inputs[state].add(effective_hash)
 
     for state, values in effective_inputs.items():
@@ -188,6 +192,9 @@ def summarize_model(rows):
             for row in rows
         ),
         "final_result_contains_candidate": sum(row["final_result_contains_candidate"] for row in rows),
+        "target_hypotheses_emitted": sum(row["target_hypotheses_emitted"] for row in rows),
+        "exact_hypothesis_identity_present": sum(row["exact_hypothesis_identity_present"] for row in rows),
+        "deterministic_verification_outcomes": dict(sorted(collections.Counter(row["deterministic_verification_outcome"] for row in rows).items())),
         "diagnostics_by_state": {
             state: {
                 "trials": len([row for row in rows if row.get("temporal_state") == state]),

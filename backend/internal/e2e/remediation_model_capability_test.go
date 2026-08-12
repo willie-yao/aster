@@ -32,7 +32,7 @@ import (
 const (
 	copilotResponsesEndpoint                 = "https://api.githubcopilot.com/responses"
 	remediationModelCapabilityManifest       = "testdata/benchmarks/remediation-investigation-temporal-v1.json"
-	remediationModelCapabilityManifestSHA256 = "b38ced513168fd23f81986e85fb5de346d9f2ffa1086e123d308f64d74e0683c"
+	remediationModelCapabilityManifestSHA256 = "449cce4e0b8623e1792e65908b51b079a5bfee3d3ca6ed3be7143197f30ec435"
 	remediationModelCapabilityRepetitions    = 3
 )
 
@@ -155,38 +155,41 @@ type remediationModelCapabilityOracle struct {
 }
 
 type remediationModelCapabilityTrial struct {
-	CaseID                       string                                  `json:"case_id"`
-	TemporalState                string                                  `json:"temporal_state"`
-	Repetition                   int                                     `json:"repetition"`
-	Model                        string                                  `json:"model"`
-	APIMode                      string                                  `json:"api_mode"`
-	ReasoningEffort              string                                  `json:"reasoning_effort,omitempty"`
-	ProviderIdentity             string                                  `json:"provider_identity"`
-	ProviderFingerprint          string                                  `json:"provider_fingerprint"`
-	TransportFingerprint         string                                  `json:"transport_fingerprint"`
-	TrialStatus                  string                                  `json:"trial_status"`
-	ErrorCode                    string                                  `json:"error_code,omitempty"`
-	EngineCommit                 string                                  `json:"engine_commit"`
-	ManifestSHA256               string                                  `json:"manifest_sha256"`
-	EffectiveInputSHA256         string                                  `json:"effective_input_sha256"`
-	StructurallyValid            bool                                    `json:"structurally_valid"`
-	CandidateKind                string                                  `json:"candidate_kind,omitempty"`
-	CandidateIdentity            *models.RemediationTarget               `json:"candidate_identity,omitempty"`
-	ExactIdentity                bool                                    `json:"exact_identity"`
-	SelectedEvidenceIDs          []string                                `json:"selected_evidence_ids,omitempty"`
-	Evidence                     remediationinvestigation.EvidenceStats  `json:"evidence"`
-	Metrics                      remediationinvestigation.Metrics        `json:"metrics"`
-	ActualClassification         remediationinvestigation.Classification `json:"actual_classification,omitempty"`
-	VerificationStatus           string                                  `json:"verification_status"`
-	VerifiedActionable           bool                                    `json:"verified_actionable"`
-	CorrectTemporalResult        bool                                    `json:"correct_temporal_result"`
-	UnsafeAcceptance             bool                                    `json:"unsafe_acceptance"`
-	CostAvailable                bool                                    `json:"cost_available"`
-	MemoMentionsTargetJob        bool                                    `json:"memo_mentions_target_job"`
-	MemoMentionsTargetContainer  bool                                    `json:"memo_mentions_target_container"`
-	MemoMentionsTargetName       bool                                    `json:"memo_mentions_target_name"`
-	MemoMentionsTargetValue      bool                                    `json:"memo_mentions_target_value"`
-	FinalResultContainsCandidate bool                                    `json:"final_result_contains_candidate"`
+	CaseID                           string                                  `json:"case_id"`
+	TemporalState                    string                                  `json:"temporal_state"`
+	Repetition                       int                                     `json:"repetition"`
+	Model                            string                                  `json:"model"`
+	APIMode                          string                                  `json:"api_mode"`
+	ReasoningEffort                  string                                  `json:"reasoning_effort,omitempty"`
+	ProviderIdentity                 string                                  `json:"provider_identity"`
+	ProviderFingerprint              string                                  `json:"provider_fingerprint"`
+	TransportFingerprint             string                                  `json:"transport_fingerprint"`
+	TrialStatus                      string                                  `json:"trial_status"`
+	ErrorCode                        string                                  `json:"error_code,omitempty"`
+	EngineCommit                     string                                  `json:"engine_commit"`
+	ManifestSHA256                   string                                  `json:"manifest_sha256"`
+	EffectiveInputSHA256             string                                  `json:"effective_input_sha256"`
+	StructurallyValid                bool                                    `json:"structurally_valid"`
+	CandidateKind                    string                                  `json:"candidate_kind,omitempty"`
+	CandidateIdentity                *models.RemediationTarget               `json:"candidate_identity,omitempty"`
+	ExactIdentity                    bool                                    `json:"exact_identity"`
+	SelectedEvidenceIDs              []string                                `json:"selected_evidence_ids,omitempty"`
+	Evidence                         remediationinvestigation.EvidenceStats  `json:"evidence"`
+	Metrics                          remediationinvestigation.Metrics        `json:"metrics"`
+	ActualClassification             remediationinvestigation.Classification `json:"actual_classification,omitempty"`
+	VerificationStatus               string                                  `json:"verification_status"`
+	VerifiedActionable               bool                                    `json:"verified_actionable"`
+	CorrectTemporalResult            bool                                    `json:"correct_temporal_result"`
+	UnsafeAcceptance                 bool                                    `json:"unsafe_acceptance"`
+	CostAvailable                    bool                                    `json:"cost_available"`
+	MemoMentionsTargetJob            bool                                    `json:"memo_mentions_target_job"`
+	MemoMentionsTargetContainer      bool                                    `json:"memo_mentions_target_container"`
+	MemoMentionsTargetName           bool                                    `json:"memo_mentions_target_name"`
+	MemoMentionsTargetValue          bool                                    `json:"memo_mentions_target_value"`
+	FinalResultContainsCandidate     bool                                    `json:"final_result_contains_candidate"`
+	TargetHypothesesEmitted          bool                                    `json:"target_hypotheses_emitted"`
+	ExactHypothesisIdentityPresent   bool                                    `json:"exact_hypothesis_identity_present"`
+	DeterministicVerificationOutcome string                                  `json:"deterministic_verification_outcome,omitempty"`
 }
 
 type remediationModelCapabilityMemoDiagnostics struct {
@@ -235,7 +238,8 @@ func TestRemediationModelCapabilityManifestAndPreflight(t *testing.T) {
 	}
 	wantDiagnostics := []string{
 		"memo_mentions_target_job", "memo_mentions_target_container", "memo_mentions_target_name",
-		"memo_mentions_target_value", "final_result_contains_candidate",
+		"memo_mentions_target_value", "target_hypotheses_emitted", "exact_hypothesis_identity_present",
+		"deterministic_verification_outcome",
 	}
 	if !slices.Equal(manifest.Diagnostics, wantDiagnostics) {
 		t.Fatalf("diagnostics=%v want=%v", manifest.Diagnostics, wantDiagnostics)
@@ -323,7 +327,8 @@ func TestRemediationModelCapabilityScorerRejectsIncompleteAndDuplicateTrials(t *
 					"effective_input_sha256": state + "-input", "trial_status": "no_result",
 					"memo_mentions_target_job": false, "memo_mentions_target_container": false,
 					"memo_mentions_target_name": false, "memo_mentions_target_value": false,
-					"final_result_contains_candidate": false,
+					"final_result_contains_candidate": false, "target_hypotheses_emitted": false,
+					"exact_hypothesis_identity_present": false, "deterministic_verification_outcome": "not_run",
 				})
 			}
 		}
@@ -447,19 +452,34 @@ func TestRemediationModelCapabilityBenchmark(t *testing.T) {
 				row.Metrics = remediationBenchmarkUsageMetrics(recorder)
 			} else {
 				row.TrialStatus, row.StructurallyValid = "valid_result", true
-				row.FinalResultContainsCandidate = result.Entry.Result.Candidate != nil
-				row.CandidateKind = remediationCandidateKind(result.Entry.Result.Candidate)
-				row.CandidateIdentity = temporalCandidateIdentity(result.Entry.Result.Candidate, capabilityCase.InvestigationSource)
-				row.ExactIdentity = temporalTargetIdentityEqual(row.CandidateIdentity, capabilityCase.ScorerPrivate.KnownTarget, capabilityCase.InvestigationSource)
-				row.SelectedEvidenceIDs = slices.Clone(result.Entry.Result.EvidenceIDs)
+				row.FinalResultContainsCandidate = len(result.Entry.Result.Hypotheses) > 0
+				row.TargetHypothesesEmitted = len(result.Entry.Result.Hypotheses) > 0
+				target := remediationFirstHypothesisTarget(result.Entry.Result)
+				row.CandidateKind = remediationCandidateKind(target)
+				row.CandidateIdentity = temporalCandidateIdentity(target, capabilityCase.InvestigationSource)
+				row.ExactHypothesisIdentityPresent, target = temporalExactHypothesis(result.Entry.Result.Hypotheses, capabilityCase.ScorerPrivate.KnownTarget, capabilityCase.InvestigationSource)
+				if row.ExactHypothesisIdentityPresent {
+					row.CandidateKind = remediationCandidateKind(target)
+					row.CandidateIdentity = temporalCandidateIdentity(target, capabilityCase.InvestigationSource)
+				}
+				row.SelectedEvidenceIDs = slices.Clone(remediationResultEvidenceIDs(result.Entry.Result))
 				row.Evidence, row.Metrics = result.Entry.Provenance.Evidence, result.Entry.Provenance.Metrics
 				verifier, _ := remediationinvestigation.NewVerifier(source)
+				hypothesisResults, hypothesisErr := verifier.VerifyHypotheses(t.Context(), input, result.Entry.Result.Hypotheses, result.Entry.EvidenceCatalog, browser)
+				exactVerified := hypothesisErr == nil && temporalExactVerifiedHypothesis(result.Entry.Result.Hypotheses, hypothesisResults, capabilityCase.ScorerPrivate.KnownTarget, capabilityCase.InvestigationSource)
 				verified, verifyErr := verifier.Verify(t.Context(), input, result.Entry, browser)
 				if verifyErr != nil {
 					row.VerificationStatus = "verification_error"
 				} else {
 					row.ActualClassification, row.VerificationStatus = verified.Classification, string(verified.Classification)
+					row.DeterministicVerificationOutcome = string(verified.Classification)
 					row.VerifiedActionable = verified.Classification == remediationinvestigation.ClassificationActionable && verified.Proposal != nil
+					if row.VerifiedActionable {
+						row.CandidateIdentity = &verified.Proposal.Target
+						row.ExactIdentity = temporalTargetIdentityEqual(row.CandidateIdentity, capabilityCase.ScorerPrivate.KnownTarget, capabilityCase.InvestigationSource)
+					} else if verified.Classification == remediationinvestigation.ClassificationAlreadyFixed {
+						row.ExactIdentity = exactVerified
+					}
 					if capabilityCase.TemporalState == "pre_fix" {
 						row.CorrectTemporalResult = row.VerifiedActionable && row.ExactIdentity
 					} else {
@@ -773,6 +793,23 @@ func remediationModelCapabilityOracleEntry(ctx context.Context, input remediatio
 	}
 	sourceRecord.ID = remediationModelCapabilityEvidenceRecordID(sourceRecord)
 	catalog.Records = append(catalog.Records, sourceRecord)
+	for _, path := range input.RelevantFiles {
+		if path == target.Path {
+			continue
+		}
+		content, readErr := source.ReadFile(ctx, input.InvestigationSource, path)
+		if readErr != nil || !strings.Contains(content, target.Name) || !strings.Contains(content, target.Value) {
+			continue
+		}
+		record := remediationinvestigation.EvidenceRecord{
+			Kind: remediationinvestigation.EvidenceSource,
+			Source: &remediationinvestigation.SourceEvidenceIdentity{
+				Repository: input.InvestigationSource, Path: path, ContentDigest: remediationinvestigation.HashText(content),
+			},
+		}
+		record.ID = remediationModelCapabilityEvidenceRecordID(record)
+		catalog.Records = append(catalog.Records, record)
+	}
 	for _, analysis := range input.Analyses {
 		record := remediationinvestigation.EvidenceRecord{
 			Kind: remediationinvestigation.EvidenceAnalysis,
@@ -808,13 +845,14 @@ func remediationModelCapabilityOracleEntry(ctx context.Context, input remediatio
 		evidenceIDs = append(evidenceIDs, record.ID)
 	}
 	result := remediationinvestigation.Result{
-		Version: remediationinvestigation.ResultVersion, CauseAssessment: remediationinvestigation.CauseSupports,
-		Reason: "The recurring failure evidence and pinned job source identify one missing environment entry.",
-		Candidate: &remediationinvestigation.ProwEnvironmentEntryCandidate{
-			Kind: remediationinvestigation.CandidateProwEnvironmentEntry, ConfigPath: target.Path, Job: target.Job,
-			Container: target.Container, Name: target.Name, Value: target.Value,
-		},
-		EvidenceIDs: evidenceIDs,
+		Version: remediationinvestigation.ResultVersion,
+		Hypotheses: []remediationinvestigation.TargetHypothesis{{
+			Target: &remediationinvestigation.ProwEnvironmentEntryCandidate{
+				Kind: remediationinvestigation.CandidateProwEnvironmentEntry, ConfigPath: target.Path, Job: target.Job,
+				Container: target.Container, Name: target.Name, Value: target.Value,
+			},
+			EvidenceIDs: evidenceIDs, RelationshipReason: "The recurring failure evidence and pinned job source identify one missing environment entry.",
+		}},
 	}
 	key, err := remediationinvestigation.CacheKey(input)
 	if err != nil {
@@ -1001,6 +1039,41 @@ func loadRemediationModelCapabilitySource(capabilityCase remediationModelCapabil
 		files[benchmarkSourceKey(snapshot.Repository)] = contents
 	}
 	return benchmarkSource{files: files}
+}
+
+func temporalExactHypothesis(hypotheses []remediationinvestigation.TargetHypothesis, expected models.RemediationTarget, repository sourceinvestigation.Repository) (bool, remediationinvestigation.CandidateTarget) {
+	for _, hypothesis := range hypotheses {
+		identity := temporalCandidateIdentity(hypothesis.Target, repository)
+		if temporalTargetIdentityEqual(identity, expected, repository) {
+			return true, hypothesis.Target
+		}
+	}
+	return false, nil
+}
+
+func temporalExactVerifiedHypothesis(hypotheses []remediationinvestigation.TargetHypothesis, results []remediationinvestigation.VerifiedResult, expected models.RemediationTarget, repository sourceinvestigation.Repository) bool {
+	for index, hypothesis := range hypotheses {
+		if index >= len(results) || (results[index].Classification != remediationinvestigation.ClassificationActionable && results[index].Classification != remediationinvestigation.ClassificationAlreadyFixed) {
+			continue
+		}
+		if temporalTargetIdentityEqual(temporalCandidateIdentity(hypothesis.Target, repository), expected, repository) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestTemporalExactHypothesisScansBeyondFirstCandidate(t *testing.T) {
+	repository := sourceinvestigation.Repository{Owner: "kubernetes", Name: "test-infra", Revision: strings.Repeat("a", 40)}
+	expected := models.RemediationTarget{Intent: models.RemediationIntentSetJobEnvironment, Path: "config/jobs.yaml", Job: "periodic", Container: "test", Name: "FLAG", Value: "enabled"}
+	hypotheses := []remediationinvestigation.TargetHypothesis{
+		{Target: &remediationinvestigation.SymbolAdditionCandidate{Kind: remediationinvestigation.CandidateSymbolAddition, Path: "wrong.go", Symbol: "wrong"}},
+		{Target: &remediationinvestigation.ProwEnvironmentEntryCandidate{Kind: remediationinvestigation.CandidateProwEnvironmentEntry, ConfigPath: expected.Path, Job: expected.Job, Container: expected.Container, Name: expected.Name, Value: expected.Value}},
+	}
+	found, target := temporalExactHypothesis(hypotheses, expected, repository)
+	if !found || remediationCandidateKind(target) != string(remediationinvestigation.CandidateProwEnvironmentEntry) {
+		t.Fatalf("found=%v target=%T", found, target)
+	}
 }
 
 func temporalCandidateIdentity(candidate remediationinvestigation.CandidateTarget, repository sourceinvestigation.Repository) *models.RemediationTarget {

@@ -67,75 +67,125 @@ func (v *Verifier) Verify(ctx context.Context, input FrozenInput, entry CacheEnt
 	if err := ValidateEvidenceCatalog(entry.EvidenceCatalog); err != nil {
 		return VerifiedResult{}, err
 	}
-	if err := verifyCachedEvidence(ctx, v.source, browser, input, entry.Result, entry.EvidenceCatalog); err != nil {
-		return insufficientVerification("cached investigation evidence could not be reverified"), nil
+	verified, err := v.VerifyHypotheses(ctx, input, entry.Result.Hypotheses, entry.EvidenceCatalog, browser)
+	if err != nil {
+		return VerifiedResult{}, err
 	}
-
-	result := entry.Result
-	if result.Candidate == nil {
-		classification := classificationForNonActionable(result.NonActionableReason)
+	accepted := acceptedHypothesisResults(verified)
+	switch len(accepted) {
+	case 1:
+		return accepted[0], nil
+	case 0:
+		if entry.Result.NonActionable == nil {
+			return insufficientVerification("no target hypothesis passed deterministic verification"), nil
+		}
+		assessment := *entry.Result.NonActionable
+		if err := verifyCachedEvidence(ctx, v.source, browser, input, assessment.EvidenceIDs, entry.EvidenceCatalog); err != nil {
+			return insufficientVerification("cached non-actionable evidence could not be reverified"), nil
+		}
 		return VerifiedResult{
 			VerificationVersion: VerificationVersion,
-			Classification:      classification,
-			Reason:              result.Reason,
+			Classification:      classificationForNonActionable(&assessment.NonActionableReason),
+			Reason:              assessment.Reason,
+		}, nil
+	default:
+		return VerifiedResult{
+			VerificationVersion: VerificationVersion,
+			Classification:      ClassificationAmbiguous,
+			Reason:              "Multiple distinct target hypotheses passed deterministic verification.",
 		}, nil
 	}
-	kind, target, ok := candidateToTarget(result.Candidate, input.InvestigationSource)
+}
+
+// VerifyHypotheses independently verifies every model-authored target identity.
+func (v *Verifier) VerifyHypotheses(ctx context.Context, input FrozenInput, hypotheses []TargetHypothesis, catalog EvidenceCatalog, browser artifacts.Browser) ([]VerifiedResult, error) {
+	if browser == nil {
+		return nil, fmt.Errorf("remediation verification artifact browser is required")
+	}
+	if err := ValidateFrozenInput(input); err != nil {
+		return nil, err
+	}
+	if err := ValidateEvidenceCatalog(catalog); err != nil {
+		return nil, err
+	}
+	if err := ValidateTargetExtraction(TargetExtraction{Version: TargetExtractionVersion, Hypotheses: hypotheses}); err != nil {
+		return nil, err
+	}
+	results := make([]VerifiedResult, 0, len(hypotheses))
+	for _, hypothesis := range hypotheses {
+		results = append(results, v.verifyHypothesis(ctx, input, hypothesis, catalog, browser))
+	}
+	return results, nil
+}
+
+func acceptedHypothesisResults(results []VerifiedResult) []VerifiedResult {
+	accepted := make([]VerifiedResult, 0, len(results))
+	for _, result := range results {
+		if result.Classification == ClassificationActionable && result.Proposal != nil {
+			accepted = append(accepted, result)
+		} else if result.Classification == ClassificationAlreadyFixed && result.Proposal == nil {
+			accepted = append(accepted, result)
+		}
+	}
+	return accepted
+}
+
+func (v *Verifier) verifyHypothesis(ctx context.Context, input FrozenInput, hypothesis TargetHypothesis, catalog EvidenceCatalog, browser artifacts.Browser) VerifiedResult {
+	if err := verifyCachedEvidence(ctx, v.source, browser, input, hypothesis.EvidenceIDs, catalog); err != nil {
+		return insufficientVerification("target hypothesis evidence could not be reverified")
+	}
+	kind, target, ok := candidateToTarget(hypothesis.Target, input.InvestigationSource)
 	if !ok {
-		return insufficientVerification("candidate target could not be converted to a typed remediation target"), nil
+		return insufficientVerification("target hypothesis could not be converted to a typed remediation target")
 	}
 	policy := destinationPolicyForSource(input)
 	if policy == nil {
-		return insufficientVerification("the frozen source repository is not an allowed destination repository"), nil
+		return insufficientVerification("the frozen source repository is not an allowed destination repository")
 	}
 	if !pathAllowedByPolicy(target.Path, policy.AllowedPaths) {
-		return insufficientVerification("candidate target path is outside the frozen destination policy"), nil
+		return insufficientVerification("target hypothesis path is outside the frozen destination policy")
 	}
 	if reason := actionverify.InvalidTargetReason(target); reason != "" {
-		return insufficientVerification("candidate target failed typed remediation validation"), nil
+		return insufficientVerification("target hypothesis failed typed remediation validation")
 	}
 	if !deterministicallyVerifiableTargetKind(kind) {
-		return insufficientVerification("the typed target kind lacks a deterministic present-or-missing predicate"), nil
+		return insufficientVerification("the typed target kind lacks a deterministic present-or-missing predicate")
 	}
 	if suspiciousRepositoryPath(target.Path) {
-		return insufficientVerification("module-cache or workspace paths cannot identify a destination-repository target"), nil
+		return insufficientVerification("module-cache or workspace paths cannot identify a destination-repository target")
 	}
-	if reason := remediationpolicy.Reason(result.Reason+"\n"+candidateExpectedBehavior(result.Candidate), []models.RemediationTarget{target}); reason != "" {
-		return insufficientVerification("candidate target violates deterministic remediation safety policy"), nil
+	if reason := remediationpolicy.Reason(hypothesis.RelationshipReason+"\n"+candidateExpectedBehavior(hypothesis.Target), []models.RemediationTarget{target}); reason != "" {
+		return insufficientVerification("target hypothesis violates deterministic remediation safety policy")
 	}
 	if target.Intent == models.RemediationIntentSetJobEnvironment {
 		if err := v.verifyFrozenProwJobIdentity(ctx, input, target); err != nil {
-			return insufficientVerification("the prow target does not match the exact frozen job identity"), nil
+			return insufficientVerification("the prow target does not match the exact frozen job identity")
 		}
 	}
-	proposal := policyDerivedProposal(input, result, kind, target, *policy)
-	if err := verifyStructuralRelationship(ctx, browser, input, result, entry.EvidenceCatalog, proposal); err != nil {
-		return insufficientVerification(err.Error()), nil
+	proposal := policyDerivedProposal(input, hypothesis, kind, target, *policy)
+	if err := verifyStructuralRelationship(ctx, v.source, browser, input, hypothesis, catalog, proposal); err != nil {
+		return insufficientVerification(err.Error())
 	}
 
 	currentState, err := sourceinvestigation.VerifyTargetState(ctx, v.source, input.InvestigationSource, targetForRepository(target, input.InvestigationSource))
 	if err != nil {
-		return insufficientVerification("current-source target verification was inconclusive"), nil
+		return insufficientVerification("current-source target verification was inconclusive")
 	}
-	current := RevisionVerification{
-		Repository: input.InvestigationSource,
-		State:      currentState.State, Reason: currentState.Reason,
-	}
+	current := RevisionVerification{Repository: input.InvestigationSource, State: currentState.State, Reason: currentState.Reason}
 	if currentState.State == actionverify.StateAlreadyPresent {
 		return VerifiedResult{
 			VerificationVersion: VerificationVersion,
 			Classification:      ClassificationAlreadyFixed,
 			Reason:              "Current source already contains the deterministically verified remediation target.",
 			CurrentSource:       &current,
-		}, nil
+		}
 	}
 	if currentState.State != actionverify.StateUnresolved {
-		return insufficientVerification("current source does not prove one unresolved remediation target"), nil
+		return insufficientVerification("current source does not prove one unresolved remediation target")
 	}
-
 	failureStates, ok := v.verifyFailureSources(ctx, input, target)
 	if !ok {
-		return insufficientVerification("failure revisions do not prove that the target was unresolved for every causal-group build"), nil
+		return insufficientVerification("failure revisions do not prove that the target was unresolved for every causal-group build")
 	}
 	return VerifiedResult{
 		VerificationVersion: VerificationVersion,
@@ -144,7 +194,7 @@ func (v *Verifier) Verify(ctx context.Context, input FrozenInput, entry CacheEnt
 		Proposal:            &proposal,
 		CurrentSource:       &current,
 		FailureSources:      failureStates,
-	}, nil
+	}
 }
 
 func (v *Verifier) verifyFailureSources(ctx context.Context, input FrozenInput, target models.RemediationTarget) ([]RevisionVerification, bool) {
@@ -186,8 +236,8 @@ func (v *Verifier) verifyFailureSources(ctx context.Context, input FrozenInput, 
 	return out, len(out) > 0
 }
 
-func verifyCachedEvidence(ctx context.Context, source sourceinvestigation.TreeReader, browser artifacts.Browser, input FrozenInput, result Result, catalog EvidenceCatalog) error {
-	records, err := selectedEvidenceRecords(result.EvidenceIDs, catalog)
+func verifyCachedEvidence(ctx context.Context, source sourceinvestigation.TreeReader, browser artifacts.Browser, input FrozenInput, evidenceIDs []string, catalog EvidenceCatalog) error {
+	records, err := selectedEvidenceRecords(evidenceIDs, catalog)
 	if err != nil {
 		return err
 	}
@@ -233,8 +283,8 @@ func verifyCachedEvidence(ctx context.Context, source sourceinvestigation.TreeRe
 	return nil
 }
 
-func verifyStructuralRelationship(ctx context.Context, browser artifacts.Browser, input FrozenInput, result Result, catalog EvidenceCatalog, proposal ActionableProposal) error {
-	records, err := selectedEvidenceRecords(result.EvidenceIDs, catalog)
+func verifyStructuralRelationship(ctx context.Context, source sourceinvestigation.TreeReader, browser artifacts.Browser, input FrozenInput, hypothesis TargetHypothesis, catalog EvidenceCatalog, proposal ActionableProposal) error {
+	records, err := selectedEvidenceRecords(hypothesis.EvidenceIDs, catalog)
 	if err != nil {
 		return err
 	}
@@ -257,8 +307,13 @@ func verifyStructuralRelationship(ctx context.Context, browser artifacts.Browser
 	if !pathReferenced {
 		return fmt.Errorf("the typed target is not connected to any referenced per-build analysis")
 	}
-	if proposal.Target.Intent == models.RemediationIntentSetJobEnvironment && proposal.Target.Job != input.JobName {
-		return fmt.Errorf("the Prow environment target does not match the exact frozen job name")
+	if proposal.Target.Intent == models.RemediationIntentSetJobEnvironment {
+		if proposal.Target.Job != input.JobName {
+			return fmt.Errorf("the Prow environment target does not match the exact frozen job name")
+		}
+		if !prowEnvironmentValueGrounded(ctx, source, input.InvestigationSource, records, proposal.Target) {
+			return fmt.Errorf("the exact Prow environment value lacks selected source evidence")
+		}
 	}
 	identifiers := targetEvidenceIdentifiers(proposal)
 	if len(identifiers) == 0 {
@@ -298,6 +353,33 @@ func verifyStructuralRelationship(ctx context.Context, browser artifacts.Browser
 		return fmt.Errorf("fewer than two causal-group builds contain the exact target identifier")
 	}
 	return nil
+}
+
+func prowEnvironmentValueGrounded(ctx context.Context, source sourceinvestigation.TreeReader, repository sourceinvestigation.Repository, records []EvidenceRecord, target models.RemediationTarget) bool {
+	name := strings.ToLower(target.Name)
+	value := strings.ToLower(target.Value)
+	for _, record := range records {
+		var text string
+		switch record.Kind {
+		case EvidenceSource:
+			if record.Source == nil || record.Source.Repository != repository {
+				continue
+			}
+			content, err := source.ReadFile(ctx, repository, record.Source.Path)
+			if err == nil && HashText(content) == record.Source.ContentDigest {
+				text = content
+			}
+		case EvidenceSourceGrep:
+			if record.SourceGrep != nil && record.SourceGrep.Repository == repository {
+				text = record.SourceGrep.Match
+			}
+		}
+		lower := strings.ToLower(text)
+		if strings.Contains(lower, name) && strings.Contains(lower, value) {
+			return true
+		}
+	}
+	return false
 }
 
 func targetEvidenceIdentifiers(proposal ActionableProposal) []string {
@@ -369,11 +451,11 @@ func destinationPolicyForSource(input FrozenInput) *RepositoryPolicy {
 	return nil
 }
 
-func policyDerivedProposal(input FrozenInput, result Result, kind TargetKind, target models.RemediationTarget, policy RepositoryPolicy) ActionableProposal {
+func policyDerivedProposal(input FrozenInput, hypothesis TargetHypothesis, kind TargetKind, target models.RemediationTarget, policy RepositoryPolicy) ActionableProposal {
 	return ActionableProposal{
 		TargetKind: kind, Repository: input.InvestigationSource, Target: target,
-		ExpectedBehavior:          candidateExpectedBehavior(result.Candidate),
-		EvidenceIDs:               slices.Clone(result.EvidenceIDs),
+		ExpectedBehavior:          candidateExpectedBehavior(hypothesis.Target),
+		EvidenceIDs:               slices.Clone(hypothesis.EvidenceIDs),
 		VerificationRequirements:  verificationRequirements(kind),
 		AllowedChangedPaths:       []string{target.Path},
 		AllowedValidationCommands: cloneValidationCommands(policy.AllowedCommands),

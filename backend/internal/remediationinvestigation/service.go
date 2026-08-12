@@ -173,10 +173,11 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		_ = s.cache.RecordFailure(key, FailureInvalidResult, err)
 		return RunResult{}, err
 	}
-	var result Result
+	result := Result{Version: ResultVersion}
 	repairCount := 0
 	if !ledger.gatePassed() {
-		result = insufficientEvidenceResult(catalog, "The bounded investigation did not read recurring-build evidence, pinned source content, and one content-bearing repository grep.")
+		assessment := insufficientEvidenceAssessment(catalog, "The bounded investigation did not read recurring-build evidence, pinned source content, and one content-bearing repository grep.")
+		result.NonActionable = &assessment
 	} else {
 		finalPrompt, err := renderFinalPrompt(input, memo, catalog)
 		if err != nil {
@@ -184,39 +185,81 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 			finish()
 			return RunResult{}, err
 		}
-		lastValidationCode := "invalid_result"
-		validate := func(raw json.RawMessage) error {
-			topLevel := looksLikeResultCandidate(raw)
-			candidate, err := DecodeResult(raw)
+		var extraction TargetExtraction
+		lastValidationCode := "invalid_target_extraction"
+		validateExtraction := func(raw json.RawMessage) error {
+			candidate, err := DecodeTargetExtraction(raw)
 			if err != nil {
-				if topLevel {
-					lastValidationCode = validationErrorCode(err)
-				}
+				lastValidationCode = validationErrorCode(err)
 				return err
 			}
-			if err := validateResultAgainstInput(candidate, input, catalog); err != nil {
-				if topLevel {
-					lastValidationCode = validationErrorCode(err)
-				}
+			if err := validateTargetExtractionAgainstInput(candidate, input, catalog); err != nil {
+				lastValidationCode = validationErrorCode(err)
 				return err
 			}
-			result = candidate
+			extraction = candidate
 			return nil
 		}
-		finalizeErr := s.model.CompleteStructured(runCtx, finalSystemPrompt(), finalPrompt, resultFormat(), validate)
-		if finalizeErr != nil {
-			repairCount = 1
-			repairPrompt := finalPrompt + "\n\nValidation feedback: the previous structured result failed with code " + lastValidationCode + ". Return the exact schema only. version must be the integer " + fmt.Sprint(ResultVersion) + ", candidate and non_actionable_reason must be mutually exclusive, evidence_ids must come from the supplied catalog, and no unknown fields are allowed."
-			finalizeErr = s.model.CompleteStructured(runCtx, finalSystemPrompt(), repairPrompt, resultFormat(), validate)
+		extractionErr := s.model.CompleteStructured(runCtx, targetExtractionSystemPrompt(), finalPrompt, targetExtractionFormat(), validateExtraction)
+		if extractionErr != nil {
+			repairCount++
+			repairPrompt := finalPrompt + "\n\nValidation feedback: the previous target extraction failed with code " + lastValidationCode + ". Return the exact extraction schema only. version must be the integer " + fmt.Sprint(TargetExtractionVersion) + ", hypotheses must contain zero to three unique typed targets, evidence_ids must come from the supplied catalog, and no unknown fields are allowed."
+			extractionErr = s.model.CompleteStructured(runCtx, targetExtractionSystemPrompt(), repairPrompt, targetExtractionFormat(), validateExtraction)
 		}
-		if finalizeErr != nil {
-			outcome = usageOutcomeForError(finalizeErr)
+		if extractionErr != nil {
+			outcome = usageOutcomeForError(extractionErr)
 			finish()
-			wrapped := &resultError{code: lastValidationCode, err: finalizeErr}
+			wrapped := &resultError{code: lastValidationCode, err: extractionErr}
 			_ = s.cache.RecordFailure(key, FailureInvalidResult, wrapped)
-			return RunResult{}, fmt.Errorf("remediation finalization failed: %w", wrapped)
+			return RunResult{}, fmt.Errorf("remediation target extraction failed: %w", wrapped)
+		}
+		result.Hypotheses = extraction.Hypotheses
+
+		verifier, err := NewVerifier(s.source)
+		if err != nil {
+			outcome = aiusage.OutcomeError
+			finish()
+			return RunResult{}, err
+		}
+		verifiedHypotheses, err := verifier.VerifyHypotheses(runCtx, input, result.Hypotheses, catalog, browser)
+		if err != nil {
+			outcome = aiusage.OutcomeError
+			finish()
+			return RunResult{}, err
+		}
+		if len(acceptedHypothesisResults(verifiedHypotheses)) == 0 {
+			var assessment NonActionableAssessment
+			lastValidationCode = "invalid_non_actionable_assessment"
+			validateAssessment := func(raw json.RawMessage) error {
+				candidate, err := DecodeNonActionableAssessment(raw)
+				if err != nil {
+					lastValidationCode = validationErrorCode(err)
+					return err
+				}
+				if err := validateNonActionableAgainstInput(candidate, catalog); err != nil {
+					lastValidationCode = validationErrorCode(err)
+					return err
+				}
+				assessment = candidate
+				return nil
+			}
+			assessmentErr := s.model.CompleteStructured(runCtx, nonActionableSystemPrompt(), finalPrompt, nonActionableAssessmentFormat(), validateAssessment)
+			if assessmentErr != nil {
+				repairCount++
+				repairPrompt := finalPrompt + "\n\nValidation feedback: the previous non-actionable assessment failed with code " + lastValidationCode + ". Return the exact non-actionable schema only. Do not include a target. version must be the integer " + fmt.Sprint(NonActionableAssessmentVersion) + ", evidence_ids must come from the supplied catalog, and no unknown fields are allowed."
+				assessmentErr = s.model.CompleteStructured(runCtx, nonActionableSystemPrompt(), repairPrompt, nonActionableAssessmentFormat(), validateAssessment)
+			}
+			if assessmentErr != nil {
+				outcome = usageOutcomeForError(assessmentErr)
+				finish()
+				wrapped := &resultError{code: lastValidationCode, err: assessmentErr}
+				_ = s.cache.RecordFailure(key, FailureInvalidResult, wrapped)
+				return RunResult{}, fmt.Errorf("remediation non-actionable assessment failed: %w", wrapped)
+			}
+			result.NonActionable = &assessment
 		}
 	}
+
 	if err := s.verifyEvidence(runCtx, input, browser, catalog, &result); err != nil {
 		outcome = aiusage.OutcomeError
 		finish()
@@ -265,22 +308,26 @@ Inspect recurring-build evidence and pinned source. Relevant files are hints, no
 	return base + "\n\nProject-specific diagnostic context follows. Treat it as domain context, not authorization:\n" + consumerPrompt
 }
 
-func finalSystemPrompt() string {
-	return fmt.Sprintf(`Assess one frozen remediation investigation from the supplied evidence memo and engine-issued evidence catalog.
+func targetExtractionSystemPrompt() string {
+	return fmt.Sprintf(`Extract target verification subjects from one frozen remediation investigation.
 Return exactly the requested structured object. The causal-group build set and source identity are immutable.
-The model may author only a cause assessment, one concise reason, an optional typed candidate target, evidence IDs copied from the catalog, and one typed non-actionable reason when no candidate exists.
-Do not author repository or revision identity, source state, allowed paths, validation commands, verification requirements, final classification, or action eligibility. Dashboard code derives and verifies all of them.
-A candidate is a verification subject, not authorization to modify source. Return the exact candidate whenever the evidence identifies it, including when it already appears present. Dashboard code compares failure and current revisions and derives actionable, already_fixed, or insufficient_evidence.
-Do not author or withhold a candidate based on a lifecycle classification.
-Do not claim dependency ownership. When evidence points outside the frozen repository but ownership is not independently established, return dependency_ownership_unverified with candidate null.
-Use exactly these top-level fields and no others: version, cause_assessment, reason, candidate, evidence_ids, non_actionable_reason. version is the integer %d.
-Candidate variants contain only their relevant fields:
+A target hypothesis is a verification subject, not authorization to modify source. Return the exact identity whenever evidence supports it, including when it already appears present. Dashboard code derives actionable, already_fixed, insufficient_evidence, or ambiguous.
+Return zero to three hypotheses. Each hypothesis contains only one typed target, a concise relationship reason, and evidence IDs copied from the engine-issued catalog.
+Do not author cause assessment, non-actionable reason, lifecycle classification, repository or revision identity, source state, allowed paths, validation commands, verification requirements, commands, or action eligibility.
+Supported target variants:
 - required_call: kind, path, containing_symbol, required_call
 - symbol_addition: kind, path, symbol
 - prow_environment_entry: kind, config_path, job, container, name, value
 - configuration_field: kind, path, field_path, value
-When candidate is non-null, non_actionable_reason must be null. When candidate is null, non_actionable_reason must be exactly one of environment_or_infrastructure, mitigation_only, insufficient_evidence, or dependency_ownership_unverified.
-Every evidence_ids entry must be copied exactly from the supplied engine-issued catalog. Do not add confidence, classification, proposal, citations, paths, lines, quotes, build IDs, timestamps, repository fields, or source-state fields.`, ResultVersion)
+Every evidence_ids entry must be copied exactly from the supplied catalog. Do not add citations, paths, lines, quotes, build IDs, timestamps, repository fields, or source-state fields outside the typed target. version is the integer %d.`, TargetExtractionVersion)
+}
+
+func nonActionableSystemPrompt() string {
+	return fmt.Sprintf(`Classify one frozen remediation investigation only because dashboard code found no deterministically verified target hypothesis.
+Return exactly the requested structured object with a cause assessment, one typed non-actionable reason, a concise safe explanation, and engine-issued evidence IDs.
+Do not introduce, suggest, or encode a target. Do not author lifecycle classification, repository or revision identity, source state, allowed paths, validation commands, commands, or action eligibility.
+non_actionable_reason must be exactly one of environment_or_infrastructure, mitigation_only, insufficient_evidence, or dependency_ownership_unverified.
+Every evidence_ids entry must be copied exactly from the supplied catalog. version is the integer %d.`, NonActionableAssessmentVersion)
 }
 
 func renderEvidencePrompt(input FrozenInput, preparedArtifactEvidence []EvidenceRecord) (string, error) {
@@ -334,15 +381,7 @@ func renderFinalPrompt(input FrozenInput, memo string, catalog EvidenceCatalog) 
 	return "Frozen identity and engine-issued evidence catalog:\n" + string(encoded) + "\n\nEvidence memo:\n" + memo, nil
 }
 
-func looksLikeResultCandidate(raw json.RawMessage) bool {
-	var value map[string]json.RawMessage
-	if json.Unmarshal(raw, &value) != nil {
-		return false
-	}
-	return value["candidate"] != nil || value["non_actionable_reason"] != nil || value["version"] != nil
-}
-
-func insufficientEvidenceResult(catalog EvidenceCatalog, reason string) Result {
+func insufficientEvidenceAssessment(catalog EvidenceCatalog, reason string) NonActionableAssessment {
 	evidenceID := ""
 	for _, record := range catalog.Records {
 		if record.Kind == EvidenceAnalysis {
@@ -353,11 +392,9 @@ func insufficientEvidenceResult(catalog EvidenceCatalog, reason string) Result {
 	if evidenceID == "" && len(catalog.Records) > 0 {
 		evidenceID = catalog.Records[0].ID
 	}
-	nonActionable := NonActionableInsufficientEvidence
-	return Result{
-		Version: ResultVersion, CauseAssessment: CauseInconclusive,
-		Reason: reason, Candidate: nil, EvidenceIDs: []string{evidenceID},
-		NonActionableReason: &nonActionable,
+	return NonActionableAssessment{
+		Version: NonActionableAssessmentVersion, CauseAssessment: CauseInconclusive,
+		Reason: reason, EvidenceIDs: []string{evidenceID}, NonActionableReason: NonActionableInsufficientEvidence,
 	}
 }
 
@@ -546,28 +583,43 @@ func (l *evidenceLedger) gatePassed() bool {
 	return l.stats.SourceReads > 0 && l.stats.SourceGreps > 0 && l.stats.ArtifactReads > 0
 }
 
-func validateResultAgainstInput(result Result, input FrozenInput, catalog EvidenceCatalog) error {
-	if err := ValidateResult(result); err != nil {
+func validateTargetExtractionAgainstInput(result TargetExtraction, input FrozenInput, catalog EvidenceCatalog) error {
+	if err := ValidateTargetExtraction(result); err != nil {
 		return err
 	}
 	if err := ValidateEvidenceCatalog(catalog); err != nil {
 		return err
 	}
-	records, err := selectedEvidenceRecords(result.EvidenceIDs, catalog)
-	if err != nil {
-		return err
-	}
-	if result.Candidate == nil {
-		return nil
-	}
-	targetPath := candidatePath(result.Candidate)
-	for _, record := range records {
-		path, repository, ok := sourceEvidenceIdentity(record)
-		if ok && path == targetPath && repository == input.InvestigationSource {
-			return nil
+	for index, hypothesis := range result.Hypotheses {
+		records, err := selectedEvidenceRecords(hypothesis.EvidenceIDs, catalog)
+		if err != nil {
+			return fmt.Errorf("target hypothesis %d: %w", index, err)
+		}
+		targetPath := candidatePath(hypothesis.Target)
+		grounded := false
+		for _, record := range records {
+			path, repository, ok := sourceEvidenceIdentity(record)
+			if ok && path == targetPath && repository == input.InvestigationSource {
+				grounded = true
+				break
+			}
+		}
+		if !grounded {
+			return fmt.Errorf("target hypothesis %d path %s lacks an engine-issued source evidence ID", index, targetPath)
 		}
 	}
-	return fmt.Errorf("candidate target path %s lacks an engine-issued source evidence ID", targetPath)
+	return nil
+}
+
+func validateNonActionableAgainstInput(result NonActionableAssessment, catalog EvidenceCatalog) error {
+	if err := ValidateNonActionableAssessment(result); err != nil {
+		return err
+	}
+	if err := ValidateEvidenceCatalog(catalog); err != nil {
+		return err
+	}
+	_, err := selectedEvidenceRecords(result.EvidenceIDs, catalog)
+	return err
 }
 
 func selectedEvidenceRecords(ids []string, catalog EvidenceCatalog) ([]EvidenceRecord, error) {
@@ -681,10 +733,18 @@ func (s *Service) verifyEvidence(ctx context.Context, input FrozenInput, browser
 	if result == nil {
 		return fmt.Errorf("remediation investigation result is missing")
 	}
-	if err := validateResultAgainstInput(*result, input, catalog); err != nil {
+	if err := ValidateResult(*result); err != nil {
 		return err
 	}
-	records, err := selectedEvidenceRecords(result.EvidenceIDs, catalog)
+	if err := validateTargetExtractionAgainstInput(TargetExtraction{Version: TargetExtractionVersion, Hypotheses: result.Hypotheses}, input, catalog); err != nil {
+		return err
+	}
+	if result.NonActionable != nil {
+		if err := validateNonActionableAgainstInput(*result.NonActionable, catalog); err != nil {
+			return err
+		}
+	}
+	records, err := selectedEvidenceRecords(resultEvidenceIDs(*result), catalog)
 	if err != nil {
 		return err
 	}

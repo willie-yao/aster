@@ -15,11 +15,13 @@ import (
 )
 
 const (
-	PromptVersion          = 6
-	SchemaVersion          = 3
-	VerificationVersion    = 4
-	ResultVersion          = 3
-	EvidenceCatalogVersion = 2
+	PromptVersion                  = 7
+	SchemaVersion                  = 4
+	VerificationVersion            = 5
+	ResultVersion                  = 4
+	TargetExtractionVersion        = 1
+	NonActionableAssessmentVersion = 1
+	EvidenceCatalogVersion         = 2
 )
 
 type Versions struct {
@@ -141,6 +143,7 @@ const (
 	ClassificationEnvironmentOrInfrastructure Classification = "environment_or_infrastructure"
 	ClassificationMitigationOnly              Classification = "mitigation_only"
 	ClassificationInsufficientEvidence        Classification = "insufficient_evidence"
+	ClassificationAmbiguous                   Classification = "ambiguous"
 )
 
 type CauseAssessment string
@@ -289,15 +292,35 @@ type ActionableProposal struct {
 	AllowedValidationCommands []ValidationCommand            `json:"allowed_validation_commands"`
 }
 
-// Result is the minimal private model output. Dashboard code owns repository,
-// revision, policy, source-state, final classification, and action eligibility.
+// TargetHypothesis is a model-authored verification subject. It does not carry
+// repository, revision, lifecycle, policy, command, or action eligibility.
+type TargetHypothesis struct {
+	Target             CandidateTarget `json:"target"`
+	EvidenceIDs        []string        `json:"evidence_ids"`
+	RelationshipReason string          `json:"relationship_reason"`
+}
+
+// TargetExtraction is the first bounded structured model stage.
+type TargetExtraction struct {
+	Version    int                `json:"version"`
+	Hypotheses []TargetHypothesis `json:"hypotheses"`
+}
+
+// NonActionableAssessment is requested only when no target hypothesis verifies.
+type NonActionableAssessment struct {
+	Version             int                 `json:"version"`
+	CauseAssessment     CauseAssessment     `json:"cause_assessment"`
+	Reason              string              `json:"reason"`
+	EvidenceIDs         []string            `json:"evidence_ids"`
+	NonActionableReason NonActionableReason `json:"non_actionable_reason"`
+}
+
+// Result is the final private engine-owned combination of the two model stages.
+// Dashboard code owns repository, revision, source state, lifecycle, and action eligibility.
 type Result struct {
-	Version             int                  `json:"version"`
-	CauseAssessment     CauseAssessment      `json:"cause_assessment"`
-	Reason              string               `json:"reason"`
-	Candidate           CandidateTarget      `json:"candidate"`
-	EvidenceIDs         []string             `json:"evidence_ids"`
-	NonActionableReason *NonActionableReason `json:"non_actionable_reason"`
+	Version       int                      `json:"version"`
+	Hypotheses    []TargetHypothesis       `json:"hypotheses"`
+	NonActionable *NonActionableAssessment `json:"non_actionable,omitempty"`
 }
 
 type EvidenceStats struct {

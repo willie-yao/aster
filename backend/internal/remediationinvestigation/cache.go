@@ -133,7 +133,7 @@ func (c *Cache) StoreSuccess(key string, result Result, catalog EvidenceCatalog,
 	if err := ValidateEvidenceCatalog(catalog); err != nil {
 		return err
 	}
-	if _, err := selectedEvidenceRecords(result.EvidenceIDs, catalog); err != nil {
+	if _, err := selectedEvidenceRecords(resultEvidenceIDs(result), catalog); err != nil {
 		return err
 	}
 	if strings.TrimSpace(provenance.InputDigest) == "" || provenance.Versions != CurrentVersions() || provenance.ProviderFingerprint == "" ||
@@ -245,7 +245,7 @@ func (c *Cache) loadLocked() error {
 			delete(loaded.Entries, key)
 			continue
 		}
-		_, evidenceErr := selectedEvidenceRecords(entry.Result.EvidenceIDs, entry.EvidenceCatalog)
+		_, evidenceErr := selectedEvidenceRecords(resultEvidenceIDs(entry.Result), entry.EvidenceCatalog)
 		if key != entry.Key || ValidateResult(entry.Result) != nil || entry.ResultDigest != ResultDigest(entry.Result) ||
 			ValidateEvidenceCatalog(entry.EvidenceCatalog) != nil || evidenceErr != nil ||
 			entry.EvidenceCatalogDigest != EvidenceCatalogDigest(entry.EvidenceCatalog) ||
@@ -340,11 +340,16 @@ func cloneCacheEntry(entry CacheEntry) CacheEntry {
 }
 
 func cloneResult(result Result) Result {
-	result.Candidate = cloneCandidate(result.Candidate)
-	result.EvidenceIDs = slices.Clone(result.EvidenceIDs)
-	if result.NonActionableReason != nil {
-		reason := *result.NonActionableReason
-		result.NonActionableReason = &reason
+	result.Hypotheses = slices.Clone(result.Hypotheses)
+	for index := range result.Hypotheses {
+		hypothesis := &result.Hypotheses[index]
+		hypothesis.Target = cloneCandidate(hypothesis.Target)
+		hypothesis.EvidenceIDs = slices.Clone(hypothesis.EvidenceIDs)
+	}
+	if result.NonActionable != nil {
+		value := *result.NonActionable
+		value.EvidenceIDs = slices.Clone(value.EvidenceIDs)
+		result.NonActionable = &value
 	}
 	return result
 }
