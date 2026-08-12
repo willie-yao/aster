@@ -345,7 +345,7 @@ func verifySourceWorkspace(ctx context.Context, root, revision string, modePolic
 		wantFileMode = "false"
 	}
 	if strings.TrimSpace(string(configuredMode)) != wantFileMode {
-		return fmt.Errorf("source workspace mode policy changed")
+		return sourceIntegrityFailure(SourceModePolicyChanged, nil)
 	}
 	head, err := gitWorkspaceOutput(ctx, root, "rev-parse", "HEAD")
 	if err != nil || strings.TrimSpace(string(head)) != revision {
@@ -360,7 +360,7 @@ func verifySourceWorkspace(ctx context.Context, root, revision string, modePolic
 			continue
 		}
 		if len(record) < 3 || record[0] != 'H' || record[1] != ' ' {
-			return fmt.Errorf("source workspace uses unsupported index flags")
+			return sourceIntegrityFailure(SourceIndexFlagsChanged, nil)
 		}
 	}
 	staged, err := gitWorkspaceOutput(ctx, root, "ls-files", "--stage", "-z")
@@ -393,12 +393,37 @@ func verifySourceWorkspace(ctx context.Context, root, revision string, modePolic
 	if err := validateSourceDirectoryGraph(root, directorySymlinks); err != nil {
 		return err
 	}
-	for _, args := range [][]string{
-		{"diff", "--cached", "--no-ext-diff", "--no-textconv", "--quiet", revision, "--"},
-		{"diff", "--no-ext-diff", "--no-textconv", "--quiet", "--"},
-	} {
-		if _, err := gitWorkspaceOutput(ctx, root, args...); err != nil {
-			return fmt.Errorf("source workspace tracked files changed")
+	stagedExit, err := sourceDiffExitCode(ctx, root, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--quiet", revision, "--")
+	if err != nil {
+		return err
+	}
+	if stagedExit == 1 {
+		contentChanges, modeChanges, err := stagedDiffCounts(ctx, root, revision)
+		if err != nil {
+			return err
+		}
+		if contentChanges > 0 {
+			return sourceIntegrityFailure(SourceStagedContentChanged, nil)
+		}
+		if modeChanges > 0 {
+			return sourceIntegrityFailure(SourceIndexModeChanged, nil)
+		}
+		return sourceIntegrityFailure(SourceStagedContentChanged, nil)
+	}
+	contentExit, err := sourceDiffExitCode(ctx, root, "-c", "core.filemode=false", "diff", "--no-ext-diff", "--no-textconv", "--quiet", "--")
+	if err != nil {
+		return err
+	}
+	if contentExit == 1 {
+		return sourceIntegrityFailure(SourceWorktreeContentChanged, nil)
+	}
+	if modePolicy == WorkspaceSourceModePreserve {
+		worktreeExit, err := sourceDiffExitCode(ctx, root, "diff", "--no-ext-diff", "--no-textconv", "--quiet", "--")
+		if err != nil {
+			return err
+		}
+		if worktreeExit == 1 {
+			return sourceIntegrityFailure(SourceWorktreeModeChanged, nil)
 		}
 	}
 	for _, args := range [][]string{{"ls-files", "--others", "--exclude-standard", "-z"}, {"ls-files", "--others", "--ignored", "--exclude-standard", "-z"}} {
@@ -407,7 +432,7 @@ func verifySourceWorkspace(ctx context.Context, root, revision string, modePolic
 			return fmt.Errorf("inspect source workspace extras: %w", err)
 		}
 		if len(output) != 0 {
-			return fmt.Errorf("source workspace contains untracked or ignored files")
+			return sourceIntegrityFailure(SourceUntrackedFiles, nil)
 		}
 	}
 	return nil

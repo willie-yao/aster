@@ -119,6 +119,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		return fail(engineruntime.TerminalFailed, err.Error())
 	}
 	if err := verifyInputs(ctx, request, sourceRoot, artifactRoot); err != nil {
+		recordSourceIntegrityFailure(&result, err)
 		return fail(stateForContext(ctx), err.Error())
 	}
 	if err := verifyReadSafeWorkspace(ctx, sourceRoot, request.Manifest.Artifacts); err != nil {
@@ -186,6 +187,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		return fail(stateForContext(ctx), fmt.Sprintf("run OpenCode analyzer: %v", ctx.Err()))
 	}
 	if err := verifyInputsBounded(request, sourceRoot, artifactRoot); err != nil {
+		recordSourceIntegrityFailure(&result, err)
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("workspace changed during analysis: %v", err))
 	}
 	if runErr != nil {
@@ -212,6 +214,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("prepared mounts changed during result canonicalization: %v", err))
 	}
 	if err := verifyInputsBounded(request, sourceRoot, artifactRoot); err != nil {
+		recordSourceIntegrityFailure(&result, err)
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("workspace changed during result canonicalization: %v", err))
 	}
 	canonical, err := agentanalysis.MarshalWorkspaceAnalysis(analysis)
@@ -240,6 +243,12 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("validate analyzer result: %v", err))
 	}
 	return validated
+}
+
+func recordSourceIntegrityFailure(result *agentanalysis.WorkspaceExecutionResult, err error) {
+	if category := agentanalysis.SourceIntegrityCategory(err); category != "" {
+		result.OpenCodeTelemetry.FailureCode = category
+	}
 }
 
 func verifyInputs(ctx context.Context, request agentanalysis.WorkspaceExecutionRequest, sourceRoot, artifactRoot string) error {

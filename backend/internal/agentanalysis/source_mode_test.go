@@ -29,8 +29,8 @@ func TestConfigurePreparedSourceModePolicySealsModeOnlyProjection(t *testing.T) 
 	if err := os.Chmod(filepath.Join(root, "script.sh"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifySourceWorkspace(t.Context(), root, revision); err == nil || !strings.Contains(err.Error(), "tracked files changed") {
-		t.Fatalf("mode-only drift error=%v", err)
+	if err := VerifySourceWorkspace(t.Context(), root, revision); SourceIntegrityCategory(err) != SourceWorktreeModeChanged {
+		t.Fatalf("mode-only drift error=%v category=%q", err, SourceIntegrityCategory(err))
 	}
 	policy, err := configurePreparedSourceModePolicy(t.Context(), root, revision, func(string) (bool, error) { return false, nil })
 	if err != nil {
@@ -178,14 +178,14 @@ func TestPreparedSourceModePolicyMismatchIsRejected(t *testing.T) {
 	if policy != WorkspaceSourceModeIgnoreExecutable {
 		t.Fatalf("policy=%q", policy)
 	}
-	if err := VerifyPreparedSourceWorkspace(t.Context(), root, revision, WorkspaceSourceModePreserve); err == nil || !strings.Contains(err.Error(), "mode policy changed") {
-		t.Fatalf("error=%v", err)
+	if err := VerifyPreparedSourceWorkspace(t.Context(), root, revision, WorkspaceSourceModePreserve); SourceIntegrityCategory(err) != SourceModePolicyChanged {
+		t.Fatalf("error=%v category=%q", err, SourceIntegrityCategory(err))
 	}
 	if err := SetPreparedSourceModePolicy(t.Context(), root, WorkspaceSourceModePreserve); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyPreparedSourceWorkspace(t.Context(), root, revision, WorkspaceSourceModeIgnoreExecutable); err == nil || !strings.Contains(err.Error(), "mode policy changed") {
-		t.Fatalf("error=%v", err)
+	if err := VerifyPreparedSourceWorkspace(t.Context(), root, revision, WorkspaceSourceModeIgnoreExecutable); SourceIntegrityCategory(err) != SourceModePolicyChanged {
+		t.Fatalf("error=%v category=%q", err, SourceIntegrityCategory(err))
 	}
 }
 

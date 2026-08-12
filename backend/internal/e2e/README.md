@@ -423,3 +423,9 @@ Freeze the blinded score file with
 `hack/freeze-agent-sandbox-blind-scores.py` before reading the runtime map, then
 pass the resulting `--score-freeze` file to the scored comparison. The comparison
 rejects a changed post-unblinding score file.
+
+The provider-free analyzer integrity harness lives in
+`internal/analysisexecutor`. It is opt-in, uses a deterministic loopback TLS
+Chat Completions server, and runs inside the exact analysis executor image for
+Azure Files and Kata differential checks. Its JSON summary contains only
+content-free source integrity snapshots and aggregate tool telemetry.

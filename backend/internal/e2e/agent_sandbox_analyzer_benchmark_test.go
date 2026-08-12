@@ -916,8 +916,8 @@ func TestAgentSandboxAnalyzerExecutionRejectsChangedSourceModePolicy(t *testing.
 	}
 	sealed := agentSandboxAnalyzerPrepared{Version: 4, EvidenceMode: benchmarkEvidenceModeArtifactOnly, SourceModePolicy: string(policy)}
 	run("config", "--local", "core.filemode", "false")
-	if _, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), root, revision, &sealed); err == nil || !strings.Contains(err.Error(), "mode policy changed") {
-		t.Fatalf("error=%v", err)
+	if _, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), root, revision, &sealed); agentanalysis.SourceIntegrityCategory(err) != agentanalysis.SourceModePolicyChanged {
+		t.Fatalf("error=%v category=%q", err, agentanalysis.SourceIntegrityCategory(err))
 	}
 	if mode := run("config", "--local", "--bool", "--get", "core.filemode"); mode != "false" {
 		t.Fatalf("execution rewrote core.filemode=%s", mode)

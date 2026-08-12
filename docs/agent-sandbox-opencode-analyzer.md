@@ -513,3 +513,32 @@ subPath in the guest mountinfo root. The verifier accepts this exact Kata shape
 while admission and content verification bind the mounted data to the manifest.
 The temporary Sandbox, Pod, PVC, NetworkPolicy, and namespace were deleted and
 namespace absence was verified. Private operator evidence retains the Sandbox, Pod, mountinfo, write-denial, and cleanup records.
+
+### Provider-free source-integrity harness
+
+`TestProviderFreeSourceIntegrityHarness` runs the exact analyzer executor and
+OpenCode path against a loopback deterministic TLS gateway. It issues one
+artifact read, one source read, one source grep, and one `StructuredOutput`
+finalization. The source and artifact mounts remain read-only.
+
+The opt-in harness records only content-free before/after facts: HEAD and tree
+hashes, repository-local `core.filemode`, index mode and flag counts, redacted
+porcelain-v2 status identity, staged/worktree Git exit codes, content and mode
+change counts, untracked counts, evidence-call totals, and the privacy-safe
+terminal failure code. It does not retain prompts, source or artifact content,
+tool arguments, raw model output, credentials, or source paths.
+
+Source verification failures use these stable categories:
+
+- `source_staged_content_changed`
+- `source_worktree_content_changed`
+- `source_worktree_mode_changed`
+- `source_index_flags_changed`
+- `source_index_mode_changed`
+- `source_mode_policy_changed`
+- `source_untracked_files`
+- `source_git_diff_error`
+
+Git diff exit status `0` means clean, `1` means an actual difference, and any
+other status is `source_git_diff_error`. A Git command error is never reported
+as a confirmed source mutation.

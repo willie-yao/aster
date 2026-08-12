@@ -190,7 +190,23 @@ func TestExecuteRejectsSourceMutation(t *testing.T) {
 			return testOpenCodeResult(), nil
 		},
 	})
-	if result.TerminalState != engineruntime.TerminalFailed || !strings.Contains(result.FailureReason, "workspace changed") {
+	if result.TerminalState != engineruntime.TerminalFailed || result.FailureReason != "workspace changed during analysis: "+agentanalysis.SourceWorktreeContentChanged || result.OpenCodeTelemetry.FailureCode != agentanalysis.SourceWorktreeContentChanged {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestExecuteRejectsSourceModeMutation(t *testing.T) {
+	root, request := executorTestFixture(t)
+	result := Execute(context.Background(), request, Options{
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
+			if err := os.Chmod(filepath.Join(root, agentanalysis.WorkspaceSourceDir, "pkg", "controller.go"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			return testOpenCodeResult(), nil
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalFailed || result.FailureReason != "workspace changed during analysis: "+agentanalysis.SourceWorktreeModeChanged || result.OpenCodeTelemetry.FailureCode != agentanalysis.SourceWorktreeModeChanged {
 		t.Fatalf("result=%+v", result)
 	}
 }
