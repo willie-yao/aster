@@ -703,13 +703,13 @@ func failureLocationFile(loc string) string {
 
 // aiAPI returns the configured model API. project.yaml wins over AI_API.
 func aiAPI(cfg *project.Config) string {
-	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).API
+	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv)).API
 }
 
 // aiEndpoint returns the configured AI chat-completions URL.
 // project.yaml wins over AI_ENDPOINT.
 func aiEndpoint(cfg *project.Config) string {
-	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Endpoint
+	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv)).Endpoint
 }
 
 // githubReadToken returns the token for read-only GitHub source access.
@@ -729,5 +729,5 @@ func githubReadToken() string {
 // aiModel returns the configured AI model identifier.
 // project.yaml wins over AI_MODEL.
 func aiModel(cfg *project.Config) string {
-	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Model
+	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv)).Model
 }

@@ -287,6 +287,11 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 			}
 		}
 	}
+	if value, ok := deploy.With["ai-reasoning-effort"]; ok {
+		if !githubExpression(value, "vars", project.AIReasoningEffortEnv) {
+			missing = append(missing, "ai-reasoning-effort")
+		}
+	}
 	if !githubExpression(deploy.Secrets["AI_TOKEN"], "secrets", "AI_TOKEN") {
 		missing = append(missing, "secrets.AI_TOKEN")
 	}

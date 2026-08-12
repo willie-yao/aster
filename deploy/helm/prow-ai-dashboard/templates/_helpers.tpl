@@ -366,6 +366,9 @@ Validate AI provider configuration.
 {{- if not (has .Values.ai.api (list "chat_completions" "responses")) -}}
 {{- fail "ai.api must be chat_completions or responses" -}}
 {{- end -}}
+{{- if not (has (printf "%v" .Values.ai.reasoningEffort) (list "" "none" "low" "medium" "high" "xhigh" "max")) -}}
+{{- fail "ai.reasoningEffort must be empty, none, low, medium, high, xhigh, or max" -}}
+{{- end -}}
 {{- if and .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName -}}
 {{- fail "ai.githubReadToken and ai.githubReadTokenSecretName are mutually exclusive" -}}
 {{- end -}}
@@ -526,6 +529,10 @@ key, or bot token).
   value: {{ .Values.agentSandbox.fixRuntime.modelProvider.endpoint | quote }}
 - name: AGENT_SANDBOX_MODEL_PROVIDER_MODEL
   value: {{ .Values.agentSandbox.fixRuntime.modelProvider.model | quote }}
+{{- if .Values.agentSandbox.fixRuntime.modelProvider.reasoningEffort }}
+- name: AGENT_SANDBOX_MODEL_PROVIDER_REASONING_EFFORT
+  value: {{ .Values.agentSandbox.fixRuntime.modelProvider.reasoningEffort | quote }}
+{{- end }}
 - name: AGENT_SANDBOX_MODEL_PROVIDER_AUTH_TYPE
   value: {{ .Values.agentSandbox.fixRuntime.modelProvider.auth.type | quote }}
 - name: AGENT_SANDBOX_MODEL_PROVIDER_AUTH_SECRET_NAME
@@ -596,6 +603,7 @@ key, or bot token).
   {{- $publicCAPrivateDNS := default false $provider.publicCAPrivateDNS -}}
   {{- if not (has $credentialMode (list "direct" "gateway")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.credentialMode must be direct or gateway" -}}{{- end -}}
   {{- if not (has $providerAPI (list "chat_completions" "responses")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.api must be chat_completions or responses" -}}{{- end -}}
+  {{- if not (has (default "" $provider.reasoningEffort) (list "" "none" "low" "medium" "high" "xhigh")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.reasoningEffort must be empty, none, low, medium, high, or xhigh with pinned OpenCode 1.18.2" -}}{{- end -}}
   {{- if not (regexMatch "^https://[^/@?#]+(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $provider.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.endpoint must be an absolute credential-free HTTPS URL" -}}{{- end -}}
   {{- if and (eq $providerAPI "chat_completions") (not (hasSuffix "/chat/completions" (trimSuffix "/" $provider.endpoint))) -}}{{- fail "agentSandbox.fixRuntime.modelProvider chat_completions endpoint must end with /chat/completions" -}}{{- end -}}
   {{- if and (eq $providerAPI "responses") (not (hasSuffix "/responses" (trimSuffix "/" $provider.endpoint))) -}}{{- fail "agentSandbox.fixRuntime.modelProvider responses endpoint must end with /responses" -}}{{- end -}}
@@ -667,6 +675,7 @@ key, or bot token).
   {{- if ne $providerAPI (default "chat_completions" (get $projectProvider "api")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.api must match project agent_runtime.model_provider.api" -}}{{- end -}}
   {{- if ne $provider.endpoint (default "" (get $projectProvider "endpoint")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.endpoint must match project agent_runtime.model_provider.endpoint" -}}{{- end -}}
   {{- if ne $provider.model (default "" (get $projectProvider "model")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.model must match project agent_runtime.model_provider.model" -}}{{- end -}}
+  {{- if ne (default "" $provider.reasoningEffort) (default "" (get $projectProvider "reasoning_effort")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.reasoningEffort must match project agent_runtime.model_provider.reasoning_effort" -}}{{- end -}}
   {{- if ne $authType (default "none" (get $projectProviderAuth "type")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.auth.type must match project agent_runtime.model_provider.auth.type" -}}{{- end -}}
   {{- if ne $publicCAPrivateDNS (default false (get $projectProvider "public_ca_private_dns")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.publicCAPrivateDNS must match project agent_runtime.model_provider.public_ca_private_dns" -}}{{- end -}}
   {{- if (default false (get $projectRuntime "allow_bash")) -}}{{- fail "agentSandbox.fixRuntime requires project agent_runtime.allow_bash=false" -}}{{- end -}}
@@ -730,6 +739,7 @@ key, or bot token).
   {{- $authType := default "none" $providerAuth.type -}}
   {{- if not (has $credentialMode (list "direct" "gateway")) -}}{{- fail "agentSandbox.analyzer.modelProvider.credentialMode must be direct or gateway" -}}{{- end -}}
   {{- if not (has $providerAPI (list "chat_completions" "responses")) -}}{{- fail "agentSandbox.analyzer.modelProvider.api must be chat_completions or responses" -}}{{- end -}}
+  {{- if not (has (default "" $provider.reasoningEffort) (list "" "none" "low" "medium" "high" "xhigh")) -}}{{- fail "agentSandbox.analyzer.modelProvider.reasoningEffort must be empty, none, low, medium, high, or xhigh with pinned OpenCode 1.18.2" -}}{{- end -}}
   {{- if not (regexMatch "^https://[^/@?#]+(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $provider.endpoint) -}}{{- fail "agentSandbox.analyzer.modelProvider.endpoint must be an absolute credential-free HTTPS URL" -}}{{- end -}}
   {{- if and (eq $providerAPI "chat_completions") (not (hasSuffix "/chat/completions" (trimSuffix "/" $provider.endpoint))) -}}{{- fail "agentSandbox.analyzer.modelProvider chat_completions endpoint must end with /chat/completions" -}}{{- end -}}
   {{- if and (eq $providerAPI "responses") (not (hasSuffix "/responses" (trimSuffix "/" $provider.endpoint))) -}}{{- fail "agentSandbox.analyzer.modelProvider responses endpoint must end with /responses" -}}{{- end -}}

@@ -106,6 +106,7 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	ProviderPath                 string                                 `json:"provider_path"`
 	TransportID                  string                                 `json:"transport_id"`
 	APIMode                      string                                 `json:"api_mode"`
+	ReasoningEffort              string                                 `json:"reasoning_effort,omitempty"`
 	EvidenceCondition            string                                 `json:"evidence_condition"`
 	EvidenceMode                 string                                 `json:"evidence_mode"`
 	EvidenceContractPassed       bool                                   `json:"evidence_contract_passed"`
@@ -308,11 +309,12 @@ func loadAgentSandboxAnalyzerBenchmarkConfig(t *testing.T) agentSandboxAnalyzerB
 	}
 	prepareOnly := strings.TrimSpace(os.Getenv("ANALYZER_BENCH_PREPARE_ONLY")) == "1"
 	provider := modelprovider.Normalize(modelprovider.Config{
-		CredentialMode: require("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_CREDENTIAL_MODE"),
-		API:            require("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_API"),
-		Endpoint:       require("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_ENDPOINT"),
-		Model:          require("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_MODEL"),
-		Auth:           modelprovider.Auth{Type: require("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_AUTH_TYPE")},
+		CredentialMode:  require("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_CREDENTIAL_MODE"),
+		API:             require("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_API"),
+		Endpoint:        require("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_ENDPOINT"),
+		Model:           require("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_MODEL"),
+		ReasoningEffort: modelprovider.ReasoningEffort(strings.TrimSpace(os.Getenv("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_REASONING_EFFORT"))),
+		Auth:            modelprovider.Auth{Type: require("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_AUTH_TYPE")},
 	})
 	if err := validateBenchmarkProviderPath(require("BENCH_PROVIDER_PATH"), provider.Model); err != nil {
 		t.Fatal(err)
@@ -509,7 +511,7 @@ func agentSandboxAnalyzerRecordForResult(
 		EngineCommit: cfg.EngineCommit, FixtureSHA256: prepared.bc.fixtureSHA256,
 		BaselineConsumerCommit: prepared.bc.consumerCommit, BaselinePromptSHA256: prepared.bc.promptSHA256,
 		ProjectSHA256: prepared.prepared.ProjectSHA256, ProviderPath: cfg.ProviderPath, TransportID: cfg.TransportID,
-		APIMode: ai.APIChatCompletions, EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceMode: prepared.bc.evidenceMode,
+		APIMode: cfg.Provider.API, ReasoningEffort: string(cfg.Provider.ReasoningEffort), EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceMode: prepared.bc.evidenceMode,
 		EvidenceContractStatus: "analysis_unavailable", SourceExpectationSHA256: benchmarkSourceExpectationSHA256(prepared.bc), SourceExpectationPaths: append([]string{}, prepared.bc.sourcePaths...),
 		SourceExpectationTotal: len(prepared.bc.sourcePaths), SourceSignalTotal: len(prepared.bc.sourceSignals),
 		JobName: prepared.bc.jobName, BuildID: prepared.bc.buildID, TestName: prepared.bc.testName, TestSource: prepared.bc.testSource,

@@ -28,6 +28,9 @@ func TestValidateWorkspaceOpenCodeTelemetryAllowsFirstOperationFailure(t *testin
 	telemetry := WorkspaceOpenCodeTelemetry{
 		Available:                    true,
 		Status:                       WorkspaceTelemetryAvailable,
+		ProviderCredentialMode:       "direct",
+		ProviderAPI:                  "responses",
+		ProviderReasoningEffort:      "high",
 		EventCount:                   1,
 		ProviderRequests:             1,
 		ProviderRequestsKnown:        true,
@@ -120,6 +123,8 @@ func TestValidateWorkspaceOpenCodeTelemetryRejectsUnsafeOrInconsistentFields(t *
 		"request count unknown": func(value *WorkspaceOpenCodeTelemetry) {
 			value.ProviderRequestsKnown = false
 		},
+		"invalid reasoning effort":          func(value *WorkspaceOpenCodeTelemetry) { value.ProviderReasoningEffort = "ultra" },
+		"reasoning effort without provider": func(value *WorkspaceOpenCodeTelemetry) { value.ProviderReasoningEffort = "high" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			value := base

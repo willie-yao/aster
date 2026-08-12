@@ -516,6 +516,24 @@ agentSandbox:
 VALUES
 expect_fail invalid-agent-sandbox-provider-api "$tmp/invalid-agent-sandbox-provider-api.yaml" /agentSandbox/fixRuntime/modelProvider/api
 
+cat > "$tmp/invalid-reasoning-effort.yaml" <<'VALUES'
+ai:
+  reasoningEffort: ultra
+agentSandbox:
+  fixRuntime:
+    modelProvider:
+      reasoningEffort: ultra
+VALUES
+expect_fail invalid-reasoning-effort "$tmp/invalid-reasoning-effort.yaml" /ai/reasoningEffort
+
+cat > "$tmp/invalid-agent-sandbox-max-effort.yaml" <<'VALUES'
+agentSandbox:
+  fixRuntime:
+    modelProvider:
+      reasoningEffort: max
+VALUES
+expect_fail invalid-agent-sandbox-max-effort "$tmp/invalid-agent-sandbox-max-effort.yaml" /agentSandbox/fixRuntime/modelProvider/reasoningEffort
+
 cat > "$tmp/invalid-agent-sandbox-auth-type.yaml" <<'VALUES'
 agentSandbox:
   analyzer:

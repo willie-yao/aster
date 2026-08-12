@@ -18,6 +18,7 @@ name: Reusable Deploy
 #         # if set.
 #         ai-model: ${{ vars.AI_MODEL }}
 #         ai-endpoint: ${{ vars.AI_ENDPOINT }}
+#         ai-reasoning-effort: ${{ vars.AI_REASONING_EFFORT }}
 #         ai-context-window-tokens: ${{ vars.AI_CONTEXT_WINDOW_TOKENS }}
 #       secrets:
 #         AI_TOKEN: ${{ secrets.AI_TOKEN }}
@@ -62,6 +63,11 @@ on:
         default: ""
       ai-endpoint:
         description: "Optional. URL for the selected AI API, passed to the fetcher as AI_ENDPOINT. Use this with a repo variable (vars.AI_ENDPOINT) to keep private endpoint URLs out of the public project.yaml. The yaml ai.endpoint field wins if set."
+        required: false
+        type: string
+        default: ""
+      ai-reasoning-effort:
+        description: "Optional. Provider reasoning effort passed as AI_REASONING_EFFORT. Empty uses the provider default; accepted values are none, low, medium, high, xhigh, and max."
         required: false
         type: string
         default: ""
@@ -251,6 +257,7 @@ jobs:
           AI_API: ${{ inputs.ai-api }}
           AI_MODEL: ${{ inputs.ai-model }}
           AI_ENDPOINT: ${{ inputs.ai-endpoint }}
+          AI_REASONING_EFFORT: ${{ inputs.ai-reasoning-effort }}
           AI_CONTEXT_WINDOW_TOKENS: ${{ inputs.ai-context-window-tokens }}
           AI_CACHE_GENERATION: ${{ inputs.ai-cache-generation }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

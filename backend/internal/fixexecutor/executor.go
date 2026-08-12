@@ -399,12 +399,16 @@ func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps in
 	if provider.Auth.Type == modelprovider.AuthTypeBearer {
 		providerOptions["apiKey"] = "{env:" + modelprovider.TokenEnv + "}"
 	}
+	modelOptions := map[string]any{"limit": map[string]any{"context": 128000, "output": 8192}}
+	if provider.ReasoningEffort != "" {
+		modelOptions["options"] = map[string]any{"reasoningEffort": string(provider.ReasoningEffort)}
+	}
 	config := map[string]any{
 		"$schema": "https://opencode.ai/config.json", "share": "disabled", "autoupdate": false, "snapshot": false,
 		"provider": map[string]any{"engine": map[string]any{
 			"npm": adapter.NPM, "name": "engine",
 			"options": providerOptions,
-			"models":  map[string]any{provider.Model: map[string]any{"limit": map[string]any{"context": 128000, "output": 8192}}},
+			"models":  map[string]any{provider.Model: modelOptions},
 		}},
 		"agent": map[string]any{"build": map[string]any{"steps": maxSteps}},
 		"permission": map[string]any{

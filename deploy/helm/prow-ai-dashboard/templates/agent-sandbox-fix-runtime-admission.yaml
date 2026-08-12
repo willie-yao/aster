@@ -2,6 +2,7 @@
 {{- if .Values.agentSandbox.fixRuntime.enabled }}
 {{- $cfg := .Values.agentSandbox.fixRuntime -}}
 {{- $provider := $cfg.modelProvider -}}
+{{- $reasoningEffort := default "" $provider.reasoningEffort -}}
 {{- $directBearer := and (eq (default "direct" $provider.credentialMode) "direct") (eq (default "none" $provider.auth.type) "bearer") -}}
 {{- $clientSA := include "prow-ai-dashboard.agentSandboxClientServiceAccountName" . -}}
 {{- $requester := printf "system:serviceaccount:%s:%s" .Release.Namespace $clientSA -}}
@@ -44,8 +45,17 @@ spec:
       message: "dashboard Fix Sandbox execution identity annotations are immutable"
     - expression: "request.operation != 'CREATE' || (object.metadata.name.matches('^fix-[a-z0-9-]+-[0-9a-f]{12}$') && has(object.metadata.labels) && size(object.metadata.labels) == 3 && object.metadata.labels['app.kubernetes.io/managed-by'] == 'prow-ai-dashboard' && object.metadata.labels['agents.x-k8s.io/created-by'] == 'prow-ai-dashboard' && object.metadata.labels['prow-ai-dashboard/execution'] == object.metadata.name && (!has(object.metadata.finalizers) || size(object.metadata.finalizers) == 0))"
       message: "dashboard Fix Sandboxes must use the exact content-addressed labels and name without caller finalizers"
-    - expression: "request.operation != 'CREATE' || (has(object.metadata.annotations) && size(object.metadata.annotations) == 2 && object.metadata.annotations['prow-ai-dashboard/execution-contract-sha256'].matches('^[0-9a-f]{64}$') && size(object.metadata.annotations['prow-ai-dashboard/execution-id']) > 0)"
+    - expression: "request.operation != 'CREATE' || (has(object.metadata.annotations) && size(object.metadata.annotations) == {{ add 2 (ternary 1 0 (ne $reasoningEffort "")) }} && object.metadata.annotations['prow-ai-dashboard/execution-contract-sha256'].matches('^[0-9a-f]{64}$') && size(object.metadata.annotations['prow-ai-dashboard/execution-id']) > 0)"
       message: "dashboard Fix Sandboxes must carry the exact execution annotations"
+    {{- if $reasoningEffort }}
+    - expression: {{ printf "request.operation != 'CREATE' || (has(object.metadata.annotations) && object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == %s)" (toJson $reasoningEffort) | quote }}
+      message: "dashboard Fix Sandboxes must use the configured reasoning effort"
+    - expression: "request.operation != 'UPDATE' || object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == oldObject.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort']"
+      message: "dashboard Fix Sandbox reasoning effort is immutable"
+    {{- else }}
+    - expression: "request.operation != 'CREATE' || !has(object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'])"
+      message: "dashboard Fix Sandboxes must not add a reasoning effort override"
+    {{- end }}
     # AdmissionRequest exposes no trusted wall-clock value. The adapter sets the
     # absolute shutdown time; admission pins Delete policy and the Pod deadline.
     - expression: "has(object.spec.shutdownTime) && has(object.spec.shutdownPolicy) && object.spec.shutdownPolicy == 'Delete' && (!has(object.spec.operatingMode) || object.spec.operatingMode == 'Running')"

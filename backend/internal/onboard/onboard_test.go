@@ -330,7 +330,7 @@ func TestScaffold_PagesIncludesProviderSetup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render deploy workflow: %v", err)
 	}
-	for _, want := range []string{"vars.AI_API", "vars.AI_ENDPOINT", "vars.AI_MODEL", "secrets.AI_TOKEN"} {
+	for _, want := range []string{"vars.AI_API", "vars.AI_ENDPOINT", "vars.AI_MODEL", "vars.AI_REASONING_EFFORT", "secrets.AI_TOKEN"} {
 		if !strings.Contains(deploy, want) {
 			t.Errorf("deploy workflow missing %q:\n%s", want, deploy)
 		}
@@ -352,7 +352,7 @@ func TestScaffold_PagesIncludesProviderSetup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render checklist: %v", err)
 	}
-	for _, want := range []string{"gh variable set AI_API", "gh variable set AI_ENDPOINT", "gh variable set AI_MODEL", "gh secret set AI_TOKEN"} {
+	for _, want := range []string{"gh variable set AI_API", "gh variable set AI_ENDPOINT", "gh variable set AI_MODEL", "gh variable set AI_REASONING_EFFORT", "gh secret set AI_TOKEN"} {
 		if !strings.Contains(checklist, want) {
 			t.Errorf("checklist missing %q:\n%s", want, checklist)
 		}
@@ -681,6 +681,7 @@ func TestChecklist_UsesSelectedAPIAndExplainsDeferredAI(t *testing.T) {
 		"gh variable set AI_API --body responses",
 		"gh variable set AI_ENDPOINT",
 		"gh variable set AI_MODEL",
+		"gh variable set AI_REASONING_EFFORT",
 		"gh secret set AI_TOKEN",
 	} {
 		if !strings.Contains(disabled, want) {

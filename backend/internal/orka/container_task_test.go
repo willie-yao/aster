@@ -302,11 +302,20 @@ func TestBuildContainerAnalysisResourcesRequiresProviderAndToken(t *testing.T) {
 	}
 }
 
+func TestBuildContainerAnalysisResourcesRejectsInvalidReasoningEffort(t *testing.T) {
+	spec := containerTaskSpec(t)
+	spec.Environment[project.AIReasoningEffortEnv] = "ultra"
+	if _, err := BuildContainerAnalysisResources(spec); err == nil || !strings.Contains(err.Error(), "reasoning effort") {
+		t.Fatalf("invalid reasoning effort error = %v", err)
+	}
+}
+
 func TestBuildContainerAnalysisResourcesNormalizesProviderEnvironment(t *testing.T) {
 	spec := containerTaskSpec(t)
 	spec.Environment["AI_API"] = " Responses "
 	spec.Environment["AI_ENDPOINT"] = "  https://model.invalid/v1/responses  "
 	spec.Environment["AI_MODEL"] = "  model-name  "
+	spec.Environment[project.AIReasoningEffortEnv] = " HIGH "
 	resources, err := BuildContainerAnalysisResources(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -322,7 +331,7 @@ func TestBuildContainerAnalysisResourcesNormalizesProviderEnvironment(t *testing
 		}
 	}
 	want := map[string]string{
-		"AI_API": "responses", "AI_ENDPOINT": "https://model.invalid/v1/responses", "AI_MODEL": "model-name",
+		"AI_API": "responses", "AI_ENDPOINT": "https://model.invalid/v1/responses", "AI_MODEL": "model-name", project.AIReasoningEffortEnv: "high",
 	}
 	for name, value := range want {
 		if got[name] != value {
@@ -429,7 +438,7 @@ func TestBuildContainerAnalysisResourcesAllowsOnlyKnownSafeInlineEnvironment(t *
 	spec := containerTaskSpec(t)
 	spec.Environment = map[string]string{
 		"AI_API": "chat_completions", "AI_ENDPOINT": "http://model.invalid/v1/chat/completions", "AI_MODEL": "model",
-		project.AICacheGenerationEnv: "h100-grounded-v1",
+		project.AICacheGenerationEnv: "h100-grounded-v1", project.AIReasoningEffortEnv: "high",
 	}
 	resources, err := BuildContainerAnalysisResources(spec)
 	if err != nil {

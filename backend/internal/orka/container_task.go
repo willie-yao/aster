@@ -112,9 +112,18 @@ func prepareContainerAnalysisTask(in ContainerAnalysisTaskSpec) (preparedContain
 	if model == "" {
 		return preparedContainerAnalysisTask{}, fmt.Errorf("container analysis Task environment requires AI_MODEL")
 	}
+	reasoningEffort, err := ai.NormalizeReasoningEffort(environment[project.AIReasoningEffortEnv])
+	if err != nil {
+		return preparedContainerAnalysisTask{}, err
+	}
 	environment["AI_API"] = api
 	environment["AI_ENDPOINT"] = endpoint
 	environment["AI_MODEL"] = model
+	if reasoningEffort == "" {
+		delete(environment, project.AIReasoningEffortEnv)
+	} else {
+		environment[project.AIReasoningEffortEnv] = string(reasoningEffort)
+	}
 	in.Environment = environment
 	bundleJSON, bundleDigest, err := analysisruntime.BuildProjectBundleWithCache(in.ProjectDir, ContainerAnalysisContractVersion, in.Request, in.CacheSeed)
 	if err != nil {
@@ -348,7 +357,7 @@ func validateContainerAnalysisEndpoint(raw string) (string, error) {
 
 func safeInlineEnvironmentName(name string) bool {
 	switch name {
-	case "AI_API", "AI_ENDPOINT", "AI_MODEL", project.AICacheGenerationEnv, "AI_CONTEXT_WINDOW_TOKENS":
+	case "AI_API", "AI_ENDPOINT", "AI_MODEL", project.AIReasoningEffortEnv, project.AICacheGenerationEnv, "AI_CONTEXT_WINDOW_TOKENS":
 		return true
 	default:
 		return false

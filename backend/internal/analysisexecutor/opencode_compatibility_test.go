@@ -809,3 +809,80 @@ func assertCompatibilityAnalysis(t *testing.T, result OpenCodeRunResult, artifac
 		t.Fatalf("analysis=%+v validation=%+v", analysis, validation)
 	}
 }
+
+func TestOpenCode1182ReasoningEffortWireCompatibility(t *testing.T) {
+	bin := os.Getenv("OPENCODE_1_18_2_BIN")
+	if bin == "" {
+		t.Skip("set OPENCODE_1_18_2_BIN to the exact OpenCode 1.18.2 executable")
+	}
+	for _, tc := range []struct {
+		name   string
+		api    string
+		path   string
+		effort modelprovider.ReasoningEffort
+	}{
+		{name: "chat_completions/high", api: modelprovider.APIChatCompletions, path: "/v1/chat/completions", effort: modelprovider.ReasoningEffortHigh},
+		{name: "chat_completions/empty", api: modelprovider.APIChatCompletions, path: "/v1/chat/completions"},
+		{name: "responses/high", api: modelprovider.APIResponses, path: "/v1/responses", effort: modelprovider.ReasoningEffortHigh},
+		{name: "responses/empty", api: modelprovider.APIResponses, path: "/v1/responses"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			credential := "fixture-reasoning-effort-token"
+			t.Setenv(modelprovider.TokenEnv, credential)
+			requests := make(chan map[string]any, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tc.path {
+					t.Errorf("provider path = %q, want %q", r.URL.Path, tc.path)
+				}
+				var request map[string]any
+				if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&request); err != nil {
+					t.Errorf("decode provider request: %v", err)
+				}
+				requests <- request
+				w.Header().Set("Content-Type", "application/json")
+				http.Error(w, `{"error":{"message":"synthetic stop"}}`, http.StatusBadRequest)
+			}))
+			defer server.Close()
+
+			workDir := t.TempDir()
+			for _, dir := range []string{"source", "artifacts", "result"} {
+				if err := os.Mkdir(filepath.Join(workDir, dir), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			provider := modelprovider.Normalize(modelprovider.Config{
+				CredentialMode: modelprovider.CredentialModeDirect, API: tc.api,
+				Endpoint: server.URL + tc.path, Model: "synthetic-model", ReasoningEffort: tc.effort,
+				Auth: modelprovider.Auth{Type: modelprovider.AuthTypeBearer},
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			_, _ = defaultRunOpenCode(ctx, OpenCodeSpec{
+				Bin: bin, WorkDir: workDir, HomeDir: t.TempDir(), TempDir: t.TempDir(), Provider: provider,
+				Prompt: "Inspect the fixture.", MaxSteps: 3, ModelContextTokens: 200000, ModelOutputTokens: 8192,
+			})
+
+			select {
+			case request := <-requests:
+				reasoningEffort, hasReasoningEffort := request["reasoning_effort"]
+				reasoning, hasReasoning := request["reasoning"]
+				if tc.effort == "" {
+					if hasReasoningEffort || hasReasoning {
+						t.Fatalf("empty effort added reasoning fields: %#v", request)
+					}
+					return
+				}
+				if tc.api == modelprovider.APIResponses {
+					reasoningObject, ok := reasoning.(map[string]any)
+					if !hasReasoning || !ok || reasoningObject["effort"] != string(tc.effort) || hasReasoningEffort {
+						t.Fatalf("Responses reasoning fields = %#v", request)
+					}
+				} else if !hasReasoningEffort || reasoningEffort != string(tc.effort) || hasReasoning {
+					t.Fatalf("Chat reasoning fields = %#v", request)
+				}
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		})
+	}
+}

@@ -97,6 +97,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	}
 	result.OpenCodeTelemetry.ProviderCredentialMode = request.ModelProvider.CredentialMode
 	result.OpenCodeTelemetry.ProviderAPI = request.ModelProvider.API
+	result.OpenCodeTelemetry.ProviderReasoningEffort = string(request.ModelProvider.ReasoningEffort)
 	ctx, cancel := context.WithTimeout(parent, time.Duration(request.TimeoutSeconds)*time.Second)
 	defer cancel()
 
@@ -167,6 +168,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	}
 	runResult.Telemetry.ProviderCredentialMode = request.ModelProvider.CredentialMode
 	runResult.Telemetry.ProviderAPI = request.ModelProvider.API
+	runResult.Telemetry.ProviderReasoningEffort = string(request.ModelProvider.ReasoningEffort)
 	if runResult.Telemetry.ProviderRequests == 0 && runResult.Telemetry.StepsUsed > 0 {
 		runResult.Telemetry.ProviderRequests = runResult.Telemetry.StepsUsed
 		if !runResult.Telemetry.Error.Available {
@@ -1031,13 +1033,17 @@ func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps, c
 		"edit": "deny", "write": "deny", "apply_patch": "deny",
 		"webfetch": "deny", "websearch": "deny", "task": "deny", "skill": "deny", "external_directory": "deny",
 	}
+	modelOptions := map[string]any{"limit": map[string]any{"context": contextTokens, "output": outputTokens}}
+	if provider.ReasoningEffort != "" {
+		modelOptions["options"] = map[string]any{"reasoningEffort": string(provider.ReasoningEffort)}
+	}
 	config := map[string]any{
 		"$schema": "https://opencode.ai/config.json", "share": "disabled", "autoupdate": false, "snapshot": false,
 		"default_agent": openCodeEvidenceAgent,
 		"provider": map[string]any{"engine": map[string]any{
 			"npm": adapter.NPM, "name": "engine",
 			"options": providerOptions,
-			"models":  map[string]any{provider.Model: map[string]any{"limit": map[string]any{"context": contextTokens, "output": outputTokens}}},
+			"models":  map[string]any{provider.Model: modelOptions},
 		}},
 		"agent": map[string]any{
 			openCodeEvidenceAgent: map[string]any{

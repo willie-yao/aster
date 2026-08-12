@@ -40,6 +40,7 @@ const (
 	agentSandboxExecutionLabel             = "prow-ai-dashboard/execution"
 	agentSandboxContractAnnotation         = "prow-ai-dashboard/execution-contract-sha256"
 	agentSandboxIDAnnotation               = "prow-ai-dashboard/execution-id"
+	agentSandboxReasoningEffortAnnotation  = "prow-ai-dashboard/model-provider-reasoning-effort"
 	agentSandboxPreparedAnnotation         = "prow-ai-dashboard/prepared-manifest-sha256"
 	agentSandboxPreparedIdentityAnnotation = "prow-ai-dashboard/prepared-workspace-sha256"
 	agentSandboxPodAnnotation              = "agents.x-k8s.io/pod-name"
@@ -281,7 +282,7 @@ func newAgentSandboxProviderRunnerFromEnv(prefix, kubeContext string, inClusterO
 	}
 	opts.ModelProvider = modelprovider.Normalize(modelprovider.Config{
 		CredentialMode: env("MODEL_PROVIDER_CREDENTIAL_MODE"), API: env("MODEL_PROVIDER_API"),
-		Endpoint: env("MODEL_PROVIDER_ENDPOINT"), Model: env("MODEL_PROVIDER_MODEL"),
+		Endpoint: env("MODEL_PROVIDER_ENDPOINT"), Model: env("MODEL_PROVIDER_MODEL"), ReasoningEffort: modelprovider.ReasoningEffort(env("MODEL_PROVIDER_REASONING_EFFORT")),
 		Auth: modelprovider.Auth{Type: env("MODEL_PROVIDER_AUTH_TYPE")}, PublicCAPrivateDNS: publicCAPrivateDNS,
 	})
 	opts.ProviderSecretRef = ProviderSecretRef{Name: env("MODEL_PROVIDER_AUTH_SECRET_NAME"), Key: env("MODEL_PROVIDER_AUTH_SECRET_KEY")}
@@ -567,6 +568,7 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	if r.opts.ModelProvider != (modelprovider.Config{}) {
 		result.Telemetry.ProviderCredentialMode = r.opts.ModelProvider.CredentialMode
 		result.Telemetry.ProviderAPI = r.opts.ModelProvider.API
+		result.Telemetry.ProviderReasoningEffort = string(r.opts.ModelProvider.ReasoningEffort)
 	} else {
 		result.Telemetry.ProviderCredentialMode = modelprovider.CredentialModeGateway
 		result.Telemetry.ProviderAPI = modelprovider.APIChatCompletions
@@ -832,6 +834,9 @@ func (r *AgentSandboxRuntime) sandboxObjectForSpec(name string, spec agentsandbo
 	annotations := map[string]any{
 		agentSandboxContractAnnotation: hex.EncodeToString(contractHash),
 		agentSandboxIDAnnotation:       strings.TrimSpace(executionID),
+	}
+	if r.opts.ModelProvider.ReasoningEffort != "" {
+		annotations[agentSandboxReasoningEffortAnnotation] = string(r.opts.ModelProvider.ReasoningEffort)
 	}
 	if spec.PreparedWorkspace != nil {
 		annotations[agentSandboxPreparedAnnotation] = spec.PreparedWorkspace.ManifestHash

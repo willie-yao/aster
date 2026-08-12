@@ -404,6 +404,9 @@ func TestAgentSandboxRuntimeIdentityIncludesWorkloadConfiguration(t *testing.T) 
 		func(opts *AgentSandboxOptions) { opts.RuntimeClassName = "other-runtime" },
 		func(opts *AgentSandboxOptions) { opts.Resources.MemoryLimit = "1Gi" },
 		func(opts *AgentSandboxOptions) {
+			opts.ModelProvider.ReasoningEffort = modelprovider.ReasoningEffortHigh
+		},
+		func(opts *AgentSandboxOptions) {
 			opts.ModelProvider = testResponsesProvider("https://api.openai.com/v1/responses", "fixture-model")
 			opts.ProviderSecretRef = ProviderSecretRef{Name: "agent-sandbox-model", Key: "AI_TOKEN"}
 		},
@@ -868,6 +871,7 @@ func TestAgentSandboxRunTimeoutUsesPurposeSpecificGrace(t *testing.T) {
 
 func TestAgentSandboxPreparedWorkspaceUsesImmutableInputMounts(t *testing.T) {
 	runtime := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, testAgentSandboxOptions())
+	runtime.opts.ModelProvider.ReasoningEffort = modelprovider.ReasoningEffortHigh
 	runtime.opts.StagerImage = "stager:test"
 	runtime.opts.StagerInputClaim = "analysis-input"
 	manifestHash := strings.Repeat("a", 64)
@@ -883,7 +887,7 @@ func TestAgentSandboxPreparedWorkspaceUsesImmutableInputMounts(t *testing.T) {
 		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: manifestHash, IdentityHash: identityHash},
 	}, []byte(strings.Repeat("b", 32)), "execution-1")
 	annotations := object["metadata"].(map[string]any)["annotations"].(map[string]any)
-	if annotations[agentSandboxPreparedAnnotation] != manifestHash || annotations[agentSandboxPreparedIdentityAnnotation] != identityHash {
+	if annotations[agentSandboxPreparedAnnotation] != manifestHash || annotations[agentSandboxPreparedIdentityAnnotation] != identityHash || annotations[agentSandboxReasoningEffortAnnotation] != "high" {
 		t.Fatalf("annotations=%+v", annotations)
 	}
 	if got := pod["activeDeadlineSeconds"]; got != int64(time.Minute/time.Second)+int64(agentanalysis.WorkspacePostModelGrace/time.Second) {
@@ -1081,6 +1085,7 @@ func TestAgentSandboxDirectTelemetryIdentifiesCredentialMode(t *testing.T) {
 	}
 	opts := testAgentSandboxOptions()
 	opts.ModelProvider = testDirectUnauthenticatedProvider("https://provider.example/v1/chat/completions", "fixture")
+	opts.ModelProvider.ReasoningEffort = modelprovider.ReasoningEffortHigh
 	runtime := newAgentSandboxRuntimeForTest(api, opts)
 	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
 		Purpose: "analysis", ExecutionID: "request-1", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64",
@@ -1089,7 +1094,7 @@ func TestAgentSandboxDirectTelemetryIdentifiesCredentialMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Telemetry.ProviderCredentialMode != modelprovider.CredentialModeDirect || result.Telemetry.ProviderAPI != modelprovider.APIChatCompletions || result.Telemetry.UsageStatus != "unavailable_from_direct_provider" {
+	if result.Telemetry.ProviderCredentialMode != modelprovider.CredentialModeDirect || result.Telemetry.ProviderAPI != modelprovider.APIChatCompletions || result.Telemetry.ProviderReasoningEffort != "high" || result.Telemetry.UsageStatus != "unavailable_from_direct_provider" {
 		t.Fatalf("telemetry = %+v", result.Telemetry)
 	}
 }
@@ -1126,6 +1131,7 @@ func TestAgentSandboxResponsesTelemetryIdentifiesAPI(t *testing.T) {
 	}
 	opts := testAgentSandboxOptions()
 	opts.ModelProvider = testResponsesProvider("https://api.openai.com/v1/responses", "fixture")
+	opts.ModelProvider.ReasoningEffort = modelprovider.ReasoningEffortHigh
 	opts.ProviderSecretRef = ProviderSecretRef{Name: "agent-sandbox-model", Key: "AI_TOKEN"}
 	runtime := newAgentSandboxRuntimeForTest(api, opts)
 	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
@@ -1135,7 +1141,7 @@ func TestAgentSandboxResponsesTelemetryIdentifiesAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Telemetry.ProviderCredentialMode != modelprovider.CredentialModeDirect || result.Telemetry.ProviderAPI != modelprovider.APIResponses {
+	if result.Telemetry.ProviderCredentialMode != modelprovider.CredentialModeDirect || result.Telemetry.ProviderAPI != modelprovider.APIResponses || result.Telemetry.ProviderReasoningEffort != "high" {
 		t.Fatalf("telemetry = %+v", result.Telemetry)
 	}
 }

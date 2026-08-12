@@ -35,7 +35,7 @@ type ProviderFallbacks struct {
 	API             string
 	Endpoint        string
 	Model           string
-	ReasoningEffort ai.ReasoningEffort
+	ReasoningEffort string
 	CacheGeneration string
 }
 
@@ -61,9 +61,8 @@ func LoadProject(projectDir string, cfg *project.Config, fallbacks ProviderFallb
 			return nil, fmt.Errorf("loading project config: %w", err)
 		}
 	}
-	provider := cfg.ResolveAIProvider(fallbacks.API, fallbacks.Endpoint, fallbacks.Model)
-	provider.ReasoningEffort = fallbacks.ReasoningEffort
-	if err := project.ValidateAIAPI(provider.API); err != nil {
+	provider := cfg.ResolveAIProvider(fallbacks.API, fallbacks.Endpoint, fallbacks.Model, fallbacks.ReasoningEffort)
+	if err := project.ValidateAIProvider(provider); err != nil {
 		return nil, err
 	}
 	if provider.Endpoint == "" || provider.Model == "" {

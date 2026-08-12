@@ -120,6 +120,8 @@ agentSandbox:
       api: chat_completions
       endpoint: ""
       model: ""
+      # Optional OpenCode reasoning effort. Empty uses the provider default.
+      reasoningEffort: ""
       auth:
         # none is valid for unauthenticated providers and all gateway workloads.
         type: none
@@ -174,6 +176,8 @@ agentSandbox:
       api: chat_completions
       endpoint: ""
       model: ""
+      # Optional OpenCode reasoning effort. Empty uses the provider default.
+      reasoningEffort: ""
       auth:
         type: none
         existingSecret: ""
@@ -379,6 +383,8 @@ ai:
   api: chat_completions
   endpoint: ""
   model: ""
+  # Optional provider reasoning effort. Empty uses the provider default.
+  reasoningEffort: ""
   # Optional operator-provided total provider context window. Leave 0 to use
   # /v1/models metadata or the engine's bounded fallback. For the current
   # Copilot GPT-5 mini deployment, set 128000.

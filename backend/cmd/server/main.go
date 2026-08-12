@@ -171,7 +171,7 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 	}
 	opts.AIUsageEnabled = usageRecorder != nil
 	if cfg.AI != nil {
-		opts.AIUsageModel = cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Model
+		opts.AIUsageModel = cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv)).Model
 		pricing := cfg.AI.EffectiveUsage().Pricing
 		if pricing.Currency != "" {
 			table, priceErr := aiusage.NewPriceTable(aiusage.Rates{
@@ -354,8 +354,8 @@ func configureAuthenticator(opts *server.Options, actionsEnabled bool) error {
 }
 
 func enableActions(ctx context.Context, opts *server.Options, cfg *project.Config, dataDir string, usageRecorder *aiusage.Recorder) (*actions.Service, error) {
-	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
-	if err := project.ValidateAIAPI(provider.API); err != nil {
+	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv))
+	if err := project.ValidateAIProvider(provider); err != nil {
 		return nil, err
 	}
 	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
@@ -394,7 +394,7 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 		return nil, fmt.Errorf("analysis chat requires AI_TOKEN")
 	}
 	projectRuntime, err := analysisruntime.LoadProject(projectDir, cfg, analysisruntime.ProviderFallbacks{
-		API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"),
+		API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"), ReasoningEffort: os.Getenv(project.AIReasoningEffortEnv),
 		CacheGeneration: os.Getenv(project.AICacheGenerationEnv),
 	})
 	if err != nil {
@@ -439,15 +439,15 @@ func enableCausalRemediationInvestigation(
 	if token == "" {
 		return fmt.Errorf("causal remediation investigation requires AI_TOKEN")
 	}
-	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
-	if err := project.ValidateAIAPI(provider.API); err != nil {
+	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv))
+	if err := project.ValidateAIProvider(provider); err != nil {
 		return err
 	}
 	if strings.TrimSpace(provider.Endpoint) == "" || strings.TrimSpace(provider.Model) == "" {
 		return fmt.Errorf("causal remediation investigation requires an AI endpoint and model")
 	}
 	loaded, err := analysisruntime.LoadProject(projectDir, cfg, analysisruntime.ProviderFallbacks{
-		API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model, ReasoningEffort: provider.ReasoningEffort,
+		API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model, ReasoningEffort: string(provider.ReasoningEffort),
 		CacheGeneration: os.Getenv(project.AICacheGenerationEnv),
 	})
 	if err != nil {

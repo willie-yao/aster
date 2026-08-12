@@ -93,6 +93,7 @@ ai:
   api: chat_completions
   endpoint: "<provider-endpoint>"
   model: "<model-id>"
+  reasoningEffort: "" # optional: none, low, medium, high, xhigh, or max
   existingSecret: "<ai-secret-name>"
   tokenSecretKey: AI_TOKEN
 ```

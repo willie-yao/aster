@@ -221,9 +221,12 @@ telemetry because OpenCode 1.18.2 does not expose the completed structured messa
 through the session message-list endpoint. No prompt, output, file content, raw
 event, response body, or provider message is retained.
 
-Responses uses the native streaming provider path with `store: false`. OpenCode
-keeps the complete evidence, tool-call, tool-result, and finalization history in
-one local session. The executor does not use `previous_response_id` or depend on
+Responses uses the native streaming provider path with `store: false`. The
+optional Helm `modelProvider.reasoningEffort` is sealed into the provider
+contract and runtime identity. Pinned OpenCode 1.18.2 emits
+`reasoning.effort` for Responses and `reasoning_effort` for Chat Completions
+for `none` through `xhigh`; it rejects `max`. OpenCode keeps the complete
+evidence, tool-call, tool-result, and finalization history in one local session. The executor does not use `previous_response_id` or depend on
 provider-side response chaining. Exact OpenCode 1.18.2 fixtures prove streaming
 text, function calls, StructuredOutput, multi-turn history, actual usage when
 reported, unavailable usage when omitted, and sanitized HTTP or malformed-stream

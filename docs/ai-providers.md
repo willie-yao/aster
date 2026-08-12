@@ -25,6 +25,40 @@ or via the `AI_ENDPOINT` / `AI_MODEL` env vars (see below). GitHub Copilot has
 separate Responses and Chat Completions endpoints. Choose the API listed in the
 model catalog's `supported_endpoints` field.
 
+### Reasoning effort
+
+Set the optional provider reasoning effort with `AI_REASONING_EFFORT` or Helm
+`ai.reasoningEffort`. Empty or unset uses the provider default. The engine
+normalizes whitespace and case and accepts `none`, `low`, `medium`, `high`,
+`xhigh`, and `max`. Unknown values fail before provider I/O. The engine does not
+infer effort from the model name and does not downgrade `max` to `xhigh`.
+
+The native request fields are:
+
+```json
+// Responses
+{"reasoning":{"effort":"high"}}
+```
+
+```json
+// Chat Completions
+{"reasoning_effort":"high"}
+```
+
+Provider and model support is not universal. The captured Copilot catalog used
+for the current compatibility tests advertises `none`, `low`, `medium`, `high`,
+and `xhigh` for GPT-5.4, but not `max`. GPT-5.6 Sol advertises all six values,
+including `max`, and is exposed through Copilot Responses rather than Chat
+Completions. Copilot Opus 4.8 is exposed through Chat Completions and
+`/v1/messages`; the engine does not have a proven reasoning-effort mapping for
+that model, and native Anthropic Messages support is outside this contract.
+
+Higher effort can increase latency and token use. Requested effort is private,
+content-free provenance and is separate from provider-reported reasoning-token
+counts. The dashboard does not publish or retain provider chain-of-thought or
+encrypted reasoning payloads. A non-empty effort changes model and cache
+fingerprints; empty preserves the historical request body and fingerprint.
+
 The guided `fetcher onboard` wizard includes coordinate presets for GitHub
 Copilot Responses, GitHub Copilot Chat Completions, OpenAI Responses, OpenAI
 Chat Completions, and the public NVIDIA API.
@@ -54,8 +88,8 @@ providers and standard model names, but it's a problem when:
 For those cases, leave `endpoint:` and `model:` out of `project.yaml` and
 pass them through repo-scoped GitHub Actions **variables** (not secrets;
 these aren't sensitive enough to need masking). The reusable workflow
-accepts `ai-model` and `ai-endpoint` inputs and forwards them to the
-fetcher as `AI_MODEL` / `AI_ENDPOINT` env vars; the fetcher reads those
+accepts `ai-model`, `ai-endpoint`, and `ai-reasoning-effort` inputs and forwards them to the
+fetcher as `AI_MODEL`, `AI_ENDPOINT`, and `AI_REASONING_EFFORT` env vars; the fetcher reads those
 when the yaml fields are blank.
 
 ```yaml
@@ -74,6 +108,7 @@ jobs:
       project_dir: .
       ai-model: ${{ vars.AI_MODEL }}
       ai-endpoint: ${{ vars.AI_ENDPOINT }}
+      ai-reasoning-effort: ${{ vars.AI_REASONING_EFFORT }}
     secrets:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
 ```
@@ -83,15 +118,19 @@ Set the variables once per consumer repo:
 ```sh
 gh variable set AI_MODEL    --repo your-org/your-consumer-repo
 gh variable set AI_ENDPOINT --repo your-org/your-consumer-repo
+# Optional; omit for the provider default.
+gh variable set AI_REASONING_EFFORT --body high --repo your-org/your-consumer-repo
 ```
 
-Resolution order is `project.yaml` field > env var, with no engine default, so
-yaml entries still win if you ever need to override per-repo. Sourcing
+Endpoint, model, and API resolution order is `project.yaml` field > env var,
+with no engine default, so yaml entries still win for those coordinates.
+Reasoning effort is deployment-owned and comes only from `AI_REASONING_EFFORT`
+or Helm `ai.reasoningEffort`. Sourcing
 the inputs from `vars.*` (instead of hardcoding in the workflow file)
 keeps the values out of the public repo source.
 
 On the [Kubernetes-native](kubernetes.md) path, set the endpoint and model in the
-Helm values (`ai.endpoint` / `ai.model`) and the token via `--set ai.token=` or
+Helm values (`ai.endpoint` / `ai.model` / `ai.reasoningEffort`) and the token via `--set ai.token=` or
 `ai.existingSecret` instead of workflow secrets.
 
 The engine also scrubs `ai.endpoint`, `ai.model`, and per-failure
@@ -297,6 +336,16 @@ Responses with `auth.type: none` or tokenless gateway mode fails validation
 rather than inventing a placeholder credential. Direct unauthenticated access
 and gateway mode remain supported for Chat Completions, including internal Ray
 Serve deployments.
+
+Pinned source tag `v1.18.2` at commit
+`70b56a0a93d366889cae950379cc9d2537148fa2` uses
+`@ai-sdk/openai` 3.0.84 and `@ai-sdk/openai-compatible` 2.0.41. Its model
+`options.reasoningEffort` reaches `reasoning.effort` for Responses and
+`reasoning_effort` for Chat Completions. Deterministic fake-provider tests
+capture both actual OpenCode requests. The pinned OpenAI protocol excludes
+`max`, so Agent Sandbox `modelProvider.reasoningEffort` supports empty,
+`none`, `low`, `medium`, `high`, and `xhigh`, but rejects `max`. Engine-native
+GPT-5.6 Sol Responses requests still support `max` when the provider does.
 
 For bearer auth, the named Secret must already exist in the Agent Sandbox
 execution namespace. The chart never creates, copies, reads, or prints it. The

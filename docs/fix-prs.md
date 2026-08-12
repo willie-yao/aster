@@ -571,6 +571,7 @@ ai:
         api: chat_completions
         endpoint: https://api.githubcopilot.com/chat/completions
         model: claude-sonnet-4.6
+        reasoning_effort: high
         auth:
           type: bearer
 ```
@@ -586,6 +587,7 @@ agentSandbox:
       api: chat_completions
       endpoint: https://api.githubcopilot.com/chat/completions
       model: claude-sonnet-4.6
+      reasoningEffort: high
       auth:
         type: bearer
         existingSecret: agent-sandbox-model
@@ -596,9 +598,11 @@ agentSandbox:
 For native Responses, change both project and Helm `api` values to `responses`
 and use a full endpoint such as `https://api.openai.com/v1/responses`. Pinned
 OpenCode 1.18.2 maps Chat Completions to `@ai-sdk/openai-compatible` and
-Responses to `@ai-sdk/openai`. Responses currently requires direct bearer auth;
-Chat Completions retains direct unauthenticated and explicit tokenless gateway
-modes.
+Responses to `@ai-sdk/openai`. The optional project `reasoning_effort` and Helm
+`reasoningEffort` values must match. Pinned OpenCode 1.18.2 emits the expected
+wire field for `none` through `xhigh`; it rejects `max`. Responses currently
+requires direct bearer auth; Chat Completions retains direct unauthenticated and
+explicit tokenless gateway modes.
 
 Use a dedicated inference-only credential. Do not mount `BOT_TOKEN`,
 `FIX_TOKEN`, OAuth credentials, GitHub read credentials, or a general GitHub

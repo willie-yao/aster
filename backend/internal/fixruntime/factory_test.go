@@ -120,7 +120,7 @@ func setAgentSandboxProviderEnv(t *testing.T, prefix string, provider modelprovi
 		"NAMESPACE": "fix-eval", "IMAGE": "registry.example.test/fixer@sha256:" + strings.Repeat("a", 64),
 		"SERVICE_ACCOUNT": "fix-workload", "RUNTIME_CLASS": "kata-vm-isolation",
 		"MODEL_PROVIDER_CREDENTIAL_MODE": provider.CredentialMode, "MODEL_PROVIDER_API": provider.API,
-		"MODEL_PROVIDER_ENDPOINT": provider.Endpoint, "MODEL_PROVIDER_MODEL": provider.Model,
+		"MODEL_PROVIDER_ENDPOINT": provider.Endpoint, "MODEL_PROVIDER_MODEL": provider.Model, "MODEL_PROVIDER_REASONING_EFFORT": string(provider.ReasoningEffort),
 		"MODEL_PROVIDER_AUTH_TYPE": provider.Auth.Type, "MODEL_PROVIDER_AUTH_SECRET_NAME": secret.Name,
 		"MODEL_PROVIDER_AUTH_SECRET_KEY": secret.Key, "MODEL_PROVIDER_PUBLIC_CA_PRIVATE_DNS": "false",
 		"TIMEOUT": timeout, "OUTPUT_LIMIT_BYTES": "131072", "CPU_REQUEST": "100m", "CPU_LIMIT": "1",
@@ -137,12 +137,13 @@ func TestNewAgentSandboxSelectionRequiresIsolatedConfiguration(t *testing.T) {
 		return &rest.Config{Host: "https://127.0.0.1:65535"}, nil
 	}
 	provider := testDirectBearerProvider("https://api.githubcopilot.com/chat/completions", "fixture-model")
+	provider.ReasoningEffort = modelprovider.ReasoningEffortHigh
 	secret := ProviderSecretRef{Name: "agent-sandbox-model", Key: "AI_TOKEN"}
 	setAgentSandboxProviderEnv(t, "AGENT_SANDBOX_", provider, secret, "10m")
 	got, err := New(&project.FixAgentRuntime{
 		Type: "agent-sandbox", Timeout: "10m", OutputLimitBytes: 131072,
 		ModelProvider: project.FixModelProvider{
-			CredentialMode: provider.CredentialMode, API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model,
+			CredentialMode: provider.CredentialMode, API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model, ReasoningEffort: provider.ReasoningEffort,
 			Auth: project.FixModelProviderAuth{Type: provider.Auth.Type},
 		},
 	})
@@ -166,6 +167,7 @@ func TestAgentSandboxProviderRunnerFromEnvIncludesStagerConfiguration(t *testing
 	}
 	prefix := "AGENT_SANDBOX_ANALYSIS_"
 	provider := testGatewayProvider("https://fixture-gateway.fixture.svc.cluster.local/v1/chat/completions", "fixture-model")
+	provider.ReasoningEffort = modelprovider.ReasoningEffortHigh
 	setAgentSandboxProviderEnv(t, prefix, provider, ProviderSecretRef{}, "1m")
 	t.Setenv(prefix+"NAMESPACE", "analysis-eval")
 	t.Setenv(prefix+"IMAGE", "registry.example.test/analyzer@sha256:"+strings.Repeat("a", 64))
@@ -176,7 +178,7 @@ func TestAgentSandboxProviderRunnerFromEnvIncludesStagerConfiguration(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.opts.StagerImage != "registry.example.test/stager@sha256:"+strings.Repeat("b", 64) || runtime.opts.StagerInputClaim != "analysis-input" {
+	if runtime.opts.StagerImage != "registry.example.test/stager@sha256:"+strings.Repeat("b", 64) || runtime.opts.StagerInputClaim != "analysis-input" || runtime.opts.ModelProvider.ReasoningEffort != modelprovider.ReasoningEffortHigh {
 		t.Fatalf("stager options = %q %q", runtime.opts.StagerImage, runtime.opts.StagerInputClaim)
 	}
 }

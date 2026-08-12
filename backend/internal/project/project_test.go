@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 )
 
 const validYAML = `
@@ -1105,13 +1107,20 @@ func TestEffectiveFixPRsPreservesZeroOrkaRetries(t *testing.T) {
 
 func TestResolveAIProviderAPI(t *testing.T) {
 	cfg := &Config{AI: &AI{API: AIAPIResponses, Endpoint: "https://example/v1/responses", Model: "m"}}
-	got := cfg.ResolveAIProvider(AIAPIChatCompletions, "fallback", "fallback-model")
-	if got.API != AIAPIResponses || got.Endpoint != cfg.AI.Endpoint || got.Model != "m" {
+	got := cfg.ResolveAIProvider(AIAPIChatCompletions, "fallback", "fallback-model", " HIGH ")
+	if got.API != AIAPIResponses || got.Endpoint != cfg.AI.Endpoint || got.Model != "m" || got.ReasoningEffort != "high" {
 		t.Fatalf("provider = %+v", got)
 	}
-	defaults := (&Config{}).ResolveAIProvider("", "endpoint", "model")
+	defaults := (&Config{}).ResolveAIProvider("", "endpoint", "model", "")
 	if defaults.API != AIAPIChatCompletions {
 		t.Fatalf("default API = %q", defaults.API)
+	}
+}
+
+func TestValidateAIProviderRejectsUnknownReasoningEffort(t *testing.T) {
+	provider := (&Config{}).ResolveAIProvider("", "endpoint", "model", "ultra")
+	if err := ValidateAIProvider(provider); err == nil || !strings.Contains(err.Error(), "reasoning effort") {
+		t.Fatalf("ValidateAIProvider error = %v", err)
 	}
 }
 
@@ -1476,7 +1485,7 @@ func TestEffectiveFixPRsAgentSandboxDefaults(t *testing.T) {
 func validAgentSandboxModelProvider() FixModelProvider {
 	return FixModelProvider{
 		CredentialMode: "direct", API: "chat_completions",
-		Endpoint: "https://api.githubcopilot.com/chat/completions", Model: "fixture-model",
+		Endpoint: "https://api.githubcopilot.com/chat/completions", Model: "fixture-model", ReasoningEffort: modelprovider.ReasoningEffortHigh,
 		Auth: FixModelProviderAuth{Type: "bearer"},
 	}
 }
@@ -1518,6 +1527,11 @@ func TestValidateAgentSandboxFixRuntime(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatalf("agent-sandbox Responses provider rejected: %v", err)
 	}
+	c.AI.FixPRs.AgentRuntime.ModelProvider.ReasoningEffort = modelprovider.ReasoningEffortMax
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "OpenCode 1.18.2") {
+		t.Fatalf("agent-sandbox max reasoning effort error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.ModelProvider.ReasoningEffort = modelprovider.ReasoningEffortHigh
 	c.AI.FixPRs.AgentRuntime.ModelProvider.Endpoint = "https://api.githubcopilot.com/chat/completions"
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "responses endpoint") {
 		t.Fatalf("agent-sandbox API path mismatch error = %v", err)
@@ -1714,5 +1728,40 @@ func TestValidateFixRepositoryAllowlist(t *testing.T) {
 	cfg.AI.FixPRs.AllowedRepositories[0].PathPrefixes = []string{"../config/"}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "invalid prefix") {
 		t.Fatalf("unsafe prefix error = %v", err)
+	}
+}
+
+func TestParseAgentSandboxReasoningEffort(t *testing.T) {
+	cfg, err := Parse([]byte(validYAML + `
+ai:
+  fix_prs:
+    enabled: true
+    author_name: Fixture
+    author_email: fixture@example.test
+    critique_retries: 0
+    agent_runtime:
+      type: agent-sandbox
+      max_turns: 3
+      allow_bash: false
+      timeout: 2m
+      output_limit_bytes: 131072
+      allowed_commands:
+        - argv: [git, diff, --cached, --check]
+          timeout: 30s
+      model_provider:
+        credential_mode: direct
+        api: chat_completions
+        endpoint: https://api.githubcopilot.com/chat/completions
+        model: fixture
+        reasoning_effort: HIGH
+        auth:
+          type: bearer
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := cfg.EffectiveFixPRs().AgentRuntime.ModelProvider.RuntimeConfig()
+	if provider.ReasoningEffort != modelprovider.ReasoningEffortHigh {
+		t.Fatalf("reasoning effort = %q", provider.ReasoningEffort)
 	}
 }

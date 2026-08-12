@@ -12,6 +12,9 @@ Worker:           {{ include "prow-ai-dashboard.fullname" . }}-worker (watch eve
 Fetcher CronJob:  {{ include "prow-ai-dashboard.fullname" . }}-fetcher (schedule {{ .Values.fetcher.schedule | quote }}, suspended={{ .Values.fetcher.suspend }})
 {{- end }}
 Server:           {{ include "prow-ai-dashboard.fullname" . }}-server
+{{- if .Values.ai.enabled }}
+AI reasoning:     {{ default "provider default" .Values.ai.reasoningEffort }}
+{{- end }}
 Shared volume:    {{ include "prow-ai-dashboard.pvcName" . }} ({{ .Values.persistence.accessMode }})
 {{- if .Values.orka.agentAnalysisShadow.enabled }}
 Shadow analysis:  configured, authoritative runtime remains inprocess

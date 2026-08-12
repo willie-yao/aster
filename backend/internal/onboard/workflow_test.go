@@ -22,6 +22,8 @@ func TestReusableDeployContract(t *testing.T) {
 	for _, want := range []string{
 		"group: prow-ai-dashboard-${{ github.repository }}-${{ inputs.project_dir }}",
 		"cancel-in-progress: false",
+		"ai-reasoning-effort:",
+		"AI_REASONING_EFFORT: ${{ inputs.ai-reasoning-effort }}",
 		"ai-cache-generation:",
 		"AI_CACHE_GENERATION: ${{ inputs.ai-cache-generation }}",
 		"WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}",

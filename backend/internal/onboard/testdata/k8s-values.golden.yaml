@@ -49,6 +49,8 @@ ai:
   api: "responses"
   endpoint: "https://provider.example/v1/responses"
   model: "fixture-model"
+  # Empty uses the provider default. Supported values depend on the provider/model.
+  reasoningEffort: ""
   # 0 uses provider metadata or the engine fallback. Set a nonzero value only
   # when the endpoint's documented context window supports it.
   contextWindowTokens: 0

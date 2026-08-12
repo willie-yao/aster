@@ -159,6 +159,7 @@ ai:
 	t.Setenv("AI_API", "chat_completions")
 	t.Setenv("AI_ENDPOINT", "https://helm.invalid/v1/chat/completions")
 	t.Setenv("AI_MODEL", "helm-model")
+	t.Setenv(project.AIReasoningEffortEnv, " HIGH ")
 	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "128000")
 	t.Setenv("PROW_AI_STATE_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x22}, 32)))
 	opts := validContainerAnalysisOptions()
@@ -173,7 +174,7 @@ ai:
 		t.Fatal(err)
 	}
 	provider := pipeline.aiProject.Provider
-	if provider.API != "chat_completions" || provider.Endpoint != "https://helm.invalid/v1/chat/completions" || provider.Model != "helm-model" {
+	if provider.API != "chat_completions" || provider.Endpoint != "https://helm.invalid/v1/chat/completions" || provider.Model != "helm-model" || provider.ReasoningEffort != ai.ReasoningEffortHigh {
 		t.Fatalf("provider = %+v", provider)
 	}
 	if got := pipeline.opts.AnalysisRuntime.OrkaContainer.ContextWindowTokens; got != 128000 {

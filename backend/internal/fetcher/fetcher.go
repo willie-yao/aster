@@ -242,7 +242,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	var aiProject *analysisruntime.Project
 	if enableAI {
 		fallbacks := analysisruntime.ProviderFallbacks{
-			API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"),
+			API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"), ReasoningEffort: os.Getenv(project.AIReasoningEffortEnv),
 			CacheGeneration: os.Getenv(project.AICacheGenerationEnv),
 		}
 		aiProject, err = analysisruntime.LoadProject(opts.ProjectDir, cfg, fallbacks)
@@ -260,7 +260,8 @@ func setupPipeline(opts Options) (*pipeline, error) {
 			if err := project.ValidateAIAPI(api); err != nil {
 				return nil, err
 			}
-			aiProject.Provider = project.AIProvider{API: api, Endpoint: fallbacks.Endpoint, Model: fallbacks.Model, ReasoningEffort: fallbacks.ReasoningEffort}
+			reasoningEffort := aiProject.Provider.ReasoningEffort
+			aiProject.Provider = project.AIProvider{API: api, Endpoint: fallbacks.Endpoint, Model: fallbacks.Model, ReasoningEffort: reasoningEffort}
 			if cfg.AI != nil && len(cfg.AI.Headers) > 0 {
 				return nil, fmt.Errorf("orka-container analysis does not transport ai.headers; use bearer-token modelAuth or a trusted proxy")
 			}
@@ -273,7 +274,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 			container := opts.AnalysisRuntime.OrkaContainer
 			if err := orka.ValidateContainerAnalyzerOptions(orka.ContainerAnalyzerOptions{
 				Namespace: container.Namespace, OrkaAPI: container.ResultAPI, Image: container.Image, ProjectDir: opts.ProjectDir, DataDir: opts.OutDir,
-				API: aiProject.Provider.API, Endpoint: aiProject.Provider.Endpoint, Model: aiProject.Provider.Model, CacheGeneration: aiProject.CacheGeneration,
+				API: aiProject.Provider.API, Endpoint: aiProject.Provider.Endpoint, Model: aiProject.Provider.Model, ReasoningEffort: string(aiProject.Provider.ReasoningEffort), CacheGeneration: aiProject.CacheGeneration,
 				ModelSecretName: container.ModelSecretName, ModelTokenKey: container.ModelTokenKey,
 				GitHubSecretName: container.GitHubSecretName, GitHubTokenKey: container.GitHubTokenKey,
 				StateSecretName: container.StateSecretName, StateSecretKey: container.StateSecretKey, StateKey: stateKey,
@@ -1030,7 +1031,7 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 	// issue template. Falls back to the default body when no template exists.
 	var filler issues.TemplateFiller
 	if enableAI {
-		provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
+		provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv))
 		aiClient := ai.NewClientWithOptions(ai.Options{
 			Token:           aiToken,
 			API:             provider.API,
@@ -1128,8 +1129,8 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		return false, nil
 	}
 
-	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
-	if err := project.ValidateAIAPI(provider.API); err != nil {
+	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv))
+	if err := project.ValidateAIProvider(provider); err != nil {
 		return false, fmt.Errorf("fix PRs: %w", err)
 	}
 	if eff.AgentRuntime.Type == "opencode" && provider.API == project.AIAPIResponses {

@@ -44,6 +44,7 @@ For AI analysis:
 export AI_TOKEN=<token>
 export AI_API=chat_completions AI_ENDPOINT=<provider-api-url>
 export AI_MODEL=<model-id>
+# Optional: export AI_REASONING_EFFORT=high
 make fetch-data-ai-quick PROJECT_DIR=../my-consumer
 make dev
 ```

@@ -546,12 +546,12 @@ type AIProvider struct {
 }
 
 // ResolveAIProvider applies environment fallbacks to the project configuration.
-func (c *Config) ResolveAIProvider(apiFallback, endpointFallback, modelFallback string) AIProvider {
+func (c *Config) ResolveAIProvider(apiFallback, endpointFallback, modelFallback, reasoningEffortFallback string) AIProvider {
 	api := strings.ToLower(strings.TrimSpace(apiFallback))
 	if api == "" {
 		api = AIAPIChatCompletions
 	}
-	out := AIProvider{API: api, Endpoint: endpointFallback, Model: modelFallback}
+	out := AIProvider{API: api, Endpoint: endpointFallback, Model: modelFallback, ReasoningEffort: modelprovider.CanonicalReasoningEffort(reasoningEffortFallback)}
 	if c == nil || c.AI == nil {
 		return out
 	}
@@ -566,6 +566,15 @@ func (c *Config) ResolveAIProvider(apiFallback, endpointFallback, modelFallback 
 	}
 	out.Headers = c.AI.Headers
 	return out
+}
+
+// ValidateAIProvider validates the shared provider request contract.
+func ValidateAIProvider(provider AIProvider) error {
+	if err := ValidateAIAPI(provider.API); err != nil {
+		return err
+	}
+	_, err := modelprovider.NormalizeReasoningEffort(string(provider.ReasoningEffort))
+	return err
 }
 
 // AnalysisSourceInvestigation configures read-only source inspection for analysis chat.
@@ -726,12 +735,13 @@ type FixAgentCommand struct {
 
 // FixModelProvider configures the non-secret Agent Sandbox provider contract.
 type FixModelProvider struct {
-	CredentialMode     string               `yaml:"credential_mode,omitempty" json:"credential_mode,omitempty"`
-	API                string               `yaml:"api,omitempty" json:"api,omitempty"`
-	Endpoint           string               `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
-	Model              string               `yaml:"model,omitempty" json:"model,omitempty"`
-	Auth               FixModelProviderAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
-	PublicCAPrivateDNS bool                 `yaml:"public_ca_private_dns,omitempty" json:"public_ca_private_dns,omitempty"`
+	CredentialMode     string                        `yaml:"credential_mode,omitempty" json:"credential_mode,omitempty"`
+	API                string                        `yaml:"api,omitempty" json:"api,omitempty"`
+	Endpoint           string                        `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
+	Model              string                        `yaml:"model,omitempty" json:"model,omitempty"`
+	ReasoningEffort    modelprovider.ReasoningEffort `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
+	Auth               FixModelProviderAuth          `yaml:"auth,omitempty" json:"auth,omitempty"`
+	PublicCAPrivateDNS bool                          `yaml:"public_ca_private_dns,omitempty" json:"public_ca_private_dns,omitempty"`
 }
 
 // FixModelProviderAuth selects direct provider authentication without carrying a credential.
@@ -742,7 +752,7 @@ type FixModelProviderAuth struct {
 // RuntimeConfig returns the normalized non-secret provider configuration.
 func (p FixModelProvider) RuntimeConfig() modelprovider.Config {
 	return modelprovider.Normalize(modelprovider.Config{
-		CredentialMode: p.CredentialMode, API: p.API, Endpoint: p.Endpoint, Model: p.Model,
+		CredentialMode: p.CredentialMode, API: p.API, Endpoint: p.Endpoint, Model: p.Model, ReasoningEffort: p.ReasoningEffort,
 		Auth: modelprovider.Auth{Type: p.Auth.Type}, PublicCAPrivateDNS: p.PublicCAPrivateDNS,
 	})
 }
