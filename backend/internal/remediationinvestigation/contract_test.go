@@ -32,7 +32,7 @@ func testFrozenInput() FrozenInput {
 		RelevantFiles:       []string{"controllers/reconcile.go"},
 		InvestigationSource: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: testRevision},
 		DestinationPolicy: DestinationPolicy{Project: "test-project", Repositories: []RepositoryPolicy{{
-			Repository: "example/repo", AllowedPaths: []string{"controllers/"}, AllowedCommands: []string{"go test ./controllers/..."},
+			Repository: "example/repo", AllowedPaths: []string{"controllers/"}, AllowedCommands: []ValidationCommand{{Argv: []string{"go", "test", "./controllers/..."}, Timeout: "10m"}},
 		}}},
 		ConsumerPrompt: "Project context.", ConsumerPromptHash: HashText("Project context."),
 		SkillHash: strings.Repeat("c", 64), ProviderFingerprint: strings.Repeat("d", 16), Versions: CurrentVersions(),
@@ -52,7 +52,7 @@ func TestFrozenInputDigestCanonicalizesOrderAndSealsSemanticFields(t *testing.T)
 	reordered.Group.Builds[0], reordered.Group.Builds[1] = reordered.Group.Builds[1], reordered.Group.Builds[0]
 	reordered.Builds[0], reordered.Builds[1] = reordered.Builds[1], reordered.Builds[0]
 	reordered.Analyses[0], reordered.Analyses[1] = reordered.Analyses[1], reordered.Analyses[0]
-	reordered.DestinationPolicy.Repositories[0].AllowedCommands = []string{"go test ./controllers/..."}
+	reordered.DestinationPolicy.Repositories[0].AllowedCommands = []ValidationCommand{{Argv: []string{"go", "test", "./controllers/..."}, Timeout: "10m"}}
 	got, err := CacheKey(reordered)
 	if err != nil || got != key {
 		t.Fatalf("reordered key=%q err=%v want=%q", got, err, key)
@@ -90,13 +90,13 @@ func TestFrozenInputDigestCanonicalizesOrderAndSealsSemanticFields(t *testing.T)
 }
 
 func TestDecodeResultRejectsUnknownDuplicateAndNonActionableProposal(t *testing.T) {
-	valid := `{"version":1,"classification":"insufficient_evidence","reason":"not enough evidence","cause_assessment":"inconclusive","cause_assessment_reason":"the source relationship is ambiguous","proposal":null,"evidence":[{"kind":"analysis","build_id":"1","path":"","line_start":0,"line_end":0,"quote":"cause","analysis_generated_at":"2026-08-11T00:00:00Z"}]}`
+	valid := `{"version":2,"classification":"insufficient_evidence","reason":"not enough evidence","cause_assessment":"inconclusive","cause_assessment_reason":"the source relationship is ambiguous","proposal":null,"evidence":[{"kind":"analysis","build_id":"1","path":"","line_start":0,"line_end":0,"quote":"cause","analysis_generated_at":"2026-08-11T00:00:00Z"}]}`
 	if _, err := DecodeResult(json.RawMessage(valid)); err != nil {
 		t.Fatal(err)
 	}
 	for name, raw := range map[string]string{
-		"unknown":   strings.Replace(valid, `"version":1`, `"version":1,"extra":true`, 1),
-		"duplicate": strings.Replace(valid, `"version":1`, `"version":1,"version":1`, 1),
+		"unknown":   strings.Replace(valid, `"version":2`, `"version":2,"extra":true`, 1),
+		"duplicate": strings.Replace(valid, `"version":2`, `"version":2,"version":2`, 1),
 		"proposal":  strings.Replace(valid, `"proposal":null`, `"proposal":{"repository":{"owner":"example","name":"repo","revision":"`+testRevision+`"},"target":{"intent":"modify_symbol","symbol":"reconcile","required_call":"applyFix","path":"controllers/reconcile.go","value":"","repository":"example/repo","revision":"`+testRevision+`","job":"","container":"","name":""},"expected_behavior":"call applyFix","relationship_proof":"the cited function owns the failing path","current_source":"absent","verification_requirements":["run tests"],"allowed_changed_paths":["controllers/reconcile.go"],"allowed_validation_commands":["go test ./controllers/..."]}`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -118,7 +118,7 @@ func TestValidateActionableResultRequiresTypedBoundedTarget(t *testing.T) {
 			Target:           models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "applyFix", Path: "controllers/reconcile.go"},
 			ExpectedBehavior: "invoke applyFix before returning", RelationshipProof: "the failing path executes reconcile",
 			CurrentSource: CurrentSourceAbsent, VerificationRequirements: []string{"go test the controller"},
-			AllowedChangedPaths: []string{"controllers/reconcile.go"}, AllowedValidationCommands: []string{"go test ./controllers/..."},
+			AllowedChangedPaths: []string{"controllers/reconcile.go"}, AllowedValidationCommands: []ValidationCommand{{Argv: []string{"go", "test", "./controllers/..."}, Timeout: "10m"}},
 		},
 		Evidence: []EvidenceCitation{{Kind: EvidenceSource, Path: "controllers/reconcile.go", LineStart: 1, LineEnd: 3, Quote: "func reconcile"}},
 	}
@@ -147,7 +147,7 @@ func TestValidateActionableResultRejectsUnsafeConversionProposal(t *testing.T) {
 			Target:           models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: "DeleteWebhookConfigurations", Path: "controllers/conversion.go"},
 			ExpectedBehavior: "delete webhook configuration to disable conversion", RelationshipProof: "conversion timed out",
 			CurrentSource: CurrentSourceAbsent, VerificationRequirements: []string{"run tests"},
-			AllowedChangedPaths: []string{"controllers/conversion.go"}, AllowedValidationCommands: []string{"go test ./controllers/..."},
+			AllowedChangedPaths: []string{"controllers/conversion.go"}, AllowedValidationCommands: []ValidationCommand{{Argv: []string{"go", "test", "./controllers/..."}, Timeout: "10m"}},
 		},
 		Evidence: []EvidenceCitation{{Kind: EvidenceSource, Path: "controllers/conversion.go", LineStart: 1, LineEnd: 1, Quote: "conversion"}},
 	}

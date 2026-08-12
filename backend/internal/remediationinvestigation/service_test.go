@@ -132,7 +132,7 @@ func actionableJSON() string {
 			Target:           models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "applyFix", Path: "controllers/reconcile.go"},
 			ExpectedBehavior: "reconcile invokes applyFix before returning", RelationshipProof: "the failed builds enter reconcile and report the missing transition",
 			CurrentSource: CurrentSourceAbsent, VerificationRequirements: []string{"verify the required call is missing", "run controller tests"},
-			AllowedChangedPaths: []string{"controllers/reconcile.go"}, AllowedValidationCommands: []string{"go test ./controllers/..."},
+			AllowedChangedPaths: []string{"controllers/reconcile.go"}, AllowedValidationCommands: []ValidationCommand{{Argv: []string{"go", "test", "./controllers/..."}, Timeout: "10m"}},
 		},
 		Evidence: []EvidenceCitation{
 			{Kind: EvidenceArtifact, BuildID: "1", Path: "builds/1/log.txt", LineStart: 1, LineEnd: 1, Quote: "missing transition"},

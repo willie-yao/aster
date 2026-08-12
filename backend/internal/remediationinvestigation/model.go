@@ -6,6 +6,14 @@ func resultFormat() ai.ResponseFormat {
 	stringArray := func(max int) map[string]any {
 		return map[string]any{"type": "array", "maxItems": max, "items": map[string]any{"type": "string"}}
 	}
+	validationCommand := map[string]any{
+		"type": "object", "additionalProperties": false,
+		"properties": map[string]any{
+			"argv":    map[string]any{"type": "array", "minItems": 1, "maxItems": 32, "items": map[string]any{"type": "string"}},
+			"timeout": map[string]any{"type": "string"},
+		},
+		"required": []string{"argv", "timeout"},
+	}
 	repository := map[string]any{
 		"type": "object", "additionalProperties": false,
 		"properties": map[string]any{
@@ -36,7 +44,7 @@ func resultFormat() ai.ResponseFormat {
 			"relationship_proof":        map[string]any{"type": "string"},
 			"current_source":            map[string]any{"type": "string", "enum": []string{string(CurrentSourcePresent), string(CurrentSourceAbsent), string(CurrentSourceUnknown)}},
 			"verification_requirements": stringArray(20), "allowed_changed_paths": stringArray(20),
-			"allowed_validation_commands": stringArray(20),
+			"allowed_validation_commands": map[string]any{"type": "array", "maxItems": 20, "items": validationCommand},
 		},
 		"required": []string{"target_kind", "repository", "target", "expected_behavior", "relationship_proof", "current_source", "verification_requirements", "allowed_changed_paths", "allowed_validation_commands"},
 	}

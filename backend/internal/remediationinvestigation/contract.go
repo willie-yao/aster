@@ -16,9 +16,9 @@ import (
 
 const (
 	PromptVersion       = 1
-	SchemaVersion       = 1
-	VerificationVersion = 1
-	ResultVersion       = 1
+	SchemaVersion       = 2
+	VerificationVersion = 2
+	ResultVersion       = 2
 )
 
 type Versions struct {
@@ -50,10 +50,15 @@ type BuildReference struct {
 	Source      *sourceinvestigation.Repository `json:"source,omitempty"`
 }
 
+type ValidationCommand struct {
+	Argv    []string `json:"argv"`
+	Timeout string   `json:"timeout"`
+}
+
 type RepositoryPolicy struct {
-	Repository      string   `json:"repository"`
-	AllowedPaths    []string `json:"allowed_paths"`
-	AllowedCommands []string `json:"allowed_commands"`
+	Repository      string              `json:"repository"`
+	AllowedPaths    []string            `json:"allowed_paths"`
+	AllowedCommands []ValidationCommand `json:"allowed_commands"`
 }
 
 type DestinationPolicy struct {
@@ -115,8 +120,10 @@ func canonicalFrozenInput(input FrozenInput) FrozenInput {
 		repository := &input.DestinationPolicy.Repositories[index]
 		repository.AllowedPaths = slices.Clone(repository.AllowedPaths)
 		slices.Sort(repository.AllowedPaths)
-		repository.AllowedCommands = slices.Clone(repository.AllowedCommands)
-		slices.Sort(repository.AllowedCommands)
+		repository.AllowedCommands = cloneValidationCommands(repository.AllowedCommands)
+		sort.Slice(repository.AllowedCommands, func(i, j int) bool {
+			return validationCommandKey(repository.AllowedCommands[i]) < validationCommandKey(repository.AllowedCommands[j])
+		})
 	}
 	sort.Slice(input.DestinationPolicy.Repositories, func(i, j int) bool {
 		return input.DestinationPolicy.Repositories[i].Repository < input.DestinationPolicy.Repositories[j].Repository
@@ -190,7 +197,7 @@ type ActionableProposal struct {
 	CurrentSource             CurrentSourceState             `json:"current_source"`
 	VerificationRequirements  []string                       `json:"verification_requirements"`
 	AllowedChangedPaths       []string                       `json:"allowed_changed_paths"`
-	AllowedValidationCommands []string                       `json:"allowed_validation_commands"`
+	AllowedValidationCommands []ValidationCommand            `json:"allowed_validation_commands"`
 }
 
 // Result is a model proposal. It never grants action eligibility. Dashboard
@@ -258,6 +265,25 @@ func NewProvenance(input FrozenInput, model, apiMode string, evidence EvidenceSt
 		SkillHash: input.SkillHash, PolicyHash: HashPolicy(input.DestinationPolicy),
 		Evidence: evidence, Metrics: metrics, CompletedAt: completed.UTC().Format(time.RFC3339),
 	}
+}
+
+func cloneValidationCommands(commands []ValidationCommand) []ValidationCommand {
+	out := slices.Clone(commands)
+	for index := range out {
+		out[index].Argv = slices.Clone(out[index].Argv)
+	}
+	return out
+}
+
+func validationCommandKey(command ValidationCommand) string {
+	encoded, _ := json.Marshal(command)
+	return string(encoded)
+}
+
+func ResultDigest(result Result) string {
+	encoded, _ := json.Marshal(result)
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
 }
 
 func HashPolicy(policy DestinationPolicy) string {

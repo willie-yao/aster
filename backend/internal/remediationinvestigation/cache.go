@@ -20,7 +20,7 @@ import (
 
 const (
 	CacheRelativePath = ".remediation-investigations/cache.json"
-	cacheFileVersion  = 1
+	cacheFileVersion  = 2
 	defaultMaxEntries = 256
 	maxCacheFileBytes = 16 << 20
 	cacheLockFileName = "cache.lock"
@@ -45,12 +45,13 @@ type FailureRecord struct {
 }
 
 type CacheEntry struct {
-	Key         string         `json:"key"`
-	Result      Result         `json:"result"`
-	Provenance  Provenance     `json:"provenance"`
-	CreatedAt   string         `json:"created_at"`
-	UpdatedAt   string         `json:"updated_at"`
-	LastFailure *FailureRecord `json:"last_failure,omitempty"`
+	Key          string         `json:"key"`
+	Result       Result         `json:"result"`
+	ResultDigest string         `json:"result_digest"`
+	Provenance   Provenance     `json:"provenance"`
+	CreatedAt    string         `json:"created_at"`
+	UpdatedAt    string         `json:"updated_at"`
+	LastFailure  *FailureRecord `json:"last_failure,omitempty"`
 }
 
 type cacheFile struct {
@@ -143,7 +144,7 @@ func (c *Cache) StoreSuccess(key string, result Result, provenance Provenance) e
 			created = current.CreatedAt
 		}
 		c.state.Entries[key] = CacheEntry{
-			Key: key, Result: cloneResult(result), Provenance: cloneProvenance(provenance),
+			Key: key, Result: cloneResult(result), ResultDigest: ResultDigest(result), Provenance: cloneProvenance(provenance),
 			CreatedAt: created, UpdatedAt: now,
 		}
 		delete(c.state.Failures, key)
@@ -231,7 +232,7 @@ func (c *Cache) loadLocked() error {
 		loaded.Failures = map[string]FailureRecord{}
 	}
 	for key, entry := range loaded.Entries {
-		if key != entry.Key || ValidateResult(entry.Result) != nil || strings.TrimSpace(entry.Provenance.InputDigest) == "" ||
+		if key != entry.Key || ValidateResult(entry.Result) != nil || entry.ResultDigest != ResultDigest(entry.Result) || strings.TrimSpace(entry.Provenance.InputDigest) == "" ||
 			entry.Provenance.Versions != CurrentVersions() || entry.Provenance.ProviderFingerprint == "" ||
 			cacheKeyForDigest(entry.Provenance.InputDigest) != key {
 			return fmt.Errorf("remediation investigation cache entry %q is invalid", key)
@@ -328,7 +329,7 @@ func cloneResult(result Result) Result {
 		proposal := *result.Proposal
 		proposal.VerificationRequirements = slices.Clone(result.Proposal.VerificationRequirements)
 		proposal.AllowedChangedPaths = slices.Clone(result.Proposal.AllowedChangedPaths)
-		proposal.AllowedValidationCommands = slices.Clone(result.Proposal.AllowedValidationCommands)
+		proposal.AllowedValidationCommands = cloneValidationCommands(result.Proposal.AllowedValidationCommands)
 		result.Proposal = &proposal
 	}
 	return result

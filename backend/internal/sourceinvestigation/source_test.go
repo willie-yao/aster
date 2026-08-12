@@ -230,3 +230,15 @@ func TestValidateResultEnforcesAdmissionConversionPolicy(t *testing.T) {
 		t.Fatalf("safe result error = %v", err)
 	}
 }
+
+func TestVerifyTargetStateRejectsMismatchedProwSourceIdentity(t *testing.T) {
+	repo := Repository{Owner: "kubernetes", Name: "test-infra", Revision: strings.Repeat("a", 40)}
+	target := models.RemediationTarget{
+		Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra",
+		Revision: strings.Repeat("b", 40), Path: "config/jobs/example/periodics.yaml",
+		Job: "periodic-test", Container: "test", Name: "FEATURE_FLAG", Value: "enabled",
+	}
+	if _, err := VerifyTargetState(t.Context(), &countingSourceReader{}, repo, target); err == nil {
+		t.Fatal("mismatched Prow target source identity was accepted")
+	}
+}
