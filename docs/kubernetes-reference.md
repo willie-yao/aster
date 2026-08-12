@@ -545,6 +545,12 @@ auth mode. Direct unauthenticated and gateway modes render no Secret reference.
 Use a dedicated inference-only credential, never dashboard, repository, OAuth,
 or general GitHub credentials.
 
+Chat Completions uses `@ai-sdk/openai-compatible`; Responses uses
+`@ai-sdk/openai`. Provider endpoints must end with the operation path matching
+the selected API. With pinned OpenCode 1.18.2, Responses requires direct bearer
+auth. Tokenless gateway and direct unauthenticated modes remain available for
+Chat Completions.
+
 Internal gateway certificates must chain to a CA in the immutable executor
 image. A privately resolved public gateway FQDN with a publicly trusted
 certificate can set `modelProvider.publicCAPrivateDNS: true`. Direct mode leaves
@@ -583,9 +589,9 @@ Network policy denies ingress. Kubernetes policy mode permits DNS plus an
 internal provider selected by namespace and Pod labels. Cilium mode permits DNS
 plus either the configured internal Kubernetes Service or one exact external
 direct-provider FQDN and port. External direct providers therefore require
-Cilium mode. The provider or gateway must independently authenticate the
-analyzer workload. The quota assumes the namespace is dedicated to this
-experiment.
+Cilium mode. Responses also requires direct bearer auth with the pinned OpenCode
+provider. The provider or gateway must independently authenticate the analyzer
+workload. The quota assumes the namespace is dedicated to this experiment.
 
 See [Agent Sandbox OpenCode analyzer](agent-sandbox-opencode-analyzer.md) for
 the workspace, result, authority, and benchmark boundaries.

@@ -18,3 +18,13 @@ func testGatewayProvider(endpoint, model string) modelprovider.Config {
 		Auth:           modelprovider.Auth{Type: modelprovider.AuthTypeNone},
 	})
 }
+
+func testResponsesProvider(endpoint, model string) modelprovider.Config {
+	return modelprovider.Normalize(modelprovider.Config{
+		CredentialMode: modelprovider.CredentialModeDirect,
+		API:            modelprovider.APIResponses,
+		Endpoint:       endpoint,
+		Model:          model,
+		Auth:           modelprovider.Auth{Type: modelprovider.AuthTypeBearer},
+	})
+}

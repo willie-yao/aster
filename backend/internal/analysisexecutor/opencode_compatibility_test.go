@@ -1,6 +1,7 @@
 package analysisexecutor
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 )
 
@@ -27,6 +29,11 @@ func TestOpenCode1182RequestShapeCompatibility(t *testing.T) {
 	}
 	requests := make(chan []byte, 4)
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, name := range []string{"Authorization", "api-key", "x-api-key"} {
+			if strings.TrimSpace(r.Header.Get(name)) != "" {
+				t.Error("direct unauthenticated Chat request carried a credential header")
+			}
+		}
 		data, err := io.ReadAll(io.LimitReader(r.Body, maxOpenCodeAPIResponseBytes+1))
 		if err != nil || len(data) > maxOpenCodeAPIResponseBytes {
 			t.Errorf("read provider request: bytes=%d err=%v", len(data), err)
@@ -127,6 +134,118 @@ func TestOpenCode1182DirectBearerCompatibility(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
+}
+
+func TestOpenCode1182ResponsesRequestShapeCompatibility(t *testing.T) {
+	bin := os.Getenv("OPENCODE_1_18_2_BIN")
+	if bin == "" {
+		t.Skip("set OPENCODE_1_18_2_BIN to the exact OpenCode 1.18.2 executable")
+	}
+	credential := strings.Repeat("fixture-responses-credential-", 2)
+	t.Setenv(modelprovider.TokenEnv, credential)
+	requests := make(chan []byte, 2)
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+credential {
+			t.Error("Responses request did not carry direct bearer authentication")
+		}
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("Responses path = %q", r.URL.Path)
+		}
+		data, err := io.ReadAll(io.LimitReader(r.Body, maxOpenCodeAPIResponseBytes+1))
+		if err != nil || len(data) > maxOpenCodeAPIResponseBytes {
+			t.Errorf("read Responses request: bytes=%d err=%v", len(data), err)
+			http.Error(w, "invalid synthetic request", http.StatusBadRequest)
+			return
+		}
+		if bytes.Contains(data, []byte(credential)) {
+			t.Error("Responses request body contained the provider credential")
+		}
+		requests <- data
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"synthetic bad request","code":"synthetic"}}`))
+	}))
+	defer providerServer.Close()
+	workDir := t.TempDir()
+	for _, dir := range []string{"source", "artifacts", "result"} {
+		if err := os.Mkdir(filepath.Join(workDir, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	spec := OpenCodeSpec{
+		Bin: bin, WorkDir: workDir, HomeDir: t.TempDir(), TempDir: t.TempDir(),
+		Provider: testResponsesProvider(providerServer.URL+"/v1/responses", "synthetic-model"),
+		Prompt:   "Return a structured result.", MaxSteps: 3, ModelContextTokens: 200000, ModelOutputTokens: 8192,
+	}
+	result, err := defaultRunOpenCode(ctx, spec)
+	if err == nil {
+		t.Fatal("synthetic Responses HTTP 400 unexpectedly succeeded")
+	}
+	if result.Telemetry.Error.HTTPStatusCode != http.StatusBadRequest || result.Telemetry.Error.Classification != "api_bad_request" {
+		t.Fatalf("err=%v telemetry=%+v", err, result.Telemetry)
+	}
+	var raw []byte
+	select {
+	case raw = <-requests:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	observed, err := parseSyntheticResponsesRequest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Model != "synthetic-model" || !observed.Stream || observed.Store == nil || *observed.Store || observed.HasPreviousResponseID || len(observed.Tools) == 0 || observed.MaxOutputTokens != 8192 {
+		t.Fatalf("Responses request shape = %+v", observed)
+	}
+}
+
+type syntheticResponsesRequest struct {
+	Model                 string
+	Stream                bool
+	Store                 *bool
+	HasPreviousResponseID bool
+	Instructions          string
+	Input                 []map[string]any
+	Tools                 []map[string]any
+	ToolChoice            any
+	MaxOutputTokens       int
+}
+
+func parseSyntheticResponsesRequest(raw []byte) (syntheticResponsesRequest, error) {
+	var wire map[string]any
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return syntheticResponsesRequest{}, fmt.Errorf("decode Responses request: %w", err)
+	}
+	result := syntheticResponsesRequest{
+		Model:                 fmt.Sprint(wire["model"]),
+		Stream:                wire["stream"] == true,
+		HasPreviousResponseID: wire["previous_response_id"] != nil,
+		Instructions:          fmt.Sprint(wire["instructions"]),
+		ToolChoice:            wire["tool_choice"],
+	}
+	if value, ok := wire["store"].(bool); ok {
+		result.Store = &value
+	}
+	if value, ok := wire["max_output_tokens"].(float64); ok {
+		result.MaxOutputTokens = int(value)
+	}
+	if values, ok := wire["input"].([]any); ok {
+		for _, value := range values {
+			if item, ok := value.(map[string]any); ok {
+				result.Input = append(result.Input, item)
+			}
+		}
+	}
+	if values, ok := wire["tools"].([]any); ok {
+		for _, value := range values {
+			if item, ok := value.(map[string]any); ok {
+				result.Tools = append(result.Tools, item)
+			}
+		}
+	}
+	return result, nil
 }
 
 type syntheticProviderRequestShape struct {
@@ -243,6 +362,11 @@ func TestOpenCode1182TwoPhaseCompatibility(t *testing.T) {
 	var toolSets [][]string
 	var providerShapes []syntheticProviderRequestShape
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, name := range []string{"Authorization", "api-key", "x-api-key"} {
+			if strings.TrimSpace(r.Header.Get(name)) != "" {
+				t.Fatal("gateway Chat request carried a provider credential header")
+			}
+		}
 		data, err := io.ReadAll(io.LimitReader(r.Body, maxOpenCodeAPIResponseBytes+1))
 		if err != nil {
 			t.Fatal(err)
@@ -292,7 +416,7 @@ func TestOpenCode1182TwoPhaseCompatibility(t *testing.T) {
 	defer cancel()
 	spec := OpenCodeSpec{
 		Bin: bin, WorkDir: workDir, HomeDir: t.TempDir(), TempDir: t.TempDir(),
-		Provider: testOpenCodeProvider(gateway.URL+"/v1/chat/completions", "synthetic-model"),
+		Provider: testGatewayProvider(gateway.URL+"/v1/chat/completions", "synthetic-model"),
 		Prompt:   "Read artifacts/failure.log, inspect source/main.go if relevant, and investigate the failure.", MaxSteps: 6,
 		ModelContextTokens: 200000, ModelOutputTokens: 8192,
 	}
@@ -376,4 +500,229 @@ func writeSyntheticSSE(t *testing.T, w http.ResponseWriter, chunks []any) {
 		fmt.Fprintf(w, "data: %s\n\n", data)
 	}
 	fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+func TestOpenCode1182ResponsesTwoPhaseCompatibility(t *testing.T) {
+	bin := os.Getenv("OPENCODE_1_18_2_BIN")
+	if bin == "" {
+		t.Skip("set OPENCODE_1_18_2_BIN to the exact OpenCode 1.18.2 executable")
+	}
+	credential := strings.Repeat("fixture-responses-credential-", 2)
+	t.Setenv(modelprovider.TokenEnv, credential)
+	workDir := t.TempDir()
+	for _, dir := range []string{"source", "artifacts", "result"} {
+		if err := os.Mkdir(filepath.Join(workDir, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "artifacts", "failure.log"), []byte("synthetic failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "source", "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	var requests []syntheticResponsesRequest
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("Responses path = %q", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer "+credential {
+			t.Fatal("Responses request did not carry direct bearer authentication")
+		}
+		data, err := io.ReadAll(io.LimitReader(r.Body, maxOpenCodeAPIResponseBytes+1))
+		if err != nil || len(data) > maxOpenCodeAPIResponseBytes {
+			t.Fatalf("read Responses request: bytes=%d err=%v", len(data), err)
+		}
+		if bytes.Contains(data, []byte(credential)) {
+			t.Fatal("Responses request body contained the provider credential")
+		}
+		request, err := parseSyntheticResponsesRequest(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requests = append(requests, request)
+		calls++
+		switch calls {
+		case 1:
+			writeSyntheticResponsesToolCalls(t, w, []syntheticResponsesToolCall{
+				{Name: "read", Arguments: map[string]any{"filePath": "artifacts/failure.log"}},
+				{Name: "read", Arguments: map[string]any{"filePath": "source/main.go"}},
+			}, true)
+		case 2:
+			writeSyntheticResponsesText(t, w, "Evidence inspected.", true)
+		case 3:
+			var structured any
+			if err := json.Unmarshal(executorAnalysisJSON(), &structured); err != nil {
+				t.Fatal(err)
+			}
+			writeSyntheticResponsesToolCalls(t, w, []syntheticResponsesToolCall{{Name: "StructuredOutput", Arguments: structured}}, true)
+		default:
+			t.Fatalf("unexpected Responses request %d", calls)
+		}
+	}))
+	defer providerServer.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	defer cancel()
+	result, err := defaultRunOpenCode(ctx, OpenCodeSpec{
+		Bin: bin, WorkDir: workDir, HomeDir: t.TempDir(), TempDir: t.TempDir(),
+		Provider: testResponsesProvider(providerServer.URL+"/v1/responses", "synthetic-model"),
+		Prompt:   "Read artifacts/failure.log, inspect source/main.go if relevant, and investigate the failure.", MaxSteps: 6,
+		ModelContextTokens: 200000, ModelOutputTokens: 8192,
+	})
+	if err != nil {
+		t.Fatalf("err=%v result=%+v", err, result)
+	}
+	if calls != 3 || len(requests) != 3 {
+		t.Fatalf("calls=%d requests=%d", calls, len(requests))
+	}
+	for index, request := range requests {
+		if request.Store == nil || *request.Store || request.HasPreviousResponseID || !request.Stream {
+			t.Fatalf("request %d stateful Responses fields = %+v", index+1, request)
+		}
+	}
+	if responseInputTypeCount(requests[0], "function_call_output") != 0 || responseInputTypeCount(requests[1], "function_call_output") < 2 || responseInputTypeCount(requests[2], "function_call_output") < 2 {
+		t.Fatalf("multi-turn Responses history was not preserved: %#v", requests)
+	}
+	if slices.Contains(responseToolNames(requests[0]), "StructuredOutput") || slices.Contains(responseToolNames(requests[1]), "StructuredOutput") || !slices.Equal(responseToolNames(requests[2]), []string{"StructuredOutput"}) {
+		t.Fatalf("Responses tool sets = %v %v %v", responseToolNames(requests[0]), responseToolNames(requests[1]), responseToolNames(requests[2]))
+	}
+	if result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Usage.ModelRequests != 3 || !result.Usage.Available || result.Usage.InputTokens != 24 || result.Usage.CachedInputTokens != 6 || result.Usage.OutputTokens != 6 || !result.Telemetry.EvidencePhaseCompleted || !result.Telemetry.FinalizationPhaseCompleted || len(result.Structured) == 0 {
+		t.Fatalf("Responses result=%+v", result)
+	}
+}
+
+type syntheticResponsesToolCall struct {
+	Name      string
+	Arguments any
+}
+
+func responseToolNames(request syntheticResponsesRequest) []string {
+	var names []string
+	for _, tool := range request.Tools {
+		if name, ok := tool["name"].(string); ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func responseInputTypeCount(request syntheticResponsesRequest, want string) int {
+	count := 0
+	for _, item := range request.Input {
+		if item["type"] == want {
+			count++
+		}
+	}
+	return count
+}
+
+func writeSyntheticResponsesText(t *testing.T, w http.ResponseWriter, text string, usage bool) {
+	t.Helper()
+	writeSyntheticResponsesSSE(t, w, []any{
+		map[string]any{"type": "response.output_item.added", "output_index": 0, "item": map[string]any{"type": "message", "id": "msg-1", "phase": "final_answer"}},
+		map[string]any{"type": "response.output_text.delta", "item_id": "msg-1", "delta": text, "logprobs": []any{}},
+		map[string]any{"type": "response.output_item.done", "output_index": 0, "item": map[string]any{"type": "message", "id": "msg-1", "phase": "final_answer"}},
+		responsesCompletedEvent("resp-text", usage),
+	})
+}
+
+func writeSyntheticResponsesToolCalls(t *testing.T, w http.ResponseWriter, calls []syntheticResponsesToolCall, usage bool) {
+	t.Helper()
+	var events []any
+	for index, call := range calls {
+		arguments, err := json.Marshal(call.Arguments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		itemID := fmt.Sprintf("fc-%d", index)
+		callID := fmt.Sprintf("call-%d", index)
+		item := map[string]any{"type": "function_call", "id": itemID, "call_id": callID, "name": call.Name, "arguments": string(arguments), "status": "completed"}
+		events = append(events,
+			map[string]any{"type": "response.output_item.added", "output_index": index, "item": map[string]any{"type": "function_call", "id": itemID, "call_id": callID, "name": call.Name, "arguments": ""}},
+			map[string]any{"type": "response.function_call_arguments.delta", "item_id": itemID, "output_index": index, "delta": string(arguments)},
+			map[string]any{"type": "response.output_item.done", "output_index": index, "item": item},
+		)
+	}
+	events = append(events, responsesCompletedEvent("resp-tools", usage))
+	writeSyntheticResponsesSSE(t, w, events)
+}
+
+func responsesCompletedEvent(id string, usage bool) map[string]any {
+	response := map[string]any{"id": id, "status": "completed"}
+	if usage {
+		response["usage"] = map[string]any{
+			"input_tokens": 10, "input_tokens_details": map[string]any{"cached_tokens": 2},
+			"output_tokens": 3, "output_tokens_details": map[string]any{"reasoning_tokens": 1}, "total_tokens": 13,
+		}
+	}
+	return map[string]any{"type": "response.completed", "response": response}
+}
+
+func writeSyntheticResponsesSSE(t *testing.T, w http.ResponseWriter, events []any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "text/event-stream")
+	for _, event := range events {
+		data, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(w, "data: %s\n\n", data)
+	}
+}
+
+func TestOpenCode1182ResponsesFailureModesAreSanitized(t *testing.T) {
+	bin := os.Getenv("OPENCODE_1_18_2_BIN")
+	if bin == "" {
+		t.Skip("set OPENCODE_1_18_2_BIN to the exact OpenCode 1.18.2 executable")
+	}
+	credential := strings.Repeat("fixture-responses-credential-", 2)
+	for _, tc := range []struct {
+		name     string
+		wantCode string
+		write    func(*testing.T, http.ResponseWriter)
+	}{
+		{name: "missing usage", wantCode: "evidence_unavailable", write: func(t *testing.T, w http.ResponseWriter) { writeSyntheticResponsesText(t, w, "No usage.", false) }},
+		{name: "malformed event", wantCode: "serialization", write: func(_ *testing.T, w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: {not-json}\n\n")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(modelprovider.TokenEnv, credential)
+			providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer "+credential {
+					t.Error("Responses failure request did not carry direct bearer authentication")
+				}
+				tc.write(t, w)
+			}))
+			defer providerServer.Close()
+			workDir := t.TempDir()
+			for _, dir := range []string{"source", "artifacts", "result"} {
+				if err := os.Mkdir(filepath.Join(workDir, dir), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			result, err := defaultRunOpenCode(ctx, OpenCodeSpec{
+				Bin: bin, WorkDir: workDir, HomeDir: t.TempDir(), TempDir: t.TempDir(),
+				Provider: testResponsesProvider(providerServer.URL+"/v1/responses", "synthetic-model"),
+				Prompt:   "Investigate.", MaxSteps: 3, ModelContextTokens: 200000, ModelOutputTokens: 8192,
+			})
+			if err == nil || result.Usage.Available || result.Usage.Status != agentanalysis.WorkspaceTelemetryUnavailable || result.Telemetry.FailureCode != tc.wantCode {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			encoded, marshalErr := json.Marshal(result)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			for _, forbidden := range []string{credential, "No usage.", "not-json"} {
+				if strings.Contains(err.Error(), forbidden) || bytes.Contains(encoded, []byte(forbidden)) {
+					t.Fatal("Responses failure diagnostics retained provider content")
+				}
+			}
+		})
+	}
 }

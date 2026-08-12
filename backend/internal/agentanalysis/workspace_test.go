@@ -260,6 +260,29 @@ func TestWorkspaceExecutionRequestBindsPromptAndRuntime(t *testing.T) {
 	}
 }
 
+func TestWorkspaceExecutionRequestAcceptsResponsesWithoutVersionChange(t *testing.T) {
+	_, artifactRoot, request, source := workspaceTestInputs(t)
+	files, err := SnapshotArtifactWorkspace(artifactRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := NewWorkspaceManifest(request, source, "Inspect this project.", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat, err := NewWorkspaceExecutionRequest(manifest, testGatewayProvider("https://model-gateway.prow-ai.svc.cluster.local:8443/v1/chat/completions", "test-model"), 5*time.Minute, 20, 200000, 8192, 128<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responses, err := NewWorkspaceExecutionRequest(manifest, testResponsesProvider("https://api.openai.com/v1/responses", "test-model"), 5*time.Minute, 20, 200000, 8192, 128<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if responses.Version != 3 || responses.Hash == chat.Hash || responses.ModelProvider.API != "responses" {
+		t.Fatalf("chat=%+v responses=%+v", chat.ModelProvider, responses.ModelProvider)
+	}
+}
+
 func TestVerifySourceWorkspaceRejectsDirtyCheckout(t *testing.T) {
 	sourceRoot, _, _, source := workspaceTestInputs(t)
 	if err := os.WriteFile(filepath.Join(sourceRoot, "dirty.txt"), []byte("dirty\n"), 0o600); err != nil {

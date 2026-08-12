@@ -77,7 +77,7 @@ func ValidateOpenCode(config Config) error {
 	default:
 		return fmt.Errorf("model provider credential mode %q is unsupported", config.CredentialMode)
 	}
-	if config.API != APIChatCompletions {
+	if config.API != APIChatCompletions && config.API != APIResponses {
 		return fmt.Errorf("model provider API %q is unsupported", config.API)
 	}
 	parsed, err := url.Parse(config.Endpoint)
@@ -101,6 +101,9 @@ func ValidateOpenCode(config Config) error {
 		if config.Auth.Type != AuthTypeNone || config.Auth.TokenEnv != "" {
 			return fmt.Errorf("gateway credential mode must use auth type none")
 		}
+		if config.API == APIResponses {
+			return fmt.Errorf("responses requires direct bearer auth with the pinned OpenCode provider")
+		}
 		return nil
 	}
 	if config.PublicCAPrivateDNS {
@@ -118,6 +121,9 @@ func ValidateOpenCode(config Config) error {
 	default:
 		return fmt.Errorf("model provider auth type %q is unsupported", config.Auth.Type)
 	}
+	if config.API == APIResponses && config.Auth.Type != AuthTypeBearer {
+		return fmt.Errorf("responses requires direct bearer auth with the pinned OpenCode provider")
+	}
 	return nil
 }
 
@@ -130,21 +136,44 @@ func ValidateDeploymentEndpoint(config Config) error {
 	return ValidateOpenCode(config)
 }
 
-// OpenCodeBaseURL derives the OpenAI-compatible provider base URL.
-func OpenCodeBaseURL(config Config) (string, error) {
+// OpenCodeAdapter describes the native AI SDK package and base URL OpenCode uses.
+type OpenCodeAdapter struct {
+	NPM     string
+	BaseURL string
+}
+
+// OpenCodeAdapterFor derives the native provider package from one full operation endpoint.
+func OpenCodeAdapterFor(config Config) (OpenCodeAdapter, error) {
 	if err := ValidateOpenCode(config); err != nil {
-		return "", err
+		return OpenCodeAdapter{}, err
 	}
 	parsed, _ := url.Parse(config.Endpoint)
 	path := strings.TrimRight(parsed.Path, "/")
-	if !strings.HasSuffix(path, "/chat/completions") {
-		return "", fmt.Errorf("chat_completions endpoint must end with /chat/completions")
+	var suffix, npm string
+	switch config.API {
+	case APIChatCompletions:
+		suffix = "/chat/completions"
+		npm = "@ai-sdk/openai-compatible"
+	case APIResponses:
+		suffix = "/responses"
+		npm = "@ai-sdk/openai"
+	default:
+		return OpenCodeAdapter{}, fmt.Errorf("model provider API %q is unsupported", config.API)
 	}
-	parsed.Path = strings.TrimSuffix(path, "/chat/completions")
+	if !strings.HasSuffix(path, suffix) {
+		return OpenCodeAdapter{}, fmt.Errorf("%s endpoint must end with %s", config.API, suffix)
+	}
+	parsed.Path = strings.TrimSuffix(path, suffix)
 	if parsed.Path == "" {
 		parsed.Path = "/"
 	}
-	return strings.TrimRight(parsed.String(), "/"), nil
+	return OpenCodeAdapter{NPM: npm, BaseURL: strings.TrimRight(parsed.String(), "/")}, nil
+}
+
+// OpenCodeBaseURL derives the native provider base URL.
+func OpenCodeBaseURL(config Config) (string, error) {
+	adapter, err := OpenCodeAdapterFor(config)
+	return adapter.BaseURL, err
 }
 
 // CredentialGuard holds the exact provider credential only inside an executor process.

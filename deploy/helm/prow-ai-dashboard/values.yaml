@@ -116,6 +116,7 @@ agentSandbox:
       # Direct mode is the default only after this runtime is explicitly enabled.
       # Gateway mode preserves the tokenless consumer-operated gateway path.
       credentialMode: direct
+      # chat_completions or responses. Responses requires direct bearer auth.
       api: chat_completions
       endpoint: ""
       model: ""
@@ -169,6 +170,7 @@ agentSandbox:
       name: ""
     modelProvider:
       credentialMode: direct
+      # chat_completions or responses. Responses requires direct bearer auth.
       api: chat_completions
       endpoint: ""
       model: ""

@@ -497,6 +497,17 @@ VALUES
 expect_fail invalid-agent-sandbox-key "$tmp/invalid-agent-sandbox-key.yaml" /agentSandbox
 
 
+cat > "$tmp/agent-sandbox-responses-api.yaml" <<'VALUES'
+agentSandbox:
+  fixRuntime:
+    modelProvider:
+      api: responses
+  analyzer:
+    modelProvider:
+      api: responses
+VALUES
+expect_pass agent-sandbox-responses-api "$tmp/agent-sandbox-responses-api.yaml"
+
 cat > "$tmp/invalid-agent-sandbox-provider-api.yaml" <<'VALUES'
 agentSandbox:
   fixRuntime:

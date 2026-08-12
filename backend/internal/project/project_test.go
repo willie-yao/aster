@@ -1514,8 +1514,13 @@ func TestValidateAgentSandboxFixRuntime(t *testing.T) {
 	}
 	c.AI.FixPRs.AgentRuntime.AllowedCommands = []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}}
 	c.AI.FixPRs.AgentRuntime.ModelProvider.API = "responses"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "API") {
-		t.Fatalf("agent-sandbox unsupported API error = %v", err)
+	c.AI.FixPRs.AgentRuntime.ModelProvider.Endpoint = "https://api.githubcopilot.com/responses"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("agent-sandbox Responses provider rejected: %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.ModelProvider.Endpoint = "https://api.githubcopilot.com/chat/completions"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "responses endpoint") {
+		t.Fatalf("agent-sandbox API path mismatch error = %v", err)
 	}
 	c.AI.FixPRs.AgentRuntime.ModelProvider = validAgentSandboxModelProvider()
 	c.AI.FixPRs.AgentRuntime.ModelProvider.Auth.Type = "none"

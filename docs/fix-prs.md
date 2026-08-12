@@ -593,6 +593,13 @@ agentSandbox:
       publicCAPrivateDNS: false
 ```
 
+For native Responses, change both project and Helm `api` values to `responses`
+and use a full endpoint such as `https://api.openai.com/v1/responses`. Pinned
+OpenCode 1.18.2 maps Chat Completions to `@ai-sdk/openai-compatible` and
+Responses to `@ai-sdk/openai`. Responses currently requires direct bearer auth;
+Chat Completions retains direct unauthenticated and explicit tokenless gateway
+modes.
+
 Use a dedicated inference-only credential. Do not mount `BOT_TOKEN`,
 `FIX_TOKEN`, OAuth credentials, GitHub read credentials, or a general GitHub
 PAT. The dashboard never reads the Secret value. Helm never creates, copies, or
@@ -613,6 +620,12 @@ Gateway mode requires `auth.type: none`. Internal service certificates must
 chain to a CA in the immutable executor image. The Fix runtime can explicitly
 acknowledge a privately resolved public gateway FQDN with
 `public_ca_private_dns: true`; direct provider endpoints use direct mode instead.
+
+Responses requests use `store: false`, keep the complete conversation and tool
+history in the local OpenCode session, and omit `previous_response_id`.
+Deterministic OpenCode 1.18.2 tests prove Responses streaming text, native tool
+calls, StructuredOutput in the analyzer, and the Fix edit path. They do not
+establish live compatibility with every Responses-like provider or model.
 
 Generation is one-shot. OpenCode Bash, web fetch, task delegation, external
 skills, and external-directory access are disabled. After OpenCode finishes,

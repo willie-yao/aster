@@ -318,3 +318,17 @@ func TestParseOpenCodeTelemetryCountsMatchingRootGrep(t *testing.T) {
 		}
 	}
 }
+
+func TestParseOpenCodeTelemetryTreatsZeroTokenUsageAsUnavailable(t *testing.T) {
+	raw := []byte(`[{
+		"info":{"role":"assistant","cost":0,"tokens":{"input":0,"output":0,"cache":{"read":0}}},
+		"parts":[{"type":"step-start"},{"type":"step-finish","cost":0,"tokens":{"input":0,"output":0,"cache":{"read":0}}}]
+	}]`)
+	usage, telemetry, err := parseOpenCodeTelemetry(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Available || usage.Status != agentanalysis.WorkspaceTelemetryUnavailable || usage.ModelRequests != 0 || telemetry.ProviderRequests != 1 || !telemetry.ProviderRequestsKnown {
+		t.Fatalf("usage=%+v telemetry=%+v", usage, telemetry)
+	}
+}

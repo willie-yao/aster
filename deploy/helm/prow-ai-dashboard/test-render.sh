@@ -1905,6 +1905,19 @@ if grep -Fq 'PROW_AI_MODEL_PROVIDER_TOKEN' "$tmp/agent-sandbox-gateway-render.ya
   exit 1
 fi
 
+python3 - "$tmp/agent-sandbox.yaml" "$tmp/agent-sandbox-responses.yaml" <<'PYRESPONSES'
+from pathlib import Path
+import sys
+text=Path(sys.argv[1]).read_text()
+text=text.replace('            api: chat_completions\n', '            api: responses\n')
+text=text.replace('      api: chat_completions\n', '      api: responses\n')
+text=text.replace('https://api.githubcopilot.com/chat/completions', 'https://api.openai.com/v1/responses')
+Path(sys.argv[2]).write_text(text)
+PYRESPONSES
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-responses.yaml" > "$tmp/agent-sandbox-responses-render.yaml"
+grep -A1 -F 'name: AGENT_SANDBOX_MODEL_PROVIDER_API' "$tmp/agent-sandbox-responses-render.yaml" | grep -Fq 'value: "responses"'
+grep -Fq "variables.container.env[1].name == 'PROW_AI_MODEL_PROVIDER_TOKEN'" "$tmp/agent-sandbox-responses-render.yaml"
+
 expect_agent_sandbox_fail() {
   local name=$1 expected=$2
   shift 2
@@ -1924,7 +1937,9 @@ expect_agent_sandbox_fail missing-bearer-key 'auth.tokenKey is required for bear
 expect_agent_sandbox_fail none-with-secret 'auth.type=none must not set Secret fields' --set agentSandbox.fixRuntime.modelProvider.auth.type=none
 expect_agent_sandbox_fail gateway-bearer 'gateway mode requires auth.type=none' --set agentSandbox.fixRuntime.modelProvider.credentialMode=gateway
 expect_agent_sandbox_fail direct-private-dns 'publicCAPrivateDNS applies only to gateway mode' --set agentSandbox.fixRuntime.modelProvider.publicCAPrivateDNS=true
-expect_agent_sandbox_fail provider-path 'chat_completions URL' --set agentSandbox.fixRuntime.modelProvider.endpoint=https://api.githubcopilot.com/v1
+expect_agent_sandbox_fail provider-path 'chat_completions endpoint must end with /chat/completions' --set agentSandbox.fixRuntime.modelProvider.endpoint=https://api.githubcopilot.com/v1
+expect_agent_sandbox_fail responses-path-mismatch 'responses endpoint must end with /responses' --set agentSandbox.fixRuntime.modelProvider.api=responses
+expect_agent_sandbox_fail responses-without-bearer 'responses requires direct bearer auth' --set agentSandbox.fixRuntime.modelProvider.api=responses --set agentSandbox.fixRuntime.modelProvider.endpoint=https://api.openai.com/v1/responses --set agentSandbox.fixRuntime.modelProvider.auth.type=none --set-string agentSandbox.fixRuntime.modelProvider.auth.existingSecret= --set-string agentSandbox.fixRuntime.modelProvider.auth.tokenKey=
 expect_agent_sandbox_fail project-mode-mismatch 'credentialMode must match project' --set agentSandbox.fixRuntime.modelProvider.credentialMode=gateway --set agentSandbox.fixRuntime.modelProvider.auth.type=none --set-string agentSandbox.fixRuntime.modelProvider.auth.existingSecret= --set-string agentSandbox.fixRuntime.modelProvider.auth.tokenKey= --set agentSandbox.fixRuntime.modelProvider.endpoint=https://fake-gateway.fix-eval.svc.cluster.local/v1/chat/completions
 expect_agent_sandbox_fail orka-combination 'cannot be combined with Orka runtimes' --set orka.fixRuntime.enabled=true
 expect_agent_sandbox_fail command-mismatch 'must end with argv [git diff --cached --check]' --set-string agentSandbox.fixRuntime.allowedCommands[0].argv[0]=go
@@ -2076,6 +2091,17 @@ grep -Fq '(!has(variables.container.envFrom) || size(variables.container.envFrom
 grep -Fq 'variables.container.env[1].valueFrom.secretKeyRef.name == \"analyzer-model\"' "$tmp/agent-sandbox-analyzer-direct-render.yaml"
 grep -Fq 'variables.container.env[1].valueFrom.secretKeyRef.key == \"AI_TOKEN\"' "$tmp/agent-sandbox-analyzer-direct-render.yaml"
 
+python3 - "$tmp/agent-sandbox-analyzer-direct.yaml" "$tmp/agent-sandbox-analyzer-responses.yaml" <<'PYANALYZERRESPONSES'
+from pathlib import Path
+import sys
+text=Path(sys.argv[1]).read_text().replace('      api: chat_completions\n', '      api: responses\n')
+text=text.replace('https://api.openai.com/v1/chat/completions', 'https://api.openai.com/v1/responses')
+Path(sys.argv[2]).write_text(text)
+PYANALYZERRESPONSES
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-analyzer-responses.yaml" > "$tmp/agent-sandbox-analyzer-responses-render.yaml"
+grep -Fq 'matchName: "api.openai.com"' "$tmp/agent-sandbox-analyzer-responses-render.yaml"
+grep -Fq "variables.container.env[1].name == 'PROW_AI_MODEL_PROVIDER_TOKEN'" "$tmp/agent-sandbox-analyzer-responses-render.yaml"
+
 helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-analyzer.yaml" \
   --show-only templates/worker-deployment.yaml > "$tmp/agent-sandbox-analyzer-worker.yaml"
 if grep -Fq 'AGENT_SANDBOX_ANALYSIS_' "$tmp/agent-sandbox-analyzer-worker.yaml" || grep -Fq 'test-prow-ai-dashboard-agent-sandbox-analyzer-client' "$tmp/agent-sandbox-analyzer-worker.yaml"; then
@@ -2126,6 +2152,8 @@ expect_agent_sandbox_analyzer_fail() {
 }
 expect_agent_sandbox_analyzer_fail external-with-kubernetes 'external direct providers require networkPolicy.mode=cilium' --set agentSandbox.analyzer.modelProvider.credentialMode=direct --set agentSandbox.analyzer.modelProvider.auth.type=none --set agentSandbox.analyzer.modelProvider.endpoint=https://api.openai.com/v1/chat/completions
 expect_agent_sandbox_analyzer_fail gateway-bearer 'gateway mode requires auth.type=none' --set agentSandbox.analyzer.modelProvider.auth.type=bearer --set agentSandbox.analyzer.modelProvider.auth.existingSecret=analyzer-model --set agentSandbox.analyzer.modelProvider.auth.tokenKey=AI_TOKEN
+expect_agent_sandbox_analyzer_fail responses-without-bearer 'responses requires direct bearer auth' --set agentSandbox.analyzer.modelProvider.credentialMode=direct --set agentSandbox.analyzer.modelProvider.api=responses --set agentSandbox.analyzer.modelProvider.endpoint=https://api.openai.com/v1/responses
+expect_agent_sandbox_analyzer_fail responses-path-mismatch 'responses endpoint must end with /responses' --set agentSandbox.analyzer.modelProvider.credentialMode=direct --set agentSandbox.analyzer.modelProvider.api=responses --set agentSandbox.analyzer.modelProvider.auth.type=bearer --set agentSandbox.analyzer.modelProvider.auth.existingSecret=analyzer-model --set agentSandbox.analyzer.modelProvider.auth.tokenKey=AI_TOKEN
 expect_agent_sandbox_analyzer_fail none-with-secret 'auth.type=none must not set Secret fields' --set agentSandbox.analyzer.modelProvider.credentialMode=direct --set agentSandbox.analyzer.modelProvider.endpoint=https://api.openai.com/v1/chat/completions --set agentSandbox.analyzer.modelProvider.auth.existingSecret=unexpected
 expect_agent_sandbox_analyzer_fail mutable-executor 'executorImage.digest must be an immutable sha256 digest' --set-string agentSandbox.analyzer.executorImage.digest=latest
 expect_agent_sandbox_analyzer_fail missing-input 'input.existingClaim is required' --set-string agentSandbox.analyzer.input.existingClaim=
