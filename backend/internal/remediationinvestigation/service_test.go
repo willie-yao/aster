@@ -750,3 +750,53 @@ func TestValidationErrorCodeCategories(t *testing.T) {
 		}
 	}
 }
+
+type structuredMetadataDecorator struct{ Model }
+
+func (m *structuredMetadataDecorator) CompleteStructuredWithMetadata(ctx context.Context, system, user string, format ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
+	model, ok := m.Model.(structuredCompletionModel)
+	if !ok {
+		err := m.Model.CompleteStructured(ctx, system, user, format, validate)
+		metadata, _ := ai.StructuredCompletionFailureMetadata(err)
+		return metadata, err
+	}
+	return model.CompleteStructuredWithMetadata(ctx, system, user, format, validate)
+}
+
+func TestServiceDecoratorPreservesCancellationAndDeadlineMetadata(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		category FailureCategory
+		phase    Phase
+	}{
+		{name: "cancelled", err: context.Canceled, category: FailureCancelled, phase: PhaseTargetExtractionInitial},
+		{name: "deadline", err: context.DeadlineExceeded, category: FailureTimeout, phase: PhaseTargetExtractionInitial},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := &fakeModel{
+				fingerprint: strings.Repeat("d", 16), memo: "evidence", finalErr: tt.err,
+				toolEvents: []ai.ToolLoopEvent{
+					{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
+					{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
+					{Name: "grep_repo", ContentBytes: len("applyFix")},
+				},
+			}
+			service, input, browser, _ := serviceFixture(t, model)
+			service.model = &structuredMetadataDecorator{Model: model}
+			_, err := service.Investigate(t.Context(), input, browser, false)
+			if !errors.Is(err, tt.err) {
+				t.Fatalf("err=%v", err)
+			}
+			details, ok := FailureDetailsOf(err)
+			if !ok || details.Category != tt.category || details.Phase != tt.phase || len(details.StructuredAttempts) != 1 || model.finalCalls != 1 {
+				t.Fatalf("details=%+v ok=%v calls=%d", details, ok, model.finalCalls)
+			}
+			attempt := details.StructuredAttempts[0]
+			if attempt.Path != ai.StructuredAttemptResponseFormat || attempt.Outcome != ai.StructuredOutcomeProviderError || attempt.ProviderCategory != "request_transport" || attempt.ValidatorCalled {
+				t.Fatalf("attempt=%+v", attempt)
+			}
+		})
+	}
+}

@@ -207,6 +207,18 @@ type remediationModelCapabilityDiagnosticModel struct {
 	diagnostics *remediationModelCapabilityMemoDiagnostics
 }
 
+func (m *remediationModelCapabilityDiagnosticModel) CompleteStructuredWithMetadata(ctx context.Context, system, user string, format ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
+	model, ok := m.Model.(interface {
+		CompleteStructuredWithMetadata(context.Context, string, string, ai.ResponseFormat, ai.StructuredValidator) (ai.StructuredCompletionMetadata, error)
+	})
+	if ok {
+		return model.CompleteStructuredWithMetadata(ctx, system, user, format, validate)
+	}
+	err := m.Model.CompleteStructured(ctx, system, user, format, validate)
+	metadata, _ := ai.StructuredCompletionFailureMetadata(err)
+	return metadata, err
+}
+
 func (m *remediationModelCapabilityDiagnosticModel) ToolLoop(ctx context.Context, system, user string, registry *tools.Registry, enabled []string, env *tools.Env, options ai.ToolLoopOptions) (string, error) {
 	memo, err := m.Model.ToolLoop(ctx, system, user, registry, enabled, env, options)
 	if err != nil {
