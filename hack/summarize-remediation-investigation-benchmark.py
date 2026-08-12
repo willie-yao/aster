@@ -71,6 +71,8 @@ def main():
         bool(row.get("classification_correct")) and
         bool(row.get("exact_target"))
         for row in valid)
+    known_fix_expected = sum(bool(row.get("known_fix_expected")) for row in rows)
+    known_fix_matches = sum(bool(row.get("known_fix_match")) for row in valid if row.get("known_fix_expected"))
     true_positive = sum(bool(row.get("expected_actionable")) and bool(row.get("verified_actionable")) and bool(row.get("exact_target")) for row in valid)
     precision = true_positive / verified_positive if verified_positive else None
     recall = true_positive / expected_positive if expected_positive else None
@@ -101,6 +103,9 @@ def main():
         "correct_model_candidates": correct_candidates,
         "model_candidate_precision": candidate_precision,
         "model_candidate_recall": candidate_recall,
+        "known_fix_expected": known_fix_expected,
+        "known_fix_matches": known_fix_matches,
+        "known_fix_recall": (known_fix_matches / known_fix_expected) if known_fix_expected else None,
         "expected_candidates": expected_candidates,
         "model_candidates": model_candidates,
         "model_candidate_kinds": dict(sorted(collections.Counter(row.get("model_candidate_kind") for row in valid if row.get("model_candidate_kind")).items())),

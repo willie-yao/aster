@@ -285,9 +285,38 @@ real historical holdouts.
 
 ### Stage C: real historical holdouts
 
-Run the frozen real-history cases with at least two cold repetitions each. Keep
-expected outcomes out of provider prompts. Require zero unsafe acceptance and no
-wrong-repository actionable target.
+The committed manifest is:
+
+```text
+backend/internal/e2e/testdata/benchmarks/remediation-investigation-history-v1.json
+SHA-256: 426ecf50a6f7773c55463eb6f920af4eef153d4c70facbd5234b57c0b199a094
+```
+
+It freezes the recurring CAPZ ASO-upgrade failure at its initial and merged
+repair revisions, one upstream DRA dependency failure, and the Azure Linux 3
+control-plane join causal group reconstructed from the deployed safe snapshot.
+Each case binds public build IDs, immutable source revisions, public artifact
+identities and hashes, bounded artifact excerpts, source snapshot hashes, and a
+private scorer expectation. Expected outcomes and known-fix scorer metadata are
+not included in provider prompts. Published pattern IDs, pattern hashes,
+analysis timestamps, test names, and causal content come from the frozen safe
+dashboard snapshot; group IDs are reconstructed because that snapshot predates
+per-group publication.
+
+Run the four cases with two cold repetitions each:
+
+```bash
+RUN_REMEDIATION_INVESTIGATION_HISTORY_BENCHMARK=1 \
+REMEDIATION_HISTORY_RESULTS_JSONL=/private/path/stage-c.jsonl \
+AI_ENDPOINT=<configured-endpoint> \
+AI_MODEL=<configured-model> \
+go test ./internal/e2e -run '^TestRemediationInvestigationHistoricalBenchmark$' -v -timeout 120m
+```
+
+Require zero unsafe acceptance, no wrong-repository actionable target, every
+already-fixed result blocked from patch generation, and a content-bearing source
+read in every valid trial. Report `known_fix_recall` separately and do not count
+an unrelated candidate as an exact historical target.
 
 Set `AI_API` only when the intended provider mode is not the client default.
 `AI_TOKEN` is read by the client but is never printed, persisted, compared, or
