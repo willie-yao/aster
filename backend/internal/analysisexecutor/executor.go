@@ -193,9 +193,11 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		}
 		return fail(stateForContext(ctx), fmt.Sprintf("run OpenCode analyzer: %v", runErr))
 	}
-	analysis, err := agentanalysis.ParseWorkspaceAnalysis(string(runResult.Structured), request.Manifest, artifactRoot, sourceRoot)
+	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(runResult.Structured), request.Manifest, artifactRoot, sourceRoot)
+	result.ResultValidation = validation
 	if err != nil {
-		return fail(engineruntime.TerminalFailed, err.Error())
+		result.OpenCodeTelemetry.FailureCode = "analysis_result_invalid"
+		return fail(engineruntime.TerminalFailed, agentanalysis.WorkspaceResultRejectedReason)
 	}
 	if (len(analysis.SourceCitations) > 0 || len(analysis.RelevantFiles) > 0) && result.OpenCodeTelemetry.SourceEvidenceToolCalls < 1 {
 		result.OpenCodeTelemetry.FailureCode = "source_evidence_unavailable"

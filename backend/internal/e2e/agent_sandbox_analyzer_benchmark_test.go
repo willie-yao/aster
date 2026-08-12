@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,7 +30,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
-const agentSandboxAnalyzerBenchmarkRecordVersion = 3
+const agentSandboxAnalyzerBenchmarkRecordVersion = 4
 
 type agentSandboxAnalyzerBenchmarkConfig struct {
 	KubeContext        string
@@ -144,6 +145,8 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	PhaseTimingStatus            string                                 `json:"phase_timing_status"`
 	CleanupDurationMS            int64                                  `json:"cleanup_duration_ms,omitempty"`
 	AnalysisValid                bool                                   `json:"analysis_valid"`
+	ResultValidationStatus       string                                 `json:"result_validation_status,omitempty"`
+	ResultValidationCodes        []string                               `json:"result_validation_codes,omitempty"`
 	ArtifactCitationCount        int                                    `json:"artifact_citation_count"`
 	SourceCitationCount          int                                    `json:"source_citation_count"`
 	SourceVerified               bool                                   `json:"source_verified"`
@@ -594,6 +597,9 @@ func agentSandboxAnalyzerRecordForResult(
 	if record.OpenCodeTelemetryStatus == "" {
 		record.OpenCodeTelemetryStatus = agentanalysis.WorkspaceTelemetryUnavailable
 	}
+	validation := result.Execution.ResultValidation
+	record.ResultValidationStatus = validation.Status
+	record.ResultValidationCodes = append([]string(nil), validation.Codes...)
 	analysis := result.Execution.Analysis
 	record.AnalysisValid = analysis != nil && result.Telemetry.FinalizationValid
 	assessment := assessBenchmarkCase(prepared.bc, nil)
@@ -671,8 +677,12 @@ func agentSandboxAnalyzerBenchmarkStatus(result agentanalysis.WorkspaceSandboxRe
 		return "no_result", "no_result"
 	case result.Telemetry.ResultAvailable && !result.Telemetry.FinalizationValid:
 		return "invalid_result", "invalid_result"
-	case result.Execution.TerminalState == engineruntime.TerminalFailed && strings.Contains(result.Execution.FailureReason, "invalid agent analysis result:"):
-		return "invalid_result", "invalid_result"
+	case result.Execution.ResultValidation.Status == agentanalysis.WorkspaceResultRejected:
+		code := "invalid_result"
+		if len(result.Execution.ResultValidation.Codes) == 1 {
+			code = result.Execution.ResultValidation.Codes[0]
+		}
+		return "invalid_result", code
 	case errors.Is(err, engineruntime.ErrMalformedResult) || errors.Is(err, engineruntime.ErrResultContract):
 		return "invalid_result", "invalid_result"
 	default:
@@ -898,8 +908,10 @@ func TestAgentSandboxAnalyzerRecordRetainsFailureUsage(t *testing.T) {
 		result     agentanalysis.WorkspaceSandboxResult
 		err        error
 		wantStatus string
+		wantCode   string
 	}{
 		{name: "invalid", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{Usage: usage}, Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true, ResultAvailable: true}}, err: engineruntime.ErrMalformedResult, wantStatus: "invalid_result"},
+		{name: "validated invalid", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{TerminalState: engineruntime.TerminalFailed, FailureReason: agentanalysis.WorkspaceResultRejectedReason, ResultValidation: agentanalysis.WorkspaceResultValidation{Status: agentanalysis.WorkspaceResultRejected, Codes: []string{agentanalysis.WorkspaceInvalidArtifactPath}}, Usage: usage}, Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true, ResultAvailable: true, FinalizationValid: true}}, err: errors.New("rejected"), wantStatus: "invalid_result", wantCode: agentanalysis.WorkspaceInvalidArtifactPath},
 		{name: "no result", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{Usage: usage}, Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true}}, err: errors.New("missing"), wantStatus: "no_result"},
 		{name: "timeout", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{TerminalState: engineruntime.TerminalTimedOut, Usage: usage}}, err: context.DeadlineExceeded, wantStatus: "timeout"},
 	} {
@@ -907,6 +919,9 @@ func TestAgentSandboxAnalyzerRecordRetainsFailureUsage(t *testing.T) {
 			record := agentSandboxAnalyzerRecordForResult(cfg, prepared, 1, "execution", "runtime", test.result, time.Second, test.err)
 			if record.AnalysisValid || record.Status != test.wantStatus || record.ModelRequests != 3 || record.InputTokens != 100 || record.CachedInputTokens != 20 || record.OutputTokens != 40 || record.CostUSD != "0.42" || !record.TokenUsageAvailable || !record.CostAvailable || record.UsageStatus != agentanalysis.WorkspaceTelemetryAvailable {
 				t.Fatalf("record = %+v", record)
+			}
+			if test.wantCode != "" && (record.ResultValidationStatus != agentanalysis.WorkspaceResultRejected || !slices.Equal(record.ResultValidationCodes, []string{test.wantCode})) {
+				t.Fatalf("result validation = %q %v", record.ResultValidationStatus, record.ResultValidationCodes)
 			}
 		})
 	}
@@ -948,7 +963,7 @@ func TestAgentSandboxAnalyzerBenchmarkStatus(t *testing.T) {
 		}(), err: engineruntime.ErrCleanupPending, want: "cleanup_pending"},
 		{name: "no result", result: agentanalysis.WorkspaceSandboxResult{Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true}}, err: errors.New("missing"), want: "no_result"},
 		{name: "invalid", result: agentanalysis.WorkspaceSandboxResult{Telemetry: engineruntime.GenerateTelemetry{ResultAvailable: true}}, err: engineruntime.ErrMalformedResult, want: "invalid_result"},
-		{name: "validated failure envelope", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{TerminalState: engineruntime.TerminalFailed, FailureReason: "invalid agent analysis result: artifact citation 0 quote does not match"}, Telemetry: engineruntime.GenerateTelemetry{ResultAvailable: true, FinalizationValid: true}}, err: errors.New("workspace analysis failed"), want: "invalid_result"},
+		{name: "validated failure envelope", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{TerminalState: engineruntime.TerminalFailed, FailureReason: "workspace analysis result rejected", ResultValidation: agentanalysis.WorkspaceResultValidation{Status: agentanalysis.WorkspaceResultRejected, Codes: []string{agentanalysis.WorkspaceInvalidArtifactLineRange}}}, Telemetry: engineruntime.GenerateTelemetry{ResultAvailable: true, FinalizationValid: true}}, err: errors.New("workspace analysis failed"), want: "invalid_result"},
 		{name: "timeout", result: agentanalysis.WorkspaceSandboxResult{}, err: context.DeadlineExceeded, want: "timeout"},
 		{name: "runtime", result: agentanalysis.WorkspaceSandboxResult{}, err: errors.New("failed"), want: "runtime_failure"},
 	} {
