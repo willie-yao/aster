@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -42,6 +43,11 @@ func TestAgentSandboxAnalyzerReport(t *testing.T) {
 	criteria := report["criteria"].(map[string]any)
 	if criteria["recommendation"] != "continue_experiment_not_replacement" || criteria["automatic_quality_passed"] != true || criteria["quality_passed"] != false || criteria["simplicity_passed"] != true {
 		t.Fatalf("criteria = %+v", criteria)
+	}
+	evidenceModes := report["evidence_mode_coverage"].(map[string]any)
+	artifactAndSource := evidenceModes[benchmarkEvidenceModeArtifactAndSource].(map[string]any)
+	if artifactAndSource["trials"] != float64(3) || report["evidence_modes_complete"] != false {
+		t.Fatalf("evidence mode coverage = %+v", evidenceModes)
 	}
 	for _, sensitive := range []string{"INPROCESS_PRIVATE_ROOT_CAUSE", "SANDBOX_PRIVATE_ROOT_CAUSE", "PRIVATE_ARTIFACT_QUOTE"} {
 		if strings.Contains(string(output), sensitive) {
@@ -258,6 +264,31 @@ func TestAgentSandboxAnalyzerReportRejectsIdentityMismatch(t *testing.T) {
 		{name: "evidence", mutate: func(inprocess []map[string]any, _ []map[string]any) {
 			inprocess[0]["evidence_condition"] = "kueue-oracle-v1"
 		}, expected: "inprocess line 1 must use fixture-v1 evidence"},
+		{name: "evidence mode", mutate: func(_ []map[string]any, sandbox []map[string]any) {
+			for index := range sandbox {
+				sandbox[index]["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
+				sandbox[index]["source_expectation_paths"] = []string{}
+				sandbox[index]["source_expectation_hits"] = 0
+				sandbox[index]["source_expectation_total"] = 0
+				sandbox[index]["source_signal_hits"] = 0
+				sandbox[index]["source_signal_total"] = 0
+				sandbox[index]["evidence_contract_passed"] = true
+				sandbox[index]["evidence_contract_status"] = "passed"
+			}
+		}, expected: "differs in evidence_mode"},
+		{name: "case evidence mode drift", mutate: func(inprocess []map[string]any, sandbox []map[string]any) {
+			inprocess[1]["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
+			sandbox[1]["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
+			for _, record := range []map[string]any{inprocess[1], sandbox[1]} {
+				record["source_expectation_paths"] = []string{}
+				record["source_expectation_hits"] = 0
+				record["source_expectation_total"] = 0
+				record["source_signal_hits"] = 0
+				record["source_signal_total"] = 0
+			}
+			sandbox[1]["evidence_contract_passed"] = true
+			sandbox[1]["evidence_contract_status"] = "passed"
+		}, expected: "inprocess case case changes evidence_mode across repetitions"},
 		{name: "model label", mutate: func(_ []map[string]any, sandbox []map[string]any) { sandbox[0]["model_label"] = "model-b" }, expected: "differs in model_label"},
 		{name: "rubric version", mutate: func(_ []map[string]any, sandbox []map[string]any) {
 			sandbox[0]["human_score_rubric_version"] = benchmarkHumanScoreRubricVersion + 1
@@ -303,7 +334,9 @@ func validAgentSandboxAnalyzerReportRecords(t *testing.T) ([]map[string]any, []m
 			"fixture_sha256": strings.Repeat("b", 64), "baseline_consumer_commit": strings.Repeat("c", 40),
 			"baseline_prompt_sha256": strings.Repeat("d", 64), "project_sha256": strings.Repeat("e", 64),
 			"source_revision": strings.Repeat("f", 40), "provider_path": "provider/model", "transport_id": "transport-v1",
-			"api_mode": "chat_completions", "evidence_condition": "fixture-v1",
+			"api_mode": "chat_completions", "evidence_condition": "fixture-v1", "evidence_mode": benchmarkEvidenceModeArtifactAndSource,
+			"source_expectation_sha256": strings.Repeat("9", 64), "source_expectation_paths": []string{"pkg/file.go"}, "source_expectation_hits": 1, "source_expectation_total": 1,
+			"source_signal_hits": 1, "source_signal_total": 1, "source_evidence_tool_calls": 1,
 			"job_name": "job", "build_id": "1", "test_name": "test", "test_source": "build",
 			"human_score_rubric_version": benchmarkHumanScoreRubricVersion, "human_score_max": 10, "human_score_dimensions": benchmarkHumanScoreDimensions,
 			"elapsed_ms": 1000 + repetition, "signal_hits": 4, "signal_total": 5,
@@ -323,12 +356,14 @@ func validAgentSandboxAnalyzerReportRecords(t *testing.T) ([]map[string]any, []m
 		left["severity"] = "High"
 		left["is_transient"] = false
 		left["evidence_citations"] = []map[string]any{{"path": "artifact.log", "quote": "PRIVATE_ARTIFACT_QUOTE"}}
+		left["relevant_files"] = []string{"pkg/file.go"}
 		left["file_links"] = map[string]string{"pkg/file.go": "private"}
+		left["tool_names"] = []string{"read_artifact", "read_repo_file"}
 		left["trace"] = map[string]any{"model_requests": 2, "provider_attempts": 2, "input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 20}
 		inprocess = append(inprocess, left)
 
 		right := cloneReportRecord(common)
-		right["version"] = 1
+		right["version"] = agentSandboxAnalyzerBenchmarkRecordVersion
 		right["runtime"] = "agent-sandbox-opencode"
 		right["arm"] = "arm-b"
 		right["status"] = "succeeded"
@@ -338,6 +373,10 @@ func validAgentSandboxAnalyzerReportRecords(t *testing.T) ([]map[string]any, []m
 		right["source_verified"] = true
 		right["artifact_citation_count"] = 1
 		right["source_citation_count"] = 1
+		right["artifact_evidence_tool_calls"] = 1
+		right["source_evidence_tool_calls"] = 1
+		right["evidence_contract_passed"] = true
+		right["evidence_contract_status"] = "passed"
 		right["summary"] = "private summary"
 		right["root_cause"] = "SANDBOX_PRIVATE_ROOT_CAUSE"
 		right["suggested_fix"] = "private fix"
@@ -548,4 +587,159 @@ func TestAgentSandboxAnalyzerReportAcceptsTwoRepetitionCorrectedMatrix(t *testin
 	if criteria["evidence_complete"] != false || report["holdouts_complete"] != false {
 		t.Fatalf("extra trials were accepted: %s", extraOutput)
 	}
+}
+
+func TestAgentSandboxAnalyzerReportArtifactOnlyDoesNotRequireSource(t *testing.T) {
+	inprocess, sandbox := validAgentSandboxAnalyzerReportRecords(t)
+	for index := range inprocess {
+		inprocess[index]["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
+		inprocess[index]["file_links"] = map[string]string{}
+		inprocess[index]["relevant_files"] = []string{}
+		inprocess[index]["source_expectation_paths"] = []string{}
+		inprocess[index]["source_expectation_hits"] = 0
+		inprocess[index]["source_expectation_total"] = 0
+		inprocess[index]["source_signal_hits"] = 0
+		inprocess[index]["source_signal_total"] = 0
+		inprocess[index]["source_evidence_tool_calls"] = 0
+		sandbox[index]["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
+		sandbox[index]["source_expectation_paths"] = []string{}
+		sandbox[index]["source_expectation_hits"] = 0
+		sandbox[index]["source_expectation_total"] = 0
+		sandbox[index]["source_signal_hits"] = 0
+		sandbox[index]["source_signal_total"] = 0
+		sandbox[index]["source_verified"] = false
+		sandbox[index]["source_citation_count"] = 0
+		sandbox[index]["source_citations"] = []map[string]any{}
+		sandbox[index]["source_evidence_tool_calls"] = 0
+		sandbox[index]["evidence_contract_passed"] = true
+		sandbox[index]["evidence_contract_status"] = "passed"
+	}
+	report := runAgentSandboxAnalyzerReport(t, inprocess, sandbox)
+	sandboxSummary := report["agent_sandbox"].(map[string]any)
+	modes := sandboxSummary["evidence_modes"].(map[string]any)
+	artifactOnly := modes[benchmarkEvidenceModeArtifactOnly].(map[string]any)
+	if sandboxSummary["runtime_valid_trials"] != float64(3) || sandboxSummary["valid_trials"] != float64(3) || sandboxSummary["source_grounded_trials"] != float64(0) || artifactOnly["contract_pass_rate"] != float64(1) {
+		t.Fatalf("sandbox summary = %+v", sandboxSummary)
+	}
+	criteria := report["criteria"].(map[string]any)
+	if criteria["automatic_quality_passed"] != true {
+		t.Fatalf("criteria = %+v", criteria)
+	}
+}
+
+func TestAgentSandboxAnalyzerReportSourceRequiredRejectsUnreadFileLink(t *testing.T) {
+	inprocess, sandbox := validAgentSandboxAnalyzerReportRecords(t)
+	inprocess[0]["relevant_files"] = []string{}
+	inprocess[0]["source_expectation_hits"] = 0
+	report := runAgentSandboxAnalyzerReport(t, inprocess, sandbox)
+	inprocessSummary := report["inprocess"].(map[string]any)
+	modes := inprocessSummary["evidence_modes"].(map[string]any)
+	sourceRequired := modes[benchmarkEvidenceModeArtifactAndSource].(map[string]any)
+	if inprocessSummary["runtime_valid_trials"] != float64(3) || inprocessSummary["valid_trials"] != float64(2) || sourceRequired["contract_passed_trials"] != float64(2) {
+		t.Fatalf("in-process summary = %+v", inprocessSummary)
+	}
+}
+
+func TestAgentSandboxAnalyzerReportSourceRequiredNeedsToolAndCitation(t *testing.T) {
+	inprocess, sandbox := validAgentSandboxAnalyzerReportRecords(t)
+	sandbox[0]["source_evidence_tool_calls"] = 0
+	sandbox[0]["evidence_contract_passed"] = false
+	sandbox[0]["evidence_contract_status"] = "unsupported_source_claim"
+	report := runAgentSandboxAnalyzerReport(t, inprocess, sandbox)
+	sandboxSummary := report["agent_sandbox"].(map[string]any)
+	modes := sandboxSummary["evidence_modes"].(map[string]any)
+	sourceRequired := modes[benchmarkEvidenceModeArtifactAndSource].(map[string]any)
+	if sandboxSummary["runtime_valid_trials"] != float64(3) || sandboxSummary["valid_trials"] != float64(2) || sourceRequired["contract_passed_trials"] != float64(2) {
+		t.Fatalf("sandbox summary = %+v", sandboxSummary)
+	}
+	criteria := report["criteria"].(map[string]any)
+	if criteria["automatic_quality_passed"] != false {
+		t.Fatalf("criteria = %+v", criteria)
+	}
+}
+
+func TestAgentSandboxAnalyzerReportArtifactOnlyRejectsUnsupportedSourceOutput(t *testing.T) {
+	inprocess, sandbox := validAgentSandboxAnalyzerReportRecords(t)
+	for index := range inprocess {
+		for _, record := range []map[string]any{inprocess[index], sandbox[index]} {
+			record["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
+			record["source_expectation_paths"] = []string{}
+			record["source_expectation_hits"] = 0
+			record["source_expectation_total"] = 0
+			record["source_signal_hits"] = 0
+			record["source_signal_total"] = 0
+			record["source_evidence_tool_calls"] = 0
+		}
+		sandbox[index]["evidence_contract_passed"] = false
+		sandbox[index]["evidence_contract_status"] = "unsupported_source_claim"
+	}
+	report := runAgentSandboxAnalyzerReport(t, inprocess, sandbox)
+	sandboxSummary := report["agent_sandbox"].(map[string]any)
+	if sandboxSummary["runtime_valid_trials"] != float64(3) || sandboxSummary["valid_trials"] != float64(0) {
+		t.Fatalf("sandbox summary = %+v", sandboxSummary)
+	}
+}
+
+func TestAgentSandboxAnalyzerSixTrialReportRequiresBothEvidenceModes(t *testing.T) {
+	inprocess, sandbox := validAgentSandboxAnalyzerReportRecords(t)
+	for index := range inprocess {
+		for _, record := range []map[string]any{inprocess[index], sandbox[index]} {
+			record["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
+			record["source_expectation_paths"] = []string{}
+			record["source_expectation_hits"] = 0
+			record["source_expectation_total"] = 0
+			record["source_signal_hits"] = 0
+			record["source_signal_total"] = 0
+			record["source_evidence_tool_calls"] = 0
+		}
+		inprocess[index]["file_links"] = map[string]string{}
+		sandbox[index]["source_citations"] = []map[string]any{}
+		sandbox[index]["source_citation_count"] = 0
+		sandbox[index]["source_verified"] = false
+		sandbox[index]["evidence_contract_passed"] = true
+		sandbox[index]["evidence_contract_status"] = "passed"
+	}
+	for repetition := 4; repetition <= 6; repetition++ {
+		left := cloneReportRecord(inprocess[0])
+		right := cloneReportRecord(sandbox[0])
+		left["source_expectation_paths"], right["source_expectation_paths"] = []string{}, []string{}
+		left["repetition"], right["repetition"] = repetition, repetition
+		inprocess, sandbox = append(inprocess, left), append(sandbox, right)
+	}
+	report := runAgentSandboxAnalyzerReportWithExpected(t, inprocess, sandbox, 6)
+	criteria := report["criteria"].(map[string]any)
+	if report["evidence_modes_complete"] != false || criteria["evidence_complete"] != false || criteria["evidence_modes_required"] != true {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
+func runAgentSandboxAnalyzerReport(t *testing.T, inprocess, sandbox []map[string]any) map[string]any {
+	t.Helper()
+	return runAgentSandboxAnalyzerReportWithExpected(t, inprocess, sandbox, 3)
+}
+
+func runAgentSandboxAnalyzerReportWithExpected(t *testing.T, inprocess, sandbox []map[string]any, expected int) map[string]any {
+	t.Helper()
+	dir := t.TempDir()
+	inprocessPath := filepath.Join(dir, "inprocess.jsonl")
+	sandboxPath := filepath.Join(dir, "sandbox.jsonl")
+	writeReportJSONL(t, inprocessPath, inprocess)
+	writeReportJSONL(t, sandboxPath, sandbox)
+	command := exec.Command(
+		"python3", filepath.Join("..", "..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
+		"--inprocess", inprocessPath,
+		"--sandbox", sandboxPath,
+		"--repo", filepath.Join("..", "..", ".."),
+		"--holdout-case", "case",
+		"--expected-pairs", strconv.Itoa(expected),
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report: %v: %s", err, output)
+	}
+	var report map[string]any
+	if err := json.Unmarshal(output, &report); err != nil {
+		t.Fatal(err)
+	}
+	return report
 }

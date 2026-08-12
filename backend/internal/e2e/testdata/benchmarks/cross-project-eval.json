@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "cases": [
     {
       "id": "secrets-store-csi-image-scan",
@@ -76,7 +76,8 @@
             "(?i)(?:trivy image --exit-code\\s+1|make: \\*\\*\\* \\[Makefile:[0-9]+: image-scan\\] Error 1)"
           ]
         }
-      ]
+      ],
+      "evidence_mode": "artifact_only"
     },
     {
       "id": "kueue-was-podgroup-api-mismatch",
@@ -214,7 +215,8 @@
           "oracle_context_lines": 2
         }
       ],
-      "oracle_evidence_sha256": "92376ed20f725db6b210eabc538dc77feb15373e3fa59341651cca30c5c6ba9c"
+      "oracle_evidence_sha256": "92376ed20f725db6b210eabc538dc77feb15373e3fa59341651cca30c5c6ba9c",
+      "evidence_mode": "artifact_only"
     },
     {
       "id": "gcp-pd-csi-windows-mount-visibility",
@@ -272,7 +274,7 @@
           "negated": "(?is)(?:not|isn.t|wasn.t).{0,40}(?:definitively|conclusively|unquestionably|solely|clearly|responsible)"
         }
       ],
-      "reference_diagnosis": "Most likely an upstream Kubernetes Windows test/runtime mount-visibility defect at the publish-to-container handoff. The GCE PD CSI driver successfully staged and published each NTFS volume and each target pod became Running and Ready, but /mnt/volume1 was absent inside the Windows container. The failure repeated in two filesystem-size snapshot test variants on separate target pods and nodes after an earlier Windows suite passed. The available artifacts do not distinguish an incorrect or missing test volumeMount from kubelet/containerd/HCS failing to expose a valid host target, or CSI-proxy reporting symlink creation success without a usable target.",
+      "reference_diagnosis": "At the pinned driver source, the GCE test-selection code handles Windows by excluding only tests labeled LinuxOnly; unlike the GKE version guard, it does not exclude the snapshot restore filesystem-size case, so that upstream VolumeSnapshotDataSource test runs on Windows. In the artifacts, the GCE PD CSI driver successfully staged and published each NTFS volume and each target pod became Running and Ready, but /mnt/volume1 was absent inside the Windows container. The failure repeated in two filesystem-size snapshot variants. The combined source and artifact evidence does not distinguish an incorrect or missing test volumeMount from kubelet/containerd/HCS failing to expose a valid host target, or CSI-proxy reporting symlink creation success without a usable target.",
       "reference_is_transient": false,
       "evidence_groups": [
         {
@@ -293,6 +295,17 @@
           "content": [
             "(?i)NodePublishVolume succeeded on volume"
           ]
+        }
+      ],
+      "evidence_mode": "artifact_and_source",
+      "source_paths": [
+        "test/k8s-integration/main.go"
+      ],
+      "source_signals": [
+        {
+          "name": "identifies Windows snapshot test selection gap",
+          "pattern": "(?is)(?:(?:GCE|Windows).{0,100}(?:skip|filter|selection).{0,180}(?:only|just).{0,80}(?:\\\\?\\[?LinuxOnly\\\\?\\]?|LinuxOnly)|(?:\\\\?\\[?LinuxOnly\\\\?\\]?|LinuxOnly).{0,180}(?:only|just).{0,100}(?:GCE|Windows)).{0,280}(?:snapshot|filesystem.?size|VolumeSnapshotDataSource)",
+          "must": true
         }
       ]
     }

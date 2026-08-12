@@ -351,7 +351,16 @@ go test ./internal/e2e -run '^TestAgentSandboxAnalyzerBenchmark$' -v -count=1 -t
 ```
 
 Run the in-process arm with `TestAIBenchmark`, the same case, consumer,
-provider, model, and two fresh cold trials. Keep the two JSONL files private.
+provider, model, and two fresh cold trials. Keep the two JSONL files private. The frozen manifest classifies each case as
+`artifact_only` or `artifact_and_source`. Artifact-only results do not lose
+validity merely because no source was read. Source-required cases freeze exact
+source paths and source-backed diagnosis signals. They must contain artifact
+evidence, a successful source read or grep, verified canonical citations for all
+expected paths, and every source-backed signal. Source outputs without a source
+read fail either mode. The report keeps runtime validity separate from this
+evidence contract, reports both modes separately, and rejects the exact six-trial
+matrix when either category is absent.
+
 Then generate a content-free comparison plus separate blinded scoring packets:
 
 ```bash
