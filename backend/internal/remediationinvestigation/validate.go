@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -16,11 +15,15 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
-var hexDigest = regexp.MustCompile(`^[0-9a-f]{16,128}$`)
+var (
+	hexDigest       = regexp.MustCompile(`^[0-9a-f]{16,128}$`)
+	fullHexDigest   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	evidenceIDShape = regexp.MustCompile(`^(source|analysis|artifact):[0-9a-f]{64}$`)
+	fieldSegment    = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+)
 
 func ValidateFrozenInput(input FrozenInput) error {
 	for name, value := range map[string]string{
@@ -225,6 +228,63 @@ func DecodeResult(raw json.RawMessage) (Result, error) {
 	return result, nil
 }
 
+func (r *Result) UnmarshalJSON(data []byte) error {
+	type wireResult struct {
+		Version             int                  `json:"version"`
+		CauseAssessment     CauseAssessment      `json:"cause_assessment"`
+		Reason              string               `json:"reason"`
+		Candidate           json.RawMessage      `json:"candidate"`
+		EvidenceIDs         []string             `json:"evidence_ids"`
+		NonActionableReason *NonActionableReason `json:"non_actionable_reason"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var wire wireResult
+	if err := decoder.Decode(&wire); err != nil {
+		return err
+	}
+	candidate, err := decodeCandidate(wire.Candidate)
+	if err != nil {
+		return err
+	}
+	*r = Result{
+		Version: wire.Version, CauseAssessment: wire.CauseAssessment, Reason: wire.Reason,
+		Candidate: candidate, EvidenceIDs: wire.EvidenceIDs, NonActionableReason: wire.NonActionableReason,
+	}
+	return nil
+}
+
+func decodeCandidate(raw json.RawMessage) (CandidateTarget, error) {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, nil
+	}
+	var header struct {
+		Kind CandidateKind `json:"kind"`
+	}
+	if err := json.Unmarshal(raw, &header); err != nil {
+		return nil, fmt.Errorf("decode candidate target: %w", err)
+	}
+	var candidate CandidateTarget
+	switch header.Kind {
+	case CandidateRequiredCall:
+		candidate = &RequiredCallCandidate{}
+	case CandidateSymbolAddition:
+		candidate = &SymbolAdditionCandidate{}
+	case CandidateProwEnvironmentEntry:
+		candidate = &ProwEnvironmentEntryCandidate{}
+	case CandidateConfigurationField:
+		candidate = &ConfigurationFieldCandidate{}
+	default:
+		return nil, fmt.Errorf("candidate kind %q is invalid", header.Kind)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(candidate); err != nil {
+		return nil, fmt.Errorf("decode candidate target: %w", err)
+	}
+	return candidate, nil
+}
+
 func rejectDuplicateJSONKeys(raw []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
@@ -288,58 +348,50 @@ func validateResultObjectKeys(raw []byte) error {
 	if err := decoder.Decode(&value); err != nil {
 		return fmt.Errorf("decode remediation investigation result: %w", err)
 	}
-	if field := firstUnknownField(value, map[string]bool{
-		"version": true, "classification": true, "reason": true, "cause_assessment": true,
-		"cause_assessment_reason": true, "proposal": true, "evidence": true,
-	}); field != "" {
+	allowed := map[string]bool{
+		"version": true, "cause_assessment": true, "reason": true, "candidate": true,
+		"evidence_ids": true, "non_actionable_reason": true,
+	}
+	if field := firstUnknownField(value, allowed); field != "" {
 		return fmt.Errorf("unknown field path %s", field)
 	}
-	version, ok := value["version"]
-	if !ok {
-		return fmt.Errorf("result version is missing")
+	for field := range allowed {
+		if _, ok := value[field]; !ok {
+			return fmt.Errorf("result field %s is missing", field)
+		}
 	}
-	number, ok := version.(json.Number)
+	version, ok := value["version"].(json.Number)
 	if !ok {
-		return fmt.Errorf("result version must be the integer 1")
+		return fmt.Errorf("result version must be the integer %d", ResultVersion)
 	}
-	parsedVersion, err := number.Int64()
+	parsedVersion, err := version.Int64()
 	if err != nil || parsedVersion != ResultVersion {
-		return fmt.Errorf("result version must be the integer 1")
+		return fmt.Errorf("result version must be the integer %d", ResultVersion)
 	}
-	if proposal, ok := value["proposal"].(map[string]any); ok {
-		if field := firstUnknownField(proposal, map[string]bool{
-			"target_kind": true, "repository": true, "target": true, "expected_behavior": true,
-			"relationship_proof": true, "current_source": true, "verification_requirements": true,
-			"allowed_changed_paths": true, "allowed_validation_commands": true,
-		}); field != "" {
-			return fmt.Errorf("unknown field path proposal.%s", field)
-		}
-		if repository, ok := proposal["repository"].(map[string]any); ok {
-			if field := firstUnknownField(repository, map[string]bool{"owner": true, "name": true, "revision": true}); field != "" {
-				return fmt.Errorf("unknown field path proposal.repository.%s", field)
-			}
-		}
-		if target, ok := proposal["target"].(map[string]any); ok {
-			if field := firstUnknownField(target, map[string]bool{
-				"intent": true, "symbol": true, "required_call": true, "path": true, "value": true,
-				"repository": true, "revision": true, "job": true, "container": true, "name": true,
-			}); field != "" {
-				return fmt.Errorf("unknown field path proposal.target.%s", field)
-			}
-		}
+	candidate, ok := value["candidate"].(map[string]any)
+	if !ok {
+		return nil
 	}
-	if evidence, ok := value["evidence"].([]any); ok {
-		for index, item := range evidence {
-			citation, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			if field := firstUnknownField(citation, map[string]bool{
-				"kind": true, "build_id": true, "path": true, "line_start": true,
-				"line_end": true, "quote": true, "analysis_generated_at": true,
-			}); field != "" {
-				return fmt.Errorf("unknown field path evidence[%d].%s", index, field)
-			}
+	kind, _ := candidate["kind"].(string)
+	var candidateFields map[string]bool
+	switch CandidateKind(kind) {
+	case CandidateRequiredCall:
+		candidateFields = map[string]bool{"kind": true, "path": true, "containing_symbol": true, "required_call": true}
+	case CandidateSymbolAddition:
+		candidateFields = map[string]bool{"kind": true, "path": true, "symbol": true}
+	case CandidateProwEnvironmentEntry:
+		candidateFields = map[string]bool{"kind": true, "config_path": true, "job": true, "container": true, "name": true, "value": true}
+	case CandidateConfigurationField:
+		candidateFields = map[string]bool{"kind": true, "path": true, "field_path": true, "value": true}
+	default:
+		return fmt.Errorf("candidate kind %q is invalid", kind)
+	}
+	if field := firstUnknownField(candidate, candidateFields); field != "" {
+		return fmt.Errorf("unknown field path candidate.%s", field)
+	}
+	for field := range candidateFields {
+		if _, ok := candidate[field]; !ok {
+			return fmt.Errorf("candidate field %s is missing", field)
 		}
 	}
 	return nil
@@ -363,141 +415,172 @@ func ValidateResult(result Result) error {
 	if result.Version != ResultVersion {
 		return fmt.Errorf("result version %d is not current", result.Version)
 	}
-	if !validClassification(result.Classification) {
-		return fmt.Errorf("classification %q is invalid", result.Classification)
-	}
 	if !validCauseAssessment(result.CauseAssessment) {
 		return fmt.Errorf("cause assessment %q is invalid", result.CauseAssessment)
 	}
 	if err := boundedText("reason", result.Reason, 16<<10); err != nil {
 		return err
 	}
-	if err := boundedText("cause assessment reason", result.CauseAssessmentReason, 16<<10); err != nil {
-		return err
+	if len(result.EvidenceIDs) == 0 || len(result.EvidenceIDs) > 128 {
+		return fmt.Errorf("result must contain 1-128 evidence IDs")
 	}
-	if len(result.Evidence) == 0 || len(result.Evidence) > 16 {
-		return fmt.Errorf("result must contain 1-16 evidence citations")
-	}
-	sourceEvidence := false
 	seen := map[string]bool{}
-	for index, citation := range result.Evidence {
-		if err := validateEvidenceCitation(citation); err != nil {
-			return fmt.Errorf("evidence %d: %w", index, err)
+	for index, id := range result.EvidenceIDs {
+		if !evidenceIDShape.MatchString(id) {
+			return fmt.Errorf("evidence ID %d is invalid", index)
 		}
-		encoded, _ := json.Marshal(citation)
-		key := string(encoded)
-		if seen[key] {
-			return fmt.Errorf("duplicate evidence citation %d", index)
+		if seen[id] {
+			return fmt.Errorf("duplicate evidence ID %d", index)
 		}
-		seen[key] = true
-		sourceEvidence = sourceEvidence || citation.Kind == EvidenceSource
+		seen[id] = true
 	}
-	if result.Classification != ClassificationActionable {
-		if result.Proposal != nil {
-			return fmt.Errorf("non-actionable classification must not include a proposal")
+	if result.Candidate == nil {
+		if result.NonActionableReason == nil || !validNonActionableReason(*result.NonActionableReason) {
+			return fmt.Errorf("a result without a candidate requires one typed non-actionable reason")
 		}
 		return nil
 	}
-	if result.Proposal == nil {
-		return fmt.Errorf("actionable classification requires a proposal")
+	if result.NonActionableReason != nil {
+		return fmt.Errorf("a candidate result must set non_actionable_reason to null")
 	}
 	if result.CauseAssessment != CauseSupports && result.CauseAssessment != CauseRefines {
-		return fmt.Errorf("actionable proposal must support or refine the claimed cause")
+		return fmt.Errorf("a candidate target must support or refine the claimed cause")
 	}
-	if !sourceEvidence {
-		return fmt.Errorf("actionable proposal requires source evidence")
-	}
-	if err := validateProposal(*result.Proposal); err != nil {
-		return err
-	}
-	policyText := strings.Join([]string{result.Reason, result.CauseAssessmentReason, result.Proposal.ExpectedBehavior, result.Proposal.RelationshipProof}, "\n")
-	if reason := remediationpolicy.Reason(policyText, []models.RemediationTarget{result.Proposal.Target}); reason != "" {
-		return fmt.Errorf("actionable proposal violates remediation safety policy: %s", reason)
-	}
-	return nil
+	return validateCandidate(result.Candidate)
 }
 
-func validateProposal(proposal ActionableProposal) error {
-	if err := sourceinvestigation.ValidateRepository(proposal.Repository); err != nil {
-		return fmt.Errorf("proposal repository: %w", err)
-	}
-	if reason := actionverify.InvalidTargetReason(proposal.Target); reason != "" {
-		return fmt.Errorf("proposal target: %s", reason)
-	}
-	if !targetKindMatches(proposal.TargetKind, proposal.Target) {
-		return fmt.Errorf("proposal target kind does not match the typed remediation target")
-	}
-	if proposal.Target.Intent == models.RemediationIntentInvestigate {
-		return fmt.Errorf("actionable proposal cannot use an investigation target")
-	}
-	repository := strings.TrimSpace(proposal.Repository.Owner + "/" + proposal.Repository.Name)
-	if proposal.Target.Intent == models.RemediationIntentSetJobEnvironment {
-		if !strings.EqualFold(strings.TrimSpace(proposal.Target.Repository), repository) || !strings.EqualFold(strings.TrimSpace(proposal.Target.Revision), proposal.Repository.Revision) {
-			return fmt.Errorf("prow target repository and revision must match the pinned repository")
+func validateCandidate(candidate CandidateTarget) error {
+	switch value := candidate.(type) {
+	case *RequiredCallCandidate:
+		if value == nil || value.Kind != CandidateRequiredCall {
+			return fmt.Errorf("required-call candidate kind is invalid")
 		}
-	} else if proposal.Target.Repository != "" || proposal.Target.Revision != "" {
-		return fmt.Errorf("code and configuration targets inherit repository identity from the proposal")
-	}
-	if proposal.CurrentSource != CurrentSourceAbsent {
-		return fmt.Errorf("actionable proposal must report the target absent from current source")
-	}
-	if err := boundedText("expected behavior", proposal.ExpectedBehavior, 16<<10); err != nil {
-		return err
-	}
-	if err := boundedText("relationship proof", proposal.RelationshipProof, 16<<10); err != nil {
-		return err
-	}
-	if len(proposal.VerificationRequirements) == 0 || len(proposal.VerificationRequirements) > 20 {
-		return fmt.Errorf("proposal must contain 1-20 verification requirements")
-	}
-	for _, requirement := range proposal.VerificationRequirements {
-		if err := boundedText("verification requirement", requirement, 2048); err != nil {
+		target := models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: value.ContainingSymbol, RequiredCall: value.RequiredCall, Path: value.Path}
+		if reason := actionverify.InvalidTargetReason(target); reason != "" {
+			return fmt.Errorf("required-call candidate: %s", reason)
+		}
+	case *SymbolAdditionCandidate:
+		if value == nil || value.Kind != CandidateSymbolAddition {
+			return fmt.Errorf("symbol-addition candidate kind is invalid")
+		}
+		target := models.RemediationTarget{Intent: models.RemediationIntentAddSymbol, Symbol: value.Symbol, Path: value.Path}
+		if reason := actionverify.InvalidTargetReason(target); reason != "" {
+			return fmt.Errorf("symbol-addition candidate: %s", reason)
+		}
+	case *ProwEnvironmentEntryCandidate:
+		if value == nil || value.Kind != CandidateProwEnvironmentEntry {
+			return fmt.Errorf("prow environment candidate kind is invalid")
+		}
+		target := models.RemediationTarget{
+			Intent: models.RemediationIntentSetJobEnvironment, Path: value.ConfigPath,
+			Repository: "kubernetes/test-infra", Revision: strings.Repeat("0", 40),
+			Job: value.Job, Container: value.Container, Name: value.Name, Value: value.Value,
+		}
+		if reason := actionverify.InvalidTargetReason(target); reason != "" {
+			return fmt.Errorf("prow environment candidate: %s", reason)
+		}
+	case *ConfigurationFieldCandidate:
+		if value == nil || value.Kind != CandidateConfigurationField {
+			return fmt.Errorf("configuration-field candidate kind is invalid")
+		}
+		if err := validateCandidatePath(value.Path); err != nil {
 			return err
 		}
-	}
-	if len(proposal.AllowedChangedPaths) == 0 || len(proposal.AllowedChangedPaths) > 20 {
-		return fmt.Errorf("proposal must contain 1-20 allowed changed paths")
-	}
-	if err := validateUniquePaths(proposal.AllowedChangedPaths, true); err != nil {
-		return fmt.Errorf("proposal allowed changed paths: %w", err)
-	}
-	if proposal.Target.Path != "" && !slices.Contains(proposal.AllowedChangedPaths, path.Clean(proposal.Target.Path)) {
-		return fmt.Errorf("proposal target path is not in allowed changed paths")
-	}
-	if len(proposal.AllowedValidationCommands) > 20 {
-		return fmt.Errorf("proposal has too many validation commands")
-	}
-	seenCommands := map[string]bool{}
-	for _, command := range proposal.AllowedValidationCommands {
-		if err := validateValidationCommand(command); err != nil {
-			return fmt.Errorf("proposal validation command: %w", err)
+		if len(value.FieldPath) == 0 || len(value.FieldPath) > 16 {
+			return fmt.Errorf("configuration field path must contain 1-16 segments")
 		}
-		key := validationCommandKey(command)
-		if seenCommands[key] {
-			return fmt.Errorf("proposal validation commands must be unique")
+		for _, segment := range value.FieldPath {
+			if segment == "" || segment != strings.TrimSpace(segment) || len(segment) > 128 || !fieldSegment.MatchString(segment) {
+				return fmt.Errorf("configuration field path segments must be bounded identifiers")
+			}
 		}
-		seenCommands[key] = true
+		if err := boundedText("configuration field value", value.Value, 512); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("candidate target type is unsupported")
 	}
 	return nil
 }
 
-func targetKindMatches(kind TargetKind, target models.RemediationTarget) bool {
-	switch kind {
-	case TargetAddSymbol:
-		return target.Intent == models.RemediationIntentAddSymbol
-	case TargetModifySymbol:
-		return target.Intent == models.RemediationIntentModifySymbol && target.RequiredCall == ""
-	case TargetAddRequiredCall:
-		return target.Intent == models.RemediationIntentModifySymbol && target.RequiredCall != ""
-	case TargetSetConfiguration:
-		return target.Intent == models.RemediationIntentSetConfiguration
-	case TargetRemoveConfiguration:
-		return target.Intent == models.RemediationIntentRemoveConfiguration
-	case TargetSetJobEnvironment:
-		return target.Intent == models.RemediationIntentSetJobEnvironment
-	default:
-		return false
+func validateCandidatePath(value string) error {
+	clean, err := artifacts.SafePath(value)
+	if err != nil || clean == "" || clean != value || len(value) > 1024 {
+		return fmt.Errorf("candidate path must be a canonical safe relative path")
 	}
+	return nil
+}
+
+func ValidateEvidenceCatalog(catalog EvidenceCatalog) error {
+	if catalog.Version != EvidenceCatalogVersion {
+		return fmt.Errorf("evidence catalog version %d is not current", catalog.Version)
+	}
+	if len(catalog.Records) == 0 || len(catalog.Records) > 256 {
+		return fmt.Errorf("evidence catalog must contain 1-256 records")
+	}
+	seen := map[string]bool{}
+	for index, record := range catalog.Records {
+		if !evidenceIDShape.MatchString(record.ID) || seen[record.ID] {
+			return fmt.Errorf("evidence catalog record %d has an invalid or duplicate ID", index)
+		}
+		seen[record.ID] = true
+		if err := validateEvidenceRecord(record); err != nil {
+			return fmt.Errorf("evidence catalog record %d: %w", index, err)
+		}
+		if record.ID != evidenceRecordID(record) {
+			return fmt.Errorf("evidence catalog record %d ID does not match its engine-issued identity", index)
+		}
+	}
+	return nil
+}
+
+func validateEvidenceRecord(record EvidenceRecord) error {
+	switch record.Kind {
+	case EvidenceSource:
+		if record.Source == nil || record.Analysis != nil || record.Artifact != nil {
+			return fmt.Errorf("source evidence must contain only source identity")
+		}
+		if err := sourceinvestigation.ValidateRepository(record.Source.Repository); err != nil {
+			return err
+		}
+		if err := validateCandidatePath(record.Source.Path); err != nil {
+			return err
+		}
+		if !fullHexDigest.MatchString(record.Source.ContentDigest) {
+			return fmt.Errorf("source content digest is invalid")
+		}
+	case EvidenceAnalysis:
+		if record.Analysis == nil || record.Source != nil || record.Artifact != nil {
+			return fmt.Errorf("analysis evidence must contain only analysis identity")
+		}
+		if strings.TrimSpace(record.Analysis.BuildID) == "" || len(record.Analysis.BuildID) > 256 || strings.TrimSpace(record.Analysis.GeneratedAt) == "" || len(record.Analysis.GeneratedAt) > 128 || !fullHexDigest.MatchString(record.Analysis.RootCauseDigest) {
+			return fmt.Errorf("analysis evidence identity is invalid")
+		}
+	case EvidenceArtifact:
+		if record.Artifact == nil || record.Source != nil || record.Analysis != nil {
+			return fmt.Errorf("artifact evidence must contain only artifact identity")
+		}
+		if strings.TrimSpace(record.Artifact.BuildID) == "" || len(record.Artifact.BuildID) > 256 {
+			return fmt.Errorf("artifact build ID is invalid")
+		}
+		if err := validateCandidatePath(record.Artifact.Path); err != nil {
+			return err
+		}
+		if !fullHexDigest.MatchString(record.Artifact.ContentDigest) {
+			return fmt.Errorf("artifact content digest is invalid")
+		}
+	default:
+		return fmt.Errorf("evidence kind %q is invalid", record.Kind)
+	}
+	return nil
+}
+
+func evidenceRecordID(record EvidenceRecord) string {
+	copy := record
+	copy.ID = ""
+	encoded, _ := json.Marshal(copy)
+	sum := sha256.Sum256(encoded)
+	return string(record.Kind) + ":" + fmt.Sprintf("%x", sum)
 }
 
 func validateValidationCommand(command ValidationCommand) error {
@@ -518,61 +601,11 @@ func validateValidationCommand(command ValidationCommand) error {
 	return nil
 }
 
-func validateEvidenceCitation(citation EvidenceCitation) error {
-	if err := boundedText("evidence quote", citation.Quote, 4<<10); err != nil {
-		return err
-	}
-	switch citation.Kind {
-	case EvidenceSource:
-		if citation.BuildID != "" || citation.AnalysisGeneratedAt != "" {
-			return fmt.Errorf("source evidence cannot carry build or analysis identity")
-		}
-		if err := validateEvidencePathAndLines(citation); err != nil {
-			return err
-		}
-	case EvidenceArtifact:
-		if strings.TrimSpace(citation.BuildID) == "" || citation.AnalysisGeneratedAt != "" {
-			return fmt.Errorf("artifact evidence requires only a build ID")
-		}
-		if err := validateEvidencePathAndLines(citation); err != nil {
-			return err
-		}
-	case EvidenceAnalysis:
-		if strings.TrimSpace(citation.BuildID) == "" || strings.TrimSpace(citation.AnalysisGeneratedAt) == "" || citation.Path != "" || citation.LineStart != 0 || citation.LineEnd != 0 {
-			return fmt.Errorf("analysis evidence requires build and generated-at identity only")
-		}
-	default:
-		return fmt.Errorf("evidence kind %q is invalid", citation.Kind)
-	}
-	return nil
-}
-
-func validateEvidencePathAndLines(citation EvidenceCitation) error {
-	clean, err := artifacts.SafePath(citation.Path)
-	if err != nil || clean == "" || clean != citation.Path {
-		return fmt.Errorf("evidence path must be a canonical safe relative path")
-	}
-	if citation.LineStart < 1 || citation.LineEnd < citation.LineStart || citation.LineEnd-citation.LineStart+1 > 200 {
-		return fmt.Errorf("evidence line range is invalid")
-	}
-	return nil
-}
-
 func boundedText(name, value string, limit int) error {
 	if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) || len(value) > limit || strings.ContainsRune(value, '\x00') {
 		return fmt.Errorf("%s must be non-empty, trimmed, and at most %d bytes", name, limit)
 	}
 	return nil
-}
-
-func validClassification(value Classification) bool {
-	switch value {
-	case ClassificationActionable, ClassificationAlreadyFixed, ClassificationExternalDependency,
-		ClassificationEnvironmentOrInfrastructure, ClassificationMitigationOnly, ClassificationInsufficientEvidence:
-		return true
-	default:
-		return false
-	}
 }
 
 func validCauseAssessment(value CauseAssessment) bool {
@@ -581,5 +614,120 @@ func validCauseAssessment(value CauseAssessment) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func validNonActionableReason(value NonActionableReason) bool {
+	switch value {
+	case NonActionableEnvironmentOrInfrastructure, NonActionableMitigationOnly,
+		NonActionableInsufficientEvidence, NonActionableDependencyOwnershipUnverified:
+		return true
+	default:
+		return false
+	}
+}
+
+func pathAllowedByPolicy(target string, allowed []string) bool {
+	for _, candidate := range allowed {
+		candidate = strings.TrimSpace(candidate)
+		if strings.HasSuffix(candidate, "/") {
+			if strings.HasPrefix(target, candidate) {
+				return true
+			}
+			continue
+		}
+		if target == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func candidatePath(candidate CandidateTarget) string {
+	switch value := candidate.(type) {
+	case *RequiredCallCandidate:
+		return value.Path
+	case *SymbolAdditionCandidate:
+		return value.Path
+	case *ProwEnvironmentEntryCandidate:
+		return value.ConfigPath
+	case *ConfigurationFieldCandidate:
+		return value.Path
+	default:
+		return ""
+	}
+}
+
+func candidateToTarget(candidate CandidateTarget, repository sourceinvestigation.Repository) (TargetKind, models.RemediationTarget, bool) {
+	switch value := candidate.(type) {
+	case *RequiredCallCandidate:
+		return TargetAddRequiredCall, models.RemediationTarget{
+			Intent: models.RemediationIntentModifySymbol, Symbol: value.ContainingSymbol,
+			RequiredCall: value.RequiredCall, Path: value.Path,
+		}, true
+	case *SymbolAdditionCandidate:
+		return TargetAddSymbol, models.RemediationTarget{
+			Intent: models.RemediationIntentAddSymbol, Symbol: value.Symbol, Path: value.Path,
+		}, true
+	case *ProwEnvironmentEntryCandidate:
+		return TargetSetJobEnvironment, models.RemediationTarget{
+			Intent: models.RemediationIntentSetJobEnvironment, Path: value.ConfigPath,
+			Repository: repository.Owner + "/" + repository.Name, Revision: repository.Revision,
+			Job: value.Job, Container: value.Container, Name: value.Name, Value: value.Value,
+		}, true
+	case *ConfigurationFieldCandidate:
+		return TargetSetConfigurationField, models.RemediationTarget{
+			Intent: models.RemediationIntentSetConfiguration, Path: value.Path,
+			Value: strings.Join(value.FieldPath, ".") + "=" + value.Value,
+		}, true
+	default:
+		return "", models.RemediationTarget{}, false
+	}
+}
+
+func candidateExpectedBehavior(candidate CandidateTarget) string {
+	switch value := candidate.(type) {
+	case *RequiredCallCandidate:
+		return fmt.Sprintf("Ensure %s invokes %s in %s.", value.ContainingSymbol, value.RequiredCall, value.Path)
+	case *SymbolAdditionCandidate:
+		return fmt.Sprintf("Add symbol %s in %s.", value.Symbol, value.Path)
+	case *ProwEnvironmentEntryCandidate:
+		return fmt.Sprintf("Set %s=%s for container %s in Prow job %s.", value.Name, value.Value, value.Container, value.Job)
+	case *ConfigurationFieldCandidate:
+		return fmt.Sprintf("Set configuration field %s in %s.", strings.Join(value.FieldPath, "."), value.Path)
+	default:
+		return ""
+	}
+}
+
+func cloneCandidate(candidate CandidateTarget) CandidateTarget {
+	switch value := candidate.(type) {
+	case *RequiredCallCandidate:
+		if value == nil {
+			return nil
+		}
+		copy := *value
+		return &copy
+	case *SymbolAdditionCandidate:
+		if value == nil {
+			return nil
+		}
+		copy := *value
+		return &copy
+	case *ProwEnvironmentEntryCandidate:
+		if value == nil {
+			return nil
+		}
+		copy := *value
+		return &copy
+	case *ConfigurationFieldCandidate:
+		if value == nil {
+			return nil
+		}
+		copy := *value
+		copy.FieldPath = slices.Clone(value.FieldPath)
+		return &copy
+	default:
+		return nil
 	}
 }

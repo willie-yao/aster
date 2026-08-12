@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	PromptVersion       = 1
-	SchemaVersion       = 2
-	VerificationVersion = 2
-	ResultVersion       = 2
+	PromptVersion          = 2
+	SchemaVersion          = 3
+	VerificationVersion    = 3
+	ResultVersion          = 3
+	EvidenceCatalogVersion = 1
 )
 
 type Versions struct {
@@ -151,13 +152,68 @@ const (
 	CauseInconclusive CauseAssessment = "inconclusive"
 )
 
-type CurrentSourceState string
+type NonActionableReason string
 
 const (
-	CurrentSourcePresent CurrentSourceState = "present"
-	CurrentSourceAbsent  CurrentSourceState = "absent"
-	CurrentSourceUnknown CurrentSourceState = "unknown"
+	NonActionableEnvironmentOrInfrastructure   NonActionableReason = "environment_or_infrastructure"
+	NonActionableMitigationOnly                NonActionableReason = "mitigation_only"
+	NonActionableInsufficientEvidence          NonActionableReason = "insufficient_evidence"
+	NonActionableDependencyOwnershipUnverified NonActionableReason = "dependency_ownership_unverified"
 )
+
+type CandidateKind string
+
+const (
+	CandidateRequiredCall         CandidateKind = "required_call"
+	CandidateSymbolAddition       CandidateKind = "symbol_addition"
+	CandidateProwEnvironmentEntry CandidateKind = "prow_environment_entry"
+	CandidateConfigurationField   CandidateKind = "configuration_field"
+)
+
+// CandidateTarget is a model-authored discriminated target. Each concrete
+// variant contains only fields that are relevant to that target kind.
+type CandidateTarget interface {
+	candidateKind() CandidateKind
+}
+
+type RequiredCallCandidate struct {
+	Kind             CandidateKind `json:"kind"`
+	Path             string        `json:"path"`
+	ContainingSymbol string        `json:"containing_symbol"`
+	RequiredCall     string        `json:"required_call"`
+}
+
+func (*RequiredCallCandidate) candidateKind() CandidateKind { return CandidateRequiredCall }
+
+type SymbolAdditionCandidate struct {
+	Kind   CandidateKind `json:"kind"`
+	Path   string        `json:"path"`
+	Symbol string        `json:"symbol"`
+}
+
+func (*SymbolAdditionCandidate) candidateKind() CandidateKind { return CandidateSymbolAddition }
+
+type ProwEnvironmentEntryCandidate struct {
+	Kind       CandidateKind `json:"kind"`
+	ConfigPath string        `json:"config_path"`
+	Job        string        `json:"job"`
+	Container  string        `json:"container"`
+	Name       string        `json:"name"`
+	Value      string        `json:"value"`
+}
+
+func (*ProwEnvironmentEntryCandidate) candidateKind() CandidateKind {
+	return CandidateProwEnvironmentEntry
+}
+
+type ConfigurationFieldCandidate struct {
+	Kind      CandidateKind `json:"kind"`
+	Path      string        `json:"path"`
+	FieldPath []string      `json:"field_path"`
+	Value     string        `json:"value"`
+}
+
+func (*ConfigurationFieldCandidate) candidateKind() CandidateKind { return CandidateConfigurationField }
 
 type EvidenceKind string
 
@@ -167,49 +223,70 @@ const (
 	EvidenceArtifact EvidenceKind = "artifact"
 )
 
-type EvidenceCitation struct {
-	Kind                EvidenceKind `json:"kind"`
-	BuildID             string       `json:"build_id,omitempty"`
-	Path                string       `json:"path,omitempty"`
-	LineStart           int          `json:"line_start,omitempty"`
-	LineEnd             int          `json:"line_end,omitempty"`
-	Quote               string       `json:"quote"`
-	AnalysisGeneratedAt string       `json:"analysis_generated_at,omitempty"`
+type SourceEvidenceIdentity struct {
+	Repository    sourceinvestigation.Repository `json:"repository"`
+	Path          string                         `json:"path"`
+	ContentDigest string                         `json:"content_digest"`
+}
+
+type AnalysisEvidenceIdentity struct {
+	BuildID         string `json:"build_id"`
+	GeneratedAt     string `json:"generated_at"`
+	RootCauseDigest string `json:"root_cause_digest"`
+}
+
+type ArtifactEvidenceIdentity struct {
+	BuildID       string `json:"build_id"`
+	Path          string `json:"path"`
+	ContentDigest string `json:"content_digest"`
+}
+
+// EvidenceRecord is private engine-issued evidence identity. The model cites
+// only ID values and cannot author paths, revisions, build IDs, or excerpts.
+type EvidenceRecord struct {
+	ID       string                    `json:"id"`
+	Kind     EvidenceKind              `json:"kind"`
+	Source   *SourceEvidenceIdentity   `json:"source,omitempty"`
+	Analysis *AnalysisEvidenceIdentity `json:"analysis,omitempty"`
+	Artifact *ArtifactEvidenceIdentity `json:"artifact,omitempty"`
+}
+
+type EvidenceCatalog struct {
+	Version int              `json:"version"`
+	Records []EvidenceRecord `json:"records"`
 }
 
 type TargetKind string
 
 const (
-	TargetAddSymbol           TargetKind = "add_symbol"
-	TargetModifySymbol        TargetKind = "modify_symbol"
-	TargetAddRequiredCall     TargetKind = "add_required_call"
-	TargetSetConfiguration    TargetKind = "set_configuration"
-	TargetRemoveConfiguration TargetKind = "remove_configuration"
-	TargetSetJobEnvironment   TargetKind = "set_job_environment"
+	TargetAddSymbol             TargetKind = "add_symbol"
+	TargetAddRequiredCall       TargetKind = "add_required_call"
+	TargetSetJobEnvironment     TargetKind = "set_job_environment"
+	TargetSetConfigurationField TargetKind = "set_configuration_field"
 )
 
+// ActionableProposal contains only engine-derived, deterministically verified
+// action inputs. It is never decoded from a model response.
 type ActionableProposal struct {
 	TargetKind                TargetKind                     `json:"target_kind"`
 	Repository                sourceinvestigation.Repository `json:"repository"`
 	Target                    models.RemediationTarget       `json:"target"`
 	ExpectedBehavior          string                         `json:"expected_behavior"`
-	RelationshipProof         string                         `json:"relationship_proof"`
-	CurrentSource             CurrentSourceState             `json:"current_source"`
+	EvidenceIDs               []string                       `json:"evidence_ids"`
 	VerificationRequirements  []string                       `json:"verification_requirements"`
 	AllowedChangedPaths       []string                       `json:"allowed_changed_paths"`
 	AllowedValidationCommands []ValidationCommand            `json:"allowed_validation_commands"`
 }
 
-// Result is a model proposal. It never grants action eligibility. Dashboard
-// code must deterministically verify an actionable proposal in a later stage.
+// Result is the minimal private model output. Dashboard code owns repository,
+// revision, policy, source-state, final classification, and action eligibility.
 type Result struct {
-	Version               int                 `json:"version"`
-	Classification        Classification      `json:"classification"`
-	Reason                string              `json:"reason"`
-	CauseAssessment       CauseAssessment     `json:"cause_assessment"`
-	CauseAssessmentReason string              `json:"cause_assessment_reason"`
-	Proposal              *ActionableProposal `json:"proposal"`
-	Evidence              []EvidenceCitation  `json:"evidence"`
+	Version             int                  `json:"version"`
+	CauseAssessment     CauseAssessment      `json:"cause_assessment"`
+	Reason              string               `json:"reason"`
+	Candidate           CandidateTarget      `json:"candidate"`
+	EvidenceIDs         []string             `json:"evidence_ids"`
+	NonActionableReason *NonActionableReason `json:"non_actionable_reason"`
 }
 
 type EvidenceStats struct {
@@ -284,6 +361,19 @@ func ResultDigest(result Result) string {
 	encoded, _ := json.Marshal(result)
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:])
+}
+
+func EvidenceCatalogDigest(catalog EvidenceCatalog) string {
+	catalog = canonicalEvidenceCatalog(catalog)
+	encoded, _ := json.Marshal(catalog)
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+func canonicalEvidenceCatalog(catalog EvidenceCatalog) EvidenceCatalog {
+	catalog.Records = slices.Clone(catalog.Records)
+	sort.Slice(catalog.Records, func(i, j int) bool { return catalog.Records[i].ID < catalog.Records[j].ID })
+	return catalog
 }
 
 func HashPolicy(policy DestinationPolicy) string {

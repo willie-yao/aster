@@ -26,8 +26,8 @@ import (
 )
 
 const (
-	remediationInvestigationManifest       = "testdata/benchmarks/remediation-investigation-v1.json"
-	remediationInvestigationManifestSHA256 = "93fff9a14a51abba3490d18d93a3404d830f9244ccb102dc82c623fbb52596ae"
+	remediationInvestigationManifest       = "testdata/benchmarks/remediation-investigation-v2.json"
+	remediationInvestigationManifestSHA256 = "b051b3151c74bcf526626241580b82f256b626b661123d3ed044a79133c691ec"
 )
 
 type remediationBenchmarkManifest struct {
@@ -67,18 +67,24 @@ type remediationBenchmarkTrial struct {
 	EffectiveInputSHA256     string                                  `json:"effective_input_sha256"`
 	PatternHash              string                                  `json:"pattern_hash"`
 	CausalGroupHash          string                                  `json:"causal_group_hash"`
+	ResultDigest             string                                  `json:"result_digest,omitempty"`
+	EvidenceCatalogDigest    string                                  `json:"evidence_catalog_digest,omitempty"`
 	ProviderFingerprint      string                                  `json:"provider_fingerprint"`
 	Model                    string                                  `json:"model"`
 	APIMode                  string                                  `json:"api_mode"`
 	PromptVersion            int                                     `json:"prompt_version"`
 	SchemaVersion            int                                     `json:"schema_version"`
 	VerificationVersion      int                                     `json:"verification_version"`
+	ResultVersion            int                                     `json:"result_version"`
 	ExpectedClassification   remediationinvestigation.Classification `json:"expected_classification"`
 	ActualClassification     remediationinvestigation.Classification `json:"actual_classification,omitempty"`
 	StructurallyValid        bool                                    `json:"structurally_valid"`
 	ClassificationCorrect    bool                                    `json:"classification_correct"`
 	ExpectedActionable       bool                                    `json:"expected_actionable"`
+	ExpectedCandidate        bool                                    `json:"expected_candidate"`
 	ActualActionable         bool                                    `json:"actual_actionable"`
+	ModelCandidateKind       string                                  `json:"model_candidate_kind,omitempty"`
+	ModelNonActionableReason string                                  `json:"model_non_actionable_reason,omitempty"`
 	VerifiedActionable       bool                                    `json:"verified_actionable"`
 	ExactTarget              bool                                    `json:"exact_target"`
 	UnverifiedUnsafeProposal bool                                    `json:"unverified_unsafe_proposal"`
@@ -97,7 +103,7 @@ func TestRemediationInvestigationBenchmarkManifest(t *testing.T) {
 	if got := hex.EncodeToString(sum[:]); got != remediationInvestigationManifestSHA256 {
 		t.Fatalf("manifest hash=%s want=%s", got, remediationInvestigationManifestSHA256)
 	}
-	if manifest.Version != 1 || len(manifest.Cases) != 12 {
+	if manifest.Version != 2 || len(manifest.Cases) != 12 {
 		t.Fatalf("version=%d cases=%d", manifest.Version, len(manifest.Cases))
 	}
 	wantCategories := map[string]bool{
@@ -215,9 +221,12 @@ func TestRemediationInvestigationBenchmark(t *testing.T) {
 				ProviderFingerprint: client.ModelFingerprint(), Model: modelName, APIMode: apiMode,
 				PromptVersion: remediationinvestigation.PromptVersion, SchemaVersion: remediationinvestigation.SchemaVersion,
 				VerificationVersion:    remediationinvestigation.VerificationVersion,
+				ResultVersion:          remediationinvestigation.ResultVersion,
 				ExpectedClassification: benchmarkCase.Expected.Classification,
 				ExpectedActionable:     benchmarkCase.Expected.Classification == remediationinvestigation.ClassificationActionable,
-				VerificationStatus:     "not_run_invalid_result",
+				ExpectedCandidate: benchmarkCase.Expected.Classification == remediationinvestigation.ClassificationActionable ||
+					benchmarkCase.Expected.Classification == remediationinvestigation.ClassificationAlreadyFixed,
+				VerificationStatus: "not_run_invalid_result",
 			}
 			recorder, err := aiusage.NewRecorder("", aiusage.RecorderOptions{RetentionDays: 1, RecentOperations: 10})
 			if err != nil {
@@ -242,30 +251,16 @@ func TestRemediationInvestigationBenchmark(t *testing.T) {
 			} else {
 				row.TrialStatus = "valid_result"
 				row.StructurallyValid = true
-				row.ActualClassification = result.Entry.Result.Classification
-				row.ActualActionable = result.Entry.Result.Classification == remediationinvestigation.ClassificationActionable
+				row.ActualActionable = result.Entry.Result.Candidate != nil
+				row.ModelCandidateKind = remediationCandidateKind(result.Entry.Result.Candidate)
+				if result.Entry.Result.NonActionableReason != nil {
+					row.ModelNonActionableReason = string(*result.Entry.Result.NonActionableReason)
+				}
+				row.ResultDigest = result.Entry.ResultDigest
+				row.EvidenceCatalogDigest = result.Entry.EvidenceCatalogDigest
 				row.Evidence = result.Entry.Provenance.Evidence
 				row.Metrics = result.Entry.Provenance.Metrics
 				row.CacheHit = result.CacheHit
-				score := scoreRemediationBenchmark(benchmarkCase.Expected, remediationBenchmarkActual{
-					Classification: result.Entry.Result.Classification,
-					Repository: func() *sourceinvestigation.Repository {
-						if result.Entry.Result.Proposal == nil {
-							return nil
-						}
-						repository := result.Entry.Result.Proposal.Repository
-						return &repository
-					}(),
-					Target: func() *models.RemediationTarget {
-						if result.Entry.Result.Proposal == nil {
-							return nil
-						}
-						target := result.Entry.Result.Proposal.Target
-						return &target
-					}(),
-				})
-				row.ClassificationCorrect = score.ClassificationCorrect
-				row.ExactTarget = score.ExactTarget
 				verifier, verifyErr := remediationinvestigation.NewVerifier(source)
 				if verifyErr != nil {
 					t.Fatal(verifyErr)
@@ -274,10 +269,21 @@ func TestRemediationInvestigationBenchmark(t *testing.T) {
 				if verifyErr != nil {
 					row.VerificationStatus = "verification_error"
 				} else {
+					row.ActualClassification = verified.Classification
 					row.VerificationStatus = string(verified.Classification)
 					row.VerifiedActionable = verified.Classification == remediationinvestigation.ClassificationActionable && verified.Proposal != nil
+					actual := remediationBenchmarkActual{Classification: verified.Classification}
+					if verified.Proposal != nil {
+						repository := verified.Proposal.Repository
+						target := verified.Proposal.Target
+						actual.Repository = &repository
+						actual.Target = &target
+					}
+					score := scoreRemediationBenchmark(benchmarkCase.Expected, actual)
+					row.ClassificationCorrect = score.ClassificationCorrect
+					row.ExactTarget = score.ExactTarget
 				}
-				row.UnverifiedUnsafeProposal = row.ActualActionable && !row.ExpectedActionable
+				row.UnverifiedUnsafeProposal = row.ActualActionable && !row.ExpectedCandidate
 				row.UnsafeFalseAcceptance = row.VerifiedActionable && !row.ExpectedActionable
 				row.AlreadyFixedBlocked = benchmarkCase.Expected.Classification != remediationinvestigation.ClassificationAlreadyFixed || !row.VerifiedActionable
 			}
@@ -292,6 +298,21 @@ func TestRemediationInvestigationBenchmark(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+	}
+}
+
+func remediationCandidateKind(candidate remediationinvestigation.CandidateTarget) string {
+	switch candidate.(type) {
+	case *remediationinvestigation.RequiredCallCandidate:
+		return string(remediationinvestigation.CandidateRequiredCall)
+	case *remediationinvestigation.SymbolAdditionCandidate:
+		return string(remediationinvestigation.CandidateSymbolAddition)
+	case *remediationinvestigation.ProwEnvironmentEntryCandidate:
+		return string(remediationinvestigation.CandidateProwEnvironmentEntry)
+	case *remediationinvestigation.ConfigurationFieldCandidate:
+		return string(remediationinvestigation.CandidateConfigurationField)
+	default:
+		return ""
 	}
 }
 

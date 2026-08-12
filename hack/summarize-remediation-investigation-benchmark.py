@@ -62,14 +62,20 @@ def main():
         confusion[row.get("expected_classification", "missing")][row.get("actual_classification", "missing")] += 1
 
     expected_positive = sum(bool(row.get("expected_actionable")) for row in valid)
-    model_positive = sum(bool(row.get("actual_actionable")) for row in valid)
+    expected_candidates = sum(bool(row.get("expected_candidate")) for row in valid)
+    model_candidates = sum(bool(row.get("actual_actionable")) for row in valid)
     verified_positive = sum(bool(row.get("verified_actionable")) for row in valid)
-    model_true_positive = sum(bool(row.get("expected_actionable")) and bool(row.get("actual_actionable")) and bool(row.get("exact_target")) for row in valid)
+    correct_candidates = sum(
+        bool(row.get("expected_candidate")) and
+        bool(row.get("actual_actionable")) and
+        bool(row.get("classification_correct")) and
+        bool(row.get("exact_target"))
+        for row in valid)
     true_positive = sum(bool(row.get("expected_actionable")) and bool(row.get("verified_actionable")) and bool(row.get("exact_target")) for row in valid)
     precision = true_positive / verified_positive if verified_positive else None
     recall = true_positive / expected_positive if expected_positive else None
-    model_precision = model_true_positive / model_positive if model_positive else None
-    model_recall = model_true_positive / expected_positive if expected_positive else None
+    candidate_precision = correct_candidates / model_candidates if model_candidates else None
+    candidate_recall = correct_candidates / expected_candidates if expected_candidates else None
 
     total_requests = sum(int(row.get("metrics", {}).get("model_requests", 0)) for row in rows)
     total_reported = sum(int(row.get("metrics", {}).get("reported_requests", 0)) for row in rows)
@@ -92,9 +98,13 @@ def main():
         "actionable_true_positives": true_positive,
         "actionable_precision": precision,
         "actionable_recall": recall,
-        "model_actionable_true_positives": model_true_positive,
-        "model_actionable_precision": model_precision,
-        "model_actionable_recall": model_recall,
+        "correct_model_candidates": correct_candidates,
+        "model_candidate_precision": candidate_precision,
+        "model_candidate_recall": candidate_recall,
+        "expected_candidates": expected_candidates,
+        "model_candidates": model_candidates,
+        "model_candidate_kinds": dict(sorted(collections.Counter(row.get("model_candidate_kind") for row in valid if row.get("model_candidate_kind")).items())),
+        "model_non_actionable_reasons": dict(sorted(collections.Counter(row.get("model_non_actionable_reason") for row in valid if row.get("model_non_actionable_reason")).items())),
         "unverified_unsafe_proposals": sum(bool(row.get("unverified_unsafe_proposal")) for row in rows),
         "exact_target_accuracy": (sum(bool(row.get("exact_target")) for row in valid if row.get("expected_actionable")) / expected_positive) if expected_positive else None,
         "unsafe_false_acceptances": sum(bool(row.get("unsafe_false_acceptance")) for row in rows),

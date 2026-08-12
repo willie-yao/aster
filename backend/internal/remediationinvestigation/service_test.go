@@ -12,7 +12,6 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
@@ -121,23 +120,35 @@ func (b fakeBrowser) Grep(_ context.Context, file string, re *regexp.Regexp, _ i
 	return result, nil
 }
 
+const serviceSourceContent = "package controllers\nfunc reconcile() error {\n\treturn nil\n}\nfunc applyFix() {}\n"
+
 func actionableJSON() string {
+	input := testFrozenInput()
+	sourceRecord := EvidenceRecord{
+		Kind: EvidenceSource,
+		Source: &SourceEvidenceIdentity{
+			Repository: input.InvestigationSource, Path: "controllers/reconcile.go", ContentDigest: HashText(serviceSourceContent),
+		},
+	}
+	sourceRecord.ID = evidenceRecordID(sourceRecord)
+	evidenceIDs := []string{sourceRecord.ID}
+	for _, analysis := range input.Analyses {
+		record := EvidenceRecord{
+			Kind: EvidenceAnalysis,
+			Analysis: &AnalysisEvidenceIdentity{
+				BuildID: analysis.BuildID, GeneratedAt: analysis.GeneratedAt, RootCauseDigest: HashText(analysis.RootCause),
+			},
+		}
+		record.ID = evidenceRecordID(record)
+		evidenceIDs = append(evidenceIDs, record.ID)
+	}
 	result := Result{
-		Version: ResultVersion, Classification: ClassificationActionable,
-		Reason: "the controller omits applyFix", CauseAssessment: CauseSupports,
-		CauseAssessmentReason: "the recurring log and reconcile implementation identify the same missing transition",
-		Proposal: &ActionableProposal{
-			TargetKind:       TargetAddRequiredCall,
-			Repository:       sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: testRevision},
-			Target:           models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "applyFix", Path: "controllers/reconcile.go"},
-			ExpectedBehavior: "reconcile invokes applyFix before returning", RelationshipProof: "the failed builds enter reconcile and report the missing transition",
-			CurrentSource: CurrentSourceAbsent, VerificationRequirements: []string{"verify the required call is missing", "run controller tests"},
-			AllowedChangedPaths: []string{"controllers/reconcile.go"}, AllowedValidationCommands: []ValidationCommand{{Argv: []string{"go", "test", "./controllers/..."}, Timeout: "10m"}},
+		Version: ResultVersion, CauseAssessment: CauseSupports,
+		Reason: "the controller omits applyFix",
+		Candidate: &RequiredCallCandidate{
+			Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
 		},
-		Evidence: []EvidenceCitation{
-			{Kind: EvidenceArtifact, BuildID: "1", Path: "builds/1/log.txt", LineStart: 1, LineEnd: 1, Quote: "missing transition"},
-			{Kind: EvidenceSource, Path: "controllers/reconcile.go", LineStart: 1, LineEnd: 3, Quote: "func reconcile"},
-		},
+		EvidenceIDs: evidenceIDs,
 	}
 	encoded, _ := json.Marshal(result)
 	return string(encoded)
@@ -147,13 +158,13 @@ func serviceFixture(t *testing.T, model *fakeModel) (*Service, FrozenInput, fake
 	t.Helper()
 	input := testFrozenInput()
 	input.ProviderFingerprint = model.fingerprint
-	cache, err := NewCache("", CacheOptions{Now: func() time.Time { return time.Date(2026, 8, 11, 2, 0, 0, 0, time.UTC) }})
+	cache, err := NewCache("", CacheOptions{Now: func() time.Time { return time.Date(2026, 8, 12, 2, 0, 0, 0, time.UTC) }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	service, err := NewService(model, fakeSource{files: map[string]string{
-		"controllers/reconcile.go": "package controllers\nfunc reconcile() error {\n\treturn nil\n}\nfunc applyFix() {}\n",
-	}}, cache, ServiceOptions{Now: func() time.Time { return time.Date(2026, 8, 11, 2, 0, 1, 0, time.UTC) }})
+		"controllers/reconcile.go": serviceSourceContent,
+	}}, cache, ServiceOptions{Now: func() time.Time { return time.Date(2026, 8, 12, 2, 0, 1, 0, time.UTC) }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +186,7 @@ func TestServiceCachesEvidenceBackedTypedResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CacheHit || got.Entry.Result.Classification != ClassificationActionable || got.Entry.Provenance.Evidence.SourceReads != 1 || got.Entry.Provenance.Evidence.ArtifactReads != 1 {
+	if got.CacheHit || got.Entry.Result.Candidate == nil || got.Entry.Provenance.Evidence.SourceReads != 1 || got.Entry.Provenance.Evidence.ArtifactReads != 1 || len(got.Entry.EvidenceCatalog.Records) < 4 {
 		t.Fatalf("result=%+v", got)
 	}
 	cached, err := service.Investigate(t.Context(), input, browser, false)
@@ -194,7 +205,7 @@ func TestServiceEvidenceFloorReturnsSafeNonActionableResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Entry.Result.Classification != ClassificationInsufficientEvidence || got.Entry.Result.Proposal != nil || model.finalCalls != 0 {
+	if got.Entry.Result.Candidate != nil || got.Entry.Result.NonActionableReason == nil || *got.Entry.Result.NonActionableReason != NonActionableInsufficientEvidence || model.finalCalls != 0 {
 		t.Fatalf("result=%+v finalCalls=%d", got, model.finalCalls)
 	}
 }
@@ -217,7 +228,7 @@ func TestServiceFailedRefreshPreservesAcceptedResult(t *testing.T) {
 	}
 	key, _ := CacheKey(input)
 	entry, ok, err := cache.Lookup(key)
-	if err != nil || !ok || entry.Result.Classification != ClassificationActionable || entry.LastFailure == nil {
+	if err != nil || !ok || entry.Result.Candidate == nil || entry.LastFailure == nil {
 		t.Fatalf("entry=%+v ok=%v err=%v", entry, ok, err)
 	}
 }
@@ -236,7 +247,7 @@ func TestServiceRepairsOneInvalidStructuredResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.finalCalls != 2 || got.Entry.Provenance.Metrics.RepairCount != 1 || got.Entry.Result.Classification != ClassificationActionable {
+	if model.finalCalls != 2 || got.Entry.Provenance.Metrics.RepairCount != 1 || got.Entry.Result.Candidate == nil {
 		t.Fatalf("calls=%d result=%+v", model.finalCalls, got)
 	}
 }
@@ -259,17 +270,19 @@ func TestServiceInvalidRefreshPreservesAcceptedResult(t *testing.T) {
 	}
 	key, _ := CacheKey(input)
 	entry, ok, err := cache.Lookup(key)
-	if err != nil || !ok || entry.Result.Classification != ClassificationActionable || entry.LastFailure == nil || entry.LastFailure.Category != FailureInvalidResult {
+	if err != nil || !ok || entry.Result.Candidate == nil || entry.LastFailure == nil || entry.LastFailure.Category != FailureInvalidResult {
 		t.Fatalf("entry=%+v ok=%v err=%v", entry, ok, err)
 	}
 }
 
-func TestServiceRejectsProposalOutsideFrozenRepository(t *testing.T) {
+func TestServiceRejectsCandidateWithoutIssuedSourceEvidence(t *testing.T) {
 	var result Result
 	if err := json.Unmarshal([]byte(actionableJSON()), &result); err != nil {
 		t.Fatal(err)
 	}
-	result.Proposal.Repository = sourceinvestigation.Repository{Owner: "other", Name: "repo", Revision: testRevision}
+	result.Candidate = &RequiredCallCandidate{
+		Kind: CandidateRequiredCall, Path: "controllers/other.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
+	}
 	encoded, _ := json.Marshal(result)
 	model := &fakeModel{
 		fingerprint: strings.Repeat("d", 16), memo: "evidence", result: string(encoded),
@@ -280,10 +293,10 @@ func TestServiceRejectsProposalOutsideFrozenRepository(t *testing.T) {
 	}
 	service, input, browser, cache := serviceFixture(t, model)
 	if _, err := service.Investigate(t.Context(), input, browser, false); err == nil {
-		t.Fatal("proposal outside the frozen repository was accepted")
+		t.Fatal("candidate without engine-issued source evidence was accepted")
 	}
 	key, _ := CacheKey(input)
 	if _, ok, err := cache.Lookup(key); err != nil || ok {
-		t.Fatalf("wrong-repository proposal entered cache: ok=%v err=%v", ok, err)
+		t.Fatalf("invalid candidate entered cache: ok=%v err=%v", ok, err)
 	}
 }

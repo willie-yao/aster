@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -77,7 +76,7 @@ func NewService(model Model, source sourceinvestigation.TreeReader, cache *Cache
 }
 
 // Investigate runs one bounded read-only investigation. A private model
-// actionable classification is only a proposal and never action eligibility.
+// candidate is only a proposal and never action eligibility.
 func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser artifacts.Browser, refresh bool) (RunResult, error) {
 	if browser == nil {
 		return RunResult{}, fmt.Errorf("remediation investigation artifact browser is required")
@@ -164,12 +163,19 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		memo = memo[:maxEvidenceMemoBytes]
 	}
 
+	catalog, err := s.buildEvidenceCatalog(runCtx, input, browser, ledger)
+	if err != nil {
+		outcome = aiusage.OutcomeError
+		finish()
+		_ = s.cache.RecordFailure(key, FailureInvalidResult, err)
+		return RunResult{}, err
+	}
 	var result Result
 	repairCount := 0
 	if !ledger.gatePassed() {
-		result = insufficientEvidenceResult(input, "The bounded investigation did not read both recurring-build evidence and pinned source content.")
+		result = insufficientEvidenceResult(catalog, "The bounded investigation did not read both recurring-build evidence and pinned source content.")
 	} else {
-		finalPrompt, err := renderFinalPrompt(input, memo)
+		finalPrompt, err := renderFinalPrompt(input, memo, catalog)
 		if err != nil {
 			outcome = aiusage.OutcomeError
 			finish()
@@ -185,7 +191,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 				}
 				return err
 			}
-			if err := validateResultAgainstInput(candidate, input, ledger); err != nil {
+			if err := validateResultAgainstInput(candidate, input, catalog); err != nil {
 				if topLevel {
 					lastValidationCode = validationErrorCode(err)
 				}
@@ -197,7 +203,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		finalizeErr := s.model.CompleteStructured(runCtx, finalSystemPrompt(), finalPrompt, resultFormat(), validate)
 		if finalizeErr != nil {
 			repairCount = 1
-			repairPrompt := finalPrompt + "\n\nValidation feedback: the previous structured result failed with code " + lastValidationCode + ". Return the exact schema only. version must be the integer " + fmt.Sprint(ResultVersion) + ", non-actionable proposal must be null, and no unknown fields are allowed."
+			repairPrompt := finalPrompt + "\n\nValidation feedback: the previous structured result failed with code " + lastValidationCode + ". Return the exact schema only. version must be the integer " + fmt.Sprint(ResultVersion) + ", candidate and non_actionable_reason must be mutually exclusive, evidence_ids must come from the supplied catalog, and no unknown fields are allowed."
 			finalizeErr = s.model.CompleteStructured(runCtx, finalSystemPrompt(), repairPrompt, resultFormat(), validate)
 		}
 		if finalizeErr != nil {
@@ -208,7 +214,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 			return RunResult{}, fmt.Errorf("remediation finalization failed: %w", wrapped)
 		}
 	}
-	if err := s.verifyEvidence(runCtx, input, browser, ledger, &result); err != nil {
+	if err := s.verifyEvidence(runCtx, input, browser, catalog, &result); err != nil {
 		outcome = aiusage.OutcomeError
 		finish()
 		_ = s.cache.RecordFailure(key, FailureInvalidResult, err)
@@ -226,7 +232,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		RepairCount: repairCount,
 	}
 	provenance := NewProvenance(input, s.model.ModelName(), s.model.APIMode(), ledger.stats, metrics, completed)
-	if err := s.cache.StoreSuccess(key, result, provenance); err != nil {
+	if err := s.cache.StoreSuccess(key, result, catalog, provenance); err != nil {
 		return RunResult{}, err
 	}
 	entry, ok, lookupErr := s.cache.Lookup(key)
@@ -234,7 +240,11 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		return RunResult{}, lookupErr
 	}
 	if !ok {
-		entry = CacheEntry{Key: key, Result: cloneResult(result), ResultDigest: ResultDigest(result), Provenance: provenance, CreatedAt: completed.Format(time.RFC3339), UpdatedAt: completed.Format(time.RFC3339)}
+		entry = CacheEntry{
+			Key: key, Result: cloneResult(result), ResultDigest: ResultDigest(result),
+			EvidenceCatalog: cloneEvidenceCatalog(catalog), EvidenceCatalogDigest: EvidenceCatalogDigest(catalog),
+			Provenance: provenance, CreatedAt: completed.Format(time.RFC3339), UpdatedAt: completed.Format(time.RFC3339),
+		}
 	}
 	return RunResult{Entry: entry}, nil
 }
@@ -252,17 +262,23 @@ Inspect recurring-build evidence and pinned source. Read an exact source file be
 }
 
 func finalSystemPrompt() string {
-	return fmt.Sprintf(`Classify one frozen remediation investigation from the supplied evidence memo.
+	return fmt.Sprintf(`Assess one frozen remediation investigation from the supplied evidence memo and engine-issued evidence catalog.
 Return exactly the requested structured object. The causal-group build set and source identity are immutable.
-An actionable result is only a private proposal. It must contain exactly one typed target at the pinned repository revision, a behavioral relationship proof, current-source state, verification requirements, allowed changed paths, and allowed validation commands.
-Non-actionable classifications must set proposal to null. Never invent source, artifact, symbol, configuration, repository, job, container, environment, or citation identities.
-Use exactly these top-level fields and no others: version, classification, reason, cause_assessment, cause_assessment_reason, proposal, evidence. version is the integer %d.
-Each evidence item uses exactly: kind, build_id, path, line_start, line_end, quote, analysis_generated_at. Use empty strings and zero line numbers for fields that do not apply.
-An actionable proposal uses exactly: target_kind, repository, target, expected_behavior, relationship_proof, current_source, verification_requirements, allowed_changed_paths, allowed_validation_commands. Each validation command is an object with exact argv array and timeout string copied from the frozen policy.
-The target uses exactly: intent, symbol, required_call, path, value, repository, revision, job, container, name. Use empty strings for fields that do not apply. Do not add confidence, summary, citations, actionable, or current_source_state.`, ResultVersion)
+The model may author only a cause assessment, one concise reason, an optional typed candidate target, evidence IDs copied from the catalog, and one typed non-actionable reason when no candidate exists.
+Do not author repository or revision identity, source state, allowed paths, validation commands, verification requirements, final classification, or action eligibility. Dashboard code derives and verifies all of them.
+Do not classify a target as already fixed. If the evidence identifies one exact candidate, return that candidate and let dashboard code compare failure and current revisions.
+Do not claim dependency ownership. When evidence points outside the frozen repository but ownership is not independently established, return dependency_ownership_unverified with candidate null.
+Use exactly these top-level fields and no others: version, cause_assessment, reason, candidate, evidence_ids, non_actionable_reason. version is the integer %d.
+Candidate variants contain only their relevant fields:
+- required_call: kind, path, containing_symbol, required_call
+- symbol_addition: kind, path, symbol
+- prow_environment_entry: kind, config_path, job, container, name, value
+- configuration_field: kind, path, field_path, value
+When candidate is non-null, non_actionable_reason must be null. When candidate is null, non_actionable_reason must be exactly one of environment_or_infrastructure, mitigation_only, insufficient_evidence, or dependency_ownership_unverified.
+Every evidence_ids entry must be copied exactly from the supplied engine-issued catalog. Do not add confidence, classification, proposal, citations, paths, lines, quotes, build IDs, timestamps, repository fields, or source-state fields.`, ResultVersion)
 }
 
-func renderEvidencePrompt(input FrozenInput, preparedArtifactEvidence []EvidenceCitation) (string, error) {
+func renderEvidencePrompt(input FrozenInput, preparedArtifactEvidence []EvidenceRecord) (string, error) {
 	view := struct {
 		PatternID                string              `json:"pattern_id"`
 		PatternHash              string              `json:"pattern_hash"`
@@ -277,7 +293,7 @@ func renderEvidencePrompt(input FrozenInput, preparedArtifactEvidence []Evidence
 		RelevantFiles            []string            `json:"relevant_files"`
 		Source                   any                 `json:"source"`
 		Policy                   DestinationPolicy   `json:"destination_policy"`
-		PreparedArtifactEvidence []EvidenceCitation  `json:"prepared_artifact_evidence,omitempty"`
+		PreparedArtifactEvidence []EvidenceRecord    `json:"prepared_artifact_evidence,omitempty"`
 	}{
 		PatternID: input.PatternID, PatternHash: input.PatternHash,
 		CausalGroupID: input.CausalGroupID, CausalGroupHash: input.CausalGroupHash,
@@ -293,24 +309,24 @@ func renderEvidencePrompt(input FrozenInput, preparedArtifactEvidence []Evidence
 	return "Investigate this exact frozen input. Artifact paths are under builds/<build-id>/... .\n" + string(encoded), nil
 }
 
-func renderFinalPrompt(input FrozenInput, memo string) (string, error) {
+func renderFinalPrompt(input FrozenInput, memo string, catalog EvidenceCatalog) (string, error) {
 	identity := struct {
 		PatternID, PatternHash, CausalGroupID, CausalGroupHash string
 		JobID, JobName                                         string
 		Group                                                  any
 		Source                                                 any
-		Policy                                                 DestinationPolicy
+		EvidenceCatalog                                        EvidenceCatalog `json:"evidence_catalog"`
 	}{
 		PatternID: input.PatternID, PatternHash: input.PatternHash,
 		CausalGroupID: input.CausalGroupID, CausalGroupHash: input.CausalGroupHash,
 		JobID: input.JobID, JobName: input.JobName, Group: input.Group,
-		Source: input.InvestigationSource, Policy: input.DestinationPolicy,
+		Source: input.InvestigationSource, EvidenceCatalog: catalog,
 	}
 	encoded, err := json.MarshalIndent(identity, "", "  ")
 	if err != nil {
 		return "", err
 	}
-	return "Frozen identity and policy:\n" + string(encoded) + "\n\nEvidence memo:\n" + memo, nil
+	return "Frozen identity and engine-issued evidence catalog:\n" + string(encoded) + "\n\nEvidence memo:\n" + memo, nil
 }
 
 func looksLikeResultCandidate(raw json.RawMessage) bool {
@@ -318,22 +334,25 @@ func looksLikeResultCandidate(raw json.RawMessage) bool {
 	if json.Unmarshal(raw, &value) != nil {
 		return false
 	}
-	return value["classification"] != nil || value["proposal"] != nil || value["version"] != nil
+	return value["candidate"] != nil || value["non_actionable_reason"] != nil || value["version"] != nil
 }
 
-func insufficientEvidenceResult(input FrozenInput, reason string) Result {
-	analysis := input.Analyses[0]
-	quote := strings.TrimSpace(analysis.RootCause)
-	if len(quote) > 4<<10 {
-		quote = quote[:4<<10]
+func insufficientEvidenceResult(catalog EvidenceCatalog, reason string) Result {
+	evidenceID := ""
+	for _, record := range catalog.Records {
+		if record.Kind == EvidenceAnalysis {
+			evidenceID = record.ID
+			break
+		}
 	}
+	if evidenceID == "" && len(catalog.Records) > 0 {
+		evidenceID = catalog.Records[0].ID
+	}
+	nonActionable := NonActionableInsufficientEvidence
 	return Result{
-		Version: ResultVersion, Classification: ClassificationInsufficientEvidence,
-		Reason: reason, CauseAssessment: CauseInconclusive,
-		CauseAssessmentReason: "The evidence floor was not met, so no remediation target was accepted.",
-		Proposal:              nil, Evidence: []EvidenceCitation{{
-			Kind: EvidenceAnalysis, BuildID: analysis.BuildID, AnalysisGeneratedAt: analysis.GeneratedAt, Quote: quote,
-		}},
+		Version: ResultVersion, CauseAssessment: CauseInconclusive,
+		Reason: reason, Candidate: nil, EvidenceIDs: []string{evidenceID},
+		NonActionableReason: &nonActionable,
 	}
 }
 
@@ -446,194 +465,229 @@ func (l *evidenceLedger) gatePassed() bool {
 	return l.stats.SourceReads > 0 && l.stats.ArtifactReads > 0
 }
 
-func validateResultAgainstInput(result Result, input FrozenInput, ledger *evidenceLedger) error {
-	for _, citation := range result.Evidence {
-		switch citation.Kind {
-		case EvidenceSource:
-			if !ledger.sourceReads[citation.Path] {
-				return fmt.Errorf("source citation %s was not read during the evidence phase", citation.Path)
-			}
-		case EvidenceArtifact:
-			if !ledger.artifactReads[citation.Path] {
-				return fmt.Errorf("artifact citation %s was not read during the evidence phase", citation.Path)
-			}
-			if !strings.HasPrefix(citation.Path, "builds/"+citation.BuildID+"/") {
-				return fmt.Errorf("artifact citation does not match its frozen build")
-			}
-		case EvidenceAnalysis:
-			if !analysisCitationMatches(citation, input.Analyses) {
-				return fmt.Errorf("analysis citation does not match a frozen analysis")
-			}
-		}
+func validateResultAgainstInput(result Result, input FrozenInput, catalog EvidenceCatalog) error {
+	if err := ValidateResult(result); err != nil {
+		return err
 	}
-	if result.Proposal != nil {
-		if result.Proposal.Target.Path != "" && !ledger.sourceReads[result.Proposal.Target.Path] {
-			return fmt.Errorf("proposed target path %s was not read during the evidence phase", result.Proposal.Target.Path)
-		}
-		if err := bindProposalToFrozenInput(result.Proposal, input); err != nil {
-			return err
-		}
+	if err := ValidateEvidenceCatalog(catalog); err != nil {
+		return err
 	}
-	return nil
-}
-
-func bindProposalToFrozenInput(proposal *ActionableProposal, input FrozenInput) error {
-	if proposal == nil {
+	records, err := selectedEvidenceRecords(result.EvidenceIDs, catalog)
+	if err != nil {
+		return err
+	}
+	if result.Candidate == nil {
 		return nil
 	}
-	if !strings.EqualFold(proposal.Repository.Owner, input.InvestigationSource.Owner) ||
-		!strings.EqualFold(proposal.Repository.Name, input.InvestigationSource.Name) ||
-		!strings.EqualFold(proposal.Repository.Revision, input.InvestigationSource.Revision) {
-		return fmt.Errorf("proposal repository does not match the engine-frozen investigation source")
-	}
-	repositoryName := strings.ToLower(input.InvestigationSource.Owner + "/" + input.InvestigationSource.Name)
-	var policy *RepositoryPolicy
-	for index := range input.DestinationPolicy.Repositories {
-		candidate := &input.DestinationPolicy.Repositories[index]
-		if strings.ToLower(strings.TrimSpace(candidate.Repository)) == repositoryName {
-			policy = candidate
-			break
+	targetPath := candidatePath(result.Candidate)
+	for _, record := range records {
+		if record.Kind == EvidenceSource && record.Source != nil && record.Source.Path == targetPath && record.Source.Repository == input.InvestigationSource {
+			return nil
 		}
 	}
-	if policy == nil {
-		return fmt.Errorf("proposal repository is not present in the frozen destination policy")
-	}
-	if !pathAllowedByPolicy(proposal.Target.Path, policy.AllowedPaths) {
-		return fmt.Errorf("proposal target path is outside the frozen destination policy")
-	}
-	if len(proposal.AllowedChangedPaths) != 1 || proposal.AllowedChangedPaths[0] != proposal.Target.Path {
-		return fmt.Errorf("proposal allowed changed paths must contain only the exact typed target path")
-	}
-	wantCommands := cloneValidationCommands(policy.AllowedCommands)
-	gotCommands := cloneValidationCommands(proposal.AllowedValidationCommands)
-	sort.Slice(wantCommands, func(i, j int) bool {
-		return validationCommandKey(wantCommands[i]) < validationCommandKey(wantCommands[j])
-	})
-	sort.Slice(gotCommands, func(i, j int) bool {
-		return validationCommandKey(gotCommands[i]) < validationCommandKey(gotCommands[j])
-	})
-	if !slices.EqualFunc(wantCommands, gotCommands, func(left, right ValidationCommand) bool {
-		return slices.Equal(left.Argv, right.Argv) && left.Timeout == right.Timeout
-	}) {
-		return fmt.Errorf("proposal validation commands do not match the frozen destination policy")
-	}
-	return nil
+	return fmt.Errorf("candidate target path %s lacks an engine-issued source evidence ID", targetPath)
 }
 
-func pathAllowedByPolicy(target string, allowed []string) bool {
-	for _, candidate := range allowed {
-		candidate = strings.TrimSpace(candidate)
-		if strings.HasSuffix(candidate, "/") {
-			if strings.HasPrefix(target, candidate) {
-				return true
-			}
-			continue
-		}
-		if target == candidate {
-			return true
-		}
+func selectedEvidenceRecords(ids []string, catalog EvidenceCatalog) ([]EvidenceRecord, error) {
+	byID := make(map[string]EvidenceRecord, len(catalog.Records))
+	for _, record := range catalog.Records {
+		byID[record.ID] = record
 	}
-	return false
+	records := make([]EvidenceRecord, 0, len(ids))
+	for _, id := range ids {
+		record, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("evidence ID %s was not issued by the investigation ledger", id)
+		}
+		records = append(records, record)
+	}
+	return records, nil
 }
 
-func analysisCitationMatches(citation EvidenceCitation, analyses []AnalysisReference) bool {
-	for _, analysis := range analyses {
-		if analysis.BuildID == citation.BuildID && analysis.GeneratedAt == citation.AnalysisGeneratedAt && strings.Contains(analysis.RootCause, citation.Quote) {
-			return true
-		}
+func (s *Service) buildEvidenceCatalog(ctx context.Context, input FrozenInput, browser artifacts.Browser, ledger *evidenceLedger) (EvidenceCatalog, error) {
+	catalog := EvidenceCatalog{Version: EvidenceCatalogVersion}
+	paths := make([]string, 0, len(ledger.sourceReads))
+	for file := range ledger.sourceReads {
+		paths = append(paths, file)
 	}
-	return false
+	slices.Sort(paths)
+	for _, file := range paths {
+		content, err := s.source.ReadFile(ctx, input.InvestigationSource, file)
+		if err != nil {
+			return EvidenceCatalog{}, fmt.Errorf("reconstruct source evidence %s: %w", file, err)
+		}
+		record := EvidenceRecord{
+			Kind: EvidenceSource,
+			Source: &SourceEvidenceIdentity{
+				Repository: input.InvestigationSource, Path: file, ContentDigest: HashText(content),
+			},
+		}
+		record.ID = evidenceRecordID(record)
+		catalog.Records = append(catalog.Records, record)
+	}
+	for _, analysis := range input.Analyses {
+		record := EvidenceRecord{
+			Kind: EvidenceAnalysis,
+			Analysis: &AnalysisEvidenceIdentity{
+				BuildID: analysis.BuildID, GeneratedAt: analysis.GeneratedAt, RootCauseDigest: HashText(analysis.RootCause),
+			},
+		}
+		record.ID = evidenceRecordID(record)
+		catalog.Records = append(catalog.Records, record)
+	}
+	artifactPaths := make([]string, 0, len(ledger.artifactReads))
+	for file := range ledger.artifactReads {
+		artifactPaths = append(artifactPaths, file)
+	}
+	slices.Sort(artifactPaths)
+	for _, file := range artifactPaths {
+		buildID, ok := artifactBuildID(file, input.Group.Builds)
+		if !ok {
+			return EvidenceCatalog{}, fmt.Errorf("artifact evidence %s does not belong to the frozen causal group", file)
+		}
+		content, err := readArtifactEvidence(ctx, browser, file)
+		if err != nil {
+			return EvidenceCatalog{}, err
+		}
+		record := EvidenceRecord{
+			Kind: EvidenceArtifact,
+			Artifact: &ArtifactEvidenceIdentity{
+				BuildID: buildID, Path: file, ContentDigest: HashText(content),
+			},
+		}
+		record.ID = evidenceRecordID(record)
+		catalog.Records = append(catalog.Records, record)
+	}
+	catalog = canonicalEvidenceCatalog(catalog)
+	if err := ValidateEvidenceCatalog(catalog); err != nil {
+		return EvidenceCatalog{}, err
+	}
+	return catalog, nil
 }
 
-func (s *Service) verifyEvidence(ctx context.Context, input FrozenInput, browser artifacts.Browser, ledger *evidenceLedger, result *Result) error {
+func (s *Service) verifyEvidence(ctx context.Context, input FrozenInput, browser artifacts.Browser, catalog EvidenceCatalog, result *Result) error {
 	if result == nil {
 		return fmt.Errorf("remediation investigation result is missing")
 	}
-	var sourceCitations []sourceinvestigation.Citation
-	var sourceIndexes []int
-	for index, citation := range result.Evidence {
-		switch citation.Kind {
+	if err := validateResultAgainstInput(*result, input, catalog); err != nil {
+		return err
+	}
+	records, err := selectedEvidenceRecords(result.EvidenceIDs, catalog)
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		switch record.Kind {
 		case EvidenceSource:
-			sourceIndexes = append(sourceIndexes, index)
-			sourceCitations = append(sourceCitations, sourceinvestigation.Citation{
-				Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd, Quote: citation.Quote,
-			})
-		case EvidenceArtifact:
-			if err := verifyArtifactCitation(ctx, browser, citation); err != nil {
-				return err
+			if record.Source == nil || record.Source.Repository != input.InvestigationSource {
+				return fmt.Errorf("source evidence does not match the frozen source identity")
+			}
+			content, readErr := s.source.ReadFile(ctx, input.InvestigationSource, record.Source.Path)
+			if readErr != nil || HashText(content) != record.Source.ContentDigest {
+				return fmt.Errorf("source evidence %s could not be reconstructed", record.ID)
 			}
 		case EvidenceAnalysis:
-			if !analysisCitationMatches(citation, input.Analyses) {
-				return fmt.Errorf("analysis citation is not frozen evidence")
+			if !analysisEvidenceMatches(record, input.Analyses) {
+				return fmt.Errorf("analysis evidence %s is not frozen evidence", record.ID)
+			}
+		case EvidenceArtifact:
+			if err := verifyArtifactEvidence(ctx, browser, record); err != nil {
+				return err
 			}
 		}
 	}
-	if len(sourceCitations) > 0 {
-		verified, err := sourceinvestigation.VerifyCitations(ctx, s.source, input.InvestigationSource, sourceCitations)
-		if err != nil {
-			return err
-		}
-		for index, citation := range verified {
-			if !citation.Verified || !ledger.sourceReads[citation.Path] {
-				return fmt.Errorf("source citation %d was not verified from read evidence", sourceIndexes[index])
-			}
-		}
-	}
-	return ValidateResult(*result)
+	return nil
 }
 
-func prepareArtifactEvidence(ctx context.Context, input FrozenInput, browser artifacts.Browser, ledger *evidenceLedger) ([]EvidenceCitation, error) {
-	var prepared []EvidenceCitation
+func analysisEvidenceMatches(record EvidenceRecord, analyses []AnalysisReference) bool {
+	if record.Kind != EvidenceAnalysis || record.Analysis == nil {
+		return false
+	}
+	for _, analysis := range analyses {
+		if analysis.BuildID == record.Analysis.BuildID && analysis.GeneratedAt == record.Analysis.GeneratedAt && HashText(analysis.RootCause) == record.Analysis.RootCauseDigest {
+			return true
+		}
+	}
+	return false
+}
+
+func prepareArtifactEvidence(ctx context.Context, input FrozenInput, browser artifacts.Browser, ledger *evidenceLedger) ([]EvidenceRecord, error) {
+	var prepared []EvidenceRecord
 	seen := map[string]bool{}
 	for _, analysis := range input.Analyses {
 		for _, citation := range analysis.Evidence {
-			path := strings.TrimSpace(citation.Path)
-			if !strings.HasPrefix(path, "builds/") {
-				path = "builds/" + analysis.BuildID + "/" + path
+			file := strings.TrimSpace(citation.Path)
+			if !strings.HasPrefix(file, "builds/") {
+				file = "builds/" + analysis.BuildID + "/" + file
 			}
-			preparedCitation := EvidenceCitation{
-				Kind: EvidenceArtifact, BuildID: analysis.BuildID, Path: path,
-				LineStart: citation.LineStart, LineEnd: citation.LineEnd, Quote: strings.TrimSpace(citation.Quote),
+			content, err := readArtifactEvidence(ctx, browser, file)
+			if err != nil {
+				return nil, fmt.Errorf("frozen analysis artifact evidence is unavailable: %w", err)
 			}
-			if err := validateEvidenceCitation(preparedCitation); err != nil {
-				return nil, fmt.Errorf("frozen analysis artifact citation is invalid: %w", err)
+			lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+			if citation.LineStart < 1 || citation.LineEnd < citation.LineStart || citation.LineEnd > len(lines) {
+				return nil, fmt.Errorf("frozen analysis artifact evidence has an invalid line range")
 			}
-			if err := verifyArtifactCitation(ctx, browser, preparedCitation); err != nil {
-				return nil, fmt.Errorf("frozen analysis artifact citation is unavailable: %w", err)
+			selected := strings.Join(lines[citation.LineStart-1:citation.LineEnd], "\n")
+			if !strings.Contains(selected, strings.TrimSpace(citation.Quote)) {
+				return nil, fmt.Errorf("frozen analysis artifact evidence quote does not match %s", file)
 			}
-			key := preparedCitation.BuildID + "\x00" + preparedCitation.Path + "\x00" + preparedCitation.Quote
-			if seen[key] {
+			record := EvidenceRecord{
+				Kind: EvidenceArtifact,
+				Artifact: &ArtifactEvidenceIdentity{
+					BuildID: analysis.BuildID, Path: file, ContentDigest: HashText(content),
+				},
+			}
+			record.ID = evidenceRecordID(record)
+			if err := validateEvidenceRecord(record); err != nil {
+				return nil, fmt.Errorf("frozen analysis artifact evidence is invalid: %w", err)
+			}
+			if seen[record.ID] {
 				continue
 			}
-			seen[key] = true
-			prepared = append(prepared, preparedCitation)
-			if !ledger.artifactReads[path] {
+			seen[record.ID] = true
+			prepared = append(prepared, record)
+			if !ledger.artifactReads[file] {
 				ledger.stats.ToolCalls++
 				ledger.stats.ArtifactReads++
-				ledger.stats.ArtifactReadBytes += len(preparedCitation.Quote)
-				ledger.artifactReads[path] = true
+				ledger.stats.ArtifactReadBytes += len(content)
+				ledger.artifactReads[file] = true
 			}
 		}
 	}
 	return prepared, nil
 }
 
-func verifyArtifactCitation(ctx context.Context, browser artifacts.Browser, citation EvidenceCitation) error {
-	const maxArtifactCitationBytes = 256 << 10
-	content, size, err := browser.Read(ctx, citation.Path, 0, maxArtifactCitationBytes)
+func artifactBuildID(file string, buildIDs []string) (string, bool) {
+	parts := strings.SplitN(file, "/", 3)
+	if len(parts) != 3 || parts[0] != "builds" || parts[2] == "" || !slices.Contains(buildIDs, parts[1]) {
+		return "", false
+	}
+	return parts[1], true
+}
+
+func readArtifactEvidence(ctx context.Context, browser artifacts.Browser, file string) (string, error) {
+	const maxArtifactEvidenceBytes = 256 << 10
+	content, size, err := browser.Read(ctx, file, 0, maxArtifactEvidenceBytes)
 	if err != nil {
-		return fmt.Errorf("read cited artifact %s: %w", citation.Path, err)
+		return "", fmt.Errorf("read artifact evidence %s: %w", file, err)
 	}
-	if size > maxArtifactCitationBytes {
-		return fmt.Errorf("cited artifact %s exceeds bounded verification size", citation.Path)
+	if size > maxArtifactEvidenceBytes {
+		return "", fmt.Errorf("artifact evidence %s exceeds bounded verification size", file)
 	}
-	lines := strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n")
-	if citation.LineStart < 1 || citation.LineEnd > len(lines) {
-		return fmt.Errorf("artifact citation %s has an invalid line range", citation.Path)
+	return string(content), nil
+}
+
+func verifyArtifactEvidence(ctx context.Context, browser artifacts.Browser, record EvidenceRecord) error {
+	if record.Kind != EvidenceArtifact || record.Artifact == nil {
+		return fmt.Errorf("artifact evidence identity is missing")
 	}
-	selected := strings.Join(lines[citation.LineStart-1:citation.LineEnd], "\n")
-	if !strings.Contains(selected, citation.Quote) {
-		return fmt.Errorf("artifact citation quote does not match %s", citation.Path)
+	content, err := readArtifactEvidence(ctx, browser, record.Artifact.Path)
+	if err != nil {
+		return err
+	}
+	if HashText(content) != record.Artifact.ContentDigest {
+		return fmt.Errorf("artifact evidence content does not match %s", record.Artifact.Path)
 	}
 	return nil
 }

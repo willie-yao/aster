@@ -10,6 +10,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
@@ -53,7 +54,9 @@ func (v *Verifier) Verify(ctx context.Context, input FrozenInput, entry CacheEnt
 	if err != nil {
 		return VerifiedResult{}, err
 	}
-	if entry.Key != key || entry.ResultDigest != ResultDigest(entry.Result) || entry.Provenance.InputDigest != FrozenInputDigest(input) ||
+	if entry.Key != key || entry.ResultDigest != ResultDigest(entry.Result) ||
+		entry.EvidenceCatalogDigest != EvidenceCatalogDigest(entry.EvidenceCatalog) ||
+		entry.Provenance.InputDigest != FrozenInputDigest(input) ||
 		entry.Provenance.ProviderFingerprint != input.ProviderFingerprint || entry.Provenance.Versions != CurrentVersions() ||
 		entry.Provenance.PolicyHash != HashPolicy(input.DestinationPolicy) || entry.Provenance.Source != input.InvestigationSource {
 		return VerifiedResult{}, fmt.Errorf("cached remediation investigation provenance does not match the frozen input")
@@ -61,46 +64,56 @@ func (v *Verifier) Verify(ctx context.Context, input FrozenInput, entry CacheEnt
 	if err := ValidateResult(entry.Result); err != nil {
 		return VerifiedResult{}, err
 	}
-	if err := verifyCachedEvidence(ctx, v.source, browser, input, entry.Result); err != nil {
+	if err := ValidateEvidenceCatalog(entry.EvidenceCatalog); err != nil {
+		return VerifiedResult{}, err
+	}
+	if err := verifyCachedEvidence(ctx, v.source, browser, input, entry.Result, entry.EvidenceCatalog); err != nil {
 		return insufficientVerification("cached investigation evidence could not be reverified"), nil
 	}
 
 	result := entry.Result
-	if result.Classification != ClassificationActionable {
-		switch result.Classification {
-		case ClassificationAlreadyFixed:
-			return insufficientVerification("already-fixed classification lacks a typed target for deterministic current-source verification"), nil
-		case ClassificationExternalDependency:
-			return insufficientVerification("external-dependency classification lacks a typed ownership identity for deterministic repository verification"), nil
-		}
+	if result.Candidate == nil {
+		classification := classificationForNonActionable(result.NonActionableReason)
 		return VerifiedResult{
 			VerificationVersion: VerificationVersion,
-			Classification:      result.Classification,
+			Classification:      classification,
 			Reason:              result.Reason,
 		}, nil
 	}
-	if result.Proposal == nil {
-		return insufficientVerification("actionable classification has no typed proposal"), nil
+	kind, target, ok := candidateToTarget(result.Candidate, input.InvestigationSource)
+	if !ok {
+		return insufficientVerification("candidate target could not be converted to a typed remediation target"), nil
 	}
-	if err := bindProposalToFrozenInput(result.Proposal, input); err != nil {
-		return insufficientVerification("proposal does not match the frozen repository or destination policy"), nil
+	policy := destinationPolicyForSource(input)
+	if policy == nil {
+		return insufficientVerification("the frozen source repository is not an allowed destination repository"), nil
 	}
-	if !deterministicallyVerifiableTargetKind(result.Proposal.TargetKind) {
+	if !pathAllowedByPolicy(target.Path, policy.AllowedPaths) {
+		return insufficientVerification("candidate target path is outside the frozen destination policy"), nil
+	}
+	if reason := actionverify.InvalidTargetReason(target); reason != "" {
+		return insufficientVerification("candidate target failed typed remediation validation"), nil
+	}
+	if !deterministicallyVerifiableTargetKind(kind) {
 		return insufficientVerification("the typed target kind lacks a deterministic present-or-missing predicate"), nil
 	}
-	if suspiciousRepositoryPath(result.Proposal.Target.Path) {
+	if suspiciousRepositoryPath(target.Path) {
 		return insufficientVerification("module-cache or workspace paths cannot identify a destination-repository target"), nil
 	}
-	if result.Proposal.Target.Intent == models.RemediationIntentSetJobEnvironment {
-		if err := v.verifyFrozenProwJobIdentity(ctx, input, result.Proposal.Target); err != nil {
+	if reason := remediationpolicy.Reason(result.Reason+"\n"+candidateExpectedBehavior(result.Candidate), []models.RemediationTarget{target}); reason != "" {
+		return insufficientVerification("candidate target violates deterministic remediation safety policy"), nil
+	}
+	if target.Intent == models.RemediationIntentSetJobEnvironment {
+		if err := v.verifyFrozenProwJobIdentity(ctx, input, target); err != nil {
 			return insufficientVerification("the prow target does not match the exact frozen job identity"), nil
 		}
 	}
-	if err := verifyStructuralRelationship(input, result); err != nil {
+	proposal := policyDerivedProposal(input, result, kind, target, *policy)
+	if err := verifyStructuralRelationship(ctx, browser, input, result, entry.EvidenceCatalog, proposal); err != nil {
 		return insufficientVerification(err.Error()), nil
 	}
 
-	currentState, err := sourceinvestigation.VerifyTargetState(ctx, v.source, input.InvestigationSource, targetForRepository(result.Proposal.Target, input.InvestigationSource))
+	currentState, err := sourceinvestigation.VerifyTargetState(ctx, v.source, input.InvestigationSource, targetForRepository(target, input.InvestigationSource))
 	if err != nil {
 		return insufficientVerification("current-source target verification was inconclusive"), nil
 	}
@@ -120,11 +133,10 @@ func (v *Verifier) Verify(ctx context.Context, input FrozenInput, entry CacheEnt
 		return insufficientVerification("current source does not prove one unresolved remediation target"), nil
 	}
 
-	failureStates, ok := v.verifyFailureSources(ctx, input, result.Proposal.Target)
+	failureStates, ok := v.verifyFailureSources(ctx, input, target)
 	if !ok {
 		return insufficientVerification("failure revisions do not prove that the target was unresolved for every causal-group build"), nil
 	}
-	proposal := policyDerivedProposal(input, *result.Proposal)
 	return VerifiedResult{
 		VerificationVersion: VerificationVersion,
 		Classification:      ClassificationActionable,
@@ -174,30 +186,39 @@ func (v *Verifier) verifyFailureSources(ctx context.Context, input FrozenInput, 
 	return out, len(out) > 0
 }
 
-func verifyCachedEvidence(ctx context.Context, source sourceinvestigation.TreeReader, browser artifacts.Browser, input FrozenInput, result Result) error {
-	var sourceCitations []sourceinvestigation.Citation
+func verifyCachedEvidence(ctx context.Context, source sourceinvestigation.TreeReader, browser artifacts.Browser, input FrozenInput, result Result, catalog EvidenceCatalog) error {
+	records, err := selectedEvidenceRecords(result.EvidenceIDs, catalog)
+	if err != nil {
+		return err
+	}
 	coveredBuilds := map[string]bool{}
-	for _, citation := range result.Evidence {
-		switch citation.Kind {
+	for _, record := range records {
+		switch record.Kind {
 		case EvidenceSource:
-			sourceCitations = append(sourceCitations, sourceinvestigation.Citation{
-				Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd, Quote: citation.Quote,
-			})
+			if record.Source == nil || record.Source.Repository != input.InvestigationSource {
+				return fmt.Errorf("source evidence does not match frozen source identity")
+			}
+			content, readErr := source.ReadFile(ctx, input.InvestigationSource, record.Source.Path)
+			if readErr != nil || HashText(content) != record.Source.ContentDigest {
+				return fmt.Errorf("source evidence content does not match frozen identity")
+			}
 		case EvidenceArtifact:
-			if err := verifyArtifactCitation(ctx, browser, citation); err != nil {
+			if record.Artifact == nil {
+				return fmt.Errorf("artifact evidence identity is missing")
+			}
+			buildID, ok := artifactBuildID(record.Artifact.Path, input.Group.Builds)
+			if !ok || buildID != record.Artifact.BuildID {
+				return fmt.Errorf("artifact evidence does not match a frozen causal-group build")
+			}
+			if err := verifyArtifactEvidence(ctx, browser, record); err != nil {
 				return err
 			}
-			coveredBuilds[citation.BuildID] = true
+			coveredBuilds[record.Artifact.BuildID] = true
 		case EvidenceAnalysis:
-			if !analysisCitationMatches(citation, input.Analyses) {
-				return fmt.Errorf("analysis citation does not match frozen evidence")
+			if !analysisEvidenceMatches(record, input.Analyses) {
+				return fmt.Errorf("analysis evidence does not match frozen evidence")
 			}
-			coveredBuilds[citation.BuildID] = true
-		}
-	}
-	if len(sourceCitations) > 0 {
-		if _, err := sourceinvestigation.VerifyCitations(ctx, source, input.InvestigationSource, sourceCitations); err != nil {
-			return err
+			coveredBuilds[record.Analysis.BuildID] = true
 		}
 	}
 	for _, buildID := range input.Group.Builds {
@@ -208,21 +229,21 @@ func verifyCachedEvidence(ctx context.Context, source sourceinvestigation.TreeRe
 	return nil
 }
 
-func verifyStructuralRelationship(input FrozenInput, result Result) error {
-	proposal := result.Proposal
-	if proposal == nil {
-		return fmt.Errorf("typed proposal is missing")
+func verifyStructuralRelationship(ctx context.Context, browser artifacts.Browser, input FrozenInput, result Result, catalog EvidenceCatalog, proposal ActionableProposal) error {
+	records, err := selectedEvidenceRecords(result.EvidenceIDs, catalog)
+	if err != nil {
+		return err
 	}
 	targetPath := proposal.Target.Path
 	pathCited := false
-	for _, citation := range result.Evidence {
-		if citation.Kind == EvidenceSource && citation.Path == targetPath {
+	for _, record := range records {
+		if record.Kind == EvidenceSource && record.Source != nil && record.Source.Path == targetPath && record.Source.Repository == input.InvestigationSource {
 			pathCited = true
 			break
 		}
 	}
 	if !pathCited {
-		return fmt.Errorf("the exact target path lacks a verified source citation")
+		return fmt.Errorf("the exact target path lacks an engine-issued source evidence ID")
 	}
 	pathReferenced := slices.Contains(input.RelevantFiles, targetPath)
 	for _, analysis := range input.Analyses {
@@ -234,19 +255,36 @@ func verifyStructuralRelationship(input FrozenInput, result Result) error {
 	if proposal.Target.Intent == models.RemediationIntentSetJobEnvironment && proposal.Target.Job != input.JobName {
 		return fmt.Errorf("the Prow environment target does not match the exact frozen job name")
 	}
-	identifiers := targetEvidenceIdentifiers(*proposal)
+	identifiers := targetEvidenceIdentifiers(proposal)
 	if len(identifiers) == 0 {
 		return fmt.Errorf("the typed target has no exact evidence identifier")
 	}
 	buildsWithIdentifier := map[string]bool{}
-	for _, citation := range result.Evidence {
-		if citation.Kind != EvidenceArtifact && citation.Kind != EvidenceAnalysis {
-			continue
+	for _, record := range records {
+		var buildID, evidenceText string
+		switch record.Kind {
+		case EvidenceArtifact:
+			if record.Artifact != nil {
+				buildID = record.Artifact.BuildID
+				content, readErr := readArtifactEvidence(ctx, browser, record.Artifact.Path)
+				if readErr == nil && HashText(content) == record.Artifact.ContentDigest {
+					evidenceText = content
+				}
+			}
+		case EvidenceAnalysis:
+			if record.Analysis != nil {
+				buildID = record.Analysis.BuildID
+				for _, analysis := range input.Analyses {
+					if analysis.BuildID == record.Analysis.BuildID && analysis.GeneratedAt == record.Analysis.GeneratedAt {
+						evidenceText = analysis.RootCause
+						break
+					}
+				}
+			}
 		}
-		quote := strings.ToLower(citation.Quote)
 		for _, identifier := range identifiers {
-			if strings.Contains(quote, strings.ToLower(identifier)) {
-				buildsWithIdentifier[citation.BuildID] = true
+			if strings.Contains(strings.ToLower(evidenceText), strings.ToLower(identifier)) {
+				buildsWithIdentifier[buildID] = true
 				break
 			}
 		}
@@ -277,7 +315,7 @@ func targetEvidenceIdentifiers(proposal ActionableProposal) []string {
 
 func deterministicallyVerifiableTargetKind(kind TargetKind) bool {
 	switch kind {
-	case TargetAddSymbol, TargetAddRequiredCall, TargetSetJobEnvironment:
+	case TargetAddRequiredCall, TargetSetJobEnvironment:
 		return true
 	default:
 		return false
@@ -315,18 +353,64 @@ func (v *Verifier) verifyFrozenProwJobIdentity(ctx context.Context, input Frozen
 	return nil
 }
 
-func policyDerivedProposal(input FrozenInput, proposal ActionableProposal) ActionableProposal {
-	proposal = cloneProposal(proposal)
-	proposal.AllowedChangedPaths = []string{proposal.Target.Path}
-	repositoryName := strings.ToLower(proposal.Repository.Owner + "/" + proposal.Repository.Name)
-	for _, policy := range input.DestinationPolicy.Repositories {
-		if strings.ToLower(strings.TrimSpace(policy.Repository)) == repositoryName {
-			proposal.AllowedValidationCommands = cloneValidationCommands(policy.AllowedCommands)
-			break
+func destinationPolicyForSource(input FrozenInput) *RepositoryPolicy {
+	repositoryName := strings.ToLower(input.InvestigationSource.Owner + "/" + input.InvestigationSource.Name)
+	for index := range input.DestinationPolicy.Repositories {
+		candidate := &input.DestinationPolicy.Repositories[index]
+		if strings.ToLower(strings.TrimSpace(candidate.Repository)) == repositoryName {
+			return candidate
 		}
 	}
-	proposal.CurrentSource = CurrentSourceAbsent
-	return proposal
+	return nil
+}
+
+func policyDerivedProposal(input FrozenInput, result Result, kind TargetKind, target models.RemediationTarget, policy RepositoryPolicy) ActionableProposal {
+	return ActionableProposal{
+		TargetKind: kind, Repository: input.InvestigationSource, Target: target,
+		ExpectedBehavior:          candidateExpectedBehavior(result.Candidate),
+		EvidenceIDs:               slices.Clone(result.EvidenceIDs),
+		VerificationRequirements:  verificationRequirements(kind),
+		AllowedChangedPaths:       []string{target.Path},
+		AllowedValidationCommands: cloneValidationCommands(policy.AllowedCommands),
+	}
+}
+
+func verificationRequirements(kind TargetKind) []string {
+	switch kind {
+	case TargetAddRequiredCall:
+		return []string{
+			"Verify the exact required call is missing from the containing symbol at the pinned revision.",
+			"Verify the exact required call is missing from every failure revision and absent from current source.",
+		}
+	case TargetAddSymbol:
+		return []string{
+			"Verify the exact symbol is missing from the target package at the pinned revision.",
+			"Verify the exact symbol is missing from every failure revision and absent from current source.",
+		}
+	case TargetSetJobEnvironment:
+		return []string{
+			"Resolve the exact Prow job, container, environment name, and desired value uniquely.",
+			"Verify the desired environment entry is missing from every failure revision and current source.",
+		}
+	default:
+		return nil
+	}
+}
+
+func classificationForNonActionable(reason *NonActionableReason) Classification {
+	if reason == nil {
+		return ClassificationInsufficientEvidence
+	}
+	switch *reason {
+	case NonActionableEnvironmentOrInfrastructure:
+		return ClassificationEnvironmentOrInfrastructure
+	case NonActionableMitigationOnly:
+		return ClassificationMitigationOnly
+	case NonActionableDependencyOwnershipUnverified, NonActionableInsufficientEvidence:
+		return ClassificationInsufficientEvidence
+	default:
+		return ClassificationInsufficientEvidence
+	}
 }
 
 func targetForRepository(target models.RemediationTarget, repository sourceinvestigation.Repository) models.RemediationTarget {
@@ -347,11 +431,4 @@ func insufficientVerification(reason string) VerifiedResult {
 
 func sameRepository(left, right sourceinvestigation.Repository) bool {
 	return strings.EqualFold(left.Owner, right.Owner) && strings.EqualFold(left.Name, right.Name)
-}
-
-func cloneProposal(proposal ActionableProposal) ActionableProposal {
-	proposal.VerificationRequirements = slices.Clone(proposal.VerificationRequirements)
-	proposal.AllowedChangedPaths = slices.Clone(proposal.AllowedChangedPaths)
-	proposal.AllowedValidationCommands = slices.Clone(proposal.AllowedValidationCommands)
-	return proposal
 }

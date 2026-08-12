@@ -1,9 +1,9 @@
 # Causal-group remediation investigation
 
 > **Status:** private verification foundation. The read-only investigator,
-> typed result, private cache, deterministic verifier, and frozen benchmark
-> exist, but no server endpoint, public actionable state, File Issue eligibility,
-> or Fix PR handoff is enabled yet.
+> minimal candidate contract, private evidence ledger and cache, deterministic
+> verifier, and frozen benchmark exist, but no server endpoint, public
+> actionable state, File Issue eligibility, or Fix PR handoff is enabled yet.
 
 Version-10 causal-group correlation remains analysis-only. It does not emit a
 suggested fix, remediation target, source target, or action field. A separate
@@ -40,90 +40,133 @@ The trusted in-process model client runs two bounded phases:
    `repotree` tools are available. Artifact access is bound to the exact causal
    builds. Source access is bound to one immutable repository revision. A
    successful content-bearing artifact read and source read are required.
-2. **Structured finalization.** Read tools are removed. The model must return one
-   strict typed classification. Unknown and duplicate JSON fields, trailing
-   data, partial targets, unread citations, and unverified citation quotes are
-   rejected.
+2. **Structured finalization.** Read tools are removed. The engine supplies a
+   private evidence catalog with deterministic IDs. The model may return only a
+   cause assessment, concise reason, optional typed candidate target, selected
+   evidence IDs, and a typed non-actionable reason when no candidate exists.
 
 If the evidence floor is not met, dashboard code produces a safe private
-`insufficient_evidence` result without asking the model to invent a target.
-No workspace, shell, branch, issue, pull request, or write tool is available.
-The experimental Agent Sandbox analyzer is not used. Agent Sandbox/OpenCode
-remains the later patch-generation stage after deterministic target verification.
+`insufficient_evidence` result without asking the model to invent a target. No
+workspace, shell, branch, issue, pull request, or write tool is available. The
+experimental Agent Sandbox analyzer is not used. Agent Sandbox/OpenCode remains
+the later patch-generation stage after deterministic target verification.
 
-## Typed private result
+## Minimal model result
 
-The result classifications are:
+Result version 3 contains exactly:
 
-- `actionable`
-- `already_fixed`
-- `external_dependency`
-- `environment_or_infrastructure`
-- `mitigation_only`
-- `insufficient_evidence`
+```text
+version
+cause_assessment
+reason
+candidate
+engine-issued evidence_ids
+non_actionable_reason
+```
 
-Every result also states whether the source supports, refines, contradicts, or
-cannot resolve the published cause. All classifications require bounded evidence.
-Non-actionable results must set the proposal to `null`.
+The model does not author a final lifecycle classification. It also does not
+author repository or revision identity, current-source state, failure-revision
+state, allowed paths, validation commands, verification requirements, or action
+eligibility.
 
-An `actionable` result is still only a private model proposal. It must contain:
+`candidate` is a discriminated union. Each variant contains only relevant
+fields:
 
-- one immutable destination repository revision;
-- one existing typed `models.RemediationTarget`;
-- expected behavioral change;
-- proof connecting the target to the recurring cause;
-- claimed current-source absence;
-- verification requirements;
-- allowed changed paths; and
-- allowed validation commands.
+- `required_call`: `path`, `containing_symbol`, and `required_call`;
+- `symbol_addition`: `path` and `symbol`;
+- `prow_environment_entry`: `config_path`, `job`, `container`, `name`, and
+  `value`; and
+- `configuration_field`: `path`, typed `field_path` segments, and `value`.
 
-The exact target path must have been read during the evidence phase. Source and
-artifact citations are reread and quote-verified before the result can enter the
-private cache. This structural acceptance does not grant action eligibility.
-Deterministic repository, current-source, dependency ownership, target behavior,
-conversion, ambiguity, and already-present verification remain the next stage.
+General configuration fields are represented without a universal bag of empty
+fields, but they remain non-actionable until a deterministic field-state
+predicate exists.
+
+A result with no candidate must use exactly one typed reason:
+
+- `environment_or_infrastructure`;
+- `mitigation_only`;
+- `insufficient_evidence`; or
+- `dependency_ownership_unverified`.
+
+Candidate and non-actionable reason are mutually exclusive. The model is not
+asked to return `already_fixed`. When evidence identifies an exact candidate,
+the engine checks that candidate at failure and current revisions and derives
+`actionable` or `already_fixed`.
+
+## Engine-issued evidence ledger
+
+The model no longer authors evidence paths, source revisions, line numbers,
+quotes, build IDs, or timestamps. Dashboard code reconstructs successful tool
+reads into a private versioned catalog:
+
+- source evidence binds repository, revision, path, and content digest;
+- analysis evidence binds build ID, analysis timestamp, and root-cause digest;
+- artifact evidence binds build ID, artifact path, and content digest.
+
+Each record receives a deterministic ID over its complete identity. The final
+model response may cite only those IDs. Before caching and again during
+deterministic verification, dashboard code resolves every selected ID, rereads
+source and artifacts, rechecks digests, and matches analysis identities to the
+frozen input. Unknown, duplicate, or mutated IDs fail closed.
+
+The exact candidate path must have a selected source evidence ID. Every causal
+build must have selected analysis or artifact evidence before a terminal result
+can pass deterministic verification.
 
 ## Deterministic verification
 
-Verification version 2 rechecks one accepted private cache entry before it can
-be considered actionable. The verifier binds the cached result digest and full
-provenance to the current frozen input, then independently:
+Verification version 3 rechecks one accepted private cache entry before it can
+be considered actionable. The verifier binds the model-result digest, evidence
+catalog digest, and full provenance to the current frozen input, then
+independently:
 
-- rereads every source and artifact citation and validates every referenced
-  per-build analysis;
-- requires evidence coverage for every exact causal-group build;
-- requires an exact source citation for the typed target path;
+- reconstructs every selected evidence ID and requires coverage for every exact
+  causal-group build;
+- requires an exact engine-issued source identity for the candidate path;
 - treats relevant files only as an additional relationship hint, never as target
   proof;
-- requires the proposal repository and revision, path, and commands to match the
-  engine-frozen source and destination policy;
+- derives the destination repository and immutable revision from the frozen
+  source and destination policy;
+- derives allowed changed paths and validation commands from project policy;
+- converts the candidate variant to an existing typed
+  `models.RemediationTarget`;
 - runs existing `actionverify` target verification at current source and every
   available failure revision;
 - proves required calls are actually missing and rejects already-present calls;
 - resolves Prow job, container, environment name, and desired value uniquely;
 - keeps repository-local call resolution within module boundaries;
 - reapplies conversion and destructive-remediation policy; and
-- rejects mutated, duplicate, unknown, fabricated, unlinked, ambiguous, or
-  dependency-owned targets.
+- rejects mutated, duplicate, unknown, fabricated, unlinked, ambiguous,
+  workspace, module-cache, or wrong-repository targets.
 
-The first deterministic version accepts only package-symbol addition, a
-`modify_symbol` target with an exact `required_call`, and exact Prow job
-environment changes. A prose-only `modify_symbol` and general configuration
-change remain `insufficient_evidence` until they have a typed behavioral or
-field-path predicate. Module-cache and workspace paths are never repository
-targets.
+The currently actionable deterministic target kinds remain limited to a
+`modify_symbol` target with an exact `required_call` and exact Prow job
+environment changes. Package-symbol additions and general configuration fields
+remain `insufficient_evidence` until they have deterministic behavioral-role and
+field-state predicates. Textual mention plus source absence is not sufficient
+proof for a new symbol.
 
-A target already present in current source becomes `already_fixed` with no
-proposal. A target not proven unresolved at every failure revision becomes
-`insufficient_evidence`. Only a target proven unresolved in current source and
-all failure sources remains `actionable`. Evidence-backed non-actionable
-classifications remain terminal and cannot gain a target. A model-only
-`already_fixed` claim without a typed target is downgraded because current-source
-presence cannot be independently verified. An `external_dependency` claim is
-also downgraded until the private contract carries a typed dependency ownership
-identity that can be resolved to another repository.
+The engine derives the terminal classification:
 
-The verifier returns a private `VerifiedResult`. It does not publish a public
+- a target already present in current source becomes `already_fixed` with no
+  proposal;
+- a target not proven unresolved at every failure revision becomes
+  `insufficient_evidence`;
+- only a target proven unresolved in current source and all failure sources
+  becomes `actionable`;
+- environment and mitigation reasons retain their typed non-actionable
+  classifications; and
+- dependency ownership that cannot be independently verified remains
+  `insufficient_evidence` rather than claiming an external repository owner.
+
+`external_dependency` remains reserved for a future typed dependency identity
+that dashboard code can independently verify. A prose or module-cache path alone
+cannot produce that classification.
+
+Only the private verified proposal contains repository, revision, target,
+expected behavior, selected evidence IDs, verification requirements, allowed
+changed paths, and validation commands. The verifier does not publish a public
 state or grant Fix PR eligibility.
 
 ## Private cache
@@ -135,27 +178,27 @@ The cache lives at:
 ```
 
 The directory is `0700`, the cache and lock files are `0600`, and writes use a
-cross-process file lock plus durable atomic replacement. Cache version 2 binds a
-canonical result digest, so an in-memory or on-disk result mutation is rejected
-before verification. Corrupt, oversized, or unsupported state fails closed. A
-failed refresh records only a bounded category,
-timestamp, and error digest while preserving the previous valid result for the
-same semantic key. A changed identity creates a cache miss instead of reusing the
-old result.
+cross-process file lock plus durable atomic replacement. Cache version 3 binds
+both the minimal model-result digest and the engine-issued evidence-catalog
+digest. Corrupt, oversized, mutated, or unsupported state fails closed. A failed
+refresh records only a bounded category, timestamp, and error digest while
+preserving the previous valid result for the same semantic key. A changed
+identity creates a cache miss instead of reusing the old result.
 
-The server already hides dot-directories under `/data`. The Pages workflow also
-strips the remediation-investigation cache before upload. Cached entries contain
-only the typed result, content-free provenance, evidence counters, usage totals,
-and latency. They do not contain credentials, endpoints, raw prompts, raw model
-responses, transcripts, source bundles, or tool payloads.
+The server hides dot-directories under `/data`. The Pages workflow also strips
+the remediation-investigation cache before upload. Cached entries contain the
+typed private result, digest-only evidence identities, content-free provenance,
+evidence counters, usage totals, and latency. They do not contain credentials,
+endpoints, raw prompts, raw model responses, transcripts, source bundles, tool
+payloads, or source excerpts.
 
 ## Frozen benchmark
 
 The committed manifest is:
 
 ```text
-backend/internal/e2e/testdata/benchmarks/remediation-investigation-v1.json
-SHA-256: 93fff9a14a51abba3490d18d93a3404d830f9244ccb102dc82c623fbb52596ae
+backend/internal/e2e/testdata/benchmarks/remediation-investigation-v2.json
+SHA-256: b051b3151c74bcf526626241580b82f256b626b661123d3ed044a79133c691ec
 ```
 
 It freezes 12 categories:
@@ -164,7 +207,7 @@ It freezes 12 categories:
 2. actionable missing Prow environment configuration;
 3. target already present at the pinned revision;
 4. fixed in current source;
-5. external dependency;
+5. external dependency evidence without verified ownership;
 6. environment or infrastructure;
 7. mitigation only;
 8. insufficient or ambiguous evidence;
@@ -173,30 +216,80 @@ It freezes 12 categories:
 11. duplicated or unknown target; and
 12. fabricated symbol or configuration field.
 
+The external-dependency and wrong-repository cases expect
+`insufficient_evidence` until a typed ownership identity can be independently
+verified.
+
 Hermetic tests validate the manifest, hashes, exact category coverage, two
-distinct positive target kinds, typed contracts, cache preservation, read floors,
-and scoring controls. Provider-backed trials are opt-in and write sanitized
-private JSONL only:
+distinct positive target kinds, discriminated candidate contracts, evidence ID
+reconstruction, cache preservation, read floors, deterministic source-state
+checks, and scoring controls.
+
+Provider-backed evaluation must use the final merged schema and exact intended
+provider. The earlier 0/12 run against result version 2 is evidence that the old
+model contract was unsuitable. It is not readiness evidence for result version
+3 and is not evidence that source-grounded remediation is infeasible.
+
+Run the provider gate in stages and stop at the first failed stage.
+
+### Stage 1: structural gate
+
+Run these three cases with two cold repetitions each:
+
+```bash
+RUN_REMEDIATION_INVESTIGATION_BENCHMARK=1 \
+REMEDIATION_BENCH_CASES=actionable-missing-call,target-already-present-at-pinned-revision,environment-or-infrastructure \
+REMEDIATION_BENCH_REPETITIONS=2 \
+REMEDIATION_BENCH_RESULTS_JSONL=/private/path/stage-1.jsonl \
+AI_ENDPOINT=<configured-endpoint> \
+AI_MODEL=<configured-model> \
+go test ./internal/e2e -run '^TestRemediationInvestigationBenchmark$' -v -timeout 60m
+```
+
+Proceed only if at least five of six trials are structurally valid.
+
+### Stage 2: positive-target gate
+
+Run the two positive cases with three cold repetitions each:
+
+```bash
+RUN_REMEDIATION_INVESTIGATION_BENCHMARK=1 \
+REMEDIATION_BENCH_CASES=actionable-missing-call,actionable-missing-job-environment \
+REMEDIATION_BENCH_REPETITIONS=3 \
+REMEDIATION_BENCH_RESULTS_JSONL=/private/path/stage-2.jsonl \
+AI_ENDPOINT=<configured-endpoint> \
+AI_MODEL=<configured-model> \
+go test ./internal/e2e -run '^TestRemediationInvestigationBenchmark$' -v -timeout 60m
+```
+
+Proceed only if each positive case produces the correct deterministically
+verified target in at least two of three repetitions and there are zero unsafe
+acceptances.
+
+### Stage 3: full matrix
+
+Only after stages 1 and 2 pass, run all 12 cases with three cold repetitions:
 
 ```bash
 RUN_REMEDIATION_INVESTIGATION_BENCHMARK=1 \
 REMEDIATION_BENCH_REPETITIONS=3 \
-REMEDIATION_BENCH_RESULTS_JSONL=/private/path/results.jsonl \
-AI_API=responses \
+REMEDIATION_BENCH_RESULTS_JSONL=/private/path/stage-3.jsonl \
 AI_ENDPOINT=<configured-endpoint> \
 AI_MODEL=<configured-model> \
-go test ./internal/e2e -run '^TestRemediationInvestigationBenchmark$' -v -timeout 90m
+go test ./internal/e2e -run '^TestRemediationInvestigationBenchmark$' -v -timeout 120m
 ```
 
+Set `AI_API` only when the intended provider mode is not the client default.
 `AI_TOKEN` is read by the client but is never printed, persisted, compared, or
-hashed. Summarize the private JSONL with:
+hashed. Summarize each private JSONL with:
 
 ```bash
 python3 hack/summarize-remediation-investigation-benchmark.py \
-  /private/path/results.jsonl
+  /private/path/stage-1.jsonl
 ```
 
-The report separates structural validity, classification confusion, actionable
+The report separates structural validity, engine-derived classification
+confusion, model candidate and non-actionable-reason distributions, actionable
 precision and recall, exact-target accuracy, unsafe false acceptances,
 already-fixed blocking, verification status, invalid/no-result/runtime trials,
 requests, tokens, cost coverage, latency, and repair counts.
@@ -205,12 +298,11 @@ requests, tokens, cost coverage, latency, and repair counts.
 
 This foundation does not update the public remediation state and does not expose
 an investigation API. Causal-group patterns remain blocked by
-`models.PatternAllowsActions`. Deterministic verification is available privately,
-but the provider holdout did not produce the two distinct verified actionable
-positives required by the production gate. Therefore **Investigate possible
-fix**, public terminal-state publication, File Issue eligibility, and Fix PR
-preview remain disabled.
+`models.PatternAllowsActions`. **Investigate possible fix**, public terminal-state
+publication, File Issue eligibility, and Fix PR preview remain disabled.
 
-The later Fix PR handoff must consume only `VerifiedResult.Proposal`. It remains
-deferred until remediation provider quality passes repeated cold holdouts and the
-exact final Fix executor passes a separate direct-runtime smoke.
+The later Fix PR handoff must consume only `VerifiedResult.Proposal`. OpenCode
+must receive the frozen verified target and cannot repair, replace, or rediscover
+an unverified target. That handoff remains deferred until remediation provider
+quality passes the staged cold holdouts and the exact final Fix executor passes a
+separate direct-runtime smoke.
