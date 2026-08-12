@@ -278,10 +278,11 @@ func TestRemediationInvestigationBenchmark(t *testing.T) {
 			} else {
 				row.TrialStatus = "valid_result"
 				row.StructurallyValid = true
-				row.ActualActionable = result.Entry.Result.Candidate != nil
-				row.ModelCandidateKind = remediationCandidateKind(result.Entry.Result.Candidate)
-				if result.Entry.Result.NonActionableReason != nil {
-					row.ModelNonActionableReason = string(*result.Entry.Result.NonActionableReason)
+				row.ActualActionable = len(result.Entry.Result.Hypotheses) > 0
+				target := remediationFirstHypothesisTarget(result.Entry.Result)
+				row.ModelCandidateKind = remediationCandidateKind(target)
+				if reason := remediationResultNonActionableReason(result.Entry.Result); reason != nil {
+					row.ModelNonActionableReason = string(*reason)
 				}
 				row.ResultDigest = result.Entry.ResultDigest
 				row.EvidenceCatalogDigest = result.Entry.EvidenceCatalogDigest
@@ -326,6 +327,43 @@ func TestRemediationInvestigationBenchmark(t *testing.T) {
 			}
 		}
 	}
+}
+
+func remediationFirstHypothesisTarget(result remediationinvestigation.Result) remediationinvestigation.CandidateTarget {
+	if len(result.Hypotheses) == 0 {
+		return nil
+	}
+	return result.Hypotheses[0].Target
+}
+
+func remediationResultNonActionableReason(result remediationinvestigation.Result) *remediationinvestigation.NonActionableReason {
+	if result.NonActionable == nil {
+		return nil
+	}
+	reason := result.NonActionable.NonActionableReason
+	return &reason
+}
+
+func remediationResultEvidenceIDs(result remediationinvestigation.Result) []string {
+	seen := map[string]bool{}
+	var ids []string
+	for _, hypothesis := range result.Hypotheses {
+		for _, id := range hypothesis.EvidenceIDs {
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	if result.NonActionable != nil {
+		for _, id := range result.NonActionable.EvidenceIDs {
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
 }
 
 func remediationCandidateKind(candidate remediationinvestigation.CandidateTarget) string {

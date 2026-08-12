@@ -198,14 +198,15 @@ func TestRemediationInvestigationHistoricalBenchmark(t *testing.T) {
 				row.Metrics = remediationBenchmarkUsageMetrics(recorder)
 			} else {
 				row.TrialStatus, row.StructurallyValid = "valid_result", true
-				row.ActualActionable = result.Entry.Result.Candidate != nil
-				row.ModelCandidateKind = remediationCandidateKind(result.Entry.Result.Candidate)
-				if result.Entry.Result.NonActionableReason != nil {
-					row.ModelNonActionableReason = string(*result.Entry.Result.NonActionableReason)
+				row.ActualActionable = len(result.Entry.Result.Hypotheses) > 0
+				target := remediationFirstHypothesisTarget(result.Entry.Result)
+				row.ModelCandidateKind = remediationCandidateKind(target)
+				if reason := remediationResultNonActionableReason(result.Entry.Result); reason != nil {
+					row.ModelNonActionableReason = string(*reason)
 				}
 				row.ResultDigest, row.EvidenceCatalogDigest = result.Entry.ResultDigest, result.Entry.EvidenceCatalogDigest
 				row.Evidence, row.Metrics, row.CacheHit = result.Entry.Provenance.Evidence, result.Entry.Provenance.Metrics, result.CacheHit
-				row.KnownFixMatch = remediationHistoryKnownFixMatches(historyCase.KnownFix, result.Entry.Result.Candidate)
+				row.KnownFixMatch = remediationHistoryKnownFixMatches(historyCase.KnownFix, target)
 				verifier, _ := remediationinvestigation.NewVerifier(source)
 				verified, verifyErr := verifier.Verify(t.Context(), input, result.Entry, browser)
 				if verifyErr != nil {

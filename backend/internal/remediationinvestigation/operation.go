@@ -479,6 +479,8 @@ func safeOperationView(ref OperationRef, result VerifiedResult, completedAt stri
 	case ClassificationMitigationOnly:
 		state = models.PatternRemediationMitigationOnly
 		reason = "The available response is an operational mitigation, not a durable implementation target."
+	case ClassificationAmbiguous:
+		reason = "Multiple distinct implementation targets passed deterministic verification, so no action is eligible."
 	}
 	view := models.PatternRemediationInvestigationSummary{
 		CausalGroupID: ref.CausalGroupID, CausalGroupHash: ref.CausalGroupHash,

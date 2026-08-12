@@ -139,14 +139,16 @@ func operationActionableJSON(input FrozenInput) string {
 		record.ID = evidenceRecordID(record)
 		evidenceIDs = append(evidenceIDs, record.ID)
 	}
-	result := Result{
-		Version: ResultVersion, CauseAssessment: CauseSupports, Reason: "the controller omits applyFix",
-		Candidate: &RequiredCallCandidate{
-			Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
-		},
-		EvidenceIDs: evidenceIDs,
+	extraction := TargetExtraction{
+		Version: TargetExtractionVersion,
+		Hypotheses: []TargetHypothesis{{
+			Target: &RequiredCallCandidate{
+				Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
+			},
+			EvidenceIDs: evidenceIDs, RelationshipReason: "the controller omits applyFix",
+		}},
 	}
-	encoded, _ := json.Marshal(result)
+	encoded, _ := json.Marshal(extraction)
 	return string(encoded)
 }
 
@@ -407,5 +409,13 @@ func TestOperationTimedOutRefreshPreservesPreviousResultWithFreshRecoveryContext
 	after, err := service.Get(t.Context(), ref)
 	if err != nil || after.State != models.PatternRemediationActionable || after.Target == nil {
 		t.Fatalf("after=%+v err=%v", after, err)
+	}
+}
+
+func TestSafeOperationViewKeepsAmbiguousResultNonActionable(t *testing.T) {
+	ref := OperationRef{CausalGroupID: "group", CausalGroupHash: strings.Repeat("a", 64)}
+	view := safeOperationView(ref, VerifiedResult{Classification: ClassificationAmbiguous, Reason: "multiple targets"}, "2026-08-12T00:00:00Z")
+	if view.State != models.PatternRemediationInsufficientEvidence || view.Target != nil {
+		t.Fatalf("view=%+v", view)
 	}
 }

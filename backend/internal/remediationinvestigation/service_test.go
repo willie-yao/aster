@@ -13,6 +13,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
@@ -138,8 +139,17 @@ func (b fakeBrowser) Grep(_ context.Context, file string, re *regexp.Regexp, _ i
 
 const serviceSourceContent = "package controllers\nfunc reconcile() error {\n\treturn nil\n}\nfunc applyFix() {}\n"
 
-func actionableJSON() string {
+func serviceTestInput() FrozenInput {
 	input := testFrozenInput()
+	for index := range input.Analyses {
+		input.Analyses[index].RootCause = "reconcile is missing the required applyFix call"
+		input.Analyses[index].RelevantFiles = []string{"controllers/reconcile.go"}
+	}
+	return input
+}
+
+func actionableJSON() string {
+	input := serviceTestInput()
 	sourceRecord := EvidenceRecord{
 		Kind: EvidenceSource,
 		Source: &SourceEvidenceIdentity{
@@ -158,21 +168,40 @@ func actionableJSON() string {
 		record.ID = evidenceRecordID(record)
 		evidenceIDs = append(evidenceIDs, record.ID)
 	}
-	result := Result{
-		Version: ResultVersion, CauseAssessment: CauseSupports,
-		Reason: "the controller omits applyFix",
-		Candidate: &RequiredCallCandidate{
-			Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
-		},
-		EvidenceIDs: evidenceIDs,
+	extraction := TargetExtraction{
+		Version: TargetExtractionVersion,
+		Hypotheses: []TargetHypothesis{{
+			Target: &RequiredCallCandidate{
+				Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
+			},
+			EvidenceIDs: evidenceIDs, RelationshipReason: "the controller omits applyFix",
+		}},
 	}
-	encoded, _ := json.Marshal(result)
+	encoded, _ := json.Marshal(extraction)
+	return string(encoded)
+}
+
+func nonActionableJSON() string {
+	input := serviceTestInput()
+	record := EvidenceRecord{
+		Kind: EvidenceAnalysis,
+		Analysis: &AnalysisEvidenceIdentity{
+			BuildID: input.Analyses[0].BuildID, GeneratedAt: input.Analyses[0].GeneratedAt, RootCauseDigest: HashText(input.Analyses[0].RootCause),
+		},
+	}
+	record.ID = evidenceRecordID(record)
+	assessment := NonActionableAssessment{
+		Version: NonActionableAssessmentVersion, CauseAssessment: CauseInconclusive,
+		Reason: "no target passed deterministic verification", EvidenceIDs: []string{record.ID},
+		NonActionableReason: NonActionableInsufficientEvidence,
+	}
+	encoded, _ := json.Marshal(assessment)
 	return string(encoded)
 }
 
 func serviceFixture(t *testing.T, model *fakeModel) (*Service, FrozenInput, fakeBrowser, *Cache) {
 	t.Helper()
-	input := testFrozenInput()
+	input := serviceTestInput()
 	input.ProviderFingerprint = model.fingerprint
 	cache, err := NewCache("", CacheOptions{Now: func() time.Time { return time.Date(2026, 8, 12, 2, 0, 0, 0, time.UTC) }})
 	if err != nil {
@@ -185,7 +214,7 @@ func serviceFixture(t *testing.T, model *fakeModel) (*Service, FrozenInput, fake
 	if err != nil {
 		t.Fatal(err)
 	}
-	browser := fakeBrowser{files: map[string]string{"builds/1/log.txt": "missing transition\n", "builds/2/log.txt": "missing transition\n"}}
+	browser := fakeBrowser{files: map[string]string{"builds/1/log.txt": "reconcile missing applyFix transition\n", "builds/2/log.txt": "reconcile missing applyFix transition\n"}}
 	return service, input, browser, cache
 }
 
@@ -204,7 +233,7 @@ func TestServiceCachesEvidenceBackedTypedResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CacheHit || got.Entry.Result.Candidate == nil || got.Entry.Provenance.Evidence.SourceReads != 1 || got.Entry.Provenance.Evidence.ArtifactReads != 1 || got.Entry.Provenance.ReasoningEffort != "high" || len(got.Entry.EvidenceCatalog.Records) < 4 {
+	if got.CacheHit || len(got.Entry.Result.Hypotheses) == 0 || got.Entry.Provenance.Evidence.SourceReads != 1 || got.Entry.Provenance.Evidence.ArtifactReads != 1 || got.Entry.Provenance.ReasoningEffort != "high" || len(got.Entry.EvidenceCatalog.Records) < 4 {
 		t.Fatalf("result=%+v", got)
 	}
 	cached, err := service.Investigate(t.Context(), input, browser, false)
@@ -214,7 +243,7 @@ func TestServiceCachesEvidenceBackedTypedResult(t *testing.T) {
 }
 
 func TestServiceIssuesAndVerifiesSourceGrepEvidence(t *testing.T) {
-	input := testFrozenInput()
+	input := serviceTestInput()
 	grepRecord := EvidenceRecord{
 		Kind: EvidenceSourceGrep,
 		SourceGrep: &SourceGrepEvidenceIdentity{
@@ -223,14 +252,24 @@ func TestServiceIssuesAndVerifiesSourceGrepEvidence(t *testing.T) {
 		},
 	}
 	grepRecord.ID = evidenceRecordID(grepRecord)
-	result := Result{
-		Version: ResultVersion, CauseAssessment: CauseSupports, Reason: "the controller omits applyFix",
-		Candidate: &RequiredCallCandidate{
-			Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
-		},
-		EvidenceIDs: []string{grepRecord.ID},
+	evidenceIDs := []string{grepRecord.ID}
+	for _, analysis := range input.Analyses {
+		record := EvidenceRecord{Kind: EvidenceAnalysis, Analysis: &AnalysisEvidenceIdentity{
+			BuildID: analysis.BuildID, GeneratedAt: analysis.GeneratedAt, RootCauseDigest: HashText(analysis.RootCause),
+		}}
+		record.ID = evidenceRecordID(record)
+		evidenceIDs = append(evidenceIDs, record.ID)
 	}
-	encoded, _ := json.Marshal(result)
+	extraction := TargetExtraction{
+		Version: TargetExtractionVersion,
+		Hypotheses: []TargetHypothesis{{
+			Target: &RequiredCallCandidate{
+				Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
+			},
+			EvidenceIDs: evidenceIDs, RelationshipReason: "the controller omits applyFix",
+		}},
+	}
+	encoded, _ := json.Marshal(extraction)
 	model := &fakeModel{
 		fingerprint: strings.Repeat("d", 16), memo: "applyFix exists but reconcile does not call it", result: string(encoded),
 		toolEvents: []ai.ToolLoopEvent{
@@ -255,7 +294,7 @@ func TestServiceIssuesAndVerifiesSourceGrepEvidence(t *testing.T) {
 			found = true
 		}
 	}
-	if !found || got.Entry.Result.Candidate == nil || got.Entry.Provenance.Evidence.SourceReads != 1 || got.Entry.Provenance.Evidence.SourceGreps != 1 {
+	if !found || len(got.Entry.Result.Hypotheses) == 0 || got.Entry.Provenance.Evidence.SourceReads != 1 || got.Entry.Provenance.Evidence.SourceGreps != 1 {
 		t.Fatalf("result=%+v", got)
 	}
 }
@@ -270,7 +309,7 @@ func TestServiceEvidenceFloorReturnsSafeNonActionableResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Entry.Result.Candidate != nil || got.Entry.Result.NonActionableReason == nil || *got.Entry.Result.NonActionableReason != NonActionableInsufficientEvidence || model.finalCalls != 0 {
+	if len(got.Entry.Result.Hypotheses) != 0 || got.Entry.Result.NonActionable == nil || got.Entry.Result.NonActionable.NonActionableReason != NonActionableInsufficientEvidence || model.finalCalls != 0 {
 		t.Fatalf("result=%+v finalCalls=%d", got, model.finalCalls)
 	}
 }
@@ -289,8 +328,8 @@ func TestServiceZeroMatchGrepDoesNotPassEvidenceFloor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Entry.Result.Candidate != nil || got.Entry.Result.NonActionableReason == nil ||
-		*got.Entry.Result.NonActionableReason != NonActionableInsufficientEvidence || model.finalCalls != 0 ||
+	if len(got.Entry.Result.Hypotheses) != 0 || got.Entry.Result.NonActionable == nil ||
+		got.Entry.Result.NonActionable.NonActionableReason != NonActionableInsufficientEvidence || model.finalCalls != 0 ||
 		got.Entry.Provenance.Evidence.SourceReads != 1 || got.Entry.Provenance.Evidence.SourceGreps != 0 {
 		t.Fatalf("result=%+v finalCalls=%d", got, model.finalCalls)
 	}
@@ -314,8 +353,8 @@ func TestServiceContentBearingGrepDoesNotReplaceRequiredSourceRead(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Entry.Result.Candidate != nil || got.Entry.Result.NonActionableReason == nil ||
-		*got.Entry.Result.NonActionableReason != NonActionableInsufficientEvidence || model.finalCalls != 0 || got.Entry.Provenance.Evidence.SourceReads != 0 {
+	if len(got.Entry.Result.Hypotheses) != 0 || got.Entry.Result.NonActionable == nil ||
+		got.Entry.Result.NonActionable.NonActionableReason != NonActionableInsufficientEvidence || model.finalCalls != 0 || got.Entry.Provenance.Evidence.SourceReads != 0 {
 		t.Fatalf("result=%+v finalCalls=%d", got, model.finalCalls)
 	}
 }
@@ -334,7 +373,7 @@ func TestServiceUsesForcedRequiredSourceReadWithoutRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.toolCalls != 1 || model.finalCalls != 1 || got.Entry.Provenance.Metrics.EvidenceRetryCount != 2 || got.Entry.Result.Candidate == nil {
+	if model.toolCalls != 1 || model.finalCalls != 1 || got.Entry.Provenance.Metrics.EvidenceRetryCount != 2 || len(got.Entry.Result.Hypotheses) == 0 {
 		t.Fatalf("tool=%d final=%d result=%+v", model.toolCalls, model.finalCalls, got)
 	}
 	required := model.toolOptions[0].RequiredTools
@@ -356,7 +395,7 @@ func TestServiceUsesForcedRequiredSourceReadWithoutRestart(t *testing.T) {
 
 func TestServiceRequiresTreeListingWhenNoRelevantFileHintResolves(t *testing.T) {
 	model := &fakeModel{
-		fingerprint: strings.Repeat("d", 16), memo: "evidence", result: actionableJSON(),
+		fingerprint: strings.Repeat("d", 16), memo: "evidence", results: []string{actionableJSON(), nonActionableJSON()},
 		toolEvents: []ai.ToolLoopEvent{
 			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
 			{Name: "list_repo_tree", Forced: true},
@@ -394,14 +433,16 @@ func TestServiceWrongPathGrepDoesNotGroundCandidate(t *testing.T) {
 		},
 	}
 	docsRecord.ID = evidenceRecordID(docsRecord)
-	result := Result{
-		Version: ResultVersion, CauseAssessment: CauseSupports, Reason: "notes mention applyFix",
-		Candidate: &RequiredCallCandidate{
-			Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
-		},
-		EvidenceIDs: []string{docsRecord.ID},
+	extraction := TargetExtraction{
+		Version: TargetExtractionVersion,
+		Hypotheses: []TargetHypothesis{{
+			Target: &RequiredCallCandidate{
+				Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
+			},
+			EvidenceIDs: []string{docsRecord.ID}, RelationshipReason: "notes mention applyFix",
+		}},
 	}
-	encoded, _ := json.Marshal(result)
+	encoded, _ := json.Marshal(extraction)
 	model := &fakeModel{
 		fingerprint: strings.Repeat("d", 16), memo: "unrelated notes mention applyFix", result: string(encoded),
 		toolEvents: []ai.ToolLoopEvent{
@@ -435,7 +476,7 @@ func TestServiceFailedRefreshPreservesAcceptedResult(t *testing.T) {
 	}
 	key, _ := CacheKey(input)
 	entry, ok, err := cache.Lookup(key)
-	if err != nil || !ok || entry.Result.Candidate == nil || entry.LastFailure == nil {
+	if err != nil || !ok || len(entry.Result.Hypotheses) == 0 || entry.LastFailure == nil {
 		t.Fatalf("entry=%+v ok=%v err=%v", entry, ok, err)
 	}
 }
@@ -455,7 +496,7 @@ func TestServiceRepairsOneInvalidStructuredResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.finalCalls != 2 || got.Entry.Provenance.Metrics.RepairCount != 1 || got.Entry.Result.Candidate == nil {
+	if model.finalCalls != 2 || got.Entry.Provenance.Metrics.RepairCount != 1 || len(got.Entry.Result.Hypotheses) == 0 {
 		t.Fatalf("calls=%d result=%+v", model.finalCalls, got)
 	}
 }
@@ -479,17 +520,17 @@ func TestServiceInvalidRefreshPreservesAcceptedResult(t *testing.T) {
 	}
 	key, _ := CacheKey(input)
 	entry, ok, err := cache.Lookup(key)
-	if err != nil || !ok || entry.Result.Candidate == nil || entry.LastFailure == nil || entry.LastFailure.Category != FailureInvalidResult {
+	if err != nil || !ok || len(entry.Result.Hypotheses) == 0 || entry.LastFailure == nil || entry.LastFailure.Category != FailureInvalidResult {
 		t.Fatalf("entry=%+v ok=%v err=%v", entry, ok, err)
 	}
 }
 
 func TestServiceRejectsCandidateWithoutIssuedSourceEvidence(t *testing.T) {
-	var result Result
+	var result TargetExtraction
 	if err := json.Unmarshal([]byte(actionableJSON()), &result); err != nil {
 		t.Fatal(err)
 	}
-	result.Candidate = &RequiredCallCandidate{
+	result.Hypotheses[0].Target = &RequiredCallCandidate{
 		Kind: CandidateRequiredCall, Path: "controllers/other.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
 	}
 	encoded, _ := json.Marshal(result)
@@ -508,5 +549,64 @@ func TestServiceRejectsCandidateWithoutIssuedSourceEvidence(t *testing.T) {
 	key, _ := CacheKey(input)
 	if _, ok, err := cache.Lookup(key); err != nil || ok {
 		t.Fatalf("invalid candidate entered cache: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestServiceNoVerifiedHypothesisRunsNonActionableStage(t *testing.T) {
+	model := &fakeModel{
+		fingerprint: strings.Repeat("d", 16), memo: "no repository target",
+		results: []string{`{"version":1,"hypotheses":[]}`, nonActionableJSON()},
+		toolEvents: []ai.ToolLoopEvent{
+			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
+			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
+			{Name: "grep_repo", ContentBytes: len("applyFix")},
+		},
+	}
+	service, input, browser, _ := serviceFixture(t, model)
+	got, err := service.Investigate(t.Context(), input, browser, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.finalCalls != 2 || len(got.Entry.Result.Hypotheses) != 0 || got.Entry.Result.NonActionable == nil || got.Entry.Result.NonActionable.NonActionableReason != NonActionableInsufficientEvidence {
+		t.Fatalf("calls=%d result=%+v", model.finalCalls, got.Entry.Result)
+	}
+}
+
+func TestServiceRejectedNonemptyHypothesisRunsNonActionableStage(t *testing.T) {
+	var extraction TargetExtraction
+	if err := json.Unmarshal([]byte(actionableJSON()), &extraction); err != nil {
+		t.Fatal(err)
+	}
+	extraction.Hypotheses[0].Target = &SymbolAdditionCandidate{Kind: CandidateSymbolAddition, Path: "controllers/reconcile.go", Symbol: "unsupportedSymbol"}
+	extraction.Hypotheses[0].RelationshipReason = "diagnostic unsupported symbol"
+	raw, _ := json.Marshal(extraction)
+	model := &fakeModel{
+		fingerprint: strings.Repeat("d", 16), memo: "unsupported symbol only",
+		results: []string{string(raw), nonActionableJSON()},
+		toolEvents: []ai.ToolLoopEvent{
+			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
+			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
+			{Name: "grep_repo", ContentBytes: len("unsupportedSymbol")},
+		},
+	}
+	service, input, browser, _ := serviceFixture(t, model)
+	got, err := service.Investigate(t.Context(), input, browser, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.finalCalls != 2 || len(got.Entry.Result.Hypotheses) != 1 || got.Entry.Result.NonActionable == nil {
+		t.Fatalf("calls=%d result=%+v", model.finalCalls, got.Entry.Result)
+	}
+	verifier, _ := NewVerifier(service.source)
+	verified, err := verifier.Verify(t.Context(), input, got.Entry, browser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Classification != ClassificationInsufficientEvidence || verified.Proposal != nil {
+		t.Fatalf("verified=%+v", verified)
+	}
+	view := safeOperationView(OperationRef{CausalGroupID: input.CausalGroupID, CausalGroupHash: input.CausalGroupHash}, verified, got.Entry.Provenance.CompletedAt)
+	if view.State != models.PatternRemediationInsufficientEvidence || view.Target != nil {
+		t.Fatalf("view=%+v", view)
 	}
 }

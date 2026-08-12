@@ -205,37 +205,72 @@ func sha256Digest(value string) string {
 	return fmt.Sprintf("%x", sum)
 }
 
-func DecodeResult(raw json.RawMessage) (Result, error) {
+func DecodeTargetExtraction(raw json.RawMessage) (TargetExtraction, error) {
 	if err := rejectDuplicateJSONKeys(raw); err != nil {
-		return Result{}, err
+		return TargetExtraction{}, err
 	}
-	if err := validateResultObjectKeys(raw); err != nil {
-		return Result{}, err
+	if err := validateTargetExtractionObjectKeys(raw); err != nil {
+		return TargetExtraction{}, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	var result Result
+	var result TargetExtraction
 	if err := decoder.Decode(&result); err != nil {
-		return Result{}, fmt.Errorf("decode remediation investigation result: %w", err)
+		return TargetExtraction{}, fmt.Errorf("decode remediation target extraction: %w", err)
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return Result{}, fmt.Errorf("decode remediation investigation result: trailing data")
-	}
-	if err := ValidateResult(result); err != nil {
-		return Result{}, err
+	if err := ValidateTargetExtraction(result); err != nil {
+		return TargetExtraction{}, err
 	}
 	return result, nil
 }
 
+func DecodeNonActionableAssessment(raw json.RawMessage) (NonActionableAssessment, error) {
+	if err := rejectDuplicateJSONKeys(raw); err != nil {
+		return NonActionableAssessment{}, err
+	}
+	if err := validateNonActionableObjectKeys(raw); err != nil {
+		return NonActionableAssessment{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var result NonActionableAssessment
+	if err := decoder.Decode(&result); err != nil {
+		return NonActionableAssessment{}, fmt.Errorf("decode remediation non-actionable assessment: %w", err)
+	}
+	if err := ValidateNonActionableAssessment(result); err != nil {
+		return NonActionableAssessment{}, err
+	}
+	return result, nil
+}
+
+func (h *TargetHypothesis) UnmarshalJSON(data []byte) error {
+	type wireHypothesis struct {
+		Target             json.RawMessage `json:"target"`
+		EvidenceIDs        []string        `json:"evidence_ids"`
+		RelationshipReason string          `json:"relationship_reason"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var wire wireHypothesis
+	if err := decoder.Decode(&wire); err != nil {
+		return err
+	}
+	target, err := decodeCandidate(wire.Target)
+	if err != nil {
+		return err
+	}
+	if target == nil {
+		return fmt.Errorf("target hypothesis must contain one typed target")
+	}
+	*h = TargetHypothesis{Target: target, EvidenceIDs: wire.EvidenceIDs, RelationshipReason: wire.RelationshipReason}
+	return nil
+}
+
 func (r *Result) UnmarshalJSON(data []byte) error {
 	type wireResult struct {
-		Version             int                  `json:"version"`
-		CauseAssessment     CauseAssessment      `json:"cause_assessment"`
-		Reason              string               `json:"reason"`
-		Candidate           json.RawMessage      `json:"candidate"`
-		EvidenceIDs         []string             `json:"evidence_ids"`
-		NonActionableReason *NonActionableReason `json:"non_actionable_reason"`
+		Version       int                      `json:"version"`
+		Hypotheses    []TargetHypothesis       `json:"hypotheses"`
+		NonActionable *NonActionableAssessment `json:"non_actionable"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -243,14 +278,7 @@ func (r *Result) UnmarshalJSON(data []byte) error {
 	if err := decoder.Decode(&wire); err != nil {
 		return err
 	}
-	candidate, err := decodeCandidate(wire.Candidate)
-	if err != nil {
-		return err
-	}
-	*r = Result{
-		Version: wire.Version, CauseAssessment: wire.CauseAssessment, Reason: wire.Reason,
-		Candidate: candidate, EvidenceIDs: wire.EvidenceIDs, NonActionableReason: wire.NonActionableReason,
-	}
+	*r = Result(wire)
 	return nil
 }
 
@@ -341,58 +369,58 @@ func walkJSONValue(decoder *json.Decoder) error {
 	}
 }
 
-func validateResultObjectKeys(raw []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	var value map[string]any
-	if err := decoder.Decode(&value); err != nil {
-		return fmt.Errorf("decode remediation investigation result: %w", err)
+func validateTargetExtractionObjectKeys(raw []byte) error {
+	value, err := decodeJSONObject(raw, "remediation target extraction")
+	if err != nil {
+		return err
 	}
-	allowed := map[string]bool{
-		"version": true, "cause_assessment": true, "reason": true, "candidate": true,
-		"evidence_ids": true, "non_actionable_reason": true,
-	}
+	allowed := map[string]bool{"version": true, "hypotheses": true}
 	if field := firstUnknownField(value, allowed); field != "" {
 		return fmt.Errorf("unknown field path %s", field)
 	}
 	for field := range allowed {
 		if _, ok := value[field]; !ok {
-			return fmt.Errorf("result field %s is missing", field)
+			return fmt.Errorf("target extraction field %s is missing", field)
 		}
 	}
-	version, ok := value["version"].(json.Number)
-	if !ok {
-		return fmt.Errorf("result version must be the integer %d", ResultVersion)
+	return validateWireVersion(value["version"], TargetExtractionVersion, "target extraction")
+}
+
+func validateNonActionableObjectKeys(raw []byte) error {
+	value, err := decodeJSONObject(raw, "remediation non-actionable assessment")
+	if err != nil {
+		return err
 	}
-	parsedVersion, err := version.Int64()
-	if err != nil || parsedVersion != ResultVersion {
-		return fmt.Errorf("result version must be the integer %d", ResultVersion)
+	allowed := map[string]bool{"version": true, "cause_assessment": true, "reason": true, "evidence_ids": true, "non_actionable_reason": true}
+	if field := firstUnknownField(value, allowed); field != "" {
+		return fmt.Errorf("unknown field path %s", field)
 	}
-	candidate, ok := value["candidate"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	kind, _ := candidate["kind"].(string)
-	var candidateFields map[string]bool
-	switch CandidateKind(kind) {
-	case CandidateRequiredCall:
-		candidateFields = map[string]bool{"kind": true, "path": true, "containing_symbol": true, "required_call": true}
-	case CandidateSymbolAddition:
-		candidateFields = map[string]bool{"kind": true, "path": true, "symbol": true}
-	case CandidateProwEnvironmentEntry:
-		candidateFields = map[string]bool{"kind": true, "config_path": true, "job": true, "container": true, "name": true, "value": true}
-	case CandidateConfigurationField:
-		candidateFields = map[string]bool{"kind": true, "path": true, "field_path": true, "value": true}
-	default:
-		return fmt.Errorf("candidate kind %q is invalid", kind)
-	}
-	if field := firstUnknownField(candidate, candidateFields); field != "" {
-		return fmt.Errorf("unknown field path candidate.%s", field)
-	}
-	for field := range candidateFields {
-		if _, ok := candidate[field]; !ok {
-			return fmt.Errorf("candidate field %s is missing", field)
+	for field := range allowed {
+		if _, ok := value[field]; !ok {
+			return fmt.Errorf("non-actionable assessment field %s is missing", field)
 		}
+	}
+	return validateWireVersion(value["version"], NonActionableAssessmentVersion, "non-actionable assessment")
+}
+
+func decodeJSONObject(raw []byte, name string) (map[string]any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value map[string]any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", name, err)
+	}
+	return value, nil
+}
+
+func validateWireVersion(value any, expected int, name string) error {
+	version, ok := value.(json.Number)
+	if !ok {
+		return fmt.Errorf("%s version must be the integer %d", name, expected)
+	}
+	parsed, err := version.Int64()
+	if err != nil || parsed != int64(expected) {
+		return fmt.Errorf("%s version must be the integer %d", name, expected)
 	}
 	return nil
 }
@@ -411,9 +439,30 @@ func firstUnknownField(value map[string]any, allowed map[string]bool) string {
 	return ""
 }
 
-func ValidateResult(result Result) error {
-	if result.Version != ResultVersion {
-		return fmt.Errorf("result version %d is not current", result.Version)
+func ValidateTargetExtraction(result TargetExtraction) error {
+	if result.Version != TargetExtractionVersion {
+		return fmt.Errorf("target extraction version %d is not current", result.Version)
+	}
+	if len(result.Hypotheses) > 3 {
+		return fmt.Errorf("target extraction must contain at most three hypotheses")
+	}
+	seen := map[string]bool{}
+	for index, hypothesis := range result.Hypotheses {
+		if err := validateTargetHypothesis(hypothesis); err != nil {
+			return fmt.Errorf("target hypothesis %d: %w", index, err)
+		}
+		key := candidateIdentityKey(hypothesis.Target)
+		if seen[key] {
+			return fmt.Errorf("target hypothesis %d duplicates another target identity", index)
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+func ValidateNonActionableAssessment(result NonActionableAssessment) error {
+	if result.Version != NonActionableAssessmentVersion {
+		return fmt.Errorf("non-actionable assessment version %d is not current", result.Version)
 	}
 	if !validCauseAssessment(result.CauseAssessment) {
 		return fmt.Errorf("cause assessment %q is invalid", result.CauseAssessment)
@@ -421,11 +470,49 @@ func ValidateResult(result Result) error {
 	if err := boundedText("reason", result.Reason, 16<<10); err != nil {
 		return err
 	}
-	if len(result.EvidenceIDs) == 0 || len(result.EvidenceIDs) > 128 {
-		return fmt.Errorf("result must contain 1-128 evidence IDs")
+	if !validNonActionableReason(result.NonActionableReason) {
+		return fmt.Errorf("non-actionable reason %q is invalid", result.NonActionableReason)
+	}
+	return validateEvidenceIDs(result.EvidenceIDs)
+}
+
+func ValidateResult(result Result) error {
+	if result.Version != ResultVersion {
+		return fmt.Errorf("result version %d is not current", result.Version)
+	}
+	if err := ValidateTargetExtraction(TargetExtraction{Version: TargetExtractionVersion, Hypotheses: result.Hypotheses}); err != nil {
+		return err
+	}
+	if result.NonActionable != nil {
+		if err := ValidateNonActionableAssessment(*result.NonActionable); err != nil {
+			return err
+		}
+	}
+	if len(result.Hypotheses) == 0 && result.NonActionable == nil {
+		return fmt.Errorf("result requires target hypotheses or a non-actionable assessment")
+	}
+	return nil
+}
+
+func validateTargetHypothesis(hypothesis TargetHypothesis) error {
+	if hypothesis.Target == nil {
+		return fmt.Errorf("typed target is required")
+	}
+	if err := boundedText("relationship reason", hypothesis.RelationshipReason, 16<<10); err != nil {
+		return err
+	}
+	if err := validateEvidenceIDs(hypothesis.EvidenceIDs); err != nil {
+		return err
+	}
+	return validateCandidate(hypothesis.Target)
+}
+
+func validateEvidenceIDs(ids []string) error {
+	if len(ids) == 0 || len(ids) > 128 {
+		return fmt.Errorf("1-128 evidence IDs are required")
 	}
 	seen := map[string]bool{}
-	for index, id := range result.EvidenceIDs {
+	for index, id := range ids {
 		if !evidenceIDShape.MatchString(id) {
 			return fmt.Errorf("evidence ID %d is invalid", index)
 		}
@@ -434,19 +521,34 @@ func ValidateResult(result Result) error {
 		}
 		seen[id] = true
 	}
-	if result.Candidate == nil {
-		if result.NonActionableReason == nil || !validNonActionableReason(*result.NonActionableReason) {
-			return fmt.Errorf("a result without a candidate requires one typed non-actionable reason")
+	return nil
+}
+
+func candidateIdentityKey(candidate CandidateTarget) string {
+	encoded, _ := json.Marshal(candidate)
+	return string(encoded)
+}
+
+func resultEvidenceIDs(result Result) []string {
+	seen := map[string]bool{}
+	var ids []string
+	for _, hypothesis := range result.Hypotheses {
+		for _, id := range hypothesis.EvidenceIDs {
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
 		}
-		return nil
 	}
-	if result.NonActionableReason != nil {
-		return fmt.Errorf("a candidate result must set non_actionable_reason to null")
+	if result.NonActionable != nil {
+		for _, id := range result.NonActionable.EvidenceIDs {
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
 	}
-	if result.CauseAssessment != CauseSupports && result.CauseAssessment != CauseRefines {
-		return fmt.Errorf("a candidate target must support or refine the claimed cause")
-	}
-	return validateCandidate(result.Candidate)
+	return ids
 }
 
 func validateCandidate(candidate CandidateTarget) error {
