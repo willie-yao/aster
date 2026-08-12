@@ -26,8 +26,8 @@ func testFrozenInput() FrozenInput {
 			{BuildID: "1", BuildPrefix: "jobs/test/1/", Source: &sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: testRevision}},
 		},
 		Analyses: []AnalysisReference{
-			{BuildID: "2", TestName: "test", GeneratedAt: "2026-08-11T00:00:00Z", RootCause: "a required call is missing", Severity: "High"},
-			{BuildID: "1", TestName: "test", GeneratedAt: "2026-08-11T00:00:00Z", RootCause: "a required call is missing", Severity: "High"},
+			{BuildID: "2", TestName: "test", GeneratedAt: "2026-08-12T00:00:00Z", RootCause: "a required call is missing", Severity: "High"},
+			{BuildID: "1", TestName: "test", GeneratedAt: "2026-08-12T00:00:00Z", RootCause: "a required call is missing", Severity: "High"},
 		},
 		RelevantFiles:       []string{"controllers/reconcile.go"},
 		InvestigationSource: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: testRevision},
@@ -52,7 +52,6 @@ func TestFrozenInputDigestCanonicalizesOrderAndSealsSemanticFields(t *testing.T)
 	reordered.Group.Builds[0], reordered.Group.Builds[1] = reordered.Group.Builds[1], reordered.Group.Builds[0]
 	reordered.Builds[0], reordered.Builds[1] = reordered.Builds[1], reordered.Builds[0]
 	reordered.Analyses[0], reordered.Analyses[1] = reordered.Analyses[1], reordered.Analyses[0]
-	reordered.DestinationPolicy.Repositories[0].AllowedCommands = []ValidationCommand{{Argv: []string{"go", "test", "./controllers/..."}, Timeout: "10m"}}
 	got, err := CacheKey(reordered)
 	if err != nil || got != key {
 		t.Fatalf("reordered key=%q err=%v want=%q", got, err, key)
@@ -89,15 +88,26 @@ func TestFrozenInputDigestCanonicalizesOrderAndSealsSemanticFields(t *testing.T)
 	}
 }
 
-func TestDecodeResultRejectsUnknownDuplicateAndNonActionableProposal(t *testing.T) {
-	valid := `{"version":2,"classification":"insufficient_evidence","reason":"not enough evidence","cause_assessment":"inconclusive","cause_assessment_reason":"the source relationship is ambiguous","proposal":null,"evidence":[{"kind":"analysis","build_id":"1","path":"","line_start":0,"line_end":0,"quote":"cause","analysis_generated_at":"2026-08-11T00:00:00Z"}]}`
+func TestDecodeResultUsesMinimalDiscriminatedContract(t *testing.T) {
+	evidenceID := "analysis:" + strings.Repeat("a", 64)
+	valid := `{"version":3,"cause_assessment":"inconclusive","reason":"the source relationship is ambiguous","candidate":null,"evidence_ids":["` + evidenceID + `"],"non_actionable_reason":"insufficient_evidence"}`
 	if _, err := DecodeResult(json.RawMessage(valid)); err != nil {
 		t.Fatal(err)
 	}
+	candidate := `{"version":3,"cause_assessment":"supports","reason":"the recurring path omits applyFix","candidate":{"kind":"required_call","path":"controllers/reconcile.go","containing_symbol":"reconcile","required_call":"applyFix"},"evidence_ids":["` + evidenceID + `"],"non_actionable_reason":null}`
+	decoded, err := DecodeResult(json.RawMessage(candidate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decoded.Candidate.(*RequiredCallCandidate); !ok {
+		t.Fatalf("candidate type=%T", decoded.Candidate)
+	}
 	for name, raw := range map[string]string{
-		"unknown":   strings.Replace(valid, `"version":2`, `"version":2,"extra":true`, 1),
-		"duplicate": strings.Replace(valid, `"version":2`, `"version":2,"version":2`, 1),
-		"proposal":  strings.Replace(valid, `"proposal":null`, `"proposal":{"repository":{"owner":"example","name":"repo","revision":"`+testRevision+`"},"target":{"intent":"modify_symbol","symbol":"reconcile","required_call":"applyFix","path":"controllers/reconcile.go","value":"","repository":"example/repo","revision":"`+testRevision+`","job":"","container":"","name":""},"expected_behavior":"call applyFix","relationship_proof":"the cited function owns the failing path","current_source":"absent","verification_requirements":["run tests"],"allowed_changed_paths":["controllers/reconcile.go"],"allowed_validation_commands":["go test ./controllers/..."]}`, 1),
+		"unknown top level":       strings.Replace(valid, `"version":3`, `"version":3,"extra":true`, 1),
+		"duplicate":               strings.Replace(valid, `"version":3`, `"version":3,"version":3`, 1),
+		"irrelevant target field": strings.Replace(candidate, `"required_call":"applyFix"`, `"required_call":"applyFix","job":"periodic-test"`, 1),
+		"candidate and reason":    strings.Replace(candidate, `"non_actionable_reason":null`, `"non_actionable_reason":"insufficient_evidence"`, 1),
+		"no candidate reason":     strings.Replace(valid, `"non_actionable_reason":"insufficient_evidence"`, `"non_actionable_reason":null`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := DecodeResult(json.RawMessage(raw)); err == nil {
@@ -107,51 +117,71 @@ func TestDecodeResultRejectsUnknownDuplicateAndNonActionableProposal(t *testing.
 	}
 }
 
-func TestValidateActionableResultRequiresTypedBoundedTarget(t *testing.T) {
-	result := Result{
-		Version: ResultVersion, Classification: ClassificationActionable,
-		Reason: "the call is missing", CauseAssessment: CauseSupports,
-		CauseAssessmentReason: "source and artifact evidence agree",
-		Proposal: &ActionableProposal{
-			TargetKind:       TargetAddRequiredCall,
-			Repository:       sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: testRevision},
-			Target:           models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "applyFix", Path: "controllers/reconcile.go"},
-			ExpectedBehavior: "invoke applyFix before returning", RelationshipProof: "the failing path executes reconcile",
-			CurrentSource: CurrentSourceAbsent, VerificationRequirements: []string{"go test the controller"},
-			AllowedChangedPaths: []string{"controllers/reconcile.go"}, AllowedValidationCommands: []ValidationCommand{{Argv: []string{"go", "test", "./controllers/..."}, Timeout: "10m"}},
-		},
-		Evidence: []EvidenceCitation{{Kind: EvidenceSource, Path: "controllers/reconcile.go", LineStart: 1, LineEnd: 3, Quote: "func reconcile"}},
+func TestCandidateVariantsDoNotRequireIrrelevantFields(t *testing.T) {
+	evidenceIDs := []string{"source:" + strings.Repeat("a", 64), "analysis:" + strings.Repeat("b", 64)}
+	candidates := []CandidateTarget{
+		&RequiredCallCandidate{Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix"},
+		&SymbolAdditionCandidate{Kind: CandidateSymbolAddition, Path: "controllers/helpers.go", Symbol: "applyFix"},
+		&ProwEnvironmentEntryCandidate{Kind: CandidateProwEnvironmentEntry, ConfigPath: "config/jobs/example/periodics.yaml", Job: "periodic-test", Container: "test", Name: "FEATURE_FLAG", Value: "enabled"},
+		&ConfigurationFieldCandidate{Kind: CandidateConfigurationField, Path: "config/defaults.yaml", FieldPath: []string{"feature", "enabled"}, Value: "true"},
 	}
-	if err := ValidateResult(result); err != nil {
-		t.Fatal(err)
-	}
-	result.Proposal.CurrentSource = CurrentSourcePresent
-	if err := ValidateResult(result); err == nil {
-		t.Fatal("already-present actionable proposal accepted")
-	}
-	result.Proposal.CurrentSource = CurrentSourceAbsent
-	result.Proposal.Target.Path = "other.go"
-	if err := ValidateResult(result); err == nil {
-		t.Fatal("target outside allowed paths accepted")
+	for _, candidate := range candidates {
+		result := Result{Version: ResultVersion, CauseAssessment: CauseSupports, Reason: "bounded evidence identifies one target", Candidate: candidate, EvidenceIDs: evidenceIDs}
+		if err := ValidateResult(result); err != nil {
+			t.Fatalf("%T: %v", candidate, err)
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), `"repository"`) || strings.Contains(string(encoded), `"revision"`) || strings.Contains(string(encoded), `"allowed_changed_paths"`) {
+			t.Fatalf("model result contains engine-owned fields: %s", encoded)
+		}
 	}
 }
 
-func TestValidateActionableResultRejectsUnsafeConversionProposal(t *testing.T) {
-	result := Result{
-		Version: ResultVersion, Classification: ClassificationActionable,
-		Reason: "DeleteWebhookConfigurations so conversion stops calling ASO", CauseAssessment: CauseSupports,
-		CauseAssessmentReason: "the conversion request failed",
-		Proposal: &ActionableProposal{
-			TargetKind:       TargetAddRequiredCall,
-			Repository:       sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: testRevision},
-			Target:           models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: "DeleteWebhookConfigurations", Path: "controllers/conversion.go"},
-			ExpectedBehavior: "delete webhook configuration to disable conversion", RelationshipProof: "conversion timed out",
-			CurrentSource: CurrentSourceAbsent, VerificationRequirements: []string{"run tests"},
-			AllowedChangedPaths: []string{"controllers/conversion.go"}, AllowedValidationCommands: []ValidationCommand{{Argv: []string{"go", "test", "./controllers/..."}, Timeout: "10m"}},
+func TestEvidenceCatalogIDsBindEngineIssuedIdentity(t *testing.T) {
+	record := EvidenceRecord{
+		Kind: EvidenceSource,
+		Source: &SourceEvidenceIdentity{
+			Repository: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: testRevision},
+			Path:       "controllers/reconcile.go", ContentDigest: HashText("package controllers\n"),
 		},
-		Evidence: []EvidenceCitation{{Kind: EvidenceSource, Path: "controllers/conversion.go", LineStart: 1, LineEnd: 1, Quote: "conversion"}},
 	}
-	if err := ValidateResult(result); err == nil {
-		t.Fatal("unsafe conversion proposal accepted")
+	record.ID = evidenceRecordID(record)
+	catalog := EvidenceCatalog{Version: EvidenceCatalogVersion, Records: []EvidenceRecord{record}}
+	if err := ValidateEvidenceCatalog(catalog); err != nil {
+		t.Fatal(err)
+	}
+	digest := EvidenceCatalogDigest(catalog)
+	catalog.Records[0].Source.Path = "controllers/other.go"
+	if ValidateEvidenceCatalog(catalog) == nil || EvidenceCatalogDigest(catalog) == digest {
+		t.Fatal("mutated evidence identity remained valid")
+	}
+}
+
+func TestResultFormatExcludesEngineOwnedFields(t *testing.T) {
+	encoded, err := json.Marshal(resultFormat().Schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, forbidden := range []string{
+		`"classification"`, `"repository"`, `"revision"`, `"current_source"`,
+		`"allowed_changed_paths"`, `"allowed_validation_commands"`, `"verification_requirements"`,
+		`"line_start"`, `"line_end"`, `"quote"`, `"build_id"`, `"generated_at"`,
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("model schema contains engine-owned field %s: %s", forbidden, text)
+		}
+	}
+	for _, required := range []string{
+		string(CandidateRequiredCall), string(CandidateSymbolAddition),
+		string(CandidateProwEnvironmentEntry), string(CandidateConfigurationField),
+		`"evidence_ids"`, `"non_actionable_reason"`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("model schema is missing %s: %s", required, text)
+		}
 	}
 }

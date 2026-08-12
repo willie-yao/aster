@@ -20,7 +20,7 @@ import (
 
 const (
 	CacheRelativePath = ".remediation-investigations/cache.json"
-	cacheFileVersion  = 2
+	cacheFileVersion  = 3
 	defaultMaxEntries = 256
 	maxCacheFileBytes = 16 << 20
 	cacheLockFileName = "cache.lock"
@@ -45,13 +45,15 @@ type FailureRecord struct {
 }
 
 type CacheEntry struct {
-	Key          string         `json:"key"`
-	Result       Result         `json:"result"`
-	ResultDigest string         `json:"result_digest"`
-	Provenance   Provenance     `json:"provenance"`
-	CreatedAt    string         `json:"created_at"`
-	UpdatedAt    string         `json:"updated_at"`
-	LastFailure  *FailureRecord `json:"last_failure,omitempty"`
+	Key                   string          `json:"key"`
+	Result                Result          `json:"result"`
+	ResultDigest          string          `json:"result_digest"`
+	EvidenceCatalog       EvidenceCatalog `json:"evidence_catalog"`
+	EvidenceCatalogDigest string          `json:"evidence_catalog_digest"`
+	Provenance            Provenance      `json:"provenance"`
+	CreatedAt             string          `json:"created_at"`
+	UpdatedAt             string          `json:"updated_at"`
+	LastFailure           *FailureRecord  `json:"last_failure,omitempty"`
 }
 
 type cacheFile struct {
@@ -118,7 +120,7 @@ func (c *Cache) Lookup(key string) (CacheEntry, bool, error) {
 	return cloneCacheEntry(entry), true, nil
 }
 
-func (c *Cache) StoreSuccess(key string, result Result, provenance Provenance) error {
+func (c *Cache) StoreSuccess(key string, result Result, catalog EvidenceCatalog, provenance Provenance) error {
 	if c == nil {
 		return nil
 	}
@@ -126,6 +128,12 @@ func (c *Cache) StoreSuccess(key string, result Result, provenance Provenance) e
 		return fmt.Errorf("cache key is required")
 	}
 	if err := ValidateResult(result); err != nil {
+		return err
+	}
+	if err := ValidateEvidenceCatalog(catalog); err != nil {
+		return err
+	}
+	if _, err := selectedEvidenceRecords(result.EvidenceIDs, catalog); err != nil {
 		return err
 	}
 	if strings.TrimSpace(provenance.InputDigest) == "" || provenance.Versions != CurrentVersions() || provenance.ProviderFingerprint == "" ||
@@ -144,8 +152,9 @@ func (c *Cache) StoreSuccess(key string, result Result, provenance Provenance) e
 			created = current.CreatedAt
 		}
 		c.state.Entries[key] = CacheEntry{
-			Key: key, Result: cloneResult(result), ResultDigest: ResultDigest(result), Provenance: cloneProvenance(provenance),
-			CreatedAt: created, UpdatedAt: now,
+			Key: key, Result: cloneResult(result), ResultDigest: ResultDigest(result),
+			EvidenceCatalog: cloneEvidenceCatalog(catalog), EvidenceCatalogDigest: EvidenceCatalogDigest(catalog),
+			Provenance: cloneProvenance(provenance), CreatedAt: created, UpdatedAt: now,
 		}
 		delete(c.state.Failures, key)
 		c.pruneLocked()
@@ -232,9 +241,12 @@ func (c *Cache) loadLocked() error {
 		loaded.Failures = map[string]FailureRecord{}
 	}
 	for key, entry := range loaded.Entries {
-		if key != entry.Key || ValidateResult(entry.Result) != nil || entry.ResultDigest != ResultDigest(entry.Result) || strings.TrimSpace(entry.Provenance.InputDigest) == "" ||
-			entry.Provenance.Versions != CurrentVersions() || entry.Provenance.ProviderFingerprint == "" ||
-			cacheKeyForDigest(entry.Provenance.InputDigest) != key {
+		_, evidenceErr := selectedEvidenceRecords(entry.Result.EvidenceIDs, entry.EvidenceCatalog)
+		if key != entry.Key || ValidateResult(entry.Result) != nil || entry.ResultDigest != ResultDigest(entry.Result) ||
+			ValidateEvidenceCatalog(entry.EvidenceCatalog) != nil || evidenceErr != nil ||
+			entry.EvidenceCatalogDigest != EvidenceCatalogDigest(entry.EvidenceCatalog) ||
+			strings.TrimSpace(entry.Provenance.InputDigest) == "" || entry.Provenance.Versions != CurrentVersions() ||
+			entry.Provenance.ProviderFingerprint == "" || cacheKeyForDigest(entry.Provenance.InputDigest) != key {
 			return fmt.Errorf("remediation investigation cache entry %q is invalid", key)
 		}
 	}
@@ -315,6 +327,7 @@ func failureDigest(err error) string {
 
 func cloneCacheEntry(entry CacheEntry) CacheEntry {
 	entry.Result = cloneResult(entry.Result)
+	entry.EvidenceCatalog = cloneEvidenceCatalog(entry.EvidenceCatalog)
 	entry.Provenance = cloneProvenance(entry.Provenance)
 	if entry.LastFailure != nil {
 		failure := *entry.LastFailure
@@ -324,15 +337,33 @@ func cloneCacheEntry(entry CacheEntry) CacheEntry {
 }
 
 func cloneResult(result Result) Result {
-	result.Evidence = slices.Clone(result.Evidence)
-	if result.Proposal != nil {
-		proposal := *result.Proposal
-		proposal.VerificationRequirements = slices.Clone(result.Proposal.VerificationRequirements)
-		proposal.AllowedChangedPaths = slices.Clone(result.Proposal.AllowedChangedPaths)
-		proposal.AllowedValidationCommands = cloneValidationCommands(result.Proposal.AllowedValidationCommands)
-		result.Proposal = &proposal
+	result.Candidate = cloneCandidate(result.Candidate)
+	result.EvidenceIDs = slices.Clone(result.EvidenceIDs)
+	if result.NonActionableReason != nil {
+		reason := *result.NonActionableReason
+		result.NonActionableReason = &reason
 	}
 	return result
+}
+
+func cloneEvidenceCatalog(catalog EvidenceCatalog) EvidenceCatalog {
+	catalog.Records = slices.Clone(catalog.Records)
+	for index := range catalog.Records {
+		record := &catalog.Records[index]
+		if record.Source != nil {
+			value := *record.Source
+			record.Source = &value
+		}
+		if record.Analysis != nil {
+			value := *record.Analysis
+			record.Analysis = &value
+		}
+		if record.Artifact != nil {
+			value := *record.Artifact
+			record.Artifact = &value
+		}
+	}
+	return catalog
 }
 
 func cloneProvenance(provenance Provenance) Provenance { return provenance }

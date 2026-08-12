@@ -266,9 +266,9 @@
           }
         ]
       },
-      "effective_input_sha256": "f3694cd1219855cbeda562e8b291585bfe437e023c073fff26c7210363698412",
+      "effective_input_sha256": "48134ba18ebd62240783b6dcec148c3da5302b4a4919d0eff5401e48825a2fc4",
       "expected": {
-        "classification": "external_dependency",
+        "classification": "insufficient_evidence",
         "repository": null,
         "target": null
       },
@@ -536,9 +536,9 @@
           }
         ]
       },
-      "effective_input_sha256": "96a12bf66d079558da7a258a9a5a2e29f842aad777f52ddf1ccfbab26003006b",
+      "effective_input_sha256": "15f665ce3adb567d23d1875130ae6f39d46b67571d6977e77b2e8ffe3ebe4c05",
       "expected": {
-        "classification": "external_dependency",
+        "classification": "insufficient_evidence",
         "repository": null,
         "target": null
       },
@@ -675,5 +675,5 @@
       }
     }
   ],
-  "version": 1
+  "version": 2
 }

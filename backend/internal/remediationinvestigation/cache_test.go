@@ -9,18 +9,28 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
+func testEvidenceCatalog() EvidenceCatalog {
+	input := testFrozenInput()
+	record := EvidenceRecord{
+		Kind: EvidenceAnalysis,
+		Analysis: &AnalysisEvidenceIdentity{
+			BuildID: input.Analyses[0].BuildID, GeneratedAt: input.Analyses[0].GeneratedAt,
+			RootCauseDigest: HashText(input.Analyses[0].RootCause),
+		},
+	}
+	record.ID = evidenceRecordID(record)
+	return EvidenceCatalog{Version: EvidenceCatalogVersion, Records: []EvidenceRecord{record}}
+}
+
 func testNonActionableResult() Result {
+	catalog := testEvidenceCatalog()
+	reason := NonActionableInsufficientEvidence
 	return Result{
-		Version: ResultVersion, Classification: ClassificationInsufficientEvidence,
-		Reason: "the evidence is ambiguous", CauseAssessment: CauseInconclusive,
-		CauseAssessmentReason: "the frozen source does not establish ownership",
-		Evidence: []EvidenceCitation{{
-			Kind: EvidenceAnalysis, BuildID: "1", AnalysisGeneratedAt: "2026-08-11T00:00:00Z", Quote: "cause",
-		}},
+		Version: ResultVersion, Reason: "the evidence is ambiguous", CauseAssessment: CauseInconclusive,
+		EvidenceIDs: []string{catalog.Records[0].ID}, NonActionableReason: &reason,
 	}
 }
 
@@ -30,7 +40,7 @@ func testProvenance(now time.Time) Provenance {
 }
 
 func TestCachePersistsPrivateAcceptedResultAndPreservesItOnFailure(t *testing.T) {
-	now := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
+	now := time.Date(2026, 8, 12, 1, 2, 3, 0, time.UTC)
 	path := filepath.Join(t.TempDir(), CacheRelativePath)
 	cache, err := NewCache(path, CacheOptions{Now: func() time.Time { return now }})
 	if err != nil {
@@ -38,7 +48,8 @@ func TestCachePersistsPrivateAcceptedResultAndPreservesItOnFailure(t *testing.T)
 	}
 	provenance := testProvenance(now)
 	key := cacheKeyForDigest(provenance.InputDigest)
-	if err := cache.StoreSuccess(key, testNonActionableResult(), provenance); err != nil {
+	catalog := testEvidenceCatalog()
+	if err := cache.StoreSuccess(key, testNonActionableResult(), catalog, provenance); err != nil {
 		t.Fatal(err)
 	}
 	if err := cache.RecordFailure(key, FailureProvider, errors.New("private provider body with source text")); err != nil {
@@ -48,8 +59,11 @@ func TestCachePersistsPrivateAcceptedResultAndPreservesItOnFailure(t *testing.T)
 	if err != nil || !ok {
 		t.Fatalf("lookup ok=%v err=%v", ok, err)
 	}
-	if entry.Result.Classification != ClassificationInsufficientEvidence || entry.LastFailure == nil || entry.LastFailure.Category != FailureProvider {
+	if entry.Result.NonActionableReason == nil || *entry.Result.NonActionableReason != NonActionableInsufficientEvidence || entry.LastFailure == nil || entry.LastFailure.Category != FailureProvider {
 		t.Fatalf("entry=%+v", entry)
+	}
+	if entry.EvidenceCatalogDigest != EvidenceCatalogDigest(entry.EvidenceCatalog) {
+		t.Fatal("evidence catalog digest mismatch")
 	}
 	if strings.Contains(entry.LastFailure.Digest, "private") || len(entry.LastFailure.Digest) != 32 {
 		t.Fatalf("failure digest=%q", entry.LastFailure.Digest)
@@ -69,7 +83,7 @@ func TestCachePersistsPrivateAcceptedResultAndPreservesItOnFailure(t *testing.T)
 		t.Fatal(err)
 	}
 	reloadedEntry, ok, err := reloaded.Lookup(key)
-	if err != nil || !ok || reloadedEntry.Result.Classification != entry.Result.Classification {
+	if err != nil || !ok || ResultDigest(reloadedEntry.Result) != ResultDigest(entry.Result) {
 		t.Fatalf("reloaded=%+v ok=%v err=%v", reloadedEntry, ok, err)
 	}
 }
@@ -104,15 +118,16 @@ func TestCacheSerializesAcrossInstances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	catalog := testEvidenceCatalog()
 	firstProvenance := testProvenance(time.Now())
 	firstKey := cacheKeyForDigest(firstProvenance.InputDigest)
-	if err := first.StoreSuccess(firstKey, testNonActionableResult(), firstProvenance); err != nil {
+	if err := first.StoreSuccess(firstKey, testNonActionableResult(), catalog, firstProvenance); err != nil {
 		t.Fatal(err)
 	}
 	secondProvenance := testProvenance(time.Now())
 	secondProvenance.InputDigest = strings.Repeat("e", 64)
 	secondKey := cacheKeyForDigest(secondProvenance.InputDigest)
-	if err := second.StoreSuccess(secondKey, testNonActionableResult(), secondProvenance); err != nil {
+	if err := second.StoreSuccess(secondKey, testNonActionableResult(), catalog, secondProvenance); err != nil {
 		t.Fatal(err)
 	}
 	for _, key := range []string{firstKey, secondKey} {
@@ -139,7 +154,8 @@ func TestCacheRejectsOversizedReplacementAndPreservesPriorFile(t *testing.T) {
 	}
 	provenance := testProvenance(time.Now())
 	key := cacheKeyForDigest(provenance.InputDigest)
-	if err := cache.StoreSuccess(key, testNonActionableResult(), provenance); err != nil {
+	catalog := testEvidenceCatalog()
+	if err := cache.StoreSuccess(key, testNonActionableResult(), catalog, provenance); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(path)
@@ -147,24 +163,26 @@ func TestCacheRejectsOversizedReplacementAndPreservesPriorFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	large := testNonActionableResult()
-	quote := strings.Repeat("x", 4<<10)
-	large.Evidence = make([]EvidenceCitation, 16)
-	for index := range large.Evidence {
-		large.Evidence[index] = EvidenceCitation{
-			Kind: EvidenceAnalysis, BuildID: fmt.Sprintf("build-%d", index),
-			AnalysisGeneratedAt: "2026-08-11T00:00:00Z", Quote: quote,
-		}
+	largeCatalog := EvidenceCatalog{Version: EvidenceCatalogVersion}
+	for index := 0; index < 256; index++ {
+		largeCatalog.Records = append(largeCatalog.Records, EvidenceRecord{
+			ID: strings.Repeat("x", 1024), Kind: EvidenceSource,
+			Source: &SourceEvidenceIdentity{
+				Repository: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: testRevision},
+				Path:       strings.Repeat("p", 1024), ContentDigest: strings.Repeat("a", 64),
+			},
+		})
 	}
 	cache.mu.Lock()
-	for index := 0; index < 300; index++ {
+	for index := 0; index < 100; index++ {
 		inputDigest := fmt.Sprintf("%064x", index+1)
 		entryKey := cacheKeyForDigest(inputDigest)
 		entryProvenance := provenance
 		entryProvenance.InputDigest = inputDigest
 		cache.state.Entries[entryKey] = CacheEntry{
-			Key: entryKey, Result: cloneResult(large), ResultDigest: ResultDigest(large), Provenance: entryProvenance,
-			CreatedAt: "2026-08-11T00:00:00Z", UpdatedAt: "2026-08-11T00:00:00Z",
+			Key: entryKey, Result: cloneResult(testNonActionableResult()), ResultDigest: ResultDigest(testNonActionableResult()),
+			EvidenceCatalog: largeCatalog, EvidenceCatalogDigest: EvidenceCatalogDigest(largeCatalog), Provenance: entryProvenance,
+			CreatedAt: "2026-08-12T00:00:00Z", UpdatedAt: "2026-08-12T00:00:00Z",
 		}
 	}
 	err = cache.withFileLockLocked(func() error { return cache.persistLocked() })
@@ -193,7 +211,7 @@ func TestCacheRejectsLegacyVersion(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(`{"version":1,"entries":{}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"version":2,"entries":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := NewCache(path, CacheOptions{}); err == nil || !strings.Contains(err.Error(), "unsupported") {
@@ -201,39 +219,40 @@ func TestCacheRejectsLegacyVersion(t *testing.T) {
 	}
 }
 
-func TestCacheLookupDeepClonesValidationCommandArgv(t *testing.T) {
+func TestCacheLookupDeepClonesCandidateAndEvidenceCatalog(t *testing.T) {
 	cache, err := NewCache("", CacheOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := testNonActionableResult()
-	result.Classification = ClassificationActionable
-	result.CauseAssessment = CauseSupports
-	result.Proposal = &ActionableProposal{
-		TargetKind:       TargetAddRequiredCall,
-		Repository:       sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: testRevision},
-		Target:           models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "applyFix", Path: "controllers/reconcile.go"},
-		ExpectedBehavior: "call applyFix", RelationshipProof: "the recurring path executes reconcile",
-		CurrentSource: CurrentSourceAbsent, VerificationRequirements: []string{"run tests"},
-		AllowedChangedPaths:       []string{"controllers/reconcile.go"},
-		AllowedValidationCommands: []ValidationCommand{{Argv: []string{"go", "test", "./controllers/..."}, Timeout: "10m"}},
+	catalog := testEvidenceCatalog()
+	result := Result{
+		Version: ResultVersion, CauseAssessment: CauseSupports, Reason: "one configuration identity",
+		Candidate: &ConfigurationFieldCandidate{
+			Kind: CandidateConfigurationField, Path: "config/defaults.yaml", FieldPath: []string{"feature", "enabled"}, Value: "true",
+		},
+		EvidenceIDs: []string{catalog.Records[0].ID},
 	}
-	result.Evidence = []EvidenceCitation{{Kind: EvidenceSource, Path: "controllers/reconcile.go", LineStart: 1, LineEnd: 1, Quote: "reconcile"}}
 	provenance := testProvenance(time.Now())
 	key := cacheKeyForDigest(provenance.InputDigest)
-	if err := cache.StoreSuccess(key, result, provenance); err != nil {
+	if err := cache.StoreSuccess(key, result, catalog, provenance); err != nil {
 		t.Fatal(err)
 	}
 	first, ok, err := cache.Lookup(key)
 	if err != nil || !ok {
 		t.Fatalf("lookup ok=%v err=%v", ok, err)
 	}
-	first.Result.Proposal.AllowedValidationCommands[0].Argv[0] = "mutated"
+	first.CandidateFieldPathForTest()[0] = "mutated"
+	first.EvidenceCatalog.Records[0].Analysis.BuildID = "mutated"
 	second, ok, err := cache.Lookup(key)
 	if err != nil || !ok {
 		t.Fatalf("second lookup ok=%v err=%v", ok, err)
 	}
-	if second.Result.Proposal.AllowedValidationCommands[0].Argv[0] != "go" || second.ResultDigest != ResultDigest(second.Result) {
-		t.Fatalf("cached command mutated: %+v", second)
+	candidate := second.Result.Candidate.(*ConfigurationFieldCandidate)
+	if candidate.FieldPath[0] != "feature" || second.EvidenceCatalog.Records[0].Analysis.BuildID == "mutated" || second.ResultDigest != ResultDigest(second.Result) {
+		t.Fatalf("cached private state mutated: %+v", second)
 	}
+}
+
+func (entry *CacheEntry) CandidateFieldPathForTest() []string {
+	return entry.Result.Candidate.(*ConfigurationFieldCandidate).FieldPath
 }
