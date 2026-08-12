@@ -236,6 +236,15 @@ func TestWorkspaceExecutionRequestBindsPromptAndRuntime(t *testing.T) {
 		t.Fatalf("unexpected prompt: %s", prompt)
 	}
 	tampered := execution
+	tampered.MaxSteps = 2
+	tampered.Hash, err = workspaceRequestDigest(tampered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateWorkspaceExecutionRequest(tampered); err == nil {
+		t.Fatal("two-step request was accepted")
+	}
+	tampered = execution
 	tampered.MaxSteps++
 	if err := ValidateWorkspaceExecutionRequest(tampered); err == nil {
 		t.Fatal("tampered request was accepted")

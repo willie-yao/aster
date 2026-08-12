@@ -30,6 +30,7 @@ const (
 	defaultOpenCodeBin        = "opencode"
 	openCodeEvidenceAgent     = "analysis-evidence"
 	openCodeFinalizationAgent = "analysis-finalize"
+	openCodeFinalizationSteps = 2
 )
 
 // OpenCodeSpec is the non-secret analyzer invocation.
@@ -937,8 +938,8 @@ func unescapeMountInfo(value string) string {
 }
 
 func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps, contextTokens, outputTokens int) error {
-	if maxSteps < 2 {
-		return fmt.Errorf("OpenCode analysis requires at least two steps")
+	if maxSteps <= openCodeFinalizationSteps {
+		return fmt.Errorf("OpenCode analysis requires at least three steps")
 	}
 	dir := filepath.Join(home, ".config", "opencode")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -984,10 +985,10 @@ func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps, c
 		}},
 		"agent": map[string]any{
 			openCodeEvidenceAgent: map[string]any{
-				"mode": "primary", "steps": maxSteps - 1, "prompt": agentanalysis.WorkspaceAgentPrompt(), "permission": evidencePermissions,
+				"mode": "primary", "steps": maxSteps - openCodeFinalizationSteps, "prompt": agentanalysis.WorkspaceAgentPrompt(), "permission": evidencePermissions,
 			},
 			openCodeFinalizationAgent: map[string]any{
-				"mode": "primary", "steps": 1, "prompt": agentanalysis.WorkspaceFinalizerPrompt(), "permission": finalizationPermissions,
+				"mode": "primary", "steps": openCodeFinalizationSteps, "prompt": agentanalysis.WorkspaceFinalizerPrompt(), "permission": finalizationPermissions,
 			},
 		},
 		"permission": map[string]any{"*": "deny"},
