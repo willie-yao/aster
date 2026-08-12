@@ -25,6 +25,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationinvestigation"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 	"gopkg.in/yaml.v3"
 )
@@ -310,6 +311,33 @@ func TestRemediationModelCapabilityManifestAndPreflight(t *testing.T) {
 		if forbidden != "" && strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("pre-fix provider input exposes scorer-private value %q", forbidden)
 		}
+	}
+}
+
+func TestRemediationModelCapabilityPostFixRelationshipTextDoesNotBlockAlreadyFixed(t *testing.T) {
+	manifest, _ := loadRemediationModelCapabilityManifest(t)
+	capabilityCase := temporalCaseByState(t, manifest.Cases, "post_fix")
+	input, source, browser := remediationModelCapabilityInput(t, capabilityCase, strings.Repeat("f", 64))
+	entry, err := remediationModelCapabilityOracleEntry(t.Context(), input, source, browser, capabilityCase.ScorerPrivate.KnownTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry.Result.Hypotheses[0].RelationshipReason = "Delete conversion webhook configurations to disable conversion."
+	entry.ResultDigest = remediationinvestigation.ResultDigest(entry.Result)
+
+	verifier, err := remediationinvestigation.NewVerifier(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := verifier.Verify(t.Context(), input, entry, browser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Classification != remediationinvestigation.ClassificationAlreadyFixed || verified.Proposal != nil || verified.CurrentSource == nil {
+		t.Fatalf("verified=%+v", verified)
+	}
+	if verified.PolicyRuleID != "" || verified.PolicyWarningRuleID != remediationpolicy.RuleRelationshipTextWarning {
+		t.Fatalf("policy result=%+v", verified)
 	}
 }
 
