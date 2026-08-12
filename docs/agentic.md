@@ -1,5 +1,9 @@
 # Agentic AI analysis (tool calling)
 
+For the concise implementation and ownership map, see
+[In-process failure analyzer architecture](architecture/in-process-analyzer.md).
+This page is the detailed configuration, tuning, and operational reference.
+
 The agentic loop is the engine's single analysis approach: the LLM decides which
 artifacts to read instead of pre-fetching a fixed set. The model calls
 function-calling tools that browse the build's GCS artifact tree:
@@ -934,11 +938,13 @@ deterministically. It also derives the compatibility `systemic`, confidence,
 shared-root-cause, and shared-build fields without inventing remediation.
 
 The correlation cache key covers the prompt version, model input, representatives,
-ordered run window, and source identity. A final pattern failure aborts public
-publication and retains the prior successful generation. The causal result is
-published in each job detail and repeated active groups are aggregated into
-`flakiness.json` for **Needs Attention**. Observation-only recovery remains a
-separate recurring-pattern lifecycle and does not prove a source fix.
+ordered run window, and source identity. Pattern failures are isolated per job.
+Before public output, `patterns.MergeLastGood` publishes a fresh successful
+verdict, retains a prior valid verdict after an eligible failed refresh, or
+publishes no fabricated fallback when no prior verdict exists. Repeated active
+groups are aggregated into `flakiness.json` for **Needs Attention**.
+Observation-only recovery remains a separate recurring-pattern lifecycle and
+does not prove a source fix.
 
 Each published causal group receives an engine-derived ID and content hash. The
 hash covers the exact causal content and canonical build set, not remediation
@@ -948,13 +954,17 @@ source-grounded implementation target has been verified. The job page shows this
 state in an always-visible **Remediation** section while keeping technical detail
 collapsed.
 
-The causal-group analyzer never investigates or proposes a fix. A later,
+The causal-group analyzer never investigates or proposes a fix. A separate,
 explicitly initiated read-only remediation investigation may inspect pinned source
-and classify the result, but it must bind to the published pattern and group
-hashes. Until that operation is implemented and deterministically verified, no
-**Investigate possible fix** control is rendered. Causal-group results remain
-blocked from File Issue, Fix PR, remediation tracking, resolution, and chat-fix
-paths by `models.PatternAllowsActions` and their existing independent gates.
+and classify the result, but it binds to the published pattern and causal-group
+hashes and uses its own private cache. The model returns bounded target
+hypotheses. Dashboard code validates their evidence, typed targets, engine-derived
+expected behavior, remediation safety policy, and current and failure-revision
+source state before it can derive a private verified proposal and safe public
+target summary. Model-authored relationship prose is non-authoritative. Even a
+public `actionable` summary does not grant action eligibility: causal-group
+patterns remain categorically blocked from File Issue, Fix PR, remediation
+tracking, resolution, and chat-fix by `models.PatternAllowsActions`.
 
 Individual failure source grounding remains unchanged. Per-build analysis may use
 read-only repository tools at an immutable revision and may publish source links.

@@ -295,10 +295,10 @@ first. Quick map:
   a failure signal with required evidence the model must read before
   claiming that class of failure. The loaded skill hash is retained as
   provenance and changes affect new analyses only.
-- **Tools** (`tools/`): `filesystem` (list/read/tail/grep over GCS) +
-  `k8s` (discover_clusters, discover_controllers, ...). Read-only. No
-  shell or write tools, ever. No browser tools. (See "What we explicitly
-  are NOT doing" in any historical plan.)
+- **Tools** (`tools/`): `filesystem` (list/read/tail/grep over GCS),
+  optional `k8s` discovery helpers, and read-only `repotree` tools when a build
+  resolves to a pinned source revision. No shell or write tools, ever. No
+  browser tools.
 - **Prompt composition** (`compose.go`): engine `BasePrompt` + consumer's
   `prompts/system.md` + engine `ResponseFormatFooter`. The fetcher hard-
   errors at startup if `-ai` is enabled and `prompts/system.md` is missing
@@ -362,7 +362,8 @@ live deploy.
 - `docs/project-configuration.md` - strict project.yaml field reference.
 - `docs/github-pages.md` - GitHub Actions and Pages deployment.
 - `docs/troubleshooting.md` - first-deploy failures and checks.
-- `docs/agentic.md` - agentic mode, tool docs, floors, critique gate.
+- `docs/architecture/in-process-analyzer.md` - concise analyzer architecture and contributor map.
+- `docs/agentic.md` - agentic configuration, tool details, floors, and critique reference.
 - `docs/remediation-investigation.md` - private causal-group investigation contracts, cache, and benchmark.
 - `docs/skills.md` - consumer-side recipe registry format + hashing.
 - `docs/writing-prompts.md` - how `prompts/system.md` slots into the
