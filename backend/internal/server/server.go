@@ -71,11 +71,12 @@ type Options struct {
 	Capabilities Capabilities
 	// Auth enables admin-gated operator features. Actions additionally enables
 	// write endpoints. With no Auth the server stays read-only.
-	Auth                auth.Authenticator
-	Actions             ActionRunner
-	AnalysisChat        AnalysisChatRunner
-	AnalysisCorrections AnalysisCorrectionRunner
-	SourceInvestigation SourceInvestigationRunner
+	Auth                           auth.Authenticator
+	Actions                        ActionRunner
+	AnalysisChat                   AnalysisChatRunner
+	AnalysisCorrections            AnalysisCorrectionRunner
+	SourceInvestigation            SourceInvestigationRunner
+	CausalRemediationInvestigation CausalRemediationInvestigationRunner
 	// ChatFix bridges one selected chat response into the existing fix preview.
 	ChatFix ChatFixRunner
 	// ActionTimeout bounds a single action. Zero uses defaultActionTimeout.
@@ -84,6 +85,8 @@ type Options struct {
 	AnalysisChatTimeout time.Duration
 	// SourceInvestigationTimeout bounds one read-only source run.
 	SourceInvestigationTimeout time.Duration
+	// CausalRemediationRequestTimeout bounds synchronous start and status validation.
+	CausalRemediationRequestTimeout time.Duration
 	// AuthMode is advertised to the frontend: "oauth" (show a sign-in button),
 	// "proxy" (auth handled upstream), or "dev" for local use.
 	AuthMode string
@@ -157,9 +160,11 @@ type Features struct {
 	// AIUsage enables the private token and cost API.
 	AIUsage bool `json:"ai_usage,omitempty"`
 	// AnalysisChat enables authenticated conversations about one published analysis.
-	AnalysisChat        bool `json:"analysis_chat,omitempty"`
-	AnalysisCorrections bool `json:"analysis_corrections,omitempty"`
-	SourceInvestigation bool `json:"source_investigation,omitempty"`
+	AnalysisChat                                bool `json:"analysis_chat,omitempty"`
+	AnalysisCorrections                         bool `json:"analysis_corrections,omitempty"`
+	SourceInvestigation                         bool `json:"source_investigation,omitempty"`
+	CausalRemediationInvestigation              bool `json:"causal_remediation_investigation,omitempty"`
+	CausalRemediationInvestigationAuthenticated bool `json:"causal_remediation_investigation_authenticated,omitempty"`
 	// ChatFix enables server-validated chat context for fix previews.
 	ChatFix              bool   `json:"chat_fix,omitempty"`
 	ChatFixMinConfidence string `json:"chat_fix_min_confidence,omitempty"`
@@ -279,6 +284,22 @@ func Handler(opts Options) (http.Handler, error) {
 		guard := func(next http.Handler) http.Handler { return csrfGuard(trusted, next) }
 		mux.Handle("POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview",
 			auth.Middleware(opts.Auth, guard(previewChatFixHandler(timeout, opts.ChatFix))))
+	}
+
+	if opts.Auth != nil && opts.CausalRemediationInvestigation != nil {
+		caps.Features.CausalRemediationInvestigation = true
+		caps.Features.CausalRemediationInvestigationAuthenticated = true
+		timeout := opts.CausalRemediationRequestTimeout
+		if timeout <= 0 {
+			timeout = 45 * time.Second
+		}
+		trusted := trustedOriginSet(opts.TrustedOrigins)
+		guard := func(next http.Handler) http.Handler { return csrfGuard(trusted, next) }
+		path := "/api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation"
+		mux.Handle("POST "+path,
+			auth.Middleware(opts.Auth, guard(startCausalRemediationInvestigationHandler(timeout, opts.CausalRemediationInvestigation))))
+		mux.Handle("GET "+path,
+			auth.Middleware(opts.Auth, getCausalRemediationInvestigationHandler(timeout, opts.CausalRemediationInvestigation)))
 	}
 
 	if opts.Auth != nil && opts.AnalysisCorrections != nil {

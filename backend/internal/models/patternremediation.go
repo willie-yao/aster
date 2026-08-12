@@ -14,14 +14,17 @@ const patternRemediationNotInvestigatedReason = "No source-grounded implementati
 func ValidPatternRemediationInvestigationState(state PatternRemediationInvestigationState) bool {
 	switch state {
 	case PatternRemediationNotInvestigated,
+		PatternRemediationQueued,
 		PatternRemediationInvestigating,
+		PatternRemediationVerifying,
 		PatternRemediationActionable,
 		PatternRemediationAlreadyFixed,
 		PatternRemediationExternalDependency,
 		PatternRemediationEnvironmentOrInfrastructure,
 		PatternRemediationMitigationOnly,
 		PatternRemediationInsufficientEvidence,
-		PatternRemediationInvestigationFailed:
+		PatternRemediationInvestigationFailed,
+		PatternRemediationStale:
 		return true
 	default:
 		return false

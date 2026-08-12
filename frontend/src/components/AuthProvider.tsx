@@ -16,7 +16,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (features.actions ||
       Boolean(features.analysis_traces) ||
       Boolean(features.analysis_chat) ||
-      Boolean(features.fetch_status));
+      Boolean(features.fetch_status) ||
+      Boolean(features.causal_remediation_investigation_authenticated));
   const mode = auth?.mode ?? null;
   const loginUrl = auth?.login_url;
 

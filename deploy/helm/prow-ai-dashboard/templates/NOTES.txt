@@ -41,13 +41,13 @@ Service origin:
   NodePort exposes the server on every selected node. Prefer ClusterIP or an
   explicitly restricted LoadBalancer for authenticated actions or chat.
 {{- end }}
-{{- if and (or .Values.server.actions.enabled .Values.server.chat.enabled) (not .Values.networkPolicy.enabled) }}
+{{- if and (or .Values.server.actions.enabled .Values.server.chat.enabled .Values.server.remediationInvestigation.enabled) (not .Values.networkPolicy.enabled) }}
   Authenticated actions or chat are enabled while NetworkPolicy is disabled.
 {{- end }}
   Service annotations are pass-through configuration, not proof that the
   origin is unreachable. Verify the deployed network path directly.
 
-{{- if and (or .Values.server.actions.enabled .Values.server.chat.enabled) (eq .Values.server.actions.mode "oauth") }}
+{{- if and (or .Values.server.actions.enabled .Values.server.chat.enabled .Values.server.remediationInvestigation.enabled) (eq .Values.server.actions.mode "oauth") }}
 OAuth access:
   GitHub OAuth uses the identity-only read:user scope.
 {{- if .Values.server.actions.enabled }}

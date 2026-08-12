@@ -453,6 +453,12 @@ server:
     # Allows OAuth cookies over local HTTP. This also acknowledges local HTTP
     # and must never be enabled on a deployed dashboard.
     allowInsecureCookies: false
+  # Explicit authenticated read-only causal remediation investigation.
+  # This does not enable File Issue or Fix PR actions.
+  remediationInvestigation:
+    enabled: false
+    timeout: 10m
+    maxOperations: 256
   # Admin-gated read-only conversations about a published AI analysis.
   # Uses the authentication settings under actions, but does not enable writes
   # or require BOT_TOKEN. Sessions are persisted on the shared volume so server

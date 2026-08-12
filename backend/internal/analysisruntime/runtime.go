@@ -227,7 +227,7 @@ func (f analysisChatBrowserFactory) ForBuild(buildPrefix, displayName string) ar
 }
 
 func (f analysisChatBrowserFactory) ForBuilds(builds []analysischat.ArtifactBuild) artifacts.Browser {
-	return newPatternBrowser(f, builds)
+	return NewPatternBrowser(f, builds)
 }
 
 // NewAnalysisChatAgent creates the interactive read-only conversation runner.

@@ -16,6 +16,8 @@ export interface CapabilityFeatures {
   analysis_chat?: boolean;
   analysis_corrections?: boolean;
   source_investigation?: boolean;
+  causal_remediation_investigation?: boolean;
+  causal_remediation_investigation_authenticated?: boolean;
   chat_fix?: boolean;
   chat_fix_min_confidence?: string;
 }

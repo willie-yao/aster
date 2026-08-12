@@ -10,7 +10,9 @@ import type { PatternRemediationInvestigationState } from "../src/types/dashboar
 
 const states: PatternRemediationInvestigationState[] = [
   "not_investigated",
+  "queued",
   "investigating",
+  "verifying",
   "actionable",
   "already_fixed",
   "external_dependency",
@@ -18,6 +20,7 @@ const states: PatternRemediationInvestigationState[] = [
   "mitigation_only",
   "insufficient_evidence",
   "failed",
+  "stale",
 ];
 
 test("causal remediation defaults to an explicit non-actionable state", () => {
@@ -55,10 +58,12 @@ test("technical reasons remain separate from the concise state message", () => {
 });
 
 
-test("PR 1 renders status without a clickable investigation action", () => {
+test("authenticated remediation UI renders only the investigation action", () => {
   const component = readFileSync(resolve(process.cwd(), "src/components/PatternRemediation.tsx"), "utf8");
   assert.match(component, />\s*Remediation\s*</);
   assert.match(component, /aria-live="polite"/);
   assert.match(component, /Investigation details/);
-  assert.doesNotMatch(component, /<Button|onClick=/);
+  assert.match(component, /Investigate possible fix/);
+  assert.match(component, /causal_remediation_investigation/);
+  assert.doesNotMatch(component, /Preview Fix PR/);
 });

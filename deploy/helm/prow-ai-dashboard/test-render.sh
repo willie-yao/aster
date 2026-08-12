@@ -928,6 +928,45 @@ if grep -Fq 'name: ANALYSIS_SOURCE_INVESTIGATION_ENABLED' "$tmp/chat-server.yaml
   echo 'source investigation enabled without explicit opt-in' >&2
   exit 1
 fi
+if grep -Fq 'name: CAUSAL_REMEDIATION_INVESTIGATION_ENABLED' "$tmp/chat-server.yaml"; then
+  echo 'causal remediation investigation enabled without explicit opt-in' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.remediationInvestigation.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=alice \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --set ai.endpoint=http://model.test/v1/chat/completions \
+  --set ai.model=test-model \
+  --show-only templates/server-deployment.yaml > "$tmp/causal-remediation.yaml"
+grep -A1 -Fq 'name: CAUSAL_REMEDIATION_INVESTIGATION_ENABLED' "$tmp/causal-remediation.yaml"
+grep -A1 -Fq 'name: CAUSAL_REMEDIATION_INVESTIGATION_TIMEOUT' "$tmp/causal-remediation.yaml"
+grep -Fq 'value: "10m"' "$tmp/causal-remediation.yaml"
+grep -A1 -Fq 'name: CAUSAL_REMEDIATION_INVESTIGATION_MAX_OPERATIONS' "$tmp/causal-remediation.yaml"
+grep -Fq 'value: "256"' "$tmp/causal-remediation.yaml"
+grep -Fq -- '- -project-dir=/config' "$tmp/causal-remediation.yaml"
+grep -Fq 'name: AI_TOKEN' "$tmp/causal-remediation.yaml"
+if grep -Fq 'name: ACTIONS_ENABLED' "$tmp/causal-remediation.yaml" || grep -Fq 'name: BOT_TOKEN' "$tmp/causal-remediation.yaml"; then
+  echo 'causal remediation rendered write-action credentials' >&2
+  exit 1
+fi
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.remediationInvestigation.enabled=true > "$tmp/causal-remediation-without-ai.yaml" 2>&1; then
+  echo 'causal remediation accepted without AI' >&2
+  exit 1
+fi
+validation_error_contains "$tmp/causal-remediation-without-ai.yaml" 'server.remediationInvestigation.enabled requires ai.enabled'
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.remediationInvestigation.maxOperations=0 > "$tmp/causal-remediation-invalid-limit.yaml" 2>&1; then
+  echo 'causal remediation accepted an invalid operation limit' >&2
+  exit 1
+fi
+validation_error_contains "$tmp/causal-remediation-invalid-limit.yaml" 'server.remediationInvestigation.maxOperations'
 
 if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true \

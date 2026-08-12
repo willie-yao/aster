@@ -160,7 +160,7 @@ call site.
 {{- $internalEnabled := $internal.enabled | default false -}}
 {{- $internalAnnotations := $internal.annotations | default dict -}}
 {{- $publicAcknowledged := $service.publicOriginAcknowledged | default false -}}
-{{- $interactive := or .Values.server.actions.enabled .Values.server.chat.enabled -}}
+{{- $interactive := or .Values.server.actions.enabled .Values.server.chat.enabled .Values.server.remediationInvestigation.enabled -}}
 {{- if and (gt (len $ranges) 0) (ne $serviceType "LoadBalancer") -}}
 {{- fail "server.service.loadBalancerSourceRanges requires server.service.type=LoadBalancer" -}}
 {{- end -}}

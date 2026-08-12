@@ -12,6 +12,7 @@ runtime.
 | Feature | Required deployment | Risk and effect | Reference |
 | --- | --- | --- | --- |
 | Analysis chat | Kubernetes with authentication | Read-only model conversations stored as private server state | [Analysis chat API](server.md#analysis-chat-api) |
+| Causal remediation investigation | Kubernetes with authentication | Explicit read-only source investigation with safe status only; File Issue and Fix PR stay blocked | [Causal remediation investigation](server.md#causal-remediation-investigation-api) |
 | File Issue | Kubernetes with authenticated actions | Creates a reviewed GitHub issue after explicit confirmation | [Admin-gated actions](server.md#admin-gated-actions) |
 | Mark Resolved | Kubernetes with authenticated actions | Writes dashboard resolution state, but does not change source code | [Admin-gated actions](server.md#admin-gated-actions) |
 | Email notifications | Pages or Kubernetes | Sends failure summaries to configured recipients | [Email notifications](notifications.md) |
@@ -29,11 +30,13 @@ required credentials are configured.
 1. Deploy the read-only dashboard with in-process analysis.
 2. Add authentication and analysis chat if maintainers need private follow-up
    conversations.
-3. Enable File Issue and Mark Resolved after the authentication boundary is
+3. Enable causal remediation investigation if maintainers need verified
+   implementation-target triage without GitHub writes.
+4. Enable File Issue and Mark Resolved after the authentication boundary is
    reviewed.
-4. Add notifications or scheduled issue automation with narrowly scoped
+5. Add notifications or scheduled issue automation with narrowly scoped
    credentials.
-5. Evaluate Fix PR generation or external runtimes only in a separate,
+6. Evaluate Fix PR generation or external runtimes only in a separate,
    explicitly experimental rollout.
 
 The focused references contain the complete credential, authorization,

@@ -445,6 +445,9 @@ export function PatternBanner({
         <PatternRemediation
           groups={pattern.causal_groups ?? []}
           investigations={pattern.remediation_investigations}
+          jobID={jobID}
+          patternID={pattern.id}
+          patternHash={pattern.content_hash}
         />
       ) : undefined}
       actions={actions}
