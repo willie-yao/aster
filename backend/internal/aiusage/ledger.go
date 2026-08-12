@@ -387,6 +387,7 @@ func normalizeOperation(operation OperationUsage, now time.Time) OperationUsage 
 	}
 	operation.ModelFingerprint = safeFingerprint(operation.ModelFingerprint)
 	operation.Model = safeModelID(operation.Model)
+	operation.ReasoningEffort = safeReasoningEffort(operation.ReasoningEffort)
 	if !validUsageSource(operation.UsageSource) {
 		operation.UsageSource = ""
 	}

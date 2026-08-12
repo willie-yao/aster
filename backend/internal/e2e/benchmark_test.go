@@ -687,7 +687,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	}
 	cacheDir := benchmarkCacheDir(t, bc, repetition, identity)
 	clientOptions := ai.Options{
-		Token: token, API: apiMode, Endpoint: endpoint, Model: model, CacheDir: cacheDir,
+		Token: token, API: apiMode, Endpoint: endpoint, Model: model, ReasoningEffort: identity.ReasoningEffort, CacheDir: cacheDir,
 	}
 	client := ai.NewClientWithOptions(clientOptions)
 

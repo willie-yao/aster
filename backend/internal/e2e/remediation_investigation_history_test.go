@@ -162,6 +162,7 @@ func TestRemediationInvestigationHistoricalBenchmark(t *testing.T) {
 	manifest, raw := loadRemediationHistoryManifest(t)
 	engineCommit := remediationBenchmarkEngineCommit(t)
 	manifestSum := sha256.Sum256(raw)
+	reasoningEffort := benchmarkReasoningEffort(t)
 	if err := os.MkdirAll(filepath.Dir(resultsPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -172,13 +173,13 @@ func TestRemediationInvestigationHistoricalBenchmark(t *testing.T) {
 	defer file.Close()
 	for _, historyCase := range manifest.Cases {
 		for repetition := 1; repetition <= repetitions; repetition++ {
-			client := ai.NewClientWithOptions(ai.Options{Token: os.Getenv("AI_TOKEN"), API: apiMode, Endpoint: endpoint, Model: modelName})
+			client := ai.NewClientWithOptions(ai.Options{Token: os.Getenv("AI_TOKEN"), API: apiMode, Endpoint: endpoint, Model: modelName, ReasoningEffort: reasoningEffort})
 			input, source, browser := remediationHistoryInput(t, historyCase, client.ModelFingerprint())
 			row := remediationHistoryTrial{remediationBenchmarkTrial: remediationBenchmarkTrial{
 				CaseID: historyCase.ID, Category: historyCase.Category, Repetition: repetition,
 				EngineCommit: engineCommit, ManifestSHA256: hex.EncodeToString(manifestSum[:]), EffectiveInputSHA256: historyCase.EffectiveInputSHA256,
 				PatternHash: input.PatternHash, CausalGroupHash: input.CausalGroupHash,
-				ProviderFingerprint: client.ModelFingerprint(), Model: modelName, APIMode: apiMode,
+				ProviderFingerprint: client.ModelFingerprint(), Model: modelName, APIMode: apiMode, ReasoningEffort: string(client.ReasoningEffort()),
 				PromptVersion: remediationinvestigation.PromptVersion, SchemaVersion: remediationinvestigation.SchemaVersion,
 				VerificationVersion: remediationinvestigation.VerificationVersion, ResultVersion: remediationinvestigation.ResultVersion,
 				ExpectedClassification: historyCase.Expected.Classification,

@@ -337,3 +337,17 @@ func TestLookupAgenticCacheReportsLookupMissing(t *testing.T) {
 		t.Fatalf("reason = %q, want %q", got, CacheRejectedLookupMissing)
 	}
 }
+
+func TestAgenticCachePolicyReasoningEffortIdentity(t *testing.T) {
+	const endpoint = "https://provider.invalid/v1/responses"
+	const model = "model"
+	empty := NewClientWithOptions(Options{API: APIResponses, Endpoint: endpoint, Model: model})
+	high := NewClientWithOptions(Options{API: APIResponses, Endpoint: endpoint, Model: model, ReasoningEffort: ReasoningEffortHigh})
+	legacyHash := ModelFingerprint(APIResponses, endpoint, model)
+	if got := agenticCachePolicy(empty, AgenticOptions{}, "", "", 0).ModelHash; got != legacyHash {
+		t.Fatalf("empty effort cache hash = %q, want legacy %q", got, legacyHash)
+	}
+	if got := agenticCachePolicy(high, AgenticOptions{}, "", "", 0).ModelHash; got == legacyHash {
+		t.Fatal("non-empty effort reused legacy cache hash")
+	}
+}

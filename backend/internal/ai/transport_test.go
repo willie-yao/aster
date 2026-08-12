@@ -55,7 +55,7 @@ func TestClientCallModelRecordsTrace(t *testing.T) {
 			OutputTokens: 7, ReasoningTokens: 2,
 		},
 	}}
-	client := &Client{model: "model-a", transport: transport}
+	client := &Client{model: "model-a", reasoningEffort: ReasoningEffortHigh, transport: transport}
 	store := NewTraceStore()
 	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIResponses})
 	ctx := withAnalysisTrace(context.Background(), trace)
@@ -64,7 +64,7 @@ func TestClientCallModelRecordsTrace(t *testing.T) {
 	}
 	trace.Finish("success", nil)
 	event := store.Snapshot().Traces[0].Events[0]
-	if event.Kind != "model_request" || event.ResponseID != "resp-1" || event.Attempts != 2 || !event.UsageReported || event.InputTokens != 11 || event.CachedInputTokens != 3 || !event.CacheWriteInputTokensReported || event.CacheWriteInputTokens != 2 || event.OutputTokens != 7 || event.ReasoningTokens != 2 || event.ToolCallCount != 1 {
+	if event.Kind != "model_request" || event.ResponseID != "resp-1" || event.Attempts != 2 || !event.UsageReported || event.InputTokens != 11 || event.CachedInputTokens != 3 || !event.CacheWriteInputTokensReported || event.CacheWriteInputTokens != 2 || event.OutputTokens != 7 || event.ReasoningTokens != 2 || event.ReasoningEffort != "high" || event.ToolCallCount != 1 {
 		t.Fatalf("event = %+v", event)
 	}
 }
@@ -76,13 +76,17 @@ func TestClientCallModelRecordsUsageOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	transport := &recordingTransport{result: &modelResponse{Usage: aiusage.TokenUsage{Reported: true, InputTokens: 9, OutputTokens: 4}}}
-	client := &Client{model: "model-a", transport: transport}
+	client := &Client{model: "model-a", reasoningEffort: ReasoningEffortXHigh, transport: transport}
 	ctx, operation := aiusage.Begin(t.Context(), recorder, aiusage.Metadata{LogicalID: "request", Origin: aiusage.OriginFetcher, Feature: aiusage.FeatureFailureAnalysis, StartedAt: now})
 	if _, err := client.callModel(ctx, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	operation.Finish(aiusage.OutcomeSuccess)
-	got := recorder.Snapshot().Days[0].Totals
+	snapshot := recorder.Snapshot()
+	got := snapshot.Days[0].Totals
+	if len(snapshot.RecentOperations) != 1 || snapshot.RecentOperations[0].ReasoningEffort != "xhigh" {
+		t.Fatalf("recent operations = %+v", snapshot.RecentOperations)
+	}
 	if got.ModelRequests != 1 || got.ReportedRequests != 1 || got.CacheWriteUnreportedRequests != 1 || got.InputTokens != 9 || got.OutputTokens != 4 {
 		t.Fatalf("usage totals = %+v", got)
 	}

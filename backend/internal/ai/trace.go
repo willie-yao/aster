@@ -41,18 +41,19 @@ type AnalysisTraceFile struct {
 
 // AnalysisTrace records sanitized control-flow metadata for one failure.
 type AnalysisTrace struct {
-	JobID      string       `json:"job_id"`
-	BuildID    string       `json:"build_id"`
-	TestName   string       `json:"test_name"`
-	APIMode    string       `json:"api_mode"`
-	Model      string       `json:"model,omitempty"`
-	StartedAt  string       `json:"started_at"`
-	RecordedAt string       `json:"recorded_at,omitempty"`
-	ElapsedMs  int          `json:"elapsed_ms"`
-	Outcome    string       `json:"outcome"`
-	ErrorCode  string       `json:"error_code,omitempty"`
-	Truncated  bool         `json:"truncated,omitempty"`
-	Events     []TraceEvent `json:"events"`
+	JobID           string       `json:"job_id"`
+	BuildID         string       `json:"build_id"`
+	TestName        string       `json:"test_name"`
+	APIMode         string       `json:"api_mode"`
+	Model           string       `json:"model,omitempty"`
+	ReasoningEffort string       `json:"reasoning_effort,omitempty"`
+	StartedAt       string       `json:"started_at"`
+	RecordedAt      string       `json:"recorded_at,omitempty"`
+	ElapsedMs       int          `json:"elapsed_ms"`
+	Outcome         string       `json:"outcome"`
+	ErrorCode       string       `json:"error_code,omitempty"`
+	Truncated       bool         `json:"truncated,omitempty"`
+	Events          []TraceEvent `json:"events"`
 }
 
 // DraftDecisionTrace records one content-free draft replacement decision.
@@ -110,6 +111,7 @@ type TraceEvent struct {
 	CacheWriteInputTokensReported bool                `json:"cache_write_input_tokens_reported,omitempty"`
 	OutputTokens                  int                 `json:"output_tokens,omitempty"`
 	ReasoningTokens               int                 `json:"reasoning_tokens,omitempty"`
+	ReasoningEffort               string              `json:"reasoning_effort,omitempty"`
 	EstimatedPromptTokens         int                 `json:"estimated_prompt_tokens,omitempty"`
 	ContextLimitTokens            int                 `json:"context_limit_tokens,omitempty"`
 	ReservedTokens                int                 `json:"reserved_tokens,omitempty"`
@@ -154,11 +156,12 @@ type TraceEvent struct {
 
 // TraceMetadata identifies one analysis without endpoint details.
 type TraceMetadata struct {
-	JobID    string
-	BuildID  string
-	TestName string
-	APIMode  string
-	Model    string
+	JobID           string
+	BuildID         string
+	TestName        string
+	APIMode         string
+	Model           string
+	ReasoningEffort string
 }
 
 // TraceStore collects completed traces for one fetch run.
@@ -207,13 +210,14 @@ func (s *TraceStore) Start(meta TraceMetadata) *TraceSession {
 		store: s,
 		start: now,
 		trace: AnalysisTrace{
-			JobID:     traceText(meta.JobID),
-			BuildID:   traceText(meta.BuildID),
-			TestName:  traceText(meta.TestName),
-			APIMode:   traceText(meta.APIMode),
-			Model:     traceText(meta.Model),
-			StartedAt: now.Format(time.RFC3339Nano),
-			Events:    []TraceEvent{},
+			JobID:           traceText(meta.JobID),
+			BuildID:         traceText(meta.BuildID),
+			TestName:        traceText(meta.TestName),
+			APIMode:         traceText(meta.APIMode),
+			Model:           traceText(meta.Model),
+			ReasoningEffort: safeReasoningEffortTrace(meta.ReasoningEffort),
+			StartedAt:       now.Format(time.RFC3339Nano),
+			Events:          []TraceEvent{},
 		},
 	}
 }
@@ -273,6 +277,7 @@ func (s *TraceSession) Record(event TraceEvent) {
 	event.ResponseID = traceResponseID(event.ResponseID)
 	event.Status = traceText(event.Status)
 	event.FinishReason = traceText(event.FinishReason)
+	event.ReasoningEffort = safeReasoningEffortTrace(event.ReasoningEffort)
 	event.Tool = traceText(event.Tool)
 	if event.ErrorCode != "" {
 		event.ErrorCode = traceCode(event.ErrorCode)
@@ -379,6 +384,14 @@ func recordTrace(ctx context.Context, event TraceEvent) {
 func traceText(s string) string {
 	s = strings.TrimSpace(redact.Credentials(redact.URLs(s)))
 	return textutil.Truncate(s, analysisTraceMaxText)
+}
+
+func safeReasoningEffortTrace(value string) string {
+	effort, err := NormalizeReasoningEffort(value)
+	if err != nil {
+		return ""
+	}
+	return string(effort)
 }
 
 func traceResponseID(s string) string {

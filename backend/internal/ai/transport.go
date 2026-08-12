@@ -127,9 +127,13 @@ func (c *Client) callModel(ctx context.Context, messages []modelMessage, toolDef
 }
 
 func (c *Client) callModelRequest(ctx context.Context, request modelRequest) (*modelResponse, error) {
+	if c.reasoningEffortErr != nil {
+		return nil, c.reasoningEffortErr
+	}
+	request.ReasoningEffort = c.reasoningEffort
 	start := time.Now()
 	resp, err := c.transport.Complete(ctx, request)
-	event := TraceEvent{Kind: "model_request", DurationMs: int(time.Since(start) / time.Millisecond), MessageCount: len(request.Messages)}
+	event := TraceEvent{Kind: "model_request", DurationMs: int(time.Since(start) / time.Millisecond), MessageCount: len(request.Messages), ReasoningEffort: string(request.ReasoningEffort)}
 	usage := aiusage.TokenUsage{}
 	if resp != nil {
 		usage = resp.Usage
@@ -147,7 +151,7 @@ func (c *Client) callModelRequest(ctx context.Context, request modelRequest) (*m
 		event.ReasoningTokens = resp.Usage.ReasoningTokens
 		event.ToolCallCount = len(resp.Message.ToolCalls)
 	}
-	aiusage.ObserveModelRequestWithModel(ctx, usage, c.model, c.modelFingerprint())
+	aiusage.ObserveModelRequestWithModelAndReasoningEffort(ctx, usage, c.model, c.modelFingerprint(), string(request.ReasoningEffort))
 	if err != nil {
 		event.Outcome = "error"
 		event.ErrorCode = traceErrorCode(err)
@@ -175,6 +179,7 @@ type modelRequest struct {
 	ToolChoice        *ToolChoice
 	MaxResponseBytes  int64
 	OmitReasoning     bool
+	ReasoningEffort   ReasoningEffort
 }
 
 const defaultModelHTTPResponseBytes int64 = 8 << 20

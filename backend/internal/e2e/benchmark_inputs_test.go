@@ -30,6 +30,7 @@ type benchmarkRunIdentity struct {
 	FrozenEvidenceSHA256   string
 	EvidenceStageSHA256    string
 	APIMode                string
+	ReasoningEffort        ai.ReasoningEffort
 	ProviderPath           string
 	TransportID            string
 }
@@ -57,6 +58,7 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, model string)
 	resultsEnabled := strings.TrimSpace(os.Getenv("BENCH_RESULTS_JSONL")) != ""
 	providerPath := strings.TrimSpace(os.Getenv("BENCH_PROVIDER_PATH"))
 	transportID := strings.TrimSpace(os.Getenv("BENCH_TRANSPORT_ID"))
+	reasoningEffort := benchmarkReasoningEffort(t)
 	if resultsEnabled && (providerPath == "" || transportID == "") {
 		t.Fatal("BENCH_PROVIDER_PATH and BENCH_TRANSPORT_ID are required when BENCH_RESULTS_JSONL is set")
 	}
@@ -71,6 +73,7 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, model string)
 			EngineCommit:      benchmarkEngineCommit(t, resultsEnabled),
 			EvidenceCondition: condition,
 			APIMode:           apiMode,
+			ReasoningEffort:   reasoningEffort,
 			ProviderPath:      providerPath,
 			TransportID:       transportID,
 		},
@@ -151,6 +154,15 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, model string)
 	return out
 }
 
+func benchmarkReasoningEffort(t *testing.T) ai.ReasoningEffort {
+	t.Helper()
+	effort, err := ai.NormalizeReasoningEffort(os.Getenv("AI_REASONING_EFFORT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return effort
+}
+
 func validateBenchmarkProviderPath(providerPath, model string) error {
 	providerPath = strings.TrimSpace(providerPath)
 	model = strings.TrimSpace(model)
@@ -195,6 +207,9 @@ func validateBenchmarkRunIdentity(identity benchmarkRunIdentity) error {
 	}
 	if identity.APIMode != ai.APIChatCompletions && identity.APIMode != ai.APIResponses {
 		return fmt.Errorf("benchmark API mode is invalid")
+	}
+	if effort, err := ai.NormalizeReasoningEffort(string(identity.ReasoningEffort)); err != nil || effort != identity.ReasoningEffort {
+		return fmt.Errorf("benchmark reasoning effort is invalid or not normalized")
 	}
 	if identity.ProviderPath != "" && (len(identity.ProviderPath) > 160 || strings.ContainsAny(identity.ProviderPath, " \t\r\n")) {
 		return fmt.Errorf("benchmark provider path is invalid")
@@ -242,22 +257,23 @@ func validateBenchmarkVariantDir(baseDir, variantDir string) error {
 
 func benchmarkEffectiveInputSHA256(identity benchmarkRunIdentity, agentic project.Agentic, cacheGeneration string) string {
 	data, err := json.Marshal(struct {
-		ProjectSHA256         string          `json:"project_sha256,omitempty"`
-		BaselinePromptSHA256  string          `json:"baseline_prompt_sha256,omitempty"`
-		EffectivePromptSHA256 string          `json:"effective_prompt_sha256"`
-		SkillSetHash          string          `json:"skill_set_hash"`
-		APIMode               string          `json:"api_mode"`
-		ProviderPath          string          `json:"provider_path,omitempty"`
-		TransportID           string          `json:"transport_id,omitempty"`
-		EvidenceCondition     string          `json:"evidence_condition"`
-		FrozenEvidenceSHA256  string          `json:"frozen_evidence_sha256,omitempty"`
-		EvidenceStageSHA256   string          `json:"evidence_stage_sha256,omitempty"`
-		CacheGeneration       string          `json:"cache_generation,omitempty"`
-		Agentic               project.Agentic `json:"agentic"`
+		ProjectSHA256         string             `json:"project_sha256,omitempty"`
+		BaselinePromptSHA256  string             `json:"baseline_prompt_sha256,omitempty"`
+		EffectivePromptSHA256 string             `json:"effective_prompt_sha256"`
+		SkillSetHash          string             `json:"skill_set_hash"`
+		APIMode               string             `json:"api_mode"`
+		ReasoningEffort       ai.ReasoningEffort `json:"reasoning_effort,omitempty"`
+		ProviderPath          string             `json:"provider_path,omitempty"`
+		TransportID           string             `json:"transport_id,omitempty"`
+		EvidenceCondition     string             `json:"evidence_condition"`
+		FrozenEvidenceSHA256  string             `json:"frozen_evidence_sha256,omitempty"`
+		EvidenceStageSHA256   string             `json:"evidence_stage_sha256,omitempty"`
+		CacheGeneration       string             `json:"cache_generation,omitempty"`
+		Agentic               project.Agentic    `json:"agentic"`
 	}{
 		ProjectSHA256: identity.ProjectSHA256, BaselinePromptSHA256: identity.BaselinePromptSHA256,
 		EffectivePromptSHA256: identity.EffectivePromptSHA256, SkillSetHash: identity.SkillSetHash,
-		APIMode: identity.APIMode, ProviderPath: identity.ProviderPath, TransportID: identity.TransportID,
+		APIMode: identity.APIMode, ReasoningEffort: identity.ReasoningEffort, ProviderPath: identity.ProviderPath, TransportID: identity.TransportID,
 		EvidenceCondition: identity.EvidenceCondition, FrozenEvidenceSHA256: identity.FrozenEvidenceSHA256, EvidenceStageSHA256: identity.EvidenceStageSHA256,
 		CacheGeneration: cacheGeneration, Agentic: agentic,
 	})
@@ -508,6 +524,11 @@ func TestValidateBenchmarkRunIdentity(t *testing.T) {
 	if err := validateBenchmarkRunIdentity(invalid); err == nil {
 		t.Fatal("invalid provider path was accepted")
 	}
+	invalid = valid
+	invalid.ReasoningEffort = " HIGH "
+	if err := validateBenchmarkRunIdentity(invalid); err == nil {
+		t.Fatal("non-normalized reasoning effort was accepted")
+	}
 }
 
 func TestBenchmarkEffectiveInputIncludesEvidenceCondition(t *testing.T) {
@@ -526,5 +547,49 @@ func TestBenchmarkEffectiveInputIncludesEvidenceCondition(t *testing.T) {
 	identity.EvidenceStageSHA256 = strings.Repeat("e", 64)
 	if withStages := benchmarkEffectiveInputSHA256(identity, project.Agentic{}, "generation"); withStages == oracle {
 		t.Fatal("evidence stage identities shared an effective input identity")
+	}
+}
+
+func TestBenchmarkReasoningEffortIdentity(t *testing.T) {
+	identity := benchmarkRunIdentity{
+		ProjectSHA256: strings.Repeat("a", 64), EffectivePromptSHA256: strings.Repeat("b", 64),
+		SkillSetHash: strings.Repeat("c", 64), APIMode: ai.APIResponses,
+		EvidenceCondition: benchmarkEvidenceConditionFixture,
+	}
+	empty := benchmarkEffectiveInputSHA256(identity, project.Agentic{}, "generation")
+	legacy, err := json.Marshal(struct {
+		ProjectSHA256         string          `json:"project_sha256,omitempty"`
+		BaselinePromptSHA256  string          `json:"baseline_prompt_sha256,omitempty"`
+		EffectivePromptSHA256 string          `json:"effective_prompt_sha256"`
+		SkillSetHash          string          `json:"skill_set_hash"`
+		APIMode               string          `json:"api_mode"`
+		ProviderPath          string          `json:"provider_path,omitempty"`
+		TransportID           string          `json:"transport_id,omitempty"`
+		EvidenceCondition     string          `json:"evidence_condition"`
+		FrozenEvidenceSHA256  string          `json:"frozen_evidence_sha256,omitempty"`
+		EvidenceStageSHA256   string          `json:"evidence_stage_sha256,omitempty"`
+		CacheGeneration       string          `json:"cache_generation,omitempty"`
+		Agentic               project.Agentic `json:"agentic"`
+	}{
+		ProjectSHA256: identity.ProjectSHA256, EffectivePromptSHA256: identity.EffectivePromptSHA256,
+		SkillSetHash: identity.SkillSetHash, APIMode: identity.APIMode,
+		EvidenceCondition: identity.EvidenceCondition, CacheGeneration: "generation", Agentic: project.Agentic{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty != sha256Hex(legacy) {
+		t.Fatalf("empty effort changed historical benchmark identity: got %s want %s", empty, sha256Hex(legacy))
+	}
+	identity.ReasoningEffort = ai.ReasoningEffortHigh
+	if high := benchmarkEffectiveInputSHA256(identity, project.Agentic{}, "generation"); high == empty {
+		t.Fatal("non-empty effort reused empty benchmark identity")
+	}
+}
+
+func TestBenchmarkReasoningEffortFromEnvironment(t *testing.T) {
+	t.Setenv("AI_REASONING_EFFORT", " HIGH ")
+	if got := benchmarkReasoningEffort(t); got != ai.ReasoningEffortHigh {
+		t.Fatalf("reasoning effort = %q, want high", got)
 	}
 }

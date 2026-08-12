@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
@@ -23,12 +24,31 @@ var callDelay = 500 * time.Millisecond
 
 // Client calls an OpenAI chat-completions compatible API for AI analysis.
 type Client struct {
-	api       *httpAPIClient
-	transport modelTransport
-	apiMode   string
-	apiURL    string
-	model     string
-	cache     *Cache
+	api                *httpAPIClient
+	transport          modelTransport
+	apiMode            string
+	apiURL             string
+	model              string
+	reasoningEffort    ReasoningEffort
+	reasoningEffortErr error
+	cache              *Cache
+}
+
+// ReasoningEffort is the normalized provider reasoning-effort contract.
+type ReasoningEffort = modelprovider.ReasoningEffort
+
+const (
+	ReasoningEffortNone   = modelprovider.ReasoningEffortNone
+	ReasoningEffortLow    = modelprovider.ReasoningEffortLow
+	ReasoningEffortMedium = modelprovider.ReasoningEffortMedium
+	ReasoningEffortHigh   = modelprovider.ReasoningEffortHigh
+	ReasoningEffortXHigh  = modelprovider.ReasoningEffortXHigh
+	ReasoningEffortMax    = modelprovider.ReasoningEffortMax
+)
+
+// NormalizeReasoningEffort normalizes and validates one requested effort.
+func NormalizeReasoningEffort(value string) (ReasoningEffort, error) {
+	return modelprovider.NormalizeReasoningEffort(value)
 }
 
 // Options configures a Client. Endpoint and Model are required; the engine
@@ -42,6 +62,9 @@ type Options struct {
 	Endpoint string
 	// Model is the model identifier the provider expects.
 	Model string
+	// ReasoningEffort requests provider reasoning depth. Empty preserves the
+	// provider default and the historical request and cache identity.
+	ReasoningEffort ReasoningEffort
 	// ExtraHeaders are merged into every request after the defaults. Use
 	// this for provider-specific routing headers or to override the default
 	// Authorization scheme.
@@ -51,6 +74,7 @@ type Options struct {
 // NewClientWithOptions creates a Client from explicit options. Endpoint and
 // Model are used verbatim; callers are responsible for setting them.
 func NewClientWithOptions(opts Options) *Client {
+	reasoningEffort, reasoningEffortErr := modelprovider.NormalizeReasoningEffort(string(opts.ReasoningEffort))
 	api := newHTTPAPIClient(opts.Endpoint, opts.Token, opts.ExtraHeaders)
 	apiMode := strings.ToLower(strings.TrimSpace(opts.API))
 	if apiMode == "" {
@@ -67,7 +91,9 @@ func NewClientWithOptions(opts Options) *Client {
 	}
 	return &Client{
 		api: api, transport: transport, apiMode: apiMode,
-		apiURL: opts.Endpoint, model: opts.Model, cache: NewCache(opts.CacheDir),
+		apiURL: opts.Endpoint, model: opts.Model,
+		reasoningEffort: reasoningEffort, reasoningEffortErr: reasoningEffortErr,
+		cache: NewCache(opts.CacheDir),
 	}
 }
 
@@ -80,8 +106,20 @@ func (c *Client) ModelName() string { return c.model }
 // APIMode returns the selected provider API contract.
 func (c *Client) APIMode() string { return c.apiMode }
 
+// ReasoningEffort returns the normalized requested effort. Empty uses the provider default.
+func (c *Client) ReasoningEffort() ReasoningEffort { return c.reasoningEffort }
+
+// ValidateConfiguration rejects unsupported client options before provider I/O.
+func (c *Client) ValidateConfiguration() error { return c.reasoningEffortErr }
+
 // ModelFingerprint hashes the model, endpoint, and non-default API contract.
 func ModelFingerprint(apiMode, endpoint, model string) string {
+	return ModelFingerprintWithReasoningEffort(apiMode, endpoint, model, "")
+}
+
+// ModelFingerprintWithReasoningEffort includes a normalized non-empty effort
+// while preserving the historical empty-effort fingerprint exactly.
+func ModelFingerprintWithReasoningEffort(apiMode, endpoint, model string, reasoningEffort ReasoningEffort) string {
 	apiMode = strings.ToLower(strings.TrimSpace(apiMode))
 	if apiMode == "" {
 		apiMode = APIChatCompletions
@@ -90,13 +128,16 @@ func ModelFingerprint(apiMode, endpoint, model string) string {
 	if apiMode != APIChatCompletions {
 		fingerprint += "\x00" + apiMode
 	}
+	if effort := modelprovider.CanonicalReasoningEffort(string(reasoningEffort)); effort != "" {
+		fingerprint += "\x00reasoning_effort=" + string(effort)
+	}
 	sum := sha256.Sum256([]byte(fingerprint))
 	return hex.EncodeToString(sum[:8])
 }
 
 // ModelFingerprint returns the current client's safe cache fingerprint.
 func (c *Client) ModelFingerprint() string {
-	return ModelFingerprint(c.apiMode, c.apiURL, c.model)
+	return ModelFingerprintWithReasoningEffort(c.apiMode, c.apiURL, c.model, c.reasoningEffort)
 }
 
 // modelFingerprint retains the package-local spelling used by older callers.
@@ -165,6 +206,9 @@ func (m modelEntry) contextTokens() int {
 // does not expose /v1/models, does not report a context window, or errors.
 // Best effort: one short GET, no retries.
 func (c *Client) DetectContextWindowTokens(ctx context.Context) (int, bool) {
+	if c.ValidateConfiguration() != nil {
+		return 0, false
+	}
 	modelsURL, ok := modelsURLFor(c.apiURL)
 	if !ok {
 		return 0, false

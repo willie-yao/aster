@@ -538,10 +538,11 @@ func (c *Config) EffectiveConsumerSkills() ConsumerSkills {
 
 // AIProvider is the resolved provider configuration used to construct clients.
 type AIProvider struct {
-	API      string
-	Endpoint string
-	Model    string
-	Headers  map[string]string
+	API             string
+	Endpoint        string
+	Model           string
+	ReasoningEffort modelprovider.ReasoningEffort
+	Headers         map[string]string
 }
 
 // ResolveAIProvider applies environment fallbacks to the project configuration.

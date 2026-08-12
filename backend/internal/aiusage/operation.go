@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 )
 
 type operationContextKey struct{}
@@ -55,6 +57,7 @@ func Begin(ctx context.Context, recorder *Recorder, metadata Metadata) (context.
 		StartedAt:        started.Format(time.RFC3339Nano),
 		ModelFingerprint: safeFingerprint(metadata.ModelFingerprint),
 		Model:            safeModelID(metadata.Model),
+		ReasoningEffort:  safeReasoningEffort(metadata.ReasoningEffort),
 		Correlation:      metadata.Correlation,
 	}}
 	return context.WithValue(ctx, operationContextKey{}, op), op
@@ -67,6 +70,12 @@ func ObserveModelRequest(ctx context.Context, usage TokenUsage) {
 
 // ObserveModelRequestWithModel adds one provider request and safe model provenance.
 func ObserveModelRequestWithModel(ctx context.Context, usage TokenUsage, model, fingerprint string) {
+	ObserveModelRequestWithModelAndReasoningEffort(ctx, usage, model, fingerprint, "")
+}
+
+// ObserveModelRequestWithModelAndReasoningEffort adds one provider request and
+// safe model and requested-effort provenance.
+func ObserveModelRequestWithModelAndReasoningEffort(ctx context.Context, usage TokenUsage, model, fingerprint, reasoningEffort string) {
 	op, _ := ctx.Value(operationContextKey{}).(*Operation)
 	if op == nil {
 		return
@@ -78,6 +87,7 @@ func ObserveModelRequestWithModel(ctx context.Context, usage TokenUsage, model, 
 	}
 	op.usage.CoverageCountsKnown = true
 	op.setModelLocked(model, fingerprint)
+	op.setReasoningEffortLocked(reasoningEffort)
 	op.setUsageSourceLocked(UsageSourceProviderResponse)
 	accumulateModelRequest(&op.usage, usage)
 }
@@ -308,6 +318,21 @@ func (o *Operation) setModelLocked(model, fingerprint string) {
 	}
 	if o.usage.ModelFingerprint == "" {
 		o.usage.ModelFingerprint = fingerprint
+	}
+}
+
+func safeReasoningEffort(value string) string {
+	effort, err := modelprovider.NormalizeReasoningEffort(value)
+	if err != nil {
+		return ""
+	}
+	return string(effort)
+}
+
+func (o *Operation) setReasoningEffortLocked(value string) {
+	value = safeReasoningEffort(value)
+	if o.usage.ReasoningEffort == "" {
+		o.usage.ReasoningEffort = value
 	}
 }
 

@@ -37,7 +37,7 @@ func testNonActionableResult() Result {
 
 func testProvenance(now time.Time) Provenance {
 	input := testFrozenInput()
-	return NewProvenance(input, "model", "responses", EvidenceStats{ToolCalls: 2, SourceReads: 1, ArtifactReads: 1}, Metrics{ModelRequests: 2}, now)
+	return NewProvenance(input, "model", "responses", "", EvidenceStats{ToolCalls: 2, SourceReads: 1, ArtifactReads: 1}, Metrics{ModelRequests: 2}, now)
 }
 
 func TestCacheDropsSemanticallyStalePrivateEntries(t *testing.T) {

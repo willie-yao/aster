@@ -35,6 +35,7 @@ type ProviderFallbacks struct {
 	API             string
 	Endpoint        string
 	Model           string
+	ReasoningEffort ai.ReasoningEffort
 	CacheGeneration string
 }
 
@@ -61,6 +62,7 @@ func LoadProject(projectDir string, cfg *project.Config, fallbacks ProviderFallb
 		}
 	}
 	provider := cfg.ResolveAIProvider(fallbacks.API, fallbacks.Endpoint, fallbacks.Model)
+	provider.ReasoningEffort = fallbacks.ReasoningEffort
 	if err := project.ValidateAIAPI(provider.API); err != nil {
 		return nil, err
 	}
@@ -145,13 +147,17 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		return nil, fmt.Errorf("analysis project configuration is required")
 	}
 	client := ai.NewClientWithOptions(ai.Options{
-		Token:        opts.Token,
-		CacheDir:     opts.DataDir,
-		API:          opts.Project.Provider.API,
-		Endpoint:     opts.Project.Provider.Endpoint,
-		Model:        opts.Project.Provider.Model,
-		ExtraHeaders: opts.Project.Provider.Headers,
+		Token:           opts.Token,
+		CacheDir:        opts.DataDir,
+		API:             opts.Project.Provider.API,
+		Endpoint:        opts.Project.Provider.Endpoint,
+		Model:           opts.Project.Provider.Model,
+		ReasoningEffort: opts.Project.Provider.ReasoningEffort,
+		ExtraHeaders:    opts.Project.Provider.Headers,
 	})
+	if err := client.ValidateConfiguration(); err != nil {
+		return nil, err
+	}
 	budgets, contextSource, err := resolveContextBudgets(ctx, client)
 	if err != nil {
 		return nil, err
@@ -382,6 +388,7 @@ func NewReusePlanner(project *Project) *ai.Service {
 	}
 	client := ai.NewClientWithOptions(ai.Options{
 		API: project.Provider.API, Endpoint: project.Provider.Endpoint, Model: project.Provider.Model,
+		ReasoningEffort: project.Provider.ReasoningEffort,
 	})
 	service := ai.NewService(client, universal.New(), project.SystemPrompt, nil)
 	service.SetCacheGeneration(project.CacheGenerationFingerprint)

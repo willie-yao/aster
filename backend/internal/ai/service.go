@@ -183,14 +183,14 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	ctx, usageOperation := aiusage.Begin(ctx, s.usageRecorder, aiusage.Metadata{
 		LogicalID: jobID + "\x00" + run.BuildID + "\x00" + tc.Name,
 		Origin:    s.usageOrigin, Feature: aiusage.FeatureFailureAnalysis,
-		ModelFingerprint: s.client.modelFingerprint(), Model: s.client.ModelName(),
+		ModelFingerprint: s.client.modelFingerprint(), Model: s.client.ModelName(), ReasoningEffort: string(s.client.ReasoningEffort()),
 		Correlation: aiusage.Correlation{JobID: jobID, BuildID: run.BuildID, TestName: tc.Name},
 	})
 	defer func() { usageOperation.Finish(usageOutcome) }()
 	var trace *TraceSession
 	if s.traceStore != nil {
 		trace = s.traceStore.Start(TraceMetadata{
-			JobID: jobID, BuildID: run.BuildID, TestName: tc.Name, APIMode: s.client.APIMode(), Model: s.client.ModelName(),
+			JobID: jobID, BuildID: run.BuildID, TestName: tc.Name, APIMode: s.client.APIMode(), Model: s.client.ModelName(), ReasoningEffort: string(s.client.ReasoningEffort()),
 		})
 		ctx = withAnalysisTrace(ctx, trace)
 	}

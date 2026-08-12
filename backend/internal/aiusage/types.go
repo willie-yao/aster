@@ -77,6 +77,7 @@ type Metadata struct {
 	Feature          Feature
 	ModelFingerprint string
 	Model            string
+	ReasoningEffort  string
 	Correlation      Correlation
 	StartedAt        time.Time
 }
@@ -117,6 +118,7 @@ type OperationUsage struct {
 	Outcome                      Outcome     `json:"outcome"`
 	ModelFingerprint             string      `json:"model_fingerprint,omitempty"`
 	Model                        string      `json:"model,omitempty"`
+	ReasoningEffort              string      `json:"reasoning_effort,omitempty"`
 	MixedModels                  bool        `json:"mixed_models,omitempty"`
 	UsageSource                  UsageSource `json:"usage_source,omitempty"`
 	Currency                     string      `json:"currency,omitempty"`

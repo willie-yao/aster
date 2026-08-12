@@ -44,11 +44,12 @@ type chatCompletionsFunction struct {
 }
 
 type chatCompletionsRequest struct {
-	Model          string                   `json:"model"`
-	Messages       []chatCompletionsMessage `json:"messages"`
-	Tools          []tools.Schema           `json:"tools,omitempty"`
-	ResponseFormat *chatResponseFormat      `json:"response_format,omitempty"`
-	ToolChoice     *chatToolChoice          `json:"tool_choice,omitempty"`
+	Model           string                   `json:"model"`
+	Messages        []chatCompletionsMessage `json:"messages"`
+	Tools           []tools.Schema           `json:"tools,omitempty"`
+	ResponseFormat  *chatResponseFormat      `json:"response_format,omitempty"`
+	ToolChoice      *chatToolChoice          `json:"tool_choice,omitempty"`
+	ReasoningEffort ReasoningEffort          `json:"reasoning_effort,omitempty"`
 
 	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
 }
@@ -112,6 +113,7 @@ func (t *chatCompletionsTransport) Complete(ctx context.Context, req modelReques
 		Tools:             req.Tools,
 		ResponseFormat:    encodeChatResponseFormat(req.ResponseFormat),
 		ToolChoice:        encodeChatToolChoice(req.ToolChoice),
+		ReasoningEffort:   req.ReasoningEffort,
 		ParallelToolCalls: req.ParallelToolCalls,
 	})
 	if err != nil {
