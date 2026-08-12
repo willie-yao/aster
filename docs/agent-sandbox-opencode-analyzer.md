@@ -211,9 +211,21 @@ The result contains the existing analysis semantics:
 - exact source path, line, and quote citations;
 - unresolved details.
 
-Dashboard code strictly parses the result, rejects duplicate or unknown fields,
-verifies all citations against the sealed workspace, and maps a valid result to
-`ai.FailureAnalysisResult`. The prototype does not publish that mapped result.
+Dashboard code strictly parses the result and verifies it against the sealed
+workspace. Malformed JSON, wrong versions, unsafe or missing paths, impossible
+line ranges, workspace mutation, credential exposure, output-bound violations,
+and results without one valid artifact citation fail closed. An empty
+`suggested_fix`, no source citations, and no relevant files are valid because
+remediation is a separate on-demand stage.
+
+Canonicalization trims whitespace, orders citations, drops duplicate or
+overlapping optional citations, removes uncited relevant files, and normalizes
+the transient flag from the bounded severity enum. These changes never invent
+or repair evidence. The private execution result records `accepted`,
+`accepted_with_warnings`, or `rejected` plus bounded validation codes. It does
+not retain model text, paths, quotes, evidence, or the raw payload for rejected
+results. A safely accepted result maps to `ai.FailureAnalysisResult`. The
+prototype does not publish that mapped result.
 
 ## Authority boundary
 

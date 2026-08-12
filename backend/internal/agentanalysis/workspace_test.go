@@ -122,9 +122,12 @@ func TestParseWorkspaceAnalysisValidatesCitationsAndMapsResult(t *testing.T) {
   "source_citations": [{"path":"pkg/controller.go","line_start":3,"line_end":3}],
   "unresolved_details": ["The caller configuration is unavailable."]
 }`
-	analysis, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot)
+	analysis, validation, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if validation.Status != WorkspaceResultAccepted || len(validation.Codes) != 0 {
+		t.Fatalf("validation=%+v", validation)
 	}
 	if len(analysis.EvidenceCitations) != 1 || analysis.EvidenceCitations[0].LineStart != 2 || len(analysis.SourceCitations) != 1 || !analysis.SourceCitations[0].Verified {
 		t.Fatalf("analysis=%+v", analysis)
@@ -156,7 +159,7 @@ func TestParseWorkspaceAnalysisRejectsUngroundedPaths(t *testing.T) {
 	} {
 		base["evidence_citations"] = []any{citation}
 		data, _ := json.Marshal(base)
-		if _, err := ParseWorkspaceAnalysis(string(data), manifest, artifactRoot, sourceRoot); err == nil {
+		if _, _, err := ParseWorkspaceAnalysis(string(data), manifest, artifactRoot, sourceRoot); err == nil {
 			t.Fatalf("citation=%v was accepted", citation)
 		}
 	}
@@ -196,7 +199,7 @@ func TestParseWorkspaceAnalysisRejectsGitMetadataCitation(t *testing.T) {
   "source_citations": [{"path":".git/config","line_start":1,"line_end":1,"quote":"core"}],
   "unresolved_details": []
 }`
-	if _, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot); err == nil {
+	if _, _, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot); err == nil {
 		t.Fatal("Git metadata citation was accepted")
 	}
 }
@@ -571,7 +574,7 @@ func TestParseWorkspaceAnalysisCanonicalizesExactRanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "crlf.log", "line_start": 1, "line_end": 2}}, nil)
-	analysis, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot)
+	analysis, _, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -598,26 +601,18 @@ func TestParseWorkspaceAnalysisRejectsAdversarialCitations(t *testing.T) {
 		t.Fatal(err)
 	}
 	tests := map[string]string{
-		"zero range":      workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 0, "line_end": 1}}, nil),
-		"reversed range":  workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 3, "line_end": 2}}, nil),
-		"past eof":        workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 20}}, nil),
-		"oversized range": workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "long.log", "line_start": 1, "line_end": maxCitationLines + 1}}, nil),
-		"binary file":     workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "binary.log", "line_start": 1, "line_end": 1}}, nil),
-		"overlap": workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{
-			map[string]any{"path": "logs/build.log", "line_start": 1, "line_end": 2},
-			map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 3},
-		}, nil),
-		"duplicate": workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{
-			map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2},
-			map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2},
-		}, nil),
+		"zero range":        workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 0, "line_end": 1}}, nil),
+		"reversed range":    workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 3, "line_end": 2}}, nil),
+		"past eof":          workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 20}}, nil),
+		"oversized range":   workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "long.log", "line_start": 1, "line_end": maxCitationLines + 1}}, nil),
+		"binary file":       workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "binary.log", "line_start": 1, "line_end": 1}}, nil),
 		"paraphrased quote": strings.Replace(workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2}}, nil), `"line_end":2`, `"line_end":2,"quote":"paraphrase"`, 1),
 		"duplicate field":   strings.Replace(workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2}}, nil), `"summary":"summary"`, `"summary":"summary","summary":"other"`, 1),
 		"malformed":         `{"version":1`,
 	}
 	for name, raw := range tests {
 		t.Run(name, func(t *testing.T) {
-			if _, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot); err == nil {
+			if _, _, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot); err == nil {
 				t.Fatal("adversarial result was accepted")
 			}
 		})
@@ -635,12 +630,12 @@ func TestValidateWorkspaceAnalysisRejectsNonCanonicalQuote(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2}}, nil)
-	analysis, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot)
+	analysis, _, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
 	analysis.EvidenceCitations[0].Quote = "paraphrase"
-	if _, err := ValidateWorkspaceAnalysis(analysis, manifest, artifactRoot, sourceRoot); err == nil {
+	if _, _, err := ValidateWorkspaceAnalysis(analysis, manifest, artifactRoot, sourceRoot); err == nil {
 		t.Fatal("non-canonical quote was accepted")
 	}
 }
@@ -658,7 +653,7 @@ func workspaceModelAnalysisJSON(contract string, evidence, source []any) string 
 	return string(data)
 }
 
-func TestParseWorkspaceAnalysisRejectsSourceSymlinkAliasOverlap(t *testing.T) {
+func TestParseWorkspaceAnalysisDropsSourceSymlinkAliasOverlap(t *testing.T) {
 	sourceRoot, artifactRoot, request, source := workspaceTestInputs(t)
 	if err := os.Symlink("controller.go", filepath.Join(sourceRoot, "pkg", "alias.go")); err != nil {
 		t.Fatal(err)
@@ -679,8 +674,12 @@ func TestParseWorkspaceAnalysisRejectsSourceSymlinkAliasOverlap(t *testing.T) {
 		map[string]any{"path": "pkg/controller.go", "line_start": 1, "line_end": 1},
 		map[string]any{"path": "pkg/alias.go", "line_start": 1, "line_end": 1},
 	}
-	if _, err := ParseWorkspaceAnalysis(workspaceModelAnalysisJSON(WorkspaceContractVersion, evidence, sourceCitations), manifest, artifactRoot, sourceRoot); err == nil {
-		t.Fatal("source symlink alias overlap was accepted")
+	analysis, validation, err := ParseWorkspaceAnalysis(workspaceModelAnalysisJSON(WorkspaceContractVersion, evidence, sourceCitations), manifest, artifactRoot, sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validation.Status != WorkspaceResultAcceptedWithWarnings || !slices.Equal(validation.Codes, []string{WorkspaceInvalidSourceOverlap}) || len(analysis.SourceCitations) != 1 {
+		t.Fatalf("analysis=%+v validation=%+v", analysis, validation)
 	}
 }
 

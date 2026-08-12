@@ -1,6 +1,7 @@
 package analysisexecutor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +43,7 @@ func TestExecuteRunsOneNativeSessionAndReturnsAnalysis(t *testing.T) {
 			return testOpenCodeResult(), nil
 		},
 	})
-	if result.TerminalState != engineruntime.TerminalSucceeded || result.Analysis == nil || calls != 1 {
+	if result.TerminalState != engineruntime.TerminalSucceeded || result.Analysis == nil || result.ResultValidation.Status != agentanalysis.WorkspaceResultAccepted || calls != 1 {
 		t.Fatalf("result=%+v calls=%d", result, calls)
 	}
 	if result.Analysis.EvidenceCitations[0].Path != "logs/build.log" || result.Analysis.EvidenceCitations[0].Quote != "artifact-only-marker specific failure" || !result.Usage.Available || result.Usage.ModelRequests != 2 {
@@ -53,6 +55,76 @@ func TestExecuteRunsOneNativeSessionAndReturnsAnalysis(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"quote":"artifact-only-marker specific failure"`) || !strings.Contains(string(data), `"verified":true`) {
 		t.Fatalf("canonical result = %s", data)
+	}
+}
+
+func TestExecuteAcceptsGroundedAnalysisWithoutSuggestedFix(t *testing.T) {
+	root, request := executorTestFixture(t)
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
+			value := testOpenCodeResult()
+			value.Structured = bytes.Replace(value.Structured, []byte(`"suggested_fix": "Correct the request before retrying."`), []byte(`"suggested_fix": ""`), 1)
+			return value, nil
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalSucceeded || result.Analysis == nil || result.Analysis.SuggestedFix != "" || result.ResultValidation.Status != agentanalysis.WorkspaceResultAccepted {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestExecutePublishesCanonicalAnalysisWithValidationWarnings(t *testing.T) {
+	root, request := executorTestFixture(t)
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
+			value := testOpenCodeResult()
+			var structured map[string]any
+			if err := json.Unmarshal(value.Structured, &structured); err != nil {
+				t.Fatal(err)
+			}
+			structured["suggested_fix"] = ""
+			structured["severity"] = "Transient-Ignore"
+			structured["is_transient"] = false
+			structured["source_citations"] = []any{}
+			structured["relevant_files"] = []any{"pkg/controller.go"}
+			structured["evidence_citations"] = []any{
+				map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2},
+				map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2},
+			}
+			value.Structured, _ = json.Marshal(structured)
+			return value, nil
+		},
+	})
+	wantCodes := []string{agentanalysis.WorkspaceInvalidArtifactOverlap, agentanalysis.WorkspaceInvalidClassification, agentanalysis.WorkspaceInvalidRelevantFile}
+	if result.TerminalState != engineruntime.TerminalSucceeded || result.Analysis == nil || result.ResultValidation.Status != agentanalysis.WorkspaceResultAcceptedWithWarnings || !slices.Equal(result.ResultValidation.Codes, wantCodes) {
+		t.Fatalf("result=%+v wantCodes=%v", result, wantCodes)
+	}
+	if !result.Analysis.IsTransient || result.Analysis.Severity != "Transient-Ignore" || result.Analysis.SuggestedFix != "" || len(result.Analysis.EvidenceCitations) != 1 || len(result.Analysis.SourceCitations) != 0 || len(result.Analysis.RelevantFiles) != 0 {
+		t.Fatalf("canonical analysis=%+v", result.Analysis)
+	}
+}
+
+func TestExecuteRejectsUnsafeAnalysisWithPrivacySafeCode(t *testing.T) {
+	root, request := executorTestFixture(t)
+	const modelPath = "private/model/path.log"
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
+			value := testOpenCodeResult()
+			value.Structured = bytes.Replace(value.Structured, []byte("logs/build.log"), []byte(modelPath), 1)
+			return value, nil
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalFailed || result.Analysis != nil || result.FailureReason != agentanalysis.WorkspaceResultRejectedReason || result.OpenCodeTelemetry.FailureCode != "analysis_result_invalid" || result.ResultValidation.Status != agentanalysis.WorkspaceResultRejected || !slices.Equal(result.ResultValidation.Codes, []string{agentanalysis.WorkspaceInvalidArtifactPath}) {
+		t.Fatalf("result=%+v", result)
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(modelPath)) || bytes.Contains(data, []byte("artifact-only-marker")) {
+		t.Fatalf("rejected result retained model or evidence content: %s", data)
 	}
 }
 
