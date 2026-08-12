@@ -336,6 +336,7 @@ type Provenance struct {
 	ProviderFingerprint string                         `json:"provider_fingerprint"`
 	Model               string                         `json:"model,omitempty"`
 	APIMode             string                         `json:"api_mode,omitempty"`
+	ReasoningEffort     string                         `json:"reasoning_effort,omitempty"`
 	Source              sourceinvestigation.Repository `json:"source"`
 	Versions            Versions                       `json:"versions"`
 	ConsumerPromptHash  string                         `json:"consumer_prompt_hash"`
@@ -346,10 +347,10 @@ type Provenance struct {
 	CompletedAt         string                         `json:"completed_at"`
 }
 
-func NewProvenance(input FrozenInput, model, apiMode string, evidence EvidenceStats, metrics Metrics, completed time.Time) Provenance {
+func NewProvenance(input FrozenInput, model, apiMode, reasoningEffort string, evidence EvidenceStats, metrics Metrics, completed time.Time) Provenance {
 	return Provenance{
 		InputDigest: FrozenInputDigest(input), ProviderFingerprint: input.ProviderFingerprint,
-		Model: model, APIMode: apiMode, Source: input.InvestigationSource,
+		Model: model, APIMode: apiMode, ReasoningEffort: reasoningEffort, Source: input.InvestigationSource,
 		Versions: input.Versions, ConsumerPromptHash: input.ConsumerPromptHash,
 		SkillHash: input.SkillHash, PolicyHash: HashPolicy(input.DestinationPolicy),
 		Evidence: evidence, Metrics: metrics, CompletedAt: completed.UTC().Format(time.RFC3339),

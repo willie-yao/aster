@@ -79,7 +79,7 @@ func verificationFixture(t *testing.T, current, failure string) (*Verifier, Froz
 	if err != nil {
 		t.Fatal(err)
 	}
-	provenance := NewProvenance(input, "model", "chat_completions", EvidenceStats{
+	provenance := NewProvenance(input, "model", "chat_completions", "", EvidenceStats{
 		ToolCalls: 3, SourceReads: 1, ArtifactReads: 2,
 	}, Metrics{ModelRequests: 2}, time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC))
 	entry := CacheEntry{
@@ -416,7 +416,7 @@ func TestVerifierProwTargetRequiresExactFrozenJobID(t *testing.T) {
 	entry := CacheEntry{
 		Key: key, Result: result, ResultDigest: ResultDigest(result),
 		EvidenceCatalog: catalog, EvidenceCatalogDigest: EvidenceCatalogDigest(catalog),
-		Provenance: NewProvenance(input, "model", "chat_completions", EvidenceStats{}, Metrics{}, time.Now()),
+		Provenance: NewProvenance(input, "model", "chat_completions", "", EvidenceStats{}, Metrics{}, time.Now()),
 	}
 	browser := fakeBrowser{files: artifacts}
 	verified, err := verifier.Verify(t.Context(), input, entry, browser)
@@ -486,7 +486,7 @@ func TestVerifierRejectsFabricatedSymbolAdditionDespiteRecurringText(t *testing.
 	entry := CacheEntry{
 		Key: key, Result: result, ResultDigest: ResultDigest(result),
 		EvidenceCatalog: catalog, EvidenceCatalogDigest: EvidenceCatalogDigest(catalog),
-		Provenance: NewProvenance(input, "model", "chat_completions", EvidenceStats{}, Metrics{}, time.Now()),
+		Provenance: NewProvenance(input, "model", "chat_completions", "", EvidenceStats{}, Metrics{}, time.Now()),
 	}
 	verified, err := verifier.Verify(t.Context(), input, entry, fakeBrowser{files: artifacts})
 	if err != nil {

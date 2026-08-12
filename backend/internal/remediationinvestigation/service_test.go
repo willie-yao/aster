@@ -64,9 +64,10 @@ func (m *fakeModel) CompleteStructured(_ context.Context, _, _ string, _ ai.Resp
 	return validate(json.RawMessage(result))
 }
 
-func (*fakeModel) ModelName() string          { return "test-model" }
-func (m *fakeModel) ModelFingerprint() string { return m.fingerprint }
-func (*fakeModel) APIMode() string            { return ai.APIResponses }
+func (*fakeModel) ModelName() string                   { return "test-model" }
+func (m *fakeModel) ModelFingerprint() string          { return m.fingerprint }
+func (*fakeModel) APIMode() string                     { return ai.APIResponses }
+func (*fakeModel) ReasoningEffort() ai.ReasoningEffort { return ai.ReasoningEffortHigh }
 
 type fakeSource struct{ files map[string]string }
 
@@ -203,7 +204,7 @@ func TestServiceCachesEvidenceBackedTypedResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CacheHit || got.Entry.Result.Candidate == nil || got.Entry.Provenance.Evidence.SourceReads != 1 || got.Entry.Provenance.Evidence.ArtifactReads != 1 || len(got.Entry.EvidenceCatalog.Records) < 4 {
+	if got.CacheHit || got.Entry.Result.Candidate == nil || got.Entry.Provenance.Evidence.SourceReads != 1 || got.Entry.Provenance.Evidence.ArtifactReads != 1 || got.Entry.Provenance.ReasoningEffort != "high" || len(got.Entry.EvidenceCatalog.Records) < 4 {
 		t.Fatalf("result=%+v", got)
 	}
 	cached, err := service.Investigate(t.Context(), input, browser, false)

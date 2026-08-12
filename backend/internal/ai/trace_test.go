@@ -12,7 +12,7 @@ import (
 
 func TestTraceStoreBoundsAndRedacts(t *testing.T) {
 	store := NewTraceStore()
-	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test https://secret.example Authorization: Bearer top-secret", APIMode: APIResponses})
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test https://secret.example Authorization: Bearer top-secret", APIMode: APIResponses, ReasoningEffort: " HIGH "})
 	for i := 0; i < analysisTraceMaxEvents+2; i++ {
 		trace.Record(TraceEvent{Kind: "model_request", ErrorCode: "provider_status"})
 	}
@@ -243,5 +243,19 @@ func TestTraceStorePreservesLongResponseID(t *testing.T) {
 	got := store.Snapshot().Traces[0].Events[0].ResponseID
 	if got != responseID {
 		t.Fatalf("response ID length = %d, want exact %d-byte value", len(got), len(responseID))
+	}
+}
+
+func TestTraceStoreNormalizesReasoningEffortOnUpsert(t *testing.T) {
+	store := NewTraceStore()
+	if !store.Upsert(AnalysisTrace{
+		JobID: "job", StartedAt: "2026-08-12T00:00:00Z", Outcome: "success", ReasoningEffort: " HIGH ",
+		Events: []TraceEvent{{Kind: "model_request", ReasoningEffort: " XHIGH "}, {Kind: "model_request", ReasoningEffort: "invalid"}},
+	}) {
+		t.Fatal("trace was not inserted")
+	}
+	got := store.Snapshot().Traces[0]
+	if got.ReasoningEffort != "high" || got.Events[0].ReasoningEffort != "xhigh" || got.Events[1].ReasoningEffort != "" {
+		t.Fatalf("reasoning effort provenance = %+v", got)
 	}
 }

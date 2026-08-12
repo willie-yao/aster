@@ -376,7 +376,7 @@ func TestContainerStateStoreRecordsUsageFromTrace(t *testing.T) {
 	}
 	request := stateTestRequest()
 	identity := NewContainerStateIdentity("orka-system", "task-usage", request)
-	trace := ai.AnalysisTrace{JobID: "job", BuildID: "1", TestName: "Test A", Model: "claude-sonnet-4.6", StartedAt: "2026-08-03T12:00:00Z", RecordedAt: "2026-08-03T12:00:01Z", Outcome: "success", Events: []ai.TraceEvent{{Kind: "model_request", UsageReported: true, InputTokens: 12, CachedInputTokens: 2, CacheWriteInputTokens: 3, CacheWriteInputTokensReported: true, OutputTokens: 4}}}
+	trace := ai.AnalysisTrace{JobID: "job", BuildID: "1", TestName: "Test A", Model: "claude-sonnet-4.6", ReasoningEffort: "high", StartedAt: "2026-08-03T12:00:00Z", RecordedAt: "2026-08-03T12:00:01Z", Outcome: "success", Events: []ai.TraceEvent{{Kind: "model_request", UsageReported: true, InputTokens: 12, CachedInputTokens: 2, CacheWriteInputTokens: 3, CacheWriteInputTokensReported: true, OutputTokens: 4}}}
 	state := ContainerAnalysisState{Version: ContainerStateVersion, TaskNamespace: identity.TaskNamespace, TaskName: identity.TaskName, CacheKey: identity.CacheKey, Traces: []ai.AnalysisTrace{trace}}
 	if err := store.MergeTraces(state); err != nil {
 		t.Fatal(err)
@@ -386,7 +386,7 @@ func TestContainerStateStoreRecordsUsageFromTrace(t *testing.T) {
 	}
 	snapshot := usage.Snapshot()
 	if len(snapshot.Days) != 1 || snapshot.Days[0].Totals.Operations != 1 || snapshot.Days[0].Totals.InputTokens != 12 || snapshot.Days[0].Totals.CacheWriteInputTokens != 3 ||
-		snapshot.Days[0].Models["claude-sonnet-4.6"].ModelRequests != 1 || snapshot.RecentOperations[0].Origin != aiusage.OriginAnalyzer {
+		snapshot.Days[0].Models["claude-sonnet-4.6"].ModelRequests != 1 || snapshot.RecentOperations[0].Origin != aiusage.OriginAnalyzer || snapshot.RecentOperations[0].ReasoningEffort != "high" {
 		t.Fatalf("usage = %+v", snapshot)
 	}
 }

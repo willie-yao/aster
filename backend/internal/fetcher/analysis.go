@@ -731,8 +731,3 @@ func githubReadToken() string {
 func aiModel(cfg *project.Config) string {
 	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Model
 }
-
-// aiHeaders returns the extra HTTP headers to attach to AI provider requests.
-func aiHeaders(cfg *project.Config) map[string]string {
-	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL")).Headers
-}

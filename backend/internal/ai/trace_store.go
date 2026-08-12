@@ -277,6 +277,7 @@ func normalizeAnalysisTrace(trace AnalysisTrace) AnalysisTrace {
 	trace.BuildID = traceText(trace.BuildID)
 	trace.TestName = traceText(trace.TestName)
 	trace.APIMode = traceText(trace.APIMode)
+	trace.ReasoningEffort = safeReasoningEffortTrace(trace.ReasoningEffort)
 	trace.StartedAt = traceText(trace.StartedAt)
 	trace.RecordedAt = traceText(trace.RecordedAt)
 	if trace.RecordedAt == "" {
@@ -304,6 +305,7 @@ func normalizeAnalysisTrace(trace AnalysisTrace) AnalysisTrace {
 		event.ResponseID = traceResponseID(event.ResponseID)
 		event.Status = traceText(event.Status)
 		event.FinishReason = traceText(event.FinishReason)
+		event.ReasoningEffort = safeReasoningEffortTrace(event.ReasoningEffort)
 		event.Tool = traceText(event.Tool)
 		if event.ErrorCode != "" {
 			event.ErrorCode = traceCode(event.ErrorCode)

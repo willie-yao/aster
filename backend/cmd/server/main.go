@@ -360,7 +360,7 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 	}
 	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
 		Token: os.Getenv("AI_TOKEN"), API: provider.API, Endpoint: provider.Endpoint,
-		Model: provider.Model, Headers: provider.Headers, SourceToken: os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"),
+		Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, Headers: provider.Headers, SourceToken: os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"),
 		UsageRecorder: usageRecorder,
 	})
 	opts.Actions = actionService
@@ -447,14 +447,14 @@ func enableCausalRemediationInvestigation(
 		return fmt.Errorf("causal remediation investigation requires an AI endpoint and model")
 	}
 	loaded, err := analysisruntime.LoadProject(projectDir, cfg, analysisruntime.ProviderFallbacks{
-		API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model,
+		API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model, ReasoningEffort: provider.ReasoningEffort,
 		CacheGeneration: os.Getenv(project.AICacheGenerationEnv),
 	})
 	if err != nil {
 		return fmt.Errorf("loading causal remediation project: %w", err)
 	}
 	client := ai.NewClientWithOptions(ai.Options{
-		Token: token, API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model, ExtraHeaders: provider.Headers,
+		Token: token, API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, ExtraHeaders: provider.Headers,
 	})
 	cache, err := remediationinvestigation.NewCache(filepath.Join(dataDir, remediationinvestigation.CacheRelativePath), remediationinvestigation.CacheOptions{})
 	if err != nil {

@@ -103,12 +103,12 @@ triggers: ["boom"]
 		t.Fatal(err)
 	}
 	loaded, err := LoadProject(dir, cfg, ProviderFallbacks{
-		API: "chat_completions", Endpoint: "https://model.invalid/v1/chat/completions", Model: "model", CacheGeneration: "2",
+		API: "chat_completions", Endpoint: "https://model.invalid/v1/chat/completions", Model: "model", ReasoningEffort: ai.ReasoningEffortHigh, CacheGeneration: "2",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.CacheGeneration != "2" || loaded.CacheGenerationFingerprint != project.AICacheGenerationFingerprint("2") {
+	if loaded.CacheGeneration != "2" || loaded.CacheGenerationFingerprint != project.AICacheGenerationFingerprint("2") || loaded.Provider.ReasoningEffort != ai.ReasoningEffortHigh {
 		t.Fatalf("cache generation = %q fingerprint=%q", loaded.CacheGeneration, loaded.CacheGenerationFingerprint)
 	}
 	if loaded.ProfileSelection.Kubernetes {
@@ -226,5 +226,25 @@ ai:
 	_, err = LoadProject(dir, cfg, ProviderFallbacks{Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"})
 	if err == nil || !strings.Contains(err.Error(), "bundle is required") {
 		t.Fatalf("missing bundle error = %v", err)
+	}
+}
+
+func TestNewRejectsInvalidReasoningEffortBeforeProviderIO(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests.Add(1)
+	}))
+	defer server.Close()
+	analysisProject := &Project{
+		Config: &project.Config{AI: &project.AI{}},
+		Provider: project.AIProvider{
+			API: project.AIAPIChatCompletions, Endpoint: server.URL + "/v1/chat/completions", Model: "model", ReasoningEffort: "invalid",
+		},
+	}
+	if _, err := New(t.Context(), Options{Project: analysisProject, Token: "token"}); err == nil || !strings.Contains(err.Error(), "reasoning effort") {
+		t.Fatalf("error = %v", err)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("provider requests = %d, want 0", requests.Load())
 	}
 }

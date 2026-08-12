@@ -160,6 +160,7 @@ type remediationModelCapabilityTrial struct {
 	Repetition                   int                                     `json:"repetition"`
 	Model                        string                                  `json:"model"`
 	APIMode                      string                                  `json:"api_mode"`
+	ReasoningEffort              string                                  `json:"reasoning_effort,omitempty"`
 	ProviderIdentity             string                                  `json:"provider_identity"`
 	ProviderFingerprint          string                                  `json:"provider_fingerprint"`
 	TransportFingerprint         string                                  `json:"transport_fingerprint"`
@@ -401,6 +402,7 @@ func TestRemediationModelCapabilityBenchmark(t *testing.T) {
 	}
 	engineCommit := remediationBenchmarkEngineCommit(t)
 	manifestSum := sha256.Sum256(raw)
+	reasoningEffort := benchmarkReasoningEffort(t)
 	if err := os.MkdirAll(filepath.Dir(resultsPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -414,13 +416,13 @@ func TestRemediationModelCapabilityBenchmark(t *testing.T) {
 			continue
 		}
 		for repetition := 1; repetition <= repetitions; repetition++ {
-			client := ai.NewClientWithOptions(ai.Options{Token: os.Getenv("AI_TOKEN"), API: ai.APIResponses, Endpoint: endpoint, Model: modelName})
+			client := ai.NewClientWithOptions(ai.Options{Token: os.Getenv("AI_TOKEN"), API: ai.APIResponses, Endpoint: endpoint, Model: modelName, ReasoningEffort: reasoningEffort})
 			input, source, browser := remediationModelCapabilityInput(t, capabilityCase, client.ModelFingerprint())
 			diagnostics := &remediationModelCapabilityMemoDiagnostics{}
 			model := &remediationModelCapabilityDiagnosticModel{Model: client, target: capabilityCase.ScorerPrivate.KnownTarget, diagnostics: diagnostics}
 			row := remediationModelCapabilityTrial{
 				CaseID: capabilityCase.ID, TemporalState: capabilityCase.TemporalState, Repetition: repetition,
-				Model: modelName, APIMode: ai.APIResponses, ProviderIdentity: manifest.Transport.Provider,
+				Model: modelName, APIMode: ai.APIResponses, ReasoningEffort: string(client.ReasoningEffort()), ProviderIdentity: manifest.Transport.Provider,
 				ProviderFingerprint: client.ModelFingerprint(), TransportFingerprint: manifest.Transport.TransportFingerprintSHA256,
 				TrialStatus: "no_result", EngineCommit: engineCommit, ManifestSHA256: hex.EncodeToString(manifestSum[:]),
 				EffectiveInputSHA256: capabilityCase.EffectiveInputSHA256,
@@ -818,7 +820,7 @@ func remediationModelCapabilityOracleEntry(ctx context.Context, input remediatio
 	if err != nil {
 		return remediationinvestigation.CacheEntry{}, err
 	}
-	provenance := remediationinvestigation.NewProvenance(input, "historical-oracle", ai.APIResponses, remediationinvestigation.EvidenceStats{
+	provenance := remediationinvestigation.NewProvenance(input, "historical-oracle", ai.APIResponses, "", remediationinvestigation.EvidenceStats{
 		ToolCalls: 1 + len(input.Analyses) + len(browser.files), SourceReads: 1, SourceReadBytes: len(sourceContent),
 		ArtifactReads: len(browser.files),
 	}, remediationinvestigation.Metrics{}, time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC))

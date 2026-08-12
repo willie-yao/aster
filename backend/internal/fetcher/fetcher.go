@@ -260,7 +260,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 			if err := project.ValidateAIAPI(api); err != nil {
 				return nil, err
 			}
-			aiProject.Provider = project.AIProvider{API: api, Endpoint: fallbacks.Endpoint, Model: fallbacks.Model}
+			aiProject.Provider = project.AIProvider{API: api, Endpoint: fallbacks.Endpoint, Model: fallbacks.Model, ReasoningEffort: fallbacks.ReasoningEffort}
 			if cfg.AI != nil && len(cfg.AI.Headers) > 0 {
 				return nil, fmt.Errorf("orka-container analysis does not transport ai.headers; use bearer-token modelAuth or a trusted proxy")
 			}
@@ -1030,12 +1030,14 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 	// issue template. Falls back to the default body when no template exists.
 	var filler issues.TemplateFiller
 	if enableAI {
+		provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
 		aiClient := ai.NewClientWithOptions(ai.Options{
-			Token:        aiToken,
-			API:          aiAPI(cfg),
-			Endpoint:     aiEndpoint(cfg),
-			Model:        aiModel(cfg),
-			ExtraHeaders: aiHeaders(cfg),
+			Token:           aiToken,
+			API:             provider.API,
+			Endpoint:        provider.Endpoint,
+			Model:           provider.Model,
+			ReasoningEffort: provider.ReasoningEffort,
+			ExtraHeaders:    provider.Headers,
 		})
 		filler = repotemplate.NewIssueFiller(token, aiClient, eff.Repo.Owner, eff.Repo.Name)
 	}
@@ -1135,7 +1137,7 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	}
 	var aiClient *ai.Client
 	if aiToken != "" && provider.Endpoint != "" && provider.Model != "" {
-		aiClient = ai.NewClientWithOptions(ai.Options{Token: aiToken, API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model, ExtraHeaders: provider.Headers})
+		aiClient = ai.NewClientWithOptions(ai.Options{Token: aiToken, API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, ExtraHeaders: provider.Headers})
 	}
 	if eff.AgentRuntime.Type == "opencode" && aiClient == nil {
 		log.Println("Fix PRs: local runtime requires AI_TOKEN, endpoint, and model; skipping")

@@ -27,9 +27,14 @@ type responsesRequest struct {
 	Tools             []responsesTool      `json:"tools,omitempty"`
 	Text              *responsesTextConfig `json:"text,omitempty"`
 	ToolChoice        *responsesToolChoice `json:"tool_choice,omitempty"`
+	Reasoning         *responsesReasoning  `json:"reasoning,omitempty"`
 	ParallelToolCalls *bool                `json:"parallel_tool_calls,omitempty"`
 	Store             bool                 `json:"store"`
 	Include           []string             `json:"include,omitempty"`
+}
+
+type responsesReasoning struct {
+	Effort ReasoningEffort `json:"effort"`
 }
 
 type responsesTextConfig struct {
@@ -100,8 +105,8 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 	body, err := json.Marshal(responsesRequest{
 		Model: req.Model, Input: encodeResponsesInput(req.Messages),
 		Tools: encodeResponsesTools(req.Tools), Text: encodeResponsesText(req.ResponseFormat),
-		ToolChoice: encodeResponsesToolChoice(req.ToolChoice), ParallelToolCalls: req.ParallelToolCalls,
-		Store: false, Include: include,
+		ToolChoice: encodeResponsesToolChoice(req.ToolChoice), Reasoning: encodeResponsesReasoning(req.ReasoningEffort),
+		ParallelToolCalls: req.ParallelToolCalls, Store: false, Include: include,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -261,6 +266,13 @@ func decodeResponsesResponse(resp responsesResponse) *modelResponse {
 		Usage:      responsesTokenUsage(resp.Usage),
 		HasMessage: len(resp.Output) > 0,
 	}
+}
+
+func encodeResponsesReasoning(effort ReasoningEffort) *responsesReasoning {
+	if effort == "" {
+		return nil
+	}
+	return &responsesReasoning{Effort: effort}
 }
 
 func encodeResponsesText(format *ResponseFormat) *responsesTextConfig {

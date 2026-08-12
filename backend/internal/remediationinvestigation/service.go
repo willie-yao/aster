@@ -31,6 +31,7 @@ type Model interface {
 	ModelName() string
 	ModelFingerprint() string
 	APIMode() string
+	ReasoningEffort() ai.ReasoningEffort
 }
 
 type ServiceOptions struct {
@@ -112,7 +113,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 	ctx, operation := aiusage.Begin(ctx, s.opts.UsageRecorder, aiusage.Metadata{
 		LogicalID: input.CausalGroupID, Origin: aiusage.OriginServer,
 		Feature:          aiusage.FeatureRemediationInvestigation,
-		ModelFingerprint: s.model.ModelFingerprint(), Model: s.model.ModelName(),
+		ModelFingerprint: s.model.ModelFingerprint(), Model: s.model.ModelName(), ReasoningEffort: string(s.model.ReasoningEffort()),
 		Correlation: aiusage.Correlation{JobID: input.JobID}, StartedAt: started,
 	})
 	outcome := aiusage.OutcomeSuccess
@@ -233,7 +234,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		ReasoningTokens: usage.ReasoningTokens, EstimatedCostNanos: usage.EstimatedCostNanos,
 		RepairCount: repairCount, EvidenceRetryCount: ledger.forcedToolCalls,
 	}
-	provenance := NewProvenance(input, s.model.ModelName(), s.model.APIMode(), ledger.stats, metrics, completed)
+	provenance := NewProvenance(input, s.model.ModelName(), s.model.APIMode(), string(s.model.ReasoningEffort()), ledger.stats, metrics, completed)
 	if err := s.cache.StoreSuccess(key, result, catalog, provenance); err != nil {
 		return RunResult{}, err
 	}

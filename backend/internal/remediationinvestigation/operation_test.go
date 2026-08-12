@@ -67,9 +67,10 @@ func (m *blockingOperationModel) ToolLoop(_ context.Context, _, _ string, _ *too
 func (m *blockingOperationModel) CompleteStructured(_ context.Context, _, _ string, _ ai.ResponseFormat, validate ai.StructuredValidator) error {
 	return validate(json.RawMessage(m.result))
 }
-func (*blockingOperationModel) ModelName() string        { return "test-model" }
-func (*blockingOperationModel) ModelFingerprint() string { return strings.Repeat("d", 16) }
-func (*blockingOperationModel) APIMode() string          { return ai.APIChatCompletions }
+func (*blockingOperationModel) ModelName() string                   { return "test-model" }
+func (*blockingOperationModel) ModelFingerprint() string            { return strings.Repeat("d", 16) }
+func (*blockingOperationModel) APIMode() string                     { return ai.APIChatCompletions }
+func (*blockingOperationModel) ReasoningEffort() ai.ReasoningEffort { return "" }
 
 func operationFixture(t *testing.T, model Model) (*OperationService, *fakeOperationResolver, *Cache, OperationRef, OperationRef) {
 	t.Helper()
@@ -268,9 +269,10 @@ func (*timeoutOperationModel) ToolLoop(ctx context.Context, _, _ string, _ *tool
 func (*timeoutOperationModel) CompleteStructured(context.Context, string, string, ai.ResponseFormat, ai.StructuredValidator) error {
 	return errors.New("unexpected finalization")
 }
-func (*timeoutOperationModel) ModelName() string        { return "timeout-model" }
-func (*timeoutOperationModel) ModelFingerprint() string { return strings.Repeat("d", 16) }
-func (*timeoutOperationModel) APIMode() string          { return ai.APIChatCompletions }
+func (*timeoutOperationModel) ModelName() string                   { return "timeout-model" }
+func (*timeoutOperationModel) ModelFingerprint() string            { return strings.Repeat("d", 16) }
+func (*timeoutOperationModel) APIMode() string                     { return ai.APIChatCompletions }
+func (*timeoutOperationModel) ReasoningEffort() ai.ReasoningEffort { return "" }
 
 func TestOperationRejectsResultWhenPublishedIdentityChangesBeforeCompletion(t *testing.T) {
 	model := &blockingOperationModel{started: make(chan struct{}, 1), release: make(chan struct{}, 1)}
@@ -352,9 +354,10 @@ func (m *refreshTimeoutModel) ToolLoop(ctx context.Context, _, _ string, _ *tool
 func (m *refreshTimeoutModel) CompleteStructured(_ context.Context, _, _ string, _ ai.ResponseFormat, validate ai.StructuredValidator) error {
 	return validate(json.RawMessage(m.result))
 }
-func (*refreshTimeoutModel) ModelName() string        { return "refresh-timeout-model" }
-func (*refreshTimeoutModel) ModelFingerprint() string { return strings.Repeat("d", 16) }
-func (*refreshTimeoutModel) APIMode() string          { return ai.APIChatCompletions }
+func (*refreshTimeoutModel) ModelName() string                   { return "refresh-timeout-model" }
+func (*refreshTimeoutModel) ModelFingerprint() string            { return strings.Repeat("d", 16) }
+func (*refreshTimeoutModel) APIMode() string                     { return ai.APIChatCompletions }
+func (*refreshTimeoutModel) ReasoningEffort() ai.ReasoningEffort { return "" }
 
 type contextAwareSource struct{ files map[string]string }
 

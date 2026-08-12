@@ -572,6 +572,7 @@ type benchmarkJSONLResult struct {
 	SkillSetHash              string                      `json:"skill_set_hash"`
 	EffectiveInputSHA256      string                      `json:"effective_input_sha256"`
 	APIMode                   string                      `json:"api_mode"`
+	ReasoningEffort           string                      `json:"reasoning_effort,omitempty"`
 	ProviderPath              string                      `json:"provider_path,omitempty"`
 	TransportID               string                      `json:"transport_id,omitempty"`
 	EvidenceTelemetryVersion  int                         `json:"evidence_telemetry_version"`
@@ -780,7 +781,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		BaselineConsumerCommit: identity.BaselineConsumerCommit, BaselinePromptSHA256: identity.BaselinePromptSHA256,
 		ProjectSHA256: identity.ProjectSHA256, EffectivePromptSHA256: identity.EffectivePromptSHA256,
 		SkillSetHash: identity.SkillSetHash, EffectiveInputSHA256: identity.EffectiveInputSHA256,
-		APIMode: identity.APIMode, ProviderPath: identity.ProviderPath, TransportID: identity.TransportID,
+		APIMode: identity.APIMode, ReasoningEffort: string(identity.ReasoningEffort), ProviderPath: identity.ProviderPath, TransportID: identity.TransportID,
 		EvidenceTelemetryVersion: 2, EvidenceCondition: stageReport.Condition, EvidenceMode: bc.evidenceMode,
 		SourceExpectationSHA256: benchmarkSourceExpectationSHA256(bc), SourceExpectationPaths: append([]string{}, bc.sourcePaths...), SourceExpectationTotal: len(bc.sourcePaths), SourceSignalTotal: len(bc.sourceSignals),
 		SourceEvidenceToolCalls: benchmarkSourceEvidenceToolCalls(toolUsage), FrozenEvidenceSHA256: stageReport.FrozenSHA256,

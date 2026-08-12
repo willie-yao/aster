@@ -75,6 +75,7 @@ type remediationBenchmarkTrial struct {
 	ProviderFingerprint      string                                  `json:"provider_fingerprint"`
 	Model                    string                                  `json:"model"`
 	APIMode                  string                                  `json:"api_mode"`
+	ReasoningEffort          string                                  `json:"reasoning_effort,omitempty"`
 	PromptVersion            int                                     `json:"prompt_version"`
 	SchemaVersion            int                                     `json:"schema_version"`
 	VerificationVersion      int                                     `json:"verification_version"`
@@ -220,6 +221,7 @@ func TestRemediationInvestigationBenchmark(t *testing.T) {
 	caseFilter := remediationBenchmarkCaseFilter(os.Getenv("REMEDIATION_BENCH_CASES"))
 	manifestSum := sha256.Sum256(raw)
 	manifestHash := hex.EncodeToString(manifestSum[:])
+	reasoningEffort := benchmarkReasoningEffort(t)
 	if err := os.MkdirAll(filepath.Dir(resultsPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -236,14 +238,14 @@ func TestRemediationInvestigationBenchmark(t *testing.T) {
 		}
 		for repetition := 1; repetition <= repetitions; repetition++ {
 			client := ai.NewClientWithOptions(ai.Options{
-				Token: os.Getenv("AI_TOKEN"), API: apiMode, Endpoint: endpoint, Model: modelName,
+				Token: os.Getenv("AI_TOKEN"), API: apiMode, Endpoint: endpoint, Model: modelName, ReasoningEffort: reasoningEffort,
 			})
 			input := remediationCaseInput(benchmarkCase, client.ModelFingerprint())
 			row := remediationBenchmarkTrial{
 				CaseID: benchmarkCase.ID, Category: benchmarkCase.Category, Repetition: repetition,
 				EngineCommit: engineCommit, ManifestSHA256: manifestHash, EffectiveInputSHA256: benchmarkCase.EffectiveInputSHA256,
 				PatternHash: input.PatternHash, CausalGroupHash: input.CausalGroupHash,
-				ProviderFingerprint: client.ModelFingerprint(), Model: modelName, APIMode: apiMode,
+				ProviderFingerprint: client.ModelFingerprint(), Model: modelName, APIMode: apiMode, ReasoningEffort: string(client.ReasoningEffort()),
 				PromptVersion: remediationinvestigation.PromptVersion, SchemaVersion: remediationinvestigation.SchemaVersion,
 				VerificationVersion:    remediationinvestigation.VerificationVersion,
 				ResultVersion:          remediationinvestigation.ResultVersion,

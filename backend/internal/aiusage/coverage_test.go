@@ -26,13 +26,13 @@ func TestOperationAccountsCacheReadWriteAndModelProvenance(t *testing.T) {
 	ctx, operation := Begin(context.Background(), recorder, Metadata{
 		LogicalID: "operation", Origin: OriginFetcher, Feature: FeatureFailureAnalysis, StartedAt: now,
 	})
-	ObserveModelRequestWithModel(ctx, TokenUsage{
+	ObserveModelRequestWithModelAndReasoningEffort(ctx, TokenUsage{
 		Reported: true, InputTokens: 1000, CachedInputTokens: 400,
 		CacheWriteInputTokens: 100, CacheWriteInputTokensReported: true,
 		OutputTokens: 250, ReasoningTokens: 50,
-	}, "claude-sonnet-4.6", "0123456789abcdef")
+	}, "claude-sonnet-4.6", "0123456789abcdef", " HIGH ")
 	got := operation.Finish(OutcomeSuccess)
-	if got.Model != "claude-sonnet-4.6" || got.ModelFingerprint != "0123456789abcdef" || got.UsageSource != UsageSourceProviderResponse ||
+	if got.Model != "claude-sonnet-4.6" || got.ModelFingerprint != "0123456789abcdef" || got.ReasoningEffort != "high" || got.UsageSource != UsageSourceProviderResponse ||
 		got.CacheWriteReportedRequests != 1 || got.CacheWriteUnreportedRequests != 0 || got.CacheWritePricedRequests != 1 ||
 		got.CacheWriteInputTokens != 100 || got.EstimatedCostNanos != 1_165_000 || !got.CoverageCountsKnown {
 		t.Fatalf("operation = %+v", got)

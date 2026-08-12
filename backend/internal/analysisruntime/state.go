@@ -491,9 +491,10 @@ func (s *ContainerStateStore) recordUsageLocked(state ContainerAnalysisState) {
 			ID:        state.TaskNamespace + "\x00" + state.TaskName + "\x00" + trace.StartedAt,
 			LogicalID: state.CacheKey, Origin: aiusage.OriginAnalyzer, Feature: aiusage.FeatureFailureAnalysis,
 			StartedAt: trace.StartedAt, CompletedAt: completedAt,
-			Outcome:     aiusage.OutcomeSuccess,
-			Model:       trace.Model,
-			Correlation: aiusage.Correlation{JobID: trace.JobID, BuildID: trace.BuildID, TestName: trace.TestName},
+			Outcome:         aiusage.OutcomeSuccess,
+			Model:           trace.Model,
+			ReasoningEffort: trace.ReasoningEffort,
+			Correlation:     aiusage.Correlation{JobID: trace.JobID, BuildID: trace.BuildID, TestName: trace.TestName},
 		}
 		switch trace.Outcome {
 		case "ai_cache_hit", "build_cache_hit":
