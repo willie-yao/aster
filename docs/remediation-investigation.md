@@ -1,9 +1,9 @@
 # Causal-group remediation investigation
 
-> **Status:** private verification foundation. The read-only investigator,
+> **Status:** authenticated preview investigation. The read-only investigator,
 > minimal candidate contract, private evidence ledger and cache, deterministic
-> verifier, and frozen benchmark exist, but no server endpoint, public
-> actionable state, File Issue eligibility, or Fix PR handoff is enabled yet.
+> verifier, frozen benchmark, authenticated operation, and safe public lifecycle
+> exist. File Issue eligibility and Fix PR handoff are not enabled.
 
 Version-10 causal-group correlation remains analysis-only. It does not emit a
 suggested fix, remediation target, source target, or action field. A separate
@@ -40,20 +40,24 @@ The trusted in-process model client runs two bounded phases:
    `repotree` tools are available. Artifact access is bound to the exact causal
    builds. Source access is bound to one immutable repository revision. A
    successful content-bearing artifact read and source read are required.
-2. **Source-floor retry.** If the first evidence attempt returns without a
-   content-bearing `read_repo_file`, it is discarded and one bounded retry
-   explicitly requires pinned source inspection. A second miss remains safely
-   `insufficient_evidence` and never reaches target finalization.
-3. **Structured finalization.** Read tools are removed. The engine supplies a
+   The generic tool loop requires one successful content-bearing
+   `read_repo_file` before it accepts a tools-free memo. If the model tries to
+   answer first, the next request forces that exact function while the model
+   still chooses its arguments. When no frozen relevant-file hint resolves at
+   the pinned revision, the loop first forces one bounded `list_repo_tree`, then
+   forces `read_repo_file`. Forced turns disable parallel tool calls and remain
+   inside the same bounded conversation and iteration budget.
+2. **Structured finalization.** Read tools are removed. The engine supplies a
    private evidence catalog with deterministic IDs. The model may return only a
    cause assessment, concise reason, optional typed candidate target, selected
    evidence IDs, and a typed non-actionable reason when no candidate exists.
 
-If the evidence floor is not met, dashboard code produces a safe private
-`insufficient_evidence` result without asking the model to invent a target. No
-workspace, shell, branch, issue, pull request, or write tool is available. The
-experimental Agent Sandbox analyzer is not used. Agent Sandbox/OpenCode remains
-the later patch-generation stage after deterministic target verification.
+If the required source tool cannot complete, the generic loop returns a typed,
+content-free failure and target finalization does not run. The evidence ledger
+also keeps the source and artifact floors as defense in depth. No workspace,
+shell, branch, issue, pull request, or write tool is available. The experimental
+Agent Sandbox analyzer is not used. Agent Sandbox/OpenCode remains the later
+patch-generation stage after deterministic target verification.
 
 ## Minimal model result
 
@@ -231,59 +235,59 @@ reconstruction, cache preservation, read floors, deterministic source-state
 checks, and scoring controls.
 
 Provider-backed evaluation must use the final merged prompt, schema, and exact
-intended provider. Prompt version 3 requires a content-bearing pinned source read
-and records the bounded evidence retry separately from structured repair count. The earlier 0/12 run against result version 2 is evidence that the old
-model contract was unsuitable. It is not readiness evidence for result version
-3 and is not evidence that source-grounded remediation is infeasible.
+intended provider. Prompt version 4 requires a content-bearing pinned source
+read through the generic required-tool mechanism. `evidence_retry_count`
+records forced required-tool dispatches separately from structured repair count.
+The earlier 0/12 run against result version 2 is evidence that the old model
+contract was unsuitable. The later prompt-version-3 Claude Stage A run proved
+that an automatic tool choice plus a prompt-only retry did not produce source
+reads. Neither result is readiness evidence for version 4, and neither is
+evidence that source-grounded remediation is infeasible.
 
 Run the provider gate in stages and stop at the first failed stage.
 
-### Stage 1: structural gate
+### Stage A: exact-provider source gate
 
-Run these three cases with two cold repetitions each:
+Run these three cases with two cold repetitions each using the exact intended
+provider configuration:
 
 ```bash
 RUN_REMEDIATION_INVESTIGATION_BENCHMARK=1 \
-REMEDIATION_BENCH_CASES=actionable-missing-call,target-already-present-at-pinned-revision,environment-or-infrastructure \
+REMEDIATION_BENCH_CASES=actionable-missing-call,fixed-in-current-source,environment-or-infrastructure \
 REMEDIATION_BENCH_REPETITIONS=2 \
-REMEDIATION_BENCH_RESULTS_JSONL=/private/path/stage-1.jsonl \
+REMEDIATION_BENCH_RESULTS_JSONL=/private/path/stage-a.jsonl \
 AI_ENDPOINT=<configured-endpoint> \
 AI_MODEL=<configured-model> \
 go test ./internal/e2e -run '^TestRemediationInvestigationBenchmark$' -v -timeout 60m
 ```
 
-Proceed only if at least five of six trials are structurally valid.
+Require all six trials to complete a successful content-bearing source read,
+zero unsafe acceptances, no wrong-repository or fabricated target, and at least
+one exact verified positive before proceeding. If all source reads succeed but
+no useful candidate is produced, stop and report a reasoning-quality limitation.
 
-### Stage 2: positive-target gate
+### Stage B: full matrix
 
-Run the two positive cases with three cold repetitions each:
-
-```bash
-RUN_REMEDIATION_INVESTIGATION_BENCHMARK=1 \
-REMEDIATION_BENCH_CASES=actionable-missing-call,actionable-missing-job-environment \
-REMEDIATION_BENCH_REPETITIONS=3 \
-REMEDIATION_BENCH_RESULTS_JSONL=/private/path/stage-2.jsonl \
-AI_ENDPOINT=<configured-endpoint> \
-AI_MODEL=<configured-model> \
-go test ./internal/e2e -run '^TestRemediationInvestigationBenchmark$' -v -timeout 60m
-```
-
-Proceed only if each positive case produces the correct deterministically
-verified target in at least two of three repetitions and there are zero unsafe
-acceptances.
-
-### Stage 3: full matrix
-
-Only after stages 1 and 2 pass, run all 12 cases with three cold repetitions:
+Only after Stage A passes, run all 12 cases with three cold repetitions:
 
 ```bash
 RUN_REMEDIATION_INVESTIGATION_BENCHMARK=1 \
 REMEDIATION_BENCH_REPETITIONS=3 \
-REMEDIATION_BENCH_RESULTS_JSONL=/private/path/stage-3.jsonl \
+REMEDIATION_BENCH_RESULTS_JSONL=/private/path/stage-b.jsonl \
 AI_ENDPOINT=<configured-endpoint> \
 AI_MODEL=<configured-model> \
 go test ./internal/e2e -run '^TestRemediationInvestigationBenchmark$' -v -timeout 120m
 ```
+
+Require 100% actionable precision, zero unsafe or wrong-repository acceptance,
+and at least two distinct positive target kinds before continuing to the frozen
+real historical holdouts.
+
+### Stage C: real historical holdouts
+
+Run the frozen real-history cases with at least two cold repetitions each. Keep
+expected outcomes out of provider prompts. Require zero unsafe acceptance and no
+wrong-repository actionable target.
 
 Set `AI_API` only when the intended provider mode is not the client default.
 `AI_TOKEN` is read by the client but is never printed, persisted, compared, or
@@ -291,7 +295,7 @@ hashed. Summarize each private JSONL with:
 
 ```bash
 python3 hack/summarize-remediation-investigation-benchmark.py \
-  /private/path/stage-1.jsonl
+  /private/path/stage-a.jsonl
 ```
 
 The report separates structural validity, engine-derived classification

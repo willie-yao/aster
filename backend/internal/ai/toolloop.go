@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
@@ -16,8 +17,43 @@ type ToolLoopEvent struct {
 	Name            string
 	Path            string
 	BytesFetched    int
+	ContentBytes    int
 	Error           bool
 	BudgetExhausted bool
+	Forced          bool
+}
+
+// RequiredTool describes one exact tool call that must succeed before the loop
+// accepts a tools-free answer. Requirements are satisfied in slice order.
+type RequiredTool struct {
+	Name             string
+	CorrectivePrompt string
+	MaxAttempts      int
+	RequireContent   bool
+}
+
+// RequiredToolErrorCode classifies a required-tool failure without retaining
+// model output, tool arguments, or tool results.
+type RequiredToolErrorCode string
+
+const (
+	RequiredToolInvalid           RequiredToolErrorCode = "invalid_requirement"
+	RequiredToolNotEnabled        RequiredToolErrorCode = "not_enabled"
+	RequiredToolAttemptsExhausted RequiredToolErrorCode = "attempts_exhausted"
+)
+
+// RequiredToolError is a content-free required-tool failure.
+type RequiredToolError struct {
+	Tool     string
+	Code     RequiredToolErrorCode
+	Attempts int
+}
+
+func (e *RequiredToolError) Error() string {
+	if e.Attempts > 0 {
+		return fmt.Sprintf("tool loop: required tool %q failed after %d forced attempt(s): %s", e.Tool, e.Attempts, e.Code)
+	}
+	return fmt.Sprintf("tool loop: required tool %q failed: %s", e.Tool, e.Code)
 }
 
 // ToolLoopOptions tunes the generic tool loop. All fields are optional; a zero
@@ -39,6 +75,9 @@ type ToolLoopOptions struct {
 	// PropagateFinalizeError returns a forced-finalization model error instead
 	// of preserving the generic tool loop's best-effort empty result.
 	PropagateFinalizeError bool
+	// RequiredTools is an ordered sequence of exact enabled tool names that must
+	// complete successfully before a tools-free answer is accepted.
+	RequiredTools []RequiredTool
 	// Observe receives content-free telemetry after each tool dispatch.
 	Observe func(ToolLoopEvent)
 }
@@ -78,6 +117,10 @@ func (c *Client) ToolLoop(
 		return "", fmt.Errorf("tool loop: no tools enabled (got %v); resolve groups with Registry.Enable first", enabled)
 	}
 	schemaBytes := schemaPayloadBytes(schemas)
+	required, err := newRequiredToolState(opts.RequiredTools, schemas)
+	if err != nil {
+		return "", err
+	}
 
 	var parallelToolCalls *bool
 	if opts.SingleToolCall {
@@ -87,7 +130,11 @@ func (c *Client) ToolLoop(
 
 	calls := 0
 	nudged := false
+	forceRequired := false
 	for iter := 0; iter < maxIters; iter++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if opts.ContextByteBudget > 0 {
 			var elided int
 			messages, elided = compactMessages(messages, schemaBytes, opts.ContextByteBudget)
@@ -95,7 +142,24 @@ func (c *Client) ToolLoop(
 				log.Printf("  ✂ tool loop: elided %d message(s) to fit ~%d-byte window", elided, opts.ContextByteBudget)
 			}
 		}
-		resp, err := c.callModel(ctx, messages, schemas, parallelToolCalls)
+		request := modelRequest{
+			Model: c.model, Messages: messages, Tools: schemas,
+			ParallelToolCalls: parallelToolCalls,
+		}
+		forcedName := ""
+		if forceRequired {
+			pending := required.pending()
+			if pending == nil {
+				return "", fmt.Errorf("tool loop: required-tool state is inconsistent")
+			}
+			required.beginForcedAttempt()
+			forcedName = pending.Name
+			request.ToolChoice = &ToolChoice{Name: forcedName}
+			parallel := false
+			request.ParallelToolCalls = &parallel
+			forceRequired = false
+		}
+		resp, err := c.callModelRequest(ctx, request)
 		if err != nil {
 			if iter == 0 && isToolsUnsupportedError(err) {
 				return "", fmt.Errorf("%w: %v", ErrToolsUnsupported, err)
@@ -108,6 +172,15 @@ func (c *Client) ToolLoop(
 		msg := resp.Message
 
 		if len(msg.ToolCalls) == 0 {
+			if pending := required.pending(); pending != nil {
+				if !required.canForce() {
+					return "", required.exhaustedError()
+				}
+				messages = appendToolsFreeAssistant(messages, msg)
+				messages = append(messages, modelMessage{Role: "user", Content: strPtr(pending.CorrectivePrompt)})
+				forceRequired = true
+				continue
+			}
 			// Require a minimum of investigation before accepting a final
 			// answer, nudging once so a model that finalizes from the prompt
 			// alone still goes and reads the source first.
@@ -128,7 +201,7 @@ func (c *Client) ToolLoop(
 			return "", nil
 		}
 
-		toolCalls, dropped := limitToolCalls(msg.ToolCalls, opts.SingleToolCall)
+		toolCalls, dropped := limitToolCalls(msg.ToolCalls, opts.SingleToolCall || forcedName != "")
 		if dropped > 0 {
 			log.Printf("  ⤵ single_tool_call: executing 1 of %d tool calls, dropping %d", len(msg.ToolCalls), dropped)
 		}
@@ -144,12 +217,13 @@ func (c *Client) ToolLoop(
 		for _, tc := range toolCalls {
 			payload, result := dispatchToolLoop(ctx, reg, env, tc)
 			calls++
+			required.observe(tc.Function.Name, result)
 			if opts.Observe != nil {
 				_, hasError := result.Payload["error"]
 				opts.Observe(ToolLoopEvent{
 					Name: tc.Function.Name, Path: toolLoopPath(tc.Function.Arguments),
-					BytesFetched: result.BytesFetched, Error: hasError,
-					BudgetExhausted: result.BudgetExhausted,
+					BytesFetched: result.BytesFetched, ContentBytes: result.ContentBytes, Error: hasError,
+					BudgetExhausted: result.BudgetExhausted, Forced: forcedName != "",
 				})
 			}
 			messages = append(messages, modelMessage{
@@ -158,6 +232,12 @@ func (c *Client) ToolLoop(
 				Content:    strPtr(payload),
 			})
 		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+	}
+	if required.pending() != nil {
+		return "", required.exhaustedError()
 	}
 
 	// The model never returned a tools-free answer within the budget. Force one
@@ -171,6 +251,86 @@ func (c *Client) ToolLoop(
 		return "", ErrContextHeadroom
 	}
 	return final, nil
+}
+
+type requiredToolState struct {
+	requirements []RequiredTool
+	attempts     []int
+	index        int
+}
+
+func newRequiredToolState(requirements []RequiredTool, schemas []tools.Schema) (*requiredToolState, error) {
+	enabled := make(map[string]bool, len(schemas))
+	for _, schema := range schemas {
+		enabled[schema.Function.Name] = true
+	}
+	state := &requiredToolState{
+		requirements: append([]RequiredTool(nil), requirements...),
+		attempts:     make([]int, len(requirements)),
+	}
+	for index := range state.requirements {
+		requirement := &state.requirements[index]
+		if requirement.Name == "" || strings.TrimSpace(requirement.Name) != requirement.Name || strings.TrimSpace(requirement.CorrectivePrompt) == "" {
+			return nil, &RequiredToolError{Tool: requirement.Name, Code: RequiredToolInvalid}
+		}
+		if !enabled[requirement.Name] {
+			return nil, &RequiredToolError{Tool: requirement.Name, Code: RequiredToolNotEnabled}
+		}
+		if requirement.MaxAttempts <= 0 {
+			requirement.MaxAttempts = 1
+		}
+	}
+	return state, nil
+}
+
+func (s *requiredToolState) pending() *RequiredTool {
+	if s == nil || s.index >= len(s.requirements) {
+		return nil
+	}
+	return &s.requirements[s.index]
+}
+
+func (s *requiredToolState) canForce() bool {
+	pending := s.pending()
+	return pending != nil && s.attempts[s.index] < pending.MaxAttempts
+}
+
+func (s *requiredToolState) beginForcedAttempt() {
+	if s.pending() != nil {
+		s.attempts[s.index]++
+	}
+}
+
+func (s *requiredToolState) observe(name string, result tools.Result) {
+	pending := s.pending()
+	if pending == nil || name != pending.Name {
+		return
+	}
+	if _, hasError := result.Payload["error"]; hasError || result.BudgetExhausted {
+		return
+	}
+	if pending.RequireContent && result.ContentBytes <= 0 {
+		return
+	}
+	s.index++
+}
+
+func (s *requiredToolState) exhaustedError() error {
+	pending := s.pending()
+	if pending == nil {
+		return nil
+	}
+	return &RequiredToolError{
+		Tool: pending.Name, Code: RequiredToolAttemptsExhausted,
+		Attempts: s.attempts[s.index],
+	}
+}
+
+func appendToolsFreeAssistant(messages []modelMessage, msg modelMessage) []modelMessage {
+	if msg.Content == nil && len(msg.ProviderItems) == 0 {
+		return messages
+	}
+	return append(messages, modelMessage{Role: "assistant", Content: msg.Content, ProviderItems: msg.ProviderItems})
 }
 
 func (c *Client) runToolLoopFinalizeRound(ctx context.Context, messages []modelMessage, headroom contextHeadroom) (string, error) {

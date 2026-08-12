@@ -26,10 +26,13 @@ type fakeModel struct {
 	finalErr      error
 	toolCalls     int
 	finalCalls    int
+	toolOptions   []ai.ToolLoopOptions
 }
 
 func (m *fakeModel) ToolLoop(_ context.Context, _, _ string, _ *tools.Registry, _ []string, _ *tools.Env, opts ai.ToolLoopOptions) (string, error) {
 	m.toolCalls++
+	opts.RequiredTools = append([]ai.RequiredTool(nil), opts.RequiredTools...)
+	m.toolOptions = append(m.toolOptions, opts)
 	events := m.toolEvents
 	if index := m.toolCalls - 1; index >= 0 && index < len(m.toolEventSets) {
 		events = m.toolEventSets[index]
@@ -183,7 +186,7 @@ func TestServiceCachesEvidenceBackedTypedResult(t *testing.T) {
 		result: actionableJSON(),
 		toolEvents: []ai.ToolLoopEvent{
 			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
-			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80},
+			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
 		},
 	}
 	service, input, browser, _ := serviceFixture(t, model)
@@ -215,12 +218,12 @@ func TestServiceEvidenceFloorReturnsSafeNonActionableResult(t *testing.T) {
 	}
 }
 
-func TestServiceRetriesEvidencePhaseWhenSourceWasNotRead(t *testing.T) {
+func TestServiceUsesForcedRequiredSourceReadWithoutRestart(t *testing.T) {
 	model := &fakeModel{
 		fingerprint: strings.Repeat("d", 16), memo: "evidence", result: actionableJSON(),
-		toolEventSets: [][]ai.ToolLoopEvent{
-			{{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19}},
-			{{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80}},
+		toolEvents: []ai.ToolLoopEvent{
+			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
+			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80, Forced: true},
 		},
 	}
 	service, input, browser, _ := serviceFixture(t, model)
@@ -228,8 +231,39 @@ func TestServiceRetriesEvidencePhaseWhenSourceWasNotRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.toolCalls != 2 || model.finalCalls != 1 || got.Entry.Provenance.Metrics.EvidenceRetryCount != 1 || got.Entry.Result.Candidate == nil {
+	if model.toolCalls != 1 || model.finalCalls != 1 || got.Entry.Provenance.Metrics.EvidenceRetryCount != 1 || got.Entry.Result.Candidate == nil {
 		t.Fatalf("tool=%d final=%d result=%+v", model.toolCalls, model.finalCalls, got)
+	}
+	required := model.toolOptions[0].RequiredTools
+	if len(required) != 1 || required[0].Name != "read_repo_file" || !required[0].RequireContent || required[0].MaxAttempts != 1 {
+		t.Fatalf("required tools=%+v", required)
+	}
+}
+
+func TestServiceRequiresTreeListingWhenNoRelevantFileHintResolves(t *testing.T) {
+	model := &fakeModel{
+		fingerprint: strings.Repeat("d", 16), memo: "evidence", result: actionableJSON(),
+		toolEvents: []ai.ToolLoopEvent{
+			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
+			{Name: "list_repo_tree", Forced: true},
+			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80, Forced: true},
+		},
+	}
+	service, input, browser, _ := serviceFixture(t, model)
+	input.RelevantFiles = nil
+	for index := range input.Analyses {
+		input.Analyses[index].RelevantFiles = nil
+	}
+	got, err := service.Investigate(t.Context(), input, browser, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	required := model.toolOptions[0].RequiredTools
+	if len(required) != 2 || required[0].Name != "list_repo_tree" || required[1].Name != "read_repo_file" || !required[1].RequireContent {
+		t.Fatalf("required tools=%+v", required)
+	}
+	if got.Entry.Provenance.Metrics.EvidenceRetryCount != 2 || got.Entry.Provenance.Evidence.SourceLists != 1 || got.Entry.Provenance.Evidence.SourceReads != 1 {
+		t.Fatalf("provenance=%+v", got.Entry.Provenance)
 	}
 }
 
@@ -238,7 +272,7 @@ func TestServiceFailedRefreshPreservesAcceptedResult(t *testing.T) {
 		fingerprint: strings.Repeat("d", 16), memo: "evidence", result: actionableJSON(),
 		toolEvents: []ai.ToolLoopEvent{
 			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
-			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80},
+			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
 		},
 	}
 	service, input, browser, cache := serviceFixture(t, model)
@@ -262,7 +296,7 @@ func TestServiceRepairsOneInvalidStructuredResult(t *testing.T) {
 		results: []string{`{"version":0}`, actionableJSON()},
 		toolEvents: []ai.ToolLoopEvent{
 			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
-			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80},
+			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
 		},
 	}
 	service, input, browser, _ := serviceFixture(t, model)
@@ -280,7 +314,7 @@ func TestServiceInvalidRefreshPreservesAcceptedResult(t *testing.T) {
 		fingerprint: strings.Repeat("d", 16), memo: "evidence", result: actionableJSON(),
 		toolEvents: []ai.ToolLoopEvent{
 			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
-			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80},
+			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
 		},
 	}
 	service, input, browser, cache := serviceFixture(t, model)
@@ -311,7 +345,7 @@ func TestServiceRejectsCandidateWithoutIssuedSourceEvidence(t *testing.T) {
 		fingerprint: strings.Repeat("d", 16), memo: "evidence", result: string(encoded),
 		toolEvents: []ai.ToolLoopEvent{
 			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
-			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80},
+			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
 		},
 	}
 	service, input, browser, cache := serviceFixture(t, model)

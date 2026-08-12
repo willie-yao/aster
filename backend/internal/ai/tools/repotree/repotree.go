@@ -207,7 +207,7 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}
 	slice := content[offset:end]
 	return tools.Result{
-		BytesFetched: len(slice),
+		BytesFetched: len(slice), ContentBytes: len(slice),
 		Payload: map[string]interface{}{
 			"path":      args.Path,
 			"file_size": size,

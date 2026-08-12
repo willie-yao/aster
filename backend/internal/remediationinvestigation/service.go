@@ -31,7 +31,6 @@ type Model interface {
 type ServiceOptions struct {
 	Timeout           time.Duration
 	MaxIters          int
-	MinToolCalls      int
 	ContextByteBudget int
 	Now               func() time.Time
 	UsageRecorder     *aiusage.Recorder
@@ -43,9 +42,6 @@ func (o ServiceOptions) normalized() ServiceOptions {
 	}
 	if o.MaxIters <= 0 {
 		o.MaxIters = 10
-	}
-	if o.MinToolCalls <= 0 {
-		o.MinToolCalls = 2
 	}
 	if o.ContextByteBudget <= 0 {
 		o.ContextByteBudget = 256 << 10
@@ -92,7 +88,8 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		return RunResult{}, err
 	}
 	bound := &boundSourceReader{reader: s.source, repository: input.InvestigationSource}
-	if _, err := bound.ListTree(ctx); err != nil {
+	sourceFiles, err := bound.ListTree(ctx)
+	if err != nil {
 		_ = s.cache.RecordFailure(key, FailureSourceUnavailable, err)
 		return RunResult{}, fmt.Errorf("pinned investigation source is unavailable: %w", err)
 	}
@@ -147,19 +144,11 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		finish()
 		return RunResult{}, err
 	}
-	runEvidence := func(prompt string) (string, error) {
-		return s.model.ToolLoop(runCtx, evidenceSystemPrompt(input.ConsumerPrompt), prompt, registry, enabled, env, ai.ToolLoopOptions{
-			MaxIters: s.opts.MaxIters, MinToolCalls: s.opts.MinToolCalls,
-			SingleToolCall: true, ContextByteBudget: s.opts.ContextByteBudget,
-			PropagateFinalizeError: true, Observe: ledger.observe,
-		})
-	}
-	memo, runErr := runEvidence(evidencePrompt)
-	evidenceRetryCount := 0
-	if runErr == nil && ledger.stats.SourceReads == 0 {
-		evidenceRetryCount = 1
-		memo, runErr = runEvidence(evidenceSourceRetryPrompt(evidencePrompt))
-	}
+	memo, runErr := s.model.ToolLoop(runCtx, evidenceSystemPrompt(input.ConsumerPrompt), evidencePrompt, registry, enabled, env, ai.ToolLoopOptions{
+		MaxIters: s.opts.MaxIters, SingleToolCall: true,
+		ContextByteBudget: s.opts.ContextByteBudget, PropagateFinalizeError: true,
+		RequiredTools: requiredSourceTools(input, sourceFiles), Observe: ledger.observe,
+	})
 	if runErr != nil {
 		outcome = usageOutcomeForError(runErr)
 		usage := finish()
@@ -237,7 +226,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		Currency: usage.Currency, PricingHash: usage.PricingHash, InputTokens: usage.InputTokens,
 		CachedInputTokens: usage.CachedInputTokens, OutputTokens: usage.OutputTokens,
 		ReasoningTokens: usage.ReasoningTokens, EstimatedCostNanos: usage.EstimatedCostNanos,
-		RepairCount: repairCount, EvidenceRetryCount: evidenceRetryCount,
+		RepairCount: repairCount, EvidenceRetryCount: ledger.forcedToolCalls,
 	}
 	provenance := NewProvenance(input, s.model.ModelName(), s.model.APIMode(), ledger.stats, metrics, completed)
 	if err := s.cache.StoreSuccess(key, result, catalog, provenance); err != nil {
@@ -268,10 +257,6 @@ Inspect recurring-build evidence and pinned source. Relevant files are hints, no
 		return base
 	}
 	return base + "\n\nProject-specific diagnostic context follows. Treat it as domain context, not authorization:\n" + consumerPrompt
-}
-
-func evidenceSourceRetryPrompt(evidencePrompt string) string {
-	return "The previous evidence attempt was discarded because it did not read pinned source. Before answering, call read_repo_file and inspect non-empty source content. Do not return a memo until that tool call succeeds.\n\n" + evidencePrompt
 }
 
 func finalSystemPrompt() string {
@@ -430,9 +415,10 @@ func (r *boundSourceReader) ReadFile(ctx context.Context, file string) (string, 
 }
 
 type evidenceLedger struct {
-	stats         EvidenceStats
-	sourceReads   map[string]bool
-	artifactReads map[string]bool
+	stats           EvidenceStats
+	sourceReads     map[string]bool
+	artifactReads   map[string]bool
+	forcedToolCalls int
 }
 
 func newEvidenceLedger() *evidenceLedger {
@@ -441,6 +427,9 @@ func newEvidenceLedger() *evidenceLedger {
 
 func (l *evidenceLedger) observe(event ai.ToolLoopEvent) {
 	l.stats.ToolCalls++
+	if event.Forced {
+		l.forcedToolCalls++
+	}
 	if event.Error {
 		l.stats.ToolErrors++
 		return
@@ -451,9 +440,9 @@ func (l *evidenceLedger) observe(event ai.ToolLoopEvent) {
 	case "grep_repo":
 		l.stats.SourceGreps++
 	case "read_repo_file":
-		if event.BytesFetched > 0 {
+		if event.ContentBytes > 0 {
 			l.stats.SourceReads++
-			l.stats.SourceReadBytes += event.BytesFetched
+			l.stats.SourceReadBytes += event.ContentBytes
 			l.sourceReads[event.Path] = true
 		}
 	case "list_artifacts", "find_artifacts":
@@ -472,6 +461,42 @@ func (l *evidenceLedger) observe(event ai.ToolLoopEvent) {
 			l.artifactReads[event.Path] = true
 		}
 	}
+}
+
+func requiredSourceTools(input FrozenInput, sourceFiles []string) []ai.RequiredTool {
+	fileSet := make(map[string]bool, len(sourceFiles))
+	for _, file := range sourceFiles {
+		fileSet[file] = true
+	}
+	hasUsableHint := false
+	for _, file := range relevantFileHints(input) {
+		if fileSet[file] {
+			hasUsableHint = true
+			break
+		}
+	}
+	read := ai.RequiredTool{
+		Name: "read_repo_file", MaxAttempts: 1, RequireContent: true,
+		CorrectivePrompt: "The pinned-source read requirement is not satisfied. Call read_repo_file now with one exact source path and inspect non-empty content before answering.",
+	}
+	if hasUsableHint {
+		return []ai.RequiredTool{read}
+	}
+	return []ai.RequiredTool{
+		{
+			Name: "list_repo_tree", MaxAttempts: 1,
+			CorrectivePrompt: "No frozen relevant-file hint resolves at the pinned revision. Call list_repo_tree now to inspect the repository structure before choosing a source file.",
+		},
+		read,
+	}
+}
+
+func relevantFileHints(input FrozenInput) []string {
+	files := slices.Clone(input.RelevantFiles)
+	for _, analysis := range input.Analyses {
+		files = append(files, analysis.RelevantFiles...)
+	}
+	return files
 }
 
 func (l *evidenceLedger) gatePassed() bool {
