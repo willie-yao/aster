@@ -50,6 +50,7 @@ jobs:
       ai-api: ${{ vars.AI_API }}
       ai-model: ${{ vars.AI_MODEL }}
       ai-endpoint: ${{ vars.AI_ENDPOINT }}
+      ai-reasoning-effort: ${{ vars.AI_REASONING_EFFORT }}
       ai-context-window-tokens: ${{ vars.AI_CONTEXT_WINDOW_TOKENS }}
     secrets:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
@@ -70,6 +71,8 @@ gh api repos/my-org/my-dashboard/pages -X POST -F build_type=workflow
 # Required unless project.yaml contains ai.endpoint and ai.model.
 gh variable set AI_API --body chat_completions --repo my-org/my-dashboard
 gh variable set AI_ENDPOINT --repo my-org/my-dashboard
+# Optional. Empty or unset uses the provider default.
+gh variable set AI_REASONING_EFFORT --body high --repo my-org/my-dashboard
 # Optional. Set only when independently verified for the selected endpoint.
 gh variable set AI_CONTEXT_WINDOW_TOKENS --body 128000 --repo my-org/my-dashboard
 gh variable set AI_MODEL --repo my-org/my-dashboard

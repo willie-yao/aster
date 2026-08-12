@@ -45,14 +45,17 @@ rather than silently degrading.
 
 ## Configuration
 
-All knobs are inlined directly under `ai:` in `project.yaml`. `endpoint` and
+Analysis-policy knobs are inlined directly under `ai:` in `project.yaml`. `endpoint` and
 `model` are required when AI is enabled (the engine has no default provider);
-every other field is optional and runs with engine defaults when unset:
+every other project field is optional and runs with engine defaults when unset.
+The provider reasoning effort is deployment-owned through `AI_REASONING_EFFORT`
+or Helm `ai.reasoningEffort`, not a competing project field:
 
 ```yaml
 ai:
   endpoint: ...                 # required when AI is enabled; or env AI_ENDPOINT
   model: ...                    # required when AI is enabled; or env AI_MODEL
+  # reasoning effort is deployment-owned: env AI_REASONING_EFFORT or Helm ai.reasoningEffort
   source_repo:                  # optional read-only source, defaults to branding.source_repo
     owner: my-org
     name: my-project
@@ -236,7 +239,7 @@ are repaired automatically.
 ### Presets
 
 Every preset still requires `endpoint` and `model` (omitted below for brevity);
-set them in `project.yaml` or via `AI_ENDPOINT` / `AI_MODEL`.
+set them in `project.yaml` or via `AI_ENDPOINT` / `AI_MODEL`. Set optional reasoning effort through `AI_REASONING_EFFORT` or Helm `ai.reasoningEffort`.
 
 **Strong hosted model** (e.g. Claude / GPT / Gemini via Copilot or OpenAI). The
 tuning defaults are enough here, so set just the endpoint, model, and tools. A

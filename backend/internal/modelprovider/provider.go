@@ -36,12 +36,13 @@ type Auth struct {
 
 // Config identifies one non-secret model provider operation endpoint.
 type Config struct {
-	CredentialMode     string `json:"credential_mode"`
-	API                string `json:"api"`
-	Endpoint           string `json:"endpoint"`
-	Model              string `json:"model"`
-	Auth               Auth   `json:"auth"`
-	PublicCAPrivateDNS bool   `json:"public_ca_private_dns,omitempty"`
+	CredentialMode     string          `json:"credential_mode"`
+	API                string          `json:"api"`
+	Endpoint           string          `json:"endpoint"`
+	Model              string          `json:"model"`
+	ReasoningEffort    ReasoningEffort `json:"reasoning_effort,omitempty"`
+	Auth               Auth            `json:"auth"`
+	PublicCAPrivateDNS bool            `json:"public_ca_private_dns,omitempty"`
 }
 
 // Normalize applies configuration defaults before the provider enters a wire contract.
@@ -56,6 +57,7 @@ func Normalize(config Config) Config {
 	}
 	config.Endpoint = strings.TrimSpace(config.Endpoint)
 	config.Model = strings.TrimSpace(config.Model)
+	config.ReasoningEffort = CanonicalReasoningEffort(string(config.ReasoningEffort))
 	config.Auth.Type = strings.ToLower(strings.TrimSpace(config.Auth.Type))
 	if config.Auth.Type == "" {
 		config.Auth.Type = AuthTypeNone
@@ -96,6 +98,12 @@ func ValidateOpenCode(config Config) error {
 	}
 	if config.Model == "" || len(config.Model) > 256 || strings.ContainsAny(config.Model, "\r\n\x00") {
 		return fmt.Errorf("model provider model must be non-empty, bounded, and single-line")
+	}
+	if _, err := NormalizeReasoningEffort(string(config.ReasoningEffort)); err != nil {
+		return err
+	}
+	if config.ReasoningEffort == ReasoningEffortMax {
+		return fmt.Errorf("pinned OpenCode 1.18.2 does not support reasoning effort max")
 	}
 	if config.CredentialMode == CredentialModeGateway {
 		if config.Auth.Type != AuthTypeNone || config.Auth.TokenEnv != "" {

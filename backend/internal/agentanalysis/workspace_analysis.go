@@ -139,6 +139,7 @@ type WorkspaceOpenCodeTelemetry struct {
 	Status                       string                             `json:"status"`
 	ProviderCredentialMode       string                             `json:"provider_credential_mode,omitempty"`
 	ProviderAPI                  string                             `json:"provider_api,omitempty"`
+	ProviderReasoningEffort      string                             `json:"provider_reasoning_effort,omitempty"`
 	EventCount                   int                                `json:"event_count,omitempty"`
 	ProviderRequests             int                                `json:"provider_requests,omitempty"`
 	ProviderRequestsKnown        bool                               `json:"provider_requests_known"`
@@ -790,8 +791,14 @@ func validateWorkspaceOpenCodeTelemetry(telemetry WorkspaceOpenCodeTelemetry) er
 	if telemetry.ProviderCredentialMode != "" && telemetry.ProviderCredentialMode != "direct" && telemetry.ProviderCredentialMode != "gateway" {
 		return fmt.Errorf("workspace OpenCode provider credential mode is invalid")
 	}
-	if telemetry.ProviderAPI != "" && telemetry.ProviderAPI != "chat_completions" {
+	if telemetry.ProviderAPI != "" && telemetry.ProviderAPI != "chat_completions" && telemetry.ProviderAPI != "responses" {
 		return fmt.Errorf("workspace OpenCode provider API is invalid")
+	}
+	if telemetry.ProviderReasoningEffort != "" && telemetry.ProviderAPI == "" {
+		return fmt.Errorf("workspace OpenCode provider reasoning effort is incomplete")
+	}
+	if _, err := ai.NormalizeReasoningEffort(telemetry.ProviderReasoningEffort); err != nil {
+		return fmt.Errorf("workspace OpenCode provider reasoning effort is invalid")
 	}
 	if telemetry.EventCount < 0 || telemetry.ProviderRequests < 0 || telemetry.DeniedToolCount < 0 || telemetry.ToolFailureCount < 0 || telemetry.StepsUsed < 0 || telemetry.StructuredOutputRetries < 0 || telemetry.StructuredOutputErrors < 0 || telemetry.EvidencePhaseSteps < 0 || telemetry.EvidencePhaseRequests < 0 || telemetry.ArtifactEvidenceToolCalls < 0 || telemetry.SourceEvidenceToolCalls < 0 || telemetry.FinalizationPhaseSteps < 0 || telemetry.FinalizationPhaseRequests < 0 || telemetry.StructuredOutputToolCalls < 0 || !validWorkspaceFailureCode(telemetry.FailureCode) {
 		return fmt.Errorf("workspace OpenCode telemetry is invalid")

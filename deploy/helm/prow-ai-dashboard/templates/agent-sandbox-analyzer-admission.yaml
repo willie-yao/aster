@@ -2,6 +2,7 @@
 {{- if .Values.agentSandbox.analyzer.enabled }}
 {{- $cfg := .Values.agentSandbox.analyzer -}}
 {{- $provider := $cfg.modelProvider -}}
+{{- $reasoningEffort := default "" $provider.reasoningEffort -}}
 {{- $directBearer := and (eq (default "direct" $provider.credentialMode) "direct") (eq (default "none" $provider.auth.type) "bearer") -}}
 {{- $clientSA := include "prow-ai-dashboard.agentSandboxAnalyzerClientServiceAccountName" . -}}
 {{- $requester := printf "system:serviceaccount:%s:%s" .Release.Namespace $clientSA -}}
@@ -52,8 +53,17 @@ spec:
       message: "dashboard analyzer execution identity is immutable"
     - expression: "request.operation != 'CREATE' || (object.metadata.name.matches('^analysis-[a-z0-9-]+-[0-9a-f]{12}$') && has(object.metadata.labels) && size(object.metadata.labels) == 4 && object.metadata.labels['app.kubernetes.io/managed-by'] == 'prow-ai-dashboard' && object.metadata.labels['agents.x-k8s.io/created-by'] == 'prow-ai-dashboard' && object.metadata.labels['prow-ai-dashboard/execution'] == object.metadata.name && object.metadata.labels['prow-ai-dashboard/purpose'] == 'analysis' && (!has(object.metadata.finalizers) || size(object.metadata.finalizers) == 0))"
       message: "dashboard analyzer Sandboxes require exact content-addressed metadata"
-    - expression: "request.operation != 'CREATE' || (has(object.metadata.annotations) && size(object.metadata.annotations) == 4 && object.metadata.annotations['prow-ai-dashboard/execution-contract-sha256'].matches('^[0-9a-f]{64}$') && size(object.metadata.annotations['prow-ai-dashboard/execution-id']) > 0 && object.metadata.annotations['prow-ai-dashboard/prepared-manifest-sha256'].matches('^[0-9a-f]{64}$') && object.metadata.annotations['prow-ai-dashboard/prepared-workspace-sha256'].matches('^[0-9a-f]{64}$'))"
+    - expression: "request.operation != 'CREATE' || (has(object.metadata.annotations) && size(object.metadata.annotations) == {{ add 4 (ternary 1 0 (ne $reasoningEffort "")) }} && object.metadata.annotations['prow-ai-dashboard/execution-contract-sha256'].matches('^[0-9a-f]{64}$') && size(object.metadata.annotations['prow-ai-dashboard/execution-id']) > 0 && object.metadata.annotations['prow-ai-dashboard/prepared-manifest-sha256'].matches('^[0-9a-f]{64}$') && object.metadata.annotations['prow-ai-dashboard/prepared-workspace-sha256'].matches('^[0-9a-f]{64}$'))"
       message: "dashboard analyzer Sandboxes require exact execution annotations"
+    {{- if $reasoningEffort }}
+    - expression: {{ printf "request.operation != 'CREATE' || (has(object.metadata.annotations) && object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == %s)" (toJson $reasoningEffort) | quote }}
+      message: "dashboard analyzer Sandboxes must use the configured reasoning effort"
+    - expression: "request.operation != 'UPDATE' || object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == oldObject.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort']"
+      message: "dashboard analyzer reasoning effort is immutable"
+    {{- else }}
+    - expression: "request.operation != 'CREATE' || !has(object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'])"
+      message: "dashboard analyzer Sandboxes must not add a reasoning effort override"
+    {{- end }}
     - expression: "object.spec.operatingMode == 'Running' && has(object.spec.shutdownTime) && object.spec.shutdownPolicy == 'Delete' && object.spec.service == false && (!has(object.spec.volumeClaimTemplates) || size(object.spec.volumeClaimTemplates) == 0)"
       message: "dashboard analyzer Sandboxes require bounded delete lifecycle without Services or PVC creation"
     - expression: "has(object.spec.podTemplate.metadata.labels) && size(object.spec.podTemplate.metadata.labels) == 2 && object.spec.podTemplate.metadata.labels['prow-ai-dashboard/execution'] == object.metadata.name && object.spec.podTemplate.metadata.labels['prow-ai-dashboard/purpose'] == 'analysis' && (!has(object.spec.podTemplate.metadata.annotations) || size(object.spec.podTemplate.metadata.annotations) == 0)"

@@ -51,6 +51,10 @@ if grep -Eq '^kind: (CronJob|Job)$' "$tmp/default.yaml"; then
   echo 'watch mode rendered a CronJob or manual Job' >&2
   exit 1
 fi
+if grep -Fq 'AI_REASONING_EFFORT' "$tmp/default.yaml"; then
+  echo 'default render included an unset reasoning effort' >&2
+  exit 1
+fi
 
 # The bundle wrapper clears skill entries inherited from values, then adds the
 # current files. Helm applies --set-json before --set-file.
@@ -120,6 +124,7 @@ container_args=(
   --set ai.enabled=true
   --set ai.endpoint=http://model.orka-system.svc.cluster.local/v1/chat/completions
   --set ai.model=script-model
+  --set ai.reasoningEffort=high
   --set ai.token=dashboard-token
   --set analysisRuntime.type=orka-container
   --set analysisRuntime.orkaContainer.image.tag=sha-deadbeef
@@ -240,6 +245,9 @@ grep -Fq 'resources: ["configmaps"]' "$tmp/container-analysis.yaml"
 grep -Fq 'kind: ValidatingAdmissionPolicy' "$tmp/container-analysis.yaml"
 grep -Fq 'object.spec.image ==' "$tmp/container-analysis.yaml"
 grep -Fq 'analysis Tasks must use only the configured model Secret' "$tmp/container-analysis.yaml"
+grep -Fq 'name: AI_REASONING_EFFORT' "$tmp/container-analysis.yaml"
+grep -Fq 'value: "high"' "$tmp/container-analysis.yaml"
+grep -Fq 'analysis Tasks must use the configured reasoning effort' "$tmp/container-analysis.yaml"
 grep -Fq 'kind: Namespace' "$tmp/container-analysis.yaml"
 grep -Eq 'namespace: test-prow-ai-dashboard-analysis-[0-9a-f]{8}' "$tmp/container-analysis.yaml"
 grep -Fq 'name: PROW_AI_STATE_KEY' "$tmp/container-analysis.yaml"
@@ -329,7 +337,7 @@ grep -Fq 'e.value == \"128000\"' "$tmp/container-context-window.yaml"
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" "${container_args[@]}" \
   --set analysisCache.generation=0 --show-only templates/orka-analysis-admission.yaml > "$tmp/container-cache-generation.yaml"
 grep -Fq 'AI_CACHE_GENERATION' "$tmp/container-cache-generation.yaml"
-grep -Fq "size(object.spec.env) == 10 + (object.spec.env.exists(e, e.name == 'AI_CACHE_GENERATION') ? 1 : 0)" "$tmp/container-cache-generation.yaml"
+grep -Fq "size(object.spec.env) == 11 + (object.spec.env.exists(e, e.name == 'AI_CACHE_GENERATION') ? 1 : 0)" "$tmp/container-cache-generation.yaml"
 grep -Fq 'e.value == \"0\"' "$tmp/container-cache-generation.yaml"
 grep -Fq "e.value.matches('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')" "$tmp/container-analysis.yaml"
 if grep -Eq 'resources: \["(tools|providers|agents|agentruntimes)"\]|type: ai|orka-producer|orka-ingestor|orka-artifact-tool' "$tmp/container-analysis.yaml"; then
@@ -1795,6 +1803,7 @@ project:
             api: chat_completions
             endpoint: https://api.githubcopilot.com/chat/completions
             model: fixture-model
+            reasoning_effort: high
             auth:
               type: bearer
   systemPrompt: test prompt
@@ -1819,6 +1828,7 @@ agentSandbox:
       api: chat_completions
       endpoint: https://api.githubcopilot.com/chat/completions
       model: fixture-model
+      reasoningEffort: high
       auth:
         type: bearer
         existingSecret: agent-sandbox-model
@@ -1863,6 +1873,8 @@ grep -Fq 'resources: ["pods/log"]' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'automountServiceAccountToken: false' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'serviceAccountName: test-prow-ai-dashboard-agent-sandbox-client' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'name: AGENT_SANDBOX_MODEL_PROVIDER_ENDPOINT' "$tmp/agent-sandbox-render.yaml"
+grep -A1 -F 'name: AGENT_SANDBOX_MODEL_PROVIDER_REASONING_EFFORT' "$tmp/agent-sandbox-render.yaml" | grep -Fq 'value: "high"'
+grep -Fq "object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == \\\"high\\\"" "$tmp/agent-sandbox-render.yaml"
 grep -Fq "variables.container.env[1].name == 'PROW_AI_MODEL_PROVIDER_TOKEN'" "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'size(variables.container.env) == 2' "$tmp/agent-sandbox-render.yaml"
 grep -Fq '(!has(variables.container.envFrom) || size(variables.container.envFrom) == 0)' "$tmp/agent-sandbox-render.yaml"
@@ -1979,6 +1991,7 @@ expect_agent_sandbox_fail direct-private-dns 'publicCAPrivateDNS applies only to
 expect_agent_sandbox_fail provider-path 'chat_completions endpoint must end with /chat/completions' --set agentSandbox.fixRuntime.modelProvider.endpoint=https://api.githubcopilot.com/v1
 expect_agent_sandbox_fail responses-path-mismatch 'responses endpoint must end with /responses' --set agentSandbox.fixRuntime.modelProvider.api=responses
 expect_agent_sandbox_fail responses-without-bearer 'responses requires direct bearer auth' --set agentSandbox.fixRuntime.modelProvider.api=responses --set agentSandbox.fixRuntime.modelProvider.endpoint=https://api.openai.com/v1/responses --set agentSandbox.fixRuntime.modelProvider.auth.type=none --set-string agentSandbox.fixRuntime.modelProvider.auth.existingSecret= --set-string agentSandbox.fixRuntime.modelProvider.auth.tokenKey=
+expect_agent_sandbox_fail reasoning-effort-mismatch 'reasoningEffort must match project' --set agentSandbox.fixRuntime.modelProvider.reasoningEffort=low
 expect_agent_sandbox_fail project-mode-mismatch 'credentialMode must match project' --set agentSandbox.fixRuntime.modelProvider.credentialMode=gateway --set agentSandbox.fixRuntime.modelProvider.auth.type=none --set-string agentSandbox.fixRuntime.modelProvider.auth.existingSecret= --set-string agentSandbox.fixRuntime.modelProvider.auth.tokenKey= --set agentSandbox.fixRuntime.modelProvider.endpoint=https://fake-gateway.fix-eval.svc.cluster.local/v1/chat/completions
 expect_agent_sandbox_fail orka-combination 'cannot be combined with Orka runtimes' --set orka.fixRuntime.enabled=true
 expect_agent_sandbox_fail command-mismatch 'must end with argv [git diff --cached --check]' --set-string agentSandbox.fixRuntime.allowedCommands[0].argv[0]=go
@@ -2033,6 +2046,7 @@ agentSandbox:
       api: chat_completions
       endpoint: https://model-gateway.platform.svc.cluster.local/v1/chat/completions
       model: analyzer-model
+      reasoningEffort: high
       auth:
         type: none
         existingSecret: ""
@@ -2082,6 +2096,7 @@ grep -Fq 'system:serviceaccount:dashboard-test:test-prow-ai-dashboard-agent-sand
 grep -Fq 'variables.pod.runtimeClassName ==' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq 'kata-vm-isolation' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq 'variables.pod.activeDeadlineSeconds == 915' "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == \\\"high\\\"" "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq "variables.container.env[0].name == 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64'" "$tmp/agent-sandbox-analyzer-render.yaml"
 if [ "$(grep -Fc 'expression: "object.spec.podTemplate.spec.containers[0]"' "$tmp/agent-sandbox-analyzer-render.yaml")" -ne 1 ] || grep -Fq 'expression: "object.spec.podTemplate.spec.initContainers[0]"' "$tmp/agent-sandbox-analyzer-render.yaml"; then
   echo 'analyzer admission rendered an invalid container variable' >&2

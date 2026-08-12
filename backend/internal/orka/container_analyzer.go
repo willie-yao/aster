@@ -40,6 +40,7 @@ type ContainerAnalyzerOptions struct {
 	API                 string
 	Endpoint            string
 	Model               string
+	ReasoningEffort     string
 	CacheGeneration     string
 	ModelSecretName     string
 	ModelTokenKey       string
@@ -147,6 +148,9 @@ func validateContainerAnalyzerOptions(opts ContainerAnalyzerOptions) error {
 		return err
 	}
 	if err := project.ValidateAIAPI(strings.ToLower(strings.TrimSpace(opts.API))); err != nil {
+		return err
+	}
+	if _, err := ai.NormalizeReasoningEffort(opts.ReasoningEffort); err != nil {
 		return err
 	}
 	if _, err := validateContainerAnalysisEndpoint(opts.Endpoint); err != nil {
@@ -368,6 +372,9 @@ func (a *ContainerAnalyzer) recordCacheDisposition(workItem string, cacheSeedInc
 
 func containerAnalyzerEnvironment(opts ContainerAnalyzerOptions) map[string]string {
 	environment := map[string]string{"AI_API": opts.API, "AI_ENDPOINT": opts.Endpoint, "AI_MODEL": opts.Model}
+	if effort, _ := ai.NormalizeReasoningEffort(opts.ReasoningEffort); effort != "" {
+		environment[project.AIReasoningEffortEnv] = string(effort)
+	}
 	if opts.CacheGeneration != "" {
 		environment[project.AICacheGenerationEnv] = opts.CacheGeneration
 	}

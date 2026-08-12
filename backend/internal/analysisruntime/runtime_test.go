@@ -103,7 +103,7 @@ triggers: ["boom"]
 		t.Fatal(err)
 	}
 	loaded, err := LoadProject(dir, cfg, ProviderFallbacks{
-		API: "chat_completions", Endpoint: "https://model.invalid/v1/chat/completions", Model: "model", ReasoningEffort: ai.ReasoningEffortHigh, CacheGeneration: "2",
+		API: "chat_completions", Endpoint: "https://model.invalid/v1/chat/completions", Model: "model", ReasoningEffort: string(ai.ReasoningEffortHigh), CacheGeneration: "2",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +123,11 @@ triggers: ["boom"]
 	}
 	if ids["engine.kubernetes.machine-node-providerid"] {
 		t.Fatal("filesystem-only project loaded Kubernetes skills")
+	}
+	if _, err := LoadProject(dir, cfg, ProviderFallbacks{
+		Endpoint: "https://model.invalid/v1/chat/completions", Model: "model", ReasoningEffort: "ultra",
+	}); err == nil || !strings.Contains(err.Error(), "reasoning effort") {
+		t.Fatalf("invalid reasoning effort error = %v", err)
 	}
 }
 

@@ -131,6 +131,7 @@ jobs:
       ai-api: ${{"{{"}} vars.AI_API {{"}}"}}
       ai-model: ${{"{{"}} vars.AI_MODEL {{"}}"}}
       ai-endpoint: ${{"{{"}} vars.AI_ENDPOINT {{"}}"}}
+      ai-reasoning-effort: ${{"{{"}} vars.AI_REASONING_EFFORT {{"}}"}}
     secrets:
       AI_TOKEN: ${{"{{"}} secrets.AI_TOKEN {{"}}"}}
 `))
@@ -187,6 +188,8 @@ ai:
   api: {{quote .AIAPI}}
   endpoint: {{quote .AIEndpoint}}
   model: {{quote .AIModel}}
+  # Empty uses the provider default. Supported values depend on the provider/model.
+  reasoningEffort: ""
   # 0 uses provider metadata or the engine fallback. Set a nonzero value only
   # when the endpoint's documented context window supports it.
   contextWindowTokens: 0
@@ -811,12 +814,14 @@ gh api -X POST repos/{{.DashboardOwner}}/{{.DashboardName}}/pages \
 gh variable set AI_API --body {{.AIAPI}} --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh variable set AI_ENDPOINT --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh variable set AI_MODEL --repo {{.DashboardOwner}}/{{.DashboardName}}
+# Optional: gh variable set AI_REASONING_EFFORT --body high --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh secret set AI_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
 {{else}}# AI is disabled in the initial workflow. To enable it later, remove ` + "`ai: false`" + `
 # from .github/workflows/deploy.yml, then configure the provider coordinates and token.
 gh variable set AI_API --body {{.AIAPI}} --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh variable set AI_ENDPOINT --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh variable set AI_MODEL --repo {{.DashboardOwner}}/{{.DashboardName}}
+# Optional: gh variable set AI_REASONING_EFFORT --body high --repo {{.DashboardOwner}}/{{.DashboardName}}
 gh secret set AI_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
 {{end}}` + "```" + `
 

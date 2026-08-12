@@ -19,6 +19,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aitest"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 )
 
 type fakeAnalyzer struct {
@@ -280,6 +281,7 @@ func TestRunWithScriptedModelEndpoint(t *testing.T) {
 	values["AI_API"] = "chat_completions"
 	values["AI_ENDPOINT"] = script.URL
 	values["AI_MODEL"] = "script-model"
+	values[project.AIReasoningEffortEnv] = " HIGH "
 	values["GITHUB_READ_TOKEN"] = "github-read-secret"
 	var stdout, stderr bytes.Buffer
 	err := run(context.Background(), []string{"-data-dir", t.TempDir()}, func(name string) string { return values[name] }, &stdout, &stderr, loadRuntime)
@@ -291,7 +293,7 @@ func TestRunWithScriptedModelEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	state, err := analysisruntime.ParseEncryptedContainerAnalysisState(stdout.String(), analyzerStateKey(), analysisruntime.NewContainerStateIdentity("orka-system", "test-task", request))
-	if err != nil || len(state.Traces) != 1 || state.TaskNamespace != "orka-system" || state.TaskName != "test-task" {
+	if err != nil || len(state.Traces) != 1 || state.TaskNamespace != "orka-system" || state.TaskName != "test-task" || state.Traces[0].ReasoningEffort != "high" {
 		t.Fatalf("state = %+v, error = %v", state, err)
 	}
 	if result.Analysis == nil || result.Analysis.RootCause == "" || result.Analysis.ToolCalls < 3 {

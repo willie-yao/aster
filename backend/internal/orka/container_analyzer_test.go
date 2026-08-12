@@ -258,14 +258,20 @@ func TestContainerAnalyzerEnvironmentIncludesContextWindowOverride(t *testing.T)
 	opts := containerAnalyzerTestOptions(t, bytes.Repeat([]byte{0x63}, 32))
 	opts.ContextWindowTokens = 128000
 	opts.CacheGeneration = "2"
+	opts.ReasoningEffort = " HIGH "
 	environment := containerAnalyzerEnvironment(opts)
-	if environment["AI_CONTEXT_WINDOW_TOKENS"] != "128000" || environment[project.AICacheGenerationEnv] != "2" {
+	if environment["AI_CONTEXT_WINDOW_TOKENS"] != "128000" || environment[project.AICacheGenerationEnv] != "2" || environment[project.AIReasoningEffortEnv] != "high" {
 		t.Fatalf("environment = %+v", environment)
 	}
 	opts.ContextWindowTokens = 0
 	opts.CacheGeneration = ""
-	if _, ok := containerAnalyzerEnvironment(opts)["AI_CONTEXT_WINDOW_TOKENS"]; ok {
+	opts.ReasoningEffort = ""
+	environment = containerAnalyzerEnvironment(opts)
+	if _, ok := environment["AI_CONTEXT_WINDOW_TOKENS"]; ok {
 		t.Fatal("unset context window was transported")
+	}
+	if _, ok := environment[project.AIReasoningEffortEnv]; ok {
+		t.Fatal("unset reasoning effort was transported")
 	}
 }
 

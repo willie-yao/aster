@@ -37,8 +37,8 @@ func RunFinalizedSideEffects(ctx context.Context, opts FinalizedSideEffectsOptio
 	if err != nil {
 		return fmt.Errorf("configuring storage: %w", err)
 	}
-	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
-	if err := project.ValidateAIAPI(provider.API); err != nil {
+	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv))
+	if err := project.ValidateAIProvider(provider); err != nil {
 		return err
 	}
 	aiToken := os.Getenv("AI_TOKEN")

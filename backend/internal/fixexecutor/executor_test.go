@@ -220,6 +220,10 @@ func TestWriteOpenCodeConfigOmitsCredentials(t *testing.T) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatal(err)
 	}
+	modelConfig := config["provider"].(map[string]any)["engine"].(map[string]any)["models"].(map[string]any)["fixture-model"].(map[string]any)
+	if _, ok := modelConfig["options"]; ok {
+		t.Fatalf("empty reasoning effort changed model config: %v", modelConfig)
+	}
 	permissions := config["permission"].(map[string]any)
 	if permissions["bash"] != "deny" || permissions["webfetch"] != "deny" || permissions["external_directory"] != "deny" {
 		t.Fatalf("permissions = %v", permissions)
@@ -286,6 +290,7 @@ func TestWriteOpenCodeConfigReferencesDirectCredentialEnvironment(t *testing.T) 
 	t.Setenv(modelprovider.TokenEnv, credential)
 	home := t.TempDir()
 	provider := testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model")
+	provider.ReasoningEffort = modelprovider.ReasoningEffortXHigh
 	if err := writeOpenCodeConfig(home, provider, 4); err != nil {
 		t.Fatal(err)
 	}
@@ -299,6 +304,14 @@ func TestWriteOpenCodeConfigReferencesDirectCredentialEnvironment(t *testing.T) 
 	}
 	if strings.Contains(text, credential) {
 		t.Fatal("config serialized the provider credential")
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	modelConfig := config["provider"].(map[string]any)["engine"].(map[string]any)["models"].(map[string]any)["fixture-model"].(map[string]any)
+	if modelConfig["options"].(map[string]any)["reasoningEffort"] != "xhigh" {
+		t.Fatalf("model config = %v", modelConfig)
 	}
 	env, err := openCodeEnvironment(home, t.TempDir(), provider)
 	if err != nil {
@@ -405,6 +418,7 @@ func TestDefaultRunOpenCodeRejectsCredentialOutsideRetainedTail(t *testing.T) {
 func TestWriteOpenCodeConfigUsesNativeResponsesProvider(t *testing.T) {
 	home := t.TempDir()
 	provider := testResponsesProvider("https://provider.example/v1/responses", "fixture-model")
+	provider.ReasoningEffort = modelprovider.ReasoningEffortHigh
 	if err := writeOpenCodeConfig(home, provider, 4); err != nil {
 		t.Fatal(err)
 	}
@@ -420,6 +434,10 @@ func TestWriteOpenCodeConfigUsesNativeResponsesProvider(t *testing.T) {
 	options := engine["options"].(map[string]any)
 	if engine["npm"] != "@ai-sdk/openai" || options["baseURL"] != "https://provider.example/v1" || options["apiKey"] != "{env:"+modelprovider.TokenEnv+"}" {
 		t.Fatalf("provider config = %v", engine)
+	}
+	modelConfig := engine["models"].(map[string]any)["fixture-model"].(map[string]any)
+	if modelConfig["options"].(map[string]any)["reasoningEffort"] != "high" {
+		t.Fatalf("model config = %v", modelConfig)
 	}
 	if strings.Contains(string(data), "/responses") {
 		t.Fatalf("config retained the operation path: %s", data)

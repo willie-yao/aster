@@ -54,7 +54,8 @@ func TestOpenCode1182FixResponsesCompatibility(t *testing.T) {
 		if err := json.Unmarshal(data, &request); err != nil {
 			t.Fatal(err)
 		}
-		if request["stream"] != true || request["store"] != false || request["previous_response_id"] != nil {
+		reasoning, _ := request["reasoning"].(map[string]any)
+		if request["stream"] != true || request["store"] != false || request["previous_response_id"] != nil || reasoning["effort"] != "high" {
 			t.Fatalf("stateful Fix Responses request = %v", request)
 		}
 		requests++
@@ -76,8 +77,12 @@ func TestOpenCode1182FixResponsesCompatibility(t *testing.T) {
 	defer cancel()
 	stdout, stderr, err := defaultRunOpenCode(ctx, OpenCodeSpec{
 		Bin: bin, WorkDir: workDir, HomeDir: t.TempDir(), TempDir: t.TempDir(),
-		Provider: testResponsesProvider(providerServer.URL+"/v1/responses", "synthetic-model"),
-		Prompt:   "Read README and replace Hello World with Hello Responses.", MaxSteps: 6, OutputLimit: 128 << 10,
+		Provider: func() modelprovider.Config {
+			provider := testResponsesProvider(providerServer.URL+"/v1/responses", "synthetic-model")
+			provider.ReasoningEffort = modelprovider.ReasoningEffortHigh
+			return provider
+		}(),
+		Prompt: "Read README and replace Hello World with Hello Responses.", MaxSteps: 6, OutputLimit: 128 << 10,
 	})
 	if err != nil {
 		t.Fatalf("err=%v stdout=%q stderr=%q", err, stdout, stderr)

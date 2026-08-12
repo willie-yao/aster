@@ -10,7 +10,9 @@ import (
 
 const (
 	// AICacheGenerationEnv overrides ai.cache_generation when non-empty.
-	AICacheGenerationEnv  = "AI_CACHE_GENERATION"
+	AICacheGenerationEnv = "AI_CACHE_GENERATION"
+	// AIReasoningEffortEnv selects the optional provider reasoning effort.
+	AIReasoningEffortEnv  = "AI_REASONING_EFFORT"
 	maxCacheGenerationLen = 64
 )
 

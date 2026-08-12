@@ -1,18 +1,22 @@
 package modelprovider
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
 
 func TestValidateOpenCodeModes(t *testing.T) {
-	directNone := Normalize(Config{CredentialMode: CredentialModeDirect, API: APIChatCompletions, Endpoint: "https://provider.example/v1/chat/completions", Model: "fixture", Auth: Auth{Type: AuthTypeNone}})
+	directNone := Normalize(Config{ReasoningEffort: " HIGH ", CredentialMode: CredentialModeDirect, API: APIChatCompletions, Endpoint: "https://provider.example/v1/chat/completions", Model: "fixture", Auth: Auth{Type: AuthTypeNone}})
 	directBearer := directNone
 	directBearer.Auth = Auth{Type: AuthTypeBearer, TokenEnv: TokenEnv}
 	gateway := Normalize(Config{CredentialMode: CredentialModeGateway, API: APIChatCompletions, Endpoint: "https://gateway.platform.svc.cluster.local/v1/chat/completions", Model: "fixture", Auth: Auth{Type: AuthTypeNone}})
 	responses := directBearer
 	responses.API = APIResponses
 	responses.Endpoint = "https://provider.example/v1/responses"
+	if directNone.ReasoningEffort != ReasoningEffortHigh {
+		t.Fatalf("normalized reasoning effort = %q", directNone.ReasoningEffort)
+	}
 	for _, config := range []Config{directNone, directBearer, responses, gateway} {
 		if err := ValidateOpenCode(config); err != nil {
 			t.Fatal(err)
@@ -26,6 +30,8 @@ func TestValidateOpenCodeModes(t *testing.T) {
 		func(c *Config) { c.Model = "" },
 		func(c *Config) { c.Auth = Auth{Type: AuthTypeBearer, TokenEnv: "OTHER_TOKEN"} },
 		func(c *Config) { c.PublicCAPrivateDNS = true },
+		func(c *Config) { c.ReasoningEffort = "ultra" },
+		func(c *Config) { c.ReasoningEffort = ReasoningEffortMax },
 	} {
 		candidate := directNone
 		mutate(&candidate)
@@ -48,6 +54,26 @@ func TestValidateOpenCodeModes(t *testing.T) {
 	gatewayBearer.Auth = Auth{Type: AuthTypeBearer, TokenEnv: TokenEnv}
 	if err := ValidateOpenCode(gatewayBearer); err == nil {
 		t.Fatal("gateway bearer auth accepted")
+	}
+}
+
+func TestConfigReasoningEffortJSONIdentity(t *testing.T) {
+	base := Normalize(Config{CredentialMode: CredentialModeDirect, API: APIChatCompletions, Endpoint: "https://provider.example/v1/chat/completions", Model: "fixture", Auth: Auth{Type: AuthTypeNone}})
+	empty, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(empty), "reasoning_effort") {
+		t.Fatalf("empty effort changed provider JSON: %s", empty)
+	}
+	high := base
+	high.ReasoningEffort = ReasoningEffortHigh
+	encoded, err := json.Marshal(high)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"reasoning_effort":"high"`) || string(encoded) == string(empty) {
+		t.Fatalf("provider JSON identity did not include effort: %s", encoded)
 	}
 }
 

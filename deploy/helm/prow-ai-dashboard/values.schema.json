@@ -432,6 +432,17 @@
                 "model": {
                   "type": "string"
                 },
+                "reasoningEffort": {
+                  "type": "string",
+                  "enum": [
+                    "",
+                    "none",
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh"
+                  ]
+                },
                 "auth": {
                   "type": "object",
                   "properties": {
@@ -465,6 +476,7 @@
                 "api",
                 "endpoint",
                 "model",
+                "reasoningEffort",
                 "auth",
                 "publicCAPrivateDNS"
               ],
@@ -694,6 +706,17 @@
                 "model": {
                   "type": "string"
                 },
+                "reasoningEffort": {
+                  "type": "string",
+                  "enum": [
+                    "",
+                    "none",
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh"
+                  ]
+                },
                 "auth": {
                   "type": "object",
                   "properties": {
@@ -727,6 +750,7 @@
                 "api",
                 "endpoint",
                 "model",
+                "reasoningEffort",
                 "auth",
                 "publicCAPrivateDNS"
               ],
@@ -1542,6 +1566,19 @@
           "type": "string",
           "description": "Provider model identifier."
         },
+        "reasoningEffort": {
+          "type": "string",
+          "description": "Optional provider reasoning effort. Empty uses the provider default.",
+          "enum": [
+            "",
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
         "contextWindowTokens": {
           "description": "Total provider context window. Use 0 for provider metadata or the engine fallback.",
           "anyOf": [
@@ -1589,6 +1626,7 @@
         "api",
         "endpoint",
         "model",
+        "reasoningEffort",
         "contextWindowTokens",
         "token",
         "existingSecret",

@@ -200,13 +200,14 @@ ai:
 ```
 
 Public consumers normally omit provider values and use `AI_ENDPOINT`, `AI_MODEL`,
-and `AI_TOKEN` from the deployment. For cache generation, a non-empty
+optional `AI_REASONING_EFFORT`, and `AI_TOKEN` from the deployment. For cache generation, a non-empty
 `AI_CACHE_GENERATION` overrides `ai.cache_generation`; empty preserves the
 historical cache-key shape. Generation values are limited to 64 characters and
 may contain alphanumerics, dot, underscore, and hyphen.
 The experimental Helm `orka-container` runtime is the exception: its API mode,
-endpoint, and model come from Helm `ai.api`, `ai.endpoint`, and `ai.model` so the
-fetcher pattern pass and analyzer Tasks use the same deployment coordinates.
+endpoint, model, and optional effort come from Helm `ai.api`, `ai.endpoint`,
+`ai.model`, and `ai.reasoningEffort` so the fetcher pattern pass and analyzer
+Tasks use the same deployment coordinates.
 
 Most projects do not need analysis tuning. The defaults are designed to work
 without an `ai:` block. Add only the setting that a measured model or artifact
@@ -373,6 +374,7 @@ bounds and the non-secret provider contract:
 - `model_provider.credential_mode`: `direct` by default or explicit `gateway`;
 - `model_provider.api`: `chat_completions` or `responses`;
 - `model_provider.endpoint` and `model`;
+- `model_provider.reasoning_effort`: optional `none`, `low`, `medium`, `high`, or `xhigh`; pinned OpenCode 1.18.2 rejects `max`;
 - `model_provider.auth.type`: `bearer` or `none` for direct mode and `none` for
   gateway mode. With pinned OpenCode 1.18.2, `responses` requires direct
   bearer auth; and

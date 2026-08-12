@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
@@ -257,6 +258,15 @@ func TestWorkspaceExecutionRequestAcceptsResponsesWithoutVersionChange(t *testin
 	}
 	if responses.Version != 3 || responses.Hash == chat.Hash || responses.ModelProvider.API != "responses" {
 		t.Fatalf("chat=%+v responses=%+v", chat.ModelProvider, responses.ModelProvider)
+	}
+	highProvider := testResponsesProvider("https://api.openai.com/v1/responses", "test-model")
+	highProvider.ReasoningEffort = modelprovider.ReasoningEffortHigh
+	high, err := NewWorkspaceExecutionRequest(manifest, highProvider, 5*time.Minute, 20, 200000, 8192, 128<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if high.Hash == responses.Hash || high.ModelProvider.ReasoningEffort != modelprovider.ReasoningEffortHigh {
+		t.Fatalf("responses=%+v high=%+v", responses.ModelProvider, high.ModelProvider)
 	}
 }
 

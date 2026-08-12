@@ -27,6 +27,7 @@ PAIR_FIELDS = (
     "transport_id",
     "model_label",
     "api_mode",
+    "reasoning_effort",
     "evidence_condition",
     "evidence_mode",
     "source_expectation_sha256",

@@ -269,6 +269,7 @@ main operator controls.
 | `project.config`, `project.systemPrompt`, `project.skills` | Inline or `--set-file` project bundle. The wrapper manages these. |
 | `project.existingConfigMap` | Reuse an external ConfigMap instead of the chart-managed bundle. |
 | `ai.enabled`, `ai.api`, `ai.endpoint`, `ai.model` | AI provider coordinates. |
+| `ai.reasoningEffort` | Optional provider reasoning effort. Empty uses the provider default. |
 | `ai.contextWindowTokens` | Optional operator-provided provider context window. Set only with endpoint evidence. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Existing provider token Secret and key. |
 | `ai.githubReadTokenSecretName`, `ai.githubReadTokenSecretKey` | Optional separate read-only GitHub token for source grounding. |

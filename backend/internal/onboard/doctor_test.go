@@ -58,6 +58,7 @@ const doctorPagesWorkflow = `jobs:
       ai-api: ${{ vars.AI_API }}
       ai-endpoint: ${{ vars.AI_ENDPOINT }}
       ai-model: ${{ vars.AI_MODEL }}
+      ai-reasoning-effort: ${{ vars.AI_REASONING_EFFORT }}
     secrets:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
 `
@@ -87,6 +88,12 @@ func TestDoctor_ValidPagesScaffold(t *testing.T) {
 	}
 	if !hasDoctorCheck(report, "Pages AI values", DoctorWarn) || !hasDoctorCheck(report, "Prow discovery", DoctorPass) {
 		t.Fatalf("checks = %+v", report.Checks)
+	}
+
+	for _, check := range report.Checks {
+		if check.Name == "Pages AI values" && strings.Contains(check.Action, project.AIReasoningEffortEnv) {
+			t.Fatalf("optional reasoning effort reported as required: %+v", check)
+		}
 	}
 }
 
@@ -348,6 +355,7 @@ func TestDoctor_PagesRequiresFullGitHubExpressions(t *testing.T) {
       ai-api: vars.AI_API
       ai-endpoint: vars.AI_ENDPOINT
       ai-model: vars.AI_MODEL
+      ai-reasoning-effort: vars.AI_REASONING_EFFORT
     secrets:
       AI_TOKEN: secrets.AI_TOKEN
 `
@@ -558,6 +566,7 @@ func TestDoctor_ProjectAPIOverridesStaleWorkflowFallback(t *testing.T) {
     uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
     with:
       ai-api: stale-literal
+      ai-reasoning-effort: ${{ vars.AI_REASONING_EFFORT }}
     secrets:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
 `

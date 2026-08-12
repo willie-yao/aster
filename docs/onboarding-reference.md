@@ -123,6 +123,7 @@ The generated workflow reads these repository settings when AI is enabled:
 AI_API       repository variable
 AI_ENDPOINT  repository variable
 AI_MODEL     repository variable
+AI_REASONING_EFFORT  optional repository variable
 AI_TOKEN     repository Secret
 ```
 
