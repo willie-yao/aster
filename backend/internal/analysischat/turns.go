@@ -223,12 +223,6 @@ func (s *Service) runTurn(id, owner, requestID, leaseID string, turn Turn) {
 	s.activeMu.Lock()
 	s.active[key] = cancel
 	s.activeMu.Unlock()
-	defer func() {
-		cancel()
-		s.activeMu.Lock()
-		delete(s.active, key)
-		s.activeMu.Unlock()
-	}()
 
 	turn.Progress = func(phase string) { _ = s.updateProgress(id, owner, requestID, leaseID, phase) }
 	turn.ReportProgress(PhaseInvestigating)
@@ -236,8 +230,17 @@ func (s *Service) runTurn(id, owner, requestID, leaseID string, turn Turn) {
 		LogicalID: requestID, Origin: aiusage.OriginServer, Feature: aiusage.FeatureAnalysisChat,
 		Correlation: aiusage.Correlation{JobID: turn.JobID, BuildID: turn.Build.BuildID, TestName: turn.TestCase.Name},
 	})
-	go s.watchCancellation(runCtx, id, owner, requestID, leaseID, cancel)
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		s.watchCancellation(runCtx, id, owner, requestID, leaseID, cancel)
+	}()
 	reply, runErr := s.runner.Reply(runCtx, turn)
+	cancel()
+	<-watchDone
+	s.activeMu.Lock()
+	delete(s.active, key)
+	s.activeMu.Unlock()
 	usageOutcome := aiusage.OutcomeSuccess
 	if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
 		usageOutcome = aiusage.OutcomeCancelled
