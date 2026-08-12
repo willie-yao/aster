@@ -28,7 +28,7 @@
           }
         ]
       },
-      "effective_input_sha256": "48d7c55b63b3f224c521173a0314139de04c52676ed3af3c36e66f08fad7ef13",
+      "effective_input_sha256": "d2c3bdb5c447e945c8cad38f1f96b5886ffc439e76b2b1afea686726a1976971",
       "expected": {
         "classification": "actionable",
         "repository": {
@@ -54,6 +54,8 @@
         "controllers/reconcile.go": "package controllers\n\nfunc reconcile() error {\n\treturn nil\n}\n\nfunc applyFix() {}\n"
       },
       "id": "actionable-missing-call",
+      "job_id": "benchmark-actionable-missing-call",
+      "job_name": "benchmark-actionable-missing-call",
       "relevant_files": [
         "controllers/reconcile.go"
       ],
@@ -95,7 +97,7 @@
           }
         ]
       },
-      "effective_input_sha256": "4d93f33e095227f56b74c6c50d52f630b5a0e371068f3863fc2d42c68dd55327",
+      "effective_input_sha256": "3d2cd4977e1fca4addbb7a3fcf5a61f6982b1c147e9ce4ec4ff5429ce30becea",
       "expected": {
         "classification": "actionable",
         "repository": {
@@ -121,6 +123,8 @@
         "config/jobs/example/periodics.yaml": "periodics:\n- name: periodic-capz\n  spec:\n    containers:\n    - name: test\n      command: [run-tests]\n"
       },
       "id": "actionable-missing-job-environment",
+      "job_id": "periodic-capz",
+      "job_name": "periodic-capz",
       "relevant_files": [
         "config/jobs/example/periodics.yaml"
       ],
@@ -162,7 +166,7 @@
           }
         ]
       },
-      "effective_input_sha256": "37d93cd5873a99f84bde7d25a38a13dec64840b71bb5ed32a5c8c603903b28fc",
+      "effective_input_sha256": "b24f84bc1218ba57793d3dfaf6acb11bf5ded7aebaabfa748530c0dfd5b2a2de",
       "expected": {
         "classification": "already_fixed",
         "repository": null,
@@ -173,6 +177,8 @@
         "controllers/reconcile.go": "package controllers\n\nfunc reconcile() error {\n\tapplyFix()\n\treturn nil\n}\n\nfunc applyFix() {}\n"
       },
       "id": "target-already-present-at-pinned-revision",
+      "job_id": "benchmark-target-already-present-at-pinned-revision",
+      "job_name": "benchmark-target-already-present-at-pinned-revision",
       "relevant_files": [
         "controllers/reconcile.go"
       ],
@@ -214,7 +220,7 @@
           }
         ]
       },
-      "effective_input_sha256": "08cba0e486a5962c7c4722cb687ee2e7ca3c50e7a8d657e7df6c27f1a6c62e57",
+      "effective_input_sha256": "f98f5eae45847a054b5c82c3deba96672a25a3864bda01f7f0d229e1a69928ad",
       "expected": {
         "classification": "already_fixed",
         "repository": null,
@@ -225,6 +231,8 @@
         "controllers/reconcile.go": "package controllers\n\nfunc reconcile() error {\n\treturn nil\n}\n\nfunc applyFix() {}\n"
       },
       "id": "fixed-in-current-source",
+      "job_id": "benchmark-fixed-in-current-source",
+      "job_name": "benchmark-fixed-in-current-source",
       "relevant_files": [
         "controllers/reconcile.go"
       ],
@@ -266,7 +274,7 @@
           }
         ]
       },
-      "effective_input_sha256": "48134ba18ebd62240783b6dcec148c3da5302b4a4919d0eff5401e48825a2fc4",
+      "effective_input_sha256": "1638240d6e0f1cdf15e0a0d00226aa48b83cfbbf7846e90fae62b8fe80ea74a9",
       "expected": {
         "classification": "insufficient_evidence",
         "repository": null,
@@ -278,6 +286,8 @@
         "go.mod": "module example/repo\n\ngo 1.25\n\nrequire example.net/external v1.2.3\n"
       },
       "id": "external-dependency",
+      "job_id": "benchmark-external-dependency",
+      "job_name": "benchmark-external-dependency",
       "relevant_files": [
         "cmd/test/main.go",
         "go.mod"
@@ -321,7 +331,7 @@
           }
         ]
       },
-      "effective_input_sha256": "8cfb6c3610d7892acae047d3315c1212cb73b18b7ca2e6c253ddcbe95a1c3483",
+      "effective_input_sha256": "e84085eb5fd661be535dc4168b3e714b6d9469e1a89e08d9ff4c3dc71518e335",
       "expected": {
         "classification": "environment_or_infrastructure",
         "repository": null,
@@ -332,6 +342,8 @@
         "cmd/test/main.go": "package main\nfunc main() {}\n"
       },
       "id": "environment-or-infrastructure",
+      "job_id": "benchmark-environment-or-infrastructure",
+      "job_name": "benchmark-environment-or-infrastructure",
       "relevant_files": [
         "cmd/test/main.go"
       ],
@@ -373,7 +385,7 @@
           }
         ]
       },
-      "effective_input_sha256": "7bf4a9da374f9e223509f2b098a16133f33fb18c2a8d4964878953d87f92376a",
+      "effective_input_sha256": "fc23041838c1d02abc8d08d7ace8658c38c0cf116987083a3c0bd81287c6eebc",
       "expected": {
         "classification": "mitigation_only",
         "repository": null,
@@ -384,6 +396,8 @@
         "pkg/client/client.go": "package client\nfunc Request() error { return nil }\n"
       },
       "id": "mitigation-only",
+      "job_id": "benchmark-mitigation-only",
+      "job_name": "benchmark-mitigation-only",
       "relevant_files": [
         "pkg/client/client.go"
       ],
@@ -425,7 +439,7 @@
           }
         ]
       },
-      "effective_input_sha256": "d2b5d59213b0d2cb6fc75b054993bcddd4ff7831d7ef9dcc4e054ba6fcf00878",
+      "effective_input_sha256": "d208757ccae8dd07ab569b961cbe532090a2b7abd2cd301ac4634f1aa004ff54",
       "expected": {
         "classification": "insufficient_evidence",
         "repository": null,
@@ -437,6 +451,8 @@
         "pkg/mount/mount.go": "package mount\nfunc Publish() error { return nil }\n"
       },
       "id": "insufficient-ambiguous-evidence",
+      "job_id": "benchmark-insufficient-ambiguous-evidence",
+      "job_name": "benchmark-insufficient-ambiguous-evidence",
       "relevant_files": [
         "pkg/mount/mount.go",
         "pkg/container/start.go"
@@ -481,7 +497,7 @@
           }
         ]
       },
-      "effective_input_sha256": "1a312d33d2f55087ae91e63e3ee88d3dc1c1e3a6909fffaca73af3a85a50f462",
+      "effective_input_sha256": "68e250835a1aaa70671284c34a6b1492664cfa1b926dc708176d3056c2a16bd1",
       "expected": {
         "classification": "insufficient_evidence",
         "repository": null,
@@ -493,6 +509,8 @@
         "controllers/conversion.go": "package controllers\nfunc ReconcileConversion() error { return nil }\n"
       },
       "id": "unsafe-conversion-webhook",
+      "job_id": "benchmark-unsafe-conversion-webhook",
+      "job_name": "benchmark-unsafe-conversion-webhook",
       "relevant_files": [
         "controllers/conversion.go",
         "config/crd/bases/example.yaml"
@@ -536,7 +554,7 @@
           }
         ]
       },
-      "effective_input_sha256": "15f665ce3adb567d23d1875130ae6f39d46b67571d6977e77b2e8ffe3ebe4c05",
+      "effective_input_sha256": "cfb2b176781d9db24b4937b7c8dd8b94810a7e8318e04d4091d34a7f026dd8d1",
       "expected": {
         "classification": "insufficient_evidence",
         "repository": null,
@@ -548,6 +566,8 @@
         "go.mod": "module example/repo\n\ngo 1.25\n\nrequire example.net/dependency v2.0.0\n"
       },
       "id": "wrong-module-cache-repository",
+      "job_id": "benchmark-wrong-module-cache-repository",
+      "job_name": "benchmark-wrong-module-cache-repository",
       "relevant_files": [
         "go.mod",
         "cmd/test/main.go"
@@ -591,7 +611,7 @@
           }
         ]
       },
-      "effective_input_sha256": "db9c268873975465f041c2ebbc7b4a8c275199872527193df93e1a97e1e1f5fc",
+      "effective_input_sha256": "59447c4d6f1d52350b33ce3d4c475a3354876ae03fd9ae8f752ae5ec1c77de23",
       "expected": {
         "classification": "insufficient_evidence",
         "repository": null,
@@ -603,6 +623,8 @@
         "pkg/two/handler.go": "package two\nfunc Handle() error { return nil }\n"
       },
       "id": "duplicated-or-unknown-target",
+      "job_id": "benchmark-duplicated-or-unknown-target",
+      "job_name": "benchmark-duplicated-or-unknown-target",
       "relevant_files": [
         "pkg/one/handler.go",
         "pkg/two/handler.go"
@@ -647,7 +669,7 @@
           }
         ]
       },
-      "effective_input_sha256": "cd83baa74c41bf5258eab7d7938e87bcfaab2103f6a48cd99c9958e394b16b43",
+      "effective_input_sha256": "3a23d85e91fd4968f16a4290dfc051374cc07206aed5ef385d5d18ae37119fe5",
       "expected": {
         "classification": "insufficient_evidence",
         "repository": null,
@@ -659,6 +681,8 @@
         "controllers/workload.go": "package controllers\nfunc reconcileWorkload() error { return nil }\n"
       },
       "id": "fabricated-symbol-or-field",
+      "job_id": "benchmark-fabricated-symbol-or-field",
+      "job_name": "benchmark-fabricated-symbol-or-field",
       "relevant_files": [
         "api/types.go",
         "controllers/workload.go"
@@ -675,5 +699,5 @@
       }
     }
   ],
-  "version": 2
+  "version": 3
 }
