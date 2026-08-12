@@ -28,6 +28,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentsandbox"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
@@ -54,6 +55,17 @@ const (
 	defaultSandboxMemoryLimit              = "512Mi"
 	defaultSandboxDiskLimit                = "256Mi"
 )
+
+func agentSandboxResultGraceForPurpose(purpose string) time.Duration {
+	if purpose == "analysis" {
+		return agentanalysis.WorkspacePostModelGrace
+	}
+	return agentSandboxResultGrace
+}
+
+func agentSandboxRunTimeout(spec agentsandbox.Spec) time.Duration {
+	return spec.Timeout + agentSandboxResultGraceForPurpose(spec.Purpose) + 5*time.Second
+}
 
 var (
 	sandboxesGVR                = schema.GroupVersionResource{Group: "agents.x-k8s.io", Version: "v1beta1", Resource: "sandboxes"}
@@ -577,7 +589,7 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	if result.Telemetry.ProviderCredentialMode == modelprovider.CredentialModeDirect {
 		result.Telemetry.UsageStatus = "unavailable_from_direct_provider"
 	}
-	runCtx, cancel := context.WithTimeout(ctx, spec.Timeout+agentSandboxResultGrace+5*time.Second)
+	runCtx, cancel := context.WithTimeout(ctx, agentSandboxRunTimeout(spec))
 	defer cancel()
 	object := r.sandboxObjectForSpec(name, spec, contractHash[:], executionID)
 	desiredState := sandboxStateFromObject(&unstructured.Unstructured{Object: object})

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
@@ -55,6 +56,11 @@ type WorkspaceAnalysis struct {
 }
 
 const (
+	// WorkspaceSourceVerificationTimeout bounds one complete source verification pass.
+	WorkspaceSourceVerificationTimeout = 30 * time.Second
+	// WorkspacePostModelGrace bounds both post-model source verification passes.
+	WorkspacePostModelGrace = 2 * WorkspaceSourceVerificationTimeout
+
 	WorkspaceTelemetryAvailable   = "available"
 	WorkspaceTelemetryUnavailable = "unavailable"
 	WorkspaceTelemetryMalformed   = "malformed"
@@ -405,7 +411,7 @@ func ValidateWorkspaceExecutionResult(result WorkspaceExecutionResult, request W
 	if result.Version != WorkspaceResultVersion || result.ContractVersion != WorkspaceContractVersion || result.RequestHash != request.Hash {
 		return result, fmt.Errorf("workspace execution result identity mismatch")
 	}
-	if result.DurationMs < 0 || result.DurationMs > request.TimeoutSeconds*1000+30_000 {
+	if result.DurationMs < 0 || result.DurationMs > request.TimeoutSeconds*1000+WorkspacePostModelGrace.Milliseconds() {
 		return result, fmt.Errorf("workspace execution duration is outside the request bound")
 	}
 	if err := validateWorkspaceUsage(result.Usage); err != nil {

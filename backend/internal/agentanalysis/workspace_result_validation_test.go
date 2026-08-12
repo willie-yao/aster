@@ -223,6 +223,22 @@ func workspaceValidationJSON(t *testing.T, handles []WorkspaceEvidenceHandle, mu
 	return string(data)
 }
 
+func TestValidateWorkspaceExecutionResultAllowsPostModelGrace(t *testing.T) {
+	_, spec := workspaceSandboxFixture(t)
+	result := validWorkspaceExecution(spec.Request)
+	result.TerminalState = engineruntime.TerminalFailed
+	result.FailureReason = "source verification completed"
+	result.Analysis = nil
+	result.DurationMs = spec.Request.TimeoutSeconds*1000 + WorkspacePostModelGrace.Milliseconds()
+	if _, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourceRoot); err != nil {
+		t.Fatalf("duration at post-model grace was rejected: %v", err)
+	}
+	result.DurationMs++
+	if _, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourceRoot); err == nil {
+		t.Fatal("duration beyond post-model grace was accepted")
+	}
+}
+
 func TestValidateWorkspaceExecutionResultPreservesPostModelValidation(t *testing.T) {
 	_, spec := workspaceSandboxFixture(t)
 	result := validWorkspaceExecution(spec.Request)

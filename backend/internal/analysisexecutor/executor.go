@@ -259,7 +259,7 @@ func verifyInputs(ctx context.Context, request agentanalysis.WorkspaceExecutionR
 }
 
 func verifyInputsBounded(request agentanalysis.WorkspaceExecutionRequest, sourceRoot, artifactRoot string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), agentanalysis.WorkspaceSourceVerificationTimeout)
 	defer cancel()
 	return verifyInputs(ctx, request, sourceRoot, artifactRoot)
 }

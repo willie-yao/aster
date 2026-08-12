@@ -497,6 +497,15 @@ func runExecutorGit(t *testing.T, root string, args ...string) string {
 	return string(output)
 }
 
+func TestSourceVerificationTimeoutCoversBoundedNetworkStorage(t *testing.T) {
+	if agentanalysis.WorkspaceSourceVerificationTimeout != 30*time.Second {
+		t.Fatalf("source verification timeout = %s", agentanalysis.WorkspaceSourceVerificationTimeout)
+	}
+	if agentanalysis.WorkspacePostModelGrace < 2*agentanalysis.WorkspaceSourceVerificationTimeout {
+		t.Fatalf("post-model grace = %s", agentanalysis.WorkspacePostModelGrace)
+	}
+}
+
 func TestExecuteReportsTimeoutTelemetry(t *testing.T) {
 	root, request := executorTestFixture(t)
 	request.TimeoutSeconds = 1
