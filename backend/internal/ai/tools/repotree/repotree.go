@@ -31,13 +31,15 @@ import (
 const Group = "repotree"
 
 const (
-	readMaxBytes = 16384 // per read_repo_file call
-	grepMaxBytes = 16384 // per matched file scanned by grep_repo
-	maxGrepFiles = 40    // files fetched per grep_repo call
-	grepMaxCtx   = 5
-	grepMaxHits  = 100
-	treeCacheKey = "repotree/tree"
-	fileCachePfx = "repotree/file/"
+	readMaxBytes         = 16384 // per read_repo_file call
+	grepMaxBytes         = 16384 // per matched file scanned by grep_repo
+	maxGrepFiles         = 40    // files fetched per grep_repo call
+	grepMaxCtx           = 5
+	grepMaxHits          = 100
+	grepEvidenceMaxHits  = 64
+	grepEvidenceMaxBytes = 2048
+	treeCacheKey         = "repotree/tree"
+	fileCachePfx         = "repotree/file/"
 )
 
 // Register adds every tool in this package to the given registry.
@@ -218,6 +220,18 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}
 }
 
+// GrepMatchObservation identifies one canonical source range returned by grep_repo.
+type GrepMatchObservation struct {
+	Path      string
+	LineStart int
+	LineEnd   int
+}
+
+// GrepObservation is private structured metadata for one successful grep_repo call.
+type GrepObservation struct {
+	Matches []GrepMatchObservation
+}
+
 type grepTool struct{}
 
 func (*grepTool) Name() string  { return "grep_repo" }
@@ -286,7 +300,8 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		Context []string `json:"context"`
 	}
 	var hits []hit
-	scanned, fetched, bytes := 0, 0, 0
+	var observations []GrepMatchObservation
+	scanned, fetched, bytes, contentBytes := 0, 0, 0, 0
 	truncatedFiles := false
 
 	for _, p := range paths {
@@ -302,11 +317,14 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 			continue
 		}
 		fetched++
+		canonicalContent := strings.ReplaceAll(content, "\r\n", "\n")
+		fullLines := strings.Split(canonicalContent, "\n")
 		body := content
 		if len(body) > grepMaxBytes {
 			body = body[:grepMaxBytes]
 		}
 		bytes += len(body)
+		body = strings.ReplaceAll(body, "\r\n", "\n")
 		lines := strings.Split(body, "\n")
 		for i, line := range lines {
 			if !re.MatchString(line) {
@@ -320,7 +338,15 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 			if hi > len(lines) {
 				hi = len(lines)
 			}
-			hits = append(hits, hit{Path: p, Line: i + 1, Context: lines[lo:hi]})
+			context := lines[lo:hi]
+			hits = append(hits, hit{Path: p, Line: i + 1, Context: context})
+			if hi <= len(fullLines) {
+				fullMatch := strings.Join(fullLines[lo:hi], "\n")
+				if strings.TrimSpace(fullMatch) != "" && len(fullMatch) <= grepEvidenceMaxBytes && len(observations) < grepEvidenceMaxHits {
+					observations = append(observations, GrepMatchObservation{Path: p, LineStart: lo + 1, LineEnd: hi})
+				}
+			}
+			contentBytes += len(strings.Join(context, "\n"))
 			if len(hits) >= maxMatches {
 				break
 			}
@@ -342,7 +368,10 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		payload["truncated"] = true
 		payload["truncated_reason"] = "max_files"
 	}
-	return tools.Result{BytesFetched: bytes, Payload: payload}
+	return tools.Result{
+		BytesFetched: bytes, ContentBytes: contentBytes, Payload: payload,
+		Observation: GrepObservation{Matches: observations},
+	}
 }
 
 // normalizeDir turns a user directory arg into a clean prefix ending in "/"

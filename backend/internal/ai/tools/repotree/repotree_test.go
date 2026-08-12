@@ -139,6 +139,24 @@ func TestGrepRepo_FindsSymbolAndReportsLocation(t *testing.T) {
 	}
 }
 
+func TestGrepRepoReturnsPrivateCanonicalMatchRanges(t *testing.T) {
+	env := envFor(sampleRepo())
+	result := (&grepTool{}).Dispatch(context.Background(), env, mustJSON(map[string]interface{}{
+		"pattern": "timeout bug", "path_glob": "*.go", "context_lines": 2,
+	}))
+	observation, ok := result.Observation.(GrepObservation)
+	if !ok || len(observation.Matches) != 1 {
+		t.Fatalf("observation=%T %+v", result.Observation, result.Observation)
+	}
+	match := observation.Matches[0]
+	if match.Path != "pkg/cloud/services/vm.go" || match.LineStart != 1 || match.LineEnd != 5 {
+		t.Fatalf("match=%+v", match)
+	}
+	if result.ContentBytes == 0 {
+		t.Fatal("content-bearing grep reported zero content bytes")
+	}
+}
+
 func TestGrepRepo_GlobNarrowsScope(t *testing.T) {
 	env := envFor(sampleRepo())
 	// image: appears in both yaml files but no go files. Narrow to config.

@@ -18,7 +18,12 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
-const maxEvidenceMemoBytes = 48 << 10
+const (
+	maxEvidenceMemoBytes      = 48 << 10
+	maxSourceGrepRecords      = 64
+	maxSourceGrepMatchBytes   = 2048
+	maxSourceGrepCatalogBytes = 64 << 10
+)
 
 type Model interface {
 	ToolLoop(context.Context, string, string, *tools.Registry, []string, *tools.Env, ai.ToolLoopOptions) (string, error)
@@ -147,7 +152,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 	memo, runErr := s.model.ToolLoop(runCtx, evidenceSystemPrompt(input.ConsumerPrompt), evidencePrompt, registry, enabled, env, ai.ToolLoopOptions{
 		MaxIters: s.opts.MaxIters, SingleToolCall: true,
 		ContextByteBudget: s.opts.ContextByteBudget, PropagateFinalizeError: true,
-		RequiredTools: requiredSourceTools(input, sourceFiles), Observe: ledger.observe,
+		RequiredTools: requiredSourceTools(input, sourceFiles), Observe: ledger.observe, ObservePrivate: ledger.observePrivate,
 	})
 	if runErr != nil {
 		outcome = usageOutcomeForError(runErr)
@@ -264,7 +269,8 @@ func finalSystemPrompt() string {
 Return exactly the requested structured object. The causal-group build set and source identity are immutable.
 The model may author only a cause assessment, one concise reason, an optional typed candidate target, evidence IDs copied from the catalog, and one typed non-actionable reason when no candidate exists.
 Do not author repository or revision identity, source state, allowed paths, validation commands, verification requirements, final classification, or action eligibility. Dashboard code derives and verifies all of them.
-Do not classify a target as already fixed. If the evidence identifies one exact candidate, return that candidate and let dashboard code compare failure and current revisions.
+A candidate is a verification subject, not authorization to modify source. Return the exact candidate whenever the evidence identifies it, including when it already appears present. Dashboard code compares failure and current revisions and derives actionable, already_fixed, or insufficient_evidence.
+Do not author or withhold a candidate based on a lifecycle classification.
 Do not claim dependency ownership. When evidence points outside the frozen repository but ownership is not independently established, return dependency_ownership_unverified with candidate null.
 Use exactly these top-level fields and no others: version, cause_assessment, reason, candidate, evidence_ids, non_actionable_reason. version is the integer %d.
 Candidate variants contain only their relevant fields:
@@ -414,15 +420,23 @@ func (r *boundSourceReader) ReadFile(ctx context.Context, file string) (string, 
 	return content, true, nil
 }
 
+type sourceGrepRange struct {
+	path      string
+	lineStart int
+	lineEnd   int
+}
+
 type evidenceLedger struct {
 	stats           EvidenceStats
 	sourceReads     map[string]bool
+	sourceGreps     []sourceGrepRange
+	sourceGrepSeen  map[sourceGrepRange]bool
 	artifactReads   map[string]bool
 	forcedToolCalls int
 }
 
 func newEvidenceLedger() *evidenceLedger {
-	return &evidenceLedger{sourceReads: map[string]bool{}, artifactReads: map[string]bool{}}
+	return &evidenceLedger{sourceReads: map[string]bool{}, sourceGrepSeen: map[sourceGrepRange]bool{}, artifactReads: map[string]bool{}}
 }
 
 func (l *evidenceLedger) observe(event ai.ToolLoopEvent) {
@@ -459,6 +473,27 @@ func (l *evidenceLedger) observe(event ai.ToolLoopEvent) {
 			l.stats.ArtifactReads++
 			l.stats.ArtifactReadBytes += event.BytesFetched
 			l.artifactReads[event.Path] = true
+		}
+	}
+}
+
+func (l *evidenceLedger) observePrivate(event ai.ToolLoopPrivateEvent) {
+	if event.Error || event.BudgetExhausted || event.Name != "grep_repo" {
+		return
+	}
+	observation, ok := event.Observation.(repotree.GrepObservation)
+	if !ok {
+		return
+	}
+	for _, match := range observation.Matches {
+		clean, err := artifacts.SafePath(match.Path)
+		if err != nil || clean == "" || clean != match.Path || match.LineStart < 1 || match.LineEnd < match.LineStart {
+			continue
+		}
+		rangeID := sourceGrepRange{path: clean, lineStart: match.LineStart, lineEnd: match.LineEnd}
+		if !l.sourceGrepSeen[rangeID] {
+			l.sourceGrepSeen[rangeID] = true
+			l.sourceGreps = append(l.sourceGreps, rangeID)
 		}
 	}
 }
@@ -519,7 +554,8 @@ func validateResultAgainstInput(result Result, input FrozenInput, catalog Eviden
 	}
 	targetPath := candidatePath(result.Candidate)
 	for _, record := range records {
-		if record.Kind == EvidenceSource && record.Source != nil && record.Source.Path == targetPath && record.Source.Repository == input.InvestigationSource {
+		path, repository, ok := sourceEvidenceIdentity(record)
+		if ok && path == targetPath && repository == input.InvestigationSource {
 			return nil
 		}
 	}
@@ -562,6 +598,36 @@ func (s *Service) buildEvidenceCatalog(ctx context.Context, input FrozenInput, b
 		}
 		record.ID = evidenceRecordID(record)
 		catalog.Records = append(catalog.Records, record)
+	}
+	grepRanges := slices.Clone(ledger.sourceGreps)
+	grepBytes := 0
+	grepRecords := 0
+	for _, item := range grepRanges {
+		if grepRecords >= maxSourceGrepRecords || grepBytes >= maxSourceGrepCatalogBytes {
+			break
+		}
+		content, err := s.source.ReadFile(ctx, input.InvestigationSource, item.path)
+		if err != nil {
+			return EvidenceCatalog{}, fmt.Errorf("reconstruct source grep evidence %s: %w", item.path, err)
+		}
+		match, err := reconstructSourceGrepMatch(content, item.lineStart, item.lineEnd)
+		if err != nil {
+			return EvidenceCatalog{}, fmt.Errorf("reconstruct source grep evidence %s: %w", item.path, err)
+		}
+		if len(match) > maxSourceGrepMatchBytes || grepBytes+len(match) > maxSourceGrepCatalogBytes {
+			continue
+		}
+		record := EvidenceRecord{
+			Kind: EvidenceSourceGrep,
+			SourceGrep: &SourceGrepEvidenceIdentity{
+				Repository: input.InvestigationSource, Path: item.path, LineStart: item.lineStart, LineEnd: item.lineEnd,
+				ContentDigest: HashText(content), Match: match,
+			},
+		}
+		record.ID = evidenceRecordID(record)
+		catalog.Records = append(catalog.Records, record)
+		grepRecords++
+		grepBytes += len(match)
 	}
 	for _, analysis := range input.Analyses {
 		record := EvidenceRecord{
@@ -624,6 +690,10 @@ func (s *Service) verifyEvidence(ctx context.Context, input FrozenInput, browser
 			if readErr != nil || HashText(content) != record.Source.ContentDigest {
 				return fmt.Errorf("source evidence %s could not be reconstructed", record.ID)
 			}
+		case EvidenceSourceGrep:
+			if err := verifySourceGrepEvidence(ctx, s.source, input.InvestigationSource, record); err != nil {
+				return err
+			}
 		case EvidenceAnalysis:
 			if !analysisEvidenceMatches(record, input.Analyses) {
 				return fmt.Errorf("analysis evidence %s is not frozen evidence", record.ID)
@@ -633,6 +703,47 @@ func (s *Service) verifyEvidence(ctx context.Context, input FrozenInput, browser
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func sourceEvidenceIdentity(record EvidenceRecord) (string, sourceinvestigation.Repository, bool) {
+	switch record.Kind {
+	case EvidenceSource:
+		if record.Source != nil {
+			return record.Source.Path, record.Source.Repository, true
+		}
+	case EvidenceSourceGrep:
+		if record.SourceGrep != nil {
+			return record.SourceGrep.Path, record.SourceGrep.Repository, true
+		}
+	}
+	return "", sourceinvestigation.Repository{}, false
+}
+
+func reconstructSourceGrepMatch(content string, lineStart, lineEnd int) (string, error) {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	if lineStart < 1 || lineEnd < lineStart || lineEnd > len(lines) || lineEnd-lineStart > 10 {
+		return "", fmt.Errorf("source grep line range is invalid")
+	}
+	match := strings.Join(lines[lineStart-1:lineEnd], "\n")
+	if strings.TrimSpace(match) == "" || len(match) > maxSourceGrepMatchBytes {
+		return "", fmt.Errorf("source grep match is empty or exceeds the bound")
+	}
+	return match, nil
+}
+
+func verifySourceGrepEvidence(ctx context.Context, source sourceinvestigation.TreeReader, repository sourceinvestigation.Repository, record EvidenceRecord) error {
+	if record.Kind != EvidenceSourceGrep || record.SourceGrep == nil || record.SourceGrep.Repository != repository {
+		return fmt.Errorf("source grep evidence does not match the frozen source identity")
+	}
+	content, err := source.ReadFile(ctx, repository, record.SourceGrep.Path)
+	if err != nil || HashText(content) != record.SourceGrep.ContentDigest {
+		return fmt.Errorf("source grep evidence %s could not be reconstructed", record.ID)
+	}
+	match, err := reconstructSourceGrepMatch(content, record.SourceGrep.LineStart, record.SourceGrep.LineEnd)
+	if err != nil || match != record.SourceGrep.Match {
+		return fmt.Errorf("source grep evidence %s does not match the frozen line range", record.ID)
 	}
 	return nil
 }

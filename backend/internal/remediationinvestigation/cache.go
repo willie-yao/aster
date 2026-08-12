@@ -241,12 +241,15 @@ func (c *Cache) loadLocked() error {
 		loaded.Failures = map[string]FailureRecord{}
 	}
 	for key, entry := range loaded.Entries {
+		if entry.Provenance.Versions != CurrentVersions() || entry.EvidenceCatalog.Version != EvidenceCatalogVersion {
+			delete(loaded.Entries, key)
+			continue
+		}
 		_, evidenceErr := selectedEvidenceRecords(entry.Result.EvidenceIDs, entry.EvidenceCatalog)
 		if key != entry.Key || ValidateResult(entry.Result) != nil || entry.ResultDigest != ResultDigest(entry.Result) ||
 			ValidateEvidenceCatalog(entry.EvidenceCatalog) != nil || evidenceErr != nil ||
 			entry.EvidenceCatalogDigest != EvidenceCatalogDigest(entry.EvidenceCatalog) ||
-			strings.TrimSpace(entry.Provenance.InputDigest) == "" || entry.Provenance.Versions != CurrentVersions() ||
-			entry.Provenance.ProviderFingerprint == "" || cacheKeyForDigest(entry.Provenance.InputDigest) != key {
+			strings.TrimSpace(entry.Provenance.InputDigest) == "" || entry.Provenance.ProviderFingerprint == "" || cacheKeyForDigest(entry.Provenance.InputDigest) != key {
 			return fmt.Errorf("remediation investigation cache entry %q is invalid", key)
 		}
 	}
@@ -353,6 +356,10 @@ func cloneEvidenceCatalog(catalog EvidenceCatalog) EvidenceCatalog {
 		if record.Source != nil {
 			value := *record.Source
 			record.Source = &value
+		}
+		if record.SourceGrep != nil {
+			value := *record.SourceGrep
+			record.SourceGrep = &value
 		}
 		if record.Analysis != nil {
 			value := *record.Analysis

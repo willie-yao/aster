@@ -343,6 +343,13 @@
   },
   "consumer_prompt": "Use only the frozen recurring-build evidence and pinned source. Do not infer dependency ownership from module-cache paths.",
   "consumer_prompt_sha256": "fb365a745c930b9b7bedfd90a9e45e00685724b21208debe0157a538fc738284",
+  "diagnostics": [
+    "memo_mentions_target_job",
+    "memo_mentions_target_container",
+    "memo_mentions_target_name",
+    "memo_mentions_target_value",
+    "final_result_contains_candidate"
+  ],
   "public_evidence": {
     "job_config_commit_api_uri": "https://api.github.com/repos/kubernetes/test-infra/commits/b0a07a0d6592017a2745223d5d259646fb30c48d",
     "job_config_commit_fixture": "testdata/benchmarks/remediation-temporal-v1/provenance/job-config-commit.json",
@@ -362,7 +369,7 @@
   },
   "scorer": {
     "path": "hack/summarize-remediation-model-capability.py",
-    "sha256": "1f03f23dbd2d803502a8b2a3a554d385a39d6a85deab17844e55498fd1395ccd"
+    "sha256": "f5fec6ca3f1482d36bed7a6c3b0bf0bce31ed040b528f07829fb1db85128a9b1"
   },
   "transport": {
     "api": "responses",
@@ -373,9 +380,9 @@
   },
   "version": 1,
   "versions": {
-    "prompt": 4,
+    "prompt": 5,
     "result": 3,
     "schema": 3,
-    "verification": 3
+    "verification": 4
   }
 }

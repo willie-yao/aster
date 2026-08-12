@@ -58,6 +58,9 @@ type Result struct {
 	BudgetExhausted bool
 	BytesFetched    int
 	ContentBytes    int
+	// Observation carries caller-private structured metadata that is never
+	// serialized into the tool response or content-free telemetry.
+	Observation any
 }
 
 // ErrPayload returns a Result whose Payload contains a single "error" key.

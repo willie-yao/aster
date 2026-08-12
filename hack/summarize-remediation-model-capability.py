@@ -56,12 +56,13 @@ def require_one(rows, field, scope):
     return next(iter(values))
 
 
-def validate_rows(rows):
-    if len(rows) != 12:
-        raise SystemExit(f"expected exactly 12 trials, found {len(rows)}")
+def validate_rows(rows, expected_models):
+    expected_trials = 6 * len(expected_models)
+    if len(rows) != expected_trials:
+        raise SystemExit(f"expected exactly {expected_trials} trials, found {len(rows)}")
     models = {row.get("model") for row in rows}
-    if models != EXPECTED_MODELS:
-        raise SystemExit(f"models must be exactly {sorted(EXPECTED_MODELS)}, found {sorted(repr(model) for model in models)}")
+    if models != expected_models:
+        raise SystemExit(f"models must be exactly {sorted(expected_models)}, found {sorted(repr(model) for model in models)}")
 
     require_one(rows, "engine_commit", "all trials")
     require_one(rows, "manifest_sha256", "all trials")
@@ -89,6 +90,15 @@ def validate_rows(rows):
         effective_hash = row.get("effective_input_sha256")
         if not effective_hash:
             raise SystemExit(f"{row['_source']}: missing effective_input_sha256")
+        for field in (
+            "memo_mentions_target_job",
+            "memo_mentions_target_container",
+            "memo_mentions_target_name",
+            "memo_mentions_target_value",
+            "final_result_contains_candidate",
+        ):
+            if not isinstance(row.get(field), bool):
+                raise SystemExit(f"{row['_source']}: missing boolean diagnostic {field}")
         effective_inputs[state].add(effective_hash)
 
     for state, values in effective_inputs.items():
@@ -97,7 +107,7 @@ def validate_rows(rows):
     if set(effective_inputs) != set(EXPECTED_CASES):
         raise SystemExit("both temporal states are required")
 
-    for model in EXPECTED_MODELS:
+    for model in expected_models:
         model_rows = [row for row in rows if row.get("model") == model]
         if len(model_rows) != 6:
             raise SystemExit(f"{model}: expected exactly six rows, found {len(model_rows)}")
@@ -166,6 +176,37 @@ def summarize_model(rows):
             and int(row.get("evidence", {}).get("source_read_bytes", 0)) > 0
             for row in rows
         ),
+        "memo_mentions_target_job": sum(row["memo_mentions_target_job"] for row in rows),
+        "memo_mentions_target_container": sum(row["memo_mentions_target_container"] for row in rows),
+        "memo_mentions_target_name": sum(row["memo_mentions_target_name"] for row in rows),
+        "memo_mentions_target_value": sum(row["memo_mentions_target_value"] for row in rows),
+        "memo_contains_complete_target_identity": sum(
+            row["memo_mentions_target_job"]
+            and row["memo_mentions_target_container"]
+            and row["memo_mentions_target_name"]
+            and row["memo_mentions_target_value"]
+            for row in rows
+        ),
+        "final_result_contains_candidate": sum(row["final_result_contains_candidate"] for row in rows),
+        "diagnostics_by_state": {
+            state: {
+                "trials": len([row for row in rows if row.get("temporal_state") == state]),
+                "memo_contains_complete_target_identity": sum(
+                    row["memo_mentions_target_job"]
+                    and row["memo_mentions_target_container"]
+                    and row["memo_mentions_target_name"]
+                    and row["memo_mentions_target_value"]
+                    for row in rows
+                    if row.get("temporal_state") == state
+                ),
+                "final_result_contains_candidate": sum(
+                    row["final_result_contains_candidate"]
+                    for row in rows
+                    if row.get("temporal_state") == state
+                ),
+            }
+            for state in EXPECTED_CASES
+        },
         "selected_evidence_kinds": dict(sorted(evidence_kinds.items())),
         "requests": distribution([int(row.get("metrics", {}).get("model_requests", 0)) for row in rows]),
         "input_tokens": distribution([int(row.get("metrics", {}).get("input_tokens", 0)) for row in rows]),
@@ -191,15 +232,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("results", nargs="+", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--model", choices=sorted(EXPECTED_MODELS))
     args = parser.parse_args()
     rows = read_rows(args.results)
-    validate_rows(rows)
+    expected_models = {args.model} if args.model else EXPECTED_MODELS
+    validate_rows(rows, expected_models)
     by_model = collections.defaultdict(list)
     for row in rows:
         by_model[row["model"]].append(row)
     output = {
         "complete": True,
-        "models": {model: summarize_model(by_model[model]) for model in sorted(EXPECTED_MODELS)},
+        "models": {model: summarize_model(by_model[model]) for model in sorted(expected_models)},
     }
     encoded = json.dumps(output, indent=2, sort_keys=True) + "\n"
     if args.output:

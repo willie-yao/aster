@@ -160,6 +160,27 @@ func TestEvidenceCatalogIDsBindEngineIssuedIdentity(t *testing.T) {
 	}
 }
 
+func TestSourceGrepEvidenceIDsBindCanonicalPrivateIdentity(t *testing.T) {
+	record := EvidenceRecord{
+		Kind: EvidenceSourceGrep,
+		SourceGrep: &SourceGrepEvidenceIdentity{
+			Repository: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: testRevision},
+			Path:       "controllers/reconcile.go", LineStart: 10, LineEnd: 12,
+			ContentDigest: HashText("package controllers\n"), Match: "func reconcile() {\n\tapplyFix()\n}",
+		},
+	}
+	record.ID = evidenceRecordID(record)
+	catalog := EvidenceCatalog{Version: EvidenceCatalogVersion, Records: []EvidenceRecord{record}}
+	if err := ValidateEvidenceCatalog(catalog); err != nil {
+		t.Fatal(err)
+	}
+	originalID := record.ID
+	catalog.Records[0].SourceGrep.LineStart = 11
+	if ValidateEvidenceCatalog(catalog) == nil || evidenceRecordID(catalog.Records[0]) == originalID {
+		t.Fatal("mutated source grep range retained a valid engine identity")
+	}
+}
+
 func TestResultFormatExcludesEngineOwnedFields(t *testing.T) {
 	encoded, err := json.Marshal(resultFormat().Schema)
 	if err != nil {
@@ -191,6 +212,20 @@ func TestEvidencePromptRequiresContentBearingSourceRead(t *testing.T) {
 	for _, anchor := range []string{"MUST call read_repo_file", "non-empty pinned source content", "memo without a content-bearing source read is discarded", "Relevant files are hints, not proven targets"} {
 		if !strings.Contains(prompt, anchor) {
 			t.Fatalf("evidence prompt is missing %q", anchor)
+		}
+	}
+}
+
+func TestFinalPromptTreatsCandidateAsVerificationSubject(t *testing.T) {
+	prompt := finalSystemPrompt()
+	for _, anchor := range []string{
+		"A candidate is a verification subject, not authorization to modify source",
+		"including when it already appears present",
+		"derives actionable, already_fixed, or insufficient_evidence",
+		"Do not author or withhold a candidate based on a lifecycle classification",
+	} {
+		if !strings.Contains(prompt, anchor) {
+			t.Fatalf("final prompt is missing %q", anchor)
 		}
 	}
 }

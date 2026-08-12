@@ -1,6 +1,7 @@
 package remediationinvestigation
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -37,6 +38,43 @@ func testNonActionableResult() Result {
 func testProvenance(now time.Time) Provenance {
 	input := testFrozenInput()
 	return NewProvenance(input, "model", "responses", EvidenceStats{ToolCalls: 2, SourceReads: 1, ArtifactReads: 1}, Metrics{ModelRequests: 2}, now)
+}
+
+func TestCacheDropsSemanticallyStalePrivateEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), CacheRelativePath)
+	cache, err := NewCache(path, CacheOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenance := testProvenance(time.Now())
+	key := cacheKeyForDigest(provenance.InputDigest)
+	catalog := testEvidenceCatalog()
+	if err := cache.StoreSuccess(key, testNonActionableResult(), catalog, provenance); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored cacheFile
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatal(err)
+	}
+	entry := stored.Entries[key]
+	entry.Provenance.Versions.Prompt--
+	entry.EvidenceCatalog.Version--
+	stored.Entries[key] = entry
+	raw, _ = json.Marshal(stored)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := NewCache(path, CacheOptions{})
+	if err != nil {
+		t.Fatalf("stale private entry blocked cache load: %v", err)
+	}
+	if _, ok, err := reloaded.Lookup(key); err != nil || ok {
+		t.Fatalf("stale lookup ok=%v err=%v", ok, err)
+	}
 }
 
 func TestCachePersistsPrivateAcceptedResultAndPreservesItOnFailure(t *testing.T) {
@@ -225,6 +263,15 @@ func TestCacheLookupDeepClonesCandidateAndEvidenceCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := testEvidenceCatalog()
+	grepRecord := EvidenceRecord{
+		Kind: EvidenceSourceGrep,
+		SourceGrep: &SourceGrepEvidenceIdentity{
+			Repository: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: testRevision},
+			Path:       "config/defaults.yaml", LineStart: 1, LineEnd: 1, ContentDigest: HashText("feature: true\n"), Match: "feature: true",
+		},
+	}
+	grepRecord.ID = evidenceRecordID(grepRecord)
+	catalog.Records = append(catalog.Records, grepRecord)
 	result := Result{
 		Version: ResultVersion, CauseAssessment: CauseSupports, Reason: "one configuration identity",
 		Candidate: &ConfigurationFieldCandidate{
@@ -243,12 +290,14 @@ func TestCacheLookupDeepClonesCandidateAndEvidenceCatalog(t *testing.T) {
 	}
 	first.CandidateFieldPathForTest()[0] = "mutated"
 	first.EvidenceCatalog.Records[0].Analysis.BuildID = "mutated"
+	first.EvidenceCatalog.Records[1].SourceGrep.Match = "mutated"
 	second, ok, err := cache.Lookup(key)
 	if err != nil || !ok {
 		t.Fatalf("second lookup ok=%v err=%v", ok, err)
 	}
 	candidate := second.Result.Candidate.(*ConfigurationFieldCandidate)
-	if candidate.FieldPath[0] != "feature" || second.EvidenceCatalog.Records[0].Analysis.BuildID == "mutated" || second.ResultDigest != ResultDigest(second.Result) {
+	if candidate.FieldPath[0] != "feature" || second.EvidenceCatalog.Records[0].Analysis.BuildID == "mutated" ||
+		second.EvidenceCatalog.Records[1].SourceGrep.Match == "mutated" || second.ResultDigest != ResultDigest(second.Result) {
 		t.Fatalf("cached private state mutated: %+v", second)
 	}
 }
