@@ -24,12 +24,14 @@ type RevisionVerification struct {
 // VerifiedResult is the deterministic terminal interpretation of a private
 // model result. Only ClassificationActionable may carry a verified proposal.
 type VerifiedResult struct {
-	VerificationVersion int                    `json:"verification_version"`
-	Classification      Classification         `json:"classification"`
-	Reason              string                 `json:"reason"`
-	Proposal            *ActionableProposal    `json:"proposal,omitempty"`
-	CurrentSource       *RevisionVerification  `json:"current_source,omitempty"`
-	FailureSources      []RevisionVerification `json:"failure_sources,omitempty"`
+	VerificationVersion int                      `json:"verification_version"`
+	Classification      Classification           `json:"classification"`
+	Reason              string                   `json:"reason"`
+	Proposal            *ActionableProposal      `json:"proposal,omitempty"`
+	CurrentSource       *RevisionVerification    `json:"current_source,omitempty"`
+	FailureSources      []RevisionVerification   `json:"failure_sources,omitempty"`
+	PolicyRuleID        remediationpolicy.RuleID `json:"policy_rule_id,omitempty"`
+	PolicyWarningRuleID remediationpolicy.RuleID `json:"policy_warning_rule_id,omitempty"`
 }
 
 type Verifier struct {
@@ -77,7 +79,9 @@ func (v *Verifier) Verify(ctx context.Context, input FrozenInput, entry CacheEnt
 		return accepted[0], nil
 	case 0:
 		if entry.Result.NonActionable == nil {
-			return insufficientVerification("no target hypothesis passed deterministic verification"), nil
+			result := insufficientVerification("no target hypothesis passed deterministic verification")
+			result.PolicyRuleID = sharedPolicyRuleID(verified)
+			return result, nil
 		}
 		assessment := *entry.Result.NonActionable
 		if err := verifyCachedEvidence(ctx, v.source, browser, input, assessment.EvidenceIDs, entry.EvidenceCatalog); err != nil {
@@ -87,6 +91,7 @@ func (v *Verifier) Verify(ctx context.Context, input FrozenInput, entry CacheEnt
 			VerificationVersion: VerificationVersion,
 			Classification:      classificationForNonActionable(&assessment.NonActionableReason),
 			Reason:              assessment.Reason,
+			PolicyRuleID:        sharedPolicyRuleID(verified),
 		}, nil
 	default:
 		return VerifiedResult{
@@ -116,6 +121,22 @@ func (v *Verifier) VerifyHypotheses(ctx context.Context, input FrozenInput, hypo
 		results = append(results, v.verifyHypothesis(ctx, input, hypothesis, catalog, browser))
 	}
 	return results, nil
+}
+
+func sharedPolicyRuleID(results []VerifiedResult) remediationpolicy.RuleID {
+	if len(results) == 0 {
+		return ""
+	}
+	shared := results[0].PolicyRuleID
+	if shared == "" {
+		return ""
+	}
+	for _, result := range results[1:] {
+		if result.PolicyRuleID != shared {
+			return ""
+		}
+	}
+	return shared
 }
 
 func acceptedHypothesisResults(results []VerifiedResult) []VerifiedResult {
@@ -154,9 +175,11 @@ func (v *Verifier) verifyHypothesis(ctx context.Context, input FrozenInput, hypo
 	if suspiciousRepositoryPath(target.Path) {
 		return insufficientVerification("module-cache or workspace paths cannot identify a destination-repository target")
 	}
-	if reason := remediationpolicy.Reason(hypothesis.RelationshipReason+"\n"+candidateExpectedBehavior(hypothesis.Target), []models.RemediationTarget{target}); reason != "" {
-		return insufficientVerification("target hypothesis violates deterministic remediation safety policy")
+	policyEvaluation := remediationpolicy.Evaluate(candidateExpectedBehavior(hypothesis.Target), []models.RemediationTarget{target})
+	if policyEvaluation.Blocked() {
+		return insufficientPolicyVerification("target hypothesis violates deterministic remediation safety policy", policyEvaluation.RuleID)
 	}
+	policyWarning := remediationpolicy.RelationshipTextWarning(hypothesis.RelationshipReason)
 	if target.Intent == models.RemediationIntentSetJobEnvironment {
 		if err := v.verifyFrozenProwJobIdentity(ctx, input, target); err != nil {
 			return insufficientVerification("the prow target does not match the exact frozen job identity")
@@ -178,6 +201,7 @@ func (v *Verifier) verifyHypothesis(ctx context.Context, input FrozenInput, hypo
 			Classification:      ClassificationAlreadyFixed,
 			Reason:              "Current source already contains the deterministically verified remediation target.",
 			CurrentSource:       &current,
+			PolicyWarningRuleID: policyWarning,
 		}
 	}
 	if currentState.State != actionverify.StateUnresolved {
@@ -194,6 +218,7 @@ func (v *Verifier) verifyHypothesis(ctx context.Context, input FrozenInput, hypo
 		Proposal:            &proposal,
 		CurrentSource:       &current,
 		FailureSources:      failureStates,
+		PolicyWarningRuleID: policyWarning,
 	}
 }
 
@@ -514,6 +539,12 @@ func insufficientVerification(reason string) VerifiedResult {
 		Classification:      ClassificationInsufficientEvidence,
 		Reason:              reason,
 	}
+}
+
+func insufficientPolicyVerification(reason string, ruleID remediationpolicy.RuleID) VerifiedResult {
+	result := insufficientVerification(reason)
+	result.PolicyRuleID = ruleID
+	return result
 }
 
 func sameRepository(left, right sourceinvestigation.Repository) bool {

@@ -419,3 +419,19 @@ func TestSafeOperationViewKeepsAmbiguousResultNonActionable(t *testing.T) {
 		t.Fatalf("view=%+v", view)
 	}
 }
+
+func TestSafeOperationViewDoesNotPublishPolicyRuleIDs(t *testing.T) {
+	ref := OperationRef{CausalGroupID: "group", CausalGroupHash: strings.Repeat("a", 64)}
+	view := safeOperationView(ref, VerifiedResult{
+		Classification:      ClassificationAlreadyFixed,
+		PolicyRuleID:        "conversion_target_unsafe",
+		PolicyWarningRuleID: "relationship_text_warning",
+	}, "2026-08-12T00:00:00Z")
+	encoded, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "conversion_target_unsafe") || strings.Contains(string(encoded), "relationship_text_warning") {
+		t.Fatalf("public view leaked private policy diagnostics: %s", encoded)
+	}
+}

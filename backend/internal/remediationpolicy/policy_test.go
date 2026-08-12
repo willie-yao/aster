@@ -6,6 +6,60 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
+func TestEvaluateRuleIDs(t *testing.T) {
+	safeTarget := models.RemediationTarget{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "applyFix", Path: "reconcile.go",
+	}
+	tests := []struct {
+		name           string
+		recommendation string
+		target         models.RemediationTarget
+		want           RuleID
+	}{
+		{
+			name: "unsafe typed conversion target", recommendation: "neutral wording",
+			target: models.RemediationTarget{Intent: models.RemediationIntentSetJobEnvironment, Name: "CONVERSION_WEBHOOK_ENABLED", Value: "maybe"},
+			want:   RuleConversionTargetUnsafe,
+		},
+		{
+			name: "conversion strategy none", recommendation: "neutral wording",
+			target: models.RemediationTarget{Intent: models.RemediationIntentSetConfiguration, Path: "crd.yaml", Value: "conversion.strategy=None"},
+			want:   RuleConversionStrategyNone,
+		},
+		{
+			name: "conversion strategy removal", recommendation: "neutral wording",
+			target: models.RemediationTarget{Intent: models.RemediationIntentRemoveConfiguration, Path: "crd.yaml", Value: "spec.conversion.strategy=Webhook"},
+			want:   RuleConversionStrategyNone,
+		},
+		{
+			name: "conversion webhook removal", recommendation: "Remove the conversion webhook before upgrade.",
+			target: safeTarget, want: RuleConversionWebhookRemoval,
+		},
+		{
+			name: "conversion invocation loss", recommendation: "Delete the admission webhook configuration so ConversionReview objects are no longer delivered.",
+			target: safeTarget, want: RuleConversionInvocationLoss,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			evaluation := Evaluate(testCase.recommendation, []models.RemediationTarget{testCase.target})
+			if !evaluation.Blocked() || evaluation.RuleID != testCase.want || evaluation.PublicReason != UnsafeConversionReason {
+				t.Fatalf("evaluation=%+v want rule=%s", evaluation, testCase.want)
+			}
+			if got := Reason(testCase.recommendation, []models.RemediationTarget{testCase.target}); got != UnsafeConversionReason {
+				t.Fatalf("public reason=%q", got)
+			}
+		})
+	}
+
+	if got := RelationshipTextWarning("Remove the conversion webhook before upgrade."); got != RuleRelationshipTextWarning {
+		t.Fatalf("relationship warning=%q", got)
+	}
+	if got := RelationshipTextWarning("The evidence identifies one exact target."); got != "" {
+		t.Fatalf("neutral relationship warning=%q", got)
+	}
+}
+
 func TestReasonAdmissionConversionClaims(t *testing.T) {
 	actionable := []models.RemediationTarget{{
 		Intent: models.RemediationIntentModifySymbol, Symbol: "getPreUpgradeFunc",

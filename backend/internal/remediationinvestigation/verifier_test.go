@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
@@ -327,7 +328,7 @@ func (result *Result) ResultEvidenceForTestReplaceSource(t *testing.T, input Fro
 	t.Fatal("source record not found")
 }
 
-func TestVerifierRejectsUnsafeConversionAndUnsupportedTargetKinds(t *testing.T) {
+func TestVerifierRelationshipTextIsNonAuthoritativeAndUnsupportedTargetKindsFailClosed(t *testing.T) {
 	missing := "package controllers\nfunc reconcile() error { return nil }\nfunc applyFix() {}\n"
 	verifier, input, entry, browser := verificationFixture(t, missing, missing)
 	entry.Result.Hypotheses[0].RelationshipReason = "Delete conversion webhook configurations to disable conversion."
@@ -336,8 +337,8 @@ func TestVerifierRejectsUnsafeConversionAndUnsupportedTargetKinds(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verified.Classification != ClassificationInsufficientEvidence {
-		t.Fatalf("unsafe conversion verified=%+v", verified)
+	if verified.Classification != ClassificationActionable || verified.Proposal == nil || verified.PolicyRuleID != "" || verified.PolicyWarningRuleID != remediationpolicy.RuleRelationshipTextWarning {
+		t.Fatalf("safe typed target was blocked by relationship prose: %+v", verified)
 	}
 
 	entry.Result.Hypotheses[0].RelationshipReason = "set one exact configuration field"
@@ -357,6 +358,52 @@ func TestVerifierRejectsUnsafeConversionAndUnsupportedTargetKinds(t *testing.T) 
 		if !suspiciousRepositoryPath(value) {
 			t.Fatalf("workspace path %q was not rejected", value)
 		}
+	}
+}
+
+func TestVerifierRejectsUnsafeTypedConversionTargetWithNeutralProse(t *testing.T) {
+	missing := "package controllers\nfunc reconcile() error { return nil }\nfunc ClearConversionWebhook() {}\n"
+	verifier, input, entry, browser := verificationFixture(t, missing, missing)
+	entry.Result.Hypotheses[0] = TargetHypothesis{
+		Target: &RequiredCallCandidate{
+			Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "ClearConversionWebhook",
+		},
+		EvidenceIDs:        evidenceIDs(entry.EvidenceCatalog),
+		RelationshipReason: "The selected evidence identifies one exact call for deterministic verification.",
+	}
+	entry.ResultDigest = ResultDigest(entry.Result)
+	verified, err := verifier.Verify(t.Context(), input, entry, browser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Classification != ClassificationInsufficientEvidence || verified.Proposal != nil || verified.PolicyRuleID != remediationpolicy.RuleConversionWebhookRemoval || verified.PolicyWarningRuleID != "" {
+		t.Fatalf("unsafe typed target was not rejected: %+v", verified)
+	}
+}
+
+func TestVerifierPreservesPolicyRuleIDThroughNonActionableAssessment(t *testing.T) {
+	missing := "package controllers\nfunc reconcile() error { return nil }\nfunc ClearConversionWebhook() {}\n"
+	verifier, input, entry, browser := verificationFixture(t, missing, missing)
+	entry.Result.Hypotheses[0] = TargetHypothesis{
+		Target: &RequiredCallCandidate{
+			Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "ClearConversionWebhook",
+		},
+		EvidenceIDs:        evidenceIDs(entry.EvidenceCatalog),
+		RelationshipReason: "The selected evidence identifies one exact call for deterministic verification.",
+	}
+	entry.Result.NonActionable = &NonActionableAssessment{
+		Version: NonActionableAssessmentVersion, CauseAssessment: CauseInconclusive,
+		Reason: "No safe source-grounded target was verified.", EvidenceIDs: evidenceIDs(entry.EvidenceCatalog),
+		NonActionableReason: NonActionableInsufficientEvidence,
+	}
+	entry.ResultDigest = ResultDigest(entry.Result)
+
+	verified, err := verifier.Verify(t.Context(), input, entry, browser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Classification != ClassificationInsufficientEvidence || verified.Proposal != nil || verified.PolicyRuleID != remediationpolicy.RuleConversionWebhookRemoval {
+		t.Fatalf("verified=%+v", verified)
 	}
 }
 

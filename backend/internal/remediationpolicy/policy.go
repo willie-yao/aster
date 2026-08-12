@@ -11,6 +11,27 @@ import (
 // UnsafeConversionReason is the public-safe reason for a blocked remediation.
 const UnsafeConversionReason = "remediation requires investigation before CRD conversion safety can be established"
 
+// RuleID identifies one content-free deterministic policy outcome.
+type RuleID string
+
+const (
+	RuleConversionTargetUnsafe   RuleID = "conversion_target_unsafe"
+	RuleConversionStrategyNone   RuleID = "conversion_strategy_none"
+	RuleConversionWebhookRemoval RuleID = "conversion_webhook_removal"
+	RuleConversionInvocationLoss RuleID = "conversion_invocation_loss"
+	RuleRelationshipTextWarning  RuleID = "relationship_text_warning"
+	RuleConversionTextUnsafe     RuleID = "conversion_text_unsafe"
+)
+
+// Evaluation is one internal policy decision.
+type Evaluation struct {
+	RuleID       RuleID
+	PublicReason string
+}
+
+// Blocked reports whether deterministic policy rejected the remediation.
+func (e Evaluation) Blocked() bool { return e.PublicReason != "" }
+
 var (
 	destructiveConversionObjectRe = regexp.MustCompile(`(?i)(?:\b(?:delete|remove|disable|drop|clear|unset|bypass)\b\s+(?:the\s+)?(?:kubernetes\s+)?(?:crd\s+)?conversion(?:\s+webhook)?\s+strategy\b|\b(?:delete|remove|disable|drop|clear|unset|bypass)\b\s+(?:the\s+)?(?:kubernetes\s+)?(?:crd\s+)?conversion\s+webhooks?\b(?:\s*(?:[.,;:]|$)|\s+(?:from|in|on)\b)|\bturn\s+off\b\s+(?:the\s+)?(?:crd\s+)?conversion(?:\s+webhooks?)?\b|\bstop\b\s+(?:the\s+)?(?:crd\s+)?conversion\b(?:\s*(?:[.,;:]|$)|\s+(?:calls?|requests?)\b))`)
 	destructiveConversionFieldRe  = regexp.MustCompile(`(?i)\b(?:delete|remove|disable|drop|clear|unset|bypass)\b\s+(?:the\s+)?(?:spec\.)?conversion\.(?:strategy|webhook(?:\.clientconfig)?)\b`)
@@ -31,19 +52,44 @@ var (
 
 // Reason returns a privacy-safe reason when an actionable remediation is unsafe.
 func Reason(recommendation string, targets []models.RemediationTarget) string {
+	return Evaluate(recommendation, targets).PublicReason
+}
+
+// Evaluate returns the content-free rule that rejected an actionable remediation.
+func Evaluate(recommendation string, targets []models.RemediationTarget) Evaluation {
 	actionable := false
 	for _, target := range targets {
 		if target.Intent == models.RemediationIntentInvestigate {
 			continue
 		}
 		actionable = true
-		if unsafeConversionTarget(target) {
-			return UnsafeConversionReason
+		if ruleID := unsafeConversionTargetRule(target); ruleID != "" {
+			return blockedEvaluation(ruleID)
 		}
 	}
 	if !actionable {
-		return ""
+		return Evaluation{}
 	}
+	if ruleID := unsafeConversionTextRule(recommendation); ruleID != "" {
+		return blockedEvaluation(ruleID)
+	}
+	return Evaluation{}
+}
+
+// RelationshipTextWarning reports suspicious prose without authorizing or
+// rejecting the typed target.
+func RelationshipTextWarning(relationship string) RuleID {
+	if unsafeConversionTextRule(relationship) != "" {
+		return RuleRelationshipTextWarning
+	}
+	return ""
+}
+
+func blockedEvaluation(ruleID RuleID) Evaluation {
+	return Evaluation{RuleID: ruleID, PublicReason: UnsafeConversionReason}
+}
+
+func unsafeConversionTextRule(recommendation string) RuleID {
 	text := strings.TrimSpace(recommendation)
 	admissionCleanup := admissionCleanupRe.MatchString(text) || admissionReferencedCleanupRe.MatchString(text)
 	for _, clause := range policyClauses(text) {
@@ -51,14 +97,28 @@ func Reason(recommendation string, targets []models.RemediationTarget) string {
 		if clause == "" {
 			continue
 		}
-		if destructiveConversionObjectRe.MatchString(clause) || destructiveConversionFieldRe.MatchString(clause) || conversionStrategyNoneRe.MatchString(clause) || conversionBypassRe.MatchString(clause) || unsafeDirectConversionOperation(clause) || unsafeDirectConversionState(clause) {
-			return UnsafeConversionReason
+		if conversionStrategyNoneRe.MatchString(clause) {
+			return RuleConversionStrategyNone
+		}
+		if destructiveConversionObjectRe.MatchString(clause) || destructiveConversionFieldRe.MatchString(clause) || conversionBypassRe.MatchString(clause) {
+			return RuleConversionWebhookRemoval
 		}
 		if conversionInvocationLoss(clause, admissionCleanup) {
-			return UnsafeConversionReason
+			return RuleConversionInvocationLoss
+		}
+		if unsafeDirectConversionOperation(clause) || unsafeDirectConversionState(clause) {
+			if conversionWebhookRemovalText(clause) {
+				return RuleConversionWebhookRemoval
+			}
+			return RuleConversionTextUnsafe
 		}
 	}
 	return ""
+}
+
+func conversionWebhookRemovalText(value string) bool {
+	words := identifierWords(value)
+	return conversionIdentifierPresent(value) && containsWord(words, "delete", "remove", "clear", "unset", "disable", "bypass", "drop", "stop")
 }
 
 func policyClauses(text string) []string {
@@ -695,35 +755,78 @@ func containsAny(value string, candidates ...string) bool {
 	return false
 }
 
-func unsafeConversionTarget(target models.RemediationTarget) bool {
+func unsafeConversionTargetRule(target models.RemediationTarget) RuleID {
+	unsafe := false
 	switch target.Intent {
 	case models.RemediationIntentAddSymbol, models.RemediationIntentModifySymbol:
-		return destructiveConversionIdentifier(target.Symbol) || destructiveConversionIdentifier(target.RequiredCall)
+		unsafe = destructiveConversionIdentifier(target.Symbol) || destructiveConversionIdentifier(target.RequiredCall)
 	case models.RemediationIntentRemoveConfiguration:
 		key, _, _ := strings.Cut(target.Value, "=")
 		isConversion, qualified := conversionObjectSetting(key)
-		return isConversion && !qualified
+		unsafe = isConversion && !qualified
 	case models.RemediationIntentSetConfiguration:
 		key, value, _ := strings.Cut(target.Value, "=")
 		isConversion, qualified := conversionObjectSetting(key)
-		if !isConversion || qualified {
-			return false
+		if isConversion && !qualified {
+			if conversionAvailabilityToggle(key) {
+				unsafe = !conversionTrueValue(value)
+			} else {
+				unsafe = conversionFalseValue(value)
+			}
 		}
-		if conversionAvailabilityToggle(key) {
-			return !conversionTrueValue(value)
-		}
-		return conversionFalseValue(value)
 	case models.RemediationIntentSetJobEnvironment:
-		if !conversionIdentifierPresent(target.Name) {
-			return false
+		if conversionIdentifierPresent(target.Name) {
+			if conversionAvailabilityToggle(target.Name) || conversionPreservationToggle(target.Name) {
+				unsafe = !conversionTrueValue(target.Value)
+			} else {
+				unsafe = destructiveConversionIdentifier(target.Name)
+			}
 		}
-		if conversionAvailabilityToggle(target.Name) || conversionPreservationToggle(target.Name) {
-			return !conversionTrueValue(target.Value)
-		}
-		return destructiveConversionIdentifier(target.Name)
-	default:
-		return false
 	}
+	if !unsafe {
+		return ""
+	}
+	if conversionStrategyNoneTarget(target) {
+		return RuleConversionStrategyNone
+	}
+	if conversionWebhookRemovalTarget(target) {
+		return RuleConversionWebhookRemoval
+	}
+	return RuleConversionTargetUnsafe
+}
+
+func conversionStrategyNoneTarget(target models.RemediationTarget) bool {
+	values := []string{target.Symbol, target.RequiredCall, target.Name}
+	if target.Intent == models.RemediationIntentSetConfiguration || target.Intent == models.RemediationIntentRemoveConfiguration {
+		key, value, _ := strings.Cut(target.Value, "=")
+		values = append(values, key)
+		strategy := conversionIdentifierPresent(key) && strings.Contains(strings.ToLower(key), "strategy")
+		if strategy && (target.Intent == models.RemediationIntentRemoveConfiguration || strings.EqualFold(strings.TrimSpace(value), "none")) {
+			return true
+		}
+	}
+	for _, value := range values {
+		normalized := normalizeConversionToken(value)
+		if strings.Contains(normalized, "conversionstrategy") || strings.Contains(normalized, "strategyconversion") {
+			if containsAny(normalized, "none", "unset", "clear", "disable", "remove") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func conversionWebhookRemovalTarget(target models.RemediationTarget) bool {
+	if target.Intent == models.RemediationIntentRemoveConfiguration {
+		return true
+	}
+	for _, value := range []string{target.Symbol, target.RequiredCall, target.Name} {
+		normalized := normalizeConversionToken(value)
+		if conversionIdentifierPresent(value) && containsAny(normalized, "delete", "remove", "clear", "unset", "disable", "bypass", "turnoff", "stop") {
+			return true
+		}
+	}
+	return false
 }
 
 func destructiveConversionIdentifier(value string) bool {

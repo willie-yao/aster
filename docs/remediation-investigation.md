@@ -55,7 +55,9 @@ The trusted in-process model client runs two bounded phases:
    with zero to three typed target hypotheses. Each hypothesis contains one
    target identity, selected engine-issued evidence IDs, and a concise
    relationship reason. A hypothesis is a verification subject, including when
-   the target appears already present. It contains no lifecycle, repository,
+   the target appears already present. The bounded relationship reason remains
+   private and may produce a content-free quality warning, but it never
+   authorizes or blocks the typed target. It contains no lifecycle, repository,
    revision, policy, command, source-state, or action fields.
 3. **Deterministic hypothesis verification.** Dashboard code validates and
    independently verifies every hypothesis. Exactly one verified identity may
@@ -137,7 +139,10 @@ independently:
 - resolves Prow job, container, environment name, and desired value uniquely;
 - requires selected source evidence for the exact Prow environment value;
 - keeps repository-local call resolution within module boundaries;
-- reapplies conversion and destructive-remediation policy; and
+- applies conversion and destructive-remediation policy to the typed target and
+  engine-derived expected behavior;
+- records suspicious model-authored relationship prose only as a content-free,
+  non-authoritative warning; and
 - rejects mutated, duplicate, unknown, fabricated, unlinked, ambiguous,
   workspace, module-cache, or wrong-repository targets.
 
@@ -146,7 +151,8 @@ The currently actionable deterministic target kinds remain limited to a
 environment changes. Package-symbol additions and general configuration fields
 remain `insufficient_evidence` until they have deterministic behavioral-role and
 field-state predicates. Textual mention plus source absence is not sufficient
-proof for a new symbol.
+proof for a new symbol. Model-authored relationship prose cannot make an unsafe
+typed target safe or block an otherwise verified safe target.
 
 The engine derives the terminal classification:
 
