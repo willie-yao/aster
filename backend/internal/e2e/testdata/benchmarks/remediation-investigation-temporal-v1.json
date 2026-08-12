@@ -380,7 +380,7 @@
   },
   "version": 1,
   "versions": {
-    "prompt": 5,
+    "prompt": 6,
     "result": 3,
     "schema": 3,
     "verification": 4

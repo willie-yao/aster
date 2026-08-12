@@ -32,7 +32,7 @@ import (
 const (
 	copilotResponsesEndpoint                 = "https://api.githubcopilot.com/responses"
 	remediationModelCapabilityManifest       = "testdata/benchmarks/remediation-investigation-temporal-v1.json"
-	remediationModelCapabilityManifestSHA256 = "682fbec371afeeb953085016b9b0755f294cb2ed3f36735f379afda18973d529"
+	remediationModelCapabilityManifestSHA256 = "b38ced513168fd23f81986e85fb5de346d9f2ffa1086e123d308f64d74e0683c"
 	remediationModelCapabilityRepetitions    = 3
 )
 

@@ -345,6 +345,59 @@ func TestToolLoopRequiredToolsCompleteVoluntarilyInOrder(t *testing.T) {
 	}
 }
 
+func TestToolLoopRequiredReadAndGrepCompleteVoluntarily(t *testing.T) {
+	read := &requiredStubTool{name: "read", result: func(json.RawMessage) tools.Result {
+		return tools.Result{Payload: map[string]interface{}{"content": "source"}, ContentBytes: 6}
+	}}
+	grep := &requiredStubTool{name: "grep", result: func(json.RawMessage) tools.Result {
+		return tools.Result{Payload: map[string]interface{}{"matches": []string{"match"}}, ContentBytes: 5}
+	}}
+	reg := tools.NewRegistry()
+	reg.Register(read)
+	reg.Register(grep)
+	client, transport := newRecordedToolLoopClient(APIChatCompletions,
+		toolLoopCall("c1", "read", `{"path":"chosen.go"}`),
+		toolLoopCall("c2", "grep", `{"pattern":"ExactIdentifier"}`),
+		toolLoopFinal("done"),
+	)
+	out, err := client.ToolLoop(t.Context(), "sys", "user", reg, []string{"read", "grep"}, &tools.Env{}, ToolLoopOptions{
+		MaxIters: 5, RequiredTools: []RequiredTool{
+			{Name: "read", CorrectivePrompt: "Read source.", RequireContent: true},
+			{Name: "grep", CorrectivePrompt: "Search exact identifiers.", RequireContent: true},
+		},
+	})
+	if err != nil || out != "done" || read.calls != 1 || grep.calls != 1 {
+		t.Fatalf("out=%q err=%v read=%d grep=%d", out, err, read.calls, grep.calls)
+	}
+	for index, request := range transport.requests {
+		if request.ToolChoice != nil {
+			t.Fatalf("request %d unexpectedly forced %+v", index+1, request.ToolChoice)
+		}
+	}
+}
+
+func TestToolLoopRequiredZeroMatchGrepExhausts(t *testing.T) {
+	grep := &requiredStubTool{name: "grep", result: func(json.RawMessage) tools.Result {
+		return tools.Result{Payload: map[string]interface{}{"matches": []string{}}, ContentBytes: 0}
+	}}
+	reg := tools.NewRegistry()
+	reg.Register(grep)
+	client, _ := newRecordedToolLoopClient(APIChatCompletions,
+		toolLoopFinal("premature"),
+		toolLoopCall("c1", "grep", `{"pattern":"missing"}`),
+		toolLoopFinal("still premature"),
+	)
+	_, err := client.ToolLoop(t.Context(), "sys", "user", reg, []string{"grep"}, &tools.Env{}, ToolLoopOptions{
+		MaxIters: 4, RequiredTools: []RequiredTool{{
+			Name: "grep", CorrectivePrompt: "Search.", MaxAttempts: 1, RequireContent: true,
+		}},
+	})
+	var requiredErr *RequiredToolError
+	if !errors.As(err, &requiredErr) || requiredErr.Tool != "grep" || requiredErr.Code != RequiredToolAttemptsExhausted || requiredErr.Attempts != 1 {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestToolLoopForcesMissingRequiredToolWithModelArguments(t *testing.T) {
 	read := &requiredStubTool{name: "read", result: func(json.RawMessage) tools.Result {
 		return tools.Result{Payload: map[string]interface{}{"content": "data"}, BytesFetched: 4, ContentBytes: 4}
@@ -531,6 +584,89 @@ func TestToolLoopRequiredToolCancellationAndTimeout(t *testing.T) {
 	}
 	if waiting.calls != 1 {
 		t.Fatalf("timeout transport calls=%d", waiting.calls)
+	}
+}
+
+func TestToolLoopRequiredGrepChoiceTransportEncoding(t *testing.T) {
+	shrinkCallDelay(t)
+	tests := []struct {
+		name      string
+		api       string
+		responses []string
+		check     func(*testing.T, map[string]interface{})
+	}{
+		{
+			name: "chat completions", api: APIChatCompletions,
+			responses: []string{
+				`{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"read","arguments":"{\"path\":\"chosen.go\"}"}}]}}]}`,
+				`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"premature"}}]}`,
+				`{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"c2","type":"function","function":{"name":"grep","arguments":"{\"pattern\":\"ExactIdentifier\"}"}}]}}]}`,
+				`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"done"}}]}`,
+			},
+			check: func(t *testing.T, request map[string]interface{}) {
+				choice := request["tool_choice"].(map[string]interface{})
+				function := choice["function"].(map[string]interface{})
+				if choice["type"] != "function" || function["name"] != "grep" {
+					t.Fatalf("tool_choice=%#v", choice)
+				}
+			},
+		},
+		{
+			name: "responses", api: APIResponses,
+			responses: []string{
+				`{"id":"r1","status":"completed","output":[{"type":"function_call","call_id":"c1","name":"read","arguments":"{\"path\":\"chosen.go\"}"}]}`,
+				`{"id":"r2","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"premature"}]}]}`,
+				`{"id":"r3","status":"completed","output":[{"type":"function_call","call_id":"c2","name":"grep","arguments":"{\"pattern\":\"ExactIdentifier\"}"}]}`,
+				`{"id":"r4","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}`,
+			},
+			check: func(t *testing.T, request map[string]interface{}) {
+				choice := request["tool_choice"].(map[string]interface{})
+				if choice["type"] != "function" || choice["name"] != "grep" {
+					t.Fatalf("tool_choice=%#v", choice)
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests []map[string]interface{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				var body map[string]interface{}
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				requests = append(requests, body)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, tc.responses[len(requests)-1])
+			}))
+			defer server.Close()
+			read := &requiredStubTool{name: "read", result: func(json.RawMessage) tools.Result {
+				return tools.Result{Payload: map[string]interface{}{"content": "source"}, ContentBytes: 6}
+			}}
+			grep := &requiredStubTool{name: "grep", result: func(json.RawMessage) tools.Result {
+				return tools.Result{Payload: map[string]interface{}{"matches": []string{"match"}}, ContentBytes: 5}
+			}}
+			reg := tools.NewRegistry()
+			reg.Register(read)
+			reg.Register(grep)
+			client := NewClientWithOptions(Options{API: tc.api, Endpoint: server.URL, Model: "m"})
+			out, err := client.ToolLoop(t.Context(), "sys", "user", reg, []string{"read", "grep"}, &tools.Env{}, ToolLoopOptions{
+				MaxIters: 6, RequiredTools: []RequiredTool{
+					{Name: "read", CorrectivePrompt: "Read.", RequireContent: true},
+					{Name: "grep", CorrectivePrompt: "Search exact identifiers.", RequireContent: true},
+				},
+			})
+			if err != nil || out != "done" {
+				t.Fatalf("out=%q err=%v", out, err)
+			}
+			if len(requests) != 4 || len(grep.arguments) != 1 || grep.arguments[0] != `{"pattern":"ExactIdentifier"}` {
+				t.Fatalf("requests=%d grep args=%v", len(requests), grep.arguments)
+			}
+			tc.check(t, requests[2])
+			if parallel, ok := requests[2]["parallel_tool_calls"].(bool); !ok || parallel {
+				t.Fatalf("parallel_tool_calls=%#v", requests[2]["parallel_tool_calls"])
+			}
+		})
 	}
 }
 

@@ -175,7 +175,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 	var result Result
 	repairCount := 0
 	if !ledger.gatePassed() {
-		result = insufficientEvidenceResult(catalog, "The bounded investigation did not read both recurring-build evidence and pinned source content.")
+		result = insufficientEvidenceResult(catalog, "The bounded investigation did not read recurring-build evidence, pinned source content, and one content-bearing repository grep.")
 	} else {
 		finalPrompt, err := renderFinalPrompt(input, memo, catalog)
 		if err != nil {
@@ -256,8 +256,8 @@ func evidenceSystemPrompt(consumerPrompt string) string {
 Use only the artifact and repository tools provided. The artifact browser is restricted to the exact causal-group builds. The repository tools are restricted to one immutable source revision.
 Do not regroup, add, or remove builds. You may challenge the claimed cause, but state that explicitly.
 Do not edit files, run shell commands, create branches, open issues, create pull requests, or choose another repository or revision.
-Evidence gate: before returning a memo, you MUST call read_repo_file and receive non-empty pinned source content. Start by listing or grepping the repository, then read the exact file that supports or disproves a candidate. A memo without a content-bearing source read is discarded.
-Inspect recurring-build evidence and pinned source. Relevant files are hints, not proven targets. Return a concise evidence memo for a separate structured finalization phase only after the source-read gate is satisfied.`
+Evidence gate: before returning a memo, you MUST call read_repo_file and receive non-empty pinned source content, then call grep_repo and inspect at least one non-empty match. Author the grep query from exact identifiers in the failure evidence and source you read, such as job names, environment names, symbols, calls, and configuration values. A memo without both a content-bearing source read and content-bearing repository grep is discarded.
+Inspect recurring-build evidence and pinned source. Relevant files are hints, not proven targets. Return a concise evidence memo for a separate structured finalization phase only after both source-evidence requirements are satisfied.`
 	if strings.TrimSpace(consumerPrompt) == "" {
 		return base
 	}
@@ -452,7 +452,9 @@ func (l *evidenceLedger) observe(event ai.ToolLoopEvent) {
 	case "list_repo_tree":
 		l.stats.SourceLists++
 	case "grep_repo":
-		l.stats.SourceGreps++
+		if event.ContentBytes > 0 {
+			l.stats.SourceGreps++
+		}
 	case "read_repo_file":
 		if event.ContentBytes > 0 {
 			l.stats.SourceReads++
@@ -514,8 +516,12 @@ func requiredSourceTools(input FrozenInput, sourceFiles []string) []ai.RequiredT
 		Name: "read_repo_file", MaxAttempts: 1, RequireContent: true,
 		CorrectivePrompt: "The pinned-source read requirement is not satisfied. Call read_repo_file now with one exact source path and inspect non-empty content before answering.",
 	}
+	grep := ai.RequiredTool{
+		Name: "grep_repo", MaxAttempts: 1, RequireContent: true,
+		CorrectivePrompt: "The pinned-source grep requirement is not satisfied. Call grep_repo now and author a focused query for exact identifiers found in the failure evidence and source you read, including relevant job names, environment names, symbols, calls, and configuration values. Inspect at least one non-empty match before answering.",
+	}
 	if hasUsableHint {
-		return []ai.RequiredTool{read}
+		return []ai.RequiredTool{read, grep}
 	}
 	return []ai.RequiredTool{
 		{
@@ -523,6 +529,7 @@ func requiredSourceTools(input FrozenInput, sourceFiles []string) []ai.RequiredT
 			CorrectivePrompt: "No frozen relevant-file hint resolves at the pinned revision. Call list_repo_tree now to inspect the repository structure before choosing a source file.",
 		},
 		read,
+		grep,
 	}
 }
 
@@ -535,7 +542,7 @@ func relevantFileHints(input FrozenInput) []string {
 }
 
 func (l *evidenceLedger) gatePassed() bool {
-	return l.stats.SourceReads > 0 && l.stats.ArtifactReads > 0
+	return l.stats.SourceReads > 0 && l.stats.SourceGreps > 0 && l.stats.ArtifactReads > 0
 }
 
 func validateResultAgainstInput(result Result, input FrozenInput, catalog EvidenceCatalog) error {

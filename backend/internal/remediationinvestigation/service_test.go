@@ -179,6 +179,7 @@ func serviceFixture(t *testing.T, model *fakeModel) (*Service, FrozenInput, fake
 	}
 	service, err := NewService(model, fakeSource{files: map[string]string{
 		"controllers/reconcile.go": serviceSourceContent,
+		"docs/notes.md":            "applyFix diagnostic notes\n",
 	}}, cache, ServiceOptions{Now: func() time.Time { return time.Date(2026, 8, 12, 2, 0, 1, 0, time.UTC) }})
 	if err != nil {
 		t.Fatal(err)
@@ -194,6 +195,7 @@ func TestServiceCachesEvidenceBackedTypedResult(t *testing.T) {
 		toolEvents: []ai.ToolLoopEvent{
 			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
 			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
+			{Name: "grep_repo", ContentBytes: len("applyFix")},
 		},
 	}
 	service, input, browser, _ := serviceFixture(t, model)
@@ -232,8 +234,8 @@ func TestServiceIssuesAndVerifiesSourceGrepEvidence(t *testing.T) {
 		fingerprint: strings.Repeat("d", 16), memo: "applyFix exists but reconcile does not call it", result: string(encoded),
 		toolEvents: []ai.ToolLoopEvent{
 			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
-			{Name: "grep_repo", ContentBytes: len("func applyFix() {}")},
 			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: len(serviceSourceContent), ContentBytes: len(serviceSourceContent)},
+			{Name: "grep_repo", ContentBytes: len("func applyFix() {}")},
 		},
 		privateToolEvents: []ai.ToolLoopPrivateEvent{{
 			Name: "grep_repo", Observation: repotree.GrepObservation{Matches: []repotree.GrepMatchObservation{{
@@ -272,6 +274,27 @@ func TestServiceEvidenceFloorReturnsSafeNonActionableResult(t *testing.T) {
 	}
 }
 
+func TestServiceZeroMatchGrepDoesNotPassEvidenceFloor(t *testing.T) {
+	model := &fakeModel{
+		fingerprint: strings.Repeat("d", 16), memo: "read source but grep found no match", result: actionableJSON(),
+		toolEvents: []ai.ToolLoopEvent{
+			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
+			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
+			{Name: "grep_repo", ContentBytes: 0},
+		},
+	}
+	service, input, browser, _ := serviceFixture(t, model)
+	got, err := service.Investigate(t.Context(), input, browser, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Entry.Result.Candidate != nil || got.Entry.Result.NonActionableReason == nil ||
+		*got.Entry.Result.NonActionableReason != NonActionableInsufficientEvidence || model.finalCalls != 0 ||
+		got.Entry.Provenance.Evidence.SourceReads != 1 || got.Entry.Provenance.Evidence.SourceGreps != 0 {
+		t.Fatalf("result=%+v finalCalls=%d", got, model.finalCalls)
+	}
+}
+
 func TestServiceContentBearingGrepDoesNotReplaceRequiredSourceRead(t *testing.T) {
 	model := &fakeModel{
 		fingerprint: strings.Repeat("d", 16), memo: "grep evidence only",
@@ -302,6 +325,7 @@ func TestServiceUsesForcedRequiredSourceReadWithoutRestart(t *testing.T) {
 		toolEvents: []ai.ToolLoopEvent{
 			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
 			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80, Forced: true},
+			{Name: "grep_repo", ContentBytes: len("applyFix"), Forced: true},
 		},
 	}
 	service, input, browser, _ := serviceFixture(t, model)
@@ -309,12 +333,23 @@ func TestServiceUsesForcedRequiredSourceReadWithoutRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.toolCalls != 1 || model.finalCalls != 1 || got.Entry.Provenance.Metrics.EvidenceRetryCount != 1 || got.Entry.Result.Candidate == nil {
+	if model.toolCalls != 1 || model.finalCalls != 1 || got.Entry.Provenance.Metrics.EvidenceRetryCount != 2 || got.Entry.Result.Candidate == nil {
 		t.Fatalf("tool=%d final=%d result=%+v", model.toolCalls, model.finalCalls, got)
 	}
 	required := model.toolOptions[0].RequiredTools
-	if len(required) != 1 || required[0].Name != "read_repo_file" || !required[0].RequireContent || required[0].MaxAttempts != 1 {
+	if len(required) != 2 || required[0].Name != "read_repo_file" || !required[0].RequireContent || required[0].MaxAttempts != 1 ||
+		required[1].Name != "grep_repo" || !required[1].RequireContent || required[1].MaxAttempts != 1 {
 		t.Fatalf("required tools=%+v", required)
+	}
+	for _, anchor := range []string{"job names", "environment names", "symbols", "calls", "configuration values"} {
+		if !strings.Contains(required[1].CorrectivePrompt, anchor) {
+			t.Fatalf("grep corrective prompt lacks %q", anchor)
+		}
+	}
+	for _, private := range []string{"applyFix", "KUBERNETES_VERSION", "v1.23.5"} {
+		if strings.Contains(required[1].CorrectivePrompt, private) {
+			t.Fatalf("grep corrective prompt leaked expected identity %q", private)
+		}
 	}
 }
 
@@ -325,6 +360,7 @@ func TestServiceRequiresTreeListingWhenNoRelevantFileHintResolves(t *testing.T) 
 			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
 			{Name: "list_repo_tree", Forced: true},
 			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80, Forced: true},
+			{Name: "grep_repo", ContentBytes: len("applyFix"), Forced: true},
 		},
 	}
 	service, input, browser, _ := serviceFixture(t, model)
@@ -337,11 +373,45 @@ func TestServiceRequiresTreeListingWhenNoRelevantFileHintResolves(t *testing.T) 
 		t.Fatal(err)
 	}
 	required := model.toolOptions[0].RequiredTools
-	if len(required) != 2 || required[0].Name != "list_repo_tree" || required[1].Name != "read_repo_file" || !required[1].RequireContent {
+	if len(required) != 3 || required[0].Name != "list_repo_tree" || required[1].Name != "read_repo_file" || !required[1].RequireContent ||
+		required[2].Name != "grep_repo" || !required[2].RequireContent {
 		t.Fatalf("required tools=%+v", required)
 	}
-	if got.Entry.Provenance.Metrics.EvidenceRetryCount != 2 || got.Entry.Provenance.Evidence.SourceLists != 1 || got.Entry.Provenance.Evidence.SourceReads != 1 {
+	if got.Entry.Provenance.Metrics.EvidenceRetryCount != 3 || got.Entry.Provenance.Evidence.SourceLists != 1 ||
+		got.Entry.Provenance.Evidence.SourceReads != 1 || got.Entry.Provenance.Evidence.SourceGreps != 1 {
 		t.Fatalf("provenance=%+v", got.Entry.Provenance)
+	}
+}
+
+func TestServiceWrongPathGrepDoesNotGroundCandidate(t *testing.T) {
+	input := testFrozenInput()
+	docsContent := "applyFix diagnostic notes\n"
+	docsRecord := EvidenceRecord{
+		Kind: EvidenceSource,
+		Source: &SourceEvidenceIdentity{
+			Repository: input.InvestigationSource, Path: "docs/notes.md", ContentDigest: HashText(docsContent),
+		},
+	}
+	docsRecord.ID = evidenceRecordID(docsRecord)
+	result := Result{
+		Version: ResultVersion, CauseAssessment: CauseSupports, Reason: "notes mention applyFix",
+		Candidate: &RequiredCallCandidate{
+			Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
+		},
+		EvidenceIDs: []string{docsRecord.ID},
+	}
+	encoded, _ := json.Marshal(result)
+	model := &fakeModel{
+		fingerprint: strings.Repeat("d", 16), memo: "unrelated notes mention applyFix", result: string(encoded),
+		toolEvents: []ai.ToolLoopEvent{
+			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
+			{Name: "read_repo_file", Path: "docs/notes.md", BytesFetched: len(docsContent), ContentBytes: len(docsContent)},
+			{Name: "grep_repo", ContentBytes: len("applyFix diagnostic notes")},
+		},
+	}
+	service, input, browser, _ := serviceFixture(t, model)
+	if _, err := service.Investigate(t.Context(), input, browser, false); err == nil || ErrorCode(err) != "missing_source_evidence" {
+		t.Fatalf("wrong-path grep err=%v code=%q", err, ErrorCode(err))
 	}
 }
 
@@ -351,6 +421,7 @@ func TestServiceFailedRefreshPreservesAcceptedResult(t *testing.T) {
 		toolEvents: []ai.ToolLoopEvent{
 			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
 			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
+			{Name: "grep_repo", ContentBytes: len("applyFix")},
 		},
 	}
 	service, input, browser, cache := serviceFixture(t, model)
@@ -375,6 +446,7 @@ func TestServiceRepairsOneInvalidStructuredResult(t *testing.T) {
 		toolEvents: []ai.ToolLoopEvent{
 			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
 			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
+			{Name: "grep_repo", ContentBytes: len("applyFix")},
 		},
 	}
 	service, input, browser, _ := serviceFixture(t, model)
@@ -393,6 +465,7 @@ func TestServiceInvalidRefreshPreservesAcceptedResult(t *testing.T) {
 		toolEvents: []ai.ToolLoopEvent{
 			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
 			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
+			{Name: "grep_repo", ContentBytes: len("applyFix")},
 		},
 	}
 	service, input, browser, cache := serviceFixture(t, model)
@@ -424,6 +497,7 @@ func TestServiceRejectsCandidateWithoutIssuedSourceEvidence(t *testing.T) {
 		toolEvents: []ai.ToolLoopEvent{
 			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
 			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
+			{Name: "grep_repo", ContentBytes: len("applyFix")},
 		},
 	}
 	service, input, browser, cache := serviceFixture(t, model)

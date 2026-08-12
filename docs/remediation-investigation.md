@@ -39,16 +39,18 @@ The trusted in-process model client runs two bounded phases:
 1. **Evidence phase.** Only existing artifact filesystem and pinned-source
    `repotree` tools are available. Artifact access is bound to the exact causal
    builds. Source access is bound to one immutable repository revision. A
-   successful content-bearing artifact read and source read are required.
-   Successful `grep_repo` matches are captured as supplemental private source
-   evidence, but they never replace the mandatory file read. The generic tool
-   loop requires one successful content-bearing
-   `read_repo_file` before it accepts a tools-free memo. If the model tries to
-   answer first, the next request forces that exact function while the model
-   still chooses its arguments. When no frozen relevant-file hint resolves at
-   the pinned revision, the loop first forces one bounded `list_repo_tree`, then
-   forces `read_repo_file`. Forced turns disable parallel tool calls and remain
-   inside the same bounded conversation and iteration budget.
+   successful content-bearing artifact read, source-file read, and repository
+   grep are required. The generic tool loop first requires one content-bearing
+   `read_repo_file`, then one content-bearing `grep_repo`. The model authors both
+   calls and the grep query. If either is missing, the next request forces that
+   exact function and asks the model to search exact identifiers from failure
+   evidence and source, such as job names, environment names, symbols, calls,
+   and configuration values. A zero-match grep does not satisfy the requirement.
+   When no frozen relevant-file hint resolves, the loop first forces one bounded
+   `list_repo_tree`. Forced turns disable parallel tool calls and remain inside
+   the same bounded conversation and iteration budget. Successful grep matches
+   become supplemental private source evidence, but never replace the mandatory
+   file read.
 2. **Structured finalization.** Read tools are removed. The engine supplies a
    private evidence catalog with deterministic IDs. The model may return only a
    cause assessment, concise reason, optional typed candidate target, selected
@@ -57,8 +59,8 @@ The trusted in-process model client runs two bounded phases:
    model returns an exact candidate even when it appears present, and dashboard
    code derives `actionable`, `already_fixed`, or `insufficient_evidence`.
 
-If the required source tool cannot complete, the generic loop returns a typed,
-content-free failure and target finalization does not run. The evidence ledger
+If either required source tool cannot complete, the generic loop returns a
+typed, content-free failure and target finalization does not run. The evidence ledger
 also keeps the source and artifact floors as defense in depth. No workspace,
 shell, branch, issue, pull request, or write tool is available. The experimental
 Agent Sandbox analyzer is not used. Agent Sandbox/OpenCode remains the later
@@ -219,8 +221,8 @@ for whether the evidence memo mentioned the expected job, container, environment
 name, and value, and whether final structured output contained a candidate. The
 runner stores only those booleans. It does not retain the memo or raw model
 output. Diagnostic case and repetition filters do not relax the default
-comparison scorer, which still requires the complete frozen two-model result set. The
-explicit `--model gpt-5.4` scorer mode requires exactly the six frozen GPT-5.4
+comparison scorer, which still requires the complete frozen two-model result
+set. The explicit `--model gpt-5.4` scorer mode requires exactly the six frozen GPT-5.4
 temporal trials and does not accept partial or replacement results.
 
 ## Frozen benchmark
