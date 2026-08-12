@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	PromptVersion          = 2
+	PromptVersion          = 3
 	SchemaVersion          = 3
 	VerificationVersion    = 3
 	ResultVersion          = 3
@@ -317,6 +317,7 @@ type Metrics struct {
 	ReasoningTokens     int64  `json:"reasoning_tokens,omitempty"`
 	EstimatedCostNanos  int64  `json:"estimated_cost_nanos,omitempty"`
 	RepairCount         int    `json:"repair_count,omitempty"`
+	EvidenceRetryCount  int    `json:"evidence_retry_count,omitempty"`
 }
 
 type Provenance struct {
