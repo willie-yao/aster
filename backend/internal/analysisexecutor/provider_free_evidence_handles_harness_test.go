@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,7 @@ type providerFreeEvidenceHandleSummary struct {
 	StructuredResult       bool                                             `json:"structured_result"`
 	ResultValidationStatus string                                           `json:"result_validation_status,omitempty"`
 	EvidenceHandles        agentanalysis.WorkspaceEvidenceHandleDiagnostics `json:"evidence_handles"`
+	OpenCodeVersion        string                                           `json:"opencode_version"`
 	SourceRevision         string                                           `json:"source_revision"`
 	WorkspaceIdentity      string                                           `json:"workspace_identity_sha256"`
 }
@@ -53,6 +55,7 @@ func TestProviderFreeEvidenceHandleScaleHarness(t *testing.T) {
 	workspaceRoot := requiredHarnessEnv(t, "PROVIDER_FREE_EVIDENCE_WORKSPACE_ROOT")
 	summaryPath := requiredHarnessEnv(t, "PROVIDER_FREE_EVIDENCE_SUMMARY_JSON")
 	revision := requiredHarnessEnv(t, "PROVIDER_FREE_EVIDENCE_SOURCE_REVISION")
+	sourcePath := requiredHarnessEnv(t, "PROVIDER_FREE_EVIDENCE_SOURCE_PATH")
 	opencodeBin := requiredHarnessEnv(t, "OPENCODE_1_18_2_BIN")
 
 	artifactRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceArtifactsDir)
@@ -78,15 +81,19 @@ func TestProviderFreeEvidenceHandleScaleHarness(t *testing.T) {
 				"pattern": ".", "path": filepath.ToSlash(artifactRoot), "include": "*.log",
 			})
 		case calls == providerFreeOverflowGreps+1:
-			writeSyntheticOpenAIText(t, w, "Evidence inspected.")
+			writeSyntheticOpenAIStream(t, w, "read", map[string]any{
+				"filePath": filepath.ToSlash(filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir, sourcePath)), "offset": 1, "limit": 80,
+			})
 		case calls == providerFreeOverflowGreps+2:
+			writeSyntheticOpenAIText(t, w, "Evidence inspected.")
+		case calls == providerFreeOverflowGreps+3:
 			writeSyntheticOpenAIStream(t, w, "StructuredOutput", map[string]any{
 				"version": 1, "contract_version": agentanalysis.WorkspaceContractVersion,
 				"summary": "The deterministic artifact evidence was inspected.", "is_transient": false,
 				"root_cause": "The provider-free harness exercised bounded high-cardinality evidence handling.",
 				"severity":   "Low", "suggested_fix": "",
-				"relevant_file_ids": []string{}, "artifact_evidence_ids": []string{"artifact-001"},
-				"source_evidence_ids": []string{}, "unresolved_details": []string{},
+				"relevant_file_ids": []string{"source-001"}, "artifact_evidence_ids": []string{"artifact-001"},
+				"source_evidence_ids": []string{"source-001"}, "unresolved_details": []string{},
 			})
 		default:
 			t.Fatalf("unexpected fake gateway request %d", calls)
@@ -127,7 +134,14 @@ func TestProviderFreeEvidenceHandleScaleHarness(t *testing.T) {
 		SourceEvidenceCalls: result.OpenCodeTelemetry.SourceEvidenceToolCalls, StructuredOutputCalls: result.OpenCodeTelemetry.StructuredOutputToolCalls,
 		EvidencePhaseCompleted: result.OpenCodeTelemetry.EvidencePhaseCompleted, FinalizationCompleted: result.OpenCodeTelemetry.FinalizationPhaseCompleted,
 		StructuredResult: result.Analysis != nil, ResultValidationStatus: result.ResultValidation.Status,
-		EvidenceHandles: result.OpenCodeTelemetry.EvidenceHandles, SourceRevision: revision, WorkspaceIdentity: hex.EncodeToString(identity[:]),
+		EvidenceHandles: result.OpenCodeTelemetry.EvidenceHandles, OpenCodeVersion: result.OpenCodeTelemetry.RequestShape.OpenCodeVersion,
+		SourceRevision: revision, WorkspaceIdentity: hex.EncodeToString(identity[:]),
+	}
+	wantCodes := []string{
+		agentanalysis.WorkspaceEvidenceHandleDuplicate,
+		agentanalysis.WorkspaceEvidenceHandleTruncated,
+		agentanalysis.WorkspaceEvidenceRangeLineInvalid,
+		agentanalysis.WorkspaceEvidenceRangeOverflow,
 	}
 	encoded, err := json.MarshalIndent(summary, "", "  ")
 	if err != nil {
@@ -135,6 +149,9 @@ func TestProviderFreeEvidenceHandleScaleHarness(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Clean(summaryPath), append(encoded, '\n'), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if result.TerminalState != "succeeded" || result.Analysis == nil || !result.Usage.Available || result.Usage.Status != agentanalysis.WorkspaceTelemetryAvailable || !result.OpenCodeTelemetry.ProviderRequestsKnown || result.OpenCodeTelemetry.ProviderRequests != providerFreeOverflowGreps+3 || result.OpenCodeTelemetry.StepsUsed != providerFreeOverflowGreps+3 || result.OpenCodeTelemetry.ArtifactEvidenceToolCalls != providerFreeOverflowGreps || result.OpenCodeTelemetry.SourceEvidenceToolCalls != 1 || result.OpenCodeTelemetry.StructuredOutputToolCalls != 1 || !result.OpenCodeTelemetry.EvidencePhaseCompleted || !result.OpenCodeTelemetry.FinalizationPhaseCompleted || result.ResultValidation.Status != agentanalysis.WorkspaceResultAccepted || result.OpenCodeTelemetry.EvidenceHandles.Status != agentanalysis.WorkspaceEvidenceHandlesAcceptedWithWarnings || result.OpenCodeTelemetry.EvidenceHandles.AcceptedArtifactHandleCount != 64 || result.OpenCodeTelemetry.EvidenceHandles.AcceptedSourceHandleCount < 1 || !result.OpenCodeTelemetry.EvidenceHandles.Truncated || !slices.Equal(result.OpenCodeTelemetry.EvidenceHandles.Codes, wantCodes) || result.OpenCodeTelemetry.RequestShape.OpenCodeVersion != "1.18.2" || calls != providerFreeOverflowGreps+3 {
+		t.Fatalf("corrected evidence lifecycle failed: result=%+v calls=%d", result, calls)
 	}
 	t.Logf("terminal=%s failure=%s requests=%d evidence_status=%s evidence_codes=%v", summary.TerminalState, summary.FailureCode, calls, summary.EvidenceHandles.Status, summary.EvidenceHandles.Codes)
 }

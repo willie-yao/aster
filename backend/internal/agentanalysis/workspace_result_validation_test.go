@@ -85,18 +85,15 @@ func TestParseWorkspaceAnalysisOrdersCitationsWithoutWarning(t *testing.T) {
 	}
 }
 
-func TestParseWorkspaceAnalysisDropsUncitedRelevantFile(t *testing.T) {
+func TestParseWorkspaceAnalysisRejectsRelevantFileWithoutSourceEvidence(t *testing.T) {
 	sourceRoot, artifactRoot, manifest, handles := workspaceValidationFixture(t)
 	raw := workspaceValidationJSON(t, handles, func(value map[string]any) {
 		value["source_evidence_ids"] = []any{}
 		value["relevant_file_ids"] = []any{workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 3)}
 	})
-	analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if validation.Status != WorkspaceResultAcceptedWithWarnings || !slices.Equal(validation.Codes, []string{WorkspaceInvalidRelevantFile}) || len(analysis.RelevantFiles) != 0 {
-		t.Fatalf("analysis=%+v validation=%+v", analysis, validation)
+	_, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
+	if err == nil || validation.Status != WorkspaceResultRejected || !slices.Equal(validation.Codes, []string{WorkspaceInvalidSourcePath}) {
+		t.Fatalf("err=%v validation=%+v", err, validation)
 	}
 }
 

@@ -302,6 +302,10 @@ func ParseWorkspaceAnalysis(raw string, handles []WorkspaceEvidenceHandle, manif
 		}
 		analysis.RelevantFiles = append(analysis.RelevantFiles, handle.Path)
 	}
+	if (len(parsed.SourceEvidenceIDs) > 0 || len(parsed.RelevantFileIDs) > 0) && len(analysis.SourceCitations) == 0 {
+		err := invalidWorkspaceResult(WorkspaceInvalidSourcePath)
+		return WorkspaceAnalysis{}, rejectedWorkspaceResult(err), err
+	}
 	return canonicalizeWorkspaceAnalysisWithWarnings(analysis, manifest, artifactRoot, sourceRoot, false, warnings)
 }
 
@@ -901,13 +905,19 @@ func validateWorkspaceEvidenceHandleDiagnostics(value WorkspaceEvidenceHandleDia
 			return fmt.Errorf("accepted workspace evidence handles contain warnings")
 		}
 	case WorkspaceEvidenceHandlesAcceptedWithWarnings:
-		if len(value.Codes) == 0 || value.DroppedRangeCount == 0 && !value.Truncated {
+		if len(value.Codes) == 0 {
 			return fmt.Errorf("workspace evidence handle warnings are empty")
 		}
 	case WorkspaceEvidenceHandlesRejected:
 		if len(value.Codes) == 0 {
 			return fmt.Errorf("rejected workspace evidence handles have no reason")
 		}
+	}
+	if value.DroppedRangeCount > value.ObservedRangeCount {
+		return fmt.Errorf("workspace evidence handle dropped count exceeds observed ranges")
+	}
+	if value.Status != WorkspaceEvidenceHandlesRejected && value.AcceptedArtifactHandleCount < 1 {
+		return fmt.Errorf("accepted workspace evidence handles contain no artifact handle")
 	}
 	return nil
 }
@@ -922,6 +932,7 @@ func validWorkspaceEvidenceDiagnosticCode(value string) bool {
 		WorkspaceEvidenceHandleNoncanonical,
 		WorkspaceEvidenceHandleDuplicate,
 		WorkspaceEvidenceHandleTruncated,
+		WorkspaceEvidenceHandleTimeout,
 		WorkspaceEvidenceArtifactHandlesMissing:
 		return true
 	default:

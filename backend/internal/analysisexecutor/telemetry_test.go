@@ -272,7 +272,6 @@ func TestParseOpenCodeTelemetryClassifiesBoundedEvidenceTools(t *testing.T) {
 		{"type":"step-start"},
 		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},
 		{"type":"tool","tool":"grep","state":{"status":"completed","input":{"path":%[2]q},"output":%[3]q,"metadata":{"matches":1}}},
-		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":"/etc/passwd"}}},
 		{"type":"tool","tool":"write","state":{"status":"error","error":"Permission denied by policy","input":{"filePath":"result/out"}}},
 		{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},
 		{"type":"step-finish","cost":0.1,"tokens":{"input":1,"output":1,"cache":{"read":0}}}
@@ -281,7 +280,7 @@ func TestParseOpenCodeTelemetryClassifiesBoundedEvidenceTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if facts.ArtifactToolCalls != 1 || facts.SourceToolCalls != 1 || facts.NonStructuredToolCalls != 4 || facts.StructuredOutputCalls != 1 {
+	if facts.ArtifactToolCalls != 1 || facts.SourceToolCalls != 1 || facts.NonStructuredToolCalls != 3 || facts.StructuredOutputCalls != 1 {
 		t.Fatalf("facts=%+v", facts)
 	}
 	wantHandles := []agentanalysis.WorkspaceEvidenceHandle{
@@ -290,6 +289,169 @@ func TestParseOpenCodeTelemetryClassifiesBoundedEvidenceTools(t *testing.T) {
 	}
 	if !slices.Equal(facts.EvidenceHandles, wantHandles) {
 		t.Fatalf("handles=%+v want=%+v", facts.EvidenceHandles, wantHandles)
+	}
+}
+
+func TestParseOpenCodeTelemetryPreservesUsageWithInvalidOptionalRange(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sourceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(artifactDir, "failure.log")
+	sourcePath := filepath.Join(sourceDir, "main.go")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(fmt.Sprintf(`[{
+		"info":{"role":"assistant"},"parts":[
+		{"type":"step-start"},
+		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},
+		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[2]q},"metadata":{"display":{"type":"file","path":%[2]q,"lineStart":2,"lineEnd":2}}}},
+		{"type":"step-finish","cost":0.1,"tokens":{"input":3,"output":2,"cache":{"read":1}}}
+	]}]`, artifactPath, sourcePath))
+	usage, telemetry, facts, err := parseOpenCodeTelemetryForWorkspace(raw, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !usage.Available || usage.InputTokens != 3 || usage.CachedInputTokens != 1 || usage.OutputTokens != 2 || !telemetry.Available || facts.ArtifactToolCalls != 1 || facts.SourceToolCalls != 1 || len(facts.EvidenceHandles) != 1 || facts.EvidenceHandles[0].Root != agentanalysis.WorkspaceArtifactsDir {
+		t.Fatalf("usage=%+v telemetry=%+v facts=%+v", usage, telemetry, facts)
+	}
+	if telemetry.EvidenceHandles.Status != agentanalysis.WorkspaceEvidenceHandlesAcceptedWithWarnings || telemetry.EvidenceHandles.AcceptedArtifactHandleCount != 1 || telemetry.EvidenceHandles.AcceptedSourceHandleCount != 0 || telemetry.EvidenceHandles.DroppedRangeCount != 1 || !slices.Contains(telemetry.EvidenceHandles.Codes, agentanalysis.WorkspaceEvidenceRangeLineInvalid) {
+		t.Fatalf("diagnostics=%+v", telemetry.EvidenceHandles)
+	}
+}
+
+func TestParseOpenCodeTelemetryRejectsUnsafeEvidenceWithoutDiscardingUsage(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(artifactDir, "failure.log")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(fmt.Sprintf(`[{
+		"info":{"role":"assistant"},"parts":[
+		{"type":"step-start"},
+		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},
+		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":"/etc/passwd"},"metadata":{"display":{"type":"file","path":"/etc/passwd","lineStart":1,"lineEnd":1}}}},
+		{"type":"step-finish","cost":0.1,"tokens":{"input":3,"output":2,"cache":{"read":1}}}
+	]}]`, artifactPath))
+	usage, telemetry, facts, err := parseOpenCodeTelemetryForWorkspace(raw, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !usage.Available || !telemetry.Available || telemetry.EvidenceHandles.Status != agentanalysis.WorkspaceEvidenceHandlesRejected || !slices.Equal(telemetry.EvidenceHandles.Codes, []string{agentanalysis.WorkspaceEvidenceRangePathInvalid}) || len(facts.EvidenceHandles) != 0 {
+		t.Fatalf("usage=%+v telemetry=%+v facts=%+v", usage, telemetry, facts)
+	}
+	if err := validateOpenCodeEvidencePhase(facts, nil); err == nil {
+		t.Fatal("unsafe evidence was allowed to reach finalization")
+	}
+}
+
+func TestParseOpenCodeTelemetryCapsHighCardinalityDirectoryGrep(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(artifactDir, "many.log")
+	var content, output strings.Builder
+	fmt.Fprintf(&output, "%s:\n", path)
+	for line := 1; line <= 513; line++ {
+		fmt.Fprintf(&content, "match-%03d\n", line)
+		fmt.Fprintf(&output, "  Line %d: match-%03d\n", line, line)
+	}
+	if err := os.WriteFile(path, []byte(content.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(fmt.Sprintf(`[{
+		"info":{"role":"assistant"},"parts":[
+		{"type":"step-start"},
+		{"type":"tool","tool":"grep","state":{"status":"completed","input":{"path":%q},"output":%q,"metadata":{"matches":%d}}},
+		{"type":"step-finish","cost":0.1,"tokens":{"input":3,"output":2,"cache":{"read":1}}}
+	]}]`, artifactDir, output.String(), 513))
+	usage, telemetry, facts, err := parseOpenCodeTelemetryForWorkspace(raw, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !usage.Available || facts.ArtifactToolCalls != 1 || len(facts.EvidenceHandles) != 64 || telemetry.EvidenceHandles.Status != agentanalysis.WorkspaceEvidenceHandlesAcceptedWithWarnings || !telemetry.EvidenceHandles.Truncated || !slices.Contains(telemetry.EvidenceHandles.Codes, agentanalysis.WorkspaceEvidenceRangeOverflow) || !slices.Contains(telemetry.EvidenceHandles.Codes, agentanalysis.WorkspaceEvidenceHandleTruncated) {
+		t.Fatalf("usage=%+v telemetry=%+v facts=%+v", usage, telemetry, facts)
+	}
+}
+
+func TestParseOpenCodeTelemetryBoundsCompactHighCardinalityGrep(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(artifactDir, "compact.log")
+	const matches = 20_000
+	var content, output strings.Builder
+	fmt.Fprintf(&output, "%s:\n", path)
+	for line := 1; line <= matches; line++ {
+		fmt.Fprintln(&content, "x")
+		fmt.Fprintf(&output, "  Line %d: x\n", line)
+	}
+	if err := os.WriteFile(path, []byte(content.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"grep","state":{"status":"completed","input":{"path":%q},"output":%q,"metadata":{"matches":%d}}},{"type":"step-finish","cost":0.1,"tokens":{"input":3,"output":2,"cache":{"read":1}}}]}]`, artifactDir, output.String(), matches))
+	usage, telemetry, facts, err := parseOpenCodeTelemetryForWorkspace(raw, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !usage.Available || len(facts.EvidenceRanges) != 512 || facts.EvidenceRetainedByRoot[agentanalysis.WorkspaceArtifactsDir] != 512 || len(facts.EvidenceHandles) != 64 || telemetry.EvidenceHandles.ObservedRangeCount != 513 || telemetry.EvidenceHandles.DroppedRangeCount != 513 || !telemetry.EvidenceHandles.Truncated || !slices.Contains(telemetry.EvidenceHandles.Codes, agentanalysis.WorkspaceEvidenceRangeOverflow) || !slices.Contains(telemetry.EvidenceHandles.Codes, agentanalysis.WorkspaceEvidenceHandleTruncated) {
+		t.Fatalf("usage=%+v telemetry=%+v facts=%+v", usage, telemetry, facts)
+	}
+}
+
+func TestParseOpenCodeTelemetryRejectsUnsafeGrepPathAfterRetainedCap(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(artifactDir, "many.log")
+	var content, output strings.Builder
+	fmt.Fprintf(&output, "%s:\n", path)
+	for line := 1; line <= 513; line++ {
+		fmt.Fprintln(&content, "match")
+		fmt.Fprintf(&output, "  Line %d: match\n", line)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.log")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	escape := filepath.Join(artifactDir, "escape.log")
+	if err := os.Symlink(outside, escape); err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintf(&output, "%s:\n", escape)
+	fmt.Fprintln(&output, "  Line 1: root")
+	if err := os.WriteFile(path, []byte(content.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"grep","state":{"status":"completed","input":{"path":%q},"output":%q,"metadata":{"matches":514}}},{"type":"step-finish","cost":0.1,"tokens":{"input":3,"output":2,"cache":{"read":1}}}]}]`, artifactDir, output.String()))
+	usage, telemetry, facts, err := parseOpenCodeTelemetryForWorkspace(raw, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !usage.Available || !telemetry.Available || len(facts.EvidenceRanges) != 512 || telemetry.EvidenceHandles.Status != agentanalysis.WorkspaceEvidenceHandlesRejected || !slices.Contains(telemetry.EvidenceHandles.Codes, agentanalysis.WorkspaceEvidenceRangePathInvalid) {
+		t.Fatalf("usage=%+v telemetry=%+v facts=%+v", usage, telemetry, facts)
+	}
+	if err := validateOpenCodeEvidencePhase(facts, nil); err == nil {
+		t.Fatal("unsafe grep path was allowed to reach finalization")
 	}
 }
 
@@ -309,7 +471,7 @@ func TestParseOpenCodeTelemetryDoesNotCountZeroMatchGrep(t *testing.T) {
 	}
 }
 
-func TestParseOpenCodeTelemetryCountsMatchingRootGrep(t *testing.T) {
+func TestParseOpenCodeTelemetryDoesNotCountGrepWithoutRanges(t *testing.T) {
 	workDir := t.TempDir()
 	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
 	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
@@ -321,7 +483,7 @@ func TestParseOpenCodeTelemetryCountsMatchingRootGrep(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if facts.ArtifactToolCalls != 1 {
+		if facts.ArtifactToolCalls != 0 || facts.EvidenceDiagnostics.Status != agentanalysis.WorkspaceEvidenceHandlesRejected {
 			t.Fatalf("candidate=%q facts=%+v", candidate, facts)
 		}
 	}

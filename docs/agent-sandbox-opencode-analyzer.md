@@ -191,7 +191,31 @@ line ranges, and quotes from the sealed workspace, requires exactly one result
 file, and emits one bounded result through stdout. Sanitized telemetry retains
 full-session requests, tokens, cost availability, steps, tool counts, failures,
 and denials plus the bounded phase counters. Evidence IDs and their locations
-are not retained in telemetry. The
+are not retained in telemetry.
+
+Evidence-handle diagnostics retain only bounded counts, truncation state, and
+allowlisted reason codes. Valid ranges are sorted, deduplicated, and capped at
+64 handles per root. Safe excess, duplicate, unreadable, or invalid-line ranges
+produce `accepted_with_warnings`; they do not discard usage or provider-request
+telemetry. Finalization continues when at least one valid artifact handle
+remains. Unsafe roots or escaping paths, a corrupted canonical handle table,
+and a result without valid artifact grounding remain hard failures. Source IDs
+or relevant-file IDs without any valid source citation are rejected.
+
+The evidence-handle reason-code contract is:
+
+- `evidence_range_overflow`
+- `evidence_range_root_invalid`
+- `evidence_range_path_invalid`
+- `evidence_range_unreadable`
+- `evidence_range_line_invalid`
+- `evidence_handle_noncanonical`
+- `evidence_handle_duplicate`
+- `evidence_handle_truncated`
+- `evidence_handle_timeout`
+- `evidence_artifact_handles_missing`
+
+The
 final synchronous structured message is combined with evidence-phase session
 telemetry because OpenCode 1.18.2 does not expose the completed structured message
 through the session message-list endpoint. No prompt, output, file content, raw
@@ -520,6 +544,15 @@ namespace absence was verified. Private operator evidence retains the Sandbox, P
 OpenCode path against a loopback deterministic TLS gateway. It issues one
 artifact read, one source read, one source grep, and one `StructuredOutput`
 finalization. The source and artifact mounts remain read-only.
+
+`TestProviderFreeEvidenceHandleScaleHarness` uses the same OpenCode 1.18.2 path
+with the pinned GCE PD source revision and representative large artifacts. Its
+scripted broad directory greps exceed 512 observed ranges. The privacy-safe
+summary records only aggregate usage, request and phase counts, handle counts,
+truncation, status, and allowlisted reason codes. Focused tests cover duplicate
+and overlapping ranges, final-line and trailing-newline reads, long files,
+mixed valid and invalid optional ranges, per-root caps, missing source grounding,
+and unsafe paths. No provider-backed request is required.
 
 The opt-in harness records only content-free before/after facts: HEAD and tree
 hashes, repository-local `core.filemode`, index mode and flag counts, redacted
