@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
 type preparedSourceSnapshot struct {
@@ -193,7 +191,7 @@ func TestPreparedSourceModePolicyMismatchIsRejected(t *testing.T) {
 
 func TestPreparedSourceModePolicyChangesOnlyPreparedIdentities(t *testing.T) {
 	root, _, manifest, revision := preparedModeFixture(t)
-	gateway := engineruntime.ModelGatewayConfig{Endpoint: "https://model-gateway.platform.svc.cluster.local:8443/v1", Model: "test-model", ProtocolVersion: "openai-chat-completions-v1"}
+	gateway := testGatewayProvider("https://model-gateway.platform.svc.cluster.local:8443/v1", "test-model")
 	preserveStage, err := NewWorkspaceStageRequestWithSourceModePolicies(manifest, WorkspaceSourceModePreserve, WorkspaceSourceModePreserve)
 	if err != nil {
 		t.Fatal(err)

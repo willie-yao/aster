@@ -18,13 +18,14 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
 const (
 	WorkspaceManifestVersion = 1
-	WorkspaceRequestVersion  = 2
+	WorkspaceRequestVersion  = 3
 	WorkspaceResultVersion   = 1
 	WorkspaceStageVersion    = 2
 	WorkspaceContractVersion = "agent-analysis-workspace-v5"
@@ -77,20 +78,20 @@ type WorkspaceStageRequest struct {
 
 // WorkspaceExecutionRequest is the non-secret request passed to one analyzer Sandbox.
 type WorkspaceExecutionRequest struct {
-	Version            int                              `json:"version"`
-	ContractVersion    string                           `json:"contract_version"`
-	Hash               string                           `json:"hash"`
-	PromptVersion      string                           `json:"prompt_version"`
-	PromptHash         string                           `json:"prompt_hash"`
-	ResultSchemaHash   string                           `json:"result_schema_hash"`
-	Manifest           WorkspaceManifest                `json:"manifest"`
-	SourceModePolicy   WorkspaceSourceModePolicy        `json:"source_mode_policy"`
-	ModelGateway       engineruntime.ModelGatewayConfig `json:"model_gateway"`
-	TimeoutSeconds     int64                            `json:"timeout_seconds"`
-	MaxSteps           int                              `json:"max_steps"`
-	ModelContextTokens int                              `json:"model_context_tokens"`
-	ModelOutputTokens  int                              `json:"model_output_tokens"`
-	OutputLimitBytes   int64                            `json:"output_limit_bytes"`
+	Version            int                       `json:"version"`
+	ContractVersion    string                    `json:"contract_version"`
+	Hash               string                    `json:"hash"`
+	PromptVersion      string                    `json:"prompt_version"`
+	PromptHash         string                    `json:"prompt_hash"`
+	ResultSchemaHash   string                    `json:"result_schema_hash"`
+	Manifest           WorkspaceManifest         `json:"manifest"`
+	SourceModePolicy   WorkspaceSourceModePolicy `json:"source_mode_policy"`
+	ModelProvider      modelprovider.Config      `json:"model_provider"`
+	TimeoutSeconds     int64                     `json:"timeout_seconds"`
+	MaxSteps           int                       `json:"max_steps"`
+	ModelContextTokens int                       `json:"model_context_tokens"`
+	ModelOutputTokens  int                       `json:"model_output_tokens"`
+	OutputLimitBytes   int64                     `json:"output_limit_bytes"`
 }
 
 // NewWorkspaceManifest creates one deterministic file-backed analyzer input.
@@ -429,22 +430,32 @@ func validateSourceGitMetadata(root string) error {
 	})
 }
 
+func workspaceGitEnvironment() []string {
+	env := []string{}
+	for _, name := range []string{"PATH", "LANG", "LC_ALL", "LC_CTYPE", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS"} {
+		if value, ok := os.LookupEnv(name); ok && value != "" {
+			env = append(env, name+"="+value)
+		}
+	}
+	return env
+}
+
 func gitWorkspaceOutput(ctx context.Context, root string, args ...string) ([]byte, error) {
 	command := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
-	command.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
+	command.Env = append(workspaceGitEnvironment(), "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
 	return command.CombinedOutput()
 }
 
 // NewWorkspaceExecutionRequest seals default mode-preserving runtime bounds and gateway identity.
-func NewWorkspaceExecutionRequest(manifest WorkspaceManifest, gateway engineruntime.ModelGatewayConfig, timeout time.Duration, maxSteps, modelContextTokens, modelOutputTokens int, outputLimit int64) (WorkspaceExecutionRequest, error) {
-	return NewWorkspaceExecutionRequestWithSourceModePolicy(manifest, WorkspaceSourceModePreserve, gateway, timeout, maxSteps, modelContextTokens, modelOutputTokens, outputLimit)
+func NewWorkspaceExecutionRequest(manifest WorkspaceManifest, provider modelprovider.Config, timeout time.Duration, maxSteps, modelContextTokens, modelOutputTokens int, outputLimit int64) (WorkspaceExecutionRequest, error) {
+	return NewWorkspaceExecutionRequestWithSourceModePolicy(manifest, WorkspaceSourceModePreserve, provider, timeout, maxSteps, modelContextTokens, modelOutputTokens, outputLimit)
 }
 
 // NewWorkspaceExecutionRequestWithSourceModePolicy seals the prepared filesystem mode policy.
-func NewWorkspaceExecutionRequestWithSourceModePolicy(manifest WorkspaceManifest, modePolicy WorkspaceSourceModePolicy, gateway engineruntime.ModelGatewayConfig, timeout time.Duration, maxSteps, modelContextTokens, modelOutputTokens int, outputLimit int64) (WorkspaceExecutionRequest, error) {
+func NewWorkspaceExecutionRequestWithSourceModePolicy(manifest WorkspaceManifest, modePolicy WorkspaceSourceModePolicy, provider modelprovider.Config, timeout time.Duration, maxSteps, modelContextTokens, modelOutputTokens int, outputLimit int64) (WorkspaceExecutionRequest, error) {
 	request := WorkspaceExecutionRequest{
 		Version: WorkspaceRequestVersion, ContractVersion: WorkspaceContractVersion, PromptVersion: WorkspacePromptVersion,
-		PromptHash: WorkspaceSkillHash(), ResultSchemaHash: WorkspaceResultSchemaHash(), Manifest: manifest, SourceModePolicy: modePolicy, ModelGateway: gateway, TimeoutSeconds: int64(timeout.Round(time.Second) / time.Second),
+		PromptHash: WorkspaceSkillHash(), ResultSchemaHash: WorkspaceResultSchemaHash(), Manifest: manifest, SourceModePolicy: modePolicy, ModelProvider: provider, TimeoutSeconds: int64(timeout.Round(time.Second) / time.Second),
 		MaxSteps: maxSteps, ModelContextTokens: modelContextTokens, ModelOutputTokens: modelOutputTokens, OutputLimitBytes: outputLimit,
 	}
 	hash, err := workspaceRequestDigest(request)
@@ -458,7 +469,7 @@ func NewWorkspaceExecutionRequestWithSourceModePolicy(manifest WorkspaceManifest
 	return request, nil
 }
 
-// ValidateWorkspaceExecutionRequest validates one credential-free analyzer request.
+// ValidateWorkspaceExecutionRequest validates one non-secret analyzer request.
 func ValidateWorkspaceExecutionRequest(request WorkspaceExecutionRequest) error {
 	if request.Version != WorkspaceRequestVersion || request.ContractVersion != WorkspaceContractVersion || request.PromptVersion != WorkspacePromptVersion || request.PromptHash != WorkspaceSkillHash() || request.ResultSchemaHash != WorkspaceResultSchemaHash() {
 		return fmt.Errorf("workspace analysis request version is invalid")
@@ -469,11 +480,16 @@ func ValidateWorkspaceExecutionRequest(request WorkspaceExecutionRequest) error 
 	if !validWorkspaceSourceModePolicy(request.SourceModePolicy) {
 		return fmt.Errorf("workspace analysis source mode policy is invalid")
 	}
-	if strings.TrimSpace(request.ModelGateway.Model) == "" || request.ModelGateway.ProtocolVersion != "openai-chat-completions-v1" {
-		return fmt.Errorf("workspace analysis model gateway is invalid")
+	if err := modelprovider.ValidateDeploymentEndpoint(request.ModelProvider); err != nil {
+		return fmt.Errorf("workspace analysis model provider: %w", err)
 	}
-	if err := engineruntime.ValidateModelGatewayTrust(request.ModelGateway.Endpoint, false); err != nil {
-		return fmt.Errorf("workspace analysis model gateway: %w", err)
+	if _, err := modelprovider.OpenCodeBaseURL(request.ModelProvider); err != nil {
+		return fmt.Errorf("workspace analysis model provider: %w", err)
+	}
+	if request.ModelProvider.CredentialMode == modelprovider.CredentialModeGateway {
+		if err := engineruntime.ValidateModelGatewayTrust(request.ModelProvider.Endpoint, request.ModelProvider.PublicCAPrivateDNS); err != nil {
+			return fmt.Errorf("workspace analysis model provider gateway: %w", err)
+		}
 	}
 	if request.TimeoutSeconds < 1 || request.TimeoutSeconds > int64((30*time.Minute)/time.Second) {
 		return fmt.Errorf("workspace analysis timeout must be between 1 second and 30 minutes")

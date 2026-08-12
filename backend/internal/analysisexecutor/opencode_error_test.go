@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
 func TestSanitizeOpenCodeAPIErrorClassifications(t *testing.T) {
@@ -230,7 +229,7 @@ func TestPromptOpenCodeUnknownErrorDoesNotUseUnpersistedPartsForLifecycle(t *tes
 		_, _ = w.Write([]byte(`{"info":{"role":"assistant","error":{"name":"UnknownError","data":{"message":"getaddrinfo ENOTFOUND synthetic.invalid"}}},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"running"}}]}`))
 	}))
 	defer server.Close()
-	_, err := promptOpenCode(t.Context(), server.Client(), server.URL, "session-1", OpenCodeSpec{WorkDir: "/workspace", Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}})
+	_, err := promptOpenCode(t.Context(), server.Client(), server.URL, "session-1", OpenCodeSpec{WorkDir: "/workspace", Provider: testOpenCodeProvider("", "test-model")})
 	promptErr, ok := err.(*openCodePromptError)
 	if !ok {
 		t.Fatalf("err=%T %v", err, err)
@@ -263,7 +262,7 @@ func TestPromptOpenCodeReturnsSanitizedAPIError(t *testing.T) {
 		_, _ = w.Write([]byte(`{"info":{"role":"assistant","error":{"name":"APIError","data":{"message":"provider secret","statusCode":429,"isRetryable":true,"metadata":{"code":"secret-code","url":"https://gateway.example?token=secret"},"responseBody":"model output"}}},"parts":[]}`))
 	}))
 	defer server.Close()
-	spec := OpenCodeSpec{WorkDir: "/workspace", Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}, Prompt: "private prompt"}
+	spec := OpenCodeSpec{WorkDir: "/workspace", Provider: testOpenCodeProvider("", "test-model"), Prompt: "private prompt"}
 	_, err := promptOpenCode(t.Context(), server.Client(), server.URL, "session-1", spec)
 	if err == nil || err.Error() != "OpenCode structured output failed: APIError" {
 		t.Fatalf("err=%v", err)
@@ -292,7 +291,7 @@ func TestPromptOpenCodePreservesMalformedErrorClassification(t *testing.T) {
 		_, _ = w.Write([]byte(`{"info":{"role":"assistant","error":{"name":"APIError","data":{"message":"private detail"}}},"parts":[]}`))
 	}))
 	defer server.Close()
-	_, err := promptOpenCode(t.Context(), server.Client(), server.URL, "session-1", OpenCodeSpec{WorkDir: "/workspace", Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}, Prompt: "private prompt"})
+	_, err := promptOpenCode(t.Context(), server.Client(), server.URL, "session-1", OpenCodeSpec{WorkDir: "/workspace", Provider: testOpenCodeProvider("", "test-model"), Prompt: "private prompt"})
 	promptErr, ok := err.(*openCodePromptError)
 	if !ok || promptErr.telemetry.Classification != "malformed_error" || promptErr.telemetry.Name != "APIError" || err.Error() != "OpenCode structured output failed: APIError" {
 		t.Fatalf("err=%T %v telemetry=%+v", err, err, promptErr)

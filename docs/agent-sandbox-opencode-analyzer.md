@@ -116,7 +116,7 @@ the analyzer security boundary:
 - one ResourceQuota permitting one Sandbox and one Pod at a time.
 
 The chart does not create the namespace, RuntimeClass, Agent Sandbox controller,
-input PVC, gateway, or images. Both images require immutable SHA-256 digests.
+input PVC, provider Secret, gateway, or images. Both images require immutable SHA-256 digests.
 The admission policy pins the requester, namespace, RuntimeClass, ServiceAccount,
 executor image, input claim, container count, mounts, resources,
 AppArmor, seccomp, and delete lifecycle. The executor receives the staged
@@ -124,12 +124,15 @@ workspace read-only, a separate writable result volume, and separate temporary
 storage.
 
 The network policy denies ingress and permits only DNS plus the configured
-internal gateway. `networkPolicy.gatewayPort` is the HTTPS Service port in the
-gateway URL. `networkPolicy.gatewayTargetPort` is the backend Pod port enforced
-after Service translation. It defaults to `gatewayPort` for existing values and
-must be set to `8443` when Service port `443` targets Pod port `8443`. The gateway
-must separately authenticate the analyzer
-ServiceAccount. The ResourceQuota assumes the analyzer namespace is dedicated.
+provider. Internal provider or gateway Pods can use Kubernetes NetworkPolicy
+with namespace and Pod selectors. Cilium mode uses the Kubernetes Service for
+an internal endpoint or an exact `toFQDNs` rule for an external direct provider.
+External direct providers therefore require Cilium mode.
+`networkPolicy.gatewayPort` remains the HTTPS port in the provider URL.
+`networkPolicy.gatewayTargetPort` is the backend Pod port used only after
+internal Service translation. The provider or gateway must separately
+authenticate the analyzer workload. The ResourceQuota assumes the analyzer
+namespace is dedicated.
 
 A gateway-side `CiliumNetworkPolicy` that selects the analyzer namespace uses
 the raw `io.kubernetes.pod.namespace` label key. The `k8s:` prefix shown by
@@ -138,6 +141,28 @@ Cilium identity inspection is not part of a policy selector key.
 No chart Deployment or CronJob receives analyzer environment variables or the
 client ServiceAccount. Installation therefore grants no scheduled analyzer
 authority. Manual validation must use the client identity explicitly.
+
+## Provider credential boundary
+
+Agent Sandbox remains disabled by default. After the analyzer boundary is
+explicitly enabled, direct mode is the default. Direct bearer mode exposes one
+dedicated inference credential to the OpenCode executor through the fixed
+`PROW_AI_MODEL_PROVIDER_TOKEN` environment variable. The Secret must already
+exist in the analyzer execution namespace. Direct unauthenticated mode and
+explicit gateway mode render no Secret reference.
+
+The chart never creates, copies, reads, or prints the Secret. Admission pins the
+exact Secret name, key, fixed environment variable, and auth mode while
+rejecting `envFrom`, Secret volumes, projected tokens, extra credentials, and
+arbitrary environment entries. OpenCode configuration contains only an
+environment reference, not the token. The executor rejects any exact credential
+found in process streams, structured output, canonical analysis content, or
+failure data before writing `result/analysis.json` or stdout.
+
+Use only a dedicated inference credential. Do not reuse dashboard write tokens,
+GitHub read credentials, OAuth credentials, or general PATs. Gateway mode keeps
+the workload tokenless and requires the gateway to attach provider credentials
+outside the Sandbox process.
 
 ## Native OpenCode boundary
 
@@ -220,9 +245,13 @@ BENCH_PROJECT_DIR=<pinned-consumer> \
 BENCH_MODEL_LABEL=model-a \
 BENCH_PROVIDER_PATH=<provider-path> \
 BENCH_TRANSPORT_ID=<stable-transport-id> \
-AGENT_SANDBOX_ANALYSIS_MODEL_GATEWAY_ENDPOINT=<internal-https-endpoint> \
-AGENT_SANDBOX_ANALYSIS_MODEL_GATEWAY_MODEL=<model> \
-AGENT_SANDBOX_ANALYSIS_MODEL_GATEWAY_PROTOCOL=openai-chat-completions-v1 \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_CREDENTIAL_MODE=<direct-or-gateway> \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_API=chat_completions \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_ENDPOINT=<full-chat-completions-endpoint> \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_MODEL=<model> \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_AUTH_TYPE=<none-or-bearer> \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_AUTH_SECRET_NAME=<existing-secret-if-bearer> \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_AUTH_SECRET_KEY=<secret-key-if-bearer> \
 AGENT_SANDBOX_ANALYSIS_TIMEOUT=15m \
 AGENT_SANDBOX_ANALYSIS_OUTPUT_LIMIT_BYTES=262144 \
 go test ./internal/e2e -run '^TestAgentSandboxAnalyzerBenchmark$' -v -count=1
@@ -264,9 +293,13 @@ AGENT_SANDBOX_ANALYSIS_IMAGE=<executor@sha256:digest> \
 AGENT_SANDBOX_ANALYSIS_STAGER_INPUT_CLAIM=<input-pvc> \
 AGENT_SANDBOX_ANALYSIS_SERVICE_ACCOUNT=<tokenless-workload-sa> \
 AGENT_SANDBOX_ANALYSIS_RUNTIME_CLASS=<secure-runtime-class> \
-AGENT_SANDBOX_ANALYSIS_MODEL_GATEWAY_ENDPOINT=<internal-https-endpoint> \
-AGENT_SANDBOX_ANALYSIS_MODEL_GATEWAY_MODEL=<model> \
-AGENT_SANDBOX_ANALYSIS_MODEL_GATEWAY_PROTOCOL=openai-chat-completions-v1 \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_CREDENTIAL_MODE=<direct-or-gateway> \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_API=chat_completions \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_ENDPOINT=<full-chat-completions-endpoint> \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_MODEL=<model> \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_AUTH_TYPE=<none-or-bearer> \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_AUTH_SECRET_NAME=<existing-secret-if-bearer> \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_AUTH_SECRET_KEY=<secret-key-if-bearer> \
 AGENT_SANDBOX_ANALYSIS_TIMEOUT=15m \
 AGENT_SANDBOX_ANALYSIS_OUTPUT_LIMIT_BYTES=262144 \
 AGENT_SANDBOX_ANALYSIS_CPU_REQUEST=250m \

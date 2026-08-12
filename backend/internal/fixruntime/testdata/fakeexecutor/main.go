@@ -189,7 +189,7 @@ func failedResult(request engineruntime.ExecutionRequest, started time.Time, err
 func emit(result engineruntime.ExecutionResult) int {
 	data, err := json.Marshal(result)
 	if err != nil {
-		fmt.Printf(`{"version":1,"terminal_state":"failed","failure_reason":"encode result"}`)
+		fmt.Printf(`{"version":2,"terminal_state":"failed","failure_reason":"encode result"}`)
 		return 1
 	}
 	fmt.Println(string(data))

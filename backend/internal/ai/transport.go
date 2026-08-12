@@ -14,14 +14,15 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 )
 
 // modelTransport executes one model turn. The analysis loops operate only on
 // these neutral types; each API adapter owns its wire encoding and response
 // conversion.
 const (
-	APIChatCompletions = "chat_completions"
-	APIResponses       = "responses"
+	APIChatCompletions = modelprovider.APIChatCompletions
+	APIResponses       = modelprovider.APIResponses
 )
 
 type modelTransport interface {

@@ -532,20 +532,20 @@ A completed failed run that has an accepted `source: "build"` analysis can use t
 
 The server advertises its current analysis critique version with the action capability. The frontend hides build action controls when the published analysis predates that contract, while analyses produced by a newer compatible engine remain visible during a rollback or rolling upgrade.
 
-### `agent-sandbox` credential-free executor
+### `agent-sandbox` OpenCode executor
 
 The experimental `agent-sandbox` runtime creates one cold Kubernetes SIG Agent
-Sandbox `v1beta1` resource per Fix PR request. The consumer installs and upgrades
-the Agent Sandbox controller separately. The dashboard chart never installs the
-controller, CRD, a secure RuntimeClass, node infrastructure, egress policy, or a
-model gateway.
+Sandbox `v1beta1` resource per Fix PR request. Agent Sandbox remains disabled by
+default. The consumer installs and upgrades the controller separately. The
+dashboard chart never installs the controller, CRD, a secure RuntimeClass, node
+infrastructure, or provider egress infrastructure.
 
-The executor uses OpenCode through a consumer-operated internal
-OpenAI-compatible gateway. The Sandbox receives only the gateway URL, model
-identifier, and protocol version. It never receives the gateway's provider
-token, a GitHub write token, dashboard OAuth credentials, or a Kubernetes
-credential. The gateway attaches any provider credential outside the Sandbox
-process.
+After the runtime is explicitly enabled, `direct` is the default credential
+mode. Direct bearer mode gives the OpenCode process access to one dedicated
+inference credential. The Secret must already exist in the execution namespace
+and is referenced through exactly one `secretKeyRef`. Direct unauthenticated
+mode uses `auth.type: none` and renders no Secret reference. Explicit `gateway`
+mode retains the tokenless consumer-operated gateway behavior.
 
 A project configuration is explicit and fail closed:
 
@@ -566,23 +566,53 @@ ai:
       allowed_commands:
         - argv: [git, diff, --cached, --check]
           timeout: 1m
-      model_gateway:
-        endpoint: https://model-gateway.platform.example.com/v1
-        model: coding-model
-        protocol_version: openai-chat-completions-v1
-        public_ca_private_dns: true
+      model_provider:
+        credential_mode: direct
+        api: chat_completions
+        endpoint: https://api.githubcopilot.com/chat/completions
+        model: claude-sonnet-4.6
+        auth:
+          type: bearer
 ```
 
-The gateway has two supported TLS trust models:
+The matching Helm values add only the existing Secret reference:
 
-- An internal service name such as `.svc` or `.internal`. Its certificate must
-  chain to a CA already present in the selected immutable executor image. A
-  consumer using a private CA must derive and publish its own executor image
-  with that non-secret CA certificate installed.
-- A privately resolved public FQDN with a publicly trusted certificate. Set
-  `public_ca_private_dns: true` to acknowledge this design. Direct known model
-  provider endpoints remain rejected, and consumer egress policy must ensure the
-  name resolves and routes only to the internal gateway.
+```yaml
+agentSandbox:
+  fixRuntime:
+    enabled: true
+    modelProvider:
+      credentialMode: direct
+      api: chat_completions
+      endpoint: https://api.githubcopilot.com/chat/completions
+      model: claude-sonnet-4.6
+      auth:
+        type: bearer
+        existingSecret: agent-sandbox-model
+        tokenKey: AI_TOKEN
+      publicCAPrivateDNS: false
+```
+
+Use a dedicated inference-only credential. Do not mount `BOT_TOKEN`,
+`FIX_TOKEN`, OAuth credentials, GitHub read credentials, or a general GitHub
+PAT. The dashboard never reads the Secret value. Helm never creates, copies, or
+prints it. Admission fixes the Secret name, key, environment variable, auth
+mode, executor image, and complete environment shape. It continues to reject
+`envFrom`, Secret volumes, projected tokens, extra credentials, and arbitrary
+environment entries.
+
+OpenCode configuration contains only
+`{env:PROW_AI_MODEL_PROVIDER_TOKEN}` for bearer mode, never the token. The
+versioned execution request contains the provider mode, API, endpoint, model,
+auth type, and fixed environment name but no Secret name, key, value, or value
+hash. The executor rejects any exact credential found in output, summaries,
+patches, changed-file content, command output, structured results, or failure
+data before publication.
+
+Gateway mode requires `auth.type: none`. Internal service certificates must
+chain to a CA in the immutable executor image. The Fix runtime can explicitly
+acknowledge a privately resolved public gateway FQDN with
+`public_ca_private_dns: true`; direct provider endpoints use direct mode instead.
 
 Generation is one-shot. OpenCode Bash, web fetch, task delegation, external
 skills, and external-directory access are disabled. After OpenCode finishes,
@@ -603,14 +633,14 @@ validators whose executables exist in the selected image. A missing executable
 produces a bounded terminal failure and no actionable Fix PR preview. Projects
 such as CAPZ must build and digest-pin a consumer-derived executor image before
 enabling Fix PR. A derived image must retain UID/GID 65532, the
-`/usr/local/bin/fixexecutor` entrypoint, the credential-free OpenCode setup, and
+`/usr/local/bin/fixexecutor` entrypoint, the fixed provider environment and output-leak protections, and
 the same runtime security contract. The README fixture proves patch generation
 and `git diff --cached --check`; it does not prove CAPZ tests can run.
 
 The Helm values under `agentSandbox` must exactly match the project timeout,
-turn, file, output, command, and gateway settings. Deployed configurations
+turn, file, output, command, and provider settings. Deployed configurations
 require an immutable executor image digest, explicit execution namespace,
-tokenless workload ServiceAccount, and non-empty secure RuntimeClass. Public
+workload ServiceAccount with token automount disabled, and non-empty secure RuntimeClass. Public
 repositories only are supported because no Git credential enters the Sandbox.
 
 Production Sandboxes request `RuntimeDefault` AppArmor and seccomp at both Pod

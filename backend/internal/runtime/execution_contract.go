@@ -9,11 +9,13 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 )
 
 const (
 	// ExecutionContractVersion is the wire contract shared by external fix runtimes.
-	ExecutionContractVersion           = 1
+	ExecutionContractVersion           = 2
 	maxExecutionPromptBytes            = 32 << 10
 	maxExecutionOutputBytes            = 1 << 20
 	maxExecutionCommands               = 32
@@ -35,26 +37,26 @@ type CommandPolicy struct {
 	Commands   []ExecutionCommand `json:"commands,omitempty"`
 }
 
-// ModelGatewayConfig identifies a credential-free OpenAI-compatible gateway.
+// ModelGatewayConfig identifies the tokenless gateway used by the causal critic.
 type ModelGatewayConfig struct {
 	Endpoint        string `json:"endpoint"`
 	Model           string `json:"model"`
 	ProtocolVersion string `json:"protocol_version"`
 }
 
-// ExecutionRequest is the credential-free contract sent to an external fix executor.
+// ExecutionRequest is the non-secret contract sent to an external fix executor.
 type ExecutionRequest struct {
-	Version          int                `json:"version"`
-	RepositoryURL    string             `json:"repository_url"`
-	CommitSHA        string             `json:"commit_sha"`
-	Prompt           string             `json:"prompt"`
-	TimeoutSeconds   int64              `json:"timeout_seconds"`
-	MaxSteps         int                `json:"max_steps"`
-	MaxFiles         int                `json:"max_files"`
-	CommandPolicy    CommandPolicy      `json:"command_policy"`
-	ModelGateway     ModelGatewayConfig `json:"model_gateway"`
-	ExpectedBaseSHA  string             `json:"expected_base_sha"`
-	OutputLimitBytes int64              `json:"output_limit_bytes"`
+	Version          int                  `json:"version"`
+	RepositoryURL    string               `json:"repository_url"`
+	CommitSHA        string               `json:"commit_sha"`
+	Prompt           string               `json:"prompt"`
+	TimeoutSeconds   int64                `json:"timeout_seconds"`
+	MaxSteps         int                  `json:"max_steps"`
+	MaxFiles         int                  `json:"max_files"`
+	CommandPolicy    CommandPolicy        `json:"command_policy"`
+	ModelProvider    modelprovider.Config `json:"model_provider"`
+	ExpectedBaseSHA  string               `json:"expected_base_sha"`
+	OutputLimitBytes int64                `json:"output_limit_bytes"`
 }
 
 // TerminalState is the final state reported by an external fix executor.
@@ -118,7 +120,7 @@ type ExecutionResult struct {
 // GenerateResult is retained as the Fix PR runtime result name.
 type GenerateResult = ExecutionResult
 
-// Validate checks the credential-free execution request contract.
+// Validate checks the non-secret execution request contract.
 func (r ExecutionRequest) Validate() error {
 	if r.Version != ExecutionContractVersion {
 		return fmt.Errorf("execution request version %d is not supported", r.Version)
@@ -142,18 +144,16 @@ func (r ExecutionRequest) Validate() error {
 	if strings.TrimSpace(r.Prompt) == "" || len(r.Prompt) > maxExecutionPromptBytes {
 		return fmt.Errorf("prompt must be non-empty and at most %d bytes", maxExecutionPromptBytes)
 	}
-	gateway, err := url.Parse(strings.TrimSpace(r.ModelGateway.Endpoint))
-	if err != nil || gateway.Host == "" || (gateway.Scheme != "http" && gateway.Scheme != "https") {
-		return fmt.Errorf("model gateway endpoint must be an absolute http or https URL")
+	if err := modelprovider.ValidateDeploymentEndpoint(r.ModelProvider); err != nil {
+		return err
 	}
-	if gateway.User != nil || gateway.RawQuery != "" || gateway.Fragment != "" {
-		return fmt.Errorf("model gateway endpoint must not contain credentials, a query, or a fragment")
+	if _, err := modelprovider.OpenCodeBaseURL(r.ModelProvider); err != nil {
+		return err
 	}
-	if model := strings.TrimSpace(r.ModelGateway.Model); model == "" || len(model) > 256 || strings.ContainsAny(model, "\r\n\x00") {
-		return fmt.Errorf("model gateway model must be non-empty, bounded, and single-line")
-	}
-	if r.ModelGateway.ProtocolVersion != "openai-chat-completions-v1" {
-		return fmt.Errorf("model gateway protocol version %q is not supported", r.ModelGateway.ProtocolVersion)
+	if r.ModelProvider.CredentialMode == modelprovider.CredentialModeGateway {
+		if err := ValidateModelGatewayTrust(r.ModelProvider.Endpoint, r.ModelProvider.PublicCAPrivateDNS); err != nil {
+			return fmt.Errorf("model provider gateway: %w", err)
+		}
 	}
 	if r.TimeoutSeconds <= 0 || time.Duration(r.TimeoutSeconds)*time.Second > 30*time.Minute {
 		return fmt.Errorf("timeout must be greater than zero and at most 30m")

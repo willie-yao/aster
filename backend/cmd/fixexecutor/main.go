@@ -55,7 +55,7 @@ func readRequest() (engineruntime.ExecutionRequest, error) {
 func emit(result engineruntime.ExecutionResult) {
 	data, err := json.Marshal(result)
 	if err != nil {
-		fmt.Println(`{"version":1,"terminal_state":"failed","failure_reason":"encode execution result"}`)
+		fmt.Println(`{"version":2,"terminal_state":"failed","failure_reason":"encode execution result"}`)
 		return
 	}
 	fmt.Println(string(data))

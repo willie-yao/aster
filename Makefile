@@ -65,7 +65,7 @@ fixer-image:
 remote-fixer-image:
 	docker build --target remote-fixer-runtime --build-arg VERSION=$(VERSION) -t $(IMAGE)/remote-fixer:$(VERSION) .
 
-# Build the credential-free OpenCode executor image for Agent Sandbox.
+# Build the Agent Sandbox OpenCode executor image.
 agent-sandbox-fix-executor-image:
 	docker build --target agent-sandbox-fix-executor --build-arg VERSION=$(VERSION) -t $(IMAGE)/agent-sandbox-fix-executor:$(VERSION) .
 
@@ -112,6 +112,7 @@ helm-check:
 	bash deploy/helm/prow-ai-dashboard/test-render.sh
 	bash deploy/helm/prow-ai-dashboard/test-operations.sh
 	bash deploy/helm/test-upgrade.sh
+	bash -n experimental/agent-sandbox/run-kind-evaluation.sh
 
 # Check the AGENTS.md repo map against the backend tree.
 check-repo-map:
@@ -223,7 +224,7 @@ help:
 	@echo "  agent-sandbox-analysis-executor-image Build the file-backed analyzer executor image"
 	@echo "  agent-sandbox-analysis-stager-image  Build the credential-free analyzer stager image"
 	@echo "  agent-sandbox-critic-executor-image Build the credential-free critic executor image"
-	@echo "  agent-sandbox-fix-executor-image  Build the credential-free Agent Sandbox executor"
+	@echo "  agent-sandbox-fix-executor-image  Build the Agent Sandbox OpenCode executor"
 	@echo "  clean              Remove build artifacts and data"
 	@echo "  clean-cache        Clear AI analysis cache"
 	@echo "  clean-all          Clean everything including cache"

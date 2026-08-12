@@ -177,8 +177,8 @@ func TestWorkspaceSandboxRuntimeRejectsConfigurationMismatch(t *testing.T) {
 		t.Fatal("sandbox should not run for configuration mismatch")
 		return agentsandbox.Result{}, nil
 	}}
-	runtime.Gateway.Model = "other-model"
-	if _, err := runtime.Analyze(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "configured gateway") {
+	runtime.Provider.Model = "other-model"
+	if _, err := runtime.Analyze(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "configured provider") {
 		t.Fatalf("error=%v", err)
 	}
 }
@@ -212,7 +212,7 @@ func workspaceSandboxFixture(t *testing.T) (*WorkspaceSandboxRuntime, WorkspaceS
 	if err != nil {
 		t.Fatal(err)
 	}
-	gateway := engineruntime.ModelGatewayConfig{Endpoint: "https://model-gateway.platform.svc.cluster.local:8443/v1", Model: "test-model", ProtocolVersion: "openai-chat-completions-v1"}
+	gateway := testGatewayProvider("https://model-gateway.platform.svc.cluster.local:8443/v1", "test-model")
 	request, err := NewWorkspaceExecutionRequest(manifest, gateway, time.Minute, 20, 200000, 8192, 128<<10)
 	if err != nil {
 		t.Fatal(err)
@@ -221,7 +221,7 @@ func workspaceSandboxFixture(t *testing.T) (*WorkspaceSandboxRuntime, WorkspaceS
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime := &WorkspaceSandboxRuntime{Gateway: gateway, Timeout: time.Minute, OutputLimitBytes: 128 << 10}
+	runtime := &WorkspaceSandboxRuntime{Provider: gateway, Timeout: time.Minute, OutputLimitBytes: 128 << 10}
 	spec := WorkspaceSandboxSpec{Request: request, StageRequest: stage, SourceRoot: sourceRoot, ArtifactRoot: artifactRoot, ExecutionID: "analysis-1"}
 	return runtime, spec
 }

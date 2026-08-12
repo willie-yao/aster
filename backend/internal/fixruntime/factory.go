@@ -16,7 +16,7 @@ func New(cfg *project.FixAgentRuntime) (runtime.AgentRuntime, error) {
 		return runtime.NewLocalAgent(), nil
 	}
 	if cfg.Type == "agent-sandbox" {
-		rt, err := NewAgentSandboxRuntimeFromEnv(cfg.ModelGateway.RuntimeConfig(), cfg.ModelGateway.PublicCAPrivateDNS, cfg.ParsedTimeout(), cfg.OutputLimitBytes)
+		rt, err := NewAgentSandboxRuntimeFromEnv(cfg.ModelProvider.RuntimeConfig(), cfg.ParsedTimeout(), cfg.OutputLimitBytes)
 		if err != nil {
 			return nil, fmt.Errorf("agent sandbox fix backend unavailable: %w", err)
 		}

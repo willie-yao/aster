@@ -3,6 +3,7 @@ package fixexecutor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,8 +11,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
+
+func testGatewayProvider(endpoint, model string) modelprovider.Config {
+	return modelprovider.Normalize(modelprovider.Config{
+		CredentialMode: modelprovider.CredentialModeGateway,
+		API:            modelprovider.APIChatCompletions,
+		Endpoint:       endpoint,
+		Model:          model,
+		Auth:           modelprovider.Auth{Type: modelprovider.AuthTypeNone},
+	})
+}
+
+func testDirectBearerProvider(endpoint, model string) modelprovider.Config {
+	return modelprovider.Normalize(modelprovider.Config{
+		CredentialMode: modelprovider.CredentialModeDirect,
+		API:            modelprovider.APIChatCompletions,
+		Endpoint:       endpoint,
+		Model:          model,
+		Auth:           modelprovider.Auth{Type: modelprovider.AuthTypeBearer},
+	})
+}
 
 func TestExecuteProducesCredentialFreeStagedPatch(t *testing.T) {
 	repository, sha := fixtureRepository(t)
@@ -19,8 +41,8 @@ func TestExecuteProducesCredentialFreeStagedPatch(t *testing.T) {
 	result := Execute(context.Background(), request, Options{
 		WorkspaceRoot: t.TempDir(),
 		RunOpenCode: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
-			if spec.Gateway.Endpoint != request.ModelGateway.Endpoint || spec.Gateway.Model != request.ModelGateway.Model {
-				t.Fatalf("gateway = %+v", spec.Gateway)
+			if spec.Provider.Endpoint != request.ModelProvider.Endpoint || spec.Provider.Model != request.ModelProvider.Model {
+				t.Fatalf("provider = %+v", spec.Provider)
 			}
 			if err := os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte("Hello Agent Sandbox!\n"), 0o644); err != nil {
 				t.Fatal(err)
@@ -170,8 +192,8 @@ func TestExecuteMapsAgentDeadline(t *testing.T) {
 
 func TestWriteOpenCodeConfigOmitsCredentials(t *testing.T) {
 	home := t.TempDir()
-	gateway := engineruntime.ModelGatewayConfig{Endpoint: "https://gateway.internal.example/v1/chat/completions", Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1"}
-	if err := writeOpenCodeConfig(home, gateway, 4); err != nil {
+	provider := testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture-model")
+	if err := writeOpenCodeConfig(home, provider, 4); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
@@ -198,7 +220,11 @@ func TestOpenCodeEnvironmentDoesNotInheritCredentials(t *testing.T) {
 	t.Setenv("AI_TOKEN", "secret")
 	t.Setenv("OPENAI_API_KEY", "secret")
 	t.Setenv("HTTPS_PROXY", "https://user:secret@proxy.invalid")
-	joined := strings.Join(openCodeEnvironment("/home", "/tmp"), "\n")
+	env, err := openCodeEnvironment("/home", "/tmp", testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture-model"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(env, "\n")
 	for _, forbidden := range []string{"AI_TOKEN", "OPENAI_API_KEY", "HTTPS_PROXY", "secret"} {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("environment contains %q: %s", forbidden, joined)
@@ -211,9 +237,7 @@ func fixtureRequest(repository, sha string) engineruntime.ExecutionRequest {
 		Version: engineruntime.ExecutionContractVersion, RepositoryURL: "file://" + repository,
 		CommitSHA: sha, ExpectedBaseSHA: sha, Prompt: "Update README.", TimeoutSeconds: 30,
 		MaxSteps: 2, MaxFiles: 1, OutputLimitBytes: 128 << 10,
-		ModelGateway: engineruntime.ModelGatewayConfig{
-			Endpoint: "https://gateway.internal.example/v1", Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1",
-		},
+		ModelProvider: testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture-model"),
 		CommandPolicy: engineruntime.CommandPolicy{Commands: []engineruntime.ExecutionCommand{{
 			Argv: []string{"git", "diff", "--cached", "--check"}, TimeoutSeconds: 10,
 		}}},
@@ -245,4 +269,125 @@ func runGit(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
 	return string(out)
+}
+
+func TestWriteOpenCodeConfigReferencesDirectCredentialEnvironment(t *testing.T) {
+	credential := strings.Repeat("fixture-provider-credential-", 2)
+	t.Setenv(modelprovider.TokenEnv, credential)
+	home := t.TempDir()
+	provider := testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model")
+	if err := writeOpenCodeConfig(home, provider, 4); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "{env:"+modelprovider.TokenEnv+"}") {
+		t.Fatal("config does not reference the fixed provider credential environment")
+	}
+	if strings.Contains(text, credential) {
+		t.Fatal("config serialized the provider credential")
+	}
+	env, err := openCodeEnvironment(home, t.TempDir(), provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialEntries := 0
+	for _, value := range env {
+		if strings.HasPrefix(value, modelprovider.TokenEnv+"=") {
+			credentialEntries++
+		}
+	}
+	if credentialEntries != 1 {
+		t.Fatalf("credential environment entries = %d", credentialEntries)
+	}
+}
+
+func TestExecuteRejectsCredentialBearingOutput(t *testing.T) {
+	credential := strings.Repeat("fixture-provider-credential-", 2)
+	provider := testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model")
+	for _, tc := range []struct {
+		name       string
+		run        func(context.Context, OpenCodeSpec) (string, string, error)
+		edit       func(*engineruntime.ExecutionRequest, string)
+		wantReason string
+	}{
+		{name: "stdout", run: func(context.Context, OpenCodeSpec) (string, string, error) { return credential, "", nil }},
+		{name: "stderr", run: func(context.Context, OpenCodeSpec) (string, string, error) { return "", credential, nil }},
+		{name: "error", run: func(context.Context, OpenCodeSpec) (string, string, error) { return "", "", errors.New(credential) }, wantReason: "coding agent failed"},
+		{name: "changed file", run: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
+			return "", "", os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte(credential), 0o644)
+		}},
+		{name: "command output", run: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
+			return "", "", os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte("changed\n"), 0o644)
+		}, edit: func(request *engineruntime.ExecutionRequest, binDir string) {
+			tool := filepath.Join(binDir, "credential-output")
+			if err := os.WriteFile(tool, []byte("#!/bin/sh\nprintf '%s' '"+credential+"'\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			request.MaxSteps = 3
+			request.CommandPolicy.Commands = []engineruntime.ExecutionCommand{
+				{Argv: []string{"credential-output"}, TimeoutSeconds: 10},
+				{Argv: []string{"git", "diff", "--cached", "--check"}, TimeoutSeconds: 10},
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(modelprovider.TokenEnv, credential)
+			repository, sha := fixtureRepository(t)
+			request := fixtureRequest(repository, sha)
+			request.ModelProvider = provider
+			binDir := t.TempDir()
+			if tc.edit != nil {
+				tc.edit(&request, binDir)
+				t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			}
+			result := Execute(t.Context(), request, Options{WorkspaceRoot: t.TempDir(), RunOpenCode: tc.run})
+			encoded, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantReason := tc.wantReason
+			if wantReason == "" {
+				wantReason = modelprovider.ErrCredentialExposure.Error()
+			}
+			if result.TerminalState != engineruntime.TerminalFailed || result.FailureReason != wantReason {
+				t.Fatalf("credential-bearing result was not rejected or sanitized: state=%s reason=%q", result.TerminalState, result.FailureReason)
+			}
+			if strings.Contains(string(encoded), credential) {
+				t.Fatal("rejected result retained the provider credential")
+			}
+		})
+	}
+}
+
+func TestDefaultRunOpenCodeRejectsCredentialOutsideRetainedTail(t *testing.T) {
+	credential := strings.Repeat("fixture-provider-credential-", 2)
+	provider := testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model")
+	for _, stream := range []string{"stdout", "stderr"} {
+		t.Run(stream, func(t *testing.T) {
+			t.Setenv(modelprovider.TokenEnv, credential)
+			bin := filepath.Join(t.TempDir(), "opencode")
+			redirect := ""
+			if stream == "stderr" {
+				redirect = "exec 1>&2\n"
+			}
+			script := "#!/bin/sh\n" + redirect + "printf '%s' \"$" + modelprovider.TokenEnv + "\"\ni=0\nwhile [ $i -lt 70000 ]; do printf x; i=$((i+1)); done\n"
+			if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			stdout, stderr, err := defaultRunOpenCode(t.Context(), OpenCodeSpec{
+				Bin: bin, WorkDir: t.TempDir(), HomeDir: t.TempDir(), TempDir: t.TempDir(),
+				Provider: provider, Prompt: "edit", MaxSteps: 2, OutputLimit: maxCapturedStream,
+			})
+			if !errors.Is(err, modelprovider.ErrCredentialExposure) {
+				t.Fatalf("credential-bearing %s error = %v", stream, err)
+			}
+			if strings.Contains(stdout, credential) || strings.Contains(stderr, credential) {
+				t.Fatal("retained output unexpectedly still contained the early credential")
+			}
+		})
+	}
 }

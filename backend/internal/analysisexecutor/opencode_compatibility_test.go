@@ -13,10 +13,11 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 )
 
 func TestOpenCode1182RequestShapeCompatibility(t *testing.T) {
@@ -56,10 +57,8 @@ func TestOpenCode1182RequestShapeCompatibility(t *testing.T) {
 	defer cancel()
 	spec := OpenCodeSpec{
 		Bin: bin, WorkDir: workDir, HomeDir: t.TempDir(), TempDir: t.TempDir(),
-		Gateway: engineruntime.ModelGatewayConfig{
-			Endpoint: gateway.URL + "/v1/chat/completions", Model: "synthetic-model", ProtocolVersion: "openai-chat-completions-v1",
-		},
-		Prompt: "Read artifacts/failure.log and return one structured result.", MaxSteps: 3,
+		Provider: testOpenCodeProvider(gateway.URL+"/v1/chat/completions", "synthetic-model"),
+		Prompt:   "Read artifacts/failure.log and return one structured result.", MaxSteps: 3,
 		ModelContextTokens: 200000, ModelOutputTokens: 8192,
 	}
 	result, err := defaultRunOpenCode(ctx, spec)
@@ -86,6 +85,47 @@ func TestOpenCode1182RequestShapeCompatibility(t *testing.T) {
 	}
 	if observed.model != shape.ModelID || observed.streamingMode != shape.StreamingMode || observed.systemPromptBytes != shape.SystemPromptBytes || observed.userPromptBytes != shape.UserPromptBytes || observed.toolCount != shape.ToolCount || observed.toolSchemaSHA256 != shape.ToolSchemaSHA256 || observed.toolChoiceMode != shape.ToolChoiceMode || observed.outputTokenLimit != shape.OutputTokenLimit {
 		t.Fatalf("observed=%+v telemetry=%+v", observed, shape)
+	}
+}
+
+func TestOpenCode1182DirectBearerCompatibility(t *testing.T) {
+	bin := os.Getenv("OPENCODE_1_18_2_BIN")
+	if bin == "" {
+		t.Skip("set OPENCODE_1_18_2_BIN to the exact OpenCode 1.18.2 executable")
+	}
+	credential := strings.Repeat("fixture-provider-credential-", 2)
+	t.Setenv(modelprovider.TokenEnv, credential)
+	requests := make(chan struct{}, 1)
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+credential {
+			t.Error("direct bearer request did not carry the configured credential")
+		}
+		requests <- struct{}{}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"synthetic bad request"}}`))
+	}))
+	defer providerServer.Close()
+	workDir := t.TempDir()
+	for _, dir := range []string{"source", "artifacts", "result"} {
+		if err := os.Mkdir(filepath.Join(workDir, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	_, err := defaultRunOpenCode(ctx, OpenCodeSpec{
+		Bin: bin, WorkDir: workDir, HomeDir: t.TempDir(), TempDir: t.TempDir(),
+		Provider: testDirectBearerProvider(providerServer.URL+"/v1/chat/completions", "synthetic-model"),
+		Prompt:   "Return a structured result.", MaxSteps: 3, ModelContextTokens: 200000, ModelOutputTokens: 8192,
+	})
+	if err == nil {
+		t.Fatal("synthetic provider failure unexpectedly succeeded")
+	}
+	select {
+	case <-requests:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
 	}
 }
 
@@ -252,8 +292,8 @@ func TestOpenCode1182TwoPhaseCompatibility(t *testing.T) {
 	defer cancel()
 	spec := OpenCodeSpec{
 		Bin: bin, WorkDir: workDir, HomeDir: t.TempDir(), TempDir: t.TempDir(),
-		Gateway: engineruntime.ModelGatewayConfig{Endpoint: gateway.URL + "/v1/chat/completions", Model: "synthetic-model", ProtocolVersion: "openai-chat-completions-v1"},
-		Prompt:  "Read artifacts/failure.log, inspect source/main.go if relevant, and investigate the failure.", MaxSteps: 6,
+		Provider: testOpenCodeProvider(gateway.URL+"/v1/chat/completions", "synthetic-model"),
+		Prompt:   "Read artifacts/failure.log, inspect source/main.go if relevant, and investigate the failure.", MaxSteps: 6,
 		ModelContextTokens: 200000, ModelOutputTokens: 8192,
 	}
 	result, err := defaultRunOpenCode(ctx, spec)

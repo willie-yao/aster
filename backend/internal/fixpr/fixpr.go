@@ -18,6 +18,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
@@ -102,8 +103,8 @@ type AgentConfig struct {
 	MaxTurns int
 	// MaxFiles bounds the changed-file result.
 	MaxFiles int
-	// ModelGateway is non-secret consumer gateway configuration.
-	ModelGateway runtime.ModelGatewayConfig
+	// ModelProvider is non-secret Agent Sandbox provider configuration.
+	ModelProvider modelprovider.Config
 	// OutputLimitBytes bounds the structured executor result.
 	OutputLimitBytes int64
 	// AllowBash lets runtimes that support it run commands during generation.
@@ -370,8 +371,8 @@ func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, i
 	if remediationpolicy.Reason(policyText, p.RemediationTargets) != "" {
 		return nil, fmt.Errorf("remediation safety policy requires investigation")
 	}
-	if m.opts.Agent != nil && m.opts.Agent.ModelGateway.Model != "" {
-		aiusage.MarkModelGatewayExcluded(ctx, m.opts.Agent.ModelGateway.Model)
+	if m.opts.Agent != nil && m.opts.Agent.ModelProvider.CredentialMode == modelprovider.CredentialModeGateway {
+		aiusage.MarkModelGatewayExcluded(ctx, m.opts.Agent.ModelProvider.Model)
 	} else {
 		aiusage.MarkExternalUnmetered(ctx)
 	}

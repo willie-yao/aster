@@ -79,6 +79,7 @@ backend/                         Go 1.25
     analysisexecutor/            File-backed OpenCode analysis executor
     analysisstager/              Credential-free analyzer workspace stager
     agentsandbox/                Business-neutral Agent Sandbox lifecycle contract
+    modelprovider/               Shared non-secret provider and credential-mode contract
     causalcritic/                Private independent causal-review contracts and runtime
     criticexecutor/              Purpose-built read-only model-gateway critic executor
     analysisruntime/             Selects the failure-analysis runtime (in-process default)

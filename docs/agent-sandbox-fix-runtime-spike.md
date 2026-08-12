@@ -11,7 +11,7 @@ image was modified.
 ## Decision
 
 Agent Sandbox is the selected Fix PR execution runtime. The engine integration,
-credential-free OpenCode executor, optional Helm wiring, least-privilege RBAC,
+bounded OpenCode executor, optional Helm wiring, least-privilege RBAC,
 fail-closed admission, and deterministic gateway are implemented locally.
 
 The final structured-command production executor completed one cold Sandbox
@@ -28,8 +28,8 @@ fixpr.Manager
   -> runtime.AgentRuntime.Generate
        -> Agent Sandbox adapter
             -> v1beta1 Sandbox
-                 -> credential-free fixexecutor
-                      -> consumer model gateway
+                 -> fixexecutor
+                      -> direct provider or consumer model gateway
   -> independent diff reconstruction
   -> existing scope and verification gates
   -> preview or separately confirmed GitHub write
@@ -40,19 +40,21 @@ contract.
 
 ## Provider-neutral contract
 
-`backend/internal/runtime/execution_contract.go` defines version 1 of the
-credential-free request and result protocol.
+`backend/internal/runtime/execution_contract.go` defines version 2 of the
+non-secret request and result protocol. Version 2 adds explicit provider
+credential mode, API, and auth metadata. It carries no Secret reference,
+credential value, or credential hash.
 
 The request binds:
 
-- a public credential-free HTTPS repository URL or an absolute local fixture;
+- a public unauthenticated HTTPS repository URL or an absolute local fixture;
 - an immutable lowercase 40-character Git SHA;
 - the exact expected base SHA;
 - a bounded generation prompt;
 - maximum execution steps and changed files;
 - exact final validation argv commands;
 - wall-clock timeout and serialized output limit; and
-- a non-secret model gateway endpoint, model, and protocol version.
+- a non-secret provider credential mode, API, endpoint, model, auth type, and fixed token environment name.
 
 The result reports:
 
@@ -82,16 +84,41 @@ The executor:
 3. checks out and verifies the immutable SHA;
 4. removes the Git remote;
 5. protects Git metadata while OpenCode runs;
-6. writes an isolated OpenCode config without credentials or custom headers;
+6. writes an isolated OpenCode config containing no token and, for direct bearer mode, only a fixed environment reference;
 7. disables Bash, web fetch, task delegation, external skills, and external
    directory access;
-8. calls only the configured model gateway;
+8. calls only the configured direct provider or explicit tokenless gateway;
 9. verifies HEAD and remotes, then stages the patch;
 10. snapshots the staged patch before final validation;
 11. runs only the configured final commands;
 12. verifies validation did not change HEAD, remotes, or staged content;
 13. requires the final argv to be `["git", "diff", "--cached", "--check"]`; and
-14. emits the bounded versioned result without pushing or making a GitHub write.
+14. rejects exact credential-bearing output before emitting the bounded versioned result, without pushing or making a GitHub write.
+
+## Provider credential modes
+
+Agent Sandbox remains disabled by default. After the Fix runtime is explicitly
+enabled, direct mode is the default. Direct bearer mode injects one dedicated
+inference credential from an existing Secret in the execution namespace into
+the executor as `PROW_AI_MODEL_PROVIDER_TOKEN`. Direct unauthenticated mode has
+no Secret reference. Explicit gateway mode remains tokenless.
+
+The chart and dashboard never read or copy the Secret value. The dashboard sees
+only the exact Secret name and key needed to construct the Sandbox Pod.
+Admission permits one `secretKeyRef` only in direct bearer mode and rejects
+arbitrary environment entries, `envFrom`, Secret volumes, projected tokens, and
+additional credential references. OpenCode reads the credential through
+`{env:PROW_AI_MODEL_PROVIDER_TOKEN}`. The token is never written to
+`opencode.json`.
+
+The executor scans stdout, stderr, summary text, validation output, changed-file
+content, the patch, the structured result, and failure text for the exact token.
+A match replaces the result with a fixed sanitized failure. Runtime identity,
+workload hashes, labels, annotations, and telemetry identify direct versus
+gateway mode without reading or hashing the Secret value.
+
+Use only a dedicated inference credential. GitHub write tokens, repository read
+credentials, OAuth credentials, and general PATs remain outside the Sandbox.
 
 ## AppArmor capability decision
 
@@ -183,11 +210,10 @@ The chart can create only:
 - a tokenless workload ServiceAccount; and
 - a requester-scoped ValidatingAdmissionPolicy and binding.
 
-Model gateway TLS uses one of two consumer-owned trust models. Internal service
-names require an immutable executor image containing the consumer CA. A
-privately resolved public FQDN can use the executor's standard public CA bundle
-when `public_ca_private_dns` is explicitly acknowledged in project and Helm
-configuration. Known direct provider endpoints remain rejected.
+Provider TLS is consumer-owned. Direct mode uses the actual HTTPS provider
+operation endpoint. Gateway mode can use an internal service whose CA is in the
+immutable executor image. The Fix runtime can also explicitly acknowledge a
+privately resolved public gateway FQDN with `public_ca_private_dns: true`.
 
 The chart does not install or own:
 
@@ -195,7 +221,7 @@ The chart does not install or own:
 - the execution namespace;
 - Kata, gVisor, or another RuntimeClass;
 - node pools, AKS, Azure Linux, Cilium, or ACNS;
-- a model gateway or provider credential;
+- a model gateway or provider Secret value;
 - executor image publication or registry credentials; or
 - consumer quotas, LimitRanges, NetworkPolicies, or monitoring.
 
@@ -313,7 +339,7 @@ The corrected local evaluation validated:
 - immutable image lookup and executor startup;
 - canonical preflight and Sandbox workload parity;
 - public immutable repository checkout;
-- credential-free OpenCode gateway interaction;
+- tokenless OpenCode gateway interaction;
 - staged patch production and exact final validation command;
 - structured result retrieval and independent reconstruction;
 - duration and resource metadata;
@@ -343,10 +369,10 @@ A deployment still requires the consumer to provide:
 3. a node environment that supports the configured AppArmor policy;
 4. an existing execution namespace;
 5. the published executor image by immutable registry digest;
-6. an internal HTTPS OpenAI-compatible model gateway;
-7. provider credentials held only by that gateway;
+6. either a direct HTTPS provider or an internal HTTPS model gateway;
+7. for direct bearer mode, an existing dedicated inference Secret in the execution namespace;
 8. registry access configured outside the Sandbox request;
-9. egress policy allowing only DNS, the public repository, and gateway; and
+9. egress policy allowing only DNS, the public repository, and configured provider; and
 10. quotas, LimitRanges, monitoring, and leaked-resource alerting.
 
 ## Readiness

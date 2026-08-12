@@ -72,7 +72,7 @@ func agentRuntimeSpec(a *AgentConfig, repo runtime.RepoRef, instruction string) 
 		Repo: repo, Instruction: instruction,
 		MaxTurns: a.MaxTurns, MaxSteps: a.MaxTurns, MaxFiles: a.MaxFiles, AllowBash: a.AllowBash, Timeout: a.Timeout,
 		ExpectedBaseSHA:  repo.Ref,
-		ModelGateway:     a.ModelGateway,
+		ModelProvider:    a.ModelProvider,
 		CommandPolicy:    policy,
 		OutputLimitBytes: a.OutputLimitBytes,
 		ExecutionID:      a.ExecutionID, WorkObserver: a.WorkObserver,

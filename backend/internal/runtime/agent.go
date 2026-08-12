@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 )
 
 const (
@@ -65,8 +67,8 @@ type GenerateSpec struct {
 	MaxSteps int
 	// MaxFiles bounds the changed-file result.
 	MaxFiles int
-	// ModelGateway is non-secret configuration for the consumer gateway.
-	ModelGateway ModelGatewayConfig
+	// ModelProvider is non-secret configuration for the Agent Sandbox provider.
+	ModelProvider modelprovider.Config
 	// CommandPolicy lists the exact commands an external executor may run.
 	CommandPolicy CommandPolicy
 	// OutputLimitBytes bounds the structured executor result.
@@ -91,26 +93,28 @@ type WorkObserver func(context.Context, WorkRef) error
 
 // GenerateTelemetry records lifecycle facts observable through the runtime contract.
 type GenerateTelemetry struct {
-	TaskFinalized        bool
-	TaskFinalizedMs      int64
-	ResultAvailable      bool
-	ResultAvailableMs    int64
-	SchedulingMs         int64
-	SchedulingAvailable  bool
-	StagingMs            int64
-	StagingAvailable     bool
-	ExecutionMs          int64
-	ExecutionAvailable   bool
-	PublicationMs        int64
-	PublicationAvailable bool
-	PhaseTimingStatus    string
-	FinalizationChecked  bool
-	FinalizationValid    bool
-	CleanupCompleted     bool
-	CleanupDurationMs    int64
-	TokenUsageAvailable  bool
-	CostAvailable        bool
-	UsageStatus          string
+	ProviderCredentialMode string
+	ProviderAPI            string
+	TaskFinalized          bool
+	TaskFinalizedMs        int64
+	ResultAvailable        bool
+	ResultAvailableMs      int64
+	SchedulingMs           int64
+	SchedulingAvailable    bool
+	StagingMs              int64
+	StagingAvailable       bool
+	ExecutionMs            int64
+	ExecutionAvailable     bool
+	PublicationMs          int64
+	PublicationAvailable   bool
+	PhaseTimingStatus      string
+	FinalizationChecked    bool
+	FinalizationValid      bool
+	CleanupCompleted       bool
+	CleanupDurationMs      int64
+	TokenUsageAvailable    bool
+	CostAvailable          bool
+	UsageStatus            string
 }
 
 // AgentRuntime materializes a disposable workspace and runs a coding agent that

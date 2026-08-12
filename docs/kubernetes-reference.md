@@ -524,26 +524,37 @@ attach, port-forward, Service, PVC, node, or cluster-admin access.
 The admission policy pins the requester, namespace, content-addressed identity,
 immutable executor image, RuntimeClass, workload ServiceAccount, Pod and
 container security contexts, `RuntimeDefault` AppArmor and seccomp, resource
-bounds, request-only environment, emptyDir-only storage, disabled Service/PVC
+bounds, the exact request environment plus one direct-bearer Secret reference when configured, emptyDir-only storage, disabled Service/PVC
 behavior, and Delete policy and Pod deadline. AppArmor has no chart override and cannot be
 set to `Unconfined`.
 The request payload remains opaque base64 data to Kubernetes admission, so the
-engine separately validates its version, immutable SHA, gateway, commands,
-bounds, and result contract before creation and after retrieval.
+engine separately validates its version, immutable SHA, provider mode, API,
+endpoint, auth contract, commands, bounds, and result contract before creation
+and after retrieval.
 
-A deployed configuration requires a consumer-operated HTTPS model gateway, a
-secure Kata, gVisor, or equivalent RuntimeClass, and nodes that support the
-requested AppArmor policy. Internal service certificates must chain to a CA in
-the immutable executor image. Alternatively, a privately resolved public FQDN
-with a publicly trusted certificate can be explicitly acknowledged with
-`modelGateway.publicCAPrivateDNS: true`. Standard `runc` is supported only by
-the disposable local
+A deployed configuration requires an HTTPS provider path, a secure Kata,
+gVisor, or equivalent RuntimeClass, and nodes that support the requested
+AppArmor policy. Agent Sandbox remains disabled by default. Once explicitly
+enabled, direct mode is the default; gateway mode is an explicit tokenless
+alternative.
+
+Direct bearer mode references one existing Secret in the execution namespace.
+The chart never creates, copies, reads, or prints it. Admission pins the exact
+Secret name, key, fixed `PROW_AI_MODEL_PROVIDER_TOKEN` environment variable, and
+auth mode. Direct unauthenticated and gateway modes render no Secret reference.
+Use a dedicated inference-only credential, never dashboard, repository, OAuth,
+or general GitHub credentials.
+
+Internal gateway certificates must chain to a CA in the immutable executor
+image. A privately resolved public gateway FQDN with a publicly trusted
+certificate can set `modelProvider.publicCAPrivateDNS: true`. Direct mode leaves
+that setting false. Standard `runc` is supported only by the disposable local
 lifecycle evaluation and is not a hostile-code boundary. Docker Desktop kind
 omits AppArmor through test-only code in both the canonical preflight and
 Sandbox shapes; it does not validate production AppArmor enforcement.
 The consumer separately owns the execution namespace, Agent Sandbox release,
-RuntimeClass, node pools, model gateway, image publication, registry access,
-egress enforcement, quotas, LimitRanges, and NetworkPolicies.
+RuntimeClass, node pools, provider Secret or gateway, image publication,
+registry access, egress enforcement, quotas, LimitRanges, and NetworkPolicies.
 
 ## Agent Sandbox OpenCode analyzer
 
@@ -558,7 +569,7 @@ tokenless workload ServiceAccount, a fail-closed admission policy, a
 deny-by-default network policy, and a one-Sandbox, one-Pod ResourceQuota. The
 quota does not duplicate cluster-owned RuntimeClass overhead. Admission pins the
 container resource bounds instead. The chart never creates the namespace,
-controller, RuntimeClass, pre-populated input PVC, internal model gateway, or
+controller, RuntimeClass, pre-populated input PVC, provider Secret or gateway, or
 runtime images.
 
 The analyzer executor and stager images must use immutable SHA-256 digests. The
@@ -568,11 +579,13 @@ single stager and executor shape, read-only source and artifact mounts, and the
 separate result-only writable volume. The executor never mounts the input PVC
 directly.
 
-Network policy denies ingress and public egress. Kubernetes policy mode selects
-the gateway with namespace and Pod labels. Cilium mode permits only DNS and the
-configured Kubernetes gateway Service and port, so the gateway must
-independently authenticate the analyzer ServiceAccount. The quota assumes the
-namespace is dedicated to this experiment.
+Network policy denies ingress. Kubernetes policy mode permits DNS plus an
+internal provider selected by namespace and Pod labels. Cilium mode permits DNS
+plus either the configured internal Kubernetes Service or one exact external
+direct-provider FQDN and port. External direct providers therefore require
+Cilium mode. The provider or gateway must independently authenticate the
+analyzer workload. The quota assumes the namespace is dedicated to this
+experiment.
 
 See [Agent Sandbox OpenCode analyzer](agent-sandbox-opencode-analyzer.md) for
 the workspace, result, authority, and benchmark boundaries.

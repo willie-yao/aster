@@ -266,28 +266,58 @@ Responses adapter reads input, output, cached-input, and reasoning token fields.
 Providers may omit usage. The dashboard does not substitute a tokenizer
 estimate and does not ship vendor price tables.
 
-## Agent Sandbox model gateway
+## Agent Sandbox OpenCode provider access
 
-The Agent Sandbox Fix executor does not receive a provider credential. It calls
-a consumer-operated internal OpenAI-compatible Chat Completions gateway using
-only a non-secret endpoint, model identifier, and protocol version. The gateway
-owns and attaches the real provider credential outside the Sandbox process.
+Agent Sandbox remains experimental and disabled by default. After an OpenCode
+Agent Sandbox runtime is explicitly enabled, `direct` is the default credential
+mode. `gateway` remains available as an explicit tokenless mode. The Agent
+Sandbox OpenCode path currently supports only `chat_completions`; native
+Responses support is evaluated separately.
 
-OpenCode 1.18.2 supports this boundary without an API key in its executor
-configuration. The executor omits `apiKey` and credential headers entirely.
-Production Helm configuration requires an internal HTTPS service URL and does
-not install or configure the gateway. Local tests use a deterministic streaming
-record/replay gateway that rejects `Authorization`, `api-key`, and `x-api-key`
-headers and makes no provider request.
+Direct mode can use either:
 
+- `auth.type: bearer`, which exposes one dedicated inference credential to the
+  OpenCode executor through the fixed `PROW_AI_MODEL_PROVIDER_TOKEN`
+  environment variable; or
+- `auth.type: none`, which renders no Secret reference and is suitable only for
+  an endpoint that intentionally requires no authentication.
 
-## Agent Sandbox model gateway TLS
+For bearer auth, the named Secret must already exist in the Agent Sandbox
+execution namespace. The chart never creates, copies, reads, or prints it. The
+dashboard receives only the exact Secret name and key so it can construct the
+Sandbox Pod. The Pod uses one `secretKeyRef`; `envFrom`, Secret volumes,
+projected tokens, extra credential references, and arbitrary environment
+variables remain denied by admission. Use a dedicated inference-only
+credential. Do not reuse `BOT_TOKEN`, `FIX_TOKEN`, OAuth credentials, GitHub
+read credentials, or a general GitHub PAT.
 
-The Agent Sandbox executor never receives a provider credential. An internal
-service endpoint requires an executor image whose CA bundle trusts the gateway.
-A privately resolved public FQDN with a publicly trusted certificate may set
-`ai.fix_prs.agent_runtime.model_gateway.public_ca_private_dns: true`; direct
-known provider endpoints remain forbidden.
+OpenCode 1.18.2 receives `apiKey: "{env:PROW_AI_MODEL_PROVIDER_TOKEN}"` in its
+isolated configuration for direct bearer mode. The credential value is not
+serialized into `opencode.json`, the execution request, runtime identity,
+annotations, labels, hashes, telemetry, logs, evidence, or results. Before a
+result is published, the executor rejects stdout, stderr, structured analysis,
+summary text, patches, changed-file content, command output, or failure data
+that contains the exact credential. Non-success diagnostics remain sanitized.
+
+Gateway mode preserves the previous behavior. OpenCode receives no provider
+credential or credential header and calls a consumer-operated HTTPS gateway.
+The gateway attaches any provider credential outside the Sandbox process.
+Deterministic tests exercise both modes without making a live provider request.
+
+## Agent Sandbox provider TLS
+
+Every deployed Agent Sandbox provider endpoint must use HTTPS. Gateway mode
+supports an internal service name whose CA is present in the immutable executor
+image. The Fix runtime can also acknowledge a privately resolved public gateway
+FQDN with a publicly trusted certificate by setting
+`model_provider.public_ca_private_dns: true`. Direct mode must leave that field
+false because it already identifies the actual provider endpoint.
+
+The analyzer deny-by-default network policy supports external direct providers
+only in Cilium mode, using an exact FQDN and port rule. Kubernetes NetworkPolicy
+mode remains limited to internal provider Pods selected by namespace and Pod
+labels. The Fix runtime still requires a separately reviewed consumer egress
+policy.
 
 ## Independent critic gateway
 

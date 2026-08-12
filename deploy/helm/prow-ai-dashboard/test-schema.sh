@@ -336,10 +336,13 @@ project:
           allowed_commands:
             - argv: [git, diff, --cached, --check]
               timeout: 30s
-          model_gateway:
-            endpoint: https://fake-gateway.fix-eval.svc.cluster.local/v1
+          model_provider:
+            credential_mode: direct
+            api: chat_completions
+            endpoint: https://api.githubcopilot.com/chat/completions
             model: fixture-model
-            protocol_version: openai-chat-completions-v1
+            auth:
+              type: bearer
   systemPrompt: schema test prompt
 agentSandbox:
   fixRuntime:
@@ -357,10 +360,15 @@ agentSandbox:
     workloadServiceAccount:
       create: true
       name: fix-workload
-    modelGateway:
-      endpoint: https://fake-gateway.fix-eval.svc.cluster.local/v1
+    modelProvider:
+      credentialMode: direct
+      api: chat_completions
+      endpoint: https://api.githubcopilot.com/chat/completions
       model: fixture-model
-      protocolVersion: openai-chat-completions-v1
+      auth:
+        type: bearer
+        existingSecret: agent-sandbox-model
+        tokenKey: AI_TOKEN
       publicCAPrivateDNS: false
     maxSteps: 30
     maxFiles: 3
@@ -397,10 +405,16 @@ agentSandbox:
     workloadServiceAccount:
       create: true
       name: analyzer-workload
-    modelGateway:
-      endpoint: https://model-gateway.platform.svc.cluster.local:8443/v1
+    modelProvider:
+      credentialMode: gateway
+      api: chat_completions
+      endpoint: https://model-gateway.platform.svc.cluster.local:8443/v1/chat/completions
       model: fixture-model
-      protocolVersion: openai-chat-completions-v1
+      auth:
+        type: none
+        existingSecret: ""
+        tokenKey: ""
+      publicCAPrivateDNS: false
     timeout: 15m
     outputLimitBytes: 262144
     pollInterval: 250ms
@@ -481,5 +495,23 @@ agentSandbox:
     install: true
 VALUES
 expect_fail invalid-agent-sandbox-key "$tmp/invalid-agent-sandbox-key.yaml" /agentSandbox
+
+
+cat > "$tmp/invalid-agent-sandbox-provider-api.yaml" <<'VALUES'
+agentSandbox:
+  fixRuntime:
+    modelProvider:
+      api: completions
+VALUES
+expect_fail invalid-agent-sandbox-provider-api "$tmp/invalid-agent-sandbox-provider-api.yaml" /agentSandbox/fixRuntime/modelProvider/api
+
+cat > "$tmp/invalid-agent-sandbox-auth-type.yaml" <<'VALUES'
+agentSandbox:
+  analyzer:
+    modelProvider:
+      auth:
+        type: ambient
+VALUES
+expect_fail invalid-agent-sandbox-auth-type "$tmp/invalid-agent-sandbox-auth-type.yaml" /agentSandbox/analyzer/modelProvider/auth/type
 
 echo 'Helm values schema checks passed.'

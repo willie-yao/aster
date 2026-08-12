@@ -357,9 +357,11 @@ python3 -c "import json; print(len(json.load(open('data/dashboard.json'))['jobs'
 
 ### Experimental Agent Sandbox fix runtime
 
-`ai.fix_prs.agent_runtime.type: agent-sandbox` selects the credential-free
-OpenCode executor described in [Fix PR generation](fix-prs.md#agent-sandbox-credential-free-executor).
-The project owns generation bounds and non-secret gateway identity:
+`ai.fix_prs.agent_runtime.type: agent-sandbox` selects the bounded OpenCode
+executor described in [Fix PR generation](fix-prs.md#agent-sandbox-opencode-executor).
+Agent Sandbox remains disabled by default. Once explicitly enabled, direct
+provider access is the default credential mode. The project owns generation
+bounds and the non-secret provider contract:
 
 - `max_turns`: total execution step budget;
 - `allow_bash`: must be `false`;
@@ -368,28 +370,36 @@ The project owns generation bounds and non-secret gateway identity:
 - `allowed_commands`: structured post-generation validators with exact `argv`
   arrays and explicit timeouts, ending with `argv: [git, diff, --cached,
   --check]`;
-- `model_gateway.endpoint`, `model`, and `protocol_version`; and
-- `model_gateway.public_ca_private_dns`, which must be `true` only for a
-  privately resolved public FQDN with a publicly trusted certificate.
+- `model_provider.credential_mode`: `direct` by default or explicit `gateway`;
+- `model_provider.api`: currently `chat_completions`;
+- `model_provider.endpoint` and `model`;
+- `model_provider.auth.type`: `bearer` or `none` for direct mode and `none` for
+  gateway mode; and
+- `model_provider.public_ca_private_dns`, which is valid only for an explicit
+  gateway using a privately resolved public FQDN.
+
+Secret name and key are Helm deployment settings, not project settings. Direct
+bearer mode requires `agentSandbox.fixRuntime.modelProvider.auth.existingSecret`
+and `tokenKey`. The Secret must already exist in the execution namespace and
+must hold a dedicated inference-only credential. The chart never creates,
+copies, reads, or prints the Secret value.
 
 Command strings are not accepted. Executables must be resolved through `PATH`;
 shells, generic command dispatchers, and coding-agent re-entry are rejected.
 Git is reserved for the exact final diff check. Arguments are passed directly
 without shell interpretation, so quoting syntax has no special meaning and an
-argument that contains spaces remains one `argv` element. The generic executor supports only
-commands whose binaries are installed in that image.
+argument that contains spaces remains one `argv` element. The generic executor
+supports only commands whose binaries are installed in that image.
 
 The Agent Sandbox runtime is one-shot generation followed by validation. A
 validator failure cannot trigger model repair, and `critique_retries` must be 0.
-
-The gateway endpoint must use HTTPS. Internal service names require an executor
-image whose CA bundle trusts the consumer gateway certificate. A privately
-resolved public FQDN with a publicly trusted certificate requires
-`public_ca_private_dns: true`. Known direct provider endpoints, embedded
-credentials, queries, fragments, raw provider tokens, and local OpenCode model
-fields are rejected. The Helm `agentSandbox` values must match these fields
-exactly and supply the consumer-owned namespace, immutable image digest,
-workload ServiceAccount, resources, and secure RuntimeClass.
+Provider endpoints must use a complete HTTPS Chat Completions operation path.
+Embedded credentials, queries, fragments, literal provider tokens, and local
+OpenCode model fields are rejected. The Helm `agentSandbox` values must match
+the project provider mode, API, endpoint, model, auth type, and trust setting
+exactly while separately supplying the consumer-owned namespace, immutable
+image digest, Secret reference when needed, workload ServiceAccount, resources,
+and secure RuntimeClass.
 
 AppArmor is engine-owned rather than project-configurable. Production requests
 `RuntimeDefault`; no `agent_runtime` field can disable it or select

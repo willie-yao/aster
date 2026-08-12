@@ -409,29 +409,62 @@
               ],
               "additionalProperties": false
             },
-            "modelGateway": {
+            "modelProvider": {
               "type": "object",
               "properties": {
+                "credentialMode": {
+                  "type": "string",
+                  "enum": [
+                    "direct",
+                    "gateway"
+                  ]
+                },
+                "api": {
+                  "type": "string",
+                  "enum": [
+                    "chat_completions"
+                  ]
+                },
                 "endpoint": {
                   "type": "string"
                 },
                 "model": {
                   "type": "string"
                 },
-                "protocolVersion": {
-                  "type": "string",
-                  "enum": [
-                    "openai-chat-completions-v1"
-                  ]
+                "auth": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "bearer"
+                      ]
+                    },
+                    "existingSecret": {
+                      "type": "string"
+                    },
+                    "tokenKey": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "existingSecret",
+                    "tokenKey"
+                  ],
+                  "additionalProperties": false
                 },
                 "publicCAPrivateDNS": {
                   "type": "boolean"
                 }
               },
               "required": [
+                "credentialMode",
+                "api",
                 "endpoint",
                 "model",
-                "protocolVersion",
+                "auth",
                 "publicCAPrivateDNS"
               ],
               "additionalProperties": false
@@ -546,7 +579,7 @@
             "image",
             "dashboardImage",
             "workloadServiceAccount",
-            "modelGateway",
+            "modelProvider",
             "maxSteps",
             "maxFiles",
             "timeout",
@@ -637,26 +670,63 @@
               ],
               "additionalProperties": false
             },
-            "modelGateway": {
+            "modelProvider": {
               "type": "object",
               "properties": {
+                "credentialMode": {
+                  "type": "string",
+                  "enum": [
+                    "direct",
+                    "gateway"
+                  ]
+                },
+                "api": {
+                  "type": "string",
+                  "enum": [
+                    "chat_completions"
+                  ]
+                },
                 "endpoint": {
                   "type": "string"
                 },
                 "model": {
                   "type": "string"
                 },
-                "protocolVersion": {
-                  "type": "string",
-                  "enum": [
-                    "openai-chat-completions-v1"
-                  ]
+                "auth": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "bearer"
+                      ]
+                    },
+                    "existingSecret": {
+                      "type": "string"
+                    },
+                    "tokenKey": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "existingSecret",
+                    "tokenKey"
+                  ],
+                  "additionalProperties": false
+                },
+                "publicCAPrivateDNS": {
+                  "type": "boolean"
                 }
               },
               "required": [
+                "credentialMode",
+                "api",
                 "endpoint",
                 "model",
-                "protocolVersion"
+                "auth",
+                "publicCAPrivateDNS"
               ],
               "additionalProperties": false
             },
@@ -804,7 +874,7 @@
             "input",
             "clientServiceAccount",
             "workloadServiceAccount",
-            "modelGateway",
+            "modelProvider",
             "timeout",
             "outputLimitBytes",
             "pollInterval",
@@ -1779,7 +1849,7 @@
                     },
                     "timeout": {
                       "type": "string",
-                      "pattern": "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|\u00b5s|\u03bcs|ms|s|m|h)((([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|\u00b5s|\u03bcs|ms|s|m|h))*$"
+                      "pattern": "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|µs|μs|ms|s|m|h)((([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|µs|μs|ms|s|m|h))*$"
                     },
                     "retries": {
                       "type": "integer",

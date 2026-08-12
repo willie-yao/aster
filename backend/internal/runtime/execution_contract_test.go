@@ -1,9 +1,22 @@
 package runtime
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 )
+
+func gatewayProvider(endpoint, model string) modelprovider.Config {
+	return modelprovider.Normalize(modelprovider.Config{
+		CredentialMode: modelprovider.CredentialModeGateway,
+		API:            modelprovider.APIChatCompletions,
+		Endpoint:       endpoint,
+		Model:          model,
+		Auth:           modelprovider.Auth{Type: modelprovider.AuthTypeNone},
+	})
+}
 
 func executionRequest() ExecutionRequest {
 	return ExecutionRequest{
@@ -14,7 +27,7 @@ func executionRequest() ExecutionRequest {
 		TimeoutSeconds:   60,
 		MaxSteps:         2,
 		MaxFiles:         1,
-		ModelGateway:     ModelGatewayConfig{Endpoint: "https://gateway.internal.example/v1", Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1"},
+		ModelProvider:    gatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture-model"),
 		CommandPolicy:    CommandPolicy{Commands: []ExecutionCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, TimeoutSeconds: 30}}},
 		ExpectedBaseSHA:  "0123456789abcdef0123456789abcdef01234567",
 		OutputLimitBytes: 64 << 10,
@@ -76,8 +89,14 @@ func TestExecutionRequestRejectsMutableOrCredentialedInput(t *testing.T) {
 		{name: "private repository IP", edit: func(r *ExecutionRequest) { r.RepositoryURL = "https://10.0.0.10/repo.git" }, want: "public host"},
 		{name: "hosted file URL", edit: func(r *ExecutionRequest) { r.RepositoryURL = "file://host/tmp/repo" }, want: "without a host"},
 		{name: "unbounded prompt", edit: func(r *ExecutionRequest) { r.Prompt = strings.Repeat("x", maxExecutionPromptBytes+1) }, want: "prompt"},
-		{name: "gateway credentials", edit: func(r *ExecutionRequest) { r.ModelGateway.Endpoint = "https://token@gateway.internal.example/v1" }, want: "credentials"},
-		{name: "gateway protocol", edit: func(r *ExecutionRequest) { r.ModelGateway.ProtocolVersion = "responses-v1" }, want: "protocol"},
+		{name: "gateway credentials", edit: func(r *ExecutionRequest) {
+			r.ModelProvider.Endpoint = "https://token@gateway.example.internal/v1/chat/completions"
+		}, want: "credentials"},
+		{name: "provider API", edit: func(r *ExecutionRequest) { r.ModelProvider.API = modelprovider.APIResponses }, want: "API"},
+		{name: "gateway bearer", edit: func(r *ExecutionRequest) {
+			r.ModelProvider.Auth = modelprovider.Auth{Type: modelprovider.AuthTypeBearer, TokenEnv: modelprovider.TokenEnv}
+		}, want: "gateway credential mode"},
+		{name: "ambiguous endpoint", edit: func(r *ExecutionRequest) { r.ModelProvider.Endpoint = "https://gateway.example.internal/v1" }, want: "/chat/completions"},
 		{name: "file bound", edit: func(r *ExecutionRequest) { r.MaxFiles = 0 }, want: "max files"},
 		{name: "zero command timeout", edit: func(r *ExecutionRequest) { r.CommandPolicy.Commands[0].TimeoutSeconds = 0 }, want: "timeout must be positive"},
 		{name: "command timeout exceeds execution", edit: func(r *ExecutionRequest) { r.CommandPolicy.Commands[0].TimeoutSeconds = 61 }, want: "execution timeout"},
@@ -207,5 +226,32 @@ func TestExecutionResultRejectsMismatchedOutput(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestExecutionRequestDirectBearerContractContainsNoSecretReference(t *testing.T) {
+	request := executionRequest()
+	request.ModelProvider = modelprovider.Normalize(modelprovider.Config{
+		CredentialMode: modelprovider.CredentialModeDirect,
+		API:            modelprovider.APIChatCompletions,
+		Endpoint:       "https://api.githubcopilot.com/chat/completions",
+		Model:          "fixture-model",
+		Auth:           modelprovider.Auth{Type: modelprovider.AuthTypeBearer},
+	})
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, forbidden := range []string{"existing_secret", "existingSecret", "token_key", "tokenKey", "credential_value", "credential_hash"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("serialized request contains forbidden credential metadata %q", forbidden)
+		}
+	}
+	if !strings.Contains(text, `"token_env":"`+modelprovider.TokenEnv+`"`) {
+		t.Fatal("serialized request does not pin the fixed credential environment")
 	}
 }

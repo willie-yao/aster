@@ -518,14 +518,22 @@ key, or bot token).
   value: {{ include "prow-ai-dashboard.agentSandboxWorkloadServiceAccountName" . | quote }}
 - name: AGENT_SANDBOX_RUNTIME_CLASS
   value: {{ .Values.agentSandbox.fixRuntime.runtimeClassName | quote }}
-- name: AGENT_SANDBOX_MODEL_GATEWAY_ENDPOINT
-  value: {{ .Values.agentSandbox.fixRuntime.modelGateway.endpoint | quote }}
-- name: AGENT_SANDBOX_MODEL_GATEWAY_MODEL
-  value: {{ .Values.agentSandbox.fixRuntime.modelGateway.model | quote }}
-- name: AGENT_SANDBOX_MODEL_GATEWAY_PROTOCOL
-  value: {{ .Values.agentSandbox.fixRuntime.modelGateway.protocolVersion | quote }}
-- name: AGENT_SANDBOX_MODEL_GATEWAY_PUBLIC_CA_PRIVATE_DNS
-  value: {{ ternary "true" "false" .Values.agentSandbox.fixRuntime.modelGateway.publicCAPrivateDNS | quote }}
+- name: AGENT_SANDBOX_MODEL_PROVIDER_CREDENTIAL_MODE
+  value: {{ .Values.agentSandbox.fixRuntime.modelProvider.credentialMode | quote }}
+- name: AGENT_SANDBOX_MODEL_PROVIDER_API
+  value: {{ .Values.agentSandbox.fixRuntime.modelProvider.api | quote }}
+- name: AGENT_SANDBOX_MODEL_PROVIDER_ENDPOINT
+  value: {{ .Values.agentSandbox.fixRuntime.modelProvider.endpoint | quote }}
+- name: AGENT_SANDBOX_MODEL_PROVIDER_MODEL
+  value: {{ .Values.agentSandbox.fixRuntime.modelProvider.model | quote }}
+- name: AGENT_SANDBOX_MODEL_PROVIDER_AUTH_TYPE
+  value: {{ .Values.agentSandbox.fixRuntime.modelProvider.auth.type | quote }}
+- name: AGENT_SANDBOX_MODEL_PROVIDER_AUTH_SECRET_NAME
+  value: {{ .Values.agentSandbox.fixRuntime.modelProvider.auth.existingSecret | quote }}
+- name: AGENT_SANDBOX_MODEL_PROVIDER_AUTH_SECRET_KEY
+  value: {{ .Values.agentSandbox.fixRuntime.modelProvider.auth.tokenKey | quote }}
+- name: AGENT_SANDBOX_MODEL_PROVIDER_PUBLIC_CA_PRIVATE_DNS
+  value: {{ ternary "true" "false" .Values.agentSandbox.fixRuntime.modelProvider.publicCAPrivateDNS | quote }}
 - name: AGENT_SANDBOX_TIMEOUT
   value: {{ .Values.agentSandbox.fixRuntime.timeout | quote }}
 - name: AGENT_SANDBOX_OUTPUT_LIMIT_BYTES
@@ -554,7 +562,7 @@ key, or bot token).
   {{- $projectAI := get $project "ai" | default dict -}}
   {{- $projectFix := get $projectAI "fix_prs" | default dict -}}
   {{- $projectRuntime := get $projectFix "agent_runtime" | default dict -}}
-  {{- $projectGateway := get $projectRuntime "model_gateway" | default dict -}}
+  {{- $projectProvider := get $projectRuntime "model_provider" | default dict -}}
   {{- if ne (default "opencode" (get $projectRuntime "type")) "agent-sandbox" -}}{{- fail "agentSandbox.fixRuntime requires project ai.fix_prs.agent_runtime.type=agent-sandbox" -}}{{- end -}}
   {{- if not (or .Values.server.actions.enabled (default false (get $projectFix "enabled"))) -}}{{- fail "agentSandbox.fixRuntime requires server.actions.enabled=true or project ai.fix_prs.enabled=true" -}}{{- end -}}
   {{- if .Values.server.actions.oauth.privateRepositories -}}{{- fail "agentSandbox.fixRuntime supports public repositories only; OAuth privateRepositories must be false" -}}{{- end -}}
@@ -580,16 +588,36 @@ key, or bot token).
   {{- $clientSA := include "prow-ai-dashboard.agentSandboxClientServiceAccountName" . -}}
   {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.clientServiceAccountName) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
-  {{- $publicCAPrivateDNS := default false $cfg.modelGateway.publicCAPrivateDNS -}}
-  {{- if $publicCAPrivateDNS -}}
-    {{- if not (regexMatch "^https://([A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?[.])+[A-Za-z]{2,}(:[0-9]+)?(/[^?#]*)?$" $cfg.modelGateway.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.endpoint must be a credential-free HTTPS DNS FQDN when publicCAPrivateDNS=true" -}}{{- end -}}
-    {{- if regexMatch "^https://([^/@?#]+[.])?(openai[.]com|openai[.]azure[.]com|services[.]ai[.]azure[.]com|anthropic[.]com|githubcopilot[.]com|copilot[.]microsoft[.]com|moonshot[.]cn|kimi[.]com|generativelanguage[.]googleapis[.]com|api[.]nvidia[.]com|mistral[.]ai|cohere[.]ai|groq[.]com|together[.]xyz|deepseek[.]com|x[.]ai)(:[0-9]+)?(/|$)" (lower $cfg.modelGateway.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.endpoint must not be a direct model-provider endpoint" -}}{{- end -}}
-    {{- if regexMatch "[.](svc([.]cluster[.]local)?|internal)(:[0-9]+)?(/|$)" (lower $cfg.modelGateway.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.publicCAPrivateDNS applies only to a privately resolved public FQDN" -}}{{- end -}}
+  {{- $provider := $cfg.modelProvider -}}
+  {{- $credentialMode := default "direct" $provider.credentialMode -}}
+  {{- $providerAPI := default "chat_completions" $provider.api -}}
+  {{- $providerAuth := $provider.auth -}}
+  {{- $authType := default "none" $providerAuth.type -}}
+  {{- $publicCAPrivateDNS := default false $provider.publicCAPrivateDNS -}}
+  {{- if not (has $credentialMode (list "direct" "gateway")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.credentialMode must be direct or gateway" -}}{{- end -}}
+  {{- if ne $providerAPI "chat_completions" -}}{{- fail "agentSandbox.fixRuntime.modelProvider.api must be chat_completions" -}}{{- end -}}
+  {{- if not (regexMatch "^https://[^/@?#]+(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?/chat/completions$" $provider.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.endpoint must be an absolute credential-free HTTPS chat_completions URL" -}}{{- end -}}
+  {{- if or (not $provider.model) (gt (len $provider.model) 256) (contains "\n" $provider.model) (contains "\r" $provider.model) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.model must be non-empty, at most 256 bytes, and single-line" -}}{{- end -}}
+  {{- if not (has $authType (list "none" "bearer")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.auth.type must be none or bearer" -}}{{- end -}}
+  {{- if eq $credentialMode "gateway" -}}
+    {{- if ne $authType "none" -}}{{- fail "agentSandbox.fixRuntime.modelProvider gateway mode requires auth.type=none" -}}{{- end -}}
+    {{- if or $providerAuth.existingSecret $providerAuth.tokenKey -}}{{- fail "agentSandbox.fixRuntime.modelProvider gateway mode must not set Secret fields" -}}{{- end -}}
+    {{- if $publicCAPrivateDNS -}}
+      {{- if not (regexMatch "^https://([A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?[.])+[A-Za-z]{2,}(:[0-9]+)?(/[^?#]*)?/chat/completions$" $provider.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.endpoint must be an HTTPS DNS FQDN when publicCAPrivateDNS=true" -}}{{- end -}}
+      {{- if regexMatch "^https://([^/@?#]+[.])?(openai[.]com|openai[.]azure[.]com|services[.]ai[.]azure[.]com|anthropic[.]com|githubcopilot[.]com|copilot[.]microsoft[.]com|moonshot[.]cn|kimi[.]com|generativelanguage[.]googleapis[.]com|api[.]nvidia[.]com|mistral[.]ai|cohere[.]ai|groq[.]com|together[.]xyz|deepseek[.]com|x[.]ai)(:[0-9]+)?(/|$)" (lower $provider.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelProvider gateway endpoint must not be a direct model-provider endpoint" -}}{{- end -}}
+      {{- if regexMatch "[.](svc([.]cluster[.]local)?|internal)(:[0-9]+)?(/|$)" (lower $provider.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.publicCAPrivateDNS applies only to a privately resolved public FQDN" -}}{{- end -}}
+    {{- else -}}
+      {{- if not (regexMatch "^https://[^/@?#]+[.](svc([.]cluster[.]local)?|internal)(:[0-9]+)?(/[^?#]*)?/chat/completions$" $provider.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelProvider gateway endpoint must be an internal HTTPS service URL or publicCAPrivateDNS must be true" -}}{{- end -}}
+    {{- end -}}
   {{- else -}}
-    {{- if not (regexMatch "^https://[^/@?#]+[.](svc([.]cluster[.]local)?|internal)(:[0-9]+)?(/[^?#]*)?$" $cfg.modelGateway.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.endpoint must be an internal HTTPS service URL or publicCAPrivateDNS must be true" -}}{{- end -}}
+    {{- if $publicCAPrivateDNS -}}{{- fail "agentSandbox.fixRuntime.modelProvider.publicCAPrivateDNS applies only to gateway mode" -}}{{- end -}}
+    {{- if eq $authType "none" -}}
+      {{- if or $providerAuth.existingSecret $providerAuth.tokenKey -}}{{- fail "agentSandbox.fixRuntime.modelProvider auth.type=none must not set Secret fields" -}}{{- end -}}
+    {{- else -}}
+      {{- if or (not $providerAuth.existingSecret) (gt (len $providerAuth.existingSecret) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $providerAuth.existingSecret)) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.auth.existingSecret is required for bearer auth and must be a valid Secret name" -}}{{- end -}}
+      {{- if or (not $providerAuth.tokenKey) (gt (len $providerAuth.tokenKey) 253) (not (regexMatch "^[A-Za-z0-9._-]+$" $providerAuth.tokenKey)) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.auth.tokenKey is required for bearer auth and must be a valid Secret key" -}}{{- end -}}
+    {{- end -}}
   {{- end -}}
-  {{- if not $cfg.modelGateway.model -}}{{- fail "agentSandbox.fixRuntime.modelGateway.model is required" -}}{{- end -}}
-  {{- if ne $cfg.modelGateway.protocolVersion "openai-chat-completions-v1" -}}{{- fail "agentSandbox.fixRuntime.modelGateway.protocolVersion must be openai-chat-completions-v1" -}}{{- end -}}
   {{- if not (regexMatch "^([1-9]|[12][0-9]|30)m$" (printf "%v" $cfg.timeout)) -}}{{- fail "agentSandbox.fixRuntime.timeout must use whole minutes from 1m through 30m" -}}{{- end -}}
   {{- $poll := printf "%v" $cfg.pollInterval -}}
   {{- if or (not (regexMatch "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ms|s)$" $poll)) (not (regexMatch "[1-9]" $poll)) -}}{{- fail "agentSandbox.fixRuntime.pollInterval must be a positive duration below 30s" -}}{{- end -}}
@@ -631,10 +659,13 @@ key, or bot token).
   {{- if ne (int $cfg.maxFiles) (int (default 3 (get $projectFix "max_files"))) -}}{{- fail "agentSandbox.fixRuntime.maxFiles must match project ai.fix_prs.max_files" -}}{{- end -}}
   {{- if ne (printf "%v" $cfg.timeout) (printf "%v" (default "10m" (get $projectRuntime "timeout"))) -}}{{- fail "agentSandbox.fixRuntime.timeout must match project agent_runtime.timeout" -}}{{- end -}}
   {{- if ne (int64 $cfg.outputLimitBytes) (int64 (default 524288 (get $projectRuntime "output_limit_bytes"))) -}}{{- fail "agentSandbox.fixRuntime.outputLimitBytes must match project agent_runtime.output_limit_bytes" -}}{{- end -}}
-  {{- if ne $cfg.modelGateway.endpoint (default "" (get $projectGateway "endpoint")) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.endpoint must match project agent_runtime.model_gateway.endpoint" -}}{{- end -}}
-  {{- if ne $cfg.modelGateway.model (default "" (get $projectGateway "model")) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.model must match project agent_runtime.model_gateway.model" -}}{{- end -}}
-  {{- if ne $cfg.modelGateway.protocolVersion (default "openai-chat-completions-v1" (get $projectGateway "protocol_version")) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.protocolVersion must match project agent_runtime.model_gateway.protocol_version" -}}{{- end -}}
-  {{- if ne $publicCAPrivateDNS (default false (get $projectGateway "public_ca_private_dns")) -}}{{- fail "agentSandbox.fixRuntime.modelGateway.publicCAPrivateDNS must match project agent_runtime.model_gateway.public_ca_private_dns" -}}{{- end -}}
+  {{- $projectProviderAuth := get $projectProvider "auth" | default dict -}}
+  {{- if ne $credentialMode (default "direct" (get $projectProvider "credential_mode")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.credentialMode must match project agent_runtime.model_provider.credential_mode" -}}{{- end -}}
+  {{- if ne $providerAPI (default "chat_completions" (get $projectProvider "api")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.api must match project agent_runtime.model_provider.api" -}}{{- end -}}
+  {{- if ne $provider.endpoint (default "" (get $projectProvider "endpoint")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.endpoint must match project agent_runtime.model_provider.endpoint" -}}{{- end -}}
+  {{- if ne $provider.model (default "" (get $projectProvider "model")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.model must match project agent_runtime.model_provider.model" -}}{{- end -}}
+  {{- if ne $authType (default "none" (get $projectProviderAuth "type")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.auth.type must match project agent_runtime.model_provider.auth.type" -}}{{- end -}}
+  {{- if ne $publicCAPrivateDNS (default false (get $projectProvider "public_ca_private_dns")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.publicCAPrivateDNS must match project agent_runtime.model_provider.public_ca_private_dns" -}}{{- end -}}
   {{- if (default false (get $projectRuntime "allow_bash")) -}}{{- fail "agentSandbox.fixRuntime requires project agent_runtime.allow_bash=false" -}}{{- end -}}
   {{- range $env := concat .Values.server.extraEnv .Values.fetcher.extraEnv -}}
     {{- if hasPrefix "AGENT_SANDBOX_" (default "" $env.name) -}}{{- fail (printf "extraEnv must not override reserved Agent Sandbox variable %s" $env.name) -}}{{- end -}}
@@ -689,11 +720,27 @@ key, or bot token).
   {{- if and (not $cfg.clientServiceAccount.create) (not $cfg.clientServiceAccount.name) -}}{{- fail "agentSandbox.analyzer.clientServiceAccount.name is required when create=false" -}}{{- end -}}
   {{- $clientSA := include "prow-ai-dashboard.agentSandboxAnalyzerClientServiceAccountName" . -}}
   {{- if or (gt (len $clientSA) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA)) -}}{{- fail "agentSandbox.analyzer.clientServiceAccount.name must be a lowercase Kubernetes object name" -}}{{- end -}}
-  {{- $gateway := $cfg.modelGateway -}}
-  {{- if not (regexMatch "^https://[^/@?#]+(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $gateway.endpoint) -}}{{- fail "agentSandbox.analyzer.modelGateway.endpoint must be an absolute credential-free HTTPS URL" -}}{{- end -}}
-  {{- if not (regexMatch "^https://[^/]+[.](svc|svc[.]cluster[.]local|internal)(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $gateway.endpoint) -}}{{- fail "agentSandbox.analyzer.modelGateway.endpoint must use internal service DNS" -}}{{- end -}}
-  {{- if or (not $gateway.model) (gt (len $gateway.model) 256) (contains "\n" $gateway.model) (contains "\r" $gateway.model) -}}{{- fail "agentSandbox.analyzer.modelGateway.model must be non-empty, at most 256 bytes, and single-line" -}}{{- end -}}
-  {{- if ne $gateway.protocolVersion "openai-chat-completions-v1" -}}{{- fail "agentSandbox.analyzer.modelGateway.protocolVersion must be openai-chat-completions-v1" -}}{{- end -}}
+  {{- $provider := $cfg.modelProvider -}}
+  {{- $credentialMode := default "direct" $provider.credentialMode -}}
+  {{- $providerAPI := default "chat_completions" $provider.api -}}
+  {{- $providerAuth := $provider.auth -}}
+  {{- $authType := default "none" $providerAuth.type -}}
+  {{- if not (has $credentialMode (list "direct" "gateway")) -}}{{- fail "agentSandbox.analyzer.modelProvider.credentialMode must be direct or gateway" -}}{{- end -}}
+  {{- if ne $providerAPI "chat_completions" -}}{{- fail "agentSandbox.analyzer.modelProvider.api must be chat_completions" -}}{{- end -}}
+  {{- if not (regexMatch "^https://[^/@?#]+(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?/chat/completions$" $provider.endpoint) -}}{{- fail "agentSandbox.analyzer.modelProvider.endpoint must be an absolute credential-free HTTPS chat_completions URL" -}}{{- end -}}
+  {{- if or (not $provider.model) (gt (len $provider.model) 256) (contains "\n" $provider.model) (contains "\r" $provider.model) -}}{{- fail "agentSandbox.analyzer.modelProvider.model must be non-empty, at most 256 bytes, and single-line" -}}{{- end -}}
+  {{- if not (has $authType (list "none" "bearer")) -}}{{- fail "agentSandbox.analyzer.modelProvider.auth.type must be none or bearer" -}}{{- end -}}
+  {{- if $provider.publicCAPrivateDNS -}}{{- fail "agentSandbox.analyzer.modelProvider.publicCAPrivateDNS is not supported" -}}{{- end -}}
+  {{- if eq $credentialMode "gateway" -}}
+    {{- if ne $authType "none" -}}{{- fail "agentSandbox.analyzer.modelProvider gateway mode requires auth.type=none" -}}{{- end -}}
+    {{- if or $providerAuth.existingSecret $providerAuth.tokenKey -}}{{- fail "agentSandbox.analyzer.modelProvider gateway mode must not set Secret fields" -}}{{- end -}}
+    {{- if not (regexMatch "^https://[^/]+[.](svc|svc[.]cluster[.]local|internal)(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?/chat/completions$" $provider.endpoint) -}}{{- fail "agentSandbox.analyzer.modelProvider gateway endpoint must use internal service DNS" -}}{{- end -}}
+  {{- else if eq $authType "none" -}}
+    {{- if or $providerAuth.existingSecret $providerAuth.tokenKey -}}{{- fail "agentSandbox.analyzer.modelProvider auth.type=none must not set Secret fields" -}}{{- end -}}
+  {{- else -}}
+    {{- if or (not $providerAuth.existingSecret) (gt (len $providerAuth.existingSecret) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $providerAuth.existingSecret)) -}}{{- fail "agentSandbox.analyzer.modelProvider.auth.existingSecret is required for bearer auth and must be a valid Secret name" -}}{{- end -}}
+    {{- if or (not $providerAuth.tokenKey) (gt (len $providerAuth.tokenKey) 253) (not (regexMatch "^[A-Za-z0-9._-]+$" $providerAuth.tokenKey)) -}}{{- fail "agentSandbox.analyzer.modelProvider.auth.tokenKey is required for bearer auth and must be a valid Secret key" -}}{{- end -}}
+  {{- end -}}
   {{- $timeoutText := printf "%v" $cfg.timeout -}}
   {{- $timeoutSeconds := 0 -}}
   {{- if regexMatch "^[1-9][0-9]*s$" $timeoutText -}}
@@ -718,22 +765,29 @@ key, or bot token).
   {{- if ne (index $cfg.resources.requests "ephemeral-storage") (index $cfg.resources.limits "ephemeral-storage") -}}{{- fail "agentSandbox.analyzer ephemeral-storage request must equal its limit" -}}{{- end -}}
   {{- if not $cfg.networkPolicy.enabled -}}{{- fail "agentSandbox.analyzer.networkPolicy.enabled must be true" -}}{{- end -}}
   {{- if not (has $cfg.networkPolicy.mode (list "kubernetes" "cilium")) -}}{{- fail "agentSandbox.analyzer.networkPolicy.mode must be kubernetes or cilium" -}}{{- end -}}
-  {{- if eq (len $cfg.networkPolicy.gatewayNamespaceSelector) 0 -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayNamespaceSelector is required" -}}{{- end -}}
-  {{- if eq (len $cfg.networkPolicy.gatewayPodSelector) 0 -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayPodSelector is required" -}}{{- end -}}
   {{- if or (lt (int $cfg.networkPolicy.gatewayPort) 1) (gt (int $cfg.networkPolicy.gatewayPort) 65535) -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayPort is invalid" -}}{{- end -}}
   {{- $gatewayTargetPort := int $cfg.networkPolicy.gatewayPort -}}
   {{- if and (hasKey $cfg.networkPolicy "gatewayTargetPort") (ne (index $cfg.networkPolicy "gatewayTargetPort") nil) -}}
     {{- $gatewayTargetPort = int (index $cfg.networkPolicy "gatewayTargetPort") -}}
   {{- end -}}
   {{- if or (lt $gatewayTargetPort 1) (gt $gatewayTargetPort 65535) -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayTargetPort is invalid" -}}{{- end -}}
-  {{- $gatewayAuthority := regexFind "^https://[^/]+" $gateway.endpoint -}}
-  {{- $explicitGatewayPort := regexFind ":[0-9]+$" $gatewayAuthority -}}
-  {{- $endpointGatewayPort := 443 -}}
-  {{- if $explicitGatewayPort -}}{{- $endpointGatewayPort = trimPrefix ":" $explicitGatewayPort | int -}}{{- end -}}
-  {{- if ne (int $cfg.networkPolicy.gatewayPort) $endpointGatewayPort -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayPort must match modelGateway.endpoint" -}}{{- end -}}
+  {{- $providerAuthority := regexFind "^https://[^/]+" $provider.endpoint -}}
+  {{- $explicitProviderPort := regexFind ":[0-9]+$" $providerAuthority -}}
+  {{- $endpointProviderPort := 443 -}}
+  {{- if $explicitProviderPort -}}{{- $endpointProviderPort = trimPrefix ":" $explicitProviderPort | int -}}{{- end -}}
+  {{- if ne (int $cfg.networkPolicy.gatewayPort) $endpointProviderPort -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayPort must match modelProvider.endpoint" -}}{{- end -}}
   {{- if or (eq (len $cfg.networkPolicy.dnsNamespaceSelector) 0) (eq (len $cfg.networkPolicy.dnsPodSelector) 0) -}}{{- fail "agentSandbox.analyzer DNS network selectors are required" -}}{{- end -}}
   {{- if and (eq $cfg.networkPolicy.mode "cilium") (or (not (hasKey $cfg.networkPolicy.dnsNamespaceSelector "kubernetes.io/metadata.name")) (not (get $cfg.networkPolicy.dnsNamespaceSelector "kubernetes.io/metadata.name"))) -}}{{- fail "agentSandbox.analyzer cilium mode requires dnsNamespaceSelector.kubernetes.io/metadata.name" -}}{{- end -}}
-  {{- if and (eq $cfg.networkPolicy.mode "cilium") (not (regexMatch "^https://[a-z0-9]([-a-z0-9]*[a-z0-9])?[.][a-z0-9]([-a-z0-9]*[a-z0-9])?[.]svc([.]cluster[.]local)?(:[0-9]+)?(/[^?#]*)?$" $gateway.endpoint)) -}}{{- fail "agentSandbox.analyzer cilium mode requires a Kubernetes Service gateway endpoint" -}}{{- end -}}
+  {{- $providerInternal := regexMatch "^https://[^/]+[.](svc|svc[.]cluster[.]local|internal)(:[0-9]+)?/" $provider.endpoint -}}
+  {{- if $providerInternal -}}
+    {{- if eq (len $cfg.networkPolicy.gatewayNamespaceSelector) 0 -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayNamespaceSelector is required for an internal provider" -}}{{- end -}}
+    {{- if eq (len $cfg.networkPolicy.gatewayPodSelector) 0 -}}{{- fail "agentSandbox.analyzer.networkPolicy.gatewayPodSelector is required for an internal provider" -}}{{- end -}}
+    {{- if and (eq $cfg.networkPolicy.mode "cilium") (not (regexMatch "^https://[a-z0-9]([-a-z0-9]*[a-z0-9])?[.][a-z0-9]([-a-z0-9]*[a-z0-9])?[.]svc([.]cluster[.]local)?(:[0-9]+)?/" $provider.endpoint)) -}}{{- fail "agentSandbox.analyzer cilium mode requires a Kubernetes Service internal provider endpoint" -}}{{- end -}}
+  {{- else -}}
+    {{- if ne $credentialMode "direct" -}}{{- fail "agentSandbox.analyzer external providers require direct credential mode" -}}{{- end -}}
+    {{- if not (regexMatch "^https://([A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?[.])+[A-Za-z]{2,}(:[0-9]+)?/" $provider.endpoint) -}}{{- fail "agentSandbox.analyzer external direct provider endpoint must use a DNS FQDN" -}}{{- end -}}
+    {{- if ne $cfg.networkPolicy.mode "cilium" -}}{{- fail "agentSandbox.analyzer external direct providers require networkPolicy.mode=cilium" -}}{{- end -}}
+  {{- end -}}
   {{- if not $cfg.quota.enabled -}}{{- fail "agentSandbox.analyzer.quota.enabled must be true" -}}{{- end -}}
   {{- range $env := concat .Values.server.extraEnv .Values.fetcher.extraEnv -}}
     {{- if hasPrefix "AGENT_SANDBOX_ANALYSIS_" (default "" $env.name) -}}{{- fail (printf "extraEnv must not override reserved analyzer variable %s" $env.name) -}}{{- end -}}

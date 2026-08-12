@@ -6,9 +6,10 @@
   {{- $gatewayTargetPort = int (index $cfg "gatewayTargetPort") -}}
 {{- end -}}
 {{- if eq $cfg.mode "cilium" }}
-{{- $gatewayAuthority := trimPrefix "https://" (regexFind "^https://[^/]+" .Values.agentSandbox.analyzer.modelGateway.endpoint) -}}
-{{- $gatewayHost := regexReplaceAll ":[0-9]+$" $gatewayAuthority "" -}}
-{{- $gatewayParts := splitList "." $gatewayHost -}}
+{{- $providerAuthority := trimPrefix "https://" (regexFind "^https://[^/]+" .Values.agentSandbox.analyzer.modelProvider.endpoint) -}}
+{{- $providerHost := regexReplaceAll ":[0-9]+$" $providerAuthority "" -}}
+{{- $providerParts := splitList "." $providerHost -}}
+{{- $providerInternalService := regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?[.][a-z0-9]([-a-z0-9]*[a-z0-9])?[.]svc([.]cluster[.]local)?$" $providerHost -}}
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -36,14 +37,23 @@ spec:
           rules:
             dns:
               - matchPattern: "*"
+    {{- if $providerInternalService }}
     - toServices:
         - k8sService:
-            serviceName: {{ index $gatewayParts 0 | quote }}
-            namespace: {{ index $gatewayParts 1 | quote }}
+            serviceName: {{ index $providerParts 0 | quote }}
+            namespace: {{ index $providerParts 1 | quote }}
       toPorts:
         - ports:
             - port: {{ $gatewayTargetPort | quote }}
               protocol: TCP
+    {{- else }}
+    - toFQDNs:
+        - matchName: {{ $providerHost | quote }}
+      toPorts:
+        - ports:
+            - port: {{ $cfg.gatewayPort | quote }}
+              protocol: TCP
+    {{- end }}
 {{- else }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

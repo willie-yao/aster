@@ -1,4 +1,4 @@
-// Package analysisexecutor runs one credential-free OpenCode failure analysis.
+// Package analysisexecutor runs one non-secret OpenCode failure analysis.
 package analysisexecutor
 
 import (
@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
@@ -37,7 +38,7 @@ type OpenCodeSpec struct {
 	WorkDir            string
 	HomeDir            string
 	TempDir            string
-	Gateway            engineruntime.ModelGatewayConfig
+	Provider           modelprovider.Config
 	Prompt             string
 	MaxSteps           int
 	ModelContextTokens int
@@ -71,6 +72,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		now = time.Now
 	}
 	started := now()
+	var credential modelprovider.CredentialGuard
 	result := agentanalysis.WorkspaceExecutionResult{
 		Version: agentanalysis.WorkspaceResultVersion, ContractVersion: agentanalysis.WorkspaceContractVersion,
 		RequestHash: request.Hash, Usage: agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable},
@@ -78,7 +80,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	}
 	fail := func(state engineruntime.TerminalState, reason string) agentanalysis.WorkspaceExecutionResult {
 		result.TerminalState = state
-		result.FailureReason = boundedReason(reason)
+		result.FailureReason = boundedReason(credential.SanitizeReason(reason))
 		result.Analysis = nil
 		result.DurationMs = max(now().Sub(started).Milliseconds(), 0)
 		return result
@@ -86,6 +88,13 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	if err := agentanalysis.ValidateWorkspaceExecutionRequest(request); err != nil {
 		return fail(engineruntime.TerminalFailed, err.Error())
 	}
+	var err error
+	credential, err = modelprovider.NewCredentialGuard(request.ModelProvider, os.LookupEnv)
+	if err != nil {
+		return fail(engineruntime.TerminalFailed, err.Error())
+	}
+	result.OpenCodeTelemetry.ProviderCredentialMode = request.ModelProvider.CredentialMode
+	result.OpenCodeTelemetry.ProviderAPI = request.ModelProvider.API
 	ctx, cancel := context.WithTimeout(parent, time.Duration(request.TimeoutSeconds)*time.Second)
 	defer cancel()
 
@@ -142,13 +151,19 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	if bin == "" {
 		bin = defaultOpenCodeBin
 	}
-	runResult, runErr := run(ctx, OpenCodeSpec{Bin: bin, WorkDir: workspaceRoot, HomeDir: home, TempDir: temp, Gateway: request.ModelGateway, Prompt: prompt, MaxSteps: request.MaxSteps, ModelContextTokens: request.ModelContextTokens, ModelOutputTokens: request.ModelOutputTokens})
+	runResult, runErr := run(ctx, OpenCodeSpec{Bin: bin, WorkDir: workspaceRoot, HomeDir: home, TempDir: temp, Provider: request.ModelProvider, Prompt: prompt, MaxSteps: request.MaxSteps, ModelContextTokens: request.ModelContextTokens, ModelOutputTokens: request.ModelOutputTokens})
+	if err := validateCredentialFreeOpenCodeRun(credential, runResult, runErr); err != nil {
+		result.OpenCodeTelemetry.FailureCode = "credential_exposure"
+		return fail(engineruntime.TerminalFailed, err.Error())
+	}
 	if runResult.Usage.Status == "" {
 		runResult.Usage.Status = agentanalysis.WorkspaceTelemetryUnavailable
 	}
 	if runResult.Telemetry.Status == "" {
 		runResult.Telemetry.Status = agentanalysis.WorkspaceTelemetryUnavailable
 	}
+	runResult.Telemetry.ProviderCredentialMode = request.ModelProvider.CredentialMode
+	runResult.Telemetry.ProviderAPI = request.ModelProvider.API
 	if runResult.Telemetry.ProviderRequests == 0 && runResult.Telemetry.StepsUsed > 0 {
 		runResult.Telemetry.ProviderRequests = runResult.Telemetry.StepsUsed
 		if !runResult.Telemetry.Error.Available {
@@ -195,6 +210,10 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	if err != nil {
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("encode canonical analysis: %v", err))
 	}
+	if err := credential.CheckBytes(canonical); err != nil {
+		result.OpenCodeTelemetry.FailureCode = "credential_exposure"
+		return fail(engineruntime.TerminalFailed, err.Error())
+	}
 	if err := writeCanonicalResult(resultRoot, canonical, request.OutputLimitBytes); err != nil {
 		return fail(engineruntime.TerminalFailed, err.Error())
 	}
@@ -204,6 +223,10 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	result.TerminalState = engineruntime.TerminalSucceeded
 	result.Analysis = &analysis
 	result.DurationMs = max(now().Sub(started).Milliseconds(), 0)
+	if err := validateCredentialFreeWorkspaceResult(credential, result); err != nil {
+		result.OpenCodeTelemetry.FailureCode = "credential_exposure"
+		return fail(engineruntime.TerminalFailed, err.Error())
+	}
 	validated, err := agentanalysis.ValidateWorkspaceExecutionResult(result, request, artifactRoot, sourceRoot)
 	if err != nil {
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("validate analyzer result: %v", err))
@@ -272,10 +295,37 @@ func readSingleResult(root string, limit int64) (string, error) {
 	return readSingleResultFile(root, agentanalysis.WorkspaceResultFile, limit)
 }
 
+func validateCredentialFreeOpenCodeRun(credential modelprovider.CredentialGuard, result OpenCodeRunResult, runErr error) error {
+	if err := credential.CheckBytes(result.Structured); err != nil {
+		return err
+	}
+	if runErr != nil {
+		if err := credential.CheckStrings(runErr.Error()); err != nil {
+			return err
+		}
+	}
+	encoded, err := json.Marshal(struct {
+		Usage     agentanalysis.WorkspaceUsage             `json:"usage"`
+		Telemetry agentanalysis.WorkspaceOpenCodeTelemetry `json:"telemetry"`
+	}{result.Usage, result.Telemetry})
+	if err != nil {
+		return fmt.Errorf("encode sanitized OpenCode result")
+	}
+	return credential.CheckBytes(encoded)
+}
+
+func validateCredentialFreeWorkspaceResult(credential modelprovider.CredentialGuard, result agentanalysis.WorkspaceExecutionResult) error {
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encode workspace analysis result")
+	}
+	return credential.CheckBytes(encoded)
+}
+
 func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (result OpenCodeRunResult, retErr error) {
 	result.Usage = agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable}
 	result.Telemetry = agentanalysis.WorkspaceOpenCodeTelemetry{Status: agentanalysis.WorkspaceTelemetryUnavailable, StructuredOutputRetriesKnown: true}
-	if err := writeOpenCodeConfig(spec.HomeDir, spec.Gateway, spec.MaxSteps, spec.ModelContextTokens, spec.ModelOutputTokens); err != nil {
+	if err := writeOpenCodeConfig(spec.HomeDir, spec.Provider, spec.MaxSteps, spec.ModelContextTokens, spec.ModelOutputTokens); err != nil {
 		return result, err
 	}
 	bin, err := exec.LookPath(spec.Bin)
@@ -292,25 +342,40 @@ func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (result OpenCode
 	}
 	cmd := exec.CommandContext(ctx, bin, "serve", "--hostname", "127.0.0.1", "--port", fmt.Sprint(port))
 	cmd.Dir = spec.WorkDir
-	cmd.Env = openCodeEnvironment(spec.HomeDir, spec.TempDir)
+	env, err := openCodeEnvironment(spec.HomeDir, spec.TempDir, spec.Provider)
+	if err != nil {
+		return result, err
+	}
+	cmd.Env = env
+	credential, err := modelprovider.NewCredentialGuard(spec.Provider, os.LookupEnv)
+	if err != nil {
+		return result, err
+	}
 	stdout := newBoundedCapture(maxOpenCodeStreamBytes)
 	stderr := newBoundedCapture(maxOpenCodeStreamBytes)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	stdoutCredential := credential.NewDetector()
+	stderrCredential := credential.NewDetector()
+	cmd.Stdout = io.MultiWriter(stdout, stdoutCredential)
+	cmd.Stderr = io.MultiWriter(stderr, stderrCredential)
 	if err := cmd.Start(); err != nil {
 		return result, err
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	defer func() {
+		stopOpenCodeProcess(func() {
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+		}, done)
 		result.Telemetry.StdoutTruncated = stdout.Truncated()
 		result.Telemetry.StderrTruncated = stderr.Truncated()
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		select {
-		case <-done:
-		case <-time.After(time.Second):
+		if stdoutCredential.Detected() || stderrCredential.Detected() {
+			result = OpenCodeRunResult{
+				Usage:     agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable},
+				Telemetry: agentanalysis.WorkspaceOpenCodeTelemetry{Status: agentanalysis.WorkspaceTelemetryUnavailable, StructuredOutputRetriesKnown: true, FailureCode: "credential_exposure"},
+			}
+			retErr = modelprovider.ErrCredentialExposure
 		}
 	}()
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
@@ -333,11 +398,31 @@ func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (result OpenCode
 	return runOpenCodePhases(ctx, client, baseURL, sessionID, spec, version, evidenceShape)
 }
 
+func stopOpenCodeProcess(terminate func(), done <-chan error) {
+	if terminate != nil {
+		terminate()
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+	}
+}
+
 func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec, version string, evidenceShape agentanalysis.WorkspaceOpenCodeRequestShape) (result OpenCodeRunResult, retErr error) {
+	credential, err := modelprovider.NewCredentialGuard(spec.Provider, os.LookupEnv)
+	if err != nil {
+		return result, err
+	}
 	result.Usage = agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable}
 	result.Telemetry = agentanalysis.WorkspaceOpenCodeTelemetry{Status: agentanalysis.WorkspaceTelemetryUnavailable, StructuredOutputRetriesKnown: true, RequestShape: evidenceShape}
 	evidenceErr := promptOpenCodeEvidence(ctx, client, baseURL, sessionID, spec)
 	evidenceRaw, evidenceRawErr := fetchOpenCodeTelemetryRaw(ctx, client, baseURL, sessionID, spec.WorkDir)
+	if evidenceRawErr == nil {
+		if err := credential.CheckBytes(evidenceRaw); err != nil {
+			result.Telemetry.FailureCode = "credential_exposure"
+			return result, err
+		}
+	}
 	evidenceUsage, evidenceTelemetry, evidenceFacts, evidenceTelemetryErr := parseOpenCodeTelemetryForWorkspace(evidenceRaw, spec.WorkDir)
 	if evidenceRawErr != nil {
 		evidenceTelemetryErr = evidenceRawErr
@@ -365,9 +450,22 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 	result.Telemetry.SourceEvidenceToolCalls = evidenceFacts.SourceToolCalls
 
 	finalShape := newOpenCodeRequestShape(spec, version)
-	structured, finalErr := promptOpenCodeFinalization(ctx, client, baseURL, sessionID, spec)
+	structured, finalMessage, finalErr := promptOpenCodeFinalizationWithMessage(ctx, client, baseURL, sessionID, spec)
+	if err := credential.CheckBytes(structured, finalMessage); err != nil {
+		result.Telemetry.FailureCode = "credential_exposure"
+		return result, err
+	}
 	result.Structured = structured
 	finalRaw, finalRawErr := fetchOpenCodeTelemetryRaw(ctx, client, baseURL, sessionID, spec.WorkDir)
+	if finalRawErr == nil {
+		if err := credential.CheckBytes(finalRaw); err != nil {
+			result.Telemetry.FailureCode = "credential_exposure"
+			return result, err
+		}
+	} else if combined, combineErr := appendOpenCodeTelemetryMessage(evidenceRaw, finalMessage); combineErr == nil {
+		finalRaw = combined
+		finalRawErr = nil
+	}
 	if finalRawErr != nil {
 		result.Telemetry.RequestShape = finalShape
 		applyOpenCodePromptError(&result, finalErr, evidenceTelemetry.ProviderRequests, evidenceTelemetry.ProviderRequestsKnown, true)
@@ -553,14 +651,23 @@ func promptOpenCode(ctx context.Context, client *http.Client, baseURL, sessionID
 }
 
 func promptOpenCodeFinalization(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec) ([]byte, error) {
+	structured, _, err := promptOpenCodeFinalizationWithMessage(ctx, client, baseURL, sessionID, spec)
+	return structured, err
+}
+
+func promptOpenCodeFinalizationWithMessage(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec) ([]byte, []byte, error) {
 	response, err := promptOpenCodeMessage(ctx, client, baseURL, sessionID, spec, openCodeFinalizationAgent, agentanalysis.WorkspaceFinalizationInstruction(), true)
+	message, marshalErr := json.Marshal(response)
+	if marshalErr != nil {
+		return nil, nil, fmt.Errorf("encode OpenCode finalization response")
+	}
 	if err != nil {
-		return nil, err
+		return nil, message, err
 	}
 	if response.Info.Role != "assistant" || len(response.Info.Structured) == 0 || bytes.Equal(bytes.TrimSpace(response.Info.Structured), []byte("null")) {
-		return nil, fmt.Errorf("OpenCode did not return structured output")
+		return nil, message, fmt.Errorf("OpenCode did not return structured output")
 	}
-	return slices.Clone(response.Info.Structured), nil
+	return slices.Clone(response.Info.Structured), message, nil
 }
 
 type openCodePromptResponse struct {
@@ -575,7 +682,7 @@ type openCodePromptResponse struct {
 func promptOpenCodeMessage(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec, agent, prompt string, structured bool) (openCodePromptResponse, error) {
 	payload := map[string]any{
 		"agent": agent,
-		"model": map[string]any{"providerID": "engine", "modelID": spec.Gateway.Model},
+		"model": map[string]any{"providerID": "engine", "modelID": spec.Provider.Model},
 		"parts": []any{map[string]any{"type": "text", "text": prompt}},
 	}
 	if structured {
@@ -589,6 +696,17 @@ func promptOpenCodeMessage(ctx context.Context, client *http.Client, baseURL, se
 	endpoint := baseURL + "/session/" + url.PathEscape(sessionID) + "/message?directory=" + url.QueryEscape(spec.WorkDir)
 	if err := openCodeJSON(ctx, client, http.MethodPost, endpoint, body, &response); err != nil {
 		return response, fmt.Errorf("prompt OpenCode session: %w", err)
+	}
+	responseJSON, err := json.Marshal(response)
+	if err != nil {
+		return response, fmt.Errorf("encode OpenCode response")
+	}
+	credential, err := modelprovider.NewCredentialGuard(spec.Provider, os.LookupEnv)
+	if err != nil {
+		return response, err
+	}
+	if err := credential.CheckBytes(responseJSON); err != nil {
+		return response, err
 	}
 	if response.Info.Error != nil {
 		telemetry, sanitizeErr := sanitizeOpenCodeError(response.Info.Error)
@@ -607,6 +725,34 @@ func promptOpenCodeMessage(ctx context.Context, client *http.Client, baseURL, se
 func fetchOpenCodeTelemetryRaw(ctx context.Context, client *http.Client, baseURL, sessionID, workDir string) ([]byte, error) {
 	endpoint := baseURL + "/session/" + url.PathEscape(sessionID) + "/message?directory=" + url.QueryEscape(workDir)
 	return openCodeResponse(ctx, client, http.MethodGet, endpoint, nil, maxOpenCodeTelemetryBytes)
+}
+
+func appendOpenCodeTelemetryMessage(messagesRaw, messageRaw []byte) ([]byte, error) {
+	if len(messagesRaw) == 0 || len(messageRaw) == 0 {
+		return nil, fmt.Errorf("OpenCode phase telemetry is missing")
+	}
+	var messages []json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(messagesRaw))
+	if err := decoder.Decode(&messages); err != nil {
+		return nil, fmt.Errorf("decode OpenCode evidence telemetry")
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return nil, fmt.Errorf("OpenCode evidence telemetry has trailing data")
+	}
+	var message json.RawMessage
+	decoder = json.NewDecoder(bytes.NewReader(messageRaw))
+	if err := decoder.Decode(&message); err != nil {
+		return nil, fmt.Errorf("decode OpenCode finalization telemetry")
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return nil, fmt.Errorf("OpenCode finalization telemetry has trailing data")
+	}
+	messages = append(messages, slices.Clone(message))
+	data, err := json.Marshal(messages)
+	if err != nil || len(data) > maxOpenCodeTelemetryBytes {
+		return nil, fmt.Errorf("combined OpenCode telemetry exceeds the bound")
+	}
+	return data, nil
 }
 
 func telemetryStatusForError(err error) string {
@@ -689,7 +835,7 @@ func verifyReadSafeWorkspace(ctx context.Context, sourceRoot string, files []age
 		}
 	}
 	command := exec.CommandContext(ctx, "git", "-C", sourceRoot, "ls-files", "-z")
-	command.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
+	command.Env = append(nonCredentialSubprocessEnvironment(), "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("inspect source instruction files: %w", err)
@@ -790,13 +936,21 @@ func unescapeMountInfo(value string) string {
 	return strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`).Replace(value)
 }
 
-func writeOpenCodeConfig(home string, gateway engineruntime.ModelGatewayConfig, maxSteps, contextTokens, outputTokens int) error {
+func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps, contextTokens, outputTokens int) error {
 	if maxSteps < 2 {
 		return fmt.Errorf("OpenCode analysis requires at least two steps")
 	}
 	dir := filepath.Join(home, ".config", "opencode")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
+	}
+	baseURL, err := modelprovider.OpenCodeBaseURL(provider)
+	if err != nil {
+		return err
+	}
+	providerOptions := map[string]any{"baseURL": baseURL}
+	if provider.Auth.Type == modelprovider.AuthTypeBearer {
+		providerOptions["apiKey"] = "{env:" + modelprovider.TokenEnv + "}"
 	}
 	evidencePermissions := map[string]any{
 		"*": "deny",
@@ -825,8 +979,8 @@ func writeOpenCodeConfig(home string, gateway engineruntime.ModelGatewayConfig, 
 		"default_agent": openCodeEvidenceAgent,
 		"provider": map[string]any{"engine": map[string]any{
 			"npm": "@ai-sdk/openai-compatible", "name": "engine",
-			"options": map[string]any{"baseURL": openAIBase(gateway.Endpoint)},
-			"models":  map[string]any{gateway.Model: map[string]any{"limit": map[string]any{"context": contextTokens, "output": outputTokens}}},
+			"options": providerOptions,
+			"models":  map[string]any{provider.Model: map[string]any{"limit": map[string]any{"context": contextTokens, "output": outputTokens}}},
 		}},
 		"agent": map[string]any{
 			openCodeEvidenceAgent: map[string]any{
@@ -845,7 +999,21 @@ func writeOpenCodeConfig(home string, gateway engineruntime.ModelGatewayConfig, 
 	return os.WriteFile(filepath.Join(dir, "opencode.json"), data, 0o600)
 }
 
-func openCodeEnvironment(home, temp string) []string {
+func nonCredentialSubprocessEnvironment() []string {
+	env := []string{}
+	for _, name := range []string{"PATH", "LANG", "LC_ALL", "LC_CTYPE", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS"} {
+		if value, ok := os.LookupEnv(name); ok && value != "" {
+			env = append(env, name+"="+value)
+		}
+	}
+	return env
+}
+
+func openCodeEnvironment(home, temp string, provider modelprovider.Config) ([]string, error) {
+	credential, err := modelprovider.NewCredentialGuard(provider, os.LookupEnv)
+	if err != nil {
+		return nil, err
+	}
 	env := []string{
 		"HOME=" + home, "TMPDIR=" + temp, "TMP=" + temp, "TEMP=" + temp,
 		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
@@ -861,16 +1029,7 @@ func openCodeEnvironment(home, temp string) []string {
 			env = append(env, name+"="+value)
 		}
 	}
-	return env
-}
-
-func openAIBase(endpoint string) string {
-	parsed, err := url.Parse(strings.TrimSpace(endpoint))
-	if err != nil {
-		return strings.TrimRight(endpoint, "/")
-	}
-	parsed.Path = strings.TrimSuffix(strings.TrimRight(parsed.Path, "/"), "/chat/completions")
-	return strings.TrimRight(parsed.String(), "/")
+	return append(env, credential.Environment()...), nil
 }
 
 func stateForContext(ctx context.Context) engineruntime.TerminalState {

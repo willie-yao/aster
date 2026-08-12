@@ -1,4 +1,4 @@
-// Package fixexecutor runs one credential-free code-generation request.
+// Package fixexecutor runs one non-secret code-generation request.
 package fixexecutor
 
 import (
@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
@@ -30,7 +32,7 @@ type OpenCodeSpec struct {
 	WorkDir     string
 	HomeDir     string
 	TempDir     string
-	Gateway     engineruntime.ModelGatewayConfig
+	Provider    modelprovider.Config
 	Prompt      string
 	MaxSteps    int
 	OutputLimit int64
@@ -55,12 +57,16 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 	}
 	started := now()
 	result := baseResult(request)
+	var credential modelprovider.CredentialGuard
 	finish := func(state engineruntime.TerminalState, reason string) engineruntime.ExecutionResult {
 		result.TerminalState = state
-		result.FailureReason = strings.TrimSpace(reason)
+		result.FailureReason = strings.TrimSpace(credential.SanitizeReason(reason))
 		result.DurationMs = max(now().Sub(started).Milliseconds(), 0)
 		if state == engineruntime.TerminalSucceeded {
 			result.FailureReason = ""
+		}
+		if err := validateCredentialFreeResult(credential, result); err != nil {
+			return compactFailure(request, now().Sub(started), err)
 		}
 		if err := result.Validate(request); err != nil {
 			return compactFailure(request, now().Sub(started), fmt.Errorf("executor result validation: %w", err))
@@ -68,6 +74,11 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 		return result
 	}
 	if err := request.Validate(); err != nil {
+		return compactFailure(request, now().Sub(started), err)
+	}
+	var err error
+	credential, err = modelprovider.NewCredentialGuard(request.ModelProvider, os.LookupEnv)
+	if err != nil {
 		return compactFailure(request, now().Sub(started), err)
 	}
 	if request.CommandPolicy.AllowShell {
@@ -139,16 +150,22 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 	}
 	stdout, stderr, agentErr := runOpenCode(ctx, OpenCodeSpec{
 		Bin: bin, WorkDir: work, HomeDir: home, TempDir: temp,
-		Gateway: request.ModelGateway, Prompt: request.Prompt, MaxSteps: agentSteps,
+		Provider: request.ModelProvider, Prompt: request.Prompt, MaxSteps: agentSteps,
 		OutputLimit: request.OutputLimitBytes,
 	})
-	result.StdoutSummary = appendSummary(result.StdoutSummary, openCodeSummary(stdout))
-	result.StderrSummary = appendSummary(result.StderrSummary, stderr)
 	if err := setGitMetadataWritable(filepath.Join(work, ".git"), true); err != nil {
 		return finish(engineruntime.TerminalFailed, fmt.Sprintf("restore Git metadata: %v", err))
 	}
+	if err := credential.CheckStrings(stdout, stderr); err != nil {
+		return compactFailure(request, now().Sub(started), err)
+	}
+	result.StdoutSummary = appendSummary(result.StdoutSummary, openCodeSummary(stdout))
+	result.StderrSummary = appendSummary(result.StderrSummary, stderr)
+	if errors.Is(agentErr, modelprovider.ErrCredentialExposure) {
+		return compactFailure(request, now().Sub(started), modelprovider.ErrCredentialExposure)
+	}
 	if agentErr != nil {
-		return finish(stateForContext(ctx), fmt.Sprintf("coding agent: %v", agentErr))
+		return finish(stateForContext(ctx), safeOpenCodeFailure(agentErr))
 	}
 	head, stderr, err = runCommand(ctx, work, gitEnvironment(home, temp), maxCapturedStream, "git", "rev-parse", "HEAD")
 	if err != nil || strings.TrimSpace(head) != request.ExpectedBaseSHA {
@@ -254,6 +271,39 @@ func compactFailure(request engineruntime.ExecutionRequest, duration time.Durati
 	}
 }
 
+func validateCredentialFreeResult(credential modelprovider.CredentialGuard, result engineruntime.ExecutionResult) error {
+	if err := credential.CheckStrings(result.Diff, result.StdoutSummary, result.StderrSummary, result.FailureReason); err != nil {
+		return err
+	}
+	for _, name := range result.ChangedFiles {
+		if err := credential.CheckStrings(name); err != nil {
+			return err
+		}
+	}
+	for name, content := range result.Files {
+		if err := credential.CheckStrings(name, content); err != nil {
+			return err
+		}
+	}
+	for _, command := range result.CommandResults {
+		if err := credential.CheckStrings(command.Stdout, command.Stderr, strings.Join(command.Argv, "\x00")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func safeOpenCodeFailure(err error) string {
+	if err == nil {
+		return "coding agent failed"
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return fmt.Sprintf("coding agent exited with status %d", exitErr.ExitCode())
+	}
+	return "coding agent failed"
+}
+
 func validateFinalCommands(commands []engineruntime.ExecutionCommand) error {
 	if len(commands) == 0 {
 		return fmt.Errorf("at least one final validation command is required")
@@ -317,28 +367,44 @@ func renderStagedDiff(ctx context.Context, work, home, temp string, outputLimit 
 }
 
 func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (string, string, error) {
-	if err := writeOpenCodeConfig(spec.HomeDir, spec.Gateway, spec.MaxSteps); err != nil {
+	if err := writeOpenCodeConfig(spec.HomeDir, spec.Provider, spec.MaxSteps); err != nil {
 		return "", "", err
 	}
 	bin, err := exec.LookPath(spec.Bin)
 	if err != nil {
 		return "", "", fmt.Errorf("opencode executable: %w", err)
 	}
-	argv := []string{bin, "run", "--dir", spec.WorkDir, "--format", "json", "--agent", "build", "--model", "engine/" + spec.Gateway.Model, spec.Prompt}
-	return runCommand(ctx, spec.WorkDir, openCodeEnvironment(spec.HomeDir, spec.TempDir), min(int(spec.OutputLimit), maxCapturedStream), argv...)
+	argv := []string{bin, "run", "--dir", spec.WorkDir, "--format", "json", "--agent", "build", "--model", "engine/" + spec.Provider.Model, spec.Prompt}
+	env, err := openCodeEnvironment(spec.HomeDir, spec.TempDir, spec.Provider)
+	if err != nil {
+		return "", "", err
+	}
+	credential, err := modelprovider.NewCredentialGuard(spec.Provider, os.LookupEnv)
+	if err != nil {
+		return "", "", err
+	}
+	return runOpenCodeCommand(ctx, spec.WorkDir, env, credential, min(int(spec.OutputLimit), maxCapturedStream), argv...)
 }
 
-func writeOpenCodeConfig(home string, gateway engineruntime.ModelGatewayConfig, maxSteps int) error {
+func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps int) error {
 	dir := filepath.Join(home, ".config", "opencode")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
+	}
+	baseURL, err := modelprovider.OpenCodeBaseURL(provider)
+	if err != nil {
+		return err
+	}
+	providerOptions := map[string]any{"baseURL": baseURL}
+	if provider.Auth.Type == modelprovider.AuthTypeBearer {
+		providerOptions["apiKey"] = "{env:" + modelprovider.TokenEnv + "}"
 	}
 	config := map[string]any{
 		"$schema": "https://opencode.ai/config.json", "share": "disabled", "autoupdate": false, "snapshot": false,
 		"provider": map[string]any{"engine": map[string]any{
 			"npm": "@ai-sdk/openai-compatible", "name": "engine",
-			"options": map[string]any{"baseURL": openAIBase(gateway.Endpoint)},
-			"models":  map[string]any{gateway.Model: map[string]any{"limit": map[string]any{"context": 128000, "output": 8192}}},
+			"options": providerOptions,
+			"models":  map[string]any{provider.Model: map[string]any{"limit": map[string]any{"context": 128000, "output": 8192}}},
 		}},
 		"agent": map[string]any{"build": map[string]any{"steps": maxSteps}},
 		"permission": map[string]any{
@@ -352,8 +418,12 @@ func writeOpenCodeConfig(home string, gateway engineruntime.ModelGatewayConfig, 
 	return os.WriteFile(filepath.Join(dir, "opencode.json"), data, 0o600)
 }
 
-func openCodeEnvironment(home, temp string) []string {
-	return append(baseEnvironment(home, temp),
+func openCodeEnvironment(home, temp string, provider modelprovider.Config) ([]string, error) {
+	credential, err := modelprovider.NewCredentialGuard(provider, os.LookupEnv)
+	if err != nil {
+		return nil, err
+	}
+	env := append(baseEnvironment(home, temp),
 		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
 		"XDG_DATA_HOME="+filepath.Join(home, ".local", "share"),
 		"XDG_CACHE_HOME="+filepath.Join(home, ".cache"),
@@ -361,6 +431,7 @@ func openCodeEnvironment(home, temp string) []string {
 		"OPENCODE_CONFIG="+filepath.Join(home, ".config", "opencode", "opencode.json"),
 		"OPENCODE_DISABLE_PROJECT_CONFIG=true", "OPENCODE_DISABLE_AUTOUPDATE=true", "OPENCODE_DISABLE_EXTERNAL_SKILLS=true",
 	)
+	return append(env, credential.Environment()...), nil
 }
 
 func gitEnvironment(home, temp string) []string {
@@ -377,6 +448,29 @@ func baseEnvironment(home, temp string) []string {
 		}
 	}
 	return env
+}
+
+func runOpenCodeCommand(ctx context.Context, dir string, env []string, credential modelprovider.CredentialGuard, limit int, argv ...string) (string, string, error) {
+	if len(argv) == 0 {
+		return "", "", fmt.Errorf("empty command")
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Dir = dir
+	cmd.Env = env
+	stdout := newTailBuffer(limit)
+	stderr := newTailBuffer(limit)
+	stdoutCredential := credential.NewDetector()
+	stderrCredential := credential.NewDetector()
+	cmd.Stdout = io.MultiWriter(stdout, stdoutCredential)
+	cmd.Stderr = io.MultiWriter(stderr, stderrCredential)
+	err := cmd.Run()
+	if stdoutCredential.Detected() || stderrCredential.Detected() {
+		return stdout.String(), stderr.String(), modelprovider.ErrCredentialExposure
+	}
+	if ctx.Err() != nil {
+		return stdout.String(), stderr.String(), ctx.Err()
+	}
+	return stdout.String(), stderr.String(), err
 }
 
 func runCommand(ctx context.Context, dir string, env []string, limit int, argv ...string) (string, string, error) {
@@ -480,12 +574,6 @@ func commandExitCode(err error) int {
 func commandOutputLimit(request engineruntime.ExecutionRequest) int {
 	limit := int(request.OutputLimitBytes) / max(len(request.CommandPolicy.Commands)+4, 1)
 	return min(max(limit, 1024), maxCapturedStream)
-}
-
-func openAIBase(endpoint string) string {
-	value := strings.TrimRight(strings.TrimSpace(endpoint), "/")
-	value = strings.TrimSuffix(value, "/chat/completions")
-	return strings.TrimSuffix(value, "/responses")
 }
 
 func appendSummary(current, next string) string {
