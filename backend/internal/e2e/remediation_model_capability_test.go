@@ -10,14 +10,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
@@ -29,7 +32,7 @@ import (
 const (
 	copilotResponsesEndpoint                 = "https://api.githubcopilot.com/responses"
 	remediationModelCapabilityManifest       = "testdata/benchmarks/remediation-investigation-temporal-v1.json"
-	remediationModelCapabilityManifestSHA256 = "dd00b6a1bdcb5024b734c5d7dee02dfeddb62cb4409e31431c2e64f3bfa68483"
+	remediationModelCapabilityManifestSHA256 = "682fbec371afeeb953085016b9b0755f294cb2ed3f36735f379afda18973d529"
 	remediationModelCapabilityRepetitions    = 3
 )
 
@@ -42,6 +45,7 @@ type remediationModelCapabilityManifestDocument struct {
 	ConsumerPrompt       string                                   `json:"consumer_prompt"`
 	ConsumerPromptSHA256 string                                   `json:"consumer_prompt_sha256"`
 	Scorer               remediationModelCapabilityScorer         `json:"scorer"`
+	Diagnostics          []string                                 `json:"diagnostics"`
 	PublicEvidence       remediationModelCapabilityPublicEvidence `json:"public_evidence"`
 	Cases                []remediationModelCapabilityCase         `json:"cases"`
 }
@@ -151,32 +155,72 @@ type remediationModelCapabilityOracle struct {
 }
 
 type remediationModelCapabilityTrial struct {
-	CaseID                string                                  `json:"case_id"`
-	TemporalState         string                                  `json:"temporal_state"`
-	Repetition            int                                     `json:"repetition"`
-	Model                 string                                  `json:"model"`
-	APIMode               string                                  `json:"api_mode"`
-	ProviderIdentity      string                                  `json:"provider_identity"`
-	ProviderFingerprint   string                                  `json:"provider_fingerprint"`
-	TransportFingerprint  string                                  `json:"transport_fingerprint"`
-	TrialStatus           string                                  `json:"trial_status"`
-	ErrorCode             string                                  `json:"error_code,omitempty"`
-	EngineCommit          string                                  `json:"engine_commit"`
-	ManifestSHA256        string                                  `json:"manifest_sha256"`
-	EffectiveInputSHA256  string                                  `json:"effective_input_sha256"`
-	StructurallyValid     bool                                    `json:"structurally_valid"`
-	CandidateKind         string                                  `json:"candidate_kind,omitempty"`
-	CandidateIdentity     *models.RemediationTarget               `json:"candidate_identity,omitempty"`
-	ExactIdentity         bool                                    `json:"exact_identity"`
-	SelectedEvidenceIDs   []string                                `json:"selected_evidence_ids,omitempty"`
-	Evidence              remediationinvestigation.EvidenceStats  `json:"evidence"`
-	Metrics               remediationinvestigation.Metrics        `json:"metrics"`
-	ActualClassification  remediationinvestigation.Classification `json:"actual_classification,omitempty"`
-	VerificationStatus    string                                  `json:"verification_status"`
-	VerifiedActionable    bool                                    `json:"verified_actionable"`
-	CorrectTemporalResult bool                                    `json:"correct_temporal_result"`
-	UnsafeAcceptance      bool                                    `json:"unsafe_acceptance"`
-	CostAvailable         bool                                    `json:"cost_available"`
+	CaseID                       string                                  `json:"case_id"`
+	TemporalState                string                                  `json:"temporal_state"`
+	Repetition                   int                                     `json:"repetition"`
+	Model                        string                                  `json:"model"`
+	APIMode                      string                                  `json:"api_mode"`
+	ProviderIdentity             string                                  `json:"provider_identity"`
+	ProviderFingerprint          string                                  `json:"provider_fingerprint"`
+	TransportFingerprint         string                                  `json:"transport_fingerprint"`
+	TrialStatus                  string                                  `json:"trial_status"`
+	ErrorCode                    string                                  `json:"error_code,omitempty"`
+	EngineCommit                 string                                  `json:"engine_commit"`
+	ManifestSHA256               string                                  `json:"manifest_sha256"`
+	EffectiveInputSHA256         string                                  `json:"effective_input_sha256"`
+	StructurallyValid            bool                                    `json:"structurally_valid"`
+	CandidateKind                string                                  `json:"candidate_kind,omitempty"`
+	CandidateIdentity            *models.RemediationTarget               `json:"candidate_identity,omitempty"`
+	ExactIdentity                bool                                    `json:"exact_identity"`
+	SelectedEvidenceIDs          []string                                `json:"selected_evidence_ids,omitempty"`
+	Evidence                     remediationinvestigation.EvidenceStats  `json:"evidence"`
+	Metrics                      remediationinvestigation.Metrics        `json:"metrics"`
+	ActualClassification         remediationinvestigation.Classification `json:"actual_classification,omitempty"`
+	VerificationStatus           string                                  `json:"verification_status"`
+	VerifiedActionable           bool                                    `json:"verified_actionable"`
+	CorrectTemporalResult        bool                                    `json:"correct_temporal_result"`
+	UnsafeAcceptance             bool                                    `json:"unsafe_acceptance"`
+	CostAvailable                bool                                    `json:"cost_available"`
+	MemoMentionsTargetJob        bool                                    `json:"memo_mentions_target_job"`
+	MemoMentionsTargetContainer  bool                                    `json:"memo_mentions_target_container"`
+	MemoMentionsTargetName       bool                                    `json:"memo_mentions_target_name"`
+	MemoMentionsTargetValue      bool                                    `json:"memo_mentions_target_value"`
+	FinalResultContainsCandidate bool                                    `json:"final_result_contains_candidate"`
+}
+
+type remediationModelCapabilityMemoDiagnostics struct {
+	Job       bool
+	Container bool
+	Name      bool
+	Value     bool
+}
+
+type remediationModelCapabilityDiagnosticModel struct {
+	remediationinvestigation.Model
+	target      models.RemediationTarget
+	diagnostics *remediationModelCapabilityMemoDiagnostics
+}
+
+func (m *remediationModelCapabilityDiagnosticModel) ToolLoop(ctx context.Context, system, user string, registry *tools.Registry, enabled []string, env *tools.Env, options ai.ToolLoopOptions) (string, error) {
+	memo, err := m.Model.ToolLoop(ctx, system, user, registry, enabled, env, options)
+	if err != nil {
+		return memo, err
+	}
+	lower := strings.ToLower(memo)
+	m.diagnostics.Job = containsDiagnosticTerm(lower, m.target.Job)
+	m.diagnostics.Container = containsDiagnosticTerm(lower, m.target.Container)
+	m.diagnostics.Name = containsDiagnosticTerm(lower, m.target.Name)
+	m.diagnostics.Value = containsDiagnosticTerm(lower, m.target.Value)
+	return memo, nil
+}
+
+func containsDiagnosticTerm(lowerMemo, value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return false
+	}
+	pattern := `(^|[^a-z0-9_.-])` + regexp.QuoteMeta(value) + `([^a-z0-9_.-]|$)`
+	return regexp.MustCompile(pattern).FindStringIndex(lowerMemo) != nil
 }
 
 func TestRemediationModelCapabilityManifestAndPreflight(t *testing.T) {
@@ -187,6 +231,13 @@ func TestRemediationModelCapabilityManifestAndPreflight(t *testing.T) {
 	}
 	if manifest.Version != 1 || len(manifest.Cases) != 2 || manifest.Budgets.Repetitions != remediationModelCapabilityRepetitions {
 		t.Fatalf("version=%d cases=%d repetitions=%d", manifest.Version, len(manifest.Cases), manifest.Budgets.Repetitions)
+	}
+	wantDiagnostics := []string{
+		"memo_mentions_target_job", "memo_mentions_target_container", "memo_mentions_target_name",
+		"memo_mentions_target_value", "final_result_contains_candidate",
+	}
+	if !slices.Equal(manifest.Diagnostics, wantDiagnostics) {
+		t.Fatalf("diagnostics=%v want=%v", manifest.Diagnostics, wantDiagnostics)
 	}
 	if manifest.Transport.API != ai.APIResponses || manifest.Transport.EndpointPath != "/responses" ||
 		manifest.Transport.Provider != "github_copilot" || manifest.Transport.Store ||
@@ -269,11 +320,14 @@ func TestRemediationModelCapabilityScorerRejectsIncompleteAndDuplicateTrials(t *
 					"provider_identity": "github_copilot", "provider_fingerprint": model + "-fingerprint",
 					"transport_fingerprint":  "f040744e3082f5cb72da45d764f9975e81569acc43db4e2d18012a3b878214ca",
 					"effective_input_sha256": state + "-input", "trial_status": "no_result",
+					"memo_mentions_target_job": false, "memo_mentions_target_container": false,
+					"memo_mentions_target_name": false, "memo_mentions_target_value": false,
+					"final_result_contains_candidate": false,
 				})
 			}
 		}
 	}
-	run := func(name string, input []map[string]any, wantSuccess bool, wantText string) {
+	run := func(name string, input []map[string]any, wantSuccess bool, wantText string, extraArgs ...string) {
 		t.Helper()
 		path := filepath.Join(t.TempDir(), name+".jsonl")
 		file, err := os.Create(path)
@@ -289,7 +343,9 @@ func TestRemediationModelCapabilityScorerRejectsIncompleteAndDuplicateTrials(t *
 		if err := file.Close(); err != nil {
 			t.Fatal(err)
 		}
-		command := exec.CommandContext(t.Context(), "python3", filepath.Join("..", "..", "..", "hack", "summarize-remediation-model-capability.py"), path)
+		args := []string{filepath.Join("..", "..", "..", "hack", "summarize-remediation-model-capability.py"), path}
+		args = append(args, extraArgs...)
+		command := exec.CommandContext(t.Context(), "python3", args...)
 		output, err := command.CombinedOutput()
 		if wantSuccess && err != nil {
 			t.Fatalf("scorer failed: %v\n%s", err, output)
@@ -299,6 +355,7 @@ func TestRemediationModelCapabilityScorerRejectsIncompleteAndDuplicateTrials(t *
 		}
 	}
 	run("complete", rows, true, "")
+	run("gpt-5.4-only", rows[:6], true, "", "--model", "gpt-5.4")
 	run("missing", rows[:len(rows)-1], false, "expected exactly 12 trials")
 	duplicate := append([]map[string]any(nil), rows...)
 	duplicate[len(duplicate)-1] = duplicate[0]
@@ -324,6 +381,15 @@ func TestRemediationModelCapabilityBenchmark(t *testing.T) {
 	if value := strings.TrimSpace(os.Getenv("AI_API")); value != "" && value != ai.APIResponses {
 		t.Fatalf("AI_API must be %q", ai.APIResponses)
 	}
+	repetitions := manifest.Budgets.Repetitions
+	if value := strings.TrimSpace(os.Getenv("REMEDIATION_MODEL_CAPABILITY_REPETITIONS")); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > manifest.Budgets.Repetitions {
+			t.Fatalf("REMEDIATION_MODEL_CAPABILITY_REPETITIONS must be 1-%d", manifest.Budgets.Repetitions)
+		}
+		repetitions = parsed
+	}
+	caseFilter := remediationModelCapabilityCaseFilter(os.Getenv("REMEDIATION_MODEL_CAPABILITY_CASES"))
 	for _, capabilityCase := range manifest.Cases {
 		if err := preflightRemediationTemporalOracle(t, capabilityCase); err != nil {
 			t.Fatalf("case %s preflight failed before provider request: %v", capabilityCase.ID, err)
@@ -344,9 +410,14 @@ func TestRemediationModelCapabilityBenchmark(t *testing.T) {
 	}
 	defer file.Close()
 	for _, capabilityCase := range manifest.Cases {
-		for repetition := 1; repetition <= manifest.Budgets.Repetitions; repetition++ {
+		if len(caseFilter) > 0 && !caseFilter[capabilityCase.ID] {
+			continue
+		}
+		for repetition := 1; repetition <= repetitions; repetition++ {
 			client := ai.NewClientWithOptions(ai.Options{Token: os.Getenv("AI_TOKEN"), API: ai.APIResponses, Endpoint: endpoint, Model: modelName})
 			input, source, browser := remediationModelCapabilityInput(t, capabilityCase, client.ModelFingerprint())
+			diagnostics := &remediationModelCapabilityMemoDiagnostics{}
+			model := &remediationModelCapabilityDiagnosticModel{Model: client, target: capabilityCase.ScorerPrivate.KnownTarget, diagnostics: diagnostics}
 			row := remediationModelCapabilityTrial{
 				CaseID: capabilityCase.ID, TemporalState: capabilityCase.TemporalState, Repetition: repetition,
 				Model: modelName, APIMode: ai.APIResponses, ProviderIdentity: manifest.Transport.Provider,
@@ -357,7 +428,7 @@ func TestRemediationModelCapabilityBenchmark(t *testing.T) {
 			}
 			recorder, _ := aiusage.NewRecorder("", aiusage.RecorderOptions{RetentionDays: 1, RecentOperations: 10})
 			cache, _ := remediationinvestigation.NewCache("", remediationinvestigation.CacheOptions{})
-			service, err := remediationinvestigation.NewService(client, source, cache, remediationinvestigation.ServiceOptions{
+			service, err := remediationinvestigation.NewService(model, source, cache, remediationinvestigation.ServiceOptions{
 				Timeout: timeout, MaxIters: manifest.Budgets.MaxIters,
 				ContextByteBudget: manifest.Budgets.ContextByteBudget, UsageRecorder: recorder,
 			})
@@ -365,11 +436,16 @@ func TestRemediationModelCapabilityBenchmark(t *testing.T) {
 				t.Fatal(err)
 			}
 			result, runErr := service.Investigate(t.Context(), input, browser, false)
+			row.MemoMentionsTargetJob = diagnostics.Job
+			row.MemoMentionsTargetContainer = diagnostics.Container
+			row.MemoMentionsTargetName = diagnostics.Name
+			row.MemoMentionsTargetValue = diagnostics.Value
 			if runErr != nil {
 				row.TrialStatus, row.ErrorCode = remediationTrialFailure(runErr)
 				row.Metrics = remediationBenchmarkUsageMetrics(recorder)
 			} else {
 				row.TrialStatus, row.StructurallyValid = "valid_result", true
+				row.FinalResultContainsCandidate = result.Entry.Result.Candidate != nil
 				row.CandidateKind = remediationCandidateKind(result.Entry.Result.Candidate)
 				row.CandidateIdentity = temporalCandidateIdentity(result.Entry.Result.Candidate, capabilityCase.InvestigationSource)
 				row.ExactIdentity = temporalTargetIdentityEqual(row.CandidateIdentity, capabilityCase.ScorerPrivate.KnownTarget, capabilityCase.InvestigationSource)
@@ -952,6 +1028,28 @@ func catalogSupportsModel(catalog remediationModelCapabilityCatalog, model, endp
 		}
 	}
 	return false
+}
+
+func TestRemediationModelCapabilityDiagnosticTermsUseExactBoundaries(t *testing.T) {
+	if containsDiagnosticTerm("the tests passed", "test") {
+		t.Fatal("container diagnostic matched a longer word")
+	}
+	for _, value := range []string{"test", "KUBERNETES_VERSION", "v1.23.5", "soak-tests-capz-windows-2019"} {
+		if !containsDiagnosticTerm("candidate "+strings.ToLower(value)+" identified", value) {
+			t.Fatalf("diagnostic did not match %q", value)
+		}
+	}
+}
+
+func remediationModelCapabilityCaseFilter(value string) map[string]bool {
+	filter := map[string]bool{}
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			filter[item] = true
+		}
+	}
+	return filter
 }
 
 func temporalCaseByState(t *testing.T, cases []remediationModelCapabilityCase, state string) remediationModelCapabilityCase {

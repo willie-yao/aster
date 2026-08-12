@@ -40,7 +40,9 @@ The trusted in-process model client runs two bounded phases:
    `repotree` tools are available. Artifact access is bound to the exact causal
    builds. Source access is bound to one immutable repository revision. A
    successful content-bearing artifact read and source read are required.
-   The generic tool loop requires one successful content-bearing
+   Successful `grep_repo` matches are captured as supplemental private source
+   evidence, but they never replace the mandatory file read. The generic tool
+   loop requires one successful content-bearing
    `read_repo_file` before it accepts a tools-free memo. If the model tries to
    answer first, the next request forces that exact function while the model
    still chooses its arguments. When no frozen relevant-file hint resolves at
@@ -50,7 +52,10 @@ The trusted in-process model client runs two bounded phases:
 2. **Structured finalization.** Read tools are removed. The engine supplies a
    private evidence catalog with deterministic IDs. The model may return only a
    cause assessment, concise reason, optional typed candidate target, selected
-   evidence IDs, and a typed non-actionable reason when no candidate exists.
+   evidence IDs, and a typed non-actionable reason when no candidate exists. A
+   candidate is a verification subject, not authorization to modify source. The
+   model returns an exact candidate even when it appears present, and dashboard
+   code derives `actionable`, `already_fixed`, or `insufficient_evidence`.
 
 If the required source tool cannot complete, the generic loop returns a typed,
 content-free failure and target finalization does not run. The evidence ledger
@@ -108,15 +113,19 @@ The model no longer authors evidence paths, source revisions, line numbers,
 quotes, build IDs, or timestamps. Dashboard code reconstructs successful tool
 reads into a private versioned catalog:
 
-- source evidence binds repository, revision, path, and content digest;
+- file-read source evidence binds repository, revision, path, and content digest;
+- source-grep evidence binds repository, revision, safe path, canonical line
+  range, full-file content digest, and one bounded engine-reconstructed match;
+  at most 64 matches and 64 KiB of reconstructed grep text enter one catalog;
 - analysis evidence binds build ID, analysis timestamp, and root-cause digest;
 - artifact evidence binds build ID, artifact path, and content digest.
 
 Each record receives a deterministic ID over its complete identity. The final
 model response may cite only those IDs. Before caching and again during
 deterministic verification, dashboard code resolves every selected ID, rereads
-source and artifacts, rechecks digests, and matches analysis identities to the
-frozen input. Unknown, duplicate, or mutated IDs fail closed.
+source and artifacts, rechecks digests, reconstructs selected grep ranges from
+the immutable source, and matches analysis identities to the frozen input.
+Unknown, duplicate, or mutated IDs fail closed.
 
 The exact candidate path must have a selected source evidence ID. Every causal
 build must have selected analysis or artifact evidence before a terminal result
@@ -124,7 +133,7 @@ can pass deterministic verification.
 
 ## Deterministic verification
 
-Verification version 3 rechecks one accepted private cache entry before it can
+Verification version 4 rechecks one accepted private cache entry before it can
 be considered actionable. The verifier binds the model-result digest, evidence
 catalog digest, and full provenance to the current frozen input, then
 independently:
@@ -188,17 +197,31 @@ The cache lives at:
 The directory is `0700`, the cache and lock files are `0600`, and writes use a
 cross-process file lock plus durable atomic replacement. Cache version 3 binds
 both the minimal model-result digest and the engine-issued evidence-catalog
-digest. Corrupt, oversized, mutated, or unsupported state fails closed. A failed
+digest. Corrupt, oversized, or mutated current-version state fails closed.
+Entries from an older prompt, verification, or evidence-catalog version are
+dropped as semantically stale instead of blocking cache startup. A failed
 refresh records only a bounded category, timestamp, and error digest while
 preserving the previous valid result for the same semantic key. A changed
 identity creates a cache miss instead of reusing the old result.
 
 The server hides dot-directories under `/data`. The Pages workflow also strips
-the remediation-investigation cache before upload. Cached entries contain the
-typed private result, digest-only evidence identities, content-free provenance,
-evidence counters, usage totals, and latency. They do not contain credentials,
-endpoints, raw prompts, raw model responses, transcripts, source bundles, tool
-payloads, or source excerpts.
+the remediation-investigation cache before upload. Cached entries contain the typed private result, deterministic evidence
+identities, content-free provenance, evidence counters, usage totals, and
+latency. A source-grep identity may contain one bounded, verifier-reconstructed
+match. The private cache does not contain credentials, endpoints, raw prompts,
+raw model responses, transcripts, unrestricted source bundles, or raw tool
+payloads. No evidence-catalog contents are published in public causal data.
+
+## Private benchmark diagnostics
+
+The temporal capability runner may compute scorer-private, content-free signals
+for whether the evidence memo mentioned the expected job, container, environment
+name, and value, and whether final structured output contained a candidate. The
+runner stores only those booleans. It does not retain the memo or raw model
+output. Diagnostic case and repetition filters do not relax the default
+comparison scorer, which still requires the complete frozen two-model result set. The
+explicit `--model gpt-5.4` scorer mode requires exactly the six frozen GPT-5.4
+temporal trials and does not accept partial or replacement results.
 
 ## Frozen benchmark
 

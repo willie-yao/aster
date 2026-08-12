@@ -11,22 +11,24 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
 type fakeModel struct {
-	fingerprint   string
-	toolEvents    []ai.ToolLoopEvent
-	toolEventSets [][]ai.ToolLoopEvent
-	memo          string
-	result        string
-	results       []string
-	toolErr       error
-	finalErr      error
-	toolCalls     int
-	finalCalls    int
-	toolOptions   []ai.ToolLoopOptions
+	fingerprint       string
+	toolEvents        []ai.ToolLoopEvent
+	toolEventSets     [][]ai.ToolLoopEvent
+	privateToolEvents []ai.ToolLoopPrivateEvent
+	memo              string
+	result            string
+	results           []string
+	toolErr           error
+	finalErr          error
+	toolCalls         int
+	finalCalls        int
+	toolOptions       []ai.ToolLoopOptions
 }
 
 func (m *fakeModel) ToolLoop(_ context.Context, _, _ string, _ *tools.Registry, _ []string, _ *tools.Env, opts ai.ToolLoopOptions) (string, error) {
@@ -40,6 +42,11 @@ func (m *fakeModel) ToolLoop(_ context.Context, _, _ string, _ *tools.Registry, 
 	for _, event := range events {
 		if opts.Observe != nil {
 			opts.Observe(event)
+		}
+	}
+	for _, event := range m.privateToolEvents {
+		if opts.ObservePrivate != nil {
+			opts.ObservePrivate(event)
 		}
 	}
 	return m.memo, m.toolErr
@@ -203,6 +210,53 @@ func TestServiceCachesEvidenceBackedTypedResult(t *testing.T) {
 	}
 }
 
+func TestServiceIssuesAndVerifiesSourceGrepEvidence(t *testing.T) {
+	input := testFrozenInput()
+	grepRecord := EvidenceRecord{
+		Kind: EvidenceSourceGrep,
+		SourceGrep: &SourceGrepEvidenceIdentity{
+			Repository: input.InvestigationSource, Path: "controllers/reconcile.go", LineStart: 5, LineEnd: 5,
+			ContentDigest: HashText(serviceSourceContent), Match: "func applyFix() {}",
+		},
+	}
+	grepRecord.ID = evidenceRecordID(grepRecord)
+	result := Result{
+		Version: ResultVersion, CauseAssessment: CauseSupports, Reason: "the controller omits applyFix",
+		Candidate: &RequiredCallCandidate{
+			Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
+		},
+		EvidenceIDs: []string{grepRecord.ID},
+	}
+	encoded, _ := json.Marshal(result)
+	model := &fakeModel{
+		fingerprint: strings.Repeat("d", 16), memo: "applyFix exists but reconcile does not call it", result: string(encoded),
+		toolEvents: []ai.ToolLoopEvent{
+			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
+			{Name: "grep_repo", ContentBytes: len("func applyFix() {}")},
+			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: len(serviceSourceContent), ContentBytes: len(serviceSourceContent)},
+		},
+		privateToolEvents: []ai.ToolLoopPrivateEvent{{
+			Name: "grep_repo", Observation: repotree.GrepObservation{Matches: []repotree.GrepMatchObservation{{
+				Path: "controllers/reconcile.go", LineStart: 5, LineEnd: 5,
+			}}},
+		}},
+	}
+	service, input, browser, _ := serviceFixture(t, model)
+	got, err := service.Investigate(t.Context(), input, browser, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, record := range got.Entry.EvidenceCatalog.Records {
+		if record.ID == grepRecord.ID && record.SourceGrep != nil && record.SourceGrep.Match == "func applyFix() {}" {
+			found = true
+		}
+	}
+	if !found || got.Entry.Result.Candidate == nil || got.Entry.Provenance.Evidence.SourceReads != 1 || got.Entry.Provenance.Evidence.SourceGreps != 1 {
+		t.Fatalf("result=%+v", got)
+	}
+}
+
 func TestServiceEvidenceFloorReturnsSafeNonActionableResult(t *testing.T) {
 	model := &fakeModel{
 		fingerprint: strings.Repeat("d", 16), memo: "No source was read.",
@@ -214,6 +268,30 @@ func TestServiceEvidenceFloorReturnsSafeNonActionableResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Entry.Result.Candidate != nil || got.Entry.Result.NonActionableReason == nil || *got.Entry.Result.NonActionableReason != NonActionableInsufficientEvidence || model.finalCalls != 0 {
+		t.Fatalf("result=%+v finalCalls=%d", got, model.finalCalls)
+	}
+}
+
+func TestServiceContentBearingGrepDoesNotReplaceRequiredSourceRead(t *testing.T) {
+	model := &fakeModel{
+		fingerprint: strings.Repeat("d", 16), memo: "grep evidence only",
+		toolEvents: []ai.ToolLoopEvent{
+			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
+			{Name: "grep_repo", ContentBytes: len("func applyFix() {}")},
+		},
+		privateToolEvents: []ai.ToolLoopPrivateEvent{{
+			Name: "grep_repo", Observation: repotree.GrepObservation{Matches: []repotree.GrepMatchObservation{{
+				Path: "controllers/reconcile.go", LineStart: 5, LineEnd: 5,
+			}}},
+		}},
+	}
+	service, input, browser, _ := serviceFixture(t, model)
+	got, err := service.Investigate(t.Context(), input, browser, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Entry.Result.Candidate != nil || got.Entry.Result.NonActionableReason == nil ||
+		*got.Entry.Result.NonActionableReason != NonActionableInsufficientEvidence || model.finalCalls != 0 || got.Entry.Provenance.Evidence.SourceReads != 0 {
 		t.Fatalf("result=%+v finalCalls=%d", got, model.finalCalls)
 	}
 }

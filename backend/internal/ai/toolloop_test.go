@@ -284,6 +284,34 @@ func TestToolLoopObserveReportsContentFreeDispatchTelemetry(t *testing.T) {
 	}
 }
 
+func TestToolLoopPrivateObservationIsOptIn(t *testing.T) {
+	read := &requiredStubTool{name: "read", result: func(json.RawMessage) tools.Result {
+		return tools.Result{Payload: map[string]interface{}{"content": "data"}, ContentBytes: 4, Observation: "private-metadata"}
+	}}
+	reg := tools.NewRegistry()
+	reg.Register(read)
+	client, transport := newRecordedToolLoopClient(APIChatCompletions,
+		toolLoopCall("c1", "read", `{"path":"chosen.go"}`),
+		toolLoopFinal("done"),
+	)
+	var privateEvents []ToolLoopPrivateEvent
+	out, err := client.ToolLoop(t.Context(), "sys", "user", reg, []string{"read"}, &tools.Env{}, ToolLoopOptions{
+		ObservePrivate: func(event ToolLoopPrivateEvent) { privateEvents = append(privateEvents, event) },
+	})
+	if err != nil || out != "done" {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+	if len(privateEvents) != 1 || privateEvents[0].Name != "read" || privateEvents[0].Observation != "private-metadata" || privateEvents[0].Error {
+		t.Fatalf("private events=%+v", privateEvents)
+	}
+	for _, request := range transport.requests {
+		encoded, _ := json.Marshal(request.Messages)
+		if strings.Contains(string(encoded), "private-metadata") {
+			t.Fatal("private tool observation entered the model transcript")
+		}
+	}
+}
+
 func TestToolLoopRequiredToolsCompleteVoluntarilyInOrder(t *testing.T) {
 	list := &requiredStubTool{name: "list"}
 	read := &requiredStubTool{name: "read", result: func(json.RawMessage) tools.Result {

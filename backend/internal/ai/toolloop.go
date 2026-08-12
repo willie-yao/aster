@@ -23,6 +23,16 @@ type ToolLoopEvent struct {
 	Forced          bool
 }
 
+// ToolLoopPrivateEvent carries tool-owned structured observations to an
+// explicitly opted-in caller. It is not logged or added to model messages.
+type ToolLoopPrivateEvent struct {
+	Name            string
+	Error           bool
+	BudgetExhausted bool
+	Forced          bool
+	Observation     any
+}
+
 // RequiredTool describes one exact tool call that must succeed before the loop
 // accepts a tools-free answer. Requirements are satisfied in slice order.
 type RequiredTool struct {
@@ -80,6 +90,9 @@ type ToolLoopOptions struct {
 	RequiredTools []RequiredTool
 	// Observe receives content-free telemetry after each tool dispatch.
 	Observe func(ToolLoopEvent)
+	// ObservePrivate receives tool-owned structured observations. Callers must
+	// keep them private and must not log or publish them.
+	ObservePrivate func(ToolLoopPrivateEvent)
 }
 
 // toolLoopBudget is a large per-dispatch budget handed to tools that gate on
@@ -218,12 +231,18 @@ func (c *Client) ToolLoop(
 			payload, result := dispatchToolLoop(ctx, reg, env, tc)
 			calls++
 			required.observe(tc.Function.Name, result)
+			_, hasError := result.Payload["error"]
 			if opts.Observe != nil {
-				_, hasError := result.Payload["error"]
 				opts.Observe(ToolLoopEvent{
 					Name: tc.Function.Name, Path: toolLoopPath(tc.Function.Arguments),
 					BytesFetched: result.BytesFetched, ContentBytes: result.ContentBytes, Error: hasError,
 					BudgetExhausted: result.BudgetExhausted, Forced: forcedName != "",
+				})
+			}
+			if opts.ObservePrivate != nil {
+				opts.ObservePrivate(ToolLoopPrivateEvent{
+					Name: tc.Function.Name, Error: hasError, BudgetExhausted: result.BudgetExhausted,
+					Forced: forcedName != "", Observation: result.Observation,
 				})
 			}
 			messages = append(messages, modelMessage{

@@ -21,7 +21,7 @@ import (
 var (
 	hexDigest       = regexp.MustCompile(`^[0-9a-f]{16,128}$`)
 	fullHexDigest   = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	evidenceIDShape = regexp.MustCompile(`^(source|analysis|artifact):[0-9a-f]{64}$`)
+	evidenceIDShape = regexp.MustCompile(`^(source|source_grep|analysis|artifact):[0-9a-f]{64}$`)
 	fieldSegment    = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 )
 
@@ -535,11 +535,17 @@ func ValidateEvidenceCatalog(catalog EvidenceCatalog) error {
 }
 
 func validateEvidenceRecord(record EvidenceRecord) error {
+	only := func(kind EvidenceKind) bool {
+		return (kind == EvidenceSource) == (record.Source != nil) &&
+			(kind == EvidenceSourceGrep) == (record.SourceGrep != nil) &&
+			(kind == EvidenceAnalysis) == (record.Analysis != nil) &&
+			(kind == EvidenceArtifact) == (record.Artifact != nil)
+	}
+	if !only(record.Kind) {
+		return fmt.Errorf("evidence identity does not match kind %q", record.Kind)
+	}
 	switch record.Kind {
 	case EvidenceSource:
-		if record.Source == nil || record.Analysis != nil || record.Artifact != nil {
-			return fmt.Errorf("source evidence must contain only source identity")
-		}
 		if err := sourceinvestigation.ValidateRepository(record.Source.Repository); err != nil {
 			return err
 		}
@@ -549,17 +555,27 @@ func validateEvidenceRecord(record EvidenceRecord) error {
 		if !fullHexDigest.MatchString(record.Source.ContentDigest) {
 			return fmt.Errorf("source content digest is invalid")
 		}
-	case EvidenceAnalysis:
-		if record.Analysis == nil || record.Source != nil || record.Artifact != nil {
-			return fmt.Errorf("analysis evidence must contain only analysis identity")
+	case EvidenceSourceGrep:
+		if err := sourceinvestigation.ValidateRepository(record.SourceGrep.Repository); err != nil {
+			return err
 		}
+		if err := validateCandidatePath(record.SourceGrep.Path); err != nil {
+			return err
+		}
+		if record.SourceGrep.LineStart < 1 || record.SourceGrep.LineEnd < record.SourceGrep.LineStart || record.SourceGrep.LineEnd-record.SourceGrep.LineStart > 10 {
+			return fmt.Errorf("source grep line range is invalid")
+		}
+		if !fullHexDigest.MatchString(record.SourceGrep.ContentDigest) {
+			return fmt.Errorf("source grep content digest is invalid")
+		}
+		if strings.TrimSpace(record.SourceGrep.Match) == "" || len(record.SourceGrep.Match) > maxSourceGrepMatchBytes || strings.ContainsRune(record.SourceGrep.Match, '\x00') {
+			return fmt.Errorf("source grep match must be non-empty and bounded")
+		}
+	case EvidenceAnalysis:
 		if strings.TrimSpace(record.Analysis.BuildID) == "" || len(record.Analysis.BuildID) > 256 || strings.TrimSpace(record.Analysis.GeneratedAt) == "" || len(record.Analysis.GeneratedAt) > 128 || !fullHexDigest.MatchString(record.Analysis.RootCauseDigest) {
 			return fmt.Errorf("analysis evidence identity is invalid")
 		}
 	case EvidenceArtifact:
-		if record.Artifact == nil || record.Source != nil || record.Analysis != nil {
-			return fmt.Errorf("artifact evidence must contain only artifact identity")
-		}
 		if strings.TrimSpace(record.Artifact.BuildID) == "" || len(record.Artifact.BuildID) > 256 {
 			return fmt.Errorf("artifact build ID is invalid")
 		}

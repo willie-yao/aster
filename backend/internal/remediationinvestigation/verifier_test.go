@@ -169,6 +169,65 @@ func TestVerifierConvertsPresentCurrentTargetToAlreadyFixed(t *testing.T) {
 	}
 }
 
+func TestVerifierAcceptsAndReconstructsSelectedSourceGrepEvidence(t *testing.T) {
+	missing := "package controllers\nfunc reconcile() error { return nil }\nfunc applyFix() {}\n"
+	verifier, input, entry, browser := verificationFixture(t, missing, missing)
+	for index := range entry.EvidenceCatalog.Records {
+		record := entry.EvidenceCatalog.Records[index]
+		if record.Kind != EvidenceSource {
+			continue
+		}
+		grepRecord := EvidenceRecord{
+			Kind: EvidenceSourceGrep,
+			SourceGrep: &SourceGrepEvidenceIdentity{
+				Repository: input.InvestigationSource, Path: "controllers/reconcile.go", LineStart: 2, LineEnd: 3,
+				ContentDigest: HashText(missing), Match: "func reconcile() error { return nil }\nfunc applyFix() {}",
+			},
+		}
+		grepRecord.ID = evidenceRecordID(grepRecord)
+		entry.EvidenceCatalog.Records[index] = grepRecord
+		for evidenceIndex, id := range entry.Result.EvidenceIDs {
+			if id == record.ID {
+				entry.Result.EvidenceIDs[evidenceIndex] = grepRecord.ID
+			}
+		}
+		break
+	}
+	entry.ResultDigest = ResultDigest(entry.Result)
+	entry.EvidenceCatalogDigest = EvidenceCatalogDigest(entry.EvidenceCatalog)
+	verified, err := verifier.Verify(t.Context(), input, entry, browser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Classification != ClassificationActionable || verified.Proposal == nil {
+		t.Fatalf("verified=%+v", verified)
+	}
+
+	for index := range entry.EvidenceCatalog.Records {
+		record := &entry.EvidenceCatalog.Records[index]
+		if record.Kind != EvidenceSourceGrep {
+			continue
+		}
+		oldID := record.ID
+		record.SourceGrep.Match = "fabricated match"
+		record.ID = evidenceRecordID(*record)
+		for evidenceIndex, id := range entry.Result.EvidenceIDs {
+			if id == oldID {
+				entry.Result.EvidenceIDs[evidenceIndex] = record.ID
+			}
+		}
+	}
+	entry.ResultDigest = ResultDigest(entry.Result)
+	entry.EvidenceCatalogDigest = EvidenceCatalogDigest(entry.EvidenceCatalog)
+	verified, err = verifier.Verify(t.Context(), input, entry, browser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Classification != ClassificationInsufficientEvidence || verified.Proposal != nil {
+		t.Fatalf("tampered grep verified=%+v", verified)
+	}
+}
+
 func TestVerifierRejectsTargetAlreadyPresentInFailureRevision(t *testing.T) {
 	missing := "package controllers\nfunc reconcile() error { return nil }\nfunc applyFix() {}\n"
 	present := "package controllers\nfunc reconcile() error { applyFix(); return nil }\nfunc applyFix() {}\n"

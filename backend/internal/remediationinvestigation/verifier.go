@@ -202,6 +202,10 @@ func verifyCachedEvidence(ctx context.Context, source sourceinvestigation.TreeRe
 			if readErr != nil || HashText(content) != record.Source.ContentDigest {
 				return fmt.Errorf("source evidence content does not match frozen identity")
 			}
+		case EvidenceSourceGrep:
+			if err := verifySourceGrepEvidence(ctx, source, input.InvestigationSource, record); err != nil {
+				return err
+			}
 		case EvidenceArtifact:
 			if record.Artifact == nil {
 				return fmt.Errorf("artifact evidence identity is missing")
@@ -237,7 +241,8 @@ func verifyStructuralRelationship(ctx context.Context, browser artifacts.Browser
 	targetPath := proposal.Target.Path
 	pathCited := false
 	for _, record := range records {
-		if record.Kind == EvidenceSource && record.Source != nil && record.Source.Path == targetPath && record.Source.Repository == input.InvestigationSource {
+		path, repository, ok := sourceEvidenceIdentity(record)
+		if ok && path == targetPath && repository == input.InvestigationSource {
 			pathCited = true
 			break
 		}

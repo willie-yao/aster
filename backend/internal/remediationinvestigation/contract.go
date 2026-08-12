@@ -15,11 +15,11 @@ import (
 )
 
 const (
-	PromptVersion          = 4
+	PromptVersion          = 5
 	SchemaVersion          = 3
-	VerificationVersion    = 3
+	VerificationVersion    = 4
 	ResultVersion          = 3
-	EvidenceCatalogVersion = 1
+	EvidenceCatalogVersion = 2
 )
 
 type Versions struct {
@@ -218,15 +218,25 @@ func (*ConfigurationFieldCandidate) candidateKind() CandidateKind { return Candi
 type EvidenceKind string
 
 const (
-	EvidenceSource   EvidenceKind = "source"
-	EvidenceAnalysis EvidenceKind = "analysis"
-	EvidenceArtifact EvidenceKind = "artifact"
+	EvidenceSource     EvidenceKind = "source"
+	EvidenceSourceGrep EvidenceKind = "source_grep"
+	EvidenceAnalysis   EvidenceKind = "analysis"
+	EvidenceArtifact   EvidenceKind = "artifact"
 )
 
 type SourceEvidenceIdentity struct {
 	Repository    sourceinvestigation.Repository `json:"repository"`
 	Path          string                         `json:"path"`
 	ContentDigest string                         `json:"content_digest"`
+}
+
+type SourceGrepEvidenceIdentity struct {
+	Repository    sourceinvestigation.Repository `json:"repository"`
+	Path          string                         `json:"path"`
+	LineStart     int                            `json:"line_start"`
+	LineEnd       int                            `json:"line_end"`
+	ContentDigest string                         `json:"content_digest"`
+	Match         string                         `json:"match"`
 }
 
 type AnalysisEvidenceIdentity struct {
@@ -244,11 +254,12 @@ type ArtifactEvidenceIdentity struct {
 // EvidenceRecord is private engine-issued evidence identity. The model cites
 // only ID values and cannot author paths, revisions, build IDs, or excerpts.
 type EvidenceRecord struct {
-	ID       string                    `json:"id"`
-	Kind     EvidenceKind              `json:"kind"`
-	Source   *SourceEvidenceIdentity   `json:"source,omitempty"`
-	Analysis *AnalysisEvidenceIdentity `json:"analysis,omitempty"`
-	Artifact *ArtifactEvidenceIdentity `json:"artifact,omitempty"`
+	ID         string                      `json:"id"`
+	Kind       EvidenceKind                `json:"kind"`
+	Source     *SourceEvidenceIdentity     `json:"source,omitempty"`
+	SourceGrep *SourceGrepEvidenceIdentity `json:"source_grep,omitempty"`
+	Analysis   *AnalysisEvidenceIdentity   `json:"analysis,omitempty"`
+	Artifact   *ArtifactEvidenceIdentity   `json:"artifact,omitempty"`
 }
 
 type EvidenceCatalog struct {
