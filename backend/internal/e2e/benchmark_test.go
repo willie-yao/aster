@@ -73,9 +73,10 @@ type benchSignal struct {
 // benchCase pins one historical failure and the signals a correct root cause
 // should contain.
 type benchCase struct {
-	name     string
-	stableID string
-	bucket   string
+	name         string
+	stableID     string
+	bucket       string
+	evidenceMode string
 	// fixtureAsset is the .tar.gz on the benchmark-fixtures release holding a
 	// full snapshot of this build's bucket-relative artifact tree. The default
 	// run extracts it and reads through the local storage provider, so the
@@ -113,8 +114,34 @@ type benchCase struct {
 	projectSHA256        string
 	promptSHA256         string
 	signals              []benchSignal
+	sourcePaths          []string
+	sourceSignals        []benchSignal
 	evidenceGroups       []benchmarkEvidenceGroup
 	oracleEvidenceSHA256 string
+}
+
+const (
+	benchmarkEvidenceModeArtifactOnly      = "artifact_only"
+	benchmarkEvidenceModeArtifactAndSource = "artifact_and_source"
+)
+
+func validBenchmarkEvidenceMode(value string) bool {
+	return value == benchmarkEvidenceModeArtifactOnly || value == benchmarkEvidenceModeArtifactAndSource
+}
+
+func benchmarkSourceExpectationSHA256(bc benchCase) string {
+	var input strings.Builder
+	for _, path := range bc.sourcePaths {
+		fmt.Fprintf(&input, "path\x00%s\n", path)
+	}
+	for _, signal := range bc.sourceSignals {
+		negative := ""
+		if signal.negated != nil {
+			negative = signal.negated.String()
+		}
+		fmt.Fprintf(&input, "signal\x00%s\x00%s\x00%s\x00%t\n", signal.name, signal.re.String(), negative, signal.must)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(input.String())))
 }
 
 type benchmarkOutcome string
@@ -1526,6 +1553,8 @@ type benchmarkAssessment struct {
 	total            int
 	diagnosisHits    int
 	diagnosisTotal   int
+	sourceHits       int
+	sourceTotal      int
 	transientCorrect *bool
 	forbiddenPassed  int
 	forbiddenTotal   int
@@ -1534,8 +1563,8 @@ type benchmarkAssessment struct {
 }
 
 func assessBenchmarkCase(bc benchCase, tc *models.TestCase) benchmarkAssessment {
-	assessment := benchmarkAssessment{total: len(bc.signals) + len(bc.forbidden), forbiddenTotal: len(bc.forbidden)}
-	for _, signal := range bc.signals {
+	assessment := benchmarkAssessment{total: len(bc.signals) + len(bc.sourceSignals) + len(bc.forbidden), sourceTotal: len(bc.sourceSignals), forbiddenTotal: len(bc.forbidden)}
+	for _, signal := range append(slices.Clone(bc.signals), bc.sourceSignals...) {
 		if signal.must {
 			assessment.diagnosisTotal++
 		}
@@ -1554,11 +1583,14 @@ func assessBenchmarkCase(bc benchCase, tc *models.TestCase) benchmarkAssessment 
 		return assessment
 	}
 	scored := strings.ToLower(strings.Join([]string{tc.AISummary.Summary, tc.AIAnalysis.RootCause, tc.AIAnalysis.SuggestedFix}, "\n"))
-	for _, signal := range bc.signals {
+	for index, signal := range append(slices.Clone(bc.signals), bc.sourceSignals...) {
 		hit := signal.matches(scored)
 		assessment.results = append(assessment.results, benchmarkSignalResult{name: signal.name, hit: hit, required: signal.must})
 		if hit {
 			assessment.hits++
+			if index >= len(bc.signals) {
+				assessment.sourceHits++
+			}
 			if signal.must {
 				assessment.diagnosisHits++
 			}

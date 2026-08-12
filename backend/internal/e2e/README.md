@@ -199,6 +199,15 @@ moderately successful merely because it avoids forbidden claims.
 The telemetry never prints prompts, model response text, Tool arguments, Tool
 output, endpoints, model coordinates, credentials, or full hashes.
 
+Each frozen case declares an `evidence_mode`. `artifact_only` requires artifact
+evidence and canonical artifact citations but does not require a repository read.
+`artifact_and_source` additionally freezes expected source paths and source-backed
+diagnosis signals. It requires a successful source read or grep, verified canonical
+citations for every expected path, and all source-backed signals. Source citations,
+relevant files, or source-backed claims remain invalid without source evidence
+regardless of the case mode. The exact six-trial comparison reports both categories
+separately and is incomplete when either category is absent.
+
 
 To separate retrieval from reasoning on the Kueue case, run the same cold trial
 with the frozen oracle condition:
