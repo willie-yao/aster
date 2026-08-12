@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
@@ -21,7 +22,7 @@ func TestAgentSandboxProductionKindFixture(t *testing.T) {
 	if gatewayEndpoint == "" {
 		t.Fatal("AGENT_SANDBOX_TEST_GATEWAY_ENDPOINT is required")
 	}
-	gateway := engineruntime.ModelGatewayConfig{Endpoint: gatewayEndpoint, Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1"}
+	gateway := testGatewayProvider(gatewayEndpoint, "fixture-model")
 	runtime, err := newAgentSandboxRuntimeFromEnvForKindTest(gateway, 5*time.Minute, 256<<10)
 	if err != nil {
 		t.Fatal(err)
@@ -95,10 +96,10 @@ func TestWriteAgentSandboxEvaluationFixtures(t *testing.T) {
 	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	gateway := engineruntime.ModelGatewayConfig{Endpoint: gatewayEndpoint, Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1"}
+	gateway := testGatewayProvider(gatewayEndpoint, "fixture-model")
 	opts := AgentSandboxOptions{
 		Namespace: namespace, Image: image, ServiceAccountName: "fix-workload", RuntimeClassName: runtimeClass,
-		ModelGateway: gateway, Timeout: 5 * time.Minute, OutputLimitBytes: 256 << 10,
+		ModelProvider: gateway, Timeout: 5 * time.Minute, OutputLimitBytes: 256 << 10,
 	}
 	production := newAgentSandboxRuntimeForTest(nil, opts)
 	localKind := newAgentSandboxRuntimeForKindTest(nil, opts)
@@ -128,12 +129,12 @@ func TestWriteAgentSandboxEvaluationFixtures(t *testing.T) {
 	}
 }
 
-func agentSandboxEvaluationSpec(gateway engineruntime.ModelGatewayConfig) engineruntime.GenerateSpec {
+func agentSandboxEvaluationSpec(gateway modelprovider.Config) engineruntime.GenerateSpec {
 	const baseSHA = "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d"
 	return engineruntime.GenerateSpec{
 		Repo:        engineruntime.RepoRef{Owner: "octocat", Name: "Hello-World", Ref: baseSHA},
 		Instruction: "Read README and replace Hello World with Hello Agent Sandbox. Do not run shell commands.",
-		MaxSteps:    5, MaxFiles: 1, ModelGateway: gateway,
+		MaxSteps:    5, MaxFiles: 1, ModelProvider: gateway,
 		Timeout: 5 * time.Minute, ExpectedBaseSHA: baseSHA, OutputLimitBytes: 256 << 10,
 		CommandPolicy: engineruntime.CommandPolicy{Commands: []engineruntime.ExecutionCommand{{
 			Argv: []string{"git", "diff", "--cached", "--check"}, TimeoutSeconds: 30,

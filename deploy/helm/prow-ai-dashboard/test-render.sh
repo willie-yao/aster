@@ -1751,10 +1751,13 @@ project:
           allowed_commands:
             - argv: [git, diff, --cached, --check]
               timeout: 30s
-          model_gateway:
-            endpoint: https://fake-gateway.fix-eval.svc.cluster.local/v1
+          model_provider:
+            credential_mode: direct
+            api: chat_completions
+            endpoint: https://api.githubcopilot.com/chat/completions
             model: fixture-model
-            protocol_version: openai-chat-completions-v1
+            auth:
+              type: bearer
   systemPrompt: test prompt
 agentSandbox:
   fixRuntime:
@@ -1772,10 +1775,15 @@ agentSandbox:
     workloadServiceAccount:
       create: true
       name: fix-workload
-    modelGateway:
-      endpoint: https://fake-gateway.fix-eval.svc.cluster.local/v1
+    modelProvider:
+      credentialMode: direct
+      api: chat_completions
+      endpoint: https://api.githubcopilot.com/chat/completions
       model: fixture-model
-      protocolVersion: openai-chat-completions-v1
+      auth:
+        type: bearer
+        existingSecret: agent-sandbox-model
+        tokenKey: AI_TOKEN
       publicCAPrivateDNS: false
     maxSteps: 30
     maxFiles: 3
@@ -1815,7 +1823,16 @@ grep -Fq 'verbs: ["create", "get", "list", "watch", "delete"]' "$tmp/agent-sandb
 grep -Fq 'resources: ["pods/log"]' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'automountServiceAccountToken: false' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'serviceAccountName: test-prow-ai-dashboard-agent-sandbox-client' "$tmp/agent-sandbox-render.yaml"
-grep -Fq 'name: AGENT_SANDBOX_MODEL_GATEWAY_ENDPOINT' "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'name: AGENT_SANDBOX_MODEL_PROVIDER_ENDPOINT' "$tmp/agent-sandbox-render.yaml"
+grep -Fq "variables.container.env[1].name == 'PROW_AI_MODEL_PROVIDER_TOKEN'" "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'size(variables.container.env) == 2' "$tmp/agent-sandbox-render.yaml"
+grep -Fq '(!has(variables.container.envFrom) || size(variables.container.envFrom) == 0)' "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'variables.container.env[1].valueFrom.secretKeyRef.name == \"agent-sandbox-model\"' "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'variables.container.env[1].valueFrom.secretKeyRef.key == \"AI_TOKEN\"' "$tmp/agent-sandbox-render.yaml"
+if grep -Eq '^  name: agent-sandbox-model$' "$tmp/agent-sandbox-render.yaml"; then
+  echo 'Agent Sandbox chart rendered or copied a provider Secret' >&2
+  exit 1
+fi
 grep -A1 -F 'name: AGENT_SANDBOX_OUTPUT_LIMIT_BYTES' "$tmp/agent-sandbox-render.yaml" | grep -Fq 'value: "1048576"'
 grep -Fq 'local/agent-sandbox-fix-executor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$tmp/agent-sandbox-render.yaml"
 if [ "$(grep -Fc 'image: local/remote-fixer:sha-abcdef0' "$tmp/agent-sandbox-render.yaml")" -ne 2 ]; then
@@ -1865,16 +1882,28 @@ if grep -Fq 'kind: CustomResourceDefinition' "$tmp/agent-sandbox-render.yaml" ||
   exit 1
 fi
 
-python3 - "$tmp/agent-sandbox.yaml" "$tmp/agent-sandbox-public-ca.yaml" <<'PYGATEWAY'
+python3 - "$tmp/agent-sandbox.yaml" "$tmp/agent-sandbox-direct-none.yaml" "$tmp/agent-sandbox-gateway.yaml" <<'PYPROVIDERS'
 from pathlib import Path
 import sys
-text=Path(sys.argv[1]).read_text().replace('https://fake-gateway.fix-eval.svc.cluster.local/v1','https://model-gateway.platform.example.com/v1')
-text=text.replace('            protocol_version: openai-chat-completions-v1\n','            protocol_version: openai-chat-completions-v1\n            public_ca_private_dns: true\n')
-text=text.replace('      publicCAPrivateDNS: false\n','      publicCAPrivateDNS: true\n')
-Path(sys.argv[2]).write_text(text)
-PYGATEWAY
-helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-public-ca.yaml" > "$tmp/agent-sandbox-public-ca-render.yaml"
-grep -A1 -F 'name: AGENT_SANDBOX_MODEL_GATEWAY_PUBLIC_CA_PRIVATE_DNS' "$tmp/agent-sandbox-public-ca-render.yaml" | grep -Fq 'value: "true"'
+source=Path(sys.argv[1]).read_text()
+direct_none=source.replace('              type: bearer\n', '              type: none\n').replace('        type: bearer\n', '        type: none\n')
+direct_none=direct_none.replace('        existingSecret: agent-sandbox-model\n', '        existingSecret: ""\n').replace('        tokenKey: AI_TOKEN\n', '        tokenKey: ""\n')
+Path(sys.argv[2]).write_text(direct_none)
+gateway=direct_none.replace('            credential_mode: direct\n', '            credential_mode: gateway\n').replace('      credentialMode: direct\n', '      credentialMode: gateway\n')
+gateway=gateway.replace('https://api.githubcopilot.com/chat/completions', 'https://fake-gateway.fix-eval.svc.cluster.local/v1/chat/completions')
+Path(sys.argv[3]).write_text(gateway)
+PYPROVIDERS
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-direct-none.yaml" > "$tmp/agent-sandbox-direct-none-render.yaml"
+if grep -Fq 'PROW_AI_MODEL_PROVIDER_TOKEN' "$tmp/agent-sandbox-direct-none-render.yaml"; then
+  echo 'direct unauthenticated render admitted a provider Secret reference' >&2
+  exit 1
+fi
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-gateway.yaml" > "$tmp/agent-sandbox-gateway-render.yaml"
+grep -A1 -F 'name: AGENT_SANDBOX_MODEL_PROVIDER_CREDENTIAL_MODE' "$tmp/agent-sandbox-gateway-render.yaml" | grep -Fq 'value: "gateway"'
+if grep -Fq 'PROW_AI_MODEL_PROVIDER_TOKEN' "$tmp/agent-sandbox-gateway-render.yaml"; then
+  echo 'gateway render admitted a provider Secret reference' >&2
+  exit 1
+fi
 
 expect_agent_sandbox_fail() {
   local name=$1 expected=$2
@@ -1890,23 +1919,13 @@ expect_agent_sandbox_fail runtime-class 'runtimeClassName is required' --set-str
 expect_agent_sandbox_fail mutable-image 'image.digest must be an immutable sha256 digest' --set agentSandbox.fixRuntime.image.digest=sha-deadbeef
 expect_agent_sandbox_fail mutable-dashboard-image 'dashboardImage tag must be an immutable' --set-string agentSandbox.fixRuntime.dashboardImage.tag=latest
 expect_agent_sandbox_fail dashboard-image-digest 'dashboardImage.repository must not contain' --set-string agentSandbox.fixRuntime.dashboardImage.repository=local/remote-fixer@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-expect_agent_sandbox_fail public-gateway 'must be an internal HTTPS service URL or publicCAPrivateDNS must be true' --set agentSandbox.fixRuntime.modelGateway.endpoint=https://api.openai.com/v1
-if helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-public-ca.yaml" --set agentSandbox.fixRuntime.modelGateway.endpoint=https://api.anthropic.com/v1 > "$tmp/agent-sandbox-direct-provider.out" 2>&1; then
-  echo 'direct provider endpoint was accepted with public CA private DNS enabled' >&2
-  exit 1
-fi
-validation_error_contains "$tmp/agent-sandbox-direct-provider.out" 'must not be a direct model-provider endpoint'
-python3 - "$tmp/agent-sandbox-public-ca.yaml" "$tmp/agent-sandbox-nvidia.yaml" <<'PYNVIDIA'
-from pathlib import Path
-import sys
-text=Path(sys.argv[1]).read_text().replace('https://model-gateway.platform.example.com/v1','https://integrate.api.nvidia.com/v1/chat/completions')
-Path(sys.argv[2]).write_text(text)
-PYNVIDIA
-if helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-nvidia.yaml" > "$tmp/agent-sandbox-nvidia.out" 2>&1; then
-  echo 'NVIDIA direct provider endpoint was accepted' >&2
-  exit 1
-fi
-validation_error_contains "$tmp/agent-sandbox-nvidia.out" 'must not be a direct model-provider endpoint'
+expect_agent_sandbox_fail missing-bearer-secret 'auth.existingSecret is required for bearer auth' --set-string agentSandbox.fixRuntime.modelProvider.auth.existingSecret=
+expect_agent_sandbox_fail missing-bearer-key 'auth.tokenKey is required for bearer auth' --set-string agentSandbox.fixRuntime.modelProvider.auth.tokenKey=
+expect_agent_sandbox_fail none-with-secret 'auth.type=none must not set Secret fields' --set agentSandbox.fixRuntime.modelProvider.auth.type=none
+expect_agent_sandbox_fail gateway-bearer 'gateway mode requires auth.type=none' --set agentSandbox.fixRuntime.modelProvider.credentialMode=gateway
+expect_agent_sandbox_fail direct-private-dns 'publicCAPrivateDNS applies only to gateway mode' --set agentSandbox.fixRuntime.modelProvider.publicCAPrivateDNS=true
+expect_agent_sandbox_fail provider-path 'chat_completions URL' --set agentSandbox.fixRuntime.modelProvider.endpoint=https://api.githubcopilot.com/v1
+expect_agent_sandbox_fail project-mode-mismatch 'credentialMode must match project' --set agentSandbox.fixRuntime.modelProvider.credentialMode=gateway --set agentSandbox.fixRuntime.modelProvider.auth.type=none --set-string agentSandbox.fixRuntime.modelProvider.auth.existingSecret= --set-string agentSandbox.fixRuntime.modelProvider.auth.tokenKey= --set agentSandbox.fixRuntime.modelProvider.endpoint=https://fake-gateway.fix-eval.svc.cluster.local/v1/chat/completions
 expect_agent_sandbox_fail orka-combination 'cannot be combined with Orka runtimes' --set orka.fixRuntime.enabled=true
 expect_agent_sandbox_fail command-mismatch 'must end with argv [git diff --cached --check]' --set-string agentSandbox.fixRuntime.allowedCommands[0].argv[0]=go
 expect_agent_sandbox_fail command-timeout 'timeout exceeds the execution timeout' --set-string agentSandbox.fixRuntime.allowedCommands[0].timeout=11m
@@ -1955,10 +1974,16 @@ agentSandbox:
     workloadServiceAccount:
       create: true
       name: analyzer-workload
-    modelGateway:
-      endpoint: https://model-gateway.platform.svc.cluster.local/v1
+    modelProvider:
+      credentialMode: gateway
+      api: chat_completions
+      endpoint: https://model-gateway.platform.svc.cluster.local/v1/chat/completions
       model: analyzer-model
-      protocolVersion: openai-chat-completions-v1
+      auth:
+        type: none
+        existingSecret: ""
+        tokenKey: ""
+      publicCAPrivateDNS: false
     timeout: 15m
     outputLimitBytes: 262144
     pollInterval: 250ms
@@ -2031,6 +2056,26 @@ if grep -Eq 'resources: \["(secrets|services|persistentvolumeclaims|pods/exec|po
   exit 1
 fi
 
+python3 - "$tmp/agent-sandbox-analyzer.yaml" "$tmp/agent-sandbox-analyzer-direct.yaml" <<'PYANALYZERDIRECT'
+from pathlib import Path
+import sys
+text=Path(sys.argv[1]).read_text()
+text=text.replace('      credentialMode: gateway\n', '      credentialMode: direct\n')
+text=text.replace('https://model-gateway.platform.svc.cluster.local/v1/chat/completions', 'https://api.openai.com/v1/chat/completions')
+text=text.replace('        type: none\n        existingSecret: ""\n        tokenKey: ""\n', '        type: bearer\n        existingSecret: analyzer-model\n        tokenKey: AI_TOKEN\n')
+text=text.replace('      mode: kubernetes\n', '      mode: cilium\n')
+Path(sys.argv[2]).write_text(text)
+PYANALYZERDIRECT
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-analyzer-direct.yaml" > "$tmp/agent-sandbox-analyzer-direct-render.yaml"
+grep -Fq 'kind: CiliumNetworkPolicy' "$tmp/agent-sandbox-analyzer-direct-render.yaml"
+grep -Fq 'toFQDNs:' "$tmp/agent-sandbox-analyzer-direct-render.yaml"
+grep -Fq 'matchName: "api.openai.com"' "$tmp/agent-sandbox-analyzer-direct-render.yaml"
+grep -Fq "variables.container.env[1].name == 'PROW_AI_MODEL_PROVIDER_TOKEN'" "$tmp/agent-sandbox-analyzer-direct-render.yaml"
+grep -Fq 'size(variables.container.env) == 2' "$tmp/agent-sandbox-analyzer-direct-render.yaml"
+grep -Fq '(!has(variables.container.envFrom) || size(variables.container.envFrom) == 0)' "$tmp/agent-sandbox-analyzer-direct-render.yaml"
+grep -Fq 'variables.container.env[1].valueFrom.secretKeyRef.name == \"analyzer-model\"' "$tmp/agent-sandbox-analyzer-direct-render.yaml"
+grep -Fq 'variables.container.env[1].valueFrom.secretKeyRef.key == \"AI_TOKEN\"' "$tmp/agent-sandbox-analyzer-direct-render.yaml"
+
 helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-analyzer.yaml" \
   --show-only templates/worker-deployment.yaml > "$tmp/agent-sandbox-analyzer-worker.yaml"
 if grep -Fq 'AGENT_SANDBOX_ANALYSIS_' "$tmp/agent-sandbox-analyzer-worker.yaml" || grep -Fq 'test-prow-ai-dashboard-agent-sandbox-analyzer-client' "$tmp/agent-sandbox-analyzer-worker.yaml"; then
@@ -2059,7 +2104,7 @@ text = Path(sys.argv[1]).read_text().replace('      gatewayTargetPort: 8443\n', 
 Path(sys.argv[2]).write_text(text)
 PYANALYZERLEGACY
 helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-analyzer-legacy.yaml" \
-  --set-string agentSandbox.analyzer.modelGateway.endpoint=https://model-gateway.platform.svc.cluster.local:8443/v1 \
+  --set-string agentSandbox.analyzer.modelProvider.endpoint=https://model-gateway.platform.svc.cluster.local:8443/v1/chat/completions \
   --set agentSandbox.analyzer.networkPolicy.gatewayPort=8443 \
   --set agentSandbox.analyzer.networkPolicy.mode=cilium > "$tmp/agent-sandbox-analyzer-legacy-render.yaml"
 grep -A3 -F 'toPorts:' "$tmp/agent-sandbox-analyzer-legacy-render.yaml" | grep -Fq 'port: "8443"'
@@ -2079,7 +2124,9 @@ expect_agent_sandbox_analyzer_fail() {
   fi
   validation_error_contains "$tmp/agent-sandbox-analyzer-$name.out" "$expected"
 }
-expect_agent_sandbox_analyzer_fail direct-provider 'must use internal service DNS' --set agentSandbox.analyzer.modelGateway.endpoint=https://api.openai.com/v1
+expect_agent_sandbox_analyzer_fail external-with-kubernetes 'external direct providers require networkPolicy.mode=cilium' --set agentSandbox.analyzer.modelProvider.credentialMode=direct --set agentSandbox.analyzer.modelProvider.auth.type=none --set agentSandbox.analyzer.modelProvider.endpoint=https://api.openai.com/v1/chat/completions
+expect_agent_sandbox_analyzer_fail gateway-bearer 'gateway mode requires auth.type=none' --set agentSandbox.analyzer.modelProvider.auth.type=bearer --set agentSandbox.analyzer.modelProvider.auth.existingSecret=analyzer-model --set agentSandbox.analyzer.modelProvider.auth.tokenKey=AI_TOKEN
+expect_agent_sandbox_analyzer_fail none-with-secret 'auth.type=none must not set Secret fields' --set agentSandbox.analyzer.modelProvider.credentialMode=direct --set agentSandbox.analyzer.modelProvider.endpoint=https://api.openai.com/v1/chat/completions --set agentSandbox.analyzer.modelProvider.auth.existingSecret=unexpected
 expect_agent_sandbox_analyzer_fail mutable-executor 'executorImage.digest must be an immutable sha256 digest' --set-string agentSandbox.analyzer.executorImage.digest=latest
 expect_agent_sandbox_analyzer_fail missing-input 'input.existingClaim is required' --set-string agentSandbox.analyzer.input.existingClaim=
 expect_agent_sandbox_analyzer_fail public-data-input 'input.existingClaim must differ from the public dashboard data PVC' --set persistence.existingClaim=analyzer-input
@@ -2093,9 +2140,9 @@ expect_agent_sandbox_analyzer_fail quota-disabled 'quota.enabled must be true' -
 expect_agent_sandbox_analyzer_fail timeout-over-limit 'timeout must be at most 30m' --set-string agentSandbox.analyzer.timeout=31m
 expect_agent_sandbox_analyzer_fail poll-too-slow 'pollInterval must be below 30s' --set-string agentSandbox.analyzer.pollInterval=30s
 expect_agent_sandbox_analyzer_fail ephemeral-storage-mismatch 'ephemeral-storage request must equal its limit' --set-string agentSandbox.analyzer.resources.requests.ephemeral-storage=1Gi
-expect_agent_sandbox_analyzer_fail gateway-port-mismatch 'networkPolicy.gatewayPort must match modelGateway.endpoint' --set agentSandbox.analyzer.networkPolicy.gatewayPort=8443
+expect_agent_sandbox_analyzer_fail gateway-port-mismatch 'networkPolicy.gatewayPort must match modelProvider.endpoint' --set agentSandbox.analyzer.networkPolicy.gatewayPort=8443
 expect_agent_sandbox_analyzer_fail invalid-gateway-target-port 'networkPolicy.gatewayTargetPort is invalid' --skip-schema-validation --set agentSandbox.analyzer.networkPolicy.gatewayTargetPort=0
-expect_agent_sandbox_analyzer_fail cilium-gateway-service 'cilium mode requires a Kubernetes Service gateway endpoint' --set agentSandbox.analyzer.networkPolicy.mode=cilium --set agentSandbox.analyzer.modelGateway.endpoint=https://gateway.models.internal:8443/v1 --set agentSandbox.analyzer.networkPolicy.gatewayPort=8443
+expect_agent_sandbox_analyzer_fail cilium-gateway-service 'cilium mode requires a Kubernetes Service internal provider endpoint' --set agentSandbox.analyzer.networkPolicy.mode=cilium --set agentSandbox.analyzer.modelProvider.endpoint=https://gateway.models.internal:8443/v1/chat/completions --set agentSandbox.analyzer.networkPolicy.gatewayPort=8443
 expect_agent_sandbox_analyzer_fail cilium-dns-namespace 'cilium mode requires dnsNamespaceSelector.kubernetes.io/metadata.name' --set agentSandbox.analyzer.networkPolicy.mode=cilium --set-string 'agentSandbox.analyzer.networkPolicy.dnsNamespaceSelector.kubernetes\.io/metadata\.name='
 expect_agent_sandbox_analyzer_fail reserved-env 'must not override reserved analyzer variable' --set fetcher.extraEnv[0].name=AGENT_SANDBOX_ANALYSIS_IMAGE --set fetcher.extraEnv[0].value=attacker
 

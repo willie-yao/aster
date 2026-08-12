@@ -18,6 +18,7 @@ import (
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentsandbox"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
@@ -116,7 +117,7 @@ func agentSandboxSpec() engineruntime.GenerateSpec {
 		Instruction:     "create one deterministic file",
 		MaxSteps:        2,
 		MaxFiles:        1,
-		ModelGateway:    engineruntime.ModelGatewayConfig{Endpoint: "https://gateway.internal.example/v1", Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1"},
+		ModelProvider:   testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture-model"),
 		Timeout:         time.Minute,
 		ExpectedBaseSHA: "0123456789abcdef0123456789abcdef01234567",
 		CommandPolicy: engineruntime.CommandPolicy{Commands: []engineruntime.ExecutionCommand{{
@@ -185,8 +186,8 @@ func TestAgentSandboxProductionConstructorPinsRuntimeDefaultAppArmor(t *testing.
 	opts := AgentSandboxOptions{
 		Namespace: "fix-eval", Image: "registry.internal.example/fixer@sha256:" + strings.Repeat("a", 64),
 		ServiceAccountName: "fix-workload", RuntimeClassName: "kata-vm-isolation",
-		ModelGateway: engineruntime.ModelGatewayConfig{Endpoint: "https://gateway.fix-eval.svc.cluster.local/v1", Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1"},
-		Timeout:      10 * time.Minute, OutputLimitBytes: 128 << 10,
+		ModelProvider: testGatewayProvider("https://gateway.fix-eval.svc.cluster.local/v1/chat/completions", "fixture-model"),
+		Timeout:       10 * time.Minute, OutputLimitBytes: 128 << 10,
 	}
 	runtime, err := NewAgentSandboxRuntime(&fakeAgentSandboxAPI{}, opts)
 	if err != nil {
@@ -237,7 +238,7 @@ func TestAgentSandboxRunUsesPurposeBoundResultChannelWithoutWorkspace(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Output != `{"review":"pass"}` || result.FinishedReason != "PodSucceeded" || !result.Telemetry.CleanupCompleted || result.Telemetry.UsageStatus != "unavailable_from_model_gateway" {
+	if result.Output != `{"review":"pass"}` || result.FinishedReason != "PodSucceeded" || !result.Telemetry.CleanupCompleted || result.Telemetry.UsageStatus != "unavailable_from_model_gateway" || result.Telemetry.ProviderCredentialMode != modelprovider.CredentialModeGateway || result.Telemetry.ProviderAPI != modelprovider.APIChatCompletions {
 		t.Fatalf("result = %+v", result)
 	}
 	metadata := api.object["metadata"].(map[string]any)
@@ -585,8 +586,8 @@ func TestAgentSandboxRuntimeRejectsUnreconstructableResult(t *testing.T) {
 func testAgentSandboxOptions() AgentSandboxOptions {
 	return AgentSandboxOptions{
 		Namespace: "fix-eval", Image: "fixer:test", ServiceAccountName: "fix-workload",
-		ModelGateway: engineruntime.ModelGatewayConfig{Endpoint: "https://gateway.internal.example/v1", Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1"},
-		Timeout:      time.Minute, OutputLimitBytes: 512 << 10, PollEvery: time.Millisecond,
+		ModelProvider: testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture-model"),
+		Timeout:       time.Minute, OutputLimitBytes: 512 << 10, PollEvery: time.Millisecond,
 	}
 }
 
@@ -714,10 +715,8 @@ func TestAgentSandboxProductionOptionsFailClosed(t *testing.T) {
 		Image:              "registry.internal.example/fixer@sha256:" + strings.Repeat("a", 64),
 		ServiceAccountName: "fix-workload",
 		RuntimeClassName:   "kata-vm-isolation",
-		ModelGateway: engineruntime.ModelGatewayConfig{
-			Endpoint: "https://gateway.fix-eval.svc.cluster.local/v1", Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1",
-		},
-		Timeout: 10 * time.Minute, OutputLimitBytes: 128 << 10,
+		ModelProvider:      testGatewayProvider("https://gateway.fix-eval.svc.cluster.local/v1/chat/completions", "fixture-model"),
+		Timeout:            10 * time.Minute, OutputLimitBytes: 128 << 10,
 	}
 	for _, tc := range []struct {
 		name string
@@ -734,20 +733,22 @@ func TestAgentSandboxProductionOptionsFailClosed(t *testing.T) {
 			o.StagerInputClaim = "Invalid_Claim"
 		}, want: "input claim"},
 		{name: "runtime class", edit: func(o *AgentSandboxOptions) { o.RuntimeClassName = "" }, want: "runtime class"},
-		{name: "insecure gateway", edit: func(o *AgentSandboxOptions) { o.ModelGateway.Endpoint = "http://gateway.fix-eval.svc/v1" }, want: "absolute https"},
-		{name: "public gateway", edit: func(o *AgentSandboxOptions) { o.ModelGateway.Endpoint = "https://api.openai.com/v1" }, want: "public CA private DNS"},
+		{name: "insecure gateway", edit: func(o *AgentSandboxOptions) {
+			o.ModelProvider.Endpoint = "http://gateway.fix-eval.svc/v1/chat/completions"
+		}, want: "absolute HTTPS"},
+		{name: "public gateway", edit: func(o *AgentSandboxOptions) { o.ModelProvider.Endpoint = "https://api.openai.com/v1/chat/completions" }, want: "public CA private DNS"},
 		{name: "unacknowledged private DNS", edit: func(o *AgentSandboxOptions) {
-			o.ModelGateway.Endpoint = "https://model-gateway.platform.example.com/v1"
+			o.ModelProvider.Endpoint = "https://model-gateway.platform.example.com/v1/chat/completions"
 		}, want: "public CA private DNS"},
 		{name: "direct provider with acknowledgement", edit: func(o *AgentSandboxOptions) {
-			o.ModelGateway.Endpoint = "https://api.anthropic.com/v1"
-			o.PublicCAPrivateDNS = true
+			o.ModelProvider.Endpoint = "https://api.anthropic.com/v1/chat/completions"
+			o.ModelProvider.PublicCAPrivateDNS = true
 		}, want: "non-provider"},
 		{name: "NVIDIA provider with acknowledgement", edit: func(o *AgentSandboxOptions) {
-			o.ModelGateway.Endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"
-			o.PublicCAPrivateDNS = true
+			o.ModelProvider.Endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"
+			o.ModelProvider.PublicCAPrivateDNS = true
 		}, want: "non-provider"},
-		{name: "internal with acknowledgement", edit: func(o *AgentSandboxOptions) { o.PublicCAPrivateDNS = true }, want: "applies only"},
+		{name: "internal with acknowledgement", edit: func(o *AgentSandboxOptions) { o.ModelProvider.PublicCAPrivateDNS = true }, want: "applies only"},
 		{name: "resource", edit: func(o *AgentSandboxOptions) { o.Resources.MemoryLimit = "not-a-quantity" }, want: "memory limit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -761,8 +762,8 @@ func TestAgentSandboxProductionOptionsFailClosed(t *testing.T) {
 	if _, err := NewAgentSandboxRuntime(&fakeAgentSandboxAPI{}, base); err != nil {
 		t.Fatalf("valid production options rejected: %v", err)
 	}
-	base.ModelGateway.Endpoint = "https://model-gateway.platform.example.com/v1"
-	base.PublicCAPrivateDNS = true
+	base.ModelProvider.Endpoint = "https://model-gateway.platform.example.com/v1/chat/completions"
+	base.ModelProvider.PublicCAPrivateDNS = true
 	if _, err := NewAgentSandboxRuntime(&fakeAgentSandboxAPI{}, base); err != nil {
 		t.Fatalf("valid public CA private DNS options rejected: %v", err)
 	}
@@ -967,5 +968,131 @@ func TestAgentSandboxPreparedWorkspaceRejectsMissingInputClaim(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "prepared workspace requires an input claim") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestAgentSandboxProviderCredentialEnvironmentShape(t *testing.T) {
+	base := testAgentSandboxOptions()
+	spec := agentsandbox.Spec{
+		Purpose: "fix", RequestEnv: agentSandboxRequestEnv, Request: []byte(`{"version":2}`),
+		Timeout: base.Timeout, OutputLimitBytes: base.OutputLimitBytes, WritableWorkspace: true,
+	}
+	for _, tc := range []struct {
+		name       string
+		provider   modelprovider.Config
+		secret     ProviderSecretRef
+		wantEnv    int
+		wantSecret bool
+	}{
+		{name: "direct bearer", provider: testDirectBearerProvider("https://api.githubcopilot.com/chat/completions", "fixture"), secret: ProviderSecretRef{Name: "agent-sandbox-model", Key: "AI_TOKEN"}, wantEnv: 2, wantSecret: true},
+		{name: "direct none", provider: testDirectUnauthenticatedProvider("https://provider.example/v1/chat/completions", "fixture"), wantEnv: 1},
+		{name: "gateway", provider: testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture"), wantEnv: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := base
+			opts.ModelProvider = tc.provider
+			opts.ProviderSecretRef = tc.secret
+			runtime := newAgentSandboxRuntimeForTest(nil, opts)
+			pod := runtime.sandboxWorkloadPodSpec(spec)
+			container := pod["containers"].([]any)[0].(map[string]any)
+			env := container["env"].([]any)
+			if len(env) != tc.wantEnv {
+				t.Fatalf("environment entries = %d", len(env))
+			}
+			secretRefs := 0
+			for _, raw := range env {
+				entry := raw.(map[string]any)
+				valueFrom, ok := entry["valueFrom"].(map[string]any)
+				if !ok {
+					continue
+				}
+				secretRef, ok := valueFrom["secretKeyRef"].(map[string]any)
+				if !ok {
+					t.Fatal("credential environment did not use secretKeyRef")
+				}
+				secretRefs++
+				if entry["name"] != modelprovider.TokenEnv || secretRef["name"] != tc.secret.Name || secretRef["key"] != tc.secret.Key {
+					t.Fatal("credential environment reference did not match the configured Secret")
+				}
+			}
+			if secretRefs != btoi(tc.wantSecret) {
+				t.Fatalf("Secret references = %d", secretRefs)
+			}
+			for _, raw := range pod["volumes"].([]any) {
+				if _, ok := raw.(map[string]any)["secret"]; ok {
+					t.Fatal("provider credential was mounted as a volume")
+				}
+			}
+		})
+	}
+}
+
+func TestAgentSandboxRuntimeIdentityDistinguishesCredentialModeWithoutCredentialValue(t *testing.T) {
+	base := testAgentSandboxOptions()
+	direct := base
+	direct.ModelProvider = testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture")
+	direct.ProviderSecretRef = ProviderSecretRef{Name: "agent-sandbox-model", Key: "AI_TOKEN"}
+	gateway := base
+	gateway.ModelProvider = testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture")
+	t.Setenv(modelprovider.TokenEnv, strings.Repeat("credential-one-", 3))
+	directIdentity := newAgentSandboxRuntimeForTest(nil, direct).RuntimeIdentity()
+	t.Setenv(modelprovider.TokenEnv, strings.Repeat("credential-two-", 3))
+	if rotated := newAgentSandboxRuntimeForTest(nil, direct).RuntimeIdentity(); rotated != directIdentity {
+		t.Fatal("runtime identity changed after only the Secret value changed")
+	}
+	if gatewayIdentity := newAgentSandboxRuntimeForTest(nil, gateway).RuntimeIdentity(); gatewayIdentity == directIdentity {
+		t.Fatal("direct and gateway modes shared a runtime identity")
+	}
+}
+
+func btoi(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func TestAgentSandboxDirectTelemetryIdentifiesCredentialMode(t *testing.T) {
+	api := &fakeAgentSandboxAPI{
+		state: sandboxState{Exists: true, UID: "uid-1", PodName: "analysis-request-1", Finished: true, FinishedReason: "PodSucceeded"},
+		logs:  `{"terminal_state":"succeeded"}`,
+	}
+	opts := testAgentSandboxOptions()
+	opts.ModelProvider = testDirectUnauthenticatedProvider("https://provider.example/v1/chat/completions", "fixture")
+	runtime := newAgentSandboxRuntimeForTest(api, opts)
+	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
+		Purpose: "analysis", ExecutionID: "request-1", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64",
+		Request: []byte(`{"version":3}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Telemetry.ProviderCredentialMode != modelprovider.CredentialModeDirect || result.Telemetry.ProviderAPI != modelprovider.APIChatCompletions || result.Telemetry.UsageStatus != "unavailable_from_direct_provider" {
+		t.Fatalf("telemetry = %+v", result.Telemetry)
+	}
+}
+
+func TestAgentSandboxProviderSecretReferenceValidation(t *testing.T) {
+	base := testAgentSandboxOptions()
+	base.testOnly = true
+	for _, tc := range []struct {
+		name     string
+		provider modelprovider.Config
+		secret   ProviderSecretRef
+		want     string
+	}{
+		{name: "bearer missing Secret", provider: testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture"), want: "Secret name and key"},
+		{name: "bearer missing key", provider: testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture"), secret: ProviderSecretRef{Name: "agent-sandbox-model"}, want: "Secret name and key"},
+		{name: "none with Secret", provider: testDirectUnauthenticatedProvider("https://provider.example/v1/chat/completions", "fixture"), secret: ProviderSecretRef{Name: "agent-sandbox-model", Key: "AI_TOKEN"}, want: "require direct bearer"},
+		{name: "gateway with Secret", provider: testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture"), secret: ProviderSecretRef{Name: "agent-sandbox-model", Key: "AI_TOKEN"}, want: "require direct bearer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := base
+			opts.ModelProvider = tc.provider
+			opts.ProviderSecretRef = tc.secret
+			if err := validateAgentSandboxOptions(opts); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }

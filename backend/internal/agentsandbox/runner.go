@@ -40,7 +40,7 @@ type PreparedWorkspace struct {
 	IdentityHash string
 }
 
-// Spec describes one credential-free workload executed through Agent Sandbox.
+// Spec describes one non-secret workload executed through Agent Sandbox.
 type Spec struct {
 	Purpose           string
 	ExecutionID       string

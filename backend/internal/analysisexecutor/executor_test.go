@@ -17,6 +17,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
@@ -173,7 +174,7 @@ func TestPromptOpenCodeEvidenceHasNoStructuredOutput(t *testing.T) {
 		fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
 	}))
 	defer server.Close()
-	spec := OpenCodeSpec{WorkDir: "/workspace", Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}, Prompt: "investigate"}
+	spec := OpenCodeSpec{WorkDir: "/workspace", Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate"}
 	if err := promptOpenCodeEvidence(t.Context(), server.Client(), server.URL, "session-1", spec); err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +212,7 @@ func TestPromptOpenCodeUsesStructuredOutputSchema(t *testing.T) {
 		fmt.Fprintf(w, `{"info":{"id":"message-1","role":"assistant","structured":%s},"parts":[]}`, executorAnalysisJSON())
 	}))
 	defer server.Close()
-	spec := OpenCodeSpec{WorkDir: "/workspace", Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}, Prompt: "analyze"}
+	spec := OpenCodeSpec{WorkDir: "/workspace", Provider: testOpenCodeProvider("", "test-model"), Prompt: "analyze"}
 	got, err := promptOpenCode(t.Context(), server.Client(), server.URL, "session-1", spec)
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +241,7 @@ func TestOpenCodeJSONRejectsTrailingData(t *testing.T) {
 
 func TestWriteOpenCodeConfigSeparatesEvidenceAndFinalizationPermissions(t *testing.T) {
 	home := t.TempDir()
-	gateway := engineruntime.ModelGatewayConfig{Endpoint: "https://model-gateway.prow-ai.svc.cluster.local:8443/v1/chat/completions", Model: "test-model", ProtocolVersion: "openai-chat-completions-v1"}
+	gateway := testGatewayProvider("https://model-gateway.prow-ai.svc.cluster.local:8443/v1/chat/completions", "test-model")
 	if err := writeOpenCodeConfig(home, gateway, 20, 200000, 8192); err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +328,7 @@ func executorTestFixture(t *testing.T) (string, agentanalysis.WorkspaceExecution
 	if err != nil {
 		t.Fatal(err)
 	}
-	gateway := engineruntime.ModelGatewayConfig{Endpoint: "https://model-gateway.prow-ai.svc.cluster.local:8443/v1", Model: "test-model", ProtocolVersion: "openai-chat-completions-v1"}
+	gateway := testGatewayProvider("https://model-gateway.prow-ai.svc.cluster.local:8443/v1", "test-model")
 	execution, err := agentanalysis.NewWorkspaceExecutionRequest(manifest, gateway, 5*time.Minute, 20, 200000, 8192, 128<<10)
 	if err != nil {
 		t.Fatal(err)
@@ -380,7 +381,7 @@ func TestExecuteReportsTimeoutTelemetry(t *testing.T) {
 	data, _ := json.Marshal(request)
 	_ = data
 	// Rebuild through the constructor so the request hash remains canonical.
-	request, err := agentanalysis.NewWorkspaceExecutionRequest(request.Manifest, request.ModelGateway, time.Second, request.MaxSteps, request.ModelContextTokens, request.ModelOutputTokens, request.OutputLimitBytes)
+	request, err := agentanalysis.NewWorkspaceExecutionRequest(request.Manifest, request.ModelProvider, time.Second, request.MaxSteps, request.ModelContextTokens, request.ModelOutputTokens, request.OutputLimitBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +399,7 @@ func TestExecuteReportsTimeoutTelemetry(t *testing.T) {
 
 func TestExecuteRejectsResultReturnedAfterDeadline(t *testing.T) {
 	root, base := executorTestFixture(t)
-	request, err := agentanalysis.NewWorkspaceExecutionRequest(base.Manifest, base.ModelGateway, time.Second, base.MaxSteps, base.ModelContextTokens, base.ModelOutputTokens, base.OutputLimitBytes)
+	request, err := agentanalysis.NewWorkspaceExecutionRequest(base.Manifest, base.ModelProvider, time.Second, base.MaxSteps, base.ModelContextTokens, base.ModelOutputTokens, base.OutputLimitBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +502,7 @@ func TestExecutePreservesSanitizedFailureTelemetryWithoutUsage(t *testing.T) {
 		Classification: "api_rate_limited",
 	}
 	shape := newOpenCodeRequestShape(OpenCodeSpec{
-		Gateway: request.ModelGateway, Prompt: "synthetic", ModelContextTokens: request.ModelContextTokens, ModelOutputTokens: request.ModelOutputTokens,
+		Provider: request.ModelProvider, Prompt: "synthetic", ModelContextTokens: request.ModelContextTokens, ModelOutputTokens: request.ModelOutputTokens,
 	}, "1.18.2")
 	result := Execute(t.Context(), request, Options{
 		WorkspaceRoot: root,
@@ -529,7 +530,7 @@ func TestExecutePreservesUnknownErrorWithUnknownProviderStage(t *testing.T) {
 		MessagePresent: true, MessageBytes: 20, RedactedMessageSHA256: strings.Repeat("a", 64),
 	}
 	shape := newOpenCodeEvidenceRequestShape(OpenCodeSpec{
-		Gateway: request.ModelGateway, Prompt: "synthetic", ModelContextTokens: request.ModelContextTokens, ModelOutputTokens: request.ModelOutputTokens,
+		Provider: request.ModelProvider, Prompt: "synthetic", ModelContextTokens: request.ModelContextTokens, ModelOutputTokens: request.ModelOutputTokens,
 	}, "1.18.2")
 	result := Execute(t.Context(), request, Options{
 		WorkspaceRoot: root,
@@ -740,7 +741,7 @@ func TestRunOpenCodePhasesUsesOneSessionAndGatesFinalization(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	spec := OpenCodeSpec{WorkDir: workDir, Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}, Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192}
+	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192}
 	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
 	if err != nil {
 		t.Fatal(err)
@@ -789,7 +790,7 @@ func TestRunOpenCodePhasesPreservesPromptErrorWhenFinalTranscriptMalformed(t *te
 		}
 	}))
 	defer server.Close()
-	spec := OpenCodeSpec{WorkDir: workDir, Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}, Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192}
+	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192}
 	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
 	if err == nil || result.Usage.Status != agentanalysis.WorkspaceTelemetryUnavailable || result.Telemetry.Error.Name != "UnknownError" || result.Telemetry.Error.Classification != "dns" || result.Telemetry.ProviderRequests != 1 || result.Telemetry.ProviderRequestsKnown {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -824,7 +825,7 @@ func TestRunOpenCodePhasesStopsBeforeFinalizationWithoutArtifactEvidence(t *test
 		fmt.Fprintf(w, `[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%q}}},{"type":"step-finish","cost":0.1,"tokens":{"input":1,"output":1,"cache":{"read":0}}}]}]`, sourcePath)
 	}))
 	defer server.Close()
-	spec := OpenCodeSpec{WorkDir: workDir, Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}, Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192}
+	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192}
 	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
 	if err == nil || result.Telemetry.FailureCode != "evidence_unavailable" || posts != 1 {
 		t.Fatalf("posts=%d result=%+v err=%v", posts, result, err)
@@ -878,5 +879,117 @@ func TestExecuteAllowsNoSourceClaimsWithoutSourceEvidence(t *testing.T) {
 	})
 	if result.TerminalState != engineruntime.TerminalSucceeded || result.Analysis == nil || len(result.Analysis.SourceCitations) != 0 || len(result.Analysis.RelevantFiles) != 0 {
 		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestWriteOpenCodeConfigReferencesDirectCredentialEnvironment(t *testing.T) {
+	credential := strings.Repeat("fixture-provider-credential-", 2)
+	t.Setenv(modelprovider.TokenEnv, credential)
+	home := t.TempDir()
+	provider := testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model")
+	if err := writeOpenCodeConfig(home, provider, 20, 200000, 8192); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "{env:"+modelprovider.TokenEnv+"}") {
+		t.Fatal("analyzer config does not reference the fixed provider credential environment")
+	}
+	if strings.Contains(text, credential) {
+		t.Fatal("analyzer config serialized the provider credential")
+	}
+	env, err := openCodeEnvironment(home, t.TempDir(), provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := 0
+	for _, value := range env {
+		if strings.HasPrefix(value, modelprovider.TokenEnv+"=") {
+			entries++
+		}
+	}
+	if entries != 1 {
+		t.Fatalf("credential environment entries = %d", entries)
+	}
+}
+
+func TestExecuteRejectsCredentialBearingStructuredResult(t *testing.T) {
+	credential := strings.Repeat("fixture-provider-credential-", 2)
+	t.Setenv(modelprovider.TokenEnv, credential)
+	root, base := executorTestFixture(t)
+	provider := testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model")
+	request, err := agentanalysis.NewWorkspaceExecutionRequest(base.Manifest, provider, time.Second, base.MaxSteps, base.ModelContextTokens, base.ModelOutputTokens, base.OutputLimitBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runResult := testOpenCodeResult()
+	runResult.Structured = []byte(strings.Replace(string(runResult.Structured), "The specific failure occurred before cleanup.", credential, 1))
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) { return runResult, nil },
+	})
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TerminalState != engineruntime.TerminalFailed || result.FailureReason != modelprovider.ErrCredentialExposure.Error() || result.OpenCodeTelemetry.FailureCode != "credential_exposure" {
+		t.Fatalf("credential-bearing analysis was not rejected: state=%s reason=%q code=%q", result.TerminalState, result.FailureReason, result.OpenCodeTelemetry.FailureCode)
+	}
+	if strings.Contains(string(encoded), credential) {
+		t.Fatal("rejected analysis retained the provider credential")
+	}
+}
+
+func TestDefaultRunOpenCodeRejectsCredentialBearingProcessStream(t *testing.T) {
+	credential := strings.Repeat("fixture-provider-credential-", 2)
+	t.Setenv(modelprovider.TokenEnv, credential)
+	bin := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s' \"$"+modelprovider.TokenEnv+"\"\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	_, err := defaultRunOpenCode(ctx, OpenCodeSpec{
+		Bin: bin, WorkDir: t.TempDir(), HomeDir: t.TempDir(), TempDir: t.TempDir(),
+		Provider: testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model"),
+		Prompt:   "analyze", MaxSteps: 2, ModelContextTokens: 200000, ModelOutputTokens: 8192,
+	})
+	if !errors.Is(err, modelprovider.ErrCredentialExposure) {
+		t.Fatalf("credential-bearing process stream error = %v", err)
+	}
+}
+
+func TestNonCredentialSubprocessEnvironmentExcludesProviderCredential(t *testing.T) {
+	t.Setenv(modelprovider.TokenEnv, strings.Repeat("fixture-provider-credential-", 2))
+	for _, value := range nonCredentialSubprocessEnvironment() {
+		if strings.HasPrefix(value, modelprovider.TokenEnv+"=") {
+			t.Fatal("dashboard-owned subprocess inherited the provider credential")
+		}
+	}
+}
+
+func TestStopOpenCodeProcessWaitsBeforeCredentialCheck(t *testing.T) {
+	credential := strings.Repeat("fixture-provider-credential-", 2)
+	provider := testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model")
+	guard, err := modelprovider.NewCredentialGuard(provider, func(string) (string, bool) { return credential, true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	detector := guard.NewDetector()
+	terminated := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		<-terminated
+		mid := len(credential) / 2
+		_, _ = detector.Write([]byte(credential[:mid]))
+		_, _ = detector.Write([]byte(credential[mid:]))
+		done <- nil
+	}()
+	stopOpenCodeProcess(func() { close(terminated) }, done)
+	if !detector.Detected() {
+		t.Fatal("credential emitted during shutdown was checked before process completion")
 	}
 }

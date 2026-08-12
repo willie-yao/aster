@@ -22,6 +22,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	agentruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
 )
@@ -343,8 +344,8 @@ func (i Issues) HasTrigger(name string) bool {
 }
 
 const (
-	AIAPIChatCompletions = "chat_completions"
-	AIAPIResponses       = "responses"
+	AIAPIChatCompletions = modelprovider.APIChatCompletions
+	AIAPIResponses       = modelprovider.APIResponses
 )
 
 func ValidateAIAPI(api string) error {
@@ -701,8 +702,8 @@ type FixAgentRuntime struct {
 	// AllowedCommands are exact argv commands run after one-shot generation.
 	// Other runtimes reject this field.
 	AllowedCommands []FixAgentCommand `yaml:"allowed_commands,omitempty" json:"allowed_commands,omitempty"`
-	// ModelGateway is non-secret configuration for the consumer-operated gateway.
-	ModelGateway FixModelGateway `yaml:"model_gateway,omitempty" json:"model_gateway,omitempty"`
+	// ModelProvider is non-secret configuration for the Agent Sandbox provider.
+	ModelProvider FixModelProvider `yaml:"model_provider,omitempty" json:"model_provider,omitempty"`
 	// OutputLimitBytes bounds the structured executor result.
 	OutputLimitBytes int64 `yaml:"output_limit_bytes,omitempty" json:"output_limit_bytes,omitempty"`
 	// Timeout bounds the whole generation, e.g. "10m". Empty uses the Runtime
@@ -722,20 +723,27 @@ type FixAgentCommand struct {
 	Timeout string   `yaml:"timeout" json:"timeout"`
 }
 
-// FixModelGateway configures the credential-free model gateway protocol.
-type FixModelGateway struct {
-	Endpoint           string `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
-	Model              string `yaml:"model,omitempty" json:"model,omitempty"`
-	ProtocolVersion    string `yaml:"protocol_version,omitempty" json:"protocol_version,omitempty"`
-	PublicCAPrivateDNS bool   `yaml:"public_ca_private_dns,omitempty" json:"public_ca_private_dns,omitempty"`
+// FixModelProvider configures the non-secret Agent Sandbox provider contract.
+type FixModelProvider struct {
+	CredentialMode     string               `yaml:"credential_mode,omitempty" json:"credential_mode,omitempty"`
+	API                string               `yaml:"api,omitempty" json:"api,omitempty"`
+	Endpoint           string               `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
+	Model              string               `yaml:"model,omitempty" json:"model,omitempty"`
+	Auth               FixModelProviderAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
+	PublicCAPrivateDNS bool                 `yaml:"public_ca_private_dns,omitempty" json:"public_ca_private_dns,omitempty"`
 }
 
-// RuntimeConfig returns the provider-neutral non-secret gateway configuration.
-func (g FixModelGateway) RuntimeConfig() agentruntime.ModelGatewayConfig {
-	return agentruntime.ModelGatewayConfig{
-		Endpoint: strings.TrimSpace(g.Endpoint), Model: strings.TrimSpace(g.Model),
-		ProtocolVersion: strings.TrimSpace(g.ProtocolVersion),
-	}
+// FixModelProviderAuth selects direct provider authentication without carrying a credential.
+type FixModelProviderAuth struct {
+	Type string `yaml:"type,omitempty" json:"type,omitempty"`
+}
+
+// RuntimeConfig returns the normalized non-secret provider configuration.
+func (p FixModelProvider) RuntimeConfig() modelprovider.Config {
+	return modelprovider.Normalize(modelprovider.Config{
+		CredentialMode: p.CredentialMode, API: p.API, Endpoint: p.Endpoint, Model: p.Model,
+		Auth: modelprovider.Auth{Type: p.Auth.Type}, PublicCAPrivateDNS: p.PublicCAPrivateDNS,
+	})
 }
 
 // RuntimeCommands validates and converts exact post-generation commands.
@@ -922,9 +930,12 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 		if out.AgentRuntime.OutputLimitBytes == 0 {
 			out.AgentRuntime.OutputLimitBytes = 512 << 10
 		}
-		if strings.TrimSpace(out.AgentRuntime.ModelGateway.ProtocolVersion) == "" {
-			out.AgentRuntime.ModelGateway.ProtocolVersion = "openai-chat-completions-v1"
-		}
+		provider := out.AgentRuntime.ModelProvider.RuntimeConfig()
+		out.AgentRuntime.ModelProvider.CredentialMode = provider.CredentialMode
+		out.AgentRuntime.ModelProvider.API = provider.API
+		out.AgentRuntime.ModelProvider.Endpoint = provider.Endpoint
+		out.AgentRuntime.ModelProvider.Model = provider.Model
+		out.AgentRuntime.ModelProvider.Auth.Type = provider.Auth.Type
 	}
 	if out.AgentRuntime.Type == "orka" {
 		out.AgentRuntime.OrkaAgentRef = strings.TrimSpace(out.AgentRuntime.OrkaAgentRef)
@@ -1587,8 +1598,8 @@ func (c *Config) Validate() error {
 			}
 			switch runtimeType {
 			case "", "opencode":
-				if len(ar.AllowedCommands) > 0 || ar.ModelGateway != (FixModelGateway{}) || ar.OutputLimitBytes != 0 {
-					return fmt.Errorf("ai.fix_prs.agent_runtime allowed_commands, model_gateway, and output_limit_bytes apply only to the agent-sandbox runtime")
+				if len(ar.AllowedCommands) > 0 || ar.ModelProvider != (FixModelProvider{}) || ar.OutputLimitBytes != 0 {
+					return fmt.Errorf("ai.fix_prs.agent_runtime allowed_commands, model_provider, and output_limit_bytes apply only to the agent-sandbox runtime")
 				}
 			case "agent-sandbox":
 				if f.CritiqueRetries != nil && *f.CritiqueRetries != 0 {
@@ -1617,8 +1628,8 @@ func (c *Config) Validate() error {
 				if last := commands[len(commands)-1].Argv; !equalArgv(last, []string{"git", "diff", "--cached", "--check"}) {
 					return fmt.Errorf("ai.fix_prs.agent_runtime.allowed_commands must end with argv [git diff --cached --check]")
 				}
-				if err := validateInternalModelGateway(ar.ModelGateway); err != nil {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.model_gateway: %w", err)
+				if err := validateAgentSandboxModelProvider(ar.ModelProvider); err != nil {
+					return fmt.Errorf("ai.fix_prs.agent_runtime.model_provider: %w", err)
 				}
 				if ar.OutputLimitBytes < 4<<10 || ar.OutputLimitBytes > 1<<20 {
 					return fmt.Errorf("ai.fix_prs.agent_runtime.output_limit_bytes must be between 4096 and 1048576")
@@ -1630,8 +1641,8 @@ func (c *Config) Validate() error {
 					return fmt.Errorf("ai.fix_prs.agent_runtime.timeout must be greater than zero and at most 30m")
 				}
 			case "orka":
-				if len(ar.AllowedCommands) > 0 || ar.ModelGateway != (FixModelGateway{}) || ar.OutputLimitBytes != 0 {
-					return fmt.Errorf("ai.fix_prs.agent_runtime allowed_commands, model_gateway, and output_limit_bytes apply only to the agent-sandbox runtime")
+				if len(ar.AllowedCommands) > 0 || ar.ModelProvider != (FixModelProvider{}) || ar.OutputLimitBytes != 0 {
+					return fmt.Errorf("ai.fix_prs.agent_runtime allowed_commands, model_provider, and output_limit_bytes apply only to the agent-sandbox runtime")
 				}
 				if strings.TrimSpace(ar.Model) != "" {
 					return fmt.Errorf("ai.fix_prs.agent_runtime.model applies only to the local opencode runtime")
@@ -1660,16 +1671,18 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-func validateInternalModelGateway(gateway FixModelGateway) error {
-	config := gateway.RuntimeConfig()
-	if err := agentruntime.ValidateModelGatewayTrust(config.Endpoint, gateway.PublicCAPrivateDNS); err != nil {
+func validateAgentSandboxModelProvider(provider FixModelProvider) error {
+	config := provider.RuntimeConfig()
+	if err := modelprovider.ValidateDeploymentEndpoint(config); err != nil {
 		return err
 	}
-	if config.Model == "" || len(config.Model) > 256 || strings.ContainsAny(config.Model, "\r\n\x00") {
-		return fmt.Errorf("model must be non-empty, bounded, and single-line")
+	if _, err := modelprovider.OpenCodeBaseURL(config); err != nil {
+		return err
 	}
-	if config.ProtocolVersion != "openai-chat-completions-v1" {
-		return fmt.Errorf("protocol_version must be openai-chat-completions-v1")
+	if config.CredentialMode == modelprovider.CredentialModeGateway {
+		if err := agentruntime.ValidateModelGatewayTrust(config.Endpoint, config.PublicCAPrivateDNS); err != nil {
+			return err
+		}
 	}
 	return nil
 }

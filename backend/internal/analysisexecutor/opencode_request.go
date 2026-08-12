@@ -65,7 +65,7 @@ func baseOpenCodeRequestShape(spec OpenCodeSpec, version, prompt, toolChoice str
 	return agentanalysis.WorkspaceOpenCodeRequestShape{
 		Available:        true,
 		StreamingMode:    "streaming",
-		ModelID:          spec.Gateway.Model,
+		ModelID:          spec.Provider.Model,
 		UserPromptBytes:  len(prompt),
 		ToolChoiceMode:   toolChoice,
 		ContextLimit:     spec.ModelContextTokens,
@@ -93,6 +93,7 @@ func openCodePhaseSystemPromptBytes(spec OpenCodeSpec, now time.Time, agentPromp
 	worktree := string(filepath.Separator)
 	isGit := "no"
 	cmd := exec.Command("git", "-C", directory, "rev-parse", "--show-toplevel")
+	cmd.Env = append(nonCredentialSubprocessEnvironment(), "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
 	if output, gitErr := cmd.Output(); gitErr == nil {
 		worktree = strings.TrimSpace(string(output))
 		if resolved, resolveErr := filepath.EvalSymlinks(worktree); resolveErr == nil {
@@ -101,7 +102,7 @@ func openCodePhaseSystemPromptBytes(spec OpenCodeSpec, now time.Time, agentPromp
 		isGit = "yes"
 	}
 	environment := strings.Join([]string{
-		"You are powered by the model named " + spec.Gateway.Model + ". The exact model ID is engine/" + spec.Gateway.Model,
+		"You are powered by the model named " + spec.Provider.Model + ". The exact model ID is engine/" + spec.Provider.Model,
 		"Here is some useful information about the environment you are running in:",
 		"<env>",
 		"  Working directory: " + directory,
@@ -122,7 +123,7 @@ func fetchOpenCodeNativeToolSchemaDigest(ctx context.Context, client *http.Clien
 	query := url.Values{
 		"directory": {spec.WorkDir},
 		"provider":  {"engine"},
-		"model":     {spec.Gateway.Model},
+		"model":     {spec.Provider.Model},
 	}
 	var response []openCodeToolSchema
 	if err := openCodeJSON(ctx, client, http.MethodGet, baseURL+"/experimental/tool?"+query.Encode(), nil, &response); err != nil {

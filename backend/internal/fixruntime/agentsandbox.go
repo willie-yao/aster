@@ -29,6 +29,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentsandbox"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
@@ -72,8 +73,10 @@ func (r *AgentSandboxRuntime) RuntimeIdentity() string {
 		Image              string                           `json:"image"`
 		ServiceAccountName string                           `json:"service_account_name"`
 		RuntimeClassName   string                           `json:"runtime_class_name"`
-		ModelGateway       engineruntime.ModelGatewayConfig `json:"model_gateway"`
-		PublicCAPrivateDNS bool                             `json:"public_ca_private_dns"`
+		ModelProvider      modelprovider.Config             `json:"model_provider,omitempty"`
+		ProviderSecretRef  ProviderSecretRef                `json:"provider_secret_ref,omitempty"`
+		ModelGateway       engineruntime.ModelGatewayConfig `json:"model_gateway,omitempty"`
+		PublicCAPrivateDNS bool                             `json:"public_ca_private_dns,omitempty"`
 		Timeout            string                           `json:"timeout"`
 		OutputLimitBytes   int64                            `json:"output_limit_bytes"`
 		PollEvery          string                           `json:"poll_every"`
@@ -84,6 +87,7 @@ func (r *AgentSandboxRuntime) RuntimeIdentity() string {
 	}{
 		Backend: agentSandboxBackend, Namespace: opts.Namespace, Image: opts.Image,
 		ServiceAccountName: opts.ServiceAccountName, RuntimeClassName: opts.RuntimeClassName,
+		ModelProvider: opts.ModelProvider, ProviderSecretRef: opts.ProviderSecretRef,
 		ModelGateway: opts.ModelGateway, PublicCAPrivateDNS: opts.PublicCAPrivateDNS,
 		Timeout: opts.Timeout.String(), OutputLimitBytes: opts.OutputLimitBytes, PollEvery: opts.PollEvery.String(),
 		Resources: opts.Resources, AppArmorCapability: opts.appArmorCapability.String(), StagerImage: opts.StagerImage, StagerInputClaim: opts.StagerInputClaim,
@@ -101,6 +105,12 @@ type AgentSandboxResources struct {
 	EphemeralStorage string
 }
 
+// ProviderSecretRef identifies the one existing Secret key admitted to direct bearer workloads.
+type ProviderSecretRef struct {
+	Name string `json:"name"`
+	Key  string `json:"key"`
+}
+
 type AgentSandboxOptions struct {
 	Namespace          string
 	Image              string
@@ -108,6 +118,8 @@ type AgentSandboxOptions struct {
 	StagerInputClaim   string
 	ServiceAccountName string
 	RuntimeClassName   string
+	ModelProvider      modelprovider.Config
+	ProviderSecretRef  ProviderSecretRef
 	ModelGateway       engineruntime.ModelGatewayConfig
 	PublicCAPrivateDNS bool
 	Timeout            time.Duration
@@ -149,7 +161,7 @@ type agentSandboxAPI interface {
 	ExecutionPods(context.Context, string, string) ([]string, error)
 }
 
-// AgentSandboxRuntime executes one credential-free request in a v1beta1 Sandbox.
+// AgentSandboxRuntime executes one non-secret request in a v1beta1 Sandbox.
 type AgentSandboxRuntime struct {
 	api       agentSandboxAPI
 	opts      AgentSandboxOptions
@@ -179,37 +191,31 @@ func newAgentSandboxRuntimeForTest(api agentSandboxAPI, opts AgentSandboxOptions
 }
 
 // NewAgentSandboxRuntimeFromEnv constructs the Fix PR adapter from deployment environment and Kubernetes config.
-func NewAgentSandboxRuntimeFromEnv(expectedGateway engineruntime.ModelGatewayConfig, expectedPublicCAPrivateDNS bool, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
-	return NewAgentSandboxRunnerFromEnv("AGENT_SANDBOX_", expectedGateway, expectedPublicCAPrivateDNS, expectedTimeout, expectedOutputLimit)
+func NewAgentSandboxRuntimeFromEnv(expectedProvider modelprovider.Config, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
+	return NewAgentSandboxProviderRunnerFromEnv("AGENT_SANDBOX_", expectedProvider, expectedTimeout, expectedOutputLimit)
 }
 
-// NewAgentSandboxRunnerFromEnv constructs a shared lifecycle runner from one reserved environment prefix.
-func NewAgentSandboxRunnerFromEnv(prefix string, expectedGateway engineruntime.ModelGatewayConfig, expectedPublicCAPrivateDNS bool, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
-	return newAgentSandboxRunnerFromEnv(prefix, "", true, expectedGateway, expectedPublicCAPrivateDNS, expectedTimeout, expectedOutputLimit)
+// NewAgentSandboxProviderRunnerFromEnv constructs an OpenCode lifecycle runner from one reserved environment prefix.
+func NewAgentSandboxProviderRunnerFromEnv(prefix string, expectedProvider modelprovider.Config, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
+	return newAgentSandboxProviderRunnerFromEnv(prefix, "", true, expectedProvider, expectedTimeout, expectedOutputLimit)
 }
 
-// NewAgentSandboxRunnerForBenchmarkFromEnv allows an explicit disposable kubeconfig context for opt-in benchmarks.
-func NewAgentSandboxRunnerForBenchmarkFromEnv(prefix, kubeContext string, expectedGateway engineruntime.ModelGatewayConfig, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
+// NewAgentSandboxProviderRunnerForBenchmarkFromEnv allows an explicit disposable kubeconfig context for opt-in analyzer benchmarks.
+func NewAgentSandboxProviderRunnerForBenchmarkFromEnv(prefix, kubeContext string, expectedProvider modelprovider.Config, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
 	if strings.TrimSpace(kubeContext) == "" {
 		return nil, fmt.Errorf("agent sandbox benchmark kube context is required")
 	}
-	return newAgentSandboxRunnerFromEnv(prefix, kubeContext, false, expectedGateway, false, expectedTimeout, expectedOutputLimit)
+	return newAgentSandboxProviderRunnerFromEnv(prefix, kubeContext, false, expectedProvider, expectedTimeout, expectedOutputLimit)
 }
 
-func newAgentSandboxRunnerFromEnv(prefix, kubeContext string, inClusterOnly bool, expectedGateway engineruntime.ModelGatewayConfig, expectedPublicCAPrivateDNS bool, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
-	prefix = strings.TrimSpace(prefix)
-	if !regexp.MustCompile(`^[A-Z][A-Z0-9_]*_$`).MatchString(prefix) {
-		return nil, fmt.Errorf("agent sandbox environment prefix is invalid")
-	}
-	env := func(name string) string { return strings.TrimSpace(os.Getenv(prefix + name)) }
-	outputLimit, err := parseInt64Value(prefix+"OUTPUT_LIMIT_BYTES", env("OUTPUT_LIMIT_BYTES"))
+// NewAgentSandboxRunnerFromEnv retains the tokenless causal-critic gateway runner.
+func NewAgentSandboxRunnerFromEnv(prefix string, expectedGateway engineruntime.ModelGatewayConfig, expectedPublicCAPrivateDNS bool, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
+	opts, err := agentSandboxBaseOptionsFromEnv(prefix)
 	if err != nil {
 		return nil, err
 	}
-	timeout, err := time.ParseDuration(env("TIMEOUT"))
-	if err != nil {
-		return nil, fmt.Errorf("agent sandbox timeout: %w", err)
-	}
+	prefix = strings.TrimSpace(prefix)
+	env := func(name string) string { return strings.TrimSpace(os.Getenv(prefix + name)) }
 	publicCAPrivateDNS := false
 	if value := env("MODEL_GATEWAY_PUBLIC_CA_PRIVATE_DNS"); value != "" {
 		publicCAPrivateDNS, err = strconv.ParseBool(value)
@@ -217,13 +223,79 @@ func newAgentSandboxRunnerFromEnv(prefix, kubeContext string, inClusterOnly bool
 			return nil, fmt.Errorf("agent sandbox public CA private DNS setting is invalid")
 		}
 	}
+	opts.ModelGateway = engineruntime.ModelGatewayConfig{
+		Endpoint: env("MODEL_GATEWAY_ENDPOINT"), Model: env("MODEL_GATEWAY_MODEL"), ProtocolVersion: env("MODEL_GATEWAY_PROTOCOL"),
+	}
+	opts.PublicCAPrivateDNS = publicCAPrivateDNS
+	if opts.ModelGateway != expectedGateway || opts.PublicCAPrivateDNS != expectedPublicCAPrivateDNS || opts.Timeout != expectedTimeout || opts.OutputLimitBytes != expectedOutputLimit {
+		return nil, fmt.Errorf("agent sandbox deployment values do not match runtime configuration")
+	}
+	return finishAgentSandboxRunner(opts, "", true)
+}
+
+// NewAgentSandboxRunnerForBenchmarkFromEnv retains the tokenless causal-critic benchmark runner.
+func NewAgentSandboxRunnerForBenchmarkFromEnv(prefix, kubeContext string, expectedGateway engineruntime.ModelGatewayConfig, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
+	if strings.TrimSpace(kubeContext) == "" {
+		return nil, fmt.Errorf("agent sandbox benchmark kube context is required")
+	}
+	opts, err := agentSandboxBaseOptionsFromEnv(prefix)
+	if err != nil {
+		return nil, err
+	}
+	prefix = strings.TrimSpace(prefix)
+	env := func(name string) string { return strings.TrimSpace(os.Getenv(prefix + name)) }
+	opts.ModelGateway = engineruntime.ModelGatewayConfig{
+		Endpoint: env("MODEL_GATEWAY_ENDPOINT"), Model: env("MODEL_GATEWAY_MODEL"), ProtocolVersion: env("MODEL_GATEWAY_PROTOCOL"),
+	}
+	if opts.ModelGateway != expectedGateway || opts.Timeout != expectedTimeout || opts.OutputLimitBytes != expectedOutputLimit {
+		return nil, fmt.Errorf("agent sandbox deployment values do not match runtime configuration")
+	}
+	return finishAgentSandboxRunner(opts, kubeContext, false)
+}
+
+func newAgentSandboxProviderRunnerFromEnv(prefix, kubeContext string, inClusterOnly bool, expectedProvider modelprovider.Config, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
+	opts, err := agentSandboxBaseOptionsFromEnv(prefix)
+	if err != nil {
+		return nil, err
+	}
+	prefix = strings.TrimSpace(prefix)
+	env := func(name string) string { return strings.TrimSpace(os.Getenv(prefix + name)) }
+	publicCAPrivateDNS := false
+	if value := env("MODEL_PROVIDER_PUBLIC_CA_PRIVATE_DNS"); value != "" {
+		publicCAPrivateDNS, err = strconv.ParseBool(value)
+		if err != nil {
+			return nil, fmt.Errorf("agent sandbox provider public CA private DNS setting is invalid")
+		}
+	}
+	opts.ModelProvider = modelprovider.Normalize(modelprovider.Config{
+		CredentialMode: env("MODEL_PROVIDER_CREDENTIAL_MODE"), API: env("MODEL_PROVIDER_API"),
+		Endpoint: env("MODEL_PROVIDER_ENDPOINT"), Model: env("MODEL_PROVIDER_MODEL"),
+		Auth: modelprovider.Auth{Type: env("MODEL_PROVIDER_AUTH_TYPE")}, PublicCAPrivateDNS: publicCAPrivateDNS,
+	})
+	opts.ProviderSecretRef = ProviderSecretRef{Name: env("MODEL_PROVIDER_AUTH_SECRET_NAME"), Key: env("MODEL_PROVIDER_AUTH_SECRET_KEY")}
+	if opts.ModelProvider != expectedProvider || opts.Timeout != expectedTimeout || opts.OutputLimitBytes != expectedOutputLimit {
+		return nil, fmt.Errorf("agent sandbox deployment values do not match runtime configuration")
+	}
+	return finishAgentSandboxRunner(opts, kubeContext, inClusterOnly)
+}
+
+func agentSandboxBaseOptionsFromEnv(prefix string) (AgentSandboxOptions, error) {
+	prefix = strings.TrimSpace(prefix)
+	if !regexp.MustCompile(`^[A-Z][A-Z0-9_]*_$`).MatchString(prefix) {
+		return AgentSandboxOptions{}, fmt.Errorf("agent sandbox environment prefix is invalid")
+	}
+	env := func(name string) string { return strings.TrimSpace(os.Getenv(prefix + name)) }
+	outputLimit, err := parseInt64Value(prefix+"OUTPUT_LIMIT_BYTES", env("OUTPUT_LIMIT_BYTES"))
+	if err != nil {
+		return AgentSandboxOptions{}, err
+	}
+	timeout, err := time.ParseDuration(env("TIMEOUT"))
+	if err != nil {
+		return AgentSandboxOptions{}, fmt.Errorf("agent sandbox timeout: %w", err)
+	}
 	opts := AgentSandboxOptions{
 		Namespace: env("NAMESPACE"), Image: env("IMAGE"), StagerImage: env("STAGER_IMAGE"), StagerInputClaim: env("STAGER_INPUT_CLAIM"),
-		ServiceAccountName: env("SERVICE_ACCOUNT"), RuntimeClassName: env("RUNTIME_CLASS"),
-		ModelGateway: engineruntime.ModelGatewayConfig{
-			Endpoint: env("MODEL_GATEWAY_ENDPOINT"), Model: env("MODEL_GATEWAY_MODEL"), ProtocolVersion: env("MODEL_GATEWAY_PROTOCOL"),
-		},
-		PublicCAPrivateDNS: publicCAPrivateDNS, Timeout: timeout, OutputLimitBytes: outputLimit,
+		ServiceAccountName: env("SERVICE_ACCOUNT"), RuntimeClassName: env("RUNTIME_CLASS"), Timeout: timeout, OutputLimitBytes: outputLimit,
 		Resources: AgentSandboxResources{
 			CPURequest: env("CPU_REQUEST"), CPULimit: env("CPU_LIMIT"), MemoryRequest: env("MEMORY_REQUEST"),
 			MemoryLimit: env("MEMORY_LIMIT"), EphemeralStorage: env("EPHEMERAL_STORAGE_LIMIT"),
@@ -232,18 +304,21 @@ func newAgentSandboxRunnerFromEnv(prefix, kubeContext string, inClusterOnly bool
 	if value := env("POLL_INTERVAL"); value != "" {
 		poll, err := time.ParseDuration(value)
 		if err != nil || poll <= 0 {
-			return nil, fmt.Errorf("agent sandbox poll interval %q is invalid", value)
+			return AgentSandboxOptions{}, fmt.Errorf("agent sandbox poll interval %q is invalid", value)
 		}
 		opts.PollEvery = poll
 	}
-	opts = normalizeAgentSandboxOptions(opts)
-	if opts.ModelGateway != expectedGateway || opts.PublicCAPrivateDNS != expectedPublicCAPrivateDNS || opts.Timeout != expectedTimeout || opts.OutputLimitBytes != expectedOutputLimit {
-		return nil, fmt.Errorf("agent sandbox deployment values do not match runtime configuration")
-	}
+	return normalizeAgentSandboxOptions(opts), nil
+}
+
+func finishAgentSandboxRunner(opts AgentSandboxOptions, kubeContext string, inClusterOnly bool) (*AgentSandboxRuntime, error) {
 	if err := validateAgentSandboxOptions(opts); err != nil {
 		return nil, err
 	}
-	var cfg *rest.Config
+	var (
+		cfg *rest.Config
+		err error
+	)
 	if inClusterOnly {
 		cfg, err = agentSandboxInClusterConfig()
 		if err != nil {
@@ -315,19 +390,34 @@ func validateAgentSandboxOptions(opts AgentSandboxOptions) error {
 	if opts.OutputLimitBytes < 4<<10 || opts.OutputLimitBytes > 1<<20 {
 		return fmt.Errorf("agent sandbox output limit must be between 4096 and 1048576")
 	}
-	request := engineruntime.ExecutionRequest{
-		Version: engineruntime.ExecutionContractVersion, RepositoryURL: "https://example.invalid/repo.git",
-		CommitSHA: strings.Repeat("a", 40), ExpectedBaseSHA: strings.Repeat("a", 40), Prompt: "validate",
-		TimeoutSeconds: 1, MaxSteps: 2, MaxFiles: 1,
-		CommandPolicy: engineruntime.CommandPolicy{Commands: []engineruntime.ExecutionCommand{{
-			Argv: []string{"git", "diff", "--cached", "--check"}, TimeoutSeconds: 1,
-		}}},
-		ModelGateway: opts.ModelGateway, OutputLimitBytes: opts.OutputLimitBytes,
+	hasProvider := opts.ModelProvider != (modelprovider.Config{})
+	hasGateway := opts.ModelGateway != (engineruntime.ModelGatewayConfig{})
+	if hasProvider == hasGateway {
+		return fmt.Errorf("agent sandbox requires exactly one model provider or legacy critic gateway")
 	}
-	if err := request.Validate(); err != nil {
-		return fmt.Errorf("agent sandbox model gateway: %w", err)
-	}
-	if !opts.testOnly {
+	if hasProvider {
+		if err := modelprovider.ValidateDeploymentEndpoint(opts.ModelProvider); err != nil {
+			return fmt.Errorf("agent sandbox model provider: %w", err)
+		}
+		if _, err := modelprovider.OpenCodeBaseURL(opts.ModelProvider); err != nil {
+			return fmt.Errorf("agent sandbox model provider: %w", err)
+		}
+		if opts.ModelProvider.CredentialMode == modelprovider.CredentialModeGateway && !opts.testOnly {
+			if err := engineruntime.ValidateModelGatewayTrust(opts.ModelProvider.Endpoint, opts.ModelProvider.PublicCAPrivateDNS); err != nil {
+				return fmt.Errorf("agent sandbox model provider gateway: %w", err)
+			}
+		}
+		if opts.ModelProvider.Auth.Type == modelprovider.AuthTypeBearer {
+			if len(k8svalidation.IsDNS1123Subdomain(opts.ProviderSecretRef.Name)) > 0 || len(k8svalidation.IsConfigMapKey(opts.ProviderSecretRef.Key)) > 0 {
+				return fmt.Errorf("agent sandbox provider Secret name and key are required and must be valid")
+			}
+		} else if opts.ProviderSecretRef != (ProviderSecretRef{}) {
+			return fmt.Errorf("agent sandbox provider Secret settings require direct bearer auth")
+		}
+	} else {
+		if opts.ProviderSecretRef != (ProviderSecretRef{}) {
+			return fmt.Errorf("agent sandbox critic gateway must not carry a provider Secret reference")
+		}
 		if err := engineruntime.ValidateModelGatewayTrust(opts.ModelGateway.Endpoint, opts.PublicCAPrivateDNS); err != nil {
 			return fmt.Errorf("agent sandbox model gateway: %w", err)
 		}
@@ -363,8 +453,8 @@ func (r *AgentSandboxRuntime) Generate(ctx context.Context, spec engineruntime.G
 	if err != nil {
 		return result, err
 	}
-	if request.ModelGateway != r.opts.ModelGateway || time.Duration(request.TimeoutSeconds)*time.Second != r.opts.Timeout || request.OutputLimitBytes != r.opts.OutputLimitBytes {
-		return result, fmt.Errorf("agent sandbox request does not match configured gateway, timeout, or output limit")
+	if request.ModelProvider != r.opts.ModelProvider || time.Duration(request.TimeoutSeconds)*time.Second != r.opts.Timeout || request.OutputLimitBytes != r.opts.OutputLimitBytes {
+		return result, fmt.Errorf("agent sandbox request does not match configured provider, timeout, or output limit")
 	}
 	requestJSON, err := json.Marshal(request)
 	if err != nil {
@@ -462,6 +552,13 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	if spec.Timeout != r.opts.Timeout || spec.OutputLimitBytes != r.opts.OutputLimitBytes {
 		return result, fmt.Errorf("agent sandbox workload does not match configured timeout or output limit")
 	}
+	if r.opts.ModelProvider != (modelprovider.Config{}) {
+		result.Telemetry.ProviderCredentialMode = r.opts.ModelProvider.CredentialMode
+		result.Telemetry.ProviderAPI = r.opts.ModelProvider.API
+	} else {
+		result.Telemetry.ProviderCredentialMode = modelprovider.CredentialModeGateway
+		result.Telemetry.ProviderAPI = modelprovider.APIChatCompletions
+	}
 	contractHash := agentSandboxWorkloadHash(spec, r.opts)
 	executionID := strings.TrimSpace(spec.ExecutionID)
 	if executionID == "" {
@@ -477,6 +574,9 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 
 	started := r.now()
 	result.Telemetry.UsageStatus = "unavailable_from_model_gateway"
+	if result.Telemetry.ProviderCredentialMode == modelprovider.CredentialModeDirect {
+		result.Telemetry.UsageStatus = "unavailable_from_direct_provider"
+	}
 	runCtx, cancel := context.WithTimeout(ctx, spec.Timeout+agentSandboxResultGrace+5*time.Second)
 	defer cancel()
 	object := r.sandboxObjectForSpec(name, spec, contractHash[:], executionID)
@@ -804,7 +904,7 @@ func executionRequest(spec engineruntime.GenerateSpec) (engineruntime.ExecutionR
 		MaxSteps:         maxSteps,
 		MaxFiles:         spec.MaxFiles,
 		CommandPolicy:    spec.CommandPolicy,
-		ModelGateway:     spec.ModelGateway,
+		ModelProvider:    spec.ModelProvider,
 		ExpectedBaseSHA:  strings.TrimSpace(spec.ExpectedBaseSHA),
 		OutputLimitBytes: outputLimit,
 	}
@@ -901,8 +1001,10 @@ func agentSandboxWorkloadHash(spec agentsandbox.Spec, opts AgentSandboxOptions) 
 
 func agentSandboxContractHash(requestJSON []byte, opts AgentSandboxOptions) [sha256.Size]byte {
 	hash := sha256.New()
+	providerJSON, _ := json.Marshal(opts.ModelProvider)
+	secretRefJSON, _ := json.Marshal(opts.ProviderSecretRef)
 	values := [][]byte{
-		requestJSON, []byte(opts.Image), []byte(opts.ServiceAccountName), []byte(opts.RuntimeClassName),
+		requestJSON, providerJSON, secretRefJSON, []byte(opts.Image), []byte(opts.ServiceAccountName), []byte(opts.RuntimeClassName),
 		[]byte(opts.Resources.CPURequest), []byte(opts.Resources.CPULimit), []byte(opts.Resources.MemoryRequest),
 		[]byte(opts.Resources.MemoryLimit), []byte(opts.Resources.EphemeralStorage), []byte(opts.appArmorCapability.String()), strconv.AppendBool(nil, opts.PublicCAPrivateDNS),
 	}

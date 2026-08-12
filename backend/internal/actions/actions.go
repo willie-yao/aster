@@ -816,7 +816,7 @@ func (s *Service) buildFixManagerFor(ctx context.Context, userToken string, dest
 		ModelToken:          s.ai.Token,
 		MaxTurns:            ar.MaxTurns,
 		MaxFiles:            eff.MaxFiles,
-		ModelGateway:        ar.ModelGateway.RuntimeConfig(),
+		ModelProvider:       ar.ModelProvider.RuntimeConfig(),
 		OutputLimitBytes:    ar.OutputLimitBytes,
 		AllowBash:           allowBash,
 		NetworkDomains:      ar.NetworkDomains,

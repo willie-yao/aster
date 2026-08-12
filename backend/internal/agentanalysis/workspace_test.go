@@ -13,7 +13,6 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
@@ -212,10 +211,22 @@ func TestWorkspaceExecutionRequestBindsPromptAndRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gateway := engineruntime.ModelGatewayConfig{Endpoint: "https://model-gateway.prow-ai.svc.cluster.local:8443/v1", Model: "test-model", ProtocolVersion: "openai-chat-completions-v1"}
-	execution, err := NewWorkspaceExecutionRequest(manifest, gateway, 5*time.Minute, 20, 200000, 8192, 128<<10)
+	provider := testGatewayProvider("https://model-gateway.prow-ai.svc.cluster.local:8443/v1", "test-model")
+	execution, err := NewWorkspaceExecutionRequest(manifest, provider, 5*time.Minute, 20, 200000, 8192, 128<<10)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if execution.Version != 3 {
+		t.Fatalf("workspace request version = %d", execution.Version)
+	}
+	encoded, err := json.Marshal(execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"existing_secret", "token_key", "credential_value", "credential_hash"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("workspace request contains forbidden credential metadata %q", forbidden)
+		}
 	}
 	prompt, err := WorkspaceInstruction(execution, "/workspace")
 	if err != nil {
@@ -638,5 +649,14 @@ func TestParseWorkspaceAnalysisRejectsSourceSymlinkAliasOverlap(t *testing.T) {
 	}
 	if _, err := ParseWorkspaceAnalysis(workspaceModelAnalysisJSON(WorkspaceContractVersion, evidence, sourceCitations), manifest, artifactRoot, sourceRoot); err == nil {
 		t.Fatal("source symlink alias overlap was accepted")
+	}
+}
+
+func TestWorkspaceGitEnvironmentExcludesProviderCredential(t *testing.T) {
+	t.Setenv("PROW_AI_MODEL_PROVIDER_TOKEN", strings.Repeat("fixture-provider-credential-", 2))
+	for _, value := range workspaceGitEnvironment() {
+		if strings.HasPrefix(value, "PROW_AI_MODEL_PROVIDER_TOKEN=") {
+			t.Fatal("workspace verifier inherited the provider credential")
+		}
 	}
 }

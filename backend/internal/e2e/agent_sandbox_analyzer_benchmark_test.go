@@ -21,6 +21,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
@@ -41,7 +42,7 @@ type agentSandboxAnalyzerBenchmarkConfig struct {
 	ProviderPath       string
 	TransportID        string
 	EngineCommit       string
-	Gateway            engineruntime.ModelGatewayConfig
+	Provider           modelprovider.Config
 	Timeout            time.Duration
 	OutputLimit        int64
 	MaxSteps           int
@@ -265,14 +266,14 @@ func TestAgentSandboxAnalyzerBenchmark(t *testing.T) {
 		t.Logf("prepared analyzer input manifest %s", prepared.prepared.ManifestHash)
 		return
 	}
-	runner, err := fixruntime.NewAgentSandboxRunnerForBenchmarkFromEnv(
-		"AGENT_SANDBOX_ANALYSIS_", cfg.KubeContext, cfg.Gateway, cfg.Timeout, cfg.OutputLimit,
+	runner, err := fixruntime.NewAgentSandboxProviderRunnerForBenchmarkFromEnv(
+		"AGENT_SANDBOX_ANALYSIS_", cfg.KubeContext, cfg.Provider, cfg.Timeout, cfg.OutputLimit,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runtime := &agentanalysis.WorkspaceSandboxRuntime{
-		Sandbox: runner, Gateway: cfg.Gateway, SourceModePolicy: prepared.request.SourceModePolicy, Timeout: cfg.Timeout, OutputLimitBytes: cfg.OutputLimit,
+		Sandbox: runner, Provider: cfg.Provider, SourceModePolicy: prepared.request.SourceModePolicy, Timeout: cfg.Timeout, OutputLimitBytes: cfg.OutputLimit,
 	}
 	for index := 0; index < cfg.Repetitions; index++ {
 		repetition := cfg.RepetitionBase + index
@@ -292,12 +293,14 @@ func loadAgentSandboxAnalyzerBenchmarkConfig(t *testing.T) agentSandboxAnalyzerB
 		return value
 	}
 	prepareOnly := strings.TrimSpace(os.Getenv("ANALYZER_BENCH_PREPARE_ONLY")) == "1"
-	gateway := engineruntime.ModelGatewayConfig{
-		Endpoint:        require("AGENT_SANDBOX_ANALYSIS_MODEL_GATEWAY_ENDPOINT"),
-		Model:           require("AGENT_SANDBOX_ANALYSIS_MODEL_GATEWAY_MODEL"),
-		ProtocolVersion: require("AGENT_SANDBOX_ANALYSIS_MODEL_GATEWAY_PROTOCOL"),
-	}
-	if err := validateBenchmarkProviderPath(require("BENCH_PROVIDER_PATH"), gateway.Model); err != nil {
+	provider := modelprovider.Normalize(modelprovider.Config{
+		CredentialMode: require("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_CREDENTIAL_MODE"),
+		API:            require("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_API"),
+		Endpoint:       require("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_ENDPOINT"),
+		Model:          require("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_MODEL"),
+		Auth:           modelprovider.Auth{Type: require("AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_AUTH_TYPE")},
+	})
+	if err := validateBenchmarkProviderPath(require("BENCH_PROVIDER_PATH"), provider.Model); err != nil {
 		t.Fatal(err)
 	}
 	timeout := agentSandboxAnalyzerBenchmarkDuration(t, "AGENT_SANDBOX_ANALYSIS_TIMEOUT", 15*time.Minute)
@@ -318,7 +321,7 @@ func loadAgentSandboxAnalyzerBenchmarkConfig(t *testing.T) agentSandboxAnalyzerB
 		SourceRoot: require("ANALYZER_BENCH_SOURCE_ROOT"), ProjectDir: require("BENCH_PROJECT_DIR"),
 		PreparedPath: require("ANALYZER_BENCH_PREPARED_JSON"),
 		ArmLabel:     arm, ModelLabel: modelLabel, ProviderPath: require("BENCH_PROVIDER_PATH"), TransportID: transportID,
-		EngineCommit: benchmarkEngineCommit(t, !prepareOnly), Gateway: gateway, Timeout: timeout, OutputLimit: outputLimit,
+		EngineCommit: benchmarkEngineCommit(t, !prepareOnly), Provider: provider, Timeout: timeout, OutputLimit: outputLimit,
 		MaxSteps:           agentSandboxAnalyzerBenchmarkInt(t, "ANALYZER_BENCH_MAX_STEPS", 20, 1, 100),
 		ModelContextTokens: agentSandboxAnalyzerBenchmarkInt(t, "ANALYZER_BENCH_MODEL_CONTEXT_TOKENS", 0, 8192, 2_000_000),
 		ModelOutputTokens:  agentSandboxAnalyzerBenchmarkInt(t, "ANALYZER_BENCH_MODEL_OUTPUT_TOKENS", 0, 1024, 131072),
@@ -403,7 +406,7 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 	if err != nil {
 		t.Fatal(err)
 	}
-	execution, err := agentanalysis.NewWorkspaceExecutionRequestWithSourceModePolicy(manifest, sourceModePolicy, cfg.Gateway, cfg.Timeout, cfg.MaxSteps, cfg.ModelContextTokens, cfg.ModelOutputTokens, cfg.OutputLimit)
+	execution, err := agentanalysis.NewWorkspaceExecutionRequestWithSourceModePolicy(manifest, sourceModePolicy, cfg.Provider, cfg.Timeout, cfg.MaxSteps, cfg.ModelContextTokens, cfg.ModelOutputTokens, cfg.OutputLimit)
 	if err != nil {
 		t.Fatal(err)
 	}

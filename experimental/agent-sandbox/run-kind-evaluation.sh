@@ -11,6 +11,7 @@ EXECUTION_NAMESPACE="pad-fix-prod-${RUN_ID}"
 EXECUTOR_REPOSITORY=prow-ai-dashboard/agent-sandbox-fix-executor
 EXECUTOR_TAG=production-eval
 EXECUTOR_IMAGE="${EXECUTOR_REPOSITORY}:${EXECUTOR_TAG}"
+EXECUTOR_BASE_IMAGE="${EXECUTOR_REPOSITORY}:${EXECUTOR_TAG}-base"
 GATEWAY_IMAGE=prow-ai-dashboard/fake-model-gateway:production-eval
 RUNTIME_CLASS=runc-test
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/pad-agent-sandbox-prod.XXXXXX")
@@ -57,11 +58,35 @@ PY
 }
 trap cleanup EXIT INT TERM
 
-for tool in cp curl docker git go helm kind kubectl python3 shasum; do
+for tool in cp curl docker git go helm kind kubectl openssl python3 shasum; do
   command -v "$tool" >/dev/null || { echo "missing required tool: $tool" >&2; exit 1; }
 done
 docker info >/dev/null
 unset AI_TOKEN OPENAI_API_KEY ANTHROPIC_API_KEY CLAUDE_API_KEY KIMI_API_KEY FIX_TOKEN BOT_TOKEN ORKA_API_TOKEN GITHUB_TOKEN GH_TOKEN COPILOT_TOKEN AZURE_OPENAI_API_KEY || true
+
+CA_CERT="$TMP_DIR/gateway-ca.crt"
+CA_KEY="$TMP_DIR/gateway-ca.key"
+TLS_CERT="$TMP_DIR/gateway-tls.crt"
+TLS_KEY="$TMP_DIR/gateway-tls.key"
+GATEWAY_DNS="fake-model-gateway.${EXECUTION_NAMESPACE}.svc.cluster.local"
+openssl genrsa -out "$CA_KEY" 2048 >/dev/null 2>&1
+openssl req -x509 -new -nodes -key "$CA_KEY" -sha256 -days 1 -subj "/CN=Agent Sandbox Fixture CA" -out "$CA_CERT" >/dev/null 2>&1
+openssl genrsa -out "$TLS_KEY" 2048 >/dev/null 2>&1
+cat >"$TMP_DIR/gateway-cert.cnf" <<CERT
+[req]
+distinguished_name=req_distinguished_name
+req_extensions=v3_req
+prompt=no
+[req_distinguished_name]
+CN=$GATEWAY_DNS
+[v3_req]
+subjectAltName=@alt_names
+[alt_names]
+DNS.1=$GATEWAY_DNS
+DNS.2=fake-model-gateway.${EXECUTION_NAMESPACE}.svc
+CERT
+openssl req -new -key "$TLS_KEY" -out "$TMP_DIR/gateway-tls.csr" -config "$TMP_DIR/gateway-cert.cnf" >/dev/null 2>&1
+openssl x509 -req -in "$TMP_DIR/gateway-tls.csr" -CA "$CA_CERT" -CAkey "$CA_KEY" -CAcreateserial -out "$TLS_CERT" -days 1 -sha256 -extensions v3_req -extfile "$TMP_DIR/gateway-cert.cnf" >/dev/null 2>&1
 
 cat >"$EVIDENCE_DIR/run-metadata.txt" <<META
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -80,7 +105,16 @@ curl -fsSL "https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$
 echo "$ASSET_SHA256  $ASSET" | shasum -a 256 -c - | tee "$EVIDENCE_DIR/release-asset-check.txt"
 
 cd "$ROOT"
-docker build --progress=plain --target agent-sandbox-fix-executor -t "$EXECUTOR_IMAGE" . >"$EVIDENCE_DIR/executor-image-build.log"
+docker build --progress=plain --target agent-sandbox-fix-executor -t "$EXECUTOR_BASE_IMAGE" . >"$EVIDENCE_DIR/executor-image-build.log"
+cat >"$TMP_DIR/executor-ca.Dockerfile" <<'DOCKERFILE'
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+USER root
+COPY gateway-ca.crt /usr/local/share/ca-certificates/agent-sandbox-fixture.crt
+RUN update-ca-certificates
+USER 65532:65532
+DOCKERFILE
+docker build --progress=plain --build-arg BASE_IMAGE="$EXECUTOR_BASE_IMAGE" -t "$EXECUTOR_IMAGE" -f "$TMP_DIR/executor-ca.Dockerfile" "$TMP_DIR" >>"$EVIDENCE_DIR/executor-image-build.log"
 docker build --progress=plain -f experimental/agent-sandbox/fake-gateway.Dockerfile -t "$GATEWAY_IMAGE" . >"$EVIDENCE_DIR/gateway-image-build.log"
 EXECUTOR_DIGEST=$(docker image inspect "$EXECUTOR_IMAGE" --format '{{.Id}}')
 docker image inspect "$EXECUTOR_IMAGE" --format '{{json .RepoTags}} {{.Id}} {{.Architecture}} {{.Os}} {{json .Config.User}}' >"$EVIDENCE_DIR/executor-image.txt"
@@ -115,6 +149,8 @@ kubectl --kubeconfig "$ADMIN_KUBECONFIG" label namespace "$EXECUTION_NAMESPACE" 
   pod-security.kubernetes.io/enforce=restricted \
   pod-security.kubernetes.io/audit=restricted \
   pod-security.kubernetes.io/warn=restricted
+kubectl --kubeconfig "$ADMIN_KUBECONFIG" -n "$EXECUTION_NAMESPACE" create secret tls fake-model-gateway-tls \
+  --cert="$TLS_CERT" --key="$TLS_KEY" >/dev/null
 cat <<YAML | kubectl --kubeconfig "$ADMIN_KUBECONFIG" apply -f -
 apiVersion: node.k8s.io/v1
 kind: RuntimeClass
@@ -154,7 +190,7 @@ spec:
       - name: gateway
         image: $GATEWAY_IMAGE
         imagePullPolicy: IfNotPresent
-        ports: [{name: http, containerPort: 8080}]
+        ports: [{name: https, containerPort: 8443}]
         securityContext:
           runAsNonRoot: true
           runAsUser: 65532
@@ -163,14 +199,21 @@ spec:
           readOnlyRootFilesystem: true
           capabilities: {drop: [ALL]}
           seccompProfile: {type: RuntimeDefault}
+        env:
+        - {name: TLS_CERT_FILE, value: /tls/tls.crt}
+        - {name: TLS_KEY_FILE, value: /tls/tls.key}
         resources:
           requests: {cpu: 10m, memory: 32Mi}
           limits: {cpu: 100m, memory: 64Mi}
-        readinessProbe: {httpGet: {path: /healthz, port: http}}
-        volumeMounts: [{name: tmp, mountPath: /tmp}]
+        readinessProbe: {httpGet: {path: /healthz, port: https, scheme: HTTPS}}
+        volumeMounts:
+        - {name: tmp, mountPath: /tmp}
+        - {name: tls, mountPath: /tls, readOnly: true}
       volumes:
       - name: tmp
         emptyDir: {sizeLimit: 16Mi}
+      - name: tls
+        secret: {secretName: fake-model-gateway-tls}
 ---
 apiVersion: v1
 kind: Service
@@ -180,7 +223,7 @@ metadata:
 spec:
   type: ClusterIP
   selector: {app: fake-model-gateway}
-  ports: [{name: http, port: 8080, targetPort: http}]
+  ports: [{name: https, port: 8443, targetPort: https}]
 YAML
 kubectl --kubeconfig "$ADMIN_KUBECONFIG" -n "$EXECUTION_NAMESPACE" rollout status deployment/fake-model-gateway --timeout=180s
 
@@ -218,10 +261,13 @@ project:
           allowed_commands:
             - argv: [git, diff, --cached, --check]
               timeout: 30s
-          model_gateway:
-            endpoint: https://fake-model-gateway.${EXECUTION_NAMESPACE}.svc.cluster.local/v1
+          model_provider:
+            credential_mode: gateway
+            api: chat_completions
+            endpoint: https://fake-model-gateway.${EXECUTION_NAMESPACE}.svc.cluster.local:8443/v1/chat/completions
             model: fixture-model
-            protocol_version: openai-chat-completions-v1
+            auth:
+              type: none
   systemPrompt: production evaluation prompt
 agentSandbox:
   fixRuntime:
@@ -235,10 +281,15 @@ agentSandbox:
     workloadServiceAccount:
       create: true
       name: fix-workload
-    modelGateway:
-      endpoint: https://fake-model-gateway.${EXECUTION_NAMESPACE}.svc.cluster.local/v1
+    modelProvider:
+      credentialMode: gateway
+      api: chat_completions
+      endpoint: https://fake-model-gateway.${EXECUTION_NAMESPACE}.svc.cluster.local:8443/v1/chat/completions
       model: fixture-model
-      protocolVersion: openai-chat-completions-v1
+      auth:
+        type: none
+        existingSecret: ""
+        tokenKey: ""
       publicCAPrivateDNS: false
     maxSteps: 5
     maxFiles: 1
@@ -291,7 +342,7 @@ mkdir -p "$FIXTURE_DIR"
   AGENT_SANDBOX_NAMESPACE="$EXECUTION_NAMESPACE" \
   AGENT_SANDBOX_IMAGE="${EXECUTOR_REPOSITORY}@${EXECUTOR_DIGEST}" \
   AGENT_SANDBOX_RUNTIME_CLASS="$RUNTIME_CLASS" \
-  AGENT_SANDBOX_TEST_GATEWAY_ENDPOINT="http://fake-model-gateway.${EXECUTION_NAMESPACE}.svc.cluster.local:8080/v1" \
+  AGENT_SANDBOX_TEST_GATEWAY_ENDPOINT="https://fake-model-gateway.${EXECUTION_NAMESPACE}.svc.cluster.local:8443/v1/chat/completions" \
   go test ./internal/fixruntime -run '^(TestWriteAgentSandboxEvaluationFixtures|TestAgentSandboxPreflightAndSandboxWorkloadParity)$' -count=1 -v
 ) >"$EVIDENCE_DIR/workload-shape-parity-test.log" 2>&1
 
@@ -372,6 +423,65 @@ grep -Fq 'storage must use only bounded emptyDir volumes' "$EVIDENCE_DIR/admissi
 grep -Fq 'executor process shape is fixed' "$EVIDENCE_DIR/admission-unsafe-probe.txt"
 grep -Fq 'must not override placement, scheduling, devices' "$EVIDENCE_DIR/admission-unsafe-claim.txt"
 grep -Fq 'container security context is fixed' "$EVIDENCE_DIR/admission-unsafe-apparmor.txt"
+
+# Re-render the same policy in direct bearer mode and exercise every credential
+# mutation without creating or reading a provider Secret value.
+python3 - "$TMP_DIR/chart-values.yaml" "$TMP_DIR/chart-values-direct-bearer.yaml" <<'PYDIRECTVALUES'
+from pathlib import Path
+import sys
+text=Path(sys.argv[1]).read_text()
+text=text.replace('            credential_mode: gateway\n', '            credential_mode: direct\n')
+text=text.replace('              type: none\n', '              type: bearer\n')
+text=text.replace('      credentialMode: gateway\n', '      credentialMode: direct\n')
+text=text.replace('        type: none\n        existingSecret: ""\n        tokenKey: ""\n', '        type: bearer\n        existingSecret: agent-sandbox-model\n        tokenKey: AI_TOKEN\n')
+Path(sys.argv[2]).write_text(text)
+PYDIRECTVALUES
+helm template production-eval deploy/helm/prow-ai-dashboard -n "$DASHBOARD_NAMESPACE" -f "$TMP_DIR/chart-values-direct-bearer.yaml" --show-only templates/agent-sandbox-fix-runtime-admission.yaml >"$TMP_DIR/admission-direct-production.yaml"
+python3 - "$TMP_DIR/admission-direct-production.yaml" "$TMP_DIR/admission-direct-local-kind.yaml" <<'PYDIRECTADMISSION'
+from pathlib import Path
+import sys
+source=Path(sys.argv[1]).read_text()
+replacements={
+  "variables.pod.securityContext.appArmorProfile.type == 'RuntimeDefault'": "!has(variables.pod.securityContext.appArmorProfile)",
+  "variables.container.securityContext.appArmorProfile.type == 'RuntimeDefault'": "!has(variables.container.securityContext.appArmorProfile)",
+}
+for old,new in replacements.items():
+    if source.count(old) != 1: raise SystemExit(f'unexpected direct AppArmor predicate count for {old!r}')
+    source=source.replace(old,new)
+Path(sys.argv[2]).write_text(source)
+PYDIRECTADMISSION
+kubectl --kubeconfig "$ADMIN_KUBECONFIG" apply -f "$TMP_DIR/admission-direct-local-kind.yaml"
+wait_policy_typecheck "$EVIDENCE_DIR/admission-policy-direct.json" "$EVIDENCE_DIR/admission-policy-direct.yaml"
+python3 - "$FIXTURE_DIR/local-sandbox.json" "$TMP_DIR/direct-valid.json" "$TMP_DIR/direct-wrong-secret.json" "$TMP_DIR/direct-wrong-key.json" "$TMP_DIR/direct-wrong-env.json" "$TMP_DIR/direct-envfrom.json" "$TMP_DIR/direct-projected.json" "$TMP_DIR/direct-extra-secret.json" <<'PYDIRECTMUTATE'
+import copy,json,sys
+source=json.load(open(sys.argv[1]))
+container=source['spec']['podTemplate']['spec']['containers'][0]
+container['env'].append({'name':'PROW_AI_MODEL_PROVIDER_TOKEN','valueFrom':{'secretKeyRef':{'name':'agent-sandbox-model','key':'AI_TOKEN'}}})
+json.dump(source,open(sys.argv[2],'w'))
+wrong_secret=copy.deepcopy(source); wrong_secret['spec']['podTemplate']['spec']['containers'][0]['env'][1]['valueFrom']['secretKeyRef']['name']='other-secret'; json.dump(wrong_secret,open(sys.argv[3],'w'))
+wrong_key=copy.deepcopy(source); wrong_key['spec']['podTemplate']['spec']['containers'][0]['env'][1]['valueFrom']['secretKeyRef']['key']='OTHER_TOKEN'; json.dump(wrong_key,open(sys.argv[4],'w'))
+wrong_env=copy.deepcopy(source); wrong_env['spec']['podTemplate']['spec']['containers'][0]['env'][1]['name']='OTHER_TOKEN'; json.dump(wrong_env,open(sys.argv[5],'w'))
+envfrom=copy.deepcopy(source); envfrom['spec']['podTemplate']['spec']['containers'][0]['envFrom']=[{'secretRef':{'name':'other-secret'}}]; json.dump(envfrom,open(sys.argv[6],'w'))
+projected=copy.deepcopy(source); projected['spec']['podTemplate']['spec']['volumes'].append({'name':'projected-credential','projected':{'sources':[{'secret':{'name':'other-secret'}}]}}); json.dump(projected,open(sys.argv[7],'w'))
+extra=copy.deepcopy(source); extra['spec']['podTemplate']['spec']['containers'][0]['env'].append({'name':'EXTRA_TOKEN','valueFrom':{'secretKeyRef':{'name':'other-secret','key':'token'}}}); json.dump(extra,open(sys.argv[8],'w'))
+PYDIRECTMUTATE
+kubectl --kubeconfig "$ADMIN_KUBECONFIG" create --dry-run=server --as="$requester" -f "$TMP_DIR/direct-valid.json" -o json >"$EVIDENCE_DIR/admission-direct-valid.json"
+for mutation in wrong-secret wrong-key wrong-env envfrom extra-secret; do
+  if kubectl --kubeconfig "$ADMIN_KUBECONFIG" create --dry-run=server --as="$requester" -f "$TMP_DIR/direct-${mutation}.json" >"$EVIDENCE_DIR/admission-direct-${mutation}.txt" 2>&1; then
+    echo "unsafe direct credential mutation passed admission: $mutation" >&2
+    exit 1
+  fi
+  grep -Fq 'environment must match the configured request and provider credential' "$EVIDENCE_DIR/admission-direct-${mutation}.txt"
+done
+if kubectl --kubeconfig "$ADMIN_KUBECONFIG" create --dry-run=server --as="$requester" -f "$TMP_DIR/direct-projected.json" >"$EVIDENCE_DIR/admission-direct-projected.txt" 2>&1; then
+  echo 'projected direct credential passed admission' >&2
+  exit 1
+fi
+grep -Fq 'storage must use only bounded emptyDir volumes' "$EVIDENCE_DIR/admission-direct-projected.txt"
+
+# Restore the gateway policy before executing the tokenless lifecycle fixture.
+kubectl --kubeconfig "$ADMIN_KUBECONFIG" apply -f "$TMP_DIR/admission-local-kind.yaml"
+wait_policy_typecheck "$EVIDENCE_DIR/admission-policy-local-kind-restored.json" "$EVIDENCE_DIR/admission-policy-local-kind-restored.yaml"
 
 kubectl --kubeconfig "$ADMIN_KUBECONFIG" apply -f "$FIXTURE_DIR/local-preflight-pod.json"
 preflight_phase=""
@@ -495,7 +605,7 @@ set +e
   AGENT_SANDBOX_SERVICE_ACCOUNT=fix-workload \
   AGENT_SANDBOX_RUNTIME_CLASS="$RUNTIME_CLASS" \
   AGENT_SANDBOX_POLL_INTERVAL=200ms \
-  AGENT_SANDBOX_TEST_GATEWAY_ENDPOINT="http://fake-model-gateway.${EXECUTION_NAMESPACE}.svc.cluster.local:8080/v1" \
+  AGENT_SANDBOX_TEST_GATEWAY_ENDPOINT="https://fake-model-gateway.${EXECUTION_NAMESPACE}.svc.cluster.local:8443/v1/chat/completions" \
   AGENT_SANDBOX_EVIDENCE_DIR="$EVIDENCE_DIR" \
   go test ./internal/fixruntime -run '^TestAgentSandboxProductionKindFixture$' -count=1 -v
 ) 2>&1 | tee "$TEST_LOG"
@@ -542,7 +652,7 @@ finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 primary_fixture=passed
 primary_fixture_runs=1
 production_executor=opencode-1.18.2
-model_gateway=deterministic-credential-free
+model_provider=gateway-tokenless-chat-completions
 independent_patch_verification=passed
 remaining_sandboxes=0
 remaining_executor_pods=0

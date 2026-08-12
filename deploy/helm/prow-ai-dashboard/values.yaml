@@ -88,7 +88,7 @@ analysisRuntime:
 
 # Agent Sandbox is a consumer-installed execution backend for private workloads.
 # The chart never installs the Agent Sandbox CRD/controller, a secure RuntimeClass,
-# execution namespace, model gateway, input PVC, or node infrastructure.
+# execution namespace, provider Secret or gateway, input PVC, or node infrastructure.
 agentSandbox:
   fixRuntime:
     enabled: false
@@ -112,14 +112,20 @@ agentSandbox:
       # Create only the tokenless workload identity, never the namespace.
       create: false
       name: ""
-    modelGateway:
-      # Consumer-operated HTTPS OpenAI-compatible gateway. Internal service
-      # names require a consumer-derived executor image containing the gateway CA.
+    modelProvider:
+      # Direct mode is the default only after this runtime is explicitly enabled.
+      # Gateway mode preserves the tokenless consumer-operated gateway path.
+      credentialMode: direct
+      api: chat_completions
       endpoint: ""
       model: ""
-      protocolVersion: openai-chat-completions-v1
-      # A privately resolved public FQDN with a publicly trusted certificate.
-      # Direct model-provider endpoints remain forbidden.
+      auth:
+        # none is valid for unauthenticated providers and all gateway workloads.
+        type: none
+        # Direct bearer mode references one existing Secret in the execution namespace.
+        existingSecret: ""
+        tokenKey: ""
+      # Gateway-only trust acknowledgement for a privately resolved public FQDN.
       publicCAPrivateDNS: false
     # These duplicate project.yaml security bounds and must match exactly.
     maxSteps: 30
@@ -161,11 +167,16 @@ agentSandbox:
     workloadServiceAccount:
       create: false
       name: ""
-    modelGateway:
-      # Internal HTTPS gateway only. Direct provider endpoints are rejected.
+    modelProvider:
+      credentialMode: direct
+      api: chat_completions
       endpoint: ""
       model: ""
-      protocolVersion: openai-chat-completions-v1
+      auth:
+        type: none
+        existingSecret: ""
+        tokenKey: ""
+      publicCAPrivateDNS: false
     timeout: 15m
     outputLimitBytes: 262144
     pollInterval: 250ms
@@ -176,7 +187,7 @@ agentSandbox:
       enabled: true
       gatewayNamespaceSelector: {}
       gatewayPodSelector: {}
-      # HTTPS port exposed by the gateway Service and used by modelGateway.endpoint.
+      # HTTPS port exposed by the gateway Service and used by modelProvider.endpoint.
       gatewayPort: 443
       # Backend Pod port enforced after Service translation. This may differ
       # from gatewayPort, for example Service port 443 targeting Pod port 8443.

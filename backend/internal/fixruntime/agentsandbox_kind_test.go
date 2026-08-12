@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 )
 
 func newAgentSandboxRuntimeForKindTest(api agentSandboxAPI, opts AgentSandboxOptions) *AgentSandboxRuntime {
@@ -15,7 +15,7 @@ func newAgentSandboxRuntimeForKindTest(api agentSandboxAPI, opts AgentSandboxOpt
 	return &AgentSandboxRuntime{api: api, opts: opts, now: time.Now}
 }
 
-func newAgentSandboxRuntimeFromEnvForKindTest(expectedGateway engineruntime.ModelGatewayConfig, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
+func newAgentSandboxRuntimeFromEnvForKindTest(expectedProvider modelprovider.Config, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
 	cfg, err := agentSandboxRESTConfig(strings.TrimSpace(os.Getenv("AGENT_SANDBOX_KUBE_CONTEXT")))
 	if err != nil {
 		return nil, err
@@ -27,7 +27,7 @@ func newAgentSandboxRuntimeFromEnvForKindTest(expectedGateway engineruntime.Mode
 	opts := AgentSandboxOptions{
 		Namespace: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_NAMESPACE")), Image: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_IMAGE")),
 		ServiceAccountName: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_SERVICE_ACCOUNT")), RuntimeClassName: strings.TrimSpace(os.Getenv("AGENT_SANDBOX_RUNTIME_CLASS")),
-		ModelGateway: expectedGateway, Timeout: expectedTimeout, OutputLimitBytes: expectedOutputLimit,
+		ModelProvider: expectedProvider, Timeout: expectedTimeout, OutputLimitBytes: expectedOutputLimit,
 		PollEvery: defaultSandboxPollEvery, testOnly: true, appArmorCapability: appArmorUnavailableForKindTest,
 	}
 	if value := strings.TrimSpace(os.Getenv("AGENT_SANDBOX_POLL_INTERVAL")); value != "" {

@@ -1467,6 +1467,18 @@ func TestEffectiveFixPRsAgentSandboxDefaults(t *testing.T) {
 	if got.AllowBash == nil || *got.AllowBash {
 		t.Fatalf("agent-sandbox allow_bash default = %v, want false", got.AllowBash)
 	}
+	provider := got.ModelProvider.RuntimeConfig()
+	if provider.CredentialMode != "direct" || provider.API != "chat_completions" || provider.Auth.Type != "none" {
+		t.Fatalf("agent-sandbox provider defaults = %+v", provider)
+	}
+}
+
+func validAgentSandboxModelProvider() FixModelProvider {
+	return FixModelProvider{
+		CredentialMode: "direct", API: "chat_completions",
+		Endpoint: "https://api.githubcopilot.com/chat/completions", Model: "fixture-model",
+		Auth: FixModelProviderAuth{Type: "bearer"},
+	}
 }
 
 func TestValidateAgentSandboxFixRuntime(t *testing.T) {
@@ -1475,7 +1487,7 @@ func TestValidateAgentSandboxFixRuntime(t *testing.T) {
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{
 		Type: "agent-sandbox", AllowBash: &no, MaxTurns: 30, Timeout: "90s", OutputLimitBytes: 131072,
 		AllowedCommands: []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}},
-		ModelGateway:    FixModelGateway{Endpoint: "https://fixture-gateway.fixture.svc.cluster.local/v1", Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1"},
+		ModelProvider:   validAgentSandboxModelProvider(),
 	}}}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid agent-sandbox runtime rejected: %v", err)
@@ -1501,34 +1513,36 @@ func TestValidateAgentSandboxFixRuntime(t *testing.T) {
 		t.Fatalf("agent-sandbox command policy error = %v", err)
 	}
 	c.AI.FixPRs.AgentRuntime.AllowedCommands = []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}}
-	c.AI.FixPRs.AgentRuntime.ModelGateway.Endpoint = "https://api.openai.com/v1"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "public CA private DNS") {
-		t.Fatalf("agent-sandbox public gateway error = %v", err)
+	c.AI.FixPRs.AgentRuntime.ModelProvider.API = "responses"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "API") {
+		t.Fatalf("agent-sandbox unsupported API error = %v", err)
 	}
-	c.AI.FixPRs.AgentRuntime.ModelGateway.Endpoint = "https://model-gateway.platform.example.com/v1"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "public CA private DNS") {
-		t.Fatalf("agent-sandbox unacknowledged private DNS gateway error = %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.ModelGateway.PublicCAPrivateDNS = true
+	c.AI.FixPRs.AgentRuntime.ModelProvider = validAgentSandboxModelProvider()
+	c.AI.FixPRs.AgentRuntime.ModelProvider.Auth.Type = "none"
 	if err := c.Validate(); err != nil {
-		t.Fatalf("agent-sandbox public CA private DNS gateway rejected: %v", err)
+		t.Fatalf("agent-sandbox unauthenticated direct provider rejected: %v", err)
 	}
-	c.AI.FixPRs.AgentRuntime.ModelGateway.Endpoint = "https://api.anthropic.com/v1"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "non-provider") {
-		t.Fatalf("agent-sandbox direct provider gateway error = %v", err)
+	c.AI.FixPRs.AgentRuntime.ModelProvider = FixModelProvider{
+		CredentialMode: "gateway", API: "chat_completions",
+		Endpoint: "https://gateway.fixture.svc.cluster.local/v1/chat/completions", Model: "fixture-model",
+		Auth: FixModelProviderAuth{Type: "none"},
 	}
-	c.AI.FixPRs.AgentRuntime.ModelGateway.Endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "non-provider") {
-		t.Fatalf("agent-sandbox NVIDIA provider gateway error = %v", err)
+	if err := c.Validate(); err != nil {
+		t.Fatalf("agent-sandbox gateway provider rejected: %v", err)
 	}
-	c.AI.FixPRs.AgentRuntime.ModelGateway.Endpoint = "https://fixture-gateway.fixture.svc.cluster.local/v1"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "applies only") {
-		t.Fatalf("agent-sandbox internal gateway acknowledgement error = %v", err)
+	c.AI.FixPRs.AgentRuntime.ModelProvider.Auth.Type = "bearer"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "gateway credential mode") {
+		t.Fatalf("agent-sandbox gateway bearer error = %v", err)
 	}
-	c.AI.FixPRs.AgentRuntime.ModelGateway.PublicCAPrivateDNS = false
+	c.AI.FixPRs.AgentRuntime.ModelProvider = validAgentSandboxModelProvider()
+	c.AI.FixPRs.AgentRuntime.ModelProvider.PublicCAPrivateDNS = true
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "gateway credential mode") {
+		t.Fatalf("agent-sandbox direct trust option error = %v", err)
+	}
+	c.AI.FixPRs.AgentRuntime.ModelProvider = validAgentSandboxModelProvider()
 	c.AI.FixPRs.AgentRuntime.AllowedCommands = []FixAgentCommand{{Argv: []string{"go", "test", "./..."}, Timeout: "30s"}}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "must end with argv [git diff --cached --check]") {
-		t.Fatalf("agent-sandbox final command error = %v", err)
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "must end") {
+		t.Fatalf("agent-sandbox final diff command error = %v", err)
 	}
 	c.AI.FixPRs.AgentRuntime.AllowedCommands = []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}}
 	c.AI.FixPRs.AgentRuntime.OutputLimitBytes = 1024
@@ -1622,10 +1636,13 @@ ai:
       output_limit_bytes: 131072
       allowed_commands:
         - git diff --cached --check
-      model_gateway:
-        endpoint: https://gateway.fix.svc.cluster.local/v1
+      model_provider:
+        credential_mode: gateway
+        api: chat_completions
+        endpoint: https://gateway.fix.svc.cluster.local/v1/chat/completions
         model: fixture
-        protocol_version: openai-chat-completions-v1
+        auth:
+          type: none
 `
 	if _, err := Parse([]byte(legacy)); err == nil || !strings.Contains(err.Error(), "cannot unmarshal") {
 		t.Fatalf("legacy command error = %v", err)
@@ -1644,7 +1661,7 @@ func TestAgentSandboxIsOneShotByDefault(t *testing.T) {
 	config.AI.FixPRs.AgentRuntime = &FixAgentRuntime{
 		Type: "agent-sandbox", MaxTurns: 2, Timeout: "2m", OutputLimitBytes: 131072,
 		AllowedCommands: []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}},
-		ModelGateway:    FixModelGateway{Endpoint: "https://gateway.fix.svc.cluster.local/v1", Model: "fixture", ProtocolVersion: "openai-chat-completions-v1"},
+		ModelProvider:   validAgentSandboxModelProvider(),
 	}
 	no := false
 	config.AI.FixPRs.AgentRuntime.AllowBash = &no
@@ -1659,10 +1676,10 @@ func TestValidateDisabledFixPRRuntimeStillFailsClosed(t *testing.T) {
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: false, AgentRuntime: &FixAgentRuntime{
 		Type: "agent-sandbox", AllowBash: &no, MaxTurns: 30, Timeout: "10m", OutputLimitBytes: 131072,
 		AllowedCommands: []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}},
-		ModelGateway:    FixModelGateway{Endpoint: "https://api.openai.com/v1", Model: "fixture-model", ProtocolVersion: "openai-chat-completions-v1"},
+		ModelProvider:   FixModelProvider{CredentialMode: "gateway", API: "chat_completions", Endpoint: "https://api.openai.com/v1/chat/completions", Model: "fixture-model", Auth: FixModelProviderAuth{Type: "none"}},
 	}}}
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "public CA private DNS") {
-		t.Fatalf("disabled on-demand runtime validation error = %v", err)
+		t.Fatalf("disabled runtime validation error = %v", err)
 	}
 }
 

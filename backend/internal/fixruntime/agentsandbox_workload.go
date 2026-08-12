@@ -9,6 +9,7 @@ import (
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentsandbox"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
@@ -57,14 +58,24 @@ func (r *AgentSandboxRuntime) sandboxWorkloadPodSpec(spec agentsandbox.Spec) map
 		"requests": map[string]any{"cpu": r.opts.Resources.CPURequest, "memory": r.opts.Resources.MemoryRequest, "ephemeral-storage": r.opts.Resources.EphemeralStorage},
 		"limits":   map[string]any{"cpu": r.opts.Resources.CPULimit, "memory": r.opts.Resources.MemoryLimit, "ephemeral-storage": r.opts.Resources.EphemeralStorage},
 	}
+	env := []any{map[string]any{
+		"name":  spec.RequestEnv,
+		"value": base64.StdEncoding.EncodeToString(spec.Request),
+	}}
+	if r.opts.ModelProvider.Auth.Type == modelprovider.AuthTypeBearer {
+		env = append(env, map[string]any{
+			"name": modelprovider.TokenEnv,
+			"valueFrom": map[string]any{"secretKeyRef": map[string]any{
+				"name": r.opts.ProviderSecretRef.Name,
+				"key":  r.opts.ProviderSecretRef.Key,
+			}},
+		})
+	}
 	container := map[string]any{
 		"name":            agentSandboxContainerName,
 		"image":           r.opts.Image,
 		"imagePullPolicy": "IfNotPresent",
-		"env": []any{map[string]any{
-			"name":  spec.RequestEnv,
-			"value": base64.StdEncoding.EncodeToString(spec.Request),
-		}},
+		"env":             env,
 		"securityContext": containerSecurity,
 		"resources":       resources,
 	}

@@ -50,7 +50,7 @@ ENV HOME=/tmp \
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/server"]
 
-# Credential-free OpenCode executor for consumer-installed Agent Sandbox.
+# OpenCode executor for consumer-installed Agent Sandbox.
 # OpenCode is inherited from its official image pinned by release and OCI digest.
 FROM ghcr.io/anomalyco/opencode:1.18.2@sha256:ef9257b3246e9be63d5050924c07f7e6d8d9f135fdfcd8422fc873a408c367af AS agent-sandbox-fix-executor
 USER root

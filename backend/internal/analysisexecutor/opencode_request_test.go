@@ -9,12 +9,11 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
 func TestNewOpenCodeRequestShapeRecordsBoundedFacts(t *testing.T) {
 	spec := OpenCodeSpec{
-		Gateway:            engineruntime.ModelGatewayConfig{Model: "claude-sonnet-4.6"},
+		Provider:           testOpenCodeProvider("", "claude-sonnet-4.6"),
 		Prompt:             "synthetic prompt",
 		ModelContextTokens: 200000,
 		ModelOutputTokens:  8192,
@@ -24,13 +23,13 @@ func TestNewOpenCodeRequestShapeRecordsBoundedFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Available || got.StreamingMode != "streaming" || got.ModelID != spec.Gateway.Model || !got.SystemPromptBytesAvailable || got.SystemPromptBytes != wantSystemBytes || got.UserPromptBytes != len(spec.Prompt)+len(agentanalysis.WorkspaceFinalizationInstruction()) || got.ResponseSchemaSHA256 != agentanalysis.WorkspaceResultSchemaHash() || got.ToolChoiceMode != "required" || got.ContextLimit != 200000 || got.OutputTokenLimit != 8192 || got.OpenCodeVersion != "1.18.2" || !got.ToolSchemaAvailable || got.ToolCount != 1 {
+	if !got.Available || got.StreamingMode != "streaming" || got.ModelID != spec.Provider.Model || !got.SystemPromptBytesAvailable || got.SystemPromptBytes != wantSystemBytes || got.UserPromptBytes != len(spec.Prompt)+len(agentanalysis.WorkspaceFinalizationInstruction()) || got.ResponseSchemaSHA256 != agentanalysis.WorkspaceResultSchemaHash() || got.ToolChoiceMode != "required" || got.ContextLimit != 200000 || got.OutputTokenLimit != 8192 || got.OpenCodeVersion != "1.18.2" || !got.ToolSchemaAvailable || got.ToolCount != 1 {
 		t.Fatalf("shape=%+v", got)
 	}
 }
 
 func TestNewOpenCodeEvidenceRequestShapeHasNoResponseSchema(t *testing.T) {
-	spec := OpenCodeSpec{Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}, Prompt: "investigate", ModelContextTokens: 200000, ModelOutputTokens: 8192}
+	spec := OpenCodeSpec{Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", ModelContextTokens: 200000, ModelOutputTokens: 8192}
 	got := newOpenCodeEvidenceRequestShape(spec, "1.18.2")
 	wantSystemBytes, err := openCodeEvidenceSystemPromptBytes(spec, time.Now())
 	if err != nil {
@@ -59,7 +58,7 @@ func TestFetchOpenCodeToolSchemaDigestUsesOnlyAnalysisTools(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	spec := OpenCodeSpec{WorkDir: "/workspace", Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}}
+	spec := OpenCodeSpec{WorkDir: "/workspace", Provider: testOpenCodeProvider("", "test-model")}
 	count, digest, err := fetchOpenCodeNativeToolSchemaDigest(t.Context(), server.Client(), server.URL, spec)
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +81,7 @@ func TestFetchOpenCodeToolSchemaDigestRejectsMissingAnalysisTool(t *testing.T) {
 		fmt.Fprint(w, `[{"id":"read","parameters":{"type":"object"}}]`)
 	}))
 	defer server.Close()
-	_, _, err := fetchOpenCodeNativeToolSchemaDigest(t.Context(), server.Client(), server.URL, OpenCodeSpec{Gateway: engineruntime.ModelGatewayConfig{Model: "test-model"}})
+	_, _, err := fetchOpenCodeNativeToolSchemaDigest(t.Context(), server.Client(), server.URL, OpenCodeSpec{Provider: testOpenCodeProvider("", "test-model")})
 	if err == nil {
 		t.Fatal("incomplete tool schema set was accepted")
 	}

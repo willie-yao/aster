@@ -8,8 +8,19 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
+
+func testGatewayProvider(endpoint, model string) modelprovider.Config {
+	return modelprovider.Normalize(modelprovider.Config{
+		CredentialMode: modelprovider.CredentialModeGateway,
+		API:            modelprovider.APIChatCompletions,
+		Endpoint:       endpoint,
+		Model:          model,
+		Auth:           modelprovider.Auth{Type: modelprovider.AuthTypeNone},
+	})
+}
 
 // fakeAgentRuntime is a stand-in AgentRuntime that returns canned results and
 // records the spec it was called with.
@@ -31,9 +42,7 @@ func TestManagerGenerateMarksModelGatewayExclusion(t *testing.T) {
 	})
 	manager := &Manager{opts: Options{
 		SourceOwner: "o", SourceName: "r", MaxFiles: 3,
-		Agent: &AgentConfig{Runtime: goodAgent(), MaxFiles: 3, ModelGateway: runtime.ModelGatewayConfig{
-			Endpoint: "https://gateway.internal/v1", Model: "gateway-model", ProtocolVersion: "openai-chat-completions-v1",
-		}},
+		Agent: &AgentConfig{Runtime: goodAgent(), MaxFiles: 3, ModelProvider: testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "gateway-model")},
 	}}
 	if _, err := manager.generate(ctx, systemicPattern("etcd"), "ref", "", nil); err != nil {
 		t.Fatal(err)
@@ -69,7 +78,7 @@ func TestGenerateWithAgent_HappyPath(t *testing.T) {
 		Diff:  "--- a/templates/cluster.yaml\n+++ b/templates/cluster.yaml\n",
 	}}
 	observer := func(context.Context, runtime.WorkRef) error { return nil }
-	gp := agentGenParams(&AgentConfig{Runtime: fa, SharedModelEndpoint: true, Model: "m", Endpoint: "e", ModelToken: "t", MaxFiles: 3, OutputLimitBytes: 131072, ModelGateway: runtime.ModelGatewayConfig{Endpoint: "https://gateway.internal/v1", Model: "fixture", ProtocolVersion: "openai-chat-completions-v1"}, AllowBash: true, NetworkDomains: []string{"registry.example.test:443"}, CommandPolicy: runtime.CommandPolicy{Commands: []runtime.ExecutionCommand{{Argv: []string{"go", "test", "./..."}}}}, ExecutionID: "request-1", WorkObserver: observer})
+	gp := agentGenParams(&AgentConfig{Runtime: fa, SharedModelEndpoint: true, Model: "m", Endpoint: "e", ModelToken: "t", MaxFiles: 3, OutputLimitBytes: 131072, ModelProvider: testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture"), AllowBash: true, NetworkDomains: []string{"registry.example.test:443"}, CommandPolicy: runtime.CommandPolicy{Commands: []runtime.ExecutionCommand{{Argv: []string{"go", "test", "./..."}}}}, ExecutionID: "request-1", WorkObserver: observer})
 
 	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
 	if err != nil {
@@ -97,7 +106,7 @@ func TestGenerateWithAgent_HappyPath(t *testing.T) {
 	if fa.spec.ExecutionID != "request-1" || fa.spec.WorkObserver == nil {
 		t.Errorf("runtime work identity not passed: %+v", fa.spec)
 	}
-	if fa.spec.ExpectedBaseSHA != "ref" || fa.spec.MaxSteps != fa.spec.MaxTurns || fa.spec.MaxFiles != 3 || fa.spec.OutputLimitBytes != 131072 || fa.spec.ModelGateway.Model != "fixture" || !fa.spec.CommandPolicy.AllowShell || len(fa.spec.CommandPolicy.Commands) != 1 {
+	if fa.spec.ExpectedBaseSHA != "ref" || fa.spec.MaxSteps != fa.spec.MaxTurns || fa.spec.MaxFiles != 3 || fa.spec.OutputLimitBytes != 131072 || fa.spec.ModelProvider.Model != "fixture" || !fa.spec.CommandPolicy.AllowShell || len(fa.spec.CommandPolicy.Commands) != 1 {
 		t.Errorf("provider-neutral execution policy not passed: %+v", fa.spec)
 	}
 }
