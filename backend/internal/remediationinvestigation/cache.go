@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 	"golang.org/x/sys/unix"
 )
@@ -29,19 +30,27 @@ const (
 type FailureCategory string
 
 const (
-	FailureInvalidInput      FailureCategory = "invalid_input"
-	FailureSourceUnavailable FailureCategory = "source_unavailable"
-	FailureProvider          FailureCategory = "provider"
-	FailureInvalidResult     FailureCategory = "invalid_result"
-	FailureCancelled         FailureCategory = "cancelled"
-	FailureTimeout           FailureCategory = "timeout"
-	FailureUnknown           FailureCategory = "unknown"
+	FailureInvalidInput               FailureCategory = "invalid_input"
+	FailureSourceUnavailable          FailureCategory = "source_unavailable"
+	FailureProvider                   FailureCategory = "provider"
+	FailureInvalidResult              FailureCategory = "invalid_result"
+	FailureTargetExtractionTransport  FailureCategory = "target_extraction_transport"
+	FailureTargetExtractionValidation FailureCategory = "target_extraction_structured_validation"
+	FailureTargetExtractionAttempts   FailureCategory = "target_extraction_attempt_exhausted"
+	FailureNonActionableAssessment    FailureCategory = "non_actionable_assessment"
+	FailureCancelled                  FailureCategory = "cancelled"
+	FailureTimeout                    FailureCategory = "timeout"
+	FailureUnknown                    FailureCategory = "unknown"
 )
 
 type FailureRecord struct {
-	Category FailureCategory `json:"category"`
-	Digest   string          `json:"digest"`
-	At       string          `json:"at"`
+	Category           FailureCategory                `json:"category"`
+	Code               string                         `json:"code,omitempty"`
+	Phase              Phase                          `json:"phase,omitempty"`
+	ValidationCode     string                         `json:"validation_code,omitempty"`
+	StructuredAttempts []ai.StructuredAttemptMetadata `json:"structured_attempts,omitempty"`
+	Digest             string                         `json:"digest"`
+	At                 string                         `json:"at"`
 }
 
 type CacheEntry struct {
@@ -171,7 +180,14 @@ func (c *Cache) RecordFailure(key string, category FailureCategory, err error) e
 	if strings.TrimSpace(key) == "" || !validFailureCategory(category) {
 		return fmt.Errorf("valid cache key and failure category are required")
 	}
-	record := FailureRecord{Category: category, Digest: failureDigest(err), At: c.now().UTC().Format(time.RFC3339)}
+	record := FailureRecord{Category: category, At: c.now().UTC().Format(time.RFC3339)}
+	if details, ok := FailureDetailsOf(err); ok {
+		record.Code = details.DiagnosticErrorCode()
+		record.Phase = details.Phase
+		record.ValidationCode = details.ValidationCode
+		record.StructuredAttempts = append([]ai.StructuredAttemptMetadata(nil), details.StructuredAttempts...)
+	}
+	record.Digest = failureDigest(err)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.withFileLockLocked(func() error {
@@ -312,7 +328,8 @@ func (c *Cache) persistLocked() error {
 func validFailureCategory(category FailureCategory) bool {
 	switch category {
 	case FailureInvalidInput, FailureSourceUnavailable, FailureProvider, FailureInvalidResult,
-		FailureCancelled, FailureTimeout, FailureUnknown:
+		FailureTargetExtractionTransport, FailureTargetExtractionValidation, FailureTargetExtractionAttempts,
+		FailureNonActionableAssessment, FailureCancelled, FailureTimeout, FailureUnknown:
 		return true
 	default:
 		return false
@@ -321,7 +338,12 @@ func validFailureCategory(category FailureCategory) bool {
 
 func failureDigest(err error) string {
 	value := "unknown"
-	if err != nil {
+	if details, ok := FailureDetailsOf(err); ok {
+		encoded, marshalErr := json.Marshal(details)
+		if marshalErr == nil {
+			value = string(encoded)
+		}
+	} else if err != nil {
 		value = err.Error()
 	}
 	sum := sha256.Sum256([]byte(value))
@@ -334,6 +356,7 @@ func cloneCacheEntry(entry CacheEntry) CacheEntry {
 	entry.Provenance = cloneProvenance(entry.Provenance)
 	if entry.LastFailure != nil {
 		failure := *entry.LastFailure
+		failure.StructuredAttempts = append([]ai.StructuredAttemptMetadata(nil), failure.StructuredAttempts...)
 		entry.LastFailure = &failure
 	}
 	return entry

@@ -46,6 +46,7 @@ func (e *modelHTTPError) Error() string {
 // ProviderErrorMetadata contains only provider fields safe for diagnostic logs.
 type ProviderErrorMetadata struct {
 	API               string
+	Category          string
 	StatusCode        int
 	RetryAfter        string
 	RequestID         string
@@ -58,11 +59,31 @@ func SafeProviderErrorMetadata(err error) (ProviderErrorMetadata, bool) {
 	if err == nil {
 		return ProviderErrorMetadata{}, false
 	}
-	metadata := ProviderErrorMetadata{}
 	var structured *structuredCompletionError
 	if errors.As(err, &structured) {
-		metadata.StructuredAttempt = structured.attempt
+		metadata := structured.provider
+		if final, ok := structured.metadata.FinalAttempt(); ok {
+			metadata.StructuredAttempt = string(final.Path)
+			if final.ProviderCategory != "" {
+				metadata.Category = final.ProviderCategory
+			}
+			if final.ProviderStatus != 0 {
+				metadata.StatusCode = final.ProviderStatus
+			}
+		}
+		if metadata.StructuredAttempt == "" && metadata.StatusCode == 0 && metadata.Category == "" {
+			return ProviderErrorMetadata{}, false
+		}
+		return metadata, true
 	}
+	return safeProviderErrorMetadataFromCause(err)
+}
+
+func safeProviderErrorMetadataFromCause(err error) (ProviderErrorMetadata, bool) {
+	if err == nil {
+		return ProviderErrorMetadata{}, false
+	}
+	metadata := ProviderErrorMetadata{Category: traceErrorCode(err)}
 	var httpErr *modelHTTPError
 	if errors.As(err, &httpErr) {
 		metadata.API = httpErr.API
@@ -70,7 +91,7 @@ func SafeProviderErrorMetadata(err error) (ProviderErrorMetadata, bool) {
 		metadata.RetryAfter = safeProviderRetryAfter(httpErr.RetryAfter)
 		metadata.RequestID = safeProviderRequestID(httpErr.RequestID)
 	}
-	if metadata.StructuredAttempt == "" && metadata.StatusCode == 0 {
+	if metadata.StatusCode == 0 && metadata.Category == "analysis_error" {
 		return ProviderErrorMetadata{}, false
 	}
 	return metadata, true

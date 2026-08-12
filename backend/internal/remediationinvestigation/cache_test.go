@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
@@ -306,4 +308,46 @@ func TestCacheLookupDeepClonesCandidateAndEvidenceCatalog(t *testing.T) {
 
 func (entry *CacheEntry) CandidateFieldPathForTest() []string {
 	return entry.Result.Hypotheses[0].Target.(*ConfigurationFieldCandidate).FieldPath
+}
+
+func TestCacheStructuredFailureStoresOnlyBoundedMetadata(t *testing.T) {
+	path := filepath.Join(t.TempDir(), CacheRelativePath)
+	cache, err := NewCache(path, CacheOptions{Now: func() time.Time { return time.Date(2026, 8, 12, 3, 4, 5, 0, time.UTC) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forbidden := []string{
+		"private prompt text", "config/jobs/private-target.yaml", "source-evidence-private-id",
+		"provider response body", "fixture-secret-credential",
+	}
+	metadata := ai.StructuredCompletionMetadata{Attempts: []ai.StructuredAttemptMetadata{
+		{Phase: string(PhaseTargetExtractionInitial), Path: ai.StructuredAttemptResponseFormat, Outcome: ai.StructuredOutcomeValidatorRejected, ValidatorCalled: true, ValidationCode: "invalid_version", ProviderAttempts: 1, ProviderAttemptsKnown: true},
+		{Phase: string(PhaseTargetExtractionRepair), Path: ai.StructuredAttemptPlainFallback, Outcome: ai.StructuredOutcomeInvalidJSON, ValidatorCalled: false, ProviderAttempts: 1, ProviderAttemptsKnown: true},
+	}}
+	wrapped := newResultError(PhaseTargetExtractionRepair, "invalid_version", metadata, errors.New(strings.Join(forbidden, " ")))
+	key := "remediation-investigation:" + strings.Repeat("a", 64)
+	if err := cache.RecordFailure(key, wrapped.details.Category, wrapped); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, value := range forbidden {
+		if strings.Contains(text, value) {
+			t.Fatalf("private cache retained %q: %s", value, text)
+		}
+	}
+	for _, want := range []string{
+		`"target_extraction_structured_validation"`,
+		`"target_extraction_repair"`,
+		`"invalid_version"`,
+		`"plain_fallback"`,
+		`"invalid_json"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("private cache missing %s: %s", want, text)
+		}
+	}
 }

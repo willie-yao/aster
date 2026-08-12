@@ -435,3 +435,27 @@ func TestSafeOperationViewDoesNotPublishPolicyRuleIDs(t *testing.T) {
 		t.Fatalf("public view leaked private policy diagnostics: %s", encoded)
 	}
 }
+
+func TestSafeOperationViewDoesNotPublishStructuredFailureMetadata(t *testing.T) {
+	ref := OperationRef{CausalGroupID: "group", CausalGroupHash: strings.Repeat("a", 64)}
+	view := operationFailureView(ref, newResultError(
+		PhaseTargetExtractionRepair,
+		"invalid_version",
+		ai.StructuredCompletionMetadata{Attempts: []ai.StructuredAttemptMetadata{{
+			Phase: string(PhaseTargetExtractionRepair), Path: ai.StructuredAttemptPlainFallback,
+			Outcome: ai.StructuredOutcomeInvalidJSON, ValidatorCalled: false,
+		}}},
+		errors.New("private prompt and target"),
+	), time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC))
+	encoded, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{
+		"structured_attempts", "target_extraction_repair", "plain_fallback", "invalid_version", "private prompt", "provider_category",
+	} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("public view exposed %q: %s", forbidden, encoded)
+		}
+	}
+}

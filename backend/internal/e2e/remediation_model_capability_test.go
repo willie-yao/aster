@@ -167,6 +167,7 @@ type remediationModelCapabilityTrial struct {
 	TransportFingerprint             string                                  `json:"transport_fingerprint"`
 	TrialStatus                      string                                  `json:"trial_status"`
 	ErrorCode                        string                                  `json:"error_code,omitempty"`
+	Failure                          *remediationBenchmarkFailure            `json:"failure,omitempty"`
 	EngineCommit                     string                                  `json:"engine_commit"`
 	ManifestSHA256                   string                                  `json:"manifest_sha256"`
 	EffectiveInputSHA256             string                                  `json:"effective_input_sha256"`
@@ -477,6 +478,7 @@ func TestRemediationModelCapabilityBenchmark(t *testing.T) {
 			row.MemoMentionsTargetValue = diagnostics.Value
 			if runErr != nil {
 				row.TrialStatus, row.ErrorCode = remediationTrialFailure(runErr)
+				row.Failure = remediationFailureDiagnostics(runErr)
 				row.Metrics = remediationBenchmarkUsageMetrics(recorder)
 			} else {
 				row.TrialStatus, row.StructurallyValid = "valid_result", true

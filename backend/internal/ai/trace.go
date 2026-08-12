@@ -152,6 +152,10 @@ type TraceEvent struct {
 	RemainingTimeMs               int                 `json:"remaining_time_ms,omitempty"`
 	ErrorCode                     string              `json:"error_code,omitempty"`
 	ValidationCode                string              `json:"validation_code,omitempty"`
+	StructuredPhase               string              `json:"structured_phase,omitempty"`
+	StructuredAttempt             string              `json:"structured_attempt,omitempty"`
+	StructuredOutcome             string              `json:"structured_outcome,omitempty"`
+	ValidatorCalled               *bool               `json:"validator_called,omitempty"`
 }
 
 // TraceMetadata identifies one analysis without endpoint details.
@@ -284,6 +288,18 @@ func (s *TraceSession) Record(event TraceEvent) {
 	}
 	if event.ValidationCode != "" {
 		event.ValidationCode = traceCode(event.ValidationCode)
+	}
+	event.StructuredPhase = structuredPhaseCode(event.StructuredPhase)
+	switch StructuredAttemptPath(event.StructuredAttempt) {
+	case StructuredAttemptResponseFormat, StructuredAttemptForcedFunction, StructuredAttemptPlainFallback:
+	default:
+		event.StructuredAttempt = ""
+	}
+	switch StructuredAttemptOutcome(event.StructuredOutcome) {
+	case StructuredOutcomeAccepted, StructuredOutcomeProviderError, StructuredOutcomeEmptyResponse,
+		StructuredOutcomeMissingForcedFunction, StructuredOutcomeInvalidJSON, StructuredOutcomeValidatorRejected, StructuredOutcomeNoCandidate:
+	default:
+		event.StructuredOutcome = ""
 	}
 	event.SemanticFindings = sanitizeSemanticFindingClasses(event.SemanticFindings)
 	if event.DraftDecision != nil {
