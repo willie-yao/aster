@@ -53,6 +53,8 @@ remains identical.
 | `POST /api/analysis-chat/sessions/{id}/source-investigations/stream` | Start or reconnect to a source investigation over SSE progress events. |
 | `GET /api/analysis-chat/sessions/{id}/source-investigations/{requestID}` | Read the persisted owner-bound investigation state. |
 | `POST /api/analysis-chat/sessions/{id}/source-investigations/{requestID}/cancel` | Cancel one active source investigation. |
+| `POST /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Start one authenticated, explicitly requested causal remediation investigation. Requires exact pattern and causal-group hashes plus `Idempotency-Key`. |
+| `GET /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Read the safe current status for one exact causal group. Requires exact hashes as query parameters. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview` | Generate an existing fix preview from one selected evidence-backed chat response and optional verified source investigation. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/correction/preview` | Preview an evidence-backed proposed correction. |
 | `POST /api/analysis-corrections/confirm` | Explicitly confirm a preview token and publish the correction overlay. |
@@ -341,6 +343,49 @@ Additional settings:
 | `ANALYSIS_SOURCE_INVESTIGATION_MAX_PER_SESSION` | `8` | Persisted source requests per chat session. |
 | `ANALYSIS_SOURCE_INVESTIGATION_MAX_ACTIVE_PER_OWNER` | `1` | Concurrent source Tasks per login. |
 | `SOURCE_INVESTIGATION_GITHUB_TOKEN` | empty | Optional read-only token for pinned citation verification in private GitHub repositories. |
+
+## Causal remediation investigation API
+
+Set `CAUSAL_REMEDIATION_INVESTIGATION_ENABLED=true` to expose the authenticated
+read-only operation. This feature is independent of analysis chat and does not
+enable GitHub writes. It uses the existing AI provider, read-only artifact
+backend, analysis source repository, and `ai.fix_prs` destination allowlist.
+
+The POST body contains only `pattern_hash`, `causal_group_hash`, and an optional
+`refresh` boolean. The route provides the job, pattern, and causal-group IDs.
+`Idempotency-Key` is required. Requests fail closed when published hashes,
+lifecycle, builds, source revisions, provider identity, or destination policy no
+longer match current data. Starts are rejected while a fetch/watch refresh is
+running.
+
+One operation may actively investigate or verify at a time per server. Other
+exact cache keys remain queued. The overall operation is bounded by
+`CAUSAL_REMEDIATION_INVESTIGATION_TIMEOUT`, defaults to 10 minutes, and is
+cancelled during server shutdown. A restart loses in-memory queued and active
+state, but never persists or publishes a partial result. Completed private cache
+entries are reverified before their safe state is returned.
+
+The GET response contains only the causal-group ID and content hash, safe state,
+fixed concise reason, optional verified target identity, and completion time.
+States are `not_investigated`, `queued`, `investigating`, `verifying`,
+`actionable`, `already_fixed`, `external_dependency`,
+`environment_or_infrastructure`, `mitigation_only`, `insufficient_evidence`,
+`failed`, or `stale`. Evidence catalogs, excerpts, prompts, raw model output,
+traces, provider coordinates, usage, cache keys, and private errors are never
+returned.
+
+Capabilities advertise `causal_remediation_investigation` and
+`causal_remediation_investigation_authenticated`. File Issue and Fix PR remain
+blocked for causal-group patterns through `models.PatternAllowsActions`.
+
+Environment variables:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `CAUSAL_REMEDIATION_INVESTIGATION_ENABLED` | `false` | Enable the authenticated start/status operation. |
+| `CAUSAL_REMEDIATION_INVESTIGATION_TIMEOUT` | `10m` | Bound queue wait, model investigation, and deterministic verification. Maximum 30m. |
+| `CAUSAL_REMEDIATION_INVESTIGATION_MAX_OPERATIONS` | `256` | Bound retained in-memory safe status records. |
+| `SOURCE_INVESTIGATION_GITHUB_TOKEN` | empty | Optional read-only source token for private repositories. |
 
 ## Analysis correction overlays
 

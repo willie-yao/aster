@@ -280,6 +280,7 @@ main operator controls.
 | `fetcher.extraEnv` | Additional environment variables, preferably through `secretKeyRef`. |
 | `server.replicaCount` | Server replicas. Persistent private state requires a suitable shared filesystem. |
 | `server.chat.*` | Authenticated analysis conversation settings. |
+| `server.remediationInvestigation.*` | Explicit authenticated causal remediation start/status operation. Does not enable writes. |
 | `server.security.hsts.enabled` | Helm HSTS behavior. Keep enabled for deployed HTTPS origins. |
 | `server.development.allowInsecureHTTP` | Explicit local HTTP acknowledgement required to disable HSTS outside OAuth cookie testing. |
 | `server.development.allowInsecureCookies` | Local HTTP OAuth testing only. Never enable on a deployed dashboard. |
@@ -388,6 +389,25 @@ JSON.
 
 See [Server mode](server.md) for OAuth, proxy mode, chat, correction review, and
 trusted-origin configuration.
+
+## Causal remediation investigation
+
+Set `server.remediationInvestigation.enabled=true` with `ai.enabled=true` to
+expose the authenticated **Investigate possible fix** operation. It reuses
+`server.actions` OAuth or proxy authentication, but does not enable actions or
+require `BOT_TOKEN`. Configure its overall timeout and bounded retained status
+count under `server.remediationInvestigation`.
+
+The server reads the existing project prompt, skills, artifact backend,
+`ai.source_repo`, and `ai.fix_prs` destination policy. The default destination
+repository is constrained to exact relevant files from the frozen causal input.
+Cross-repository Prow configuration targets require an explicit
+`ai.fix_prs.allowed_repositories` path prefix. An optional read-only GitHub token
+comes from the existing `ai.githubReadToken*` settings.
+
+File Issue and Preview Fix PR remain disabled for causal-group results. See
+[Server mode](server.md#causal-remediation-investigation-api) for the endpoint,
+idempotency, concurrency, timeout, stale-result, and privacy contract.
 
 ## Authenticated write actions
 

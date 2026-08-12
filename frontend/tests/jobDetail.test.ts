@@ -157,6 +157,8 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(pattern, /<PatternRemediation/);
   assert.match(pattern, /followUp=\{analysisOnly/);
   assert.match(pattern, /investigations=\{pattern\.remediation_investigations\}/);
+  assert.match(pattern, /patternID=\{pattern\.id\}/);
+  assert.match(pattern, /patternHash=\{pattern\.content_hash\}/);
   assert.match(pattern, /Remediation present, verifying the fix/);
   assert.match(pattern, /Watching recovery/);
   assert.match(pattern, /Observed passing runs:/);

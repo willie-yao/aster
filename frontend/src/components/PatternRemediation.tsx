@@ -1,29 +1,132 @@
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { ExpandMore } from "@mui/icons-material";
 import Accordion from "@mui/material/Accordion";
 import AccordionDetails from "@mui/material/AccordionDetails";
 import AccordionSummary from "@mui/material/AccordionSummary";
 import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
-import { ExpandMore } from "@mui/icons-material";
+import { useAuth } from "../hooks/useAuth";
+import { useCapabilities } from "../hooks/useCapabilities";
+import {
+  getCausalRemediationStatus,
+  startCausalRemediation,
+  type CausalRemediationRef,
+} from "../lib/causalRemediation";
+import { patternRemediationPresentation } from "../lib/patternRemediation";
+import { overviewTypography } from "../theme/overview";
 import type {
   PatternCausalGroup,
   PatternRemediationInvestigationSummary,
+  PatternRemediationInvestigationState,
+  PatternRemediationTargetSummary,
 } from "../types/dashboard";
-import { patternRemediationPresentation } from "../lib/patternRemediation";
-import { overviewTypography } from "../theme/overview";
+
+const activeStates = new Set<PatternRemediationInvestigationState>([
+  "queued",
+  "investigating",
+  "verifying",
+]);
 
 export function PatternRemediation({
   groups,
   investigations,
+  jobID,
+  patternID,
+  patternHash,
 }: {
   groups: PatternCausalGroup[];
   investigations?: PatternRemediationInvestigationSummary[];
+  jobID?: string;
+  patternID?: string;
+  patternHash?: string;
 }) {
-  const recurringGroups = groups.filter((group) => group.builds.length >= 2);
-  const investigationsByHash = new Map(
-    investigations?.map((investigation) => [investigation.causal_group_hash, investigation]),
+  const { features } = useCapabilities();
+  const { status: authStatus, signIn } = useAuth();
+  const recurringGroups = useMemo(() => groups.filter((group) => group.builds.length >= 2), [groups]);
+  const [states, setStates] = useState<Map<string, PatternRemediationInvestigationSummary>>(
+    () => new Map(investigations?.map((item) => [item.causal_group_hash, item])),
   );
+  const [busyHash, setBusyHash] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Map<string, string>>(new Map());
+  const idempotencyKeys = useRef(new Map<string, string>());
+  const operationAvailable = Boolean(features.causal_remediation_investigation);
+
+  useEffect(() => {
+    setStates(new Map(investigations?.map((item) => [item.causal_group_hash, item])));
+  }, [investigations]);
+
+  useEffect(() => {
+    if (!operationAvailable || authStatus !== "authenticated" || !jobID || !patternID || !patternHash) return;
+    let cancelled = false;
+    const load = async (group: PatternCausalGroup) => {
+      const ref = operationRef(jobID, patternID, patternHash, group);
+      if (!ref) return;
+      try {
+        const view = await getCausalRemediationStatus(ref);
+        if (!cancelled) updateState(setStates, view);
+      } catch {
+        // The public not-investigated projection remains the safe fallback.
+      }
+    };
+    void Promise.all(recurringGroups.map(load));
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus, jobID, operationAvailable, patternHash, patternID, recurringGroups]);
+
+  useEffect(() => {
+    for (const [hash, view] of states) {
+      if (!activeStates.has(view.state)) idempotencyKeys.current.delete(hash);
+    }
+  }, [states]);
+
+  useEffect(() => {
+    if (!operationAvailable || authStatus !== "authenticated" || !jobID || !patternID || !patternHash) return;
+    const active = recurringGroups.filter((group) => {
+      const state = group.content_hash ? states.get(group.content_hash)?.state : undefined;
+      return state ? activeStates.has(state) : false;
+    });
+    if (active.length === 0) return;
+    const timer = window.setInterval(() => {
+      for (const group of active) {
+        const ref = operationRef(jobID, patternID, patternHash, group);
+        if (!ref) continue;
+        void getCausalRemediationStatus(ref)
+          .then((view) => updateState(setStates, view))
+          .catch(() => undefined);
+      }
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [authStatus, jobID, operationAvailable, patternHash, patternID, recurringGroups, states]);
+
+  const start = async (group: PatternCausalGroup, refresh: boolean) => {
+    if (authStatus === "anonymous") {
+      signIn();
+      return;
+    }
+    if (authStatus !== "authenticated" || !jobID || !patternID || !patternHash) return;
+    const ref = operationRef(jobID, patternID, patternHash, group);
+    if (!ref) return;
+    let requestID = idempotencyKeys.current.get(ref.causalGroupHash);
+    if (!requestID) {
+      requestID = crypto.randomUUID();
+      idempotencyKeys.current.set(ref.causalGroupHash, requestID);
+    }
+    setBusyHash(ref.causalGroupHash);
+    setErrors((current) => withoutKey(current, ref.causalGroupHash));
+    try {
+      const view = await startCausalRemediation(ref, requestID, refresh);
+      updateState(setStates, view);
+    } catch (error) {
+      idempotencyKeys.current.delete(ref.causalGroupHash);
+      setErrors((current) => new Map(current).set(ref.causalGroupHash, error instanceof Error ? error.message : "Investigation could not start."));
+    } finally {
+      setBusyHash(null);
+    }
+  };
 
   return (
     <Box aria-live="polite">
@@ -41,9 +144,13 @@ export function PatternRemediation({
       ) : (
         <Stack spacing={1.5} sx={{ mt: 0.75 }}>
           {recurringGroups.map((group, index) => {
-            const presentation = patternRemediationPresentation(
-              group.content_hash ? investigationsByHash.get(group.content_hash) : undefined,
-            );
+            const investigation = group.content_hash ? states.get(group.content_hash) : undefined;
+            const presentation = patternRemediationPresentation(investigation);
+            const localError = group.content_hash ? errors.get(group.content_hash) : undefined;
+            const details = investigationDetails(investigation, localError, presentation.message);
+            const canStart = operationAvailable &&
+              (presentation.state === "not_investigated" || presentation.state === "failed") &&
+              authStatus !== "loading";
             return (
               <Box key={group.id ?? group.content_hash ?? `${group.builds.join("-")}-${index}`}>
                 <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}>
@@ -60,7 +167,18 @@ export function PatternRemediation({
                   />
                 </Stack>
                 <Typography sx={{ mt: 0.75 }}>{presentation.message}</Typography>
-                {presentation.detail && (
+                {canStart && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={busyHash === group.content_hash}
+                    onClick={() => void start(group, presentation.state === "failed")}
+                    sx={{ mt: 1 }}
+                  >
+                    {authStatus === "anonymous" ? "Sign in to investigate" : "Investigate possible fix"}
+                  </Button>
+                )}
+                {details && (
                   <Accordion
                     disableGutters
                     elevation={0}
@@ -76,8 +194,8 @@ export function PatternRemediation({
                       <Typography sx={overviewTypography.data}>Investigation details</Typography>
                     </AccordionSummary>
                     <AccordionDetails sx={{ pt: 0 }}>
-                      <Typography color="text.secondary" sx={{ overflowWrap: "anywhere" }}>
-                        {presentation.detail}
+                      <Typography color="text.secondary" sx={{ whiteSpace: "pre-line", overflowWrap: "anywhere" }}>
+                        {details}
                       </Typography>
                     </AccordionDetails>
                   </Accordion>
@@ -89,4 +207,49 @@ export function PatternRemediation({
       )}
     </Box>
   );
+}
+
+function operationRef(jobID: string, patternID: string, patternHash: string, group: PatternCausalGroup): CausalRemediationRef | null {
+  if (!group.id || !group.content_hash) return null;
+  return {
+    jobID,
+    patternID,
+    patternHash,
+    causalGroupID: group.id,
+    causalGroupHash: group.content_hash,
+  };
+}
+
+function updateState(
+  setStates: Dispatch<SetStateAction<Map<string, PatternRemediationInvestigationSummary>>>,
+  view: PatternRemediationInvestigationSummary,
+) {
+  setStates((current) => new Map(current).set(view.causal_group_hash, view));
+}
+
+function withoutKey(values: Map<string, string>, key: string): Map<string, string> {
+  const next = new Map(values);
+  next.delete(key);
+  return next;
+}
+
+function investigationDetails(
+  investigation?: PatternRemediationInvestigationSummary,
+  localError?: string,
+  conciseMessage?: string,
+): string | undefined {
+  const details: string[] = [];
+  if (investigation?.reason && investigation.reason !== conciseMessage) details.push(investigation.reason);
+  if (investigation?.target) details.push(formatTarget(investigation.target));
+  if (investigation?.completed_at) details.push(`Completed: ${investigation.completed_at}`);
+  if (localError) details.push(localError);
+  return details.length > 0 ? details.join("\n") : undefined;
+}
+
+function formatTarget(target: PatternRemediationTargetSummary): string {
+  const identity = [target.symbol, target.required_call, target.job, target.container, target.name]
+    .filter(Boolean)
+    .join(" · ");
+  const value = target.value ? ` = ${target.value}` : "";
+  return `Verified target: ${target.kind} · ${target.repository}@${target.revision} · ${target.path}${identity ? ` · ${identity}` : ""}${value}`;
 }

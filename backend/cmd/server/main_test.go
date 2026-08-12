@@ -52,24 +52,27 @@ func TestTrustedOrigins_EmptyRedirect(t *testing.T) {
 }
 
 func TestInteractiveFeaturesFromEnv(t *testing.T) {
-	t.Run("legacy actions default", func(t *testing.T) {
+	setDefaults := func(t *testing.T) {
+		t.Helper()
 		t.Setenv("ANALYSIS_CHAT_ENABLED", "")
 		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "")
 		t.Setenv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", "")
+		t.Setenv("CAUSAL_REMEDIATION_INVESTIGATION_ENABLED", "")
 		t.Setenv("ACTIONS_ENABLED", "")
+	}
+	t.Run("legacy actions default", func(t *testing.T) {
+		setDefaults(t)
 		features, err := interactiveFeaturesFromEnv()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !features.Actions || features.AnalysisChat {
+		if !features.Actions || features.AnalysisChat || features.CausalRemediationInvestigation {
 			t.Fatalf("features = %+v", features)
 		}
 	})
 	t.Run("chat defaults writes off", func(t *testing.T) {
+		setDefaults(t)
 		t.Setenv("ANALYSIS_CHAT_ENABLED", "true")
-		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "")
-		t.Setenv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", "")
-		t.Setenv("ACTIONS_ENABLED", "")
 		features, err := interactiveFeaturesFromEnv()
 		if err != nil {
 			t.Fatal(err)
@@ -79,8 +82,8 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 		}
 	})
 	t.Run("chat and actions", func(t *testing.T) {
+		setDefaults(t)
 		t.Setenv("ANALYSIS_CHAT_ENABLED", "1")
-		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "")
 		t.Setenv("ACTIONS_ENABLED", "1")
 		features, err := interactiveFeaturesFromEnv()
 		if err != nil {
@@ -91,10 +94,9 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 		}
 	})
 	t.Run("chat corrections", func(t *testing.T) {
+		setDefaults(t)
 		t.Setenv("ANALYSIS_CHAT_ENABLED", "true")
 		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "true")
-		t.Setenv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", "")
-		t.Setenv("ACTIONS_ENABLED", "")
 		features, err := interactiveFeaturesFromEnv()
 		if err != nil {
 			t.Fatal(err)
@@ -103,11 +105,21 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 			t.Fatalf("features = %+v", features)
 		}
 	})
+	t.Run("causal remediation defaults writes off", func(t *testing.T) {
+		setDefaults(t)
+		t.Setenv("CAUSAL_REMEDIATION_INVESTIGATION_ENABLED", "true")
+		features, err := interactiveFeaturesFromEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if features.Actions || !features.CausalRemediationInvestigation {
+			t.Fatalf("features = %+v", features)
+		}
+	})
 	t.Run("source investigation", func(t *testing.T) {
+		setDefaults(t)
 		t.Setenv("ANALYSIS_CHAT_ENABLED", "true")
-		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "")
 		t.Setenv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", "true")
-		t.Setenv("ACTIONS_ENABLED", "")
 		features, err := interactiveFeaturesFromEnv()
 		if err != nil {
 			t.Fatal(err)
@@ -117,14 +129,15 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 		}
 	})
 	t.Run("source investigation requires chat", func(t *testing.T) {
+		setDefaults(t)
 		t.Setenv("ANALYSIS_CHAT_ENABLED", "false")
-		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "")
 		t.Setenv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", "true")
 		if _, err := interactiveFeaturesFromEnv(); err == nil {
 			t.Fatal("source investigation was accepted without chat")
 		}
 	})
 	t.Run("corrections require chat", func(t *testing.T) {
+		setDefaults(t)
 		t.Setenv("ANALYSIS_CHAT_ENABLED", "false")
 		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "true")
 		if _, err := interactiveFeaturesFromEnv(); err == nil {
@@ -132,7 +145,8 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 		}
 	})
 	t.Run("invalid", func(t *testing.T) {
-		t.Setenv("ANALYSIS_CHAT_ENABLED", "sometimes")
+		setDefaults(t)
+		t.Setenv("CAUSAL_REMEDIATION_INVESTIGATION_ENABLED", "sometimes")
 		if _, err := interactiveFeaturesFromEnv(); err == nil {
 			t.Fatal("invalid feature flag was accepted")
 		}

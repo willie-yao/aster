@@ -297,13 +297,20 @@ requests, tokens, cost coverage, latency, and repair counts.
 
 ## Current boundary
 
-This foundation does not update the public remediation state and does not expose
-an investigation API. Causal-group patterns remain blocked by
-`models.PatternAllowsActions`. **Investigate possible fix**, public terminal-state
-publication, File Issue eligibility, and Fix PR preview remain disabled.
+Authenticated server deployments may explicitly enable the preview-only
+**Investigate possible fix** operation. It validates the exact current pattern,
+causal group, lifecycle, builds, source revisions, provider identity, and
+destination policy before running the trusted read-only investigator. Only safe
+status, a fixed concise reason, optional verified target identity, completion
+time, and causal-group hash are returned.
+
+Private evidence remains in the remediation cache. The operation does not modify
+published causal analysis, does not run during fetch/watch refresh, and does not
+automatically investigate any group. Causal-group patterns remain blocked by
+`models.PatternAllowsActions`, so File Issue and Fix PR preview remain disabled.
 
 The later Fix PR handoff must consume only `VerifiedResult.Proposal`. OpenCode
 must receive the frozen verified target and cannot repair, replace, or rediscover
-an unverified target. That handoff remains deferred until remediation provider
-quality passes the staged cold holdouts and the exact final Fix executor passes a
-separate direct-runtime smoke.
+an unverified target. That handoff remains deferred until the Claude and real
+historical gates pass and the exact final Fix executor passes a separate
+single-use smoke.

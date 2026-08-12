@@ -28,9 +28,11 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/chatfix"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/corrections"
@@ -38,6 +40,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationinvestigation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/server"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
@@ -125,6 +128,13 @@ func main() {
 			log.Printf("server: waiting for analysis chat turns: %v", err)
 		}
 	}
+	if waiter, ok := opts.CausalRemediationInvestigation.(interface{ Wait(context.Context) error }); ok {
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer waitCancel()
+		if err := waiter.Wait(waitCtx); err != nil {
+			log.Printf("server: waiting for causal remediation investigations: %v", err)
+		}
+	}
 	if waiter, ok := opts.Actions.(interface{ Wait(context.Context) error }); ok {
 		waitCtx, waitCancel := context.WithTimeout(context.Background(), 35*time.Second)
 		defer waitCancel()
@@ -201,6 +211,11 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 			return err
 		}
 	}
+	if features.CausalRemediationInvestigation {
+		if err := enableCausalRemediationInvestigation(ctx, opts, cfg, projectDir, dataDir, usageRecorder); err != nil {
+			return err
+		}
+	}
 	if actionService != nil && chatService != nil && features.SourceInvestigation {
 		analysisRepo := cfg.EffectiveAnalysisSourceRepo()
 		fixConfig := cfg.EffectiveFixPRs()
@@ -224,10 +239,11 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 }
 
 type interactiveFeatures struct {
-	Actions             bool
-	AnalysisChat        bool
-	AnalysisCorrections bool
-	SourceInvestigation bool
+	Actions                        bool
+	AnalysisChat                   bool
+	AnalysisCorrections            bool
+	SourceInvestigation            bool
+	CausalRemediationInvestigation bool
 }
 
 func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
@@ -249,13 +265,17 @@ func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
 	if sourceEnabled && !chat {
 		return interactiveFeatures{}, fmt.Errorf("ANALYSIS_SOURCE_INVESTIGATION_ENABLED requires ANALYSIS_CHAT_ENABLED")
 	}
-	actions, err := optionalBoolEnv("ACTIONS_ENABLED", !chat)
+	causalRemediation, err := optionalBoolEnv("CAUSAL_REMEDIATION_INVESTIGATION_ENABLED", false)
+	if err != nil {
+		return interactiveFeatures{}, err
+	}
+	actions, err := optionalBoolEnv("ACTIONS_ENABLED", !chat && !causalRemediation)
 	if err != nil {
 		return interactiveFeatures{}, err
 	}
 	return interactiveFeatures{
 		Actions: actions, AnalysisChat: chat, AnalysisCorrections: correctionsEnabled,
-		SourceInvestigation: sourceEnabled,
+		SourceInvestigation: sourceEnabled, CausalRemediationInvestigation: causalRemediation,
 	}, nil
 }
 
@@ -402,6 +422,88 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 	opts.AnalysisChatTimeout = timeout
 	log.Printf("💬 analysis chat enabled (state=%s ttl=%s)", serviceOpts.StateDir, serviceOpts.SessionTTL)
 	return service, nil
+}
+
+func enableCausalRemediationInvestigation(
+	ctx context.Context,
+	opts *server.Options,
+	cfg *project.Config,
+	projectDir, dataDir string,
+	usageRecorder *aiusage.Recorder,
+) error {
+	timeout, err := causalRemediationTimeoutFromEnv()
+	if err != nil {
+		return err
+	}
+	token := os.Getenv("AI_TOKEN")
+	if token == "" {
+		return fmt.Errorf("causal remediation investigation requires AI_TOKEN")
+	}
+	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"))
+	if err := project.ValidateAIAPI(provider.API); err != nil {
+		return err
+	}
+	if strings.TrimSpace(provider.Endpoint) == "" || strings.TrimSpace(provider.Model) == "" {
+		return fmt.Errorf("causal remediation investigation requires an AI endpoint and model")
+	}
+	loaded, err := analysisruntime.LoadProject(projectDir, cfg, analysisruntime.ProviderFallbacks{
+		API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model,
+		CacheGeneration: os.Getenv(project.AICacheGenerationEnv),
+	})
+	if err != nil {
+		return fmt.Errorf("loading causal remediation project: %w", err)
+	}
+	client := ai.NewClientWithOptions(ai.Options{
+		Token: token, API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model, ExtraHeaders: provider.Headers,
+	})
+	cache, err := remediationinvestigation.NewCache(filepath.Join(dataDir, remediationinvestigation.CacheRelativePath), remediationinvestigation.CacheOptions{})
+	if err != nil {
+		return fmt.Errorf("configuring remediation investigation cache: %w", err)
+	}
+	backend, err := storage.New(cfg.StorageConfig(), &http.Client{Timeout: 30 * time.Second})
+	if err != nil {
+		return fmt.Errorf("configuring remediation investigation storage: %w", err)
+	}
+	sourceToken := os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN")
+	resolver, err := remediationinvestigation.NewPublishedResolver(remediationinvestigation.PublishedResolverOptions{
+		DataDir: dataDir, Config: cfg, ConsumerPrompt: loaded.ConsumerPrompt,
+		SkillHash: loaded.SkillSet.Hash(), ProviderFingerprint: client.ModelFingerprint(),
+		Artifacts: artifacts.NewBackendFactory(backend, cfg.Storage.Bucket),
+		Source:    remediationinvestigation.NewGitHubSourceAccess(sourceToken),
+	})
+	if err != nil {
+		return fmt.Errorf("configuring remediation investigation resolver: %w", err)
+	}
+	maxOperations, err := positiveIntEnv("CAUSAL_REMEDIATION_INVESTIGATION_MAX_OPERATIONS", 256)
+	if err != nil {
+		return err
+	}
+	service, err := remediationinvestigation.NewOperationService(ctx, client, cache, resolver, remediationinvestigation.OperationOptions{
+		Timeout: timeout, MaxOperations: maxOperations, UsageRecorder: usageRecorder,
+	})
+	if err != nil {
+		return fmt.Errorf("configuring remediation investigation operation: %w", err)
+	}
+	opts.CausalRemediationInvestigation = service
+	opts.CausalRemediationRequestTimeout = 45 * time.Second
+	log.Printf("🔎 causal remediation investigation enabled (timeout=%s max_operations=%d)", timeout, maxOperations)
+	return nil
+}
+
+func causalRemediationTimeoutFromEnv() (time.Duration, error) {
+	const maxTimeout = 30 * time.Minute
+	timeout := 10 * time.Minute
+	if value := strings.TrimSpace(os.Getenv("CAUSAL_REMEDIATION_INVESTIGATION_TIMEOUT")); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return 0, fmt.Errorf("invalid CAUSAL_REMEDIATION_INVESTIGATION_TIMEOUT %q: %w", value, err)
+		}
+		timeout = parsed
+	}
+	if timeout <= 0 || timeout > maxTimeout {
+		return 0, fmt.Errorf("CAUSAL_REMEDIATION_INVESTIGATION_TIMEOUT must be greater than zero and at most %s", maxTimeout)
+	}
+	return timeout, nil
 }
 
 func sourceInvestigationKubeContext() string {

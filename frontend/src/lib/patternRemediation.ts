@@ -23,9 +23,17 @@ const presentations: Record<
     message: notInvestigatedReason,
     futureAction: "Investigate possible fix",
   },
+  queued: {
+    label: "Queued",
+    message: "The read-only remediation investigation is queued.",
+  },
   investigating: {
     label: "Investigating",
     message: "A bounded read-only source investigation is in progress.",
+  },
+  verifying: {
+    label: "Verifying",
+    message: "The proposed target is undergoing deterministic verification.",
   },
   actionable: {
     label: "Actionable",
@@ -56,6 +64,10 @@ const presentations: Record<
     label: "Investigation failed",
     message: "The read-only investigation did not produce a verified result. Published causal analysis is unchanged.",
     futureAction: "Investigate possible fix",
+  },
+  stale: {
+    label: "Stale",
+    message: "This recurring cause is no longer the current active causal group. Refresh the dashboard before investigating again.",
   },
 };
 

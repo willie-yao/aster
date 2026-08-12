@@ -81,7 +81,9 @@ func TestPatternCausalGroupHashCanonicalizesBuildOrder(t *testing.T) {
 func TestValidPatternRemediationInvestigationState(t *testing.T) {
 	states := []PatternRemediationInvestigationState{
 		PatternRemediationNotInvestigated,
+		PatternRemediationQueued,
 		PatternRemediationInvestigating,
+		PatternRemediationVerifying,
 		PatternRemediationActionable,
 		PatternRemediationAlreadyFixed,
 		PatternRemediationExternalDependency,
@@ -89,6 +91,7 @@ func TestValidPatternRemediationInvestigationState(t *testing.T) {
 		PatternRemediationMitigationOnly,
 		PatternRemediationInsufficientEvidence,
 		PatternRemediationInvestigationFailed,
+		PatternRemediationStale,
 	}
 	for _, state := range states {
 		if !ValidPatternRemediationInvestigationState(state) {

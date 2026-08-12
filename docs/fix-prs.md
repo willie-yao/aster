@@ -27,12 +27,12 @@ causal-group IDs and content hashes. Repeated groups start at `not_investigated`
 with the message that no source-grounded implementation target has been verified.
 
 The job detail view shows this state in a concise, always-visible
-**Remediation** section. The **Investigate possible fix** label is reserved for
-the later authenticated read-only operation; no control is rendered before that
-endpoint exists. Technical failure details remain collapsed. Existing File Issue
-and Fix PR gates continue to reject causal-group results, and remediation state is
-excluded from causal-group and pattern content hashes so an investigation cannot
-rewrite the published analysis identity.
+**Remediation** section. Authenticated server deployments may explicitly enable
+**Investigate possible fix**, which starts the bounded trusted read-only
+investigator and publishes only safe status. Technical details remain collapsed.
+Existing File Issue and Fix PR gates continue to reject causal-group results, and
+remediation state is excluded from causal-group and pattern content hashes so an
+investigation cannot rewrite the published analysis identity.
 
 ## What it does
 

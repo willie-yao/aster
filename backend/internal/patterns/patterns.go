@@ -368,16 +368,7 @@ func GatherFailures(d *models.JobDetail) []ai.PatternFailure {
 		if run.Passed || run.Result == "PENDING" {
 			continue
 		}
-		var rep *models.TestCase
-		for j := range run.TestCases {
-			tc := &run.TestCases[j]
-			if tc.Status != "failed" || tc.AIAnalysis == nil {
-				continue
-			}
-			if rep == nil || severityRank(tc.AIAnalysis.Severity) > severityRank(rep.AIAnalysis.Severity) {
-				rep = tc
-			}
-		}
+		rep := RepresentativeAnalyzedFailure(run)
 		if rep == nil {
 			continue
 		}
@@ -398,6 +389,24 @@ func GatherFailures(d *models.JobDetail) []ai.PatternFailure {
 		})
 	}
 	return out
+}
+
+// RepresentativeAnalyzedFailure returns the exact failure used for causal correlation.
+func RepresentativeAnalyzedFailure(run *models.BuildResult) *models.TestCase {
+	if run == nil {
+		return nil
+	}
+	var representative *models.TestCase
+	for index := range run.TestCases {
+		testCase := &run.TestCases[index]
+		if testCase.Status != "failed" || testCase.AIAnalysis == nil {
+			continue
+		}
+		if representative == nil || severityRank(testCase.AIAnalysis.Severity) > severityRank(representative.AIAnalysis.Severity) {
+			representative = testCase
+		}
+	}
+	return representative
 }
 
 func patternRunSourceRevision(build models.BuildInfo) string {

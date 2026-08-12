@@ -413,7 +413,9 @@ type PatternRemediationInvestigationState string
 
 const (
 	PatternRemediationNotInvestigated             PatternRemediationInvestigationState = "not_investigated"
+	PatternRemediationQueued                      PatternRemediationInvestigationState = "queued"
 	PatternRemediationInvestigating               PatternRemediationInvestigationState = "investigating"
+	PatternRemediationVerifying                   PatternRemediationInvestigationState = "verifying"
 	PatternRemediationActionable                  PatternRemediationInvestigationState = "actionable"
 	PatternRemediationAlreadyFixed                PatternRemediationInvestigationState = "already_fixed"
 	PatternRemediationExternalDependency          PatternRemediationInvestigationState = "external_dependency"
@@ -421,6 +423,7 @@ const (
 	PatternRemediationMitigationOnly              PatternRemediationInvestigationState = "mitigation_only"
 	PatternRemediationInsufficientEvidence        PatternRemediationInvestigationState = "insufficient_evidence"
 	PatternRemediationInvestigationFailed         PatternRemediationInvestigationState = "failed"
+	PatternRemediationStale                       PatternRemediationInvestigationState = "stale"
 )
 
 // PatternRemediationInvestigationSummary is the safe public state for one
@@ -430,6 +433,22 @@ type PatternRemediationInvestigationSummary struct {
 	CausalGroupHash string                               `json:"causal_group_hash"`
 	State           PatternRemediationInvestigationState `json:"state"`
 	Reason          string                               `json:"reason,omitempty"`
+	Target          *PatternRemediationTargetSummary     `json:"target,omitempty"`
+	CompletedAt     string                               `json:"completed_at,omitempty"`
+}
+
+// PatternRemediationTargetSummary is the safe public identity of one verified target.
+type PatternRemediationTargetSummary struct {
+	Kind         string `json:"kind"`
+	Repository   string `json:"repository"`
+	Revision     string `json:"revision"`
+	Path         string `json:"path"`
+	Symbol       string `json:"symbol,omitempty"`
+	RequiredCall string `json:"required_call,omitempty"`
+	Job          string `json:"job,omitempty"`
+	Container    string `json:"container,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Value        string `json:"value,omitempty"`
 }
 
 type PatternRemediationState string

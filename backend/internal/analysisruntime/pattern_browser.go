@@ -17,11 +17,8 @@ type patternBrowser struct {
 	browsers map[string]artifacts.Browser
 }
 
-type buildBrowserFactory interface {
-	ForBuild(buildPrefix, displayName string) artifacts.Browser
-}
-
-func newPatternBrowser(factory buildBrowserFactory, builds []analysischat.ArtifactBuild) artifacts.Browser {
+// NewPatternBrowser returns one read-only Browser namespaced by exact build IDs.
+func NewPatternBrowser(factory artifacts.Factory, builds []analysischat.ArtifactBuild) artifacts.Browser {
 	browser := &patternBrowser{root: "recurring pattern builds", browsers: map[string]artifacts.Browser{}}
 	for _, build := range builds {
 		id := strings.TrimSpace(build.Build.BuildID)
@@ -131,4 +128,8 @@ func (b *patternBrowser) resolve(value string) (string, string, artifacts.Browse
 		sub = parts[2]
 	}
 	return parts[1], sub, browser, nil
+}
+
+func newPatternBrowser(factory artifacts.Factory, builds []analysischat.ArtifactBuild) artifacts.Browser {
+	return NewPatternBrowser(factory, builds)
 }

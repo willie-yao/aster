@@ -217,20 +217,38 @@ export type PatternRecurrence =
 
 export type PatternRemediationInvestigationState =
   | "not_investigated"
+  | "queued"
   | "investigating"
+  | "verifying"
   | "actionable"
   | "already_fixed"
   | "external_dependency"
   | "environment_or_infrastructure"
   | "mitigation_only"
   | "insufficient_evidence"
-  | "failed";
+  | "failed"
+  | "stale";
+
+export interface PatternRemediationTargetSummary {
+  kind: string;
+  repository: string;
+  revision: string;
+  path: string;
+  symbol?: string;
+  required_call?: string;
+  job?: string;
+  container?: string;
+  name?: string;
+  value?: string;
+}
 
 export interface PatternRemediationInvestigationSummary {
   causal_group_id: string;
   causal_group_hash: string;
   state: PatternRemediationInvestigationState;
   reason?: string;
+  target?: PatternRemediationTargetSummary;
+  completed_at?: string;
 }
 
 export interface PatternAnalysis {
