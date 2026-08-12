@@ -183,6 +183,8 @@ func TestAnalysisChatAgentKeepsValidatedCitedDraftWhenFinalizeIsInvalid(t *testi
 	valid := `{"answer":"The controller exit supports the published conclusion.","assessment":"supports","citations":[{"path":"build-log.txt","quote":"controller stopped"}],"proposed_revision":null}`
 	server.push(200, chatRespToolCallWithContent(valid, "call-2", "list_artifacts", map[string]interface{}{"path": ""}))
 	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
+	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
+	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
 	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("controller stopped\n")}}
 	agent := newAnalysisChatAgentForTest(t, server.URL, browser, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
 
@@ -202,6 +204,8 @@ func TestAnalysisChatAgentRejectsStaleValidatedDraft(t *testing.T) {
 	valid := `{"answer":"The first log supports the published conclusion.","assessment":"supports","citations":[{"path":"build-log.txt","quote":"controller stopped"}],"proposed_revision":null}`
 	server.push(200, chatRespToolCallWithContent(valid, "call-2", "tail_artifact", map[string]interface{}{"path": "later.log", "lines": 20}))
 	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
+	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
+	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
 	browser := &fakeBrowser{files: map[string][]byte{
 		"build-log.txt": []byte("controller stopped\n"),
 		"later.log":     []byte("new evidence\n"),
@@ -220,6 +224,8 @@ func TestAnalysisChatAgentNeverKeepsDraftWithInvalidCitations(t *testing.T) {
 	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
 	invalid := `{"answer":"The log supports the conclusion.","assessment":"supports","citations":[{"path":"build-log.txt","quote":"different evidence"}],"proposed_revision":null}`
 	server.push(200, chatRespToolCallWithContent(invalid, "call-2", "list_artifacts", map[string]interface{}{"path": ""}))
+	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
+	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
 	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
 	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("controller stopped\n")}}
 	agent := newAnalysisChatAgentForTest(t, server.URL, browser, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
@@ -265,6 +271,8 @@ func TestAnalysisChatAgentReturnsSafeValidationCategory(t *testing.T) {
 	server := newScriptedChatServer(t)
 	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
 	server.push(200, chatRespFinal(`still not JSON`))
+	server.push(200, chatRespFinal(`still not JSON`))
+	server.push(200, chatRespFinal(`still not JSON`))
 	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
 
 	_, err := agent.Reply(context.Background(), analysisChatTurn())
@@ -295,6 +303,8 @@ func TestAnalysisChatAgentReturnsSafeCitationCategory(t *testing.T) {
 	server := newScriptedChatServer(t)
 	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
 	invalid := `{"answer":"The log proves it.","assessment":"supports","citations":[{"path":"build-log.txt","quote":"different evidence"}],"proposed_revision":null}`
+	server.push(200, chatRespFinal(invalid))
+	server.push(200, chatRespFinal(invalid))
 	server.push(200, chatRespFinal(invalid))
 	server.push(200, chatRespFinal(invalid))
 	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
@@ -914,4 +924,92 @@ func TestPatternAnalysisChatToolsExcludeSingleBuildHelpers(t *testing.T) {
 	if !slices.Equal(got, []string{"list_artifacts", "read_artifact"}) {
 		t.Fatalf("pattern tools = %v", got)
 	}
+}
+
+func TestAnalysisChatFinalizationUsesForcedFunctionAndRecordsUsage(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespFinalWithUsage(`{"answer":"unfinished"}`, 10, 2, 0))
+	server.push(200, chatRespFinalWithUsage(`still invalid`, 11, 3, 0))
+	valid := `{"answer":"The published context is sufficient.","assessment":"inconclusive","citations":[],"proposed_revision":null}`
+	server.push(200, chatRespForcedFunctionWithUsage("analysis_chat_reply", valid, 12, 4, 1))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+
+	reply, err := agent.Reply(ctx, analysisChatTurn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace.Finish("success", nil)
+	if reply.Answer != "The published context is sufficient." || reply.ValidationRetries != 1 {
+		t.Fatalf("reply = %+v", reply)
+	}
+	server.mu.Lock()
+	requests := append([][]byte(nil), server.requests...)
+	server.mu.Unlock()
+	if len(requests) != 3 || !strings.Contains(string(requests[1]), `"response_format"`) ||
+		!strings.Contains(string(requests[2]), `"tool_choice"`) || !strings.Contains(string(requests[2]), `"parallel_tool_calls":false`) {
+		t.Fatalf("structured requests = %q", requests)
+	}
+
+	var modelRequests []TraceEvent
+	var structuredAttempts []TraceEvent
+	var responseEvent *TraceEvent
+	snapshot := store.Snapshot()
+	for index := range snapshot.Traces[0].Events {
+		event := snapshot.Traces[0].Events[index]
+		if event.Kind == "model_request" {
+			modelRequests = append(modelRequests, event)
+		}
+		if event.Kind == "structured_completion" {
+			structuredAttempts = append(structuredAttempts, event)
+		}
+		if event.Kind == "analysis_chat_response" {
+			copy := event
+			responseEvent = &copy
+		}
+	}
+	if len(modelRequests) != 3 {
+		t.Fatalf("model request events = %+v", modelRequests)
+	}
+	inputTokens, outputTokens, reasoningTokens := 0, 0, 0
+	for _, event := range modelRequests {
+		if !event.UsageReported {
+			t.Fatalf("usage missing from event: %+v", event)
+		}
+		inputTokens += event.InputTokens
+		outputTokens += event.OutputTokens
+		reasoningTokens += event.ReasoningTokens
+	}
+	if inputTokens != 33 || outputTokens != 9 || reasoningTokens != 1 {
+		t.Fatalf("usage totals input=%d output=%d reasoning=%d", inputTokens, outputTokens, reasoningTokens)
+	}
+	if len(structuredAttempts) != 2 || structuredAttempts[0].StructuredPhase != "analysis_chat_validation_retry" ||
+		structuredAttempts[0].StructuredAttempt != "response_format" || structuredAttempts[0].StructuredOutcome != "no_candidate" ||
+		structuredAttempts[1].StructuredAttempt != "forced_function" || structuredAttempts[1].StructuredOutcome != "accepted" {
+		t.Fatalf("structured attempt events = %+v", structuredAttempts)
+	}
+	if responseEvent == nil || responseEvent.Outcome != "success" || responseEvent.Status != "validation_retry" ||
+		responseEvent.StructuredAttempt != "forced_function" || responseEvent.ModelCallCount != 3 || responseEvent.Attempts != 3 || responseEvent.HTTPStatus != 200 {
+		t.Fatalf("response event = %+v", responseEvent)
+	}
+}
+
+func chatRespFinalWithUsage(content string, input, output, reasoning int) string {
+	encoded, _ := json.Marshal(content)
+	return fmt.Sprintf(
+		`{"id":"chat-final","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":%s}}],"usage":{"prompt_tokens":%d,"completion_tokens":%d,"completion_tokens_details":{"reasoning_tokens":%d}}}`,
+		encoded, input, output, reasoning,
+	)
+}
+
+func chatRespForcedFunctionWithUsage(name, arguments string, input, output, reasoning int) string {
+	encodedName, _ := json.Marshal(name)
+	encodedArguments, _ := json.Marshal(arguments)
+	return fmt.Sprintf(
+		`{"id":"chat-forced","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"final-call","type":"function","function":{"name":%s,"arguments":%s}}]}}],"usage":{"prompt_tokens":%d,"completion_tokens":%d,"completion_tokens_details":{"reasoning_tokens":%d}}}`,
+		encodedName, encodedArguments, input, output, reasoning,
+	)
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -503,5 +504,136 @@ func TestCompleteStructuredConflictingCandidatesAreNoCandidate(t *testing.T) {
 	}
 	if metadata.Attempts[0].Outcome != StructuredOutcomeNoCandidate || metadata.Attempts[2].Outcome != StructuredOutcomeNoCandidate || !metadata.Attempts[2].ValidatorCalled {
 		t.Fatalf("attempts=%+v", metadata.Attempts)
+	}
+}
+
+func TestCompleteStructuredMessagesPreservesExistingHistory(t *testing.T) {
+	messages := []modelMessage{
+		{Role: "system", Content: strPtr("system")},
+		{Role: "user", Content: strPtr("published context")},
+		{
+			Role: "assistant", Content: strPtr("checking"),
+			ToolCalls: []modelToolCall{{
+				ID: "artifact-call", Type: "function",
+				Function: modelFunction{Name: "read_artifact", Arguments: `{"path":"build.log"}`},
+			}},
+			ProviderItems: []json.RawMessage{
+				json.RawMessage(`{"type":"reasoning","id":"reason-1","encrypted_content":"opaque-marker"}`),
+				json.RawMessage(`{"type":"function_call","call_id":"artifact-call","name":"read_artifact","arguments":"{\"path\":\"build.log\"}"}`),
+			},
+		},
+		{Role: "tool", Name: "read_artifact", ToolCallID: "artifact-call", Content: strPtr(`{"content":"evidence"}`)},
+	}
+	transport := &scriptedTransport{results: []scriptedTransportResult{
+		{response: &modelResponse{
+			HasMessage: true, HTTPStatus: http.StatusOK, Attempts: 2,
+			Message: modelMessage{Content: strPtr(`{"body":"unsafe"}`)},
+		}},
+		{response: &modelResponse{
+			HasMessage: true, HTTPStatus: http.StatusOK, Attempts: 1,
+			Message: modelMessage{ToolCalls: []modelToolCall{{
+				ID: "final-call", Type: "function",
+				Function: modelFunction{Name: "return_body", Arguments: `{"body":"safe"}`},
+			}}},
+		}},
+	}}
+	client := &Client{model: "model", transport: transport}
+	result, err := client.completeStructuredMessagesWithMetadata(
+		WithStructuredCompletionPhase(t.Context(), "analysis_chat_finalize"),
+		messages, structuredBodyFormat(), analysisChatMaxResponseBytes, true,
+		func(raw string) structuredValidationResult {
+			return evaluateStructuredCandidates(raw, bodyValidator("safe"))
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.finalPath() != StructuredAttemptForcedFunction || result.modelCalls() != 2 || result.providerAttempts() != 3 || result.httpStatus() != http.StatusOK {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(result.Metadata.Attempts) != 2 || result.Metadata.Attempts[0].Outcome != StructuredOutcomeValidatorRejected ||
+		result.Metadata.Attempts[0].ProviderAttempts != 2 || result.Metadata.Attempts[0].ProviderStatus != http.StatusOK ||
+		result.Metadata.Attempts[1].Outcome != StructuredOutcomeAccepted {
+		t.Fatalf("attempt metadata = %+v", result.Metadata.Attempts)
+	}
+	for index, request := range transport.requests {
+		if !reflect.DeepEqual(request.Messages, messages) {
+			t.Fatalf("request %d messages changed:\n got: %#v\nwant: %#v", index, request.Messages, messages)
+		}
+	}
+	forced := transport.requests[1]
+	if forced.ToolChoice == nil || forced.ToolChoice.Name != "return_body" || forced.ParallelToolCalls == nil || *forced.ParallelToolCalls || len(forced.Tools) != 1 || !forced.Tools[0].Function.Strict {
+		t.Fatalf("forced request = %+v", forced)
+	}
+}
+
+func TestCompleteStructuredMessagesPreservesChatAndResponsesWireHistory(t *testing.T) {
+	for _, apiMode := range []string{APIChatCompletions, APIResponses} {
+		t.Run(apiMode, func(t *testing.T) {
+			shrinkCallDelay(t)
+			var requests []map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				requests = append(requests, request)
+				if len(requests) == 1 {
+					writeReasoningTestFinal(w, apiMode, `{"body":"unsafe"}`)
+					return
+				}
+				writeReasoningTestToolCall(w, apiMode, "return_body", `{"body":"safe"}`)
+			}))
+			defer server.Close()
+
+			messages := []modelMessage{
+				{Role: "system", Content: strPtr("system-marker")},
+				{Role: "user", Content: strPtr("question-marker")},
+				{
+					Role: "assistant", Content: strPtr("assistant-marker"),
+					ToolCalls: []modelToolCall{{
+						ID: "artifact-call", Type: "function",
+						Function: modelFunction{Name: "read_artifact", Arguments: `{"path":"build.log"}`},
+					}},
+					ProviderItems: []json.RawMessage{
+						json.RawMessage(`{"type":"reasoning","id":"reason-1","encrypted_content":"opaque-marker"}`),
+						json.RawMessage(`{"type":"function_call","call_id":"artifact-call","name":"read_artifact","arguments":"{\"path\":\"build.log\"}"}`),
+					},
+				},
+				{Role: "tool", Name: "read_artifact", ToolCallID: "artifact-call", Content: strPtr(`{"content":"evidence-marker"}`)},
+			}
+			client := NewClientWithOptions(Options{API: apiMode, Endpoint: server.URL, Model: "model"})
+			result, err := client.completeStructuredMessagesWithMetadata(
+				t.Context(), messages, structuredBodyFormat(), defaultStructuredResponseBytes, true,
+				func(raw string) structuredValidationResult {
+					return evaluateStructuredCandidates(raw, bodyValidator("safe"))
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.finalPath() != StructuredAttemptForcedFunction || len(requests) != 2 {
+				t.Fatalf("result=%+v requests=%d", result, len(requests))
+			}
+			encoded, err := json.Marshal(requests)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire := string(encoded)
+			for _, marker := range []string{"system-marker", "question-marker", "artifact-call", "evidence-marker"} {
+				if !strings.Contains(wire, marker) {
+					t.Fatalf("%s wire history omitted %q: %s", apiMode, marker, wire)
+				}
+			}
+			if apiMode == APIResponses && !strings.Contains(wire, "opaque-marker") {
+				t.Fatalf("responses wire omitted provider continuation item: %s", wire)
+			}
+			if _, ok := requests[0][reasoningStructuredField(apiMode)]; !ok {
+				t.Fatalf("first request omitted response format: %#v", requests[0])
+			}
+			if requests[1]["parallel_tool_calls"] != false || requests[1]["tool_choice"] == nil {
+				t.Fatalf("forced request = %#v", requests[1])
+			}
+		})
 	}
 }

@@ -30,8 +30,9 @@ type analysisChatValidationError struct {
 	err      error
 }
 
-func (e *analysisChatValidationError) Error() string { return e.err.Error() }
-func (e *analysisChatValidationError) Unwrap() error { return e.err }
+func (e *analysisChatValidationError) Error() string                    { return e.err.Error() }
+func (e *analysisChatValidationError) Unwrap() error                    { return e.err }
+func (e *analysisChatValidationError) StructuredValidationCode() string { return e.category }
 
 func newAnalysisChatValidationError(category string, err error) error {
 	return &analysisChatValidationError{category: category, err: err}

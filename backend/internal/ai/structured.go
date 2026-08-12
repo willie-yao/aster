@@ -119,22 +119,78 @@ func (c *Client) CompleteStructured(ctx context.Context, system, user string, fo
 // CompleteStructuredWithMetadata preserves bounded attempt metadata without
 // retaining prompts, response text, tool arguments, or provider bodies.
 func (c *Client) CompleteStructuredWithMetadata(ctx context.Context, system, user string, format ResponseFormat, validate StructuredValidator) (StructuredCompletionMetadata, error) {
-	metadata := StructuredCompletionMetadata{Attempts: []StructuredAttemptMetadata{}}
 	if validate == nil {
-		return metadata, fmt.Errorf("structured completion validator is required")
-	}
-	if strings.TrimSpace(format.Name) == "" || len(format.Schema) == 0 {
-		return metadata, fmt.Errorf("structured completion schema is required")
+		return StructuredCompletionMetadata{Attempts: []StructuredAttemptMetadata{}}, fmt.Errorf("structured completion validator is required")
 	}
 	messages := []modelMessage{
 		{Role: "system", Content: strPtr(system)},
 		{Role: "user", Content: strPtr(user)},
 	}
+	result, err := c.completeStructuredMessagesWithMetadata(
+		ctx, messages, format, defaultStructuredResponseBytes, true,
+		func(raw string) structuredValidationResult { return evaluateStructuredCandidates(raw, validate) },
+	)
+	return result.Metadata, err
+}
+
+type structuredContentValidator func(string) structuredValidationResult
+
+type structuredMessagesResult struct {
+	Response *modelResponse
+	Metadata StructuredCompletionMetadata
+}
+
+func (r structuredMessagesResult) modelCalls() int { return len(r.Metadata.Attempts) }
+
+func (r structuredMessagesResult) providerAttempts() int {
+	attempts := 0
+	for _, attempt := range r.Metadata.Attempts {
+		if attempt.ProviderAttemptsKnown && attempt.ProviderAttempts > 0 {
+			attempts += attempt.ProviderAttempts
+		} else {
+			attempts++
+		}
+	}
+	return attempts
+}
+
+func (r structuredMessagesResult) finalPath() StructuredAttemptPath {
+	attempt, _ := r.Metadata.FinalAttempt()
+	return attempt.Path
+}
+
+func (r structuredMessagesResult) httpStatus() int {
+	if r.Response != nil && r.Response.HTTPStatus != 0 {
+		return r.Response.HTTPStatus
+	}
+	attempt, _ := r.Metadata.FinalAttempt()
+	return attempt.ProviderStatus
+}
+
+func (c *Client) completeStructuredMessagesWithMetadata(
+	ctx context.Context,
+	messages []modelMessage,
+	format ResponseFormat,
+	maxResponseBytes int64,
+	omitReasoning bool,
+	validate structuredContentValidator,
+) (structuredMessagesResult, error) {
+	result := structuredMessagesResult{Metadata: StructuredCompletionMetadata{Attempts: []StructuredAttemptMetadata{}}}
+	if validate == nil {
+		return result, fmt.Errorf("structured completion validator is required")
+	}
+	if strings.TrimSpace(format.Name) == "" || len(format.Schema) == 0 {
+		return result, fmt.Errorf("structured completion schema is required")
+	}
+	if maxResponseBytes <= 0 {
+		maxResponseBytes = defaultStructuredResponseBytes
+	}
+	messages = append([]modelMessage(nil), messages...)
 	parallel := false
-	attempts := []modelRequest{
+	requests := []modelRequest{
 		{
 			Model: c.model, Messages: messages, ResponseFormat: &format,
-			MaxResponseBytes: defaultStructuredResponseBytes, OmitReasoning: true,
+			MaxResponseBytes: maxResponseBytes, OmitReasoning: omitReasoning,
 		},
 		{
 			Model: c.model, Messages: messages,
@@ -146,75 +202,77 @@ func (c *Client) CompleteStructuredWithMetadata(ctx context.Context, system, use
 				},
 			}},
 			ToolChoice: &ToolChoice{Name: format.Name}, ParallelToolCalls: &parallel,
-			MaxResponseBytes: defaultStructuredResponseBytes, OmitReasoning: true,
+			MaxResponseBytes: maxResponseBytes, OmitReasoning: omitReasoning,
 		},
 		{
 			Model: c.model, Messages: messages,
-			MaxResponseBytes: defaultStructuredResponseBytes, OmitReasoning: true,
+			MaxResponseBytes: maxResponseBytes, OmitReasoning: omitReasoning,
 		},
 	}
 
-	for index, request := range attempts {
+	for index, request := range requests {
 		attempt := StructuredAttemptMetadata{Phase: StructuredCompletionPhase(ctx), Path: structuredAttemptPath(index)}
-		resp, err := c.callModelRequest(ctx, request)
-		setStructuredProviderAttempts(&attempt, resp)
+		response, err := c.callModelRequest(ctx, request)
+		result.Response = response
+		setStructuredProviderAttempts(&attempt, response)
+		if response != nil {
+			attempt.ProviderStatus = response.HTTPStatus
+		}
 		if err != nil {
 			attempt.Outcome = StructuredOutcomeProviderError
 			attempt.ProviderCategory = traceErrorCode(err)
-			if httpMetadata, ok := SafeProviderErrorMetadata(err); ok {
-				attempt.ProviderStatus = httpMetadata.StatusCode
-				if httpMetadata.Category != "" {
-					attempt.ProviderCategory = httpMetadata.Category
+			if provider, ok := SafeProviderErrorMetadata(err); ok {
+				attempt.ProviderStatus = provider.StatusCode
+				if provider.Category != "" {
+					attempt.ProviderCategory = provider.Category
 				}
-			} else if resp != nil {
-				attempt.ProviderStatus = resp.HTTPStatus
 			}
-			metadata = appendStructuredAttempt(ctx, metadata, attempt)
+			result.Metadata = appendStructuredAttempt(ctx, result.Metadata, attempt)
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return metadata, err
+				return result, err
 			}
-			if index < len(attempts)-1 && structuredFallbackAllowed(err) {
+			if index < len(requests)-1 && structuredFallbackAllowed(err) {
 				continue
 			}
-			return metadata, newStructuredCompletionError("provider request failed", metadata, err)
+			return result, newStructuredCompletionError("provider request failed", result.Metadata, err)
 		}
 		if request.ToolChoice != nil {
-			if resp == nil || !resp.HasMessage || len(resp.Message.ToolCalls) != 1 || resp.Message.ToolCalls[0].Function.Name != format.Name {
+			if response == nil || !response.HasMessage || len(response.Message.ToolCalls) != 1 || response.Message.ToolCalls[0].Function.Name != format.Name {
 				attempt.Outcome = StructuredOutcomeMissingForcedFunction
-				metadata = appendStructuredAttempt(ctx, metadata, attempt)
+				result.Metadata = appendStructuredAttempt(ctx, result.Metadata, attempt)
 				continue
 			}
-			raw := resp.Message.ToolCalls[0].Function.Arguments
+			raw := response.Message.ToolCalls[0].Function.Arguments
 			if strings.TrimSpace(raw) == "" {
 				attempt.Outcome = StructuredOutcomeEmptyResponse
-				metadata = appendStructuredAttempt(ctx, metadata, attempt)
+				result.Metadata = appendStructuredAttempt(ctx, result.Metadata, attempt)
 				continue
 			}
-			validation := evaluateStructuredCandidates(raw, validate)
+			validation := validate(raw)
 			attempt.Outcome = validation.outcome
 			attempt.ValidatorCalled = validation.validatorCalled
 			attempt.ValidationCode = validation.validationCode
-			metadata = appendStructuredAttempt(ctx, metadata, attempt)
+			result.Metadata = appendStructuredAttempt(ctx, result.Metadata, attempt)
 			if validation.err == nil {
-				return metadata, nil
+				return result, nil
 			}
 			continue
 		}
-		if resp == nil || !resp.HasMessage || resp.Message.Content == nil || strings.TrimSpace(*resp.Message.Content) == "" {
+		if response == nil || !response.HasMessage || response.Message.Content == nil || strings.TrimSpace(*response.Message.Content) == "" {
 			attempt.Outcome = StructuredOutcomeEmptyResponse
-			metadata = appendStructuredAttempt(ctx, metadata, attempt)
+			result.Metadata = appendStructuredAttempt(ctx, result.Metadata, attempt)
 			continue
 		}
-		validation := evaluateStructuredCandidates(*resp.Message.Content, validate)
+		validation := validate(*response.Message.Content)
 		attempt.Outcome = validation.outcome
 		attempt.ValidatorCalled = validation.validatorCalled
 		attempt.ValidationCode = validation.validationCode
-		metadata = appendStructuredAttempt(ctx, metadata, attempt)
+		result.Metadata = appendStructuredAttempt(ctx, result.Metadata, attempt)
 		if validation.err == nil {
-			return metadata, nil
+			return result, nil
 		}
 	}
-	return metadata, newStructuredCompletionError("no valid structured response", metadata, nil)
+	return result, newStructuredCompletionError("no valid structured response", result.Metadata, nil)
 }
 
 // completeForcedFunction accepts only one call to the exact named function.
