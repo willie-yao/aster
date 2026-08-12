@@ -288,6 +288,9 @@ func safePatternProviderError(err error) error {
 	if errors.As(err, &patternErr) {
 		return patternErr
 	}
+	if provider, ok := SafeProviderErrorMetadata(err); ok && provider.StatusCode != 0 {
+		return &PatternProviderError{StatusCode: provider.StatusCode}
+	}
 	var httpErr *modelHTTPError
 	if errors.As(err, &httpErr) {
 		return &PatternProviderError{StatusCode: httpErr.StatusCode}

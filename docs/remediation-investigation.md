@@ -191,9 +191,13 @@ both the minimal model-result digest and the engine-issued evidence-catalog
 digest. Corrupt, oversized, or mutated current-version state fails closed.
 Entries from an older prompt, verification, or evidence-catalog version are
 dropped as semantically stale instead of blocking cache startup. A failed
-refresh records only a bounded category, timestamp, and error digest while
-preserving the previous valid result for the same semantic key. A changed
-identity creates a cache miss instead of reusing the old result.
+refresh records only a bounded category, remediation phase, validation code,
+structured attempt path and outcome, validator-called flag, safe provider
+category and status, timestamp, and digest while preserving the previous valid
+result for the same semantic key. Attempt paths are `response_format`,
+`forced_function`, and `plain_fallback`. No prompt, response text, function
+arguments, provider body, header, evidence ID, or target identity is retained. A
+changed identity creates a cache miss instead of reusing the old result.
 
 The server hides dot-directories under `/data`. The Pages workflow also strips
 the remediation-investigation cache before upload. Cached entries contain the typed private result, deterministic evidence

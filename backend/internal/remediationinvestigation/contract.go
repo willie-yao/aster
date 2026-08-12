@@ -337,21 +337,25 @@ type EvidenceStats struct {
 }
 
 type Metrics struct {
-	ElapsedMs           int    `json:"elapsed_ms"`
-	ModelRequests       int    `json:"model_requests,omitempty"`
-	ReportedRequests    int    `json:"reported_requests,omitempty"`
-	UnreportedRequests  int    `json:"unreported_requests,omitempty"`
-	CoverageCountsKnown bool   `json:"coverage_counts_known,omitempty"`
-	UsageInvalid        bool   `json:"usage_invalid,omitempty"`
-	Currency            string `json:"currency,omitempty"`
-	PricingHash         string `json:"pricing_hash,omitempty"`
-	InputTokens         int64  `json:"input_tokens,omitempty"`
-	CachedInputTokens   int64  `json:"cached_input_tokens,omitempty"`
-	OutputTokens        int64  `json:"output_tokens,omitempty"`
-	ReasoningTokens     int64  `json:"reasoning_tokens,omitempty"`
-	EstimatedCostNanos  int64  `json:"estimated_cost_nanos,omitempty"`
-	RepairCount         int    `json:"repair_count,omitempty"`
-	EvidenceRetryCount  int    `json:"evidence_retry_count,omitempty"`
+	ElapsedMs                        int    `json:"elapsed_ms"`
+	ModelRequests                    int    `json:"model_requests,omitempty"`
+	ReportedRequests                 int    `json:"reported_requests,omitempty"`
+	UnreportedRequests               int    `json:"unreported_requests,omitempty"`
+	CoverageCountsKnown              bool   `json:"coverage_counts_known,omitempty"`
+	UsageInvalid                     bool   `json:"usage_invalid,omitempty"`
+	Currency                         string `json:"currency,omitempty"`
+	PricingHash                      string `json:"pricing_hash,omitempty"`
+	InputTokens                      int64  `json:"input_tokens,omitempty"`
+	CachedInputTokens                int64  `json:"cached_input_tokens,omitempty"`
+	OutputTokens                     int64  `json:"output_tokens,omitempty"`
+	ReasoningTokens                  int64  `json:"reasoning_tokens,omitempty"`
+	EstimatedCostNanos               int64  `json:"estimated_cost_nanos,omitempty"`
+	RepairCount                      int    `json:"repair_count,omitempty"`
+	EvidenceRetryCount               int    `json:"evidence_retry_count,omitempty"`
+	TargetExtractionModelRequests    *int   `json:"target_extraction_model_requests,omitempty"`
+	TargetExtractionProviderAttempts *int   `json:"target_extraction_provider_attempts,omitempty"`
+	TargetExtractionRepairCount      *int   `json:"target_extraction_repair_count,omitempty"`
+	TargetExtractionFinalAttempt     string `json:"target_extraction_final_attempt,omitempty"`
 }
 
 type Provenance struct {

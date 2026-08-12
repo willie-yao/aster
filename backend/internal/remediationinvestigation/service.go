@@ -175,6 +175,9 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 	}
 	result := Result{Version: ResultVersion}
 	repairCount := 0
+	targetRepairCount := 0
+	structuredTelemetry := structuredCompletionTelemetry{available: structuredMetadataAvailable(s.model)}
+	targetTelemetry := structuredCompletionTelemetry{available: structuredMetadataAvailable(s.model)}
 	if !ledger.gatePassed() {
 		assessment := insufficientEvidenceAssessment(catalog, "The bounded investigation did not read recurring-build evidence, pinned source content, and one content-bearing repository grep.")
 		result.NonActionable = &assessment
@@ -191,26 +194,33 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 			candidate, err := DecodeTargetExtraction(raw)
 			if err != nil {
 				lastValidationCode = validationErrorCode(err)
-				return err
+				return &codedValidationError{code: lastValidationCode, err: err}
 			}
 			if err := validateTargetExtractionAgainstInput(candidate, input, catalog); err != nil {
 				lastValidationCode = validationErrorCode(err)
-				return err
+				return &codedValidationError{code: lastValidationCode, err: err}
 			}
 			extraction = candidate
 			return nil
 		}
-		extractionErr := s.model.CompleteStructured(runCtx, targetExtractionSystemPrompt(), finalPrompt, targetExtractionFormat(), validateExtraction)
-		if extractionErr != nil {
+		extractionMetadata, metadataAvailable, extractionErr := s.completeStructured(runCtx, PhaseTargetExtractionInitial, targetExtractionSystemPrompt(), finalPrompt, targetExtractionFormat(), validateExtraction)
+		structuredTelemetry.append(extractionMetadata, metadataAvailable)
+		targetTelemetry.append(extractionMetadata, metadataAvailable)
+		failedPhase := PhaseTargetExtractionInitial
+		if extractionErr != nil && !errors.Is(extractionErr, context.Canceled) && !errors.Is(extractionErr, context.DeadlineExceeded) {
 			repairCount++
+			targetRepairCount++
+			failedPhase = PhaseTargetExtractionRepair
 			repairPrompt := finalPrompt + "\n\nValidation feedback: the previous target extraction failed with code " + lastValidationCode + ". Return the exact extraction schema only. version must be the integer " + fmt.Sprint(TargetExtractionVersion) + ", hypotheses must contain zero to three unique typed targets, evidence_ids must come from the supplied catalog, and no unknown fields are allowed."
-			extractionErr = s.model.CompleteStructured(runCtx, targetExtractionSystemPrompt(), repairPrompt, targetExtractionFormat(), validateExtraction)
+			extractionMetadata, metadataAvailable, extractionErr = s.completeStructured(runCtx, PhaseTargetExtractionRepair, targetExtractionSystemPrompt(), repairPrompt, targetExtractionFormat(), validateExtraction)
+			structuredTelemetry.append(extractionMetadata, metadataAvailable)
+			targetTelemetry.append(extractionMetadata, metadataAvailable)
 		}
 		if extractionErr != nil {
 			outcome = usageOutcomeForError(extractionErr)
 			finish()
-			wrapped := &resultError{code: lastValidationCode, err: extractionErr}
-			_ = s.cache.RecordFailure(key, FailureInvalidResult, wrapped)
+			wrapped := newResultError(failedPhase, lastValidationCode, structuredTelemetry.metadata, extractionErr)
+			_ = s.cache.RecordFailure(key, wrapped.details.Category, wrapped)
 			return RunResult{}, fmt.Errorf("remediation target extraction failed: %w", wrapped)
 		}
 		result.Hypotheses = extraction.Hypotheses
@@ -234,26 +244,30 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 				candidate, err := DecodeNonActionableAssessment(raw)
 				if err != nil {
 					lastValidationCode = validationErrorCode(err)
-					return err
+					return &codedValidationError{code: lastValidationCode, err: err}
 				}
 				if err := validateNonActionableAgainstInput(candidate, catalog); err != nil {
 					lastValidationCode = validationErrorCode(err)
-					return err
+					return &codedValidationError{code: lastValidationCode, err: err}
 				}
 				assessment = candidate
 				return nil
 			}
-			assessmentErr := s.model.CompleteStructured(runCtx, nonActionableSystemPrompt(), finalPrompt, nonActionableAssessmentFormat(), validateAssessment)
-			if assessmentErr != nil {
+			assessmentMetadata, metadataAvailable, assessmentErr := s.completeStructured(runCtx, PhaseNonActionableAssessmentInitial, nonActionableSystemPrompt(), finalPrompt, nonActionableAssessmentFormat(), validateAssessment)
+			structuredTelemetry.append(assessmentMetadata, metadataAvailable)
+			failedPhase := PhaseNonActionableAssessmentInitial
+			if assessmentErr != nil && !errors.Is(assessmentErr, context.Canceled) && !errors.Is(assessmentErr, context.DeadlineExceeded) {
 				repairCount++
+				failedPhase = PhaseNonActionableAssessmentRepair
 				repairPrompt := finalPrompt + "\n\nValidation feedback: the previous non-actionable assessment failed with code " + lastValidationCode + ". Return the exact non-actionable schema only. Do not include a target. version must be the integer " + fmt.Sprint(NonActionableAssessmentVersion) + ", evidence_ids must come from the supplied catalog, and no unknown fields are allowed."
-				assessmentErr = s.model.CompleteStructured(runCtx, nonActionableSystemPrompt(), repairPrompt, nonActionableAssessmentFormat(), validateAssessment)
+				assessmentMetadata, metadataAvailable, assessmentErr = s.completeStructured(runCtx, PhaseNonActionableAssessmentRepair, nonActionableSystemPrompt(), repairPrompt, nonActionableAssessmentFormat(), validateAssessment)
+				structuredTelemetry.append(assessmentMetadata, metadataAvailable)
 			}
 			if assessmentErr != nil {
 				outcome = usageOutcomeForError(assessmentErr)
 				finish()
-				wrapped := &resultError{code: lastValidationCode, err: assessmentErr}
-				_ = s.cache.RecordFailure(key, FailureInvalidResult, wrapped)
+				wrapped := newResultError(failedPhase, lastValidationCode, structuredTelemetry.metadata, assessmentErr)
+				_ = s.cache.RecordFailure(key, wrapped.details.Category, wrapped)
 				return RunResult{}, fmt.Errorf("remediation non-actionable assessment failed: %w", wrapped)
 			}
 			result.NonActionable = &assessment
@@ -276,6 +290,16 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		CachedInputTokens: usage.CachedInputTokens, OutputTokens: usage.OutputTokens,
 		ReasoningTokens: usage.ReasoningTokens, EstimatedCostNanos: usage.EstimatedCostNanos,
 		RepairCount: repairCount, EvidenceRetryCount: ledger.forcedToolCalls,
+	}
+	metrics.TargetExtractionRepairCount = intPointer(targetRepairCount)
+	if targetTelemetry.available {
+		metrics.TargetExtractionModelRequests = intPointer(len(targetTelemetry.metadata.Attempts))
+		if providerAttempts, known := targetTelemetry.providerAttempts(); known {
+			metrics.TargetExtractionProviderAttempts = intPointer(providerAttempts)
+		}
+		if final, ok := targetTelemetry.metadata.FinalAttempt(); ok {
+			metrics.TargetExtractionFinalAttempt = string(final.Path)
+		}
 	}
 	provenance := NewProvenance(input, s.model.ModelName(), s.model.APIMode(), string(s.model.ReasoningEffort()), ledger.stats, metrics, completed)
 	if err := s.cache.StoreSuccess(key, result, catalog, provenance); err != nil {
@@ -397,6 +421,52 @@ func insufficientEvidenceAssessment(catalog EvidenceCatalog, reason string) NonA
 		Reason: reason, EvidenceIDs: []string{evidenceID}, NonActionableReason: NonActionableInsufficientEvidence,
 	}
 }
+
+type structuredCompletionModel interface {
+	CompleteStructuredWithMetadata(context.Context, string, string, ai.ResponseFormat, ai.StructuredValidator) (ai.StructuredCompletionMetadata, error)
+}
+
+type structuredCompletionTelemetry struct {
+	metadata  ai.StructuredCompletionMetadata
+	available bool
+}
+
+func structuredMetadataAvailable(model Model) bool {
+	_, ok := model.(structuredCompletionModel)
+	return ok
+}
+
+func (s *Service) completeStructured(ctx context.Context, phase Phase, system, user string, format ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, bool, error) {
+	ctx = ai.WithStructuredCompletionPhase(ctx, string(phase))
+	if model, ok := s.model.(structuredCompletionModel); ok {
+		metadata, err := model.CompleteStructuredWithMetadata(ctx, system, user, format, validate)
+		return metadata, true, err
+	}
+	err := s.model.CompleteStructured(ctx, system, user, format, validate)
+	metadata, ok := ai.StructuredCompletionFailureMetadata(err)
+	return metadata, ok, err
+}
+
+func (t *structuredCompletionTelemetry) append(metadata ai.StructuredCompletionMetadata, available bool) {
+	if t == nil {
+		return
+	}
+	t.available = t.available && available
+	t.metadata.Attempts = append(t.metadata.Attempts, metadata.Attempts...)
+}
+
+func (t structuredCompletionTelemetry) providerAttempts() (int, bool) {
+	total := 0
+	for _, attempt := range t.metadata.Attempts {
+		if !attempt.ProviderAttemptsKnown {
+			return 0, false
+		}
+		total += attempt.ProviderAttempts
+	}
+	return total, t.available
+}
+
+func intPointer(value int) *int { return &value }
 
 func usageOutcomeForError(err error) aiusage.Outcome {
 	switch {

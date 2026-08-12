@@ -65,6 +65,29 @@ func (m *fakeModel) CompleteStructured(_ context.Context, _, _ string, _ ai.Resp
 	return validate(json.RawMessage(result))
 }
 
+func (m *fakeModel) CompleteStructuredWithMetadata(ctx context.Context, system, user string, format ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
+	err := m.CompleteStructured(ctx, system, user, format, validate)
+	attempt := ai.StructuredAttemptMetadata{
+		Phase: ai.StructuredCompletionPhase(ctx), Path: ai.StructuredAttemptResponseFormat,
+		ProviderAttempts: 1, ProviderAttemptsKnown: true,
+	}
+	if err == nil {
+		attempt.Outcome = ai.StructuredOutcomeAccepted
+		attempt.ValidatorCalled = true
+	} else if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || m.finalErr != nil {
+		attempt.Outcome = ai.StructuredOutcomeProviderError
+		attempt.ProviderCategory = "request_transport"
+	} else {
+		attempt.Outcome = ai.StructuredOutcomeValidatorRejected
+		attempt.ValidatorCalled = true
+		var coded interface{ StructuredValidationCode() string }
+		if errors.As(err, &coded) {
+			attempt.ValidationCode = coded.StructuredValidationCode()
+		}
+	}
+	return ai.StructuredCompletionMetadata{Attempts: []ai.StructuredAttemptMetadata{attempt}}, err
+}
+
 func (*fakeModel) ModelName() string                   { return "test-model" }
 func (m *fakeModel) ModelFingerprint() string          { return m.fingerprint }
 func (*fakeModel) APIMode() string                     { return ai.APIResponses }
@@ -520,7 +543,7 @@ func TestServiceInvalidRefreshPreservesAcceptedResult(t *testing.T) {
 	}
 	key, _ := CacheKey(input)
 	entry, ok, err := cache.Lookup(key)
-	if err != nil || !ok || len(entry.Result.Hypotheses) == 0 || entry.LastFailure == nil || entry.LastFailure.Category != FailureInvalidResult {
+	if err != nil || !ok || len(entry.Result.Hypotheses) == 0 || entry.LastFailure == nil || entry.LastFailure.Category != FailureTargetExtractionValidation {
 		t.Fatalf("entry=%+v ok=%v err=%v", entry, ok, err)
 	}
 }
@@ -608,5 +631,172 @@ func TestServiceRejectedNonemptyHypothesisRunsNonActionableStage(t *testing.T) {
 	view := safeOperationView(OperationRef{CausalGroupID: input.CausalGroupID, CausalGroupHash: input.CausalGroupHash}, verified, got.Entry.Provenance.CompletedAt)
 	if view.State != models.PatternRemediationInsufficientEvidence || view.Target != nil {
 		t.Fatalf("view=%+v", view)
+	}
+}
+
+func TestServiceTargetExtractionInitialFailureRepairSuccessTelemetry(t *testing.T) {
+	model := &fakeModel{
+		fingerprint: strings.Repeat("d", 16), memo: "evidence",
+		results: []string{`{"version":0}`, actionableJSON()},
+		toolEvents: []ai.ToolLoopEvent{
+			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
+			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
+			{Name: "grep_repo", ContentBytes: len("applyFix")},
+		},
+	}
+	service, input, browser, _ := serviceFixture(t, model)
+	got, err := service.Investigate(t.Context(), input, browser, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics := got.Entry.Provenance.Metrics
+	if metrics.TargetExtractionModelRequests == nil || *metrics.TargetExtractionModelRequests != 2 ||
+		metrics.TargetExtractionProviderAttempts == nil || *metrics.TargetExtractionProviderAttempts != 2 ||
+		metrics.TargetExtractionRepairCount == nil || *metrics.TargetExtractionRepairCount != 1 ||
+		metrics.TargetExtractionFinalAttempt != string(ai.StructuredAttemptResponseFormat) {
+		t.Fatalf("metrics=%+v", metrics)
+	}
+}
+
+func TestServiceTargetExtractionInitialAndRepairFailurePreservesFinalCode(t *testing.T) {
+	model := &fakeModel{
+		fingerprint: strings.Repeat("d", 16), memo: "evidence",
+		results: []string{`{"version":0,"hypotheses":[]}`, `{"version":0,"hypotheses":[]}`},
+		toolEvents: []ai.ToolLoopEvent{
+			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
+			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
+			{Name: "grep_repo", ContentBytes: len("applyFix")},
+		},
+	}
+	service, input, browser, cache := serviceFixture(t, model)
+	_, err := service.Investigate(t.Context(), input, browser, false)
+	if err == nil {
+		t.Fatal("invalid initial and repair extraction succeeded")
+	}
+	details, ok := FailureDetailsOf(err)
+	if !ok || details.Category != FailureTargetExtractionValidation || details.Phase != PhaseTargetExtractionRepair || details.ValidationCode != "invalid_version" || details.DiagnosticErrorCode() != "target_extraction_invalid_version" {
+		t.Fatalf("details=%+v ok=%v err=%v", details, ok, err)
+	}
+	if len(details.StructuredAttempts) != 2 || details.StructuredAttempts[0].Phase != string(PhaseTargetExtractionInitial) || details.StructuredAttempts[1].Phase != string(PhaseTargetExtractionRepair) {
+		t.Fatalf("attempts=%+v", details.StructuredAttempts)
+	}
+	key, _ := CacheKey(input)
+	record, ok := cache.state.Failures[key]
+	if !ok || record.Category != FailureTargetExtractionValidation || record.Phase != PhaseTargetExtractionRepair || record.ValidationCode != "invalid_version" || record.Code != "target_extraction_invalid_version" || len(record.StructuredAttempts) != 2 {
+		t.Fatalf("record=%+v ok=%v", record, ok)
+	}
+}
+
+func TestServiceNonActionableAssessmentFailureIsSeparate(t *testing.T) {
+	model := &fakeModel{
+		fingerprint: strings.Repeat("d", 16), memo: "no repository target",
+		results: []string{`{"version":1,"hypotheses":[]}`, `{"version":0,"cause_assessment":"inconclusive","reason":"no target","evidence_ids":[],"non_actionable_reason":"insufficient_evidence"}`, `{"version":0,"cause_assessment":"inconclusive","reason":"no target","evidence_ids":[],"non_actionable_reason":"insufficient_evidence"}`},
+		toolEvents: []ai.ToolLoopEvent{
+			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
+			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
+			{Name: "grep_repo", ContentBytes: len("applyFix")},
+		},
+	}
+	service, input, browser, cache := serviceFixture(t, model)
+	_, err := service.Investigate(t.Context(), input, browser, false)
+	if err == nil {
+		t.Fatal("invalid non-actionable assessment succeeded")
+	}
+	details, ok := FailureDetailsOf(err)
+	if !ok || details.Category != FailureNonActionableAssessment || details.Phase != PhaseNonActionableAssessmentRepair || details.ValidationCode != "invalid_version" || details.DiagnosticErrorCode() != "non_actionable_assessment_invalid_version" {
+		t.Fatalf("details=%+v ok=%v", details, ok)
+	}
+	key, _ := CacheKey(input)
+	if record := cache.state.Failures[key]; record.Category != FailureNonActionableAssessment || record.Phase != PhaseNonActionableAssessmentRepair {
+		t.Fatalf("record=%+v", record)
+	}
+}
+
+func TestSuccessfulResultDigestIgnoresPrivateTelemetry(t *testing.T) {
+	result := testNonActionableResult()
+	before := ResultDigest(result)
+	metrics := Metrics{
+		TargetExtractionModelRequests: intPointer(6), TargetExtractionProviderAttempts: intPointer(6),
+		TargetExtractionRepairCount: intPointer(1), TargetExtractionFinalAttempt: string(ai.StructuredAttemptPlainFallback),
+	}
+	_ = NewProvenance(testFrozenInput(), "model", "responses", "", EvidenceStats{}, metrics, time.Now())
+	if after := ResultDigest(result); after != before {
+		t.Fatalf("result digest changed with private telemetry: before=%s after=%s", before, after)
+	}
+}
+
+func TestValidationErrorCodeCategories(t *testing.T) {
+	tests := []struct {
+		message string
+		want    string
+	}{
+		{"decode remediation target extraction: malformed", "decode"},
+		{"unknown field path repository", "unknown_field"},
+		{"duplicate field \"version\"", "duplicate_field"},
+		{"target extraction version must be the integer 1", "invalid_version"},
+		{"candidate field path is missing", "candidate_missing_field"},
+		{"candidate kind is invalid", "candidate_kind"},
+		{"required-call candidate is invalid", "required_call_target"},
+		{"prow environment candidate is invalid", "prow_environment_target"},
+		{"configuration field is invalid", "configuration_target"},
+		{"engine-issued source evidence ID is required", "missing_source_evidence"},
+		{"evidence ID was not issued by the investigation ledger", "unknown_evidence_id"},
+		{"duplicate evidence ID", "duplicate_evidence_id"},
+		{"evidence catalog is invalid", "evidence_catalog"},
+	}
+	for _, tt := range tests {
+		if got := validationErrorCode(errors.New(tt.message)); got != tt.want {
+			t.Errorf("message=%q code=%q want=%q", tt.message, got, tt.want)
+		}
+	}
+}
+
+type structuredMetadataDecorator struct{ Model }
+
+func (m *structuredMetadataDecorator) CompleteStructuredWithMetadata(ctx context.Context, system, user string, format ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
+	model, ok := m.Model.(structuredCompletionModel)
+	if !ok {
+		err := m.Model.CompleteStructured(ctx, system, user, format, validate)
+		metadata, _ := ai.StructuredCompletionFailureMetadata(err)
+		return metadata, err
+	}
+	return model.CompleteStructuredWithMetadata(ctx, system, user, format, validate)
+}
+
+func TestServiceDecoratorPreservesCancellationAndDeadlineMetadata(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		category FailureCategory
+		phase    Phase
+	}{
+		{name: "cancelled", err: context.Canceled, category: FailureCancelled, phase: PhaseTargetExtractionInitial},
+		{name: "deadline", err: context.DeadlineExceeded, category: FailureTimeout, phase: PhaseTargetExtractionInitial},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := &fakeModel{
+				fingerprint: strings.Repeat("d", 16), memo: "evidence", finalErr: tt.err,
+				toolEvents: []ai.ToolLoopEvent{
+					{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
+					{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
+					{Name: "grep_repo", ContentBytes: len("applyFix")},
+				},
+			}
+			service, input, browser, _ := serviceFixture(t, model)
+			service.model = &structuredMetadataDecorator{Model: model}
+			_, err := service.Investigate(t.Context(), input, browser, false)
+			if !errors.Is(err, tt.err) {
+				t.Fatalf("err=%v", err)
+			}
+			details, ok := FailureDetailsOf(err)
+			if !ok || details.Category != tt.category || details.Phase != tt.phase || len(details.StructuredAttempts) != 1 || model.finalCalls != 1 {
+				t.Fatalf("details=%+v ok=%v calls=%d", details, ok, model.finalCalls)
+			}
+			attempt := details.StructuredAttempts[0]
+			if attempt.Path != ai.StructuredAttemptResponseFormat || attempt.Outcome != ai.StructuredOutcomeProviderError || attempt.ProviderCategory != "request_transport" || attempt.ValidatorCalled {
+				t.Fatalf("attempt=%+v", attempt)
+			}
+		})
 	}
 }

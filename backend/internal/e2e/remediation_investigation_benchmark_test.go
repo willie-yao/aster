@@ -60,6 +60,21 @@ type remediationBenchmarkExpected struct {
 	Target         *models.RemediationTarget               `json:"target"`
 }
 
+type remediationBenchmarkFailure struct {
+	Category                         remediationinvestigation.FailureCategory `json:"category"`
+	Phase                            remediationinvestigation.Phase           `json:"phase,omitempty"`
+	ValidationCode                   string                                   `json:"validation_code,omitempty"`
+	StructuredAttempts               []ai.StructuredAttemptMetadata           `json:"structured_attempts,omitempty"`
+	FinalAttempt                     ai.StructuredAttemptPath                 `json:"final_attempt,omitempty"`
+	FinalOutcome                     ai.StructuredAttemptOutcome              `json:"final_outcome,omitempty"`
+	ValidatorCalled                  *bool                                    `json:"validator_called,omitempty"`
+	ProviderCategory                 string                                   `json:"provider_category,omitempty"`
+	ProviderStatus                   int                                      `json:"provider_status,omitempty"`
+	TargetExtractionModelRequests    int                                      `json:"target_extraction_model_requests"`
+	TargetExtractionProviderAttempts *int                                     `json:"target_extraction_provider_attempts,omitempty"`
+	TargetExtractionRepairCount      int                                      `json:"target_extraction_repair_count"`
+}
+
 type remediationBenchmarkTrial struct {
 	CaseID                   string                                  `json:"case_id"`
 	Category                 string                                  `json:"category"`
@@ -99,6 +114,7 @@ type remediationBenchmarkTrial struct {
 	Metrics                  remediationinvestigation.Metrics        `json:"metrics"`
 	CacheHit                 bool                                    `json:"cache_hit"`
 	ErrorCode                string                                  `json:"error_code,omitempty"`
+	Failure                  *remediationBenchmarkFailure            `json:"failure,omitempty"`
 }
 
 func TestRemediationInvestigationBenchmarkManifest(t *testing.T) {
@@ -274,6 +290,7 @@ func TestRemediationInvestigationBenchmark(t *testing.T) {
 			result, runErr := service.Investigate(t.Context(), input, browser, false)
 			if runErr != nil {
 				row.TrialStatus, row.ErrorCode = remediationTrialFailure(runErr)
+				row.Failure = remediationFailureDiagnostics(runErr)
 				row.Metrics = remediationBenchmarkUsageMetrics(recorder)
 			} else {
 				row.TrialStatus = "valid_result"
@@ -543,6 +560,11 @@ func benchmarkShortHash(value string) string {
 }
 
 func remediationTrialFailure(err error) (string, string) {
+	if details, ok := remediationinvestigation.FailureDetailsOf(err); ok {
+		if status, code, classified := remediationTrialFailureDetails(details); classified {
+			return status, code
+		}
+	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout", "timeout"
@@ -558,6 +580,66 @@ func remediationTrialFailure(err error) (string, string) {
 	default:
 		return "runtime_failure", "runtime"
 	}
+}
+
+func remediationTrialFailureDetails(details remediationinvestigation.FailureDetails) (string, string, bool) {
+	switch details.Category {
+	case remediationinvestigation.FailureTargetExtractionTransport:
+		return "runtime_failure", details.DiagnosticErrorCode(), true
+	case remediationinvestigation.FailureTargetExtractionValidation:
+		return "invalid_result", details.DiagnosticErrorCode(), true
+	case remediationinvestigation.FailureTargetExtractionAttempts:
+		return "no_result", details.DiagnosticErrorCode(), true
+	case remediationinvestigation.FailureNonActionableAssessment:
+		return "invalid_result", details.DiagnosticErrorCode(), true
+	default:
+		return "", "", false
+	}
+}
+
+func remediationFailureDiagnostics(err error) *remediationBenchmarkFailure {
+	details, ok := remediationinvestigation.FailureDetailsOf(err)
+	if !ok {
+		return nil
+	}
+	return remediationFailureDiagnosticsFromDetails(details)
+}
+
+func remediationFailureDiagnosticsFromDetails(details remediationinvestigation.FailureDetails) *remediationBenchmarkFailure {
+	failure := &remediationBenchmarkFailure{
+		Category: details.Category, Phase: details.Phase, ValidationCode: details.ValidationCode,
+		StructuredAttempts: append([]ai.StructuredAttemptMetadata(nil), details.StructuredAttempts...),
+	}
+	targetProviderAttempts := 0
+	targetProviderAttemptsKnown := true
+	repairPhases := map[remediationinvestigation.Phase]bool{}
+	for _, attempt := range details.StructuredAttempts {
+		phase := remediationinvestigation.Phase(attempt.Phase)
+		if phase == remediationinvestigation.PhaseTargetExtractionInitial || phase == remediationinvestigation.PhaseTargetExtractionRepair {
+			failure.TargetExtractionModelRequests++
+			if attempt.ProviderAttemptsKnown {
+				targetProviderAttempts += attempt.ProviderAttempts
+			} else {
+				targetProviderAttemptsKnown = false
+			}
+		}
+		if phase == remediationinvestigation.PhaseTargetExtractionRepair {
+			repairPhases[phase] = true
+		}
+	}
+	failure.TargetExtractionRepairCount = len(repairPhases)
+	if targetProviderAttemptsKnown {
+		failure.TargetExtractionProviderAttempts = &targetProviderAttempts
+	}
+	if final, ok := details.FinalStructuredAttempt(); ok {
+		failure.FinalAttempt = final.Path
+		failure.FinalOutcome = final.Outcome
+		validatorCalled := final.ValidatorCalled
+		failure.ValidatorCalled = &validatorCalled
+		failure.ProviderCategory = final.ProviderCategory
+		failure.ProviderStatus = final.ProviderStatus
+	}
+	return failure
 }
 
 type benchmarkSource struct{ files map[string]map[string]string }
@@ -686,4 +768,48 @@ func TestRemediationBenchmarkSourceDistinguishesCurrentAndFailureRevisions(t *te
 		return
 	}
 	t.Fatal("fixed-in-current-source case not found")
+}
+
+func TestRemediationTrialFailureDetailsClassifiesStructuredPhases(t *testing.T) {
+	tests := []struct {
+		name       string
+		details    remediationinvestigation.FailureDetails
+		wantStatus string
+		wantCode   string
+	}{
+		{name: "target transport", details: remediationinvestigation.FailureDetails{Category: remediationinvestigation.FailureTargetExtractionTransport, Phase: remediationinvestigation.PhaseTargetExtractionInitial, ValidationCode: "invalid_target_extraction"}, wantStatus: "runtime_failure", wantCode: "target_extraction_transport"},
+		{name: "target validation", details: remediationinvestigation.FailureDetails{Category: remediationinvestigation.FailureTargetExtractionValidation, Phase: remediationinvestigation.PhaseTargetExtractionRepair, ValidationCode: "invalid_version"}, wantStatus: "invalid_result", wantCode: "target_extraction_invalid_version"},
+		{name: "target exhaustion", details: remediationinvestigation.FailureDetails{Category: remediationinvestigation.FailureTargetExtractionAttempts, Phase: remediationinvestigation.PhaseTargetExtractionRepair, ValidationCode: "invalid_target_extraction"}, wantStatus: "no_result", wantCode: "target_extraction_attempt_exhausted"},
+		{name: "non actionable", details: remediationinvestigation.FailureDetails{Category: remediationinvestigation.FailureNonActionableAssessment, Phase: remediationinvestigation.PhaseNonActionableAssessmentRepair, ValidationCode: "decode"}, wantStatus: "invalid_result", wantCode: "non_actionable_assessment_decode"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, code, ok := remediationTrialFailureDetails(tt.details)
+			if !ok || status != tt.wantStatus || code != tt.wantCode {
+				t.Fatalf("status=%q code=%q ok=%v", status, code, ok)
+			}
+		})
+	}
+}
+
+func TestRemediationFailureDiagnosticsAreBounded(t *testing.T) {
+	details := remediationinvestigation.FailureDetails{
+		Category:       remediationinvestigation.FailureTargetExtractionValidation,
+		Phase:          remediationinvestigation.PhaseTargetExtractionRepair,
+		ValidationCode: "invalid_version",
+		StructuredAttempts: []ai.StructuredAttemptMetadata{
+			{Phase: string(remediationinvestigation.PhaseTargetExtractionInitial), Path: ai.StructuredAttemptResponseFormat, Outcome: ai.StructuredOutcomeValidatorRejected, ValidatorCalled: true, ValidationCode: "invalid_version", ProviderAttempts: 1, ProviderAttemptsKnown: true},
+			{Phase: string(remediationinvestigation.PhaseTargetExtractionRepair), Path: ai.StructuredAttemptPlainFallback, Outcome: ai.StructuredOutcomeInvalidJSON, ValidatorCalled: false, ProviderAttempts: 2, ProviderAttemptsKnown: true},
+		},
+	}
+	failure := remediationFailureDiagnosticsFromDetails(details)
+	if failure == nil || failure.TargetExtractionModelRequests != 2 || failure.TargetExtractionProviderAttempts == nil || *failure.TargetExtractionProviderAttempts != 3 || failure.TargetExtractionRepairCount != 1 || failure.FinalAttempt != ai.StructuredAttemptPlainFallback || failure.FinalOutcome != ai.StructuredOutcomeInvalidJSON || failure.ValidatorCalled == nil || *failure.ValidatorCalled {
+		t.Fatalf("failure=%+v", failure)
+	}
+	encoded, _ := json.Marshal(failure)
+	for _, forbidden := range []string{"private prompt", "target/path", "evidence-id", "provider body", "credential"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("diagnostics exposed %q: %s", forbidden, encoded)
+		}
+	}
 }

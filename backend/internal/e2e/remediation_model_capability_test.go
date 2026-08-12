@@ -167,6 +167,7 @@ type remediationModelCapabilityTrial struct {
 	TransportFingerprint             string                                  `json:"transport_fingerprint"`
 	TrialStatus                      string                                  `json:"trial_status"`
 	ErrorCode                        string                                  `json:"error_code,omitempty"`
+	Failure                          *remediationBenchmarkFailure            `json:"failure,omitempty"`
 	EngineCommit                     string                                  `json:"engine_commit"`
 	ManifestSHA256                   string                                  `json:"manifest_sha256"`
 	EffectiveInputSHA256             string                                  `json:"effective_input_sha256"`
@@ -204,6 +205,18 @@ type remediationModelCapabilityDiagnosticModel struct {
 	remediationinvestigation.Model
 	target      models.RemediationTarget
 	diagnostics *remediationModelCapabilityMemoDiagnostics
+}
+
+func (m *remediationModelCapabilityDiagnosticModel) CompleteStructuredWithMetadata(ctx context.Context, system, user string, format ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
+	model, ok := m.Model.(interface {
+		CompleteStructuredWithMetadata(context.Context, string, string, ai.ResponseFormat, ai.StructuredValidator) (ai.StructuredCompletionMetadata, error)
+	})
+	if ok {
+		return model.CompleteStructuredWithMetadata(ctx, system, user, format, validate)
+	}
+	err := m.Model.CompleteStructured(ctx, system, user, format, validate)
+	metadata, _ := ai.StructuredCompletionFailureMetadata(err)
+	return metadata, err
 }
 
 func (m *remediationModelCapabilityDiagnosticModel) ToolLoop(ctx context.Context, system, user string, registry *tools.Registry, enabled []string, env *tools.Env, options ai.ToolLoopOptions) (string, error) {
@@ -477,6 +490,7 @@ func TestRemediationModelCapabilityBenchmark(t *testing.T) {
 			row.MemoMentionsTargetValue = diagnostics.Value
 			if runErr != nil {
 				row.TrialStatus, row.ErrorCode = remediationTrialFailure(runErr)
+				row.Failure = remediationFailureDiagnostics(runErr)
 				row.Metrics = remediationBenchmarkUsageMetrics(recorder)
 			} else {
 				row.TrialStatus, row.StructurallyValid = "valid_result", true

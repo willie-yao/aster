@@ -33,15 +33,98 @@ type ToolChoice struct {
 // validate the expected fields before returning nil.
 type StructuredValidator func(json.RawMessage) error
 
+// StructuredAttemptPath identifies one structured completion transport path.
+type StructuredAttemptPath string
+
+const (
+	StructuredAttemptResponseFormat StructuredAttemptPath = "response_format"
+	StructuredAttemptForcedFunction StructuredAttemptPath = "forced_function"
+	StructuredAttemptPlainFallback  StructuredAttemptPath = "plain_fallback"
+)
+
+// StructuredAttemptOutcome is one content-free structured attempt result.
+type StructuredAttemptOutcome string
+
+const (
+	StructuredOutcomeAccepted              StructuredAttemptOutcome = "accepted"
+	StructuredOutcomeProviderError         StructuredAttemptOutcome = "provider_error"
+	StructuredOutcomeEmptyResponse         StructuredAttemptOutcome = "empty_response"
+	StructuredOutcomeMissingForcedFunction StructuredAttemptOutcome = "missing_forced_function"
+	StructuredOutcomeInvalidJSON           StructuredAttemptOutcome = "invalid_json"
+	StructuredOutcomeValidatorRejected     StructuredAttemptOutcome = "validator_rejected"
+	StructuredOutcomeNoCandidate           StructuredAttemptOutcome = "no_candidate"
+)
+
+// StructuredAttemptMetadata contains only bounded control-flow information.
+type StructuredAttemptMetadata struct {
+	Phase                 string                   `json:"phase,omitempty"`
+	Path                  StructuredAttemptPath    `json:"path"`
+	Outcome               StructuredAttemptOutcome `json:"outcome"`
+	ValidatorCalled       bool                     `json:"validator_called"`
+	ValidationCode        string                   `json:"validation_code,omitempty"`
+	ProviderCategory      string                   `json:"provider_category,omitempty"`
+	ProviderStatus        int                      `json:"provider_status,omitempty"`
+	ProviderAttempts      int                      `json:"provider_attempts,omitempty"`
+	ProviderAttemptsKnown bool                     `json:"provider_attempts_known,omitempty"`
+}
+
+// StructuredCompletionMetadata is the bounded attempt history for one call.
+type StructuredCompletionMetadata struct {
+	Attempts []StructuredAttemptMetadata `json:"attempts"`
+}
+
+// FinalAttempt returns the last attempted structured path.
+func (m StructuredCompletionMetadata) FinalAttempt() (StructuredAttemptMetadata, bool) {
+	if len(m.Attempts) == 0 {
+		return StructuredAttemptMetadata{}, false
+	}
+	return m.Attempts[len(m.Attempts)-1], true
+}
+
+// StructuredCompletionFailureMetadata extracts bounded attempt metadata.
+func StructuredCompletionFailureMetadata(err error) (StructuredCompletionMetadata, bool) {
+	var structured *structuredCompletionError
+	if !errors.As(err, &structured) {
+		return StructuredCompletionMetadata{}, false
+	}
+	return cloneStructuredCompletionMetadata(structured.metadata), true
+}
+
+// WithStructuredCompletionPhase attaches one bounded caller phase to attempts.
+func WithStructuredCompletionPhase(ctx context.Context, phase string) context.Context {
+	phase = structuredPhaseCode(phase)
+	if ctx == nil || phase == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, structuredCompletionPhaseContextKey{}, phase)
+}
+
+// StructuredCompletionPhase returns the bounded caller phase from context.
+func StructuredCompletionPhase(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	phase, _ := ctx.Value(structuredCompletionPhaseContextKey{}).(string)
+	return structuredPhaseCode(phase)
+}
+
 // CompleteStructured requests a schema-bound object and accepts it only after
 // deterministic caller validation. Provider schema support is preferred, then
 // a forced function call, then bounded extraction from a plain completion.
 func (c *Client) CompleteStructured(ctx context.Context, system, user string, format ResponseFormat, validate StructuredValidator) error {
+	_, err := c.CompleteStructuredWithMetadata(ctx, system, user, format, validate)
+	return err
+}
+
+// CompleteStructuredWithMetadata preserves bounded attempt metadata without
+// retaining prompts, response text, tool arguments, or provider bodies.
+func (c *Client) CompleteStructuredWithMetadata(ctx context.Context, system, user string, format ResponseFormat, validate StructuredValidator) (StructuredCompletionMetadata, error) {
+	metadata := StructuredCompletionMetadata{Attempts: []StructuredAttemptMetadata{}}
 	if validate == nil {
-		return fmt.Errorf("structured completion validator is required")
+		return metadata, fmt.Errorf("structured completion validator is required")
 	}
 	if strings.TrimSpace(format.Name) == "" || len(format.Schema) == 0 {
-		return fmt.Errorf("structured completion schema is required")
+		return metadata, fmt.Errorf("structured completion schema is required")
 	}
 	messages := []modelMessage{
 		{Role: "system", Content: strPtr(system)},
@@ -72,34 +155,66 @@ func (c *Client) CompleteStructured(ctx context.Context, system, user string, fo
 	}
 
 	for index, request := range attempts {
-		attempt := structuredAttemptName(index)
+		attempt := StructuredAttemptMetadata{Phase: StructuredCompletionPhase(ctx), Path: structuredAttemptPath(index)}
 		resp, err := c.callModelRequest(ctx, request)
+		setStructuredProviderAttempts(&attempt, resp)
 		if err != nil {
+			attempt.Outcome = StructuredOutcomeProviderError
+			attempt.ProviderCategory = traceErrorCode(err)
+			if httpMetadata, ok := SafeProviderErrorMetadata(err); ok {
+				attempt.ProviderStatus = httpMetadata.StatusCode
+				if httpMetadata.Category != "" {
+					attempt.ProviderCategory = httpMetadata.Category
+				}
+			} else if resp != nil {
+				attempt.ProviderStatus = resp.HTTPStatus
+			}
+			metadata = appendStructuredAttempt(ctx, metadata, attempt)
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return err
+				return metadata, err
 			}
 			if index < len(attempts)-1 && structuredFallbackAllowed(err) {
 				continue
 			}
-			return structuredFailureAt("provider request failed", attempt, err)
+			return metadata, newStructuredCompletionError("provider request failed", metadata, err)
 		}
-		var raw string
 		if request.ToolChoice != nil {
-			if len(resp.Message.ToolCalls) != 1 || resp.Message.ToolCalls[0].Function.Name != format.Name {
+			if resp == nil || !resp.HasMessage || len(resp.Message.ToolCalls) != 1 || resp.Message.ToolCalls[0].Function.Name != format.Name {
+				attempt.Outcome = StructuredOutcomeMissingForcedFunction
+				metadata = appendStructuredAttempt(ctx, metadata, attempt)
 				continue
 			}
-			raw = resp.Message.ToolCalls[0].Function.Arguments
-		} else if resp.HasMessage && resp.Message.Content != nil {
-			raw = *resp.Message.Content
-		} else {
+			raw := resp.Message.ToolCalls[0].Function.Arguments
+			if strings.TrimSpace(raw) == "" {
+				attempt.Outcome = StructuredOutcomeEmptyResponse
+				metadata = appendStructuredAttempt(ctx, metadata, attempt)
+				continue
+			}
+			validation := evaluateStructuredCandidates(raw, validate)
+			attempt.Outcome = validation.outcome
+			attempt.ValidatorCalled = validation.validatorCalled
+			attempt.ValidationCode = validation.validationCode
+			metadata = appendStructuredAttempt(ctx, metadata, attempt)
+			if validation.err == nil {
+				return metadata, nil
+			}
 			continue
 		}
-		if err := validateStructuredCandidates(raw, validate); err != nil {
+		if resp == nil || !resp.HasMessage || resp.Message.Content == nil || strings.TrimSpace(*resp.Message.Content) == "" {
+			attempt.Outcome = StructuredOutcomeEmptyResponse
+			metadata = appendStructuredAttempt(ctx, metadata, attempt)
 			continue
 		}
-		return nil
+		validation := evaluateStructuredCandidates(*resp.Message.Content, validate)
+		attempt.Outcome = validation.outcome
+		attempt.ValidatorCalled = validation.validatorCalled
+		attempt.ValidationCode = validation.validationCode
+		metadata = appendStructuredAttempt(ctx, metadata, attempt)
+		if validation.err == nil {
+			return metadata, nil
+		}
 	}
-	return structuredFailureAt("no valid structured response", structuredAttemptName(len(attempts)-1), nil)
+	return metadata, newStructuredCompletionError("no valid structured response", metadata, nil)
 }
 
 // completeForcedFunction accepts only one call to the exact named function.
@@ -127,18 +242,45 @@ func (c *Client) completeForcedFunction(ctx context.Context, system, user string
 		ToolChoice: &ToolChoice{Name: format.Name}, ParallelToolCalls: &parallel,
 		MaxResponseBytes: defaultStructuredResponseBytes, OmitReasoning: true,
 	}
+	attempt := StructuredAttemptMetadata{Phase: StructuredCompletionPhase(ctx), Path: StructuredAttemptForcedFunction}
 	resp, err := c.callModelRequest(ctx, request)
+	setStructuredProviderAttempts(&attempt, resp)
 	if err != nil {
-		return structuredFailureAt("provider request failed", "forced-function", err)
+		attempt.Outcome = StructuredOutcomeProviderError
+		attempt.ProviderCategory = traceErrorCode(err)
+		if provider, ok := SafeProviderErrorMetadata(err); ok {
+			attempt.ProviderStatus = provider.StatusCode
+			if provider.Category != "" {
+				attempt.ProviderCategory = provider.Category
+			}
+		}
+		metadata := appendStructuredAttempt(ctx, StructuredCompletionMetadata{}, attempt)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return newStructuredCompletionError("provider request failed", metadata, err)
 	}
 	if resp == nil || !resp.HasMessage || len(resp.Message.ToolCalls) != 1 ||
 		resp.Message.ToolCalls[0].Function.Name != format.Name {
-		return structuredFailureAt("exact forced function was not returned", "forced-function", nil)
+		attempt.Outcome = StructuredOutcomeMissingForcedFunction
+		metadata := appendStructuredAttempt(ctx, StructuredCompletionMetadata{}, attempt)
+		return newStructuredCompletionError("exact forced function was not returned", metadata, nil)
 	}
 	raw := json.RawMessage(resp.Message.ToolCalls[0].Function.Arguments)
-	if !json.Valid(raw) || validate(raw) != nil {
-		return structuredFailureAt("forced function arguments failed validation", "forced-function", nil)
+	if !json.Valid(raw) {
+		attempt.Outcome = StructuredOutcomeInvalidJSON
+		metadata := appendStructuredAttempt(ctx, StructuredCompletionMetadata{}, attempt)
+		return newStructuredCompletionError("forced function arguments failed validation", metadata, nil)
 	}
+	attempt.ValidatorCalled = true
+	if err := validate(raw); err != nil {
+		attempt.Outcome = StructuredOutcomeValidatorRejected
+		attempt.ValidationCode = structuredValidationCode(err)
+		metadata := appendStructuredAttempt(ctx, StructuredCompletionMetadata{}, attempt)
+		return newStructuredCompletionError("forced function arguments failed validation", metadata, nil)
+	}
+	attempt.Outcome = StructuredOutcomeAccepted
+	appendStructuredAttempt(ctx, StructuredCompletionMetadata{}, attempt)
 	return nil
 }
 
@@ -156,9 +298,10 @@ func structuredFallbackAllowed(err error) bool {
 }
 
 type structuredCompletionError struct {
-	reason  string
-	attempt string
-	cause   error
+	reason   string
+	metadata StructuredCompletionMetadata
+	provider ProviderErrorMetadata
+	cause    error
 }
 
 func (e *structuredCompletionError) Error() string {
@@ -167,35 +310,118 @@ func (e *structuredCompletionError) Error() string {
 
 func (e *structuredCompletionError) Unwrap() error { return e.cause }
 
-func structuredFailureAt(reason, attempt string, cause error) error {
-	return &structuredCompletionError{reason: reason, attempt: attempt, cause: cause}
+type structuredProviderFailure struct{ category string }
+
+func (e *structuredProviderFailure) Error() string {
+	if e.category == "" {
+		return "structured provider failure"
+	}
+	return "structured provider failure: " + e.category
 }
 
-func structuredAttemptName(index int) string {
+func newStructuredCompletionError(reason string, metadata StructuredCompletionMetadata, cause error) error {
+	provider, _ := safeProviderErrorMetadataFromCause(cause)
+	provider = ProviderErrorMetadata{Category: provider.Category, StatusCode: provider.StatusCode}
+	var safeCause error
+	if cause != nil {
+		safeCause = &structuredProviderFailure{category: provider.Category}
+	}
+	return &structuredCompletionError{reason: reason, metadata: cloneStructuredCompletionMetadata(metadata), provider: provider, cause: safeCause}
+}
+
+func structuredFailureAt(reason, attempt string, cause error) error {
+	outcome := StructuredOutcomeNoCandidate
+	if cause != nil {
+		outcome = StructuredOutcomeProviderError
+	}
+	item := StructuredAttemptMetadata{Path: structuredAttemptPathName(attempt), Outcome: outcome}
+	if cause != nil {
+		item.ProviderCategory = traceErrorCode(cause)
+		if provider, ok := SafeProviderErrorMetadata(cause); ok {
+			item.ProviderStatus = provider.StatusCode
+			if provider.Category != "" {
+				item.ProviderCategory = provider.Category
+			}
+		}
+	}
+	return newStructuredCompletionError(reason, StructuredCompletionMetadata{Attempts: []StructuredAttemptMetadata{item}}, cause)
+}
+
+func structuredAttemptPath(index int) StructuredAttemptPath {
 	switch index {
 	case 0:
-		return "json-schema"
+		return StructuredAttemptResponseFormat
 	case 1:
-		return "forced-function"
+		return StructuredAttemptForcedFunction
 	default:
-		return "plain-json"
+		return StructuredAttemptPlainFallback
 	}
 }
 
-func validateStructuredCandidates(raw string, validate StructuredValidator) error {
+func structuredAttemptPathName(value string) StructuredAttemptPath {
+	switch value {
+	case "json-schema", string(StructuredAttemptResponseFormat):
+		return StructuredAttemptResponseFormat
+	case "forced-function", string(StructuredAttemptForcedFunction):
+		return StructuredAttemptForcedFunction
+	default:
+		return StructuredAttemptPlainFallback
+	}
+}
+
+type structuredValidationResult struct {
+	outcome         StructuredAttemptOutcome
+	validatorCalled bool
+	validationCode  string
+	err             error
+}
+
+func evaluateStructuredCandidates(raw string, validate StructuredValidator) structuredValidationResult {
+	tracker := &structuredValidationResult{outcome: StructuredOutcomeNoCandidate}
 	if len(raw) > int(defaultStructuredResponseBytes) {
-		return fmt.Errorf("structured response exceeds %d bytes", defaultStructuredResponseBytes)
+		tracker.err = fmt.Errorf("structured response exceeds %d bytes", defaultStructuredResponseBytes)
+		return *tracker
 	}
 	trimmed := strings.TrimSpace(raw)
 	if json.Valid([]byte(trimmed)) {
+		tracker.validatorCalled = true
 		if err := validate(json.RawMessage(trimmed)); err == nil {
-			return nil
+			tracker.outcome = StructuredOutcomeAccepted
+			return *tracker
+		} else {
+			tracker.validationCode = structuredValidationCode(err)
 		}
 	}
-	return validateExtractedCandidates(raw, validate)
+	tracker.err = validateExtractedCandidatesTracked(raw, validate, tracker)
+	if tracker.err == nil {
+		tracker.outcome = StructuredOutcomeAccepted
+		tracker.validationCode = ""
+		return *tracker
+	}
+	if strings.Contains(tracker.err.Error(), "conflicting valid JSON objects") ||
+		strings.Contains(tracker.err.Error(), "too many candidate") ||
+		strings.Contains(tracker.err.Error(), "too many JSON candidates") ||
+		strings.Contains(tracker.err.Error(), "exceeds") {
+		tracker.outcome = StructuredOutcomeNoCandidate
+		return *tracker
+	}
+	if tracker.validatorCalled {
+		tracker.outcome = StructuredOutcomeValidatorRejected
+		return *tracker
+	}
+	if strings.Contains(tracker.err.Error(), "no valid JSON object") {
+		tracker.outcome = StructuredOutcomeInvalidJSON
+		return *tracker
+	}
+	tracker.outcome = StructuredOutcomeNoCandidate
+	return *tracker
 }
 
-func validateExtractedCandidates(raw string, validate StructuredValidator) error {
+func validateStructuredCandidates(raw string, validate StructuredValidator) error {
+	return evaluateStructuredCandidates(raw, validate).err
+}
+
+func validateExtractedCandidatesTracked(raw string, validate StructuredValidator, tracker *structuredValidationResult) error {
 	data := []byte(raw)
 	type acceptedCandidate struct {
 		canonical []byte
@@ -221,7 +447,11 @@ func validateExtractedCandidates(raw string, validate StructuredValidator) error
 		if decodedCandidates > maxStructuredCandidates {
 			return fmt.Errorf("structured response contains too many JSON candidates")
 		}
+		tracker.validatorCalled = true
 		if err := validate(candidate); err != nil {
+			if code := structuredValidationCode(err); code != "" {
+				tracker.validationCode = code
+			}
 			continue
 		}
 		canonical, err := canonicalJSON(candidate)
@@ -242,6 +472,73 @@ func validateExtractedCandidates(raw string, validate StructuredValidator) error
 	return nil
 }
 
+func structuredValidationCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	var coded interface{ StructuredValidationCode() string }
+	if !errors.As(err, &coded) {
+		return ""
+	}
+	code := strings.ToLower(strings.TrimSpace(coded.StructuredValidationCode()))
+	if !traceCodePattern.MatchString(code) {
+		return ""
+	}
+	return code
+}
+
+func appendStructuredAttempt(ctx context.Context, metadata StructuredCompletionMetadata, attempt StructuredAttemptMetadata) StructuredCompletionMetadata {
+	attempt.Phase = structuredPhaseCode(attempt.Phase)
+	attempt.ValidationCode = structuredValidationCodeValue(attempt.ValidationCode)
+	attempt.ProviderCategory = structuredProviderCategory(attempt.ProviderCategory)
+	metadata.Attempts = append(metadata.Attempts, attempt)
+	validatorCalled := attempt.ValidatorCalled
+	recordTrace(ctx, TraceEvent{
+		Kind: "structured_completion", StructuredPhase: attempt.Phase,
+		StructuredAttempt: string(attempt.Path), StructuredOutcome: string(attempt.Outcome),
+		ValidatorCalled: &validatorCalled, ValidationCode: attempt.ValidationCode,
+		ErrorCode: attempt.ProviderCategory, HTTPStatus: attempt.ProviderStatus, Attempts: attempt.ProviderAttempts,
+	})
+	return metadata
+}
+
+func setStructuredProviderAttempts(attempt *StructuredAttemptMetadata, response *modelResponse) {
+	if attempt == nil || response == nil || response.Attempts <= 0 {
+		return
+	}
+	attempt.ProviderAttempts = response.Attempts
+	attempt.ProviderAttemptsKnown = true
+}
+
+func structuredPhaseCode(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if traceCodePattern.MatchString(value) {
+		return value
+	}
+	return ""
+}
+
+func structuredValidationCodeValue(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if traceCodePattern.MatchString(value) {
+		return value
+	}
+	return ""
+}
+
+func structuredProviderCategory(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if traceCodePattern.MatchString(value) {
+		return value
+	}
+	return ""
+}
+
+func cloneStructuredCompletionMetadata(metadata StructuredCompletionMetadata) StructuredCompletionMetadata {
+	metadata.Attempts = append([]StructuredAttemptMetadata(nil), metadata.Attempts...)
+	return metadata
+}
+
 func canonicalJSON(raw json.RawMessage) ([]byte, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
@@ -251,3 +548,5 @@ func canonicalJSON(raw json.RawMessage) ([]byte, error) {
 	}
 	return json.Marshal(value)
 }
+
+type structuredCompletionPhaseContextKey struct{}
