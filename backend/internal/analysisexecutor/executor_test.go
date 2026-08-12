@@ -242,6 +242,9 @@ func TestOpenCodeJSONRejectsTrailingData(t *testing.T) {
 func TestWriteOpenCodeConfigSeparatesEvidenceAndFinalizationPermissions(t *testing.T) {
 	home := t.TempDir()
 	gateway := testGatewayProvider("https://model-gateway.prow-ai.svc.cluster.local:8443/v1/chat/completions", "test-model")
+	if err := writeOpenCodeConfig(home, gateway, 2, 200000, 8192); err == nil {
+		t.Fatal("two-step OpenCode analysis was accepted")
+	}
 	if err := writeOpenCodeConfig(home, gateway, 20, 200000, 8192); err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +265,7 @@ func TestWriteOpenCodeConfigSeparatesEvidenceAndFinalizationPermissions(t *testi
 	}
 	evidence := agents[openCodeEvidenceAgent].(map[string]any)
 	finalize := agents[openCodeFinalizationAgent].(map[string]any)
-	if evidence["steps"].(float64) != 19 || finalize["steps"].(float64) != 1 {
+	if evidence["steps"].(float64) != 18 || finalize["steps"].(float64) != 2 {
 		t.Fatalf("evidence=%v finalize=%v", evidence, finalize)
 	}
 	evidencePermissions := evidence["permission"].(map[string]any)
@@ -955,7 +958,7 @@ func TestDefaultRunOpenCodeRejectsCredentialBearingProcessStream(t *testing.T) {
 	_, err := defaultRunOpenCode(ctx, OpenCodeSpec{
 		Bin: bin, WorkDir: t.TempDir(), HomeDir: t.TempDir(), TempDir: t.TempDir(),
 		Provider: testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model"),
-		Prompt:   "analyze", MaxSteps: 2, ModelContextTokens: 200000, ModelOutputTokens: 8192,
+		Prompt:   "analyze", MaxSteps: 3, ModelContextTokens: 200000, ModelOutputTokens: 8192,
 	})
 	if !errors.Is(err, modelprovider.ErrCredentialExposure) {
 		t.Fatalf("credential-bearing process stream error = %v", err)

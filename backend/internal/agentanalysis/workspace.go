@@ -494,8 +494,8 @@ func ValidateWorkspaceExecutionRequest(request WorkspaceExecutionRequest) error 
 	if request.TimeoutSeconds < 1 || request.TimeoutSeconds > int64((30*time.Minute)/time.Second) {
 		return fmt.Errorf("workspace analysis timeout must be between 1 second and 30 minutes")
 	}
-	if request.MaxSteps < 2 || request.MaxSteps > 100 {
-		return fmt.Errorf("workspace analysis max steps must be between 2 and 100")
+	if request.MaxSteps < 3 || request.MaxSteps > 100 {
+		return fmt.Errorf("workspace analysis max steps must be between 3 and 100")
 	}
 	if request.ModelContextTokens < 8192 || request.ModelContextTokens > 2_000_000 || request.ModelOutputTokens < 1024 || request.ModelOutputTokens > request.ModelContextTokens || request.ModelOutputTokens > 131072 {
 		return fmt.Errorf("workspace analysis model limits are invalid")

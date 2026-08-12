@@ -257,6 +257,7 @@ type syntheticProviderRequestShape struct {
 	toolSchemaSHA256  string
 	toolChoiceMode    string
 	outputTokenLimit  int
+	roles             []string
 }
 
 func parseSyntheticProviderRequest(raw []byte) (syntheticProviderRequestShape, error) {
@@ -288,6 +289,7 @@ func parseSyntheticProviderRequest(raw []byte) (syntheticProviderRequestShape, e
 		shape.streamingMode = "streaming"
 	}
 	for _, message := range request.Messages {
+		shape.roles = append(shape.roles, message.Role)
 		count, err := providerMessageTextBytes(message.Content)
 		if err != nil {
 			return syntheticProviderRequestShape{}, err
@@ -428,6 +430,9 @@ func TestOpenCode1182TwoPhaseCompatibility(t *testing.T) {
 		t.Fatalf("calls=%d toolSets=%v", calls, toolSets)
 	}
 	finalShape := providerShapes[2]
+	if len(finalShape.roles) == 0 || finalShape.roles[len(finalShape.roles)-1] != "user" {
+		t.Fatalf("final provider roles=%v", finalShape.roles)
+	}
 	if finalShape.toolCount != result.Telemetry.RequestShape.ToolCount || finalShape.toolSchemaSHA256 != result.Telemetry.RequestShape.ToolSchemaSHA256 || finalShape.toolChoiceMode != result.Telemetry.RequestShape.ToolChoiceMode || finalShape.userPromptBytes != result.Telemetry.RequestShape.UserPromptBytes || finalShape.systemPromptBytes != result.Telemetry.RequestShape.SystemPromptBytes {
 		t.Fatalf("provider shape=%+v telemetry=%+v", finalShape, result.Telemetry.RequestShape)
 	}
@@ -587,6 +592,9 @@ func TestOpenCode1182ResponsesTwoPhaseCompatibility(t *testing.T) {
 	if slices.Contains(responseToolNames(requests[0]), "StructuredOutput") || slices.Contains(responseToolNames(requests[1]), "StructuredOutput") || !slices.Equal(responseToolNames(requests[2]), []string{"StructuredOutput"}) {
 		t.Fatalf("Responses tool sets = %v %v %v", responseToolNames(requests[0]), responseToolNames(requests[1]), responseToolNames(requests[2]))
 	}
+	if role := responseLastMessageRole(requests[2]); role != "user" {
+		t.Fatalf("final Responses message role = %q sequence=%v", role, responseInputRoleSequence(requests[2]))
+	}
 	if result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Usage.ModelRequests != 3 || !result.Usage.Available || result.Usage.InputTokens != 24 || result.Usage.CachedInputTokens != 6 || result.Usage.OutputTokens != 6 || !result.Telemetry.EvidencePhaseCompleted || !result.Telemetry.FinalizationPhaseCompleted || len(result.Structured) == 0 {
 		t.Fatalf("Responses result=%+v", result)
 	}
@@ -606,6 +614,23 @@ func responseToolNames(request syntheticResponsesRequest) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func responseInputRoleSequence(request syntheticResponsesRequest) []string {
+	result := make([]string, 0, len(request.Input))
+	for _, item := range request.Input {
+		result = append(result, fmt.Sprintf("%v:%v", item["type"], item["role"]))
+	}
+	return result
+}
+
+func responseLastMessageRole(request syntheticResponsesRequest) string {
+	for index := len(request.Input) - 1; index >= 0; index-- {
+		if role, ok := request.Input[index]["role"].(string); ok && role != "" {
+			return role
+		}
+	}
+	return ""
 }
 
 func responseInputTypeCount(request syntheticResponsesRequest, want string) int {

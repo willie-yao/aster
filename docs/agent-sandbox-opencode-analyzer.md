@@ -174,8 +174,10 @@ Chat-Completions-only.
 
 OpenCode receives the pinned workspace, failure metadata, consumer guidance,
 and one engine-owned output contract. One server process and one session carry
-the evidence and finalization messages. The evidence agent has bounded native
-read and search access. The finalization agent has only StructuredOutput. Network
+the evidence and finalization messages. The step budget reserves two steps for
+finalization. StructuredOutput is required on the first, while the spare step
+keeps OpenCode 1.18.2's last-step assistant sentinel out of the provider
+request. The evidence agent has bounded native read and search access. The finalization agent has only StructuredOutput. Network
 access, web fetching, delegation, writes, project configuration, and external
 skills remain denied. Filesystem mounts and admission policy, not a second
 dashboard tool loop, enforce the source and artifact boundary.
