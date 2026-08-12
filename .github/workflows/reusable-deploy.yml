@@ -370,8 +370,8 @@ jobs:
       # Keep operational files out of the public site. Vite copies public/data/
       # into dist/data/ at build; strip AI traces, the cache, and side-effect
       # state (they carry operational metadata, never dashboard data). The flat
-      # files stay in sync with output.NonPublishedFiles; fetch status is hidden
-      # in its private subdirectory.
+      # files stay in sync with output.NonPublishedFiles; private status and
+      # remediation cache files are hidden in dot-directories.
       - name: Strip non-published data files
         run: |
           d=engine/frontend/dist/data
@@ -383,7 +383,11 @@ jobs:
             "$d"/action_request_state.json "$d"/action_preview_state.json \
             "$d"/analysis_correction_state.json \
             "$d"/.fetch-status/status.json "$d"/.fetch-status/status.json.tmp-* \
-            "$d"/.fetch-status/history.json "$d"/.fetch-status/history.json.tmp-* || true
+            "$d"/.fetch-status/history.json "$d"/.fetch-status/history.json.tmp-* \
+            "$d"/.remediation-investigations/cache.json \
+            "$d"/.remediation-investigations/cache.json.tmp-* \
+            "$d"/.remediation-investigations/cache.lock || true
+          rmdir "$d"/.remediation-investigations 2>/dev/null || true
 
       # --- Deploy to GitHub Pages ---
       - uses: actions/configure-pages@v5

@@ -94,10 +94,13 @@ func ModelFingerprint(apiMode, endpoint, model string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// modelFingerprint returns the current client's cache fingerprint.
-func (c *Client) modelFingerprint() string {
+// ModelFingerprint returns the current client's safe cache fingerprint.
+func (c *Client) ModelFingerprint() string {
 	return ModelFingerprint(c.apiMode, c.apiURL, c.model)
 }
+
+// modelFingerprint retains the package-local spelling used by older callers.
+func (c *Client) modelFingerprint() string { return c.ModelFingerprint() }
 
 // Cache returns the underlying cache so callers can persist it.
 func (c *Client) Cache() *Cache {

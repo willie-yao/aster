@@ -183,3 +183,23 @@ func TestToolLoopFinalizeUnexpectedToolCallIsCategorized(t *testing.T) {
 		t.Fatalf("missing finalize category: %+v", store.Snapshot())
 	}
 }
+
+func TestToolLoopObserveReportsContentFreeDispatchTelemetry(t *testing.T) {
+	script := aitest.NewScriptServer(t)
+	script.PushToolCall("c1", "echo", map[string]any{"msg": "hi"})
+	script.PushFinal(`done`)
+
+	reg := tools.NewRegistry()
+	reg.Register(&stubTool{})
+	var events []ToolLoopEvent
+	_, err := newLoopClient(script.URL).ToolLoop(
+		t.Context(), "sys", "user", reg, []string{"echo"}, &tools.Env{},
+		ToolLoopOptions{Observe: func(event ToolLoopEvent) { events = append(events, event) }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Name != "echo" || events[0].Error || events[0].Path != "" {
+		t.Fatalf("events=%+v", events)
+	}
+}
