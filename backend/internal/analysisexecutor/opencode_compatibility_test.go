@@ -727,7 +727,7 @@ func TestOpenCode1182ResponsesFailureModesAreSanitized(t *testing.T) {
 		wantCode string
 		write    func(*testing.T, http.ResponseWriter)
 	}{
-		{name: "missing usage", wantCode: "evidence_unavailable", write: func(t *testing.T, w http.ResponseWriter) { writeSyntheticResponsesText(t, w, "No usage.", false) }},
+		{name: "missing usage", wantCode: agentanalysis.WorkspaceEvidenceArtifactHandlesMissing, write: func(t *testing.T, w http.ResponseWriter) { writeSyntheticResponsesText(t, w, "No usage.", false) }},
 		{name: "malformed event", wantCode: "serialization", write: func(_ *testing.T, w http.ResponseWriter) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			fmt.Fprint(w, "data: {not-json}\n\n")

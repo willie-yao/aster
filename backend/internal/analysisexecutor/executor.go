@@ -451,6 +451,7 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 		result.Usage.Status = telemetryStatusForError(evidenceTelemetryErr)
 		result.Telemetry.Status = result.Usage.Status
 		result.Telemetry.RequestShape = evidenceShape
+		result.Telemetry.EvidenceHandles = evidenceTelemetry.EvidenceHandles
 	}
 	applyOpenCodePromptError(&result, evidenceErr, 0, true, false)
 	if evidenceErr != nil {
@@ -458,6 +459,9 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 	}
 	if err := validateOpenCodeEvidencePhase(evidenceFacts, evidenceTelemetryErr); err != nil {
 		result.Telemetry.FailureCode = "evidence_unavailable"
+		if code := primaryWorkspaceEvidenceFailureCode(evidenceFacts.EvidenceDiagnostics); code != "" {
+			result.Telemetry.FailureCode = code
+		}
 		return result, err
 	}
 	result.Telemetry.EvidencePhaseCompleted = true
@@ -551,9 +555,39 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 	return result, nil
 }
 
+func primaryWorkspaceEvidenceFailureCode(value agentanalysis.WorkspaceEvidenceHandleDiagnostics) string {
+	if value.Status != agentanalysis.WorkspaceEvidenceHandlesRejected {
+		return ""
+	}
+	available := make(map[string]bool, len(value.Codes))
+	for _, code := range value.Codes {
+		available[code] = true
+	}
+	for _, code := range []string{
+		agentanalysis.WorkspaceEvidenceRangePathInvalid,
+		agentanalysis.WorkspaceEvidenceRangeRootInvalid,
+		agentanalysis.WorkspaceEvidenceHandleNoncanonical,
+		agentanalysis.WorkspaceEvidenceHandleTimeout,
+		agentanalysis.WorkspaceEvidenceArtifactHandlesMissing,
+		agentanalysis.WorkspaceEvidenceHandleDuplicate,
+		agentanalysis.WorkspaceEvidenceRangeUnreadable,
+		agentanalysis.WorkspaceEvidenceRangeLineInvalid,
+		agentanalysis.WorkspaceEvidenceRangeOverflow,
+		agentanalysis.WorkspaceEvidenceHandleTruncated,
+	} {
+		if available[code] {
+			return code
+		}
+	}
+	return ""
+}
+
 func validateOpenCodeEvidencePhase(facts openCodeEvidenceFacts, telemetryErr error) error {
 	if telemetryErr != nil {
 		return fmt.Errorf("OpenCode evidence telemetry unavailable: %w", telemetryErr)
+	}
+	if facts.EvidenceDiagnostics.Status == agentanalysis.WorkspaceEvidenceHandlesRejected {
+		return fmt.Errorf("OpenCode evidence handles were rejected")
 	}
 	if facts.ArtifactToolCalls < 1 || facts.StructuredOutputCalls != 0 {
 		return fmt.Errorf("OpenCode evidence unavailable")

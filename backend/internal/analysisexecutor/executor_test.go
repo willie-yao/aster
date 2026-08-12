@@ -93,8 +93,8 @@ func TestExecutePublishesCanonicalAnalysisWithValidationWarnings(t *testing.T) {
 			structured["suggested_fix"] = ""
 			structured["severity"] = "Transient-Ignore"
 			structured["is_transient"] = false
-			structured["source_evidence_ids"] = []any{}
-			structured["relevant_file_ids"] = []any{"source-003"}
+			structured["source_evidence_ids"] = []any{"source-003"}
+			structured["relevant_file_ids"] = []any{"source-999"}
 			structured["artifact_evidence_ids"] = []any{"artifact-002", "artifact-002"}
 			value.Structured, _ = json.Marshal(structured)
 			return value, nil
@@ -104,7 +104,7 @@ func TestExecutePublishesCanonicalAnalysisWithValidationWarnings(t *testing.T) {
 	if result.TerminalState != engineruntime.TerminalSucceeded || result.Analysis == nil || result.ResultValidation.Status != agentanalysis.WorkspaceResultAcceptedWithWarnings || !slices.Equal(result.ResultValidation.Codes, wantCodes) {
 		t.Fatalf("result=%+v wantCodes=%v", result, wantCodes)
 	}
-	if !result.Analysis.IsTransient || result.Analysis.Severity != "Transient-Ignore" || result.Analysis.SuggestedFix != "" || len(result.Analysis.EvidenceCitations) != 1 || len(result.Analysis.SourceCitations) != 0 || len(result.Analysis.RelevantFiles) != 0 {
+	if !result.Analysis.IsTransient || result.Analysis.Severity != "Transient-Ignore" || result.Analysis.SuggestedFix != "" || len(result.Analysis.EvidenceCitations) != 1 || len(result.Analysis.SourceCitations) != 1 || len(result.Analysis.RelevantFiles) != 0 {
 		t.Fatalf("canonical analysis=%+v", result.Analysis)
 	}
 }
@@ -959,8 +959,42 @@ func TestRunOpenCodePhasesStopsBeforeFinalizationWithoutArtifactEvidence(t *test
 	defer server.Close()
 	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192}
 	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
-	if err == nil || result.Telemetry.FailureCode != "evidence_unavailable" || posts != 1 {
+	if err == nil || result.Telemetry.FailureCode != agentanalysis.WorkspaceEvidenceArtifactHandlesMissing || !result.Usage.Available || result.Telemetry.EvidenceHandles.Status != agentanalysis.WorkspaceEvidenceHandlesRejected || posts != 1 {
 		t.Fatalf("posts=%d result=%+v err=%v", posts, result, err)
+	}
+}
+
+func TestPrimaryWorkspaceEvidenceFailureCodePrioritizesHardRejections(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		codes []string
+		want  string
+	}{
+		{
+			name: "unsafe path after overflow",
+			codes: []string{
+				agentanalysis.WorkspaceEvidenceHandleTruncated,
+				agentanalysis.WorkspaceEvidenceRangeOverflow,
+				agentanalysis.WorkspaceEvidenceRangePathInvalid,
+			},
+			want: agentanalysis.WorkspaceEvidenceRangePathInvalid,
+		},
+		{
+			name: "timeout after truncation",
+			codes: []string{
+				agentanalysis.WorkspaceEvidenceHandleDuplicate,
+				agentanalysis.WorkspaceEvidenceHandleTimeout,
+				agentanalysis.WorkspaceEvidenceHandleTruncated,
+			},
+			want: agentanalysis.WorkspaceEvidenceHandleTimeout,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := primaryWorkspaceEvidenceFailureCode(agentanalysis.WorkspaceEvidenceHandleDiagnostics{Status: agentanalysis.WorkspaceEvidenceHandlesRejected, Codes: test.codes})
+			if got != test.want {
+				t.Fatalf("code=%q want=%q", got, test.want)
+			}
+		})
 	}
 }
 

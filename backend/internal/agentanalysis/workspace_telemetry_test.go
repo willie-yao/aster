@@ -131,6 +131,19 @@ func TestValidateWorkspaceOpenCodeTelemetryRejectsUnsafeOrInconsistentFields(t *
 	}
 }
 
+func TestValidateWorkspaceOpenCodeTelemetryAllowsRejectedEvidenceDiagnosticsWhenUnavailable(t *testing.T) {
+	telemetry := WorkspaceOpenCodeTelemetry{
+		Status: WorkspaceTelemetryMalformed, RequestShape: validRequestShapeForTest(), StructuredOutputRetriesKnown: true,
+		EvidenceHandles: WorkspaceEvidenceHandleDiagnostics{
+			Status: WorkspaceEvidenceHandlesRejected, ObservedRangeCount: maxWorkspaceEvidenceRanges + 1,
+			DroppedRangeCount: maxWorkspaceEvidenceRanges + 1, Truncated: true, Codes: []string{WorkspaceEvidenceRangeOverflow},
+		},
+	}
+	if err := validateWorkspaceOpenCodeTelemetry(telemetry); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func boolPointer(value bool) *bool {
 	return &value
 }

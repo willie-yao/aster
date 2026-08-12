@@ -429,3 +429,10 @@ The provider-free analyzer integrity harness lives in
 Chat Completions server, and runs inside the exact analysis executor image for
 Azure Files and Kata differential checks. Its JSON summary contains only
 content-free source integrity snapshots and aggregate tool telemetry.
+
+The provider-free evidence-handle scale harness is also in
+`internal/analysisexecutor`. It runs exact OpenCode 1.18.2 against a
+deterministic loopback TLS gateway and representative large source and artifact
+trees. Broad directory greps reproduce high-cardinality range handling. Its
+summary contains only bounded counts, status, truncation, usage availability,
+phase totals, and allowlisted warning or rejection codes.

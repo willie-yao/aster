@@ -16,12 +16,13 @@ import (
 )
 
 const (
-	maxOpenCodeTelemetryBytes  = 4 << 20
-	maxOpenCodeTelemetryEvents = 4096
-	maxOpenCodeToolNames       = 64
-	maxOpenCodeFieldBytes      = 512
-	maxOpenCodeStreamBytes     = 64 << 10
-	maxTelemetryParseTime      = 2 * time.Second
+	maxOpenCodeTelemetryBytes        = 4 << 20
+	maxOpenCodeTelemetryEvents       = 4096
+	maxOpenCodeToolNames             = 64
+	maxOpenCodeFieldBytes            = 512
+	maxOpenCodeStreamBytes           = 64 << 10
+	maxTelemetryParseTime            = 2 * time.Second
+	maxOpenCodeEvidenceRangesPerRoot = 512
 )
 
 type boundedCapture struct {
@@ -103,6 +104,15 @@ type openCodeEvidenceFacts struct {
 	StructuredOutputCalls  int
 	EvidenceRanges         []agentanalysis.WorkspaceEvidenceRange
 	EvidenceHandles        []agentanalysis.WorkspaceEvidenceHandle
+	EvidenceDiagnostics    agentanalysis.WorkspaceEvidenceHandleDiagnostics
+	EvidenceExtraObserved  int
+	EvidenceExtraDropped   int
+	EvidenceExtraTruncated bool
+	EvidenceIssueCodes     map[string]bool
+	EvidenceRejected       bool
+	EvidenceRetainedByRoot map[string]int
+	EvidencePathSafe       map[string]bool
+	ParseDeadline          time.Time
 }
 
 func parseOpenCodeTelemetry(raw []byte) (agentanalysis.WorkspaceUsage, agentanalysis.WorkspaceOpenCodeTelemetry, error) {
@@ -116,7 +126,7 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 	telemetry := agentanalysis.WorkspaceOpenCodeTelemetry{
 		Status: agentanalysis.WorkspaceTelemetryMalformed, StructuredOutputRetriesKnown: true,
 	}
-	facts := openCodeEvidenceFacts{}
+	facts := openCodeEvidenceFacts{ParseDeadline: started.Add(maxTelemetryParseTime)}
 	if len(raw) == 0 || len(raw) > maxOpenCodeTelemetryBytes {
 		return unavailable, telemetry, facts, fmt.Errorf("telemetry payload is empty or oversized")
 	}
@@ -292,8 +302,15 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 		telemetry.Tools = append(telemetry.Tools, agentanalysis.WorkspaceToolTelemetry{Name: name, Count: value.count, Failures: value.failures, Denied: value.denied})
 	}
 	if workDir != "" {
-		handles, err := agentanalysis.BuildWorkspaceEvidenceHandles(workDir, facts.EvidenceRanges)
-		if err != nil {
+		handles, diagnostics, err := agentanalysis.BuildWorkspaceEvidenceHandlesWithDeadline(workDir, facts.EvidenceRanges, facts.ParseDeadline)
+		diagnostics = mergeOpenCodeEvidenceDiagnostics(diagnostics, facts)
+		telemetry.EvidenceHandles = diagnostics
+		facts.EvidenceDiagnostics = diagnostics
+		if facts.EvidenceRejected {
+			handles = nil
+			err = fmt.Errorf("workspace evidence ranges were rejected")
+		}
+		if err != nil && diagnostics.Status != agentanalysis.WorkspaceEvidenceHandlesRejected {
 			return unavailable, telemetry, facts, fmt.Errorf("telemetry evidence handles are invalid")
 		}
 		facts.EvidenceHandles = handles
@@ -302,6 +319,86 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 	telemetry.Status = agentanalysis.WorkspaceTelemetryAvailable
 	telemetry.EventCount = events
 	return usage, telemetry, facts, nil
+}
+
+func mergeOpenCodeEvidenceDiagnostics(value agentanalysis.WorkspaceEvidenceHandleDiagnostics, facts openCodeEvidenceFacts) agentanalysis.WorkspaceEvidenceHandleDiagnostics {
+	value.ObservedRangeCount = min(value.ObservedRangeCount+facts.EvidenceExtraObserved, 513)
+	value.DroppedRangeCount = min(value.DroppedRangeCount+facts.EvidenceExtraDropped, 513)
+	value.Truncated = value.Truncated || facts.EvidenceExtraTruncated
+	codes := map[string]bool{}
+	for _, code := range value.Codes {
+		codes[code] = true
+	}
+	for code := range facts.EvidenceIssueCodes {
+		codes[code] = true
+	}
+	value.Codes = value.Codes[:0]
+	for code := range codes {
+		value.Codes = append(value.Codes, code)
+	}
+	sort.Strings(value.Codes)
+	switch {
+	case facts.EvidenceRejected:
+		value.Status = agentanalysis.WorkspaceEvidenceHandlesRejected
+	case value.Status == agentanalysis.WorkspaceEvidenceHandlesAccepted && len(value.Codes) > 0:
+		value.Status = agentanalysis.WorkspaceEvidenceHandlesAcceptedWithWarnings
+	}
+	return value
+}
+
+func recordOpenCodeEvidenceIssue(facts *openCodeEvidenceFacts, code string, observed, dropped int, truncated, rejected bool) {
+	if facts.EvidenceIssueCodes == nil {
+		facts.EvidenceIssueCodes = map[string]bool{}
+	}
+	facts.EvidenceIssueCodes[code] = true
+	facts.EvidenceExtraObserved = min(facts.EvidenceExtraObserved+max(observed, 0), 513)
+	facts.EvidenceExtraDropped = min(facts.EvidenceExtraDropped+max(dropped, 0), 513)
+	facts.EvidenceExtraTruncated = facts.EvidenceExtraTruncated || truncated
+	facts.EvidenceRejected = facts.EvidenceRejected || rejected
+}
+
+func appendOpenCodeEvidenceRange(facts *openCodeEvidenceFacts, value agentanalysis.WorkspaceEvidenceRange) {
+	if facts.EvidenceRetainedByRoot == nil {
+		facts.EvidenceRetainedByRoot = map[string]int{}
+	}
+	if facts.EvidenceRetainedByRoot[value.Root] == maxOpenCodeEvidenceRangesPerRoot {
+		recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangeOverflow, 1, 1, true, false)
+		facts.EvidenceIssueCodes[agentanalysis.WorkspaceEvidenceHandleTruncated] = true
+		return
+	}
+	facts.EvidenceRetainedByRoot[value.Root]++
+	facts.EvidenceRanges = append(facts.EvidenceRanges, value)
+}
+
+func openCodeEvidencePathIsSafe(facts *openCodeEvidenceFacts, workDir, root, relative, absolute string) bool {
+	if facts.EvidencePathSafe == nil {
+		facts.EvidencePathSafe = map[string]bool{}
+	}
+	key := root + "\x00" + relative
+	if safe, ok := facts.EvidencePathSafe[key]; ok {
+		return safe
+	}
+	base, err := filepath.EvalSymlinks(filepath.Join(workDir, root))
+	if err != nil {
+		facts.EvidencePathSafe[key] = false
+		return false
+	}
+	if _, err := os.Lstat(absolute); os.IsNotExist(err) {
+		facts.EvidencePathSafe[key] = true
+		return true
+	} else if err != nil {
+		facts.EvidencePathSafe[key] = false
+		return false
+	}
+	real, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		facts.EvidencePathSafe[key] = false
+		return false
+	}
+	rel, err := filepath.Rel(base, real)
+	safe := err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	facts.EvidencePathSafe[key] = safe
+	return safe
 }
 
 func applyOpenCodeErrorLifecycle(value *agentanalysis.WorkspaceOpenCodeErrorTelemetry, observedProviderRequests, observedToolParts, messageStarts, messageToolParts, activeTools int) {
@@ -361,82 +458,129 @@ func recordOpenCodeEvidenceTool(facts *openCodeEvidenceFacts, tool string, raw j
 	candidate := input.FilePath
 	if tool == "grep" {
 		candidate = input.Path
-		if matches == nil || *matches < 1 {
+		if matches != nil && *matches == 0 {
 			return nil
 		}
 	}
-	root, _, absolute, ok := openCodeEvidenceLocation(workDir, candidate, true)
+	root, relative, absolute, ok := openCodeEvidenceLocation(workDir, candidate, true)
 	if !ok {
+		recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangePathInvalid, 1, 1, false, true)
 		return nil
 	}
+	if !openCodeEvidencePathIsSafe(facts, workDir, root, relative, absolute) {
+		recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangePathInvalid, 1, 1, false, true)
+		return nil
+	}
+	validEvidence := false
 	switch tool {
 	case "read":
-		info, err := os.Stat(absolute)
-		if err != nil || !info.Mode().IsRegular() {
-			return nil
+		if display == nil {
+			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangeLineInvalid, 1, 1, false, false)
+			break
 		}
-		if display != nil {
-			if display.Type != "file" || display.LineStart < 1 {
-				return fmt.Errorf("telemetry read evidence metadata is invalid")
-			}
-			displayRoot, relative, displayAbsolute, ok := openCodeEvidenceLocation(workDir, display.Path, false)
-			if !ok || displayRoot != root || !sameOpenCodeEvidenceFile(absolute, displayAbsolute) {
-				return fmt.Errorf("telemetry read evidence path is inconsistent")
-			}
-			if display.LineEnd >= display.LineStart {
-				facts.EvidenceRanges = append(facts.EvidenceRanges, agentanalysis.WorkspaceEvidenceRange{Root: root, Path: relative, LineStart: display.LineStart, LineEnd: display.LineEnd})
-			}
+		if display.Type != "file" || display.LineStart < 1 || display.LineEnd < display.LineStart {
+			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangeLineInvalid, 1, 1, false, false)
+			break
 		}
+		displayRoot, displayRelative, displayAbsolute, displayOK := openCodeEvidenceLocation(workDir, display.Path, false)
+		if !displayOK || displayRoot != root {
+			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangePathInvalid, 1, 1, false, true)
+			break
+		}
+		if !openCodeEvidencePathIsSafe(facts, workDir, displayRoot, displayRelative, displayAbsolute) {
+			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangePathInvalid, 1, 1, false, true)
+			break
+		}
+		info, statErr := os.Stat(absolute)
+		if statErr != nil || !info.Mode().IsRegular() {
+			appendOpenCodeEvidenceRange(facts, agentanalysis.WorkspaceEvidenceRange{Root: root, Path: relative, LineStart: display.LineStart, LineEnd: display.LineEnd})
+			break
+		}
+		if !sameOpenCodeEvidenceFile(absolute, displayAbsolute) {
+			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangePathInvalid, 1, 1, false, true)
+			break
+		}
+		appendOpenCodeEvidenceRange(facts, agentanalysis.WorkspaceEvidenceRange{Root: root, Path: displayRelative, LineStart: display.LineStart, LineEnd: display.LineEnd})
+		validEvidence = true
 	case "grep":
-		if output != "" {
-			ranges, err := openCodeGrepEvidenceRanges(output, workDir, root)
-			if err != nil || len(ranges) != *matches {
-				return fmt.Errorf("telemetry grep evidence output is invalid")
-			}
-			facts.EvidenceRanges = append(facts.EvidenceRanges, ranges...)
+		if matches == nil || *matches < 1 {
+			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangeLineInvalid, 1, 1, false, false)
+			break
+		}
+		if output == "" {
+			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangeLineInvalid, *matches, *matches, false, false)
+			break
+		}
+		if len(output) > maxOpenCodeTelemetryBytes {
+			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangeOverflow, 513, 513, true, false)
+			break
+		}
+		valid, invalid, rejected, parseErr := openCodeGrepEvidenceRanges(output, workDir, root, facts, facts.ParseDeadline, func(value agentanalysis.WorkspaceEvidenceRange) {
+			appendOpenCodeEvidenceRange(facts, value)
+		})
+		if parseErr != nil {
+			return parseErr
+		}
+		validEvidence = valid > 0
+		if rejected {
+			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangePathInvalid, 1, 1, false, true)
+		}
+		if invalid > 0 || valid+invalid != *matches {
+			missing := max(*matches-valid, invalid)
+			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangeLineInvalid, missing, missing, false, false)
 		}
 	}
-	switch root {
-	case agentanalysis.WorkspaceArtifactsDir:
-		facts.ArtifactToolCalls++
-	case agentanalysis.WorkspaceSourceDir:
-		facts.SourceToolCalls++
+	if !facts.EvidenceRejected && validEvidence {
+		switch root {
+		case agentanalysis.WorkspaceArtifactsDir:
+			facts.ArtifactToolCalls++
+		case agentanalysis.WorkspaceSourceDir:
+			facts.SourceToolCalls++
+		}
 	}
 	return nil
 }
 
-func openCodeGrepEvidenceRanges(output, workDir, wantRoot string) ([]agentanalysis.WorkspaceEvidenceRange, error) {
-	if output == "" || len(output) > maxOpenCodeTelemetryBytes {
-		return nil, fmt.Errorf("grep output is empty or oversized")
-	}
-	current := ""
-	var ranges []agentanalysis.WorkspaceEvidenceRange
-	for _, line := range strings.Split(output, "\n") {
+func openCodeGrepEvidenceRanges(output, workDir, wantRoot string, facts *openCodeEvidenceFacts, deadline time.Time, retain func(agentanalysis.WorkspaceEvidenceRange)) (int, int, bool, error) {
+	currentPath := ""
+	valid := 0
+	invalid := 0
+	lines := 0
+	for line := range strings.SplitSeq(output, "\n") {
+		lines++
+		if lines%256 == 0 && !deadline.IsZero() && time.Now().After(deadline) {
+			return valid, invalid, false, fmt.Errorf("telemetry parsing exceeded the bound")
+		}
 		if strings.HasPrefix(line, "  Line ") {
-			if current == "" {
-				return nil, fmt.Errorf("grep match path is missing")
+			if currentPath == "" {
+				invalid++
+				continue
 			}
 			rest := strings.TrimPrefix(line, "  Line ")
 			separator := strings.Index(rest, ":")
 			if separator < 1 {
-				return nil, fmt.Errorf("grep match line is invalid")
+				invalid++
+				continue
 			}
 			lineNumber, err := strconv.Atoi(rest[:separator])
 			if err != nil || lineNumber < 1 {
-				return nil, fmt.Errorf("grep match line is invalid")
+				invalid++
+				continue
 			}
-			root, relative, _, ok := openCodeEvidenceLocation(workDir, current, false)
-			if !ok || root != wantRoot {
-				return nil, fmt.Errorf("grep match path is invalid")
-			}
-			ranges = append(ranges, agentanalysis.WorkspaceEvidenceRange{Root: root, Path: relative, LineStart: lineNumber, LineEnd: lineNumber})
+			valid++
+			retain(agentanalysis.WorkspaceEvidenceRange{Root: wantRoot, Path: currentPath, LineStart: lineNumber, LineEnd: lineNumber})
 			continue
 		}
 		if strings.HasSuffix(line, ":") && !strings.HasPrefix(line, " ") {
-			current = strings.TrimSuffix(line, ":")
+			candidate := strings.TrimSuffix(line, ":")
+			root, relative, absolute, ok := openCodeEvidenceLocation(workDir, candidate, false)
+			if !ok || root != wantRoot || !openCodeEvidencePathIsSafe(facts, workDir, root, relative, absolute) {
+				return valid, invalid, true, nil
+			}
+			currentPath = relative
 		}
 	}
-	return ranges, nil
+	return valid, invalid, false, nil
 }
 
 func openCodeEvidenceLocation(workDir, candidate string, allowDirectory bool) (string, string, string, bool) {
