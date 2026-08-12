@@ -185,3 +185,16 @@ func TestResultFormatExcludesEngineOwnedFields(t *testing.T) {
 		}
 	}
 }
+
+func TestEvidencePromptRequiresContentBearingSourceRead(t *testing.T) {
+	prompt := evidenceSystemPrompt("Project context.")
+	for _, anchor := range []string{"MUST call read_repo_file", "non-empty pinned source content", "memo without a content-bearing source read is discarded", "Relevant files are hints, not proven targets"} {
+		if !strings.Contains(prompt, anchor) {
+			t.Fatalf("evidence prompt is missing %q", anchor)
+		}
+	}
+	retry := evidenceSourceRetryPrompt("frozen input")
+	if !strings.Contains(retry, "previous evidence attempt was discarded") || !strings.Contains(retry, "Do not return a memo until that tool call succeeds") {
+		t.Fatalf("retry prompt=%q", retry)
+	}
+}

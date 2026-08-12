@@ -124,6 +124,7 @@ def main():
         "estimated_cost_nanos": distribution([int(row.get("metrics", {}).get("estimated_cost_nanos", 0)) for row in rows]),
         "latency_ms": distribution([int(row.get("metrics", {}).get("elapsed_ms", 0)) for row in rows]),
         "repair_counts": distribution([repair_count(row) for row in rows]),
+        "evidence_retry_counts": distribution([int(row.get("metrics", {}).get("evidence_retry_count", 0)) for row in rows]),
         "repair_count_inferred_trials": sum("repair_count" not in row.get("metrics", {}) and row.get("trial_status") == "invalid_result" for row in rows),
         "error_codes": dict(sorted(collections.Counter(row.get("error_code") for row in rows if row.get("error_code")).items())),
     }

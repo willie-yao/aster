@@ -40,7 +40,11 @@ The trusted in-process model client runs two bounded phases:
    `repotree` tools are available. Artifact access is bound to the exact causal
    builds. Source access is bound to one immutable repository revision. A
    successful content-bearing artifact read and source read are required.
-2. **Structured finalization.** Read tools are removed. The engine supplies a
+2. **Source-floor retry.** If the first evidence attempt returns without a
+   content-bearing `read_repo_file`, it is discarded and one bounded retry
+   explicitly requires pinned source inspection. A second miss remains safely
+   `insufficient_evidence` and never reaches target finalization.
+3. **Structured finalization.** Read tools are removed. The engine supplies a
    private evidence catalog with deterministic IDs. The model may return only a
    cause assessment, concise reason, optional typed candidate target, selected
    evidence IDs, and a typed non-actionable reason when no candidate exists.
@@ -226,8 +230,9 @@ contracts, evidence ID
 reconstruction, cache preservation, read floors, deterministic source-state
 checks, and scoring controls.
 
-Provider-backed evaluation must use the final merged schema and exact intended
-provider. The earlier 0/12 run against result version 2 is evidence that the old
+Provider-backed evaluation must use the final merged prompt, schema, and exact
+intended provider. Prompt version 3 requires a content-bearing pinned source read
+and records the bounded evidence retry separately from structured repair count. The earlier 0/12 run against result version 2 is evidence that the old
 model contract was unsuitable. It is not readiness evidence for result version
 3 and is not evidence that source-grounded remediation is infeasible.
 

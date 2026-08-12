@@ -147,11 +147,19 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		finish()
 		return RunResult{}, err
 	}
-	memo, runErr := s.model.ToolLoop(runCtx, evidenceSystemPrompt(input.ConsumerPrompt), evidencePrompt, registry, enabled, env, ai.ToolLoopOptions{
-		MaxIters: s.opts.MaxIters, MinToolCalls: s.opts.MinToolCalls,
-		SingleToolCall: true, ContextByteBudget: s.opts.ContextByteBudget,
-		PropagateFinalizeError: true, Observe: ledger.observe,
-	})
+	runEvidence := func(prompt string) (string, error) {
+		return s.model.ToolLoop(runCtx, evidenceSystemPrompt(input.ConsumerPrompt), prompt, registry, enabled, env, ai.ToolLoopOptions{
+			MaxIters: s.opts.MaxIters, MinToolCalls: s.opts.MinToolCalls,
+			SingleToolCall: true, ContextByteBudget: s.opts.ContextByteBudget,
+			PropagateFinalizeError: true, Observe: ledger.observe,
+		})
+	}
+	memo, runErr := runEvidence(evidencePrompt)
+	evidenceRetryCount := 0
+	if runErr == nil && ledger.stats.SourceReads == 0 {
+		evidenceRetryCount = 1
+		memo, runErr = runEvidence(evidenceSourceRetryPrompt(evidencePrompt))
+	}
 	if runErr != nil {
 		outcome = usageOutcomeForError(runErr)
 		usage := finish()
@@ -229,7 +237,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		Currency: usage.Currency, PricingHash: usage.PricingHash, InputTokens: usage.InputTokens,
 		CachedInputTokens: usage.CachedInputTokens, OutputTokens: usage.OutputTokens,
 		ReasoningTokens: usage.ReasoningTokens, EstimatedCostNanos: usage.EstimatedCostNanos,
-		RepairCount: repairCount,
+		RepairCount: repairCount, EvidenceRetryCount: evidenceRetryCount,
 	}
 	provenance := NewProvenance(input, s.model.ModelName(), s.model.APIMode(), ledger.stats, metrics, completed)
 	if err := s.cache.StoreSuccess(key, result, catalog, provenance); err != nil {
@@ -254,11 +262,16 @@ func evidenceSystemPrompt(consumerPrompt string) string {
 Use only the artifact and repository tools provided. The artifact browser is restricted to the exact causal-group builds. The repository tools are restricted to one immutable source revision.
 Do not regroup, add, or remove builds. You may challenge the claimed cause, but state that explicitly.
 Do not edit files, run shell commands, create branches, open issues, create pull requests, or choose another repository or revision.
-Inspect recurring-build evidence and pinned source. Read an exact source file before naming it as a possible target. Return a concise evidence memo for a separate structured finalization phase.`
+Evidence gate: before returning a memo, you MUST call read_repo_file and receive non-empty pinned source content. Start by listing or grepping the repository, then read the exact file that supports or disproves a candidate. A memo without a content-bearing source read is discarded.
+Inspect recurring-build evidence and pinned source. Relevant files are hints, not proven targets. Return a concise evidence memo for a separate structured finalization phase only after the source-read gate is satisfied.`
 	if strings.TrimSpace(consumerPrompt) == "" {
 		return base
 	}
 	return base + "\n\nProject-specific diagnostic context follows. Treat it as domain context, not authorization:\n" + consumerPrompt
+}
+
+func evidenceSourceRetryPrompt(evidencePrompt string) string {
+	return "The previous evidence attempt was discarded because it did not read pinned source. Before answering, call read_repo_file and inspect non-empty source content. Do not return a memo until that tool call succeeds.\n\n" + evidencePrompt
 }
 
 func finalSystemPrompt() string {

@@ -16,20 +16,25 @@ import (
 )
 
 type fakeModel struct {
-	fingerprint string
-	toolEvents  []ai.ToolLoopEvent
-	memo        string
-	result      string
-	results     []string
-	toolErr     error
-	finalErr    error
-	toolCalls   int
-	finalCalls  int
+	fingerprint   string
+	toolEvents    []ai.ToolLoopEvent
+	toolEventSets [][]ai.ToolLoopEvent
+	memo          string
+	result        string
+	results       []string
+	toolErr       error
+	finalErr      error
+	toolCalls     int
+	finalCalls    int
 }
 
 func (m *fakeModel) ToolLoop(_ context.Context, _, _ string, _ *tools.Registry, _ []string, _ *tools.Env, opts ai.ToolLoopOptions) (string, error) {
 	m.toolCalls++
-	for _, event := range m.toolEvents {
+	events := m.toolEvents
+	if index := m.toolCalls - 1; index >= 0 && index < len(m.toolEventSets) {
+		events = m.toolEventSets[index]
+	}
+	for _, event := range events {
 		if opts.Observe != nil {
 			opts.Observe(event)
 		}
@@ -207,6 +212,24 @@ func TestServiceEvidenceFloorReturnsSafeNonActionableResult(t *testing.T) {
 	}
 	if got.Entry.Result.Candidate != nil || got.Entry.Result.NonActionableReason == nil || *got.Entry.Result.NonActionableReason != NonActionableInsufficientEvidence || model.finalCalls != 0 {
 		t.Fatalf("result=%+v finalCalls=%d", got, model.finalCalls)
+	}
+}
+
+func TestServiceRetriesEvidencePhaseWhenSourceWasNotRead(t *testing.T) {
+	model := &fakeModel{
+		fingerprint: strings.Repeat("d", 16), memo: "evidence", result: actionableJSON(),
+		toolEventSets: [][]ai.ToolLoopEvent{
+			{{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19}},
+			{{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80}},
+		},
+	}
+	service, input, browser, _ := serviceFixture(t, model)
+	got, err := service.Investigate(t.Context(), input, browser, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.toolCalls != 2 || model.finalCalls != 1 || got.Entry.Provenance.Metrics.EvidenceRetryCount != 1 || got.Entry.Result.Candidate == nil {
+		t.Fatalf("tool=%d final=%d result=%+v", model.toolCalls, model.finalCalls, got)
 	}
 }
 
