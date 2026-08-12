@@ -1,8 +1,9 @@
 # Causal-group remediation investigation
 
-> **Status:** private foundation. The read-only investigator, typed result,
-> private cache, and frozen benchmark exist, but no server endpoint, public
-> actionable state, File Issue eligibility, or Fix PR handoff is enabled yet.
+> **Status:** private verification foundation. The read-only investigator,
+> typed result, private cache, deterministic verifier, and frozen benchmark
+> exist, but no server endpoint, public actionable state, File Issue eligibility,
+> or Fix PR handoff is enabled yet.
 
 Version-10 causal-group correlation remains analysis-only. It does not emit a
 suggested fix, remediation target, source target, or action field. A separate
@@ -20,7 +21,7 @@ request.
 - relevant files as evidence hints only;
 - source revisions available for each build;
 - one immutable repository revision for the bounded source investigation;
-- project destination repositories, allowed paths, and exact validation commands;
+- project destination repositories, allowed paths, and exact validation commands as argv plus timeout;
 - consumer prompt and skill hashes;
 - provider/model fingerprint; and
 - prompt, schema, and verification versions.
@@ -82,6 +83,49 @@ private cache. This structural acceptance does not grant action eligibility.
 Deterministic repository, current-source, dependency ownership, target behavior,
 conversion, ambiguity, and already-present verification remain the next stage.
 
+## Deterministic verification
+
+Verification version 2 rechecks one accepted private cache entry before it can
+be considered actionable. The verifier binds the cached result digest and full
+provenance to the current frozen input, then independently:
+
+- rereads every source and artifact citation and validates every referenced
+  per-build analysis;
+- requires evidence coverage for every exact causal-group build;
+- requires an exact source citation for the typed target path;
+- treats relevant files only as an additional relationship hint, never as target
+  proof;
+- requires the proposal repository and revision, path, and commands to match the
+  engine-frozen source and destination policy;
+- runs existing `actionverify` target verification at current source and every
+  available failure revision;
+- proves required calls are actually missing and rejects already-present calls;
+- resolves Prow job, container, environment name, and desired value uniquely;
+- keeps repository-local call resolution within module boundaries;
+- reapplies conversion and destructive-remediation policy; and
+- rejects mutated, duplicate, unknown, fabricated, unlinked, ambiguous, or
+  dependency-owned targets.
+
+The first deterministic version accepts only package-symbol addition, a
+`modify_symbol` target with an exact `required_call`, and exact Prow job
+environment changes. A prose-only `modify_symbol` and general configuration
+change remain `insufficient_evidence` until they have a typed behavioral or
+field-path predicate. Module-cache and workspace paths are never repository
+targets.
+
+A target already present in current source becomes `already_fixed` with no
+proposal. A target not proven unresolved at every failure revision becomes
+`insufficient_evidence`. Only a target proven unresolved in current source and
+all failure sources remains `actionable`. Evidence-backed non-actionable
+classifications remain terminal and cannot gain a target. A model-only
+`already_fixed` claim without a typed target is downgraded because current-source
+presence cannot be independently verified. An `external_dependency` claim is
+also downgraded until the private contract carries a typed dependency ownership
+identity that can be resolved to another repository.
+
+The verifier returns a private `VerifiedResult`. It does not publish a public
+state or grant Fix PR eligibility.
+
 ## Private cache
 
 The cache lives at:
@@ -91,8 +135,10 @@ The cache lives at:
 ```
 
 The directory is `0700`, the cache and lock files are `0600`, and writes use a
-cross-process file lock plus durable atomic replacement. Corrupt, oversized, or
-unsupported state fails closed. A failed refresh records only a bounded category,
+cross-process file lock plus durable atomic replacement. Cache version 2 binds a
+canonical result digest, so an in-memory or on-disk result mutation is rejected
+before verification. Corrupt, oversized, or unsupported state fails closed. A
+failed refresh records only a bounded category,
 timestamp, and error digest while preserving the previous valid result for the
 same semantic key. A changed identity creates a cache miss instead of reusing the
 old result.
@@ -109,7 +155,7 @@ The committed manifest is:
 
 ```text
 backend/internal/e2e/testdata/benchmarks/remediation-investigation-v1.json
-SHA-256: e7c41be4da59684652bbdf6a2c6a71b6eec70f5207f5354ae6f89093c4fa6d1d
+SHA-256: 93fff9a14a51abba3490d18d93a3404d830f9244ccb102dc82c623fbb52596ae
 ```
 
 It freezes 12 categories:
@@ -159,8 +205,12 @@ requests, tokens, cost coverage, latency, and repair counts.
 
 This foundation does not update the public remediation state and does not expose
 an investigation API. Causal-group patterns remain blocked by
-`models.PatternAllowsActions`. The next stage must independently verify every
-candidate and convert any failure to a terminal non-actionable result before an
-authenticated **Investigate possible fix** control can publish a safe summary.
-Fix PR preview remains deferred until the direct-credential and Responses API
-runtime work is settled and the exact Fix executor passes a separate smoke.
+`models.PatternAllowsActions`. Deterministic verification is available privately,
+but the provider holdout did not produce the two distinct verified actionable
+positives required by the production gate. Therefore **Investigate possible
+fix**, public terminal-state publication, File Issue eligibility, and Fix PR
+preview remain disabled.
+
+The later Fix PR handoff must consume only `VerifiedResult.Proposal`. It remains
+deferred until remediation provider quality passes repeated cold holdouts and the
+exact final Fix executor passes a separate direct-runtime smoke.

@@ -27,7 +27,7 @@ import (
 
 const (
 	remediationInvestigationManifest       = "testdata/benchmarks/remediation-investigation-v1.json"
-	remediationInvestigationManifestSHA256 = "e7c41be4da59684652bbdf6a2c6a71b6eec70f5207f5354ae6f89093c4fa6d1d"
+	remediationInvestigationManifestSHA256 = "93fff9a14a51abba3490d18d93a3404d830f9244ccb102dc82c623fbb52596ae"
 )
 
 type remediationBenchmarkManifest struct {
@@ -45,6 +45,7 @@ type remediationBenchmarkCase struct {
 	DestinationPolicy    remediationinvestigation.DestinationPolicy `json:"destination_policy"`
 	RelevantFiles        []string                                   `json:"relevant_files"`
 	SourceFiles          map[string]string                          `json:"source_files"`
+	FailureSourceFiles   map[string]string                          `json:"failure_source_files"`
 	ArtifactFiles        map[string]string                          `json:"artifact_files"`
 	Expected             remediationBenchmarkExpected               `json:"expected"`
 	EffectiveInputSHA256 string                                     `json:"effective_input_sha256"`
@@ -120,6 +121,9 @@ func TestRemediationInvestigationBenchmarkManifest(t *testing.T) {
 		seenCategories[benchmarkCase.Category] = true
 		if got := remediationCaseHash(t, raw, benchmarkCase.ID); got != benchmarkCase.EffectiveInputSHA256 {
 			t.Fatalf("case %s hash=%s want=%s", benchmarkCase.ID, got, benchmarkCase.EffectiveInputSHA256)
+		}
+		if len(benchmarkCase.SourceFiles) == 0 || len(benchmarkCase.FailureSourceFiles) == 0 {
+			t.Fatalf("case %s must freeze current and failure source trees", benchmarkCase.ID)
 		}
 		input := remediationCaseInput(benchmarkCase, strings.Repeat("d", 16))
 		if err := remediationinvestigation.ValidateFrozenInput(input); err != nil {
@@ -213,7 +217,7 @@ func TestRemediationInvestigationBenchmark(t *testing.T) {
 				VerificationVersion:    remediationinvestigation.VerificationVersion,
 				ExpectedClassification: benchmarkCase.Expected.Classification,
 				ExpectedActionable:     benchmarkCase.Expected.Classification == remediationinvestigation.ClassificationActionable,
-				VerificationStatus:     "not_run_pr2",
+				VerificationStatus:     "not_run_invalid_result",
 			}
 			recorder, err := aiusage.NewRecorder("", aiusage.RecorderOptions{RetentionDays: 1, RecentOperations: 10})
 			if err != nil {
@@ -223,13 +227,15 @@ func TestRemediationInvestigationBenchmark(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			service, err := remediationinvestigation.NewService(client, benchmarkSource{files: benchmarkCase.SourceFiles}, cache, remediationinvestigation.ServiceOptions{
+			source := newBenchmarkSource(benchmarkCase)
+			browser := benchmarkBrowser{files: benchmarkCase.ArtifactFiles}
+			service, err := remediationinvestigation.NewService(client, source, cache, remediationinvestigation.ServiceOptions{
 				Timeout: 10 * time.Minute, UsageRecorder: recorder,
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, runErr := service.Investigate(t.Context(), input, benchmarkBrowser{files: benchmarkCase.ArtifactFiles}, false)
+			result, runErr := service.Investigate(t.Context(), input, browser, false)
 			if runErr != nil {
 				row.TrialStatus, row.ErrorCode = remediationTrialFailure(runErr)
 				row.Metrics = remediationBenchmarkUsageMetrics(recorder)
@@ -260,6 +266,17 @@ func TestRemediationInvestigationBenchmark(t *testing.T) {
 				})
 				row.ClassificationCorrect = score.ClassificationCorrect
 				row.ExactTarget = score.ExactTarget
+				verifier, verifyErr := remediationinvestigation.NewVerifier(source)
+				if verifyErr != nil {
+					t.Fatal(verifyErr)
+				}
+				verified, verifyErr := verifier.Verify(t.Context(), input, result.Entry, browser)
+				if verifyErr != nil {
+					row.VerificationStatus = "verification_error"
+				} else {
+					row.VerificationStatus = string(verified.Classification)
+					row.VerifiedActionable = verified.Classification == remediationinvestigation.ClassificationActionable && verified.Proposal != nil
+				}
 				row.UnverifiedUnsafeProposal = row.ActualActionable && !row.ExpectedActionable
 				row.UnsafeFalseAcceptance = row.VerifiedActionable && !row.ExpectedActionable
 				row.AlreadyFixedBlocked = benchmarkCase.Expected.Classification != remediationinvestigation.ClassificationAlreadyFixed || !row.VerifiedActionable
@@ -457,18 +474,34 @@ func remediationTrialFailure(err error) (string, string) {
 	}
 }
 
-type benchmarkSource struct{ files map[string]string }
+type benchmarkSource struct{ files map[string]map[string]string }
 
-func (s benchmarkSource) ListFiles(context.Context, sourceinvestigation.Repository) ([]string, error) {
-	paths := make([]string, 0, len(s.files))
-	for file := range s.files {
+func newBenchmarkSource(benchmarkCase remediationBenchmarkCase) benchmarkSource {
+	current := benchmarkCase.Repository
+	failure := sourceinvestigation.Repository{Owner: current.Owner, Name: current.Name, Revision: benchmarkCase.FailureRevision}
+	files := map[string]map[string]string{benchmarkSourceKey(current): benchmarkCase.SourceFiles}
+	files[benchmarkSourceKey(failure)] = benchmarkCase.FailureSourceFiles
+	return benchmarkSource{files: files}
+}
+
+func benchmarkSourceKey(repository sourceinvestigation.Repository) string {
+	return strings.ToLower(repository.Owner + "/" + repository.Name + "@" + repository.Revision)
+}
+
+func (s benchmarkSource) ListFiles(_ context.Context, repository sourceinvestigation.Repository) ([]string, error) {
+	source := s.files[benchmarkSourceKey(repository)]
+	if source == nil {
+		return nil, fmt.Errorf("revision unavailable")
+	}
+	paths := make([]string, 0, len(source))
+	for file := range source {
 		paths = append(paths, file)
 	}
 	sort.Strings(paths)
 	return paths, nil
 }
-func (s benchmarkSource) ReadFile(_ context.Context, _ sourceinvestigation.Repository, file string) (string, error) {
-	content, ok := s.files[file]
+func (s benchmarkSource) ReadFile(_ context.Context, repository sourceinvestigation.Repository, file string) (string, error) {
+	content, ok := s.files[benchmarkSourceKey(repository)][file]
 	if !ok {
 		return "", fmt.Errorf("not found")
 	}
@@ -543,4 +576,28 @@ func TestRemediationInvestigationPrivateCacheIsStrippedFromPages(t *testing.T) {
 	if strings.Contains(text, `rm -rf "$d"/.remediation-investigations`) {
 		t.Fatal("Pages workflow uses recursive deletion for remediation cache")
 	}
+}
+
+func TestRemediationBenchmarkSourceDistinguishesCurrentAndFailureRevisions(t *testing.T) {
+	manifest, _ := loadRemediationBenchmarkManifest(t)
+	for _, benchmarkCase := range manifest.Cases {
+		if benchmarkCase.ID != "fixed-in-current-source" {
+			continue
+		}
+		source := newBenchmarkSource(benchmarkCase)
+		current, err := source.ReadFile(t.Context(), benchmarkCase.Repository, "controllers/reconcile.go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		failureRepository := sourceinvestigation.Repository{Owner: benchmarkCase.Repository.Owner, Name: benchmarkCase.Repository.Name, Revision: benchmarkCase.FailureRevision}
+		failure, err := source.ReadFile(t.Context(), failureRepository, "controllers/reconcile.go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(current, "applyFix()") || strings.Contains(failure, "applyFix()\n\treturn") {
+			t.Fatalf("current and failure source transition is not frozen: current=%q failure=%q", current, failure)
+		}
+		return
+	}
+	t.Fatal("fixed-in-current-source case not found")
 }

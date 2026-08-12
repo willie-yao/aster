@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
 func testNonActionableResult() Result {
@@ -160,7 +163,7 @@ func TestCacheRejectsOversizedReplacementAndPreservesPriorFile(t *testing.T) {
 		entryProvenance := provenance
 		entryProvenance.InputDigest = inputDigest
 		cache.state.Entries[entryKey] = CacheEntry{
-			Key: entryKey, Result: cloneResult(large), Provenance: entryProvenance,
+			Key: entryKey, Result: cloneResult(large), ResultDigest: ResultDigest(large), Provenance: entryProvenance,
 			CreatedAt: "2026-08-11T00:00:00Z", UpdatedAt: "2026-08-11T00:00:00Z",
 		}
 	}
@@ -182,5 +185,55 @@ func TestCacheRejectsOversizedReplacementAndPreservesPriorFile(t *testing.T) {
 	}
 	if _, ok, err := reloaded.Lookup(key); err != nil || !ok {
 		t.Fatalf("prior result unavailable after rejected replacement: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestCacheRejectsLegacyVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), CacheRelativePath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":1,"entries":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewCache(path, CacheOptions{}); err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("legacy cache err=%v", err)
+	}
+}
+
+func TestCacheLookupDeepClonesValidationCommandArgv(t *testing.T) {
+	cache, err := NewCache("", CacheOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := testNonActionableResult()
+	result.Classification = ClassificationActionable
+	result.CauseAssessment = CauseSupports
+	result.Proposal = &ActionableProposal{
+		TargetKind:       TargetAddRequiredCall,
+		Repository:       sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: testRevision},
+		Target:           models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Symbol: "reconcile", RequiredCall: "applyFix", Path: "controllers/reconcile.go"},
+		ExpectedBehavior: "call applyFix", RelationshipProof: "the recurring path executes reconcile",
+		CurrentSource: CurrentSourceAbsent, VerificationRequirements: []string{"run tests"},
+		AllowedChangedPaths:       []string{"controllers/reconcile.go"},
+		AllowedValidationCommands: []ValidationCommand{{Argv: []string{"go", "test", "./controllers/..."}, Timeout: "10m"}},
+	}
+	result.Evidence = []EvidenceCitation{{Kind: EvidenceSource, Path: "controllers/reconcile.go", LineStart: 1, LineEnd: 1, Quote: "reconcile"}}
+	provenance := testProvenance(time.Now())
+	key := cacheKeyForDigest(provenance.InputDigest)
+	if err := cache.StoreSuccess(key, result, provenance); err != nil {
+		t.Fatal(err)
+	}
+	first, ok, err := cache.Lookup(key)
+	if err != nil || !ok {
+		t.Fatalf("lookup ok=%v err=%v", ok, err)
+	}
+	first.Result.Proposal.AllowedValidationCommands[0].Argv[0] = "mutated"
+	second, ok, err := cache.Lookup(key)
+	if err != nil || !ok {
+		t.Fatalf("second lookup ok=%v err=%v", ok, err)
+	}
+	if second.Result.Proposal.AllowedValidationCommands[0].Argv[0] != "go" || second.ResultDigest != ResultDigest(second.Result) {
+		t.Fatalf("cached command mutated: %+v", second)
 	}
 }

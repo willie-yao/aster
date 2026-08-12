@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -196,7 +197,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		finalizeErr := s.model.CompleteStructured(runCtx, finalSystemPrompt(), finalPrompt, resultFormat(), validate)
 		if finalizeErr != nil {
 			repairCount = 1
-			repairPrompt := finalPrompt + "\n\nValidation feedback: the previous structured result failed with code " + lastValidationCode + ". Return the exact schema only. version must be the integer 1, non-actionable proposal must be null, and no unknown fields are allowed."
+			repairPrompt := finalPrompt + "\n\nValidation feedback: the previous structured result failed with code " + lastValidationCode + ". Return the exact schema only. version must be the integer " + fmt.Sprint(ResultVersion) + ", non-actionable proposal must be null, and no unknown fields are allowed."
 			finalizeErr = s.model.CompleteStructured(runCtx, finalSystemPrompt(), repairPrompt, resultFormat(), validate)
 		}
 		if finalizeErr != nil {
@@ -233,7 +234,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		return RunResult{}, lookupErr
 	}
 	if !ok {
-		entry = CacheEntry{Key: key, Result: cloneResult(result), Provenance: provenance, CreatedAt: completed.Format(time.RFC3339), UpdatedAt: completed.Format(time.RFC3339)}
+		entry = CacheEntry{Key: key, Result: cloneResult(result), ResultDigest: ResultDigest(result), Provenance: provenance, CreatedAt: completed.Format(time.RFC3339), UpdatedAt: completed.Format(time.RFC3339)}
 	}
 	return RunResult{Entry: entry}, nil
 }
@@ -251,14 +252,14 @@ Inspect recurring-build evidence and pinned source. Read an exact source file be
 }
 
 func finalSystemPrompt() string {
-	return `Classify one frozen remediation investigation from the supplied evidence memo.
+	return fmt.Sprintf(`Classify one frozen remediation investigation from the supplied evidence memo.
 Return exactly the requested structured object. The causal-group build set and source identity are immutable.
 An actionable result is only a private proposal. It must contain exactly one typed target at the pinned repository revision, a behavioral relationship proof, current-source state, verification requirements, allowed changed paths, and allowed validation commands.
 Non-actionable classifications must set proposal to null. Never invent source, artifact, symbol, configuration, repository, job, container, environment, or citation identities.
-Use exactly these top-level fields and no others: version, classification, reason, cause_assessment, cause_assessment_reason, proposal, evidence. version is the integer 1.
+Use exactly these top-level fields and no others: version, classification, reason, cause_assessment, cause_assessment_reason, proposal, evidence. version is the integer %d.
 Each evidence item uses exactly: kind, build_id, path, line_start, line_end, quote, analysis_generated_at. Use empty strings and zero line numbers for fields that do not apply.
-An actionable proposal uses exactly: target_kind, repository, target, expected_behavior, relationship_proof, current_source, verification_requirements, allowed_changed_paths, allowed_validation_commands.
-The target uses exactly: intent, symbol, required_call, path, value, repository, revision, job, container, name. Use empty strings for fields that do not apply. Do not add confidence, summary, citations, actionable, or current_source_state.`
+An actionable proposal uses exactly: target_kind, repository, target, expected_behavior, relationship_proof, current_source, verification_requirements, allowed_changed_paths, allowed_validation_commands. Each validation command is an object with exact argv array and timeout string copied from the frozen policy.
+The target uses exactly: intent, symbol, required_call, path, value, repository, revision, job, container, name. Use empty strings for fields that do not apply. Do not add confidence, summary, citations, actionable, or current_source_state.`, ResultVersion)
 }
 
 func renderEvidencePrompt(input FrozenInput, preparedArtifactEvidence []EvidenceCitation) (string, error) {
@@ -503,11 +504,17 @@ func bindProposalToFrozenInput(proposal *ActionableProposal, input FrozenInput) 
 	if len(proposal.AllowedChangedPaths) != 1 || proposal.AllowedChangedPaths[0] != proposal.Target.Path {
 		return fmt.Errorf("proposal allowed changed paths must contain only the exact typed target path")
 	}
-	wantCommands := slices.Clone(policy.AllowedCommands)
-	gotCommands := slices.Clone(proposal.AllowedValidationCommands)
-	slices.Sort(wantCommands)
-	slices.Sort(gotCommands)
-	if !slices.Equal(wantCommands, gotCommands) {
+	wantCommands := cloneValidationCommands(policy.AllowedCommands)
+	gotCommands := cloneValidationCommands(proposal.AllowedValidationCommands)
+	sort.Slice(wantCommands, func(i, j int) bool {
+		return validationCommandKey(wantCommands[i]) < validationCommandKey(wantCommands[j])
+	})
+	sort.Slice(gotCommands, func(i, j int) bool {
+		return validationCommandKey(gotCommands[i]) < validationCommandKey(gotCommands[j])
+	})
+	if !slices.EqualFunc(wantCommands, gotCommands, func(left, right ValidationCommand) bool {
+		return slices.Equal(left.Argv, right.Argv) && left.Timeout == right.Timeout
+	}) {
 		return fmt.Errorf("proposal validation commands do not match the frozen destination policy")
 	}
 	return nil

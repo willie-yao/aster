@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
@@ -148,11 +149,14 @@ func validateDestinationPolicy(policy DestinationPolicy) error {
 		}
 		seenCommands := map[string]bool{}
 		for _, command := range repository.AllowedCommands {
-			command = strings.TrimSpace(command)
-			if command == "" || len(command) > 1024 || seenCommands[command] {
-				return fmt.Errorf("destination repository %s commands must be unique and bounded", name)
+			if err := validateValidationCommand(command); err != nil {
+				return fmt.Errorf("destination repository %s command: %w", name, err)
 			}
-			seenCommands[command] = true
+			key := validationCommandKey(command)
+			if seenCommands[key] {
+				return fmt.Errorf("destination repository %s commands must be unique", name)
+			}
+			seenCommands[key] = true
 		}
 	}
 	return nil
@@ -465,13 +469,14 @@ func validateProposal(proposal ActionableProposal) error {
 	}
 	seenCommands := map[string]bool{}
 	for _, command := range proposal.AllowedValidationCommands {
-		if err := boundedText("validation command", command, 1024); err != nil {
-			return err
+		if err := validateValidationCommand(command); err != nil {
+			return fmt.Errorf("proposal validation command: %w", err)
 		}
-		if seenCommands[command] {
+		key := validationCommandKey(command)
+		if seenCommands[key] {
 			return fmt.Errorf("proposal validation commands must be unique")
 		}
-		seenCommands[command] = true
+		seenCommands[key] = true
 	}
 	return nil
 }
@@ -493,6 +498,24 @@ func targetKindMatches(kind TargetKind, target models.RemediationTarget) bool {
 	default:
 		return false
 	}
+}
+
+func validateValidationCommand(command ValidationCommand) error {
+	if len(command.Argv) == 0 || len(command.Argv) > 32 {
+		return fmt.Errorf("argv must contain 1-32 entries")
+	}
+	for _, argument := range command.Argv {
+		if argument == "" || argument != strings.TrimSpace(argument) || len(argument) > 1024 || strings.ContainsAny(argument, "\r\n\x00") {
+			return fmt.Errorf("argv entries must be trimmed and bounded")
+		}
+	}
+	if command.Timeout != "" {
+		duration, err := time.ParseDuration(command.Timeout)
+		if err != nil || duration <= 0 || duration > 2*time.Hour {
+			return fmt.Errorf("timeout must be a positive duration of at most 2h")
+		}
+	}
+	return nil
 }
 
 func validateEvidenceCitation(citation EvidenceCitation) error {

@@ -12,7 +12,14 @@
         "repositories": [
           {
             "allowed_commands": [
-              "go test ./..."
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
             ],
             "allowed_paths": [
               "controllers/reconcile.go"
@@ -21,7 +28,7 @@
           }
         ]
       },
-      "effective_input_sha256": "e7c3d558f0a3eb22a268b9cde426c803d6b84440ff0a36222c9748948436b0db",
+      "effective_input_sha256": "48d7c55b63b3f224c521173a0314139de04c52676ed3af3c36e66f08fad7ef13",
       "expected": {
         "classification": "actionable",
         "repository": {
@@ -43,6 +50,9 @@
         }
       },
       "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "controllers/reconcile.go": "package controllers\n\nfunc reconcile() error {\n\treturn nil\n}\n\nfunc applyFix() {}\n"
+      },
       "id": "actionable-missing-call",
       "relevant_files": [
         "controllers/reconcile.go"
@@ -69,7 +79,14 @@
         "repositories": [
           {
             "allowed_commands": [
-              "go test ./..."
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
             ],
             "allowed_paths": [
               "config/jobs/example/"
@@ -78,7 +95,7 @@
           }
         ]
       },
-      "effective_input_sha256": "83338536059386ddb1fccb8fffb54b7956618b0795bd48802bc180f1a00b3ad4",
+      "effective_input_sha256": "4d93f33e095227f56b74c6c50d52f630b5a0e371068f3863fc2d42c68dd55327",
       "expected": {
         "classification": "actionable",
         "repository": {
@@ -100,6 +117,9 @@
         }
       },
       "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "config/jobs/example/periodics.yaml": "periodics:\n- name: periodic-capz\n  spec:\n    containers:\n    - name: test\n      command: [run-tests]\n"
+      },
       "id": "actionable-missing-job-environment",
       "relevant_files": [
         "config/jobs/example/periodics.yaml"
@@ -126,7 +146,14 @@
         "repositories": [
           {
             "allowed_commands": [
-              "go test ./..."
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
             ],
             "allowed_paths": [
               "controllers/reconcile.go"
@@ -135,13 +162,16 @@
           }
         ]
       },
-      "effective_input_sha256": "a44195ee94cfe94b81131dccdf96171b83984dc7ab6f67f11c7f04466f2b4bea",
+      "effective_input_sha256": "37d93cd5873a99f84bde7d25a38a13dec64840b71bb5ed32a5c8c603903b28fc",
       "expected": {
         "classification": "already_fixed",
         "repository": null,
         "target": null
       },
       "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "controllers/reconcile.go": "package controllers\n\nfunc reconcile() error {\n\tapplyFix()\n\treturn nil\n}\n\nfunc applyFix() {}\n"
+      },
       "id": "target-already-present-at-pinned-revision",
       "relevant_files": [
         "controllers/reconcile.go"
@@ -168,7 +198,14 @@
         "repositories": [
           {
             "allowed_commands": [
-              "go test ./..."
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
             ],
             "allowed_paths": [
               "controllers/reconcile.go"
@@ -177,13 +214,16 @@
           }
         ]
       },
-      "effective_input_sha256": "0ed0bc0428e8b835b6abdbd498c91a702db6d3eeb36b152dad707d3bf9e1f4d4",
+      "effective_input_sha256": "08cba0e486a5962c7c4722cb687ee2e7ca3c50e7a8d657e7df6c27f1a6c62e57",
       "expected": {
         "classification": "already_fixed",
         "repository": null,
         "target": null
       },
       "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "controllers/reconcile.go": "package controllers\n\nfunc reconcile() error {\n\treturn nil\n}\n\nfunc applyFix() {}\n"
+      },
       "id": "fixed-in-current-source",
       "relevant_files": [
         "controllers/reconcile.go"
@@ -210,7 +250,14 @@
         "repositories": [
           {
             "allowed_commands": [
-              "go test ./..."
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
             ],
             "allowed_paths": [
               "cmd/"
@@ -219,13 +266,17 @@
           }
         ]
       },
-      "effective_input_sha256": "5c1cf6e0093b068c87a3d85c500569e94894d6e18b6aedc9049c5267177b8b88",
+      "effective_input_sha256": "f3694cd1219855cbeda562e8b291585bfe437e023c073fff26c7210363698412",
       "expected": {
         "classification": "external_dependency",
         "repository": null,
         "target": null
       },
       "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "cmd/test/main.go": "package main\n\nimport external \"example.net/external/tls\"\n\nfunc run() error { return external.Connect() }\n",
+        "go.mod": "module example/repo\n\ngo 1.25\n\nrequire example.net/external v1.2.3\n"
+      },
       "id": "external-dependency",
       "relevant_files": [
         "cmd/test/main.go",
@@ -254,7 +305,14 @@
         "repositories": [
           {
             "allowed_commands": [
-              "go test ./..."
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
             ],
             "allowed_paths": [
               "cmd/"
@@ -263,13 +321,16 @@
           }
         ]
       },
-      "effective_input_sha256": "94dfd9789f86f0cf713ef0250d2a61a775efd7b6d7f3da61fc5c618dc65d567f",
+      "effective_input_sha256": "8cfb6c3610d7892acae047d3315c1212cb73b18b7ca2e6c253ddcbe95a1c3483",
       "expected": {
         "classification": "environment_or_infrastructure",
         "repository": null,
         "target": null
       },
       "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "cmd/test/main.go": "package main\nfunc main() {}\n"
+      },
       "id": "environment-or-infrastructure",
       "relevant_files": [
         "cmd/test/main.go"
@@ -296,7 +357,14 @@
         "repositories": [
           {
             "allowed_commands": [
-              "go test ./..."
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
             ],
             "allowed_paths": [
               "pkg/client/"
@@ -305,13 +373,16 @@
           }
         ]
       },
-      "effective_input_sha256": "32aba67f59cb96d5e94e233e1c1a98001171df33f75247d89f1c4478173a9e4c",
+      "effective_input_sha256": "7bf4a9da374f9e223509f2b098a16133f33fb18c2a8d4964878953d87f92376a",
       "expected": {
         "classification": "mitigation_only",
         "repository": null,
         "target": null
       },
       "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "pkg/client/client.go": "package client\nfunc Request() error { return nil }\n"
+      },
       "id": "mitigation-only",
       "relevant_files": [
         "pkg/client/client.go"
@@ -338,7 +409,14 @@
         "repositories": [
           {
             "allowed_commands": [
-              "go test ./..."
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
             ],
             "allowed_paths": [
               "pkg/"
@@ -347,13 +425,17 @@
           }
         ]
       },
-      "effective_input_sha256": "fce51e58db84f573dd78be41ba65e3c7a709c2a1a7934a338314ce048b087ae5",
+      "effective_input_sha256": "d2b5d59213b0d2cb6fc75b054993bcddd4ff7831d7ef9dcc4e054ba6fcf00878",
       "expected": {
         "classification": "insufficient_evidence",
         "repository": null,
         "target": null
       },
       "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "pkg/container/start.go": "package container\nfunc Start() error { return nil }\n",
+        "pkg/mount/mount.go": "package mount\nfunc Publish() error { return nil }\n"
+      },
       "id": "insufficient-ambiguous-evidence",
       "relevant_files": [
         "pkg/mount/mount.go",
@@ -382,7 +464,14 @@
         "repositories": [
           {
             "allowed_commands": [
-              "go test ./..."
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
             ],
             "allowed_paths": [
               "controllers/",
@@ -392,13 +481,17 @@
           }
         ]
       },
-      "effective_input_sha256": "d1862a4ace4728c097e27bb31445d0071d517d170c64d5a74325889e3ca62691",
+      "effective_input_sha256": "1a312d33d2f55087ae91e63e3ee88d3dc1c1e3a6909fffaca73af3a85a50f462",
       "expected": {
         "classification": "insufficient_evidence",
         "repository": null,
         "target": null
       },
       "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "config/crd/bases/example.yaml": "spec:\n  conversion:\n    strategy: Webhook\n",
+        "controllers/conversion.go": "package controllers\nfunc ReconcileConversion() error { return nil }\n"
+      },
       "id": "unsafe-conversion-webhook",
       "relevant_files": [
         "controllers/conversion.go",
@@ -427,7 +520,14 @@
         "repositories": [
           {
             "allowed_commands": [
-              "go test ./..."
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
             ],
             "allowed_paths": [
               "cmd/"
@@ -436,13 +536,17 @@
           }
         ]
       },
-      "effective_input_sha256": "da0895fea5bb70ca9112e4d35a7d39cf94131e0271d32f758f8015347122ab05",
+      "effective_input_sha256": "96a12bf66d079558da7a258a9a5a2e29f842aad777f52ddf1ccfbab26003006b",
       "expected": {
         "classification": "external_dependency",
         "repository": null,
         "target": null
       },
       "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "cmd/test/main.go": "package main\nfunc main() {}\n",
+        "go.mod": "module example/repo\n\ngo 1.25\n\nrequire example.net/dependency v2.0.0\n"
+      },
       "id": "wrong-module-cache-repository",
       "relevant_files": [
         "go.mod",
@@ -471,7 +575,14 @@
         "repositories": [
           {
             "allowed_commands": [
-              "go test ./..."
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
             ],
             "allowed_paths": [
               "pkg/"
@@ -480,13 +591,17 @@
           }
         ]
       },
-      "effective_input_sha256": "43c01532dc982ce80e8fbb045a33910aedf1a2f9721e467fb5cba69d5f09d61c",
+      "effective_input_sha256": "db9c268873975465f041c2ebbc7b4a8c275199872527193df93e1a97e1e1f5fc",
       "expected": {
         "classification": "insufficient_evidence",
         "repository": null,
         "target": null
       },
       "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "pkg/one/handler.go": "package one\nfunc Handle() error { return nil }\n",
+        "pkg/two/handler.go": "package two\nfunc Handle() error { return nil }\n"
+      },
       "id": "duplicated-or-unknown-target",
       "relevant_files": [
         "pkg/one/handler.go",
@@ -515,7 +630,14 @@
         "repositories": [
           {
             "allowed_commands": [
-              "go test ./..."
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
             ],
             "allowed_paths": [
               "api/",
@@ -525,13 +647,17 @@
           }
         ]
       },
-      "effective_input_sha256": "cc0fb9108e09b395e1021d9aa37d1ea0133d2ac67fd01162c9e7e02a88bfeff5",
+      "effective_input_sha256": "cd83baa74c41bf5258eab7d7938e87bcfaab2103f6a48cd99c9958e394b16b43",
       "expected": {
         "classification": "insufficient_evidence",
         "repository": null,
         "target": null
       },
       "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "api/types.go": "package api\ntype Workload struct { Name string }\n",
+        "controllers/workload.go": "package controllers\nfunc reconcileWorkload() error { return nil }\n"
+      },
       "id": "fabricated-symbol-or-field",
       "relevant_files": [
         "api/types.go",

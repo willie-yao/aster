@@ -335,23 +335,41 @@ func (r targetVerificationReader) ReadFile(ctx context.Context, file string) (st
 	return r.source.ReadFile(ctx, file)
 }
 
+// VerifyTargetState deterministically checks one typed target at an immutable repository revision.
+func VerifyTargetState(ctx context.Context, reader Reader, repo Repository, target models.RemediationTarget) (actionverify.Result, error) {
+	tree, ok := reader.(TreeReader)
+	if !ok {
+		return actionverify.Result{}, fmt.Errorf("%w: bounded source tree is unavailable", ErrInvalidResult)
+	}
+	if err := ValidateRepository(repo); err != nil {
+		return actionverify.Result{}, err
+	}
+	if target.Intent == models.RemediationIntentSetJobEnvironment {
+		wantRepository := strings.TrimSpace(repo.Owner + "/" + repo.Name)
+		if !strings.EqualFold(target.Repository, wantRepository) || !strings.EqualFold(target.Revision, repo.Revision) {
+			return actionverify.Result{}, fmt.Errorf("%w: prow target source identity does not match the bounded repository", ErrInvalidResult)
+		}
+	}
+	source := repositoryBoundedSource{reader: tree, repo: repo}
+	archive, err := actionverify.BuildTargetArchive(ctx, source, []models.RemediationTarget{target})
+	if err != nil {
+		return actionverify.Result{}, fmt.Errorf("%w: remediation target source is unavailable", ErrInvalidResult)
+	}
+	verification, err := actionverify.Verify(ctx, targetVerificationReader{archive: archive, source: source}, actionverify.Input{Targets: []models.RemediationTarget{target}})
+	if err != nil {
+		return actionverify.Result{}, fmt.Errorf("%w: remediation target could not be verified", ErrInvalidResult)
+	}
+	return verification, nil
+}
+
 // VerifyResultTarget proves an actionable result against its pinned repository.
 func VerifyResultTarget(ctx context.Context, reader Reader, repo Repository, result *Result) error {
 	if result == nil || result.Target == nil {
 		return nil
 	}
-	tree, ok := reader.(TreeReader)
-	if !ok {
-		return fmt.Errorf("%w: bounded source tree is unavailable", ErrInvalidResult)
-	}
-	source := repositoryBoundedSource{reader: tree, repo: repo}
-	archive, err := actionverify.BuildTargetArchive(ctx, source, []models.RemediationTarget{*result.Target})
+	verification, err := VerifyTargetState(ctx, reader, repo, *result.Target)
 	if err != nil {
-		return fmt.Errorf("%w: remediation target source is unavailable", ErrInvalidResult)
-	}
-	verification, err := actionverify.Verify(ctx, targetVerificationReader{archive: archive, source: source}, actionverify.Input{Targets: []models.RemediationTarget{*result.Target}})
-	if err != nil {
-		return fmt.Errorf("%w: remediation target could not be verified", ErrInvalidResult)
+		return err
 	}
 	want := actionverify.StateUnresolved
 	if result.State == StateAlreadyPresent {
