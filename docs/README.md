@@ -46,6 +46,7 @@ part of standard onboarding.
 
 ## Architecture and decisions
 
+- [In-process failure analyzer architecture](architecture/in-process-analyzer.md)
 - [ADR 0001: Dashboard ownership of analysis policy](architecture-decisions/0001-analysis-runtime-ownership.md)
 - [Historical failure-analysis runtime evaluation](architecture/analysis-runtime-evaluation.md)
 
