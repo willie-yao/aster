@@ -261,7 +261,11 @@ func TestStringEncodedNumericArgsAreAccepted(t *testing.T) {
 	mustNoError(t, "grep_artifact", (&grepTool{}).Dispatch(context.Background(), env, raw).Payload)
 
 	raw, _ = json.Marshal(map[string]interface{}{"path": "build-log.txt", "offset": "0", "length": "5"})
-	mustNoError(t, "read_artifact", (&readTool{}).Dispatch(context.Background(), env, raw).Payload)
+	read := (&readTool{}).Dispatch(context.Background(), env, raw)
+	mustNoError(t, "read_artifact", read.Payload)
+	if content, _ := read.Payload["content"].(string); read.ContentBytes != len(content) || read.ContentBytes == 0 {
+		t.Fatalf("read_artifact content bytes = %d, content length = %d", read.ContentBytes, len(content))
+	}
 
 	raw, _ = json.Marshal(map[string]interface{}{"pattern": ".*", "max_results": "10", "max_dirs": "50"})
 	mustNoError(t, "find_artifacts", (&findTool{}).Dispatch(context.Background(), env, raw).Payload)

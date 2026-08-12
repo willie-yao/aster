@@ -82,9 +82,13 @@ func TestReadRepoFile_RangeAndCache(t *testing.T) {
 	env := envFor(repo)
 	tool := &readTool{}
 
-	p := dispatch(t, tool, env, map[string]interface{}{"path": "config/dev.yaml"})
+	res := tool.Dispatch(context.Background(), env, mustJSON(map[string]interface{}{"path": "config/dev.yaml"}))
+	p := res.Payload
 	if p["content"] != "replicas: 1\nimage: foo:v1\n" {
 		t.Errorf("content = %q", p["content"])
+	}
+	if res.ContentBytes != len("replicas: 1\nimage: foo:v1\n") {
+		t.Errorf("content bytes = %d", res.ContentBytes)
 	}
 	if p["file_size"].(int) != len("replicas: 1\nimage: foo:v1\n") {
 		t.Errorf("file_size = %v", p["file_size"])
@@ -93,9 +97,12 @@ func TestReadRepoFile_RangeAndCache(t *testing.T) {
 	if repo.reads != 1 {
 		t.Fatalf("reads = %d after first read, want 1", repo.reads)
 	}
-	dispatch(t, tool, env, map[string]interface{}{"path": "config/dev.yaml"})
+	cached := tool.Dispatch(context.Background(), env, mustJSON(map[string]interface{}{"path": "config/dev.yaml"}))
 	if repo.reads != 1 {
 		t.Errorf("reads = %d after cached read, want still 1", repo.reads)
+	}
+	if cached.ContentBytes != len("replicas: 1\nimage: foo:v1\n") {
+		t.Errorf("cached content bytes = %d", cached.ContentBytes)
 	}
 
 	sl := dispatch(t, tool, env, map[string]interface{}{"path": "config/dev.yaml", "offset": 10, "length": 6})

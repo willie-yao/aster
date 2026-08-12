@@ -46,9 +46,10 @@ type FunctionDecl struct {
 //
 // BudgetExhausted is a typed signal so the agentic loop can stamp
 // AIAnalysis.BudgetExhausted without string-matching error messages.
-// BytesFetched is GCS bytes pulled by this call and added to the per-analysis
-// GCS budget. Zero means nothing was fetched, such as an error, cache hit, or
-// listing-only call.
+// BytesFetched is backend bytes pulled by this call and added to the
+// per-analysis fetch budget. Zero means nothing was fetched, such as an error,
+// cache hit, or listing-only call. ContentBytes is the number of content bytes
+// returned to the model. It remains non-zero for a content-bearing cache hit.
 //
 // A tool that wants to surface an error to the model uses ErrPayload as a
 // shortcut; the loop will still apply the envelope.
@@ -56,6 +57,7 @@ type Result struct {
 	Payload         map[string]interface{}
 	BudgetExhausted bool
 	BytesFetched    int
+	ContentBytes    int
 }
 
 // ErrPayload returns a Result whose Payload contains a single "error" key.

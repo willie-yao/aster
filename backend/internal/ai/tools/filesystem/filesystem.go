@@ -130,7 +130,7 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		return tools.ErrPayload(err.Error())
 	}
 	return tools.Result{
-		BytesFetched: len(data),
+		BytesFetched: len(data), ContentBytes: len(data),
 		Payload: map[string]interface{}{
 			"path":      args.Path,
 			"file_size": size,
@@ -187,7 +187,7 @@ func (*tailTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		return tools.ErrPayload(err.Error())
 	}
 	return tools.Result{
-		BytesFetched: len(res.Content),
+		BytesFetched: len(res.Content), ContentBytes: len(res.Content),
 		Payload: map[string]interface{}{
 			"path":           args.Path,
 			"file_size":      res.FileSize,

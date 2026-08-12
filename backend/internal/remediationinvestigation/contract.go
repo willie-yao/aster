@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	PromptVersion          = 3
+	PromptVersion          = 4
 	SchemaVersion          = 3
 	VerificationVersion    = 3
 	ResultVersion          = 3

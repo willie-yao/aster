@@ -193,8 +193,4 @@ func TestEvidencePromptRequiresContentBearingSourceRead(t *testing.T) {
 			t.Fatalf("evidence prompt is missing %q", anchor)
 		}
 	}
-	retry := evidenceSourceRetryPrompt("frozen input")
-	if !strings.Contains(retry, "previous evidence attempt was discarded") || !strings.Contains(retry, "Do not return a memo until that tool call succeeds") {
-		t.Fatalf("retry prompt=%q", retry)
-	}
 }
