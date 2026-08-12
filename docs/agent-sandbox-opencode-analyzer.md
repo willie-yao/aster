@@ -541,4 +541,8 @@ Source verification failures use these stable categories:
 
 Git diff exit status `0` means clean, `1` means an actual difference, and any
 other status is `source_git_diff_error`. A Git command error is never reported
-as a confirmed source mutation.
+as a confirmed source mutation. Each post-analysis source verification pass has
+a bounded 30-second deadline. The analysis workload and result contract reserve
+a 60-second aggregate post-model grace for both passes, so large read-only network
+filesystems can complete the same checks without turning a verifier timeout into
+a mutation claim or exceeding the Sandbox lifecycle.

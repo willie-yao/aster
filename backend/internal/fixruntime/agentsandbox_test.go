@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentsandbox"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
@@ -851,6 +852,20 @@ func TestAgentSandboxCleanupDetectsOrphanedPod(t *testing.T) {
 	}
 }
 
+func TestAgentSandboxRunTimeoutUsesPurposeSpecificGrace(t *testing.T) {
+	base := agentsandbox.Spec{Timeout: time.Minute}
+	analysis := base
+	analysis.Purpose = "analysis"
+	if got := agentSandboxRunTimeout(analysis); got != time.Minute+agentanalysis.WorkspacePostModelGrace+5*time.Second {
+		t.Fatalf("analysis run timeout = %s", got)
+	}
+	fix := base
+	fix.Purpose = "fix"
+	if got := agentSandboxRunTimeout(fix); got != time.Minute+agentSandboxResultGrace+5*time.Second {
+		t.Fatalf("fix run timeout = %s", got)
+	}
+}
+
 func TestAgentSandboxPreparedWorkspaceUsesImmutableInputMounts(t *testing.T) {
 	runtime := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, testAgentSandboxOptions())
 	runtime.opts.StagerImage = "stager:test"
@@ -870,6 +885,9 @@ func TestAgentSandboxPreparedWorkspaceUsesImmutableInputMounts(t *testing.T) {
 	annotations := object["metadata"].(map[string]any)["annotations"].(map[string]any)
 	if annotations[agentSandboxPreparedAnnotation] != manifestHash || annotations[agentSandboxPreparedIdentityAnnotation] != identityHash {
 		t.Fatalf("annotations=%+v", annotations)
+	}
+	if got := pod["activeDeadlineSeconds"]; got != int64(time.Minute/time.Second)+int64(agentanalysis.WorkspacePostModelGrace/time.Second) {
+		t.Fatalf("analysis active deadline = %v", got)
 	}
 	if _, ok := pod["initContainers"]; ok {
 		t.Fatalf("prepared workspace unexpectedly has init containers: %+v", pod)
