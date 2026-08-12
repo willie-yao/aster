@@ -28,7 +28,7 @@ const (
 	WorkspaceRequestVersion  = 3
 	WorkspaceResultVersion   = 1
 	WorkspaceStageVersion    = 2
-	WorkspaceContractVersion = "agent-analysis-workspace-v5"
+	WorkspaceContractVersion = "agent-analysis-workspace-v6"
 	WorkspaceStageContract   = "agent-analysis-stage-v2"
 	WorkspacePromptVersion   = "agent-analysis-workspace-prompt-v6"
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -269,19 +270,26 @@ func TestParseOpenCodeTelemetryClassifiesBoundedEvidenceTools(t *testing.T) {
 	raw := []byte(fmt.Sprintf(`[{
 		"info":{"role":"assistant"},"parts":[
 		{"type":"step-start"},
-		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%q}}},
-		{"type":"tool","tool":"grep","state":{"status":"completed","input":{"path":%q},"metadata":{"matches":1}}},
+		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},
+		{"type":"tool","tool":"grep","state":{"status":"completed","input":{"path":%[2]q},"output":%[3]q,"metadata":{"matches":1}}},
 		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":"/etc/passwd"}}},
 		{"type":"tool","tool":"write","state":{"status":"error","error":"Permission denied by policy","input":{"filePath":"result/out"}}},
 		{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},
 		{"type":"step-finish","cost":0.1,"tokens":{"input":1,"output":1,"cache":{"read":0}}}
-	]}]`, artifactPath, sourcePath))
+	]}]`, artifactPath, sourcePath, sourcePath+":\n  Line 1: package main"))
 	_, _, facts, err := parseOpenCodeTelemetryForWorkspace(raw, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if facts.ArtifactToolCalls != 1 || facts.SourceToolCalls != 1 || facts.NonStructuredToolCalls != 4 || facts.StructuredOutputCalls != 1 {
 		t.Fatalf("facts=%+v", facts)
+	}
+	wantHandles := []agentanalysis.WorkspaceEvidenceHandle{
+		{ID: "artifact-001", Root: agentanalysis.WorkspaceArtifactsDir, Path: "failure.log", LineStart: 1, LineEnd: 1},
+		{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, Path: "main.go", LineStart: 1, LineEnd: 1},
+	}
+	if !slices.Equal(facts.EvidenceHandles, wantHandles) {
+		t.Fatalf("handles=%+v want=%+v", facts.EvidenceHandles, wantHandles)
 	}
 }
 

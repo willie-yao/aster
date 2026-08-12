@@ -18,12 +18,16 @@ func TestNewOpenCodeRequestShapeRecordsBoundedFacts(t *testing.T) {
 		ModelContextTokens: 200000,
 		ModelOutputTokens:  8192,
 	}
-	got := newOpenCodeRequestShape(spec, "1.18.2")
+	instruction, err := agentanalysis.WorkspaceFinalizationInstruction([]agentanalysis.WorkspaceEvidenceHandle{{ID: "artifact-001", Root: agentanalysis.WorkspaceArtifactsDir, Path: "failure.log", LineStart: 1, LineEnd: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := newOpenCodeRequestShape(spec, "1.18.2", instruction)
 	wantSystemBytes, err := openCodeSystemPromptBytes(spec, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Available || got.StreamingMode != "streaming" || got.ModelID != spec.Provider.Model || !got.SystemPromptBytesAvailable || got.SystemPromptBytes != wantSystemBytes || got.UserPromptBytes != len(spec.Prompt)+len(agentanalysis.WorkspaceFinalizationInstruction()) || got.ResponseSchemaSHA256 != agentanalysis.WorkspaceResultSchemaHash() || got.ToolChoiceMode != "required" || got.ContextLimit != 200000 || got.OutputTokenLimit != 8192 || got.OpenCodeVersion != "1.18.2" || !got.ToolSchemaAvailable || got.ToolCount != 1 {
+	if !got.Available || got.StreamingMode != "streaming" || got.ModelID != spec.Provider.Model || !got.SystemPromptBytesAvailable || got.SystemPromptBytes != wantSystemBytes || got.UserPromptBytes != len(spec.Prompt)+len(instruction) || got.ResponseSchemaSHA256 != agentanalysis.WorkspaceResultSchemaHash() || got.ToolChoiceMode != "required" || got.ContextLimit != 200000 || got.OutputTokenLimit != 8192 || got.OpenCodeVersion != "1.18.2" || !got.ToolSchemaAvailable || got.ToolCount != 1 {
 		t.Fatalf("shape=%+v", got)
 	}
 }
