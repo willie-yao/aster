@@ -92,7 +92,9 @@ func TestExecutionRequestRejectsMutableOrCredentialedInput(t *testing.T) {
 		{name: "gateway credentials", edit: func(r *ExecutionRequest) {
 			r.ModelProvider.Endpoint = "https://token@gateway.example.internal/v1/chat/completions"
 		}, want: "credentials"},
-		{name: "provider API", edit: func(r *ExecutionRequest) { r.ModelProvider.API = modelprovider.APIResponses }, want: "API"},
+		{name: "API path mismatch", edit: func(r *ExecutionRequest) {
+			r.ModelProvider = modelprovider.Normalize(modelprovider.Config{CredentialMode: modelprovider.CredentialModeDirect, API: modelprovider.APIResponses, Endpoint: "https://api.openai.com/v1/chat/completions", Model: "fixture-model", Auth: modelprovider.Auth{Type: modelprovider.AuthTypeBearer}})
+		}, want: "responses endpoint"},
 		{name: "gateway bearer", edit: func(r *ExecutionRequest) {
 			r.ModelProvider.Auth = modelprovider.Auth{Type: modelprovider.AuthTypeBearer, TokenEnv: modelprovider.TokenEnv}
 		}, want: "gateway credential mode"},
@@ -226,6 +228,23 @@ func TestExecutionResultRejectsMismatchedOutput(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestExecutionRequestAcceptsResponsesWithoutContractVersionChange(t *testing.T) {
+	request := executionRequest()
+	request.ModelProvider = modelprovider.Normalize(modelprovider.Config{
+		CredentialMode: modelprovider.CredentialModeDirect,
+		API:            modelprovider.APIResponses,
+		Endpoint:       "https://api.openai.com/v1/responses",
+		Model:          "fixture-model",
+		Auth:           modelprovider.Auth{Type: modelprovider.AuthTypeBearer},
+	})
+	if request.Version != 2 {
+		t.Fatalf("execution request version = %d", request.Version)
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }
 

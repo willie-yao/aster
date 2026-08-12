@@ -120,6 +120,12 @@ gateway mode without reading or hashing the Secret value.
 Use only a dedicated inference credential. GitHub write tokens, repository read
 credentials, OAuth credentials, and general PATs remain outside the Sandbox.
 
+Chat Completions uses `@ai-sdk/openai-compatible`. Responses uses
+`@ai-sdk/openai`, `store: false`, complete local conversation history, and no
+`previous_response_id`. With the pinned OpenCode version, Responses requires
+direct bearer auth. Deterministic fixtures validate the wire behavior but do
+not make a live provider compatibility claim.
+
 ## AppArmor capability decision
 
 Production constructors always request `RuntimeDefault` AppArmor on both the Pod

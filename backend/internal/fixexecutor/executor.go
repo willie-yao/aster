@@ -391,18 +391,18 @@ func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps in
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	baseURL, err := modelprovider.OpenCodeBaseURL(provider)
+	adapter, err := modelprovider.OpenCodeAdapterFor(provider)
 	if err != nil {
 		return err
 	}
-	providerOptions := map[string]any{"baseURL": baseURL}
+	providerOptions := map[string]any{"baseURL": adapter.BaseURL}
 	if provider.Auth.Type == modelprovider.AuthTypeBearer {
 		providerOptions["apiKey"] = "{env:" + modelprovider.TokenEnv + "}"
 	}
 	config := map[string]any{
 		"$schema": "https://opencode.ai/config.json", "share": "disabled", "autoupdate": false, "snapshot": false,
 		"provider": map[string]any{"engine": map[string]any{
-			"npm": "@ai-sdk/openai-compatible", "name": "engine",
+			"npm": adapter.NPM, "name": "engine",
 			"options": providerOptions,
 			"models":  map[string]any{provider.Model: map[string]any{"limit": map[string]any{"context": 128000, "output": 8192}}},
 		}},

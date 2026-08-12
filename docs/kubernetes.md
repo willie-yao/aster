@@ -112,8 +112,10 @@ is explicitly enabled, direct mode is the provider default. Direct bearer mode
 must reference a dedicated inference-only Secret that already exists in the
 Agent Sandbox execution namespace. Helm stores only the Secret name and key and
 never copies, reads, or prints the value. Gateway mode remains available for a
-tokenless workload. Do not reuse the dashboard AI Secret, bot token, Fix token,
-OAuth credentials, repository credentials, or a general GitHub PAT.
+tokenless Chat Completions workload. Native Responses requires direct bearer
+auth with pinned OpenCode 1.18.2. Do not reuse the dashboard AI Secret, bot
+token, Fix token, OAuth credentials, repository credentials, or a general
+GitHub PAT.
 
 Inspect every chart value available in the selected release:
 

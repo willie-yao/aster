@@ -270,9 +270,18 @@ estimate and does not ship vendor price tables.
 
 Agent Sandbox remains experimental and disabled by default. After an OpenCode
 Agent Sandbox runtime is explicitly enabled, `direct` is the default credential
-mode. `gateway` remains available as an explicit tokenless mode. The Agent
-Sandbox OpenCode path currently supports only `chat_completions`; native
-Responses support is evaluated separately.
+mode. `gateway` remains available as an explicit tokenless mode. Agent Sandbox
+OpenCode supports two separate native protocols:
+
+| `model_provider.api` | OpenCode provider package |
+|---|---|
+| `chat_completions` | `@ai-sdk/openai-compatible` |
+| `responses` | `@ai-sdk/openai` |
+
+Configure a full operation endpoint. Chat Completions endpoints must end with
+`/chat/completions`; Responses endpoints must end with `/responses`. The engine
+derives only the provider base URL and rejects API/path mismatches instead of
+guessing.
 
 Direct mode can use either:
 
@@ -281,6 +290,13 @@ Direct mode can use either:
   environment variable; or
 - `auth.type: none`, which renders no Secret reference and is suitable only for
   an endpoint that intentionally requires no authentication.
+
+With pinned OpenCode 1.18.2, native Responses requires direct bearer auth. The
+`@ai-sdk/openai` package requires an API key before it starts a request, so
+Responses with `auth.type: none` or tokenless gateway mode fails validation
+rather than inventing a placeholder credential. Direct unauthenticated access
+and gateway mode remain supported for Chat Completions, including internal Ray
+Serve deployments.
 
 For bearer auth, the named Secret must already exist in the Agent Sandbox
 execution namespace. The chart never creates, copies, reads, or prints it. The
@@ -302,7 +318,22 @@ that contains the exact credential. Non-success diagnostics remain sanitized.
 Gateway mode preserves the previous behavior. OpenCode receives no provider
 credential or credential header and calls a consumer-operated HTTPS gateway.
 The gateway attaches any provider credential outside the Sandbox process.
-Deterministic tests exercise both modes without making a live provider request.
+Deterministic tests exercise Chat Completions and Responses without making a
+live provider request. The Responses tests verify streaming text, native
+function calls, analyzer StructuredOutput, complete local multi-turn tool
+history, `store: false`, absence of `previous_response_id`, exact usage when
+reported, unavailable usage when omitted, and sanitized HTTP or malformed-stream
+failures. This proves the pinned OpenCode transport shape only. It does not
+establish live compatibility with every Responses-like endpoint or model.
+
+## Agent Sandbox protocol compatibility
+
+GitHub Copilot Chat Completions and Ray Serve commonly use
+`chat_completions`. OpenAI Responses and Copilot models that advertise only the
+Responses endpoint use `responses`. Responses support does not imply universal
+provider compatibility. The endpoint must implement the selected streaming
+protocol, tool-call events, usage fields when claimed, and the model behavior
+OpenCode expects. Deterministic fixtures are not a live provider smoke test.
 
 ## Agent Sandbox provider TLS
 

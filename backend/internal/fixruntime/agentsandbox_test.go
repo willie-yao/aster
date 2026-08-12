@@ -403,6 +403,10 @@ func TestAgentSandboxRuntimeIdentityIncludesWorkloadConfiguration(t *testing.T) 
 		func(opts *AgentSandboxOptions) { opts.RuntimeClassName = "other-runtime" },
 		func(opts *AgentSandboxOptions) { opts.Resources.MemoryLimit = "1Gi" },
 		func(opts *AgentSandboxOptions) {
+			opts.ModelProvider = testResponsesProvider("https://api.openai.com/v1/responses", "fixture-model")
+			opts.ProviderSecretRef = ProviderSecretRef{Name: "agent-sandbox-model", Key: "AI_TOKEN"}
+		},
+		func(opts *AgentSandboxOptions) {
 			opts.StagerImage = "stager:test"
 			opts.StagerInputClaim = "analysis-input"
 		},
@@ -1094,5 +1098,26 @@ func TestAgentSandboxProviderSecretReferenceValidation(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestAgentSandboxResponsesTelemetryIdentifiesAPI(t *testing.T) {
+	api := &fakeAgentSandboxAPI{
+		state: sandboxState{Exists: true, UID: "uid-1", PodName: "analysis-request-1", Finished: true, FinishedReason: "PodSucceeded"},
+		logs:  `{"terminal_state":"succeeded"}`,
+	}
+	opts := testAgentSandboxOptions()
+	opts.ModelProvider = testResponsesProvider("https://api.openai.com/v1/responses", "fixture")
+	opts.ProviderSecretRef = ProviderSecretRef{Name: "agent-sandbox-model", Key: "AI_TOKEN"}
+	runtime := newAgentSandboxRuntimeForTest(api, opts)
+	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
+		Purpose: "analysis", ExecutionID: "request-1", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64",
+		Request: []byte(`{"version":3}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Telemetry.ProviderCredentialMode != modelprovider.CredentialModeDirect || result.Telemetry.ProviderAPI != modelprovider.APIResponses {
+		t.Fatalf("telemetry = %+v", result.Telemetry)
 	}
 }

@@ -164,6 +164,12 @@ GitHub read credentials, OAuth credentials, or general PATs. Gateway mode keeps
 the workload tokenless and requires the gateway to attach provider credentials
 outside the Sandbox process.
 
+Chat Completions maps to `@ai-sdk/openai-compatible`. Responses maps to
+`@ai-sdk/openai`. With pinned OpenCode 1.18.2, Responses requires direct bearer
+auth because the provider package requires an API key before it starts a
+request. Direct unauthenticated access and tokenless gateway mode remain
+Chat-Completions-only.
+
 ## Native OpenCode boundary
 
 OpenCode receives the pinned workspace, failure metadata, consumer guidance,
@@ -182,6 +188,15 @@ final synchronous structured message is combined with evidence-phase session
 telemetry because OpenCode 1.18.2 does not expose the completed structured message
 through the session message-list endpoint. No prompt, output, file content, raw
 event, response body, or provider message is retained.
+
+Responses uses the native streaming provider path with `store: false`. OpenCode
+keeps the complete evidence, tool-call, tool-result, and finalization history in
+one local session. The executor does not use `previous_response_id` or depend on
+provider-side response chaining. Exact OpenCode 1.18.2 fixtures prove streaming
+text, function calls, StructuredOutput, multi-turn history, actual usage when
+reported, unavailable usage when omitted, and sanitized HTTP or malformed-stream
+failures. These deterministic results do not establish live compatibility with
+every Responses-like endpoint or model.
 
 ## Result contract
 
@@ -246,7 +261,7 @@ BENCH_MODEL_LABEL=model-a \
 BENCH_PROVIDER_PATH=<provider-path> \
 BENCH_TRANSPORT_ID=<stable-transport-id> \
 AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_CREDENTIAL_MODE=<direct-or-gateway> \
-AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_API=chat_completions \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_API=<chat_completions-or-responses> \
 AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_ENDPOINT=<full-chat-completions-endpoint> \
 AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_MODEL=<model> \
 AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_AUTH_TYPE=<none-or-bearer> \
@@ -294,7 +309,7 @@ AGENT_SANDBOX_ANALYSIS_STAGER_INPUT_CLAIM=<input-pvc> \
 AGENT_SANDBOX_ANALYSIS_SERVICE_ACCOUNT=<tokenless-workload-sa> \
 AGENT_SANDBOX_ANALYSIS_RUNTIME_CLASS=<secure-runtime-class> \
 AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_CREDENTIAL_MODE=<direct-or-gateway> \
-AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_API=chat_completions \
+AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_API=<chat_completions-or-responses> \
 AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_ENDPOINT=<full-chat-completions-endpoint> \
 AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_MODEL=<model> \
 AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_AUTH_TYPE=<none-or-bearer> \

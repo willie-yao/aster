@@ -263,7 +263,7 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 	if usage.ModelRequests > telemetry.StepsUsed || (telemetry.StepsUsed == 0 && !telemetry.Error.Available) {
 		return unavailable, telemetry, facts, fmt.Errorf("telemetry step usage is inconsistent")
 	}
-	if incompleteUsage || telemetry.StepsUsed == 0 {
+	if incompleteUsage || telemetry.StepsUsed == 0 || usage.InputTokens == 0 && usage.OutputTokens == 0 {
 		usage = agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable}
 	} else {
 		usage.CostAvailable = costKnown && positiveCost

@@ -371,10 +371,11 @@ bounds and the non-secret provider contract:
   arrays and explicit timeouts, ending with `argv: [git, diff, --cached,
   --check]`;
 - `model_provider.credential_mode`: `direct` by default or explicit `gateway`;
-- `model_provider.api`: currently `chat_completions`;
+- `model_provider.api`: `chat_completions` or `responses`;
 - `model_provider.endpoint` and `model`;
 - `model_provider.auth.type`: `bearer` or `none` for direct mode and `none` for
-  gateway mode; and
+  gateway mode. With pinned OpenCode 1.18.2, `responses` requires direct
+  bearer auth; and
 - `model_provider.public_ca_private_dns`, which is valid only for an explicit
   gateway using a privately resolved public FQDN.
 
@@ -393,7 +394,13 @@ supports only commands whose binaries are installed in that image.
 
 The Agent Sandbox runtime is one-shot generation followed by validation. A
 validator failure cannot trigger model repair, and `critique_retries` must be 0.
-Provider endpoints must use a complete HTTPS Chat Completions operation path.
+
+Chat Completions uses `@ai-sdk/openai-compatible`. Responses uses
+`@ai-sdk/openai`, requests `store: false`, keeps complete conversation and tool
+history locally, and does not use `previous_response_id`. Responses support is
+endpoint- and model-dependent and deterministic tests do not establish live
+provider compatibility.
+Provider endpoints must use a complete HTTPS operation path matching the selected API.
 Embedded credentials, queries, fragments, literal provider tokens, and local
 OpenCode model fields are rejected. The Helm `agentSandbox` values must match
 the project provider mode, API, endpoint, model, auth type, and trust setting

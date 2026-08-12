@@ -993,3 +993,27 @@ func TestStopOpenCodeProcessWaitsBeforeCredentialCheck(t *testing.T) {
 		t.Fatal("credential emitted during shutdown was checked before process completion")
 	}
 }
+
+func TestWriteOpenCodeConfigUsesNativeResponsesProvider(t *testing.T) {
+	home := t.TempDir()
+	provider := testResponsesProvider("https://provider.example/v1/responses", "fixture-model")
+	if err := writeOpenCodeConfig(home, provider, 20, 200000, 8192); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	engine := config["provider"].(map[string]any)["engine"].(map[string]any)
+	options := engine["options"].(map[string]any)
+	if engine["npm"] != "@ai-sdk/openai" || options["baseURL"] != "https://provider.example/v1" || options["apiKey"] != "{env:"+modelprovider.TokenEnv+"}" {
+		t.Fatalf("provider config = %v", engine)
+	}
+	if strings.Contains(string(data), "/responses") {
+		t.Fatalf("config retained the operation path: %s", data)
+	}
+}

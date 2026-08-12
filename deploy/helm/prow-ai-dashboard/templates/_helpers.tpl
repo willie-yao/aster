@@ -595,19 +595,22 @@ key, or bot token).
   {{- $authType := default "none" $providerAuth.type -}}
   {{- $publicCAPrivateDNS := default false $provider.publicCAPrivateDNS -}}
   {{- if not (has $credentialMode (list "direct" "gateway")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.credentialMode must be direct or gateway" -}}{{- end -}}
-  {{- if ne $providerAPI "chat_completions" -}}{{- fail "agentSandbox.fixRuntime.modelProvider.api must be chat_completions" -}}{{- end -}}
-  {{- if not (regexMatch "^https://[^/@?#]+(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?/chat/completions$" $provider.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.endpoint must be an absolute credential-free HTTPS chat_completions URL" -}}{{- end -}}
+  {{- if not (has $providerAPI (list "chat_completions" "responses")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.api must be chat_completions or responses" -}}{{- end -}}
+  {{- if not (regexMatch "^https://[^/@?#]+(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $provider.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.endpoint must be an absolute credential-free HTTPS URL" -}}{{- end -}}
+  {{- if and (eq $providerAPI "chat_completions") (not (hasSuffix "/chat/completions" (trimSuffix "/" $provider.endpoint))) -}}{{- fail "agentSandbox.fixRuntime.modelProvider chat_completions endpoint must end with /chat/completions" -}}{{- end -}}
+  {{- if and (eq $providerAPI "responses") (not (hasSuffix "/responses" (trimSuffix "/" $provider.endpoint))) -}}{{- fail "agentSandbox.fixRuntime.modelProvider responses endpoint must end with /responses" -}}{{- end -}}
   {{- if or (not $provider.model) (gt (len $provider.model) 256) (contains "\n" $provider.model) (contains "\r" $provider.model) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.model must be non-empty, at most 256 bytes, and single-line" -}}{{- end -}}
   {{- if not (has $authType (list "none" "bearer")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.auth.type must be none or bearer" -}}{{- end -}}
+  {{- if and (eq $providerAPI "responses") (or (ne $credentialMode "direct") (ne $authType "bearer")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider responses requires direct bearer auth with the pinned OpenCode provider" -}}{{- end -}}
   {{- if eq $credentialMode "gateway" -}}
     {{- if ne $authType "none" -}}{{- fail "agentSandbox.fixRuntime.modelProvider gateway mode requires auth.type=none" -}}{{- end -}}
     {{- if or $providerAuth.existingSecret $providerAuth.tokenKey -}}{{- fail "agentSandbox.fixRuntime.modelProvider gateway mode must not set Secret fields" -}}{{- end -}}
     {{- if $publicCAPrivateDNS -}}
-      {{- if not (regexMatch "^https://([A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?[.])+[A-Za-z]{2,}(:[0-9]+)?(/[^?#]*)?/chat/completions$" $provider.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.endpoint must be an HTTPS DNS FQDN when publicCAPrivateDNS=true" -}}{{- end -}}
+      {{- if not (regexMatch "^https://([A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?[.])+[A-Za-z]{2,}(:[0-9]+)?(/[^?#]*)?$" $provider.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.endpoint must be an HTTPS DNS FQDN when publicCAPrivateDNS=true" -}}{{- end -}}
       {{- if regexMatch "^https://([^/@?#]+[.])?(openai[.]com|openai[.]azure[.]com|services[.]ai[.]azure[.]com|anthropic[.]com|githubcopilot[.]com|copilot[.]microsoft[.]com|moonshot[.]cn|kimi[.]com|generativelanguage[.]googleapis[.]com|api[.]nvidia[.]com|mistral[.]ai|cohere[.]ai|groq[.]com|together[.]xyz|deepseek[.]com|x[.]ai)(:[0-9]+)?(/|$)" (lower $provider.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelProvider gateway endpoint must not be a direct model-provider endpoint" -}}{{- end -}}
       {{- if regexMatch "[.](svc([.]cluster[.]local)?|internal)(:[0-9]+)?(/|$)" (lower $provider.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.publicCAPrivateDNS applies only to a privately resolved public FQDN" -}}{{- end -}}
     {{- else -}}
-      {{- if not (regexMatch "^https://[^/@?#]+[.](svc([.]cluster[.]local)?|internal)(:[0-9]+)?(/[^?#]*)?/chat/completions$" $provider.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelProvider gateway endpoint must be an internal HTTPS service URL or publicCAPrivateDNS must be true" -}}{{- end -}}
+      {{- if not (regexMatch "^https://[^/@?#]+[.](svc([.]cluster[.]local)?|internal)(:[0-9]+)?(/[^?#]*)?$" $provider.endpoint) -}}{{- fail "agentSandbox.fixRuntime.modelProvider gateway endpoint must be an internal HTTPS service URL or publicCAPrivateDNS must be true" -}}{{- end -}}
     {{- end -}}
   {{- else -}}
     {{- if $publicCAPrivateDNS -}}{{- fail "agentSandbox.fixRuntime.modelProvider.publicCAPrivateDNS applies only to gateway mode" -}}{{- end -}}
@@ -726,15 +729,18 @@ key, or bot token).
   {{- $providerAuth := $provider.auth -}}
   {{- $authType := default "none" $providerAuth.type -}}
   {{- if not (has $credentialMode (list "direct" "gateway")) -}}{{- fail "agentSandbox.analyzer.modelProvider.credentialMode must be direct or gateway" -}}{{- end -}}
-  {{- if ne $providerAPI "chat_completions" -}}{{- fail "agentSandbox.analyzer.modelProvider.api must be chat_completions" -}}{{- end -}}
-  {{- if not (regexMatch "^https://[^/@?#]+(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?/chat/completions$" $provider.endpoint) -}}{{- fail "agentSandbox.analyzer.modelProvider.endpoint must be an absolute credential-free HTTPS chat_completions URL" -}}{{- end -}}
+  {{- if not (has $providerAPI (list "chat_completions" "responses")) -}}{{- fail "agentSandbox.analyzer.modelProvider.api must be chat_completions or responses" -}}{{- end -}}
+  {{- if not (regexMatch "^https://[^/@?#]+(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $provider.endpoint) -}}{{- fail "agentSandbox.analyzer.modelProvider.endpoint must be an absolute credential-free HTTPS URL" -}}{{- end -}}
+  {{- if and (eq $providerAPI "chat_completions") (not (hasSuffix "/chat/completions" (trimSuffix "/" $provider.endpoint))) -}}{{- fail "agentSandbox.analyzer.modelProvider chat_completions endpoint must end with /chat/completions" -}}{{- end -}}
+  {{- if and (eq $providerAPI "responses") (not (hasSuffix "/responses" (trimSuffix "/" $provider.endpoint))) -}}{{- fail "agentSandbox.analyzer.modelProvider responses endpoint must end with /responses" -}}{{- end -}}
   {{- if or (not $provider.model) (gt (len $provider.model) 256) (contains "\n" $provider.model) (contains "\r" $provider.model) -}}{{- fail "agentSandbox.analyzer.modelProvider.model must be non-empty, at most 256 bytes, and single-line" -}}{{- end -}}
   {{- if not (has $authType (list "none" "bearer")) -}}{{- fail "agentSandbox.analyzer.modelProvider.auth.type must be none or bearer" -}}{{- end -}}
+  {{- if and (eq $providerAPI "responses") (or (ne $credentialMode "direct") (ne $authType "bearer")) -}}{{- fail "agentSandbox.analyzer.modelProvider responses requires direct bearer auth with the pinned OpenCode provider" -}}{{- end -}}
   {{- if $provider.publicCAPrivateDNS -}}{{- fail "agentSandbox.analyzer.modelProvider.publicCAPrivateDNS is not supported" -}}{{- end -}}
   {{- if eq $credentialMode "gateway" -}}
     {{- if ne $authType "none" -}}{{- fail "agentSandbox.analyzer.modelProvider gateway mode requires auth.type=none" -}}{{- end -}}
     {{- if or $providerAuth.existingSecret $providerAuth.tokenKey -}}{{- fail "agentSandbox.analyzer.modelProvider gateway mode must not set Secret fields" -}}{{- end -}}
-    {{- if not (regexMatch "^https://[^/]+[.](svc|svc[.]cluster[.]local|internal)(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?/chat/completions$" $provider.endpoint) -}}{{- fail "agentSandbox.analyzer.modelProvider gateway endpoint must use internal service DNS" -}}{{- end -}}
+    {{- if not (regexMatch "^https://[^/]+[.](svc|svc[.]cluster[.]local|internal)(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $provider.endpoint) -}}{{- fail "agentSandbox.analyzer.modelProvider gateway endpoint must use internal service DNS" -}}{{- end -}}
   {{- else if eq $authType "none" -}}
     {{- if or $providerAuth.existingSecret $providerAuth.tokenKey -}}{{- fail "agentSandbox.analyzer.modelProvider auth.type=none must not set Secret fields" -}}{{- end -}}
   {{- else -}}
