@@ -109,20 +109,21 @@ func TestParseWorkspaceAnalysisValidatesCitationsAndMapsResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := `{
-  "version": 1,
-  "contract_version": "agent-analysis-workspace-v5",
-  "summary": "The controller rejected the request.",
-  "is_transient": false,
-  "root_cause": "The specific failure occurred before cleanup.",
-  "severity": "High",
-  "suggested_fix": "Correct the request before retrying.",
-  "relevant_files": ["pkg/controller.go"],
-  "evidence_citations": [{"path":"logs/build.log","line_start":2,"line_end":2}],
-  "source_citations": [{"path":"pkg/controller.go","line_start":3,"line_end":3}],
-  "unresolved_details": ["The caller configuration is unavailable."]
-}`
-	analysis, validation, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot)
+	handles := workspaceDefaultHandles(t, sourceRoot, artifactRoot)
+	artifactID := workspaceHandleID(t, handles, WorkspaceArtifactsDir, "logs/build.log", 2)
+	sourceID := workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 3)
+	raw := workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection(artifactID)}, []any{workspaceCitationSelection(sourceID)})
+	var value map[string]any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		t.Fatal(err)
+	}
+	value["summary"] = "The controller rejected the request."
+	value["root_cause"] = "The specific failure occurred before cleanup."
+	value["suggested_fix"] = "Correct the request before retrying."
+	value["relevant_file_ids"] = []string{sourceID}
+	value["unresolved_details"] = []string{"The caller configuration is unavailable."}
+	data, _ := json.Marshal(value)
+	analysis, validation, err := ParseWorkspaceAnalysis(string(data), handles, manifest, artifactRoot, sourceRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,19 +149,11 @@ func TestParseWorkspaceAnalysisRejectsUngroundedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := map[string]any{
-		"version": 1, "contract_version": WorkspaceContractVersion,
-		"summary": "summary", "is_transient": false, "root_cause": "cause", "severity": "High", "suggested_fix": "fix",
-		"relevant_files": []string{}, "source_citations": []any{}, "unresolved_details": []any{},
-	}
-	for _, citation := range []map[string]any{
-		{"path": "missing.log", "line_start": 1, "line_end": 1},
-		{"path": "../escape.log", "line_start": 1, "line_end": 1},
-	} {
-		base["evidence_citations"] = []any{citation}
-		data, _ := json.Marshal(base)
-		if _, _, err := ParseWorkspaceAnalysis(string(data), manifest, artifactRoot, sourceRoot); err == nil {
-			t.Fatalf("citation=%v was accepted", citation)
+	handles := workspaceDefaultHandles(t, sourceRoot, artifactRoot)
+	for _, id := range []string{"artifact-999", workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 1)} {
+		raw := workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection(id)}, nil)
+		if _, _, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot); err == nil || WorkspaceInvalidResultCode(err) != WorkspaceInvalidArtifactPath {
+			t.Fatalf("evidence ID %q was accepted: %v", id, err)
 		}
 	}
 }
@@ -173,34 +166,6 @@ func TestSafeWorkspaceSourcePathRejectsGitMetadataCaseInsensitive(t *testing.T) 
 	}
 	if !safeWorkspaceSourcePath("pkg/controller.go") {
 		t.Fatal("regular source path was rejected")
-	}
-}
-
-func TestParseWorkspaceAnalysisRejectsGitMetadataCitation(t *testing.T) {
-	sourceRoot, artifactRoot, request, source := workspaceTestInputs(t)
-	files, err := SnapshotArtifactWorkspace(artifactRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := NewWorkspaceManifest(request, source, "Inspect this project.", files)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw := `{
-  "version": 1,
-  "contract_version": "agent-analysis-workspace-v5",
-  "summary": "summary",
-  "is_transient": false,
-  "root_cause": "cause",
-  "severity": "High",
-  "suggested_fix": "fix",
-  "relevant_files": [".git/config"],
-  "evidence_citations": [{"path":"logs/build.log","line_start":2,"line_end":2}],
-  "source_citations": [{"path":".git/config","line_start":1,"line_end":1,"quote":"core"}],
-  "unresolved_details": []
-}`
-	if _, _, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot); err == nil {
-		t.Fatal("Git metadata citation was accepted")
 	}
 }
 
@@ -235,7 +200,7 @@ func TestWorkspaceExecutionRequestBindsPromptAndRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(prompt, "logs/build.log") || !strings.Contains(prompt, "Inspect this project.") || !strings.Contains(prompt, "Omit the leading `artifacts/`") || !strings.Contains(prompt, "StructuredOutput") || strings.Contains(prompt, "artifact-only-marker") || strings.Contains(prompt, `"source/path.go"`) {
+	if !strings.Contains(prompt, "logs/build.log") || !strings.Contains(prompt, "Inspect this project.") || !strings.Contains(prompt, "content-free evidence") || !strings.Contains(prompt, "StructuredOutput") || strings.Contains(prompt, "artifact-only-marker") || strings.Contains(prompt, `"source/path.go"`) {
 		t.Fatalf("unexpected prompt: %s", prompt)
 	}
 	tampered := execution
@@ -573,25 +538,19 @@ func TestParseWorkspaceAnalysisCanonicalizesExactRanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "crlf.log", "line_start": 1, "line_end": 2}}, nil)
-	analysis, _, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot)
+	handles := workspaceTestHandles(t, sourceRoot, artifactRoot, WorkspaceEvidenceRange{Root: WorkspaceArtifactsDir, Path: "crlf.log", LineStart: 1, LineEnd: 2})
+	raw := workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection("artifact-001"), workspaceCitationSelection("artifact-002")}, nil)
+	analysis, _, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := analysis.EvidenceCitations[0].Quote; got != "first\nsecond" {
-		t.Fatalf("canonical quote = %q", got)
+	if len(analysis.EvidenceCitations) != 2 || analysis.EvidenceCitations[0].Quote != "first" || analysis.EvidenceCitations[1].Quote != "second" {
+		t.Fatalf("canonical citations = %+v", analysis.EvidenceCitations)
 	}
 }
 
 func TestParseWorkspaceAnalysisRejectsAdversarialCitations(t *testing.T) {
 	sourceRoot, artifactRoot, request, source := workspaceTestInputs(t)
-	longLines := strings.Repeat("line\n", maxCitationLines+1)
-	if err := os.WriteFile(filepath.Join(artifactRoot, "long.log"), []byte(longLines), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(artifactRoot, "binary.log"), []byte{'x', 0, 'y'}, 0o600); err != nil {
-		t.Fatal(err)
-	}
 	files, err := SnapshotArtifactWorkspace(artifactRoot)
 	if err != nil {
 		t.Fatal(err)
@@ -600,19 +559,18 @@ func TestParseWorkspaceAnalysisRejectsAdversarialCitations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handles := workspaceDefaultHandles(t, sourceRoot, artifactRoot)
+	valid := workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection(workspaceHandleID(t, handles, WorkspaceArtifactsDir, "logs/build.log", 2))}, nil)
 	tests := map[string]string{
-		"zero range":        workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 0, "line_end": 1}}, nil),
-		"reversed range":    workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 3, "line_end": 2}}, nil),
-		"past eof":          workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 20}}, nil),
-		"oversized range":   workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "long.log", "line_start": 1, "line_end": maxCitationLines + 1}}, nil),
-		"binary file":       workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "binary.log", "line_start": 1, "line_end": 1}}, nil),
-		"paraphrased quote": strings.Replace(workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2}}, nil), `"line_end":2`, `"line_end":2,"quote":"paraphrase"`, 1),
-		"duplicate field":   strings.Replace(workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2}}, nil), `"summary":"summary"`, `"summary":"summary","summary":"other"`, 1),
-		"malformed":         `{"version":1`,
+		"unknown evidence id": workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection("artifact-999")}, nil),
+		"wrong evidence root": workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection("source-001")}, nil),
+		"object selection":    strings.Replace(valid, `"artifact_evidence_ids":["artifact-002"]`, `"artifact_evidence_ids":[{"evidence_id":"artifact-002"}]`, 1),
+		"duplicate field":     strings.Replace(valid, `"summary":"summary"`, `"summary":"summary","summary":"other"`, 1),
+		"malformed":           `{"version":1`,
 	}
 	for name, raw := range tests {
 		t.Run(name, func(t *testing.T) {
-			if _, _, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot); err == nil {
+			if _, _, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot); err == nil {
 				t.Fatal("adversarial result was accepted")
 			}
 		})
@@ -629,8 +587,9 @@ func TestValidateWorkspaceAnalysisRejectsNonCanonicalQuote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2}}, nil)
-	analysis, _, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot)
+	handles := workspaceDefaultHandles(t, sourceRoot, artifactRoot)
+	raw := workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection(workspaceHandleID(t, handles, WorkspaceArtifactsDir, "logs/build.log", 2))}, nil)
+	analysis, _, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,8 +605,8 @@ func workspaceModelAnalysisJSON(contract string, evidence, source []any) string 
 	}
 	value := map[string]any{
 		"version": 1, "contract_version": contract, "summary": "summary", "is_transient": false,
-		"root_cause": "cause", "severity": "High", "suggested_fix": "fix", "relevant_files": []string{},
-		"evidence_citations": evidence, "source_citations": source, "unresolved_details": []string{},
+		"root_cause": "cause", "severity": "High", "suggested_fix": "fix", "relevant_file_ids": []string{},
+		"artifact_evidence_ids": evidence, "source_evidence_ids": source, "unresolved_details": []string{},
 	}
 	data, _ := json.Marshal(value)
 	return string(data)
@@ -669,12 +628,17 @@ func TestParseWorkspaceAnalysisDropsSourceSymlinkAliasOverlap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	evidence := []any{map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2}}
+	handles := workspaceTestHandles(t, sourceRoot, artifactRoot,
+		WorkspaceEvidenceRange{Root: WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 2, LineEnd: 2},
+		WorkspaceEvidenceRange{Root: WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 1, LineEnd: 1},
+		WorkspaceEvidenceRange{Root: WorkspaceSourceDir, Path: "pkg/alias.go", LineStart: 1, LineEnd: 1},
+	)
+	evidence := []any{workspaceCitationSelection(workspaceHandleID(t, handles, WorkspaceArtifactsDir, "logs/build.log", 2))}
 	sourceCitations := []any{
-		map[string]any{"path": "pkg/controller.go", "line_start": 1, "line_end": 1},
-		map[string]any{"path": "pkg/alias.go", "line_start": 1, "line_end": 1},
+		workspaceCitationSelection(workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 1)),
+		workspaceCitationSelection(workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/alias.go", 1)),
 	}
-	analysis, validation, err := ParseWorkspaceAnalysis(workspaceModelAnalysisJSON(WorkspaceContractVersion, evidence, sourceCitations), manifest, artifactRoot, sourceRoot)
+	analysis, validation, err := ParseWorkspaceAnalysis(workspaceModelAnalysisJSON(WorkspaceContractVersion, evidence, sourceCitations), handles, manifest, artifactRoot, sourceRoot)
 	if err != nil {
 		t.Fatal(err)
 	}

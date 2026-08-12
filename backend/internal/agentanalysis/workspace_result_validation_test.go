@@ -11,13 +11,13 @@ import (
 )
 
 func TestParseWorkspaceAnalysisAcceptsNoVerifiedFixOrSourceClaims(t *testing.T) {
-	sourceRoot, artifactRoot, manifest := workspaceValidationManifest(t)
-	raw := workspaceValidationJSON(t, func(value map[string]any) {
+	sourceRoot, artifactRoot, manifest, handles := workspaceValidationFixture(t)
+	raw := workspaceValidationJSON(t, handles, func(value map[string]any) {
 		value["suggested_fix"] = ""
-		value["source_citations"] = []any{}
-		value["relevant_files"] = []any{}
+		value["source_evidence_ids"] = []any{}
+		value["relevant_file_ids"] = []any{}
 	})
-	analysis, validation, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot)
+	analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,25 +27,21 @@ func TestParseWorkspaceAnalysisAcceptsNoVerifiedFixOrSourceClaims(t *testing.T) 
 }
 
 func TestParseWorkspaceAnalysisCanonicalizesNonFatalWarnings(t *testing.T) {
-	sourceRoot, artifactRoot, manifest := workspaceValidationManifest(t)
-	raw := workspaceValidationJSON(t, func(value map[string]any) {
+	sourceRoot, artifactRoot, manifest, handles := workspaceValidationFixture(t)
+	artifactID := workspaceHandleID(t, handles, WorkspaceArtifactsDir, "logs/build.log", 2)
+	sourceID := workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 3)
+	raw := workspaceValidationJSON(t, handles, func(value map[string]any) {
 		value["summary"] = "  summary  "
 		value["root_cause"] = "  cause  "
 		value["suggested_fix"] = ""
 		value["severity"] = "Transient-Ignore"
 		value["is_transient"] = false
 		value["unresolved_details"] = []any{"", "  bounded detail  "}
-		value["evidence_citations"] = []any{
-			map[string]any{"path": " logs/build.log ", "line_start": 2, "line_end": 2},
-			map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2},
-		}
-		value["source_citations"] = []any{
-			map[string]any{"path": " pkg/controller.go ", "line_start": 3, "line_end": 3},
-			map[string]any{"path": "pkg/controller.go", "line_start": 3, "line_end": 3},
-		}
-		value["relevant_files"] = []any{" pkg/controller.go ", "pkg/controller.go"}
+		value["artifact_evidence_ids"] = []any{workspaceCitationSelection(artifactID), workspaceCitationSelection(artifactID)}
+		value["source_evidence_ids"] = []any{workspaceCitationSelection(sourceID), workspaceCitationSelection(sourceID)}
+		value["relevant_file_ids"] = []any{sourceID, sourceID}
 	})
-	analysis, validation, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot)
+	analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,19 +64,19 @@ func TestParseWorkspaceAnalysisCanonicalizesNonFatalWarnings(t *testing.T) {
 }
 
 func TestParseWorkspaceAnalysisOrdersCitationsWithoutWarning(t *testing.T) {
-	sourceRoot, artifactRoot, manifest := workspaceValidationManifest(t)
-	raw := workspaceValidationJSON(t, func(value map[string]any) {
-		value["evidence_citations"] = []any{
-			map[string]any{"path": "logs/build.log", "line_start": 3, "line_end": 3},
-			map[string]any{"path": "logs/build.log", "line_start": 1, "line_end": 1},
+	sourceRoot, artifactRoot, manifest, handles := workspaceValidationFixture(t)
+	raw := workspaceValidationJSON(t, handles, func(value map[string]any) {
+		value["artifact_evidence_ids"] = []any{
+			workspaceCitationSelection(workspaceHandleID(t, handles, WorkspaceArtifactsDir, "logs/build.log", 3)),
+			workspaceCitationSelection(workspaceHandleID(t, handles, WorkspaceArtifactsDir, "logs/build.log", 1)),
 		}
-		value["source_citations"] = []any{
-			map[string]any{"path": "pkg/controller.go", "line_start": 3, "line_end": 3},
-			map[string]any{"path": "pkg/controller.go", "line_start": 1, "line_end": 1},
+		value["source_evidence_ids"] = []any{
+			workspaceCitationSelection(workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 3)),
+			workspaceCitationSelection(workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 1)),
 		}
-		value["relevant_files"] = []any{"pkg/controller.go"}
+		value["relevant_file_ids"] = []any{workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 3)}
 	})
-	analysis, validation, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot)
+	analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,12 +86,12 @@ func TestParseWorkspaceAnalysisOrdersCitationsWithoutWarning(t *testing.T) {
 }
 
 func TestParseWorkspaceAnalysisDropsUncitedRelevantFile(t *testing.T) {
-	sourceRoot, artifactRoot, manifest := workspaceValidationManifest(t)
-	raw := workspaceValidationJSON(t, func(value map[string]any) {
-		value["source_citations"] = []any{}
-		value["relevant_files"] = []any{"pkg/controller.go"}
+	sourceRoot, artifactRoot, manifest, handles := workspaceValidationFixture(t)
+	raw := workspaceValidationJSON(t, handles, func(value map[string]any) {
+		value["source_evidence_ids"] = []any{}
+		value["relevant_file_ids"] = []any{workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 3)}
 	})
-	analysis, validation, err := ParseWorkspaceAnalysis(raw, manifest, artifactRoot, sourceRoot)
+	analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,8 +100,49 @@ func TestParseWorkspaceAnalysisDropsUncitedRelevantFile(t *testing.T) {
 	}
 }
 
+func TestParseWorkspaceAnalysisDropsUnknownOptionalEvidenceIDs(t *testing.T) {
+	sourceRoot, artifactRoot, manifest, handles := workspaceValidationFixture(t)
+	artifactID := workspaceHandleID(t, handles, WorkspaceArtifactsDir, "logs/build.log", 2)
+	sourceID := workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 3)
+	raw := workspaceValidationJSON(t, handles, func(value map[string]any) {
+		value["artifact_evidence_ids"] = []any{artifactID, "artifact-999"}
+		value["source_evidence_ids"] = []any{sourceID, "source-999"}
+		value["relevant_file_ids"] = []any{sourceID, "source-999"}
+	})
+	analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCodes := []string{WorkspaceInvalidArtifactPath, WorkspaceInvalidRelevantFile, WorkspaceInvalidSourcePath}
+	if validation.Status != WorkspaceResultAcceptedWithWarnings || !slices.Equal(validation.Codes, wantCodes) || len(analysis.EvidenceCitations) != 1 || len(analysis.SourceCitations) != 1 || len(analysis.RelevantFiles) != 1 {
+		t.Fatalf("analysis=%+v validation=%+v", analysis, validation)
+	}
+}
+
+func TestParseWorkspaceAnalysisInspectsUnknownIDsBeyondRetainedBounds(t *testing.T) {
+	sourceRoot, artifactRoot, manifest, handles := workspaceValidationFixture(t)
+	artifactID := workspaceHandleID(t, handles, WorkspaceArtifactsDir, "logs/build.log", 2)
+	raw := workspaceValidationJSON(t, handles, func(value map[string]any) {
+		ids := make([]any, maxEvidenceCitations+1)
+		for index := range maxEvidenceCitations {
+			ids[index] = artifactID
+		}
+		ids[maxEvidenceCitations] = "artifact-999"
+		value["artifact_evidence_ids"] = ids
+	})
+	analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCodes := []string{WorkspaceInvalidArtifactOverlap, WorkspaceInvalidArtifactPath}
+	if validation.Status != WorkspaceResultAcceptedWithWarnings || !slices.Equal(validation.Codes, wantCodes) || len(analysis.EvidenceCitations) != 1 {
+		t.Fatalf("analysis=%+v validation=%+v", analysis, validation)
+	}
+}
+
 func TestParseWorkspaceAnalysisRejectsHardFailuresWithCodes(t *testing.T) {
-	sourceRoot, artifactRoot, manifest := workspaceValidationManifest(t)
+	sourceRoot, artifactRoot, manifest, handles := workspaceValidationFixture(t)
+	sourceID := workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 3)
 	tests := []struct {
 		name string
 		code string
@@ -113,79 +150,32 @@ func TestParseWorkspaceAnalysisRejectsHardFailuresWithCodes(t *testing.T) {
 	}{
 		{name: "json", code: WorkspaceInvalidResultJSON, raw: func() string { return `{"version":1` }},
 		{name: "version", code: WorkspaceInvalidResultVersion, raw: func() string {
-			return workspaceValidationJSON(t, func(value map[string]any) { value["version"] = 2 })
+			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["version"] = 2 })
 		}},
 		{name: "analysis text", code: WorkspaceInvalidAnalysisText, raw: func() string {
-			return workspaceValidationJSON(t, func(value map[string]any) { value["summary"] = "" })
+			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["summary"] = "" })
 		}},
 		{name: "artifact count", code: WorkspaceInvalidArtifactCount, raw: func() string {
-			return workspaceValidationJSON(t, func(value map[string]any) { value["evidence_citations"] = []any{} })
+			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["artifact_evidence_ids"] = []any{} })
 		}},
-		{name: "artifact path", code: WorkspaceInvalidArtifactPath, raw: func() string {
-			return workspaceValidationJSON(t, func(value map[string]any) {
-				value["evidence_citations"] = []any{map[string]any{"path": "missing.log", "line_start": 1, "line_end": 1}}
-			})
+		{name: "unknown artifact only", code: WorkspaceInvalidArtifactPath, raw: func() string {
+			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["artifact_evidence_ids"] = []any{"artifact-999"} })
 		}},
-		{name: "artifact line range", code: WorkspaceInvalidArtifactLineRange, raw: func() string {
-			return workspaceValidationJSON(t, func(value map[string]any) {
-				value["evidence_citations"] = []any{map[string]any{"path": "logs/build.log", "line_start": 1, "line_end": 99}}
-			})
-		}},
-		{name: "source path", code: WorkspaceInvalidSourcePath, raw: func() string {
-			return workspaceValidationJSON(t, func(value map[string]any) {
-				value["source_citations"] = []any{map[string]any{"path": "../outside.go", "line_start": 1, "line_end": 1}}
-			})
-		}},
-		{name: "source line range", code: WorkspaceInvalidSourceLineRange, raw: func() string {
-			return workspaceValidationJSON(t, func(value map[string]any) {
-				value["source_citations"] = []any{map[string]any{"path": "pkg/controller.go", "line_start": 1, "line_end": 99}}
-			})
-		}},
-		{name: "relevant file", code: WorkspaceInvalidRelevantFile, raw: func() string {
-			return workspaceValidationJSON(t, func(value map[string]any) { value["relevant_files"] = []any{"pkg/missing.go"} })
+		{name: "wrong-root artifact only", code: WorkspaceInvalidArtifactPath, raw: func() string {
+			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["artifact_evidence_ids"] = []any{sourceID} })
 		}},
 		{name: "classification", code: WorkspaceInvalidClassification, raw: func() string {
-			return workspaceValidationJSON(t, func(value map[string]any) { value["severity"] = "Unknown" })
-		}},
-		{name: "artifact path beyond retained bound", code: WorkspaceInvalidArtifactPath, raw: func() string {
-			return workspaceValidationJSON(t, func(value map[string]any) {
-				citations := make([]any, maxEvidenceCitations+1)
-				for index := range maxEvidenceCitations {
-					citations[index] = map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2}
-				}
-				citations[maxEvidenceCitations] = map[string]any{"path": "missing.log", "line_start": 1, "line_end": 1}
-				value["evidence_citations"] = citations
-			})
-		}},
-		{name: "source path beyond retained bound", code: WorkspaceInvalidSourcePath, raw: func() string {
-			return workspaceValidationJSON(t, func(value map[string]any) {
-				citations := make([]any, maxSourceCitations+1)
-				for index := range maxSourceCitations {
-					citations[index] = map[string]any{"path": "pkg/controller.go", "line_start": 3, "line_end": 3}
-				}
-				citations[maxSourceCitations] = map[string]any{"path": "../outside.go", "line_start": 1, "line_end": 1}
-				value["source_citations"] = citations
-			})
-		}},
-		{name: "relevant path beyond retained bound", code: WorkspaceInvalidRelevantFile, raw: func() string {
-			return workspaceValidationJSON(t, func(value map[string]any) {
-				files := make([]any, maxRelevantFiles+1)
-				for index := range maxRelevantFiles {
-					files[index] = "pkg/controller.go"
-				}
-				files[maxRelevantFiles] = "pkg/missing.go"
-				value["relevant_files"] = files
-			})
+			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["severity"] = "Unknown" })
 		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			analysis, validation, err := ParseWorkspaceAnalysis(test.raw(), manifest, artifactRoot, sourceRoot)
+			analysis, validation, err := ParseWorkspaceAnalysis(test.raw(), handles, manifest, artifactRoot, sourceRoot)
 			if !errors.Is(err, ErrInvalidResult) || WorkspaceInvalidResultCode(err) != test.code || validation.Status != WorkspaceResultRejected || !slices.Equal(validation.Codes, []string{test.code}) || analysis.Summary != "" || len(analysis.EvidenceCitations) != 0 {
 				t.Fatalf("analysis=%+v validation=%+v code=%q err=%v", analysis, validation, WorkspaceInvalidResultCode(err), err)
 			}
-			if strings.Contains(err.Error(), "missing.log") || strings.Contains(err.Error(), "outside.go") || strings.Contains(err.Error(), "pkg/missing.go") {
-				t.Fatalf("validator error retained model path: %q", err)
+			if strings.Contains(err.Error(), "artifact-999") || strings.Contains(err.Error(), "source-999") {
+				t.Fatalf("validator error retained model evidence ID: %q", err)
 			}
 		})
 	}
@@ -204,7 +194,7 @@ func TestWorkspaceResultValidationRejectsUnsafeTelemetryShapes(t *testing.T) {
 	}
 }
 
-func workspaceValidationManifest(t *testing.T) (string, string, WorkspaceManifest) {
+func workspaceValidationFixture(t *testing.T) (string, string, WorkspaceManifest, []WorkspaceEvidenceHandle) {
 	t.Helper()
 	sourceRoot, artifactRoot, request, source := workspaceTestInputs(t)
 	files, err := SnapshotArtifactWorkspace(artifactRoot)
@@ -215,13 +205,14 @@ func workspaceValidationManifest(t *testing.T) (string, string, WorkspaceManifes
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sourceRoot, artifactRoot, manifest
+	return sourceRoot, artifactRoot, manifest, workspaceDefaultHandles(t, sourceRoot, artifactRoot)
 }
 
-func workspaceValidationJSON(t *testing.T, mutate func(map[string]any)) string {
+func workspaceValidationJSON(t *testing.T, handles []WorkspaceEvidenceHandle, mutate func(map[string]any)) string {
 	t.Helper()
 	var value map[string]any
-	if err := json.Unmarshal([]byte(workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2}}, nil)), &value); err != nil {
+	artifactID := workspaceHandleID(t, handles, WorkspaceArtifactsDir, "logs/build.log", 2)
+	if err := json.Unmarshal([]byte(workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection(artifactID)}, nil)), &value); err != nil {
 		t.Fatal(err)
 	}
 	mutate(value)

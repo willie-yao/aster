@@ -19,7 +19,10 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
 func TestOpenCode1182RequestShapeCompatibility(t *testing.T) {
@@ -405,7 +408,7 @@ func TestOpenCode1182TwoPhaseCompatibility(t *testing.T) {
 			writeSyntheticOpenAIText(t, w, "Evidence inspected.")
 		case 3:
 			var structured any
-			if err := json.Unmarshal(executorAnalysisJSON(), &structured); err != nil {
+			if err := json.Unmarshal(compatibilityAnalysisJSON(), &structured); err != nil {
 				t.Fatal(err)
 			}
 			writeSyntheticOpenAIStream(t, w, "StructuredOutput", structured)
@@ -439,6 +442,14 @@ func TestOpenCode1182TwoPhaseCompatibility(t *testing.T) {
 	if result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Telemetry.EvidencePhaseSteps != 2 || result.Telemetry.FinalizationPhaseSteps != 1 || result.Telemetry.StepsUsed != 3 || result.Usage.ModelRequests != 3 || !result.Telemetry.EvidencePhaseCompleted || !result.Telemetry.FinalizationPhaseCompleted || len(result.Structured) == 0 {
 		t.Fatalf("result=%+v", result)
 	}
+	wantHandles := []agentanalysis.WorkspaceEvidenceHandle{
+		{ID: "artifact-001", Root: agentanalysis.WorkspaceArtifactsDir, Path: "failure.log", LineStart: 1, LineEnd: 1},
+		{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, Path: "main.go", LineStart: 1, LineEnd: 1},
+	}
+	if !slices.Equal(result.EvidenceHandles, wantHandles) {
+		t.Fatalf("evidence handles=%+v want=%+v", result.EvidenceHandles, wantHandles)
+	}
+	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourceDir))
 }
 
 type syntheticOpenAIToolCall struct {
@@ -558,7 +569,7 @@ func TestOpenCode1182ResponsesTwoPhaseCompatibility(t *testing.T) {
 			writeSyntheticResponsesText(t, w, "Evidence inspected.", true)
 		case 3:
 			var structured any
-			if err := json.Unmarshal(executorAnalysisJSON(), &structured); err != nil {
+			if err := json.Unmarshal(compatibilityAnalysisJSON(), &structured); err != nil {
 				t.Fatal(err)
 			}
 			writeSyntheticResponsesToolCalls(t, w, []syntheticResponsesToolCall{{Name: "StructuredOutput", Arguments: structured}}, true)
@@ -598,6 +609,14 @@ func TestOpenCode1182ResponsesTwoPhaseCompatibility(t *testing.T) {
 	if result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Usage.ModelRequests != 3 || !result.Usage.Available || result.Usage.InputTokens != 24 || result.Usage.CachedInputTokens != 6 || result.Usage.OutputTokens != 6 || !result.Telemetry.EvidencePhaseCompleted || !result.Telemetry.FinalizationPhaseCompleted || len(result.Structured) == 0 {
 		t.Fatalf("Responses result=%+v", result)
 	}
+	wantHandles := []agentanalysis.WorkspaceEvidenceHandle{
+		{ID: "artifact-001", Root: agentanalysis.WorkspaceArtifactsDir, Path: "failure.log", LineStart: 1, LineEnd: 1},
+		{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, Path: "main.go", LineStart: 1, LineEnd: 1},
+	}
+	if !slices.Equal(result.EvidenceHandles, wantHandles) {
+		t.Fatalf("Responses evidence handles=%+v want=%+v", result.EvidenceHandles, wantHandles)
+	}
+	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourceDir))
 }
 
 type syntheticResponsesToolCall struct {
@@ -749,5 +768,44 @@ func TestOpenCode1182ResponsesFailureModesAreSanitized(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func compatibilityAnalysisJSON() []byte {
+	return []byte(`{
+  "version": 1,
+  "contract_version": "agent-analysis-workspace-v6",
+  "summary": "The synthetic failure is grounded.",
+  "is_transient": false,
+  "root_cause": "The artifact and source contain the same synthetic marker.",
+  "severity": "Low",
+  "suggested_fix": "",
+  "relevant_file_ids": ["source-001"],
+  "artifact_evidence_ids": ["artifact-001"],
+  "source_evidence_ids": ["source-001"],
+  "unresolved_details": []
+}`)
+}
+
+func assertCompatibilityAnalysis(t *testing.T, result OpenCodeRunResult, artifactRoot, sourceRoot string) {
+	t.Helper()
+	files, err := agentanalysis.SnapshotArtifactWorkspace(artifactRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := agentanalysis.NewWorkspaceManifest(
+		ai.FailureAnalysisRequest{JobID: "periodic::synthetic", BuildPrefix: "logs/synthetic/1/", Build: models.BuildInfo{BuildID: "1", JobName: "synthetic"}, TestCase: models.TestCase{Name: "TestSynthetic", Status: "failed", FailureMessage: "synthetic failure"}},
+		sourceinvestigation.Repository{Owner: "synthetic", Name: "workspace", Revision: strings.Repeat("a", 40)},
+		"Inspect the synthetic evidence.", files,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(result.Structured), result.EvidenceHandles, manifest, artifactRoot, sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validation.Status != agentanalysis.WorkspaceResultAccepted || analysis.SuggestedFix != "" || len(analysis.EvidenceCitations) != 1 || analysis.EvidenceCitations[0].Path != "failure.log" || analysis.EvidenceCitations[0].Quote != "synthetic failure" || len(analysis.SourceCitations) != 1 || analysis.SourceCitations[0].Path != "main.go" || analysis.SourceCitations[0].Quote != "package main" {
+		t.Fatalf("analysis=%+v validation=%+v", analysis, validation)
 	}
 }

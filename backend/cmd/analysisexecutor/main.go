@@ -60,7 +60,7 @@ func readRequest() (agentanalysis.WorkspaceExecutionRequest, error) {
 func emit(result agentanalysis.WorkspaceExecutionResult) {
 	data, err := json.Marshal(result)
 	if err != nil {
-		fmt.Println(`{"version":1,"contract_version":"agent-analysis-workspace-v5","terminal_state":"failed","failure_reason":"encode execution result","usage":{"available":false}}`)
+		fmt.Println(`{"version":1,"contract_version":"agent-analysis-workspace-v6","terminal_state":"failed","failure_reason":"encode execution result","usage":{"available":false}}`)
 		return
 	}
 	fmt.Println(string(data))

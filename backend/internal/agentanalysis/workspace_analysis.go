@@ -41,18 +41,6 @@ func WorkspaceAgentPrompt() string { return strings.TrimSpace(workspaceAnalysisA
 // WorkspaceFinalizerPrompt returns the static StructuredOutput-only guidance.
 func WorkspaceFinalizerPrompt() string { return strings.TrimSpace(workspaceAnalysisFinalizer) }
 
-// WorkspaceFinalizationInstruction requests the authoritative result after evidence succeeds.
-func WorkspaceFinalizationInstruction() string {
-	return "Finalize the analysis now from evidence already inspected in this session. Use StructuredOutput exactly once. Include source citations or relevant files only if source evidence was successfully read or grepped during the evidence phase."
-}
-
-// WorkspaceCitationReference is a model-authored path and exact line range.
-type WorkspaceCitationReference struct {
-	Path      string `json:"path"`
-	LineStart int    `json:"line_start"`
-	LineEnd   int    `json:"line_end"`
-}
-
 // WorkspaceAnalysis is one validated file-backed OpenCode result.
 type WorkspaceAnalysis struct {
 	Summary           string                         `json:"summary"`
@@ -188,47 +176,38 @@ type WorkspaceExecutionResult struct {
 }
 
 type workspaceAnalysisEnvelope struct {
-	Version           int                          `json:"version"`
-	ContractVersion   string                       `json:"contract_version"`
-	Summary           string                       `json:"summary"`
-	IsTransient       *bool                        `json:"is_transient"`
-	RootCause         string                       `json:"root_cause"`
-	Severity          string                       `json:"severity"`
-	SuggestedFix      string                       `json:"suggested_fix"`
-	RelevantFiles     []string                     `json:"relevant_files"`
-	EvidenceCitations []WorkspaceCitationReference `json:"evidence_citations"`
-	SourceCitations   []WorkspaceCitationReference `json:"source_citations"`
-	UnresolvedDetails []string                     `json:"unresolved_details"`
+	Version             int      `json:"version"`
+	ContractVersion     string   `json:"contract_version"`
+	Summary             string   `json:"summary"`
+	IsTransient         *bool    `json:"is_transient"`
+	RootCause           string   `json:"root_cause"`
+	Severity            string   `json:"severity"`
+	SuggestedFix        string   `json:"suggested_fix"`
+	RelevantFileIDs     []string `json:"relevant_file_ids"`
+	ArtifactEvidenceIDs []string `json:"artifact_evidence_ids"`
+	SourceEvidenceIDs   []string `json:"source_evidence_ids"`
+	UnresolvedDetails   []string `json:"unresolved_details"`
 }
 
 // WorkspaceResultSchema returns the exact schema passed to OpenCode.
 func WorkspaceResultSchema() map[string]any {
-	citation := map[string]any{
-		"type": "object", "additionalProperties": false,
-		"properties": map[string]any{
-			"path":       map[string]any{"type": "string"},
-			"line_start": map[string]any{"type": "integer", "minimum": 1},
-			"line_end":   map[string]any{"type": "integer", "minimum": 1},
-		},
-		"required": []string{"path", "line_start", "line_end"},
-	}
 	return map[string]any{
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
 		"type":    "object", "additionalProperties": false,
 		"properties": map[string]any{
-			"version":            map[string]any{"type": "integer", "const": WorkspaceResultVersion},
-			"contract_version":   map[string]any{"type": "string", "const": WorkspaceContractVersion},
-			"summary":            map[string]any{"type": "string"},
-			"is_transient":       map[string]any{"type": "boolean"},
-			"root_cause":         map[string]any{"type": "string"},
-			"severity":           map[string]any{"type": "string", "enum": []string{"Critical", "High", "Medium", "Low", "Transient-Ignore"}},
-			"suggested_fix":      map[string]any{"type": "string"},
-			"relevant_files":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": maxRelevantFiles},
-			"evidence_citations": map[string]any{"type": "array", "items": citation, "minItems": 1, "maxItems": maxEvidenceCitations},
-			"source_citations":   map[string]any{"type": "array", "items": citation, "maxItems": maxSourceCitations},
-			"unresolved_details": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": maxUnresolvedDetails},
+			"version":               map[string]any{"type": "integer", "const": WorkspaceResultVersion},
+			"contract_version":      map[string]any{"type": "string", "const": WorkspaceContractVersion},
+			"summary":               map[string]any{"type": "string"},
+			"is_transient":          map[string]any{"type": "boolean"},
+			"root_cause":            map[string]any{"type": "string"},
+			"severity":              map[string]any{"type": "string", "enum": []string{"Critical", "High", "Medium", "Low", "Transient-Ignore"}},
+			"suggested_fix":         map[string]any{"type": "string"},
+			"relevant_file_ids":     map[string]any{"type": "array", "items": map[string]any{"type": "string", "pattern": "^source-[0-9]{3}$"}, "maxItems": maxRelevantFiles},
+			"artifact_evidence_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string", "pattern": "^artifact-[0-9]{3}$"}, "minItems": 1, "maxItems": maxEvidenceCitations},
+			"source_evidence_ids":   map[string]any{"type": "array", "items": map[string]any{"type": "string", "pattern": "^source-[0-9]{3}$"}, "maxItems": maxSourceCitations},
+			"unresolved_details":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": maxUnresolvedDetails},
 		},
-		"required": []string{"version", "contract_version", "summary", "is_transient", "root_cause", "severity", "suggested_fix", "relevant_files", "evidence_citations", "source_citations", "unresolved_details"},
+		"required": []string{"version", "contract_version", "summary", "is_transient", "root_cause", "severity", "suggested_fix", "relevant_file_ids", "artifact_evidence_ids", "source_evidence_ids", "unresolved_details"},
 	}
 }
 
@@ -242,7 +221,7 @@ func WorkspaceResultSchemaHash() string {
 }
 
 // ParseWorkspaceAnalysis validates one schema-constrained result against mounted files.
-func ParseWorkspaceAnalysis(raw string, manifest WorkspaceManifest, artifactRoot, sourceRoot string) (WorkspaceAnalysis, WorkspaceResultValidation, error) {
+func ParseWorkspaceAnalysis(raw string, handles []WorkspaceEvidenceHandle, manifest WorkspaceManifest, artifactRoot, sourceRoot string) (WorkspaceAnalysis, WorkspaceResultValidation, error) {
 	if err := ValidateWorkspaceManifest(manifest); err != nil {
 		return WorkspaceAnalysis{}, WorkspaceResultValidation{}, err
 	}
@@ -274,19 +253,49 @@ func ParseWorkspaceAnalysis(raw string, manifest WorkspaceManifest, artifactRoot
 		err := invalidWorkspaceResult(WorkspaceInvalidClassification)
 		return WorkspaceAnalysis{}, rejectedWorkspaceResult(err), err
 	}
+	handlesByID, err := workspaceEvidenceHandlesByID(handles)
+	if err != nil {
+		return WorkspaceAnalysis{}, WorkspaceResultValidation{}, fmt.Errorf("workspace evidence handles are invalid")
+	}
 	analysis := WorkspaceAnalysis{
 		Summary: parsed.Summary, IsTransient: *parsed.IsTransient,
 		RootCause: parsed.RootCause, Severity: parsed.Severity,
-		SuggestedFix: parsed.SuggestedFix, RelevantFiles: slices.Clone(parsed.RelevantFiles),
-		UnresolvedDetails: slices.Clone(parsed.UnresolvedDetails),
+		SuggestedFix: parsed.SuggestedFix, UnresolvedDetails: slices.Clone(parsed.UnresolvedDetails),
 	}
-	for _, citation := range parsed.EvidenceCitations {
-		analysis.EvidenceCitations = append(analysis.EvidenceCitations, models.EvidenceCitation{Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd})
+	warnings := map[string]bool{}
+	for _, id := range parsed.ArtifactEvidenceIDs {
+		handle, ok := handlesByID[id]
+		if !ok || handle.Root != WorkspaceArtifactsDir {
+			warnings[WorkspaceInvalidArtifactPath] = true
+			continue
+		}
+		analysis.EvidenceCitations = append(analysis.EvidenceCitations, models.EvidenceCitation{Path: handle.Path, LineStart: handle.LineStart, LineEnd: handle.LineEnd})
 	}
-	for _, citation := range parsed.SourceCitations {
-		analysis.SourceCitations = append(analysis.SourceCitations, sourceinvestigation.Citation{Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd})
+	if len(analysis.EvidenceCitations) == 0 {
+		code := WorkspaceInvalidArtifactCount
+		if warnings[WorkspaceInvalidArtifactPath] {
+			code = WorkspaceInvalidArtifactPath
+		}
+		err := invalidWorkspaceResult(code)
+		return WorkspaceAnalysis{}, rejectedWorkspaceResult(err), err
 	}
-	return canonicalizeWorkspaceAnalysis(analysis, manifest, artifactRoot, sourceRoot, false)
+	for _, id := range parsed.SourceEvidenceIDs {
+		handle, ok := handlesByID[id]
+		if !ok || handle.Root != WorkspaceSourceDir {
+			warnings[WorkspaceInvalidSourcePath] = true
+			continue
+		}
+		analysis.SourceCitations = append(analysis.SourceCitations, sourceinvestigation.Citation{Path: handle.Path, LineStart: handle.LineStart, LineEnd: handle.LineEnd})
+	}
+	for _, id := range parsed.RelevantFileIDs {
+		handle, ok := handlesByID[id]
+		if !ok || handle.Root != WorkspaceSourceDir {
+			warnings[WorkspaceInvalidRelevantFile] = true
+			continue
+		}
+		analysis.RelevantFiles = append(analysis.RelevantFiles, handle.Path)
+	}
+	return canonicalizeWorkspaceAnalysisWithWarnings(analysis, manifest, artifactRoot, sourceRoot, false, warnings)
 }
 
 // ValidateWorkspaceAnalysis rechecks canonical output against the sealed workspace.
@@ -295,10 +304,13 @@ func ValidateWorkspaceAnalysis(analysis WorkspaceAnalysis, manifest WorkspaceMan
 }
 
 func canonicalizeWorkspaceAnalysis(analysis WorkspaceAnalysis, manifest WorkspaceManifest, artifactRoot, sourceRoot string, requireCanonical bool) (WorkspaceAnalysis, WorkspaceResultValidation, error) {
+	return canonicalizeWorkspaceAnalysisWithWarnings(analysis, manifest, artifactRoot, sourceRoot, requireCanonical, map[string]bool{})
+}
+
+func canonicalizeWorkspaceAnalysisWithWarnings(analysis WorkspaceAnalysis, manifest WorkspaceManifest, artifactRoot, sourceRoot string, requireCanonical bool, warnings map[string]bool) (WorkspaceAnalysis, WorkspaceResultValidation, error) {
 	if err := ValidateWorkspaceManifest(manifest); err != nil {
 		return WorkspaceAnalysis{}, WorkspaceResultValidation{}, err
 	}
-	warnings := map[string]bool{}
 	var err error
 	analysis, err = canonicalizeWorkspaceAnalysisText(analysis, warnings)
 	if err != nil {

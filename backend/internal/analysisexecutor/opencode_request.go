@@ -37,8 +37,8 @@ type digestToolSchema struct {
 	Schema json.RawMessage `json:"schema"`
 }
 
-func newOpenCodeRequestShape(spec OpenCodeSpec, version string) agentanalysis.WorkspaceOpenCodeRequestShape {
-	shape := baseOpenCodeRequestShape(spec, version, spec.Prompt+agentanalysis.WorkspaceFinalizationInstruction(), "required")
+func newOpenCodeRequestShape(spec OpenCodeSpec, version, finalizationInstruction string) agentanalysis.WorkspaceOpenCodeRequestShape {
+	shape := baseOpenCodeRequestShape(spec, version, spec.Prompt+finalizationInstruction, "required")
 	shape.ResponseSchemaSHA256 = agentanalysis.WorkspaceResultSchemaHash()
 	if count, digest, err := structuredOutputToolSchemaDigest(); err == nil {
 		shape.ToolSchemaAvailable = true

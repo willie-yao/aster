@@ -48,9 +48,10 @@ type OpenCodeSpec struct {
 
 // OpenCodeRunResult contains the structured result and sanitized aggregates only.
 type OpenCodeRunResult struct {
-	Structured []byte
-	Usage      agentanalysis.WorkspaceUsage
-	Telemetry  agentanalysis.WorkspaceOpenCodeTelemetry
+	Structured      []byte
+	EvidenceHandles []agentanalysis.WorkspaceEvidenceHandle
+	Usage           agentanalysis.WorkspaceUsage
+	Telemetry       agentanalysis.WorkspaceOpenCodeTelemetry
 }
 
 // OpenCodeRunner runs one native OpenCode session and returns its structured result.
@@ -193,11 +194,15 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		}
 		return fail(stateForContext(ctx), fmt.Sprintf("run OpenCode analyzer: %v", runErr))
 	}
-	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(runResult.Structured), request.Manifest, artifactRoot, sourceRoot)
+	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(runResult.Structured), runResult.EvidenceHandles, request.Manifest, artifactRoot, sourceRoot)
 	result.ResultValidation = validation
 	if err != nil {
-		result.OpenCodeTelemetry.FailureCode = "analysis_result_invalid"
-		return fail(engineruntime.TerminalFailed, agentanalysis.WorkspaceResultRejectedReason)
+		if validation.Status == agentanalysis.WorkspaceResultRejected {
+			result.OpenCodeTelemetry.FailureCode = "analysis_result_invalid"
+			return fail(engineruntime.TerminalFailed, agentanalysis.WorkspaceResultRejectedReason)
+		}
+		result.OpenCodeTelemetry.FailureCode = "evidence_handle_invalid"
+		return fail(engineruntime.TerminalFailed, "workspace evidence handles are invalid")
 	}
 	if (len(analysis.SourceCitations) > 0 || len(analysis.RelevantFiles) > 0) && result.OpenCodeTelemetry.SourceEvidenceToolCalls < 1 {
 		result.OpenCodeTelemetry.FailureCode = "source_evidence_unavailable"
@@ -451,9 +456,19 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 	result.Telemetry.EvidencePhaseRequests = evidenceTelemetry.ProviderRequests
 	result.Telemetry.ArtifactEvidenceToolCalls = evidenceFacts.ArtifactToolCalls
 	result.Telemetry.SourceEvidenceToolCalls = evidenceFacts.SourceToolCalls
+	finalizationInstruction, err := agentanalysis.WorkspaceFinalizationInstruction(evidenceFacts.EvidenceHandles)
+	if err != nil {
+		result.Telemetry.FailureCode = "evidence_handle_unavailable"
+		return result, err
+	}
+	if err := credential.CheckStrings(finalizationInstruction); err != nil {
+		result.Telemetry.FailureCode = "credential_exposure"
+		return result, err
+	}
+	result.EvidenceHandles = slices.Clone(evidenceFacts.EvidenceHandles)
 
-	finalShape := newOpenCodeRequestShape(spec, version)
-	structured, finalMessage, finalErr := promptOpenCodeFinalizationWithMessage(ctx, client, baseURL, sessionID, spec)
+	finalShape := newOpenCodeRequestShape(spec, version, finalizationInstruction)
+	structured, finalMessage, finalErr := promptOpenCodeFinalizationWithMessage(ctx, client, baseURL, sessionID, spec, finalizationInstruction)
 	if err := credential.CheckBytes(structured, finalMessage); err != nil {
 		result.Telemetry.FailureCode = "credential_exposure"
 		return result, err
@@ -649,17 +664,13 @@ func promptOpenCodeEvidence(ctx context.Context, client *http.Client, baseURL, s
 	return nil
 }
 
-func promptOpenCode(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec) ([]byte, error) {
-	return promptOpenCodeFinalization(ctx, client, baseURL, sessionID, spec)
-}
-
-func promptOpenCodeFinalization(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec) ([]byte, error) {
-	structured, _, err := promptOpenCodeFinalizationWithMessage(ctx, client, baseURL, sessionID, spec)
+func promptOpenCodeFinalization(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec, instruction string) ([]byte, error) {
+	structured, _, err := promptOpenCodeFinalizationWithMessage(ctx, client, baseURL, sessionID, spec, instruction)
 	return structured, err
 }
 
-func promptOpenCodeFinalizationWithMessage(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec) ([]byte, []byte, error) {
-	response, err := promptOpenCodeMessage(ctx, client, baseURL, sessionID, spec, openCodeFinalizationAgent, agentanalysis.WorkspaceFinalizationInstruction(), true)
+func promptOpenCodeFinalizationWithMessage(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec, instruction string) ([]byte, []byte, error) {
+	response, err := promptOpenCodeMessage(ctx, client, baseURL, sessionID, spec, openCodeFinalizationAgent, instruction, true)
 	message, marshalErr := json.Marshal(response)
 	if marshalErr != nil {
 		return nil, nil, fmt.Errorf("encode OpenCode finalization response")

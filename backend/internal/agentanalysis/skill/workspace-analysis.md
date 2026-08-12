@@ -16,14 +16,10 @@ available during that evidence phase. After at least one artifact read or focuse
 grep succeeds, the executor will request finalization in the same OpenCode
 session. Do not create or edit `result/analysis.json`; the executor creates the
 canonical result after validation. The result contract is
-`agent-analysis-workspace-v5`. Citation entries contain only an exact path and
-1-based inclusive line range. Do not include quotation text. The executor reads
-the sealed file range and constructs the authoritative exact quotation.
-
-Use paths relative to `artifacts/` and `source/`. Omit the leading `artifacts/`
-and `source/` mount-directory components from every result path. If a manifest
-path itself begins with `artifacts/`, its full mounted path begins with
-`artifacts/artifacts/`; keep the exact manifest path in the result. Include at
-least one artifact citation. Do not use overlapping citation ranges for the same
-file. List a source path in `relevant_files` only when a source citation verifies
-it.
+`agent-analysis-workspace-v6`. The executor derives content-free evidence
+IDs from successful read and grep calls. Finalization lists the available IDs.
+Select artifact IDs for `artifact_evidence_ids` and source IDs for
+`source_evidence_ids` and `relevant_file_ids`. Do not return paths, line ranges, or
+quotation text. The executor reconstructs and verifies them against the sealed
+workspace. Include at least one artifact citation. List a source evidence ID in
+`relevant_file_ids` only when the same ID is selected in `source_evidence_ids`.

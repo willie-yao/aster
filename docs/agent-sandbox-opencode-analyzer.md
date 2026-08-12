@@ -182,10 +182,16 @@ access, web fetching, delegation, writes, project configuration, and external
 skills remain denied. Filesystem mounts and admission policy, not a second
 dashboard tool loop, enforce the source and artifact boundary.
 
-The executor verifies source and artifact identity before and after the session,
-requires exactly one result file, and emits one bounded result through stdout.
-Sanitized telemetry retains full-session requests, tokens, cost availability,
-steps, tool counts, failures, and denials plus the bounded phase counters. The
+The executor verifies source and artifact identity before and after the session.
+Successful native read and grep calls produce bounded content-free evidence IDs
+for exact lines the model inspected. The finalization message lists only those
+IDs with their mounted location and line number. StructuredOutput selects IDs
+instead of authoring paths or ranges. The executor reconstructs canonical paths,
+line ranges, and quotes from the sealed workspace, requires exactly one result
+file, and emits one bounded result through stdout. Sanitized telemetry retains
+full-session requests, tokens, cost availability, steps, tool counts, failures,
+and denials plus the bounded phase counters. Evidence IDs and their locations
+are not retained in telemetry. The
 final synchronous structured message is combined with evidence-phase session
 telemetry because OpenCode 1.18.2 does not expose the completed structured message
 through the session message-list endpoint. No prompt, output, file content, raw
@@ -202,14 +208,19 @@ every Responses-like endpoint or model.
 
 ## Result contract
 
-The result contains the existing analysis semantics:
+The model result contains the existing analysis semantics plus engine-issued
+evidence selections:
 
 - summary and transient classification;
 - root cause, severity, and suggested fix;
-- verified relevant source files;
-- exact artifact path, line, and quote citations;
-- exact source path, line, and quote citations;
+- source evidence IDs in `relevant_file_ids`;
+- required artifact evidence IDs in `artifact_evidence_ids`;
+- optional source evidence IDs in `source_evidence_ids`;
 - unresolved details.
+
+The canonical result replaces every selected ID with the verified source or
+artifact path, exact line range, and reconstructed quote. The model cannot
+author those citation fields.
 
 Dashboard code strictly parses the result and verifies it against the sealed
 workspace. Malformed JSON, wrong versions, unsafe or missing paths, impossible
@@ -458,11 +469,13 @@ phase. Shell access is limited to the exact read-only commands
 
 The executor fetches sanitized session telemetry after the evidence message and
 requires at least one successful artifact file read or matching artifact grep.
-It records successful source evidence separately. If that gate passes, the
+It derives bounded artifact and source evidence IDs from exact read metadata and
+grep matches without retaining file content. If that gate passes, the
 `analysis-finalize` agent receives a second message in the same session. Its only
 allowed tool is the exact schema-backed StructuredOutput function. Any native
-tool attempt or any result other than exactly one StructuredOutput call fails
-closed. Source citations or relevant files are rejected unless the evidence phase
+tool attempt, unknown evidence ID, or result other than exactly one
+StructuredOutput call fails closed. Source citations or relevant files are
+rejected unless the evidence phase
 recorded a successful source read or matching source grep.
 
 Tracked or artifact `AGENTS.md`, `CLAUDE.md`, and `CONTEXT.md` files are rejected

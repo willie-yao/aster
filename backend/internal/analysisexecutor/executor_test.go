@@ -49,6 +49,13 @@ func TestExecuteRunsOneNativeSessionAndReturnsAnalysis(t *testing.T) {
 	if result.Analysis.EvidenceCitations[0].Path != "logs/build.log" || result.Analysis.EvidenceCitations[0].Quote != "artifact-only-marker specific failure" || !result.Usage.Available || result.Usage.ModelRequests != 2 {
 		t.Fatalf("result=%+v", result)
 	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("artifact-002")) || bytes.Contains(encoded, []byte("source-003")) {
+		t.Fatalf("execution result retained evidence handles: %s", encoded)
+	}
 	data, err := os.ReadFile(filepath.Join(root, agentanalysis.WorkspaceResultDir, agentanalysis.WorkspaceResultFile))
 	if err != nil {
 		t.Fatal(err)
@@ -86,12 +93,9 @@ func TestExecutePublishesCanonicalAnalysisWithValidationWarnings(t *testing.T) {
 			structured["suggested_fix"] = ""
 			structured["severity"] = "Transient-Ignore"
 			structured["is_transient"] = false
-			structured["source_citations"] = []any{}
-			structured["relevant_files"] = []any{"pkg/controller.go"}
-			structured["evidence_citations"] = []any{
-				map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2},
-				map[string]any{"path": "logs/build.log", "line_start": 2, "line_end": 2},
-			}
+			structured["source_evidence_ids"] = []any{}
+			structured["relevant_file_ids"] = []any{"source-003"}
+			structured["artifact_evidence_ids"] = []any{"artifact-002", "artifact-002"}
 			value.Structured, _ = json.Marshal(structured)
 			return value, nil
 		},
@@ -107,12 +111,12 @@ func TestExecutePublishesCanonicalAnalysisWithValidationWarnings(t *testing.T) {
 
 func TestExecuteRejectsUnsafeAnalysisWithPrivacySafeCode(t *testing.T) {
 	root, request := executorTestFixture(t)
-	const modelPath = "private/model/path.log"
+	const modelEvidenceID = "artifact-999"
 	result := Execute(t.Context(), request, Options{
 		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
 		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
 			value := testOpenCodeResult()
-			value.Structured = bytes.Replace(value.Structured, []byte("logs/build.log"), []byte(modelPath), 1)
+			value.Structured = bytes.Replace(value.Structured, []byte("artifact-002"), []byte(modelEvidenceID), 1)
 			return value, nil
 		},
 	})
@@ -123,8 +127,23 @@ func TestExecuteRejectsUnsafeAnalysisWithPrivacySafeCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(data, []byte(modelPath)) || bytes.Contains(data, []byte("artifact-only-marker")) {
+	if bytes.Contains(data, []byte(modelEvidenceID)) || bytes.Contains(data, []byte("artifact-only-marker")) {
 		t.Fatalf("rejected result retained model or evidence content: %s", data)
+	}
+}
+
+func TestExecuteRejectsInvalidEngineEvidenceHandlesSeparately(t *testing.T) {
+	root, request := executorTestFixture(t)
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
+			value := testOpenCodeResult()
+			value.EvidenceHandles[0], value.EvidenceHandles[len(value.EvidenceHandles)-1] = value.EvidenceHandles[len(value.EvidenceHandles)-1], value.EvidenceHandles[0]
+			return value, nil
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalFailed || result.Analysis != nil || result.FailureReason != "workspace evidence handles are invalid" || result.OpenCodeTelemetry.FailureCode != "evidence_handle_invalid" || result.ResultValidation.Status != "" {
+		t.Fatalf("result=%+v", result)
 	}
 }
 
@@ -275,10 +294,15 @@ func TestPromptOpenCodeUsesStructuredOutputSchema(t *testing.T) {
 			t.Fatal("OpenCode 1.18.2 does not implement structured-output retries")
 		}
 		schema := format["schema"].(map[string]any)
-		citations := schema["properties"].(map[string]any)["evidence_citations"].(map[string]any)
+		citations := schema["properties"].(map[string]any)["artifact_evidence_ids"].(map[string]any)
 		item := citations["items"].(map[string]any)
-		if _, ok := item["properties"].(map[string]any)["quote"]; ok {
-			t.Fatal("schema still asks the model for quote text")
+		if item["type"] != "string" || item["pattern"] != "^artifact-[0-9]{3}$" {
+			t.Fatalf("citation schema = %v", item)
+		}
+		parts := payload["parts"].([]any)
+		prompt := parts[0].(map[string]any)["text"].(string)
+		if !strings.Contains(prompt, "artifact-001") || strings.Contains(prompt, "artifact-only-marker") {
+			t.Fatalf("finalization prompt = %q", prompt)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"info":{"id":"message-1","role":"assistant","structured":%s},"parts":[]}`, executorAnalysisJSON())
@@ -289,7 +313,7 @@ func TestPromptOpenCodeUsesStructuredOutputSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(got), `"evidence_citations"`) {
+	if !strings.Contains(string(got), `"artifact_evidence_ids"`) {
 		t.Fatalf("structured = %s", got)
 	}
 }
@@ -414,7 +438,15 @@ func executorTestFixture(t *testing.T) (string, agentanalysis.WorkspaceExecution
 func testOpenCodeResult() OpenCodeRunResult {
 	return OpenCodeRunResult{
 		Structured: executorAnalysisJSON(),
-		Usage:      agentanalysis.WorkspaceUsage{Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable, ModelRequests: 2, InputTokens: 10, OutputTokens: 5, CostAvailable: true, CostUSD: "0.01000000"},
+		EvidenceHandles: []agentanalysis.WorkspaceEvidenceHandle{
+			{ID: "artifact-001", Root: agentanalysis.WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 1, LineEnd: 1},
+			{ID: "artifact-002", Root: agentanalysis.WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 2, LineEnd: 2},
+			{ID: "artifact-003", Root: agentanalysis.WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 3, LineEnd: 3},
+			{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 1, LineEnd: 1},
+			{ID: "source-002", Root: agentanalysis.WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 2, LineEnd: 2},
+			{ID: "source-003", Root: agentanalysis.WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 3, LineEnd: 3},
+		},
+		Usage: agentanalysis.WorkspaceUsage{Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable, ModelRequests: 2, InputTokens: 10, OutputTokens: 5, CostAvailable: true, CostUSD: "0.01000000"},
 		Telemetry: agentanalysis.WorkspaceOpenCodeTelemetry{
 			Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable, EventCount: 4, ProviderRequests: 2, ProviderRequestsKnown: true, StepsUsed: 2, StructuredOutputRetriesKnown: true,
 			EvidencePhaseCompleted: true, EvidencePhaseSteps: 1, EvidencePhaseRequests: 1, ArtifactEvidenceToolCalls: 1, SourceEvidenceToolCalls: 1,
@@ -426,15 +458,15 @@ func testOpenCodeResult() OpenCodeRunResult {
 func executorAnalysisJSON() []byte {
 	return []byte(`{
   "version": 1,
-  "contract_version": "agent-analysis-workspace-v5",
+  "contract_version": "agent-analysis-workspace-v6",
   "summary": "The controller rejected the request.",
   "is_transient": false,
   "root_cause": "The specific failure occurred before cleanup.",
   "severity": "High",
   "suggested_fix": "Correct the request before retrying.",
-  "relevant_files": ["pkg/controller.go"],
-  "evidence_citations": [{"path":"logs/build.log","line_start":2,"line_end":2}],
-  "source_citations": [{"path":"pkg/controller.go","line_start":3,"line_end":3}],
+  "relevant_file_ids": ["source-003"],
+  "artifact_evidence_ids": ["artifact-002"],
+  "source_evidence_ids": ["source-003"],
   "unresolved_details": []
 }`)
 }
@@ -578,7 +610,7 @@ func TestExecutePreservesSanitizedFailureTelemetryWithoutUsage(t *testing.T) {
 	}
 	shape := newOpenCodeRequestShape(OpenCodeSpec{
 		Provider: request.ModelProvider, Prompt: "synthetic", ModelContextTokens: request.ModelContextTokens, ModelOutputTokens: request.ModelOutputTokens,
-	}, "1.18.2")
+	}, "1.18.2", "finalize")
 	result := Execute(t.Context(), request, Options{
 		WorkspaceRoot: root,
 		TempRoot:      t.TempDir(),
@@ -771,8 +803,8 @@ func TestRunOpenCodePhasesUsesOneSessionAndGatesFinalization(t *testing.T) {
 	evidenceTelemetry := fmt.Sprintf(`[{
 		"info":{"role":"assistant"},"parts":[
 		{"type":"step-start"},
-		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%q}}},
-		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%q}}},
+		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},
+		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[2]q},"metadata":{"display":{"type":"file","path":%[2]q,"lineStart":1,"lineEnd":1}}}},
 		{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}
 	]}]`, artifactPath, sourcePath)
 	finalTelemetry := strings.TrimSuffix(evidenceTelemetry, "]") + fmt.Sprintf(`,{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},{"type":"step-finish","cost":0.2,"tokens":{"input":20,"output":4,"cache":{"read":2}}}]}]`, executorAnalysisJSON())
@@ -841,7 +873,7 @@ func TestRunOpenCodePhasesPreservesPromptErrorWhenFinalTranscriptMalformed(t *te
 	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	evidenceTelemetry := fmt.Sprintf(`[{"info":{"role":"assistant","error":{"name":"APIError","data":{"message":"retry","statusCode":429,"isRetryable":true}}},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%q}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
+	evidenceTelemetry := fmt.Sprintf(`[{"info":{"role":"assistant","error":{"name":"APIError","data":{"message":"retry","statusCode":429,"isRetryable":true}}},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
 	posts := 0
 	gets := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -948,7 +980,7 @@ func TestExecuteAllowsNoSourceClaimsWithoutSourceEvidence(t *testing.T) {
 		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
 			value := testOpenCodeResult()
 			value.Telemetry.SourceEvidenceToolCalls = 0
-			value.Structured = []byte(strings.ReplaceAll(strings.ReplaceAll(string(executorAnalysisJSON()), `"relevant_files": ["pkg/controller.go"]`, `"relevant_files": []`), `"source_citations": [{"path":"pkg/controller.go","line_start":3,"line_end":3}]`, `"source_citations": []`))
+			value.Structured = []byte(strings.ReplaceAll(strings.ReplaceAll(string(executorAnalysisJSON()), `"relevant_file_ids": ["source-003"]`, `"relevant_file_ids": []`), `"source_evidence_ids": ["source-003"]`, `"source_evidence_ids": []`))
 			return value, nil
 		},
 	})
