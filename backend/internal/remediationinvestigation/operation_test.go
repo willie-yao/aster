@@ -57,6 +57,7 @@ func (m *blockingOperationModel) ToolLoop(_ context.Context, _, _ string, _ *too
 	if opts.Observe != nil {
 		opts.Observe(ai.ToolLoopEvent{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19})
 		opts.Observe(ai.ToolLoopEvent{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80})
+		opts.Observe(ai.ToolLoopEvent{Name: "grep_repo", ContentBytes: len("applyFix")})
 	}
 	m.started <- struct{}{}
 	<-m.release
@@ -193,7 +194,7 @@ func TestOperationSingleflightAndOneActiveInvestigation(t *testing.T) {
 func TestOperationFailedRefreshPreservesPreviousVerifiedResult(t *testing.T) {
 	model := &fakeModel{
 		fingerprint: strings.Repeat("d", 16), memo: "evidence", result: actionableJSON(),
-		toolEvents: []ai.ToolLoopEvent{{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19}, {Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80}},
+		toolEvents: []ai.ToolLoopEvent{{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19}, {Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80}, {Name: "grep_repo", ContentBytes: len("applyFix")}},
 	}
 	service, _, _, ref, _ := operationFixture(t, model)
 	if _, err := service.Start(t.Context(), ref, "alice", "first", false); err != nil {
@@ -315,7 +316,7 @@ func TestOperationTimeoutPublishesOnlySafeFailure(t *testing.T) {
 func TestOperationTerminalStatusBecomesStaleWhenCurrentSourceIdentityChanges(t *testing.T) {
 	model := &fakeModel{
 		fingerprint: strings.Repeat("d", 16), memo: "evidence",
-		toolEvents: []ai.ToolLoopEvent{{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19}, {Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80}},
+		toolEvents: []ai.ToolLoopEvent{{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19}, {Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80}, {Name: "grep_repo", ContentBytes: len("applyFix")}},
 	}
 	service, resolver, _, ref, _ := operationFixture(t, model)
 	if _, err := service.Start(t.Context(), ref, "alice", "request", false); err != nil {
@@ -341,6 +342,7 @@ func (m *refreshTimeoutModel) ToolLoop(ctx context.Context, _, _ string, _ *tool
 		if opts.Observe != nil {
 			opts.Observe(ai.ToolLoopEvent{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19})
 			opts.Observe(ai.ToolLoopEvent{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80})
+			opts.Observe(ai.ToolLoopEvent{Name: "grep_repo", ContentBytes: len("applyFix")})
 		}
 		return "bounded evidence", nil
 	}
