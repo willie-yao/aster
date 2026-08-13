@@ -254,6 +254,23 @@ jobs:
             echo "image_tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Build release target
+        run: |
+          docker build --platform linux/amd64 \
+            --target agent-sandbox-fix-executor \
+            --build-arg VERSION=${{ steps.meta.outputs.version }} \
+            --build-arg COMMIT=${{ github.sha }} \
+            --build-arg IMAGE_TAG=${{ steps.build_identity.outputs.image_tag }} \
+            -t prow-ai-dashboard/agent-sandbox-fix-executor:release-test .
+
+      - name: Test release target
+        run: |
+          hack/test-agent-sandbox-fix-image.sh \
+            prow-ai-dashboard/agent-sandbox-fix-executor:release-test \
+            "${{ steps.meta.outputs.version }}" \
+            "${{ github.sha }}" \
+            "${{ steps.build_identity.outputs.image_tag }}"
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 

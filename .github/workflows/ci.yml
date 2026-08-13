@@ -72,6 +72,30 @@ jobs:
       - name: Test git-only runtime
         run: hack/test-remote-fixer-image.sh prow-ai-dashboard/remote-fixer:ci
 
+  agent-sandbox-fix-executor-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release target
+        env:
+          SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          image_tag="sha-${SOURCE_REVISION::7}"
+          docker build --platform linux/amd64 \
+            --target agent-sandbox-fix-executor \
+            --build-arg VERSION=ci \
+            --build-arg COMMIT="$SOURCE_REVISION" \
+            --build-arg IMAGE_TAG="$image_tag" \
+            -t prow-ai-dashboard/agent-sandbox-fix-executor:ci .
+      - name: Test credential-free runtime
+        env:
+          SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          image_tag="sha-${SOURCE_REVISION::7}"
+          hack/test-agent-sandbox-fix-image.sh \
+            prow-ai-dashboard/agent-sandbox-fix-executor:ci \
+            ci "$SOURCE_REVISION" "$image_tag"
+
   agent-sandbox-analysis-images:
     runs-on: ubuntu-latest
     steps:

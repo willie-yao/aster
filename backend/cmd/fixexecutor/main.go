@@ -15,7 +15,17 @@ import (
 
 const requestEnv = "PROW_AI_FIX_EXECUTION_REQUEST_B64"
 
+var (
+	version  = "dev"
+	commit   = "dev"
+	imageTag = "dev"
+)
+
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println(versionString())
+		return
+	}
 	request, err := readRequest()
 	if err != nil {
 		emit(engineruntime.ExecutionResult{
@@ -29,6 +39,10 @@ func main() {
 	if result.TerminalState != engineruntime.TerminalSucceeded {
 		os.Exit(1)
 	}
+}
+
+func versionString() string {
+	return fmt.Sprintf("fixexecutor version=%s commit=%s image_tag=%s", version, commit, imageTag)
 }
 
 func readRequest() (engineruntime.ExecutionRequest, error) {

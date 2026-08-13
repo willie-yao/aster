@@ -644,15 +644,16 @@ coding-agent re-entry, empty or multiline arguments, and per-command timeouts ab
 execution timeout are rejected. Git is reserved for the final command, which must be exactly
 `["git", "diff", "--cached", "--check"]`.
 
-The published generic executor contains OpenCode, Git, and CA certificates. It
-does not include Go, `make`, or repository-specific build tools. Configure only
-validators whose executables exist in the selected image. A missing executable
-produces a bounded terminal failure and no actionable Fix PR preview. Projects
-such as CAPZ must build and digest-pin a consumer-derived executor image before
-enabling Fix PR. A derived image must retain UID/GID 65532, the
-`/usr/local/bin/fixexecutor` entrypoint, the fixed provider environment and output-leak protections, and
-the same runtime security contract. The README fixture proves patch generation
-and `git diff --cached --check`; it does not prove CAPZ tests can run.
+The published generic executor contains Go 1.25.12, OpenCode 1.18.2, Git, and CA
+certificates. It does not include `make` or repository-specific development tools.
+Configure only validators whose executables exist in the selected image. A missing
+executable produces a bounded terminal failure and no actionable Fix PR preview.
+The immutable image supports CAPZ Go validators such as `go test`, `go vet`, and
+`go version` while retaining UID/GID 65532, the `/usr/local/bin/fixexecutor`
+entrypoint, the fixed provider environment and output-leak protections, and the
+same runtime security contract. The credential-free image fixture proves patch
+generation, Go validation, result reconstruction, and
+`git diff --cached --check`; it does not make a live provider claim.
 
 The Helm values under `agentSandbox` must exactly match the project timeout,
 turn, file, output, command, and provider settings. Deployed configurations
