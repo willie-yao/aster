@@ -208,7 +208,9 @@ inspect artifacts, build logs, JUnit output, or test output must complete a
 content-bearing read, tail, or grep and return a validated citation. If the
 first draft does not acquire evidence, the agent receives one bounded
 Tool-enabled repair opportunity before the turn fails safely. A proposed
-revision does not alter `jobs/*.json` or the published analysis.
+revision does not alter `jobs/*.json` or the published analysis. When a grep
+result supplies source line numbers, the server verifies the selected range and
+reconstructs the exact public quote from current-turn evidence.
 While a turn is running, the owner-safe response also includes its request ID,
 question, phase, and update time. A reloaded client reconnects with the same
 request ID, and can still cancel it from another server replica.
