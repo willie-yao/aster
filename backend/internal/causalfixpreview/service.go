@@ -2,6 +2,8 @@ package causalfixpreview
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,11 +13,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationinvestigation"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
 var (
@@ -99,7 +103,7 @@ func (s *Service) Preview(ctx context.Context, ref remediationinvestigation.Oper
 	if err != nil {
 		return Preview{}, err
 	}
-	digest := subject.ResultDigest + "\x00" + subject.Input.PatternHash + "\x00" + subject.Input.CausalGroupHash
+	digest := subjectDigest(subject)
 	key := owner + "\x00" + requestID
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -147,6 +151,13 @@ func (s *Service) generate(ctx context.Context, subject remediationinvestigation
 	if err != nil {
 		return Preview{}, fmt.Errorf("generation failed: %w", err)
 	}
+	current, err := s.resolver.ResolveActionable(ctx, remediationinvestigation.OperationRef{
+		JobID: subject.Input.JobID, PatternID: subject.Input.PatternID, PatternHash: subject.Input.PatternHash,
+		CausalGroupID: subject.Input.CausalGroupID, CausalGroupHash: subject.Input.CausalGroupHash,
+	})
+	if err != nil || subjectDigest(current) != subjectDigest(subject) {
+		return Preview{}, ErrNotActionable
+	}
 	if len(result.Files) == 0 || strings.TrimSpace(result.Diff) == "" {
 		return Preview{}, ErrRejected
 	}
@@ -169,6 +180,10 @@ func (s *Service) generate(ctx context.Context, subject remediationinvestigation
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
+	verification, err := sourceinvestigation.VerifyTargetState(ctx, overlayReader{base: subject.Source, files: reconstructed}, proposal.Repository, proposal.Target)
+	if err != nil || verification.State != actionverify.StateAlreadyPresent {
+		return Preview{}, fmt.Errorf("%w: target postcondition was not established: state=%s reason=%s err=%v", ErrRejected, verification.State, verification.Reason, err)
+	}
 	validations := make([]ValidationResult, 0, len(proposal.AllowedValidationCommands))
 	for _, command := range proposal.AllowedValidationCommands {
 		timeout, _ := time.ParseDuration(command.Timeout)
@@ -180,6 +195,29 @@ func (s *Service) generate(ctx context.Context, subject remediationinvestigation
 		validations = append(validations, vr)
 	}
 	return Preview{Summary: proposal.ExpectedBehavior, BaseRevision: proposal.Repository.Revision, Target: proposal.Target, ChangedFiles: paths, Diff: canonicalDiff, Validations: validations, RuntimeIdentity: s.opts.RuntimeIdentity}, nil
+}
+
+type overlayReader struct {
+	base  sourceinvestigation.TreeReader
+	files map[string]string
+}
+
+func (r overlayReader) ReadFile(ctx context.Context, repo sourceinvestigation.Repository, path string) (string, error) {
+	if content, ok := r.files[path]; ok {
+		return content, nil
+	}
+	return r.base.ReadFile(ctx, repo, path)
+}
+func (r overlayReader) ListFiles(ctx context.Context, repo sourceinvestigation.Repository) ([]string, error) {
+	return r.base.ListFiles(ctx, repo)
+}
+func subjectDigest(subject remediationinvestigation.ActionableSubject) string {
+	payload, _ := json.Marshal(struct {
+		Input, Result, Evidence string
+		Proposal                remediationinvestigation.ActionableProposal
+	}{remediationinvestigation.FrozenInputDigest(subject.Input), subject.ResultDigest, subject.EvidenceCatalogDigest, subject.Proposal})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
 }
 
 func executionCommands(commands []remediationinvestigation.ValidationCommand, overall time.Duration) ([]engineruntime.ExecutionCommand, error) {

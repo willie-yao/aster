@@ -512,10 +512,12 @@ var ErrOperationNotActionable = errors.New("remediation investigation is not exa
 
 // ActionableSubject is the private, reverified handoff for preview-only patch generation.
 type ActionableSubject struct {
-	Input        FrozenInput
-	ResultDigest string
-	Proposal     ActionableProposal
-	Evidence     []EvidenceRecord
+	Input                 FrozenInput
+	ResultDigest          string
+	Proposal              ActionableProposal
+	Evidence              []EvidenceRecord
+	EvidenceCatalogDigest string
+	Source                sourceinvestigation.TreeReader
 }
 
 // MarshalJSON prevents private evidence and cache provenance from entering an API response.
@@ -555,5 +557,5 @@ func (s *OperationService) ResolveActionable(ctx context.Context, ref OperationR
 	if err != nil {
 		return ActionableSubject{}, err
 	}
-	return ActionableSubject{Input: resolved.Input, ResultDigest: entry.ResultDigest, Proposal: *verified.Proposal, Evidence: evidence}, nil
+	return ActionableSubject{Input: resolved.Input, ResultDigest: entry.ResultDigest, Proposal: *verified.Proposal, Evidence: evidence, EvidenceCatalogDigest: entry.EvidenceCatalogDigest, Source: resolved.Source}, nil
 }
