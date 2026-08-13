@@ -36,6 +36,20 @@ func (f *fakeOperationResolver) Resolve(_ context.Context, ref OperationRef) (Re
 }
 func (f *fakeOperationResolver) RefreshActive() (bool, error) { return f.refreshActive, f.refreshError }
 
+func testContinuationResult(ctx context.Context, raw string, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
+	err := validate(json.RawMessage(raw))
+	attempt := ai.StructuredAttemptMetadata{
+		Phase: ai.StructuredCompletionPhase(ctx), Path: ai.StructuredAttemptResponseFormat,
+		ValidatorCalled: true, ProviderAttempts: 1, ProviderAttemptsKnown: true,
+	}
+	if err != nil {
+		attempt.Outcome = ai.StructuredOutcomeValidatorRejected
+	} else {
+		attempt.Outcome = ai.StructuredOutcomeAccepted
+	}
+	return ai.StructuredCompletionMetadata{Attempts: []ai.StructuredAttemptMetadata{attempt}}, err
+}
+
 type blockingOperationModel struct {
 	result    string
 	started   chan struct{}
@@ -63,6 +77,13 @@ func (m *blockingOperationModel) ToolLoop(_ context.Context, _, _ string, _ *too
 	<-m.release
 	m.active.Add(-1)
 	return "bounded evidence", nil
+}
+func (m *blockingOperationModel) ToolLoopWithContinuation(ctx context.Context, system, user string, registry *tools.Registry, enabled []string, env *tools.Env, options ai.ToolLoopOptions) (string, ai.ToolLoopContinuation, error) {
+	memo, err := m.ToolLoop(ctx, system, user, registry, enabled, env, options)
+	return memo, ai.ToolLoopContinuation{}, err
+}
+func (m *blockingOperationModel) ContinueStructuredWithMetadata(ctx context.Context, _ ai.ToolLoopContinuation, _ string, _ ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
+	return testContinuationResult(ctx, m.result, validate)
 }
 func (m *blockingOperationModel) CompleteStructured(_ context.Context, _, _ string, _ ai.ResponseFormat, validate ai.StructuredValidator) error {
 	return validate(json.RawMessage(m.result))
@@ -268,6 +289,13 @@ func (*timeoutOperationModel) ToolLoop(ctx context.Context, _, _ string, _ *tool
 	<-ctx.Done()
 	return "", ctx.Err()
 }
+func (m *timeoutOperationModel) ToolLoopWithContinuation(ctx context.Context, system, user string, registry *tools.Registry, enabled []string, env *tools.Env, options ai.ToolLoopOptions) (string, ai.ToolLoopContinuation, error) {
+	memo, err := m.ToolLoop(ctx, system, user, registry, enabled, env, options)
+	return memo, ai.ToolLoopContinuation{}, err
+}
+func (*timeoutOperationModel) ContinueStructuredWithMetadata(context.Context, ai.ToolLoopContinuation, string, ai.ResponseFormat, ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
+	return ai.StructuredCompletionMetadata{}, errors.New("unexpected finalization")
+}
 func (*timeoutOperationModel) CompleteStructured(context.Context, string, string, ai.ResponseFormat, ai.StructuredValidator) error {
 	return errors.New("unexpected finalization")
 }
@@ -352,6 +380,13 @@ func (m *refreshTimeoutModel) ToolLoop(ctx context.Context, _, _ string, _ *tool
 	}
 	<-ctx.Done()
 	return "", ctx.Err()
+}
+func (m *refreshTimeoutModel) ToolLoopWithContinuation(ctx context.Context, system, user string, registry *tools.Registry, enabled []string, env *tools.Env, options ai.ToolLoopOptions) (string, ai.ToolLoopContinuation, error) {
+	memo, err := m.ToolLoop(ctx, system, user, registry, enabled, env, options)
+	return memo, ai.ToolLoopContinuation{}, err
+}
+func (m *refreshTimeoutModel) ContinueStructuredWithMetadata(ctx context.Context, _ ai.ToolLoopContinuation, _ string, _ ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
+	return testContinuationResult(ctx, m.result, validate)
 }
 func (m *refreshTimeoutModel) CompleteStructured(_ context.Context, _, _ string, _ ai.ResponseFormat, validate ai.StructuredValidator) error {
 	return validate(json.RawMessage(m.result))

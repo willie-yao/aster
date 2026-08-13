@@ -29,6 +29,7 @@ type fakeModel struct {
 	finalErr          error
 	toolCalls         int
 	finalCalls        int
+	continuedCalls    int
 	toolOptions       []ai.ToolLoopOptions
 }
 
@@ -53,6 +54,11 @@ func (m *fakeModel) ToolLoop(_ context.Context, _, _ string, _ *tools.Registry, 
 	return m.memo, m.toolErr
 }
 
+func (m *fakeModel) ToolLoopWithContinuation(ctx context.Context, system, user string, registry *tools.Registry, enabled []string, env *tools.Env, options ai.ToolLoopOptions) (string, ai.ToolLoopContinuation, error) {
+	memo, err := m.ToolLoop(ctx, system, user, registry, enabled, env, options)
+	return memo, ai.ToolLoopContinuation{}, err
+}
+
 func (m *fakeModel) CompleteStructured(_ context.Context, _, _ string, _ ai.ResponseFormat, validate ai.StructuredValidator) error {
 	m.finalCalls++
 	if m.finalErr != nil {
@@ -63,6 +69,11 @@ func (m *fakeModel) CompleteStructured(_ context.Context, _, _ string, _ ai.Resp
 		result = m.results[index]
 	}
 	return validate(json.RawMessage(result))
+}
+
+func (m *fakeModel) ContinueStructuredWithMetadata(ctx context.Context, _ ai.ToolLoopContinuation, _ string, format ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
+	m.continuedCalls++
+	return m.CompleteStructuredWithMetadata(ctx, "", "", format, validate)
 }
 
 func (m *fakeModel) CompleteStructuredWithMetadata(ctx context.Context, system, user string, format ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
@@ -753,6 +764,22 @@ func TestValidationErrorCodeCategories(t *testing.T) {
 
 type structuredMetadataDecorator struct{ Model }
 
+func (m *structuredMetadataDecorator) ToolLoopWithContinuation(ctx context.Context, system, user string, registry *tools.Registry, enabled []string, env *tools.Env, options ai.ToolLoopOptions) (string, ai.ToolLoopContinuation, error) {
+	model, ok := m.Model.(toolLoopContinuationModel)
+	if !ok {
+		return "", ai.ToolLoopContinuation{}, errors.New("continuation unsupported")
+	}
+	return model.ToolLoopWithContinuation(ctx, system, user, registry, enabled, env, options)
+}
+
+func (m *structuredMetadataDecorator) ContinueStructuredWithMetadata(ctx context.Context, continuation ai.ToolLoopContinuation, instruction string, format ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
+	model, ok := m.Model.(toolLoopContinuationModel)
+	if !ok {
+		return ai.StructuredCompletionMetadata{}, errors.New("continuation unsupported")
+	}
+	return model.ContinueStructuredWithMetadata(ctx, continuation, instruction, format, validate)
+}
+
 func (m *structuredMetadataDecorator) CompleteStructuredWithMetadata(ctx context.Context, system, user string, format ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
 	model, ok := m.Model.(structuredCompletionModel)
 	if !ok {
@@ -798,5 +825,52 @@ func TestServiceDecoratorPreservesCancellationAndDeadlineMetadata(t *testing.T) 
 				t.Fatalf("attempt=%+v", attempt)
 			}
 		})
+	}
+}
+
+type continuationOnlyModel struct {
+	*fakeModel
+	calls int
+}
+
+func (m *continuationOnlyModel) ContinueStructuredWithMetadata(ctx context.Context, _ ai.ToolLoopContinuation, _ string, _ ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
+	m.calls++
+	err := validate(json.RawMessage(m.result))
+	attempt := ai.StructuredAttemptMetadata{Phase: ai.StructuredCompletionPhase(ctx), Path: ai.StructuredAttemptResponseFormat, ValidatorCalled: true, ProviderAttempts: 1, ProviderAttemptsKnown: true}
+	if err != nil {
+		attempt.Outcome = ai.StructuredOutcomeValidatorRejected
+	} else {
+		attempt.Outcome = ai.StructuredOutcomeAccepted
+	}
+	return ai.StructuredCompletionMetadata{Attempts: []ai.StructuredAttemptMetadata{attempt}}, err
+}
+
+func (m *continuationOnlyModel) CompleteStructured(context.Context, string, string, ai.ResponseFormat, ai.StructuredValidator) error {
+	return errors.New("fresh structured handoff must not run")
+}
+
+func TestServiceTargetExtractionUsesConversationWhenMemoOmitsSourceIdentity(t *testing.T) {
+	base := &fakeModel{
+		fingerprint: strings.Repeat("d", 16), memo: "summary without the required call identity", result: actionableJSON(),
+		toolEvents: []ai.ToolLoopEvent{
+			{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
+			{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
+			{Name: "grep_repo", ContentBytes: len("applyFix")},
+		},
+	}
+	model := &continuationOnlyModel{fakeModel: base}
+	service, input, browser, cache := serviceFixture(t, base)
+	service.model = model
+	got, err := service.Investigate(t.Context(), input, browser, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.calls != 1 || len(got.Entry.Result.Hypotheses) != 1 || got.Entry.Provenance.Metrics.TargetExtractionModelRequests == nil || *got.Entry.Provenance.Metrics.TargetExtractionModelRequests != 1 {
+		t.Fatalf("calls=%d result=%+v", model.calls, got.Entry)
+	}
+	key, _ := CacheKey(input)
+	entry, ok, err := cache.Lookup(key)
+	if err != nil || !ok || strings.Contains(entry.Result.Hypotheses[0].RelationshipReason, serviceSourceContent) {
+		t.Fatalf("entry=%+v ok=%v err=%v", entry, ok, err)
 	}
 }

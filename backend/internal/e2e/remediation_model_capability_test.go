@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,6 +22,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
@@ -33,7 +35,7 @@ import (
 const (
 	copilotResponsesEndpoint                 = "https://api.githubcopilot.com/responses"
 	remediationModelCapabilityManifest       = "testdata/benchmarks/remediation-investigation-temporal-v1.json"
-	remediationModelCapabilityManifestSHA256 = "449cce4e0b8623e1792e65908b51b079a5bfee3d3ca6ed3be7143197f30ec435"
+	remediationModelCapabilityManifestSHA256 = "5ce4a5933eafd6a7eb98a66c6a04e9a6bab537b6cbedd67e77998f1ff392e922"
 	remediationModelCapabilityRepetitions    = 3
 )
 
@@ -207,6 +209,30 @@ type remediationModelCapabilityDiagnosticModel struct {
 	diagnostics *remediationModelCapabilityMemoDiagnostics
 }
 
+func (m *remediationModelCapabilityDiagnosticModel) ToolLoopWithContinuation(ctx context.Context, system, user string, registry *tools.Registry, enabled []string, env *tools.Env, options ai.ToolLoopOptions) (string, ai.ToolLoopContinuation, error) {
+	model, ok := m.Model.(interface {
+		ToolLoopWithContinuation(context.Context, string, string, *tools.Registry, []string, *tools.Env, ai.ToolLoopOptions) (string, ai.ToolLoopContinuation, error)
+	})
+	if !ok {
+		return "", ai.ToolLoopContinuation{}, errors.New("remediation capability model does not support continuation")
+	}
+	memo, continuation, err := model.ToolLoopWithContinuation(ctx, system, user, registry, enabled, env, options)
+	if err == nil {
+		m.observeMemo(memo)
+	}
+	return memo, continuation, err
+}
+
+func (m *remediationModelCapabilityDiagnosticModel) ContinueStructuredWithMetadata(ctx context.Context, continuation ai.ToolLoopContinuation, instruction string, format ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
+	model, ok := m.Model.(interface {
+		ContinueStructuredWithMetadata(context.Context, ai.ToolLoopContinuation, string, ai.ResponseFormat, ai.StructuredValidator) (ai.StructuredCompletionMetadata, error)
+	})
+	if !ok {
+		return ai.StructuredCompletionMetadata{}, errors.New("remediation capability model does not support structured continuation")
+	}
+	return model.ContinueStructuredWithMetadata(ctx, continuation, instruction, format, validate)
+}
+
 func (m *remediationModelCapabilityDiagnosticModel) CompleteStructuredWithMetadata(ctx context.Context, system, user string, format ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
 	model, ok := m.Model.(interface {
 		CompleteStructuredWithMetadata(context.Context, string, string, ai.ResponseFormat, ai.StructuredValidator) (ai.StructuredCompletionMetadata, error)
@@ -224,12 +250,16 @@ func (m *remediationModelCapabilityDiagnosticModel) ToolLoop(ctx context.Context
 	if err != nil {
 		return memo, err
 	}
+	m.observeMemo(memo)
+	return memo, nil
+}
+
+func (m *remediationModelCapabilityDiagnosticModel) observeMemo(memo string) {
 	lower := strings.ToLower(memo)
 	m.diagnostics.Job = containsDiagnosticTerm(lower, m.target.Job)
 	m.diagnostics.Container = containsDiagnosticTerm(lower, m.target.Container)
 	m.diagnostics.Name = containsDiagnosticTerm(lower, m.target.Name)
 	m.diagnostics.Value = containsDiagnosticTerm(lower, m.target.Value)
-	return memo, nil
 }
 
 func containsDiagnosticTerm(lowerMemo, value string) bool {
@@ -1211,4 +1241,108 @@ func remediationModelCapabilityCaseHash(t *testing.T, raw []byte, caseID string)
 	}
 	t.Fatalf("case %s not found", caseID)
 	return ""
+}
+
+type temporalContinuationModel struct {
+	target       models.RemediationTarget
+	fingerprint  string
+	artifactPath string
+	continued    bool
+}
+
+func (m *temporalContinuationModel) ToolLoop(ctx context.Context, system, user string, registry *tools.Registry, enabled []string, env *tools.Env, options ai.ToolLoopOptions) (string, error) {
+	memo, continuation, err := m.ToolLoopWithContinuation(ctx, system, user, registry, enabled, env, options)
+	continuation.Discard()
+	return memo, err
+}
+
+func (m *temporalContinuationModel) ToolLoopWithContinuation(_ context.Context, _, _ string, _ *tools.Registry, _ []string, _ *tools.Env, options ai.ToolLoopOptions) (string, ai.ToolLoopContinuation, error) {
+	if options.Observe != nil {
+		options.Observe(ai.ToolLoopEvent{Name: "read_artifact", Path: m.artifactPath, BytesFetched: 100})
+		options.Observe(ai.ToolLoopEvent{Name: "read_repo_file", Path: m.target.Path, BytesFetched: 100, ContentBytes: 100})
+		options.Observe(ai.ToolLoopEvent{Name: "grep_repo", ContentBytes: len(m.target.Name)})
+	}
+	if options.ObservePrivate != nil {
+		options.ObservePrivate(ai.ToolLoopPrivateEvent{Name: "grep_repo", Observation: repotree.GrepObservation{Matches: []repotree.GrepMatchObservation{{Path: m.target.Path, LineStart: 1, LineEnd: 2}}}})
+	}
+	return "The job and environment value are supported; the container is omitted from this memo.", ai.ToolLoopContinuation{}, nil
+}
+
+func (m *temporalContinuationModel) ContinueStructuredWithMetadata(ctx context.Context, _ ai.ToolLoopContinuation, instruction string, _ ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
+	const startMarker = "Frozen identity and engine-issued evidence catalog:\n"
+	start := strings.Index(instruction, startMarker)
+	end := strings.Index(instruction, "\n\nEvidence memo:")
+	if start < 0 || end < 0 || end <= start {
+		return ai.StructuredCompletionMetadata{}, errors.New("continued instruction omitted the frozen evidence catalog")
+	}
+	var identity struct {
+		EvidenceCatalog remediationinvestigation.EvidenceCatalog `json:"evidence_catalog"`
+	}
+	if err := json.Unmarshal([]byte(instruction[start+len(startMarker):end]), &identity); err != nil {
+		return ai.StructuredCompletionMetadata{}, err
+	}
+	evidenceIDs := make([]string, 0, len(identity.EvidenceCatalog.Records))
+	for _, record := range identity.EvidenceCatalog.Records {
+		evidenceIDs = append(evidenceIDs, record.ID)
+	}
+	extraction := remediationinvestigation.TargetExtraction{Version: remediationinvestigation.TargetExtractionVersion, Hypotheses: []remediationinvestigation.TargetHypothesis{{
+		Target: &remediationinvestigation.ProwEnvironmentEntryCandidate{
+			Kind: remediationinvestigation.CandidateProwEnvironmentEntry, ConfigPath: m.target.Path,
+			Job: m.target.Job, Container: m.target.Container, Name: m.target.Name, Value: m.target.Value,
+		},
+		EvidenceIDs: evidenceIDs, RelationshipReason: "the continued source evidence identifies the exact environment target",
+	}}}
+	raw, _ := json.Marshal(extraction)
+	err := validate(raw)
+	attempt := ai.StructuredAttemptMetadata{Phase: ai.StructuredCompletionPhase(ctx), Path: ai.StructuredAttemptResponseFormat, ValidatorCalled: true, ProviderAttempts: 1, ProviderAttemptsKnown: true}
+	if err != nil {
+		attempt.Outcome = ai.StructuredOutcomeValidatorRejected
+	} else {
+		attempt.Outcome = ai.StructuredOutcomeAccepted
+		m.continued = true
+	}
+	return ai.StructuredCompletionMetadata{Attempts: []ai.StructuredAttemptMetadata{attempt}}, err
+}
+
+func (*temporalContinuationModel) CompleteStructured(context.Context, string, string, ai.ResponseFormat, ai.StructuredValidator) error {
+	return errors.New("fresh target extraction is not allowed")
+}
+func (*temporalContinuationModel) ModelName() string          { return "test-continuation-model" }
+func (m *temporalContinuationModel) ModelFingerprint() string { return m.fingerprint }
+func (*temporalContinuationModel) APIMode() string            { return ai.APIResponses }
+func (*temporalContinuationModel) ReasoningEffort() ai.ReasoningEffort {
+	return ai.ReasoningEffortMedium
+}
+
+func TestRemediationPostFixEnvironmentTargetUsesContinuedEvidence(t *testing.T) {
+	manifest, _ := loadRemediationModelCapabilityManifest(t)
+	capabilityCase := temporalCaseByState(t, manifest.Cases, "post_fix")
+	fingerprint := strings.Repeat("d", 16)
+	input, source, browser := remediationModelCapabilityInput(t, capabilityCase, fingerprint)
+	artifactPaths := make([]string, 0, len(browser.files))
+	for path := range browser.files {
+		artifactPaths = append(artifactPaths, path)
+	}
+	sort.Strings(artifactPaths)
+	model := &temporalContinuationModel{target: capabilityCase.ScorerPrivate.KnownTarget, fingerprint: fingerprint, artifactPath: artifactPaths[0]}
+	cache, err := remediationinvestigation.NewCache("", remediationinvestigation.CacheOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := remediationinvestigation.NewService(model, source, cache, remediationinvestigation.ServiceOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Investigate(t.Context(), input, browser, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, _ := remediationinvestigation.NewVerifier(source)
+	verified, err := verifier.Verify(t.Context(), input, result.Entry, browser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !model.continued || len(result.Entry.Result.Hypotheses) != 1 || verified.Classification != remediationinvestigation.ClassificationAlreadyFixed || verified.Proposal != nil {
+		t.Fatalf("continued=%v result=%+v verified=%+v", model.continued, result.Entry.Result, verified)
+	}
 }

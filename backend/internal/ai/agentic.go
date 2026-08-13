@@ -2555,6 +2555,7 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty", ErrorCode: "missing_message"})
 		return "", resp.Message.ProviderItems, true
 	}
+	captureToolLoopContinuation(ctx, c, appendToolsFreeAssistant(messages, resp.Message))
 	if resp.Message.Content == nil {
 		code := "nil_content"
 		if len(resp.Message.ToolCalls) > 0 {

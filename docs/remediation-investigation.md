@@ -51,8 +51,14 @@ The trusted in-process model client runs two bounded phases:
    the same bounded conversation and iteration budget. Successful grep matches
    become supplemental private source evidence, but never replace the mandatory
    file read.
-2. **Target extraction.** Read tools are removed. The model returns version 1
-   with zero to three typed target hypotheses. Each hypothesis contains one
+2. **Target extraction.** Read tools are removed, but the bounded evidence
+   conversation is retained in one opaque, single-use in-memory continuation.
+   The engine appends the frozen identity, current engine-issued evidence
+   catalog, and exact target-extraction contract to the same message history.
+   The response-format, forced-function, and plain-fallback attempts therefore
+   retain prior source and artifact tool results even when the diagnostic memo
+   omits a useful field. The model returns version 1 with zero to three typed
+   target hypotheses. Each hypothesis contains one
    target identity, selected engine-issued evidence IDs, and a concise
    relationship reason. A hypothesis is a verification subject, including when
    the target appears already present. The bounded relationship reason remains
@@ -68,6 +74,13 @@ The trusted in-process model client runs two bounded phases:
    structured model call returns a cause assessment, one typed non-actionable
    reason, a concise safe explanation, and evidence IDs. This stage cannot
    introduce a target.
+
+The continuation is bound to the model client, expires after the operation
+budget, and can be consumed only once. It rejects JSON or text serialization and
+clears its message history when consumed or discarded. It is never written to a
+cache, trace, public response, or benchmark row. Context compaction remains
+active for the continued structured request and preserves tool-call wiring and
+provider continuation items.
 
 If either required source tool cannot complete, the generic loop returns a
 typed, content-free failure and target extraction does not run. The evidence

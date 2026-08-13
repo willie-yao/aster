@@ -150,7 +150,15 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		finish()
 		return RunResult{}, err
 	}
-	memo, runErr := s.model.ToolLoop(runCtx, evidenceSystemPrompt(input.ConsumerPrompt), evidencePrompt, registry, enabled, env, ai.ToolLoopOptions{
+	conversationModel, ok := s.model.(toolLoopContinuationModel)
+	if !ok {
+		outcome = aiusage.OutcomeError
+		finish()
+		err := fmt.Errorf("remediation investigation model does not support private conversation continuation")
+		_ = s.cache.RecordFailure(key, FailureProvider, err)
+		return RunResult{}, err
+	}
+	memo, continuation, runErr := conversationModel.ToolLoopWithContinuation(runCtx, evidenceSystemPrompt(input.ConsumerPrompt), evidencePrompt, registry, enabled, env, ai.ToolLoopOptions{
 		MaxIters: s.opts.MaxIters, SingleToolCall: true,
 		ContextByteBudget: s.opts.ContextByteBudget, PropagateFinalizeError: true,
 		RequiredTools: requiredSourceTools(input, sourceFiles), Observe: ledger.observe, ObservePrivate: ledger.observePrivate,
@@ -162,6 +170,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		_ = s.cache.RecordFailure(key, failureCategory(runErr), runErr)
 		return RunResult{}, fmt.Errorf("remediation evidence phase failed: %w", runErr)
 	}
+	defer continuation.Discard()
 	if len(memo) > maxEvidenceMemoBytes {
 		memo = memo[:maxEvidenceMemoBytes]
 	}
@@ -176,8 +185,8 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 	result := Result{Version: ResultVersion}
 	repairCount := 0
 	targetRepairCount := 0
-	structuredTelemetry := structuredCompletionTelemetry{available: structuredMetadataAvailable(s.model)}
-	targetTelemetry := structuredCompletionTelemetry{available: structuredMetadataAvailable(s.model)}
+	structuredTelemetry := structuredCompletionTelemetry{available: true}
+	targetTelemetry := structuredCompletionTelemetry{available: true}
 	if !ledger.gatePassed() {
 		assessment := insufficientEvidenceAssessment(catalog, "The bounded investigation did not read recurring-build evidence, pinned source content, and one content-bearing repository grep.")
 		result.NonActionable = &assessment
@@ -203,7 +212,8 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 			extraction = candidate
 			return nil
 		}
-		extractionMetadata, metadataAvailable, extractionErr := s.completeStructured(runCtx, PhaseTargetExtractionInitial, targetExtractionSystemPrompt(), finalPrompt, targetExtractionFormat(), validateExtraction)
+		targetInstruction := targetExtractionSystemPrompt() + "\n\n" + finalPrompt
+		extractionMetadata, metadataAvailable, extractionErr := s.continueStructured(runCtx, conversationModel, continuation, PhaseTargetExtractionInitial, targetInstruction, targetExtractionFormat(), validateExtraction)
 		structuredTelemetry.append(extractionMetadata, metadataAvailable)
 		targetTelemetry.append(extractionMetadata, metadataAvailable)
 		failedPhase := PhaseTargetExtractionInitial
@@ -422,6 +432,11 @@ func insufficientEvidenceAssessment(catalog EvidenceCatalog, reason string) NonA
 	}
 }
 
+type toolLoopContinuationModel interface {
+	ToolLoopWithContinuation(context.Context, string, string, *tools.Registry, []string, *tools.Env, ai.ToolLoopOptions) (string, ai.ToolLoopContinuation, error)
+	ContinueStructuredWithMetadata(context.Context, ai.ToolLoopContinuation, string, ai.ResponseFormat, ai.StructuredValidator) (ai.StructuredCompletionMetadata, error)
+}
+
 type structuredCompletionModel interface {
 	CompleteStructuredWithMetadata(context.Context, string, string, ai.ResponseFormat, ai.StructuredValidator) (ai.StructuredCompletionMetadata, error)
 }
@@ -431,9 +446,10 @@ type structuredCompletionTelemetry struct {
 	available bool
 }
 
-func structuredMetadataAvailable(model Model) bool {
-	_, ok := model.(structuredCompletionModel)
-	return ok
+func (s *Service) continueStructured(ctx context.Context, model toolLoopContinuationModel, continuation ai.ToolLoopContinuation, phase Phase, instruction string, format ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, bool, error) {
+	ctx = ai.WithStructuredCompletionPhase(ctx, string(phase))
+	metadata, err := model.ContinueStructuredWithMetadata(ctx, continuation, instruction, format, validate)
+	return metadata, true, err
 }
 
 func (s *Service) completeStructured(ctx context.Context, phase Phase, system, user string, format ai.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, bool, error) {
