@@ -763,3 +763,59 @@ func TestProcessIssuesKeepsCurrentAnalysisOnlyPatternOpen(t *testing.T) {
 		t.Fatalf("keep-open keys=%v", gotOptions.KeepOpenKeys)
 	}
 }
+
+type agentSandboxBatchAgent struct {
+	spec runtime.GenerateSpec
+}
+
+func (a *agentSandboxBatchAgent) Generate(_ context.Context, spec runtime.GenerateSpec) (runtime.GenerateResult, error) {
+	a.spec = spec
+	results := make([]runtime.CommandResult, len(spec.CommandPolicy.Commands))
+	for i, command := range spec.CommandPolicy.Commands {
+		results[i] = runtime.CommandResult{Argv: append([]string(nil), command.Argv...), ExitCode: 0, DurationMs: 1}
+	}
+	return runtime.GenerateResult{
+		BaseSHA: "base-sha", Files: map[string]string{"config/fix.yaml": "fixed: true\n"},
+		Diff: "diff --git a/config/fix.yaml b/config/fix.yaml\n+fixed: true\n", CommandResults: results,
+	}, nil
+}
+
+func TestProcessFixPRsAgentSandboxUsesExecutorVerification(t *testing.T) {
+	t.Setenv("FIX_TOKEN", "write-token")
+	t.Setenv(runtime.TrustedLocalRuntimeEnv, "")
+	zero := 0
+	cfg := &project.Config{
+		Name: "Test", Branding: project.Branding{SiteURL: "https://dashboard.example.test"},
+		AI: &project.AI{FixPRs: &project.FixPRs{
+			Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"}, DryRun: true,
+			AuthorName: "Test", AuthorEmail: "test@example.com", CritiqueRetries: &zero,
+			AgentRuntime: &project.FixAgentRuntime{
+				Type: "agent-sandbox", MaxTurns: 3, Timeout: "1m", OutputLimitBytes: 65536,
+				AllowedCommands: []project.FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}},
+			},
+		}},
+	}
+	agent := &agentSandboxBatchAgent{}
+	oldRuntime, oldManager := newBatchFixRuntime, newBatchFixManager
+	var captured fixpr.Options
+	newBatchFixRuntime = func(*project.FixAgentRuntime) (runtime.AgentRuntime, error) { return agent, nil }
+	newBatchFixManager = func(_ string, stateFile string, opts fixpr.Options) *fixpr.Manager {
+		captured = opts
+		return fixpr.NewManager(finalizedFakePR{}, stateFile, opts)
+	}
+	t.Cleanup(func() { newBatchFixRuntime, newBatchFixManager = oldRuntime, oldManager })
+
+	pattern := models.PatternAnalysis{
+		ID: "pattern", JobID: "job", Subject: "job", Systemic: true, Confidence: "high",
+		SharedRootCause: "configuration is stale", SuggestedFix: "update config/fix.yaml",
+	}
+	if changed, err := processFixPRs(t.Context(), cfg, []models.PatternAnalysis{pattern}, "", t.TempDir(), nil); err != nil || changed {
+		t.Fatalf("changed=%t error=%v", changed, err)
+	}
+	if captured.Verify != nil || captured.Agent == nil || !captured.Agent.RequireCommandResults {
+		t.Fatalf("captured options = %+v", captured)
+	}
+	if captured.Agent.GitToken != "" || agent.spec.Repo.Token != "" {
+		t.Fatalf("dashboard token entered Sandbox: config=%q spec=%q", captured.Agent.GitToken, agent.spec.Repo.Token)
+	}
+}

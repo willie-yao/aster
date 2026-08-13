@@ -1349,15 +1349,27 @@ if grep -Fq 'name: HSTS_ENABLED' "$tmp/insecure-local-oauth.yaml"; then
   exit 1
 fi
 
-for reserved_env in COOKIE_INSECURE HSTS_ENABLED; do
+for reserved_env in COOKIE_INSECURE HSTS_ENABLED TRUSTED_LOCAL_FIX_RUNTIME; do
   if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
     --set 'server.extraEnv[0].name='"$reserved_env" \
     --set-string server.extraEnv[0].value=1 > "$tmp/reserved-${reserved_env}.yaml" 2>&1; then
     echo "server.extraEnv accepted ${reserved_env}" >&2
     exit 1
   fi
-  grep -Fq "server.extraEnv must not set ${reserved_env}" "$tmp/reserved-${reserved_env}.yaml"
+  if [ "$reserved_env" = TRUSTED_LOCAL_FIX_RUNTIME ]; then
+    grep -Fq "extraEnv must not set ${reserved_env}" "$tmp/reserved-${reserved_env}.yaml"
+  else
+    grep -Fq "server.extraEnv must not set ${reserved_env}" "$tmp/reserved-${reserved_env}.yaml"
+  fi
 done
+
+if helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set fetcher.extraEnv[0].name=TRUSTED_LOCAL_FIX_RUNTIME \
+  --set-string fetcher.extraEnv[0].value=true > "$tmp/reserved-fetcher-local-fix.yaml" 2>&1; then
+  echo 'fetcher.extraEnv accepted TRUSTED_LOCAL_FIX_RUNTIME' >&2
+  exit 1
+fi
+grep -Fq 'extraEnv must not set TRUSTED_LOCAL_FIX_RUNTIME' "$tmp/reserved-fetcher-local-fix.yaml"
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.chat.enabled=true \

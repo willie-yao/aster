@@ -89,6 +89,11 @@ type Options struct {
 	// Agent generates the fix with a coding-agent CLI in a real workspace clone.
 	// Runtime-specific validators may run only after generation completes.
 	Agent *AgentConfig
+	// PatchToken is used only by the dashboard to rematerialize the pinned source
+	// during confirmation. It is never sent to the coding runtime.
+	PatchToken string
+	// ReconstructPatch overrides independent patch reconstruction in tests.
+	ReconstructPatch func(context.Context, runtime.RepoRef, string) (map[string]string, string, error)
 }
 
 // AgentConfig configures the coding-agent fix generator.
@@ -117,6 +122,9 @@ type AgentConfig struct {
 	NetworkDomains []string
 	// CommandPolicy is the exact provider-neutral command policy.
 	CommandPolicy runtime.CommandPolicy
+	// RequireCommandResults makes the runtime's complete ordered validator
+	// results part of the fix contract. Agent Sandbox always enables it.
+	RequireCommandResults bool
 	// Timeout bounds the whole generation. Zero uses the Runtime default.
 	Timeout time.Duration
 	// GitToken authenticates the source clone. Empty clones anonymously, which
@@ -297,7 +305,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 				reconcileErrs = append(reconcileErrs, fmt.Errorf("generate preview for %q: %w", p.Subject, err))
 				continue
 			}
-			v := m.verify(ctx, base, fix.files)
+			v := m.verify(ctx, base, fix.files, fix.executionVerification)
 			previews = append(previews, Preview{Subject: p.Subject, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: v})
 			stats.Previewed++
 			log.Printf("  🧪 fix preview for %q (%d file(s), verify=%s):\n%s", p.Subject, len(fix.files), v.Status, fix.diff)
@@ -334,7 +342,7 @@ func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalys
 		}
 
 		// Reformat the description to follow the repo PR template when configured.
-		v := m.verify(ctx, base, fix.files)
+		v := m.verify(ctx, base, fix.files, fix.executionVerification)
 		_, body := m.renderBody(ctx, p, fix, v, key)
 
 		url, err := m.openPR(ctx, prTitle(p), body, fix.files, base)
@@ -396,7 +404,13 @@ func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, i
 // configured Runtime. It never blocks: a build failure yields a "failed"
 // verdict (annotated on the draft), and an unavailable toolchain or infra error
 // yields "skipped". Verification runs once, at generation time.
-func (m *Manager) verify(ctx context.Context, base ghpr.Base, files map[string]string) VerifyResult {
+func (m *Manager) verify(ctx context.Context, base ghpr.Base, files map[string]string, execution *ExecutionVerification) VerifyResult {
+	if execution != nil {
+		if err := execution.validate(base.HeadSHA); err != nil {
+			return VerifyResult{Status: VerifyFailed, Summary: oneLine(err.Error())}
+		}
+		return execution.verifyResult()
+	}
 	if m.opts.Verify == nil || m.opts.Verify.Runtime == nil {
 		return VerifyResult{Status: VerifySkipped, Summary: "verification not configured"}
 	}
@@ -476,27 +490,29 @@ type GeneratedFix struct {
 	Description string  // PR description (after any repo-template reformat)
 	Body        string  // full PR body that embeds Description + diff + marker
 
-	pattern            models.PatternAnalysis
-	key                string
-	base               ghpr.Base
-	requireBaseCurrent bool
+	executionVerification *ExecutionVerification
+	pattern               models.PatternAnalysis
+	key                   string
+	base                  ghpr.Base
+	requireBaseCurrent    bool
 }
 
 // GeneratedFixSnapshot is the serializable form of a generated fix. It keeps
 // the exact files and pinned base needed to open the reviewed draft later.
 type GeneratedFixSnapshot struct {
-	Subject            string                 `json:"subject"`
-	Rationale          string                 `json:"rationale"`
-	Diff               string                 `json:"diff"`
-	Files              map[string]string      `json:"files"`
-	Verify             VerifyResult           `json:"verify"`
-	Title              string                 `json:"title"`
-	Description        string                 `json:"description"`
-	Body               string                 `json:"body"`
-	Pattern            models.PatternAnalysis `json:"pattern"`
-	Key                string                 `json:"key"`
-	Base               ghpr.Base              `json:"base"`
-	RequireBaseCurrent bool                   `json:"require_base_current,omitempty"`
+	Subject               string                 `json:"subject"`
+	Rationale             string                 `json:"rationale"`
+	Diff                  string                 `json:"diff"`
+	Files                 map[string]string      `json:"files"`
+	Verify                VerifyResult           `json:"verify"`
+	Title                 string                 `json:"title"`
+	Description           string                 `json:"description"`
+	Body                  string                 `json:"body"`
+	Pattern               models.PatternAnalysis `json:"pattern"`
+	Key                   string                 `json:"key"`
+	Base                  ghpr.Base              `json:"base"`
+	RequireBaseCurrent    bool                   `json:"require_base_current,omitempty"`
+	ExecutionVerification *ExecutionVerification `json:"execution_verification,omitempty"`
 }
 
 // Snapshot returns a deep-copy serializable representation of gf.
@@ -513,6 +529,7 @@ func (gf *GeneratedFix) Snapshot() *GeneratedFixSnapshot {
 		Diff: gf.Preview.Diff, Files: files, Verify: gf.Preview.Verify,
 		Title: gf.Title, Description: gf.Description, Body: gf.Body,
 		Pattern: gf.pattern, Key: gf.key, Base: gf.base, RequireBaseCurrent: gf.requireBaseCurrent,
+		ExecutionVerification: cloneExecutionVerification(gf.executionVerification),
 	}
 }
 
@@ -529,7 +546,8 @@ func RestoreGeneratedFix(snapshot *GeneratedFixSnapshot) *GeneratedFix {
 		Preview: Preview{Subject: snapshot.Subject, Rationale: snapshot.Rationale,
 			Diff: snapshot.Diff, Files: files, Verify: snapshot.Verify},
 		Title: snapshot.Title, Description: snapshot.Description, Body: snapshot.Body,
-		pattern: snapshot.Pattern, key: snapshot.Key, base: snapshot.Base, requireBaseCurrent: snapshot.RequireBaseCurrent,
+		executionVerification: cloneExecutionVerification(snapshot.ExecutionVerification),
+		pattern:               snapshot.Pattern, key: snapshot.Key, base: snapshot.Base, requireBaseCurrent: snapshot.RequireBaseCurrent,
 	}
 }
 
@@ -568,16 +586,17 @@ func (m *Manager) generatePreview(ctx context.Context, p models.PatternAnalysis,
 		return nil, err
 	}
 	key := KeyFor(p)
-	v := m.verify(ctx, base, fix.files)
+	v := m.verify(ctx, base, fix.files, fix.executionVerification)
 	description, body := m.renderBody(ctx, p, fix, v, key)
 	return &GeneratedFix{
-		Preview:     Preview{Subject: p.Subject, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: v},
-		Title:       prTitle(p),
-		Description: description,
-		Body:        body,
-		pattern:     p,
-		key:         key,
-		base:        base,
+		Preview:               Preview{Subject: p.Subject, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: v},
+		Title:                 prTitle(p),
+		Description:           description,
+		Body:                  body,
+		executionVerification: cloneExecutionVerification(fix.executionVerification),
+		pattern:               p,
+		key:                   key,
+		base:                  base,
 	}, nil
 }
 
@@ -591,6 +610,56 @@ func patternTargetsRepository(pattern models.PatternAnalysis, owner, repo string
 	return true
 }
 
+// ValidateExecutionVerification rechecks the retained Agent Sandbox command contract.
+func (gf *GeneratedFix) ValidateExecutionVerification() error {
+	if gf == nil {
+		return fmt.Errorf("generated fix is missing")
+	}
+	if gf.executionVerification == nil {
+		return nil
+	}
+	expected := gf.executionVerification.verifyResult()
+	if gf.Preview.Verify != expected {
+		return fmt.Errorf("agent Sandbox verification summary does not match executor results")
+	}
+	return gf.executionVerification.validate(gf.base.HeadSHA)
+}
+
+func (m *Manager) validateExecutionPreview(ctx context.Context, gf *GeneratedFix) error {
+	if err := gf.ValidateExecutionVerification(); err != nil {
+		return fmt.Errorf("validating Agent Sandbox preview: %w", err)
+	}
+	if gf.executionVerification == nil {
+		return nil
+	}
+	reconstruct := m.opts.ReconstructPatch
+	if reconstruct == nil {
+		reconstruct = runtime.ApplyDiff
+	}
+	files, diff, err := reconstruct(ctx, runtime.RepoRef{
+		Owner: m.opts.SourceOwner, Name: m.opts.SourceName, Ref: gf.base.HeadSHA, Token: m.opts.PatchToken,
+	}, gf.Preview.Diff)
+	if err != nil {
+		return fmt.Errorf("reconstructing Agent Sandbox preview: %w", err)
+	}
+	if diff != gf.Preview.Diff || !sameFileContents(files, gf.Preview.Files) {
+		return fmt.Errorf("agent Sandbox preview patch content changed")
+	}
+	return nil
+}
+
+func sameFileContents(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for path, content := range left {
+		if right[path] != content {
+			return false
+		}
+	}
+	return true
+}
+
 // OpenFromPreview opens the draft PR for a previously generated fix, applying
 // the same dedup guard as Reconcile: skip if the subject is already tracked or
 // an open fix PR already exists. It returns the PR URL and records tracking
@@ -598,6 +667,9 @@ func patternTargetsRepository(pattern models.PatternAnalysis, owner, repo string
 func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string, error) {
 	if gf == nil {
 		return "", fmt.Errorf("no generated fix to open")
+	}
+	if err := m.validateExecutionPreview(ctx, gf); err != nil {
+		return "", err
 	}
 	key := gf.key
 	if t, tracked := m.state.Tracked[key]; tracked {

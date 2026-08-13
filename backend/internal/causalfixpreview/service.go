@@ -36,7 +36,6 @@ type Resolver interface {
 
 type Options struct {
 	Runtime          engineruntime.AgentRuntime
-	Validator        engineruntime.Runtime
 	ModelProvider    modelprovider.Config
 	Timeout          time.Duration
 	MaxSteps         int
@@ -73,7 +72,7 @@ type stored struct {
 }
 
 func New(resolver Resolver, opts Options) (*Service, error) {
-	if resolver == nil || opts.Runtime == nil || opts.Validator == nil {
+	if resolver == nil || opts.Runtime == nil {
 		return nil, fmt.Errorf("causal fix preview dependencies are required")
 	}
 	if opts.Timeout <= 0 {
@@ -151,6 +150,9 @@ func (s *Service) generate(ctx context.Context, subject remediationinvestigation
 	if err != nil {
 		return Preview{}, fmt.Errorf("generation failed: %w", err)
 	}
+	if err := engineruntime.ValidateSuccessfulCommandResults(commands, result.CommandResults); err != nil {
+		return Preview{}, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
 	current, err := s.resolver.ResolveActionable(ctx, remediationinvestigation.OperationRef{
 		JobID: subject.Input.JobID, PatternID: subject.Input.PatternID, PatternHash: subject.Input.PatternHash,
 		CausalGroupID: subject.Input.CausalGroupID, CausalGroupHash: subject.Input.CausalGroupHash,
@@ -184,15 +186,9 @@ func (s *Service) generate(ctx context.Context, subject remediationinvestigation
 	if err != nil || verification.State != actionverify.StateAlreadyPresent {
 		return Preview{}, fmt.Errorf("%w: target postcondition was not established: state=%s reason=%s err=%v", ErrRejected, verification.State, verification.Reason, err)
 	}
-	validations := make([]ValidationResult, 0, len(proposal.AllowedValidationCommands))
-	for _, command := range proposal.AllowedValidationCommands {
-		timeout, _ := time.ParseDuration(command.Timeout)
-		res, runErr := s.opts.Validator.Run(ctx, engineruntime.Spec{Repo: engineruntime.RepoRef{Owner: proposal.Repository.Owner, Name: proposal.Repository.Name, Ref: proposal.Repository.Revision}, Overlay: reconstructed, Command: command.Argv, Timeout: timeout})
-		vr := ValidationResult{Argv: slices.Clone(command.Argv), Status: "passed"}
-		if runErr != nil || !res.Passed() {
-			return Preview{}, ErrValidation
-		}
-		validations = append(validations, vr)
+	validations := make([]ValidationResult, 0, len(result.CommandResults))
+	for _, command := range result.CommandResults {
+		validations = append(validations, ValidationResult{Argv: slices.Clone(command.Argv), Status: "passed"})
 	}
 	return Preview{Summary: proposal.ExpectedBehavior, BaseRevision: proposal.Repository.Revision, Target: proposal.Target, ChangedFiles: paths, Diff: canonicalDiff, Validations: validations, RuntimeIdentity: s.opts.RuntimeIdentity}, nil
 }

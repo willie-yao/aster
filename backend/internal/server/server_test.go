@@ -1342,3 +1342,57 @@ func TestWriteActionErrorUsesStructuredReasonContract(t *testing.T) {
 		})
 	}
 }
+
+func TestHandlerDisablesFixRoutesAndCapabilityIndependently(t *testing.T) {
+	dataDir := t.TempDir()
+	writeFile(t, dataDir, "manifest.json", `{}`)
+	runner := &fakeAsyncRunner{}
+	h, err := Handler(Options{
+		DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, Actions: runner,
+		AuthMode: "dev", DisableFixActions: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	capResponse, err := http.Get(srv.URL + "/api/capabilities")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var caps Capabilities
+	if err := json.NewDecoder(capResponse.Body).Decode(&caps); err != nil {
+		t.Fatal(err)
+	}
+	_ = capResponse.Body.Close()
+	if !caps.Features.Actions || caps.Features.FixPRs {
+		t.Fatalf("capabilities = %+v", caps.Features)
+	}
+
+	post := func(path string) *http.Response {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(`{}`))
+		req.Header.Set("Authorization", "ok")
+		req.Header.Set("Origin", srv.URL)
+		response, requestErr := http.DefaultClient.Do(req)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		return response
+	}
+	for _, path := range []string{
+		"/api/failures/pattern/propose-fix/preview",
+		"/api/failures/pattern/propose-fix/requests",
+	} {
+		response := post(path)
+		if response.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s status=%d body=%s", path, response.StatusCode, readBody(t, response))
+		}
+		_ = response.Body.Close()
+	}
+	issue := post("/api/failures/pattern/create-issue/requests")
+	if issue.StatusCode != http.StatusAccepted {
+		t.Fatalf("issue status=%d body=%s", issue.StatusCode, readBody(t, issue))
+	}
+	_ = issue.Body.Close()
+}

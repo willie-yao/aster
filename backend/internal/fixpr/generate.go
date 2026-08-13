@@ -22,6 +22,8 @@ type proposedFix struct {
 	diff string
 	// rationale is the model's short explanation of the change.
 	rationale string
+	// executionVerification retains the successful tokenless validator contract.
+	executionVerification *ExecutionVerification
 }
 
 // genParams holds the inputs for fix generation.

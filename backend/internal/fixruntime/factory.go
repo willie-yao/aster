@@ -10,7 +10,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
-// New returns the configured coding-agent runtime.
+// New returns the configured coding-agent runtime. The default OpenCode backend is local-development or trusted-CI only.
 func New(cfg *project.FixAgentRuntime) (runtime.AgentRuntime, error) {
 	if cfg == nil || cfg.Type == "" || cfg.Type == "opencode" {
 		return runtime.NewLocalAgent(), nil

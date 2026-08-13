@@ -375,3 +375,35 @@ func TestExactJUnitChatFixEnabledRequiresOptInAgentSandbox(t *testing.T) {
 		})
 	}
 }
+
+func TestFixActionsEnabledDoesNotAdvertiseLocalRuntimeByDefault(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		cfg      project.FixPRs
+		authMode string
+		trusted  string
+		want     bool
+		wantErr  string
+	}{
+		{name: "agent sandbox", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"}}, authMode: "oauth", want: true},
+		{name: "orka", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "orka"}}, authMode: "proxy", want: true},
+		{name: "local production", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "opencode"}}, authMode: "oauth"},
+		{name: "trusted local development", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "opencode"}}, authMode: "dev", trusted: "true", want: true},
+		{name: "trusted local outside dev", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "opencode"}}, authMode: "proxy", trusted: "true", wantErr: "AUTH_MODE=dev"},
+		{name: "disabled", cfg: project.FixPRs{AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"}}, authMode: "oauth"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("TRUSTED_LOCAL_FIX_RUNTIME", testCase.trusted)
+			got, err := fixActionsEnabled(testCase.cfg, testCase.authMode)
+			if testCase.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+					t.Fatalf("error=%v want=%q", err, testCase.wantErr)
+				}
+				return
+			}
+			if err != nil || got != testCase.want {
+				t.Fatalf("enabled=%t err=%v want=%t", got, err, testCase.want)
+			}
+		})
+	}
+}

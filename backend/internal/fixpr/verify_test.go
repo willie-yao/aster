@@ -37,7 +37,7 @@ func TestVerify_Verdicts(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := &Manager{opts: Options{Verify: &VerifyConfig{Runtime: tc.rt}}}
-			got := m.verify(context.Background(), base, files)
+			got := m.verify(context.Background(), base, files, nil)
 			if got.Status != tc.want {
 				t.Errorf("status = %q, want %q (summary=%q)", got.Status, tc.want, got.Summary)
 			}
@@ -47,7 +47,7 @@ func TestVerify_Verdicts(t *testing.T) {
 
 func TestVerify_NotConfiguredSkips(t *testing.T) {
 	m := &Manager{opts: Options{}}
-	if got := m.verify(context.Background(), ghpr.Base{HeadSHA: "x"}, nil); got.Status != VerifySkipped {
+	if got := m.verify(context.Background(), ghpr.Base{HeadSHA: "x"}, nil, nil); got.Status != VerifySkipped {
 		t.Errorf("status = %q, want skipped", got.Status)
 	}
 }

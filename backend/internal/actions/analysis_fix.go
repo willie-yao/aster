@@ -165,6 +165,9 @@ func osReadFile(dataDir, jobID string) ([]byte, error) {
 func (s *Service) PreviewAnalysisFix(
 	ctx context.Context, input AnalysisFixInput, owner, writeToken, instruction string,
 ) (_ PreviewResult, resultErr error) {
+	if err := s.requireFixActions(); err != nil {
+		return PreviewResult{}, err
+	}
 	owner = normalizeActionOwner(owner)
 	if owner == "" {
 		return PreviewResult{}, fmt.Errorf("preview owner is required")

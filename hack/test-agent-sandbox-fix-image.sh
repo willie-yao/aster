@@ -164,11 +164,27 @@ GO
     cat > message_test.go <<"GO"
 package fixfixture
 
-import "testing"
+import (
+    "bytes"
+    "os"
+    "path/filepath"
+    "testing"
+)
 
 func TestMessage(t *testing.T) {
 	if got := Message(); got != "after" {
 		t.Fatalf("Message() = %q", got)
+	}
+}
+
+func TestValidationIsolation(t *testing.T) {
+	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), "private-state")); !os.IsNotExist(err) {
+		t.Fatalf("OpenCode private state remained visible: %v", err)
+	}
+	if data, err := os.ReadFile("/proc/1/environ"); err == nil && (
+		bytes.Contains(data, []byte("PROW_AI_MODEL_PROVIDER_TOKEN=")) ||
+		bytes.Contains(data, []byte("PROW_AI_FIX_EXECUTION_REQUEST_B64="))) {
+		t.Fatal("executor parent environment remained visible")
 	}
 }
 GO
@@ -182,6 +198,7 @@ GO
 cat >"$tmp/opencode-success" <<'EOF_SUCCESS'
 #!/bin/sh
 set -eu
+printf '%s\n' 'selected private evidence' > "$HOME/private-state"
 cat > message.go <<'GO'
 package fixfixture
 
@@ -211,7 +228,7 @@ provider = {
     "model": "fixture-model",
     "auth": {"type": "none"},
 }
-if mode == "credential":
+if mode in ("credential", "direct"):
     provider = {
         "credential_mode": "direct",
         "api": "chat_completions",
@@ -283,6 +300,34 @@ assert "go version go1.25.12 linux/amd64" in commands[0].get("stdout", ""), comm
 patch = result["diff"]
 assert "diff --git a/message.go b/message.go" in patch, patch
 open(patch_path, "w", encoding="utf-8").write(patch)
+PY
+
+direct_credential='fixture-direct-provider-credential-0123456789abcdef'
+direct_request=$(make_request direct)
+set +e
+docker run --rm "${runtime_args[@]}" \
+  --mount "type=volume,src=${source_volume},dst=/input/repository,readonly" \
+  --mount "type=bind,src=${tmp}/opencode-success,dst=/usr/local/bin/opencode,readonly" \
+  --env "PROW_AI_FIX_EXECUTION_REQUEST_B64=${direct_request}" \
+  --env "PROW_AI_MODEL_PROVIDER_TOKEN=${direct_credential}" \
+  "$image" >"$tmp/direct-result.json" 2>"$tmp/direct-result.err"
+direct_status=$?
+set -e
+if [[ $direct_status -ne 0 ]]; then
+  cat "$tmp/direct-result.json" "$tmp/direct-result.err" >&2
+  exit "$direct_status"
+fi
+if grep -Fq "$direct_credential" "$tmp/direct-result.json" "$tmp/direct-result.err"; then
+  echo 'direct provider credential escaped validation isolation' >&2
+  exit 1
+fi
+python3 - "$tmp/direct-result.json" <<'PY'
+import json
+import sys
+
+result = json.load(open(sys.argv[1], encoding="utf-8"))
+assert result["terminal_state"] == "succeeded", result
+assert all(entry["exit_code"] == 0 and not entry.get("timed_out", False) for entry in result["command_results"]), result
 PY
 
 docker run --rm "${runtime_args[@]}" \

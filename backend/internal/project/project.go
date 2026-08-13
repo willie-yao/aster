@@ -667,11 +667,9 @@ type FixPRs struct {
 	// an LLM reviewer's objections before the fix is dropped. Defaults to 1; 0
 	// disables the review. Excluded from manifest.json.
 	CritiqueRetries *int `yaml:"critique_retries,omitempty" json:"-"`
-	// Verify builds and vets a proposed fix in a local Runtime before the PR is
-	// opened, recording the verdict on the PR and preview. Off by default; it
-	// needs a git and language toolchain on the runner, which the distroless
-	// image lacks (verification then reports "skipped"). Excluded from
-	// manifest.json.
+	// Verify builds and vets a proposed fix in a trusted local Runtime before the
+	// PR is opened. Agent Sandbox uses agent_runtime.allowed_commands instead and
+	// rejects this legacy verifier. Excluded from manifest.json.
 	Verify *FixVerify `yaml:"verify,omitempty" json:"-"`
 	// AgentRuntime tunes the coding-agent fix generator (a coding-agent CLI in a
 	// real workspace clone). A nil block uses opencode with defaults. Excluded
@@ -697,7 +695,8 @@ type FixDestination struct {
 
 // FixAgentRuntime configures the coding-agent generator for fix PRs.
 type FixAgentRuntime struct {
-	// Type selects "opencode" (default), "orka", or experimental "agent-sandbox".
+	// Type selects local-development "opencode" (default), "orka", or
+	// experimental "agent-sandbox".
 	Type string `yaml:"type,omitempty" json:"type,omitempty"`
 	// Model overrides the local opencode model. Orka takes its model from AgentRef.
 	Model string `yaml:"model,omitempty" json:"model,omitempty"`
@@ -1613,6 +1612,9 @@ func (c *Config) Validate() error {
 					return fmt.Errorf("ai.fix_prs.agent_runtime allowed_commands, model_provider, and output_limit_bytes apply only to the agent-sandbox runtime")
 				}
 			case "agent-sandbox":
+				if f.Verify != nil && f.Verify.Enabled {
+					return fmt.Errorf("ai.fix_prs.verify is not allowed with agent-sandbox; use agent_runtime.allowed_commands")
+				}
 				if f.CritiqueRetries != nil && *f.CritiqueRetries != 0 {
 					return fmt.Errorf("ai.fix_prs.critique_retries must be 0 for the one-shot agent-sandbox runtime")
 				}

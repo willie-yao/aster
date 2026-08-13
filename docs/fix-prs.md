@@ -15,10 +15,11 @@ scope, a CLA-signed commit author, and idempotent dedup.
 This is the highest-risk automation the engine offers (it writes code to a repo),
 so read this whole page before enabling it.
 
-The standard deployments do not include the coding-agent runtime. Scheduled and
-interactive fix generation require `opencode` and git in the process that runs
-the feature. File Issue and Mark Resolved work in the standard server image and
-do not have this requirement.
+The standard deployments do not include a coding-agent runtime. Local OpenCode
+requires `opencode`, git, and enforcing SRT on a trusted development or CI host.
+Agent Sandbox runs OpenCode and every target-controlled validation command only
+in the isolated executor workload. File Issue and Mark Resolved do not require a
+Fix PR runtime.
 
 ## Analysis-only causal groups
 
@@ -66,10 +67,29 @@ Any later change requires a new chat session.
 Fix generation starts only when the pinned build revision is still the target
 repository's default-branch head. Confirmation rechecks the owner-bound chat
 response, full analysis hash, source snapshot, symbol-grounding result,
-destination configuration, and branch head before any GitHub write. The Agent
-Sandbox request receives no
-GitHub token. Patch reconstruction, changed-path policy, configured validation
-commands, diff checks, and the separate preview confirmation remain unchanged.
+destination configuration, branch head, canonical patch reconstruction, and the
+retained exact executor command results
+before any GitHub write. The Agent Sandbox request receives no GitHub token. The
+dashboard does not rerun target repository build, test, vet, or validation
+commands during preview or confirmation.
+
+## Command execution and credential boundary
+
+The following boundary is enforced without a provider call. It follows the
+server, worker, fetcher, runtime, executor, Docker, and Helm contracts directly.
+
+| Process | Agent Sandbox Fix behavior | Environment, storage, network, and credentials |
+|---|---|---|
+| Dashboard server | Dispatches the Sandbox, reconstructs the canonical patch, validates files, identities, targets, and retained command results, then performs a separately confirmed GitHub write. It does not run target build, test, vet, or validation commands. | The server can hold `BOT_TOKEN`, AI and OAuth credentials, mounts the shared `/data` PVC, project configuration, and `/tmp`, and has normal dashboard egress. Target code never runs in this process. |
+| Worker or fetcher | Dispatches scheduled Sandbox generation, validates returned results, reconstructs the patch, and may open the configured draft PR. It does not run target commands for Agent Sandbox. | The process can hold `FIX_TOKEN`, AI credentials, shared `/data`, project configuration, and its normal network access. None of these enter the Sandbox request. |
+| `remote-fixer` image | Supplies the normal dashboard binaries and git for patch reconstruction. The included Go toolchain is not used to execute target code. | It inherits the server, worker, or fetcher Pod boundary. It is not a separate execution workload and receives no target command. |
+| Agent Sandbox executor | Clones the public pinned source, runs OpenCode once, stages the patch, then runs every configured exact validator and the final `git diff --cached --check`. | The workload mounts only bounded `/workspace` and `/tmp` `emptyDir` volumes. ServiceAccount token automount is disabled and no GitHub credential or dashboard PVC is present. Validation children receive only HOME, temp, PATH, locale, and CA variables. OpenCode state is removed before validation, the provider token is not inherited, and the parent is non-dumpable so validators cannot read the request or credential through `/proc`. Egress is governed by the consumer-owned execution namespace and network policy. |
+| `LocalAgentRuntime` | Runs OpenCode through enforcing SRT and fails closed if SRT is missing or invalid. | Local-development or trusted-CI only. Kubernetes capability advertisement does not enable it. |
+| `LocalRuntime` | Clones, overlays, and executes configured commands directly with `os/exec`. | No isolation beyond a temporary directory. It is available only with explicit `TRUSTED_LOCAL_FIX_RUNTIME=true` on a trusted host. Helm rejects that variable. Local artifact storage is unrelated. |
+
+Agent Sandbox confirmation repeats identity, source, symbol, target, destination,
+base, command-result, and canonical patch checks. It never repeats target command
+execution in the dashboard process.
 
 ## What it does
 
@@ -86,8 +106,10 @@ suggested fix, the engine:
    times. Agent Sandbox instead requires `critique_retries: 0`: it performs one
    generation request, then exact post-generation validation with no repair
    retry.
-3. Optionally **verifies** the change (build + vet) when `verify` is set,
-   stamping the verdict on the PR without ever blocking the draft.
+3. For Agent Sandbox, requires the complete ordered successful result for every
+   `allowed_commands` entry, including the final staged diff check. Legacy local
+   verification remains available only to trusted local development or CI for
+   non-Agent-Sandbox runtimes.
 4. Opens a **draft PR** via fork-and-PR with the change, the diff, and a review
    checklist in the body.
 
@@ -223,9 +245,10 @@ then drops the fix. The review uses the same AI client as generation.
 
 ### Coding-agent generator (`agent_runtime`)
 
-The fix generator is selected by `agent_runtime.type`. The reviewer, verification,
-dry-run preview, scope limits, and PR-opening path remain engine-owned for both
-backends.
+The fix generator is selected by `agent_runtime.type`. Scope limits, independent
+patch reconstruction, result validation, preview, and PR opening remain
+engine-owned. Agent Sandbox validators run in the executor, not in the dashboard
+process.
 
 Remote backends return a patch to the dashboard. Kubernetes deployments use the
 minimal `remote-fixer` engine image to reapply that patch to the pinned source
@@ -235,7 +258,10 @@ does not contain OpenCode or srt.
 #### `opencode` (default)
 
 The local backend runs the `opencode` CLI in a real clone on the runner. It uses
-the engine's `ai.endpoint`, `ai.model`, and `AI_TOKEN`.
+the engine's `ai.endpoint`, `ai.model`, and `AI_TOKEN`. It is local-development or
+trusted-CI only. Production server capability does not advertise Fix PR actions
+for this runtime. `make dev-actions` opts in explicitly with
+`TRUSTED_LOCAL_FIX_RUNTIME=1` under `AUTH_MODE=dev`.
 
 ```yaml
 ai:
@@ -259,9 +285,9 @@ does not contain them. Local `opencode` deployments should build
 the root [`Dockerfile`](../Dockerfile) `fixer-runtime` target, which installs
 all three at pinned versions, includes the server, worker, fetcher, and SPA, and
 sets `SRT_BIN`.
-The chart's `orka.fixRuntime.enabled` image contains git only because it
-reconstructs diffs returned by an Orka Agent; it does not support the local
-`opencode` backend.
+The chart runtime images reconstruct returned diffs but do not support the local
+`opencode` backend. Helm rejects `TRUSTED_LOCAL_FIX_RUNTIME`; Kubernetes
+deployments must use a production runtime.
 
 
 The local backend never executes without `srt`. The configured AI endpoint host
@@ -670,9 +696,16 @@ establish live compatibility with every Responses-like provider or model.
 
 Generation is one-shot. OpenCode Bash, web fetch, task delegation, external
 skills, and external-directory access are disabled. After OpenCode finishes,
-the executor stages the patch and runs the configured exact argv validators. A
-validator failure returns a terminal failed result. OpenCode does not observe
-that failure, issue a second model request, or repair the patch. Iterative
+the executor stages the patch and runs the configured exact argv validators with
+a credential-free environment. A validator failure
+returns a terminal failed result. The dashboard requires the complete ordered
+results, rechecks their argv, timeouts, exit codes, and final
+`git diff --cached --check`, and persists only the bounded structural result for
+confirmation. Before validators start, the executor removes OpenCode home and
+temporary state, unsets the provider credential from child environments, and
+makes the parent process non-dumpable so target code cannot read the original
+request or provider credential through `/proc`. OpenCode does not observe a
+validation failure, issue a second model request, or repair the patch. Iterative
 test-feedback repair is a possible future feature, not current behavior.
 
 Each `allowed_commands` item contains an exact `argv` list and an explicit

@@ -75,7 +75,7 @@ var ErrPreviewNotFound = errors.New("preview not found or expired")
 
 // previewTTL bounds how long a generated draft is held for confirmation.
 const previewTTL = 15 * time.Minute
-const sourceVerificationVersion = 4
+const sourceVerificationVersion = 5
 
 // AIConfig is the resolved chat-completions configuration used to draft fixes.
 type AIConfig struct {
@@ -207,6 +207,7 @@ type Service struct {
 	sourceVerifier           func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error)
 	sourceReaderFactory      sourceSnapshotReaderFactory
 	analysisPreviewValidator AnalysisPreviewValidator
+	fixActionsEnabled        bool
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
@@ -221,6 +222,7 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 		},
 		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{}, requestDone: map[string]chan struct{}{}, requestCleanups: map[string]struct{}{}, requestNotifyCancels: map[string]context.CancelFunc{},
 		requestTimeout: defaultRequestTimeout, requestStateWriter: statefile.WritePrivateJSONDurable,
+		fixActionsEnabled: true,
 	}
 	s.sourceVerifier = actionverify.Verify
 	s.managedRuntime = func() (runtime.ManagedAgentRuntime, error) {
@@ -237,6 +239,19 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 	}
 	s.loadActionRequests()
 	return s
+}
+
+// ConfigureFixActions controls whether Fix PR preview and confirmation are exposed.
+// Production server startup disables them for the local OpenCode runtime.
+func (s *Service) ConfigureFixActions(enabled bool) {
+	s.fixActionsEnabled = enabled
+}
+
+func (s *Service) requireFixActions() error {
+	if s == nil || !s.fixActionsEnabled {
+		return fmt.Errorf("%w: no production-capable Fix PR runtime is configured", ErrPreviewRejected)
+	}
+	return nil
 }
 
 // aiClient returns a chat client when AI is fully configured, else a nil
@@ -792,7 +807,14 @@ func (s *Service) buildFixManagerForRepositoryAccess(
 		CritiqueRetries: critiqueRetries,
 		PRFiller:        prFiller,
 	}
-	if eff.Verify != nil && eff.Verify.Enabled {
+	if eff.Verify != nil && eff.Verify.Enabled && ar.Type != "agent-sandbox" {
+		trusted, err := runtime.TrustedLocalRuntimeEnabled()
+		if err != nil {
+			return nil, err
+		}
+		if !trusted {
+			return nil, fmt.Errorf("local Fix PR verification requires %s=true on a trusted development or CI host", runtime.TrustedLocalRuntimeEnv)
+		}
 		opts.Verify = &fixpr.VerifyConfig{
 			Runtime:  runtime.NewLocal(),
 			Commands: eff.Verify.ParsedCommands(),
@@ -820,26 +842,28 @@ func (s *Service) buildFixManagerForRepositoryAccess(
 	}
 	gitToken := previewRepositoryToken(ar.Type, userToken, allowRepositoryToken)
 	opts.Agent = &fixpr.AgentConfig{
-		Runtime:             agentRuntime,
-		API:                 s.ai.API,
-		SharedModelEndpoint: ar.Type == "opencode",
-		Model:               model,
-		Endpoint:            s.ai.Endpoint,
-		ModelToken:          s.ai.Token,
-		MaxTurns:            ar.MaxTurns,
-		MaxFiles:            eff.MaxFiles,
-		ModelProvider:       ar.ModelProvider.RuntimeConfig(),
-		OutputLimitBytes:    ar.OutputLimitBytes,
-		AllowBash:           allowBash,
-		NetworkDomains:      ar.NetworkDomains,
-		CommandPolicy:       runtime.CommandPolicy{AllowShell: allowBash, Commands: commands},
-		Timeout:             ar.ParsedTimeout(),
-		GitToken:            gitToken,
-		ExecutionID:         actionRequestID(ctx),
+		Runtime:               agentRuntime,
+		API:                   s.ai.API,
+		SharedModelEndpoint:   ar.Type == "opencode",
+		Model:                 model,
+		Endpoint:              s.ai.Endpoint,
+		ModelToken:            s.ai.Token,
+		MaxTurns:              ar.MaxTurns,
+		MaxFiles:              eff.MaxFiles,
+		ModelProvider:         ar.ModelProvider.RuntimeConfig(),
+		OutputLimitBytes:      ar.OutputLimitBytes,
+		AllowBash:             allowBash,
+		NetworkDomains:        ar.NetworkDomains,
+		CommandPolicy:         runtime.CommandPolicy{AllowShell: allowBash, Commands: commands},
+		RequireCommandResults: ar.Type == "agent-sandbox",
+		Timeout:               ar.ParsedTimeout(),
+		GitToken:              gitToken,
+		ExecutionID:           actionRequestID(ctx),
 	}
 	if opts.Agent.ExecutionID != "" {
 		opts.Agent.WorkObserver = s.observeRuntimeWork(opts.Agent.ExecutionID)
 	}
+	opts.PatchToken = userToken
 	mgr := fixpr.NewManager(prClient,
 		fixStateFile(s.dataDir, eff, destination), opts)
 	return mgr, nil
@@ -1144,6 +1168,9 @@ const gfKind = "fix"
 
 // PreviewFix generates the exact fix PR preview and caches it for confirmation.
 func (s *Service) PreviewFix(ctx context.Context, failureID, owner, writeToken, instruction string) (PreviewResult, error) {
+	if err := s.requireFixActions(); err != nil {
+		return PreviewResult{}, err
+	}
 	preview, entry, err := s.generateFixPreview(ctx, failureID, writeToken, instruction)
 	if err != nil {
 		return PreviewResult{}, err
@@ -1164,6 +1191,9 @@ func (s *Service) PreviewFix(ctx context.Context, failureID, owner, writeToken, 
 func (s *Service) PreviewFixWithContext(
 	ctx context.Context, pattern models.PatternAnalysis, owner, writeToken, instruction string, target FixTarget, generationContext fixpr.GenerationContext,
 ) (_ PreviewResult, resultErr error) {
+	if err := s.requireFixActions(); err != nil {
+		return PreviewResult{}, err
+	}
 	logicalID := actionRequestID(ctx)
 	if logicalID == "" {
 		logicalID = pattern.ID
@@ -1297,6 +1327,9 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 		}
 		return mgr.FindOpen(ctx, entry.spec.Key)
 	case gfKind:
+		if err := s.requireFixActions(); err != nil {
+			return "", false, err
+		}
 		eff := s.cfg.EffectiveFixPRs()
 		if entry.fix == nil {
 			return "", false, fmt.Errorf("no source repo resolved (set ai.fix_prs.repo or branding.source_repo)")
@@ -1379,6 +1412,9 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 		}
 		return url, nil
 	case gfKind:
+		if err := s.requireFixActions(); err != nil {
+			return "", err
+		}
 		eff := s.cfg.EffectiveFixPRs()
 		destination, err := s.fixDestinationForEntry(entry)
 		if err != nil || entry.targetRepo != destination.Repo.Owner+"/"+destination.Repo.Name {

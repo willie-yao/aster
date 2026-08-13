@@ -250,25 +250,18 @@ func (r ExecutionResult) Validate(request ExecutionRequest) error {
 	if len(r.CommandResults) > len(request.CommandPolicy.Commands) || len(r.CommandResults) > request.MaxSteps {
 		return fmt.Errorf("command results exceed the request policy")
 	}
-	if r.TerminalState == TerminalSucceeded && len(r.CommandResults) != len(request.CommandPolicy.Commands) {
-		return fmt.Errorf("successful execution must report every allowed command")
-	}
-	for index, result := range r.CommandResults {
-		if !sameArgv(result.Argv, request.CommandPolicy.Commands[index].Argv) {
-			return fmt.Errorf("command result %d does not match the allowed argv", index)
+	if r.TerminalState == TerminalSucceeded {
+		if err := ValidateSuccessfulCommandResults(request.CommandPolicy.Commands, r.CommandResults); err != nil {
+			return err
 		}
-		if result.DurationMs < 0 {
-			return fmt.Errorf("command result %d has a negative duration", index)
-		}
-		commandTimeoutMs := request.CommandPolicy.Commands[index].TimeoutSeconds * 1000
-		if result.ExitCode == 0 && !result.TimedOut && result.DurationMs > commandTimeoutMs {
-			return fmt.Errorf("successful command result %d duration exceeds its configured timeout", index)
-		}
-		if result.DurationMs > commandTimeoutMs+maxExecutionCommandDurationGraceMs {
-			return fmt.Errorf("command result %d duration exceeds its configured timeout and cleanup grace", index)
-		}
-		if r.TerminalState == TerminalSucceeded && (result.ExitCode != 0 || result.TimedOut) {
-			return fmt.Errorf("successful execution has a failed command result")
+	} else {
+		for index, result := range r.CommandResults {
+			if !sameArgv(result.Argv, request.CommandPolicy.Commands[index].Argv) {
+				return fmt.Errorf("command result %d does not match the allowed argv", index)
+			}
+			if err := validateCommandResultTiming(index, request.CommandPolicy.Commands[index], result); err != nil {
+				return err
+			}
 		}
 	}
 	changed := append([]string(nil), r.ChangedFiles...)
@@ -318,6 +311,56 @@ func (r ExecutionResult) Validate(request ExecutionRequest) error {
 	}
 	if int64(len(encodedResult)+1) > request.OutputLimitBytes+maxExecutionResourceMetadataBytes {
 		return fmt.Errorf("enriched execution result exceeds its bounded metadata allowance")
+	}
+	return nil
+}
+
+// ValidateSuccessfulCommandResults verifies the complete ordered result set for
+// one successful external execution. Every configured command must appear once,
+// succeed within its timeout, and end with the exact staged diff check.
+func ValidateSuccessfulCommandResults(commands []ExecutionCommand, results []CommandResult) error {
+	if len(commands) == 0 {
+		return fmt.Errorf("at least one final validation command is required")
+	}
+	if !sameArgv(commands[len(commands)-1].Argv, []string{"git", "diff", "--cached", "--check"}) {
+		return fmt.Errorf("the final validation command must be git diff --cached --check")
+	}
+	if len(results) != len(commands) {
+		return fmt.Errorf("successful execution must report every allowed command exactly once")
+	}
+	for index, result := range results {
+		if commands[index].TimeoutSeconds <= 0 || commands[index].TimeoutSeconds > int64((30*time.Minute)/time.Second) {
+			return fmt.Errorf("allowed command %d has an invalid timeout", index)
+		}
+		if err := ValidateExecutionCommandArgv(commands[index].Argv); err != nil {
+			return fmt.Errorf("allowed command %d: %w", index, err)
+		}
+		if !sameArgv(result.Argv, commands[index].Argv) {
+			return fmt.Errorf("command result %d does not match the allowed argv", index)
+		}
+		if err := validateCommandResultTiming(index, commands[index], result); err != nil {
+			return err
+		}
+		if result.TimedOut {
+			return fmt.Errorf("command result %d timed out", index)
+		}
+		if result.ExitCode != 0 {
+			return fmt.Errorf("command result %d failed with exit code %d", index, result.ExitCode)
+		}
+	}
+	return nil
+}
+
+func validateCommandResultTiming(index int, command ExecutionCommand, result CommandResult) error {
+	if result.DurationMs < 0 {
+		return fmt.Errorf("command result %d has a negative duration", index)
+	}
+	commandTimeoutMs := command.TimeoutSeconds * 1000
+	if result.ExitCode == 0 && !result.TimedOut && result.DurationMs > commandTimeoutMs {
+		return fmt.Errorf("successful command result %d duration exceeds its configured timeout", index)
+	}
+	if result.DurationMs > commandTimeoutMs+maxExecutionCommandDurationGraceMs {
+		return fmt.Errorf("command result %d duration exceeds its configured timeout and cleanup grace", index)
 	}
 	return nil
 }

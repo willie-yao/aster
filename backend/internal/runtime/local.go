@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,12 +25,29 @@ const (
 	waitDelay = 5 * time.Second
 )
 
+// TrustedLocalRuntimeEnv explicitly enables unisolated local validation on a
+// trusted development or CI host. Kubernetes charts reject this setting.
+const TrustedLocalRuntimeEnv = "TRUSTED_LOCAL_FIX_RUNTIME"
+
+// TrustedLocalRuntimeEnabled reports whether the trusted-host opt-in is set.
+func TrustedLocalRuntimeEnabled() (bool, error) {
+	value := strings.TrimSpace(os.Getenv(TrustedLocalRuntimeEnv))
+	if value == "" {
+		return false, nil
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("invalid %s %q: %w", TrustedLocalRuntimeEnv, value, err)
+	}
+	return enabled, nil
+}
+
 // LocalRuntime runs commands on the local host: it shallow-clones the repo into
 // a temp directory, overlays the changed files, and executes the command with
-// os/exec. It provides no isolation beyond a scratch directory, so it suits a
-// trusted dev or CI host and a controlled demo; use a SandboxRuntime for
-// untrusted execution at scale. Returns ErrUnavailable when git or the command
-// binary is not on PATH, so a distroless deployment degrades to "skipped".
+// os/exec. It provides no isolation beyond a scratch directory and is only for
+// trusted local development or trusted CI. It must not validate untrusted target
+// code in a dashboard production process. Returns ErrUnavailable when git or the
+// command binary is not on PATH.
 type LocalRuntime struct{}
 
 // NewLocal returns a LocalRuntime.
@@ -131,8 +149,10 @@ func materialize(ctx context.Context, dir string, repo RepoRef) error {
 		{"-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD"},
 	}
 	for _, args := range steps {
-		cmd := exec.CommandContext(ctx, "git", args...)
+		gitArgs := append([]string{"-c", "core.hooksPath=/dev/null"}, args...)
+		cmd := exec.CommandContext(ctx, "git", gitArgs...)
 		cmd.Dir = dir
+		cmd.Env = gitSafeEnvironment()
 		var buf bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &buf, &buf
 		if err := cmd.Run(); err != nil {
@@ -144,6 +164,26 @@ func materialize(ctx context.Context, dir string, repo RepoRef) error {
 		}
 	}
 	return nil
+}
+
+func gitSafeEnvironment() []string {
+	env := []string{
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_OPTIONAL_LOCKS=0",
+	}
+	for _, name := range []string{
+		"PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "SSL_CERT_FILE", "SSL_CERT_DIR",
+		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+		"http_proxy", "https_proxy", "no_proxy", "all_proxy",
+	} {
+		if value, ok := os.LookupEnv(name); ok && value != "" {
+			env = append(env, name+"="+value)
+		}
+	}
+	return env
 }
 
 // overlay writes each file over the checkout, rejecting paths that escape dir

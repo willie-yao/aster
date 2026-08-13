@@ -176,3 +176,18 @@ func TestResultPassed(t *testing.T) {
 		t.Error("timed out should not pass")
 	}
 }
+
+func TestTrustedLocalRuntimeEnabledRequiresExplicitValidOptIn(t *testing.T) {
+	t.Setenv(TrustedLocalRuntimeEnv, "")
+	if enabled, err := TrustedLocalRuntimeEnabled(); err != nil || enabled {
+		t.Fatalf("unset enabled=%t err=%v", enabled, err)
+	}
+	t.Setenv(TrustedLocalRuntimeEnv, "true")
+	if enabled, err := TrustedLocalRuntimeEnabled(); err != nil || !enabled {
+		t.Fatalf("true enabled=%t err=%v", enabled, err)
+	}
+	t.Setenv(TrustedLocalRuntimeEnv, "not-a-bool")
+	if _, err := TrustedLocalRuntimeEnabled(); err == nil {
+		t.Fatal("invalid trusted local runtime opt-in was accepted")
+	}
+}

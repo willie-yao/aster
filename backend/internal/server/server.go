@@ -78,8 +78,11 @@ type Options struct {
 	Capabilities Capabilities
 	// Auth enables admin-gated operator features. Actions additionally enables
 	// write endpoints. With no Auth the server stays read-only.
-	Auth                           auth.Authenticator
-	Actions                        ActionRunner
+	Auth    auth.Authenticator
+	Actions ActionRunner
+	// DisableFixActions keeps issue and resolution actions available while
+	// withholding Fix PR routes and capability advertisement.
+	DisableFixActions              bool
 	AnalysisChat                   AnalysisChatRunner
 	AnalysisCorrections            AnalysisCorrectionRunner
 	SourceInvestigation            SourceInvestigationRunner
@@ -149,8 +152,10 @@ type AuthInfo struct {
 
 // Features enumerates the optional interactive capabilities.
 type Features struct {
-	// Actions enables on-page create-issue / propose-fix buttons.
+	// Actions enables authenticated issue and resolution controls.
 	Actions bool `json:"actions"`
+	// FixPRs advertises production-capable Fix PR preview and confirmation.
+	FixPRs bool `json:"fix_prs,omitempty"`
 	// AnalysisCritiqueVersion lets action UIs apply the current critique gate.
 	AnalysisCritiqueVersion int `json:"analysis_critique_version,omitempty"`
 	// ActionRequests enables persisted asynchronous draft generation.
@@ -341,8 +346,11 @@ func Handler(opts Options) (http.Handler, error) {
 		guard := func(next http.Handler) http.Handler { return csrfGuard(trusted, next) }
 		mux.Handle("POST /api/failures/{id}/create-issue/preview",
 			auth.Middleware(opts.Auth, guard(previewHandler(timeout, opts.Actions.PreviewIssue))))
-		mux.Handle("POST /api/failures/{id}/propose-fix/preview",
-			auth.Middleware(opts.Auth, guard(previewHandler(timeout, opts.Actions.PreviewFix))))
+		if !opts.DisableFixActions {
+			caps.Features.FixPRs = true
+			mux.Handle("POST /api/failures/{id}/propose-fix/preview",
+				auth.Middleware(opts.Auth, guard(previewHandler(timeout, opts.Actions.PreviewFix))))
+		}
 		mux.Handle("POST /api/actions/confirm",
 			auth.Middleware(opts.Auth, guard(confirmHandler(timeout, opts.Actions.Confirm))))
 		mux.Handle("POST /api/failures/{id}/resolve",
@@ -358,7 +366,7 @@ func Handler(opts Options) (http.Handler, error) {
 		if requests, ok := opts.Actions.(ActionRequestRunner); ok {
 			caps.Features.ActionRequests = true
 			mux.Handle("POST /api/failures/{id}/{action}/requests",
-				auth.Middleware(opts.Auth, guard(createActionRequestHandler(requests.CreateRequest))))
+				auth.Middleware(opts.Auth, guard(createActionRequestHandler(requests.CreateRequest, !opts.DisableFixActions))))
 			mux.Handle("GET /api/action-requests/{id}",
 				auth.Middleware(opts.Auth, getActionRequestHandler(requests.GetRequest)))
 			mux.Handle("POST /api/action-requests/{id}/confirm",
@@ -645,11 +653,15 @@ func actionEligibilityHandler(timeout time.Duration, run actionEligibilityFunc) 
 
 type createActionRequestFunc func(failureID, kind, login, userToken, instruction, supersedesID string) (actions.ActionRequestView, error)
 
-func createActionRequestHandler(run createActionRequestFunc) http.Handler {
+func createActionRequestHandler(run createActionRequestFunc, allowFix bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFrom(r.Context())
 		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.PathValue("action") == "propose-fix" && !allowFix {
+			http.NotFound(w, r)
 			return
 		}
 		var body struct {

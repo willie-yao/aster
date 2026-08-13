@@ -214,7 +214,7 @@ func TestExecutionResultRejectsMismatchedOutput(t *testing.T) {
 		}, want: "max_files"},
 		{name: "command mismatch", edit: func(r *ExecutionResult) { r.CommandResults[0].Argv = []string{"sh", "-c", "true"} }, want: "allowed argv"},
 		{name: "missing command result", edit: func(r *ExecutionResult) { r.CommandResults = nil }, want: "every allowed command"},
-		{name: "failed command on success", edit: func(r *ExecutionResult) { r.CommandResults[0].ExitCode = 1 }, want: "failed command"},
+		{name: "failed command on success", edit: func(r *ExecutionResult) { r.CommandResults[0].ExitCode = 1 }, want: "failed with exit code"},
 		{name: "changed file without diff", edit: func(r *ExecutionResult) { r.Diff = "" }, want: "unified diff"},
 		{name: "failed without reason", edit: func(r *ExecutionResult) { r.TerminalState = TerminalFailed }, want: "failure reason"},
 		{name: "oversized output", edit: func(r *ExecutionResult) { r.StdoutSummary = strings.Repeat("x", 65<<10) }, want: "output limit"},

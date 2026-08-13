@@ -402,6 +402,9 @@ Validate AI provider configuration.
 
 {{/* Validate the fail-closed Orka fix Task contract. */}}
 {{- define "prow-ai-dashboard.validateFixRuntime" -}}
+{{- range $env := concat .Values.server.extraEnv .Values.fetcher.extraEnv -}}
+  {{- if eq (default "" $env.name) "TRUSTED_LOCAL_FIX_RUNTIME" -}}{{- fail "extraEnv must not set TRUSTED_LOCAL_FIX_RUNTIME; the local OpenCode Fix runtime is development-only" -}}{{- end -}}
+{{- end -}}
 {{- if and .Values.orka.fixRuntime.enabled .Values.agentSandbox.fixRuntime.enabled -}}{{- fail "agentSandbox.fixRuntime cannot be combined with Orka runtimes or source investigation" -}}{{- end -}}
 {{- if .Values.orka.fixRuntime.enabled -}}
   {{- $cfg := .Values.orka.fixRuntime.admission -}}

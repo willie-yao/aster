@@ -63,7 +63,7 @@ remains identical.
 | `GET /` | The built SPA, when `-static-dir` is set, with deep-link fallback to `index.html`. |
 | `GET /api/failures/{id}/eligibility` | Admin-gated deterministic source preflight without draft generation. |
 | `POST /api/failures/{id}/create-issue/preview` | Admin-gated: render the exact GitHub issue for one failure without filing it. Enabled only when actions are configured. |
-| `POST /api/failures/{id}/propose-fix/preview` | Admin-gated: generate and render the exact draft fix PR for one failure without opening it. |
+| `POST /api/failures/{id}/propose-fix/preview` | Admin-gated: generate and render the exact draft fix PR for one failure without opening it. Registered only when `features.fix_prs` is true. |
 | `POST /api/actions/confirm` | Admin-gated: file the issue or open the PR previewed under the posted `{"token":...}`. |
 | `POST /api/failures/{id}/{action}/requests` | Create a persisted asynchronous issue or fix draft request. Pass `supersedes_request_id` to atomically replace an active request. |
 | `GET /api/action-requests/{id}` | Read the owning admin's pending, ready, failed, or confirmed request. |
@@ -455,7 +455,9 @@ advertise the feature and continue stripping `ai_traces.json` before publication
 
 When analysis chat and write actions are both configured for the same source and
 Fix PR repository, the server advertises `features.chat_fix: true`. It advertises
-`features.junit_chat_fix: true` only when the Fix runtime is Agent Sandbox. A
+`features.fix_prs: true` only for Agent Sandbox, Orka, or an explicit trusted
+local-development opt-in, and advertises `features.junit_chat_fix: true` only
+when the Fix runtime is Agent Sandbox. A
 client can request a fix preview for one successful assistant response:
 
 ```http
@@ -491,9 +493,10 @@ configuration, and branch head before any GitHub write.
 Generation receives only the bounded published analysis, selected answer,
 optional proposed revision, artifact citations, verified source paths and
 identity, and optional maintainer instruction. It never receives the complete
-transcript or a GitHub credential in the Agent Sandbox request. Patch
-reconstruction, allowed changed paths, configured validation commands, and diff
-checks use the existing Fix PR pipeline.
+transcript or a GitHub credential in the Agent Sandbox request. The executor runs
+the configured validators and final staged diff check. The server validates their
+complete ordered results and independently reconstructs the canonical patch at
+preview and confirmation without executing target code locally.
 
 Legacy action-capable recurring patterns keep their existing request fields:
 

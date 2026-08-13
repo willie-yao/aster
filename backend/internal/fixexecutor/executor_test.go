@@ -443,3 +443,48 @@ func TestWriteOpenCodeConfigUsesNativeResponsesProvider(t *testing.T) {
 		t.Fatalf("config retained the operation path: %s", data)
 	}
 }
+
+func TestValidationCommandsCannotReadProviderOrOpenCodeState(t *testing.T) {
+	credential := strings.Repeat("fixture-provider-credential-", 2)
+	t.Setenv(modelprovider.TokenEnv, credential)
+	repository, sha := fixtureRepository(t)
+	request := fixtureRequest(repository, sha)
+	request.ModelProvider = testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model")
+	binDir := t.TempDir()
+	validator := filepath.Join(binDir, "private-state-check")
+	script := `#!/bin/sh
+set -eu
+test ! -e "$HOME/private-state"
+test -z "${PROW_AI_MODEL_PROVIDER_TOKEN:-}"
+if [ -r "/proc/$PPID/environ" ]; then
+  if tr '\000' '\n' < "/proc/$PPID/environ" | grep -Fq 'fixture-provider-credential-'; then
+    echo 'parent credential visible' >&2
+    exit 1
+  fi
+fi
+`
+	if err := os.WriteFile(validator, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	request.MaxSteps = 3
+	request.CommandPolicy.Commands = []engineruntime.ExecutionCommand{
+		{Argv: []string{"private-state-check"}, TimeoutSeconds: 10},
+		{Argv: []string{"git", "diff", "--cached", "--check"}, TimeoutSeconds: 10},
+	}
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: t.TempDir(),
+		RunOpenCode: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
+			if err := os.WriteFile(filepath.Join(spec.HomeDir, "private-state"), []byte("selected private evidence\n"), 0o600); err != nil {
+				return "", "", err
+			}
+			return "", "", os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte("changed\n"), 0o644)
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalSucceeded {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(result.CommandResults) != 2 || result.CommandResults[0].ExitCode != 0 {
+		t.Fatalf("command results = %+v", result.CommandResults)
+	}
+}

@@ -67,7 +67,7 @@ func ApplyDiff(ctx context.Context, repo RepoRef, diff string) (map[string]strin
 }
 
 func validateRemoteContentSizes(ctx context.Context, work string) error {
-	names, err := gitOut(ctx, work, "diff", "--cached", "--name-only", "--diff-filter=AM")
+	names, err := gitOut(ctx, work, "diff", "--no-ext-diff", "--cached", "--name-only", "--diff-filter=AM")
 	if err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func validateRemoteContentSizes(ctx context.Context, work string) error {
 }
 
 func validateRemoteChange(ctx context.Context, work string) error {
-	status, err := gitOut(ctx, work, "diff", "--cached", "--name-status")
+	status, err := gitOut(ctx, work, "diff", "--no-ext-diff", "--cached", "--name-status")
 	if err != nil {
 		return err
 	}
@@ -120,7 +120,7 @@ func validateRemoteChange(ctx context.Context, work string) error {
 		}
 		changed = append(changed, file)
 	}
-	numstat, err := gitOut(ctx, work, "diff", "--cached", "--numstat")
+	numstat, err := gitOut(ctx, work, "diff", "--no-ext-diff", "--cached", "--numstat")
 	if err != nil {
 		return err
 	}
@@ -140,7 +140,7 @@ func validateRemoteChange(ctx context.Context, work string) error {
 			return fmt.Errorf("%w: unsupported symlink or submodule at %s", ErrResultContract, file)
 		}
 	}
-	summary, err := gitOut(ctx, work, "diff", "--cached", "--summary")
+	summary, err := gitOut(ctx, work, "diff", "--no-ext-diff", "--cached", "--summary")
 	if err != nil {
 		return err
 	}
