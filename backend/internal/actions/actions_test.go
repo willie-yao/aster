@@ -2304,3 +2304,21 @@ func TestConversionPolicyRejectsPersistedPreviewAndConfirmation(t *testing.T) {
 		t.Fatalf("Confirm unsafe preview error = %v code=%s", err, ReasonCodeOf(err))
 	}
 }
+
+func TestDisabledFixActionsRejectPreviewRequestsAndConfirmation(t *testing.T) {
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
+	service.ConfigureFixActions(false)
+	if _, err := service.PreviewFix(t.Context(), "failure", "alice", "token", ""); !errors.Is(err, ErrPreviewRejected) {
+		t.Fatalf("PreviewFix error = %v", err)
+	}
+	if _, err := service.CreateRequest("failure", "propose-fix", "alice", "token", "", ""); !errors.Is(err, ErrPreviewRejected) {
+		t.Fatalf("CreateRequest error = %v", err)
+	}
+	entry := &previewEntry{kind: gfKind, fix: &fixpr.GeneratedFix{}}
+	if _, err := service.confirmEntry(t.Context(), entry, "token"); !errors.Is(err, ErrPreviewRejected) {
+		t.Fatalf("confirmEntry error = %v", err)
+	}
+	if _, _, err := service.reconcileEntry(t.Context(), entry, "token"); !errors.Is(err, ErrPreviewRejected) {
+		t.Fatalf("reconcileEntry error = %v", err)
+	}
+}

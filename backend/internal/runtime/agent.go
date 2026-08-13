@@ -133,6 +133,7 @@ type ManagedAgentRuntime interface {
 
 // LocalAgentRuntime shallow-clones a repository into temporary directories,
 // runs a coding-agent CLI through ProcessSandbox, and returns the changed files.
+// It is for local development or trusted CI, not Kubernetes production.
 // NewLocalAgent requires the enforcing srt backend and never falls back to
 // direct execution. Returns ErrUnavailable when git or the CLI binary is not on
 // PATH.
@@ -315,7 +316,7 @@ func gitChanges(ctx context.Context, dir, token string) (map[string]string, stri
 	if err := gitRun(ctx, dir, "add", "-A"); err != nil {
 		return nil, "", err
 	}
-	names, err := gitOut(ctx, dir, "diff", "--cached", "--name-only")
+	names, err := gitOut(ctx, dir, "diff", "--no-ext-diff", "--cached", "--name-only")
 	if err != nil {
 		return nil, "", err
 	}
@@ -335,7 +336,7 @@ func gitChanges(ctx context.Context, dir, token string) (map[string]string, stri
 		}
 		files[p] = string(b)
 	}
-	diff, err := gitOut(ctx, dir, "diff", "--cached")
+	diff, err := gitOut(ctx, dir, "diff", "--no-ext-diff", "--cached")
 	if err != nil {
 		return nil, "", err
 	}
@@ -343,8 +344,10 @@ func gitChanges(ctx context.Context, dir, token string) (map[string]string, stri
 }
 
 func gitRun(ctx context.Context, dir string, args ...string) error {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	gitArgs := append([]string{"-c", "core.hooksPath=/dev/null"}, args...)
+	cmd := exec.CommandContext(ctx, "git", gitArgs...)
 	cmd.Dir = dir
+	cmd.Env = gitSafeEnvironment()
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	if err := cmd.Run(); err != nil {
@@ -354,8 +357,10 @@ func gitRun(ctx context.Context, dir string, args ...string) error {
 }
 
 func gitOut(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	gitArgs := append([]string{"-c", "core.hooksPath=/dev/null"}, args...)
+	cmd := exec.CommandContext(ctx, "git", gitArgs...)
 	cmd.Dir = dir
+	cmd.Env = gitSafeEnvironment()
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {

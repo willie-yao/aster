@@ -72,7 +72,13 @@ func previewSubject() remediationinvestigation.ActionableSubject {
 }
 func newTestService(t *testing.T, resolver *fakeResolver, agent *fakeAgent, validator *fakeValidator) *Service {
 	t.Helper()
-	s, err := New(resolver, Options{Runtime: agent, Validator: validator, ApplyDiff: func(context.Context, engineruntime.RepoRef, string) (map[string]string, string, error) {
+	if agent.result.CommandResults == nil {
+		agent.result.CommandResults = []engineruntime.CommandResult{
+			{Argv: []string{"go", "test", "./..."}, ExitCode: 0, DurationMs: 1},
+			{Argv: []string{"git", "diff", "--cached", "--check"}, ExitCode: 0, DurationMs: 1},
+		}
+	}
+	s, err := New(resolver, Options{Runtime: agent, ApplyDiff: func(context.Context, engineruntime.RepoRef, string) (map[string]string, string, error) {
 		return map[string]string{"config/jobs/periodic.yaml": "periodics:\n- name: periodic\n  spec:\n    containers:\n    - name: test\n      env:\n      - name: FLAG\n        value: enabled\n"}, "canonical diff", nil
 	}})
 	if err != nil {
@@ -94,8 +100,11 @@ func TestPreviewSuccessIsNonConfirmableAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.calls != 1 || first.Diff != "canonical diff" || second.Diff != first.Diff || a.spec.Repo.Token != "" || len(first.ChangedFiles) != 1 {
+	if a.calls != 1 || v.calls != 0 || first.Diff != "canonical diff" || second.Diff != first.Diff || a.spec.Repo.Token != "" || len(first.ChangedFiles) != 1 || len(first.Validations) != 2 {
 		t.Fatalf("first=%+v calls=%d spec=%+v", first, a.calls, a.spec)
+	}
+	if !slices.Equal(first.Validations[len(first.Validations)-1].Argv, []string{"git", "diff", "--cached", "--check"}) {
+		t.Fatalf("final validation = %+v", first.Validations)
 	}
 	raw, _ := json.Marshal(first)
 	for _, bad := range []string{"private-id", "confirm", "token", "branch"} {
@@ -123,8 +132,8 @@ func TestPreviewFailsClosed(t *testing.T) {
 				return map[string]string{"controller.go": "other"}, "d", nil
 			}
 		}, ErrRejected},
-		{"validation", func(_ *fakeResolver, _ *fakeAgent, v *fakeValidator, _ *Service) {
-			v.result = engineruntime.Result{ExitCode: 1}
+		{"validation", func(_ *fakeResolver, a *fakeAgent, _ *fakeValidator, _ *Service) {
+			a.result.CommandResults[0].ExitCode = 1
 		}, ErrValidation},
 	}
 	for _, tt := range tests {

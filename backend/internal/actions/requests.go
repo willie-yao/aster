@@ -424,6 +424,9 @@ func validatedPreviewEntry(entry *previewEntry) (PreviewResult, error) {
 		if err := actiondraft.ValidateTitleBody(entry.fix.Title, entry.fix.Description); err != nil {
 			return PreviewResult{}, err
 		}
+		if err := entry.fix.ValidateExecutionVerification(); err != nil {
+			return PreviewResult{}, err
+		}
 		snapshot := entry.fix.Snapshot()
 		policyText := strings.Join([]string{
 			snapshot.Pattern.SuggestedFix, snapshot.Pattern.SharedRootCause, snapshot.Pattern.Summary,
@@ -824,6 +827,11 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	if kind != "create-issue" && kind != "propose-fix" {
 		return ActionRequestView{}, fmt.Errorf("unsupported action %q", kind)
 	}
+	if kind == "propose-fix" {
+		if err := s.requireFixActions(); err != nil {
+			return ActionRequestView{}, err
+		}
+	}
 	subject, err := s.resolveSubject(failureID)
 	if err != nil {
 		return ActionRequestView{}, err
@@ -1210,6 +1218,12 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 	if request == nil || request.Owner != owner {
 		s.rmu.Unlock()
 		return "", ErrRequestNotFound
+	}
+	if request.Kind == "propose-fix" {
+		if err := s.requireFixActions(); err != nil {
+			s.rmu.Unlock()
+			return "", err
+		}
 	}
 	if request.Status == RequestConfirmed && request.ResultURL != "" {
 		url := request.ResultURL

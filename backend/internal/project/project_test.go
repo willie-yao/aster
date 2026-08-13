@@ -1765,3 +1765,20 @@ ai:
 		t.Fatalf("reasoning effort = %q", provider.ReasoningEffort)
 	}
 }
+
+func TestValidateRejectsLegacyLocalVerifierWithAgentSandbox(t *testing.T) {
+	cfg := validConfig()
+	allowBash := false
+	cfg.AI = &AI{FixPRs: &FixPRs{
+		Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com",
+		Verify: &FixVerify{Enabled: true, Commands: []string{"go test ./..."}},
+		AgentRuntime: &FixAgentRuntime{
+			Type: "agent-sandbox", AllowBash: &allowBash, MaxTurns: 30, Timeout: "90s", OutputLimitBytes: 131072,
+			AllowedCommands: []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}},
+			ModelProvider:   validAgentSandboxModelProvider(),
+		},
+	}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "use agent_runtime.allowed_commands") {
+		t.Fatalf("validation error = %v", err)
+	}
+}

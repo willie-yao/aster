@@ -186,6 +186,13 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 		result.StderrSummary = appendSummary(result.StderrSummary, stderr)
 		return finish(stateForContext(ctx), fmt.Sprintf("snapshot generated patch: %v", err))
 	}
+	if err := resetPrivateRuntimeDirs(home, temp); err != nil {
+		return finish(engineruntime.TerminalFailed, fmt.Sprintf("reset private runtime state before validation: %v", err))
+	}
+	_ = os.Unsetenv(modelprovider.TokenEnv)
+	if err := lockProcessSecrets(); err != nil {
+		return finish(engineruntime.TerminalFailed, fmt.Sprintf("protect executor process state before validation: %v", err))
+	}
 
 	for index, command := range request.CommandPolicy.Commands {
 		commandStarted := now()
@@ -514,6 +521,18 @@ func runCommandExact(ctx context.Context, dir string, env []string, limit int, a
 		return stdout.String(), stderr.String(), fmt.Errorf("command output exceeds %d bytes", stdout.limit)
 	}
 	return stdout.String(), stderr.String(), err
+}
+
+func resetPrivateRuntimeDirs(paths ...string) error {
+	for _, path := range paths {
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+		if err := os.Mkdir(path, 0o700); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func setGitMetadataWritable(root string, writable bool) error {

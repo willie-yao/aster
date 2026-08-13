@@ -227,8 +227,8 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 	if actionService != nil && chatService != nil {
 		analysisRepo := cfg.EffectiveAnalysisSourceRepo()
 		fixConfig := cfg.EffectiveFixPRs()
-		exactEnabled := exactJUnitChatFixEnabled(fixConfig)
-		legacyEnabled := features.SourceInvestigation
+		exactEnabled := exactJUnitChatFixEnabled(fixConfig) && !opts.DisableFixActions
+		legacyEnabled := features.SourceInvestigation && !opts.DisableFixActions
 		if (exactEnabled || legacyEnabled) && fixConfig.Repo != nil && strings.EqualFold(analysisRepo.Owner, fixConfig.Repo.Owner) && strings.EqualFold(analysisRepo.Name, fixConfig.Repo.Name) {
 			bridge := chatfix.NewService(chatService, actionService)
 			opts.ChatFix = bridge
@@ -253,6 +253,36 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 
 func exactJUnitChatFixEnabled(fixConfig project.FixPRs) bool {
 	return fixConfig.Enabled && fixConfig.AgentRuntime != nil && fixConfig.AgentRuntime.Type == "agent-sandbox"
+}
+
+func fixActionsEnabled(fixConfig project.FixPRs, authMode string) (bool, error) {
+	if !fixConfig.Enabled || fixConfig.AgentRuntime == nil {
+		return false, nil
+	}
+	if fixConfig.Verify != nil && fixConfig.Verify.Enabled {
+		trusted, err := engineruntime.TrustedLocalRuntimeEnabled()
+		if err != nil {
+			return false, err
+		}
+		if !trusted {
+			return false, fmt.Errorf("ai.fix_prs.verify requires %s=true on a trusted development or CI host", engineruntime.TrustedLocalRuntimeEnv)
+		}
+	}
+	switch fixConfig.AgentRuntime.Type {
+	case "agent-sandbox", "orka":
+		return true, nil
+	case "", "opencode":
+		trusted, err := engineruntime.TrustedLocalRuntimeEnabled()
+		if err != nil {
+			return false, err
+		}
+		if trusted && authMode != "dev" {
+			return false, fmt.Errorf("%s requires AUTH_MODE=dev", engineruntime.TrustedLocalRuntimeEnv)
+		}
+		return trusted, nil
+	default:
+		return false, nil
+	}
 }
 
 type interactiveFeatures struct {
@@ -388,6 +418,12 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 		Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, Headers: provider.Headers, SourceToken: os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"),
 		UsageRecorder: usageRecorder,
 	})
+	fixActions, err := fixActionsEnabled(cfg.EffectiveFixPRs(), opts.AuthMode)
+	if err != nil {
+		return nil, err
+	}
+	actionService.ConfigureFixActions(fixActions)
+	opts.DisableFixActions = !fixActions
 	opts.Actions = actionService
 	if value := os.Getenv("ACTION_TIMEOUT"); value != "" {
 		timeout, err := time.ParseDuration(value)
@@ -525,8 +561,8 @@ func enableCausalRemediationFixPreview(opts *server.Options, cfg *project.Config
 		return fmt.Errorf("causal remediation fix preview requires authenticated remediation investigation")
 	}
 	fixConfig := cfg.EffectiveFixPRs()
-	if fixConfig.AgentRuntime == nil {
-		return fmt.Errorf("causal remediation fix preview requires a configured fix runtime")
+	if fixConfig.AgentRuntime == nil || fixConfig.AgentRuntime.Type != "agent-sandbox" {
+		return fmt.Errorf("causal remediation fix preview requires the Agent Sandbox fix runtime")
 	}
 	agentRuntime, err := fixruntime.New(fixConfig.AgentRuntime)
 	if err != nil {
@@ -537,7 +573,7 @@ func enableCausalRemediationFixPreview(opts *server.Options, cfg *project.Config
 		identity = identified.RuntimeIdentity()
 	}
 	preview, err := causalfixpreview.New(operation, causalfixpreview.Options{
-		Runtime: agentRuntime, Validator: engineruntime.NewLocal(), ModelProvider: fixConfig.AgentRuntime.ModelProvider.RuntimeConfig(),
+		Runtime: agentRuntime, ModelProvider: fixConfig.AgentRuntime.ModelProvider.RuntimeConfig(),
 		Timeout: fixConfig.AgentRuntime.ParsedTimeout(), MaxSteps: fixConfig.AgentRuntime.MaxTurns, OutputLimitBytes: fixConfig.AgentRuntime.OutputLimitBytes, RuntimeIdentity: identity,
 	})
 	if err != nil {

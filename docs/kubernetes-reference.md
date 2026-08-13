@@ -522,12 +522,14 @@ The `agentSandbox.fixRuntime` chart section is disabled by default. It wires the
 dashboard to a consumer-installed Kubernetes SIG Agent Sandbox controller but
 never installs that controller or its CRD.
 
-The Sandbox returns a patch rather than writing GitHub directly. The dashboard
-independently reapplies it to the pinned source revision, so the server and any
+The Sandbox returns a patch and bounded command results rather than writing
+GitHub directly. The dashboard independently reapplies the patch to the pinned
+source revision and validates the exact ordered results, so the server and any
 scheduled fix reconciler use `agentSandbox.fixRuntime.dashboardImage`. The
 published `remote-fixer` image contains the normal engine binaries, SPA, CA
-certificates, and git. It intentionally omits OpenCode, srt, and model
-credentials.
+certificates, git, and the pinned Go toolchain used to build the image. Dashboard
+processes do not execute target repository build, test, vet, or validation
+commands. The image intentionally omits OpenCode, srt, and model credentials.
 
 When enabled, the chart can create:
 

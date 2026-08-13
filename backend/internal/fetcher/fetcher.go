@@ -1172,7 +1172,14 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		CritiqueRetries: critiqueRetries,
 		PRFiller:        prFiller,
 	}
-	if eff.Verify != nil && eff.Verify.Enabled {
+	if eff.Verify != nil && eff.Verify.Enabled && eff.AgentRuntime.Type != "agent-sandbox" {
+		trusted, err := runtime.TrustedLocalRuntimeEnabled()
+		if err != nil {
+			return false, err
+		}
+		if !trusted {
+			return false, fmt.Errorf("fix PRs: local verification requires %s=true on a trusted development or CI host", runtime.TrustedLocalRuntimeEnv)
+		}
 		fixOpts.Verify = &fixpr.VerifyConfig{
 			Runtime:  runtime.NewLocal(),
 			Commands: eff.Verify.ParsedCommands(),
@@ -1196,21 +1203,22 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		model = aiModel(cfg)
 	}
 	fixOpts.Agent = &fixpr.AgentConfig{
-		Runtime:             agentRuntime,
-		API:                 aiAPI(cfg),
-		SharedModelEndpoint: ar.Type == "opencode",
-		Model:               model,
-		Endpoint:            aiEndpoint(cfg),
-		ModelToken:          aiToken,
-		MaxTurns:            ar.MaxTurns,
-		MaxFiles:            eff.MaxFiles,
-		ModelProvider:       ar.ModelProvider.RuntimeConfig(),
-		OutputLimitBytes:    ar.OutputLimitBytes,
-		AllowBash:           allowBash,
-		NetworkDomains:      ar.NetworkDomains,
-		CommandPolicy:       runtime.CommandPolicy{AllowShell: allowBash, Commands: commands},
-		Timeout:             ar.ParsedTimeout(),
-		GitToken:            repositoryToken(ar.Type, fixToken),
+		Runtime:               agentRuntime,
+		API:                   aiAPI(cfg),
+		SharedModelEndpoint:   ar.Type == "opencode",
+		Model:                 model,
+		Endpoint:              aiEndpoint(cfg),
+		ModelToken:            aiToken,
+		MaxTurns:              ar.MaxTurns,
+		MaxFiles:              eff.MaxFiles,
+		ModelProvider:         ar.ModelProvider.RuntimeConfig(),
+		OutputLimitBytes:      ar.OutputLimitBytes,
+		AllowBash:             allowBash,
+		NetworkDomains:        ar.NetworkDomains,
+		CommandPolicy:         runtime.CommandPolicy{AllowShell: allowBash, Commands: commands},
+		RequireCommandResults: ar.Type == "agent-sandbox",
+		Timeout:               ar.ParsedTimeout(),
+		GitToken:              repositoryToken(ar.Type, fixToken),
 	}
 	mgr := newBatchFixManager(fixToken, filepath.Join(outDir, "fix_pr_state.json"), fixOpts)
 	ctx, usageOperation := aiusage.Begin(ctx, usageRecorder, aiusage.Metadata{

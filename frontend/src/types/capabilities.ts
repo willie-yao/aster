@@ -5,6 +5,7 @@
 
 export interface CapabilityFeatures {
   actions: boolean;
+  fix_prs?: boolean;
   analysis_critique_version?: number;
   action_requests?: boolean;
   action_eligibility?: boolean;

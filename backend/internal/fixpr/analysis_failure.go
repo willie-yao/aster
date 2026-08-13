@@ -61,16 +61,21 @@ func (m *Manager) GenerateAnalysisPreview(ctx context.Context, failure AnalysisF
 		return nil, err
 	}
 	key := "fix-analysis::" + failure.ID + "::" + failure.AnalysisHash + "::" + failure.ChatResponseHash + "::" + failure.PreviewRequestHash + "::" + failure.SourceVerification + "::" + failure.FindingVerification
-	verified := m.verify(ctx, base, fix.files)
+	verified := m.verify(ctx, base, fix.files, fix.executionVerification)
 	description := analysisFailureDescription(failure, fix)
 	if m.opts.PRFiller != nil {
 		description = m.opts.PRFiller.FillBody(ctx, description)
 	}
 	body := analysisFailurePRBody(failure, fix, verified, key, m.opts.DashboardURL, description)
 	return &GeneratedFix{
-		Preview: Preview{Subject: failure.TestName, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: verified},
-		Title:   "fix: address " + oneLine(failure.TestName), Description: description, Body: body,
-		key: key, base: base, requireBaseCurrent: true,
+		Preview:               Preview{Subject: failure.TestName, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: verified},
+		Title:                 "fix: address " + oneLine(failure.TestName),
+		Description:           description,
+		Body:                  body,
+		executionVerification: cloneExecutionVerification(fix.executionVerification),
+		key:                   key,
+		base:                  base,
+		requireBaseCurrent:    true,
 	}, nil
 }
 
@@ -135,11 +140,15 @@ func generateAnalysisWithAgent(ctx context.Context, gp genParams, failure Analys
 		if gp.maxFiles > 0 && len(res.Files) > gp.maxFiles {
 			return nil, fmt.Errorf("the coding agent changed %d files, exceeding max_files=%d; dropping as too broad for review", len(res.Files), gp.maxFiles)
 		}
+		executionVerification, err := executionVerificationForAgent(a, res, failure.SourceRevision)
+		if err != nil {
+			return nil, err
+		}
 		rationale := failure.SuggestedFix
 		if failure.ProposedRevision != nil {
 			rationale = failure.ProposedRevision.SuggestedFix
 		}
-		fix := &proposedFix{files: res.Files, diff: res.Diff, rationale: strings.TrimSpace(rationale)}
+		fix := &proposedFix{files: res.Files, diff: res.Diff, rationale: strings.TrimSpace(rationale), executionVerification: executionVerification}
 		if gp.critique == nil || gp.critiqueRetries == 0 {
 			return fix, nil
 		}

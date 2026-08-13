@@ -34,6 +34,7 @@ func main() {
 		})
 		os.Exit(1)
 	}
+	_ = os.Unsetenv(requestEnv)
 	result := fixexecutor.Execute(context.Background(), request, fixexecutor.Options{})
 	emit(result)
 	if result.TerminalState != engineruntime.TerminalSucceeded {

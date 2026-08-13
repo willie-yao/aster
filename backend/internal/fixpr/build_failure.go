@@ -43,16 +43,20 @@ func (m *Manager) GenerateBuildPreview(ctx context.Context, failure BuildFailure
 		return nil, err
 	}
 	key := "fix-build::" + failure.ID
-	verified := m.verify(ctx, base, fix.files)
+	verified := m.verify(ctx, base, fix.files, fix.executionVerification)
 	description := buildFailureDescription(failure, fix)
 	if m.opts.PRFiller != nil {
 		description = m.opts.PRFiller.FillBody(ctx, description)
 	}
 	body := buildFailurePRBody(failure, fix, verified, key, m.opts.DashboardURL, description)
 	return &GeneratedFix{
-		Preview: Preview{Subject: failure.JobName, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: verified},
-		Title:   "fix: address build failure in " + oneLine(failure.JobName), Description: description, Body: body,
-		key: key, base: base,
+		Preview:               Preview{Subject: failure.JobName, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: verified},
+		Title:                 "fix: address build failure in " + oneLine(failure.JobName),
+		Description:           description,
+		Body:                  body,
+		executionVerification: cloneExecutionVerification(fix.executionVerification),
+		key:                   key,
+		base:                  base,
 	}, nil
 }
 
@@ -83,7 +87,11 @@ func generateBuildWithAgent(ctx context.Context, gp genParams, failure BuildFail
 		if gp.maxFiles > 0 && len(res.Files) > gp.maxFiles {
 			return nil, fmt.Errorf("the coding agent changed %d files, exceeding max_files=%d; dropping as too broad for review", len(res.Files), gp.maxFiles)
 		}
-		fix := &proposedFix{files: res.Files, diff: res.Diff, rationale: strings.TrimSpace(failure.SuggestedFix)}
+		executionVerification, err := executionVerificationForAgent(a, res, gp.ref)
+		if err != nil {
+			return nil, err
+		}
+		fix := &proposedFix{files: res.Files, diff: res.Diff, rationale: strings.TrimSpace(failure.SuggestedFix), executionVerification: executionVerification}
 		if gp.critique == nil || gp.critiqueRetries == 0 {
 			return fix, nil
 		}

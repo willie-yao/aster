@@ -152,7 +152,10 @@ export function FailureActions({
   const detailAppearance = appearance === "detail";
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedFailure = searchParams.get("failure");
-  const linkedAction = requestedAction(searchParams.get("action"));
+  const requestedLinkedAction = requestedAction(searchParams.get("action"));
+  const linkedAction = requestedLinkedAction === "propose-fix" && !features.fix_prs
+    ? null
+    : requestedLinkedAction;
   const [reviewIntent, setReviewIntent] = useState<Action | null>(null);
   const [action, setAction] = useState<Action | null>(null);
   const [busy, setBusy] = useState<
@@ -290,7 +293,10 @@ export function FailureActions({
     }
     const owner = storageOwner;
     const expectedOwner = login?.trim().toLowerCase();
-    const stored = (["create-issue", "propose-fix"] as const)
+    const storedActions: Action[] = features.fix_prs
+      ? ["create-issue", "propose-fix"]
+      : ["create-issue"];
+    const stored = storedActions
       .map((kind) => ({
         kind,
         id: readStoredActionRequestID(
@@ -345,7 +351,7 @@ export function FailureActions({
     return () => {
       cancelled = true;
     };
-  }, [failureID, features.action_requests, login, status, storageOwner]);
+  }, [failureID, features.action_requests, features.fix_prs, login, status, storageOwner]);
 
   useEffect(() => {
     if (
@@ -437,7 +443,7 @@ export function FailureActions({
         {features.action_requests && linkedFailure === failureID && linkedAction
           ? `Sign in to review ${linkedAction === "propose-fix" ? "a fix proposal" : "an issue draft"}`
           : features.action_requests
-            ? "Sign in to file issues or fixes"
+            ? features.fix_prs ? "Sign in to file issues or fixes" : "Sign in to file issues"
             : "Sign in to manage this failure"}
       </Button>
     );
@@ -486,6 +492,10 @@ export function FailureActions({
     prompt = "",
     previousRequestID?: string,
   ) {
+    if (requested === "propose-fix" && !features.fix_prs) {
+      setError("Fix PR generation is unavailable on this deployment.");
+      return;
+    }
     if (!canStartActions) {
       setError(eligibility?.reason ?? "Action eligibility has not been confirmed.");
       return;
@@ -739,16 +749,18 @@ export function FailureActions({
             >
               Draft issue
             </Button>
-            <Button
-              size="small"
-              variant={detailAppearance ? "text" : "outlined"}
-              color={detailAppearance ? "primary" : "warning"}
-              startIcon={<Build sx={{ fontSize: 18 }} />}
-              disabled={action !== null}
-              onClick={() => open("propose-fix")}
-            >
-              Draft fix PR
-            </Button>
+            {features.fix_prs && (
+              <Button
+                size="small"
+                variant={detailAppearance ? "text" : "outlined"}
+                color={detailAppearance ? "primary" : "warning"}
+                startIcon={<Build sx={{ fontSize: 18 }} />}
+                disabled={action !== null}
+                onClick={() => open("propose-fix")}
+              >
+                Draft fix PR
+              </Button>
+            )}
           </>
         )}
         {resolvable && (isResolved ? (
