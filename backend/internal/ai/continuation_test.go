@@ -248,3 +248,18 @@ func TestContinueStructuredCancellationAndTimeout(t *testing.T) {
 		t.Fatalf("metadata=%+v", metadata)
 	}
 }
+
+func TestContinueStructuredRejectsOverBudgetWithoutProviderRequest(t *testing.T) {
+	client, transport := newRecordedToolLoopClient(APIChatCompletions, continuationFinalResponse("memo"))
+	registry, enabled := continuationRegistry(t, "source")
+	_, continuation, err := client.ToolLoopWithContinuation(t.Context(), strings.Repeat("system", 100), "user", registry, enabled, &tools.Env{}, ToolLoopOptions{ContextByteBudget: 256})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ContinueStructured(t.Context(), continuation, strings.Repeat("final", 100), structuredBodyFormat(), bodyValidator("safe")); !errors.Is(err, ErrContextHeadroom) {
+		t.Fatalf("err=%v", err)
+	}
+	if len(transport.requests) != 1 {
+		t.Fatalf("requests=%d", len(transport.requests))
+	}
+}

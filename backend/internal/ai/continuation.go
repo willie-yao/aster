@@ -123,12 +123,17 @@ func (c *Client) ContinueStructuredWithMetadata(ctx context.Context, continuatio
 		schemaBytes := schemaPayloadBytes([]tools.Schema{toolSchema})
 		var elided int
 		messages, elided = compactMessages(messages, schemaBytes, contextByteBudget)
+		afterBytes := requestSizeEstimate(messages, schemaBytes)
 		if elided > 0 {
 			log.Printf("  ✂ structured continuation: elided %d message(s) to fit ~%d-byte window", elided, contextByteBudget)
 			recordTrace(ctx, TraceEvent{
 				Kind: "context_compaction", Outcome: "structured_continuation", Elided: elided,
-				Bytes: requestSizeEstimate(messages, schemaBytes), MessageCount: len(messages),
+				Bytes: afterBytes, MessageCount: len(messages),
 			})
+		}
+		if afterBytes > contextByteBudget {
+			recordTrace(ctx, TraceEvent{Kind: "context_headroom", Outcome: "structured_continuation", Bytes: afterBytes, MessageCount: len(messages)})
+			return metadata, ErrContextHeadroom
 		}
 	}
 	result, err := c.completeStructuredMessagesWithMetadata(
