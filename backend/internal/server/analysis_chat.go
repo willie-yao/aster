@@ -19,7 +19,7 @@ import (
 
 // AnalysisChatRunner manages authenticated conversations about published analyses.
 type analysisChatFixPreflighter interface {
-	PreflightTestFix(sessionID, owner string) error
+	PreflightTestFix(context.Context, string, string, string) error
 }
 
 type AnalysisChatRunner interface {
@@ -129,7 +129,7 @@ func sendAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRunne
 			http.Error(w, "missing idempotency key", http.StatusBadRequest)
 			return
 		}
-		if err := preflightAnalysisChatFix(run, r.PathValue("id"), identity.Login, body.FixIntent); err != nil {
+		if err := preflightAnalysisChatFix(r.Context(), run, r.PathValue("id"), identity.Login, requestID, body.FixIntent); err != nil {
 			writeAnalysisChatError(w, r.PathValue("id"), identity.Login, err)
 			return
 		}
@@ -162,7 +162,7 @@ func streamAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRun
 			http.Error(w, "missing idempotency key", http.StatusBadRequest)
 			return
 		}
-		if err := preflightAnalysisChatFix(run, r.PathValue("id"), identity.Login, body.FixIntent); err != nil {
+		if err := preflightAnalysisChatFix(r.Context(), run, r.PathValue("id"), identity.Login, requestID, body.FixIntent); err != nil {
 			writeAnalysisChatError(w, r.PathValue("id"), identity.Login, err)
 			return
 		}
@@ -199,7 +199,7 @@ func streamAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRun
 	})
 }
 
-func preflightAnalysisChatFix(run AnalysisChatRunner, sessionID, owner string, fixIntent bool) error {
+func preflightAnalysisChatFix(ctx context.Context, run AnalysisChatRunner, sessionID, owner, requestID string, fixIntent bool) error {
 	if !fixIntent {
 		return nil
 	}
@@ -207,7 +207,7 @@ func preflightAnalysisChatFix(run AnalysisChatRunner, sessionID, owner string, f
 	if !ok {
 		return fmt.Errorf("%w: exact JUnit Fix preflight is unavailable", analysischat.ErrInvalidRequest)
 	}
-	return preflight.PreflightTestFix(sessionID, owner)
+	return preflight.PreflightTestFix(ctx, sessionID, owner, requestID)
 }
 
 func cancelAnalysisChatMessageHandler(run AnalysisChatRunner) http.Handler {

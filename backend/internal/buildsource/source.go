@@ -71,6 +71,39 @@ func Resolve(build models.BuildInfo, owner, name string) (Source, bool) {
 	return Source{Owner: owner, Name: name, Revision: commit}, true
 }
 
+// Branch returns the repository-specific tested branch when build metadata names one.
+func Branch(build models.BuildInfo, owner, name string) (string, bool) {
+	if _, ok := Resolve(build, owner, name); !ok {
+		return "", false
+	}
+	wanted := strings.ToLower(strings.TrimSpace(owner) + "/" + strings.TrimSpace(name))
+	var branch string
+	branched, branchless := false, false
+	for repo, value := range build.RepoRefs {
+		if strings.ToLower(strings.TrimSpace(repo)) != wanted {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if _, ok := bareRevision(value); ok {
+			branchless = true
+			continue
+		}
+		candidate := value
+		if strings.Count(value, ":") == 1 && !strings.Contains(value, ",") {
+			candidate, _, _ = strings.Cut(value, ":")
+		}
+		candidate = strings.TrimPrefix(strings.TrimSpace(candidate), "refs/heads/")
+		if candidate == "" || !mutableRef(candidate) || branched && branch != candidate {
+			return "", false
+		}
+		branch, branched = candidate, true
+	}
+	if !branched || branchless {
+		return "", false
+	}
+	return branch, true
+}
+
 // NormalizeRevision accepts a bare full SHA or one ref-qualified full SHA.
 func NormalizeRevision(value string) (string, bool) {
 	value = strings.TrimSpace(value)

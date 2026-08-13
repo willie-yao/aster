@@ -19,6 +19,11 @@ import (
 
 const analysisFixRevision = "0123456789abcdef0123456789abcdef01234567"
 
+const (
+	capzFailureRevision        = "a866aca055bcaa205648e81d15c67668179fdfab"
+	capzGenerationBaseRevision = "c83d69ab8c572a4c00816076222d65262ee690cc"
+)
+
 func exactJUnitDetail() models.JobDetail {
 	return models.JobDetail{Name: "periodic-capz", JobID: "periodic-capz", Runs: []models.BuildResult{{
 		BuildInfo: models.BuildInfo{
@@ -133,6 +138,24 @@ func (r *mapSourceReader) ReadSourceArchive(context.Context) (actionverify.Archi
 	return archive, nil
 }
 
+type fakeAnalysisSourceRevisionClient struct {
+	base         ghpr.Base
+	contains     bool
+	compareCalls int
+}
+
+func (f *fakeAnalysisSourceRevisionClient) ResolveBase(context.Context, string, string) (ghpr.Base, error) {
+	return f.base, nil
+}
+
+func (f *fakeAnalysisSourceRevisionClient) CompareCommits(context.Context, string, string, string, string) (bool, string, error) {
+	f.compareCalls++
+	if f.contains {
+		return true, "ahead", nil
+	}
+	return false, "diverged", nil
+}
+
 func TestAnalysisSourceSnapshotIdentityDetectsDrift(t *testing.T) {
 	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
 	reader := &mapSourceReader{files: map[string]string{"controllers/cluster_controller.go": "package controllers\nfunc reconcile() { markReady() }\n"}}
@@ -155,6 +178,137 @@ func TestAnalysisSourceSnapshotIdentityDetectsDrift(t *testing.T) {
 	}
 }
 
+func TestAnalysisSourceCompatibilityExactHeadFastPath(t *testing.T) {
+	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+	client := &fakeAnalysisSourceRevisionClient{
+		base: ghpr.Base{Branch: "main", HeadSHA: capzFailureRevision, TreeSHA: "tree"},
+	}
+	service.sourceRevisionClient = client
+	content := "package e2e\nfunc InstallCNIManifest() {}\n"
+	reader := &mapSourceReader{files: map[string]string{"test/e2e/cni.go": content}}
+	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader { return reader }
+	repo := sourceinvestigation.Repository{
+		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
+	}
+
+	compatibility, err := service.verifyAnalysisSourceCompatibility(
+		t.Context(), repo, "", []string{"test/e2e/cni.go"}, "Update `InstallCNIManifest`.",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compatibility.GenerationBaseRevision != capzFailureRevision || client.compareCalls != 0 ||
+		len(compatibility.VerifiedSourceFileHashes) != 1 || compatibility.FindingVerification == "" {
+		t.Fatalf("compatibility=%+v compare_calls=%d", compatibility, client.compareCalls)
+	}
+}
+
+func TestAnalysisSourceCompatibilityAcceptsPreservedCAPZAdvancement(t *testing.T) {
+	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+	client := &fakeAnalysisSourceRevisionClient{
+		base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "tree"}, contains: true,
+	}
+	service.sourceRevisionClient = client
+	failureFiles := map[string]string{
+		"test/e2e/cni.go":           "package e2e\nfunc InstallCNIManifest() {}\n",
+		"test/e2e/azure_test.go":    "package e2e\nfunc TestAzure() { InstallCNIManifest() }\n",
+		"azure/services/machine.go": "failure revision unrelated content\n",
+	}
+	generationFiles := map[string]string{
+		"test/e2e/cni.go":           failureFiles["test/e2e/cni.go"],
+		"test/e2e/azure_test.go":    failureFiles["test/e2e/azure_test.go"],
+		"azure/services/machine.go": "generation base unrelated VMSS Flex content\n",
+	}
+	readers := map[string]sourceSnapshotReader{
+		capzFailureRevision:        &mapSourceReader{files: failureFiles},
+		capzGenerationBaseRevision: &mapSourceReader{files: generationFiles},
+	}
+	service.sourceReaderFactory = func(repo sourceinvestigation.Repository) sourceSnapshotReader { return readers[repo.Revision] }
+	repo := sourceinvestigation.Repository{
+		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
+	}
+	files := []string{"test/e2e/cni.go", "test/e2e/azure_test.go"}
+
+	compatibility, err := service.verifyAnalysisSourceCompatibility(
+		t.Context(), repo, "main", files, "Update `InstallCNIManifest` to handle the conflict.",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compatibility.GenerationBaseRevision != capzGenerationBaseRevision || client.compareCalls != 1 ||
+		len(compatibility.VerifiedSourceFileHashes) != len(files) || compatibility.FindingVerification == "" {
+		t.Fatalf("compatibility=%+v compare_calls=%d", compatibility, client.compareCalls)
+	}
+}
+
+func TestAnalysisSourceCompatibilityRejectsRelevantDrift(t *testing.T) {
+	baseFiles := map[string]string{"test/e2e/cni.go": "package e2e\nfunc InstallCNIManifest() {}\n"}
+	for _, testCase := range []struct {
+		name         string
+		generation   map[string]string
+		contains     bool
+		targetBranch string
+		finding      string
+	}{
+		{name: "changed file", targetBranch: "main", generation: map[string]string{"test/e2e/cni.go": "package e2e\nfunc InstallCNIManifest() { retry() }\n"}, contains: true},
+		{name: "deleted or renamed file", targetBranch: "main", generation: map[string]string{"test/e2e/cni_renamed.go": baseFiles["test/e2e/cni.go"]}, contains: true},
+		{name: "rewritten ancestry", targetBranch: "main", generation: baseFiles, contains: false},
+		{name: "wrong target branch", targetBranch: "release-1.2", generation: baseFiles, contains: true},
+		{name: "missing symbol", targetBranch: "main", generation: map[string]string{"test/e2e/cni.go": "package e2e\nfunc OtherSymbol() {}\n"}, contains: true, finding: "Update `InstallCNIManifest`."},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+			service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
+				base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "tree"}, contains: testCase.contains,
+			}
+			readers := map[string]sourceSnapshotReader{
+				capzFailureRevision:        &mapSourceReader{files: baseFiles},
+				capzGenerationBaseRevision: &mapSourceReader{files: testCase.generation},
+			}
+			service.sourceReaderFactory = func(repo sourceinvestigation.Repository) sourceSnapshotReader { return readers[repo.Revision] }
+			repo := sourceinvestigation.Repository{
+				Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
+			}
+			_, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, testCase.targetBranch, []string{"test/e2e/cni.go"}, testCase.finding)
+			if err == nil {
+				t.Fatal("relevant source drift was accepted")
+			}
+		})
+	}
+}
+
+func TestAnalysisSourceCompatibilityRejectsSymbolDrift(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		files map[string]string
+		paths []string
+		want  string
+	}{
+		{name: "missing", files: map[string]string{"test/e2e/cni.go": "package e2e\nfunc OtherSymbol() {}\n"}, paths: []string{"test/e2e/cni.go"}, want: "not declared"},
+		{name: "ambiguous", files: map[string]string{
+			"test/e2e/cni.go":        "package e2e\nfunc InstallCNIManifest() {}\n",
+			"test/e2e/azure_test.go": "package e2e\nfunc InstallCNIManifest() {}\n",
+		}, paths: []string{"test/e2e/cni.go", "test/e2e/azure_test.go"}, want: "ambiguous"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+			service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
+				base: ghpr.Base{Branch: "main", HeadSHA: capzFailureRevision, TreeSHA: "tree"},
+			}
+			reader := &mapSourceReader{files: testCase.files}
+			service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader { return reader }
+			repo := sourceinvestigation.Repository{
+				Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
+			}
+			if _, err := service.verifyAnalysisSourceCompatibility(
+				t.Context(), repo, "", testCase.paths, "Update `InstallCNIManifest`.",
+			); err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("symbol drift error = %v", err)
+			}
+		})
+	}
+}
+
 type rejectingAnalysisPreviewValidator struct{}
 
 func (rejectingAnalysisPreviewValidator) ValidateAnalysisPreview(context.Context, string, AnalysisPreviewBinding) error {
@@ -169,6 +323,8 @@ func TestAnalysisPreviewBindingSurvivesRestartAndFailsClosed(t *testing.T) {
 		ChatSessionID: "session", ChatRequestID: "request", ChatResponseHash: "chat-hash", VerificationVersion: analysisSourceVerificationVersion,
 		SourceRepository: sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision},
 		SourceFiles:      []string{"controllers/cluster_controller.go"}, SourceVerification: "source-hash",
+		FailureRevision: analysisFixRevision, GenerationBaseRevision: analysisFixRevision,
+		VerifiedSourceFileHashes: map[string]string{"controllers/cluster_controller.go": strings.Repeat("d", 64)},
 	}
 	fix := fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{
 		Subject: "TestCluster", Rationale: "fix", Diff: "diff", Files: map[string]string{"controllers/cluster_controller.go": "package controllers\n"},
@@ -189,6 +345,8 @@ func TestAnalysisPreviewBindingSurvivesRestartAndFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if entry.analysisBinding == nil || entry.analysisBinding.ChatResponseHash != "chat-hash" ||
+		entry.analysisBinding.FailureRevision != analysisFixRevision || entry.analysisBinding.GenerationBaseRevision != analysisFixRevision ||
+		entry.analysisBinding.VerifiedSourceFileHashes["controllers/cluster_controller.go"] != strings.Repeat("d", 64) ||
 		!slices.Equal(entry.analysisBinding.SourceFiles, []string{"controllers/cluster_controller.go"}) {
 		t.Fatalf("restored binding = %+v", entry.analysisBinding)
 	}
@@ -252,6 +410,10 @@ func TestValidateAnalysisPreviewRejectsWrongOrAmbiguousSourceIdentity(t *testing
 	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
 	service := NewService(exactAnalysisConfig(), dir, AIConfig{})
 	service.analysisPreviewValidator = acceptingAnalysisPreviewValidator{}
+	client := &fakeAnalysisSourceRevisionClient{
+		base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}, contains: true,
+	}
+	service.sourceRevisionClient = client
 	reader := &mapSourceReader{files: map[string]string{
 		"controllers/cluster_controller.go": "package controllers\nfunc markReady() {}\nfunc reconcile() {}\n",
 	}}
@@ -266,7 +428,7 @@ func TestValidateAnalysisPreviewRejectsWrongOrAmbiguousSourceIdentity(t *testing
 		t.Fatal(err)
 	}
 	findingText := "Update `markReady` in the terminal branch."
-	findingVerification, err := service.verifyAnalysisFinding(t.Context(), repo, []string{"controllers/cluster_controller.go"}, findingText)
+	compatibility, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "", []string{"controllers/cluster_controller.go"}, findingText)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +436,9 @@ func TestValidateAnalysisPreviewRejectsWrongOrAmbiguousSourceIdentity(t *testing
 		Identity: exactIdentity(), AnalysisID: subject.ID, AnalysisHash: subject.ContentHash, AnalysisContentHash: subject.AnalysisContentHash,
 		ChatSessionID: "session", ChatRequestID: "request", ChatResponseHash: "chat", PreviewRequestHash: "preview",
 		SourceRepository: repo, SourceFiles: []string{"controllers/cluster_controller.go"}, SourceVerification: verification,
-		FindingText: findingText, FindingVerification: findingVerification, VerificationVersion: analysisSourceVerificationVersion,
+		FailureRevision: repo.Revision, GenerationBaseRevision: compatibility.GenerationBaseRevision,
+		VerifiedSourceFileHashes: compatibility.VerifiedSourceFileHashes,
+		FindingText:              findingText, FindingVerification: compatibility.FindingVerification, VerificationVersion: analysisSourceVerificationVersion,
 	}
 	if err := service.validateAnalysisPreview(t.Context(), "alice", binding); err != nil {
 		t.Fatalf("valid binding error = %v", err)
@@ -284,6 +448,17 @@ func TestValidateAnalysisPreviewRejectsWrongOrAmbiguousSourceIdentity(t *testing
 	if err := service.validateAnalysisPreview(t.Context(), "alice", changedFinding); !errors.Is(err, ErrPreviewTargetChanged) {
 		t.Fatalf("changed finding verification error = %v", err)
 	}
+	changedHashes := binding
+	changedHashes.VerifiedSourceFileHashes = cloneStringMap(binding.VerifiedSourceFileHashes)
+	changedHashes.VerifiedSourceFileHashes["controllers/cluster_controller.go"] = strings.Repeat("e", 64)
+	if err := service.validateAnalysisPreview(t.Context(), "alice", changedHashes); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("changed source hash error = %v", err)
+	}
+	client.base = ghpr.Base{Branch: "main", HeadSHA: strings.Repeat("c", 40), TreeSHA: "tree-c"}
+	if err := service.validateAnalysisPreview(t.Context(), "alice", binding); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("generation base drift error = %v", err)
+	}
+	client.base = ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}
 	reader.files["controllers/cluster_controller.go"] += "// drift\n"
 	if err := service.validateAnalysisPreview(t.Context(), "alice", binding); !errors.Is(err, ErrPreviewTargetChanged) {
 		t.Fatalf("source drift error = %v", err)
@@ -334,6 +509,9 @@ func TestPreviewAnalysisFixRejectsUnverifiedGenericFindingBeforeGeneration(t *te
 	detail := exactJUnitDetail()
 	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
 	service := NewService(exactAnalysisConfig(), dir, AIConfig{})
+	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
+		base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}, contains: true,
+	}
 	reader := &mapSourceReader{files: map[string]string{
 		"controllers/cluster_controller.go": "package controllers\nfunc reconcileDelete() {}\n",
 	}}
@@ -349,8 +527,59 @@ func TestPreviewAnalysisFixRejectsUnverifiedGenericFindingBeforeGeneration(t *te
 		AssistantAnswer:   "The terminal branch should record readiness.",
 		ArtifactCitations: []fixpr.Evidence{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
 	}, "alice", "github-write-token", "")
-	if !errors.Is(err, ErrPreviewRejected) || !strings.Contains(err.Error(), "selected source finding") {
+	if !errors.Is(err, ErrPreviewRejected) || !strings.Contains(err.Error(), "selected symbol") {
 		t.Fatalf("generic finding error = %v", err)
+	}
+}
+
+func TestPreviewAnalysisFixRejectsPreflightGenerationBaseDriftBeforeSandbox(t *testing.T) {
+	dir := t.TempDir()
+	detail := exactJUnitDetail()
+	detail.Runs[0].RepoRefs = map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main"}
+	detail.Runs[0].Commit = analysisFixRevision
+	detail.Runs[0].RepoVersion = analysisFixRevision
+	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
+	service := NewService(exactAnalysisConfig(), dir, AIConfig{})
+	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
+		base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "tree"}, contains: true,
+	}
+	content := "package controllers\nfunc reconcileDelete() {}\n"
+	readers := map[string]sourceSnapshotReader{
+		analysisFixRevision:        &mapSourceReader{files: map[string]string{"controllers/cluster_controller.go": content}},
+		capzGenerationBaseRevision: &mapSourceReader{files: map[string]string{"controllers/cluster_controller.go": content}},
+	}
+	service.sourceReaderFactory = func(repo sourceinvestigation.Repository) sourceSnapshotReader { return readers[repo.Revision] }
+	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision}
+	compatibility, err := service.verifyAnalysisSourceCompatibility(
+		t.Context(), repo, "main", []string{"controllers/cluster_controller.go"}, "Update `reconcileDelete`.",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, err := service.ResolveAnalysisActionSubject(exactIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.PreviewAnalysisFix(t.Context(), AnalysisFixInput{
+		Identity: exactIdentity(), ChatSessionID: "session", ChatRequestID: "request", ChatResponseHash: "chat-hash",
+		PreviewRequestHash: "preview-hash", AnalysisContentHash: subject.AnalysisContentHash, SourceRepository: repo,
+		FailureRevision: repo.Revision, GenerationBaseRevision: strings.Repeat("b", 40),
+		VerifiedSourceFileHashes: compatibility.VerifiedSourceFileHashes,
+		SourceBranch:             "main",
+		AssistantAnswer:          "Update `reconcileDelete`.",
+		ArtifactCitations:        []fixpr.Evidence{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
+	}, "alice", "github-write-token", "")
+	if !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("generation base drift error = %v", err)
+	}
+	_, err = service.PreviewAnalysisFix(t.Context(), AnalysisFixInput{
+		Identity: exactIdentity(), ChatSessionID: "normal-session", ChatRequestID: "normal-request", ChatResponseHash: "normal-chat-hash",
+		PreviewRequestHash: "normal-preview-hash", AnalysisContentHash: subject.AnalysisContentHash, SourceRepository: repo,
+		AssistantAnswer:   "Update `reconcileDelete`.",
+		ArtifactCitations: []fixpr.Evidence{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
+	}, "alice", "github-write-token", "")
+	if !errors.Is(err, ErrPreviewRejected) || !strings.Contains(err.Error(), "Fix-intended source preflight") {
+		t.Fatalf("unbound advancement error = %v", err)
 	}
 }
 

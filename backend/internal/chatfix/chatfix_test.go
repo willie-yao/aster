@@ -216,6 +216,10 @@ func TestPreviewChatFixUsesExactJUnitAnalysisWithoutPatternAuthority(t *testing.
 		SessionID: "session", RequestID: "request", ResponseHash: "response-hash",
 		AnalysisContentHash:      "analysis-hash",
 		SourceRepositorySnapshot: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567"},
+		FailureRevision:          "0123456789abcdef0123456789abcdef01234567",
+		GenerationBaseRevision:   "fedcba9876543210fedcba9876543210fedcba98",
+		VerifiedSourceFileHashes: map[string]string{"pkg/controller.go": strings.Repeat("d", 64)},
+		SourceBranch:             "main", SourceBranchKnown: true,
 		Analysis: analysischat.AnalysisRef{
 			Scope: analysischat.ScopeTest, JobID: "periodic-capz", BuildID: "123", TestName: "TestCluster",
 			SuiteName: "CAPZ", ClassName: "e2e", JUnitFile: "junit.xml", AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
@@ -236,6 +240,10 @@ func TestPreviewChatFixUsesExactJUnitAnalysisWithoutPatternAuthority(t *testing.
 	if input.Identity.JobID != "periodic-capz" || input.Identity.BuildID != "123" || input.Identity.TestName != "TestCluster" ||
 		input.Identity.JUnitFile != "junit.xml" || input.ChatSessionID != "session" || input.ChatRequestID != "request" ||
 		input.AnalysisContentHash != "analysis-hash" || input.SourceRepository.Name != "repo" ||
+		input.FailureRevision != "0123456789abcdef0123456789abcdef01234567" ||
+		input.GenerationBaseRevision != "fedcba9876543210fedcba9876543210fedcba98" ||
+		input.VerifiedSourceFileHashes["pkg/controller.go"] != strings.Repeat("d", 64) ||
+		input.SourceBranch != "main" ||
 		len(input.ArtifactCitations) != 1 || input.ProposedRevision == nil || fixes.userToken != "write-token" {
 		t.Fatalf("analysis input = %+v", input)
 	}

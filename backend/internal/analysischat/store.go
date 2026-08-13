@@ -43,6 +43,7 @@ type persistedSession struct {
 	CreateRequestHash    string                            `json:"create_request_hash"`
 	CreateRequestVersion int                               `json:"create_request_version,omitempty"`
 	Requests             map[string]persistedRequest       `json:"requests,omitempty"`
+	FixSources           map[string]persistedTestFixSource `json:"fix_sources,omitempty"`
 	Active               *persistedActiveTurn              `json:"active,omitempty"`
 	Investigations       map[string]persistedInvestigation `json:"investigations,omitempty"`
 }
@@ -73,6 +74,12 @@ type persistedRequest struct {
 	Turn         int    `json:"turn,omitempty"`
 	CreatedAt    string `json:"created_at,omitempty"`
 	UpdatedAt    string `json:"updated_at,omitempty"`
+}
+
+type persistedTestFixSource struct {
+	FailureRevision          string            `json:"failure_revision"`
+	GenerationBaseRevision   string            `json:"generation_base_revision"`
+	VerifiedSourceFileHashes map[string]string `json:"verified_source_file_hashes"`
 }
 
 type persistedInvestigation struct {

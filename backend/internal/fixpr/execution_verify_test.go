@@ -37,10 +37,10 @@ func TestAgentSandboxPreviewAndConfirmationUseExecutorResults(t *testing.T) {
 	files := map[string]string{"controllers/cluster_controller.go": "package controllers\n"}
 	diff := "diff --git a/controllers/cluster_controller.go b/controllers/cluster_controller.go\n"
 	agent := &fakeAgentRuntime{res: runtime.GenerateResult{
-		BaseSHA: failure.SourceRevision, Files: files, Diff: diff,
+		BaseSHA: failure.GenerationBaseRevision, Files: files, Diff: diff,
 		CommandResults: sandboxCommandResults(),
 	}}
-	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: failure.SourceRevision, TreeSHA: strings.Repeat("b", 40)}}
+	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: failure.GenerationBaseRevision, TreeSHA: strings.Repeat("b", 40)}}
 	reconstructions := 0
 	manager := NewManager(pr, t.TempDir()+"/state.json", Options{
 		SourceOwner: "up", SourceName: "stream", AuthorName: "Jane", AuthorEmail: "jane@example.com",
@@ -52,7 +52,7 @@ func TestAgentSandboxPreviewAndConfirmationUseExecutorResults(t *testing.T) {
 		},
 		ReconstructPatch: func(_ context.Context, repo runtime.RepoRef, gotDiff string) (map[string]string, string, error) {
 			reconstructions++
-			if repo.Ref != failure.SourceRevision || repo.Token != "" || gotDiff != diff {
+			if repo.Ref != failure.GenerationBaseRevision || repo.Token != "" || gotDiff != diff {
 				t.Fatalf("reconstruction repo=%+v diff=%q", repo, gotDiff)
 			}
 			return files, diff, nil

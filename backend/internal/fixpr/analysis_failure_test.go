@@ -18,8 +18,9 @@ func validAnalysisFailure() AnalysisFailure {
 		AssistantAnswer:  "The artifact shows the terminal branch never calls `markReady`.",
 		ChatResponseHash: "chat-hash", PreviewRequestHash: "preview-hash",
 		ArtifactCitations: []Evidence{{Path: "artifacts/junit_01.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
-		SourceRepository:  "up/stream", SourceRevision: exactAnalysisRevision,
-		SourceFiles: []string{"controllers/cluster_controller.go"}, SourceVerification: "source-hash", FindingVerification: "finding-hash",
+		SourceRepository:  "up/stream", FailureRevision: exactAnalysisRevision, GenerationBaseRevision: exactAnalysisRevision,
+		VerifiedSourceFileHashes: map[string]string{"controllers/cluster_controller.go": strings.Repeat("d", 64)},
+		SourceFiles:              []string{"controllers/cluster_controller.go"}, SourceVerification: "source-hash", FindingVerification: "finding-hash",
 	}
 }
 
@@ -52,6 +53,37 @@ func TestGenerateAnalysisPreviewUsesExactSourceAndCreatesNoWrite(t *testing.T) {
 	}
 }
 
+func TestGenerateAnalysisPreviewUsesCurrentGenerationBase(t *testing.T) {
+	failure := validAnalysisFailure()
+	failure.FailureRevision = "a866aca055bcaa205648e81d15c67668179fdfab"
+	failure.GenerationBaseRevision = "c83d69ab8c572a4c00816076222d65262ee690cc"
+	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: failure.GenerationBaseRevision, TreeSHA: "tree"}}
+	agent := goodAgent()
+	manager := newManager(t, pr, agent, Options{})
+
+	fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.spec.Repo.Ref != failure.GenerationBaseRevision || agent.spec.ExpectedBaseSHA != failure.GenerationBaseRevision {
+		t.Fatalf("runtime spec = %+v", agent.spec)
+	}
+	if agent.spec.Repo.Ref == failure.FailureRevision {
+		t.Fatal("generation used the failure revision")
+	}
+	for _, want := range []string{failure.FailureRevision, failure.GenerationBaseRevision, "unchanged at the generation base"} {
+		if !strings.Contains(agent.spec.Instruction, want) {
+			t.Fatalf("instruction missing %q: %s", want, agent.spec.Instruction)
+		}
+	}
+	if snapshot := fix.Snapshot(); snapshot.Base.HeadSHA != failure.GenerationBaseRevision || !snapshot.RequireBaseCurrent {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	if len(pr.opened) != 0 {
+		t.Fatalf("preview performed GitHub write: %+v", pr.opened)
+	}
+}
+
 func TestAnalysisPreviewRequiresCurrentPinnedBaseAtGenerationAndConfirmation(t *testing.T) {
 	failure := validAnalysisFailure()
 	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: strings.Repeat("b", 40), TreeSHA: "tree-b"}}
@@ -71,6 +103,21 @@ func TestAnalysisPreviewRequiresCurrentPinnedBaseAtGenerationAndConfirmation(t *
 	}
 	if len(pr.opened) != 0 {
 		t.Fatalf("drifted confirmation wrote PR: %+v", pr.opened)
+	}
+}
+
+func TestAnalysisPreviewRejectsBaseAdvanceDuringGeneration(t *testing.T) {
+	failure := validAnalysisFailure()
+	initial := ghpr.Base{Branch: "main", HeadSHA: failure.GenerationBaseRevision, TreeSHA: "tree-a"}
+	advanced := ghpr.Base{Branch: "main", HeadSHA: strings.Repeat("c", 40), TreeSHA: "tree-c"}
+	pr := &fakePR{bases: []ghpr.Base{initial, advanced}}
+	agent := goodAgent()
+	manager := newManager(t, pr, agent, Options{})
+	if _, err := manager.GenerateAnalysisPreview(t.Context(), failure, ""); !errors.Is(err, ErrPreviewBaseChanged) {
+		t.Fatalf("generation-time base drift error = %v", err)
+	}
+	if agent.calls != 1 || len(pr.opened) != 0 {
+		t.Fatalf("agent calls=%d opened=%d", agent.calls, len(pr.opened))
 	}
 }
 

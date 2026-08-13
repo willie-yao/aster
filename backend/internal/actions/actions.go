@@ -205,6 +205,7 @@ type Service struct {
 	requestStateWriter       func(string, any) error
 	sourceVerifier           func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error)
 	sourceReaderFactory      sourceSnapshotReaderFactory
+	sourceRevisionClient     analysisSourceRevisionClient
 	analysisPreviewValidator AnalysisPreviewValidator
 	fixActionsEnabled        bool
 }

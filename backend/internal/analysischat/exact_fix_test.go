@@ -1,8 +1,11 @@
 package analysischat
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -177,6 +180,19 @@ func TestServiceExactFixResolvesPreservedMutableBuildSourceBeforeProvider(t *tes
 	if err := service.ConfigureSourceRepository(sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure"}); err != nil {
 		t.Fatal(err)
 	}
+	sourcePreflightErr := errors.New("relevant source drift")
+	generationBase := detail.Runs[0].Commit
+	if err := service.ConfigureTestFixPreflight(func(_ context.Context, repo sourceinvestigation.Repository, branch string, files []string) (string, map[string]string, error) {
+		if repo.Revision != detail.Runs[0].Commit || branch != "main" || !slices.Equal(files, []string{"test/e2e/cni.go"}) {
+			t.Fatalf("source preflight repo=%+v branch=%q files=%v", repo, branch, files)
+		}
+		if sourcePreflightErr != nil {
+			return "", nil, sourcePreflightErr
+		}
+		return generationBase, map[string]string{"test/e2e/cni.go": strings.Repeat("a", 64)}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	session, err := service.Create(AnalysisRef{
 		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster", JUnitFile: "junit.xml",
 		AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
@@ -187,8 +203,27 @@ func TestServiceExactFixResolvesPreservedMutableBuildSourceBeforeProvider(t *tes
 	if session.SourceRepository == nil || session.SourceRepository.Revision != detail.Runs[0].Commit {
 		t.Fatalf("source repository = %+v", session.SourceRepository)
 	}
-	if err := service.PreflightTestFix(session.ID, "Alice"); err != nil {
+	requestID := testRequestID(t)
+	if err := service.PreflightTestFix(t.Context(), session.ID, "Alice", requestID); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("source drift preflight error = %v", err)
+	}
+	runner.mu.Lock()
+	providerCalls := len(runner.turns)
+	runner.mu.Unlock()
+	if providerCalls != 0 {
+		t.Fatalf("failed source preflight made %d provider calls", providerCalls)
+	}
+	sourcePreflightErr = nil
+	if err := service.PreflightTestFix(t.Context(), session.ID, "Alice", requestID); err != nil {
 		t.Fatalf("Fix preflight error = %v", err)
+	}
+	generationBase = strings.Repeat("b", 40)
+	if err := service.PreflightTestFix(t.Context(), session.ID, "Alice", requestID); !errors.Is(err, ErrAnalysisChanged) {
+		t.Fatalf("pre-admission branch drift error = %v", err)
+	}
+	generationBase = detail.Runs[0].Commit
+	if err := service.PreflightTestFix(t.Context(), session.ID, "Alice", requestID); err != nil {
+		t.Fatalf("restored Fix preflight error = %v", err)
 	}
 	runner.mu.Lock()
 	turnsBefore := len(runner.turns)
@@ -196,9 +231,12 @@ func TestServiceExactFixResolvesPreservedMutableBuildSourceBeforeProvider(t *tes
 	if turnsBefore != 0 {
 		t.Fatalf("session source preflight made %d provider calls", turnsBefore)
 	}
-	requestID := testRequestID(t)
 	if _, err := service.Send(t.Context(), session.ID, "Alice", requestID, "What evidence supports the Fix?"); err != nil {
 		t.Fatal(err)
+	}
+	sourcePreflightErr = errors.New("branch advanced after admission")
+	if err := service.PreflightTestFix(t.Context(), session.ID, "Alice", requestID); err != nil {
+		t.Fatalf("admitted idempotent Fix preflight error = %v", err)
 	}
 	subject, err := service.sourceInvestigationSubject(session.ID, "alice", requestID)
 	if err != nil || subject.Repository.Revision != detail.Runs[0].Commit {
@@ -208,8 +246,29 @@ func TestServiceExactFixResolvesPreservedMutableBuildSourceBeforeProvider(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if candidate.SourceRepositorySnapshot.Revision != detail.Runs[0].Commit || candidate.AnalysisContentHash == "" {
+	if candidate.SourceRepositorySnapshot.Revision != detail.Runs[0].Commit || candidate.AnalysisContentHash == "" ||
+		candidate.FailureRevision != detail.Runs[0].Commit || candidate.GenerationBaseRevision != detail.Runs[0].Commit ||
+		candidate.VerifiedSourceFileHashes["test/e2e/cni.go"] != strings.Repeat("a", 64) ||
+		!candidate.SourceBranchKnown || candidate.SourceBranch != "main" {
 		t.Fatalf("candidate = %+v", candidate)
+	}
+	reloaded, err := NewService(t.Context(), dir, runner, Options{StateDir: filepath.Join(dir, ".chat"), PollInterval: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reloaded.ConfigureSourceRepository(sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure"}); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := reloaded.TestFixCandidate(session.ID, "Alice", requestID)
+	if err != nil || restored.FailureRevision != detail.Runs[0].Commit || restored.GenerationBaseRevision != detail.Runs[0].Commit ||
+		restored.VerifiedSourceFileHashes["test/e2e/cni.go"] != strings.Repeat("a", 64) ||
+		!restored.SourceBranchKnown || restored.SourceBranch != "main" {
+		t.Fatalf("restored candidate = %+v, %v", restored, err)
+	}
+	detail.Runs[0].RepoRefs = map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "release-1.2"}
+	writeJobDetail(t, dir, detail)
+	if _, err := reloaded.TestFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrAnalysisChanged) {
+		t.Fatalf("refreshed branch drift error = %v", err)
 	}
 }
 
@@ -252,7 +311,7 @@ func TestServiceExactFixSourceIneligibilityIsProviderFree(t *testing.T) {
 			if session.SourceRepository != nil {
 				t.Fatalf("source repository = %+v", session.SourceRepository)
 			}
-			if err := service.PreflightTestFix(session.ID, "Alice"); !errors.Is(err, ErrInvalidRequest) {
+			if err := service.PreflightTestFix(t.Context(), session.ID, "Alice", testRequestID(t)); !errors.Is(err, ErrInvalidRequest) {
 				t.Fatalf("Fix preflight error = %v", err)
 			}
 			runner.mu.Lock()
