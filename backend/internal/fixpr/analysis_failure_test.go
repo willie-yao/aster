@@ -53,6 +53,25 @@ func TestGenerateAnalysisPreviewUsesExactSourceAndCreatesNoWrite(t *testing.T) {
 	}
 }
 
+func TestGenerateAnalysisPreviewAllowsEmptyOriginalSuggestedFix(t *testing.T) {
+	failure := validAnalysisFailure()
+	failure.SuggestedFix = ""
+	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
+	agent := goodAgent()
+	manager := newManager(t, pr, agent, Options{})
+
+	fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.calls != 1 || !strings.Contains(agent.spec.Instruction, failure.AssistantAnswer) {
+		t.Fatalf("agent calls=%d instruction=%q", agent.calls, agent.spec.Instruction)
+	}
+	if fix == nil || len(pr.opened) != 0 {
+		t.Fatalf("fix=%+v opened=%+v", fix, pr.opened)
+	}
+}
+
 func TestGenerateAnalysisPreviewUsesCurrentGenerationBase(t *testing.T) {
 	failure := validAnalysisFailure()
 	failure.FailureRevision = "a866aca055bcaa205648e81d15c67668179fdfab"

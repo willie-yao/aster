@@ -1023,14 +1023,24 @@ func TestBuildSourceFilesMustMatchFixRepository(t *testing.T) {
 	}
 }
 
-func TestBuildActionsRejectOldCritiqueContract(t *testing.T) {
-	dataDir := t.TempDir()
-	detail := analyzedBuildDetail(true)
-	detail.Runs[0].TestCases[0].AIAnalysis.CritiqueVersion--
-	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
-	service := NewService(&project.Config{}, dataDir, AIConfig{})
-	if _, err := service.resolveSubject(BuildFailureID(detail.JobID, "123")); err == nil || !strings.Contains(err.Error(), "quality gates") {
-		t.Fatalf("old critique analysis error = %v", err)
+func TestBuildActionsKeepStrictCritiqueContract(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*models.AIAnalysis)
+	}{
+		{name: "old version", mutate: func(analysis *models.AIAnalysis) { analysis.CritiqueVersion-- }},
+		{name: "failed critique", mutate: func(analysis *models.AIAnalysis) { analysis.CritiquePassed = false }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			detail := analyzedBuildDetail(true)
+			testCase.mutate(detail.Runs[0].TestCases[0].AIAnalysis)
+			writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+			service := NewService(&project.Config{}, dataDir, AIConfig{})
+			if _, err := service.resolveSubject(BuildFailureID(detail.JobID, "123")); err == nil || !strings.Contains(err.Error(), "quality gates") {
+				t.Fatalf("build critique analysis error = %v", err)
+			}
+		})
 	}
 }
 
