@@ -506,3 +506,56 @@ func cloneOperationView(view models.PatternRemediationInvestigationSummary) mode
 	}
 	return view
 }
+
+// ErrOperationNotActionable means the exact current investigation cannot enter fix preview.
+var ErrOperationNotActionable = errors.New("remediation investigation is not exactly actionable")
+
+// ActionableSubject is the private, reverified handoff for preview-only patch generation.
+type ActionableSubject struct {
+	Input                 FrozenInput
+	ResultDigest          string
+	Proposal              ActionableProposal
+	Evidence              []EvidenceRecord
+	EvidenceCatalogDigest string
+	Source                sourceinvestigation.TreeReader
+}
+
+// MarshalJSON prevents private evidence and cache provenance from entering an API response.
+func (ActionableSubject) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("actionable remediation subject is private")
+}
+
+// ResolveActionable revalidates the exact current operation and returns one verified proposal.
+func (s *OperationService) ResolveActionable(ctx context.Context, ref OperationRef) (ActionableSubject, error) {
+	ref, err := normalizeOperationRef(ref)
+	if err != nil {
+		return ActionableSubject{}, err
+	}
+	resolved, err := s.resolver.Resolve(ctx, ref)
+	if err != nil {
+		return ActionableSubject{}, err
+	}
+	if err := s.validateBeforePublish(ctx, ref, resolved.Input); err != nil {
+		return ActionableSubject{}, err
+	}
+	key, err := CacheKey(resolved.Input)
+	if err != nil {
+		return ActionableSubject{}, err
+	}
+	entry, ok, err := s.cache.Lookup(key)
+	if err != nil || !ok {
+		return ActionableSubject{}, ErrOperationNotActionable
+	}
+	verified, err := verifyOperationResult(ctx, resolved, entry)
+	if err != nil {
+		return ActionableSubject{}, err
+	}
+	if verified.Classification != ClassificationActionable || verified.Proposal == nil {
+		return ActionableSubject{}, ErrOperationNotActionable
+	}
+	evidence, err := selectedEvidenceRecords(verified.Proposal.EvidenceIDs, entry.EvidenceCatalog)
+	if err != nil {
+		return ActionableSubject{}, err
+	}
+	return ActionableSubject{Input: resolved.Input, ResultDigest: entry.ResultDigest, Proposal: *verified.Proposal, Evidence: evidence, EvidenceCatalogDigest: entry.EvidenceCatalogDigest, Source: resolved.Source}, nil
+}

@@ -383,3 +383,15 @@ must receive the frozen verified target and cannot repair, replace, or rediscove
 an unverified target. That handoff remains deferred until the Claude and real
 historical gates pass and the exact final Fix executor passes a separate
 single-use smoke.
+
+## Experimental causal Fix PR preview
+
+The v0.9 beta may separately enable `server.remediationInvestigation.fixPreview.enabled` after authenticated remediation investigation and an Agent Sandbox fix runtime are configured. The gate is disabled by default and advertises `causal_remediation_fix_preview` only when the server has authentication, remediation re-verification, and a fix runtime.
+
+A preview request is explicitly initiated for one exact pattern and causal-group hash. The server reloads the private cache entry, rechecks provenance and immutable source identity, and requires exactly one current `actionable` verified proposal. Already-fixed, ambiguous, insufficient-evidence, failed, inactive, stale, unsupported, or drifted results fail closed.
+
+The coding runtime receives only the immutable repository revision, engine-derived typed target, expected behavior, selected private evidence, allowed paths, exact validation commands, and output bounds. The repository clone uses no GitHub write token. The server reapplies the returned diff to the immutable base, reconstructs changed files, compares the reported file map, rejects unexpected paths and unsupported Git changes, and reruns the exact validation commands.
+
+The response is a human-visible preview containing a summary, base revision, safe target identity, changed paths, canonical unified diff, validation outcomes, and a safe runtime identity. It contains no confirmation token, branch, push state, PR URL, private cache key, raw model output, or raw private evidence. It is not persisted as an action request and no existing confirmation endpoint accepts it. Causal groups remain blocked by `PatternAllowsActions`; this beta uses a separate preview-only eligibility path and does not enable normal actions or chat-to-fix.
+
+Preview generation is nondeterministic and may safely end with generation failure, patch rejection, validation failure, stale target, or no actionable target. No GitHub PR is created by this flow.

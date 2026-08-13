@@ -55,6 +55,7 @@ ENTRYPOINT ["/usr/local/bin/server"]
 FROM ghcr.io/anomalyco/opencode:1.18.2@sha256:ef9257b3246e9be63d5050924c07f7e6d8d9f135fdfcd8422fc873a408c367af AS agent-sandbox-fix-executor
 USER root
 RUN apk add --no-cache ca-certificates git \
+ && go version \
  && addgroup -g 65532 padnonroot \
  && adduser -D -H -u 65532 -G padnonroot padnonroot \
  && opencode --version
@@ -105,7 +106,7 @@ ENTRYPOINT ["/usr/local/bin/criticexecutor"]
 
 # Minimal git-capable engine for reconstructing patches returned by remote fix
 # runtimes such as Agent Sandbox. It intentionally omits OpenCode and srt.
-FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce AS remote-fixer-runtime
+FROM golang:1.25.12-alpine AS remote-fixer-runtime
 RUN apk add --no-cache ca-certificates git \
  && addgroup -g 65532 padnonroot \
  && adduser -D -H -u 65532 -G padnonroot padnonroot \

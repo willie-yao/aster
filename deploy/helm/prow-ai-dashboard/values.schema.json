@@ -2205,13 +2205,28 @@
               "type": "integer",
               "description": "Maximum retained in-memory safe operation states.",
               "minimum": 1
+            },
+            "fixPreview": {
+              "type": "object",
+              "description": "Experimental preview-only causal fix generation.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable preview generation without any GitHub write or confirmation capability."
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "enabled"
+              ]
             }
           },
           "additionalProperties": false,
           "required": [
             "enabled",
             "timeout",
-            "maxOperations"
+            "maxOperations",
+            "fixPreview"
           ]
         }
       },

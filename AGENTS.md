@@ -87,6 +87,7 @@ backend/                         Go 1.25
     corrections/                 Promotes reviewed chat revisions without mutating output
     sourceinvestigation/         Read-only source investigation contracts
     remediationinvestigation/    Frozen causal-group remediation investigation + private cache
+    causalfixpreview/            Preview-only causal-group patch generation, reconstruction, and validation
     aitest/                      Record/replay chat-completions server for tests
 
     -- write actions (issues, fix PRs, resolution) --

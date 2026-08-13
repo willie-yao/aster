@@ -12,7 +12,9 @@ import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
 import {
   getCausalRemediationStatus,
+  previewCausalFix,
   startCausalRemediation,
+  type CausalFixPreview,
   type CausalRemediationRef,
 } from "../lib/causalRemediation";
 import { patternRemediationPresentation } from "../lib/patternRemediation";
@@ -51,8 +53,11 @@ export function PatternRemediation({
   );
   const [busyHash, setBusyHash] = useState<string | null>(null);
   const [errors, setErrors] = useState<Map<string, string>>(new Map());
+  const [previews, setPreviews] = useState<Map<string, CausalFixPreview>>(new Map());
+  const [previewBusyHash, setPreviewBusyHash] = useState<string | null>(null);
   const idempotencyKeys = useRef(new Map<string, string>());
   const operationAvailable = Boolean(features.causal_remediation_investigation);
+  const previewAvailable = Boolean(features.causal_remediation_fix_preview);
 
   useEffect(() => {
     setStates(new Map(investigations?.map((item) => [item.causal_group_hash, item])));
@@ -128,6 +133,22 @@ export function PatternRemediation({
     }
   };
 
+  const preview = async (group: PatternCausalGroup) => {
+    if (authStatus !== "authenticated" || !jobID || !patternID || !patternHash) return;
+    const ref = operationRef(jobID, patternID, patternHash, group);
+    if (!ref) return;
+    setPreviewBusyHash(ref.causalGroupHash);
+    setErrors((current) => withoutKey(current, ref.causalGroupHash));
+    try {
+      const result = await previewCausalFix(ref, crypto.randomUUID());
+      setPreviews((current) => new Map(current).set(ref.causalGroupHash, result));
+    } catch (error) {
+      setErrors((current) => new Map(current).set(ref.causalGroupHash, error instanceof Error ? error.message : "Fix preview generation failed."));
+    } finally {
+      setPreviewBusyHash(null);
+    }
+  };
+
   return (
     <Box aria-live="polite">
       <Typography
@@ -148,6 +169,8 @@ export function PatternRemediation({
             const presentation = patternRemediationPresentation(investigation);
             const localError = group.content_hash ? errors.get(group.content_hash) : undefined;
             const details = investigationDetails(investigation, localError, presentation.message);
+            const fixPreview = group.content_hash ? previews.get(group.content_hash) : undefined;
+            const canPreview = previewAvailable && authStatus === "authenticated" && presentation.state === "actionable" && Boolean(investigation?.target);
             const canStart = operationAvailable &&
               (presentation.state === "not_investigated" || presentation.state === "failed") &&
               authStatus !== "loading";
@@ -177,6 +200,25 @@ export function PatternRemediation({
                   >
                     {authStatus === "anonymous" ? "Sign in to investigate" : "Investigate possible fix"}
                   </Button>
+                )}
+                {canPreview && (
+                  <Box sx={{ mt: 1 }}>
+                    <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                      <Button size="small" variant="contained" disabled={previewBusyHash === group.content_hash} onClick={() => void preview(group)}>
+                        Preview Fix PR
+                      </Button>
+                      <Chip size="small" color="warning" variant="outlined" label="Experimental" />
+                    </Stack>
+                    <Typography color="text.secondary" sx={{ mt: 0.5 }}>Generates a review preview only. No GitHub PR will be created.</Typography>
+                  </Box>
+                )}
+                {fixPreview && (
+                  <Box sx={{ mt: 1, border: "1px solid", borderColor: "divider", borderRadius: 1, p: 1.5 }}>
+                    <Typography sx={{ fontWeight: 700 }}>{fixPreview.summary}</Typography>
+                    <Typography color="text.secondary">Base: {fixPreview.base_revision}</Typography>
+                    <Typography color="text.secondary">Changed files: {fixPreview.changed_files.join(", ")}</Typography>
+                    <Box component="pre" sx={{ overflowX: "auto", whiteSpace: "pre", fontSize: 12, mt: 1 }}>{fixPreview.diff}</Box>
+                  </Box>
                 )}
                 {details && (
                   <Accordion
