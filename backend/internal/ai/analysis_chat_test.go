@@ -721,9 +721,55 @@ func TestAnalysisChatCitationLineValidation(t *testing.T) {
 	if reply.Citations[0].LineStart != 42 || reply.Citations[0].LineEnd != 42 {
 		t.Fatalf("verified line range was not retained: %+v", reply.Citations[0])
 	}
-	invalid := `{"answer":"The controller stopped.","assessment":"supports","citations":[{"path":"build-log.txt","line_start":41,"line_end":41,"quote":"controller stopped"}],"proposed_revision":null}`
+	canonical := `{"answer":"The controller stopped.","assessment":"supports","citations":[{"path":"build-log.txt","line_start":42,"line_end":42,"quote":"the controller exited"}],"proposed_revision":null}`
+	reply, err = parseAnalysisChatReply(canonical, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Citations[0].Quote != "controller stopped" {
+		t.Fatalf("canonical quote = %q", reply.Citations[0].Quote)
+	}
+	invalid := `{"answer":"The controller stopped.","assessment":"supports","citations":[{"path":"build-log.txt","line_start":40,"line_end":40,"quote":"controller stopped"}],"proposed_revision":null}`
 	if _, err := parseAnalysisChatReply(invalid, evidence); err == nil {
 		t.Fatal("fabricated line range was accepted")
+	}
+}
+
+func TestAnalysisChatCitationRangeReconstructionFailsClosed(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{"build-log.txt": {
+		Segments: []string{"controller stopped"},
+		Lines:    map[int]string{42: "controller stopped"},
+		Bytes:    len("controller stopped"),
+	}}
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "missing line",
+			raw:  `{"answer":"x","citations":[{"path":"build-log.txt","line_start":42,"line_end":43,"quote":"ignored"}]}`,
+		},
+		{
+			name: "unread path",
+			raw:  `{"answer":"x","citations":[{"path":"other.log","line_start":42,"line_end":42,"quote":"ignored"}]}`,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := parseAnalysisChatReply(testCase.raw, evidence); err == nil {
+				t.Fatal("invalid citation was accepted")
+			}
+		})
+	}
+}
+
+func TestAnalysisChatCitationWithoutLineRangeStillRequiresExactQuote(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{"build-log.txt": {
+		Segments: []string{"controller stopped"}, Bytes: len("controller stopped"),
+	}}
+	raw := `{"answer":"x","citations":[{"path":"build-log.txt","quote":"the controller exited"}]}`
+	if _, err := parseAnalysisChatReply(raw, evidence); err == nil {
+		t.Fatal("mismatched quote without a verified line range was accepted")
 	}
 }
 
@@ -759,7 +805,7 @@ func TestAnalysisChatEvidenceRequiresContiguousSegmentsAndLines(t *testing.T) {
 	if analysisChatEvidenceContains(evidence, "first snippet\nsecond snippet") {
 		t.Fatal("quote spanning separate reads was accepted")
 	}
-	if analysisChatQuoteInRange(evidence.Lines, 10, 12, "first snippet\nsecond snippet") {
+	if _, ok := analysisChatQuoteForRange(evidence.Lines, 10, 12); ok {
 		t.Fatal("line range with an unobserved gap was accepted")
 	}
 }
@@ -1473,7 +1519,7 @@ func TestAnalysisChatRecheckArtifactsRepairsThroughEvidence(t *testing.T) {
 	}))
 	server.push(200, chatRespFinal(`{
 		"answer":"The build log records the controller stopping.",
-		"citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"controller stopped"}],
+		"citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"the controller exited"}],
 		"assessment":"supports","proposed_revision":null
 	}`))
 	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
@@ -1486,7 +1532,8 @@ func TestAnalysisChatRecheckArtifactsRepairsThroughEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply.ToolCalls != 1 || len(reply.Citations) != 1 || reply.Citations[0].LineStart != 1 {
+	if reply.ToolCalls != 1 || len(reply.Citations) != 1 || reply.Citations[0].LineStart != 1 ||
+		reply.Citations[0].Quote != "controller stopped" {
 		t.Fatalf("reply = %+v", reply)
 	}
 }
@@ -1494,12 +1541,12 @@ func TestAnalysisChatRecheckArtifactsRepairsThroughEvidence(t *testing.T) {
 func TestAnalysisChatPatternArtifactCitationKeepsBuildPrefix(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]interface{}{
-		"path": "builds/104/build-log.txt", "offset": 0, "length": 1024,
+	server.push(200, chatRespToolCall("call-1", "grep_artifact", map[string]interface{}{
+		"path": "builds/104/build-log.txt", "pattern": "group failure", "max_matches": 10,
 	}))
 	server.push(200, chatRespFinal(`{
 		"answer":"Build 104 records the group failure.",
-		"citations":[{"path":"builds/104/build-log.txt","quote":"group failure"}],
+		"citations":[{"path":"builds/104/build-log.txt","line_start":1,"line_end":1,"quote":"the group failed"}],
 		"assessment":"supports","proposed_revision":null
 	}`))
 	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
@@ -1514,7 +1561,8 @@ func TestAnalysisChatPatternArtifactCitationKeepsBuildPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reply.Citations) != 1 || reply.Citations[0].Path != "builds/104/build-log.txt" {
+	if len(reply.Citations) != 1 || reply.Citations[0].Path != "builds/104/build-log.txt" ||
+		reply.Citations[0].Quote != "group failure" {
 		t.Fatalf("reply = %+v", reply)
 	}
 }

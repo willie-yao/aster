@@ -312,6 +312,15 @@ func decodeAnalysisChatReplyCandidate(candidate string, evidence map[string]*ana
 				analysisChatValidationCitation, fmt.Errorf("citation %d has an invalid line range", i+1),
 			)
 		}
+		if citation.LineStart > 0 && len(artifactEvidence.Lines) > 0 {
+			quote, ok := analysisChatQuoteForRange(artifactEvidence.Lines, citation.LineStart, citation.LineEnd)
+			if !ok {
+				return analysischat.Reply{}, newAnalysisChatValidationError(
+					analysisChatValidationCitation, fmt.Errorf("citation %d line range was not returned by the cited artifact read", i+1),
+				)
+			}
+			citation.Quote = quote
+		}
 		if len(citation.Quote) < 4 {
 			return analysischat.Reply{}, newAnalysisChatValidationError(
 				analysisChatValidationCitation, fmt.Errorf("citation %d requires an exact quote of at least 4 bytes", i+1),
@@ -330,10 +339,6 @@ func decodeAnalysisChatReplyCandidate(candidate string, evidence map[string]*ana
 		if citation.LineStart > 0 {
 			if len(artifactEvidence.Lines) == 0 {
 				citation.LineStart, citation.LineEnd = 0, 0
-			} else if !analysisChatQuoteInRange(artifactEvidence.Lines, citation.LineStart, citation.LineEnd, citation.Quote) {
-				return analysischat.Reply{}, newAnalysisChatValidationError(
-					analysisChatValidationCitation, fmt.Errorf("citation %d quote does not occur in the claimed line range", i+1),
-				)
 			}
 		}
 	}

@@ -1246,16 +1246,16 @@ func analysisChatEvidenceContains(evidence *analysisChatEvidence, quote string) 
 	return false
 }
 
-func analysisChatQuoteInRange(lines map[int]string, start, end int, quote string) bool {
+func analysisChatQuoteForRange(lines map[int]string, start, end int) (string, bool) {
 	parts := make([]string, 0, end-start+1)
 	for line := start; line <= end; line++ {
 		text, ok := lines[line]
 		if !ok {
-			return false
+			return "", false
 		}
 		parts = append(parts, text)
 	}
-	return strings.Contains(strings.Join(parts, "\n"), quote)
+	return strings.Join(parts, "\n"), true
 }
 
 func boundedAnalysisChatFiles(files []string) []string {
