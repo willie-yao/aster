@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
@@ -218,6 +219,67 @@ func workspaceValidationJSON(t *testing.T, handles []WorkspaceEvidenceHandle, mu
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func TestValidateWorkspaceExecutionResultRequiresSourceEvidenceFloor(t *testing.T) {
+	_, base := workspaceSandboxFixture(t)
+	request, err := NewWorkspaceExecutionRequestWithSourceEvidence(base.Request.Manifest, base.Request.SourceModePolicy, true, base.Request.ModelProvider, time.Minute, base.Request.MaxSteps, base.Request.ModelContextTokens, base.Request.ModelOutputTokens, base.Request.OutputLimitBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := validWorkspaceExecution(request)
+	result.OpenCodeTelemetry.SourceEvidenceStatus = WorkspaceSourceEvidenceAccepted
+	result.OpenCodeTelemetry.EvidenceHandles = WorkspaceEvidenceHandleDiagnostics{
+		Status: WorkspaceEvidenceHandlesAccepted, ObservedRangeCount: 2, AcceptedArtifactHandleCount: 1, AcceptedSourceHandleCount: 1,
+	}
+	if _, err := ValidateWorkspaceExecutionResult(result, request, base.ArtifactRoot, base.SourceRoot); err != nil {
+		t.Fatalf("valid source floor was rejected: %v", err)
+	}
+	for _, mutate := range []func(*WorkspaceExecutionResult){
+		func(value *WorkspaceExecutionResult) {
+			value.OpenCodeTelemetry.SourceEvidenceStatus = WorkspaceSourceToolSkipped
+		},
+		func(value *WorkspaceExecutionResult) { value.OpenCodeTelemetry.SourceEvidenceToolCalls = 0 },
+		func(value *WorkspaceExecutionResult) {
+			value.OpenCodeTelemetry.EvidenceHandles.AcceptedSourceHandleCount = 0
+		},
+	} {
+		changed := result
+		mutate(&changed)
+		if _, err := ValidateWorkspaceExecutionResult(changed, request, base.ArtifactRoot, base.SourceRoot); err == nil {
+			t.Fatalf("missing source floor was accepted: %+v", changed.OpenCodeTelemetry)
+		}
+	}
+}
+
+func TestValidateWorkspaceExecutionResultAcceptsRejectedCorrectiveSourceHandle(t *testing.T) {
+	_, base := workspaceSandboxFixture(t)
+	request, err := NewWorkspaceExecutionRequestWithSourceEvidence(base.Request.Manifest, base.Request.SourceModePolicy, true, base.Request.ModelProvider, time.Minute, base.Request.MaxSteps, base.Request.ModelContextTokens, base.Request.ModelOutputTokens, base.Request.OutputLimitBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := validWorkspaceExecution(request)
+	result.TerminalState = engineruntime.TerminalFailed
+	result.FailureReason = "required source evidence is missing"
+	result.Analysis = nil
+	result.OpenCodeTelemetry.ProviderRequests = 2
+	result.OpenCodeTelemetry.StepsUsed = 2
+	result.OpenCodeTelemetry.EvidencePhaseSteps = 2
+	result.OpenCodeTelemetry.EvidencePhaseRequests = 2
+	result.OpenCodeTelemetry.FinalizationPhaseCompleted = false
+	result.OpenCodeTelemetry.FinalizationPhaseSteps = 0
+	result.OpenCodeTelemetry.FinalizationPhaseRequests = 0
+	result.OpenCodeTelemetry.StructuredOutputToolCalls = 0
+	result.OpenCodeTelemetry.SourceEvidenceStatus = WorkspaceSourceEvidenceUnusable
+	result.OpenCodeTelemetry.SourceEvidenceCorrectiveTurn = true
+	result.OpenCodeTelemetry.SourceEvidenceCorrectionReason = WorkspaceSourceToolSkipped
+	result.OpenCodeTelemetry.EvidenceHandles = WorkspaceEvidenceHandleDiagnostics{
+		Status: WorkspaceEvidenceHandlesAccepted, ObservedRangeCount: 2, AcceptedArtifactHandleCount: 1, AcceptedSourceHandleCount: 1,
+	}
+	result.OpenCodeTelemetry.FailureCode = "source_evidence_missing"
+	if _, err := ValidateWorkspaceExecutionResult(result, request, base.ArtifactRoot, base.SourceRoot); err != nil {
+		t.Fatalf("failed corrective result was rejected: %v", err)
+	}
 }
 
 func TestValidateWorkspaceExecutionResultAllowsPostModelGrace(t *testing.T) {

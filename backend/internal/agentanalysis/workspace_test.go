@@ -185,7 +185,7 @@ func TestWorkspaceExecutionRequestBindsPromptAndRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if execution.Version != 3 {
+	if execution.Version != 4 {
 		t.Fatalf("workspace request version = %d", execution.Version)
 	}
 	encoded, err := json.Marshal(execution)
@@ -256,7 +256,7 @@ func TestWorkspaceExecutionRequestAcceptsResponsesWithoutVersionChange(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if responses.Version != 3 || responses.Hash == chat.Hash || responses.ModelProvider.API != "responses" {
+	if responses.Version != 4 || responses.Hash == chat.Hash || responses.ModelProvider.API != "responses" {
 		t.Fatalf("chat=%+v responses=%+v", chat.ModelProvider, responses.ModelProvider)
 	}
 	highProvider := testResponsesProvider("https://api.openai.com/v1/responses", "test-model")
@@ -267,6 +267,62 @@ func TestWorkspaceExecutionRequestAcceptsResponsesWithoutVersionChange(t *testin
 	}
 	if high.Hash == responses.Hash || high.ModelProvider.ReasoningEffort != modelprovider.ReasoningEffortHigh {
 		t.Fatalf("responses=%+v high=%+v", responses.ModelProvider, high.ModelProvider)
+	}
+}
+
+func TestWorkspaceExecutionRequestSourceEvidenceFloorIsHashed(t *testing.T) {
+	sourceRoot, artifactRoot, failure, source := workspaceTestInputs(t)
+	_ = sourceRoot
+	files, err := SnapshotArtifactWorkspace(artifactRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := NewWorkspaceManifest(failure, source, "Inspect this project.", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := testGatewayProvider("https://model-gateway.prow-ai.svc.cluster.local:8443/v1", "test-model")
+	artifactOnly, err := NewWorkspaceExecutionRequestWithSourceEvidence(manifest, WorkspaceSourceModePreserve, false, provider, time.Minute, 20, 200000, 8192, 128<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceRequired, err := NewWorkspaceExecutionRequestWithSourceEvidence(manifest, WorkspaceSourceModePreserve, true, provider, time.Minute, 20, 200000, 8192, 128<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifactOnly.RequireSourceEvidence || !sourceRequired.RequireSourceEvidence || artifactOnly.Hash == sourceRequired.Hash || sourceRequired.Version != 4 {
+		t.Fatalf("artifactOnly=%+v sourceRequired=%+v", artifactOnly, sourceRequired)
+	}
+	if _, err := NewWorkspaceExecutionRequestWithSourceEvidence(manifest, WorkspaceSourceModePreserve, true, provider, time.Minute, 4, 200000, 8192, 128<<10); err == nil {
+		t.Fatal("source-required request without a corrective-turn budget was accepted")
+	}
+}
+
+func TestWorkspaceInstructionSourceEvidenceRequirementIsGeneric(t *testing.T) {
+	_, artifactRoot, failure, source := workspaceTestInputs(t)
+	files, err := SnapshotArtifactWorkspace(artifactRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := NewWorkspaceManifest(failure, source, "Inspect this project.", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := NewWorkspaceExecutionRequestWithSourceEvidence(manifest, WorkspaceSourceModePreserve, true, testGatewayProvider("https://model-gateway.prow-ai.svc.cluster.local:8443/v1", "test-model"), time.Minute, 20, 200000, 8192, 128<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := WorkspaceInstruction(request, "/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "Required source grounding") || !strings.Contains(prompt, "canonical source evidence handle") {
+		t.Fatalf("source requirement missing: %s", prompt)
+	}
+	for _, forbidden := range []string{"test/k8s-integration/main.go", "Windows snapshot", "expected diagnosis", "expected signal"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("prompt leaked %q: %s", forbidden, prompt)
+		}
 	}
 }
 

@@ -371,6 +371,11 @@ func workspaceEvidenceLine(file workspaceEvidenceFileIndex, line int) string {
 	return file.content[start : start+end]
 }
 
+// WorkspaceSourceEvidenceCorrectionInstruction requests one bounded source investigation.
+func WorkspaceSourceEvidenceCorrectionInstruction() string {
+	return `Required source grounding is not yet usable. Continue the evidence investigation with a focused, content-bearing read or grep under source/. Use only the failure metadata and artifact findings already inspected to choose relevant source. Do not inspect more artifacts, use StructuredOutput, or provide the final analysis. Respond briefly after the source operation completes.`
+}
+
 // WorkspaceFinalizationInstruction binds citation IDs to evidence already seen.
 func WorkspaceFinalizationInstruction(handles []WorkspaceEvidenceHandle) (string, error) {
 	if err := validateWorkspaceEvidenceHandles(handles); err != nil {

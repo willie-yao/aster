@@ -63,20 +63,31 @@ func TestFetchOpenCodeToolSchemaDigestUsesOnlyAnalysisTools(t *testing.T) {
 	}))
 	defer server.Close()
 	spec := OpenCodeSpec{WorkDir: "/workspace", Provider: testOpenCodeProvider("", "test-model")}
-	count, digest, err := fetchOpenCodeNativeToolSchemaDigest(t.Context(), server.Client(), server.URL, spec)
+	count, digest, sourceTools, err := fetchOpenCodeNativeToolSchemaDigest(t.Context(), server.Client(), server.URL, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 4 || len(digest) != 64 {
+	if count != 4 || len(digest) != 64 || !sourceTools {
 		t.Fatalf("count=%d digest=%q", count, digest)
 	}
 	response[0], response[4] = response[4], response[0]
-	count2, digest2, err := fetchOpenCodeNativeToolSchemaDigest(t.Context(), server.Client(), server.URL, spec)
+	count2, digest2, sourceTools2, err := fetchOpenCodeNativeToolSchemaDigest(t.Context(), server.Client(), server.URL, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count2 != count || digest2 != digest {
+	if count2 != count || digest2 != digest || sourceTools2 != sourceTools {
 		t.Fatalf("digest changed with response order: %s != %s", digest2, digest)
+	}
+}
+
+func TestFetchOpenCodeToolSchemaDigestReportsSourceToolsWhenOtherToolsAreMissing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `[{"id":"read","parameters":{"type":"object"}},{"id":"grep","parameters":{"type":"object"}}]`)
+	}))
+	defer server.Close()
+	_, _, sourceTools, err := fetchOpenCodeNativeToolSchemaDigest(t.Context(), server.Client(), server.URL, OpenCodeSpec{Provider: testOpenCodeProvider("", "test-model")})
+	if err == nil || !sourceTools {
+		t.Fatalf("sourceTools=%v err=%v", sourceTools, err)
 	}
 }
 
@@ -85,8 +96,8 @@ func TestFetchOpenCodeToolSchemaDigestRejectsMissingAnalysisTool(t *testing.T) {
 		fmt.Fprint(w, `[{"id":"read","parameters":{"type":"object"}}]`)
 	}))
 	defer server.Close()
-	_, _, err := fetchOpenCodeNativeToolSchemaDigest(t.Context(), server.Client(), server.URL, OpenCodeSpec{Provider: testOpenCodeProvider("", "test-model")})
-	if err == nil {
-		t.Fatal("incomplete tool schema set was accepted")
+	_, _, sourceTools, err := fetchOpenCodeNativeToolSchemaDigest(t.Context(), server.Client(), server.URL, OpenCodeSpec{Provider: testOpenCodeProvider("", "test-model")})
+	if err == nil || sourceTools {
+		t.Fatal("incomplete source tool schema set was accepted")
 	}
 }

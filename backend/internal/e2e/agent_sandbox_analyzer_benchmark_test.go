@@ -425,7 +425,7 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 	if err != nil {
 		t.Fatal(err)
 	}
-	execution, err := agentanalysis.NewWorkspaceExecutionRequestWithSourceModePolicy(manifest, sourceModePolicy, cfg.Provider, cfg.Timeout, cfg.MaxSteps, cfg.ModelContextTokens, cfg.ModelOutputTokens, cfg.OutputLimit)
+	execution, err := agentanalysis.NewWorkspaceExecutionRequestWithSourceEvidence(manifest, sourceModePolicy, bc.evidenceMode == benchmarkEvidenceModeArtifactAndSource, cfg.Provider, cfg.Timeout, cfg.MaxSteps, cfg.ModelContextTokens, cfg.ModelOutputTokens, cfg.OutputLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +444,7 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 		artifactPaths = append(artifactPaths, file.Path)
 	}
 	prepared := agentSandboxAnalyzerPrepared{
-		Version: 4, CaseID: bc.name, StableID: bc.stableID, EvidenceMode: bc.evidenceMode, SourceExpectationSHA256: benchmarkSourceExpectationSHA256(bc), EngineCommit: cfg.EngineCommit,
+		Version: 5, CaseID: bc.name, StableID: bc.stableID, EvidenceMode: bc.evidenceMode, SourceExpectationSHA256: benchmarkSourceExpectationSHA256(bc), EngineCommit: cfg.EngineCommit,
 		FixtureSHA256: bc.fixtureSHA256, BaselineConsumerCommit: bc.consumerCommit,
 		BaselinePromptSHA256: bc.promptSHA256, ProjectSHA256: sha256Hex(projectData),
 		SourceRevision: source.Revision, SourceModePolicy: string(sourceModePolicy), SourceRoot: filepath.Clean(cfg.SourceRoot), ArtifactRoot: artifactRoot,
@@ -816,7 +816,7 @@ func readAgentSandboxAnalyzerPrepared(t *testing.T, path string) agentSandboxAna
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		t.Fatal("prepared analyzer record has trailing data")
 	}
-	if prepared.Version != 4 || !validBenchmarkEvidenceMode(prepared.EvidenceMode) || !benchmarkSHA256RE.MatchString(prepared.SourceExpectationSHA256) {
+	if prepared.Version != 5 || !validBenchmarkEvidenceMode(prepared.EvidenceMode) || !benchmarkSHA256RE.MatchString(prepared.SourceExpectationSHA256) {
 		t.Fatal("prepared analyzer record version is invalid")
 	}
 	return prepared
@@ -916,7 +916,7 @@ func TestAgentSandboxAnalyzerExecutionRejectsChangedSourceModePolicy(t *testing.
 	if err != nil || policy != agentanalysis.WorkspaceSourceModePreserve {
 		t.Fatalf("policy=%q err=%v", policy, err)
 	}
-	sealed := agentSandboxAnalyzerPrepared{Version: 4, EvidenceMode: benchmarkEvidenceModeArtifactOnly, SourceModePolicy: string(policy)}
+	sealed := agentSandboxAnalyzerPrepared{Version: 5, EvidenceMode: benchmarkEvidenceModeArtifactOnly, SourceModePolicy: string(policy)}
 	run("config", "--local", "core.filemode", "false")
 	if _, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), root, revision, &sealed); agentanalysis.SourceIntegrityCategory(err) != agentanalysis.SourceModePolicyChanged {
 		t.Fatalf("error=%v category=%q", err, agentanalysis.SourceIntegrityCategory(err))

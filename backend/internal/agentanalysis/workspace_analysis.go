@@ -31,13 +31,21 @@ var workspaceAnalysisAgent string
 //go:embed skill/analysis-finalizer.md
 var workspaceAnalysisFinalizer string
 
+//go:embed skill/analysis-source-evidence.md
+var workspaceSourceEvidenceAgent string
+
 // WorkspaceSkillHash returns the file-backed analyzer prompt fingerprint.
 func WorkspaceSkillHash() string {
-	return hashString(workspaceAnalysisSkill + "\n" + workspaceAnalysisAgent + "\n" + workspaceAnalysisFinalizer)
+	return hashString(workspaceAnalysisSkill + "\n" + workspaceAnalysisAgent + "\n" + workspaceSourceEvidenceAgent + "\n" + workspaceAnalysisFinalizer)
 }
 
 // WorkspaceAgentPrompt returns the static read-only evidence-agent guidance.
 func WorkspaceAgentPrompt() string { return strings.TrimSpace(workspaceAnalysisAgent) }
+
+// WorkspaceSourceEvidenceAgentPrompt returns the source-only correction guidance.
+func WorkspaceSourceEvidenceAgentPrompt() string {
+	return strings.TrimSpace(workspaceSourceEvidenceAgent)
+}
 
 // WorkspaceFinalizerPrompt returns the static StructuredOutput-only guidance.
 func WorkspaceFinalizerPrompt() string { return strings.TrimSpace(workspaceAnalysisFinalizer) }
@@ -65,6 +73,12 @@ const (
 	WorkspaceTelemetryUnavailable = "unavailable"
 	WorkspaceTelemetryMalformed   = "malformed"
 	WorkspaceTelemetryTruncated   = "truncated"
+
+	WorkspaceSourceEvidenceAccepted = "accepted"
+	WorkspaceSourceToolUnavailable  = "source_tool_unavailable"
+	WorkspaceSourceToolSkipped      = "source_tool_skipped"
+	WorkspaceSourceToolFailed       = "source_tool_failed"
+	WorkspaceSourceEvidenceUnusable = "source_evidence_unusable"
 )
 
 // WorkspaceUsage records provider telemetry when the runtime exposes it.
@@ -135,38 +149,41 @@ type WorkspaceOpenCodeErrorTelemetry struct {
 
 // WorkspaceOpenCodeTelemetry contains no prompts, responses, evidence, or raw events.
 type WorkspaceOpenCodeTelemetry struct {
-	Available                    bool                               `json:"available"`
-	Status                       string                             `json:"status"`
-	ProviderCredentialMode       string                             `json:"provider_credential_mode,omitempty"`
-	ProviderAPI                  string                             `json:"provider_api,omitempty"`
-	ProviderReasoningEffort      string                             `json:"provider_reasoning_effort,omitempty"`
-	EventCount                   int                                `json:"event_count,omitempty"`
-	ProviderRequests             int                                `json:"provider_requests,omitempty"`
-	ProviderRequestsKnown        bool                               `json:"provider_requests_known"`
-	RequestShape                 WorkspaceOpenCodeRequestShape      `json:"request_shape"`
-	Error                        WorkspaceOpenCodeErrorTelemetry    `json:"error"`
-	Tools                        []WorkspaceToolTelemetry           `json:"tools,omitempty"`
-	DeniedToolCount              int                                `json:"denied_tool_count,omitempty"`
-	ToolFailureCount             int                                `json:"tool_failure_count,omitempty"`
-	StepsUsed                    int                                `json:"steps_used,omitempty"`
-	StructuredOutputRetriesKnown bool                               `json:"structured_output_retries_known"`
-	StructuredOutputRetries      int                                `json:"structured_output_retries,omitempty"`
-	StructuredOutputErrors       int                                `json:"structured_output_errors,omitempty"`
-	EvidencePhaseCompleted       bool                               `json:"evidence_phase_completed,omitempty"`
-	EvidencePhaseSteps           int                                `json:"evidence_phase_steps,omitempty"`
-	EvidencePhaseRequests        int                                `json:"evidence_phase_requests,omitempty"`
-	ArtifactEvidenceToolCalls    int                                `json:"artifact_evidence_tool_calls,omitempty"`
-	SourceEvidenceToolCalls      int                                `json:"source_evidence_tool_calls,omitempty"`
-	EvidenceHandles              WorkspaceEvidenceHandleDiagnostics `json:"evidence_handles,omitempty"`
-	FinalizationPhaseCompleted   bool                               `json:"finalization_phase_completed,omitempty"`
-	FinalizationPhaseSteps       int                                `json:"finalization_phase_steps,omitempty"`
-	FinalizationPhaseRequests    int                                `json:"finalization_phase_requests,omitempty"`
-	StructuredOutputToolCalls    int                                `json:"structured_output_tool_calls,omitempty"`
-	ContextLimit                 bool                               `json:"context_limit,omitempty"`
-	TimedOut                     bool                               `json:"timed_out,omitempty"`
-	FailureCode                  string                             `json:"failure_code,omitempty"`
-	StdoutTruncated              bool                               `json:"stdout_truncated,omitempty"`
-	StderrTruncated              bool                               `json:"stderr_truncated,omitempty"`
+	Available                      bool                               `json:"available"`
+	Status                         string                             `json:"status"`
+	ProviderCredentialMode         string                             `json:"provider_credential_mode,omitempty"`
+	ProviderAPI                    string                             `json:"provider_api,omitempty"`
+	ProviderReasoningEffort        string                             `json:"provider_reasoning_effort,omitempty"`
+	EventCount                     int                                `json:"event_count,omitempty"`
+	ProviderRequests               int                                `json:"provider_requests,omitempty"`
+	ProviderRequestsKnown          bool                               `json:"provider_requests_known"`
+	RequestShape                   WorkspaceOpenCodeRequestShape      `json:"request_shape"`
+	Error                          WorkspaceOpenCodeErrorTelemetry    `json:"error"`
+	Tools                          []WorkspaceToolTelemetry           `json:"tools,omitempty"`
+	DeniedToolCount                int                                `json:"denied_tool_count,omitempty"`
+	ToolFailureCount               int                                `json:"tool_failure_count,omitempty"`
+	StepsUsed                      int                                `json:"steps_used,omitempty"`
+	StructuredOutputRetriesKnown   bool                               `json:"structured_output_retries_known"`
+	StructuredOutputRetries        int                                `json:"structured_output_retries,omitempty"`
+	StructuredOutputErrors         int                                `json:"structured_output_errors,omitempty"`
+	EvidencePhaseCompleted         bool                               `json:"evidence_phase_completed,omitempty"`
+	EvidencePhaseSteps             int                                `json:"evidence_phase_steps,omitempty"`
+	EvidencePhaseRequests          int                                `json:"evidence_phase_requests,omitempty"`
+	ArtifactEvidenceToolCalls      int                                `json:"artifact_evidence_tool_calls,omitempty"`
+	SourceEvidenceToolCalls        int                                `json:"source_evidence_tool_calls,omitempty"`
+	SourceEvidenceStatus           string                             `json:"source_evidence_status,omitempty"`
+	SourceEvidenceCorrectiveTurn   bool                               `json:"source_evidence_corrective_turn,omitempty"`
+	SourceEvidenceCorrectionReason string                             `json:"source_evidence_correction_reason,omitempty"`
+	EvidenceHandles                WorkspaceEvidenceHandleDiagnostics `json:"evidence_handles,omitempty"`
+	FinalizationPhaseCompleted     bool                               `json:"finalization_phase_completed,omitempty"`
+	FinalizationPhaseSteps         int                                `json:"finalization_phase_steps,omitempty"`
+	FinalizationPhaseRequests      int                                `json:"finalization_phase_requests,omitempty"`
+	StructuredOutputToolCalls      int                                `json:"structured_output_tool_calls,omitempty"`
+	ContextLimit                   bool                               `json:"context_limit,omitempty"`
+	TimedOut                       bool                               `json:"timed_out,omitempty"`
+	FailureCode                    string                             `json:"failure_code,omitempty"`
+	StdoutTruncated                bool                               `json:"stdout_truncated,omitempty"`
+	StderrTruncated                bool                               `json:"stderr_truncated,omitempty"`
 }
 
 // WorkspaceExecutionResult is the single executor result read from Pod logs.
@@ -417,6 +434,9 @@ func ValidateWorkspaceExecutionResult(result WorkspaceExecutionResult, request W
 	if result.Version != WorkspaceResultVersion || result.ContractVersion != WorkspaceContractVersion || result.RequestHash != request.Hash {
 		return result, fmt.Errorf("workspace execution result identity mismatch")
 	}
+	if request.RequireSourceEvidence && result.TerminalState == engineruntime.TerminalSucceeded && (result.OpenCodeTelemetry.SourceEvidenceStatus != WorkspaceSourceEvidenceAccepted || result.OpenCodeTelemetry.SourceEvidenceToolCalls < 1 || result.OpenCodeTelemetry.EvidenceHandles.AcceptedSourceHandleCount < 1) {
+		return result, fmt.Errorf("successful workspace execution is missing required source evidence")
+	}
 	if result.DurationMs < 0 || result.DurationMs > request.TimeoutSeconds*1000+WorkspacePostModelGrace.Milliseconds() {
 		return result, fmt.Errorf("workspace execution duration is outside the request bound")
 	}
@@ -486,7 +506,11 @@ func WorkspaceInstruction(request WorkspaceExecutionRequest, workspaceRoot strin
 	if err != nil {
 		return "", err
 	}
-	instruction := fmt.Sprintf(`%s
+	sourceRequirement := ""
+	if request.RequireSourceEvidence {
+		sourceRequirement = "\nRequired source grounding:\nInspect relevant source under source/ with at least one successful content-bearing read or focused grep before finalization. The executor requires a canonical source evidence handle. This requirement does not identify which file or diagnosis is correct.\n"
+	}
+	instruction := fmt.Sprintf(`%s%s
 
 Workspace root: %s
 Source revision: %s
@@ -502,7 +526,7 @@ Consumer guidance:
 
 Available artifact paths:
 %s
-`, strings.TrimSpace(workspaceAnalysisSkill), workspaceRoot, request.Manifest.Source.Revision, request.Manifest.Hash, failure, request.Manifest.ConsumerPrompt, paths)
+`, strings.TrimSpace(workspaceAnalysisSkill), sourceRequirement, workspaceRoot, request.Manifest.Source.Revision, request.Manifest.Hash, failure, request.Manifest.ConsumerPrompt, paths)
 	if len(instruction) > maxAgentPromptBytes || !utf8.ValidString(instruction) {
 		return "", fmt.Errorf("workspace analysis instruction exceeds %d bytes", maxAgentPromptBytes)
 	}
@@ -800,8 +824,27 @@ func validateWorkspaceOpenCodeTelemetry(telemetry WorkspaceOpenCodeTelemetry) er
 	if _, err := ai.NormalizeReasoningEffort(telemetry.ProviderReasoningEffort); err != nil {
 		return fmt.Errorf("workspace OpenCode provider reasoning effort is invalid")
 	}
-	if telemetry.EventCount < 0 || telemetry.ProviderRequests < 0 || telemetry.DeniedToolCount < 0 || telemetry.ToolFailureCount < 0 || telemetry.StepsUsed < 0 || telemetry.StructuredOutputRetries < 0 || telemetry.StructuredOutputErrors < 0 || telemetry.EvidencePhaseSteps < 0 || telemetry.EvidencePhaseRequests < 0 || telemetry.ArtifactEvidenceToolCalls < 0 || telemetry.SourceEvidenceToolCalls < 0 || telemetry.FinalizationPhaseSteps < 0 || telemetry.FinalizationPhaseRequests < 0 || telemetry.StructuredOutputToolCalls < 0 || !validWorkspaceFailureCode(telemetry.FailureCode) {
+	if telemetry.EventCount < 0 || telemetry.ProviderRequests < 0 || telemetry.DeniedToolCount < 0 || telemetry.ToolFailureCount < 0 || telemetry.StepsUsed < 0 || telemetry.StructuredOutputRetries < 0 || telemetry.StructuredOutputErrors < 0 || telemetry.EvidencePhaseSteps < 0 || telemetry.EvidencePhaseRequests < 0 || telemetry.ArtifactEvidenceToolCalls < 0 || telemetry.SourceEvidenceToolCalls < 0 || telemetry.FinalizationPhaseSteps < 0 || telemetry.FinalizationPhaseRequests < 0 || telemetry.StructuredOutputToolCalls < 0 || !validWorkspaceFailureCode(telemetry.FailureCode) || !validWorkspaceSourceEvidenceStatus(telemetry.SourceEvidenceStatus) || !validWorkspaceSourceEvidenceCorrectionReason(telemetry.SourceEvidenceCorrectionReason) {
 		return fmt.Errorf("workspace OpenCode telemetry is invalid")
+	}
+	if telemetry.SourceEvidenceCorrectiveTurn != (telemetry.SourceEvidenceCorrectionReason != "") {
+		return fmt.Errorf("workspace OpenCode source evidence correction telemetry is inconsistent")
+	}
+	switch telemetry.SourceEvidenceStatus {
+	case WorkspaceSourceEvidenceAccepted:
+		if telemetry.SourceEvidenceToolCalls < 1 || telemetry.EvidenceHandles.AcceptedSourceHandleCount < 1 {
+			return fmt.Errorf("accepted workspace source evidence telemetry is incomplete")
+		}
+	case WorkspaceSourceToolSkipped, WorkspaceSourceToolFailed:
+		if telemetry.SourceEvidenceToolCalls != 0 || telemetry.EvidenceHandles.AcceptedSourceHandleCount != 0 {
+			return fmt.Errorf("missing workspace source evidence telemetry is inconsistent")
+		}
+	case WorkspaceSourceEvidenceUnusable:
+		// A handle can remain observable when a prohibited corrective tool sequence makes it unusable.
+	case WorkspaceSourceToolUnavailable:
+		if telemetry.SourceEvidenceCorrectiveTurn || telemetry.SourceEvidenceToolCalls != 0 || telemetry.EvidenceHandles.AcceptedSourceHandleCount != 0 {
+			return fmt.Errorf("unavailable workspace source tool telemetry is inconsistent")
+		}
 	}
 	if err := validateWorkspaceOpenCodeRequestShape(telemetry.RequestShape); err != nil {
 		return err
@@ -1075,6 +1118,24 @@ func validOpenCodeCauseCode(value string) bool {
 func validOpenCodeMetadataCode(value string) bool {
 	switch value {
 	case "", "ProviderHeaderTimeoutError", "ProviderResponseStreamError", "ECONNRESET", "ZlibError":
+		return true
+	default:
+		return false
+	}
+}
+
+func validWorkspaceSourceEvidenceStatus(value string) bool {
+	switch value {
+	case "", WorkspaceSourceEvidenceAccepted, WorkspaceSourceToolUnavailable, WorkspaceSourceToolSkipped, WorkspaceSourceToolFailed, WorkspaceSourceEvidenceUnusable:
+		return true
+	default:
+		return false
+	}
+}
+
+func validWorkspaceSourceEvidenceCorrectionReason(value string) bool {
+	switch value {
+	case "", WorkspaceSourceToolSkipped, WorkspaceSourceToolFailed, WorkspaceSourceEvidenceUnusable:
 		return true
 	default:
 		return false

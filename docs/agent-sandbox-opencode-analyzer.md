@@ -174,10 +174,13 @@ Chat-Completions-only.
 
 OpenCode receives the pinned workspace, failure metadata, consumer guidance,
 and one engine-owned output contract. One server process and one session carry
-the evidence and finalization messages. The step budget reserves two steps for
-finalization. StructuredOutput is required on the first, while the spare step
-keeps OpenCode 1.18.2's last-step assistant sentinel out of the provider
-request. The evidence agent has bounded native read and search access. The finalization agent has only StructuredOutput. Network
+the evidence and finalization messages. The step budget always reserves two
+steps for finalization. A request that requires source grounding also reserves
+two steps for one source-only corrective turn. StructuredOutput is required on
+the first finalization step, while the spare step keeps OpenCode 1.18.2's
+last-step assistant sentinel out of the provider request. The evidence agent has
+bounded native read and search access. The corrective agent has source-only read
+and grep access. The finalization agent has only StructuredOutput. Network
 access, web fetching, delegation, writes, project configuration, and external
 skills remain denied. Filesystem mounts and admission policy, not a second
 dashboard tool loop, enforce the source and artifact boundary.
@@ -197,10 +200,22 @@ Evidence-handle diagnostics retain only bounded counts, truncation state, and
 allowlisted reason codes. Valid ranges are sorted, deduplicated, and capped at
 64 handles per root. Safe excess, duplicate, unreadable, or invalid-line ranges
 produce `accepted_with_warnings`; they do not discard usage or provider-request
-telemetry. Finalization continues when at least one valid artifact handle
-remains. Unsafe roots or escaping paths, a corrupted canonical handle table,
-and a result without valid artifact grounding remain hard failures. Source IDs
-or relevant-file IDs without any valid source citation are rejected.
+telemetry. Artifact-only requests continue when at least one valid artifact
+handle remains. Source-required requests also need one successful content-bearing
+source read or grep and one accepted canonical source handle. If the first
+evidence turn misses that floor, finalization remains unavailable while the
+executor permits exactly one source-only corrective turn. A second miss ends as
+`source_evidence_missing`. Unsafe roots or escaping paths, a corrupted canonical
+handle table, and a result without valid artifact grounding remain hard failures.
+Source IDs or relevant-file IDs without any valid source citation are rejected.
+
+Source orchestration telemetry distinguishes `source_tool_unavailable`,
+`source_tool_skipped`, `source_tool_failed`, and `source_evidence_unusable`. The
+last status covers an empty or noncanonical source operation and a corrective
+turn rejected for prohibited tool activity, even when a source handle remains
+observable. Telemetry retains only the status and whether the bounded corrective
+turn ran. It does not
+retain source paths, ranges, arguments, or output.
 
 The evidence-handle reason-code contract is:
 
@@ -494,9 +509,11 @@ without this reduction is not a successful replacement.
 
 ## Purpose-built OpenCode agents
 
-The executor configures two private primary agents and uses them in one OpenCode
-session. It does not use OpenCode's generic coding-oriented `build` agent. The
-`analysis-evidence` agent receives static engine-owned diagnostic guidance and
+The executor configures two private primary agents for artifact-only requests
+and one additional source-correction agent for source-required requests. All
+agents run in one OpenCode session. The executor does not use OpenCode's generic
+coding-oriented `build` agent. The `analysis-evidence` agent receives static
+engine-owned diagnostic guidance and
 can use native glob, grep, and read against the sealed `source/` and `artifacts/`
 trees. StructuredOutput is denied and no response format is attached during this
 phase. Shell access is limited to the exact read-only commands
@@ -506,13 +523,21 @@ phase. Shell access is limited to the exact read-only commands
 The executor fetches sanitized session telemetry after the evidence message and
 requires at least one successful artifact file read or matching artifact grep.
 It derives bounded artifact and source evidence IDs from exact read metadata and
-grep matches without retaining file content. If that gate passes, the
-`analysis-finalize` agent receives a second message in the same session. Its only
-allowed tool is the exact schema-backed StructuredOutput function. Any native
-tool attempt, unknown evidence ID, or result other than exactly one
-StructuredOutput call fails closed. Source citations or relevant files are
-rejected unless the evidence phase
-recorded a successful source read or matching source grep.
+grep matches without retaining file content. For a source-required request, the
+executor checks the source-operation and canonical-source-handle floor before it
+issues the finalization message. If the floor is missing, the
+`analysis-source-evidence` agent receives one generic corrective message. It can
+only read or grep under `source/`; StructuredOutput remains denied. Because
+OpenCode 1.18.2 does not path-scope grep permissions, the executor also rejects
+any corrective-turn telemetry delta containing artifact, unrooted, or other
+tool activity. The corrective message does not contain an expected file, diagnosis, or benchmark
+signal. If the floor remains missing, execution stops without finalization.
+Otherwise the `analysis-finalize` agent receives the next message in the same
+session. Its only allowed tool is the exact schema-backed StructuredOutput
+function. Any native tool attempt, unknown evidence ID, or result other than
+exactly one StructuredOutput call fails closed. Source citations or relevant
+files are rejected unless the evidence phase recorded a successful source read
+or matching source grep.
 
 Tracked or artifact `AGENTS.md`, `CLAUDE.md`, and `CONTEXT.md` files are rejected
 before OpenCode starts, so nearby instruction discovery cannot elevate workspace

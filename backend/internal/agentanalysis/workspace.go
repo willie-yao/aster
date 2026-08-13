@@ -25,12 +25,12 @@ import (
 
 const (
 	WorkspaceManifestVersion = 1
-	WorkspaceRequestVersion  = 3
+	WorkspaceRequestVersion  = 4
 	WorkspaceResultVersion   = 1
 	WorkspaceStageVersion    = 2
-	WorkspaceContractVersion = "agent-analysis-workspace-v6"
+	WorkspaceContractVersion = "agent-analysis-workspace-v7"
 	WorkspaceStageContract   = "agent-analysis-stage-v2"
-	WorkspacePromptVersion   = "agent-analysis-workspace-prompt-v6"
+	WorkspacePromptVersion   = "agent-analysis-workspace-prompt-v7"
 
 	WorkspaceSourceDir    = "source"
 	WorkspaceArtifactsDir = "artifacts"
@@ -78,20 +78,21 @@ type WorkspaceStageRequest struct {
 
 // WorkspaceExecutionRequest is the non-secret request passed to one analyzer Sandbox.
 type WorkspaceExecutionRequest struct {
-	Version            int                       `json:"version"`
-	ContractVersion    string                    `json:"contract_version"`
-	Hash               string                    `json:"hash"`
-	PromptVersion      string                    `json:"prompt_version"`
-	PromptHash         string                    `json:"prompt_hash"`
-	ResultSchemaHash   string                    `json:"result_schema_hash"`
-	Manifest           WorkspaceManifest         `json:"manifest"`
-	SourceModePolicy   WorkspaceSourceModePolicy `json:"source_mode_policy"`
-	ModelProvider      modelprovider.Config      `json:"model_provider"`
-	TimeoutSeconds     int64                     `json:"timeout_seconds"`
-	MaxSteps           int                       `json:"max_steps"`
-	ModelContextTokens int                       `json:"model_context_tokens"`
-	ModelOutputTokens  int                       `json:"model_output_tokens"`
-	OutputLimitBytes   int64                     `json:"output_limit_bytes"`
+	Version               int                       `json:"version"`
+	ContractVersion       string                    `json:"contract_version"`
+	Hash                  string                    `json:"hash"`
+	PromptVersion         string                    `json:"prompt_version"`
+	PromptHash            string                    `json:"prompt_hash"`
+	ResultSchemaHash      string                    `json:"result_schema_hash"`
+	Manifest              WorkspaceManifest         `json:"manifest"`
+	SourceModePolicy      WorkspaceSourceModePolicy `json:"source_mode_policy"`
+	RequireSourceEvidence bool                      `json:"require_source_evidence"`
+	ModelProvider         modelprovider.Config      `json:"model_provider"`
+	TimeoutSeconds        int64                     `json:"timeout_seconds"`
+	MaxSteps              int                       `json:"max_steps"`
+	ModelContextTokens    int                       `json:"model_context_tokens"`
+	ModelOutputTokens     int                       `json:"model_output_tokens"`
+	OutputLimitBytes      int64                     `json:"output_limit_bytes"`
 }
 
 // NewWorkspaceManifest creates one deterministic file-backed analyzer input.
@@ -478,9 +479,14 @@ func NewWorkspaceExecutionRequest(manifest WorkspaceManifest, provider modelprov
 
 // NewWorkspaceExecutionRequestWithSourceModePolicy seals the prepared filesystem mode policy.
 func NewWorkspaceExecutionRequestWithSourceModePolicy(manifest WorkspaceManifest, modePolicy WorkspaceSourceModePolicy, provider modelprovider.Config, timeout time.Duration, maxSteps, modelContextTokens, modelOutputTokens int, outputLimit int64) (WorkspaceExecutionRequest, error) {
+	return NewWorkspaceExecutionRequestWithSourceEvidence(manifest, modePolicy, false, provider, timeout, maxSteps, modelContextTokens, modelOutputTokens, outputLimit)
+}
+
+// NewWorkspaceExecutionRequestWithSourceEvidence seals an optional source-evidence floor.
+func NewWorkspaceExecutionRequestWithSourceEvidence(manifest WorkspaceManifest, modePolicy WorkspaceSourceModePolicy, requireSourceEvidence bool, provider modelprovider.Config, timeout time.Duration, maxSteps, modelContextTokens, modelOutputTokens int, outputLimit int64) (WorkspaceExecutionRequest, error) {
 	request := WorkspaceExecutionRequest{
 		Version: WorkspaceRequestVersion, ContractVersion: WorkspaceContractVersion, PromptVersion: WorkspacePromptVersion,
-		PromptHash: WorkspaceSkillHash(), ResultSchemaHash: WorkspaceResultSchemaHash(), Manifest: manifest, SourceModePolicy: modePolicy, ModelProvider: provider, TimeoutSeconds: int64(timeout.Round(time.Second) / time.Second),
+		PromptHash: WorkspaceSkillHash(), ResultSchemaHash: WorkspaceResultSchemaHash(), Manifest: manifest, SourceModePolicy: modePolicy, RequireSourceEvidence: requireSourceEvidence, ModelProvider: provider, TimeoutSeconds: int64(timeout.Round(time.Second) / time.Second),
 		MaxSteps: maxSteps, ModelContextTokens: modelContextTokens, ModelOutputTokens: modelOutputTokens, OutputLimitBytes: outputLimit,
 	}
 	hash, err := workspaceRequestDigest(request)
@@ -521,6 +527,9 @@ func ValidateWorkspaceExecutionRequest(request WorkspaceExecutionRequest) error 
 	}
 	if request.MaxSteps < 3 || request.MaxSteps > 100 {
 		return fmt.Errorf("workspace analysis max steps must be between 3 and 100")
+	}
+	if request.RequireSourceEvidence && request.MaxSteps < 5 {
+		return fmt.Errorf("workspace analysis with required source evidence needs at least 5 steps")
 	}
 	if request.ModelContextTokens < 8192 || request.ModelContextTokens > 2_000_000 || request.ModelOutputTokens < 1024 || request.ModelOutputTokens > request.ModelContextTokens || request.ModelOutputTokens > 131072 {
 		return fmt.Errorf("workspace analysis model limits are invalid")
