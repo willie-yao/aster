@@ -180,7 +180,11 @@ func TestPreviewChatFixKeepsAtomicPatternSnapshotAfterPublishedReplacement(t *te
 
 func TestPreviewChatFixRejectsAnalysisOnlyCausalGroup(t *testing.T) {
 	chat := &fakeChatStore{candidate: analysischat.FixCandidate{Pattern: models.PatternAnalysis{
-		Recurrence: models.PatternRecurrenceSharedCause,
+		Recurrence:   models.PatternRecurrenceSharedCause,
+		CausalGroups: []models.PatternCausalGroup{{ID: "group", ContentHash: "hash", Builds: []string{"2", "1"}, RootCause: "cause", Confidence: "high"}},
+		RemediationInvestigations: []models.PatternRemediationInvestigationSummary{{
+			CausalGroupID: "group", CausalGroupHash: "hash", State: models.PatternRemediationActionable,
+		}},
 	}}}
 	fixes := &fakeFixPreviewer{}
 	_, err := NewService(chat, fixes).PreviewChatFix(

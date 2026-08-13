@@ -443,13 +443,72 @@ func boundedPersistedPattern(pattern *models.PatternAnalysis) *models.PatternAna
 		ID: pattern.ID, ContentHash: pattern.ContentHash,
 		Subject: clampPersistedText(pattern.Subject, 4<<10), JobID: clampPersistedText(pattern.JobID, maxJobIDBytes),
 		GeneratedAt: clampPersistedText(pattern.GeneratedAt, maxTimestampBytes), BuildsAnalyzed: pattern.BuildsAnalyzed,
-		Systemic: pattern.Systemic, Confidence: clampPersistedText(pattern.Confidence, 32),
-		SharedRootCause: clampPersistedText(pattern.SharedRootCause, 32<<10),
-		SharedBuilds:    boundedPersistedBuildIDs(pattern.SharedBuilds),
-		SuggestedFix:    clampPersistedText(pattern.SuggestedFix, 16<<10),
-		RelevantFiles:   boundedPersistedFiles(pattern.RelevantFiles),
-		Summary:         clampPersistedText(pattern.Summary, 16<<10),
+		Recurrence: pattern.Recurrence, CausalGroups: boundedPersistedCausalGroups(pattern.CausalGroups),
+		UnclassifiedBuilds: boundedPersistedPatternBuildIDs(pattern.UnclassifiedBuilds, maxPatternChatUnclassifiedBuilds),
+		Systemic:           pattern.Systemic, Confidence: clampPersistedText(pattern.Confidence, 32),
+		SharedRootCause:           clampPersistedText(pattern.SharedRootCause, 32<<10),
+		SharedBuilds:              boundedPersistedBuildIDs(pattern.SharedBuilds),
+		SuggestedFix:              clampPersistedText(pattern.SuggestedFix, 16<<10),
+		RelevantFiles:             boundedPersistedFiles(pattern.RelevantFiles),
+		RemediationInvestigations: boundedPersistedRemediationSummaries(pattern.RemediationInvestigations),
+		Lifecycle:                 boundedPersistedPatternLifecycle(pattern.Lifecycle),
+		Summary:                   clampPersistedText(pattern.Summary, 16<<10),
 	}
+}
+
+func boundedPersistedCausalGroups(groups []models.PatternCausalGroup) []models.PatternCausalGroup {
+	if len(groups) > maxPatternChatCausalGroups {
+		groups = groups[:maxPatternChatCausalGroups]
+	}
+	out := make([]models.PatternCausalGroup, 0, len(groups))
+	for _, group := range groups {
+		out = append(out, models.PatternCausalGroup{
+			ID: clampPersistedText(group.ID, maxPatternIDBytes), ContentHash: clampPersistedText(group.ContentHash, maxPatternHashBytes),
+			Builds:    boundedPersistedPatternBuildIDs(group.Builds, maxPatternChatBuildsPerGroup),
+			RootCause: clampPersistedText(group.RootCause, 8<<10), Confidence: clampPersistedText(group.Confidence, 32),
+		})
+	}
+	return out
+}
+
+func boundedPersistedRemediationSummaries(summaries []models.PatternRemediationInvestigationSummary) []models.PatternRemediationInvestigationSummary {
+	if len(summaries) > maxPatternChatRemediationSummaries {
+		summaries = summaries[:maxPatternChatRemediationSummaries]
+	}
+	out := make([]models.PatternRemediationInvestigationSummary, 0, len(summaries))
+	for _, summary := range summaries {
+		out = append(out, models.PatternRemediationInvestigationSummary{
+			CausalGroupID:   clampPersistedText(summary.CausalGroupID, maxPatternIDBytes),
+			CausalGroupHash: clampPersistedText(summary.CausalGroupHash, maxPatternHashBytes),
+			State:           summary.State, Reason: clampPersistedText(summary.Reason, 4<<10),
+			CompletedAt: clampPersistedText(summary.CompletedAt, maxTimestampBytes),
+		})
+	}
+	return out
+}
+
+func boundedPersistedPatternLifecycle(lifecycle *models.PatternLifecycle) *models.PatternLifecycle {
+	if lifecycle == nil {
+		return nil
+	}
+	return &models.PatternLifecycle{
+		State: lifecycle.State, Reason: clampPersistedText(lifecycle.Reason, 4<<10),
+	}
+}
+
+func boundedPersistedPatternBuildIDs(builds []string, limit int) []string {
+	if len(builds) > limit {
+		builds = builds[:limit]
+	}
+	out := make([]string, 0, len(builds))
+	for _, build := range builds {
+		build = strings.TrimSpace(build)
+		if build == "" {
+			continue
+		}
+		out = append(out, clampPersistedText(build, maxBuildIDBytes))
+	}
+	return out
 }
 
 func boundedPersistedBuildIDs(builds []string) []string {
