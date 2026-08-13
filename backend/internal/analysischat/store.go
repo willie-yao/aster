@@ -431,12 +431,10 @@ func persistResolved(resolved resolvedAnalysis, sourceRepo sourceinvestigation.R
 			RelevantFiles: boundedPersistedFiles(analysis.RelevantFiles),
 		}
 	}
-	if sourceRepo.Owner != "" && sourceRepo.Name != "" {
-		if revision, ok := repoRevision(resolved.build.RepoRefs, sourceRepo.Owner, sourceRepo.Name); ok {
-			sourceRepo.Revision = revision
-		} else {
-			sourceRepo.Revision = ""
-		}
+	if source, ok := resolveBuildSourceRepository(resolved.build, sourceRepo); ok {
+		sourceRepo = source
+	} else {
+		sourceRepo.Revision = ""
 	}
 	return persistedResolvedAnalysis{
 		Ref: resolved.ref, AnalysisHash: models.TestAnalysisContentHash(resolved.testCase), Source: sourceRepo,
@@ -545,33 +543,24 @@ func boundedRepoRefs(refs map[string]string, requiredRepo string) map[string]str
 		return nil
 	}
 	wanted := strings.ToLower(strings.TrimSpace(requiredRepo))
-	requiredFound := false
-	requiredValid := true
-	requiredRevision := ""
-	keys := make([]string, 0, len(refs))
-	for repo, value := range refs {
+	var required, others []string
+	for repo := range refs {
 		if wanted != "" && strings.ToLower(strings.TrimSpace(repo)) == wanted {
-			candidate, ok := exactRepoRevision(value)
-			if !ok || requiredRevision != "" && requiredRevision != candidate {
-				requiredValid = false
-			}
-			if ok && requiredRevision == "" {
-				requiredRevision = candidate
-			}
-			requiredFound = true
-			continue
+			required = append(required, repo)
+		} else {
+			others = append(others, repo)
 		}
-		keys = append(keys, repo)
 	}
-	slices.Sort(keys)
-	limit := 20
-	if requiredFound {
-		limit--
+	slices.Sort(required)
+	slices.Sort(others)
+	if len(required) > 20 {
+		return map[string]string{wanted: "ambiguous"}
 	}
-	if len(keys) > limit {
-		keys = keys[:limit]
+	keys := append(required, others...)
+	if len(keys) > 20 {
+		keys = keys[:20]
 	}
-	out := make(map[string]string, len(keys)+1)
+	out := make(map[string]string, len(keys))
 	for _, key := range keys {
 		repo := strings.TrimSpace(key)
 		revision := strings.TrimSpace(refs[key])
@@ -579,12 +568,6 @@ func boundedRepoRefs(refs map[string]string, requiredRepo string) map[string]str
 			continue
 		}
 		out[repo] = revision
-	}
-	if requiredFound {
-		if !requiredValid || requiredRevision == "" {
-			requiredRevision = "ambiguous"
-		}
-		out[wanted] = requiredRevision
 	}
 	return out
 }

@@ -407,3 +407,48 @@ func TestPreviewAnalysisFixRequiresEnabledFixPRFeature(t *testing.T) {
 		t.Fatalf("disabled fix feature error = %v", err)
 	}
 }
+
+func TestResolveAnalysisActionSubjectUsesSharedMutableBuildSource(t *testing.T) {
+	sha := "a866aca055bcaa205648e81d15c67668179fdfab"
+	for _, tc := range []struct {
+		name     string
+		mutate   func(*models.BuildInfo)
+		eligible bool
+	}{
+		{name: "matching checkout", eligible: true, mutate: func(build *models.BuildInfo) {
+			build.RepoRefs = map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main"}
+			build.Commit, build.RepoVersion = sha, sha
+		}},
+		{name: "mismatched checkout", mutate: func(build *models.BuildInfo) {
+			build.RepoRefs = map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main"}
+			build.Commit, build.RepoVersion = sha, strings.Repeat("b", 40)
+		}},
+		{name: "multiple repositories", mutate: func(build *models.BuildInfo) {
+			build.RepoRefs = map[string]string{
+				"kubernetes-sigs/cluster-api-provider-azure": "main",
+				"kubernetes-sigs/cloud-provider-azure":       "main",
+			}
+			build.Commit, build.RepoVersion = sha, sha
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			detail := exactJUnitDetail()
+			tc.mutate(&detail.Runs[0].BuildInfo)
+			detail.Runs[0].TestCases[0].AIAnalysis.FileLinks = map[string]string{
+				"controllers/cluster_controller.go": "https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/" + sha + "/controllers/cluster_controller.go",
+			}
+			writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
+			subject, err := NewService(exactAnalysisConfig(), dir, AIConfig{}).ResolveAnalysisActionSubject(exactIdentity())
+			if tc.eligible {
+				if err != nil || subject.SourceRepository.Revision != sha || len(subject.SourceFiles) != 1 {
+					t.Fatalf("subject=%+v err=%v", subject, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("ineligible subject = %+v", subject)
+			}
+		})
+	}
+}

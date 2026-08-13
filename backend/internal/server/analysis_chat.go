@@ -18,6 +18,10 @@ import (
 )
 
 // AnalysisChatRunner manages authenticated conversations about published analyses.
+type analysisChatFixPreflighter interface {
+	PreflightTestFix(sessionID, owner string) error
+}
+
 type AnalysisChatRunner interface {
 	Create(analysischat.AnalysisRef, string, string) (analysischat.SessionView, error)
 	Find(analysischat.AnalysisRef, string) (analysischat.SessionView, error)
@@ -111,7 +115,8 @@ func sendAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRunne
 			return
 		}
 		var body struct {
-			Message string `json:"message"`
+			Message   string `json:"message"`
+			FixIntent bool   `json:"fix_intent,omitempty"`
 		}
 		if err := decodeAnalysisChatBody(w, r, &body, maxAnalysisChatMessageBodyBytes); err != nil || strings.TrimSpace(body.Message) == "" {
 			http.Error(w, "invalid message", http.StatusBadRequest)
@@ -122,6 +127,10 @@ func sendAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRunne
 		requestID := strings.TrimSpace(r.Header.Get(analysisChatIdempotencyHeader))
 		if requestID == "" {
 			http.Error(w, "missing idempotency key", http.StatusBadRequest)
+			return
+		}
+		if err := preflightAnalysisChatFix(run, r.PathValue("id"), identity.Login, body.FixIntent); err != nil {
+			writeAnalysisChatError(w, r.PathValue("id"), identity.Login, err)
 			return
 		}
 		session, err := run.Send(ctx, r.PathValue("id"), identity.Login, requestID, body.Message)
@@ -141,7 +150,8 @@ func streamAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRun
 			return
 		}
 		var body struct {
-			Message string `json:"message"`
+			Message   string `json:"message"`
+			FixIntent bool   `json:"fix_intent,omitempty"`
 		}
 		if err := decodeAnalysisChatBody(w, r, &body, maxAnalysisChatMessageBodyBytes); err != nil || strings.TrimSpace(body.Message) == "" {
 			http.Error(w, "invalid message", http.StatusBadRequest)
@@ -150,6 +160,10 @@ func streamAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRun
 		requestID := strings.TrimSpace(r.Header.Get(analysisChatIdempotencyHeader))
 		if requestID == "" {
 			http.Error(w, "missing idempotency key", http.StatusBadRequest)
+			return
+		}
+		if err := preflightAnalysisChatFix(run, r.PathValue("id"), identity.Login, body.FixIntent); err != nil {
+			writeAnalysisChatError(w, r.PathValue("id"), identity.Login, err)
 			return
 		}
 		flusher, ok := w.(http.Flusher)
@@ -183,6 +197,17 @@ func streamAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRun
 		}
 		_ = writeAnalysisChatSSE(w, flusher, "session", session)
 	})
+}
+
+func preflightAnalysisChatFix(run AnalysisChatRunner, sessionID, owner string, fixIntent bool) error {
+	if !fixIntent {
+		return nil
+	}
+	preflight, ok := run.(analysisChatFixPreflighter)
+	if !ok {
+		return fmt.Errorf("%w: exact JUnit Fix preflight is unavailable", analysischat.ErrInvalidRequest)
+	}
+	return preflight.PreflightTestFix(sessionID, owner)
 }
 
 func cancelAnalysisChatMessageHandler(run AnalysisChatRunner) http.Handler {

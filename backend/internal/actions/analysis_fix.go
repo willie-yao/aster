@@ -50,6 +50,8 @@ type AnalysisActionSubject struct {
 	JobName             string
 	Build               models.BuildInfo
 	Failure             models.TestCase
+	SourceRepository    sourceinvestigation.Repository
+	SourceFiles         []string
 }
 
 // AnalysisFixInput is one owner-bound chat finding selected for fix generation.
@@ -150,7 +152,23 @@ func (s *Service) ResolveAnalysisActionSubject(identity AnalysisIdentity) (*Anal
 		strings.EqualFold(strings.TrimSpace(analysis.Severity), "Transient-Ignore") {
 		return nil, fmt.Errorf("JUnit analysis does not pass current action quality gates")
 	}
-	subject := &AnalysisActionSubject{Identity: identity, JobName: match.jobName, Build: match.run, Failure: match.testCase}
+	analysisRepo := s.cfg.EffectiveAnalysisSourceRepo()
+	source, ok := ai.ResolveBuildSource(match.run, analysisRepo.Owner, analysisRepo.Name)
+	if !ok {
+		return nil, fmt.Errorf("%w: JUnit analysis build source repository revision could not be resolved", ErrPreviewRejected)
+	}
+	repository := sourceinvestigation.Repository{Owner: source.Owner, Name: source.Name, Revision: source.Revision}
+	if err := sourceinvestigation.ValidateRepository(repository); err != nil {
+		return nil, fmt.Errorf("%w: JUnit analysis immutable source identity is unavailable", ErrPreviewRejected)
+	}
+	sourceFiles := verifiedSourceFiles(analysis.FileLinks, repository.Owner, repository.Name, repository.Revision)
+	if len(sourceFiles) == 0 || len(sourceFiles) > maxAnalysisSourceFiles {
+		return nil, fmt.Errorf("%w: JUnit analysis has no bounded verified source paths", ErrPreviewRejected)
+	}
+	subject := &AnalysisActionSubject{
+		Identity: identity, JobName: match.jobName, Build: match.run, Failure: match.testCase,
+		SourceRepository: repository, SourceFiles: sourceFiles,
+	}
 	subject.AnalysisContentHash = models.TestAnalysisContentHash(match.testCase)
 	subject.ID = analysisActionID(identity)
 	subject.ContentHash = analysisActionHash(subject)
@@ -203,21 +221,15 @@ func (s *Service) PreviewAnalysisFix(
 		!strings.EqualFold(analysisRepo.Owner, eff.Repo.Owner) || !strings.EqualFold(analysisRepo.Name, eff.Repo.Name) {
 		return PreviewResult{}, fmt.Errorf("%w: analysis source and fix repositories must match", ErrPreviewRejected)
 	}
-	source, ok := ai.ResolveBuildSource(subject.Build, analysisRepo.Owner, analysisRepo.Name)
-	if !ok {
-		return PreviewResult{}, fmt.Errorf("%w: build source repository revision could not be resolved", ErrPreviewRejected)
-	}
-	repository := sourceinvestigation.Repository{Owner: source.Owner, Name: source.Name, Revision: source.Revision}
-	if input.SourceRepository != repository {
+	repository := subject.SourceRepository
+	if !strings.EqualFold(repository.Owner, analysisRepo.Owner) || !strings.EqualFold(repository.Name, analysisRepo.Name) ||
+		input.SourceRepository != repository {
 		return PreviewResult{}, ErrPreviewTargetChanged
 	}
 	if err := sourceinvestigation.ValidateRepository(repository); err != nil {
 		return PreviewResult{}, fmt.Errorf("%w: immutable source identity is unavailable", ErrPreviewRejected)
 	}
-	sourceFiles := verifiedSourceFiles(subject.Failure.AIAnalysis.FileLinks, repository.Owner, repository.Name, repository.Revision)
-	if len(sourceFiles) == 0 || len(sourceFiles) > maxAnalysisSourceFiles {
-		return PreviewResult{}, fmt.Errorf("%w: exact analysis has no bounded verified source paths", ErrPreviewRejected)
-	}
+	sourceFiles := slices.Clone(subject.SourceFiles)
 	verification, err := s.verifyAnalysisSourceSnapshot(ctx, repository, sourceFiles)
 	if err != nil {
 		return PreviewResult{}, fmt.Errorf("%w: immutable source investigation failed", ErrPreviewRejected)
@@ -345,14 +357,10 @@ func (s *Service) validateAnalysisPreview(ctx context.Context, owner string, bin
 		subject.AnalysisContentHash != binding.AnalysisContentHash {
 		return ErrPreviewTargetChanged
 	}
-	source, ok := ai.ResolveBuildSource(subject.Build, binding.SourceRepository.Owner, binding.SourceRepository.Name)
-	if !ok || !strings.EqualFold(source.Revision, binding.SourceRepository.Revision) {
+	if subject.SourceRepository != binding.SourceRepository || !slices.Equal(subject.SourceFiles, binding.SourceFiles) {
 		return ErrPreviewTargetChanged
 	}
-	files := verifiedSourceFiles(subject.Failure.AIAnalysis.FileLinks, binding.SourceRepository.Owner, binding.SourceRepository.Name, binding.SourceRepository.Revision)
-	if !slices.Equal(files, binding.SourceFiles) {
-		return ErrPreviewTargetChanged
-	}
+	files := subject.SourceFiles
 	verification, err := s.verifyAnalysisSourceSnapshot(ctx, binding.SourceRepository, files)
 	if err != nil || verification != binding.SourceVerification {
 		return ErrPreviewTargetChanged

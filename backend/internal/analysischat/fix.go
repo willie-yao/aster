@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/buildsource"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
@@ -86,10 +87,10 @@ func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandi
 		return FixCandidate{}, err
 	}
 	analysis := resolved.testCase.AIAnalysis
-	currentRevision, sourceOK := repoRevision(resolved.build.RepoRefs, candidate.SourceRepositorySnapshot.Owner, candidate.SourceRepositorySnapshot.Name)
+	currentSource, sourceOK := resolveBuildSourceRepository(resolved.build, candidate.SourceRepositorySnapshot)
 	if analysis == nil || candidate.AnalysisContentHash == "" || models.TestAnalysisContentHash(resolved.testCase) != candidate.AnalysisContentHash ||
 		!sameAnalysisSnapshot(candidate.Original, analysisSnapshot(analysis)) || sourceinvestigation.ValidateRepository(candidate.SourceRepositorySnapshot) != nil ||
-		!sourceOK || !strings.EqualFold(currentRevision, candidate.SourceRepositorySnapshot.Revision) {
+		!sourceOK || currentSource != candidate.SourceRepositorySnapshot {
 		return FixCandidate{}, ErrAnalysisChanged
 	}
 	candidate.ResponseHash, err = fixCandidateResponseHash(candidate)
@@ -197,7 +198,7 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 			if err := sourceinvestigation.ValidateRepository(record.Repository); err != nil {
 				return changed, fmt.Errorf("%w: source repository identity is invalid: %v", sourceinvestigation.ErrInvalidResult, err)
 			}
-			revision, ok := exactRepoRevision(record.Revision)
+			revision, ok := buildsource.NormalizeRevision(record.Revision)
 			if !ok {
 				return changed, sourceinvestigation.ErrUnavailable
 			}
