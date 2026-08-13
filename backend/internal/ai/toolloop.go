@@ -208,6 +208,8 @@ func (c *Client) ToolLoop(
 				})
 				continue
 			}
+			messages = appendToolsFreeAssistant(messages, msg)
+			captureToolLoopContinuation(ctx, c, messages)
 			if msg.Content != nil {
 				return *msg.Content, nil
 			}
@@ -370,6 +372,7 @@ func (c *Client) runToolLoopFinalizeRound(ctx context.Context, messages []modelM
 		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty", ErrorCode: "missing_message"})
 		return "", nil
 	}
+	captureToolLoopContinuation(ctx, c, appendToolsFreeAssistant(prepared, resp.Message))
 	if resp.Message.Content == nil {
 		code := "nil_content"
 		if len(resp.Message.ToolCalls) > 0 {
