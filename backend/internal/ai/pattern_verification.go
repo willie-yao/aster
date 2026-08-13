@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/buildsource"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
@@ -41,7 +42,7 @@ func (s *Service) VerifyPatternRemediation(ctx context.Context, pattern models.P
 
 func (s *Service) verifyPatternFailureRevisions(ctx context.Context, pattern models.PatternAnalysis, detail models.JobDetail, verification *models.PatternRemediationVerification) {
 	verification.FailureState = models.PatternRemediationInconclusive
-	if verification.Repository == "" || !fullSourceCommitRE.MatchString(verification.Revision) || !historicalPatternTargetsSupported(pattern.RemediationTargets) {
+	if _, ok := buildsource.NormalizeRevision(verification.Revision); verification.Repository == "" || !ok || !historicalPatternTargetsSupported(pattern.RemediationTargets) {
 		return
 	}
 	owner, name, ok := strings.Cut(verification.Repository, "/")
@@ -119,21 +120,9 @@ func (s *Service) resolvePatternBuildSource(build models.BuildInfo, owner, name 
 	if repository == configured {
 		return ResolveBuildSource(build, owner, name)
 	}
-	var revision string
-	for repo, value := range build.RepoRefs {
-		if strings.ToLower(strings.TrimSpace(repo)) != repository {
-			continue
-		}
-		candidate, ok := exactBuildRevision(value)
-		if !ok || revision != "" && revision != candidate {
-			return BuildSource{}, false
-		}
-		revision = candidate
-	}
-	if revision == "" {
-		return BuildSource{}, false
-	}
-	return BuildSource{Owner: owner, Name: name, Revision: revision}, true
+	build.Commit = ""
+	build.RepoVersion = ""
+	return ResolveBuildSource(build, owner, name)
 }
 
 func historicalPatternTargetsSupported(targets []models.RemediationTarget) bool {

@@ -166,28 +166,6 @@ func TestServiceSourceInvestigationPersistsPinnedSubjectAndResult(t *testing.T) 
 	}
 }
 
-func TestRepoRevisionAcceptsOnlyExactUnambiguousCommits(t *testing.T) {
-	sha := "0123456789abcdef0123456789abcdef01234567"
-	for _, tc := range []struct {
-		name  string
-		value string
-		want  bool
-	}{
-		{name: "bare", value: sha, want: true},
-		{name: "single ref", value: "main:" + sha, want: true},
-		{name: "branch", value: "main"},
-		{name: "composite presubmit", value: "main:" + sha + ",123:" + sha},
-		{name: "short hash", value: "main:01234567"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := repoRevision(map[string]string{"Example/Repo": tc.value}, "example", "repo")
-			if ok != tc.want || tc.want && got != sha {
-				t.Fatalf("repoRevision(%q) = %q, %v", tc.value, got, ok)
-			}
-		})
-	}
-}
-
 func TestBoundedRepoRefsRetainsConfiguredSource(t *testing.T) {
 	refs := map[string]string{}
 	for i := 0; i < 25; i++ {
@@ -199,13 +177,17 @@ func TestBoundedRepoRefsRetainsConfiguredSource(t *testing.T) {
 	if len(got) != 20 || got[source] == "" {
 		t.Fatalf("bounded refs omitted configured source: len=%d refs=%+v", len(got), got)
 	}
+	if got[source] != refs[source] {
+		t.Fatalf("bounded source ref = %q, want %q", got[source], refs[source])
+	}
 	refs["ZZZZ/Source"] = "main:fedcba9876543210fedcba9876543210fedcba98"
 	got = boundedRepoRefs(refs, source)
 	if len(got) != 20 {
 		t.Fatalf("ambiguous bounded refs len = %d", len(got))
 	}
-	if revision, ok := repoRevision(got, "zzzz", "source"); ok {
-		t.Fatalf("ambiguous bounded refs resolved to %q", revision)
+	build := models.BuildInfo{RepoRefs: got}
+	if resolved, ok := resolveBuildSourceRepository(build, sourceinvestigation.Repository{Owner: "zzzz", Name: "source"}); ok {
+		t.Fatalf("conflicting bounded refs resolved to %+v", resolved)
 	}
 }
 
@@ -255,12 +237,13 @@ func TestServiceSourceInvestigationExpiredLeaseRetainsUnknownOutcome(t *testing.
 	}
 }
 
-func TestServiceSourceInvestigationRefreshesLegacySnapshot(t *testing.T) {
+func TestServiceSourceInvestigationRejectsLegacySnapshotWithoutSourceIdentity(t *testing.T) {
 	dir := t.TempDir()
 	runner := &fakeSourceInvestigator{result: sourceResult()}
 	service, session, chatRequestID := sourceReadyService(t, dir, runner)
 	ctx, cancel := service.store.context()
 	err := service.store.update(ctx, func(state *persistedState) (bool, error) {
+		state.Sessions[session.ID].Resolved.Source.Revision = ""
 		state.Sessions[session.ID].Resolved.Build.RepoRefs = nil
 		return true, nil
 	})
@@ -268,13 +251,13 @@ func TestServiceSourceInvestigationRefreshesLegacySnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.SourceInvestigation(t.Context(), session.ID, "Alice", testRequestID(t), chatRequestID); err != nil {
-		t.Fatal(err)
+	if _, err := service.SourceInvestigation(t.Context(), session.ID, "Alice", testRequestID(t), chatRequestID); !errors.Is(err, sourceinvestigation.ErrUnavailable) {
+		t.Fatalf("legacy source identity error = %v", err)
 	}
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
-	if len(runner.calls) != 1 || runner.calls[0].Subject.Repository.Revision == "" {
-		t.Fatalf("legacy refresh calls = %+v", runner.calls)
+	if len(runner.calls) != 0 {
+		t.Fatalf("legacy source investigation calls = %+v", runner.calls)
 	}
 }
 

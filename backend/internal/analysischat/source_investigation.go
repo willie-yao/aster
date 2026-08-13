@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
@@ -487,25 +486,10 @@ func (s *Service) sourceInvestigationSubject(
 			return changed, ErrRequestNotFound
 		}
 		resolved := restoreResolved(current.Resolved)
-		revision, ok := repoRevision(resolved.build.RepoRefs, s.sourceRepo.Owner, s.sourceRepo.Name)
+		repo, ok := persistedBuildSourceRepository(current.Resolved, s.sourceRepo)
 		if !ok {
-			refreshed, err := s.resolve(current.View.Analysis)
-			if err != nil {
-				return changed, err
-			}
-			if !sameResolvedContext(resolved, refreshed) {
-				return changed, ErrAnalysisChanged
-			}
-			refreshedPersisted := persistResolved(refreshed, s.sourceRepo)
-			current.Resolved.Build.RepoRefs = refreshedPersisted.Build.RepoRefs
-			resolved = restoreResolved(current.Resolved)
-			revision, ok = repoRevision(resolved.build.RepoRefs, s.sourceRepo.Owner, s.sourceRepo.Name)
-			if !ok {
-				return changed, fmt.Errorf("%w: build has no revision for %s/%s", sourceinvestigation.ErrUnavailable, s.sourceRepo.Owner, s.sourceRepo.Name)
-			}
-			changed = true
+			return changed, fmt.Errorf("%w: build has no immutable revision for %s/%s", sourceinvestigation.ErrUnavailable, s.sourceRepo.Owner, s.sourceRepo.Name)
 		}
-		repo := sourceinvestigation.Repository{Owner: s.sourceRepo.Owner, Name: s.sourceRepo.Name, Revision: revision}
 		if err := sourceinvestigation.ValidateRepository(repo); err != nil {
 			return changed, err
 		}
@@ -524,55 +508,6 @@ func (s *Service) sourceInvestigationSubject(
 		return changed, nil
 	})
 	return subject, err
-}
-
-func sameResolvedContext(left, right resolvedAnalysis) bool {
-	if left.ref.Scope == ScopePattern || right.ref.Scope == ScopePattern {
-		return left.pattern != nil && right.pattern != nil && models.PatternHash(*left.pattern) == models.PatternHash(*right.pattern)
-	}
-	if left.ref.JobID != right.ref.JobID || left.ref.BuildID != right.ref.BuildID || left.ref.TestName != right.ref.TestName ||
-		left.ref.Source != right.ref.Source || left.ref.SuiteName != right.ref.SuiteName || left.ref.ClassName != right.ref.ClassName || left.ref.JUnitFile != right.ref.JUnitFile {
-		return false
-	}
-	return sameAnalysisSnapshot(analysisSnapshot(left.testCase.AIAnalysis), analysisSnapshot(right.testCase.AIAnalysis))
-}
-
-func repoRevision(refs map[string]string, owner, name string) (string, bool) {
-	wanted := sourceRepositoryName(sourceinvestigation.Repository{Owner: owner, Name: name})
-	var revision string
-	for repo, candidate := range refs {
-		if strings.ToLower(strings.TrimSpace(repo)) != wanted {
-			continue
-		}
-		candidate, ok := exactRepoRevision(candidate)
-		if !ok || revision != "" && revision != candidate {
-			return "", false
-		}
-		revision = candidate
-	}
-	return revision, revision != ""
-}
-
-func exactRepoRevision(value string) (string, bool) {
-	value = strings.TrimSpace(value)
-	if validSourceRevision(value) {
-		return strings.ToLower(value), true
-	}
-	if strings.Count(value, ":") != 1 || strings.Contains(value, ",") {
-		return "", false
-	}
-	_, value, _ = strings.Cut(value, ":")
-	value = strings.TrimSpace(value)
-	if !validSourceRevision(value) {
-		return "", false
-	}
-	return strings.ToLower(value), true
-}
-
-func validSourceRevision(revision string) bool {
-	return sourceinvestigation.ValidateRepository(sourceinvestigation.Repository{
-		Owner: "source", Name: "repository", Revision: revision,
-	}) == nil
 }
 
 func sourceRepositoryName(repo sourceinvestigation.Repository) string {

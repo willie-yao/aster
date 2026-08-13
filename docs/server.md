@@ -72,6 +72,12 @@ remains identical.
 | `POST /api/failures/{id}/resolve` | Admin-gated: mark a recurring pattern resolved at its latest-build watermark. |
 | `POST /api/failures/{id}/unresolve` | Admin-gated: remove the resolved marker. |
 
+Analysis-chat message requests may include `"fix_intent": true` when the turn is
+being initiated specifically for an exact JUnit Fix flow. The server validates
+the current analysis identity, immutable configured source revision, and verified
+source paths before contacting the provider. Omit the field for normal analysis
+chat, which remains available when Fix source eligibility is absent.
+
 ## Capability seam
 
 Recurring-pattern deterministic failures are retained in the private AI cache under an exact-input identity. Authenticated servers expose only the sanitized subset through `/api/pattern-diagnostics`: the final category, fixed validation stage and code, bounded parser counters, repair stage and count, and cooldown times. The endpoint never returns prompts, model responses, citations, artifact paths, repository source, or model prose. Legacy cooldown entries remain valid and appear without diagnostics until a new exact-input failure is recorded.

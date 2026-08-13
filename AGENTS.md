@@ -118,6 +118,7 @@ backend/                         Go 1.25
 
     -- support --
     statefile/                   Atomic JSON writes + repo-scoped tracking state
+    buildsource/                 Immutable build repository source resolution
     redact/                      Scrubs sensitive values before logging
     textutil/                    Small shared string helpers
     e2e/                         End-to-end pipeline, benchmark, and quality suites

@@ -16,6 +16,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/buildsource"
 )
 
 // githubRepoReader is a bound tools.RepoReader over one GitHub repo at a ref.
@@ -75,10 +76,11 @@ func (r *githubRepoReader) ResolveRef(ctx context.Context) error {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
 		return err
 	}
-	if !fullSourceCommitRE.MatchString(out.SHA) {
+	revision, ok := buildsource.NormalizeRevision(out.SHA)
+	if !ok {
 		return fmt.Errorf("resolving %s/%s HEAD returned invalid commit", r.owner, r.repo)
 	}
-	r.ref = strings.ToLower(out.SHA)
+	r.ref = revision
 	return nil
 }
 

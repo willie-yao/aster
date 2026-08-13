@@ -1204,10 +1204,8 @@ func (s *Service) sessionView(current *persistedSession) SessionView {
 	view.Attempts = attemptViews(current.Requests)
 	view.TurnsUsed = current.Turns
 	view.MaxTurns = s.opts.MaxTurns
-	if view.Analysis.Scope != ScopePattern && s.sourceRepo.Owner != "" && s.sourceRepo.Name != "" {
-		resolved := restoreResolved(current.Resolved)
-		if revision, ok := repoRevision(resolved.build.RepoRefs, s.sourceRepo.Owner, s.sourceRepo.Name); ok {
-			repo := sourceinvestigation.Repository{Owner: s.sourceRepo.Owner, Name: s.sourceRepo.Name, Revision: revision}
+	if view.Analysis.Scope != ScopePattern {
+		if repo, ok := persistedBuildSourceRepository(current.Resolved, s.sourceRepo); ok {
 			view.SourceRepository = &repo
 		}
 	}

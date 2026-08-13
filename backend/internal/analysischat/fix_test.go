@@ -311,8 +311,8 @@ func TestLegacySourceRefreshCannotReplaceFixCandidateAnalysis(t *testing.T) {
 
 	if _, err := service.SourceInvestigation(
 		t.Context(), session.ID, "Alice", testRequestID(t), chatRequestID,
-	); !errors.Is(err, ErrAnalysisChanged) {
-		t.Fatalf("legacy source refresh error = %v", err)
+	); !errors.Is(err, sourceinvestigation.ErrUnavailable) {
+		t.Fatalf("legacy source identity error = %v", err)
 	}
 	if _, err := service.FixCandidate(
 		session.ID, "Alice", chatRequestID, fixCandidatePattern().ID, fixCandidatePattern().ContentHash, "",

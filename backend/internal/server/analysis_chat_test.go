@@ -29,6 +29,8 @@ type fakeAnalysisChatRunner struct {
 	findErr          error
 	getErr           error
 	sendErr          error
+	preflightErr     error
+	preflightCalls   int
 	cancelErr        error
 	cancelID         string
 	cancelOwner      string
@@ -92,6 +94,11 @@ func (f *fakeAnalysisChatRunner) Stream(
 		}
 	}
 	return f.Send(ctx, id, owner, requestID, message)
+}
+
+func (f *fakeAnalysisChatRunner) PreflightTestFix(_, _ string) error {
+	f.preflightCalls++
+	return f.preflightErr
 }
 
 func (f *fakeAnalysisChatRunner) Cancel(id, owner, requestID string) error {
@@ -204,6 +211,39 @@ func TestHandlerAnalysisChatFlow(t *testing.T) {
 	_ = cancelled.Body.Close()
 	if runner.cancelID != "session-1" || runner.cancelOwner != "alice" || runner.cancelRequestID != "request-flow" {
 		t.Fatalf("cancel runner id=%q owner=%q request=%q", runner.cancelID, runner.cancelOwner, runner.cancelRequestID)
+	}
+}
+
+func TestHandlerAnalysisChatFixIntentPreflightsBeforeProvider(t *testing.T) {
+	runner := &fakeAnalysisChatRunner{preflightErr: fmt.Errorf("%w: source unavailable", analysischat.ErrInvalidRequest)}
+	handler, err := Handler(Options{
+		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev", AnalysisChat: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(path, body, key string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "ok")
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(analysisChatIdempotencyHeader, key)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
+		return recorder
+	}
+
+	failed := request("/api/analysis-chat/sessions/session-1/messages", `{"message":"find Fix evidence","fix_intent":true}`, "fix-sync")
+	if failed.Code != http.StatusBadRequest || runner.preflightCalls != 1 || runner.gotMessage != "" {
+		t.Fatalf("sync preflight status=%d calls=%d message=%q body=%q", failed.Code, runner.preflightCalls, runner.gotMessage, failed.Body.String())
+	}
+	failed = request("/api/analysis-chat/sessions/session-1/messages/stream", `{"message":"find Fix evidence","fix_intent":true}`, "fix-stream")
+	if failed.Code != http.StatusBadRequest || runner.preflightCalls != 2 || runner.gotMessage != "" {
+		t.Fatalf("stream preflight status=%d calls=%d message=%q body=%q", failed.Code, runner.preflightCalls, runner.gotMessage, failed.Body.String())
+	}
+
+	normal := request("/api/analysis-chat/sessions/session-1/messages", `{"message":"explain only"}`, "normal")
+	if normal.Code != http.StatusOK || runner.preflightCalls != 2 || runner.gotMessage != "explain only" {
+		t.Fatalf("normal chat status=%d calls=%d message=%q body=%q", normal.Code, runner.preflightCalls, runner.gotMessage, normal.Body.String())
 	}
 }
 

@@ -14,9 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -27,6 +25,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/buildsource"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
@@ -442,41 +441,7 @@ func verifiedBuildSourceFiles(subject *BuildActionSubject, owner, repo string) [
 }
 
 func verifiedSourceFiles(fileLinks map[string]string, owner, repo, revision string) []string {
-	if len(fileLinks) == 0 {
-		return nil
-	}
-	var files []string
-	links := make([]string, 0, len(fileLinks))
-	for _, raw := range fileLinks {
-		links = append(links, raw)
-	}
-	slices.Sort(links)
-	for _, link := range links {
-		raw := strings.TrimSpace(link)
-		parsed, err := url.Parse(raw)
-		if err != nil || !strings.EqualFold(parsed.Hostname(), "github.com") {
-			continue
-		}
-		parts := strings.Split(strings.Trim(parsed.EscapedPath(), "/"), "/")
-		if len(parts) < 5 || !strings.EqualFold(parts[0], owner) || !strings.EqualFold(parts[1], repo) || parts[2] != "blob" {
-			continue
-		}
-		linkRevision, err := url.PathUnescape(parts[3])
-		if err != nil || revision != "" && !strings.EqualFold(linkRevision, revision) {
-			continue
-		}
-		decoded, err := url.PathUnescape(strings.Join(parts[4:], "/"))
-		if err != nil {
-			continue
-		}
-		clean := path.Clean(decoded)
-		if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || strings.Contains(clean, "\\") {
-			continue
-		}
-		files = append(files, clean)
-	}
-	slices.Sort(files)
-	return slices.Compact(files)
+	return buildsource.VerifiedPaths(fileLinks, buildsource.Source{Owner: owner, Name: repo, Revision: revision})
 }
 
 // buildIssueSpecForPattern renders one current pattern into an issue spec.

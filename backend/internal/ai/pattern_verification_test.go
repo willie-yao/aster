@@ -83,8 +83,8 @@ func reconcile() {}
 	base := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
 	detail := models.JobDetail{Runs: []models.BuildResult{
 		{BuildInfo: models.BuildInfo{BuildID: "failure-1", RepoRefs: map[string]string{"example/repo": "main:" + oldRevisionOne}, Revision: passRevisionOne, Started: base}},
-		{BuildInfo: models.BuildInfo{BuildID: "failure-2", RepoVersion: oldRevisionTwo, Started: base.Add(time.Hour)}},
-		{BuildInfo: models.BuildInfo{BuildID: "pass-1", RepoVersion: passRevisionOne, Passed: true, Started: base.Add(2 * time.Hour)}},
+		{BuildInfo: models.BuildInfo{BuildID: "failure-2", RepoVersion: oldRevisionTwo, RepoRefs: map[string]string{"example/repo": oldRevisionTwo}, Started: base.Add(time.Hour)}},
+		{BuildInfo: models.BuildInfo{BuildID: "pass-1", RepoVersion: passRevisionOne, RepoRefs: map[string]string{"example/repo": passRevisionOne}, Passed: true, Started: base.Add(2 * time.Hour)}},
 		{BuildInfo: models.BuildInfo{BuildID: "pass-2", RepoRefs: map[string]string{"example/repo": "main:" + passRevisionTwo}, Passed: true, Started: base.Add(3 * time.Hour)}},
 	}}
 	verification, err := service.VerifyPatternRemediation(t.Context(), pattern, detail)
@@ -298,12 +298,12 @@ func TestVerifyPatternRemediationSamePackageLifecycle(t *testing.T) {
 			}
 			base := time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)
 			detail := models.JobDetail{Runs: []models.BuildResult{
-				{BuildInfo: models.BuildInfo{BuildID: "failure-1", RepoVersion: failureOne, Started: base}},
-				{BuildInfo: models.BuildInfo{BuildID: "failure-2", RepoVersion: failureTwo, Started: base.Add(time.Hour)}},
+				{BuildInfo: models.BuildInfo{BuildID: "failure-1", RepoVersion: failureOne, RepoRefs: map[string]string{"example/repo": failureOne}, Started: base}},
+				{BuildInfo: models.BuildInfo{BuildID: "failure-2", RepoVersion: failureTwo, RepoRefs: map[string]string{"example/repo": failureTwo}, Started: base.Add(time.Hour)}},
 			}}
 			for index, revision := range test.passingRevisions {
 				detail.Runs = append(detail.Runs, models.BuildResult{BuildInfo: models.BuildInfo{
-					BuildID: fmt.Sprintf("pass-%d", index+1), RepoVersion: revision, Passed: true, Started: base.Add(time.Duration(index+2) * time.Hour),
+					BuildID: fmt.Sprintf("pass-%d", index+1), RepoVersion: revision, RepoRefs: map[string]string{"example/repo": revision}, Passed: true, Started: base.Add(time.Duration(index+2) * time.Hour),
 				}})
 			}
 			verification, err := service.VerifyPatternRemediation(t.Context(), pattern, detail)
