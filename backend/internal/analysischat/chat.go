@@ -330,19 +330,20 @@ type resolvedAnalysis struct {
 
 // Service resolves published analyses and owns durable chat sessions.
 type Service struct {
-	dataDir      string
-	runner       Runner
-	investigator sourceinvestigation.Runner
-	sourceRepo   sourceinvestigation.Repository
-	sourceOpts   SourceInvestigationOptions
-	opts         Options
-	store        *sessionStore
-	lifecycle    context.Context
-	activeMu     sync.Mutex
-	active       map[string]context.CancelFunc
-	activeWG     sync.WaitGroup
-	notifyMu     sync.Mutex
-	notify       map[string]map[chan struct{}]struct{}
+	dataDir          string
+	runner           Runner
+	investigator     sourceinvestigation.Runner
+	testFixPreflight func(context.Context, sourceinvestigation.Repository, string, []string) (string, map[string]string, error)
+	sourceRepo       sourceinvestigation.Repository
+	sourceOpts       SourceInvestigationOptions
+	opts             Options
+	store            *sessionStore
+	lifecycle        context.Context
+	activeMu         sync.Mutex
+	active           map[string]context.CancelFunc
+	activeWG         sync.WaitGroup
+	notifyMu         sync.Mutex
+	notify           map[string]map[chan struct{}]struct{}
 }
 
 // NewService creates a durable analysis chat service.

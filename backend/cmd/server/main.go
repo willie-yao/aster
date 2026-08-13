@@ -230,6 +230,11 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 		exactEnabled := exactJUnitChatFixEnabled(fixConfig) && !opts.DisableFixActions
 		legacyEnabled := features.SourceInvestigation && !opts.DisableFixActions
 		if (exactEnabled || legacyEnabled) && fixConfig.Repo != nil && strings.EqualFold(analysisRepo.Owner, fixConfig.Repo.Owner) && strings.EqualFold(analysisRepo.Name, fixConfig.Repo.Name) {
+			if exactEnabled {
+				if err := chatService.ConfigureTestFixPreflight(actionService.PreflightAnalysisFixSource); err != nil {
+					return fmt.Errorf("configuring exact JUnit Fix source preflight: %w", err)
+				}
+			}
 			bridge := chatfix.NewService(chatService, actionService)
 			opts.ChatFix = bridge
 			actionService.ConfigureAnalysisPreviewValidator(bridge)

@@ -68,6 +68,31 @@ func TestNormalizeRevision(t *testing.T) {
 	}
 }
 
+func TestBranch(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	for _, testCase := range []struct {
+		name  string
+		build models.BuildInfo
+		want  string
+	}{
+		{name: "mutable checkout", build: models.BuildInfo{RepoRefs: map[string]string{"example/repo": "main"}, Commit: sha, RepoVersion: sha}, want: "main"},
+		{name: "qualified revision", build: models.BuildInfo{RepoRefs: map[string]string{"example/repo": "release-1.2:" + sha}}, want: "release-1.2"},
+		{name: "heads prefix", build: models.BuildInfo{RepoRefs: map[string]string{"example/repo": "refs/heads/main"}, Commit: sha, RepoVersion: sha}, want: "main"},
+		{name: "duplicate identical branch", build: models.BuildInfo{RepoRefs: map[string]string{"example/repo": "main:" + sha, "Example/Repo": "main:" + sha}}, want: "main"},
+		{name: "conflicting branches", build: models.BuildInfo{RepoRefs: map[string]string{"example/repo": "main:" + sha, "Example/Repo": "release-1.2:" + sha}}, want: ""},
+		{name: "branch and bare revision", build: models.BuildInfo{RepoRefs: map[string]string{"example/repo": "main:" + sha, "Example/Repo": sha}}, want: ""},
+		{name: "exact revision", build: models.BuildInfo{RepoRefs: map[string]string{"example/repo": sha}}, want: ""},
+		{name: "wrong repository", build: models.BuildInfo{RepoRefs: map[string]string{"example/other": "main"}, Commit: sha, RepoVersion: sha}, want: ""},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, ok := Branch(testCase.build, "example", "repo")
+			if ok != (testCase.want != "") || got != testCase.want {
+				t.Fatalf("Branch() = %q, %t, want %q", got, ok, testCase.want)
+			}
+		})
+	}
+}
+
 func TestVerifiedPaths(t *testing.T) {
 	sha := strings.Repeat("a", 40)
 	source := Source{Owner: "example", Name: "repo", Revision: sha}

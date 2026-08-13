@@ -43,6 +43,8 @@ type fakePR struct {
 	searchFound    bool
 	searchAnyCalls int
 	base           ghpr.Base
+	bases          []ghpr.Base
+	resolveCalls   int
 }
 
 func (f *fakePR) OpenPR(_ context.Context, req ghpr.Request) (string, error) {
@@ -66,6 +68,14 @@ func (f *fakePR) SearchAnyPR(ctx context.Context, owner, repo, token, marker str
 }
 
 func (f *fakePR) ResolveBase(_ context.Context, _, _ string) (ghpr.Base, error) {
+	if len(f.bases) > 0 {
+		index := f.resolveCalls
+		if index >= len(f.bases) {
+			index = len(f.bases) - 1
+		}
+		f.resolveCalls++
+		return f.bases[index], nil
+	}
 	if f.base.HeadSHA != "" {
 		return f.base, nil
 	}

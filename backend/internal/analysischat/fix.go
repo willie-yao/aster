@@ -37,6 +37,11 @@ type FixCandidate struct {
 	ResponseHash             string
 	AnalysisContentHash      string
 	SourceRepositorySnapshot sourceinvestigation.Repository
+	FailureRevision          string
+	GenerationBaseRevision   string
+	VerifiedSourceFileHashes map[string]string
+	SourceBranch             string
+	SourceBranchKnown        bool
 }
 
 // TestFixCandidate returns one owner-bound answer for the exact JUnit analysis session.
@@ -77,6 +82,14 @@ func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandi
 			ProposedRevision: cloneRevision(answer.ProposedRevision), ArtifactCitations: slices.Clone(answer.Citations),
 			AnalysisContentHash: current.Resolved.AnalysisHash, SourceRepositorySnapshot: current.Resolved.Source,
 		}
+		if binding, ok := current.FixSources[requestID]; ok {
+			candidate.FailureRevision = binding.FailureRevision
+			candidate.GenerationBaseRevision = binding.GenerationBaseRevision
+			candidate.VerifiedSourceFileHashes = cloneTestFixHashes(binding.VerifiedSourceFileHashes)
+			candidate.SourceBranch, candidate.SourceBranchKnown = buildsource.Branch(
+				current.Resolved.Build, current.Resolved.Source.Owner, current.Resolved.Source.Name,
+			)
+		}
 		return changed, nil
 	})
 	if err != nil {
@@ -93,6 +106,24 @@ func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandi
 		!sourceOK || currentSource != candidate.SourceRepositorySnapshot {
 		return FixCandidate{}, ErrAnalysisChanged
 	}
+	if candidate.GenerationBaseRevision != "" {
+		currentBranch, currentBranchKnown := buildsource.Branch(
+			resolved.build, candidate.SourceRepositorySnapshot.Owner, candidate.SourceRepositorySnapshot.Name,
+		)
+		if currentBranchKnown != candidate.SourceBranchKnown || candidate.SourceBranchKnown && currentBranch != candidate.SourceBranch {
+			return FixCandidate{}, ErrAnalysisChanged
+		}
+		files := buildsource.VerifiedPaths(analysis.FileLinks, buildsource.Source{
+			Owner: candidate.SourceRepositorySnapshot.Owner, Name: candidate.SourceRepositorySnapshot.Name,
+			Revision: candidate.SourceRepositorySnapshot.Revision,
+		})
+		if !validTestFixSource(persistedTestFixSource{
+			FailureRevision: candidate.FailureRevision, GenerationBaseRevision: candidate.GenerationBaseRevision,
+			VerifiedSourceFileHashes: candidate.VerifiedSourceFileHashes,
+		}, candidate.SourceRepositorySnapshot.Revision, files) {
+			return FixCandidate{}, ErrAnalysisChanged
+		}
+	}
 	candidate.ResponseHash, err = fixCandidateResponseHash(candidate)
 	if err != nil {
 		return FixCandidate{}, err
@@ -102,15 +133,24 @@ func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandi
 
 func fixCandidateResponseHash(candidate FixCandidate) (string, error) {
 	payload, err := json.Marshal(struct {
-		SessionID, RequestID string
-		Analysis             AnalysisRef
-		Original             AnalysisSnapshot
-		AssistantAnswer      string
-		ProposedRevision     *Revision
-		ArtifactCitations    []Citation
-		AnalysisContentHash  string
-		SourceRepository     sourceinvestigation.Repository
-	}{candidate.SessionID, candidate.RequestID, candidate.Analysis, candidate.Original, candidate.AssistantAnswer, candidate.ProposedRevision, candidate.ArtifactCitations, candidate.AnalysisContentHash, candidate.SourceRepositorySnapshot})
+		SessionID, RequestID                    string
+		Analysis                                AnalysisRef
+		Original                                AnalysisSnapshot
+		AssistantAnswer                         string
+		ProposedRevision                        *Revision
+		ArtifactCitations                       []Citation
+		AnalysisContentHash                     string
+		SourceRepository                        sourceinvestigation.Repository
+		FailureRevision, GenerationBaseRevision string
+		VerifiedSourceFileHashes                map[string]string
+		SourceBranch                            string
+		SourceBranchKnown                       bool
+	}{
+		candidate.SessionID, candidate.RequestID, candidate.Analysis, candidate.Original, candidate.AssistantAnswer,
+		candidate.ProposedRevision, candidate.ArtifactCitations, candidate.AnalysisContentHash, candidate.SourceRepositorySnapshot,
+		candidate.FailureRevision, candidate.GenerationBaseRevision, candidate.VerifiedSourceFileHashes,
+		candidate.SourceBranch, candidate.SourceBranchKnown,
+	})
 	if err != nil {
 		return "", fmt.Errorf("encoding selected chat response identity: %w", err)
 	}

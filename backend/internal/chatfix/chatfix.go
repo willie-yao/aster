@@ -64,7 +64,10 @@ func (s *Service) PreviewChatFix(
 			ChatSessionID: candidate.SessionID, ChatRequestID: candidate.RequestID, ChatResponseHash: candidate.ResponseHash,
 			PreviewRequestHash: exactPreviewRequestHash(candidate, instruction), AnalysisContentHash: candidate.AnalysisContentHash,
 			SourceRepository: candidate.SourceRepositorySnapshot,
-			AssistantAnswer:  candidate.AssistantAnswer, ArtifactCitations: artifactEvidence(candidate.ArtifactCitations),
+			FailureRevision:  candidate.FailureRevision, GenerationBaseRevision: candidate.GenerationBaseRevision,
+			VerifiedSourceFileHashes: cloneStringMap(candidate.VerifiedSourceFileHashes),
+			SourceBranch:             candidate.SourceBranch,
+			AssistantAnswer:          candidate.AssistantAnswer, ArtifactCitations: artifactEvidence(candidate.ArtifactCitations),
 		}
 		if candidate.ProposedRevision != nil {
 			input.ProposedRevision = &fixpr.RevisionContext{RootCause: candidate.ProposedRevision.RootCause, SuggestedFix: candidate.ProposedRevision.SuggestedFix}
@@ -113,6 +116,29 @@ func (s *Service) PreviewChatFix(
 	)
 }
 
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func stringMapsEqual(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
 func exactPreviewRequestHash(candidate analysischat.FixCandidate, instruction string) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{
 		candidate.SessionID, candidate.RequestID, candidate.ResponseHash, strings.TrimSpace(instruction),
@@ -134,6 +160,12 @@ func (s *Service) ValidateAnalysisPreview(_ context.Context, owner string, bindi
 		ref.JobID != identity.JobID || ref.BuildID != identity.BuildID || ref.TestName != identity.TestName ||
 		ref.Source != identity.Source || ref.SuiteName != identity.SuiteName || ref.ClassName != identity.ClassName ||
 		ref.JUnitFile != identity.JUnitFile || ref.AnalysisGeneratedAt != identity.AnalysisGeneratedAt {
+		return analysischat.ErrAnalysisChanged
+	}
+	if candidate.GenerationBaseRevision != "" &&
+		(!strings.EqualFold(candidate.FailureRevision, binding.FailureRevision) ||
+			!strings.EqualFold(candidate.GenerationBaseRevision, binding.GenerationBaseRevision) ||
+			!stringMapsEqual(candidate.VerifiedSourceFileHashes, binding.VerifiedSourceFileHashes)) {
 		return analysischat.ErrAnalysisChanged
 	}
 	return nil
