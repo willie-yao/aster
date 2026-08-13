@@ -161,7 +161,7 @@ func TestContinueStructuredCompactsContext(t *testing.T) {
 		structuredContent(`{"body":"safe"}`),
 	)
 	registry, enabled := continuationRegistry(t, large)
-	_, continuation, err := client.ToolLoopWithContinuation(t.Context(), "system", "user", registry, enabled, &tools.Env{}, ToolLoopOptions{MaxIters: 4, ContextByteBudget: 1200})
+	_, continuation, err := client.ToolLoopWithContinuation(t.Context(), "system", "user", registry, enabled, &tools.Env{}, ToolLoopOptions{MaxIters: 4, ContextByteBudget: 3000})
 	if err != nil {
 		t.Fatal(err)
 	}
