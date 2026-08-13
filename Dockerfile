@@ -21,10 +21,13 @@ ARG IMAGE_TAG=dev
 RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/fetcher ./cmd/fetcher \
  && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/worker ./cmd/worker \
  && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/server ./cmd/server \
- && CGO_ENABLED=0 go build -o /out/fixexecutor ./cmd/fixexecutor \
+ && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/fixexecutor ./cmd/fixexecutor \
  && CGO_ENABLED=0 go build -o /out/criticexecutor ./cmd/criticexecutor \
  && CGO_ENABLED=0 go build -o /out/analysisexecutor ./cmd/analysisexecutor \
  && CGO_ENABLED=0 go build -o /out/analysisstager ./cmd/analysisstager
+
+# Pinned Go toolchain copied into the Agent Sandbox Fix executor.
+FROM golang:1.25.12-alpine@sha256:56961d79ea8129efddcc0b8643fd8a5416b4e6228cfd477e3fd61deb2672c587 AS agent-sandbox-fix-go
 
 # Optional full engine image for local sandboxed OpenCode fix generation.
 FROM node:20-slim AS fixer-runtime
@@ -53,13 +56,23 @@ ENTRYPOINT ["/usr/local/bin/server"]
 # OpenCode executor for consumer-installed Agent Sandbox.
 # OpenCode is inherited from its official image pinned by release and OCI digest.
 FROM ghcr.io/anomalyco/opencode:1.18.2@sha256:ef9257b3246e9be63d5050924c07f7e6d8d9f135fdfcd8422fc873a408c367af AS agent-sandbox-fix-executor
+ARG VERSION=dev
+ARG COMMIT=dev
+ARG IMAGE_TAG=dev
 USER root
+COPY --from=agent-sandbox-fix-go /usr/local/go /usr/local/go
+ENV PATH=/usr/local/go/bin:${PATH} \
+    GOTOOLCHAIN=local
 RUN apk add --no-cache ca-certificates git \
- && go version \
+ && test "$(go env GOVERSION)" = "go1.25.12" \
+ && git --version \
  && addgroup -g 65532 padnonroot \
  && adduser -D -H -u 65532 -G padnonroot padnonroot \
- && opencode --version
+ && test "$(opencode --version)" = "1.18.2"
 COPY --from=build /out/fixexecutor /usr/local/bin/fixexecutor
+LABEL org.opencontainers.image.version=${VERSION} \
+      org.opencontainers.image.revision=${COMMIT} \
+      io.prow-ai-dashboard.image-tag=${IMAGE_TAG}
 ENV HOME=/tmp/home \
     GIT_TERMINAL_PROMPT=0 \
     GIT_CONFIG_NOSYSTEM=1
