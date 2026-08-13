@@ -37,6 +37,8 @@ type providerFreeEvidenceHandleSummary struct {
 	Steps                  int                                              `json:"steps"`
 	ArtifactEvidenceCalls  int                                              `json:"artifact_evidence_calls"`
 	SourceEvidenceCalls    int                                              `json:"source_evidence_calls"`
+	SourceEvidenceStatus   string                                           `json:"source_evidence_status,omitempty"`
+	SourceCorrectiveTurn   bool                                             `json:"source_corrective_turn,omitempty"`
 	StructuredOutputCalls  int                                              `json:"structured_output_calls"`
 	EvidencePhaseCompleted bool                                             `json:"evidence_phase_completed"`
 	FinalizationCompleted  bool                                             `json:"finalization_completed"`
@@ -113,8 +115,8 @@ func TestProviderFreeEvidenceHandleScaleHarness(t *testing.T) {
 		CredentialMode: modelprovider.CredentialModeGateway, API: modelprovider.APIChatCompletions,
 		Endpoint: server.URL + "/v1/chat/completions", Model: "provider-free-evidence-handles", Auth: modelprovider.Auth{Type: modelprovider.AuthTypeNone},
 	})
-	request, err := agentanalysis.NewWorkspaceExecutionRequestWithSourceModePolicy(
-		manifest, agentanalysis.WorkspaceSourceModePreserve, provider, 10*time.Minute, 20, 200000, 8192, 256<<10,
+	request, err := agentanalysis.NewWorkspaceExecutionRequestWithSourceEvidence(
+		manifest, agentanalysis.WorkspaceSourceModePreserve, true, provider, 10*time.Minute, 20, 200000, 8192, 256<<10,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +133,7 @@ func TestProviderFreeEvidenceHandleScaleHarness(t *testing.T) {
 		UsageStatus: result.Usage.Status, UsageAvailable: result.Usage.Available,
 		ProviderRequests: result.OpenCodeTelemetry.ProviderRequests, ProviderRequestsKnown: result.OpenCodeTelemetry.ProviderRequestsKnown,
 		Steps: result.OpenCodeTelemetry.StepsUsed, ArtifactEvidenceCalls: result.OpenCodeTelemetry.ArtifactEvidenceToolCalls,
-		SourceEvidenceCalls: result.OpenCodeTelemetry.SourceEvidenceToolCalls, StructuredOutputCalls: result.OpenCodeTelemetry.StructuredOutputToolCalls,
+		SourceEvidenceCalls: result.OpenCodeTelemetry.SourceEvidenceToolCalls, SourceEvidenceStatus: result.OpenCodeTelemetry.SourceEvidenceStatus, SourceCorrectiveTurn: result.OpenCodeTelemetry.SourceEvidenceCorrectiveTurn, StructuredOutputCalls: result.OpenCodeTelemetry.StructuredOutputToolCalls,
 		EvidencePhaseCompleted: result.OpenCodeTelemetry.EvidencePhaseCompleted, FinalizationCompleted: result.OpenCodeTelemetry.FinalizationPhaseCompleted,
 		StructuredResult: result.Analysis != nil, ResultValidationStatus: result.ResultValidation.Status,
 		EvidenceHandles: result.OpenCodeTelemetry.EvidenceHandles, OpenCodeVersion: result.OpenCodeTelemetry.RequestShape.OpenCodeVersion,
@@ -150,7 +152,7 @@ func TestProviderFreeEvidenceHandleScaleHarness(t *testing.T) {
 	if err := os.WriteFile(filepath.Clean(summaryPath), append(encoded, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if result.TerminalState != "succeeded" || result.Analysis == nil || !result.Usage.Available || result.Usage.Status != agentanalysis.WorkspaceTelemetryAvailable || !result.OpenCodeTelemetry.ProviderRequestsKnown || result.OpenCodeTelemetry.ProviderRequests != providerFreeOverflowGreps+3 || result.OpenCodeTelemetry.StepsUsed != providerFreeOverflowGreps+3 || result.OpenCodeTelemetry.ArtifactEvidenceToolCalls != providerFreeOverflowGreps || result.OpenCodeTelemetry.SourceEvidenceToolCalls != 1 || result.OpenCodeTelemetry.StructuredOutputToolCalls != 1 || !result.OpenCodeTelemetry.EvidencePhaseCompleted || !result.OpenCodeTelemetry.FinalizationPhaseCompleted || result.ResultValidation.Status != agentanalysis.WorkspaceResultAccepted || result.OpenCodeTelemetry.EvidenceHandles.Status != agentanalysis.WorkspaceEvidenceHandlesAcceptedWithWarnings || result.OpenCodeTelemetry.EvidenceHandles.AcceptedArtifactHandleCount != 64 || result.OpenCodeTelemetry.EvidenceHandles.AcceptedSourceHandleCount < 1 || !result.OpenCodeTelemetry.EvidenceHandles.Truncated || !slices.Equal(result.OpenCodeTelemetry.EvidenceHandles.Codes, wantCodes) || result.OpenCodeTelemetry.RequestShape.OpenCodeVersion != "1.18.2" || calls != providerFreeOverflowGreps+3 {
+	if result.TerminalState != "succeeded" || result.Analysis == nil || !result.Usage.Available || result.Usage.Status != agentanalysis.WorkspaceTelemetryAvailable || !result.OpenCodeTelemetry.ProviderRequestsKnown || result.OpenCodeTelemetry.ProviderRequests != providerFreeOverflowGreps+3 || result.OpenCodeTelemetry.StepsUsed != providerFreeOverflowGreps+3 || result.OpenCodeTelemetry.ArtifactEvidenceToolCalls != providerFreeOverflowGreps || result.OpenCodeTelemetry.SourceEvidenceToolCalls != 1 || result.OpenCodeTelemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceAccepted || result.OpenCodeTelemetry.SourceEvidenceCorrectiveTurn || result.OpenCodeTelemetry.StructuredOutputToolCalls != 1 || !result.OpenCodeTelemetry.EvidencePhaseCompleted || !result.OpenCodeTelemetry.FinalizationPhaseCompleted || result.ResultValidation.Status != agentanalysis.WorkspaceResultAccepted || result.OpenCodeTelemetry.EvidenceHandles.Status != agentanalysis.WorkspaceEvidenceHandlesAcceptedWithWarnings || result.OpenCodeTelemetry.EvidenceHandles.AcceptedArtifactHandleCount != 64 || result.OpenCodeTelemetry.EvidenceHandles.AcceptedSourceHandleCount < 1 || !result.OpenCodeTelemetry.EvidenceHandles.Truncated || !slices.Equal(result.OpenCodeTelemetry.EvidenceHandles.Codes, wantCodes) || result.OpenCodeTelemetry.RequestShape.OpenCodeVersion != "1.18.2" || calls != providerFreeOverflowGreps+3 {
 		t.Fatalf("corrected evidence lifecycle failed: result=%+v calls=%d", result, calls)
 	}
 	t.Logf("terminal=%s failure=%s requests=%d evidence_status=%s evidence_codes=%v", summary.TerminalState, summary.FailureCode, calls, summary.EvidenceHandles.Status, summary.EvidenceHandles.Codes)

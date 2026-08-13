@@ -65,6 +65,27 @@ func TestExecuteRunsOneNativeSessionAndReturnsAnalysis(t *testing.T) {
 	}
 }
 
+func TestExecuteRejectsRequiredSourceFloorMissingFromRunner(t *testing.T) {
+	root, base := executorTestFixture(t)
+	request, err := agentanalysis.NewWorkspaceExecutionRequestWithSourceEvidence(base.Manifest, base.SourceModePolicy, true, base.ModelProvider, 5*time.Minute, base.MaxSteps, base.ModelContextTokens, base.ModelOutputTokens, base.OutputLimitBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
+			value := testOpenCodeResult()
+			value.Telemetry.SourceEvidenceToolCalls = 0
+			value.Telemetry.SourceEvidenceStatus = agentanalysis.WorkspaceSourceToolSkipped
+			value.Telemetry.EvidenceHandles = agentanalysis.WorkspaceEvidenceHandleDiagnostics{Status: agentanalysis.WorkspaceEvidenceHandlesAccepted, ObservedRangeCount: 1, AcceptedArtifactHandleCount: 1}
+			return value, nil
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalFailed || result.Analysis != nil || result.OpenCodeTelemetry.FailureCode != "source_evidence_missing" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 func TestExecuteAcceptsGroundedAnalysisWithoutSuggestedFix(t *testing.T) {
 	root, request := executorTestFixture(t)
 	result := Execute(t.Context(), request, Options{
@@ -354,10 +375,10 @@ func TestOpenCodeJSONRejectsTrailingData(t *testing.T) {
 func TestWriteOpenCodeConfigSeparatesEvidenceAndFinalizationPermissions(t *testing.T) {
 	home := t.TempDir()
 	gateway := testGatewayProvider("https://model-gateway.prow-ai.svc.cluster.local:8443/v1/chat/completions", "test-model")
-	if err := writeOpenCodeConfig(home, gateway, 2, 200000, 8192); err == nil {
+	if err := writeOpenCodeConfig(home, gateway, 2, 200000, 8192, false); err == nil {
 		t.Fatal("two-step OpenCode analysis was accepted")
 	}
-	if err := writeOpenCodeConfig(home, gateway, 20, 200000, 8192); err != nil {
+	if err := writeOpenCodeConfig(home, gateway, 20, 200000, 8192, false); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
@@ -407,6 +428,42 @@ func TestWriteOpenCodeConfigSeparatesEvidenceAndFinalizationPermissions(t *testi
 	}
 	if strings.Contains(strings.ToLower(string(data)), "token") || strings.Contains(string(data), "/chat/completions") {
 		t.Fatalf("config contains credential or non-base endpoint: %s", data)
+	}
+}
+
+func TestWriteOpenCodeConfigReservesSourceCorrectionAgent(t *testing.T) {
+	home := t.TempDir()
+	provider := testGatewayProvider("https://model-gateway.prow-ai.svc.cluster.local:8443/v1/chat/completions", "test-model")
+	if err := writeOpenCodeConfig(home, provider, 20, 200000, 8192, true); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	agents := config["agent"].(map[string]any)
+	if len(agents) != 3 {
+		t.Fatalf("agents=%v", agents)
+	}
+	evidence := agents[openCodeEvidenceAgent].(map[string]any)
+	source := agents[openCodeSourceEvidenceAgent].(map[string]any)
+	finalize := agents[openCodeFinalizationAgent].(map[string]any)
+	if evidence["steps"].(float64) != 16 || source["steps"].(float64) != 2 || finalize["steps"].(float64) != 2 {
+		t.Fatalf("evidence=%v source=%v finalize=%v", evidence, source, finalize)
+	}
+	permissions := source["permission"].(map[string]any)
+	read := permissions["read"].(map[string]any)
+	if permissions["*"] != "deny" || permissions["grep"] != "allow" || permissions["StructuredOutput"] != "deny" || permissions["glob"] != "deny" || read["*"] != "deny" || read["source/*"] != "allow" || read["*/source/*"] != "allow" || len(read) != 3 {
+		t.Fatalf("source permissions=%v", permissions)
+	}
+	for _, denied := range []string{"bash", "edit", "write", "apply_patch", "webfetch", "websearch", "task", "skill", "external_directory"} {
+		if permissions[denied] != "deny" {
+			t.Fatalf("source permission %s=%v", denied, permissions[denied])
+		}
 	}
 }
 
@@ -478,7 +535,7 @@ func testOpenCodeResult() OpenCodeRunResult {
 func executorAnalysisJSON() []byte {
 	return []byte(`{
   "version": 1,
-  "contract_version": "agent-analysis-workspace-v6",
+  "contract_version": "agent-analysis-workspace-v7",
   "summary": "The controller rejected the request.",
   "is_transient": false,
   "root_cause": "The specific failure occurred before cleanup.",
@@ -877,18 +934,380 @@ func TestRunOpenCodePhasesUsesOneSessionAndGatesFinalization(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192}
+	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192, RequireSourceEvidence: true}
 	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if posts != 2 || gets != 2 || len(result.Structured) == 0 || !result.Telemetry.EvidencePhaseCompleted || !result.Telemetry.FinalizationPhaseCompleted || result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Telemetry.StepsUsed != 2 || result.Usage.ModelRequests != 2 {
+	if posts != 2 || gets != 2 || len(result.Structured) == 0 || !result.Telemetry.EvidencePhaseCompleted || !result.Telemetry.FinalizationPhaseCompleted || result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceAccepted || result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.StructuredOutputToolCalls != 1 || result.Telemetry.StepsUsed != 2 || result.Usage.ModelRequests != 2 {
 		t.Fatalf("posts=%d gets=%d result=%+v", posts, gets, result)
 	}
 	for _, tool := range result.Telemetry.Tools {
 		if tool.Name == "read" && tool.Count != 2 {
 			t.Fatalf("unpersisted response parts were counted: %+v", result.Telemetry.Tools)
 		}
+	}
+}
+
+func TestRunOpenCodePhasesArtifactOnlySkipsSourceCorrection(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourceDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(artifactDir, "failure.log")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	initial := fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
+	final := strings.TrimSuffix(initial, "]") + fmt.Sprintf(`,{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},{"type":"step-finish","cost":0.2,"tokens":{"input":20,"output":4,"cache":{"read":2}}}]}]`, executorAnalysisJSON())
+	posts, gets := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			posts++
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if posts == 1 {
+				if payload["agent"] != openCodeEvidenceAgent {
+					t.Fatalf("evidence payload=%v", payload)
+				}
+				fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
+				return
+			}
+			if posts != 2 || payload["agent"] != openCodeFinalizationAgent {
+				t.Fatalf("unexpected payload=%v posts=%d", payload, posts)
+			}
+			fmt.Fprintf(w, `{"info":{"role":"assistant","structured":%s},"parts":[]}`, executorAnalysisJSON())
+		case http.MethodGet:
+			gets++
+			if gets == 1 {
+				fmt.Fprint(w, initial)
+			} else {
+				fmt.Fprint(w, final)
+			}
+		}
+	}))
+	defer server.Close()
+	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192}
+	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
+	if err != nil || posts != 2 || gets != 2 || result.Telemetry.SourceEvidenceStatus != "" || result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 {
+		t.Fatalf("posts=%d gets=%d result=%+v err=%v", posts, gets, result, err)
+	}
+}
+
+func TestRunOpenCodePhasesInterceptsArtifactOnlyFinalizationForSourceEvidence(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+	for _, dir := range []string{artifactDir, sourceDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifactPath := filepath.Join(artifactDir, "failure.log")
+	sourcePath := filepath.Join(sourceDir, "main.go")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	initial := fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
+	corrected := strings.TrimSuffix(initial, "]") + fmt.Sprintf(`,{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, sourcePath)
+	final := strings.TrimSuffix(corrected, "]") + fmt.Sprintf(`,{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},{"type":"step-finish","cost":0.2,"tokens":{"input":20,"output":4,"cache":{"read":2}}}]}]`, executorAnalysisJSON())
+	posts, gets := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			posts++
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			switch posts {
+			case 1:
+				if payload["agent"] != openCodeEvidenceAgent {
+					t.Fatalf("initial payload=%v", payload)
+				}
+				fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
+			case 2:
+				if payload["agent"] != openCodeSourceEvidenceAgent {
+					t.Fatalf("correction payload=%v", payload)
+				}
+				if _, ok := payload["format"]; ok {
+					t.Fatalf("source correction exposed StructuredOutput: %v", payload)
+				}
+				prompt := payload["parts"].([]any)[0].(map[string]any)["text"].(string)
+				for _, forbidden := range []string{"test/k8s-integration/main.go", "Windows snapshot", "expected diagnosis", "expected signal"} {
+					if strings.Contains(prompt, forbidden) {
+						t.Fatalf("correction leaked %q: %s", forbidden, prompt)
+					}
+				}
+				fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
+			case 3:
+				if payload["agent"] != openCodeFinalizationAgent {
+					t.Fatalf("final payload=%v", payload)
+				}
+				fmt.Fprintf(w, `{"info":{"role":"assistant","structured":%s},"parts":[]}`, executorAnalysisJSON())
+			default:
+				t.Fatalf("unexpected post %d", posts)
+			}
+		case http.MethodGet:
+			gets++
+			switch gets {
+			case 1:
+				fmt.Fprint(w, initial)
+			case 2:
+				fmt.Fprint(w, corrected)
+			case 3:
+				fmt.Fprint(w, final)
+			default:
+				t.Fatalf("unexpected get %d", gets)
+			}
+		default:
+			t.Fatalf("method=%s", r.Method)
+		}
+	}))
+	defer server.Close()
+	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192, RequireSourceEvidence: true}
+	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if posts != 3 || gets != 3 || result.Telemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceAccepted || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.SourceEvidenceCorrectionReason != agentanalysis.WorkspaceSourceToolSkipped || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.EvidenceHandles.AcceptedSourceHandleCount != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Telemetry.EvidencePhaseSteps != 2 || result.Telemetry.FinalizationPhaseSteps != 1 {
+		t.Fatalf("posts=%d gets=%d result=%+v", posts, gets, result)
+	}
+}
+
+func TestRunOpenCodePhasesRejectsUnusableCorrectiveSourceEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		tool       func(string, string) string
+		wantStatus string
+	}{
+		{name: "empty grep", wantStatus: agentanalysis.WorkspaceSourceEvidenceUnusable, tool: func(_, sourceDir string) string {
+			return fmt.Sprintf(`{"type":"tool","tool":"grep","state":{"status":"completed","input":{"path":%q},"metadata":{"matches":0}}}`, sourceDir)
+		}},
+		{name: "invalid line", wantStatus: agentanalysis.WorkspaceSourceEvidenceUnusable, tool: func(sourcePath, _ string) string {
+			return fmt.Sprintf(`{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":2,"lineEnd":2}}}}`, sourcePath)
+		}},
+		{name: "failed read", wantStatus: agentanalysis.WorkspaceSourceToolFailed, tool: func(sourcePath, _ string) string {
+			return fmt.Sprintf(`{"type":"tool","tool":"read","state":{"status":"error","error":"read failed","input":{"filePath":%q}}}`, sourcePath)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+			sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+			for _, dir := range []string{artifactDir, sourceDir} {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			artifactPath := filepath.Join(artifactDir, "failure.log")
+			sourcePath := filepath.Join(sourceDir, "main.go")
+			if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(sourcePath, []byte("package main\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			initial := fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
+			corrected := strings.TrimSuffix(initial, "]") + fmt.Sprintf(`,{"info":{"role":"assistant"},"parts":[{"type":"step-start"},%s,{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, test.tool(sourcePath, sourceDir))
+			posts, gets := 0, 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case http.MethodPost:
+					posts++
+					if posts > 2 {
+						t.Fatalf("finalization ran after unusable source evidence")
+					}
+					fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
+				case http.MethodGet:
+					gets++
+					if gets == 1 {
+						fmt.Fprint(w, initial)
+					} else {
+						fmt.Fprint(w, corrected)
+					}
+				}
+			}))
+			defer server.Close()
+			spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192, RequireSourceEvidence: true}
+			result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
+			if err == nil || posts != 2 || gets != 2 || result.Telemetry.FailureCode != "source_evidence_missing" || result.Telemetry.SourceEvidenceStatus != test.wantStatus || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.StructuredOutputToolCalls != 0 {
+				t.Fatalf("posts=%d gets=%d result=%+v err=%v", posts, gets, result, err)
+			}
+		})
+	}
+}
+
+func TestRunOpenCodePhasesRejectsArtifactAccessDuringSourceCorrection(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+	for _, dir := range []string{artifactDir, sourceDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifactPath := filepath.Join(artifactDir, "failure.log")
+	sourcePath := filepath.Join(sourceDir, "main.go")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	initial := fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
+	grepOutput := fmt.Sprintf("%s:\n  Line 1: failure\n", artifactPath)
+	corrected := strings.TrimSuffix(initial, "]") + fmt.Sprintf(`,{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"grep","state":{"status":"completed","input":{"path":%[1]q},"output":%[2]q,"metadata":{"matches":1}}},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[3]q},"metadata":{"display":{"type":"file","path":%[3]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactDir, grepOutput, sourcePath)
+	posts, gets := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			posts++
+			if posts > 2 {
+				t.Fatalf("finalization ran after corrective artifact access")
+			}
+			fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
+		case http.MethodGet:
+			gets++
+			if gets == 1 {
+				fmt.Fprint(w, initial)
+			} else {
+				fmt.Fprint(w, corrected)
+			}
+		}
+	}))
+	defer server.Close()
+	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192, RequireSourceEvidence: true}
+	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
+	if err == nil || posts != 2 || gets != 2 || result.Telemetry.FailureCode != "source_evidence_missing" || result.Telemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceUnusable || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.StructuredOutputToolCalls != 0 {
+		t.Fatalf("posts=%d gets=%d result=%+v err=%v", posts, gets, result, err)
+	}
+}
+
+func TestRunOpenCodePhasesPreservesCorrectionTelemetryWhenTranscriptUnavailable(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		get  func(http.ResponseWriter)
+	}{
+		{name: "malformed", get: func(w http.ResponseWriter) { fmt.Fprint(w, `[{`) }},
+		{name: "unavailable", get: func(w http.ResponseWriter) { http.Error(w, "unavailable", http.StatusServiceUnavailable) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+			if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourceDir), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			artifactPath := filepath.Join(artifactDir, "failure.log")
+			if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			initial := fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
+			posts, gets := 0, 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case http.MethodPost:
+					posts++
+					fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
+				case http.MethodGet:
+					gets++
+					if gets == 1 {
+						fmt.Fprint(w, initial)
+					} else {
+						test.get(w)
+					}
+				}
+			}))
+			defer server.Close()
+			spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192, RequireSourceEvidence: true}
+			result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
+			if err == nil || posts != 2 || gets != 2 || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.SourceEvidenceCorrectionReason != agentanalysis.WorkspaceSourceToolSkipped || result.Telemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceToolSkipped || result.Telemetry.FailureCode != "telemetry_unavailable" {
+				t.Fatalf("posts=%d gets=%d result=%+v err=%v", posts, gets, result, err)
+			}
+		})
+	}
+}
+
+func TestRunOpenCodePhasesBoundsSourceCorrectionToOneTurn(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourceDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(artifactDir, "failure.log")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	initial := fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
+	corrected := strings.TrimSuffix(initial, "]") + `,{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`
+	posts, gets := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			posts++
+			if posts > 2 {
+				t.Fatalf("more than one source correction was attempted")
+			}
+			fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
+		case http.MethodGet:
+			gets++
+			if gets == 1 {
+				fmt.Fprint(w, initial)
+			} else {
+				fmt.Fprint(w, corrected)
+			}
+		}
+	}))
+	defer server.Close()
+	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192, RequireSourceEvidence: true}
+	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
+	if err == nil || posts != 2 || gets != 2 || result.Telemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceToolSkipped || result.Telemetry.FailureCode != "source_evidence_missing" || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.StructuredOutputToolCalls != 0 {
+		t.Fatalf("posts=%d gets=%d result=%+v err=%v", posts, gets, result, err)
+	}
+}
+
+func TestApplyOpenCodeNativeToolSchemaClassifiesRequiredSourceToolAbsence(t *testing.T) {
+	shape := agentanalysis.WorkspaceOpenCodeRequestShape{}
+	telemetry := agentanalysis.WorkspaceOpenCodeTelemetry{}
+	err := applyOpenCodeNativeToolSchema(&shape, &telemetry, true, false, 0, "", errors.New("read tool missing"))
+	if err == nil || telemetry.FailureCode != agentanalysis.WorkspaceSourceToolUnavailable || telemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceToolUnavailable || shape.ToolSchemaAvailable {
+		t.Fatalf("shape=%+v telemetry=%+v err=%v", shape, telemetry, err)
+	}
+	if err := applyOpenCodeNativeToolSchema(&shape, &telemetry, false, false, 0, "", errors.New("read tool missing")); err != nil {
+		t.Fatalf("artifact-only tool catalog became mandatory: %v", err)
+	}
+	if err := applyOpenCodeNativeToolSchema(&shape, &telemetry, true, true, 0, "", errors.New("glob tool missing")); err != nil {
+		t.Fatalf("available source tools were misclassified: %v", err)
+	}
+}
+
+func TestOpenCodeSourceEvidenceStatusPreservesValidSourceHandleAfterTruncation(t *testing.T) {
+	facts := openCodeEvidenceFacts{
+		SourceToolCalls:    1,
+		SourceToolAttempts: 1,
+		EvidenceDiagnostics: agentanalysis.WorkspaceEvidenceHandleDiagnostics{
+			Status: agentanalysis.WorkspaceEvidenceHandlesAcceptedWithWarnings, AcceptedArtifactHandleCount: 64,
+			AcceptedSourceHandleCount: 1, Truncated: true, Codes: []string{agentanalysis.WorkspaceEvidenceHandleTruncated},
+		},
+	}
+	if got := openCodeSourceEvidenceStatus(facts); got != agentanalysis.WorkspaceSourceEvidenceAccepted {
+		t.Fatalf("source evidence status = %q", got)
 	}
 }
 
@@ -1058,7 +1477,7 @@ func TestWriteOpenCodeConfigReferencesDirectCredentialEnvironment(t *testing.T) 
 	home := t.TempDir()
 	provider := testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model")
 	provider.ReasoningEffort = modelprovider.ReasoningEffortXHigh
-	if err := writeOpenCodeConfig(home, provider, 20, 200000, 8192); err != nil {
+	if err := writeOpenCodeConfig(home, provider, 20, 200000, 8192, false); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
@@ -1177,7 +1596,7 @@ func TestWriteOpenCodeConfigUsesNativeResponsesProvider(t *testing.T) {
 	home := t.TempDir()
 	provider := testResponsesProvider("https://provider.example/v1/responses", "fixture-model")
 	provider.ReasoningEffort = modelprovider.ReasoningEffortHigh
-	if err := writeOpenCodeConfig(home, provider, 20, 200000, 8192); err != nil {
+	if err := writeOpenCodeConfig(home, provider, 20, 200000, 8192, false); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))

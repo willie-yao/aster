@@ -100,6 +100,11 @@ type toolAggregate struct {
 type openCodeEvidenceFacts struct {
 	ArtifactToolCalls      int
 	SourceToolCalls        int
+	ArtifactToolAttempts   int
+	SourceToolAttempts     int
+	SourceToolFailures     int
+	UnrootedToolAttempts   int
+	OtherToolCalls         int
 	NonStructuredToolCalls int
 	StructuredOutputCalls  int
 	EvidenceRanges         []agentanalysis.WorkspaceEvidenceRange
@@ -228,6 +233,22 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 					facts.StructuredOutputCalls++
 				} else {
 					facts.NonStructuredToolCalls++
+				}
+				root := openCodeEvidenceToolRoot(part.Tool, part.State.Input, workDir)
+				if part.Tool == "read" || part.Tool == "grep" {
+					switch root {
+					case agentanalysis.WorkspaceArtifactsDir:
+						facts.ArtifactToolAttempts++
+					case agentanalysis.WorkspaceSourceDir:
+						facts.SourceToolAttempts++
+						if part.State.Status != "completed" {
+							facts.SourceToolFailures++
+						}
+					default:
+						facts.UnrootedToolAttempts++
+					}
+				} else if part.Tool != "StructuredOutput" {
+					facts.OtherToolCalls++
 				}
 				switch part.State.Status {
 				case "completed":
@@ -436,6 +457,28 @@ func unknownErrorProvesResponseStream(classification string) bool {
 
 func openCodeTelemetryBool(value bool) *bool {
 	return &value
+}
+
+func openCodeEvidenceToolRoot(tool string, raw json.RawMessage, workDir string) string {
+	if workDir == "" || (tool != "read" && tool != "grep") || len(raw) == 0 || len(raw) > 16<<10 {
+		return ""
+	}
+	var input struct {
+		FilePath string `json:"filePath"`
+		Path     string `json:"path"`
+	}
+	if json.Unmarshal(raw, &input) != nil {
+		return ""
+	}
+	candidate := input.FilePath
+	if tool == "grep" {
+		candidate = input.Path
+	}
+	root, _, _, ok := openCodeEvidenceLocation(workDir, candidate, true)
+	if !ok {
+		return ""
+	}
+	return root
 }
 
 func recordOpenCodeEvidenceTool(facts *openCodeEvidenceFacts, tool string, raw json.RawMessage, output string, matches *int, display *openCodeReadDisplay, workDir string) error {

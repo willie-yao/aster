@@ -452,6 +452,91 @@ func TestOpenCode1182TwoPhaseCompatibility(t *testing.T) {
 	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourceDir))
 }
 
+func TestOpenCode1182RequiredSourceCorrectionCompatibility(t *testing.T) {
+	bin := os.Getenv("OPENCODE_1_18_2_BIN")
+	if bin == "" {
+		t.Skip("set OPENCODE_1_18_2_BIN to the exact OpenCode 1.18.2 executable")
+	}
+	workDir := t.TempDir()
+	for _, dir := range []string{"source", "artifacts", "result"} {
+		if err := os.Mkdir(filepath.Join(workDir, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "artifacts", "failure.log"), []byte("synthetic failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "source", "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	var toolSets [][]string
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, err := io.ReadAll(io.LimitReader(r.Body, maxOpenCodeAPIResponseBytes+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var request struct {
+			Tools []struct {
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			} `json:"tools"`
+		}
+		if err := json.Unmarshal(data, &request); err != nil {
+			t.Fatal(err)
+		}
+		names := make([]string, 0, len(request.Tools))
+		for _, tool := range request.Tools {
+			names = append(names, tool.Function.Name)
+		}
+		sort.Strings(names)
+		toolSets = append(toolSets, names)
+		calls++
+		switch calls {
+		case 1:
+			writeSyntheticOpenAIStream(t, w, "read", map[string]any{"filePath": "artifacts/failure.log"})
+		case 2:
+			writeSyntheticOpenAIText(t, w, "Artifact evidence inspected.")
+		case 3:
+			writeSyntheticOpenAIStream(t, w, "read", map[string]any{"filePath": "source/main.go"})
+		case 4:
+			writeSyntheticOpenAIText(t, w, "Source evidence inspected.")
+		case 5:
+			var structured any
+			if err := json.Unmarshal(compatibilityAnalysisJSON(), &structured); err != nil {
+				t.Fatal(err)
+			}
+			writeSyntheticOpenAIStream(t, w, "StructuredOutput", structured)
+		default:
+			t.Fatalf("unexpected provider request %d", calls)
+		}
+	}))
+	defer gateway.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	defer cancel()
+	spec := OpenCodeSpec{
+		Bin: bin, WorkDir: workDir, HomeDir: t.TempDir(), TempDir: t.TempDir(),
+		Provider:              testGatewayProvider(gateway.URL+"/v1/chat/completions", "synthetic-model"),
+		Prompt:                "Read artifacts/failure.log and investigate the failure.",
+		MaxSteps:              8,
+		ModelContextTokens:    200000,
+		ModelOutputTokens:     8192,
+		RequireSourceEvidence: true,
+	}
+	result, err := defaultRunOpenCode(ctx, spec)
+	if err != nil {
+		t.Fatalf("err=%v result=%+v", err, result)
+	}
+	if calls != 5 || len(toolSets) != 5 || slices.Contains(toolSets[0], "StructuredOutput") || slices.Contains(toolSets[1], "StructuredOutput") || slices.Contains(toolSets[2], "StructuredOutput") || slices.Contains(toolSets[3], "StructuredOutput") || !slices.Equal(toolSets[4], []string{"StructuredOutput"}) {
+		t.Fatalf("calls=%d toolSets=%v", calls, toolSets)
+	}
+	if result.Telemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceAccepted || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.SourceEvidenceCorrectionReason != agentanalysis.WorkspaceSourceToolSkipped || result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Telemetry.EvidencePhaseSteps != 4 || result.Telemetry.FinalizationPhaseSteps != 1 || result.Telemetry.StepsUsed != 5 || result.Usage.ModelRequests != 5 {
+		t.Fatalf("result=%+v", result)
+	}
+	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourceDir))
+}
+
 type syntheticOpenAIToolCall struct {
 	Name      string
 	Arguments any
@@ -774,7 +859,7 @@ func TestOpenCode1182ResponsesFailureModesAreSanitized(t *testing.T) {
 func compatibilityAnalysisJSON() []byte {
 	return []byte(`{
   "version": 1,
-  "contract_version": "agent-analysis-workspace-v6",
+  "contract_version": "agent-analysis-workspace-v7",
   "summary": "The synthetic failure is grounded.",
   "is_transient": false,
   "root_cause": "The artifact and source contain the same synthetic marker.",

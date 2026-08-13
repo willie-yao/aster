@@ -82,6 +82,10 @@ func openCodeEvidenceSystemPromptBytes(spec OpenCodeSpec, now time.Time) (int, e
 	return openCodePhaseSystemPromptBytes(spec, now, agentanalysis.WorkspaceAgentPrompt(), false)
 }
 
+func openCodeSourceEvidenceSystemPromptBytes(spec OpenCodeSpec, now time.Time) (int, error) {
+	return openCodePhaseSystemPromptBytes(spec, now, agentanalysis.WorkspaceSourceEvidenceAgentPrompt(), false)
+}
+
 func openCodePhaseSystemPromptBytes(spec OpenCodeSpec, now time.Time, agentPrompt string, structured bool) (int, error) {
 	directory, err := filepath.Abs(spec.WorkDir)
 	if err != nil {
@@ -119,7 +123,7 @@ func openCodePhaseSystemPromptBytes(spec OpenCodeSpec, now time.Time, agentPromp
 	return len([]byte(strings.Join(parts, "\n"))), nil
 }
 
-func fetchOpenCodeNativeToolSchemaDigest(ctx context.Context, client *http.Client, baseURL string, spec OpenCodeSpec) (int, string, error) {
+func fetchOpenCodeNativeToolSchemaDigest(ctx context.Context, client *http.Client, baseURL string, spec OpenCodeSpec) (int, string, bool, error) {
 	query := url.Values{
 		"directory": {spec.WorkDir},
 		"provider":  {"engine"},
@@ -127,10 +131,10 @@ func fetchOpenCodeNativeToolSchemaDigest(ctx context.Context, client *http.Clien
 	}
 	var response []openCodeToolSchema
 	if err := openCodeJSON(ctx, client, http.MethodGet, baseURL+"/experimental/tool?"+query.Encode(), nil, &response); err != nil {
-		return 0, "", err
+		return 0, "", false, err
 	}
 	if len(response) == 0 || len(response) > maxOpenCodeToolSchemas {
-		return 0, "", fmt.Errorf("OpenCode tool schema count is invalid")
+		return 0, "", false, fmt.Errorf("OpenCode tool schema count is invalid")
 	}
 	wanted := map[string]bool{}
 	for _, name := range analysisNativeToolIDs {
@@ -143,25 +147,26 @@ func fetchOpenCodeNativeToolSchemaDigest(ctx context.Context, client *http.Clien
 			continue
 		}
 		if seen[item.ID] || len(item.Parameters) == 0 {
-			return 0, "", fmt.Errorf("OpenCode tool schema is invalid")
+			return 0, "", false, fmt.Errorf("OpenCode tool schema is invalid")
 		}
 		canonical, err := canonicalJSON(item.Parameters)
 		if err != nil {
-			return 0, "", fmt.Errorf("canonicalize OpenCode tool schema")
+			return 0, "", false, fmt.Errorf("canonicalize OpenCode tool schema")
 		}
 		seen[item.ID] = true
 		tools = append(tools, digestToolSchema{Name: item.ID, Schema: canonical})
 	}
+	sourceToolsAvailable := seen["read"] && seen["grep"]
 	if len(seen) != len(wanted) {
-		return 0, "", fmt.Errorf("OpenCode tool schema set is incomplete")
+		return 0, "", sourceToolsAvailable, fmt.Errorf("OpenCode tool schema set is incomplete")
 	}
 	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
 	data, err := json.Marshal(tools)
 	if err != nil {
-		return 0, "", err
+		return 0, "", sourceToolsAvailable, err
 	}
 	digest := sha256.Sum256(data)
-	return len(tools), hex.EncodeToString(digest[:]), nil
+	return len(tools), hex.EncodeToString(digest[:]), sourceToolsAvailable, nil
 }
 
 func structuredOutputToolSchemaDigest() (int, string, error) {

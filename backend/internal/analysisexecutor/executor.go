@@ -25,25 +25,28 @@ import (
 )
 
 const (
-	defaultWorkspaceRoot      = "/workspace"
-	defaultTempRoot           = "/tmp"
-	defaultOpenCodeBin        = "opencode"
-	openCodeEvidenceAgent     = "analysis-evidence"
-	openCodeFinalizationAgent = "analysis-finalize"
-	openCodeFinalizationSteps = 2
+	defaultWorkspaceRoot        = "/workspace"
+	defaultTempRoot             = "/tmp"
+	defaultOpenCodeBin          = "opencode"
+	openCodeEvidenceAgent       = "analysis-evidence"
+	openCodeSourceEvidenceAgent = "analysis-source-evidence"
+	openCodeFinalizationAgent   = "analysis-finalize"
+	openCodeSourceEvidenceSteps = 2
+	openCodeFinalizationSteps   = 2
 )
 
 // OpenCodeSpec is the non-secret analyzer invocation.
 type OpenCodeSpec struct {
-	Bin                string
-	WorkDir            string
-	HomeDir            string
-	TempDir            string
-	Provider           modelprovider.Config
-	Prompt             string
-	MaxSteps           int
-	ModelContextTokens int
-	ModelOutputTokens  int
+	Bin                   string
+	WorkDir               string
+	HomeDir               string
+	TempDir               string
+	Provider              modelprovider.Config
+	Prompt                string
+	MaxSteps              int
+	ModelContextTokens    int
+	ModelOutputTokens     int
+	RequireSourceEvidence bool
 }
 
 // OpenCodeRunResult contains the structured result and sanitized aggregates only.
@@ -155,7 +158,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	if bin == "" {
 		bin = defaultOpenCodeBin
 	}
-	runResult, runErr := run(ctx, OpenCodeSpec{Bin: bin, WorkDir: workspaceRoot, HomeDir: home, TempDir: temp, Provider: request.ModelProvider, Prompt: prompt, MaxSteps: request.MaxSteps, ModelContextTokens: request.ModelContextTokens, ModelOutputTokens: request.ModelOutputTokens})
+	runResult, runErr := run(ctx, OpenCodeSpec{Bin: bin, WorkDir: workspaceRoot, HomeDir: home, TempDir: temp, Provider: request.ModelProvider, Prompt: prompt, MaxSteps: request.MaxSteps, ModelContextTokens: request.ModelContextTokens, ModelOutputTokens: request.ModelOutputTokens, RequireSourceEvidence: request.RequireSourceEvidence})
 	if err := validateCredentialFreeOpenCodeRun(credential, runResult, runErr); err != nil {
 		result.OpenCodeTelemetry.FailureCode = "credential_exposure"
 		return fail(engineruntime.TerminalFailed, err.Error())
@@ -197,6 +200,10 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 			result.OpenCodeTelemetry.FailureCode = openCodeFailureCode(runErr)
 		}
 		return fail(stateForContext(ctx), fmt.Sprintf("run OpenCode analyzer: %v", runErr))
+	}
+	if request.RequireSourceEvidence && (result.OpenCodeTelemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceAccepted || result.OpenCodeTelemetry.SourceEvidenceToolCalls < 1 || result.OpenCodeTelemetry.EvidenceHandles.AcceptedSourceHandleCount < 1) {
+		result.OpenCodeTelemetry.FailureCode = "source_evidence_missing"
+		return fail(engineruntime.TerminalFailed, "required source evidence is missing")
 	}
 	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(runResult.Structured), runResult.EvidenceHandles, request.Manifest, artifactRoot, sourceRoot)
 	result.ResultValidation = validation
@@ -344,7 +351,7 @@ func validateCredentialFreeWorkspaceResult(credential modelprovider.CredentialGu
 func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (result OpenCodeRunResult, retErr error) {
 	result.Usage = agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable}
 	result.Telemetry = agentanalysis.WorkspaceOpenCodeTelemetry{Status: agentanalysis.WorkspaceTelemetryUnavailable, StructuredOutputRetriesKnown: true}
-	if err := writeOpenCodeConfig(spec.HomeDir, spec.Provider, spec.MaxSteps, spec.ModelContextTokens, spec.ModelOutputTokens); err != nil {
+	if err := writeOpenCodeConfig(spec.HomeDir, spec.Provider, spec.MaxSteps, spec.ModelContextTokens, spec.ModelOutputTokens, spec.RequireSourceEvidence); err != nil {
 		return result, err
 	}
 	bin, err := exec.LookPath(spec.Bin)
@@ -404,10 +411,10 @@ func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (result OpenCode
 		return result, err
 	}
 	evidenceShape := newOpenCodeEvidenceRequestShape(spec, version)
-	if toolCount, digest, schemaErr := fetchOpenCodeNativeToolSchemaDigest(ctx, client, baseURL, spec); schemaErr == nil {
-		evidenceShape.ToolSchemaAvailable = true
-		evidenceShape.ToolCount = toolCount
-		evidenceShape.ToolSchemaSHA256 = digest
+	toolCount, digest, sourceToolsAvailable, schemaErr := fetchOpenCodeNativeToolSchemaDigest(ctx, client, baseURL, spec)
+	if err := applyOpenCodeNativeToolSchema(&evidenceShape, &result.Telemetry, spec.RequireSourceEvidence, sourceToolsAvailable, toolCount, digest, schemaErr); err != nil {
+		result.Telemetry.RequestShape = evidenceShape
+		return result, err
 	}
 	result.Telemetry.RequestShape = evidenceShape
 	sessionID, err := createOpenCodeSession(ctx, client, baseURL, spec.WorkDir)
@@ -415,6 +422,21 @@ func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (result OpenCode
 		return result, err
 	}
 	return runOpenCodePhases(ctx, client, baseURL, sessionID, spec, version, evidenceShape)
+}
+
+func applyOpenCodeNativeToolSchema(shape *agentanalysis.WorkspaceOpenCodeRequestShape, telemetry *agentanalysis.WorkspaceOpenCodeTelemetry, requireSourceEvidence, sourceToolsAvailable bool, toolCount int, digest string, schemaErr error) error {
+	if schemaErr == nil {
+		shape.ToolSchemaAvailable = true
+		shape.ToolCount = toolCount
+		shape.ToolSchemaSHA256 = digest
+		return nil
+	}
+	if !requireSourceEvidence || sourceToolsAvailable {
+		return nil
+	}
+	telemetry.SourceEvidenceStatus = agentanalysis.WorkspaceSourceToolUnavailable
+	telemetry.FailureCode = agentanalysis.WorkspaceSourceToolUnavailable
+	return fmt.Errorf("OpenCode source tool catalog unavailable: %w", schemaErr)
 }
 
 func stopOpenCodeProcess(terminate func(), done <-chan error) {
@@ -471,6 +493,86 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 	result.Telemetry.EvidencePhaseRequests = evidenceTelemetry.ProviderRequests
 	result.Telemetry.ArtifactEvidenceToolCalls = evidenceFacts.ArtifactToolCalls
 	result.Telemetry.SourceEvidenceToolCalls = evidenceFacts.SourceToolCalls
+	sourceEvidenceStatus := ""
+	correctionReason := ""
+	correctiveTurn := false
+	if spec.RequireSourceEvidence {
+		sourceEvidenceStatus = openCodeSourceEvidenceStatus(evidenceFacts)
+		result.Telemetry.SourceEvidenceStatus = sourceEvidenceStatus
+		if sourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceAccepted {
+			correctiveTurn = true
+			correctionReason = sourceEvidenceStatus
+			correctionInstruction := agentanalysis.WorkspaceSourceEvidenceCorrectionInstruction()
+			if err := credential.CheckStrings(correctionInstruction); err != nil {
+				result.Telemetry.FailureCode = "credential_exposure"
+				return result, err
+			}
+			correctionShape := evidenceShape
+			correctionShape.UserPromptBytes = len(correctionInstruction)
+			if count, err := openCodeSourceEvidenceSystemPromptBytes(spec, time.Now()); err == nil {
+				correctionShape.SystemPromptBytesAvailable = true
+				correctionShape.SystemPromptBytes = count
+			}
+			result.Telemetry.SourceEvidenceCorrectiveTurn = true
+			result.Telemetry.SourceEvidenceCorrectionReason = correctionReason
+			correctionErr := promptOpenCodeSourceEvidence(ctx, client, baseURL, sessionID, spec, correctionInstruction)
+			correctedRaw, correctedRawErr := fetchOpenCodeTelemetryRaw(ctx, client, baseURL, sessionID, spec.WorkDir)
+			if correctedRawErr == nil {
+				if err := credential.CheckBytes(correctedRaw); err != nil {
+					result.Telemetry.FailureCode = "credential_exposure"
+					return result, err
+				}
+			}
+			correctedUsage, correctedTelemetry, correctedFacts, correctedTelemetryErr := parseOpenCodeTelemetryForWorkspace(correctedRaw, spec.WorkDir)
+			if correctedRawErr != nil {
+				correctedTelemetryErr = correctedRawErr
+			}
+			if correctedTelemetryErr != nil {
+				result.Telemetry.RequestShape = correctionShape
+				applyOpenCodePromptError(&result, correctionErr, evidenceTelemetry.ProviderRequests, evidenceTelemetry.ProviderRequestsKnown, true)
+				result.Usage = agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable}
+				if correctionErr != nil {
+					return result, correctionErr
+				}
+				result.Telemetry.FailureCode = "telemetry_unavailable"
+				return result, fmt.Errorf("OpenCode source evidence telemetry unavailable: %w", correctedTelemetryErr)
+			}
+			result.Usage, result.Telemetry = correctedUsage, correctedTelemetry
+			result.Telemetry.RequestShape = correctionShape
+			result.Telemetry.SourceEvidenceCorrectiveTurn = true
+			result.Telemetry.SourceEvidenceCorrectionReason = correctionReason
+			applyOpenCodePromptError(&result, correctionErr, evidenceTelemetry.ProviderRequests, evidenceTelemetry.ProviderRequestsKnown, false)
+			if correctionErr != nil {
+				return result, correctionErr
+			}
+			if err := validateOpenCodeSourceCorrectionPhase(evidenceFacts, correctedFacts); err != nil {
+				result.Telemetry.SourceEvidenceStatus = agentanalysis.WorkspaceSourceEvidenceUnusable
+				result.Telemetry.FailureCode = "source_evidence_missing"
+				return result, err
+			}
+			if err := validateOpenCodeEvidencePhase(correctedFacts, nil); err != nil {
+				result.Telemetry.FailureCode = "evidence_unavailable"
+				if code := primaryWorkspaceEvidenceFailureCode(correctedFacts.EvidenceDiagnostics); code != "" {
+					result.Telemetry.FailureCode = code
+				}
+				return result, err
+			}
+			evidenceRaw, evidenceTelemetry, evidenceFacts = correctedRaw, correctedTelemetry, correctedFacts
+			result.Telemetry.EvidencePhaseCompleted = true
+			result.Telemetry.EvidencePhaseSteps = correctedTelemetry.StepsUsed
+			result.Telemetry.EvidencePhaseRequests = correctedTelemetry.ProviderRequests
+			result.Telemetry.ArtifactEvidenceToolCalls = correctedFacts.ArtifactToolCalls
+			result.Telemetry.SourceEvidenceToolCalls = correctedFacts.SourceToolCalls
+			sourceEvidenceStatus = openCodeSourceEvidenceStatus(correctedFacts)
+			result.Telemetry.SourceEvidenceStatus = sourceEvidenceStatus
+			result.Telemetry.SourceEvidenceCorrectiveTurn = true
+			result.Telemetry.SourceEvidenceCorrectionReason = correctionReason
+		}
+		if sourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceAccepted {
+			result.Telemetry.FailureCode = "source_evidence_missing"
+			return result, fmt.Errorf("required source evidence is missing")
+		}
+	}
 	finalizationInstruction, err := agentanalysis.WorkspaceFinalizationInstruction(evidenceFacts.EvidenceHandles)
 	if err != nil {
 		result.Telemetry.FailureCode = "evidence_handle_unavailable"
@@ -533,6 +635,9 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 	result.Telemetry.EvidencePhaseRequests = evidenceTelemetry.ProviderRequests
 	result.Telemetry.ArtifactEvidenceToolCalls = evidenceFacts.ArtifactToolCalls
 	result.Telemetry.SourceEvidenceToolCalls = evidenceFacts.SourceToolCalls
+	result.Telemetry.SourceEvidenceStatus = sourceEvidenceStatus
+	result.Telemetry.SourceEvidenceCorrectiveTurn = correctiveTurn
+	result.Telemetry.SourceEvidenceCorrectionReason = correctionReason
 	result.Telemetry.FinalizationPhaseSteps = max(telemetry.StepsUsed-evidenceTelemetry.StepsUsed, 0)
 	result.Telemetry.FinalizationPhaseRequests = max(telemetry.ProviderRequests-evidenceTelemetry.ProviderRequests, 0)
 	result.Telemetry.StructuredOutputToolCalls = max(facts.StructuredOutputCalls-evidenceFacts.StructuredOutputCalls, 0)
@@ -582,6 +687,29 @@ func primaryWorkspaceEvidenceFailureCode(value agentanalysis.WorkspaceEvidenceHa
 		}
 	}
 	return ""
+}
+
+func validateOpenCodeSourceCorrectionPhase(before, after openCodeEvidenceFacts) error {
+	if after.StructuredOutputCalls != before.StructuredOutputCalls ||
+		after.ArtifactToolAttempts != before.ArtifactToolAttempts ||
+		after.UnrootedToolAttempts != before.UnrootedToolAttempts ||
+		after.OtherToolCalls != before.OtherToolCalls {
+		return fmt.Errorf("OpenCode source evidence correction tool sequence is invalid")
+	}
+	return nil
+}
+
+func openCodeSourceEvidenceStatus(facts openCodeEvidenceFacts) string {
+	if facts.SourceToolCalls > 0 && facts.EvidenceDiagnostics.AcceptedSourceHandleCount > 0 {
+		return agentanalysis.WorkspaceSourceEvidenceAccepted
+	}
+	if facts.SourceToolAttempts == 0 {
+		return agentanalysis.WorkspaceSourceToolSkipped
+	}
+	if facts.SourceToolFailures == facts.SourceToolAttempts {
+		return agentanalysis.WorkspaceSourceToolFailed
+	}
+	return agentanalysis.WorkspaceSourceEvidenceUnusable
 }
 
 func validateOpenCodeEvidencePhase(facts openCodeEvidenceFacts, telemetryErr error) error {
@@ -705,6 +833,17 @@ func promptOpenCodeEvidence(ctx context.Context, client *http.Client, baseURL, s
 	}
 	if response.Info.Role != "assistant" {
 		return fmt.Errorf("OpenCode evidence phase did not return an assistant message")
+	}
+	return nil
+}
+
+func promptOpenCodeSourceEvidence(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec, instruction string) error {
+	response, err := promptOpenCodeMessage(ctx, client, baseURL, sessionID, spec, openCodeSourceEvidenceAgent, instruction, false)
+	if err != nil {
+		return err
+	}
+	if response.Info.Role != "assistant" {
+		return fmt.Errorf("OpenCode source evidence turn did not return an assistant message")
 	}
 	return nil
 }
@@ -995,9 +1134,13 @@ func unescapeMountInfo(value string) string {
 	return strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`).Replace(value)
 }
 
-func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps, contextTokens, outputTokens int) error {
-	if maxSteps <= openCodeFinalizationSteps {
-		return fmt.Errorf("OpenCode analysis requires at least three steps")
+func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps, contextTokens, outputTokens int, requireSourceEvidence bool) error {
+	reservedSteps := openCodeFinalizationSteps
+	if requireSourceEvidence {
+		reservedSteps += openCodeSourceEvidenceSteps
+	}
+	if maxSteps <= reservedSteps {
+		return fmt.Errorf("OpenCode analysis has too few steps for reserved phases")
 	}
 	dir := filepath.Join(home, ".config", "opencode")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -1037,6 +1180,28 @@ func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps, c
 	if provider.ReasoningEffort != "" {
 		modelOptions["options"] = map[string]any{"reasoningEffort": string(provider.ReasoningEffort)}
 	}
+	agents := map[string]any{
+		openCodeEvidenceAgent: map[string]any{
+			"mode": "primary", "steps": maxSteps - reservedSteps, "prompt": agentanalysis.WorkspaceAgentPrompt(), "permission": evidencePermissions,
+		},
+		openCodeFinalizationAgent: map[string]any{
+			"mode": "primary", "steps": openCodeFinalizationSteps, "prompt": agentanalysis.WorkspaceFinalizerPrompt(), "permission": finalizationPermissions,
+		},
+	}
+	if requireSourceEvidence {
+		sourceEvidencePermissions := map[string]any{
+			"*": "deny",
+			"read": map[string]any{
+				"*": "deny", "source/*": "allow", "*/source/*": "allow",
+			},
+			"grep": "allow", "StructuredOutput": "deny",
+			"glob": "deny", "bash": "deny", "edit": "deny", "write": "deny", "apply_patch": "deny",
+			"webfetch": "deny", "websearch": "deny", "task": "deny", "skill": "deny", "external_directory": "deny",
+		}
+		agents[openCodeSourceEvidenceAgent] = map[string]any{
+			"mode": "primary", "steps": openCodeSourceEvidenceSteps, "prompt": agentanalysis.WorkspaceSourceEvidenceAgentPrompt(), "permission": sourceEvidencePermissions,
+		}
+	}
 	config := map[string]any{
 		"$schema": "https://opencode.ai/config.json", "share": "disabled", "autoupdate": false, "snapshot": false,
 		"default_agent": openCodeEvidenceAgent,
@@ -1045,14 +1210,7 @@ func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps, c
 			"options": providerOptions,
 			"models":  map[string]any{provider.Model: modelOptions},
 		}},
-		"agent": map[string]any{
-			openCodeEvidenceAgent: map[string]any{
-				"mode": "primary", "steps": maxSteps - openCodeFinalizationSteps, "prompt": agentanalysis.WorkspaceAgentPrompt(), "permission": evidencePermissions,
-			},
-			openCodeFinalizationAgent: map[string]any{
-				"mode": "primary", "steps": openCodeFinalizationSteps, "prompt": agentanalysis.WorkspaceFinalizerPrompt(), "permission": finalizationPermissions,
-			},
-		},
+		"agent":      agents,
 		"permission": map[string]any{"*": "deny"},
 	}
 	data, err := json.MarshalIndent(config, "", "  ")
