@@ -35,6 +35,9 @@ const markerPrefix = "prow-ai-dashboard-fix"
 // ErrWriteOutcomeUnknown means GitHub may have accepted the PR create request.
 var ErrWriteOutcomeUnknown = errors.New("fix PR write outcome unknown")
 
+// ErrPreviewBaseChanged means the pinned source revision is no longer the target branch head.
+var ErrPreviewBaseChanged = errors.New("fix preview base changed")
+
 // prClient is the subset of *ghpr.Client the manager needs.
 type prClient interface {
 	OpenPR(ctx context.Context, req ghpr.Request) (string, error)
@@ -473,25 +476,27 @@ type GeneratedFix struct {
 	Description string  // PR description (after any repo-template reformat)
 	Body        string  // full PR body that embeds Description + diff + marker
 
-	pattern models.PatternAnalysis
-	key     string
-	base    ghpr.Base
+	pattern            models.PatternAnalysis
+	key                string
+	base               ghpr.Base
+	requireBaseCurrent bool
 }
 
 // GeneratedFixSnapshot is the serializable form of a generated fix. It keeps
 // the exact files and pinned base needed to open the reviewed draft later.
 type GeneratedFixSnapshot struct {
-	Subject     string                 `json:"subject"`
-	Rationale   string                 `json:"rationale"`
-	Diff        string                 `json:"diff"`
-	Files       map[string]string      `json:"files"`
-	Verify      VerifyResult           `json:"verify"`
-	Title       string                 `json:"title"`
-	Description string                 `json:"description"`
-	Body        string                 `json:"body"`
-	Pattern     models.PatternAnalysis `json:"pattern"`
-	Key         string                 `json:"key"`
-	Base        ghpr.Base              `json:"base"`
+	Subject            string                 `json:"subject"`
+	Rationale          string                 `json:"rationale"`
+	Diff               string                 `json:"diff"`
+	Files              map[string]string      `json:"files"`
+	Verify             VerifyResult           `json:"verify"`
+	Title              string                 `json:"title"`
+	Description        string                 `json:"description"`
+	Body               string                 `json:"body"`
+	Pattern            models.PatternAnalysis `json:"pattern"`
+	Key                string                 `json:"key"`
+	Base               ghpr.Base              `json:"base"`
+	RequireBaseCurrent bool                   `json:"require_base_current,omitempty"`
 }
 
 // Snapshot returns a deep-copy serializable representation of gf.
@@ -507,7 +512,7 @@ func (gf *GeneratedFix) Snapshot() *GeneratedFixSnapshot {
 		Subject: gf.Preview.Subject, Rationale: gf.Preview.Rationale,
 		Diff: gf.Preview.Diff, Files: files, Verify: gf.Preview.Verify,
 		Title: gf.Title, Description: gf.Description, Body: gf.Body,
-		Pattern: gf.pattern, Key: gf.key, Base: gf.base,
+		Pattern: gf.pattern, Key: gf.key, Base: gf.base, RequireBaseCurrent: gf.requireBaseCurrent,
 	}
 }
 
@@ -524,7 +529,7 @@ func RestoreGeneratedFix(snapshot *GeneratedFixSnapshot) *GeneratedFix {
 		Preview: Preview{Subject: snapshot.Subject, Rationale: snapshot.Rationale,
 			Diff: snapshot.Diff, Files: files, Verify: snapshot.Verify},
 		Title: snapshot.Title, Description: snapshot.Description, Body: snapshot.Body,
-		pattern: snapshot.Pattern, key: snapshot.Key, base: snapshot.Base,
+		pattern: snapshot.Pattern, key: snapshot.Key, base: snapshot.Base, requireBaseCurrent: snapshot.RequireBaseCurrent,
 	}
 }
 
@@ -599,7 +604,7 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 		return t.URL, nil
 	}
 	search := m.pr.SearchOpenPR
-	if strings.HasPrefix(key, "fix-build::") {
+	if strings.HasPrefix(key, "fix-build::") || strings.HasPrefix(key, "fix-analysis::") {
 		search = m.pr.SearchAnyPR
 	}
 	if _, url, found, err := search(ctx, m.opts.SourceOwner, m.opts.SourceName, markerToken(key), markerFor(key)); err != nil {
@@ -607,6 +612,15 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 	} else if found {
 		m.state.Tracked[key] = trackedGeneratedFix(url, gf)
 		return url, nil
+	}
+	if gf.requireBaseCurrent {
+		current, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName)
+		if err != nil {
+			return "", fmt.Errorf("checking current fix base: %w", err)
+		}
+		if current.Branch != gf.base.Branch || !strings.EqualFold(current.HeadSHA, gf.base.HeadSHA) || current.TreeSHA != gf.base.TreeSHA {
+			return "", ErrPreviewBaseChanged
+		}
 	}
 	url, err := m.openPR(ctx, gf.Title, gf.Body, gf.Preview.Files, gf.base)
 	if url == "" {

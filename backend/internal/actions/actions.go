@@ -126,6 +126,7 @@ type previewEntry struct {
 	initiatedAt         string
 	spec                issues.IssueSpec    // issue drafts
 	fix                 *fixpr.GeneratedFix // fix drafts
+	analysisBinding     *AnalysisPreviewBinding
 }
 
 type actionSubjectKind string
@@ -189,21 +190,23 @@ type Service struct {
 	issueManagerFactory issueManagerFactory
 	writeAudit          func(botWriteAuditRecord) error
 
-	rmu                  sync.Mutex
-	requests             *actionRequestState
-	requestTimeout       time.Duration
-	requestNotify        RequestReadyNotifier
-	requestNotifyCancels map[string]context.CancelFunc
-	requestCancels       map[string]context.CancelFunc
-	requestConfirms      map[string]struct{}
-	requestDone          map[string]chan struct{}
-	requestCleanups      map[string]struct{}
-	requestsConfigured   bool
-	stopping             bool
-	requestWG            sync.WaitGroup
-	managedRuntime       func() (runtime.ManagedAgentRuntime, error)
-	requestStateWriter   func(string, any) error
-	sourceVerifier       func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error)
+	rmu                      sync.Mutex
+	requests                 *actionRequestState
+	requestTimeout           time.Duration
+	requestNotify            RequestReadyNotifier
+	requestNotifyCancels     map[string]context.CancelFunc
+	requestCancels           map[string]context.CancelFunc
+	requestConfirms          map[string]struct{}
+	requestDone              map[string]chan struct{}
+	requestCleanups          map[string]struct{}
+	requestsConfigured       bool
+	stopping                 bool
+	requestWG                sync.WaitGroup
+	managedRuntime           func() (runtime.ManagedAgentRuntime, error)
+	requestStateWriter       func(string, any) error
+	sourceVerifier           func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error)
+	sourceReaderFactory      sourceSnapshotReaderFactory
+	analysisPreviewValidator AnalysisPreviewValidator
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding
@@ -745,6 +748,12 @@ func (s *Service) buildFixManager(ctx context.Context, userToken string) (*fixpr
 }
 
 func (s *Service) buildFixManagerFor(ctx context.Context, userToken string, destination project.FixDestination) (*fixpr.Manager, error) {
+	return s.buildFixManagerForRepositoryAccess(ctx, userToken, destination, true)
+}
+
+func (s *Service) buildFixManagerForRepositoryAccess(
+	ctx context.Context, userToken string, destination project.FixDestination, allowRepositoryToken bool,
+) (*fixpr.Manager, error) {
 	eff := s.cfg.EffectiveFixPRs()
 	if destination.Repo.Owner == "" || destination.Repo.Name == "" {
 		return nil, fmt.Errorf("no source repo resolved (set ai.fix_prs.repo or branding.source_repo)")
@@ -809,6 +818,7 @@ func (s *Service) buildFixManagerFor(ctx context.Context, userToken string, dest
 	if model == "" {
 		model = s.ai.Model
 	}
+	gitToken := previewRepositoryToken(ar.Type, userToken, allowRepositoryToken)
 	opts.Agent = &fixpr.AgentConfig{
 		Runtime:             agentRuntime,
 		API:                 s.ai.API,
@@ -824,7 +834,7 @@ func (s *Service) buildFixManagerFor(ctx context.Context, userToken string, dest
 		NetworkDomains:      ar.NetworkDomains,
 		CommandPolicy:       runtime.CommandPolicy{AllowShell: allowBash, Commands: commands},
 		Timeout:             ar.ParsedTimeout(),
-		GitToken:            repositoryToken(ar.Type, userToken),
+		GitToken:            gitToken,
 		ExecutionID:         actionRequestID(ctx),
 	}
 	if opts.Agent.ExecutionID != "" {
@@ -848,6 +858,13 @@ func repositoryToken(runtimeType, token string) string {
 		return ""
 	}
 	return token
+}
+
+func previewRepositoryToken(runtimeType, token string, allow bool) string {
+	if !allow {
+		return ""
+	}
+	return repositoryToken(runtimeType, token)
 }
 
 func actionUsageOutcome(err error) aiusage.Outcome {
@@ -1196,7 +1213,12 @@ func (s *Service) Confirm(ctx context.Context, token, owner, writeToken string) 
 			return "", withReason(previewValidationReasonCode(validateErr), ErrPreviewRejected, "")
 		}
 	}
-	if !reconcile && (entry.failureID != "" || entry.patternHash != "") {
+	if !reconcile && entry.analysisBinding != nil {
+		if err := s.validateAnalysisPreview(ctx, owner, *entry.analysisBinding); err != nil {
+			_ = s.previewStore.discard(owner, token, attemptID)
+			return "", ErrPreviewTargetChanged
+		}
+	} else if !reconcile && (entry.failureID != "" || entry.patternHash != "") {
 		if err := s.validateSubjectSnapshot(entry.failureID, entry.patternHash, entry.kind); err != nil {
 			_ = s.previewStore.discard(owner, token, attemptID)
 			return "", err
@@ -1288,7 +1310,7 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 		}
 		key := entry.fix.Snapshot().Key
 		client := fixpr.NewClients(userToken)
-		if strings.HasPrefix(entry.failureID, "build::") {
+		if strings.HasPrefix(entry.failureID, "build::") || entry.analysisBinding != nil {
 			_, url, found, err := client.SearchAnyPR(ctx, destination.Repo.Owner, destination.Repo.Name, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
 			return url, found, err
 		}
@@ -1310,7 +1332,7 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 }
 
 func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry, userToken string) (string, error) {
-	if entry != nil && entry.failureID != "" {
+	if entry != nil && entry.failureID != "" && entry.analysisBinding == nil {
 		if err := s.validateSubjectSnapshot(entry.failureID, entry.patternHash, entry.kind); err != nil {
 			return "", err
 		}
@@ -1345,7 +1367,7 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 		if !ok {
 			return "", fmt.Errorf("issue was not filed")
 		}
-		if strings.HasPrefix(entry.failureID, "build::") {
+		if strings.HasPrefix(entry.failureID, "build::") || entry.analysisBinding != nil {
 			mgr.Forget(entry.spec.Key)
 		}
 		if err := mgr.SaveState(); err != nil {
@@ -1371,17 +1393,20 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 		}
 		url, err := mgr.OpenFromPreview(ctx, entry.fix)
 		if err != nil {
+			if errors.Is(err, fixpr.ErrPreviewBaseChanged) {
+				return "", ErrPreviewTargetChanged
+			}
 			if errors.Is(err, fixpr.ErrWriteOutcomeUnknown) {
 				return "", fmt.Errorf("%w: opening fix: %s", ErrPreviewOutcomeUnknown, safeReason(err.Error()))
 			}
 			return "", fmt.Errorf("%s", safeReason(err.Error()))
 		}
-		if strings.HasPrefix(entry.failureID, "build::") {
+		if strings.HasPrefix(entry.failureID, "build::") || entry.analysisBinding != nil {
 			mgr.Forget(entry.fix.Snapshot().Key)
 		}
 		if err := mgr.SaveState(); err != nil {
-			if strings.HasPrefix(entry.failureID, "build::") {
-				log.Printf("Warning: build fix state cleanup failed after opening %s: %v", url, err)
+			if strings.HasPrefix(entry.failureID, "build::") || entry.analysisBinding != nil {
+				log.Printf("Warning: single-analysis fix state cleanup failed after opening %s: %v", url, err)
 				return url, nil
 			}
 			return url, fmt.Errorf("saving fix-PR state: %w", err)

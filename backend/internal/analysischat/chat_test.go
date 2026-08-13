@@ -17,6 +17,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
 var testRequestCounter atomic.Int64
@@ -1767,7 +1768,7 @@ func TestVersionOneCreateIdempotencyMigratesOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	persisted := persistResolved(resolved, "")
+	persisted := persistResolved(resolved, sourceinvestigation.Repository{})
 	persisted.Ref.Scope = ""
 	expires := time.Now().UTC().Add(time.Hour)
 	legacy := &persistedState{

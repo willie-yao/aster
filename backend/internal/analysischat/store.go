@@ -48,13 +48,15 @@ type persistedSession struct {
 }
 
 type persistedResolvedAnalysis struct {
-	Ref            AnalysisRef              `json:"ref"`
-	JobID          string                   `json:"job_id"`
-	BuildPrefix    string                   `json:"build_prefix"`
-	Build          models.BuildInfo         `json:"build"`
-	TestCase       models.TestCase          `json:"test_case"`
-	Pattern        *models.PatternAnalysis  `json:"pattern,omitempty"`
-	EvidenceBuilds []persistedArtifactBuild `json:"evidence_builds,omitempty"`
+	Ref            AnalysisRef                    `json:"ref"`
+	AnalysisHash   string                         `json:"analysis_hash,omitempty"`
+	Source         sourceinvestigation.Repository `json:"source,omitempty"`
+	JobID          string                         `json:"job_id"`
+	BuildPrefix    string                         `json:"build_prefix"`
+	Build          models.BuildInfo               `json:"build"`
+	TestCase       models.TestCase                `json:"test_case"`
+	Pattern        *models.PatternAnalysis        `json:"pattern,omitempty"`
+	EvidenceBuilds []persistedArtifactBuild       `json:"evidence_builds,omitempty"`
 }
 
 type persistedArtifactBuild struct {
@@ -395,7 +397,8 @@ func writePrivateJSONLimitWithSync(
 	return nil
 }
 
-func persistResolved(resolved resolvedAnalysis, requiredRepo string) persistedResolvedAnalysis {
+func persistResolved(resolved resolvedAnalysis, sourceRepo sourceinvestigation.Repository) persistedResolvedAnalysis {
+	requiredRepo := sourceRepositoryName(sourceRepo)
 	build := models.BuildInfo{
 		BuildID:     resolved.build.BuildID,
 		JobName:     resolved.build.JobName,
@@ -428,8 +431,16 @@ func persistResolved(resolved resolvedAnalysis, requiredRepo string) persistedRe
 			RelevantFiles: boundedPersistedFiles(analysis.RelevantFiles),
 		}
 	}
+	if sourceRepo.Owner != "" && sourceRepo.Name != "" {
+		if revision, ok := repoRevision(resolved.build.RepoRefs, sourceRepo.Owner, sourceRepo.Name); ok {
+			sourceRepo.Revision = revision
+		} else {
+			sourceRepo.Revision = ""
+		}
+	}
 	return persistedResolvedAnalysis{
-		Ref: resolved.ref, JobID: resolved.jobID, BuildPrefix: resolved.buildPrefix,
+		Ref: resolved.ref, AnalysisHash: models.TestAnalysisContentHash(resolved.testCase), Source: sourceRepo,
+		JobID: resolved.jobID, BuildPrefix: resolved.buildPrefix,
 		Build: build, TestCase: testCase, Pattern: boundedPersistedPattern(resolved.pattern),
 		EvidenceBuilds: persistArtifactBuilds(resolved.evidenceBuilds),
 	}

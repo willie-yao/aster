@@ -55,7 +55,7 @@ remains identical.
 | `POST /api/analysis-chat/sessions/{id}/source-investigations/{requestID}/cancel` | Cancel one active source investigation. |
 | `POST /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Start one authenticated, explicitly requested causal remediation investigation. Requires exact pattern and causal-group hashes plus `Idempotency-Key`. |
 | `GET /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Read the safe current status for one exact causal group. Requires exact hashes as query parameters. |
-| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview` | Generate an existing fix preview from one selected evidence-backed chat response and optional verified source investigation. |
+| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview` | Generate a fix preview from one selected evidence-backed chat response. Exact JUnit sessions use the published immutable source identity; legacy pattern sessions require their existing verified source investigation fields. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/correction/preview` | Preview an evidence-backed proposed correction. |
 | `POST /api/analysis-corrections/confirm` | Explicitly confirm a preview token and publish the correction overlay. |
 | `POST /api/analysis-corrections/{id}/revoke` | Revoke a correction and restore the original analysis. |
@@ -171,6 +171,19 @@ Pattern conversations cannot be promoted as test-analysis corrections or start
 source investigation. Recurrence-classified causal-group patterns also remain
 blocked from chat-to-fix; only legacy action-capable pattern sessions can use the
 existing fix bridge.
+
+An exact failed JUnit session may use one successful assistant response for a Fix
+PR preview when that turn has at least one validated current-turn artifact
+citation. The server binds the project, job, build, canonical test identity,
+analysis generation and content hash, session, request, owner, repository,
+revision, and source-verification hash. It resolves the repository revision only
+from immutable build metadata, verifies the published source paths at that
+revision, and requires that revision to remain the target branch head during
+preview and confirmation. The coding runtime receives the selected analysis,
+chat answer, artifact citations, and verified source paths, but not the rest of
+the conversation or a GitHub credential. A changed analysis, response, citation,
+source path, repository, revision, or target branch invalidates the preview.
+The existing `/api/actions/confirm` request remains a separate explicit step.
 In the dashboard, a systemic recurring-pattern card with a published content
 hash renders the same **Chat with agent** control as a test analysis when at
 least one affected build remains in the current job data window. Pattern
@@ -440,53 +453,75 @@ advertise the feature and continue stripping `ai_traces.json` before publication
 
 ## Chat-to-fix bridge
 
-When analysis chat and write actions are both configured, the server advertises
-`features.chat_fix: true`. A client can request a fix preview for one successful
-assistant response:
+When analysis chat and write actions are both configured for the same source and
+Fix PR repository, the server advertises `features.chat_fix: true`. It advertises
+`features.junit_chat_fix: true` only when the Fix runtime is Agent Sandbox. A
+client can request a fix preview for one successful assistant response:
 
 ```http
 POST /api/analysis-chat/sessions/{sessionID}/requests/{chatRequestID}/fix/preview
 Content-Type: application/json
 
 {
-  "pattern_id": "<recurring-pattern-id>",
-  "source_request_id": "<required-successful-actionable-source-request-id>",
   "instruction": "<optional-maintainer-direction>"
 }
 ```
 
-The client selects only identifiers and the optional maintainer instruction. It
-cannot submit answer text, revisions, citations, or source findings. The server
-reconstructs those fields from the owner-bound private chat state and requires:
+The exact JUnit form accepts only the optional instruction. The server rebuilds
+the answer, proposed revision, and artifact citations from owner-bound private
+chat state. The response must belong to a test-scoped session, have completed
+successfully, include validated current-turn artifact citations, and still match
+the selected published analysis. Passing, skipped, build-level, unavailable,
+stale, ambiguous, or rejected analyses are not eligible.
 
-- a successful assistant response with verified artifact citations,
-- the original published analysis generation and content to remain current,
-- analysis freshness and the recurring pattern to come from one job-detail snapshot,
-- the recurring pattern to belong to the same job and include the selected build,
-- a source request to belong to that response and have a successful, independently
-  verified actionable code or configuration result with a validated remediation target.
+The server resolves the configured source repository and full commit from the
+selected build metadata. The chat session retains a full analysis content hash
+covering failure content, artifact citations, verified source links, critique
+state, and analysis provenance, plus that repository and revision. It verifies
+the published source paths at the pinned revision and requires the selected
+finding to name an explicit backticked source symbol. `actionverify`
+deterministically records whether each symbol is present in the bounded source,
+and the preview stores hashes of both the source snapshot and this grounding
+result. The source and Fix PR repositories must match. Preview
+generation also requires the pinned commit to remain the default-branch head.
+Confirmation rechecks the chat response hash, full analysis hash, source
+identity, source verification hash, symbol-grounding hash, destination
+configuration, and branch head before any GitHub write.
 
-Generation receives the selected assistant answer, optional evidence-backed
-revision, verified artifact citations, the required verified source finding,
-repository, immutable revision, remediation target, and citations, the existing `PatternAnalysis`, and the bounded maintainer
-instruction. It never receives the complete transcript. The response is the
-normal fix `PreviewResult`; post its token to `/api/actions/confirm` to open the
-exact reviewed draft through the existing confirmation workflow. Confirmation state is stored in the shared private volume and remains idempotent
-across replicas and restarts for the preview retention window: retrying the same
-token after a lost success response returns the original URL, while a concurrent
-confirmation returns 409 until the first attempt finishes. The persisted lease
-tracks the configured action timeout and carries a fenced attempt ID, so a stale
-completion cannot overwrite a newer retry.
+Generation receives only the bounded published analysis, selected answer,
+optional proposed revision, artifact citations, verified source paths and
+identity, and optional maintainer instruction. It never receives the complete
+transcript or a GitHub credential in the Agent Sandbox request. Patch
+reconstruction, allowed changed paths, configured validation commands, and diff
+checks use the existing Fix PR pipeline.
 
-The dashboard exposes **Use this finding in a fix proposal** only for completed
-evidence-backed responses whose selected build belongs to an actionable recurring
-pattern. Before generation, the user reviews the selected pattern, assistant
-answer, proposed revision, artifact citations, required actionable source result,
-and maintainer instruction. Actionable source code results must identify both the
-function to modify and a uniquely proven package-level `required_call` at the
-pinned commit. Missing, fabricated, external, method-only, or ambiguous callees
-fail closed before fix generation. The generated draft then uses the existing
-preview and confirmation UI.
+Legacy action-capable recurring patterns keep their existing request fields:
+
+```json
+{
+  "pattern_id": "<recurring-pattern-id>",
+  "pattern_hash": "<recurring-pattern-hash>",
+  "source_request_id": "<successful-actionable-source-request-id>",
+  "instruction": "<optional-maintainer-direction>"
+}
+```
+
+That legacy form still requires `PatternAllowsActions`, shared-build membership,
+a completed verified actionable source result, and its validated remediation
+target. Causal-group patterns remain action-free.
+
+The response is the normal fix `PreviewResult`. Post its token separately to
+`/api/actions/confirm` to open the exact reviewed draft. Preview and confirmation
+state remain owner-bound, CSRF-protected, persisted across replicas and restarts,
+and deduplicated by the existing Fix PR marker. Retrying one exact preview input
+reuses its persisted preview identity instead of creating duplicate preview or PR
+state.
+
+The dashboard exposes **Use this finding in a fix proposal** for an exact failed
+JUnit analysis only after the selected response has current-turn artifact
+evidence, an explicit backticked source symbol, and published verified immutable
+source paths. It shows a safe reason when any requirement is missing. Legacy pattern chat keeps
+its existing pattern and source-result review UI.
 
 ## Admin-gated actions
 

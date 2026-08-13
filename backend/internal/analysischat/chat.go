@@ -461,7 +461,7 @@ func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView,
 	expires := now.Add(s.opts.SessionTTL)
 	created := &persistedSession{
 		Owner:                owner,
-		Resolved:             persistResolved(resolved, sourceRepositoryName(s.sourceRepo)),
+		Resolved:             persistResolved(resolved, s.sourceRepo),
 		ExpiresAt:            expires,
 		CreateRequestID:      requestID,
 		CreateRequestHash:    requestHash,

@@ -28,8 +28,8 @@ export function limitChatFixInstruction(value: string): string {
 export async function previewChatFix(
   sessionID: string,
   chatRequestID: string,
-  patternID: string,
-  patternHash: string,
+  patternID: string | null,
+  patternHash: string | null,
   sourceRequestID: string | null,
   instruction: string,
   signal?: AbortSignal,
@@ -43,8 +43,8 @@ export async function previewChatFix(
       signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        pattern_id: patternID,
-        pattern_hash: patternHash,
+        ...(patternID ? { pattern_id: patternID } : {}),
+        ...(patternHash ? { pattern_hash: patternHash } : {}),
         ...(sourceRequestID ? { source_request_id: sourceRequestID } : {}),
         ...(instruction.trim() ? { instruction: instruction.trim() } : {}),
       }),

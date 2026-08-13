@@ -1,6 +1,8 @@
 package actions
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +25,7 @@ const (
 	maxPreviewStateBytes    = 64 << 20
 	maxPersistedPreviews    = 128
 	previewStatusReady      = "ready"
+	previewStatusGenerating = "generating"
 	previewStatusRunning    = "confirming"
 	previewStatusDone       = "confirmed"
 	previewStatusUnknown    = "unknown"
@@ -47,6 +50,9 @@ type persistedPreview struct {
 	AttemptMode         string                      `json:"attempt_mode,omitempty"`
 	Issue               *issues.IssueSpec           `json:"issue,omitempty"`
 	Fix                 *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
+	AnalysisBinding     *AnalysisPreviewBinding     `json:"analysis_binding,omitempty"`
+	IdempotencyKey      string                      `json:"idempotency_key,omitempty"`
+	GenerationHash      string                      `json:"generation_hash,omitempty"`
 }
 
 type previewState struct {
@@ -98,6 +104,126 @@ func (s *previewStore) stash(owner string, entry *previewEntry) (string, error) 
 	return token, nil
 }
 
+func (s *previewStore) stashIdempotent(owner, requestHash string, entry *previewEntry) (string, error) {
+	owner = normalizeActionOwner(owner)
+	requestHash = strings.TrimSpace(requestHash)
+	if owner == "" || requestHash == "" {
+		return "", fmt.Errorf("preview owner and idempotency identity are required")
+	}
+	token := idempotentPreviewToken(owner, requestHash)
+	key := tokenHash(token)
+	record, err := persistPreview(entry, owner, time.Now().UTC())
+	if err != nil {
+		return "", err
+	}
+	record.IdempotencyKey = requestHash
+	err = s.updateProtected(key, func(state *previewState, now time.Time) (bool, error) {
+		if existing := state.Previews[key]; existing != nil {
+			if existing.Owner != record.Owner || existing.IdempotencyKey != requestHash || !samePreviewAction(existing, record) {
+				return false, ErrPreviewTargetChanged
+			}
+			return false, nil
+		}
+		record.CreatedAt = now.Format(time.RFC3339Nano)
+		state.Previews[key] = record
+		return true, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+func (s *previewStore) reserveIdempotent(owner, requestHash, generationHash string, lease time.Duration) (string, *previewEntry, bool, error) {
+	owner = normalizeActionOwner(owner)
+	requestHash = strings.TrimSpace(requestHash)
+	generationHash = strings.TrimSpace(generationHash)
+	if owner == "" || requestHash == "" || generationHash == "" {
+		return "", nil, false, fmt.Errorf("preview reservation identity is required")
+	}
+	if lease <= 0 {
+		lease = defaultRequestTimeout
+	}
+	token := idempotentPreviewToken(owner, requestHash)
+	key := tokenHash(token)
+	var existing *previewEntry
+	acquired := false
+	err := s.updateProtected(key, func(state *previewState, now time.Time) (bool, error) {
+		record := state.Previews[key]
+		if record == nil {
+			stamp := now.Format(time.RFC3339Nano)
+			state.Previews[key] = &persistedPreview{
+				Owner: tokenHash(owner), InitiatedBy: owner, InitiatedAt: stamp,
+				Kind: gfKind, IdempotencyKey: requestHash, GenerationHash: generationHash,
+				CreatedAt: stamp, Status: previewStatusGenerating, LeaseExpires: now.Add(lease).Format(time.RFC3339Nano),
+			}
+			acquired = true
+			return true, nil
+		}
+		if record.Owner != tokenHash(owner) || record.IdempotencyKey != requestHash || record.GenerationHash != generationHash {
+			return false, ErrPreviewTargetChanged
+		}
+		if record.Status == previewStatusGenerating {
+			expires, err := time.Parse(time.RFC3339Nano, record.LeaseExpires)
+			if err == nil && now.Before(expires) {
+				return false, ErrPreviewPending
+			}
+			record.LeaseExpires = now.Add(lease).Format(time.RFC3339Nano)
+			record.CreatedAt = now.Format(time.RFC3339Nano)
+			acquired = true
+			return true, nil
+		}
+		var err error
+		existing, err = restorePreview(record)
+		return false, err
+	})
+	return token, existing, acquired, err
+}
+
+func (s *previewStore) completeIdempotent(owner, token, requestHash, generationHash string, entry *previewEntry) error {
+	owner = normalizeActionOwner(owner)
+	key := tokenHash(token)
+	return s.updateProtected(key, func(state *previewState, now time.Time) (bool, error) {
+		record := state.Previews[key]
+		if record == nil || record.Owner != tokenHash(owner) || record.Status != previewStatusGenerating ||
+			record.IdempotencyKey != requestHash || record.GenerationHash != generationHash {
+			return false, ErrPreviewSuperseded
+		}
+		completed, err := persistPreview(entry, owner, now)
+		if err != nil {
+			return false, err
+		}
+		completed.IdempotencyKey = requestHash
+		completed.GenerationHash = generationHash
+		state.Previews[key] = completed
+		return true, nil
+	})
+}
+
+func (s *previewStore) cancelIdempotent(owner, token, requestHash, generationHash string) error {
+	owner = normalizeActionOwner(owner)
+	return s.update(func(state *previewState, _ time.Time) (bool, error) {
+		key := tokenHash(token)
+		record := state.Previews[key]
+		if record == nil {
+			return false, nil
+		}
+		if record.Owner != tokenHash(owner) || record.IdempotencyKey != requestHash || record.GenerationHash != generationHash {
+			return false, ErrPreviewSuperseded
+		}
+		if record.Status == previewStatusGenerating {
+			delete(state.Previews, key)
+			return true, nil
+		}
+		return false, nil
+	})
+}
+
+func idempotentPreviewToken(owner, requestHash string) string {
+	sum := sha256.Sum256([]byte("analysis-preview\x00" + owner + "\x00" + requestHash))
+	return hex.EncodeToString(sum[:])
+}
+
 func (s *previewStore) begin(owner, token string, lease time.Duration) (*previewEntry, string, string, bool, error) {
 	owner = normalizeActionOwner(owner)
 	if lease <= 0 {
@@ -114,6 +240,9 @@ func (s *previewStore) begin(owner, token string, lease time.Duration) (*preview
 		record := state.Previews[tokenHash(token)]
 		if record == nil || record.Owner != tokenHash(owner) {
 			return false, ErrPreviewNotFound
+		}
+		if record.Status == previewStatusGenerating {
+			return false, ErrPreviewPending
 		}
 		if record.Status == previewStatusDone && record.ResultURL != "" {
 			resultURL = record.ResultURL
@@ -319,7 +448,7 @@ func persistPreview(entry *previewEntry, owner string, now time.Time) (*persiste
 	}
 	initiatedAt := now.Format(time.RFC3339Nano)
 	record := &persistedPreview{
-		Owner: tokenHash(owner), InitiatedBy: owner, InitiatedAt: initiatedAt, Kind: entry.kind, FailureID: entry.failureID, PatternHash: entry.patternHash, TargetRepo: entry.targetRepo, TargetConfig: entry.targetConfig, VerificationVersion: entry.verificationVersion,
+		Owner: tokenHash(owner), InitiatedBy: owner, InitiatedAt: initiatedAt, Kind: entry.kind, FailureID: entry.failureID, PatternHash: entry.patternHash, TargetRepo: entry.targetRepo, TargetConfig: entry.targetConfig, VerificationVersion: entry.verificationVersion, AnalysisBinding: cloneAnalysisPreviewBinding(entry.analysisBinding),
 		CreatedAt: initiatedAt, Status: previewStatusReady,
 	}
 	switch entry.kind {
@@ -348,7 +477,7 @@ func restorePreview(record *persistedPreview) (*previewEntry, error) {
 	if _, err := time.Parse(time.RFC3339Nano, record.InitiatedAt); err != nil {
 		return nil, fmt.Errorf("persisted preview has invalid initiation time: %w", err)
 	}
-	entry := &previewEntry{failureID: record.FailureID, patternHash: record.PatternHash, kind: record.Kind, targetRepo: record.TargetRepo, targetConfig: record.TargetConfig, verificationVersion: record.VerificationVersion, initiatedBy: initiatedBy, initiatedAt: record.InitiatedAt}
+	entry := &previewEntry{failureID: record.FailureID, patternHash: record.PatternHash, kind: record.Kind, targetRepo: record.TargetRepo, targetConfig: record.TargetConfig, verificationVersion: record.VerificationVersion, initiatedBy: initiatedBy, initiatedAt: record.InitiatedAt, analysisBinding: cloneAnalysisPreviewBinding(record.AnalysisBinding)}
 	switch record.Kind {
 	case "issue":
 		if record.Issue == nil {
@@ -384,6 +513,15 @@ func evictPersistedPreviews(state *previewState, now time.Time) bool {
 	changed := false
 	cutoff := now.Add(-previewTTL)
 	for key, record := range state.Previews {
+		if record.Status == previewStatusGenerating {
+			expires, err := time.Parse(time.RFC3339Nano, record.LeaseExpires)
+			if err == nil && now.Before(expires) {
+				continue
+			}
+			delete(state.Previews, key)
+			changed = true
+			continue
+		}
 		if record.Status == previewStatusRunning {
 			lease, err := time.Parse(time.RFC3339, record.LeaseExpires)
 			if err == nil && now.Before(lease) {

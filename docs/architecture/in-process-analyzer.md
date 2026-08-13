@@ -267,7 +267,10 @@ data-serving path.
   `models.PatternAllowsActions`, even after a remediation investigation reaches
   the public `actionable` state.
 - **Fix PR generation** consumes an eligible action subject and verified source
-  through `backend/internal/fixpr` and `backend/internal/fixruntime`. Its coding
+  through `backend/internal/fixpr` and `backend/internal/fixruntime`. Exact JUnit
+  chat handoff binds one accepted published analysis and one cited owner-bound
+  response to an immutable build revision and deterministic source snapshot.
+  Pattern actions keep their separate `PatternAllowsActions` gate. The coding
   agent, review, validation, and PR state are independent of failure-analysis
   tools and cache acceptance.
 - **Scheduled analysis shadows** use `agentanalysis.Runtime` from

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 )
 
 func TestWritePrivateJSONLimitPreservesReadableState(t *testing.T) {
@@ -321,7 +322,7 @@ func TestPersistResolvedBoundsPatternEvidenceBuilds(t *testing.T) {
 			},
 		}},
 	}
-	persisted := persistResolved(resolved, "")
+	persisted := persistResolved(resolved, sourceinvestigation.Repository{})
 	if persisted.Pattern == nil || len(persisted.Pattern.Subject) > 4<<10 || len(persisted.Pattern.SharedRootCause) > 32<<10 ||
 		len(persisted.Pattern.SuggestedFix) > 16<<10 || len(persisted.Pattern.Summary) > 16<<10 ||
 		len(persisted.Pattern.SharedBuilds) != 50 || len(persisted.Pattern.RelevantFiles) != 50 {

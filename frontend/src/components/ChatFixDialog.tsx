@@ -110,6 +110,7 @@ export function ChatFixDialog({
   message,
   patterns,
   source,
+  exactAnalysis,
   onClose,
 }: {
   open: boolean;
@@ -117,6 +118,7 @@ export function ChatFixDialog({
   message: AnalysisChatMessage | null;
   patterns: PatternAnalysis[];
   source: ChatFixSourceSelection | null;
+  exactAnalysis: boolean;
   onClose: () => void;
 }) {
   const [patternID, setPatternID] = useState("");
@@ -156,7 +158,7 @@ export function ChatFixDialog({
   useEffect(() => () => controllerRef.current?.abort(), []);
 
   async function generatePreview() {
-    if (!message?.request_id || !selectedPattern || busy) return;
+    if (!message?.request_id || busy || (!exactAnalysis && !selectedPattern)) return;
     const requestIdentity = identity;
     controllerRef.current?.abort();
     const controller = new AbortController();
@@ -167,9 +169,9 @@ export function ChatFixDialog({
       const value = await previewChatFix(
         sessionID,
         message.request_id,
-        patternID,
-        selectedPattern.content_hash,
-        sourceResult && source ? source.requestID : null,
+        exactAnalysis ? null : patternID,
+        exactAnalysis ? null : selectedPattern?.content_hash ?? null,
+        exactAnalysis ? null : sourceResult && source ? source.requestID : null,
         instruction,
         controller.signal,
       );
@@ -275,10 +277,12 @@ export function ChatFixDialog({
         {!preview && !url && (
           <Stack spacing={2.5}>
             <Alert severity="info" variant="outlined">
-              Only this response, its verified evidence, the selected recurring pattern, any enabled verified source finding, and your optional instruction are sent. The complete conversation is excluded.
+              {exactAnalysis
+                ? "Only this exact failed JUnit analysis, this response, its validated artifact evidence, server-verified immutable source identity, and your optional instruction are sent. The complete conversation is excluded."
+                : "Only this response, its verified evidence, the selected recurring pattern, any enabled verified source finding, and your optional instruction are sent. The complete conversation is excluded."}
             </Alert>
 
-            <ContextSection title="Recurring pattern" icon={<BuildOutlined sx={{ fontSize: 17, color: "warning.main" }} />}>
+            {!exactAnalysis && <ContextSection title="Recurring pattern" icon={<BuildOutlined sx={{ fontSize: 17, color: "warning.main" }} />}>
               {eligiblePatterns.length > 1 && (
                 <FormControl fullWidth size="small" sx={{ mb: 1.25 }}>
                   <InputLabel id="chat-fix-pattern-label">Pattern</InputLabel>
@@ -336,7 +340,7 @@ export function ChatFixDialog({
                   )}
                 </Box>
               )}
-            </ContextSection>
+            </ContextSection>}
 
             <ContextSection title="Selected chat finding" icon={<FactCheckOutlined sx={{ fontSize: 17, color: "success.main" }} />}>
               <Box sx={{ borderLeft: "3px solid", borderColor: "primary.main", pl: 1.5, py: 0.2 }}>
@@ -361,7 +365,13 @@ export function ChatFixDialog({
               )}
             </ContextSection>
 
-            {sourceResult && source ? (
+            {exactAnalysis ? (
+              <ContextSection title="Immutable source verification" icon={<SourceOutlined sx={{ fontSize: 17, color: "info.main" }} />}>
+                <Alert severity="info" variant="outlined">
+                  The server resolves the exact repository revision from build metadata, verifies the published source paths at that revision, and rejects the preview if the target branch has moved.
+                </Alert>
+              </ContextSection>
+            ) : sourceResult && source ? (
               <ContextSection title="Required verified source investigation" icon={<SourceOutlined sx={{ fontSize: 17, color: "info.main" }} />}>
                 <Box sx={{ borderRadius: "10px", bgcolor: (theme) => soft(theme, "info", 0.06), p: 1.25 }}>
                   <Typography variant="body2" sx={{ lineHeight: 1.6 }}>{sourceResult.finding}</Typography>
@@ -426,7 +436,7 @@ export function ChatFixDialog({
             color="warning"
             startIcon={busy === "preview" ? <CircularProgress size={16} color="inherit" /> : <BuildOutlined />}
             onClick={() => void generatePreview()}
-            disabled={busy !== null || !patternID || !sourceResult || !source}
+            disabled={busy !== null || (!exactAnalysis && (!patternID || !sourceResult || !source))}
           >
             {busy === "preview" ? "Generating" : "Generate fix preview"}
           </Button>

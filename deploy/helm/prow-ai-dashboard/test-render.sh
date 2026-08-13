@@ -1933,6 +1933,19 @@ if grep -Fq 'kind: CustomResourceDefinition' "$tmp/agent-sandbox-render.yaml" ||
   exit 1
 fi
 
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --set ai.endpoint=https://model.example.test/v1/chat/completions \
+  --set ai.model=fixture-model \
+  --set server.chat.enabled=true > "$tmp/agent-sandbox-chat-render.yaml"
+grep -A1 -F 'name: ACTIONS_ENABLED' "$tmp/agent-sandbox-chat-render.yaml" | grep -Fq 'value: "true"'
+grep -A1 -F 'name: ANALYSIS_CHAT_ENABLED' "$tmp/agent-sandbox-chat-render.yaml" | grep -Fq 'value: "true"'
+if grep -Fq 'name: ANALYSIS_SOURCE_INVESTIGATION_ENABLED' "$tmp/agent-sandbox-chat-render.yaml"; then
+  echo 'Agent Sandbox exact-analysis chat flow unexpectedly enabled Orka source investigation' >&2
+  exit 1
+fi
+
 python3 - "$tmp/agent-sandbox.yaml" "$tmp/agent-sandbox-direct-none.yaml" "$tmp/agent-sandbox-gateway.yaml" <<'PYPROVIDERS'
 from pathlib import Path
 import sys
@@ -1994,6 +2007,17 @@ expect_agent_sandbox_fail responses-without-bearer 'responses requires direct be
 expect_agent_sandbox_fail reasoning-effort-mismatch 'reasoningEffort must match project' --set agentSandbox.fixRuntime.modelProvider.reasoningEffort=low
 expect_agent_sandbox_fail project-mode-mismatch 'credentialMode must match project' --set agentSandbox.fixRuntime.modelProvider.credentialMode=gateway --set agentSandbox.fixRuntime.modelProvider.auth.type=none --set-string agentSandbox.fixRuntime.modelProvider.auth.existingSecret= --set-string agentSandbox.fixRuntime.modelProvider.auth.tokenKey= --set agentSandbox.fixRuntime.modelProvider.endpoint=https://fake-gateway.fix-eval.svc.cluster.local/v1/chat/completions
 expect_agent_sandbox_fail orka-combination 'cannot be combined with Orka runtimes' --set orka.fixRuntime.enabled=true
+expect_agent_sandbox_fail source-investigation-combination 'cannot be combined with Orka runtimes or source investigation' \
+  --set ai.enabled=true \
+  --set ai.token=test-token \
+  --set ai.endpoint=https://model.example.test/v1/chat/completions \
+  --set ai.model=fixture-model \
+  --set server.chat.enabled=true \
+  --set server.chat.sourceInvestigation.enabled=true \
+  --set server.chat.sourceInvestigation.admission.agentRef=source-reader \
+  --set server.chat.sourceInvestigation.admission.repository.owner=octocat \
+  --set server.chat.sourceInvestigation.admission.repository.name=Hello-World \
+  --set server.chat.sourceInvestigation.admission.gitSecret=source-readonly
 expect_agent_sandbox_fail command-mismatch 'must end with argv [git diff --cached --check]' --set-string agentSandbox.fixRuntime.allowedCommands[0].argv[0]=go
 expect_agent_sandbox_fail command-timeout 'timeout exceeds the execution timeout' --set-string agentSandbox.fixRuntime.allowedCommands[0].timeout=11m
 expect_agent_sandbox_fail command-timeout-syntax 'timeout must use positive whole seconds or minutes' --set-string agentSandbox.fixRuntime.allowedCommands[0].timeout=1000ms

@@ -18,6 +18,7 @@ runtime.
 | Email notifications | Pages or Kubernetes | Sends failure summaries to configured recipients | [Email notifications](notifications.md) |
 | Automatic GitHub issues | Pages or Kubernetes | Creates and updates GitHub issues during fetches | [GitHub issues](github-issues.md) |
 | Fix PR generation | Custom Pages runner, local sandbox, Orka, or consumer-installed Agent Sandbox | Experimental, highest-risk code-writing automation | [Experimental Fix PR generation](fix-prs.md) |
+| Exact JUnit chat-to-fix | Kubernetes with authenticated analysis chat, actions, and Agent Sandbox Fix runtime | Uses one cited chat finding and immutable build source; still requires separate confirmation | [Exact JUnit analysis handoff](fix-prs.md#exact-junit-analysis-handoff) |
 | Source investigation | Kubernetes plus a separate Orka evaluation deployment | Experimental read-only external Agent workflow | [Source investigation](server.md#source-investigation-api) |
 | Independent causal critic | Kubernetes plus consumer-installed Agent Sandbox and internal model gateway | Private sampled review only; never changes publication or writes | [Agent Sandbox causal critic](agent-sandbox-causal-critic.md) |
 

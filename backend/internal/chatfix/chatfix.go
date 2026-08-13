@@ -3,6 +3,8 @@ package chatfix
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -15,12 +17,14 @@ import (
 
 type chatStore interface {
 	FixCandidate(sessionID, owner, requestID, patternID, patternHash, sourceRequestID string) (analysischat.FixCandidate, error)
+	TestFixCandidate(sessionID, owner, requestID string) (analysischat.FixCandidate, error)
 }
 
 type fixPreviewer interface {
 	PreviewFixWithContext(
 		context.Context, models.PatternAnalysis, string, string, string, actions.FixTarget, fixpr.GenerationContext,
 	) (actions.PreviewResult, error)
+	PreviewAnalysisFix(context.Context, actions.AnalysisFixInput, string, string, string) (actions.PreviewResult, error)
 }
 
 // Service validates owner-bound chat context before fix generation.
@@ -43,8 +47,32 @@ func (s *Service) PreviewChatFix(
 	patternHash = strings.TrimSpace(patternHash)
 	sourceRequestID = strings.TrimSpace(sourceRequestID)
 	instruction = strings.TrimSpace(instruction)
-	if patternID == "" || patternHash == "" || sourceRequestID == "" || len(instruction) > 4096 {
-		return actions.PreviewResult{}, fmt.Errorf("%w: pattern_id, pattern_hash, and source_request_id are required and instruction must not exceed 4096 bytes", analysischat.ErrInvalidRequest)
+	if len(instruction) > 4096 {
+		return actions.PreviewResult{}, fmt.Errorf("%w: instruction must not exceed 4096 bytes", analysischat.ErrInvalidRequest)
+	}
+	if patternID == "" && patternHash == "" && sourceRequestID == "" {
+		candidate, err := s.chat.TestFixCandidate(sessionID, owner, requestID)
+		if err != nil {
+			return actions.PreviewResult{}, err
+		}
+		input := actions.AnalysisFixInput{
+			Identity: actions.AnalysisIdentity{
+				JobID: candidate.Analysis.JobID, BuildID: candidate.Analysis.BuildID, TestName: candidate.Analysis.TestName,
+				Source: candidate.Analysis.Source, SuiteName: candidate.Analysis.SuiteName, ClassName: candidate.Analysis.ClassName,
+				JUnitFile: candidate.Analysis.JUnitFile, AnalysisGeneratedAt: candidate.Analysis.AnalysisGeneratedAt,
+			},
+			ChatSessionID: candidate.SessionID, ChatRequestID: candidate.RequestID, ChatResponseHash: candidate.ResponseHash,
+			PreviewRequestHash: exactPreviewRequestHash(candidate, instruction), AnalysisContentHash: candidate.AnalysisContentHash,
+			SourceRepository: candidate.SourceRepositorySnapshot,
+			AssistantAnswer:  candidate.AssistantAnswer, ArtifactCitations: artifactEvidence(candidate.ArtifactCitations),
+		}
+		if candidate.ProposedRevision != nil {
+			input.ProposedRevision = &fixpr.RevisionContext{RootCause: candidate.ProposedRevision.RootCause, SuggestedFix: candidate.ProposedRevision.SuggestedFix}
+		}
+		return s.fixes.PreviewAnalysisFix(ctx, input, owner, userToken, instruction)
+	}
+	if patternID == "" || patternHash == "" || sourceRequestID == "" {
+		return actions.PreviewResult{}, fmt.Errorf("%w: legacy pattern fix requires pattern_id, pattern_hash, and source_request_id", analysischat.ErrInvalidRequest)
 	}
 	candidate, err := s.chat.FixCandidate(sessionID, owner, requestID, patternID, patternHash, sourceRequestID)
 	if err != nil {
@@ -83,6 +111,32 @@ func (s *Service) PreviewChatFix(
 		actions.FixTarget{JobID: candidate.Analysis.JobID, BuildID: candidate.Analysis.BuildID},
 		generationContext,
 	)
+}
+
+func exactPreviewRequestHash(candidate analysischat.FixCandidate, instruction string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		candidate.SessionID, candidate.RequestID, candidate.ResponseHash, strings.TrimSpace(instruction),
+	}, "\x00")))
+	return hex.EncodeToString(sum[:])
+}
+
+// ValidateAnalysisPreview rechecks the exact owner-bound chat response.
+func (s *Service) ValidateAnalysisPreview(_ context.Context, owner string, binding actions.AnalysisPreviewBinding) error {
+	candidate, err := s.chat.TestFixCandidate(binding.ChatSessionID, owner, binding.ChatRequestID)
+	if err != nil {
+		return err
+	}
+	ref := candidate.Analysis
+	identity := binding.Identity
+	if candidate.ResponseHash != binding.ChatResponseHash || ref.Scope != analysischat.ScopeTest ||
+		candidate.AnalysisContentHash == "" || candidate.AnalysisContentHash != binding.AnalysisContentHash ||
+		candidate.SourceRepositorySnapshot != binding.SourceRepository ||
+		ref.JobID != identity.JobID || ref.BuildID != identity.BuildID || ref.TestName != identity.TestName ||
+		ref.Source != identity.Source || ref.SuiteName != identity.SuiteName || ref.ClassName != identity.ClassName ||
+		ref.JUnitFile != identity.JUnitFile || ref.AnalysisGeneratedAt != identity.AnalysisGeneratedAt {
+		return analysischat.ErrAnalysisChanged
+	}
+	return nil
 }
 
 func artifactEvidence(citations []analysischat.Citation) []fixpr.Evidence {

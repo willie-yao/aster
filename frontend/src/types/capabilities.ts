@@ -20,6 +20,7 @@ export interface CapabilityFeatures {
   causal_remediation_investigation_authenticated?: boolean;
   causal_remediation_fix_preview?: boolean;
   chat_fix?: boolean;
+  junit_chat_fix?: boolean;
   chat_fix_min_confidence?: string;
 }
 

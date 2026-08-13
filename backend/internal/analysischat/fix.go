@@ -1,6 +1,7 @@
 package analysischat
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -20,18 +21,99 @@ type AnalysisSnapshot struct {
 
 // FixCandidate is one selected successful answer and optional source result.
 type FixCandidate struct {
-	SessionID         string
-	RequestID         string
-	Analysis          AnalysisRef
-	Original          AnalysisSnapshot
-	AssistantAnswer   string
-	ProposedRevision  *Revision
-	ArtifactCitations []Citation
-	SourceRequestID   string
-	SourceRepository  sourceinvestigation.Repository
-	SourceRevision    string
-	SourceResult      *sourceinvestigation.Result
-	Pattern           models.PatternAnalysis
+	SessionID                string
+	RequestID                string
+	Analysis                 AnalysisRef
+	Original                 AnalysisSnapshot
+	AssistantAnswer          string
+	ProposedRevision         *Revision
+	ArtifactCitations        []Citation
+	SourceRequestID          string
+	SourceRepository         sourceinvestigation.Repository
+	SourceRevision           string
+	SourceResult             *sourceinvestigation.Result
+	Pattern                  models.PatternAnalysis
+	ResponseHash             string
+	AnalysisContentHash      string
+	SourceRepositorySnapshot sourceinvestigation.Repository
+}
+
+// TestFixCandidate returns one owner-bound answer for the exact JUnit analysis session.
+func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandidate, error) {
+	owner = normalizeOwner(owner)
+	requestID, err := normalizeRequestID(requestID)
+	if err != nil {
+		return FixCandidate{}, err
+	}
+	now := s.opts.Now().UTC()
+	ctx, cancel := s.store.context()
+	defer cancel()
+	var candidate FixCandidate
+	err = s.store.update(ctx, func(state *persistedState) (bool, error) {
+		changed := s.cleanup(state, now)
+		current := state.Sessions[strings.TrimSpace(sessionID)]
+		if current == nil || current.Owner != owner {
+			return changed, ErrSessionNotFound
+		}
+		if current.View.Analysis.Scope != ScopeTest {
+			return changed, fmt.Errorf("%w: exact JUnit fix requires a test-scoped conversation", ErrInvalidRequest)
+		}
+		request, ok := current.Requests[requestID]
+		if !ok || request.Status != requestSucceeded {
+			return changed, ErrRequestNotFound
+		}
+		answer := assistantResponse(current.View.Messages, requestID)
+		if answer == nil || strings.TrimSpace(answer.Content) == "" || len(answer.Citations) == 0 {
+			return changed, fmt.Errorf("%w: request has no evidence-backed assistant answer", ErrInvalidRequest)
+		}
+		analysis := current.Resolved.TestCase.AIAnalysis
+		if analysis == nil {
+			return changed, ErrAnalysisNotFound
+		}
+		candidate = FixCandidate{
+			SessionID: current.View.ID, RequestID: requestID, Analysis: current.View.Analysis,
+			Original: analysisSnapshot(analysis), AssistantAnswer: strings.TrimSpace(answer.Content),
+			ProposedRevision: cloneRevision(answer.ProposedRevision), ArtifactCitations: slices.Clone(answer.Citations),
+			AnalysisContentHash: current.Resolved.AnalysisHash, SourceRepositorySnapshot: current.Resolved.Source,
+		}
+		return changed, nil
+	})
+	if err != nil {
+		return FixCandidate{}, err
+	}
+	resolved, err := s.resolve(candidate.Analysis)
+	if err != nil {
+		return FixCandidate{}, err
+	}
+	analysis := resolved.testCase.AIAnalysis
+	currentRevision, sourceOK := repoRevision(resolved.build.RepoRefs, candidate.SourceRepositorySnapshot.Owner, candidate.SourceRepositorySnapshot.Name)
+	if analysis == nil || candidate.AnalysisContentHash == "" || models.TestAnalysisContentHash(resolved.testCase) != candidate.AnalysisContentHash ||
+		!sameAnalysisSnapshot(candidate.Original, analysisSnapshot(analysis)) || sourceinvestigation.ValidateRepository(candidate.SourceRepositorySnapshot) != nil ||
+		!sourceOK || !strings.EqualFold(currentRevision, candidate.SourceRepositorySnapshot.Revision) {
+		return FixCandidate{}, ErrAnalysisChanged
+	}
+	candidate.ResponseHash, err = fixCandidateResponseHash(candidate)
+	if err != nil {
+		return FixCandidate{}, err
+	}
+	return candidate, nil
+}
+
+func fixCandidateResponseHash(candidate FixCandidate) (string, error) {
+	payload, err := json.Marshal(struct {
+		SessionID, RequestID string
+		Analysis             AnalysisRef
+		Original             AnalysisSnapshot
+		AssistantAnswer      string
+		ProposedRevision     *Revision
+		ArtifactCitations    []Citation
+		AnalysisContentHash  string
+		SourceRepository     sourceinvestigation.Repository
+	}{candidate.SessionID, candidate.RequestID, candidate.Analysis, candidate.Original, candidate.AssistantAnswer, candidate.ProposedRevision, candidate.ArtifactCitations, candidate.AnalysisContentHash, candidate.SourceRepositorySnapshot})
+	if err != nil {
+		return "", fmt.Errorf("encoding selected chat response identity: %w", err)
+	}
+	return hashBytes(payload), nil
 }
 
 // FixCandidate returns one owner-bound evidence-backed assistant response.
