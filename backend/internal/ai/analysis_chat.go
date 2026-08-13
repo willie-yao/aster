@@ -268,19 +268,36 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		}
 		var response *modelResponse
 		if validationRetries > 0 {
-			var calls, attempts int
 			providerStart := time.Now()
-			response, calls, attempts, err = a.callAnalysisChatFinal(loopCtx, messages)
+			finalCtx := WithStructuredCompletionPhase(loopCtx, "analysis_chat_validation_retry")
+			finalReply, stats, structured, finalErr := a.callAnalysisChatFinal(finalCtx, messages, evidence)
 			providerElapsedMs += int(time.Since(providerStart) / time.Millisecond)
-			modelCalls += calls
-			providerAttempts += attempts
-		} else {
-			providerStart := time.Now()
-			response, err = a.client.callModel(loopCtx, messages, schemas, parallelToolCalls)
-			providerElapsedMs += int(time.Since(providerStart) / time.Millisecond)
-			modelCalls++
-			providerAttempts += analysisChatResponseAttempts(response)
+			modelCalls += structured.modelCalls()
+			providerAttempts += structured.providerAttempts()
+			if finalErr == nil {
+				recordAnalysisChatStructuredResponse(loopCtx, "success", "validation_retry", modelCalls, providerAttempts, structured, stats, "")
+				return completeAnalysisChatReply(finalReply, state, start, providerElapsedMs, validationRetries), nil
+			}
+			category := analysisChatStructuredErrorCategory(finalErr, stats)
+			if errors.Is(finalErr, context.Canceled) || errors.Is(finalErr, context.DeadlineExceeded) {
+				recordAnalysisChatStructuredResponse(loopCtx, "error", "validation_retry_request", modelCalls, providerAttempts, structured, stats, category)
+				return analysischat.Reply{}, finalErr
+			}
+			if fallback.usable(evidenceRevision) {
+				recordAnalysisChatStructuredResponse(loopCtx, "fallback", "validation_retry", modelCalls, providerAttempts, structured, stats, category)
+				return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, validationRetries), nil
+			}
+			recordAnalysisChatStructuredResponse(loopCtx, "error", "validation_retry", modelCalls, providerAttempts, structured, stats, category)
+			if analysisChatStructuredProviderFailure(finalErr) {
+				return analysischat.Reply{}, analysischat.ErrProviderRequestFailed
+			}
+			return analysischat.Reply{}, analysisChatSafeValidationCategory(stats.Category)
 		}
+		providerStart := time.Now()
+		response, err = a.client.callModel(loopCtx, messages, schemas, parallelToolCalls)
+		providerElapsedMs += int(time.Since(providerStart) / time.Millisecond)
+		modelCalls++
+		providerAttempts += analysisChatResponseAttempts(response)
 		if err != nil {
 			category := analysisChatRequestErrorCategory(err)
 			recordAnalysisChatResponseFailure(loopCtx, "tool_loop_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, category)
@@ -297,14 +314,6 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			return analysischat.Reply{}, analysischat.ErrResponseValidationFailed
 		}
 		message := response.Message
-		if validationRetries > 0 && len(message.ToolCalls) > 0 {
-			if fallback.usable(evidenceRevision) {
-				recordAnalysisChatResponseFallback(loopCtx, "validation_retry_tools", modelCalls, providerAttempts, response, analysisChatParseStats{}, "response_contract")
-				return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, validationRetries), nil
-			}
-			recordAnalysisChatResponseFailure(loopCtx, "validation_retry_tools", modelCalls, providerAttempts, response, analysisChatParseStats{}, "response_contract")
-			return analysischat.Reply{}, analysischat.ErrResponseValidationFailed
-		}
 		messageContent := ""
 		if message.Content != nil {
 			messageContent = *message.Content
@@ -383,61 +392,66 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		return analysischat.Reply{}, err
 	}
 	providerStart := time.Now()
-	response, calls, attempts, err := a.callAnalysisChatFinal(loopCtx, messages)
+	finalCtx := WithStructuredCompletionPhase(loopCtx, "analysis_chat_finalize")
+	reply, stats, structured, err := a.callAnalysisChatFinal(finalCtx, messages, evidence)
 	providerElapsedMs += int(time.Since(providerStart) / time.Millisecond)
-	modelCalls += calls
-	providerAttempts += attempts
+	modelCalls += structured.modelCalls()
+	providerAttempts += structured.providerAttempts()
 	if err != nil {
-		category := analysisChatRequestErrorCategory(err)
+		category := analysisChatStructuredErrorCategory(err, stats)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			recordAnalysisChatResponseFailure(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, category)
+			recordAnalysisChatStructuredResponse(loopCtx, "error", "finalize_request", modelCalls, providerAttempts, structured, stats, category)
 			return analysischat.Reply{}, err
 		}
 		if fallback.usable(evidenceRevision) {
-			recordAnalysisChatResponseFallback(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, "provider_request")
+			recordAnalysisChatStructuredResponse(loopCtx, "fallback", "finalize", modelCalls, providerAttempts, structured, stats, category)
 			return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, validationRetries), nil
 		}
-		recordAnalysisChatResponseFailure(loopCtx, "finalize_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, category)
-		return analysischat.Reply{}, analysischat.ErrProviderRequestFailed
-	}
-	if response == nil || !response.HasMessage || response.Message.Content == nil {
-		if fallback.usable(evidenceRevision) {
-			recordAnalysisChatResponseFallback(loopCtx, "finalize_response", modelCalls, providerAttempts, response, analysisChatParseStats{}, "empty_response")
-			return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, validationRetries), nil
+		recordAnalysisChatStructuredResponse(loopCtx, "error", "finalize", modelCalls, providerAttempts, structured, stats, category)
+		if analysisChatStructuredProviderFailure(err) {
+			return analysischat.Reply{}, analysischat.ErrProviderRequestFailed
 		}
-		recordAnalysisChatResponseFailure(loopCtx, "finalize_response", modelCalls, providerAttempts, response, analysisChatParseStats{}, "empty_response")
-		return analysischat.Reply{}, analysischat.ErrResponseValidationFailed
+		return analysischat.Reply{}, analysisChatSafeValidationCategory(stats.Category)
 	}
-	lastContent = *response.Message.Content
-	reply, stats, err := parseAnalysisChatReplyCandidates(lastContent, evidence)
-	if err != nil {
-		category := analysisChatValidationCategory(err)
-		if fallback.usable(evidenceRevision) {
-			recordAnalysisChatResponseFallback(loopCtx, "finalize_validation", modelCalls, providerAttempts, response, stats, category)
-			return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, validationRetries), nil
-		}
-		recordAnalysisChatResponseFailure(loopCtx, "finalize_validation", modelCalls, providerAttempts, response, stats, category)
-		return analysischat.Reply{}, analysisChatSafeValidationError(err)
-	}
+	recordAnalysisChatStructuredResponse(loopCtx, "success", "finalize", modelCalls, providerAttempts, structured, stats, "")
 	return completeAnalysisChatReply(reply, state, start, providerElapsedMs, validationRetries), nil
 }
 
-func (a *AnalysisChatAgent) callAnalysisChatFinal(ctx context.Context, messages []modelMessage) (*modelResponse, int, int, error) {
-	request := modelRequest{
-		Model: a.client.model, Messages: messages, ResponseFormat: ptrAnalysisChatFormat(analysisChatStructuredFormat()),
-		MaxResponseBytes: analysisChatMaxResponseBytes, OmitReasoning: true,
-	}
-	response, err := a.client.callModelRequest(ctx, request)
-	calls, attempts := 1, max(1, analysisChatResponseAttempts(response))
-	if err == nil || !structuredFallbackAllowed(err) {
-		return response, calls, attempts, err
-	}
-	request.ResponseFormat = nil
-	fallback, fallbackErr := a.client.callModelRequest(ctx, request)
-	return fallback, calls + 1, attempts + max(1, analysisChatResponseAttempts(fallback)), fallbackErr
+func (a *AnalysisChatAgent) callAnalysisChatFinal(
+	ctx context.Context,
+	messages []modelMessage,
+	evidence map[string]*analysisChatEvidence,
+) (analysischat.Reply, analysisChatParseStats, structuredMessagesResult, error) {
+	var reply analysischat.Reply
+	var stats analysisChatParseStats
+	result, err := a.client.completeStructuredMessagesWithMetadata(
+		ctx, messages, analysisChatStructuredFormat(), analysisChatMaxResponseBytes, true,
+		func(raw string) structuredValidationResult {
+			candidate, candidateStats, candidateErr := parseAnalysisChatReplyCandidates(raw, evidence)
+			if candidateErr == nil || analysisChatValidationRank(candidateStats.Category) >= analysisChatValidationRank(stats.Category) {
+				stats = candidateStats
+			}
+			validation := structuredValidationResult{
+				outcome: StructuredOutcomeAccepted, validatorCalled: true,
+				validationCode: structuredValidationCode(candidateErr), err: candidateErr,
+			}
+			if candidateErr == nil {
+				reply = candidate
+				return validation
+			}
+			switch candidateStats.Category {
+			case analysisChatValidationJSON:
+				validation.outcome = StructuredOutcomeInvalidJSON
+			case analysisChatValidationCandidate:
+				validation.outcome = StructuredOutcomeNoCandidate
+			default:
+				validation.outcome = StructuredOutcomeValidatorRejected
+			}
+			return validation
+		},
+	)
+	return reply, stats, result, err
 }
-
-func ptrAnalysisChatFormat(format ResponseFormat) *ResponseFormat { return &format }
 
 type analysisChatFallback struct {
 	reply            analysischat.Reply
@@ -467,6 +481,35 @@ func analysisChatResponseAttempts(response *modelResponse) int {
 	return 1
 }
 
+func analysisChatStructuredProviderFailure(err error) bool {
+	metadata, ok := StructuredCompletionFailureMetadata(err)
+	if !ok {
+		return false
+	}
+	final, ok := metadata.FinalAttempt()
+	return ok && final.Outcome == StructuredOutcomeProviderError
+}
+
+func analysisChatStructuredErrorCategory(err error, stats analysisChatParseStats) string {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return analysisChatRequestErrorCategory(err)
+	}
+	if analysisChatStructuredProviderFailure(err) {
+		return "provider_request"
+	}
+	if stats.Category != "" {
+		return stats.Category
+	}
+	return analysisChatValidationContract
+}
+
+func analysisChatSafeValidationCategory(category string) error {
+	if category == analysisChatValidationReference || category == analysisChatValidationCitation {
+		return analysischat.ErrCitationValidationFailed
+	}
+	return analysischat.ErrResponseValidationFailed
+}
+
 func analysisChatRequestErrorCategory(err error) string {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
@@ -479,10 +522,7 @@ func analysisChatRequestErrorCategory(err error) string {
 }
 
 func analysisChatSafeValidationError(err error) error {
-	if category := analysisChatValidationCategory(err); category == analysisChatValidationReference || category == analysisChatValidationCitation {
-		return analysischat.ErrCitationValidationFailed
-	}
-	return analysischat.ErrResponseValidationFailed
+	return analysisChatSafeValidationCategory(analysisChatValidationCategory(err))
 }
 
 func recordAnalysisChatResponseFailure(
@@ -515,16 +555,46 @@ func recordAnalysisChatResponseTelemetry(
 	stats analysisChatParseStats,
 	category string,
 ) {
+	recordAnalysisChatResponseTelemetryWithAttempt(
+		ctx, outcome, stage, modelCalls, providerAttempts, response, stats, category, "",
+	)
+}
+
+func recordAnalysisChatStructuredResponse(
+	ctx context.Context,
+	outcome, stage string,
+	modelCalls, providerAttempts int,
+	result structuredMessagesResult,
+	stats analysisChatParseStats,
+	category string,
+) {
+	response := result.Response
+	if response == nil && result.httpStatus() != 0 {
+		response = &modelResponse{HTTPStatus: result.httpStatus()}
+	}
+	recordAnalysisChatResponseTelemetryWithAttempt(
+		ctx, outcome, stage, modelCalls, providerAttempts, response, stats, category, string(result.finalPath()),
+	)
+}
+
+func recordAnalysisChatResponseTelemetryWithAttempt(
+	ctx context.Context,
+	outcome, stage string,
+	modelCalls, providerAttempts int,
+	response *modelResponse,
+	stats analysisChatParseStats,
+	category, structuredAttempt string,
+) {
 	httpStatus := 0
 	if response != nil {
 		httpStatus = response.HTTPStatus
 	}
 	log.Printf(
-		"analysis chat response: outcome=%s stage=%s model_calls=%d provider_attempts=%d http_status=%d candidate_count=%d validation=%s",
-		outcome, stage, modelCalls, providerAttempts, httpStatus, stats.CandidateCount, category,
+		"analysis chat response: outcome=%s stage=%s structured_attempt=%s model_calls=%d provider_attempts=%d http_status=%d candidate_count=%d validation=%s",
+		outcome, stage, structuredAttempt, modelCalls, providerAttempts, httpStatus, stats.CandidateCount, category,
 	)
 	recordTrace(ctx, TraceEvent{
-		Kind: "analysis_chat_response", Outcome: outcome, Status: stage,
+		Kind: "analysis_chat_response", Outcome: outcome, Status: stage, StructuredAttempt: structuredAttempt,
 		Attempts: providerAttempts, HTTPStatus: httpStatus, ModelCallCount: modelCalls,
 		CandidateCount: stats.CandidateCount, ErrorCode: category,
 	})
