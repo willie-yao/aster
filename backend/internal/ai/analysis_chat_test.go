@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -136,12 +137,19 @@ func TestAnalysisChatAgentAllowsExplanationWithoutTools(t *testing.T) {
 	turn := analysisChatTurn()
 	turn.Question = "Explain the current conclusion."
 
-	reply, err := agent.Reply(context.Background(), turn)
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(t.Context(), trace)
+	reply, err := agent.Reply(ctx, turn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply.Assessment != "" || reply.ToolCalls != 0 {
+	trace.Finish("success", nil)
+	if reply.Assessment != "" || reply.ToolCalls != 0 || len(reply.Citations) != 0 {
 		t.Fatalf("reply = %+v", reply)
+	}
+	if statuses := analysisChatEvidenceTraceStatuses(store.Snapshot()); !slices.Contains(statuses, analysisChatEvidenceNotRequired) {
+		t.Fatalf("evidence statuses = %v", statuses)
 	}
 }
 
@@ -1189,4 +1197,439 @@ func TestAnalysisChatPatternContextKeepsGroupsWithoutArtifactSlots(t *testing.T)
 	if len(context.CausalGroups) != 4 || len(context.CausalGroups[3].ArtifactBuilds) != 0 || context.CausalGroups[3].ID != "group-3" {
 		t.Fatalf("context = %+v", context.CausalGroups)
 	}
+}
+
+func TestAnalysisChatArtifactEvidenceQuestionClassifier(t *testing.T) {
+	tests := []struct {
+		question string
+		want     bool
+	}{
+		{question: "What artifact evidence supports this root cause?", want: true},
+		{question: "Inspect the artifacts before answering.", want: true},
+		{question: "Read the build log and explain the first failure.", want: true},
+		{question: "Check the logs for the actual error.", want: true},
+		{question: "What does the JUnit output show?", want: true},
+		{question: "Re-check the artifacts for this claim.", want: true},
+		{question: "Which test output supports the conclusion?", want: true},
+		{question: "What build evidence supports this?", want: true},
+		{question: "What does the published analysis say?", want: false},
+		{question: "How do the published causal groups differ?", want: false},
+		{question: "Which builds are listed in each published causal group?", want: false},
+		{question: "Explain the current conclusion.", want: false},
+		{question: "What evidence supports the published conclusion?", want: false},
+		{question: "Which artifacts are listed in the published analysis?", want: false},
+		{question: "According to the published analysis, which artifact is relevant?", want: false},
+		{question: "According to the published analysis, which artifacts support the root cause?", want: false},
+		{question: "Check the published analysis for which artifacts it lists.", want: false},
+		{question: "What does the current analysis cite from the logs?", want: false},
+		{question: "Which logs are listed in the published analysis?", want: false},
+		{question: "What artifact evidence supports the published analysis?", want: true},
+		{question: "According to the published analysis, re-check the artifacts.", want: true},
+		{question: "Read the published analysis and then inspect the build logs.", want: true},
+		{question: "Check a different hypothesis.", want: false},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.question, func(t *testing.T) {
+			if got := analysisChatQuestionRequiresArtifactEvidence(testCase.question); got != testCase.want {
+				t.Fatalf("classifier = %t, want %t", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestAnalysisChatExplicitArtifactQuestionReadsAndCitesEvidence(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+	server.push(200, chatRespFinal(`{
+		"answer":"The artifact records the controller stopping.",
+		"citations":[{"path":"build-log.txt","quote":"controller stopped"}],
+		"assessment":"supports","proposed_revision":null
+	}`))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte("controller stopped\n"),
+	}}, AnalysisChatOptions{MaxIters: 3, Timeout: time.Second})
+	turn := analysisChatTurn()
+	turn.Question = "What artifact evidence supports this root cause?"
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(t.Context(), trace)
+
+	reply, err := agent.Reply(ctx, turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace.Finish("success", nil)
+	if reply.ToolCalls != 1 || len(reply.Citations) != 1 || reply.Citations[0].Path != "build-log.txt" {
+		t.Fatalf("reply = %+v", reply)
+	}
+	statuses := analysisChatEvidenceTraceStatuses(store.Snapshot())
+	if !slices.Contains(statuses, analysisChatEvidenceRequired) || !slices.Contains(statuses, analysisChatEvidenceSatisfied) {
+		t.Fatalf("evidence statuses = %v", statuses)
+	}
+}
+
+func TestAnalysisChatArtifactPromiseGetsOneToolEnabledRepair(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespFinal(analysisChatPromiseReply()))
+	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 1024}))
+	server.push(200, chatRespFinal(`{
+		"answer":"The artifact contains the terminal controller error.",
+		"citations":[{"path":"build-log.txt","quote":"terminal controller error"}],
+		"assessment":"supports","proposed_revision":null
+	}`))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte("terminal controller error\n"),
+	}}, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
+	turn := analysisChatTurn()
+	turn.Question = "What artifact evidence supports this root cause?"
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(t.Context(), trace)
+
+	reply, err := agent.Reply(ctx, turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace.Finish("success", nil)
+	if reply.ToolCalls != 1 || len(reply.Citations) != 1 {
+		t.Fatalf("reply = %+v", reply)
+	}
+	server.mu.Lock()
+	requests := append([][]byte(nil), server.requests...)
+	server.mu.Unlock()
+	if len(requests) != 3 || !strings.Contains(string(requests[1]), analysisChatEvidenceRepairPrompt) ||
+		!strings.Contains(string(requests[1]), `"tools"`) || strings.Contains(string(requests[1]), `"response_format"`) {
+		t.Fatalf("repair request = %s", requests[1])
+	}
+	snapshot := store.Snapshot()
+	statuses := analysisChatEvidenceTraceStatuses(snapshot)
+	if !slices.Contains(statuses, analysisChatEvidenceRepairStarted) || !slices.Contains(statuses, analysisChatEvidenceRepairSatisfied) {
+		t.Fatalf("evidence statuses = %v", statuses)
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{analysisChatEvidenceRepairPrompt, "terminal controller error", analysisChatPromiseReply()} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("private telemetry retained provider or evidence content %q", forbidden)
+		}
+	}
+}
+
+func TestAnalysisChatSecondArtifactFreeFinalizationFailsSafely(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespFinal(analysisChatPromiseReply()))
+	server.push(200, chatRespFinal(analysisChatPromiseReply()))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
+	turn := analysisChatTurn()
+	turn.Question = "What artifact evidence supports this root cause?"
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(t.Context(), trace)
+
+	_, err := agent.Reply(ctx, turn)
+	if !errors.Is(err, analysischat.ErrCitationValidationFailed) {
+		t.Fatalf("error = %v", err)
+	}
+	trace.Finish("error", err)
+	if got := atomic.LoadInt32(&server.calls); got != 2 {
+		t.Fatalf("provider calls = %d, want 2", got)
+	}
+	statuses := analysisChatEvidenceTraceStatuses(store.Snapshot())
+	if !slices.Contains(statuses, analysisChatEvidenceRepairStarted) || !slices.Contains(statuses, analysisChatEvidenceRepairMissing) {
+		t.Fatalf("evidence statuses = %v", statuses)
+	}
+}
+
+func TestAnalysisChatEmptyOrFailedArtifactDoesNotSatisfyRepair(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		browser artifacts.Browser
+	}{
+		{
+			name: "failed",
+			browser: &trackingBrowser{fakeBrowser: &fakeBrowser{}, tailErrors: map[string]error{
+				"build-log.txt": errors.New("unavailable"),
+			}},
+		},
+		{
+			name: "empty",
+			browser: &trackingBrowser{fakeBrowser: &fakeBrowser{}, emptyTails: map[string]bool{
+				"build-log.txt": true,
+			}},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			shrinkCallDelay(t)
+			server := newScriptedChatServer(t)
+			server.push(200, chatRespFinal(analysisChatPromiseReply()))
+			server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+			agent := newAnalysisChatAgentForTest(t, server.URL, testCase.browser, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
+			turn := analysisChatTurn()
+			turn.Question = "Re-check the artifacts before answering."
+			store := NewTraceStore()
+			trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+			ctx := withAnalysisTrace(t.Context(), trace)
+
+			_, err := agent.Reply(ctx, turn)
+			if !errors.Is(err, analysischat.ErrCitationValidationFailed) {
+				t.Fatalf("error = %v", err)
+			}
+			trace.Finish("error", err)
+			statuses := analysisChatEvidenceTraceStatuses(store.Snapshot())
+			if !slices.Contains(statuses, analysisChatEvidenceNoContent) || !slices.Contains(statuses, analysisChatEvidenceRepairMissing) {
+				t.Fatalf("evidence statuses = %v", statuses)
+			}
+		})
+	}
+}
+
+func TestAnalysisChatArtifactEvidenceWithEmptyCitationsFailsValidation(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+	invalid := `{"answer":"The artifact supports it.","citations":[],"assessment":"inconclusive","proposed_revision":null}`
+	server.push(200, chatRespFinal(invalid))
+	server.push(200, chatRespFinal(invalid))
+	server.push(200, chatRespFinal(invalid))
+	server.push(200, chatRespFinal(invalid))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte("controller stopped\n"),
+	}}, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
+	turn := analysisChatTurn()
+	turn.Question = "What artifact evidence supports this root cause?"
+
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(t.Context(), trace)
+	_, err := agent.Reply(ctx, turn)
+	if !errors.Is(err, analysischat.ErrCitationValidationFailed) {
+		t.Fatalf("error = %v", err)
+	}
+	trace.Finish("error", err)
+	if statuses := analysisChatEvidenceTraceStatuses(store.Snapshot()); !slices.Contains(statuses, analysisChatEvidenceCitationFailed) {
+		t.Fatalf("evidence statuses = %v", statuses)
+	}
+}
+
+func TestAnalysisChatArtifactCitationMustMatchCurrentTurnEvidence(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 1024}))
+	invalid := `{"answer":"The artifact supports it.","citations":[{"path":"build-log.txt","quote":"different evidence"}],"assessment":"supports","proposed_revision":null}`
+	server.push(200, chatRespFinal(invalid))
+	server.push(200, chatRespFinal(invalid))
+	server.push(200, chatRespFinal(invalid))
+	server.push(200, chatRespFinal(invalid))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte("controller stopped\n"),
+	}}, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
+	turn := analysisChatTurn()
+	turn.Question = "Read the artifact evidence for this root cause."
+
+	_, err := agent.Reply(t.Context(), turn)
+	if !errors.Is(err, analysischat.ErrCitationValidationFailed) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestAnalysisChatPublishedPatternMembershipNeedsNoArtifactRead(t *testing.T) {
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespFinal(`{
+		"answer":"Group A contains builds 104 and 103; Group B contains build 102.",
+		"citations":[],"assessment":"explains","proposed_revision":null
+	}`))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
+	turn := analysisChatTurn()
+	turn.Pattern = &models.PatternAnalysis{
+		ID: "pattern", Subject: "failures", Systemic: true,
+		CausalGroups: []models.PatternCausalGroup{
+			{ID: "a", Builds: []string{"104", "103"}, RootCause: "cause a", Confidence: "high"},
+			{ID: "b", Builds: []string{"102"}, RootCause: "cause b", Confidence: "medium"},
+		},
+	}
+	turn.EvidenceBuilds = []analysischat.ArtifactBuild{{Build: models.BuildInfo{BuildID: "104"}}}
+	turn.Question = "Which builds are listed in each published causal group?"
+
+	reply, err := agent.Reply(t.Context(), turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.ToolCalls != 0 || len(reply.Citations) != 0 {
+		t.Fatalf("reply = %+v", reply)
+	}
+}
+
+func TestAnalysisChatRecheckArtifactsRepairsThroughEvidence(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespFinal(analysisChatPromiseReply()))
+	server.push(200, chatRespToolCall("call-1", "grep_artifact", map[string]interface{}{
+		"path": "build-log.txt", "pattern": "controller stopped", "max_matches": 10,
+	}))
+	server.push(200, chatRespFinal(`{
+		"answer":"The build log records the controller stopping.",
+		"citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"controller stopped"}],
+		"assessment":"supports","proposed_revision":null
+	}`))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte("controller stopped\n"),
+	}}, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
+	turn := analysisChatTurn()
+	turn.Question = "Re-check the artifacts and cite what supports the root cause."
+
+	reply, err := agent.Reply(t.Context(), turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.ToolCalls != 1 || len(reply.Citations) != 1 || reply.Citations[0].LineStart != 1 {
+		t.Fatalf("reply = %+v", reply)
+	}
+}
+
+func TestAnalysisChatPatternArtifactCitationKeepsBuildPrefix(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]interface{}{
+		"path": "builds/104/build-log.txt", "offset": 0, "length": 1024,
+	}))
+	server.push(200, chatRespFinal(`{
+		"answer":"Build 104 records the group failure.",
+		"citations":[{"path":"builds/104/build-log.txt","quote":"group failure"}],
+		"assessment":"supports","proposed_revision":null
+	}`))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
+		"builds/104/build-log.txt": []byte("group failure\n"),
+	}}, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
+	turn := analysisChatTurn()
+	turn.Pattern = &models.PatternAnalysis{ID: "pattern", Subject: "failures", Systemic: true}
+	turn.EvidenceBuilds = []analysischat.ArtifactBuild{{Build: models.BuildInfo{BuildID: "104"}}}
+	turn.Question = "What artifact evidence supports this causal group?"
+
+	reply, err := agent.Reply(t.Context(), turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.Citations) != 1 || reply.Citations[0].Path != "builds/104/build-log.txt" {
+		t.Fatalf("reply = %+v", reply)
+	}
+}
+
+func TestAnalysisChatEvidenceRepairPreservesChatAndResponsesHistory(t *testing.T) {
+	for _, apiMode := range []string{APIChatCompletions, APIResponses} {
+		t.Run(apiMode, func(t *testing.T) {
+			providerInitial := []json.RawMessage{json.RawMessage(`{"type":"message","id":"message-1","role":"assistant","content":[{"type":"output_text","text":"promise"}]}`)}
+			providerTool := []json.RawMessage{json.RawMessage(`{"type":"function_call","call_id":"call-1","name":"read_artifact","arguments":"{\"path\":\"build-log.txt\",\"offset\":0,\"length\":1024}"}`)}
+			transport := &scriptedTransport{results: []scriptedTransportResult{
+				{response: &modelResponse{
+					HasMessage: true, Attempts: 1,
+					Message: modelMessage{Role: "assistant", Content: strPtr(analysisChatPromiseReply()), ProviderItems: providerInitial},
+				}},
+				{response: &modelResponse{
+					HasMessage: true, Attempts: 1,
+					Message: modelMessage{Role: "assistant", ProviderItems: providerTool, ToolCalls: []modelToolCall{{
+						ID: "call-1", Type: "function",
+						Function: modelFunction{Name: "read_artifact", Arguments: `{"path":"build-log.txt","offset":0,"length":1024}`},
+					}}},
+				}},
+				{response: &modelResponse{
+					HasMessage: true, Attempts: 1,
+					Message: modelMessage{Role: "assistant", Content: strPtr(`{"answer":"The artifact records the failure.","citations":[{"path":"build-log.txt","quote":"controller stopped"}],"assessment":"supports","proposed_revision":null}`)},
+				}},
+			}}
+			client := &Client{model: "model", apiMode: apiMode, transport: transport}
+			registry, enabled := newTestRegistry(t)
+			agent, err := NewAnalysisChatAgent(
+				client, ComposeAnalysisChatSystemPrompt("project"), registry, enabled,
+				&fixedBrowserFactory{browser: &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("controller stopped\n")}}},
+				AnalysisChatOptions{MaxIters: 2, Timeout: time.Second},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			turn := analysisChatTurn()
+			turn.Question = "What artifact evidence supports this root cause?"
+
+			if _, err := agent.Reply(t.Context(), turn); err != nil {
+				t.Fatal(err)
+			}
+			if len(transport.requests) != 3 {
+				t.Fatalf("requests = %d", len(transport.requests))
+			}
+			if !analysisChatMessagesContainText(transport.requests[1].Messages, analysisChatEvidenceRepairPrompt) ||
+				!analysisChatMessagesContainProviderItem(transport.requests[1].Messages, "message-1") ||
+				!analysisChatMessagesContainProviderItem(transport.requests[2].Messages, "call-1") ||
+				!analysisChatMessagesContainToolResult(transport.requests[2].Messages, "call-1") {
+				t.Fatalf("history was not preserved: %+v", transport.requests)
+			}
+		})
+	}
+}
+
+func TestPrepareAnalysisChatEvidenceRepairMessagesRespectsContextBudget(t *testing.T) {
+	toolContent := strings.Repeat("x", 12<<10)
+	messages := []modelMessage{
+		{Role: "system", Content: strPtr("system")},
+		{Role: "user", Content: strPtr("question")},
+		{Role: "assistant", ToolCalls: []modelToolCall{{ID: "call-1", Type: "function", Function: modelFunction{Name: "list_artifacts", Arguments: `{}`}}}},
+		{Role: "tool", ToolCallID: "call-1", Content: &toolContent},
+	}
+	budget := requestSizeEstimate(messages, 0) + len(analysisChatEvidenceRepairPrompt)/2
+	prepared, err := prepareAnalysisChatEvidenceRepairMessages(messages, nil, 0, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requestSizeEstimate(prepared, 0) > budget || !analysisChatMessagesContainText(prepared, analysisChatEvidenceRepairPrompt) {
+		t.Fatalf("prepared messages exceed budget: %+v", prepared)
+	}
+}
+
+func analysisChatPromiseReply() string {
+	return `{"answer":"Let me pull the key artifacts to show the evidence supporting the root cause.","citations":[],"assessment":null,"proposed_revision":null}`
+}
+
+func analysisChatEvidenceTraceStatuses(snapshot AnalysisTraceFile) []string {
+	if len(snapshot.Traces) == 0 {
+		return nil
+	}
+	var statuses []string
+	for _, event := range snapshot.Traces[0].Events {
+		if event.Kind == "analysis_chat_evidence" {
+			statuses = append(statuses, event.Status)
+		}
+	}
+	return statuses
+}
+
+func analysisChatMessagesContainText(messages []modelMessage, text string) bool {
+	for _, message := range messages {
+		if message.Content != nil && strings.Contains(*message.Content, text) {
+			return true
+		}
+	}
+	return false
+}
+
+func analysisChatMessagesContainProviderItem(messages []modelMessage, marker string) bool {
+	for _, message := range messages {
+		for _, item := range message.ProviderItems {
+			if strings.Contains(string(item), marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func analysisChatMessagesContainToolResult(messages []modelMessage, callID string) bool {
+	for _, message := range messages {
+		if message.Role == "tool" && message.ToolCallID == callID && message.Content != nil {
+			return true
+		}
+	}
+	return false
 }

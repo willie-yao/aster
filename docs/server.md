@@ -202,8 +202,13 @@ request ID so the frontend can reconcile a response lost after the server
 committed it. Every assistant response requires `answer` and `citations`. An
 `assessment` of `supports`, `challenges`, or `inconclusive` is optional, as is a
 complete proposed revision for a challenges response. Normal follow-up answers
-do not need either optional field. A proposed revision does not alter
-`jobs/*.json` or the published analysis.
+do not need either optional field. Citations may be empty when the question is
+answerable from the published context. A question that explicitly asks to
+inspect artifacts, build logs, JUnit output, or test output must complete a
+content-bearing read, tail, or grep and return a validated citation. If the
+first draft does not acquire evidence, the agent receives one bounded
+Tool-enabled repair opportunity before the turn fails safely. A proposed
+revision does not alter `jobs/*.json` or the published analysis.
 While a turn is running, the owner-safe response also includes its request ID,
 question, phase, and update time. A reloaded client reconnects with the same
 request ID, and can still cancel it from another server replica.

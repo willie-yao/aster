@@ -25,6 +25,10 @@ type analysisChatParseStats struct {
 	Category       string
 }
 
+type analysisChatReplyRequirements struct {
+	ArtifactEvidenceRequired bool
+}
+
 type analysisChatValidationError struct {
 	category string
 	err      error
@@ -52,6 +56,14 @@ func parseAnalysisChatReply(raw string, evidence map[string]*analysisChatEvidenc
 }
 
 func parseAnalysisChatReplyCandidates(raw string, evidence map[string]*analysisChatEvidence) (analysischat.Reply, analysisChatParseStats, error) {
+	return parseAnalysisChatReplyCandidatesWithRequirements(raw, evidence, analysisChatReplyRequirements{})
+}
+
+func parseAnalysisChatReplyCandidatesWithRequirements(
+	raw string,
+	evidence map[string]*analysisChatEvidence,
+	requirements analysisChatReplyRequirements,
+) (analysischat.Reply, analysisChatParseStats, error) {
 	stats := analysisChatParseStats{}
 	if strings.TrimSpace(raw) == "" {
 		stats.Category = analysisChatValidationCandidate
@@ -97,6 +109,9 @@ func parseAnalysisChatReplyCandidates(raw string, evidence map[string]*analysisC
 	for _, candidate := range scan.candidates {
 		reply, err := decodeAnalysisChatReplyCandidate(candidate.value, evidence)
 		if err == nil {
+			err = validateAnalysisChatReplyRequirements(reply, evidence, requirements)
+		}
+		if err == nil {
 			candidate.replyLike = true
 			valid = append(valid, validCandidate{reply: reply, span: candidate})
 			continue
@@ -139,6 +154,29 @@ func parseAnalysisChatReplyCandidates(raw string, evidence map[string]*analysisC
 		stats.Category = analysisChatValidationCandidate
 		return analysischat.Reply{}, stats, newAnalysisChatValidationError(stats.Category, errors.New("response contains multiple valid candidates"))
 	}
+}
+
+func validateAnalysisChatReplyRequirements(
+	reply analysischat.Reply,
+	evidence map[string]*analysisChatEvidence,
+	requirements analysisChatReplyRequirements,
+) error {
+	if !requirements.ArtifactEvidenceRequired {
+		return nil
+	}
+	if len(evidence) == 0 || analysisChatEvidenceBytes(evidence) == 0 {
+		return newAnalysisChatValidationError(
+			analysisChatValidationCitation,
+			errors.New("this question requires content-bearing artifact evidence read during the current turn"),
+		)
+	}
+	if len(reply.Citations) == 0 {
+		return newAnalysisChatValidationError(
+			analysisChatValidationCitation,
+			errors.New("this question requires at least one validated artifact citation"),
+		)
+	}
+	return nil
 }
 
 func analysisChatValidationRank(category string) int {

@@ -73,6 +73,19 @@ const (
 
 const analysisChatFinalizePrompt = `Stop calling tools. Return the final analysis-conversation JSON now using only evidence already gathered. Follow the Analysis conversation schema exactly. Output JSON only.`
 
+const analysisChatEvidenceRepairPrompt = `This question explicitly requires artifact evidence. Use the available read-only artifact tools to successfully read, tail, or grep content from at least one relevant artifact, then answer with at least one exact citation to evidence read during this turn.`
+
+const (
+	analysisChatEvidenceNotRequired     = "not_required"
+	analysisChatEvidenceRequired        = "required"
+	analysisChatEvidenceSatisfied       = "satisfied_direct"
+	analysisChatEvidenceRepairStarted   = "repair_started"
+	analysisChatEvidenceRepairSatisfied = "repair_satisfied"
+	analysisChatEvidenceRepairMissing   = "repair_missing"
+	analysisChatEvidenceNoContent       = "artifact_no_content"
+	analysisChatEvidenceCitationFailed  = "citation_failed"
+)
+
 const analysisChatMaxValidationRetries = 1
 
 func analysisChatStructuredFormat() ResponseFormat {
@@ -203,6 +216,40 @@ func hasAnalysisChatContentReader(enabledTools []string) bool {
 	return false
 }
 
+var (
+	analysisChatArtifactSourcePattern         = `(?:artifacts?|build[[:space:]-]+logs?|logs|(?:job|prow|test)[[:space:]-]+log|junit(?:[[:space:]-]+(?:output|results?|xml))?|test[[:space:]-]+output|build[[:space:]-]+evidence)`
+	analysisChatArtifactSourceRE              = regexp.MustCompile(`(?i)\b` + analysisChatArtifactSourcePattern + `\b`)
+	analysisChatArtifactInspectionRE          = regexp.MustCompile(`(?i)\b(?:inspect|read|check|re-check|recheck|review|examine|open|grep|search|look[[:space:]]+(?:at|through))\b`)
+	analysisChatArtifactDirectedInspectionRE  = regexp.MustCompile(`(?i)\b(?:inspect|read|check|re-check|recheck|review|examine|open|grep|search|look[[:space:]]+(?:at|through))\b(?:[[:space:][:punct:]]+[^[:space:]]+){0,3}[[:space:][:punct:]]+\b` + analysisChatArtifactSourcePattern + `\b`)
+	analysisChatArtifactEvidenceIntentRE      = regexp.MustCompile(`(?i)\b(?:evidence|support|supports|show|shows|prove|proves|confirm|confirms|contradict|contradicts|contain|contains|quote|cite)\b`)
+	analysisChatPublishedContextRE            = regexp.MustCompile(`(?i)\b(?:published|current|selected)[[:space:]]+analysis\b`)
+	analysisChatPublishedContextOnlyRequestRE = regexp.MustCompile(`(?i)(?:\baccording[[:space:]]+to[[:space:]]+(?:the[[:space:]]+)?(?:published|current|selected)[[:space:]]+analysis\b|\b(?:check|read|review|examine|summarize|explain)[[:space:]]+(?:the[[:space:]]+)?(?:published|current|selected)[[:space:]]+analysis\b|\bwhat[[:space:]]+does[[:space:]]+(?:the[[:space:]]+)?(?:published|current|selected)[[:space:]]+analysis[[:space:]]+(?:say|show|list|cite|identify|mention)\b)`)
+	analysisChatIntrinsicArtifactOutputRE     = regexp.MustCompile(`(?i)\b(?:build[[:space:]-]+logs?|logs|(?:job|prow|test)[[:space:]-]+log|junit(?:[[:space:]-]+(?:output|results?|xml))?|test[[:space:]-]+output|build[[:space:]-]+evidence)\b`)
+)
+
+func analysisChatQuestionRequiresArtifactEvidence(question string) bool {
+	question = strings.TrimSpace(question)
+	if len(question) > analysisChatMaxQuestionBytes {
+		question = strings.ToValidUTF8(question[:analysisChatMaxQuestionBytes], "")
+	}
+	if !analysisChatArtifactSourceRE.MatchString(question) {
+		return false
+	}
+	if analysisChatArtifactDirectedInspectionRE.MatchString(question) {
+		return true
+	}
+	if analysisChatPublishedContextOnlyRequestRE.MatchString(question) {
+		return false
+	}
+	if analysisChatArtifactInspectionRE.MatchString(question) || analysisChatArtifactEvidenceIntentRE.MatchString(question) {
+		return true
+	}
+	if analysisChatPublishedContextRE.MatchString(question) {
+		return false
+	}
+	return analysisChatIntrinsicArtifactOutputRE.MatchString(question)
+}
+
 // Reply runs one bounded tool-calling turn.
 func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (analysischat.Reply, error) {
 	if turn.TestCase.AIAnalysis == nil {
@@ -259,6 +306,17 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	}
 
 	evidence := map[string]*analysisChatEvidence{}
+	evidenceRequired := analysisChatQuestionRequiresArtifactEvidence(turn.Question)
+	requirements := analysisChatReplyRequirements{ArtifactEvidenceRequired: evidenceRequired}
+	evidenceRepairUsed := false
+	evidenceRepairPending := false
+	evidenceReads := 0
+	evidenceSatisfiedRecorded := false
+	if evidenceRequired {
+		recordAnalysisChatEvidenceStatus(loopCtx, analysisChatEvidenceRequired, "required", "", 0, 0, false)
+	} else {
+		recordAnalysisChatEvidenceStatus(loopCtx, analysisChatEvidenceNotRequired, "not_required", "", 0, 0, false)
+	}
 	var lastContent string
 	var fallback *analysisChatFallback
 	evidenceRevision := 0
@@ -268,6 +326,8 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	validationRetries := 0
 	maxLoopIters := a.opts.MaxIters
 	for iter := 0; iter < maxLoopIters; iter++ {
+		evidenceRepairTurn := evidenceRepairPending
+		evidenceRepairPending = false
 		if iter > 0 && validationRetries == 0 {
 			turn.ReportProgress(analysischat.PhaseEvaluating)
 		}
@@ -279,10 +339,17 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		if validationRetries > 0 {
 			providerStart := time.Now()
 			finalCtx := WithStructuredCompletionPhase(loopCtx, "analysis_chat_validation_retry")
-			finalReply, stats, structured, finalErr := a.callAnalysisChatFinal(finalCtx, messages, evidence)
+			finalReply, stats, structured, finalErr := a.callAnalysisChatFinal(finalCtx, messages, evidence, requirements)
 			providerElapsedMs += int(time.Since(providerStart) / time.Millisecond)
 			modelCalls += structured.modelCalls()
 			providerAttempts += structured.providerAttempts()
+			if evidenceRequired && analysisChatEvidenceFloorSatisfied(evidenceReads, evidence) &&
+				structuredMessagesHasValidationCode(structured, analysisChatValidationCitation) {
+				recordAnalysisChatEvidenceStatus(
+					loopCtx, analysisChatEvidenceCitationFailed, "rejected", "",
+					evidenceReads, analysisChatEvidenceBytes(evidence), evidenceRepairUsed,
+				)
+			}
 			if finalErr == nil {
 				recordAnalysisChatStructuredResponse(loopCtx, "success", "validation_retry", modelCalls, providerAttempts, structured, stats, "")
 				return completeAnalysisChatReply(finalReply, state, start, providerElapsedMs, validationRetries), nil
@@ -319,6 +386,13 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			return analysischat.Reply{}, analysischat.ErrProviderRequestFailed
 		}
 		if response == nil || !response.HasMessage {
+			if evidenceRepairTurn && evidenceRequired && !analysisChatEvidenceFloorSatisfied(evidenceReads, evidence) {
+				recordAnalysisChatEvidenceStatus(
+					loopCtx, analysisChatEvidenceRepairMissing, "missing", "",
+					evidenceReads, analysisChatEvidenceBytes(evidence), true,
+				)
+				return analysischat.Reply{}, analysischat.ErrCitationValidationFailed
+			}
 			recordAnalysisChatResponseFailure(loopCtx, "tool_loop_response", modelCalls, providerAttempts, response, analysisChatParseStats{}, "empty_response")
 			return analysischat.Reply{}, analysischat.ErrResponseValidationFailed
 		}
@@ -327,20 +401,51 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		if message.Content != nil {
 			messageContent = *message.Content
 		}
-		if len(message.ToolCalls) > 0 && strings.TrimSpace(messageContent) != "" {
-			candidate, _, candidateErr := parseAnalysisChatReplyCandidates(messageContent, evidence)
+		if len(message.ToolCalls) > 0 && strings.TrimSpace(messageContent) != "" &&
+			(!evidenceRequired || analysisChatEvidenceFloorSatisfied(evidenceReads, evidence)) {
+			candidate, _, candidateErr := parseAnalysisChatReplyCandidatesWithRequirements(messageContent, evidence, requirements)
 			if candidateErr == nil {
 				fallback = &analysisChatFallback{reply: candidate, evidenceRevision: evidenceRevision}
 			}
 		}
 		if len(message.ToolCalls) == 0 {
+			if evidenceRequired && !analysisChatEvidenceFloorSatisfied(evidenceReads, evidence) {
+				if evidenceRepairTurn || evidenceRepairUsed {
+					recordAnalysisChatEvidenceStatus(
+						loopCtx, analysisChatEvidenceRepairMissing, "missing", "",
+						evidenceReads, analysisChatEvidenceBytes(evidence), true,
+					)
+					return analysischat.Reply{}, analysischat.ErrCitationValidationFailed
+				}
+				messages, err = prepareAnalysisChatEvidenceRepairMessages(messages, &message, schemaBytes, a.opts.ContextByteBudget)
+				if err != nil {
+					return analysischat.Reply{}, err
+				}
+				evidenceRepairUsed = true
+				evidenceRepairPending = true
+				maxLoopIters++
+				turn.ReportProgress(analysischat.PhaseReadingEvidence)
+				recordAnalysisChatEvidenceStatus(
+					loopCtx, analysisChatEvidenceRepairStarted, "retry", "",
+					evidenceReads, analysisChatEvidenceBytes(evidence), true,
+				)
+				continue
+			}
+
 			turn.ReportProgress(analysischat.PhaseFinalizing)
 			lastContent = messageContent
-			reply, stats, validationErr := parseAnalysisChatReplyCandidates(lastContent, evidence)
+			reply, stats, validationErr := parseAnalysisChatReplyCandidatesWithRequirements(lastContent, evidence, requirements)
 			if validationErr == nil {
 				return completeAnalysisChatReply(reply, state, start, providerElapsedMs, validationRetries), nil
 			}
-			recordAnalysisChatResponseFailure(loopCtx, "tool_loop_validation", modelCalls, providerAttempts, response, stats, analysisChatValidationCategory(validationErr))
+			category := analysisChatValidationCategory(validationErr)
+			if evidenceRequired && analysisChatEvidenceFloorSatisfied(evidenceReads, evidence) && category == analysisChatValidationCitation {
+				recordAnalysisChatEvidenceStatus(
+					loopCtx, analysisChatEvidenceCitationFailed, "rejected", "",
+					evidenceReads, analysisChatEvidenceBytes(evidence), evidenceRepairUsed,
+				)
+			}
+			recordAnalysisChatResponseFailure(loopCtx, "tool_loop_validation", modelCalls, providerAttempts, response, stats, category)
 			if validationRetries < analysisChatMaxValidationRetries {
 				validationRetries++
 				maxLoopIters++
@@ -352,7 +457,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 				continue
 			}
 			if fallback.usable(evidenceRevision) {
-				recordAnalysisChatResponseFallback(loopCtx, "validation_retry", modelCalls, providerAttempts, response, stats, analysisChatValidationCategory(validationErr))
+				recordAnalysisChatResponseFallback(loopCtx, "validation_retry", modelCalls, providerAttempts, response, stats, category)
 				return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, validationRetries), nil
 			}
 			return analysischat.Reply{}, analysisChatSafeValidationError(validationErr)
@@ -379,16 +484,74 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		for _, toolCall := range toolCalls {
 			envelope, payload := dispatchAgenticToolWithPayload(loopCtx, state, toolCall)
 			before := analysisChatEvidenceBytes(evidence)
-			if !recordAnalysisChatEvidence(evidence, toolCall, payload) {
+			recorded := recordAnalysisChatEvidence(evidence, toolCall, payload)
+			if !recorded {
 				state.budgetExhausted = true
 				envelope = toolErrJSON("analysis chat evidence budget exhausted; stop reading and finalize")
 			}
-			if analysisChatEvidenceBytes(evidence) > before {
+			after := analysisChatEvidenceBytes(evidence)
+			if after > before {
 				evidenceRevision++
+				if isContentFetchingTool(toolCall.Function.Name) {
+					evidenceReads++
+				}
+			} else if isContentFetchingTool(toolCall.Function.Name) {
+				outcome := "empty"
+				if _, failed := payload["error"]; failed {
+					outcome = "failed"
+				} else if !recorded {
+					outcome = "budget_exhausted"
+				}
+				recordAnalysisChatEvidenceStatus(
+					loopCtx, analysisChatEvidenceNoContent, outcome, toolCall.Function.Name,
+					evidenceReads, after, evidenceRepairUsed,
+				)
 			}
 			state.modelBytes += len(envelope)
 			messages = append(messages, modelMessage{Role: "tool", ToolCallID: toolCall.ID, Content: strPtr(envelope)})
 		}
+
+		if evidenceRequired && analysisChatEvidenceFloorSatisfied(evidenceReads, evidence) && !evidenceSatisfiedRecorded {
+			status := analysisChatEvidenceSatisfied
+			if evidenceRepairTurn {
+				status = analysisChatEvidenceRepairSatisfied
+			}
+			recordAnalysisChatEvidenceStatus(
+				loopCtx, status, "satisfied", "", evidenceReads,
+				analysisChatEvidenceBytes(evidence), evidenceRepairUsed,
+			)
+			evidenceSatisfiedRecorded = true
+		}
+		if evidenceRepairTurn && !analysisChatEvidenceFloorSatisfied(evidenceReads, evidence) {
+			recordAnalysisChatEvidenceStatus(
+				loopCtx, analysisChatEvidenceRepairMissing, "missing", "",
+				evidenceReads, analysisChatEvidenceBytes(evidence), true,
+			)
+			return analysischat.Reply{}, analysischat.ErrCitationValidationFailed
+		}
+		if evidenceRequired && !analysisChatEvidenceFloorSatisfied(evidenceReads, evidence) &&
+			!evidenceRepairUsed && iter+1 >= maxLoopIters {
+			messages, err = prepareAnalysisChatEvidenceRepairMessages(messages, nil, schemaBytes, a.opts.ContextByteBudget)
+			if err != nil {
+				return analysischat.Reply{}, err
+			}
+			evidenceRepairUsed = true
+			evidenceRepairPending = true
+			maxLoopIters++
+			turn.ReportProgress(analysischat.PhaseReadingEvidence)
+			recordAnalysisChatEvidenceStatus(
+				loopCtx, analysisChatEvidenceRepairStarted, "retry", "",
+				evidenceReads, analysisChatEvidenceBytes(evidence), true,
+			)
+		}
+	}
+
+	if evidenceRequired && !analysisChatEvidenceFloorSatisfied(evidenceReads, evidence) {
+		recordAnalysisChatEvidenceStatus(
+			loopCtx, analysisChatEvidenceRepairMissing, "missing", "",
+			evidenceReads, analysisChatEvidenceBytes(evidence), evidenceRepairUsed,
+		)
+		return analysischat.Reply{}, analysischat.ErrCitationValidationFailed
 	}
 
 	turn.ReportProgress(analysischat.PhaseFinalizing)
@@ -402,10 +565,17 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	}
 	providerStart := time.Now()
 	finalCtx := WithStructuredCompletionPhase(loopCtx, "analysis_chat_finalize")
-	reply, stats, structured, err := a.callAnalysisChatFinal(finalCtx, messages, evidence)
+	reply, stats, structured, err := a.callAnalysisChatFinal(finalCtx, messages, evidence, requirements)
 	providerElapsedMs += int(time.Since(providerStart) / time.Millisecond)
 	modelCalls += structured.modelCalls()
 	providerAttempts += structured.providerAttempts()
+	if evidenceRequired && analysisChatEvidenceFloorSatisfied(evidenceReads, evidence) &&
+		structuredMessagesHasValidationCode(structured, analysisChatValidationCitation) {
+		recordAnalysisChatEvidenceStatus(
+			loopCtx, analysisChatEvidenceCitationFailed, "rejected", "",
+			evidenceReads, analysisChatEvidenceBytes(evidence), evidenceRepairUsed,
+		)
+	}
 	if err != nil {
 		category := analysisChatStructuredErrorCategory(err, stats)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -430,13 +600,14 @@ func (a *AnalysisChatAgent) callAnalysisChatFinal(
 	ctx context.Context,
 	messages []modelMessage,
 	evidence map[string]*analysisChatEvidence,
+	requirements analysisChatReplyRequirements,
 ) (analysischat.Reply, analysisChatParseStats, structuredMessagesResult, error) {
 	var reply analysischat.Reply
 	var stats analysisChatParseStats
 	result, err := a.client.completeStructuredMessagesWithMetadata(
 		ctx, messages, analysisChatStructuredFormat(), analysisChatMaxResponseBytes, true,
 		func(raw string) structuredValidationResult {
-			candidate, candidateStats, candidateErr := parseAnalysisChatReplyCandidates(raw, evidence)
+			candidate, candidateStats, candidateErr := parseAnalysisChatReplyCandidatesWithRequirements(raw, evidence, requirements)
 			if candidateErr == nil || analysisChatValidationRank(candidateStats.Category) >= analysisChatValidationRank(stats.Category) {
 				stats = candidateStats
 			}
@@ -488,6 +659,15 @@ func analysisChatResponseAttempts(response *modelResponse) int {
 		return response.Attempts
 	}
 	return 1
+}
+
+func structuredMessagesHasValidationCode(result structuredMessagesResult, code string) bool {
+	for _, attempt := range result.Metadata.Attempts {
+		if attempt.ValidationCode == code {
+			return true
+		}
+	}
+	return false
 }
 
 func analysisChatStructuredProviderFailure(err error) bool {
@@ -609,6 +789,22 @@ func recordAnalysisChatResponseTelemetryWithAttempt(
 	})
 }
 
+func recordAnalysisChatEvidenceStatus(
+	ctx context.Context,
+	status, outcome, tool string,
+	reads, bytes int,
+	repairUsed bool,
+) {
+	retry := 0
+	if repairUsed {
+		retry = 1
+	}
+	recordTrace(ctx, TraceEvent{
+		Kind: "analysis_chat_evidence", Status: status, Outcome: outcome, Tool: tool,
+		NewEvidenceReads: reads, Bytes: bytes, Retry: retry,
+	})
+}
+
 func patternAnalysisChatTools(enabled []string) []string {
 	allowed := map[string]bool{
 		"list_artifacts": true, "read_artifact": true, "tail_artifact": true,
@@ -621,6 +817,23 @@ func patternAnalysisChatTools(enabled []string) []string {
 		}
 	}
 	return out
+}
+
+func prepareAnalysisChatEvidenceRepairMessages(
+	messages []modelMessage,
+	response *modelMessage,
+	schemaBytes, budget int,
+) ([]modelMessage, error) {
+	if response != nil {
+		assistant := modelMessage{Role: "assistant", Content: response.Content, ProviderItems: response.ProviderItems}
+		messages = append(messages, assistant)
+	}
+	messages = append(messages, modelMessage{Role: "user", Content: strPtr(analysisChatEvidenceRepairPrompt)})
+	messages, _ = compactMessages(messages, schemaBytes, budget)
+	if size := requestSizeEstimate(messages, schemaBytes); size > budget {
+		return nil, fmt.Errorf("analysis chat evidence repair request exceeds the %d-byte context budget after compaction", budget)
+	}
+	return messages, nil
 }
 
 func prepareAnalysisChatFinalizeMessages(messages []modelMessage, budget int) ([]modelMessage, error) {
@@ -906,6 +1119,10 @@ type analysisChatEvidence struct {
 
 var analysisChatContextLineRE = regexp.MustCompile(`^[> ]\s*(\d+):\s?(.*)$`)
 
+func analysisChatEvidenceFloorSatisfied(reads int, evidence map[string]*analysisChatEvidence) bool {
+	return reads > 0 && len(evidence) > 0 && analysisChatEvidenceBytes(evidence) > 0
+}
+
 func analysisChatEvidenceBytes(evidence map[string]*analysisChatEvidence) int {
 	total := 0
 	for _, entry := range evidence {
@@ -976,7 +1193,7 @@ func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolC
 }
 
 func appendAnalysisChatEvidenceCandidate(evidence *analysisChatEvidence, text string) {
-	if evidence == nil || text == "" {
+	if evidence == nil || strings.TrimSpace(text) == "" {
 		return
 	}
 	evidence.Segments = append(evidence.Segments, text)
