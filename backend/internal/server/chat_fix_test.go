@@ -41,6 +41,7 @@ func (f *fakeChatFixRunner) PreviewChatFix(
 func TestHandlerChatFixPreview(t *testing.T) {
 	runner := &fakeChatFixRunner{}
 	capabilities := DefaultCapabilities()
+	capabilities.Features.JUnitChatFix = true
 	capabilities.Features.ChatFixMinConfidence = "medium"
 	handler, err := Handler(Options{
 		DataDir: t.TempDir(), Capabilities: capabilities, Auth: fakeAuth{}, AuthMode: "dev",
@@ -57,7 +58,7 @@ func TestHandlerChatFixPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := readBody(t, capabilitiesResponse)
-	if !strings.Contains(body, `"chat_fix":true`) || !strings.Contains(body, `"chat_fix_min_confidence":"medium"`) {
+	if !strings.Contains(body, `"chat_fix":true`) || !strings.Contains(body, `"junit_chat_fix":true`) || !strings.Contains(body, `"chat_fix_min_confidence":"medium"`) {
 		t.Fatalf("capabilities = %s", body)
 	}
 
@@ -85,6 +86,28 @@ func TestHandlerChatFixPreview(t *testing.T) {
 	}
 }
 
+func TestHandlerExactJUnitChatFixPreview(t *testing.T) {
+	runner := &fakeChatFixRunner{}
+	handler, err := Handler(Options{
+		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+		Actions: &fakeRunner{}, AnalysisChat: &fakeAnalysisChatRunner{}, ChatFix: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/analysis-chat/sessions/session/requests/request/fix/preview", strings.NewReader(`{"instruction":"keep the API stable"}`))
+	req.Header.Set("Authorization", "ok")
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if runner.patternID != "" || runner.patternHash != "" || runner.sourceRequestID != "" || runner.instruction != "keep the API stable" {
+		t.Fatalf("runner = %+v", runner)
+	}
+}
+
 func TestHandlerChatFixRejectsInvalidBodies(t *testing.T) {
 	handler, err := Handler(Options{
 		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
@@ -94,7 +117,6 @@ func TestHandlerChatFixRejectsInvalidBodies(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, body := range []string{
-		`{}`,
 		`{"pattern_id":"pattern"}`,
 		`{"pattern_id":"pattern","pattern_hash":"hash","extra":true}`,
 		`{"pattern_id":"pattern","pattern_hash":"hash"}{}`,
@@ -127,6 +149,8 @@ func TestWriteChatFixErrorMapping(t *testing.T) {
 		{analysischat.ErrAnalysisNotFound, http.StatusNotFound},
 		{analysischat.ErrSessionNotFound, http.StatusNotFound},
 		{actions.ErrPatternMismatch, http.StatusConflict},
+		{actions.ErrPreviewTargetChanged, http.StatusConflict},
+		{actions.ErrPreviewPending, http.StatusConflict},
 		{analysischat.ErrAnalysisChanged, http.StatusConflict},
 		{analysischat.ErrPatternChanged, http.StatusConflict},
 		{analysischat.ErrRequestPending, http.StatusConflict},

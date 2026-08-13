@@ -176,6 +176,7 @@ type Features struct {
 	CausalRemediationFixPreview                 bool `json:"causal_remediation_fix_preview,omitempty"`
 	// ChatFix enables server-validated chat context for fix previews.
 	ChatFix              bool   `json:"chat_fix,omitempty"`
+	JUnitChatFix         bool   `json:"junit_chat_fix,omitempty"`
 	ChatFixMinConfidence string `json:"chat_fix_min_confidence,omitempty"`
 }
 

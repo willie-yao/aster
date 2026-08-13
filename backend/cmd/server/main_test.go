@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/server"
 )
 
@@ -351,6 +352,25 @@ func TestConfigureAuthenticatorRejectsLegacyOAuthRepositoryControls(t *testing.T
 			t.Setenv(name, "repo")
 			if err := configureAuthenticator(&server.Options{}, true); err == nil || !strings.Contains(err.Error(), name) {
 				t.Fatalf("legacy repository control error = %v", err)
+			}
+		})
+	}
+}
+
+func TestExactJUnitChatFixEnabledRequiresOptInAgentSandbox(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		cfg  project.FixPRs
+		want bool
+	}{
+		{name: "enabled agent sandbox", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"}}, want: true},
+		{name: "disabled", cfg: project.FixPRs{AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"}}},
+		{name: "local runtime", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "opencode"}}},
+		{name: "missing runtime", cfg: project.FixPRs{Enabled: true}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := exactJUnitChatFixEnabled(testCase.cfg); got != testCase.want {
+				t.Fatalf("enabled = %t, want %t", got, testCase.want)
 			}
 		})
 	}

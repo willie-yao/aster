@@ -52,9 +52,11 @@ func previewChatFixHandler(timeout time.Duration, run ChatFixRunner) http.Handle
 		body.PatternHash = strings.TrimSpace(body.PatternHash)
 		body.SourceRequestID = strings.TrimSpace(body.SourceRequestID)
 		body.Instruction = strings.TrimSpace(body.Instruction)
-		if body.PatternID == "" || len(body.PatternID) > maxChatFixPatternBytes ||
-			body.PatternHash == "" || len(body.PatternHash) > maxChatFixPatternHash ||
-			body.SourceRequestID == "" || len(body.SourceRequestID) > maxChatFixRequestIDBytes || len(body.Instruction) > maxChatFixInputBytes {
+		legacyFields := body.PatternID != "" || body.PatternHash != "" || body.SourceRequestID != ""
+		legacyComplete := body.PatternID != "" && body.PatternHash != "" && body.SourceRequestID != ""
+		if legacyFields && !legacyComplete || len(body.PatternID) > maxChatFixPatternBytes ||
+			len(body.PatternHash) > maxChatFixPatternHash || len(body.SourceRequestID) > maxChatFixRequestIDBytes ||
+			len(body.Instruction) > maxChatFixInputBytes {
 			http.Error(w, "invalid chat fix request", http.StatusBadRequest)
 			return
 		}
@@ -90,6 +92,8 @@ func writeChatFixError(w http.ResponseWriter, sessionID, login string, err error
 		status, message = http.StatusNotFound, "not found"
 	case errors.Is(err, actions.ErrPatternMismatch):
 		status, message = http.StatusConflict, actions.ErrPatternMismatch.Error()
+	case errors.Is(err, actions.ErrPreviewTargetChanged), errors.Is(err, actions.ErrPreviewPending):
+		status, message = http.StatusConflict, "fix preview state changed; generate a new preview"
 	case errors.Is(err, analysischat.ErrAnalysisChanged):
 		status, message = http.StatusConflict, analysischat.ErrAnalysisChanged.Error()
 	case errors.Is(err, analysischat.ErrPatternChanged):

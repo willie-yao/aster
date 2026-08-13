@@ -5,8 +5,10 @@
 > installation. Analysis chat, File Issue, and Mark Resolved are separate server
 > features and do not require Orka or a Fix PR runtime.
 
-The dashboard can draft a **minimal code fix** for a systemic recurring failure
-and open a **draft pull request** against the source repo. It is **off by
+The dashboard can draft a **minimal code fix** for a legacy action-capable
+recurring failure or one exact failed JUnit analysis with a selected
+evidence-backed chat response, then open a **draft pull request** against the
+source repo. It is **off by
 default**, opt-in per project, and heavily guardrailed: draft-only, bounded file
 scope, a CLA-signed commit author, and idempotent dedup.
 
@@ -33,6 +35,41 @@ investigator and publishes only safe status. Technical details remain collapsed.
 Existing File Issue and Fix PR gates continue to reject causal-group results, and
 remediation state is excluded from causal-group and pattern content hashes so an
 investigation cannot rewrite the published analysis identity.
+
+## Exact JUnit analysis handoff
+
+Authenticated server deployments using the Agent Sandbox Fix runtime may offer
+**Use this finding in a fix proposal** on one successful test-scoped chat
+response. This path does not use a
+recurring pattern as action authority. It requires:
+
+- one failed JUnit case with a current accepted published analysis;
+- one owner-bound successful chat turn with validated artifact citations;
+- an exact repository and full commit resolved from build metadata;
+- published verified source links for that same repository and revision;
+- a selected finding that names an explicit backticked source symbol;
+- deterministic verification of that symbol as present or absent in the
+  bounded pinned source, plus a source snapshot hash; and
+- the configured Fix PR destination to match the analyzed repository.
+
+The current Orka-backed chat source-investigation Task cannot run alongside the
+Agent Sandbox Fix runtime. The exact JUnit path therefore reuses the dashboard's
+immutable GitHub source reader and deterministic source verification rather than
+enabling Orka or weakening the Helm constraint. Legacy pattern chat-to-fix keeps
+its existing source-investigation and target requirements.
+
+The chat session persists a full authoritative analysis content hash that covers
+failure content, artifact citations, verified source links, critique state, and
+analysis provenance, together with the exact source repository and revision.
+Any later change requires a new chat session.
+
+Fix generation starts only when the pinned build revision is still the target
+repository's default-branch head. Confirmation rechecks the owner-bound chat
+response, full analysis hash, source snapshot, symbol-grounding result,
+destination configuration, and branch head before any GitHub write. The Agent
+Sandbox request receives no
+GitHub token. Patch reconstruction, changed-path policy, configured validation
+commands, diff checks, and the separate preview confirmation remain unchanged.
 
 ## What it does
 

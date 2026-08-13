@@ -224,15 +224,20 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 			return err
 		}
 	}
-	if actionService != nil && chatService != nil && features.SourceInvestigation {
+	if actionService != nil && chatService != nil {
 		analysisRepo := cfg.EffectiveAnalysisSourceRepo()
 		fixConfig := cfg.EffectiveFixPRs()
-		if fixConfig.Repo != nil && strings.EqualFold(analysisRepo.Owner, fixConfig.Repo.Owner) && strings.EqualFold(analysisRepo.Name, fixConfig.Repo.Name) {
-			opts.ChatFix = chatfix.NewService(chatService, actionService)
+		exactEnabled := exactJUnitChatFixEnabled(fixConfig)
+		legacyEnabled := features.SourceInvestigation
+		if (exactEnabled || legacyEnabled) && fixConfig.Repo != nil && strings.EqualFold(analysisRepo.Owner, fixConfig.Repo.Owner) && strings.EqualFold(analysisRepo.Name, fixConfig.Repo.Name) {
+			bridge := chatfix.NewService(chatService, actionService)
+			opts.ChatFix = bridge
+			actionService.ConfigureAnalysisPreviewValidator(bridge)
+			opts.Capabilities.Features.JUnitChatFix = exactEnabled
 			opts.Capabilities.Features.ChatFixMinConfidence = fixConfig.MinConfidence
-			log.Printf("🛠️ analysis chat fix previews enabled")
+			log.Printf("🛠️ analysis chat fix previews enabled (exact_junit=%t legacy_pattern=%t)", exactEnabled, legacyEnabled)
 		} else {
-			log.Printf("🛠️ analysis chat fix previews disabled: source and fix repositories differ")
+			log.Printf("🛠️ analysis chat fix previews disabled: no compatible runtime or source and fix repositories differ")
 		}
 	}
 	if features.AnalysisCorrections {
@@ -244,6 +249,10 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 		log.Printf("📝 analysis correction promotion enabled")
 	}
 	return nil
+}
+
+func exactJUnitChatFixEnabled(fixConfig project.FixPRs) bool {
+	return fixConfig.Enabled && fixConfig.AgentRuntime != nil && fixConfig.AgentRuntime.Type == "agent-sandbox"
 }
 
 type interactiveFeatures struct {
@@ -433,6 +442,10 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 	service, err := analysischat.NewService(ctx, dataDir, agent, serviceOpts)
 	if err != nil {
 		return nil, err
+	}
+	sourceRepo := cfg.EffectiveAnalysisSourceRepo()
+	if err := service.ConfigureSourceRepository(sourceinvestigation.Repository{Owner: sourceRepo.Owner, Name: sourceRepo.Name}); err != nil {
+		return nil, fmt.Errorf("configuring analysis chat source repository: %w", err)
 	}
 	opts.AnalysisChat = service
 	opts.AnalysisChatTimeout = timeout

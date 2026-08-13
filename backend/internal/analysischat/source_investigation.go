@@ -37,6 +37,18 @@ func (o SourceInvestigationOptions) normalized() SourceInvestigationOptions {
 	return o
 }
 
+// ConfigureSourceRepository binds chat sessions to one immutable build source.
+func (s *Service) ConfigureSourceRepository(repo sourceinvestigation.Repository) error {
+	repo.Owner = strings.TrimSpace(repo.Owner)
+	repo.Name = strings.TrimSpace(repo.Name)
+	repo.Revision = ""
+	if repo.Owner == "" || repo.Name == "" {
+		return fmt.Errorf("analysis chat source repository owner and name are required")
+	}
+	s.sourceRepo = repo
+	return nil
+}
+
 // ConfigureSourceInvestigation enables the optional read-only source runtime.
 func (s *Service) ConfigureSourceInvestigation(
 	runner sourceinvestigation.Runner,
@@ -46,13 +58,10 @@ func (s *Service) ConfigureSourceInvestigation(
 	if runner == nil {
 		return fmt.Errorf("source investigation runner is required")
 	}
-	repo.Owner = strings.TrimSpace(repo.Owner)
-	repo.Name = strings.TrimSpace(repo.Name)
-	if repo.Owner == "" || repo.Name == "" {
-		return fmt.Errorf("source investigation repository owner and name are required")
+	if err := s.ConfigureSourceRepository(repo); err != nil {
+		return err
 	}
 	s.investigator = runner
-	s.sourceRepo = repo
 	s.sourceOpts = opts.normalized()
 	return nil
 }
@@ -487,7 +496,7 @@ func (s *Service) sourceInvestigationSubject(
 			if !sameResolvedContext(resolved, refreshed) {
 				return changed, ErrAnalysisChanged
 			}
-			refreshedPersisted := persistResolved(refreshed, sourceRepositoryName(s.sourceRepo))
+			refreshedPersisted := persistResolved(refreshed, s.sourceRepo)
 			current.Resolved.Build.RepoRefs = refreshedPersisted.Build.RepoRefs
 			resolved = restoreResolved(current.Resolved)
 			revision, ok = repoRevision(resolved.build.RepoRefs, s.sourceRepo.Owner, s.sourceRepo.Name)
@@ -504,7 +513,7 @@ func (s *Service) sourceInvestigationSubject(
 		if question == "" || answer == "" {
 			return changed, ErrRequestNotFound
 		}
-		bounded := persistResolved(resolved, sourceRepositoryName(s.sourceRepo))
+		bounded := persistResolved(resolved, s.sourceRepo)
 		subject = sourceinvestigation.Subject{
 			SessionID: current.View.ID, ChatRequestID: chatRequestID, Repository: repo,
 			JobID: resolved.jobID, BuildPrefix: resolved.buildPrefix,

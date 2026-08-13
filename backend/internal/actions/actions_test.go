@@ -2046,6 +2046,11 @@ func TestRepositoryTokenExcludedFromAgentSandboxRuntime(t *testing.T) {
 	if got := repositoryToken("orka", "read-token"); got != "read-token" {
 		t.Fatalf("Orka token changed = %q", got)
 	}
+	for _, runtimeType := range []string{"opencode", "orka", "agent-sandbox"} {
+		if got := previewRepositoryToken(runtimeType, "github-write-token", false); got != "" {
+			t.Fatalf("exact analysis %s token = %q, want empty", runtimeType, got)
+		}
+	}
 }
 
 func TestFixDestinationForPatternAllowsPinnedTestInfraTarget(t *testing.T) {

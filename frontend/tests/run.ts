@@ -1,6 +1,7 @@
 import "./flakinessPage.test.js";
 import "./analysisTraces.test.js";
 import "./analysisChat.test.js";
+import "./chatFix.test.js";
 import "./aiUsage.test.js";
 import "./patternChat.test.js";
 import "./patternRemediation.test.js";
