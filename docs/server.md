@@ -157,13 +157,20 @@ For a recurring pattern, post its stable ID and complete content hash instead:
 }
 ```
 
-Pattern sessions snapshot the published root cause, suggested fix, confidence,
-relevant files, and affected builds. The read-only artifact tools expose at
-most the three most recent affected builds under
-`builds/<build-id>/<artifact-path>`. A changed hash returns `409 Conflict`.
+Pattern sessions snapshot the published summary and legacy compatibility fields,
+plus bounded recurrence classification, causal groups, unclassified builds,
+lifecycle state and reason, and safe public remediation-investigation state.
+Private remediation evidence, prompts, source excerpts, provider data, usage,
+and target hypotheses are not copied into chat context. The read-only artifact
+tools expose at most three affected builds under
+`builds/<build-id>/<artifact-path>`. Selection first gives each repeated causal
+group one current build when capacity permits, then fills remaining slots with
+the newest shared builds. Every causal group remains in the textual context even
+when it has no artifact slot. A changed hash returns `409 Conflict`.
 Pattern conversations cannot be promoted as test-analysis corrections or start
-source investigation, but an evidence-backed response can still use the existing
-chat-to-fix flow.
+source investigation. Recurrence-classified causal-group patterns also remain
+blocked from chat-to-fix; only legacy action-capable pattern sessions can use the
+existing fix bridge.
 In the dashboard, a systemic recurring-pattern card with a published content
 hash renders the same **Chat with agent** control as a test analysis when at
 least one affected build remains in the current job data window. Pattern

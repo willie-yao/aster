@@ -76,18 +76,22 @@ const (
 	ScopeTest    = "test"
 	ScopePattern = "pattern"
 
-	maxJobDetailBytes        = 64 << 20
-	maxJobIDBytes            = 1024
-	maxBuildIDBytes          = 256
-	maxTestNameBytes         = 4096
-	maxSuiteNameBytes        = 4096
-	maxClassNameBytes        = 4096
-	maxJUnitFileBytes        = 1024
-	maxTimestampBytes        = 128
-	maxRequestIDBytes        = 128
-	maxPatternIDBytes        = 512
-	maxPatternHashBytes      = 128
-	maxPatternEvidenceBuilds = 3
+	maxJobDetailBytes                  = 64 << 20
+	maxJobIDBytes                      = 1024
+	maxBuildIDBytes                    = 256
+	maxTestNameBytes                   = 4096
+	maxSuiteNameBytes                  = 4096
+	maxClassNameBytes                  = 4096
+	maxJUnitFileBytes                  = 1024
+	maxTimestampBytes                  = 128
+	maxRequestIDBytes                  = 128
+	maxPatternIDBytes                  = 512
+	maxPatternHashBytes                = 128
+	maxPatternEvidenceBuilds           = 3
+	maxPatternChatCausalGroups         = 10
+	maxPatternChatBuildsPerGroup       = 10
+	maxPatternChatUnclassifiedBuilds   = 10
+	maxPatternChatRemediationSummaries = 10
 )
 
 // AnalysisRef addresses one published test or recurring-pattern analysis.
@@ -867,47 +871,20 @@ func resolvePatternAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedA
 	if models.PatternHash(*selected) != ref.PatternHash {
 		return resolvedAnalysis{}, ErrPatternChanged
 	}
-	shared := make(map[string]struct{}, len(selected.SharedBuilds))
-	for _, buildID := range selected.SharedBuilds {
-		shared[strings.TrimSpace(buildID)] = struct{}{}
+	if err := validatePatternChatBounds(*selected); err != nil {
+		return resolvedAnalysis{}, err
 	}
-	matchingRuns := make([]models.BuildResult, 0, len(selected.SharedBuilds))
-	for _, run := range detail.Runs {
-		if _, ok := shared[run.BuildID]; !ok {
-			continue
-		}
-		matchingRuns = append(matchingRuns, run)
-	}
-	if detail.PatternRefresh != nil && detail.PatternRefresh.State != models.PatternRefreshCurrent && len(matchingRuns) != len(shared) {
+	selectedRuns, availableCount, eligibleCount := selectPatternEvidenceRuns(*selected, detail.Runs)
+	if detail.PatternRefresh != nil && detail.PatternRefresh.State != models.PatternRefreshCurrent && availableCount != eligibleCount {
 		return resolvedAnalysis{}, ErrAnalysisNotFound
 	}
-	slices.SortStableFunc(matchingRuns, func(left, right models.BuildResult) int {
-		if !left.Started.Equal(right.Started) {
-			if left.Started.After(right.Started) {
-				return -1
-			}
-			return 1
-		}
-		leftID, leftErr := strconv.ParseUint(left.BuildID, 10, 64)
-		rightID, rightErr := strconv.ParseUint(right.BuildID, 10, 64)
-		if leftErr == nil && rightErr == nil && leftID != rightID {
-			if leftID > rightID {
-				return -1
-			}
-			return 1
-		}
-		return strings.Compare(right.BuildID, left.BuildID)
-	})
-	builds := make([]ArtifactBuild, 0, maxPatternEvidenceBuilds)
-	for _, run := range matchingRuns {
+	builds := make([]ArtifactBuild, 0, len(selectedRuns))
+	for _, run := range selectedRuns {
 		build, err := artifactBuildFor(detail, run)
 		if err != nil {
 			return resolvedAnalysis{}, err
 		}
 		builds = append(builds, build)
-		if len(builds) == maxPatternEvidenceBuilds {
-			break
-		}
 	}
 	if len(builds) == 0 {
 		return resolvedAnalysis{}, ErrAnalysisNotFound
@@ -939,6 +916,127 @@ func resolvePatternAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedA
 	}, nil
 }
 
+func validatePatternChatBounds(pattern models.PatternAnalysis) error {
+	if len(pattern.CausalGroups) > maxPatternChatCausalGroups {
+		return fmt.Errorf("%w: pattern has %d causal groups, maximum %d", ErrInvalidRequest, len(pattern.CausalGroups), maxPatternChatCausalGroups)
+	}
+	for _, group := range pattern.CausalGroups {
+		if len(group.Builds) > maxPatternChatBuildsPerGroup {
+			return fmt.Errorf("%w: causal group %q has %d builds, maximum %d", ErrInvalidRequest, group.ID, len(group.Builds), maxPatternChatBuildsPerGroup)
+		}
+	}
+	if len(pattern.UnclassifiedBuilds) > maxPatternChatUnclassifiedBuilds {
+		return fmt.Errorf("%w: pattern has %d unclassified builds, maximum %d", ErrInvalidRequest, len(pattern.UnclassifiedBuilds), maxPatternChatUnclassifiedBuilds)
+	}
+	if len(pattern.RemediationInvestigations) > maxPatternChatRemediationSummaries {
+		return fmt.Errorf("%w: pattern has %d remediation summaries, maximum %d", ErrInvalidRequest, len(pattern.RemediationInvestigations), maxPatternChatRemediationSummaries)
+	}
+	return nil
+}
+
+func selectPatternEvidenceRuns(pattern models.PatternAnalysis, runs []models.BuildResult) ([]models.BuildResult, int, int) {
+	repeatedGroups := make([]models.PatternCausalGroup, 0, len(pattern.CausalGroups))
+	eligible := map[string]struct{}{}
+	for _, group := range pattern.CausalGroups {
+		if len(group.Builds) < 2 {
+			continue
+		}
+		repeatedGroups = append(repeatedGroups, group)
+		for _, buildID := range group.Builds {
+			if buildID = strings.TrimSpace(buildID); buildID != "" {
+				eligible[buildID] = struct{}{}
+			}
+		}
+	}
+	if len(repeatedGroups) == 0 {
+		for _, buildID := range pattern.SharedBuilds {
+			if buildID = strings.TrimSpace(buildID); buildID != "" {
+				eligible[buildID] = struct{}{}
+			}
+		}
+	}
+
+	matchingRuns := make([]models.BuildResult, 0, len(eligible))
+	seenRuns := map[string]struct{}{}
+	for _, run := range runs {
+		if _, ok := eligible[run.BuildID]; !ok {
+			continue
+		}
+		if _, duplicate := seenRuns[run.BuildID]; duplicate {
+			continue
+		}
+		seenRuns[run.BuildID] = struct{}{}
+		matchingRuns = append(matchingRuns, run)
+	}
+	sortPatternEvidenceRuns(matchingRuns)
+
+	fillEligible := eligible
+	if len(repeatedGroups) > 0 && len(pattern.SharedBuilds) > 0 {
+		fillEligible = make(map[string]struct{}, len(pattern.SharedBuilds))
+		for _, buildID := range pattern.SharedBuilds {
+			buildID = strings.TrimSpace(buildID)
+			if _, ok := eligible[buildID]; ok {
+				fillEligible[buildID] = struct{}{}
+			}
+		}
+	}
+	selected := make([]models.BuildResult, 0, maxPatternEvidenceBuilds)
+	selectedIDs := map[string]struct{}{}
+	for _, group := range repeatedGroups {
+		groupBuilds := make(map[string]struct{}, len(group.Builds))
+		for _, buildID := range group.Builds {
+			groupBuilds[strings.TrimSpace(buildID)] = struct{}{}
+		}
+		for _, run := range matchingRuns {
+			if _, ok := groupBuilds[run.BuildID]; !ok {
+				continue
+			}
+			if _, exists := selectedIDs[run.BuildID]; exists {
+				continue
+			}
+			selected = append(selected, run)
+			selectedIDs[run.BuildID] = struct{}{}
+			break
+		}
+		if len(selected) == maxPatternEvidenceBuilds {
+			return selected, len(matchingRuns), len(eligible)
+		}
+	}
+	for _, run := range matchingRuns {
+		if _, exists := selectedIDs[run.BuildID]; exists {
+			continue
+		}
+		if _, ok := fillEligible[run.BuildID]; !ok {
+			continue
+		}
+		selected = append(selected, run)
+		if len(selected) == maxPatternEvidenceBuilds {
+			break
+		}
+	}
+	return selected, len(matchingRuns), len(eligible)
+}
+
+func sortPatternEvidenceRuns(runs []models.BuildResult) {
+	slices.SortStableFunc(runs, func(left, right models.BuildResult) int {
+		if !left.Started.Equal(right.Started) {
+			if left.Started.After(right.Started) {
+				return -1
+			}
+			return 1
+		}
+		leftID, leftErr := strconv.ParseUint(left.BuildID, 10, 64)
+		rightID, rightErr := strconv.ParseUint(right.BuildID, 10, 64)
+		if leftErr == nil && rightErr == nil && leftID != rightID {
+			if leftID > rightID {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(right.BuildID, left.BuildID)
+	})
+}
+
 func artifactBuildFor(detail models.JobDetail, run models.BuildResult) (ArtifactBuild, error) {
 	jobLocation := prowbuild.JobLocation{JobType: detail.JobType, Repo: detail.Repo}
 	if detail.JobType != models.JobTypePeriodic && detail.JobType != models.JobTypePresubmit {
@@ -964,9 +1062,22 @@ func cloneArtifactBuilds(builds []ArtifactBuild) []ArtifactBuild {
 func clonePatternAnalyses(patterns []models.PatternAnalysis) []models.PatternAnalysis {
 	out := slices.Clone(patterns)
 	for i := range out {
-		out[i].SharedBuilds = slices.Clone(out[i].SharedBuilds)
-		out[i].RemediationTargets = slices.Clone(out[i].RemediationTargets)
-		out[i].RelevantFiles = slices.Clone(out[i].RelevantFiles)
+		out[i].SharedBuilds = slices.Clone(patterns[i].SharedBuilds)
+		out[i].CausalGroups = slices.Clone(patterns[i].CausalGroups)
+		for groupIndex := range out[i].CausalGroups {
+			out[i].CausalGroups[groupIndex].Builds = slices.Clone(patterns[i].CausalGroups[groupIndex].Builds)
+		}
+		out[i].UnclassifiedBuilds = slices.Clone(patterns[i].UnclassifiedBuilds)
+		out[i].RemediationTargets = slices.Clone(patterns[i].RemediationTargets)
+		out[i].RemediationInvestigations = slices.Clone(patterns[i].RemediationInvestigations)
+		out[i].RelevantFiles = slices.Clone(patterns[i].RelevantFiles)
+		out[i].FileLinks = maps.Clone(patterns[i].FileLinks)
+		if patterns[i].Lifecycle != nil {
+			lifecycle := *patterns[i].Lifecycle
+			lifecycle.PassingBuilds = slices.Clone(patterns[i].Lifecycle.PassingBuilds)
+			lifecycle.RecoveryBuilds = slices.Clone(patterns[i].Lifecycle.RecoveryBuilds)
+			out[i].Lifecycle = &lifecycle
+		}
 	}
 	return out
 }

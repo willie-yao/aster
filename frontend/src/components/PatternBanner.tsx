@@ -25,7 +25,7 @@ import { useRemediations, useResolved } from "../hooks/useData";
 import { soft } from "../theme";
 import { AnalysisChat } from "./AnalysisChat";
 import { useCapabilities } from "../hooks/useCapabilities";
-import { patternChatAvailability } from "../lib/patternChat";
+import { patternChatAvailability, patternChatHasEvidenceBuild } from "../lib/patternChat";
 import { patternActionEligibilityHint, patternLifecycleActive } from "../lib/actionEligibility";
 import { jobRunPath } from "../lib/routes";
 import { AnalysisBriefing } from "./AnalysisBriefing";
@@ -103,9 +103,10 @@ export function PatternBanner({
     const latestObservedAt = latest.completed_at ?? latest.started_at ?? "";
     return observedAt > latestObservedAt ? observation : latest;
   }, undefined as RemediationObservation | undefined);
-  const hasEvidenceBuild = Boolean(
-    pattern.shared_builds?.length &&
-      pattern.shared_builds.every((buildID) => runs.some((run) => run.build_id === buildID)),
+  const hasEvidenceBuild = patternChatHasEvidenceBuild(
+    pattern,
+    runs.map((run) => run.build_id),
+    Boolean(refreshStatus && refreshStatus.state !== "current"),
   );
   const chatAvailability = patternChatAvailability(
     pattern,

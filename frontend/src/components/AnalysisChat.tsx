@@ -88,10 +88,10 @@ const suggestedQuestions = [
 ] as const;
 
 const patternSuggestedQuestions = [
-  "Which affected builds provide the strongest evidence?",
-  "What would disprove this shared root cause?",
-  "Do the failures differ across builds?",
-  "Check a different cross-build hypothesis",
+  "How do the failures differ across the identified causes?",
+  "Which builds support each cause?",
+  "Are any builds unclassified or outliers?",
+  "What evidence would change the grouping?",
 ] as const;
 
 const assessmentConfig: Record<

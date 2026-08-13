@@ -15,6 +15,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 )
 
 const analysisChatResponseFormat = `## Analysis conversation
@@ -53,13 +54,21 @@ the answer. For recurring-pattern builds, preserve the full builds/<build-id>/
 prefix in every citation.`
 
 const (
-	analysisChatFallbackContextBytes  = 192 << 10
-	analysisChatHistoryTargetPct      = 65
-	analysisChatMaxQuestionBytes      = 4096
-	analysisChatMaxBuildIDBytes       = 256
-	analysisChatMaxResponseBytes      = 1 << 20
-	analysisChatMaxCandidates         = 256
-	analysisChatMaxCandidateSpanBytes = 4 * analysisChatMaxResponseBytes
+	analysisChatFallbackContextBytes             = 192 << 10
+	analysisChatHistoryTargetPct                 = 65
+	analysisChatMaxQuestionBytes                 = 4096
+	analysisChatMaxBuildIDBytes                  = 256
+	analysisChatMaxResponseBytes                 = 1 << 20
+	analysisChatMaxCandidates                    = 256
+	analysisChatMaxCandidateSpanBytes            = 4 * analysisChatMaxResponseBytes
+	analysisChatMaxPatternCausalGroups           = 10
+	analysisChatMaxPatternBuildsPerGroup         = 10
+	analysisChatMaxPatternUnclassifiedBuilds     = 10
+	analysisChatMaxPatternRemediationSummaries   = 10
+	analysisChatMaxPatternRootCauseBytes         = 8 << 10
+	analysisChatMaxPatternRemediationReasonBytes = 4 << 10
+	analysisChatMaxPatternLifecycleReasonBytes   = 4 << 10
+	analysisChatMaxPatternContextBytes           = 128 << 10
 )
 
 const analysisChatFinalizePrompt = `Stop calling tools. Return the final analysis-conversation JSON now using only evidence already gathered. Follow the Analysis conversation schema exactly. Output JSON only.`
@@ -702,39 +711,157 @@ func analysisChatAssistantHistory(message analysischat.Message) (string, error) 
 	return string(encoded), nil
 }
 
+type analysisChatPatternRemediation struct {
+	State       models.PatternRemediationInvestigationState `json:"state"`
+	Reason      string                                      `json:"reason,omitempty"`
+	CompletedAt string                                      `json:"completed_at,omitempty"`
+}
+
+type analysisChatPatternCausalGroup struct {
+	ID             string                          `json:"id,omitempty"`
+	ContentHash    string                          `json:"content_hash,omitempty"`
+	Builds         []string                        `json:"builds"`
+	RootCause      string                          `json:"root_cause"`
+	Confidence     string                          `json:"confidence"`
+	ArtifactBuilds []string                        `json:"artifact_builds"`
+	Remediation    *analysisChatPatternRemediation `json:"remediation_investigation,omitempty"`
+}
+
+type analysisChatPatternLifecycle struct {
+	State  models.PatternLifecycleState `json:"state"`
+	Reason string                       `json:"reason,omitempty"`
+}
+
+type analysisChatPatternContext struct {
+	JobID           string                           `json:"job_id"`
+	PatternID       string                           `json:"pattern_id"`
+	Subject         string                           `json:"subject"`
+	Summary         string                           `json:"published_summary"`
+	Confidence      string                           `json:"confidence"`
+	BuildsAnalyzed  int                              `json:"builds_analyzed"`
+	Recurrence      models.PatternRecurrence         `json:"recurrence_classification,omitempty"`
+	CausalGroups    []analysisChatPatternCausalGroup `json:"causal_groups,omitempty"`
+	Unclassified    []string                         `json:"unclassified_builds,omitempty"`
+	Lifecycle       *analysisChatPatternLifecycle    `json:"lifecycle,omitempty"`
+	SharedRootCause string                           `json:"published_shared_root_cause,omitempty"`
+	SuggestedFix    string                           `json:"published_suggested_fix,omitempty"`
+	RelevantFiles   []string                         `json:"published_relevant_files,omitempty"`
+	SharedBuilds    []string                         `json:"shared_builds,omitempty"`
+	ArtifactBuilds  []string                         `json:"artifact_builds"`
+}
+
+func clampAnalysisChatPatternText(value string, maxBytes int) string {
+	value = strings.TrimSpace(value)
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return value
+	}
+	const marker = "\n...[content elided]...\n"
+	if maxBytes <= len(marker) {
+		return strings.ToValidUTF8(value[:maxBytes], "")
+	}
+	contentBytes := maxBytes - len(marker)
+	head := contentBytes * 3 / 4
+	tail := contentBytes - head
+	return strings.ToValidUTF8(value[:head], "") + marker + strings.ToValidUTF8(value[len(value)-tail:], "")
+}
+
+func encodeAnalysisChatPatternContext(turn analysischat.Turn) ([]byte, error) {
+	pattern := turn.Pattern
+	if pattern == nil {
+		return nil, fmt.Errorf("pattern chat context requires a pattern")
+	}
+	if len(pattern.CausalGroups) > analysisChatMaxPatternCausalGroups {
+		return nil, fmt.Errorf("pattern chat context has %d causal groups, maximum %d", len(pattern.CausalGroups), analysisChatMaxPatternCausalGroups)
+	}
+	if len(pattern.UnclassifiedBuilds) > analysisChatMaxPatternUnclassifiedBuilds {
+		return nil, fmt.Errorf("pattern chat context has %d unclassified builds, maximum %d", len(pattern.UnclassifiedBuilds), analysisChatMaxPatternUnclassifiedBuilds)
+	}
+	if len(pattern.RemediationInvestigations) > analysisChatMaxPatternRemediationSummaries {
+		return nil, fmt.Errorf("pattern chat context has %d remediation summaries, maximum %d", len(pattern.RemediationInvestigations), analysisChatMaxPatternRemediationSummaries)
+	}
+
+	artifactBuilds := make([]string, 0, len(turn.EvidenceBuilds))
+	artifactSet := make(map[string]struct{}, len(turn.EvidenceBuilds))
+	for _, build := range turn.EvidenceBuilds {
+		buildID := strings.TrimSpace(build.Build.BuildID)
+		if buildID == "" || len(buildID) > analysisChatMaxBuildIDBytes {
+			continue
+		}
+		if _, duplicate := artifactSet[buildID]; duplicate {
+			continue
+		}
+		artifactSet[buildID] = struct{}{}
+		artifactBuilds = append(artifactBuilds, buildID)
+	}
+
+	remediationByHash := make(map[string]models.PatternRemediationInvestigationSummary, len(pattern.RemediationInvestigations))
+	for _, summary := range pattern.RemediationInvestigations {
+		if summary.CausalGroupHash != "" {
+			remediationByHash[summary.CausalGroupHash] = summary
+		}
+	}
+	groups := make([]analysisChatPatternCausalGroup, 0, len(pattern.CausalGroups))
+	for _, group := range pattern.CausalGroups {
+		if len(group.Builds) > analysisChatMaxPatternBuildsPerGroup {
+			return nil, fmt.Errorf("pattern chat causal group %q has %d builds, maximum %d", group.ID, len(group.Builds), analysisChatMaxPatternBuildsPerGroup)
+		}
+		builds := boundedAnalysisChatBuildIDs(group.Builds)
+		available := make([]string, 0, len(builds))
+		for _, buildID := range builds {
+			if _, ok := artifactSet[buildID]; ok {
+				available = append(available, buildID)
+			}
+		}
+		contextGroup := analysisChatPatternCausalGroup{
+			ID: clampAnalysisChatPatternText(group.ID, 512), ContentHash: clampAnalysisChatPatternText(group.ContentHash, 128),
+			Builds: builds, RootCause: clampAnalysisChatPatternText(group.RootCause, analysisChatMaxPatternRootCauseBytes),
+			Confidence: clampAnalysisChatPatternText(group.Confidence, 32), ArtifactBuilds: available,
+		}
+		if summary, ok := remediationByHash[group.ContentHash]; ok && (summary.CausalGroupID == "" || group.ID == "" || summary.CausalGroupID == group.ID) {
+			contextGroup.Remediation = &analysisChatPatternRemediation{
+				State:       summary.State,
+				Reason:      clampAnalysisChatPatternText(summary.Reason, analysisChatMaxPatternRemediationReasonBytes),
+				CompletedAt: clampAnalysisChatPatternText(summary.CompletedAt, 128),
+			}
+		}
+		groups = append(groups, contextGroup)
+	}
+
+	var lifecycle *analysisChatPatternLifecycle
+	if pattern.Lifecycle != nil {
+		lifecycle = &analysisChatPatternLifecycle{
+			State:  pattern.Lifecycle.State,
+			Reason: clampAnalysisChatPatternText(pattern.Lifecycle.Reason, analysisChatMaxPatternLifecycleReasonBytes),
+		}
+	}
+	payload := analysisChatPatternContext{
+		JobID: turn.JobID, PatternID: pattern.ID, Subject: clampAnalysisChatPatternText(pattern.Subject, 4<<10),
+		Summary: clampAnalysisChatPatternText(pattern.Summary, 16<<10), Confidence: clampAnalysisChatPatternText(pattern.Confidence, 32),
+		BuildsAnalyzed: pattern.BuildsAnalyzed, Recurrence: pattern.Recurrence, CausalGroups: groups,
+		Unclassified: boundedAnalysisChatBuildIDs(pattern.UnclassifiedBuilds), Lifecycle: lifecycle,
+		SharedRootCause: clampAnalysisChatPatternText(pattern.SharedRootCause, 32<<10),
+		SuggestedFix:    clampAnalysisChatPatternText(pattern.SuggestedFix, 16<<10),
+		RelevantFiles:   boundedAnalysisChatFiles(pattern.RelevantFiles),
+		SharedBuilds:    boundedAnalysisChatBuildIDs(pattern.SharedBuilds), ArtifactBuilds: artifactBuilds,
+	}
+	encoded, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encoding pattern chat context: %w", err)
+	}
+	if len(encoded) > analysisChatMaxPatternContextBytes {
+		return nil, fmt.Errorf("pattern chat context is %d bytes, exceeding the %d-byte limit", len(encoded), analysisChatMaxPatternContextBytes)
+	}
+	return encoded, nil
+}
+
 func analysisChatContext(turn analysischat.Turn) (string, error) {
 	if turn.Pattern != nil {
-		buildIDs := make([]string, 0, len(turn.EvidenceBuilds))
-		for _, build := range turn.EvidenceBuilds {
-			buildIDs = append(buildIDs, build.Build.BuildID)
-		}
-		payload := struct {
-			JobID           string   `json:"job_id"`
-			PatternID       string   `json:"pattern_id"`
-			Subject         string   `json:"subject"`
-			Summary         string   `json:"published_summary"`
-			Confidence      string   `json:"confidence"`
-			BuildsAnalyzed  int      `json:"builds_analyzed"`
-			SharedRootCause string   `json:"published_shared_root_cause"`
-			SuggestedFix    string   `json:"published_suggested_fix"`
-			RelevantFiles   []string `json:"published_relevant_files,omitempty"`
-			SharedBuilds    []string `json:"shared_builds,omitempty"`
-			EvidenceBuilds  []string `json:"artifact_builds"`
-		}{
-			JobID: turn.JobID, PatternID: turn.Pattern.ID, Subject: turn.Pattern.Subject,
-			Summary:    clampAnalysisChatText(turn.Pattern.Summary, 16<<10),
-			Confidence: turn.Pattern.Confidence, BuildsAnalyzed: turn.Pattern.BuildsAnalyzed,
-			SharedRootCause: clampAnalysisChatText(turn.Pattern.SharedRootCause, 32<<10),
-			SuggestedFix:    clampAnalysisChatText(turn.Pattern.SuggestedFix, 16<<10),
-			RelevantFiles:   boundedAnalysisChatFiles(turn.Pattern.RelevantFiles),
-			SharedBuilds:    boundedAnalysisChatBuildIDs(turn.Pattern.SharedBuilds), EvidenceBuilds: buildIDs,
-		}
-		encoded, err := json.MarshalIndent(payload, "", "  ")
+		encoded, err := encodeAnalysisChatPatternContext(turn)
 		if err != nil {
-			return "", fmt.Errorf("encoding pattern chat context: %w", err)
+			return "", err
 		}
 		return "Selected published recurring-pattern analysis:\n\n" + string(encoded) +
-			"\n\nArtifacts are available under builds/<build-id>/<path>. Use that exact full path in citations. Answer only about this recurring pattern and its listed builds.", nil
+			"\n\nArtifacts are available under builds/<build-id>/<path>. Use that exact full path in citations. Each causal group's artifact_builds field lists which selected builds have artifact access. Answer only about this recurring pattern and its listed builds.", nil
 	}
 	analysis := turn.TestCase.AIAnalysis
 	payload := struct {
