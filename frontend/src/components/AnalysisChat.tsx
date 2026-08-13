@@ -42,15 +42,20 @@ import {
   analysisChatTurnLimitMessage,
   analysisChatTurnUsage,
   AnalysisChatAPIError,
+  beginAnalysisChatFixInvestigation,
   cancelAnalysisChatRequest,
+  clearAnalysisChatPendingIntent,
   createAnalysisChatSession,
   findAnalysisChatSession,
-  getAnalysisChatSession,
   isAmbiguousAnalysisChatFailure,
+  isAnalysisChatOAuthExpired,
   limitAnalysisChatQuestion,
+  loadAnalysisChatPendingIntent,
   markAnalysisChatTurnLimitReached,
   newAnalysisChatRequestID,
+  reconcileAnalysisChatTurn,
   resumeAnalysisChatTurn,
+  saveAnalysisChatPendingIntent,
   streamAnalysisChatMessage,
 } from "../lib/analysisChat";
 import { fileToUrl, type FileToUrlContext } from "../lib/utils";
@@ -73,12 +78,21 @@ import type { AnalysisCorrectionPreview } from "../types/corrections";
 import type { PatternAnalysis } from "../types/dashboard";
 import type { SourceInvestigationView } from "../types/sourceInvestigation";
 import { ChatFixDialog, type ChatFixSourceSelection } from "./ChatFixDialog";
-import { chatFixVerifiedSourcePaths } from "../lib/chatFixEligibility";
+import { chatFixVerifiedSourcePaths, fixInvestigationAvailable } from "../lib/chatFixEligibility";
 
 interface PendingTurn {
   sessionID: string;
   requestID: string;
   question: string;
+  fixIntent?: boolean;
+}
+
+function analysisChatIntentStorage(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
 }
 
 const suggestedQuestions = [
@@ -104,6 +118,12 @@ const assessmentConfig: Record<
   challenges: { label: "Evidence challenges it", color: "warning" },
   inconclusive: { label: "Evidence inconclusive", color: "default" },
 };
+
+function isPendingAnalysisChatFailure(error: unknown): boolean {
+  return error instanceof AnalysisChatAPIError &&
+    error.status === 409 &&
+    (error.message === analysisChatSessionBusyMessage || error.message === analysisChatRequestPendingMessage);
+}
 
 function readableError(error: unknown): string {
   const guidance = analysisChatFailureGuidance(error);
@@ -470,17 +490,19 @@ export function AnalysisChat({
   analysisRef,
   fileCtx,
   fixPatterns = [],
+  fixInvestigationEligible = false,
   onCorrectionChanged,
   appearance = "default",
 }: {
   analysisRef: AnalysisChatReference;
   fileCtx: FileToUrlContext;
   fixPatterns?: PatternAnalysis[];
+  fixInvestigationEligible?: boolean;
   onCorrectionChanged?: () => void;
   appearance?: "default" | "detail";
 }) {
   const { features } = useCapabilities();
-  const auth = useAuth();
+  const { status: authStatus, mode: authMode, signIn } = useAuth();
   const detailAppearance = appearance === "detail";
   const [expanded, setExpanded] = useState(false);
   const [question, setQuestion] = useState("");
@@ -491,6 +513,8 @@ export function AnalysisChat({
   const [turnLimitRejected, setTurnLimitRejected] = useState(false);
   const [pendingTurn, setPendingTurn] = useState<PendingTurn | null>(null);
   const [continueMode, setContinueMode] = useState(false);
+  const [fixIntentMode, setFixIntentMode] = useState(false);
+  const [restoreEpoch, setRestoreEpoch] = useState(0);
   const [progressPhase, setProgressPhase] = useState<AnalysisChatProgressPhase>("queued");
   const [progressStartedAt, setProgressStartedAt] = useState<string | undefined>();
   const [validationRetries, setValidationRetries] = useState(0);
@@ -558,6 +582,7 @@ export function AnalysisChat({
     setTurnLimitRejected(false);
     setPendingTurn(null);
     setContinueMode(false);
+    setFixIntentMode(false);
     setProgressPhase("queued");
     setProgressStartedAt(undefined);
     setValidationRetries(0);
@@ -574,9 +599,9 @@ export function AnalysisChat({
   }, [identity]);
 
   useEffect(() => {
-    if (!features.analysis_chat || auth.status !== "authenticated") {
+    if (!features.analysis_chat || authStatus !== "authenticated") {
       restoreControllerRef.current?.abort();
-      if (auth.status !== "loading") {
+      if (authStatus !== "loading") {
         setSession(null);
         setRestoring(false);
       }
@@ -597,11 +622,19 @@ export function AnalysisChat({
         setRestoring(false);
         if (!restored?.active) return;
 
+        const restoredFixIntent = loadAnalysisChatPendingIntent(
+          analysisChatIntentStorage(),
+          restoreIdentity,
+          restored.id,
+          restored.active.request_id,
+        );
         restoredTurn = {
           sessionID: restored.id,
           requestID: restored.active.request_id,
           question: restored.active.question ?? "",
+          fixIntent: restoredFixIntent,
         };
+        if (restoredFixIntent === true) setFixIntentMode(true);
         setPendingTurn(restoredTurn);
         setQuestion(restoredTurn.question);
         setProgressPhase(restored.active.phase);
@@ -609,60 +642,94 @@ export function AnalysisChat({
         const updated = await resumeAnalysisChatTurn(
           restored,
           recordProgress,
-          controller.signal,
+          { fixIntent: restoredFixIntent, signal: controller.signal },
         );
         if (identityRef.current !== restoreIdentity) return;
         setSession(updated);
         const restoredState = restoredTurn ? analysisChatRequestState(updated, restoredTurn.requestID) : "unresolved";
         if (restoredState === "answered" || restoredState === "succeeded") {
           setQuestion("");
+          if (restoredTurn) clearAnalysisChatPendingIntent(analysisChatIntentStorage(), restoredTurn.sessionID, restoredTurn.requestID);
           setPendingTurn(null);
           setContinueMode(false);
           setError(null);
         } else if (restoredState === "terminal") {
+          if (restoredTurn) clearAnalysisChatPendingIntent(analysisChatIntentStorage(), restoredTurn.sessionID, restoredTurn.requestID);
           setPendingTurn(null);
           setError(null);
+        } else if (restoredTurn?.fixIntent === undefined) {
+          setPendingTurn(null);
+          setQuestion("");
+          setContinueMode(false);
+          setError("The restored request ended without an answer and its intent cannot be recovered safely. Start a new conversation.");
         } else {
           setPendingTurn(null);
-          setQuestion(restoredTurn?.question ?? "");
+          setQuestion(restoredTurn.question);
           setContinueMode(true);
-          setError("The restored question ended without an answer. Select Continue to try again.");
+          setError("The restored question ended without an answer. Select Continue to try again with the same intent.");
         }
       } catch (restoreError) {
         if (restoreError instanceof Error && restoreError.name === "AbortError") return;
         if (identityRef.current !== restoreIdentity) return;
         let reconciled: AnalysisChatSession | null = null;
+        let reconciledState = "unresolved" as ReturnType<typeof analysisChatRequestState>;
+        let reconcileError: unknown;
         if (restoredTurn) {
+          clearAnalysisChatPendingIntent(analysisChatIntentStorage(), restoredTurn.sessionID, restoredTurn.requestID);
+          restoredTurn = { ...restoredTurn, fixIntent: undefined };
           try {
-            reconciled = await getAnalysisChatSession(restoredTurn.sessionID, controller.signal);
+            const result = await reconcileAnalysisChatTurn(
+              restoredTurn.sessionID,
+              restoredTurn.requestID,
+              recordProgress,
+              { signal: controller.signal },
+            );
             if (identityRef.current !== restoreIdentity) return;
+            reconciled = result.session;
+            reconciledState = result.state;
             setSession(reconciled);
-          } catch (reconcileError) {
-            if (reconcileError instanceof Error && reconcileError.name === "AbortError") return;
+          } catch (error) {
+            if (error instanceof Error && error.name === "AbortError") return;
+            reconcileError = error;
           }
         }
-        const restoredRequestID = restoredTurn?.requestID;
-        if (restoredRequestID && reconciled) {
-          const restoredState = analysisChatRequestState(reconciled, restoredRequestID);
-          if (restoredState === "answered" || restoredState === "succeeded") {
+        const effectiveError = reconcileError ?? restoreError;
+        if (isAnalysisChatOAuthExpired(effectiveError, authMode)) {
+          signIn();
+          return;
+        }
+        if (restoredTurn && reconciled) {
+          if (reconciledState === "answered" || reconciledState === "succeeded") {
             setQuestion("");
             setPendingTurn(null);
             setError(null);
             return;
           }
-          if (restoredState === "terminal") {
+          if (reconciledState === "terminal") {
             setPendingTurn(null);
             setError(null);
             return;
           }
+          if (reconciledState === "pending") {
+            setPendingTurn(restoredTurn);
+            setQuestion(restoredTurn.question);
+            setContinueMode(true);
+            setError("The restored question is still running. Select Continue to observe the same request.");
+            return;
+          }
         }
-        if (restoredTurn && isAmbiguousAnalysisChatFailure(restoreError)) {
+        if (restoredTurn && isPendingAnalysisChatFailure(effectiveError)) {
+          setPendingTurn(restoredTurn);
+          setQuestion(restoredTurn.question);
+          setContinueMode(true);
+          setError("The restored question is still running. Select Continue to observe the same request.");
+        } else if (restoredTurn && isAmbiguousAnalysisChatFailure(effectiveError)) {
           setPendingTurn(restoredTurn);
           setContinueMode(true);
-          setError("The restored question may still be running. Select Continue to reconnect.");
+          setError("The restored question may still be running. Select Continue to observe the same request.");
         } else {
           setPendingTurn(null);
-          setError(readableError(restoreError));
+          setError(readableError(effectiveError));
         }
       } finally {
         if (restoreControllerRef.current === controller) {
@@ -675,7 +742,7 @@ export function AnalysisChat({
       }
     })();
     return () => controller.abort();
-  }, [auth.status, features.analysis_chat, identity, recordProgress]);
+  }, [authMode, authStatus, features.analysis_chat, identity, recordProgress, restoreEpoch, signIn]);
 
   useEffect(() => {
     if (!expanded || (history.length === 0 && !busy)) return;
@@ -696,19 +763,103 @@ export function AnalysisChat({
   const turnUsage = session ? analysisChatTurnUsage(session) : null;
   const turnLimitReached = analysisChatTurnLimitReached(session, pendingTurn !== null, turnLimitRejected);
   const questions = patternScope ? patternSuggestedQuestions : suggestedQuestions;
+  const canStartFixInvestigation = fixInvestigationAvailable(
+    analysisRef,
+    Boolean(features.analysis_chat),
+    Boolean(features.junit_chat_fix),
+    authStatus,
+    fixInvestigationEligible,
+  );
+
+  async function startFixInvestigation() {
+    if (authStatus === "anonymous") {
+      signIn();
+      return;
+    }
+    if (authStatus !== "authenticated" || busy || pendingTurn) return;
+
+    const startIdentity = identity;
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    const started = beginAnalysisChatFixInvestigation(
+      analysisRef,
+      () => {
+        restoreControllerRef.current?.abort();
+        restoreControllerRef.current = null;
+      },
+      controller.signal,
+    );
+    createRequestIDRef.current = started.requestID;
+    setExpanded(true);
+    setRestoring(true);
+    setBusy(true);
+    setError(null);
+    setContinueMode(false);
+    setFixIntentMode(true);
+    setSession(null);
+    setPendingTurn(null);
+    setTurnLimitRejected(false);
+    setSourceSelections({});
+    setFixMessage(null);
+    setFixOpen(false);
+    try {
+      const created = await started.session;
+      if (identityRef.current !== startIdentity) return;
+      setSession(created);
+    } catch (createError) {
+      if (createError instanceof Error && createError.name === "AbortError") return;
+      if (identityRef.current !== startIdentity) return;
+      if (isAnalysisChatOAuthExpired(createError, authMode)) {
+        signIn();
+        return;
+      }
+      if (isAmbiguousAnalysisChatFailure(createError)) {
+        setContinueMode(true);
+        setError("The new Fix conversation may have been created. Enter a question and select Continue to reconnect safely.");
+      } else {
+        setFixIntentMode(false);
+        setError(readableError(createError));
+      }
+    } finally {
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+        if (identityRef.current === startIdentity) {
+          setRestoring(false);
+          setBusy(false);
+        }
+      }
+    }
+  }
+
+  function returnToNormalChat() {
+    if (busy || pendingTurn) return;
+    restoreControllerRef.current?.abort();
+    controllerRef.current?.abort();
+    setFixIntentMode(false);
+    setSession(null);
+    setQuestion("");
+    setError(null);
+    setContinueMode(false);
+    setTurnLimitRejected(false);
+    setSourceSelections({});
+    createRequestIDRef.current = newAnalysisChatRequestID();
+    setRestoreEpoch((value) => value + 1);
+  }
 
   async function submit(nextQuestion?: string) {
     const value = (nextQuestion ?? pendingTurn?.question ?? question).trim();
+    const selectedFixIntent = pendingTurn ? pendingTurn.fixIntent : fixIntentMode;
     if (!value || busy || restoring || turnLimitReached) return;
     if (pendingTurn && pendingTurn.question !== value) {
       setError("The previous question may still be running. Select Continue before asking another question.");
       return;
     }
-    if (auth.status === "anonymous") {
-      auth.signIn();
+    if (authStatus === "anonymous") {
+      signIn();
       return;
     }
-    if (auth.status !== "authenticated") return;
+    if (authStatus !== "authenticated") return;
 
     setContinueMode(false);
     controllerRef.current?.abort();
@@ -736,68 +887,107 @@ export function AnalysisChat({
           sessionID: activeSession.id,
           requestID: newAnalysisChatRequestID(),
           question: value,
+          fixIntent: selectedFixIntent ?? false,
         };
         setPendingTurn(activeTurn);
         setQuestion(value);
+        saveAnalysisChatPendingIntent(analysisChatIntentStorage(), {
+          analysisIdentity: identity,
+          sessionID: activeTurn.sessionID,
+          requestID: activeTurn.requestID,
+          fixIntent: activeTurn.fixIntent ?? false,
+        });
       }
-      const updated = await streamAnalysisChatMessage(
-        activeTurn.sessionID,
-        activeTurn.question,
-        activeTurn.requestID,
-        recordProgress,
-        controller.signal,
-      );
+      const updated = activeTurn.fixIntent === undefined
+        ? await resumeAnalysisChatTurn(activeSession, recordProgress, { signal: controller.signal })
+        : await streamAnalysisChatMessage(
+          activeTurn.sessionID,
+          activeTurn.question,
+          activeTurn.requestID,
+          recordProgress,
+          { fixIntent: activeTurn.fixIntent, signal: controller.signal },
+        );
       setSession(updated);
+      if (activeTurn.fixIntent === undefined) {
+        const requestState = analysisChatRequestState(updated, activeTurn.requestID);
+        clearAnalysisChatPendingIntent(analysisChatIntentStorage(), activeTurn.sessionID, activeTurn.requestID);
+        setPendingTurn(null);
+        if (requestState === "answered" || requestState === "succeeded" || requestState === "terminal") {
+          setQuestion("");
+          return;
+        }
+        setQuestion("");
+        setError("The restored request ended without an answer and its intent cannot be recovered safely. Start a new conversation.");
+        return;
+      }
       setQuestion("");
+      clearAnalysisChatPendingIntent(analysisChatIntentStorage(), activeTurn.sessionID, activeTurn.requestID);
       setPendingTurn(null);
     } catch (requestError) {
       if (requestError instanceof Error && requestError.name === "AbortError") return;
-      if (
-        requestError instanceof AnalysisChatAPIError &&
-        requestError.status === 401 &&
-        auth.mode === "oauth"
-      ) {
-        auth.signIn();
+      const observedTurn = activeTurn ? { ...activeTurn, fixIntent: undefined } : null;
+      if (activeTurn) {
+        clearAnalysisChatPendingIntent(analysisChatIntentStorage(), activeTurn.sessionID, activeTurn.requestID);
+      }
+      if (isAnalysisChatOAuthExpired(requestError, authMode)) {
+        signIn();
         return;
       }
 
       let reconciled: AnalysisChatSession | null = null;
-      if (activeSession) {
+      let reconciledState = "unresolved" as ReturnType<typeof analysisChatRequestState>;
+      let reconcileError: unknown;
+      if (activeSession && activeTurn) {
         try {
-          reconciled = await getAnalysisChatSession(activeSession.id, controller.signal);
+          const result = await reconcileAnalysisChatTurn(
+            activeSession.id,
+            activeTurn.requestID,
+            recordProgress,
+            { signal: controller.signal },
+          );
+          reconciled = result.session;
+          reconciledState = result.state;
           setSession(reconciled);
-          const activeRequestID = activeTurn?.requestID;
-          if (activeRequestID) {
-            const requestState = analysisChatRequestState(reconciled, activeRequestID);
-            if (requestState === "answered" || requestState === "succeeded") {
-              setQuestion("");
-              setPendingTurn(null);
-              return;
-            }
-            if (requestState === "terminal") {
-              setPendingTurn(null);
-              setError(null);
-              return;
-            }
+          if (reconciledState === "answered" || reconciledState === "succeeded") {
+            setQuestion("");
+            setPendingTurn(null);
+            return;
           }
-        } catch (reconcileError) {
-          if (reconcileError instanceof Error && reconcileError.name === "AbortError") return;
-          if (
-            reconcileError instanceof AnalysisChatAPIError &&
-            reconcileError.status === 401 &&
-            auth.mode === "oauth"
-          ) {
-            auth.signIn();
+          if (reconciledState === "terminal") {
+            setPendingTurn(null);
+            setError(null);
+            return;
+          }
+          if (reconciledState === "pending" && observedTurn) {
+            setPendingTurn(observedTurn);
+            setQuestion(observedTurn.question);
+            setContinueMode(true);
+            setError("The question is still running. Select Continue to observe the same request.");
+            return;
+          }
+        } catch (error) {
+          if (error instanceof Error && error.name === "AbortError") return;
+          reconcileError = error;
+          if (isAnalysisChatOAuthExpired(error, authMode)) {
+            signIn();
             return;
           }
         }
       }
 
-      const ambiguousFailure = isAmbiguousAnalysisChatFailure(requestError);
-      if (activeSession && activeTurn && ambiguousFailure) {
-        setPendingTurn(activeTurn);
+      const effectiveError = reconcileError ?? requestError;
+      if (activeSession && observedTurn && isPendingAnalysisChatFailure(effectiveError)) {
+        setPendingTurn(observedTurn);
+        setQuestion(observedTurn.question);
         setContinueMode(true);
-        setError("The question may still be running. Select Continue to reconnect to the same request.");
+        setError("The question is still running. Select Continue to observe the same request.");
+        return;
+      }
+      const ambiguousFailure = isAmbiguousAnalysisChatFailure(effectiveError);
+      if (activeSession && observedTurn && ambiguousFailure) {
+        setPendingTurn(observedTurn);
+        setContinueMode(true);
+        setError("The question may still be running. Select Continue to observe the same request.");
         return;
       }
       if (!activeSession && ambiguousFailure) {
@@ -813,16 +1003,13 @@ export function AnalysisChat({
       if (exhausted) {
         setTurnLimitRejected(true);
         setSession((current) => current ? markAnalysisChatTurnLimitReached(current) : current);
+        if (activeTurn) clearAnalysisChatPendingIntent(analysisChatIntentStorage(), activeTurn.sessionID, activeTurn.requestID);
         setPendingTurn(null);
         setError(reconciled ? null : readableError(requestError));
       } else {
-        const stillRunning =
-          requestError instanceof AnalysisChatAPIError &&
-          requestError.status === 409 &&
-          (requestError.message === analysisChatSessionBusyMessage ||
-            requestError.message === analysisChatRequestPendingMessage);
-        if (!stillRunning) setPendingTurn(null);
-        setError(readableError(requestError));
+        if (activeTurn) clearAnalysisChatPendingIntent(analysisChatIntentStorage(), activeTurn.sessionID, activeTurn.requestID);
+        setPendingTurn(null);
+        setError(readableError(effectiveError));
       }
     } finally {
       if (controllerRef.current === controller) {
@@ -931,18 +1118,18 @@ export function AnalysisChat({
   }
 
   function openFix(message: AnalysisChatMessage) {
-    if (auth.status === "anonymous") {
-      auth.signIn();
+    if (authStatus === "anonymous") {
+      signIn();
       return;
     }
-    if (auth.status !== "authenticated") return;
+    if (authStatus !== "authenticated") return;
     setFixMessage(message);
     setFixOpen(true);
   }
 
   function toggleChat() {
-    if (auth.status === "anonymous") {
-      auth.signIn();
+    if (authStatus === "anonymous") {
+      signIn();
       return;
     }
     setExpanded((value) => !value);
@@ -983,7 +1170,7 @@ export function AnalysisChat({
           <ButtonBase
             disableRipple
             onClick={toggleChat}
-            disabled={auth.status === "loading" || auth.status === "unavailable"}
+            disabled={authStatus === "loading" || authStatus === "unavailable"}
             aria-expanded={expanded}
             aria-controls="analysis-chat-content"
             sx={{
@@ -1034,7 +1221,7 @@ export function AnalysisChat({
             aria-expanded={expanded}
             aria-controls="analysis-chat-content"
             onClick={toggleChat}
-            disabled={auth.status === "loading" || auth.status === "unavailable"}
+            disabled={authStatus === "loading" || authStatus === "unavailable"}
           >
             <ExpandMore
               fontSize="small"
@@ -1046,6 +1233,27 @@ export function AnalysisChat({
             />
           </IconButton>
         </Stack>
+
+        {canStartFixInvestigation && (
+          <Box sx={{ px: 1, pb: 0.75 }}>
+            <Tooltip title={fixIntentMode
+              ? "Restore the latest normal analysis conversation"
+              : "Start a fresh evidence-backed chat. This does not create a branch or PR."}>
+              <span>
+                <Button
+                  fullWidth
+                  size="small"
+                  variant={fixIntentMode ? "text" : "outlined"}
+                  startIcon={<BuildOutlined />}
+                  onClick={() => fixIntentMode ? returnToNormalChat() : void startFixInvestigation()}
+                  disabled={busy || pendingTurn !== null}
+                >
+                  {fixIntentMode ? "Return to normal chat" : "Start fix investigation"}
+                </Button>
+              </span>
+            </Tooltip>
+          </Box>
+        )}
 
         <Collapse in={expanded} appear>
           <Box id="analysis-chat-content">
@@ -1076,6 +1284,12 @@ export function AnalysisChat({
                 <Typography role="status" variant="body2" color="text.secondary" sx={{ py: 0.5 }}>
                   Restoring conversation...
                 </Typography>
+              )}
+              {fixIntentMode && (
+                <Alert severity="info" variant="outlined">
+                  This fresh Fix investigation requires evidence-backed source eligibility. It does not create a branch or PR.
+                  Use a successful finding in a separate fix proposal when you are ready.
+                </Alert>
               )}
               {!restoring && history.length === 0 && !busy && !pendingTurn && !turnLimitReached && (
                 <Box sx={{ py: 0.5 }}>

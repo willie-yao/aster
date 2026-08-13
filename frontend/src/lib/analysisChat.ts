@@ -21,6 +21,94 @@ export const analysisChatProviderFailureMessage = "analysis chat provider reques
 export const analysisChatResponseValidationMessage = "analysis chat model response could not be validated";
 export const analysisChatCitationValidationMessage = "analysis chat evidence citation validation failed";
 
+export interface AnalysisChatMessageOptions {
+  fixIntent?: boolean;
+  signal?: AbortSignal;
+}
+
+export interface AnalysisChatResumeOptions extends AnalysisChatMessageOptions {
+  pollDelayMs?: number;
+}
+
+export interface AnalysisChatFixInvestigationStart {
+  requestID: string;
+  session: Promise<AnalysisChatSession>;
+}
+
+export interface AnalysisChatReconciliation {
+  session: AnalysisChatSession;
+  state: AnalysisChatRequestState;
+}
+
+export interface AnalysisChatPendingIntent {
+  analysisIdentity: string;
+  sessionID: string;
+  requestID: string;
+  fixIntent: boolean;
+}
+
+interface AnalysisChatIntentStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+const pendingIntentStorageKey = "prow-analysis-chat-pending-intent-v1";
+
+export function saveAnalysisChatPendingIntent(
+  storage: AnalysisChatIntentStorage | null,
+  value: AnalysisChatPendingIntent,
+): void {
+  if (!storage) return;
+  try {
+    storage.setItem(pendingIntentStorageKey, JSON.stringify(value));
+  } catch {
+    // A disabled storage surface must not block the admitted request.
+  }
+}
+
+export function loadAnalysisChatPendingIntent(
+  storage: AnalysisChatIntentStorage | null,
+  analysisIdentity: string,
+  sessionID: string,
+  requestID: string,
+): boolean | undefined {
+  if (!storage) return undefined;
+  try {
+    const raw = storage.getItem(pendingIntentStorageKey);
+    if (!raw) return undefined;
+    const value = JSON.parse(raw) as Partial<AnalysisChatPendingIntent>;
+    if (value.analysisIdentity !== analysisIdentity || value.sessionID !== sessionID || value.requestID !== requestID ||
+      typeof value.fixIntent !== "boolean") return undefined;
+    return value.fixIntent;
+  } catch {
+    return undefined;
+  }
+}
+
+export function clearAnalysisChatPendingIntent(
+  storage: AnalysisChatIntentStorage | null,
+  sessionID: string,
+  requestID: string,
+): void {
+  if (!storage) return;
+  let remove = false;
+  try {
+    const raw = storage.getItem(pendingIntentStorageKey);
+    if (!raw) return;
+    const value = JSON.parse(raw) as Partial<AnalysisChatPendingIntent>;
+    remove = value.sessionID === sessionID && value.requestID === requestID;
+  } catch {
+    remove = true;
+  }
+  if (!remove) return;
+  try {
+    storage.removeItem(pendingIntentStorageKey);
+  } catch {
+    // A disabled storage surface must not block request reconciliation.
+  }
+}
+
 export class AnalysisChatAPIError extends Error {
   readonly status: number;
   readonly outcome: string | null;
@@ -36,6 +124,10 @@ export class AnalysisChatAPIError extends Error {
 export function isAmbiguousAnalysisChatFailure(error: unknown): boolean {
   return !(error instanceof AnalysisChatAPIError) ||
     (error.status >= 500 && error.outcome === null);
+}
+
+export function isAnalysisChatOAuthExpired(error: unknown, authMode: string | null): boolean {
+  return authMode === "oauth" && error instanceof AnalysisChatAPIError && error.status === 401;
 }
 
 export function analysisChatFailureGuidance(error: unknown): string | null {
@@ -226,6 +318,19 @@ export async function createAnalysisChatSession(
   return parseResponse(response);
 }
 
+export function beginAnalysisChatFixInvestigation(
+  analysis: AnalysisChatReference,
+  abortRestore: () => void,
+  signal?: AbortSignal,
+): AnalysisChatFixInvestigationStart {
+  abortRestore();
+  const requestID = newAnalysisChatRequestID();
+  return {
+    requestID,
+    session: createAnalysisChatSession(analysis, requestID, signal),
+  };
+}
+
 export async function findAnalysisChatSession(
   analysis: AnalysisChatReference,
   signal?: AbortSignal,
@@ -261,7 +366,7 @@ export async function sendAnalysisChatMessage(
   sessionID: string,
   message: string,
   requestID: string,
-  signal?: AbortSignal,
+  options: AnalysisChatMessageOptions = {},
 ): Promise<AnalysisChatSession> {
   const response = await fetch(
     `${API_BASE}api/analysis-chat/sessions/${encodeURIComponent(sessionID)}/messages`,
@@ -269,14 +374,18 @@ export async function sendAnalysisChatMessage(
       method: "POST",
       credentials: "same-origin",
       cache: "no-store",
-      signal,
+      signal: options.signal,
       headers: { "Content-Type": "application/json", "Idempotency-Key": requestID },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(analysisChatMessageBody(message, options.fixIntent)),
     },
   );
   return parseResponse(response);
 }
 
+
+function analysisChatMessageBody(message: string, fixIntent?: boolean): { message: string; fix_intent?: true } {
+  return fixIntent ? { message, fix_intent: true } : { message };
+}
 
 interface AnalysisChatStreamError {
   status: number;
@@ -289,19 +398,19 @@ export async function streamAnalysisChatMessage(
   message: string,
   requestID: string,
   onProgress: (progress: AnalysisChatProgress) => void,
-  signal?: AbortSignal,
+  options: AnalysisChatMessageOptions = {},
 ): Promise<AnalysisChatSession> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      return await streamAnalysisChatMessageOnce(sessionID, message, requestID, onProgress, signal);
+      return await streamAnalysisChatMessageOnce(sessionID, message, requestID, onProgress, options);
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") throw error;
       if (error instanceof AnalysisChatAPIError && !isAmbiguousAnalysisChatFailure(error)) {
         throw error;
       }
       lastError = error;
-      if (attempt < 2) await reconnectDelay(400 * (attempt + 1), signal);
+      if (attempt < 2) await reconnectDelay(400 * (attempt + 1), options.signal);
     }
   }
   throw lastError instanceof Error ? lastError : new Error("Analysis chat stream disconnected");
@@ -310,23 +419,40 @@ export async function streamAnalysisChatMessage(
 export async function resumeAnalysisChatTurn(
   session: AnalysisChatSession,
   onProgress: (progress: AnalysisChatProgress) => void,
-  signal?: AbortSignal,
-  pollDelayMs = 1000,
+  options: AnalysisChatResumeOptions = {},
 ): Promise<AnalysisChatSession> {
   const active = session.active;
   if (!active) return session;
   onProgress(active);
-  if (active.question?.trim()) {
-    return streamAnalysisChatMessage(session.id, active.question, active.request_id, onProgress, signal);
+  if (active.question?.trim() && options.fixIntent !== undefined) {
+    return streamAnalysisChatMessage(session.id, active.question, active.request_id, onProgress, options);
   }
 
   let current = session;
   while (current.active?.request_id === active.request_id) {
-    await reconnectDelay(pollDelayMs, signal);
-    current = await getAnalysisChatSession(session.id, signal);
+    await reconnectDelay(options.pollDelayMs ?? 1000, options.signal);
+    current = await getAnalysisChatSession(session.id, options.signal);
     if (current.active?.request_id === active.request_id) onProgress(current.active);
   }
   return current;
+}
+
+export async function reconcileAnalysisChatTurn(
+  sessionID: string,
+  requestID: string,
+  onProgress: (progress: AnalysisChatProgress) => void,
+  options: AnalysisChatResumeOptions = {},
+): Promise<AnalysisChatReconciliation> {
+  let session = await getAnalysisChatSession(sessionID, options.signal);
+  let state = analysisChatRequestState(session, requestID);
+  if (state === "pending" && session.active?.request_id === requestID) {
+    session = await resumeAnalysisChatTurn(session, onProgress, {
+      signal: options.signal,
+      pollDelayMs: options.pollDelayMs,
+    });
+    state = analysisChatRequestState(session, requestID);
+  }
+  return { session, state };
 }
 
 async function streamAnalysisChatMessageOnce(
@@ -334,7 +460,7 @@ async function streamAnalysisChatMessageOnce(
   message: string,
   requestID: string,
   onProgress: (progress: AnalysisChatProgress) => void,
-  signal?: AbortSignal,
+  options: AnalysisChatMessageOptions,
 ): Promise<AnalysisChatSession> {
   const response = await fetch(
     `${API_BASE}api/analysis-chat/sessions/${encodeURIComponent(sessionID)}/messages/stream`,
@@ -342,9 +468,9 @@ async function streamAnalysisChatMessageOnce(
       method: "POST",
       credentials: "same-origin",
       cache: "no-store",
-      signal,
+      signal: options.signal,
       headers: { "Content-Type": "application/json", "Idempotency-Key": requestID },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(analysisChatMessageBody(message, options.fixIntent)),
     },
   );
   if (!response.ok) throw await apiError(response);

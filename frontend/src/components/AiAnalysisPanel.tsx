@@ -67,6 +67,7 @@ export function AiAnalysisPanel({
   traceHref,
   chatRef,
   fixPatterns = [],
+  fixInvestigationEligible = false,
   appearance = "default",
 }: {
   analysis: AIAnalysis;
@@ -74,6 +75,7 @@ export function AiAnalysisPanel({
   traceHref?: string;
   chatRef?: AnalysisChatReference;
   fixPatterns?: PatternAnalysis[];
+  fixInvestigationEligible?: boolean;
   appearance?: "default" | "detail";
 }) {
   const { data: corrections, error: correctionsLoadError, refetch } =
@@ -451,6 +453,7 @@ export function AiAnalysisPanel({
       analysisRef={chatRef}
       fileCtx={fileCtx}
       fixPatterns={fixPatterns}
+      fixInvestigationEligible={fixInvestigationEligible}
       onCorrectionChanged={refetch}
       appearance={detailAppearance ? "detail" : "default"}
     />

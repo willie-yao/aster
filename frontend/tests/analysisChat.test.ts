@@ -13,9 +13,17 @@ import {
   analysisChatProgressTurnUsage,
   analysisChatTurnLimitReached,
   analysisChatTurnUsage,
+  beginAnalysisChatFixInvestigation,
+  clearAnalysisChatPendingIntent,
   findAnalysisChatSession,
+  isAnalysisChatOAuthExpired,
+  loadAnalysisChatPendingIntent,
   markAnalysisChatTurnLimitReached,
+  reconcileAnalysisChatTurn,
   resumeAnalysisChatTurn,
+  saveAnalysisChatPendingIntent,
+  sendAnalysisChatMessage,
+  streamAnalysisChatMessage,
 } from "../src/lib/analysisChat.js";
 import type {
   AnalysisChatAttempt,
@@ -83,6 +91,128 @@ test("missing or expired server sessions restore as empty", async () => {
   globalThis.fetch = async () => new Response(null, { status: 204 });
 
   assert.equal(await findAnalysisChatSession(analysis), null);
+});
+
+test("Fix investigation aborts restore and creates only fresh sessions", async () => {
+  const requests: Array<{ url: string; id: string | null }> = [];
+  let restoreAborted = false;
+  globalThis.fetch = async (input, init) => {
+    assert.equal(restoreAborted, true);
+    requests.push({
+      url: String(input),
+      id: new Headers(init?.headers).get("Idempotency-Key"),
+    });
+    assert.equal(init?.method, "POST");
+    assert.equal(init?.credentials, "same-origin");
+    assert.deepEqual(JSON.parse(String(init?.body)), analysis);
+    return new Response(JSON.stringify(session), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  const first = beginAnalysisChatFixInvestigation(analysis, () => { restoreAborted = true; });
+  await first.session;
+  restoreAborted = false;
+  const second = beginAnalysisChatFixInvestigation(analysis, () => { restoreAborted = true; });
+  await second.session;
+
+  assert.notEqual(first.requestID, second.requestID);
+  assert.deepEqual(requests.map((request) => request.url), [
+    "/api/analysis-chat/sessions",
+    "/api/analysis-chat/sessions",
+  ]);
+  assert.deepEqual(requests.map((request) => request.id), [first.requestID, second.requestID]);
+  assert.equal(requests.some((request) => /preview|confirm/.test(request.url)), false);
+});
+
+test("normal and Fix-intended synchronous messages serialize only the requested intent", async () => {
+  const bodies: unknown[] = [];
+  globalThis.fetch = async (_input, init) => {
+    assert.equal(init?.credentials, "same-origin");
+    bodies.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify(session), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+
+  await sendAnalysisChatMessage("session-1", "normal", "request-normal");
+  await sendAnalysisChatMessage("session-1", "fix", "request-fix", { fixIntent: true });
+
+  assert.deepEqual(bodies, [{ message: "normal" }, { message: "fix", fix_intent: true }]);
+});
+
+test("normal and Fix-intended streams serialize intent and reuse one request identity", async () => {
+  const completed: AnalysisChatSession = { ...session, active: undefined };
+  const events = `event: session\ndata: ${JSON.stringify(completed)}\n\n`;
+  const bodies: unknown[] = [];
+  const ids: string[] = [];
+  globalThis.fetch = async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    ids.push(new Headers(init?.headers).get("Idempotency-Key") ?? "");
+    return new Response(events, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  };
+
+  await streamAnalysisChatMessage("session-1", "normal", "request-normal", () => {});
+  await streamAnalysisChatMessage("session-1", "fix", "request-fix", () => {}, { fixIntent: true });
+
+  assert.deepEqual(bodies, [{ message: "normal" }, { message: "fix", fix_intent: true }]);
+  assert.deepEqual(ids, ["request-normal", "request-fix"]);
+});
+
+test("ambiguous Fix stream recovery preserves intent without changing the request ID", async () => {
+  const completed: AnalysisChatSession = { ...session, active: undefined };
+  const events = `event: session\ndata: ${JSON.stringify(completed)}\n\n`;
+  const requests: Array<{ id: string | null; body: unknown }> = [];
+  globalThis.fetch = async (_input, init) => {
+    requests.push({
+      id: new Headers(init?.headers).get("Idempotency-Key"),
+      body: JSON.parse(String(init?.body)),
+    });
+    if (requests.length === 1) throw new TypeError("connection reset");
+    return new Response(events, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  };
+
+  await streamAnalysisChatMessage("session-1", "fix", "request-fix", () => {}, { fixIntent: true });
+
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests, [
+    { id: "request-fix", body: { message: "fix", fix_intent: true } },
+    { id: "request-fix", body: { message: "fix", fix_intent: true } },
+  ]);
+});
+
+test("Fix-intent preflight failure is not retried or downgraded to normal chat", async () => {
+  let calls = 0;
+  globalThis.fetch = async (_input, init) => {
+    calls++;
+    assert.deepEqual(JSON.parse(String(init?.body)), { message: "fix", fix_intent: true });
+    return new Response("invalid analysis chat request", {
+      status: 400,
+      headers: { "X-Analysis-Chat-Outcome": "rejected" },
+    });
+  };
+
+  await assert.rejects(
+    streamAnalysisChatMessage("session-1", "fix", "request-fix", () => {}, { fixIntent: true }),
+    (error: unknown) => error instanceof AnalysisChatAPIError && error.status === 400,
+  );
+  assert.equal(calls, 1);
+});
+
+test("pending-turn intent storage retains only request identity and intent", () => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  };
+  saveAnalysisChatPendingIntent(storage, {
+    analysisIdentity: "analysis", sessionID: "session-1", requestID: "request-fix", fixIntent: true,
+  });
+  assert.equal(loadAnalysisChatPendingIntent(storage, "analysis", "session-1", "request-fix"), true);
+  assert.equal(loadAnalysisChatPendingIntent(storage, "other", "session-1", "request-fix"), undefined);
+  assert.doesNotMatch(Array.from(values.values())[0] ?? "", /token|cookie|question/i);
+  clearAnalysisChatPendingIntent(storage, "session-1", "request-fix");
+  assert.equal(values.size, 0);
 });
 
 test("turn usage comes only from authoritative session fields", () => {
@@ -244,11 +374,105 @@ test("reload during a turn reconnects the persisted request", async () => {
   };
   const phases: string[] = [];
 
-  const restored = await resumeAnalysisChatTurn(active, (value) => phases.push(value.phase));
+  const restored = await resumeAnalysisChatTurn(active, (value) => phases.push(value.phase), { fixIntent: false });
 
   assert.equal(restored.active, undefined);
   assert.equal(restored.messages[1]?.request_id, "request-active");
   assert.deepEqual(phases, ["reading_evidence", "finalizing"]);
+});
+
+test("reload during a Fix-intended turn reconnects with Fix intent", async () => {
+  const active: AnalysisChatSession = {
+    ...session, messages: [], active: {
+      request_id: "request-fix", question: "What should change?", phase: "reading_evidence", updated_at: "2026-07-26T12:03:00Z",
+    },
+  };
+  const events = `event: session\ndata: ${JSON.stringify({ ...session, active: undefined })}\n\n`;
+  globalThis.fetch = async (_input, init) => {
+    assert.deepEqual(JSON.parse(String(init?.body)), { message: "What should change?", fix_intent: true });
+    assert.equal(new Headers(init?.headers).get("Idempotency-Key"), "request-fix");
+    return new Response(events, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  };
+
+  await resumeAnalysisChatTurn(active, () => {}, { fixIntent: true });
+});
+
+test("deterministic reconnect failure observes an admitted request without a second POST", async () => {
+  const active: AnalysisChatSession = {
+    ...session, messages: [], active: {
+      request_id: "request-fix", question: "What should change?", phase: "reading_evidence", updated_at: "2026-07-26T12:03:00Z",
+    },
+  };
+  const completed: AnalysisChatSession = {
+    ...session,
+    active: undefined,
+    messages: [
+      { role: "user", content: "What should change?", request_id: "request-fix", created_at: "2026-07-26T12:03:00Z" },
+      { role: "assistant", content: "Change `reconcileThing`.", request_id: "request-fix", created_at: "2026-07-26T12:04:00Z" },
+    ],
+  };
+  const calls: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    const method = init?.method ?? "GET";
+    calls.push(`${method} ${String(input)}`);
+    if (method === "POST") {
+      assert.deepEqual(JSON.parse(String(init?.body)), { message: "What should change?", fix_intent: true });
+      return new Response("analysis chat source revision changed", { status: 400 });
+    }
+    if (calls.length === 2) {
+      return new Response(JSON.stringify(active), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify(completed), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+
+  await assert.rejects(
+    resumeAnalysisChatTurn(active, () => {}, { fixIntent: true }),
+    (error: unknown) => error instanceof AnalysisChatAPIError && error.status === 400,
+  );
+  const reconciled = await reconcileAnalysisChatTurn("session-1", "request-fix", () => {}, { pollDelayMs: 0 });
+
+  assert.equal(reconciled.state, "answered");
+  assert.deepEqual(calls, [
+    "POST /api/analysis-chat/sessions/session-1/messages/stream",
+    "GET /api/analysis-chat/sessions/session-1",
+    "GET /api/analysis-chat/sessions/session-1",
+  ]);
+});
+
+test("OAuth expiry is recognized for lookup and active-turn restoration", async () => {
+  globalThis.fetch = async () => new Response("unauthorized", { status: 401 });
+
+  await assert.rejects(
+    findAnalysisChatSession(analysis),
+    (error: unknown) => isAnalysisChatOAuthExpired(error, "oauth"),
+  );
+  const active: AnalysisChatSession = {
+    ...session, messages: [], active: {
+      request_id: "request-fix", question: "What should change?", phase: "reading_evidence", updated_at: "2026-07-26T12:03:00Z",
+    },
+  };
+  await assert.rejects(
+    resumeAnalysisChatTurn(active, () => {}, { fixIntent: true }),
+    (error: unknown) => isAnalysisChatOAuthExpired(error, "oauth"),
+  );
+  assert.equal(isAnalysisChatOAuthExpired(new AnalysisChatAPIError(401, "unauthorized"), "dev"), false);
+});
+
+test("active turns with unknown intent poll instead of resubmitting without intent", async () => {
+  const active: AnalysisChatSession = {
+    ...session, messages: [], active: {
+      request_id: "request-unknown", question: "What should change?", phase: "reading_evidence", updated_at: "2026-07-26T12:03:00Z",
+    },
+  };
+  globalThis.fetch = async (input, init) => {
+    assert.equal(String(input), "/api/analysis-chat/sessions/session-1");
+    assert.equal(init?.method, undefined);
+    return new Response(JSON.stringify({ ...session, active: undefined }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  await resumeAnalysisChatTurn(active, () => {}, { pollDelayMs: 0 });
 });
 
 test("version two active sessions poll without a recoverable question", async () => {
@@ -270,7 +494,7 @@ test("version two active sessions poll without a recoverable question", async ()
     });
   };
 
-  const restored = await resumeAnalysisChatTurn(active, () => {}, undefined, 0);
+  const restored = await resumeAnalysisChatTurn(active, () => {}, { pollDelayMs: 0 });
 
   assert.equal(restored.id, session.id);
   assert.equal(restored.active, undefined);

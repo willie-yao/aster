@@ -39,9 +39,16 @@ investigation cannot rewrite the published analysis identity.
 
 ## Exact JUnit analysis handoff
 
-Authenticated server deployments using the Agent Sandbox Fix runtime may offer
-**Use this finding in a fix proposal** on one successful test-scoped chat
-response. This path does not use a
+Authenticated server deployments using the Agent Sandbox Fix runtime offer
+**Start fix investigation** for an exact failed JUnit analysis. This creates a
+fresh owner-bound session instead of restoring the latest normal chat, and its
+turns send `fix_intent: true` so the server performs immutable source and path
+preflight before contacting the provider. The control does not generate a
+preview, branch, or pull request. Normal **Chat with agent** continues restoring
+the latest existing conversation.
+
+After a successful cited response, **Use this finding in a fix proposal** remains
+the separate explicit action that starts preview. This path does not use a
 recurring pattern as action authority. It requires:
 
 - one failed JUnit case with a current accepted published analysis;
@@ -62,7 +69,11 @@ its existing source-investigation and target requirements.
 The chat session persists a full authoritative analysis content hash that covers
 failure content, artifact citations, verified source links, critique state, and
 analysis provenance, together with the exact source repository and revision.
-Any later change requires a new chat session.
+Any later change requires a new chat session. During an active turn the browser
+retains only the analysis identity, session ID, request ID, and Fix-intent bit in
+same-origin session storage. Reload reconnects with the same request identity. If
+the intent bit is unavailable, the client polls the admitted request instead of
+resubmitting it without Fix intent.
 
 Fix generation starts only when the pinned build revision is still the target
 repository's default-branch head. Confirmation rechecks the owner-bound chat
