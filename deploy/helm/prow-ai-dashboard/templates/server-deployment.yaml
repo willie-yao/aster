@@ -7,8 +7,9 @@
 {{- $corrections := .Values.server.chat.correctionsEnabled -}}
 {{- $source := .Values.server.chat.sourceInvestigation.enabled -}}
 {{- $remediation := .Values.server.remediationInvestigation.enabled -}}
+{{- $remediationFixPreview := .Values.server.remediationInvestigation.fixPreview.enabled -}}
 {{- $interactive := or $actions $chat $remediation -}}
-{{- $agentSandboxActions := and .Values.agentSandbox.fixRuntime.enabled $actions -}}
+{{- $agentSandboxActions := and .Values.agentSandbox.fixRuntime.enabled (or $actions $remediationFixPreview) -}}
 {{- $a := .Values.server.actions -}}
 {{- $extraHSTS := false -}}
 {{- $extraInsecureCookies := false -}}
@@ -73,6 +74,12 @@
 {{- end -}}
 {{- if and $remediation (not .Values.server.remediationInvestigation.timeout) -}}
 {{- fail "server.remediationInvestigation.timeout is required" -}}
+{{- end -}}
+{{- if and $remediationFixPreview (not $remediation) -}}
+{{- fail "server.remediationInvestigation.fixPreview.enabled requires server.remediationInvestigation.enabled" -}}
+{{- end -}}
+{{- if and $remediationFixPreview (not .Values.agentSandbox.fixRuntime.enabled) -}}
+{{- fail "server.remediationInvestigation.fixPreview.enabled requires agentSandbox.fixRuntime.enabled" -}}
 {{- end -}}
 {{- if and $corrections (not $chat) -}}
 {{- fail "server.chat.correctionsEnabled requires server.chat.enabled" -}}
@@ -217,6 +224,10 @@ spec:
               value: {{ .Values.server.remediationInvestigation.timeout | quote }}
             - name: CAUSAL_REMEDIATION_INVESTIGATION_MAX_OPERATIONS
               value: {{ .Values.server.remediationInvestigation.maxOperations | quote }}
+            {{- if $remediationFixPreview }}
+            - name: CAUSAL_REMEDIATION_FIX_PREVIEW_ENABLED
+              value: "true"
+            {{- end }}
             {{- end }}
             {{- if $chat }}
             - name: ANALYSIS_CHAT_ENABLED

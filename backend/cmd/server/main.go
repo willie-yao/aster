@@ -34,13 +34,16 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/causalfixpreview"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/chatfix"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/corrections"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationinvestigation"
+	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/server"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
@@ -216,6 +219,11 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 			return err
 		}
 	}
+	if features.CausalRemediationFixPreview {
+		if err := enableCausalRemediationFixPreview(opts, cfg); err != nil {
+			return err
+		}
+	}
 	if actionService != nil && chatService != nil && features.SourceInvestigation {
 		analysisRepo := cfg.EffectiveAnalysisSourceRepo()
 		fixConfig := cfg.EffectiveFixPRs()
@@ -244,6 +252,7 @@ type interactiveFeatures struct {
 	AnalysisCorrections            bool
 	SourceInvestigation            bool
 	CausalRemediationInvestigation bool
+	CausalRemediationFixPreview    bool
 }
 
 func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
@@ -269,13 +278,20 @@ func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
 	if err != nil {
 		return interactiveFeatures{}, err
 	}
+	causalPreview, err := optionalBoolEnv("CAUSAL_REMEDIATION_FIX_PREVIEW_ENABLED", false)
+	if err != nil {
+		return interactiveFeatures{}, err
+	}
+	if causalPreview && !causalRemediation {
+		return interactiveFeatures{}, fmt.Errorf("CAUSAL_REMEDIATION_FIX_PREVIEW_ENABLED requires CAUSAL_REMEDIATION_INVESTIGATION_ENABLED")
+	}
 	actions, err := optionalBoolEnv("ACTIONS_ENABLED", !chat && !causalRemediation)
 	if err != nil {
 		return interactiveFeatures{}, err
 	}
 	return interactiveFeatures{
 		Actions: actions, AnalysisChat: chat, AnalysisCorrections: correctionsEnabled,
-		SourceInvestigation: sourceEnabled, CausalRemediationInvestigation: causalRemediation,
+		SourceInvestigation: sourceEnabled, CausalRemediationInvestigation: causalRemediation, CausalRemediationFixPreview: causalPreview,
 	}, nil
 }
 
@@ -487,6 +503,35 @@ func enableCausalRemediationInvestigation(
 	opts.CausalRemediationInvestigation = service
 	opts.CausalRemediationRequestTimeout = 45 * time.Second
 	log.Printf("🔎 causal remediation investigation enabled (timeout=%s max_operations=%d)", timeout, maxOperations)
+	return nil
+}
+
+func enableCausalRemediationFixPreview(opts *server.Options, cfg *project.Config) error {
+	operation, ok := opts.CausalRemediationInvestigation.(*remediationinvestigation.OperationService)
+	if !ok || opts.Auth == nil {
+		return fmt.Errorf("causal remediation fix preview requires authenticated remediation investigation")
+	}
+	fixConfig := cfg.EffectiveFixPRs()
+	if fixConfig.AgentRuntime == nil {
+		return fmt.Errorf("causal remediation fix preview requires a configured fix runtime")
+	}
+	agentRuntime, err := fixruntime.New(fixConfig.AgentRuntime)
+	if err != nil {
+		return err
+	}
+	identity := ""
+	if identified, ok := agentRuntime.(interface{ RuntimeIdentity() string }); ok {
+		identity = identified.RuntimeIdentity()
+	}
+	preview, err := causalfixpreview.New(operation, causalfixpreview.Options{
+		Runtime: agentRuntime, Validator: engineruntime.NewLocal(), ModelProvider: fixConfig.AgentRuntime.ModelProvider.RuntimeConfig(),
+		Timeout: fixConfig.AgentRuntime.ParsedTimeout(), MaxSteps: fixConfig.AgentRuntime.MaxTurns, OutputLimitBytes: fixConfig.AgentRuntime.OutputLimitBytes, RuntimeIdentity: identity,
+	})
+	if err != nil {
+		return fmt.Errorf("configuring causal remediation fix preview: %w", err)
+	}
+	opts.CausalFixPreview = preview
+	log.Printf("🧪 causal remediation fix preview enabled (preview only, no GitHub write)")
 	return nil
 }
 

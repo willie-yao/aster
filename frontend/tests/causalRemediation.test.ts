@@ -3,6 +3,7 @@ import { afterEach, test } from "node:test";
 
 import {
   getCausalRemediationStatus,
+  previewCausalFix,
   startCausalRemediation,
   type CausalRemediationRef,
 } from "../src/lib/causalRemediation.js";
@@ -63,4 +64,16 @@ test("causal remediation status requires exact displayed hashes", async () => {
 test("causal remediation errors expose only server-safe response text", async () => {
   globalThis.fetch = async () => new Response("the displayed recurring cause is stale\n", { status: 409 });
   await assert.rejects(() => startCausalRemediation(ref, "request", false), /displayed recurring cause is stale/);
+});
+
+
+test("causal fix preview is hash-bound and has no confirmation field", async () => {
+  let requestURL = ""; let requestInit: RequestInit | undefined;
+  const preview = { summary: "safe", base_revision: "a".repeat(40), changed_files: ["controller.go"], diff: "diff", validations: [] };
+  globalThis.fetch = async (input, init) => { requestURL = String(input); requestInit = init; return new Response(JSON.stringify(preview), { status: 200 }); };
+  assert.deepEqual(await previewCausalFix(ref, "preview-one"), preview);
+  assert.match(requestURL, /remediation-investigation\/fix-preview$/);
+  assert.equal(new Headers(requestInit?.headers).get("Idempotency-Key"), "preview-one");
+  assert.deepEqual(JSON.parse(String(requestInit?.body)), { pattern_hash: "pattern-hash", causal_group_hash: "group-hash" });
+  assert.equal("token" in preview, false);
 });

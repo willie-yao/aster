@@ -465,6 +465,9 @@ server:
     enabled: false
     timeout: 10m
     maxOperations: 256
+    fixPreview:
+      # Experimental preview only. Never creates or confirms a GitHub PR.
+      enabled: false
   # Admin-gated read-only conversations about a published AI analysis.
   # Uses the authentication settings under actions, but does not enable writes
   # or require BOT_TOKEN. Sessions are persisted on the shared volume so server

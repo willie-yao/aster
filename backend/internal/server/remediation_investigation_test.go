@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/causalfixpreview"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationinvestigation"
 )
@@ -133,5 +134,51 @@ func TestCausalRemediationErrorContractDoesNotExposePrivateErrors(t *testing.T) 
 	status, message := causalRemediationErrorDetails(errors.New("private source excerpt and provider body"))
 	if status != http.StatusServiceUnavailable || strings.Contains(message, "private") || strings.Contains(message, "provider") {
 		t.Fatalf("status=%d message=%q", status, message)
+	}
+}
+
+type fakeCausalFixPreviewRunner struct {
+	preview          causalfixpreview.Preview
+	err              error
+	ref              remediationinvestigation.OperationRef
+	owner, requestID string
+}
+
+func (f *fakeCausalFixPreviewRunner) Preview(_ context.Context, ref remediationinvestigation.OperationRef, owner, requestID string) (causalfixpreview.Preview, error) {
+	f.ref, f.owner, f.requestID = ref, owner, requestID
+	return f.preview, f.err
+}
+func TestCausalFixPreviewIsAuthenticatedCSRFProtectedAndNonConfirmable(t *testing.T) {
+	runner := &fakeCausalFixPreviewRunner{preview: causalfixpreview.Preview{Summary: "safe", BaseRevision: strings.Repeat("a", 40), ChangedFiles: []string{"controller.go"}, Diff: "diff"}}
+	handler, err := Handler(Options{DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: auth.NewDevAuthenticator("alice", ""), AuthMode: "dev", CausalRemediationInvestigation: &fakeCausalRemediationRunner{}, CausalFixPreview: runner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capRes := httptest.NewRecorder()
+	handler.ServeHTTP(capRes, httptest.NewRequest(http.MethodGet, "/api/capabilities", nil))
+	var caps Capabilities
+	_ = json.Unmarshal(capRes.Body.Bytes(), &caps)
+	if !caps.Features.CausalRemediationFixPreview {
+		t.Fatalf("caps=%+v", caps)
+	}
+	path := "/api/jobs/job/patterns/pattern/causal-groups/group/remediation-investigation/fix-preview"
+	body := `{"pattern_hash":"` + strings.Repeat("b", 64) + `","causal_group_hash":"` + strings.Repeat("c", 64) + `"}`
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Host = "example.test"
+	req.Header.Set("Origin", "http://example.test")
+	req.Header.Set("Idempotency-Key", "id")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK || runner.owner != "alice" || strings.Contains(res.Body.String(), "token") || strings.Contains(res.Body.String(), "confirm") {
+		t.Fatalf("code=%d runner=%+v body=%s", res.Code, runner, res.Body.String())
+	}
+	evil := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	evil.Host = "example.test"
+	evil.Header.Set("Origin", "https://evil.example")
+	evil.Header.Set("Idempotency-Key", "id2")
+	evilRes := httptest.NewRecorder()
+	handler.ServeHTTP(evilRes, evil)
+	if evilRes.Code != http.StatusForbidden {
+		t.Fatalf("csrf code=%d", evilRes.Code)
 	}
 }

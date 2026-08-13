@@ -52,3 +52,26 @@ async function safeError(response: Response): Promise<string> {
   const text = (await response.text()).trim();
   return text || `Remediation investigation request failed with HTTP ${response.status}.`;
 }
+
+export interface CausalFixPreview {
+  summary: string;
+  base_revision: string;
+  changed_files: string[];
+  diff: string;
+  validations: Array<{ argv: string[]; status: string; output?: string }>;
+  runtime_identity?: string;
+}
+
+export async function previewCausalFix(
+  ref: CausalRemediationRef,
+  idempotencyKey: string,
+): Promise<CausalFixPreview> {
+  const response = await fetch(`${endpoint(ref)}/fix-preview`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify({ pattern_hash: ref.patternHash, causal_group_hash: ref.causalGroupHash }),
+  });
+  if (!response.ok) throw new Error(await safeError(response));
+  return response.json() as Promise<CausalFixPreview>;
+}

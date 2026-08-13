@@ -58,12 +58,15 @@ test("technical reasons remain separate from the concise state message", () => {
 });
 
 
-test("authenticated remediation UI renders only the investigation action", () => {
+test("causal remediation keeps normal actions blocked and gates experimental preview", () => {
   const component = readFileSync(resolve(process.cwd(), "src/components/PatternRemediation.tsx"), "utf8");
   assert.match(component, />\s*Remediation\s*</);
   assert.match(component, /aria-live="polite"/);
   assert.match(component, /Investigation details/);
   assert.match(component, /Investigate possible fix/);
   assert.match(component, /causal_remediation_investigation/);
-  assert.doesNotMatch(component, /Preview Fix PR/);
+  assert.match(component, /Preview Fix PR/);
+  assert.match(component, /causal_remediation_fix_preview/);
+  assert.match(component, /No GitHub PR will be created/);
+  assert.doesNotMatch(component, /Create PR|Confirm PR/);
 });

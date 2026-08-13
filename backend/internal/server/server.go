@@ -27,8 +27,10 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/causalfixpreview"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/redact"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationinvestigation"
 )
 
 // ActionRunner performs on-demand actions for a failure id using the admin's
@@ -60,6 +62,11 @@ type ActionEligibilityRunner interface {
 // the model and opens a PR, so it can run for a while.
 const defaultActionTimeout = 5 * time.Minute
 
+// CausalFixPreviewRunner generates a non-confirmable preview from one reverified proposal.
+type CausalFixPreviewRunner interface {
+	Preview(context.Context, remediationinvestigation.OperationRef, string, string) (causalfixpreview.Preview, error)
+}
+
 // Options configures a server Handler.
 type Options struct {
 	// DataDir is the fetcher output directory served at /data. Required.
@@ -77,6 +84,7 @@ type Options struct {
 	AnalysisCorrections            AnalysisCorrectionRunner
 	SourceInvestigation            SourceInvestigationRunner
 	CausalRemediationInvestigation CausalRemediationInvestigationRunner
+	CausalFixPreview               CausalFixPreviewRunner
 	// ChatFix bridges one selected chat response into the existing fix preview.
 	ChatFix ChatFixRunner
 	// ActionTimeout bounds a single action. Zero uses defaultActionTimeout.
@@ -165,6 +173,7 @@ type Features struct {
 	SourceInvestigation                         bool `json:"source_investigation,omitempty"`
 	CausalRemediationInvestigation              bool `json:"causal_remediation_investigation,omitempty"`
 	CausalRemediationInvestigationAuthenticated bool `json:"causal_remediation_investigation_authenticated,omitempty"`
+	CausalRemediationFixPreview                 bool `json:"causal_remediation_fix_preview,omitempty"`
 	// ChatFix enables server-validated chat context for fix previews.
 	ChatFix              bool   `json:"chat_fix,omitempty"`
 	ChatFixMinConfidence string `json:"chat_fix_min_confidence,omitempty"`
@@ -300,6 +309,11 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, guard(startCausalRemediationInvestigationHandler(timeout, opts.CausalRemediationInvestigation))))
 		mux.Handle("GET "+path,
 			auth.Middleware(opts.Auth, getCausalRemediationInvestigationHandler(timeout, opts.CausalRemediationInvestigation)))
+		if opts.CausalFixPreview != nil {
+			caps.Features.CausalRemediationFixPreview = true
+			mux.Handle("POST "+path+"/fix-preview",
+				auth.Middleware(opts.Auth, guard(causalFixPreviewHandler(defaultActionTimeout, opts.CausalFixPreview))))
+		}
 	}
 
 	if opts.Auth != nil && opts.AnalysisCorrections != nil {
