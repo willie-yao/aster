@@ -102,13 +102,34 @@ printf '%s\n' "$security_state"
 tool_versions=$(docker run --rm "${runtime_args[@]}" --entrypoint /bin/sh "$image" -c '
   set -eu
   go version
+  go env GOTOOLCHAIN
   git version
   opencode --version
 ')
 printf '%s\n' "$tool_versions"
 printf '%s\n' "$tool_versions" | grep -Fxq 'go version go1.25.12 linux/amd64'
+printf '%s\n' "$tool_versions" | grep -Fxq 'local'
 printf '%s\n' "$tool_versions" | grep -Eq '^git version [0-9]+\.[0-9]+\.[0-9]+'
 printf '%s\n' "$tool_versions" | grep -Fxq '1.18.2'
+
+toolchain_guard=$(docker run --rm "${runtime_args[@]}" --entrypoint /bin/sh "$image" -c '
+  set -eu
+  mkdir /workspace/newer-toolchain
+  cd /workspace/newer-toolchain
+  printf "module example.com/newer\n\ngo 1.26.0\n" > go.mod
+  set +e
+  output=$(go list ./... 2>&1)
+  status=$?
+  set -e
+  test "$status" -ne 0
+  case "$output" in
+    *downloading*) echo "Go attempted a runtime toolchain download" >&2; exit 1 ;;
+    *GOTOOLCHAIN=local*) ;;
+    *) printf "%s\n" "$output" >&2; exit 1 ;;
+  esac
+  printf "toolchain-download=disabled\n"
+')
+printf '%s\n' "$toolchain_guard"
 
 identity=$(docker run --rm "${runtime_args[@]}" "$image" --version)
 expected_identity="fixexecutor version=${expected_version} commit=${expected_commit} image_tag=${expected_image_tag}"

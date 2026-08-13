@@ -22,6 +22,7 @@ func TestAgentSandboxFixExecutorImageIncludesValidationToolchain(t *testing.T) {
 	block := dockerfileStage(t, text, "agent-sandbox-fix-executor", "agent-sandbox-analysis-executor")
 	for _, required := range []string{
 		"COPY --from=agent-sandbox-fix-go /usr/local/go /usr/local/go",
+		"GOTOOLCHAIN=local",
 		`test "$(go env GOVERSION)" = "go1.25.12"`,
 		`test "$(opencode --version)" = "1.18.2"`,
 	} {

@@ -61,7 +61,8 @@ ARG COMMIT=dev
 ARG IMAGE_TAG=dev
 USER root
 COPY --from=agent-sandbox-fix-go /usr/local/go /usr/local/go
-ENV PATH=/usr/local/go/bin:${PATH}
+ENV PATH=/usr/local/go/bin:${PATH} \
+    GOTOOLCHAIN=local
 RUN apk add --no-cache ca-certificates git \
  && test "$(go env GOVERSION)" = "go1.25.12" \
  && git --version \

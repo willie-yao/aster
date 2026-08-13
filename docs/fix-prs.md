@@ -649,7 +649,8 @@ certificates. It does not include `make` or repository-specific development tool
 Configure only validators whose executables exist in the selected image. A missing
 executable produces a bounded terminal failure and no actionable Fix PR preview.
 The immutable image supports CAPZ Go validators such as `go test`, `go vet`, and
-`go version` while retaining UID/GID 65532, the `/usr/local/bin/fixexecutor`
+`go version`. `GOTOOLCHAIN=local` prevents runtime toolchain downloads. The image
+retains UID/GID 65532, the `/usr/local/bin/fixexecutor`
 entrypoint, the fixed provider environment and output-leak protections, and the
 same runtime security contract. The credential-free image fixture proves patch
 generation, Go validation, result reconstruction, and
