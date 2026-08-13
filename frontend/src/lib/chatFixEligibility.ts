@@ -1,3 +1,6 @@
+import type { AuthStatus } from "../hooks/useAuth";
+import type { AnalysisChatReference } from "../types/analysisChat";
+
 export interface ChatFixSourceRepository {
   owner: string;
   name: string;
@@ -36,4 +39,16 @@ export function chatFixVerifiedSourcePaths(
     }
   }
   return paths.sort();
+}
+
+export function fixInvestigationAvailable(
+  analysis: AnalysisChatReference,
+  analysisChatEnabled: boolean,
+  junitChatFixEnabled: boolean,
+  authStatus: AuthStatus,
+  analysisEligible: boolean,
+): boolean {
+  return analysisEligible && analysisChatEnabled && junitChatFixEnabled &&
+    (authStatus === "authenticated" || authStatus === "anonymous") &&
+    analysis.scope !== "pattern" && analysis.source !== "build" && Boolean(analysis.junit_file);
 }
