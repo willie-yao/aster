@@ -1887,6 +1887,8 @@ grep -Fq 'serviceAccountName: test-prow-ai-dashboard-agent-sandbox-client' "$tmp
 grep -Fq 'name: AGENT_SANDBOX_MODEL_PROVIDER_ENDPOINT' "$tmp/agent-sandbox-render.yaml"
 grep -A1 -F 'name: AGENT_SANDBOX_MODEL_PROVIDER_REASONING_EFFORT' "$tmp/agent-sandbox-render.yaml" | grep -Fq 'value: "high"'
 grep -Fq "object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == \\\"high\\\"" "$tmp/agent-sandbox-render.yaml"
+grep -Fq "request.operation != 'UPDATE' || object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == oldObject.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort']" "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'size(object.metadata.annotations) == 3' "$tmp/agent-sandbox-render.yaml"
 grep -Fq "variables.container.env[1].name == 'PROW_AI_MODEL_PROVIDER_TOKEN'" "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'size(variables.container.env) == 2' "$tmp/agent-sandbox-render.yaml"
 grep -Fq '(!has(variables.container.envFrom) || size(variables.container.envFrom) == 0)' "$tmp/agent-sandbox-render.yaml"
@@ -1900,6 +1902,32 @@ grep -A1 -F 'name: AGENT_SANDBOX_OUTPUT_LIMIT_BYTES' "$tmp/agent-sandbox-render.
 grep -Fq 'local/agent-sandbox-fix-executor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$tmp/agent-sandbox-render.yaml"
 if [ "$(grep -Fc 'image: local/remote-fixer:sha-abcdef0' "$tmp/agent-sandbox-render.yaml")" -ne 2 ]; then
   echo 'Agent Sandbox did not select the remote fixer for server and worker' >&2
+  exit 1
+fi
+
+python3 - "$tmp/agent-sandbox.yaml" "$tmp/agent-sandbox-unset-reasoning.yaml" <<'PYUNSETFIXREASONING'
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text()
+for value in (
+    "            reasoning_effort: high\n",
+    "      reasoningEffort: high\n",
+):
+    assert text.count(value) == 1
+    text = text.replace(value, "")
+Path(sys.argv[2]).write_text(text)
+PYUNSETFIXREASONING
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-unset-reasoning.yaml" > "$tmp/agent-sandbox-unset-reasoning-render.yaml"
+grep -Fq "request.operation != 'CREATE' || !has(object.metadata.annotations) || !('prow-ai-dashboard/model-provider-reasoning-effort' in object.metadata.annotations)" "$tmp/agent-sandbox-unset-reasoning-render.yaml"
+grep -Fq "(has(object.metadata.annotations) && 'prow-ai-dashboard/model-provider-reasoning-effort' in object.metadata.annotations) == (has(oldObject.metadata.annotations) && 'prow-ai-dashboard/model-provider-reasoning-effort' in oldObject.metadata.annotations)" "$tmp/agent-sandbox-unset-reasoning-render.yaml"
+grep -Fq "has(oldObject.metadata.annotations) && 'prow-ai-dashboard/model-provider-reasoning-effort' in oldObject.metadata.annotations && object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == oldObject.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort']" "$tmp/agent-sandbox-unset-reasoning-render.yaml"
+grep -Fq 'size(object.metadata.annotations) == 2' "$tmp/agent-sandbox-unset-reasoning-render.yaml"
+if grep -Fq 'has(object.metadata.annotations[' "$tmp/agent-sandbox-unset-reasoning-render.yaml"; then
+  echo 'Agent Sandbox Fix admission rendered invalid has(map[key]) CEL' >&2
+  exit 1
+fi
+if grep -Fq 'AGENT_SANDBOX_MODEL_PROVIDER_REASONING_EFFORT' "$tmp/agent-sandbox-unset-reasoning-render.yaml"; then
+  echo 'Agent Sandbox Fix render retained an unset reasoning effort' >&2
   exit 1
 fi
 
@@ -2133,6 +2161,8 @@ grep -Fq 'variables.pod.runtimeClassName ==' "$tmp/agent-sandbox-analyzer-render
 grep -Fq 'kata-vm-isolation' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq 'variables.pod.activeDeadlineSeconds == 915' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq "object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == \\\"high\\\"" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq "request.operation != 'UPDATE' || object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == oldObject.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort']" "$tmp/agent-sandbox-analyzer-render.yaml"
+grep -Fq 'size(object.metadata.annotations) == 5' "$tmp/agent-sandbox-analyzer-render.yaml"
 grep -Fq "variables.container.env[0].name == 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64'" "$tmp/agent-sandbox-analyzer-render.yaml"
 if [ "$(grep -Fc 'expression: "object.spec.podTemplate.spec.containers[0]"' "$tmp/agent-sandbox-analyzer-render.yaml")" -ne 1 ] || grep -Fq 'expression: "object.spec.podTemplate.spec.initContainers[0]"' "$tmp/agent-sandbox-analyzer-render.yaml"; then
   echo 'analyzer admission rendered an invalid container variable' >&2
@@ -2158,6 +2188,33 @@ if grep -Eq 'object[.]spec[.]podTemplate[.]metadata[.](finalizers|ownerReference
 fi
 if grep -Eq 'resources: \["(secrets|services|persistentvolumeclaims|pods/exec|pods/attach|nodes)"\]' "$tmp/agent-sandbox-analyzer-render.yaml"; then
   echo 'analyzer RBAC rendered a forbidden resource' >&2
+  exit 1
+fi
+
+python3 - "$tmp/agent-sandbox-analyzer.yaml" "$tmp/agent-sandbox-analyzer-unset-reasoning.yaml" <<'PYUNSETANALYZERREASONING'
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text()
+assert text.count("      reasoningEffort: high\n") == 1
+text = text.replace("      reasoningEffort: high\n", "")
+Path(sys.argv[2]).write_text(text)
+PYUNSETANALYZERREASONING
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-analyzer-unset-reasoning.yaml" > "$tmp/agent-sandbox-analyzer-unset-reasoning-render.yaml"
+grep -Fq "request.operation != 'CREATE' || !has(object.metadata.annotations) || !('prow-ai-dashboard/model-provider-reasoning-effort' in object.metadata.annotations)" "$tmp/agent-sandbox-analyzer-unset-reasoning-render.yaml"
+grep -Fq "(has(object.metadata.annotations) && 'prow-ai-dashboard/model-provider-reasoning-effort' in object.metadata.annotations) == (has(oldObject.metadata.annotations) && 'prow-ai-dashboard/model-provider-reasoning-effort' in oldObject.metadata.annotations)" "$tmp/agent-sandbox-analyzer-unset-reasoning-render.yaml"
+grep -Fq "has(oldObject.metadata.annotations) && 'prow-ai-dashboard/model-provider-reasoning-effort' in oldObject.metadata.annotations && object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == oldObject.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort']" "$tmp/agent-sandbox-analyzer-unset-reasoning-render.yaml"
+grep -Fq 'size(object.metadata.annotations) == 4' "$tmp/agent-sandbox-analyzer-unset-reasoning-render.yaml"
+if grep -Fq 'has(object.metadata.annotations[' "$tmp/agent-sandbox-analyzer-unset-reasoning-render.yaml"; then
+  echo 'Agent Sandbox analyzer admission rendered invalid has(map[key]) CEL' >&2
+  exit 1
+fi
+if grep -Fq 'AGENT_SANDBOX_MODEL_PROVIDER_REASONING_EFFORT' "$tmp/agent-sandbox-analyzer-unset-reasoning-render.yaml"; then
+  echo 'Agent Sandbox analyzer render retained an unset reasoning effort' >&2
+  exit 1
+fi
+
+if grep -R -Fq 'has(object.metadata.annotations[' "$chart/templates"; then
+  echo 'chart contains an invalid has(map[key]) annotation presence check' >&2
   exit 1
 fi
 

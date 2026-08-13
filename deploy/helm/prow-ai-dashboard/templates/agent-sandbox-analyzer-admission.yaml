@@ -61,8 +61,10 @@ spec:
     - expression: "request.operation != 'UPDATE' || object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == oldObject.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort']"
       message: "dashboard analyzer reasoning effort is immutable"
     {{- else }}
-    - expression: "request.operation != 'CREATE' || !has(object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'])"
+    - expression: "request.operation != 'CREATE' || !has(object.metadata.annotations) || !('prow-ai-dashboard/model-provider-reasoning-effort' in object.metadata.annotations)"
       message: "dashboard analyzer Sandboxes must not add a reasoning effort override"
+    - expression: "request.operation != 'UPDATE' || ((has(object.metadata.annotations) && 'prow-ai-dashboard/model-provider-reasoning-effort' in object.metadata.annotations) == (has(oldObject.metadata.annotations) && 'prow-ai-dashboard/model-provider-reasoning-effort' in oldObject.metadata.annotations) && (!has(object.metadata.annotations) || !('prow-ai-dashboard/model-provider-reasoning-effort' in object.metadata.annotations) || (has(oldObject.metadata.annotations) && 'prow-ai-dashboard/model-provider-reasoning-effort' in oldObject.metadata.annotations && object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == oldObject.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'])))"
+      message: "dashboard analyzer reasoning effort overrides cannot be introduced"
     {{- end }}
     - expression: "object.spec.operatingMode == 'Running' && has(object.spec.shutdownTime) && object.spec.shutdownPolicy == 'Delete' && object.spec.service == false && (!has(object.spec.volumeClaimTemplates) || size(object.spec.volumeClaimTemplates) == 0)"
       message: "dashboard analyzer Sandboxes require bounded delete lifecycle without Services or PVC creation"
