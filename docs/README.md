@@ -16,6 +16,7 @@ users need them.
 - [GitHub Actions and Pages](github-pages.md)
 - [Kubernetes quickstart](kubernetes.md)
 - [Kubernetes operator reference](kubernetes-reference.md)
+- [Kubernetes platform ownership](kubernetes-platform-ownership.md)
 
 ## Configure analysis
 

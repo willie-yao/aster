@@ -69,9 +69,13 @@ func main() {
 }
 
 func runKubernetes(args []string) {
-	if len(args) == 0 || (args[0] != "install" && args[0] != "upgrade") {
-		fmt.Fprintln(os.Stderr, "error: usage: fetcher kubernetes <install|upgrade> [flags]")
+	if len(args) == 0 || (args[0] != "doctor" && args[0] != "install" && args[0] != "upgrade") {
+		fmt.Fprintln(os.Stderr, "error: usage: fetcher kubernetes <doctor|install|upgrade> [flags]")
 		os.Exit(2)
+	}
+	if args[0] == "doctor" {
+		runKubernetesDoctor(args[1:])
+		return
 	}
 
 	opts := kubernetesdeploy.Options{Action: args[0]}
@@ -97,6 +101,38 @@ func runKubernetes(args []string) {
 	defer stop()
 	if err := kubernetesdeploy.Run(ctx, opts, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runKubernetesDoctor(args []string) {
+	opts := kubernetesdeploy.KubernetesDoctorOptions{}
+	fs := flag.NewFlagSet("kubernetes doctor", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.StringVar(&opts.Action, "action", "auto", "expected next operation: auto, install, or upgrade")
+	fs.StringVar(&opts.ProjectDir, "project-dir", ".", "consumer directory containing project.yaml, prompts/system.md, and optional skills")
+	fs.StringVar(&opts.ValuesFile, "values", filepath.Join("deploy", "values.yaml"), "Helm values file relative to project-dir unless absolute")
+	fs.StringVar(&opts.Release, "release", "", "Helm release name (required)")
+	fs.StringVar(&opts.Namespace, "namespace", "", "Kubernetes namespace (required)")
+	fs.StringVar(&opts.KubeContext, "kube-context", "", "explicit Kubernetes context (required)")
+	fs.StringVar(&opts.Chart, "chart", kubernetesdeploy.DefaultChart, "Helm chart path or OCI reference")
+	fs.StringVar(&opts.ChartVersion, "chart-version", "", "optional OCI chart version")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(os.Stderr, "error: unexpected arguments: %s\n", strings.Join(fs.Args(), " "))
+		os.Exit(2)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	report := kubernetesdeploy.KubernetesDoctor(ctx, opts)
+	if err := kubernetesdeploy.WriteKubernetesDoctorReport(os.Stdout, report); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if report.HasFailures() {
 		os.Exit(1)
 	}
 }

@@ -126,14 +126,40 @@ helm show values \
   --version "$CHART_VERSION"
 ```
 
-## 2. Validate the consumer bundle
+## 2. Validate the consumer bundle and live platform
 
-Run the read-only doctor:
+Run the static consumer doctor first:
 
 ```bash
 "$FETCHER" onboard doctor \
   -project-dir "$PROJECT_DIR"
 ```
+
+Then run the live read-only Kubernetes doctor with the exact chart and intended
+operation. It never uses the current context implicitly:
+
+```bash
+"$FETCHER" kubernetes doctor \
+  -action install \
+  -project-dir "$PROJECT_DIR" \
+  -values deploy/values.yaml \
+  -release "$RELEASE" \
+  -namespace "$NAMESPACE" \
+  -kube-context "$CONTEXT" \
+  -chart oci://ghcr.io/willie-yao/charts/prow-ai-dashboard \
+  -chart-version "$CHART_VERSION"
+```
+
+For an existing release, use `-action upgrade`. The doctor validates the local
+bundle and chart render, reads Helm release status from metadata-only release labels, and performs
+Kubernetes `GET` and `LIST` checks. Secret checks use metadata-only requests. Secret key
+names and values are intentionally not inspected. Fix deterministic blockers
+before install or upgrade. Warnings and unverified assumptions identify facts
+that require platform or real-AKS acceptance.
+
+See [Kubernetes platform ownership](kubernetes-platform-ownership.md) for the
+cluster-admin, platform-bundle, application-chart, consumer, and Secret-manager
+boundaries.
 
 Doctor validates the project, prompt, deployment values, credential source, and
 Prow discovery. It does not contact the model endpoint or inspect the cluster.

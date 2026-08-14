@@ -452,7 +452,7 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 		add("Kubernetes AI", DoctorPass, "API, endpoint, and model are configured", "")
 	}
 	if placeholder(values.AI.Token) && placeholder(values.AI.ExistingSecret) {
-		add("Kubernetes AI credential", DoctorWarn, "no token or existing Secret is declared in deploy/values.yaml", "Supply --set ai.token at install time or configure ai.existingSecret.")
+		add("Kubernetes AI credential", DoctorWarn, "no token or existing Secret is declared in deploy/values.yaml", "Configure ai.existingSecret and have the organization Secret manager provision the required key.")
 	}
 	return includePresubmits
 }

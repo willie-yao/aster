@@ -93,9 +93,18 @@ inside Helm values.
 The supported deployment wrapper is part of the `fetcher` binary:
 
 ```text
+fetcher kubernetes doctor
 fetcher kubernetes install
 fetcher kubernetes upgrade
 ```
+
+`doctor` renders the selected chart locally and performs live read-only checks
+against an explicit Kubernetes context. It uses only Kubernetes `GET` and `LIST`, metadata-only Secret existence and
+Helm release-label requests, and local Helm `template`. It does not read Secret payloads, Helm values, or Helm manifests
+from the cluster. Pass `-action install` or `-action upgrade` to detect
+release-state conflicts before the write command. See
+[Kubernetes platform ownership](kubernetes-platform-ownership.md) for the
+resource boundary and verification limits.
 
 Every operation validates:
 
