@@ -103,11 +103,12 @@ fetcher kubernetes upgrade
 ```
 
 `doctor` renders the selected chart locally and performs live read-only checks
-against an explicit Kubernetes context. It uses only Kubernetes `GET` and `LIST`, metadata-only Secret existence and
-Helm release-label requests, and local Helm `template`. It does not read Secret payloads, Helm values, or Helm manifests
-from the cluster. Pass `-action install` or `-action upgrade` to detect
+against an explicit Kubernetes context. It uses only Kubernetes `GET` and
+`LIST`, metadata-only Secret existence and Helm release-label requests, and
+local Helm `template`. It does not read Secret payloads, Helm values, or Helm
+manifests from the cluster. Pass `-action install` or `-action upgrade` to detect
 release-state conflicts before the write command. See
-[Kubernetes platform ownership](kubernetes-platform-ownership.md) for the
+[Kubernetes platform setup](kubernetes-platform.md) for the
 resource boundary and verification limits.
 
 Every operation validates:
@@ -127,60 +128,17 @@ Relative `--values` paths are resolved from `--project-dir`. Install refuses an
 existing release. Upgrade requires an existing release. The current kubectl or
 Helm context is never selected implicitly.
 
-## Local chart development
+## Development and release references
 
-The wrapper defaults to the published OCI chart. Use the local chart only when
-testing engine chart changes:
+Use a local chart only while testing engine chart changes. `--dry-run` invokes
+local `helm template`, does not contact the cluster, and does not print rendered
+Secret values. See [Local development](development.md) for build and chart
+commands.
 
-```bash
-export PROJECT_DIR="<consumer-directory>"
-export RELEASE="<dashboard-release>"
-export NAMESPACE="<dashboard-namespace>"
-export CONTEXT="<explicit-context>"
-
-./bin/fetcher kubernetes install \
-  --project-dir "$PROJECT_DIR" \
-  --values deploy/values.yaml \
-  --release "$RELEASE" \
-  --namespace "$NAMESPACE" \
-  --kube-context "$CONTEXT" \
-  --chart deploy/helm/prow-ai-dashboard \
-  --dry-run
-```
-
-`--dry-run` runs `helm template` locally. It does not contact the context or
-print rendered Secrets.
-
-## Building and publishing images
-
-For a fork or local registry:
-
-```bash
-export IMAGE="ghcr.io/<owner>/prow-ai-dashboard"
-export VERSION="vX.Y.Z"
-
-make image IMAGE="$IMAGE" VERSION="$VERSION"
-make analyzer-image IMAGE="$IMAGE" VERSION="$VERSION"
-make fixer-image IMAGE="$IMAGE" VERSION="$VERSION"
-make remote-fixer-image IMAGE="$IMAGE" VERSION="$VERSION"
-make agent-sandbox-fix-executor-image IMAGE="$IMAGE" VERSION="$VERSION"
-
-docker push "${IMAGE}:${VERSION}"
-docker push "${IMAGE}/analyzer:${VERSION}"
-docker push "${IMAGE}/fixer:${VERSION}"
-docker push "${IMAGE}/remote-fixer:${VERSION}"
-docker push "${IMAGE}/agent-sandbox-fix-executor:${VERSION}"
-```
-
-Pushes to `main` and `vX.Y.Z` tags in the engine repository publish images
-through `.github/workflows/image.yml`. A release tag also publishes the Helm
-chart and attaches the packaged chart to the GitHub release. See
-[Releasing](releasing.md).
-
-Do not use a mutable tag for a production rollback target. Agent Sandbox
-consumers must resolve the executor tag to its OCI digest and configure
-`agentSandbox.fixRuntime.image.digest`; a tag alone is rejected. Record the
-chart version and resolved image references before changing a live release.
+Published releases provide paired application and platform charts, CLI assets,
+and immutable image identities. Production rollbacks must use a recorded chart
+version and immutable image references. Agent Sandbox executor images require
+OCI digests. See [Releasing](releasing.md) for publication and provenance.
 
 ## Upgrade behavior
 
@@ -386,102 +344,24 @@ that the public reverse proxy preserves the header:
 curl -fsSI https://dashboard.example.com/ | grep -i '^strict-transport-security:'
 ```
 
-## Analysis chat
+## Optional server and automation features
 
-Analysis chat is Kubernetes-native and persists owner-bound session state on the
-shared volume. Multiple server replicas can serve the same session when the
-storage backend provides the required filesystem semantics.
+Enable optional features only after the baseline writer, server, storage, and
+public data path are healthy.
 
-Chat reuses `server.actions` authentication settings but does not enable GitHub
-writes or require a bot token. Chat-only OAuth requests `read:user`. Configure
-session TTL, deployment-wide limits, per-owner limits, and per-turn timeouts
-under `server.chat`.
+- [Server mode](server.md) covers authentication, capabilities, analysis chat,
+  and admin-gated actions.
+- [GitHub issues](github-issues.md) covers issue credentials and issue state.
+- [Email notifications](notifications.md) covers SMTP Secret references and
+  notification ownership.
+- [Fix PR generation](fix-prs.md) covers remediation policy, GitHub writes,
+  Agent Sandbox execution, and confirmation boundaries.
+- [Optional features](optional-features.md) provides the high-level feature
+  matrix.
 
-Correction promotion is disabled by default. When enabled, it writes a private
-audit ledger and a public correction overlay without rewriting fetched job
-JSON.
-
-See [Server mode](server.md) for OAuth, proxy mode, chat, correction review, and
-trusted-origin configuration.
-
-## Causal remediation investigation
-
-Set `server.remediationInvestigation.enabled=true` with `ai.enabled=true` to
-expose the authenticated **Investigate possible fix** operation. It reuses
-`server.actions` OAuth or proxy authentication, but does not enable actions or
-require `BOT_TOKEN`. Configure its overall timeout and bounded retained status
-count under `server.remediationInvestigation`.
-
-The server reads the existing project prompt, skills, artifact backend,
-`ai.source_repo`, and `ai.fix_prs` destination policy. The default destination
-repository is constrained to exact relevant files from the frozen causal input.
-Cross-repository Prow configuration targets require an explicit
-`ai.fix_prs.allowed_repositories` path prefix. An optional read-only GitHub token
-comes from the existing `ai.githubReadToken*` settings.
-
-File Issue and Preview Fix PR remain disabled for causal-group results. See
-[Server mode](server.md#causal-remediation-investigation-api) for the endpoint,
-idempotency, concurrency, timeout, stale-result, and privacy contract.
-
-## Authenticated write actions
-
-Write actions are disabled by default. Enable them only after configuring:
-
-- `server.actions.enabled=true`.
-- `server.actions.mode` as `oauth` or `proxy`.
-- A non-empty `server.actions.admins` allowlist.
-- Existing Secrets for OAuth or proxy credentials.
-- A secure origin topology.
-
-OAuth and proxy modes authenticate the initiating admin separately from the
-GitHub write credential. OAuth uses `read:user`; `BOT_TOKEN` performs enabled
-writes in both modes. Keep credentials in existing Kubernetes Secrets rather
-than inline values.
-
-See [Server mode](server.md) for setup and threat boundaries.
-
-The bot-token split changes `action_preview_state.json` to version 5. During an
-upgrade, every version 1 through 4 synchronous preview is invalidated because
-its owner was bound to a credential hash rather than the initiating login.
-Admins must generate a new preview. A rollback to a pre-v5 server fails closed
-on v5 preview state; roll forward, or move the private preview state aside and
-regenerate previews after confirming no action is in progress. The separate
-`.action-write-audit/state.json` ledger remains private and must be retained
-across upgrades and rollbacks. Its dot-prefixed directory is rejected by both
-pre-v5 and current data-serving rules, so rollback does not expose the ledger.
-
-## Email notification integration
-
-Enable email delivery in `project.yaml`. If the SMTP relay requires a password,
-store it in a Secret and reference it through `fetcher.extraEnv`:
-
-```yaml
-fetcher:
-  extraEnv:
-    - name: EMAIL_SMTP_PASSWORD
-      valueFrom:
-        secretKeyRef:
-          name: dashboard-smtp
-          key: password
-```
-
-The SMTP host must be reachable from the worker or CronJob. When authenticated
-review links are enabled, also provide the password to the server through
-`server.extraEnv`. See [Email notifications](notifications.md).
-
-## Scheduled issues and fix PRs
-
-Automatic issues and fix PRs are disabled by default. Enable the feature in
-`project.yaml` and provide write-scoped tokens through Secret-backed
-`fetcher.extraEnv` entries.
-
-The standard distroless engine image does not contain git or the fix-generation
-runtime. Use a reviewed writer image before enabling scheduled fix PRs. Filing
-issues and marking failures resolved do not require that writer image.
-
-A missing token causes the optional action to be skipped without failing the
-fetch pass. See [GitHub issues](github-issues.md) and
-[Agent-proposed fix PRs](fix-prs.md) for permissions, identity, and guardrails.
+These features retain private operational state on the shared volume. Their
+write credentials and identity configuration are separate from model-provider
+credentials.
 
 ## Reusing external project configuration
 
@@ -523,11 +403,13 @@ ledgers.
 ## Related references
 
 - [Kubernetes quickstart](kubernetes.md)
-- [Experimental Orka maintainer reference](orka.md)
+- [Kubernetes platform setup](kubernetes-platform.md)
+- [Platform chart README](../deploy/helm/prow-ai-dashboard-platform/README.md)
 - [Server mode](server.md)
 - [Project configuration](project-configuration.md)
 - [Troubleshooting](troubleshooting.md)
 - [Releasing](releasing.md)
+- [Experimental Orka maintainer reference](orka.md)
 
 ## Agent Sandbox Fix runtime
 
@@ -642,11 +524,11 @@ or participate in any write action.
 The chart creates separate critic RBAC and a separate fail-closed admission
 policy. Critic Sandboxes use an immutable purpose-built image, a tokenless
 workload ServiceAccount, a secure RuntimeClass, no volumes, one request
-environment value, one container, and no public repository access. A required network policy denies
-ingress and public egress. Standard Kubernetes peer selection is the default.
-`mode: cilium` is available for Cilium-enabled target clusters with secure
-runtime and limits egress to cluster DNS plus the configured cluster-internal gateway
-port; the gateway must separately authorize the critic ServiceAccount.
+environment value, one container, and no public repository access. A required network policy
+denies ingress and public egress. Standard Kubernetes peer selection is the
+default. `mode: cilium` is available for Cilium-enabled target clusters with a
+secure runtime and limits egress to cluster DNS plus the configured
+cluster-internal gateway port; the gateway must separately authorize the critic ServiceAccount.
 
 The consumer must provide a separate private ledger PVC. The worker or fetcher
 mounts this claim, but the server and public data path do not. The gateway must

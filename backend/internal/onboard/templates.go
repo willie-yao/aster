@@ -395,145 +395,50 @@ networkPolicy:
 var k8sDeployReadmeTmpl = template.Must(template.New("README.md").Funcs(readmeTemplateFuncs).Parse(
 	`# Deploy {{.Name}} with Helm
 
-This is the project contributor path for ` + "`{{.DashboardName}}`" + `. Run commands from
-the consumer repository root. The platform administrator prepares the cluster,
-platform chart, secure runtime, storage, external identity, and Secret names.
+This handoff is for the ` + "`{{.DashboardName}}`" + ` consumer repository. Run
+commands from its root. No engine source checkout or local build is required.
 
-## Consumer files
+Use the published CLI and paired chart version from one release. The canonical
+CLI download, platform setup, and detailed operating procedures are linked at
+the end of this file.
 
-` + "```text" + `
-project.yaml
-prompts/system.md
-skills/*.yaml
-skills/*.yml
-deploy/values.yaml
-deploy/README.md
-` + "```" + `
-
-The ` + "`skills/`" + ` directory is optional unless ` + "`project.yaml`" + ` requires a
-consumer skill bundle. Do not add platform manifests, Secret values, a custom
-executor Dockerfile, or a private CA to this repository.
-
-## Required platform handoff
-
-Before deployment, obtain these reviewed values from the platform administrator:
-
-- explicit Kubernetes context and application namespace;
-- application release name and release-dedicated execution namespace;
-- published engine tag and matching application and platform chart versions;
-- RWX StorageClass or existing claim;
-- existing Secret names and non-secret key names;
-- public URL, OAuth callback, and one expected project job name.
-
-The platform administrator guide is:
-https://github.com/willie-yao/prow-ai-dashboard/blob/<published-engine-tag>/docs/kubernetes-platform-administrator.md
-
-## Set local variables
+## Project variables
 
 ` + "```bash" + `
 export PROJECT_DIR="$PWD"
+export FETCHER="<verified-fetcher-path>"
 export CLI_VERSION="<published-engine-tag>"
+export CHART_VERSION="${CLI_VERSION#v}"
 export RELEASE="<application-release-from-platform-handoff>"
 export NAMESPACE={{shellquote .Namespace}}
-export EXECUTION_NAMESPACE="<execution-namespace-from-platform-handoff>"
-export PUBLIC_URL="<https-public-dashboard-url>"
+export EXECUTION_NAMESPACE="" # set when Agent Sandbox Fix is enabled
+export CONTEXT="<explicit-kubernetes-context>"
+export PUBLIC_URL="" # set when an external public origin is configured
 export EXPECTED_JOB="<expected-job-name>"
-export CONTEXT="<your-kubernetes-context>"
-export CHART_VERSION="${CLI_VERSION#v}"
 ` + "```" + `
 
-Keep the context explicit in every cluster command. Use a published semantic
-version and matching chart versions from the same release.
+Keep the context explicit in every Kubernetes and Helm command. The platform
+administrator supplies the release, application namespace, storage, Secret names,
+and expected project job. Agent Sandbox and public-origin values are required
+only when those features are enabled.
 
-## Download the published CLI
+## Review the consumer bundle
 
-No engine source checkout or local build is required.
+Review project.yaml, prompts/system.md, optional skills, and deploy/values.yaml.
+Replace storage and Secret-name placeholders. Keep credentials out of files and
+Helm arguments.
+{{if .AIEnabled}}AI is enabled. Set ai.existingSecret to the reviewed existing provider Secret
+name and verify the non-secret key name.
+{{else}}AI is disabled. No provider Secret is required. Keep ai.existingSecret as a
+placeholder until AI is enabled through a reviewed configuration change.
+{{end}}Keep optional chat, write actions, ingress, and experimental runtimes disabled
+until the baseline dashboard is healthy.
 
-` + "```bash" + `
-export CLI_DIR="$HOME/.local/share/prow-ai-dashboard/$CLI_VERSION"
-case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64) CLI_TARGET=linux-amd64 ;;
-  Linux-aarch64|Linux-arm64) CLI_TARGET=linux-arm64 ;;
-  Darwin-x86_64) CLI_TARGET=darwin-amd64 ;;
-  Darwin-arm64) CLI_TARGET=darwin-arm64 ;;
-  *) printf 'Unsupported CLI platform\n' >&2; exit 1 ;;
-esac
-CLI_ASSET="prow-ai-dashboard-fetcher-${CLI_VERSION}-${CLI_TARGET}"
-RELEASE_URL="https://github.com/willie-yao/prow-ai-dashboard/releases/download/${CLI_VERSION}"
-install -d -m 755 "$CLI_DIR"
-if (
-  set -euo pipefail
-  DOWNLOAD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/prow-cli-download.XXXXXX")
-  cleanup_download() {
-    find "$DOWNLOAD_DIR" -type f -delete 2>/dev/null || true
-    rmdir "$DOWNLOAD_DIR" 2>/dev/null || true
-  }
-  trap cleanup_download EXIT
-  curl --fail --location "$RELEASE_URL/$CLI_ASSET" --output "$DOWNLOAD_DIR/$CLI_ASSET"
-  curl --fail --location "$RELEASE_URL/SHA256SUMS" --output "$DOWNLOAD_DIR/SHA256SUMS"
-  cd "$DOWNLOAD_DIR"
-  CHECKSUM_LINE=$(awk -v asset="$CLI_ASSET" '$2 == asset {print}' SHA256SUMS)
-  test -n "$CHECKSUM_LINE"
-  if command -v sha256sum >/dev/null && \
-    printf '%s\n' "$CHECKSUM_LINE" | sha256sum -c - 2>/dev/null; then
-    :
-  elif command -v shasum >/dev/null; then
-    printf '%s\n' "$CHECKSUM_LINE" | shasum -a 256 --check
-  else
-    printf 'sha256sum or shasum is required\n' >&2
-    exit 1
-  fi
-  install -m 0755 "$CLI_ASSET" "$CLI_DIR/$CLI_ASSET"
-); then
-  export FETCHER="$CLI_DIR/$CLI_ASSET"
-else
-  printf 'CLI download or verification failed\n' >&2
-  exit 1
-fi
-` + "```" + `
-
-## Review deploy/values.yaml
-
-Active values are application-owned settings. Platform prerequisites are not
-application values.
-
-1. Review ` + "`project.yaml`" + `, source identity, TestGrid discovery, and categories.
-2. Review every claim and TODO in ` + "`prompts/system.md`" + `.
-3. Review consumer diagnostic skills.
-4. Replace ` + "`<your-rwx-storage-class>`" + ` or set a reviewed existing claim.
-{{if .AIEnabled}}5. Confirm provider API, endpoint, model, and replace
-   ` + "`<existing-ai-secret>`" + ` in ` + "`ai.existingSecret`" + ` with the exact existing
-   name supplied by the platform administrator or Secret manager.
-{{else}}5. AI is disabled. No provider Secret is required until it is enabled through
-   a reviewed configuration change. When enabling it, set ` + "`ai.existingSecret`" + `
-   to the existing name supplied by the platform administrator.
-{{end}}6. Keep chat, write actions, public ingress, and experimental runtimes disabled
-   until the baseline dashboard is healthy.
-
-Never place tokens, passwords, private keys, or certificate data in consumer
-files or Helm arguments.
-
-Inspect the published application values:
+## Static validation and local render
 
 ` + "```bash" + `
-helm show values \
-  oci://ghcr.io/willie-yao/charts/prow-ai-dashboard \
-  --version "$CHART_VERSION"
-` + "```" + `
+"$FETCHER" onboard doctor --project-dir "$PROJECT_DIR"
 
-## Run the static doctor
-
-` + "```bash" + `
-"$FETCHER" onboard doctor \
-  --project-dir "$PROJECT_DIR"
-` + "```" + `
-
-This validates the strict project, prompt, values, credential-reference shape,
-and Prow discovery without model-provider or Kubernetes writes.
-
-## Render locally
-
-` + "```bash" + `
 "$FETCHER" kubernetes install \
   --project-dir "$PROJECT_DIR" \
   --values deploy/values.yaml \
@@ -544,12 +449,10 @@ and Prow discovery without model-provider or Kubernetes writes.
   --dry-run
 ` + "```" + `
 
-The render validates chart schema and the current project, prompt, and skills.
-It does not contact the cluster or print rendered Secret values.
+The static doctor and local render do not call the provider or write cluster
+resources.
 
-## Run the live read-only doctor
-
-Run this before any installation:
+## Live doctor and guarded install
 
 ` + "```bash" + `
 "$FETCHER" kubernetes doctor \
@@ -560,15 +463,7 @@ Run this before any installation:
   --namespace "$NAMESPACE" \
   --kube-context "$CONTEXT" \
   --chart-version "$CHART_VERSION"
-` + "```" + `
 
-Fix blocking checks. Review warnings and unverified assumptions with the platform
-administrator. Secret checks use metadata only. The doctor does not create a
-Sandbox or call the provider.
-
-## Install
-
-` + "```bash" + `
 "$FETCHER" kubernetes install \
   --project-dir "$PROJECT_DIR" \
   --values deploy/values.yaml \
@@ -578,116 +473,70 @@ Sandbox or call the provider.
   --chart-version "$CHART_VERSION"
 ` + "```" + `
 
-The wrapper refuses an existing release, includes the current project, prompt,
-and skills, waits for readiness, and rolls back a failed install.
+Resolve every blocking doctor check before installation. Secret checks use
+metadata only. The doctor does not create a Sandbox or call the provider.
 
 ## Verify
 
-Resolve and wait for the default watch-mode workloads using stable labels:
-
 ` + "```bash" + `
-SERVER_DEPLOYMENT=$(kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
-  get deployment \
+SERVER=$(kubectl --context "$CONTEXT" -n "$NAMESPACE" get deployment \
   -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=server" \
   -o jsonpath='{.items[0].metadata.name}')
-WORKER_DEPLOYMENT=$(kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
-  get deployment \
+WRITER=$(kubectl --context "$CONTEXT" -n "$NAMESPACE" get deployment \
   -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=worker" \
   -o jsonpath='{.items[0].metadata.name}')
-SERVER_SERVICE=$(kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
-  get service \
+SERVICE=$(kubectl --context "$CONTEXT" -n "$NAMESPACE" get service \
   -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=server" \
   -o jsonpath='{.items[0].metadata.name}')
-
-test -n "$SERVER_DEPLOYMENT"
-test -n "$WORKER_DEPLOYMENT"
-test -n "$SERVER_SERVICE"
-kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
-  rollout status "deployment/$SERVER_DEPLOYMENT" --timeout=5m
-kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
-  rollout status "deployment/$WORKER_DEPLOYMENT" --timeout=10m
+test -n "$SERVER" && test -n "$WRITER" && test -n "$SERVICE"
+kubectl --context "$CONTEXT" -n "$NAMESPACE" \
+  rollout status "deployment/$SERVER" --timeout=5m
+kubectl --context "$CONTEXT" -n "$NAMESPACE" \
+  rollout status "deployment/$WRITER" --timeout=10m
 ` + "```" + `
 
-Wait for the first fetch and validate local data, public origin, private-file
-filtering, and execution cleanup in one fail-closed subshell:
+Port-forward the Service in a second terminal:
 
 ` + "```bash" + `
-(
-  set -euo pipefail
-  VERIFY_DIR=$(mktemp -d "${TMPDIR:-/tmp}/prow-dashboard-verify.XXXXXX")
-  PF_PID=""
-  cleanup() {
-    if [ -n "$PF_PID" ]; then
-      kill "$PF_PID" 2>/dev/null || true
-      wait "$PF_PID" 2>/dev/null || true
-    fi
-    find "$VERIFY_DIR" -type f -delete 2>/dev/null || true
-    rmdir "$VERIFY_DIR" 2>/dev/null || true
-  }
-  trap cleanup EXIT
-
-  kubectl --context "$CONTEXT" --namespace "$NAMESPACE" \
-    port-forward "service/$SERVER_SERVICE" 18080:80 \
-    >"$VERIFY_DIR/port-forward.log" 2>&1 &
-  PF_PID=$!
-  manifest_ready=false
-  for _ in $(seq 1 60); do
-    if curl --fail --silent http://127.0.0.1:18080/data/manifest.json \
-      --output "$VERIFY_DIR/manifest.json"; then
-      manifest_ready=true
-      break
-    fi
-    sleep 10
-  done
-  if [ "$manifest_ready" != true ]; then
-    printf 'manifest did not become available within 10 minutes\n' >&2
-    exit 1
-  fi
-
-  curl --fail --silent http://127.0.0.1:18080/data/dashboard.json \
-    --output "$VERIFY_DIR/dashboard.json"
-  python3 -m json.tool "$VERIFY_DIR/manifest.json" >/dev/null
-  python3 -m json.tool "$VERIFY_DIR/dashboard.json" >/dev/null
-  grep -F "$EXPECTED_JOB" "$VERIFY_DIR/dashboard.json"
-  PRIVATE_STATUS=$(curl --silent --output /dev/null --write-out '%{http_code}' \
-    http://127.0.0.1:18080/data/ai_cache.json)
-  test "$PRIVATE_STATUS" = 404
-  curl --fail --silent "${PUBLIC_URL%/}/data/manifest.json" \
-    | python3 -m json.tool >/dev/null
-  SANDBOXES=$(kubectl --context "$CONTEXT" --namespace "$EXECUTION_NAMESPACE" \
-    get sandboxes.agents.x-k8s.io -o name)
-  test -z "$SANDBOXES"
-)
+kubectl --context "$CONTEXT" -n "$NAMESPACE" \
+  port-forward "service/$SERVICE" 18080:80
 ` + "```" + `
 
-Open the public URL and confirm expected branding, the expected project job, and OAuth sign-in
-when authentication is enabled. The private-file check must remain HTTP 404.
-Use normal DNS. Do not use a direct-IP kubeconfig, remove the CA, edit
-` + "`/etc/hosts`" + `, or set ` + "`insecure-skip-tls-verify`" + `.
+Then verify data, private-file filtering, the public origin, and execution
+cleanup:
 
-## Upgrade
+` + "```bash" + `
+curl --fail --retry 60 --retry-delay 10 --retry-connrefused \
+  http://127.0.0.1:18080/data/manifest.json | python3 -m json.tool >/dev/null
+curl --fail http://127.0.0.1:18080/data/dashboard.json | grep -F "$EXPECTED_JOB"
+test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+  http://127.0.0.1:18080/data/ai_cache.json)" = 404
+if [ -n "$PUBLIC_URL" ]; then
+  curl --fail "${PUBLIC_URL%/}/data/manifest.json" | python3 -m json.tool >/dev/null
+fi
+if [ -n "$EXECUTION_NAMESPACE" ]; then
+  test -z "$(kubectl --context "$CONTEXT" -n "$EXECUTION_NAMESPACE" \
+    get sandboxes.agents.x-k8s.io -o name)"
+fi
+` + "```" + `
 
-Commit the reviewed consumer state and record rollback inputs before changing
-versions:
+Confirm branding, the expected project job, and authentication when enabled.
+Use normal DNS and verified TLS. Do not use a direct-IP kubeconfig, edit
+/etc/hosts, remove the cluster CA, or disable TLS verification.
+
+## Guarded upgrade
+
+Commit the reviewed consumer state and record the prior Helm revision. Verify
+the new CLI and matching chart version before running:
 
 ` + "```bash" + `
 test -z "$(git status --porcelain)"
 export PRIOR_CONSUMER_COMMIT=$(git rev-parse HEAD)
-export PRIOR_FETCHER="$FETCHER"
-export PRIOR_CLI_VERSION="$CLI_VERSION"
-export PRIOR_CHART_VERSION="$CHART_VERSION"
-helm --kube-context "$CONTEXT" --namespace "$NAMESPACE" history "$RELEASE"
-export PRIOR_HELM_REVISION=$(helm --kube-context "$CONTEXT" \
-  --namespace "$NAMESPACE" status "$RELEASE" --output json \
+export PRIOR_HELM_REVISION=$(helm --kube-context "$CONTEXT" -n "$NAMESPACE" \
+  status "$RELEASE" --output json \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')
-` + "```" + `
 
-Download and verify the new published CLI, update ` + "`CHART_VERSION`" + `, then run
-the static doctor and live doctor before the guarded upgrade:
-
-` + "```bash" + `
 "$FETCHER" onboard doctor --project-dir "$PROJECT_DIR"
-
 "$FETCHER" kubernetes doctor \
   --action upgrade \
   --project-dir "$PROJECT_DIR" \
@@ -696,7 +545,6 @@ the static doctor and live doctor before the guarded upgrade:
   --namespace "$NAMESPACE" \
   --kube-context "$CONTEXT" \
   --chart-version "$CHART_VERSION"
-
 "$FETCHER" kubernetes upgrade \
   --project-dir "$PROJECT_DIR" \
   --values deploy/values.yaml \
@@ -706,49 +554,37 @@ the static doctor and live doctor before the guarded upgrade:
   --chart-version "$CHART_VERSION"
 ` + "```" + `
 
+Repeat verification after the upgrade.
+
 ## Roll back
 
-If post-upgrade verification fails, roll back to the recorded Helm revision:
-
 ` + "```bash" + `
-helm --kube-context "$CONTEXT" --namespace "$NAMESPACE" \
+helm --kube-context "$CONTEXT" -n "$NAMESPACE" \
   rollback "$RELEASE" "$PRIOR_HELM_REVISION" --wait
-` + "```" + `
-
-Restore the prior consumer bundle and matching CLI and chart version before
-validating the restored deployment:
-
-` + "```bash" + `
 git restore --source="$PRIOR_CONSUMER_COMMIT" -- \
   project.yaml prompts/system.md deploy/values.yaml
 git restore --source="$PRIOR_CONSUMER_COMMIT" -- skills 2>/dev/null || true
-export FETCHER="$PRIOR_FETCHER"
-export CLI_VERSION="$PRIOR_CLI_VERSION"
-export CHART_VERSION="$PRIOR_CHART_VERSION"
-
-"$FETCHER" kubernetes doctor \
-  --action upgrade \
-  --project-dir "$PROJECT_DIR" \
-  --values deploy/values.yaml \
-  --release "$RELEASE" \
-  --namespace "$NAMESPACE" \
-  --kube-context "$CONTEXT" \
-  --chart-version "$CHART_VERSION"
 ` + "```" + `
 
-Repeat verification using the restored bundle. Rollback does not delete retained
-PVC data or externally owned platform resources.
+Restore the CLI and chart version matching the prior consumer state, rerun the
+live doctor with ` + "`--action upgrade`" + `, and repeat verification. Rollback
+does not delete retained PVC data or externally owned platform resources.
 
-## References
+## Versioned references
 
-- Contributor guide:
-  https://github.com/willie-yao/prow-ai-dashboard/blob/<published-engine-tag>/docs/kubernetes-contributor-deployment.md
-- Platform ownership:
-  https://github.com/willie-yao/prow-ai-dashboard/blob/<published-engine-tag>/docs/kubernetes-platform-ownership.md
-- Kubernetes operator reference:
-  https://github.com/willie-yao/prow-ai-dashboard/blob/<published-engine-tag>/docs/kubernetes-reference.md
-- Troubleshooting:
-  https://github.com/willie-yao/prow-ai-dashboard/blob/<published-engine-tag>/docs/troubleshooting.md
+Print URLs pinned to the selected ` + "`CLI_VERSION`" + ` before opening the generic
+documentation:
+
+` + "```bash" + `
+for path in \
+  docs/kubernetes.md \
+  docs/kubernetes-platform.md \
+  docs/kubernetes-reference.md \
+  docs/troubleshooting.md; do
+  printf 'https://github.com/willie-yao/prow-ai-dashboard/blob/%s/%s\n' \
+    "$CLI_VERSION" "$path"
+done
+` + "```" + `
 `))
 var systemPromptTmpl = template.Must(template.New("system.md").Parse(
 	`# {{.Name}} AI prompt addendum

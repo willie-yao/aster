@@ -375,6 +375,7 @@ live deploy.
   (Copilot, OpenAI, Nvidia Dynamo/NIM, vLLM, Ollama, ...).
 - `docs/server.md` - server mode endpoints and the capability seam.
 - `docs/kubernetes.md` - first-run Kubernetes deployment quickstart.
+- `docs/kubernetes-platform.md` - platform ownership, prerequisites, and lifecycle.
 - `docs/kubernetes-reference.md` - architecture, modes, chart values, upgrades,
   and advanced Kubernetes operations.
 - `docs/orka.md` - experimental Orka maintainer and evaluation reference.

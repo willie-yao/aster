@@ -77,95 +77,156 @@ PY_VALUES
 )
 
 python3 - \
-  "$root/docs/kubernetes-contributor-deployment.md" \
-  "$root/docs/kubernetes-platform-administrator.md" \
   "$root/docs/kubernetes.md" \
-  "$root/docs/kubernetes-platform-ownership.md" \
+  "$root/docs/kubernetes-platform.md" \
   "$root/docs/kubernetes-reference.md" \
-  "$root/deploy/helm/prow-ai-dashboard-platform/README.md" <<'PY'
+  "$root/deploy/helm/prow-ai-dashboard-platform/README.md" \
+  "$consumer/deploy/README.md" \
+  "$root" <<'PY'
 from pathlib import Path
+import re
 import sys
 
-contributor = Path(sys.argv[1]).read_text()
-admin = Path(sys.argv[2]).read_text()
+quickstart = Path(sys.argv[1])
+platform = Path(sys.argv[2])
+reference = Path(sys.argv[3])
+chart = Path(sys.argv[4])
+generated = Path(sys.argv[5])
+root = Path(sys.argv[6])
 
-for raw_path in sys.argv[1:]:
-    text = Path(raw_path).read_text()
+documents = [quickstart, platform, reference, chart, generated]
+for path in documents:
+    text = path.read_text()
     for forbidden in [
         "CAPZ",
         "capz",
         "cluster-api-provider-azure",
         "prow-dashboard-demo",
         "<expected-capz-job-name>",
+        "Azure",
+        "AKS",
+        "Front Door",
         "Aster",
         "aster kubernetes",
     ]:
         if forbidden in text:
-            raise SystemExit(f"generic Kubernetes document {raw_path} contains {forbidden!r}")
+            raise SystemExit(f"generic Kubernetes document {path} contains {forbidden!r}")
 
-required = [
+quick = quickstart.read_text()
+for value in [
     "prow-ai-dashboard-fetcher-${CLI_VERSION}-${CLI_TARGET}",
     "SHA256SUMS",
+    "onboard doctor",
     "kubernetes doctor",
-    "-action install",
-    "-action upgrade",
+    "--action install",
+    "--action upgrade",
     "kubernetes install",
     "kubernetes upgrade",
-    "rollback",
-    "matching chart version",
-    "SERVER_DEPLOYMENT=",
-    "WORKER_DEPLOYMENT=",
-    "SERVER_SERVICE=",
+    "## Verify the first deployment",
+    "## Roll back",
     "EXECUTION_NAMESPACE=",
     "EXPECTED_JOB=",
     "PRIOR_CONSUMER_COMMIT",
     "PRIOR_HELM_REVISION",
-    "set -euo pipefail",
-    "manifest_ready=false",
-    "trap cleanup EXIT",
-    "CLI download or verification failed",
-    'test "$PRIVATE_STATUS" = 404',
-]
-for value in required:
-    if value not in contributor:
-        raise SystemExit(f"contributor guide missing {value!r}")
-
-install_doctor = contributor.index("-action install")
-install = contributor.index('"$FETCHER" kubernetes install', install_doctor)
-upgrade_doctor = contributor.index("-action upgrade")
-upgrade = contributor.index('"$FETCHER" kubernetes upgrade', upgrade_doctor)
-if install_doctor > install or upgrade_doctor > upgrade:
-    raise SystemExit("doctor does not precede the write command")
-
-unsupported_commands = [
-    "git clone https://github.com/willie-yao/prow-ai-dashboard",
-    "make -C",
-    "kubectl config set-cluster",
-    "az afd",
-    "--from-literal",
-]
-for value in unsupported_commands:
-    if value in contributor:
-        raise SystemExit(f"contributor guide contains unsupported command {value!r}")
-
-for value in [
-    "v0.5.3",
-    "prow-ai-dashboard-platform",
-    "RuntimeClass",
-    "Secret manager",
-    "external edge",
-    "rollback",
-    "Uninstall retains the execution namespace",
-    "export ENGINE_TAG=",
-    "export APPLICATION_RELEASE=",
-    "export EXECUTION_NAMESPACE=",
-    "export RWX_STORAGE_CLASS=",
-    "export AI_SECRET_NAME=",
-    "export PUBLIC_URL=",
-    "EXPECTED_JOB=<expected-job-name>",
+    "/data/ai_cache.json",
 ]:
-    if value not in admin:
-        raise SystemExit(f"platform administrator guide missing {value!r}")
+    if value not in quick:
+        raise SystemExit(f"Kubernetes quickstart missing {value!r}")
+
+install_doctor = quick.index("--action install")
+install = quick.index('"$FETCHER" kubernetes install', install_doctor)
+upgrade_doctor = quick.index("--action upgrade")
+upgrade = quick.index('"$FETCHER" kubernetes upgrade', upgrade_doctor)
+if install_doctor > install or upgrade_doctor > upgrade:
+    raise SystemExit("doctor does not precede the contributor write command")
+
+platform_text = platform.read_text()
+for value in [
+    "Ownership matrix",
+    "Agent Sandbox",
+    "RuntimeClass",
+    "RWX",
+    "Cilium",
+    "allowedFQDNs",
+    "Model gateway and TLS",
+    "Secret ownership",
+    "Install or upgrade the platform chart",
+    "target-cluster acceptance",
+    "Upgrade, rollback, and uninstall",
+    "helm upgrade --install",
+    "rollback",
+]:
+    if value not in platform_text:
+        raise SystemExit(f"Kubernetes platform guide missing {value!r}")
+
+generated_text = generated.read_text()
+for value in [
+    'export FETCHER="<verified-fetcher-path>"',
+    "kubernetes doctor",
+    "--action install",
+    "--action upgrade",
+    "kubernetes install",
+    "kubernetes upgrade",
+    "rollback",
+    "docs/kubernetes.md",
+    "docs/kubernetes-platform.md",
+    "docs/kubernetes-reference.md",
+]:
+    if value not in generated_text:
+        raise SystemExit(f"generated consumer README missing {value!r}")
+for duplicated in ["CLI_ASSET=", "SHA256SUMS", "DOWNLOAD_DIR=", "manifest_ready=", "for _ in"]:
+    if duplicated in generated_text:
+        raise SystemExit(f"generated consumer README duplicates canonical procedure {duplicated!r}")
+
+removed = [
+    "kubernetes-contributor-deployment.md",
+    "kubernetes-platform-ownership.md",
+    "kubernetes-platform-administrator.md",
+]
+for name in removed:
+    if (root / "docs" / name).exists():
+        raise SystemExit(f"removed Kubernetes document still exists: {name}")
+for path in [
+    root / "AGENTS.md",
+    root / "docs" / "README.md",
+    root / "docs" / "onboarding-a-new-project.md",
+    root / "backend" / "internal" / "onboard" / "templates.go",
+    quickstart,
+    platform,
+    reference,
+    chart,
+    generated,
+]:
+    text = path.read_text()
+    for name in removed:
+        if name in text:
+            raise SystemExit(f"{path} still links removed document {name}")
+
+for path in [quickstart, platform, reference, chart]:
+    text = path.read_text()
+    for target in re.findall(r"\[[^]]+\]\(([^)]+)\)", text):
+        target = target.strip().split("#", 1)[0]
+        if not target or "://" in target or target.startswith(("mailto:", "#")):
+            continue
+        resolved = (path.parent / target).resolve()
+        if not resolved.exists():
+            raise SystemExit(f"broken Markdown link in {path}: {target}")
+
+line_limits = {
+    quickstart: (180, 270),
+    platform: (150, 220),
+    reference: (400, 600),
+    chart: (80, 150),
+    generated: (120, 200),
+}
+for path, (minimum, maximum) in line_limits.items():
+    lines = len(path.read_text().splitlines())
+    if not minimum <= lines <= maximum:
+        raise SystemExit(f"{path} has {lines} lines, want {minimum}-{maximum}")
+
+generic_total = sum(len(path.read_text().splitlines()) for path in [quickstart, platform, reference])
+if not 900 <= generic_total <= 1200:
+    raise SystemExit(f"generic Kubernetes docs total {generic_total} lines, want 900-1200")
 PY
 
 bash "$root/deploy/helm/prow-ai-dashboard-platform/test-render.sh"
