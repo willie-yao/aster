@@ -128,55 +128,62 @@ func validateBundle(opts Options) (Options, []string, error) {
 		return Options{}, nil, fmt.Errorf("--kube-context is required; the current default context is never used implicitly")
 	}
 
-	if strings.TrimSpace(opts.ProjectDir) == "" {
-		opts.ProjectDir = "."
-	}
-	projectDir, err := filepath.Abs(opts.ProjectDir)
+	projectDir, valuesFile, skillPaths, err := validateLocalBundle(opts.ProjectDir, opts.ValuesFile)
 	if err != nil {
-		return Options{}, nil, fmt.Errorf("resolve project directory: %w", err)
-	}
-	opts.ProjectDir = filepath.Clean(projectDir)
-
-	if strings.TrimSpace(opts.ValuesFile) == "" {
-		opts.ValuesFile = filepath.Join("deploy", "values.yaml")
-	}
-	if !filepath.IsAbs(opts.ValuesFile) {
-		opts.ValuesFile = filepath.Join(opts.ProjectDir, opts.ValuesFile)
-	}
-	opts.ValuesFile = filepath.Clean(opts.ValuesFile)
-	if err := requireRegularFile(opts.ValuesFile, "Helm values"); err != nil {
 		return Options{}, nil, err
 	}
-
+	opts.ProjectDir, opts.ValuesFile = projectDir, valuesFile
 	if strings.TrimSpace(opts.Chart) == "" {
 		opts.Chart = DefaultChart
 	}
+	return opts, skillPaths, nil
+}
 
-	cfg, _, err := project.LoadDir(opts.ProjectDir)
+func validateLocalBundle(projectDir, valuesFile string) (string, string, []string, error) {
+	if strings.TrimSpace(projectDir) == "" {
+		projectDir = "."
+	}
+	projectDir, err := filepath.Abs(projectDir)
 	if err != nil {
-		return Options{}, nil, fmt.Errorf("validate project bundle: %w", err)
+		return "", "", nil, fmt.Errorf("resolve project directory: %w", err)
+	}
+	projectDir = filepath.Clean(projectDir)
+	if strings.TrimSpace(valuesFile) == "" {
+		valuesFile = filepath.Join("deploy", "values.yaml")
+	}
+	if !filepath.IsAbs(valuesFile) {
+		valuesFile = filepath.Join(projectDir, valuesFile)
+	}
+	valuesFile = filepath.Clean(valuesFile)
+	if err := requireRegularFile(valuesFile, "Helm values"); err != nil {
+		return "", "", nil, err
+	}
+
+	cfg, _, err := project.LoadDir(projectDir)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("validate project bundle: %w", err)
 	}
 	toolSelection := cfg.AI.EffectiveAgentic().Tools
 	if err := validateToolSelection(toolSelection); err != nil {
-		return Options{}, nil, fmt.Errorf("validate project tools: %w", err)
+		return "", "", nil, fmt.Errorf("validate project tools: %w", err)
 	}
-	set, _, err := skills.LoadForTools(opts.ProjectDir, toolSelection)
+	set, _, err := skills.LoadForTools(projectDir, toolSelection)
 	if err != nil {
-		return Options{}, nil, fmt.Errorf("validate project skills: %w", err)
+		return "", "", nil, fmt.Errorf("validate project skills: %w", err)
 	}
 	requirement := cfg.EffectiveConsumerSkills()
 	if requirement.Required && !set.ConsumerBundlePresent() {
-		return Options{}, nil, fmt.Errorf("validate project skills: consumer skill bundle is required but not present")
+		return "", "", nil, fmt.Errorf("validate project skills: consumer skill bundle is required but not present")
 	}
 	if requirement.MinimumCount > 0 && set.ConsumerCount() < requirement.MinimumCount {
-		return Options{}, nil, fmt.Errorf("validate project skills: consumer skill count %d is below required minimum %d", set.ConsumerCount(), requirement.MinimumCount)
+		return "", "", nil, fmt.Errorf("validate project skills: consumer skill count %d is below required minimum %d", set.ConsumerCount(), requirement.MinimumCount)
 	}
 
-	skillPaths, err := consumerSkillPaths(opts.ProjectDir)
+	skillPaths, err := consumerSkillPaths(projectDir)
 	if err != nil {
-		return Options{}, nil, err
+		return "", "", nil, err
 	}
-	return opts, skillPaths, nil
+	return projectDir, valuesFile, skillPaths, nil
 }
 
 func validateToolSelection(selection []string) error {

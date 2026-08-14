@@ -73,12 +73,16 @@ func main() {
 }
 
 func runKubernetes(args []string) {
-	if len(args) == 0 || (args[0] != "doctor" && args[0] != "install" && args[0] != "upgrade") {
-		fmt.Fprintln(os.Stderr, "error: usage: aster kubernetes <doctor|install|upgrade> [flags]")
+	if len(args) == 0 || (args[0] != "doctor" && args[0] != "gitops" && args[0] != "install" && args[0] != "upgrade") {
+		fmt.Fprintln(os.Stderr, "error: usage: aster kubernetes <doctor|gitops|install|upgrade> [flags]")
 		os.Exit(2)
 	}
 	if args[0] == "doctor" {
 		runKubernetesDoctor(args[1:])
+		return
+	}
+	if args[0] == "gitops" {
+		runKubernetesGitOps(args[1:])
 		return
 	}
 
@@ -104,6 +108,51 @@ func runKubernetes(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := kubernetesdeploy.Run(ctx, opts, os.Stdout, os.Stderr); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runKubernetesGitOps(args []string) {
+	if len(args) == 0 || (args[0] != "render" && args[0] != "check") {
+		fmt.Fprintln(os.Stderr, "error: usage: aster kubernetes gitops <render|check> [flags]")
+		os.Exit(2)
+	}
+
+	action := args[0]
+	opts := kubernetesdeploy.GitOpsOptions{}
+	fs := flag.NewFlagSet("kubernetes gitops "+action, flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.StringVar(&opts.ProjectDir, "project-dir", ".", "consumer directory containing project.yaml, prompts/system.md, and optional skills")
+	fs.StringVar(&opts.ValuesFile, "values", filepath.Join("deploy", "values.yaml"), "application Helm values file relative to project-dir")
+	fs.StringVar(&opts.PlatformValuesFile, "platform-values", filepath.Join("deploy", "platform-values.yaml"), "platform Helm values file used when Agent Sandbox Fix is enabled")
+	fs.StringVar(&opts.Release, "release", "", "application Helm release name (required)")
+	fs.StringVar(&opts.Namespace, "namespace", "", "application and Flux control namespace (required)")
+	fs.StringVar(&opts.ExecutionNamespace, "execution-namespace", "", "Agent Sandbox execution namespace (required when Fix is enabled)")
+	fs.StringVar(&opts.Chart, "chart", kubernetesdeploy.DefaultChart, "application OCI chart reference")
+	fs.StringVar(&opts.PlatformChart, "platform-chart", kubernetesdeploy.DefaultPlatformChart, "platform OCI chart reference")
+	fs.StringVar(&opts.ChartVersion, "chart-version", "", "exact semantic chart version (required)")
+	if action == "render" {
+		fs.StringVar(&opts.OutputDir, "output", "gitops", "generated directory relative to project-dir")
+		fs.BoolVar(&opts.DryRun, "dry-run", false, "validate and print the file plan without writing")
+	} else {
+		fs.StringVar(&opts.OutputDir, "gitops-dir", "gitops", "generated directory relative to project-dir")
+	}
+	if err := fs.Parse(args[1:]); err != nil {
+		os.Exit(2)
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(os.Stderr, "error: unexpected arguments: %s\n", strings.Join(fs.Args(), " "))
+		os.Exit(2)
+	}
+
+	var err error
+	if action == "render" {
+		err = kubernetesdeploy.RenderGitOps(opts, os.Stdout)
+	} else {
+		err = kubernetesdeploy.CheckGitOps(opts, os.Stdout)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

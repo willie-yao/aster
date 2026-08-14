@@ -337,7 +337,7 @@ func checkReleaseState(add func(string, KubernetesDoctorStatus, string, string),
 	}
 }
 
-func checkLocalSecurity(add func(string, KubernetesDoctorStatus, string, string), values kubernetesDoctorValues, cfg *project.Config) {
+func inlineCredentialFields(values kubernetesDoctorValues) []string {
 	var inline []string
 	if strings.TrimSpace(values.AI.Token) != "" {
 		inline = append(inline, "ai.token")
@@ -363,8 +363,13 @@ func checkLocalSecurity(add func(string, KubernetesDoctorStatus, string, string)
 			inline = append(inline, "server.extraEnv."+env.Name)
 		}
 	}
+	sort.Strings(inline)
+	return inline
+}
+
+func checkLocalSecurity(add func(string, KubernetesDoctorStatus, string, string), values kubernetesDoctorValues, cfg *project.Config) {
+	inline := inlineCredentialFields(values)
 	if len(inline) > 0 {
-		sort.Strings(inline)
 		add("credential references", KubernetesDoctorFail, "inline credential fields are set: "+strings.Join(inline, ", "), "Move credential values to the organization Secret manager and retain only existing Secret names in consumer files.")
 	} else {
 		add("credential references", KubernetesDoctorPass, "consumer files contain references rather than credential values", "")

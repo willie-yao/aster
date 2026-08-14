@@ -15,6 +15,7 @@ users need them.
 
 - [GitHub Actions and Pages](github-pages.md)
 - [Kubernetes quickstart](kubernetes.md)
+- [Flux GitOps deployment](kubernetes-gitops.md)
 - [Kubernetes platform setup](kubernetes-platform.md)
 - [Kubernetes operator reference](kubernetes-reference.md)
 

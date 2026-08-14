@@ -36,7 +36,7 @@ An LLM CLI can run the same engine-owned workflow with
 | Need | Use |
 | --- | --- |
 | Fast evaluation or a public read-only dashboard | [GitHub Actions and Pages](docs/github-pages.md) |
-| A private in-cluster model endpoint or persistent shared data | [Kubernetes with Helm](docs/kubernetes.md) |
+| A private in-cluster model endpoint or persistent shared data | [Kubernetes with Helm](docs/kubernetes.md) or [Flux GitOps](docs/kubernetes-gitops.md) |
 | Authenticated chat, File Issue, or Mark Resolved | [Kubernetes with Helm](docs/kubernetes.md) |
 | No cluster to operate | [GitHub Actions and Pages](docs/github-pages.md) |
 
@@ -102,6 +102,7 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 - [Onboarding](docs/onboarding-a-new-project.md)
 - [GitHub Pages](docs/github-pages.md)
 - [Kubernetes](docs/kubernetes.md)
+- [Flux GitOps](docs/kubernetes-gitops.md)
 - [Project configuration](docs/project-configuration.md)
 - [Optional features](docs/optional-features.md)
 - [Troubleshooting](docs/troubleshooting.md)

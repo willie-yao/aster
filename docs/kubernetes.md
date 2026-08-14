@@ -13,6 +13,7 @@ This page is the canonical contributor install, verification, upgrade, and
 rollback procedure. Cluster administrators should prepare prerequisites with
 [Kubernetes platform setup](kubernetes-platform.md). Detailed chart behavior is
 in the [Kubernetes operator reference](kubernetes-reference.md).
+For pull-based deployments, see [Flux GitOps deployment](kubernetes-gitops.md).
 
 ## Prerequisites
 
