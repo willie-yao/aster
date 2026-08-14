@@ -513,8 +513,8 @@ func TestScaffold_K8sStaysFocused(t *testing.T) {
 	for _, want := range []string{
 		"mode: watch", "type: inprocess", "imageTag: \"\"", "existingSecret: \"<existing-ai-secret>\"",
 		"# schedule:", "# namespace:", "chat:\n    enabled: false", "actions:\n    enabled: false",
-		"Active values below are settings a new consumer commonly owns", "Platform prerequisites are not", "No engine source checkout",
-		"helm show values", "Secret manager", "kubernetes doctor", "--chart-version \"$CHART_VERSION\"",
+		"Active values below are settings a new consumer commonly owns", "No engine source checkout",
+		"verified-fetcher-path", "kubernetes doctor", "--chart-version \"$CHART_VERSION\"", "docs/kubernetes-platform.md",
 	} {
 		if !strings.Contains(values+readme, want) {
 			t.Errorf("Kubernetes scaffold missing %q:\n%s\n%s", want, values, readme)
@@ -537,38 +537,36 @@ func TestK8sDeployReadmeGuidesSafeProjectSpecificInstall(t *testing.T) {
 	}
 
 	for _, want := range []string{
+		`export FETCHER="<verified-fetcher-path>"`,
 		`export CLI_VERSION="<published-engine-tag>"`,
 		`export CHART_VERSION="${CLI_VERSION#v}"`,
-		`CLI_ASSET="prow-ai-dashboard-fetcher-${CLI_VERSION}-${CLI_TARGET}"`,
-		`curl --fail --location "$RELEASE_URL/$CLI_ASSET"`,
-		`awk -v asset="$CLI_ASSET" '$2 == asset {print}' SHA256SUMS`,
-		`export FETCHER="$CLI_DIR/$CLI_ASSET"`,
 		`export RELEASE="<application-release-from-platform-handoff>"`,
-		`export EXECUTION_NAMESPACE="<execution-namespace-from-platform-handoff>"`,
+		`export EXECUTION_NAMESPACE=""`,
+		`export PUBLIC_URL=""`,
 		`export EXPECTED_JOB="<expected-job-name>"`,
 		"export NAMESPACE='my-proj'",
 		`"$FETCHER" onboard doctor`,
 		`"$FETCHER" kubernetes doctor`,
-		`-action install`,
+		`--action install`,
 		`"$FETCHER" kubernetes install`,
-		`-dry-run`,
-		`-action upgrade`,
+		`--dry-run`,
+		`--action upgrade`,
 		`"$FETCHER" kubernetes upgrade`,
-		`helm --kube-context "$CONTEXT" --namespace "$NAMESPACE" history "$RELEASE"`,
 		`rollback "$RELEASE" "$PRIOR_HELM_REVISION" --wait`,
-		`set -euo pipefail`,
-		`manifest_ready=false`,
-		`trap cleanup EXIT`,
-		`test "$PRIVATE_STATUS" = 404`,
-		"docs/kubernetes-contributor-deployment.md",
-		"docs/kubernetes-platform-ownership.md",
+		`--retry 60`,
+		`if [ -n "$PUBLIC_URL" ]`,
+		`if [ -n "$EXECUTION_NAMESPACE" ]`,
+		`/data/ai_cache.json)" = 404`,
+		"docs/kubernetes.md",
+		"docs/kubernetes-platform.md",
+		"docs/kubernetes-reference.md",
 	} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("generated Kubernetes README missing %q:\n%s", want, readme)
 		}
 	}
 
-	for _, unsafe := range []string{
+	for _, unwanted := range []string{
 		`export ENGINE_DIR=`,
 		`git clone https://github.com/willie-yao/prow-ai-dashboard`,
 		`make -C "$ENGINE_DIR" build`,
@@ -577,22 +575,28 @@ func TestK8sDeployReadmeGuidesSafeProjectSpecificInstall(t *testing.T) {
 		`--from-literal`,
 		`az afd`,
 		`insecure-skip-tls-verify=true`,
+		`CLI_ASSET=`,
+		`SHA256SUMS`,
+		`DOWNLOAD_DIR=`,
+		`manifest_ready=`,
+		`for _ in`,
 	} {
-		if strings.Contains(readme, unsafe) {
-			t.Errorf("generated Kubernetes README contains unsupported normal-path guidance %q:\n%s", unsafe, readme)
+		if strings.Contains(readme, unwanted) {
+			t.Errorf("generated Kubernetes README contains duplicated or unsupported guidance %q:\n%s", unwanted, readme)
 		}
 	}
 
-	doctor := strings.Index(readme, `"$FETCHER" kubernetes doctor`)
-	installSection := strings.Index(readme, "## Install")
-	liveInstall := strings.Index(readme[installSection:], `"$FETCHER" kubernetes install`)
-	if doctor < 0 || installSection < 0 || liveInstall < 0 || doctor > installSection {
+	installSection := strings.Index(readme, "## Live doctor and guarded install")
+	upgradeSection := strings.Index(readme, "## Guarded upgrade")
+	if installSection < 0 || upgradeSection < 0 {
+		t.Fatalf("generated Kubernetes README lacks lifecycle sections:\n%s", readme)
+	}
+	installBody := readme[installSection:upgradeSection]
+	if doctor, install := strings.Index(installBody, `"$FETCHER" kubernetes doctor`), strings.Index(installBody, `"$FETCHER" kubernetes install`); doctor < 0 || install < 0 || doctor > install {
 		t.Fatalf("live doctor does not precede installation:\n%s", readme)
 	}
-	upgradeSection := strings.Index(readme, "## Upgrade")
-	upgradeDoctor := strings.Index(readme[upgradeSection:], `"$FETCHER" kubernetes doctor`)
-	upgrade := strings.Index(readme[upgradeSection:], `"$FETCHER" kubernetes upgrade`)
-	if upgradeSection < 0 || upgradeDoctor < 0 || upgrade < 0 || upgradeDoctor > upgrade {
+	upgradeBody := readme[upgradeSection:]
+	if doctor, upgrade := strings.Index(upgradeBody, `"$FETCHER" kubernetes doctor`), strings.Index(upgradeBody, `"$FETCHER" kubernetes upgrade`); doctor < 0 || upgrade < 0 || doctor > upgrade {
 		t.Fatalf("upgrade doctor does not precede upgrade:\n%s", readme)
 	}
 }
@@ -612,7 +616,7 @@ func TestK8sDeployReadmeIsProjectAndProviderAgnostic(t *testing.T) {
 			t.Errorf("generated Kubernetes README contains project or provider assumption %q:\n%s", forbidden, readme)
 		}
 	}
-	for _, required := range []string{"project contributor", "consumer repository", "expected project job", "<expected-job-name>"} {
+	for _, required := range []string{"consumer repository", "expected project job", "<expected-job-name>"} {
 		if !strings.Contains(readme, required) {
 			t.Errorf("generated Kubernetes README lacks generic term %q:\n%s", required, readme)
 		}
@@ -753,9 +757,9 @@ func TestKubernetesCleanRoomScaffoldContract(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		"prow-ai-dashboard-fetcher-${CLI_VERSION}-${CLI_TARGET}",
-		"SHA256SUMS", "kubernetes doctor", "-action install", "-action upgrade",
-		"oci://ghcr.io/willie-yao/charts/prow-ai-dashboard", "rollback",
+		"verified-fetcher-path", "kubernetes doctor", "--action install", "--action upgrade",
+		"kubernetes install", "kubernetes upgrade", "rollback",
+		"docs/kubernetes.md", "docs/kubernetes-platform.md", "docs/kubernetes-reference.md",
 	} {
 		if !strings.Contains(readme, required) {
 			t.Errorf("clean-room scaffold is missing %q", required)
@@ -763,7 +767,7 @@ func TestKubernetesCleanRoomScaffoldContract(t *testing.T) {
 	}
 }
 
-func TestK8sDeployReadmeUsesPublishedReferencePlaceholders(t *testing.T) {
+func TestK8sDeployReadmePrintsVersionedReferences(t *testing.T) {
 	data := buildScaffoldData(testOpts(), nil)
 	data.Mode = modeK8s
 	data.EngineRef = "main"
@@ -775,8 +779,23 @@ func TestK8sDeployReadmeUsesPublishedReferencePlaceholders(t *testing.T) {
 	if strings.Contains(readme, "blob/main/") || strings.Contains(readme, "export ENGINE_REF=") {
 		t.Fatalf("generated Kubernetes README follows mutable main:\n%s", readme)
 	}
-	if !strings.Contains(readme, "blob/<published-engine-tag>/docs/") {
-		t.Fatalf("generated Kubernetes README lacks published reference placeholders:\n%s", readme)
+	for _, want := range []string{"for path in", "docs/kubernetes.md", "docs/kubernetes-platform.md", "blob/%s/%s", `"$CLI_VERSION" "$path"`} {
+		if !strings.Contains(readme, want) {
+			t.Fatalf("generated Kubernetes README lacks versioned reference command %q:\n%s", want, readme)
+		}
+	}
+}
+
+func TestK8sDeployReadmeIsConcise(t *testing.T) {
+	data := buildScaffoldData(testOpts(), nil)
+	data.Mode = modeK8s
+	readme, err := render(k8sDeployReadmeTmpl, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Count(readme, "\n") + 1
+	if lines < 120 || lines > 200 {
+		t.Fatalf("generated Kubernetes README has %d lines, want 120-200", lines)
 	}
 }
 

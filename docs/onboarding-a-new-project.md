@@ -196,11 +196,11 @@ external settings.
 For Pages, complete `CHECKLIST.md` and follow
 [GitHub Actions and Pages](github-pages.md).
 
-For Kubernetes, the platform administrator first follows the
-[platform administrator guide](kubernetes-platform-administrator.md). The CAPZ
-contributor edits `deploy/values.yaml`, follows the generated `deploy/README.md`,
-and uses the [contributor deployment guide](kubernetes-contributor-deployment.md).
-A published CLI and chart release do not require an engine source checkout.
+For Kubernetes, the platform administrator first follows
+[Kubernetes platform setup](kubernetes-platform.md). The project contributor
+edits `deploy/values.yaml`, follows the generated `deploy/README.md`, and uses
+the [Kubernetes quickstart](kubernetes.md). A published CLI and chart release do
+not require an engine source checkout.
 
 A successful first deployment shows the expected branding and jobs, publishes
 grounded analysis when AI is enabled, and serves healthy data endpoints. Keep
