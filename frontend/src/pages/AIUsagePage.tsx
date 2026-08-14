@@ -60,16 +60,13 @@ function AIUsagePageFrame({ children, action }: { children: ReactNode; action?: 
         sx={{
           display: "grid",
           gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "minmax(0, 1fr) auto" },
-          gridTemplateAreas: { xs: '"title" "description" "action"', sm: '"title action" "description action"' },
-          alignItems: "end",
+          gridTemplateAreas: { xs: '"title" "action"', sm: '"title action"' },
+          alignItems: "center",
           columnGap: 2,
-          rowGap: 0.75,
+          rowGap: 1,
         }}
       >
-        <Typography component="h1" sx={{ gridArea: "title", ...overviewTypography.pageHeadline }}>AI usage</Typography>
-        <Typography color="text.secondary" sx={{ gridArea: "description", maxWidth: "78ch", ...overviewTypography.primaryBody }}>
-          Provider-reported tokens, recorded-price estimates, and current-rate historical repricing for private operator review.
-        </Typography>
+        <Typography component="h1" sx={{ gridArea: "title", ...overviewTypography.pageHeadline }}>AI Usage</Typography>
         {action && <Box sx={{ gridArea: "action", justifySelf: { xs: "start", sm: "end" }, alignSelf: "end" }}>{action}</Box>}
       </Box>
       {children}
@@ -257,9 +254,12 @@ export function AIUsagePage() {
         <UnavailableSection title="No AI usage recorded" message="No private provider usage records are available for the selected range." />
       ) : (
         <>
-          <AIUsageCoverage data={data} partialDay={partialDay} />
           <MetricStrip items={metricItems} label="AI usage metrics" />
-          <AIUsageDailySections data={data} days={days} />
+          <AIUsageDailySections
+            data={data}
+            days={days}
+            coverageSection={<AIUsageCoverage data={data} partialDay={partialDay} />}
+          />
         </>
       )}
     </AIUsagePageFrame>

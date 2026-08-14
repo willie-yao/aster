@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { Fragment, useMemo, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import KeyboardArrowDown from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowRight from "@mui/icons-material/KeyboardArrowRight";
 import Box from "@mui/material/Box";
@@ -471,7 +471,15 @@ function FeatureMix({ data }: { data: AIUsageReport }) {
   );
 }
 
-export function AIUsageDailySections({ data, days }: { data: AIUsageReport; days: AIUsageDaily[] }) {
+export function AIUsageDailySections({
+  data,
+  days,
+  coverageSection,
+}: {
+  data: AIUsageReport;
+  days: AIUsageDaily[];
+  coverageSection?: ReactNode;
+}) {
   const partialDay = days.find((day) => day.current_partial_utc)?.date;
   const rangeMetadata = `${data.range.start} to ${data.range.end} UTC${partialDay ? ` · ${partialDay} partial` : ""}`;
   return (
@@ -487,6 +495,8 @@ export function AIUsageDailySections({ data, days }: { data: AIUsageReport; days
       </Box>
 
       <FeatureMix data={data} />
+
+      {coverageSection}
 
       <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
         <DetailSectionBand title="Daily usage ledger" metadata="Newest first · sortable by UTC date" />

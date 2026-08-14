@@ -43,7 +43,11 @@ function UsageFilterFields({
       <Box
         sx={{
           display: "grid",
-          gridTemplateColumns: { xs: "1fr", md: "repeat(3, minmax(0, 1fr))" },
+          gridTemplateColumns: {
+            xs: "minmax(0, 1fr)",
+            md: "repeat(3, minmax(0, 1fr)) auto",
+          },
+          alignItems: "end",
           gap: 1.5,
           p: 1.5,
         }}
@@ -105,11 +109,10 @@ function UsageFilterFields({
         <Stack
           direction="row"
           sx={{
-            gridColumn: "1 / -1",
             minHeight: 44,
             alignItems: "center",
             gap: 1,
-            flexWrap: "wrap",
+            flexWrap: "nowrap",
           }}
         >
           <Button type="submit" variant="contained" sx={{ minHeight: { xs: 44, md: 40 }, borderRadius: "4px" }}>
@@ -118,12 +121,6 @@ function UsageFilterFields({
           <Button type="button" onClick={onReset} sx={{ minHeight: { xs: 44, md: 40 }, borderRadius: "4px" }}>
             Reset
           </Button>
-          <Typography
-            color="text.secondary"
-            sx={{ ml: { md: "auto" }, width: { xs: "100%", md: "auto" }, ...overviewTypography.description }}
-          >
-            Download JSON uses the current URL filters.
-          </Typography>
         </Stack>
       </Box>
     </Box>

@@ -133,7 +133,7 @@ test("published freshness stays separate from background refresh progress", () =
 
 
 test("build failures use a bounded summary surface and canonical links", () => {
-  assert.match(source, />\s*Failure trends\s*</);
+  assert.match(source, />\s*Failure Trends\s*</);
   assert.match(source, /function BuildFailureRow/);
   assert.match(source, /to={item\.job_detail_url}/);
   assert.match(source, /aria-label={`Open details for \$\{item\.job_name\} build \$\{item\.build_id\}`}/);

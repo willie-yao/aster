@@ -112,14 +112,19 @@ test("AI usage preserves accounting semantics in the operator-ledger composition
   assert.doesNotMatch(page, /current_rate_estimated_cost_nanos \?\? "0"/);
   assert.match(page, /Provider-reported tokens/);
   assert.match(page, /model requests reported usage/);
+  assert.match(page, />AI Usage</);
+  assert.doesNotMatch(page, /Provider-reported tokens, recorded-price estimates/);
   assert.match(page, /<MetricStrip items=\{metricItems\} label="AI usage metrics"/);
+  assert.match(page, /coverageSection=\{<AIUsageCoverage/);
+  assert.ok(page.indexOf("<MetricStrip") < page.indexOf("<AIUsageDailySections"));
   assert.match(metrics, /note\?: ReactNode/);
 
   assert.match(filters, /aria-expanded=\{open\}/);
   assert.match(filters, /minHeight: 48/);
   assert.match(filters, />\s*Apply\s*</);
   assert.match(filters, />\s*Reset\s*</);
-  assert.match(filters, /Download JSON uses the current URL filters/);
+  assert.match(filters, /md: "repeat\(3, minmax\(0, 1fr\)\) auto"/);
+  assert.doesNotMatch(filters, /Download JSON uses the current URL filters/);
 
   assert.match(coverage, /Coverage and pricing/);
   assert.match(coverage, /Provider-reported requests/);
@@ -141,6 +146,9 @@ test("AI usage preserves accounting semantics in the operator-ledger composition
   assert.match(daily, /chartCurrencyPolicy\(recordedCurrency, currentCurrency, mixedCurrency\)/);
   assert.match(daily, /Selected-range feature mix/);
   assert.match(daily, /featureTokenPercentage\(tokens, selectedTokens\)/);
+  assert.match(daily, /coverageSection\?: ReactNode/);
+  assert.ok(daily.indexOf("<FeatureMix") < daily.indexOf("{coverageSection}"));
+  assert.ok(daily.indexOf("{coverageSection}") < daily.indexOf("Daily usage ledger"));
   assert.match(daily, /Daily usage ledger/);
   assert.match(daily, /aria-label="Historical daily AI usage and cost"/);
   assert.match(daily, /TableSortLabel/);
