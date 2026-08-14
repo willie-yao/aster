@@ -220,15 +220,15 @@ export function Layout() {
             />
             <NavTab
               to="/flaky"
-              label="Failure trends"
+              label="Failure Trends"
               active={flakyActive}
               current={location.pathname === "/flaky"}
             />
             {features.analysis_traces && (
-              <NavTab to="/analysis-traces" label="Analysis traces" active={tracesActive} current={tracesActive} />
+              <NavTab to="/analysis-traces" label="Analysis Traces" active={tracesActive} current={tracesActive} />
             )}
             {features.ai_usage && (
-              <NavTab to="/ai-usage" label="AI usage" active={usageActive} current={usageActive} />
+              <NavTab to="/ai-usage" label="AI Usage" active={usageActive} current={usageActive} />
             )}
           </Box>
 

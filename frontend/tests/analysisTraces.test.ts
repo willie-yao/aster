@@ -296,6 +296,12 @@ test("Analysis traces page preserves private gates query downloads and operator-
   const filters = readFileSync(resolve(process.cwd(), "src/components/AnalysisTraceFilters.tsx"), "utf8");
   const ledger = readFileSync(resolve(process.cwd(), "src/components/AnalysisTraceLedger.tsx"), "utf8");
 
+  assert.match(source, />\s*Analysis Traces\s*</);
+  assert.doesNotMatch(source, /gridArea: "description"/);
+  assert.match(source, /About trace privacy/);
+  assert.match(source, /aria-expanded=\{open\}/);
+  assert.match(source, /aria-controls=\{contentID\}/);
+  assert.match(source, /Prompts, tool arguments, tool results, credentials, diagnostic content, and billing records are never shown/);
   assert.match(source, /if \(!features\.analysis_traces\)/);
   assert.match(source, /if \(auth\.status === "loading"\)/);
   assert.match(source, /if \(auth\.status === "anonymous"\)/);

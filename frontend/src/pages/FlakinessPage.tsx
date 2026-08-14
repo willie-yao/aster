@@ -616,7 +616,7 @@ export function FlakinessPage() {
             fontWeight: 720,
           }}
         >
-          Failure trends
+          Failure Trends
         </Typography>
         <Stack
           direction={{ xs: "column", sm: "row" }}

@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import ChevronRight from "@mui/icons-material/ChevronRight";
 import Download from "@mui/icons-material/Download";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import ButtonBase from "@mui/material/ButtonBase";
 import CircularProgress from "@mui/material/CircularProgress";
+import Collapse from "@mui/material/Collapse";
 import Typography from "@mui/material/Typography";
 import { useSearchParams } from "react-router-dom";
 import { AnalysisTraceFilters } from "../components/AnalysisTraceFilters";
@@ -41,25 +44,76 @@ function AnalysisTracesPageFrame({
         sx={{
           display: "grid",
           gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "minmax(0, 1fr) auto" },
-          gridTemplateAreas: { xs: '"title" "description" "action"', sm: '"title action" "description action"' },
-          alignItems: "end",
+          gridTemplateAreas: { xs: '"title" "action"', sm: '"title action"' },
+          alignItems: "center",
           columnGap: 2,
-          rowGap: 0.75,
+          rowGap: 1,
         }}
       >
         <Typography component="h1" sx={{ gridArea: "title", ...overviewTypography.pageHeadline }}>
-          Analysis traces
-        </Typography>
-        <Typography
-          color="text.secondary"
-          sx={{ gridArea: "description", maxWidth: "76ch", ...overviewTypography.primaryBody }}
-        >
-          Private, content-free runtime metadata. Prompts, tool arguments, tool results,
-          credentials, diagnostic content, and billing records are never shown.
+          Analysis Traces
         </Typography>
         {action && <Box sx={{ gridArea: "action", justifySelf: { xs: "start", sm: "end" }, alignSelf: "end" }}>{action}</Box>}
       </Box>
       {children}
+    </Box>
+  );
+}
+
+function TracePrivacyDisclosure() {
+  const [open, setOpen] = useState(false);
+  const generatedID = useId();
+  const contentID = `trace-privacy-${generatedID.replaceAll(":", "")}`;
+
+  return (
+    <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
+      <ButtonBase
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-controls={contentID}
+        sx={{
+          width: "100%",
+          minHeight: 44,
+          px: 1.5,
+          py: 0.75,
+          justifyContent: "flex-start",
+          gap: 1,
+          bgcolor: "surface.containerHigh",
+          color: "text.primary",
+          textAlign: "left",
+          "&:hover": { bgcolor: "surface.containerHighest" },
+          "&.Mui-focusVisible": {
+            outline: "2px solid",
+            outlineColor: "primary.main",
+            outlineOffset: -2,
+          },
+        }}
+      >
+        <Typography component="span" sx={{ ...overviewTypography.secondaryBody, fontWeight: 700 }}>
+          About trace privacy
+        </Typography>
+        <ChevronRight
+          aria-hidden="true"
+          sx={{
+            ml: "auto",
+            fontSize: 20,
+            color: "text.secondary",
+            transform: open ? "rotate(90deg)" : "rotate(0deg)",
+            transition: (theme) => theme.transitions.create("transform", { duration: theme.transitions.duration.shortest }),
+            "@media (prefers-reduced-motion: reduce)": { transition: "none" },
+          }}
+        />
+      </ButtonBase>
+      <Collapse in={open} timeout="auto">
+        <Typography
+          id={contentID}
+          color="text.secondary"
+          sx={{ px: 1.5, py: 1.5, borderTop: "1px solid", borderColor: "divider", ...overviewTypography.secondaryBody }}
+        >
+          Traces contain private, content-free runtime metadata. Prompts, tool arguments, tool results, credentials, diagnostic content, and billing records are never shown.
+        </Typography>
+      </Collapse>
     </Box>
   );
 }
@@ -304,6 +358,8 @@ export function AnalysisTracesPage() {
       ) : (
         <EmptyTraceSection activeFilters={activeFilters} onClear={clearFilters} />
       )}
+
+      <TracePrivacyDisclosure />
     </AnalysisTracesPageFrame>
   );
 }

@@ -18,6 +18,9 @@ test("mobile branding link keeps an accessible home name", () => {
     layout,
     /<Typography[\s\S]*?display: \{ xs: "none", sm: "block" \}/,
   );
+  assert.match(layout, /label="Failure Trends"/);
+  assert.match(layout, /label="Analysis Traces"/);
+  assert.match(layout, /label="AI Usage"/);
 });
 
 test("run history remains contained on narrow detail pages", () => {
