@@ -84,7 +84,7 @@ app.kubernetes.io/part-of: prow-ai-dashboard-platform
 {{- if ne .Values.agentSandbox.manifestURL "https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.5.3/sandbox.yaml" -}}{{- fail "agentSandbox.manifestURL must remain the official v0.5.3 sandbox.yaml asset" -}}{{- end -}}
 {{- if ne .Values.agentSandbox.manifestSHA256 "50f54b0e746376455ae6bb8b90b436bdd8798e1296cff0d72b6267bbeb858e3c" -}}{{- fail "agentSandbox.manifestSHA256 must remain the published v0.5.3 checksum" -}}{{- end -}}
 {{- if .Values.runtimeClass.create -}}{{- fail "runtimeClass.create is unsupported; node infrastructure must provide the real handler" -}}{{- end -}}
-{{- if ne .Values.execution.networkPolicy.mode "cilium" -}}{{- fail "execution.networkPolicy.mode must remain cilium for the supported AKS contract" -}}{{- end -}}
+{{- if ne .Values.execution.networkPolicy.mode "cilium" -}}{{- fail "execution.networkPolicy.mode must remain cilium for the supported FQDN-aware network-policy contract" -}}{{- end -}}
 {{- if eq (len .Values.execution.networkPolicy.allowedFQDNs) 0 -}}{{- fail "execution.networkPolicy.allowedFQDNs must not be empty" -}}{{- end -}}
 {{- include "prow-ai-dashboard-platform.validateFQDNs" (list "execution.networkPolicy.allowedFQDNs" .Values.execution.networkPolicy.allowedFQDNs) -}}
 {{- $bindingName := include "prow-ai-dashboard-platform.bindingName" . -}}
@@ -116,8 +116,5 @@ app.kubernetes.io/part-of: prow-ai-dashboard-platform
   {{- if not $gateway.providerAuth.existingSecret -}}{{- fail "modelGateway.providerAuth.existingSecret is required" -}}{{- end -}}
   {{- if not $gateway.providerAuth.tokenKey -}}{{- fail "modelGateway.providerAuth.tokenKey is required" -}}{{- end -}}
   {{- if not $gateway.tls.existingSecret -}}{{- fail "modelGateway.tls.existingSecret is required" -}}{{- end -}}
-  {{- if $gateway.networkPolicy.allowedFQDNs -}}
-    {{- include "prow-ai-dashboard-platform.validateFQDNs" (list "modelGateway.networkPolicy.allowedFQDNs" $gateway.networkPolicy.allowedFQDNs) -}}
-  {{- end -}}
 {{- end -}}
 {{- end -}}

@@ -144,6 +144,49 @@ func TestKubernetesDoctorValidAgentSandboxBaseline(t *testing.T) {
 	}
 }
 
+func TestKubernetesDoctorUsesProviderNeutralResults(t *testing.T) {
+	dir := writeDoctorBundle(t, baselineValues(false))
+	report := runDoctorForTest(t, dir, "install", baselineDoctorRunner(), baselineCluster(false))
+	assertDoctorCheck(t, report, "external edge and DNS", KubernetesDoctorUnverified)
+
+	var output bytes.Buffer
+	if err := WriteKubernetesDoctorReport(&output, report); err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"Azure Front Door", "AKS", "real AKS", "supported AKS"} {
+		if strings.Contains(output.String(), forbidden) {
+			t.Fatalf("provider-specific doctor output contains %q:\n%s", forbidden, output.String())
+		}
+	}
+	if !strings.Contains(output.String(), "target-cluster release acceptance") {
+		t.Fatalf("doctor output lacks provider-neutral acceptance guidance:\n%s", output.String())
+	}
+}
+
+func TestKubernetesDoctorCiliumChecksFollowPlatformContract(t *testing.T) {
+	dir := writeDoctorBundle(t, baselineValues(true))
+	cluster := baselineCluster(true)
+	namespace := cluster.objects[objectKey(namespacesGVR, "", "sandbox")]
+	annotations := namespace.GetAnnotations()
+	annotations["prow-ai-dashboard/network-policy-mode"] = "unsupported"
+	namespace.SetAnnotations(annotations)
+
+	report := runDoctorForTest(t, dir, "install", baselineDoctorRunner(), cluster)
+	assertDoctorCheck(t, report, "Agent Sandbox network-policy backend", KubernetesDoctorFail)
+	for _, call := range cluster.calls {
+		if strings.Contains(call, "cilium.io") {
+			t.Fatalf("doctor inspected Cilium resources for an unselected backend: %s", call)
+		}
+	}
+	var output bytes.Buffer
+	if err := WriteKubernetesDoctorReport(&output, report); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "AKS") {
+		t.Fatalf("Cilium validation uses cloud-specific terminology:\n%s", output.String())
+	}
+}
+
 func TestKubernetesDoctorRequiresExplicitContext(t *testing.T) {
 	report := runKubernetesDoctor(context.Background(), KubernetesDoctorOptions{}, kubernetesDoctorDependencies{
 		consumerDoctor: passingConsumerDoctor,
@@ -155,7 +198,7 @@ func TestKubernetesDoctorReleaseStateConflict(t *testing.T) {
 	dir := writeDoctorBundle(t, baselineValues(false))
 	cluster := baselineCluster(false)
 	runner := baselineDoctorRunner()
-	setHelmRelease(cluster, "capz", "capz", 2, "deployed")
+	setHelmRelease(cluster, "sample", "sample", 2, "deployed")
 	report := runDoctorForTest(t, dir, "install", runner, cluster)
 	assertDoctorCheck(t, report, "Helm release", KubernetesDoctorFail)
 
@@ -169,7 +212,7 @@ func TestKubernetesDoctorMissingNamespaceAndStorage(t *testing.T) {
 	t.Run("namespace", func(t *testing.T) {
 		dir := writeDoctorBundle(t, baselineValues(false))
 		cluster := baselineCluster(false)
-		delete(cluster.objects, objectKey(namespacesGVR, "", "capz"))
+		delete(cluster.objects, objectKey(namespacesGVR, "", "sample"))
 		report := runDoctorForTest(t, dir, "install", baselineDoctorRunner(), cluster)
 		assertDoctorCheck(t, report, "application namespace", KubernetesDoctorFail)
 	})
@@ -183,7 +226,7 @@ func TestKubernetesDoctorMissingNamespaceAndStorage(t *testing.T) {
 	t.Run("invalid existing claim", func(t *testing.T) {
 		dir := writeDoctorBundle(t, baselineValues(true))
 		cluster := baselineCluster(true)
-		claim := cluster.objects[objectKey(persistentClaimsGVR, "capz", "dashboard-data")]
+		claim := cluster.objects[objectKey(persistentClaimsGVR, "sample", "dashboard-data")]
 		_ = unstructured.SetNestedStringSlice(claim.Object, []string{"ReadWriteOnce"}, "spec", "accessModes")
 		report := runDoctorForTest(t, dir, "install", baselineDoctorRunner(), cluster)
 		assertDoctorCheck(t, report, "persistent storage", KubernetesDoctorFail)
@@ -224,14 +267,14 @@ func TestKubernetesDoctorAgentSandboxFailures(t *testing.T) {
 			namespace.SetAnnotations(annotations)
 		}, check: "Agent Sandbox execution namespace"},
 		{name: "missing platform binding", mutate: func(c *fakeDoctorCluster) {
-			c.lists[listKey(configMapsGVR, "capz", "app.kubernetes.io/part-of=prow-ai-dashboard-platform,app.kubernetes.io/component=platform-binding")] = objectList()
+			c.lists[listKey(configMapsGVR, "sample", "app.kubernetes.io/part-of=prow-ai-dashboard-platform,app.kubernetes.io/component=platform-binding")] = objectList()
 		}, check: "platform binding"},
 		{name: "coordinated gateway policy drift", mutate: func(c *fakeDoctorCluster) {
 			namespace := c.objects[objectKey(namespacesGVR, "", "sandbox")]
 			annotations := namespace.GetAnnotations()
 			annotations["prow-ai-dashboard/model-gateway-namespace"] = "attacker"
 			annotations["prow-ai-dashboard/model-gateway-target-port"] = "9443"
-			allowed := []string{"github.com", "api.github.com", "proxy.golang.org", "sum.golang.org", "storage.googleapis.com"}
+			allowed := []string{"vcs.example.test", "registry.example.test", "artifacts.example.test", "provider.example.test"}
 			annotations["prow-ai-dashboard/execution-policy-sha256"] = executionPolicyHash(allowed, annotations)
 			namespace.SetAnnotations(annotations)
 			policy := &c.lists[listKey(ciliumPoliciesGVR, "sandbox", "")].Items[0]
@@ -324,29 +367,29 @@ func TestKubernetesDoctorPublicCAPrivateDNSGatewayBaseline(t *testing.T) {
 	values = strings.Replace(values, "publicCAPrivateDNS: false", "publicCAPrivateDNS: true", 1)
 	dir := writeDoctorBundle(t, values)
 	cluster := baselineCluster(true)
-	bindingList := cluster.lists[listKey(configMapsGVR, "capz", "app.kubernetes.io/part-of=prow-ai-dashboard-platform,app.kubernetes.io/component=platform-binding")]
+	bindingList := cluster.lists[listKey(configMapsGVR, "sample", "app.kubernetes.io/part-of=prow-ai-dashboard-platform,app.kubernetes.io/component=platform-binding")]
 	_ = unstructured.SetNestedField(bindingList.Items[0].Object, "gateway.platform.example.com", "data", "modelGatewayPublicHost")
 
 	selector := "app.kubernetes.io/part-of=prow-ai-dashboard-platform,app.kubernetes.io/component=model-gateway"
-	service := object(servicesGVR, "capz", "platform-model-gateway", map[string]any{"spec": map[string]any{"type": "ClusterIP", "selector": map[string]any{"app.kubernetes.io/name": "prow-ai-dashboard-platform", "app.kubernetes.io/instance": "platform", "app.kubernetes.io/component": "model-gateway"}}})
+	service := object(servicesGVR, "sample", "platform-model-gateway", map[string]any{"spec": map[string]any{"type": "ClusterIP", "selector": map[string]any{"app.kubernetes.io/name": "prow-ai-dashboard-platform", "app.kubernetes.io/instance": "platform", "app.kubernetes.io/component": "model-gateway"}}})
 	service.SetLabels(map[string]string{"app.kubernetes.io/part-of": "prow-ai-dashboard-platform", "app.kubernetes.io/component": "model-gateway"})
 	service.SetAnnotations(map[string]string{"prow-ai-dashboard/model-gateway-host": "gateway.platform.example.com"})
-	cluster.objects[objectKey(servicesGVR, "capz", "platform-model-gateway")] = service
-	cluster.lists[listKey(servicesGVR, "capz", selector)] = objectList(service)
-	cluster.lists[listKey(endpointSlicesGVR, "capz", "kubernetes.io/service-name=platform-model-gateway")] = readyEndpointList("platform-model-gateway")
+	cluster.objects[objectKey(servicesGVR, "sample", "platform-model-gateway")] = service
+	cluster.lists[listKey(servicesGVR, "sample", selector)] = objectList(service)
+	cluster.lists[listKey(endpointSlicesGVR, "sample", "kubernetes.io/service-name=platform-model-gateway")] = readyEndpointList("platform-model-gateway")
 
 	deployment := cluster.lists[listKey(deploymentsGVR, "gateway-ns", gatewaySelectorForTest())].Items[0].DeepCopy()
 	deployment.SetName("platform-model-gateway")
-	deployment.SetNamespace("capz")
+	deployment.SetNamespace("sample")
 	annotations := deployment.GetAnnotations()
 	annotations["prow-ai-dashboard/model-gateway-host"] = "gateway.platform.example.com"
 	annotations[modelGatewayTLSSecretAnnotation] = "gateway-tls"
 	deployment.SetAnnotations(annotations)
-	cluster.lists[listKey(deploymentsGVR, "capz", gatewaySelectorForTest())] = objectList(deployment)
+	cluster.lists[listKey(deploymentsGVR, "sample", gatewaySelectorForTest())] = objectList(deployment)
 	podLabels, _, _ := unstructured.NestedStringMap(deployment.Object, "spec", "template", "metadata", "labels")
-	addGatewayPolicyFixtures(cluster, "capz", deployment, podLabels)
-	cluster.secretNames["capz/provider"] = true
-	cluster.secretNames["capz/gateway-tls"] = true
+	addGatewayPolicyFixtures(cluster, "sample", deployment, podLabels)
+	cluster.secretNames["sample/provider"] = true
+	cluster.secretNames["sample/gateway-tls"] = true
 
 	report := runDoctorForTest(t, dir, "install", baselineDoctorRunner(), cluster)
 	if report.HasFailures() {
@@ -388,7 +431,7 @@ ingress:
 `, 1)
 	dir := writeDoctorBundle(t, values)
 	cluster := baselineCluster(false)
-	cluster.secretNames["capz/oauth"] = true
+	cluster.secretNames["sample/oauth"] = true
 	report := runDoctorForTest(t, dir, "install", baselineDoctorRunner(), cluster)
 	assertDoctorCheck(t, report, "OAuth callback", KubernetesDoctorFail)
 	assertDoctorCheck(t, report, "public topology", KubernetesDoctorFail)
@@ -399,7 +442,7 @@ func TestKubernetesDoctorSecretMetadataOnly(t *testing.T) {
 	values := strings.Replace(baselineValues(false), "accessMode: ReadWriteMany", "accessMode: ReadWriteMany\nai:\n  existingSecret: ai-model", 1)
 	dir := writeDoctorBundle(t, values)
 	cluster := baselineCluster(false)
-	cluster.secretNames["capz/ai-model"] = true
+	cluster.secretNames["sample/ai-model"] = true
 	sentinel := "DO_NOT_EXPOSE_SECRET_VALUE"
 	runner := baselineDoctorRunner()
 	runner.manifest = "apiVersion: v1\nkind: Secret\nmetadata:\n  name: rendered-secret\ndata:\n  image: " + sentinel + "\nstringData:\n  image: " + sentinel + "\n---\n" + runner.manifest
@@ -414,7 +457,7 @@ func TestKubernetesDoctorSecretMetadataOnly(t *testing.T) {
 	}
 	foundMetadata := false
 	for _, call := range cluster.calls {
-		if call == "metadata secrets capz/ai-model" {
+		if call == "metadata secrets sample/ai-model" {
 			foundMetadata = true
 		}
 		if strings.HasPrefix(call, "get /v1, Resource=secrets") {
@@ -429,11 +472,11 @@ func TestKubernetesDoctorSecretMetadataOnly(t *testing.T) {
 func TestKubernetesDoctorModeChangingUpgradeIsWarning(t *testing.T) {
 	dir := writeDoctorBundle(t, baselineValues(false))
 	cluster := baselineCluster(false)
-	setHelmRelease(cluster, "capz", "capz", 2, "deployed")
-	cron := object(cronJobsGVR, "capz", "capz-fetcher", nil)
-	cron.SetLabels(map[string]string{"app.kubernetes.io/instance": "capz", "app.kubernetes.io/component": "fetcher"})
-	cluster.lists[listKey(cronJobsGVR, "capz", "app.kubernetes.io/instance=capz")] = objectList(cron)
-	cluster.objects[objectKey(serviceAccountsGVR, "capz", "app")] = object(serviceAccountsGVR, "capz", "app", nil)
+	setHelmRelease(cluster, "sample", "sample", 2, "deployed")
+	cron := object(cronJobsGVR, "sample", "sample-fetcher", nil)
+	cron.SetLabels(map[string]string{"app.kubernetes.io/instance": "sample", "app.kubernetes.io/component": "fetcher"})
+	cluster.lists[listKey(cronJobsGVR, "sample", "app.kubernetes.io/instance=sample")] = objectList(cron)
+	cluster.objects[objectKey(serviceAccountsGVR, "sample", "app")] = object(serviceAccountsGVR, "sample", "app", nil)
 	report := runDoctorForTest(t, dir, "upgrade", baselineDoctorRunner(), cluster)
 	assertDoctorCheck(t, report, "writer mode", KubernetesDoctorWarn)
 	for _, check := range report.Checks {
@@ -508,8 +551,8 @@ func TestKubernetesDoctorForbiddenReadsFailClosed(t *testing.T) {
 	t.Run("application ServiceAccount", func(t *testing.T) {
 		dir := writeDoctorBundle(t, baselineValues(false))
 		cluster := baselineCluster(false)
-		setHelmRelease(cluster, "capz", "capz", 1, "deployed")
-		key := objectKey(serviceAccountsGVR, "capz", "app")
+		setHelmRelease(cluster, "sample", "sample", 1, "deployed")
+		key := objectKey(serviceAccountsGVR, "sample", "app")
 		cluster.getErrors[key] = apierrors.NewForbidden(serviceAccountsGVR.GroupResource(), "app", fmt.Errorf("denied"))
 		report := runDoctorForTest(t, dir, "upgrade", baselineDoctorRunner(), cluster)
 		assertDoctorCheck(t, report, "application ServiceAccounts", KubernetesDoctorFail)
@@ -532,14 +575,14 @@ func TestKubernetesDoctorOriginReadsFailClosed(t *testing.T) {
 		selector string
 		check    string
 	}{
-		{name: "Service", gvr: servicesGVR, selector: "app.kubernetes.io/instance=capz,app.kubernetes.io/component=server", check: "live Service topology"},
-		{name: "Ingress", gvr: ingressesGVR, selector: "app.kubernetes.io/instance=capz", check: "live Ingress"},
+		{name: "Service", gvr: servicesGVR, selector: "app.kubernetes.io/instance=sample,app.kubernetes.io/component=server", check: "live Service topology"},
+		{name: "Ingress", gvr: ingressesGVR, selector: "app.kubernetes.io/instance=sample", check: "live Ingress"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := writeDoctorBundle(t, baselineValues(false))
 			cluster := baselineCluster(false)
-			setHelmRelease(cluster, "capz", "capz", 1, "deployed")
-			cluster.listErrors[listKey(test.gvr, "capz", test.selector)] = apierrors.NewForbidden(test.gvr.GroupResource(), "", fmt.Errorf("denied"))
+			setHelmRelease(cluster, "sample", "sample", 1, "deployed")
+			cluster.listErrors[listKey(test.gvr, "sample", test.selector)] = apierrors.NewForbidden(test.gvr.GroupResource(), "", fmt.Errorf("denied"))
 			report := runDoctorForTest(t, dir, "upgrade", baselineDoctorRunner(), cluster)
 			assertDoctorCheck(t, report, test.check, KubernetesDoctorFail)
 		})
@@ -690,7 +733,7 @@ func runDoctorForTest(t *testing.T, dir, action string, runner *doctorRunner, cl
 	t.Helper()
 	return runKubernetesDoctor(context.Background(), KubernetesDoctorOptions{
 		Action: action, ProjectDir: dir, ValuesFile: filepath.Join("deploy", "values.yaml"),
-		Release: "capz", Namespace: "capz", KubeContext: "test", Chart: "chart",
+		Release: "sample", Namespace: "sample", KubeContext: "test", Chart: "chart",
 	}, kubernetesDoctorDependencies{
 		runner:         runner,
 		clusterFactory: func(string) (clusterReader, error) { return cluster, nil },
@@ -712,7 +755,7 @@ func setHelmRelease(cluster *fakeDoctorCluster, namespace, release string, revis
 }
 
 func baselineDoctorRunner() *doctorRunner {
-	return &doctorRunner{manifest: "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: app\n  namespace: capz\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: rendered\nspec:\n  template:\n    spec:\n      containers:\n      - name: app\n        image: registry.example/dashboard:sha-abcdef1234567\n"}
+	return &doctorRunner{manifest: "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: app\n  namespace: sample\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: rendered\nspec:\n  template:\n    spec:\n      containers:\n      - name: app\n        image: registry.example/dashboard:sha-abcdef1234567\n"}
 }
 
 func baselineCluster(agentSandbox bool) *fakeDoctorCluster {
@@ -729,16 +772,16 @@ func baselineCluster(agentSandbox bool) *fakeDoctorCluster {
 	for _, gvr := range []schema.GroupVersionResource{deploymentsGVR, cronJobsGVR, endpointSlicesGVR, networkPoliciesGVR, storageClassesGVR, runtimeClassesGVR, sandboxesGVR, ciliumPoliciesGVR, ciliumClusterwidePoliciesGVR} {
 		cluster.resources[gvr] = true
 	}
-	cluster.objects[objectKey(namespacesGVR, "", "capz")] = object(namespacesGVR, "", "capz", nil)
+	cluster.objects[objectKey(namespacesGVR, "", "sample")] = object(namespacesGVR, "", "sample", nil)
 	cluster.objects[objectKey(storageClassesGVR, "", "rwx")] = object(storageClassesGVR, "", "rwx", nil)
-	cluster.lists[listKey(deploymentsGVR, "capz", "app.kubernetes.io/instance=capz")] = objectList()
-	cluster.lists[listKey(cronJobsGVR, "capz", "app.kubernetes.io/instance=capz")] = objectList()
-	cluster.lists[listKey(podsGVR, "capz", "")] = objectList()
-	cluster.lists[listKey(ingressesGVR, "capz", "app.kubernetes.io/instance=capz")] = objectList()
+	cluster.lists[listKey(deploymentsGVR, "sample", "app.kubernetes.io/instance=sample")] = objectList()
+	cluster.lists[listKey(cronJobsGVR, "sample", "app.kubernetes.io/instance=sample")] = objectList()
+	cluster.lists[listKey(podsGVR, "sample", "")] = objectList()
+	cluster.lists[listKey(ingressesGVR, "sample", "app.kubernetes.io/instance=sample")] = objectList()
 	if !agentSandbox {
 		return cluster
 	}
-	cluster.objects[objectKey(persistentClaimsGVR, "capz", "dashboard-data")] = object(persistentClaimsGVR, "capz", "dashboard-data", map[string]any{
+	cluster.objects[objectKey(persistentClaimsGVR, "sample", "dashboard-data")] = object(persistentClaimsGVR, "sample", "dashboard-data", map[string]any{
 		"spec": map[string]any{"accessModes": []any{"ReadWriteMany"}}, "status": map[string]any{"phase": "Bound"},
 	})
 	cluster.objects[objectKey(customResourcesGVR, "", "sandboxes.agents.x-k8s.io")] = object(customResourcesGVR, "", "sandboxes.agents.x-k8s.io", map[string]any{
@@ -759,8 +802,8 @@ func baselineCluster(agentSandbox bool) *fakeDoctorCluster {
 	})
 	cluster.lists[listKey(podsGVR, agentSandboxSystemNamespace, "app=agent-sandbox-controller")] = objectList(controllerPod)
 	cluster.objects[objectKey(namespacesGVR, "", "sandbox")] = object(namespacesGVR, "", "sandbox", nil)
-	cluster.objects[objectKey(namespacesGVR, "", "sandbox")].SetLabels(map[string]string{"prow-ai-dashboard/release": "capz"})
-	allowedFQDNs := []string{"github.com", "api.github.com", "proxy.golang.org", "sum.golang.org", "storage.googleapis.com"}
+	cluster.objects[objectKey(namespacesGVR, "", "sandbox")].SetLabels(map[string]string{"prow-ai-dashboard/release": "sample"})
+	allowedFQDNs := []string{"vcs.example.test", "registry.example.test", "artifacts.example.test", "provider.example.test"}
 	platformAnnotations := map[string]string{
 		"prow-ai-dashboard/runtime-class":             "kata-vm-isolation",
 		"prow-ai-dashboard/agent-sandbox-version":     supportedAgentSandboxVersion,
@@ -777,12 +820,12 @@ func baselineCluster(agentSandbox bool) *fakeDoctorCluster {
 	platformAnnotations["prow-ai-dashboard/execution-policy-sha256"] = policyHash
 	cluster.objects[objectKey(namespacesGVR, "", "sandbox")].SetAnnotations(platformAnnotations)
 	gatewayHash := gatewayPolicyHash("sandbox", "provider.example", "8443")
-	binding := object(configMapsGVR, "capz", "platform-prow-ai-dashboard-platform-binding", map[string]any{"data": map[string]any{
-		"applicationReleaseName": "capz", "executionNamespace": "sandbox", "runtimeClassName": "kata-vm-isolation", "executionPolicySHA256": policyHash,
+	binding := object(configMapsGVR, "sample", "platform-prow-ai-dashboard-platform-binding", map[string]any{"data": map[string]any{
+		"applicationReleaseName": "sample", "executionNamespace": "sandbox", "runtimeClassName": "kata-vm-isolation", "executionPolicySHA256": policyHash,
 		"modelGatewayEnabled": "true", "modelGatewayPublicHost": "", "modelGatewayUpstreamHost": "provider.example", "modelGatewayExecutionNamespace": "sandbox", "modelGatewayTargetPort": "8443", "modelGatewayPolicySHA256": gatewayHash,
 	}})
 	binding.SetLabels(map[string]string{"app.kubernetes.io/part-of": "prow-ai-dashboard-platform", "app.kubernetes.io/component": "platform-binding", "app.kubernetes.io/instance": "platform"})
-	cluster.lists[listKey(configMapsGVR, "capz", "app.kubernetes.io/part-of=prow-ai-dashboard-platform,app.kubernetes.io/component=platform-binding")] = objectList(binding)
+	cluster.lists[listKey(configMapsGVR, "sample", "app.kubernetes.io/part-of=prow-ai-dashboard-platform,app.kubernetes.io/component=platform-binding")] = objectList(binding)
 	fqdnEntries := make([]any, 0, len(allowedFQDNs))
 	for _, name := range allowedFQDNs {
 		fqdnEntries = append(fqdnEntries, map[string]any{"matchName": name})

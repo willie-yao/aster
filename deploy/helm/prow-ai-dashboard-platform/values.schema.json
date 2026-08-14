@@ -203,19 +203,11 @@
           "additionalProperties": false,
           "required": [
             "mode",
-            "dnsNamespaceSelector",
-            "dnsPodSelector",
             "allowedFQDNs"
           ],
           "properties": {
             "mode": {
               "const": "cilium"
-            },
-            "dnsNamespaceSelector": {
-              "type": "object"
-            },
-            "dnsPodSelector": {
-              "type": "object"
             },
             "allowedFQDNs": {
               "type": "array",
@@ -245,8 +237,7 @@
         "providerAuth",
         "tls",
         "service",
-        "resources",
-        "networkPolicy"
+        "resources"
       ],
       "properties": {
         "enabled": {
@@ -354,24 +345,6 @@
         },
         "resources": {
           "type": "object"
-        },
-        "networkPolicy": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "allowedFQDNs"
-          ],
-          "properties": {
-            "allowedFQDNs": {
-              "type": "array",
-              "maxItems": 64,
-              "uniqueItems": true,
-              "items": {
-                "type": "string",
-                "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\\.[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
-              }
-            }
-          }
         }
       }
     },

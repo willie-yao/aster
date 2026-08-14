@@ -545,6 +545,7 @@ func TestK8sDeployReadmeGuidesSafeProjectSpecificInstall(t *testing.T) {
 		`export FETCHER="$CLI_DIR/$CLI_ASSET"`,
 		`export RELEASE="<application-release-from-platform-handoff>"`,
 		`export EXECUTION_NAMESPACE="<execution-namespace-from-platform-handoff>"`,
+		`export EXPECTED_JOB="<expected-job-name>"`,
 		"export NAMESPACE='my-proj'",
 		`"$FETCHER" onboard doctor`,
 		`"$FETCHER" kubernetes doctor`,
@@ -596,6 +597,70 @@ func TestK8sDeployReadmeGuidesSafeProjectSpecificInstall(t *testing.T) {
 	}
 }
 
+func TestK8sDeployReadmeIsProjectAndProviderAgnostic(t *testing.T) {
+	data := buildScaffoldData(testOpts(), nil)
+	data.Mode = modeK8s
+	readme, err := render(k8sDeployReadmeTmpl, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{
+		"CAPZ", "capz", "cluster-api-provider-azure", "prow-dashboard-demo",
+		"<expected-capz-job-name>", "aster kubernetes", "Azure Front Door", "AKS",
+	} {
+		if strings.Contains(readme, forbidden) {
+			t.Errorf("generated Kubernetes README contains project or provider assumption %q:\n%s", forbidden, readme)
+		}
+	}
+	for _, required := range []string{"project contributor", "consumer repository", "expected project job", "<expected-job-name>"} {
+		if !strings.Contains(readme, required) {
+			t.Errorf("generated Kubernetes README lacks generic term %q:\n%s", required, readme)
+		}
+	}
+}
+
+func TestK8sDeployReadmeUsesTheSameProcessForDifferentProjects(t *testing.T) {
+	renderConsumer := func(opts Options) (scaffoldData, string, string) {
+		t.Helper()
+		opts.Mode = modeK8s
+		data := buildScaffoldData(opts, nil)
+		readme, err := render(k8sDeployReadmeTmpl, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		values, err := render(k8sValuesTmpl, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data, readme, values
+	}
+	firstOpts := testOpts()
+	firstOpts.ID = "sample-one"
+	firstOpts.Name = "Sample One"
+	firstOpts.DashboardRepo = "example/sample-one-dashboard"
+	first, firstReadme, firstValues := renderConsumer(firstOpts)
+
+	secondOpts := testOpts()
+	secondOpts.ID = "sample-two"
+	secondOpts.Name = "Sample Two"
+	secondOpts.DashboardRepo = "example/sample-two-dashboard"
+	second, secondReadme, secondValues := renderConsumer(secondOpts)
+
+	normalize := func(readme string, data scaffoldData) string {
+		return strings.NewReplacer(
+			data.Name, "<project-name>",
+			data.DashboardName, "<consumer-repository>",
+			"'"+data.Namespace+"'", "'<application-namespace>'",
+		).Replace(readme)
+	}
+	if got, want := normalize(firstReadme, first), normalize(secondReadme, second); got != want {
+		t.Fatalf("generated projects received different deployment processes\n--- first ---\n%s\n--- second ---\n%s", got, want)
+	}
+	if firstValues != secondValues {
+		t.Fatalf("project identity changed consumer Helm values\n--- first ---\n%s\n--- second ---\n%s", firstValues, secondValues)
+	}
+}
+
 func TestWriteKubernetesCleanRoomFixture(t *testing.T) {
 	out := os.Getenv("CLEANROOM_FIXTURE_OUT")
 	if out == "" {
@@ -605,6 +670,10 @@ func TestWriteKubernetesCleanRoomFixture(t *testing.T) {
 	opts := testOpts()
 	opts.Mode = modeK8s
 	opts.AIEnabled = &disabled
+	opts.ID = "sample-dashboard"
+	opts.Name = "Sample Dashboard"
+	opts.DashboardRepo = "example/sample-dashboard"
+	opts.SourceRepo = "example/sample-project"
 	data := buildScaffoldData(opts, nil)
 	projectYAML, err := renderProjectYAML(data)
 	if err != nil {
@@ -675,7 +744,8 @@ func TestKubernetesCleanRoomScaffoldContract(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		"clientSecret:", "sessionKey:", "botToken:", "--set ai.token",
-		"capz-model-gateway-ca.crt", "runtime/agent-sandbox", "ENGINE_DIR",
+		"CAPZ", "capz", "cluster-api-provider-azure", "prow-dashboard-demo",
+		"<expected-capz-job-name>", "aster kubernetes", "runtime/agent-sandbox", "ENGINE_DIR",
 		"insecure-skip-tls-verify=true", "kubectl config set-cluster", "az afd",
 	} {
 		if strings.Contains(values+readme, forbidden) {

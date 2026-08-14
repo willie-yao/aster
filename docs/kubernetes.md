@@ -8,7 +8,7 @@ public read-only dashboard without a cluster, use
 Start with `fetcher onboard` and select **Kubernetes with Helm**. The generated
 `deploy/README.md` contains project-specific commands. Platform administrators
 should first follow the [platform administrator guide](kubernetes-platform-administrator.md).
-CAPZ contributors should use the [contributor deployment guide](kubernetes-contributor-deployment.md).
+Project contributors should use the [contributor deployment guide](kubernetes-contributor-deployment.md).
 This page remains the combined quickstart reference.
 
 The default deployment uses the supported in-process analysis runtime.
@@ -46,7 +46,7 @@ export NAMESPACE="<dashboard-namespace>"
 export CONTEXT="<your-kubernetes-context>"
 export EXECUTION_NAMESPACE="<release-dedicated-execution-namespace>"
 export PUBLIC_URL="<https-public-dashboard-url>"
-export EXPECTED_JOB="<expected-capz-job-name>"
+export EXPECTED_JOB="<expected-job-name>"
 export CHART_VERSION="${CLI_VERSION#v}"
 ```
 
@@ -184,7 +184,7 @@ bundle and chart render, reads Helm release status from metadata-only release la
 Kubernetes `GET` and `LIST` checks. Secret checks use metadata-only requests. Secret key
 names and values are intentionally not inspected. Fix deterministic blockers
 before install or upgrade. Warnings and unverified assumptions identify facts
-that require platform or real-AKS acceptance.
+that require platform or target-cluster acceptance.
 
 See [Kubernetes platform ownership](kubernetes-platform-ownership.md) for the
 cluster-admin, platform-bundle, application-chart, consumer, and Secret-manager

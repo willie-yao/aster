@@ -1,6 +1,6 @@
 # Platform resources are installed by a cluster administrator before the
 # prow-ai-dashboard application chart. This chart never creates Secret values,
-# Agent Sandbox CRDs, a RuntimeClass, secure-runtime nodes, or Azure resources.
+# Agent Sandbox CRDs, a RuntimeClass, secure-runtime nodes, or external infrastructure.
 
 nameOverride: ""
 fullnameOverride: ""
@@ -43,23 +43,13 @@ execution:
     maxMemory: 8Gi
     maxEphemeralStorage: 8Gi
   networkPolicy:
-    # The current AKS contract uses Cilium FQDN policy for GitHub, Go modules,
-    # and a public-CA privately resolved gateway.
+    # Cilium is the currently supported FQDN-aware egress backend. Supply the
+    # exact project-owned hosts required by reviewed workload commands.
     mode: cilium
-    dnsNamespaceSelector:
-      kubernetes.io/metadata.name: kube-system
-    dnsPodSelector:
-      k8s-app: kube-dns
-    allowedFQDNs:
-      - github.com
-      - api.github.com
-      - codeload.github.com
-      - objects.githubusercontent.com
-      - raw.githubusercontent.com
-      - github-releases.githubusercontent.com
-      - proxy.golang.org
-      - sum.golang.org
-      - storage.googleapis.com
+    # Fail closed until the platform administrator supplies a reviewed list.
+    # Example categories include the project's VCS, dependency registry,
+    # artifact service, and provider hosts.
+    allowedFQDNs: []
 
 modelGateway:
   enabled: false
@@ -87,8 +77,6 @@ modelGateway:
     limits:
       cpu: 250m
       memory: 128Mi
-  networkPolicy:
-    allowedFQDNs: []
 
 runtimeClass:
   # This chart validates and records the required name. It does not create the

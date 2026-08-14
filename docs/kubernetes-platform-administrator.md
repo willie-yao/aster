@@ -2,7 +2,7 @@
 
 This guide prepares one cluster and one application namespace for a
 prow-ai-dashboard consumer. The platform administrator owns shared prerequisites.
-The CAPZ contributor owns only the reviewed consumer configuration and the
+The project contributor owns only the reviewed consumer configuration and the
 application release.
 
 See [Kubernetes platform ownership](kubernetes-platform-ownership.md) for the
@@ -38,19 +38,19 @@ provider-free maintainer validation (`make cleanroom-check`) and do not substitu
 a contributor-side engine build. Repeat the clean-room walkthrough with actual
 release assets during release-candidate acceptance.
 
-## 1. Provide the AKS platform
+## 1. Provide the target Kubernetes platform
 
 Use the team's normal infrastructure-as-code process to provide:
 
-- an AKS cluster and explicit kube context;
+- a target Kubernetes cluster and explicit kube context;
 - Cilium networking for the supported exact-host egress policy;
 - an RWX-capable StorageClass or a reviewed existing RWX claim;
 - secure-runtime nodes, labels, taints, and a real RuntimeClass handler;
-- private DNS, certificates, Front Door, and public DNS where required;
+- private DNS, certificates, an external edge, and public DNS where required;
 - OAuth and other external identity applications.
 
-The Helm charts do not install Kata, gVisor, a node handler, Azure resources,
-Front Door, DNS records, or OAuth applications. Do not create a placeholder
+The Helm charts do not install Kata, gVisor, a node handler, external infrastructure,
+edge routing, DNS records, or OAuth applications. Do not create a placeholder
 RuntimeClass whose handler is absent from the nodes.
 
 ## 2. Install the supported Agent Sandbox release
@@ -122,22 +122,20 @@ execution:
   networkPolicy:
     mode: cilium
     allowedFQDNs:
-      - github.com
-      - api.github.com
-      - codeload.github.com
-      - objects.githubusercontent.com
-      - raw.githubusercontent.com
-      - github-releases.githubusercontent.com
-      - proxy.golang.org
-      - sum.golang.org
-      - storage.googleapis.com
+      - vcs.example.test
+      - registry.example.test
+      - artifacts.example.test
+      - provider.example.test
 
 modelGateway:
   enabled: false
 ```
 
-The exact-host allowlist is part of the security boundary. Wildcards, raw
-CIDRs, internal names, and unrestricted fallbacks are rejected.
+The exact-host allowlist is project-owned and part of the security boundary.
+Include only the VCS, dependency registry, artifact service, and provider hosts
+required by the configured commands. Wildcards, raw CIDRs, internal names, and
+unrestricted fallbacks are rejected. The current Cilium backend expects DNS in
+`kube-system` with the `k8s-app: kube-dns` label.
 
 For gateway mode, enable `modelGateway` and set only non-secret coordinates,
 image digest, and existing Secret references. The values schema and chart README
@@ -194,7 +192,7 @@ AI_SECRET_NAME=<existing-ai-secret-or-empty-when-ai-disabled>
 AI_SECRET_KEY=AI_TOKEN
 PUBLIC_URL=<https-public-dashboard-url>
 OAUTH_CALLBACK=<https-public-dashboard-url>/api/auth/callback
-EXPECTED_JOB=<expected-capz-job-name>
+EXPECTED_JOB=<expected-job-name>
 ```
 
 The contributor guide defines the doctor, install, verification, upgrade, and
@@ -204,8 +202,8 @@ NetworkPolicies, Cilium policy structure and hashes, gateway readiness, image
 digests, TLS mounts, and Secret metadata.
 
 It does not prove hostile-code isolation, real RWX behavior, provider
-compatibility, certificate trust, private DNS, Front Door, or OAuth application
-state. Verify those facts in real AKS release-candidate acceptance.
+compatibility, certificate trust, private DNS, external edge, or OAuth application
+state. Verify those facts during target-cluster release acceptance.
 
 ## 8. Upgrade, rollback, and uninstall
 
@@ -228,4 +226,4 @@ terminating Sandboxes bounded. After the application no longer references the
 platform, confirm that no Sandbox, Pod, or application RBAC remains. Delete the
 retained boundary only through a separate, explicitly reviewed cleanup action.
 External Agent Sandbox, RuntimeClass, nodes, Secrets, DNS, certificates, and
-Azure resources remain independently owned.
+External infrastructure remains independently owned.

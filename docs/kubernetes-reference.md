@@ -642,9 +642,10 @@ or participate in any write action.
 The chart creates separate critic RBAC and a separate fail-closed admission
 policy. Critic Sandboxes use an immutable purpose-built image, a tokenless
 workload ServiceAccount, a secure RuntimeClass, no volumes, one request
-environment value, one container, and no public repository access. A required network policy denies ingress and public egress. Standard Kubernetes
-peer selection is the default. `mode: cilium` is available for AKS Cilium/Kata
-and limits egress to cluster DNS plus the configured cluster-internal gateway
+environment value, one container, and no public repository access. A required network policy denies
+ingress and public egress. Standard Kubernetes peer selection is the default.
+`mode: cilium` is available for Cilium-enabled target clusters with secure
+runtime and limits egress to cluster DNS plus the configured cluster-internal gateway
 port; the gateway must separately authorize the critic ServiceAccount.
 
 The consumer must provide a separate private ledger PVC. The worker or fetcher
