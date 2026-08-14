@@ -209,26 +209,55 @@ func TestAnalysisPreviewFailedAuthenticCommandsWarnAndRemainConfirmable(t *testi
 	manager := newManager(t, pr, agent, Options{})
 	manager.opts.Agent.RequireCommandResults = true
 	manager.opts.Agent.CommandPolicy.Commands = commands
+	reconstructions := 0
 	manager.opts.ReconstructPatch = func(context.Context, runtime.RepoRef, string) (map[string]string, string, error) {
+		reconstructions++
 		return agent.res.Files, agent.res.Diff, nil
 	}
 	fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fix.Preview.Verify.Status != VerifyFailed || !slices.Contains(fix.Warnings, analysisPatchVerifyWarning) {
-		t.Fatalf("verify=%+v warnings=%v", fix.Preview.Verify, fix.Warnings)
+	if agent.calls != 1 || fix.Preview.Verify.Status != VerifyFailed || !slices.Contains(fix.Warnings, analysisPatchVerifyWarning) {
+		t.Fatalf("calls=%d verify=%+v warnings=%v", agent.calls, fix.Preview.Verify, fix.Warnings)
 	}
-	if _, err := manager.OpenFromPreview(t.Context(), fix); err != nil {
+	restored := RestoreGeneratedFix(fix.Snapshot())
+	if restored.executionVerification == nil || !restored.executionVerification.AllowFailures || restored.executionVerification.Results[0].ExitCode != 1 {
+		t.Fatalf("restored verification = %+v", restored.executionVerification)
+	}
+	if _, err := manager.OpenFromPreview(t.Context(), restored); err != nil {
 		t.Fatal(err)
 	}
-	if len(pr.opened) != 1 {
-		t.Fatalf("opened=%d", len(pr.opened))
+	if len(pr.opened) != 1 || reconstructions != 1 {
+		t.Fatalf("opened=%d reconstructions=%d", len(pr.opened), reconstructions)
 	}
 
 	drifted := RestoreGeneratedFix(fix.Snapshot())
 	drifted.executionVerification.Results[0].Argv = []string{"go", "test", "./wrong"}
 	if _, err := manager.OpenFromPreview(t.Context(), drifted); err == nil || !strings.Contains(err.Error(), "allowed argv") {
 		t.Fatalf("integrity error = %v", err)
+	}
+}
+
+func TestAnalysisPreviewTimedOutAuthenticCommandWarnsWithoutRetry(t *testing.T) {
+	failure := validAnalysisFailure()
+	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
+	agent := goodAgent()
+	commands := sandboxVerificationCommands()
+	results := sandboxCommandResults()
+	results[0].ExitCode = -1
+	results[0].TimedOut = true
+	results[0].DurationMs = commands[0].TimeoutSeconds * 1000
+	agent.res.BaseSHA = exactAnalysisRevision
+	agent.res.CommandResults = results
+	manager := newManager(t, pr, agent, Options{})
+	manager.opts.Agent.RequireCommandResults = true
+	manager.opts.Agent.CommandPolicy.Commands = commands
+	fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.calls != 1 || fix.Preview.Verify.Status != VerifyFailed || !slices.Contains(fix.Warnings, analysisPatchVerifyWarning) {
+		t.Fatalf("calls=%d verify=%+v warnings=%v", agent.calls, fix.Preview.Verify, fix.Warnings)
 	}
 }

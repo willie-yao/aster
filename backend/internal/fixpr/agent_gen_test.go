@@ -161,6 +161,28 @@ func TestGenerateWithAgent_ValidationFailureIsOneShotAndNotActionable(t *testing
 	}
 }
 
+func TestGenerateWithAgentRejectsCompletedFailedCommandResults(t *testing.T) {
+	commands := sandboxVerificationCommands()
+	results := sandboxCommandResults()
+	results[0].ExitCode = 1
+	fa := &fakeAgentRuntime{res: runtime.GenerateResult{
+		BaseSHA: "ref", Files: map[string]string{"a.yaml": "fixed\n"}, Diff: "diff", CommandResults: results,
+	}}
+	reviewer := &fakeCompleter{}
+	gp := agentGenParams(&AgentConfig{
+		Runtime: fa, RequireCommandResults: true, CommandPolicy: runtime.CommandPolicy{Commands: commands},
+	})
+	gp.critique = reviewer
+	gp.critiqueRetries = 3
+	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
+	if err == nil || !strings.Contains(err.Error(), "failed with exit code") {
+		t.Fatalf("fix=%v error=%v", fix, err)
+	}
+	if fix != nil || fa.calls != 1 || reviewer.lastSystem != "" || reviewer.lastUser != "" {
+		t.Fatalf("fix=%v runtime calls=%d critique=%q/%q", fix, fa.calls, reviewer.lastSystem, reviewer.lastUser)
+	}
+}
+
 func TestGenerateWithAgent_UnavailableSurfaces(t *testing.T) {
 	// Wrap the sentinel so errors.Is matches through the fixpr error.
 	fa := &fakeAgentRuntime{err: errWrap{runtime.ErrUnavailable}}
@@ -244,5 +266,30 @@ func TestGenerateBuildWithAgentPassesRuntimeIdentity(t *testing.T) {
 	}
 	if fa.spec.ExecutionID != "build-request" || fa.spec.WorkObserver == nil {
 		t.Fatalf("runtime work identity not passed: %+v", fa.spec)
+	}
+}
+
+func TestGenerateBuildWithAgentRejectsCompletedFailedCommandResults(t *testing.T) {
+	commands := sandboxVerificationCommands()
+	results := sandboxCommandResults()
+	results[0].TimedOut = true
+	results[0].ExitCode = -1
+	fa := &fakeAgentRuntime{res: runtime.GenerateResult{
+		BaseSHA: "ref", Files: map[string]string{"a": "b"}, Diff: "diff", CommandResults: results,
+	}}
+	reviewer := &fakeCompleter{}
+	gp := agentGenParams(&AgentConfig{
+		Runtime: fa, RequireCommandResults: true, CommandPolicy: runtime.CommandPolicy{Commands: commands},
+	})
+	gp.critique = reviewer
+	gp.critiqueRetries = 3
+	fix, err := generateBuildWithAgent(context.Background(), gp, BuildFailure{
+		RootCause: "failed", SuggestedFix: "fix it", SourceFiles: []string{"a"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("fix=%v error=%v", fix, err)
+	}
+	if fix != nil || fa.calls != 1 || reviewer.lastSystem != "" || reviewer.lastUser != "" {
+		t.Fatalf("fix=%v runtime calls=%d critique=%q/%q", fix, fa.calls, reviewer.lastSystem, reviewer.lastUser)
 	}
 }

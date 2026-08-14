@@ -257,6 +257,10 @@ request = {
     "expected_base_sha": sha,
     "output_limit_bytes": 262144,
 }
+if mode == "warning":
+    request["command_policy"]["commands"].insert(
+        0, {"argv": ["false"], "timeout_seconds": 10}
+    )
 print(base64.b64encode(json.dumps(request, separators=(",", ":")).encode()).decode())
 PY
 }
@@ -300,6 +304,44 @@ assert "go version go1.25.12 linux/amd64" in commands[0].get("stdout", ""), comm
 patch = result["diff"]
 assert "diff --git a/message.go b/message.go" in patch, patch
 open(patch_path, "w", encoding="utf-8").write(patch)
+PY
+
+warning_request=$(make_request warning)
+set +e
+docker run --rm "${runtime_args[@]}" \
+  --mount "type=volume,src=${source_volume},dst=/input/repository,readonly" \
+  --mount "type=bind,src=${tmp}/opencode-success,dst=/usr/local/bin/opencode,readonly" \
+  --env "PROW_AI_FIX_EXECUTION_REQUEST_B64=${warning_request}" \
+  "$image" >"$tmp/warning-result.json" 2>"$tmp/warning-result.err"
+warning_status=$?
+set -e
+if [[ $warning_status -ne 0 ]]; then
+  cat "$tmp/warning-result.json" "$tmp/warning-result.err" >&2
+  exit "$warning_status"
+fi
+python3 - "$tmp/warning-result.json" "$source_sha" <<'PY'
+import json
+import sys
+
+result_path, sha = sys.argv[1:]
+result = json.load(open(result_path, encoding="utf-8"))
+assert result["version"] == 2, result
+assert result["terminal_state"] == "succeeded", result
+assert result["base_sha"] == sha, result
+assert result["changed_files"] == ["message.go"], result
+assert "diff --git a/message.go b/message.go" in result["diff"], result
+assert not result.get("failure_reason"), result
+commands = result["command_results"]
+expected = [
+    ["false"],
+    ["go", "version"],
+    ["go", "test", "./..."],
+    ["go", "vet", "./..."],
+    ["git", "diff", "--cached", "--check"],
+]
+assert [entry["argv"] for entry in commands] == expected, commands
+assert commands[0]["exit_code"] != 0 and not commands[0].get("timed_out", False), commands[0]
+assert all(entry["exit_code"] == 0 and not entry.get("timed_out", False) for entry in commands[1:]), commands
 PY
 
 direct_credential='fixture-direct-provider-credential-0123456789abcdef'

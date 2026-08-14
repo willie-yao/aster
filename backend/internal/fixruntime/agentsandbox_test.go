@@ -487,6 +487,55 @@ func TestAgentSandboxRuntimeSuccessAndSecurityContract(t *testing.T) {
 	assertSandboxSecurity(t, api.object)
 }
 
+func TestAgentSandboxRuntimeReconstructsCompletedResultWithFailedCommand(t *testing.T) {
+	spec := agentSandboxSpec()
+	spec.MaxSteps = 3
+	spec.CommandPolicy.Commands = []engineruntime.ExecutionCommand{
+		{Argv: []string{"go", "test", "./..."}, TimeoutSeconds: 30},
+		{Argv: []string{"git", "diff", "--cached", "--check"}, TimeoutSeconds: 30},
+	}
+	executorResult := engineruntime.ExecutionResult{
+		Version:      engineruntime.ExecutionContractVersion,
+		BaseSHA:      spec.ExpectedBaseSHA,
+		ChangedFiles: []string{"agent-sandbox-spike.txt"},
+		Files:        map[string]string{"agent-sandbox-spike.txt": "reconstructed content\n"},
+		Diff:         "diff --git a/agent-sandbox-spike.txt b/agent-sandbox-spike.txt\n",
+		CommandResults: []engineruntime.CommandResult{
+			{Argv: []string{"go", "test", "./..."}, ExitCode: 1, DurationMs: 20},
+			{Argv: []string{"git", "diff", "--cached", "--check"}, ExitCode: 0, DurationMs: 2},
+		},
+		TerminalState: engineruntime.TerminalSucceeded,
+		DurationMs:    30,
+	}
+	encoded, err := json.Marshal(executorResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &fakeAgentSandboxAPI{
+		state: sandboxState{Exists: true, UID: "uid-1", PodName: "fix-request-1", Finished: true, FinishedReason: "PodSucceeded"},
+		logs:  string(encoded),
+	}
+	runtime := newAgentSandboxRuntimeForTest(api, testAgentSandboxOptions())
+	reconstructions := 0
+	runtime.applyDiff = func(context.Context, engineruntime.RepoRef, string) (map[string]string, string, error) {
+		reconstructions++
+		return map[string]string{"agent-sandbox-spike.txt": "reconstructed content\n"}, "canonical diff", nil
+	}
+	result, err := runtime.Generate(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if reconstructions != 1 || result.TerminalState != engineruntime.TerminalSucceeded || len(result.CommandResults) != 2 || result.CommandResults[0].ExitCode != 1 {
+		t.Fatalf("reconstructions=%d result=%+v", reconstructions, result)
+	}
+	if result.Files["agent-sandbox-spike.txt"] != "reconstructed content\n" || result.Diff != "canonical diff" {
+		t.Fatalf("reconstructed result = %+v", result)
+	}
+	if !result.Telemetry.CleanupCompleted || !api.deleted {
+		t.Fatalf("cleanup = %+v deleted=%v", result.Telemetry, api.deleted)
+	}
+}
+
 func TestAgentSandboxRuntimeRejectsEmptySuccessfulLogs(t *testing.T) {
 	api := &fakeAgentSandboxAPI{
 		state: sandboxState{Exists: true, UID: "uid-1", PodName: "fix-request-1", Finished: true, FinishedReason: "PodSucceeded"},

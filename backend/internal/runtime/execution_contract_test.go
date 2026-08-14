@@ -76,6 +76,32 @@ func TestExecutionContractAcceptsCredentialFreeResult(t *testing.T) {
 	}
 }
 
+func TestExecutionResultAllowsAuthenticFailedVerificationOutcomes(t *testing.T) {
+	request := executionRequest()
+	for _, tc := range []struct {
+		name string
+		edit func(*CommandResult)
+	}{
+		{name: "nonzero exit", edit: func(result *CommandResult) { result.ExitCode = 1 }},
+		{name: "bounded timeout", edit: func(result *CommandResult) {
+			result.ExitCode = -1
+			result.TimedOut = true
+			result.DurationMs = request.CommandPolicy.Commands[0].TimeoutSeconds * 1000
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := executionResult()
+			tc.edit(&result.CommandResults[0])
+			if err := result.Validate(request); err != nil {
+				t.Fatalf("completed execution rejected authentic command result: %v", err)
+			}
+			if err := ValidateSuccessfulCommandResults(request.CommandPolicy.Commands, result.CommandResults); err == nil {
+				t.Fatal("strict command validation accepted a failed result")
+			}
+		})
+	}
+}
+
 func TestExecutionRequestRejectsMutableOrCredentialedInput(t *testing.T) {
 	cases := []struct {
 		name string
@@ -214,7 +240,6 @@ func TestExecutionResultRejectsMismatchedOutput(t *testing.T) {
 		}, want: "max_files"},
 		{name: "command mismatch", edit: func(r *ExecutionResult) { r.CommandResults[0].Argv = []string{"sh", "-c", "true"} }, want: "allowed argv"},
 		{name: "missing command result", edit: func(r *ExecutionResult) { r.CommandResults = nil }, want: "every allowed command"},
-		{name: "failed command on success", edit: func(r *ExecutionResult) { r.CommandResults[0].ExitCode = 1 }, want: "failed with exit code"},
 		{name: "changed file without diff", edit: func(r *ExecutionResult) { r.Diff = "" }, want: "unified diff"},
 		{name: "failed without reason", edit: func(r *ExecutionResult) { r.TerminalState = TerminalFailed }, want: "failure reason"},
 		{name: "oversized output", edit: func(r *ExecutionResult) { r.StdoutSummary = strings.Repeat("x", 65<<10) }, want: "output limit"},
