@@ -187,6 +187,54 @@ func normalizeRequestReason(request *actionRequest) bool {
 	return true
 }
 
+func (s *Service) setRequestWarning(ctx context.Context, warnings ...string) error {
+	id := actionRequestID(ctx)
+	if id == "" || len(warnings) == 0 {
+		return nil
+	}
+	s.rmu.Lock()
+	defer s.rmu.Unlock()
+	request := s.requests.Requests[id]
+	if request == nil || request.Status != RequestPending {
+		return nil
+	}
+	next := boundedWarningSummary(append([]string{request.Warning}, warnings...)...)
+	if next == request.Warning {
+		return nil
+	}
+	previous, previousUpdatedAt := request.Warning, request.UpdatedAt
+	request.Warning = next
+	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := s.saveRequestsLocked(); err != nil {
+		request.Warning, request.UpdatedAt = previous, previousUpdatedAt
+		return err
+	}
+	return nil
+}
+
+func boundedWarningSummary(warnings ...string) string {
+	const maxWarningBytes = 2048
+	seen := map[string]bool{}
+	parts := make([]string, 0, len(warnings))
+	for _, warning := range warnings {
+		warning = strings.Join(strings.Fields(warning), " ")
+		if warning == "" || seen[warning] {
+			continue
+		}
+		seen[warning] = true
+		parts = append(parts, warning)
+	}
+	summary := strings.Join(parts, " ")
+	if len(summary) <= maxWarningBytes {
+		return summary
+	}
+	limit := maxWarningBytes
+	for limit > 0 && limit < len(summary) && summary[limit]&0xc0 == 0x80 {
+		limit--
+	}
+	return strings.TrimSpace(summary[:limit])
+}
+
 func (s *Service) setRequestStage(ctx context.Context, stage string) error {
 	id := actionRequestID(ctx)
 	if id == "" {
@@ -456,11 +504,19 @@ func validatedPreviewEntry(entry *previewEntry) (PreviewResult, error) {
 			return PreviewResult{}, err
 		}
 		snapshot := entry.fix.Snapshot()
-		policyText := strings.Join([]string{
+		policyParts := []string{
 			snapshot.Pattern.SuggestedFix, snapshot.Pattern.SharedRootCause, snapshot.Pattern.Summary,
 			entry.fix.Title, entry.fix.Description,
-		}, "\n")
-		if remediationpolicy.Reason(policyText, snapshot.Pattern.RemediationTargets) != "" {
+		}
+		if entry.analysisBinding != nil {
+			policyParts = append(policyParts, entry.fix.Preview.Diff)
+		}
+		policyText := strings.Join(policyParts, "\n")
+		unsafe := remediationpolicy.Reason(policyText, snapshot.Pattern.RemediationTargets) != ""
+		if entry.analysisBinding != nil {
+			unsafe = remediationpolicy.RelationshipTextWarning(entry.fix.Preview.Diff) != ""
+		}
+		if unsafe {
 			return PreviewResult{}, withReason(ReasonUnsafeRemediation, ErrPreviewRejected, "")
 		}
 		return PreviewResult{
@@ -1263,6 +1319,9 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 			request.Preview = &preview
 		} else {
 			request.Error = ReasonMessage(request.ReasonCode)
+			if analysisRequest {
+				request.Warning = ""
+			}
 		}
 	} else {
 		request.Status = RequestReady

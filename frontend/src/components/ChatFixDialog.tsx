@@ -23,6 +23,7 @@ import {
   SourceOutlined,
 } from "@mui/icons-material";
 import {
+  cancelAnalysisChatFixRequest,
   chatFixInstructionBytes,
   confirmChatFix,
   createAnalysisChatFixRequest,
@@ -128,9 +129,10 @@ export function ChatFixDialog({
 }) {
   const [patternID, setPatternID] = useState("");
   const [instruction, setInstruction] = useState("");
+  const [submittedInstruction, setSubmittedInstruction] = useState("");
   const [preview, setPreview] = useState<ChatFixPreview | null>(null);
   const [request, setRequest] = useState<ChatFixRequest | null>(null);
-  const [busy, setBusy] = useState<"preview" | "confirm" | null>(null);
+  const [busy, setBusy] = useState<"preview" | "regenerate" | "confirm" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [url, setURL] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
@@ -155,6 +157,7 @@ export function ChatFixDialog({
     controllerRef.current?.abort();
     setPatternID(firstPatternID);
     setInstruction("");
+    setSubmittedInstruction("");
     setPreview(null);
     setRequest(null);
     setBusy(null);
@@ -199,6 +202,7 @@ export function ChatFixDialog({
     controllerRef.current?.abort();
     controllerRef.current = controller;
     setInstruction(stored.instruction);
+    setSubmittedInstruction(stored.instruction);
     setBusy("preview");
     setError(null);
     void observeAnalysisFixRequest(stored.id, requestIdentity, controller)
@@ -241,6 +245,7 @@ export function ChatFixDialog({
         );
         if (identityRef.current !== requestIdentity || controllerRef.current !== controller) return;
         storeChatFixRequest(window.sessionStorage, sessionID, message.request_id, { id: request.id, instruction });
+        setSubmittedInstruction(instruction);
         setRequest(request);
         await observeAnalysisFixRequest(request.id, requestIdentity, controller, request);
         return;
@@ -261,6 +266,57 @@ export function ChatFixDialog({
       if (identityRef.current === requestIdentity) {
         const message = previewError instanceof Error ? previewError.message : "Could not generate the fix preview.";
         setError(exactAnalysis ? `${message} If the connection was lost after admission, select Generate again to reconnect to the same request.` : message);
+      }
+    } finally {
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+        if (identityRef.current === requestIdentity) setBusy(null);
+      }
+    }
+  }
+
+  async function regeneratePreview() {
+    if (!exactAnalysis || !message?.request_id || !request?.id || busy) return;
+    if (instruction.trim() === submittedInstruction.trim()) {
+      setError("Edit the maintainer instruction before regenerating the preview.");
+      return;
+    }
+    const requestIdentity = identity;
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setBusy("regenerate");
+    setError(null);
+    try {
+      let cancelled = await cancelAnalysisChatFixRequest(request.id);
+      while (actionRequestIsPollable(cancelled.status)) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+        cancelled = await loadAnalysisChatFixRequest(request.id, controller.signal);
+      }
+      if (cancelled.status !== "cancelled") {
+        throw new Error(cancelled.error || "The previous fix preview could not be cancelled.");
+      }
+      if (identityRef.current !== requestIdentity || controllerRef.current !== controller) return;
+      setRequest(cancelled);
+      setPreview(null);
+      clearStoredChatFixRequest(window.sessionStorage, sessionID, message.request_id);
+
+      const replacement = await createAnalysisChatFixRequest(
+        sessionID,
+        message.request_id,
+        instruction,
+        controller.signal,
+      );
+      if (identityRef.current !== requestIdentity || controllerRef.current !== controller) return;
+      storeChatFixRequest(window.sessionStorage, sessionID, message.request_id, { id: replacement.id, instruction });
+      setSubmittedInstruction(instruction);
+      setRequest(replacement);
+      await observeAnalysisFixRequest(replacement.id, requestIdentity, controller, replacement);
+    } catch (regenerateError) {
+      if (regenerateError instanceof Error && regenerateError.name === "AbortError") return;
+      if (identityRef.current === requestIdentity) {
+        setError(regenerateError instanceof Error ? regenerateError.message : "Could not regenerate the fix preview.");
       }
     } finally {
       if (controllerRef.current === controller) {
@@ -482,12 +538,16 @@ export function ChatFixDialog({
           </Stack>
         )}
 
-        {busy === "preview" && (
+        {(busy === "preview" || busy === "regenerate") && (
           <Stack direction="row" spacing={1.25} sx={{ alignItems: "center", py: 4, justifyContent: "center" }}>
             <CircularProgress size={20} />
             <Box>
               <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                {request?.stage === "drafting" ? "Generating the fix preview" : "Verifying the fix request"}
+                {busy === "regenerate"
+                  ? "Regenerating the fix preview"
+                  : request?.stage === "drafting"
+                    ? "Generating the fix preview"
+                    : "Verifying the fix request"}
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 {exactAnalysis
@@ -500,6 +560,11 @@ export function ChatFixDialog({
 
         {preview && !url && (
           <Stack spacing={2.25}>
+            {request?.warning && (
+              <Alert severity="warning" variant="outlined">
+                {request.warning}
+              </Alert>
+            )}
             <Button
               size="small"
               color="inherit"
@@ -511,6 +576,30 @@ export function ChatFixDialog({
               Back to context
             </Button>
             <ActionDraftPreview preview={preview} />
+            {exactAnalysis && (
+              <Stack spacing={1.25}>
+                <TextField
+                  label="Maintainer instruction"
+                  placeholder="Describe the revision needed for the next preview"
+                  fullWidth
+                  multiline
+                  minRows={2}
+                  maxRows={5}
+                  value={instruction}
+                  onChange={(event) => setInstruction(limitChatFixInstruction(event.target.value))}
+                  helperText={`${chatFixInstructionBytes(instruction)}/4096 bytes`}
+                />
+                <Button
+                  variant="outlined"
+                  color="warning"
+                  onClick={() => void regeneratePreview()}
+                  disabled={busy !== null || instruction.trim() === submittedInstruction.trim()}
+                  sx={{ alignSelf: "flex-start" }}
+                >
+                  {busy === "regenerate" ? "Regenerating" : "Regenerate with feedback"}
+                </Button>
+              </Stack>
+            )}
           </Stack>
         )}
       </DialogContent>
@@ -538,7 +627,11 @@ export function ChatFixDialog({
             onClick={() => void confirm()}
             disabled={busy !== null}
           >
-            {busy === "confirm" ? "Opening draft PR" : "Open draft PR"}
+            {busy === "confirm"
+              ? "Opening draft PR"
+              : request?.warning
+                ? "Open draft PR with warnings"
+                : "Open draft PR"}
           </Button>
         )}
       </DialogActions>

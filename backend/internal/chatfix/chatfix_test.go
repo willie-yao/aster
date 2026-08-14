@@ -295,3 +295,12 @@ func TestValidateAnalysisPreviewRejectsChangedChatIdentity(t *testing.T) {
 		t.Fatalf("unchanged chat validation error = %v", err)
 	}
 }
+
+func TestExactPreviewRequestHashChangesWithRegenerationFeedback(t *testing.T) {
+	candidate := analysischat.FixCandidate{SessionID: "session", RequestID: "request", ResponseHash: "response"}
+	first := exactPreviewRequestHash(candidate, "keep compatibility")
+	second := exactPreviewRequestHash(candidate, "retry conflicts")
+	if first == second || first != exactPreviewRequestHash(candidate, " keep compatibility ") {
+		t.Fatalf("hashes first=%q second=%q", first, second)
+	}
+}
