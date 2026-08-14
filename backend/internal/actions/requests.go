@@ -1024,6 +1024,9 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 func (s *Service) CreateAnalysisFixRequest(input AnalysisFixInput, owner, userToken, instruction string) (ActionRequestView, error) {
 	owner = normalizeActionOwner(owner)
 	instruction = strings.TrimSpace(instruction)
+	if s.cfg != nil {
+		input.Identity.Project = strings.TrimSpace(s.cfg.Name)
+	}
 	input.Identity = normalizeAnalysisIdentity(input.Identity)
 	if owner == "" || strings.TrimSpace(userToken) == "" {
 		return ActionRequestView{}, fmt.Errorf("authenticated owner and token are required")

@@ -245,7 +245,7 @@ func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t
 		t.Fatalf("request=%+v fixes=%+v", request, fixes)
 	}
 	input := fixes.analysisInput
-	if input.Identity.JobID != "periodic-capz" || input.Identity.BuildID != "123" || input.Identity.TestName != "TestCluster" ||
+	if input.Identity.Project != "" || input.Identity.JobID != "periodic-capz" || input.Identity.BuildID != "123" || input.Identity.TestName != "TestCluster" ||
 		input.Identity.JUnitFile != "junit.xml" || input.ChatSessionID != "session" || input.ChatRequestID != "request" ||
 		input.AnalysisContentHash != "analysis-hash" || input.SourceRepository.Name != "repo" ||
 		input.FailureRevision != "0123456789abcdef0123456789abcdef01234567" ||

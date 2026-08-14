@@ -631,8 +631,10 @@ func TestPreviewAnalysisFixRequiresEnabledFixPRFeature(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	identity := exactIdentity()
+	identity.Project = "caller-project"
 	_, err = service.PreviewAnalysisFix(t.Context(), AnalysisFixInput{
-		Identity: exactIdentity(), ChatSessionID: "session", ChatRequestID: "request", ChatResponseHash: "chat-hash",
+		Identity: identity, ChatSessionID: "session", ChatRequestID: "request", ChatResponseHash: "chat-hash",
 		PreviewRequestHash: "preview-hash", AnalysisContentHash: subject.AnalysisContentHash,
 		SourceRepository:  sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision},
 		AssistantAnswer:   "Update `reconcileDelete`.",
