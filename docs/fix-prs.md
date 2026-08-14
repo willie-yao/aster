@@ -48,7 +48,14 @@ preview, branch, or pull request. Normal **Chat with agent** continues restoring
 the latest existing conversation.
 
 After a successful cited response, **Use this finding in a fix proposal** remains
-the separate explicit action that starts preview. This path does not use a
+the separate explicit action that admits a persisted asynchronous preview
+request. The server returns the owner-bound request before Agent Sandbox
+generation finishes, and the UI polls the same request until the preview is
+ready. Closing the dialog, losing the browser connection, or exceeding an edge
+proxy's HTTP timeout does not cancel an already admitted Sandbox. Reopening the
+dialog restores the request from same-origin session storage; repeating the same
+admission input reconnects to the active request instead of starting another
+Sandbox. This path does not use a
 recurring pattern as action authority. It requires:
 
 - one failed JUnit case with a current accepted published analysis;
@@ -83,6 +90,12 @@ retained exact executor command results
 before any GitHub write. The Agent Sandbox request receives no GitHub token. The
 dashboard does not rerun target repository build, test, vet, or validation
 commands during preview or confirmation.
+
+The persisted asynchronous request does not replace the existing preview and
+confirmation stores. It only owns admission, background execution, polling, and
+runtime cleanup. The completed preview still passes through the existing source,
+patch, reconstruction, command-result, owner, authentication, confirmation, and
+GitHub deduplication gates.
 
 ## Command execution and credential boundary
 

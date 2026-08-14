@@ -219,6 +219,31 @@ func (s *previewStore) cancelIdempotent(owner, token, requestHash, generationHas
 	})
 }
 
+func (s *previewStore) revoke(owner, token string) error {
+	owner = normalizeActionOwner(owner)
+	key := tokenHash(token)
+	return s.updateProtected(key, func(state *previewState, _ time.Time) (bool, error) {
+		record := state.Previews[key]
+		if record == nil {
+			return false, nil
+		}
+		if record.Owner != tokenHash(owner) {
+			return false, ErrPreviewNotFound
+		}
+		switch record.Status {
+		case previewStatusGenerating, previewStatusReady:
+			delete(state.Previews, key)
+			return true, nil
+		case previewStatusRunning:
+			return false, ErrPreviewPending
+		case previewStatusUnknown, previewStatusDone:
+			return false, ErrPreviewOutcomeUnknown
+		default:
+			return false, ErrPreviewNotFound
+		}
+	})
+}
+
 func idempotentPreviewToken(owner, requestHash string) string {
 	sum := sha256.Sum256([]byte("analysis-preview\x00" + owner + "\x00" + requestHash))
 	return hex.EncodeToString(sum[:])

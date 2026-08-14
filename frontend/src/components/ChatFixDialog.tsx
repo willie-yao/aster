@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -25,10 +25,15 @@ import {
 import {
   chatFixInstructionBytes,
   confirmChatFix,
+  createAnalysisChatFixRequest,
   limitChatFixInstruction,
+  loadAnalysisChatFixRequest,
   previewChatFix,
+  type ChatFixRequest,
   type ChatFixPreview,
 } from "../lib/chatFix";
+import { actionRequestIsPollable } from "../lib/actionRequests";
+import { clearStoredChatFixRequest, readStoredChatFixRequest, storeChatFixRequest } from "../lib/chatFixRequestStorage";
 import { soft } from "../theme";
 import type { AnalysisChatMessage } from "../types/analysisChat";
 import type { PatternAnalysis } from "../types/dashboard";
@@ -124,6 +129,7 @@ export function ChatFixDialog({
   const [patternID, setPatternID] = useState("");
   const [instruction, setInstruction] = useState("");
   const [preview, setPreview] = useState<ChatFixPreview | null>(null);
+  const [request, setRequest] = useState<ChatFixRequest | null>(null);
   const [busy, setBusy] = useState<"preview" | "confirm" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [url, setURL] = useState<string | null>(null);
@@ -150,12 +156,72 @@ export function ChatFixDialog({
     setPatternID(firstPatternID);
     setInstruction("");
     setPreview(null);
+    setRequest(null);
     setBusy(null);
     setError(null);
     setURL(null);
   }, [identity, firstPatternID, open]);
 
   useEffect(() => () => controllerRef.current?.abort(), []);
+
+  const observeAnalysisFixRequest = useCallback(async (
+    id: string,
+    requestIdentity: string,
+    controller: AbortController,
+    initial?: ChatFixRequest,
+  ): Promise<void> => {
+    let current = initial ?? await loadAnalysisChatFixRequest(id, controller.signal);
+    for (;;) {
+      if (identityRef.current !== requestIdentity || controllerRef.current !== controller) return;
+      setRequest(current);
+      if (current.status === "ready") {
+        if (!current.preview?.token) throw new Error("The generated fix preview is incomplete.");
+        setPreview(current.preview);
+        return;
+      }
+      if (!actionRequestIsPollable(current.status)) {
+        clearStoredChatFixRequest(window.sessionStorage, sessionID, message?.request_id ?? "");
+        throw new Error(current.error || "The fix preview could not be generated.");
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+      current = await loadAnalysisChatFixRequest(current.id, controller.signal);
+    }
+  }, [message?.request_id, sessionID]);
+
+  useEffect(() => {
+    if (!open || !exactAnalysis || !message?.request_id) return;
+    const chatRequestID = message.request_id;
+    const stored = readStoredChatFixRequest(window.sessionStorage, sessionID, chatRequestID);
+    if (!stored) return;
+    const requestIdentity = identity;
+    const controller = new AbortController();
+    controllerRef.current?.abort();
+    controllerRef.current = controller;
+    setInstruction(stored.instruction);
+    setBusy("preview");
+    setError(null);
+    void observeAnalysisFixRequest(stored.id, requestIdentity, controller)
+      .catch((requestError) => {
+        if (requestError instanceof Error && requestError.name === "AbortError") return;
+        if (identityRef.current === requestIdentity) {
+          setError(requestError instanceof Error ? requestError.message : "Could not recover the fix preview request.");
+        }
+      })
+      .finally(() => {
+        if (controllerRef.current === controller) {
+          controllerRef.current = null;
+          if (identityRef.current === requestIdentity) setBusy(null);
+        }
+      });
+    return () => {
+      if (controllerRef.current === controller) {
+        controller.abort();
+        controllerRef.current = null;
+      }
+    };
+  }, [exactAnalysis, identity, message?.request_id, observeAnalysisFixRequest, open, sessionID]);
+
 
   async function generatePreview() {
     if (!message?.request_id || busy || (!exactAnalysis && !selectedPattern)) return;
@@ -166,12 +232,25 @@ export function ChatFixDialog({
     setBusy("preview");
     setError(null);
     try {
+      if (exactAnalysis) {
+        const request = await createAnalysisChatFixRequest(
+          sessionID,
+          message.request_id,
+          instruction,
+          controller.signal,
+        );
+        if (identityRef.current !== requestIdentity || controllerRef.current !== controller) return;
+        storeChatFixRequest(window.sessionStorage, sessionID, message.request_id, { id: request.id, instruction });
+        setRequest(request);
+        await observeAnalysisFixRequest(request.id, requestIdentity, controller, request);
+        return;
+      }
       const value = await previewChatFix(
         sessionID,
         message.request_id,
-        exactAnalysis ? null : patternID,
-        exactAnalysis ? null : selectedPattern?.content_hash ?? null,
-        exactAnalysis ? null : sourceResult && source ? source.requestID : null,
+        patternID,
+        selectedPattern?.content_hash ?? null,
+        sourceResult && source ? source.requestID : null,
         instruction,
         controller.signal,
       );
@@ -180,7 +259,8 @@ export function ChatFixDialog({
     } catch (previewError) {
       if (previewError instanceof Error && previewError.name === "AbortError") return;
       if (identityRef.current === requestIdentity) {
-        setError(previewError instanceof Error ? previewError.message : "Could not generate the fix preview.");
+        const message = previewError instanceof Error ? previewError.message : "Could not generate the fix preview.";
+        setError(exactAnalysis ? `${message} If the connection was lost after admission, select Generate again to reconnect to the same request.` : message);
       }
     } finally {
       if (controllerRef.current === controller) {
@@ -202,6 +282,7 @@ export function ChatFixDialog({
       const resultURL = await confirmChatFix(preview.token, controller.signal);
       if (identityRef.current !== requestIdentity || controllerRef.current !== controller) return;
       setURL(resultURL);
+      if (message?.request_id) clearStoredChatFixRequest(window.sessionStorage, sessionID, message.request_id);
     } catch (confirmError) {
       if (confirmError instanceof Error && confirmError.name === "AbortError") return;
       if (identityRef.current === requestIdentity) {
@@ -216,7 +297,7 @@ export function ChatFixDialog({
   }
 
   function close() {
-    if (busy) return;
+    if (busy && !(exactAnalysis && busy === "preview")) return;
     controllerRef.current?.abort();
     onClose();
   }
@@ -226,7 +307,7 @@ export function ChatFixDialog({
   return (
     <Dialog
       open={open}
-      onClose={busy ? undefined : close}
+      onClose={busy && !(exactAnalysis && busy === "preview") ? undefined : close}
       maxWidth="md"
       fullWidth
       slotProps={{
@@ -405,8 +486,14 @@ export function ChatFixDialog({
           <Stack direction="row" spacing={1.25} sx={{ alignItems: "center", py: 4, justifyContent: "center" }}>
             <CircularProgress size={20} />
             <Box>
-              <Typography variant="body2" sx={{ fontWeight: 700 }}>Generating the fix preview</Typography>
-              <Typography variant="caption" color="text.secondary">The coding agent is using only the reviewed context.</Typography>
+              <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                {request?.stage === "drafting" ? "Generating the fix preview" : "Verifying the fix request"}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {exactAnalysis
+                  ? "Generation continues in the background. You can close this dialog and return later."
+                  : "The coding agent is using only the reviewed context."}
+              </Typography>
             </Box>
           </Stack>
         )}
@@ -429,7 +516,9 @@ export function ChatFixDialog({
       </DialogContent>
 
       <DialogActions sx={{ px: 3, py: 2 }}>
-        <Button onClick={close} disabled={busy !== null}>{url ? "Done" : "Cancel"}</Button>
+        <Button onClick={close} disabled={busy !== null && !(exactAnalysis && busy === "preview")}>
+          {url ? "Done" : exactAnalysis && busy === "preview" ? "Close" : "Cancel"}
+        </Button>
         {!preview && !url && (
           <Button
             variant="contained"

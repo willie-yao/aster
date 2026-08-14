@@ -48,7 +48,8 @@ const (
 const (
 	RequestStageVerifying     = "verifying_remediation"
 	RequestStageDrafting      = "drafting"
-	actionRequestStateVersion = 6
+	requestKindAnalysisFix    = "analysis-fix"
+	actionRequestStateVersion = 7
 )
 
 const draftRefinementWarning = "The revised draft could not be generated or did not pass safety validation. The safe fallback draft is shown below, but this replacement request cannot be confirmed."
@@ -96,6 +97,8 @@ type actionCleanupState struct {
 type actionRequest struct {
 	ActionRequestView
 	Instruction         string                      `json:"instruction,omitempty"`
+	RequestHash         string                      `json:"request_hash,omitempty"`
+	AnalysisFix         *AnalysisFixInput           `json:"analysis_fix,omitempty"`
 	Issue               *issues.IssueSpec           `json:"issue,omitempty"`
 	Fix                 *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
 	TargetRepo          string                      `json:"target_repo,omitempty"`
@@ -275,6 +278,9 @@ func (s *Service) loadActionRequests() {
 		state.Version = 5
 	}
 	if state.Version == 5 {
+		state.Version = 6
+	}
+	if state.Version == 6 {
 		state.Version = actionRequestStateVersion
 	}
 	if state.Requests == nil {
@@ -295,6 +301,7 @@ func (s *Service) loadActionRequests() {
 			request.Error = "saved preview requires regeneration after source verification upgrade"
 			request.ReasonCode = ReasonContractGenerationFailed
 			request.Preview = nil
+			request.AnalysisFix = nil
 			request.Issue = nil
 			request.Fix = nil
 			request.UpdatedAt = nowText
@@ -319,6 +326,7 @@ func (s *Service) loadActionRequests() {
 			request.Error = ReasonMessage(request.ReasonCode)
 			request.Warning = ""
 			request.Preview = nil
+			request.AnalysisFix = nil
 			request.Issue = nil
 			request.Fix = nil
 			request.Instruction = ""
@@ -356,6 +364,7 @@ func (s *Service) loadActionRequests() {
 			request.BaseIssue = nil
 			request.BaseTargetRepo = ""
 			request.BasePatternHash = ""
+			request.AnalysisFix = nil
 			request.UpdatedAt = nowText
 			changed = true
 		case RequestCancelling:
@@ -393,6 +402,15 @@ func validatedReadyPreview(request *actionRequest) (*PreviewResult, error) {
 		}
 		entry.kind = gfKind
 		entry.fix = fixpr.RestoreGeneratedFix(request.Fix)
+	case requestKindAnalysisFix:
+		if request.Preview == nil || strings.TrimSpace(request.Preview.Token) == "" {
+			return nil, fmt.Errorf("ready analysis fix request has no preview token")
+		}
+		preview, err := validatedAnalysisFixRequestPreview(*request.Preview)
+		if err != nil {
+			return nil, err
+		}
+		return &preview, nil
 	default:
 		return nil, fmt.Errorf("ready request has unsupported action %q", request.Kind)
 	}
@@ -401,6 +419,16 @@ func validatedReadyPreview(request *actionRequest) (*PreviewResult, error) {
 		return nil, err
 	}
 	return &preview, nil
+}
+
+func validatedAnalysisFixRequestPreview(preview PreviewResult) (PreviewResult, error) {
+	if strings.TrimSpace(preview.Token) == "" || preview.Kind != gfKind || strings.TrimSpace(preview.Diff) == "" {
+		return PreviewResult{}, fmt.Errorf("analysis fix request has an invalid fix preview")
+	}
+	if err := actiondraft.ValidateTitleBody(preview.Title, preview.Body); err != nil {
+		return PreviewResult{}, err
+	}
+	return preview, nil
 }
 
 func validatedPreviewEntry(entry *previewEntry) (PreviewResult, error) {
@@ -452,10 +480,18 @@ func (s *Service) startGeneration(id, userToken string) {
 	if s.requestDone[id] == nil {
 		s.requestDone[id] = make(chan struct{})
 	}
+	kind := ""
+	if request := s.requests.Requests[id]; request != nil {
+		kind = request.Kind
+	}
 	s.rmu.Unlock()
 	s.requestWG.Add(1)
 	go func() {
 		defer s.requestWG.Done()
+		if kind == requestKindAnalysisFix {
+			s.generateAnalysisFixRequest(id, userToken)
+			return
+		}
 		s.generateRequest(id, userToken)
 	}()
 }
@@ -653,6 +689,7 @@ func (s *Service) finalizeCleanup(id string) (ActionRequestView, error) {
 	request.Warning = ""
 	request.Preview = nil
 	request.Instruction = ""
+	request.AnalysisFix = nil
 	request.Issue = nil
 	request.Fix = nil
 	request.BaseIssue = nil
@@ -733,7 +770,7 @@ func (s *Service) ConfigureAsyncRequestsWithContext(ctx context.Context, timeout
 	var pending []ActionRequestView
 	var cleanupIDs []string
 	for id, request := range s.requests.Requests {
-		if request.Status == RequestReady && !request.EmailSent && notifier != nil {
+		if request.Status == RequestReady && request.Kind != requestKindAnalysisFix && !request.EmailSent && notifier != nil {
 			pending = append(pending, request.ActionRequestView)
 		}
 		if request.Status == RequestCancelling {
@@ -982,6 +1019,102 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	return view, nil
 }
 
+// CreateAnalysisFixRequest persists one exact JUnit chat-to-fix preview request
+// and starts generation independently of the initiating HTTP request.
+func (s *Service) CreateAnalysisFixRequest(input AnalysisFixInput, owner, userToken, instruction string) (ActionRequestView, error) {
+	owner = normalizeActionOwner(owner)
+	instruction = strings.TrimSpace(instruction)
+	input.Identity = normalizeAnalysisIdentity(input.Identity)
+	if owner == "" || strings.TrimSpace(userToken) == "" {
+		return ActionRequestView{}, fmt.Errorf("authenticated owner and token are required")
+	}
+	if len(instruction) > 4096 {
+		return ActionRequestView{}, fmt.Errorf("instruction must not exceed 4096 bytes")
+	}
+	if err := s.requireFixActions(); err != nil {
+		return ActionRequestView{}, err
+	}
+	if err := validateAnalysisFixInput(input); err != nil {
+		return ActionRequestView{}, err
+	}
+
+	id, err := newToken()
+	if err != nil {
+		return ActionRequestView{}, fmt.Errorf("creating action request id: %w", err)
+	}
+	now := time.Now().UTC()
+	request := &actionRequest{
+		ActionRequestView: ActionRequestView{
+			ID: id, FailureID: analysisActionID(input.Identity), Kind: requestKindAnalysisFix, Owner: owner,
+			Status: RequestPending, Stage: RequestStageVerifying, CreatedAt: now.Format(time.RFC3339),
+			UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(actionRequestTTL).Format(time.RFC3339),
+		},
+		Instruction: instruction,
+		RequestHash: input.PreviewRequestHash,
+		AnalysisFix: cloneAnalysisFixInput(input),
+	}
+
+	s.rmu.Lock()
+	if s.stopping {
+		s.rmu.Unlock()
+		return ActionRequestView{}, fmt.Errorf("action service is stopping")
+	}
+	s.expireRequestsLocked(now)
+	for _, existing := range s.requests.Requests {
+		if existing == nil || existing.Owner != owner || existing.Kind != requestKindAnalysisFix || existing.RequestHash != input.PreviewRequestHash {
+			continue
+		}
+		if existing.Status == RequestPending || existing.Status == RequestReady || existing.Status == RequestCancelling || existing.Status == RequestUnknown {
+			view := existing.ActionRequestView
+			s.rmu.Unlock()
+			return view, nil
+		}
+	}
+	pending := 0
+	active := 0
+	for _, existing := range s.requests.Requests {
+		if existing == nil {
+			continue
+		}
+		if (existing.Status == RequestPending || existing.Status == RequestCancelling) && existing.Owner == owner {
+			pending++
+		}
+		if existing.Status == RequestPending || existing.Status == RequestCancelling || existing.Status == RequestReady || existing.Status == RequestUnknown {
+			active++
+		}
+	}
+	if pending >= maxPendingPerOwner {
+		s.rmu.Unlock()
+		return ActionRequestView{}, fmt.Errorf("too many pending action requests")
+	}
+	if active >= maxActiveRequests {
+		s.rmu.Unlock()
+		return ActionRequestView{}, fmt.Errorf("too many active action requests")
+	}
+	s.requests.Requests[request.ID] = request
+	if err := s.saveRequestsLocked(); err != nil {
+		delete(s.requests.Requests, request.ID)
+		s.rmu.Unlock()
+		return ActionRequestView{}, err
+	}
+	view := request.ActionRequestView
+	s.rmu.Unlock()
+
+	s.startGeneration(request.ID, userToken)
+	return view, nil
+}
+
+func cloneAnalysisFixInput(input AnalysisFixInput) *AnalysisFixInput {
+	clone := input
+	clone.VerifiedSourceFileHashes = cloneStringMap(input.VerifiedSourceFileHashes)
+	clone.ArtifactCitations = slices.Clone(input.ArtifactCitations)
+	if input.ProposedRevision != nil {
+		revision := *input.ProposedRevision
+		clone.ProposedRevision = &revision
+	}
+	return &clone
+}
+
 type requestPreviewGenerator func(context.Context, string, string, string, string, *issues.IssueSpec, string, string) (PreviewResult, *previewEntry, error)
 
 func (s *Service) generateRequest(id, userToken string) {
@@ -1000,6 +1133,35 @@ func (s *Service) generateRequestPreview(ctx context.Context, failureID, kind, u
 }
 
 func (s *Service) generateRequestWith(id, userToken string, generate requestPreviewGenerator) {
+	s.generateRequestOperation(id, func(ctx context.Context, input requestGenerationInput) (PreviewResult, *previewEntry, error) {
+		return generate(ctx, input.failureID, input.kind, userToken, input.instruction, input.baseIssue, input.baseTargetRepo, input.basePatternHash)
+	})
+}
+
+type requestGenerationInput struct {
+	failureID, kind, owner, instruction string
+	baseTargetRepo, basePatternHash     string
+	baseIssue                           *issues.IssueSpec
+	analysisFix                         *AnalysisFixInput
+}
+
+type requestOperationGenerator func(context.Context, requestGenerationInput) (PreviewResult, *previewEntry, error)
+
+func (s *Service) generateAnalysisFixRequest(id, userToken string) {
+	s.generateRequestOperation(id, func(ctx context.Context, input requestGenerationInput) (PreviewResult, *previewEntry, error) {
+		if input.analysisFix == nil {
+			return PreviewResult{}, nil, fmt.Errorf("analysis fix request context is missing")
+		}
+		generate := s.analysisRequestGenerator
+		if generate == nil {
+			generate = s.PreviewAnalysisFix
+		}
+		preview, err := generate(ctx, *input.analysisFix, input.owner, userToken, input.instruction)
+		return preview, nil, err
+	})
+}
+
+func (s *Service) generateRequestOperation(id string, generate requestOperationGenerator) {
 	ctx, cancel := context.WithTimeout(withActionRequestID(context.Background(), id), s.requestTimeout)
 	needsCleanup := false
 	s.rmu.Lock()
@@ -1022,21 +1184,31 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 		s.rmu.Unlock()
 		return
 	}
-	failureID, kind, instruction := request.FailureID, request.Kind, request.Instruction
-	baseTargetRepo := request.BaseTargetRepo
-	basePatternHash := request.BasePatternHash
-	var baseIssue *issues.IssueSpec
+	input := requestGenerationInput{
+		failureID: request.FailureID, kind: request.Kind, owner: request.Owner, instruction: request.Instruction,
+		baseTargetRepo: request.BaseTargetRepo, basePatternHash: request.BasePatternHash,
+	}
 	if request.BaseIssue != nil {
 		base := *request.BaseIssue
 		base.Labels = slices.Clone(base.Labels)
-		baseIssue = &base
+		input.baseIssue = &base
+	}
+	if request.AnalysisFix != nil {
+		input.analysisFix = cloneAnalysisFixInput(*request.AnalysisFix)
 	}
 	s.rmu.Unlock()
 
-	preview, entry, err := generate(ctx, failureID, kind, userToken, instruction, baseIssue, baseTargetRepo, basePatternHash)
-	fallbackPreview := errors.Is(err, ErrDraftRefinementRejected) && entry != nil
+	preview, entry, err := generate(ctx, input)
+	analysisRequest := input.kind == requestKindAnalysisFix
+	fallbackPreview := !analysisRequest && errors.Is(err, ErrDraftRefinementRejected) && entry != nil
 	if err == nil || fallbackPreview {
-		if validateErr := s.validateSubjectSnapshot(failureID, entry.patternHash, entry.kind); validateErr != nil {
+		if analysisRequest {
+			if validated, validateErr := validatedAnalysisFixRequestPreview(preview); validateErr != nil {
+				err = withReason(previewValidationReasonCode(validateErr), ErrPreviewRejected, "")
+			} else {
+				preview = validated
+			}
+		} else if validateErr := s.validateSubjectSnapshot(input.failureID, entry.patternHash, entry.kind); validateErr != nil {
 			err = validateErr
 			fallbackPreview = false
 		} else if validated, validateErr := validatedPreviewEntry(entry); validateErr != nil {
@@ -1048,6 +1220,9 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 	}
 
 	if ctx.Err() != nil || errors.Is(err, runtime.ErrCleanupPending) {
+		if analysisRequest && input.analysisFix != nil {
+			_ = s.previewStore.revoke(input.owner, idempotentPreviewToken(input.owner, input.analysisFix.PreviewRequestHash))
+		}
 		reason := "draft runtime cleanup did not complete"
 		if ctx.Err() != nil {
 			reason = "draft generation timed out"
@@ -1066,12 +1241,17 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 	if request == nil || request.Status != RequestPending {
 		needsCleanup = request != nil && request.Status == RequestCancelling
 		s.rmu.Unlock()
+		if analysisRequest && input.analysisFix != nil {
+			_ = s.previewStore.revoke(input.owner, idempotentPreviewToken(input.owner, input.analysisFix.PreviewRequestHash))
+		}
 		return
 	}
-	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC()
+	request.UpdatedAt = now.Format(time.RFC3339)
 	request.BaseIssue = nil
 	request.BaseTargetRepo = ""
 	request.BasePatternHash = ""
+	request.AnalysisFix = nil
 	if err != nil {
 		request.Status = RequestFailed
 		request.ReasonCode = ReasonCodeOf(err)
@@ -1085,20 +1265,28 @@ func (s *Service) generateRequestWith(id, userToken string, generate requestPrev
 		request.Status = RequestReady
 		request.ReasonCode = ""
 		request.Preview = &preview
-		request.TargetRepo = entry.targetRepo
-		request.TargetConfig = entry.targetConfig
-		request.VerificationVersion = entry.verificationVersion
-		request.PatternHash = entry.patternHash
-		if entry.kind == "issue" {
-			spec := entry.spec
-			request.Issue = &spec
+		if analysisRequest {
+			request.ExpiresAt = now.Add(previewTTL).Format(time.RFC3339)
+			request.Instruction = ""
 		} else {
-			request.Fix = entry.fix.Snapshot()
+			request.TargetRepo = entry.targetRepo
+			request.TargetConfig = entry.targetConfig
+			request.VerificationVersion = entry.verificationVersion
+			request.PatternHash = entry.patternHash
+			if entry.kind == "issue" {
+				spec := entry.spec
+				request.Issue = &spec
+			} else {
+				request.Fix = entry.fix.Snapshot()
+			}
 		}
 	}
 	saveErr := s.saveRequestsLocked()
 	view := request.ActionRequestView
 	notifier := s.requestNotify
+	if analysisRequest {
+		notifier = nil
+	}
 	s.rmu.Unlock()
 	if saveErr != nil {
 		log.Printf("action request %s: save result: %v", id, saveErr)
@@ -1394,13 +1582,31 @@ func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRe
 		s.rmu.Unlock()
 		return ActionRequestView{}, fmt.Errorf("action request is %s", status)
 	}
+	analysisToken := ""
+	requestStatus := request.Status
+	if request.Kind == requestKindAnalysisFix && request.RequestHash != "" {
+		analysisToken = idempotentPreviewToken(owner, request.RequestHash)
+		if request.Preview != nil && strings.TrimSpace(request.Preview.Token) != "" {
+			analysisToken = request.Preview.Token
+		}
+	}
 	s.rmu.Unlock()
+	if analysisToken != "" && requestStatus == RequestReady {
+		if err := s.previewStore.revoke(owner, analysisToken); err != nil {
+			return ActionRequestView{}, err
+		}
+	}
 	cancel, err := s.transitionToCleanup(id, RequestCancelled, "")
 	if err != nil {
 		return ActionRequestView{}, err
 	}
 	if cancel != nil {
 		cancel()
+	}
+	if analysisToken != "" && requestStatus == RequestPending {
+		if err := s.previewStore.revoke(owner, analysisToken); err != nil && !errors.Is(err, ErrPreviewPending) {
+			return s.currentRequestView(id), err
+		}
 	}
 	view, cleanupErr := s.cleanupRequest(ctx, id)
 	current := s.currentRequestView(id)
@@ -1448,11 +1654,12 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 			request.UpdatedAt = now.Format(time.RFC3339)
 			changed = true
 		}
-		if request.Error != "" || request.Warning != "" || request.Preview != nil || request.Instruction != "" || request.Issue != nil || request.BaseIssue != nil || request.BaseTargetRepo != "" || request.BasePatternHash != "" || request.Runtime != nil || request.Cleanup != nil || request.Fix != nil || request.EmailError != "" {
+		if request.Error != "" || request.Warning != "" || request.Preview != nil || request.Instruction != "" || request.AnalysisFix != nil || request.Issue != nil || request.BaseIssue != nil || request.BaseTargetRepo != "" || request.BasePatternHash != "" || request.Runtime != nil || request.Cleanup != nil || request.Fix != nil || request.EmailError != "" {
 			request.Error = ""
 			request.Warning = ""
 			request.Preview = nil
 			request.Instruction = ""
+			request.AnalysisFix = nil
 			request.Issue = nil
 			request.BaseIssue = nil
 			request.BaseTargetRepo = ""

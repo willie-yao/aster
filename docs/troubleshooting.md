@@ -135,7 +135,9 @@ git in the server image.
 - Check the server logs and `GET /api/action-requests/<id>` status.
 - A server restart marks an unfinished pending request failed because user tokens
   are intentionally never persisted. Start a new request from the pattern.
-- Ready drafts persist for 24 hours in non-public `action_request_state.json`.
+- Generic ready drafts persist for 24 hours in non-public
+  `action_request_state.json`. Exact JUnit chat-to-fix previews use the
+  confirmation token's 15-minute lifetime.
 - Draft-ready email requires `EMAIL_SMTP_PASSWORD` in `server.extraEnv`, not only
   `fetcher.extraEnv`.
 - The review link is bound to the authenticated login that created the request.

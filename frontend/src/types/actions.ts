@@ -45,6 +45,7 @@ export interface ActionVerification {
 }
 
 export interface ActionPreview {
+  token?: string;
   kind: "issue" | "fix";
   title: string;
   body: string;

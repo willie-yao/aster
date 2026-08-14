@@ -4,6 +4,12 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 
 import { chatFixVerifiedSourcePaths, fixInvestigationAvailable } from "../src/lib/chatFixEligibility.js";
+import {
+  chatFixRequestStorageKey,
+  clearStoredChatFixRequest,
+  readStoredChatFixRequest,
+  storeChatFixRequest,
+} from "../src/lib/chatFixRequestStorage.js";
 import type { AnalysisChatReference } from "../src/types/analysisChat.js";
 
 function source(path: string): string {
@@ -64,13 +70,47 @@ test("exact JUnit source-path eligibility requires the bound repository and revi
 test("exact JUnit fix dialog excludes pattern authority and keeps confirmation separate", () => {
   const dialog = source("src/components/ChatFixDialog.tsx");
   const api = source("src/lib/chatFix.ts");
-  assert.match(dialog, /exactAnalysis \? null : patternID/);
+  assert.match(dialog, /createAnalysisChatFixRequest/);
+  assert.match(dialog, /loadAnalysisChatFixRequest/);
+  assert.match(dialog, /Generation continues in the background/);
+  assert.match(dialog, /previewChatFix\([\s\S]*patternID/);
   assert.match(dialog, /server resolves the exact repository revision from build metadata/);
   assert.match(dialog, /rejects the preview if the target branch has moved/);
   assert.match(dialog, /Generate fix preview/);
   assert.match(dialog, /Open draft PR/);
+  assert.match(api, /fix\/requests/);
   assert.match(api, /patternID \? \{ pattern_id: patternID \} : \{\}/);
   assert.match(api, /api\/actions\/confirm/);
+});
+
+test("exact JUnit fix request storage preserves the durable request identity and instruction", () => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  };
+  const key = chatFixRequestStorageKey("session", "chat-request");
+  storeChatFixRequest(storage, "session", "chat-request", { id: "request-1", instruction: "keep compatibility" });
+  assert.equal(values.has(key), true);
+  assert.deepEqual(readStoredChatFixRequest(storage, "session", "chat-request"), {
+    id: "request-1",
+    instruction: "keep compatibility",
+  });
+  clearStoredChatFixRequest(storage, "session", "chat-request");
+  assert.equal(readStoredChatFixRequest(storage, "session", "chat-request"), null);
+});
+
+test("exact JUnit fix request storage rejects malformed request identities", () => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  };
+  const key = chatFixRequestStorageKey("session", "chat-request");
+  values.set(key, JSON.stringify({ id: "bad request id", instruction: "x" }));
+  assert.equal(readStoredChatFixRequest(storage, "session", "chat-request"), null);
 });
 
 test("Fix investigation control is limited to exact JUnit chat capability", () => {

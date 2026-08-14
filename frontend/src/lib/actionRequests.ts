@@ -252,6 +252,7 @@ async function requestView(response: Response): Promise<ActionRequest> {
 export async function loadLatestActionRequest(
   apiBase: string,
   id: string,
+  signal?: AbortSignal,
 ): Promise<ActionRequest> {
   const seen = new Set<string>();
   let currentID = id;
@@ -263,7 +264,7 @@ export async function loadLatestActionRequest(
     const request = await requestView(
       await fetch(
         `${apiBase}api/action-requests/${encodeURIComponent(currentID)}`,
-        { credentials: "same-origin", cache: "no-store" },
+        { credentials: "same-origin", cache: "no-store", signal },
       ),
     );
     if (!request.superseded_by) return request;

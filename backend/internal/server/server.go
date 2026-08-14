@@ -299,6 +299,10 @@ func Handler(opts Options) (http.Handler, error) {
 		guard := func(next http.Handler) http.Handler { return csrfGuard(trusted, next) }
 		mux.Handle("POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview",
 			auth.Middleware(opts.Auth, guard(previewChatFixHandler(timeout, opts.ChatFix))))
+		if requests, ok := opts.ChatFix.(ChatFixRequestRunner); ok {
+			mux.Handle("POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/requests",
+				auth.Middleware(opts.Auth, guard(createAnalysisChatFixRequestHandler(requests))))
+		}
 	}
 
 	if opts.Auth != nil && opts.CausalRemediationInvestigation != nil {

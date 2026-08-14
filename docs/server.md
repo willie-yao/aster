@@ -55,7 +55,8 @@ remains identical.
 | `POST /api/analysis-chat/sessions/{id}/source-investigations/{requestID}/cancel` | Cancel one active source investigation. |
 | `POST /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Start one authenticated, explicitly requested causal remediation investigation. Requires exact pattern and causal-group hashes plus `Idempotency-Key`. |
 | `GET /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Read the safe current status for one exact causal group. Requires exact hashes as query parameters. |
-| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview` | Generate a fix preview from one selected evidence-backed chat response. Exact JUnit sessions use the published immutable source identity; legacy pattern sessions require their existing verified source investigation fields. |
+| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/requests` | Admit one exact JUnit chat finding for persisted asynchronous Fix preview generation. Returns `202 Accepted` with an owner-bound action request. |
+| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview` | Generate a legacy pattern chat-to-fix preview synchronously. Requires the existing verified source investigation fields. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/correction/preview` | Preview an evidence-backed proposed correction. |
 | `POST /api/analysis-corrections/confirm` | Explicitly confirm a preview token and publish the correction overlay. |
 | `POST /api/analysis-corrections/{id}/revoke` | Revoke a correction and restore the original analysis. |
@@ -463,11 +464,13 @@ When analysis chat and write actions are both configured for the same source and
 Fix PR repository, the server advertises `features.chat_fix: true`. It advertises
 `features.fix_prs: true` only for Agent Sandbox, Orka, or an explicit trusted
 local-development opt-in, and advertises `features.junit_chat_fix: true` only
-when the Fix runtime is Agent Sandbox. A
-client can request a fix preview for one successful assistant response:
+when the Fix runtime is Agent Sandbox.
+
+An exact JUnit client admits one successful assistant response for asynchronous
+preview generation:
 
 ```http
-POST /api/analysis-chat/sessions/{sessionID}/requests/{chatRequestID}/fix/preview
+POST /api/analysis-chat/sessions/{sessionID}/requests/{chatRequestID}/fix/requests
 Content-Type: application/json
 
 {
@@ -475,12 +478,18 @@ Content-Type: application/json
 }
 ```
 
-The exact JUnit form accepts only the optional instruction. The server rebuilds
-the answer, proposed revision, and artifact citations from owner-bound private
-chat state. The response must belong to a test-scoped session, have completed
-successfully, include validated current-turn artifact citations, and still match
-the selected published analysis. Passing, skipped, build-level, unavailable,
-stale, ambiguous, or rejected analyses are not eligible.
+The request returns `202 Accepted` with an `analysis-fix` action request. The
+client reads its owner-bound state through `GET /api/action-requests/{id}` until
+it becomes `ready` or reaches a terminal failure. A ready request carries the
+normal confirmable fix preview and token.
+
+The exact JUnit form accepts only the optional instruction. Before returning,
+the server rebuilds the answer, proposed revision, and artifact citations from
+owner-bound private chat state. The response must belong to a test-scoped
+session, have completed successfully, include validated current-turn artifact
+citations, and still match the selected published analysis. Passing, skipped,
+build-level, unavailable, stale, ambiguous, or rejected analyses are not
+eligible.
 
 The server resolves the configured source repository and full commit from the
 selected build metadata. The chat session retains a full analysis content hash
@@ -490,11 +499,20 @@ the published source paths at the pinned revision and requires the selected
 finding to name an explicit backticked source symbol. `actionverify`
 deterministically records whether each symbol is present in the bounded source,
 and the preview stores hashes of both the source snapshot and this grounding
-result. The source and Fix PR repositories must match. Preview
-generation also requires the pinned commit to remain the default-branch head.
-Confirmation rechecks the chat response hash, full analysis hash, source
-identity, source verification hash, symbol-grounding hash, destination
-configuration, and branch head before any GitHub write.
+result. The source and Fix PR repositories must match. Preview generation also
+requires the pinned commit to remain the default-branch head. Confirmation
+rechecks the chat response hash, full analysis hash, source identity, source
+verification hash, symbol-grounding hash, destination configuration, and branch
+head before any GitHub write.
+
+After admission, generation runs under the action service's server-owned timeout
+instead of the initiating HTTP context. An Azure Front Door timeout, closed
+dialog, browser disconnect, or lost response therefore does not cancel an
+already admitted Agent Sandbox. The browser keeps the action request ID and
+optional maintainer instruction in same-origin session storage, reconnects by
+polling, and can safely repeat the same admission request if the initial response
+was lost. The server reuses the active or ready request with the same owner-bound
+preview-request hash rather than starting a second Sandbox.
 
 Generation receives only the bounded published analysis, selected answer,
 optional proposed revision, artifact citations, verified source paths and
@@ -504,7 +522,8 @@ the configured validators and final staged diff check. The server validates thei
 complete ordered results and independently reconstructs the canonical patch at
 preview and confirmation without executing target code locally.
 
-Legacy action-capable recurring patterns keep their existing request fields:
+Legacy action-capable recurring patterns keep the synchronous
+`/fix/preview` endpoint and their existing request fields:
 
 ```json
 {
@@ -519,18 +538,18 @@ That legacy form still requires `PatternAllowsActions`, shared-build membership,
 a completed verified actionable source result, and its validated remediation
 target. Causal-group patterns remain action-free.
 
-The response is the normal fix `PreviewResult`. Post its token separately to
-`/api/actions/confirm` to open the exact reviewed draft. Preview and confirmation
-state remain owner-bound, CSRF-protected, persisted across replicas and restarts,
-and deduplicated by the existing Fix PR marker. Retrying one exact preview input
-reuses its persisted preview identity instead of creating duplicate preview or PR
-state.
+Post the ready exact JUnit preview token, or the legacy synchronous preview
+token, separately to `/api/actions/confirm` to open the exact reviewed draft.
+Preview and confirmation state remain owner-bound, CSRF-protected, persisted
+across replicas and restarts, and deduplicated by the existing Fix PR marker.
+Retrying one exact preview input reuses its persisted action-request and preview
+identities instead of creating duplicate Sandbox, preview, or PR state.
 
 The dashboard exposes **Use this finding in a fix proposal** for an exact failed
 JUnit analysis only after the selected response has current-turn artifact
 evidence, an explicit backticked source symbol, and published verified immutable
-source paths. It shows a safe reason when any requirement is missing. Legacy pattern chat keeps
-its existing pattern and source-result review UI.
+source paths. It shows a safe reason when any requirement is missing. Legacy
+pattern chat keeps its existing pattern and source-result review UI.
 
 ## Admin-gated actions
 
@@ -728,14 +747,19 @@ the `AUTH_MODE` env above to enable admin actions.
 
 ## Asynchronous action requests
 
-Email deep links and the in-page issue and fix buttons use persistent action
-requests. Generation runs in the server process while request metadata and ready
-drafts are stored in `action_request_state.json`. The state file is not served
-under `/data`.
-Requests expire after 24 hours, are bound to the requesting authenticated login,
-and require the current user's GitHub token only when generating or confirming.
-Raw GitHub tokens are never persisted. A server restart marks unfinished pending
-requests failed; ready drafts survive and remain reviewable.
+Email deep links, the in-page issue and fix buttons, and exact JUnit
+chat-to-fix previews use persistent action requests. Generation runs in the
+server process while request metadata and ready drafts are stored in
+`action_request_state.json`. The state file is not served under `/data`.
+Generic requests expire after 24 hours. Ready exact JUnit preview requests use
+the same 15-minute lifetime as their confirmation token. All requests are bound
+to the requesting authenticated login and require the current user's GitHub
+token only when generating or confirming. Raw GitHub tokens are never persisted.
+A server restart marks unfinished pending requests failed and reconciles any
+retained external runtime identity; ready drafts survive and remain reviewable.
+State version 7 adds the private pending exact-analysis context and the
+`analysis-fix` request kind. Older request kinds retain their existing migration
+behavior.
 
 When `notifications.email.action_links` is enabled and the server receives
 `EMAIL_SMTP_PASSWORD`, it emails the configured recipients after a draft becomes
