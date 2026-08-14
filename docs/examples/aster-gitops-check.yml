@@ -73,7 +73,7 @@ jobs:
             --namespace "$ASTER_NAMESPACE" \
             --version "$ASTER_CHART_VERSION" \
             --values "$RUNNER_TEMP/application-values.yaml" > "$RUNNER_TEMP/application-render.yaml"
-          ruby -ryaml -e 'images=[]; walk=nil; walk=->(v){case v; when Hash; v.each{|k,x| images << x if k == "image" && x.is_a?(String); walk.call(x)}; when Array; v.each{|x| walk.call(x)}; end}; YAML.load_stream(File.read(ARGV[0])).each{|d| walk.call(d)}; bad=images.reject{|i| !i.downcase.include?("snapshot") && (i.match?(/@sha256:[0-9a-f]{64}\z/) || i.match?(/:(?:v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?|sha-[0-9a-f]{7,64})\z/))}; abort "mutable rendered images: #{bad.join(", ")}" unless bad.empty?' "$RUNNER_TEMP/application-render.yaml"
+          ruby -ryaml -e 'images=[]; walk=nil; walk=->(v){case v; when Hash; v.each{|k,x| images << x if k == "image" && x.is_a?(String); walk.call(x)}; when Array; v.each{|x| walk.call(x)}; end}; YAML.load_stream(File.read(ARGV[0])).each{|d| walk.call(d)}; bad=images.reject{|i| !i.rpartition(":").last.downcase.include?("snapshot") && (i.match?(/@sha256:[0-9a-f]{64}\z/) || i.match?(/:(?:v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?|sha-[0-9a-f]{7,64})\z/))}; abort "mutable rendered images: #{bad.join(", ")}" unless bad.empty?' "$RUNNER_TEMP/application-render.yaml"
           if [[ -n $ASTER_EXECUTION_NAMESPACE ]]; then
             ruby -ryaml -e 'print YAML.load_file(ARGV[0]).fetch("data").fetch("values.yaml")' \
               gitops/platform/values-configmap.yaml > "$RUNNER_TEMP/platform-values.yaml"
@@ -82,7 +82,7 @@ jobs:
               --namespace "$ASTER_NAMESPACE" \
               --version "$ASTER_CHART_VERSION" \
               --values "$RUNNER_TEMP/platform-values.yaml" > "$RUNNER_TEMP/platform-render.yaml"
-            ruby -ryaml -e 'images=[]; walk=nil; walk=->(v){case v; when Hash; v.each{|k,x| images << x if k == "image" && x.is_a?(String); walk.call(x)}; when Array; v.each{|x| walk.call(x)}; end}; YAML.load_stream(File.read(ARGV[0])).each{|d| walk.call(d)}; bad=images.reject{|i| !i.downcase.include?("snapshot") && (i.match?(/@sha256:[0-9a-f]{64}\z/) || i.match?(/:(?:v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?|sha-[0-9a-f]{7,64})\z/))}; abort "mutable rendered images: #{bad.join(", ")}" unless bad.empty?' "$RUNNER_TEMP/platform-render.yaml"
+            ruby -ryaml -e 'images=[]; walk=nil; walk=->(v){case v; when Hash; v.each{|k,x| images << x if k == "image" && x.is_a?(String); walk.call(x)}; when Array; v.each{|x| walk.call(x)}; end}; YAML.load_stream(File.read(ARGV[0])).each{|d| walk.call(d)}; bad=images.reject{|i| !i.rpartition(":").last.downcase.include?("snapshot") && (i.match?(/@sha256:[0-9a-f]{64}\z/) || i.match?(/:(?:v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?|sha-[0-9a-f]{7,64})\z/))}; abort "mutable rendered images: #{bad.join(", ")}" unless bad.empty?' "$RUNNER_TEMP/platform-render.yaml"
           fi
 
       - name: Scan generated files

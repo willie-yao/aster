@@ -115,6 +115,22 @@ func TestGitOpsValuesPreserveExactInputsAndSortedSkills(t *testing.T) {
 	}
 }
 
+func TestGitOpsAllowsSnapshotInPinnedRepositoryName(t *testing.T) {
+	values := `image:
+  repository: registry.example.test/snapshot-service
+  tag: v1.2.3
+agentSandbox:
+  analyzer:
+    executorImage:
+      repository: registry.example.test/snapshot-worker
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+`
+	dir := writeGitOpsConsumer(t, values, "", nil)
+	if err := RenderGitOps(gitOpsTestOptions(dir), nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGitOpsDeterministicAndCheckoutIndependent(t *testing.T) {
 	dirA := writeGitOpsConsumer(t, "mode: cron\n", "", nil)
 	dirB := writeGitOpsConsumer(t, "mode: cron\n", "", nil)
