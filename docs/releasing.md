@@ -42,6 +42,11 @@ the changelog.
      pushes them to `oci://ghcr.io/<owner>/charts/prow-ai-dashboard` and
      `oci://ghcr.io/<owner>/charts/prow-ai-dashboard-platform`, and attaches
      both `.tgz` files to the release,
+   - cross-compiles the current `fetcher` CLI for Linux and macOS on amd64 and
+     arm64, attaches the four binaries plus `SHA256SUMS`,
+   - waits for the matching engine, remote-fixer, and Agent Sandbox Fix executor
+     images and verifies their embedded source revision before publishing charts,
+     the GitHub Release, or the stable major alias,
    - for a **stable** tag only, fast-forwards the `vMAJOR` alias after both
      charts are packaged, pushed, and attached successfully.
 

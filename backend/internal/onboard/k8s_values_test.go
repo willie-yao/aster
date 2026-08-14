@@ -62,7 +62,7 @@ func TestK8sValuesActiveConfiguration(t *testing.T) {
 		"ai.endpoint":                  "https://provider.example/v1/responses",
 		"ai.model":                     "fixture-model",
 		"ai.contextWindowTokens":       0,
-		"ai.existingSecret":            "fixture-dashboard-ai",
+		"ai.existingSecret":            "<existing-ai-secret>",
 		"ai.tokenSecretKey":            "AI_TOKEN",
 		"ai.githubReadTokenSecretName": "",
 		"ai.githubReadTokenSecretKey":  "GITHUB_READ_TOKEN",
@@ -105,8 +105,8 @@ func TestK8sValuesDocumentsOptionalConfiguration(t *testing.T) {
 		"# tolerations: []",
 		"# affinity: {}",
 		"helm show values oci://ghcr.io/willie-yao/charts/prow-ai-dashboard",
-		"raw.githubusercontent.com/willie-yao/prow-ai-dashboard/fixture-engine-ref/deploy/helm/prow-ai-dashboard/values.schema.json",
-		"blob/fixture-engine-ref/deploy/helm/prow-ai-dashboard/values.yaml",
+		"Use values.schema.json from the same published chart version",
+		"Published values reference:",
 	} {
 		if !strings.Contains(values, want) {
 			t.Errorf("generated values missing %q\n---\n%s", want, values)
@@ -146,17 +146,19 @@ func TestK8sValuesDisabledAIStaysValid(t *testing.T) {
 	}
 }
 
-func TestK8sValuesEscapesEngineRefInSourceURL(t *testing.T) {
-	data := k8sValuesFixtureData(true)
-	data.EngineRef = "feature/scaffold values"
-	values := renderK8sValuesForTest(t, data)
-	if !strings.Contains(values, "blob/feature%2Fscaffold%20values/deploy/helm/prow-ai-dashboard/values.yaml") {
-		t.Fatalf("engine ref was not escaped in source URL\n---\n%s", values)
+func TestK8sValuesDoNotDependOnMutableEngineRef(t *testing.T) {
+	first := k8sValuesFixtureData(true)
+	first.EngineRef = "main"
+	second := first
+	second.EngineRef = "feature/scaffold-values"
+	firstValues := renderK8sValuesForTest(t, first)
+	secondValues := renderK8sValuesForTest(t, second)
+	if firstValues != secondValues {
+		t.Fatalf("Kubernetes values changed with mutable engine ref")
 	}
-	if !strings.Contains(values, "feature%2Fscaffold%20values/deploy/helm/prow-ai-dashboard/values.schema.json") {
-		t.Fatalf("engine ref was not escaped in schema URL\n---\n%s", values)
+	if strings.Contains(firstValues, "/main/") || strings.Contains(firstValues, "feature/scaffold") {
+		t.Fatalf("Kubernetes values contain a mutable engine-ref URL\n---\n%s", firstValues)
 	}
-	parseYAMLMap(t, values)
 }
 
 func TestK8sValuesActiveKeysExistInChartDefaults(t *testing.T) {

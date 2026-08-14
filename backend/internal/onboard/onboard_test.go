@@ -1,6 +1,8 @@
 package onboard
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -509,10 +511,10 @@ func TestScaffold_K8sStaysFocused(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"mode: watch", "type: inprocess", "imageTag: \"\"", "existingSecret: \"my-proj-ai\"",
+		"mode: watch", "type: inprocess", "imageTag: \"\"", "existingSecret: \"<existing-ai-secret>\"",
 		"# schedule:", "# namespace:", "chat:\n    enabled: false", "actions:\n    enabled: false",
-		"Active values are common settings", "`mode: cron`", "separately installed", "authentication and secure origin",
-		"helm show values", "blob/main/deploy/helm/prow-ai-dashboard/values.yaml", "AI Secret", "--chart-version \"$CHART_VERSION\"",
+		"Active values below are settings a new consumer commonly owns", "Platform prerequisites are not", "No engine source checkout",
+		"helm show values", "Secret manager", "kubernetes doctor", "--chart-version \"$CHART_VERSION\"",
 	} {
 		if !strings.Contains(values+readme, want) {
 			t.Errorf("Kubernetes scaffold missing %q:\n%s\n%s", want, values, readme)
@@ -535,75 +537,176 @@ func TestK8sDeployReadmeGuidesSafeProjectSpecificInstall(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		`export ENGINE_DIR="$HOME/src/prow-ai-dashboard"`,
-		"export ENGINE_REF='main'",
-		`git clone https://github.com/willie-yao/prow-ai-dashboard.git "$ENGINE_DIR"`,
-		`if [ -n "$(git -C "$ENGINE_DIR" status --porcelain)" ]; then`,
-		`git -C "$ENGINE_DIR" fetch --tags origin "$ENGINE_REF"`,
-		`git -C "$ENGINE_DIR" checkout --detach FETCH_HEAD`,
-		`printf 'Fetcher ready: %s\n' "$FETCHER"`,
-		`make -C "$ENGINE_DIR" build`,
-		`export FETCHER="$ENGINE_DIR/bin/fetcher"`,
-		"export RELEASE='my-proj'",
+		`export CLI_VERSION="<published-engine-tag>"`,
+		`export CHART_VERSION="${CLI_VERSION#v}"`,
+		`CLI_ASSET="prow-ai-dashboard-fetcher-${CLI_VERSION}-${CLI_TARGET}"`,
+		`curl --fail --location "$RELEASE_URL/$CLI_ASSET"`,
+		`awk -v asset="$CLI_ASSET" '$2 == asset {print}' SHA256SUMS`,
+		`export FETCHER="$CLI_DIR/$CLI_ASSET"`,
+		`export RELEASE="<application-release-from-platform-handoff>"`,
+		`export EXECUTION_NAMESPACE="<execution-namespace-from-platform-handoff>"`,
 		"export NAMESPACE='my-proj'",
-		"kubectl config get-contexts",
-		"kubectl --context \"$CONTEXT\" get storageclass",
 		`"$FETCHER" onboard doctor`,
+		`"$FETCHER" kubernetes doctor`,
+		`-action install`,
 		`"$FETCHER" kubernetes install`,
-		"--dry-run",
-		"create namespace \"$NAMESPACE\"",
-		"create secret generic 'my-proj-ai'",
-		"printf 'AI token: '",
-		"IFS= read -r -s AI_TOKEN",
-		"printf '%s' \"$AI_TOKEN\" >\"$AI_TOKEN_FILE\"",
-		`if [ -s "$AI_TOKEN_FILE" ]; then`,
-		"--from-file=AI_TOKEN=\"$AI_TOKEN_FILE\"",
-		"AI Secret was not created because the token file is empty.",
-		"helm show values",
-		"blob/main/deploy/helm/prow-ai-dashboard/values.yaml",
-		"get deploy,pod,pvc",
-		"app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=worker",
-		`logs -f "deployment/$WORKER_DEPLOYMENT"`,
-		"app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=server",
-		`port-forward "service/$SERVER_SERVICE" 8080:80`,
+		`-dry-run`,
+		`-action upgrade`,
 		`"$FETCHER" kubernetes upgrade`,
-		"docs/kubernetes.md",
-		"docs/kubernetes-reference.md",
-		"docs/orka.md",
+		`helm --kube-context "$CONTEXT" --namespace "$NAMESPACE" history "$RELEASE"`,
+		`rollback "$RELEASE" "$PRIOR_HELM_REVISION" --wait`,
+		`set -euo pipefail`,
+		`manifest_ready=false`,
+		`trap cleanup EXIT`,
+		`test "$PRIVATE_STATUS" = 404`,
+		"docs/kubernetes-contributor-deployment.md",
+		"docs/kubernetes-platform-ownership.md",
 	} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("generated Kubernetes README missing %q:\n%s", want, readme)
 		}
 	}
 
-	beforeLive, _, found := strings.Cut(readme, "## Live setup and install")
-	if !found {
-		t.Fatalf("generated Kubernetes README has no live setup section:\n%s", readme)
-	}
-	for _, write := range []string{"create namespace", "create secret generic", "apply -f -"} {
-		if strings.Contains(beforeLive, write) {
-			t.Errorf("cluster write %q appears before the live setup section:\n%s", write, beforeLive)
-		}
-	}
-	for _, unsafe := range []string{"--from-literal", "AI_TOKEN=<", "AI_TOKEN='"} {
+	for _, unsafe := range []string{
+		`export ENGINE_DIR=`,
+		`git clone https://github.com/willie-yao/prow-ai-dashboard`,
+		`make -C "$ENGINE_DIR" build`,
+		`kubectl --context "$CONTEXT" create namespace`,
+		`create secret generic`,
+		`--from-literal`,
+		`az afd`,
+		`insecure-skip-tls-verify=true`,
+	} {
 		if strings.Contains(readme, unsafe) {
-			t.Errorf("generated Kubernetes README contains unsafe token guidance %q:\n%s", unsafe, readme)
+			t.Errorf("generated Kubernetes README contains unsupported normal-path guidance %q:\n%s", unsafe, readme)
 		}
+	}
+
+	doctor := strings.Index(readme, `"$FETCHER" kubernetes doctor`)
+	installSection := strings.Index(readme, "## Install")
+	liveInstall := strings.Index(readme[installSection:], `"$FETCHER" kubernetes install`)
+	if doctor < 0 || installSection < 0 || liveInstall < 0 || doctor > installSection {
+		t.Fatalf("live doctor does not precede installation:\n%s", readme)
+	}
+	upgradeSection := strings.Index(readme, "## Upgrade")
+	upgradeDoctor := strings.Index(readme[upgradeSection:], `"$FETCHER" kubernetes doctor`)
+	upgrade := strings.Index(readme[upgradeSection:], `"$FETCHER" kubernetes upgrade`)
+	if upgradeSection < 0 || upgradeDoctor < 0 || upgrade < 0 || upgradeDoctor > upgrade {
+		t.Fatalf("upgrade doctor does not precede upgrade:\n%s", readme)
 	}
 }
 
-func TestK8sDeployReadmeShellQuotesEngineRef(t *testing.T) {
+func TestWriteKubernetesCleanRoomFixture(t *testing.T) {
+	out := os.Getenv("CLEANROOM_FIXTURE_OUT")
+	if out == "" {
+		t.Skip("CLEANROOM_FIXTURE_OUT is not set")
+	}
+	disabled := false
+	opts := testOpts()
+	opts.Mode = modeK8s
+	opts.AIEnabled = &disabled
+	data := buildScaffoldData(opts, nil)
+	projectYAML, err := renderProjectYAML(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := render(systemPromptTmpl, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := render(k8sValuesTmpl, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme, err := render(k8sDeployReadmeTmpl, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFiles(out, map[string]string{
+		"project.yaml":       projectYAML,
+		"prompts/system.md":  prompt,
+		"deploy/values.yaml": values,
+		"deploy/README.md":   readme,
+	}, false, false, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestKubernetesCleanRoomScaffoldContract(t *testing.T) {
 	data := buildScaffoldData(testOpts(), nil)
 	data.Mode = modeK8s
-	data.EngineRef = "feature/a'b; echo unsafe"
-
+	values, err := render(k8sValuesTmpl, data)
+	if err != nil {
+		t.Fatalf("render values: %v", err)
+	}
 	readme, err := render(k8sDeployReadmeTmpl, data)
 	if err != nil {
 		t.Fatalf("render readme: %v", err)
 	}
-	want := `export ENGINE_REF='feature/a'"'"'b; echo unsafe'`
-	if !strings.Contains(readme, want) {
-		t.Fatalf("generated Kubernetes README did not shell-quote the engine ref:\n%s", readme)
+	prompt, err := render(systemPromptTmpl, data)
+	if err != nil {
+		t.Fatalf("render prompt: %v", err)
+	}
+	projectYAML, err := renderProjectYAML(data)
+	if err != nil {
+		t.Fatalf("render project: %v", err)
+	}
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"project.yaml":       projectYAML,
+		"prompts/system.md":  prompt,
+		"deploy/values.yaml": values,
+		"deploy/README.md":   readme,
+	} {
+		if strings.TrimSpace(content) == "" {
+			t.Errorf("clean-room scaffold file %s is empty", name)
+			continue
+		}
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+			t.Errorf("clean-room scaffold file %s was not created as a regular file", name)
+		}
+	}
+	for _, forbidden := range []string{
+		"clientSecret:", "sessionKey:", "botToken:", "--set ai.token",
+		"capz-model-gateway-ca.crt", "runtime/agent-sandbox", "ENGINE_DIR",
+		"insecure-skip-tls-verify=true", "kubectl config set-cluster", "az afd",
+	} {
+		if strings.Contains(values+readme, forbidden) {
+			t.Errorf("clean-room scaffold contains forbidden assumption %q", forbidden)
+		}
+	}
+	for _, required := range []string{
+		"prow-ai-dashboard-fetcher-${CLI_VERSION}-${CLI_TARGET}",
+		"SHA256SUMS", "kubernetes doctor", "-action install", "-action upgrade",
+		"oci://ghcr.io/willie-yao/charts/prow-ai-dashboard", "rollback",
+	} {
+		if !strings.Contains(readme, required) {
+			t.Errorf("clean-room scaffold is missing %q", required)
+		}
+	}
+}
+
+func TestK8sDeployReadmeUsesPublishedReferencePlaceholders(t *testing.T) {
+	data := buildScaffoldData(testOpts(), nil)
+	data.Mode = modeK8s
+	data.EngineRef = "main"
+
+	readme, err := render(k8sDeployReadmeTmpl, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(readme, "blob/main/") || strings.Contains(readme, "export ENGINE_REF=") {
+		t.Fatalf("generated Kubernetes README follows mutable main:\n%s", readme)
+	}
+	if !strings.Contains(readme, "blob/<published-engine-tag>/docs/") {
+		t.Fatalf("generated Kubernetes README lacks published reference placeholders:\n%s", readme)
 	}
 }
 
@@ -629,7 +732,7 @@ func TestScaffold_KubernetesDisabledAIOmitsTokenInstruction(t *testing.T) {
 			t.Fatalf("AI-disabled install still contains %q:\n%s", unwanted, readme)
 		}
 	}
-	for _, want := range []string{"AI is disabled in the initial scaffold", "ai.enabled=true", "ai.existingSecret"} {
+	for _, want := range []string{"AI is disabled", "No provider Secret is required", "ai.existingSecret"} {
 		if !strings.Contains(readme, want) {
 			t.Fatalf("AI-disabled guidance missing %q:\n%s", want, readme)
 		}

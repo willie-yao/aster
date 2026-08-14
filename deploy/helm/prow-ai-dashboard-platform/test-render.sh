@@ -126,6 +126,10 @@ project:
             auth:
               type: none
   systemPrompt: test prompt
+  skills:
+    capz.yaml: |
+      id: capz-clean-room
+      triggers: [failure]
 agentSandbox:
   fixRuntime:
     enabled: true
@@ -166,6 +170,12 @@ server:
 VALUES
 
 helm template capz "$app_chart" -n capz -f "$tmp/application.yaml" > "$tmp/application-render.yaml"
+grep -Fq 'project.yaml:' "$tmp/application-render.yaml"
+grep -Fq 'system.md:' "$tmp/application-render.yaml"
+grep -Fq 'capz.yaml:' "$tmp/application-render.yaml"
+grep -Fq 'id: capz-clean-room' "$tmp/application-render.yaml"
+grep -Fq 'registry.example/fix-executor@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$tmp/application-render.yaml"
+grep -Fq 'registry.example/remote-fixer:sha-abcdef0' "$tmp/application-render.yaml"
 python3 - "$tmp/base.yaml" "$tmp/application-render.yaml" <<'PY'
 from pathlib import Path
 import sys

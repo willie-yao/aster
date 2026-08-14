@@ -6,8 +6,10 @@ public read-only dashboard without a cluster, use
 [GitHub Actions and Pages](github-pages.md).
 
 Start with `fetcher onboard` and select **Kubernetes with Helm**. The generated
-`deploy/README.md` contains project-specific commands. This page shows the same
-first-run path with generic variables.
+`deploy/README.md` contains project-specific commands. Platform administrators
+should first follow the [platform administrator guide](kubernetes-platform-administrator.md).
+CAPZ contributors should use the [contributor deployment guide](kubernetes-contributor-deployment.md).
+This page remains the combined quickstart reference.
 
 The default deployment uses the supported in-process analysis runtime.
 Experimental external runtimes are outside normal onboarding. Add optional
@@ -25,52 +27,79 @@ values that ship with that chart version.
 You need:
 
 - A generated Kubernetes consumer scaffold.
-- Go 1.25 or a built `fetcher` binary.
-- `kubectl`.
-- Helm 4 for live install and rollback support.
-- `curl` for the optional local data-endpoint check.
-- A Kubernetes cluster with a `ReadWriteMany` storage class or an existing RWX
-  claim.
-- A published dashboard chart version.
-- An AI endpoint reachable from the dashboard namespace when AI is enabled.
+- The published `fetcher` CLI matching the chart release.
+- `kubectl`, Helm 4, `curl`, `awk`, `install`, `python3`, and either
+  `sha256sum` or `shasum`.
+- An explicit Kubernetes context and application namespace supplied by the
+  platform administrator.
+- A cluster with the platform bundle, supported Agent Sandbox release, secure
+  RuntimeClass, compatible nodes, and RWX storage already prepared.
+- Existing Secret names provisioned through the organization Secret manager.
 
-Run the commands below from the consumer repository root. Set the deployment
-values once:
+Run the commands below from the consumer repository root:
 
 ```bash
 export PROJECT_DIR="$PWD"
-export ENGINE_DIR="$HOME/src/prow-ai-dashboard"
-export ENGINE_REF="<engine-ref-used-by-the-scaffold>"
+export CLI_VERSION="<published-engine-tag>"
 export RELEASE="<dashboard-release>"
 export NAMESPACE="<dashboard-namespace>"
 export CONTEXT="<your-kubernetes-context>"
-export CHART_VERSION="<published-chart-version>"
+export EXECUTION_NAMESPACE="<release-dedicated-execution-namespace>"
+export PUBLIC_URL="<https-public-dashboard-url>"
+export EXPECTED_JOB="<expected-capz-job-name>"
+export CHART_VERSION="${CLI_VERSION#v}"
 ```
 
-Release and namespace can use the same DNS-safe project ID. Keep the context
-explicit in every cluster command. Choose a reviewed release from the project
-release page. For a stable install, use an engine tag and chart version from the
-same release. Chart versions omit the leading `v` used by Git tags.
+Keep the context explicit in every cluster command. Use an engine tag and both
+chart versions from the same release.
 
-Prepare a dedicated, clean engine checkout. Root release tags work with this
-Git checkout even though the Go module lives under `backend/`:
+Download and verify the published CLI rather than cloning and building the
+engine repository:
 
 ```bash
-if [ ! -d "$ENGINE_DIR/.git" ]; then
-  git clone https://github.com/willie-yao/prow-ai-dashboard.git "$ENGINE_DIR"
-fi
-
-if [ -n "$(git -C "$ENGINE_DIR" status --porcelain)" ]; then
-  printf 'Engine checkout has local changes: %s\n' "$ENGINE_DIR" >&2
-else
-  if git -C "$ENGINE_DIR" fetch --tags origin "$ENGINE_REF" &&
-    git -C "$ENGINE_DIR" checkout --detach FETCH_HEAD &&
-    make -C "$ENGINE_DIR" build; then
-    export FETCHER="$ENGINE_DIR/bin/fetcher"
-    printf 'Fetcher ready: %s\n' "$FETCHER"
+export CLI_DIR="$HOME/.local/share/prow-ai-dashboard/$CLI_VERSION"
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64) CLI_TARGET=linux-amd64 ;;
+  Linux-aarch64|Linux-arm64) CLI_TARGET=linux-arm64 ;;
+  Darwin-x86_64) CLI_TARGET=darwin-amd64 ;;
+  Darwin-arm64) CLI_TARGET=darwin-arm64 ;;
+  *) printf 'Unsupported CLI platform\n' >&2; exit 1 ;;
+esac
+CLI_ASSET="prow-ai-dashboard-fetcher-${CLI_VERSION}-${CLI_TARGET}"
+RELEASE_URL="https://github.com/willie-yao/prow-ai-dashboard/releases/download/${CLI_VERSION}"
+install -d -m 755 "$CLI_DIR"
+if (
+  set -euo pipefail
+  DOWNLOAD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/prow-cli-download.XXXXXX")
+  cleanup_download() {
+    find "$DOWNLOAD_DIR" -type f -delete 2>/dev/null || true
+    rmdir "$DOWNLOAD_DIR" 2>/dev/null || true
+  }
+  trap cleanup_download EXIT
+  curl --fail --location "$RELEASE_URL/$CLI_ASSET" --output "$DOWNLOAD_DIR/$CLI_ASSET"
+  curl --fail --location "$RELEASE_URL/SHA256SUMS" --output "$DOWNLOAD_DIR/SHA256SUMS"
+  cd "$DOWNLOAD_DIR"
+  CHECKSUM_LINE=$(awk -v asset="$CLI_ASSET" '$2 == asset {print}' SHA256SUMS)
+  test -n "$CHECKSUM_LINE"
+  if command -v sha256sum >/dev/null && \
+    printf '%s\n' "$CHECKSUM_LINE" | sha256sum -c - 2>/dev/null; then
+    :
+  elif command -v shasum >/dev/null; then
+    printf '%s\n' "$CHECKSUM_LINE" | shasum -a 256 --check
+  else
+    printf 'sha256sum or shasum is required\n' >&2
+    exit 1
   fi
+  install -m 0755 "$CLI_ASSET" "$CLI_DIR/$CLI_ASSET"
+); then
+  export FETCHER="$CLI_DIR/$CLI_ASSET"
+else
+  printf 'CLI download or verification failed\n' >&2
+  exit 1
 fi
 ```
+
+No engine source checkout or local chart is required for a published release.
 
 ## 1. Inspect and edit `deploy/values.yaml`
 
@@ -132,7 +161,7 @@ Run the static consumer doctor first:
 
 ```bash
 "$FETCHER" onboard doctor \
-  -project-dir "$PROJECT_DIR"
+  --project-dir "$PROJECT_DIR"
 ```
 
 Then run the live read-only Kubernetes doctor with the exact chart and intended
@@ -140,14 +169,14 @@ operation. It never uses the current context implicitly:
 
 ```bash
 "$FETCHER" kubernetes doctor \
-  -action install \
-  -project-dir "$PROJECT_DIR" \
-  -values deploy/values.yaml \
-  -release "$RELEASE" \
-  -namespace "$NAMESPACE" \
-  -kube-context "$CONTEXT" \
+  --action install \
+  --project-dir "$PROJECT_DIR" \
+  --values deploy/values.yaml \
+  --release "$RELEASE" \
+  --namespace "$NAMESPACE" \
+  --kube-context "$CONTEXT" \
   -chart oci://ghcr.io/willie-yao/charts/prow-ai-dashboard \
-  -chart-version "$CHART_VERSION"
+  --chart-version "$CHART_VERSION"
 ```
 
 For an existing release, use `-action upgrade`. The doctor validates the local
@@ -220,57 +249,16 @@ kubectl --context "$CONTEXT" \
   get pvc <existing-claim>
 ```
 
-## 5. Live setup and install
+## 5. Confirm the platform handoff
 
-The commands in this section write to the selected cluster.
+The platform administrator has already created the application namespace,
+installed the platform prerequisites, and provisioned the existing Secret names
+through the organization Secret manager. The contributor does not create or copy
+Secret values as part of application deployment.
 
-### Create the namespace
-
-```bash
-kubectl --context "$CONTEXT" create namespace "$NAMESPACE" \
-  --dry-run=client \
-  -o yaml |
-kubectl --context "$CONTEXT" apply -f -
-```
-
-### Create the AI Secret
-
-Skip this step when `ai.enabled` is false. Set the Secret name to the exact value
-in `ai.existingSecret` and point to a token file outside the repository:
-
-```bash
-export AI_SECRET="<ai.existingSecret>"
-export AI_TOKEN_FILE="$HOME/.config/prow-ai-dashboard/ai-token"
-
-install -d -m 700 "$(dirname "$AI_TOKEN_FILE")"
-if [ ! -s "$AI_TOKEN_FILE" ]; then
-  printf 'AI token: '
-  IFS= read -r -s AI_TOKEN
-  printf '\n'
-  if [ -n "${AI_TOKEN:-}" ]; then
-    printf '%s' "$AI_TOKEN" >"$AI_TOKEN_FILE"
-    chmod 600 "$AI_TOKEN_FILE"
-  fi
-  unset AI_TOKEN
-fi
-
-if [ -s "$AI_TOKEN_FILE" ]; then
-  kubectl --context "$CONTEXT" \
-    --namespace "$NAMESPACE" \
-    create secret generic "$AI_SECRET" \
-    --from-file=AI_TOKEN="$AI_TOKEN_FILE" \
-    --dry-run=client \
-    -o yaml |
-  kubectl --context "$CONTEXT" \
-    --namespace "$NAMESPACE" \
-    apply -f -
-else
-  printf 'AI Secret was not created because the token file is empty.\n' >&2
-fi
-```
-
-The token value is read from the file and is not placed in the command line.
-Use your normal Secret manager for production rotation and audit controls.
+Rerun the live doctor immediately before the write command. It validates
+namespace, platform binding, storage, Secret metadata, release state, and the
+configured application topology without creating resources.
 
 ### Install the dashboard
 

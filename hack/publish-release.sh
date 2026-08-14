@@ -3,6 +3,7 @@ set -euo pipefail
 
 : "${TAG:?TAG is required}"
 : "${REPOSITORY_OWNER:?REPOSITORY_OWNER is required}"
+: "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
 
 chart_version=${TAG#v}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/prow-ai-dashboard-release.XXXXXX")
@@ -37,7 +38,11 @@ verify_release_tag() {
 }
 
 verify_release_tag
-
+reviewed_commit=$(git rev-parse 'HEAD^{commit}')
+TAG="$TAG" \
+  IMAGE_REPOSITORY="$IMAGE_REPOSITORY" \
+  REVIEWED_COMMIT="$reviewed_commit" \
+  hack/verify-release-images.sh
 
 major=""
 if [[ $TAG != *-* ]]; then
@@ -96,6 +101,26 @@ done
 
 app_pkg=$tmp/prow-ai-dashboard-$chart_version.tgz
 platform_pkg=$tmp/prow-ai-dashboard-platform-$chart_version.tgz
+for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+  goos=${target%-*}
+  goarch=${target#*-}
+  asset="prow-ai-dashboard-fetcher-${TAG}-${target}"
+  (
+    cd backend
+    CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build \
+      -trimpath \
+      -ldflags "-s -w -X main.version=$TAG -X main.commit=$reviewed_commit -X main.imageTag=$TAG" \
+      -o "$tmp/$asset" \
+      ./cmd/fetcher
+  )
+done
+(
+  cd "$tmp"
+  shasum -a 256 \
+    "$(basename "$app_pkg")" \
+    "$(basename "$platform_pkg")" \
+    prow-ai-dashboard-fetcher-* > SHA256SUMS
+)
 registry="oci://ghcr.io/$REPOSITORY_OWNER/charts"
 # Publish the prerequisite chart first. The application chart is the consumer
 # entry point and is published only after its matching platform artifact exists.
@@ -105,7 +130,7 @@ verify_release_tag
 helm push "$app_pkg" "$registry"
 verify_release_tag
 
-release_args=("$TAG" "$app_pkg" "$platform_pkg" --title "$TAG" --generate-notes --verify-tag)
+release_args=("$TAG" "$app_pkg" "$platform_pkg" "$tmp/SHA256SUMS" "$tmp"/prow-ai-dashboard-fetcher-* --title "$TAG" --generate-notes --verify-tag)
 if [[ $TAG == *-* ]]; then
   release_args+=(--prerelease)
 fi
