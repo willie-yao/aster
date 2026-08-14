@@ -59,7 +59,7 @@ func (m *Manager) GenerateAnalysisPreview(ctx context.Context, failure AnalysisF
 		return nil, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
 	}
 	if !strings.EqualFold(base.HeadSHA, failure.GenerationBaseRevision) {
-		return nil, fmt.Errorf("generation base is no longer the current fix base")
+		return nil, fmt.Errorf("%w: generation base is no longer the current fix base", ErrPreviewBaseChanged)
 	}
 	fix, err := generateAnalysisWithAgent(ctx, genParams{
 		critique: m.opts.Critique, owner: m.opts.SourceOwner, repo: m.opts.SourceName, ref: failure.GenerationBaseRevision,
@@ -149,20 +149,23 @@ func generateAnalysisWithAgent(ctx context.Context, gp genParams, failure Analys
 		analysisFailureInstruction(failure, gp.instruction, "", gp.maxFiles, a.AllowBash),
 	))
 	if err != nil {
+		category := classifyAnalysisRuntimeFailure(res, err)
 		if errors.Is(err, runtime.ErrUnavailable) || errors.Is(err, runtime.ErrSandboxUnavailable) {
-			return nil, fmt.Errorf("agent fix generation unavailable: %w", err)
+			return nil, newAnalysisGenerationError(category, a, res, fmt.Errorf("agent fix generation unavailable: %w", err))
 		}
-		return nil, fmt.Errorf("agent fix generation: %w", err)
+		return nil, newAnalysisGenerationError(category, a, res, fmt.Errorf("agent fix generation: %w", err))
 	}
 	if len(res.Files) == 0 {
-		return nil, fmt.Errorf("the coding agent produced no repository change; the remediation appears external or operational")
+		return nil, newAnalysisGenerationError(AnalysisFailureNoReviewablePatch, a, res,
+			fmt.Errorf("the coding agent produced no repository change; the remediation appears external or operational"))
 	}
 	if gp.maxFiles > 0 && len(res.Files) > gp.maxFiles {
-		return nil, fmt.Errorf("the coding agent changed %d files, exceeding max_files=%d; dropping as too broad for review", len(res.Files), gp.maxFiles)
+		return nil, newAnalysisGenerationError(AnalysisFailureNoReviewablePatch, a, res,
+			fmt.Errorf("the coding agent changed %d files, exceeding max_files=%d; dropping as too broad for review", len(res.Files), gp.maxFiles))
 	}
 	executionVerification, err := executionVerificationForAnalysisAgent(a, res, failure.GenerationBaseRevision)
 	if err != nil {
-		return nil, err
+		return nil, newAnalysisGenerationError(AnalysisFailureResultContract, a, res, err)
 	}
 	rationale := failure.SuggestedFix
 	if failure.ProposedRevision != nil {

@@ -72,6 +72,15 @@ const (
 	TerminalCancelled TerminalState = "cancelled"
 )
 
+// ExecutionFailureCode classifies a failed executor outcome without exposing output.
+type ExecutionFailureCode string
+
+const (
+	ExecutionFailureRuntime         ExecutionFailureCode = "runtime"
+	ExecutionFailureReviewScope     ExecutionFailureCode = "review_scope"
+	ExecutionFailureSafetyIntegrity ExecutionFailureCode = "safety_integrity"
+)
+
 // CommandResult records one allowed command execution.
 type CommandResult struct {
 	Argv       []string `json:"argv"`
@@ -100,18 +109,19 @@ type ResourceMetadata struct {
 
 // ExecutionResult is the provider-neutral outcome of a bounded fix execution.
 type ExecutionResult struct {
-	Version        int               `json:"version,omitempty"`
-	BaseSHA        string            `json:"base_sha,omitempty"`
-	ChangedFiles   []string          `json:"changed_files,omitempty"`
-	Files          map[string]string `json:"files,omitempty"`
-	Diff           string            `json:"diff,omitempty"`
-	CommandResults []CommandResult   `json:"command_results,omitempty"`
-	StdoutSummary  string            `json:"stdout_summary,omitempty"`
-	StderrSummary  string            `json:"stderr_summary,omitempty"`
-	TerminalState  TerminalState     `json:"terminal_state,omitempty"`
-	DurationMs     int64             `json:"duration_ms,omitempty"`
-	Resources      ResourceMetadata  `json:"resources,omitempty"`
-	FailureReason  string            `json:"failure_reason,omitempty"`
+	Version        int                  `json:"version,omitempty"`
+	BaseSHA        string               `json:"base_sha,omitempty"`
+	ChangedFiles   []string             `json:"changed_files,omitempty"`
+	Files          map[string]string    `json:"files,omitempty"`
+	Diff           string               `json:"diff,omitempty"`
+	CommandResults []CommandResult      `json:"command_results,omitempty"`
+	StdoutSummary  string               `json:"stdout_summary,omitempty"`
+	StderrSummary  string               `json:"stderr_summary,omitempty"`
+	TerminalState  TerminalState        `json:"terminal_state,omitempty"`
+	FailureCode    ExecutionFailureCode `json:"failure_code,omitempty"`
+	DurationMs     int64                `json:"duration_ms,omitempty"`
+	Resources      ResourceMetadata     `json:"resources,omitempty"`
+	FailureReason  string               `json:"failure_reason,omitempty"`
 
 	// Output is the legacy bounded summary consumed by the existing Fix PR path.
 	Output string `json:"-"`
@@ -240,9 +250,18 @@ func (r ExecutionResult) Validate(request ExecutionRequest) error {
 		if strings.TrimSpace(r.FailureReason) != "" {
 			return fmt.Errorf("successful execution has a failure reason")
 		}
+		if r.FailureCode != "" {
+			return fmt.Errorf("successful execution has a failure code")
+		}
 	case TerminalFailed, TerminalTimedOut, TerminalCancelled:
 		if strings.TrimSpace(r.FailureReason) == "" {
 			return fmt.Errorf("terminal state %q requires a failure reason", r.TerminalState)
+		}
+		if r.TerminalState != TerminalFailed && r.FailureCode != "" {
+			return fmt.Errorf("terminal state %q cannot carry failure code %q", r.TerminalState, r.FailureCode)
+		}
+		if r.TerminalState == TerminalFailed && r.FailureCode != "" && r.FailureCode != ExecutionFailureRuntime && r.FailureCode != ExecutionFailureReviewScope && r.FailureCode != ExecutionFailureSafetyIntegrity {
+			return fmt.Errorf("execution failure code %q is not supported", r.FailureCode)
 		}
 	default:
 		return fmt.Errorf("terminal state %q is not supported", r.TerminalState)
@@ -276,7 +295,7 @@ func (r ExecutionResult) Validate(request ExecutionRequest) error {
 		return fmt.Errorf("changed file list and file contents differ")
 	}
 	if len(changed) > request.MaxFiles {
-		return fmt.Errorf("changed files exceed the request max_files bound")
+		return fmt.Errorf("%w: changed files exceed the request max_files bound", ErrResultScope)
 	}
 	if len(changed) > 0 && strings.TrimSpace(r.Diff) == "" {
 		return fmt.Errorf("changed files require a unified diff")

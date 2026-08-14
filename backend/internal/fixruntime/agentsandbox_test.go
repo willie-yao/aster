@@ -1194,3 +1194,31 @@ func TestAgentSandboxResponsesTelemetryIdentifiesAPI(t *testing.T) {
 		t.Fatalf("telemetry = %+v", result.Telemetry)
 	}
 }
+
+func TestAgentSandboxRuntimeRetainsReviewScopeClassification(t *testing.T) {
+	executorResult := engineruntime.ExecutionResult{
+		Version: engineruntime.ExecutionContractVersion, BaseSHA: agentSandboxSpec().ExpectedBaseSHA,
+		Files: map[string]string{}, TerminalState: engineruntime.TerminalFailed,
+		FailureCode: engineruntime.ExecutionFailureReviewScope, FailureReason: "generated change exceeded review scope",
+		CommandResults: []engineruntime.CommandResult{{
+			Argv: []string{"git", "diff", "--cached", "--check"}, ExitCode: 0, DurationMs: 2,
+		}},
+		DurationMs: 10,
+	}
+	encoded, err := json.Marshal(executorResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &fakeAgentSandboxAPI{
+		state: sandboxState{Exists: true, UID: "uid-1", PodName: "fix-request-1", Finished: true, FinishedReason: "PodFailed"},
+		logs:  string(encoded),
+	}
+	runtime := newAgentSandboxRuntimeForTest(api, testAgentSandboxOptions())
+	result, err := runtime.Generate(t.Context(), agentSandboxSpec())
+	if err == nil || result.TerminalState != engineruntime.TerminalFailed || result.FailureCode != engineruntime.ExecutionFailureReviewScope {
+		t.Fatalf("result=%+v error=%v", result, err)
+	}
+	if len(result.CommandResults) != 1 || result.CommandResults[0].Argv[0] != "git" || !result.Telemetry.CleanupCompleted || !api.deleted {
+		t.Fatalf("result=%+v deleted=%v", result, api.deleted)
+	}
+}

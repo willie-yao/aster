@@ -35,6 +35,9 @@ var ErrMalformedResult = errors.New("runtime result is malformed")
 // ErrResultContract means the external runtime result violated its declared contract.
 var ErrResultContract = errors.New("runtime result contract violation")
 
+// ErrResultScope means the generated change exceeded the configured review scope.
+var ErrResultScope = errors.New("runtime result exceeds review scope")
+
 // ErrResultDeletion means the external runtime attempted to delete a repository file.
 var ErrResultDeletion = errors.New("runtime result attempted deletion")
 

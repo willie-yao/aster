@@ -27,7 +27,7 @@ type fixPreviewer interface {
 }
 
 type analysisFixRequester interface {
-	CreateAnalysisFixRequest(actions.AnalysisFixInput, string, string, string) (actions.ActionRequestView, error)
+	CreateAnalysisFixRequest(actions.AnalysisFixInput, string, string, string, ...string) (actions.ActionRequestView, error)
 }
 
 // Service validates owner-bound chat context before fix generation.
@@ -103,7 +103,7 @@ func (s *Service) PreviewChatFix(
 // CreateAnalysisFixRequest admits one exact JUnit chat finding for durable
 // background preview generation.
 func (s *Service) CreateAnalysisFixRequest(
-	sessionID, owner, requestID, userToken, instruction string,
+	sessionID, owner, requestID, userToken, instruction string, replacesRequestIDs ...string,
 ) (actions.ActionRequestView, error) {
 	instruction = strings.TrimSpace(instruction)
 	if len(instruction) > 4096 {
@@ -117,7 +117,7 @@ func (s *Service) CreateAnalysisFixRequest(
 		return actions.ActionRequestView{}, err
 	}
 	input := exactAnalysisFixInput(candidate, instruction)
-	return s.requests.CreateAnalysisFixRequest(input, owner, userToken, instruction)
+	return s.requests.CreateAnalysisFixRequest(input, owner, userToken, instruction, replacesRequestIDs...)
 }
 
 func exactAnalysisFixInput(candidate analysischat.FixCandidate, instruction string) actions.AnalysisFixInput {

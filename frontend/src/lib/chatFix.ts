@@ -64,6 +64,7 @@ export async function createAnalysisChatFixRequest(
   sessionID: string,
   chatRequestID: string,
   instruction: string,
+  replacesRequestID?: string,
   signal?: AbortSignal,
 ): Promise<ChatFixRequest> {
   const response = await fetch(
@@ -74,7 +75,10 @@ export async function createAnalysisChatFixRequest(
       cache: "no-store",
       signal,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(instruction.trim() ? { instruction: instruction.trim() } : {}),
+      body: JSON.stringify({
+        ...(instruction.trim() ? { instruction: instruction.trim() } : {}),
+        ...(replacesRequestID ? { replaces_request_id: replacesRequestID } : {}),
+      }),
     },
   );
   if (!response.ok) throw new Error(await actionErrorMessage(response));
