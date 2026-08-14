@@ -395,12 +395,9 @@ networkPolicy:
 var k8sDeployReadmeTmpl = template.Must(template.New("README.md").Funcs(readmeTemplateFuncs).Parse(
 	`# Deploy {{.Name}} with Helm
 
-This is the contributor path for ` + "`{{.DashboardName}}`" + `. Run commands from
+This is the project contributor path for ` + "`{{.DashboardName}}`" + `. Run commands from
 the consumer repository root. The platform administrator prepares the cluster,
 platform chart, secure runtime, storage, external identity, and Secret names.
-
-The current commands will become ` + "`aster kubernetes ...`" + ` during the later
-repository migration. The pre-migration ` + "`fetcher`" + ` commands remain supported.
 
 ## Consumer files
 
@@ -426,7 +423,7 @@ Before deployment, obtain these reviewed values from the platform administrator:
 - published engine tag and matching application and platform chart versions;
 - RWX StorageClass or existing claim;
 - existing Secret names and non-secret key names;
-- public URL, OAuth callback, and one expected CAPZ job name.
+- public URL, OAuth callback, and one expected project job name.
 
 The platform administrator guide is:
 https://github.com/willie-yao/prow-ai-dashboard/blob/<published-engine-tag>/docs/kubernetes-platform-administrator.md
@@ -440,7 +437,7 @@ export RELEASE="<application-release-from-platform-handoff>"
 export NAMESPACE={{shellquote .Namespace}}
 export EXECUTION_NAMESPACE="<execution-namespace-from-platform-handoff>"
 export PUBLIC_URL="<https-public-dashboard-url>"
-export EXPECTED_JOB="<expected-capz-job-name>"
+export EXPECTED_JOB="<expected-job-name>"
 export CONTEXT="<your-kubernetes-context>"
 export CHART_VERSION="${CLI_VERSION#v}"
 ` + "```" + `
@@ -663,7 +660,7 @@ filtering, and execution cleanup in one fail-closed subshell:
 )
 ` + "```" + `
 
-Open the public URL and confirm expected branding, the CAPZ job, and OAuth sign-in
+Open the public URL and confirm expected branding, the expected project job, and OAuth sign-in
 when authentication is enabled. The private-file check must remain HTTP 404.
 Use normal DNS. Do not use a direct-IP kubeconfig, remove the CA, edit
 ` + "`/etc/hosts`" + `, or set ` + "`insecure-skip-tls-verify`" + `.

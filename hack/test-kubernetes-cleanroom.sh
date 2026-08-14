@@ -25,20 +25,20 @@ consumer=$tmp/consumer
   go build -trimpath -o "$tmp/fetcher" ./cmd/fetcher
 )
 storage=$tmp/storage
-mkdir -p "$storage/logs/cleanroom-job/1"
-printf '{"timestamp":1}\n' > "$storage/logs/cleanroom-job/1/started.json"
+mkdir -p "$storage/logs/sample-e2e-job/1"
+printf '{"timestamp":1}\n' > "$storage/logs/sample-e2e-job/1/started.json"
 cat > "$consumer/project.yaml" <<PROJECT
-id: cleanroom
-name: Clean Room
+id: sample
+name: Sample
 discovery:
   source: bucket
   exact_jobs:
-    - cleanroom-job
+    - sample-e2e-job
 storage:
   provider: local
   base: "$storage"
 branding:
-  title: Clean Room
+  title: Sample
   base_path: /
   site_url: https://dashboard.example.test
   source_repo:
@@ -56,17 +56,17 @@ PY_VALUES
 "$tmp/fetcher" kubernetes install \
   --project-dir "$consumer" \
   --values deploy/values.yaml \
-  --release cleanroom \
-  --namespace cleanroom \
-  --kube-context cleanroom-explicit \
+  --release sample-dashboard \
+  --namespace sample-dashboard \
+  --kube-context sample-explicit \
   --chart "$root/deploy/helm/prow-ai-dashboard" \
   --dry-run
 "$tmp/fetcher" kubernetes upgrade \
   --project-dir "$consumer" \
   --values deploy/values.yaml \
-  --release cleanroom \
-  --namespace cleanroom \
-  --kube-context cleanroom-explicit \
+  --release sample-dashboard \
+  --namespace sample-dashboard \
+  --kube-context sample-explicit \
   --chart "$root/deploy/helm/prow-ai-dashboard" \
   --dry-run
 (
@@ -76,12 +76,32 @@ PY_VALUES
     -count=1
 )
 
-python3 - "$root/docs/kubernetes-contributor-deployment.md" "$root/docs/kubernetes-platform-administrator.md" <<'PY'
+python3 - \
+  "$root/docs/kubernetes-contributor-deployment.md" \
+  "$root/docs/kubernetes-platform-administrator.md" \
+  "$root/docs/kubernetes.md" \
+  "$root/docs/kubernetes-platform-ownership.md" \
+  "$root/docs/kubernetes-reference.md" \
+  "$root/deploy/helm/prow-ai-dashboard-platform/README.md" <<'PY'
 from pathlib import Path
 import sys
 
 contributor = Path(sys.argv[1]).read_text()
 admin = Path(sys.argv[2]).read_text()
+
+for raw_path in sys.argv[1:]:
+    text = Path(raw_path).read_text()
+    for forbidden in [
+        "CAPZ",
+        "capz",
+        "cluster-api-provider-azure",
+        "prow-dashboard-demo",
+        "<expected-capz-job-name>",
+        "Aster",
+        "aster kubernetes",
+    ]:
+        if forbidden in text:
+            raise SystemExit(f"generic Kubernetes document {raw_path} contains {forbidden!r}")
 
 required = [
     "prow-ai-dashboard-fetcher-${CLI_VERSION}-${CLI_TARGET}",
@@ -133,7 +153,7 @@ for value in [
     "prow-ai-dashboard-platform",
     "RuntimeClass",
     "Secret manager",
-    "Front Door",
+    "external edge",
     "rollback",
     "Uninstall retains the execution namespace",
     "export ENGINE_TAG=",
@@ -142,7 +162,7 @@ for value in [
     "export RWX_STORAGE_CLASS=",
     "export AI_SECRET_NAME=",
     "export PUBLIC_URL=",
-    "EXPECTED_JOB=<expected-capz-job-name>",
+    "EXPECTED_JOB=<expected-job-name>",
 ]:
     if value not in admin:
         raise SystemExit(f"platform administrator guide missing {value!r}")

@@ -9,21 +9,26 @@ trap 'find "$tmp" -type f -delete 2>/dev/null || true; rmdir "$tmp" 2>/dev/null 
 
 cat > "$tmp/platform.yaml" <<'VALUES'
 application:
-  releaseName: capz
+  releaseName: sample
 execution:
-  namespace: capz-sandbox
+  namespace: sample-sandbox
   runtimeClassName: kata-vm-isolation
   workloadServiceAccountName: fix-workload
+  networkPolicy:
+    allowedFQDNs:
+      - vcs.example.test
+      - registry.example.test
+      - artifacts.example.test
 VALUES
 
 helm lint "$chart" -f "$tmp/platform.yaml"
-helm template platform "$chart" -n capz -f "$tmp/platform.yaml" > "$tmp/base.yaml"
-helm template platform "$chart" -n capz -f "$tmp/platform.yaml" > "$tmp/base-second.yaml"
+helm template platform "$chart" -n sample -f "$tmp/platform.yaml" > "$tmp/base.yaml"
+helm template platform "$chart" -n sample -f "$tmp/platform.yaml" > "$tmp/base-second.yaml"
 cmp "$tmp/base.yaml" "$tmp/base-second.yaml"
 
 grep -Fq 'kind: Namespace' "$tmp/base.yaml"
-grep -Fq 'name: capz-sandbox' "$tmp/base.yaml"
-grep -Fq 'prow-ai-dashboard/release: "capz"' "$tmp/base.yaml"
+grep -Fq 'name: sample-sandbox' "$tmp/base.yaml"
+grep -Fq 'prow-ai-dashboard/release: "sample"' "$tmp/base.yaml"
 grep -Fq 'prow-ai-dashboard/runtime-class: "kata-vm-isolation"' "$tmp/base.yaml"
 grep -Fq 'prow-ai-dashboard/agent-sandbox-version: "v0.5.3"' "$tmp/base.yaml"
 if [ "$(grep -Fc 'helm.sh/resource-policy: keep' "$tmp/base.yaml")" -lt 7 ]; then
@@ -32,7 +37,7 @@ if [ "$(grep -Fc 'helm.sh/resource-policy: keep' "$tmp/base.yaml")" -lt 7 ]; the
 fi
 grep -Fq 'prow-ai-dashboard/network-policy-mode: "cilium"' "$tmp/base.yaml"
 grep -Fq 'app.kubernetes.io/component: platform-binding' "$tmp/base.yaml"
-grep -Fq 'applicationReleaseName: "capz"' "$tmp/base.yaml"
+grep -Fq 'applicationReleaseName: "sample"' "$tmp/base.yaml"
 grep -Fq 'modelGatewayEnabled: "false"' "$tmp/base.yaml"
 grep -Fq 'kind: ResourceQuota' "$tmp/base.yaml"
 grep -Fq 'count/sandboxes.agents.x-k8s.io: "4"' "$tmp/base.yaml"
@@ -40,7 +45,7 @@ grep -Fq 'kind: LimitRange' "$tmp/base.yaml"
 grep -Fq 'name: fix-workload' "$tmp/base.yaml"
 grep -Fq 'automountServiceAccountToken: false' "$tmp/base.yaml"
 grep -Fq 'kind: CiliumNetworkPolicy' "$tmp/base.yaml"
-grep -Fq 'matchName: "github.com"' "$tmp/base.yaml"
+grep -Fq 'matchName: "vcs.example.test"' "$tmp/base.yaml"
 if grep -Eq '^kind: (Secret|RuntimeClass|CustomResourceDefinition)$' "$tmp/base.yaml" || grep -Fq 'agent-sandbox-controller' "$tmp/base.yaml"; then
   echo 'platform base render claimed an external resource' >&2
   exit 1
@@ -62,7 +67,7 @@ modelGateway:
     existingSecret: gateway-tls
 VALUES
 
-helm template platform "$chart" -n capz -f "$tmp/platform.yaml" -f "$tmp/gateway.yaml" > "$tmp/gateway-render.yaml"
+helm template platform "$chart" -n sample -f "$tmp/platform.yaml" -f "$tmp/gateway.yaml" > "$tmp/gateway-render.yaml"
 grep -Fq 'image: registry.example/model-gateway@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$tmp/gateway-render.yaml"
 grep -Fq 'prow-ai-dashboard/model-gateway-host: "gateway.platform.example.com"' "$tmp/gateway-render.yaml"
 grep -Fq 'prow-ai-dashboard/model-gateway-tls-secret: "gateway-tls"' "$tmp/gateway-render.yaml"
@@ -75,7 +80,7 @@ grep -Fq 'app.kubernetes.io/component: model-gateway' "$tmp/gateway-render.yaml"
 grep -Fq 'modelGatewayEnabled: "true"' "$tmp/gateway-render.yaml"
 grep -Fq 'modelGatewayPublicHost: "gateway.platform.example.com"' "$tmp/gateway-render.yaml"
 grep -Fq 'modelGatewayUpstreamHost: "provider.example"' "$tmp/gateway-render.yaml"
-grep -Fq 'modelGatewayExecutionNamespace: "capz-sandbox"' "$tmp/gateway-render.yaml"
+grep -Fq 'modelGatewayExecutionNamespace: "sample-sandbox"' "$tmp/gateway-render.yaml"
 grep -Fq 'modelGatewayTargetPort: "8443"' "$tmp/gateway-render.yaml"
 if grep -Eq '^kind: Secret$' "$tmp/gateway-render.yaml" || grep -Fq 'value: actual-provider-token' "$tmp/gateway-render.yaml"; then
   echo 'platform gateway render contained a Secret value' >&2
@@ -127,13 +132,13 @@ project:
               type: none
   systemPrompt: test prompt
   skills:
-    capz.yaml: |
-      id: capz-clean-room
+    sample.yaml: |
+      id: sample-clean-room
       triggers: [failure]
 agentSandbox:
   fixRuntime:
     enabled: true
-    namespace: capz-sandbox
+    namespace: sample-sandbox
     runtimeClassName: kata-vm-isolation
     image:
       repository: registry.example/fix-executor
@@ -169,11 +174,11 @@ server:
       existingSecret: app-auth
 VALUES
 
-helm template capz "$app_chart" -n capz -f "$tmp/application.yaml" > "$tmp/application-render.yaml"
+helm template sample "$app_chart" -n sample -f "$tmp/application.yaml" > "$tmp/application-render.yaml"
 grep -Fq 'project.yaml:' "$tmp/application-render.yaml"
 grep -Fq 'system.md:' "$tmp/application-render.yaml"
-grep -Fq 'capz.yaml:' "$tmp/application-render.yaml"
-grep -Fq 'id: capz-clean-room' "$tmp/application-render.yaml"
+grep -Fq 'sample.yaml:' "$tmp/application-render.yaml"
+grep -Fq 'id: sample-clean-room' "$tmp/application-render.yaml"
 grep -Fq 'registry.example/fix-executor@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$tmp/application-render.yaml"
 grep -Fq 'registry.example/remote-fixer:sha-abcdef0' "$tmp/application-render.yaml"
 python3 - "$tmp/base.yaml" "$tmp/application-render.yaml" <<'PY'

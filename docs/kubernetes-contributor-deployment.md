@@ -1,6 +1,6 @@
 # Kubernetes contributor deployment guide
 
-This is the normal application-deployment path for a CAPZ contributor. The
+This is the normal application-deployment path for a project contributor. The
 platform administrator has already installed the cluster prerequisites, supplied
 an explicit kube context and namespace, and provisioned the referenced Secret
 names.
@@ -18,7 +18,7 @@ You need:
   `deploy/README.md`;
 - an explicit Kubernetes context, application namespace, and release-dedicated
   execution namespace;
-- application release name and one expected CAPZ job name;
+- application release name and one expected project job name;
 - one published engine tag and matching chart version;
 - existing Secret names and non-secret key names supplied by the platform
   administrator;
@@ -78,9 +78,6 @@ else
 fi
 ```
 
-The commands will become `aster kubernetes ...` during the later repository
-migration. The current pre-migration commands remain supported here.
-
 ## 3. Review the consumer
 
 From the consumer repository root:
@@ -92,7 +89,7 @@ export NAMESPACE="<application-namespace>"
 export EXECUTION_NAMESPACE="<release-dedicated-execution-namespace>"
 export CONTEXT="<explicit-kube-context>"
 export PUBLIC_URL="<https-public-dashboard-url>"
-export EXPECTED_JOB="<expected-capz-job-name>"
+export EXPECTED_JOB="<expected-job-name>"
 export CHART_VERSION="${CLI_VERSION#v}"
 ```
 
@@ -244,7 +241,7 @@ filtering, and execution cleanup in one fail-closed subshell:
 )
 ```
 
-Open `PUBLIC_URL` and confirm the expected branding, CAPZ job, and OAuth sign-in
+Open `PUBLIC_URL` and confirm the expected branding, expected project job, and OAuth sign-in
 when authentication is enabled. The private-file check must remain HTTP 404.
 Use normal DNS for production verification. Do not use a direct-IP kubeconfig,
 remove the CA, edit `/etc/hosts`, or set `insecure-skip-tls-verify`.
@@ -332,7 +329,7 @@ delete retained PVC data or externally owned platform resources.
 
 ## Remaining platform acceptance
 
-Provider-free render and kind tests do not prove real AKS Cilium behavior,
-secure-runtime isolation, RWX semantics, Front Door, DNS, certificates, OAuth,
+Provider-free render and kind tests do not prove target-cluster Cilium behavior,
+secure-runtime isolation, RWX semantics, external edge, DNS, certificates, OAuth,
 or provider compatibility. Those remain release-candidate acceptance owned with
 the platform administrator.

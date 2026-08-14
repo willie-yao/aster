@@ -493,7 +493,7 @@ func checkStorage(ctx context.Context, add func(string, KubernetesDoctorStatus, 
 			return
 		}
 		add("persistent storage", KubernetesDoctorPass, "existing claim "+claim+" is Bound and declares ReadWriteMany", "")
-		add("RWX semantics", KubernetesDoctorUnverified, "claim metadata cannot prove working multi-node RWX semantics", "Validate RWX behavior in the real AKS release acceptance.")
+		add("RWX semantics", KubernetesDoctorUnverified, "claim metadata cannot prove working multi-node RWX semantics", "Validate RWX behavior during target-cluster release acceptance.")
 		checkClaimConsumers(ctx, add, cluster, opts, claim)
 	} else {
 		storageClass := strings.TrimSpace(values.Persistence.StorageClass)
@@ -510,7 +510,7 @@ func checkStorage(ctx context.Context, add func(string, KubernetesDoctorStatus, 
 			return
 		}
 		add("persistent storage", KubernetesDoctorPass, "storage class "+storageClass+" exists and the desired claim requests ReadWriteMany", "")
-		add("RWX semantics", KubernetesDoctorUnverified, "read-only inspection cannot prove the storage driver provides working multi-node RWX semantics", "Validate RWX behavior in the real AKS release acceptance.")
+		add("RWX semantics", KubernetesDoctorUnverified, "read-only inspection cannot prove the storage driver provides working multi-node RWX semantics", "Validate RWX behavior during target-cluster release acceptance.")
 	}
 	claims := []string{values.Persistence.ExistingClaim, values.AgentSandbox.Analyzer.Input.ExistingClaim, values.AgentSandbox.CausalCritic.Ledger.ExistingClaim}
 	seen := map[string]string{}
@@ -731,7 +731,7 @@ func checkPublicOrigin(ctx context.Context, add func(string, KubernetesDoctorSta
 		add("public URL", KubernetesDoctorPass, "public URL uses a clean HTTPS origin", "")
 	}
 	_ = manifest
-	add("Azure Front Door and DNS", KubernetesDoctorUnverified, "the doctor does not call Azure APIs and cannot prove Front Door, DNS ownership, or certificate issuance", "Verify those resources through the organization's infrastructure-as-code and release acceptance.")
+	add("external edge and DNS", KubernetesDoctorUnverified, "Kubernetes reads cannot prove externally managed edge routing, DNS ownership, or certificate issuance; private-only deployments should confirm that public exposure is intentionally absent", "Verify public-origin infrastructure through the organization's infrastructure-as-code and target-cluster release acceptance.")
 }
 
 func checkAgentSandbox(ctx context.Context, add func(string, KubernetesDoctorStatus, string, string), cluster clusterReader, opts Options, values kubernetesDoctorValues, releaseExists bool) {
@@ -772,14 +772,18 @@ func checkAgentSandbox(ctx context.Context, add func(string, KubernetesDoctorSta
 		add("Agent Sandbox execution namespace", KubernetesDoctorFail, "namespace runtime-class contract does not match "+fix.RuntimeClassName, "Upgrade the platform bundle with the reviewed secure RuntimeClass name.")
 	} else if executionNamespace.GetAnnotations()["prow-ai-dashboard/agent-sandbox-version"] != supportedAgentSandboxVersion {
 		add("Agent Sandbox execution namespace", KubernetesDoctorFail, "namespace Agent Sandbox contract is not "+supportedAgentSandboxVersion, "Upgrade the platform bundle to the supported controller contract.")
-	} else if executionNamespace.GetAnnotations()["prow-ai-dashboard/network-policy-mode"] != "cilium" || executionNamespace.GetAnnotations()["prow-ai-dashboard/default-deny-policy-name"] == "" || executionNamespace.GetAnnotations()["prow-ai-dashboard/execution-policy-name"] == "" || executionNamespace.GetAnnotations()["prow-ai-dashboard/execution-policy-sha256"] == "" || executionNamespace.GetAnnotations()["prow-ai-dashboard/platform-release"] == "" {
-		add("Agent Sandbox execution namespace", KubernetesDoctorFail, "namespace does not record the complete supported Cilium policy and platform-release contract", "Upgrade the platform bundle before enabling Fix runtime.")
+	} else if executionNamespace.GetAnnotations()["prow-ai-dashboard/default-deny-policy-name"] == "" || executionNamespace.GetAnnotations()["prow-ai-dashboard/execution-policy-name"] == "" || executionNamespace.GetAnnotations()["prow-ai-dashboard/execution-policy-sha256"] == "" || executionNamespace.GetAnnotations()["prow-ai-dashboard/platform-release"] == "" {
+		add("Agent Sandbox execution namespace", KubernetesDoctorFail, "namespace does not record the complete network-policy and platform-release contract", "Upgrade the platform bundle before enabling Fix runtime.")
+	} else if executionNamespace.GetAnnotations()["prow-ai-dashboard/network-policy-mode"] != "cilium" {
+		add("Agent Sandbox execution namespace", KubernetesDoctorFail, "namespace selects an unsupported network-policy backend", "Install the platform bundle with the supported FQDN-aware Cilium backend.")
 	} else {
-		add("Agent Sandbox execution namespace", KubernetesDoctorPass, "namespace records the release, runtime, controller, and Cilium policy contract", "")
+		add("Agent Sandbox execution namespace", KubernetesDoctorPass, "namespace records the release, runtime, controller, and FQDN-aware Cilium policy contract", "")
 	}
 	policyHash := ""
+	networkPolicyMode := ""
 	if executionNamespace != nil {
 		policyHash = executionNamespace.GetAnnotations()["prow-ai-dashboard/execution-policy-sha256"]
+		networkPolicyMode = executionNamespace.GetAnnotations()["prow-ai-dashboard/network-policy-mode"]
 	}
 	platformRelease := ""
 	if executionNamespace != nil {
@@ -801,8 +805,12 @@ func checkAgentSandbox(ctx context.Context, add func(string, KubernetesDoctorSta
 	checkExecutionBounds(ctx, add, cluster, fix.Namespace)
 	checkWorkloadServiceAccount(ctx, add, cluster, fix, releaseExists)
 	checkActiveSandboxes(ctx, add, cluster, fix.Namespace, opts.Release)
-	checkGateway(ctx, add, cluster, opts.Namespace, fix, platformBinding)
-	add("hostile-code isolation", KubernetesDoctorUnverified, "resource presence does not prove that the RuntimeClass enforces hostile-code isolation", "Validate the secure runtime and node image in real AKS release acceptance.")
+	if networkPolicyMode == "cilium" {
+		checkGateway(ctx, add, cluster, opts.Namespace, fix, platformBinding)
+	} else if fix.ModelProvider.CredentialMode == modelprovider.CredentialModeGateway {
+		add("model gateway network-policy backend", KubernetesDoctorFail, "the selected platform contract is not the supported FQDN-aware Cilium backend", "Install or restore the platform chart with execution.networkPolicy.mode=cilium.")
+	}
+	add("hostile-code isolation", KubernetesDoctorUnverified, "resource presence does not prove that the RuntimeClass enforces hostile-code isolation", "Validate the secure runtime and node image during target-cluster release acceptance.")
 }
 
 func checkPlatformBinding(ctx context.Context, add func(string, KubernetesDoctorStatus, string, string), cluster clusterReader, applicationNamespace, release string, fix doctorFixRuntimeValues, policyHash, platformRelease string) map[string]string {
@@ -928,7 +936,7 @@ func checkRuntimeNodes(ctx context.Context, add func(string, KubernetesDoctorSta
 		return
 	}
 	add("secure runtime nodes", KubernetesDoctorPass, fmt.Sprintf("%d Ready schedulable node(s) match observable RuntimeClass selectors", matches), "")
-	add("runtime handler enforcement", KubernetesDoctorUnverified, "node labels and RuntimeClass metadata do not prove the handler is installed or functional", "Validate the runtime handler in real AKS release acceptance.")
+	add("runtime handler enforcement", KubernetesDoctorUnverified, "node labels and RuntimeClass metadata do not prove the handler is installed or functional", "Validate the runtime handler during target-cluster release acceptance.")
 }
 
 func nodeTaintsTolerated(node *unstructured.Unstructured, tolerations []any) bool {
@@ -1021,10 +1029,15 @@ func checkExecutionBounds(ctx context.Context, add func(string, KubernetesDoctor
 		return
 	}
 	add("Agent Sandbox network policy", KubernetesDoctorPass, "execution namespace contains only the release-owned default-deny policy", "")
+	if annotations["prow-ai-dashboard/network-policy-mode"] != "cilium" {
+		add("Agent Sandbox network-policy backend", KubernetesDoctorFail, "the selected platform contract is not the supported FQDN-aware Cilium backend", "Install or restore the platform chart with execution.networkPolicy.mode=cilium.")
+		return
+	}
+	add("Agent Sandbox network-policy backend", KubernetesDoctorPass, "the platform contract selects the supported FQDN-aware Cilium backend", "")
 	policyName := annotations["prow-ai-dashboard/execution-policy-name"]
 	served, err := cluster.HasResource(ctx, ciliumPoliciesGVR)
 	if err != nil || !served {
-		add("Agent Sandbox Cilium policy", KubernetesDoctorFail, "the cilium.io/v2 CiliumNetworkPolicy API is unavailable", "Install the supported AKS Cilium data plane before the platform bundle.")
+		add("Agent Sandbox Cilium policy", KubernetesDoctorFail, "the cilium.io/v2 CiliumNetworkPolicy API is unavailable", "Install the supported FQDN-aware Cilium network-policy backend before the platform bundle.")
 		return
 	}
 	ciliumPolicies, err := cluster.List(ctx, ciliumPoliciesGVR, namespace, "")
@@ -1043,7 +1056,7 @@ func checkExecutionBounds(ctx context.Context, add func(string, KubernetesDoctor
 	}
 	clusterwideServed, err := cluster.HasResource(ctx, ciliumClusterwidePoliciesGVR)
 	if err != nil || !clusterwideServed {
-		add("Agent Sandbox Cilium policy", KubernetesDoctorFail, "the cluster-wide Cilium policy API is unavailable", "Restore the supported AKS Cilium policy APIs.")
+		add("Agent Sandbox Cilium policy", KubernetesDoctorFail, "the cluster-wide Cilium policy API is unavailable", "Restore the supported Cilium policy APIs.")
 		return
 	}
 	clusterwide, err := cluster.List(ctx, ciliumClusterwidePoliciesGVR, "", "")
@@ -1504,7 +1517,7 @@ func checkGatewayNetworkPolicies(ctx context.Context, add func(string, Kubernete
 	}
 	served, err := cluster.HasResource(ctx, ciliumPoliciesGVR)
 	if err != nil || !served {
-		add("model gateway network policy", KubernetesDoctorFail, "the CiliumNetworkPolicy API is unavailable for the gateway", "Restore the supported AKS Cilium data plane.")
+		add("model gateway network policy", KubernetesDoctorFail, "the CiliumNetworkPolicy API is unavailable for the gateway", "Restore the supported FQDN-aware Cilium network-policy backend.")
 		return
 	}
 	ciliumPolicies, err := cluster.List(ctx, ciliumPoliciesGVR, namespace, "")

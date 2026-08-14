@@ -51,13 +51,7 @@ spec:
             dns:
               - matchPattern: "*"
     - toFQDNs:
-        {{- if .Values.modelGateway.networkPolicy.allowedFQDNs }}
-        {{- range .Values.modelGateway.networkPolicy.allowedFQDNs }}
-        - matchName: {{ . | quote }}
-        {{- end }}
-        {{- else }}
         - matchName: {{ .Values.modelGateway.upstreamHost | quote }}
-        {{- end }}
       toPorts:
         - ports:
             - port: "443"

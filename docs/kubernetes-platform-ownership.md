@@ -8,18 +8,18 @@ cluster-scoped platform resources.
 
 | Owner | Resources and responsibilities |
 | --- | --- |
-| Azure infrastructure or infrastructure-as-code | AKS, node pools, secure-runtime node images, RWX storage capability, Azure Front Door, DNS, certificates, public origin restrictions, and external identity applications. |
+| External infrastructure or infrastructure-as-code | Target Kubernetes cluster, node pools, secure-runtime node images, RWX storage capability, external edge, DNS, certificates, public origin restrictions, and external identity applications. |
 | Kubernetes SIG Agent Sandbox release | The `sandboxes.agents.x-k8s.io` CRD, `agent-sandbox-system`, controller, webhook, and their cluster-scoped RBAC. Install the supported upstream artifact as an explicit cluster-admin operation. |
 | Cluster platform administrator | A working secure `RuntimeClass`, compatible labeled nodes, the versioned platform bundle, existing Secret references, and platform upgrade and rollback. |
 | Platform bundle | Agent Sandbox execution namespaces, quota, limits, tokenless workload identities, default-deny and reviewed egress policy, and an optional model-gateway Deployment and Service that reference existing Secrets. |
 | Application chart | Dashboard worker or CronJob, server, application PVC, Services, optional Ingress, project ConfigMap, application ServiceAccounts, exact Sandbox admission policy, application-scoped RBAC, executor digest, and runtime bounds. |
-| CAPZ consumer repository | Reviewed `project.yaml`, `prompts/system.md`, skills, `deploy/values.yaml`, provider coordinates, Secret names, public URL, and application release choices. |
-| CAPZ contributor | Run the static consumer doctor and live Kubernetes doctor, perform one guarded install or upgrade, verify health and published data, and use documented Helm rollback. |
+| Consumer repository | Reviewed `project.yaml`, `prompts/system.md`, skills, `deploy/values.yaml`, provider coordinates, Secret names, public URL, and application release choices. |
+| Project contributor | Run the static consumer doctor and live Kubernetes doctor, perform one guarded install or upgrade, verify health and published data, and use documented Helm rollback. |
 | Organization Secret manager | Provider, GitHub, OAuth, SMTP, gateway TLS, and session credential values. Consumer files and Helm arguments contain only existing Secret names and non-secret key names. |
 
 ## Required order
 
-1. Provision AKS, secure-runtime nodes, RWX storage, and the intended public edge.
+1. Provision the target Kubernetes cluster, secure-runtime nodes, RWX storage, and the intended public edge.
 2. Install the supported upstream Agent Sandbox controller and CRD.
 3. Verify the secure `RuntimeClass` and compatible Ready nodes.
 4. Install the platform bundle and provision its referenced Secrets through the
@@ -27,8 +27,8 @@ cluster-scoped platform resources.
 5. Review the consumer configuration and run `fetcher onboard doctor`.
 6. Run `fetcher kubernetes doctor` with an explicit kube context.
 7. Run one guarded `fetcher kubernetes install` or `upgrade` command.
-8. Verify application health, published CAPZ data, authentication, and the
-   externally managed Front Door and DNS path.
+8. Verify application health, published project data, authentication, and the
+   externally managed edge and DNS path.
 
 ## Application and platform boundary
 
@@ -86,7 +86,7 @@ disabled, and arbitrary CA mounts are not added to Sandbox workloads.
 
 ## Demo-only procedures that are not the target contract
 
-The current CAPZ demo documents useful operational evidence, but these steps are
+A consumer deployment guide may document useful operational evidence, but these steps are
 not normal contributor requirements:
 
 - building a local engine binary from an exact checkout;
@@ -95,7 +95,7 @@ not normal contributor requirements:
 - building a consumer-specific executor or model gateway;
 - injecting a private CA into the executor image;
 - constructing a long raw Helm command;
-- configuring Front Door with ad hoc `az afd` commands instead of the team's
+- configuring an external edge with ad hoc provider commands instead of the team's
   infrastructure-as-code process;
 - using a temporary direct-IP kubeconfig for local DNS failure;
 - manually editing owner references during a mode transition.
@@ -109,9 +109,9 @@ cluster CA, editing `/etc/hosts`, or using a mutable image tag is not supported.
 The live doctor proves observable resource presence, selected metadata,
 readiness, and configuration consistency. It does not prove:
 
-- real RWX behavior across AKS nodes;
+- real RWX behavior across target-cluster nodes;
 - secure-runtime handler installation or hostile-code isolation;
-- public DNS ownership, Front Door state, certificate issuance, or OAuth app
+- public DNS ownership, external edge state, certificate issuance, or OAuth app
   configuration;
 - model-provider compatibility or gateway authorization;
 - registry provenance beyond the configured immutable reference syntax.

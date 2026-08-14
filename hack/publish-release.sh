@@ -90,7 +90,8 @@ helm lint deploy/helm/prow-ai-dashboard
 helm lint deploy/helm/prow-ai-dashboard-platform \
   --set application.releaseName=release \
   --set execution.namespace=release-sandbox \
-  --set execution.runtimeClassName=secure-runtime
+  --set execution.runtimeClassName=secure-runtime \
+  --set-string 'execution.networkPolicy.allowedFQDNs[0]=vcs.example.test'
 
 for chart in prow-ai-dashboard prow-ai-dashboard-platform; do
   helm package "deploy/helm/$chart" \

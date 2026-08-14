@@ -6,6 +6,6 @@ Required upstream Agent Sandbox release:
   sha256: {{ .Values.agentSandbox.manifestSHA256 }}
 
 The chart does not install the Agent Sandbox controller, RuntimeClass handler,
-secure-runtime nodes, Secret values, DNS, certificates, or Azure resources.
+secure-runtime nodes, Secret values, DNS, certificates, or external infrastructure.
 Run the checksum verifier and the live Kubernetes doctor before installing the
 application chart.

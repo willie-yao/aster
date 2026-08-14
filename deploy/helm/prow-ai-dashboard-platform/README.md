@@ -1,10 +1,7 @@
 # prow-ai-dashboard platform chart
 
 This chart packages cluster-platform prerequisites for one prow-ai-dashboard
-application release. Install it before the application chart. It is designed to
-be renamed mechanically during the later repository migration.
-
-## Ownership
+application release. Install it before the application chart. ## Ownership
 
 The chart owns:
 
@@ -19,7 +16,7 @@ The chart does not own:
 
 - the Agent Sandbox CRD, controller, webhook, or cluster RBAC;
 - a RuntimeClass, runtime handler, node image, labels, or taints;
-- Azure infrastructure, RWX storage, Front Door, DNS, certificates, or OAuth;
+- external infrastructure, RWX storage, edge routing, DNS, certificates, or OAuth;
 - provider, TLS, GitHub, or application Secret values;
 - application workloads, PVCs, ConfigMaps, admission policies, or
   cross-namespace application RBAC.
@@ -91,14 +88,21 @@ policy.
 
 ## Network policy
 
-The supported AKS contract requires `execution.networkPolicy.mode: cilium` so
-hostile workloads use reviewed exact-host FQDN policy. Wildcards, public
-suffixes, multi-tenant wildcard domains, internal names, raw CIDRs, and a
+The currently supported FQDN-aware network-policy contract requires
+`execution.networkPolicy.mode: cilium` so hostile workloads use reviewed
+exact-host FQDN policy. Wildcards, public suffixes, multi-tenant wildcard domains, internal names, raw CIDRs, and a
 portable unrestricted fallback are not supported.
+
+`execution.networkPolicy.allowedFQDNs` has no default grants and must contain an
+explicit reviewed list. Include only the VCS, dependency registry, artifact
+service, and provider hosts required by the project commands. An empty list
+fails closed. The current backend selects DNS in `kube-system` with the
+`k8s-app: kube-dns` label. Clusters with a different DNS identity are not yet
+supported by this platform chart.
 
 A normal kind cluster can validate chart lifecycle only with a disposable
 test-only Cilium CRD. It does not prove Cilium behavior, secure RuntimeClass
-enforcement, hostile-code isolation, or AKS networking.
+enforcement, hostile-code isolation, or target-cluster networking.
 
 ## Model gateway and TLS
 
@@ -110,6 +114,10 @@ not require this Deployment. When enabled, the platform administrator supplies:
 - an existing TLS Secret name;
 - an HTTPS provider upstream and exact upstream host;
 - a public FQDN whose private DNS record resolves to the gateway Service.
+
+Gateway egress is always limited to the configured `upstreamHost`. The chart
+rejects a separate additional-host allowlist so the rendered policy matches the
+doctor's immutable gateway binding.
 
 The gateway Deployment carries stable host and TLS-Secret annotations. It mounts
 the exact TLS Secret read-only in the `gateway` container. The chart never
@@ -125,7 +133,7 @@ policy. Uninstall therefore retains the complete execution security boundary for
 explicit, separately confirmed cleanup, including protection for active or
 terminating Sandboxes. Confirm that no Sandbox, Pod, or application RBAC remains
 before deleting those resources and then the namespace. External Agent Sandbox,
-RuntimeClass, node, Secret, DNS, certificate, and Azure resources are retained.
+RuntimeClass, node, Secret, DNS, certificate, and external infrastructure are retained.
 
 `application.releaseName` and `execution.namespace` are immutable after the
 first installation. Use a new platform release for a different binding rather
