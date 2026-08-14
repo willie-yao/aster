@@ -69,14 +69,20 @@ func TestResolveAnalysisActionSubjectEligibility(t *testing.T) {
 		mutate func(*models.JobDetail)
 		ok     bool
 	}{
-		{name: "eligible", ok: true},
+		{name: "strict critique pass", ok: true},
 		{name: "passing", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].Status = "passed" }},
 		{name: "skipped", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].Status = "skipped" }},
 		{name: "unavailable", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].AIAnalysis = nil }},
-		{name: "rejected", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].AIAnalysis.CritiquePassed = false }},
+		{name: "published without strict critique pass", mutate: func(d *models.JobDetail) {
+			d.Runs[0].TestCases[0].AIAnalysis.CritiquePassed = false
+		}, ok: true},
+		{name: "empty suggested fix", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].AIAnalysis.SuggestedFix = "" }, ok: true},
+		{name: "non-agentic", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].AIAnalysis.Mode = "legacy" }},
+		{name: "empty root cause", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].AIAnalysis.RootCause = "" }},
 		{name: "transient", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].AIAnalysis.Severity = "Transient-Ignore" }},
 		{name: "build failure", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].Source = models.TestCaseSourceBuild }},
 		{name: "missing junit", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].JUnitFile = "" }},
+		{name: "missing verified source paths", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].AIAnalysis.FileLinks = nil }},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			dir := t.TempDir()

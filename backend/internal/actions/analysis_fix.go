@@ -167,8 +167,8 @@ func (s *Service) ResolveAnalysisActionSubject(identity AnalysisIdentity) (*Anal
 	match := matches[0]
 	analysis := match.testCase.AIAnalysis
 	if match.run.Passed || match.testCase.Status != "failed" || match.testCase.Source == models.TestCaseSourceBuild || match.testCase.JUnitFile == "" ||
-		analysis == nil || analysis.GeneratedAt != identity.AnalysisGeneratedAt || !ai.MeetsCurrentCritiqueContract(analysis) ||
-		strings.TrimSpace(analysis.RootCause) == "" || strings.TrimSpace(analysis.SuggestedFix) == "" ||
+		analysis == nil || analysis.GeneratedAt != identity.AnalysisGeneratedAt || analysis.Mode != ai.AgenticMode ||
+		strings.TrimSpace(analysis.RootCause) == "" ||
 		strings.EqualFold(strings.TrimSpace(analysis.Severity), "Transient-Ignore") {
 		return nil, fmt.Errorf("JUnit analysis does not pass current action quality gates")
 	}

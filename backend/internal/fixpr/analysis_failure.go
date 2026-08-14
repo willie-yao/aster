@@ -92,8 +92,7 @@ func validateAnalysisFailure(failure AnalysisFailure) error {
 	if strings.TrimSpace(failure.ID) == "" || strings.TrimSpace(failure.Project) == "" || strings.TrimSpace(failure.JobID) == "" ||
 		strings.TrimSpace(failure.BuildID) == "" || strings.TrimSpace(failure.TestName) == "" || strings.TrimSpace(failure.AnalysisGeneratedAt) == "" ||
 		strings.TrimSpace(failure.AnalysisHash) == "" || strings.TrimSpace(failure.ChatResponseHash) == "" || strings.TrimSpace(failure.PreviewRequestHash) == "" ||
-		strings.TrimSpace(failure.RootCause) == "" || strings.TrimSpace(failure.SuggestedFix) == "" ||
-		strings.TrimSpace(failure.AssistantAnswer) == "" || strings.TrimSpace(failure.SourceRepository) == "" ||
+		strings.TrimSpace(failure.RootCause) == "" || strings.TrimSpace(failure.AssistantAnswer) == "" || strings.TrimSpace(failure.SourceRepository) == "" ||
 		strings.TrimSpace(failure.SourceVerification) == "" || strings.TrimSpace(failure.FindingVerification) == "" {
 		return fmt.Errorf("exact analysis fix context is incomplete")
 	}
