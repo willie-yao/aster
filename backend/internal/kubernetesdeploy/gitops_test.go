@@ -152,6 +152,7 @@ func TestGitOpsRejectsInvalidConsumerInputs(t *testing.T) {
 		{"mutable image", "image:\n  repository: example/image:latest\n", "", "", "mutable image"},
 		{"mutable image main", "image:\n  tag: main\n", "", "", "mutable image"},
 		{"mutable global image", "global:\n  imageTag: latest\n", "", "", "mutable image"},
+		{"snapshot global image", "global:\n  imageTag: 0.9.0-SNAPSHOT\n", "", "", "mutable image"},
 		{"mutable image canary", "image:\n  tag: canary\n", "", "", "mutable image"},
 		{"openai token", "note: sk-proj-abcdefghijklmnopqrstuvwxyz123456\n", "", "", "credential-like"},
 		{"local home path", "note: /Users/alice/private/config\n", "", "", "local workstation"},

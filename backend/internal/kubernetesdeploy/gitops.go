@@ -595,6 +595,9 @@ func rejectInlineCredentials(value any, path []string) error {
 
 func immutableImageIdentity(field, value string) bool {
 	value = strings.TrimSpace(value)
+	if strings.Contains(strings.ToLower(value), "snapshot") {
+		return false
+	}
 	if value == "" {
 		return true
 	}
