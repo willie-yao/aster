@@ -39,6 +39,11 @@ application client ServiceAccount, cross-namespace admission RBAC, and
 release-specific admission policy because those resources depend on the
 application release identity and executor contract.
 
+The versioned platform bundle is implemented by
+[`deploy/helm/prow-ai-dashboard-platform`](../deploy/helm/prow-ai-dashboard-platform/README.md).
+It ships with the application release but has an independent Helm release and
+resource identity.
+
 The platform bundle must not create project configuration, application data
 claims, application workloads, OAuth applications, credential values, or
 release-specific admission policy. Each Agent Sandbox execution namespace is

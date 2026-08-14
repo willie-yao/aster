@@ -1,0 +1,30 @@
+{{- include "prow-ai-dashboard-platform.validate" . -}}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.execution.namespace }}
+  labels:
+    {{- include "prow-ai-dashboard-platform.labels" . | nindent 4 }}
+    prow-ai-dashboard/release: {{ .Values.application.releaseName | quote }}
+    pod-security.kubernetes.io/enforce: {{ .Values.execution.podSecurity.enforce | quote }}
+    pod-security.kubernetes.io/enforce-version: {{ .Values.execution.podSecurity.enforceVersion | quote }}
+    pod-security.kubernetes.io/audit: {{ .Values.execution.podSecurity.audit | quote }}
+    pod-security.kubernetes.io/audit-version: {{ .Values.execution.podSecurity.auditVersion | quote }}
+    pod-security.kubernetes.io/warn: {{ .Values.execution.podSecurity.warn | quote }}
+    pod-security.kubernetes.io/warn-version: {{ .Values.execution.podSecurity.warnVersion | quote }}
+  annotations:
+    helm.sh/resource-policy: keep
+    prow-ai-dashboard/runtime-class: {{ .Values.execution.runtimeClassName | quote }}
+    prow-ai-dashboard/agent-sandbox-version: {{ .Values.agentSandbox.requiredVersion | quote }}
+    prow-ai-dashboard/network-policy-mode: {{ .Values.execution.networkPolicy.mode | quote }}
+    prow-ai-dashboard/default-deny-policy-name: {{ printf "%s-execution-default-deny" (include "prow-ai-dashboard-platform.fullname" .) | quote }}
+    prow-ai-dashboard/execution-policy-name: {{ printf "%s-execution-egress" (include "prow-ai-dashboard-platform.fullname" .) | quote }}
+    prow-ai-dashboard/execution-policy-sha256: {{ include "prow-ai-dashboard-platform.executionPolicyHash" . | quote }}
+    prow-ai-dashboard/platform-release: {{ .Release.Name | quote }}
+    prow-ai-dashboard/model-gateway-enabled: {{ .Values.modelGateway.enabled | quote }}
+    {{- if .Values.modelGateway.enabled }}
+    prow-ai-dashboard/model-gateway-namespace: {{ .Release.Namespace | quote }}
+    prow-ai-dashboard/model-gateway-name: {{ include "prow-ai-dashboard-platform.name" . | quote }}
+    prow-ai-dashboard/model-gateway-target-port: {{ .Values.modelGateway.service.targetPort | quote }}
+    {{- end }}
+    prow-ai-dashboard/agent-sandbox-manifest-sha256: {{ .Values.agentSandbox.manifestSHA256 | quote }}

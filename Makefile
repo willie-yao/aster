@@ -111,7 +111,13 @@ helm-check:
 	bash deploy/helm/prow-ai-dashboard/test-schema.sh
 	bash deploy/helm/prow-ai-dashboard/test-render.sh
 	bash deploy/helm/prow-ai-dashboard/test-operations.sh
+	bash deploy/helm/prow-ai-dashboard-platform/test-schema.sh
+	bash deploy/helm/prow-ai-dashboard-platform/test-render.sh
+	bash deploy/helm/prow-ai-dashboard-platform/test-release.sh
+	bash deploy/helm/prow-ai-dashboard-platform/test-kind-cleanup.sh
+	bash hack/test-publish-release.sh
 	bash deploy/helm/test-upgrade.sh
+	bash -n deploy/helm/prow-ai-dashboard-platform/test-kind.sh
 	bash -n experimental/agent-sandbox/run-kind-evaluation.sh
 
 # Check the AGENTS.md repo map against the backend tree.

@@ -38,10 +38,12 @@ the changelog.
    - re-runs the full CI gate against the tagged commit,
    - creates the GitHub Release with auto-generated notes (marked
      **pre-release** when the tag has a `-beta`/`-rc` suffix),
-   - packages the Helm chart at the release version (with its image pinned to
-     the tag), pushes it to `oci://ghcr.io/<owner>/charts/prow-ai-dashboard`,
-     and attaches the `.tgz` to the release,
-   - for a **stable** tag only, fast-forwards the `vMAJOR` alias to the tag.
+   - packages the application and platform Helm charts at the release version,
+     pushes them to `oci://ghcr.io/<owner>/charts/prow-ai-dashboard` and
+     `oci://ghcr.io/<owner>/charts/prow-ai-dashboard-platform`, and attaches
+     both `.tgz` files to the release,
+   - for a **stable** tag only, fast-forwards the `vMAJOR` alias after both
+     charts are packaged, pushed, and attached successfully.
 
    In parallel, `.github/workflows/image.yml` builds and pushes the engine,
    analyzer, local fixer, remote fixer, and Agent Sandbox executor images with `main`,

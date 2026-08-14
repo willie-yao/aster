@@ -211,6 +211,94 @@ func TestKubernetesDoctorAgentSandboxFailures(t *testing.T) {
 			c.lists[listKey(nodesGVR, "", "")] = objectList(nodeObject("node-a", false, map[string]string{"runtime": "other"}))
 		}, check: "secure runtime nodes"},
 		{name: "missing execution namespace", mutate: func(c *fakeDoctorCluster) { delete(c.objects, objectKey(namespacesGVR, "", "sandbox")) }, check: "Agent Sandbox execution namespace"},
+		{name: "wrong namespace runtime", mutate: func(c *fakeDoctorCluster) {
+			namespace := c.objects[objectKey(namespacesGVR, "", "sandbox")]
+			annotations := namespace.GetAnnotations()
+			annotations["prow-ai-dashboard/runtime-class"] = "runc"
+			namespace.SetAnnotations(annotations)
+		}, check: "Agent Sandbox execution namespace"},
+		{name: "wrong namespace controller version", mutate: func(c *fakeDoctorCluster) {
+			namespace := c.objects[objectKey(namespacesGVR, "", "sandbox")]
+			annotations := namespace.GetAnnotations()
+			annotations["prow-ai-dashboard/agent-sandbox-version"] = "v0.5.2"
+			namespace.SetAnnotations(annotations)
+		}, check: "Agent Sandbox execution namespace"},
+		{name: "missing platform binding", mutate: func(c *fakeDoctorCluster) {
+			c.lists[listKey(configMapsGVR, "capz", "app.kubernetes.io/part-of=prow-ai-dashboard-platform,app.kubernetes.io/component=platform-binding")] = objectList()
+		}, check: "platform binding"},
+		{name: "coordinated gateway policy drift", mutate: func(c *fakeDoctorCluster) {
+			namespace := c.objects[objectKey(namespacesGVR, "", "sandbox")]
+			annotations := namespace.GetAnnotations()
+			annotations["prow-ai-dashboard/model-gateway-namespace"] = "attacker"
+			annotations["prow-ai-dashboard/model-gateway-target-port"] = "9443"
+			allowed := []string{"github.com", "api.github.com", "proxy.golang.org", "sum.golang.org", "storage.googleapis.com"}
+			annotations["prow-ai-dashboard/execution-policy-sha256"] = executionPolicyHash(allowed, annotations)
+			namespace.SetAnnotations(annotations)
+			policy := &c.lists[listKey(ciliumPoliciesGVR, "sandbox", "")].Items[0]
+			policyAnnotations := policy.GetAnnotations()
+			policyAnnotations["prow-ai-dashboard/execution-policy-sha256"] = annotations["prow-ai-dashboard/execution-policy-sha256"]
+			policy.SetAnnotations(policyAnnotations)
+			egress, _, _ := unstructured.NestedSlice(policy.Object, "spec", "egress")
+			gateway := egress[1].(map[string]any)
+			endpointLabels := gateway["toEndpoints"].([]any)[0].(map[string]any)["matchLabels"].(map[string]any)
+			endpointLabels["k8s:io.kubernetes.pod.namespace"] = "attacker"
+			gateway["toPorts"].([]any)[0].(map[string]any)["ports"].([]any)[0].(map[string]any)["port"] = "9443"
+			_ = unstructured.SetNestedSlice(policy.Object, egress, "spec", "egress")
+		}, check: "platform binding"},
+		{name: "missing Cilium API", mutate: func(c *fakeDoctorCluster) { c.resources[ciliumPoliciesGVR] = false }, check: "Agent Sandbox Cilium policy"},
+		{name: "missing Cilium policy", mutate: func(c *fakeDoctorCluster) {
+			c.lists[listKey(ciliumPoliciesGVR, "sandbox", "")] = objectList()
+		}, check: "Agent Sandbox Cilium policy"},
+		{name: "empty Cilium policy", mutate: func(c *fakeDoctorCluster) {
+			policy := &c.lists[listKey(ciliumPoliciesGVR, "sandbox", "")].Items[0]
+			policy.Object["spec"] = map[string]any{"endpointSelector": map[string]any{}, "ingress": []any{}, "egress": []any{}}
+		}, check: "Agent Sandbox Cilium policy"},
+		{name: "world Cilium policy", mutate: func(c *fakeDoctorCluster) {
+			policy := &c.lists[listKey(ciliumPoliciesGVR, "sandbox", "")].Items[0]
+			egress, _, _ := unstructured.NestedSlice(policy.Object, "spec", "egress")
+			egress = append(egress, map[string]any{"toEntities": []any{"world"}})
+			_ = unstructured.SetNestedSlice(policy.Object, egress, "spec", "egress")
+		}, check: "Agent Sandbox Cilium policy"},
+		{name: "Cilium policy hash mismatch", mutate: func(c *fakeDoctorCluster) {
+			policy := &c.lists[listKey(ciliumPoliciesGVR, "sandbox", "")].Items[0]
+			annotations := policy.GetAnnotations()
+			annotations["prow-ai-dashboard/execution-policy-sha256"] = "wrong"
+			policy.SetAnnotations(annotations)
+		}, check: "Agent Sandbox Cilium policy"},
+		{name: "gateway Cilium namespace drift", mutate: func(c *fakeDoctorCluster) {
+			policy := &c.lists[listKey(ciliumPoliciesGVR, "sandbox", "")].Items[0]
+			egress, _, _ := unstructured.NestedSlice(policy.Object, "spec", "egress")
+			gateway := egress[1].(map[string]any)
+			endpoints := gateway["toEndpoints"].([]any)
+			labels := endpoints[0].(map[string]any)["matchLabels"].(map[string]any)
+			labels["k8s:io.kubernetes.pod.namespace"] = "attacker"
+			_ = unstructured.SetNestedSlice(policy.Object, egress, "spec", "egress")
+		}, check: "Agent Sandbox Cilium policy"},
+		{name: "gateway Cilium port drift", mutate: func(c *fakeDoctorCluster) {
+			policy := &c.lists[listKey(ciliumPoliciesGVR, "sandbox", "")].Items[0]
+			egress, _, _ := unstructured.NestedSlice(policy.Object, "spec", "egress")
+			gateway := egress[1].(map[string]any)
+			toPorts := gateway["toPorts"].([]any)
+			ports := toPorts[0].(map[string]any)["ports"].([]any)
+			ports[0].(map[string]any)["port"] = "443"
+			_ = unstructured.SetNestedSlice(policy.Object, egress, "spec", "egress")
+		}, check: "Agent Sandbox Cilium policy"},
+		{name: "additional world Cilium policy", mutate: func(c *fakeDoctorCluster) {
+			extra := object(ciliumPoliciesGVR, "sandbox", "manual-world", map[string]any{"spec": map[string]any{"endpointSelector": map[string]any{}, "egress": []any{map[string]any{"toEntities": []any{"world"}}}}})
+			c.lists[listKey(ciliumPoliciesGVR, "sandbox", "")].Items = append(c.lists[listKey(ciliumPoliciesGVR, "sandbox", "")].Items, *extra)
+		}, check: "Agent Sandbox Cilium policy"},
+		{name: "additional Kubernetes egress policy", mutate: func(c *fakeDoctorCluster) {
+			extra := object(networkPoliciesGVR, "sandbox", "manual-egress", map[string]any{"spec": map[string]any{"podSelector": map[string]any{}, "policyTypes": []any{"Egress"}, "egress": []any{map[string]any{}}}})
+			c.lists[listKey(networkPoliciesGVR, "sandbox", "")].Items = append(c.lists[listKey(networkPoliciesGVR, "sandbox", "")].Items, *extra)
+		}, check: "Agent Sandbox network policy"},
+		{name: "broadened default deny policy", mutate: func(c *fakeDoctorCluster) {
+			policy := &c.lists[listKey(networkPoliciesGVR, "sandbox", "")].Items[0]
+			_ = unstructured.SetNestedSlice(policy.Object, []any{map[string]any{}}, "spec", "egress")
+		}, check: "Agent Sandbox network policy"},
+		{name: "cluster-wide world Cilium policy", mutate: func(c *fakeDoctorCluster) {
+			extra := object(ciliumClusterwidePoliciesGVR, "", "world", map[string]any{"spec": map[string]any{"endpointSelector": map[string]any{}, "egress": []any{map[string]any{"toEntities": []any{"world"}}}}})
+			c.lists[listKey(ciliumClusterwidePoliciesGVR, "", "")] = objectList(extra)
+		}, check: "Agent Sandbox Cilium policy"},
 		{name: "missing quota", mutate: func(c *fakeDoctorCluster) { c.lists[listKey(resourceQuotasGVR, "sandbox", "")] = objectList() }, check: "Agent Sandbox ResourceQuota"},
 		{name: "malformed quota", mutate: func(c *fakeDoctorCluster) {
 			c.lists[listKey(resourceQuotasGVR, "sandbox", "")] = objectList(object(resourceQuotasGVR, "sandbox", "bounds", map[string]any{"spec": map[string]any{"hard": map[string]any{"pods": "0"}}}))
@@ -229,6 +317,42 @@ func TestKubernetesDoctorAgentSandboxFailures(t *testing.T) {
 			assertDoctorCheck(t, report, test.check, KubernetesDoctorFail)
 		})
 	}
+}
+
+func TestKubernetesDoctorPublicCAPrivateDNSGatewayBaseline(t *testing.T) {
+	values := strings.Replace(baselineValues(true), "https://model-gateway.gateway-ns.svc.cluster.local/v1/chat/completions", "https://gateway.platform.example.com/v1/chat/completions", 1)
+	values = strings.Replace(values, "publicCAPrivateDNS: false", "publicCAPrivateDNS: true", 1)
+	dir := writeDoctorBundle(t, values)
+	cluster := baselineCluster(true)
+	bindingList := cluster.lists[listKey(configMapsGVR, "capz", "app.kubernetes.io/part-of=prow-ai-dashboard-platform,app.kubernetes.io/component=platform-binding")]
+	_ = unstructured.SetNestedField(bindingList.Items[0].Object, "gateway.platform.example.com", "data", "modelGatewayPublicHost")
+
+	selector := "app.kubernetes.io/part-of=prow-ai-dashboard-platform,app.kubernetes.io/component=model-gateway"
+	service := object(servicesGVR, "capz", "platform-model-gateway", map[string]any{"spec": map[string]any{"type": "ClusterIP", "selector": map[string]any{"app.kubernetes.io/name": "prow-ai-dashboard-platform", "app.kubernetes.io/instance": "platform", "app.kubernetes.io/component": "model-gateway"}}})
+	service.SetLabels(map[string]string{"app.kubernetes.io/part-of": "prow-ai-dashboard-platform", "app.kubernetes.io/component": "model-gateway"})
+	service.SetAnnotations(map[string]string{"prow-ai-dashboard/model-gateway-host": "gateway.platform.example.com"})
+	cluster.objects[objectKey(servicesGVR, "capz", "platform-model-gateway")] = service
+	cluster.lists[listKey(servicesGVR, "capz", selector)] = objectList(service)
+	cluster.lists[listKey(endpointSlicesGVR, "capz", "kubernetes.io/service-name=platform-model-gateway")] = readyEndpointList("platform-model-gateway")
+
+	deployment := cluster.lists[listKey(deploymentsGVR, "gateway-ns", gatewaySelectorForTest())].Items[0].DeepCopy()
+	deployment.SetName("platform-model-gateway")
+	deployment.SetNamespace("capz")
+	annotations := deployment.GetAnnotations()
+	annotations["prow-ai-dashboard/model-gateway-host"] = "gateway.platform.example.com"
+	annotations[modelGatewayTLSSecretAnnotation] = "gateway-tls"
+	deployment.SetAnnotations(annotations)
+	cluster.lists[listKey(deploymentsGVR, "capz", gatewaySelectorForTest())] = objectList(deployment)
+	podLabels, _, _ := unstructured.NestedStringMap(deployment.Object, "spec", "template", "metadata", "labels")
+	addGatewayPolicyFixtures(cluster, "capz", deployment, podLabels)
+	cluster.secretNames["capz/provider"] = true
+	cluster.secretNames["capz/gateway-tls"] = true
+
+	report := runDoctorForTest(t, dir, "install", baselineDoctorRunner(), cluster)
+	if report.HasFailures() {
+		t.Fatalf("checks = %+v", report.Checks)
+	}
+	assertDoctorCheck(t, report, "model gateway private DNS", KubernetesDoctorUnverified)
 }
 
 func TestKubernetesDoctorRejectsInsecureProviderAndMutableExecutor(t *testing.T) {
@@ -395,7 +519,7 @@ func TestKubernetesDoctorForbiddenReadsFailClosed(t *testing.T) {
 func TestKubernetesDoctorGatewayProviderSecretDoesNotSatisfyTLS(t *testing.T) {
 	dir := writeDoctorBundle(t, baselineValues(true))
 	cluster := baselineCluster(true)
-	deployments := cluster.lists[listKey(deploymentsGVR, "gateway-ns", "app=gateway")]
+	deployments := cluster.lists[listKey(deploymentsGVR, "gateway-ns", gatewaySelectorForTest())]
 	_ = unstructured.SetNestedSlice(deployments.Items[0].Object, nil, "spec", "template", "spec", "volumes")
 	report := runDoctorForTest(t, dir, "install", baselineDoctorRunner(), cluster)
 	assertDoctorCheck(t, report, "model gateway TLS", KubernetesDoctorFail)
@@ -425,7 +549,7 @@ func TestKubernetesDoctorOriginReadsFailClosed(t *testing.T) {
 func TestKubernetesDoctorTLSMountMustBeOnGatewayContainer(t *testing.T) {
 	dir := writeDoctorBundle(t, baselineValues(true))
 	cluster := baselineCluster(true)
-	deployment := &cluster.lists[listKey(deploymentsGVR, "gateway-ns", "app=gateway")].Items[0]
+	deployment := &cluster.lists[listKey(deploymentsGVR, "gateway-ns", gatewaySelectorForTest())].Items[0]
 	containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
 	gateway := containers[0].(map[string]any)
 	delete(gateway, "volumeMounts")
@@ -436,6 +560,86 @@ func TestKubernetesDoctorTLSMountMustBeOnGatewayContainer(t *testing.T) {
 	_ = unstructured.SetNestedSlice(deployment.Object, containers, "spec", "template", "spec", "containers")
 	report := runDoctorForTest(t, dir, "install", baselineDoctorRunner(), cluster)
 	assertDoctorCheck(t, report, "model gateway TLS", KubernetesDoctorFail)
+}
+
+func TestKubernetesDoctorGatewayPolicyFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		check  string
+		mutate func(*fakeDoctorCluster)
+	}{
+		{name: "missing default deny", mutate: func(c *fakeDoctorCluster) {
+			c.lists[listKey(networkPoliciesGVR, "gateway-ns", "")] = objectList()
+		}},
+		{name: "broadened default deny", mutate: func(c *fakeDoctorCluster) {
+			policy := &c.lists[listKey(networkPoliciesGVR, "gateway-ns", "")].Items[0]
+			_ = unstructured.SetNestedSlice(policy.Object, []any{map[string]any{}}, "spec", "egress")
+		}},
+		{name: "additional Kubernetes policy", mutate: func(c *fakeDoctorCluster) {
+			extra := object(networkPoliciesGVR, "gateway-ns", "manual", map[string]any{"spec": map[string]any{"podSelector": map[string]any{}, "policyTypes": []any{"Egress"}, "egress": []any{map[string]any{}}}})
+			c.lists[listKey(networkPoliciesGVR, "gateway-ns", "")].Items = append(c.lists[listKey(networkPoliciesGVR, "gateway-ns", "")].Items, *extra)
+		}},
+		{name: "missing Cilium policy", mutate: func(c *fakeDoctorCluster) {
+			c.lists[listKey(ciliumPoliciesGVR, "gateway-ns", "")] = objectList()
+		}},
+		{name: "additional world Cilium policy", mutate: func(c *fakeDoctorCluster) {
+			extra := object(ciliumPoliciesGVR, "gateway-ns", "world", map[string]any{"spec": map[string]any{"endpointSelector": map[string]any{}, "egress": []any{map[string]any{"toEntities": []any{"world"}}}}})
+			c.lists[listKey(ciliumPoliciesGVR, "gateway-ns", "")].Items = append(c.lists[listKey(ciliumPoliciesGVR, "gateway-ns", "")].Items, *extra)
+		}},
+		{name: "wrong upstream host", mutate: func(c *fakeDoctorCluster) {
+			policy := &c.lists[listKey(ciliumPoliciesGVR, "gateway-ns", "")].Items[0]
+			egress, _, _ := unstructured.NestedSlice(policy.Object, "spec", "egress")
+			fqdn := egress[1].(map[string]any)["toFQDNs"].([]any)[0].(map[string]any)
+			fqdn["matchName"] = "attacker.example"
+			_ = unstructured.SetNestedSlice(policy.Object, egress, "spec", "egress")
+		}},
+		{name: "ingress world source", mutate: func(c *fakeDoctorCluster) {
+			policy := &c.lists[listKey(ciliumPoliciesGVR, "gateway-ns", "")].Items[0]
+			ingress, _, _ := unstructured.NestedSlice(policy.Object, "spec", "ingress")
+			ingress[0].(map[string]any)["fromEntities"] = []any{"world"}
+			_ = unstructured.SetNestedSlice(policy.Object, ingress, "spec", "ingress")
+		}},
+		{name: "ingress CIDR source", mutate: func(c *fakeDoctorCluster) {
+			policy := &c.lists[listKey(ciliumPoliciesGVR, "gateway-ns", "")].Items[0]
+			ingress, _, _ := unstructured.NestedSlice(policy.Object, "spec", "ingress")
+			ingress[0].(map[string]any)["fromCIDR"] = []any{"0.0.0.0/0"}
+			_ = unstructured.SetNestedSlice(policy.Object, ingress, "spec", "ingress")
+		}},
+		{name: "ingress CIDR set source", mutate: func(c *fakeDoctorCluster) {
+			policy := &c.lists[listKey(ciliumPoliciesGVR, "gateway-ns", "")].Items[0]
+			ingress, _, _ := unstructured.NestedSlice(policy.Object, "spec", "ingress")
+			ingress[0].(map[string]any)["fromCIDRSet"] = []any{map[string]any{"cidr": "0.0.0.0/0"}}
+			_ = unstructured.SetNestedSlice(policy.Object, ingress, "spec", "ingress")
+		}},
+		{name: "coordinated gateway Deployment drift", check: "model gateway Deployment", mutate: func(c *fakeDoctorCluster) {
+			deployment := &c.lists[listKey(deploymentsGVR, "gateway-ns", gatewaySelectorForTest())].Items[0]
+			annotations := deployment.GetAnnotations()
+			annotations["prow-ai-dashboard/model-gateway-upstream-host"] = "attacker.example"
+			annotations["prow-ai-dashboard/model-gateway-policy-sha256"] = gatewayPolicyHash("sandbox", "attacker.example", "8443")
+			deployment.SetAnnotations(annotations)
+			containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+			env := containers[0].(map[string]any)["env"].([]any)
+			env[1].(map[string]any)["value"] = "https://attacker.example/v1/chat/completions"
+			_ = unstructured.SetNestedSlice(deployment.Object, containers, "spec", "template", "spec", "containers")
+		}},
+		{name: "cluster-wide gateway policy", mutate: func(c *fakeDoctorCluster) {
+			extra := object(ciliumClusterwidePoliciesGVR, "", "gateway-world", map[string]any{"spec": map[string]any{"endpointSelector": map[string]any{}, "egress": []any{map[string]any{"toEntities": []any{"world"}}}}})
+			c.lists[listKey(ciliumClusterwidePoliciesGVR, "", "")] = objectList(extra)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := writeDoctorBundle(t, baselineValues(true))
+			cluster := baselineCluster(true)
+			test.mutate(cluster)
+			report := runDoctorForTest(t, dir, "install", baselineDoctorRunner(), cluster)
+			check := test.check
+			if check == "" {
+				check = "model gateway network policy"
+			}
+			assertDoctorCheck(t, report, check, KubernetesDoctorFail)
+		})
+	}
 }
 
 func TestKubernetesDoctorMissingReferencedTLSSecretDoesNotPass(t *testing.T) {
@@ -522,7 +726,7 @@ func baselineCluster(agentSandbox bool) *fakeDoctorCluster {
 		secretNames: map[string]bool{},
 		secretLists: map[string]*metav1.PartialObjectMetadataList{},
 	}
-	for _, gvr := range []schema.GroupVersionResource{deploymentsGVR, cronJobsGVR, endpointSlicesGVR, networkPoliciesGVR, storageClassesGVR, runtimeClassesGVR, sandboxesGVR} {
+	for _, gvr := range []schema.GroupVersionResource{deploymentsGVR, cronJobsGVR, endpointSlicesGVR, networkPoliciesGVR, storageClassesGVR, runtimeClassesGVR, sandboxesGVR, ciliumPoliciesGVR, ciliumClusterwidePoliciesGVR} {
 		cluster.resources[gvr] = true
 	}
 	cluster.objects[objectKey(namespacesGVR, "", "capz")] = object(namespacesGVR, "", "capz", nil)
@@ -556,6 +760,61 @@ func baselineCluster(agentSandbox bool) *fakeDoctorCluster {
 	cluster.lists[listKey(podsGVR, agentSandboxSystemNamespace, "app=agent-sandbox-controller")] = objectList(controllerPod)
 	cluster.objects[objectKey(namespacesGVR, "", "sandbox")] = object(namespacesGVR, "", "sandbox", nil)
 	cluster.objects[objectKey(namespacesGVR, "", "sandbox")].SetLabels(map[string]string{"prow-ai-dashboard/release": "capz"})
+	allowedFQDNs := []string{"github.com", "api.github.com", "proxy.golang.org", "sum.golang.org", "storage.googleapis.com"}
+	platformAnnotations := map[string]string{
+		"prow-ai-dashboard/runtime-class":             "kata-vm-isolation",
+		"prow-ai-dashboard/agent-sandbox-version":     supportedAgentSandboxVersion,
+		"prow-ai-dashboard/network-policy-mode":       "cilium",
+		"prow-ai-dashboard/default-deny-policy-name":  "platform-prow-ai-dashboard-platform-execution-default-deny",
+		"prow-ai-dashboard/execution-policy-name":     "platform-prow-ai-dashboard-platform-execution-egress",
+		"prow-ai-dashboard/platform-release":          "platform",
+		"prow-ai-dashboard/model-gateway-enabled":     "true",
+		"prow-ai-dashboard/model-gateway-namespace":   "gateway-ns",
+		"prow-ai-dashboard/model-gateway-name":        "prow-ai-dashboard-platform",
+		"prow-ai-dashboard/model-gateway-target-port": "8443",
+	}
+	policyHash := executionPolicyHash(allowedFQDNs, platformAnnotations)
+	platformAnnotations["prow-ai-dashboard/execution-policy-sha256"] = policyHash
+	cluster.objects[objectKey(namespacesGVR, "", "sandbox")].SetAnnotations(platformAnnotations)
+	gatewayHash := gatewayPolicyHash("sandbox", "provider.example", "8443")
+	binding := object(configMapsGVR, "capz", "platform-prow-ai-dashboard-platform-binding", map[string]any{"data": map[string]any{
+		"applicationReleaseName": "capz", "executionNamespace": "sandbox", "runtimeClassName": "kata-vm-isolation", "executionPolicySHA256": policyHash,
+		"modelGatewayEnabled": "true", "modelGatewayPublicHost": "", "modelGatewayUpstreamHost": "provider.example", "modelGatewayExecutionNamespace": "sandbox", "modelGatewayTargetPort": "8443", "modelGatewayPolicySHA256": gatewayHash,
+	}})
+	binding.SetLabels(map[string]string{"app.kubernetes.io/part-of": "prow-ai-dashboard-platform", "app.kubernetes.io/component": "platform-binding", "app.kubernetes.io/instance": "platform"})
+	cluster.lists[listKey(configMapsGVR, "capz", "app.kubernetes.io/part-of=prow-ai-dashboard-platform,app.kubernetes.io/component=platform-binding")] = objectList(binding)
+	fqdnEntries := make([]any, 0, len(allowedFQDNs))
+	for _, name := range allowedFQDNs {
+		fqdnEntries = append(fqdnEntries, map[string]any{"matchName": name})
+	}
+	ciliumPolicy := object(ciliumPoliciesGVR, "sandbox", "platform-prow-ai-dashboard-platform-execution-egress", map[string]any{"spec": map[string]any{
+		"endpointSelector": map[string]any{},
+		"ingress":          []any{},
+		"egress": []any{
+			map[string]any{
+				"toEndpoints": []any{map[string]any{"matchLabels": map[string]any{"k8s:io.kubernetes.pod.namespace": "kube-system", "k8s:k8s-app": "kube-dns"}}},
+				"toPorts":     []any{map[string]any{"ports": []any{map[string]any{"port": "53", "protocol": "ANY"}}, "rules": map[string]any{"dns": []any{map[string]any{"matchPattern": "*"}}}}},
+			},
+			map[string]any{
+				"toEndpoints": []any{map[string]any{"matchLabels": map[string]any{
+					"k8s:io.kubernetes.pod.namespace": "gateway-ns",
+					"k8s:app.kubernetes.io/name":      "prow-ai-dashboard-platform",
+					"k8s:app.kubernetes.io/instance":  "platform",
+					"k8s:app.kubernetes.io/component": "model-gateway",
+				}}},
+				"toPorts": []any{map[string]any{"ports": []any{map[string]any{"port": "8443", "protocol": "TCP"}}}},
+			},
+			map[string]any{
+				"toFQDNs": fqdnEntries,
+				"toPorts": []any{map[string]any{"ports": []any{map[string]any{"port": "443", "protocol": "TCP"}}}},
+			},
+		},
+	}})
+	ciliumPolicy.SetLabels(map[string]string{"app.kubernetes.io/part-of": "prow-ai-dashboard-platform", "app.kubernetes.io/component": "agent-sandbox-execution", "app.kubernetes.io/instance": "platform"})
+	ciliumPolicy.SetAnnotations(map[string]string{"prow-ai-dashboard/execution-policy-sha256": policyHash})
+	cluster.objects[objectKey(ciliumPoliciesGVR, "sandbox", "platform-prow-ai-dashboard-platform-execution-egress")] = ciliumPolicy
+	cluster.lists[listKey(ciliumPoliciesGVR, "sandbox", "")] = objectList(ciliumPolicy)
+	cluster.lists[listKey(ciliumClusterwidePoliciesGVR, "", "")] = objectList()
 	cluster.objects[objectKey(runtimeClassesGVR, "", "kata-vm-isolation")] = object(runtimeClassesGVR, "", "kata-vm-isolation", map[string]any{
 		"handler": "kata", "scheduling": map[string]any{"nodeSelector": map[string]any{"runtime": "kata"}},
 	})
@@ -563,28 +822,109 @@ func baselineCluster(agentSandbox bool) *fakeDoctorCluster {
 	quota := object(resourceQuotasGVR, "sandbox", "bounds", map[string]any{"spec": map[string]any{"hard": map[string]any{"pods": "4", "count/sandboxes.agents.x-k8s.io": "2"}}})
 	cluster.lists[listKey(resourceQuotasGVR, "sandbox", "")] = objectList(quota)
 	cluster.lists[listKey(limitRangesGVR, "sandbox", "")] = objectList(object(limitRangesGVR, "sandbox", "bounds", nil))
-	policy := object(networkPoliciesGVR, "sandbox", "default-deny", map[string]any{"spec": map[string]any{"podSelector": map[string]any{}, "policyTypes": []any{"Ingress", "Egress"}}})
+	policy := object(networkPoliciesGVR, "sandbox", "platform-prow-ai-dashboard-platform-execution-default-deny", map[string]any{"spec": map[string]any{"podSelector": map[string]any{}, "policyTypes": []any{"Ingress", "Egress"}}})
+	policy.SetLabels(map[string]string{"app.kubernetes.io/part-of": "prow-ai-dashboard-platform", "app.kubernetes.io/component": "agent-sandbox-execution", "app.kubernetes.io/instance": "platform"})
 	cluster.lists[listKey(networkPoliciesGVR, "sandbox", "")] = objectList(policy)
 	cluster.objects[objectKey(serviceAccountsGVR, "sandbox", "fix-workload")] = object(serviceAccountsGVR, "sandbox", "fix-workload", nil)
 	cluster.lists[listKey(sandboxesGVR, "sandbox", "")] = objectList()
-	gatewayService := object(servicesGVR, "gateway-ns", "model-gateway", map[string]any{"spec": map[string]any{"type": "ClusterIP", "selector": map[string]any{"app": "gateway"}}})
+	gatewayPodLabels := map[string]string{
+		"app.kubernetes.io/name":      "prow-ai-dashboard-platform",
+		"app.kubernetes.io/instance":  "platform",
+		"app.kubernetes.io/component": "model-gateway",
+		"app.kubernetes.io/part-of":   "prow-ai-dashboard-platform",
+	}
+	gatewaySelector := map[string]any{
+		"app.kubernetes.io/name":      "prow-ai-dashboard-platform",
+		"app.kubernetes.io/instance":  "platform",
+		"app.kubernetes.io/component": "model-gateway",
+	}
+	gatewayService := object(servicesGVR, "gateway-ns", "model-gateway", map[string]any{"spec": map[string]any{"type": "ClusterIP", "selector": gatewaySelector}})
 	cluster.objects[objectKey(servicesGVR, "gateway-ns", "model-gateway")] = gatewayService
 	cluster.lists[listKey(endpointSlicesGVR, "gateway-ns", "kubernetes.io/service-name=model-gateway")] = readyEndpointList("model-gateway")
+	gatewayAnnotations := map[string]string{
+		modelGatewayTLSSecretAnnotation:                       "gateway-tls",
+		"prow-ai-dashboard/model-gateway-default-deny-policy": "platform-model-gateway-default-deny",
+		"prow-ai-dashboard/model-gateway-cilium-policy":       "platform-model-gateway",
+		"prow-ai-dashboard/model-gateway-execution-namespace": "sandbox",
+		"prow-ai-dashboard/model-gateway-upstream-host":       "provider.example",
+		"prow-ai-dashboard/model-gateway-target-port":         "8443",
+	}
+	gatewayAnnotations["prow-ai-dashboard/model-gateway-policy-sha256"] = gatewayHash
 	gatewayDeployment := object(deploymentsGVR, "gateway-ns", "model-gateway", map[string]any{
-		"metadata": map[string]any{"annotations": map[string]any{modelGatewayTLSSecretAnnotation: "gateway-tls"}},
-		"spec": map[string]any{"template": map[string]any{"spec": map[string]any{
+		"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{"labels": stringMapAny(gatewayPodLabels)}, "spec": map[string]any{
 			"containers": []any{map[string]any{
 				"name": "gateway", "image": "registry.example/gateway@sha256:" + strings.Repeat("b", 64),
-				"env":          []any{map[string]any{"name": "AI_TOKEN", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": "provider", "key": "token"}}}},
+				"env": []any{
+					map[string]any{"name": "AI_TOKEN", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": "provider", "key": "token"}}},
+					map[string]any{"name": "UPSTREAM_URL", "value": "https://provider.example/v1/chat/completions"},
+				},
 				"volumeMounts": []any{map[string]any{"name": "certificates", "mountPath": "/etc/certs", "readOnly": true}},
 			}},
 			"volumes": []any{map[string]any{"name": "certificates", "secret": map[string]any{"secretName": "gateway-tls"}}},
 		}}}, "status": map[string]any{"availableReplicas": int64(1)},
 	})
-	cluster.lists[listKey(deploymentsGVR, "gateway-ns", "app=gateway")] = objectList(gatewayDeployment)
+	gatewayDeployment.SetLabels(map[string]string{"app.kubernetes.io/part-of": "prow-ai-dashboard-platform", "app.kubernetes.io/component": "model-gateway", "app.kubernetes.io/instance": "platform"})
+	gatewayDeployment.SetAnnotations(gatewayAnnotations)
+	cluster.lists[listKey(deploymentsGVR, "gateway-ns", gatewaySelectorForTest())] = objectList(gatewayDeployment)
+	addGatewayPolicyFixtures(cluster, "gateway-ns", gatewayDeployment, gatewayPodLabels)
 	cluster.secretNames["gateway-ns/provider"] = true
 	cluster.secretNames["gateway-ns/gateway-tls"] = true
 	return cluster
+}
+
+func gatewaySelectorForTest() string {
+	return selectorString(map[string]string{
+		"app.kubernetes.io/name":      "prow-ai-dashboard-platform",
+		"app.kubernetes.io/instance":  "platform",
+		"app.kubernetes.io/component": "model-gateway",
+	})
+}
+
+func stringMapAny(values map[string]string) map[string]any {
+	result := make(map[string]any, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
+}
+
+func addGatewayPolicyFixtures(cluster *fakeDoctorCluster, namespace string, deployment *unstructured.Unstructured, podLabels map[string]string) {
+	annotations := deployment.GetAnnotations()
+	defaultDeny := object(networkPoliciesGVR, namespace, annotations["prow-ai-dashboard/model-gateway-default-deny-policy"], map[string]any{"spec": map[string]any{
+		"podSelector": map[string]any{"matchLabels": stringMapAny(podLabels)}, "policyTypes": []any{"Ingress", "Egress"},
+	}})
+	defaultDeny.SetLabels(map[string]string{"app.kubernetes.io/part-of": "prow-ai-dashboard-platform", "app.kubernetes.io/component": "model-gateway", "app.kubernetes.io/instance": "platform"})
+	cluster.lists[listKey(networkPoliciesGVR, namespace, "")] = objectList(defaultDeny)
+	selectorLabels := map[string]any{
+		"app.kubernetes.io/name":      podLabels["app.kubernetes.io/name"],
+		"app.kubernetes.io/instance":  podLabels["app.kubernetes.io/instance"],
+		"app.kubernetes.io/component": podLabels["app.kubernetes.io/component"],
+	}
+	policy := object(ciliumPoliciesGVR, namespace, annotations["prow-ai-dashboard/model-gateway-cilium-policy"], map[string]any{"spec": map[string]any{
+		"endpointSelector": map[string]any{"matchLabels": selectorLabels},
+		"ingress": []any{map[string]any{
+			"fromEndpoints": []any{map[string]any{"matchLabels": map[string]any{"k8s:io.kubernetes.pod.namespace": annotations["prow-ai-dashboard/model-gateway-execution-namespace"]}}},
+			"toPorts":       []any{map[string]any{"ports": []any{map[string]any{"port": annotations["prow-ai-dashboard/model-gateway-target-port"], "protocol": "TCP"}}}},
+		}},
+		"egress": []any{
+			map[string]any{
+				"toEndpoints": []any{map[string]any{"matchLabels": map[string]any{"k8s:io.kubernetes.pod.namespace": "kube-system", "k8s:k8s-app": "kube-dns"}}},
+				"toPorts":     []any{map[string]any{"ports": []any{map[string]any{"port": "53", "protocol": "ANY"}}, "rules": map[string]any{"dns": []any{map[string]any{"matchPattern": "*"}}}}},
+			},
+			map[string]any{
+				"toFQDNs": []any{map[string]any{"matchName": annotations["prow-ai-dashboard/model-gateway-upstream-host"]}},
+				"toPorts": []any{map[string]any{"ports": []any{map[string]any{"port": "443", "protocol": "TCP"}}}},
+			},
+		},
+	}})
+	policy.SetLabels(map[string]string{"app.kubernetes.io/part-of": "prow-ai-dashboard-platform", "app.kubernetes.io/component": "model-gateway", "app.kubernetes.io/instance": "platform"})
+	policy.SetAnnotations(map[string]string{"prow-ai-dashboard/model-gateway-policy-sha256": annotations["prow-ai-dashboard/model-gateway-policy-sha256"]})
+	existing := cluster.lists[listKey(ciliumPoliciesGVR, namespace, "")]
+	if existing == nil {
+		existing = objectList()
+	}
+	existing.Items = append(existing.Items, *policy)
+	cluster.lists[listKey(ciliumPoliciesGVR, namespace, "")] = existing
 }
 
 func baselineValues(agentSandbox bool) string {
