@@ -1,4 +1,4 @@
-.PHONY: all build build-server build-worker serve dev-actions image analyzer-image fixer-image remote-fixer-image agent-sandbox-fix-executor-image agent-sandbox-critic-executor-image agent-sandbox-analysis-executor-image agent-sandbox-analysis-stager-image test test-v e2e lint fmt tidy helm-check check-repo-map \
+.PHONY: all build build-server build-worker serve dev-actions image analyzer-image fixer-image remote-fixer-image agent-sandbox-fix-executor-image agent-sandbox-critic-executor-image agent-sandbox-analysis-executor-image agent-sandbox-analysis-stager-image test test-v e2e lint fmt tidy helm-check cleanroom-check check-repo-map \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check fe-test fe-lint \
        dist dist-ai clean clean-cache clean-all help
@@ -116,9 +116,17 @@ helm-check:
 	bash deploy/helm/prow-ai-dashboard-platform/test-release.sh
 	bash deploy/helm/prow-ai-dashboard-platform/test-kind-cleanup.sh
 	bash hack/test-publish-release.sh
+	bash hack/test-verify-release-images.sh
+	bash hack/test-kubernetes-cleanroom.sh
+	bash hack/test-kubernetes-verification-failures.sh
+	bash hack/test-cli-download-failclosed.sh
 	bash deploy/helm/test-upgrade.sh
 	bash -n deploy/helm/prow-ai-dashboard-platform/test-kind.sh
 	bash -n experimental/agent-sandbox/run-kind-evaluation.sh
+
+# Validate the generated provider-free Kubernetes contributor contract.
+cleanroom-check:
+	bash hack/test-kubernetes-cleanroom.sh
 
 # Check the AGENTS.md repo map against the backend tree.
 check-repo-map:
@@ -204,6 +212,7 @@ help:
 	@echo "  fmt                Format Go code"
 	@echo "  tidy               Tidy Go modules"
 	@echo "  helm-check         Lint and validate Helm chart renders"
+	@echo "  cleanroom-check     Validate the generated Kubernetes contributor contract"
 	@echo ""
 	@echo "  fetch-data         Fetch data from GCS (8 builds/job)"
 	@echo "  fetch-data-quick   Fetch minimal data (3 builds/job)"

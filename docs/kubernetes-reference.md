@@ -90,6 +90,10 @@ feature policy. `deploy/values.yaml` owns infrastructure, credentials, image
 selection, persistence, and runtime tuning. Do not duplicate the project schema
 inside Helm values.
 
+Published engine releases attach checksum-listed `fetcher` binaries for Linux
+and macOS on amd64 and arm64. A normal contributor downloads that artifact and
+does not clone or build the engine repository.
+
 The supported deployment wrapper is part of the `fetcher` binary:
 
 ```text

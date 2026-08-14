@@ -46,6 +46,31 @@ cat > "$tmp/bin/gh" <<'GH'
 set -euo pipefail
 printf 'gh %s\n' "$*" >> "$RELEASE_TEST_LOG"
 GH
+cat > "$tmp/bin/docker" <<'DOCKER'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'docker %s\n' "$*" >> "$RELEASE_TEST_LOG"
+case ${1:-} in
+  pull) exit 0 ;;
+  image) printf '%s\n' "${HEAD_COMMIT:-2222222222222222222222222222222222222222}" ;;
+  *) exit 2 ;;
+esac
+DOCKER
+cat > "$tmp/bin/go" <<'GO'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'go %s\n' "$*" >> "$RELEASE_TEST_LOG"
+if [[ ${1:-} != build ]]; then exit 2; fi
+if [[ -n ${FAIL_CLI_TARGET:-} && ${GOOS:-}-${GOARCH:-} == "$FAIL_CLI_TARGET" ]]; then
+  exit 43
+fi
+out=
+while (($#)); do
+  if [[ $1 == -o ]]; then out=$2; shift 2; else shift; fi
+done
+: "${out:?missing -o}"
+: > "$out"
+GO
 cat > "$tmp/bin/git" <<'GIT'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -85,7 +110,8 @@ case ${1:-} in
   push) exit 0 ;;
 esac
 GIT
-chmod +x "$tmp/bin/helm" "$tmp/bin/gh" "$tmp/bin/git"
+chmod +x "$tmp/bin/helm" "$tmp/bin/gh" "$tmp/bin/docker" "$tmp/bin/go" "$tmp/bin/git"
+export IMAGE_REPOSITORY=ghcr.io/example/prow-ai-dashboard
 
 if (cd "$root" && RELEASE_TEST_LOG="$log" REMOTE_TAG_STATE=missing PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script") >"$tmp/missing-tag.out" 2>&1; then
   echo 'missing remote release tag was accepted' >&2
@@ -105,6 +131,16 @@ fi
 grep -Fq 'does not identify reviewed HEAD' "$tmp/moved-tag.out"
 if grep -Eq '^(helm push|gh release create|git tag -f|git push origin)' "$log"; then
   echo 'moved release tag performed publication side effects' >&2
+  exit 1
+fi
+
+: > "$log"
+if (cd "$root" && RELEASE_TEST_LOG="$log" FAIL_CLI_TARGET=darwin-arm64 PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script") >"$tmp/cli-build.out" 2>&1; then
+  echo 'failed CLI asset build was accepted' >&2
+  exit 1
+fi
+if grep -Eq '^(helm push|gh release create|git tag -f|git push origin)' "$log"; then
+  echo 'CLI build failure performed publication side effects' >&2
   exit 1
 fi
 
@@ -155,6 +191,10 @@ release_line = lines[release]
 assert 'prow-ai-dashboard-1.2.3.tgz' in release_line
 assert 'prow-ai-dashboard-platform-1.2.3.tgz' in release_line
 assert '--verify-tag' in release_line
+assert 'SHA256SUMS' in release_line
+assert sum(1 for line in lines if line.startswith('go build ')) == 4
+for target in ('linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64'):
+    assert f'prow-ai-dashboard-fetcher-v1.2.3-{target}' in release_line
 PY
 
 : > "$log"
