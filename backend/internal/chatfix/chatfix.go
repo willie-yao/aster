@@ -24,18 +24,23 @@ type fixPreviewer interface {
 	PreviewFixWithContext(
 		context.Context, models.PatternAnalysis, string, string, string, actions.FixTarget, fixpr.GenerationContext,
 	) (actions.PreviewResult, error)
-	PreviewAnalysisFix(context.Context, actions.AnalysisFixInput, string, string, string) (actions.PreviewResult, error)
+}
+
+type analysisFixRequester interface {
+	CreateAnalysisFixRequest(actions.AnalysisFixInput, string, string, string) (actions.ActionRequestView, error)
 }
 
 // Service validates owner-bound chat context before fix generation.
 type Service struct {
-	chat  chatStore
-	fixes fixPreviewer
+	chat     chatStore
+	fixes    fixPreviewer
+	requests analysisFixRequester
 }
 
 // NewService builds the chat-to-fix bridge.
 func NewService(chat chatStore, fixes fixPreviewer) *Service {
-	return &Service{chat: chat, fixes: fixes}
+	requests, _ := fixes.(analysisFixRequester)
+	return &Service{chat: chat, fixes: fixes, requests: requests}
 }
 
 // PreviewChatFix generates an existing fix preview from one selected answer.
@@ -51,28 +56,7 @@ func (s *Service) PreviewChatFix(
 		return actions.PreviewResult{}, fmt.Errorf("%w: instruction must not exceed 4096 bytes", analysischat.ErrInvalidRequest)
 	}
 	if patternID == "" && patternHash == "" && sourceRequestID == "" {
-		candidate, err := s.chat.TestFixCandidate(sessionID, owner, requestID)
-		if err != nil {
-			return actions.PreviewResult{}, err
-		}
-		input := actions.AnalysisFixInput{
-			Identity: actions.AnalysisIdentity{
-				JobID: candidate.Analysis.JobID, BuildID: candidate.Analysis.BuildID, TestName: candidate.Analysis.TestName,
-				Source: candidate.Analysis.Source, SuiteName: candidate.Analysis.SuiteName, ClassName: candidate.Analysis.ClassName,
-				JUnitFile: candidate.Analysis.JUnitFile, AnalysisGeneratedAt: candidate.Analysis.AnalysisGeneratedAt,
-			},
-			ChatSessionID: candidate.SessionID, ChatRequestID: candidate.RequestID, ChatResponseHash: candidate.ResponseHash,
-			PreviewRequestHash: exactPreviewRequestHash(candidate, instruction), AnalysisContentHash: candidate.AnalysisContentHash,
-			SourceRepository: candidate.SourceRepositorySnapshot,
-			FailureRevision:  candidate.FailureRevision, GenerationBaseRevision: candidate.GenerationBaseRevision,
-			VerifiedSourceFileHashes: cloneStringMap(candidate.VerifiedSourceFileHashes),
-			SourceBranch:             candidate.SourceBranch,
-			AssistantAnswer:          candidate.AssistantAnswer, ArtifactCitations: artifactEvidence(candidate.ArtifactCitations),
-		}
-		if candidate.ProposedRevision != nil {
-			input.ProposedRevision = &fixpr.RevisionContext{RootCause: candidate.ProposedRevision.RootCause, SuggestedFix: candidate.ProposedRevision.SuggestedFix}
-		}
-		return s.fixes.PreviewAnalysisFix(ctx, input, owner, userToken, instruction)
+		return actions.PreviewResult{}, fmt.Errorf("%w: exact JUnit fix previews use asynchronous requests", analysischat.ErrInvalidRequest)
 	}
 	if patternID == "" || patternHash == "" || sourceRequestID == "" {
 		return actions.PreviewResult{}, fmt.Errorf("%w: legacy pattern fix requires pattern_id, pattern_hash, and source_request_id", analysischat.ErrInvalidRequest)
@@ -114,6 +98,47 @@ func (s *Service) PreviewChatFix(
 		actions.FixTarget{JobID: candidate.Analysis.JobID, BuildID: candidate.Analysis.BuildID},
 		generationContext,
 	)
+}
+
+// CreateAnalysisFixRequest admits one exact JUnit chat finding for durable
+// background preview generation.
+func (s *Service) CreateAnalysisFixRequest(
+	sessionID, owner, requestID, userToken, instruction string,
+) (actions.ActionRequestView, error) {
+	instruction = strings.TrimSpace(instruction)
+	if len(instruction) > 4096 {
+		return actions.ActionRequestView{}, fmt.Errorf("%w: instruction must not exceed 4096 bytes", analysischat.ErrInvalidRequest)
+	}
+	if s.requests == nil {
+		return actions.ActionRequestView{}, fmt.Errorf("%w: asynchronous exact JUnit fix previews are unavailable", analysischat.ErrInvalidRequest)
+	}
+	candidate, err := s.chat.TestFixCandidate(sessionID, owner, requestID)
+	if err != nil {
+		return actions.ActionRequestView{}, err
+	}
+	input := exactAnalysisFixInput(candidate, instruction)
+	return s.requests.CreateAnalysisFixRequest(input, owner, userToken, instruction)
+}
+
+func exactAnalysisFixInput(candidate analysischat.FixCandidate, instruction string) actions.AnalysisFixInput {
+	input := actions.AnalysisFixInput{
+		Identity: actions.AnalysisIdentity{
+			JobID: candidate.Analysis.JobID, BuildID: candidate.Analysis.BuildID, TestName: candidate.Analysis.TestName,
+			Source: candidate.Analysis.Source, SuiteName: candidate.Analysis.SuiteName, ClassName: candidate.Analysis.ClassName,
+			JUnitFile: candidate.Analysis.JUnitFile, AnalysisGeneratedAt: candidate.Analysis.AnalysisGeneratedAt,
+		},
+		ChatSessionID: candidate.SessionID, ChatRequestID: candidate.RequestID, ChatResponseHash: candidate.ResponseHash,
+		PreviewRequestHash: exactPreviewRequestHash(candidate, instruction), AnalysisContentHash: candidate.AnalysisContentHash,
+		SourceRepository: candidate.SourceRepositorySnapshot,
+		FailureRevision:  candidate.FailureRevision, GenerationBaseRevision: candidate.GenerationBaseRevision,
+		VerifiedSourceFileHashes: cloneStringMap(candidate.VerifiedSourceFileHashes),
+		SourceBranch:             candidate.SourceBranch,
+		AssistantAnswer:          candidate.AssistantAnswer, ArtifactCitations: artifactEvidence(candidate.ArtifactCitations),
+	}
+	if candidate.ProposedRevision != nil {
+		input.ProposedRevision = &fixpr.RevisionContext{RootCause: candidate.ProposedRevision.RootCause, SuggestedFix: candidate.ProposedRevision.SuggestedFix}
+	}
+	return input
 }
 
 func cloneStringMap(values map[string]string) map[string]string {

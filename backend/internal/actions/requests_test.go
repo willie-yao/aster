@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +20,7 @@ import (
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
 )
 
@@ -54,6 +57,407 @@ func waitRequest(t *testing.T, service *Service, id, owner string, want ...strin
 	view, err := service.GetRequest(id, owner)
 	t.Fatalf("request did not reach %v: view=%+v err=%v", want, view, err)
 	return ActionRequestView{}
+}
+
+func exactAnalysisRequestInput() AnalysisFixInput {
+	return AnalysisFixInput{
+		Identity: AnalysisIdentity{
+			Project: "CAPZ", JobID: "periodic-capz", BuildID: "123", TestName: "TestCluster", Source: "test",
+			SuiteName: "CAPZ", ClassName: "e2e", JUnitFile: "junit.xml", AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
+		},
+		ChatSessionID: "session", ChatRequestID: "chat-request", ChatResponseHash: strings.Repeat("a", 64),
+		PreviewRequestHash: strings.Repeat("b", 64), AnalysisContentHash: strings.Repeat("c", 64),
+		SourceRepository: sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: strings.Repeat("d", 40)},
+		FailureRevision:  strings.Repeat("d", 40), GenerationBaseRevision: strings.Repeat("e", 40), SourceBranch: "main",
+		VerifiedSourceFileHashes: map[string]string{"test/e2e/cni.go": strings.Repeat("f", 64)},
+		AssistantAnswer:          "The cited conflict is handled by `InstallCNIManifest`.",
+		ArtifactCitations:        []fixpr.Evidence{{Path: "build-log.txt", LineStart: 10, LineEnd: 10, Quote: "Conflict"}},
+	}
+}
+
+func TestAnalysisFixRequestSurvivesInitiatingRequestLifecycle(t *testing.T) {
+	service, _ := requestTestService(t)
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	service.analysisRequestGenerator = func(ctx context.Context, _ AnalysisFixInput, owner, token, instruction string) (PreviewResult, error) {
+		calls.Add(1)
+		if owner != "alice" || token != "write-token" || instruction != "keep compatibility" {
+			return PreviewResult{}, fmt.Errorf("generation identity owner=%q token=%q instruction=%q", owner, token, instruction)
+		}
+		if err := service.setRequestStage(ctx, RequestStageDrafting); err != nil {
+			return PreviewResult{}, err
+		}
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return PreviewResult{}, ctx.Err()
+		}
+		return PreviewResult{
+			Token: "preview-token", Kind: gfKind, Title: "Fix the CNI conflict",
+			Body: "## Summary\nRetry the CNI update conflict.\n", Diff: "diff --git a/test/e2e/cni.go b/test/e2e/cni.go",
+		}, nil
+	}
+
+	input := exactAnalysisRequestInput()
+	created, err := service.CreateAnalysisFixRequest(input, "Alice", "write-token", "keep compatibility")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Status != RequestPending || created.Kind != requestKindAnalysisFix || created.Owner != "alice" {
+		t.Fatalf("created = %+v", created)
+	}
+	<-started
+	duplicate, err := service.CreateAnalysisFixRequest(input, "alice", "write-token", "keep compatibility")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate.ID != created.ID || calls.Load() != 1 {
+		t.Fatalf("duplicate=%+v calls=%d", duplicate, calls.Load())
+	}
+	pendingState, err := os.ReadFile(service.requestStatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(pendingState), "write-token") {
+		t.Fatal("write token was persisted in pending analysis fix state")
+	}
+	if view := waitRequest(t, service, created.ID, "alice", RequestPending); view.Stage != RequestStageDrafting {
+		t.Fatalf("pending view = %+v", view)
+	}
+	close(release)
+	ready := waitRequest(t, service, created.ID, "alice", RequestReady)
+	if ready.Preview == nil || ready.Preview.Token != "preview-token" || ready.Preview.Diff == "" {
+		t.Fatalf("ready = %+v", ready)
+	}
+	recovered, err := service.CreateAnalysisFixRequest(input, "alice", "write-token", "keep compatibility")
+	if err != nil || recovered.ID != created.ID || recovered.Status != RequestReady || calls.Load() != 1 {
+		t.Fatalf("recovered=%+v calls=%d err=%v", recovered, calls.Load(), err)
+	}
+	expiresAt, err := time.Parse(time.RFC3339, ready.ExpiresAt)
+	if err != nil || time.Until(expiresAt) < 14*time.Minute || time.Until(expiresAt) > 16*time.Minute {
+		t.Fatalf("ready expiry=%q err=%v", ready.ExpiresAt, err)
+	}
+
+	data, err := os.ReadFile(service.requestStatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted actionRequestState
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	record := persisted.Requests[created.ID]
+	if record == nil || record.AnalysisFix != nil || record.Instruction != "" || record.RequestHash != input.PreviewRequestHash {
+		t.Fatalf("persisted request = %+v", record)
+	}
+	if err := service.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestActionRequestStateV6MigratesToV7(t *testing.T) {
+	service, _ := requestTestService(t)
+	now := time.Now().UTC()
+	state := actionRequestState{Version: 6, Requests: map[string]*actionRequest{
+		"existing": {ActionRequestView: ActionRequestView{
+			ID: "existing", FailureID: "failure", Kind: "create-issue", Owner: "alice", Status: RequestFailed,
+			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+		}},
+	}}
+	if err := statefile.WritePrivateJSONDurable(service.requestStatePath(), state); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	if view, err := reloaded.GetRequest("existing", "alice"); err != nil || view.Status != RequestFailed {
+		t.Fatalf("migrated view=%+v err=%v", view, err)
+	}
+	data, err := os.ReadFile(reloaded.requestStatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var migrated actionRequestState
+	if err := json.Unmarshal(data, &migrated); err != nil {
+		t.Fatal(err)
+	}
+	if migrated.Version != actionRequestStateVersion {
+		t.Fatalf("migrated version=%d", migrated.Version)
+	}
+}
+
+func TestReadyAnalysisFixRequestReloads(t *testing.T) {
+	service, _ := requestTestService(t)
+	now := time.Now().UTC()
+	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
+		"analysis-fix": {ActionRequestView: ActionRequestView{
+			ID: "analysis-fix", FailureID: "analysis::id", Kind: requestKindAnalysisFix, Owner: "alice", Status: RequestReady,
+			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+			Preview: &PreviewResult{Token: "preview-token", Kind: gfKind, Title: "Fix conflict", Body: "## Summary\nRetry conflict.\n", Diff: "diff --git a/a b/a"},
+		}, RequestHash: strings.Repeat("a", 64)},
+	}}
+	if err := statefile.WritePrivateJSONDurable(service.requestStatePath(), state); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	view, err := reloaded.GetRequest("analysis-fix", "alice")
+	if err != nil || view.Status != RequestReady || view.Preview == nil || view.Preview.Token != "preview-token" {
+		t.Fatalf("reloaded view=%+v err=%v", view, err)
+	}
+}
+
+func TestPendingAnalysisFixRequestFailsClosedAfterRestart(t *testing.T) {
+	service, _ := requestTestService(t)
+	now := time.Now().UTC()
+	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
+		"analysis-fix": {
+			ActionRequestView: ActionRequestView{
+				ID: "analysis-fix", FailureID: "analysis::id", Kind: requestKindAnalysisFix, Owner: "alice", Status: RequestPending,
+				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+			},
+			RequestHash: strings.Repeat("a", 64), AnalysisFix: cloneAnalysisFixInput(exactAnalysisRequestInput()),
+		},
+	}}
+	if err := statefile.WritePrivateJSONDurable(service.requestStatePath(), state); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	view, err := reloaded.GetRequest("analysis-fix", "alice")
+	if err != nil || view.Status != RequestFailed || view.Preview != nil {
+		t.Fatalf("reloaded view=%+v err=%v", view, err)
+	}
+	record := reloaded.requests.Requests["analysis-fix"]
+	if record == nil || record.AnalysisFix != nil {
+		t.Fatalf("reloaded request = %+v", record)
+	}
+}
+
+func TestAnalysisFixRequestCancellationCleansObservedRuntime(t *testing.T) {
+	service, _ := requestTestService(t)
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	fake := &fakeManagedAgentRuntime{}
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	started := make(chan struct{})
+	exited := make(chan struct{})
+	var calls atomic.Int32
+	service.analysisRequestGenerator = func(ctx context.Context, _ AnalysisFixInput, _, _, _ string) (PreviewResult, error) {
+		calls.Add(1)
+		defer close(exited)
+		id := actionRequestID(ctx)
+		if id == "" {
+			return PreviewResult{}, errors.New("missing action request identity")
+		}
+		if err := service.observeRuntimeWork(id)(ctx, runtime.WorkRef{Backend: "agent-sandbox", Namespace: "sandbox", Name: "fix-task", UID: "uid-one", ExecutionID: id}); err != nil {
+			return PreviewResult{}, err
+		}
+		close(started)
+		<-ctx.Done()
+		return PreviewResult{}, ctx.Err()
+	}
+	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	view, err := service.CancelRequest(context.Background(), created.ID, "alice")
+	if err != nil || (view.Status != RequestCancelled && view.Status != RequestCancelling) {
+		t.Fatalf("cancel view=%+v err=%v", view, err)
+	}
+	final := waitRequest(t, service, created.ID, "alice", RequestCancelled)
+	if final.Preview != nil || calls.Load() != 1 {
+		t.Fatalf("final=%+v calls=%d", final, calls.Load())
+	}
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Fatal("generator did not exit after cancellation")
+	}
+	if err := service.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	refs := slices.Clone(fake.refs)
+	fake.mu.Unlock()
+	if len(refs) != 1 || refs[0].Name != "fix-task" || refs[0].UID != "uid-one" || refs[0].ExecutionID != created.ID {
+		t.Fatalf("cleanup refs = %+v", refs)
+	}
+	service.rmu.Lock()
+	record := service.requests.Requests[created.ID]
+	service.rmu.Unlock()
+	if record == nil || record.AnalysisFix != nil || record.Instruction != "" || record.Runtime != nil || record.Status != RequestCancelled {
+		t.Fatalf("persisted cancellation = %+v", record)
+	}
+}
+
+func TestCancellingReadyAnalysisFixRequestRevokesPreviewToken(t *testing.T) {
+	service, _ := requestTestService(t)
+	requestHash := strings.Repeat("a", 64)
+	token := idempotentPreviewToken("alice", requestHash)
+	if err := service.previewStore.update(func(state *previewState, now time.Time) (bool, error) {
+		state.Previews[tokenHash(token)] = &persistedPreview{
+			Owner: tokenHash("alice"), InitiatedBy: "alice", InitiatedAt: now.Format(time.RFC3339Nano),
+			Kind: gfKind, Status: previewStatusReady, CreatedAt: now.Format(time.RFC3339Nano),
+		}
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	service.requests.Requests["analysis-fix"] = &actionRequest{
+		ActionRequestView: ActionRequestView{
+			ID: "analysis-fix", FailureID: "analysis::id", Kind: requestKindAnalysisFix, Owner: "alice", Status: RequestReady,
+			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+			Preview: &PreviewResult{Token: token, Kind: gfKind, Title: "Fix conflict", Body: "## Summary\nRetry conflict.\n", Diff: "diff --git a/a b/a"},
+		},
+		RequestHash: requestHash,
+	}
+	view, err := service.CancelRequest(context.Background(), "analysis-fix", "alice")
+	if err != nil || view.Status != RequestCancelled {
+		t.Fatalf("cancel view=%+v err=%v", view, err)
+	}
+	if _, _, _, _, err := service.previewStore.begin("alice", token, time.Minute); !errors.Is(err, ErrPreviewNotFound) {
+		t.Fatalf("revoked preview begin err=%v", err)
+	}
+}
+
+func TestAnalysisFixRequestTimeoutFailsAndCleansRuntime(t *testing.T) {
+	service, _ := requestTestService(t)
+	service.ConfigureAsyncRequests(50*time.Millisecond, nil)
+	fake := &fakeManagedAgentRuntime{}
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	var calls atomic.Int32
+	service.analysisRequestGenerator = func(ctx context.Context, _ AnalysisFixInput, _, _, _ string) (PreviewResult, error) {
+		calls.Add(1)
+		id := actionRequestID(ctx)
+		if err := service.observeRuntimeWork(id)(ctx, runtime.WorkRef{Backend: "agent-sandbox", Namespace: "sandbox", Name: "timeout-task", UID: "timeout-uid", ExecutionID: id}); err != nil {
+			return PreviewResult{}, err
+		}
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return PreviewResult{}, ctx.Err()
+	}
+	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	final := waitRequest(t, service, created.ID, "alice", RequestFailed)
+	if final.Preview != nil || calls.Load() != 1 {
+		t.Fatalf("final=%+v calls=%d", final, calls.Load())
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("generator did not observe timeout cancellation")
+	}
+	if err := service.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	refs := slices.Clone(fake.refs)
+	fake.mu.Unlock()
+	if len(refs) != 1 || refs[0].Name != "timeout-task" || refs[0].UID != "timeout-uid" || refs[0].ExecutionID != created.ID {
+		t.Fatalf("cleanup refs = %+v", refs)
+	}
+	if after, err := service.GetRequest(created.ID, "alice"); err != nil || after.Status != RequestFailed || after.Preview != nil {
+		t.Fatalf("post-timeout=%+v err=%v", after, err)
+	}
+}
+
+func TestActiveAnalysisFixRequestFailsClosedOnShutdown(t *testing.T) {
+	service, _ := requestTestService(t)
+	serverCtx, stopServer := context.WithCancel(context.Background())
+	service.ConfigureAsyncRequestsWithContext(serverCtx, time.Minute, nil)
+	fake := &fakeManagedAgentRuntime{}
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	service.analysisRequestGenerator = func(ctx context.Context, _ AnalysisFixInput, _, _, _ string) (PreviewResult, error) {
+		id := actionRequestID(ctx)
+		if err := service.observeRuntimeWork(id)(ctx, runtime.WorkRef{Backend: "agent-sandbox", Namespace: "sandbox", Name: "shutdown-task", UID: "shutdown-uid", ExecutionID: id}); err != nil {
+			return PreviewResult{}, err
+		}
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return PreviewResult{}, ctx.Err()
+	}
+	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- service.Wait(context.Background()) }()
+	stopServer()
+	final := waitRequest(t, service, created.ID, "alice", RequestFailed)
+	if final.Preview != nil {
+		t.Fatalf("shutdown final=%+v", final)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("generator did not observe server shutdown")
+	}
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Wait did not include generation and cleanup")
+	}
+	fake.mu.Lock()
+	refs := slices.Clone(fake.refs)
+	fake.mu.Unlock()
+	if len(refs) != 1 || refs[0].Name != "shutdown-task" || refs[0].UID != "shutdown-uid" || refs[0].ExecutionID != created.ID {
+		t.Fatalf("cleanup refs = %+v", refs)
+	}
+}
+
+func TestAnalysisFixRequestOwnerIsolation(t *testing.T) {
+	service, _ := requestTestService(t)
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	var calls atomic.Int32
+	service.analysisRequestGenerator = func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error) {
+		calls.Add(1)
+		return PreviewResult{Token: "preview-token", Kind: gfKind, Title: "Fix conflict", Body: "## Summary\nRetry conflict.\n", Diff: "diff --git a/a b/a"}, nil
+	}
+	input := exactAnalysisRequestInput()
+	alice, err := service.CreateAnalysisFixRequest(input, "alice", "alice-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := service.CreateAnalysisFixRequest(input, "bob", "bob-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alice.ID == bob.ID {
+		t.Fatalf("different owners shared request %q", alice.ID)
+	}
+	waitRequest(t, service, alice.ID, "alice", RequestReady)
+	waitRequest(t, service, bob.ID, "bob", RequestReady)
+	if _, err := service.GetRequest(alice.ID, "bob"); !errors.Is(err, ErrRequestNotFound) {
+		t.Fatalf("cross-owner get err=%v", err)
+	}
+	if _, err := service.CancelRequest(context.Background(), alice.ID, "bob"); !errors.Is(err, ErrRequestNotFound) {
+		t.Fatalf("cross-owner cancel err=%v", err)
+	}
+	aliceDuplicate, err := service.CreateAnalysisFixRequest(input, "alice", "alice-token", "")
+	if err != nil || aliceDuplicate.ID != alice.ID {
+		t.Fatalf("alice duplicate=%+v err=%v", aliceDuplicate, err)
+	}
+	bobDuplicate, err := service.CreateAnalysisFixRequest(input, "bob", "bob-token", "")
+	if err != nil || bobDuplicate.ID != bob.ID {
+		t.Fatalf("bob duplicate=%+v err=%v", bobDuplicate, err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("generator calls=%d", calls.Load())
+	}
 }
 
 func TestAsyncIssueRequestPersistsAndNotifies(t *testing.T) {

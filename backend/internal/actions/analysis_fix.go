@@ -347,8 +347,12 @@ func (s *Service) PreviewAnalysisFix(
 	if input.AnalysisContentHash != subject.AnalysisContentHash {
 		return PreviewResult{}, ErrPreviewTargetChanged
 	}
+	logicalID := actionRequestID(ctx)
+	if logicalID == "" {
+		logicalID = input.ChatRequestID
+	}
 	ctx, usageOperation := aiusage.Begin(ctx, s.ai.UsageRecorder, aiusage.Metadata{
-		LogicalID: input.ChatRequestID, Origin: aiusage.OriginServer, Feature: aiusage.FeatureFixPreview,
+		LogicalID: logicalID, Origin: aiusage.OriginServer, Feature: aiusage.FeatureFixPreview,
 		Correlation: aiusage.Correlation{JobID: input.Identity.JobID, BuildID: input.Identity.BuildID, TestName: input.Identity.TestName},
 	})
 	defer func() { usageOperation.Finish(actionUsageOutcome(resultErr)) }()
@@ -410,6 +414,9 @@ func (s *Service) PreviewAnalysisFix(
 	}
 	if input.GenerationBaseRevision == "" && !strings.EqualFold(repository.Revision, compatibility.GenerationBaseRevision) {
 		return PreviewResult{}, fmt.Errorf("%w: branch advancement requires a Fix-intended source preflight", ErrPreviewRejected)
+	}
+	if err := s.setRequestStage(ctx, RequestStageDrafting); err != nil {
+		return PreviewResult{}, err
 	}
 	targetConfig := fixDestinationFingerprint(eff, destination)
 	generationHash := analysisPreviewGenerationHash(

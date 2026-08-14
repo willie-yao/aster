@@ -1,5 +1,5 @@
-import type { ActionPreview } from "../types/actions";
-import { actionErrorMessage } from "./actionRequests";
+import type { ActionPreview, ActionRequest } from "../types/actions";
+import { actionErrorMessage, loadLatestActionRequest } from "./actionRequests.js";
 
 const API_BASE = import.meta.env.BASE_URL;
 const maxInstructionBytes = 4096;
@@ -8,6 +8,12 @@ const utf8Encoder = new TextEncoder();
 export interface ChatFixPreview extends ActionPreview {
   token: string;
 }
+
+export interface ChatFixRequest extends Omit<ActionRequest, "kind" | "preview"> {
+  kind: "analysis-fix";
+  preview?: ChatFixPreview;
+}
+
 
 export function chatFixInstructionBytes(value: string): number {
   return utf8Encoder.encode(value).byteLength;
@@ -52,6 +58,39 @@ export async function previewChatFix(
   );
   if (!response.ok) throw new Error(await actionErrorMessage(response));
   return response.json() as Promise<ChatFixPreview>;
+}
+
+export async function createAnalysisChatFixRequest(
+  sessionID: string,
+  chatRequestID: string,
+  instruction: string,
+  signal?: AbortSignal,
+): Promise<ChatFixRequest> {
+  const response = await fetch(
+    `${API_BASE}api/analysis-chat/sessions/${encodeURIComponent(sessionID)}/requests/${encodeURIComponent(chatRequestID)}/fix/requests`,
+    {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(instruction.trim() ? { instruction: instruction.trim() } : {}),
+    },
+  );
+  if (!response.ok) throw new Error(await actionErrorMessage(response));
+  return validateChatFixRequest(await response.json() as ActionRequest);
+}
+
+export async function loadAnalysisChatFixRequest(id: string, signal?: AbortSignal): Promise<ChatFixRequest> {
+  return validateChatFixRequest(await loadLatestActionRequest(API_BASE, id, signal));
+}
+
+function validateChatFixRequest(request: ActionRequest): ChatFixRequest {
+  if ((request as { kind: string }).kind !== "analysis-fix") throw new Error("The saved request is not an exact JUnit fix preview.");
+  if (request.preview && (!request.preview.token || request.preview.kind !== "fix")) {
+    throw new Error("The saved exact JUnit fix preview is incomplete.");
+  }
+  return request as unknown as ChatFixRequest;
 }
 
 export async function confirmChatFix(token: string, signal?: AbortSignal): Promise<string> {

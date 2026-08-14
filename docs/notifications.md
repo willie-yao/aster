@@ -150,8 +150,10 @@ server:
 ```
 
 The fetcher sends scheduled failure alerts. The server sends draft-ready emails
-for asynchronous action requests. Ready requests and their exact reviewed drafts
-are persisted in non-public `action_request_state.json` for 24 hours. Pending
+for issue and regular Fix action requests. Those ready requests and their exact
+reviewed drafts are persisted in non-public `action_request_state.json` for 24
+hours. Exact JUnit chat-to-fix previews do not send draft-ready email and retain
+their ready request for the confirmation token's 15-minute lifetime. Pending
 requests interrupted by a server restart are marked failed and can be recreated.
 
 ## State and retry behavior

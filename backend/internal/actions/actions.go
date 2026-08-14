@@ -207,6 +207,7 @@ type Service struct {
 	sourceReaderFactory      sourceSnapshotReaderFactory
 	sourceRevisionClient     analysisSourceRevisionClient
 	analysisPreviewValidator AnalysisPreviewValidator
+	analysisRequestGenerator func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error)
 	fixActionsEnabled        bool
 }
 

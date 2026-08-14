@@ -31,6 +31,56 @@ type ChatFixRunner interface {
 	) (actions.PreviewResult, error)
 }
 
+// ChatFixRequestRunner admits exact JUnit chat-to-fix previews for durable
+// asynchronous generation.
+type ChatFixRequestRunner interface {
+	CreateAnalysisFixRequest(string, string, string, string, string) (actions.ActionRequestView, error)
+}
+
+func createAnalysisChatFixRequestHandler(run ChatFixRequestRunner) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			Instruction string `json:"instruction"`
+		}
+		if err := decodeAnalysisChatBody(w, r, &body, maxChatFixBodyBytes); err != nil {
+			http.Error(w, "invalid chat fix request", http.StatusBadRequest)
+			return
+		}
+		body.Instruction = strings.TrimSpace(body.Instruction)
+		if len(body.Instruction) > maxChatFixInputBytes {
+			http.Error(w, "invalid chat fix request", http.StatusBadRequest)
+			return
+		}
+		view, err := run.CreateAnalysisFixRequest(
+			r.PathValue("id"), identity.Login, r.PathValue("requestID"), identity.Token, body.Instruction,
+		)
+		if err != nil {
+			writeChatFixRequestError(w, r.PathValue("id"), identity.Login, err)
+			return
+		}
+		writeAnalysisChatJSON(w, http.StatusAccepted, view)
+	})
+}
+
+func writeChatFixRequestError(w http.ResponseWriter, sessionID, login string, err error) {
+	switch {
+	case errors.Is(err, analysischat.ErrAnalysisNotFound), errors.Is(err, analysischat.ErrPatternNotFound),
+		errors.Is(err, analysischat.ErrSessionNotFound), errors.Is(err, analysischat.ErrRequestNotFound),
+		errors.Is(err, analysischat.ErrAnalysisChanged), errors.Is(err, analysischat.ErrPatternChanged),
+		errors.Is(err, analysischat.ErrRequestPending), errors.Is(err, analysischat.ErrRequestOutcomeUnknown),
+		errors.Is(err, analysischat.ErrInvalidRequest), errors.Is(err, analysischat.ErrRequestFailed),
+		errors.Is(err, sourceinvestigation.ErrInvalidResult), errors.Is(err, sourceinvestigation.ErrUnavailable):
+		writeChatFixError(w, sessionID, login, err)
+	default:
+		writeActionError(w, sessionID, login, err)
+	}
+}
+
 func previewChatFixHandler(timeout time.Duration, run ChatFixRunner) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFrom(r.Context())

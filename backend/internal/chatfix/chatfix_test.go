@@ -50,6 +50,7 @@ type fakeFixPreviewer struct {
 	target            actions.FixTarget
 	generationContext fixpr.GenerationContext
 	called            bool
+	requestCalled     bool
 	analysisInput     actions.AnalysisFixInput
 }
 
@@ -66,6 +67,13 @@ func (f *fakeFixPreviewer) PreviewAnalysisFix(
 ) (actions.PreviewResult, error) {
 	f.analysisInput, f.owner, f.userToken, f.instruction, f.called = input, owner, userToken, instruction, true
 	return actions.PreviewResult{Token: "preview", Kind: "fix"}, nil
+}
+
+func (f *fakeFixPreviewer) CreateAnalysisFixRequest(
+	input actions.AnalysisFixInput, owner, userToken, instruction string,
+) (actions.ActionRequestView, error) {
+	f.analysisInput, f.owner, f.userToken, f.instruction, f.requestCalled = input, owner, userToken, instruction, true
+	return actions.ActionRequestView{ID: "async-request", Kind: "analysis-fix", Owner: owner, Status: actions.RequestPending}, nil
 }
 
 func TestPreviewChatFixBuildsSelectedContext(t *testing.T) {
@@ -211,7 +219,7 @@ func TestPreviewChatFixRejectsAnalysisOnlyCausalGroup(t *testing.T) {
 	}
 }
 
-func TestPreviewChatFixUsesExactJUnitAnalysisWithoutPatternAuthority(t *testing.T) {
+func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t *testing.T) {
 	chat := &fakeChatStore{candidate: analysischat.FixCandidate{
 		SessionID: "session", RequestID: "request", ResponseHash: "response-hash",
 		AnalysisContentHash:      "analysis-hash",
@@ -229,12 +237,12 @@ func TestPreviewChatFixUsesExactJUnitAnalysisWithoutPatternAuthority(t *testing.
 		ProposedRevision:  &analysischat.Revision{RootCause: "terminal branch omits Ready", SuggestedFix: "record Ready"},
 	}}
 	fixes := &fakeFixPreviewer{}
-	preview, err := NewService(chat, fixes).PreviewChatFix(t.Context(), "session", "Alice", "request", "", "", "", "write-token", "keep compatibility")
+	request, err := NewService(chat, fixes).CreateAnalysisFixRequest("session", "Alice", "request", "write-token", "keep compatibility")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preview.Token != "preview" || !fixes.called || fixes.pattern.ID != "" || fixes.analysisInput.ChatResponseHash != "response-hash" {
-		t.Fatalf("preview=%+v fixes=%+v", preview, fixes)
+	if request.ID != "async-request" || !fixes.requestCalled || fixes.called || fixes.pattern.ID != "" || fixes.analysisInput.ChatResponseHash != "response-hash" {
+		t.Fatalf("request=%+v fixes=%+v", request, fixes)
 	}
 	input := fixes.analysisInput
 	if input.Identity.JobID != "periodic-capz" || input.Identity.BuildID != "123" || input.Identity.TestName != "TestCluster" ||
@@ -246,6 +254,16 @@ func TestPreviewChatFixUsesExactJUnitAnalysisWithoutPatternAuthority(t *testing.
 		input.SourceBranch != "main" ||
 		len(input.ArtifactCitations) != 1 || input.ProposedRevision == nil || fixes.userToken != "write-token" {
 		t.Fatalf("analysis input = %+v", input)
+	}
+}
+
+func TestPreviewChatFixRejectsSynchronousExactJUnitGeneration(t *testing.T) {
+	fixes := &fakeFixPreviewer{}
+	_, err := NewService(&fakeChatStore{}, fixes).PreviewChatFix(
+		t.Context(), "session", "Alice", "request", "", "", "", "write-token", "",
+	)
+	if !errors.Is(err, analysischat.ErrInvalidRequest) || fixes.called || fixes.requestCalled {
+		t.Fatalf("error=%v fixes=%+v", err, fixes)
 	}
 }
 
