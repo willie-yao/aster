@@ -15,10 +15,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/prowbuild"
 )
 
 const (

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai"
 )
 
 // Phase identifies one structured remediation finalization cycle.

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	agentruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	agentruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 func TestLiveSandboxedPromptAuthor(t *testing.T) {

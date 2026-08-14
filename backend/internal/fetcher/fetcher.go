@@ -1,4 +1,4 @@
-// Package fetcher contains the orchestration invoked by cmd/fetcher:
+// Package fetcher contains the orchestration invoked by cmd/aster:
 // loading project config, discovering jobs, fetching builds, running AI
 // analysis, and writing dashboard output.
 package fetcher
@@ -21,36 +21,36 @@ import (
 	"sync"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/causalcritic"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/notify"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patterns"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patternstate"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediation"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/repotemplate"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
+	"github.com/willie-yao/aster/backend/internal/aggregator"
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/aiusage"
+	"github.com/willie-yao/aster/backend/internal/analysisruntime"
+	"github.com/willie-yao/aster/backend/internal/causalcritic"
+	"github.com/willie-yao/aster/backend/internal/fetchprogress"
+	"github.com/willie-yao/aster/backend/internal/fixpr"
+	"github.com/willie-yao/aster/backend/internal/fixruntime"
+	"github.com/willie-yao/aster/backend/internal/ghpr"
+	"github.com/willie-yao/aster/backend/internal/issues"
+	"github.com/willie-yao/aster/backend/internal/junit"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/notify"
+	"github.com/willie-yao/aster/backend/internal/orka"
+	"github.com/willie-yao/aster/backend/internal/output"
+	"github.com/willie-yao/aster/backend/internal/patterns"
+	"github.com/willie-yao/aster/backend/internal/patternstate"
+	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
+	"github.com/willie-yao/aster/backend/internal/prowbuild"
+	"github.com/willie-yao/aster/backend/internal/remediation"
+	"github.com/willie-yao/aster/backend/internal/repotemplate"
+	"github.com/willie-yao/aster/backend/internal/resolve"
+	"github.com/willie-yao/aster/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/statefile"
+	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
 // Options is the parsed invocation for a single fetcher run.
-// cmd/fetcher constructs it from flags before Run.
+// cmd/aster constructs it from flags before Run.
 const (
 	AnalysisRuntimeInProcess     = "inprocess"
 	AnalysisRuntimeOrkaContainer = "orka-container"

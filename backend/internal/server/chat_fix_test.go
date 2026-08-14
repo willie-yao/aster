@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
+	"github.com/willie-yao/aster/backend/internal/actions"
+	"github.com/willie-yao/aster/backend/internal/analysischat"
 )
 
 type fakeChatFixRunner struct {

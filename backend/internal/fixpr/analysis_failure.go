@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 const maxAnalysisFixCitations = 16

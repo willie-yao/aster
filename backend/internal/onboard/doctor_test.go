@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/project"
 )
 
 type doctorMapFS map[string]string
@@ -53,7 +53,7 @@ branding:
 
 const doctorPagesWorkflow = `jobs:
   deploy:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
     with:
       ai-api: ${{ vars.AI_API }}
       ai-endpoint: ${{ vars.AI_ENDPOINT }}
@@ -100,7 +100,7 @@ func TestDoctor_ValidPagesScaffold(t *testing.T) {
 func TestDoctor_PagesMissingProviderMappings(t *testing.T) {
 	sweeper := &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}}
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
-		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": "jobs:\n  deploy:\n    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main\n"}),
+		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": "jobs:\n  deploy:\n    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main\n"}),
 		sweeper: sweeper,
 	})
 	if !hasDoctorCheck(report, "Pages AI", DoctorFail) {
@@ -279,7 +279,7 @@ func TestDoctor_PagesParsingIsScopedToDeployJob(t *testing.T) {
     steps:
       - run: echo "vars.AI_API secrets.AI_TOKEN"
   deploy:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
 `
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
 		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
@@ -350,7 +350,7 @@ func TestDoctor_PromptReadErrorIsDistinct(t *testing.T) {
 func TestDoctor_PagesRequiresFullGitHubExpressions(t *testing.T) {
 	workflow := `jobs:
   deploy:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
     with:
       ai-api: vars.AI_API
       ai-endpoint: vars.AI_ENDPOINT
@@ -391,7 +391,7 @@ func TestDoctor_PagesAcceptsProviderCoordinatesInProjectConfig(t *testing.T) {
 `
 	workflow := `jobs:
   deploy:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
     secrets:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
 `
@@ -409,7 +409,7 @@ func TestDoctor_PagesAcceptsProviderCoordinatesInProjectConfig(t *testing.T) {
 func TestDoctor_PagesSkipFetchDoesNotRequireProviderMappings(t *testing.T) {
 	workflow := `jobs:
   deploy:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
     with:
       skip-fetch: true
 `
@@ -461,7 +461,7 @@ ai:
 }
 
 func TestDoctor_PagesRequiresReusableDeployTarget(t *testing.T) {
-	workflow := strings.Replace(doctorPagesWorkflow, "willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main", "example/other/.github/workflows/build.yml@main", 1)
+	workflow := strings.Replace(doctorPagesWorkflow, "willie-yao/aster/.github/workflows/reusable-deploy.yml@main", "example/other/.github/workflows/build.yml@main", 1)
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
 		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
 		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
@@ -505,12 +505,16 @@ func TestNormalizeDoctorProjectDir_IsAbsolute(t *testing.T) {
 }
 
 func TestReusableDeployReference_RequiresExactPathAndRef(t *testing.T) {
-	valid := "willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main"
-	if !reusableDeployReference(valid) {
-		t.Fatalf("valid reference rejected: %s", valid)
+	for _, valid := range []string{
+		"willie-yao/aster/.github/workflows/reusable-deploy.yml@main",
+		"willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main",
+	} {
+		if !reusableDeployReference(valid) {
+			t.Errorf("valid reference rejected: %s", valid)
+		}
 	}
 	for _, invalid := range []string{
-		"willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@",
+		"willie-yao/aster/.github/workflows/reusable-deploy.yml@",
 		"willie-yao/prow-ai-dashboard/.github/workflows/other.yml@main",
 		"./.github/workflows/reusable-deploy.yml@main",
 	} {
@@ -542,7 +546,7 @@ ai:
 func TestDoctor_PagesDynamicAIBranchWarns(t *testing.T) {
 	workflow := `jobs:
   deploy:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
     with:
       ai: ${{ vars.ENABLE_AI }}
 `
@@ -563,7 +567,7 @@ func TestDoctor_ProjectAPIOverridesStaleWorkflowFallback(t *testing.T) {
 `
 	workflow := `jobs:
   deploy:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
     with:
       ai-api: stale-literal
       ai-reasoning-effort: ${{ vars.AI_REASONING_EFFORT }}

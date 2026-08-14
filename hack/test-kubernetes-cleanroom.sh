@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/prow-kubernetes-cleanroom.XXXXXX")
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/aster-kubernetes-cleanroom.XXXXXX")
 cleanup() {
   find "$tmp" -type f -delete 2>/dev/null || true
   find "$tmp" -depth -type d -empty -delete 2>/dev/null || true
@@ -22,7 +22,7 @@ consumer=$tmp/consumer
   CLEANROOM_FIXTURE_OUT="$consumer" go test ./internal/onboard \
     -run '^TestWriteKubernetesCleanRoomFixture$' \
     -count=1
-  go build -trimpath -o "$tmp/fetcher" ./cmd/fetcher
+  go build -trimpath -o "$tmp/aster" ./cmd/aster
 )
 storage=$tmp/storage
 mkdir -p "$storage/logs/sample-e2e-job/1"
@@ -52,22 +52,22 @@ path = Path(sys.argv[1])
 text = path.read_text().replace('<your-rwx-storage-class>', 'cleanroom-rwx')
 path.write_text(text)
 PY_VALUES
-"$tmp/fetcher" onboard doctor --project-dir "$consumer"
-"$tmp/fetcher" kubernetes install \
+"$tmp/aster" onboard doctor --project-dir "$consumer"
+"$tmp/aster" kubernetes install \
   --project-dir "$consumer" \
   --values deploy/values.yaml \
   --release sample-dashboard \
   --namespace sample-dashboard \
   --kube-context sample-explicit \
-  --chart "$root/deploy/helm/prow-ai-dashboard" \
+  --chart "$root/deploy/helm/aster" \
   --dry-run
-"$tmp/fetcher" kubernetes upgrade \
+"$tmp/aster" kubernetes upgrade \
   --project-dir "$consumer" \
   --values deploy/values.yaml \
   --release sample-dashboard \
   --namespace sample-dashboard \
   --kube-context sample-explicit \
-  --chart "$root/deploy/helm/prow-ai-dashboard" \
+  --chart "$root/deploy/helm/aster" \
   --dry-run
 (
   cd "$root/backend"
@@ -80,7 +80,7 @@ python3 - \
   "$root/docs/kubernetes.md" \
   "$root/docs/kubernetes-platform.md" \
   "$root/docs/kubernetes-reference.md" \
-  "$root/deploy/helm/prow-ai-dashboard-platform/README.md" \
+  "$root/deploy/helm/aster-platform/README.md" \
   "$consumer/deploy/README.md" \
   "$root" <<'PY'
 from pathlib import Path
@@ -106,15 +106,13 @@ for path in documents:
         "Azure",
         "AKS",
         "Front Door",
-        "Aster",
-        "aster kubernetes",
     ]:
         if forbidden in text:
             raise SystemExit(f"generic Kubernetes document {path} contains {forbidden!r}")
 
 quick = quickstart.read_text()
 for value in [
-    "prow-ai-dashboard-fetcher-${CLI_VERSION}-${CLI_TARGET}",
+    "aster-${CLI_VERSION}-${CLI_TARGET}",
     "SHA256SUMS",
     "onboard doctor",
     "kubernetes doctor",
@@ -134,9 +132,9 @@ for value in [
         raise SystemExit(f"Kubernetes quickstart missing {value!r}")
 
 install_doctor = quick.index("--action install")
-install = quick.index('"$FETCHER" kubernetes install', install_doctor)
+install = quick.index('"$ASTER" kubernetes install', install_doctor)
 upgrade_doctor = quick.index("--action upgrade")
-upgrade = quick.index('"$FETCHER" kubernetes upgrade', upgrade_doctor)
+upgrade = quick.index('"$ASTER" kubernetes upgrade', upgrade_doctor)
 if install_doctor > install or upgrade_doctor > upgrade:
     raise SystemExit("doctor does not precede the contributor write command")
 
@@ -161,7 +159,7 @@ for value in [
 
 generated_text = generated.read_text()
 for value in [
-    'export FETCHER="<verified-fetcher-path>"',
+    'export ASTER="<verified-aster-path>"',
     "kubernetes doctor",
     "--action install",
     "--action upgrade",
@@ -229,7 +227,7 @@ if not 900 <= generic_total <= 1200:
     raise SystemExit(f"generic Kubernetes docs total {generic_total} lines, want 900-1200")
 PY
 
-bash "$root/deploy/helm/prow-ai-dashboard-platform/test-render.sh"
+bash "$root/deploy/helm/aster-platform/test-render.sh"
 bash "$root/hack/test-release-cli-assets.sh"
 bash "$root/hack/test-kubernetes-verification-failures.sh"
 bash "$root/hack/test-cli-download-failclosed.sh"

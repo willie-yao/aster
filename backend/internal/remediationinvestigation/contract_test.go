@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 const testRevision = "0123456789abcdef0123456789abcdef01234567"

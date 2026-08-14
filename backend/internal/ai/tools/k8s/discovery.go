@@ -15,7 +15,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/artifacts"
 )
 
 // Group is the alias used in config to enable all k8s tools at once.

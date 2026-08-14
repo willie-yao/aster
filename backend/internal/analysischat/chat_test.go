@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/aiusage"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/output"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 var testRequestCounter atomic.Int64

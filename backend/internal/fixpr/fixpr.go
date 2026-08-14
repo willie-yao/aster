@@ -16,13 +16,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
+	"github.com/willie-yao/aster/backend/internal/aiusage"
+	"github.com/willie-yao/aster/backend/internal/ghpr"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/remediationpolicy"
+	"github.com/willie-yao/aster/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/statefile"
 )
 
 // keyPrefix namespaces a fix's dedup key (one per recurring pattern + cause).

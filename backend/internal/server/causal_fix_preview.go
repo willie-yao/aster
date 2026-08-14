@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/causalfixpreview"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationinvestigation"
+	"github.com/willie-yao/aster/backend/internal/auth"
+	"github.com/willie-yao/aster/backend/internal/causalfixpreview"
+	"github.com/willie-yao/aster/backend/internal/remediationinvestigation"
 )
 
 func causalFixPreviewHandler(timeout time.Duration, runner CausalFixPreviewRunner) http.Handler {

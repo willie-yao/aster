@@ -3,8 +3,8 @@ package analysisruntime
 import (
 	"path/filepath"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/aiusage"
+	"github.com/willie-yao/aster/backend/internal/project"
 )
 
 // NewUsageRecorder creates the configured private usage ledger for one writer.

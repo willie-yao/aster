@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/output"
+	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
+	"github.com/willie-yao/aster/backend/internal/prowbuild"
+	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
 func TestClearAnalysisTrace(t *testing.T) {

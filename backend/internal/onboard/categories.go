@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/project"
 )
 
 // maxCategories caps inferred rules so noisy fleets stay reviewable.

@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/actions"
+	"github.com/willie-yao/aster/backend/internal/analysischat"
+	"github.com/willie-yao/aster/backend/internal/fixpr"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 type chatStore interface {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 func TestPreflightIdentityIncludesAllImmutableInputs(t *testing.T) {

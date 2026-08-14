@@ -97,9 +97,9 @@ does not clone or build the engine repository.
 The supported deployment wrapper is part of the `fetcher` binary:
 
 ```text
-fetcher kubernetes doctor
-fetcher kubernetes install
-fetcher kubernetes upgrade
+aster kubernetes doctor
+aster kubernetes install
+aster kubernetes upgrade
 ```
 
 `doctor` renders the selected chart locally and performs live read-only checks
@@ -203,7 +203,7 @@ The wrapper is preferred because it validates the consumer bundle and protects
 install versus upgrade intent. A manual local-chart render follows this shape:
 
 ```bash
-helm template "$RELEASE" deploy/helm/prow-ai-dashboard \
+helm template "$RELEASE" deploy/helm/aster \
   --namespace "$NAMESPACE" \
   --values "$PROJECT_DIR/deploy/values.yaml" \
   --set-string project.existingConfigMap= \
@@ -223,7 +223,7 @@ and Helm release state.
 ## Configuration reference
 
 The complete commented defaults live in
-`deploy/helm/prow-ai-dashboard/values.yaml`. The table below highlights the
+`deploy/helm/aster/values.yaml`. The table below highlights the
 main operator controls.
 
 | Value | Purpose |
@@ -404,7 +404,7 @@ ledgers.
 
 - [Kubernetes quickstart](kubernetes.md)
 - [Kubernetes platform setup](kubernetes-platform.md)
-- [Platform chart README](../deploy/helm/prow-ai-dashboard-platform/README.md)
+- [Platform chart README](../deploy/helm/aster-platform/README.md)
 - [Server mode](server.md)
 - [Project configuration](project-configuration.md)
 - [Troubleshooting](troubleshooting.md)

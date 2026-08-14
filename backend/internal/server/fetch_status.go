@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
+	"github.com/willie-yao/aster/backend/internal/auth"
+	"github.com/willie-yao/aster/backend/internal/fetchprogress"
 )
 
 const (

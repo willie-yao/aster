@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/auth"
 )
 
 func patternDiagnosticsHandler(dataDir string, now func() time.Time) http.Handler {

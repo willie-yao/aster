@@ -530,7 +530,7 @@ Wire the token into the deploy workflow:
 # .github/workflows/deploy.yml  (GitHub Actions + Pages path)
 jobs:
   deploy:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
     with:
       runs-on: fix-enabled-runner   # preinstalled opencode + git
     secrets:

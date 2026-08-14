@@ -10,10 +10,10 @@ import (
 
 	"k8s.io/client-go/rest"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
+	"github.com/willie-yao/aster/backend/internal/orka"
+	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 func TestNewDefaultsToLocalAgent(t *testing.T) {

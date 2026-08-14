@@ -5,9 +5,9 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/analysischat"
+	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 type patternBrowserFactoryStub struct {

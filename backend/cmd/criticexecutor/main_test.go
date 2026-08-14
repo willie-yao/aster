@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/causalcritic"
+	"github.com/willie-yao/aster/backend/internal/causalcritic"
 )
 
 func TestReadRequestRejectsTrailingData(t *testing.T) {

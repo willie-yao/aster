@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
+	"github.com/willie-yao/aster/backend/internal/ai/skills"
 )
 
 // CritiqueRuleID is a stable, privacy-safe deterministic critique identifier.

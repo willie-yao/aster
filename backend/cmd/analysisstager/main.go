@@ -10,10 +10,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisstager"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/redact"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
+	"github.com/willie-yao/aster/backend/internal/agentanalysis"
+	"github.com/willie-yao/aster/backend/internal/analysisstager"
+	"github.com/willie-yao/aster/backend/internal/redact"
+	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
 const requestEnv = "PROW_AI_ANALYSIS_STAGE_REQUEST_B64"

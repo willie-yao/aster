@@ -8,7 +8,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai"
 )
 
 const (

@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
+	"github.com/willie-yao/aster/backend/internal/agentanalysis"
 )
 
 const (

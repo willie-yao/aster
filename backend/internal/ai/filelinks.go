@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 // File-link verification. The UI links file citations in an analysis to GitHub,

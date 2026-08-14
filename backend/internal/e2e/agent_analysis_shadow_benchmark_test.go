@@ -16,16 +16,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
-	agentruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/agentanalysis"
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/skills"
+	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/orka"
+	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/prowbuild"
+	agentruntime "github.com/willie-yao/aster/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 const (

@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/corrections"
+	"github.com/willie-yao/aster/backend/internal/analysischat"
+	"github.com/willie-yao/aster/backend/internal/auth"
+	"github.com/willie-yao/aster/backend/internal/corrections"
 )
 
 // AnalysisCorrectionRunner previews, confirms, and revokes correction overlays.

@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 func pattern(id string, builds ...string) models.PatternAnalysis {

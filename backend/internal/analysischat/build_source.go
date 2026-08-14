@@ -3,9 +3,9 @@ package analysischat
 import (
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/buildsource"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/buildsource"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 func resolveBuildSourceRepository(build models.BuildInfo, configured sourceinvestigation.Repository) (sourceinvestigation.Repository, bool) {

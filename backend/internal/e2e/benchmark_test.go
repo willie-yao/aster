@@ -22,17 +22,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/modules/universal"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/modules/universal"
+	"github.com/willie-yao/aster/backend/internal/ai/skills"
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/tools/filesystem"
+	"github.com/willie-yao/aster/backend/internal/ai/tools/k8s"
+	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/prowbuild"
+	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
 // This file is an opt-in quality benchmark: it runs the real agentic analysis
@@ -153,7 +153,7 @@ const (
 )
 
 // fixtureReleaseBase is the download root for benchmark-fixtures release assets.
-const fixtureReleaseBase = "https://github.com/willie-yao/prow-ai-dashboard/releases/download/benchmark-fixtures/"
+const fixtureReleaseBase = "https://github.com/willie-yao/aster/releases/download/benchmark-fixtures/"
 
 func mustRE(s string) *regexp.Regexp { return regexp.MustCompile(s) }
 

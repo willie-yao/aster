@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 const (
@@ -303,7 +303,7 @@ func buildSetupHandoff(plan *Plan, planDigest string, result ApplyResult, doctor
 			SourceOnlyCandidate: plan.Files["prompts/system.md"], RequestedMode: plan.Prompt.RequestedMode, Source: plan.Prompt.Source,
 		}, ApplyResult: result,
 		ArtifactSmoke: smoke, Doctor: doctor, Warnings: warnings,
-		NextPhase: "Run $author-prow-ai-diagnostics with this handoff. The active prompt is a source-only baseline and has not been validated against historical failures.",
+		NextPhase: "Run $author-aster-diagnostics with this handoff. The active prompt is a source-only baseline and has not been validated against historical failures.",
 	}
 }
 

@@ -1,6 +1,6 @@
 # ADR 0001: Dashboard ownership of analysis policy
 
-See [Orka architecture in prow-ai-dashboard](../orka.md#architecture-and-lifecycle)
+See [Orka architecture in Aster](../orka.md#architecture-and-lifecycle)
 for the current end-to-end component, credential, and state flows built on this
 decision.
 
@@ -10,7 +10,7 @@ decision.
 
 ## Context
 
-`prow-ai-dashboard` originally supported two analysis execution paths:
+Aster originally supported two analysis execution paths:
 
 - The in-process analyzer ran the dashboard-owned agentic loop inside the
   fetcher or worker.
@@ -41,7 +41,7 @@ Three changes established a cleaner boundary:
 
 ### Analysis policy and default execution
 
-`prow-ai-dashboard` owns all failure-analysis policy. The in-process analyzer
+Aster owns all failure-analysis policy. The in-process analyzer
 inside the fetcher or worker is the default and the only recommended production
 runtime. It owns provider behavior, prompts, Tool schemas, diagnostic skills,
 ranked evidence planning and repair, critique, semantic review, cache acceptance,

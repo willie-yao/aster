@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/aggregator"
+	"github.com/willie-yao/aster/backend/internal/junit"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 func TestObservePresubmits_PassesExactTest(t *testing.T) {

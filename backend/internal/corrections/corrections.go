@@ -17,7 +17,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
+	"github.com/willie-yao/aster/backend/internal/analysischat"
 )
 
 const (

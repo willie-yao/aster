@@ -16,11 +16,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
+	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 const (

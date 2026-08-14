@@ -2,12 +2,12 @@
 
 Each consumer owns one strict `project.yaml`. Unknown fields are errors. Start
 with [`configs/example/project.yaml`](../configs/example/project.yaml) or let
-[`fetcher onboard`](onboarding-a-new-project.md) generate it. Add optional
+[`aster onboard`](onboarding-a-new-project.md) generate it. Add optional
 sections only when a working deployment needs them. The guided onboarding
 wizard shows the source and confidence for inferred identity and TestGrid values,
 then lets you edit them before any file is written.
 
-Use `fetcher onboard doctor -project-dir <dir>` to run the same strict parser on
+Use `aster onboard doctor -project-dir <dir>` to run the same strict parser on
 an existing consumer before deployment.
 
 ## Configuration boundaries
@@ -347,7 +347,7 @@ A one-build, discovery-only fetch validates the strict schema without making AI
 calls:
 
 ```bash
-./bin/fetcher -project-dir=../my-consumer -ai=false -builds=1
+./bin/aster -project-dir=../my-consumer -ai=false -builds=1
 ```
 
 Then inspect the job count:

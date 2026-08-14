@@ -140,7 +140,7 @@ adds its exact contents to a trusted Task-prompt preamble. Current Orka Agent
 Tasks do not support per-Task skill overrides, so the dashboard does not modify
 the operator-owned Agent.
 
-Onboarding may opt into this backend with `fetcher onboard
+Onboarding may opt into this backend with `aster onboard
 --prompt-mode=agent --prompt-agent-runtime=orka`. Supply the Orka result API and
 Agent reference through `--prompt-orka-api` and `--prompt-orka-agent-ref`.
 Namespace and read-only private-clone Secret overrides are optional. The local
@@ -312,7 +312,7 @@ analysisRuntime:
     taskTimeout: 20m
     retries: 1
     image:
-      repository: ghcr.io/willie-yao/prow-ai-dashboard/analyzer
+      repository: ghcr.io/willie-yao/aster/analyzer
       tag: "<immutable-engine-version>"
       pullPolicy: IfNotPresent
     modelAuth:
@@ -620,7 +620,7 @@ runtime. Enabling one Orka integration does not enable the others.
 
 ```mermaid
 flowchart LR
-    subgraph Dashboard["prow-ai-dashboard"]
+    subgraph Dashboard["Aster"]
         Fetcher["Fetcher CronJob"]
         Server["Dashboard server"]
         Analyzer["FailureAnalyzer image"]

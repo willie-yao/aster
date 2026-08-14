@@ -72,7 +72,7 @@ Build the local image without publishing it:
 ```bash
 make agent-sandbox-critic-executor-image
 hack/test-agent-sandbox-critic-image.sh \
-  ghcr.io/willie-yao/prow-ai-dashboard/agent-sandbox-critic-executor:dev
+  ghcr.io/willie-yao/aster/agent-sandbox-critic-executor:dev
 ```
 
 Model identity and token usage are copied only from the gateway response. An

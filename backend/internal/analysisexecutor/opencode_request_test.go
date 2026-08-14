@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
+	"github.com/willie-yao/aster/backend/internal/agentanalysis"
 )
 
 func TestNewOpenCodeRequestShapeRecordsBoundedFacts(t *testing.T) {

@@ -53,7 +53,7 @@ For a one-off run, build the binary first:
 
 ```bash
 make build
-./bin/fetcher -project-dir=../my-consumer -out=frontend/public/data \
+./bin/aster -project-dir=../my-consumer -out=frontend/public/data \
   -builds=3 -workers=5
 ```
 
@@ -85,7 +85,7 @@ OpenCode, git, the pinned `srt` package, and its platform dependencies. Set
 make build-server
 make build-worker
 make image
-helm lint deploy/helm/prow-ai-dashboard \
+helm lint deploy/helm/aster \
   --set-file project.config=configs/example/project.yaml \
   --set-file project.systemPrompt=configs/example/prompts/system.md
 make helm-check

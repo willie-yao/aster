@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
+	"github.com/willie-yao/aster/backend/internal/ghpr"
 )
 
 // GitHub OAuth endpoints, overridable in tests.

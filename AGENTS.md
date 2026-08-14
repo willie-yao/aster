@@ -1,12 +1,12 @@
 # AGENTS.md
 
-Guidance for AI coding agents working on `prow-ai-dashboard`. See
+Guidance for AI coding agents working on Aster. See
 [`README.md`](README.md) for the human-facing introduction and
 [`docs/`](docs/) for deep dives.
 
 ## Project overview
 
-`prow-ai-dashboard` is the **reusable engine** for AI-powered Prow/TestGrid
+Aster is the **reusable engine** for AI-powered Prow/TestGrid
 dashboards. It is consumed by lightweight per-project repos (the
 "consumers") via a reusable GitHub Actions workflow or Helm chart. The engine
 repo holds all the code; consumer repos hold `project.yaml`,
@@ -19,8 +19,8 @@ The data flow per scheduled deploy is:
 Consumer workflow (cron)
    └─> Reusable workflow `.github/workflows/reusable-deploy.yml`
          ├─> Checks out engine + consumer side-by-side
-         ├─> Builds backend/cmd/fetcher
-         ├─> fetcher -project-dir=<consumer> -out=engine/frontend/public/data
+         ├─> Builds backend/cmd/aster
+         ├─> aster -project-dir=<consumer> -out=engine/frontend/public/data
          │     ├─> Loads consumer's project.yaml + prompts/system.md
          │     ├─> Discovers prow jobs from kubernetes/test-infra
          │     ├─> Fetches recent builds + JUnit XML from GCS
@@ -39,7 +39,7 @@ list and the tree diverge.
 ```
 backend/                         Go 1.25
   cmd/
-    fetcher/                     One-shot pipeline; the Pages path and the k8s CronJob
+    aster/                      Public CLI and one-shot pipeline; Pages and the k8s CronJob
     worker/                      Continuous in-cluster watch loop (k8s mode: watch)
     server/                      API server: /data/* read parity, capabilities, actions
     analyzer/                    Runs one failure analysis request (Orka container runtime)
@@ -49,7 +49,7 @@ backend/                         Go 1.25
     criticexecutor/              Runs one credential-free causal review workload
   internal/
     -- core pipeline (discover -> analyze -> write) --
-    fetcher/                     Orchestration invoked by cmd/fetcher and cmd/worker
+    fetcher/                     Orchestration invoked by cmd/aster and cmd/worker
     prow/jobconfig/              kubernetes/test-infra job discovery + parsing
     prowbuild/                   Addresses Prow build artifacts over a storage.Backend
     storage/                     Pluggable artifact store (gcs / gcsweb / local)
@@ -113,7 +113,7 @@ backend/                         Go 1.25
     runtime/                     Swappable agent-execution abstraction
     orka/                        Adapters for Orka lifecycle execution
     kubernetesdeploy/            Installs a validated consumer bundle with Helm
-    onboard/                     `fetcher onboard`: discovery, presets, doctor, scaffold
+    onboard/                     `aster onboard`: discovery, presets, doctor, scaffold
     project/                     project.yaml load + validate
 
     -- support --
@@ -171,7 +171,7 @@ dependencies between `fetcher`, `actions`, and `server` (for example `resolve`,
 
 ```bash
 # Backend (Go 1.25)
-make build           # cd backend && go build -o ../bin/fetcher ./cmd/fetcher/
+make build           # cd backend && go build -o ../bin/aster ./cmd/aster/
 make test            # cd backend && go test ./... -count=1
 make tidy            # go mod tidy
 make check-repo-map  # AGENTS.md repo layout matches backend/cmd + backend/internal

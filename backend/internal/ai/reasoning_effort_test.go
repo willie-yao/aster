@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
 )
 
 func TestReasoningEffortRequestBodies(t *testing.T) {

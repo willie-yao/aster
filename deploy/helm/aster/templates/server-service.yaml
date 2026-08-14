@@ -1,0 +1,34 @@
+{{- include "aster.validateNetworkSecurity" . -}}
+{{- $service := .Values.server.service -}}
+{{- $internal := $service.internal | default dict -}}
+{{- $annotations := deepCopy ($service.annotations | default dict) -}}
+{{- if ($internal.enabled | default false) -}}
+{{- $annotations = mergeOverwrite $annotations ($internal.annotations | default dict) -}}
+{{- end -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aster.fullname" . }}-server
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $service.type }}
+  {{- with $service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ . }}
+  {{- end }}
+  selector:
+    {{- include "aster.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: {{ $service.port }}
+      targetPort: http

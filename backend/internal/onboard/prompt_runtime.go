@@ -4,8 +4,8 @@ import (
 	"context"
 	"os"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/onboard/promptauthor"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
+	"github.com/willie-yao/aster/backend/internal/onboard/promptauthor"
+	"github.com/willie-yao/aster/backend/internal/orka"
 )
 
 type failedPromptAuthor struct{ err error }

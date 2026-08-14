@@ -1,6 +1,6 @@
 # Releasing the engine
 
-How to cut a release of the prow-ai-dashboard engine. Consumers on the GitHub
+How to cut a release of the Aster engine. Consumers on the GitHub
 Actions + Pages path pin the engine through the reusable deploy workflow, so for
 them a "release" is just a git tag plus a GitHub Release. A tag also publishes
 the Kubernetes-native artifacts: the container image and the Helm chart.
@@ -39,11 +39,11 @@ the changelog.
    - creates the GitHub Release with auto-generated notes (marked
      **pre-release** when the tag has a `-beta`/`-rc` suffix),
    - packages the application and platform Helm charts at the release version,
-     pushes them to `oci://ghcr.io/<owner>/charts/prow-ai-dashboard` and
-     `oci://ghcr.io/<owner>/charts/prow-ai-dashboard-platform`, and attaches
-     both `.tgz` files to the release,
-   - cross-compiles the current `fetcher` CLI for Linux and macOS on amd64 and
-     arm64, attaches the four binaries plus `SHA256SUMS`,
+     pushes them to `oci://ghcr.io/<owner>/charts/aster` and
+     `oci://ghcr.io/<owner>/charts/aster-platform`, and attaches
+     `aster-<version>.tgz` and `aster-platform-<version>.tgz` to the release,
+   - cross-compiles the `aster` CLI for Linux and macOS on amd64 and arm64,
+     attaches `aster-<tag>-<target>` for each target plus `SHA256SUMS`,
    - waits for the matching engine, remote-fixer, and Agent Sandbox Fix executor
      images and verifies their embedded source revision before publishing charts,
      the GitHub Release, or the stable major alias,
@@ -54,11 +54,11 @@ the changelog.
    analyzer, local fixer, remote fixer, and Agent Sandbox executor images with `main`,
    `sha-<short-commit>`, and applicable semantic-version tags. The Agent Sandbox
    executor is published for `linux/amd64` at
-   `ghcr.io/<owner>/prow-ai-dashboard/agent-sandbox-fix-executor`. Tags are
+   `ghcr.io/<owner>/aster/agent-sandbox-fix-executor`. Tags are
    discovery aliases only; deployed Agent Sandbox configuration requires the
    resolved OCI digest.
    The git-only remote fixer is published at
-   `ghcr.io/<owner>/prow-ai-dashboard/remote-fixer` for dashboard-side patch
+   `ghcr.io/<owner>/aster/remote-fixer` for dashboard-side patch
    reconstruction and contains neither OpenCode nor srt.
 
 ## Pre-release to stable

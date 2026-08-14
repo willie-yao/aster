@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
 )
 
 func continuationRegistry(t *testing.T, payload string) (*tools.Registry, []string) {

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	runtimepkg "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	runtimepkg "github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 type fixBenchmarkCheck struct {

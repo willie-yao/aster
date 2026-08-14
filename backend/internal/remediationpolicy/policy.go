@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 // UnsafeConversionReason is the public-safe reason for a blocked remediation.

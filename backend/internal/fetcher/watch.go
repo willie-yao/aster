@@ -7,10 +7,10 @@ import (
 	"log"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
+	"github.com/willie-yao/aster/backend/internal/analysisruntime"
+	"github.com/willie-yao/aster/backend/internal/fetchprogress"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/orka"
 )
 
 type watchPipeline interface {

@@ -20,7 +20,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/artifacts"
 )
 
 // Schema is the OpenAI-shape tool definition emitted in the tools array of a

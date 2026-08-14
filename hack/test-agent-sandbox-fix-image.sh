@@ -31,6 +31,9 @@ assert config["User"] == "65532:65532", config["User"]
 assert config["WorkingDir"] == "/workspace", config["WorkingDir"]
 assert config["Entrypoint"] == ["/usr/local/bin/fixexecutor"], config["Entrypoint"]
 labels = config.get("Labels") or {}
+assert labels.get("org.opencontainers.image.source") == "https://github.com/willie-yao/aster", labels
+assert labels.get("org.opencontainers.image.title") == "Aster Agent Sandbox Fix Executor", labels
+assert labels.get("org.opencontainers.image.url") == "https://github.com/willie-yao/aster", labels
 assert labels.get("org.opencontainers.image.version") == version, labels
 assert labels.get("org.opencontainers.image.revision") == commit, labels
 assert labels.get("io.prow-ai-dashboard.image-tag") == image_tag, labels

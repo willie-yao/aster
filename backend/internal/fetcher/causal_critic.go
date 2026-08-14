@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/causalcritic"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixruntime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/agentanalysis"
+	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/causalcritic"
+	"github.com/willie-yao/aster/backend/internal/fixruntime"
+	"github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 func normalizeCausalCriticOptions(cfg *CausalCriticOptions) {

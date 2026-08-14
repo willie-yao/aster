@@ -5,7 +5,7 @@ shared persistent data, authenticated server features, or cluster-local
 integration. Use [GitHub Actions and Pages](github-pages.md) for a public,
 read-only dashboard that does not need a cluster.
 
-Start with `fetcher onboard` and select **Kubernetes with Helm**. The generated
+Start with `aster onboard` and select **Kubernetes with Helm**. The generated
 consumer repository contains `project.yaml`, `prompts/system.md`, optional
 skills, `deploy/values.yaml`, and a project-specific `deploy/README.md`.
 
@@ -54,7 +54,7 @@ A normal contributor uses the published binary and does not need an engine
 source checkout or local build.
 
 ```bash
-export CLI_DIR="$HOME/.local/share/prow-ai-dashboard/$CLI_VERSION"
+export CLI_DIR="$HOME/.local/share/aster/$CLI_VERSION"
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) CLI_TARGET=linux-amd64 ;;
   Linux-aarch64|Linux-arm64) CLI_TARGET=linux-arm64 ;;
@@ -63,10 +63,10 @@ case "$(uname -s)-$(uname -m)" in
   *) printf 'Unsupported CLI platform\n' >&2; exit 1 ;;
 esac
 
-CLI_ASSET="prow-ai-dashboard-fetcher-${CLI_VERSION}-${CLI_TARGET}"
-RELEASE_URL="https://github.com/willie-yao/prow-ai-dashboard/releases/download/${CLI_VERSION}"
+CLI_ASSET="aster-${CLI_VERSION}-${CLI_TARGET}"
+RELEASE_URL="https://github.com/willie-yao/aster/releases/download/${CLI_VERSION}"
 install -d -m 755 "$CLI_DIR"
-DOWNLOAD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/prow-cli-download.XXXXXX")
+DOWNLOAD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/aster-cli-download.XXXXXX")
 trap 'find "$DOWNLOAD_DIR" -type f -delete 2>/dev/null || true; rmdir "$DOWNLOAD_DIR" 2>/dev/null || true' EXIT
 curl --fail --location "$RELEASE_URL/$CLI_ASSET" --output "$DOWNLOAD_DIR/$CLI_ASSET"
 curl --fail --location "$RELEASE_URL/SHA256SUMS" --output "$DOWNLOAD_DIR/SHA256SUMS"
@@ -81,7 +81,7 @@ test -n "$CHECKSUM_LINE"
   fi
 )
 install -m 0755 "$DOWNLOAD_DIR/$CLI_ASSET" "$CLI_DIR/$CLI_ASSET"
-export FETCHER="$CLI_DIR/$CLI_ASSET"
+export ASTER="$CLI_DIR/$CLI_ASSET"
 ```
 
 A missing asset, missing checksum entry, checksum mismatch, or unavailable
@@ -105,7 +105,7 @@ Inspect the complete values for the selected chart version when needed:
 
 ```bash
 helm show values \
-  oci://ghcr.io/willie-yao/charts/prow-ai-dashboard \
+  oci://ghcr.io/willie-yao/charts/aster \
   --version "$CHART_VERSION"
 ```
 
@@ -114,13 +114,13 @@ helm show values \
 Run the static consumer doctor:
 
 ```bash
-"$FETCHER" onboard doctor --project-dir "$PROJECT_DIR"
+"$ASTER" onboard doctor --project-dir "$PROJECT_DIR"
 ```
 
 Render locally without contacting the cluster:
 
 ```bash
-"$FETCHER" kubernetes install \
+"$ASTER" kubernetes install \
   --project-dir "$PROJECT_DIR" \
   --values deploy/values.yaml \
   --release "$RELEASE" \
@@ -133,7 +133,7 @@ Render locally without contacting the cluster:
 Run the live read-only doctor before the write command:
 
 ```bash
-"$FETCHER" kubernetes doctor \
+"$ASTER" kubernetes doctor \
   --action install \
   --project-dir "$PROJECT_DIR" \
   --values deploy/values.yaml \
@@ -151,7 +151,7 @@ blocking checks and review unverified external facts with the platform owner.
 ## Install
 
 ```bash
-"$FETCHER" kubernetes install \
+"$ASTER" kubernetes install \
   --project-dir "$PROJECT_DIR" \
   --values deploy/values.yaml \
   --release "$RELEASE" \
@@ -225,8 +225,8 @@ export PRIOR_HELM_REVISION=$(helm --kube-context "$CONTEXT" -n "$NAMESPACE" \
 After selecting and verifying the new CLI and matching chart version, run:
 
 ```bash
-"$FETCHER" onboard doctor --project-dir "$PROJECT_DIR"
-"$FETCHER" kubernetes doctor \
+"$ASTER" onboard doctor --project-dir "$PROJECT_DIR"
+"$ASTER" kubernetes doctor \
   --action upgrade \
   --project-dir "$PROJECT_DIR" \
   --values deploy/values.yaml \
@@ -234,7 +234,7 @@ After selecting and verifying the new CLI and matching chart version, run:
   --namespace "$NAMESPACE" \
   --kube-context "$CONTEXT" \
   --chart-version "$CHART_VERSION"
-"$FETCHER" kubernetes upgrade \
+"$ASTER" kubernetes upgrade \
   --project-dir "$PROJECT_DIR" \
   --values deploy/values.yaml \
   --release "$RELEASE" \

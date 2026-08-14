@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
+	"github.com/willie-yao/aster/backend/internal/ghpr"
 )
 
 // loginResolver verifies a token and returns the GitHub login it authenticates

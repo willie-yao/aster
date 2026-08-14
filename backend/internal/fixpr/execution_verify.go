@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 // ExecutionVerification is the retained tokenless validator result for one

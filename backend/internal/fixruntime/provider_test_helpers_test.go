@@ -1,6 +1,6 @@
 package fixruntime
 
-import "github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
+import "github.com/willie-yao/aster/backend/internal/modelprovider"
 
 func testGatewayProvider(endpoint, model string) modelprovider.Config {
 	return modelprovider.Normalize(modelprovider.Config{

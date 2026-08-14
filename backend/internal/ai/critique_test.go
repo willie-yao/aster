@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
+	"github.com/willie-yao/aster/backend/internal/ai/skills"
 )
 
 // TestPuntRE_SanityTable mirrors the Python harness cases so Go and Python

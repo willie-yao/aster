@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
 )
 
 const (

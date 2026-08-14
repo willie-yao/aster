@@ -180,7 +180,7 @@ func (f *Fetcher) get(ctx context.Context, owner, repo, path string) ([]byte, in
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "prow-ai-dashboard")
+	req.Header.Set("User-Agent", "aster")
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return nil, 0, err

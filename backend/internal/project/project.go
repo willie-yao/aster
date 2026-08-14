@@ -22,9 +22,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
-	agentruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
+	agentruntime "github.com/willie-yao/aster/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
 // Config is the in-memory representation of a project.yaml file.
@@ -1256,11 +1256,11 @@ func LoadPrompt(dir string) (string, error) {
 	promptPath := filepath.Join(dir, "prompts", "system.md")
 	data, err := os.ReadFile(promptPath)
 	if err != nil {
-		return "", fmt.Errorf("AI analysis requires %s; see https://github.com/willie-yao/prow-ai-dashboard/blob/main/docs/writing-prompts.md (%w)", promptPath, err)
+		return "", fmt.Errorf("AI analysis requires %s; see https://github.com/willie-yao/aster/blob/main/docs/writing-prompts.md (%w)", promptPath, err)
 	}
 	prompt := strings.TrimSpace(string(data))
 	if prompt == "" {
-		return "", fmt.Errorf("AI analysis requires non-empty %s; see https://github.com/willie-yao/prow-ai-dashboard/blob/main/docs/writing-prompts.md", promptPath)
+		return "", fmt.Errorf("AI analysis requires non-empty %s; see https://github.com/willie-yao/aster/blob/main/docs/writing-prompts.md", promptPath)
 	}
 	return prompt, nil
 }

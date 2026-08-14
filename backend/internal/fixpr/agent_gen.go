@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 // generateWithAgent produces a fix by running a coding-agent CLI in a real clone

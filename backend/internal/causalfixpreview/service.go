@@ -13,13 +13,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationinvestigation"
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/actionverify"
+	"github.com/willie-yao/aster/backend/internal/aiusage"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/remediationinvestigation"
+	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 var (

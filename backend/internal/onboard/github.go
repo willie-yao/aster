@@ -142,7 +142,7 @@ func (c githubRepositoryClient) AuthenticatedLogin(ctx context.Context, token st
 func setGitHubRequestHeaders(req *http.Request, token string) {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "prow-ai-dashboard")
+	req.Header.Set("User-Agent", "aster")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

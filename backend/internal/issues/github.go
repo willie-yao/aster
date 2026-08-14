@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
+	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
 // defaultAPIBase is the GitHub REST API root. Overridable per-client so tests
@@ -59,7 +59,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "prow-ai-dashboard")
+	req.Header.Set("User-Agent", "aster")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

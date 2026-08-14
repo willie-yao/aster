@@ -8,11 +8,11 @@ RUN_ID=$(date -u +%Y%m%d%H%M%S)-$$
 CLUSTER="pad-agent-sandbox-prod-${RUN_ID}"
 DASHBOARD_NAMESPACE=dashboard-test
 EXECUTION_NAMESPACE="pad-fix-prod-${RUN_ID}"
-EXECUTOR_REPOSITORY=prow-ai-dashboard/agent-sandbox-fix-executor
+EXECUTOR_REPOSITORY=aster/agent-sandbox-fix-executor
 EXECUTOR_TAG=production-eval
 EXECUTOR_IMAGE="${EXECUTOR_REPOSITORY}:${EXECUTOR_TAG}"
 EXECUTOR_BASE_IMAGE="${EXECUTOR_REPOSITORY}:${EXECUTOR_TAG}-base"
-GATEWAY_IMAGE=prow-ai-dashboard/fake-model-gateway:production-eval
+GATEWAY_IMAGE=aster/fake-model-gateway:production-eval
 RUNTIME_CLASS=runc-test
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/pad-agent-sandbox-prod.XXXXXX")
 EVIDENCE_DIR=${EVIDENCE_DIR:-"${TMPDIR:-/tmp}/prow-ai-agent-sandbox-v053-production-evidence-${RUN_ID}"}
@@ -306,8 +306,8 @@ agentSandbox:
     create: true
     clientServiceAccountName: ""
 VALUES
-helm template production-eval deploy/helm/prow-ai-dashboard -n "$DASHBOARD_NAMESPACE" -f "$TMP_DIR/chart-values.yaml" --show-only templates/agent-sandbox-fix-runtime-rbac.yaml >"$TMP_DIR/rbac.yaml"
-helm template production-eval deploy/helm/prow-ai-dashboard -n "$DASHBOARD_NAMESPACE" -f "$TMP_DIR/chart-values.yaml" --show-only templates/agent-sandbox-fix-runtime-admission.yaml >"$TMP_DIR/admission-production.yaml"
+helm template production-eval deploy/helm/aster -n "$DASHBOARD_NAMESPACE" -f "$TMP_DIR/chart-values.yaml" --show-only templates/agent-sandbox-fix-runtime-rbac.yaml >"$TMP_DIR/rbac.yaml"
+helm template production-eval deploy/helm/aster -n "$DASHBOARD_NAMESPACE" -f "$TMP_DIR/chart-values.yaml" --show-only templates/agent-sandbox-fix-runtime-admission.yaml >"$TMP_DIR/admission-production.yaml"
 kubectl --kubeconfig "$ADMIN_KUBECONFIG" apply -f "$TMP_DIR/rbac.yaml"
 kubectl --kubeconfig "$ADMIN_KUBECONFIG" apply -f "$TMP_DIR/admission-production.yaml"
 
@@ -436,7 +436,7 @@ text=text.replace('      credentialMode: gateway\n', '      credentialMode: dire
 text=text.replace('        type: none\n        existingSecret: ""\n        tokenKey: ""\n', '        type: bearer\n        existingSecret: agent-sandbox-model\n        tokenKey: AI_TOKEN\n')
 Path(sys.argv[2]).write_text(text)
 PYDIRECTVALUES
-helm template production-eval deploy/helm/prow-ai-dashboard -n "$DASHBOARD_NAMESPACE" -f "$TMP_DIR/chart-values-direct-bearer.yaml" --show-only templates/agent-sandbox-fix-runtime-admission.yaml >"$TMP_DIR/admission-direct-production.yaml"
+helm template production-eval deploy/helm/aster -n "$DASHBOARD_NAMESPACE" -f "$TMP_DIR/chart-values-direct-bearer.yaml" --show-only templates/agent-sandbox-fix-runtime-admission.yaml >"$TMP_DIR/admission-direct-production.yaml"
 python3 - "$TMP_DIR/admission-direct-production.yaml" "$TMP_DIR/admission-direct-local-kind.yaml" <<'PYDIRECTADMISSION'
 from pathlib import Path
 import sys

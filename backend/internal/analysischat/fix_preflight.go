@@ -7,9 +7,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/buildsource"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/buildsource"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 // ConfigureTestFixPreflight binds the provider-free target source check.

@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/actionverify"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/project"
 )
 
 const eligibilityRevision = "0123456789abcdef0123456789abcdef01234567"

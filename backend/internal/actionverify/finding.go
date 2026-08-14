@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
+	"github.com/willie-yao/aster/backend/internal/remediationpolicy"
 )
 
 // FindingSymbol identifies one uniquely grounded source declaration.

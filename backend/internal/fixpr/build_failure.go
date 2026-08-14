@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 // BuildFailure is one analyzed failed run with verified repository-local paths.

@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/assets/prow-ai-dashboard-mark.svg" alt="Prow AI Dashboard logo" width="80" height="80">
+  <img src="docs/assets/aster-mark.svg" alt="Aster logo" width="80" height="80">
 </p>
 
-# prow-ai-dashboard
+# Aster
 
 Reusable engine for AI-powered Prow and TestGrid dashboards. It discovers Prow
 jobs, analyzes failures, renders a React dashboard, and can notify maintainers or
@@ -16,7 +16,7 @@ open guarded GitHub actions without requiring each project to fork the engine.
 Run the guided onboarding wizard from the source repository you want to monitor:
 
 ```bash
-go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard
+go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard
 ```
 
 The wizard detects the current GitHub repository where possible and walks you
@@ -28,7 +28,7 @@ dry-run, pull-request, and non-interactive usage is in the
 [onboarding reference](docs/onboarding-reference.md).
 
 An LLM CLI can run the same engine-owned workflow with
-`$setup-prow-ai-consumer`. See the
+`$setup-aster-consumer`. See the
 [agent-driven setup guide](docs/agent-onboarding.md).
 
 ## Choose a deployment
@@ -68,9 +68,15 @@ deploy/values.yaml             # Kubernetes
 - **Deployment configuration** supplies infrastructure details such as runner
   selection, model credentials, persistence, and authenticated server settings.
 
+Aster preserves existing compatibility identifiers where changing them would
+strand deployed consumers or persisted state. This includes `project.yaml` and
+Helm value keys, JSON and state filenames, `prow-ai-dashboard/*` Kubernetes
+labels and annotations, `PROW_AI_*` environment variables, action deduplication
+markers, browser storage keys, and existing Helm release names.
+
 The files under [`configs/example`](configs/example) are references, not a
 ready-to-deploy consumer. Replace every placeholder and validate the result with
-`onboard doctor`.
+`aster onboard doctor`.
 
 ## How data flows
 

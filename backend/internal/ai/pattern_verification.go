@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/buildsource"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/actionverify"
+	"github.com/willie-yao/aster/backend/internal/buildsource"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 // VerifyPatternRemediation checks structured pattern targets at the current

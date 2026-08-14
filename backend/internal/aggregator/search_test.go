@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 var searchBaseTime = time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	agentruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	agentruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 // ErrOutputValidation marks an agent result that failed the output contract.

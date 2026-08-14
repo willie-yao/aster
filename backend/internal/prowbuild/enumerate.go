@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
 // ListRecentBuilds returns up to count builds for job, newest first.

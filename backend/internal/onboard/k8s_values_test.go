@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/project"
 	"gopkg.in/yaml.v3"
 )
 
@@ -104,7 +104,7 @@ func TestK8sValuesDocumentsOptionalConfiguration(t *testing.T) {
 		"# nodeSelector: {}",
 		"# tolerations: []",
 		"# affinity: {}",
-		"helm show values oci://ghcr.io/willie-yao/charts/prow-ai-dashboard",
+		"helm show values oci://ghcr.io/willie-yao/charts/aster",
 		"Use values.schema.json from the same published chart version",
 		"Published values reference:",
 	} {
@@ -167,7 +167,7 @@ func TestK8sValuesActiveKeysExistInChartDefaults(t *testing.T) {
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	chartValuesPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "deploy", "helm", "prow-ai-dashboard", "values.yaml")
+	chartValuesPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "deploy", "helm", "aster", "values.yaml")
 	chartBytes, err := os.ReadFile(chartValuesPath)
 	if err != nil {
 		t.Fatalf("read chart values: %v", err)

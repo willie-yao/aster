@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Upgrade an existing prow-ai-dashboard release to one immutable image snapshot.
+Upgrade an existing Aster release to one immutable image snapshot.
 
 Usage:
   upgrade.sh --context CONTEXT --namespace NAMESPACE --release RELEASE \
@@ -163,7 +163,7 @@ if ! grep -Fq -- '--rollback-on-failure' <<< "$helm_upgrade_help"; then
 fi
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-chart=$script_dir/prow-ai-dashboard
+chart=$script_dir/aster
 [[ -f $chart/Chart.yaml ]] || fail "chart not found: $chart"
 
 tmp=$(mktemp -d)

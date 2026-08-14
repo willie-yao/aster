@@ -17,12 +17,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/agentanalysis"
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
+	"github.com/willie-yao/aster/backend/internal/models"
+	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 func TestExecuteRunsOneNativeSessionAndReturnsAnalysis(t *testing.T) {

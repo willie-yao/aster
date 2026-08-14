@@ -5,11 +5,11 @@
 
 # Path to a consumer project directory containing project.yaml + prompts/system.md.
 # Override on the command line, e.g.:
-#   make fetch-data PROJECT_DIR=../capz-prow-ai-dashboard
+#   make fetch-data PROJECT_DIR=../capz-aster
 PROJECT_DIR ?= configs/example
 
 # Container image coordinates for `make image`.
-IMAGE ?= ghcr.io/willie-yao/prow-ai-dashboard
+IMAGE ?= ghcr.io/willie-yao/aster
 VERSION ?= dev
 
 # Default target
@@ -19,7 +19,7 @@ all: build
 
 # Build the data fetcher binary
 build:
-	cd backend && go build -o ../bin/fetcher ./cmd/fetcher/
+	cd backend && go build -o ../bin/aster ./cmd/aster/
 
 # Build the Kubernetes-native API server binary
 build-server:
@@ -49,7 +49,7 @@ dev-actions: build-server fe-build
 		-project-dir=$(PROJECT_DIR)
 
 # Build the container image (fetcher + server + SPA). Override IMAGE/VERSION:
-#   make image IMAGE=ghcr.io/you/prow-ai-dashboard VERSION=v1.2.3
+#   make image IMAGE=ghcr.io/you/aster VERSION=v1.2.3
 image:
 	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(VERSION) .
 
@@ -108,20 +108,20 @@ tidy:
 
 # Lint and render the Helm chart.
 helm-check:
-	bash deploy/helm/prow-ai-dashboard/test-schema.sh
-	bash deploy/helm/prow-ai-dashboard/test-render.sh
-	bash deploy/helm/prow-ai-dashboard/test-operations.sh
-	bash deploy/helm/prow-ai-dashboard-platform/test-schema.sh
-	bash deploy/helm/prow-ai-dashboard-platform/test-render.sh
-	bash deploy/helm/prow-ai-dashboard-platform/test-release.sh
-	bash deploy/helm/prow-ai-dashboard-platform/test-kind-cleanup.sh
+	bash deploy/helm/aster/test-schema.sh
+	bash deploy/helm/aster/test-render.sh
+	bash deploy/helm/aster/test-operations.sh
+	bash deploy/helm/aster-platform/test-schema.sh
+	bash deploy/helm/aster-platform/test-render.sh
+	bash deploy/helm/aster-platform/test-release.sh
+	bash deploy/helm/aster-platform/test-kind-cleanup.sh
 	bash hack/test-publish-release.sh
 	bash hack/test-verify-release-images.sh
 	bash hack/test-kubernetes-cleanroom.sh
 	bash hack/test-kubernetes-verification-failures.sh
 	bash hack/test-cli-download-failclosed.sh
 	bash deploy/helm/test-upgrade.sh
-	bash -n deploy/helm/prow-ai-dashboard-platform/test-kind.sh
+	bash -n deploy/helm/aster-platform/test-kind.sh
 	bash -n experimental/agent-sandbox/run-kind-evaluation.sh
 
 # Validate the generated provider-free Kubernetes contributor contract.
@@ -136,19 +136,19 @@ check-repo-map:
 
 # Fetch fresh test data from GCS into frontend/public/data/
 fetch-data: build
-	./bin/fetcher -project-dir=$(PROJECT_DIR) -builds=8 -workers=5 -out=frontend/public/data -timeout=5m
+	./bin/aster -project-dir=$(PROJECT_DIR) -builds=8 -workers=5 -out=frontend/public/data -timeout=5m
 
 # Fetch minimal data (3 builds per job, faster)
 fetch-data-quick: build
-	./bin/fetcher -project-dir=$(PROJECT_DIR) -builds=3 -workers=5 -out=frontend/public/data -timeout=3m
+	./bin/aster -project-dir=$(PROJECT_DIR) -builds=3 -workers=5 -out=frontend/public/data -timeout=3m
 
 # Fetch data with AI analysis (requires AI_TOKEN env var)
 fetch-data-ai: build
-	./bin/fetcher -project-dir=$(PROJECT_DIR) -builds=8 -workers=5 -out=frontend/public/data -timeout=30m -ai
+	./bin/aster -project-dir=$(PROJECT_DIR) -builds=8 -workers=5 -out=frontend/public/data -timeout=30m -ai
 
 # Fetch minimal data with AI analysis
 fetch-data-ai-quick: build
-	./bin/fetcher -project-dir=$(PROJECT_DIR) -builds=3 -workers=5 -out=frontend/public/data -timeout=5m -ai
+	./bin/aster -project-dir=$(PROJECT_DIR) -builds=3 -workers=5 -out=frontend/public/data -timeout=5m -ai
 
 ## ─── Frontend ─────────────────────────────────────────────────
 
@@ -200,7 +200,7 @@ clean-all: clean clean-cache
 ## ─── Help ─────────────────────────────────────────────────────
 
 help:
-	@echo "prow-ai-dashboard — Make Targets"
+	@echo "Aster - Make Targets"
 	@echo ""
 	@echo "  build              Build Go data fetcher binary"
 	@echo "  build-server       Build Go API server binary"
@@ -220,7 +220,7 @@ help:
 	@echo "  fetch-data-ai-quick  Fetch minimal data + AI analysis"
 	@echo ""
 	@echo "    Override PROJECT_DIR to point at a consumer repo, e.g.:"
-	@echo "      make fetch-data PROJECT_DIR=../capz-prow-ai-dashboard"
+	@echo "      make fetch-data PROJECT_DIR=../capz-aster"
 	@echo "    Default: configs/example (renders an empty dashboard, smoke-test only)"
 	@echo ""
 	@echo "  fe-install         Install frontend npm dependencies"

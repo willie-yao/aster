@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/causalfixpreview"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationinvestigation"
+	"github.com/willie-yao/aster/backend/internal/auth"
+	"github.com/willie-yao/aster/backend/internal/causalfixpreview"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/remediationinvestigation"
 )
 
 type fakeCausalRemediationRunner struct {

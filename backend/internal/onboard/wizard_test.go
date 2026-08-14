@@ -12,12 +12,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
 )
 
-const defaultTestDashboardRepo = "example/project-prow-ai-dashboard"
+const defaultTestDashboardRepo = "example/project-aster"
 
 type wizardFakeRepositoryClient struct {
 	metadata      RepositoryMetadata
@@ -255,7 +255,7 @@ func TestWizard_DefaultsAccepted(t *testing.T) {
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
-	if writer.writes != 1 || writer.outDir != "project-prow-ai-dashboard" {
+	if writer.writes != 1 || writer.outDir != "project-aster" {
 		t.Fatalf("writes=%d out=%q", writer.writes, writer.outDir)
 	}
 	projectYAML := writer.files["project.yaml"]
@@ -450,7 +450,7 @@ func TestRun_CompleteFlagsRemainNonInteractive(t *testing.T) {
 	deps.wizard = panicWizardUI{}
 	disabled := false
 	opts := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 		SourceRepo: "git@github.com:example/project.git", Mode: modePages,
 		EngineRef: "main", OutDir: "out", NoPrompt: true, AIEnabled: &disabled,
 	}
@@ -473,9 +473,9 @@ func TestRun_InteractiveAndFlaggedInputsGenerateSameFiles(t *testing.T) {
 	flaggedDeps.terminal.Interactive = false
 	disabled := false
 	flagged := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 		SourceRepo: "example/project", Mode: modePages, ID: "project", Name: "Project",
-		EngineRef: "main", OutDir: "project-prow-ai-dashboard", NoPrompt: true, AIEnabled: &disabled,
+		EngineRef: "main", OutDir: "project-aster", NoPrompt: true, AIEnabled: &disabled,
 	}
 	if err := run(context.Background(), flagged, flaggedDeps); err != nil {
 		t.Fatalf("flagged run: %v", err)
@@ -496,9 +496,9 @@ func TestRun_K8sInteractiveAndFlaggedInputsGenerateSameFiles(t *testing.T) {
 	flaggedDeps.terminal.Interactive = false
 	disabled := false
 	flagged := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 		SourceRepo: "example/project", Mode: modeK8s, ID: "project", Name: "Project",
-		EngineRef: "main", OutDir: "project-prow-ai-dashboard", NoPrompt: true, AIEnabled: &disabled,
+		EngineRef: "main", OutDir: "project-aster", NoPrompt: true, AIEnabled: &disabled,
 	}
 	if err := run(context.Background(), flagged, flaggedDeps); err != nil {
 		t.Fatalf("flagged run: %v", err)
@@ -511,7 +511,7 @@ func TestRun_K8sInteractiveAndFlaggedInputsGenerateSameFiles(t *testing.T) {
 func TestBuildPlan_DoesNotContainTokens(t *testing.T) {
 	deps, _, _, _ := wizardDependencies("")
 	opts := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out",
 		NoPrompt: true, GitHubToken: "fixture-github-token",
 	}
@@ -687,13 +687,13 @@ func TestWizard_DetectedForkUsesUpstreamSourceAndForkDashboardOwner(t *testing.T
 	if !strings.Contains(projectYAML, `owner: "upstream-owner"`) {
 		t.Fatalf("upstream source repo not used:\n%s", projectYAML)
 	}
-	if !strings.Contains(projectYAML, `site_url: "https://fork-owner.github.io/project-prow-ai-dashboard"`) {
+	if !strings.Contains(projectYAML, `site_url: "https://fork-owner.github.io/project-aster"`) {
 		t.Fatalf("detected fork owner was not preserved for the dashboard destination:\n%s", projectYAML)
 	}
 	if !strings.Contains(out.String(), "original Git remote owner and source repository name (high confidence)") {
 		t.Fatalf("dashboard inference source missing:\n%s", out.String())
 	}
-	if writer.outDir != filepath.Join("..", "project-prow-ai-dashboard") {
+	if writer.outDir != filepath.Join("..", "project-aster") {
 		t.Fatalf("dashboard consumer directory = %q", writer.outDir)
 	}
 }
@@ -703,7 +703,7 @@ func TestRun_OpenPRDryRunDoesNotCallGitHub(t *testing.T) {
 	pullRequests := deps.pullRequests.(*fakePullRequestWriter)
 	disabled := false
 	opts := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", NoPrompt: true,
 		AIEnabled: &disabled, OpenPR: true, DryRun: true,
 	}
@@ -733,7 +733,7 @@ func TestBuildPlan_RejectsCredentialInRenderedFilesWithoutLeaking(t *testing.T) 
 	deps, _, _, _ := wizardDependencies("")
 	deps.prompts = &fakePromptBuilder{content: "fixture-github-token"}
 	opts := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out",
 		NoPrompt: true, GitHubToken: "fixture-github-token",
 	}
@@ -751,7 +751,7 @@ func TestBuildPlan_SeparatesPromptAgentAndDeploymentProvider(t *testing.T) {
 	prompts := &fakePromptBuilder{drafted: true}
 	deps.prompts = prompts
 	opts := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", OutDir: "out",
 		PromptMode: promptModeAgent, PromptAgentModel: "github-copilot/claude-sonnet-4.6",
 		DeploymentAIAPI: project.AIAPIResponses, DeploymentAIEndpoint: "https://deploy.example/v1/responses",
@@ -810,7 +810,7 @@ func TestWizard_ExplicitTestGridPromptsForRequiredPresubmits(t *testing.T) {
 func TestSetPlanCategoryTokens_RejectsCredentialBeforeMutation(t *testing.T) {
 	deps, _, _, _ := wizardDependencies("")
 	opts := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-prow-ai-dashboard",
+		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out",
 		NoPrompt: true, GitHubToken: "fixture-github-token",
 	}
@@ -1026,7 +1026,7 @@ func TestWizard_AuthenticatedUserOwnsUpstreamDashboardSuggestion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runWizard: %v\n%s", err, out.String())
 	}
-	if plan.DashboardRepo.FullName != "authenticated-owner/project-prow-ai-dashboard" {
+	if plan.DashboardRepo.FullName != "authenticated-owner/project-aster" {
 		t.Fatalf("dashboard repo = %+v", plan.DashboardRepo)
 	}
 	if repositories.authCalls != 1 || repositories.authTokenSeen != "fixture-token" {
@@ -1042,7 +1042,7 @@ func TestWizard_AuthenticatedUserOwnsUpstreamDashboardSuggestion(t *testing.T) {
 
 func TestWizard_NoSafeDashboardOwnerRequiresInput(t *testing.T) {
 	deps, out, _, _ := wizardDependencies("")
-	ui := &queuedWizardUI{inputs: []string{"chosen-owner/project-prow-ai-dashboard"}}
+	ui := &queuedWizardUI{inputs: []string{"chosen-owner/project-aster"}}
 	deps.wizard = ui
 	disabled := false
 	plan, _, err := runWizard(context.Background(), Options{
@@ -1056,7 +1056,7 @@ func TestWizard_NoSafeDashboardOwnerRequiresInput(t *testing.T) {
 	if len(ui.inputPrompts) != 1 || ui.inputPrompts[0].Title != "Dashboard repository" || ui.inputPrompts[0].Value != "" || !ui.inputPrompts[0].Required {
 		t.Fatalf("dashboard prompt = %+v", ui.inputPrompts)
 	}
-	if plan.DashboardRepo.FullName != "chosen-owner/project-prow-ai-dashboard" {
+	if plan.DashboardRepo.FullName != "chosen-owner/project-aster" {
 		t.Fatalf("dashboard repo = %+v", plan.DashboardRepo)
 	}
 	if inferred := plan.Provenance["dashboard_repo"]; inferred.Source != "confirmed dashboard repository input" || inferred.Confidence != ConfidenceHigh {
@@ -1256,8 +1256,8 @@ func TestRun_DryRunShowsCreateReplaceAndStaleFiles(t *testing.T) {
 }
 
 func TestSiblingDashboardConsumerDirUsesCheckoutRoot(t *testing.T) {
-	got := siblingDashboardConsumerDir("/workspace/source", "/workspace/source/backend", "project-prow-ai-dashboard")
-	want := filepath.Join("..", "..", "project-prow-ai-dashboard")
+	got := siblingDashboardConsumerDir("/workspace/source", "/workspace/source/backend", "project-aster")
+	want := filepath.Join("..", "..", "project-aster")
 	if got != want {
 		t.Fatalf("sibling directory = %q, want %q", got, want)
 	}

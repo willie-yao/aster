@@ -18,12 +18,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prowbuild"
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/analysisruntime"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/orka"
+	"github.com/willie-yao/aster/backend/internal/output"
+	"github.com/willie-yao/aster/backend/internal/prowbuild"
 	"k8s.io/client-go/rest"
 )
 

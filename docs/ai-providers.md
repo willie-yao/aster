@@ -59,7 +59,7 @@ counts. The dashboard does not publish or retain provider chain-of-thought or
 encrypted reasoning payloads. A non-empty effort changes model and cache
 fingerprints; empty preserves the historical request body and fingerprint.
 
-The guided `fetcher onboard` wizard includes coordinate presets for GitHub
+The guided `aster onboard` wizard includes coordinate presets for GitHub
 Copilot Responses, GitHub Copilot Chat Completions, OpenAI Responses, OpenAI
 Chat Completions, and the public NVIDIA API.
 It also provides guided self-hosted, Azure, custom, and configure-later paths.
@@ -103,7 +103,7 @@ ai:
 # In the consumer's .github/workflows/deploy.yml
 jobs:
   deploy:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
     with:
       project_dir: .
       ai-model: ${{ vars.AI_MODEL }}

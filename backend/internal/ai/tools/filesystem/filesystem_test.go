@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/artifacts"
 )
 
 // fakeBrowser is a small in-memory Browser shared across filesystem tests.

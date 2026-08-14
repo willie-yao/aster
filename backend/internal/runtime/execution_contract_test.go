@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
 )
 
 func gatewayProvider(endpoint, model string) modelprovider.Config {

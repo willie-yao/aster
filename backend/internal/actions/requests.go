@@ -14,15 +14,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actiondraft"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/issues"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/patternstate"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
+	"github.com/willie-yao/aster/backend/internal/actiondraft"
+	"github.com/willie-yao/aster/backend/internal/actionverify"
+	"github.com/willie-yao/aster/backend/internal/fixpr"
+	"github.com/willie-yao/aster/backend/internal/issues"
+	"github.com/willie-yao/aster/backend/internal/patternstate"
+	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/remediationpolicy"
+	"github.com/willie-yao/aster/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/statefile"
 )
 
 const (

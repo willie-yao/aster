@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/project"
 )
 
 func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Options, error) {
@@ -28,7 +28,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	if closer, ok := prompt.(io.Closer); ok {
 		defer func() { _ = closer.Close() }()
 	}
-	fmt.Fprintln(deps.terminal.Out, "Guided prow-ai-dashboard onboarding")
+	fmt.Fprintln(deps.terminal.Out, "Guided Aster onboarding")
 	fmt.Fprintln(deps.terminal.Out, "Use Ctrl+C to cancel. No files are written before final confirmation.")
 	fmt.Fprintln(deps.terminal.Out)
 

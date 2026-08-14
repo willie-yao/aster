@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/project"
 	"gopkg.in/yaml.v3"
 )
 
@@ -214,7 +214,7 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 		return
 	}
 	if !reusableDeployReference(deploy.Uses) {
-		add("Pages workflow", DoctorFail, "jobs.deploy.uses does not target the dashboard reusable-deploy workflow", "Restore the generated uses target for prow-ai-dashboard/.github/workflows/reusable-deploy.yml.")
+		add("Pages workflow", DoctorFail, "jobs.deploy.uses does not target the dashboard reusable-deploy workflow", "Restore the generated uses target for aster/.github/workflows/reusable-deploy.yml.")
 		return
 	}
 	if value, ok := deploy.With["include-presubmits"]; ok {
@@ -316,8 +316,10 @@ func reusableDeployReference(value string) bool {
 		return false
 	}
 	parts := strings.Split(workflow, "/")
-	return len(parts) == 5 && parts[0] == "willie-yao" && parts[1] == "prow-ai-dashboard" &&
-		parts[2] == ".github" && parts[3] == "workflows" && parts[4] == "reusable-deploy.yml"
+	if len(parts) != 5 || parts[0] != "willie-yao" || parts[2] != ".github" || parts[3] != "workflows" || parts[4] != "reusable-deploy.yml" {
+		return false
+	}
+	return parts[1] == "aster" || parts[1] == "prow-ai-dashboard"
 }
 
 func githubExpression(value any, scope, name string) bool {

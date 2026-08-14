@@ -42,7 +42,7 @@ run_case() {
 }
 
 run_case secrets-store-csi-image-scan /path/to/secrets-store-csi-prow-dashboard-eval
-run_case kueue-was-podgroup-api-mismatch /path/to/kueue-prow-ai-dashboard-eval
+run_case kueue-was-podgroup-api-mismatch /path/to/kueue-aster-eval
 run_case gcp-pd-csi-windows-mount-visibility /path/to/gcp-pd-csi-prow-dashboard-eval
 ```
 

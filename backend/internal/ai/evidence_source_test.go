@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
 )
 
 type evidenceSourceTool struct{ source EvidenceReadSource }

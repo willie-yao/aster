@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 func testEvidenceCatalog() EvidenceCatalog {

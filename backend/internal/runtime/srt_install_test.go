@@ -64,7 +64,7 @@ func TestSRTInstallerContract(t *testing.T) {
 		t.Fatalf("read Dockerfile: %v", err)
 	}
 	dockerText := string(dockerfile)
-	if !strings.Contains(dockerText, "install-srt /usr/local/share/prow-ai-dashboard/srt") {
+	if !strings.Contains(dockerText, "install-srt /usr/local/share/aster/srt") {
 		t.Fatal("fixer image does not use the verified srt installer")
 	}
 	if strings.Contains(dockerText, `npm install -g "opencode-ai@${OPENCODE_VERSION}" "@anthropic-ai/sandbox-runtime@`) {

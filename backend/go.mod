@@ -1,4 +1,4 @@
-module github.com/willie-yao/prow-ai-dashboard/backend
+module github.com/willie-yao/aster/backend
 
 go 1.25.12
 

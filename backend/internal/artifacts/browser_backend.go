@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
+	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
 // Per-file cache cap. The browser caches whole files at or below this size so

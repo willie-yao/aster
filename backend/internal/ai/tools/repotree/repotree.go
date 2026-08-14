@@ -24,7 +24,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
 )
 
 // Group is the alias used to enable all repo tools at once.

@@ -1,7 +1,7 @@
 # Kubernetes platform setup
 
 This guide defines the cluster-administrator contract for one or more
-prow-ai-dashboard consumer releases. Project contributors own reviewed consumer
+Aster consumer releases. Project contributors own reviewed consumer
 configuration and application releases. Platform administrators own shared or
 cluster-scoped prerequisites.
 
@@ -66,9 +66,9 @@ chart includes a verifier for the official `sandbox.yaml` asset and its pinned
 SHA-256.
 
 ```bash
-helm pull oci://ghcr.io/willie-yao/charts/prow-ai-dashboard-platform \
+helm pull oci://ghcr.io/willie-yao/charts/aster-platform \
   --version "$PLATFORM_CHART_VERSION" --untar
-./prow-ai-dashboard-platform/verify-agent-sandbox-release.sh \
+./aster-platform/verify-agent-sandbox-release.sh \
   --output ./sandbox-v0.5.3.yaml
 kubectl --context "$CONTEXT" apply -f ./sandbox-v0.5.3.yaml
 ```
@@ -155,12 +155,12 @@ Render and install with the explicit context:
 
 ```bash
 helm template "$PLATFORM_RELEASE" \
-  oci://ghcr.io/willie-yao/charts/prow-ai-dashboard-platform \
+  oci://ghcr.io/willie-yao/charts/aster-platform \
   --version "$PLATFORM_CHART_VERSION" \
   --namespace "$NAMESPACE" \
   --values platform-values.yaml >/dev/null
 helm upgrade --install "$PLATFORM_RELEASE" \
-  oci://ghcr.io/willie-yao/charts/prow-ai-dashboard-platform \
+  oci://ghcr.io/willie-yao/charts/aster-platform \
   --version "$PLATFORM_CHART_VERSION" \
   --namespace "$NAMESPACE" \
   --create-namespace \
@@ -183,7 +183,7 @@ Hand these non-secret values to the project contributor:
 
 ## Verify target-cluster acceptance
 
-Run `fetcher kubernetes doctor` before the application install. Resolve all
+Run `aster kubernetes doctor` before the application install. Resolve all
 blocking checks. The doctor cannot prove:
 
 - secure-runtime isolation or node-handler functionality;
@@ -212,7 +212,7 @@ separately deleting retained resources. Agent Sandbox, RuntimeClass, nodes,
 Secrets, storage, DNS, certificates, and external infrastructure remain owned by
 their original systems.
 
-See the [platform chart README](../deploy/helm/prow-ai-dashboard-platform/README.md)
+See the [platform chart README](../deploy/helm/aster-platform/README.md)
 for exact values and retention details, and the
 [Kubernetes operator reference](kubernetes-reference.md) for application
 architecture and advanced behavior.

@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/agentanalysis"
+	"github.com/willie-yao/aster/backend/internal/models"
+	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 func TestValidationCodesRemainStable(t *testing.T) {

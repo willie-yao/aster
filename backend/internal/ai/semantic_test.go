@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/ai/skills"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 func TestSemanticCritique_ParsesFindings(t *testing.T) {

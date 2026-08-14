@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
+	"github.com/willie-yao/aster/backend/internal/ghpr"
 )
 
 const exactAnalysisRevision = "0123456789abcdef0123456789abcdef01234567"

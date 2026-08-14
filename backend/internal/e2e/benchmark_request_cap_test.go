@@ -3,7 +3,7 @@ package e2e
 import (
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/project"
 )
 
 type benchmarkRequestCap struct {

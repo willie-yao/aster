@@ -1,6 +1,6 @@
 name: Reusable Deploy
 
-# Reusable workflow that builds and deploys a Prow AI Dashboard for a single
+# Reusable workflow that builds and deploys an Aster dashboard for a single
 # project. Consumer repos call this from a workflow in their own repo and
 # point at the directory in their checkout that holds project.yaml plus
 # prompts/system.md. The engine repo is checked out separately for the Go
@@ -9,7 +9,7 @@ name: Reusable Deploy
 # Example consumer workflow:
 #   jobs:
 #     deploy:
-#       uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+#       uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
 #       with:
 #         # Optional: keep private or preview model identifiers and private
 #         # endpoint URLs out of the public project.yaml by sourcing them
@@ -227,7 +227,7 @@ jobs:
           go-version-file: engine/backend/go.mod
           cache-dependency-path: engine/backend/go.sum
 
-      - name: Build data fetcher
+      - name: Build Aster data command
         if: ${{ !inputs.skip-fetch }}
         working-directory: engine/backend
         run: |
@@ -239,7 +239,7 @@ jobs:
           [ -z "$VERSION" ] && VERSION="dev-$(git rev-parse --short HEAD)"
           COMMIT="$(git rev-parse HEAD)"
           echo "Building fetcher version $VERSION at $COMMIT"
-          go build -ldflags "-X main.version=$VERSION -X main.commit=$COMMIT -X main.imageTag=github-pages" -o "$GITHUB_WORKSPACE/fetcher" ./cmd/fetcher/
+          go build -ldflags "-X main.version=$VERSION -X main.commit=$COMMIT -X main.imageTag=github-pages" -o "$GITHUB_WORKSPACE/aster" ./cmd/aster/
 
       # Restore cached data (job JSON + AI cache) so we only fetch new builds.
       - name: Restore data cache
@@ -273,7 +273,7 @@ jobs:
           if [ "${{ inputs.include-presubmits }}" = "true" ]; then
             PRESUBMITS_FLAG="-include-presubmits"
           fi
-          "$GITHUB_WORKSPACE/fetcher" \
+          "$GITHUB_WORKSPACE/aster" \
             -project-dir="${{ steps.cfg.outputs.project_dir_abs }}" \
             -builds=${{ inputs.builds }} \
             -workers=${{ inputs.workers }} \

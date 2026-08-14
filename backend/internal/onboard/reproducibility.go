@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 const (
@@ -73,7 +73,7 @@ func findEngineCheckout() string {
 	current := filepath.Clean(cwd)
 	for {
 		goMod := filepath.Join(current, "backend", "go.mod")
-		if data, err := os.ReadFile(goMod); err == nil && strings.Contains(string(data), "module github.com/willie-yao/prow-ai-dashboard/backend") {
+		if data, err := os.ReadFile(goMod); err == nil && strings.Contains(string(data), "module github.com/willie-yao/aster/backend") {
 			return current
 		}
 		parent := filepath.Dir(current)

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/orka"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/orka"
+	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 // New returns the configured coding-agent runtime. The default OpenCode backend is local-development or trusted-CI only.

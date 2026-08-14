@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysischat"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/corrections"
+	"github.com/willie-yao/aster/backend/internal/analysischat"
+	"github.com/willie-yao/aster/backend/internal/corrections"
 )
 
 type fakeCorrectionRunner struct {

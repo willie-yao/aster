@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/artifacts"
 )
 
 // fakeBrowser is an in-memory artifacts.Browser shaped like a CAPI-style build

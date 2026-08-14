@@ -2,9 +2,9 @@
 
 The repository ships two portable Agent Skills for compatible LLM CLIs:
 
-- [`setup-prow-ai-consumer`](../.agents/skills/setup-prow-ai-consumer/SKILL.md)
+- [`setup-aster-consumer`](../.agents/skills/setup-aster-consumer/SKILL.md)
   creates or updates a validated consumer through the engine CLI.
-- [`author-prow-ai-diagnostics`](../.agents/skills/author-prow-ai-diagnostics/SKILL.md)
+- [`author-aster-diagnostics`](../.agents/skills/author-aster-diagnostics/SKILL.md)
   investigates a valid consumer, improves its project prompt, proposes bounded
   diagnostic recipes, and benchmarks held-out failures without activating the
   recipes.
@@ -26,8 +26,8 @@ copying their supporting files.
 Install both skills for Codex at personal scope:
 
 ```bash
-npx --yes skills@latest add willie-yao/prow-ai-dashboard \
-  --skill setup-prow-ai-consumer author-prow-ai-diagnostics \
+npx --yes skills@latest add willie-yao/aster \
+  --skill setup-aster-consumer author-aster-diagnostics \
   --agent codex \
   --global \
   --yes
@@ -43,8 +43,8 @@ For project scope, run the same command from the intended workspace without
 `--global`:
 
 ```bash
-npx --yes skills@latest add willie-yao/prow-ai-dashboard \
-  --skill setup-prow-ai-consumer author-prow-ai-diagnostics \
+npx --yes skills@latest add willie-yao/aster \
+  --skill setup-aster-consumer author-aster-diagnostics \
   --agent codex \
   --yes
 ```
@@ -67,16 +67,16 @@ Project scope:
 
 ```bash
 mkdir -p .agents/skills
-cp -R /path/to/prow-ai-dashboard/.agents/skills/setup-prow-ai-consumer .agents/skills/
-cp -R /path/to/prow-ai-dashboard/.agents/skills/author-prow-ai-diagnostics .agents/skills/
+cp -R /path/to/aster/.agents/skills/setup-aster-consumer .agents/skills/
+cp -R /path/to/aster/.agents/skills/author-aster-diagnostics .agents/skills/
 ```
 
 Personal scope:
 
 ```bash
 mkdir -p ~/.agents/skills
-cp -R /path/to/prow-ai-dashboard/.agents/skills/setup-prow-ai-consumer ~/.agents/skills/
-cp -R /path/to/prow-ai-dashboard/.agents/skills/author-prow-ai-diagnostics ~/.agents/skills/
+cp -R /path/to/aster/.agents/skills/setup-aster-consumer ~/.agents/skills/
+cp -R /path/to/aster/.agents/skills/author-aster-diagnostics ~/.agents/skills/
 ```
 
 Use the client-specific personal directory only when the client does not support
@@ -90,20 +90,20 @@ before asking about selectors, and use the discovery-suggested consumer identity
 when one is available:
 
 ```text
-Use $setup-prow-ai-consumer to create a Pages consumer for
+Use $setup-aster-consumer to create a Pages consumer for
 https://github.com/kubernetes-sigs/kueue. Store it in a timestamped Codex
-workspace under ~/.codex/deployments/prow-ai-dashboard, exclude presubmits,
+workspace under ~/.codex/deployments/aster, exclude presubmits,
 and keep deployed AI enabled. Do not ask me to clone the source repository.
 ```
 
 ```text
-Use $setup-prow-ai-consumer for
+Use $setup-aster-consumer for
 https://github.com/kubernetes-sigs/gcp-compute-persistent-disk-csi-driver and
 put the consumer files in the current directory.
 ```
 
 ```text
-Use $setup-prow-ai-consumer to create a separate Kubernetes consumer checkout
+Use $setup-aster-consumer to create a separate Kubernetes consumer checkout
 for kubernetes-sigs/secrets-store-csi-driver.
 ```
 
@@ -123,7 +123,7 @@ job identities and writes canonical `manifest/apply-result.json` and
 
 The skill should also trigger for requests such as:
 
-- “Set up a prow-ai-dashboard consumer for this project.”
+- “Set up an Aster consumer for this project.”
 - “Create a dashboard consumer repo for this repository.”
 - “Run onboarding without the interactive wizard.”
 - “Add the consumer files to this repository.”
@@ -140,7 +140,7 @@ The skill should also trigger for requests such as:
   a warning when sampled builds have no JUnit and only build-level analysis may
   be available.
 - A validated machine-readable handoff with first-class artifact location and
-  test-infra identity for `$author-prow-ai-diagnostics`.
+  test-infra identity for `$author-aster-diagnostics`.
 
 Git initialization, GitHub repository creation, pushes, pull requests, Pages
 configuration, Secret writes, Helm installation, and deployment remain separate
@@ -151,7 +151,7 @@ confirmation-gated actions.
 The agent should:
 
 1. Determine the source and intended consumer repository identities.
-2. Run `fetcher onboard discover -json`.
+2. Run `aster onboard discover -json`.
 3. Select Pages or Kubernetes from artifact privacy, provider reachability,
    authentication, persistent state, admin actions, and cluster-local endpoints.
 4. Run a complete non-interactive dry run with `-prompt-mode handoff`,
@@ -161,7 +161,7 @@ The agent should:
 6. Apply the saved artifact with `-apply-plan`, `-plan-digest`, `-result-out`,
    `-handoff-out`, and `-artifact-smoke-builds` after confirmation.
 7. Validate `manifest/setup-handoff.json` with the setup skill's bundled script.
-8. Pass the validated handoff to `$author-prow-ai-diagnostics`.
+8. Pass the validated handoff to `$author-aster-diagnostics`.
 9. Report remaining checklist and deployment work.
 
 For an existing consumer, the first dry run reports conflicts. The agent must
@@ -175,7 +175,7 @@ Onboarding's direct `-open-pr` mode is intentionally not used because local
 doctor, artifact smoke, and handoff validation require local files. The plan and
 result files stay outside the consumer destination.
 
-The skill must use `fetcher onboard` rather than hand-writing `project.yaml`,
+The skill must use `aster onboard` rather than hand-writing `project.yaml`,
 workflows, Helm values, or deployment guides. This keeps agent-driven setup on
 the same discovery, validation, credential, path, preservation, and hashing
 contracts as the wizard.
@@ -185,7 +185,7 @@ contracts as the wizard.
 After the consumer passes doctor, invoke:
 
 ```text
-Use $author-prow-ai-diagnostics to investigate representative historical
+Use $author-aster-diagnostics to investigate representative historical
 failures for this consumer, improve prompts/system.md, and propose recipes only
 under proposals/skills without activating them.
 ```
@@ -228,7 +228,7 @@ Update these global installations from their recorded source:
 
 ```bash
 npx --yes skills@latest update \
-  setup-prow-ai-consumer author-prow-ai-diagnostics \
+  setup-aster-consumer author-aster-diagnostics \
   --global \
   --yes
 ```

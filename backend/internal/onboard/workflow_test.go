@@ -44,7 +44,7 @@ func TestReusableDeployContract(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		"github.job_workflow_sha",
-		"repository: willie-yao/prow-ai-dashboard\n          # Build the engine code",
+		"repository: willie-yao/aster\n          # Build the engine code",
 	} {
 		if strings.Contains(workflow, forbidden) {
 			t.Errorf("reusable deploy workflow contains stale contract %q", forbidden)

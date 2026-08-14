@@ -6,10 +6,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aggregator"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/junit"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/resolve"
+	"github.com/willie-yao/aster/backend/internal/aggregator"
+	"github.com/willie-yao/aster/backend/internal/junit"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/resolve"
 )
 
 func patternMatchesDetail(pattern models.PatternAnalysis, detail models.JobDetail) bool {

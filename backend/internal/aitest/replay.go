@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
+	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
 // volatileToolFields are envelope keys the agentic loop stamps onto every tool

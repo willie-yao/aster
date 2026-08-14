@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
+	"github.com/willie-yao/aster/backend/internal/actionverify"
 )
 
 // ReasonCode is a stable machine-readable explanation for action availability.

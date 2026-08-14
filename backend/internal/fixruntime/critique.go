@@ -3,7 +3,7 @@ package fixruntime
 import (
 	"fmt"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixpr"
+	"github.com/willie-yao/aster/backend/internal/fixpr"
 )
 
 // Critique resolves the configured review gate and fails closed when unavailable.

@@ -1,6 +1,6 @@
 package remediationinvestigation
 
-import "github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+import "github.com/willie-yao/aster/backend/internal/ai"
 
 func targetExtractionFormat() ai.ResponseFormat {
 	hypothesis := map[string]any{

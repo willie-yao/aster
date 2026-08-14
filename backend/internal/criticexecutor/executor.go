@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/causalcritic"
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/causalcritic"
+	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 const maxGatewayErrorBytes = 4 << 10

@@ -1,4 +1,4 @@
-# Minimal project config for prow-ai-dashboard: only the required fields.
+# Minimal project config for Aster: only the required fields.
 #
 # Copy this into your consumer repo as project.yaml, drop a prompts/system.md
 # alongside it, and point .github/workflows/deploy.yml at the reusable workflow

@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/onboard/promptauthor"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/ghpr"
+	"github.com/willie-yao/aster/backend/internal/onboard/promptauthor"
+	"github.com/willie-yao/aster/backend/internal/project"
 	"golang.org/x/term"
 )
 
@@ -252,7 +252,7 @@ func applyPlan(ctx context.Context, plan *Plan, githubToken string, deps depende
 		if githubToken == "" {
 			return fmt.Errorf("applying an open-PR onboarding plan needs a GitHub token with write access to the dashboard repo")
 		}
-		title := fmt.Sprintf("Add %s prow-ai-dashboard scaffold", plan.Project.Name)
+		title := fmt.Sprintf("Add %s Aster scaffold", plan.Project.Name)
 		fmt.Fprintf(deps.terminal.Out, "Opening a scaffold pull request against %s...\n", plan.DashboardRepo.FullName)
 		url, err := deps.pullRequests.Open(ctx, plan.DashboardRepo, plan.Files, "onboard/scaffold", title, scaffoldPRBody(plan.Project.Name, plan.Deployment.Mode, plan.Deployment.AIEnabled), githubToken)
 		if err != nil {
@@ -275,7 +275,7 @@ func applyPlan(ctx context.Context, plan *Plan, githubToken string, deps depende
 		return err
 	}
 	fmt.Fprintf(deps.terminal.Out, "Scaffold written to %s/\n", plan.Destination.OutDir)
-	fmt.Fprintf(deps.terminal.Out, "Next: review project.yaml and the source-only prompts/system.md baseline, follow %s, then run $author-prow-ai-diagnostics.\n", scaffoldGuide(plan.Deployment.Mode))
+	fmt.Fprintf(deps.terminal.Out, "Next: review project.yaml and the source-only prompts/system.md baseline, follow %s, then run $author-aster-diagnostics.\n", scaffoldGuide(plan.Deployment.Mode))
 	return nil
 }
 

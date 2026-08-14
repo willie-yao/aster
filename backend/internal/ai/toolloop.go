@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
 // ToolLoopEvent is content-free telemetry for one dispatched tool call.

@@ -91,7 +91,7 @@ owned_images+=("$base_image")
 fixture=flatcar-sysext-dns-providerid.tar.gz
 fixture_sha=${ORKA_CONTAINER_FIXTURE_SHA:-8ed886395742d145c014be4b6a2dc38b3ddf3db0ad6e7a5740da10eea80a1945}
 mkdir -p "$tmp/image/fixtures"
-curl -fsSL "https://github.com/willie-yao/prow-ai-dashboard/releases/download/benchmark-fixtures/$fixture" -o "$tmp/$fixture"
+curl -fsSL "https://github.com/willie-yao/aster/releases/download/benchmark-fixtures/$fixture" -o "$tmp/$fixture"
 if command -v sha256sum >/dev/null; then
   actual_fixture_sha=$(sha256sum "$tmp/$fixture" | awk '{print $1}')
 else
@@ -153,7 +153,7 @@ roleRef:
 EOF_RBAC
 echo "Validating Helm admission policy"
 admission_manifest="$tmp/analysis-admission.yaml"
-helm template dashboard "$repo_root/deploy/helm/prow-ai-dashboard" \
+helm template dashboard "$repo_root/deploy/helm/aster" \
   --namespace dashboard-test \
   --show-only templates/orka-analysis-admission.yaml \
   --set mode=cron \

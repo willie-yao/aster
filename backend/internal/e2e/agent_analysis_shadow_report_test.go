@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
-	agentruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/agentanalysis"
+	agentruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 func TestAgentAnalysisShadowReport(t *testing.T) {

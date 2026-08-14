@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actiondraft"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
+	"github.com/willie-yao/aster/backend/internal/actiondraft"
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/statefile"
 )
 
 // markerPrefix tags the hidden HTML comment embedded in every filed issue. The
@@ -351,5 +351,5 @@ func recoverable(key string, prefixes []string) bool {
 
 func recoveryComment() string {
 	return "✅ This failure has not recurred in the most recent builds, so the dashboard now considers it recovered. " +
-		"_(managed by prow-ai-dashboard)_"
+		"_(managed by Aster)_"
 }

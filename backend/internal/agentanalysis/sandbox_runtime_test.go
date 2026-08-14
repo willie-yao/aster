@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentsandbox"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/agentsandbox"
+	"github.com/willie-yao/aster/backend/internal/models"
+	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 type fakeWorkspaceSandbox struct {

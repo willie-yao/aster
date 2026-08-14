@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
+	"github.com/willie-yao/aster/backend/internal/ai/skills"
 )
 
 func TestCritiqueRuleIDs(t *testing.T) {

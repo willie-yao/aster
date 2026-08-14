@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/fetcher"
 )
 
 var (

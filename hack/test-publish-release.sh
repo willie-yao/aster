@@ -3,7 +3,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 script=$root/hack/publish-release.sh
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/prow-ai-dashboard-release-test.XXXXXX")
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/aster-release-test.XXXXXX")
 cleanup() {
   find "$tmp" -type f -delete 2>/dev/null || true
   rmdir "$tmp/bin" "$tmp" 2>/dev/null || true
@@ -33,7 +33,7 @@ case ${1:-} in
     : > "$destination/$chart-$version.tgz"
     ;;
   push)
-    if [[ ${FAIL_APPLICATION_PUSH:-false} == true && $2 == *prow-ai-dashboard-[0-9]* && $2 != *prow-ai-dashboard-platform-* ]]; then
+    if [[ ${FAIL_APPLICATION_PUSH:-false} == true && $2 == *aster-[0-9]* && $2 != *aster-platform-* ]]; then
       exit 42
     fi
     printf 'published %s\n' "$2" >> "$RELEASE_TEST_LOG"
@@ -111,7 +111,7 @@ case ${1:-} in
 esac
 GIT
 chmod +x "$tmp/bin/helm" "$tmp/bin/gh" "$tmp/bin/docker" "$tmp/bin/go" "$tmp/bin/git"
-export IMAGE_REPOSITORY=ghcr.io/example/prow-ai-dashboard
+export IMAGE_REPOSITORY=ghcr.io/example/aster
 
 if (cd "$root" && RELEASE_TEST_LOG="$log" REMOTE_TAG_STATE=missing PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script") >"$tmp/missing-tag.out" 2>&1; then
   echo 'missing remote release tag was accepted' >&2
@@ -153,7 +153,7 @@ if grep -Eq '^(gh|git push|git tag -f) ' "$log"; then
   echo 'release or alias was published after an application chart push failure' >&2
   exit 1
 fi
-if grep -E '^published .*prow-ai-dashboard-[0-9]' "$log" | grep -vq 'prow-ai-dashboard-platform-'; then
+if grep -E '^published .*aster-[0-9]' "$log" | grep -vq 'aster-platform-'; then
   echo 'application chart became available without its platform prerequisite' >&2
   exit 1
 fi
@@ -182,19 +182,19 @@ python3 - "$log" <<'PY'
 from pathlib import Path
 import sys
 lines = Path(sys.argv[1]).read_text().splitlines()
-app_push = next(i for i, line in enumerate(lines) if line.startswith('helm push ') and 'prow-ai-dashboard-1.2.3.tgz' in line and 'platform' not in line)
-platform_push = next(i for i, line in enumerate(lines) if line.startswith('helm push ') and 'prow-ai-dashboard-platform-1.2.3.tgz' in line)
+app_push = next(i for i, line in enumerate(lines) if line.startswith('helm push ') and 'aster-1.2.3.tgz' in line and 'platform' not in line)
+platform_push = next(i for i, line in enumerate(lines) if line.startswith('helm push ') and 'aster-platform-1.2.3.tgz' in line)
 release = next(i for i, line in enumerate(lines) if line.startswith('gh release create '))
 alias = next(i for i, line in enumerate(lines) if line.startswith('git push origin '))
 assert platform_push < app_push < release < alias, lines
 release_line = lines[release]
-assert 'prow-ai-dashboard-1.2.3.tgz' in release_line
-assert 'prow-ai-dashboard-platform-1.2.3.tgz' in release_line
+assert 'aster-1.2.3.tgz' in release_line
+assert 'aster-platform-1.2.3.tgz' in release_line
 assert '--verify-tag' in release_line
 assert 'SHA256SUMS' in release_line
 assert sum(1 for line in lines if line.startswith('go build ')) == 4
 for target in ('linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64'):
-    assert f'prow-ai-dashboard-fetcher-v1.2.3-{target}' in release_line
+    assert f'aster-v1.2.3-{target}' in release_line
 PY
 
 : > "$log"

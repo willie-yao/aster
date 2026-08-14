@@ -19,7 +19,7 @@ to make and review the files.
 
 ## What onboarding creates
 
-The wizard, coding-agent, and non-interactive paths use `fetcher onboard` to
+The wizard, coding-agent, and non-interactive paths use `aster onboard` to
 discover jobs, validate the result, and create a small consumer repository.
 Manual setup creates the same file contract directly. In every case, the
 consumer points at the shared engine instead of copying engine code.
@@ -43,7 +43,7 @@ add agent instructions for completing `prompts/system.md`.
 From the source repository checkout:
 
 ```bash
-go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard
+go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard
 ```
 
 The wizard detects the current GitHub `origin` where possible. It then walks you
@@ -71,24 +71,24 @@ engine CLI or hand-write scaffold files.
 Install the portable setup and diagnostic-authoring skills:
 
 ```bash
-npx --yes skills@latest add willie-yao/prow-ai-dashboard \
-  --skill setup-prow-ai-consumer author-prow-ai-diagnostics \
+npx --yes skills@latest add willie-yao/aster \
+  --skill setup-aster-consumer author-aster-diagnostics \
   --agent codex \
   --global \
   --yes
 ```
 
-Then ask the agent to use `$setup-prow-ai-consumer`, for example:
+Then ask the agent to use `$setup-aster-consumer`, for example:
 
 ```text
-Use $setup-prow-ai-consumer to create a Pages consumer for
+Use $setup-aster-consumer to create a Pages consumer for
 https://github.com/kubernetes-sigs/kueue.
 ```
 
 The setup skill runs read-only discovery, reviews an exact dry-run plan,
 preserves consumer-owned files during updates, applies only the reviewed plan,
 and validates the resulting consumer. It leaves template placeholders in the
-source-only prompt for review. After setup, `$author-prow-ai-diagnostics` can improve
+source-only prompt for review. After setup, `$author-aster-diagnostics` can improve
 the prompt from historical failures and propose inactive diagnostic recipes.
 
 See [Agent-driven setup and diagnostic authoring](agent-onboarding.md) for
@@ -162,7 +162,7 @@ Use these references:
 - [GitHub Actions and Pages](github-pages.md) for the reusable workflow.
 - [Kubernetes quickstart](kubernetes.md) for consumer values and the deployment
   wrapper.
-- [CAPZ Prow AI Dashboard](https://github.com/willie-yao/capz-prow-ai-dashboard)
+- [CAPZ consumer example](https://github.com/willie-yao/capz-prow-ai-dashboard)
   for a current public Pages consumer.
 
 `configs/example` is documentation-only. It contains placeholders and is not a
@@ -172,7 +172,7 @@ storage, branding, prompt, and deployment settings for your repository.
 When the files are ready, run:
 
 ```bash
-go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest \
+go run github.com/willie-yao/aster/backend/cmd/aster@latest \
   onboard doctor \
   -project-dir ./my-dashboard
 ```

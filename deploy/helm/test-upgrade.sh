@@ -3,7 +3,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 upgrade=$root/deploy/helm/upgrade.sh
-tmp="${TMPDIR:-/tmp}/prow-ai-dashboard-upgrade-$$"
+tmp="${TMPDIR:-/tmp}/aster-upgrade-$$"
 mkdir -p "$tmp/bin"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -53,11 +53,11 @@ spec:
     spec:
       containers:
         - name: engine
-          image: ghcr.io/willie-yao/prow-ai-dashboard:\$tag
+          image: ghcr.io/willie-yao/aster:\$tag
         - name: fixer
-          image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:\$tag
+          image: ghcr.io/willie-yao/aster/fixer:\$tag
       args:
-        - -orka-analysis-image=ghcr.io/willie-yao/prow-ai-dashboard/analyzer:\$tag
+        - -orka-analysis-image=ghcr.io/willie-yao/aster/analyzer:\$tag
       initContainers:
         - name: materializer
           image: busybox:1.36.1
@@ -119,11 +119,11 @@ spec:
     spec:
       containers:
         - name: engine
-          image: ghcr.io/willie-yao/prow-ai-dashboard:\$tag
+          image: ghcr.io/willie-yao/aster:\$tag
         - name: fixer
-          image: ghcr.io/willie-yao/prow-ai-dashboard/fixer:\$fixer_tag
+          image: ghcr.io/willie-yao/aster/fixer:\$fixer_tag
       args:
-        - -orka-analysis-image=ghcr.io/willie-yao/prow-ai-dashboard/analyzer:\$tag
+        - -orka-analysis-image=ghcr.io/willie-yao/aster/analyzer:\$tag
       initContainers:
         - name: materializer
           image: busybox:1.36.1
@@ -188,12 +188,12 @@ export PATH="$tmp/bin:/usr/bin:/bin"
 
 grep -Fq 'status <capz> <--kube-context> <h100> <--namespace> <capz-dynamo>' "$calls"
 grep -Fq 'get <values> <capz> <--kube-context> <h100> <--namespace> <capz-dynamo> <-o> <json>' "$calls"
-grep -Fq "lint <$root/deploy/helm/prow-ai-dashboard>" "$calls"
-grep -Fq "template <capz> <$root/deploy/helm/prow-ai-dashboard>" "$calls"
+grep -Fq "lint <$root/deploy/helm/aster>" "$calls"
+grep -Fq "template <capz> <$root/deploy/helm/aster>" "$calls"
 grep -Fq "<--values> <$tmp/consumer-values.yaml>" "$calls"
 grep -Fq '<--set-string> <global.imageTag=sha-deadbeef>' "$calls"
 grep -Fq '<--set-string> <analysisCache.generation=cache-7>' "$calls"
-grep -Fq "upgrade <capz> <$root/deploy/helm/prow-ai-dashboard>" "$calls"
+grep -Fq "upgrade <capz> <$root/deploy/helm/aster>" "$calls"
 if grep -Fq '<--reuse-values>' "$calls"; then
   echo 'guarded upgrade retained --reuse-values' >&2
   exit 1
@@ -228,9 +228,9 @@ grep -Fq 'server.actions.oauth.scope' "$tmp/upgrade-output"
 grep -Fq 'server.actions.oauth.chatScope' "$tmp/upgrade-output"
 grep -Fq 'server.extraEnv[OAUTH_SCOPE]' "$tmp/upgrade-output"
 grep -Fxq 'busybox:1.36.1' "$inspections"
-grep -Fxq 'ghcr.io/willie-yao/prow-ai-dashboard:sha-deadbeef' "$inspections"
-grep -Fxq 'ghcr.io/willie-yao/prow-ai-dashboard/analyzer:sha-deadbeef' "$inspections"
-grep -Fxq 'ghcr.io/willie-yao/prow-ai-dashboard/fixer:sha-deadbeef' "$inspections"
+grep -Fxq 'ghcr.io/willie-yao/aster:sha-deadbeef' "$inspections"
+grep -Fxq 'ghcr.io/willie-yao/aster/analyzer:sha-deadbeef' "$inspections"
+grep -Fxq 'ghcr.io/willie-yao/aster/fixer:sha-deadbeef' "$inspections"
 grep -Fq 'Preserving analysis cache generation: cache-7' "$tmp/upgrade-output"
 grep -Fq 'Image changes:' "$tmp/upgrade-output"
 grep -Fq 'Helm revision: 17' "$tmp/upgrade-output"

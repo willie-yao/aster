@@ -45,7 +45,7 @@ type Options struct {
 	// interactive wizard may ask; non-interactive planning treats nil as false.
 	IncludePresubmits *bool
 
-	// EngineRef is the prow-ai-dashboard ref the generated workflows pin.
+	// EngineRef is the Aster ref the generated workflows pin.
 	EngineRef string
 
 	// OutDir is where the scaffold is written.

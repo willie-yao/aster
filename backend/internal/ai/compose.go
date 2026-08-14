@@ -25,7 +25,7 @@ func PromptFingerprint(composedPrompt string) string {
 //
 //	<engine ResponseFormatFooter>
 //
-// The consumer addendum is mandatory; cmd/fetcher hard-errors at startup if
+// The consumer addendum is mandatory; cmd/aster hard-errors at startup if
 // the consumer's prompts/system.md is missing or whitespace-only.
 func ComposeSystemPrompt(consumerAddendum string) string {
 	var b strings.Builder

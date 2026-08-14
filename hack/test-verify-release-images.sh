@@ -32,13 +32,13 @@ DOCKER
 chmod +x "$tmp/bin/docker"
 
 IMAGE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" \
-  TAG=v1.2.3 IMAGE_REPOSITORY=ghcr.io/example/prow-ai-dashboard \
+  TAG=v1.2.3 IMAGE_REPOSITORY=ghcr.io/example/aster \
   REVIEWED_COMMIT=reviewed-commit IMAGE_WAIT_ATTEMPTS=1 IMAGE_WAIT_DELAY_SECONDS=0 \
   "$script" >"$tmp/success.out"
 [[ $(grep -Fc 'release_image=verified' "$tmp/success.out") == 3 ]]
 
 if IMAGE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" \
-  TAG=v1.2.3 IMAGE_REPOSITORY=ghcr.io/example/prow-ai-dashboard \
+  TAG=v1.2.3 IMAGE_REPOSITORY=ghcr.io/example/aster \
   REVIEWED_COMMIT=reviewed-commit IMAGE_REVISION=wrong \
   IMAGE_WAIT_ATTEMPTS=1 IMAGE_WAIT_DELAY_SECONDS=0 \
   "$script" >"$tmp/revision.out" 2>&1; then
@@ -48,7 +48,7 @@ fi
 grep -Fq 'release image revision mismatch' "$tmp/revision.out"
 
 if IMAGE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" \
-  TAG=v1.2.3 IMAGE_REPOSITORY=ghcr.io/example/prow-ai-dashboard \
+  TAG=v1.2.3 IMAGE_REPOSITORY=ghcr.io/example/aster \
   REVIEWED_COMMIT=reviewed-commit FAIL_IMAGE_SUFFIX=remote-fixer \
   IMAGE_WAIT_ATTEMPTS=2 IMAGE_WAIT_DELAY_SECONDS=0 \
   "$script" >"$tmp/missing.out" 2>&1; then

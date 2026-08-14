@@ -13,8 +13,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/project"
 )
 
 // Base URLs for talking to kubernetes/test-infra on github.com. Vars rather

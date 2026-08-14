@@ -35,7 +35,7 @@ func defaultBranch(ctx context.Context, client *http.Client, owner, repo, token 
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "prow-ai-dashboard")
+	req.Header.Set("User-Agent", "aster")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -66,7 +66,7 @@ func resolvePromptSourceRevision(ctx context.Context, client *http.Client, owner
 		return "", err
 	}
 	req.Header.Set("Accept", "application/vnd.github.sha")
-	req.Header.Set("User-Agent", "prow-ai-dashboard")
+	req.Header.Set("User-Agent", "aster")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

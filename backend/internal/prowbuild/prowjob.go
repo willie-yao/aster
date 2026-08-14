@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/storage"
+	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
 const maxProwJobBytes = 2 * 1024 * 1024

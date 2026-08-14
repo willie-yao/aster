@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisruntime"
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/analysisruntime"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 

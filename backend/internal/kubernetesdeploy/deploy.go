@@ -14,15 +14,15 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/filesystem"
-	k8stools "github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools/k8s"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/ai/skills"
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/tools/filesystem"
+	k8stools "github.com/willie-yao/aster/backend/internal/ai/tools/k8s"
+	"github.com/willie-yao/aster/backend/internal/project"
 	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
 )
 
-const DefaultChart = "oci://ghcr.io/willie-yao/charts/prow-ai-dashboard"
+const DefaultChart = "oci://ghcr.io/willie-yao/charts/aster"
 
 // Options select the consumer bundle and Helm release.
 type Options struct {

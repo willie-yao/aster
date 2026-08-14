@@ -13,10 +13,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/buildsource"
+	"github.com/willie-yao/aster/backend/internal/actionverify"
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/buildsource"
 )
 
 // githubRepoReader is a bound tools.RepoReader over one GitHub repo at a ref.
@@ -120,7 +120,7 @@ func (r *githubRepoReader) ListTree(ctx context.Context) ([]string, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "prow-ai-dashboard")
+	req.Header.Set("User-Agent", "aster")
 	resp, err := r.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -178,7 +178,7 @@ func (r *githubRepoReader) ReadFile(ctx context.Context, path string) (string, b
 		req.Header.Set("Accept", "application/vnd.github.raw+json")
 		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	}
-	req.Header.Set("User-Agent", "prow-ai-dashboard")
+	req.Header.Set("User-Agent", "aster")
 	resp, err := r.client.Do(req)
 	if err != nil {
 		return "", false, err
@@ -233,7 +233,7 @@ func (r *githubRepoReader) readSourceArchive(ctx context.Context) (actionverify.
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "prow-ai-dashboard")
+	req.Header.Set("User-Agent", "aster")
 	client := *r.client
 	previousRedirect := client.CheckRedirect
 	client.CheckRedirect = func(redirect *http.Request, via []*http.Request) error {

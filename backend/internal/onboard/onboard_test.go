@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/project"
 )
 
 func TestInferCategories_GroupsAndOrders(t *testing.T) {
@@ -140,7 +140,7 @@ func TestLabelFor(t *testing.T) {
 func testOpts() Options {
 	return Options{
 		TestGrid:      "my-dashboard",
-		DashboardRepo: "my-org/my-proj-prow-ai-dashboard",
+		DashboardRepo: "my-org/my-proj-aster",
 		SourceRepo:    "upstream/my-proj",
 		EngineRef:     "main",
 	}
@@ -162,8 +162,8 @@ func TestRenderProjectYAML_ValidatesForTestGrid(t *testing.T) {
 		`dashboard: "my-dashboard"`,
 		`provider: gcs`,
 		`bucket: "kubernetes-ci-logs"`,
-		`base_path: "/my-proj-prow-ai-dashboard"`,
-		`site_url: "https://my-org.github.io/my-proj-prow-ai-dashboard"`,
+		`base_path: "/my-proj-aster"`,
+		`site_url: "https://my-org.github.io/my-proj-aster"`,
 		`owner: "upstream"`,
 		`name: "my-proj"`,
 	} {
@@ -266,7 +266,7 @@ func TestValidateOptions_DefaultsOutDir(t *testing.T) {
 	if err := validateOptions(&opts); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if opts.OutDir != "my-proj-prow-ai-dashboard" {
+	if opts.OutDir != "my-proj-aster" {
 		t.Errorf("OutDir = %q, want the dashboard repo name", opts.OutDir)
 	}
 	if opts.EngineRef != "main" {
@@ -514,7 +514,7 @@ func TestScaffold_K8sStaysFocused(t *testing.T) {
 		"mode: watch", "type: inprocess", "imageTag: \"\"", "existingSecret: \"<existing-ai-secret>\"",
 		"# schedule:", "# namespace:", "chat:\n    enabled: false", "actions:\n    enabled: false",
 		"Active values below are settings a new consumer commonly owns", "No engine source checkout",
-		"verified-fetcher-path", "kubernetes doctor", "--chart-version \"$CHART_VERSION\"", "docs/kubernetes-platform.md",
+		"verified-aster-path", "kubernetes doctor", "--chart-version \"$CHART_VERSION\"", "docs/kubernetes-platform.md",
 	} {
 		if !strings.Contains(values+readme, want) {
 			t.Errorf("Kubernetes scaffold missing %q:\n%s\n%s", want, values, readme)
@@ -537,7 +537,7 @@ func TestK8sDeployReadmeGuidesSafeProjectSpecificInstall(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		`export FETCHER="<verified-fetcher-path>"`,
+		`export ASTER="<verified-aster-path>"`,
 		`export CLI_VERSION="<published-engine-tag>"`,
 		`export CHART_VERSION="${CLI_VERSION#v}"`,
 		`export RELEASE="<application-release-from-platform-handoff>"`,
@@ -545,13 +545,13 @@ func TestK8sDeployReadmeGuidesSafeProjectSpecificInstall(t *testing.T) {
 		`export PUBLIC_URL=""`,
 		`export EXPECTED_JOB="<expected-job-name>"`,
 		"export NAMESPACE='my-proj'",
-		`"$FETCHER" onboard doctor`,
-		`"$FETCHER" kubernetes doctor`,
+		`"$ASTER" onboard doctor`,
+		`"$ASTER" kubernetes doctor`,
 		`--action install`,
-		`"$FETCHER" kubernetes install`,
+		`"$ASTER" kubernetes install`,
 		`--dry-run`,
 		`--action upgrade`,
-		`"$FETCHER" kubernetes upgrade`,
+		`"$ASTER" kubernetes upgrade`,
 		`rollback "$RELEASE" "$PRIOR_HELM_REVISION" --wait`,
 		`--retry 60`,
 		`if [ -n "$PUBLIC_URL" ]`,
@@ -568,7 +568,7 @@ func TestK8sDeployReadmeGuidesSafeProjectSpecificInstall(t *testing.T) {
 
 	for _, unwanted := range []string{
 		`export ENGINE_DIR=`,
-		`git clone https://github.com/willie-yao/prow-ai-dashboard`,
+		`git clone https://github.com/willie-yao/aster`,
 		`make -C "$ENGINE_DIR" build`,
 		`kubectl --context "$CONTEXT" create namespace`,
 		`create secret generic`,
@@ -592,11 +592,11 @@ func TestK8sDeployReadmeGuidesSafeProjectSpecificInstall(t *testing.T) {
 		t.Fatalf("generated Kubernetes README lacks lifecycle sections:\n%s", readme)
 	}
 	installBody := readme[installSection:upgradeSection]
-	if doctor, install := strings.Index(installBody, `"$FETCHER" kubernetes doctor`), strings.Index(installBody, `"$FETCHER" kubernetes install`); doctor < 0 || install < 0 || doctor > install {
+	if doctor, install := strings.Index(installBody, `"$ASTER" kubernetes doctor`), strings.Index(installBody, `"$ASTER" kubernetes install`); doctor < 0 || install < 0 || doctor > install {
 		t.Fatalf("live doctor does not precede installation:\n%s", readme)
 	}
 	upgradeBody := readme[upgradeSection:]
-	if doctor, upgrade := strings.Index(upgradeBody, `"$FETCHER" kubernetes doctor`), strings.Index(upgradeBody, `"$FETCHER" kubernetes upgrade`); doctor < 0 || upgrade < 0 || doctor > upgrade {
+	if doctor, upgrade := strings.Index(upgradeBody, `"$ASTER" kubernetes doctor`), strings.Index(upgradeBody, `"$ASTER" kubernetes upgrade`); doctor < 0 || upgrade < 0 || doctor > upgrade {
 		t.Fatalf("upgrade doctor does not precede upgrade:\n%s", readme)
 	}
 }
@@ -757,7 +757,7 @@ func TestKubernetesCleanRoomScaffoldContract(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		"verified-fetcher-path", "kubernetes doctor", "--action install", "--action upgrade",
+		"verified-aster-path", "kubernetes doctor", "--action install", "--action upgrade",
 		"kubernetes install", "kubernetes upgrade", "rollback",
 		"docs/kubernetes.md", "docs/kubernetes-platform.md", "docs/kubernetes-reference.md",
 	} {

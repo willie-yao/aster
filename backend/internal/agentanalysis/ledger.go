@@ -12,10 +12,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	agentruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/statefile"
+	"github.com/willie-yao/aster/backend/internal/models"
+	agentruntime "github.com/willie-yao/aster/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/statefile"
 	"golang.org/x/sys/unix"
 )
 

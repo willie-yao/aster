@@ -2,7 +2,7 @@
 
 This page describes runtime diagnostic recipe YAML loaded by the dashboard
 analyzer. It is separate from the installable LLM CLI Agent Skills
-`$setup-prow-ai-consumer` and `$author-prow-ai-diagnostics`. Install and invoke
+`$setup-aster-consumer` and `$author-aster-diagnostics`. Install and invoke
 those Agent Skills through the
 [agent-driven setup and diagnostic-authoring guide](agent-onboarding.md); they
 coordinate onboarding and authoring but do not become active runtime recipes.

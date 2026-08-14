@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
+	"github.com/willie-yao/aster/backend/internal/agentanalysis"
 )
 
 func promptOpenCode(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec) ([]byte, error) {

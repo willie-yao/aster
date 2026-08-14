@@ -6,12 +6,12 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actionverify"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/artifacts"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationpolicy"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/actionverify"
+	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
+	"github.com/willie-yao/aster/backend/internal/remediationpolicy"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 type RevisionVerification struct {

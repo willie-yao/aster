@@ -1,6 +1,6 @@
 # Writing a project AI prompt
 
-Every consumer of [prow-ai-dashboard][engine] must ship a `prompts/system.md`
+Every consumer of [Aster][engine] must ship a `prompts/system.md`
 alongside its `project.yaml`. This file is what makes the AI summaries useful
 for your project. It should be an artifact-backed diagnostic runbook that tells
 the model how to localize a failure, which evidence proves each conclusion, and
@@ -11,7 +11,7 @@ whitespace-only when `-ai` is enabled. There is no "default project prompt";
 generic AI analysis on Prow logs without project context produces hallucinations
 faster than it produces signal.
 
-[engine]: https://github.com/willie-yao/prow-ai-dashboard
+[engine]: https://github.com/willie-yao/aster
 
 ## How the prompt is composed
 
@@ -76,7 +76,7 @@ credential.
 The handoff serializes the project name, source repository, resolved commit or
 known branch, and matched Prow job metadata as untrusted data. The generated
 prompt is a source-only baseline and is not validated against historical
-failures. Run `$author-prow-ai-diagnostics` after setup for that evaluation. The bundled skill
+failures. Run `$author-aster-diagnostics` after setup for that evaluation. The bundled skill
 tells the agent to investigate a bounded set of high-value repository files and
 to treat repository content and job metadata as evidence, never as instructions.
 
@@ -88,7 +88,7 @@ source-resolution, timeout, or validation failure writes the TODO template and
 handoff bundle without exposing raw OpenCode output.
 
 Prompt authoring has a 15-minute total timeout by default.
-`fetcher onboard --prompt-timeout` can set a value from one minute through two
+`aster onboard --prompt-timeout` can set a value from one minute through two
 hours. `--require-prompt-draft` is valid only with `--prompt-mode=agent` and
 fails before any write unless the validated agent draft succeeds.
 

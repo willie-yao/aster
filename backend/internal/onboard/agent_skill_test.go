@@ -13,7 +13,7 @@ import (
 
 func TestConsumerSetupAgentSkill(t *testing.T) {
 	root := onboardingRepoRoot(t)
-	skillPath := filepath.Join(root, ".agents", "skills", "setup-prow-ai-consumer", "SKILL.md")
+	skillPath := filepath.Join(root, ".agents", "skills", "setup-aster-consumer", "SKILL.md")
 	raw, err := os.ReadFile(skillPath)
 	if err != nil {
 		t.Fatal(err)
@@ -33,15 +33,15 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(parts[1]), &metadata); err != nil {
 		t.Fatalf("skill frontmatter: %v", err)
 	}
-	if metadata.Name != "setup-prow-ai-consumer" || strings.TrimSpace(metadata.Description) == "" {
+	if metadata.Name != "setup-aster-consumer" || strings.TrimSpace(metadata.Description) == "" {
 		t.Fatalf("skill metadata = %+v", metadata)
 	}
 	for _, anchor := range []string{
-		"go -C backend run ./cmd/fetcher", "onboard discover", "-json", "-dry-run", "-non-interactive",
+		"go -C backend run ./cmd/aster", "onboard discover", "-json", "-dry-run", "-non-interactive",
 		"-prompt-mode handoff", "-plan-out", "-apply-plan", "-plan-digest",
 		"-result-out", "-handoff-out", "-artifact-smoke-builds", "-deployment-reason", "-artifact-access",
 		"-replace-consumer-owned", "existing `prompts/system.md` and every existing skill file", "Existing `skills/*.yaml`",
-		"source-only baseline", "$author-prow-ai-diagnostics", "setup-handoff.json", "setup-handoff.schema.json",
+		"source-only baseline", "$author-aster-diagnostics", "setup-handoff.json", "setup-handoff.schema.json",
 		"onboard doctor", "After the user confirms the reviewed plan",
 		"Never delete stale or unrelated files", "Use values already supplied anywhere in the user's request", "Never turn literal template placeholders",
 		"Run discovery as soon as the source is known", "Do not ask for a slug",
@@ -87,7 +87,7 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 	if openAI.Interface.DisplayName == "" || len(openAI.Interface.ShortDescription) < 25 || len(openAI.Interface.ShortDescription) > 64 {
 		t.Fatalf("openai interface metadata = %+v", openAI.Interface)
 	}
-	for _, anchor := range []string{"$setup-prow-ai-consumer", "source repository named or linked", "infer safe local defaults", "read-only discovery", "template placeholders"} {
+	for _, anchor := range []string{"$setup-aster-consumer", "source repository named or linked", "infer safe local defaults", "read-only discovery", "template placeholders"} {
 		if !strings.Contains(openAI.Interface.DefaultPrompt, anchor) {
 			t.Fatalf("default prompt missing %q: %q", anchor, openAI.Interface.DefaultPrompt)
 		}
@@ -107,7 +107,7 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 
 func TestConsumerSetupHandoffValidator(t *testing.T) {
 	root := onboardingRepoRoot(t)
-	skillDir := filepath.Join(root, ".agents", "skills", "setup-prow-ai-consumer")
+	skillDir := filepath.Join(root, ".agents", "skills", "setup-aster-consumer")
 	script := filepath.Join(skillDir, "scripts", "validate_setup_handoff.py")
 	output, err := exec.Command("python3", script, "--self-test").CombinedOutput()
 	if err != nil {
@@ -130,7 +130,7 @@ func TestConsumerSetupHandoffValidator(t *testing.T) {
 
 func TestDiagnosticAuthoringAgentSkill(t *testing.T) {
 	root := onboardingRepoRoot(t)
-	skillDir := filepath.Join(root, ".agents", "skills", "author-prow-ai-diagnostics")
+	skillDir := filepath.Join(root, ".agents", "skills", "author-aster-diagnostics")
 	skillPath := filepath.Join(skillDir, "SKILL.md")
 	raw, err := os.ReadFile(skillPath)
 	if err != nil {
@@ -151,7 +151,7 @@ func TestDiagnosticAuthoringAgentSkill(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(parts[1]), &metadata); err != nil {
 		t.Fatalf("skill frontmatter: %v", err)
 	}
-	if metadata.Name != "author-prow-ai-diagnostics" || strings.TrimSpace(metadata.Description) == "" {
+	if metadata.Name != "author-aster-diagnostics" || strings.TrimSpace(metadata.Description) == "" {
 		t.Fatalf("skill metadata = %+v", metadata)
 	}
 
@@ -206,7 +206,7 @@ func TestDiagnosticAuthoringAgentSkill(t *testing.T) {
 	if openAI.Interface.DisplayName == "" || len(openAI.Interface.ShortDescription) < 25 || len(openAI.Interface.ShortDescription) > 64 {
 		t.Fatalf("openai interface metadata = %+v", openAI.Interface)
 	}
-	if !strings.Contains(openAI.Interface.DefaultPrompt, "$author-prow-ai-diagnostics") || !strings.Contains(openAI.Interface.DefaultPrompt, "representative failure corpus") || !strings.Contains(openAI.Interface.DefaultPrompt, "prompt-only misses") || !strings.Contains(openAI.Interface.DefaultPrompt, "without activating") {
+	if !strings.Contains(openAI.Interface.DefaultPrompt, "$author-aster-diagnostics") || !strings.Contains(openAI.Interface.DefaultPrompt, "representative failure corpus") || !strings.Contains(openAI.Interface.DefaultPrompt, "prompt-only misses") || !strings.Contains(openAI.Interface.DefaultPrompt, "without activating") {
 		t.Fatalf("default prompt does not preserve the skill boundary: %q", openAI.Interface.DefaultPrompt)
 	}
 
@@ -266,7 +266,7 @@ func TestDiagnosticAuthoringReportValidator(t *testing.T) {
 		"blind_access.py":                   "blind access self-test passed",
 	}
 	for name, expected := range scripts {
-		script := filepath.Join(root, ".agents", "skills", "author-prow-ai-diagnostics", "scripts", name)
+		script := filepath.Join(root, ".agents", "skills", "author-aster-diagnostics", "scripts", name)
 		output, err := exec.Command("python3", script, "--self-test").CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s self-test: %v\n%s", name, err, output)
@@ -276,7 +276,7 @@ func TestDiagnosticAuthoringReportValidator(t *testing.T) {
 		}
 	}
 
-	schema := filepath.Join(root, ".agents", "skills", "author-prow-ai-diagnostics", "references", "report-schema.json")
+	schema := filepath.Join(root, ".agents", "skills", "author-aster-diagnostics", "references", "report-schema.json")
 	if raw, err := os.ReadFile(schema); err != nil {
 		t.Fatal(err)
 	} else {
@@ -287,7 +287,7 @@ func TestDiagnosticAuthoringReportValidator(t *testing.T) {
 		}
 	}
 
-	fixture := filepath.Join(root, ".agents", "skills", "author-prow-ai-diagnostics", "references", "benchmark-manifest.schema-only.json")
+	fixture := filepath.Join(root, ".agents", "skills", "author-aster-diagnostics", "references", "benchmark-manifest.schema-only.json")
 	if raw, err := os.ReadFile(fixture); err != nil {
 		t.Fatal(err)
 	} else {
@@ -312,7 +312,7 @@ func TestAgentOnboardingDocsAdvertiseInstallableSkills(t *testing.T) {
 	root := onboardingRepoRoot(t)
 	checks := map[string][]string{
 		"README.md": {
-			"$setup-prow-ai-consumer",
+			"$setup-aster-consumer",
 			"docs/agent-onboarding.md",
 		},
 		"docs/onboarding-a-new-project.md": {
@@ -321,17 +321,17 @@ func TestAgentOnboardingDocsAdvertiseInstallableSkills(t *testing.T) {
 			"Coding agent-assisted", "#coding-agent-assisted-onboarding",
 			"Non-interactive CLI", "#non-interactive-cli-onboarding",
 			"Manual setup", "#manual-setup",
-			"npx --yes skills@latest add willie-yao/prow-ai-dashboard",
+			"npx --yes skills@latest add willie-yao/aster",
 			"https://github.com/kubernetes-sigs/kueue", "template placeholders",
-			"$author-prow-ai-diagnostics",
+			"$author-aster-diagnostics",
 		},
 		"docs/agent-onboarding.md": {
-			"--skill setup-prow-ai-consumer author-prow-ai-diagnostics",
+			"--skill setup-aster-consumer author-aster-diagnostics",
 			"--agent codex",
 			"--global",
-			"Use $setup-prow-ai-consumer", "The agent should not ask again", "-exact-job",
+			"Use $setup-aster-consumer", "The agent should not ask again", "-exact-job",
 			"manifest/consumer-files.sha256", "reports/setup-summary.md",
-			"Use $author-prow-ai-diagnostics",
+			"Use $author-aster-diagnostics",
 			"npx --yes skills@latest update",
 		},
 	}

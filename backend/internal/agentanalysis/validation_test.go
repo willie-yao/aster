@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 type testSourceReader struct {

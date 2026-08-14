@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
+	"github.com/willie-yao/aster/backend/internal/fetchprogress"
 )
 
 func startFetchProgress(ctx context.Context, opts Options, passType fetchprogress.PassType) (*fetchprogress.Tracker, context.CancelFunc) {

@@ -10,9 +10,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/analysisexecutor"
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/agentanalysis"
+	"github.com/willie-yao/aster/backend/internal/analysisexecutor"
+	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 const requestEnv = "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64"

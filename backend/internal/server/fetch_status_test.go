@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetchprogress"
+	"github.com/willie-yao/aster/backend/internal/fetchprogress"
 )
 
 func serverFetchStatus(now time.Time) fetchprogress.Status {

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentsandbox"
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/agentsandbox"
+	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 const (

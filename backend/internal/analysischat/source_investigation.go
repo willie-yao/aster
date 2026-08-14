@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 // SourceInvestigationOptions bounds read-only source requests attached to chat sessions.

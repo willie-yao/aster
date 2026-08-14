@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 // JobLocation identifies which Prow-convention path a job lives under. For

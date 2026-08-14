@@ -1,0 +1,10 @@
+apiVersion: v2
+name: aster
+description: Kubernetes-native deployment of Aster, running a worker or CronJob and serving the dashboard from a shared volume.
+type: application
+version: 0.1.0
+# appVersion is the default tag for engine, analyzer, and fixer images.
+appVersion: "dev"
+home: https://github.com/willie-yao/aster
+sources:
+  - https://github.com/willie-yao/aster

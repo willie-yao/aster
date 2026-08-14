@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 // xmlTestSuites mirrors the JUnit <testsuites> root.

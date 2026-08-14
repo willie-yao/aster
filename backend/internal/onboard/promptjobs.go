@@ -4,8 +4,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
 )
 
 func buildPromptJobSummaries(jobs []models.ProwJob, definitions []jobconfig.JobDefinition, sourceRepo Repo, selectedDashboard string) []promptJobSummary {

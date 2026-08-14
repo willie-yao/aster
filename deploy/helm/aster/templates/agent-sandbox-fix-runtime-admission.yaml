@@ -1,0 +1,110 @@
+{{- include "aster.validateAgentSandboxFixRuntime" . -}}
+{{- if .Values.agentSandbox.fixRuntime.enabled }}
+{{- $cfg := .Values.agentSandbox.fixRuntime -}}
+{{- $provider := $cfg.modelProvider -}}
+{{- $reasoningEffort := default "" $provider.reasoningEffort -}}
+{{- $directBearer := and (eq (default "direct" $provider.credentialMode) "direct") (eq (default "none" $provider.auth.type) "bearer") -}}
+{{- $clientSA := include "aster.agentSandboxClientServiceAccountName" . -}}
+{{- $requester := printf "system:serviceaccount:%s:%s" .Release.Namespace $clientSA -}}
+{{- $image := include "aster.agentSandboxExecutorImage" . -}}
+{{- $workloadSA := include "aster.agentSandboxWorkloadServiceAccountName" . -}}
+{{- $timeoutMinutes := trimSuffix "m" (printf "%v" $cfg.timeout) | int -}}
+{{- $timeoutSeconds := add (mul $timeoutMinutes 60) 15 -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "aster.agentSandboxAdmissionName" . }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-fix-runtime
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["agents.x-k8s.io"]
+        apiVersions: ["v1beta1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["sandboxes"]
+        scope: Namespaced
+  matchConditions:
+    - name: execution-namespace
+      expression: {{ printf "object.metadata.namespace == %s" (toJson $cfg.namespace) | quote }}
+    - name: dashboard-created-sandbox
+      expression: {{ printf "request.operation == 'CREATE' ? request.userInfo.username == %s : (has(oldObject.metadata.labels) && 'app.kubernetes.io/managed-by' in oldObject.metadata.labels && oldObject.metadata.labels['app.kubernetes.io/managed-by'] == 'prow-ai-dashboard' && 'prow-ai-dashboard/execution' in oldObject.metadata.labels)" (toJson $requester) | quote }}
+  variables:
+    - name: pod
+      expression: "object.spec.podTemplate.spec"
+    - name: container
+      expression: "object.spec.podTemplate.spec.containers[0]"
+  validations:
+    - expression: "request.operation != 'UPDATE' || object.spec == oldObject.spec"
+      message: "dashboard Fix Sandboxes have an immutable workload spec"
+    - expression: "request.operation != 'UPDATE' || object.metadata.labels == oldObject.metadata.labels"
+      message: "dashboard Fix Sandbox labels are immutable"
+    - expression: "request.operation != 'UPDATE' || (has(object.metadata.annotations) && has(oldObject.metadata.annotations) && object.metadata.annotations['prow-ai-dashboard/execution-contract-sha256'] == oldObject.metadata.annotations['prow-ai-dashboard/execution-contract-sha256'] && object.metadata.annotations['prow-ai-dashboard/execution-id'] == oldObject.metadata.annotations['prow-ai-dashboard/execution-id'])"
+      message: "dashboard Fix Sandbox execution identity annotations are immutable"
+    - expression: "request.operation != 'CREATE' || (object.metadata.name.matches('^fix-[a-z0-9-]+-[0-9a-f]{12}$') && has(object.metadata.labels) && size(object.metadata.labels) == 3 && object.metadata.labels['app.kubernetes.io/managed-by'] == 'prow-ai-dashboard' && object.metadata.labels['agents.x-k8s.io/created-by'] == 'prow-ai-dashboard' && object.metadata.labels['prow-ai-dashboard/execution'] == object.metadata.name && (!has(object.metadata.finalizers) || size(object.metadata.finalizers) == 0))"
+      message: "dashboard Fix Sandboxes must use the exact content-addressed labels and name without caller finalizers"
+    - expression: "request.operation != 'CREATE' || (has(object.metadata.annotations) && size(object.metadata.annotations) == {{ add 2 (ternary 1 0 (ne $reasoningEffort "")) }} && object.metadata.annotations['prow-ai-dashboard/execution-contract-sha256'].matches('^[0-9a-f]{64}$') && size(object.metadata.annotations['prow-ai-dashboard/execution-id']) > 0)"
+      message: "dashboard Fix Sandboxes must carry the exact execution annotations"
+    {{- if $reasoningEffort }}
+    - expression: {{ printf "request.operation != 'CREATE' || (has(object.metadata.annotations) && object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == %s)" (toJson $reasoningEffort) | quote }}
+      message: "dashboard Fix Sandboxes must use the configured reasoning effort"
+    - expression: "request.operation != 'UPDATE' || object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == oldObject.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort']"
+      message: "dashboard Fix Sandbox reasoning effort is immutable"
+    {{- else }}
+    - expression: "request.operation != 'CREATE' || !has(object.metadata.annotations) || !('prow-ai-dashboard/model-provider-reasoning-effort' in object.metadata.annotations)"
+      message: "dashboard Fix Sandboxes must not add a reasoning effort override"
+    - expression: "request.operation != 'UPDATE' || ((has(object.metadata.annotations) && 'prow-ai-dashboard/model-provider-reasoning-effort' in object.metadata.annotations) == (has(oldObject.metadata.annotations) && 'prow-ai-dashboard/model-provider-reasoning-effort' in oldObject.metadata.annotations) && (!has(object.metadata.annotations) || !('prow-ai-dashboard/model-provider-reasoning-effort' in object.metadata.annotations) || (has(oldObject.metadata.annotations) && 'prow-ai-dashboard/model-provider-reasoning-effort' in oldObject.metadata.annotations && object.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'] == oldObject.metadata.annotations['prow-ai-dashboard/model-provider-reasoning-effort'])))"
+      message: "dashboard Fix Sandbox reasoning effort overrides cannot be introduced"
+    {{- end }}
+    # AdmissionRequest exposes no trusted wall-clock value. The adapter sets the
+    # absolute shutdown time; admission pins Delete policy and the Pod deadline.
+    - expression: "has(object.spec.shutdownTime) && has(object.spec.shutdownPolicy) && object.spec.shutdownPolicy == 'Delete' && (!has(object.spec.operatingMode) || object.spec.operatingMode == 'Running')"
+      message: "dashboard Fix Sandboxes must declare shutdownTime and Delete policy"
+    - expression: "has(object.spec.service) && object.spec.service == false && (!has(object.spec.volumeClaimTemplates) || size(object.spec.volumeClaimTemplates) == 0)"
+      message: "dashboard Fix Sandboxes must not create Services or PVCs"
+    - expression: "has(object.spec.podTemplate.metadata) && has(object.spec.podTemplate.metadata.labels) && size(object.spec.podTemplate.metadata.labels) == 1 && object.spec.podTemplate.metadata.labels['prow-ai-dashboard/execution'] == object.metadata.name && (!has(object.spec.podTemplate.metadata.annotations) || size(object.spec.podTemplate.metadata.annotations) == 0)"
+      message: "dashboard Fix Sandbox Pod metadata is fixed"
+    - expression: {{ printf "variables.pod.serviceAccountName == %s && (!has(variables.pod.serviceAccount) || variables.pod.serviceAccount == '') && has(variables.pod.automountServiceAccountToken) && variables.pod.automountServiceAccountToken == false && variables.pod.runtimeClassName == %s" (toJson $workloadSA) (toJson $cfg.runtimeClassName) | quote }}
+      message: "dashboard Fix Sandbox identity and RuntimeClass must match configured values"
+    - expression: {{ printf "variables.pod.restartPolicy == 'Never' && variables.pod.activeDeadlineSeconds == %d && variables.pod.terminationGracePeriodSeconds == 5 && has(variables.pod.enableServiceLinks) && variables.pod.enableServiceLinks == false" $timeoutSeconds | quote }}
+      message: "dashboard Fix Sandbox Pod lifecycle must match configured bounds"
+    - expression: "(!has(variables.pod.hostNetwork) || variables.pod.hostNetwork == false) && (!has(variables.pod.hostPID) || variables.pod.hostPID == false) && (!has(variables.pod.hostIPC) || variables.pod.hostIPC == false) && (!has(variables.pod.shareProcessNamespace) || variables.pod.shareProcessNamespace == false) && !has(variables.pod.hostUsers) && (!has(variables.pod.hostAliases) || size(variables.pod.hostAliases) == 0) && !has(variables.pod.dnsPolicy) && !has(variables.pod.dnsConfig) && !has(variables.pod.setHostnameAsFQDN)"
+      message: "dashboard Fix Sandboxes must not join host namespaces or override DNS"
+    - expression: "has(variables.pod.securityContext) && variables.pod.securityContext.runAsNonRoot == true && variables.pod.securityContext.runAsUser == 65532 && variables.pod.securityContext.runAsGroup == 65532 && variables.pod.securityContext.fsGroup == 65532 && variables.pod.securityContext.seccompProfile.type == 'RuntimeDefault' && variables.pod.securityContext.appArmorProfile.type == 'RuntimeDefault' && (!has(variables.pod.securityContext.sysctls) || size(variables.pod.securityContext.sysctls) == 0) && (!has(variables.pod.securityContext.supplementalGroups) || size(variables.pod.securityContext.supplementalGroups) == 0) && !has(variables.pod.securityContext.supplementalGroupsPolicy) && !has(variables.pod.securityContext.fsGroupChangePolicy) && !has(variables.pod.securityContext.seLinuxChangePolicy) && !has(variables.pod.securityContext.seLinuxOptions) && !has(variables.pod.securityContext.windowsOptions)"
+      message: "dashboard Fix Sandbox Pod security context is fixed"
+    - expression: "size(variables.pod.containers) == 1 && (!has(variables.pod.initContainers) || size(variables.pod.initContainers) == 0) && (!has(variables.pod.ephemeralContainers) || size(variables.pod.ephemeralContainers) == 0)"
+      message: "dashboard Fix Sandboxes must contain exactly one executor container"
+    - expression: {{ printf "variables.container.name == 'executor' && variables.container.image == %s && variables.container.imagePullPolicy == %s && (!has(variables.container.command) || size(variables.container.command) == 0) && (!has(variables.container.args) || size(variables.container.args) == 0)" (toJson $image) (toJson $cfg.image.pullPolicy) | quote }}
+      message: "dashboard Fix Sandboxes must use the configured immutable executor entrypoint"
+    - expression: "has(variables.container.securityContext) && variables.container.securityContext.runAsNonRoot == true && variables.container.securityContext.runAsUser == 65532 && variables.container.securityContext.runAsGroup == 65532 && variables.container.securityContext.allowPrivilegeEscalation == false && variables.container.securityContext.readOnlyRootFilesystem == true && variables.container.securityContext.seccompProfile.type == 'RuntimeDefault' && variables.container.securityContext.appArmorProfile.type == 'RuntimeDefault' && has(variables.container.securityContext.capabilities) && size(variables.container.securityContext.capabilities.drop) == 1 && variables.container.securityContext.capabilities.drop[0] == 'ALL' && (!has(variables.container.securityContext.capabilities.add) || size(variables.container.securityContext.capabilities.add) == 0) && (!has(variables.container.securityContext.privileged) || variables.container.securityContext.privileged == false) && (!has(variables.container.securityContext.procMount) || variables.container.securityContext.procMount == 'Default') && !has(variables.container.securityContext.seLinuxOptions) && !has(variables.container.securityContext.windowsOptions)"
+      message: "dashboard Fix Sandbox container security context is fixed"
+    {{- if $directBearer }}
+    - expression: {{ printf "size(variables.container.env) == 2 && variables.container.env[0].name == 'PROW_AI_FIX_EXECUTION_REQUEST_B64' && has(variables.container.env[0].value) && size(variables.container.env[0].value) > 0 && size(variables.container.env[0].value) <= 262144 && variables.container.env[0].value.matches('^[A-Za-z0-9+/]+={0,2}$') && !has(variables.container.env[0].valueFrom) && variables.container.env[1].name == 'PROW_AI_MODEL_PROVIDER_TOKEN' && !has(variables.container.env[1].value) && has(variables.container.env[1].valueFrom) && has(variables.container.env[1].valueFrom.secretKeyRef) && variables.container.env[1].valueFrom.secretKeyRef.name == %s && variables.container.env[1].valueFrom.secretKeyRef.key == %s && (!has(variables.container.env[1].valueFrom.secretKeyRef.optional) || variables.container.env[1].valueFrom.secretKeyRef.optional == false) && !has(variables.container.env[1].valueFrom.configMapKeyRef) && !has(variables.container.env[1].valueFrom.fieldRef) && !has(variables.container.env[1].valueFrom.resourceFieldRef) && (!has(variables.container.envFrom) || size(variables.container.envFrom) == 0)" (toJson $provider.auth.existingSecret) (toJson $provider.auth.tokenKey) | quote }}
+    {{- else }}
+    - expression: "size(variables.container.env) == 1 && variables.container.env[0].name == 'PROW_AI_FIX_EXECUTION_REQUEST_B64' && has(variables.container.env[0].value) && size(variables.container.env[0].value) > 0 && size(variables.container.env[0].value) <= 262144 && variables.container.env[0].value.matches('^[A-Za-z0-9+/]+={0,2}$') && !has(variables.container.env[0].valueFrom) && (!has(variables.container.envFrom) || size(variables.container.envFrom) == 0)"
+    {{- end }}
+      message: "dashboard Fix Sandbox executor environment must match the configured request and provider credential"
+    - expression: "(!has(variables.container.ports) || size(variables.container.ports) == 0) && (!has(variables.container.volumeDevices) || size(variables.container.volumeDevices) == 0) && !has(variables.container.lifecycle) && !has(variables.container.livenessProbe) && !has(variables.container.readinessProbe) && !has(variables.container.startupProbe) && !has(variables.container.restartPolicy) && (!has(variables.container.restartPolicyRules) || size(variables.container.restartPolicyRules) == 0) && (!has(variables.container.resizePolicy) || size(variables.container.resizePolicy) == 0) && (!has(variables.container.stdin) || variables.container.stdin == false) && (!has(variables.container.stdinOnce) || variables.container.stdinOnce == false) && (!has(variables.container.tty) || variables.container.tty == false) && !has(variables.container.workingDir) && !has(variables.container.terminationMessagePath) && !has(variables.container.terminationMessagePolicy)"
+      message: "dashboard Fix Sandbox executor process shape is fixed"
+    - expression: {{ printf "size(variables.container.resources.requests) == 3 && size(variables.container.resources.limits) == 3 && (!has(variables.container.resources.claims) || size(variables.container.resources.claims) == 0) && variables.container.resources.requests['cpu'] == %s && variables.container.resources.requests['memory'] == %s && variables.container.resources.requests['ephemeral-storage'] == %s && variables.container.resources.limits['cpu'] == %s && variables.container.resources.limits['memory'] == %s && variables.container.resources.limits['ephemeral-storage'] == %s" (toJson (index $cfg.resources.requests "cpu")) (toJson (index $cfg.resources.requests "memory")) (toJson (index $cfg.resources.requests "ephemeral-storage")) (toJson (index $cfg.resources.limits "cpu")) (toJson (index $cfg.resources.limits "memory")) (toJson (index $cfg.resources.limits "ephemeral-storage")) | quote }}
+      message: "dashboard Fix Sandbox resources must match configured bounds"
+    - expression: "size(variables.container.volumeMounts) == 2 && variables.container.volumeMounts.exists(v, v.name == 'workspace' && v.mountPath == '/workspace' && (!has(v.readOnly) || v.readOnly == false)) && variables.container.volumeMounts.exists(v, v.name == 'tmp' && v.mountPath == '/tmp' && (!has(v.readOnly) || v.readOnly == false))"
+      message: "dashboard Fix Sandbox mounts are limited to disposable workspace and tmp"
+    - expression: {{ printf "size(variables.pod.volumes) == 2 && variables.pod.volumes.all(v, has(v.emptyDir) && !has(v.awsElasticBlockStore) && !has(v.azureDisk) && !has(v.azureFile) && !has(v.cephfs) && !has(v.cinder) && !has(v.configMap) && !has(v.csi) && !has(v.downwardAPI) && !has(v.ephemeral) && !has(v.fc) && !has(v.flexVolume) && !has(v.flocker) && !has(v.gcePersistentDisk) && !has(v.gitRepo) && !has(v.glusterfs) && !has(v.hostPath) && !has(v.image) && !has(v.iscsi) && !has(v.nfs) && !has(v.persistentVolumeClaim) && !has(v.photonPersistentDisk) && !has(v.portworxVolume) && !has(v.projected) && !has(v.quobyte) && !has(v.rbd) && !has(v.scaleIO) && !has(v.secret) && !has(v.storageos) && !has(v.vsphereVolume)) && variables.pod.volumes.exists(v, v.name == 'workspace' && v.emptyDir.sizeLimit == %s) && variables.pod.volumes.exists(v, v.name == 'tmp' && v.emptyDir.sizeLimit == '64Mi')" (toJson (index $cfg.resources.limits "ephemeral-storage")) | quote }}
+      message: "dashboard Fix Sandbox storage must use only bounded emptyDir volumes"
+    - expression: "(!has(variables.pod.imagePullSecrets) || size(variables.pod.imagePullSecrets) == 0) && (!has(variables.pod.nodeSelector) || size(variables.pod.nodeSelector) == 0) && (!has(variables.pod.tolerations) || size(variables.pod.tolerations) == 0) && !has(variables.pod.nodeName) && !has(variables.pod.hostname) && !has(variables.pod.hostnameOverride) && !has(variables.pod.subdomain) && !has(variables.pod.affinity) && !has(variables.pod.schedulerName) && !has(variables.pod.priority) && !has(variables.pod.priorityClassName) && !has(variables.pod.preemptionPolicy) && (!has(variables.pod.topologySpreadConstraints) || size(variables.pod.topologySpreadConstraints) == 0) && (!has(variables.pod.schedulingGates) || size(variables.pod.schedulingGates) == 0) && !has(variables.pod.schedulingGroup) && (!has(variables.pod.readinessGates) || size(variables.pod.readinessGates) == 0) && (!has(variables.pod.resourceClaims) || size(variables.pod.resourceClaims) == 0) && !has(variables.pod.resources) && !has(variables.pod.os) && !has(variables.pod.overhead)"
+      message: "dashboard Fix Sandboxes must not override placement, scheduling, devices, registry credentials, or network identity"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "aster.agentSandboxAdmissionName" . }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-fix-runtime
+spec:
+  policyName: {{ include "aster.agentSandboxAdmissionName" . }}
+  validationActions: [Deny]
+{{- end }}

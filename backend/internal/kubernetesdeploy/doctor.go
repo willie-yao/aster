@@ -17,9 +17,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/onboard"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
+	"github.com/willie-yao/aster/backend/internal/onboard"
+	"github.com/willie-yao/aster/backend/internal/project"
 	"gopkg.in/yaml.v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	k8sresource "k8s.io/apimachinery/pkg/api/resource"

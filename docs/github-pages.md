@@ -15,7 +15,7 @@ and you do not need interactive admin actions.
 - When AI is enabled, the API selector, endpoint URL, model id, and bearer
   token.
 
-Run the guided [`fetcher onboard`](onboarding-a-new-project.md) flow to generate
+Run the guided [`aster onboard`](onboarding-a-new-project.md) flow to generate
 and validate these files. The wizard does not enable Pages or write repository
 variables and Secrets. Use `-dry-run` to review the complete plan without
 writing files.
@@ -45,7 +45,7 @@ concurrency:
 
 jobs:
   deploy:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
     with:
       ai-api: ${{ vars.AI_API }}
       ai-model: ${{ vars.AI_MODEL }}
@@ -91,7 +91,7 @@ choice. Using it does not configure the deployed Pages workflow.
 Validate the local scaffold and workflow structure with:
 
 ```bash
-fetcher onboard doctor -project-dir ./my-dashboard
+aster onboard doctor -project-dir ./my-dashboard
 ```
 
 Doctor validates the workflow mappings but cannot read the values stored in
@@ -104,10 +104,10 @@ Use only refs that currently exist:
 
 ```yaml
 # Current development version.
-uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
 
 # Existing prerelease or release, pinned exactly.
-uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@v1.0.0-beta.5
+uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v1.0.0-beta.5
 ```
 
 The moving `@v1` alias is created only when the first stable `v1.0.0` release is
@@ -192,7 +192,7 @@ For pre-fetched data:
 ```bash
 AI_ENDPOINT="http://localhost:8000/v1/chat/completions" \
 AI_MODEL="model-id" AI_TOKEN="token-or-placeholder" \
-  ./bin/fetcher -project-dir=<project_dir> -out=<project_dir>/data -ai
+  ./bin/aster -project-dir=<project_dir> -out=<project_dir>/data -ai
 
 git add <project_dir>/data
 git commit -m "Refresh prefetched data"
@@ -211,7 +211,7 @@ the relay uses authentication:
 ```yaml
 jobs:
   deploy:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
     secrets:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
       EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}

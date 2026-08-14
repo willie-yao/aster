@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
 )
 
 const (

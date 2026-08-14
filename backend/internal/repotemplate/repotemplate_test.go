@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai"
 )
 
 // contentsServer serves the GitHub contents API for a fixed file/dir set.

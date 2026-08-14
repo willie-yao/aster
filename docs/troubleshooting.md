@@ -37,7 +37,7 @@ cases below.
 
 ```bash
 # Validate config and job discovery without AI.
-./bin/fetcher -project-dir=../my-consumer -ai=false -builds=1
+./bin/aster -project-dir=../my-consumer -ai=false -builds=1
 
 # Inspect the generated job count.
 python3 -c "import json; print(len(json.load(open('data/dashboard.json'))['jobs']))"
@@ -77,7 +77,7 @@ found no matching jobs, or every discovered job failed while loading build data.
 2. Run a one-build check without AI:
 
    ```bash
-   ./bin/fetcher -project-dir=../my-consumer -ai=false -builds=1
+   ./bin/aster -project-dir=../my-consumer -ai=false -builds=1
    ```
 
 3. Inspect the result:

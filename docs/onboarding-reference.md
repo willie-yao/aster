@@ -1,7 +1,7 @@
 # Onboarding reference
 
 This page documents discovery, automation, prompt authoring, validation, and the
-full `fetcher onboard` command surface. It includes advanced and experimental
+full `aster onboard` command surface. It includes advanced and experimental
 flags that do not belong in the first-run path. For a first project, start with
 [Onboarding a project](onboarding-a-new-project.md).
 
@@ -75,7 +75,7 @@ scaffold.
 Inspect automatic inference without rendering or writing files:
 
 ```bash
-go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest \
+go run github.com/willie-yao/aster/backend/cmd/aster@latest \
   onboard discover \
   -source-repo owner/name
 ```
@@ -263,7 +263,7 @@ rationale, prompt hashes, and the same create/replace/preserve plan without
 writing scaffold files or opening a pull request.
 
 ```bash
-go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
+go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard \
   -source-repo owner/source \
   -dry-run
 ```
@@ -283,7 +283,7 @@ represent an open-PR plan.
 Apply the exact reviewed artifact with no discovery or scaffold flags:
 
 ```bash
-fetcher onboard \
+aster onboard \
   -apply-plan /private/path/onboard-plan.json \
   -plan-digest 'sha256:<reviewed-digest>' \
   -result-out /private/path/manifest/apply-result.json \
@@ -316,7 +316,7 @@ value.
 Pages example:
 
 ```bash
-go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
+go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -329,7 +329,7 @@ go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboar
 Kubernetes example:
 
 ```bash
-go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest onboard \
+go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -364,7 +364,7 @@ For automation that must receive a validated agent-authored prompt rather than a
 handoff fallback, select agent mode and add the strict flag:
 
 ```bash
-fetcher onboard \
+aster onboard \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -385,7 +385,7 @@ repository instead of writing a local directory.
 
 ```bash
 export GITHUB_TOKEN="..."
-fetcher onboard \
+aster onboard \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<existing-dashboard-repo>" \
@@ -417,7 +417,7 @@ Run the read-only doctor after generation or while diagnosing an existing
 consumer:
 
 ```bash
-go run github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@latest \
+go run github.com/willie-yao/aster/backend/cmd/aster@latest \
   onboard doctor \
   -project-dir ./my-dashboard
 ```
@@ -440,16 +440,16 @@ Doctor does not contact the model provider or inspect a Kubernetes cluster.
 Scaffolding and read-only validation remain under:
 
 ```text
-fetcher onboard
-fetcher onboard discover
-fetcher onboard doctor
+aster onboard
+aster onboard discover
+aster onboard doctor
 ```
 
 Kubernetes bundle operations use:
 
 ```text
-fetcher kubernetes install
-fetcher kubernetes upgrade
+aster kubernetes install
+aster kubernetes upgrade
 ```
 
 These commands reuse the same project, prompt, and skill validation. A separate

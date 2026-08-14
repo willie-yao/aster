@@ -71,7 +71,7 @@ function EmptyDashboardState({ generatedAt }: { generatedAt: string }) {
           overflowWrap: "anywhere",
         }}
       >
-        fetcher -project-dir=&lt;consumer&gt; -ai=false -builds=1
+        aster -project-dir=&lt;consumer&gt; -ai=false -builds=1
       </Box>
       <Typography variant="data" color="text.secondary" sx={{ display: "block", mt: 2 }}>
         Last generated {timeAgo(generatedAt)}

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/project"
 	"gopkg.in/yaml.v3"
 )
 
@@ -52,7 +52,7 @@ func TestBuildApplyResultAndSetupHandoffValidate(t *testing.T) {
 		t.Fatalf("handoff mode = %o", info.Mode().Perm())
 	}
 	root := onboardingRepoRoot(t)
-	script := filepath.Join(root, ".agents", "skills", "setup-prow-ai-consumer", "scripts", "validate_setup_handoff.py")
+	script := filepath.Join(root, ".agents", "skills", "setup-aster-consumer", "scripts", "validate_setup_handoff.py")
 	output, err := exec.Command("python3", script, path).CombinedOutput()
 	if err != nil {
 		t.Fatalf("validate handoff: %v\n%s", err, output)
@@ -162,7 +162,7 @@ func TestApplyReviewedWritesValidatedOutputs(t *testing.T) {
 		t.Fatalf("artifact/test-infra handoff = %+v %+v", handoff.ArtifactLocation, handoff.TestInfra)
 	}
 	root := onboardingRepoRoot(t)
-	script := filepath.Join(root, ".agents", "skills", "setup-prow-ai-consumer", "scripts", "validate_setup_handoff.py")
+	script := filepath.Join(root, ".agents", "skills", "setup-aster-consumer", "scripts", "validate_setup_handoff.py")
 	output, err := exec.Command("python3", script, handoffPath).CombinedOutput()
 	if err != nil {
 		t.Fatalf("validate handoff: %v\n%s", err, output)

@@ -1,8 +1,8 @@
 package ai
 
 import (
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/buildsource"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/buildsource"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 // BuildSource identifies one configured repository at the immutable commit tested by a build.

@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
 type eventKind int

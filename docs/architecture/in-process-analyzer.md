@@ -1,7 +1,7 @@
 # In-process failure analyzer architecture
 
 This document describes the authoritative per-build failure analyzer used by
-`prow-ai-dashboard`. It focuses on implementation ownership and control flow.
+Aster. It focuses on implementation ownership and control flow.
 Configuration details remain in [Agentic analysis](../agentic.md),
 [Project configuration](../project-configuration.md), [AI providers](../ai-providers.md),
 and [diagnostic skills](../skills.md).
@@ -31,7 +31,7 @@ fetcher or worker. It has no public output or normal cache authority.
 
 ## End-to-end flow
 
-`backend/cmd/fetcher` calls `fetcher.Run` for a one-shot refresh.
+`backend/cmd/aster` calls `fetcher.Run` for a one-shot refresh.
 `backend/cmd/worker` calls `fetcher.RunWatch` for repeated refreshes. After job
 discovery, artifact loading, JUnit parsing, and aggregation,
 `fetcher.analyzeFailuresWithAI` schedules each failed `models.TestCase` through

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/agentanalysis"
+	"github.com/willie-yao/aster/backend/internal/agentanalysis"
 )
 
 func TestParseOpenCodeTelemetrySanitizesSuccessfulUsage(t *testing.T) {

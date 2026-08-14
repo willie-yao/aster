@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
+	"github.com/willie-yao/aster/backend/internal/fetcher"
 )
 
 func TestParseOptionsOrkaAnalysis(t *testing.T) {

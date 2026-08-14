@@ -1,8 +1,8 @@
 # Changelog
 
-All notable changes to the prow-ai-dashboard engine are documented here. The
+All notable changes to the Aster engine are documented here. The
 engine follows [Semantic Versioning](https://semver.org): consumers pin it via
-`uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@<ref>`,
+`uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@<ref>`,
 and the pinned ref controls both the workflow and the engine code it builds.
 
 What bumps what:
@@ -128,7 +128,7 @@ how to pin a consumer to a reviewed version.
   both targets. A `cmd/worker` runs a continuous watch loop (incremental every
   few minutes, full rediscovery hourly) writing to a shared volume the server
   reads. Ships as a single container image (fetcher + server + SPA) and a Helm
-  chart (`deploy/helm/prow-ai-dashboard`: fetcher CronJob + server from a shared
+  chart (`deploy/helm/aster`: fetcher CronJob + server from a shared
   RWX volume). See [docs/kubernetes.md](docs/kubernetes.md) and
   [docs/server.md](docs/server.md).
 - **Admin-gated on-demand actions** (server mode). Signed-in admins can, per
@@ -148,7 +148,7 @@ how to pin a consumer to a reviewed version.
   flake that comes back is never permanently hidden. State lives in
   `resolved.json`, served read-only.
 - The Helm chart is now published on each release: a `v*.*.*` tag pushes it to
-  `oci://ghcr.io/<owner>/charts/prow-ai-dashboard` (image pinned to the release)
+  `oci://ghcr.io/<owner>/charts/aster` (image pinned to the release)
   and attaches the packaged `.tgz` to the GitHub Release.
 - `make dev-actions` previews the server-mode UI with admin actions enabled
   locally (local proxy auth, no OAuth setup), unlike the read-only `make dev`.
@@ -176,7 +176,7 @@ how to pin a consumer to a reviewed version.
   draft against the skills schema before proposing, and dedupes by a hidden
   marker. Needs a `SKILL_TOKEN` secret. See
   [docs/skills.md](docs/skills.md#auto-suggesting-recipes).
-- New `fetcher onboard` subcommand scaffolds a new dashboard from a testgrid
+- New `aster onboard` subcommand scaffolds a new dashboard from a testgrid
   dashboard name or a storage bucket. It verifies discovery finds jobs, infers
   `categories` from the job names, and writes a ready-to-review scaffold
   (`project.yaml`, both workflows, a `prompts/system.md` draft, a `CHECKLIST.md`),

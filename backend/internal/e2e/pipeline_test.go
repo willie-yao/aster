@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/skills"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aitest"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fetcher"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/ai/skills"
+	"github.com/willie-yao/aster/backend/internal/aitest"
+	"github.com/willie-yao/aster/backend/internal/fetcher"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 // fixtureBucket is the committed artifact tree the local storage provider reads.

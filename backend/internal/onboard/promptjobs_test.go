@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
 )
 
 func TestBuildPromptJobSummariesUsesSweepAndDiscoveryMetadata(t *testing.T) {

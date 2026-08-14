@@ -34,7 +34,7 @@ notifications:
   email:
     enabled: true
     action_links: false
-    from: "Prow AI Dashboard <prow-dashboard@example.com>"
+    from: "Aster <aster@example.com>"
     to:
       - "ci-team@example.com"
     smtp:
@@ -106,7 +106,7 @@ workflow:
 ```yaml
 jobs:
   deploy:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
     with:
       project_dir: .
     secrets:

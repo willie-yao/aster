@@ -10,8 +10,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/causalcritic"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/criticexecutor"
+	"github.com/willie-yao/aster/backend/internal/causalcritic"
+	"github.com/willie-yao/aster/backend/internal/criticexecutor"
 )
 
 func main() {

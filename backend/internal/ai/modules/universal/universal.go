@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 // Module implements ai.Module: it builds the per-failure seed prompt for the

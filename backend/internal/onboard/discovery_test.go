@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
 )
 
 type fakeRepositoryClient struct {
@@ -117,7 +117,7 @@ func TestDiscoverRepository_SuggestionsAndPinnedRevision(t *testing.T) {
 	if report.CatalogRevision != "abcdef123456" || len(report.Candidates) != 1 || report.Candidates[0].Dashboard != "capz-dashboard" {
 		t.Fatalf("report = %+v", report)
 	}
-	if report.DashboardRepo.Value != "kubernetes-sigs/cluster-api-provider-azure-prow-ai-dashboard" || report.DashboardRepo.Source != "authenticated GitHub login and source repository name" {
+	if report.DashboardRepo.Value != "kubernetes-sigs/cluster-api-provider-azure-aster" || report.DashboardRepo.Source != "authenticated GitHub login and source repository name" {
 		t.Fatalf("dashboard repo = %+v", report.DashboardRepo)
 	}
 	if report.Identity.ID.Confidence != ConfidenceHigh || report.Identity.Name.Value != "Cluster API Provider Azure" || report.Identity.ShortName.Value != "" || report.Identity.ShortName.Confidence != ConfidenceLow {
@@ -158,7 +158,7 @@ func TestWriteDiscovery_EscapesTerminalControlCharacters(t *testing.T) {
 func TestSuggestedDashboardNameIsValidForLongSourceName(t *testing.T) {
 	source := strings.Repeat("a", 100)
 	name := suggestedDashboardName(source)
-	if len(name) != 100 || !strings.HasSuffix(name, "-prow-ai-dashboard") {
+	if len(name) != 100 || !strings.HasSuffix(name, "-aster") {
 		t.Fatalf("suggested name length=%d value=%q", len(name), name)
 	}
 }
@@ -172,9 +172,9 @@ func TestWriteDiscovery_TextIncludesAllSuggestions(t *testing.T) {
 			Name:      Inferred[string]{Value: "Project", Source: "repo", Confidence: ConfidenceMedium},
 			ShortName: Inferred[string]{Value: "PRJ", Source: "initials", Confidence: ConfidenceMedium},
 		},
-		DashboardRepo: Inferred[string]{Value: "example/project-prow-ai-dashboard", Source: "repo", Confidence: ConfidenceHigh},
-		BasePath:      Inferred[string]{Value: "/project-prow-ai-dashboard", Source: "dashboard repo", Confidence: ConfidenceHigh},
-		SiteURL:       Inferred[string]{Value: "https://example.github.io/project-prow-ai-dashboard", Source: "Pages", Confidence: ConfidenceHigh},
+		DashboardRepo: Inferred[string]{Value: "example/project-aster", Source: "repo", Confidence: ConfidenceHigh},
+		BasePath:      Inferred[string]{Value: "/project-aster", Source: "dashboard repo", Confidence: ConfidenceHigh},
+		SiteURL:       Inferred[string]{Value: "https://example.github.io/project-aster", Source: "Pages", Confidence: ConfidenceHigh},
 		Categories:    []project.CategoryRule{{ID: "e2e"}, {ID: "conformance"}},
 	}
 	if err := WriteDiscovery(&out, report, false); err != nil {
@@ -311,7 +311,7 @@ func TestInferDashboardOwnerPreference(t *testing.T) {
 }
 
 func TestInferredDashboardDestinationWithoutOwner(t *testing.T) {
-	repo, site := inferredDashboardDestination(Inferred[string]{Source: "owner unresolved", Confidence: ConfidenceLow}, "project-prow-ai-dashboard")
+	repo, site := inferredDashboardDestination(Inferred[string]{Source: "owner unresolved", Confidence: ConfidenceLow}, "project-aster")
 	if repo.Value != "" || site.Value != "" || repo.Confidence != ConfidenceLow || site.Confidence != ConfidenceLow {
 		t.Fatalf("repo=%+v site=%+v", repo, site)
 	}

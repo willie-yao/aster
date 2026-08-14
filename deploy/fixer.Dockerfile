@@ -8,7 +8,7 @@ COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/ ./
 ARG VERSION=fixer
-RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" -o /out/fetcher ./cmd/fetcher
+RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" -o /out/fetcher ./cmd/aster
 
 FROM node:20-slim
 ARG OPENCODE_VERSION=1.18.2
@@ -21,4 +21,7 @@ COPY --from=build /out/fetcher /usr/local/bin/fetcher
 # opencode writes config/data under HOME; the runtime uses isolated temp HOMEs,
 # but give the non-root default a writable HOME too.
 ENV HOME=/tmp
+LABEL org.opencontainers.image.source="https://github.com/willie-yao/aster" \
+      org.opencontainers.image.title="Aster Fixer" \
+      org.opencontainers.image.url="https://github.com/willie-yao/aster"
 ENTRYPOINT ["/usr/local/bin/fetcher"]

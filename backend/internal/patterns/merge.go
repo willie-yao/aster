@@ -3,7 +3,7 @@ package patterns
 import (
 	"fmt"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 // MergeLastGood applies fresh outcomes and retains prior model verdicts on failure.

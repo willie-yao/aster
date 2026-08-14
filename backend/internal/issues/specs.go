@@ -5,9 +5,9 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
 // BuildInput carries everything the spec builder needs to turn findings into
@@ -105,7 +105,7 @@ func persistentSpec(tf models.TestFlakiness, summary, rootCause, site string, la
 
 // footer appends the standard provenance line and the hidden dedup marker.
 func footer(key string) string {
-	return fmt.Sprintf("---\n_Filed automatically by [prow-ai-dashboard]. It updates and resolves on its own as builds change._\n\n%s\n", markerFor(key))
+	return fmt.Sprintf("---\n_Filed automatically by Aster. It updates and resolves on its own as builds change._\n\n%s\n", markerFor(key))
 }
 
 func jobLink(site, jobID string) string {

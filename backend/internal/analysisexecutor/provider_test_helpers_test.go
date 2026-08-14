@@ -3,7 +3,7 @@ package analysisexecutor
 import (
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
 )
 
 func testOpenCodeProvider(endpoint, model string) modelprovider.Config {

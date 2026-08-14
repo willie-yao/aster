@@ -13,8 +13,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/redact"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/textutil"
+	"github.com/willie-yao/aster/backend/internal/redact"
+	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
 const (

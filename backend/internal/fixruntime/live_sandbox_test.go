@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
-	agentruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/project"
+	agentruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 func TestLiveSandboxedFixRuntime(t *testing.T) {

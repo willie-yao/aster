@@ -1,0 +1,2464 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Aster Helm values",
+  "description": "Configuration contract for the Aster Helm chart. Cross-field and cluster-dependent constraints are also enforced by chart templates.",
+  "type": "object",
+  "additionalProperties": false,
+  "definitions": {
+    "stringMap": {
+      "type": "object",
+      "description": "A string-valued Kubernetes metadata or selector map.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "freeFormObject": {
+      "type": "object",
+      "description": "A Kubernetes pass-through object.",
+      "additionalProperties": true
+    },
+    "freeFormArray": {
+      "type": "array",
+      "description": "A Kubernetes pass-through object list.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "envVars": {
+      "type": "array",
+      "description": "Kubernetes core/v1 EnvVar entries.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": true
+      }
+    },
+    "tolerations": {
+      "type": "array",
+      "description": "A Kubernetes pass-through object list.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "networkPolicyRules": {
+      "type": "array",
+      "description": "networking.k8s.io/v1 NetworkPolicy ingress rules.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "networkPolicyPeers": {
+      "type": "array",
+      "description": "Legacy networking.k8s.io/v1 NetworkPolicy peers.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "image": {
+      "type": "object",
+      "description": "Container image configuration.",
+      "properties": {
+        "repository": {
+          "type": "string",
+          "description": "Container image repository."
+        },
+        "tag": {
+          "type": "string",
+          "description": "Container image tag. An empty value follows the chart image fallback."
+        },
+        "pullPolicy": {
+          "type": "string",
+          "description": "Kubernetes image pull policy.",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "tag",
+        "pullPolicy"
+      ]
+    }
+  },
+  "properties": {
+    "global": {
+      "type": "object",
+      "description": "Values shared by the engine, analyzer, and fixer images.",
+      "properties": {
+        "imageTag": {
+          "type": "string",
+          "description": "Shared image tag. Empty falls back to the chart appVersion."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "imageTag"
+      ]
+    },
+    "image": {
+      "$ref": "#/definitions/image"
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "description": "Kubernetes image pull Secrets.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Secret name."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "nameOverride": {
+      "type": "string",
+      "description": "Override for the chart name."
+    },
+    "fullnameOverride": {
+      "type": "string",
+      "description": "Override for the fully qualified release name."
+    },
+    "mode": {
+      "type": "string",
+      "description": "Select the single dashboard data writer.",
+      "enum": [
+        "watch",
+        "cron"
+      ]
+    },
+    "analysisCache": {
+      "type": "object",
+      "description": "AI cache namespace controls.",
+      "properties": {
+        "generation": {
+          "description": "Reversible cache generation. Empty preserves historical keys; nonnegative integers are also accepted.",
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "generation"
+      ]
+    },
+    "analysisRuntime": {
+      "type": "object",
+      "description": "Failure analysis runtime selection.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Analysis runtime implementation.",
+          "enum": [
+            "inprocess",
+            "orka-container"
+          ]
+        },
+        "orkaContainer": {
+          "type": "object",
+          "description": "Experimental Orka container analysis settings.",
+          "properties": {
+            "namespace": {
+              "type": "string",
+              "description": "Analysis namespace. Empty creates a retained release-scoped namespace."
+            },
+            "api": {
+              "type": "string",
+              "description": "Orka result API URL."
+            },
+            "apiAuth": {
+              "type": "object",
+              "description": "Orka result API authentication.",
+              "properties": {
+                "existingSecret": {
+                  "type": "string",
+                  "description": "Dashboard-namespace Secret containing a static Orka API token. Empty uses a projected ServiceAccount token."
+                },
+                "tokenKey": {
+                  "type": "string",
+                  "description": "Secret key containing the Orka API token."
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "existingSecret",
+                "tokenKey"
+              ]
+            },
+            "maxConcurrentTasks": {
+              "type": "integer",
+              "description": "Maximum concurrent analyzer Tasks.",
+              "minimum": 1,
+              "maximum": 999
+            },
+            "pollInterval": {
+              "type": "string",
+              "description": "Interval between Orka Task status polls."
+            },
+            "taskTimeout": {
+              "type": "string",
+              "description": "Per-Task timeout. It must exceed the project AI timeout plus lifecycle margin."
+            },
+            "retries": {
+              "type": "integer",
+              "description": "Orka Task retry count.",
+              "minimum": 0,
+              "maximum": 99
+            },
+            "image": {
+              "type": "object",
+              "description": "Analyzer Task image.",
+              "properties": {
+                "repository": {
+                  "type": "string",
+                  "description": "Container image repository."
+                },
+                "tag": {
+                  "type": "string",
+                  "description": "Container image tag. An empty value follows the chart image fallback."
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "description": "Kubernetes image pull policy.",
+                  "enum": [
+                    "IfNotPresent"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "repository",
+                "tag",
+                "pullPolicy"
+              ]
+            },
+            "modelAuth": {
+              "type": "object",
+              "description": "Model credential reference in the analysis namespace.",
+              "properties": {
+                "existingSecret": {
+                  "type": "string",
+                  "description": "Existing model credential Secret name."
+                },
+                "tokenKey": {
+                  "type": "string",
+                  "description": "Secret key containing the model token."
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "existingSecret",
+                "tokenKey"
+              ]
+            },
+            "state": {
+              "type": "object",
+              "description": "Encrypted analyzer state key configuration.",
+              "properties": {
+                "existingSecret": {
+                  "type": "string",
+                  "description": "Existing state Secret name in both dashboard and analysis namespaces."
+                },
+                "key": {
+                  "type": "string",
+                  "description": "Secret key containing the state key."
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "existingSecret",
+                "key"
+              ]
+            },
+            "nodeSelector": {
+              "$ref": "#/definitions/stringMap"
+            },
+            "tolerations": {
+              "$ref": "#/definitions/tolerations"
+            },
+            "affinity": {
+              "$ref": "#/definitions/freeFormObject"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "namespace",
+            "api",
+            "apiAuth",
+            "maxConcurrentTasks",
+            "pollInterval",
+            "taskTimeout",
+            "retries",
+            "image",
+            "modelAuth",
+            "state",
+            "nodeSelector",
+            "tolerations",
+            "affinity"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "orkaContainer"
+      ]
+    },
+    "agentSandbox": {
+      "type": "object",
+      "description": "Consumer-installed Kubernetes SIG Agent Sandbox integrations for Fix PR execution and private analysis experiments.",
+      "properties": {
+        "fixRuntime": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "namespace": {
+              "type": "string"
+            },
+            "runtimeClassName": {
+              "type": "string"
+            },
+            "image": {
+              "type": "object",
+              "properties": {
+                "repository": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "IfNotPresent"
+                  ]
+                }
+              },
+              "required": [
+                "repository",
+                "digest",
+                "pullPolicy"
+              ],
+              "additionalProperties": false
+            },
+            "dashboardImage": {
+              "type": "object",
+              "properties": {
+                "repository": {
+                  "type": "string"
+                },
+                "tag": {
+                  "type": "string"
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "IfNotPresent"
+                  ]
+                }
+              },
+              "required": [
+                "repository",
+                "tag",
+                "pullPolicy"
+              ],
+              "additionalProperties": false
+            },
+            "workloadServiceAccount": {
+              "type": "object",
+              "properties": {
+                "create": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "create",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "modelProvider": {
+              "type": "object",
+              "properties": {
+                "credentialMode": {
+                  "type": "string",
+                  "enum": [
+                    "direct",
+                    "gateway"
+                  ]
+                },
+                "api": {
+                  "type": "string",
+                  "enum": [
+                    "chat_completions",
+                    "responses"
+                  ]
+                },
+                "endpoint": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "reasoningEffort": {
+                  "type": "string",
+                  "enum": [
+                    "",
+                    "none",
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh"
+                  ]
+                },
+                "auth": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "bearer"
+                      ]
+                    },
+                    "existingSecret": {
+                      "type": "string"
+                    },
+                    "tokenKey": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "existingSecret",
+                    "tokenKey"
+                  ],
+                  "additionalProperties": false
+                },
+                "publicCAPrivateDNS": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "credentialMode",
+                "api",
+                "endpoint",
+                "model",
+                "reasoningEffort",
+                "auth",
+                "publicCAPrivateDNS"
+              ],
+              "additionalProperties": false
+            },
+            "maxSteps": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "maxFiles": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "timeout": {
+              "type": "string"
+            },
+            "outputLimitBytes": {
+              "type": "integer",
+              "minimum": 4096,
+              "maximum": 1048576
+            },
+            "allowedCommands": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "argv": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1024,
+                      "pattern": "^[^\r\n\u0000]+$"
+                    }
+                  },
+                  "timeout": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 5,
+                    "pattern": "^[1-9][0-9]*(s|m)$"
+                  }
+                },
+                "required": [
+                  "argv",
+                  "timeout"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "pollInterval": {
+              "type": "string"
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    },
+                    "ephemeral-storage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory",
+                    "ephemeral-storage"
+                  ],
+                  "additionalProperties": false
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    },
+                    "ephemeral-storage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory",
+                    "ephemeral-storage"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "requests",
+                "limits"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "enabled",
+            "namespace",
+            "runtimeClassName",
+            "image",
+            "dashboardImage",
+            "workloadServiceAccount",
+            "modelProvider",
+            "maxSteps",
+            "maxFiles",
+            "timeout",
+            "outputLimitBytes",
+            "allowedCommands",
+            "pollInterval",
+            "resources"
+          ],
+          "additionalProperties": false
+        },
+        "analyzer": {
+          "type": "object",
+          "description": "Private disabled-by-default OpenCode analyzer deployment guardrails without scheduled authority.",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "namespace": {
+              "type": "string"
+            },
+            "runtimeClassName": {
+              "type": "string"
+            },
+            "executorImage": {
+              "type": "object",
+              "properties": {
+                "repository": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "IfNotPresent"
+                  ]
+                }
+              },
+              "required": [
+                "repository",
+                "digest",
+                "pullPolicy"
+              ],
+              "additionalProperties": false
+            },
+            "input": {
+              "type": "object",
+              "properties": {
+                "existingClaim": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "existingClaim"
+              ],
+              "additionalProperties": false
+            },
+            "clientServiceAccount": {
+              "type": "object",
+              "properties": {
+                "create": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "create",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "workloadServiceAccount": {
+              "type": "object",
+              "properties": {
+                "create": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "create",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "modelProvider": {
+              "type": "object",
+              "properties": {
+                "credentialMode": {
+                  "type": "string",
+                  "enum": [
+                    "direct",
+                    "gateway"
+                  ]
+                },
+                "api": {
+                  "type": "string",
+                  "enum": [
+                    "chat_completions",
+                    "responses"
+                  ]
+                },
+                "endpoint": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "reasoningEffort": {
+                  "type": "string",
+                  "enum": [
+                    "",
+                    "none",
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh"
+                  ]
+                },
+                "auth": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "bearer"
+                      ]
+                    },
+                    "existingSecret": {
+                      "type": "string"
+                    },
+                    "tokenKey": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "existingSecret",
+                    "tokenKey"
+                  ],
+                  "additionalProperties": false
+                },
+                "publicCAPrivateDNS": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "credentialMode",
+                "api",
+                "endpoint",
+                "model",
+                "reasoningEffort",
+                "auth",
+                "publicCAPrivateDNS"
+              ],
+              "additionalProperties": false
+            },
+            "timeout": {
+              "type": "string"
+            },
+            "outputLimitBytes": {
+              "type": "integer",
+              "minimum": 4096,
+              "maximum": 1048576
+            },
+            "pollInterval": {
+              "type": "string"
+            },
+            "networkPolicy": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "kubernetes",
+                    "cilium"
+                  ]
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "gatewayNamespaceSelector": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "gatewayPodSelector": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "gatewayPort": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "gatewayTargetPort": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "dnsNamespaceSelector": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "dnsPodSelector": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "mode",
+                "enabled",
+                "gatewayNamespaceSelector",
+                "gatewayPodSelector",
+                "gatewayPort",
+                "dnsNamespaceSelector",
+                "dnsPodSelector"
+              ],
+              "additionalProperties": false
+            },
+            "quota": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "enabled"
+              ],
+              "additionalProperties": false
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    },
+                    "ephemeral-storage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory",
+                    "ephemeral-storage"
+                  ],
+                  "additionalProperties": false
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    },
+                    "ephemeral-storage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory",
+                    "ephemeral-storage"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "requests",
+                "limits"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "enabled",
+            "namespace",
+            "runtimeClassName",
+            "executorImage",
+            "input",
+            "clientServiceAccount",
+            "workloadServiceAccount",
+            "modelProvider",
+            "timeout",
+            "outputLimitBytes",
+            "pollInterval",
+            "networkPolicy",
+            "quota",
+            "resources"
+          ],
+          "additionalProperties": false
+        },
+        "causalCritic": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "namespace": {
+              "type": "string"
+            },
+            "runtimeClassName": {
+              "type": "string"
+            },
+            "image": {
+              "type": "object",
+              "properties": {
+                "repository": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "IfNotPresent"
+                  ]
+                }
+              },
+              "required": [
+                "repository",
+                "digest",
+                "pullPolicy"
+              ],
+              "additionalProperties": false
+            },
+            "workloadServiceAccount": {
+              "type": "object",
+              "properties": {
+                "create": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "create",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "modelGateway": {
+              "type": "object",
+              "properties": {
+                "endpoint": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "protocolVersion": {
+                  "type": "string",
+                  "enum": [
+                    "openai-chat-completions-v1"
+                  ]
+                }
+              },
+              "required": [
+                "endpoint",
+                "model",
+                "protocolVersion"
+              ],
+              "additionalProperties": false
+            },
+            "timeout": {
+              "type": "string"
+            },
+            "outputLimitBytes": {
+              "type": "integer",
+              "minimum": 4096,
+              "maximum": 1048576
+            },
+            "maxPerRun": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            },
+            "pollInterval": {
+              "type": "string"
+            },
+            "ledger": {
+              "type": "object",
+              "properties": {
+                "existingClaim": {
+                  "type": "string"
+                },
+                "mountPath": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "existingClaim",
+                "mountPath"
+              ],
+              "additionalProperties": false
+            },
+            "networkPolicy": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "kubernetes",
+                    "cilium"
+                  ]
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "gatewayNamespaceSelector": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "gatewayPodSelector": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "gatewayPort": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "dnsNamespaceSelector": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "dnsPodSelector": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "mode",
+                "enabled",
+                "gatewayNamespaceSelector",
+                "gatewayPodSelector",
+                "gatewayPort",
+                "dnsNamespaceSelector",
+                "dnsPodSelector"
+              ],
+              "additionalProperties": false
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    },
+                    "ephemeral-storage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory",
+                    "ephemeral-storage"
+                  ],
+                  "additionalProperties": false
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    },
+                    "ephemeral-storage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory",
+                    "ephemeral-storage"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "requests",
+                "limits"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "enabled",
+            "namespace",
+            "runtimeClassName",
+            "image",
+            "workloadServiceAccount",
+            "modelGateway",
+            "timeout",
+            "outputLimitBytes",
+            "maxPerRun",
+            "pollInterval",
+            "ledger",
+            "networkPolicy",
+            "resources"
+          ],
+          "additionalProperties": false
+        },
+        "rbac": {
+          "type": "object",
+          "properties": {
+            "create": {
+              "type": "boolean"
+            },
+            "clientServiceAccountName": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "create",
+            "clientServiceAccountName"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "fixRuntime",
+        "analyzer",
+        "causalCritic",
+        "rbac"
+      ],
+      "additionalProperties": false
+    },
+    "orka": {
+      "type": "object",
+      "description": "Orka integration shared by analysis, source investigation, and fix generation.",
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "description": "Namespace of the separately installed Orka release."
+        },
+        "agentAnalysisShadow": {
+          "type": "object",
+          "description": "Private disabled-by-default Agent comparison after authoritative in-process analysis.",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "api": {
+              "type": "string",
+              "description": "Absolute Orka result API URL."
+            },
+            "agentVersion": {
+              "type": "string",
+              "description": "Declared Agent contract version used in Task identity."
+            },
+            "serviceAccountName": {
+              "type": "string",
+              "description": "Existing dedicated shadow ServiceAccount when chart-managed RBAC is disabled."
+            },
+            "maxPerRun": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            },
+            "admission": {
+              "type": "object",
+              "properties": {
+                "agentRef": {
+                  "type": "string"
+                },
+                "repository": {
+                  "type": "object",
+                  "properties": {
+                    "owner": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "owner",
+                    "name"
+                  ]
+                },
+                "gitSecret": {
+                  "type": "string"
+                },
+                "maxTurns": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
+                },
+                "timeout": {
+                  "type": "string"
+                },
+                "retries": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "agentRef",
+                "repository",
+                "gitSecret",
+                "maxTurns",
+                "timeout",
+                "retries"
+              ]
+            },
+            "ledger": {
+              "type": "object",
+              "properties": {
+                "existingClaim": {
+                  "type": "string"
+                },
+                "retain": {
+                  "type": "boolean"
+                },
+                "accessMode": {
+                  "type": "string",
+                  "enum": [
+                    "ReadWriteOnce",
+                    "ReadWriteMany"
+                  ]
+                },
+                "size": {
+                  "type": "string"
+                },
+                "storageClass": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "existingClaim",
+                "retain",
+                "accessMode",
+                "size",
+                "storageClass"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "api",
+            "agentVersion",
+            "serviceAccountName",
+            "maxPerRun",
+            "admission",
+            "ledger"
+          ]
+        },
+        "fixRuntime": {
+          "type": "object",
+          "description": "Orka fix generation settings.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable Orka RBAC and the git-capable fixer runtime."
+            },
+            "image": {
+              "type": "object",
+              "description": "Fixer image.",
+              "properties": {
+                "repository": {
+                  "type": "string",
+                  "description": "Container image repository."
+                },
+                "tag": {
+                  "type": "string",
+                  "description": "Container image tag. An empty value follows the chart image fallback."
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "description": "Kubernetes image pull policy.",
+                  "enum": [
+                    "Always",
+                    "IfNotPresent",
+                    "Never"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "repository",
+                "tag",
+                "pullPolicy"
+              ]
+            },
+            "admission": {
+              "type": "object",
+              "description": "Fail-closed admission contract for dashboard-created Orka fix Tasks.",
+              "properties": {
+                "agentRef": {
+                  "type": "string",
+                  "description": "Exact Orka Agent name allowed for fix generation."
+                },
+                "repository": {
+                  "type": "object",
+                  "description": "Exact GitHub repository allowed in fix Task workspaces.",
+                  "properties": {
+                    "owner": {
+                      "type": "string",
+                      "description": "Approved GitHub repository owner."
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "Approved GitHub repository name."
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "owner",
+                    "name"
+                  ]
+                },
+                "maxTurns": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000,
+                  "description": "Exact maximum agent turns allowed by admission."
+                },
+                "allowBash": {
+                  "type": "boolean",
+                  "description": "Exact Bash policy allowed by admission."
+                },
+                "timeout": {
+                  "type": "string",
+                  "pattern": "^([1-9]|[12][0-9]|30)m$",
+                  "description": "Exact Task timeout, from 1m through 30m."
+                },
+                "retries": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2,
+                  "description": "Exact Orka Task retry count allowed by admission."
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "agentRef",
+                "repository",
+                "maxTurns",
+                "allowBash",
+                "timeout",
+                "retries"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "image",
+            "admission"
+          ]
+        },
+        "rbac": {
+          "type": "object",
+          "description": "Orka ServiceAccount and Role management.",
+          "properties": {
+            "create": {
+              "type": "boolean",
+              "description": "Create the dashboard Orka ServiceAccount and Roles."
+            },
+            "serviceAccountName": {
+              "type": "string",
+              "description": "Existing fix and analysis Orka ServiceAccount name when chart-managed RBAC is disabled."
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "create",
+            "serviceAccountName"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "namespace",
+        "agentAnalysisShadow",
+        "fixRuntime",
+        "rbac"
+      ]
+    },
+    "persistence": {
+      "type": "object",
+      "description": "Shared dashboard output and AI cache storage.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Create or mount shared persistent storage."
+        },
+        "existingClaim": {
+          "type": "string",
+          "description": "Existing ReadWriteMany PersistentVolumeClaim name."
+        },
+        "retain": {
+          "type": "boolean",
+          "description": "Retain chart-managed data when the release or claim changes."
+        },
+        "accessMode": {
+          "type": "string",
+          "description": "PersistentVolumeClaim access mode.",
+          "enum": [
+            "ReadWriteMany"
+          ]
+        },
+        "size": {
+          "type": "string",
+          "description": "Requested PersistentVolumeClaim capacity."
+        },
+        "storageClass": {
+          "type": "string",
+          "description": "ReadWriteMany StorageClass name. Empty uses the cluster default."
+        },
+        "mountPath": {
+          "type": "string",
+          "description": "Shared volume mount path in dashboard containers."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "existingClaim",
+        "retain",
+        "accessMode",
+        "size",
+        "storageClass",
+        "mountPath"
+      ]
+    },
+    "project": {
+      "type": "object",
+      "description": "Consumer project bundle mounted into dashboard workloads.",
+      "properties": {
+        "existingConfigMap": {
+          "type": "string",
+          "description": "Existing ConfigMap containing project.yaml and system.md."
+        },
+        "config": {
+          "type": "string",
+          "description": "Inline project.yaml content, normally supplied with --set-file."
+        },
+        "systemPrompt": {
+          "type": "string",
+          "description": "Inline prompts/system.md content, normally supplied with --set-file."
+        },
+        "skills": {
+          "type": "object",
+          "description": "Consumer skill filename to YAML content map.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "mountPath": {
+          "type": "string",
+          "description": "Project bundle mount path."
+        },
+        "materializer": {
+          "type": "object",
+          "description": "Project bundle materializer used by Orka container analysis.",
+          "properties": {
+            "image": {
+              "type": "object",
+              "description": "Materializer image.",
+              "properties": {
+                "repository": {
+                  "type": "string",
+                  "description": "Container image repository."
+                },
+                "tag": {
+                  "type": "string",
+                  "description": "Container image tag. An empty value follows the chart image fallback."
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "description": "Kubernetes image pull policy.",
+                  "enum": [
+                    "IfNotPresent"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "repository",
+                "tag",
+                "pullPolicy"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "image"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "existingConfigMap",
+        "config",
+        "systemPrompt",
+        "skills",
+        "mountPath",
+        "materializer"
+      ]
+    },
+    "ai": {
+      "type": "object",
+      "description": "AI provider coordinates and credential references.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable AI failure analysis."
+        },
+        "api": {
+          "type": "string",
+          "description": "Provider request API.",
+          "enum": [
+            "chat_completions",
+            "responses"
+          ]
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "Absolute provider endpoint URL."
+        },
+        "model": {
+          "type": "string",
+          "description": "Provider model identifier."
+        },
+        "reasoningEffort": {
+          "type": "string",
+          "description": "Optional provider reasoning effort. Empty uses the provider default.",
+          "enum": [
+            "",
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "contextWindowTokens": {
+          "description": "Total provider context window. Use 0 for provider metadata or the engine fallback.",
+          "anyOf": [
+            {
+              "type": "integer",
+              "enum": [
+                0
+              ]
+            },
+            {
+              "type": "integer",
+              "minimum": 9217,
+              "maximum": 1000000000
+            }
+          ]
+        },
+        "token": {
+          "type": "string",
+          "description": "Inline provider token. Prefer existingSecret in production."
+        },
+        "existingSecret": {
+          "type": "string",
+          "description": "Existing provider credential Secret name."
+        },
+        "tokenSecretKey": {
+          "type": "string",
+          "description": "Secret key containing the provider token."
+        },
+        "githubReadToken": {
+          "type": "string",
+          "description": "Inline read-only GitHub source token. Prefer githubReadTokenSecretName."
+        },
+        "githubReadTokenSecretName": {
+          "type": "string",
+          "description": "Existing read-only GitHub source credential Secret name."
+        },
+        "githubReadTokenSecretKey": {
+          "type": "string",
+          "description": "Secret key containing the GitHub read token."
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "api",
+        "endpoint",
+        "model",
+        "reasoningEffort",
+        "contextWindowTokens",
+        "token",
+        "existingSecret",
+        "tokenSecretKey",
+        "githubReadToken",
+        "githubReadTokenSecretName",
+        "githubReadTokenSecretKey"
+      ]
+    },
+    "fetcher": {
+      "type": "object",
+      "description": "Fetcher, worker, and CronJob behavior.",
+      "properties": {
+        "schedule": {
+          "type": "string",
+          "description": "Cron schedule used in cron mode."
+        },
+        "concurrencyPolicy": {
+          "type": "string",
+          "description": "CronJob concurrency policy.",
+          "enum": [
+            "Allow",
+            "Forbid",
+            "Replace"
+          ]
+        },
+        "suspend": {
+          "type": "boolean",
+          "description": "Suspend cron-mode scheduled starts."
+        },
+        "successfulJobsHistoryLimit": {
+          "type": "integer",
+          "description": "Successful CronJob history limit.",
+          "minimum": 0
+        },
+        "failedJobsHistoryLimit": {
+          "type": "integer",
+          "description": "Failed CronJob history limit.",
+          "minimum": 0
+        },
+        "restartPolicy": {
+          "type": "string",
+          "description": "CronJob pod restart policy. Empty selects a runtime-specific default.",
+          "enum": [
+            "",
+            "Never",
+            "OnFailure"
+          ]
+        },
+        "backoffLimit": {
+          "type": "integer",
+          "description": "CronJob retry limit. -1 selects a runtime-specific default.",
+          "minimum": -1,
+          "maximum": 2147483647
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "description": "CronJob hard deadline. Zero omits the deadline.",
+          "minimum": 0
+        },
+        "watchInterval": {
+          "type": "string",
+          "description": "Watch-mode incremental refresh interval."
+        },
+        "reconcileInterval": {
+          "type": "string",
+          "description": "Watch-mode full reconciliation interval."
+        },
+        "buildsPerJob": {
+          "type": "integer",
+          "description": "Prow build history depth per job.",
+          "minimum": 1
+        },
+        "workers": {
+          "type": "integer",
+          "description": "Concurrent artifact fetch workers.",
+          "minimum": 1
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Discovery and artifact fetch timeout."
+        },
+        "includePresubmits": {
+          "type": "boolean",
+          "description": "Include presubmit jobs."
+        },
+        "extraEnv": {
+          "$ref": "#/definitions/envVars"
+        },
+        "resources": {
+          "$ref": "#/definitions/freeFormObject"
+        },
+        "nodeSelector": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "tolerations": {
+          "$ref": "#/definitions/tolerations"
+        },
+        "affinity": {
+          "$ref": "#/definitions/freeFormObject"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schedule",
+        "concurrencyPolicy",
+        "suspend",
+        "successfulJobsHistoryLimit",
+        "failedJobsHistoryLimit",
+        "restartPolicy",
+        "backoffLimit",
+        "activeDeadlineSeconds",
+        "watchInterval",
+        "reconcileInterval",
+        "buildsPerJob",
+        "workers",
+        "timeout",
+        "includePresubmits",
+        "extraEnv",
+        "resources",
+        "nodeSelector",
+        "tolerations",
+        "affinity"
+      ]
+    },
+    "server": {
+      "type": "object",
+      "description": "Dashboard API and SPA server configuration.",
+      "properties": {
+        "replicaCount": {
+          "type": "integer",
+          "description": "Server Deployment replica count.",
+          "minimum": 1
+        },
+        "staticDir": {
+          "type": "string",
+          "description": "Path to the SPA files in the server image."
+        },
+        "port": {
+          "type": "integer",
+          "description": "Server container port.",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "extraEnv": {
+          "$ref": "#/definitions/envVars"
+        },
+        "security": {
+          "type": "object",
+          "description": "Server HTTP security settings.",
+          "properties": {
+            "hsts": {
+              "type": "object",
+              "description": "HTTP Strict Transport Security settings.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Send the chart HSTS policy."
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "enabled"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "hsts"
+          ]
+        },
+        "development": {
+          "type": "object",
+          "description": "Local development-only server settings.",
+          "properties": {
+            "allowInsecureHTTP": {
+              "type": "boolean",
+              "description": "Explicitly acknowledge direct local HTTP serving when HSTS is disabled."
+            },
+            "allowInsecureCookies": {
+              "type": "boolean",
+              "description": "Allow OAuth cookies over local HTTP. Never enable in a deployed dashboard."
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "allowInsecureHTTP",
+            "allowInsecureCookies"
+          ]
+        },
+        "chat": {
+          "type": "object",
+          "description": "Authenticated analysis chat settings.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable read-only authenticated analysis chat."
+            },
+            "timeout": {
+              "type": "string",
+              "description": "Per-turn model timeout."
+            },
+            "correctionsEnabled": {
+              "type": "boolean",
+              "description": "Enable reviewed chat corrections."
+            },
+            "sourceInvestigation": {
+              "type": "object",
+              "description": "Authenticated source investigation settings.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable source investigation from analysis chat."
+                },
+                "serviceAccountName": {
+                  "type": "string",
+                  "description": "Existing source-investigation ServiceAccount name when chart-managed RBAC is disabled. Must differ from orka.rbac.serviceAccountName when fix actions share the server pod."
+                },
+                "maxPerSession": {
+                  "type": "integer",
+                  "description": "Maximum source investigations per chat session.",
+                  "minimum": 1
+                },
+                "maxActivePerOwner": {
+                  "type": "integer",
+                  "description": "Maximum active source investigations per owner.",
+                  "minimum": 1
+                },
+                "admission": {
+                  "type": "object",
+                  "description": "Fail-closed admission contract for source investigation Tasks.",
+                  "properties": {
+                    "agentRef": {
+                      "type": "string"
+                    },
+                    "repository": {
+                      "type": "object",
+                      "properties": {
+                        "owner": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "owner",
+                        "name"
+                      ]
+                    },
+                    "gitSecret": {
+                      "type": "string",
+                      "description": "Exact read-only workspace Git Secret."
+                    },
+                    "maxTurns": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1000
+                    },
+                    "timeout": {
+                      "type": "string",
+                      "pattern": "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|\u00b5s|\u03bcs|ms|s|m|h)((([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|\u00b5s|\u03bcs|ms|s|m|h))*$"
+                    },
+                    "retries": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 2
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "agentRef",
+                    "repository",
+                    "gitSecret",
+                    "maxTurns",
+                    "timeout",
+                    "retries"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "enabled",
+                "serviceAccountName",
+                "maxPerSession",
+                "maxActivePerOwner",
+                "admission"
+              ]
+            },
+            "sessionTTL": {
+              "type": "string",
+              "description": "Persisted chat session lifetime."
+            },
+            "maxSessions": {
+              "type": "integer",
+              "description": "Maximum stored chat sessions.",
+              "minimum": 1
+            },
+            "maxSessionsPerOwner": {
+              "type": "integer",
+              "description": "Maximum stored chat sessions per owner.",
+              "minimum": 1
+            },
+            "maxActiveTurnsPerOwner": {
+              "type": "integer",
+              "description": "Maximum active chat turns per owner.",
+              "minimum": 1
+            },
+            "requestsPerMinute": {
+              "type": "integer",
+              "description": "Per-owner chat request rate limit.",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "timeout",
+            "correctionsEnabled",
+            "sourceInvestigation",
+            "sessionTTL",
+            "maxSessions",
+            "maxSessionsPerOwner",
+            "maxActiveTurnsPerOwner",
+            "requestsPerMinute"
+          ]
+        },
+        "actions": {
+          "type": "object",
+          "description": "Authentication and GitHub write action settings shared with chat.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable GitHub write endpoints."
+            },
+            "mode": {
+              "type": "string",
+              "description": "Authentication mode.",
+              "enum": [
+                "oauth",
+                "proxy"
+              ]
+            },
+            "admins": {
+              "type": "array",
+              "description": "Fail-closed GitHub login allowlist.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "trustedOrigins": {
+              "type": "array",
+              "description": "Additional public origins accepted by the CSRF guard.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "oauth": {
+              "type": "object",
+              "description": "GitHub OAuth authentication.",
+              "properties": {
+                "clientId": {
+                  "type": "string",
+                  "description": "OAuth App client ID."
+                },
+                "clientSecret": {
+                  "type": "string",
+                  "description": "Inline OAuth client secret. Prefer existingSecret."
+                },
+                "redirectUrl": {
+                  "type": "string",
+                  "description": "OAuth callback URL."
+                },
+                "sessionKey": {
+                  "type": "string",
+                  "description": "Inline session encryption key. Prefer existingSecret."
+                },
+                "botToken": {
+                  "type": "string",
+                  "description": "Inline bot token for GitHub writes. Prefer existingSecret."
+                },
+                "privateRepositories": {
+                  "type": "boolean",
+                  "description": "Deprecated OAuth repository access switch. Remove this field and grant access to botToken instead."
+                },
+                "existingSecret": {
+                  "type": "string",
+                  "description": "Existing Secret containing OAuth credentials and BOT_TOKEN when actions are enabled."
+                },
+                "scope": {
+                  "type": "string",
+                  "description": "Deprecated OAuth scope override. OAuth now uses read:user and botToken performs writes."
+                },
+                "chatScope": {
+                  "type": "string",
+                  "description": "Deprecated chat OAuth scope override. OAuth now uses read:user and botToken performs writes."
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "clientId",
+                "clientSecret",
+                "redirectUrl",
+                "sessionKey",
+                "botToken",
+                "existingSecret"
+              ]
+            },
+            "proxy": {
+              "type": "object",
+              "description": "Upstream SSO proxy authentication.",
+              "properties": {
+                "header": {
+                  "type": "string",
+                  "description": "Header carrying the authenticated identity."
+                },
+                "botToken": {
+                  "type": "string",
+                  "description": "Inline GitHub bot token. Prefer existingSecret."
+                },
+                "secret": {
+                  "type": "string",
+                  "description": "Inline proxy shared secret. Prefer existingSecret."
+                },
+                "existingSecret": {
+                  "type": "string",
+                  "description": "Existing Secret containing proxy credentials."
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "header",
+                "botToken",
+                "secret",
+                "existingSecret"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "mode",
+            "admins",
+            "trustedOrigins",
+            "oauth",
+            "proxy"
+          ]
+        },
+        "resources": {
+          "$ref": "#/definitions/freeFormObject"
+        },
+        "nodeSelector": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "tolerations": {
+          "$ref": "#/definitions/tolerations"
+        },
+        "affinity": {
+          "$ref": "#/definitions/freeFormObject"
+        },
+        "service": {
+          "type": "object",
+          "description": "Dashboard Service exposure.",
+          "properties": {
+            "type": {
+              "type": "string",
+              "description": "Kubernetes Service type.",
+              "enum": [
+                "ClusterIP",
+                "NodePort",
+                "LoadBalancer"
+              ]
+            },
+            "port": {
+              "type": "integer",
+              "description": "Service port.",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "loadBalancerSourceRanges": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "description": "Allowed LoadBalancer client CIDRs.",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Allowed LoadBalancer client CIDRs."
+            },
+            "externalTrafficPolicy": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "description": "Kubernetes external traffic policy.",
+                  "enum": [
+                    "",
+                    "Cluster",
+                    "Local"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Kubernetes external traffic policy."
+            },
+            "internal": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "description": "Private LoadBalancer configuration.",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "Enable provider-specific private LoadBalancer annotations."
+                    },
+                    "annotations": {
+                      "$ref": "#/definitions/stringMap"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "enabled",
+                    "annotations"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Private LoadBalancer configuration."
+            },
+            "publicOriginAcknowledged": {
+              "anyOf": [
+                {
+                  "type": "boolean",
+                  "description": "Acknowledge intentional public LoadBalancer origin risk."
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Acknowledge intentional public LoadBalancer origin risk."
+            },
+            "annotations": {
+              "$ref": "#/definitions/stringMap"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "port",
+            "annotations"
+          ]
+        },
+        "remediationInvestigation": {
+          "type": "object",
+          "description": "Authenticated on-demand causal remediation investigation settings.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable the authenticated read-only causal remediation operation."
+            },
+            "timeout": {
+              "type": "string",
+              "description": "Overall investigation timeout.",
+              "pattern": "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|\u00b5s|\u03bcs|ms|s|m|h)((([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|\u00b5s|\u03bcs|ms|s|m|h))*$"
+            },
+            "maxOperations": {
+              "type": "integer",
+              "description": "Maximum retained in-memory safe operation states.",
+              "minimum": 1
+            },
+            "fixPreview": {
+              "type": "object",
+              "description": "Experimental preview-only causal fix generation.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable preview generation without any GitHub write or confirmation capability."
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "enabled"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "timeout",
+            "maxOperations",
+            "fixPreview"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "replicaCount",
+        "staticDir",
+        "port",
+        "extraEnv",
+        "security",
+        "development",
+        "remediationInvestigation",
+        "chat",
+        "actions",
+        "resources",
+        "nodeSelector",
+        "tolerations",
+        "affinity",
+        "service"
+      ]
+    },
+    "ingress": {
+      "type": "object",
+      "description": "Kubernetes Ingress configuration.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Create an Ingress resource."
+        },
+        "className": {
+          "type": "string",
+          "description": "IngressClass name."
+        },
+        "annotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "hosts": {
+          "type": "array",
+          "description": "Ingress hosts.",
+          "items": {
+            "type": "object",
+            "description": "Ingress host and paths.",
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "DNS host name."
+              },
+              "paths": {
+                "type": "array",
+                "description": "Paths exposed for this host.",
+                "items": {
+                  "type": "object",
+                  "description": "Ingress path.",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "URL path."
+                    },
+                    "pathType": {
+                      "type": "string",
+                      "description": "Kubernetes Ingress path type.",
+                      "enum": [
+                        "Exact",
+                        "Prefix",
+                        "ImplementationSpecific"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "path",
+                    "pathType"
+                  ]
+                }
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "host",
+              "paths"
+            ]
+          }
+        },
+        "tls": {
+          "type": "array",
+          "description": "Ingress TLS entries.",
+          "items": {
+            "type": "object",
+            "description": "Ingress TLS entry.",
+            "properties": {
+              "hosts": {
+                "type": "array",
+                "description": "TLS host names.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "secretName": {
+                "type": "string",
+                "description": "TLS Secret name."
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "className",
+        "annotations",
+        "hosts",
+        "tls"
+      ]
+    },
+    "networkPolicy": {
+      "type": "object",
+      "description": "Server ingress NetworkPolicy configuration.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Create a NetworkPolicy for server ingress."
+        },
+        "ingress": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/networkPolicyRules"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": ""
+        },
+        "from": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/networkPolicyPeers"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ]
+    },
+    "podSecurityContext": {
+      "type": "object",
+      "description": "Kubernetes PodSecurityContext applied to dashboard pods.",
+      "properties": {
+        "runAsNonRoot": {
+          "type": "boolean",
+          "description": "Require a non-root process."
+        },
+        "runAsUser": {
+          "type": "integer",
+          "description": "Container user ID.",
+          "minimum": 0
+        },
+        "runAsGroup": {
+          "type": "integer",
+          "description": "Container group ID.",
+          "minimum": 0
+        },
+        "fsGroup": {
+          "type": "integer",
+          "description": "Shared volume filesystem group ID.",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "securityContext": {
+      "type": "object",
+      "description": "Kubernetes container SecurityContext applied to dashboard containers.",
+      "properties": {
+        "allowPrivilegeEscalation": {
+          "type": "boolean",
+          "description": "Allow privilege escalation."
+        },
+        "readOnlyRootFilesystem": {
+          "type": "boolean",
+          "description": "Mount the root filesystem read-only."
+        },
+        "capabilities": {
+          "type": "object",
+          "properties": {
+            "add": {
+              "type": "array",
+              "description": "Linux capabilities to add.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "drop": {
+              "type": "array",
+              "description": "Linux capabilities to drop.",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "global",
+    "image",
+    "imagePullSecrets",
+    "nameOverride",
+    "fullnameOverride",
+    "mode",
+    "analysisCache",
+    "analysisRuntime",
+    "agentSandbox",
+    "orka",
+    "persistence",
+    "project",
+    "ai",
+    "fetcher",
+    "server",
+    "ingress",
+    "networkPolicy",
+    "podSecurityContext",
+    "securityContext"
+  ]
+}

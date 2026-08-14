@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixexecutor"
-	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/fixexecutor"
+	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 const requestEnv = "PROW_AI_FIX_EXECUTION_REQUEST_B64"

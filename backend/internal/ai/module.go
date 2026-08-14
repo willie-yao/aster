@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 // Module supplies the per-failure prompt and a stable name for cache keys.

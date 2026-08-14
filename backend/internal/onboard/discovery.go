@@ -11,9 +11,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/models"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/project"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/prow/jobconfig"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
 )
 
 // Confidence describes how strongly discovery supports an inferred value.
@@ -356,7 +356,7 @@ func splitDashboards(value string) []string {
 
 func suggestedDashboardName(sourceName string) string {
 	const (
-		suffix        = "-prow-ai-dashboard"
+		suffix        = "-aster"
 		maxRepository = 100
 	)
 	maxSource := maxRepository - len(suffix)

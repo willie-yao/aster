@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actiondraft"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/actiondraft"
+	"github.com/willie-yao/aster/backend/internal/ai"
 )
 
 // Completer is the subset of the AI client this package needs.

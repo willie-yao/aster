@@ -23,14 +23,14 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/actions"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/aiusage"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/auth"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/causalfixpreview"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/output"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/redact"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/remediationinvestigation"
+	"github.com/willie-yao/aster/backend/internal/actions"
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/aiusage"
+	"github.com/willie-yao/aster/backend/internal/auth"
+	"github.com/willie-yao/aster/backend/internal/causalfixpreview"
+	"github.com/willie-yao/aster/backend/internal/output"
+	"github.com/willie-yao/aster/backend/internal/redact"
+	"github.com/willie-yao/aster/backend/internal/remediationinvestigation"
 )
 
 // ActionRunner performs on-demand actions for a failure id using the admin's

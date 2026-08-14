@@ -20,7 +20,7 @@ import (
 	"errors"
 	"regexp"
 
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
 )
 
 // Group is the alias used in config to enable all filesystem tools at once.

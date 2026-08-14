@@ -62,7 +62,7 @@ Wire the token in the deploy workflow:
 # .github/workflows/deploy.yml  (GitHub Actions + Pages path)
 jobs:
   deploy:
-    uses: willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
     # ...
     secrets:
       ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}

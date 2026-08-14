@@ -10,8 +10,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	agentruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
-	"github.com/willie-yao/prow-ai-dashboard/backend/internal/sourceinvestigation"
+	agentruntime "github.com/willie-yao/aster/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 //go:embed skill/failure-analysis.md

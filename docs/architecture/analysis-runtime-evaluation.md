@@ -9,7 +9,7 @@ Status: Historical maintainer record from July 23, 2026. It is not deployment
 guidance.
 
 This document summarizes the evaluation of three ways to run failure analysis in
-`prow-ai-dashboard`:
+Aster:
 
 1. The dashboard's in-process analyzer.
 2. Orka's generic `type: ai` worker with a dashboard compatibility patch.
@@ -88,7 +88,7 @@ Execution lifecycle includes:
 - Workload isolation
 - Durable result storage
 
-`prow-ai-dashboard` must own the first list because those behaviors define what a
+Aster must own the first list because those behaviors define what a
 safe, publishable diagnosis means. Orka can potentially own the second list, but
 only if its lifecycle value is greater than the integration and operational
 cost.

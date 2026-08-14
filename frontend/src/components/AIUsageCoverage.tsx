@@ -131,7 +131,7 @@ function AboutCoverage({ data }: { data: AIUsageReport }) {
           <Typography sx={overviewTypography.secondaryBody}>
             Pricing configuration: {data.pricing_configured ? "configured" : "not configured"}.{" "}
             <Link
-              href="https://github.com/willie-yao/prow-ai-dashboard/blob/main/docs/project-configuration.md"
+              href="https://github.com/willie-yao/aster/blob/main/docs/project-configuration.md"
               target="_blank"
               rel="noopener noreferrer"
             >

@@ -6,7 +6,7 @@ set -euo pipefail
 : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
 
 chart_version=${TAG#v}
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/prow-ai-dashboard-release.XXXXXX")
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/aster-release.XXXXXX")
 cleanup() {
   find "$tmp" -type f -delete 2>/dev/null || true
   rmdir "$tmp" 2>/dev/null || true
@@ -86,41 +86,42 @@ PY_VERSION
   esac
 fi
 
-helm lint deploy/helm/prow-ai-dashboard
-helm lint deploy/helm/prow-ai-dashboard-platform \
+helm lint deploy/helm/aster
+helm lint deploy/helm/aster-platform \
   --set application.releaseName=release \
   --set execution.namespace=release-sandbox \
   --set execution.runtimeClassName=secure-runtime \
   --set-string 'execution.networkPolicy.allowedFQDNs[0]=vcs.example.test'
 
-for chart in prow-ai-dashboard prow-ai-dashboard-platform; do
+for chart in aster aster-platform; do
   helm package "deploy/helm/$chart" \
     --destination "$tmp" \
     --version "$chart_version" \
     --app-version "$TAG"
 done
 
-app_pkg=$tmp/prow-ai-dashboard-$chart_version.tgz
-platform_pkg=$tmp/prow-ai-dashboard-platform-$chart_version.tgz
+app_pkg=$tmp/aster-$chart_version.tgz
+platform_pkg=$tmp/aster-platform-$chart_version.tgz
 for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
   goos=${target%-*}
   goarch=${target#*-}
-  asset="prow-ai-dashboard-fetcher-${TAG}-${target}"
+  asset="aster-${TAG}-${target}"
   (
     cd backend
     CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build \
       -trimpath \
       -ldflags "-s -w -X main.version=$TAG -X main.commit=$reviewed_commit -X main.imageTag=$TAG" \
       -o "$tmp/$asset" \
-      ./cmd/fetcher
+      ./cmd/aster
   )
 done
 (
   cd "$tmp"
+  cli_assets=(aster-"${TAG}"-*)
   shasum -a 256 \
     "$(basename "$app_pkg")" \
     "$(basename "$platform_pkg")" \
-    prow-ai-dashboard-fetcher-* > SHA256SUMS
+    "${cli_assets[@]}" > SHA256SUMS
 )
 registry="oci://ghcr.io/$REPOSITORY_OWNER/charts"
 # Publish the prerequisite chart first. The application chart is the consumer
@@ -131,7 +132,8 @@ verify_release_tag
 helm push "$app_pkg" "$registry"
 verify_release_tag
 
-release_args=("$TAG" "$app_pkg" "$platform_pkg" "$tmp/SHA256SUMS" "$tmp"/prow-ai-dashboard-fetcher-* --title "$TAG" --generate-notes --verify-tag)
+cli_assets=("$tmp"/aster-"${TAG}"-*)
+release_args=("$TAG" "$app_pkg" "$platform_pkg" "$tmp/SHA256SUMS" "${cli_assets[@]}" --title "$TAG" --generate-notes --verify-tag)
 if [[ $TAG == *-* ]]; then
   release_args+=(--prerelease)
 fi
