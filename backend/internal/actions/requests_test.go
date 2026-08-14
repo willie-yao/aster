@@ -32,6 +32,7 @@ func requestTestService(t *testing.T) (*Service, models.PatternAnalysis) {
 		JobID: "periodic-x", PatternAnalyses: []models.PatternAnalysis{pattern},
 	})
 	cfg := &project.Config{
+		Name:     "capz",
 		Branding: project.Branding{SiteURL: "https://dash.example.com", SourceRepo: project.SourceRepo{Owner: "o", Name: "r"}},
 		Issues:   &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}},
 	}
@@ -81,10 +82,12 @@ func TestAnalysisFixRequestSurvivesInitiatingRequestLifecycle(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var calls atomic.Int32
-	service.analysisRequestGenerator = func(ctx context.Context, _ AnalysisFixInput, owner, token, instruction string) (PreviewResult, error) {
+	var generatedInput AnalysisFixInput
+	service.analysisRequestGenerator = func(ctx context.Context, input AnalysisFixInput, owner, token, instruction string) (PreviewResult, error) {
 		calls.Add(1)
-		if owner != "alice" || token != "write-token" || instruction != "keep compatibility" {
-			return PreviewResult{}, fmt.Errorf("generation identity owner=%q token=%q instruction=%q", owner, token, instruction)
+		generatedInput = input
+		if owner != "alice" || token != "write-token" || instruction != "keep compatibility" || input.Identity.Project != "capz" {
+			return PreviewResult{}, fmt.Errorf("generation identity project=%q owner=%q token=%q instruction=%q", input.Identity.Project, owner, token, instruction)
 		}
 		if err := service.setRequestStage(ctx, RequestStageDrafting); err != nil {
 			return PreviewResult{}, err
@@ -102,6 +105,7 @@ func TestAnalysisFixRequestSurvivesInitiatingRequestLifecycle(t *testing.T) {
 	}
 
 	input := exactAnalysisRequestInput()
+	input.Identity.Project = ""
 	created, err := service.CreateAnalysisFixRequest(input, "Alice", "write-token", "keep compatibility")
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +114,12 @@ func TestAnalysisFixRequestSurvivesInitiatingRequestLifecycle(t *testing.T) {
 		t.Fatalf("created = %+v", created)
 	}
 	<-started
-	duplicate, err := service.CreateAnalysisFixRequest(input, "alice", "write-token", "keep compatibility")
+	if generatedInput.Identity.Project != "capz" {
+		t.Fatalf("background input project = %q", generatedInput.Identity.Project)
+	}
+	duplicateInput := input
+	duplicateInput.Identity.Project = "caller-project"
+	duplicate, err := service.CreateAnalysisFixRequest(duplicateInput, "alice", "write-token", "keep compatibility")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,6 +132,14 @@ func TestAnalysisFixRequestSurvivesInitiatingRequestLifecycle(t *testing.T) {
 	}
 	if strings.Contains(string(pendingState), "write-token") {
 		t.Fatal("write token was persisted in pending analysis fix state")
+	}
+	var pending actionRequestState
+	if err := json.Unmarshal(pendingState, &pending); err != nil {
+		t.Fatal(err)
+	}
+	pendingRecord := pending.Requests[created.ID]
+	if pendingRecord == nil || pendingRecord.AnalysisFix == nil || pendingRecord.AnalysisFix.Identity.Project != "capz" {
+		t.Fatalf("pending persisted request = %+v", pendingRecord)
 	}
 	if view := waitRequest(t, service, created.ID, "alice", RequestPending); view.Stage != RequestStageDrafting {
 		t.Fatalf("pending view = %+v", view)
@@ -155,6 +172,82 @@ func TestAnalysisFixRequestSurvivesInitiatingRequestLifecycle(t *testing.T) {
 	}
 	if err := service.Wait(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCreateAnalysisFixRequestOverridesCallerProject(t *testing.T) {
+	service, _ := requestTestService(t)
+	service.cfg.Name = " capz "
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	started := make(chan AnalysisFixInput, 1)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	service.analysisRequestGenerator = func(ctx context.Context, input AnalysisFixInput, _, _, _ string) (PreviewResult, error) {
+		calls.Add(1)
+		started <- input
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return PreviewResult{}, ctx.Err()
+		}
+		return PreviewResult{Token: "preview-token", Kind: gfKind, Title: "Fix conflict", Body: "## Summary\nRetry conflict.\n", Diff: "diff --git a/a b/a"}, nil
+	}
+	input := exactAnalysisRequestInput()
+	input.Identity.Project = "caller-project"
+	created, err := service.CreateAnalysisFixRequest(input, "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := <-started
+	if generated.Identity.Project != "capz" {
+		t.Fatalf("background input project = %q", generated.Identity.Project)
+	}
+	data, err := os.ReadFile(service.requestStatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pending actionRequestState
+	if err := json.Unmarshal(data, &pending); err != nil {
+		t.Fatal(err)
+	}
+	record := pending.Requests[created.ID]
+	if record == nil || record.AnalysisFix == nil || record.AnalysisFix.Identity.Project != "capz" {
+		t.Fatalf("pending persisted request = %+v", record)
+	}
+	close(release)
+	waitRequest(t, service, created.ID, "alice", RequestReady)
+	if calls.Load() != 1 {
+		t.Fatalf("generator calls = %d", calls.Load())
+	}
+	if err := service.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateAnalysisFixRequestRejectsInvalidInputBeforePersistence(t *testing.T) {
+	service, _ := requestTestService(t)
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	var writes atomic.Int32
+	var calls atomic.Int32
+	service.requestStateWriter = func(string, any) error {
+		writes.Add(1)
+		return nil
+	}
+	service.analysisRequestGenerator = func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error) {
+		calls.Add(1)
+		return PreviewResult{}, nil
+	}
+	input := exactAnalysisRequestInput()
+	input.Identity.Project = "caller-project"
+	input.Identity.JobID = ""
+	if _, err := service.CreateAnalysisFixRequest(input, "alice", "write-token", ""); err == nil {
+		t.Fatal("invalid exact analysis fix request was admitted")
+	}
+	service.rmu.Lock()
+	persisted := len(service.requests.Requests)
+	service.rmu.Unlock()
+	if writes.Load() != 0 || calls.Load() != 0 || persisted != 0 {
+		t.Fatalf("writes=%d calls=%d persisted=%d", writes.Load(), calls.Load(), persisted)
 	}
 }
 
