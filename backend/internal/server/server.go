@@ -606,7 +606,8 @@ func writeActionError(w http.ResponseWriter, id, login string, err error) {
 		}
 		writeActionReason(w, http.StatusConflict, code)
 		return
-	case actions.ReasonNonSystemic, actions.ReasonInvestigationRequired, actions.ReasonContractGenerationFailed, actions.ReasonUnsafeRemediation:
+	case actions.ReasonNonSystemic, actions.ReasonInvestigationRequired, actions.ReasonNoReviewablePatch,
+		actions.ReasonContractGenerationFailed, actions.ReasonUnsafeRemediation:
 		writeActionReason(w, http.StatusUnprocessableEntity, code)
 		return
 	default:

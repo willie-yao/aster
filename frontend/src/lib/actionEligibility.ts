@@ -29,6 +29,7 @@ const reasonMessages: Record<ActionReasonCode, string> = {
   non_systemic: "This result was classified as non-systemic and does not qualify for a recurring-pattern action.",
   evidence_unavailable: "Current published evidence is unavailable or no longer matches the selected action subject.",
   investigation_required: "The published remediation requires source investigation before an issue or fix can be drafted.",
+  no_reviewable_patch: "No reviewable patch was generated. Add a maintainer instruction and regenerate.",
   contract_generation_failed: "The action preview could not be generated from the current verified inputs.",
   unsafe_remediation: "The proposed remediation violates the deterministic safety policy and requires further investigation.",
   already_present: "The grounded source already contains the proposed remediation.",

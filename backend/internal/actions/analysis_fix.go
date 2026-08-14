@@ -454,7 +454,7 @@ func (s *Service) PreviewAnalysisFix(
 		}
 		preview, err := validatedPreviewEntry(existing)
 		if err != nil {
-			return PreviewResult{}, withReason(previewValidationReasonCode(err), ErrPreviewRejected, "")
+			return PreviewResult{}, classifiedAnalysisPreviewValidationError(err)
 		}
 		preview.Token = token
 		return preview, nil
@@ -483,13 +483,15 @@ func (s *Service) PreviewAnalysisFix(
 		FindingVerification: compatibility.FindingVerification,
 	}, instruction)
 	if err != nil {
-		return PreviewResult{}, safeFixPreviewError(err)
+		return PreviewResult{}, safeAnalysisFixPreviewError(err)
 	}
 	if err := s.setRequestWarning(ctx, gf.Warnings...); err != nil {
 		return PreviewResult{}, err
 	}
 	if err := s.validateFixFiles(destination, gf.Preview.Files); err != nil {
-		return PreviewResult{}, fmt.Errorf("%w: %v", ErrPreviewRejected, err)
+		return PreviewResult{}, classifiedAnalysisFixFailure(
+			ReasonUnsafeRemediation, AnalysisFixFailureSafetyIntegrity, "", fmt.Errorf("%w: %v", ErrPreviewRejected, err),
+		)
 	}
 	entry := &previewEntry{
 		failureID: subject.ID, patternHash: subject.ContentHash, kind: gfKind,
@@ -509,7 +511,7 @@ func (s *Service) PreviewAnalysisFix(
 	}
 	preview, err := validatedPreviewEntry(entry)
 	if err != nil {
-		return PreviewResult{}, withReason(previewValidationReasonCode(err), ErrPreviewRejected, "")
+		return PreviewResult{}, classifiedAnalysisPreviewValidationError(err)
 	}
 	if err := s.previewStore.completeIdempotent(owner, token, input.PreviewRequestHash, generationHash, entry); err != nil {
 		return PreviewResult{}, err
@@ -537,6 +539,27 @@ func analysisPreviewGenerationHash(
 		subject.ID, subject.ContentHash, subject.AnalysisContentHash, requestHash,
 		repo, sourceVerification, compatibility.FindingVerification, compatibility.GenerationBaseRevision,
 		compatibility.VerifiedSourceFileHashes, targetConfig,
+	})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+func analysisFixReplacementHash(input AnalysisFixInput) string {
+	payload, _ := json.Marshal(struct {
+		Identity                 AnalysisIdentity
+		ChatSessionID            string
+		ChatRequestID            string
+		ChatResponseHash         string
+		AnalysisContentHash      string
+		SourceRepository         sourceinvestigation.Repository
+		FailureRevision          string
+		GenerationBaseRevision   string
+		VerifiedSourceFileHashes map[string]string
+		SourceBranch             string
+	}{
+		input.Identity, input.ChatSessionID, input.ChatRequestID, input.ChatResponseHash,
+		input.AnalysisContentHash, input.SourceRepository, input.FailureRevision,
+		input.GenerationBaseRevision, input.VerifiedSourceFileHashes, input.SourceBranch,
 	})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])

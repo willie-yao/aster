@@ -19,6 +19,7 @@ const (
 	ReasonNonSystemic                    ReasonCode = "non_systemic"
 	ReasonEvidenceUnavailable            ReasonCode = "evidence_unavailable"
 	ReasonInvestigationRequired          ReasonCode = "investigation_required"
+	ReasonNoReviewablePatch              ReasonCode = "no_reviewable_patch"
 	ReasonContractGenerationFailed       ReasonCode = "contract_generation_failed"
 	ReasonUnsafeRemediation              ReasonCode = "unsafe_remediation"
 	ReasonAlreadyPresent                 ReasonCode = "already_present"
@@ -35,6 +36,7 @@ var reasonCodeOrder = []ReasonCode{
 	ReasonNonSystemic,
 	ReasonEvidenceUnavailable,
 	ReasonInvestigationRequired,
+	ReasonNoReviewablePatch,
 	ReasonContractGenerationFailed,
 	ReasonUnsafeRemediation,
 	ReasonAlreadyPresent,
@@ -79,6 +81,8 @@ func ReasonMessage(code ReasonCode) string {
 		return "Current published evidence is unavailable or no longer matches the selected action subject."
 	case ReasonInvestigationRequired:
 		return "The published remediation requires source investigation before an issue or fix can be drafted."
+	case ReasonNoReviewablePatch:
+		return "No reviewable patch was generated. Add a maintainer instruction and regenerate."
 	case ReasonContractGenerationFailed:
 		return "The action preview could not be generated from the current verified inputs."
 	case ReasonUnsafeRemediation:

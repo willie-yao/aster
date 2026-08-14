@@ -33,6 +33,7 @@ import {
   type ChatFixRequest,
   type ChatFixPreview,
 } from "../lib/chatFix";
+import { chatFixRequestPresentation } from "../lib/chatFixPresentation";
 import { actionRequestIsPollable } from "../lib/actionRequests";
 import { clearStoredChatFixRequest, readStoredChatFixRequest, storeChatFixRequest } from "../lib/chatFixRequestStorage";
 import { soft } from "../theme";
@@ -134,6 +135,7 @@ export function ChatFixDialog({
   const [request, setRequest] = useState<ChatFixRequest | null>(null);
   const [busy, setBusy] = useState<"preview" | "regenerate" | "confirm" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [observationMessage, setObservationMessage] = useState<string | null>(null);
   const [url, setURL] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const identity = `${sessionID}\u0000${message?.request_id ?? ""}`;
@@ -149,6 +151,7 @@ export function ChatFixDialog({
   );
   const selectedPattern = eligiblePatterns.find((pattern) => pattern.id === patternID) ?? null;
   const sourceResult = source?.view.status === "succeeded" ? source.view.result : undefined;
+  const requestPresentation = exactAnalysis && request ? chatFixRequestPresentation(request) : null;
 
   const firstPatternID = eligiblePatterns[0]?.id ?? "";
 
@@ -162,6 +165,7 @@ export function ChatFixDialog({
     setRequest(null);
     setBusy(null);
     setError(null);
+    setObservationMessage(null);
     setURL(null);
   }, [identity, firstPatternID, open]);
 
@@ -182,15 +186,14 @@ export function ChatFixDialog({
         setPreview(current.preview);
         return;
       }
-      if (!actionRequestIsPollable(current.status)) {
-        clearStoredChatFixRequest(window.sessionStorage, sessionID, message?.request_id ?? "");
-        throw new Error(current.error || "The fix preview could not be generated.");
+      if (!actionRequestIsPollable(current.status) && current.status !== "unknown") {
+        return;
       }
       await new Promise((resolve) => window.setTimeout(resolve, 1000));
       if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
       current = await loadAnalysisChatFixRequest(current.id, controller.signal);
     }
-  }, [message?.request_id, sessionID]);
+  }, []);
 
   useEffect(() => {
     if (!open || !exactAnalysis || !message?.request_id) return;
@@ -205,11 +208,12 @@ export function ChatFixDialog({
     setSubmittedInstruction(stored.instruction);
     setBusy("preview");
     setError(null);
+    setObservationMessage(null);
     void observeAnalysisFixRequest(stored.id, requestIdentity, controller)
       .catch((requestError) => {
         if (requestError instanceof Error && requestError.name === "AbortError") return;
         if (identityRef.current === requestIdentity) {
-          setError(requestError instanceof Error ? requestError.message : "Could not recover the fix preview request.");
+          setObservationMessage("The admitted request could not be observed just now. Reopen this dialog to continue observing the same request ID.");
         }
       })
       .finally(() => {
@@ -235,18 +239,22 @@ export function ChatFixDialog({
     controllerRef.current = controller;
     setBusy("preview");
     setError(null);
+    setObservationMessage(null);
+    let admitted = false;
     try {
       if (exactAnalysis) {
         const request = await createAnalysisChatFixRequest(
           sessionID,
           message.request_id,
           instruction,
+          undefined,
           controller.signal,
         );
         if (identityRef.current !== requestIdentity || controllerRef.current !== controller) return;
         storeChatFixRequest(window.sessionStorage, sessionID, message.request_id, { id: request.id, instruction });
         setSubmittedInstruction(instruction);
         setRequest(request);
+        admitted = true;
         await observeAnalysisFixRequest(request.id, requestIdentity, controller, request);
         return;
       }
@@ -264,8 +272,12 @@ export function ChatFixDialog({
     } catch (previewError) {
       if (previewError instanceof Error && previewError.name === "AbortError") return;
       if (identityRef.current === requestIdentity) {
-        const message = previewError instanceof Error ? previewError.message : "Could not generate the fix preview.";
-        setError(exactAnalysis ? `${message} If the connection was lost after admission, select Generate again to reconnect to the same request.` : message);
+        const detail = previewError instanceof Error ? previewError.message : "Could not generate the fix preview.";
+        if (exactAnalysis && admitted) {
+          setObservationMessage("The admitted request could not be observed just now. Reopen this dialog to continue observing the same request ID.");
+        } else {
+          setError(detail);
+        }
       }
     } finally {
       if (controllerRef.current === controller) {
@@ -277,7 +289,7 @@ export function ChatFixDialog({
 
   async function regeneratePreview() {
     if (!exactAnalysis || !message?.request_id || !request?.id || busy) return;
-    if (instruction.trim() === submittedInstruction.trim()) {
+    if (!instruction.trim() || instruction.trim() === submittedInstruction.trim()) {
       setError("Edit the maintainer instruction before regenerating the preview.");
       return;
     }
@@ -287,25 +299,30 @@ export function ChatFixDialog({
     controllerRef.current = controller;
     setBusy("regenerate");
     setError(null);
+    setObservationMessage(null);
     try {
-      let cancelled = await cancelAnalysisChatFixRequest(request.id);
-      while (actionRequestIsPollable(cancelled.status)) {
-        await new Promise((resolve) => window.setTimeout(resolve, 1000));
-        if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
-        cancelled = await loadAnalysisChatFixRequest(request.id, controller.signal);
+      const recoverableTerminal = request.status === "failed" && request.reason_code === "no_reviewable_patch";
+      if (!recoverableTerminal) {
+        let cancelled = await cancelAnalysisChatFixRequest(request.id);
+        while (actionRequestIsPollable(cancelled.status)) {
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+          if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+          cancelled = await loadAnalysisChatFixRequest(request.id, controller.signal);
+        }
+        if (cancelled.status !== "cancelled") {
+          throw new Error(cancelled.error || "The previous fix preview could not be cancelled.");
+        }
+        if (identityRef.current !== requestIdentity || controllerRef.current !== controller) return;
+        setRequest(cancelled);
+        setPreview(null);
+        clearStoredChatFixRequest(window.sessionStorage, sessionID, message.request_id);
       }
-      if (cancelled.status !== "cancelled") {
-        throw new Error(cancelled.error || "The previous fix preview could not be cancelled.");
-      }
-      if (identityRef.current !== requestIdentity || controllerRef.current !== controller) return;
-      setRequest(cancelled);
-      setPreview(null);
-      clearStoredChatFixRequest(window.sessionStorage, sessionID, message.request_id);
 
       const replacement = await createAnalysisChatFixRequest(
         sessionID,
         message.request_id,
         instruction,
+        recoverableTerminal ? request.id : undefined,
         controller.signal,
       );
       if (identityRef.current !== requestIdentity || controllerRef.current !== controller) return;
@@ -405,6 +422,7 @@ export function ChatFixDialog({
 
       <DialogContent dividers sx={{ px: 3, py: 2.5 }}>
         {error && <Alert severity="error" variant="outlined" sx={{ mb: 2 }}>{error}</Alert>}
+        {observationMessage && <Alert severity="info" variant="outlined" sx={{ mb: 2 }}>{observationMessage}</Alert>}
         {url && (
           <Alert severity="success" icon={<CheckCircleOutlined />} sx={{ mb: 2 }}>
             Draft PR opened: <Link href={url} target="_blank" rel="noopener noreferrer">{url}</Link>
@@ -413,6 +431,16 @@ export function ChatFixDialog({
 
         {!preview && !url && (
           <Stack spacing={2.5}>
+            {requestPresentation && busy === null && !observationMessage && (
+              <Alert severity={requestPresentation.severity} variant="outlined">
+                {requestPresentation.message}
+              </Alert>
+            )}
+            {request?.warning && !preview && (
+              <Alert severity="warning" variant="outlined">
+                {request.warning}
+              </Alert>
+            )}
             <Alert severity="info" variant="outlined">
               {exactAnalysis
                 ? "Only this exact failed JUnit analysis, this response, its validated artifact evidence, server-verified immutable source identity, and your optional instruction are sent. The complete conversation is excluded."
@@ -535,6 +563,17 @@ export function ChatFixDialog({
               onChange={(event) => setInstruction(limitChatFixInstruction(event.target.value))}
               helperText={`${chatFixInstructionBytes(instruction)}/4096 bytes`}
             />
+            {requestPresentation?.canRegenerate && (
+              <Button
+                variant="outlined"
+                color="warning"
+                onClick={() => void regeneratePreview()}
+                disabled={busy !== null || !instruction.trim() || instruction.trim() === submittedInstruction.trim()}
+                sx={{ alignSelf: "flex-start" }}
+              >
+                {busy === "regenerate" ? "Regenerating" : "Regenerate with feedback"}
+              </Button>
+            )}
           </Stack>
         )}
 
@@ -593,7 +632,7 @@ export function ChatFixDialog({
                   variant="outlined"
                   color="warning"
                   onClick={() => void regeneratePreview()}
-                  disabled={busy !== null || instruction.trim() === submittedInstruction.trim()}
+                  disabled={busy !== null || !instruction.trim() || instruction.trim() === submittedInstruction.trim()}
                   sx={{ alignSelf: "flex-start" }}
                 >
                   {busy === "regenerate" ? "Regenerating" : "Regenerate with feedback"}
@@ -608,7 +647,7 @@ export function ChatFixDialog({
         <Button onClick={close} disabled={busy !== null && !(exactAnalysis && busy === "preview")}>
           {url ? "Done" : exactAnalysis && busy === "preview" ? "Close" : "Cancel"}
         </Button>
-        {!preview && !url && (
+        {!request && !preview && !url && (
           <Button
             variant="contained"
             color="warning"
@@ -617,6 +656,17 @@ export function ChatFixDialog({
             disabled={busy !== null || (!exactAnalysis && (!patternID || !sourceResult || !source))}
           >
             {busy === "preview" ? "Generating" : "Generate fix preview"}
+          </Button>
+        )}
+        {request?.status === "ready" && request.preview && !preview && !url && (
+          <Button
+            variant="contained"
+            color="warning"
+            startIcon={<BuildOutlined />}
+            onClick={() => setPreview(request.preview ?? null)}
+            disabled={busy !== null}
+          >
+            Review fix preview
           </Button>
         )}
         {preview && !url && (

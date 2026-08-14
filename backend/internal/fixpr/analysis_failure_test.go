@@ -261,3 +261,98 @@ func TestAnalysisPreviewTimedOutAuthenticCommandWarnsWithoutRetry(t *testing.T) 
 		t.Fatalf("calls=%d verify=%+v warnings=%v", agent.calls, fix.Preview.Verify, fix.Warnings)
 	}
 }
+
+func TestAnalysisGenerationFailureRetainsOnlySafeDiagnostic(t *testing.T) {
+	commands := sandboxVerificationCommands()
+	results := sandboxCommandResults()
+	results[0].Stdout = "private stdout"
+	results[0].Stderr = "private stderr"
+	agent := &fakeAgentRuntime{res: runtime.GenerateResult{
+		TerminalState: runtime.TerminalSucceeded, BaseSHA: exactAnalysisRevision,
+		Files: map[string]string{}, CommandResults: results,
+	}}
+	config := &AgentConfig{Runtime: agent, RequireCommandResults: true, CommandPolicy: runtime.CommandPolicy{Commands: commands}}
+	_, err := generateAnalysisWithAgent(t.Context(), genParams{
+		owner: "up", repo: "stream", maxFiles: 2, agent: config,
+	}, validAnalysisFailure())
+	if err == nil {
+		t.Fatal("expected no-change failure")
+	}
+	diagnostic, ok := AnalysisFailureDiagnosticOf(err)
+	if !ok || diagnostic.Category != AnalysisFailureNoReviewablePatch || diagnostic.TerminalState != runtime.TerminalSucceeded {
+		t.Fatalf("diagnostic = %+v ok=%v", diagnostic, ok)
+	}
+	if agent.calls != 1 || len(diagnostic.CommandResults) != len(commands) {
+		t.Fatalf("calls=%d diagnostic=%+v", agent.calls, diagnostic)
+	}
+	for _, result := range diagnostic.CommandResults {
+		if result.Stdout != "" || result.Stderr != "" {
+			t.Fatalf("diagnostic retained command output: %+v", result)
+		}
+	}
+}
+
+func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
+	commands := sandboxVerificationCommands()
+	results := sandboxCommandResults()
+	tests := []struct {
+		name     string
+		result   runtime.GenerateResult
+		err      error
+		maxFiles int
+		want     AnalysisFailureCategory
+	}{
+		{
+			name: "too broad", maxFiles: 1, want: AnalysisFailureNoReviewablePatch,
+			result: runtime.GenerateResult{TerminalState: runtime.TerminalSucceeded, BaseSHA: exactAnalysisRevision,
+				Files: map[string]string{"a": "1", "b": "2"}, Diff: "diff", CommandResults: results},
+		},
+		{
+			name: "runtime", maxFiles: 2, want: AnalysisFailureRuntimeInfrastructure,
+			result: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureRuntime},
+			err:    runtime.ErrUnavailable,
+		},
+		{
+			name: "review scope wire outcome", maxFiles: 2, want: AnalysisFailureNoReviewablePatch,
+			result: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureReviewScope,
+				CommandResults: results},
+			err: errors.New("agent Sandbox execution failed"),
+		},
+		{
+			name: "result contract", maxFiles: 2, want: AnalysisFailureResultContract,
+			result: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, CommandResults: results},
+			err:    runtime.ErrMalformedResult,
+		},
+		{
+			name: "safety", maxFiles: 2, want: AnalysisFailureSafetyIntegrity,
+			result: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureSafetyIntegrity, CommandResults: results},
+			err:    errors.New("agent Sandbox execution failed"),
+		},
+		{
+			name: "timeout", maxFiles: 2, want: AnalysisFailureTimedOut,
+			result: runtime.GenerateResult{TerminalState: runtime.TerminalTimedOut},
+			err:    context.DeadlineExceeded,
+		},
+		{
+			name: "cancelled", maxFiles: 2, want: AnalysisFailureCancelled,
+			result: runtime.GenerateResult{TerminalState: runtime.TerminalCancelled},
+			err:    runtime.ErrCancelled,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agent := &fakeAgentRuntime{res: tt.result, err: tt.err}
+			config := &AgentConfig{Runtime: agent, RequireCommandResults: true, CommandPolicy: runtime.CommandPolicy{Commands: commands}}
+			_, err := generateAnalysisWithAgent(t.Context(), genParams{
+				owner: "up", repo: "stream", maxFiles: tt.maxFiles, agent: config,
+			}, validAnalysisFailure())
+			if err == nil {
+				t.Fatal("expected generation failure")
+			}
+			diagnostic, ok := AnalysisFailureDiagnosticOf(err)
+			if !ok || diagnostic.Category != tt.want || agent.calls != 1 {
+				t.Fatalf("diagnostic=%+v ok=%v calls=%d err=%v", diagnostic, ok, agent.calls, err)
+			}
+		})
+	}
+}

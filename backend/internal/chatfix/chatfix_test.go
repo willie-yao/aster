@@ -70,7 +70,7 @@ func (f *fakeFixPreviewer) PreviewAnalysisFix(
 }
 
 func (f *fakeFixPreviewer) CreateAnalysisFixRequest(
-	input actions.AnalysisFixInput, owner, userToken, instruction string,
+	input actions.AnalysisFixInput, owner, userToken, instruction string, _ ...string,
 ) (actions.ActionRequestView, error) {
 	f.analysisInput, f.owner, f.userToken, f.instruction, f.requestCalled = input, owner, userToken, instruction, true
 	return actions.ActionRequestView{ID: "async-request", Kind: "analysis-fix", Owner: owner, Status: actions.RequestPending}, nil

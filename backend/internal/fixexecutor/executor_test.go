@@ -221,7 +221,7 @@ func TestExecuteReportsUnavailableValidationExecutable(t *testing.T) {
 			return "", "", os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte("changed\n"), 0o644)
 		},
 	})
-	if result.TerminalState != engineruntime.TerminalFailed || !strings.Contains(result.FailureReason, `executable "missing-validator-binary" is unavailable`) {
+	if result.TerminalState != engineruntime.TerminalFailed || result.FailureCode != engineruntime.ExecutionFailureRuntime || !strings.Contains(result.FailureReason, `executable "missing-validator-binary" is unavailable`) {
 		t.Fatalf("result = %+v", result)
 	}
 	if modelRequests != 1 || len(result.CommandResults) != 1 || result.CommandResults[0].ExitCode != -1 {
@@ -261,7 +261,7 @@ func TestExecuteRejectsValidationWorkspaceMutation(t *testing.T) {
 					return "", "", os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte("generated change\n"), 0o644)
 				},
 			})
-			if result.TerminalState != engineruntime.TerminalFailed || !strings.Contains(result.FailureReason, tc.want) {
+			if result.TerminalState != engineruntime.TerminalFailed || result.FailureCode != engineruntime.ExecutionFailureSafetyIntegrity || !strings.Contains(result.FailureReason, tc.want) {
 				t.Fatalf("result = %+v, want %q", result, tc.want)
 			}
 		})
@@ -421,7 +421,7 @@ func TestExecuteRejectsCredentialBearingOutput(t *testing.T) {
 	}{
 		{name: "stdout", run: func(context.Context, OpenCodeSpec) (string, string, error) { return credential, "", nil }},
 		{name: "stderr", run: func(context.Context, OpenCodeSpec) (string, string, error) { return "", credential, nil }},
-		{name: "error", run: func(context.Context, OpenCodeSpec) (string, string, error) { return "", "", errors.New(credential) }, wantReason: "coding agent failed"},
+		{name: "error", run: func(context.Context, OpenCodeSpec) (string, string, error) { return "", "", errors.New(credential) }},
 		{name: "changed file", run: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
 			return "", "", os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte(credential), 0o644)
 		}},
@@ -458,7 +458,7 @@ func TestExecuteRejectsCredentialBearingOutput(t *testing.T) {
 			if wantReason == "" {
 				wantReason = modelprovider.ErrCredentialExposure.Error()
 			}
-			if result.TerminalState != engineruntime.TerminalFailed || result.FailureReason != wantReason {
+			if result.TerminalState != engineruntime.TerminalFailed || result.FailureCode != engineruntime.ExecutionFailureSafetyIntegrity || result.FailureReason != wantReason {
 				t.Fatalf("credential-bearing result was not rejected or sanitized: state=%s reason=%q", result.TerminalState, result.FailureReason)
 			}
 			if strings.Contains(string(encoded), credential) {
@@ -568,5 +568,31 @@ fi
 	}
 	if len(result.CommandResults) != 2 || result.CommandResults[0].ExitCode != 0 {
 		t.Fatalf("command results = %+v", result.CommandResults)
+	}
+}
+
+func TestExecuteClassifiesReviewScopeWithoutPatchContent(t *testing.T) {
+	repository, sha := fixtureRepository(t)
+	request := fixtureRequest(repository, sha)
+	request.MaxFiles = 1
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: t.TempDir(),
+		RunOpenCode: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
+			if err := os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte("changed\n"), 0o644); err != nil {
+				return "", "", err
+			}
+			return "private model output", "private model error", os.WriteFile(filepath.Join(spec.WorkDir, "added.txt"), []byte("added\n"), 0o644)
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalFailed || result.FailureCode != engineruntime.ExecutionFailureReviewScope {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(result.CommandResults) != len(request.CommandPolicy.Commands) || len(result.Files) != 0 || result.Diff != "" || len(result.ChangedFiles) != 0 {
+		t.Fatalf("scope failure retained patch or incomplete command identity: %+v", result)
+	}
+	for _, command := range result.CommandResults {
+		if command.Stdout != "" || command.Stderr != "" {
+			t.Fatalf("scope failure retained command output: %+v", command)
+		}
 	}
 }
