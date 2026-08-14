@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -24,6 +25,7 @@ const (
 	defaultWorkspaceRoot = "/workspace"
 	defaultOpenCodeBin   = "opencode"
 	maxCapturedStream    = 64 << 10
+	commandCleanupGrace  = time.Second
 )
 
 // OpenCodeSpec is the non-secret invocation passed to the coding agent.
@@ -202,8 +204,7 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 		if timeout > 0 {
 			commandCtx, commandCancel = context.WithTimeout(ctx, timeout)
 		}
-		stdout, stderr, commandErr := runCommand(commandCtx, work, executionEnvironment(home, temp), commandOutputLimit(request), command.Argv...)
-		commandState := stateForContext(commandCtx)
+		stdout, stderr, commandErr := runValidationCommand(commandCtx, work, executionEnvironment(home, temp), commandOutputLimit(request), command.Argv...)
 		commandTimedOut := errors.Is(commandCtx.Err(), context.DeadlineExceeded)
 		commandCancel()
 		commandResult := engineruntime.CommandResult{
@@ -216,11 +217,18 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 		result.StdoutSummary = appendSummary(result.StdoutSummary, stdout)
 		result.StderrSummary = appendSummary(result.StderrSummary, stderr)
 		if commandErr != nil {
+			if ctx.Err() != nil {
+				return finish(stateForContext(ctx), fmt.Sprintf("validation command %d interrupted: %v", index+1, ctx.Err()))
+			}
 			var executableErr *exec.Error
 			if errors.As(commandErr, &executableErr) {
 				return finish(engineruntime.TerminalFailed, fmt.Sprintf("validation command %d executable %q is unavailable in the executor image", index+1, command.Argv[0]))
 			}
-			return finish(commandState, fmt.Sprintf("validation command %d failed: %v", index+1, commandErr))
+			var exitErr *exec.ExitError
+			if commandTimedOut || errors.As(commandErr, &exitErr) && exitErr.ExitCode() >= 0 {
+				continue
+			}
+			return finish(engineruntime.TerminalFailed, fmt.Sprintf("validation command %d could not run: %v", index+1, commandErr))
 		}
 	}
 	if _, _, err := runCommand(ctx, work, gitEnvironment(home, temp), maxCapturedStream, "git", "diff", "--quiet"); err != nil {
@@ -491,6 +499,38 @@ func runCommand(ctx context.Context, dir string, env []string, limit int, argv .
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = env
+	stdout := newTailBuffer(limit)
+	stderr := newTailBuffer(limit)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return stdout.String(), stderr.String(), ctx.Err()
+	}
+	return stdout.String(), stderr.String(), err
+}
+
+func runValidationCommand(ctx context.Context, dir string, env []string, limit int, argv ...string) (string, string, error) {
+	if len(argv) == 0 {
+		return "", "", fmt.Errorf("empty command")
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Dir = dir
+	cmd.Env = env
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+			if errors.Is(err, syscall.ESRCH) {
+				return os.ErrProcessDone
+			}
+			return err
+		}
+		return nil
+	}
+	cmd.WaitDelay = commandCleanupGrace
 	stdout := newTailBuffer(limit)
 	stderr := newTailBuffer(limit)
 	cmd.Stdout = stdout

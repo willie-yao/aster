@@ -63,6 +63,9 @@ type ExecutionRequest struct {
 type TerminalState string
 
 const (
+	// TerminalSucceeded means the executor completed every configured command
+	// and passed the hard repository and result-integrity checks. Individual
+	// command outcomes remain authoritative in CommandResults.
 	TerminalSucceeded TerminalState = "succeeded"
 	TerminalFailed    TerminalState = "failed"
 	TerminalTimedOut  TerminalState = "timed_out"
@@ -251,7 +254,7 @@ func (r ExecutionResult) Validate(request ExecutionRequest) error {
 		return fmt.Errorf("command results exceed the request policy")
 	}
 	if r.TerminalState == TerminalSucceeded {
-		if err := ValidateSuccessfulCommandResults(request.CommandPolicy.Commands, r.CommandResults); err != nil {
+		if err := ValidateCommandResults(request.CommandPolicy.Commands, r.CommandResults); err != nil {
 			return err
 		}
 	} else {
