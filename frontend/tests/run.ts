@@ -5,6 +5,7 @@ import "./chatFix.test.js";
 import "./aiUsage.test.js";
 import "./patternChat.test.js";
 import "./patternRemediation.test.js";
+import "./patternFixGuidance.test.js";
 import "./pageMetadata.test.js";
 import "./routes.test.js";
 import "./securityMarkup.test.js";
