@@ -15,24 +15,27 @@ import (
 )
 
 var (
-	namespacesGVR       = schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}
-	podsGVR             = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-	servicesGVR         = schema.GroupVersionResource{Version: "v1", Resource: "services"}
-	serviceAccountsGVR  = schema.GroupVersionResource{Version: "v1", Resource: "serviceaccounts"}
-	persistentClaimsGVR = schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}
-	resourceQuotasGVR   = schema.GroupVersionResource{Version: "v1", Resource: "resourcequotas"}
-	limitRangesGVR      = schema.GroupVersionResource{Version: "v1", Resource: "limitranges"}
-	nodesGVR            = schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
-	secretsGVR          = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
-	deploymentsGVR      = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
-	cronJobsGVR         = schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"}
-	endpointSlicesGVR   = schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}
-	ingressesGVR        = schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}
-	networkPoliciesGVR  = schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}
-	storageClassesGVR   = schema.GroupVersionResource{Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses"}
-	runtimeClassesGVR   = schema.GroupVersionResource{Group: "node.k8s.io", Version: "v1", Resource: "runtimeclasses"}
-	customResourcesGVR  = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
-	sandboxesGVR        = schema.GroupVersionResource{Group: "agents.x-k8s.io", Version: "v1beta1", Resource: "sandboxes"}
+	namespacesGVR                = schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}
+	podsGVR                      = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	servicesGVR                  = schema.GroupVersionResource{Version: "v1", Resource: "services"}
+	serviceAccountsGVR           = schema.GroupVersionResource{Version: "v1", Resource: "serviceaccounts"}
+	configMapsGVR                = schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
+	persistentClaimsGVR          = schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}
+	resourceQuotasGVR            = schema.GroupVersionResource{Version: "v1", Resource: "resourcequotas"}
+	limitRangesGVR               = schema.GroupVersionResource{Version: "v1", Resource: "limitranges"}
+	nodesGVR                     = schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
+	secretsGVR                   = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
+	deploymentsGVR               = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	cronJobsGVR                  = schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"}
+	endpointSlicesGVR            = schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}
+	ingressesGVR                 = schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"}
+	networkPoliciesGVR           = schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}
+	storageClassesGVR            = schema.GroupVersionResource{Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses"}
+	runtimeClassesGVR            = schema.GroupVersionResource{Group: "node.k8s.io", Version: "v1", Resource: "runtimeclasses"}
+	customResourcesGVR           = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
+	sandboxesGVR                 = schema.GroupVersionResource{Group: "agents.x-k8s.io", Version: "v1beta1", Resource: "sandboxes"}
+	ciliumPoliciesGVR            = schema.GroupVersionResource{Group: "cilium.io", Version: "v2", Resource: "ciliumnetworkpolicies"}
+	ciliumClusterwidePoliciesGVR = schema.GroupVersionResource{Group: "cilium.io", Version: "v2", Resource: "ciliumclusterwidenetworkpolicies"}
 )
 
 type clusterReader interface {

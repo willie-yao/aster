@@ -4,9 +4,12 @@ package kubernetesdeploy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
@@ -40,6 +43,7 @@ var (
 	sha256DigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	shaTagPattern       = regexp.MustCompile(`^sha-[0-9a-f]{7,64}$`)
 	semverTagPattern    = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
+	publicHostPattern   = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 )
 
 // KubernetesDoctorOptions selects the configured release to inspect.
@@ -764,9 +768,24 @@ func checkAgentSandbox(ctx context.Context, add func(string, KubernetesDoctorSta
 		add("Agent Sandbox execution namespace", KubernetesDoctorFail, "namespace "+fix.Namespace+" is unavailable: "+err.Error(), "Install the platform bundle before the application release.")
 	} else if executionNamespace.GetLabels()["prow-ai-dashboard/release"] != opts.Release {
 		add("Agent Sandbox execution namespace", KubernetesDoctorFail, "namespace is not dedicated to release "+opts.Release, "Install the platform bundle with prow-ai-dashboard/release set to the application release name.")
+	} else if executionNamespace.GetAnnotations()["prow-ai-dashboard/runtime-class"] != fix.RuntimeClassName {
+		add("Agent Sandbox execution namespace", KubernetesDoctorFail, "namespace runtime-class contract does not match "+fix.RuntimeClassName, "Upgrade the platform bundle with the reviewed secure RuntimeClass name.")
+	} else if executionNamespace.GetAnnotations()["prow-ai-dashboard/agent-sandbox-version"] != supportedAgentSandboxVersion {
+		add("Agent Sandbox execution namespace", KubernetesDoctorFail, "namespace Agent Sandbox contract is not "+supportedAgentSandboxVersion, "Upgrade the platform bundle to the supported controller contract.")
+	} else if executionNamespace.GetAnnotations()["prow-ai-dashboard/network-policy-mode"] != "cilium" || executionNamespace.GetAnnotations()["prow-ai-dashboard/default-deny-policy-name"] == "" || executionNamespace.GetAnnotations()["prow-ai-dashboard/execution-policy-name"] == "" || executionNamespace.GetAnnotations()["prow-ai-dashboard/execution-policy-sha256"] == "" || executionNamespace.GetAnnotations()["prow-ai-dashboard/platform-release"] == "" {
+		add("Agent Sandbox execution namespace", KubernetesDoctorFail, "namespace does not record the complete supported Cilium policy and platform-release contract", "Upgrade the platform bundle before enabling Fix runtime.")
 	} else {
-		add("Agent Sandbox execution namespace", KubernetesDoctorPass, "namespace exists and is dedicated to release "+opts.Release, "")
+		add("Agent Sandbox execution namespace", KubernetesDoctorPass, "namespace records the release, runtime, controller, and Cilium policy contract", "")
 	}
+	policyHash := ""
+	if executionNamespace != nil {
+		policyHash = executionNamespace.GetAnnotations()["prow-ai-dashboard/execution-policy-sha256"]
+	}
+	platformRelease := ""
+	if executionNamespace != nil {
+		platformRelease = executionNamespace.GetAnnotations()["prow-ai-dashboard/platform-release"]
+	}
+	platformBinding := checkPlatformBinding(ctx, add, cluster, opts.Namespace, opts.Release, fix, policyHash, platformRelease)
 	runtimeClass, err := cluster.Get(ctx, runtimeClassesGVR, "", fix.RuntimeClassName)
 	if err != nil {
 		add("Agent Sandbox RuntimeClass", KubernetesDoctorFail, "RuntimeClass "+fix.RuntimeClassName+" is unavailable: "+err.Error(), "Have the infrastructure owner install and configure the secure runtime handler.")
@@ -782,8 +801,46 @@ func checkAgentSandbox(ctx context.Context, add func(string, KubernetesDoctorSta
 	checkExecutionBounds(ctx, add, cluster, fix.Namespace)
 	checkWorkloadServiceAccount(ctx, add, cluster, fix, releaseExists)
 	checkActiveSandboxes(ctx, add, cluster, fix.Namespace, opts.Release)
-	checkGateway(ctx, add, cluster, fix)
+	checkGateway(ctx, add, cluster, opts.Namespace, fix, platformBinding)
 	add("hostile-code isolation", KubernetesDoctorUnverified, "resource presence does not prove that the RuntimeClass enforces hostile-code isolation", "Validate the secure runtime and node image in real AKS release acceptance.")
+}
+
+func checkPlatformBinding(ctx context.Context, add func(string, KubernetesDoctorStatus, string, string), cluster clusterReader, applicationNamespace, release string, fix doctorFixRuntimeValues, policyHash, platformRelease string) map[string]string {
+	selector := "app.kubernetes.io/part-of=prow-ai-dashboard-platform,app.kubernetes.io/component=platform-binding"
+	bindings, err := cluster.List(ctx, configMapsGVR, applicationNamespace, selector)
+	if err != nil {
+		add("platform binding", KubernetesDoctorFail, "platform binding ConfigMaps are unreadable: "+err.Error(), "Restore LIST access to the application namespace.")
+		return nil
+	}
+	var matches []map[string]string
+	for _, binding := range bindings.Items {
+		data, _, _ := unstructured.NestedStringMap(binding.Object, "data")
+		if data["applicationReleaseName"] != release || data["executionNamespace"] != fix.Namespace || data["runtimeClassName"] != fix.RuntimeClassName || policyHash == "" || data["executionPolicySHA256"] != policyHash || platformRelease == "" || binding.GetLabels()["app.kubernetes.io/instance"] != platformRelease {
+			continue
+		}
+		gatewayMode := fix.ModelProvider.CredentialMode == modelprovider.CredentialModeGateway
+		if gatewayMode != (data["modelGatewayEnabled"] == "true") {
+			continue
+		}
+		if gatewayMode {
+			if data["modelGatewayExecutionNamespace"] != fix.Namespace || !validPublicHostname(data["modelGatewayUpstreamHost"]) || data["modelGatewayTargetPort"] == "" || data["modelGatewayPolicySHA256"] != gatewayPolicyHash(fix.Namespace, data["modelGatewayUpstreamHost"], data["modelGatewayTargetPort"]) {
+				continue
+			}
+			if fix.ModelProvider.PublicCAPrivateDNS {
+				parsed, _ := url.Parse(fix.ModelProvider.Endpoint)
+				if !strings.EqualFold(data["modelGatewayPublicHost"], parsed.Hostname()) {
+					continue
+				}
+			}
+		}
+		matches = append(matches, data)
+	}
+	if len(matches) != 1 {
+		add("platform binding", KubernetesDoctorFail, fmt.Sprintf("expected one immutable platform binding, found %d", len(matches)), "Install or repair the platform chart in the application namespace.")
+		return nil
+	}
+	add("platform binding", KubernetesDoctorPass, "immutable application, execution namespace, RuntimeClass, egress, and gateway binding is present", "")
+	return matches[0]
 }
 
 func crdServesStorageVersion(crd *unstructured.Unstructured, version string) bool {
@@ -942,11 +999,266 @@ func checkExecutionBounds(ctx context.Context, add func(string, KubernetesDoctor
 		add("Agent Sandbox LimitRange", KubernetesDoctorPass, "execution namespace has a LimitRange", "")
 	}
 	policies, err := cluster.List(ctx, networkPoliciesGVR, namespace, "")
-	if err != nil || !hasDefaultDeny(policies) {
-		add("Agent Sandbox network policy", KubernetesDoctorFail, "execution namespace has no observable Kubernetes default-deny policy", "Install the platform bundle network policy and any required Cilium policy.")
-	} else {
-		add("Agent Sandbox network policy", KubernetesDoctorPass, "execution namespace has an observable default-deny policy", "")
+	if err != nil {
+		add("Agent Sandbox network policy", KubernetesDoctorFail, "execution namespace NetworkPolicies are unreadable: "+err.Error(), "Restore LIST access to the execution namespace.")
+		return
 	}
+	namespaceObject, err := cluster.Get(ctx, namespacesGVR, "", namespace)
+	if err != nil {
+		add("Agent Sandbox Cilium policy", KubernetesDoctorFail, "execution namespace annotations are unavailable: "+err.Error(), "Restore read access to the platform namespace contract.")
+		return
+	}
+	annotations := namespaceObject.GetAnnotations()
+	defaultDenyName := annotations["prow-ai-dashboard/default-deny-policy-name"]
+	platformRelease := annotations["prow-ai-dashboard/platform-release"]
+	if len(policies.Items) != 1 || policies.Items[0].GetName() != defaultDenyName || !hasStrictDefaultDeny(&policies.Items[0]) {
+		add("Agent Sandbox network policy", KubernetesDoctorFail, "execution namespace must contain exactly the release-owned default-deny NetworkPolicy", "Remove stale or additional policies and restore the platform chart boundary.")
+		return
+	}
+	policyLabels := policies.Items[0].GetLabels()
+	if policyLabels["app.kubernetes.io/part-of"] != "prow-ai-dashboard-platform" || policyLabels["app.kubernetes.io/component"] != "agent-sandbox-execution" || policyLabels["app.kubernetes.io/instance"] != platformRelease {
+		add("Agent Sandbox network policy", KubernetesDoctorFail, "default-deny NetworkPolicy lacks the exact platform release ownership labels", "Restore the chart-owned policy.")
+		return
+	}
+	add("Agent Sandbox network policy", KubernetesDoctorPass, "execution namespace contains only the release-owned default-deny policy", "")
+	policyName := annotations["prow-ai-dashboard/execution-policy-name"]
+	served, err := cluster.HasResource(ctx, ciliumPoliciesGVR)
+	if err != nil || !served {
+		add("Agent Sandbox Cilium policy", KubernetesDoctorFail, "the cilium.io/v2 CiliumNetworkPolicy API is unavailable", "Install the supported AKS Cilium data plane before the platform bundle.")
+		return
+	}
+	ciliumPolicies, err := cluster.List(ctx, ciliumPoliciesGVR, namespace, "")
+	if err != nil {
+		add("Agent Sandbox Cilium policy", KubernetesDoctorFail, "execution namespace Cilium policies are unreadable: "+err.Error(), "Restore LIST access to the execution namespace.")
+		return
+	}
+	if len(ciliumPolicies.Items) != 1 || ciliumPolicies.Items[0].GetName() != policyName {
+		add("Agent Sandbox Cilium policy", KubernetesDoctorFail, "execution namespace must contain exactly the release-owned Cilium egress policy", "Remove stale or additional Cilium policies and restore the platform chart boundary.")
+		return
+	}
+	policy := &ciliumPolicies.Items[0]
+	if err := validateCiliumExecutionPolicy(policy, annotations); err != nil {
+		add("Agent Sandbox Cilium policy", KubernetesDoctorFail, err.Error(), "Restore the exact platform-chart egress policy and rerun doctor.")
+		return
+	}
+	clusterwideServed, err := cluster.HasResource(ctx, ciliumClusterwidePoliciesGVR)
+	if err != nil || !clusterwideServed {
+		add("Agent Sandbox Cilium policy", KubernetesDoctorFail, "the cluster-wide Cilium policy API is unavailable", "Restore the supported AKS Cilium policy APIs.")
+		return
+	}
+	clusterwide, err := cluster.List(ctx, ciliumClusterwidePoliciesGVR, "", "")
+	if err != nil {
+		add("Agent Sandbox Cilium policy", KubernetesDoctorFail, "cluster-wide Cilium policies are unreadable: "+err.Error(), "Restore LIST access to cluster-wide Cilium policy metadata.")
+		return
+	}
+	for _, candidate := range clusterwide.Items {
+		if clusterwidePolicyMaySelectNamespace(&candidate, namespace) {
+			add("Agent Sandbox Cilium policy", KubernetesDoctorFail, "cluster-wide Cilium policy "+candidate.GetName()+" may select the release-dedicated execution namespace", "Remove or narrowly scope the cluster-wide policy before enabling hostile workloads.")
+			return
+		}
+	}
+	add("Agent Sandbox Cilium policy", KubernetesDoctorPass, "release-owned Cilium egress policy matches the bounded exact-host contract and no cluster-wide policy can select the namespace", "")
+}
+
+func hasStrictDefaultDeny(policy *unstructured.Unstructured) bool {
+	selector, found, _ := unstructured.NestedMap(policy.Object, "spec", "podSelector")
+	return found && len(selector) == 0 && hasNoAllowRules(policy)
+}
+
+func hasNoAllowRules(policy *unstructured.Unstructured) bool {
+	types, _, _ := unstructured.NestedStringSlice(policy.Object, "spec", "policyTypes")
+	if !containsString(types, "Ingress") || !containsString(types, "Egress") {
+		return false
+	}
+	for _, field := range []string{"ingress", "egress"} {
+		rules, found, _ := unstructured.NestedSlice(policy.Object, "spec", field)
+		if found && len(rules) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func clusterwidePolicyMaySelectNamespace(policy *unstructured.Unstructured, namespace string) bool {
+	selector, found, err := unstructured.NestedMap(policy.Object, "spec", "endpointSelector")
+	if err != nil || !found || len(selector) == 0 {
+		return true
+	}
+	labels, _, _ := unstructured.NestedStringMap(selector, "matchLabels")
+	if selectedNamespace, ok := labels["k8s:io.kubernetes.pod.namespace"]; ok {
+		return selectedNamespace == namespace
+	}
+	if selectedNamespace, ok := labels["io.kubernetes.pod.namespace"]; ok {
+		return selectedNamespace == namespace
+	}
+	return true
+}
+
+func validateCiliumExecutionPolicy(policy *unstructured.Unstructured, annotations map[string]string) error {
+	platformRelease := annotations["prow-ai-dashboard/platform-release"]
+	expectedHash := annotations["prow-ai-dashboard/execution-policy-sha256"]
+	labels := policy.GetLabels()
+	if labels["app.kubernetes.io/part-of"] != "prow-ai-dashboard-platform" || labels["app.kubernetes.io/component"] != "agent-sandbox-execution" || labels["app.kubernetes.io/instance"] != platformRelease || platformRelease == "" {
+		return fmt.Errorf("cilium egress policy lacks the exact platform release ownership labels")
+	}
+	if expectedHash == "" || policy.GetAnnotations()["prow-ai-dashboard/execution-policy-sha256"] != expectedHash {
+		return fmt.Errorf("cilium egress policy hash does not match the namespace contract")
+	}
+	selector, found, err := unstructured.NestedMap(policy.Object, "spec", "endpointSelector")
+	if err != nil || !found || len(selector) != 0 {
+		return fmt.Errorf("cilium egress policy must select only the dedicated namespace through an empty endpointSelector")
+	}
+	ingress, found, err := unstructured.NestedSlice(policy.Object, "spec", "ingress")
+	if err != nil || !found || len(ingress) != 0 {
+		return fmt.Errorf("cilium egress policy must deny ingress")
+	}
+	egress, found, err := unstructured.NestedSlice(policy.Object, "spec", "egress")
+	if err != nil || !found || len(egress) == 0 {
+		return fmt.Errorf("cilium egress policy has no bounded egress rules")
+	}
+	var fqdnNames []string
+	hasDNS := false
+	gatewayRules := 0
+	for _, raw := range egress {
+		rule, _ := raw.(map[string]any)
+		for _, forbidden := range []string{"toEntities", "toCIDR", "toCIDRSet", "toServices", "toGroups", "toNodes"} {
+			if value, ok := rule[forbidden]; ok && value != nil {
+				return fmt.Errorf("cilium egress policy contains forbidden %s access", forbidden)
+			}
+		}
+		fqdns, hasFQDNs, _ := unstructured.NestedSlice(rule, "toFQDNs")
+		endpoints, hasEndpoints, _ := unstructured.NestedSlice(rule, "toEndpoints")
+		switch {
+		case hasFQDNs:
+			if hasEndpoints || len(fqdns) == 0 || !ruleUsesOnlyPort(rule, "443") {
+				return fmt.Errorf("cilium FQDN egress must use only TCP port 443")
+			}
+			for _, fqdnRaw := range fqdns {
+				fqdn, _ := fqdnRaw.(map[string]any)
+				name, hasName, _ := unstructured.NestedString(fqdn, "matchName")
+				if !hasName || len(fqdn) != 1 || !validPublicHostname(name) {
+					return fmt.Errorf("cilium FQDN egress must contain exact public matchName entries only")
+				}
+				fqdnNames = append(fqdnNames, strings.ToLower(name))
+			}
+		case hasEndpoints:
+			if isDNSRule(rule, endpoints) {
+				hasDNS = true
+			} else if isGatewayRule(rule, endpoints, annotations) {
+				gatewayRules++
+			} else {
+				return fmt.Errorf("cilium egress policy contains an unexpected endpoint destination")
+			}
+		default:
+			return fmt.Errorf("cilium egress policy contains an unbounded egress rule")
+		}
+	}
+	if !hasDNS || len(fqdnNames) == 0 {
+		return fmt.Errorf("cilium egress policy must contain DNS and exact-host HTTPS rules")
+	}
+	gatewayEnabled := annotations["prow-ai-dashboard/model-gateway-enabled"] == "true"
+	if gatewayEnabled && gatewayRules != 1 || !gatewayEnabled && gatewayRules != 0 {
+		return fmt.Errorf("cilium egress gateway rule does not match the namespace contract")
+	}
+	actualHash := executionPolicyHash(fqdnNames, annotations)
+	if actualHash != expectedHash {
+		return fmt.Errorf("cilium egress destinations do not match the namespace policy hash")
+	}
+	return nil
+}
+
+func ruleUsesOnlyPort(rule map[string]any, want string) bool {
+	toPorts, found, _ := unstructured.NestedSlice(rule, "toPorts")
+	if !found || len(toPorts) != 1 {
+		return false
+	}
+	entry, _ := toPorts[0].(map[string]any)
+	ports, found, _ := unstructured.NestedSlice(entry, "ports")
+	if !found || len(ports) != 1 {
+		return false
+	}
+	port, _ := ports[0].(map[string]any)
+	value, _, _ := unstructured.NestedString(port, "port")
+	protocol, _, _ := unstructured.NestedString(port, "protocol")
+	return value == want && protocol == "TCP"
+}
+
+func isDNSRule(rule map[string]any, endpoints []any) bool {
+	if !ruleUsesOnlyPortOrAny(rule, "53") || len(endpoints) != 1 {
+		return false
+	}
+	endpoint, _ := endpoints[0].(map[string]any)
+	labels, _, _ := unstructured.NestedStringMap(endpoint, "matchLabels")
+	if labels["k8s:io.kubernetes.pod.namespace"] != "kube-system" || labels["k8s:k8s-app"] != "kube-dns" {
+		return false
+	}
+	toPorts, _, _ := unstructured.NestedSlice(rule, "toPorts")
+	entry, _ := toPorts[0].(map[string]any)
+	dnsRules, found, _ := unstructured.NestedSlice(entry, "rules", "dns")
+	if !found || len(dnsRules) != 1 {
+		return false
+	}
+	dns, _ := dnsRules[0].(map[string]any)
+	pattern, _, _ := unstructured.NestedString(dns, "matchPattern")
+	return pattern == "*" && len(dns) == 1
+}
+
+func ruleUsesOnlyPortOrAny(rule map[string]any, want string) bool {
+	toPorts, found, _ := unstructured.NestedSlice(rule, "toPorts")
+	if !found || len(toPorts) != 1 {
+		return false
+	}
+	entry, _ := toPorts[0].(map[string]any)
+	ports, found, _ := unstructured.NestedSlice(entry, "ports")
+	if !found || len(ports) != 1 {
+		return false
+	}
+	port, _ := ports[0].(map[string]any)
+	value, _, _ := unstructured.NestedString(port, "port")
+	protocol, _, _ := unstructured.NestedString(port, "protocol")
+	return value == want && (protocol == "ANY" || protocol == "UDP" || protocol == "TCP")
+}
+
+func isGatewayRule(rule map[string]any, endpoints []any, annotations map[string]string) bool {
+	if annotations["prow-ai-dashboard/model-gateway-enabled"] != "true" || len(endpoints) != 1 {
+		return false
+	}
+	endpoint, _ := endpoints[0].(map[string]any)
+	labels, _, _ := unstructured.NestedStringMap(endpoint, "matchLabels")
+	if labels["k8s:io.kubernetes.pod.namespace"] != annotations["prow-ai-dashboard/model-gateway-namespace"] || labels["k8s:app.kubernetes.io/name"] != annotations["prow-ai-dashboard/model-gateway-name"] || labels["k8s:app.kubernetes.io/instance"] != annotations["prow-ai-dashboard/platform-release"] || labels["k8s:app.kubernetes.io/component"] != "model-gateway" {
+		return false
+	}
+	toPorts, found, _ := unstructured.NestedSlice(rule, "toPorts")
+	if !found || len(toPorts) != 1 {
+		return false
+	}
+	entry, _ := toPorts[0].(map[string]any)
+	ports, found, _ := unstructured.NestedSlice(entry, "ports")
+	if !found || len(ports) != 1 {
+		return false
+	}
+	port, _ := ports[0].(map[string]any)
+	value, _, _ := unstructured.NestedString(port, "port")
+	protocol, _, _ := unstructured.NestedString(port, "protocol")
+	return value == annotations["prow-ai-dashboard/model-gateway-target-port"] && protocol == "TCP"
+}
+
+func validPublicHostname(value string) bool {
+	value = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(value), "."))
+	return publicHostPattern.MatchString(value) && net.ParseIP(value) == nil && value != "localhost" && !strings.HasSuffix(value, ".svc") && !strings.HasSuffix(value, ".cluster.local") && !strings.HasSuffix(value, ".local")
+}
+
+func executionPolicyHash(names []string, annotations map[string]string) string {
+	gatewayEnabled := annotations["prow-ai-dashboard/model-gateway-enabled"] == "true"
+	gatewayNamespace, gatewayName, platformRelease, targetPort := "", "", "", ""
+	if gatewayEnabled {
+		gatewayNamespace = annotations["prow-ai-dashboard/model-gateway-namespace"]
+		gatewayName = annotations["prow-ai-dashboard/model-gateway-name"]
+		platformRelease = annotations["prow-ai-dashboard/platform-release"]
+		targetPort = annotations["prow-ai-dashboard/model-gateway-target-port"]
+	}
+	data, _ := json.Marshal([]any{names, gatewayEnabled, gatewayNamespace, gatewayName, platformRelease, targetPort})
+	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
 func checkWorkloadServiceAccount(ctx context.Context, add func(string, KubernetesDoctorStatus, string, string), cluster clusterReader, fix doctorFixRuntimeValues, releaseExists bool) {
@@ -996,7 +1308,7 @@ func checkActiveSandboxes(ctx context.Context, add func(string, KubernetesDoctor
 	add("active Sandboxes", KubernetesDoctorPass, "no Sandbox object remains in the release-dedicated execution namespace", "")
 }
 
-func checkGateway(ctx context.Context, add func(string, KubernetesDoctorStatus, string, string), cluster clusterReader, fix doctorFixRuntimeValues) {
+func checkGateway(ctx context.Context, add func(string, KubernetesDoctorStatus, string, string), cluster clusterReader, applicationNamespace string, fix doctorFixRuntimeValues, binding map[string]string) {
 	provider := fix.ModelProvider
 	parsed, err := url.Parse(provider.Endpoint)
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" {
@@ -1007,18 +1319,47 @@ func checkGateway(ctx context.Context, add func(string, KubernetesDoctorStatus, 
 		add("model gateway", KubernetesDoctorUnverified, "direct provider mode does not use an in-cluster gateway", "Confirm the external provider and Secret-manager contract separately.")
 		return
 	}
-	service, namespace, ok := kubernetesServiceHost(parsed.Hostname())
-	if !ok {
-		if provider.PublicCAPrivateDNS {
-			add("model gateway", KubernetesDoctorUnverified, "public-CA/private-DNS gateway cannot be resolved or TLS-tested without creating a Sandbox", "Verify private DNS, certificate SAN, gateway authorization, and network policy in release acceptance.")
-		} else {
-			add("model gateway", KubernetesDoctorFail, "gateway mode requires an in-cluster Service or explicit publicCAPrivateDNS acknowledgement", "Use the reviewed gateway trust contract without weakening TLS.")
-		}
+	if binding == nil || binding["modelGatewayEnabled"] != "true" {
+		add("model gateway", KubernetesDoctorFail, "the retained platform binding does not enable the configured gateway", "Restore the platform binding before using gateway mode.")
 		return
 	}
+	service, namespace, internal := kubernetesServiceHost(parsed.Hostname())
+	if internal {
+		checkGatewayResources(ctx, add, cluster, namespace, service, "", binding)
+		return
+	}
+	if !provider.PublicCAPrivateDNS {
+		add("model gateway", KubernetesDoctorFail, "gateway mode requires an in-cluster Service or explicit publicCAPrivateDNS acknowledgement", "Use the reviewed gateway trust contract without weakening TLS.")
+		return
+	}
+	selector := "app.kubernetes.io/part-of=prow-ai-dashboard-platform,app.kubernetes.io/component=model-gateway"
+	services, err := cluster.List(ctx, servicesGVR, applicationNamespace, selector)
+	if err != nil {
+		add("model gateway Service", KubernetesDoctorFail, "platform gateway Services are unreadable: "+err.Error(), "Restore LIST access to the application namespace.")
+		return
+	}
+	var matches []string
+	for _, candidate := range services.Items {
+		if strings.EqualFold(candidate.GetAnnotations()["prow-ai-dashboard/model-gateway-host"], parsed.Hostname()) {
+			matches = append(matches, candidate.GetName())
+		}
+	}
+	if len(matches) != 1 {
+		add("model gateway Service", KubernetesDoctorFail, fmt.Sprintf("expected one platform gateway for host %s, found %d", parsed.Hostname(), len(matches)), "Install the platform bundle in the application namespace with the reviewed public host.")
+		return
+	}
+	checkGatewayResources(ctx, add, cluster, applicationNamespace, matches[0], parsed.Hostname(), binding)
+	add("model gateway private DNS", KubernetesDoctorUnverified, "resource metadata cannot prove that the public hostname privately resolves to the selected ClusterIP Service", "Verify private DNS resolution from the secure runtime during real release acceptance.")
+}
+
+func checkGatewayResources(ctx context.Context, add func(string, KubernetesDoctorStatus, string, string), cluster clusterReader, namespace, service, expectedHost string, binding map[string]string) {
 	gatewayService, err := cluster.Get(ctx, servicesGVR, namespace, service)
 	if err != nil {
 		add("model gateway Service", KubernetesDoctorFail, "Service is unavailable: "+err.Error(), "Install or repair the platform gateway.")
+		return
+	}
+	if expectedHost != "" && !strings.EqualFold(gatewayService.GetAnnotations()["prow-ai-dashboard/model-gateway-host"], expectedHost) {
+		add("model gateway Service", KubernetesDoctorFail, "Service host annotation does not match "+expectedHost, "Upgrade the platform bundle with the reviewed public gateway host.")
 		return
 	}
 	if serviceType, _, _ := unstructured.NestedString(gatewayService.Object, "spec", "type"); serviceType != "ClusterIP" {
@@ -1046,23 +1387,34 @@ func checkGateway(ctx context.Context, add func(string, KubernetesDoctorStatus, 
 		add("model gateway Deployment", KubernetesDoctorFail, "exactly one selected gateway Deployment was not found", "Correct the platform gateway Service selector and Deployment labels.")
 		return
 	}
-	available, _, _ := unstructured.NestedInt64(deployments.Items[0].Object, "status", "availableReplicas")
+	deployment := &deployments.Items[0]
+	if expectedHost != "" && !strings.EqualFold(deployment.GetAnnotations()["prow-ai-dashboard/model-gateway-host"], expectedHost) {
+		add("model gateway Deployment", KubernetesDoctorFail, "Deployment host annotation does not match "+expectedHost, "Upgrade the platform bundle with the reviewed public gateway host.")
+		return
+	}
+	available, _, _ := unstructured.NestedInt64(deployment.Object, "status", "availableReplicas")
 	if available < 1 {
 		add("model gateway Deployment", KubernetesDoctorFail, "gateway Deployment has no available replicas", "Restore gateway readiness.")
 		return
 	}
-	image := containerImage(&deployments.Items[0], "gateway")
+	add("model gateway Deployment", KubernetesDoctorPass, "gateway Deployment is available", "")
+	image := containerImage(deployment, "gateway")
 	if !strings.Contains(image, "@sha256:") {
 		add("model gateway image", KubernetesDoctorFail, "gateway image is not pinned by digest", "Use a reviewed published gateway image digest.")
 	} else {
 		add("model gateway image", KubernetesDoctorPass, "gateway image is pinned by digest", "")
 	}
-	tlsSecretName := strings.TrimSpace(deployments.Items[0].GetAnnotations()[modelGatewayTLSSecretAnnotation])
+	if !gatewayDeploymentMatchesBinding(deployment, binding) {
+		add("model gateway Deployment", KubernetesDoctorFail, "gateway Deployment does not match the retained upstream and policy binding", "Restore the platform chart gateway Deployment.")
+		return
+	}
+	checkGatewayNetworkPolicies(ctx, add, cluster, namespace, deployment, binding)
+	tlsSecretName := strings.TrimSpace(deployment.GetAnnotations()[modelGatewayTLSSecretAnnotation])
 	if tlsSecretName == "" {
 		add("model gateway TLS", KubernetesDoctorFail, "gateway Deployment lacks the explicit TLS Secret annotation", "Set "+modelGatewayTLSSecretAnnotation+" to the mounted existing TLS Secret name.")
 		return
 	}
-	tlsSecrets, otherSecrets, tlsMounted := deploymentSecretReferences(&deployments.Items[0], tlsSecretName)
+	tlsSecrets, otherSecrets, tlsMounted := deploymentSecretReferences(deployment, tlsSecretName)
 	tlsSet := map[string]struct{}{}
 	for _, name := range tlsSecrets {
 		tlsSet[name] = struct{}{}
@@ -1088,6 +1440,220 @@ func checkGateway(ctx context.Context, add func(string, KubernetesDoctorStatus, 
 		add("model gateway TLS", KubernetesDoctorPass, "gateway Deployment references a TLS Secret whose metadata exists", "")
 	}
 	add("model gateway TLS identity", KubernetesDoctorUnverified, "metadata cannot prove certificate SAN, trust chain, private-key pairing, reload behavior, or a successful TLS handshake", "Validate the public-CA/private-DNS certificate path in real release acceptance.")
+}
+
+func gatewayDeploymentMatchesBinding(deployment *unstructured.Unstructured, binding map[string]string) bool {
+	if binding == nil {
+		return false
+	}
+	annotations := deployment.GetAnnotations()
+	if annotations["prow-ai-dashboard/model-gateway-policy-sha256"] != binding["modelGatewayPolicySHA256"] || annotations["prow-ai-dashboard/model-gateway-execution-namespace"] != binding["modelGatewayExecutionNamespace"] || !strings.EqualFold(annotations["prow-ai-dashboard/model-gateway-upstream-host"], binding["modelGatewayUpstreamHost"]) || annotations["prow-ai-dashboard/model-gateway-target-port"] != binding["modelGatewayTargetPort"] {
+		return false
+	}
+	containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+	for _, raw := range containers {
+		container, _ := raw.(map[string]any)
+		name, _, _ := unstructured.NestedString(container, "name")
+		if name != "gateway" {
+			continue
+		}
+		env, _, _ := unstructured.NestedSlice(container, "env")
+		for _, envRaw := range env {
+			envVar, _ := envRaw.(map[string]any)
+			envName, _, _ := unstructured.NestedString(envVar, "name")
+			if envName != "UPSTREAM_URL" {
+				continue
+			}
+			value, _, _ := unstructured.NestedString(envVar, "value")
+			parsed, err := url.Parse(value)
+			return err == nil && parsed.Scheme == "https" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" && strings.EqualFold(parsed.Hostname(), binding["modelGatewayUpstreamHost"])
+		}
+	}
+	return false
+}
+
+func checkGatewayNetworkPolicies(ctx context.Context, add func(string, KubernetesDoctorStatus, string, string), cluster clusterReader, namespace string, deployment *unstructured.Unstructured, binding map[string]string) {
+	podLabels, _, _ := unstructured.NestedStringMap(deployment.Object, "spec", "template", "metadata", "labels")
+	annotations := deployment.GetAnnotations()
+	defaultDenyName := annotations["prow-ai-dashboard/model-gateway-default-deny-policy"]
+	ciliumName := annotations["prow-ai-dashboard/model-gateway-cilium-policy"]
+	if defaultDenyName == "" || ciliumName == "" || annotations["prow-ai-dashboard/model-gateway-policy-sha256"] == "" {
+		add("model gateway network policy", KubernetesDoctorFail, "gateway Deployment lacks the stable network-policy contract annotations", "Restore the platform chart gateway Deployment.")
+		return
+	}
+	policies, err := cluster.List(ctx, networkPoliciesGVR, namespace, "")
+	if err != nil {
+		add("model gateway network policy", KubernetesDoctorFail, "gateway NetworkPolicies are unreadable: "+err.Error(), "Restore LIST access to the gateway namespace.")
+		return
+	}
+	var selected []unstructured.Unstructured
+	for _, policy := range policies.Items {
+		selector, found, _ := unstructured.NestedMap(policy.Object, "spec", "podSelector")
+		if !found || labelSelectorMaySelect(selector, podLabels) {
+			selected = append(selected, policy)
+		}
+	}
+	if len(selected) != 1 || selected[0].GetName() != defaultDenyName || !hasNoAllowRules(&selected[0]) {
+		add("model gateway network policy", KubernetesDoctorFail, "gateway Pods must be selected by exactly the release-owned default-deny NetworkPolicy", "Remove stale or additional policies and restore the platform chart boundary.")
+		return
+	}
+	labels := selected[0].GetLabels()
+	if labels["app.kubernetes.io/part-of"] != "prow-ai-dashboard-platform" || labels["app.kubernetes.io/component"] != "model-gateway" || labels["app.kubernetes.io/instance"] != deployment.GetLabels()["app.kubernetes.io/instance"] {
+		add("model gateway network policy", KubernetesDoctorFail, "gateway default-deny policy lacks the exact platform release labels", "Restore the chart-owned gateway policy.")
+		return
+	}
+	served, err := cluster.HasResource(ctx, ciliumPoliciesGVR)
+	if err != nil || !served {
+		add("model gateway network policy", KubernetesDoctorFail, "the CiliumNetworkPolicy API is unavailable for the gateway", "Restore the supported AKS Cilium data plane.")
+		return
+	}
+	ciliumPolicies, err := cluster.List(ctx, ciliumPoliciesGVR, namespace, "")
+	if err != nil {
+		add("model gateway network policy", KubernetesDoctorFail, "gateway Cilium policies are unreadable: "+err.Error(), "Restore LIST access to the gateway namespace.")
+		return
+	}
+	var selectedCilium []unstructured.Unstructured
+	for _, policy := range ciliumPolicies.Items {
+		selector, found, _ := unstructured.NestedMap(policy.Object, "spec", "endpointSelector")
+		if !found || labelSelectorMaySelect(selector, podLabels) {
+			selectedCilium = append(selectedCilium, policy)
+		}
+	}
+	if len(selectedCilium) != 1 || selectedCilium[0].GetName() != ciliumName {
+		add("model gateway network policy", KubernetesDoctorFail, "gateway Pods must be selected by exactly the release-owned Cilium policy", "Remove stale or additional Cilium policies and restore the platform chart boundary.")
+		return
+	}
+	if err := validateGatewayCiliumPolicy(&selectedCilium[0], deployment, podLabels, binding); err != nil {
+		add("model gateway network policy", KubernetesDoctorFail, err.Error(), "Restore the exact platform-chart gateway policy.")
+		return
+	}
+	clusterwide, err := cluster.List(ctx, ciliumClusterwidePoliciesGVR, "", "")
+	if err != nil {
+		add("model gateway network policy", KubernetesDoctorFail, "cluster-wide Cilium policies are unreadable: "+err.Error(), "Restore LIST access to cluster-wide Cilium policy metadata.")
+		return
+	}
+	for _, policy := range clusterwide.Items {
+		selector, found, _ := unstructured.NestedMap(policy.Object, "spec", "endpointSelector")
+		if !found || labelSelectorMaySelect(selector, podLabels) {
+			add("model gateway network policy", KubernetesDoctorFail, "cluster-wide Cilium policy "+policy.GetName()+" may select the credential-bearing gateway", "Remove or narrowly scope the cluster-wide policy.")
+			return
+		}
+	}
+	add("model gateway network policy", KubernetesDoctorPass, "gateway default-deny and exact-host Cilium policies are the only policies selecting the gateway", "")
+}
+
+func validateGatewayCiliumPolicy(policy, deployment *unstructured.Unstructured, podLabels map[string]string, binding map[string]string) error {
+	annotations := deployment.GetAnnotations()
+	labels := policy.GetLabels()
+	if labels["app.kubernetes.io/part-of"] != "prow-ai-dashboard-platform" || labels["app.kubernetes.io/component"] != "model-gateway" || labels["app.kubernetes.io/instance"] != deployment.GetLabels()["app.kubernetes.io/instance"] {
+		return fmt.Errorf("gateway Cilium policy lacks the exact platform release labels")
+	}
+	if binding == nil || policy.GetAnnotations()["prow-ai-dashboard/model-gateway-policy-sha256"] != binding["modelGatewayPolicySHA256"] || annotations["prow-ai-dashboard/model-gateway-policy-sha256"] != binding["modelGatewayPolicySHA256"] {
+		return fmt.Errorf("gateway Cilium policy hash does not match the Deployment contract")
+	}
+	selector, found, _ := unstructured.NestedMap(policy.Object, "spec", "endpointSelector")
+	expectedSelectorLabels := map[string]string{
+		"app.kubernetes.io/name":      podLabels["app.kubernetes.io/name"],
+		"app.kubernetes.io/instance":  podLabels["app.kubernetes.io/instance"],
+		"app.kubernetes.io/component": podLabels["app.kubernetes.io/component"],
+	}
+	if !found || !labelSelectorExactlyMatches(selector, expectedSelectorLabels) {
+		return fmt.Errorf("gateway Cilium policy endpoint selector does not match the gateway Pod labels")
+	}
+	ingress, found, _ := unstructured.NestedSlice(policy.Object, "spec", "ingress")
+	if !found || len(ingress) != 1 || !gatewayIngressRuleValid(ingress[0], binding) {
+		return fmt.Errorf("gateway Cilium policy ingress does not match the execution namespace and target port")
+	}
+	egress, found, _ := unstructured.NestedSlice(policy.Object, "spec", "egress")
+	if !found || len(egress) != 2 {
+		return fmt.Errorf("gateway Cilium policy must contain only DNS and exact upstream-host egress")
+	}
+	hasDNS := false
+	hasUpstream := false
+	for _, raw := range egress {
+		rule, _ := raw.(map[string]any)
+		for _, forbidden := range []string{"toEntities", "toCIDR", "toCIDRSet", "toServices", "toGroups", "toNodes"} {
+			if value, ok := rule[forbidden]; ok && value != nil {
+				return fmt.Errorf("gateway Cilium policy contains forbidden %s access", forbidden)
+			}
+		}
+		endpoints, hasEndpoints, _ := unstructured.NestedSlice(rule, "toEndpoints")
+		fqdns, hasFQDNs, _ := unstructured.NestedSlice(rule, "toFQDNs")
+		switch {
+		case hasEndpoints && isDNSRule(rule, endpoints):
+			hasDNS = true
+		case hasFQDNs && !hasEndpoints && len(fqdns) == 1 && ruleUsesOnlyPort(rule, "443"):
+			fqdn, _ := fqdns[0].(map[string]any)
+			name, ok, _ := unstructured.NestedString(fqdn, "matchName")
+			if !ok || len(fqdn) != 1 || !strings.EqualFold(name, binding["modelGatewayUpstreamHost"]) || !validPublicHostname(name) {
+				return fmt.Errorf("gateway Cilium policy upstream FQDN does not match the Deployment contract")
+			}
+			hasUpstream = true
+		default:
+			return fmt.Errorf("gateway Cilium policy contains an unexpected egress rule")
+		}
+	}
+	if !hasDNS || !hasUpstream {
+		return fmt.Errorf("gateway Cilium policy lacks DNS or exact upstream-host egress")
+	}
+	actualHash := gatewayPolicyHash(binding["modelGatewayExecutionNamespace"], binding["modelGatewayUpstreamHost"], binding["modelGatewayTargetPort"])
+	if actualHash != binding["modelGatewayPolicySHA256"] {
+		return fmt.Errorf("gateway Cilium policy contract hash is invalid")
+	}
+	return nil
+}
+
+func gatewayIngressRuleValid(raw any, binding map[string]string) bool {
+	rule, _ := raw.(map[string]any)
+	from, found, _ := unstructured.NestedSlice(rule, "fromEndpoints")
+	if !found || len(from) != 1 {
+		return false
+	}
+	endpoint, _ := from[0].(map[string]any)
+	labels, _, _ := unstructured.NestedStringMap(endpoint, "matchLabels")
+	if len(labels) != 1 || labels["k8s:io.kubernetes.pod.namespace"] != binding["modelGatewayExecutionNamespace"] {
+		return false
+	}
+	return len(rule) == 2 && ruleUsesOnlyPort(rule, binding["modelGatewayTargetPort"])
+}
+
+func labelSelectorMaySelect(selector map[string]any, labels map[string]string) bool {
+	matchLabels, _, _ := unstructured.NestedStringMap(selector, "matchLabels")
+	for key, want := range matchLabels {
+		if got, ok := labels[key]; ok && got != want {
+			return false
+		}
+		if _, ok := labels[key]; !ok {
+			return false
+		}
+	}
+	expressions, found, _ := unstructured.NestedSlice(selector, "matchExpressions")
+	if found && len(expressions) > 0 {
+		return true
+	}
+	return true
+}
+
+func labelSelectorExactlyMatches(selector map[string]any, labels map[string]string) bool {
+	expressions, found, _ := unstructured.NestedSlice(selector, "matchExpressions")
+	if found && len(expressions) > 0 {
+		return false
+	}
+	matchLabels, found, _ := unstructured.NestedStringMap(selector, "matchLabels")
+	if !found || len(matchLabels) != len(labels) {
+		return false
+	}
+	for key, value := range labels {
+		if matchLabels[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func gatewayPolicyHash(executionNamespace, upstreamHost, targetPort string) string {
+	data, _ := json.Marshal([]string{executionNamespace, upstreamHost, targetPort})
+	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
 func containerImage(object *unstructured.Unstructured, name string) string {
@@ -1172,23 +1738,6 @@ func hasReadyEndpoint(slices *unstructured.UnstructuredList) bool {
 			if !found || ready {
 				return true
 			}
-		}
-	}
-	return false
-}
-
-func hasDefaultDeny(policies *unstructured.UnstructuredList) bool {
-	if policies == nil {
-		return false
-	}
-	for _, policy := range policies.Items {
-		selector, found, _ := unstructured.NestedMap(policy.Object, "spec", "podSelector")
-		if !found || len(selector) != 0 {
-			continue
-		}
-		types, _, _ := unstructured.NestedStringSlice(policy.Object, "spec", "policyTypes")
-		if containsString(types, "Ingress") && containsString(types, "Egress") {
-			return true
 		}
 	}
 	return false

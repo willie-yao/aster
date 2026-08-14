@@ -1,0 +1,97 @@
+# Platform resources are installed by a cluster administrator before the
+# prow-ai-dashboard application chart. This chart never creates Secret values,
+# Agent Sandbox CRDs, a RuntimeClass, secure-runtime nodes, or Azure resources.
+
+nameOverride: ""
+fullnameOverride: ""
+
+application:
+  # Exact Helm release name of the application that will use this execution
+  # namespace. The namespace is dedicated to this release.
+  releaseName: ""
+
+agentSandbox:
+  requiredVersion: v0.5.3
+  manifestURL: https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.5.3/sandbox.yaml
+  manifestSHA256: 50f54b0e746376455ae6bb8b90b436bdd8798e1296cff0d72b6267bbeb858e3c
+
+execution:
+  namespace: ""
+  runtimeClassName: ""
+  workloadServiceAccountName: fix-workload
+  podSecurity:
+    enforce: restricted
+    enforceVersion: latest
+    audit: restricted
+    auditVersion: latest
+    warn: restricted
+    warnVersion: latest
+  quota:
+    pods: "6"
+    sandboxes: "4"
+    requestsCPU: "6"
+    requestsMemory: 12Gi
+    limitsCPU: "12"
+    limitsMemory: 24Gi
+    requestsEphemeralStorage: 12Gi
+    limitsEphemeralStorage: 24Gi
+  limits:
+    minCPU: 50m
+    minMemory: 64Mi
+    minEphemeralStorage: 64Mi
+    maxCPU: "4"
+    maxMemory: 8Gi
+    maxEphemeralStorage: 8Gi
+  networkPolicy:
+    # The current AKS contract uses Cilium FQDN policy for GitHub, Go modules,
+    # and a public-CA privately resolved gateway.
+    mode: cilium
+    dnsNamespaceSelector:
+      kubernetes.io/metadata.name: kube-system
+    dnsPodSelector:
+      k8s-app: kube-dns
+    allowedFQDNs:
+      - github.com
+      - api.github.com
+      - codeload.github.com
+      - objects.githubusercontent.com
+      - raw.githubusercontent.com
+      - github-releases.githubusercontent.com
+      - proxy.golang.org
+      - sum.golang.org
+      - storage.googleapis.com
+
+modelGateway:
+  enabled: false
+  name: model-gateway
+  publicHost: ""
+  image:
+    repository: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  replicas: 2
+  upstreamURL: ""
+  upstreamHost: ""
+  providerAuth:
+    existingSecret: ""
+    tokenKey: AI_TOKEN
+  tls:
+    existingSecret: ""
+  service:
+    port: 443
+    targetPort: 8443
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+  networkPolicy:
+    allowedFQDNs: []
+
+runtimeClass:
+  # This chart validates and records the required name. It does not create the
+  # RuntimeClass or install its handler on nodes.
+  create: false
+  handler: ""

@@ -62,6 +62,10 @@ jobs:
       - uses: azure/setup-helm@v4
       - name: Lint and render
         run: make helm-check
+      - name: Test platform chart lifecycle in kind
+        run: |
+          GOBIN="$RUNNER_TEMP/bin" go install sigs.k8s.io/kind@v0.31.0
+          PATH="$RUNNER_TEMP/bin:$PATH" bash deploy/helm/prow-ai-dashboard-platform/test-kind.sh
 
   remote-fixer-image:
     runs-on: ubuntu-latest

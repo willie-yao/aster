@@ -1,0 +1,13 @@
+apiVersion: v2
+name: prow-ai-dashboard-platform
+description: Cluster-platform prerequisites for prow-ai-dashboard Agent Sandbox workloads.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/willie-yao/prow-ai-dashboard
+sources:
+  - https://github.com/willie-yao/prow-ai-dashboard
+annotations:
+  prow-ai-dashboard/agent-sandbox-version: v0.5.3
+  prow-ai-dashboard/agent-sandbox-manifest: https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.5.3/sandbox.yaml
+  prow-ai-dashboard/agent-sandbox-sha256: 50f54b0e746376455ae6bb8b90b436bdd8798e1296cff0d72b6267bbeb858e3c
