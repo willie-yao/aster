@@ -24,7 +24,11 @@ type fakeGitHub struct {
 	prBase        string
 	prTitle       string
 	prDraft       bool
-	forkCreated   bool   // set when POST /forks is called
+	forkCreated   bool // set when POST /forks is called
+	forkPOSTCount int
+	forkGETCount  int
+	forkGETStatus int
+	existingFork  *forkRepository
 	treeOwnerRepo string // owner/repo path the tree was created under
 }
 
@@ -44,13 +48,23 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"login": "forker"})
 	case r.Method == http.MethodPost && strings.HasSuffix(p, "/forks"):
 		f.forkCreated = true
+		f.forkPOSTCount++
 		writeJSON(w, 202, map[string]any{"name": "r", "owner": map[string]any{"login": "forker"}})
 	case r.Method == http.MethodGet && strings.HasSuffix(p, "/repos/forker/r"):
-		if !f.forkCreated {
-			http.Error(w, "not found", 404)
+		f.forkGETCount++
+		if f.forkGETStatus != 0 {
+			http.Error(w, http.StatusText(f.forkGETStatus), f.forkGETStatus)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"default_branch": "main"})
+		if f.existingFork != nil {
+			writeJSON(w, http.StatusOK, f.existingFork)
+			return
+		}
+		if !f.forkCreated {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, forkMetadata("forker", "r", "main", "o/r"))
 	case r.Method == http.MethodGet && strings.HasSuffix(p, "/repos/o/r"):
 		writeJSON(w, 200, map[string]any{"default_branch": f.defaultBranch})
 	case r.Method == http.MethodGet && strings.Contains(p, "/git/ref/heads/"):
@@ -103,6 +117,17 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "unexpected "+r.Method+" "+p, 500)
 	}
+}
+
+func forkMetadata(owner, repo, defaultBranch, upstream string) forkRepository {
+	var fork forkRepository
+	fork.Name = repo
+	fork.Fork = true
+	fork.DefaultBranch = defaultBranch
+	fork.Owner.Login = owner
+	fork.Parent.FullName = upstream
+	fork.Source.FullName = upstream
+	return fork
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -202,6 +227,115 @@ func TestOpenPR_NoFiles(t *testing.T) {
 	}
 }
 
+func TestOpenPR_ExistingForkSkipsCreation(t *testing.T) {
+	f := newFakeGitHub(t, "main")
+	existing := forkMetadata("forker", "r", "main", "o/r")
+	f.existingFork = &existing
+
+	_, err := testClient(f).OpenPR(context.Background(), Request{
+		Owner: "o", Repo: "r", Files: map[string]string{"a.txt": "b"},
+		BranchPrefix: "fix", Title: "Fix", Fork: true, Draft: true,
+	})
+	if err != nil {
+		t.Fatalf("OpenPR: %v", err)
+	}
+	if f.forkPOSTCount != 0 || f.forkCreated {
+		t.Fatalf("fork creation calls = %d, created=%v", f.forkPOSTCount, f.forkCreated)
+	}
+	if f.forkGETCount != 1 {
+		t.Fatalf("fork lookup calls = %d, want 1", f.forkGETCount)
+	}
+	if f.treeOwnerRepo != "forker/r" {
+		t.Fatalf("tree pushed to %q, want forker/r", f.treeOwnerRepo)
+	}
+}
+
+func TestOpenPR_ExistingForkSourceNetworkSkipsCreation(t *testing.T) {
+	f := newFakeGitHub(t, "main")
+	existing := forkMetadata("forker", "r", "main", "intermediate/r")
+	existing.Source.FullName = "o/r"
+	f.existingFork = &existing
+
+	_, err := testClient(f).OpenPR(context.Background(), Request{
+		Owner: "o", Repo: "r", Files: map[string]string{"a.txt": "b"},
+		BranchPrefix: "fix", Title: "Fix", Fork: true, Draft: true,
+	})
+	if err != nil {
+		t.Fatalf("OpenPR: %v", err)
+	}
+	if f.forkPOSTCount != 0 || f.treeOwnerRepo != "forker/r" {
+		t.Fatalf("fork post=%d tree owner=%q", f.forkPOSTCount, f.treeOwnerRepo)
+	}
+}
+
+func TestOpenPR_ExistingSameNameNonForkFailsClosed(t *testing.T) {
+	f := newFakeGitHub(t, "main")
+	existing := forkMetadata("forker", "r", "main", "o/r")
+	existing.Fork = false
+	f.existingFork = &existing
+
+	_, err := testClient(f).OpenPR(context.Background(), Request{
+		Owner: "o", Repo: "r", Files: map[string]string{"a.txt": "b"},
+		BranchPrefix: "fix", Title: "Fix", Fork: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "is not a fork") {
+		t.Fatalf("error = %v", err)
+	}
+	if f.forkPOSTCount != 0 || f.createdTree != nil {
+		t.Fatalf("unexpected write after non-fork: post=%d tree=%v", f.forkPOSTCount, f.createdTree)
+	}
+}
+
+func TestOpenPR_ExistingWrongForkNetworkFailsClosed(t *testing.T) {
+	f := newFakeGitHub(t, "main")
+	existing := forkMetadata("forker", "r", "main", "other/project")
+	f.existingFork = &existing
+
+	_, err := testClient(f).OpenPR(context.Background(), Request{
+		Owner: "o", Repo: "r", Files: map[string]string{"a.txt": "b"},
+		BranchPrefix: "fix", Title: "Fix", Fork: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "not in the o/r fork network") {
+		t.Fatalf("error = %v", err)
+	}
+	if f.forkPOSTCount != 0 || f.createdTree != nil {
+		t.Fatalf("unexpected write after wrong fork: post=%d tree=%v", f.forkPOSTCount, f.createdTree)
+	}
+}
+
+func TestOpenPR_ExistingForkWithoutDefaultBranchFailsClosed(t *testing.T) {
+	f := newFakeGitHub(t, "main")
+	existing := forkMetadata("forker", "r", "", "o/r")
+	f.existingFork = &existing
+
+	_, err := testClient(f).OpenPR(context.Background(), Request{
+		Owner: "o", Repo: "r", Files: map[string]string{"a.txt": "b"},
+		BranchPrefix: "fix", Title: "Fix", Fork: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "has no default branch") {
+		t.Fatalf("error = %v", err)
+	}
+	if f.forkPOSTCount != 0 || f.createdTree != nil {
+		t.Fatalf("unexpected write after empty fork: post=%d tree=%v", f.forkPOSTCount, f.createdTree)
+	}
+}
+
+func TestOpenPR_ForkLookupErrorDoesNotCreateFork(t *testing.T) {
+	f := newFakeGitHub(t, "main")
+	f.forkGETStatus = http.StatusForbidden
+
+	_, err := testClient(f).OpenPR(context.Background(), Request{
+		Owner: "o", Repo: "r", Files: map[string]string{"a.txt": "b"},
+		BranchPrefix: "fix", Title: "Fix", Fork: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "checking existing fork") || !strings.Contains(err.Error(), "403 Forbidden") {
+		t.Fatalf("error = %v", err)
+	}
+	if f.forkPOSTCount != 0 || f.createdTree != nil {
+		t.Fatalf("unexpected write after lookup error: post=%d tree=%v", f.forkPOSTCount, f.createdTree)
+	}
+}
+
 func TestOpenPR_ForkFlow(t *testing.T) {
 	// Shrink the fork-readiness poll so the test doesn't wait on real intervals.
 	oldInterval := forkPollInterval
@@ -227,8 +361,11 @@ func TestOpenPR_ForkFlow(t *testing.T) {
 	if url != "https://github.com/o/r/pull/7" {
 		t.Errorf("url = %q", url)
 	}
-	if !f.forkCreated {
-		t.Errorf("fork was not created")
+	if !f.forkCreated || f.forkPOSTCount != 1 {
+		t.Errorf("fork creation = %v, calls=%d", f.forkCreated, f.forkPOSTCount)
+	}
+	if f.forkGETCount < 2 {
+		t.Errorf("fork lookup calls = %d, want preflight and readiness checks", f.forkGETCount)
 	}
 	// The branch is pushed to the fork (forker/r), not upstream.
 	if f.treeOwnerRepo != "forker/r" {
