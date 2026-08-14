@@ -25,6 +25,10 @@ for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
   )
   [[ -s "$tmp/$asset" ]]
 done
+host_asset="aster-${version}-$(go env GOOS)-$(go env GOARCH)"
+identity=$("$tmp/$host_asset" version)
+[[ "$identity" == "aster version=$version commit=$commit image_tag=$version" ]]
+[[ $("$tmp/$host_asset" --version) == "$identity" ]]
 (
   cd "$tmp"
   shasum -a 256 aster-${version}-* > SHA256SUMS

@@ -34,6 +34,10 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version") {
+		fmt.Printf("aster version=%s commit=%s image_tag=%s\n", version, commit, imageTag)
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "kubernetes" {
 		runKubernetes(os.Args[2:])
 		return
