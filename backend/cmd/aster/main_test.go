@@ -16,8 +16,8 @@ name: Sample
 testgrid:
   dashboard: sample
 storage:
-  provider: local
-  base: /tmp
+  provider: gcs
+  bucket: example-bucket
 branding:
   title: Sample
   base_path: /

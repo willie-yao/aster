@@ -88,7 +88,7 @@ execution:
 }
 
 func TestGitOpsValuesPreserveExactInputsAndSortedSkills(t *testing.T) {
-	projectYAML := minimalProject + "categories:\n  - match: periodic\n    id: periodic\n    label: Periodic\n"
+	projectYAML := gitOpsProject + "categories:\n  - match: periodic\n    id: periodic\n    label: Periodic\n"
 	prompt := "first line\n\n  indented line\nlast line\n"
 	dir := t.TempDir()
 	writeGitOpsFile(t, filepath.Join(dir, "project.yaml"), projectYAML)
@@ -151,6 +151,7 @@ func TestGitOpsRejectsInvalidConsumerInputs(t *testing.T) {
 		{"url userinfo", "endpoint: https://user:password@example.test/v1\n", "", "", "URL userinfo"},
 		{"mutable image", "image:\n  repository: example/image:latest\n", "", "", "mutable image"},
 		{"mutable image main", "image:\n  tag: main\n", "", "", "mutable image"},
+		{"mutable global image", "global:\n  imageTag: latest\n", "", "", "mutable image"},
 		{"mutable image canary", "image:\n  tag: canary\n", "", "", "mutable image"},
 		{"openai token", "note: sk-proj-abcdefghijklmnopqrstuvwxyz123456\n", "", "", "credential-like"},
 		{"local home path", "note: /Users/alice/private/config\n", "", "", "local workstation"},
@@ -177,6 +178,14 @@ func TestGitOpsRejectsInvalidConsumerInputs(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestGitOpsRejectsLocalFilesystemProject(t *testing.T) {
+	dir := writeGitOpsConsumer(t, "mode: cron\n", "", nil)
+	writeGitOpsFile(t, filepath.Join(dir, "project.yaml"), minimalProject)
+	if err := RenderGitOps(gitOpsTestOptions(dir), nil); err == nil || !strings.Contains(err.Error(), "local filesystem storage") {
+		t.Fatalf("error = %v, want local storage rejection", err)
 	}
 }
 
@@ -359,6 +368,22 @@ func TestCheckGitOpsRejectsSpecialGeneratedFile(t *testing.T) {
 	}
 }
 
+const gitOpsProject = `id: test
+name: Test
+testgrid:
+  dashboard: test
+storage:
+  provider: gcs
+  bucket: example-bucket
+branding:
+  title: Test
+  base_path: /
+  site_url: https://example.test
+  source_repo:
+    owner: example
+    name: example
+`
+
 func gitOpsFixAppValues(namespace, runtimeClass, serviceAccount string) string {
 	return fmt.Sprintf(`agentSandbox:
   fixRuntime:
@@ -383,7 +408,7 @@ func gitOpsFixAppValues(namespace, runtimeClass, serviceAccount string) string {
 func writeGitOpsConsumer(t *testing.T, appValues, platformValues string, skills map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
-	writeGitOpsFile(t, filepath.Join(dir, "project.yaml"), minimalProject)
+	writeGitOpsFile(t, filepath.Join(dir, "project.yaml"), gitOpsProject)
 	writeGitOpsFile(t, filepath.Join(dir, "prompts", "system.md"), "diagnose from evidence\n")
 	writeGitOpsFile(t, filepath.Join(dir, "deploy", "values.yaml"), appValues)
 	if platformValues != "" {

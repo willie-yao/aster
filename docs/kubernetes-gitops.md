@@ -60,6 +60,8 @@ aster kubernetes gitops check \
 
 For an application-only deployment, omit `--execution-namespace`. The platform
 values file is not read and the generator omits the platform source and release.
+GitOps consumers must use remote artifact storage. The generator rejects the
+`local` storage provider so absolute workstation paths cannot enter the bundle.
 
 `render` and `check` are local operations. They do not read a kubeconfig, call a
 provider, contact an OCI registry, or inspect a Kubernetes cluster. `render`

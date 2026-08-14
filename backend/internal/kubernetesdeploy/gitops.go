@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
+	"github.com/willie-yao/aster/backend/internal/project"
 	"gopkg.in/yaml.v3"
 	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
 )
@@ -262,6 +263,13 @@ func resolveGitOpsInputs(opts GitOpsOptions) (gitOpsResolved, map[string]any, ma
 	projectYAML, err := os.ReadFile(filepath.Join(opts.ProjectDir, "project.yaml"))
 	if err != nil {
 		return gitOpsResolved{}, nil, nil, nil, nil, nil, fmt.Errorf("read project.yaml: %w", err)
+	}
+	cfg, _, err := project.LoadDir(opts.ProjectDir)
+	if err != nil {
+		return gitOpsResolved{}, nil, nil, nil, nil, nil, fmt.Errorf("reload validated project bundle: %w", err)
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.Storage.Provider), "local") {
+		return gitOpsResolved{}, nil, nil, nil, nil, nil, fmt.Errorf("gitops bundles do not support local filesystem storage paths")
 	}
 	prompt, err := os.ReadFile(filepath.Join(opts.ProjectDir, "prompts", "system.md"))
 	if err != nil {
@@ -577,7 +585,7 @@ func rejectInlineCredentials(value any, path []string) error {
 	case string:
 		if len(path) > 0 {
 			leaf := strings.ToLower(path[len(path)-1])
-			if (leaf == "tag" || leaf == "repository" || leaf == "image") && !immutableImageIdentity(leaf, typed) {
+			if (leaf == "tag" || leaf == "imagetag" || leaf == "repository" || leaf == "image") && !immutableImageIdentity(leaf, typed) {
 				return fmt.Errorf("mutable image identity at %s is not allowed", strings.Join(path, "."))
 			}
 		}
@@ -591,7 +599,7 @@ func immutableImageIdentity(field, value string) bool {
 		return true
 	}
 	identity := value
-	if field != "tag" {
+	if field != "tag" && field != "imagetag" {
 		if at := strings.LastIndex(identity, "@"); at >= 0 {
 			return sha256DigestPattern.MatchString(identity[at+1:])
 		}
@@ -919,7 +927,7 @@ func openGitOpsOutput(projectDir, outputDir string, create bool) (*os.Root, bool
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return nil, false, fmt.Errorf("GitOps output path conflicts with a non-directory filesystem entry")
 	}
-	root, err := os.OpenRoot(outputDir)
+	root, err := projectRoot.OpenRoot(rel)
 	if err != nil {
 		return nil, false, fmt.Errorf("open GitOps output directory: %w", err)
 	}
