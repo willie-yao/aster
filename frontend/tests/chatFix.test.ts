@@ -23,10 +23,9 @@ test("exact JUnit chat fix requires current-turn artifacts and verified source p
   assert.match(chat, /analysisRef\.junit_file/);
   assert.match(chat, /message\.citations\?\.length/);
   assert.match(chat, /chatFixVerifiedSourcePaths/);
-  assert.match(chat, /hasExplicitSourceSymbol/);
+  assert.doesNotMatch(chat, /hasExplicitSourceSymbol/);
   assert.match(chat, /no validated artifact citation from this turn/);
   assert.match(chat, /no verified immutable source paths/);
-  assert.match(chat, /explicit backticked source symbol/);
 });
 
 test("exact JUnit source-path eligibility requires the bound repository and revision", () => {
@@ -77,9 +76,15 @@ test("exact JUnit fix dialog excludes pattern authority and keeps confirmation s
   assert.match(dialog, /server resolves the exact repository revision from build metadata/);
   assert.match(dialog, /rejects the preview if the target branch has moved/);
   assert.match(dialog, /Generate fix preview/);
-  assert.match(dialog, /Open draft PR/);
+  assert.match(dialog, /Open draft PR with warnings/);
+  assert.match(dialog, /Regenerate with feedback/);
+  assert.match(dialog, /request\.warning/);
+  assert.match(dialog, /instruction\.trim\(\) === submittedInstruction\.trim\(\)/);
+  assert.match(dialog, /cancelAnalysisChatFixRequest\(request\.id\)/);
+  assert.match(dialog, /clearStoredChatFixRequest[\s\S]*createAnalysisChatFixRequest/);
   assert.match(api, /fix\/requests/);
   assert.match(api, /patternID \? \{ pattern_id: patternID \} : \{\}/);
+  assert.match(api, /cancelActionRequest\(API_BASE, id\)/);
   assert.match(api, /api\/actions\/confirm/);
 });
 
@@ -154,4 +159,13 @@ test("anonymous Fix investigation uses the existing OAuth sign-in path", () => {
   assert.match(api, /credentials: "same-origin"/);
   assert.match(chat, /isAnalysisChatOAuthExpired\(effectiveError, authMode\)[\s\S]*signIn\(\)/);
   assert.doesNotMatch(chat + api, /document\.cookie|Authorization.*Bearer|session[_-]?key/i);
+});
+
+
+test("exact JUnit reload and polling observe requests without regenerating", () => {
+  const dialog = source("src/components/ChatFixDialog.tsx");
+  const recovery = dialog.slice(dialog.indexOf("useEffect(() => {", dialog.indexOf("observeAnalysisFixRequest")), dialog.indexOf("async function generatePreview"));
+  assert.match(recovery, /readStoredChatFixRequest/);
+  assert.match(recovery, /observeAnalysisFixRequest/);
+  assert.doesNotMatch(recovery, /createAnalysisChatFixRequest/);
 });

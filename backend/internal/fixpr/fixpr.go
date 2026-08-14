@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -485,10 +486,11 @@ func (m *Manager) openPR(ctx context.Context, title, body string, files map[stri
 // OpenFromPreview to open exactly the previewed PR. The base is pinned at
 // generation time so confirm opens the same diff against the same snapshot.
 type GeneratedFix struct {
-	Preview     Preview // Subject, Rationale, Diff, Files, Verify
-	Title       string  // final PR title
-	Description string  // PR description (after any repo-template reformat)
-	Body        string  // full PR body that embeds Description + diff + marker
+	Preview     Preview  // Subject, Rationale, Diff, Files, Verify
+	Warnings    []string // bounded public-safe exact-JUnit quality warnings
+	Title       string   // final PR title
+	Description string   // PR description (after any repo-template reformat)
+	Body        string   // full PR body that embeds Description + diff + marker
 
 	executionVerification *ExecutionVerification
 	pattern               models.PatternAnalysis
@@ -513,6 +515,7 @@ type GeneratedFixSnapshot struct {
 	Base                  ghpr.Base              `json:"base"`
 	RequireBaseCurrent    bool                   `json:"require_base_current,omitempty"`
 	ExecutionVerification *ExecutionVerification `json:"execution_verification,omitempty"`
+	Warnings              []string               `json:"warnings,omitempty"`
 }
 
 // Snapshot returns a deep-copy serializable representation of gf.
@@ -529,7 +532,7 @@ func (gf *GeneratedFix) Snapshot() *GeneratedFixSnapshot {
 		Diff: gf.Preview.Diff, Files: files, Verify: gf.Preview.Verify,
 		Title: gf.Title, Description: gf.Description, Body: gf.Body,
 		Pattern: gf.pattern, Key: gf.key, Base: gf.base, RequireBaseCurrent: gf.requireBaseCurrent,
-		ExecutionVerification: cloneExecutionVerification(gf.executionVerification),
+		ExecutionVerification: cloneExecutionVerification(gf.executionVerification), Warnings: slices.Clone(gf.Warnings),
 	}
 }
 
@@ -545,7 +548,7 @@ func RestoreGeneratedFix(snapshot *GeneratedFixSnapshot) *GeneratedFix {
 	return &GeneratedFix{
 		Preview: Preview{Subject: snapshot.Subject, Rationale: snapshot.Rationale,
 			Diff: snapshot.Diff, Files: files, Verify: snapshot.Verify},
-		Title: snapshot.Title, Description: snapshot.Description, Body: snapshot.Body,
+		Title: snapshot.Title, Description: snapshot.Description, Body: snapshot.Body, Warnings: slices.Clone(snapshot.Warnings),
 		executionVerification: cloneExecutionVerification(snapshot.ExecutionVerification),
 		pattern:               snapshot.Pattern, key: snapshot.Key, base: snapshot.Base, requireBaseCurrent: snapshot.RequireBaseCurrent,
 	}
@@ -618,11 +621,14 @@ func (gf *GeneratedFix) ValidateExecutionVerification() error {
 	if gf.executionVerification == nil {
 		return nil
 	}
+	if err := gf.executionVerification.validate(gf.base.HeadSHA); err != nil {
+		return err
+	}
 	expected := gf.executionVerification.verifyResult()
 	if gf.Preview.Verify != expected {
 		return fmt.Errorf("agent Sandbox verification summary does not match executor results")
 	}
-	return gf.executionVerification.validate(gf.base.HeadSHA)
+	return nil
 }
 
 func (m *Manager) validateExecutionPreview(ctx context.Context, gf *GeneratedFix) error {

@@ -315,10 +315,9 @@ func (r ExecutionResult) Validate(request ExecutionRequest) error {
 	return nil
 }
 
-// ValidateSuccessfulCommandResults verifies the complete ordered result set for
-// one successful external execution. Every configured command must appear once,
-// succeed within its timeout, and end with the exact staged diff check.
-func ValidateSuccessfulCommandResults(commands []ExecutionCommand, results []CommandResult) error {
+// ValidateCommandResults verifies a complete ordered result set without
+// requiring each authentic command to succeed.
+func ValidateCommandResults(commands []ExecutionCommand, results []CommandResult) error {
 	if len(commands) == 0 {
 		return fmt.Errorf("at least one final validation command is required")
 	}
@@ -326,7 +325,7 @@ func ValidateSuccessfulCommandResults(commands []ExecutionCommand, results []Com
 		return fmt.Errorf("the final validation command must be git diff --cached --check")
 	}
 	if len(results) != len(commands) {
-		return fmt.Errorf("successful execution must report every allowed command exactly once")
+		return fmt.Errorf("execution must report every allowed command exactly once")
 	}
 	for index, result := range results {
 		if commands[index].TimeoutSeconds <= 0 || commands[index].TimeoutSeconds > int64((30*time.Minute)/time.Second) {
@@ -341,6 +340,18 @@ func ValidateSuccessfulCommandResults(commands []ExecutionCommand, results []Com
 		if err := validateCommandResultTiming(index, commands[index], result); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// ValidateSuccessfulCommandResults verifies the complete ordered result set for
+// one successful external execution. Every configured command must appear once,
+// succeed within its timeout, and end with the exact staged diff check.
+func ValidateSuccessfulCommandResults(commands []ExecutionCommand, results []CommandResult) error {
+	if err := ValidateCommandResults(commands, results); err != nil {
+		return err
+	}
+	for index, result := range results {
 		if result.TimedOut {
 			return fmt.Errorf("command result %d timed out", index)
 		}

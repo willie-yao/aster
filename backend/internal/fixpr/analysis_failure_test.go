@@ -1,11 +1,14 @@
 package fixpr
 
 import (
+	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/ghpr"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
 const exactAnalysisRevision = "0123456789abcdef0123456789abcdef01234567"
@@ -177,5 +180,55 @@ func TestAnalysisPreviewDedupIdentityIncludesSelectedChatAndRequest(t *testing.T
 	}
 	if first.Snapshot().Key == second.Snapshot().Key || first.Snapshot().Key == third.Snapshot().Key {
 		t.Fatal("selected chat or preview identity did not change Fix PR dedup key")
+	}
+}
+
+func TestAnalysisPreviewCritiqueConcernWarnsWithoutRetry(t *testing.T) {
+	failure := validAnalysisFailure()
+	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
+	agent := goodAgent()
+	manager := newManager(t, pr, agent, Options{Critique: &fakeCompleter{critique: `{"issues":["patch needs a narrower condition"]}`}, CritiqueRetries: 3})
+	fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.calls != 1 || !slices.Contains(fix.Warnings, analysisPatchCritiqueWarning) {
+		t.Fatalf("calls=%d warnings=%v", agent.calls, fix.Warnings)
+	}
+}
+
+func TestAnalysisPreviewFailedAuthenticCommandsWarnAndRemainConfirmable(t *testing.T) {
+	failure := validAnalysisFailure()
+	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
+	agent := goodAgent()
+	commands := sandboxVerificationCommands()
+	results := sandboxCommandResults()
+	results[0].ExitCode = 1
+	agent.res.BaseSHA = exactAnalysisRevision
+	agent.res.CommandResults = results
+	manager := newManager(t, pr, agent, Options{})
+	manager.opts.Agent.RequireCommandResults = true
+	manager.opts.Agent.CommandPolicy.Commands = commands
+	manager.opts.ReconstructPatch = func(context.Context, runtime.RepoRef, string) (map[string]string, string, error) {
+		return agent.res.Files, agent.res.Diff, nil
+	}
+	fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fix.Preview.Verify.Status != VerifyFailed || !slices.Contains(fix.Warnings, analysisPatchVerifyWarning) {
+		t.Fatalf("verify=%+v warnings=%v", fix.Preview.Verify, fix.Warnings)
+	}
+	if _, err := manager.OpenFromPreview(t.Context(), fix); err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.opened) != 1 {
+		t.Fatalf("opened=%d", len(pr.opened))
+	}
+
+	drifted := RestoreGeneratedFix(fix.Snapshot())
+	drifted.executionVerification.Results[0].Argv = []string{"go", "test", "./wrong"}
+	if _, err := manager.OpenFromPreview(t.Context(), drifted); err == nil || !strings.Contains(err.Error(), "allowed argv") {
+		t.Fatalf("integrity error = %v", err)
 	}
 }

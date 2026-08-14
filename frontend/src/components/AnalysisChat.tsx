@@ -1336,20 +1336,13 @@ export function AnalysisChat({
                     sourceSelection.view.result?.state === "actionable_configuration_change") &&
                   Boolean(sourceSelection.view.result?.target);
                 const hasArtifactEvidence = Boolean(message.citations?.length);
-                const findingText = [
-                  message.content,
-                  message.proposed_revision?.root_cause,
-                  message.proposed_revision?.suggested_fix,
-                ].filter(Boolean).join("\n");
-                const hasExplicitSourceSymbol = /`[A-Za-z_][A-Za-z0-9_]*(?:\(\))?`/.test(findingText) ||
-                  /`(?:[A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*\(\)`/.test(findingText);
                 const exactJUnitAnalysis = !patternScope && analysisRef.source !== "build" && Boolean(analysisRef.junit_file);
                 const hasVerifiedSourcePaths = chatFixVerifiedSourcePaths(
                   fileCtx.fileLinks,
                   session?.source_repository,
                 ).length > 0;
                 const exactFixEnabled = Boolean(features.junit_chat_fix) && exactJUnitAnalysis;
-                const exactFixEligible = exactFixEnabled && hasArtifactEvidence && hasVerifiedSourcePaths && hasExplicitSourceSymbol;
+                const exactFixEligible = exactFixEnabled && hasArtifactEvidence && hasVerifiedSourcePaths;
                 const legacyFixEligible = patternScope && Boolean(features.chat_fix) && hasArtifactEvidence &&
                   Boolean(fixPatterns.length && actionableSource);
                 let fixIneligibleReason: string | undefined;
@@ -1357,8 +1350,6 @@ export function AnalysisChat({
                   fixIneligibleReason = "This response cannot start a fix preview because it has no validated artifact citation from this turn.";
                 } else if (exactFixEnabled && !hasVerifiedSourcePaths) {
                   fixIneligibleReason = "Fix preview is unavailable because this analysis has no verified immutable source paths.";
-                } else if (exactFixEnabled && !hasExplicitSourceSymbol) {
-                  fixIneligibleReason = "Fix preview is unavailable until the selected finding names an explicit backticked source symbol that can be verified at the pinned revision.";
                 }
                 return (
                   <AssistantMessage

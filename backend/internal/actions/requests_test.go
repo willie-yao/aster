@@ -1961,3 +1961,77 @@ func TestLegacyFailedRequestReasonCodesAreBackfilled(t *testing.T) {
 		t.Fatalf("present=%+v err=%v", present, err)
 	}
 }
+
+func TestAnalysisFixReadyRequestPreservesBoundedWarnings(t *testing.T) {
+	service, _ := requestTestService(t)
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	service.analysisRequestGenerator = func(ctx context.Context, _ AnalysisFixInput, _, _, _ string) (PreviewResult, error) {
+		if err := service.setRequestWarning(ctx,
+			analysisWarningCritique,
+			analysisWarningSuggestedFix,
+			analysisWarningCritique,
+		); err != nil {
+			return PreviewResult{}, err
+		}
+		close(started)
+		<-release
+		return PreviewResult{Token: "preview-token", Kind: gfKind, Title: "Fix CNI", Body: "Safe body", Diff: "safe diff"}, nil
+	}
+	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	pending := waitRequest(t, service, created.ID, "alice", RequestPending)
+	if pending.Warning != analysisWarningCritique+" "+analysisWarningSuggestedFix {
+		t.Fatalf("pending = %+v", pending)
+	}
+	close(release)
+	ready := waitRequest(t, service, created.ID, "alice", RequestReady)
+	if ready.Warning != analysisWarningCritique+" "+analysisWarningSuggestedFix || ready.Preview == nil {
+		t.Fatalf("ready = %+v", ready)
+	}
+	if strings.Contains(ready.Warning, "test/e2e/cni.go") || len(ready.Warning) > 2048 {
+		t.Fatalf("warning leaked private data or exceeded bound: %q", ready.Warning)
+	}
+	if _, err := service.GetRequest(created.ID, "bob"); !errors.Is(err, ErrRequestNotFound) {
+		t.Fatalf("wrong owner read warning: %v", err)
+	}
+}
+
+func TestFrozenCAPZFindingReachesAsyncGeneratorWithoutProvider(t *testing.T) {
+	service, _ := requestTestService(t)
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	const finding = "The artifact evidence is entirely in build-log.txt. Here is the exact chain:\n\n" +
+		"1. **First CNI install** (line 2205): `STEP: Installing a CNI plugin to the workload cluster @ 08/12/26 08:51:19.322` — this step runs during `EnsureCloudProviderAzure` and succeeds, creating the `azure-cni` DaemonSet on the workload cluster.\n\n" +
+		"2. **Second CNI install** (line 2217): `INFO: Installing a CNI plugin to the workload cluster capz-e2e-5p1bg6/capz-e2e-5p1bg6-azcni-v1` — this fires immediately after the CSI driver becomes available at 08:52:40.572. The very next line (2218) is the `[FAILED]` marker, meaning the call returned the 409 error without any retry.\n\n" +
+		"3. **409 Conflict body** (lines 2567, 2580–2583): The full `StatusError` is printed:\n" +
+		"   - `Operation cannot be fulfilled on daemonsets.apps \"azure-cni\": the object has been modified; please apply your changes to the latest version and try again`\n" +
+		"   - `Reason: \"Conflict\"`, `Code: 409`\n\n" +
+		"This implicates `InstallCNIManifest` in `test/e2e/cni.go` because that function is the only code path in the CAPZ e2e suite that applies the Azure CNI v1 manifest to the workload cluster. The second \"Installing a CNI plugin\" log message at line 2217 is the `Logf` call that `InstallCNIManifest` emits immediately before invoking `workloadCluster.CreateOrUpdate(ctx, cniYaml)`. `CreateOrUpdate` performs a `Get` then an `Update` using the `resourceVersion` embedded in the static manifest bytes, but the kube-controller-manager had already mutated the DaemonSet (advancing its `resourceVersion`) between the two install calls. The `Update` is therefore rejected by the API server with HTTP 409, and because `InstallCNIManifest` does not retry on conflict, the error propagates immediately as the terminal test failure at 08:52:40.919 (line 2218)."
+	seen := make(chan AnalysisFixInput, 1)
+	service.analysisRequestGenerator = func(_ context.Context, input AnalysisFixInput, _, _, _ string) (PreviewResult, error) {
+		seen <- input
+		return PreviewResult{Token: "preview-token", Kind: gfKind, Title: "Fix CNI", Body: "Safe body", Diff: "safe diff"}, nil
+	}
+	input := exactAnalysisRequestInput()
+	input.AssistantAnswer = finding
+	created, err := service.CreateAnalysisFixRequest(input, "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := waitRequest(t, service, created.ID, "alice", RequestReady)
+	if ready.Preview == nil {
+		t.Fatalf("ready = %+v", ready)
+	}
+	select {
+	case got := <-seen:
+		if got.AssistantAnswer != finding {
+			t.Fatalf("generator finding = %q", got.AssistantAnswer)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fake generator was not reached")
+	}
+}

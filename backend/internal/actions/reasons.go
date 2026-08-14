@@ -80,7 +80,7 @@ func ReasonMessage(code ReasonCode) string {
 	case ReasonInvestigationRequired:
 		return "The published remediation requires source investigation before an issue or fix can be drafted."
 	case ReasonContractGenerationFailed:
-		return "The published analysis did not produce a complete implementation-ready remediation contract."
+		return "The action preview could not be generated from the current verified inputs."
 	case ReasonUnsafeRemediation:
 		return "The proposed remediation violates the deterministic safety policy and requires further investigation."
 	case ReasonAlreadyPresent:
