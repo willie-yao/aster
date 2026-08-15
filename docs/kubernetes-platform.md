@@ -80,10 +80,41 @@ controller image, endpoints, and readiness.
 
 ## RuntimeClass, nodes, and storage
 
-Provide a real secure RuntimeClass and compatible nodes. The chart records the
-required RuntimeClass name but never creates a placeholder handler or changes
-node images, labels, or taints. Resource presence cannot prove hostile-code
-isolation, so validate the handler and node image on the target cluster.
+### Secure-runtime contract
+
+Aster's core dashboard, in-process read-only analysis, and ordinary GitOps
+deployment do not inherently require Kata or any Agent Sandbox RuntimeClass. A
+secure runtime is required only when a configured feature creates Agent Sandbox
+workloads. Current examples are Agent Sandbox Fix execution and the optional
+Agent Sandbox analyzer and causal critic experiments. When those features are
+disabled, Aster can run without Agent Sandbox or a sandbox RuntimeClass.
+
+Aster accepts the configured `runtimeClassName`; it does not hardcode Kata. The
+platform administrator must install and review the RuntimeClass handler, provide
+compatible nodes, and complete target-cluster isolation acceptance. For
+configured Agent Sandbox paths, Aster validates the RuntimeClass identity,
+scheduling compatibility with Ready nodes, workload shape, and admission
+contract. These checks do not prove that the handler provides VM or sandbox
+isolation.
+
+Agent Sandbox Fix can execute repository-controlled validation commands.
+RuntimeClass presence, node labels, taints, and a dedicated node pool can
+constrain scheduling, but are not themselves a hostile-code runtime boundary.
+Standard `runc` is not the intended production boundary for repository code
+execution.
+
+The application and platform charts do not create a RuntimeClass handler,
+install runtime-capable node images, or configure cloud infrastructure. Provider
+setup remains owned by the Kubernetes or cloud platform administrator.
+
+Examples only. These are not automatic compatibility guarantees.
+
+| Provider or environment | Example secure runtime |
+| --- | --- |
+| AKS | Kata or AKS Pod Sandboxing |
+| GKE | gVisor or GKE Sandbox |
+| EKS | A separately validated sandbox or microVM execution path |
+| Self-managed Kubernetes | Kata, gVisor, or equivalent |
 
 Provide RWX storage for application data. Metadata can prove that a claim is
 Bound and declares `ReadWriteMany`; it cannot prove working multi-node RWX

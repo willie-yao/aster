@@ -452,11 +452,11 @@ engine separately validates its version, immutable SHA, provider mode, API,
 endpoint, auth contract, commands, bounds, and result contract before creation
 and after retrieval.
 
-A deployed configuration requires an HTTPS provider path, a secure Kata,
-gVisor, or equivalent RuntimeClass, and nodes that support the requested
-AppArmor policy. Agent Sandbox remains disabled by default. Once explicitly
-enabled, direct mode is the default; gateway mode is an explicit tokenless
-alternative.
+A deployed configuration requires an HTTPS provider path and the
+[secure-runtime contract](kubernetes-platform.md#secure-runtime-contract),
+including compatible nodes that support the requested AppArmor policy. Agent
+Sandbox remains disabled by default. Once explicitly enabled, direct mode is the
+default; gateway mode is an explicit tokenless alternative.
 
 Direct bearer mode references one existing Secret in the execution namespace.
 The chart never creates, copies, reads, or prints it. Admission pins the exact

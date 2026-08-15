@@ -95,8 +95,20 @@ generated = Path(sys.argv[5])
 root = Path(sys.argv[6])
 
 documents = [quickstart, platform, reference, chart, generated]
+platform_examples = """Examples only. These are not automatic compatibility guarantees.
+
+| Provider or environment | Example secure runtime |
+| --- | --- |
+| AKS | Kata or AKS Pod Sandboxing |
+| GKE | gVisor or GKE Sandbox |
+| EKS | A separately validated sandbox or microVM execution path |
+| Self-managed Kubernetes | Kata, gVisor, or equivalent |"""
+if platform_examples not in platform.read_text():
+    raise SystemExit("Kubernetes platform guide is missing the non-normative provider examples")
 for path in documents:
     text = path.read_text()
+    if path == platform:
+        text = text.replace(platform_examples, "", 1)
     for forbidden in [
         "CAPZ",
         "capz",
@@ -105,6 +117,8 @@ for path in documents:
         "<expected-capz-job-name>",
         "Azure",
         "AKS",
+        "GKE",
+        "EKS",
         "Front Door",
     ]:
         if forbidden in text:
@@ -212,7 +226,7 @@ for path in [quickstart, platform, reference, chart]:
 
 line_limits = {
     quickstart: (180, 270),
-    platform: (150, 220),
+    platform: (150, 250),
     reference: (400, 600),
     chart: (80, 150),
     generated: (120, 200),

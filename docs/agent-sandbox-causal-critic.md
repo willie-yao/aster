@@ -183,12 +183,13 @@ timeout, cost, latency, or cleanup regressions.
 
 ## Evaluation status
 
-The August 9, 2026 AKS evaluation validated immutable digest execution, Kata
-isolation, RuntimeDefault AppArmor and seccomp, tokenless workload identity,
-admission denial cases, identity-gated gateway ingress, public-egress denial,
-UID-checked cleanup, and no leaked Sandboxes. The public test image was
-published manually for that evaluation. It remains intentionally absent from
-the release workflow.
+The August 9, 2026 AKS evaluation is provider-specific historical acceptance
+evidence, not the universal Aster secure-runtime contract. It validated
+immutable digest execution, Kata isolation, RuntimeDefault AppArmor and seccomp,
+tokenless workload identity, admission denial cases, identity-gated gateway
+ingress, public-egress denial, UID-checked cleanup, and no leaked Sandboxes. The
+public test image was published manually for that evaluation. It remains
+intentionally absent from the release workflow.
 
 The first cold comparison matrix produced 10 valid and finalized reviews from
 15 trials, with cleanup succeeding in all 15. The Flatcar control produced no
