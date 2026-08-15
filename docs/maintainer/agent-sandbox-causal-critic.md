@@ -1,14 +1,11 @@
 # Agent Sandbox causal critic
 
-Status: stopped on August 10, 2026. The private implementation remains disabled
-and non-authoritative, but no critic digest, structural repair, revision, or
-activation work is planned. The replacement experiment tests a direct OpenCode
-analyzer instead. See [Agent Sandbox OpenCode analyzer](agent-sandbox-opencode-analyzer.md).
-
-Historical status: private, disabled-by-default experimental implementation. It is wired to
-the scheduled fetcher and worker only when explicitly enabled. A public
-immutable test image and an AKS evaluation exist, but the image is not part of
-the release workflow and the critic is not approved for production use.
+> **Status: stopped experiment.** Work stopped on August 10, 2026. The private,
+> disabled-by-default implementation remains in the tree, so this page is kept
+> only as a maintainer reference for its isolation, ledger, and cleanup
+> contracts. No digest, structural repair, revision, activation, or new
+> evaluation is planned. The replacement experiment tests a direct
+> [OpenCode analyzer](agent-sandbox-opencode-analyzer.md).
 
 ## Authority boundary
 
@@ -198,7 +195,7 @@ initiating API-version chain. Fixture requests also consumed roughly 20K to 29K
 input tokens and commonly took 30 to 60 seconds.
 
 These results validate the runtime boundary, not diagnostic promotion. The
-critic remains disabled, private, sampled, and non-authoritative. Further work
-must improve structured validity, reduce critic-specific evidence size, and
-show repeated causal gains over the in-process analyzer before a separate
-production-enablement decision.
+critic remains disabled, private, sampled, and non-authoritative. The stopped
+experiment did not meet its promotion gates. Any future reconsideration would
+need a new proposal that improves structured validity, reduces critic-specific
+evidence size, and shows repeated causal gains over the in-process analyzer.

@@ -380,7 +380,7 @@ live deploy.
 - `docs/troubleshooting.md` - first-deploy failures and checks.
 - `docs/architecture/in-process-analyzer.md` - concise analyzer architecture and contributor map.
 - `docs/agentic.md` - agentic configuration, tool details, floors, and critique reference.
-- `docs/remediation-investigation.md` - private causal-group investigation contracts, cache, and benchmark.
+- `docs/maintainer/remediation-investigation.md` - private causal-group investigation contracts, cache, and benchmark.
 - `docs/skills.md` - consumer-side recipe registry format + hashing.
 - `docs/writing-prompts.md` - how `prompts/system.md` slots into the
   composed prompt and what makes a good project addendum.
@@ -392,7 +392,7 @@ live deploy.
 - `docs/kubernetes-platform.md` - platform ownership, prerequisites, and lifecycle.
 - `docs/kubernetes-reference.md` - architecture, modes, chart values, upgrades,
   and advanced Kubernetes operations.
-- `docs/orka.md` - experimental Orka maintainer and evaluation reference.
+- `docs/maintainer/orka.md` - experimental Orka maintainer and evaluation reference.
 
 ## When in doubt
 

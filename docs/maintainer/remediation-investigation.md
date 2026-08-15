@@ -1,9 +1,10 @@
 # Causal-group remediation investigation
 
-> **Status:** authenticated preview investigation. The read-only investigator,
-> minimal candidate contract, private evidence ledger and cache, deterministic
-> verifier, frozen benchmark, authenticated operation, and safe public lifecycle
-> exist. File Issue eligibility and Fix PR handoff are not enabled.
+> **Status: authenticated preview, maintainer reference.** The read-only
+> investigator, minimal candidate contract, private evidence ledger and cache,
+> deterministic verifier, frozen benchmark, authenticated operation, and safe
+> public lifecycle exist. File Issue eligibility and Fix PR handoff are not
+> enabled. User-facing setup remains in the server and Fix PR guides.
 
 Version-10 causal-group correlation remains analysis-only. It does not emit a
 suggested fix, remediation target, source target, or action field. A separate

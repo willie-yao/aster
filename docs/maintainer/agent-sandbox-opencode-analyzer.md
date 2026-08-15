@@ -1,8 +1,9 @@
 # Agent Sandbox OpenCode analyzer
 
-Status: private deployment prototype. Helm can install its security boundary,
-but the fetcher and worker cannot create analyzer workloads. It has no public
-output or cache authority.
+> **Status: private, disabled deployment prototype.** Helm can install its
+> security boundary, but the fetcher and worker cannot create analyzer
+> workloads. This maintainer-only experiment has no public output or cache
+> authority and is not standard setup guidance.
 
 ## Goal
 

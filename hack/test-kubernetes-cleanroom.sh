@@ -190,14 +190,24 @@ for duplicated in ["CLI_ASSET=", "SHA256SUMS", "DOWNLOAD_DIR=", "manifest_ready=
     if duplicated in generated_text:
         raise SystemExit(f"generated consumer README duplicates canonical procedure {duplicated!r}")
 
-removed = [
-    "kubernetes-contributor-deployment.md",
-    "kubernetes-platform-ownership.md",
-    "kubernetes-platform-administrator.md",
+removed_kubernetes_docs = [
+    root / "docs" / "kubernetes-contributor-deployment.md",
+    root / "docs" / "kubernetes-platform-ownership.md",
+    root / "docs" / "kubernetes-platform-administrator.md",
 ]
-for name in removed:
-    if (root / "docs" / name).exists():
-        raise SystemExit(f"removed Kubernetes document still exists: {name}")
+removed_or_moved_docs = [
+    root / "docs" / "agent-sandbox-fix-runtime-spike.md",
+    root / "docs" / "architecture" / "analysis-runtime-evaluation.md",
+    root / "docs" / "agent-sandbox-causal-critic.md",
+    root / "docs" / "agent-sandbox-opencode-analyzer.md",
+    root / "docs" / "orka.md",
+    root / "docs" / "remediation-investigation.md",
+]
+for path in removed_kubernetes_docs + removed_or_moved_docs:
+    if path.exists():
+        raise SystemExit(f"removed or moved document still exists: {path.relative_to(root)}")
+if (root / "plan").exists():
+    raise SystemExit("historical plan directory still exists")
 for path in [
     root / "AGENTS.md",
     root / "docs" / "README.md",
@@ -210,9 +220,9 @@ for path in [
     generated,
 ]:
     text = path.read_text()
-    for name in removed:
-        if name in text:
-            raise SystemExit(f"{path} still links removed document {name}")
+    for removed_path in removed_kubernetes_docs:
+        if removed_path.name in text:
+            raise SystemExit(f"{path} still links removed document {removed_path.name}")
 
 for path in [quickstart, platform, reference, chart]:
     text = path.read_text()
@@ -223,6 +233,42 @@ for path in [quickstart, platform, reference, chart]:
         resolved = (path.parent / target).resolve()
         if not resolved.exists():
             raise SystemExit(f"broken Markdown link in {path}: {target}")
+
+def markdown_anchors(path):
+    anchors = set()
+    counts = {}
+    for line in path.read_text().splitlines():
+        match = re.match(r"^#{1,6}\s+(.+?)\s*#*\s*$", line)
+        if not match:
+            continue
+        heading = re.sub(r"`([^`]*)`", r"\1", match.group(1)).lower()
+        heading = re.sub(r"<[^>]+>", "", heading)
+        heading = re.sub(r"[^\w\- ]", "", heading)
+        base = re.sub(r"\s+", "-", heading.strip())
+        count = counts.get(base, 0)
+        counts[base] = count + 1
+        anchors.add(base if count == 0 else f"{base}-{count}")
+    return anchors
+
+markdown_files = [
+    root / "AGENTS.md",
+    root / "README.md",
+    root / "CONTRIBUTING.md",
+    *sorted((root / "docs").rglob("*.md")),
+    *sorted((root / "experimental").rglob("*.md")),
+]
+for path in markdown_files:
+    text = path.read_text()
+    for target in re.findall(r"\[[^]]+\]\(([^)]+)\)", text):
+        target = target.strip()
+        if not target or "://" in target or target.startswith("mailto:"):
+            continue
+        relative, _, anchor = target.partition("#")
+        resolved = path if not relative else (path.parent / relative).resolve()
+        if not resolved.exists():
+            raise SystemExit(f"broken Markdown link in {path}: {target}")
+        if anchor and resolved.suffix == ".md" and anchor.lower() not in markdown_anchors(resolved):
+            raise SystemExit(f"broken Markdown anchor in {path}: {target}")
 
 line_limits = {
     quickstart: (180, 270),

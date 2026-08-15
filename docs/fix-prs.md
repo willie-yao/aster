@@ -324,7 +324,7 @@ because the Orka Agent owns that runtime policy.
 #### `orka` (experimental, in-cluster)
 
 See the
-[Orka architecture and lifecycle reference](orka.md#architecture-and-lifecycle)
+[Orka architecture and lifecycle reference](maintainer/orka.md#architecture-and-lifecycle)
 for how the Agent Task, isolated workspace, structured result, and dashboard
 validation boundary fit with the other Orka integrations.
 
@@ -444,7 +444,7 @@ those changes. Do not install older raw manifests or add a supplemental
 controller RBAC patch. Source-commit packaging is maintainer-only and limited to
 local lint, render, and temporary kind validation until matching immutable
 runtime artifacts are available. See the
-[experimental Orka maintainer reference](orka.md).
+[experimental Orka maintainer reference](maintainer/orka.md).
 
 Treat this integration as maintainer evaluation only. It is not a recommended
 turnkey deployment.
@@ -766,5 +766,4 @@ that can disable AppArmor or select `Unconfined`. The Docker Desktop kind
 evaluation omits AppArmor only through an internal Go test capability and does
 not validate AppArmor enforcement or hostile-code isolation.
 
-See [Agent Sandbox Fix Runtime Spike](agent-sandbox-fix-runtime-spike.md) and
-[Kubernetes operator reference](kubernetes-reference.md#agent-sandbox-fix-runtime).
+See [Kubernetes operator reference](kubernetes-reference.md#agent-sandbox-fix-runtime).
