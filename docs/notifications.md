@@ -133,7 +133,7 @@ Store the password in a Kubernetes Secret. Expose it to the fetcher or worker
 for scheduled alerts, and to the server for asynchronous draft-ready emails:
 
 ```bash
-kubectl -n dashboards create secret generic capz-smtp \
+kubectl -n dashboards create secret generic dashboard-smtp \
   --from-literal=password=<smtp-password>
 ```
 
@@ -143,7 +143,7 @@ fetcher:
     - name: EMAIL_SMTP_PASSWORD
       valueFrom:
         secretKeyRef:
-          name: capz-smtp
+          name: dashboard-smtp
           key: password
 server:
   extraEnv: *smtpEnv

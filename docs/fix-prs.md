@@ -213,13 +213,13 @@ ai:
   fix_prs:
     enabled: true
     # repo:                       # defaults to branding.source_repo
-    #   owner: "kubernetes-sigs"
-    #   name: "cluster-api-provider-azure"
+    #   owner: "example-org"
+    #   name: "source-project"
     # allowed_repositories:       # explicit cross-repository destinations
-    #   - owner: kubernetes
-    #     name: test-infra
+    #   - owner: example-org
+    #     name: ci-config
     #     path_prefixes:
-    #       - config/jobs/kubernetes-sigs/cluster-api-provider-azure/
+    #       - config/jobs/example-org/source-project/
     #     allowed_commands:
     #       - argv: [git, diff, --cached, --check]
     #         timeout: 1m
@@ -744,7 +744,7 @@ The published generic executor contains Go 1.25.12, OpenCode 1.18.2, Git, and CA
 certificates. It does not include `make` or repository-specific development tools.
 Configure only validators whose executables exist in the selected image. A missing
 executable produces a bounded terminal failure and no actionable Fix PR preview.
-The immutable image supports CAPZ Go validators such as `go test`, `go vet`, and
+The immutable image supports Go validators such as `go test`, `go vet`, and
 `go version`. `GOTOOLCHAIN=local` prevents runtime toolchain downloads. The image
 retains UID/GID 65532, the `/usr/local/bin/fixexecutor`
 entrypoint, the fixed provider environment and output-leak protections, and the

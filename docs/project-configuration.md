@@ -78,8 +78,8 @@ Analysis can read a repository that differs from branding and write targets:
 ```yaml
 ai:
   source_repo:
-    owner: kubernetes-sigs
-    name: cluster-api-provider-azure
+    owner: example-org
+    name: source-project
 ```
 
 Omit `ai.source_repo` to use `branding.source_repo`. This setting controls
