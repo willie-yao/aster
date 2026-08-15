@@ -19,28 +19,35 @@ how to pin a consumer to a reviewed version.
 
 ## [Unreleased]
 
+## [0.9.0-rc.2] - 2026-08-15
+
 ### Added
 
-- **v0.9 exact JUnit debugging-to-draft-PR lifecycle.** A maintainer can select
-  one cited chat finding, generate a persisted Agent Sandbox preview, inspect
-  warnings and deterministic verification results, explicitly regenerate with
-  bounded feedback, and confirm one human-controlled draft PR through a
-  verified existing fork.
-- **Provider-neutral Flux GitOps generation.** The Aster CLI renders and checks
-  deterministic application and optional platform Helm releases with immutable
-  chart and image identities, ConfigMap-backed values, and no generated Secrets.
-- **Optional private gateway CA trust.** Agent Sandbox Fix workloads can consume
-  one exact, hash-pinned public CA bundle from an existing ConfigMap without
-  embedding certificate bytes or generating credentials.
+- **Exact-version consumer onboarding.** The setup skill resolves and verifies
+  an immutable release before generating consumer configuration, including the
+  matching nested Go module version.
+- **New-user and migration guidance.** The documentation now makes Prow and
+  TestGrid prerequisites explicit and provides a focused migration path from
+  `prow-ai-dashboard`.
 
 ### Changed
 
-- **v0.9 beta feature freeze.** Compilation, source and branch identity, command
-  integrity, patch reconstruction, credential detection, file bounds, and
-  confirmation deduplication remain hard blockers. Model patch quality and
-  reviewer preferences remain visible warnings that maintainers may address
-  through explicit regeneration or normal draft-PR review. The engine does not
-  autonomously merge, close, or amend generated PRs.
+- **Aster product identity.** The repository and public documentation now use
+  Aster, Automated Signal Triage, Explanation, and Remediation, while existing
+  `prow-ai-dashboard` and `PROW_AI` identifiers remain compatibility contracts.
+- **Paired Go release tags.** Releases publish matching root and `backend/`
+  module tags, and verify both tags point to the same commit before publishing
+  release artifacts or moving a stable alias.
+- **Dependency-aware CI.** Change classification routes affected checks while
+  preserving cross-contract coverage, with Helm static validation separated
+  from the kind-based lifecycle test.
+- **Documentation organization.** Historical planning documents were removed,
+  and active experimental runtime references now live under maintainer
+  documentation.
+- **Deterministically verifiable remediation targets.** New remediation model
+  output is limited to supported target kinds that the engine can verify.
+  Legacy payloads with removed kinds still decode for compatibility but fail
+  closed during deterministic verification.
 
 ## [1.0.0-beta.7] - 2026-07-28
 
@@ -207,7 +214,7 @@ how to pin a consumer to a reviewed version.
   When AI creds are set it drafts `prompts/system.md` from the source repo's own
   docs; otherwise it writes a stub. Pass `-open-pr` to open a scaffold PR instead
   of writing locally, and `-mode k8s` to also scaffold a `deploy/` folder. See
-  [docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md#run-the-wizard).
+  [docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md#interactive-wizard).
 - Optional **auto-filing of GitHub issues** for the dashboard's highest-signal
   findings: systemic recurring patterns and persistent failures (>=3 consecutive
   runs). Off by default; enable with an `issues:` block plus an `ISSUE_TOKEN`
