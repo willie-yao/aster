@@ -11,6 +11,8 @@ the Kubernetes-native artifacts: the container image and the Helm chart.
 
 - `vMAJOR.MINOR.PATCH` for stable releases (e.g. `v1.2.0`).
 - `vMAJOR.MINOR.PATCH-beta.N` / `-rc.N` for pre-releases (e.g. `v1.0.0-beta.1`).
+- `backend/vMAJOR.MINOR.PATCH[-PRERELEASE]` pairs every root release tag with
+  the same exact commit so the nested Go module resolves at that version.
 - A moving `vMAJOR` alias (e.g. `v1`) tracks the latest stable release in that
   major, created/advanced automatically on each stable release.
 
@@ -28,14 +30,19 @@ the changelog.
 1. Make sure `main` is green and the `## [Unreleased]` section of
    `CHANGELOG.md` is up to date. Rename it to the version being released and add
    a fresh `## [Unreleased]` above it.
-2. Tag and push:
+2. Create the root and nested-module tags at the same reviewed commit, then
+   push both without force:
    ```bash
    git checkout main && git pull
    git tag v1.0.0-beta.1
-   git push origin v1.0.0-beta.1
+   git tag backend/v1.0.0-beta.1
+   git push origin v1.0.0-beta.1 backend/v1.0.0-beta.1
    ```
 3. The `Release` workflow (`.github/workflows/release.yml`) runs on the tag:
    - re-runs the full CI gate against the tagged commit,
+   - verifies both release tags identify the reviewed commit; if the root tag
+     exists and only the module tag is missing, it creates the module tag with
+     a non-force push before publishing,
    - creates the GitHub Release with auto-generated notes (marked
      **pre-release** when the tag has a `-beta`/`-rc` suffix),
    - packages the application and platform Helm charts at the release version,
@@ -60,6 +67,13 @@ the changelog.
    The git-only remote fixer is published at
    `ghcr.io/<owner>/aster/remote-fixer` for dashboard-side patch
    reconstruction and contains neither OpenCode nor srt.
+
+The `backend/` tag does not match the release or image workflow triggers, so it
+does not publish a second GitHub Release or duplicate OCI artifacts. To inspect
+tag state without changing it, run the publishing script with
+`RELEASE_DRY_RUN=true`. To recover only a missing module tag without publishing
+artifacts, use `RELEASE_TAGS_ONLY=true`. Both modes still reject invalid
+versions, moved tags, and mismatched tag pairs.
 
 ## Pre-release to stable
 

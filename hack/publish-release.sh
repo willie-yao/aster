@@ -2,6 +2,141 @@
 set -euo pipefail
 
 : "${TAG:?TAG is required}"
+
+release_dry_run=${RELEASE_DRY_RUN:-false}
+release_tags_only=${RELEASE_TAGS_ONLY:-false}
+case $release_dry_run:$release_tags_only in
+  true:true | true:false | false:true | false:false) ;;
+  *)
+    echo "RELEASE_DRY_RUN and RELEASE_TAGS_ONLY must be true or false" >&2
+    exit 1
+    ;;
+esac
+if [[ ! $TAG =~ ^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-(beta|rc)[.](0|[1-9][0-9]*))?$ ]]; then
+  echo "invalid release tag: $TAG" >&2
+  exit 1
+fi
+
+module_tag="backend/$TAG"
+release_ref_prefix="refs/aster-release/$$"
+root_remote_ref="$release_ref_prefix/root"
+module_remote_ref="$release_ref_prefix/module"
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/aster-release.XXXXXX")
+cleanup() {
+  git update-ref -d "$root_remote_ref" 2>/dev/null || true
+  git update-ref -d "$module_remote_ref" 2>/dev/null || true
+  find "$tmp" -type f -delete 2>/dev/null || true
+  rmdir "$tmp" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+remote_tag_commit() {
+  local tag=$1
+  local output=$2
+  local remote_ref=$3
+  local tag_ref="refs/tags/$tag"
+  set +e
+  git ls-remote --exit-code --refs --tags origin "$tag_ref" > "$output"
+  local status=$?
+  set -e
+  if [[ $status -eq 2 ]]; then
+    return 2
+  fi
+  if [[ $status -ne 0 ]]; then
+    echo "failed to inspect remote release tag: $tag" >&2
+    return 1
+  fi
+  if ! git fetch --quiet --no-tags --force origin "$tag_ref:$remote_ref"; then
+    echo "failed to fetch remote release tag: $tag" >&2
+    return 1
+  fi
+  local commit
+  if ! commit=$(git rev-parse "$remote_ref^{commit}"); then
+    echo "remote release tag does not identify a commit: $tag" >&2
+    return 1
+  fi
+  printf '%s\n' "$commit"
+}
+
+ensure_release_tag_pair() {
+  local root_commit=""
+  local root_status=0
+  local module_commit=""
+  local module_status=0
+  root_commit=$(remote_tag_commit "$TAG" "$tmp/root-tag-remote" "$root_remote_ref") || root_status=$?
+  module_commit=$(remote_tag_commit "$module_tag" "$tmp/module-tag-remote" "$module_remote_ref") || module_status=$?
+
+  if [[ $root_status -ne 0 && $root_status -ne 2 ]] ||
+    [[ $module_status -ne 0 && $module_status -ne 2 ]]; then
+    return 1
+  fi
+  if [[ $root_status -eq 2 ]]; then
+    if [[ $module_status -eq 0 ]]; then
+      echo "module tag exists without root release tag: $module_tag" >&2
+    else
+      echo "remote release tag does not exist: $TAG" >&2
+    fi
+    return 1
+  fi
+  if [[ $root_commit != "$reviewed_commit" ]]; then
+    echo "remote release tag $TAG does not identify reviewed HEAD $reviewed_commit" >&2
+    return 1
+  fi
+  if [[ $module_status -eq 0 && $module_commit != "$reviewed_commit" ]]; then
+    echo "remote module tag $module_tag does not identify reviewed HEAD $reviewed_commit" >&2
+    return 1
+  fi
+
+  if [[ $module_status -eq 2 ]]; then
+    if [[ $release_dry_run == true ]]; then
+      echo "would create module tag $module_tag at $reviewed_commit"
+      return
+    fi
+    if git show-ref --verify --quiet "refs/tags/$module_tag"; then
+      local local_module_commit
+      local_module_commit=$(git rev-parse "$module_tag^{commit}")
+      if [[ $local_module_commit != "$reviewed_commit" ]]; then
+        echo "local module tag $module_tag does not identify reviewed HEAD $reviewed_commit" >&2
+        return 1
+      fi
+    else
+      git -c tag.gpgSign=false tag "$module_tag" "$reviewed_commit"
+    fi
+    if ! git push --atomic origin \
+      "$root_remote_ref:refs/tags/$TAG" \
+      "refs/tags/$module_tag:refs/tags/$module_tag"; then
+      local root_after=""
+      local root_after_status=0
+      local module_after=""
+      local module_after_status=0
+      root_after=$(remote_tag_commit "$TAG" "$tmp/root-tag-remote" "$root_remote_ref") || root_after_status=$?
+      module_after=$(remote_tag_commit "$module_tag" "$tmp/module-tag-remote" "$module_remote_ref") || module_after_status=$?
+      if [[ $root_after_status -eq 0 && $module_after_status -eq 0 &&
+        $root_after == "$reviewed_commit" && $module_after == "$reviewed_commit" ]]; then
+        echo "release tags $TAG and $module_tag were created concurrently at $reviewed_commit"
+        return
+      fi
+      echo "failed to create immutable release tag pair for $TAG" >&2
+      return 1
+    fi
+    module_commit=$(remote_tag_commit "$module_tag" "$tmp/module-tag-remote" "$module_remote_ref")
+    if [[ $module_commit != "$reviewed_commit" ]]; then
+      echo "remote module tag $module_tag does not identify reviewed HEAD $reviewed_commit after push" >&2
+      return 1
+    fi
+    echo "created module tag $module_tag at $reviewed_commit"
+    return
+  fi
+
+  echo "release tags $TAG and $module_tag identify reviewed HEAD $reviewed_commit"
+}
+
+reviewed_commit=$(git rev-parse 'HEAD^{commit}')
+ensure_release_tag_pair
+if [[ $release_dry_run == true || $release_tags_only == true ]]; then
+  exit 0
+fi
+
 : "${REPOSITORY_OWNER:?REPOSITORY_OWNER is required}"
 : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
 
@@ -12,39 +147,6 @@ if [[ $(go env GOVERSION) != go1.25.12 ]]; then
 fi
 
 chart_version=${TAG#v}
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/aster-release.XXXXXX")
-cleanup() {
-  find "$tmp" -type f -delete 2>/dev/null || true
-  rmdir "$tmp" 2>/dev/null || true
-}
-trap cleanup EXIT
-
-verify_release_tag() {
-  local tag_ref="refs/tags/$TAG"
-  set +e
-  git ls-remote --exit-code --tags origin "$tag_ref" > "$tmp/release-tag-remote"
-  local status=$?
-  set -e
-  if [[ $status -eq 2 ]]; then
-    echo "remote release tag does not exist: $TAG" >&2
-    return 1
-  fi
-  if [[ $status -ne 0 ]]; then
-    echo "failed to inspect remote release tag: $TAG" >&2
-    return 1
-  fi
-  git fetch --force origin "$tag_ref:$tag_ref"
-  local head_commit tag_commit
-  head_commit=$(git rev-parse 'HEAD^{commit}')
-  tag_commit=$(git rev-parse "$TAG^{commit}")
-  if [[ $tag_commit != "$head_commit" ]]; then
-    echo "remote release tag $TAG does not identify reviewed HEAD $head_commit" >&2
-    return 1
-  fi
-}
-
-verify_release_tag
-reviewed_commit=$(git rev-parse 'HEAD^{commit}')
 TAG="$TAG" \
   IMAGE_REPOSITORY="$IMAGE_REPOSITORY" \
   REVIEWED_COMMIT="$reviewed_commit" \
@@ -176,11 +278,11 @@ PY_MANIFEST
 registry="oci://ghcr.io/$REPOSITORY_OWNER/charts"
 # Publish the prerequisite chart first. The application chart is the consumer
 # entry point and is published only after its matching platform artifact exists.
-verify_release_tag
+ensure_release_tag_pair
 helm push "$platform_pkg" "$registry"
-verify_release_tag
+ensure_release_tag_pair
 helm push "$app_pkg" "$registry"
-verify_release_tag
+ensure_release_tag_pair
 
 release_args=("$TAG" "$app_pkg" "$platform_pkg" "$source_archive" "$release_manifest" "$tmp/SHA256SUMS" "${cli_assets[@]}" --title "$TAG" --generate-notes --verify-tag)
 if [[ $TAG == *-* ]]; then
@@ -189,6 +291,6 @@ fi
 gh release create "${release_args[@]}"
 
 if [[ $TAG != *-* ]]; then
-  git tag -f "$major" "$TAG"
+  git tag -f "$major" "$root_remote_ref"
   git push origin -f "refs/tags/$major"
 fi

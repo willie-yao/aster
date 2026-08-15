@@ -25,7 +25,7 @@ finding a useful signal and moving toward a clear, reviewed next action.
 Run the guided onboarding wizard from the source repository you want to monitor:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard
 ```
 
 The wizard detects the current GitHub repository where possible and walks you
