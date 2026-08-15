@@ -27,6 +27,7 @@ users need them.
 - [Writing the project prompt](writing-prompts.md)
 - [Agentic analysis](agentic.md)
 - [Custom diagnostic skills](skills.md)
+- [Local OpenCode sandbox setup](local-opencode-sandbox.md)
 
 ## Optional features
 
@@ -35,23 +36,22 @@ users need them.
 - [Email notifications](notifications.md)
 - [GitHub issues](github-issues.md)
 
-## Experimental features and runtimes
+## Experimental maintainer references
 
 These references are for isolated evaluation and maintainer work. They are not
 part of standard onboarding.
 
 - [Experimental Fix PR generation](fix-prs.md)
-- [Agent Sandbox Fix Runtime spike](agent-sandbox-fix-runtime-spike.md)
-- [Private Agent Sandbox OpenCode analyzer](agent-sandbox-opencode-analyzer.md)
-- [Private Agent Sandbox causal critic](agent-sandbox-causal-critic.md)
-- [Experimental Orka maintainer reference](orka.md)
-- [Local OpenCode sandbox](local-opencode-sandbox.md)
+- [Maintainer reference index](maintainer/README.md)
+- [Causal-group remediation investigation](maintainer/remediation-investigation.md)
+- [Private Agent Sandbox OpenCode analyzer](maintainer/agent-sandbox-opencode-analyzer.md)
+- [Stopped Agent Sandbox causal critic](maintainer/agent-sandbox-causal-critic.md)
+- [Experimental Orka integrations](maintainer/orka.md)
 
 ## Architecture and decisions
 
 - [In-process failure analyzer architecture](architecture/in-process-analyzer.md)
 - [ADR 0001: Dashboard ownership of analysis policy](architecture-decisions/0001-analysis-runtime-ownership.md)
-- [Historical failure-analysis runtime evaluation](architecture/analysis-runtime-evaluation.md)
 
 ## Development
 

@@ -32,9 +32,9 @@ The implementation includes:
 - CPU-only placement and bounded Task execution
 - retry, cache reuse, concurrent merge, and cleanup checks
 
-See [the runtime evaluation](../../docs/architecture/analysis-runtime-evaluation.md) and
+See the [Orka maintainer reference](../../docs/maintainer/orka.md) and
 [ADR 0001](../../docs/architecture-decisions/0001-analysis-runtime-ownership.md)
-for the decision boundary.
+for the current decision boundary.
 
 Run the isolated kind test from the repository root:
 

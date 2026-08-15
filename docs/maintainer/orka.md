@@ -458,7 +458,7 @@ server:
 ```
 
 Configure a secure origin before enabling authenticated chat. See
-[Server mode](server.md) for OAuth, proxy authentication, admin allowlists,
+[Server mode](../server.md) for OAuth, proxy authentication, admin allowlists,
 NetworkPolicy, and origin requirements.
 
 Project configuration shape:
@@ -560,7 +560,7 @@ because Orka Agent Tasks do not support per-Task skill overrides. Skill contents
 and runtime purpose are part of the Task fingerprint. The dashboard never
 mutates the operator-owned Agent or its default skills.
 
-See [Experimental Fix PR generation](fix-prs.md#orka-experimental-in-cluster)
+See [Experimental Fix PR generation](../fix-prs.md#orka-experimental-in-cluster)
 for project settings and identity boundaries.
 
 The policy is scoped by the authenticated dashboard ServiceAccount and the Orka
@@ -917,8 +917,7 @@ Before enabling any Orka integration:
 
 ## Related references
 
-- [Kubernetes operator reference](kubernetes-reference.md)
-- [Historical failure-analysis runtime evaluation](architecture/analysis-runtime-evaluation.md)
-- [Experimental Fix PR generation](fix-prs.md)
-- [ADR 0001: Dashboard ownership of analysis policy](architecture-decisions/0001-analysis-runtime-ownership.md)
+- [Kubernetes operator reference](../kubernetes-reference.md)
+- [Experimental Fix PR generation](../fix-prs.md)
+- [ADR 0001: Dashboard ownership of analysis policy](../architecture-decisions/0001-analysis-runtime-ownership.md)
 - `experimental/orka/README.md`

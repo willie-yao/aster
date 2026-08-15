@@ -330,7 +330,7 @@ dashboard publishes the expected jobs and analyses.
 - `ai.fix_prs`: [Experimental Fix PR generation](fix-prs.md)
 - `ai.source_investigation`: experimental Orka-backed source investigation for
   authenticated analysis chat. See [Server mode](server.md#source-investigation-api)
-  and the [experimental Orka maintainer reference](orka.md).
+  and the [experimental Orka maintainer reference](maintainer/orka.md).
 
 Authenticated chat, File Issue, and Mark Resolved are server deployment features,
 not separate analysis runtimes. They do not require Orka or a Fix PR runtime.

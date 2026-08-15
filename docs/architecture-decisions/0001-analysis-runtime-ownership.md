@@ -1,6 +1,6 @@
 # ADR 0001: Dashboard ownership of analysis policy
 
-See [Orka architecture in Aster](../orka.md#architecture-and-lifecycle)
+See [Orka architecture in Aster](../maintainer/orka.md#architecture-and-lifecycle)
 for the current end-to-end component, credential, and state flows built on this
 decision.
 

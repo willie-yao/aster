@@ -308,7 +308,7 @@ context and persist a terminal cancelled outcome.
 
 ## Source investigation API
 
-See [Orka architecture and lifecycle](orka.md#architecture-and-lifecycle) for
+See [Orka architecture and lifecycle](maintainer/orka.md#architecture-and-lifecycle) for
 how this read-only Agent path differs from container analysis and fix
 generation.
 

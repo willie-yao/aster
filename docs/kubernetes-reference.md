@@ -6,7 +6,7 @@ with the [Kubernetes quickstart](kubernetes.md) or the generated
 `deploy/README.md`.
 
 Orka is documented separately in the
-[experimental Orka maintainer reference](orka.md). It is not required for the
+[experimental Orka maintainer reference](maintainer/orka.md). It is not required for the
 default in-process deployment.
 
 ## Why run in-cluster
@@ -409,7 +409,7 @@ ledgers.
 - [Project configuration](project-configuration.md)
 - [Troubleshooting](troubleshooting.md)
 - [Releasing](releasing.md)
-- [Experimental Orka maintainer reference](orka.md)
+- [Experimental Orka maintainer reference](maintainer/orka.md)
 
 ## Agent Sandbox Fix runtime
 
@@ -541,15 +541,15 @@ Cilium mode. Responses also requires direct bearer auth with the pinned OpenCode
 provider. The provider or gateway must independently authenticate the analyzer
 workload. The quota assumes the namespace is dedicated to this experiment.
 
-See [Agent Sandbox OpenCode analyzer](agent-sandbox-opencode-analyzer.md) for
+See [Agent Sandbox OpenCode analyzer](maintainer/agent-sandbox-opencode-analyzer.md) for
 the workspace, result, authority, and benchmark boundaries.
 
-## Agent Sandbox causal critic
+## Agent Sandbox causal critic (stopped experiment)
 
-The `agentSandbox.causalCritic` chart section is independent from Fix PR
-execution and defaults to disabled. It runs a private sampled review only after
-in-process authoritative analysis. It does not publish a replacement diagnosis
-or participate in any write action.
+The `agentSandbox.causalCritic` chart section is retained for existing
+maintainer inspection and defaults to disabled. The experiment stopped on
+August 10, 2026, and must not be enabled for new evaluations. It never published
+a replacement diagnosis or participated in a write action.
 
 The chart creates separate critic RBAC and a separate fail-closed admission
 policy. Critic Sandboxes use an immutable purpose-built image, a tokenless
@@ -565,6 +565,6 @@ mounts this claim, but the server and public data path do not. The gateway must
 authorize the critic workload through an infrastructure identity outside the
 executor process. Network reachability alone is not authentication.
 
-See [Agent Sandbox causal critic](agent-sandbox-causal-critic.md) for the result
-contract, finalization rules, cold benchmark workflow, and remaining promotion
-gates.
+See the [stopped Agent Sandbox causal critic
+record](maintainer/agent-sandbox-causal-critic.md) for its result, finalization,
+and cleanup contracts.

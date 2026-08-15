@@ -222,7 +222,7 @@ mode. `ORKA_KUBE_CONTEXT` is accepted only for an explicitly selected context.
 This runtime is experimental and is not part of guided onboarding. It requires a
 separately installed, operator-owned Orka release, and the Orka Task contract
 limits prompt authoring to 30 minutes. See the
-[experimental Orka maintainer reference](orka.md).
+[experimental Orka maintainer reference](maintainer/orka.md).
 
 Generated prompts are drafts. Review every architecture, artifact, failure, and
 transient-classification claim before deployment.
