@@ -60,16 +60,15 @@ BACKEND_DOCUMENTATION_PATHS = {
 
 HELM_DOCUMENTATION_PATHS = {
     "AGENTS.md",
-    "deploy/helm/aster-platform/README.md",
-    "docs/README.md",
-    "docs/kubernetes-contributor-deployment.md",
-    "docs/kubernetes-platform-administrator.md",
-    "docs/kubernetes-platform-ownership.md",
-    "docs/kubernetes-platform.md",
-    "docs/kubernetes-reference.md",
-    "docs/kubernetes.md",
-    "docs/onboarding-a-new-project.md",
 }
+
+
+def helm_documentation_path(path: str) -> bool:
+    return (
+        path in HELM_DOCUMENTATION_PATHS
+        or under(path, "docs")
+        or (under(path, "deploy/helm") and path.endswith("/README.md"))
+    )
 
 
 def changed_paths(
@@ -264,7 +263,7 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
             result["documentation"] = True
             if path in BACKEND_DOCUMENTATION_PATHS:
                 result["backend"] = True
-            if path in HELM_DOCUMENTATION_PATHS:
+            if helm_documentation_path(path):
                 result["helm_static"] = True
             continue
 
@@ -339,6 +338,8 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
 
         if under(path, "deploy/helm"):
             result["helm_static"] = True
+            if path == "deploy/helm/aster/values.yaml":
+                result["backend"] = True
             matched = True
             if under(path, "deploy/helm/aster-platform"):
                 result["platform_kind"] = True
@@ -395,12 +396,12 @@ def self_test() -> None:
         (
             "generic documentation",
             ["docs/architecture-decisions/0001-analysis-runtime.md"],
-            {"documentation"},
+            {"helm_static", "documentation"},
         ),
         (
             "agent onboarding documentation",
             ["docs/agent-onboarding.md"],
-            {"backend", "documentation"},
+            {"backend", "helm_static", "documentation"},
         ),
         (
             "shared onboarding documentation",
@@ -415,6 +416,11 @@ def self_test() -> None:
         (
             "platform README contract",
             ["deploy/helm/aster-platform/README.md"],
+            {"helm_static", "documentation"},
+        ),
+        (
+            "application chart README contract",
+            ["deploy/helm/aster/README.md"],
             {"helm_static", "documentation"},
         ),
         (
@@ -442,6 +448,11 @@ def self_test() -> None:
             "platform",
             ["deploy/helm/aster-platform/values.yaml"],
             {"helm_static", "platform_kind"},
+        ),
+        (
+            "chart values backend contract",
+            ["deploy/helm/aster/values.yaml"],
+            {"backend", "helm_static"},
         ),
         (
             "fix executor",
@@ -583,6 +594,15 @@ def self_test() -> None:
     ):
         raise AssertionError("forced full CI did not enable every class")
 
+    workflow = (
+        pathlib.Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
+    ).read_text(encoding="utf-8")
+    backend_start = workflow.index("\n  backend:")
+    frontend_start = workflow.index("\n  frontend:", backend_start)
+    backend_job = workflow[backend_start:frontend_start]
+    if "bash hack/test-release-cli-assets.sh" not in backend_job:
+        raise AssertionError("backend job does not run the release CLI asset contract")
+
     with tempfile.TemporaryDirectory(prefix="aster-ci-classifier-") as tmp:
         repository = pathlib.Path(tmp)
 
@@ -636,13 +656,13 @@ def self_test() -> None:
                 f"rename/merge-base: expected {sorted(expected_paths)}, got {sorted(paths)}"
             )
         actual = {key for key, enabled in classify(paths).items() if enabled}
-        expected = {"backend", "remote_fixer", "documentation"}
+        expected = {"backend", "helm_static", "remote_fixer", "documentation"}
         if actual != expected:
             raise AssertionError(
                 f"rename/merge-base: expected {sorted(expected)}, got {sorted(actual)}"
             )
 
-    print(f"{len(scenarios) + 2} classification scenarios passed")
+    print(f"{len(scenarios) + 3} classification scenarios passed")
 
 
 def main() -> int:

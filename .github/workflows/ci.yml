@@ -128,6 +128,8 @@ jobs:
           cache-dependency-path: backend/go.sum
       - name: Check repo map
         run: make check-repo-map
+      - name: Test release CLI assets
+        run: bash hack/test-release-cli-assets.sh
       - name: Build
         working-directory: backend
         run: go build ./...
