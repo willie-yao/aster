@@ -29,6 +29,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
       - name: Set up Helm
         uses: azure/setup-helm@v4
 
@@ -48,4 +54,5 @@ jobs:
           TAG: ${{ github.ref_name }}
           REPOSITORY_OWNER: ${{ github.repository_owner }}
           IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
+          GOTOOLCHAIN: local
         run: hack/publish-release.sh

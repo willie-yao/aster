@@ -5,6 +5,12 @@ set -euo pipefail
 : "${REPOSITORY_OWNER:?REPOSITORY_OWNER is required}"
 : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
 
+export GOTOOLCHAIN=local
+if [[ $(go env GOVERSION) != go1.25.12 ]]; then
+  echo "release requires Go 1.25.12 with GOTOOLCHAIN=local" >&2
+  exit 1
+fi
+
 chart_version=${TAG#v}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/aster-release.XXXXXX")
 cleanup() {
@@ -115,13 +121,54 @@ for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
       ./cmd/aster
   )
 done
+source_archive="$tmp/aster-${TAG}-source.tar.gz"
+release_manifest="$tmp/aster-${TAG}-release-manifest.json"
+git archive \
+  --format=tar.gz \
+  --prefix="aster-${TAG}/" \
+  --output="$source_archive" \
+  HEAD
+python3 - "$release_manifest" "$TAG" "$reviewed_commit" "$REPOSITORY_OWNER" <<'PY_MANIFEST'
+import json
+import sys
+
+path, tag, revision, owner = sys.argv[1:]
+chart_version = tag.removeprefix("v")
+assets = [
+    f"aster-{chart_version}.tgz",
+    f"aster-platform-{chart_version}.tgz",
+    *(f"aster-{tag}-{target}" for target in ("linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64")),
+    f"aster-{tag}-source.tar.gz",
+    "SHA256SUMS",
+]
+manifest = {
+    "schema_version": 1,
+    "version": tag,
+    "revision": revision,
+    "images": {
+        "application": f"ghcr.io/{owner}/aster:{tag}",
+        "remote_fixer": f"ghcr.io/{owner}/aster/remote-fixer:{tag}",
+        "fix_executor": f"ghcr.io/{owner}/aster/agent-sandbox-fix-executor:{tag}",
+    },
+    "charts": {
+        "application": f"oci://ghcr.io/{owner}/charts/aster:{chart_version}",
+        "platform": f"oci://ghcr.io/{owner}/charts/aster-platform:{chart_version}",
+    },
+    "assets": assets,
+}
+with open(path, "w", encoding="utf-8") as output:
+    json.dump(manifest, output, indent=2, sort_keys=True)
+    output.write("\n")
+PY_MANIFEST
 (
   cd "$tmp"
   cli_assets=(aster-"${TAG}"-*)
   shasum -a 256 \
     "$(basename "$app_pkg")" \
     "$(basename "$platform_pkg")" \
-    "${cli_assets[@]}" > SHA256SUMS
+    "${cli_assets[@]}" \
+    "$(basename "$source_archive")" \
+    "$(basename "$release_manifest")" > SHA256SUMS
 )
 registry="oci://ghcr.io/$REPOSITORY_OWNER/charts"
 # Publish the prerequisite chart first. The application chart is the consumer
@@ -133,7 +180,7 @@ helm push "$app_pkg" "$registry"
 verify_release_tag
 
 cli_assets=("$tmp"/aster-"${TAG}"-*)
-release_args=("$TAG" "$app_pkg" "$platform_pkg" "$tmp/SHA256SUMS" "${cli_assets[@]}" --title "$TAG" --generate-notes --verify-tag)
+release_args=("$TAG" "$app_pkg" "$platform_pkg" "$source_archive" "$release_manifest" "$tmp/SHA256SUMS" "${cli_assets[@]}" --title "$TAG" --generate-notes --verify-tag)
 if [[ $TAG == *-* ]]; then
   release_args+=(--prerelease)
 fi

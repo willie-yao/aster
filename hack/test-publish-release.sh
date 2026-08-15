@@ -60,6 +60,10 @@ cat > "$tmp/bin/go" <<'GO'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'go %s\n' "$*" >> "$RELEASE_TEST_LOG"
+if [[ ${1:-} == env && ${2:-} == GOVERSION ]]; then
+  printf 'go1.25.12\n'
+  exit 0
+fi
 if [[ ${1:-} != build ]]; then exit 2; fi
 if [[ -n ${FAIL_CLI_TARGET:-} && ${GOOS:-}-${GOARCH:-} == "$FAIL_CLI_TARGET" ]]; then
   exit 43
@@ -91,6 +95,14 @@ case ${1:-} in
     printf '2222222222222222222222222222222222222222\t%s\n' "$ref"
     ;;
   fetch) exit 0 ;;
+  archive)
+    output=
+    for arg in "$@"; do
+      case $arg in --output=*) output=${arg#--output=} ;; esac
+    done
+    : "${output:?missing archive output}"
+    : > "$output"
+    ;;
   rev-parse)
     if [[ ${2:-} == 'HEAD^{commit}' ]]; then
       printf '%s\n' "${HEAD_COMMIT:-2222222222222222222222222222222222222222}"
@@ -192,6 +204,8 @@ assert 'aster-1.2.3.tgz' in release_line
 assert 'aster-platform-1.2.3.tgz' in release_line
 assert '--verify-tag' in release_line
 assert 'SHA256SUMS' in release_line
+assert 'aster-v1.2.3-source.tar.gz' in release_line
+assert 'aster-v1.2.3-release-manifest.json' in release_line
 assert sum(1 for line in lines if line.startswith('go build ')) == 4
 for target in ('linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64'):
     assert f'aster-v1.2.3-{target}' in release_line

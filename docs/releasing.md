@@ -43,20 +43,20 @@ the changelog.
      `oci://ghcr.io/<owner>/charts/aster-platform`, and attaches
      `aster-<version>.tgz` and `aster-platform-<version>.tgz` to the release,
    - cross-compiles the `aster` CLI for Linux and macOS on amd64 and arm64,
-     attaches `aster-<tag>-<target>` for each target plus `SHA256SUMS`,
+     attaches `aster-<tag>-<target>` for each target, an exact source archive,
+     a machine-readable release manifest, and `SHA256SUMS`,
    - waits for the matching engine, remote-fixer, and Agent Sandbox Fix executor
      images and verifies their embedded source revision before publishing charts,
      the GitHub Release, or the stable major alias,
    - for a **stable** tag only, fast-forwards the `vMAJOR` alias after both
      charts are packaged, pushed, and attached successfully.
 
-   In parallel, `.github/workflows/image.yml` builds and pushes the engine,
-   analyzer, local fixer, remote fixer, and Agent Sandbox executor images with `main`,
-   `sha-<short-commit>`, and applicable semantic-version tags. The Agent Sandbox
+   In parallel, `.github/workflows/image.yml` publishes only the exact release
+   tag for the application, remote fixer, and Agent Sandbox Fix executor. Other
+   image targets remain manual-only and use commit-addressed tags. The Fix
    executor is published for `linux/amd64` at
-   `ghcr.io/<owner>/aster/agent-sandbox-fix-executor`. Tags are
-   discovery aliases only; deployed Agent Sandbox configuration requires the
-   resolved OCI digest.
+   `ghcr.io/<owner>/aster/agent-sandbox-fix-executor`; deployed Agent Sandbox
+   configuration still requires the resolved OCI digest.
    The git-only remote fixer is published at
    `ghcr.io/<owner>/aster/remote-fixer` for dashboard-side patch
    reconstruction and contains neither OpenCode nor srt.
