@@ -2,7 +2,7 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/aster-banner-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="docs/assets/aster-banner-light.svg">
-    <img src="docs/assets/aster-banner-light.svg" alt="Aster. Find the signal. Explain the failure. Act safely.">
+    <img src="docs/assets/aster-banner-light.svg" alt="Aster. Turn failing tests into clear next steps.">
   </picture>
 </p>
 
