@@ -8,6 +8,12 @@ flags that do not belong in the first-run path. For a first project, start with
 For a conversational agent workflow over the same command surface, see
 [Agent-driven setup and diagnostic authoring](agent-onboarding.md).
 
+Commands that use `go run` below pin the current prerelease exactly. An
+installed `aster` CLI from the same release can be used instead. Use an exact
+stable tag once one is published; reserve commit pins for engine development.
+For Pages scaffolds, `-engine-ref` must also pin the generated reusable workflow.
+The flag does not select Kubernetes image tags or chart versions.
+
 ## Discovery behavior
 
 When required flags are missing and stdin is an interactive terminal, the
@@ -75,7 +81,7 @@ scaffold.
 Inspect automatic inference without rendering or writing files:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 \
   onboard discover \
   -source-repo owner/name
 ```
@@ -263,7 +269,8 @@ rationale, prompt hashes, and the same create/replace/preserve plan without
 writing scaffold files or opening a pull request.
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
+  -engine-ref v0.9.0-rc.2 \
   -source-repo owner/source \
   -dry-run
 ```
@@ -316,7 +323,8 @@ value.
 Pages example:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
+  -engine-ref v0.9.0-rc.2 \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -329,7 +337,7 @@ go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard \
 Kubernetes example:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -339,6 +347,10 @@ go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard \
   -deployment-reason "Artifacts require in-cluster authenticated access." \
   -out ./my-dashboard
 ```
+
+The Kubernetes example omits `-engine-ref` because Kubernetes image and chart
+versions are selected by the deployment values and release commands, not by the
+Pages workflow ref.
 
 For a project outside Kubernetes TestGrid, replace `-testgrid` with:
 
@@ -365,6 +377,7 @@ handoff fallback, select agent mode and add the strict flag:
 
 ```bash
 aster onboard \
+  -engine-ref v0.9.0-rc.2 \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -386,6 +399,7 @@ repository instead of writing a local directory.
 ```bash
 export GITHUB_TOKEN="..."
 aster onboard \
+  -engine-ref v0.9.0-rc.2 \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<existing-dashboard-repo>" \
@@ -417,7 +431,7 @@ Run the read-only doctor after generation or while diagnosing an existing
 consumer:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 \
   onboard doctor \
   -project-dir ./my-dashboard
 ```

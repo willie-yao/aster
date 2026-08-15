@@ -12,32 +12,54 @@ investigates failures through bounded logs, test results, artifacts, history,
 and source evidence, and helps maintainers move from signal to explanation to a
 reviewed next step.
 
-**Aster** stands for **Automated Signal Triage, Explanation, and Remediation**.
-The name uses the Greek root for *star*, and the mark combines a capital A, a
-forward-facing prow, and a central star or spark. Together they represent
-finding a useful signal and moving toward a clear, reviewed next action.
+## Who Aster is for
 
-> **Active development.** Pin consumers to `@main`, a commit SHA, or an exact
-> prerelease until a stable release and moving `v1` alias are published.
+Aster is for maintainers and platform teams that already operate Prow jobs, or
+publish compatible job artifacts, and want a shared failure-analysis dashboard.
+It supports a public, read-only GitHub Pages deployment and a Kubernetes
+deployment with persistent data, authentication, chat, and guarded actions.
 
-## Start here
+## What Prow means here
 
-Run the guided onboarding wizard from the source repository you want to monitor:
+[Prow](https://docs.prow.k8s.io/docs/overview/) is Kubernetes-oriented CI and
+job infrastructure used to trigger, run, and report repository tests. Aster
+does not install Prow. It consumes Prow and TestGrid job configuration and build
+artifacts, so onboarding requires existing Prow jobs or compatible artifacts in
+a publicly readable GCS bucket.
+
+## Prerequisites
+
+Requirements depend on how you run and deploy Aster:
+
+- The released `aster` CLI does not require an Aster source checkout.
+- The `go run` path requires the Go version supported by this repository
+  (currently Go 1.25).
+- `gh` is needed only for GitHub-assisted repository, workflow, variable, or
+  Secret operations.
+- Node.js is needed only for frontend source development.
+- An AI endpoint and credential are needed only when AI analysis is enabled.
+- Kubernetes, Helm, and Flux are needed only for their respective deployment
+  paths. GitHub Pages needs none of them.
+
+## Quickstart
+
+From a checkout of the repository whose jobs you want to monitor, run the
+guided wizard at an exact released version:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
+  -engine-ref v0.9.0-rc.2
 ```
 
-The wizard detects the current GitHub repository where possible and walks you
-through Prow discovery, deployment, AI, and output choices. It validates the
-result before writing a small consumer repository.
+The wizard discovers matching Prow jobs, reviews deployment and AI choices,
+validates the complete plan, and writes a small consumer repository only after
+confirmation. The explicit engine ref pins a generated Pages workflow to the
+same exact release. It does not require an Aster source checkout.
 
 Continue with [Onboarding a project](docs/onboarding-a-new-project.md). Flagged,
 dry-run, pull-request, and non-interactive usage is in the
-[onboarding reference](docs/onboarding-reference.md).
-
-An LLM CLI can run the same engine-owned workflow with
-`$setup-aster-consumer`. See the
+[onboarding reference](docs/onboarding-reference.md). An LLM CLI can run the
+same engine-owned workflow with `$setup-aster-consumer`; see the
 [agent-driven setup guide](docs/agent-onboarding.md).
 
 ## Choose a deployment
@@ -49,62 +71,10 @@ An LLM CLI can run the same engine-owned workflow with
 | Authenticated chat, File Issue, or Mark Resolved | [Kubernetes with Helm](docs/kubernetes.md) |
 | No cluster to operate | [GitHub Actions and Pages](docs/github-pages.md) |
 
-Both deployment paths use the dashboard-owned in-process analyzer. It is the
-supported and recommended runtime. Pages publishes static JSON and assets.
-Kubernetes adds a server for authentication, chat, and guarded actions.
-
-Experimental external runtimes and Fix PR generation are not part of standard
-onboarding. Maintainers evaluating them can start from the
-[complete documentation map](docs/README.md#experimental-features-and-runtimes).
-
-## What a project owns
-
-A consumer normally contains only:
-
-```text
-project.yaml
-prompts/system.md
-.github/workflows/deploy.yml   # GitHub Pages
-# or
-deploy/values.yaml             # Kubernetes
-```
-
-- **`project.yaml`** identifies jobs, storage, branding, analysis policy, and
-  optional features. Start with guided onboarding or the
-  [configuration reference](docs/project-configuration.md).
-- **`prompts/system.md`** supplies project-specific architecture, artifact, and
-  failure knowledge. It is required when AI analysis is enabled.
-- **Deployment configuration** supplies infrastructure details such as runner
-  selection, model credentials, persistence, and authenticated server settings.
-
-Aster preserves existing compatibility identifiers where changing them would
-strand deployed consumers or persisted state. This includes `project.yaml` and
-Helm value keys, JSON and state filenames, `prow-ai-dashboard/*` Kubernetes
-labels and annotations, `PROW_AI_*` environment variables, action deduplication
-markers, browser storage keys, and existing Helm release names.
-
-The files under [`configs/example`](configs/example) are references, not a
-ready-to-deploy consumer. Replace every placeholder and validate the result with
-`aster onboard doctor`.
-
-## How data flows
-
-```text
-Prow job configuration and artifact storage
-                  |
-            fetcher or worker
-                  |
-       in-process analysis
-                  |
- dashboard.json, jobs/*.json, flakiness.json
-                  |
-       Pages or the Kubernetes server
-                  |
-             React dashboard
-```
-
-The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
-`/api/capabilities` for server-only features.
+Both deployment paths use the supported in-process analyzer. Pages publishes
+static JSON and assets. Kubernetes adds a server for authentication, chat, and
+guarded actions. Experimental external runtimes and Fix PR generation are not
+part of standard onboarding.
 
 ## Documentation
 
@@ -116,6 +86,25 @@ The Kubernetes server serves the same `/data/*.json` contract as Pages and adds
 - [Optional features](docs/optional-features.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Complete documentation map and contributor guides](docs/README.md)
+
+## Migration and compatibility
+
+Existing `prow-ai-dashboard` consumers should follow
+[Migrating from prow-ai-dashboard](docs/migrating-from-prow-ai-dashboard.md).
+The guide maps workflow, image, chart, CLI, and release coordinates and provides
+doctor, dry-run, and rollback steps.
+
+Identifiers such as `PROW_AI_*`, `prow-ai-dashboard/*`, persisted state
+filenames, GitHub deduplication markers, and compatible platform resource names
+are intentional contracts. They are retained so an Aster upgrade can reuse
+existing configuration, cache data, Helm releases, and GitHub records. They are
+not unfinished branding work.
+
+## Name and mark
+
+**Aster** stands for **Automated Signal Triage, Explanation, and Remediation**.
+The mark combines a capital A, a forward-facing prow, and a central star,
+representing a useful signal and a clear, reviewed next action.
 
 ## License
 

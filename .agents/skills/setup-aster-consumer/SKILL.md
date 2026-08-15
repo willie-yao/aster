@@ -20,6 +20,8 @@ logic in this skill.
   plan before applying it.
 - Never print, request, or place secret values in command arguments or generated
   files.
+- Do not call a model provider during setup. Record provider coordinates and
+  reachability as reviewed inputs only.
 - Do not initialize Git, create a GitHub repository, push, configure Pages,
   write Secrets, install Helm, or deploy unless the user explicitly authorizes
   that action.
@@ -29,30 +31,101 @@ logic in this skill.
 
 ## 1. Select and pin the CLI
 
-When working in an Aster checkout, run the local command from its
-repository root:
+Select one `<aster>` command and, for Pages, one matching immutable
+`<engine-ref>` plus its externally resolved full `<selected-commit>` before
+planning.
+
+The rendered Pages engine repository is fixed:
+
+```text
+<engine-repository> = willie-yao/aster
+<engine-repository-url> = https://github.com/willie-yao/aster
+```
+
+Every Pages module-origin, tag, commit, and availability check must use this
+exact official repository. Do not substitute a checkout origin or configurable
+fork coordinate because the generated workflow hardcodes
+`willie-yao/aster/.github/workflows/reusable-deploy.yml`.
+
+The default published pair is:
+
+```text
+<aster> = go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2
+<engine-ref> = v0.9.0-rc.2
+```
+
+For an explicitly requested exact release tag or full commit SHA, use that
+exact ref in the module command and as `<engine-ref>`. Do not use `main`,
+`latest`, a branch name, or a moving major alias for a standard Pages output.
+
+For every module command, preserve its exact selector as `<module-selector>`
+and resolve its origin before planning:
+
+```bash
+go mod download -json \
+  github.com/willie-yao/aster/backend@<module-selector>
+```
+
+Require `Origin.VCS` to be `git`, `Origin.URL` to be exactly
+`https://github.com/willie-yao/aster`, `Origin.Subdir` to be `backend`, and
+`Origin.Hash` to be a full commit SHA; record that hash as
+`<selected-commit>`. Do not infer identity from a pseudo-version's abbreviated
+suffix or from optional CLI build information.
+
+For a release selector `v<version>`, set `<engine-ref>` to that exact tag and
+use `git ls-remote --tags https://github.com/willie-yao/aster` to resolve both
+root `v<version>` and module `backend/v<version>` tags. Peel annotated tags,
+treat a lightweight tag's direct target as its peeled target, and require both
+tags to resolve to `<selected-commit>`. For a full commit selector, require
+`Origin.Hash`, the requested full SHA, `<selected-commit>`, and `<engine-ref>`
+to be identical. Prove the selected commit is available from the official
+repository with a provider-free `git fetch --no-tags
+https://github.com/willie-yao/aster <selected-commit>` into an isolated
+temporary Git repository, then require `FETCH_HEAD^{commit}` to equal
+`<selected-commit>`. Stop before Pages planning if module origin, paired tags,
+official commit availability, or any identity comparison cannot be proved.
+These are Go and Git checks, not provider API calls.
+
+When working in an Aster checkout, the local command is available for
+development and read-only discovery:
 
 ```bash
 go -C backend run ./cmd/aster onboard ...
 ```
 
-Otherwise use the published command:
+Record the full `git rev-parse HEAD` as `<selected-commit>`, worktree state, and
+checkout origin for context. A Pages `<engine-ref>` may use that full commit SHA
+only when the checkout is unmodified and the official-repository fetch above
+proves that exact commit is available from `willie-yao/aster`. If the checkout
+is dirty, the commit is fork-only or local-only, or official availability
+cannot be established, local discovery and Kubernetes work may continue but
+stop before a Pages plan and ask for an exact tag or full commit SHA published
+in the official repository. Do not claim that a fork-only or local-only
+checkout can be deployed by the reusable workflow.
+
+Outside an Aster checkout, use the default published command:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard ...
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard ...
 ```
 
-Use one form consistently for discovery, planning, application, and doctor.
-When the request asks for the current or latest engine, fetch `origin`, compare
-`HEAD` with `origin/main`, and record both SHAs. If the checkout is stale, dirty,
-or its primary branch must remain untouched, create a detached engine worktree
-at current `origin/main` under the task workspace and use it for every command.
-Do not silently use a stale local engine merely because it is the current
-working directory. Preserve an explicitly requested ref or commit.
+Use one form consistently as `<aster>` for discovery, planning, application,
+and doctor.
+When the request asks for the current or latest engine, fetch the canonical
+Aster URL, compare `HEAD` with its current `main`, and record both SHAs. If the
+checkout is stale, dirty, fork-only, or its primary branch must remain
+untouched, create a detached engine worktree at the reviewed official `main`
+commit under the task workspace and use it for every command. Do not silently
+use a stale or fork-only local engine merely because it is the current working
+directory. For Pages, use that full reviewed official commit SHA as both the
+module source and `<engine-ref>`, never the mutable name `main`.
+Preserve an explicitly requested exact ref or commit.
 
-The reviewed plan records the engine path, resolved module version, Git commit,
-and modified state. Do not describe `@latest` as reproducible unless the plan
-records the resolved version and revision without an unresolved warning.
+The reviewed plan records the engine path, exact module selector and resolved
+version when applicable, `<selected-commit>`, and modified state. Before
+applying a Pages plan, repeat the external identity proof, verify that
+`<engine-ref>` resolves to `<selected-commit>`, and verify that the rendered
+Pages workflow ends in `@<engine-ref>`. Stop on any mismatch.
 
 ## 2. Resolve source, consumer, and deployment inputs
 
@@ -94,7 +167,7 @@ deployment, discovery, or update behavior remains unresolved.
 ## 3. Run read-only discovery
 
 ```bash
-<fetcher> onboard discover \
+<aster> onboard discover \
   -source-repo <owner/source> \
   -json
 ```
@@ -155,6 +228,20 @@ Always include:
 -prompt-mode handoff
 ```
 
+For Pages, also include:
+
+```text
+-engine-ref <engine-ref>
+```
+
+This pins the reusable workflow generated by the reviewed plan. The saved plan
+carries that exact ref through apply. Do not pass scaffold flags alongside
+`-apply-plan`.
+
+For Kubernetes-only setup, omit `-engine-ref`. It does not select application
+image tags or chart versions; those belong to the Kubernetes deployment values
+and release procedure.
+
 Add only when selected:
 
 ```text
@@ -206,7 +293,9 @@ with:
 
 Present:
 
-- Engine path, version, revision, and modified state.
+- Engine path, version, externally resolved selected commit, any reported
+  revision, and modified state.
+- For Pages, the immutable engine ref and matching rendered workflow ref.
 - Source repository and resolved revision.
 - Discovery selector, digest, catalog revision, and exact job identities.
 - Pages or Kubernetes mode, artifact access, and every selection reason.
@@ -224,7 +313,7 @@ saved plan remains bound to the reviewed canonical destination.
 After the user confirms the reviewed plan, apply only the saved artifact:
 
 ```bash
-<fetcher> onboard \
+<aster> onboard \
   -apply-plan <temporary-plan-file> \
   -plan-digest <reviewed-sha256-digest> \
   -result-out <workspace>/manifest/apply-result.json \
@@ -258,6 +347,14 @@ as the contract. Confirm the handoff records engine, source, first-class
 `artifact_location` provider and bucket or base, deployment rationale, artifact
 access, original and candidate prompt hashes, generated file hashes, doctor
 results, smoke results, and unresolved warnings.
+For Pages, verify the generated workflow still ends in `@<engine-ref>` and
+repeat the external proof that the exact module selector and `<engine-ref>`
+resolve to `<selected-commit>`. If the handoff or CLI build information contains
+a non-empty engine revision, require it to equal `<selected-commit>`. A
+versioned `go run` may omit that revision; do not fail solely because it is
+absent when the exact module selector, module `Origin.Hash`, paired release tags
+when applicable, and rendered workflow ref all pass their identity checks.
+Never accept a mutable ref or skip the external identity proof.
 
 ## 9. Hand off diagnostic authoring
 
@@ -275,7 +372,7 @@ separately approved.
 A standalone read-only doctor remains available:
 
 ```bash
-<fetcher> onboard doctor -project-dir <destination>
+<aster> onboard doctor -project-dir <destination>
 ```
 
 ## 10. Optional repository operations

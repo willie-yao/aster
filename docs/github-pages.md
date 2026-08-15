@@ -45,7 +45,7 @@ concurrency:
 
 jobs:
   deploy:
-    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.9.0-rc.2
     with:
       ai-api: ${{ vars.AI_API }}
       ai-model: ${{ vars.AI_MODEL }}
@@ -100,18 +100,16 @@ GitHub repository variables or Secrets.
 ## Engine version
 
 The workflow ref controls both the reusable workflow and the engine checkout.
-Use only refs that currently exist:
+Pin a currently published version exactly:
 
 ```yaml
-# Current development version.
-uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
-
-# Existing prerelease or release, pinned exactly.
-uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v1.0.0-beta.5
+# Current prerelease, pinned exactly.
+uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.9.0-rc.2
 ```
 
-The moving `@v1` alias is created only when the first stable `v1.0.0` release is
-published. Do not use `@v1` before that alias exists.
+After a stable release is published, pin its exact `vMAJOR.MINOR.PATCH` tag.
+Commit SHAs are appropriate for engine development. Do not use `@main`,
+`@latest`, or a moving major alias as a production version.
 
 The reusable workflow fails closed when GitHub does not provide its resolved
 repository, ref, or commit SHA. After checkout it verifies that the engine HEAD
@@ -211,7 +209,7 @@ the relay uses authentication:
 ```yaml
 jobs:
   deploy:
-    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.9.0-rc.2
     secrets:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
       EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}

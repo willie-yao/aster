@@ -40,10 +40,12 @@ add agent instructions for completing `prompts/system.md`.
 
 ## Interactive wizard
 
-From the source repository checkout:
+From a checkout of the source repository you want to monitor. No Aster source
+checkout is required:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
+  -engine-ref v0.9.0-rc.2
 ```
 
 The wizard detects the current GitHub `origin` where possible. It then walks you
@@ -54,6 +56,9 @@ through:
 3. Project identity and dashboard destination.
 4. AI provider and prompt choices.
 5. The output directory or pull request target.
+
+`-engine-ref` pins a generated Pages workflow to the same exact release. It
+does not select Kubernetes image tags or chart versions.
 
 For a private repository, export `GITHUB_TOKEN` before starting. The token is
 used for GitHub API reads and is not written to the scaffold.
@@ -172,7 +177,7 @@ storage, branding, prompt, and deployment settings for your repository.
 When the files are ready, run:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 \
   onboard doctor \
   -project-dir ./my-dashboard
 ```

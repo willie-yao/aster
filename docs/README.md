@@ -9,6 +9,7 @@ users need them.
 - [Onboarding quickstart](onboarding-a-new-project.md)
 - [Onboarding command and behavior reference](onboarding-reference.md)
 - [Agent-driven setup and diagnostic authoring](agent-onboarding.md)
+- [Migrating from prow-ai-dashboard](migrating-from-prow-ai-dashboard.md)
 - [Troubleshooting](troubleshooting.md)
 
 ## Deploy
