@@ -306,6 +306,62 @@ func TestCacheLookupDeepClonesCandidateAndEvidenceCatalog(t *testing.T) {
 	}
 }
 
+func TestCacheReloadsLegacyCandidateKinds(t *testing.T) {
+	tests := []struct {
+		name   string
+		target CandidateTarget
+		assert func(*testing.T, CandidateTarget)
+	}{
+		{
+			name:   "symbol addition",
+			target: &SymbolAdditionCandidate{Kind: CandidateSymbolAddition, Path: "controllers/helpers.go", Symbol: "applyFix"},
+			assert: func(t *testing.T, target CandidateTarget) {
+				t.Helper()
+				if _, ok := target.(*SymbolAdditionCandidate); !ok {
+					t.Fatalf("target type=%T", target)
+				}
+			},
+		},
+		{
+			name:   "configuration field",
+			target: &ConfigurationFieldCandidate{Kind: CandidateConfigurationField, Path: "config/defaults.yaml", FieldPath: []string{"feature", "enabled"}, Value: "true"},
+			assert: func(t *testing.T, target CandidateTarget) {
+				t.Helper()
+				if _, ok := target.(*ConfigurationFieldCandidate); !ok {
+					t.Fatalf("target type=%T", target)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), CacheRelativePath)
+			cache, err := NewCache(path, CacheOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalog := testEvidenceCatalog()
+			result := Result{Version: ResultVersion, Hypotheses: []TargetHypothesis{{
+				Target: test.target, EvidenceIDs: []string{catalog.Records[0].ID}, RelationshipReason: "persisted legacy diagnostic target",
+			}}}
+			provenance := testProvenance(time.Now())
+			key := cacheKeyForDigest(provenance.InputDigest)
+			if err := cache.StoreSuccess(key, result, catalog, provenance); err != nil {
+				t.Fatal(err)
+			}
+			reloaded, err := NewCache(path, CacheOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry, ok, err := reloaded.Lookup(key)
+			if err != nil || !ok || len(entry.Result.Hypotheses) != 1 {
+				t.Fatalf("lookup ok=%v err=%v entry=%+v", ok, err, entry)
+			}
+			test.assert(t, entry.Result.Hypotheses[0].Target)
+		})
+	}
+}
+
 func (entry *CacheEntry) CandidateFieldPathForTest() []string {
 	return entry.Result.Hypotheses[0].Target.(*ConfigurationFieldCandidate).FieldPath
 }

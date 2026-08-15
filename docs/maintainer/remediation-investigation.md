@@ -94,8 +94,16 @@ the later patch-generation stage after deterministic target verification.
 
 Target extraction version 1 contains exactly `version` and `hypotheses`. Each
 hypothesis contains `target`, `evidence_ids`, and `relationship_reason`. At most
-three hypotheses are accepted. Supported target variants remain required calls,
-Prow environment entries, and diagnostic-only symbol or configuration targets.
+three hypotheses are accepted. The model-visible target variants are limited to
+required calls and Prow environment entries, the two kinds with deterministic
+present-or-missing verification.
+
+Published symbol-addition and general-configuration candidate and target
+constants, concrete Go types, JSON decoding, validation, and cache payloads
+remain for compatibility with existing private diagnostic entries. They are not
+offered to the model. If encountered in a persisted or legacy response, they
+decode normally and the deterministic verifier rejects them as
+`insufficient_evidence`.
 
 Non-actionable assessment version 1 contains exactly `version`,
 `cause_assessment`, `reason`, `evidence_ids`, and `non_actionable_reason`. The
@@ -162,11 +170,12 @@ independently:
 
 The currently actionable deterministic target kinds remain limited to a
 `modify_symbol` target with an exact `required_call` and exact Prow job
-environment changes. Package-symbol additions and general configuration fields
-remain `insufficient_evidence` until they have deterministic behavioral-role and
-field-state predicates. Textual mention plus source absence is not sufficient
-proof for a new symbol. Model-authored relationship prose cannot make an unsafe
-typed target safe or block an otherwise verified safe target.
+environment changes. Legacy package-symbol additions and general configuration
+fields remain `insufficient_evidence` until they have deterministic
+behavioral-role and field-state predicates. Textual mention plus source absence
+is not sufficient proof for a new symbol. Model-authored relationship prose
+cannot make an unsafe typed target safe or block an otherwise verified safe
+target.
 
 The engine derives the terminal classification:
 
@@ -254,15 +263,15 @@ It freezes 12 categories:
 9. unsafe conversion-webhook proposal;
 10. wrong module-cache or dependency repository;
 11. duplicated or unknown target; and
-12. fabricated symbol or configuration field.
+12. legacy fabricated symbol or configuration field.
 
 The external-dependency and wrong-repository cases expect
 `insufficient_evidence` until a typed ownership identity can be independently
 verified.
 
 Hermetic tests validate the manifest, hashes, exact category coverage, frozen
-Prow job identity, two distinct positive target kinds, discriminated candidate
-contracts, evidence ID
+Prow job identity, two distinct positive target kinds, current model-visible and
+legacy-compatible discriminated candidate contracts, evidence ID
 reconstruction, cache preservation, read floors, deterministic source-state
 checks, and scoring controls.
 

@@ -328,7 +328,7 @@ func (result *Result) ResultEvidenceForTestReplaceSource(t *testing.T, input Fro
 	t.Fatal("source record not found")
 }
 
-func TestVerifierRelationshipTextIsNonAuthoritativeAndUnsupportedTargetKindsFailClosed(t *testing.T) {
+func TestVerifierRelationshipTextIsNonAuthoritativeAndLegacyConfigurationTargetFailsClosed(t *testing.T) {
 	missing := "package controllers\nfunc reconcile() error { return nil }\nfunc applyFix() {}\n"
 	verifier, input, entry, browser := verificationFixture(t, missing, missing)
 	entry.Result.Hypotheses[0].RelationshipReason = "Delete conversion webhook configurations to disable conversion."
@@ -350,7 +350,7 @@ func TestVerifierRelationshipTextIsNonAuthoritativeAndUnsupportedTargetKindsFail
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verified.Classification != ClassificationInsufficientEvidence {
+	if verified.Classification != ClassificationInsufficientEvidence || verified.Proposal != nil {
 		t.Fatalf("unsupported configuration field verified=%+v", verified)
 	}
 
@@ -507,7 +507,7 @@ func modelsRemediationTargetForProwTest(name string) models.RemediationTarget {
 	}
 }
 
-func TestVerifierRejectsFabricatedSymbolAdditionDespiteRecurringText(t *testing.T) {
+func TestVerifierRejectsLegacyFabricatedSymbolAdditionDespiteRecurringText(t *testing.T) {
 	missing := "package controllers\nfunc reconcile() error { return nil }\n"
 	verifier, input, _, _ := verificationFixture(t, missing, missing)
 	for index := range input.Analyses {

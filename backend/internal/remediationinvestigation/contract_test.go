@@ -124,6 +124,47 @@ func TestDecodeTwoStageContracts(t *testing.T) {
 	}
 }
 
+func TestDecodeTargetExtractionPreservesLegacyCandidateKinds(t *testing.T) {
+	evidenceID := "analysis:" + strings.Repeat("a", 64)
+	tests := []struct {
+		name string
+		raw  string
+		want any
+	}{
+		{
+			name: "symbol addition",
+			raw:  `{"version":1,"hypotheses":[{"target":{"kind":"symbol_addition","path":"controllers/helpers.go","symbol":"applyFix"},"evidence_ids":["` + evidenceID + `"],"relationship_reason":"legacy diagnostic target"}]}`,
+			want: &SymbolAdditionCandidate{},
+		},
+		{
+			name: "configuration field",
+			raw:  `{"version":1,"hypotheses":[{"target":{"kind":"configuration_field","path":"config/defaults.yaml","field_path":["feature","enabled"],"value":"true"},"evidence_ids":["` + evidenceID + `"],"relationship_reason":"legacy diagnostic target"}]}`,
+			want: &ConfigurationFieldCandidate{},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			decoded, err := DecodeTargetExtraction(json.RawMessage(test.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(decoded.Hypotheses) != 1 || decoded.Hypotheses[0].Target == nil {
+				t.Fatalf("decoded=%+v", decoded)
+			}
+			switch test.want.(type) {
+			case *SymbolAdditionCandidate:
+				if _, ok := decoded.Hypotheses[0].Target.(*SymbolAdditionCandidate); !ok {
+					t.Fatalf("target type=%T", decoded.Hypotheses[0].Target)
+				}
+			case *ConfigurationFieldCandidate:
+				if _, ok := decoded.Hypotheses[0].Target.(*ConfigurationFieldCandidate); !ok {
+					t.Fatalf("target type=%T", decoded.Hypotheses[0].Target)
+				}
+			}
+		})
+	}
+}
+
 func TestTargetHypothesisVariantsDoNotRequireIrrelevantFields(t *testing.T) {
 	evidenceIDs := []string{"source:" + strings.Repeat("a", 64), "analysis:" + strings.Repeat("b", 64)}
 	candidates := []CandidateTarget{
@@ -198,7 +239,7 @@ func TestTwoStageFormatsExcludeEngineOwnedAndCrossStageFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	extractionText := string(extraction)
-	for _, forbidden := range []string{`"classification"`, `"repository"`, `"revision"`, `"current_source"`, `"non_actionable_reason"`, `"cause_assessment"`, `"allowed_changed_paths"`, `"commands"`} {
+	for _, forbidden := range []string{`"classification"`, `"repository"`, `"revision"`, `"current_source"`, `"non_actionable_reason"`, `"cause_assessment"`, `"allowed_changed_paths"`, `"commands"`, string(CandidateSymbolAddition), string(CandidateConfigurationField)} {
 		if strings.Contains(extractionText, forbidden) {
 			t.Fatalf("target extraction schema contains forbidden field %s", forbidden)
 		}
@@ -225,6 +266,43 @@ func TestTwoStageFormatsExcludeEngineOwnedAndCrossStageFields(t *testing.T) {
 	}
 }
 
+func TestTargetCandidateSchemaOffersOnlyDeterministicallyVerifiableKinds(t *testing.T) {
+	variants, ok := targetCandidateSchema()["anyOf"].([]any)
+	if !ok || len(variants) != 2 {
+		t.Fatalf("candidate variants=%T %+v", targetCandidateSchema()["anyOf"], targetCandidateSchema()["anyOf"])
+	}
+	seen := map[string]bool{}
+	for _, rawVariant := range variants {
+		variant, ok := rawVariant.(map[string]any)
+		if !ok {
+			t.Fatalf("candidate variant type=%T", rawVariant)
+		}
+		properties, ok := variant["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("candidate properties type=%T", variant["properties"])
+		}
+		kindSchema, ok := properties["kind"].(map[string]any)
+		if !ok {
+			t.Fatalf("candidate kind schema type=%T", properties["kind"])
+		}
+		values, ok := kindSchema["enum"].([]string)
+		if !ok || len(values) != 1 {
+			t.Fatalf("candidate kind enum=%T %+v", kindSchema["enum"], kindSchema["enum"])
+		}
+		seen[values[0]] = true
+	}
+	for _, kind := range []CandidateKind{CandidateRequiredCall, CandidateProwEnvironmentEntry} {
+		if !seen[string(kind)] {
+			t.Fatalf("candidate schema is missing %q", kind)
+		}
+	}
+	for _, kind := range []CandidateKind{CandidateSymbolAddition, CandidateConfigurationField} {
+		if seen[string(kind)] {
+			t.Fatalf("candidate schema offers unsupported kind %q", kind)
+		}
+	}
+}
+
 func TestEvidencePromptRequiresContentBearingSourceRead(t *testing.T) {
 	prompt := evidenceSystemPrompt("Project context.")
 	for _, anchor := range []string{"MUST call read_repo_file", "non-empty pinned source content", "then call grep_repo", "content-bearing repository grep is discarded", "Relevant files are hints, not proven targets"} {
@@ -244,6 +322,16 @@ func TestTargetExtractionPromptTreatsHypothesisAsVerificationSubject(t *testing.
 	} {
 		if !strings.Contains(strings.ToLower(prompt), strings.ToLower(anchor)) {
 			t.Fatalf("target extraction prompt is missing %q", anchor)
+		}
+	}
+	for _, kind := range []CandidateKind{CandidateRequiredCall, CandidateProwEnvironmentEntry} {
+		if !strings.Contains(prompt, string(kind)) {
+			t.Fatalf("target extraction prompt is missing supported kind %q", kind)
+		}
+	}
+	for _, kind := range []CandidateKind{CandidateSymbolAddition, CandidateConfigurationField} {
+		if strings.Contains(prompt, string(kind)) {
+			t.Fatalf("target extraction prompt offers unsupported kind %q", kind)
 		}
 	}
 }
