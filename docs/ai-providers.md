@@ -103,7 +103,7 @@ ai:
 # In the consumer's .github/workflows/deploy.yml
 jobs:
   deploy:
-    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.9.0-rc.2
     with:
       project_dir: .
       ai-model: ${{ vars.AI_MODEL }}
