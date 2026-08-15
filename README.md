@@ -47,12 +47,14 @@ From a checkout of the repository whose jobs you want to monitor, run the
 guided wizard at an exact released version:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
+  -engine-ref v0.9.0-rc.2
 ```
 
 The wizard discovers matching Prow jobs, reviews deployment and AI choices,
 validates the complete plan, and writes a small consumer repository only after
-confirmation. It does not require an Aster source checkout.
+confirmation. The explicit engine ref pins a generated Pages workflow to the
+same exact release. It does not require an Aster source checkout.
 
 Continue with [Onboarding a project](docs/onboarding-a-new-project.md). Flagged,
 dry-run, pull-request, and non-interactive usage is in the

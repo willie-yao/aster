@@ -11,6 +11,8 @@ For a conversational agent workflow over the same command surface, see
 Commands that use `go run` below pin the current prerelease exactly. An
 installed `aster` CLI from the same release can be used instead. Use an exact
 stable tag once one is published; reserve commit pins for engine development.
+For Pages scaffolds, `-engine-ref` must also pin the generated reusable workflow.
+The flag does not select Kubernetes image tags or chart versions.
 
 ## Discovery behavior
 
@@ -268,6 +270,7 @@ writing scaffold files or opening a pull request.
 
 ```bash
 go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
+  -engine-ref v0.9.0-rc.2 \
   -source-repo owner/source \
   -dry-run
 ```
@@ -321,6 +324,7 @@ Pages example:
 
 ```bash
 go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
+  -engine-ref v0.9.0-rc.2 \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -343,6 +347,10 @@ go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
   -deployment-reason "Artifacts require in-cluster authenticated access." \
   -out ./my-dashboard
 ```
+
+The Kubernetes example omits `-engine-ref` because Kubernetes image and chart
+versions are selected by the deployment values and release commands, not by the
+Pages workflow ref.
 
 For a project outside Kubernetes TestGrid, replace `-testgrid` with:
 
@@ -369,6 +377,7 @@ handoff fallback, select agent mode and add the strict flag:
 
 ```bash
 aster onboard \
+  -engine-ref v0.9.0-rc.2 \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -390,6 +399,7 @@ repository instead of writing a local directory.
 ```bash
 export GITHUB_TOKEN="..."
 aster onboard \
+  -engine-ref v0.9.0-rc.2 \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<existing-dashboard-repo>" \
