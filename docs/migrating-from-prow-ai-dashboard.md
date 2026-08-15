@@ -24,14 +24,34 @@ claims. Back up the persistent data directory or volume with its metadata.
 | Reusable Pages workflow | `willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@<exact-version>` | `willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.9.0-rc.2` |
 | Go CLI | `github.com/willie-yao/prow-ai-dashboard/backend/cmd/fetcher@<exact-version>` | `github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2` |
 | CLI release asset | `prow-ai-dashboard-fetcher-<tag>-<target>` | `aster-<tag>-<target>` |
-| Application image | `ghcr.io/willie-yao/prow-ai-dashboard:<tag>` | `ghcr.io/willie-yao/aster:<tag>` |
-| Component images | `ghcr.io/willie-yao/prow-ai-dashboard/<component>:<tag>` | `ghcr.io/willie-yao/aster/<component>:<tag>` |
+| Application image | `ghcr.io/willie-yao/prow-ai-dashboard:<exact-release>` | `ghcr.io/willie-yao/aster:<exact-release>` |
+| Remote-fixer image | `ghcr.io/willie-yao/prow-ai-dashboard/remote-fixer:<exact-release>` | `ghcr.io/willie-yao/aster/remote-fixer:<exact-release>` |
+| Agent Sandbox Fix executor image | `ghcr.io/willie-yao/prow-ai-dashboard/agent-sandbox-fix-executor:<exact-release>` | `ghcr.io/willie-yao/aster/agent-sandbox-fix-executor:<exact-release>` |
 | Application chart | `oci://ghcr.io/willie-yao/charts/prow-ai-dashboard` | `oci://ghcr.io/willie-yao/charts/aster` |
 | Platform chart | `oci://ghcr.io/willie-yao/charts/prow-ai-dashboard-platform` | `oci://ghcr.io/willie-yao/charts/aster-platform` |
 
-Update only component images enabled in your reviewed values. Keep immutable
-digest pins where the feature requires them. The exact CLI download and chart
-verification procedure is in the [Kubernetes quickstart](kubernetes.md).
+Those are the only standard release-tagged images. The remote fixer and Agent
+Sandbox Fix executor are published with each release, but their associated
+runtime remains optional and disabled by default. Deployed Agent Sandbox
+executors still require the reviewed immutable digest.
+
+The analyzer and fixer images are manual-only
+`ghcr.io/willie-yao/aster/{analyzer,fixer}:sha-*` artifacts. The experimental
+Agent Sandbox analysis executor currently uses
+`ghcr.io/willie-yao/aster/agent-sandbox-fix-executor:sha-*`, and its stager uses
+`ghcr.io/willie-yao/aster/agent-sandbox-analysis-stager:sha-*`; both are
+manual-only and their chart interfaces require immutable digests. The
+experimental critic executor is not published by the standard image workflow.
+These analysis, stager, critic, Orka container-analysis, and Orka fix paths are
+not standard onboarding surfaces and remain disabled by default.
+
+When one of those components was intentionally enabled before migration,
+retain or choose only a verified commit-addressed `sha-*` tag or immutable
+digest from its explicit manual publication or evaluation flow. Do not assume
+the chart AppVersion release tag exists for it. Leaving an enabled component on
+a nonexistent release-candidate tag causes an image pull failure. The exact CLI
+download and chart verification procedure is in the
+[Kubernetes quickstart](kubernetes.md).
 
 ## Preserve compatibility contracts
 
