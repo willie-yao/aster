@@ -5,7 +5,7 @@
 
 # Path to a consumer project directory containing project.yaml + prompts/system.md.
 # Override on the command line, e.g.:
-#   make fetch-data PROJECT_DIR=../capz-aster
+#   make fetch-data PROJECT_DIR=../your-consumer-repo
 PROJECT_DIR ?= configs/example
 
 # Container image coordinates for `make image`.
@@ -220,7 +220,7 @@ help:
 	@echo "  fetch-data-ai-quick  Fetch minimal data + AI analysis"
 	@echo ""
 	@echo "    Override PROJECT_DIR to point at a consumer repo, e.g.:"
-	@echo "      make fetch-data PROJECT_DIR=../capz-aster"
+	@echo "      make fetch-data PROJECT_DIR=../your-consumer-repo"
 	@echo "    Default: configs/example (renders an empty dashboard, smoke-test only)"
 	@echo ""
 	@echo "  fe-install         Install frontend npm dependencies"

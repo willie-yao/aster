@@ -18,7 +18,7 @@ platform, architecture, and installer schema in `INSTALL_PROVENANCE`.
 Install it into a dedicated tool directory rather than globally:
 
 ```bash
-tool_root="$HOME/.local/share/prow-ai-dashboard/srt-0.0.70"
+tool_root="$HOME/.local/share/aster/srt-0.0.70"
 ./hack/install-srt.sh "$tool_root"
 export SRT_BIN="$tool_root/node_modules/.bin/srt"
 ```
