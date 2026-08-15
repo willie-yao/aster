@@ -40,10 +40,11 @@ add agent instructions for completing `prompts/system.md`.
 
 ## Interactive wizard
 
-From the source repository checkout:
+From a checkout of the source repository you want to monitor. No Aster source
+checkout is required:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard
 ```
 
 The wizard detects the current GitHub `origin` where possible. It then walks you
@@ -172,7 +173,7 @@ storage, branding, prompt, and deployment settings for your repository.
 When the files are ready, run:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 \
   onboard doctor \
   -project-dir ./my-dashboard
 ```

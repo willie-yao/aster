@@ -8,6 +8,10 @@ flags that do not belong in the first-run path. For a first project, start with
 For a conversational agent workflow over the same command surface, see
 [Agent-driven setup and diagnostic authoring](agent-onboarding.md).
 
+Commands that use `go run` below pin the current prerelease exactly. An
+installed `aster` CLI from the same release can be used instead. Use an exact
+stable tag once one is published; reserve commit pins for engine development.
+
 ## Discovery behavior
 
 When required flags are missing and stdin is an interactive terminal, the
@@ -75,7 +79,7 @@ scaffold.
 Inspect automatic inference without rendering or writing files:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 \
   onboard discover \
   -source-repo owner/name
 ```
@@ -263,7 +267,7 @@ rationale, prompt hashes, and the same create/replace/preserve plan without
 writing scaffold files or opening a pull request.
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
   -source-repo owner/source \
   -dry-run
 ```
@@ -316,7 +320,7 @@ value.
 Pages example:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -329,7 +333,7 @@ go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard \
 Kubernetes example:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest onboard \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -417,7 +421,7 @@ Run the read-only doctor after generation or while diagnosing an existing
 consumer:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@latest \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 \
   onboard doctor \
   -project-dir ./my-dashboard
 ```
