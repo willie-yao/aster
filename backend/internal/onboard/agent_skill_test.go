@@ -51,12 +51,19 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 		"exact release tag or full commit SHA", "configured GitHub",
 		"commit is local-only", "before a Pages plan", "local-only checkout can be deployed",
 		"Pages workflow ends in `@<engine-ref>`", "never the mutable name `main`",
+		"<selected-commit>", "<module-selector>", "go mod download -json",
+		"Origin.Hash", "backend/v<version>", "paired tags",
+		"If the handoff or CLI build information contains", "non-empty engine revision",
+		"versioned `go run` may omit that revision", "Never accept a mutable ref or skip the external identity proof",
 	} {
 		if !strings.Contains(text, anchor) {
 			t.Errorf("skill missing %q", anchor)
 		}
 	}
-	for _, forbidden := range []string{"api-experimental", "rm -rf", "--no-verify", "backend/cmd/aster@latest", "-engine-ref v0.9.0-rc.2"} {
+	for _, forbidden := range []string{
+		"api-experimental", "rm -rf", "--no-verify", "backend/cmd/aster@latest",
+		"-engine-ref v0.9.0-rc.2", "recorded engine revision is the commit resolved from that exact ref",
+	} {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("skill contains forbidden text %q", forbidden)
 		}

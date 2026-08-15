@@ -32,7 +32,8 @@ logic in this skill.
 ## 1. Select and pin the CLI
 
 Select one `<aster>` command and, for Pages, one matching immutable
-`<engine-ref>` before planning.
+`<engine-ref>` plus its externally resolved full `<selected-commit>` before
+planning.
 
 The default published pair is:
 
@@ -45,6 +46,29 @@ For an explicitly requested exact release tag or full commit SHA, use that
 exact ref in the module command and as `<engine-ref>`. Do not use `main`,
 `latest`, a branch name, or a moving major alias for a standard Pages output.
 
+For every module command, preserve its exact selector as `<module-selector>`
+and resolve its origin before planning:
+
+```bash
+go mod download -json \
+  github.com/willie-yao/aster/backend@<module-selector>
+```
+
+Require the result to identify the Aster Git repository, the `backend`
+subdirectory, and a full `Origin.Hash`; record that hash as
+`<selected-commit>`. Do not infer identity from a pseudo-version's abbreviated
+suffix or from optional CLI build information.
+
+For a release selector `v<version>`, set `<engine-ref>` to that exact tag and
+use `git ls-remote --tags` against the configured Aster Git remote to resolve
+both root `v<version>` and module `backend/v<version>` tags. Peel annotated
+tags, treat a lightweight tag's direct target as its peeled target, and require
+both tags to resolve to `<selected-commit>`. For a full commit selector, require
+`Origin.Hash`, the requested full SHA, `<selected-commit>`, and `<engine-ref>`
+to be identical. Stop before Pages planning if module origin, paired tags,
+remote availability, or any identity comparison cannot be proved. These are Go
+and Git checks, not provider API calls.
+
 When working in an Aster checkout, the local command is available for
 development and read-only discovery:
 
@@ -52,13 +76,14 @@ development and read-only discovery:
 go -C backend run ./cmd/aster onboard ...
 ```
 
-Record the full `git rev-parse HEAD`, worktree state, and configured GitHub
-remote. A Pages `<engine-ref>` may use that full commit SHA only when the
-checkout is unmodified and the commit is available on the configured GitHub
-remote. If the checkout is dirty, the commit is local-only, or remote
-availability cannot be established, local discovery may continue but stop
-before a Pages plan and ask for a publishable exact tag or full commit SHA. Do
-not claim that a local-only checkout can be deployed by the reusable workflow.
+Record the full `git rev-parse HEAD` as `<selected-commit>`, worktree state, and
+configured GitHub remote. A Pages `<engine-ref>` may use that full commit SHA
+only when the checkout is unmodified and the commit is available on the
+configured GitHub remote. If the checkout is dirty, the commit is local-only,
+or remote availability cannot be established, local discovery may continue but
+stop before a Pages plan and ask for a publishable exact tag or full commit SHA.
+Do not claim that a local-only checkout can be deployed by the reusable
+workflow.
 
 Outside an Aster checkout, use the default published command:
 
@@ -77,9 +102,10 @@ working directory. For Pages, use the full reviewed `origin/main` commit SHA as
 both the module source and `<engine-ref>`, never the mutable name `main`.
 Preserve an explicitly requested exact ref or commit.
 
-The reviewed plan records the engine path, resolved module version, Git commit,
-and modified state. Before applying a Pages plan, verify that its engine source
-identity resolves to the same commit as `<engine-ref>` and that the rendered
+The reviewed plan records the engine path, exact module selector and resolved
+version when applicable, `<selected-commit>`, and modified state. Before
+applying a Pages plan, repeat the external identity proof, verify that
+`<engine-ref>` resolves to `<selected-commit>`, and verify that the rendered
 Pages workflow ends in `@<engine-ref>`. Stop on any mismatch.
 
 ## 2. Resolve source, consumer, and deployment inputs
@@ -248,7 +274,8 @@ with:
 
 Present:
 
-- Engine path, version, revision, and modified state.
+- Engine path, version, externally resolved selected commit, any reported
+  revision, and modified state.
 - For Pages, the immutable engine ref and matching rendered workflow ref.
 - Source repository and resolved revision.
 - Discovery selector, digest, catalog revision, and exact job identities.
@@ -301,8 +328,14 @@ as the contract. Confirm the handoff records engine, source, first-class
 `artifact_location` provider and bucket or base, deployment rationale, artifact
 access, original and candidate prompt hashes, generated file hashes, doctor
 results, smoke results, and unresolved warnings.
-For Pages, verify the generated workflow still ends in `@<engine-ref>` and the
-recorded engine revision is the commit resolved from that exact ref.
+For Pages, verify the generated workflow still ends in `@<engine-ref>` and
+repeat the external proof that the exact module selector and `<engine-ref>`
+resolve to `<selected-commit>`. If the handoff or CLI build information contains
+a non-empty engine revision, require it to equal `<selected-commit>`. A
+versioned `go run` may omit that revision; do not fail solely because it is
+absent when the exact module selector, module `Origin.Hash`, paired release tags
+when applicable, and rendered workflow ref all pass their identity checks.
+Never accept a mutable ref or skip the external identity proof.
 
 ## 9. Hand off diagnostic authoring
 
