@@ -40,7 +40,6 @@ def documentation_path(path: str) -> bool:
         or path
         in {
             ".gitignore",
-            ".gitattributes",
             "AGENTS.md",
             "CODE_OF_CONDUCT",
             "CODE_OF_CONDUCT.md",
@@ -210,6 +209,31 @@ FIX_BACKEND_PREFIXES = (
     "backend/internal/runtime",
 )
 
+HELM_BACKEND_PREFIXES = (
+    "backend/cmd/aster",
+    "backend/cmd/fixexecutor",
+    "backend/cmd/analysisexecutor",
+    "backend/cmd/analysisstager",
+    "backend/cmd/criticexecutor",
+    "backend/internal/ai/skills",
+    "backend/internal/ai/tools",
+    "backend/internal/agentsandbox",
+    "backend/internal/analysisexecutor",
+    "backend/internal/analysisstager",
+    "backend/internal/artifacts",
+    "backend/internal/causalcritic",
+    "backend/internal/criticexecutor",
+    "backend/internal/fixexecutor",
+    "backend/internal/kubernetesdeploy",
+    "backend/internal/modelprovider",
+    "backend/internal/models",
+    "backend/internal/onboard",
+    "backend/internal/project",
+    "backend/internal/prowbuild",
+    "backend/internal/runtime",
+    "backend/internal/storage",
+)
+
 HELM_SUPPORT_PATHS = (
     "hack/test-cli-download-failclosed.sh",
     "hack/test-kubernetes-cleanroom.sh",
@@ -217,6 +241,7 @@ HELM_SUPPORT_PATHS = (
 )
 
 RELEASE_SHARED_PATHS = (
+    ".gitattributes",
     "Makefile",
     "hack/publish-release.sh",
     "hack/test-publish-release.sh",
@@ -299,27 +324,7 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
                 if under_any(path, CRITIC_BACKEND_PREFIXES):
                     result["critic_image"] = True
 
-            if (
-                under_any(
-                    path,
-                    (
-                        "backend/cmd/aster",
-                        "backend/cmd/fixexecutor",
-                        "backend/cmd/analysisexecutor",
-                        "backend/cmd/analysisstager",
-                        "backend/cmd/criticexecutor",
-                        "backend/internal/fixexecutor",
-                        "backend/internal/analysisexecutor",
-                        "backend/internal/analysisstager",
-                        "backend/internal/criticexecutor",
-                        "backend/internal/causalcritic",
-                        "backend/internal/agentsandbox",
-                        "backend/internal/kubernetesdeploy",
-                        "backend/internal/modelprovider",
-                        "backend/internal/onboard",
-                    ),
-                )
-            ):
+            if under_any(path, HELM_BACKEND_PREFIXES):
                 result["helm_static"] = True
 
         if under(path, "frontend"):
@@ -417,6 +422,7 @@ def self_test() -> None:
             [".agents/skills/setup-aster-consumer/references/decisions.md"],
             {"backend", "documentation"},
         ),
+        (".gitattributes release contract", [".gitattributes"], set(CLASSES)),
         (
             "frontend",
             ["frontend/src/App.tsx"],
@@ -472,6 +478,95 @@ def self_test() -> None:
             "Aster CLI clean-room contract",
             ["backend/cmd/aster/main.go"],
             {"backend", "helm_static", "remote_fixer"},
+        ),
+        (
+            "project clean-room dependency",
+            ["backend/internal/project/project.go"],
+            {
+                "backend",
+                "helm_static",
+                "remote_fixer",
+                "analysis_images",
+                "critic_image",
+            },
+        ),
+        (
+            "skills clean-room dependency",
+            ["backend/internal/ai/skills/skills.go"],
+            {
+                "backend",
+                "helm_static",
+                "remote_fixer",
+                "analysis_images",
+                "critic_image",
+            },
+        ),
+        (
+            "tools clean-room dependency",
+            ["backend/internal/ai/tools/filesystem/filesystem.go"],
+            {
+                "backend",
+                "helm_static",
+                "remote_fixer",
+                "analysis_images",
+                "critic_image",
+            },
+        ),
+        (
+            "artifacts clean-room dependency",
+            ["backend/internal/artifacts/browser.go"],
+            {
+                "backend",
+                "helm_static",
+                "remote_fixer",
+                "analysis_images",
+                "critic_image",
+            },
+        ),
+        (
+            "models clean-room dependency",
+            ["backend/internal/models/models.go"],
+            {
+                "backend",
+                "helm_static",
+                "remote_fixer",
+                "analysis_images",
+                "critic_image",
+            },
+        ),
+        (
+            "prowbuild clean-room dependency",
+            ["backend/internal/prowbuild/builds.go"],
+            {
+                "backend",
+                "helm_static",
+                "remote_fixer",
+                "analysis_images",
+                "critic_image",
+            },
+        ),
+        (
+            "runtime clean-room dependency",
+            ["backend/internal/runtime/runtime.go"],
+            {
+                "backend",
+                "helm_static",
+                "remote_fixer",
+                "fix_executor",
+                "analysis_images",
+                "critic_image",
+            },
+        ),
+        (
+            "storage clean-room dependency",
+            ["backend/internal/storage/storage.go"],
+            {
+                "backend",
+                "helm_static",
+                "remote_fixer",
+                "analysis_images",
+                "critic_image",
+            },
         ),
         ("release", [".github/workflows/release.yml"], set(CLASSES)),
     )
