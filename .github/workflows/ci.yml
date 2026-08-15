@@ -4,13 +4,121 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      full_ci:
+        description: Run the complete CI suite
+        required: false
+        default: false
+        type: boolean
   workflow_call:
+    inputs:
+      full_ci:
+        description: Run the complete CI suite
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.classify.outputs.backend }}
+      frontend: ${{ steps.classify.outputs.frontend }}
+      helm_static: ${{ steps.classify.outputs.helm_static }}
+      platform_kind: ${{ steps.classify.outputs.platform_kind }}
+      remote_fixer: ${{ steps.classify.outputs.remote_fixer }}
+      fix_executor: ${{ steps.classify.outputs.fix_executor }}
+      analysis_images: ${{ steps.classify.outputs.analysis_images }}
+      critic_image: ${{ steps.classify.outputs.critic_image }}
+      documentation: ${{ steps.classify.outputs.documentation }}
+      release_shared: ${{ steps.classify.outputs.release_shared }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Test change classification
+        run: python3 hack/classify-ci-changes.py --self-test
+      - name: Classify changes
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          FULL_CI: ${{ inputs.full_ci || false }}
+        run: |
+          args=()
+          if [[ "$EVENT_NAME" == workflow_call || "$FULL_CI" == true ]]; then
+            args+=(--full)
+          else
+            merge_base=false
+            case "$EVENT_NAME" in
+              pull_request)
+                base="$BASE_SHA"
+                merge_base=true
+                ;;
+              push)
+                base="$BEFORE_SHA"
+                ;;
+              workflow_dispatch)
+                base="${HEAD_SHA}^"
+                ;;
+              *)
+                args+=(--full)
+                base=
+                ;;
+            esac
+
+            if [[ ${#args[@]} -eq 0 ]]; then
+              if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+                args+=(--full)
+              else
+                args+=(--diff-base "$base" --diff-head "$HEAD_SHA")
+                if [[ "$merge_base" == true ]]; then
+                  args+=(--merge-base)
+                fi
+              fi
+            fi
+          fi
+
+          python3 hack/classify-ci-changes.py "${args[@]}" | tee "$GITHUB_OUTPUT"
+      - name: Summarize classification
+        env:
+          BACKEND: ${{ steps.classify.outputs.backend }}
+          FRONTEND: ${{ steps.classify.outputs.frontend }}
+          HELM_STATIC: ${{ steps.classify.outputs.helm_static }}
+          PLATFORM_KIND: ${{ steps.classify.outputs.platform_kind }}
+          REMOTE_FIXER: ${{ steps.classify.outputs.remote_fixer }}
+          FIX_EXECUTOR: ${{ steps.classify.outputs.fix_executor }}
+          ANALYSIS_IMAGES: ${{ steps.classify.outputs.analysis_images }}
+          CRITIC_IMAGE: ${{ steps.classify.outputs.critic_image }}
+          DOCUMENTATION: ${{ steps.classify.outputs.documentation }}
+          RELEASE_SHARED: ${{ steps.classify.outputs.release_shared }}
+        run: |
+          {
+            echo '### CI change classification'
+            echo
+            echo '| Class | Run |'
+            echo '| --- | --- |'
+            echo "| Backend | $BACKEND |"
+            echo "| Frontend | $FRONTEND |"
+            echo "| Helm/platform static | $HELM_STATIC |"
+            echo "| Platform kind lifecycle | $PLATFORM_KIND |"
+            echo "| Remote fixer image | $REMOTE_FIXER |"
+            echo "| Agent Sandbox Fix executor | $FIX_EXECUTOR |"
+            echo "| Agent Sandbox analysis images | $ANALYSIS_IMAGES |"
+            echo "| Agent Sandbox critic image | $CRITIC_IMAGE |"
+            echo "| Documentation/repository metadata | $DOCUMENTATION |"
+            echo "| Release/shared | $RELEASE_SHARED |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,6 +128,8 @@ jobs:
           cache-dependency-path: backend/go.sum
       - name: Check repo map
         run: make check-repo-map
+      - name: Test release CLI assets
+        run: bash hack/test-release-cli-assets.sh
       - name: Build
         working-directory: backend
         run: go build ./...
@@ -31,6 +141,8 @@ jobs:
         run: go vet ./...
 
   frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,18 +168,30 @@ jobs:
         run: npm run build
 
   helm:
+    needs: changes
+    if: needs.changes.outputs.helm_static == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
       - name: Lint and render
         run: make helm-check
+
+  platform-kind:
+    needs: changes
+    if: needs.changes.outputs.platform_kind == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
       - name: Test platform chart lifecycle in kind
         run: |
           GOBIN="$RUNNER_TEMP/bin" go install sigs.k8s.io/kind@v0.31.0
           PATH="$RUNNER_TEMP/bin:$PATH" bash deploy/helm/aster-platform/test-kind.sh
 
   remote-fixer-image:
+    needs: changes
+    if: needs.changes.outputs.remote_fixer == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,6 +201,8 @@ jobs:
         run: hack/test-remote-fixer-image.sh aster/remote-fixer:ci
 
   agent-sandbox-fix-executor-image:
+    needs: changes
+    if: needs.changes.outputs.fix_executor == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,6 +227,8 @@ jobs:
             ci "$SOURCE_REVISION" "$image_tag"
 
   agent-sandbox-analysis-images:
+    needs: changes
+    if: needs.changes.outputs.analysis_images == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -112,6 +240,8 @@ jobs:
         run: hack/test-agent-sandbox-analysis-images.sh aster/agent-sandbox-analysis-executor:ci aster/agent-sandbox-analysis-stager:ci
 
   agent-sandbox-critic-executor-image:
+    needs: changes
+    if: needs.changes.outputs.critic_image == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
