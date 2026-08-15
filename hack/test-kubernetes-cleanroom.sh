@@ -276,7 +276,29 @@ def markdown_without_fenced_code(text):
 
 def markdown_targets(text):
     text = markdown_without_fenced_code(text)
-    inline = [match.group(1) for match in re.finditer(r"\[[^]]+\]\(([^)]+)\)", text)]
+    inline_pattern = re.compile(
+        r"""!?\[[^]\n]+\]\(
+            [ \t]*
+            (?:
+                <([^>\n]+)>
+                |
+                ((?:\\[^\n]|[^()\s])+)
+            )
+            (?:
+                [ \t]+
+                (?:
+                    "(?:\\.|[^"\\])*"
+                    |
+                    '(?:\\.|[^'\\])*'
+                    |
+                    \((?:\\.|[^)\\])*\)
+                )
+            )?
+            [ \t]*
+        \)""",
+        re.VERBOSE,
+    )
+    inline = [match.group(1) or match.group(2) for match in inline_pattern.finditer(text)]
     definitions = []
     definition_pattern = re.compile(
         r"^[ \t]{0,3}\[[^]\n]+\]:[ \t]*(?:<([^>\n]+)>|(\S+))",
@@ -385,6 +407,16 @@ except MarkdownContractError as err:
 else:
     raise SystemExit("broken Markdown reference definition was accepted")
 
+broken_titled = link_fixtures / "broken-titled.md"
+broken_titled.write_text('[missing](missing.md "Missing documentation")\n')
+try:
+    validate_markdown(broken_titled, link_fixtures.resolve())
+except MarkdownContractError as err:
+    if "missing.md" not in str(err) or "Missing documentation" in str(err):
+        raise SystemExit(f"titled link fixture failed for the wrong reason: {err}")
+else:
+    raise SystemExit("broken titled Markdown destination was accepted")
+
 valid_target = link_fixtures / "target.md"
 valid_target.write_text("# Target\n")
 valid_reference = link_fixtures / "valid-reference.md"
@@ -392,6 +424,8 @@ valid_reference.write_text("""# Fixture
 
 [local][target]
 ![local image](target.md#target)
+[titled link](target.md#target "Documentation index")
+![titled image](<target.md#target> "Target image")
 
 [target]: target.md#target
 [section]: #fixture
