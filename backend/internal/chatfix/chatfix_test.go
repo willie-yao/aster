@@ -70,7 +70,7 @@ func (f *fakeFixPreviewer) PreviewAnalysisFix(
 }
 
 func (f *fakeFixPreviewer) CreateAnalysisFixRequest(
-	input actions.AnalysisFixInput, owner, userToken, instruction string,
+	input actions.AnalysisFixInput, owner, userToken, instruction string, _ ...string,
 ) (actions.ActionRequestView, error) {
 	f.analysisInput, f.owner, f.userToken, f.instruction, f.requestCalled = input, owner, userToken, instruction, true
 	return actions.ActionRequestView{ID: "async-request", Kind: "analysis-fix", Owner: owner, Status: actions.RequestPending}, nil
@@ -293,5 +293,14 @@ func TestValidateAnalysisPreviewRejectsChangedChatIdentity(t *testing.T) {
 	chat.candidate.ResponseHash = "old-response"
 	if err := service.ValidateAnalysisPreview(t.Context(), "Alice", binding); err != nil {
 		t.Fatalf("unchanged chat validation error = %v", err)
+	}
+}
+
+func TestExactPreviewRequestHashChangesWithRegenerationFeedback(t *testing.T) {
+	candidate := analysischat.FixCandidate{SessionID: "session", RequestID: "request", ResponseHash: "response"}
+	first := exactPreviewRequestHash(candidate, "keep compatibility")
+	second := exactPreviewRequestHash(candidate, "retry conflicts")
+	if first == second || first != exactPreviewRequestHash(candidate, " keep compatibility ") {
+		t.Fatalf("hashes first=%q second=%q", first, second)
 	}
 }

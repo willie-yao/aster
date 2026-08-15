@@ -101,6 +101,16 @@ func TestWriteAgentSandboxEvaluationFixtures(t *testing.T) {
 		Namespace: namespace, Image: image, ServiceAccountName: "fix-workload", RuntimeClassName: runtimeClass,
 		ModelProvider: gateway, Timeout: 5 * time.Minute, OutputLimitBytes: 256 << 10,
 	}
+	if configMap := strings.TrimSpace(os.Getenv("AGENT_SANDBOX_MODEL_PROVIDER_CA_CONFIG_MAP")); configMap != "" {
+		opts.CABundle = modelprovider.CABundleConfig{
+			ExistingConfigMap: configMap,
+			Key:               strings.TrimSpace(os.Getenv("AGENT_SANDBOX_MODEL_PROVIDER_CA_KEY")),
+			SHA256:            strings.TrimSpace(os.Getenv("AGENT_SANDBOX_MODEL_PROVIDER_CA_SHA256")),
+		}
+		if err := modelprovider.ValidateCABundleConfig(opts.CABundle); err != nil {
+			t.Fatal(err)
+		}
+	}
 	production := newAgentSandboxRuntimeForTest(nil, opts)
 	localKind := newAgentSandboxRuntimeForKindTest(nil, opts)
 	spec := agentSandboxEvaluationSpec(gateway)

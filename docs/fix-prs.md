@@ -707,10 +707,12 @@ hash. The executor rejects any exact credential found in output, summaries,
 patches, changed-file content, command output, structured results, or failure
 data before publication.
 
-Gateway mode requires `auth.type: none`. Internal service certificates must
-chain to a CA in the immutable executor image. The Fix runtime can explicitly
-acknowledge a privately resolved public gateway FQDN with
-`public_ca_private_dns: true`; direct provider endpoints use direct mode instead.
+Gateway mode requires `auth.type: none`. Private-CA provider gateways may use
+the optional public ConfigMap bundle documented in
+[Kubernetes reference](kubernetes-reference.md#agent-sandbox-fix-runtime). The
+Fix runtime can explicitly acknowledge a privately resolved public gateway FQDN
+with `public_ca_private_dns: true`; direct provider endpoints use direct mode
+instead.
 
 Responses requests use `store: false`, keep the complete conversation and tool
 history in the local OpenCode session, and omit `previous_response_id`.

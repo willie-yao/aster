@@ -115,7 +115,17 @@ type analysisSourceCompatibility struct {
 	GenerationBaseRevision   string
 	VerifiedSourceFileHashes map[string]string
 	FindingVerification      string
+	Warnings                 []string
 }
+
+const (
+	analysisWarningCritique     = "The original analysis critique did not pass."
+	analysisWarningSuggestedFix = "The original analysis has no suggested fix."
+	analysisWarningRootCause    = "The original analysis root cause is incomplete."
+	analysisWarningTransient    = "The original analysis is marked transient."
+	analysisWarningProse        = "The model-authored remediation prose is incomplete."
+	analysisWarningPolicy       = "The model-authored prose triggered a text-only remediation-policy concern."
+)
 
 // ConfigureAnalysisPreviewValidator binds exact chat state to later confirmation.
 func (s *Service) ConfigureAnalysisPreviewValidator(validator AnalysisPreviewValidator) {
@@ -167,9 +177,7 @@ func (s *Service) ResolveAnalysisActionSubject(identity AnalysisIdentity) (*Anal
 	match := matches[0]
 	analysis := match.testCase.AIAnalysis
 	if match.run.Passed || match.testCase.Status != "failed" || match.testCase.Source == models.TestCaseSourceBuild || match.testCase.JUnitFile == "" ||
-		analysis == nil || analysis.GeneratedAt != identity.AnalysisGeneratedAt || analysis.Mode != ai.AgenticMode ||
-		strings.TrimSpace(analysis.RootCause) == "" ||
-		strings.EqualFold(strings.TrimSpace(analysis.Severity), "Transient-Ignore") {
+		analysis == nil || analysis.GeneratedAt != identity.AnalysisGeneratedAt || analysis.Mode != ai.AgenticMode {
 		return nil, fmt.Errorf("JUnit analysis does not pass current action quality gates")
 	}
 	analysisRepo := s.cfg.EffectiveAnalysisSourceRepo()
@@ -276,6 +284,7 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 		}
 	}
 	hashes := make(map[string]string, len(files))
+	contents := make(map[string]string, len(files))
 	for _, file := range files {
 		failureContent, found, err := failureReader.ReadFile(ctx, file)
 		if err != nil || !found {
@@ -293,17 +302,19 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 		}
 		sum := sha256.Sum256([]byte(failureContent))
 		hashes[file] = hex.EncodeToString(sum[:])
+		contents[file] = generationContent
 	}
 	findingVerification := ""
+	var warnings []string
 	if strings.TrimSpace(finding) != "" {
-		findingVerification, err = s.verifyAnalysisFinding(ctx, generationRepo, files, finding)
+		findingVerification, warnings, err = s.verifyAnalysisFinding(generationRepo, files, finding, contents)
 		if err != nil {
 			return analysisSourceCompatibility{}, err
 		}
 	}
 	return analysisSourceCompatibility{
 		GenerationBaseRevision: generationBase, VerifiedSourceFileHashes: hashes,
-		FindingVerification: findingVerification,
+		FindingVerification: findingVerification, Warnings: warnings,
 	}, nil
 }
 
@@ -386,9 +397,12 @@ func (s *Service) PreviewAnalysisFix(
 	if input.ProposedRevision != nil {
 		findingText += "\n" + input.ProposedRevision.RootCause + "\n" + input.ProposedRevision.SuggestedFix
 	}
-	policyText := findingText + "\n" + instruction
-	if remediationpolicy.Reason(policyText, nil) != "" {
+	if remediationpolicy.RelationshipTextWarning(instruction) != "" {
 		return PreviewResult{}, withReason(ReasonUnsafeRemediation, ErrPreviewRejected, "")
+	}
+	warnings := analysisQualityWarnings(subject.Failure.AIAnalysis, input)
+	if remediationpolicy.RelationshipTextWarning(findingText) != "" {
+		warnings = append(warnings, analysisWarningPolicy)
 	}
 	destination, err := s.cfg.ResolveFixDestination("", "")
 	if err != nil {
@@ -407,6 +421,10 @@ func (s *Service) PreviewAnalysisFix(
 			!strings.EqualFold(input.GenerationBaseRevision, compatibility.GenerationBaseRevision) ||
 			!stringMapsEqual(input.VerifiedSourceFileHashes, compatibility.VerifiedSourceFileHashes)) {
 		return PreviewResult{}, ErrPreviewTargetChanged
+	}
+	warnings = append(warnings, compatibility.Warnings...)
+	if err := s.setRequestWarning(ctx, warnings...); err != nil {
+		return PreviewResult{}, err
 	}
 	if input.GenerationBaseRevision != "" && !strings.EqualFold(input.GenerationBaseRevision, input.FailureRevision) &&
 		(strings.TrimSpace(input.SourceBranch) == "" || input.SourceBranch != targetBranch) {
@@ -429,9 +447,14 @@ func (s *Service) PreviewAnalysisFix(
 		return PreviewResult{}, err
 	}
 	if !acquired {
+		if existing != nil && existing.fix != nil {
+			if err := s.setRequestWarning(ctx, existing.fix.Warnings...); err != nil {
+				return PreviewResult{}, err
+			}
+		}
 		preview, err := validatedPreviewEntry(existing)
 		if err != nil {
-			return PreviewResult{}, withReason(previewValidationReasonCode(err), ErrPreviewRejected, "")
+			return PreviewResult{}, classifiedAnalysisPreviewValidationError(err)
 		}
 		preview.Token = token
 		return preview, nil
@@ -460,10 +483,15 @@ func (s *Service) PreviewAnalysisFix(
 		FindingVerification: compatibility.FindingVerification,
 	}, instruction)
 	if err != nil {
-		return PreviewResult{}, safeFixPreviewError(err)
+		return PreviewResult{}, safeAnalysisFixPreviewError(err)
+	}
+	if err := s.setRequestWarning(ctx, gf.Warnings...); err != nil {
+		return PreviewResult{}, err
 	}
 	if err := s.validateFixFiles(destination, gf.Preview.Files); err != nil {
-		return PreviewResult{}, fmt.Errorf("%w: %v", ErrPreviewRejected, err)
+		return PreviewResult{}, classifiedAnalysisFixFailure(
+			ReasonUnsafeRemediation, AnalysisFixFailureSafetyIntegrity, "", fmt.Errorf("%w: %v", ErrPreviewRejected, err),
+		)
 	}
 	entry := &previewEntry{
 		failureID: subject.ID, patternHash: subject.ContentHash, kind: gfKind,
@@ -483,7 +511,7 @@ func (s *Service) PreviewAnalysisFix(
 	}
 	preview, err := validatedPreviewEntry(entry)
 	if err != nil {
-		return PreviewResult{}, withReason(previewValidationReasonCode(err), ErrPreviewRejected, "")
+		return PreviewResult{}, classifiedAnalysisPreviewValidationError(err)
 	}
 	if err := s.previewStore.completeIdempotent(owner, token, input.PreviewRequestHash, generationHash, entry); err != nil {
 		return PreviewResult{}, err
@@ -511,6 +539,27 @@ func analysisPreviewGenerationHash(
 		subject.ID, subject.ContentHash, subject.AnalysisContentHash, requestHash,
 		repo, sourceVerification, compatibility.FindingVerification, compatibility.GenerationBaseRevision,
 		compatibility.VerifiedSourceFileHashes, targetConfig,
+	})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+func analysisFixReplacementHash(input AnalysisFixInput) string {
+	payload, _ := json.Marshal(struct {
+		Identity                 AnalysisIdentity
+		ChatSessionID            string
+		ChatRequestID            string
+		ChatResponseHash         string
+		AnalysisContentHash      string
+		SourceRepository         sourceinvestigation.Repository
+		FailureRevision          string
+		GenerationBaseRevision   string
+		VerifiedSourceFileHashes map[string]string
+		SourceBranch             string
+	}{
+		input.Identity, input.ChatSessionID, input.ChatRequestID, input.ChatResponseHash,
+		input.AnalysisContentHash, input.SourceRepository, input.FailureRevision,
+		input.GenerationBaseRevision, input.VerifiedSourceFileHashes, input.SourceBranch,
 	})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
@@ -553,16 +602,11 @@ func (s *Service) validateAnalysisPreview(ctx context.Context, owner string, bin
 }
 
 func (s *Service) verifyAnalysisFinding(
-	ctx context.Context, repo sourceinvestigation.Repository, files []string, finding string,
-) (string, error) {
-	reader := s.analysisSourceReader(repo)
-	archiveReader, ok := reader.(actionverify.Reader)
-	if !ok {
-		return "", fmt.Errorf("pinned source archive reader is unavailable")
-	}
-	result, err := actionverify.VerifyFindingSource(ctx, archiveReader, finding, files)
+	repo sourceinvestigation.Repository, files []string, finding string, contents map[string]string,
+) (string, []string, error) {
+	result, err := actionverify.VerifyFindingSource(finding, files, contents)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	payload, _ := json.Marshal(struct {
 		Version    int
@@ -572,7 +616,30 @@ func (s *Service) verifyAnalysisFinding(
 		Result     actionverify.FindingResult
 	}{analysisSourceVerificationVersion, repo, slices.Clone(files), finding, result})
 	sum := sha256.Sum256(payload)
-	return hex.EncodeToString(sum[:]), nil
+	return hex.EncodeToString(sum[:]), slices.Clone(result.Warnings), nil
+}
+
+func analysisQualityWarnings(analysis *models.AIAnalysis, input AnalysisFixInput) []string {
+	if analysis == nil {
+		return nil
+	}
+	warnings := make([]string, 0, 6)
+	if !analysis.CritiquePassed {
+		warnings = append(warnings, analysisWarningCritique)
+	}
+	if strings.TrimSpace(analysis.SuggestedFix) == "" {
+		warnings = append(warnings, analysisWarningSuggestedFix)
+	}
+	if strings.TrimSpace(analysis.RootCause) == "" && strings.TrimSpace(input.AssistantAnswer) != "" {
+		warnings = append(warnings, analysisWarningRootCause)
+	}
+	if strings.EqualFold(strings.TrimSpace(analysis.Severity), "Transient-Ignore") {
+		warnings = append(warnings, analysisWarningTransient)
+	}
+	if input.ProposedRevision != nil && (strings.TrimSpace(input.ProposedRevision.RootCause) == "" || strings.TrimSpace(input.ProposedRevision.SuggestedFix) == "") {
+		warnings = append(warnings, analysisWarningProse)
+	}
+	return warnings
 }
 
 func (s *Service) verifyAnalysisSourceSnapshot(ctx context.Context, repo sourceinvestigation.Repository, files []string) (string, error) {

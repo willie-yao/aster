@@ -25,6 +25,7 @@ type fakeChatFixRunner struct {
 	sourceRequestID string
 	userToken       string
 	instruction     string
+	replacesRequest string
 	err             error
 	requestCreated  bool
 }
@@ -46,7 +47,7 @@ func newBlockingHTTPChatFixRunner() *blockingHTTPChatFixRunner {
 }
 
 func (r *blockingHTTPChatFixRunner) CreateAnalysisFixRequest(
-	_, owner, _, _, _ string,
+	_, owner, _, _, _ string, _ ...string,
 ) (actions.ActionRequestView, error) {
 	r.mu.Lock()
 	if r.request.ID != "" {
@@ -127,10 +128,13 @@ func (f *fakeChatFixRunner) PreviewChatFix(
 }
 
 func (f *fakeChatFixRunner) CreateAnalysisFixRequest(
-	sessionID, owner, requestID, userToken, instruction string,
+	sessionID, owner, requestID, userToken, instruction string, replaces ...string,
 ) (actions.ActionRequestView, error) {
 	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
 	f.userToken, f.instruction, f.requestCreated = userToken, instruction, true
+	if len(replaces) > 0 {
+		f.replacesRequest = replaces[0]
+	}
 	if f.err != nil {
 		return actions.ActionRequestView{}, f.err
 	}
@@ -197,7 +201,7 @@ func TestHandlerExactJUnitChatFixPreview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/analysis-chat/sessions/session/requests/request/fix/requests", strings.NewReader(`{"instruction":"keep the API stable"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/analysis-chat/sessions/session/requests/request/fix/requests", strings.NewReader(`{"instruction":"keep the API stable","replaces_request_id":"failed-request"}`))
 	req.Header.Set("Authorization", "ok")
 	req.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
@@ -205,7 +209,7 @@ func TestHandlerExactJUnitChatFixPreview(t *testing.T) {
 	if recorder.Code != http.StatusAccepted || !strings.Contains(recorder.Body.String(), `"id":"action-request"`) {
 		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if !runner.requestCreated || runner.patternID != "" || runner.patternHash != "" || runner.sourceRequestID != "" || runner.instruction != "keep the API stable" {
+	if !runner.requestCreated || runner.patternID != "" || runner.patternHash != "" || runner.sourceRequestID != "" || runner.instruction != "keep the API stable" || runner.replacesRequest != "failed-request" {
 		t.Fatalf("runner = %+v", runner)
 	}
 }

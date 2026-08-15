@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -73,6 +74,32 @@ func TestExecutionContractAcceptsCredentialFreeResult(t *testing.T) {
 	}
 	if err := executionResult().Validate(request); err != nil {
 		t.Fatalf("result: %v", err)
+	}
+}
+
+func TestExecutionResultAllowsAuthenticFailedVerificationOutcomes(t *testing.T) {
+	request := executionRequest()
+	for _, tc := range []struct {
+		name string
+		edit func(*CommandResult)
+	}{
+		{name: "nonzero exit", edit: func(result *CommandResult) { result.ExitCode = 1 }},
+		{name: "bounded timeout", edit: func(result *CommandResult) {
+			result.ExitCode = -1
+			result.TimedOut = true
+			result.DurationMs = request.CommandPolicy.Commands[0].TimeoutSeconds * 1000
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := executionResult()
+			tc.edit(&result.CommandResults[0])
+			if err := result.Validate(request); err != nil {
+				t.Fatalf("completed execution rejected authentic command result: %v", err)
+			}
+			if err := ValidateSuccessfulCommandResults(request.CommandPolicy.Commands, result.CommandResults); err == nil {
+				t.Fatal("strict command validation accepted a failed result")
+			}
+		})
 	}
 }
 
@@ -214,9 +241,14 @@ func TestExecutionResultRejectsMismatchedOutput(t *testing.T) {
 		}, want: "max_files"},
 		{name: "command mismatch", edit: func(r *ExecutionResult) { r.CommandResults[0].Argv = []string{"sh", "-c", "true"} }, want: "allowed argv"},
 		{name: "missing command result", edit: func(r *ExecutionResult) { r.CommandResults = nil }, want: "every allowed command"},
-		{name: "failed command on success", edit: func(r *ExecutionResult) { r.CommandResults[0].ExitCode = 1 }, want: "failed with exit code"},
 		{name: "changed file without diff", edit: func(r *ExecutionResult) { r.Diff = "" }, want: "unified diff"},
 		{name: "failed without reason", edit: func(r *ExecutionResult) { r.TerminalState = TerminalFailed }, want: "failure reason"},
+		{name: "success with failure code", edit: func(r *ExecutionResult) { r.FailureCode = ExecutionFailureRuntime }, want: "failure code"},
+		{name: "unsupported failure code", edit: func(r *ExecutionResult) {
+			r.TerminalState = TerminalFailed
+			r.FailureReason = "failed"
+			r.FailureCode = "unknown"
+		}, want: "not supported"},
 		{name: "oversized output", edit: func(r *ExecutionResult) { r.StdoutSummary = strings.Repeat("x", 65<<10) }, want: "output limit"},
 		{name: "escaped output", edit: func(r *ExecutionResult) { r.Files["fix.txt"] = strings.Repeat("\x01", 40<<10) }, want: "output limit"},
 	}
@@ -228,6 +260,30 @@ func TestExecutionResultRejectsMismatchedOutput(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestExecutionResultClassifiesReviewScope(t *testing.T) {
+	result := executionResult()
+	result.ChangedFiles = []string{"a", "b"}
+	result.Files = map[string]string{"a": "a", "b": "b"}
+	err := result.Validate(executionRequest())
+	if !errors.Is(err, ErrResultScope) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestExecutionResultAcceptsBoundedReviewScopeFailure(t *testing.T) {
+	request := executionRequest()
+	result := executionResult()
+	result.TerminalState = TerminalFailed
+	result.FailureReason = "generated change exceeded review scope"
+	result.FailureCode = ExecutionFailureReviewScope
+	result.ChangedFiles = nil
+	result.Files = map[string]string{}
+	result.Diff = ""
+	if err := result.Validate(request); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -6,12 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 const maxAnalysisFixCitations = 16
+
+const (
+	analysisPatchCritiqueWarning = "The generated patch has provider critique concerns and may need maintainer revisions."
+	analysisPatchVerifyWarning   = "One or more authentic verification commands failed; the generated patch may need maintainer revisions."
+)
 
 // AnalysisFailure is one exact failed JUnit analysis and selected chat finding.
 type AnalysisFailure struct {
@@ -53,7 +59,7 @@ func (m *Manager) GenerateAnalysisPreview(ctx context.Context, failure AnalysisF
 		return nil, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
 	}
 	if !strings.EqualFold(base.HeadSHA, failure.GenerationBaseRevision) {
-		return nil, fmt.Errorf("generation base is no longer the current fix base")
+		return nil, fmt.Errorf("%w: generation base is no longer the current fix base", ErrPreviewBaseChanged)
 	}
 	fix, err := generateAnalysisWithAgent(ctx, genParams{
 		critique: m.opts.Critique, owner: m.opts.SourceOwner, repo: m.opts.SourceName, ref: failure.GenerationBaseRevision,
@@ -78,6 +84,7 @@ func (m *Manager) GenerateAnalysisPreview(ctx context.Context, failure AnalysisF
 	}
 	return &GeneratedFix{
 		Preview:               Preview{Subject: failure.TestName, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: verified},
+		Warnings:              slices.Clone(fix.warnings),
 		Title:                 "fix: address " + oneLine(failure.TestName),
 		Description:           description,
 		Body:                  body,
@@ -92,7 +99,7 @@ func validateAnalysisFailure(failure AnalysisFailure) error {
 	if strings.TrimSpace(failure.ID) == "" || strings.TrimSpace(failure.Project) == "" || strings.TrimSpace(failure.JobID) == "" ||
 		strings.TrimSpace(failure.BuildID) == "" || strings.TrimSpace(failure.TestName) == "" || strings.TrimSpace(failure.AnalysisGeneratedAt) == "" ||
 		strings.TrimSpace(failure.AnalysisHash) == "" || strings.TrimSpace(failure.ChatResponseHash) == "" || strings.TrimSpace(failure.PreviewRequestHash) == "" ||
-		strings.TrimSpace(failure.RootCause) == "" || strings.TrimSpace(failure.AssistantAnswer) == "" || strings.TrimSpace(failure.SourceRepository) == "" ||
+		strings.TrimSpace(failure.AssistantAnswer) == "" || strings.TrimSpace(failure.SourceRepository) == "" ||
 		strings.TrimSpace(failure.SourceVerification) == "" || strings.TrimSpace(failure.FindingVerification) == "" {
 		return fmt.Errorf("exact analysis fix context is incomplete")
 	}
@@ -118,9 +125,6 @@ func validateAnalysisFailure(failure AnalysisFailure) error {
 			return fmt.Errorf("verified source file hash is missing or invalid")
 		}
 	}
-	if failure.ProposedRevision != nil && (strings.TrimSpace(failure.ProposedRevision.RootCause) == "" || strings.TrimSpace(failure.ProposedRevision.SuggestedFix) == "") {
-		return fmt.Errorf("proposed revision is incomplete")
-	}
 	encoded, err := json.Marshal(failure)
 	if err != nil {
 		return fmt.Errorf("encoding exact analysis fix context: %w", err)
@@ -139,49 +143,45 @@ func generateAnalysisWithAgent(ctx context.Context, gp genParams, failure Analys
 	if a == nil || a.Runtime == nil {
 		return nil, fmt.Errorf("agent fix generation: no agent runtime configured")
 	}
-	var reviewFeedback string
-	for attempt := 0; ; attempt++ {
-		res, err := a.Runtime.Generate(ctx, agentRuntimeSpec(
-			a,
-			runtime.RepoRef{Owner: gp.owner, Name: gp.repo, Ref: failure.GenerationBaseRevision, Token: a.GitToken},
-			analysisFailureInstruction(failure, gp.instruction, reviewFeedback, gp.maxFiles, a.AllowBash),
-		))
-		if err != nil {
-			if errors.Is(err, runtime.ErrUnavailable) || errors.Is(err, runtime.ErrSandboxUnavailable) {
-				return nil, fmt.Errorf("agent fix generation unavailable: %w", err)
-			}
-			return nil, fmt.Errorf("agent fix generation: %w", err)
+	res, err := a.Runtime.Generate(ctx, agentRuntimeSpec(
+		a,
+		runtime.RepoRef{Owner: gp.owner, Name: gp.repo, Ref: failure.GenerationBaseRevision, Token: a.GitToken},
+		analysisFailureInstruction(failure, gp.instruction, "", gp.maxFiles, a.AllowBash),
+	))
+	if err != nil {
+		category := classifyAnalysisRuntimeFailure(res, err)
+		if errors.Is(err, runtime.ErrUnavailable) || errors.Is(err, runtime.ErrSandboxUnavailable) {
+			return nil, newAnalysisGenerationError(category, a, res, fmt.Errorf("agent fix generation unavailable: %w", err))
 		}
-		if len(res.Files) == 0 {
-			return nil, fmt.Errorf("the coding agent produced no repository change; the remediation appears external or operational")
-		}
-		if gp.maxFiles > 0 && len(res.Files) > gp.maxFiles {
-			return nil, fmt.Errorf("the coding agent changed %d files, exceeding max_files=%d; dropping as too broad for review", len(res.Files), gp.maxFiles)
-		}
-		executionVerification, err := executionVerificationForAgent(a, res, failure.GenerationBaseRevision)
-		if err != nil {
-			return nil, err
-		}
-		rationale := failure.SuggestedFix
-		if failure.ProposedRevision != nil {
-			rationale = failure.ProposedRevision.SuggestedFix
-		}
-		fix := &proposedFix{files: res.Files, diff: res.Diff, rationale: strings.TrimSpace(rationale), executionVerification: executionVerification}
-		if gp.critique == nil || gp.critiqueRetries == 0 {
-			return fix, nil
-		}
-		issues, err := critiqueAnalysisFix(ctx, gp.critique, failure, res.Files, res.Diff)
-		if err != nil {
-			return nil, fmt.Errorf("fix review failed: %w", err)
-		}
-		if issues == "" {
-			return fix, nil
-		}
-		if attempt >= gp.critiqueRetries {
-			return nil, fmt.Errorf("agent fix rejected by review after %d attempt(s): %s", attempt+1, oneLine(issues))
-		}
-		reviewFeedback = issues
+		return nil, newAnalysisGenerationError(category, a, res, fmt.Errorf("agent fix generation: %w", err))
 	}
+	if len(res.Files) == 0 {
+		return nil, newAnalysisGenerationError(AnalysisFailureNoReviewablePatch, a, res,
+			fmt.Errorf("the coding agent produced no repository change; the remediation appears external or operational"))
+	}
+	if gp.maxFiles > 0 && len(res.Files) > gp.maxFiles {
+		return nil, newAnalysisGenerationError(AnalysisFailureNoReviewablePatch, a, res,
+			fmt.Errorf("the coding agent changed %d files, exceeding max_files=%d; dropping as too broad for review", len(res.Files), gp.maxFiles))
+	}
+	executionVerification, err := executionVerificationForAnalysisAgent(a, res, failure.GenerationBaseRevision)
+	if err != nil {
+		return nil, newAnalysisGenerationError(AnalysisFailureResultContract, a, res, err)
+	}
+	rationale := failure.SuggestedFix
+	if failure.ProposedRevision != nil {
+		rationale = failure.ProposedRevision.SuggestedFix
+	}
+	fix := &proposedFix{files: res.Files, diff: res.Diff, rationale: strings.TrimSpace(rationale), executionVerification: executionVerification}
+	if executionVerification != nil && executionVerification.verifyResult().Status == VerifyFailed {
+		fix.warnings = append(fix.warnings, analysisPatchVerifyWarning)
+	}
+	if gp.critique != nil && gp.critiqueRetries > 0 {
+		issues, critiqueErr := critiqueAnalysisFix(ctx, gp.critique, failure, res.Files, res.Diff)
+		if critiqueErr != nil || issues != "" {
+			fix.warnings = append(fix.warnings, analysisPatchCritiqueWarning)
+		}
+	}
+	return fix, nil
 }
 
 func analysisFailureInstruction(failure AnalysisFailure, maintainer, reviewFeedback string, maxFiles int, allowBash bool) string {

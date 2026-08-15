@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 
 import { chatFixVerifiedSourcePaths, fixInvestigationAvailable } from "../src/lib/chatFixEligibility.js";
+import { chatFixRequestPresentation } from "../src/lib/chatFixPresentation.js";
 import {
   chatFixRequestStorageKey,
   clearStoredChatFixRequest,
@@ -23,10 +24,9 @@ test("exact JUnit chat fix requires current-turn artifacts and verified source p
   assert.match(chat, /analysisRef\.junit_file/);
   assert.match(chat, /message\.citations\?\.length/);
   assert.match(chat, /chatFixVerifiedSourcePaths/);
-  assert.match(chat, /hasExplicitSourceSymbol/);
+  assert.doesNotMatch(chat, /hasExplicitSourceSymbol/);
   assert.match(chat, /no validated artifact citation from this turn/);
   assert.match(chat, /no verified immutable source paths/);
-  assert.match(chat, /explicit backticked source symbol/);
 });
 
 test("exact JUnit source-path eligibility requires the bound repository and revision", () => {
@@ -77,9 +77,15 @@ test("exact JUnit fix dialog excludes pattern authority and keeps confirmation s
   assert.match(dialog, /server resolves the exact repository revision from build metadata/);
   assert.match(dialog, /rejects the preview if the target branch has moved/);
   assert.match(dialog, /Generate fix preview/);
-  assert.match(dialog, /Open draft PR/);
+  assert.match(dialog, /Open draft PR with warnings/);
+  assert.match(dialog, /Regenerate with feedback/);
+  assert.match(dialog, /request\.warning/);
+  assert.match(dialog, /instruction\.trim\(\) === submittedInstruction\.trim\(\)/);
+  assert.match(dialog, /cancelAnalysisChatFixRequest\(request\.id\)/);
+  assert.match(dialog, /clearStoredChatFixRequest[\s\S]*createAnalysisChatFixRequest/);
   assert.match(api, /fix\/requests/);
   assert.match(api, /patternID \? \{ pattern_id: patternID \} : \{\}/);
+  assert.match(api, /cancelActionRequest\(API_BASE, id\)/);
   assert.match(api, /api\/actions\/confirm/);
 });
 
@@ -154,4 +160,63 @@ test("anonymous Fix investigation uses the existing OAuth sign-in path", () => {
   assert.match(api, /credentials: "same-origin"/);
   assert.match(chat, /isAnalysisChatOAuthExpired\(effectiveError, authMode\)[\s\S]*signIn\(\)/);
   assert.doesNotMatch(chat + api, /document\.cookie|Authorization.*Bearer|session[_-]?key/i);
+});
+
+
+test("exact JUnit reload and polling observe requests without regenerating", () => {
+  const dialog = source("src/components/ChatFixDialog.tsx");
+  const recovery = dialog.slice(dialog.indexOf("useEffect(() => {", dialog.indexOf("observeAnalysisFixRequest")), dialog.indexOf("async function generatePreview"));
+  assert.match(recovery, /readStoredChatFixRequest/);
+  assert.match(recovery, /observeAnalysisFixRequest/);
+  assert.doesNotMatch(recovery, /createAnalysisChatFixRequest/);
+});
+
+test("exact JUnit terminal requests render persisted state without false reconnect guidance", () => {
+  const dialog = source("src/components/ChatFixDialog.tsx");
+  const observer = dialog.slice(dialog.indexOf("const observeAnalysisFixRequest"), dialog.indexOf("useEffect(() => {", dialog.indexOf("const observeAnalysisFixRequest")));
+  assert.doesNotMatch(observer, /throw new Error\(current\.error/);
+  assert.doesNotMatch(dialog, /If the connection was lost after admission, select Generate again/);
+  assert.match(dialog, /request\?\.warning && !preview/);
+  assert.match(dialog, /Regenerate with feedback/);
+  assert.match(dialog, /requestPresentation\.severity/);
+});
+
+test("exact JUnit request presentation separates recoverable hard and observation states", () => {
+  const base = {
+    id: "request", failure_id: "failure", kind: "analysis-fix" as const, owner: "alice",
+    stage: "drafting" as const, created_at: "2026-08-14T00:00:00Z", updated_at: "2026-08-14T00:00:00Z",
+    expires_at: "2026-08-15T00:00:00Z",
+  };
+  const recoverable = chatFixRequestPresentation({
+    ...base, status: "failed", reason_code: "no_reviewable_patch",
+    error: "No reviewable patch was generated. Add a maintainer instruction and regenerate.",
+  });
+  assert.deepEqual(recoverable, {
+    severity: "warning",
+    message: "No reviewable patch was generated. Add a maintainer instruction and regenerate.",
+    canRegenerate: true,
+    shouldObserve: false,
+  });
+  const hard = chatFixRequestPresentation({
+    ...base, status: "failed", reason_code: "unsafe_remediation", error: "Unsafe remediation blocked.",
+    failure: { category: "safety_integrity" },
+  });
+  assert.equal(hard?.severity, "error");
+  assert.equal(hard?.canRegenerate, false);
+  assert.equal(hard?.message, "Fix preview generation was blocked by a safety or integrity check.");
+  const pending = chatFixRequestPresentation({ ...base, status: "unknown" });
+  assert.equal(pending?.severity, "info");
+  assert.equal(pending?.shouldObserve, true);
+});
+
+test("exact JUnit regeneration is one explicit replacement with changed feedback", () => {
+  const dialog = source("src/components/ChatFixDialog.tsx");
+  const regenerate = dialog.slice(dialog.indexOf("async function regeneratePreview"), dialog.indexOf("async function confirm"));
+  assert.match(regenerate, /recoverableTerminal = request\.status === "failed" && request\.reason_code === "no_reviewable_patch"/);
+  assert.match(regenerate, /if \(!recoverableTerminal\) \{[\s\S]*cancelAnalysisChatFixRequest/);
+  assert.equal((regenerate.match(/createAnalysisChatFixRequest\(/g) ?? []).length, 1);
+  assert.match(regenerate, /recoverableTerminal \? request\.id : undefined/);
+  assert.match(dialog, /!instruction\.trim\(\) \|\| instruction\.trim\(\) === submittedInstruction\.trim\(\)/);
+  assert.match(dialog, /!request && !preview && !url/);
+  assert.match(dialog, /Review fix preview/);
 });

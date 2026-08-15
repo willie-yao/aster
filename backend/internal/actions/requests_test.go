@@ -439,7 +439,8 @@ func TestAnalysisFixRequestTimeoutFailsAndCleansRuntime(t *testing.T) {
 	}
 	<-started
 	final := waitRequest(t, service, created.ID, "alice", RequestFailed)
-	if final.Preview != nil || calls.Load() != 1 {
+	if final.Preview != nil || calls.Load() != 1 || final.ReasonCode != ReasonGenerationFailed ||
+		final.Failure == nil || final.Failure.Category != AnalysisFixFailureTimedOut || final.Failure.TerminalState != runtime.TerminalTimedOut {
 		t.Fatalf("final=%+v calls=%d", final, calls.Load())
 	}
 	select {
@@ -456,7 +457,8 @@ func TestAnalysisFixRequestTimeoutFailsAndCleansRuntime(t *testing.T) {
 	if len(refs) != 1 || refs[0].Name != "timeout-task" || refs[0].UID != "timeout-uid" || refs[0].ExecutionID != created.ID {
 		t.Fatalf("cleanup refs = %+v", refs)
 	}
-	if after, err := service.GetRequest(created.ID, "alice"); err != nil || after.Status != RequestFailed || after.Preview != nil {
+	if after, err := service.GetRequest(created.ID, "alice"); err != nil || after.Status != RequestFailed || after.Preview != nil ||
+		after.Failure == nil || after.Failure.Category != AnalysisFixFailureTimedOut {
 		t.Fatalf("post-timeout=%+v err=%v", after, err)
 	}
 }
@@ -1324,12 +1326,13 @@ func TestCancelRequestFailsWhenIdentityChanges(t *testing.T) {
 	now := time.Now().UTC()
 	const id = "identity-changed"
 	service.requests.Requests[id] = &actionRequest{
-		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestReady,
+		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: requestKindAnalysisFix, Owner: "alice", Status: RequestReady,
 			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
 		Runtime: &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "old-uid", ExecutionID: id},
 	}
 	view, err := service.CancelRequest(context.Background(), id, "alice")
-	if err != nil || view.Status != RequestFailed || view.Error == "" {
+	if err != nil || view.Status != RequestFailed || view.Error == "" || view.ReasonCode != ReasonGenerationFailed ||
+		view.Failure == nil || view.Failure.Category != AnalysisFixFailureSafetyIntegrity {
 		t.Fatalf("view=%+v err=%v", view, err)
 	}
 	if _, err = service.CancelRequest(context.Background(), id, "alice"); err == nil {
@@ -1959,5 +1962,179 @@ func TestLegacyFailedRequestReasonCodesAreBackfilled(t *testing.T) {
 	present, err := service.GetRequest("present", "alice")
 	if err != nil || present.ReasonCode != ReasonAlreadyPresent || present.Verification == nil || present.Verification.Code != ReasonAlreadyPresent {
 		t.Fatalf("present=%+v err=%v", present, err)
+	}
+}
+
+func TestAnalysisFixReadyRequestPreservesBoundedWarnings(t *testing.T) {
+	service, _ := requestTestService(t)
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	service.analysisRequestGenerator = func(ctx context.Context, _ AnalysisFixInput, _, _, _ string) (PreviewResult, error) {
+		if err := service.setRequestWarning(ctx,
+			analysisWarningCritique,
+			analysisWarningSuggestedFix,
+			analysisWarningCritique,
+		); err != nil {
+			return PreviewResult{}, err
+		}
+		close(started)
+		<-release
+		return PreviewResult{Token: "preview-token", Kind: gfKind, Title: "Fix CNI", Body: "Safe body", Diff: "safe diff"}, nil
+	}
+	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	pending := waitRequest(t, service, created.ID, "alice", RequestPending)
+	if pending.Warning != analysisWarningCritique+" "+analysisWarningSuggestedFix {
+		t.Fatalf("pending = %+v", pending)
+	}
+	close(release)
+	ready := waitRequest(t, service, created.ID, "alice", RequestReady)
+	if ready.Warning != analysisWarningCritique+" "+analysisWarningSuggestedFix || ready.Preview == nil {
+		t.Fatalf("ready = %+v", ready)
+	}
+	if strings.Contains(ready.Warning, "test/e2e/cni.go") || len(ready.Warning) > 2048 {
+		t.Fatalf("warning leaked private data or exceeded bound: %q", ready.Warning)
+	}
+	if _, err := service.GetRequest(created.ID, "bob"); !errors.Is(err, ErrRequestNotFound) {
+		t.Fatalf("wrong owner read warning: %v", err)
+	}
+}
+
+func TestAnalysisFixFailedRequestPreservesWarnings(t *testing.T) {
+	service, _ := requestTestService(t)
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	service.analysisRequestGenerator = func(ctx context.Context, _ AnalysisFixInput, _, _, _ string) (PreviewResult, error) {
+		if err := service.setRequestWarning(ctx, analysisWarningCritique, analysisWarningSuggestedFix); err != nil {
+			return PreviewResult{}, err
+		}
+		return PreviewResult{}, withReason(ReasonNoReviewablePatch, ErrPreviewRejected, ReasonMessage(ReasonNoReviewablePatch))
+	}
+	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := waitRequest(t, service, created.ID, "alice", RequestFailed)
+	if failed.Warning != analysisWarningCritique+" "+analysisWarningSuggestedFix {
+		t.Fatalf("failed warning = %q", failed.Warning)
+	}
+	if failed.ReasonCode != ReasonNoReviewablePatch {
+		t.Fatalf("reason code = %q", failed.ReasonCode)
+	}
+	if failed.Error != "No reviewable patch was generated. Add a maintainer instruction and regenerate." {
+		t.Fatalf("error = %q", failed.Error)
+	}
+}
+
+func TestAnalysisFixOverlyBroadFailureIsRecoverable(t *testing.T) {
+	service, _ := requestTestService(t)
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	service.analysisRequestGenerator = func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error) {
+		return PreviewResult{}, withReason(ReasonNoReviewablePatch, ErrPreviewRejected, ReasonMessage(ReasonNoReviewablePatch))
+	}
+	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := waitRequest(t, service, created.ID, "alice", RequestFailed)
+	if failed.ReasonCode != ReasonNoReviewablePatch || failed.Preview != nil {
+		t.Fatalf("failed = %+v", failed)
+	}
+}
+
+func TestFrozenCAPZFindingReachesAsyncGeneratorWithoutProvider(t *testing.T) {
+	service, _ := requestTestService(t)
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	const finding = "The artifact evidence is entirely in build-log.txt. Here is the exact chain:\n\n" +
+		"1. **First CNI install** (line 2205): `STEP: Installing a CNI plugin to the workload cluster @ 08/12/26 08:51:19.322` — this step runs during `EnsureCloudProviderAzure` and succeeds, creating the `azure-cni` DaemonSet on the workload cluster.\n\n" +
+		"2. **Second CNI install** (line 2217): `INFO: Installing a CNI plugin to the workload cluster capz-e2e-5p1bg6/capz-e2e-5p1bg6-azcni-v1` — this fires immediately after the CSI driver becomes available at 08:52:40.572. The very next line (2218) is the `[FAILED]` marker, meaning the call returned the 409 error without any retry.\n\n" +
+		"3. **409 Conflict body** (lines 2567, 2580–2583): The full `StatusError` is printed:\n" +
+		"   - `Operation cannot be fulfilled on daemonsets.apps \"azure-cni\": the object has been modified; please apply your changes to the latest version and try again`\n" +
+		"   - `Reason: \"Conflict\"`, `Code: 409`\n\n" +
+		"This implicates `InstallCNIManifest` in `test/e2e/cni.go` because that function is the only code path in the CAPZ e2e suite that applies the Azure CNI v1 manifest to the workload cluster. The second \"Installing a CNI plugin\" log message at line 2217 is the `Logf` call that `InstallCNIManifest` emits immediately before invoking `workloadCluster.CreateOrUpdate(ctx, cniYaml)`. `CreateOrUpdate` performs a `Get` then an `Update` using the `resourceVersion` embedded in the static manifest bytes, but the kube-controller-manager had already mutated the DaemonSet (advancing its `resourceVersion`) between the two install calls. The `Update` is therefore rejected by the API server with HTTP 409, and because `InstallCNIManifest` does not retry on conflict, the error propagates immediately as the terminal test failure at 08:52:40.919 (line 2218)."
+	seen := make(chan AnalysisFixInput, 1)
+	service.analysisRequestGenerator = func(_ context.Context, input AnalysisFixInput, _, _, _ string) (PreviewResult, error) {
+		seen <- input
+		return PreviewResult{Token: "preview-token", Kind: gfKind, Title: "Fix CNI", Body: "Safe body", Diff: "safe diff"}, nil
+	}
+	input := exactAnalysisRequestInput()
+	input.AssistantAnswer = finding
+	created, err := service.CreateAnalysisFixRequest(input, "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := waitRequest(t, service, created.ID, "alice", RequestReady)
+	if ready.Preview == nil {
+		t.Fatalf("ready = %+v", ready)
+	}
+	select {
+	case got := <-seen:
+		if got.AssistantAnswer != finding {
+			t.Fatalf("generator finding = %q", got.AssistantAnswer)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fake generator was not reached")
+	}
+}
+
+func TestAnalysisFixRecoverableReplacementIsExplicitAndImmutable(t *testing.T) {
+	service, _ := requestTestService(t)
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	var calls atomic.Int32
+	service.analysisRequestGenerator = func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error) {
+		calls.Add(1)
+		return PreviewResult{}, withReason(ReasonNoReviewablePatch, ErrPreviewRejected, ReasonMessage(ReasonNoReviewablePatch))
+	}
+	input := exactAnalysisRequestInput()
+	created, err := service.CreateAnalysisFixRequest(input, "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := waitRequest(t, service, created.ID, "alice", RequestFailed)
+	service.rmu.Lock()
+	record := service.requests.Requests[created.ID]
+	record.Failure = &AnalysisFixFailureView{Category: AnalysisFixFailureNoReviewablePatch}
+	if err := service.saveRequestsLocked(); err != nil {
+		service.rmu.Unlock()
+		t.Fatal(err)
+	}
+	before, err := json.Marshal(record)
+	service.rmu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.ReasonCode != ReasonNoReviewablePatch || calls.Load() != 1 {
+		t.Fatalf("failed=%+v calls=%d", failed, calls.Load())
+	}
+	changed := input
+	changed.PreviewRequestHash = "replacement-preview-hash"
+	if _, err := service.CreateAnalysisFixRequest(changed, "alice", "write-token", "bounded feedback"); err == nil {
+		t.Fatal("implicit replacement was accepted")
+	}
+	if _, err := service.CreateAnalysisFixRequest(changed, "alice", "write-token", "", created.ID); err == nil {
+		t.Fatal("unchanged empty feedback was accepted")
+	}
+	replacement, err := service.CreateAnalysisFixRequest(changed, "alice", "write-token", "bounded feedback", created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.ID == created.ID {
+		t.Fatalf("replacement reused failed request id %q", replacement.ID)
+	}
+	waitRequest(t, service, replacement.ID, "alice", RequestFailed)
+	service.rmu.Lock()
+	after, err := json.Marshal(service.requests.Requests[created.ID])
+	service.rmu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("failed request mutated\nbefore=%s\nafter=%s", before, after)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("generator calls = %d", calls.Load())
 	}
 }

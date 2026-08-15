@@ -3,13 +3,22 @@ package kubernetesdeploy
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/aster/backend/internal/onboard"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -17,6 +26,53 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
+
+func TestCheckFixCABundle(t *testing.T) {
+	bundle := doctorCABundle(t)
+	sum := sha256.Sum256(bundle)
+	fix := doctorFixRuntimeValues{Namespace: "fix-eval"}
+	fix.CABundle.ExistingConfigMap = "model-provider-ca"
+	fix.CABundle.Key = "ca-bundle.pem"
+	fix.CABundle.SHA256 = hex.EncodeToString(sum[:])
+	cluster := &fakeDoctorCluster{objects: map[string]*unstructured.Unstructured{
+		objectKey(configMapsGVR, "fix-eval", "model-provider-ca"): {Object: map[string]any{
+			"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "model-provider-ca", "namespace": "fix-eval"},
+			"data": map[string]any{"ca-bundle.pem": string(bundle)},
+		}},
+	}}
+	var report KubernetesDoctorReport
+	add := func(name string, status KubernetesDoctorStatus, detail, action string) {
+		report.Checks = append(report.Checks, KubernetesDoctorCheck{Name: name, Status: status, Detail: detail, Action: action})
+	}
+	checkFixCABundle(t.Context(), add, cluster, fix)
+	assertDoctorCheck(t, report, "Agent Sandbox public CA bundle", KubernetesDoctorPass)
+	if len(cluster.calls) != 1 || cluster.calls[0] != "get "+objectKey(configMapsGVR, "fix-eval", "model-provider-ca") {
+		t.Fatalf("calls = %v", cluster.calls)
+	}
+
+	report.Checks = nil
+	fix.CABundle.SHA256 = strings.Repeat("0", 64)
+	checkFixCABundle(t.Context(), add, cluster, fix)
+	assertDoctorCheck(t, report, "Agent Sandbox public CA bundle", KubernetesDoctorFail)
+}
+
+func doctorCABundle(t *testing.T) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "fixture CA"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
 
 type doctorRunner struct {
 	releases []string

@@ -37,6 +37,23 @@ type decodeResponseError struct{ err error }
 func (e *decodeResponseError) Error() string { return e.err.Error() }
 func (e *decodeResponseError) Unwrap() error { return e.err }
 
+type responseStatusError struct {
+	method     string
+	url        string
+	statusCode int
+	status     string
+	body       string
+}
+
+func (e *responseStatusError) Error() string {
+	return fmt.Sprintf("%s %s: %s: %s", e.method, e.url, e.status, e.body)
+}
+
+func isResponseStatus(err error, status int) bool {
+	var responseErr *responseStatusError
+	return errors.As(err, &responseErr) && responseErr.statusCode == status
+}
+
 // Client opens PRs against a GitHub repo with a single token identity.
 type Client struct {
 	httpClient *http.Client
@@ -186,16 +203,48 @@ func (c *Client) AuthedLogin(ctx context.Context) (string, error) {
 	return u.Login, nil
 }
 
-// ensureFork creates (or reuses) a fork of owner/repo under the token identity
-// and returns the fork's owner and name once it is queryable. The forks POST is
-// idempotent; forking is async, so it polls until the fork repo exists.
-func (c *Client) ensureFork(ctx context.Context, owner, repo, login string) (string, string, error) {
-	var fork struct {
-		Name  string `json:"name"`
-		Owner struct {
-			Login string `json:"login"`
-		} `json:"owner"`
+type forkRepository struct {
+	Name          string `json:"name"`
+	Fork          bool   `json:"fork"`
+	DefaultBranch string `json:"default_branch"`
+	Owner         struct {
+		Login string `json:"login"`
+	} `json:"owner"`
+	Parent struct {
+		FullName string `json:"full_name"`
+	} `json:"parent"`
+	Source struct {
+		FullName string `json:"full_name"`
+	} `json:"source"`
+}
+
+func validateForkRepository(fork forkRepository, login, repo, upstream string) error {
+	if !fork.Fork {
+		return fmt.Errorf("repository %s/%s exists but is not a fork", login, repo)
 	}
+	if fork.Parent.FullName != upstream && fork.Source.FullName != upstream {
+		return fmt.Errorf("repository %s/%s is not in the %s fork network", login, repo, upstream)
+	}
+	if strings.TrimSpace(fork.DefaultBranch) == "" {
+		return fmt.Errorf("fork %s/%s has no default branch", login, repo)
+	}
+	return nil
+}
+
+// ensureFork creates or reuses a verified fork under the token identity.
+func (c *Client) ensureFork(ctx context.Context, owner, repo, login string) (string, string, error) {
+	upstream := owner + "/" + repo
+	var existing forkRepository
+	if err := c.get(ctx, c.url(login, repo, ""), &existing); err == nil {
+		if err := validateForkRepository(existing, login, repo, upstream); err != nil {
+			return "", "", err
+		}
+		return login, repo, nil
+	} else if !isResponseStatus(err, http.StatusNotFound) {
+		return "", "", fmt.Errorf("checking existing fork %s/%s: %w", login, repo, err)
+	}
+
+	var fork forkRepository
 	if err := c.do(ctx, http.MethodPost, c.url(owner, repo, "forks"), map[string]any{}, &fork,
 		http.StatusAccepted, http.StatusOK, http.StatusCreated); err != nil {
 		return "", "", err
@@ -208,11 +257,20 @@ func (c *Client) ensureFork(ctx context.Context, owner, repo, login string) (str
 		forkRepo = repo
 	}
 	for i := 0; i < forkPollAttempts; i++ {
-		var probe struct {
-			DefaultBranch string `json:"default_branch"`
-		}
-		if err := c.get(ctx, c.url(forkOwner, forkRepo, ""), &probe); err == nil && probe.DefaultBranch != "" {
-			return forkOwner, forkRepo, nil
+		var probe forkRepository
+		err := c.get(ctx, c.url(forkOwner, forkRepo, ""), &probe)
+		if err == nil {
+			if !probe.Fork {
+				return "", "", fmt.Errorf("repository %s/%s created for fork flow is not a fork", forkOwner, forkRepo)
+			}
+			if probe.Parent.FullName != upstream && probe.Source.FullName != upstream {
+				return "", "", fmt.Errorf("repository %s/%s created for fork flow is not in the %s fork network", forkOwner, forkRepo, upstream)
+			}
+			if strings.TrimSpace(probe.DefaultBranch) != "" {
+				return forkOwner, forkRepo, nil
+			}
+		} else if !isResponseStatus(err, http.StatusNotFound) {
+			return "", "", fmt.Errorf("checking fork readiness %s/%s: %w", forkOwner, forkRepo, err)
 		}
 		select {
 		case <-ctx.Done():
@@ -395,7 +453,10 @@ func (c *Client) do(ctx context.Context, method, url string, body, out any, okSt
 		}
 	}
 	if !ok {
-		return fmt.Errorf("%s %s: %s: %s", method, url, resp.Status, textutil.Truncate(string(rb), 300))
+		return &responseStatusError{
+			method: method, url: url, statusCode: resp.StatusCode, status: resp.Status,
+			body: textutil.Truncate(string(rb), 300),
+		}
 	}
 	if out != nil {
 		if err := json.Unmarshal(rb, out); err != nil {

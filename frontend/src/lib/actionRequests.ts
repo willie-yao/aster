@@ -147,7 +147,8 @@ export function actionRequestReasonTitle(request: ActionRequest): string | null 
     case "non_systemic": return "Not a recurring systemic pattern";
     case "evidence_unavailable": return "Current evidence unavailable";
     case "investigation_required": return "Source investigation required";
-    case "contract_generation_failed": return "Implementation contract unavailable";
+    case "no_reviewable_patch": return "No reviewable patch generated";
+    case "contract_generation_failed": return "Preview generation failed";
     case "unsafe_remediation": return "Unsafe remediation blocked";
     case "already_present": return "Remediation already exists";
     case "source_verification_inconclusive": return "Source verification inconclusive";

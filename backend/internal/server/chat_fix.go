@@ -34,7 +34,7 @@ type ChatFixRunner interface {
 // ChatFixRequestRunner admits exact JUnit chat-to-fix previews for durable
 // asynchronous generation.
 type ChatFixRequestRunner interface {
-	CreateAnalysisFixRequest(string, string, string, string, string) (actions.ActionRequestView, error)
+	CreateAnalysisFixRequest(string, string, string, string, string, ...string) (actions.ActionRequestView, error)
 }
 
 func createAnalysisChatFixRequestHandler(run ChatFixRequestRunner) http.Handler {
@@ -45,19 +45,21 @@ func createAnalysisChatFixRequestHandler(run ChatFixRequestRunner) http.Handler 
 			return
 		}
 		var body struct {
-			Instruction string `json:"instruction"`
+			Instruction       string `json:"instruction"`
+			ReplacesRequestID string `json:"replaces_request_id"`
 		}
 		if err := decodeAnalysisChatBody(w, r, &body, maxChatFixBodyBytes); err != nil {
 			http.Error(w, "invalid chat fix request", http.StatusBadRequest)
 			return
 		}
 		body.Instruction = strings.TrimSpace(body.Instruction)
-		if len(body.Instruction) > maxChatFixInputBytes {
+		body.ReplacesRequestID = strings.TrimSpace(body.ReplacesRequestID)
+		if len(body.Instruction) > maxChatFixInputBytes || len(body.ReplacesRequestID) > maxChatFixRequestIDBytes {
 			http.Error(w, "invalid chat fix request", http.StatusBadRequest)
 			return
 		}
 		view, err := run.CreateAnalysisFixRequest(
-			r.PathValue("id"), identity.Login, r.PathValue("requestID"), identity.Token, body.Instruction,
+			r.PathValue("id"), identity.Login, r.PathValue("requestID"), identity.Token, body.Instruction, body.ReplacesRequestID,
 		)
 		if err != nil {
 			writeChatFixRequestError(w, r.PathValue("id"), identity.Login, err)

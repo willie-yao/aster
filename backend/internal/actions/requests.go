@@ -82,6 +82,7 @@ type ActionRequestView struct {
 	Error        string                  `json:"error,omitempty"`
 	ReasonCode   ReasonCode              `json:"reason_code,omitempty"`
 	Warning      string                  `json:"warning,omitempty"`
+	Failure      *AnalysisFixFailureView `json:"failure,omitempty"`
 	ResultURL    string                  `json:"result_url,omitempty"`
 	SupersededBy string                  `json:"superseded_by,omitempty"`
 	Preview      *PreviewResult          `json:"preview,omitempty"`
@@ -89,15 +90,19 @@ type ActionRequestView struct {
 }
 
 type actionCleanupState struct {
-	FinalStatus string `json:"final_status"`
-	Reason      string `json:"reason,omitempty"`
-	RequestedAt string `json:"requested_at"`
+	FinalStatus string                  `json:"final_status"`
+	Reason      string                  `json:"reason,omitempty"`
+	ReasonCode  ReasonCode              `json:"reason_code,omitempty"`
+	Failure     *AnalysisFixFailureView `json:"failure,omitempty"`
+	RequestedAt string                  `json:"requested_at"`
 }
 
 type actionRequest struct {
 	ActionRequestView
 	Instruction         string                      `json:"instruction,omitempty"`
 	RequestHash         string                      `json:"request_hash,omitempty"`
+	ReplacementHash     string                      `json:"replacement_hash,omitempty"`
+	ReplacesRequestID   string                      `json:"replaces_request_id,omitempty"`
 	AnalysisFix         *AnalysisFixInput           `json:"analysis_fix,omitempty"`
 	Issue               *issues.IssueSpec           `json:"issue,omitempty"`
 	Fix                 *fixpr.GeneratedFixSnapshot `json:"fix,omitempty"`
@@ -185,6 +190,54 @@ func normalizeRequestReason(request *actionRequest) bool {
 		request.ReasonCode = ReasonGenerationFailed
 	}
 	return true
+}
+
+func (s *Service) setRequestWarning(ctx context.Context, warnings ...string) error {
+	id := actionRequestID(ctx)
+	if id == "" || len(warnings) == 0 {
+		return nil
+	}
+	s.rmu.Lock()
+	defer s.rmu.Unlock()
+	request := s.requests.Requests[id]
+	if request == nil || request.Status != RequestPending {
+		return nil
+	}
+	next := boundedWarningSummary(append([]string{request.Warning}, warnings...)...)
+	if next == request.Warning {
+		return nil
+	}
+	previous, previousUpdatedAt := request.Warning, request.UpdatedAt
+	request.Warning = next
+	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := s.saveRequestsLocked(); err != nil {
+		request.Warning, request.UpdatedAt = previous, previousUpdatedAt
+		return err
+	}
+	return nil
+}
+
+func boundedWarningSummary(warnings ...string) string {
+	const maxWarningBytes = 2048
+	seen := map[string]bool{}
+	parts := make([]string, 0, len(warnings))
+	for _, warning := range warnings {
+		warning = strings.Join(strings.Fields(warning), " ")
+		if warning == "" || seen[warning] {
+			continue
+		}
+		seen[warning] = true
+		parts = append(parts, warning)
+	}
+	summary := strings.Join(parts, " ")
+	if len(summary) <= maxWarningBytes {
+		return summary
+	}
+	limit := maxWarningBytes
+	for limit > 0 && limit < len(summary) && summary[limit]&0xc0 == 0x80 {
+		limit--
+	}
+	return strings.TrimSpace(summary[:limit])
 }
 
 func (s *Service) setRequestStage(ctx context.Context, stage string) error {
@@ -456,11 +509,19 @@ func validatedPreviewEntry(entry *previewEntry) (PreviewResult, error) {
 			return PreviewResult{}, err
 		}
 		snapshot := entry.fix.Snapshot()
-		policyText := strings.Join([]string{
+		policyParts := []string{
 			snapshot.Pattern.SuggestedFix, snapshot.Pattern.SharedRootCause, snapshot.Pattern.Summary,
 			entry.fix.Title, entry.fix.Description,
-		}, "\n")
-		if remediationpolicy.Reason(policyText, snapshot.Pattern.RemediationTargets) != "" {
+		}
+		if entry.analysisBinding != nil {
+			policyParts = append(policyParts, entry.fix.Preview.Diff)
+		}
+		policyText := strings.Join(policyParts, "\n")
+		unsafe := remediationpolicy.Reason(policyText, snapshot.Pattern.RemediationTargets) != ""
+		if entry.analysisBinding != nil {
+			unsafe = remediationpolicy.RelationshipTextWarning(entry.fix.Preview.Diff) != ""
+		}
+		if unsafe {
 			return PreviewResult{}, withReason(ReasonUnsafeRemediation, ErrPreviewRejected, "")
 		}
 		return PreviewResult{
@@ -576,7 +637,12 @@ func (s *Service) markCleanupBlocked(id string) bool {
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	previous := *request
-	request.Cleanup = &actionCleanupState{FinalStatus: RequestFailed, Reason: "runtime work identity changed during cleanup", RequestedAt: now}
+	cleanup := &actionCleanupState{FinalStatus: RequestFailed, Reason: "runtime work identity changed during cleanup", RequestedAt: now}
+	if request.Kind == requestKindAnalysisFix {
+		cleanup.ReasonCode = ReasonGenerationFailed
+		cleanup.Failure = &AnalysisFixFailureView{Category: AnalysisFixFailureSafetyIntegrity}
+	}
+	request.Cleanup = cleanup
 	request.UpdatedAt = now
 	if err := s.saveRequestsLocked(); err != nil {
 		*request = previous
@@ -677,16 +743,22 @@ func (s *Service) finalizeCleanup(id string) (ActionRequestView, error) {
 	}
 	finalStatus := RequestCancelled
 	reason := ""
+	var reasonCode ReasonCode
+	var failure *AnalysisFixFailureView
 	if request.Cleanup != nil {
 		if request.Cleanup.FinalStatus != "" {
 			finalStatus = request.Cleanup.FinalStatus
 		}
 		reason = request.Cleanup.Reason
+		reasonCode = request.Cleanup.ReasonCode
+		failure = cloneAnalysisFixFailureView(request.Cleanup.Failure)
 	}
 	previous := *request
 	request.Status = finalStatus
 	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	request.Warning = ""
+	if finalStatus != RequestFailed || request.Kind != requestKindAnalysisFix {
+		request.Warning = ""
+	}
 	request.Preview = nil
 	request.Instruction = ""
 	request.AnalysisFix = nil
@@ -701,9 +773,14 @@ func (s *Service) finalizeCleanup(id string) (ActionRequestView, error) {
 	if finalStatus == RequestFailed {
 		request.Error = reason
 		request.ReasonCode = ReasonGenerationFailed
+		request.Failure = failure
+		if validReasonCode(reasonCode) {
+			request.ReasonCode = reasonCode
+		}
 	} else {
 		request.Error = ""
 		request.ReasonCode = ""
+		request.Failure = nil
 	}
 	if err := s.saveRequestsLocked(); err != nil {
 		*request = previous
@@ -713,6 +790,14 @@ func (s *Service) finalizeCleanup(id string) (ActionRequestView, error) {
 }
 
 func (s *Service) transitionToCleanup(id, finalStatus, reason string) (context.CancelFunc, error) {
+	return s.transitionToCleanupWithFailure(id, finalStatus, reason, "", nil)
+}
+
+func (s *Service) transitionToCleanupWithFailure(
+	id, finalStatus, reason string,
+	reasonCode ReasonCode,
+	failure *AnalysisFixFailureView,
+) (context.CancelFunc, error) {
 	s.rmu.Lock()
 	defer s.rmu.Unlock()
 	request := s.requests.Requests[id]
@@ -728,7 +813,10 @@ func (s *Service) transitionToCleanup(id, finalStatus, reason string) (context.C
 	previous := *request
 	now := time.Now().UTC().Format(time.RFC3339)
 	request.Status = RequestCancelling
-	request.Cleanup = &actionCleanupState{FinalStatus: finalStatus, Reason: reason, RequestedAt: now}
+	request.Cleanup = &actionCleanupState{
+		FinalStatus: finalStatus, Reason: reason, ReasonCode: reasonCode,
+		Failure: cloneAnalysisFixFailureView(failure), RequestedAt: now,
+	}
 	request.UpdatedAt = now
 	if err := s.saveRequestsLocked(); err != nil {
 		*request = previous
@@ -1021,7 +1109,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 
 // CreateAnalysisFixRequest persists one exact JUnit chat-to-fix preview request
 // and starts generation independently of the initiating HTTP request.
-func (s *Service) CreateAnalysisFixRequest(input AnalysisFixInput, owner, userToken, instruction string) (ActionRequestView, error) {
+func (s *Service) CreateAnalysisFixRequest(input AnalysisFixInput, owner, userToken, instruction string, replacesRequestIDs ...string) (ActionRequestView, error) {
 	owner = normalizeActionOwner(owner)
 	instruction = strings.TrimSpace(instruction)
 	if s.cfg != nil {
@@ -1040,6 +1128,14 @@ func (s *Service) CreateAnalysisFixRequest(input AnalysisFixInput, owner, userTo
 	if err := validateAnalysisFixInput(input); err != nil {
 		return ActionRequestView{}, err
 	}
+	if len(replacesRequestIDs) > 1 {
+		return ActionRequestView{}, fmt.Errorf("at most one replacement request id is allowed")
+	}
+	replacesRequestID := ""
+	if len(replacesRequestIDs) == 1 {
+		replacesRequestID = strings.TrimSpace(replacesRequestIDs[0])
+	}
+	replacementHash := analysisFixReplacementHash(input)
 
 	id, err := newToken()
 	if err != nil {
@@ -1052,9 +1148,11 @@ func (s *Service) CreateAnalysisFixRequest(input AnalysisFixInput, owner, userTo
 			Status: RequestPending, Stage: RequestStageVerifying, CreatedAt: now.Format(time.RFC3339),
 			UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(actionRequestTTL).Format(time.RFC3339),
 		},
-		Instruction: instruction,
-		RequestHash: input.PreviewRequestHash,
-		AnalysisFix: cloneAnalysisFixInput(input),
+		Instruction:       instruction,
+		RequestHash:       input.PreviewRequestHash,
+		ReplacementHash:   replacementHash,
+		ReplacesRequestID: replacesRequestID,
+		AnalysisFix:       cloneAnalysisFixInput(input),
 	}
 
 	s.rmu.Lock()
@@ -1071,6 +1169,29 @@ func (s *Service) CreateAnalysisFixRequest(input AnalysisFixInput, owner, userTo
 			view := existing.ActionRequestView
 			s.rmu.Unlock()
 			return view, nil
+		}
+	}
+	if replacesRequestID != "" {
+		replaced := s.requests.Requests[replacesRequestID]
+		if replaced == nil || replaced.Owner != owner || replaced.Kind != requestKindAnalysisFix ||
+			replaced.Status != RequestFailed || replaced.ReasonCode != ReasonNoReviewablePatch ||
+			replaced.Failure == nil || replaced.Failure.Category != AnalysisFixFailureNoReviewablePatch ||
+			replaced.ReplacementHash != replacementHash {
+			s.rmu.Unlock()
+			return ActionRequestView{}, withReason(ReasonNoReviewablePatch, ErrPreviewRejected, "replacement request does not match a recoverable exact JUnit preview")
+		}
+		if instruction == "" || instruction == strings.TrimSpace(replaced.Instruction) {
+			s.rmu.Unlock()
+			return ActionRequestView{}, withReason(ReasonNoReviewablePatch, ErrPreviewRejected, "edit the maintainer instruction before regenerating")
+		}
+	} else {
+		for _, existing := range s.requests.Requests {
+			if existing != nil && existing.Owner == owner && existing.Kind == requestKindAnalysisFix &&
+				existing.Status == RequestFailed && existing.ReasonCode == ReasonNoReviewablePatch &&
+				existing.ReplacementHash == replacementHash {
+				s.rmu.Unlock()
+				return ActionRequestView{}, withReason(ReasonNoReviewablePatch, ErrPreviewRejected, "use explicit regeneration with changed maintainer feedback")
+			}
 		}
 	}
 	pending := 0
@@ -1207,7 +1328,7 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 	if err == nil || fallbackPreview {
 		if analysisRequest {
 			if validated, validateErr := validatedAnalysisFixRequestPreview(preview); validateErr != nil {
-				err = withReason(previewValidationReasonCode(validateErr), ErrPreviewRejected, "")
+				err = classifiedAnalysisPreviewValidationError(validateErr)
 			} else {
 				preview = validated
 			}
@@ -1230,7 +1351,12 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 		if ctx.Err() != nil {
 			reason = "draft generation timed out"
 		}
-		_, transitionErr := s.transitionToCleanup(id, RequestFailed, reason)
+		reasonCode := ReasonGenerationFailed
+		failure := analysisFixFailureView(err)
+		if ctx.Err() != nil {
+			failure = &AnalysisFixFailureView{Category: AnalysisFixFailureTimedOut, TerminalState: runtime.TerminalTimedOut}
+		}
+		_, transitionErr := s.transitionToCleanupWithFailure(id, RequestFailed, reason, reasonCode, failure)
 		if transitionErr == nil {
 			needsCleanup = true
 		} else {
@@ -1258,6 +1384,11 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 	if err != nil {
 		request.Status = RequestFailed
 		request.ReasonCode = ReasonCodeOf(err)
+		if analysisRequest {
+			request.Failure = analysisFixFailureView(err)
+		} else {
+			request.Failure = nil
+		}
 		if fallbackPreview {
 			request.Warning = draftRefinementWarning
 			request.Preview = &preview
@@ -1267,6 +1398,7 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 	} else {
 		request.Status = RequestReady
 		request.ReasonCode = ""
+		request.Failure = nil
 		request.Preview = &preview
 		if analysisRequest {
 			request.ExpiresAt = now.Add(previewTTL).Format(time.RFC3339)
@@ -1657,9 +1789,10 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 			request.UpdatedAt = now.Format(time.RFC3339)
 			changed = true
 		}
-		if request.Error != "" || request.Warning != "" || request.Preview != nil || request.Instruction != "" || request.AnalysisFix != nil || request.Issue != nil || request.BaseIssue != nil || request.BaseTargetRepo != "" || request.BasePatternHash != "" || request.Runtime != nil || request.Cleanup != nil || request.Fix != nil || request.EmailError != "" {
+		if request.Error != "" || request.Warning != "" || request.Failure != nil || request.Preview != nil || request.Instruction != "" || request.AnalysisFix != nil || request.Issue != nil || request.BaseIssue != nil || request.BaseTargetRepo != "" || request.BasePatternHash != "" || request.Runtime != nil || request.Cleanup != nil || request.Fix != nil || request.EmailError != "" {
 			request.Error = ""
 			request.Warning = ""
+			request.Failure = nil
 			request.Preview = nil
 			request.Instruction = ""
 			request.AnalysisFix = nil

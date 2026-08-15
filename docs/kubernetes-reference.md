@@ -436,8 +436,10 @@ When enabled, the chart can create:
   v1beta1 Sandboxes.
 
 The Role permits only Sandbox create/get/list/watch/delete, Pod
-get/list/watch, and Pod-log get. It grants no Secret, direct Pod creation, exec,
-attach, port-forward, Service, PVC, node, or cluster-admin access.
+get/list/watch, and Pod-log get. When the optional public CA bundle is enabled,
+it also permits `get` on that one named ConfigMap in the execution namespace.
+It grants no Secret, ConfigMap list/watch, direct Pod creation, exec, attach,
+port-forward, Service, PVC, node, or cluster-admin access.
 
 The admission policy pins the requester, namespace, content-addressed identity,
 immutable executor image, RuntimeClass, workload ServiceAccount, Pod and
@@ -469,10 +471,38 @@ the selected API. With pinned OpenCode 1.18.2, Responses requires direct bearer
 auth. Tokenless gateway and direct unauthenticated modes remain available for
 Chat Completions.
 
-Internal gateway certificates must chain to a CA in the immutable executor
-image. A privately resolved public gateway FQDN with a publicly trusted
-certificate can set `modelProvider.publicCAPrivateDNS: true`. Direct mode leaves
-that setting false. Standard `runc` is supported only by the disposable local
+Private-CA model-provider gateways can use one platform-managed public
+certificate bundle without deriving an executor image:
+
+```yaml
+agentSandbox:
+  fixRuntime:
+    caBundle:
+      existingConfigMap: model-provider-ca
+      key: ca-bundle.pem
+      sha256: <64-lowercase-hex>
+```
+
+All three fields are required together. The ConfigMap contains public CA
+certificates, not credentials, and remains in the execution namespace. Before
+creating each Fix Sandbox, the dashboard performs one exact ConfigMap GET and
+validates the configured data key, the 256 KiB size bound, certificate-only PEM
+structure, absence of private keys, and the SHA-256 of the exact mounted bytes.
+The executor revalidates the mounted bytes before starting OpenCode. Admission
+pins the ConfigMap name, key, fixed read-only mount, `NODE_EXTRA_CA_CERTS`, and
+configured hash annotation. OpenCode 1.18.2 uses the bundle as extra Node trust,
+so system public roots remain available to Git and Go. A combined system bundle
+is not required for this contract.
+
+Operators may maintain the ConfigMap manually or with optional tooling such as
+trust-manager. Neither trust-manager nor cert-manager is installed by this chart
+or generated consumer deployment. CA rotation requires updating the ConfigMap,
+configured SHA-256,
+and application deployment identity before new Sandboxes are admitted. Publicly
+trusted gateways require no CA bundle configuration. A privately resolved
+public gateway FQDN with a publicly trusted certificate can set
+`modelProvider.publicCAPrivateDNS: true`. Direct mode leaves that setting false.
+Standard `runc` is supported only by the disposable local
 lifecycle evaluation and is not a hostile-code boundary. Docker Desktop kind
 omits AppArmor through test-only code in both the canonical preflight and
 Sandbox shapes; it does not validate production AppArmor enforcement.

@@ -2332,3 +2332,29 @@ func TestDisabledFixActionsRejectPreviewRequestsAndConfirmation(t *testing.T) {
 		t.Fatalf("reconcileEntry error = %v", err)
 	}
 }
+
+func TestExactAnalysisFixFailureClassificationIsPublicSafe(t *testing.T) {
+	unknown := safeAnalysisFixPreviewError(errors.New("provider returned private response body"))
+	if ReasonCodeOf(unknown) != ReasonGenerationFailed || strings.Contains(unknown.Error(), "private response") {
+		t.Fatalf("unknown error = %v code=%s", unknown, ReasonCodeOf(unknown))
+	}
+	if failure := analysisFixFailureView(unknown); failure == nil || failure.Category != AnalysisFixFailureRuntimeInfrastructure {
+		t.Fatalf("unknown failure = %+v", failure)
+	}
+
+	contract := classifiedAnalysisPreviewValidationError(errors.New("private malformed preview"))
+	if ReasonCodeOf(contract) != ReasonContractGenerationFailed || strings.Contains(contract.Error(), "private malformed") {
+		t.Fatalf("contract error = %v code=%s", contract, ReasonCodeOf(contract))
+	}
+	if failure := analysisFixFailureView(contract); failure == nil || failure.Category != AnalysisFixFailureResultContract {
+		t.Fatalf("contract failure = %+v", failure)
+	}
+
+	unsafe := classifiedAnalysisPreviewValidationError(withReason(ReasonUnsafeRemediation, ErrPreviewRejected, "private unsafe path"))
+	if ReasonCodeOf(unsafe) != ReasonUnsafeRemediation || strings.Contains(unsafe.Error(), "private unsafe") {
+		t.Fatalf("unsafe error = %v code=%s", unsafe, ReasonCodeOf(unsafe))
+	}
+	if failure := analysisFixFailureView(unsafe); failure == nil || failure.Category != AnalysisFixFailureSafetyIntegrity {
+		t.Fatalf("unsafe failure = %+v", failure)
+	}
+}

@@ -29,7 +29,8 @@ const reasonMessages: Record<ActionReasonCode, string> = {
   non_systemic: "This result was classified as non-systemic and does not qualify for a recurring-pattern action.",
   evidence_unavailable: "Current published evidence is unavailable or no longer matches the selected action subject.",
   investigation_required: "The published remediation requires source investigation before an issue or fix can be drafted.",
-  contract_generation_failed: "The published analysis did not produce a complete implementation-ready remediation contract.",
+  no_reviewable_patch: "No reviewable patch was generated. Add a maintainer instruction and regenerate.",
+  contract_generation_failed: "The action preview could not be generated from the current verified inputs.",
   unsafe_remediation: "The proposed remediation violates the deterministic safety policy and requires further investigation.",
   already_present: "The grounded source already contains the proposed remediation.",
   source_verification_inconclusive: "Pinned-source verification was inconclusive; investigate the grounded source before starting an action.",
@@ -165,7 +166,7 @@ export function actionEligibilityTitle(
     case "evidence_unavailable":
       return "Current evidence unavailable";
     case "contract_generation_failed":
-      return "Implementation contract unavailable";
+      return "Preview generation failed";
     case "unsafe_remediation":
       return "Unsafe remediation blocked";
     case "source_verification_inconclusive":

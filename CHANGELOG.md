@@ -19,6 +19,29 @@ how to pin a consumer to a reviewed version.
 
 ## [Unreleased]
 
+### Added
+
+- **v0.9 exact JUnit debugging-to-draft-PR lifecycle.** A maintainer can select
+  one cited chat finding, generate a persisted Agent Sandbox preview, inspect
+  warnings and deterministic verification results, explicitly regenerate with
+  bounded feedback, and confirm one human-controlled draft PR through a
+  verified existing fork.
+- **Provider-neutral Flux GitOps generation.** The Aster CLI renders and checks
+  deterministic application and optional platform Helm releases with immutable
+  chart and image identities, ConfigMap-backed values, and no generated Secrets.
+- **Optional private gateway CA trust.** Agent Sandbox Fix workloads can consume
+  one exact, hash-pinned public CA bundle from an existing ConfigMap without
+  embedding certificate bytes or generating credentials.
+
+### Changed
+
+- **v0.9 beta feature freeze.** Compilation, source and branch identity, command
+  integrity, patch reconstruction, credential detection, file bounds, and
+  confirmation deduplication remain hard blockers. Model patch quality and
+  reviewer preferences remain visible warnings that maintainers may address
+  through explicit regeneration or normal draft-PR review. The engine does not
+  autonomously merge, close, or amend generated PRs.
+
 ## [1.0.0-beta.7] - 2026-07-28
 
 ### Fixed

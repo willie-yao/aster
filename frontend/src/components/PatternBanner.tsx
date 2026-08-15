@@ -31,6 +31,8 @@ import { jobRunPath } from "../lib/routes";
 import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
 import { PatternRemediation } from "./PatternRemediation";
+import { PatternFixGuidance } from "./PatternFixGuidance";
+import { patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
 
 function remediationStatusLabel(status: string): string {
   const label = status.replaceAll("_", " ");
@@ -92,6 +94,8 @@ export function PatternBanner({
   const { data: remediations } = useRemediations();
   const { features } = useCapabilities();
   const analysisOnly = Boolean(pattern.recurrence_classification);
+  const fixGuidanceBuildID = patternFixGuidanceBuildID(pattern, runs);
+  const showFixGuidance = Boolean(jobID && fixGuidanceBuildID);
   const resolvedEntry = !analysisOnly && pattern.id ? resolved.resolved[pattern.id] : undefined;
   const remediation = !analysisOnly && pattern.id ? remediations.remediations[pattern.id] : undefined;
   const attempt = remediation?.attempt;
@@ -297,15 +301,44 @@ export function PatternBanner({
             {pattern.causal_groups.map((group) => (
               <Box key={`${group.builds.join("-")}-${group.root_cause}`}>
                 <RichText text={group.root_cause} steps fileCtx={patternFileCtx} />
-                <Typography color="text.secondary" sx={{ mt: 0.25, ...overviewTypography.data }}>
-                  {group.confidence} confidence · {group.builds.length === 1 ? "Build" : "Builds"}{" "}
-                  {group.builds.map((buildID, index) => (
-                    <span key={buildID}>
-                      {index > 0 ? ", " : ""}
-                      <Link component={RouterLink} to={jobID ? jobRunPath(jobID, buildID) : "#"}>{buildID}</Link>
-                    </span>
-                  ))}
-                </Typography>
+                <Stack
+                  direction={{ xs: "column", sm: "row" }}
+                  spacing={{ xs: 0.5, sm: 1 }}
+                  sx={{ mt: 0.5, alignItems: { sm: "center" } }}
+                >
+                  <Typography color="text.secondary" sx={overviewTypography.data}>
+                    {group.confidence} confidence · Affected {group.builds.length === 1 ? "build" : "builds"}
+                  </Typography>
+                  <Stack direction="row" spacing={0.75} sx={{ flexWrap: "wrap", rowGap: 0.75 }}>
+                    {group.builds.map((buildID) => (
+                      <Link
+                        key={buildID}
+                        component={RouterLink}
+                        to={jobID ? jobRunPath(jobID, buildID) : "#"}
+                        aria-label={`Open affected build ${buildID}`}
+                        underline="none"
+                        sx={{
+                          minHeight: 32,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          px: 0.75,
+                          borderRadius: "4px",
+                          bgcolor: "action.selected",
+                          color: "primary.main",
+                          ...overviewTypography.data,
+                          "&:hover": { bgcolor: "surface.containerHigh" },
+                          "&:focus-visible": {
+                            outline: "2px solid",
+                            outlineColor: "primary.main",
+                            outlineOffset: 2,
+                          },
+                        }}
+                      >
+                        {buildID}
+                      </Link>
+                    ))}
+                  </Stack>
+                </Stack>
               </Box>
             ))}
           </Stack>
@@ -409,8 +442,11 @@ export function PatternBanner({
     </>
   );
 
-  const actions = chatRef || (!analysisOnly && isCurrent && lifecycleActive && pattern.systemic && pattern.id) ? (
+  const actions = showFixGuidance || chatRef || (!analysisOnly && isCurrent && lifecycleActive && pattern.systemic && pattern.id) ? (
     <Stack spacing={1.25}>
+      {jobID && fixGuidanceBuildID && (
+        <PatternFixGuidance jobID={jobID} buildID={fixGuidanceBuildID} />
+      )}
       {chatRef && (
         <AnalysisChat
           key={`${chatRef.job_id}\u0000${chatRef.pattern_id}\u0000${chatRef.pattern_hash}`}

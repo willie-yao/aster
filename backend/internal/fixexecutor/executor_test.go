@@ -110,7 +110,7 @@ func TestExecuteFailsClosedOnUnsafePolicy(t *testing.T) {
 	}
 }
 
-func TestExecuteMapsValidationFailureAsFailed(t *testing.T) {
+func TestExecuteRetainsPatchAndCompleteFailedValidationResults(t *testing.T) {
 	repository, sha := fixtureRepository(t)
 	request := fixtureRequest(repository, sha)
 	request.CommandPolicy.Commands = []engineruntime.ExecutionCommand{
@@ -129,11 +129,79 @@ func TestExecuteMapsValidationFailureAsFailed(t *testing.T) {
 			return "", "", nil
 		},
 	})
-	if result.TerminalState != engineruntime.TerminalFailed || result.TerminalState == engineruntime.TerminalCancelled {
+	if result.TerminalState != engineruntime.TerminalSucceeded || result.FailureReason != "" {
 		t.Fatalf("result = %+v", result)
 	}
-	if modelRequests != 1 || len(result.CommandResults) != 1 {
-		t.Fatalf("model requests=%d command results=%d", modelRequests, len(result.CommandResults))
+	if modelRequests != 1 || len(result.CommandResults) != 2 || result.CommandResults[0].ExitCode == 0 || result.CommandResults[0].TimedOut || result.CommandResults[1].ExitCode != 0 {
+		t.Fatalf("model requests=%d command results=%+v", modelRequests, result.CommandResults)
+	}
+	if !equalStrings(result.ChangedFiles, []string{"README"}) || result.Files["README"] != "changed\n" || !strings.Contains(result.Diff, "changed") {
+		t.Fatalf("files=%v content=%q diff=%q", result.ChangedFiles, result.Files["README"], result.Diff)
+	}
+}
+
+func TestExecuteRetainsBoundedValidationTimeout(t *testing.T) {
+	repository, sha := fixtureRepository(t)
+	binDir := t.TempDir()
+	tool := filepath.Join(binDir, "slow-validator-tree")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\nsleep 5 &\nwait\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	request := fixtureRequest(repository, sha)
+	request.MaxSteps = 3
+	request.CommandPolicy.Commands = []engineruntime.ExecutionCommand{
+		{Argv: []string{"slow-validator-tree"}, TimeoutSeconds: 1},
+		{Argv: []string{"git", "diff", "--cached", "--check"}, TimeoutSeconds: 10},
+	}
+	modelRequests := 0
+	started := time.Now()
+	result := Execute(context.Background(), request, Options{
+		WorkspaceRoot: t.TempDir(),
+		RunOpenCode: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
+			modelRequests++
+			return "", "", os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte("changed\n"), 0o644)
+		},
+	})
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("bounded command timeout took %s", elapsed)
+	}
+	if result.TerminalState != engineruntime.TerminalSucceeded || modelRequests != 1 || len(result.CommandResults) != 2 {
+		t.Fatalf("result=%+v model requests=%d", result, modelRequests)
+	}
+	if first := result.CommandResults[0]; !first.TimedOut || first.ExitCode != -1 || first.DurationMs < 900 || first.DurationMs > 2_000 {
+		t.Fatalf("timed out command = %+v", first)
+	}
+	if final := result.CommandResults[1]; final.TimedOut || final.ExitCode != 0 {
+		t.Fatalf("final command = %+v", final)
+	}
+}
+
+func TestExecuteRejectsSignaledValidationCommand(t *testing.T) {
+	repository, sha := fixtureRepository(t)
+	binDir := t.TempDir()
+	tool := filepath.Join(binDir, "crash-validator")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\nkill -SEGV $$\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	request := fixtureRequest(repository, sha)
+	request.MaxSteps = 3
+	request.CommandPolicy.Commands = []engineruntime.ExecutionCommand{
+		{Argv: []string{"crash-validator"}, TimeoutSeconds: 10},
+		{Argv: []string{"git", "diff", "--cached", "--check"}, TimeoutSeconds: 10},
+	}
+	result := Execute(context.Background(), request, Options{
+		WorkspaceRoot: t.TempDir(),
+		RunOpenCode: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
+			return "", "", os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte("changed\n"), 0o644)
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalFailed || len(result.CommandResults) != 1 || result.CommandResults[0].ExitCode != -1 || result.CommandResults[0].TimedOut {
+		t.Fatalf("result = %+v", result)
+	}
+	if !strings.Contains(result.FailureReason, "could not run") {
+		t.Fatalf("failure reason = %q", result.FailureReason)
 	}
 }
 
@@ -153,7 +221,7 @@ func TestExecuteReportsUnavailableValidationExecutable(t *testing.T) {
 			return "", "", os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte("changed\n"), 0o644)
 		},
 	})
-	if result.TerminalState != engineruntime.TerminalFailed || !strings.Contains(result.FailureReason, `executable "missing-validator-binary" is unavailable`) {
+	if result.TerminalState != engineruntime.TerminalFailed || result.FailureCode != engineruntime.ExecutionFailureRuntime || !strings.Contains(result.FailureReason, `executable "missing-validator-binary" is unavailable`) {
 		t.Fatalf("result = %+v", result)
 	}
 	if modelRequests != 1 || len(result.CommandResults) != 1 || result.CommandResults[0].ExitCode != -1 {
@@ -161,37 +229,51 @@ func TestExecuteReportsUnavailableValidationExecutable(t *testing.T) {
 	}
 }
 
-func TestExecuteRejectsValidationCommandStagedMutation(t *testing.T) {
-	repository, sha := fixtureRepository(t)
-	binDir := t.TempDir()
-	tool := filepath.Join(binDir, "mutate-index")
-	if err := os.WriteFile(tool, []byte("#!/bin/sh\nprintf 'validation mutation\n' > README\ngit add README\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	request := fixtureRequest(repository, sha)
-	request.MaxSteps = 3
-	request.CommandPolicy.Commands = []engineruntime.ExecutionCommand{
-		{Argv: []string{"mutate-index"}, TimeoutSeconds: 10},
-		{Argv: []string{"git", "diff", "--cached", "--check"}, TimeoutSeconds: 10},
-	}
-	result := Execute(context.Background(), request, Options{
-		WorkspaceRoot: t.TempDir(),
-		RunOpenCode: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
-			return "", "", os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte("generated change\n"), 0o644)
-		},
-	})
-	if result.TerminalState != engineruntime.TerminalFailed || !strings.Contains(result.FailureReason, "modified the staged patch") {
-		t.Fatalf("result = %+v", result)
+func TestExecuteRejectsValidationWorkspaceMutation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		script string
+		want   string
+	}{
+		{name: "tracked file", script: "printf 'validation mutation\\n' > README\n", want: "modified tracked workspace files"},
+		{name: "untracked file", script: "touch validation.tmp\n", want: "created untracked workspace files"},
+		{name: "staged patch", script: "printf 'validation mutation\\n' > README\ngit add README\n", want: "modified the staged patch"},
+		{name: "Git HEAD", script: "printf '0000000000000000000000000000000000000000\\n' > .git/HEAD\n", want: "changed the immutable repository HEAD"},
+		{name: "Git remote", script: "git remote add origin https://example.com/repository.git\n", want: "restored or added a Git remote"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repository, sha := fixtureRepository(t)
+			binDir := t.TempDir()
+			tool := filepath.Join(binDir, "mutate-workspace")
+			if err := os.WriteFile(tool, []byte("#!/bin/sh\nset -eu\n"+tc.script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			request := fixtureRequest(repository, sha)
+			request.MaxSteps = 3
+			request.CommandPolicy.Commands = []engineruntime.ExecutionCommand{
+				{Argv: []string{"mutate-workspace"}, TimeoutSeconds: 10},
+				{Argv: []string{"git", "diff", "--cached", "--check"}, TimeoutSeconds: 10},
+			}
+			result := Execute(context.Background(), request, Options{
+				WorkspaceRoot: t.TempDir(),
+				RunOpenCode: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
+					return "", "", os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte("generated change\n"), 0o644)
+				},
+			})
+			if result.TerminalState != engineruntime.TerminalFailed || result.FailureCode != engineruntime.ExecutionFailureSafetyIntegrity || !strings.Contains(result.FailureReason, tc.want) {
+				t.Fatalf("result = %+v, want %q", result, tc.want)
+			}
+		})
 	}
 }
 
 func TestExecuteMapsAgentDeadline(t *testing.T) {
 	repository, sha := fixtureRepository(t)
 	request := fixtureRequest(repository, sha)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
-	result := Execute(ctx, request, Options{WorkspaceRoot: t.TempDir(), RunOpenCode: func(ctx context.Context, _ OpenCodeSpec) (string, string, error) {
+	request.TimeoutSeconds = 1
+	request.CommandPolicy.Commands[0].TimeoutSeconds = 1
+	result := Execute(context.Background(), request, Options{WorkspaceRoot: t.TempDir(), RunOpenCode: func(ctx context.Context, _ OpenCodeSpec) (string, string, error) {
 		<-ctx.Done()
 		return "", "", ctx.Err()
 	}})
@@ -339,7 +421,7 @@ func TestExecuteRejectsCredentialBearingOutput(t *testing.T) {
 	}{
 		{name: "stdout", run: func(context.Context, OpenCodeSpec) (string, string, error) { return credential, "", nil }},
 		{name: "stderr", run: func(context.Context, OpenCodeSpec) (string, string, error) { return "", credential, nil }},
-		{name: "error", run: func(context.Context, OpenCodeSpec) (string, string, error) { return "", "", errors.New(credential) }, wantReason: "coding agent failed"},
+		{name: "error", run: func(context.Context, OpenCodeSpec) (string, string, error) { return "", "", errors.New(credential) }},
 		{name: "changed file", run: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
 			return "", "", os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte(credential), 0o644)
 		}},
@@ -376,7 +458,7 @@ func TestExecuteRejectsCredentialBearingOutput(t *testing.T) {
 			if wantReason == "" {
 				wantReason = modelprovider.ErrCredentialExposure.Error()
 			}
-			if result.TerminalState != engineruntime.TerminalFailed || result.FailureReason != wantReason {
+			if result.TerminalState != engineruntime.TerminalFailed || result.FailureCode != engineruntime.ExecutionFailureSafetyIntegrity || result.FailureReason != wantReason {
 				t.Fatalf("credential-bearing result was not rejected or sanitized: state=%s reason=%q", result.TerminalState, result.FailureReason)
 			}
 			if strings.Contains(string(encoded), credential) {
@@ -486,5 +568,31 @@ fi
 	}
 	if len(result.CommandResults) != 2 || result.CommandResults[0].ExitCode != 0 {
 		t.Fatalf("command results = %+v", result.CommandResults)
+	}
+}
+
+func TestExecuteClassifiesReviewScopeWithoutPatchContent(t *testing.T) {
+	repository, sha := fixtureRepository(t)
+	request := fixtureRequest(repository, sha)
+	request.MaxFiles = 1
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: t.TempDir(),
+		RunOpenCode: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
+			if err := os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte("changed\n"), 0o644); err != nil {
+				return "", "", err
+			}
+			return "private model output", "private model error", os.WriteFile(filepath.Join(spec.WorkDir, "added.txt"), []byte("added\n"), 0o644)
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalFailed || result.FailureCode != engineruntime.ExecutionFailureReviewScope {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(result.CommandResults) != len(request.CommandPolicy.Commands) || len(result.Files) != 0 || result.Diff != "" || len(result.ChangedFiles) != 0 {
+		t.Fatalf("scope failure retained patch or incomplete command identity: %+v", result)
+	}
+	for _, command := range result.CommandResults {
+		if command.Stdout != "" || command.Stderr != "" {
+			t.Fatalf("scope failure retained command output: %+v", command)
+		}
 	}
 }

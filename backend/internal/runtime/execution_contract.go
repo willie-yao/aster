@@ -63,10 +63,22 @@ type ExecutionRequest struct {
 type TerminalState string
 
 const (
+	// TerminalSucceeded means the executor completed every configured command
+	// and passed the hard repository and result-integrity checks. Individual
+	// command outcomes remain authoritative in CommandResults.
 	TerminalSucceeded TerminalState = "succeeded"
 	TerminalFailed    TerminalState = "failed"
 	TerminalTimedOut  TerminalState = "timed_out"
 	TerminalCancelled TerminalState = "cancelled"
+)
+
+// ExecutionFailureCode classifies a failed executor outcome without exposing output.
+type ExecutionFailureCode string
+
+const (
+	ExecutionFailureRuntime         ExecutionFailureCode = "runtime"
+	ExecutionFailureReviewScope     ExecutionFailureCode = "review_scope"
+	ExecutionFailureSafetyIntegrity ExecutionFailureCode = "safety_integrity"
 )
 
 // CommandResult records one allowed command execution.
@@ -97,18 +109,19 @@ type ResourceMetadata struct {
 
 // ExecutionResult is the provider-neutral outcome of a bounded fix execution.
 type ExecutionResult struct {
-	Version        int               `json:"version,omitempty"`
-	BaseSHA        string            `json:"base_sha,omitempty"`
-	ChangedFiles   []string          `json:"changed_files,omitempty"`
-	Files          map[string]string `json:"files,omitempty"`
-	Diff           string            `json:"diff,omitempty"`
-	CommandResults []CommandResult   `json:"command_results,omitempty"`
-	StdoutSummary  string            `json:"stdout_summary,omitempty"`
-	StderrSummary  string            `json:"stderr_summary,omitempty"`
-	TerminalState  TerminalState     `json:"terminal_state,omitempty"`
-	DurationMs     int64             `json:"duration_ms,omitempty"`
-	Resources      ResourceMetadata  `json:"resources,omitempty"`
-	FailureReason  string            `json:"failure_reason,omitempty"`
+	Version        int                  `json:"version,omitempty"`
+	BaseSHA        string               `json:"base_sha,omitempty"`
+	ChangedFiles   []string             `json:"changed_files,omitempty"`
+	Files          map[string]string    `json:"files,omitempty"`
+	Diff           string               `json:"diff,omitempty"`
+	CommandResults []CommandResult      `json:"command_results,omitempty"`
+	StdoutSummary  string               `json:"stdout_summary,omitempty"`
+	StderrSummary  string               `json:"stderr_summary,omitempty"`
+	TerminalState  TerminalState        `json:"terminal_state,omitempty"`
+	FailureCode    ExecutionFailureCode `json:"failure_code,omitempty"`
+	DurationMs     int64                `json:"duration_ms,omitempty"`
+	Resources      ResourceMetadata     `json:"resources,omitempty"`
+	FailureReason  string               `json:"failure_reason,omitempty"`
 
 	// Output is the legacy bounded summary consumed by the existing Fix PR path.
 	Output string `json:"-"`
@@ -237,9 +250,18 @@ func (r ExecutionResult) Validate(request ExecutionRequest) error {
 		if strings.TrimSpace(r.FailureReason) != "" {
 			return fmt.Errorf("successful execution has a failure reason")
 		}
+		if r.FailureCode != "" {
+			return fmt.Errorf("successful execution has a failure code")
+		}
 	case TerminalFailed, TerminalTimedOut, TerminalCancelled:
 		if strings.TrimSpace(r.FailureReason) == "" {
 			return fmt.Errorf("terminal state %q requires a failure reason", r.TerminalState)
+		}
+		if r.TerminalState != TerminalFailed && r.FailureCode != "" {
+			return fmt.Errorf("terminal state %q cannot carry failure code %q", r.TerminalState, r.FailureCode)
+		}
+		if r.TerminalState == TerminalFailed && r.FailureCode != "" && r.FailureCode != ExecutionFailureRuntime && r.FailureCode != ExecutionFailureReviewScope && r.FailureCode != ExecutionFailureSafetyIntegrity {
+			return fmt.Errorf("execution failure code %q is not supported", r.FailureCode)
 		}
 	default:
 		return fmt.Errorf("terminal state %q is not supported", r.TerminalState)
@@ -251,7 +273,7 @@ func (r ExecutionResult) Validate(request ExecutionRequest) error {
 		return fmt.Errorf("command results exceed the request policy")
 	}
 	if r.TerminalState == TerminalSucceeded {
-		if err := ValidateSuccessfulCommandResults(request.CommandPolicy.Commands, r.CommandResults); err != nil {
+		if err := ValidateCommandResults(request.CommandPolicy.Commands, r.CommandResults); err != nil {
 			return err
 		}
 	} else {
@@ -273,7 +295,7 @@ func (r ExecutionResult) Validate(request ExecutionRequest) error {
 		return fmt.Errorf("changed file list and file contents differ")
 	}
 	if len(changed) > request.MaxFiles {
-		return fmt.Errorf("changed files exceed the request max_files bound")
+		return fmt.Errorf("%w: changed files exceed the request max_files bound", ErrResultScope)
 	}
 	if len(changed) > 0 && strings.TrimSpace(r.Diff) == "" {
 		return fmt.Errorf("changed files require a unified diff")
@@ -315,10 +337,9 @@ func (r ExecutionResult) Validate(request ExecutionRequest) error {
 	return nil
 }
 
-// ValidateSuccessfulCommandResults verifies the complete ordered result set for
-// one successful external execution. Every configured command must appear once,
-// succeed within its timeout, and end with the exact staged diff check.
-func ValidateSuccessfulCommandResults(commands []ExecutionCommand, results []CommandResult) error {
+// ValidateCommandResults verifies a complete ordered result set without
+// requiring each authentic command to succeed.
+func ValidateCommandResults(commands []ExecutionCommand, results []CommandResult) error {
 	if len(commands) == 0 {
 		return fmt.Errorf("at least one final validation command is required")
 	}
@@ -326,7 +347,7 @@ func ValidateSuccessfulCommandResults(commands []ExecutionCommand, results []Com
 		return fmt.Errorf("the final validation command must be git diff --cached --check")
 	}
 	if len(results) != len(commands) {
-		return fmt.Errorf("successful execution must report every allowed command exactly once")
+		return fmt.Errorf("execution must report every allowed command exactly once")
 	}
 	for index, result := range results {
 		if commands[index].TimeoutSeconds <= 0 || commands[index].TimeoutSeconds > int64((30*time.Minute)/time.Second) {
@@ -341,6 +362,18 @@ func ValidateSuccessfulCommandResults(commands []ExecutionCommand, results []Com
 		if err := validateCommandResultTiming(index, commands[index], result); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// ValidateSuccessfulCommandResults verifies the complete ordered result set for
+// one successful external execution. Every configured command must appear once,
+// succeed within its timeout, and end with the exact staged diff check.
+func ValidateSuccessfulCommandResults(commands []ExecutionCommand, results []CommandResult) error {
+	if err := ValidateCommandResults(commands, results); err != nil {
+		return err
+	}
+	for index, result := range results {
 		if result.TimedOut {
 			return fmt.Errorf("command result %d timed out", index)
 		}

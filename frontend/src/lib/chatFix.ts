@@ -1,5 +1,5 @@
 import type { ActionPreview, ActionRequest } from "../types/actions";
-import { actionErrorMessage, loadLatestActionRequest } from "./actionRequests.js";
+import { actionErrorMessage, cancelActionRequest, loadLatestActionRequest } from "./actionRequests.js";
 
 const API_BASE = import.meta.env.BASE_URL;
 const maxInstructionBytes = 4096;
@@ -64,6 +64,7 @@ export async function createAnalysisChatFixRequest(
   sessionID: string,
   chatRequestID: string,
   instruction: string,
+  replacesRequestID?: string,
   signal?: AbortSignal,
 ): Promise<ChatFixRequest> {
   const response = await fetch(
@@ -74,7 +75,10 @@ export async function createAnalysisChatFixRequest(
       cache: "no-store",
       signal,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(instruction.trim() ? { instruction: instruction.trim() } : {}),
+      body: JSON.stringify({
+        ...(instruction.trim() ? { instruction: instruction.trim() } : {}),
+        ...(replacesRequestID ? { replaces_request_id: replacesRequestID } : {}),
+      }),
     },
   );
   if (!response.ok) throw new Error(await actionErrorMessage(response));
@@ -83,6 +87,11 @@ export async function createAnalysisChatFixRequest(
 
 export async function loadAnalysisChatFixRequest(id: string, signal?: AbortSignal): Promise<ChatFixRequest> {
   return validateChatFixRequest(await loadLatestActionRequest(API_BASE, id, signal));
+}
+
+
+export async function cancelAnalysisChatFixRequest(id: string): Promise<ChatFixRequest> {
+  return validateChatFixRequest(await cancelActionRequest(API_BASE, id));
 }
 
 function validateChatFixRequest(request: ActionRequest): ChatFixRequest {

@@ -25,6 +25,7 @@ import (
 	k8sresource "k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 )
 
@@ -386,6 +387,17 @@ func checkLocalSecurity(add func(string, KubernetesDoctorStatus, string, string)
 			add("Agent Sandbox provider endpoint", KubernetesDoctorFail, err.Error(), "Use a reviewed absolute HTTPS endpoint without credentials, query parameters, or fragments.")
 		} else {
 			add("Agent Sandbox provider endpoint", KubernetesDoctorPass, "configured endpoint satisfies the encrypted deployment contract", "")
+		}
+		ca := values.AgentSandbox.FixRuntime.CABundle
+		caConfig := modelprovider.CABundleConfig{ExistingConfigMap: ca.ExistingConfigMap, Key: ca.Key, SHA256: ca.SHA256}
+		if err := modelprovider.ValidateCABundleConfig(caConfig); err != nil {
+			add("Agent Sandbox public CA bundle configuration", KubernetesDoctorFail, err.Error(), "Set the exact ConfigMap name, data key, and lowercase SHA-256 together, or leave all three empty.")
+		} else if caConfig.Enabled() && (len(k8svalidation.IsDNS1123Subdomain(caConfig.ExistingConfigMap)) > 0 || len(k8svalidation.IsConfigMapKey(caConfig.Key)) > 0) {
+			add("Agent Sandbox public CA bundle configuration", KubernetesDoctorFail, "ConfigMap name or data key syntax is invalid", "Use one exact Kubernetes ConfigMap name and one exact data key.")
+		} else if caConfig.Enabled() {
+			add("Agent Sandbox public CA bundle configuration", KubernetesDoctorUnverified, "coordinates and expected SHA-256 are syntactically valid; certificate contents require an exact live ConfigMap GET", "Run live doctor with the explicit Kubernetes context.")
+		} else {
+			add("Agent Sandbox public CA bundle configuration", KubernetesDoctorPass, "disabled; the executor uses normal public trust roots", "")
 		}
 	}
 	if cfg.Branding.SiteURL == "" {
@@ -756,6 +768,7 @@ func checkPublicOrigin(ctx context.Context, add func(string, KubernetesDoctorSta
 
 func checkAgentSandbox(ctx context.Context, add func(string, KubernetesDoctorStatus, string, string), cluster clusterReader, opts Options, values kubernetesDoctorValues, releaseExists bool) {
 	fix := values.AgentSandbox.FixRuntime
+	checkFixCABundle(ctx, add, cluster, fix)
 	crd, err := cluster.Get(ctx, customResourcesGVR, "", "sandboxes.agents.x-k8s.io")
 	if err != nil {
 		add("Agent Sandbox CRD", KubernetesDoctorFail, "sandboxes.agents.x-k8s.io is unavailable: "+err.Error(), "Install the checksum-verified upstream Agent Sandbox v0.5.3 core manifest.")
@@ -829,6 +842,42 @@ func checkAgentSandbox(ctx context.Context, add func(string, KubernetesDoctorSta
 		add("model gateway network-policy backend", KubernetesDoctorFail, "the selected platform contract is not the supported FQDN-aware Cilium backend", "Install or restore the platform chart with execution.networkPolicy.mode=cilium.")
 	}
 	add("hostile-code isolation", KubernetesDoctorUnverified, "resource presence does not prove that the RuntimeClass enforces hostile-code isolation", "Validate the secure runtime and node image during target-cluster release acceptance.")
+}
+
+func checkFixCABundle(ctx context.Context, add func(string, KubernetesDoctorStatus, string, string), cluster clusterReader, fix doctorFixRuntimeValues) {
+	config := modelprovider.CABundleConfig{
+		ExistingConfigMap: fix.CABundle.ExistingConfigMap,
+		Key:               fix.CABundle.Key,
+		SHA256:            fix.CABundle.SHA256,
+	}
+	if !config.Enabled() {
+		return
+	}
+	object, err := cluster.Get(ctx, configMapsGVR, fix.Namespace, config.ExistingConfigMap)
+	if err != nil {
+		add("Agent Sandbox public CA bundle", KubernetesDoctorFail, "configured ConfigMap is unavailable: "+err.Error(), "Restore GET access to the exact public CA ConfigMap in the execution namespace.")
+		return
+	}
+	data, _, err := unstructured.NestedStringMap(object.Object, "data")
+	if err != nil {
+		add("Agent Sandbox public CA bundle", KubernetesDoctorFail, "configured ConfigMap data is invalid", "Restore the exact public CA data entry.")
+		return
+	}
+	value, ok := data[config.Key]
+	if !ok {
+		binaryData, _, _ := unstructured.NestedStringMap(object.Object, "binaryData")
+		if _, binary := binaryData[config.Key]; binary {
+			add("Agent Sandbox public CA bundle", KubernetesDoctorFail, "configured key uses unsupported ConfigMap binaryData", "Store the public PEM bundle under the exact ConfigMap data key.")
+			return
+		}
+		add("Agent Sandbox public CA bundle", KubernetesDoctorFail, "configured ConfigMap data key is missing", "Restore the exact public CA data key.")
+		return
+	}
+	if err := modelprovider.ValidateCABundle([]byte(value), config.SHA256); err != nil {
+		add("Agent Sandbox public CA bundle", KubernetesDoctorFail, err.Error(), "Restore a bounded certificate-only PEM bundle whose exact bytes match the configured SHA-256.")
+		return
+	}
+	add("Agent Sandbox public CA bundle", KubernetesDoctorPass, "exact ConfigMap key contains a bounded certificate-only PEM bundle matching the configured SHA-256", "")
 }
 
 func classifyPlatformOwnership(ctx context.Context, add func(string, KubernetesDoctorStatus, string, string), cluster clusterReader, opts Options, fix doctorFixRuntimeValues, executionNamespace *unstructured.Unstructured, releaseExists bool) platformOwnershipMode {
@@ -2606,6 +2655,11 @@ type doctorFixRuntimeValues struct {
 		Limits   map[string]string `yaml:"limits"`
 	} `yaml:"resources"`
 	ModelProvider doctorProviderValues `yaml:"modelProvider"`
+	CABundle      struct {
+		ExistingConfigMap string `yaml:"existingConfigMap"`
+		Key               string `yaml:"key"`
+		SHA256            string `yaml:"sha256"`
+	} `yaml:"caBundle"`
 }
 
 type kubernetesDoctorValues struct {

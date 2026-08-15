@@ -1904,6 +1904,38 @@ if [ "$(grep -Fc 'image: local/remote-fixer:sha-abcdef0' "$tmp/agent-sandbox-ren
   echo 'Agent Sandbox did not select the remote fixer for server and worker' >&2
   exit 1
 fi
+if grep -Eq 'AGENT_SANDBOX_MODEL_PROVIDER_CA_|resources: \["configmaps"\]|model-provider-ca/ca-bundle.pem' "$tmp/agent-sandbox-render.yaml"; then
+  echo 'disabled Agent Sandbox CA configuration changed the rendered workload or RBAC shape' >&2
+  exit 1
+fi
+grep -Fq "has(oldObject.metadata.annotations) && 'prow-ai-dashboard/model-provider-ca-sha256' in oldObject.metadata.annotations && object.metadata.annotations['prow-ai-dashboard/model-provider-ca-sha256'] == oldObject.metadata.annotations['prow-ai-dashboard/model-provider-ca-sha256']" "$tmp/agent-sandbox-render.yaml"
+
+python3 - "$tmp/agent-sandbox.yaml" "$tmp/agent-sandbox-ca.yaml" <<'PYFIXCA'
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text()
+needle = "      publicCAPrivateDNS: false\n"
+assert text.count(needle) == 1
+replacement = needle + "    caBundle:\n      existingConfigMap: model-provider-ca\n      key: ca-bundle.pem\n      sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+Path(sys.argv[2]).write_text(text.replace(needle, replacement))
+PYFIXCA
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-ca.yaml" > "$tmp/agent-sandbox-ca-render.yaml"
+grep -Fq 'resources: ["configmaps"]' "$tmp/agent-sandbox-ca-render.yaml"
+grep -Fq 'resourceNames: ["model-provider-ca"]' "$tmp/agent-sandbox-ca-render.yaml"
+grep -Fq 'verbs: ["get"]' "$tmp/agent-sandbox-ca-render.yaml"
+grep -A1 -F 'name: AGENT_SANDBOX_MODEL_PROVIDER_CA_CONFIG_MAP' "$tmp/agent-sandbox-ca-render.yaml" | grep -Fq 'value: "model-provider-ca"'
+grep -A1 -F 'name: AGENT_SANDBOX_MODEL_PROVIDER_CA_KEY' "$tmp/agent-sandbox-ca-render.yaml" | grep -Fq 'value: "ca-bundle.pem"'
+grep -A1 -F 'name: AGENT_SANDBOX_MODEL_PROVIDER_CA_SHA256' "$tmp/agent-sandbox-ca-render.yaml" | grep -Fq 'value: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"'
+grep -Fq "object.metadata.annotations['prow-ai-dashboard/model-provider-ca-sha256'] == \\\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\\\"" "$tmp/agent-sandbox-ca-render.yaml"
+grep -Fq 'size(object.metadata.annotations) == 4' "$tmp/agent-sandbox-ca-render.yaml"
+grep -Fq "variables.container.env[1].name == 'NODE_EXTRA_CA_CERTS'" "$tmp/agent-sandbox-ca-render.yaml"
+grep -Fq "variables.container.env[2].name == 'PROW_AI_MODEL_PROVIDER_CA_SHA256'" "$tmp/agent-sandbox-ca-render.yaml"
+grep -Fq "variables.container.env[3].name == 'PROW_AI_MODEL_PROVIDER_TOKEN'" "$tmp/agent-sandbox-ca-render.yaml"
+grep -Fq 'size(variables.container.env) == 4' "$tmp/agent-sandbox-ca-render.yaml"
+grep -Fq "v.name == 'model-provider-ca' && v.mountPath == '/etc/prow-ai-dashboard/model-provider-ca'" "$tmp/agent-sandbox-ca-render.yaml"
+grep -Fq 'v.configMap.name == \"model-provider-ca\"' "$tmp/agent-sandbox-ca-render.yaml"
+grep -Fq 'v.configMap.items[0].key == \"ca-bundle.pem\"' "$tmp/agent-sandbox-ca-render.yaml"
+grep -Fq "v.configMap.items[0].path == 'ca-bundle.pem'" "$tmp/agent-sandbox-ca-render.yaml"
 
 python3 - "$tmp/agent-sandbox.yaml" "$tmp/agent-sandbox-unset-reasoning.yaml" <<'PYUNSETFIXREASONING'
 from pathlib import Path

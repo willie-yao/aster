@@ -9,13 +9,13 @@ import {
 test("known routes receive route-specific page titles", () => {
   const cases = [
     ["/", "Overview"],
-    ["/flaky", "Failure trends"],
-    ["/flaky/", "Failure trends"],
-    ["/FLAKY", "Failure trends"],
-    ["/analysis-traces", "Analysis traces"],
-    ["/ANALYSIS-TRACES", "Analysis traces"],
-    ["/ai-usage", "AI usage"],
-    ["/AI-USAGE", "AI usage"],
+    ["/flaky", "Failure Trends"],
+    ["/flaky/", "Failure Trends"],
+    ["/FLAKY", "Failure Trends"],
+    ["/analysis-traces", "Analysis Traces"],
+    ["/ANALYSIS-TRACES", "Analysis Traces"],
+    ["/ai-usage", "AI Usage"],
+    ["/AI-USAGE", "AI Usage"],
     ["/job/periodic-capz", "Job details"],
     ["/JOB/periodic-capz", "Job details"],
     ["/job/periodic-capz/test/TestCluster", "Test details"],
@@ -52,7 +52,7 @@ test("unknown and malformed routes receive the Not Found title", () => {
 test("document titles combine the route title with dashboard branding", () => {
   assert.equal(
     documentTitleForPath("/flaky", "CAPZ Prow Dashboard"),
-    "Failure trends | CAPZ Prow Dashboard",
+    "Failure Trends | CAPZ Prow Dashboard",
   );
   assert.equal(
     documentTitleForPath("/does-not-exist", "CAPZ Prow Dashboard"),

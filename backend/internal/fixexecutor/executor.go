@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -24,6 +25,7 @@ const (
 	defaultWorkspaceRoot = "/workspace"
 	defaultOpenCodeBin   = "opencode"
 	maxCapturedStream    = 64 << 10
+	commandCleanupGrace  = time.Second
 )
 
 // OpenCodeSpec is the non-secret invocation passed to the coding agent.
@@ -60,29 +62,43 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 	var credential modelprovider.CredentialGuard
 	finish := func(state engineruntime.TerminalState, reason string) engineruntime.ExecutionResult {
 		result.TerminalState = state
+		if state == engineruntime.TerminalFailed && result.FailureCode == "" {
+			result.FailureCode = engineruntime.ExecutionFailureRuntime
+		}
 		result.FailureReason = strings.TrimSpace(credential.SanitizeReason(reason))
 		result.DurationMs = max(now().Sub(started).Milliseconds(), 0)
 		if state == engineruntime.TerminalSucceeded {
+			result.FailureCode = ""
 			result.FailureReason = ""
 		}
 		if err := validateCredentialFreeResult(credential, result); err != nil {
-			return compactFailure(request, now().Sub(started), err)
+			return compactFailure(request, now().Sub(started), engineruntime.ExecutionFailureSafetyIntegrity, err)
 		}
 		if err := result.Validate(request); err != nil {
-			return compactFailure(request, now().Sub(started), fmt.Errorf("executor result validation: %w", err))
+			if errors.Is(err, engineruntime.ErrResultScope) {
+				return compactFailureWithCommandResults(
+					request, now().Sub(started), engineruntime.ExecutionFailureReviewScope, result.CommandResults,
+					fmt.Errorf("executor result validation: %w", err),
+				)
+			}
+			return compactFailure(request, now().Sub(started), engineruntime.ExecutionFailureRuntime, fmt.Errorf("executor result validation: %w", err))
 		}
 		return result
 	}
+	finishSafety := func(reason string) engineruntime.ExecutionResult {
+		result.FailureCode = engineruntime.ExecutionFailureSafetyIntegrity
+		return finish(engineruntime.TerminalFailed, reason)
+	}
 	if err := request.Validate(); err != nil {
-		return compactFailure(request, now().Sub(started), err)
+		return compactFailure(request, now().Sub(started), engineruntime.ExecutionFailureRuntime, err)
 	}
 	var err error
 	credential, err = modelprovider.NewCredentialGuard(request.ModelProvider, os.LookupEnv)
 	if err != nil {
-		return compactFailure(request, now().Sub(started), err)
+		return compactFailure(request, now().Sub(started), engineruntime.ExecutionFailureRuntime, err)
 	}
 	if request.CommandPolicy.AllowShell {
-		return finish(engineruntime.TerminalFailed, "shell execution is not supported")
+		return finishSafety("shell execution is not supported")
 	}
 	if err := validateFinalCommands(request.CommandPolicy.Commands); err != nil {
 		return finish(engineruntime.TerminalFailed, err.Error())
@@ -130,7 +146,7 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 		return finish(stateForContext(ctx), fmt.Sprintf("read checked-out commit: %v", err))
 	}
 	if strings.TrimSpace(head) != request.ExpectedBaseSHA {
-		return finish(engineruntime.TerminalFailed, fmt.Sprintf("checked-out commit %s does not match expected base %s", strings.TrimSpace(head), request.ExpectedBaseSHA))
+		return finishSafety(fmt.Sprintf("checked-out commit %s does not match expected base %s", strings.TrimSpace(head), request.ExpectedBaseSHA))
 	}
 	if _, stderr, err := runCommand(ctx, work, gitEnvironment(home, temp), maxCapturedStream, "git", "remote", "remove", "origin"); err != nil {
 		result.StderrSummary = appendSummary(result.StderrSummary, stderr)
@@ -157,25 +173,28 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 		return finish(engineruntime.TerminalFailed, fmt.Sprintf("restore Git metadata: %v", err))
 	}
 	if err := credential.CheckStrings(stdout, stderr); err != nil {
-		return compactFailure(request, now().Sub(started), err)
+		return compactFailure(request, now().Sub(started), engineruntime.ExecutionFailureSafetyIntegrity, err)
 	}
 	result.StdoutSummary = appendSummary(result.StdoutSummary, openCodeSummary(stdout))
 	result.StderrSummary = appendSummary(result.StderrSummary, stderr)
 	if errors.Is(agentErr, modelprovider.ErrCredentialExposure) {
-		return compactFailure(request, now().Sub(started), modelprovider.ErrCredentialExposure)
+		return compactFailure(request, now().Sub(started), engineruntime.ExecutionFailureSafetyIntegrity, modelprovider.ErrCredentialExposure)
 	}
 	if agentErr != nil {
+		if err := credential.CheckStrings(agentErr.Error()); err != nil {
+			return compactFailure(request, now().Sub(started), engineruntime.ExecutionFailureSafetyIntegrity, err)
+		}
 		return finish(stateForContext(ctx), safeOpenCodeFailure(agentErr))
 	}
 	head, stderr, err = runCommand(ctx, work, gitEnvironment(home, temp), maxCapturedStream, "git", "rev-parse", "HEAD")
 	if err != nil || strings.TrimSpace(head) != request.ExpectedBaseSHA {
 		result.StderrSummary = appendSummary(result.StderrSummary, stderr)
-		return finish(engineruntime.TerminalFailed, "coding agent changed the immutable repository HEAD")
+		return finishSafety("coding agent changed the immutable repository HEAD")
 	}
 	remotes, stderr, err := runCommand(ctx, work, gitEnvironment(home, temp), maxCapturedStream, "git", "remote")
 	if err != nil || strings.TrimSpace(remotes) != "" {
 		result.StderrSummary = appendSummary(result.StderrSummary, stderr)
-		return finish(engineruntime.TerminalFailed, "coding agent restored or added a Git remote")
+		return finishSafety("coding agent restored or added a Git remote")
 	}
 	if _, stderr, err := runCommand(ctx, work, gitEnvironment(home, temp), maxCapturedStream, "git", "add", "-A"); err != nil {
 		result.StderrSummary = appendSummary(result.StderrSummary, stderr)
@@ -202,8 +221,7 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 		if timeout > 0 {
 			commandCtx, commandCancel = context.WithTimeout(ctx, timeout)
 		}
-		stdout, stderr, commandErr := runCommand(commandCtx, work, executionEnvironment(home, temp), commandOutputLimit(request), command.Argv...)
-		commandState := stateForContext(commandCtx)
+		stdout, stderr, commandErr := runValidationCommand(commandCtx, work, executionEnvironment(home, temp), commandOutputLimit(request), command.Argv...)
 		commandTimedOut := errors.Is(commandCtx.Err(), context.DeadlineExceeded)
 		commandCancel()
 		commandResult := engineruntime.CommandResult{
@@ -216,15 +234,22 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 		result.StdoutSummary = appendSummary(result.StdoutSummary, stdout)
 		result.StderrSummary = appendSummary(result.StderrSummary, stderr)
 		if commandErr != nil {
+			if ctx.Err() != nil {
+				return finish(stateForContext(ctx), fmt.Sprintf("validation command %d interrupted: %v", index+1, ctx.Err()))
+			}
 			var executableErr *exec.Error
 			if errors.As(commandErr, &executableErr) {
 				return finish(engineruntime.TerminalFailed, fmt.Sprintf("validation command %d executable %q is unavailable in the executor image", index+1, command.Argv[0]))
 			}
-			return finish(commandState, fmt.Sprintf("validation command %d failed: %v", index+1, commandErr))
+			var exitErr *exec.ExitError
+			if commandTimedOut || errors.As(commandErr, &exitErr) && exitErr.ExitCode() >= 0 {
+				continue
+			}
+			return finish(engineruntime.TerminalFailed, fmt.Sprintf("validation command %d could not run: %v", index+1, commandErr))
 		}
 	}
 	if _, _, err := runCommand(ctx, work, gitEnvironment(home, temp), maxCapturedStream, "git", "diff", "--quiet"); err != nil {
-		return finish(engineruntime.TerminalFailed, "validation commands modified tracked workspace files")
+		return finishSafety("validation commands modified tracked workspace files")
 	}
 	untracked, stderr, err := runCommand(ctx, work, gitEnvironment(home, temp), maxCapturedStream, "git", "ls-files", "--others", "--exclude-standard")
 	if err != nil {
@@ -232,17 +257,17 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 		return finish(engineruntime.TerminalFailed, fmt.Sprintf("inspect validation workspace: %v", err))
 	}
 	if strings.TrimSpace(untracked) != "" {
-		return finish(engineruntime.TerminalFailed, "validation commands created untracked workspace files")
+		return finishSafety("validation commands created untracked workspace files")
 	}
 	head, stderr, err = runCommand(ctx, work, gitEnvironment(home, temp), maxCapturedStream, "git", "rev-parse", "HEAD")
 	if err != nil || strings.TrimSpace(head) != request.ExpectedBaseSHA {
 		result.StderrSummary = appendSummary(result.StderrSummary, stderr)
-		return finish(engineruntime.TerminalFailed, "validation commands changed the immutable repository HEAD")
+		return finishSafety("validation commands changed the immutable repository HEAD")
 	}
 	remotes, stderr, err = runCommand(ctx, work, gitEnvironment(home, temp), maxCapturedStream, "git", "remote")
 	if err != nil || strings.TrimSpace(remotes) != "" {
 		result.StderrSummary = appendSummary(result.StderrSummary, stderr)
-		return finish(engineruntime.TerminalFailed, "validation commands restored or added a Git remote")
+		return finishSafety("validation commands restored or added a Git remote")
 	}
 	stagedAfter, stderr, err := renderStagedDiff(ctx, work, home, temp, int(request.OutputLimitBytes))
 	if err != nil {
@@ -250,12 +275,15 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 		return finish(stateForContext(ctx), fmt.Sprintf("verify generated patch: %v", err))
 	}
 	if stagedAfter != stagedBefore {
-		return finish(engineruntime.TerminalFailed, "validation commands modified the staged patch")
+		return finishSafety("validation commands modified the staged patch")
 	}
 
 	changed, files, diff, err := stagedResult(ctx, work, home, temp, int(request.OutputLimitBytes))
 	if err != nil {
-		return finish(stateForContext(ctx), err.Error())
+		if ctx.Err() != nil {
+			return finish(stateForContext(ctx), err.Error())
+		}
+		return finishSafety(err.Error())
 	}
 	result.ChangedFiles = changed
 	result.Files = files
@@ -270,12 +298,30 @@ func baseResult(request engineruntime.ExecutionRequest) engineruntime.ExecutionR
 	}
 }
 
-func compactFailure(request engineruntime.ExecutionRequest, duration time.Duration, err error) engineruntime.ExecutionResult {
+func compactFailure(request engineruntime.ExecutionRequest, duration time.Duration, code engineruntime.ExecutionFailureCode, err error) engineruntime.ExecutionResult {
 	return engineruntime.ExecutionResult{
 		Version: engineruntime.ExecutionContractVersion, BaseSHA: request.ExpectedBaseSHA,
 		Files: map[string]string{}, TerminalState: engineruntime.TerminalFailed,
-		DurationMs: max(duration.Milliseconds(), 0), FailureReason: oneLine(err.Error()),
+		FailureCode: code, DurationMs: max(duration.Milliseconds(), 0), FailureReason: oneLine(err.Error()),
 	}
+}
+
+func compactFailureWithCommandResults(
+	request engineruntime.ExecutionRequest,
+	duration time.Duration,
+	code engineruntime.ExecutionFailureCode,
+	results []engineruntime.CommandResult,
+	err error,
+) engineruntime.ExecutionResult {
+	result := compactFailure(request, duration, code, err)
+	result.CommandResults = make([]engineruntime.CommandResult, len(results))
+	for index, command := range results {
+		result.CommandResults[index] = engineruntime.CommandResult{
+			Argv: append([]string(nil), command.Argv...), ExitCode: command.ExitCode,
+			DurationMs: command.DurationMs, TimedOut: command.TimedOut,
+		}
+	}
+	return result
 }
 
 func validateCredentialFreeResult(credential modelprovider.CredentialGuard, result engineruntime.ExecutionResult) error {
@@ -374,6 +420,9 @@ func renderStagedDiff(ctx context.Context, work, home, temp string, outputLimit 
 }
 
 func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (string, string, error) {
+	if err := modelprovider.ValidateProcessCABundleEnvironment(); err != nil {
+		return "", "", err
+	}
 	if err := writeOpenCodeConfig(spec.HomeDir, spec.Provider, spec.MaxSteps); err != nil {
 		return "", "", err
 	}
@@ -491,6 +540,38 @@ func runCommand(ctx context.Context, dir string, env []string, limit int, argv .
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = env
+	stdout := newTailBuffer(limit)
+	stderr := newTailBuffer(limit)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return stdout.String(), stderr.String(), ctx.Err()
+	}
+	return stdout.String(), stderr.String(), err
+}
+
+func runValidationCommand(ctx context.Context, dir string, env []string, limit int, argv ...string) (string, string, error) {
+	if len(argv) == 0 {
+		return "", "", fmt.Errorf("empty command")
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Dir = dir
+	cmd.Env = env
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+			if errors.Is(err, syscall.ESRCH) {
+				return os.ErrProcessDone
+			}
+			return err
+		}
+		return nil
+	}
+	cmd.WaitDelay = commandCleanupGrace
 	stdout := newTailBuffer(limit)
 	stderr := newTailBuffer(limit)
 	cmd.Stdout = stdout

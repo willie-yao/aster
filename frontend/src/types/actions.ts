@@ -9,6 +9,7 @@ export type ActionReasonCode =
   | "non_systemic"
   | "evidence_unavailable"
   | "investigation_required"
+  | "no_reviewable_patch"
   | "contract_generation_failed"
   | "unsafe_remediation"
   | "already_present"
@@ -44,6 +45,29 @@ export interface ActionVerification {
   reason: string;
 }
 
+export type AnalysisFixFailureCategory =
+  | "no_reviewable_patch"
+  | "runtime_infrastructure"
+  | "result_contract"
+  | "safety_integrity"
+  | "source_changed"
+  | "cancelled"
+  | "timed_out";
+
+export interface SafeCommandResult {
+  argv: string[];
+  exit_code: number;
+  duration_ms: number;
+  timed_out?: boolean;
+}
+
+export interface AnalysisFixFailure {
+  category: AnalysisFixFailureCategory;
+  terminal_state?: "succeeded" | "failed" | "timed_out" | "cancelled";
+  command_results?: SafeCommandResult[];
+  changed_files?: string[];
+}
+
 export interface ActionPreview {
   token?: string;
   kind: "issue" | "fix";
@@ -69,6 +93,7 @@ export interface ActionRequest {
   error?: string;
   reason_code?: ActionReasonCode;
   warning?: string;
+  failure?: AnalysisFixFailure;
   result_url?: string;
   superseded_by?: string;
   preview?: ActionPreview;

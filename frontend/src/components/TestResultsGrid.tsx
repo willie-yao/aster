@@ -141,7 +141,7 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
         }}
       >
         <Typography variant="body2" color="text.secondary">
-          View on desktop for full test results grid
+          Choose a failed test from the Test results section below. View on desktop for the full comparison grid.
         </Typography>
       </Panel>
 
