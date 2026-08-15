@@ -291,6 +291,6 @@ fi
 gh release create "${release_args[@]}"
 
 if [[ $TAG != *-* ]]; then
-  git tag -f "$major" "$TAG"
+  git tag -f "$major" "$root_remote_ref"
   git push origin -f "refs/tags/$major"
 fi

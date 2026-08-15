@@ -332,6 +332,11 @@ grep -Fq 'refusing to move stable alias backward from v1.10.0 to v1.9.5' "$tmp/l
 
 : > "$log"
 (cd "$root" && RELEASE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script")
+grep -Eq '^git-argv <tag> <-f> <v1> <refs/aster-release/[0-9]+/root>$' "$log"
+if grep -Fq 'git-argv <tag> <-f> <v1> <v1.2.3>' "$log"; then
+  echo 'stable alias used the unchecked local release tag' >&2
+  exit 1
+fi
 python3 - "$log" "$RELEASE_TEST_SHA_COPY" <<'PY'
 from pathlib import Path
 import sys
