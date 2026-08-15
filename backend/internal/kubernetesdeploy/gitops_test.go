@@ -136,6 +136,44 @@ execution:
 	}
 }
 
+func TestGitOpsRejectsCABundleWhenFixDisabled(t *testing.T) {
+	tests := []struct {
+		name, values, want string
+	}{
+		{name: "partial", values: `agentSandbox:
+  fixRuntime:
+    enabled: false
+    caBundle:
+      existingConfigMap: model-provider-ca
+`, want: "requires ConfigMap name, key, and SHA-256"},
+		{name: "complete", values: `agentSandbox:
+  fixRuntime:
+    enabled: false
+    caBundle:
+      existingConfigMap: model-provider-ca
+      key: ca-bundle.pem
+      sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+`, want: "requires agentSandbox.fixRuntime.enabled=true"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			dir := writeGitOpsConsumer(t, testCase.values, "", nil)
+			opts := gitOpsTestOptions(dir)
+			for name, run := range map[string]func(GitOpsOptions, io.Writer) error{
+				"render": RenderGitOps,
+				"check":  CheckGitOps,
+			} {
+				t.Run(name, func(t *testing.T) {
+					err := run(opts, nil)
+					if err == nil || !strings.Contains(err.Error(), testCase.want) {
+						t.Fatalf("error = %v, want %q", err, testCase.want)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestGitOpsValuesPreserveExactInputsAndSortedSkills(t *testing.T) {
 	projectYAML := gitOpsProject + "categories:\n  - match: periodic\n    id: periodic\n    label: Periodic\n"
 	prompt := "first line\n\n  indented line\nlast line\n"

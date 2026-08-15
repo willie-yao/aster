@@ -297,6 +297,18 @@ func resolveGitOpsInputs(opts GitOpsOptions) (gitOpsResolved, map[string]any, ma
 	if fixEnabled != typedValues.AgentSandbox.FixRuntime.Enabled {
 		return gitOpsResolved{}, nil, nil, nil, nil, nil, fmt.Errorf("application values contain an ambiguous Agent Sandbox Fix selection")
 	}
+	fix := typedValues.AgentSandbox.FixRuntime
+	ca := fix.CABundle
+	caConfig := modelprovider.CABundleConfig{ExistingConfigMap: ca.ExistingConfigMap, Key: ca.Key, SHA256: ca.SHA256}
+	if err := modelprovider.ValidateCABundleConfig(caConfig); err != nil {
+		return gitOpsResolved{}, nil, nil, nil, nil, nil, fmt.Errorf("validate Agent Sandbox CA bundle: %w", err)
+	}
+	if caConfig.Enabled() && (len(k8svalidation.IsDNS1123Subdomain(caConfig.ExistingConfigMap)) > 0 || len(k8svalidation.IsConfigMapKey(caConfig.Key)) > 0) {
+		return gitOpsResolved{}, nil, nil, nil, nil, nil, fmt.Errorf("validate Agent Sandbox CA bundle: ConfigMap name or data key syntax is invalid")
+	}
+	if !fixEnabled && (caConfig.ExistingConfigMap != "" || caConfig.Key != "" || caConfig.SHA256 != "") {
+		return gitOpsResolved{}, nil, nil, nil, nil, nil, fmt.Errorf("validate Agent Sandbox CA bundle: caBundle requires agentSandbox.fixRuntime.enabled=true")
+	}
 	if fixEnabled {
 		if len(platformReleaseName(opts.Release)) > 53 {
 			return gitOpsResolved{}, nil, nil, nil, nil, nil, fmt.Errorf("fix-enabled application release names are limited to 44 characters so the paired platform release remains valid")
@@ -312,14 +324,6 @@ func resolveGitOpsInputs(opts GitOpsOptions) (gitOpsResolved, map[string]any, ma
 		})
 		if err := modelprovider.ValidateDeploymentEndpoint(config); err != nil {
 			return gitOpsResolved{}, nil, nil, nil, nil, nil, fmt.Errorf("validate Agent Sandbox provider endpoint: %w", err)
-		}
-		ca := fix.CABundle
-		caConfig := modelprovider.CABundleConfig{ExistingConfigMap: ca.ExistingConfigMap, Key: ca.Key, SHA256: ca.SHA256}
-		if err := modelprovider.ValidateCABundleConfig(caConfig); err != nil {
-			return gitOpsResolved{}, nil, nil, nil, nil, nil, fmt.Errorf("validate Agent Sandbox CA bundle: %w", err)
-		}
-		if caConfig.Enabled() && (len(k8svalidation.IsDNS1123Subdomain(caConfig.ExistingConfigMap)) > 0 || len(k8svalidation.IsConfigMapKey(caConfig.Key)) > 0) {
-			return gitOpsResolved{}, nil, nil, nil, nil, nil, fmt.Errorf("validate Agent Sandbox CA bundle: ConfigMap name or data key syntax is invalid")
 		}
 	}
 	var platformValues map[string]any
