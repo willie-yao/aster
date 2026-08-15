@@ -41,6 +41,7 @@ def documentation_path(path: str) -> bool:
         in {
             ".gitignore",
             ".gitattributes",
+            "AGENTS.md",
             "CODE_OF_CONDUCT",
             "CODE_OF_CONDUCT.md",
             "CONTRIBUTING.md",
@@ -49,6 +50,27 @@ def documentation_path(path: str) -> bool:
             "SECURITY.md",
         }
     )
+
+
+BACKEND_DOCUMENTATION_PATHS = {
+    "AGENTS.md",
+    "README.md",
+    "docs/agent-onboarding.md",
+    "docs/onboarding-a-new-project.md",
+}
+
+HELM_DOCUMENTATION_PATHS = {
+    "AGENTS.md",
+    "deploy/helm/aster-platform/README.md",
+    "docs/README.md",
+    "docs/kubernetes-contributor-deployment.md",
+    "docs/kubernetes-platform-administrator.md",
+    "docs/kubernetes-platform-ownership.md",
+    "docs/kubernetes-platform.md",
+    "docs/kubernetes-reference.md",
+    "docs/kubernetes.md",
+    "docs/onboarding-a-new-project.md",
+}
 
 
 def changed_paths(
@@ -215,12 +237,21 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
 
         if documentation_path(path):
             result["documentation"] = True
-            if path != "AGENTS.md":
-                continue
+            if path in BACKEND_DOCUMENTATION_PATHS:
+                result["backend"] = True
+            if path in HELM_DOCUMENTATION_PATHS:
+                result["helm_static"] = True
+            continue
 
         matched = False
 
-        if path == "AGENTS.md":
+        if under_any(
+            path,
+            (
+                ".agents/skills/setup-aster-consumer",
+                ".agents/skills/author-aster-diagnostics",
+            ),
+        ):
             result["documentation"] = True
             result["backend"] = True
             matched = True
@@ -237,6 +268,7 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
             matched = True
 
         if path == "Dockerfile":
+            result["backend"] = True
             for name in (
                 "remote_fixer",
                 "fix_executor",
@@ -353,7 +385,37 @@ def emit(result: dict[str, bool]) -> None:
 
 def self_test() -> None:
     scenarios = (
-        ("documentation", ["README.md"], {"documentation"}),
+        ("root documentation contract", ["README.md"], {"backend", "documentation"}),
+        (
+            "generic documentation",
+            ["docs/architecture-decisions/0001-analysis-runtime.md"],
+            {"documentation"},
+        ),
+        (
+            "agent onboarding documentation",
+            ["docs/agent-onboarding.md"],
+            {"backend", "documentation"},
+        ),
+        (
+            "shared onboarding documentation",
+            ["docs/onboarding-a-new-project.md"],
+            {"backend", "helm_static", "documentation"},
+        ),
+        (
+            "Kubernetes documentation contract",
+            ["docs/kubernetes.md"],
+            {"helm_static", "documentation"},
+        ),
+        (
+            "platform README contract",
+            ["deploy/helm/aster-platform/README.md"],
+            {"helm_static", "documentation"},
+        ),
+        (
+            "agent skill contract",
+            [".agents/skills/setup-aster-consumer/references/decisions.md"],
+            {"backend", "documentation"},
+        ),
         (
             "frontend",
             ["frontend/src/App.tsx"],
@@ -382,7 +444,13 @@ def self_test() -> None:
         (
             "shared Dockerfile",
             ["Dockerfile"],
-            {"remote_fixer", "fix_executor", "analysis_images", "critic_image"},
+            {
+                "backend",
+                "remote_fixer",
+                "fix_executor",
+                "analysis_images",
+                "critic_image",
+            },
         ),
         (
             "analysis executor",
