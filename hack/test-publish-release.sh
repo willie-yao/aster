@@ -120,7 +120,10 @@ case ${1:-} in
     printf '%s\t%s\n' "$commit" "$ref"
     ;;
   fetch)
-    printf '%s\n' "${*: -1}" > "$RELEASE_TEST_FETCHED_TAG"
+    refspec=${*: -1}
+    if [[ -n ${FAIL_FETCH_TAG:-} && $refspec == refs/tags/"$FAIL_FETCH_TAG":* ]]; then
+      exit 45
+    fi
     ;;
   archive)
     output=
@@ -133,13 +136,10 @@ case ${1:-} in
   rev-parse)
     if [[ ${2:-} == 'HEAD^{commit}' ]]; then
       printf '%s\n' "${HEAD_COMMIT:-2222222222222222222222222222222222222222}"
-    elif [[ ${2:-} == 'FETCH_HEAD^{commit}' ]]; then
-      fetched=$(<"$RELEASE_TEST_FETCHED_TAG")
-      if [[ $fetched == refs/tags/backend/* ]]; then
+    elif [[ ${2:-} == refs/aster-release/*/module'^{commit}' ]]; then
         printf '%s\n' "${MODULE_TAG_COMMIT:-${HEAD_COMMIT:-2222222222222222222222222222222222222222}}"
-      else
-        printf '%s\n' "${ROOT_TAG_COMMIT:-${HEAD_COMMIT:-2222222222222222222222222222222222222222}}"
-      fi
+    elif [[ ${2:-} == refs/aster-release/*/root'^{commit}' ]]; then
+      printf '%s\n' "${ROOT_TAG_COMMIT:-${HEAD_COMMIT:-2222222222222222222222222222222222222222}}"
     elif [[ ${2:-} == *'^{commit}' ]]; then
       if [[ ${2:-} == v1'^{commit}' ]]; then
         printf '1111111111111111111111111111111111111111\n'
@@ -157,14 +157,18 @@ case ${1:-} in
     fi
     ;;
   push)
-    if [[ ${3:-} == refs/tags/backend/* ]]; then
-      if [[ ${FAIL_MODULE_TAG_PUSH:-false} == true ]]; then
-        exit 44
+    for refspec in "$@"; do
+      if [[ $refspec == refs/tags/backend/* ]]; then
+        if [[ ${FAIL_MODULE_TAG_PUSH:-false} == true ]]; then
+          exit 44
+        fi
+        if [[ -n ${MODULE_TAG_STATE_FILE:-} ]]; then
+          : > "$MODULE_TAG_STATE_FILE"
+        fi
       fi
-      if [[ -n ${MODULE_TAG_STATE_FILE:-} ]]; then
-        : > "$MODULE_TAG_STATE_FILE"
-      fi
-    fi
+    done
+    ;;
+  update-ref)
     ;;
 esac
 GIT
@@ -176,7 +180,6 @@ chmod +x "$tmp/bin/helm" "$tmp/bin/gh" "$tmp/bin/docker" "$tmp/bin/go" "$tmp/bin
 export IMAGE_REPOSITORY=ghcr.io/example/aster
 export FIX_IMAGE_CONTRACT_SCRIPT="$tmp/contract.sh"
 export RELEASE_TEST_SHA_COPY="$tmp/release.SHA256SUMS"
-export RELEASE_TEST_FETCHED_TAG="$tmp/fetched-tag"
 export MODULE_TAG_STATE_FILE="$tmp/module-tag-created"
 
 if (cd "$root" && RELEASE_TEST_LOG="$log" ROOT_TAG_STATE=missing MODULE_TAG_STATE=missing PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script") >"$tmp/missing-tag.out" 2>&1; then
@@ -219,13 +222,27 @@ fi
 grep -Fq 'module tag exists without root release tag' "$tmp/module-only.out"
 
 : > "$log"
-if (cd "$root" && RELEASE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" TAG=1.2.3 RELEASE_TAGS_ONLY=true "$script") >"$tmp/invalid-version.out" 2>&1; then
-  echo 'invalid release version was accepted' >&2
+for invalid_tag in 1.2.3 v1.2.3-01 v1.2.3-rc.01; do
+  : > "$log"
+  if (cd "$root" && RELEASE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" TAG="$invalid_tag" RELEASE_TAGS_ONLY=true "$script") >"$tmp/invalid-version.out" 2>&1; then
+    echo "invalid release version was accepted: $invalid_tag" >&2
+    exit 1
+  fi
+  grep -Fq "invalid release tag: $invalid_tag" "$tmp/invalid-version.out"
+  if grep -Ev '^git(-argv)? <update-ref>|^git update-ref' "$log" | grep -q .; then
+    echo "invalid release version invoked release git operations: $invalid_tag" >&2
+    exit 1
+  fi
+done
+
+: > "$log"
+if (cd "$root" && RELEASE_TEST_LOG="$log" FAIL_FETCH_TAG=backend/v1.2.3 PATH="$tmp/bin:$PATH" TAG=v1.2.3 RELEASE_TAGS_ONLY=true "$script") >"$tmp/fetch-failure.out" 2>&1; then
+  echo 'failed module-tag fetch was accepted' >&2
   exit 1
 fi
-grep -Fq 'invalid release tag: 1.2.3' "$tmp/invalid-version.out"
-if [[ -s $log ]]; then
-  echo 'invalid release version invoked git' >&2
+grep -Fq 'failed to fetch remote release tag: backend/v1.2.3' "$tmp/fetch-failure.out"
+if grep -Eq '^(helm |gh |go build|git (-c )?tag|git push)' "$log"; then
+  echo 'failed module-tag fetch performed publication side effects' >&2
   exit 1
 fi
 
@@ -242,7 +259,7 @@ rm -f "$MODULE_TAG_STATE_FILE"
 (cd "$root" && RELEASE_TEST_LOG="$log" MODULE_TAG_STATE=missing PATH="$tmp/bin:$PATH" TAG=v1.2.3 RELEASE_TAGS_ONLY=true "$script") >"$tmp/root-only.out"
 grep -Fq 'created module tag backend/v1.2.3' "$tmp/root-only.out"
 grep -Fq 'git -c tag.gpgSign=false tag backend/v1.2.3 2222222222222222222222222222222222222222' "$log"
-grep -Fq 'git-argv <push> <origin> <refs/tags/backend/v1.2.3:refs/tags/backend/v1.2.3>' "$log"
+grep -Eq '^git-argv <push> <--atomic> <origin> <refs/aster-release/[0-9]+/root:refs/tags/v1.2.3> <refs/tags/backend/v1.2.3:refs/tags/backend/v1.2.3>$' "$log"
 
 : > "$log"
 rm -f "$MODULE_TAG_STATE_FILE"
@@ -349,6 +366,12 @@ for workflow in "$root/.github/workflows/release.yml" "$root/.github/workflows/i
     exit 1
   fi
 done
+grep -Fq '  tag-pair:' "$root/.github/workflows/image.yml"
+grep -Fq 'RELEASE_TAGS_ONLY=true hack/publish-release.sh' "$root/.github/workflows/image.yml"
+if [[ $(grep -Fc 'needs: tag-pair' "$root/.github/workflows/image.yml") -ne 3 ]]; then
+  echo 'not all release image jobs require paired-tag validation' >&2
+  exit 1
+fi
 
 fixture=$tmp/tag-fixture
 mkdir -p "$fixture"
@@ -364,11 +387,11 @@ mkdir -p "$fixture"
   "$real_git" add fixture.txt
   "$real_git" commit --quiet -m fixture
   "$real_git" remote add origin "$fixture/remote.git"
-  "$real_git" tag v0.9.0-rc.2
+  "$real_git" tag -a -m v0.9.0-rc.2 v0.9.0-rc.2
   "$real_git" push --quiet origin refs/tags/v0.9.0-rc.2
   PATH="$(dirname "$real_git"):/usr/bin:/bin" TAG=v0.9.0-rc.2 RELEASE_TAGS_ONLY=true "$script" > "$tmp/fixture-recovery.out"
   head_commit=$("$real_git" rev-parse HEAD)
-  root_commit=$("$real_git" ls-remote --refs --tags origin refs/tags/v0.9.0-rc.2 | cut -f1)
+  root_commit=$("$real_git" ls-remote --tags origin 'refs/tags/v0.9.0-rc.2^{}' | cut -f1)
   module_commit=$("$real_git" ls-remote --refs --tags origin refs/tags/backend/v0.9.0-rc.2 | cut -f1)
   [[ $root_commit == "$head_commit" ]]
   [[ $module_commit == "$head_commit" ]]

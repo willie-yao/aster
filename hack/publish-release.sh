@@ -12,14 +12,19 @@ case $release_dry_run:$release_tags_only in
     exit 1
     ;;
 esac
-if [[ ! $TAG =~ ^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+if [[ ! $TAG =~ ^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-(beta|rc)[.](0|[1-9][0-9]*))?$ ]]; then
   echo "invalid release tag: $TAG" >&2
   exit 1
 fi
 
 module_tag="backend/$TAG"
+release_ref_prefix="refs/aster-release/$$"
+root_remote_ref="$release_ref_prefix/root"
+module_remote_ref="$release_ref_prefix/module"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/aster-release.XXXXXX")
 cleanup() {
+  git update-ref -d "$root_remote_ref" 2>/dev/null || true
+  git update-ref -d "$module_remote_ref" 2>/dev/null || true
   find "$tmp" -type f -delete 2>/dev/null || true
   rmdir "$tmp" 2>/dev/null || true
 }
@@ -28,6 +33,7 @@ trap cleanup EXIT
 remote_tag_commit() {
   local tag=$1
   local output=$2
+  local remote_ref=$3
   local tag_ref="refs/tags/$tag"
   set +e
   git ls-remote --exit-code --refs --tags origin "$tag_ref" > "$output"
@@ -40,8 +46,11 @@ remote_tag_commit() {
     echo "failed to inspect remote release tag: $tag" >&2
     return 1
   fi
-  git fetch --quiet --no-tags origin "$tag_ref"
-  git rev-parse 'FETCH_HEAD^{commit}'
+  if ! git fetch --quiet --no-tags --force origin "$tag_ref:$remote_ref"; then
+    echo "failed to fetch remote release tag: $tag" >&2
+    return 1
+  fi
+  git rev-parse "$remote_ref^{commit}"
 }
 
 ensure_release_tag_pair() {
@@ -49,8 +58,8 @@ ensure_release_tag_pair() {
   local root_status=0
   local module_commit=""
   local module_status=0
-  root_commit=$(remote_tag_commit "$TAG" "$tmp/root-tag-remote") || root_status=$?
-  module_commit=$(remote_tag_commit "$module_tag" "$tmp/module-tag-remote") || module_status=$?
+  root_commit=$(remote_tag_commit "$TAG" "$tmp/root-tag-remote" "$root_remote_ref") || root_status=$?
+  module_commit=$(remote_tag_commit "$module_tag" "$tmp/module-tag-remote" "$module_remote_ref") || module_status=$?
 
   if [[ $root_status -eq 1 || $module_status -eq 1 ]]; then
     return 1
@@ -87,8 +96,24 @@ ensure_release_tag_pair() {
     else
       git -c tag.gpgSign=false tag "$module_tag" "$reviewed_commit"
     fi
-    git push origin "refs/tags/$module_tag:refs/tags/$module_tag"
-    module_commit=$(remote_tag_commit "$module_tag" "$tmp/module-tag-remote")
+    if ! git push --atomic origin \
+      "$root_remote_ref:refs/tags/$TAG" \
+      "refs/tags/$module_tag:refs/tags/$module_tag"; then
+      local root_after=""
+      local root_after_status=0
+      local module_after=""
+      local module_after_status=0
+      root_after=$(remote_tag_commit "$TAG" "$tmp/root-tag-remote" "$root_remote_ref") || root_after_status=$?
+      module_after=$(remote_tag_commit "$module_tag" "$tmp/module-tag-remote" "$module_remote_ref") || module_after_status=$?
+      if [[ $root_after_status -eq 0 && $module_after_status -eq 0 &&
+        $root_after == "$reviewed_commit" && $module_after == "$reviewed_commit" ]]; then
+        echo "release tags $TAG and $module_tag were created concurrently at $reviewed_commit"
+        return
+      fi
+      echo "failed to create immutable release tag pair for $TAG" >&2
+      return 1
+    fi
+    module_commit=$(remote_tag_commit "$module_tag" "$tmp/module-tag-remote" "$module_remote_ref")
     if [[ $module_commit != "$reviewed_commit" ]]; then
       echo "remote module tag $module_tag does not identify reviewed HEAD $reviewed_commit after push" >&2
       return 1
