@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="docs/assets/aster-mark.svg" alt="Aster logo" width="80" height="80">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/aster-banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/aster-banner-light.svg">
+    <img src="docs/assets/aster-banner-light.svg" alt="Aster. Find the signal. Explain the failure. Act safely.">
+  </picture>
 </p>
-
-# Aster
-
-**Find the signal. Explain the failure. Act safely.**
 
 Aster is an evidence-first failure analysis and guarded-remediation engine for
 Prow and Kubernetes test infrastructure. It watches Prow and TestGrid jobs,
