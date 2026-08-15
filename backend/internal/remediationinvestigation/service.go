@@ -350,9 +350,7 @@ Return zero to three hypotheses. Each hypothesis contains only one typed target,
 Do not author cause assessment, non-actionable reason, lifecycle classification, repository or revision identity, source state, allowed paths, validation commands, verification requirements, commands, or action eligibility.
 Supported target variants:
 - required_call: kind, path, containing_symbol, required_call
-- symbol_addition: kind, path, symbol
 - prow_environment_entry: kind, config_path, job, container, name, value
-- configuration_field: kind, path, field_path, value
 Every evidence_ids entry must be copied exactly from the supplied catalog. Do not add citations, paths, lines, quotes, build IDs, timestamps, repository fields, or source-state fields outside the typed target. version is the integer %d.`, TargetExtractionVersion)
 }
 

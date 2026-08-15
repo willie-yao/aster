@@ -233,6 +233,14 @@ func nonActionableJSON() string {
 	return string(encoded)
 }
 
+func legacyTargetJSON(target CandidateTarget) string {
+	extraction, _ := DecodeTargetExtraction(json.RawMessage(actionableJSON()))
+	extraction.Hypotheses[0].Target = target
+	extraction.Hypotheses[0].RelationshipReason = "legacy diagnostic target"
+	encoded, _ := json.Marshal(extraction)
+	return string(encoded)
+}
+
 func serviceFixture(t *testing.T, model *fakeModel) (*Service, FrozenInput, fakeBrowser, *Cache) {
 	t.Helper()
 	input := serviceTestInput()
@@ -273,6 +281,54 @@ func TestServiceCachesEvidenceBackedTypedResult(t *testing.T) {
 	cached, err := service.Investigate(t.Context(), input, browser, false)
 	if err != nil || !cached.CacheHit || model.toolCalls != 1 || model.finalCalls != 1 {
 		t.Fatalf("cached=%+v err=%v tool=%d final=%d", cached, err, model.toolCalls, model.finalCalls)
+	}
+}
+
+func TestServiceRejectsLegacyModelTargetsWithoutWideningActionability(t *testing.T) {
+	tests := []struct {
+		name   string
+		target CandidateTarget
+	}{
+		{
+			name:   "symbol addition",
+			target: &SymbolAdditionCandidate{Kind: CandidateSymbolAddition, Path: "controllers/reconcile.go", Symbol: "applyFix"},
+		},
+		{
+			name:   "configuration field",
+			target: &ConfigurationFieldCandidate{Kind: CandidateConfigurationField, Path: "controllers/reconcile.go", FieldPath: []string{"feature", "enabled"}, Value: "true"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			model := &fakeModel{
+				fingerprint: strings.Repeat("d", 16), memo: "bounded evidence",
+				results: []string{legacyTargetJSON(test.target), nonActionableJSON()},
+				toolEvents: []ai.ToolLoopEvent{
+					{Name: "read_artifact", Path: "builds/1/log.txt", BytesFetched: 19},
+					{Name: "read_repo_file", Path: "controllers/reconcile.go", BytesFetched: 80, ContentBytes: 80},
+					{Name: "grep_repo", ContentBytes: len("applyFix")},
+				},
+			}
+			service, input, browser, _ := serviceFixture(t, model)
+			got, err := service.Investigate(t.Context(), input, browser, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Entry.Result.NonActionable == nil || len(got.Entry.Result.Hypotheses) != 1 {
+				t.Fatalf("result=%+v", got.Entry.Result)
+			}
+			verifier, err := NewVerifier(service.source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			verified, err := verifier.Verify(t.Context(), input, got.Entry, browser)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verified.Classification != ClassificationInsufficientEvidence || verified.Proposal != nil {
+				t.Fatalf("legacy target widened actionability: %+v", verified)
+			}
+		})
 	}
 }
 

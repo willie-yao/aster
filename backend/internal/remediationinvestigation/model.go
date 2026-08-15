@@ -54,10 +54,6 @@ func targetCandidateSchema() map[string]any {
 			"containing_symbol": map[string]any{"type": "string"},
 			"required_call":     map[string]any{"type": "string"},
 		}, []string{"kind", "path", "containing_symbol", "required_call"}),
-		candidateSchema(string(CandidateSymbolAddition), map[string]any{
-			"path":   map[string]any{"type": "string"},
-			"symbol": map[string]any{"type": "string"},
-		}, []string{"kind", "path", "symbol"}),
 		candidateSchema(string(CandidateProwEnvironmentEntry), map[string]any{
 			"config_path": map[string]any{"type": "string"},
 			"job":         map[string]any{"type": "string"},
@@ -65,11 +61,6 @@ func targetCandidateSchema() map[string]any {
 			"name":        map[string]any{"type": "string"},
 			"value":       map[string]any{"type": "string"},
 		}, []string{"kind", "config_path", "job", "container", "name", "value"}),
-		candidateSchema(string(CandidateConfigurationField), map[string]any{
-			"path":       map[string]any{"type": "string"},
-			"field_path": map[string]any{"type": "array", "minItems": 1, "maxItems": 16, "items": map[string]any{"type": "string"}},
-			"value":      map[string]any{"type": "string"},
-		}, []string{"kind", "path", "field_path", "value"}),
 	}}
 }
 
