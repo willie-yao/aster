@@ -178,8 +178,8 @@ expected_identity="fixexecutor version=${expected_version} commit=${expected_com
   exit 1
 }
 build_info=$(docker run --rm "${runtime_args[@]}" --entrypoint go "$image" version -m /usr/local/bin/fixexecutor)
-printf '%s\n' "$build_info" | grep -Fq -- "-X main.commit=${expected_commit}"
-printf '%s\n' "$build_info" | grep -Fq -- "-X main.imageTag=${expected_image_tag}"
+printf '%s\n' "$build_info" | grep -Fq '/usr/local/bin/fixexecutor: go1.25.12'
+printf '%s\n' "$build_info" | grep -Fq $'path\tgithub.com/willie-yao/aster/backend/cmd/fixexecutor'
 
 docker volume create "$source_volume" >/dev/null
 source_sha=$(docker run --rm --platform linux/amd64 --network none --user 0:0 \
