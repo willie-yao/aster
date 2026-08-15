@@ -1,0 +1,95 @@
+{{- $service := .Values.server.service | default dict -}}
+{{- $serviceType := $service.type | default "ClusterIP" -}}
+{{- $internal := $service.internal | default dict -}}
+{{- $internalEnabled := $internal.enabled | default false -}}
+{{- $sourceRanges := $service.loadBalancerSourceRanges | default list -}}
+{{- $publicAcknowledged := $service.publicOriginAcknowledged | default false -}}
+Aster is installed.
+
+{{- if eq .Values.mode "watch" }}
+Worker:           {{ include "aster.fullname" . }}-worker (watch every {{ .Values.fetcher.watchInterval }}, reconcile every {{ .Values.fetcher.reconcileInterval }})
+{{- else }}
+Fetcher CronJob:  {{ include "aster.fullname" . }}-fetcher (schedule {{ .Values.fetcher.schedule | quote }}, suspended={{ .Values.fetcher.suspend }})
+{{- end }}
+Server:           {{ include "aster.fullname" . }}-server
+{{- if .Values.ai.enabled }}
+AI reasoning:     {{ default "provider default" .Values.ai.reasoningEffort }}
+{{- end }}
+Shared volume:    {{ include "aster.pvcName" . }} ({{ .Values.persistence.accessMode }})
+{{- if .Values.orka.agentAnalysisShadow.enabled }}
+Shadow analysis:  configured, authoritative runtime remains inprocess
+Shadow identity:  ServiceAccount {{ include "aster.agentAnalysisShadowServiceAccountName" . }}
+Private ledger:   {{ include "aster.agentAnalysisShadowPVCName" . }} (not mounted by server)
+{{- end }}
+
+The server serves the SPA at / and the JSON contract at /data/*, with a
+capability descriptor at /api/capabilities.
+
+Service origin:
+{{- if eq $serviceType "ClusterIP" }}
+  ClusterIP only. Place an in-cluster ingress or private origin in front of it.
+{{- else if $internalEnabled }}
+  Internal LoadBalancer requested through explicit provider annotations.
+{{- else if and (gt (len $sourceRanges) 1) $publicAcknowledged }}
+  WARNING: multiple LoadBalancer source ranges explicitly acknowledged. The
+  chart cannot prove that their combined coverage is restricted.
+{{- else if $sourceRanges }}
+  LoadBalancer restricted by spec.loadBalancerSourceRanges.
+{{- else if $publicAcknowledged }}
+  WARNING: public LoadBalancer origin explicitly acknowledged. Confirm runtime
+  reachability and restrict the origin whenever possible.
+{{- else if eq $serviceType "LoadBalancer" }}
+  LoadBalancer without an explicit chart-recognized origin restriction.
+{{- else }}
+  NodePort exposes the server on every selected node. Prefer ClusterIP or an
+  explicitly restricted LoadBalancer for authenticated actions or chat.
+{{- end }}
+{{- if and (or .Values.server.actions.enabled .Values.server.chat.enabled .Values.server.remediationInvestigation.enabled) (not .Values.networkPolicy.enabled) }}
+  Authenticated actions or chat are enabled while NetworkPolicy is disabled.
+{{- end }}
+  Service annotations are pass-through configuration, not proof that the
+  origin is unreachable. Verify the deployed network path directly.
+
+{{- if and (or .Values.server.actions.enabled .Values.server.chat.enabled .Values.server.remediationInvestigation.enabled) (eq .Values.server.actions.mode "oauth") }}
+OAuth access:
+  GitHub OAuth uses the identity-only read:user scope.
+{{- if .Values.server.actions.enabled }}
+  BOT_TOKEN performs issue and pull request writes. Scope that credential only
+  to the configured action repositories and operations.
+{{- else }}
+  Chat-only OAuth does not mount BOT_TOKEN.
+{{- end }}
+  If this release previously requested repository access, every admin must sign
+  out, revoke the old OAuth grant, and authorize the identity-only access.
+{{- end }}
+
+HTTP transport policy:
+{{- if .Values.server.security.hsts.enabled }}
+  HSTS is enabled with a one-year max age.
+{{- else }}
+  WARNING: HSTS is disabled through an explicit local HTTP acknowledgement.
+  Do not expose this release as a deployed dashboard.
+{{- end }}
+
+{{- if .Values.ingress.enabled }}
+Reach it at:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+No ingress is enabled. Port-forward to try it:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "aster.fullname" . }}-server 8080:{{ .Values.server.service.port }}
+  open http://localhost:8080
+{{- end }}
+
+{{- if eq .Values.mode "cron" }}
+The fetcher runs on its schedule. To populate data immediately, create a Job
+from the CronJob:
+
+  kubectl --namespace {{ .Release.Namespace }} create job --from=cronjob/{{ include "aster.fullname" . }}-fetcher fetch-now-$(date -u +%Y%m%d%H%M%S)
+{{- else }}
+The worker populates data continuously. Follow its progress:
+
+  kubectl --namespace {{ .Release.Namespace }} logs -f deploy/{{ include "aster.fullname" . }}-worker
+{{- end }}

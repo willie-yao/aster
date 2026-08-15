@@ -1,0 +1,245 @@
+.PHONY: all build build-server build-worker serve dev-actions image analyzer-image fixer-image remote-fixer-image agent-sandbox-fix-executor-image agent-sandbox-critic-executor-image agent-sandbox-analysis-executor-image agent-sandbox-analysis-stager-image test test-v e2e lint fmt tidy helm-check cleanroom-check check-repo-map \
+       fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
+       fe-install dev fe-build fe-check fe-test fe-lint \
+       dist dist-ai clean clean-cache clean-all help
+
+# Path to a consumer project directory containing project.yaml + prompts/system.md.
+# Override on the command line, e.g.:
+#   make fetch-data PROJECT_DIR=../your-consumer-repo
+PROJECT_DIR ?= configs/example
+
+# Container image coordinates for `make image`.
+IMAGE ?= ghcr.io/willie-yao/aster
+VERSION ?= dev
+
+# Default target
+all: build
+
+## ─── Go Backend ───────────────────────────────────────────────
+
+# Build the data fetcher binary
+build:
+	cd backend && go build -o ../bin/aster ./cmd/aster/
+
+# Build the Kubernetes-native API server binary
+build-server:
+	cd backend && go build -o ../bin/server ./cmd/server/
+
+# Build the continuous watch worker binary
+build-worker:
+	cd backend && go build -o ../bin/worker ./cmd/worker/
+
+# Serve fetched data + capability descriptor over HTTP (server-mode preview).
+# Point a built SPA at it with -static-dir=frontend/dist for a self-contained run.
+serve: build-server
+	./bin/server -data-dir=frontend/public/data
+
+# Server-mode preview WITH admin features (traces, File issue / Propose fix /
+# Mark resolved). Builds the SPA and serves it from the API server so the
+# capability descriptor advertises them. AUTH_MODE=dev
+# authenticates every request as an admin, so no OAuth or proxy setup is needed
+# (dev only; never expose this server). Set BOT_TOKEN to a GitHub token for the
+# writes to actually reach GitHub. Unlike `make dev` (Vite + HMR), this serves a
+# static build, so rebuild to pick up frontend changes. Override PROJECT_DIR to
+# resolve issue/fix repos.
+dev-actions: build-server fe-build
+	AUTH_MODE=dev ACTIONS_ENABLED=1 TRUSTED_LOCAL_FIX_RUNTIME=1 BOT_TOKEN=$${BOT_TOKEN:-dev-token} ./bin/server \
+		-data-dir=frontend/public/data \
+		-static-dir=frontend/dist \
+		-project-dir=$(PROJECT_DIR)
+
+# Build the container image (fetcher + server + SPA). Override IMAGE/VERSION:
+#   make image IMAGE=ghcr.io/you/aster VERSION=v1.2.3
+image:
+	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(VERSION) .
+
+# Build the one-shot analyzer image used by experimental Orka container Tasks.
+analyzer-image:
+	docker build -f deploy/analyzer.Dockerfile -t $(IMAGE)/analyzer:$(VERSION) .
+
+# Build the sandboxed local OpenCode image for fix generation.
+fixer-image:
+	docker build --target fixer-runtime --build-arg VERSION=$(VERSION) -t $(IMAGE)/fixer:$(VERSION) .
+
+# Build the minimal git-capable image for remote fix runtimes.
+remote-fixer-image:
+	docker build --target remote-fixer-runtime --build-arg VERSION=$(VERSION) -t $(IMAGE)/remote-fixer:$(VERSION) .
+
+# Build the Agent Sandbox OpenCode executor image.
+agent-sandbox-fix-executor-image:
+	docker build --target agent-sandbox-fix-executor --build-arg VERSION=$(VERSION) -t $(IMAGE)/agent-sandbox-fix-executor:$(VERSION) .
+
+# Build the file-backed OpenCode analyzer image for Agent Sandbox.
+agent-sandbox-analysis-executor-image:
+	docker build --target agent-sandbox-analysis-executor --build-arg VERSION=$(VERSION) -t $(IMAGE)/agent-sandbox-analysis-executor:$(VERSION) .
+
+# Build the credential-free analyzer workspace stager image.
+agent-sandbox-analysis-stager-image:
+	docker build --target agent-sandbox-analysis-stager --build-arg VERSION=$(VERSION) -t $(IMAGE)/agent-sandbox-analysis-stager:$(VERSION) .
+
+# Build the purpose-built credential-free causal critic image for Agent Sandbox.
+agent-sandbox-critic-executor-image:
+	docker build --target agent-sandbox-critic-executor --build-arg VERSION=$(VERSION) -t $(IMAGE)/agent-sandbox-critic-executor:$(VERSION) .
+
+# Run all Go tests
+test:
+	cd backend && go test ./... -count=1
+
+# Run Go tests with verbose output
+test-v:
+	cd backend && go test ./... -count=1 -v
+
+# Run the hermetic pipeline and email-remediation end-to-end tests.
+e2e:
+	cd backend && go test ./internal/e2e/... -count=1 -v
+	cd backend && go test ./internal/fetcher -run '^TestEmailRemediationLoopE2E$$' -count=1 -v
+
+# Run Go linter (requires golangci-lint)
+lint:
+	cd backend && golangci-lint run ./...
+
+# Format Go code
+fmt:
+	cd backend && gofmt -w .
+
+# Tidy Go modules
+tidy:
+	cd backend && go mod tidy
+
+# Lint and render the Helm chart.
+helm-check:
+	bash deploy/helm/aster/test-schema.sh
+	bash deploy/helm/aster/test-render.sh
+	bash deploy/helm/aster/test-operations.sh
+	bash deploy/helm/aster-platform/test-schema.sh
+	bash deploy/helm/aster-platform/test-render.sh
+	bash deploy/helm/aster-platform/test-release.sh
+	bash deploy/helm/aster-platform/test-kind-cleanup.sh
+	bash hack/test-publish-release.sh
+	bash hack/test-verify-release-images.sh
+	bash hack/test-kubernetes-cleanroom.sh
+	bash hack/test-kubernetes-verification-failures.sh
+	bash hack/test-cli-download-failclosed.sh
+	bash deploy/helm/test-upgrade.sh
+	bash -n deploy/helm/aster-platform/test-kind.sh
+	bash -n experimental/agent-sandbox/run-kind-evaluation.sh
+
+# Validate the generated provider-free Kubernetes contributor contract.
+cleanroom-check:
+	bash hack/test-kubernetes-cleanroom.sh
+
+# Check the AGENTS.md repo map against the backend tree.
+check-repo-map:
+	bash hack/check-repo-map.sh
+
+## ─── Data Fetching ────────────────────────────────────────────
+
+# Fetch fresh test data from GCS into frontend/public/data/
+fetch-data: build
+	./bin/aster -project-dir=$(PROJECT_DIR) -builds=8 -workers=5 -out=frontend/public/data -timeout=5m
+
+# Fetch minimal data (3 builds per job, faster)
+fetch-data-quick: build
+	./bin/aster -project-dir=$(PROJECT_DIR) -builds=3 -workers=5 -out=frontend/public/data -timeout=3m
+
+# Fetch data with AI analysis (requires AI_TOKEN env var)
+fetch-data-ai: build
+	./bin/aster -project-dir=$(PROJECT_DIR) -builds=8 -workers=5 -out=frontend/public/data -timeout=30m -ai
+
+# Fetch minimal data with AI analysis
+fetch-data-ai-quick: build
+	./bin/aster -project-dir=$(PROJECT_DIR) -builds=3 -workers=5 -out=frontend/public/data -timeout=5m -ai
+
+## ─── Frontend ─────────────────────────────────────────────────
+
+# Install frontend dependencies
+fe-install:
+	cd frontend && npm ci
+
+# Start the Vite dev server
+dev: fe-install
+	cd frontend && npm run dev
+
+# Build the frontend for production
+fe-build: fe-install
+	cd frontend && npm run build
+
+# TypeScript type check. Use `tsc -b` (build mode): the root tsconfig.json is a
+# solution file (files: [], project references), so `tsc --noEmit` against it
+# checks nothing. `tsc -b` walks the referenced app/node projects.
+fe-check:
+	cd frontend && npx tsc -b
+
+# Run frontend unit tests.
+fe-test: fe-install
+	cd frontend && npm test
+
+# Lint frontend sources
+fe-lint: fe-install
+	cd frontend && npm run lint
+
+## ─── Full Pipeline ────────────────────────────────────────────
+
+# Build everything: Go binary + fetch data + frontend
+dist: fetch-data fe-build
+
+# Build everything with AI analysis
+dist-ai: fetch-data-ai fe-build
+
+# Clean build artifacts and generated data
+clean:
+	rm -rf bin/ frontend/dist frontend/public/data/dashboard.json frontend/public/data/jobs/ frontend/public/data/flakiness.json frontend/public/data/orka_analysis.json frontend/public/data/ai_traces.json frontend/public/data/ai_usage_fetcher.json frontend/public/data/ai_usage_server.json
+
+# Clean AI analysis cache (forces re-analysis on next fetch)
+clean-cache:
+	rm -f frontend/public/data/ai_cache.json
+
+# Clean everything including cache
+clean-all: clean clean-cache
+
+## ─── Help ─────────────────────────────────────────────────────
+
+help:
+	@echo "Aster - Make Targets"
+	@echo ""
+	@echo "  build              Build Go data fetcher binary"
+	@echo "  build-server       Build Go API server binary"
+	@echo "  serve              Serve fetched data + capabilities over HTTP"
+	@echo "  dev-actions        Serve SPA + API with admin actions enabled (local auth)"
+	@echo "  test               Run Go tests"
+	@echo "  test-v             Run Go tests (verbose)"
+	@echo "  lint               Run golangci-lint"
+	@echo "  fmt                Format Go code"
+	@echo "  tidy               Tidy Go modules"
+	@echo "  helm-check         Lint and validate Helm chart renders"
+	@echo "  cleanroom-check     Validate the generated Kubernetes contributor contract"
+	@echo ""
+	@echo "  fetch-data         Fetch data from GCS (8 builds/job)"
+	@echo "  fetch-data-quick   Fetch minimal data (3 builds/job)"
+	@echo "  fetch-data-ai      Fetch data + AI analysis (needs AI_TOKEN)"
+	@echo "  fetch-data-ai-quick  Fetch minimal data + AI analysis"
+	@echo ""
+	@echo "    Override PROJECT_DIR to point at a consumer repo, e.g.:"
+	@echo "      make fetch-data PROJECT_DIR=../your-consumer-repo"
+	@echo "    Default: configs/example (renders an empty dashboard, smoke-test only)"
+	@echo ""
+	@echo "  fe-install         Install frontend npm dependencies"
+	@echo "  dev                Start Vite dev server"
+	@echo "  fe-build           Production build of frontend"
+	@echo "  fe-check           TypeScript type check"
+	@echo "  fe-test            Run frontend unit tests"
+	@echo "  fe-lint            Lint frontend sources"
+	@echo ""
+	@echo "  dist               Full pipeline: build + fetch + frontend"
+	@echo "  dist-ai            Full pipeline with AI analysis"
+	@echo "  image              Build the container image (fetcher + server + SPA)"
+	@echo "  analyzer-image     Build the one-shot Orka container analyzer image"
+	@echo "  fixer-image        Build the sandboxed local OpenCode fix image"
+	@echo "  remote-fixer-image Build the minimal git-capable remote fix image"
+	@echo "  agent-sandbox-analysis-executor-image Build the file-backed analyzer executor image"
+	@echo "  agent-sandbox-analysis-stager-image  Build the credential-free analyzer stager image"
+	@echo "  agent-sandbox-critic-executor-image Build the credential-free critic executor image"
+	@echo "  agent-sandbox-fix-executor-image  Build the Agent Sandbox OpenCode executor"
+	@echo "  clean              Remove build artifacts and data"
+	@echo "  clean-cache        Clear AI analysis cache"
+	@echo "  clean-all          Clean everything including cache"

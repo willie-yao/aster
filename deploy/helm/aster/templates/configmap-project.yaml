@@ -1,0 +1,24 @@
+{{- include "aster.validateAnalysisRuntime" . -}}
+{{- if not .Values.project.existingConfigMap }}
+{{- if not .Values.project.config }}
+{{- fail "project.config is required: pass --set-file project.config=project.yaml or set project.existingConfigMap" }}
+{{- end }}
+{{- if not .Values.project.systemPrompt }}
+{{- fail "project.systemPrompt is required: pass --set-file project.systemPrompt=prompts/system.md or set project.existingConfigMap" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aster.projectConfigMap" . }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+data:
+  project.yaml: |
+    {{- .Values.project.config | nindent 4 }}
+  system.md: |
+    {{- .Values.project.systemPrompt | nindent 4 }}
+{{- range $name, $content := .Values.project.skills }}
+  {{ $name }}: |
+    {{- $content | nindent 4 }}
+{{- end }}
+{{- end }}

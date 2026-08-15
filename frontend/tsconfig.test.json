@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": [
+      "node",
+      "vite/client"
+    ],
+    "strict": true,
+    "skipLibCheck": true,
+    "rootDir": ".",
+    "outDir": "node_modules/.tmp/test-dist"
+  },
+  "include": [
+    "tests/**/*.ts",
+    "src/lib/analysisChat.ts",
+    "src/lib/aiUsage.ts",
+    "src/lib/pageMetadata.ts",
+    "src/lib/routes.ts",
+    "src/lib/fetchStatus.ts",
+    "src/lib/testResults.ts",
+    "src/lib/buildFailures.ts",
+    "src/types/dashboard.ts",
+    "src/types/analysisChat.ts",
+    "src/types/usage.ts",
+    "src/types/fetchStatus.ts",
+    "src/lib/actionRequests.ts",
+    "src/lib/actionEligibility.ts",
+    "src/lib/dashboardOverview.ts",
+    "src/lib/flakinessReport.ts",
+    "src/lib/detailTitles.ts",
+    "src/lib/jobDetail.ts",
+    "src/lib/testDetail.ts",
+    "src/types/actions.ts"
+  ]
+}

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; form-action 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'" />
+    <title>Aster</title>
+    <!--
+      SPA fallback for GitHub Pages. The dashboard is a single-page app served
+      under a project base path (/<repo>/), so a direct deep link such as
+      /<repo>/job/<job>/test/<test>?run=<id> has no matching file and Pages
+      serves this 404.html. This script re-encodes the requested path into a
+      query string and redirects to the base index.html, which decodes it back
+      (see index.html) so the router can render the deep link. Standard
+      rafgraph/spa-github-pages technique. pathSegmentsToKeep is 1 because the
+      base path is a single segment; set it to 0 only for a root/custom-domain
+      deploy.
+    -->
+    <script src="/spa-404-redirect.js"></script>
+  </head>
+  <body></body>
+</html>

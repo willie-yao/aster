@@ -1,0 +1,585 @@
+package onboard
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/willie-yao/aster/backend/internal/project"
+)
+
+func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Options, error) {
+	if err := validateCredentialSeparation(opts); err != nil {
+		return nil, opts, err
+	}
+	if err := validateAIEndpoint(opts.AIEndpoint); err != nil {
+		return nil, opts, err
+	}
+	if err := validateAIEndpoint(opts.DeploymentAIEndpoint); err != nil {
+		return nil, opts, fmt.Errorf("deployed %w", err)
+	}
+	if deps.wizard == nil {
+		return nil, opts, fmt.Errorf("interactive onboarding UI is unavailable")
+	}
+	prompt := deps.wizard
+	if closer, ok := prompt.(io.Closer); ok {
+		defer func() { _ = closer.Close() }()
+	}
+	fmt.Fprintln(deps.terminal.Out, "Guided Aster onboarding")
+	fmt.Fprintln(deps.terminal.Out, "Use Ctrl+C to cancel. No files are written before final confirmation.")
+	fmt.Fprintln(deps.terminal.Out)
+
+	repo, detectedFromGit, err := wizardSourceRepo(ctx, prompt, opts, deps)
+	if err != nil {
+		return nil, opts, err
+	}
+	var detectedRepo *Repo
+	sourceCheckoutRoot := ""
+	if detectedFromGit {
+		original := repo
+		detectedRepo = &original
+		sourceCheckoutRoot, err = deps.remotes.Root(ctx)
+		if err != nil {
+			return nil, opts, err
+		}
+		metadata, metadataErr := deps.repositories.Repository(ctx, repo, opts.GitHubToken)
+		if metadataErr != nil {
+			return nil, opts, metadataErr
+		}
+		if metadata.Upstream != nil && metadata.Upstream.FullName != repo.FullName {
+			fmt.Fprintf(deps.terminal.Out, "Detected GitHub fork upstream: %s\n", metadata.Upstream.FullName)
+			useUpstream, confirmErr := prompt.Confirm(ctx, confirmPrompt{
+				Title: "Use the upstream repository for Prow discovery?",
+				Value: true,
+			})
+			if confirmErr != nil {
+				return nil, opts, confirmErr
+			}
+			if useUpstream {
+				repo = *metadata.Upstream
+			}
+		}
+	}
+	opts.SourceRepo = repo.FullName
+	dashboardOwner := Inferred[string]{Source: "no authenticated GitHub login or detected Git remote owner", Confidence: ConfidenceLow}
+	ownerWarning := ""
+	if opts.DashboardRepo == "" {
+		dashboardOwner, ownerWarning = inferDashboardOwner(ctx, opts.GitHubToken, detectedRepo, deps.repositories)
+	}
+	fmt.Fprintf(deps.terminal.Out, "\nInspecting GitHub metadata and kubernetes/test-infra for %s...\n", repo.FullName)
+	discoveryCtx, cancelDiscovery := context.WithTimeout(ctx, onboardingDiscoveryTimeout)
+	report, err := discoverRepository(discoveryCtx, repo, opts.GitHubToken, dashboardOwner, deps.repositories, deps.catalogs)
+	cancelDiscovery()
+	if err != nil {
+		return nil, opts, err
+	}
+	if ownerWarning != "" {
+		report.Warnings = append(report.Warnings, ownerWarning)
+	}
+	opts.SourceRepo = report.SourceRepo.FullName
+	fmt.Fprintf(deps.terminal.Out, "Found %d Prow job definition(s) that test this repository.\n", len(report.MatchingJobs))
+
+	selected, err := wizardDiscovery(ctx, prompt, &opts, report)
+	if err != nil {
+		return nil, opts, err
+	}
+	if selected != nil && opts.IncludePresubmits == nil && selected.DashboardPresubmitJobs > 0 {
+		defaultInclude := selected.DashboardPeriodicJobs == 0
+		include, confirmErr := prompt.Confirm(ctx, confirmPrompt{
+			Title:       "Include presubmit jobs in the dashboard?",
+			Description: "Presubmit history increases coverage and fetch time.",
+			Value:       defaultInclude,
+		})
+		if confirmErr != nil {
+			return nil, opts, confirmErr
+		}
+		opts.IncludePresubmits = &include
+	}
+
+	if opts.Mode == "" {
+		choice, selectErr := prompt.Select(ctx, selectPrompt{
+			Title: "Deployment profile",
+			Options: []selectOption{
+				{
+					Value:       modePages,
+					Label:       "GitHub Pages",
+					Description: "Public artifacts with an AI provider reachable from GitHub Actions.",
+				},
+				{
+					Value:       modeK8s,
+					Label:       "Kubernetes with Helm",
+					Description: "Cluster-local providers, persistent state, or authenticated actions.",
+				},
+			},
+			Value: modePages,
+		})
+		if selectErr != nil {
+			return nil, opts, selectErr
+		}
+		opts.Mode = choice
+	}
+
+	if opts.DashboardRepo == "" {
+		opts.DashboardRepo, err = prompt.Input(ctx, inputPrompt{
+			Title:       "Dashboard repository",
+			Description: "Existing owner/name consumer repository you control that will publish the dashboard.",
+			Value:       report.DashboardRepo.Value,
+			Required:    true,
+			Validate: func(value string) error {
+				candidateOpts := opts
+				candidateOpts.DashboardRepo = value
+				if err := validateCredentialSeparation(candidateOpts); err != nil {
+					return err
+				}
+				if _, err := NormalizeGitHubRepo(value); err != nil {
+					return err
+				}
+				return nil
+			},
+		})
+		if err != nil {
+			return nil, opts, err
+		}
+	}
+	if err := validateCredentialSeparation(opts); err != nil {
+		return nil, opts, err
+	}
+	dashboardRepo, err := NormalizeGitHubRepo(opts.DashboardRepo)
+	if err != nil {
+		return nil, opts, fmt.Errorf("dashboard repository: %w", err)
+	}
+	opts.DashboardRepo = dashboardRepo.FullName
+
+	if opts.ID == "" {
+		opts.ID, err = prompt.Input(ctx, inputPrompt{
+			Title:       "Project ID",
+			Description: "Stable lowercase identifier inferred from repository metadata.",
+			Value:       report.Identity.ID.Value,
+			Required:    true,
+		})
+		if err != nil {
+			return nil, opts, err
+		}
+	}
+	if opts.Name == "" {
+		opts.Name, err = prompt.Input(ctx, inputPrompt{
+			Title:       "Project display name",
+			Description: "Human-readable name shown throughout the dashboard.",
+			Value:       report.Identity.Name.Value,
+			Required:    true,
+		})
+		if err != nil {
+			return nil, opts, err
+		}
+	}
+	if opts.ShortName == "" {
+		opts.ShortName, err = prompt.Input(ctx, inputPrompt{
+			Title:       "Short name",
+			Description: "Optional established project abbreviation. Enter none or - to omit it.",
+			Value:       report.Identity.ShortName.Value,
+		})
+		if err != nil {
+			return nil, opts, err
+		}
+		opts.ShortName = clearableValue(opts.ShortName)
+	}
+
+	if err := wizardDeploymentAI(ctx, prompt, &opts, deps.terminal.Out); err != nil {
+		return nil, opts, err
+	}
+
+	if err := wizardPromptAuthoring(ctx, prompt, &opts); err != nil {
+		return nil, opts, err
+	}
+
+	if !opts.OpenPR && opts.OutDir == "" {
+		defaultOut := dashboardRepo.Name
+		description := "Relative directory where the dashboard consumer repository scaffold will be created."
+		if detectedFromGit {
+			workingDir, err := os.Getwd()
+			if err != nil {
+				return nil, opts, fmt.Errorf("reading current working directory: %w", err)
+			}
+			defaultOut = siblingDashboardConsumerDir(sourceCheckoutRoot, workingDir, dashboardRepo.Name)
+			description = "Sibling directory for the dashboard consumer repository. It may be a new directory or an existing checkout."
+		}
+		opts.OutDir, err = prompt.Input(ctx, inputPrompt{
+			Title:       "Dashboard consumer directory",
+			Description: description,
+			Value:       defaultOut,
+			Required:    true,
+			Validate: func(value string) error {
+				candidate := opts
+				candidate.OutDir = value
+				return validateDashboardConsumerDir(candidate)
+			},
+		})
+		if err != nil {
+			return nil, opts, err
+		}
+		opts.OutDir = filepath.Clean(opts.OutDir)
+	}
+
+	planning := planningContext{discovery: &report, selected: selected}
+	fmt.Fprintln(deps.terminal.Out, "\nRunning the real job sweep and validating the scaffold...")
+	plan, err := buildPlan(ctx, opts, planning, deps)
+	if err != nil {
+		return nil, opts, err
+	}
+	if len(plan.Project.Categories) > 0 {
+		categoryTokens := make([]string, 0, len(plan.Project.Categories))
+		for _, category := range plan.Project.Categories {
+			categoryTokens = append(categoryTokens, category.ID)
+		}
+		value, inputErr := prompt.Input(ctx, inputPrompt{
+			Title:       "Category tokens",
+			Description: "Comma-separated job-name tokens. Enter none or - to clear them.",
+			Value:       strings.Join(categoryTokens, ","),
+		})
+		if inputErr != nil {
+			return nil, opts, inputErr
+		}
+		if err := setPlanCategoryTokens(plan, opts, value); err != nil {
+			return nil, opts, err
+		}
+	}
+	if err := prepareInteractiveDestination(ctx, prompt, &opts, plan, deps); err != nil {
+		return nil, opts, err
+	}
+	if opts.PlanOut != "" {
+		if err := bindPlanArtifactDestination(plan); err != nil {
+			return nil, opts, err
+		}
+	}
+	printReview(deps.terminal.Out, plan)
+	if opts.DryRun {
+		return plan, opts, nil
+	}
+	confirmationTitle := "Create this scaffold?"
+	if hasDestinationReplacements(plan.Destination.Files) {
+		confirmationTitle = "Create and update these scaffold files?"
+	}
+	confirmed, err := prompt.Confirm(ctx, confirmPrompt{
+		Title:       confirmationTitle,
+		Description: "This is the first prompt that permits a filesystem or GitHub write.",
+		Value:       false,
+	})
+	if err != nil {
+		return nil, opts, err
+	}
+	if !confirmed {
+		return nil, opts, ErrCancelled
+	}
+	return plan, opts, nil
+}
+
+func wizardPromptAuthoring(ctx context.Context, prompt wizardUI, opts *Options) error {
+	opts.PromptMode = strings.TrimSpace(opts.PromptMode)
+	if err := validatePromptMode(opts.PromptMode); err != nil {
+		return err
+	}
+	if opts.NoPrompt && opts.PromptMode != "" && opts.PromptMode != promptModeTemplate {
+		return fmt.Errorf("--no-prompt cannot be combined with --prompt-mode=%s", opts.PromptMode)
+	}
+	if opts.PromptMode == "" && !opts.NoPrompt {
+		mode, err := prompt.Select(ctx, selectPrompt{Title: "Project prompt authoring", Description: "Choose how prompts/system.md is prepared.", Options: []selectOption{
+			{Value: promptModeAgent, Label: "Generate with OpenCode (recommended)", Description: "Uses pinned local srt sandboxing with the shell tool denied."},
+			{Value: promptModeHandoff, Label: "Create an agent handoff bundle", Description: "Writes a reusable skill and reviewable TODO prompt."},
+			{Value: promptModeTemplate, Label: "TODO template", Description: "Does not call a model."},
+		}})
+		if err != nil {
+			return err
+		}
+		opts.PromptMode = mode
+	}
+	switch effectivePromptMode(*opts) {
+	case promptModeAgent:
+		opts.NoPrompt = false
+		if opts.PromptAgentRuntime == "" {
+			runtimeChoice, err := prompt.Select(ctx, selectPrompt{Title: "Prompt agent runtime", Description: "Choose where OpenCode authors prompts/system.md.", Options: []selectOption{
+				{Value: promptRuntimeOpenCode, Label: "Local sandboxed OpenCode", Description: "Uses the pinned local srt sandbox."},
+				{Value: promptRuntimeOrka, Label: "Orka OpenCode", Description: "Uses an operator-owned Orka Agent."},
+			}})
+			if err != nil {
+				return err
+			}
+			opts.PromptAgentRuntime = runtimeChoice
+		}
+		if effectivePromptAgentRuntime(*opts) == promptRuntimeOrka {
+			if opts.PromptOrkaAPI == "" {
+				value, err := prompt.Input(ctx, inputPrompt{Title: "Orka result API", Description: "Absolute HTTP or HTTPS base URL.", Required: true, Validate: validatePromptOrkaAPI})
+				if err != nil {
+					return err
+				}
+				opts.PromptOrkaAPI = value
+			}
+			if opts.PromptOrkaAgentRef == "" {
+				value, err := prompt.Input(ctx, inputPrompt{Title: "Orka Agent", Description: "Operator-owned OpenCode Agent name.", Required: true})
+				if err != nil {
+					return err
+				}
+				opts.PromptOrkaAgentRef = value
+			}
+		} else if opts.PromptAgentModel == "" {
+			model, err := prompt.Input(ctx, inputPrompt{Title: "OpenCode model", Description: "Provider/model configured in OpenCode.", Value: defaultPromptAgentModel, Required: true, Validate: validatePromptAgentModel})
+			if err != nil {
+				return err
+			}
+			opts.PromptAgentModel = model
+		}
+	case promptModeHandoff:
+		opts.NoPrompt = false
+	case promptModeTemplate:
+		opts.NoPrompt = true
+	}
+	return nil
+}
+
+func siblingDashboardConsumerDir(sourceRoot, workingDir, dashboardName string) string {
+	sibling := filepath.Join(filepath.Dir(filepath.Clean(sourceRoot)), dashboardName)
+	relative, err := filepath.Rel(filepath.Clean(workingDir), sibling)
+	if err != nil {
+		return sibling
+	}
+	return filepath.Clean(relative)
+}
+
+func validateDashboardConsumerDir(opts Options) error {
+	if strings.TrimSpace(opts.OutDir) == "" {
+		return fmt.Errorf("dashboard consumer directory is required")
+	}
+	if err := validateCredentialSeparation(opts); err != nil {
+		return err
+	}
+	return nil
+}
+
+func prepareInteractiveDestination(ctx context.Context, prompt wizardUI, opts *Options, plan *Plan, deps dependencies) error {
+	for {
+		if err := inspectPlanDestination(plan, deps); err != nil {
+			return err
+		}
+		if plan.Destination.OpenPR || !hasDestinationReplacements(plan.Destination.Files) || plan.Destination.UpdateExisting {
+			return nil
+		}
+		choice, err := prompt.Select(ctx, selectPrompt{
+			Title:       "Dashboard consumer directory contains generated files",
+			Description: "Choose another directory, explicitly update known scaffold files, or cancel.",
+			Options: []selectOption{
+				{Value: "another", Label: "Choose another directory", Description: "Keep every existing file unchanged."},
+				{Value: "update", Label: "Update known scaffold files", Description: "Replace only the generated files listed in the review."},
+				{Value: "cancel", Label: "Cancel onboarding", Description: "Stop without writing files."},
+			},
+			Value: "another",
+		})
+		if err != nil {
+			return err
+		}
+		switch choice {
+		case "another":
+			value, err := prompt.Input(ctx, inputPrompt{
+				Title:       "Dashboard consumer directory",
+				Description: "Choose a different directory for the dashboard consumer repository.",
+				Required:    true,
+				Validate: func(value string) error {
+					candidate := *opts
+					candidate.OutDir = value
+					return validateDashboardConsumerDir(candidate)
+				},
+			})
+			if err != nil {
+				return err
+			}
+			opts.OutDir = filepath.Clean(value)
+			opts.UpdateExisting = false
+			plan.Destination.OutDir = opts.OutDir
+			plan.Destination.UpdateExisting = false
+		case "update":
+			opts.UpdateExisting = true
+			plan.Destination.UpdateExisting = true
+			return nil
+		default:
+			return ErrCancelled
+		}
+	}
+}
+
+func clearableValue(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none", "-":
+		return ""
+	default:
+		return value
+	}
+}
+
+func setPlanCategoryTokens(plan *Plan, opts Options, value string) error {
+	value = clearableValue(value)
+	var categories []project.CategoryRule
+	seen := map[string]struct{}{}
+	for _, token := range strings.Split(value, ",") {
+		token = strings.ToLower(strings.TrimSpace(token))
+		if token == "" {
+			continue
+		}
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		seen[token] = struct{}{}
+		categories = append(categories, project.CategoryRule{Match: token, ID: token, Label: labelFor(token)})
+	}
+	data := buildScaffoldData(opts, categories)
+	yamlText, err := renderProjectYAML(data)
+	if err != nil {
+		return fmt.Errorf("rendering edited project.yaml: %w", err)
+	}
+	parsed, err := project.Parse([]byte(yamlText))
+	if err != nil {
+		return fmt.Errorf("edited project.yaml failed validation: %w", err)
+	}
+	if err := validateRenderedFilesNoCredentials(opts, map[string]string{"project.yaml": yamlText}); err != nil {
+		return err
+	}
+	plan.Project = *parsed
+	plan.Files["project.yaml"] = yamlText
+	return nil
+}
+
+func wizardSourceRepo(ctx context.Context, prompt wizardUI, opts Options, deps dependencies) (Repo, bool, error) {
+	if opts.SourceRepo != "" {
+		repo, err := NormalizeGitHubRepo(opts.SourceRepo)
+		if err != nil {
+			return Repo{}, false, fmt.Errorf("source repository: %w", err)
+		}
+		fmt.Fprintf(deps.terminal.Out, "Source repository: %s (explicit input)\n", repo.FullName)
+		return repo, false, nil
+	}
+	if remote, err := deps.remotes.Origin(ctx); err == nil {
+		repo, normalizeErr := NormalizeGitHubRepo(remote)
+		if normalizeErr == nil {
+			fmt.Fprintf(deps.terminal.Out, "Source repository detected from git remote origin: %s\n", repo.FullName)
+			use, confirmErr := prompt.Confirm(ctx, confirmPrompt{
+				Title: "Use this repository?",
+				Value: true,
+			})
+			if confirmErr != nil {
+				return Repo{}, false, confirmErr
+			}
+			if use {
+				return repo, true, nil
+			}
+		}
+	}
+	value, err := prompt.Input(ctx, inputPrompt{
+		Title:       "Source GitHub repository",
+		Description: "Repository tested by Prow, as owner/name or a GitHub URL.",
+		Required:    true,
+		Validate: func(value string) error {
+			candidateOpts := opts
+			candidateOpts.SourceRepo = value
+			if err := validateCredentialSeparation(candidateOpts); err != nil {
+				return err
+			}
+			_, err := NormalizeGitHubRepo(value)
+			return err
+		},
+	})
+	if err != nil {
+		return Repo{}, false, err
+	}
+	candidateOpts := opts
+	candidateOpts.SourceRepo = value
+	if err := validateCredentialSeparation(candidateOpts); err != nil {
+		return Repo{}, false, err
+	}
+	repo, err := NormalizeGitHubRepo(value)
+	if err != nil {
+		return Repo{}, false, fmt.Errorf("source repository: %w", err)
+	}
+	return repo, false, nil
+}
+
+func wizardDiscovery(ctx context.Context, prompt wizardUI, opts *Options, report DiscoveryReport) (*DashboardCandidate, error) {
+	if opts.Bucket != "" {
+		return nil, nil
+	}
+	if opts.TestGrid != "" {
+		for _, candidate := range report.Candidates {
+			if candidate.Dashboard == opts.TestGrid {
+				selected := candidate
+				return &selected, nil
+			}
+		}
+		return nil, nil
+	}
+	options := make([]selectOption, 0, len(report.Candidates)+2)
+	for _, candidate := range report.Candidates {
+		summary := fmt.Sprintf("%s (%s)", safeTerminal(candidate.Dashboard),
+			directSourceMatchSummary(candidate.PeriodicJobs, candidate.PresubmitJobs))
+		description := fmt.Sprintf("Dashboard contains %d periodic and %d presubmit jobs", candidate.DashboardPeriodicJobs, candidate.DashboardPresubmitJobs)
+		if candidate.DashboardPostsubmitJobs > 0 {
+			description += fmt.Sprintf("; %d postsubmit jobs are unsupported", candidate.DashboardPostsubmitJobs)
+		}
+		options = append(options, selectOption{
+			Value:       "candidate:" + candidate.Dashboard,
+			Label:       summary,
+			Description: description + ".",
+		})
+	}
+	options = append(options,
+		selectOption{
+			Value:       "manual_testgrid",
+			Label:       "Enter a TestGrid dashboard manually",
+			Description: "Use a dashboard name not inferred from repository metadata.",
+		},
+		selectOption{
+			Value:       "artifact_bucket",
+			Label:       "Use an artifact bucket",
+			Description: "Discover jobs directly from a Prow artifact bucket.",
+		},
+	)
+	defaultValue := "manual_testgrid"
+	if len(report.Candidates) > 0 {
+		defaultValue = "candidate:" + report.Candidates[0].Dashboard
+	}
+	choice, err := prompt.Select(ctx, selectPrompt{
+		Title:       "Choose the discovery source",
+		Description: "Select the TestGrid dashboard or artifact source for this project.",
+		Options:     options,
+		Value:       defaultValue,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, candidate := range report.Candidates {
+		if choice == "candidate:"+candidate.Dashboard {
+			selected := candidate
+			opts.TestGrid = selected.Dashboard
+			return &selected, nil
+		}
+	}
+	if choice == "manual_testgrid" {
+		opts.TestGrid, err = prompt.Input(ctx, inputPrompt{
+			Title:    "TestGrid dashboard",
+			Required: true,
+		})
+		return nil, err
+	}
+	opts.Bucket, err = prompt.Input(ctx, inputPrompt{
+		Title:       "Artifact bucket",
+		Description: "Bucket containing Prow logs or pr-logs indexes.",
+		Required:    true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	opts.GCSWebBase, err = prompt.Input(ctx, inputPrompt{
+		Title:       "gcsweb base URL",
+		Description: "Optional gateway root for non-GCS object storage.",
+		Value:       opts.GCSWebBase,
+	})
+	return nil, err
+}

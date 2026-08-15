@@ -1,0 +1,46 @@
+name: Reusable Clear Cache
+
+# Emergency workflow that destructively clears data-cache entries for a project.
+# Prefer ai-cache-generation for reversible AI rebaselines that retain old cache
+# entries and fetched build data.
+#
+# Example consumer workflow:
+#   jobs:
+#     clear:
+#       uses: willie-yao/aster/.github/workflows/reusable-clear-cache.yml@main
+#       with:
+#         project_dir: .
+
+on:
+  workflow_call:
+    inputs:
+      project_dir:
+        description: "Directory in the caller repo containing project.yaml. Must match the value passed to the deploy workflow so the same cache slug is derived."
+        required: false
+        type: string
+        default: "."
+
+permissions:
+  actions: write
+
+jobs:
+  clear-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clear cache entries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PROJECT_DIR: ${{ inputs.project_dir }}
+        run: |
+          # Derive the same slug the deploy workflow uses for cache keys.
+          SLUG="$(echo "$PROJECT_DIR" | tr '/.' '--' | sed 's/^-*//; s/-*$//')"
+          [ -z "$SLUG" ] && SLUG="root"
+          PREFIX="data-cache-${SLUG}-"
+          echo "Listing data cache entries with prefix $PREFIX ..."
+          gh cache list --repo "$REPO" --key "$PREFIX" --json id,key | \
+            jq -r '.[].key' | while read -r key; do
+              echo "Deleting cache: $key"
+              gh cache delete "$key" --repo "$REPO"
+            done
+          echo "Cache cleared. Next deploy will re-fetch all data and re-analyze."

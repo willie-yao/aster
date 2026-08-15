@@ -1,0 +1,27 @@
+id: engine.kubernetes.cluster-control-plane-provisioning
+name: Cluster and control-plane provisioning
+priority: 210
+triggers:
+  - '(?i)\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b.{0,160}\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b.{0,80}\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b'
+  - '(?i)\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b.{0,160}\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b.{0,80}\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b'
+  - '(?i)\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b.{0,120}\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b.{0,80}\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b'
+  - '(?i)\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b.{0,80}\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b.{0,120}\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b'
+  - '(?i)\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b.{0,80}\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b.{0,120}\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b'
+  - '(?i)\b(failed|failure|error|stalled|timeout|timed out|not ready|unready)\b.{0,120}\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b.{0,80}\b(provision(?:s|ed|ing)?|reconcil(?:e[ds]?|ing|iation)|bootstrap)\b'
+  - '(?i)\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b.{0,160}\b(cannot|could not|failed to|unable to)\s+be\s+(provisioned|reconciled|bootstrapped)\b'
+  - '(?i)\b(cannot|could not|failed to|unable to)\s+(provision|reconcile|bootstrap)\b.{0,120}\b(cluster|control.?plane|kubeadmcontrolplane|kcp|machinedeployment|machine|infrastructure)\b'
+  - '(?i)\bbootstrap\b.{0,120}\b(failed|error|timeout|timed out|stalled)\b'
+required_evidence:
+  - id: provisioning-object-state
+    description: first unready Cluster, control plane, MachineDeployment, Machine, or infrastructure object
+    any_of:
+      - '(?i)^artifacts/clusters/bootstrap/resources/[^/]+/(?:cluster|kubeadmcontrolplane|machinedeployment|machine|[^/]*cluster|[^/]*machine)/.*\.ya?ml$'
+  - id: responsible-controller
+    description: controller log for the first unready object
+    any_of:
+      - '(?i)^artifacts/clusters/bootstrap/logs/[^/]+/[^/]*controller[^/]*/[^/]+/(?:manager|controller)\.log$'
+      - '(?i)^artifacts/clusters/bootstrap/logs/[^/]+/[^/]+/[^/]+/manager\.log$'
+procedure: |
+  1. Find the first unready object in dependency order: Cluster, control plane, MachineDeployment, Machine, then its infrastructure and bootstrap objects. Record its conditions and the earliest transition time.
+  2. Read the controller responsible for that object and correlate by object name and timestamp. Do not infer a provider failure from a higher-level timeout alone.
+  3. Separate infrastructure provisioning from bootstrap generation, machine boot, node registration, and cloud-provider initialization. Report the earliest layer that did not complete.

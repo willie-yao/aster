@@ -1,0 +1,133 @@
+{
+  "name": "non-capi-kubernetes",
+  "sources": [
+    {
+      "path": "docs/prow-debugging.md",
+      "kind": "markdown",
+      "start_line": 1,
+      "end_line": 20,
+      "text": "The Widget controller reconciles Widget resources after its admission webhook becomes ready. Webhook readiness precedes Widget creation, controller reconciliation, and E2E assertions. Presubmits run unit and kind E2E jobs; periodic jobs run upgrade coverage. Read the failing JUnit case, then build-log, webhook resources, manager.log, and a passing job of the same flavor. example/widget-operator. artifacts/controller/manager.log. Shows reconciliation errors and webhook startup state. Webhook readiness failure. Tests report connection refused for the admission webhook. manager.log. webhook Deployment and certificate resource dumps. Do not infer a Widget reconciliation defect before webhook readiness is established. Change webhook startup or certificate configuration only when captured logs or resources prove it. Recovered API discovery timeout. A later discovery call succeeds and the test continues during the same run. Discovery never succeeds or the API service remains unavailable through failure."
+    }
+  ],
+  "evidence": {
+    "architecture": [
+      {
+        "text": "The Widget controller reconciles Widget resources after its admission webhook becomes ready.",
+        "sources": [
+          {
+            "path": "docs/prow-debugging.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "diagnostic_lifecycle": [
+      {
+        "text": "Webhook readiness precedes Widget creation, controller reconciliation, and E2E assertions.",
+        "sources": [
+          {
+            "path": "docs/prow-debugging.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "test_flavors": [
+      {
+        "text": "Presubmits run unit and kind E2E jobs; periodic jobs run upgrade coverage.",
+        "sources": [
+          {
+            "path": "docs/prow-debugging.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "path_pattern": "artifacts/controller/manager.log",
+        "purpose": "Shows reconciliation errors and webhook startup state.",
+        "sources": [
+          {
+            "path": "docs/prow-debugging.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "failure_patterns": [
+      {
+        "name": "Webhook readiness failure",
+        "signal": "Tests report connection refused for the admission webhook",
+        "required_evidence": [
+          "manager.log",
+          "webhook Deployment and certificate resource dumps"
+        ],
+        "do_not_conclude": "Do not infer a Widget reconciliation defect before webhook readiness is established.",
+        "remediation_limit": "Change webhook startup or certificate configuration only when captured logs or resources prove it.",
+        "sources": [
+          {
+            "path": "docs/prow-debugging.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "transient_rules": [
+      {
+        "class": "Recovered API discovery timeout",
+        "only_if": "A later discovery call succeeds and the test continues during the same run.",
+        "not_transient_if": "Discovery never succeeds or the API service remains unavailable through failure.",
+        "sources": [
+          {
+            "path": "docs/prow-debugging.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "triage_order": [
+      {
+        "text": "Read the failing JUnit case, then build-log, webhook resources, manager.log, and a passing job of the same flavor.",
+        "sources": [
+          {
+            "path": "docs/prow-debugging.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "repositories": [
+      {
+        "text": "example/widget-operator",
+        "sources": [
+          {
+            "path": "docs/prow-debugging.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "unresolved": [
+      "Confirm the exact upgrade-job resource dump directory."
+    ]
+  },
+  "required": [
+    "Widget",
+    "manager.log",
+    "webhook readiness"
+  ],
+  "prohibited": [
+    "Azure Portal",
+    "SSH",
+    "browser automation"
+  ]
+}

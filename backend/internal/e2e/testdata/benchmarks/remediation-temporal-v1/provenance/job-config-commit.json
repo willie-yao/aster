@@ -1,0 +1,1 @@
+{"date":"2022-05-04T16:53:47Z","files":[{"filename":"config/jobs/kubernetes-sigs/sig-windows/soak-tests.yaml","sha":"ff32cfde12eaea0bb13fd4fb6de3a330f7ee28d9","status":"added"}],"message":"Add Windows Soak tests\ncapz deployment with Azure provider","sha":"b0a07a0d6592017a2745223d5d259646fb30c48d"}

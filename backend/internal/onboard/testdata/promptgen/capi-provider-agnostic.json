@@ -1,0 +1,134 @@
+{
+  "name": "capi-provider-agnostic",
+  "sources": [
+    {
+      "path": "docs/e2e.md",
+      "kind": "markdown",
+      "start_line": 1,
+      "end_line": 20,
+      "text": "Cluster owns control plane and worker Machines, while providers own infrastructure and bootstrap readiness. Cluster infrastructure readiness precedes control plane initialization, worker creation, and conformance tests. Jobs cover management-cluster E2E, workload-cluster conformance, and upgrade templates. Correlate the JUnit timeout with Cluster conditions, then the owning provider condition and controller log, and compare a passing workload cluster. kubernetes-sigs/cluster-api. artifacts/clusters/{cluster}/resources/cluster-api/. Contains Cluster, Machine, and control-plane resource conditions. Infrastructure readiness stall. Cluster infrastructureReady remains false. Cluster conditions. infrastructure provider conditions. provider controller log. Do not attribute the downstream Machine wait to CAPI core without provider evidence. Fix the owning provider or template only after its condition or log proves the cause. Recovered registry timeout. The image pull retry succeeds and the affected component becomes ready during the run. The image tag is missing or pulls never recover before test failure."
+    }
+  ],
+  "evidence": {
+    "architecture": [
+      {
+        "text": "Cluster owns control plane and worker Machines, while providers own infrastructure and bootstrap readiness.",
+        "sources": [
+          {
+            "path": "docs/e2e.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "diagnostic_lifecycle": [
+      {
+        "text": "Cluster infrastructure readiness precedes control plane initialization, worker creation, and conformance tests.",
+        "sources": [
+          {
+            "path": "docs/e2e.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "test_flavors": [
+      {
+        "text": "Jobs cover management-cluster E2E, workload-cluster conformance, and upgrade templates.",
+        "sources": [
+          {
+            "path": "docs/e2e.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "path_pattern": "artifacts/clusters/{cluster}/resources/cluster-api/",
+        "purpose": "Contains Cluster, Machine, and control-plane resource conditions.",
+        "sources": [
+          {
+            "path": "docs/e2e.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "failure_patterns": [
+      {
+        "name": "Infrastructure readiness stall",
+        "signal": "Cluster infrastructureReady remains false",
+        "required_evidence": [
+          "Cluster conditions",
+          "infrastructure provider conditions",
+          "provider controller log"
+        ],
+        "do_not_conclude": "Do not attribute the downstream Machine wait to CAPI core without provider evidence.",
+        "remediation_limit": "Fix the owning provider or template only after its condition or log proves the cause.",
+        "sources": [
+          {
+            "path": "docs/e2e.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "transient_rules": [
+      {
+        "class": "Recovered registry timeout",
+        "only_if": "The image pull retry succeeds and the affected component becomes ready during the run.",
+        "not_transient_if": "The image tag is missing or pulls never recover before test failure.",
+        "sources": [
+          {
+            "path": "docs/e2e.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "triage_order": [
+      {
+        "text": "Correlate the JUnit timeout with Cluster conditions, then the owning provider condition and controller log, and compare a passing workload cluster.",
+        "sources": [
+          {
+            "path": "docs/e2e.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "repositories": [
+      {
+        "text": "kubernetes-sigs/cluster-api",
+        "sources": [
+          {
+            "path": "docs/e2e.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "unresolved": [
+      "Document provider-specific artifact paths in the consumer prompt."
+    ]
+  },
+  "required": [
+    "infrastructure readiness",
+    "artifacts/clusters",
+    "owning provider"
+  ],
+  "prohibited": [
+    "Azure Portal",
+    "SSH",
+    "quota exhaustion is transient"
+  ]
+}

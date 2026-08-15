@@ -1,0 +1,37 @@
+# Operator-managed Orka model credentials. OPENAI_API_KEY is optional when the
+# endpoint accepts unauthenticated requests.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: opencode-credentials
+  namespace: orka-system
+type: Opaque
+stringData:
+  OPENAI_BASE_URL: "https://models.example.com/v1"
+  # OPENAI_API_KEY: "replace-me"
+---
+# The dashboard references this Agent by name. The Agent selects the coding CLI
+# and owns the endpoint-specific model configuration.
+apiVersion: core.orka.ai/v1alpha1
+kind: Agent
+metadata:
+  name: opencode-fixer
+  namespace: orka-system
+spec:
+  model:
+    name: "provider/model-id"
+  systemPrompt:
+    inline: "Follow the Task prompt and make only the requested code change."
+  secretRef:
+    name: opencode-credentials
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  runtime:
+    type: opencode
+    defaultMaxTurns: 30
+    defaultAllowBash: true

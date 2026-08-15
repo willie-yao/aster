@@ -1,0 +1,20 @@
+# Keep the build context small and reproducible.
+.git
+bin/
+*.test
+*.out
+coverage.out
+
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/public/data/
+
+**/.DS_Store
+*.swp
+.env
+.env.local
+
+deploy/
+docs/
+*.md

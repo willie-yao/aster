@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="57" disabled="20" errors="0" failures="9" time="6838.70">
+  <testsuite name="capz-e2e" tests="4" failures="1" errors="0" time="5834.56">
+    <testcase name="[It] Workload cluster creation Creating a HA cluster [REQUIRED] With 3 control-plane nodes and 2 Linux and 2 Windows worker nodes" classname="capz-e2e" status="failed" time="4600.00">
+      <failure message="Timed out after 3600.001s.&#xA;Timed out waiting for 3 control plane machines to exist&#xA;Expected&#xA;    &lt;int&gt;: 2&#xA;to equal&#xA;    &lt;int&gt;: 3" type="failed">
+[FAILED] Timed out after 3600.001s.
+Timed out waiting for 3 control plane machines to exist
+Expected
+    &lt;int&gt;: 2
+to equal
+    &lt;int&gt;: 3
+
+Full Stack Trace
+sigs.k8s.io/cluster-api/test@v1.12.3/framework/controlplane_helpers.go:115
+sigs.k8s.io/cluster-api-provider-azure/test/e2e.(*AzureClusterProxy).createHA:234
+      </failure>
+    </testcase>
+    <testcase name="[It] Conformance Tests conformance-tests" classname="capz-e2e" status="skipped" time="0">
+      <skipped message="SKIPPED" />
+    </testcase>
+    <testcase name="[It] Workload cluster creation Creating a VMSS cluster [REQUIRED] with a single control plane node and an AzureMachinePool with 2 nodes" classname="capz-e2e" status="passed" time="1234.56">
+    </testcase>
+    <testcase name="[It] Another skipped test via status only" classname="capz-e2e" status="skipped" time="0">
+    </testcase>
+  </testsuite>
+  <testsuite name="capz-conformance" tests="1" failures="0" errors="0" time="300.00">
+    <testcase name="[It] Networking should provide Internet connection for containers" classname="capz-conformance" status="passed" time="300.00">
+    </testcase>
+  </testsuite>
+</testsuites>

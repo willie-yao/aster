@@ -1,0 +1,48 @@
+id: engine.prow.run-context
+name: Prow run context and comparison
+priority: 110
+triggers:
+  - '(?i)\b(artifact collection|collection error|podinfo|prowjob|clone-records)\b'
+  - '(?i)\b(prow|run|test run)\b.{0,100}\b(cleanup|teardown)\b'
+  - '(?i)\b(cleanup|teardown)\b.{0,100}\b(prow|run|test run)\b'
+  - '(?i)\b(prow|run|test run)\b.{0,100}\b(start(?:ed)?|finish(?:ed)?|timestamp|duration|revision|commit|check(?:ed)? out|checkout|clone)\b'
+  - '(?i)\b(start(?:ed)?|finish(?:ed)?|timestamp|duration|revision|commit|check(?:ed)? out|checkout|clone)\b.{0,100}\b(prow|run|test run)\b'
+  - '(?i)\bprow\b.{0,80}\b(job|scheduling|scheduler|source|pod)\b'
+  - '(?i)\b(transient|regression|last[ -]passing|previous(?:ly)? pass(?:ed|ing))\b'
+required_evidence:
+  - id: run-start
+    description: run start metadata
+    when:
+      - '(?i)\b(artifact collection|collection error)\b'
+      - '(?i)\b(prow|run|test run)\b.{0,100}\b(cleanup|teardown)\b'
+      - '(?i)\b(cleanup|teardown)\b.{0,100}\b(prow|run|test run)\b'
+      - '(?i)\b(prow|run|test run)\b.{0,100}\b(start(?:ed)?|timestamp|duration)\b'
+      - '(?i)\b(start(?:ed)?|timestamp|duration)\b.{0,100}\b(prow|run|test run)\b'
+      - '(?i)\b(transient|regression|last[ -]passing|previous(?:ly)? pass(?:ed|ing))\b'
+    any_of:
+      - '(?i)(^|/)started\.json$'
+  - id: run-finish
+    description: run finish metadata and result
+    when:
+      - '(?i)\b(artifact collection|collection error)\b'
+      - '(?i)\b(prow|run|test run)\b.{0,100}\b(cleanup|teardown)\b'
+      - '(?i)\b(cleanup|teardown)\b.{0,100}\b(prow|run|test run)\b'
+      - '(?i)\b(prow|run|test run)\b.{0,100}\b(finish(?:ed)?|timestamp|duration)\b'
+      - '(?i)\b(finish(?:ed)?|timestamp|duration)\b.{0,100}\b(prow|run|test run)\b'
+      - '(?i)\b(transient|regression|last[ -]passing|previous(?:ly)? pass(?:ed|ing))\b'
+    any_of:
+      - '(?i)(^|/)finished\.json$'
+  - id: prow-context
+    description: Prow scheduling, source, or pod metadata
+    when:
+      - '(?i)\b(podinfo|prowjob|clone-records)\b'
+      - '(?i)\b(prow|run|test run)\b.{0,100}\b(revision|commit|check(?:ed)? out|checkout|clone)\b'
+      - '(?i)\b(revision|commit|check(?:ed)? out|checkout|clone)\b.{0,100}\b(prow|run|test run)\b'
+      - '(?i)\bprow\b.{0,80}\b(job|scheduling|scheduler|source|pod|revision|commit|check(?:ed)? out|checkout|clone)\b'
+      - '(?i)\b(transient|regression|last[ -]passing|previous(?:ly)? pass(?:ed|ing))\b'
+    any_of:
+      - '(?i)(^|/)(prowjob|podinfo|clone-records)\.json$'
+procedure: |
+  1. Use started.json and finished.json to establish the run window and result. Use prowjob.json and clone-records.json for the tested revision and Prow configuration. Use podinfo.json for pod lifecycle and container state.
+  2. Treat metadata and collection failures as context unless their timestamps show they initiated the test failure.
+  3. When last-passing evidence is available, compare the same artifact path and tested revision. A version label alone does not prove a regression or a transient failure.

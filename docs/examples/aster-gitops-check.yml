@@ -1,0 +1,97 @@
+name: Aster Flux GitOps check
+
+on:
+  pull_request:
+    paths:
+      - project.yaml
+      - prompts/system.md
+      - skills/**
+      - deploy/**
+      - gitops/**
+      - .github/workflows/aster-gitops-check.yml
+
+permissions:
+  contents: read
+
+env:
+  ASTER_RELEASE_TAG: v0.9.0
+  ASTER_BINARY_SHA256: replace-with-reviewed-sha256
+  ASTER_CHART_VERSION: 0.9.0
+  ASTER_RELEASE: replace-with-release
+  ASTER_NAMESPACE: replace-with-namespace
+  ASTER_EXECUTION_NAMESPACE: ""
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and verify Aster
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="aster-${ASTER_RELEASE_TAG}-linux-amd64"
+          url="https://github.com/willie-yao/aster/releases/download/${ASTER_RELEASE_TAG}/${asset}"
+          curl --fail --location --proto '=https' --tlsv1.2 --output "$RUNNER_TEMP/aster" "$url"
+          printf '%s  %s\n' "$ASTER_BINARY_SHA256" "$RUNNER_TEMP/aster" | sha256sum --check --strict
+          chmod 0755 "$RUNNER_TEMP/aster"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v4.0.0
+
+      - name: Validate consumer and generated declaration
+        shell: bash
+        run: |
+          set -euo pipefail
+          aster onboard doctor --project-dir .
+          args=(
+            --project-dir .
+            --values deploy/values.yaml
+            --platform-values deploy/platform-values.yaml
+            --release "$ASTER_RELEASE"
+            --namespace "$ASTER_NAMESPACE"
+            --chart-version "$ASTER_CHART_VERSION"
+            --gitops-dir gitops
+          )
+          if [[ -n $ASTER_EXECUTION_NAMESPACE ]]; then
+            args+=(--execution-namespace "$ASTER_EXECUTION_NAMESPACE")
+          fi
+          aster kubernetes gitops check "${args[@]}"
+
+      - name: Render pinned charts from generated values
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -ryaml -e 'print YAML.load_file(ARGV[0]).fetch("data").fetch("values.yaml")' \
+            gitops/application/values-configmap.yaml > "$RUNNER_TEMP/application-values.yaml"
+          helm template "$ASTER_RELEASE" \
+            oci://ghcr.io/willie-yao/charts/aster \
+            --namespace "$ASTER_NAMESPACE" \
+            --version "$ASTER_CHART_VERSION" \
+            --values "$RUNNER_TEMP/application-values.yaml" > "$RUNNER_TEMP/application-render.yaml"
+          ruby -ryaml -e 'images=[]; walk=nil; walk=->(v){case v; when Hash; v.each{|k,x| images << x if k == "image" && x.is_a?(String); walk.call(x)}; when Array; v.each{|x| walk.call(x)}; end}; YAML.load_stream(File.read(ARGV[0])).each{|d| walk.call(d)}; bad=images.reject{|i| !i.rpartition(":").last.downcase.include?("snapshot") && (i.match?(/@sha256:[0-9a-f]{64}\z/) || i.match?(/:(?:v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?|sha-[0-9a-f]{7,64})\z/))}; abort "mutable rendered images: #{bad.join(", ")}" unless bad.empty?' "$RUNNER_TEMP/application-render.yaml"
+          if [[ -n $ASTER_EXECUTION_NAMESPACE ]]; then
+            ruby -ryaml -e 'print YAML.load_file(ARGV[0]).fetch("data").fetch("values.yaml")' \
+              gitops/platform/values-configmap.yaml > "$RUNNER_TEMP/platform-values.yaml"
+            helm template "${ASTER_RELEASE}-platform" \
+              oci://ghcr.io/willie-yao/charts/aster-platform \
+              --namespace "$ASTER_NAMESPACE" \
+              --version "$ASTER_CHART_VERSION" \
+              --values "$RUNNER_TEMP/platform-values.yaml" > "$RUNNER_TEMP/platform-render.yaml"
+            ruby -ryaml -e 'images=[]; walk=nil; walk=->(v){case v; when Hash; v.each{|k,x| images << x if k == "image" && x.is_a?(String); walk.call(x)}; when Array; v.each{|x| walk.call(x)}; end}; YAML.load_stream(File.read(ARGV[0])).each{|d| walk.call(d)}; bad=images.reject{|i| !i.rpartition(":").last.downcase.include?("snapshot") && (i.match?(/@sha256:[0-9a-f]{64}\z/) || i.match?(/:(?:v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?|sha-[0-9a-f]{7,64})\z/))}; abort "mutable rendered images: #{bad.join(", ")}" unless bad.empty?' "$RUNNER_TEMP/platform-render.yaml"
+          fi
+
+      - name: Scan generated files
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RInE \
+            'kind:[[:space:]]*Secret|BEGIN ([A-Z ]+ )?PRIVATE KEY|gh[pousr]_[A-Za-z0-9]{20,}|https?://[^/@[:space:]]+:[^/@[:space:]]+@' \
+            gitops; then
+            echo 'generated GitOps files contain forbidden credential material' >&2
+            exit 1
+          fi

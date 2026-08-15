@@ -1,0 +1,693 @@
+package orka
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/analysisruntime"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/project"
+)
+
+func containerTaskRequest() ai.FailureAnalysisRequest {
+	return ai.FailureAnalysisRequest{
+		JobID:       "periodic-job",
+		BuildPrefix: "logs/periodic-job/1/",
+		Build:       models.BuildInfo{JobName: "periodic-job", BuildID: "1"},
+		TestCase:    models.TestCase{Name: "Test A", Status: "failed", FailureMessage: "boom"},
+		ProwJob: &ai.ProwJobContext{
+			Name: "periodic-job", JobType: models.JobTypePeriodic,
+			ConfigFile: "config/jobs/example/periodics.yaml", ConfigRevision: strings.Repeat("a", 40),
+		},
+	}
+}
+
+func containerTaskProject(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	config := `id: analyzer-test
+name: Analyzer Test
+testgrid:
+  dashboard: analyzer-test
+storage:
+  provider: local
+  base: /fixtures
+branding:
+  title: Analyzer Test
+  base_path: /analyzer-test
+  site_url: https://example.invalid/analyzer-test
+  source_repo:
+    owner: example
+    name: project
+ai:
+  endpoint: https://private-model.invalid/v1/chat/completions?token=secret
+  model: private-model
+  tools: [filesystem]
+  min_tool_calls: 2
+`
+	if err := os.WriteFile(filepath.Join(dir, "project.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "prompts", "system.md"), []byte("Investigate artifacts.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func containerTaskSpec(t *testing.T) ContainerAnalysisTaskSpec {
+	t.Helper()
+	return ContainerAnalysisTaskSpec{
+		Namespace:           "orka-system",
+		NamePrefix:          "flatcar-analyzer",
+		Image:               "dashboard-analyzer:sha",
+		Command:             []string{"/usr/local/bin/analyzer"},
+		Args:                []string{"-data-dir=/tmp/analyzer"},
+		Timeout:             "5m",
+		MaxRetries:          1,
+		ProjectDir:          containerTaskProject(t),
+		Request:             containerTaskRequest(),
+		StateKeyFingerprint: strings.Repeat("a", 64),
+		Environment: map[string]string{
+			"AI_API":      "chat_completions",
+			"AI_ENDPOINT": "https://model.invalid/v1/chat/completions",
+			"AI_MODEL":    "script-model",
+		},
+		Labels: map[string]string{
+			"prow-ai-dashboard/test":    "bundle",
+			"prow-ai-dashboard/adapter": "wrong",
+		},
+		SecretEnv: []SecretEnvVar{
+			{Name: "AI_TOKEN", SecretName: "analyzer-model", SecretKey: "token"},
+			{Name: analysisruntime.ContainerStateKeyEnv, SecretName: "analyzer-model", SecretKey: "state-key"},
+		},
+	}
+}
+
+func TestBuildContainerAnalysisResources(t *testing.T) {
+	resources, err := BuildContainerAnalysisResources(containerTaskSpec(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := resources.Task
+	configMap := resources.BundleConfigMap
+	if task["apiVersion"] != "core.orka.ai/v1alpha1" || task["kind"] != "Task" {
+		t.Fatalf("task type metadata = %+v", task)
+	}
+	metadata := task["metadata"].(map[string]any)
+	if !strings.HasPrefix(metadata["name"].(string), "flatcar-analyzer-") || metadata["namespace"] != "orka-system" {
+		t.Fatalf("metadata = %+v", metadata)
+	}
+	annotations := metadata["annotations"].(map[string]any)
+	if annotations["prow-ai-dashboard/contract-version"] != ContainerAnalysisContractVersion || annotations["prow-ai-dashboard/state-key-fingerprint"] != strings.Repeat("a", 64) {
+		t.Fatalf("annotations = %+v", annotations)
+	}
+	configMetadata := configMap["metadata"].(map[string]any)
+	if configMap["apiVersion"] != "v1" || configMap["kind"] != "ConfigMap" || configMap["immutable"] != true {
+		t.Fatalf("bundle ConfigMap = %+v", configMap)
+	}
+	bundleName := configMetadata["name"].(string)
+	if bundleName != metadata["name"].(string)+"-input" || len(bundleName) > 63 || configMetadata["namespace"] != "orka-system" {
+		t.Fatalf("bundle ConfigMap metadata = %+v", configMetadata)
+	}
+	bundleLabels := configMetadata["labels"].(map[string]any)
+	taskLabels := metadata["labels"].(map[string]any)
+	for _, labels := range []map[string]any{bundleLabels, taskLabels} {
+		if labels["prow-ai-dashboard/test"] != "bundle" || labels["prow-ai-dashboard/adapter"] != "container-analyzer" {
+			t.Fatalf("resource labels = %+v", labels)
+		}
+	}
+	if bundleLabels[containerAnalysisBundleLabel] != "true" {
+		t.Fatalf("bundle labels = %+v", bundleLabels)
+	}
+	if _, ok := taskLabels[containerAnalysisBundleLabel]; ok {
+		t.Fatalf("Task labels include bundle retention selector: %+v", taskLabels)
+	}
+	bundleJSON := configMap["data"].(map[string]any)[analysisruntime.ProjectBundleConfigMapKey].(string)
+	bundle, err := analysisruntime.DecodeProjectBundle([]byte(bundleJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundle.Digest != annotations["prow-ai-dashboard/bundle-digest"] || bundle.ContractVersion != ContainerAnalysisContractVersion {
+		t.Fatalf("bundle identity = %+v, annotations = %+v", bundle, annotations)
+	}
+	for _, forbidden := range []string{"private-model.invalid", "private-model", "token=secret", "AI_TOKEN"} {
+		if strings.Contains(bundleJSON, forbidden) {
+			t.Fatalf("bundle contains forbidden %q", forbidden)
+		}
+	}
+	spec := task["spec"].(map[string]any)
+	if spec["type"] != "container" || spec["image"] != "dashboard-analyzer:sha" {
+		t.Fatalf("spec = %+v", spec)
+	}
+	for _, forbidden := range []string{"ai", "providerRef", "model", "tools", "agentRuntime"} {
+		if _, ok := spec[forbidden]; ok {
+			t.Fatalf("spec contains forbidden field %q: %+v", forbidden, spec)
+		}
+	}
+	if !reflect.DeepEqual(spec["command"], []string{"/usr/local/bin/analyzer"}) || len(spec["args"].([]string)) != 1 {
+		t.Fatalf("command/args = %+v %+v", spec["command"], spec["args"])
+	}
+	if spec["timeout"] != "5m" || spec["retryPolicy"].(map[string]any)["maxRetries"] != 1 {
+		t.Fatalf("timeout/retry = %+v", spec)
+	}
+	selector := spec["execution"].(map[string]any)["nodeSelector"].(map[string]any)
+	if selector["agentpool"] != "nodepool1" {
+		t.Fatalf("nodeSelector = %+v", selector)
+	}
+	encoded, err := json.Marshal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, forbidden := range []string{"providerRef", `\"model\"`, `\"tools\"`, "orka-ai-worker", "compat"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("task contains forbidden %q: %s", forbidden, text)
+		}
+	}
+
+	env := spec["env"].([]any)
+	var digestValue string
+	bundleRefFound := false
+	secretFound := false
+	stateSecretFound := false
+	derived := map[string]string{}
+	for _, raw := range env {
+		entry := raw.(map[string]any)
+		switch entry["name"] {
+		case analysisruntime.ProjectBundleEnv:
+			ref := entry["valueFrom"].(map[string]any)["configMapKeyRef"].(map[string]any)
+			bundleRefFound = ref["name"] == configMetadata["name"] && ref["key"] == analysisruntime.ProjectBundleConfigMapKey
+			if _, ok := entry["value"]; ok {
+				t.Fatal("project bundle was inlined into the Task")
+			}
+		case analysisruntime.ProjectBundleDigestEnv:
+			digestValue, _ = entry["value"].(string)
+		case "AI_TOKEN":
+			secret := entry["valueFrom"].(map[string]any)["secretKeyRef"].(map[string]any)
+			secretFound = secret["name"] == "analyzer-model" && secret["key"] == "token"
+			if _, ok := entry["value"]; ok {
+				t.Fatal("AI_TOKEN was inlined instead of using a Secret reference")
+			}
+		case analysisruntime.ContainerStateKeyEnv:
+			secret := entry["valueFrom"].(map[string]any)["secretKeyRef"].(map[string]any)
+			stateSecretFound = secret["name"] == "analyzer-model" && secret["key"] == "state-key"
+		case analysisruntime.ContainerTaskNamespaceEnv, analysisruntime.ContainerTaskNameEnv, analysisruntime.ContainerContractVersionEnv:
+			derived[entry["name"].(string)] = entry["value"].(string)
+		}
+	}
+	if !bundleRefFound || digestValue != bundle.Digest || !secretFound || !stateSecretFound {
+		t.Fatalf("env = %+v", env)
+	}
+	if derived[analysisruntime.ContainerTaskNamespaceEnv] != "orka-system" || derived[analysisruntime.ContainerTaskNameEnv] != metadata["name"] || derived[analysisruntime.ContainerContractVersionEnv] != ContainerAnalysisContractVersion {
+		t.Fatalf("derived env = %+v", derived)
+	}
+}
+
+func TestBuildContainerAnalysisResourcesUsesImageEntrypoint(t *testing.T) {
+	spec := containerTaskSpec(t)
+	spec.Command = nil
+	resources, err := BuildContainerAnalysisResources(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskSpec := resources.Task["spec"].(map[string]any)
+	if _, ok := taskSpec["command"]; ok {
+		t.Fatalf("Task overrides image entrypoint: %+v", taskSpec)
+	}
+	if !reflect.DeepEqual(taskSpec["args"], []string{"-data-dir=/tmp/analyzer"}) {
+		t.Fatalf("args = %+v", taskSpec["args"])
+	}
+}
+
+func TestContainerAnalysisResourceIdentityChangesWithInputs(t *testing.T) {
+	base, err := BuildContainerAnalysisResources(containerTaskSpec(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseTask := base.Task["metadata"].(map[string]any)["name"]
+	baseBundle := base.BundleConfigMap["metadata"].(map[string]any)["name"]
+	mutations := []struct {
+		name         string
+		changeBundle bool
+		mutate       func(*ContainerAnalysisTaskSpec)
+	}{
+		{name: "request", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.Request.TestCase.FailureMessage = "changed" }},
+		{name: "image", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.Image = "dashboard-analyzer:other" }},
+		{name: "context window", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.Environment["AI_CONTEXT_WINDOW_TOKENS"] = "128000" }},
+		{name: "state key", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) { spec.StateKeyFingerprint = strings.Repeat("b", 64) }},
+		{name: "cache seed", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) {
+			key := analysisruntime.FailureCacheKey(spec.Request)
+			spec.CacheSeed = map[string]ai.CacheEntry{key: {Key: key, CreatedAt: time.Now().UTC(), Data: json.RawMessage(`{"cached":true}`)}}
+		}},
+		{name: "prompt", changeBundle: true, mutate: func(spec *ContainerAnalysisTaskSpec) {
+			if err := os.WriteFile(filepath.Join(spec.ProjectDir, "prompts", "system.md"), []byte("Changed prompt.\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			spec := containerTaskSpec(t)
+			mutation.mutate(&spec)
+			resources, err := BuildContainerAnalysisResources(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			taskName := resources.Task["metadata"].(map[string]any)["name"]
+			bundleName := resources.BundleConfigMap["metadata"].(map[string]any)["name"]
+			if taskName == baseTask {
+				t.Fatalf("%s mutation kept Task identity %q", mutation.name, taskName)
+			}
+			if got := bundleName != baseBundle; got != mutation.changeBundle {
+				t.Fatalf("%s mutation bundle changed=%t, want %t", mutation.name, got, mutation.changeBundle)
+			}
+		})
+	}
+}
+
+func TestBuildContainerAnalysisResourcesRequiresProviderAndToken(t *testing.T) {
+	for name, mutate := range map[string]func(*ContainerAnalysisTaskSpec){
+		"api":      func(spec *ContainerAnalysisTaskSpec) { delete(spec.Environment, "AI_API") },
+		"endpoint": func(spec *ContainerAnalysisTaskSpec) { delete(spec.Environment, "AI_ENDPOINT") },
+		"model":    func(spec *ContainerAnalysisTaskSpec) { delete(spec.Environment, "AI_MODEL") },
+		"token": func(spec *ContainerAnalysisTaskSpec) {
+			spec.SecretEnv = spec.SecretEnv[1:]
+		},
+		"state key": func(spec *ContainerAnalysisTaskSpec) {
+			spec.SecretEnv = spec.SecretEnv[:1]
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec := containerTaskSpec(t)
+			mutate(&spec)
+			if _, err := BuildContainerAnalysisResources(spec); err == nil || !strings.Contains(err.Error(), "requires") {
+				t.Fatalf("BuildContainerAnalysisResources error = %v", err)
+			}
+		})
+	}
+	spec := containerTaskSpec(t)
+	spec.Environment["AI_API"] = "invalid"
+	if _, err := BuildContainerAnalysisResources(spec); err == nil || !strings.Contains(err.Error(), "AI API") {
+		t.Fatalf("BuildContainerAnalysisResources invalid API error = %v", err)
+	}
+}
+
+func TestBuildContainerAnalysisResourcesRejectsInvalidReasoningEffort(t *testing.T) {
+	spec := containerTaskSpec(t)
+	spec.Environment[project.AIReasoningEffortEnv] = "ultra"
+	if _, err := BuildContainerAnalysisResources(spec); err == nil || !strings.Contains(err.Error(), "reasoning effort") {
+		t.Fatalf("invalid reasoning effort error = %v", err)
+	}
+}
+
+func TestBuildContainerAnalysisResourcesNormalizesProviderEnvironment(t *testing.T) {
+	spec := containerTaskSpec(t)
+	spec.Environment["AI_API"] = " Responses "
+	spec.Environment["AI_ENDPOINT"] = "  https://model.invalid/v1/responses  "
+	spec.Environment["AI_MODEL"] = "  model-name  "
+	spec.Environment[project.AIReasoningEffortEnv] = " HIGH "
+	resources, err := BuildContainerAnalysisResources(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Environment["AI_ENDPOINT"] != "  https://model.invalid/v1/responses  " {
+		t.Fatal("BuildContainerAnalysisResources mutated the caller environment")
+	}
+	got := map[string]string{}
+	for _, raw := range resources.Task["spec"].(map[string]any)["env"].([]any) {
+		entry := raw.(map[string]any)
+		if value, ok := entry["value"].(string); ok {
+			got[entry["name"].(string)] = value
+		}
+	}
+	want := map[string]string{
+		"AI_API": "responses", "AI_ENDPOINT": "https://model.invalid/v1/responses", "AI_MODEL": "model-name", project.AIReasoningEffortEnv: "high",
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Fatalf("%s = %q, want %q", name, got[name], value)
+		}
+	}
+}
+
+func TestBuildContainerAnalysisResourcesRejectsCredentialBearingEndpoints(t *testing.T) {
+	for name, endpoint := range map[string]string{
+		"relative":        "/v1/chat/completions",
+		"scheme":          "ftp://model.invalid/v1/chat/completions",
+		"userinfo":        "https://user:secret@model.invalid/v1/chat/completions",
+		"token query":     "https://model.invalid/v1/chat/completions?token=secret",
+		"other query":     "https://model.invalid/v1/chat/completions?region=west",
+		"malformed query": "https://model.invalid/v1/chat/completions?token=secret;foo=bar",
+		"fragment":        "https://model.invalid/v1/chat/completions#secret",
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec := containerTaskSpec(t)
+			spec.Environment["AI_ENDPOINT"] = endpoint
+			if _, err := BuildContainerAnalysisResources(spec); err == nil || !strings.Contains(err.Error(), "AI_ENDPOINT") {
+				t.Fatalf("BuildContainerAnalysisResources endpoint error = %v", err)
+			}
+		})
+	}
+	spec := containerTaskSpec(t)
+	spec.Environment["AI_ENDPOINT"] = "https://example.openai.azure.com/openai/v1/responses?api-version=2025-03-01-preview"
+	if _, err := BuildContainerAnalysisResources(spec); err != nil {
+		t.Fatalf("Azure API version endpoint rejected: %v", err)
+	}
+}
+
+func TestBuildContainerAnalysisResourcesRejectsOversizedBundle(t *testing.T) {
+	spec := containerTaskSpec(t)
+	if err := os.WriteFile(filepath.Join(spec.ProjectDir, "prompts", "system.md"), []byte(strings.Repeat("x", analysisruntime.MaxProjectBundleBytes)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BuildContainerAnalysisResources(spec); err == nil || !strings.Contains(err.Error(), "environment limit") {
+		t.Fatalf("BuildContainerAnalysisResources error = %v", err)
+	}
+}
+
+func TestParseAndApplyContainerAnalysisResult(t *testing.T) {
+	want := ai.FailureAnalysisResult{
+		Summary:  &models.AISummary{GeneratedAt: "2026-07-22T12:00:00Z", Summary: "summary"},
+		Analysis: &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic"},
+	}
+	var framed bytes.Buffer
+	if err := analysisruntime.WriteFailureAnalysisResult(&framed, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseContainerAnalysisResult("runtime log before\n" + framed.String() + "runtime log after\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("result = %+v, want %+v", got, want)
+	}
+	tc := models.TestCase{Name: "Test A", Status: "failed"}
+	if err := ApplyContainerAnalysisResult(&tc, got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(tc.AISummary, want.Summary) || !reflect.DeepEqual(tc.AIAnalysis, want.Analysis) {
+		t.Fatalf("test case = %+v", tc)
+	}
+}
+
+func TestParseAndApplyContainerUnavailableResult(t *testing.T) {
+	want := ai.FailureAnalysisResult{
+		Summary: &models.AISummary{GeneratedAt: "2026-08-06T12:00:00Z", Summary: "AI analysis unavailable: no validated artifact citation supports the analysis"},
+	}
+	var framed bytes.Buffer
+	if err := analysisruntime.WriteFailureAnalysisResult(&framed, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseContainerAnalysisResult(framed.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := models.TestCase{Name: "Test A", Status: "failed"}
+	if err := ApplyContainerAnalysisResult(&tc, got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(tc.AISummary, want.Summary) || tc.AIAnalysis != nil {
+		t.Fatalf("test case = %+v", tc)
+	}
+}
+
+func TestParseContainerAnalysisResultRejectsMalformedOrAbsentResult(t *testing.T) {
+	for _, raw := range []string{
+		"",
+		"runtime log only\n",
+		`{"ai_summary":{"summary":"plain JSON is not framed"}}`,
+		analysisruntime.FailureAnalysisResultMarker + "not-base64",
+	} {
+		if _, err := ParseContainerAnalysisResult(raw); err == nil {
+			t.Fatalf("ParseContainerAnalysisResult(%q) succeeded", raw)
+		}
+	}
+}
+
+func TestBuildContainerAnalysisResourcesAllowsOnlyKnownSafeInlineEnvironment(t *testing.T) {
+	spec := containerTaskSpec(t)
+	spec.Environment = map[string]string{
+		"AI_API": "chat_completions", "AI_ENDPOINT": "http://model.invalid/v1/chat/completions", "AI_MODEL": "model",
+		project.AICacheGenerationEnv: "h100-grounded-v1", project.AIReasoningEffortEnv: "high",
+	}
+	resources, err := BuildContainerAnalysisResources(spec)
+	if err != nil {
+		t.Fatalf("safe inline environment rejected: %v", err)
+	}
+	taskSpec := resources.Task["spec"].(map[string]any)
+	generationFound := false
+	for _, raw := range taskSpec["env"].([]any) {
+		entry := raw.(map[string]any)
+		if entry["name"] != project.AICacheGenerationEnv {
+			continue
+		}
+		generationFound = entry["value"] == "h100-grounded-v1"
+		if _, ok := entry["valueFrom"]; ok {
+			t.Fatal("AI_CACHE_GENERATION used a Secret reference")
+		}
+	}
+	if !generationFound {
+		t.Fatalf("Task environment = %+v", taskSpec["env"])
+	}
+	for _, name := range []string{"AI_TOKEN", "GITHUB_PAT", "PRIVATE_KEY", "OPENAI_APIKEY"} {
+		spec := containerTaskSpec(t)
+		spec.Environment[name] = "inline-secret"
+		if _, err := BuildContainerAnalysisResources(spec); err == nil || !strings.Contains(err.Error(), "Secret reference") {
+			t.Fatalf("BuildContainerAnalysisResources(%s) error = %v", name, err)
+		}
+	}
+}
+
+func TestApplyContainerAnalysisResultRejectsBlankSummary(t *testing.T) {
+	tc := models.TestCase{Name: "Test A", Status: "failed"}
+	err := ApplyContainerAnalysisResult(&tc, ai.FailureAnalysisResult{Summary: &models.AISummary{Summary: "  "}})
+	if err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("ApplyContainerAnalysisResult error = %v", err)
+	}
+}
+
+func TestEvidencePlanCoverageSurvivesContainerRoundTrip(t *testing.T) {
+	request := containerTaskRequest()
+	cacheKey := analysisruntime.FailureCacheKey(request)
+	seed := map[string]ai.CacheEntry{
+		cacheKey: {
+			Key:       cacheKey,
+			CreatedAt: time.Now().UTC().Add(-time.Minute),
+			Data: json.RawMessage(`{
+				"summary":"covered",
+				"root_cause":"cause",
+				"suggested_fix":"fix",
+				"severity":"High",
+				"tool_calls":2,
+				"gcs_bytes":1,
+				"evidence_plan_covered":true,
+				"future_cache_field":{"preserved":true}
+			}`),
+		},
+	}
+	spec := containerTaskSpec(t)
+	spec.Command = nil
+	spec.CacheSeed = seed
+	resources, err := BuildContainerAnalysisResources(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resources.CacheSeedIncluded {
+		t.Fatal("bounded cache seed was not reported as included")
+	}
+	bundleJSON := resources.BundleConfigMap["data"].(map[string]any)[analysisruntime.ProjectBundleConfigMapKey].(string)
+	bundle, err := analysisruntime.DecodeProjectBundle([]byte(bundleJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(bundle.CacheSeed[cacheKey].Data, []byte(`"evidence_plan_covered":true`)) {
+		t.Fatalf("Task seed dropped evidence coverage: %s", bundle.CacheSeed[cacheKey].Data)
+	}
+
+	taskName := resources.Task["metadata"].(map[string]any)["name"].(string)
+	identity := analysisruntime.NewContainerStateIdentity(spec.Namespace, taskName, request)
+	state := analysisruntime.ContainerAnalysisState{
+		Version:       analysisruntime.ContainerStateVersion,
+		TaskNamespace: identity.TaskNamespace,
+		TaskName:      identity.TaskName,
+		CacheKey:      cacheKey,
+		CacheEntries:  bundle.CacheSeed,
+	}
+	result := ai.FailureAnalysisResult{
+		Summary: &models.AISummary{GeneratedAt: time.Now().UTC().Format(time.RFC3339), Summary: "covered"},
+		Analysis: &models.AIAnalysis{
+			RootCause: "cause", SuggestedFix: "fix", Severity: "High", Mode: ai.AgenticMode,
+			EvidencePlanCovered: true,
+		},
+	}
+	key := bytes.Repeat([]byte{0x6a}, 32)
+	var logs bytes.Buffer
+	if err := analysisruntime.WriteEncryptedContainerAnalysisState(&logs, state, key, identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := analysisruntime.WriteFailureAnalysisResult(&logs, result); err != nil {
+		t.Fatal(err)
+	}
+	parsedResult, err := ParseContainerAnalysisResult(logs.String())
+	if err != nil || parsedResult.Analysis == nil || !parsedResult.Analysis.EvidencePlanCovered {
+		t.Fatalf("result = %+v, error = %v", parsedResult, err)
+	}
+	parsedState, err := analysisruntime.ParseEncryptedContainerAnalysisState(logs.String(), key, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateDir := t.TempDir()
+	store, err := analysisruntime.NewContainerStateStore(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Merge(parsedState); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := analysisruntime.NewContainerStateStore(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := reloaded.CacheSeed(request)[cacheKey]
+	var raw map[string]any
+	if err := json.Unmarshal(entry.Data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if covered, _ := raw["evidence_plan_covered"].(bool); !covered {
+		t.Fatalf("reloaded cache lost evidence coverage: %s", entry.Data)
+	}
+	future, _ := raw["future_cache_field"].(map[string]any)
+	if preserved, _ := future["preserved"].(bool); !preserved {
+		t.Fatalf("reloaded cache dropped an unenumerated field: %s", entry.Data)
+	}
+}
+
+func TestBuildContainerAnalysisResourcesUsesConfiguredCPUPlacement(t *testing.T) {
+	spec := containerTaskSpec(t)
+	spec.NodeSelector = map[string]string{"kubernetes.io/os": "linux", "agentpool": "cpu"}
+	spec.Tolerations = []map[string]any{{"key": "dedicated", "operator": "Equal", "value": "analysis", "effect": "NoSchedule"}}
+	spec.Affinity = map[string]any{"nodeAffinity": map[string]any{"preferredDuringSchedulingIgnoredDuringExecution": []any{}}}
+	resources, err := BuildContainerAnalysisResources(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution := resources.Task["spec"].(map[string]any)["execution"].(map[string]any)
+	selector := execution["nodeSelector"].(map[string]any)
+	if selector["agentpool"] != "cpu" || selector["kubernetes.io/os"] != "linux" {
+		t.Fatalf("node selector = %+v", selector)
+	}
+	if len(execution["tolerations"].([]any)) != 1 || execution["affinity"] == nil {
+		t.Fatalf("execution placement = %+v", execution)
+	}
+}
+
+func TestBuildContainerAnalysisResourcesRejectsGPUPlacement(t *testing.T) {
+	for name, mutate := range map[string]func(*ContainerAnalysisTaskSpec){
+		"selector": func(spec *ContainerAnalysisTaskSpec) { spec.NodeSelector = map[string]string{"agentpool": "h100"} },
+		"gke accelerator": func(spec *ContainerAnalysisTaskSpec) {
+			spec.NodeSelector = map[string]string{"agentpool": "cpu", "cloud.google.com/gke-accelerator": "nvidia-tesla-t4"}
+		},
+		"toleration": func(spec *ContainerAnalysisTaskSpec) {
+			spec.NodeSelector = map[string]string{"agentpool": "cpu"}
+			spec.Tolerations = []map[string]any{{"key": "nvidia.com/gpu", "operator": "Exists"}}
+		},
+		"affinity": func(spec *ContainerAnalysisTaskSpec) {
+			spec.NodeSelector = map[string]string{"agentpool": "cpu"}
+			spec.Affinity = map[string]any{"nodeAffinity": map[string]any{"gpu": "required"}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec := containerTaskSpec(t)
+			mutate(&spec)
+			if _, err := BuildContainerAnalysisResources(spec); err == nil || !strings.Contains(err.Error(), "GPU") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestContainerAnalysisIdentityIgnoresPriorPublishedAI(t *testing.T) {
+	baseSpec := containerTaskSpec(t)
+	base, err := BuildContainerAnalysisResources(baseSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := containerTaskSpec(t)
+	changed.Request.TestCase.AISummary = &models.AISummary{Summary: strings.Repeat("changed", 20_000)}
+	changed.Request.TestCase.AIAnalysis = &models.AIAnalysis{RootCause: strings.Repeat("changed", 20_000), Mode: ai.AgenticMode}
+	withPrior, err := BuildContainerAnalysisResources(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseName := base.Task["metadata"].(map[string]any)["name"]
+	changedName := withPrior.Task["metadata"].(map[string]any)["name"]
+	if changedName != baseName {
+		t.Fatalf("prior AI output changed Task identity: %v != %v", changedName, baseName)
+	}
+}
+
+func TestAnalyzerImageChangesTaskIdentityWithoutChangingFailureCacheKey(t *testing.T) {
+	beforeSpec := containerTaskSpec(t)
+	afterSpec := beforeSpec
+	afterSpec.Image = "dashboard-analyzer:sha-feedface"
+
+	before, err := BuildContainerAnalysisResources(beforeSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := BuildContainerAnalysisResources(afterSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeName := before.Task["metadata"].(map[string]any)["name"]
+	afterName := after.Task["metadata"].(map[string]any)["name"]
+	if beforeName == afterName {
+		t.Fatalf("image-only change kept Task identity %q", beforeName)
+	}
+	beforeKey := analysisruntime.FailureCacheKey(beforeSpec.Request)
+	afterKey := analysisruntime.FailureCacheKey(afterSpec.Request)
+	if beforeKey != afterKey {
+		t.Fatalf("image-only change altered failure cache key: before=%q after=%q", beforeKey, afterKey)
+	}
+}
+
+func TestBuildContainerAnalysisResourcesAllowsGitHubReadSecret(t *testing.T) {
+	spec := containerTaskSpec(t)
+	spec.SecretEnv = append(spec.SecretEnv, SecretEnvVar{
+		Name: "GITHUB_READ_TOKEN", SecretName: "github-read", SecretKey: "token",
+	})
+	resources, err := BuildContainerAnalysisResources(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, raw := range resources.Task["spec"].(map[string]any)["env"].([]any) {
+		entry := raw.(map[string]any)
+		if entry["name"] != "GITHUB_READ_TOKEN" {
+			continue
+		}
+		secret := entry["valueFrom"].(map[string]any)["secretKeyRef"].(map[string]any)
+		found = secret["name"] == "github-read" && secret["key"] == "token"
+	}
+	if !found {
+		t.Fatalf("GitHub read Secret not rendered: %+v", resources.Task)
+	}
+}
+
+func TestBuildContainerAnalysisResourcesRejectsUnknownSecretEnvironment(t *testing.T) {
+	spec := containerTaskSpec(t)
+	spec.SecretEnv = append(spec.SecretEnv, SecretEnvVar{Name: "UNRELATED_TOKEN", SecretName: "secret", SecretKey: "token"})
+	if _, err := BuildContainerAnalysisResources(spec); err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("unknown Secret environment error = %v", err)
+	}
+}

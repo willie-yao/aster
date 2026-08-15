@@ -1,0 +1,768 @@
+# Experimental Fix PR generation
+
+> **Status: experimental.** Fix PR generation and its coding-agent runtimes are
+> not part of standard onboarding. There is no recommended turnkey Orka-backed
+> installation. Analysis chat, File Issue, and Mark Resolved are separate server
+> features and do not require Orka or a Fix PR runtime.
+
+The dashboard can draft a **minimal code fix** for a legacy action-capable
+recurring failure or one exact failed JUnit analysis with a selected
+evidence-backed chat response, then open a **draft pull request** against the
+source repo. It is **off by
+default**, opt-in per project, and heavily guardrailed: draft-only, bounded file
+scope, a CLA-signed commit author, and idempotent dedup.
+
+This is the highest-risk automation the engine offers (it writes code to a repo),
+so read this whole page before enabling it.
+
+The standard deployments do not include a coding-agent runtime. Local OpenCode
+requires `opencode`, git, and enforcing SRT on a trusted development or CI host.
+Agent Sandbox runs OpenCode and every target-controlled validation command only
+in the isolated executor workload. File Issue and Mark Resolved do not require a
+Fix PR runtime.
+
+## Analysis-only causal groups
+
+Causal-group correlation remains analysis-only. It does not emit a suggested fix,
+remediation target, source target, or action field. The public pattern instead
+carries separate remediation-investigation summaries keyed to engine-derived
+causal-group IDs and content hashes. Repeated groups start at `not_investigated`
+with the message that no source-grounded implementation target has been verified.
+
+The job detail view shows this state in a concise, always-visible
+**Remediation** section. Authenticated server deployments may explicitly enable
+**Investigate possible fix**, which starts the bounded trusted read-only
+investigator and publishes only safe status. Technical details remain collapsed.
+Existing File Issue and Fix PR gates continue to reject causal-group results, and
+remediation state is excluded from causal-group and pattern content hashes so an
+investigation cannot rewrite the published analysis identity.
+
+## Exact JUnit analysis handoff
+
+Authenticated server deployments using the Agent Sandbox Fix runtime offer
+**Start fix investigation** for an exact failed JUnit analysis. This creates a
+fresh owner-bound session instead of restoring the latest normal chat, and its
+turns send `fix_intent: true` so the server performs immutable source and path
+preflight before contacting the provider. The control does not generate a
+preview, branch, or pull request. Normal **Chat with agent** continues restoring
+the latest existing conversation.
+
+After a successful cited response, **Use this finding in a fix proposal** remains
+the separate explicit action that admits a persisted asynchronous preview
+request. The server returns the owner-bound request before Agent Sandbox
+generation finishes, and the UI polls the same request until the preview is
+ready. Closing the dialog, losing the browser connection, or exceeding an edge
+proxy's HTTP timeout does not cancel an already admitted Sandbox. Reopening the
+dialog restores the request from same-origin session storage; repeating the same
+admission input reconnects to the active request instead of starting another
+Sandbox. This path does not use a
+recurring pattern as action authority. It requires:
+
+- one failed JUnit case with a current accepted published analysis;
+- one owner-bound successful chat turn with validated artifact citations;
+- an exact repository and full commit resolved from build metadata;
+- published verified source links for that same repository and revision;
+- a selected finding that names an explicit backticked source symbol;
+- deterministic verification of that symbol as present or absent in the
+  bounded pinned source, plus a source snapshot hash; and
+- the configured Fix PR destination to match the analyzed repository.
+
+The current Orka-backed chat source-investigation Task cannot run alongside the
+Agent Sandbox Fix runtime. The exact JUnit path therefore reuses the dashboard's
+immutable GitHub source reader and deterministic source verification rather than
+enabling Orka or weakening the Helm constraint. Legacy pattern chat-to-fix keeps
+its existing source-investigation and target requirements.
+
+The chat session persists a full authoritative analysis content hash that covers
+failure content, artifact citations, verified source links, critique state, and
+analysis provenance, together with the exact source repository and revision.
+Any later change requires a new chat session. During an active turn the browser
+retains only the analysis identity, session ID, request ID, and Fix-intent bit in
+same-origin session storage. Reload reconnects with the same request identity. If
+the intent bit is unavailable, the client polls the admitted request instead of
+resubmitting it without Fix intent.
+
+Fix generation starts only when the pinned build revision is still the target
+repository's default-branch head. Confirmation rechecks the owner-bound chat
+response, full analysis hash, source snapshot, symbol-grounding result,
+destination configuration, branch head, canonical patch reconstruction, and the
+retained exact executor command results
+before any GitHub write. The Agent Sandbox request receives no GitHub token. The
+dashboard does not rerun target repository build, test, vet, or validation
+commands during preview or confirmation.
+
+The persisted asynchronous request does not replace the existing preview and
+confirmation stores. It only owns admission, background execution, polling, and
+runtime cleanup. The completed preview still passes through the existing source,
+patch, reconstruction, command-result, owner, authentication, confirmation, and
+GitHub deduplication gates.
+
+## Command execution and credential boundary
+
+The following boundary is enforced without a provider call. It follows the
+server, worker, fetcher, runtime, executor, Docker, and Helm contracts directly.
+
+| Process | Agent Sandbox Fix behavior | Environment, storage, network, and credentials |
+|---|---|---|
+| Dashboard server | Dispatches the Sandbox, reconstructs the canonical patch, validates files, identities, targets, and retained command results, then performs a separately confirmed GitHub write. It does not run target build, test, vet, or validation commands. | The server can hold `BOT_TOKEN`, AI and OAuth credentials, mounts the shared `/data` PVC, project configuration, and `/tmp`, and has normal dashboard egress. Target code never runs in this process. |
+| Worker or fetcher | Dispatches scheduled Sandbox generation, validates returned results, reconstructs the patch, and may open the configured draft PR. It does not run target commands for Agent Sandbox. | The process can hold `FIX_TOKEN`, AI credentials, shared `/data`, project configuration, and its normal network access. None of these enter the Sandbox request. |
+| `remote-fixer` image | Supplies the normal dashboard binaries and git for patch reconstruction. The included Go toolchain is not used to execute target code. | It inherits the server, worker, or fetcher Pod boundary. It is not a separate execution workload and receives no target command. |
+| Agent Sandbox executor | Clones the public pinned source, runs OpenCode once, stages the patch, then runs every configured exact validator and the final `git diff --cached --check`. | The workload mounts only bounded `/workspace` and `/tmp` `emptyDir` volumes. ServiceAccount token automount is disabled and no GitHub credential or dashboard PVC is present. Validation children receive only HOME, temp, PATH, locale, and CA variables. OpenCode state is removed before validation, the provider token is not inherited, and the parent is non-dumpable so validators cannot read the request or credential through `/proc`. Egress is governed by the consumer-owned execution namespace and network policy. |
+| `LocalAgentRuntime` | Runs OpenCode through enforcing SRT and fails closed if SRT is missing or invalid. | Local-development or trusted-CI only. Kubernetes capability advertisement does not enable it. |
+| `LocalRuntime` | Clones, overlays, and executes configured commands directly with `os/exec`. | No isolation beyond a temporary directory. It is available only with explicit `TRUSTED_LOCAL_FIX_RUNTIME=true` on a trusted host. Helm rejects that variable. Local artifact storage is unrelated. |
+
+Agent Sandbox confirmation repeats identity, source, symbol, target, destination,
+base, command-result, and canonical patch checks. It never repeats target command
+execution in the dashboard process.
+
+## What it does
+
+After each fetch, for every **systemic** recurring pattern (the same ones
+surfaced on the home page) at or above `min_confidence` that carries a concrete
+suggested fix, the engine:
+
+1. Runs a **coding agent** (`opencode`) in a real clone of the source repo at a
+   pinned commit. The agent investigates the tree and makes the **minimal
+   change** that addresses the root cause; it can touch several files coherently
+   and, when `allow_bash` is set, build and test its own change while fixing.
+2. For local OpenCode and Orka generation, **reviews** the change with a second
+   LLM call and may re-run the agent with feedback up to `critique_retries`
+   times. Agent Sandbox instead requires `critique_retries: 0`: it performs one
+   generation request, then exact post-generation validation with no repair
+   retry.
+3. For Agent Sandbox, requires the complete ordered successful result for every
+   `allowed_commands` entry, including the final staged diff check. Legacy local
+   verification remains available only to trusted local development or CI for
+   non-Agent-Sandbox runtimes.
+4. Opens a **draft PR** via fork-and-PR with the change, the diff, and a review
+   checklist in the body.
+
+A fix that can't be produced (the agent makes no change, touches more than
+`max_files`, or the reviewer keeps rejecting it) is dropped and logged. No
+partial or speculative changes are ever pushed.
+
+Action availability uses a stable machine-readable reason code in addition to an operator-facing explanation. Retained or inactive patterns, non-systemic results, incomplete contracts, unsafe remediation, and inconclusive source verification remain distinct. The same code is used by eligibility checks, synchronous action errors, asynchronous requests, restored drafts, and confirmation-time revalidation. Older payloads without a code remain supported.
+
+The authenticated action controls run a deterministic eligibility check before
+draft generation. Investigation-only targets direct the maintainer to source
+investigation, missing or malformed targets show that more evidence is required,
+and pinned-source verification reports when the remediation already exists.
+Behavior targets are actionable only when the target function and the proposed
+package-level callee both exist in bounded pinned source. An external dependency
+or an incomplete or ambiguous package remains investigation-only. The shared
+remediation policy additionally rejects destructive CRD conversion changes and
+false claims that admission webhook cleanup disables conversion. The same policy
+runs before generation and when a persisted preview is restored or confirmed. A
+blocked state does not create an action request, call a model, start an Orka
+Task, or send a draft-ready notification. Draft generation repeats verification
+and remains authoritative.
+
+> **Note on correctness.** The engine bounds the change (minimal scope, at most
+> `max_files`). Local OpenCode and Orka can run an LLM review; Agent Sandbox runs
+> exact post-generation validators with no repair retry. Optional verification
+> may also build the patch, but none of these guarantees the change fixes the
+> failure. A fix PR is a **draft starting point**, not a verified patch; Prow CI
+> and a human reviewer are the correctness
+> gate (a draft PR won't run CI or merge without a maintainer's approval).
+
+## Two modes: fork-and-PR vs direct
+
+How the fix branch reaches the source repo depends on whether you can write to
+it, controlled by `ai.fix_prs.fork` (default `true`):
+
+- **`fork: true` (default): fork-and-PR.** For a source repo you **don't** own
+  (the usual case: an upstream community repo). The engine forks the repo under
+  the token's identity, pushes the branch to that fork, and opens a **cross-fork
+  PR** against the source repo.
+- **`fork: false`: direct.** For a source repo you **do** own or maintain (e.g.
+  a team running the dashboard on its own CI). The engine pushes the branch
+  straight to the source repo and opens a **same-repo PR**. No fork involved.
+
+Either way the PR targets the source repo's default branch and is opened as a
+draft. The branch is **never** pushed into a repo you don't own.
+
+## Identity, CLA, and the token (read this first)
+
+- **`FIX_TOKEN`** is a **personal access token** of a real contributor. It is
+  **not** the Actions `GITHUB_TOKEN` (which can't touch a fork elsewhere). Which
+  PAT kind you need depends on the mode:
+  - **`fork: true` against a repo you don't own** → use a **classic PAT** (scope
+    `repo`, or `public_repo` for public-only repos). A **fine-grained PAT cannot
+    open a PR against a repo you don't own**, because it can only be granted
+    permissions on your own repos.
+  - **`fork: false` against a repo you own** (or `fork: true` testing against
+    your own fork) → a **fine-grained PAT** works: scope it to that repo with
+    **Contents: Read and write** and **Pull requests: Read and write**.
+- **CLA / DCO.** CNCF projects (Kubernetes, etc.) run EasyCLA, which checks
+  **every commit's author** against a signed CLA and blocks merge otherwise. So:
+  - `author_name` / `author_email` **must** be the CLA-signed identity, and the
+    email **must** match that GitHub account, or the check reports an "unknown
+    commit author".
+  - Every commit gets a DCO `Signed-off-by` trailer matching the author
+    (required by Kubernetes repos). The engine adds this automatically.
+  - A GitHub App / bot identity generally is **not** recognized by EasyCLA;
+    use a human contributor's PAT.
+- **Prow keeps a human in the loop for free.** A draft PR won't run CI or merge
+  without a maintainer's `/ok-to-test`, `/lgtm`, and `/approve`. The engine never
+  merges anything.
+
+## Configuration
+
+```yaml
+ai:
+  fix_prs:
+    enabled: true
+    # repo:                       # defaults to branding.source_repo
+    #   owner: "example-org"
+    #   name: "source-project"
+    # allowed_repositories:       # explicit cross-repository destinations
+    #   - owner: example-org
+    #     name: ci-config
+    #     path_prefixes:
+    #       - config/jobs/example-org/source-project/
+    #     allowed_commands:
+    #       - argv: [git, diff, --cached, --check]
+    #         timeout: 1m
+    #     fork: true
+    author_name: "Jane Maintainer"     # required: CLA-signed identity
+    author_email: "jane@example.com"   # required: must match that GitHub account
+    # fork: true                  # true (default): fork-and-PR for a repo you don't own;
+    #                             # false: direct branch + same-repo PR for a repo you own
+    # min_confidence: high        # only systemic patterns at >= this confidence (default high)
+    # max_files: 3                # cap files a single fix may touch (default 3)
+    # max_new_per_run: 1          # cap fix PRs per fetch (default 1)
+    # labels: [ai-proposed-fix]   # labels applied to each PR
+    # dry_run: false              # propose without opening a PR (see below)
+    # critique_retries: 1         # LLM review re-prompts before dropping (default 1)
+    # verify:                     # build/vet the change before opening the PR (see below)
+    #   enabled: false            # off by default; needs a git + language toolchain on the runner
+    #   commands:                 # override the default; each line is one command (no shell)
+    #     - go build ./...
+    #     - go vet ./...
+    #   timeout: 10m              # per-command bound
+```
+
+`enabled: true` requires `author_name` and `author_email` (validated at load).
+The feature is active only when **all** of `enabled: true`, a non-empty
+`FIX_TOKEN`, and a resolved source repo are present; any missing piece is a
+no-op, never a deploy failure.
+
+Repository-qualified remediation targets are rejected unless the destination
+is listed in `allowed_repositories` and every changed path is under one of its
+prefixes. Prow environment changes additionally pin the exact
+`kubernetes/test-infra` discovery revision, job, container, variable name, and
+replacement value. The engine parses the YAML and fails closed on duplicate
+jobs, duplicate variables, `valueFrom`, or ambiguous containers. Prow assigns
+the effective name `test` to a job with one container, including when the source
+YAML omits the container name, so remediation targets use `container: test` for
+that common form.
+Agent Sandbox destinations also require their own exact `allowed_commands`;
+validators from the default repository are never reused implicitly for a
+different repository.
+
+### The LLM review (`critique_retries`)
+
+After the agent produces a change, a second LLM call reviews it as a skeptical
+reviewer and returns concrete defects (not style). If it objects, the engine
+re-runs the agent with that feedback, up to `critique_retries` times (default 1),
+then drops the fix. The review uses the same AI client as generation.
+
+### Coding-agent generator (`agent_runtime`)
+
+The fix generator is selected by `agent_runtime.type`. Scope limits, independent
+patch reconstruction, result validation, preview, and PR opening remain
+engine-owned. Agent Sandbox validators run in the executor, not in the dashboard
+process.
+
+Remote backends return a patch to the dashboard. Kubernetes deployments use the
+minimal `remote-fixer` engine image to reapply that patch to the pinned source
+revision and reconstruct the exact changed-file map. This image contains git but
+does not contain OpenCode or srt.
+
+#### `opencode` (default)
+
+The local backend runs the `opencode` CLI in a real clone on the runner. It uses
+the engine's `ai.endpoint`, `ai.model`, and `AI_TOKEN`. It is local-development or
+trusted-CI only. Production server capability does not advertise Fix PR actions
+for this runtime. `make dev-actions` opts in explicitly with
+`TRUSTED_LOCAL_FIX_RUNTIME=1` under `AUTH_MODE=dev`.
+
+```yaml
+ai:
+  fix_prs:
+    enabled: true
+    author_name: "Jane Maintainer"
+    author_email: "jane@example.com"
+    agent_runtime:
+      type: opencode
+      model: ""
+      max_turns: 30
+      allow_bash: true
+      network_domains:
+        - registry.example.com:443  # only when a reviewed dependency registry is required
+      timeout: 10m
+```
+
+The runner needs `opencode`, git, and the pinned `srt` runtime with its platform
+dependencies. The standard distroless Kubernetes image
+does not contain them. Local `opencode` deployments should build
+the root [`Dockerfile`](../Dockerfile) `fixer-runtime` target, which installs
+all three at pinned versions, includes the server, worker, fetcher, and SPA, and
+sets `SRT_BIN`.
+The chart runtime images reconstruct returned diffs but do not support the local
+`opencode` backend. Helm rejects `TRUSTED_LOCAL_FIX_RUNTIME`; Kubernetes
+deployments must use a production runtime.
+
+
+The local backend never executes without `srt`. The configured AI endpoint host
+is allowed automatically. `network_domains` adds only reviewed dependency or
+tool destinations and rejects URLs, credentials, invalid wildcards, and invalid
+ports. `allow_bash` changes OpenCode's Bash permission only; it does not expand
+filesystem or network access. `network_domains` is invalid for `type: orka`
+because the Orka Agent owns that runtime policy.
+
+#### `orka` (experimental, in-cluster)
+
+See the
+[Orka architecture and lifecycle reference](orka.md#architecture-and-lifecycle)
+for how the Agent Task, isolated workspace, structured result, and dashboard
+validation boundary fit with the other Orka integrations.
+
+The dashboard runtime type `orka` selects the execution backend. The referenced
+Orka `Agent` selects its coding CLI independently. For example,
+`spec.runtime.type: opencode` selects OpenCode without adding a dashboard runtime
+type such as `orka-opencode`.
+
+The Orka boundary accepts only repository, instruction, turn, Bash, timeout,
+retry, and Agent-reference policy. Local model endpoint, token, header, ambient
+authentication, and network-domain settings are rejected rather than silently
+ignored. The repository token remains dashboard-local for result
+reconstruction and is not added to the Task.
+
+The backend creates a generation-only `type: agent` Task in an isolated
+workspace. Orka captures the final workspace and returns its structured result
+with `version`, `summary`, the pinned `baseSHA`, a unified `diff`, and the changed
+`files`. The model's final message remains the human-readable summary. The Task
+does not receive `FIX_TOKEN`, push a branch, or open a PR. The engine strictly
+decodes that result, verifies the reported base SHA and file list, reapplies the
+diff to the pinned base, rejects deletions, binary files, symlinks, submodules,
+and `.gitmodules` edits, then runs the normal review, verification, preview, and
+PR-opening stages.
+
+```yaml
+ai:
+  fix_prs:
+    enabled: true
+    author_name: "Jane Maintainer"
+    author_email: "jane@example.com"
+    agent_runtime:
+      type: orka
+      agent_ref: opencode-fixer
+      api: http://orka.orka-system.svc:8080
+      namespace: orka-system
+      version: v1
+      retries: 1  # default; set 0 to disable Orka Task retries
+      max_turns: 30
+      allow_bash: true
+      timeout: 15m
+```
+
+The Orka `Agent` and its model Secret are operator-owned. Start from
+[`configs/example/orka-opencode-agent.yaml`](../configs/example/orka-opencode-agent.yaml).
+The Secret must contain `OPENAI_BASE_URL`; add `OPENAI_API_KEY` only when the
+endpoint requires authentication. Set `spec.model.name` to the endpoint-specific
+model ID and `spec.runtime.type` to `opencode`. Do not copy the endpoint, model,
+or model credential into `project.yaml`.
+
+Guarded fix Tasks do not accept `git_secret` or any other Task-level credential
+reference. The source repository must currently be publicly cloneable. Private
+repository support requires an upstream Orka credential binding that admission
+can pin without allowing an arbitrary Secret name. Keep the write-capable
+contributor token in `FIX_TOKEN`; it remains inside the dashboard and is used
+only by the engine-owned PR-opening path.
+
+For Helm deployments, set `orka.fixRuntime.enabled=true` and repeat the exact
+Agent, repository, turn, Bash, timeout, and retry settings in the admission
+contract:
+
+```yaml
+orka:
+  namespace: orka-system
+  fixRuntime:
+    enabled: true
+    admission:
+      agentRef: opencode-fixer
+      repository:
+        owner: example
+        name: repo
+      maxTurns: 30
+      allowBash: true
+      timeout: 15m
+      retries: 1
+```
+
+The chart uses the published git-capable fixer image, mounts a ServiceAccount
+token only into the workloads that generate fixes, and grants a separate
+Task-only fix Role. It also installs a fail-closed requester-scoped admission
+policy. A mismatch between `project.yaml` and Helm values denies the Task. REST
+authentication uses `ORKA_API_TOKEN`, `ORKA_API_TOKEN_FILE`, or the pod
+ServiceAccount token. File-backed credentials are read for every result request,
+so projected ServiceAccount token rotation does not require a server restart.
+Local kubeconfig testing can select a context through `ORKA_KUBE_CONTEXT`.
+
+The policy matches the authenticated dashboard ServiceAccount in
+`orka.namespace`; labels alone cannot opt a request out. It pins the Agent and
+namespace, public GitHub repository, immutable 40-character commit, workspace
+shape, turns, Bash setting, timeout, retries, priority, Agent-owned resource
+bounds, and dashboard identity metadata. It rejects custom images, commands,
+arguments, environment variables, Secret references, mutable refs, workspace
+push settings, scheduling, sessions, webhooks, prior Tasks, tool overrides, and
+placement overrides. The referenced Agent is operator-owned, so protect changes
+to its runtime, Secret, tools, and resource settings separately.
+
+Source investigation and fix actions may share one server pod without sharing
+a Task requester. The server pod runs as the source-investigation ServiceAccount.
+The fix runtime uses the Kubernetes TokenRequest API to obtain a short-lived fix
+ServiceAccount token bound to the current Pod name and UID. That delegated token
+is used for fix Task operations and fix result reads. The source ServiceAccount
+has only source Task RBAC plus permission to request a token for the exact fix
+ServiceAccount. It never receives direct fix Task access.
+
+The fix ServiceAccount remains constrained by its Task-only Role and the strict
+fix admission contract. Helm rejects equal source and fix ServiceAccount names.
+When chart-managed RBAC is disabled, operators must provide the same narrow
+`serviceaccounts/token` permission themselves. Container analysis remains
+independent in its dedicated Task namespace and admission policy.
+
+OpenCode support requires upstream PR #289. The generated chart, all 12 CRDs,
+complete AgentRuntime and SubstrateActorPool controller RBAC, and guarded CRD
+lifecycle are present at Orka merge commit
+`fde3b7925c367784570fcc36d7a5b3a51747bf10` from PR #295.
+
+This repository does not configure a verified published Orka release containing
+those changes. Do not install older raw manifests or add a supplemental
+controller RBAC patch. Source-commit packaging is maintainer-only and limited to
+local lint, render, and temporary kind validation until matching immutable
+runtime artifacts are available. See the
+[experimental Orka maintainer reference](orka.md).
+
+Treat this integration as maintainer evaluation only. It is not a recommended
+turnkey deployment.
+
+The dashboard ServiceAccount must remain limited to Orka Tasks; controller and
+worker RBAC stays with the separate Orka release.
+
+Fix generation remains independent from failure analysis. Failure analysis runs
+in-process by default; Helm deployments may separately select the experimental
+`orka-container` analysis runtime without configuring or changing fix generation.
+
+The Orka runtime can generate without the engine chat-completions client only
+when `critique_retries: 0` is explicitly configured. A positive retry count fails
+closed unless the normal AI reviewer is available. Template formatting also
+requires that client. Enable `verify` so the returned change is tested again in a clean engine-owned
+workspace rather than trusting the agent's own test run.
+
+### Verification (`verify`)
+
+When `verify.enabled` is set, the engine builds and vets the proposed change
+before opening the PR: it checks out the source repo at the pinned base, overlays
+the edited files, and runs the verify commands (default `go build ./...` then
+`go vet ./...`). The verdict is stamped on the PR body and the confirm preview:
+"passed", "failed" (the diff likely does not build; the draft is still produced
+as a lead), or "skipped". This catches the common failure modes of a generated
+diff, a hallucinated API or a broken signature, that syntax parsing alone misses.
+It does not reproduce the CI failure itself; that is left to the PR's own
+presubmits.
+
+Verification is annotate-only: a build failure never blocks the draft. It needs
+git and the language toolchain on the runner, so it runs in a full CI runner or
+a dev host; on the distroless server/worker image it reports "skipped". Execution
+runs the edited repo's build, so enable it only for a source repo you trust. The
+build resolves the repo's dependencies, so the runner needs network access (or a
+warmed module cache); a fetch failure surfaces as a "failed" verdict, so set a
+`timeout` that accommodates the first cold build.
+
+
+## Closed-loop Prow verification
+
+After the dashboard opens a fix pull request, it keeps a private remediation
+ledger and follows the pull request through Prow and GitHub. Consumers do not
+configure test names, trigger commands, pull numbers, or periodic-to-presubmit
+mappings.
+
+The engine reads this metadata automatically:
+
+- Prow job definitions from the pinned `kubernetes/test-infra` configuration.
+- Pull request refs, head SHA, base SHA, rerun command, status, and build URL
+  from `prowjob.json`.
+- Checkout metadata from `started.json` and `finished.json`.
+- Test names, results, and failure signatures from JUnit XML.
+- Pull request merge state and commit ancestry from GitHub.
+
+For a presubmit finding, only a run of the same job on the current pull request
+head counts. A new commit invalidates older results. For a periodic finding, the
+engine builds a private coverage index from recent presubmit JUnit reports. An
+exact matching test can provide pre-merge evidence without a hand-written job
+mapping. The original periodic remains authoritative after merge.
+
+A periodic build counts only when its tested source commit contains the merged
+change. A later timestamp alone is not sufficient. Persistent findings require
+two clean post-merge runs by default. Flaky findings require ten clean
+opportunities. Missing JUnit, missing source SHAs, or repository mismatches stay
+in an inconclusive state.
+
+The pull request must target a repository tested by the Prow job. For an
+upstream community project, configure the upstream repository with `fork: true`.
+Pointing `repo` at a personal fork creates a pull request that upstream Prow does
+not test.
+
+When the same failure signature recurs after merge, the remediation returns to a
+failed state and the linked issue remains open. Follow-up fix generation is a
+separate feature and is not part of this verification lifecycle.
+
+`remediation_state.json` and `remediation_prow_catalog.json` are private
+operational files. `remediations.json` is a redacted public projection used by
+the dashboard to show pull request and verification status.
+
+Wire the token into the deploy workflow:
+
+```yaml
+# .github/workflows/deploy.yml  (GitHub Actions + Pages path)
+jobs:
+  deploy:
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
+    with:
+      runs-on: fix-enabled-runner   # preinstalled opencode + git
+    secrets:
+      AI_TOKEN: ${{ secrets.AI_TOKEN }}
+      FIX_TOKEN: ${{ secrets.FIX_TOKEN }}
+```
+
+On the [Kubernetes-native](kubernetes-reference.md) path, set `FIX_TOKEN` on the worker via
+`fetcher.extraEnv` in the Helm values instead. The writer still needs a custom
+runtime image as described above. An admin can draft a single fix PR on demand
+only when the server image also contains `opencode` and git (see
+[server.md](server.md#admin-gated-actions)).
+
+## Start with dry-run
+
+Before letting it open real PRs, set `dry_run: true`. The engine runs the full
+pipeline (locate, fetch, edit, validate) and writes the proposed changes to
+`fix_previews.json` in the fetcher's output directory and logs the diffs, but
+**opens no PR and forks nothing**. Inspect the previews, confirm the edits look
+right and target the correct files, then flip `dry_run` off.
+
+`fix_previews.json` is operational state. Pages removes it before publication
+and the Kubernetes server returns 404 for it. Inspect it in a local output
+directory, the persistent volume, or the fetch logs rather than through the
+dashboard URL.
+
+## Following the repo's PR template
+
+When the source repo has a pull-request template (`.github/PULL_REQUEST_TEMPLATE.md`,
+`PULL_REQUEST_TEMPLATE.md`, or `docs/PULL_REQUEST_TEMPLATE.md`), the engine
+reformats the generated PR description to follow it with one extra AI call: it
+fills the template's sections from the proposed change, keeps placeholder text
+and checklists you have no information for, and picks a single best-fit Prow
+`/kind` line when the template has one. The warning banner, rendered diff,
+dashboard link, and dedup marker are always preserved. No template (or no AI
+configured) falls back to the default body, and any error during reformatting
+silently uses the default. This is automatic; there is no flag to set. Fetching
+the template uses `FIX_TOKEN`, which already has Contents read on the source repo.
+
+## Guardrails (summary)
+
+- **Opt-in** per project; **draft-only** PRs; never pushes to a protected branch.
+- Only **systemic**, at-or-above-`min_confidence` patterns with a concrete fix.
+- A **coding agent** makes the change in a real clone and is bounded by
+  `max_files`. Local OpenCode and Orka can use the LLM review gate; Agent Sandbox
+  is one-shot and uses exact post-generation validators instead.
+- Dedicated **`FIX_TOKEN`** with a CLA-signed author and DCO sign-off.
+- **Idempotent**: a hidden marker keyed by job + root-cause fingerprint (local
+  state plus an open-PR search) means a pattern is never proposed twice, and a
+  different cause on the same job is proposed separately.
+- **`max_new_per_run`** caps PRs per fetch.
+
+## Known limitations
+
+- **File mode.** Edited files are committed as regular files (`100644`). If a fix
+  were to edit an executable script, the PR would drop the executable bit; the
+  change is visible in the draft diff for a reviewer to catch. Fix targets are
+  typically YAML/templates, so this is rare.
+- **Concurrency.** Dedup (local state + an open-PR search) is not atomic, so two
+  overlapping deploys could both propose the same fix. Scheduled deploys are
+  normally serialized; add a workflow `concurrency:` group if you run them in
+  parallel.
+- **First fork.** Creating a brand-new fork is asynchronous; on the very first
+  run for a never-forked repo the commit step may fail while the fork populates.
+  The next run (fork now exists) succeeds.
+
+## Relationship to the other features
+
+This builds on the same pattern analysis that drives the home-page recurring
+patterns and the auto-filed issues ([github-issues.md](github-issues.md)).
+Issues act on **your** repos; fix PRs are the only feature that writes to the
+**source** repo, which is why the identity and CLA requirements are stricter.
+
+## Retained patterns
+
+Fix generation requires a fresh `current` pattern with current evidence. A retained last-known-good pattern remains visible with its existing remediation references, but it cannot start a new issue, fix preview, or remediation attempt.
+
+## Individual build failures
+
+A completed failed run that has an accepted `source: "build"` analysis can use the same authenticated preview and confirmation flow without being converted into a recurring pattern.
+
+- **File issue** renders single-run language with the Prow build, build log, published root cause, and suggested remediation.
+- **Propose fix** requires at least one repository path that the analysis linked to the configured source repository. The coding agent inspects the pinned repository and must produce a repository change. If the evidence supports only an external platform or operator action, or the agent produces no code change, the preview is rejected while issue preview remains available.
+- Build previews use a content hash over the job, build, typed subject identity, analysis generation, root cause, suggested fix, and relevant files. Confirmation fails closed when any of that published analysis changes or leaves the current window.
+- Build issues and fixes use GitHub markers for deduplication and are removed from the recurring-pattern tracking files after confirmation. They do not create a one-build pattern or participate in recurring-pattern remediation state.
+
+The server advertises its current analysis critique version with the action capability. The frontend hides build action controls when the published analysis predates that contract, while analyses produced by a newer compatible engine remain visible during a rollback or rolling upgrade.
+
+### `agent-sandbox` OpenCode executor
+
+The experimental `agent-sandbox` runtime creates one cold Kubernetes SIG Agent
+Sandbox `v1beta1` resource per Fix PR request. Agent Sandbox remains disabled by
+default. The consumer installs and upgrades the controller separately. The
+dashboard chart never installs the controller, CRD, a secure RuntimeClass, node
+infrastructure, or provider egress infrastructure.
+
+After the runtime is explicitly enabled, `direct` is the default credential
+mode. Direct bearer mode gives the OpenCode process access to one dedicated
+inference credential. The Secret must already exist in the execution namespace
+and is referenced through exactly one `secretKeyRef`. Direct unauthenticated
+mode uses `auth.type: none` and renders no Secret reference. Explicit `gateway`
+mode retains the tokenless consumer-operated gateway behavior.
+
+A project configuration is explicit and fail closed:
+
+```yaml
+ai:
+  fix_prs:
+    enabled: true
+    author_name: "Jane Maintainer"
+    author_email: "jane@example.com"
+    max_files: 3
+    critique_retries: 0
+    agent_runtime:
+      type: agent-sandbox
+      max_turns: 30
+      allow_bash: false
+      timeout: 10m
+      output_limit_bytes: 524288
+      allowed_commands:
+        - argv: [git, diff, --cached, --check]
+          timeout: 1m
+      model_provider:
+        credential_mode: direct
+        api: chat_completions
+        endpoint: https://api.githubcopilot.com/chat/completions
+        model: claude-sonnet-4.6
+        reasoning_effort: high
+        auth:
+          type: bearer
+```
+
+The matching Helm values add only the existing Secret reference:
+
+```yaml
+agentSandbox:
+  fixRuntime:
+    enabled: true
+    modelProvider:
+      credentialMode: direct
+      api: chat_completions
+      endpoint: https://api.githubcopilot.com/chat/completions
+      model: claude-sonnet-4.6
+      reasoningEffort: high
+      auth:
+        type: bearer
+        existingSecret: agent-sandbox-model
+        tokenKey: AI_TOKEN
+      publicCAPrivateDNS: false
+```
+
+For native Responses, change both project and Helm `api` values to `responses`
+and use a full endpoint such as `https://api.openai.com/v1/responses`. Pinned
+OpenCode 1.18.2 maps Chat Completions to `@ai-sdk/openai-compatible` and
+Responses to `@ai-sdk/openai`. The optional project `reasoning_effort` and Helm
+`reasoningEffort` values must match. Pinned OpenCode 1.18.2 emits the expected
+wire field for `none` through `xhigh`; it rejects `max`. Responses currently
+requires direct bearer auth; Chat Completions retains direct unauthenticated and
+explicit tokenless gateway modes.
+
+Use a dedicated inference-only credential. Do not mount `BOT_TOKEN`,
+`FIX_TOKEN`, OAuth credentials, GitHub read credentials, or a general GitHub
+PAT. The dashboard never reads the Secret value. Helm never creates, copies, or
+prints it. Admission fixes the Secret name, key, environment variable, auth
+mode, executor image, and complete environment shape. It continues to reject
+`envFrom`, Secret volumes, projected tokens, extra credentials, and arbitrary
+environment entries.
+
+OpenCode configuration contains only
+`{env:PROW_AI_MODEL_PROVIDER_TOKEN}` for bearer mode, never the token. The
+versioned execution request contains the provider mode, API, endpoint, model,
+auth type, and fixed environment name but no Secret name, key, value, or value
+hash. The executor rejects any exact credential found in output, summaries,
+patches, changed-file content, command output, structured results, or failure
+data before publication.
+
+Gateway mode requires `auth.type: none`. Private-CA provider gateways may use
+the optional public ConfigMap bundle documented in
+[Kubernetes reference](kubernetes-reference.md#agent-sandbox-fix-runtime). The
+Fix runtime can explicitly acknowledge a privately resolved public gateway FQDN
+with `public_ca_private_dns: true`; direct provider endpoints use direct mode
+instead.
+
+Responses requests use `store: false`, keep the complete conversation and tool
+history in the local OpenCode session, and omit `previous_response_id`.
+Deterministic OpenCode 1.18.2 tests prove Responses streaming text, native tool
+calls, StructuredOutput in the analyzer, and the Fix edit path. They do not
+establish live compatibility with every Responses-like provider or model.
+
+Generation is one-shot. OpenCode Bash, web fetch, task delegation, external
+skills, and external-directory access are disabled. After OpenCode finishes,
+the executor stages the patch and runs the configured exact argv validators with
+a credential-free environment. A validator failure
+returns a terminal failed result. The dashboard requires the complete ordered
+results, rechecks their argv, timeouts, exit codes, and final
+`git diff --cached --check`, and persists only the bounded structural result for
+confirmation. Before validators start, the executor removes OpenCode home and
+temporary state, unsets the provider credential from child environments, and
+makes the parent process non-dumpable so target code cannot read the original
+request or provider credential through `/proc`. OpenCode does not observe a
+validation failure, issue a second model request, or repair the patch. Iterative
+test-feedback repair is a possible future feature, not current behavior.
+
+Each `allowed_commands` item contains an exact `argv` list and an explicit
+whole-second or whole-minute timeout. Legacy command strings, shell executables, generic command dispatchers,
+coding-agent re-entry, empty or multiline arguments, and per-command timeouts above the overall
+execution timeout are rejected. Git is reserved for the final command, which must be exactly
+`["git", "diff", "--cached", "--check"]`.
+
+The published generic executor contains Go 1.25.12, OpenCode 1.18.2, Git, and CA
+certificates. It does not include `make` or repository-specific development tools.
+Configure only validators whose executables exist in the selected image. A missing
+executable produces a bounded terminal failure and no actionable Fix PR preview.
+The immutable image supports Go validators such as `go test`, `go vet`, and
+`go version`. `GOTOOLCHAIN=local` prevents runtime toolchain downloads. The image
+retains UID/GID 65532, the `/usr/local/bin/fixexecutor`
+entrypoint, the fixed provider environment and output-leak protections, and the
+same runtime security contract. The credential-free image fixture proves patch
+generation, Go validation, result reconstruction, and
+`git diff --cached --check`; it does not make a live provider claim.
+
+The Helm values under `agentSandbox` must exactly match the project timeout,
+turn, file, output, command, and provider settings. Deployed configurations
+require an immutable executor image digest, explicit execution namespace,
+workload ServiceAccount with token automount disabled, and non-empty secure RuntimeClass. Public
+repositories only are supported because no Git credential enters the Sandbox.
+
+Production Sandboxes request `RuntimeDefault` AppArmor and seccomp at both Pod
+and container scope. There is no project, Helm, environment, or request field
+that can disable AppArmor or select `Unconfined`. The Docker Desktop kind
+evaluation omits AppArmor only through an internal Go test capability and does
+not validate AppArmor enforcement or hostile-code isolation.
+
+See [Agent Sandbox Fix Runtime Spike](agent-sandbox-fix-runtime-spike.md) and
+[Kubernetes operator reference](kubernetes-reference.md#agent-sandbox-fix-runtime).

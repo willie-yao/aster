@@ -1,0 +1,1140 @@
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import Alert from "@mui/material/Alert";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import CircularProgress from "@mui/material/CircularProgress";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogTitle from "@mui/material/DialogTitle";
+import Link from "@mui/material/Link";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
+import {
+  BugReport,
+  Build,
+  GitHub,
+  Replay,
+  VisibilityOffOutlined,
+} from "@mui/icons-material";
+import { useCapabilities } from "../hooks/useCapabilities";
+import { useAuth } from "../hooks/useAuth";
+import { useResolved } from "../hooks/useData";
+import { soft } from "../theme";
+import { useSearchParams } from "react-router-dom";
+import { ActionDraftPreview } from "./ActionDraftPreview";
+import type {
+  Action,
+  ActionEligibility,
+  ActionRequest,
+  ActionPreview,
+} from "../types/actions";
+import {
+  actionErrorMessage,
+  actionRequestHasBlockingVerification,
+  actionRequestCanConfirm,
+  actionRequestIsActive,
+  actionRequestIsPollable,
+  actionRequestIsRecoverable,
+  actionRequestStorageOwner,
+  actionRequestProgressDetail,
+  actionRequestProgressTitle,
+  actionRequestReasonTitle,
+  actionRequestVerificationDetail,
+  actionRequestVerificationTitle,
+  cancelActionRequest,
+  loadLatestActionRequest,
+  readStoredActionRequestID,
+  syncStoredActionRequest,
+} from "../lib/actionRequests";
+import { actionEligibilityTitle, eligibilityForState, selectActionEligibility } from "../lib/actionEligibility";
+
+function requestedAction(value: string | null): Action | null {
+  return value === "create-issue" || value === "propose-fix" ? value : null;
+}
+
+function requestStateError(request: ActionRequest): string | null {
+  if (actionRequestHasBlockingVerification(request)) return null;
+  if (request.status === "failed" && !request.warning) {
+    const title = actionRequestReasonTitle(request);
+    const detail = request.error || "Draft generation failed.";
+    return title && !detail.startsWith(title) ? `${title}: ${detail}` : detail;
+  }
+  if (request.status === "expired") return "This draft expired.";
+
+  return null;
+}
+
+const API_BASE = import.meta.env.BASE_URL;
+
+const dialogPaperSx = {
+  borderRadius: "16px",
+  border: "1px solid",
+  borderColor: "divider",
+  backgroundImage: "none",
+} as const;
+
+function DialogHeader({
+  icon,
+  accent,
+  title,
+  subtitle,
+}: {
+  icon: ReactNode;
+  accent: "primary" | "warning";
+  title: string;
+  subtitle?: string;
+}) {
+  return (
+    <DialogTitle
+      sx={{ display: "flex", alignItems: "center", gap: 1.5, px: 3, py: 2.25 }}
+    >
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 38,
+          height: 38,
+          borderRadius: "11px",
+          flexShrink: 0,
+          color: `${accent}.main`,
+          bgcolor: (t) => soft(t, accent, 0.15),
+          border: "1px solid",
+          borderColor: (t) => soft(t, accent, 0.3),
+        }}
+      >
+        {icon}
+      </Box>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography
+          variant="headline"
+          component="span"
+          sx={{ display: "block", fontSize: "1.125rem", lineHeight: 1.2 }}
+        >
+          {title}
+        </Typography>
+        {subtitle && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: "block", mt: 0.25 }}
+          >
+            {subtitle}
+          </Typography>
+        )}
+      </Box>
+    </DialogTitle>
+  );
+}
+
+export function FailureActions({
+  failureID,
+  resolvable = true,
+  eligibilityHint = null,
+  appearance = "default",
+}: {
+  failureID: string;
+  resolvable?: boolean;
+  eligibilityHint?: ActionEligibility | null;
+  appearance?: "default" | "detail";
+}) {
+  const { features } = useCapabilities();
+  const { status, signIn, login, mode } = useAuth();
+  const detailAppearance = appearance === "detail";
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedFailure = searchParams.get("failure");
+  const requestedLinkedAction = requestedAction(searchParams.get("action"));
+  const linkedAction = requestedLinkedAction === "propose-fix" && !features.fix_prs
+    ? null
+    : requestedLinkedAction;
+  const [reviewIntent, setReviewIntent] = useState<Action | null>(null);
+  const [action, setAction] = useState<Action | null>(null);
+  const [busy, setBusy] = useState<
+    "preview" | "refine" | "confirm" | "cancel" | null
+  >(null);
+  const [request, setRequest] = useState<ActionRequest | null>(null);
+  const [preview, setPreview] = useState<ActionPreview | null>(null);
+  const [instruction, setInstruction] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [url, setUrl] = useState<string | null>(null);
+  const [fetchedEligibility, setFetchedEligibility] = useState<{
+    failureID: string;
+    value: ActionEligibility;
+  } | null>(null);
+  const hasEligibilityHint = eligibilityHint != null;
+  const eligibility = useMemo(
+    () => selectActionEligibility(eligibilityHint, fetchedEligibility, failureID),
+    [eligibilityHint, failureID, fetchedEligibility],
+  );
+  const eligibilityLoading =
+    status === "authenticated" && features.actions && !hasEligibilityHint && eligibility === null;
+  const requestID = request?.id;
+  const requestStatus = request?.status;
+  const activeFailureID = useRef(failureID);
+  const activeRequestID = useRef<string | undefined>(requestID);
+  const activeAction = useRef<Action | null>(null);
+  const storageOwner = actionRequestStorageOwner(login, mode);
+
+  const { data: resolved, refetch: refetchResolved } = useResolved();
+  const [resolveOpen, setResolveOpen] = useState(false);
+  const [note, setNote] = useState("");
+  const [resolveBusy, setResolveBusy] = useState(false);
+  const [resolveError, setResolveError] = useState<string | null>(null);
+
+  useLayoutEffect(() => {
+    const failureChanged = activeFailureID.current !== failureID;
+    activeFailureID.current = failureID;
+    activeRequestID.current = requestID;
+    activeAction.current = failureChanged ? null : action;
+  }, [action, failureID, requestID]);
+
+  // Reset action state if this component is reused for a different failure.
+  useEffect(() => {
+    setReviewIntent(null);
+    setAction(null);
+    setBusy(null);
+    setRequest(null);
+    setPreview(null);
+    setInstruction("");
+    setError(null);
+    setUrl(null);
+  }, [failureID]);
+
+  useEffect(() => {
+    if (status !== "authenticated" || hasEligibilityHint || !features.actions) return;
+    if (!features.action_eligibility) {
+      setFetchedEligibility({
+        failureID,
+        value: {
+          ...eligibilityForState("more_evidence_required"),
+          reason: "This deployment cannot confirm action eligibility before draft generation.",
+        },
+      });
+      return;
+    }
+    const controller = new AbortController();
+    setFetchedEligibility((current) => current?.failureID === failureID ? null : current);
+    fetch(`${API_BASE}api/failures/${encodeURIComponent(failureID)}/eligibility`, {
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(await actionErrorMessage(response));
+        return response.json() as Promise<ActionEligibility>;
+      })
+      .then((value) => {
+        if (!controller.signal.aborted) setFetchedEligibility({ failureID, value });
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted) return;
+        setFetchedEligibility({
+          failureID,
+          value: {
+            ...eligibilityForState("more_evidence_required"),
+            reason: cause instanceof Error
+              ? `Action eligibility could not be confirmed: ${cause.message}`
+              : "Action eligibility could not be confirmed.",
+          },
+        });
+      })
+    return () => controller.abort();
+  }, [failureID, features.action_eligibility, features.actions, hasEligibilityHint, status]);
+
+  const canStartActions = eligibility?.state === "actionable";
+
+  // Email action links are inert GETs. After authentication, they open a local
+  // intent dialog that requires an explicit click before a request is created.
+  useEffect(() => {
+    if (
+      !features.action_requests ||
+      status !== "authenticated" ||
+      linkedFailure !== failureID ||
+      !linkedAction ||
+      eligibilityLoading ||
+      !eligibility
+    ) {
+      return;
+    }
+    const next = new URLSearchParams(searchParams);
+    if (canStartActions) setReviewIntent(linkedAction);
+    next.delete("failure");
+    next.delete("action");
+    setSearchParams(next, { replace: true });
+  }, [
+    canStartActions,
+    eligibility,
+    eligibilityLoading,
+    failureID,
+    features.action_requests,
+    linkedAction,
+    linkedFailure,
+    searchParams,
+    setSearchParams,
+    status,
+  ]);
+
+  useEffect(() => {
+    if (
+      !features.action_requests ||
+      status !== "authenticated" ||
+      !storageOwner
+    ) {
+      return;
+    }
+    const owner = storageOwner;
+    const expectedOwner = login?.trim().toLowerCase();
+    const storedActions: Action[] = features.fix_prs
+      ? ["create-issue", "propose-fix"]
+      : ["create-issue"];
+    const stored = storedActions
+      .map((kind) => ({
+        kind,
+        id: readStoredActionRequestID(
+          window.sessionStorage,
+          owner,
+          failureID,
+          kind,
+        ),
+      }))
+      .filter((candidate): candidate is { kind: Action; id: string } =>
+        Boolean(candidate.id),
+      );
+    if (stored.length === 0) return;
+
+    let cancelled = false;
+    async function recover() {
+      const recovered = await Promise.all(
+        stored.map(async ({ kind, id }) => {
+          try {
+            const value = await loadLatestActionRequest(API_BASE, id);
+            if (
+              value.failure_id !== failureID ||
+              value.kind !== kind ||
+              (expectedOwner &&
+                value.owner.trim().toLowerCase() !== expectedOwner)
+            ) {
+              return null;
+            }
+            syncStoredActionRequest(
+              window.sessionStorage,
+              owner,
+              value,
+            );
+            return actionRequestIsRecoverable(value.status) ? value : null;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      if (cancelled || activeAction.current !== null) return;
+      const latest = recovered
+        .filter((value): value is ActionRequest => value !== null)
+        .sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0];
+      if (!latest) return;
+      activeAction.current = latest.kind;
+      setAction(latest.kind);
+      setRequest(latest);
+      setPreview(latest.preview ?? null);
+      setError(requestStateError(latest));
+    }
+    void recover();
+    return () => {
+      cancelled = true;
+    };
+  }, [failureID, features.action_requests, features.fix_prs, login, status, storageOwner]);
+
+  useEffect(() => {
+    if (
+      !features.action_requests ||
+      status !== "authenticated" ||
+      !storageOwner ||
+      !request ||
+      request.failure_id !== failureID
+    ) {
+      return;
+    }
+    syncStoredActionRequest(window.sessionStorage, storageOwner, request);
+  }, [failureID, features.action_requests, request, status, storageOwner]);
+
+  useEffect(() => {
+    if (
+      !features.action_requests ||
+      status !== "authenticated" ||
+      !requestID ||
+      !requestStatus ||
+      !actionRequestIsPollable(requestStatus)
+    ) {
+      return;
+    }
+    const activeRequestID = requestID;
+    let cancelled = false;
+    let timer: number | undefined;
+    let retryCount = 0;
+    async function load() {
+      try {
+        const res = await fetch(
+          `${API_BASE}api/action-requests/${encodeURIComponent(activeRequestID)}`,
+          { credentials: "same-origin", cache: "no-store" },
+        );
+        if (!res.ok) {
+          const message = await actionErrorMessage(res);
+          if (cancelled) return;
+          setError(message);
+          if (res.status >= 500) {
+            const delay = Math.min(10_000, 1000 * 2 ** retryCount++);
+            timer = window.setTimeout(load, delay);
+          }
+          return;
+        }
+        const value = (await res.json()) as ActionRequest;
+        const latest = value.superseded_by
+          ? await loadLatestActionRequest(API_BASE, value.id)
+          : value;
+        if (cancelled) return;
+        retryCount = 0;
+        setAction((current) => (current === null ? null : latest.kind));
+        setRequest(latest);
+        setPreview(latest.preview ?? null);
+        setError(requestStateError(latest));
+        if (actionRequestIsPollable(latest.status)) {
+          timer = window.setTimeout(load, 2000);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : String(e));
+        const delay = Math.min(10_000, 1000 * 2 ** retryCount++);
+        timer = window.setTimeout(load, delay);
+      }
+    }
+    timer = window.setTimeout(load, 1200);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [features.action_requests, requestID, requestStatus, status]);
+
+  if (
+    !features.actions ||
+    !failureID ||
+    status === "loading" ||
+    status === "unavailable"
+  ) {
+    return null;
+  }
+
+  if (status === "anonymous") {
+    return (
+      <Button
+        size="small"
+        variant="outlined"
+        startIcon={<GitHub sx={{ fontSize: 18 }} />}
+        onClick={signIn}
+      >
+        {features.action_requests && linkedFailure === failureID && linkedAction
+          ? `Sign in to review ${linkedAction === "propose-fix" ? "a fix proposal" : "an issue draft"}`
+          : features.action_requests
+            ? features.fix_prs ? "Sign in to file issues or fixes" : "Sign in to file issues"
+            : "Sign in to manage this failure"}
+      </Button>
+    );
+  }
+
+  function dismissReviewIntent() {
+    setReviewIntent(null);
+  }
+
+  async function refreshRequestState(
+    id: string,
+    startedFailureID: string,
+  ): Promise<ActionRequest | null> {
+    try {
+      const value = await loadLatestActionRequest(API_BASE, id);
+      if (
+        activeFailureID.current !== startedFailureID ||
+        (activeRequestID.current !== undefined && activeRequestID.current !== id)
+      ) return null;
+      activeAction.current = value.kind;
+      setAction(value.kind);
+      setRequest(value);
+      setPreview(value.preview ?? null);
+      return value;
+    } catch {
+      return null;
+    }
+  }
+
+  function handleRecoveredReplacement(
+    recovered: ActionRequest | null,
+    previousID: string,
+  ): boolean {
+    if (!recovered || recovered.id === previousID) return false;
+    if (recovered.status === "confirmed" && recovered.result_url) {
+      setUrl(recovered.result_url);
+      close();
+      return true;
+    }
+    setError(requestStateError(recovered));
+    return true;
+  }
+
+  async function startRequest(
+    requested: Action,
+    prompt = "",
+    previousRequestID?: string,
+  ) {
+    if (requested === "propose-fix" && !features.fix_prs) {
+      setError("Fix PR generation is unavailable on this deployment.");
+      return;
+    }
+    if (!canStartActions) {
+      setError(eligibility?.reason ?? "Action eligibility has not been confirmed.");
+      return;
+    }
+    if (!features.action_requests) {
+      activeAction.current = requested;
+      setAction(requested);
+      setError("Background draft generation is unavailable on this deployment.");
+      return;
+    }
+    const startedFailureID = failureID;
+    activeAction.current = requested;
+    setAction(requested);
+    setBusy(prompt ? "refine" : "preview");
+    setError(null);
+    setUrl(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}api/failures/${encodeURIComponent(failureID)}/${requested}/requests`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...(prompt.trim() ? { instruction: prompt.trim() } : {}),
+            ...(previousRequestID
+              ? { supersedes_request_id: previousRequestID }
+              : {}),
+          }),
+        },
+      );
+      if (!res.ok) throw new Error(await actionErrorMessage(res));
+      const value = (await res.json()) as ActionRequest;
+      if (activeFailureID.current !== startedFailureID) return;
+      setRequest(value);
+      setPreview(value.preview ?? null);
+      setInstruction("");
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      const refreshed = previousRequestID
+        ? await refreshRequestState(previousRequestID, startedFailureID)
+        : null;
+      if (activeFailureID.current !== startedFailureID) return;
+      if (
+        previousRequestID &&
+        handleRecoveredReplacement(refreshed, previousRequestID)
+      ) {
+        return;
+      }
+      setError(message);
+    } finally {
+      if (activeFailureID.current === startedFailureID) setBusy(null);
+    }
+  }
+
+  async function generateRequestedDraft() {
+    if (!reviewIntent) return;
+    const requested = reviewIntent;
+    setReviewIntent(null);
+    await startRequest(requested);
+  }
+
+  function open(requested: Action) {
+    if (!canStartActions) {
+      setError(eligibility?.reason ?? "Action eligibility has not been confirmed.");
+      return;
+    }
+    setInstruction("");
+    setError(null);
+    const activeRequest = request && actionRequestIsActive(request) ? request : null;
+    if (activeRequest?.status === "unknown") {
+      activeAction.current = activeRequest.kind;
+      setAction(activeRequest.kind);
+      setPreview(activeRequest.preview ?? null);
+      return;
+    }
+    if (activeRequest?.kind === requested) {
+      activeAction.current = requested;
+      setAction(requested);
+      setPreview(activeRequest.preview ?? null);
+      return;
+    }
+    setRequest(null);
+    setPreview(null);
+    void startRequest(requested, "", activeRequest?.id);
+  }
+
+  async function confirm() {
+    if (
+      !action ||
+      !request ||
+      !actionRequestCanConfirm(request.status, Boolean(preview))
+    ) {
+      return;
+    }
+    const startedFailureID = failureID;
+    setBusy("confirm");
+    setError(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}api/action-requests/${encodeURIComponent(request.id)}/confirm`,
+        { method: "POST", credentials: "same-origin" },
+      );
+      if (!res.ok) throw new Error(await actionErrorMessage(res));
+      const body = (await res.json()) as { url: string };
+      if (activeFailureID.current !== startedFailureID) return;
+      setUrl(body.url);
+      setRequest({ ...request, status: "confirmed", result_url: body.url });
+      close();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      const refreshed = await refreshRequestState(request.id, startedFailureID);
+      if (activeFailureID.current !== startedFailureID) return;
+      if (handleRecoveredReplacement(refreshed, request.id)) return;
+      if (refreshed?.status === "confirmed" && refreshed.result_url) {
+        setUrl(refreshed.result_url);
+        close();
+        return;
+      }
+      setError(message);
+    } finally {
+      if (activeFailureID.current === startedFailureID) setBusy(null);
+    }
+  }
+
+  async function cancelRequest() {
+    if (!request || request.status === "cancelling") return;
+    const startedFailureID = failureID;
+    const startedRequestID = request.id;
+    setBusy("cancel");
+    setError(null);
+    try {
+      const value = await cancelActionRequest(API_BASE, request.id);
+      const latest = value.superseded_by
+        ? await loadLatestActionRequest(API_BASE, value.id)
+        : value;
+      if (activeFailureID.current !== startedFailureID || activeRequestID.current !== startedRequestID) return;
+      activeAction.current = latest.kind;
+      setAction(latest.kind);
+      setRequest(latest);
+      setPreview(latest.preview ?? null);
+      setError(requestStateError(latest));
+    } catch (e) {
+      if (activeRequestID.current !== startedRequestID) return;
+      const message = e instanceof Error ? e.message : String(e);
+      const refreshed = await refreshRequestState(request.id, startedFailureID);
+      if (activeFailureID.current !== startedFailureID) return;
+      if (handleRecoveredReplacement(refreshed, request.id)) return;
+      setError(
+        refreshed?.status === "cancelled" || refreshed?.status === "cancelling"
+          ? null
+          : message,
+      );
+    } finally {
+      if (activeFailureID.current === startedFailureID) setBusy(null);
+    }
+  }
+
+  function close() {
+    activeAction.current = null;
+    setAction(null);
+    setInstruction("");
+    setError(null);
+  }
+
+  async function submitResolve() {
+    setResolveBusy(true);
+    setResolveError(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}api/failures/${encodeURIComponent(failureID)}/resolve`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ note: note.trim() }),
+        },
+      );
+      if (!res.ok) {
+        throw new Error(await actionErrorMessage(res));
+      }
+      setResolveOpen(false);
+      setNote("");
+      refetchResolved();
+    } catch (e) {
+      setResolveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setResolveBusy(false);
+    }
+  }
+
+  async function unresolve() {
+    setResolveBusy(true);
+    setResolveError(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}api/failures/${encodeURIComponent(failureID)}/unresolve`,
+        { method: "POST", credentials: "same-origin" },
+      );
+      if (!res.ok) {
+        throw new Error(await actionErrorMessage(res));
+      }
+      refetchResolved();
+    } catch (e) {
+      setResolveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setResolveBusy(false);
+    }
+  }
+
+  const isFix = action === "propose-fix";
+  const isResolved = !!resolved.resolved[failureID];
+  const verificationTitle = request
+    ? actionRequestVerificationTitle(request)
+    : null;
+  const verificationDetail = request
+    ? actionRequestVerificationDetail(request)
+    : null;
+
+  return (
+    <Box>
+      <Stack
+        direction="row"
+        spacing={detailAppearance ? 0 : 1}
+        sx={{
+          alignItems: "center",
+          flexWrap: "wrap",
+          rowGap: 1,
+          ...(detailAppearance && {
+            "& .MuiButton-root": {
+              minHeight: { xs: 44, sm: 36 },
+              borderRadius: 0,
+              borderLeft: "1px solid",
+              borderColor: "divider",
+              px: 1.25,
+              textTransform: "none",
+              "&:first-of-type": { borderLeft: 0, pl: 0 },
+            },
+          }),
+        }}
+      >
+        {features.action_requests && canStartActions && (
+          <>
+            <Button
+              size="small"
+              variant={detailAppearance ? "text" : "outlined"}
+              color={detailAppearance ? "primary" : "warning"}
+              startIcon={<BugReport sx={{ fontSize: 18 }} />}
+              disabled={action !== null}
+              onClick={() => open("create-issue")}
+            >
+              Draft issue
+            </Button>
+            {features.fix_prs && (
+              <Button
+                size="small"
+                variant={detailAppearance ? "text" : "outlined"}
+                color={detailAppearance ? "primary" : "warning"}
+                startIcon={<Build sx={{ fontSize: 18 }} />}
+                disabled={action !== null}
+                onClick={() => open("propose-fix")}
+              >
+                Draft fix PR
+              </Button>
+            )}
+          </>
+        )}
+        {resolvable && (isResolved ? (
+          <Button
+            size="small"
+            variant={detailAppearance ? "text" : "outlined"}
+            color="primary"
+            startIcon={<Replay sx={{ fontSize: 18 }} />}
+            disabled={resolveBusy}
+            onClick={unresolve}
+          >
+            Restore pattern
+          </Button>
+        ) : (
+          <Button
+            size="small"
+            variant={detailAppearance ? "text" : "outlined"}
+            color="primary"
+            startIcon={<VisibilityOffOutlined sx={{ fontSize: 18 }} />}
+            disabled={resolveBusy}
+            onClick={() => {
+              setResolveError(null);
+              setResolveOpen(true);
+            }}
+          >
+            Dismiss pattern
+          </Button>
+        ))}
+      </Stack>
+
+      {eligibilityLoading && (
+        <Stack direction="row" spacing={1} role="status" sx={{ alignItems: "center", mt: 1 }}>
+          <CircularProgress size={14} />
+          <Typography variant="caption" color="text.secondary">Checking action eligibility...</Typography>
+        </Stack>
+      )}
+
+      {!eligibilityLoading && eligibility && eligibility.state !== "actionable" && (
+        <Alert role="status" severity={eligibility.state === "already_present" || eligibility.state === "recovered" ? "info" : "warning"} variant="outlined" sx={{ mt: 1 }}>
+          <Typography variant="body2" sx={{ fontWeight: 650 }}>
+            {actionEligibilityTitle(eligibility, Boolean(features.source_investigation))}
+          </Typography>
+          <Typography variant="body2">{eligibility.reason}</Typography>
+        </Alert>
+      )}
+
+      {resolvable && resolveError && (
+        <Alert severity="error" sx={{ mt: 1 }}>
+          <Typography variant="body2">{resolveError}</Typography>
+        </Alert>
+      )}
+
+      <Dialog
+        open={reviewIntent !== null && action === null}
+        onClose={dismissReviewIntent}
+        maxWidth="sm"
+        fullWidth
+        slotProps={{ paper: { sx: dialogPaperSx } }}
+      >
+        <DialogHeader
+          icon={
+            reviewIntent === "propose-fix" ? (
+              <Build sx={{ fontSize: 20 }} />
+            ) : (
+              <BugReport sx={{ fontSize: 20 }} />
+            )
+          }
+          accent="warning"
+          title={
+            reviewIntent === "propose-fix"
+              ? "Generate a fix proposal?"
+              : "Generate an issue draft?"
+          }
+        />
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary">
+            Opening the email link did not create anything. Generate a draft
+            now, then review the exact content before confirming any GitHub
+            write.
+          </Typography>
+          {features.action_requests && (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
+              Generation continues in the background. If draft-ready email is
+              configured, the dashboard emails you when the draft is ready.
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2 }}>
+          <Button
+            onClick={dismissReviewIntent}
+            color="inherit"
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="warning"
+            disableElevation
+            onClick={generateRequestedDraft}
+          >
+            Generate draft
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={resolvable && resolveOpen}
+        onClose={resolveBusy ? undefined : () => setResolveOpen(false)}
+        maxWidth="sm"
+        fullWidth
+        slotProps={{ paper: { sx: dialogPaperSx } }}
+      >
+        <DialogHeader
+          icon={<VisibilityOffOutlined sx={{ fontSize: 20 }} />}
+          accent="primary"
+          title="Dismiss pattern"
+        />
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Hides this recurring pattern from the active view. It reappears
+            automatically if a newer failing build recurs.
+          </Typography>
+          <TextField
+            label="Note (optional)"
+            placeholder="For example, fixed by kubernetes/test-infra #12345"
+            fullWidth
+            multiline
+            minRows={2}
+            size="small"
+            value={note}
+            disabled={resolveBusy}
+            onChange={(e) => setNote(e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2 }}>
+          <Button
+            onClick={() => setResolveOpen(false)}
+            disabled={resolveBusy}
+            color="inherit"
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="primary"
+            disableElevation
+            disabled={resolveBusy}
+            startIcon={
+              resolveBusy ? (
+                <CircularProgress size={16} color="inherit" />
+              ) : undefined
+            }
+            onClick={submitResolve}
+          >
+            Dismiss pattern
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {url && (
+        <Alert severity="success" sx={{ mt: 1 }}>
+          Opened:{" "}
+          <Link href={url} target="_blank" rel="noopener">
+            {url}
+          </Link>
+        </Alert>
+      )}
+
+      <Dialog
+        open={action !== null}
+        onClose={busy !== null ? undefined : close}
+        maxWidth="md"
+        fullWidth
+        slotProps={{ paper: { sx: dialogPaperSx } }}
+      >
+        <DialogHeader
+          icon={
+            isFix ? (
+              <Build sx={{ fontSize: 20 }} />
+            ) : (
+              <BugReport sx={{ fontSize: 20 }} />
+            )
+          }
+          accent="warning"
+          title={isFix ? "Review draft fix PR" : "Review issue draft"}
+          subtitle={`Review the exact ${isFix ? "pull request" : "issue"} before it is opened on GitHub`}
+        />
+        <DialogContent dividers sx={{ px: 3, py: 2.5 }}>
+          {(busy === "preview" || request?.status === "pending") && (
+            <Box>
+              <Stack
+                direction="row"
+                spacing={1.5}
+                sx={{ alignItems: "center", py: 2 }}
+              >
+                <CircularProgress size={20} />
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    {actionRequestProgressTitle(request, isFix)}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {actionRequestProgressDetail(request)}
+                  </Typography>
+                </Box>
+              </Stack>
+              {request && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="inherit"
+                  disabled={busy === "cancel"}
+                  onClick={cancelRequest}
+                >
+                  {busy === "cancel" ? "Cancelling…" : "Cancel request"}
+                </Button>
+              )}
+            </Box>
+          )}
+
+          {request?.status === "cancelling" && (
+            <Box
+              role="status"
+              sx={{
+                borderRadius: "12px",
+                bgcolor: (theme) =>
+                  (theme.vars ?? theme).palette.surface.containerLow,
+                border: "1px solid",
+                borderColor: "divider",
+                p: 2,
+              }}
+            >
+              <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
+                <CircularProgress size={20} />
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    Stopping runtime work
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    This request remains active until the server confirms that
+                    its runtime work has stopped.
+                  </Typography>
+                </Box>
+              </Stack>
+            </Box>
+          )}
+
+          {error && (
+            <Alert
+              severity="error"
+              variant="outlined"
+              sx={{ mb: 2, borderRadius: "10px" }}
+            >
+              <Typography variant="body2">{error}</Typography>
+            </Alert>
+          )}
+          {request && verificationTitle && request.status !== "pending" && (
+            <Alert
+              severity={
+                request.verification?.state === "unresolved"
+                  ? "success"
+                  : request.verification?.state === "already_present"
+                    ? "info"
+                    : "warning"
+              }
+              variant="outlined"
+              sx={{ mb: 2, borderRadius: "10px" }}
+            >
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                {verificationTitle}
+              </Typography>
+              <Typography variant="body2">
+                {verificationDetail}
+              </Typography>
+            </Alert>
+          )}
+          {request?.warning && (
+            <Alert
+              severity="warning"
+              variant="outlined"
+              sx={{ mb: 2, borderRadius: "10px" }}
+            >
+              <Typography variant="body2">{request.warning}</Typography>
+            </Alert>
+          )}
+
+          {request?.status === "cancelled" && (
+            <Alert severity="info">This request was cancelled.</Alert>
+          )}
+          {request?.status === "unknown" && (
+            <Alert severity="warning">GitHub may have accepted this action. Use Check GitHub result; do not regenerate or cancel it.</Alert>
+          )}
+
+          {preview &&
+            (request?.status === "ready" ||
+              request?.status === "unknown" ||
+              (request?.status === "failed" && Boolean(request.warning))) && (
+            <Stack spacing={2.5}>
+              <ActionDraftPreview preview={preview} />
+              {request.status === "ready" && <Box>
+                <TextField
+                  label="Refine this draft with a prompt (optional)"
+                  placeholder={
+                    isFix
+                      ? "e.g. patch the kustomize base instead of the rendered template"
+                      : "e.g. mention this also affects the IPv6 flavor"
+                  }
+                  fullWidth
+                  multiline
+                  minRows={2}
+                  size="small"
+                  value={instruction}
+                  disabled={busy !== null}
+                  onChange={(event) => setInstruction(event.target.value)}
+                />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="primary"
+                  sx={{ mt: 1.25 }}
+                  startIcon={
+                    busy === "refine" ? (
+                      <CircularProgress size={14} color="inherit" />
+                    ) : undefined
+                  }
+                  disabled={
+                    busy !== null ||
+                    instruction.trim() === "" ||
+                    action === null
+                  }
+                  onClick={() =>
+                    action &&
+                    void startRequest(action, instruction, request.id)
+                  }
+                >
+                  {busy === "refine"
+                    ? "Regenerating…"
+                    : "Regenerate with prompt"}
+                </Button>
+              </Box>}
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2 }}>
+          <Button
+            onClick={close}
+            disabled={busy !== null}
+            color="inherit"
+          >
+            Close
+          </Button>
+          <Button
+            variant="contained"
+            color="warning"
+            disableElevation
+            startIcon={
+              busy === "confirm" ? (
+                <CircularProgress size={16} color="inherit" />
+              ) : isFix ? (
+                <Build sx={{ fontSize: 18 }} />
+              ) : (
+                <BugReport sx={{ fontSize: 18 }} />
+              )
+            }
+            disabled={
+              busy !== null ||
+              !request ||
+              !actionRequestCanConfirm(request.status, Boolean(preview))
+            }
+            onClick={confirm}
+          >
+            {request?.status === "unknown" ? "Check GitHub result" : isFix ? "Open draft PR" : "File issue"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  );
+}

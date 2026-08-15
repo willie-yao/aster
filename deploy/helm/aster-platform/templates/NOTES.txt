@@ -1,0 +1,11 @@
+Platform prerequisites rendered for application release {{ .Values.application.releaseName }}.
+
+Required upstream Agent Sandbox release:
+  version: {{ .Values.agentSandbox.requiredVersion }}
+  manifest: {{ .Values.agentSandbox.manifestURL }}
+  sha256: {{ .Values.agentSandbox.manifestSHA256 }}
+
+The chart does not install the Agent Sandbox controller, RuntimeClass handler,
+secure-runtime nodes, Secret values, DNS, certificates, or external infrastructure.
+Run the checksum verifier and the live Kubernetes doctor before installing the
+application chart.

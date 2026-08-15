@@ -1,0 +1,703 @@
+{
+  "cases": [
+    {
+      "artifact_files": {
+        "builds/1/log.txt": "reconcile failed because the applyFix transition never ran\n",
+        "builds/2/log.txt": "reconcile failed because the applyFix transition never ran\n"
+      },
+      "category": "actionable_missing_call",
+      "confidence": "high",
+      "destination_policy": {
+        "project": "remediation-benchmark",
+        "repositories": [
+          {
+            "allowed_commands": [
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
+            ],
+            "allowed_paths": [
+              "controllers/reconcile.go"
+            ],
+            "repository": "example/repo"
+          }
+        ]
+      },
+      "effective_input_sha256": "d2c3bdb5c447e945c8cad38f1f96b5886ffc439e76b2b1afea686726a1976971",
+      "expected": {
+        "classification": "actionable",
+        "repository": {
+          "name": "repo",
+          "owner": "example",
+          "revision": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "target": {
+          "container": "",
+          "intent": "modify_symbol",
+          "job": "",
+          "name": "",
+          "path": "controllers/reconcile.go",
+          "repository": "",
+          "required_call": "applyFix",
+          "revision": "",
+          "symbol": "reconcile",
+          "value": ""
+        }
+      },
+      "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "controllers/reconcile.go": "package controllers\n\nfunc reconcile() error {\n\treturn nil\n}\n\nfunc applyFix() {}\n"
+      },
+      "id": "actionable-missing-call",
+      "job_id": "benchmark-actionable-missing-call",
+      "job_name": "benchmark-actionable-missing-call",
+      "relevant_files": [
+        "controllers/reconcile.go"
+      ],
+      "repository": {
+        "name": "repo",
+        "owner": "example",
+        "revision": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "root_cause": "The reconcile path returns without invoking the required applyFix transition.",
+      "source_files": {
+        "controllers/reconcile.go": "package controllers\n\nfunc reconcile() error {\n\treturn nil\n}\n\nfunc applyFix() {}\n"
+      }
+    },
+    {
+      "artifact_files": {
+        "builds/1/log.txt": "test startup failed because FEATURE_FLAG was unset\n",
+        "builds/2/log.txt": "test startup failed because FEATURE_FLAG was unset\n"
+      },
+      "category": "actionable_missing_configuration",
+      "confidence": "high",
+      "destination_policy": {
+        "project": "remediation-benchmark",
+        "repositories": [
+          {
+            "allowed_commands": [
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
+            ],
+            "allowed_paths": [
+              "config/jobs/example/"
+            ],
+            "repository": "kubernetes/test-infra"
+          }
+        ]
+      },
+      "effective_input_sha256": "3d2cd4977e1fca4addbb7a3fcf5a61f6982b1c147e9ce4ec4ff5429ce30becea",
+      "expected": {
+        "classification": "actionable",
+        "repository": {
+          "name": "test-infra",
+          "owner": "kubernetes",
+          "revision": "0123456789abcdef0123456789abcdef01234567"
+        },
+        "target": {
+          "container": "test",
+          "intent": "set_job_environment",
+          "job": "periodic-capz",
+          "name": "FEATURE_FLAG",
+          "path": "config/jobs/example/periodics.yaml",
+          "repository": "kubernetes/test-infra",
+          "required_call": "",
+          "revision": "0123456789abcdef0123456789abcdef01234567",
+          "symbol": "",
+          "value": "enabled"
+        }
+      },
+      "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "config/jobs/example/periodics.yaml": "periodics:\n- name: periodic-capz\n  spec:\n    containers:\n    - name: test\n      command: [run-tests]\n"
+      },
+      "id": "actionable-missing-job-environment",
+      "job_id": "periodic-capz",
+      "job_name": "periodic-capz",
+      "relevant_files": [
+        "config/jobs/example/periodics.yaml"
+      ],
+      "repository": {
+        "name": "test-infra",
+        "owner": "kubernetes",
+        "revision": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "root_cause": "The periodic job starts without FEATURE_FLAG=enabled in the test container.",
+      "source_files": {
+        "config/jobs/example/periodics.yaml": "periodics:\n- name: periodic-capz\n  spec:\n    containers:\n    - name: test\n      command: [run-tests]\n"
+      }
+    },
+    {
+      "artifact_files": {
+        "builds/1/log.txt": "an earlier build reported a missing transition\n",
+        "builds/2/log.txt": "an earlier build reported a missing transition\n"
+      },
+      "category": "already_present_at_pinned_revision",
+      "confidence": "high",
+      "destination_policy": {
+        "project": "remediation-benchmark",
+        "repositories": [
+          {
+            "allowed_commands": [
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
+            ],
+            "allowed_paths": [
+              "controllers/reconcile.go"
+            ],
+            "repository": "example/repo"
+          }
+        ]
+      },
+      "effective_input_sha256": "b24f84bc1218ba57793d3dfaf6acb11bf5ded7aebaabfa748530c0dfd5b2a2de",
+      "expected": {
+        "classification": "already_fixed",
+        "repository": null,
+        "target": null
+      },
+      "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "controllers/reconcile.go": "package controllers\n\nfunc reconcile() error {\n\tapplyFix()\n\treturn nil\n}\n\nfunc applyFix() {}\n"
+      },
+      "id": "target-already-present-at-pinned-revision",
+      "job_id": "benchmark-target-already-present-at-pinned-revision",
+      "job_name": "benchmark-target-already-present-at-pinned-revision",
+      "relevant_files": [
+        "controllers/reconcile.go"
+      ],
+      "repository": {
+        "name": "repo",
+        "owner": "example",
+        "revision": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "root_cause": "The claimed missing applyFix call is already present at the pinned revision.",
+      "source_files": {
+        "controllers/reconcile.go": "package controllers\n\nfunc reconcile() error {\n\tapplyFix()\n\treturn nil\n}\n\nfunc applyFix() {}\n"
+      }
+    },
+    {
+      "artifact_files": {
+        "builds/1/log.txt": "failure revision returned before applyFix\n",
+        "builds/2/log.txt": "failure revision returned before applyFix\n"
+      },
+      "category": "fixed_in_current_source",
+      "confidence": "high",
+      "destination_policy": {
+        "project": "remediation-benchmark",
+        "repositories": [
+          {
+            "allowed_commands": [
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
+            ],
+            "allowed_paths": [
+              "controllers/reconcile.go"
+            ],
+            "repository": "example/repo"
+          }
+        ]
+      },
+      "effective_input_sha256": "f98f5eae45847a054b5c82c3deba96672a25a3864bda01f7f0d229e1a69928ad",
+      "expected": {
+        "classification": "already_fixed",
+        "repository": null,
+        "target": null
+      },
+      "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "controllers/reconcile.go": "package controllers\n\nfunc reconcile() error {\n\treturn nil\n}\n\nfunc applyFix() {}\n"
+      },
+      "id": "fixed-in-current-source",
+      "job_id": "benchmark-fixed-in-current-source",
+      "job_name": "benchmark-fixed-in-current-source",
+      "relevant_files": [
+        "controllers/reconcile.go"
+      ],
+      "repository": {
+        "name": "repo",
+        "owner": "example",
+        "revision": "89abcdef0123456789abcdef0123456789abcdef"
+      },
+      "root_cause": "Failure revisions lacked applyFix, but the pinned current revision contains the call.",
+      "source_files": {
+        "controllers/reconcile.go": "package controllers\n\nfunc reconcile() error {\n\tapplyFix()\n\treturn nil\n}\n\nfunc applyFix() {}\n"
+      }
+    },
+    {
+      "artifact_files": {
+        "builds/1/log.txt": "example.net/external/tls handshake rejected the provider certificate\n",
+        "builds/2/log.txt": "example.net/external/tls handshake rejected the provider certificate\n"
+      },
+      "category": "external_dependency",
+      "confidence": "high",
+      "destination_policy": {
+        "project": "remediation-benchmark",
+        "repositories": [
+          {
+            "allowed_commands": [
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
+            ],
+            "allowed_paths": [
+              "cmd/"
+            ],
+            "repository": "example/repo"
+          }
+        ]
+      },
+      "effective_input_sha256": "1638240d6e0f1cdf15e0a0d00226aa48b83cfbbf7846e90fae62b8fe80ea74a9",
+      "expected": {
+        "classification": "insufficient_evidence",
+        "repository": null,
+        "target": null
+      },
+      "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "cmd/test/main.go": "package main\n\nimport external \"example.net/external/tls\"\n\nfunc run() error { return external.Connect() }\n",
+        "go.mod": "module example/repo\n\ngo 1.25\n\nrequire example.net/external v1.2.3\n"
+      },
+      "id": "external-dependency",
+      "job_id": "benchmark-external-dependency",
+      "job_name": "benchmark-external-dependency",
+      "relevant_files": [
+        "cmd/test/main.go",
+        "go.mod"
+      ],
+      "repository": {
+        "name": "repo",
+        "owner": "example",
+        "revision": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "root_cause": "The repeated failure is thrown inside example.net/external/tls and no local wrapper controls the behavior.",
+      "source_files": {
+        "cmd/test/main.go": "package main\n\nimport external \"example.net/external/tls\"\n\nfunc run() error { return external.Connect() }\n",
+        "go.mod": "module example/repo\n\ngo 1.25\n\nrequire example.net/external v1.2.3\n"
+      }
+    },
+    {
+      "artifact_files": {
+        "builds/1/log.txt": "Pod was evicted: The node had condition DiskPressure\n",
+        "builds/2/log.txt": "Pod was evicted: The node had condition DiskPressure\n"
+      },
+      "category": "environment_or_infrastructure",
+      "confidence": "high",
+      "destination_policy": {
+        "project": "remediation-benchmark",
+        "repositories": [
+          {
+            "allowed_commands": [
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
+            ],
+            "allowed_paths": [
+              "cmd/"
+            ],
+            "repository": "example/repo"
+          }
+        ]
+      },
+      "effective_input_sha256": "e84085eb5fd661be535dc4168b3e714b6d9469e1a89e08d9ff4c3dc71518e335",
+      "expected": {
+        "classification": "environment_or_infrastructure",
+        "repository": null,
+        "target": null
+      },
+      "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "cmd/test/main.go": "package main\nfunc main() {}\n"
+      },
+      "id": "environment-or-infrastructure",
+      "job_id": "benchmark-environment-or-infrastructure",
+      "job_name": "benchmark-environment-or-infrastructure",
+      "relevant_files": [
+        "cmd/test/main.go"
+      ],
+      "repository": {
+        "name": "repo",
+        "owner": "example",
+        "revision": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "root_cause": "Both builds were evicted by node disk pressure before repository code executed.",
+      "source_files": {
+        "cmd/test/main.go": "package main\nfunc main() {}\n"
+      }
+    },
+    {
+      "artifact_files": {
+        "builds/1/log.txt": "external API returned 429; immediate rerun passed\n",
+        "builds/2/log.txt": "external API returned 429; immediate rerun passed\n"
+      },
+      "category": "mitigation_only",
+      "confidence": "high",
+      "destination_policy": {
+        "project": "remediation-benchmark",
+        "repositories": [
+          {
+            "allowed_commands": [
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
+            ],
+            "allowed_paths": [
+              "pkg/client/"
+            ],
+            "repository": "example/repo"
+          }
+        ]
+      },
+      "effective_input_sha256": "fc23041838c1d02abc8d08d7ace8658c38c0cf116987083a3c0bd81287c6eebc",
+      "expected": {
+        "classification": "mitigation_only",
+        "repository": null,
+        "target": null
+      },
+      "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "pkg/client/client.go": "package client\nfunc Request() error { return nil }\n"
+      },
+      "id": "mitigation-only",
+      "job_id": "benchmark-mitigation-only",
+      "job_name": "benchmark-mitigation-only",
+      "relevant_files": [
+        "pkg/client/client.go"
+      ],
+      "repository": {
+        "name": "repo",
+        "owner": "example",
+        "revision": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "root_cause": "The external API throttled the run and a bounded rerun succeeded; no durable local source target is proven.",
+      "source_files": {
+        "pkg/client/client.go": "package client\nfunc Request() error { return nil }\n"
+      }
+    },
+    {
+      "artifact_files": {
+        "builds/1/log.txt": "mounted path exists but expected files are not visible in the Windows container\n",
+        "builds/2/log.txt": "mounted path exists but expected files are not visible in the Windows container\n"
+      },
+      "category": "insufficient_or_ambiguous_evidence",
+      "confidence": "high",
+      "destination_policy": {
+        "project": "remediation-benchmark",
+        "repositories": [
+          {
+            "allowed_commands": [
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
+            ],
+            "allowed_paths": [
+              "pkg/"
+            ],
+            "repository": "example/repo"
+          }
+        ]
+      },
+      "effective_input_sha256": "d208757ccae8dd07ab569b961cbe532090a2b7abd2cd301ac4634f1aa004ff54",
+      "expected": {
+        "classification": "insufficient_evidence",
+        "repository": null,
+        "target": null
+      },
+      "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "pkg/container/start.go": "package container\nfunc Start() error { return nil }\n",
+        "pkg/mount/mount.go": "package mount\nfunc Publish() error { return nil }\n"
+      },
+      "id": "insufficient-ambiguous-evidence",
+      "job_id": "benchmark-insufficient-ambiguous-evidence",
+      "job_name": "benchmark-insufficient-ambiguous-evidence",
+      "relevant_files": [
+        "pkg/mount/mount.go",
+        "pkg/container/start.go"
+      ],
+      "repository": {
+        "name": "repo",
+        "owner": "example",
+        "revision": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "root_cause": "Windows mount contents were not visible, but evidence does not resolve whether publication or container mounting owns the defect.",
+      "source_files": {
+        "pkg/container/start.go": "package container\nfunc Start() error { return nil }\n",
+        "pkg/mount/mount.go": "package mount\nfunc Publish() error { return nil }\n"
+      }
+    },
+    {
+      "artifact_files": {
+        "builds/1/log.txt": "conversion webhook call to ASO timed out\n",
+        "builds/2/log.txt": "conversion webhook call to ASO timed out\n"
+      },
+      "category": "unsafe_conversion_webhook",
+      "confidence": "high",
+      "destination_policy": {
+        "project": "remediation-benchmark",
+        "repositories": [
+          {
+            "allowed_commands": [
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
+            ],
+            "allowed_paths": [
+              "controllers/",
+              "config/crd/"
+            ],
+            "repository": "example/repo"
+          }
+        ]
+      },
+      "effective_input_sha256": "68e250835a1aaa70671284c34a6b1492664cfa1b926dc708176d3056c2a16bd1",
+      "expected": {
+        "classification": "insufficient_evidence",
+        "repository": null,
+        "target": null
+      },
+      "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "config/crd/bases/example.yaml": "spec:\n  conversion:\n    strategy: Webhook\n",
+        "controllers/conversion.go": "package controllers\nfunc ReconcileConversion() error { return nil }\n"
+      },
+      "id": "unsafe-conversion-webhook",
+      "job_id": "benchmark-unsafe-conversion-webhook",
+      "job_name": "benchmark-unsafe-conversion-webhook",
+      "relevant_files": [
+        "controllers/conversion.go",
+        "config/crd/bases/example.yaml"
+      ],
+      "repository": {
+        "name": "repo",
+        "owner": "example",
+        "revision": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "root_cause": "A conversion request failed, but deleting webhook configuration would be destructive and does not disable CRD conversion.",
+      "source_files": {
+        "config/crd/bases/example.yaml": "spec:\n  conversion:\n    strategy: Webhook\n",
+        "controllers/conversion.go": "package controllers\nfunc ReconcileConversion() error { return nil }\n"
+      }
+    },
+    {
+      "artifact_files": {
+        "builds/1/log.txt": "/go/pkg/mod/example.net/dependency@v2.0.0/internal/run.go:42 returned invalid state\n",
+        "builds/2/log.txt": "/go/pkg/mod/example.net/dependency@v2.0.0/internal/run.go:42 returned invalid state\n"
+      },
+      "category": "wrong_dependency_repository",
+      "confidence": "high",
+      "destination_policy": {
+        "project": "remediation-benchmark",
+        "repositories": [
+          {
+            "allowed_commands": [
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
+            ],
+            "allowed_paths": [
+              "cmd/"
+            ],
+            "repository": "example/repo"
+          }
+        ]
+      },
+      "effective_input_sha256": "cfb2b176781d9db24b4937b7c8dd8b94810a7e8318e04d4091d34a7f026dd8d1",
+      "expected": {
+        "classification": "insufficient_evidence",
+        "repository": null,
+        "target": null
+      },
+      "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "cmd/test/main.go": "package main\nfunc main() {}\n",
+        "go.mod": "module example/repo\n\ngo 1.25\n\nrequire example.net/dependency v2.0.0\n"
+      },
+      "id": "wrong-module-cache-repository",
+      "job_id": "benchmark-wrong-module-cache-repository",
+      "job_name": "benchmark-wrong-module-cache-repository",
+      "relevant_files": [
+        "go.mod",
+        "cmd/test/main.go"
+      ],
+      "repository": {
+        "name": "repo",
+        "owner": "example",
+        "revision": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "root_cause": "The stack names a module-cache file owned by example.net/dependency, not the destination repository.",
+      "source_files": {
+        "cmd/test/main.go": "package main\nfunc main() {}\n",
+        "go.mod": "module example/repo\n\ngo 1.25\n\nrequire example.net/dependency v2.0.0\n"
+      }
+    },
+    {
+      "artifact_files": {
+        "builds/1/log.txt": "Handle returned an unknown target identity\n",
+        "builds/2/log.txt": "Handle returned an unknown target identity\n"
+      },
+      "category": "duplicated_or_unknown_target",
+      "confidence": "high",
+      "destination_policy": {
+        "project": "remediation-benchmark",
+        "repositories": [
+          {
+            "allowed_commands": [
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
+            ],
+            "allowed_paths": [
+              "pkg/"
+            ],
+            "repository": "example/repo"
+          }
+        ]
+      },
+      "effective_input_sha256": "59447c4d6f1d52350b33ce3d4c475a3354876ae03fd9ae8f752ae5ec1c77de23",
+      "expected": {
+        "classification": "insufficient_evidence",
+        "repository": null,
+        "target": null
+      },
+      "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "pkg/one/handler.go": "package one\nfunc Handle() error { return nil }\n",
+        "pkg/two/handler.go": "package two\nfunc Handle() error { return nil }\n"
+      },
+      "id": "duplicated-or-unknown-target",
+      "job_id": "benchmark-duplicated-or-unknown-target",
+      "job_name": "benchmark-duplicated-or-unknown-target",
+      "relevant_files": [
+        "pkg/one/handler.go",
+        "pkg/two/handler.go"
+      ],
+      "repository": {
+        "name": "repo",
+        "owner": "example",
+        "revision": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "root_cause": "Two same-named handlers in different packages are mentioned and the evidence does not identify one implementation target.",
+      "source_files": {
+        "pkg/one/handler.go": "package one\nfunc Handle() error { return nil }\n",
+        "pkg/two/handler.go": "package two\nfunc Handle() error { return nil }\n"
+      }
+    },
+    {
+      "artifact_files": {
+        "builds/1/log.txt": "analysis suggested GenericWorkload.fabricatedFix without source support\n",
+        "builds/2/log.txt": "analysis suggested GenericWorkload.fabricatedFix without source support\n"
+      },
+      "category": "fabricated_symbol_or_configuration",
+      "confidence": "high",
+      "destination_policy": {
+        "project": "remediation-benchmark",
+        "repositories": [
+          {
+            "allowed_commands": [
+              {
+                "argv": [
+                  "go",
+                  "test",
+                  "./..."
+                ],
+                "timeout": "10m"
+              }
+            ],
+            "allowed_paths": [
+              "api/",
+              "controllers/"
+            ],
+            "repository": "example/repo"
+          }
+        ]
+      },
+      "effective_input_sha256": "3a23d85e91fd4968f16a4290dfc051374cc07206aed5ef385d5d18ae37119fe5",
+      "expected": {
+        "classification": "insufficient_evidence",
+        "repository": null,
+        "target": null
+      },
+      "failure_revision": "0123456789abcdef0123456789abcdef01234567",
+      "failure_source_files": {
+        "api/types.go": "package api\ntype Workload struct { Name string }\n",
+        "controllers/workload.go": "package controllers\nfunc reconcileWorkload() error { return nil }\n"
+      },
+      "id": "fabricated-symbol-or-field",
+      "job_id": "benchmark-fabricated-symbol-or-field",
+      "job_name": "benchmark-fabricated-symbol-or-field",
+      "relevant_files": [
+        "api/types.go",
+        "controllers/workload.go"
+      ],
+      "repository": {
+        "name": "repo",
+        "owner": "example",
+        "revision": "0123456789abcdef0123456789abcdef01234567"
+      },
+      "root_cause": "The proposed GenericWorkload field and fabricatedFix symbol do not exist in pinned source.",
+      "source_files": {
+        "api/types.go": "package api\ntype Workload struct { Name string }\n",
+        "controllers/workload.go": "package controllers\nfunc reconcileWorkload() error { return nil }\n"
+      }
+    }
+  ],
+  "version": 3
+}

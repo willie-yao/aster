@@ -1,0 +1,34 @@
+{{- include "aster.validateSourceInvestigation" . -}}
+{{- include "aster.validateAnalysisRuntime" . -}}
+{{- if and .Values.server.chat.sourceInvestigation.enabled .Values.orka.rbac.create }}
+# Source investigation creates and cancels only read-only agent Tasks.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "aster.orkaSourceRBACName" . }}
+  namespace: {{ .Values.orka.namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orka-source-investigation
+rules:
+  - apiGroups: ["core.orka.ai"]
+    resources: ["tasks"]
+    verbs: ["create", "get", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "aster.orkaSourceRBACName" . }}
+  namespace: {{ .Values.orka.namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orka-source-investigation
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "aster.orkaSourceServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "aster.orkaSourceRBACName" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

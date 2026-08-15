@@ -1,0 +1,623 @@
+# Default values for the Aster chart.
+# A worker Deployment (default) or CronJob writes JSON and its AI cache to a
+# shared volume. The server Deployment reads the public files from that volume
+# and serves the SPA, /data/*.json, and /api/capabilities.
+
+global:
+  # Shared snapshot tag for engine, analyzer, and fixer images. Each
+  # image-specific tag takes precedence; empty falls back to Chart.appVersion.
+  imageTag: ""
+
+image:
+  repository: ghcr.io/willie-yao/aster
+  # Defaults to global.imageTag, then .Chart.AppVersion, when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Fetch mode selects how data is produced. Both modes have exactly one writer.
+#   watch: (default) a continuous worker Deployment refreshes on a short interval
+#          and reconciles (rediscovers jobs, runs side effects) periodically.
+#          Best for an in-cluster deploy co-located with the inference stack.
+#   cron:  the fetcher runs as a scheduled CronJob (portable, also the GitHub
+#          Pages path).
+# In watch mode the worker must be the only writer to the shared volume: do not
+# also run the CronJob or a manual fetch-now Job, and do not point a second
+# release at the same existingClaim.
+mode: watch
+
+# AI cache generation selects a reversible namespace for all analysis and
+# recurring-pattern cache keys. Empty preserves the historical key shape.
+analysisCache:
+  generation: ""
+
+# Failure analysis runs in-process by default. The Orka container runtime is an
+# experimental Helm-only option for cron or watch mode. It is a lifecycle
+# sidegrade, not the recommended production mode, and has no compatibility
+# guarantee.
+analysisRuntime:
+  type: inprocess
+  orkaContainer:
+    # Leave empty to create a retained release-scoped namespace for analyzer
+    # Tasks and only their model/state Secrets. Custom names must end in the
+    # release scope hash rendered by the chart.
+    namespace: ""
+    # Orka REST API used to retrieve durable Task results. Set this to the
+    # Service name of the installed Orka release.
+    api: http://orka.orka-system.svc.cluster.local:8080
+    # Set existingSecret to use a static Orka result API token from the
+    # dashboard namespace. Leave it empty to use the rotating projected token
+    # of the Orka runtime ServiceAccount.
+    apiAuth:
+      existingSecret: ""
+      tokenKey: token
+    maxConcurrentTasks: 2
+    pollInterval: 2s
+    # Must be at least the project ai.timeout plus two minutes for Task startup
+    # and encrypted result finalization. The fetcher validates this at startup.
+    taskTimeout: 20m
+    retries: 1
+    image:
+      repository: ghcr.io/willie-yao/aster/analyzer
+      # Defaults to global.imageTag, then .Chart.AppVersion, when empty.
+      # Container mode accepts only immutable sha-<hex> or full semantic-version
+      # tags.
+      tag: ""
+      # The pinned Orka controller uses IfNotPresent for container Tasks.
+      pullPolicy: IfNotPresent
+    # This Secret must already exist in the analysis namespace. The chart never
+    # copies provider credentials across namespaces.
+    modelAuth:
+      existingSecret: ""
+      tokenKey: token
+    # With existingSecret, create the same named Secret and key in both the
+    # dashboard and analysis namespaces. When empty, the chart creates and retains
+    # matching release-scoped AES-256 state key Secrets in both namespaces.
+    state:
+      existingSecret: ""
+      key: state-key
+    # Analyzer Tasks must stay on CPU nodes. An explicit agentpool selector is
+    # required, and accelerator selectors, affinity, or tolerations fail render.
+    nodeSelector:
+      agentpool: nodepool1
+    tolerations: []
+    affinity: {}
+
+# Agent Sandbox is a consumer-installed execution backend for private workloads.
+# The chart never installs the Agent Sandbox CRD/controller, a secure RuntimeClass,
+# execution namespace, provider Secret or gateway, input PVC, or node infrastructure.
+agentSandbox:
+  fixRuntime:
+    enabled: false
+    # Existing consumer-owned namespace containing the Sandbox workloads.
+    namespace: ""
+    # Required secure runtime for deployed configurations, for example kata-vm-isolation.
+    runtimeClassName: ""
+    image:
+      repository: ""
+      # Required sha256 digest without an image tag.
+      digest: ""
+      pullPolicy: IfNotPresent
+    # Minimal git-capable dashboard image used only to reconstruct and validate
+    # patches returned by Agent Sandbox. It does not contain OpenCode or srt.
+    dashboardImage:
+      repository: ghcr.io/willie-yao/aster/remote-fixer
+      # Defaults to global.imageTag, then .Chart.AppVersion, when empty.
+      tag: ""
+      pullPolicy: IfNotPresent
+    workloadServiceAccount:
+      # Create only the tokenless workload identity, never the namespace.
+      create: false
+      name: ""
+    modelProvider:
+      # Direct mode is the default only after this runtime is explicitly enabled.
+      # Gateway mode preserves the tokenless consumer-operated gateway path.
+      credentialMode: direct
+      # chat_completions or responses. Responses requires direct bearer auth.
+      api: chat_completions
+      endpoint: ""
+      model: ""
+      # Optional OpenCode reasoning effort. Empty uses the provider default.
+      reasoningEffort: ""
+      auth:
+        # none is valid for unauthenticated providers and all gateway workloads.
+        type: none
+        # Direct bearer mode references one existing Secret in the execution namespace.
+        existingSecret: ""
+        tokenKey: ""
+      # Gateway-only trust acknowledgement for a privately resolved public FQDN.
+      publicCAPrivateDNS: false
+    # Optional public CA certificates for a private-CA model-provider gateway.
+    # The exact ConfigMap entry is mounted only into Fix executor Sandboxes.
+    caBundle:
+      existingConfigMap: ""
+      key: ""
+      # Lowercase SHA-256 of the exact ConfigMap data value.
+      sha256: ""
+    # These duplicate project.yaml security bounds and must match exactly.
+    maxSteps: 30
+    maxFiles: 3
+    timeout: 10m
+    outputLimitBytes: 524288
+    allowedCommands:
+      - argv: [git, diff, --cached, --check]
+        timeout: 1m
+    pollInterval: 250ms
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+        ephemeral-storage: 256Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+        ephemeral-storage: 256Mi
+  analyzer:
+    enabled: false
+    # Existing dedicated namespace for private analyzer Sandboxes. Enabling this
+    # section does not wire the fetcher or worker to create analyzer workloads.
+    namespace: ""
+    runtimeClassName: ""
+    executorImage:
+      repository: ""
+      digest: ""
+      pullPolicy: IfNotPresent
+    input:
+      # Existing read-only PVC populated outside the Sandbox. The chart never
+      # creates, writes, or mounts it into dashboard workloads.
+      existingClaim: ""
+    clientServiceAccount:
+      # Kept separate from Fix and critic clients so scheduled workloads never
+      # inherit analyzer RBAC.
+      create: true
+      name: ""
+    workloadServiceAccount:
+      create: false
+      name: ""
+    modelProvider:
+      credentialMode: direct
+      # chat_completions or responses. Responses requires direct bearer auth.
+      api: chat_completions
+      endpoint: ""
+      model: ""
+      # Optional OpenCode reasoning effort. Empty uses the provider default.
+      reasoningEffort: ""
+      auth:
+        type: none
+        existingSecret: ""
+        tokenKey: ""
+      publicCAPrivateDNS: false
+    timeout: 15m
+    outputLimitBytes: 262144
+    pollInterval: 250ms
+    networkPolicy:
+      # Use cilium on AKS Cilium/Kata when Kubernetes NetworkPolicy does not
+      # admit cross-node VM-isolated traffic to the gateway.
+      mode: kubernetes
+      enabled: true
+      gatewayNamespaceSelector: {}
+      gatewayPodSelector: {}
+      # HTTPS port exposed by the gateway Service and used by modelProvider.endpoint.
+      gatewayPort: 443
+      # Backend Pod port enforced after Service translation. This may differ
+      # from gatewayPort, for example Service port 443 targeting Pod port 8443.
+      gatewayTargetPort: null
+      dnsNamespaceSelector:
+        kubernetes.io/metadata.name: kube-system
+      dnsPodSelector:
+        k8s-app: kube-dns
+    quota:
+      # The analyzer namespace must be dedicated. The quota permits one Sandbox
+      # and one Pod at a time. Admission pins container resources separately.
+      enabled: true
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+        ephemeral-storage: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+        ephemeral-storage: 2Gi
+  causalCritic:
+    enabled: false
+    # Existing consumer-owned namespace containing private critic Sandboxes.
+    namespace: ""
+    runtimeClassName: ""
+    image:
+      repository: ""
+      digest: ""
+      pullPolicy: IfNotPresent
+    workloadServiceAccount:
+      create: false
+      name: ""
+    modelGateway:
+      # Internal HTTPS gateway only. Direct provider endpoints are rejected.
+      endpoint: ""
+      model: ""
+      protocolVersion: openai-chat-completions-v1
+    timeout: 5m
+    outputLimitBytes: 65536
+    maxPerRun: 1
+    pollInterval: 250ms
+    ledger:
+      # Existing private PVC. The chart does not create or share it with public data.
+      existingClaim: ""
+      mountPath: /private/causal-critic
+    networkPolicy:
+      # Required when enabled. Use cilium on AKS Cilium/Kata, where the
+      # Kubernetes NetworkPolicy service peer does not admit cross-node Kata traffic.
+      mode: kubernetes
+      enabled: false
+      gatewayNamespaceSelector: {}
+      gatewayPodSelector: {}
+      gatewayPort: 443
+      dnsNamespaceSelector:
+        kubernetes.io/metadata.name: kube-system
+      dnsPodSelector:
+        k8s-app: kube-dns
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+        ephemeral-storage: 32Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+        ephemeral-storage: 32Mi
+  rbac:
+    # Creates the namespace-scoped Role/RoleBinding and optionally the client SA.
+    create: true
+    clientServiceAccountName: ""
+
+# Orka Agent integrations are independent from the analysis runtime selector.
+orka:
+  namespace: orka-system
+  # Private experimental Agent analysis runs only after authoritative in-process
+  # publication. It never changes public output, caches, issues, fixes, patterns,
+  # or remediation. Enabling this does not install Orka or create an Agent.
+  agentAnalysisShadow:
+    enabled: false
+    # Orka REST API used to retrieve durable Task results.
+    api: http://orka.orka-system.svc.cluster.local:8080
+    # Declared provenance version. Use versioned Agent names and update this when
+    # the operator-owned Agent contract changes.
+    agentVersion: v1
+    # Existing dedicated ServiceAccount when orka.rbac.create=false.
+    serviceAccountName: ""
+    maxPerRun: 1
+    admission:
+      # Required when enabled. Admission permits only this exact Agent and repo.
+      agentRef: ""
+      repository:
+        owner: ""
+        name: ""
+      # Optional read-only clone Secret already present in orka.namespace.
+      gitSecret: ""
+      maxTurns: 12
+      timeout: 10m
+      retries: 0
+    # Dedicated private PVC mounted only into the worker or fetcher. The server
+    # never mounts this claim. Empty existingClaim creates a release-scoped PVC.
+    ledger:
+      existingClaim: ""
+      retain: true
+      accessMode: ReadWriteOnce
+      size: 1Gi
+      storageClass: ""
+  # Fix generation is separately configured in project.yaml.
+  fixRuntime:
+    # Enables Task RBAC, ServiceAccount token mounts, and the git-capable fixer
+    # image. The Agent and API are configured in project.yaml under
+    # ai.fix_prs.agent_runtime. When source investigation shares the server pod,
+    # the chart delegates a short-lived Pod-bound token for this runtime identity.
+    enabled: false
+    image:
+      repository: ghcr.io/willie-yao/aster/fixer
+      # Defaults to global.imageTag, then .Chart.AppVersion, when empty.
+      tag: ""
+      pullPolicy: IfNotPresent
+    # Required when enabled. These values duplicate the security-sensitive
+    # project.yaml settings so Kubernetes admission can fail closed before an
+    # Orka controller observes the Task.
+    admission:
+      agentRef: ""
+      repository:
+        owner: ""
+        name: ""
+      maxTurns: 30
+      allowBash: true
+      timeout: 10m
+      retries: 1
+  # Disable this when an operator provides the ServiceAccount and Orka Roles.
+  rbac:
+    create: true
+    serviceAccountName: ""
+
+
+# Shared volume holding fetcher output and the AI cache. It must be
+# ReadWriteMany so the CronJob (writer) and the server (reader) can mount it at
+# the same time. Set existingClaim to reuse a pre-provisioned PVC.
+persistence:
+  enabled: true
+  existingClaim: ""
+  # Preserve chart-managed data if the release is removed or switched to a
+  # different existingClaim. Delete retained claims manually after rollback.
+  retain: true
+  accessMode: ReadWriteMany
+  size: 1Gi
+  storageClass: ""
+  # Mount path inside both the fetcher and the server containers.
+  mountPath: /data
+
+# Consumer-owned portable bundle. project.yaml owns project behavior and
+# analysis policy; Helm values own infrastructure, credentials, and execution
+# tuning. Supply project.yaml and prompts/system.md at
+# install time, for example:
+#   helm install ... \
+#     --set-file project.config=project.yaml \
+#     --set-file project.systemPrompt=prompts/system.md
+# Or point at a ConfigMap you created yourself with keys project.yaml and
+# system.md via project.existingConfigMap.
+# Consumer skill recipes: set project.skills to a map of <name>.yaml -> file
+# contents (e.g. --set-file project.skills.myrecipe\.yaml=skills/myrecipe.yaml).
+# Each is mounted at <project_dir>/skills/<name>.yaml so the engine loads it.
+project:
+  existingConfigMap: ""
+  config: ""
+  systemPrompt: ""
+  # Consumer skill recipes: <name>.yaml -> file contents. Mounted under skills/.
+  skills: {}
+  # Mount path the fetcher reads as -project-dir.
+  mountPath: /config
+  # Orka container analysis copies ConfigMap-backed symlinks into an emptyDir
+  # so the strict project bundle loader receives regular files.
+  materializer:
+    image:
+      repository: busybox
+      tag: 1.36.1
+      pullPolicy: IfNotPresent
+
+# AI failure analysis. When enabled the fetcher runs with -ai and needs an
+# OpenAI-compatible endpoint, a model id, and a token. The token lives in a
+# Secret; endpoint and model are passed as env. Set existingSecret to reuse a
+# Secret you manage (it must hold the key named by tokenSecretKey).
+ai:
+  enabled: false
+  api: chat_completions
+  endpoint: ""
+  model: ""
+  # Optional provider reasoning effort. Empty uses the provider default.
+  reasoningEffort: ""
+  # Optional operator-provided total provider context window. Leave 0 to use
+  # /v1/models metadata or the engine's bounded fallback. For the current
+  # Copilot GPT-5 mini deployment, set 128000.
+  contextWindowTokens: 0
+  token: ""
+  existingSecret: ""
+  tokenSecretKey: AI_TOKEN
+  # githubReadToken grounds analysis on the configured ai.source_repo. It is
+  # optional for public repositories, which use anonymous GitHub reads. Prefer
+  # githubReadTokenSecretName in production. When the inline value is used, the
+  # chart creates a dedicated read-token Secret. For compatibility, an empty
+  # secret name with ai.existingSecret reads the key from the AI Secret.
+  githubReadToken: ""
+  githubReadTokenSecretName: ""
+  githubReadTokenSecretKey: GITHUB_READ_TOKEN
+
+fetcher:
+  # Cron schedule for the fetch. Default: every 6 hours. (mode: cron)
+  schedule: "0 */6 * * *"
+  # Forbid overlapping runs so a slow fetch never races itself.
+  concurrencyPolicy: Forbid
+  # Suspend cron-mode starts while retaining the CronJob for manual evaluation.
+  # Keep this true during watch mode for a safe rollback to suspended cron mode.
+  suspend: false
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # CronJob pod restart policy. Empty selects Never for orka-container and
+  # OnFailure for in-process analysis. Task retries belong to Orka.
+  restartPolicy: ""
+  # Job retry limit. -1 uses 0 for orka-container and the Kubernetes default otherwise.
+  backoffLimit: -1
+  # Hard Job deadline in seconds. Set 0 to omit the deadline.
+  activeDeadlineSeconds: 36000
+  # watch mode: how often to refresh data reusing the cached job list, and how
+  # often to rediscover jobs and run a full pass with side effects.
+  watchInterval: 5m
+  reconcileInterval: 1h
+  buildsPerJob: 10
+  workers: 5
+  # Bounds discovery and artifact fetching. Orka container analysis uses its
+  # per-Task timeout across Task waves; cron mode also has activeDeadlineSeconds.
+  timeout: 30m
+  includePresubmits: false
+  # Extra environment variables (e.g. ISSUE_TOKEN, FIX_TOKEN,
+  # EMAIL_SMTP_PASSWORD) sourced from secrets or given inline. In Orka mode the
+  # ingest container receives these after pattern finalization. Standard
+  # core/v1 EnvVar entries.
+  extraEnv: []
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+server:
+  replicaCount: 1
+  # Path to the SPA baked into the image.
+  staticDir: /app/web
+  port: 8080
+  # Extra environment variables for the server container. Standard core/v1
+  # EnvVar entries. Add EMAIL_SMTP_PASSWORD here for async draft-ready emails.
+  # HSTS_ENABLED and COOKIE_INSECURE are reserved by the chart.
+  extraEnv: []
+  security:
+    hsts:
+      # Sends a one-year Strict-Transport-Security policy. Disable only when
+      # serving the chart directly over local HTTP.
+      enabled: true
+  development:
+    # Explicitly acknowledges direct local HTTP serving when HSTS is disabled.
+    # Never enable this on a deployed dashboard.
+    allowInsecureHTTP: false
+    # Allows OAuth cookies over local HTTP. This also acknowledges local HTTP
+    # and must never be enabled on a deployed dashboard.
+    allowInsecureCookies: false
+  # Explicit authenticated read-only causal remediation investigation.
+  # This does not enable File Issue or Fix PR actions.
+  remediationInvestigation:
+    enabled: false
+    timeout: 10m
+    maxOperations: 256
+    fixPreview:
+      # Experimental preview only. Never creates or confirms a GitHub PR.
+      enabled: false
+  # Admin-gated read-only conversations about a published AI analysis.
+  # Uses the authentication settings under actions, but does not enable writes
+  # or require BOT_TOKEN. Sessions are persisted on the shared volume so server
+  # replicas can serve the same conversation.
+  chat:
+    enabled: false
+    # Per-turn model timeout. Slow local models may need 10m or more.
+    # The server accepts values up to 30m.
+    timeout: 2m
+    # Enables explicit review/confirmation of evidence-backed chat revisions.
+    correctionsEnabled: false
+    sourceInvestigation:
+      enabled: false
+      # Keep this distinct from orka.rbac.serviceAccountName when fix actions
+      # share the server pod. The chart grants only exact fix-token minting.
+      serviceAccountName: ""
+      maxPerSession: 8
+      maxActivePerOwner: 1
+      # Required when enabled. Match ai.source_investigation in project.yaml.
+      admission:
+        agentRef: ""
+        repository:
+          owner: ""
+          name: ""
+        gitSecret: ""
+        maxTurns: 30
+        timeout: 10m
+        retries: 1
+    sessionTTL: 2h
+    maxSessions: 128
+    maxSessionsPerOwner: 8
+    maxActiveTurnsPerOwner: 2
+    requestsPerMinute: 10
+  # Admin authentication and write actions: file an issue or draft a fix PR.
+  # The mode, admins, oauth, proxy, and trustedOrigins settings are shared with
+  # chat when server.chat.enabled is true.
+  # Enabling actions mounts the project config and AI secret into the server and
+  # gives it write access to the shared volume (issue/fix-PR dedup state).
+  actions:
+    # enabled turns the write endpoints on. mode selects how admins authenticate.
+    enabled: false
+    # mode: "oauth" (each admin signs in with GitHub) or "proxy" (an upstream
+    # SSO proxy authenticates). BOT_TOKEN performs enabled writes in either mode.
+    mode: oauth
+    # admins is the GitHub login allowlist (case-insensitive).
+    admins: []
+    # trustedOrigins are extra public origins the CSRF guard accepts for write
+    # actions, as full origins ("https://dash.example.net") or bare hosts. Needed
+    # when a reverse proxy (e.g. Azure Front Door) serves the public hostname but
+    # forwards a different Host to the server. In oauth mode the redirect URL's
+    # host is trusted automatically, so this is mainly for proxy mode.
+    trustedOrigins: []
+    # oauth mode settings. clientId is public; clientSecret and sessionKey are
+    # held in a Secret (inline here, or reuse one via existingSecret).
+    oauth:
+      clientId: ""
+      clientSecret: ""
+      # redirectUrl must match the OAuth App's callback, e.g.
+      # https://dashboard.example.com/api/auth/callback
+      redirectUrl: ""
+      # sessionKey seeds the session-cookie encryption; use a long random value.
+      sessionKey: ""
+      # OAuth authenticates the admin with read:user only. When actions are
+      # enabled, this bot token performs GitHub writes. Prefer existingSecret.
+      botToken: ""
+      existingSecret: ""
+    # proxy mode settings.
+    proxy:
+      # header carries the SSO-authenticated user, e.g. X-Auth-Request-Email.
+      header: X-Auth-Request-Email
+      # botToken is the GitHub PAT that performs writes (in a Secret).
+      botToken: ""
+      # secret, when set, is a shared value the proxy must inject in the
+      # X-Proxy-Secret header; the backend rejects requests without it. An
+      # existingSecret may provide AUTH_PROXY_SECRET as an optional key. This
+      # defends against a client reaching the server directly and spoofing the
+      # identity header if network isolation is imperfect. Held in a Secret.
+      secret: ""
+      existingSecret: ""
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  service:
+    type: ClusterIP
+    port: 80
+    # Optional client source ranges for a LoadBalancer Service. These are
+    # rendered as spec.loadBalancerSourceRanges.
+    loadBalancerSourceRanges: []
+    # Optional for LoadBalancer or NodePort. Kubernetes accepts Cluster or Local.
+    externalTrafficPolicy: ""
+    # Explicit private LoadBalancer configuration. Provider-specific annotations
+    # are merged into annotations only when enabled. Example for Azure:
+    #   annotations:
+    #     service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+    internal:
+      enabled: false
+      annotations: {}
+    # A public LoadBalancer with authenticated actions or chat must either set
+    # source ranges, use internal.enabled, or explicitly acknowledge the risk.
+    # Acknowledgement does not prove that the origin is unreachable directly.
+    publicOriginAcknowledged: false
+    # General Service annotations. They are passed through but are not treated
+    # as verified origin restrictions by chart validation.
+    annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: dashboard.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# NetworkPolicy restricting ingress to the server pod. Strongly recommended with
+# authenticated actions. Ingress contains complete networking.k8s.io/v1
+# NetworkPolicy ingress rules; an empty list denies all ingress.
+networkPolicy:
+  enabled: false
+  # Example allowing an ingress controller to the server container port:
+  #   - from:
+  #       - namespaceSelector:
+  #           matchLabels:
+  #             kubernetes.io/metadata.name: ingress-nginx
+  #     ports:
+  #       - protocol: TCP
+  #         port: 8080
+  ingress: []
+
+# Applied to both the fetcher and server pods. The numeric UID/GID match the
+# distroless nonroot user; fsGroup makes the shared volume group-writable so the
+# non-root fetcher can write to a freshly provisioned PVC.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
