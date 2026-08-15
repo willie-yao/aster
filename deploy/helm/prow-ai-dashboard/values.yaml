@@ -130,6 +130,13 @@ agentSandbox:
         tokenKey: ""
       # Gateway-only trust acknowledgement for a privately resolved public FQDN.
       publicCAPrivateDNS: false
+    # Optional public CA certificates for a private-CA model-provider gateway.
+    # The exact ConfigMap entry is mounted only into Fix executor Sandboxes.
+    caBundle:
+      existingConfigMap: ""
+      key: ""
+      # Lowercase SHA-256 of the exact ConfigMap data value.
+      sha256: ""
     # These duplicate project.yaml security bounds and must match exactly.
     maxSteps: 30
     maxFiles: 3

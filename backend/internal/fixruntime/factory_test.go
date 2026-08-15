@@ -140,6 +140,10 @@ func TestNewAgentSandboxSelectionRequiresIsolatedConfiguration(t *testing.T) {
 	provider.ReasoningEffort = modelprovider.ReasoningEffortHigh
 	secret := ProviderSecretRef{Name: "agent-sandbox-model", Key: "AI_TOKEN"}
 	setAgentSandboxProviderEnv(t, "AGENT_SANDBOX_", provider, secret, "10m")
+	caBundle := testCABundleConfig()
+	t.Setenv("AGENT_SANDBOX_MODEL_PROVIDER_CA_CONFIG_MAP", caBundle.ExistingConfigMap)
+	t.Setenv("AGENT_SANDBOX_MODEL_PROVIDER_CA_KEY", caBundle.Key)
+	t.Setenv("AGENT_SANDBOX_MODEL_PROVIDER_CA_SHA256", caBundle.SHA256)
 	got, err := New(&project.FixAgentRuntime{
 		Type: "agent-sandbox", Timeout: "10m", OutputLimitBytes: 131072,
 		ModelProvider: project.FixModelProvider{
@@ -154,7 +158,7 @@ func TestNewAgentSandboxSelectionRequiresIsolatedConfiguration(t *testing.T) {
 	if !ok {
 		t.Fatalf("runtime = %T, want AgentSandboxRuntime", got)
 	}
-	if runtime.opts.appArmorCapability != appArmorRuntimeDefault || runtime.opts.ProviderSecretRef != secret {
+	if runtime.opts.appArmorCapability != appArmorRuntimeDefault || runtime.opts.ProviderSecretRef != secret || runtime.opts.CABundle != caBundle {
 		t.Fatalf("production options = %+v", runtime.opts)
 	}
 }
@@ -174,12 +178,18 @@ func TestAgentSandboxProviderRunnerFromEnvIncludesStagerConfiguration(t *testing
 	t.Setenv(prefix+"STAGER_IMAGE", "registry.example.test/stager@sha256:"+strings.Repeat("b", 64))
 	t.Setenv(prefix+"STAGER_INPUT_CLAIM", "analysis-input")
 	t.Setenv(prefix+"SERVICE_ACCOUNT", "analysis-workload")
+	t.Setenv(prefix+"MODEL_PROVIDER_CA_CONFIG_MAP", "must-be-ignored")
+	t.Setenv(prefix+"MODEL_PROVIDER_CA_KEY", "ca.pem")
+	t.Setenv(prefix+"MODEL_PROVIDER_CA_SHA256", strings.Repeat("a", 64))
 	runtime, err := NewAgentSandboxProviderRunnerFromEnv(prefix, provider, time.Minute, 131072)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if runtime.opts.StagerImage != "registry.example.test/stager@sha256:"+strings.Repeat("b", 64) || runtime.opts.StagerInputClaim != "analysis-input" || runtime.opts.ModelProvider.ReasoningEffort != modelprovider.ReasoningEffortHigh {
 		t.Fatalf("stager options = %q %q", runtime.opts.StagerImage, runtime.opts.StagerInputClaim)
+	}
+	if runtime.opts.CABundle != (modelprovider.CABundleConfig{}) {
+		t.Fatalf("analyzer unexpectedly inherited Fix CA bundle = %+v", runtime.opts.CABundle)
 	}
 }
 

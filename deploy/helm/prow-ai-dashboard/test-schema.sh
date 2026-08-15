@@ -474,6 +474,26 @@ agentSandbox:
 VALUES
 expect_fail invalid-agent-sandbox-dashboard-pull "$tmp/invalid-agent-sandbox-dashboard-pull.yaml" /agentSandbox/fixRuntime/dashboardImage/pullPolicy
 
+cat > "$tmp/invalid-agent-sandbox-ca-hash.yaml" <<'VALUES'
+agentSandbox:
+  fixRuntime:
+    caBundle:
+      existingConfigMap: model-provider-ca
+      key: ca-bundle.pem
+      sha256: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+VALUES
+expect_fail invalid-agent-sandbox-ca-hash "$tmp/invalid-agent-sandbox-ca-hash.yaml" /agentSandbox/fixRuntime/caBundle/sha256
+
+cat > "$tmp/agent-sandbox-ca.yaml" <<'VALUES'
+agentSandbox:
+  fixRuntime:
+    caBundle:
+      existingConfigMap: model-provider-ca
+      key: ca-bundle.pem
+      sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+VALUES
+expect_pass agent-sandbox-ca "$tmp/agent-sandbox-ca.yaml"
+
 cat > "$tmp/invalid-agent-sandbox-analyzer-pull.yaml" <<'VALUES'
 agentSandbox:
   analyzer:

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/willie-yao/prow-ai-dashboard/backend/internal/fixexecutor"
+	"github.com/willie-yao/prow-ai-dashboard/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/prow-ai-dashboard/backend/internal/runtime"
 )
 
@@ -25,6 +26,13 @@ func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		fmt.Println(versionString())
 		return
+	}
+	if err := modelprovider.ValidateProcessCABundleEnvironment(); err != nil {
+		emit(engineruntime.ExecutionResult{
+			Version: engineruntime.ExecutionContractVersion, Files: map[string]string{},
+			TerminalState: engineruntime.TerminalFailed, FailureReason: err.Error(),
+		})
+		os.Exit(1)
 	}
 	request, err := readRequest()
 	if err != nil {

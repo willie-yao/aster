@@ -482,6 +482,29 @@
               ],
               "additionalProperties": false
             },
+            "caBundle": {
+              "type": "object",
+              "properties": {
+                "existingConfigMap": {
+                  "type": "string",
+                  "maxLength": 253
+                },
+                "key": {
+                  "type": "string",
+                  "maxLength": 253
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^$|^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "existingConfigMap",
+                "key",
+                "sha256"
+              ],
+              "additionalProperties": false
+            },
             "maxSteps": {
               "type": "integer",
               "minimum": 1,
@@ -593,6 +616,7 @@
             "dashboardImage",
             "workloadServiceAccount",
             "modelProvider",
+            "caBundle",
             "maxSteps",
             "maxFiles",
             "timeout",
