@@ -4,7 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import os
+import pathlib
+import subprocess
 import sys
+import tempfile
 
 
 CLASSES = (
@@ -27,6 +31,45 @@ def under(path: str, prefix: str) -> bool:
 
 def under_any(path: str, prefixes: tuple[str, ...]) -> bool:
     return any(under(path, prefix) for prefix in prefixes)
+
+
+def documentation_path(path: str) -> bool:
+    return (
+        under(path, "docs")
+        or path.endswith("/README.md")
+        or path
+        in {
+            ".gitignore",
+            ".gitattributes",
+            "CODE_OF_CONDUCT",
+            "CODE_OF_CONDUCT.md",
+            "CONTRIBUTING.md",
+            "LICENSE",
+            "README.md",
+            "SECURITY.md",
+        }
+    )
+
+
+def changed_paths(
+    base: str, head: str, *, merge_base: bool, repository: pathlib.Path
+) -> list[str]:
+    if merge_base:
+        base = subprocess.run(
+            ["git", "merge-base", base, head],
+            cwd=repository,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+
+    output = subprocess.run(
+        ["git", "diff", "--no-renames", "--name-only", "-z", base, head],
+        cwd=repository,
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout
+    return [path.decode("utf-8") for path in output.split(b"\0") if path]
 
 
 REMOTE_BACKEND_PREFIXES = (
@@ -170,21 +213,7 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
         if not path:
             continue
 
-        if (
-            path.endswith(".md")
-            or path.startswith("docs/")
-            or path
-            in {
-                ".gitignore",
-                ".gitattributes",
-                "CODE_OF_CONDUCT",
-                "CODE_OF_CONDUCT.md",
-                "CONTRIBUTING.md",
-                "LICENSE",
-                "README.md",
-                "SECURITY.md",
-            }
-        ):
+        if documentation_path(path):
             result["documentation"] = True
             if path != "AGENTS.md":
                 continue
@@ -262,6 +291,7 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
 
         if under(path, "frontend"):
             result["frontend"] = True
+            result["remote_fixer"] = True
             matched = True
 
         if under(path, "configs"):
@@ -324,7 +354,21 @@ def emit(result: dict[str, bool]) -> None:
 def self_test() -> None:
     scenarios = (
         ("documentation", ["README.md"], {"documentation"}),
-        ("frontend", ["frontend/src/App.tsx"], {"frontend"}),
+        (
+            "frontend",
+            ["frontend/src/App.tsx"],
+            {"frontend", "remote_fixer"},
+        ),
+        (
+            "embedded analysis skill",
+            ["backend/internal/agentanalysis/skill/failure-analysis.md"],
+            {"backend", "remote_fixer", "analysis_images", "critic_image"},
+        ),
+        (
+            "embedded prompt-author skill",
+            ["backend/internal/onboard/promptauthor/skill/system-prompt-generation.md"],
+            {"backend", "helm_static", "remote_fixer"},
+        ),
         (
             "platform",
             ["deploy/helm/aster-platform/values.yaml"],
@@ -370,13 +414,75 @@ def self_test() -> None:
     ):
         raise AssertionError("forced full CI did not enable every class")
 
-    print(f"{len(scenarios) + 1} classification scenarios passed")
+    with tempfile.TemporaryDirectory(prefix="aster-ci-classifier-") as tmp:
+        repository = pathlib.Path(tmp)
+
+        def git(*args: str) -> str:
+            return subprocess.run(
+                ["git", *args],
+                cwd=repository,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            ).stdout.strip()
+
+        def write(path: str, content: str) -> None:
+            target = repository / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+
+        git("init", "-q")
+        git("config", "user.name", "CI Classifier")
+        git("config", "user.email", "ci-classifier@example.test")
+        write("backend/internal/server/server.go", "package server\n")
+        git("add", ".")
+        git("commit", "--no-gpg-sign", "-qm", "base")
+        common = git("rev-parse", "HEAD")
+
+        git("switch", "-qc", "feature")
+        (repository / "docs").mkdir()
+        os.rename(
+            repository / "backend/internal/server/server.go",
+            repository / "docs/archived-server.md",
+        )
+        git("add", "-A")
+        git("commit", "--no-gpg-sign", "-qm", "move backend source into docs")
+        feature_head = git("rev-parse", "HEAD")
+
+        git("switch", "-q", "--detach", common)
+        write("frontend/src/unrelated.ts", "export {}\n")
+        git("add", ".")
+        git("commit", "--no-gpg-sign", "-qm", "advance base")
+        advanced_base = git("rev-parse", "HEAD")
+
+        paths = changed_paths(
+            advanced_base, feature_head, merge_base=True, repository=repository
+        )
+        expected_paths = {
+            "backend/internal/server/server.go",
+            "docs/archived-server.md",
+        }
+        if set(paths) != expected_paths:
+            raise AssertionError(
+                f"rename/merge-base: expected {sorted(expected_paths)}, got {sorted(paths)}"
+            )
+        actual = {key for key, enabled in classify(paths).items() if enabled}
+        expected = {"backend", "remote_fixer", "documentation"}
+        if actual != expected:
+            raise AssertionError(
+                f"rename/merge-base: expected {sorted(expected)}, got {sorted(actual)}"
+            )
+
+    print(f"{len(scenarios) + 2} classification scenarios passed")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--full", action="store_true", help="enable every CI class")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--diff-base")
+    parser.add_argument("--diff-head")
+    parser.add_argument("--merge-base", action="store_true")
     parser.add_argument("paths", nargs="*")
     args = parser.parse_args()
 
@@ -384,7 +490,21 @@ def main() -> int:
         self_test()
         return 0
 
-    emit(classify(args.paths, force_full=args.full))
+    if bool(args.diff_base) != bool(args.diff_head):
+        parser.error("--diff-base and --diff-head must be provided together")
+
+    paths = list(args.paths)
+    if args.diff_base:
+        paths.extend(
+            changed_paths(
+                args.diff_base,
+                args.diff_head,
+                merge_base=args.merge_base,
+                repository=pathlib.Path.cwd(),
+            )
+        )
+
+    emit(classify(paths, force_full=args.full))
     return 0
 
 

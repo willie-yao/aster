@@ -55,9 +55,11 @@ jobs:
           if [[ "$EVENT_NAME" == workflow_call || "$FULL_CI" == true ]]; then
             args+=(--full)
           else
+            merge_base=false
             case "$EVENT_NAME" in
               pull_request)
                 base="$BASE_SHA"
+                merge_base=true
                 ;;
               push)
                 base="$BEFORE_SHA"
@@ -75,8 +77,10 @@ jobs:
               if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
                 args+=(--full)
               else
-                mapfile -d '' changed_files < <(git diff --name-only -z "$base" "$HEAD_SHA")
-                args+=("${changed_files[@]}")
+                args+=(--diff-base "$base" --diff-head "$HEAD_SHA")
+                if [[ "$merge_base" == true ]]; then
+                  args+=(--merge-base)
+                fi
               fi
             fi
           fi
