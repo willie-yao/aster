@@ -1,5 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
   <title id="title">Aster</title>
+  <desc id="desc">A stylized A and forward-facing prow surrounding a central star.</desc>
   <rect x="2" y="2" width="60" height="60" rx="16" fill="#121826" />
   <rect x="2.5" y="2.5" width="59" height="59" rx="15.5" fill="none" stroke="#3a465e" />
   <g transform="translate(10.4 10.4) scale(1.8)" color="#6d8bff">
