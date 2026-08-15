@@ -1,0 +1,313 @@
+{
+  "version": 3,
+  "cases": [
+    {
+      "id": "secrets-store-csi-image-scan",
+      "stable_id": "05f00f504eb6bc584b82",
+      "bucket": "kubernetes-ci-logs",
+      "fixture_asset": "secrets-store-csi-image-scan-2085268778555281408.tar.gz",
+      "fixture_sha256": "8a2a713a7ca73ef38c7c03b08a6a97fd71dbeb36c04561da67ea43b81b6ef9cf",
+      "job_type": "periodic",
+      "job_name": "periodic-secrets-store-csi-driver-image-scan",
+      "build_id": "2085268778555281408",
+      "web_url": "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/periodic-secrets-store-csi-driver-image-scan/2085268778555281408/",
+      "commit": "267a6145f401911c1e13a6b3f68b4d47c7c645f7",
+      "repo_version": "267a6145f401911c1e13a6b3f68b4d47c7c645f7",
+      "repo_refs": {
+        "kubernetes-sigs/secrets-store-csi-driver": "267a6145f401911c1e13a6b3f68b4d47c7c645f7"
+      },
+      "source_owner": "kubernetes-sigs",
+      "source_name": "secrets-store-csi-driver",
+      "test_name": "Prow job execution",
+      "test_source": "build",
+      "failure_message": "Trivy image scan found fixable vulnerabilities and make image-scan exited with Error 1.",
+      "opposite_diagnosis": "Trivy found four fixable vulnerabilities and the --exit-code 1 security gate fired, but temporary scanner database state caused the failure.",
+      "signals": [
+        {
+          "name": "identifies Trivy security scan",
+          "pattern": "(?i)trivy",
+          "must": true
+        },
+        {
+          "name": "identifies four fixable vulnerabilities",
+          "pattern": "(?i)(?:total:\\s*4|(?:4|four).{0,80}(?:fixable|vulnerabilit))",
+          "must": true
+        },
+        {
+          "name": "identifies the gating exit",
+          "pattern": "(?is)(?:--exit-code\\s+1|exit(?:ed)?\\s+(?:with\\s+)?(?:code\\s+)?1|gating scan|(?:intentionally\\s+)?fails?.{0,100}image-scan|image-scan.{0,100}(?:fails?|error 1))",
+          "must": true
+        },
+        {
+          "name": "names dependency or toolchain remediation",
+          "pattern": "(?i)(?:golang\\.org/x/text|google\\.golang\\.org/grpc|go\\s+1\\.26\\.5)"
+        }
+      ],
+      "consumer_commit": "cf63e830080f203fbda95a3077c5e02da55fb6f1",
+      "project_sha256": "10873d2458089155433d834f70d836166dc940c9e61c174fc389a28aed783b5a",
+      "prompt_sha256": "2eb191dd8303bdead6d0465d0ca0ec96a4f55b3553df7b8d6850f7a7c0cd764e",
+      "expected_transient": false,
+      "opposite_is_transient": false,
+      "forbidden": [
+        {
+          "name": "temporary security-scanner attribution",
+          "pattern": "(?is)(?:(?:temporary|transient|one-off).{0,100}(?:scanner|database|trivy).{0,160}(?:caused|root cause|primary|responsible|attributed|due)|(?:caused by|root cause|primary|responsible|attributed to|due to).{0,160}(?:temporary|transient|one-off).{0,100}(?:scanner|database|trivy))",
+          "negated": "(?is)(?:not|isn.t|wasn.t|cannot be|could not be).{0,80}(?:responsible|root cause|primary|attributed|due)"
+        }
+      ],
+      "reference_diagnosis": "At the pinned commit, the driver image is compiled with Go 1.26.4 and includes google.golang.org/grpc v1.81.1 and golang.org/x/text v0.38.0. Trivy reports those exact installed versions as affected by four vulnerabilities with fixes available, and the Makefile intentionally fails the image-scan target when any fixed MEDIUM, HIGH, or CRITICAL finding is present.",
+      "reference_is_transient": false,
+      "evidence_groups": [
+        {
+          "id": "trivy-findings",
+          "paths": [
+            "(?i)(?:^|/)build-log\\.txt$"
+          ],
+          "content": [
+            "(?i)Total:\\s*4\\s*\\(MEDIUM:\\s*1,\\s*HIGH:\\s*3,\\s*CRITICAL:\\s*0\\)"
+          ]
+        },
+        {
+          "id": "security-gate",
+          "paths": [
+            "(?i)(?:^|/)build-log\\.txt$"
+          ],
+          "content": [
+            "(?i)(?:trivy image --exit-code\\s+1|make: \\*\\*\\* \\[Makefile:[0-9]+: image-scan\\] Error 1)"
+          ]
+        }
+      ],
+      "evidence_mode": "artifact_only"
+    },
+    {
+      "id": "kueue-was-podgroup-api-mismatch",
+      "stable_id": "291074626e3efd8eeea5",
+      "bucket": "kubernetes-ci-logs",
+      "fixture_asset": "kueue-was-release-0-18-2085222735172079616.tar.gz",
+      "fixture_sha256": "1ba89d5b35ec46fd4931645be1301aca656f015d9717af0e444e48e608914b9a",
+      "job_type": "periodic",
+      "job_name": "periodic-kueue-test-e2e-k8s-release-0-18-was",
+      "build_id": "2085222735172079616",
+      "web_url": "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/periodic-kueue-test-e2e-k8s-release-0-18-was/2085222735172079616/",
+      "commit": "429fa288e738edd7e6f5638d71a40560c25f1906",
+      "repo_version": "429fa288e738edd7e6f5638d71a40560c25f1906",
+      "repo_refs": {
+        "kubernetes-sigs/kueue": "429fa288e738edd7e6f5638d71a40560c25f1906"
+      },
+      "source_owner": "kubernetes-sigs",
+      "source_name": "kueue",
+      "test_name": "Prow job execution",
+      "test_source": "build",
+      "failure_message": "error: timed out waiting for the condition on deployments/kubeflow-trainer-controller-manager; make run-test-e2e-k8s-main-was failed.",
+      "opposite_diagnosis": "The scheduler requested v1beta1 while the cluster served v1alpha3; PodGroup returned 404 and the handler failed to sync, but the API mismatch was incidental and a one-off image-pull delay caused the timeout.",
+      "signals": [
+        {
+          "name": "identifies PodGroup API",
+          "pattern": "(?i)podgroup",
+          "must": true
+        },
+        {
+          "name": "identifies requested and served version mismatch",
+          "pattern": "(?is)(?:(?:serves?|served|configured|provided).{0,100}v1alpha3.{0,260}(?:scheduler|informer|request(?:ed|ing)?|attempt(?:ed|ing)?).{0,120}v1beta1|v1beta1.{0,120}(?:scheduler|informer|request(?:ed|ing)?|attempt(?:ed|ing)?).{0,260}(?:serves?|served|configured|provided).{0,100}v1alpha3)",
+          "must": true
+        },
+        {
+          "name": "identifies unavailable PodGroup API response",
+          "pattern": "(?is)(?:API server response (?:for|to) (?:the )?v1beta1(?:\\.PodGroup| PodGroups?|/podgroups) (?:returned|was) (?:404|not[ -]?found|unavailable)|API server returned (?:404|not[ -]?found) (?:when|while) (?:the )?scheduler (?:listed|watched|requested) (?:the )?v1beta1(?:\\.PodGroup| PodGroups?|/podgroups)|scheduler request (?:for|to list|to watch) (?:the )?v1beta1(?:\\.PodGroup| PodGroups?|/podgroups) (?:returned (?:404|not[ -]?found)|was unavailable|failed with 404)|v1beta1(?:\\.PodGroup| PodGroups?|/podgroups) (?:API(?: endpoint| request| response)?|endpoint|request|response) (?:was not served|was unavailable|returned (?:404|not[ -]?found)|failed with 404)|Skipping API scheduling\\.k8s\\.io/v1beta1 because it has no resources|API server returned (?:404|not[ -]?found) for that version)",
+          "must": true
+        },
+        {
+          "name": "traces scheduler synchronization failure",
+          "pattern": "(?is)(?:scheduler.{0,180}(?:sync|handler)|(?:sync|handler).{0,180}scheduler)",
+          "must": true
+        }
+      ],
+      "consumer_commit": "e4257c64fc9c5344b01919488fc76aa3fb0618b7",
+      "project_sha256": "aaec4a9ca30c5c74e5529164b3bfc1e5dfe6b8b51154956aa3b6949529c9d17b",
+      "prompt_sha256": "16b51ec1c39bd7c2b76d5bc33cb360b820ffd3b85d8b40cd0ec7fadc3118e6fc",
+      "expected_transient": false,
+      "opposite_is_transient": false,
+      "forbidden": [
+        {
+          "name": "API mismatch treated as incidental",
+          "pattern": "(?is)(?:api|version).{0,80}mismatch.{0,80}(?:incidental|secondary|unrelated)|(?:incidental|secondary|unrelated).{0,80}(?:api|version).{0,80}mismatch"
+        },
+        {
+          "name": "transient readiness as primary cause",
+          "pattern": "(?is)(?:(?:root cause|primary cause|caused by|caused the timeout).{0,140}(?:transient|one-off|image.{0,40}(?:pull|flake)|readiness flake)|(?:transient|one-off|image.{0,40}(?:pull|flake)|readiness flake).{0,140}(?:root cause|primary cause|caused))"
+        }
+      ],
+      "reference_diagnosis": "The WAS kind configuration at the pinned Kueue revision enables GenericWorkload but explicitly serves scheduling.k8s.io/v1alpha3. The job fetched Kubernetes main v1.37.0-beta.0.568+4f5591ab57b75c, whose scheduler initializes a v1beta1.PodGroup informer. The API server returned 404 for that version, so the scheduler handlers never synchronized, the Kubeflow Trainer pod remained unscheduled, and the deployment wait timed out.",
+      "reference_is_transient": false,
+      "evidence_groups": [
+        {
+          "id": "apiserver-runtime-config",
+          "paths": [
+            "(?i)(?:^|/)build-log\\.txt$",
+            "(?i)kube-apiserver.*\\.log$"
+          ],
+          "content": [
+            "(?i)scheduling\\.k8s\\.io/v1alpha3(?:=true)?"
+          ],
+          "causal": [
+            {
+              "name": "served v1alpha3 configuration is causal",
+              "pattern": "(?is)(?:served|configured|runtime-config).{0,120}scheduling\\.k8s\\.io/v1alpha3|scheduling\\.k8s\\.io/v1alpha3.{0,120}(?:served|configured|runtime-config)",
+              "negated": "(?is)(?:scheduling\\.k8s\\.io/v1alpha3|v1alpha3 configuration|runtime-config).{0,160}(?:not served|not configured|was not served|was not configured|(?:(?:that|the) (?:configuration|setting)|it).{0,60}(?:unrelated|incidental|not causal|did not cause))|(?:unrelated|incidental|not causal|did not cause).{0,100}(?:v1alpha3 configuration|runtime-config)"
+            }
+          ],
+          "oracle_context_lines": 2
+        },
+        {
+          "id": "podgroup-api-response",
+          "paths": [
+            "(?i)(?:kube-scheduler|kube-controller-manager).*\\.log$",
+            "(?i)kube-apiserver.*\\.log$"
+          ],
+          "content": [
+            "(?i)(?:failed to list \\*v1beta1\\.PodGroup.{0,160}(?:could not find the requested resource|forbidden)|Skipping API scheduling\\.k8s\\.io/v1beta1 because it has no resources)",
+            "(?i)URI=\"/apis/scheduling\\.k8s\\.io/v1beta1/podgroups[^\\\"]*\".{0,300}resp=404"
+          ],
+          "causal": [
+            {
+              "name": "rejected v1beta1 PodGroup request is causal",
+              "pattern": "(?is)v1beta1(?:\\.PodGroup| PodGroups?|/podgroups).{0,180}(?:404|not[ -]?found|could not find the requested resource|unavailable)|(?:404|not[ -]?found|could not find the requested resource|unavailable).{0,180}v1beta1(?:\\.PodGroup| PodGroups?|/podgroups)",
+              "negated": "(?is)(?:v1beta1(?:\\.PodGroup| PodGroups?|/podgroups)|PodGroup API|API mismatch|scheduler request).{0,200}(?:not unavailable|did not return 404|was not 404|succeeded|completed successfully|(?:(?:that|the) (?:mismatch|request|response|failure)|it).{0,80}(?:incidental|unrelated|not causal|did not cause|was not causal))|(?:incidental|unrelated|not causal|did not cause|was not causal).{0,100}(?:v1beta1(?:\\.PodGroup| PodGroups?|/podgroups)|PodGroup API|API mismatch|scheduler request)"
+            }
+          ],
+          "oracle_context_lines": 1
+        },
+        {
+          "id": "scheduler-handler-readiness",
+          "paths": [
+            "(?i)kube-scheduler.*\\.log$"
+          ],
+          "content": [
+            "(?i)(?:sched-handler-sync|handlers are not fully synchronized|readyz.{0,80}(?:500|failed))"
+          ],
+          "causal": [
+            {
+              "name": "scheduler handler synchronization failure is causal",
+              "pattern": "(?is)(?:sched-handler-sync.{0,80}(?:failed|not fully synchronized)|handlers? (?:are|were) not fully synchronized|scheduler.{0,180}(?:failed|unable|never).{0,120}(?:sync|handler)|(?:sync|handler).{0,180}(?:failure|failed).{0,120}scheduler)",
+              "negated": "(?is)(?:scheduler handlers?|sched-handler-sync|handler synchronization|synchronization failure).{0,200}(?:completed successfully|fully synchronized|(?:(?:that|the) (?:condition|failure|synchronization)|it).{0,80}(?:not causal|did not cause|was not causal|incidental|unrelated))|(?:not causal|did not cause|was not causal|incidental|unrelated).{0,100}(?:scheduler handlers?|sched-handler-sync|handler synchronization|synchronization failure)"
+            }
+          ],
+          "oracle_context_lines": 1
+        },
+        {
+          "id": "terminal-deployment-timeout",
+          "paths": [
+            "(?i)(?:^|/)build-log\\.txt$"
+          ],
+          "content": [
+            "(?i)timed out waiting for the condition on deployments/kubeflow-trainer-controller-manager"
+          ],
+          "oracle_context_lines": 1
+        },
+        {
+          "id": "competing-readiness-noise",
+          "paths": [
+            "(?i)(?:^|/)build-log\\.txt$"
+          ],
+          "content": [
+            "(?i)timed out waiting for the condition on nodes/kind-(?:control-plane|worker2?)"
+          ],
+          "oracle_context_lines": 2
+        }
+      ],
+      "oracle_evidence_sha256": "92376ed20f725db6b210eabc538dc77feb15373e3fa59341651cca30c5c6ba9c",
+      "evidence_mode": "artifact_only"
+    },
+    {
+      "id": "gcp-pd-csi-windows-mount-visibility",
+      "stable_id": "3991f0f093df914cd9e0",
+      "bucket": "kubernetes-ci-logs",
+      "fixture_asset": "gcp-pd-csi-windows-snapshot-2085227762318053376.tar.gz",
+      "fixture_sha256": "251cb4f3c9ffb58e5a57b3576167b5dedb1b6bebec116a8375ca7454b3dc1ad3",
+      "job_type": "periodic",
+      "job_name": "ci-gce-pd-csi-driver-latest-k8s-master-windows-2022",
+      "build_id": "2085227762318053376",
+      "web_url": "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/ci-gce-pd-csi-driver-latest-k8s-master-windows-2022/2085227762318053376/",
+      "commit": "542108f6279d571a4e2ab22656091d77b3df4449",
+      "repo_version": "542108f6279d571a4e2ab22656091d77b3df4449",
+      "repo_refs": {
+        "kubernetes-sigs/gcp-compute-persistent-disk-csi-driver": "542108f6279d571a4e2ab22656091d77b3df4449"
+      },
+      "source_owner": "kubernetes-sigs",
+      "source_name": "gcp-compute-persistent-disk-csi-driver",
+      "test_name": "[It] External Storage [Driver: csi-gcepd-sc-windows--pd-volumesnapshotclass] [Testpattern: Dynamic PV (default fs)] provisioning should provision correct filesystem size when restoring snapshot to larger size pvc [Feature:VolumeSnapshotDataSource]",
+      "junit_file": "junit_pdcsi.xml",
+      "failure_message": "[FAILED] Failed to obtain filesystem size of a volume mount: resolved empty volumeID for mountPath \"/mnt/volume1\" at provisioning.go:525.",
+      "opposite_diagnosis": "The Windows mount path was absent and the volume ID was empty. NodePublishVolume did not succeed. The evidence was insufficient to distinguish ownership, but the GCE PD CSI node driver was unquestionably responsible.",
+      "allow_unavailable": true,
+      "signals": [
+        {
+          "name": "identifies missing Windows mount path",
+          "pattern": "(?is)(?:(?:c:\\\\mnt\\\\volume1|/mnt/volume1).{0,180}(?:missing|absent|not exist|could not find|could not resolve|failed to resolve|empty volumeid)|empty volumeid.{0,180}(?:/mnt/volume1|c:\\\\mnt\\\\volume1)|(?:could not|failed to|unable to)\\s+(?:resolve|map)(?:\\s+(?:a|the))?\\s+(?:volumeid|volume id).{0,80}(?:/mnt/volume1|c:\\\\mnt\\\\volume1))",
+          "must": true
+        },
+        {
+          "name": "recognizes NodePublishVolume succeeded",
+          "pattern": "(?is)(?:nodepublishvolume.{0,140}(?:success|succeed|completed)|successfully.{0,80}staged.{0,80}(?:and\\s+)?published|staged and published)",
+          "must": true,
+          "negated": "(?is)nodepublishvolume.{0,100}(?:did not|didn.t|failed|never|not).{0,100}(?:success|succeed|complete)"
+        },
+        {
+          "name": "preserves ownership uncertainty",
+          "pattern": "(?is)(?:(?:cannot|could not|unable to|insufficient evidence|does not|do not).{0,180}(?:distinguish|determine|attribute|prove|establish)|(?:ownership|owner).{0,100}(?:uncertain|ambiguous|unresolved)|(?:component|ownership|owner|boundary).{0,140}(?:is not|was not|remains?)(?: directly)? (?:established|proven|determined|attributed|resolved))",
+          "must": true
+        },
+        {
+          "name": "names plausible Windows mount boundary",
+          "pattern": "(?i)(?:volumemount|kubelet|containerd|hcs|csi.?proxy)"
+        }
+      ],
+      "consumer_commit": "f74fc047a1f6de10eec334207c4e58ce743bdcac",
+      "project_sha256": "77fed959893ab309306faf4dd9e58e56b70d6a45fd4ae40fec915306a080d957",
+      "prompt_sha256": "5009dffcbd676f595e1702ff04c8fb24785cce14220f1624583d45a11cefd581",
+      "expected_transient": false,
+      "opposite_is_transient": false,
+      "forbidden": [
+        {
+          "name": "unsupported component ownership",
+          "pattern": "(?is)(?:(?:definitively|conclusively|unquestionably|solely|clearly).{0,180}(?:node driver|gce pd|csi.?proxy|test helper)|(?:node driver|gce pd|csi.?proxy|test helper).{0,180}(?:definitively|conclusively|unquestionably|solely|clearly|responsible|confirmed root cause))",
+          "negated": "(?is)(?:not|isn.t|wasn.t).{0,40}(?:definitively|conclusively|unquestionably|solely|clearly|responsible)"
+        }
+      ],
+      "reference_diagnosis": "At the pinned driver source, the GCE test-selection code handles Windows by excluding only tests labeled LinuxOnly; unlike the GKE version guard, it does not exclude the snapshot restore filesystem-size case, so that upstream VolumeSnapshotDataSource test runs on Windows. In the artifacts, the GCE PD CSI driver successfully staged and published each NTFS volume and each target pod became Running and Ready, but /mnt/volume1 was absent inside the Windows container. The failure repeated in two filesystem-size snapshot variants. The combined source and artifact evidence does not distinguish an incorrect or missing test volumeMount from kubelet/containerd/HCS failing to expose a valid host target, or CSI-proxy reporting symlink creation success without a usable target.",
+      "reference_is_transient": false,
+      "evidence_groups": [
+        {
+          "id": "windows-mount-missing",
+          "paths": [
+            "(?i)(?:^|/)build-log\\.txt$",
+            "(?i)(?:^|/)junit[^/]*\\.xml$"
+          ],
+          "content": [
+            "(?i)(?:Could not find item C:\\\\mnt\\\\volume1|resolved empty volumeID for mountPath)"
+          ]
+        },
+        {
+          "id": "node-publish-success",
+          "paths": [
+            "(?i)pd-csi-driver/[^/]*gce-pd-driver\\.log$"
+          ],
+          "content": [
+            "(?i)NodePublishVolume succeeded on volume"
+          ]
+        }
+      ],
+      "evidence_mode": "artifact_and_source",
+      "source_paths": [
+        "test/k8s-integration/main.go"
+      ],
+      "source_signals": [
+        {
+          "name": "identifies Windows snapshot test selection gap",
+          "pattern": "(?is)(?:(?:GCE|Windows).{0,100}(?:skip|filter|selection).{0,180}(?:only|just).{0,80}(?:\\\\?\\[?LinuxOnly\\\\?\\]?|LinuxOnly)|(?:\\\\?\\[?LinuxOnly\\\\?\\]?|LinuxOnly).{0,180}(?:only|just).{0,100}(?:GCE|Windows)).{0,280}(?:snapshot|filesystem.?size|VolumeSnapshotDataSource)",
+          "must": true
+        }
+      ]
+    }
+  ]
+}

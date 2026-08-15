@@ -1,0 +1,72 @@
+{{- include "aster.validateFixRuntime" . -}}
+{{- include "aster.validateAnalysisRuntime" . -}}
+{{- include "aster.validateAI" . -}}
+{{- $fixServiceAccount := include "aster.orkaServiceAccountName" . -}}
+{{- $sourceServiceAccount := include "aster.orkaSourceServiceAccountName" . -}}
+{{- if and .Values.orka.fixRuntime.enabled .Values.orka.rbac.create }}
+# Fix generation keeps its own Task-only Role.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "aster.orkaRBACName" . }}
+  namespace: {{ .Values.orka.namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orka-fix-runtime
+rules:
+  - apiGroups: ["core.orka.ai"]
+    resources: ["tasks"]
+    verbs: ["create", "get", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "aster.orkaRBACName" . }}
+  namespace: {{ .Values.orka.namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orka-fix-runtime
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fixServiceAccount }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "aster.orkaRBACName" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- if and .Values.server.chat.sourceInvestigation.enabled .Values.server.actions.enabled (ne $sourceServiceAccount $fixServiceAccount) }}
+---
+# The source-facing server can mint only a short-lived, Pod-bound token for the
+# exact fix ServiceAccount. It receives no direct fix Task permission.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "aster.orkaFixTokenRBACName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orka-fix-token
+rules:
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    resourceNames: [{{ $fixServiceAccount | quote }}]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "aster.orkaFixTokenRBACName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orka-fix-token
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sourceServiceAccount }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "aster.orkaFixTokenRBACName" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}

@@ -1,0 +1,142 @@
+{{- if .Values.modelGateway.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "aster-platform.gatewayName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aster-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-gateway
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aster-platform.gatewayName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aster-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-gateway
+  annotations:
+    prow-ai-dashboard/model-gateway-host: {{ .Values.modelGateway.publicHost | quote }}
+    prow-ai-dashboard/model-gateway-tls-secret: {{ .Values.modelGateway.tls.existingSecret | quote }}
+    prow-ai-dashboard/model-gateway-default-deny-policy: {{ printf "%s-default-deny" (include "aster-platform.gatewayName" .) | quote }}
+    prow-ai-dashboard/model-gateway-cilium-policy: {{ include "aster-platform.gatewayName" . | quote }}
+    prow-ai-dashboard/model-gateway-policy-sha256: {{ include "aster-platform.gatewayPolicyHash" . | quote }}
+    prow-ai-dashboard/model-gateway-execution-namespace: {{ .Values.execution.namespace | quote }}
+    prow-ai-dashboard/model-gateway-upstream-host: {{ .Values.modelGateway.upstreamHost | quote }}
+    prow-ai-dashboard/model-gateway-target-port: {{ .Values.modelGateway.service.targetPort | quote }}
+spec:
+  replicas: {{ .Values.modelGateway.replicas }}
+  selector:
+    matchLabels:
+      {{- include "aster-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: model-gateway
+  template:
+    metadata:
+      labels:
+        {{- include "aster-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/part-of: prow-ai-dashboard-platform
+        app.kubernetes.io/component: model-gateway
+      annotations:
+        prow-ai-dashboard/model-gateway-host: {{ .Values.modelGateway.publicHost | quote }}
+    spec:
+      serviceAccountName: {{ include "aster-platform.gatewayName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "aster-platform.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: model-gateway
+      containers:
+        - name: gateway
+          image: {{ include "aster-platform.gatewayImage" . }}
+          imagePullPolicy: {{ .Values.modelGateway.image.pullPolicy }}
+          ports:
+            - name: https
+              containerPort: {{ .Values.modelGateway.service.targetPort }}
+          env:
+            - name: AI_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.modelGateway.providerAuth.existingSecret }}
+                  key: {{ .Values.modelGateway.providerAuth.tokenKey }}
+            - name: UPSTREAM_URL
+              value: {{ .Values.modelGateway.upstreamURL | quote }}
+            - name: TLS_CERT_FILE
+              value: /tls/tls.crt
+            - name: TLS_KEY_FILE
+              value: /tls/tls.key
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            {{- toYaml .Values.modelGateway.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          volumeMounts:
+            - name: certificates
+              mountPath: /tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: certificates
+          secret:
+            secretName: {{ .Values.modelGateway.tls.existingSecret }}
+            defaultMode: 0440
+        - name: tmp
+          emptyDir:
+            sizeLimit: 32Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aster-platform.gatewayName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aster-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-gateway
+  annotations:
+    prow-ai-dashboard/model-gateway-host: {{ .Values.modelGateway.publicHost | quote }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "aster-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: model-gateway
+  ports:
+    - name: https
+      port: {{ .Values.modelGateway.service.port }}
+      targetPort: https
+{{- end }}

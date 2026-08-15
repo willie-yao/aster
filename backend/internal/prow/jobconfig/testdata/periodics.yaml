@@ -1,0 +1,63 @@
+periodics:
+- name: periodic-cluster-api-provider-azure-conformance-main
+  cluster: eks-prow-build-cluster
+  decorate: true
+  decoration_config:
+    timeout: 4h
+  minimum_interval: 48h
+  extra_refs:
+    - org: kubernetes-sigs
+      repo: cluster-api-provider-azure
+      base_ref: main
+      path_alias: "sigs.k8s.io/cluster-api-provider-azure"
+  spec:
+    containers:
+      - image: gcr.io/k8s-staging-test-infra/kubekins-e2e:latest
+  annotations:
+    testgrid-dashboards: sig-cluster-lifecycle-cluster-api-provider-azure
+    testgrid-tab-name: capz-periodic-conformance-main
+    testgrid-alert-email: k8s-infra-staging-cluster-api-azure@kubernetes.io
+    description: Runs conformance & node conformance tests on a CAPZ cluster
+
+- name: periodic-cluster-api-provider-azure-e2e-main
+  cluster: eks-prow-build-cluster
+  decorate: true
+  decoration_config:
+    timeout: 3h
+  minimum_interval: 24h
+  extra_refs:
+    - org: kubernetes-sigs
+      repo: cluster-api-provider-azure
+      base_ref: main
+      path_alias: "sigs.k8s.io/cluster-api-provider-azure"
+  spec:
+    containers:
+      - image: gcr.io/k8s-staging-test-infra/kubekins-e2e:latest
+  annotations:
+    testgrid-dashboards: sig-cluster-lifecycle-cluster-api-provider-azure
+    testgrid-tab-name: capz-periodic-e2e-main
+    description: Runs CAPZ e2e tests against the main branch
+
+- name: periodic-cluster-api-provider-azure-coverage-main
+  cluster: eks-prow-build-cluster
+  decorate: true
+  decoration_config:
+    timeout: 2h
+  minimum_interval: 72h
+  extra_refs:
+    - org: kubernetes-sigs
+      repo: cluster-api-provider-azure
+      base_ref: main
+  annotations:
+    testgrid-dashboards: sig-cluster-lifecycle-cluster-api-provider-azure
+    testgrid-tab-name: capz-periodic-coverage-main
+    description: Runs code coverage for CAPZ
+
+- name: periodic-some-other-sig-job
+  decorate: true
+  decoration_config:
+    timeout: 1h
+  annotations:
+    testgrid-dashboards: sig-some-other-dashboard
+    testgrid-tab-name: other-tab
+    description: This should be skipped

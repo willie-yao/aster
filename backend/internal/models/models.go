@@ -1,0 +1,591 @@
+// Package models defines shared data types for the Prow AI dashboard.
+package models
+
+import (
+	"encoding/base64"
+	"time"
+)
+
+// JobType identifies how a Prow job is triggered, which also determines
+// where its build artifacts live in the GCS bucket.
+const (
+	JobTypePeriodic  = "periodic"
+	JobTypePresubmit = "presubmit"
+)
+
+// ProwJob represents a Prow job definition.
+type ProwJob struct {
+	Name            string `json:"name" yaml:"name"`
+	TabName         string `json:"tab_name"`
+	Category        string `json:"category"`
+	Branch          string `json:"branch"`
+	Description     string `json:"description"`
+	MinimumInterval string `json:"minimum_interval" yaml:"minimum_interval"`
+	Timeout         string `json:"timeout"`
+	ConfigFile      string `json:"config_file"`
+	// JobType is "periodic" or "presubmit".
+	JobType string `json:"job_type"`
+	// Repo is the "org/repo" the job runs against. Populated for presubmits
+	// from the YAML map key; empty for periodics.
+	Repo string `json:"repo"`
+	// JobID uniquely distinguishes same-named jobs across repos or job types.
+	// The frontend uses it for routing and file fetches; cache loaders use it as
+	// a map key.
+	JobID string `json:"job_id"`
+}
+
+// JobIDFor builds a stable per-job identifier. Periodics use the bare name
+// because Prow periodics are unique. Presubmits use
+// "<repo>/<name>" so same-named jobs do not collide downstream.
+func JobIDFor(jobType, repo, name string) string {
+	if jobType == JobTypePresubmit {
+		return repo + "/" + name
+	}
+	return name
+}
+
+// JobDataFilename returns the injective, URL-safe filename for one JobID.
+func JobDataFilename(jobID string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(jobID)) + ".json"
+}
+
+// BuildInfo represents metadata for a single prow build.
+type BuildInfo struct {
+	BuildID         string    `json:"build_id"`
+	JobName         string    `json:"job_name"`
+	Started         time.Time `json:"started"`
+	Finished        time.Time `json:"finished"`
+	Passed          bool      `json:"passed"`
+	Result          string    `json:"result"`
+	DurationSeconds float64   `json:"duration_seconds"`
+	// Commit is the decorated checkout commit. For presubmits it may be a
+	// synthetic merge commit rather than the pull request head.
+	Commit      string `json:"commit"`
+	Revision    string `json:"revision,omitempty"`
+	RepoVersion string `json:"repo_version,omitempty"`
+	// RepoRefs preserves started.json's repository revision strings.
+	RepoRefs    map[string]string `json:"repo_refs,omitempty"`
+	ProwURL     string            `json:"prow_url"`
+	BuildLogURL string            `json:"build_log_url"`
+	// JUnitURLs lists every junit*.xml under the build's artifacts/ dir,
+	// discovered at fetch time. Empty when discovery failed or the build
+	// has no junit output. Stable ordering keeps cache reuse deterministic.
+	JUnitURLs     []string `json:"junit_urls,omitempty"`
+	JUnitComplete bool     `json:"junit_complete"`
+	// JUnitTruncated means discovery hit the stable object cap. The partial
+	// result is cacheable but remains unusable as complete verification evidence.
+	JUnitTruncated bool `json:"junit_truncated,omitempty"`
+	// PullNumber is the PR number that triggered this build for presubmits.
+	// Empty for periodics. Required for reconstructing presubmit GCS paths
+	// from cached BuildResults without reparsing the job config.
+	PullNumber string `json:"pull_number,omitempty"`
+	// WebURL is the human-clickable artifact directory for this build.
+	// The frontend uses it instead of recomposing storage paths from job identity.
+	WebURL string `json:"web_url,omitempty"`
+}
+
+// AISummary is a brief AI-generated explanation of a test failure.
+type AISummary struct {
+	GeneratedAt string `json:"generated_at"`
+	Summary     string `json:"summary"`
+	IsTransient bool   `json:"is_transient"`
+}
+
+// EvidenceCitation identifies an exact artifact range supporting an analysis claim.
+type EvidenceCitation struct {
+	Path      string `json:"path"`
+	LineStart int    `json:"line_start"`
+	LineEnd   int    `json:"line_end"`
+	Quote     string `json:"quote"`
+}
+
+// AIAnalysis is a deep AI-generated root cause analysis.
+type AIAnalysis struct {
+	GeneratedAt string `json:"generated_at"`
+	// Model is the provider's model identifier used for the analysis. Kept
+	// in-memory for cache validation and debug logging, but never serialized
+	// to public JSON so internal-only model labels do not leak via the
+	// deployed GitHub Pages data files.
+	Model             string             `json:"-"`
+	RootCause         string             `json:"root_cause"`
+	Severity          string             `json:"severity"` // Critical, High, Medium, Low, Transient-Ignore
+	SuggestedFix      string             `json:"suggested_fix"`
+	RelevantFiles     []string           `json:"relevant_files,omitempty"`
+	SearchSuggestions []string           `json:"search_suggestions,omitempty"`
+	EvidenceCitations []EvidenceCitation `json:"evidence_citations,omitempty"`
+	// Mode records the analysis pipeline. Cache gates reject non-agentic entries.
+	Mode string `json:"mode,omitempty"`
+	// ToolCalls is the number of agent tool invocations made during this
+	// analysis.
+	ToolCalls int `json:"tool_calls,omitempty"`
+	// ToolFailures is the number of failed tool calls recorded by the backend.
+	ToolFailures int `json:"tool_failures,omitempty"`
+	// ModelRequests and ModelFailures report model request attempts and failures.
+	ModelRequests int `json:"model_requests,omitempty"`
+	ModelFailures int `json:"model_failures,omitempty"`
+	// ContextBytes is the cumulative tool-result and injected-evidence bytes added
+	// to the model conversation.
+	ContextBytes int `json:"context_bytes,omitempty"`
+	// ContextTruncations reports model-context compaction or truncation events.
+	ContextTruncations int `json:"context_truncations,omitempty"`
+	// GCSBytes is the cumulative bytes fetched from GCS via agent tool
+	// calls.
+	GCSBytes int `json:"gcs_bytes,omitempty"`
+	// EvidencePlanCovered reports whether every available group in a complete
+	// initial evidence plan was satisfied by a non-empty content read.
+	EvidencePlanCovered bool `json:"evidence_plan_covered,omitempty"`
+	// GCSFloorRetryExhausted reports that the loop used its one retry whose only
+	// remaining reason was the raw GCS byte floor.
+	GCSFloorRetryExhausted bool `json:"gcs_floor_retry_exhausted,omitempty"`
+	// ElapsedMs is the wall-clock duration of the analysis in milliseconds.
+	ElapsedMs int `json:"elapsed_ms,omitempty"`
+	// InputTokens and OutputTokens are provider-reported usage totals when the
+	// backend exposes them.
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
+	// CacheHit reports whether the analysis was served from the AI cache.
+	CacheHit bool `json:"cache_hit,omitempty"`
+	// SameFailureReuse reports reuse from an equivalent failure in the same build.
+	SameFailureReuse bool `json:"same_failure_reuse,omitempty"`
+	// BudgetExhausted reports whether the agentic loop hit one of its
+	// budget caps and was forced to finalize on best-effort evidence.
+	BudgetExhausted bool `json:"budget_exhausted,omitempty"`
+
+	// CritiquePassed reports whether this analysis cleared the critique gate.
+	CritiquePassed bool `json:"critique_passed,omitempty"`
+	// Critique rule and cache-persistence details remain private. Public output
+	// exposes only the aggregate pass bit and critique version.
+	CritiqueHardFailures       []string `json:"-"`
+	CritiqueSoftWarnings       []string `json:"-"`
+	CachePersistenceAttempted  bool     `json:"-"`
+	CachePersistenceAccepted   bool     `json:"-"`
+	CachePolicyRejectionReason string   `json:"-"`
+	JudgeResolutionKnown       bool     `json:"-"`
+	JudgeRevisionRejected      bool     `json:"-"`
+
+	// JudgeRan / JudgeObjected / JudgeRevised are the semantic-judge telemetry:
+	// whether the second-line LLM judge ran, whether it raised objections, and
+	// whether its objections drove an accepted revision. Recorded so the judge's
+	// value can be measured before deciding to keep it always-on.
+	JudgeRan      bool `json:"judge_ran,omitempty"`
+	JudgeObjected bool `json:"judge_objected,omitempty"`
+	JudgeRevised  bool `json:"judge_revised,omitempty"`
+
+	// CritiqueVersion records the critique contract this analysis passed.
+	// Cache gates require the current version.
+	CritiqueVersion int `json:"critique_version,omitempty"`
+
+	// SkillSetHash fingerprints the loaded recipe set that produced this analysis.
+	// Empty when no recipes are loaded.
+	SkillSetHash string `json:"skill_set_hash,omitempty"`
+
+	// ModelHash fingerprints the model and endpoint that produced this analysis.
+	ModelHash string `json:"model_hash,omitempty"`
+
+	// PromptHash fingerprints the effective prompt contract that produced this analysis.
+	// Build subjects include their module prompt.
+	PromptHash string `json:"prompt_hash,omitempty"`
+
+	// CacheGeneration is the safe generation fingerprint for this analysis.
+	CacheGeneration string `json:"cache_generation,omitempty"`
+
+	// FileLinks maps cited source-file paths to verified GitHub URLs.
+	// It is the UI allowlist for source links. A present-but-empty map means
+	// verification ran and found nothing linkable; an absent field means the
+	// analysis has not run source-link verification. Artifact links are resolved
+	// client-side.
+	FileLinks map[string]string `json:"file_links"`
+}
+
+const (
+	// TestCaseSourceBuild identifies a build-level failure not represented by JUnit.
+	TestCaseSourceBuild = "build"
+)
+
+// TestCase represents one test or build-level failure.
+type TestCase struct {
+	Name            string  `json:"name"`
+	SuiteName       string  `json:"suite_name,omitempty"`
+	ClassName       string  `json:"class_name,omitempty"`
+	Source          string  `json:"source,omitempty"`
+	Status          string  `json:"status"` // "passed", "failed", "skipped"
+	DurationSeconds float64 `json:"duration_seconds"`
+	FailureMessage  string  `json:"failure_message,omitempty"`
+	FailureBody     string  `json:"failure_body,omitempty"`
+	FailureLocation string  `json:"failure_location,omitempty"`
+	FailureLocURL   string  `json:"failure_location_url,omitempty"`
+	// JUnitFile is the basename within artifacts/ that this case came from.
+	// The UI uses it to disambiguate same-named cases across shards or suites.
+	JUnitFile  string      `json:"junit_file,omitempty"`
+	AISummary  *AISummary  `json:"ai_summary,omitempty"`
+	AIAnalysis *AIAnalysis `json:"ai_analysis,omitempty"`
+}
+
+// BuildResult is a complete result for a single build.
+type BuildResult struct {
+	BuildInfo
+	TestCases    []TestCase `json:"test_cases"`
+	TestsTotal   int        `json:"tests_total"`
+	TestsPassed  int        `json:"tests_passed"`
+	TestsFailed  int        `json:"tests_failed"`
+	TestsSkipped int        `json:"tests_skipped"`
+}
+
+type JobCurrentStatus string
+
+const (
+	JobCurrentUnknown JobCurrentStatus = "UNKNOWN"
+	JobCurrentRunning JobCurrentStatus = "RUNNING"
+	JobCurrentPassing JobCurrentStatus = "PASSING"
+	JobCurrentFailing JobCurrentStatus = "FAILING"
+)
+
+// JobSummary represents aggregated data for a job on the landing page.
+type JobSummary struct {
+	ProwJob
+	// CurrentStatus describes the newest observed run independently of rolling reliability.
+	CurrentStatus JobCurrentStatus `json:"current_status"`
+	OverallStatus string           `json:"overall_status"` // "PASSING", "FAILING", "FLAKY"
+	LastRun       *RunSummary      `json:"last_run,omitempty"`
+	RecentRuns    []RunSummary     `json:"recent_runs"`
+	// PassRateRecent is the fraction of passing runs over the most recent runs.
+	PassRateRecent float64 `json:"pass_rate_recent"`
+}
+
+// RunSummary is a compact summary of a single build run.
+type RunSummary struct {
+	BuildID         string    `json:"build_id"`
+	Passed          bool      `json:"passed"`
+	Result          string    `json:"result,omitempty"`
+	Timestamp       time.Time `json:"timestamp"`
+	DurationSeconds float64   `json:"duration_seconds,omitempty"`
+	TestsTotal      int       `json:"tests_total,omitempty"`
+	TestsPassed     int       `json:"tests_passed,omitempty"`
+	TestsFailed     int       `json:"tests_failed,omitempty"`
+	TestsSkipped    int       `json:"tests_skipped,omitempty"`
+}
+
+// Dashboard is the top-level structure for dashboard.json.
+type Dashboard struct {
+	GeneratedAt time.Time    `json:"generated_at"`
+	Jobs        []JobSummary `json:"jobs"`
+}
+
+// JobDetail is the per-job detail structure for jobs/{job-id}.json.
+type JobDetail struct {
+	Name           string           `json:"name"`
+	JobID          string           `json:"job_id"`
+	JobType        string           `json:"job_type"`
+	Repo           string           `json:"repo"`
+	ConfigFile     string           `json:"config_file,omitempty"`
+	ConfigRevision string           `json:"config_revision,omitempty"`
+	CurrentStatus  JobCurrentStatus `json:"current_status"`
+	PassRateRecent float64          `json:"pass_rate_recent"`
+	Runs           []BuildResult    `json:"runs"`
+	// PatternAnalyses holds cross-build correlations for this job.
+	// Empty unless the job failed in enough builds for pattern analysis.
+	PatternAnalyses []PatternAnalysis     `json:"pattern_analyses,omitempty"`
+	PatternRefresh  *PatternRefreshStatus `json:"pattern_refresh,omitempty"`
+}
+
+// PatternRefreshState describes the current job-level correlation result.
+type PatternRefreshState string
+
+const (
+	PatternRefreshCurrent       PatternRefreshState = "current"
+	PatternRefreshRetained      PatternRefreshState = "retained"
+	PatternRefreshFailed        PatternRefreshState = "failed"
+	PatternRefreshNotApplicable PatternRefreshState = "not_applicable"
+	PatternRefreshUnavailable   PatternRefreshState = "unavailable"
+)
+
+// PatternRefreshStatus stores freshness outside PatternAnalysis identity.
+type PatternRefreshStatus struct {
+	State             PatternRefreshState `json:"state"`
+	LastSuccessfulAt  string              `json:"last_successful_at,omitempty"`
+	Attempts          int                 `json:"attempts,omitempty"`
+	Repairs           int                 `json:"repairs,omitempty"`
+	FailureCategory   string              `json:"failure_category,omitempty"`
+	EvidenceAvailable bool                `json:"evidence_available"`
+}
+
+// PatternRefreshReport aggregates job-level pattern freshness.
+type PatternRefreshReport struct {
+	Current       int                             `json:"current"`
+	Retained      int                             `json:"retained"`
+	Failed        int                             `json:"failed"`
+	Unavailable   int                             `json:"unavailable"`
+	NotApplicable int                             `json:"not_applicable"`
+	Jobs          map[string]PatternRefreshStatus `json:"jobs,omitempty"`
+}
+
+const (
+	RemediationIntentAddSymbol           = "add_symbol"
+	RemediationIntentModifySymbol        = "modify_symbol"
+	RemediationIntentSetConfiguration    = "set_configuration"
+	RemediationIntentRemoveConfiguration = "remove_configuration"
+	RemediationIntentSetJobEnvironment   = "set_job_environment"
+	RemediationIntentInvestigate         = "investigate"
+)
+
+// RemediationTarget identifies one source change proposed by a recurring pattern.
+type RemediationTarget struct {
+	Intent       string `json:"intent"`
+	Symbol       string `json:"symbol,omitempty"`
+	RequiredCall string `json:"required_call,omitempty"`
+	Path         string `json:"path,omitempty"`
+	Value        string `json:"value,omitempty"`
+	Repository   string `json:"repository,omitempty"`
+	Revision     string `json:"revision,omitempty"`
+	Job          string `json:"job,omitempty"`
+	Container    string `json:"container,omitempty"`
+	Name         string `json:"name,omitempty"`
+}
+
+type PatternRecurrence string
+
+const (
+	PatternRecurrenceSharedCause          PatternRecurrence = "shared_cause"
+	PatternRecurrenceMixedCauses          PatternRecurrence = "mixed_causes"
+	PatternRecurrenceUnrelated            PatternRecurrence = "unrelated"
+	PatternRecurrenceInsufficientEvidence PatternRecurrence = "insufficient_evidence"
+)
+
+// PatternCausalGroup is one evidence-backed cause and its failed builds.
+type PatternCausalGroup struct {
+	ID          string   `json:"id,omitempty"`
+	ContentHash string   `json:"content_hash,omitempty"`
+	Builds      []string `json:"builds"`
+	RootCause   string   `json:"root_cause"`
+	Confidence  string   `json:"confidence"`
+}
+
+// PatternAnalysis is a job-level correlation across recent failed builds.
+// The model supplies causal groups and the engine derives recurrence.
+type PatternAnalysis struct {
+	// ID is a stable, URL-safe identifier for this pattern, used to address it
+	// from the frontend and the actions API. See models.PatternID.
+	ID string `json:"id,omitempty"`
+	// ContentHash binds actions to the complete pattern shown to the maintainer.
+	ContentHash string `json:"content_hash,omitempty"`
+	// Subject is what the correlated failures belong to.
+	Subject string `json:"subject"`
+	// JobID lets home-page aggregations link back to the job page.
+	JobID          string `json:"job_id,omitempty"`
+	GeneratedAt    string `json:"generated_at"`
+	BuildsAnalyzed int    `json:"builds_analyzed"`
+	// Recurrence is derived from repeated causal groups.
+	Recurrence PatternRecurrence `json:"recurrence_classification,omitempty"`
+	// CausalGroups preserve each distinct cause and its builds.
+	CausalGroups []PatternCausalGroup `json:"causal_groups,omitempty"`
+	// UnclassifiedBuilds lack enough evidence for a causal assignment.
+	UnclassifiedBuilds []string `json:"unclassified_builds,omitempty"`
+	// Systemic is retained for compatibility and is true for shared or mixed causes.
+	Systemic bool `json:"systemic"`
+	// Confidence is the lowest confidence among the recurring groups.
+	Confidence string `json:"confidence"`
+	// SharedRootCause summarizes the recurring causal groups.
+	SharedRootCause string `json:"shared_root_cause,omitempty"`
+	// SharedBuilds is the union of builds in repeated causal groups.
+	SharedBuilds []string `json:"shared_builds,omitempty"`
+	// SuggestedFix is the cross-cutting fix for the shared cause.
+	SuggestedFix string `json:"suggested_fix,omitempty"`
+	// RemediationTargets carry the machine-verifiable source changes behind the fix.
+	RemediationTargets []RemediationTarget `json:"remediation_targets,omitempty"`
+	// RelevantFiles are the source files the per-build analyses implicated,
+	// unioned across builds. They ground the fix harness's target selection.
+	RelevantFiles []string          `json:"relevant_files,omitempty"`
+	FileLinks     map[string]string `json:"file_links,omitempty"`
+	SourceRef     string            `json:"source_ref,omitempty"`
+	// RemediationVerification records whether the legacy structured target remains
+	// unresolved at SourceRef or is already present there.
+	RemediationVerification *PatternRemediationVerification `json:"remediation_verification,omitempty"`
+	// RemediationInvestigations are safe public projections keyed to exact
+	// recurring causal groups. Private investigation evidence is stored separately.
+	RemediationInvestigations []PatternRemediationInvestigationSummary `json:"remediation_investigations,omitempty"`
+	// Lifecycle combines source verification with post-fix run evidence.
+	Lifecycle *PatternLifecycle `json:"lifecycle,omitempty"`
+	// Summary is a one-paragraph human-readable verdict.
+	Summary string `json:"summary"`
+}
+
+type PatternRemediationInvestigationState string
+
+const (
+	PatternRemediationNotInvestigated             PatternRemediationInvestigationState = "not_investigated"
+	PatternRemediationQueued                      PatternRemediationInvestigationState = "queued"
+	PatternRemediationInvestigating               PatternRemediationInvestigationState = "investigating"
+	PatternRemediationVerifying                   PatternRemediationInvestigationState = "verifying"
+	PatternRemediationActionable                  PatternRemediationInvestigationState = "actionable"
+	PatternRemediationAlreadyFixed                PatternRemediationInvestigationState = "already_fixed"
+	PatternRemediationExternalDependency          PatternRemediationInvestigationState = "external_dependency"
+	PatternRemediationEnvironmentOrInfrastructure PatternRemediationInvestigationState = "environment_or_infrastructure"
+	PatternRemediationMitigationOnly              PatternRemediationInvestigationState = "mitigation_only"
+	PatternRemediationInsufficientEvidence        PatternRemediationInvestigationState = "insufficient_evidence"
+	PatternRemediationInvestigationFailed         PatternRemediationInvestigationState = "failed"
+	PatternRemediationStale                       PatternRemediationInvestigationState = "stale"
+)
+
+// PatternRemediationInvestigationSummary is the safe public state for one
+// recurring causal group. Private evidence and model output are never embedded.
+type PatternRemediationInvestigationSummary struct {
+	CausalGroupID   string                               `json:"causal_group_id"`
+	CausalGroupHash string                               `json:"causal_group_hash"`
+	State           PatternRemediationInvestigationState `json:"state"`
+	Reason          string                               `json:"reason,omitempty"`
+	Target          *PatternRemediationTargetSummary     `json:"target,omitempty"`
+	CompletedAt     string                               `json:"completed_at,omitempty"`
+}
+
+// PatternRemediationTargetSummary is the safe public identity of one verified target.
+type PatternRemediationTargetSummary struct {
+	Kind         string `json:"kind"`
+	Repository   string `json:"repository"`
+	Revision     string `json:"revision"`
+	Path         string `json:"path"`
+	Symbol       string `json:"symbol,omitempty"`
+	RequiredCall string `json:"required_call,omitempty"`
+	Job          string `json:"job,omitempty"`
+	Container    string `json:"container,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Value        string `json:"value,omitempty"`
+}
+
+type PatternRemediationState string
+
+const (
+	PatternRemediationUnresolved     PatternRemediationState = "unresolved"
+	PatternRemediationAlreadyPresent PatternRemediationState = "already_present"
+	PatternRemediationInconclusive   PatternRemediationState = "inconclusive"
+)
+
+// PatternRemediationVerification is the pinned-source target result.
+type PatternRemediationVerification struct {
+	State         PatternRemediationState `json:"state"`
+	Reason        string                  `json:"reason"`
+	Repository    string                  `json:"repository,omitempty"`
+	Revision      string                  `json:"revision,omitempty"`
+	FailureState  PatternRemediationState `json:"failure_state,omitempty"`
+	FailureBuilds []string                `json:"failure_builds,omitempty"`
+	PassingBuilds []string                `json:"passing_builds,omitempty"`
+}
+
+type PatternLifecycleState string
+
+const (
+	PatternLifecycleActive        PatternLifecycleState = "active"
+	PatternLifecycleRecovered     PatternLifecycleState = "recovered"
+	PatternLifecycleObserving     PatternLifecycleState = "observing"
+	PatternLifecycleVerifiedFixed PatternLifecycleState = "verified_fixed"
+)
+
+// PatternLifecycle describes whether a recurring cause remains active.
+type PatternLifecycle struct {
+	State          PatternLifecycleState `json:"state"`
+	Reason         string                `json:"reason"`
+	SourceRevision string                `json:"source_revision,omitempty"`
+	PassingBuilds  []string              `json:"passing_builds,omitempty"`
+	RecoveryStreak int                   `json:"recovery_streak,omitempty"`
+	RecoveryBuilds []string              `json:"recovery_builds,omitempty"`
+}
+
+// FailureClassification indicates the type of failure.
+type FailureClassification string
+
+const (
+	ClassificationPersistent FailureClassification = "persistent"
+	ClassificationFlaky      FailureClassification = "flaky"
+	ClassificationOneOff     FailureClassification = "one-off"
+)
+
+// TestFlakiness represents flakiness statistics for one test across a job's runs.
+type TestFlakiness struct {
+	TestName            string                `json:"test_name"`
+	JobName             string                `json:"job_name"`
+	JobID               string                `json:"job_id"`
+	TotalRuns           int                   `json:"total_runs"`
+	Failures            int                   `json:"failures"`
+	Passes              int                   `json:"passes"`
+	FlipRate            float64               `json:"flip_rate"`
+	FailRate            float64               `json:"fail_rate"`
+	ConsecutiveFailures int                   `json:"consecutive_failures"`
+	Classification      FailureClassification `json:"classification"`
+	LastFailure         *TestFailureInfo      `json:"last_failure,omitempty"`
+	FirstFailedAt       string                `json:"first_failed_at,omitempty"`
+	ErrorPatterns       []ErrorPattern        `json:"error_patterns,omitempty"`
+	DurationHistory     []DurationPoint       `json:"duration_history,omitempty"`
+}
+
+// TestFailureInfo captures the most recent failure details.
+type TestFailureInfo struct {
+	BuildID        string `json:"build_id"`
+	Timestamp      string `json:"timestamp"`
+	FailureMessage string `json:"failure_message"`
+	ErrorHash      string `json:"error_hash"`
+}
+
+// ErrorPattern groups similar failures.
+type ErrorPattern struct {
+	NormalizedMessage string `json:"normalized_message"`
+	ErrorHash         string `json:"error_hash"`
+	Count             int    `json:"count"`
+	ExampleMessage    string `json:"example_message"`
+}
+
+// DurationPoint is a single data point for duration trend charts.
+type DurationPoint struct {
+	BuildID   string  `json:"build_id"`
+	Timestamp string  `json:"timestamp"`
+	Duration  float64 `json:"duration"`
+	Passed    bool    `json:"passed"`
+}
+
+// SearchEntry represents a searchable job or test case.
+type SearchEntry struct {
+	Kind     string  `json:"kind"`      // "job" or "test"
+	TestName string  `json:"test_name"` // empty for job entries
+	JobName  string  `json:"job_name"`
+	JobID    string  `json:"job_id"`
+	JobType  string  `json:"job_type"`
+	Repo     string  `json:"repo"`
+	TabName  string  `json:"tab_name"`
+	Branch   string  `json:"branch"`
+	Category string  `json:"category"`
+	Status   string  `json:"status"`    // overall status for jobs, test status for tests
+	FailRate float64 `json:"fail_rate"` // from flakiness data if available
+}
+
+// SearchIndex is the top-level structure for search-index.json.
+type SearchIndex struct {
+	GeneratedAt string        `json:"generated_at"`
+	Entries     []SearchEntry `json:"entries"`
+}
+
+// BuildFailureSummary is a bounded public index entry for one build-level failure.
+type BuildFailureSummary struct {
+	JobID         string `json:"job_id"`
+	JobName       string `json:"job_name"`
+	BuildID       string `json:"build_id"`
+	StartedAt     string `json:"started_at"`
+	Result        string `json:"result"`
+	AnalysisState string `json:"analysis_state"`
+	Summary       string `json:"summary,omitempty"`
+	Severity      string `json:"severity,omitempty"`
+	IsTransient   bool   `json:"is_transient"`
+	Provenance    string `json:"provenance,omitempty"`
+	BuildLogURL   string `json:"build_log_url,omitempty"`
+	JobDetailURL  string `json:"job_detail_url"`
+}
+
+// FlakinessReport is the top-level structure for flakiness.json.
+type FlakinessReport struct {
+	GeneratedAt        string                `json:"generated_at"`
+	MostFlaky          []TestFlakiness       `json:"most_flaky"`
+	PersistentFailures []TestFlakiness       `json:"persistent_failures"`
+	RecentlyBroken     []TestFlakiness       `json:"recently_broken"`
+	BuildFailures      []BuildFailureSummary `json:"build_failures"`
+	// RecurringPatterns holds systemic job-level verdicts across all jobs.
+	// The home page uses these without loading every job file.
+	RecurringPatterns []PatternAnalysis    `json:"recurring_patterns,omitempty"`
+	PatternRefresh    PatternRefreshReport `json:"pattern_refresh,omitempty"`
+}

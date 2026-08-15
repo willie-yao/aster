@@ -1,0 +1,18 @@
+id: engine.prow.failure-evidence
+name: Prow failure evidence
+priority: 120
+triggers:
+  - '(?i)\b(fail(?:ed|ure)?|error|timeout|timed out|panic|fatal|crash|unready|not ready)\b'
+required_evidence:
+  - id: build-log
+    description: top-level runner output
+    any_of:
+      - '(?i)(^|/)build-log\.txt$'
+  - id: junit-failure
+    description: JUnit assertion and stack trace
+    any_of:
+      - '(?i)(^|/)junit[^/]*\.xml$'
+procedure: |
+  1. Use build-log.txt for the runner timeline and JUnit XML for the exact failing assertion, stack trace, and test name. Do not treat one as a substitute for the other.
+  2. Map the artifact tree before choosing component logs. Separate the initiating test or component failure from later collection, cleanup, and teardown errors.
+  3. Follow timestamps from the first relevant failure into the responsible component logs. Quote the earliest causal error, not the loudest downstream symptom.

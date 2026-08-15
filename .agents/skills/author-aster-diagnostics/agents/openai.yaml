@@ -1,0 +1,4 @@
+interface:
+  display_name: "Author Aster Diagnostics"
+  short_description: "Diagnose failures with blind, versioned evidence"
+  default_prompt: "Use $author-aster-diagnostics to diagnose a representative failure corpus, preserve verified baseline prompt knowledge, enforce event-level holdouts and the pre-freeze blind boundary, improve the consumer prompt, and propose recipes only for repeated prompt-only misses without activating them. Keep scoring independence and dashboard-provider evidence explicit."

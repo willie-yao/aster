@@ -1,0 +1,35 @@
+presubmits:
+  kubernetes-sigs/cluster-api-provider-azure:
+  - name: pull-cluster-api-provider-azure-e2e
+    cluster: eks-prow-build-cluster
+    decorate: true
+    decoration_config:
+      timeout: 3h
+    extra_refs:
+      - org: kubernetes-sigs
+        repo: cluster-api-provider-azure
+        base_ref: main
+    annotations:
+      testgrid-dashboards: sig-cluster-lifecycle-cluster-api-provider-azure
+      testgrid-tab-name: capz-pr-e2e
+      description: Runs CAPZ e2e for pull requests
+
+  - name: pull-cluster-api-provider-azure-capi-e2e
+    cluster: eks-prow-build-cluster
+    decorate: true
+    decoration_config:
+      timeout: 2h
+    extra_refs:
+      - org: kubernetes-sigs
+        repo: cluster-api-provider-azure
+        base_ref: release-1.21
+    annotations:
+      testgrid-dashboards: sig-cluster-lifecycle-cluster-api-provider-azure
+      testgrid-tab-name: capz-pr-capi-e2e
+      description: Runs CAPI e2e tests for CAPZ PRs
+
+  - name: pull-some-other-repo-test
+    decorate: true
+    annotations:
+      testgrid-dashboards: sig-other
+      description: Not a CAPZ job

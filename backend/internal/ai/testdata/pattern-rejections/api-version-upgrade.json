@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "case_name": "api-version-upgrade",
+  "case_class": "causal-group contract failure",
+  "contract_shape": [
+    "groups",
+    "unclassified_builds",
+    "summary"
+  ],
+  "observed_attempts": 1,
+  "observed_repairs": 2,
+  "validation_transitions": [
+    {
+      "kind": "terminal",
+      "category": "missing"
+    }
+  ],
+  "expected_persisted_category": "missing",
+  "evidence_complete": false
+}

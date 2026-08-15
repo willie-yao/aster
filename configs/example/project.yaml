@@ -1,0 +1,39 @@
+# Minimal project config for Aster: only the required fields.
+#
+# Copy this into your consumer repo as project.yaml, drop a prompts/system.md
+# alongside it, and point .github/workflows/deploy.yml at the reusable workflow
+# in this engine repo. Add optional fields only from
+# docs/project-configuration.md and the focused feature guides.
+
+# Stable identifier used in cache keys and log lines. Lowercase, no spaces.
+id: example
+
+# Full display name shown in the site header.
+name: "Example Kubernetes Project"
+
+# Which testgrid dashboard's jobs to show (the default discovery source).
+testgrid:
+  dashboard: "sig-foo-your-project"
+
+# Where the project's Prow build artifacts live. The engine does not assume GCS,
+# so provider is required. See docs/project-configuration.md for gcsweb and
+# local providers.
+storage:
+  provider: gcs
+  bucket: "kubernetes-ci-logs"
+
+# Site identity and the default repo for analysis and write targets.
+branding:
+  title: "Your Project Prow Dashboard"
+  base_path: "/your-consumer-repo"
+  site_url: "https://your-org.github.io/your-consumer-repo"
+  source_repo:
+    owner: "kubernetes-sigs"
+    name: "your-project"
+
+# Optional: read source from a repository that differs from branding and write
+# targets. Public repositories work without a token.
+# ai:
+#   source_repo:
+#     owner: "kubernetes-sigs"
+#     name: "your-project"

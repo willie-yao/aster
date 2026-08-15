@@ -1,0 +1,60 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "aster-platform.fullname" . }}-execution-default-deny
+  namespace: {{ .Values.execution.namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "aster-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-execution
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "aster-platform.fullname" . }}-execution-egress
+  namespace: {{ .Values.execution.namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+    prow-ai-dashboard/execution-policy-sha256: {{ include "aster-platform.executionPolicyHash" . | quote }}
+  labels:
+    {{- include "aster-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-execution
+spec:
+  endpointSelector: {}
+  ingress: []
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchPattern: "*"
+    {{- if .Values.modelGateway.enabled }}
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .Release.Namespace }}
+            k8s:app.kubernetes.io/name: {{ include "aster-platform.name" . }}
+            k8s:app.kubernetes.io/instance: {{ .Release.Name }}
+            k8s:app.kubernetes.io/component: model-gateway
+      toPorts:
+        - ports:
+            - port: {{ .Values.modelGateway.service.targetPort | quote }}
+              protocol: TCP
+    {{- end }}
+    - toFQDNs:
+        {{- range .Values.execution.networkPolicy.allowedFQDNs }}
+        - matchName: {{ . | quote }}
+        {{- end }}
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP

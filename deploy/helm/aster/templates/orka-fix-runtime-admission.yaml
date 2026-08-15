@@ -1,0 +1,80 @@
+{{- include "aster.validateFixRuntime" . -}}
+{{- if .Values.orka.fixRuntime.enabled }}
+{{- $cfg := .Values.orka.fixRuntime.admission -}}
+{{- $serviceAccount := include "aster.orkaServiceAccountName" . -}}
+{{- $requester := printf "system:serviceaccount:%s:%s" .Release.Namespace $serviceAccount -}}
+{{- $repository := printf "https://github.com/%s/%s.git" $cfg.repository.owner $cfg.repository.name -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "aster.orkaFixAdmissionName" . }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orka-fix-runtime
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["core.orka.ai"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["tasks"]
+        scope: Namespaced
+  matchConditions:
+    - name: dashboard-fix-requester
+      expression: {{ printf "request.operation == 'CREATE' ? request.userInfo.username == %s : (request.userInfo.username == %s || (has(oldObject.metadata.labels) && 'app.kubernetes.io/managed-by' in oldObject.metadata.labels && 'prow-ai-dashboard/runtime' in oldObject.metadata.labels && oldObject.metadata.labels['app.kubernetes.io/managed-by'] == 'orka-fixer' && oldObject.metadata.labels['prow-ai-dashboard/runtime'] == 'fix-generation' && has(oldObject.metadata.annotations) && 'prow-ai-dashboard/fix-contract' in oldObject.metadata.annotations && oldObject.metadata.annotations['prow-ai-dashboard/fix-contract'] == 'v1'))" (toJson $requester) (toJson $requester) | quote }}
+    - name: fix-namespace
+      expression: {{ printf "object.metadata.namespace == %s" (toJson .Values.orka.namespace) | quote }}
+  validations:
+    - expression: "request.operation != 'UPDATE' || (object.spec == oldObject.spec && object.metadata.labels == oldObject.metadata.labels && object.metadata.annotations == oldObject.metadata.annotations)"
+      message: "dashboard fix Task contracts are immutable after creation"
+    - expression: "object.spec.type == 'agent'"
+      message: "dashboard fix Tasks must use type agent"
+    - expression: "(!has(object.spec.image) || object.spec.image == '') && (!has(object.spec.command) || size(object.spec.command) == 0) && (!has(object.spec.args) || size(object.spec.args) == 0)"
+      message: "dashboard fix Tasks must not set an image, command, or arguments"
+    - expression: "(!has(object.spec.env) || size(object.spec.env) == 0) && !has(object.spec.secretRef)"
+      message: "dashboard fix Tasks must not set environment variables or Task-level Secrets"
+    - expression: {{ printf "has(object.spec.agentRef) && has(object.spec.agentRef.namespace) && object.spec.agentRef.name == %s && object.spec.agentRef.namespace == %s" (toJson $cfg.agentRef) (toJson .Values.orka.namespace) | quote }}
+      message: "dashboard fix Tasks must use the configured Agent in the Orka namespace"
+    - expression: {{ printf "has(object.spec.agentRuntime) && has(object.spec.agentRuntime.workspace) && has(object.spec.agentRuntime.workspace.gitRepo) && has(object.spec.agentRuntime.workspace.ref) && object.spec.agentRuntime.workspace.gitRepo == %s && object.spec.agentRuntime.workspace.ref.matches('^[0-9a-f]{40}$')" (toJson $repository) | quote }}
+      message: "dashboard fix Tasks must use the approved repository at an immutable commit"
+    - expression: "!has(object.spec.agentRuntime) || !has(object.spec.agentRuntime.workspace) || (!has(object.spec.agentRuntime.workspace.branch) && !has(object.spec.agentRuntime.workspace.gitSecretRef) && !has(object.spec.agentRuntime.workspace.subPath) && !has(object.spec.agentRuntime.workspace.forkRepo) && !has(object.spec.agentRuntime.workspace.prBaseBranch) && !has(object.spec.agentRuntime.workspace.pushBranch))"
+      message: "dashboard fix Tasks must use the fixed generation-only workspace shape"
+    - expression: {{ printf "has(object.spec.agentRuntime) && has(object.spec.agentRuntime.maxTurns) && has(object.spec.agentRuntime.allowBash) && object.spec.agentRuntime.maxTurns == %v && object.spec.agentRuntime.allowBash == %v" $cfg.maxTurns $cfg.allowBash | quote }}
+      message: "dashboard fix Tasks must use the configured turn and Bash limits"
+    - expression: "!has(object.spec.agentRuntime) || ((!has(object.spec.agentRuntime.allowedTools) || size(object.spec.agentRuntime.allowedTools) == 0) && (!has(object.spec.agentRuntime.disallowedTools) || size(object.spec.agentRuntime.disallowedTools) == 0))"
+      message: "dashboard fix Tasks must not override the approved Agent tool policy"
+    - expression: {{ printf "has(object.spec.timeout) && duration(object.spec.timeout) == duration(%s)" (toJson (printf "%v" $cfg.timeout)) | quote }}
+      message: "dashboard fix Tasks must use the configured timeout"
+    - expression: "has(object.spec.priority) && object.spec.priority == 500"
+      message: "dashboard fix Tasks must use priority 500"
+    - expression: {{ printf "has(object.spec.retryPolicy) && object.spec.retryPolicy.maxRetries == %v && (!has(object.spec.retryPolicy.backoffMultiplier) || object.spec.retryPolicy.backoffMultiplier == 2.0) && !has(object.spec.retryPolicy.initialDelay)" $cfg.retries | quote }}
+      message: "dashboard fix Tasks must use the configured retry policy"
+    - expression: "!has(object.spec.resources) || ((!has(object.spec.resources.limits) || size(object.spec.resources.limits) == 0) && (!has(object.spec.resources.requests) || size(object.spec.resources.requests) == 0) && (!has(object.spec.resources.claims) || size(object.spec.resources.claims) == 0))"
+      message: "dashboard fix Tasks must inherit resource bounds from the approved Agent"
+    - expression: "!has(object.spec.execution) || ((!has(object.spec.execution.runtimeClassName) || object.spec.execution.runtimeClassName == '') && (!has(object.spec.execution.nodeSelector) || size(object.spec.execution.nodeSelector) == 0) && (!has(object.spec.execution.tolerations) || size(object.spec.execution.tolerations) == 0) && (!has(object.spec.execution.affinity) || object.spec.execution.affinity == {}) && !has(object.spec.execution.workspace))"
+      message: "dashboard fix Tasks must not override scheduling or execution workspaces"
+    - expression: "(!has(object.spec.webhookURL) || object.spec.webhookURL == '') && !has(object.spec.sessionRef) && !has(object.spec.priorTaskRef)"
+      message: "dashboard fix Tasks must not use webhooks, sessions, or prior Tasks"
+    - expression: "(!has(object.spec.schedule) || object.spec.schedule == '') && !has(object.spec.timeZone) && (!has(object.spec.concurrencyPolicy) || object.spec.concurrencyPolicy == 'Forbid') && (!has(object.spec.startingDeadlineSeconds) || object.spec.startingDeadlineSeconds == 100) && (!has(object.spec.successfulRunsHistoryLimit) || object.spec.successfulRunsHistoryLimit == 3) && (!has(object.spec.failedRunsHistoryLimit) || object.spec.failedRunsHistoryLimit == 1) && (!has(object.spec.suspend) || object.spec.suspend == false)"
+      message: "dashboard fix Tasks must not schedule recurring executions"
+    - expression: "!has(object.spec.ai) && !has(object.spec.workspace) && !has(object.spec.requestedBy) && !has(object.spec.transaction)"
+      message: "dashboard fix Tasks must not add alternate AI, workspace, or transaction fields"
+    - expression: "has(object.spec.prompt) && object.spec.prompt != ''"
+      message: "dashboard fix Tasks must include a generation prompt"
+    - expression: "has(object.metadata.labels) && size(object.metadata.labels) == 2 && 'app.kubernetes.io/managed-by' in object.metadata.labels && 'prow-ai-dashboard/runtime' in object.metadata.labels && object.metadata.labels['app.kubernetes.io/managed-by'] == 'orka-fixer' && object.metadata.labels['prow-ai-dashboard/runtime'] == 'fix-generation'"
+      message: "dashboard fix Tasks must carry the fix lifecycle labels"
+    - expression: "has(object.metadata.annotations) && size(object.metadata.annotations) == (('prow-ai-dashboard/action-request' in object.metadata.annotations) ? 2 : 1) && 'prow-ai-dashboard/fix-contract' in object.metadata.annotations && object.metadata.annotations['prow-ai-dashboard/fix-contract'] == 'v1' && (!('prow-ai-dashboard/action-request' in object.metadata.annotations) || object.metadata.annotations['prow-ai-dashboard/action-request'] != '')"
+      message: "dashboard fix Tasks must carry the fix contract annotation"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "aster.orkaFixAdmissionName" . }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orka-fix-runtime
+spec:
+  policyName: {{ include "aster.orkaFixAdmissionName" . }}
+  validationActions: [Deny]
+{{- end }}

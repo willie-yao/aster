@@ -1,0 +1,56 @@
+{{- include "aster.validateSourceInvestigation" . -}}
+{{- if .Values.server.chat.sourceInvestigation.enabled }}
+{{- $cfg := .Values.server.chat.sourceInvestigation.admission -}}
+{{- $sa := include "aster.orkaSourceServiceAccountName" . -}}
+{{- $requester := printf "system:serviceaccount:%s:%s" .Release.Namespace $sa -}}
+{{- $repo := printf "https://github.com/%s/%s.git" $cfg.repository.owner $cfg.repository.name -}}
+{{- $identity := include "aster.orkaReleaseScope" . -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "aster.orkaSourceAdmissionName" . }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orka-source-investigation
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["core.orka.ai"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["tasks"]
+        scope: Namespaced
+  matchConditions:
+    - name: source-requester
+      expression: {{ printf "request.operation == 'CREATE' ? request.userInfo.username == %s : (has(oldObject.metadata.annotations) && 'prow-ai-dashboard/source-admission' in oldObject.metadata.annotations && oldObject.metadata.annotations['prow-ai-dashboard/source-admission'] == %s)" (toJson $requester) (toJson $identity) | quote }}
+  validations:
+    - expression: {{ printf "request.operation != 'CREATE' || object.metadata.namespace == %s" (toJson .Values.orka.namespace) | quote }}
+      message: "source investigation Tasks must stay in the configured Orka namespace"
+    - expression: "request.operation != 'UPDATE' || (object.spec == oldObject.spec && object.metadata.labels == oldObject.metadata.labels && object.metadata.annotations == oldObject.metadata.annotations)"
+      message: "source investigation Task contracts are immutable"
+    - expression: "request.operation != 'CREATE' || (object.spec.type == 'agent' && (!has(object.spec.image) || object.spec.image == '') && (!has(object.spec.command) || size(object.spec.command) == 0) && (!has(object.spec.args) || size(object.spec.args) == 0) && (!has(object.spec.env) || size(object.spec.env) == 0) && !has(object.spec.secretRef))"
+      message: "source investigation Tasks must use only the approved Agent runtime"
+    - expression: {{ printf "request.operation != 'CREATE' || (has(object.spec.agentRef) && object.spec.agentRef.name == %s && object.spec.agentRef.namespace == %s)" (toJson $cfg.agentRef) (toJson .Values.orka.namespace) | quote }}
+      message: "source investigation Tasks must use the approved Agent"
+    - expression: {{ printf "request.operation != 'CREATE' || (object.spec.agentRuntime.workspace.gitRepo == %s && object.spec.agentRuntime.workspace.ref.matches('^[0-9a-f]{40}([0-9a-f]{24})?$') && object.spec.agentRuntime.workspace.gitSecretRef.name == %s)" (toJson $repo) (toJson $cfg.gitSecret) | quote }}
+      message: "source investigation Tasks must use the approved repository, commit, and read-only Git Secret"
+    - expression: "request.operation != 'CREATE' || (!has(object.spec.agentRuntime.workspace.branch) && !has(object.spec.agentRuntime.workspace.subPath) && !has(object.spec.agentRuntime.workspace.forkRepo) && !has(object.spec.agentRuntime.workspace.prBaseBranch) && !has(object.spec.agentRuntime.workspace.pushBranch))"
+      message: "source investigation Tasks must use the fixed read-only workspace shape"
+    - expression: {{ printf "request.operation != 'CREATE' || (object.spec.agentRuntime.maxTurns == %v && object.spec.agentRuntime.allowBash == false && object.spec.agentRuntime.allowedTools == ['Read', 'Glob', 'Grep'] && object.spec.agentRuntime.disallowedTools == ['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Task', 'TodoWrite', 'Question'])" $cfg.maxTurns | quote }}
+      message: "source investigation Tasks must use the bounded read-only tool policy"
+    - expression: {{ printf "request.operation != 'CREATE' || (duration(object.spec.timeout) == duration(%s) && object.spec.retryPolicy.maxRetries == %v && (!has(object.spec.retryPolicy.backoffMultiplier) || object.spec.retryPolicy.backoffMultiplier == 2.0) && !has(object.spec.retryPolicy.initialDelay) && object.spec.priority == 500)" (toJson (printf "%v" $cfg.timeout)) $cfg.retries | quote }}
+      message: "source investigation Tasks must use the configured execution bounds"
+    - expression: "request.operation != 'CREATE' || ((!has(object.spec.webhookURL) || object.spec.webhookURL == '') && !has(object.spec.sessionRef) && !has(object.spec.priorTaskRef) && (!has(object.spec.schedule) || object.spec.schedule == '') && !has(object.spec.timeZone) && (!has(object.spec.concurrencyPolicy) || object.spec.concurrencyPolicy == 'Forbid') && (!has(object.spec.startingDeadlineSeconds) || object.spec.startingDeadlineSeconds == 100) && (!has(object.spec.successfulRunsHistoryLimit) || object.spec.successfulRunsHistoryLimit == 3) && (!has(object.spec.failedRunsHistoryLimit) || object.spec.failedRunsHistoryLimit == 1) && (!has(object.spec.suspend) || object.spec.suspend == false) && !has(object.spec.ai) && !has(object.spec.workspace) && !has(object.spec.execution) && !has(object.spec.requestedBy) && !has(object.spec.transaction) && (!has(object.spec.resources) || ((!has(object.spec.resources.requests) || size(object.spec.resources.requests) == 0) && (!has(object.spec.resources.limits) || size(object.spec.resources.limits) == 0) && (!has(object.spec.resources.claims) || size(object.spec.resources.claims) == 0))))"
+      message: "source investigation Tasks must not add alternate execution or scheduling fields"
+    - expression: {{ printf "request.operation != 'CREATE' || (size(object.metadata.labels) == 1 && object.metadata.labels['app.kubernetes.io/managed-by'] == 'orka-source-investigator' && size(object.metadata.annotations) == 4 && object.metadata.annotations['orka.ai/workspace-init-container'] == 'true' && object.metadata.annotations['orka.ai/agent-read-only'] == 'true' && object.metadata.annotations['orka.ai/disable-coordination-tool-injection'] == 'true' && object.metadata.annotations['prow-ai-dashboard/source-admission'] == %s)" (toJson $identity) | quote }}
+      message: "source investigation Tasks must carry the exact read-only identity metadata"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "aster.orkaSourceAdmissionName" . }}
+spec:
+  policyName: {{ include "aster.orkaSourceAdmissionName" . }}
+  validationActions: [Deny]
+{{- end }}

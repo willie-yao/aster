@@ -1,0 +1,375 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "nameOverride": {
+      "const": ""
+    },
+    "fullnameOverride": {
+      "const": ""
+    },
+    "application": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "releaseName"
+      ],
+      "properties": {
+        "releaseName": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 53
+        }
+      }
+    },
+    "agentSandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requiredVersion",
+        "manifestURL",
+        "manifestSHA256"
+      ],
+      "properties": {
+        "requiredVersion": {
+          "const": "v0.5.3"
+        },
+        "manifestURL": {
+          "const": "https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.5.3/sandbox.yaml"
+        },
+        "manifestSHA256": {
+          "const": "50f54b0e746376455ae6bb8b90b436bdd8798e1296cff0d72b6267bbeb858e3c"
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "namespace",
+        "runtimeClassName",
+        "workloadServiceAccountName",
+        "podSecurity",
+        "quota",
+        "limits",
+        "networkPolicy"
+      ],
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63
+        },
+        "runtimeClassName": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+          "maxLength": 253
+        },
+        "workloadServiceAccountName": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63
+        },
+        "podSecurity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enforce",
+            "enforceVersion",
+            "audit",
+            "auditVersion",
+            "warn",
+            "warnVersion"
+          ],
+          "properties": {
+            "enforce": {
+              "enum": [
+                "baseline",
+                "restricted"
+              ]
+            },
+            "enforceVersion": {
+              "type": "string"
+            },
+            "audit": {
+              "enum": [
+                "baseline",
+                "restricted"
+              ]
+            },
+            "auditVersion": {
+              "type": "string"
+            },
+            "warn": {
+              "enum": [
+                "baseline",
+                "restricted"
+              ]
+            },
+            "warnVersion": {
+              "type": "string"
+            }
+          }
+        },
+        "quota": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "pods",
+            "sandboxes",
+            "requestsCPU",
+            "requestsMemory",
+            "limitsCPU",
+            "limitsMemory",
+            "requestsEphemeralStorage",
+            "limitsEphemeralStorage"
+          ],
+          "properties": {
+            "pods": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            },
+            "sandboxes": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            },
+            "requestsCPU": {
+              "type": "string",
+              "minLength": 1
+            },
+            "requestsMemory": {
+              "type": "string",
+              "minLength": 1
+            },
+            "limitsCPU": {
+              "type": "string",
+              "minLength": 1
+            },
+            "limitsMemory": {
+              "type": "string",
+              "minLength": 1
+            },
+            "requestsEphemeralStorage": {
+              "type": "string",
+              "minLength": 1
+            },
+            "limitsEphemeralStorage": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "minCPU",
+            "minMemory",
+            "minEphemeralStorage",
+            "maxCPU",
+            "maxMemory",
+            "maxEphemeralStorage"
+          ],
+          "properties": {
+            "minCPU": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minMemory": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minEphemeralStorage": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxCPU": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxMemory": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxEphemeralStorage": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "networkPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "allowedFQDNs"
+          ],
+          "properties": {
+            "mode": {
+              "const": "cilium"
+            },
+            "allowedFQDNs": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\\.[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "modelGateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "name",
+        "publicHost",
+        "image",
+        "replicas",
+        "upstreamURL",
+        "upstreamHost",
+        "providerAuth",
+        "tls",
+        "service",
+        "resources"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 32
+        },
+        "publicHost": {
+          "type": "string",
+          "pattern": "^(?:$|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\\.[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?)$"
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "digest",
+            "pullPolicy"
+          ],
+          "properties": {
+            "repository": {
+              "type": "string",
+              "pattern": "^(?:$|[^@\\s]+)$"
+            },
+            "digest": {
+              "type": "string"
+            },
+            "pullPolicy": {
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          }
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "upstreamURL": {
+          "type": "string",
+          "pattern": "^(?:$|https://[^@?#\\s]+(?:/[^@?#\\s]*)?)$"
+        },
+        "upstreamHost": {
+          "type": "string",
+          "pattern": "^(?:$|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\\.[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?)$"
+        },
+        "providerAuth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "existingSecret",
+            "tokenKey"
+          ],
+          "properties": {
+            "existingSecret": {
+              "type": "string",
+              "pattern": "^(?:$|[a-z0-9]([-a-z0-9.]*[a-z0-9])?)$",
+              "maxLength": 253
+            },
+            "tokenKey": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+$"
+            }
+          }
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "existingSecret"
+          ],
+          "properties": {
+            "existingSecret": {
+              "type": "string",
+              "pattern": "^(?:$|[a-z0-9]([-a-z0-9.]*[a-z0-9])?)$",
+              "maxLength": 253
+            }
+          }
+        },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "port",
+            "targetPort"
+          ],
+          "properties": {
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "targetPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          }
+        },
+        "resources": {
+          "type": "object"
+        }
+      }
+    },
+    "runtimeClass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "create",
+        "handler"
+      ],
+      "properties": {
+        "create": {
+          "const": false
+        },
+        "handler": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "required": [
+    "application",
+    "agentSandbox",
+    "execution",
+    "modelGateway",
+    "runtimeClass"
+  ]
+}

@@ -1,0 +1,135 @@
+{
+  "name": "cloud-vm-provider",
+  "sources": [
+    {
+      "path": "docs/ci-diagnostics.md",
+      "kind": "markdown",
+      "start_line": 1,
+      "end_line": 20,
+      "text": "CAPI Machine reconciliation delegates infrastructure provisioning to AzureMachine resources. Diagnose infrastructure provisioning, bootstrap completion, control plane initialization, then node readiness from timestamped conditions and logs. Jobs select Linux, Windows, and MachinePool templates; identify the actual template from job metadata. After build-log and JUnit, identify the template, inspect Machine and AzureMachine conditions, then read the matching machine bootstrap log. kubernetes-sigs/cluster-api-provider-azure. artifacts/clusters/{cluster}/machines/{machine}/cloud-init-output.log. Shows bootstrap commands and cloud-init failures for one machine. Bootstrap command failure. cloud-init reports a nonzero bootstrap command. cloud-init-output.log. Machine and AzureMachine conditions. Do not infer an Azure API defect from a node readiness timeout alone. Recommend code or template changes only when the failing command and owner are established. Recovered cloud API throttling. A timestamped retry succeeds and reconciliation progresses during the run. Throttling persists, credentials are invalid, quota remains exhausted, or reconciliation never progresses."
+    }
+  ],
+  "evidence": {
+    "architecture": [
+      {
+        "text": "CAPI Machine reconciliation delegates infrastructure provisioning to AzureMachine resources.",
+        "sources": [
+          {
+            "path": "docs/ci-diagnostics.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "diagnostic_lifecycle": [
+      {
+        "text": "Diagnose infrastructure provisioning, bootstrap completion, control plane initialization, then node readiness from timestamped conditions and logs.",
+        "sources": [
+          {
+            "path": "docs/ci-diagnostics.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "test_flavors": [
+      {
+        "text": "Jobs select Linux, Windows, and MachinePool templates; identify the actual template from job metadata.",
+        "sources": [
+          {
+            "path": "docs/ci-diagnostics.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "path_pattern": "artifacts/clusters/{cluster}/machines/{machine}/cloud-init-output.log",
+        "purpose": "Shows bootstrap commands and cloud-init failures for one machine.",
+        "sources": [
+          {
+            "path": "docs/ci-diagnostics.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "failure_patterns": [
+      {
+        "name": "Bootstrap command failure",
+        "signal": "cloud-init reports a nonzero bootstrap command",
+        "required_evidence": [
+          "cloud-init-output.log",
+          "Machine and AzureMachine conditions"
+        ],
+        "do_not_conclude": "Do not infer an Azure API defect from a node readiness timeout alone.",
+        "remediation_limit": "Recommend code or template changes only when the failing command and owner are established.",
+        "sources": [
+          {
+            "path": "docs/ci-diagnostics.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "transient_rules": [
+      {
+        "class": "Recovered cloud API throttling",
+        "only_if": "A timestamped retry succeeds and reconciliation progresses during the run.",
+        "not_transient_if": "Throttling persists, credentials are invalid, quota remains exhausted, or reconciliation never progresses.",
+        "sources": [
+          {
+            "path": "docs/ci-diagnostics.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "triage_order": [
+      {
+        "text": "After build-log and JUnit, identify the template, inspect Machine and AzureMachine conditions, then read the matching machine bootstrap log.",
+        "sources": [
+          {
+            "path": "docs/ci-diagnostics.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "repositories": [
+      {
+        "text": "kubernetes-sigs/cluster-api-provider-azure",
+        "sources": [
+          {
+            "path": "docs/ci-diagnostics.md",
+            "start_line": 1,
+            "end_line": 20
+          }
+        ]
+      }
+    ],
+    "unresolved": [
+      "Confirm the exact controller log path emitted by each job flavor."
+    ]
+  },
+  "required": [
+    "AzureMachine",
+    "cloud-init-output.log",
+    "Transient only if",
+    "Not transient if"
+  ],
+  "prohibited": [
+    "Azure Portal",
+    "SSH",
+    "invalid credentials are transient",
+    "persistent quota is transient"
+  ]
+}

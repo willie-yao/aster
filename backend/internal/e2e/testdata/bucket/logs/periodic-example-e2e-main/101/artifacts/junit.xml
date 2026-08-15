@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="2" failures="1" errors="0" time="615.0">
+  <testsuite name="example-e2e" tests="2" failures="1" errors="0" time="615.0">
+    <testcase name="[It] Workload cluster creation Creates a HA cluster with 3 control plane nodes" classname="example-e2e" status="failed" time="600.0">
+      <failure message="Timed out after 600.001s. Timed out waiting for 3 control plane machines to exist. Expected 2 to equal 3" type="failed">
+[FAILED] Timed out after 600.001s.
+Timed out waiting for 3 control plane machines to exist
+Expected
+    &lt;int&gt;: 2
+to equal
+    &lt;int&gt;: 3
+      </failure>
+    </testcase>
+    <testcase name="[It] Workload cluster creation Deletes the cluster cleanly" classname="example-e2e" status="passed" time="15.0"></testcase>
+  </testsuite>
+</testsuites>

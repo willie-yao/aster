@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "cases": {
+    "secrets-store-csi-image-scan": {
+      "reference_diagnosis": "The pinned image contains the reported vulnerable dependency versions, Trivy reports fixed MEDIUM or higher vulnerabilities, and the repository's image-scan policy intentionally fails on those fixed findings.",
+      "required_chain": [
+        {"id": "affected-installed-versions", "text": "Identify the installed dependency versions reported as vulnerable."},
+        {"id": "fixed-trivy-findings", "text": "Identify the Trivy findings and available fixed versions."},
+        {"id": "scan-policy-failure", "text": "Treat the configured image-scan failure policy as the initiating mechanism."}
+      ],
+      "downstream_noise": ["The terminal command failure is an expected consequence of the scan policy, not an unrelated infrastructure failure."]
+    },
+    "kueue-was-podgroup-api-mismatch": {
+      "reference_diagnosis": "The API server serves scheduling.k8s.io/v1alpha3 while the fetched Kubernetes scheduler requests v1beta1 PodGroups. The v1beta1 request is unavailable or returns 404, scheduler handlers do not synchronize, the workload remains unscheduled, and the deployment timeout is downstream.",
+      "required_chain": [
+        {"id": "served-v1alpha3", "text": "Identify that scheduling.k8s.io/v1alpha3 is served."},
+        {"id": "requested-v1beta1", "text": "Identify the scheduler's v1beta1 PodGroup request."},
+        {"id": "unavailable-api-response", "text": "Identify the unavailable or 404 v1beta1 API response."},
+        {"id": "scheduler-sync-failure", "text": "Connect the API mismatch to scheduler handler synchronization failure."},
+        {"id": "timeout-downstream", "text": "Treat the terminal deployment timeout as downstream rather than primary."}
+      ],
+      "downstream_noise": ["Kind node readiness and dependency deployment timeouts cannot receive full diagnosis credit unless the PodGroup mismatch chain is established."]
+    },
+    "gcp-pd-csi-windows-mount-visibility": {
+      "reference_diagnosis": "The CSI driver reports successful stage and publish operations and the Windows target pod becomes Running and Ready, but the mounted path is absent inside the container. Ownership remains unresolved at the publish-to-container visibility boundary.",
+      "required_chain": [
+        {"id": "publish-succeeded", "text": "Preserve the successful NodePublishVolume evidence."},
+        {"id": "target-pod-ready", "text": "Preserve that the target pod became Running and Ready."},
+        {"id": "container-path-missing", "text": "Identify that the expected mount path is absent inside the Windows container."},
+        {"id": "boundary-unresolved", "text": "Keep ownership unresolved between test volumeMount, kubelet/container runtime, and CSI-proxy visibility boundaries."}
+      ],
+      "downstream_noise": ["Do not assign the failure to the CSI driver after successful publish without evidence that contradicts that success."]
+    }
+  }
+}

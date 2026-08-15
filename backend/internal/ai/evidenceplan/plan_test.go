@@ -1,0 +1,120 @@
+package evidenceplan
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/willie-yao/aster/backend/internal/ai/skills"
+	"github.com/willie-yao/aster/backend/internal/models"
+)
+
+func TestRenderCompleteness(t *testing.T) {
+	completePlan := []skills.PlannedSkill{{
+		ID:               "complete",
+		RequiredEvidence: []skills.PlannedEvidenceGroup{{ID: "logs", CandidatePaths: []string{"logs/failure.log"}}},
+	}}
+	procedureOnly := []skills.PlannedSkill{{ID: "conditional", Procedure: "Inspect the matching subtype."}}
+	missingCandidate := []skills.PlannedSkill{{
+		ID:               "missing",
+		RequiredEvidence: []skills.PlannedEvidenceGroup{{ID: "logs"}},
+	}}
+	cases := []struct {
+		name   string
+		plan   []skills.PlannedSkill
+		scan   ScanStatus
+		want   bool
+		marker string
+	}{
+		{name: "complete", plan: completePlan, want: true},
+		{name: "missing candidate", plan: missingCandidate, want: false, marker: "none found"},
+		{name: "truncated", plan: completePlan, scan: ScanStatus{Truncated: true}, want: false, marker: "scan was truncated"},
+		{name: "failed with no applicable groups", plan: procedureOnly, scan: ScanStatus{Failed: true}, want: false, marker: "scan failed"},
+		{name: "unavailable with no applicable groups", plan: procedureOnly, scan: ScanStatus{Unavailable: true}, want: false, marker: "scan was unavailable"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prompt, got := Render(tc.plan, tc.scan)
+			if got != tc.want {
+				t.Fatalf("complete = %t, want %t: %s", got, tc.want, prompt)
+			}
+			if tc.marker != "" && !strings.Contains(prompt, tc.marker) {
+				t.Errorf("prompt missing %q: %s", tc.marker, prompt)
+			}
+		})
+	}
+}
+
+func TestRenderIncludesContentPredicatesWithoutArtifactContent(t *testing.T) {
+	plan := []skills.PlannedSkill{{
+		ID: "content-aware",
+		RequiredEvidence: []skills.PlannedEvidenceGroup{{
+			ID: "failed-log", CandidatePaths: []string{"logs/failure.log"},
+			ContentAnyOf: []string{"ManagedClustersAgentPool"},
+			ContentAllOf: []string{"conversion webhook", "connection refused"},
+		}},
+	}}
+	prompt, complete := Render(plan, ScanStatus{})
+	if !complete {
+		t.Fatalf("content-aware plan was incomplete: %s", prompt)
+	}
+	for _, want := range []string{"Required content, any of", "ManagedClustersAgentPool", "Required content, all of", "connection refused"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "PRIVATE ARTIFACT CONTENT") {
+		t.Fatalf("prompt embedded artifact content: %s", prompt)
+	}
+}
+
+func TestFailureSignalIsBoundedAndInstructionFree(t *testing.T) {
+	body := strings.Repeat("b", FailureBodyBytes+100) + "body-tail"
+	signal := FailureSignal(models.TestCase{
+		Name: "worker node timeout", FailureLocation: "test/e2e.go:42", JUnitFile: "junit.xml",
+		FailureMessage: "MachineDeployment did not create a node", FailureBody: body,
+	})
+	for _, want := range []string{"worker node timeout", "test/e2e.go:42", "junit.xml", "MachineDeployment", "body-tail"} {
+		if !strings.Contains(signal, want) {
+			t.Errorf("failure signal missing %q: %s", want, signal)
+		}
+	}
+	for _, forbidden := range []string{"classify transient", "Investigate the build", "CI test FAILED"} {
+		if strings.Contains(signal, forbidden) {
+			t.Errorf("failure signal contains backend instruction %q: %s", forbidden, signal)
+		}
+	}
+}
+
+func TestCanonicalTestCaseBoundsFailureAndDropsPriorAI(t *testing.T) {
+	tc := models.TestCase{
+		Name: "Test A", Status: "failed",
+		FailureMessage: strings.Repeat("message", 10_000),
+		FailureBody:    strings.Repeat("body", 30_000),
+		AISummary:      &models.AISummary{Summary: "old"},
+		AIAnalysis:     &models.AIAnalysis{RootCause: "old"},
+	}
+	got := CanonicalTestCase(tc)
+	if len(got.FailureMessage) > FailureMessageBytes || len(got.FailureBody) > FailureBodyBytes {
+		t.Fatalf("sizes = message:%d body:%d", len(got.FailureMessage), len(got.FailureBody))
+	}
+	if got.AISummary != nil || got.AIAnalysis != nil {
+		t.Fatalf("prior AI output retained: %+v", got)
+	}
+	if twice := CanonicalTestCase(got); !reflect.DeepEqual(twice, got) {
+		t.Fatalf("canonicalization is not idempotent: first=%+v second=%+v", got, twice)
+	}
+}
+
+func TestFailureSignalIdentifiesBuildFailure(t *testing.T) {
+	signal := FailureSignal(models.TestCase{
+		Name: "Prow job execution", Source: models.TestCaseSourceBuild,
+		FailureMessage: "Inspect build-log.txt.",
+	})
+	if !strings.Contains(signal, "Failed Prow build: Prow job execution") {
+		t.Fatalf("build failure signal = %q", signal)
+	}
+	if strings.Contains(signal, "Failed test:") {
+		t.Fatalf("build failure signal presented a synthetic test: %q", signal)
+	}
+}

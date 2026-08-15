@@ -1,0 +1,343 @@
+{{- include "aster.validateFixRuntime" . -}}
+{{- include "aster.validateAgentSandboxFixRuntime" . -}}
+{{- include "aster.validateAgentSandboxCausalCritic" . -}}
+{{- include "aster.validateAnalysisRuntime" . -}}
+{{- include "aster.validateAgentAnalysisShadow" . -}}
+{{- include "aster.validateAI" . -}}
+{{- if not (or (eq .Values.mode "cron") (eq .Values.mode "watch")) }}
+{{- fail (printf "mode must be \"cron\" or \"watch\", got %q" .Values.mode) }}
+{{- end }}
+{{- if eq .Values.mode "cron" }}
+{{- $containerAnalysis := eq .Values.analysisRuntime.type "orka-container" }}
+{{- $shadow := .Values.orka.agentAnalysisShadow.enabled }}
+{{- $agentSandboxScheduled := eq (include "aster.agentSandboxScheduledEnabled" .) "true" }}
+{{- $agentSandboxFixScheduled := eq (include "aster.agentSandboxFixScheduledEnabled" .) "true" }}
+{{- $defaultRestartPolicy := ternary "Never" "OnFailure" $containerAnalysis }}
+{{- $restartPolicy := .Values.fetcher.restartPolicy | default $defaultRestartPolicy }}
+{{- if not (or (eq $restartPolicy "Never") (eq $restartPolicy "OnFailure")) }}
+  {{- fail "fetcher.restartPolicy must be Never or OnFailure" }}
+{{- end }}
+{{- $backoffLimitValue := printf "%v" .Values.fetcher.backoffLimit }}
+{{- if not (regexMatch "^(-1|0|[1-9][0-9]{0,17})$" $backoffLimitValue) }}
+  {{- fail "fetcher.backoffLimit must be -1 or a non-negative integer" }}
+{{- end }}
+{{- $backoffLimit := int64 $backoffLimitValue }}
+{{- if gt $backoffLimit 2147483647 }}
+  {{- fail "fetcher.backoffLimit must not exceed 2147483647" }}
+{{- end }}
+{{- $activeDeadlineValue := printf "%v" .Values.fetcher.activeDeadlineSeconds }}
+{{- if not (regexMatch "^(0|[1-9][0-9]{0,17})$" $activeDeadlineValue) }}
+  {{- fail "fetcher.activeDeadlineSeconds must be a non-negative integer" }}
+{{- end }}
+{{- $activeDeadlineSeconds := int64 $activeDeadlineValue }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "aster.fullname" . }}-fetcher
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fetcher
+spec:
+  schedule: {{ .Values.fetcher.schedule | quote }}
+  suspend: {{ .Values.fetcher.suspend }}
+  concurrencyPolicy: {{ .Values.fetcher.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.fetcher.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.fetcher.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      {{- if or (ge $backoffLimit 0) $containerAnalysis }}
+      backoffLimit: {{ if ge $backoffLimit 0 }}{{ $backoffLimit }}{{ else }}0{{ end }}
+      {{- end }}
+      {{- if gt $activeDeadlineSeconds 0 }}
+      activeDeadlineSeconds: {{ $activeDeadlineSeconds }}
+      {{- end }}
+      template:
+        metadata:
+          labels:
+            {{- include "aster.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: fetcher
+        spec:
+          restartPolicy: {{ $restartPolicy }}
+          {{- if $shadow }}
+          serviceAccountName: {{ include "aster.agentAnalysisShadowServiceAccountName" . }}
+          {{- else if or .Values.orka.fixRuntime.enabled $containerAnalysis }}
+          serviceAccountName: {{ include "aster.orkaServiceAccountName" . }}
+          {{- else if $agentSandboxScheduled }}
+          serviceAccountName: {{ include "aster.agentSandboxClientServiceAccountName" . }}
+          {{- end }}
+          automountServiceAccountToken: {{ ternary "true" "false" $agentSandboxScheduled }}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- if $containerAnalysis }}
+          initContainers:
+            - name: prepare-project
+              image: {{ include "aster.projectMaterializerImage" . }}
+              imagePullPolicy: {{ .Values.project.materializer.image.pullPolicy }}
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  mkdir -p /project/prompts /project/skills
+                  cp -L /source/project.yaml /project/project.yaml
+                  cp -L /source/prompts/system.md /project/prompts/system.md
+                  for file in /source/skills/*; do
+                    if [ -f "$file" ]; then
+                      extension=${file##*.}
+                      extension=$(printf '%s' "$extension" | tr '[:upper:]' '[:lower:]')
+                      case "$extension" in
+                        yaml|yml) cp -L "$file" /project/skills/ ;;
+                      esac
+                    fi
+                  done
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              volumeMounts:
+                - name: project
+                  mountPath: /source
+                  readOnly: true
+                - name: project-runtime
+                  mountPath: /project
+          {{- end }}
+          containers:
+            - name: fetcher
+              {{- if .Values.orka.fixRuntime.enabled }}
+              image: {{ include "aster.fixerImage" . }}
+              imagePullPolicy: {{ .Values.orka.fixRuntime.image.pullPolicy }}
+              {{- else if $agentSandboxFixScheduled }}
+              image: {{ include "aster.agentSandboxDashboardImage" . }}
+              imagePullPolicy: {{ .Values.agentSandbox.fixRuntime.dashboardImage.pullPolicy }}
+              {{- else }}
+              image: {{ include "aster.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              {{- end }}
+              command:
+                - /usr/local/bin/fetcher
+                - -project-dir={{ .Values.project.mountPath }}
+                - -out={{ .Values.persistence.mountPath }}
+                - -builds={{ .Values.fetcher.buildsPerJob }}
+                - -workers={{ .Values.fetcher.workers }}
+                - -timeout={{ .Values.fetcher.timeout }}
+                {{- if .Values.fetcher.includePresubmits }}
+                - -include-presubmits
+                {{- end }}
+                {{- if .Values.ai.enabled }}
+                - -ai
+                {{- end }}
+                {{- if $containerAnalysis }}
+                - -analysis-runtime=orka-container
+                - -orka-analysis-namespace={{ include "aster.orkaAnalysisNamespace" . }}
+                - -orka-analysis-api={{ .Values.analysisRuntime.orkaContainer.api }}
+                - -orka-analysis-image={{ include "aster.analyzerImage" . }}
+                - -orka-analysis-model-secret={{ .Values.analysisRuntime.orkaContainer.modelAuth.existingSecret }}
+                - -orka-analysis-model-token-key={{ .Values.analysisRuntime.orkaContainer.modelAuth.tokenKey }}
+                {{- if or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName }}
+                - -orka-analysis-github-secret={{ include "aster.githubReadSecret" . }}
+                - -orka-analysis-github-token-key={{ .Values.ai.githubReadTokenSecretKey }}
+                {{- end }}
+                - -orka-analysis-state-secret={{ include "aster.orkaAnalysisStateSecret" . }}
+                - -orka-analysis-state-key={{ .Values.analysisRuntime.orkaContainer.state.key }}
+                - -orka-analysis-max-concurrent-tasks={{ .Values.analysisRuntime.orkaContainer.maxConcurrentTasks }}
+                - -orka-analysis-poll-interval={{ .Values.analysisRuntime.orkaContainer.pollInterval }}
+                - -orka-analysis-task-timeout={{ .Values.analysisRuntime.orkaContainer.taskTimeout }}
+                - -orka-analysis-retries={{ .Values.analysisRuntime.orkaContainer.retries }}
+                - {{ printf "-orka-analysis-node-selector-json=%s" (toJson .Values.analysisRuntime.orkaContainer.nodeSelector) | quote }}
+                - {{ printf "-orka-analysis-tolerations-json=%s" (toJson .Values.analysisRuntime.orkaContainer.tolerations) | quote }}
+                - {{ printf "-orka-analysis-affinity-json=%s" (toJson .Values.analysisRuntime.orkaContainer.affinity) | quote }}
+                {{- end }}
+                {{- if $shadow }}
+                - -agent-analysis-shadow
+                - -agent-analysis-shadow-namespace={{ .Values.orka.namespace }}
+                - -agent-analysis-shadow-api={{ .Values.orka.agentAnalysisShadow.api }}
+                - -agent-analysis-shadow-agent-ref={{ .Values.orka.agentAnalysisShadow.admission.agentRef }}
+                - -agent-analysis-shadow-agent-version={{ .Values.orka.agentAnalysisShadow.agentVersion }}
+                {{- if .Values.orka.agentAnalysisShadow.admission.gitSecret }}
+                - -agent-analysis-shadow-git-secret={{ .Values.orka.agentAnalysisShadow.admission.gitSecret }}
+                {{- end }}
+                - -agent-analysis-shadow-ledger={{ include "aster.agentAnalysisShadowLedgerPath" . }}
+                - -agent-analysis-shadow-max-per-run={{ .Values.orka.agentAnalysisShadow.maxPerRun }}
+                - -agent-analysis-shadow-max-turns={{ .Values.orka.agentAnalysisShadow.admission.maxTurns }}
+                - -agent-analysis-shadow-timeout={{ .Values.orka.agentAnalysisShadow.admission.timeout }}
+                - -agent-analysis-shadow-retries={{ .Values.orka.agentAnalysisShadow.admission.retries }}
+                {{- end }}
+                {{- if .Values.agentSandbox.causalCritic.enabled }}
+                - -causal-critic-shadow
+                - -causal-critic-shadow-ledger={{ include "aster.causalCriticLedgerPath" . }}
+                - -causal-critic-shadow-max-per-run={{ .Values.agentSandbox.causalCritic.maxPerRun }}
+                - -causal-critic-shadow-timeout={{ .Values.agentSandbox.causalCritic.timeout }}
+                - -causal-critic-shadow-output-limit-bytes={{ .Values.agentSandbox.causalCritic.outputLimitBytes }}
+                - -causal-critic-shadow-gateway-endpoint={{ .Values.agentSandbox.causalCritic.modelGateway.endpoint }}
+                - -causal-critic-shadow-gateway-model={{ .Values.agentSandbox.causalCritic.modelGateway.model }}
+                - -causal-critic-shadow-gateway-protocol={{ .Values.agentSandbox.causalCritic.modelGateway.protocolVersion }}
+                {{- end }}
+              env:
+                {{- if $agentSandboxFixScheduled }}
+                {{- include "aster.agentSandboxEnv" . | nindent 16 }}
+                {{- end }}
+                {{- if .Values.agentSandbox.causalCritic.enabled }}
+                {{- include "aster.agentSandboxCriticEnv" . | nindent 16 }}
+                {{- end }}
+                {{- if .Values.ai.enabled }}
+                - name: AI_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "aster.aiSecret" . }}
+                      key: {{ .Values.ai.tokenSecretKey }}
+                - name: AI_API
+                  value: {{ .Values.ai.api | quote }}
+                {{- if .Values.ai.reasoningEffort }}
+                - name: AI_REASONING_EFFORT
+                  value: {{ .Values.ai.reasoningEffort | quote }}
+                {{- end }}
+                {{- if ne (printf "%v" .Values.analysisCache.generation) "" }}
+                - name: AI_CACHE_GENERATION
+                  value: {{ .Values.analysisCache.generation | quote }}
+                {{- end }}
+                {{- if .Values.ai.endpoint }}
+                - name: AI_ENDPOINT
+                  value: {{ .Values.ai.endpoint | quote }}
+                {{- end }}
+                {{- if .Values.ai.model }}
+                - name: AI_MODEL
+                  value: {{ .Values.ai.model | quote }}
+                {{- end }}
+                {{- if gt (int .Values.ai.contextWindowTokens) 0 }}
+                - name: AI_CONTEXT_WINDOW_TOKENS
+                  value: {{ .Values.ai.contextWindowTokens | quote }}
+                {{- end }}
+                {{- if or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName .Values.ai.existingSecret }}
+                - name: GITHUB_READ_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "aster.githubReadSecret" . }}
+                      key: {{ .Values.ai.githubReadTokenSecretKey }}
+                      {{- if and (not .Values.ai.githubReadToken) (not .Values.ai.githubReadTokenSecretName) }}
+                      optional: true
+                      {{- end }}
+                {{- end }}
+                {{- end }}
+                {{- if $containerAnalysis }}
+                - name: PROW_AI_STATE_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "aster.orkaAnalysisStateSecret" . }}
+                      key: {{ .Values.analysisRuntime.orkaContainer.state.key }}
+                {{- if .Values.analysisRuntime.orkaContainer.apiAuth.existingSecret }}
+                {{- if .Values.orka.fixRuntime.enabled }}
+                - name: ORKA_ANALYSIS_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.analysisRuntime.orkaContainer.apiAuth.existingSecret }}
+                      key: {{ .Values.analysisRuntime.orkaContainer.apiAuth.tokenKey }}
+                - name: ORKA_API_TOKEN_FILE
+                  value: /var/run/secrets/kubernetes.io/serviceaccount/token
+                {{- else }}
+                - name: ORKA_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.analysisRuntime.orkaContainer.apiAuth.existingSecret }}
+                      key: {{ .Values.analysisRuntime.orkaContainer.apiAuth.tokenKey }}
+                {{- end }}
+                {{- else }}
+                - name: ORKA_API_TOKEN_FILE
+                  value: /var/run/secrets/kubernetes.io/serviceaccount/token
+                {{- end }}
+                {{- else if or .Values.orka.fixRuntime.enabled $shadow }}
+                - name: ORKA_API_TOKEN_FILE
+                  value: /var/run/secrets/kubernetes.io/serviceaccount/token
+                {{- end }}
+                {{- with .Values.fetcher.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              volumeMounts:
+                - name: data
+                  mountPath: {{ .Values.persistence.mountPath }}
+                {{- if $shadow }}
+                - name: agent-analysis-shadow-ledger
+                  mountPath: {{ include "aster.agentAnalysisShadowLedgerMountPath" . }}
+                {{- end }}
+                {{- if .Values.agentSandbox.causalCritic.enabled }}
+                - name: causal-critic-ledger
+                  mountPath: {{ .Values.agentSandbox.causalCritic.ledger.mountPath }}
+                {{- end }}
+                {{- if $containerAnalysis }}
+                - name: project-runtime
+                  mountPath: {{ .Values.project.mountPath }}
+                  readOnly: true
+                {{- else }}
+                - name: project
+                  mountPath: {{ .Values.project.mountPath }}
+                  readOnly: true
+                {{- end }}
+                - name: tmp
+                  mountPath: /tmp
+                {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis $shadow }}
+                - name: orka-api-token
+                  mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+                  readOnly: true
+                {{- end }}
+              resources:
+                {{- toYaml .Values.fetcher.resources | nindent 16 }}
+          {{- with .Values.fetcher.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.fetcher.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.fetcher.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: {{ include "aster.pvcName" . }}
+            {{- if $shadow }}
+            - name: agent-analysis-shadow-ledger
+              persistentVolumeClaim:
+                claimName: {{ include "aster.agentAnalysisShadowPVCName" . }}
+            {{- end }}
+            {{- if .Values.agentSandbox.causalCritic.enabled }}
+            - name: causal-critic-ledger
+              persistentVolumeClaim:
+                claimName: {{ .Values.agentSandbox.causalCritic.ledger.existingClaim }}
+            {{- end }}
+            - name: project
+              configMap:
+                name: {{ include "aster.projectConfigMap" . }}
+                items:
+                  {{- include "aster.projectVolumeItems" . | nindent 18 }}
+            {{- if $containerAnalysis }}
+            - name: project-runtime
+              emptyDir: {}
+            {{- end }}
+            {{- if or .Values.orka.fixRuntime.enabled $containerAnalysis $shadow }}
+            - name: orka-api-token
+              projected:
+                defaultMode: 420
+                sources:
+                  - serviceAccountToken:
+                      path: token
+                      expirationSeconds: 3600
+                  - configMap:
+                      name: kube-root-ca.crt
+                      items:
+                        - key: ca.crt
+                          path: ca.crt
+                  - downwardAPI:
+                      items:
+                        - path: namespace
+                          fieldRef:
+                            fieldPath: metadata.namespace
+            {{- end }}
+            - name: tmp
+              emptyDir: {}
+{{- end }}

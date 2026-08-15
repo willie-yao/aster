@@ -1,0 +1,128 @@
+# Testing
+
+The engine has deterministic backend, frontend, and end-to-end tests. Live model
+quality evaluation is opt-in and is not a normal CI gate.
+
+## Full validation
+
+Run these before opening a pull request that affects both backend and frontend:
+
+```bash
+make build
+cd backend && go vet ./... && go test ./... -count=1 && staticcheck ./...
+cd ../frontend && npm ci && npx tsc -b && npm run lint && npm run build
+```
+
+CI runs backend build, test, and vet plus frontend type check, lint, and build.
+CI does not run `staticcheck`, so run it locally for backend changes.
+
+Check Go formatting with:
+
+```bash
+cd backend
+gofmt -l .
+```
+
+## Focused backend tests
+
+```bash
+# One package tree.
+cd backend && go test ./internal/ai/... -count=1
+
+# One test.
+cd backend && go test ./internal/ai -run TestService_CacheKeyShape -v
+
+# AI subsystem with the race detector.
+cd backend && go test -race -count=1 ./internal/ai/...
+```
+
+Prompt text in `agentic.go`, `responseformat.go`, and `critique.go` is pinned by
+anchor tests. Update the relevant anchor test in the same change as intentional
+prompt edits.
+
+## End-to-end pipeline tests
+
+`internal/e2e` runs `fetcher.Run` through discovery, artifact parsing,
+aggregation, scripted AI analysis, and output writing against local fixtures.
+It has no network, model, or GCS dependency.
+
+```bash
+make e2e
+```
+
+The harness uses:
+
+- The local storage provider with a fixture tree that mirrors Prow storage.
+- `internal/aitest.ScriptServer` for ordered deterministic model responses.
+- `internal/aitest.ReplayServer` for recorded request and response fixtures.
+
+`make e2e` also runs the hermetic email remediation loop in
+`internal/fetcher`. That scenario uses temporary Prow artifacts, a fake GitHub
+transport, a deterministic fix agent, and an in-memory email sender. It covers
+the recurring-pattern alert, fix tracking, presubmit and periodic verification,
+restart persistence, transition-email deduplication, and same-cause recurrence.
+A second bridge test proves `orka.FinalizePatternsAndRun` reaches the same email
+side effects. Neither test sends real email, calls GitHub, runs OpenCode, or
+connects to an Orka service.
+
+Fixtures live under `backend/internal/e2e/testdata`. Scrub secrets and private
+artifact content before committing a recording. The email-loop test writes its
+compact sequential artifacts into temporary directories instead of committing
+additional fixture trees.
+
+## AI quality benchmark
+
+The opt-in benchmark runs real agentic analysis against labeled historical
+failures. Model output is nondeterministic, so it is not part of CI.
+
+```bash
+cd backend
+RUN_AI_BENCHMARK=1 \
+AI_ENDPOINT=http://127.0.0.1:8000/v1/chat/completions \
+AI_MODEL=<model-id> AI_TOKEN=<token-or-placeholder> \
+  go test ./internal/e2e -run TestAIBenchmark -v -timeout 60m
+```
+
+Set `BENCH_PROJECT_DIR` to a consumer repository to load its prompt and AI
+settings. The benchmark also accepts `BENCH_MAX_ITERS`, `BENCH_TIMEOUT`,
+`BENCH_MIN_TOOL_CALLS`, `BENCH_MIN_GCS_BYTES`, and
+`BENCH_CRITIQUE_RETRIES` overrides.
+
+There is no checked-in A/B comparison command. Compare benchmark logs or saved
+results when evaluating two models or configurations.
+
+The benchmark reports the unique successful filesystem and Kubernetes Tool names
+and per-Tool call counts for each trial. The Orka container kind test passes its
+transported private trace through the same scorer and reporting path.
+
+## Orka container analyzer kind test
+
+The experimental runtime has an isolated kind harness. It creates a fresh
+three-node cluster with a CPU pool and a tainted mock GPU pool, builds the pinned
+Orka controller and analyzer image, and runs scripted lifecycle checks:
+
+```bash
+experimental/orka/run-container-analyzer-kind.sh
+```
+
+The harness covers a scored 5/5 result, analyzer retry, failed-Task private
+trace transport, persistent cache reuse, a bounded five-Task wave, encrypted
+result and state parsing, CPU placement, and cleanup. It does not contact a live GPU cluster unless the explicit
+`ORKA_CONTAINER_LIVE_*` variables are set. The shell ownership regression is:
+
+```bash
+experimental/orka/test-container-analyzer-kind.sh
+```
+
+Build the dedicated image independently with `make analyzer-image`.
+
+## Documentation validation
+
+When editing Markdown:
+
+- Verify local links and heading anchors.
+- Validate generated scaffold text with `go test ./internal/onboard`.
+- Run `make helm-check` when Helm templates, packaged files, examples, or values
+  change. It lints the chart, verifies the default in-process render, the
+  experimental Orka container selector and Task-only RBAC, independent Orka fix
+  RBAC, invalid-value failures, and the operational helpers.
