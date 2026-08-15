@@ -137,6 +137,9 @@ case ${1:-} in
     if [[ ${2:-} == 'HEAD^{commit}' ]]; then
       printf '%s\n' "${HEAD_COMMIT:-2222222222222222222222222222222222222222}"
     elif [[ ${2:-} == refs/aster-release/*/module'^{commit}' ]]; then
+      if [[ ${MODULE_TAG_PEEL_FAIL:-false} == true ]]; then
+        exit 46
+      fi
         printf '%s\n' "${MODULE_TAG_COMMIT:-${HEAD_COMMIT:-2222222222222222222222222222222222222222}}"
     elif [[ ${2:-} == refs/aster-release/*/root'^{commit}' ]]; then
       printf '%s\n' "${ROOT_TAG_COMMIT:-${HEAD_COMMIT:-2222222222222222222222222222222222222222}}"
@@ -243,6 +246,17 @@ fi
 grep -Fq 'failed to fetch remote release tag: backend/v1.2.3' "$tmp/fetch-failure.out"
 if grep -Eq '^(helm |gh |go build|git (-c )?tag|git push)' "$log"; then
   echo 'failed module-tag fetch performed publication side effects' >&2
+  exit 1
+fi
+
+: > "$log"
+if (cd "$root" && RELEASE_TEST_LOG="$log" MODULE_TAG_PEEL_FAIL=true PATH="$tmp/bin:$PATH" TAG=v1.2.3 RELEASE_TAGS_ONLY=true "$script") >"$tmp/noncommit-tag.out" 2>&1; then
+  echo 'non-commit module tag was accepted' >&2
+  exit 1
+fi
+grep -Fq 'remote release tag does not identify a commit: backend/v1.2.3' "$tmp/noncommit-tag.out"
+if grep -Eq '^(helm |gh |go build|git (-c )?tag|git push)' "$log"; then
+  echo 'non-commit module tag performed publication side effects' >&2
   exit 1
 fi
 

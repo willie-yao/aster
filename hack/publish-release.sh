@@ -50,7 +50,12 @@ remote_tag_commit() {
     echo "failed to fetch remote release tag: $tag" >&2
     return 1
   fi
-  git rev-parse "$remote_ref^{commit}"
+  local commit
+  if ! commit=$(git rev-parse "$remote_ref^{commit}"); then
+    echo "remote release tag does not identify a commit: $tag" >&2
+    return 1
+  fi
+  printf '%s\n' "$commit"
 }
 
 ensure_release_tag_pair() {
@@ -61,7 +66,8 @@ ensure_release_tag_pair() {
   root_commit=$(remote_tag_commit "$TAG" "$tmp/root-tag-remote" "$root_remote_ref") || root_status=$?
   module_commit=$(remote_tag_commit "$module_tag" "$tmp/module-tag-remote" "$module_remote_ref") || module_status=$?
 
-  if [[ $root_status -eq 1 || $module_status -eq 1 ]]; then
+  if [[ $root_status -ne 0 && $root_status -ne 2 ]] ||
+    [[ $module_status -ne 0 && $module_status -ne 2 ]]; then
     return 1
   fi
   if [[ $root_status -eq 2 ]]; then
