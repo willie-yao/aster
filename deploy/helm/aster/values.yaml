@@ -94,7 +94,8 @@ agentSandbox:
     enabled: false
     # Existing consumer-owned namespace containing the Sandbox workloads.
     namespace: ""
-    # Required secure runtime for deployed configurations, for example kata-vm-isolation.
+    # Required secure RuntimeClass name for deployed configurations, for example
+    # a reviewed Kata or gVisor class.
     runtimeClassName: ""
     image:
       repository: ""
@@ -194,7 +195,7 @@ agentSandbox:
     outputLimitBytes: 262144
     pollInterval: 250ms
     networkPolicy:
-      # Use cilium on AKS Cilium/Kata when Kubernetes NetworkPolicy does not
+      # Example: use cilium on AKS Cilium/Kata when Kubernetes NetworkPolicy does not
       # admit cross-node VM-isolated traffic to the gateway.
       mode: kubernetes
       enabled: true
@@ -248,7 +249,7 @@ agentSandbox:
       existingClaim: ""
       mountPath: /private/causal-critic
     networkPolicy:
-      # Required when enabled. Use cilium on AKS Cilium/Kata, where the
+      # Required when enabled. For example, use cilium on AKS Cilium/Kata, where the
       # Kubernetes NetworkPolicy service peer does not admit cross-node Kata traffic.
       mode: kubernetes
       enabled: false

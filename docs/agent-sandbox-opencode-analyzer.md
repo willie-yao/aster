@@ -553,7 +553,10 @@ window. Benchmarks must set `ANALYZER_BENCH_MODEL_CONTEXT_TOKENS` and
 larger bound planned for the corrected experiment and does not change any
 production default.
 
-### AKS Kata prepared-mount smoke test
+### Provider-specific historical evidence: AKS Kata prepared-mount smoke test
+
+This test records one AKS Kata result. It is not the universal Aster
+secure-runtime contract or a compatibility claim for other runtimes.
 
 On August 11, 2026, a temporary `prow-dashboard-demo` Sandbox using
 `kata-vm-isolation` successfully mounted both content-addressed PVC subpaths.

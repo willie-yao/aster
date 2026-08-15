@@ -626,6 +626,8 @@ Sandbox `v1beta1` resource per Fix PR request. Agent Sandbox remains disabled by
 default. The consumer installs and upgrades the controller separately. The
 dashboard chart never installs the controller, CRD, a secure RuntimeClass, node
 infrastructure, or provider egress infrastructure.
+The [secure-runtime contract](kubernetes-platform.md#secure-runtime-contract) is
+provider-agnostic and applies only when an Agent Sandbox feature is enabled.
 
 After the runtime is explicitly enabled, `direct` is the default credential
 mode. Direct bearer mode gives the OpenCode process access to one dedicated
