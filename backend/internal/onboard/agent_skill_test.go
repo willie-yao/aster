@@ -47,12 +47,16 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 		"Run discovery as soon as the source is known", "Do not ask for a slug",
 		"separate workspaces, plans, handoffs", "fetch `origin`, compare", "stale local engine merely", "hard scope boundary",
 		"manifest/locations.json", "manifest/consumer-files.sha256", "reports/setup-summary.md",
+		"@v0.9.0-rc.2", "<engine-ref>", "-engine-ref <engine-ref>",
+		"exact release tag or full commit SHA", "configured GitHub",
+		"commit is local-only", "before a Pages plan", "local-only checkout can be deployed",
+		"Pages workflow ends in `@<engine-ref>`", "never the mutable name `main`",
 	} {
 		if !strings.Contains(text, anchor) {
 			t.Errorf("skill missing %q", anchor)
 		}
 	}
-	for _, forbidden := range []string{"api-experimental", "rm -rf", "--no-verify"} {
+	for _, forbidden := range []string{"api-experimental", "rm -rf", "--no-verify", "backend/cmd/aster@latest", "-engine-ref v0.9.0-rc.2"} {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("skill contains forbidden text %q", forbidden)
 		}
