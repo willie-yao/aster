@@ -35,6 +35,18 @@ Select one `<aster>` command and, for Pages, one matching immutable
 `<engine-ref>` plus its externally resolved full `<selected-commit>` before
 planning.
 
+The rendered Pages engine repository is fixed:
+
+```text
+<engine-repository> = willie-yao/aster
+<engine-repository-url> = https://github.com/willie-yao/aster
+```
+
+Every Pages module-origin, tag, commit, and availability check must use this
+exact official repository. Do not substitute a checkout origin or configurable
+fork coordinate because the generated workflow hardcodes
+`willie-yao/aster/.github/workflows/reusable-deploy.yml`.
+
 The default published pair is:
 
 ```text
@@ -54,20 +66,25 @@ go mod download -json \
   github.com/willie-yao/aster/backend@<module-selector>
 ```
 
-Require the result to identify the Aster Git repository, the `backend`
-subdirectory, and a full `Origin.Hash`; record that hash as
+Require `Origin.VCS` to be `git`, `Origin.URL` to be exactly
+`https://github.com/willie-yao/aster`, `Origin.Subdir` to be `backend`, and
+`Origin.Hash` to be a full commit SHA; record that hash as
 `<selected-commit>`. Do not infer identity from a pseudo-version's abbreviated
 suffix or from optional CLI build information.
 
 For a release selector `v<version>`, set `<engine-ref>` to that exact tag and
-use `git ls-remote --tags` against the configured Aster Git remote to resolve
-both root `v<version>` and module `backend/v<version>` tags. Peel annotated
-tags, treat a lightweight tag's direct target as its peeled target, and require
-both tags to resolve to `<selected-commit>`. For a full commit selector, require
+use `git ls-remote --tags https://github.com/willie-yao/aster` to resolve both
+root `v<version>` and module `backend/v<version>` tags. Peel annotated tags,
+treat a lightweight tag's direct target as its peeled target, and require both
+tags to resolve to `<selected-commit>`. For a full commit selector, require
 `Origin.Hash`, the requested full SHA, `<selected-commit>`, and `<engine-ref>`
-to be identical. Stop before Pages planning if module origin, paired tags,
-remote availability, or any identity comparison cannot be proved. These are Go
-and Git checks, not provider API calls.
+to be identical. Prove the selected commit is available from the official
+repository with a provider-free `git fetch --no-tags
+https://github.com/willie-yao/aster <selected-commit>` into an isolated
+temporary Git repository, then require `FETCH_HEAD^{commit}` to equal
+`<selected-commit>`. Stop before Pages planning if module origin, paired tags,
+official commit availability, or any identity comparison cannot be proved.
+These are Go and Git checks, not provider API calls.
 
 When working in an Aster checkout, the local command is available for
 development and read-only discovery:
@@ -77,13 +94,14 @@ go -C backend run ./cmd/aster onboard ...
 ```
 
 Record the full `git rev-parse HEAD` as `<selected-commit>`, worktree state, and
-configured GitHub remote. A Pages `<engine-ref>` may use that full commit SHA
-only when the checkout is unmodified and the commit is available on the
-configured GitHub remote. If the checkout is dirty, the commit is local-only,
-or remote availability cannot be established, local discovery may continue but
-stop before a Pages plan and ask for a publishable exact tag or full commit SHA.
-Do not claim that a local-only checkout can be deployed by the reusable
-workflow.
+checkout origin for context. A Pages `<engine-ref>` may use that full commit SHA
+only when the checkout is unmodified and the official-repository fetch above
+proves that exact commit is available from `willie-yao/aster`. If the checkout
+is dirty, the commit is fork-only or local-only, or official availability
+cannot be established, local discovery and Kubernetes work may continue but
+stop before a Pages plan and ask for an exact tag or full commit SHA published
+in the official repository. Do not claim that a fork-only or local-only
+checkout can be deployed by the reusable workflow.
 
 Outside an Aster checkout, use the default published command:
 
@@ -93,13 +111,14 @@ go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard ...
 
 Use one form consistently as `<aster>` for discovery, planning, application,
 and doctor.
-When the request asks for the current or latest engine, fetch `origin`, compare
-`HEAD` with `origin/main`, and record both SHAs. If the checkout is stale, dirty,
-or its primary branch must remain untouched, create a detached engine worktree
-at current `origin/main` under the task workspace and use it for every command.
-Do not silently use a stale local engine merely because it is the current
-working directory. For Pages, use the full reviewed `origin/main` commit SHA as
-both the module source and `<engine-ref>`, never the mutable name `main`.
+When the request asks for the current or latest engine, fetch the canonical
+Aster URL, compare `HEAD` with its current `main`, and record both SHAs. If the
+checkout is stale, dirty, fork-only, or its primary branch must remain
+untouched, create a detached engine worktree at the reviewed official `main`
+commit under the task workspace and use it for every command. Do not silently
+use a stale or fork-only local engine merely because it is the current working
+directory. For Pages, use that full reviewed official commit SHA as both the
+module source and `<engine-ref>`, never the mutable name `main`.
 Preserve an explicitly requested exact ref or commit.
 
 The reviewed plan records the engine path, exact module selector and resolved

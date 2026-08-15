@@ -45,14 +45,17 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 		"onboard doctor", "After the user confirms the reviewed plan",
 		"Never delete stale or unrelated files", "Use values already supplied anywhere in the user's request", "Never turn literal template placeholders",
 		"Run discovery as soon as the source is known", "Do not ask for a slug",
-		"separate workspaces, plans, handoffs", "fetch `origin`, compare", "stale local engine merely", "hard scope boundary",
+		"separate workspaces, plans, handoffs", "fetch the canonical", "stale or fork-only local engine", "hard scope boundary",
 		"manifest/locations.json", "manifest/consumer-files.sha256", "reports/setup-summary.md",
 		"@v0.9.0-rc.2", "<engine-ref>", "-engine-ref <engine-ref>",
-		"exact release tag or full commit SHA", "configured GitHub",
-		"commit is local-only", "before a Pages plan", "local-only checkout can be deployed",
+		"exact release tag or full commit SHA", "<engine-repository> = willie-yao/aster",
+		"<engine-repository-url> = https://github.com/willie-yao/aster",
+		"willie-yao/aster/.github/workflows/reusable-deploy.yml",
+		"commit is fork-only or local-only", "before a Pages plan", "fork-only or local-only",
 		"Pages workflow ends in `@<engine-ref>`", "never the mutable name `main`",
 		"<selected-commit>", "<module-selector>", "go mod download -json",
-		"Origin.Hash", "backend/v<version>", "paired tags",
+		"Origin.Hash", "Origin.URL", "backend/v<version>", "paired tags",
+		"git fetch --no-tags", "fork-only or local-only", "official repository",
 		"If the handoff or CLI build information contains", "non-empty engine revision",
 		"versioned `go run` may omit that revision", "Never accept a mutable ref or skip the external identity proof",
 	} {
@@ -63,6 +66,7 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 	for _, forbidden := range []string{
 		"api-experimental", "rm -rf", "--no-verify", "backend/cmd/aster@latest",
 		"-engine-ref v0.9.0-rc.2", "recorded engine revision is the commit resolved from that exact ref",
+		"configured Aster Git remote", "configured GitHub remote", "available on the configured GitHub remote",
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("skill contains forbidden text %q", forbidden)
