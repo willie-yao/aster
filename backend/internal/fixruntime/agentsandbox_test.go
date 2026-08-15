@@ -2,7 +2,9 @@ package fixruntime
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +38,15 @@ type fakeAgentSandboxAPI struct {
 	returnStateOnCreateError bool
 	deleteUID                string
 	executionPods            []string
+	caValidationErr          error
+	caValidationCalls        int
+}
+
+func (f *fakeAgentSandboxAPI) ValidateCABundle(_ context.Context, _ string, _ modelprovider.CABundleConfig) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.caValidationCalls++
+	return f.caValidationErr
 }
 
 func (f *fakeAgentSandboxAPI) Create(_ context.Context, _ string, object map[string]any) (sandboxState, error) {
@@ -398,6 +409,9 @@ func TestAgentSandboxRuntimeDerivesStableExecutionIdentity(t *testing.T) {
 func TestAgentSandboxRuntimeIdentityIncludesWorkloadConfiguration(t *testing.T) {
 	base := testAgentSandboxOptions()
 	baseIdentity := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, base).RuntimeIdentity()
+	if legacy := legacyAgentSandboxRuntimeIdentity(base); baseIdentity != legacy {
+		t.Fatalf("disabled CA runtime identity changed: got %s want %s", baseIdentity, legacy)
+	}
 	for _, mutate := range []func(*AgentSandboxOptions){
 		func(opts *AgentSandboxOptions) { opts.Namespace = "other-exec" },
 		func(opts *AgentSandboxOptions) { opts.ServiceAccountName = "other-workload" },
@@ -414,6 +428,15 @@ func TestAgentSandboxRuntimeIdentityIncludesWorkloadConfiguration(t *testing.T) 
 			opts.StagerImage = "stager:test"
 			opts.StagerInputClaim = "analysis-input"
 		},
+		func(opts *AgentSandboxOptions) { opts.CABundle = testCABundleConfig() },
+		func(opts *AgentSandboxOptions) {
+			opts.CABundle = testCABundleConfig()
+			opts.CABundle.Key = "rotated.pem"
+		},
+		func(opts *AgentSandboxOptions) {
+			opts.CABundle = testCABundleConfig()
+			opts.CABundle.SHA256 = strings.Repeat("b", 64)
+		},
 	} {
 		changed := base
 		mutate(&changed)
@@ -421,6 +444,121 @@ func TestAgentSandboxRuntimeIdentityIncludesWorkloadConfiguration(t *testing.T) 
 			t.Fatalf("runtime identity did not change for %+v", changed)
 		}
 	}
+}
+
+func legacyAgentSandboxRuntimeIdentity(opts AgentSandboxOptions) string {
+	opts = normalizeAgentSandboxOptions(opts)
+	payload, _ := json.Marshal(struct {
+		Backend            string                           `json:"backend"`
+		Namespace          string                           `json:"namespace"`
+		Image              string                           `json:"image"`
+		ServiceAccountName string                           `json:"service_account_name"`
+		RuntimeClassName   string                           `json:"runtime_class_name"`
+		ModelProvider      modelprovider.Config             `json:"model_provider,omitempty"`
+		ProviderSecretRef  ProviderSecretRef                `json:"provider_secret_ref,omitempty"`
+		ModelGateway       engineruntime.ModelGatewayConfig `json:"model_gateway,omitempty"`
+		PublicCAPrivateDNS bool                             `json:"public_ca_private_dns,omitempty"`
+		Timeout            string                           `json:"timeout"`
+		OutputLimitBytes   int64                            `json:"output_limit_bytes"`
+		PollEvery          string                           `json:"poll_every"`
+		Resources          AgentSandboxResources            `json:"resources"`
+		AppArmorCapability string                           `json:"app_armor_capability"`
+		StagerImage        string                           `json:"stager_image,omitempty"`
+		StagerInputClaim   string                           `json:"stager_input_claim,omitempty"`
+	}{
+		Backend: agentSandboxBackend, Namespace: opts.Namespace, Image: opts.Image,
+		ServiceAccountName: opts.ServiceAccountName, RuntimeClassName: opts.RuntimeClassName,
+		ModelProvider: opts.ModelProvider, ProviderSecretRef: opts.ProviderSecretRef,
+		ModelGateway: opts.ModelGateway, PublicCAPrivateDNS: opts.PublicCAPrivateDNS,
+		Timeout: opts.Timeout.String(), OutputLimitBytes: opts.OutputLimitBytes, PollEvery: opts.PollEvery.String(),
+		Resources: opts.Resources, AppArmorCapability: opts.appArmorCapability.String(), StagerImage: opts.StagerImage, StagerInputClaim: opts.StagerInputClaim,
+	})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+func TestAgentSandboxCABundleIsValidatedAndMountedForFixOnly(t *testing.T) {
+	api := &fakeAgentSandboxAPI{
+		state: sandboxState{Exists: true, UID: "uid-1", PodName: "fix-request-1", Finished: true, FinishedReason: "PodSucceeded"},
+		logs:  `{}`,
+	}
+	opts := testAgentSandboxOptions()
+	opts.CABundle = testCABundleConfig()
+	runtime := newAgentSandboxRuntimeForTest(api, opts)
+	_, err := runtime.Run(t.Context(), agentsandbox.Spec{
+		Purpose: "fix", ExecutionID: "request-1", RequestEnv: agentSandboxRequestEnv, Request: []byte(`{"version":2}`),
+		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit, WritableWorkspace: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if api.caValidationCalls != 1 {
+		t.Fatalf("CA validation calls = %d", api.caValidationCalls)
+	}
+	metadata := api.object["metadata"].(map[string]any)
+	annotations := metadata["annotations"].(map[string]any)
+	if annotations[agentSandboxCABundleAnnotation] != opts.CABundle.SHA256 {
+		t.Fatalf("CA annotation = %v", annotations[agentSandboxCABundleAnnotation])
+	}
+	pod := api.object["spec"].(map[string]any)["podTemplate"].(map[string]any)["spec"].(map[string]any)
+	container := pod["containers"].([]any)[0].(map[string]any)
+	assertEnvValue(t, container["env"].([]any), "NODE_EXTRA_CA_CERTS", modelprovider.CABundleMountPath)
+	assertEnvValue(t, container["env"].([]any), modelprovider.CABundleHashEnv, opts.CABundle.SHA256)
+	mounts := container["volumeMounts"].([]any)
+	if len(mounts) != 3 || mounts[2].(map[string]any)["name"] != modelprovider.CABundleVolumeName || mounts[2].(map[string]any)["mountPath"] != modelprovider.CABundleMountDir || mounts[2].(map[string]any)["readOnly"] != true {
+		t.Fatalf("CA mounts = %v", mounts)
+	}
+	volumes := pod["volumes"].([]any)
+	if len(volumes) != 3 {
+		t.Fatalf("volumes = %v", volumes)
+	}
+	configMap := volumes[2].(map[string]any)["configMap"].(map[string]any)
+	if configMap["name"] != opts.CABundle.ExistingConfigMap || configMap["optional"] != false || configMap["defaultMode"] != int64(0o444) {
+		t.Fatalf("CA ConfigMap volume = %v", configMap)
+	}
+	items := configMap["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["key"] != opts.CABundle.Key || items[0].(map[string]any)["path"] != "ca-bundle.pem" {
+		t.Fatalf("CA ConfigMap items = %v", items)
+	}
+
+	_, err = runtime.Run(t.Context(), agentsandbox.Spec{
+		Purpose: "analysis", ExecutionID: "request-2", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{"version":3}`),
+		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit, WritableWorkspace: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "Fix-runtime only") {
+		t.Fatalf("analysis error = %v", err)
+	}
+}
+
+func TestAgentSandboxCABundleValidationFailsBeforeCreate(t *testing.T) {
+	api := &fakeAgentSandboxAPI{caValidationErr: errors.New("configured hash mismatch")}
+	opts := testAgentSandboxOptions()
+	opts.CABundle = testCABundleConfig()
+	runtime := newAgentSandboxRuntimeForTest(api, opts)
+	_, err := runtime.Run(t.Context(), agentsandbox.Spec{
+		Purpose: "fix", ExecutionID: "request-1", RequestEnv: agentSandboxRequestEnv, Request: []byte(`{"version":2}`),
+		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit, WritableWorkspace: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "validate model provider CA bundle") {
+		t.Fatalf("error = %v", err)
+	}
+	if api.object != nil {
+		t.Fatal("Sandbox was created after CA validation failure")
+	}
+}
+
+func assertEnvValue(t *testing.T, env []any, name, want string) {
+	t.Helper()
+	for _, raw := range env {
+		entry := raw.(map[string]any)
+		if entry["name"] == name {
+			if entry["value"] != want {
+				t.Fatalf("%s = %v, want %q", name, entry["value"], want)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing environment %s", name)
 }
 
 func TestAgentSandboxBenchmarkConfigUsesExplicitKubeContext(t *testing.T) {
@@ -646,6 +784,10 @@ func testAgentSandboxOptions() AgentSandboxOptions {
 		ModelProvider: testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture-model"),
 		Timeout:       time.Minute, OutputLimitBytes: 512 << 10, PollEvery: time.Millisecond,
 	}
+}
+
+func testCABundleConfig() modelprovider.CABundleConfig {
+	return modelprovider.CABundleConfig{ExistingConfigMap: "model-provider-ca", Key: "ca-bundle.pem", SHA256: strings.Repeat("a", 64)}
 }
 
 func assertSandboxSecurity(t *testing.T, object map[string]any) {

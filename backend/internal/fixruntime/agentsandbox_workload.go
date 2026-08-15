@@ -63,6 +63,12 @@ func (r *AgentSandboxRuntime) sandboxWorkloadPodSpec(spec agentsandbox.Spec) map
 		"name":  spec.RequestEnv,
 		"value": base64.StdEncoding.EncodeToString(spec.Request),
 	}}
+	if r.opts.CABundle.Enabled() {
+		env = append(env,
+			map[string]any{"name": "NODE_EXTRA_CA_CERTS", "value": modelprovider.CABundleMountPath},
+			map[string]any{"name": modelprovider.CABundleHashEnv, "value": r.opts.CABundle.SHA256},
+		)
+	}
 	if r.opts.ModelProvider.Auth.Type == modelprovider.AuthTypeBearer {
 		env = append(env, map[string]any{
 			"name": modelprovider.TokenEnv,
@@ -125,11 +131,25 @@ func (r *AgentSandboxRuntime) sandboxWorkloadPodSpec(spec agentsandbox.Spec) map
 		}}
 		podSpec["volumes"] = stagedReadOnlyWorkspaceVolumes(r.opts.Resources.EphemeralStorage, r.opts.StagerInputClaim)
 	case spec.WritableWorkspace:
-		container["volumeMounts"] = []any{
+		mounts := []any{
 			map[string]any{"name": "workspace", "mountPath": agentsandbox.StagedWorkspaceRoot},
 			map[string]any{"name": "tmp", "mountPath": "/tmp"},
 		}
-		podSpec["volumes"] = writableWorkspaceVolumes(r.opts.Resources.EphemeralStorage)
+		volumes := writableWorkspaceVolumes(r.opts.Resources.EphemeralStorage)
+		if r.opts.CABundle.Enabled() {
+			mounts = append(mounts, map[string]any{
+				"name": modelprovider.CABundleVolumeName, "mountPath": modelprovider.CABundleMountDir, "readOnly": true,
+			})
+			volumes = append(volumes, map[string]any{
+				"name": modelprovider.CABundleVolumeName,
+				"configMap": map[string]any{
+					"name": r.opts.CABundle.ExistingConfigMap, "optional": false, "defaultMode": int64(0o444),
+					"items": []any{map[string]any{"key": r.opts.CABundle.Key, "path": "ca-bundle.pem"}},
+				},
+			})
+		}
+		container["volumeMounts"] = mounts
+		podSpec["volumes"] = volumes
 	}
 	if r.opts.RuntimeClassName != "" {
 		podSpec["runtimeClassName"] = r.opts.RuntimeClassName

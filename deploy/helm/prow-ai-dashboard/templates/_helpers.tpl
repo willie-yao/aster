@@ -544,6 +544,14 @@ key, or bot token).
   value: {{ .Values.agentSandbox.fixRuntime.modelProvider.auth.tokenKey | quote }}
 - name: AGENT_SANDBOX_MODEL_PROVIDER_PUBLIC_CA_PRIVATE_DNS
   value: {{ ternary "true" "false" .Values.agentSandbox.fixRuntime.modelProvider.publicCAPrivateDNS | quote }}
+{{- if .Values.agentSandbox.fixRuntime.caBundle.existingConfigMap }}
+- name: AGENT_SANDBOX_MODEL_PROVIDER_CA_CONFIG_MAP
+  value: {{ .Values.agentSandbox.fixRuntime.caBundle.existingConfigMap | quote }}
+- name: AGENT_SANDBOX_MODEL_PROVIDER_CA_KEY
+  value: {{ .Values.agentSandbox.fixRuntime.caBundle.key | quote }}
+- name: AGENT_SANDBOX_MODEL_PROVIDER_CA_SHA256
+  value: {{ .Values.agentSandbox.fixRuntime.caBundle.sha256 | quote }}
+{{- end }}
 - name: AGENT_SANDBOX_TIMEOUT
   value: {{ .Values.agentSandbox.fixRuntime.timeout | quote }}
 - name: AGENT_SANDBOX_OUTPUT_LIMIT_BYTES
@@ -564,8 +572,17 @@ key, or bot token).
 
 {{/* Validate the disabled-by-default consumer-installed Agent Sandbox runtime. */}}
 {{- define "prow-ai-dashboard.validateAgentSandboxFixRuntime" -}}
-{{- if .Values.agentSandbox.fixRuntime.enabled -}}
-  {{- $cfg := .Values.agentSandbox.fixRuntime -}}
+{{- $cfg := .Values.agentSandbox.fixRuntime -}}
+{{- $ca := $cfg.caBundle -}}
+{{- $caCount := add (ternary 1 0 (ne $ca.existingConfigMap "")) (ternary 1 0 (ne $ca.key "")) (ternary 1 0 (ne $ca.sha256 "")) -}}
+{{- if and (not $cfg.enabled) (gt $caCount 0) -}}{{- fail "agentSandbox.fixRuntime.caBundle requires agentSandbox.fixRuntime.enabled=true" -}}{{- end -}}
+{{- if and (ne $caCount 0) (ne $caCount 3) -}}{{- fail "agentSandbox.fixRuntime.caBundle requires existingConfigMap, key, and sha256 together" -}}{{- end -}}
+{{- if eq $caCount 3 -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $ca.existingConfigMap) -}}{{- fail "agentSandbox.fixRuntime.caBundle.existingConfigMap must be a lowercase DNS subdomain" -}}{{- end -}}
+  {{- if not (regexMatch "^[A-Za-z0-9._-]+$" $ca.key) -}}{{- fail "agentSandbox.fixRuntime.caBundle.key must be a valid ConfigMap key" -}}{{- end -}}
+  {{- if not (regexMatch "^[0-9a-f]{64}$" $ca.sha256) -}}{{- fail "agentSandbox.fixRuntime.caBundle.sha256 must be 64 lowercase hexadecimal characters" -}}{{- end -}}
+{{- end -}}
+{{- if $cfg.enabled -}}
   {{- if .Values.project.existingConfigMap -}}{{- fail "agentSandbox.fixRuntime requires inline project.config so security-sensitive values can be compared" -}}{{- end -}}
   {{- if not .Values.project.config -}}{{- fail "agentSandbox.fixRuntime requires project.config" -}}{{- end -}}
   {{- $project := fromYaml .Values.project.config -}}

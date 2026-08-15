@@ -41,6 +41,7 @@ const (
 	agentSandboxContractAnnotation         = "prow-ai-dashboard/execution-contract-sha256"
 	agentSandboxIDAnnotation               = "prow-ai-dashboard/execution-id"
 	agentSandboxReasoningEffortAnnotation  = "prow-ai-dashboard/model-provider-reasoning-effort"
+	agentSandboxCABundleAnnotation         = "prow-ai-dashboard/model-provider-ca-sha256"
 	agentSandboxPreparedAnnotation         = "prow-ai-dashboard/prepared-manifest-sha256"
 	agentSandboxPreparedIdentityAnnotation = "prow-ai-dashboard/prepared-workspace-sha256"
 	agentSandboxPodAnnotation              = "agents.x-k8s.io/pod-name"
@@ -70,6 +71,7 @@ func agentSandboxRunTimeout(spec agentsandbox.Spec) time.Duration {
 
 var (
 	sandboxesGVR                = schema.GroupVersionResource{Group: "agents.x-k8s.io", Version: "v1beta1", Resource: "sandboxes"}
+	configMapsGVR               = schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
 	immutableExecutorImage      = regexp.MustCompile(`^[^[:space:]]+@sha256:[0-9a-f]{64}$`)
 	agentSandboxInClusterConfig = rest.InClusterConfig
 )
@@ -80,6 +82,11 @@ func (r *AgentSandboxRuntime) RuntimeIdentity() string {
 		return ""
 	}
 	opts := normalizeAgentSandboxOptions(r.opts)
+	var caBundle *modelprovider.CABundleConfig
+	if opts.CABundle.Enabled() {
+		configured := opts.CABundle
+		caBundle = &configured
+	}
 	payload, _ := json.Marshal(struct {
 		Backend            string                           `json:"backend"`
 		Namespace          string                           `json:"namespace"`
@@ -90,6 +97,8 @@ func (r *AgentSandboxRuntime) RuntimeIdentity() string {
 		ProviderSecretRef  ProviderSecretRef                `json:"provider_secret_ref,omitempty"`
 		ModelGateway       engineruntime.ModelGatewayConfig `json:"model_gateway,omitempty"`
 		PublicCAPrivateDNS bool                             `json:"public_ca_private_dns,omitempty"`
+		CABundle           *modelprovider.CABundleConfig    `json:"ca_bundle,omitempty"`
+		CABundleContract   string                           `json:"ca_bundle_contract,omitempty"`
 		Timeout            string                           `json:"timeout"`
 		OutputLimitBytes   int64                            `json:"output_limit_bytes"`
 		PollEvery          string                           `json:"poll_every"`
@@ -102,6 +111,7 @@ func (r *AgentSandboxRuntime) RuntimeIdentity() string {
 		ServiceAccountName: opts.ServiceAccountName, RuntimeClassName: opts.RuntimeClassName,
 		ModelProvider: opts.ModelProvider, ProviderSecretRef: opts.ProviderSecretRef,
 		ModelGateway: opts.ModelGateway, PublicCAPrivateDNS: opts.PublicCAPrivateDNS,
+		CABundle: caBundle, CABundleContract: caBundleContract(opts.CABundle),
 		Timeout: opts.Timeout.String(), OutputLimitBytes: opts.OutputLimitBytes, PollEvery: opts.PollEvery.String(),
 		Resources: opts.Resources, AppArmorCapability: opts.appArmorCapability.String(), StagerImage: opts.StagerImage, StagerInputClaim: opts.StagerInputClaim,
 	})
@@ -135,6 +145,7 @@ type AgentSandboxOptions struct {
 	ProviderSecretRef  ProviderSecretRef
 	ModelGateway       engineruntime.ModelGatewayConfig
 	PublicCAPrivateDNS bool
+	CABundle           modelprovider.CABundleConfig
 	Timeout            time.Duration
 	OutputLimitBytes   int64
 	PollEvery          time.Duration
@@ -166,6 +177,7 @@ type sandboxState struct {
 // agentSandboxAPI is the low-level lifecycle seam intended for a future shared
 // Agent Sandbox package. It excludes Fix PR prompt, patch, and result policy.
 type agentSandboxAPI interface {
+	ValidateCABundle(context.Context, string, modelprovider.CABundleConfig) error
 	Create(context.Context, string, map[string]any) (sandboxState, error)
 	State(context.Context, string, string) (sandboxState, error)
 	Delete(context.Context, string, string, string) error
@@ -205,12 +217,12 @@ func newAgentSandboxRuntimeForTest(api agentSandboxAPI, opts AgentSandboxOptions
 
 // NewAgentSandboxRuntimeFromEnv constructs the Fix PR adapter from deployment environment and Kubernetes config.
 func NewAgentSandboxRuntimeFromEnv(expectedProvider modelprovider.Config, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
-	return NewAgentSandboxProviderRunnerFromEnv("AGENT_SANDBOX_", expectedProvider, expectedTimeout, expectedOutputLimit)
+	return newAgentSandboxProviderRunnerFromEnv("AGENT_SANDBOX_", "", true, true, expectedProvider, expectedTimeout, expectedOutputLimit)
 }
 
 // NewAgentSandboxProviderRunnerFromEnv constructs an OpenCode lifecycle runner from one reserved environment prefix.
 func NewAgentSandboxProviderRunnerFromEnv(prefix string, expectedProvider modelprovider.Config, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
-	return newAgentSandboxProviderRunnerFromEnv(prefix, "", true, expectedProvider, expectedTimeout, expectedOutputLimit)
+	return newAgentSandboxProviderRunnerFromEnv(prefix, "", true, false, expectedProvider, expectedTimeout, expectedOutputLimit)
 }
 
 // NewAgentSandboxProviderRunnerForBenchmarkFromEnv allows an explicit disposable kubeconfig context for opt-in analyzer benchmarks.
@@ -218,7 +230,7 @@ func NewAgentSandboxProviderRunnerForBenchmarkFromEnv(prefix, kubeContext string
 	if strings.TrimSpace(kubeContext) == "" {
 		return nil, fmt.Errorf("agent sandbox benchmark kube context is required")
 	}
-	return newAgentSandboxProviderRunnerFromEnv(prefix, kubeContext, false, expectedProvider, expectedTimeout, expectedOutputLimit)
+	return newAgentSandboxProviderRunnerFromEnv(prefix, kubeContext, false, false, expectedProvider, expectedTimeout, expectedOutputLimit)
 }
 
 // NewAgentSandboxRunnerFromEnv retains the tokenless causal-critic gateway runner.
@@ -266,7 +278,7 @@ func NewAgentSandboxRunnerForBenchmarkFromEnv(prefix, kubeContext string, expect
 	return finishAgentSandboxRunner(opts, kubeContext, false)
 }
 
-func newAgentSandboxProviderRunnerFromEnv(prefix, kubeContext string, inClusterOnly bool, expectedProvider modelprovider.Config, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
+func newAgentSandboxProviderRunnerFromEnv(prefix, kubeContext string, inClusterOnly, allowCABundle bool, expectedProvider modelprovider.Config, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
 	opts, err := agentSandboxBaseOptionsFromEnv(prefix)
 	if err != nil {
 		return nil, err
@@ -286,6 +298,13 @@ func newAgentSandboxProviderRunnerFromEnv(prefix, kubeContext string, inClusterO
 		Auth: modelprovider.Auth{Type: env("MODEL_PROVIDER_AUTH_TYPE")}, PublicCAPrivateDNS: publicCAPrivateDNS,
 	})
 	opts.ProviderSecretRef = ProviderSecretRef{Name: env("MODEL_PROVIDER_AUTH_SECRET_NAME"), Key: env("MODEL_PROVIDER_AUTH_SECRET_KEY")}
+	if allowCABundle {
+		opts.CABundle = modelprovider.CABundleConfig{
+			ExistingConfigMap: env("MODEL_PROVIDER_CA_CONFIG_MAP"),
+			Key:               env("MODEL_PROVIDER_CA_KEY"),
+			SHA256:            env("MODEL_PROVIDER_CA_SHA256"),
+		}
+	}
 	if opts.ModelProvider != expectedProvider || opts.Timeout != expectedTimeout || opts.OutputLimitBytes != expectedOutputLimit {
 		return nil, fmt.Errorf("agent sandbox deployment values do not match runtime configuration")
 	}
@@ -396,6 +415,17 @@ func validateAgentSandboxOptions(opts AgentSandboxOptions) error {
 	}
 	if !opts.testOnly && strings.TrimSpace(opts.RuntimeClassName) == "" {
 		return fmt.Errorf("agent sandbox secure runtime class is required")
+	}
+	if err := modelprovider.ValidateCABundleConfig(opts.CABundle); err != nil {
+		return fmt.Errorf("agent sandbox: %w", err)
+	}
+	if opts.CABundle.Enabled() {
+		if len(k8svalidation.IsDNS1123Subdomain(opts.CABundle.ExistingConfigMap)) > 0 || len(k8svalidation.IsConfigMapKey(opts.CABundle.Key)) > 0 {
+			return fmt.Errorf("agent sandbox model provider CA ConfigMap name and key are invalid")
+		}
+		if opts.ModelProvider == (modelprovider.Config{}) {
+			return fmt.Errorf("agent sandbox model provider CA bundle is Fix-runtime only")
+		}
 	}
 	if opts.Timeout <= 0 || opts.Timeout > 30*time.Minute {
 		return fmt.Errorf("agent sandbox timeout must be greater than zero and at most 30m")
@@ -565,6 +595,9 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	if spec.Timeout != r.opts.Timeout || spec.OutputLimitBytes != r.opts.OutputLimitBytes {
 		return result, fmt.Errorf("agent sandbox workload does not match configured timeout or output limit")
 	}
+	if r.opts.CABundle.Enabled() && spec.Purpose != "fix" {
+		return result, fmt.Errorf("agent sandbox model provider CA bundle is Fix-runtime only")
+	}
 	if r.opts.ModelProvider != (modelprovider.Config{}) {
 		result.Telemetry.ProviderCredentialMode = r.opts.ModelProvider.CredentialMode
 		result.Telemetry.ProviderAPI = r.opts.ModelProvider.API
@@ -593,6 +626,11 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	}
 	runCtx, cancel := context.WithTimeout(ctx, agentSandboxRunTimeout(spec))
 	defer cancel()
+	if r.opts.CABundle.Enabled() {
+		if err := r.api.ValidateCABundle(runCtx, r.opts.Namespace, r.opts.CABundle); err != nil {
+			return result, fmt.Errorf("%w: validate model provider CA bundle: %v", engineruntime.ErrUnavailable, err)
+		}
+	}
 	object := r.sandboxObjectForSpec(name, spec, contractHash[:], executionID)
 	desiredState := sandboxStateFromObject(&unstructured.Unstructured{Object: object})
 	state, err := r.api.Create(runCtx, r.opts.Namespace, object)
@@ -838,6 +876,9 @@ func (r *AgentSandboxRuntime) sandboxObjectForSpec(name string, spec agentsandbo
 	if r.opts.ModelProvider.ReasoningEffort != "" {
 		annotations[agentSandboxReasoningEffortAnnotation] = string(r.opts.ModelProvider.ReasoningEffort)
 	}
+	if r.opts.CABundle.Enabled() {
+		annotations[agentSandboxCABundleAnnotation] = r.opts.CABundle.SHA256
+	}
 	if spec.PreparedWorkspace != nil {
 		annotations[agentSandboxPreparedAnnotation] = spec.PreparedWorkspace.ManifestHash
 		annotations[agentSandboxPreparedIdentityAnnotation] = spec.PreparedWorkspace.IdentityHash
@@ -1031,6 +1072,10 @@ func agentSandboxContractHash(requestJSON []byte, opts AgentSandboxOptions) [sha
 	if opts.StagerInputClaim != "" {
 		values = append(values, []byte(opts.StagerInputClaim))
 	}
+	if opts.CABundle.Enabled() {
+		caBundleJSON, _ := json.Marshal(opts.CABundle)
+		values = append(values, caBundleJSON, []byte(modelprovider.CABundleContractVersion))
+	}
 	for _, value := range values {
 		_, _ = hash.Write([]byte{0})
 		_, _ = hash.Write(value)
@@ -1070,6 +1115,13 @@ type kubeAgentSandboxAPI struct {
 	podLifecycle func(context.Context, string, string) string
 }
 
+func caBundleContract(config modelprovider.CABundleConfig) string {
+	if !config.Enabled() {
+		return ""
+	}
+	return modelprovider.CABundleContractVersion
+}
+
 func agentSandboxRESTConfig(contextName string) (*rest.Config, error) {
 	if cfg, err := rest.InClusterConfig(); err == nil {
 		return cfg, nil
@@ -1096,6 +1148,30 @@ func newKubeAgentSandboxAPI(cfg *rest.Config) (*kubeAgentSandboxAPI, error) {
 		return nil, err
 	}
 	return &kubeAgentSandboxAPI{dynamic: dynamicClient, http: httpClient, host: strings.TrimRight(cfg.Host, "/")}, nil
+}
+
+func (k *kubeAgentSandboxAPI) ValidateCABundle(ctx context.Context, namespace string, config modelprovider.CABundleConfig) error {
+	object, err := k.dynamic.Resource(configMapsGVR).Namespace(namespace).Get(ctx, config.ExistingConfigMap, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	data, _, err := unstructured.NestedStringMap(object.Object, "data")
+	if err != nil {
+		return fmt.Errorf("read ConfigMap data: %w", err)
+	}
+	value, ok := data[config.Key]
+	if !ok {
+		if binaryData, _, binaryErr := unstructured.NestedStringMap(object.Object, "binaryData"); binaryErr != nil {
+			return fmt.Errorf("read ConfigMap binary data: %w", binaryErr)
+		} else if _, binary := binaryData[config.Key]; binary {
+			return fmt.Errorf("model provider CA bundle key must use ConfigMap data, not binaryData")
+		}
+		return fmt.Errorf("model provider CA bundle ConfigMap key is missing")
+	}
+	if err := modelprovider.ValidateCABundle([]byte(value), config.SHA256); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (k *kubeAgentSandboxAPI) Create(ctx context.Context, namespace string, object map[string]any) (sandboxState, error) {

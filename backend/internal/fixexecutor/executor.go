@@ -420,6 +420,9 @@ func renderStagedDiff(ctx context.Context, work, home, temp string, outputLimit 
 }
 
 func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (string, string, error) {
+	if err := modelprovider.ValidateProcessCABundleEnvironment(); err != nil {
+		return "", "", err
+	}
 	if err := writeOpenCodeConfig(spec.HomeDir, spec.Provider, spec.MaxSteps); err != nil {
 		return "", "", err
 	}
