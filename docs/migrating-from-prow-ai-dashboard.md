@@ -102,9 +102,12 @@ local dry-run before upgrading:
   --dry-run
 ```
 
-Review the rendered plan, then repeat the upgrade without `--dry-run`. Verify
-the existing PVC is mounted, the expected job is present, private state remains
-unserved, and enabled authenticated features still work.
+The dry-run validates the bundle and local chart render without cluster writes.
+It discards the rendered manifest and does not reuse deployed values exactly as
+the real upgrade does, so it is not a full upgrade preview. Review the consumer
+diff and `deploy/values.yaml` separately, then repeat the upgrade without
+`--dry-run`. Verify the existing PVC is mounted, the expected job is present,
+private state remains unserved, and enabled authenticated features still work.
 
 ## Roll back
 
