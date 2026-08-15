@@ -52,7 +52,12 @@ set -euo pipefail
 printf 'docker %s\n' "$*" >> "$RELEASE_TEST_LOG"
 case ${1:-} in
   pull) exit 0 ;;
-  image) printf '%s\n' "${HEAD_COMMIT:-2222222222222222222222222222222222222222}" ;;
+  image)
+    case $* in
+      *org.opencontainers.image.version*) printf '%s\n' "${TAG:-v1.2.3}" ;;
+      *) printf '%s\n' "${HEAD_COMMIT:-2222222222222222222222222222222222222222}" ;;
+    esac
+    ;;
   *) exit 2 ;;
 esac
 DOCKER
@@ -122,8 +127,13 @@ case ${1:-} in
   push) exit 0 ;;
 esac
 GIT
-chmod +x "$tmp/bin/helm" "$tmp/bin/gh" "$tmp/bin/docker" "$tmp/bin/go" "$tmp/bin/git"
+cat > "$tmp/contract.sh" <<'CONTRACT'
+#!/usr/bin/env bash
+set -euo pipefail
+CONTRACT
+chmod +x "$tmp/bin/helm" "$tmp/bin/gh" "$tmp/bin/docker" "$tmp/bin/go" "$tmp/bin/git" "$tmp/contract.sh"
 export IMAGE_REPOSITORY=ghcr.io/example/aster
+export FIX_IMAGE_CONTRACT_SCRIPT="$tmp/contract.sh"
 
 if (cd "$root" && RELEASE_TEST_LOG="$log" REMOTE_TAG_STATE=missing PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script") >"$tmp/missing-tag.out" 2>&1; then
   echo 'missing remote release tag was accepted' >&2

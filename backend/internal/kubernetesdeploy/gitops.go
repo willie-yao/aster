@@ -313,6 +313,14 @@ func resolveGitOpsInputs(opts GitOpsOptions) (gitOpsResolved, map[string]any, ma
 		if err := modelprovider.ValidateDeploymentEndpoint(config); err != nil {
 			return gitOpsResolved{}, nil, nil, nil, nil, nil, fmt.Errorf("validate Agent Sandbox provider endpoint: %w", err)
 		}
+		ca := fix.CABundle
+		caConfig := modelprovider.CABundleConfig{ExistingConfigMap: ca.ExistingConfigMap, Key: ca.Key, SHA256: ca.SHA256}
+		if err := modelprovider.ValidateCABundleConfig(caConfig); err != nil {
+			return gitOpsResolved{}, nil, nil, nil, nil, nil, fmt.Errorf("validate Agent Sandbox CA bundle: %w", err)
+		}
+		if caConfig.Enabled() && (len(k8svalidation.IsDNS1123Subdomain(caConfig.ExistingConfigMap)) > 0 || len(k8svalidation.IsConfigMapKey(caConfig.Key)) > 0) {
+			return gitOpsResolved{}, nil, nil, nil, nil, nil, fmt.Errorf("validate Agent Sandbox CA bundle: ConfigMap name or data key syntax is invalid")
+		}
 	}
 	var platformValues map[string]any
 	if fixEnabled {

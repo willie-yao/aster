@@ -112,8 +112,45 @@ tool_versions=$(docker run --rm "${runtime_args[@]}" --entrypoint /bin/sh "$imag
 printf '%s\n' "$tool_versions"
 printf '%s\n' "$tool_versions" | grep -Fxq 'go version go1.25.12 linux/amd64'
 printf '%s\n' "$tool_versions" | grep -Fxq 'local'
-printf '%s\n' "$tool_versions" | grep -Eq '^git version [0-9]+\.[0-9]+\.[0-9]+'
+printf '%s\n' "$tool_versions" | grep -Fxq 'git version 2.54.0'
 printf '%s\n' "$tool_versions" | grep -Fxq '1.18.2'
+
+# Revalidate the fixed ConfigMap CA mount contract before OpenCode starts.
+created_container=$(docker create "$image")
+docker cp "$created_container:/etc/ssl/certs/ca-certificates.crt" "$tmp/ca-bundle.pem"
+docker rm "$created_container" >/dev/null
+created_container=""
+ca_hash=$(shasum -a 256 "$tmp/ca-bundle.pem" | awk '{print $1}')
+printf 'not a PEM bundle\n' > "$tmp/malformed-ca.pem"
+malformed_hash=$(shasum -a 256 "$tmp/malformed-ca.pem" | awk '{print $1}')
+run_ca_startup_case() {
+  local name=$1 file=${2:-} expected_hash=${3:-} expected_reason=$4
+  local args=("${runtime_args[@]}")
+  if [[ -n $file ]]; then
+    args+=(
+      --mount "type=bind,src=${file},dst=/etc/prow-ai-dashboard/model-provider-ca/ca-bundle.pem,readonly"
+      --env 'NODE_EXTRA_CA_CERTS=/etc/prow-ai-dashboard/model-provider-ca/ca-bundle.pem'
+      --env "PROW_AI_MODEL_PROVIDER_CA_SHA256=${expected_hash}"
+    )
+  fi
+  set +e
+  docker run --rm "${args[@]}" "$image" >"$tmp/${name}.json" 2>"$tmp/${name}.err"
+  local status=$?
+  set -e
+  [[ $status -ne 0 ]] || { echo "CA startup case unexpectedly succeeded: $name" >&2; exit 1; }
+  python3 - "$tmp/${name}.json" "$expected_reason" <<'PY_CA'
+import json
+import sys
+result = json.load(open(sys.argv[1], encoding="utf-8"))
+assert result["version"] == 2, result
+assert result["terminal_state"] == "failed", result
+assert sys.argv[2] in result["failure_reason"], result
+PY_CA
+}
+run_ca_startup_case disabled '' '' 'PROW_AI_FIX_EXECUTION_REQUEST_B64 is required'
+run_ca_startup_case valid "$tmp/ca-bundle.pem" "$ca_hash" 'PROW_AI_FIX_EXECUTION_REQUEST_B64 is required'
+run_ca_startup_case wrong-hash "$tmp/ca-bundle.pem" "$(printf '0%.0s' {1..64})" 'SHA-256 does not match configuration'
+run_ca_startup_case malformed "$tmp/malformed-ca.pem" "$malformed_hash" 'non-PEM data'
 
 toolchain_guard=$(docker run --rm "${runtime_args[@]}" --entrypoint /bin/sh "$image" -c '
   set -eu

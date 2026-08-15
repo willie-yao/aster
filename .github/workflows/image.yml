@@ -242,7 +242,7 @@ jobs:
         run: |
           docker build --platform linux/amd64 \
             --target agent-sandbox-fix-executor \
-            --build-arg VERSION=${{ steps.meta.outputs.version }} \
+            --build-arg VERSION=${{ github.ref_name }} \
             --build-arg COMMIT=${{ github.sha }} \
             --build-arg IMAGE_TAG=${{ steps.build_identity.outputs.image_tag }} \
             -t aster/agent-sandbox-fix-executor:release-test .
@@ -251,7 +251,7 @@ jobs:
         run: |
           hack/test-agent-sandbox-fix-image.sh \
             aster/agent-sandbox-fix-executor:release-test \
-            "${{ steps.meta.outputs.version }}" \
+            "${{ github.ref_name }}" \
             "${{ github.sha }}" \
             "${{ steps.build_identity.outputs.image_tag }}"
 
@@ -268,7 +268,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
+            VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
             IMAGE_TAG=${{ steps.build_identity.outputs.image_tag }}
           cache-from: type=gha,scope=agent-sandbox-fix-executor

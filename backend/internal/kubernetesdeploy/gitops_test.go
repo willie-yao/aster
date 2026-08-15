@@ -3,6 +3,7 @@ package kubernetesdeploy
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -84,6 +85,54 @@ execution:
 	}
 	if err := CheckGitOps(opts, nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGitOpsRejectsInvalidCABundleCoordinates(t *testing.T) {
+	tests := []struct {
+		name, values, want string
+	}{
+		{name: "partial", values: `    caBundle:
+      existingConfigMap: model-provider-ca
+`, want: "requires ConfigMap name, key, and SHA-256"},
+		{name: "invalid name", values: `    caBundle:
+      existingConfigMap: INVALID_NAME
+      key: ca-bundle.pem
+      sha256: ` + strings.Repeat("a", 64) + "\n", want: "ConfigMap name or data key syntax is invalid"},
+		{name: "invalid key", values: `    caBundle:
+      existingConfigMap: model-provider-ca
+      key: invalid/key
+      sha256: ` + strings.Repeat("a", 64) + "\n", want: "ConfigMap name or data key syntax is invalid"},
+		{name: "uppercase hash", values: `    caBundle:
+      existingConfigMap: model-provider-ca
+      key: ca-bundle.pem
+      sha256: ` + strings.Repeat("A", 64) + "\n", want: "64 lowercase"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			app := gitOpsFixAppValues("execution", "kata", "workload") + testCase.values
+			platform := `application:
+  releaseName: sample
+execution:
+  namespace: execution
+  runtimeClassName: kata
+  workloadServiceAccountName: workload
+`
+			dir := writeGitOpsConsumer(t, app, platform, nil)
+			opts := gitOpsTestOptions(dir)
+			opts.ExecutionNamespace = "execution"
+			for name, run := range map[string]func(GitOpsOptions, io.Writer) error{
+				"render": RenderGitOps,
+				"check":  CheckGitOps,
+			} {
+				t.Run(name, func(t *testing.T) {
+					err := run(opts, nil)
+					if err == nil || !strings.Contains(err.Error(), testCase.want) {
+						t.Fatalf("error = %v, want %q", err, testCase.want)
+					}
+				})
+			}
+		})
 	}
 }
 

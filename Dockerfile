@@ -66,9 +66,9 @@ USER root
 COPY --from=agent-sandbox-fix-go /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:${PATH} \
     GOTOOLCHAIN=local
-RUN apk add --no-cache ca-certificates git \
+RUN apk add --no-cache ca-certificates git=2.54.0-r0 \
  && test "$(go env GOVERSION)" = "go1.25.12" \
- && git --version \
+ && test "$(git --version)" = "git version 2.54.0" \
  && addgroup -g 65532 padnonroot \
  && adduser -D -H -u 65532 -G padnonroot padnonroot \
  && test "$(opencode --version)" = "1.18.2"
@@ -135,10 +135,10 @@ ENTRYPOINT ["/usr/local/bin/criticexecutor"]
 # Minimal git-capable engine for reconstructing patches returned by remote fix
 # runtimes such as Agent Sandbox. It intentionally omits OpenCode and srt.
 FROM golang:1.25.12-alpine AS remote-fixer-runtime
-RUN apk add --no-cache ca-certificates git \
+RUN apk add --no-cache ca-certificates git=2.54.0-r0 \
  && addgroup -g 65532 padnonroot \
  && adduser -D -H -u 65532 -G padnonroot padnonroot \
- && git --version
+ && test "$(git --version)" = "git version 2.54.0"
 COPY --from=build /out/fetcher /usr/local/bin/fetcher
 COPY --from=build /out/worker /usr/local/bin/worker
 COPY --from=build /out/server /usr/local/bin/server
