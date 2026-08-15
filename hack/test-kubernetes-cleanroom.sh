@@ -82,8 +82,10 @@ python3 - \
   "$root/docs/kubernetes-reference.md" \
   "$root/deploy/helm/aster-platform/README.md" \
   "$consumer/deploy/README.md" \
-  "$root" <<'PY'
+  "$root" \
+  "$tmp" <<'PY'
 from pathlib import Path
+import os
 import re
 import sys
 
@@ -93,6 +95,7 @@ reference = Path(sys.argv[3])
 chart = Path(sys.argv[4])
 generated = Path(sys.argv[5])
 root = Path(sys.argv[6])
+fixture_root = Path(sys.argv[7])
 
 documents = [quickstart, platform, reference, chart, generated]
 platform_examples = """Examples only. These are not automatic compatibility guarantees.
@@ -191,23 +194,37 @@ for duplicated in ["CLI_ASSET=", "SHA256SUMS", "DOWNLOAD_DIR=", "manifest_ready=
         raise SystemExit(f"generated consumer README duplicates canonical procedure {duplicated!r}")
 
 removed_kubernetes_docs = [
-    root / "docs" / "kubernetes-contributor-deployment.md",
-    root / "docs" / "kubernetes-platform-ownership.md",
-    root / "docs" / "kubernetes-platform-administrator.md",
+    Path("docs/kubernetes-contributor-deployment.md"),
+    Path("docs/kubernetes-platform-ownership.md"),
+    Path("docs/kubernetes-platform-administrator.md"),
 ]
 removed_or_moved_docs = [
-    root / "docs" / "agent-sandbox-fix-runtime-spike.md",
-    root / "docs" / "architecture" / "analysis-runtime-evaluation.md",
-    root / "docs" / "agent-sandbox-causal-critic.md",
-    root / "docs" / "agent-sandbox-opencode-analyzer.md",
-    root / "docs" / "orka.md",
-    root / "docs" / "remediation-investigation.md",
+    Path("docs/agent-sandbox-fix-runtime-spike.md"),
+    Path("docs/architecture/analysis-runtime-evaluation.md"),
+    Path("docs/agent-sandbox-causal-critic.md"),
+    Path("docs/agent-sandbox-opencode-analyzer.md"),
+    Path("docs/orka.md"),
+    Path("docs/remediation-investigation.md"),
 ]
-for path in removed_kubernetes_docs + removed_or_moved_docs:
-    if path.exists():
-        raise SystemExit(f"removed or moved document still exists: {path.relative_to(root)}")
-if (root / "plan").exists():
-    raise SystemExit("historical plan directory still exists")
+removed_historical_plans = [
+    Path("plan/design-overview-operator-console-1.md"),
+    Path("plan/feature-agent-sandbox-critic-experiment-1.md"),
+    Path("plan/feature-agent-sandbox-opencode-analyzer-experiment.md"),
+    Path("plan/feature-orka-onboarding-prompt-author-1.md"),
+    Path("plan/refactor-orka-agent-generation-1.md"),
+]
+
+def require_removed_paths_absent(repository):
+    for relative in removed_kubernetes_docs + removed_or_moved_docs + removed_historical_plans:
+        if (repository / relative).exists():
+            raise SystemExit(f"removed or moved document still exists: {relative}")
+
+require_removed_paths_absent(root)
+removed_path_fixture = fixture_root / "removed-path-contract"
+active_plan = removed_path_fixture / "plan" / "active-plan.md"
+active_plan.parent.mkdir(parents=True)
+active_plan.write_text("# Active plan\n")
+require_removed_paths_absent(removed_path_fixture)
 for path in [
     root / "AGENTS.md",
     root / "docs" / "README.md",
@@ -223,16 +240,6 @@ for path in [
     for removed_path in removed_kubernetes_docs:
         if removed_path.name in text:
             raise SystemExit(f"{path} still links removed document {removed_path.name}")
-
-for path in [quickstart, platform, reference, chart]:
-    text = path.read_text()
-    for target in re.findall(r"\[[^]]+\]\(([^)]+)\)", text):
-        target = target.strip().split("#", 1)[0]
-        if not target or "://" in target or target.startswith(("mailto:", "#")):
-            continue
-        resolved = (path.parent / target).resolve()
-        if not resolved.exists():
-            raise SystemExit(f"broken Markdown link in {path}: {target}")
 
 def markdown_anchors(path):
     anchors = set()
@@ -250,25 +257,153 @@ def markdown_anchors(path):
         anchors.add(base if count == 0 else f"{base}-{count}")
     return anchors
 
+def markdown_without_fenced_code(text):
+    visible = []
+    fence = None
+    for line in text.splitlines():
+        match = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if fence is None:
+            if match:
+                fence = match.group(1)
+                visible.append("")
+            else:
+                visible.append(line)
+            continue
+        if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence):
+            fence = None
+        visible.append("")
+    return "\n".join(visible)
+
+def markdown_targets(text):
+    text = markdown_without_fenced_code(text)
+    inline = [match.group(1) for match in re.finditer(r"\[[^]]+\]\(([^)]+)\)", text)]
+    definitions = []
+    definition_pattern = re.compile(
+        r"^[ \t]{0,3}\[[^]\n]+\]:[ \t]*(?:<([^>\n]+)>|(\S+))",
+        re.MULTILINE,
+    )
+    for match in definition_pattern.finditer(text):
+        definitions.append(match.group(1) or match.group(2))
+    return inline, definitions
+
+def external_target(target):
+    return target.startswith("//") or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target)
+
+class MarkdownContractError(Exception):
+    pass
+
+def validate_markdown_target(path, target, repository_root):
+    target = target.strip()
+    if target.startswith("<") and target.endswith(">"):
+        target = target[1:-1].strip()
+    if not target or external_target(target):
+        return
+    relative, _, anchor = target.partition("#")
+    resolved = path.resolve() if not relative else (path.parent / relative).resolve()
+    try:
+        resolved.relative_to(repository_root)
+    except ValueError as err:
+        raise MarkdownContractError(
+            f"Markdown link escapes repository in {path}: {target}"
+        ) from err
+    if not resolved.exists():
+        raise MarkdownContractError(f"broken Markdown link in {path}: {target}")
+    if anchor and resolved.suffix == ".md" and anchor.lower() not in markdown_anchors(resolved):
+        raise MarkdownContractError(f"broken Markdown anchor in {path}: {target}")
+
+def validate_markdown(path, repository_root):
+    if path.is_symlink():
+        raise MarkdownContractError(f"Markdown scan refuses symlink: {path}")
+    try:
+        path.resolve().relative_to(repository_root)
+    except ValueError as err:
+        raise MarkdownContractError(f"Markdown source escapes repository: {path}") from err
+    inline, definitions = markdown_targets(path.read_text())
+    for target in inline + definitions:
+        validate_markdown_target(path, target, repository_root)
+    return definitions
+
+def markdown_tree(base):
+    paths = []
+    for directory, names, files in os.walk(base, followlinks=False):
+        directory = Path(directory)
+        names[:] = sorted(name for name in names if not (directory / name).is_symlink())
+        for name in sorted(files):
+            path = directory / name
+            if path.suffix != ".md" or path.is_symlink():
+                continue
+            try:
+                path.resolve().relative_to(repository_root)
+            except ValueError:
+                continue
+            paths.append(path)
+    return paths
+
+repository_root = root.resolve()
 markdown_files = [
     root / "AGENTS.md",
     root / "README.md",
     root / "CONTRIBUTING.md",
-    *sorted((root / "docs").rglob("*.md")),
-    *sorted((root / "experimental").rglob("*.md")),
+    *markdown_tree(root / "docs"),
+    *markdown_tree(root / "experimental"),
 ]
-for path in markdown_files:
-    text = path.read_text()
-    for target in re.findall(r"\[[^]]+\]\(([^)]+)\)", text):
-        target = target.strip()
-        if not target or "://" in target or target.startswith("mailto:"):
-            continue
-        relative, _, anchor = target.partition("#")
-        resolved = path if not relative else (path.parent / relative).resolve()
-        if not resolved.exists():
-            raise SystemExit(f"broken Markdown link in {path}: {target}")
-        if anchor and resolved.suffix == ".md" and anchor.lower() not in markdown_anchors(resolved):
-            raise SystemExit(f"broken Markdown anchor in {path}: {target}")
+writing_prompt_definitions = []
+for path in markdown_files + [chart]:
+    definitions = validate_markdown(path, repository_root)
+    if path == root / "docs" / "writing-prompts.md":
+        writing_prompt_definitions = definitions
+for target in [
+    "../backend/internal/ai/baseprompt.go",
+    "../backend/internal/ai/responseformat.go",
+    "../configs/example",
+]:
+    if target not in writing_prompt_definitions:
+        raise SystemExit(f"writing-prompts reference definition was not validated: {target}")
+
+link_fixtures = fixture_root / "markdown-link-contract"
+link_fixtures.mkdir()
+outside = Path("/etc/hosts")
+if not outside.exists():
+    raise SystemExit("Markdown traversal fixture requires /etc/hosts")
+traversal = link_fixtures / "traversal.md"
+traversal.write_text(f"[outside]({os.path.relpath(outside, traversal.parent)})\n")
+try:
+    validate_markdown(traversal, link_fixtures.resolve())
+except MarkdownContractError as err:
+    if "escapes repository" not in str(err):
+        raise SystemExit(f"traversal fixture failed for the wrong reason: {err}")
+else:
+    raise SystemExit("out-of-repository Markdown traversal was accepted")
+
+broken_reference = link_fixtures / "broken-reference.md"
+broken_reference.write_text("[missing][target]\n\n[target]: missing.md\n")
+try:
+    validate_markdown(broken_reference, link_fixtures.resolve())
+except MarkdownContractError as err:
+    if "broken Markdown link" not in str(err):
+        raise SystemExit(f"reference fixture failed for the wrong reason: {err}")
+else:
+    raise SystemExit("broken Markdown reference definition was accepted")
+
+valid_target = link_fixtures / "target.md"
+valid_target.write_text("# Target\n")
+valid_reference = link_fixtures / "valid-reference.md"
+valid_reference.write_text("""# Fixture
+
+[local][target]
+![local image](target.md#target)
+
+[target]: target.md#target
+[section]: #fixture
+[external]: https://example.com/docs
+[email]: mailto:maintainers@example.com
+
+```markdown
+[code example](missing.md)
+[code-reference]: missing.md
+```
+""")
+validate_markdown(valid_reference, link_fixtures.resolve())
 
 line_limits = {
     quickstart: (180, 270),
