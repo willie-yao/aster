@@ -1936,6 +1936,9 @@ grep -Fq "v.name == 'model-provider-ca' && v.mountPath == '/etc/prow-ai-dashboar
 grep -Fq 'v.configMap.name == \"model-provider-ca\"' "$tmp/agent-sandbox-ca-render.yaml"
 grep -Fq 'v.configMap.items[0].key == \"ca-bundle.pem\"' "$tmp/agent-sandbox-ca-render.yaml"
 grep -Fq "v.configMap.items[0].path == 'ca-bundle.pem'" "$tmp/agent-sandbox-ca-render.yaml"
+grep -Fq "v.name in ['workspace', 'tmp'] && has(v.emptyDir) && !has(v.configMap)" "$tmp/agent-sandbox-ca-render.yaml"
+grep -Fq "v.name == 'model-provider-ca' && has(v.configMap) && !has(v.emptyDir)" "$tmp/agent-sandbox-ca-render.yaml"
+grep -Fq "!has(v.projected) && !has(v.quobyte) && !has(v.rbd) && !has(v.scaleIO) && !has(v.secret)" "$tmp/agent-sandbox-ca-render.yaml"
 
 python3 - "$tmp/agent-sandbox.yaml" "$tmp/agent-sandbox-unset-reasoning.yaml" <<'PYUNSETFIXREASONING'
 from pathlib import Path
