@@ -303,6 +303,7 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
                 under_any(
                     path,
                     (
+                        "backend/cmd/aster",
                         "backend/cmd/fixexecutor",
                         "backend/cmd/analysisexecutor",
                         "backend/cmd/analysisstager",
@@ -466,6 +467,11 @@ def self_test() -> None:
             "remote runtime",
             ["backend/internal/server/server.go"],
             {"backend", "remote_fixer"},
+        ),
+        (
+            "Aster CLI clean-room contract",
+            ["backend/cmd/aster/main.go"],
+            {"backend", "helm_static", "remote_fixer"},
         ),
         ("release", [".github/workflows/release.yml"], set(CLASSES)),
     )
