@@ -4,9 +4,18 @@
 
 # Aster
 
-Reusable engine for AI-powered Prow and TestGrid dashboards. It discovers Prow
-jobs, analyzes failures, renders a React dashboard, and can notify maintainers or
-open guarded GitHub actions without requiring each project to fork the engine.
+**Find the signal. Explain the failure. Act safely.**
+
+Aster is an evidence-first failure analysis and guarded-remediation engine for
+Prow and Kubernetes test infrastructure. It watches Prow and TestGrid jobs,
+investigates failures through bounded logs, test results, artifacts, history,
+and source evidence, and helps maintainers move from signal to explanation to a
+reviewed next step.
+
+**Aster** stands for **Automated Signal Triage, Explanation, and Remediation**.
+The name uses the Greek root for *star*, and the mark combines a capital A, a
+forward-facing prow, and a central star or spark. Together they represent
+finding a useful signal and moving toward a clear, reviewed next action.
 
 > **Active development.** Pin consumers to `@main`, a commit SHA, or an exact
 > prerelease until a stable release and moving `v1` alias are published.
