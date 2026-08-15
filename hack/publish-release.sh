@@ -108,6 +108,8 @@ done
 
 app_pkg=$tmp/aster-$chart_version.tgz
 platform_pkg=$tmp/aster-platform-$chart_version.tgz
+cli_assets=()
+cli_asset_names=()
 for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
   goos=${target%-*}
   goarch=${target#*-}
@@ -120,6 +122,8 @@ for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
       -o "$tmp/$asset" \
       ./cmd/aster
   )
+  cli_assets+=("$tmp/$asset")
+  cli_asset_names+=("$asset")
 done
 source_archive="$tmp/aster-${TAG}-source.tar.gz"
 release_manifest="$tmp/aster-${TAG}-release-manifest.json"
@@ -162,11 +166,10 @@ with open(path, "w", encoding="utf-8") as output:
 PY_MANIFEST
 (
   cd "$tmp"
-  cli_assets=(aster-"${TAG}"-*)
   shasum -a 256 \
     "$(basename "$app_pkg")" \
     "$(basename "$platform_pkg")" \
-    "${cli_assets[@]}" \
+    "${cli_asset_names[@]}" \
     "$(basename "$source_archive")" \
     "$(basename "$release_manifest")" > SHA256SUMS
 )
@@ -179,7 +182,6 @@ verify_release_tag
 helm push "$app_pkg" "$registry"
 verify_release_tag
 
-cli_assets=("$tmp"/aster-"${TAG}"-*)
 release_args=("$TAG" "$app_pkg" "$platform_pkg" "$source_archive" "$release_manifest" "$tmp/SHA256SUMS" "${cli_assets[@]}" --title "$TAG" --generate-notes --verify-tag)
 if [[ $TAG == *-* ]]; then
   release_args+=(--prerelease)

@@ -45,6 +45,11 @@ cat > "$tmp/bin/gh" <<'GH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'gh %s\n' "$*" >> "$RELEASE_TEST_LOG"
+for arg in "$@"; do
+  if [[ ${arg##*/} == SHA256SUMS ]]; then
+    cp "$arg" "$RELEASE_TEST_SHA_COPY"
+  fi
+done
 GH
 cat > "$tmp/bin/docker" <<'DOCKER'
 #!/usr/bin/env bash
@@ -134,6 +139,7 @@ CONTRACT
 chmod +x "$tmp/bin/helm" "$tmp/bin/gh" "$tmp/bin/docker" "$tmp/bin/go" "$tmp/bin/git" "$tmp/contract.sh"
 export IMAGE_REPOSITORY=ghcr.io/example/aster
 export FIX_IMAGE_CONTRACT_SCRIPT="$tmp/contract.sh"
+export RELEASE_TEST_SHA_COPY="$tmp/release.SHA256SUMS"
 
 if (cd "$root" && RELEASE_TEST_LOG="$log" REMOTE_TAG_STATE=missing PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script") >"$tmp/missing-tag.out" 2>&1; then
   echo 'missing remote release tag was accepted' >&2
@@ -200,7 +206,7 @@ grep -Fq 'refusing to move stable alias backward from v1.10.0 to v1.9.5' "$tmp/l
 
 : > "$log"
 (cd "$root" && RELEASE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script")
-python3 - "$log" <<'PY'
+python3 - "$log" "$RELEASE_TEST_SHA_COPY" <<'PY'
 from pathlib import Path
 import sys
 lines = Path(sys.argv[1]).read_text().splitlines()
@@ -214,11 +220,23 @@ assert 'aster-1.2.3.tgz' in release_line
 assert 'aster-platform-1.2.3.tgz' in release_line
 assert '--verify-tag' in release_line
 assert 'SHA256SUMS' in release_line
-assert 'aster-v1.2.3-source.tar.gz' in release_line
-assert 'aster-v1.2.3-release-manifest.json' in release_line
+expected = [
+    'aster-1.2.3.tgz',
+    'aster-platform-1.2.3.tgz',
+    'aster-v1.2.3-source.tar.gz',
+    'aster-v1.2.3-release-manifest.json',
+    'SHA256SUMS',
+    *(f'aster-v1.2.3-{target}' for target in ('linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64')),
+]
+for asset in expected:
+    assert release_line.split().count(next(value for value in release_line.split() if value.endswith('/' + asset) or value == asset)) == 1, (asset, release_line)
 assert sum(1 for line in lines if line.startswith('go build ')) == 4
-for target in ('linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64'):
-    assert f'aster-v1.2.3-{target}' in release_line
+checksum_lines = Path(sys.argv[2]).read_text().splitlines()
+checksum_names = [line.split(None, 1)[1] for line in checksum_lines]
+expected_checksums = [asset for asset in expected if asset != 'SHA256SUMS']
+assert len(checksum_names) == 8, checksum_names
+assert len(checksum_names) == len(set(checksum_names)), checksum_names
+assert sorted(checksum_names) == sorted(expected_checksums), (checksum_names, expected_checksums)
 PY
 
 : > "$log"
