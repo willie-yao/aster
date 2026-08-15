@@ -18,13 +18,33 @@ runtime.
 | Email notifications | Pages or Kubernetes | Sends failure summaries to configured recipients | [Email notifications](notifications.md) |
 | Automatic GitHub issues | Pages or Kubernetes | Creates and updates GitHub issues during fetches | [GitHub issues](github-issues.md) |
 | Fix PR generation | Custom Pages runner, local sandbox, Orka, or consumer-installed Agent Sandbox | Experimental, highest-risk code-writing automation | [Experimental Fix PR generation](fix-prs.md) |
-| Exact JUnit chat-to-fix | Kubernetes with authenticated analysis chat, actions, and Agent Sandbox Fix runtime | Uses one cited chat finding and immutable build source; still requires separate confirmation | [Exact JUnit analysis handoff](fix-prs.md#exact-junit-analysis-handoff) |
+| Exact JUnit chat-to-fix | Kubernetes with authenticated analysis chat, actions, and Agent Sandbox Fix runtime | v0.9 beta: produces a reviewable warning-aware preview and requires explicit human draft-PR confirmation | [Exact JUnit analysis handoff](fix-prs.md#exact-junit-analysis-handoff) |
 | Source investigation | Kubernetes plus a separate Orka evaluation deployment | Experimental read-only external Agent workflow | [Source investigation](server.md#source-investigation-api) |
 | Independent causal critic | Kubernetes plus consumer-installed Agent Sandbox and internal model gateway | Private sampled review only; never changes publication or writes | [Agent Sandbox causal critic](agent-sandbox-causal-critic.md) |
 
 Static Pages sites do not serve authenticated interactive APIs. They can run
 scheduled notifications and issue automation during the fetch workflow when the
 required credentials are configured.
+
+## v0.9 beta feature freeze
+
+The exact JUnit chat-to-fix lifecycle is feature-frozen for v0.9. It supports a
+cited analysis finding, immutable source verification, persisted asynchronous
+preview generation, warning display, explicit **Regenerate with feedback**, and
+human-controlled draft-PR confirmation. Confirmation can reuse an existing
+verified fork when the writer credential has the required Git-data and pull
+request permissions.
+
+Deterministic safety and integrity checks remain hard blockers. These include
+source and branch identity, allowed files, credentials, complete command results,
+compilation when configured, bounded execution, patch reconstruction, and
+confirmation deduplication. Semantic reviewer preferences, naming, test
+organization, and other non-safety patch-quality concerns remain warnings. A
+maintainer may regenerate with specific feedback or carry those concerns into
+normal draft-PR review.
+
+Generated patches remain human-reviewed. The dashboard does not autonomously
+merge, close, or manually amend the resulting PR.
 
 ## Recommended order
 
