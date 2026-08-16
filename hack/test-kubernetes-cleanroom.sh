@@ -199,6 +199,7 @@ removed_kubernetes_docs = [
     Path("docs/kubernetes-platform-administrator.md"),
 ]
 removed_or_moved_docs = [
+    Path("docs/migrating-from-prow-ai-dashboard.md"),
     Path("docs/agent-sandbox-fix-runtime-spike.md"),
     Path("docs/architecture/analysis-runtime-evaluation.md"),
     Path("docs/agent-sandbox-causal-critic.md"),

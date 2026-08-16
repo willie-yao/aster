@@ -26,15 +26,13 @@ how to pin a consumer to a reviewed version.
 - **Exact-version consumer onboarding.** The setup skill resolves and verifies
   an immutable release before generating consumer configuration, including the
   matching nested Go module version.
-- **New-user and migration guidance.** The documentation now makes Prow and
-  TestGrid prerequisites explicit and provides a focused migration path from
-  `prow-ai-dashboard`.
+- **New-user guidance.** The documentation now makes Prow and TestGrid
+  prerequisites explicit and presents one exact-version onboarding path.
 
 ### Changed
 
 - **Aster product identity.** The repository and public documentation now use
-  Aster, Automated Signal Triage, Explanation, and Remediation, while existing
-  `prow-ai-dashboard` and `PROW_AI` identifiers remain compatibility contracts.
+  Aster, Automated Signal Triage, Explanation, and Remediation.
 - **Paired Go release tags.** Releases publish matching root and `backend/`
   module tags, and verify both tags point to the same commit before publishing
   release artifacts or moving a stable alias.
@@ -46,8 +44,8 @@ how to pin a consumer to a reviewed version.
   documentation.
 - **Deterministically verifiable remediation targets.** New remediation model
   output is limited to supported target kinds that the engine can verify.
-  Legacy payloads with removed kinds still decode for compatibility but fail
-  closed during deterministic verification.
+  Previously stored payloads with removed kinds still decode but fail closed
+  during deterministic verification.
 
 ## [1.0.0-beta.7] - 2026-07-28
 
@@ -116,7 +114,7 @@ how to pin a consumer to a reviewed version.
   cache and trace state, evidence-coverage round-trip protection, bounded
   bundle and terminal Task cleanup, failed-Task trace retention, explicit CPU
   pool placement, and an isolated kind lifecycle test. It has no Pages
-  or watch-mode support and no backward compatibility guarantee.
+  or watch-mode support, and its interfaces may change without notice.
 - **SMTP email notifications.** Consumers can configure persistent-failure,
   changed-error, and recovery email alerts under `notifications.email`. SMTP
   passwords are supplied through the `EMAIL_SMTP_PASSWORD` deployment secret;

@@ -288,8 +288,8 @@ invalid result remains private and never changes the authoritative dashboard.
 
 Set `analysisRuntime.type: orka-container` to submit one content-addressed Orka
 container Task per failure. This is an experimental Helm-only lifecycle
-sidegrade for watch or cron mode. It has no backward compatibility guarantee
-and is not recommended over in-process analysis.
+sidegrade for watch or cron mode. Its interfaces may change without notice, and
+it is not recommended over in-process analysis.
 
 The analyzer image still runs the dashboard `FailureAnalyzer`. Orka owns Task
 and Job lifecycle, retries, timeout, and durable result transport. It does not

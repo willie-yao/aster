@@ -22,10 +22,7 @@ steps. Do not describe Aster as autonomous repair, self-healing, or guaranteed
 root-cause detection.
 
 Use the opening of [`README.md`](README.md) as the source of truth for the
-public tagline, product description, and mark meaning. Existing
-`prow-ai-dashboard` and `PROW_AI` identifiers are compatibility contracts, not
-unfinished branding work; do not rename them without a separate migration
-plan.
+public tagline, product description, and mark meaning.
 
 The data flow per scheduled deploy is:
 
