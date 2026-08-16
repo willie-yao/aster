@@ -87,19 +87,6 @@ part of standard onboarding.
 - [Troubleshooting](docs/troubleshooting.md)
 - [Complete documentation map and contributor guides](docs/README.md)
 
-## Migration and compatibility
-
-Existing `prow-ai-dashboard` consumers should follow
-[Migrating from prow-ai-dashboard](docs/migrating-from-prow-ai-dashboard.md).
-The guide maps workflow, image, chart, CLI, and release coordinates and provides
-doctor, dry-run, and rollback steps.
-
-Identifiers such as `PROW_AI_*`, `prow-ai-dashboard/*`, persisted state
-filenames, GitHub deduplication markers, and compatible platform resource names
-are intentional contracts. They are retained so an Aster upgrade can reuse
-existing configuration, cache data, Helm releases, and GitHub records. They are
-not unfinished branding work.
-
 ## Name and mark
 
 **Aster** stands for **Automated Signal Triage, Explanation, and Remediation**.

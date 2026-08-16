@@ -100,10 +100,9 @@ present-or-missing verification.
 
 Published symbol-addition and general-configuration candidate and target
 constants, concrete Go types, JSON decoding, validation, and cache payloads
-remain for compatibility with existing private diagnostic entries. They are not
-offered to the model. If encountered in a persisted or legacy response, they
-decode normally and the deterministic verifier rejects them as
-`insufficient_evidence`.
+remain so existing private diagnostic entries still decode safely. They are not
+offered to the model. If encountered in a persisted response, the deterministic
+verifier rejects them as `insufficient_evidence`.
 
 Non-actionable assessment version 1 contains exactly `version`,
 `cause_assessment`, `reason`, `evidence_ids`, and `non_actionable_reason`. The
