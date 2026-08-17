@@ -156,13 +156,6 @@ agentSandbox:
       model: fixture-model
       auth:
         type: none
-    maxSteps: 30
-    maxFiles: 3
-    timeout: 10m
-    outputLimitBytes: 1048576
-    allowedCommands:
-      - argv: [git, diff, --cached, --check]
-        timeout: 30s
   rbac:
     create: true
 server:

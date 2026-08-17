@@ -375,13 +375,6 @@ agentSandbox:
         existingSecret: agent-sandbox-model
         tokenKey: AI_TOKEN
       publicCAPrivateDNS: false
-    maxSteps: 30
-    maxFiles: 3
-    timeout: 10m
-    outputLimitBytes: 524288
-    allowedCommands:
-      - argv: [git, diff, --cached, --check]
-        timeout: 30s
     pollInterval: 250ms
     resources:
       requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
@@ -439,29 +432,21 @@ agentSandbox:
 VALUES
 expect_pass agent-sandbox-analyzer "$tmp/agent-sandbox-analyzer.yaml"
 
-cat > "$tmp/invalid-agent-sandbox-legacy-command.yaml" <<'VALUES'
-agentSandbox:
-  fixRuntime:
-    allowedCommands:
-      - git diff --cached --check
-VALUES
-expect_fail invalid-agent-sandbox-legacy-command "$tmp/invalid-agent-sandbox-legacy-command.yaml" /agentSandbox/fixRuntime/allowedCommands/0
-
-cat > "$tmp/invalid-agent-sandbox-command-timeout.yaml" <<'VALUES'
-agentSandbox:
-  fixRuntime:
-    allowedCommands:
-      - argv: [git, diff, --cached, --check]
-        timeout: 999999999999999999999999999999s
-VALUES
-expect_fail invalid-agent-sandbox-command-timeout "$tmp/invalid-agent-sandbox-command-timeout.yaml" /agentSandbox/fixRuntime/allowedCommands/0/timeout
-
+# Execution bounds now live only in project.yaml, so a stale copy in Helm values
+# must fail closed rather than be silently ignored.
 cat > "$tmp/invalid-agent-sandbox-output.yaml" <<'VALUES'
 agentSandbox:
   fixRuntime:
     outputLimitBytes: 1024
 VALUES
-expect_fail invalid-agent-sandbox-output "$tmp/invalid-agent-sandbox-output.yaml" /agentSandbox/fixRuntime/outputLimitBytes
+expect_fail invalid-agent-sandbox-output "$tmp/invalid-agent-sandbox-output.yaml" "additional properties 'outputLimitBytes' not allowed"
+
+cat > "$tmp/invalid-agent-sandbox-stale-bounds.yaml" <<'VALUES'
+agentSandbox:
+  fixRuntime:
+    maxSteps: 30
+VALUES
+expect_fail invalid-agent-sandbox-stale-bounds "$tmp/invalid-agent-sandbox-stale-bounds.yaml" "additional properties 'maxSteps' not allowed"
 
 cat > "$tmp/invalid-agent-sandbox-pull.yaml" <<'VALUES'
 agentSandbox:

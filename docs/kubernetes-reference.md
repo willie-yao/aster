@@ -414,6 +414,14 @@ The `agentSandbox.fixRuntime` chart section is disabled by default. It wires the
 dashboard to a consumer-installed Kubernetes SIG Agent Sandbox controller but
 never installs that controller or its CRD.
 
+Execution bounds are configured once, in the consumer's `project.yaml` under
+`ai.fix_prs.agent_runtime`: `max_turns`, `max_files`, `timeout`,
+`output_limit_bytes`, and `allowed_commands`. The chart reads them from the
+inlined `project.config` and renders the workload environment and the admission
+policy deadline from those values, so the Helm values do not repeat them. A
+stale copy left under `agentSandbox.fixRuntime` fails the schema; `upgrade.sh`
+strips those keys from candidate values during an upgrade.
+
 The Sandbox returns a patch and bounded command results rather than writing
 GitHub directly. The dashboard independently reapplies the patch to the pinned
 source revision and validates the exact ordered results, so the server and any

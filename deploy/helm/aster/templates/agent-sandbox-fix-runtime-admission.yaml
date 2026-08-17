@@ -10,7 +10,7 @@
 {{- $requester := printf "system:serviceaccount:%s:%s" .Release.Namespace $clientSA -}}
 {{- $image := include "aster.agentSandboxExecutorImage" . -}}
 {{- $workloadSA := include "aster.agentSandboxWorkloadServiceAccountName" . -}}
-{{- $timeoutMinutes := trimSuffix "m" (printf "%v" $cfg.timeout) | int -}}
+{{- $timeoutMinutes := trimSuffix "m" (include "aster.fixRuntimeTimeout" .) | int -}}
 {{- $timeoutSeconds := add (mul $timeoutMinutes 60) 15 -}}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
