@@ -133,6 +133,7 @@ backend/                         Go 1.25
     statefile/                   Atomic JSON writes + repo-scoped tracking state
     buildsource/                 Immutable build repository source resolution
     redact/                      Scrubs sensitive values before logging
+    credentialenv/               Trims whitespace from secret env vars at startup
     textutil/                    Small shared string helpers
     e2e/                         Hermetic end-to-end pipeline regression test
 

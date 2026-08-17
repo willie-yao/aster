@@ -74,10 +74,11 @@ kubectl -n <namespace> logs deploy/<release>-server | grep "OAuth token exchange
 `incorrect_client_credentials` usually means the stored credential carries a
 stray newline. A Secret written with `echo` instead of `echo -n` keeps the
 trailing byte, so a 40-character client secret arrives as 41 and GitHub rejects
-it. The server trims surrounding whitespace and warns at startup:
+it. Every binary trims surrounding whitespace from credential variables at
+startup and names each one it had to correct:
 
 ```
-⚠️  OAUTH_CLIENT_SECRET has leading or trailing whitespace; using the trimmed value.
+⚠️  OAUTH_CLIENT_SECRET had leading or trailing whitespace; using the trimmed value.
 ```
 
 Check every key, since the same mistake usually affects all of them. `BOT_TOKEN`

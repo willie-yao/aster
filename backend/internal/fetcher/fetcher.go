@@ -183,7 +183,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 
 	// AI_TOKEN authenticates the configured chat-completions endpoint.
 	enableAI := opts.EnableAI
-	aiToken := credentialEnv("AI_TOKEN")
+	aiToken := os.Getenv("AI_TOKEN")
 	if enableAI && aiToken == "" {
 		if opts.ShadowAnalysis.Enabled {
 			return nil, fmt.Errorf("agent analysis shadow requires AI_TOKEN for authoritative in-process analysis")
@@ -926,7 +926,7 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		log.Println("Fix PRs: no source repo resolved (set ai.fix_prs.repo or branding.source_repo); skipping")
 		return false, fmt.Errorf("fix PRs: no source repo resolved")
 	}
-	fixToken := credentialEnv("FIX_TOKEN")
+	fixToken := os.Getenv("FIX_TOKEN")
 	if fixToken == "" {
 		log.Println("Fix PRs: enabled but FIX_TOKEN is unset; skipping automatic generation")
 		return false, nil

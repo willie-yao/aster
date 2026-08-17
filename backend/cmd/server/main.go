@@ -38,6 +38,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/causalfixpreview"
 	"github.com/willie-yao/aster/backend/internal/chatfix"
 	"github.com/willie-yao/aster/backend/internal/corrections"
+	"github.com/willie-yao/aster/backend/internal/credentialenv"
 	"github.com/willie-yao/aster/backend/internal/fixruntime"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/notify"
@@ -49,7 +50,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/server"
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 	"github.com/willie-yao/aster/backend/internal/storage"
-	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
 var (
@@ -59,6 +59,7 @@ var (
 )
 
 func main() {
+	credentialenv.SanitizeAndReport()
 	var (
 		addr       string
 		dataDir    string
@@ -344,19 +345,6 @@ func optionalBoolEnv(name string, fallback bool) (bool, error) {
 	return parsed, nil
 }
 
-// credentialEnv reads a secret-bearing variable and strips surrounding
-// whitespace, naming the variable once at startup. Without this a Secret
-// written with `echo` instead of `echo -n` fails much later as an opaque
-// upstream rejection (GitHub reports incorrect_client_credentials) that gives
-// the operator no hint which value is malformed.
-func credentialEnv(name string) string {
-	value, trimmed := textutil.TrimCredential(os.Getenv(name))
-	if trimmed {
-		log.Printf("⚠️  %s has leading or trailing whitespace; using the trimmed value. Recreate the Secret with `printf %%s` or `echo -n` to drop the stray newline.", name)
-	}
-	return value
-}
-
 func configureAuthenticator(opts *server.Options, actionsEnabled bool) error {
 	admins := splitList(os.Getenv("ADMIN_LOGINS"))
 	switch mode := os.Getenv("AUTH_MODE"); mode {
@@ -367,18 +355,18 @@ func configureAuthenticator(opts *server.Options, actionsEnabled bool) error {
 		if strings.TrimSpace(os.Getenv("OAUTH_PRIVATE_REPOSITORIES")) != "" {
 			return fmt.Errorf("OAUTH_PRIVATE_REPOSITORIES is no longer supported; grant repository access to BOT_TOKEN instead")
 		}
-		botToken := credentialEnv("BOT_TOKEN")
+		botToken := os.Getenv("BOT_TOKEN")
 		if actionsEnabled && botToken == "" {
 			return fmt.Errorf("oauth auth mode requires BOT_TOKEN when actions are enabled")
 		}
 		o, err := auth.NewOAuth(auth.OAuthConfig{
-			ClientID:      credentialEnv("OAUTH_CLIENT_ID"),
-			ClientSecret:  credentialEnv("OAUTH_CLIENT_SECRET"),
+			ClientID:      os.Getenv("OAUTH_CLIENT_ID"),
+			ClientSecret:  os.Getenv("OAUTH_CLIENT_SECRET"),
 			RedirectURL:   os.Getenv("OAUTH_REDIRECT_URL"),
 			Scope:         "read:user",
 			WriteToken:    botToken,
 			Admins:        admins,
-			SessionKey:    credentialEnv("SESSION_KEY"),
+			SessionKey:    os.Getenv("SESSION_KEY"),
 			SecureCookies: os.Getenv("COOKIE_INSECURE") != "1",
 		})
 		if err != nil {
@@ -388,7 +376,7 @@ func configureAuthenticator(opts *server.Options, actionsEnabled bool) error {
 		opts.AuthMode = "oauth"
 		opts.LoginURL = "/api/auth/login"
 	case "proxy":
-		botToken := credentialEnv("BOT_TOKEN")
+		botToken := os.Getenv("BOT_TOKEN")
 		if actionsEnabled && botToken == "" {
 			return fmt.Errorf("proxy auth mode requires BOT_TOKEN when actions are enabled")
 		}
@@ -402,7 +390,7 @@ func configureAuthenticator(opts *server.Options, actionsEnabled bool) error {
 		opts.Auth = auth.NewBotAuthenticator(header, botToken, admins, os.Getenv("AUTH_PROXY_SECRET"))
 		opts.AuthMode = "proxy"
 	case "dev":
-		botToken := credentialEnv("BOT_TOKEN")
+		botToken := os.Getenv("BOT_TOKEN")
 		if actionsEnabled && botToken == "" {
 			return fmt.Errorf("dev auth mode requires BOT_TOKEN when actions are enabled")
 		}
@@ -425,7 +413,7 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 		return nil, err
 	}
 	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
-		Token: credentialEnv("AI_TOKEN"), API: provider.API, Endpoint: provider.Endpoint,
+		Token: os.Getenv("AI_TOKEN"), API: provider.API, Endpoint: provider.Endpoint,
 		Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, Headers: provider.Headers, SourceToken: os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"),
 		UsageRecorder: usageRecorder,
 	})
@@ -461,7 +449,7 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 		return nil, err
 	}
 	serviceOpts.UsageRecorder = usageRecorder
-	token := credentialEnv("AI_TOKEN")
+	token := os.Getenv("AI_TOKEN")
 	if token == "" {
 		return nil, fmt.Errorf("analysis chat requires AI_TOKEN")
 	}
@@ -511,7 +499,7 @@ func enableCausalRemediationInvestigation(
 	if err != nil {
 		return err
 	}
-	token := credentialEnv("AI_TOKEN")
+	token := os.Getenv("AI_TOKEN")
 	if token == "" {
 		return fmt.Errorf("causal remediation investigation requires AI_TOKEN")
 	}
@@ -758,7 +746,7 @@ func enablePullRequestEscalation(
 	cfg *project.Config,
 	projectDir, dataDir string,
 ) error {
-	token := credentialEnv("AI_TOKEN")
+	token := os.Getenv("AI_TOKEN")
 	if token == "" {
 		return fmt.Errorf("pull request escalation requires AI_TOKEN")
 	}
