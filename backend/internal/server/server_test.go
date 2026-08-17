@@ -86,7 +86,6 @@ func TestHandler_DataReadParity(t *testing.T) {
 		"dashboard.json":            `{"jobs":[]}`,
 		"flakiness.json":            `{"tests":[]}`,
 		"search-index.json":         `{"entries":[]}`,
-		"remediations.json":         `{"remediations":{}}`,
 		"analysis_corrections.json": `{"corrections":{}}`,
 		"jobs/periodic-x.json":      `{"job_id":"periodic-x"}`,
 	}

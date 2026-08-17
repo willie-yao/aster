@@ -32,17 +32,14 @@ test("pattern action eligibility handles deterministic blocked states", () => {
     name: "AKS_MGMT_KUBERNETES_VERSION",
     value: "v1.34.1",
   }]), null);
-  const existing = patternActionEligibilityHint([actionableTarget], "open");
-  assert.equal(existing?.state, "already_present");
-  assert.match(existing?.reason ?? "", /attempt already exists/);
   const observing = { state: "observing" as const, reason: "remediation present" };
   assert.equal(patternLifecycleActive(observing), false);
-  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, observing)?.state, "already_present");
-  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, observing)?.reason, "remediation present");
+  assert.equal(patternActionEligibilityHint([actionableTarget], observing)?.state, "already_present");
+  assert.equal(patternActionEligibilityHint([actionableTarget], observing)?.reason, "remediation present");
   const recovered = { state: "recovered" as const, reason: "three observed passes", recovery_streak: 3 };
   assert.equal(patternLifecycleActive(recovered), false);
-  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, recovered)?.state, "recovered");
-  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, recovered)?.reason, "three observed passes");
+  assert.equal(patternActionEligibilityHint([actionableTarget], recovered)?.state, "recovered");
+  assert.equal(patternActionEligibilityHint([actionableTarget], recovered)?.reason, "three observed passes");
   assert.equal(patternLifecycleActive(undefined), true);
 });
 
@@ -70,8 +67,8 @@ test("structured action reasons distinguish safe blocked states", () => {
   assert.equal(actionEligibilityTitle(eligibilityForCode("unsafe_remediation")), "Unsafe remediation blocked");
   assert.equal(actionEligibilityTitle(eligibilityForCode("observing")), "Observing verified remediation");
   assert.equal(actionEligibilityTitle(eligibilityForCode("verified_fixed")), "Verified fixed");
-  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, undefined, true, { state: "retained", evidence_available: true })?.code, "retained_stale");
-  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, undefined, false)?.code, "non_systemic");
+  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, true, { state: "retained", evidence_available: true })?.code, "retained_stale");
+  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, false)?.code, "non_systemic");
 });
 
 test("legacy eligibility payloads derive a compatible reason code", () => {

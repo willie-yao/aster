@@ -64,11 +64,11 @@ export function PatternFixGuidance({ jobID, buildID }: { jobID: string; buildID:
         <InfoOutlined aria-hidden sx={{ mt: 0.25, flexShrink: 0, color: "info.main" }} />
         <Box sx={{ minWidth: 0 }}>
           <Typography id="pattern-fix-guidance-title" component="h3" sx={overviewTypography.subsectionHeading}>
-            Fix a specific failure
+            Fix investigation unavailable
           </Typography>
           <Typography color="text.secondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
-            This recurring result contains multiple causes, so it cannot produce one shared issue or Fix PR.
-            Choose a failed JUnit test from an affected build to start an evidence-backed Fix investigation.
+            This recurring result is grouped by cause, so it cannot produce one shared issue or Fix PR.
+            No failed JUnit test in the affected builds meets the Fix investigation requirements yet, so no cause can start one either.
           </Typography>
           <Button
             component={RouterLink}
@@ -80,7 +80,8 @@ export function PatternFixGuidance({ jobID, buildID }: { jobID: string; buildID:
             View failed tests
           </Button>
           <Typography color="text.secondary" sx={{ mt: 1, ...overviewTypography.description }}>
-            The pattern chat below helps compare causes across builds. Fix investigations start from an individual failed test.
+            The pattern chat below helps compare causes across builds. A Fix investigation becomes available once an
+            individual failed JUnit test meets every Fix eligibility requirement.
           </Typography>
         </Box>
       </Stack>

@@ -113,7 +113,6 @@ backend/                         Go 1.25
     fixruntime/                  Selects the coding-agent runtime for fix PRs
     fixexecutor/                 Clones, runs OpenCode, validates, and returns one staged patch
     chatfix/                     Bridges one chat response into fix generation
-    remediation/                 Lifecycle of dashboard-created fixes
     remediationpolicy/           Shared deterministic remediation safety policy
     resolve/                     Admin-marked "resolved" recurring patterns
     patternstate/                Pattern publication + write-side validation

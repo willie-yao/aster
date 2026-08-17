@@ -277,8 +277,21 @@ func (s *Service) Get(ref Ref) (View, error) {
 	return View{Ref: ref, State: StateNotStarted}, nil
 }
 
-// Wait blocks until in-flight escalations stop.
-func (s *Service) Wait() { s.wg.Wait() }
+// Wait blocks until in-flight escalations finish, which includes their attempt
+// to persist a terminal result. It returns ctx.Err() if ctx is done first.
+func (s *Service) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 func (s *Service) run(rec *record, resolved Resolved) {
 	defer s.wg.Done()

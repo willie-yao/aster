@@ -808,6 +808,50 @@ func TestReadAcceptsPreviousCohortFreeStatusSchema(t *testing.T) {
 	}
 }
 
+func TestReadAcceptsRetiredRemediationFollowUpComponent(t *testing.T) {
+	status := testStatus(time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC))
+	status.FollowUp = &FollowUpProgress{
+		Notifications:   &FollowUpComponentStatus{State: FollowUpCompleted},
+		AutomaticIssues: &FollowUpComponentStatus{State: FollowUpDisabled},
+	}
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	followUp, ok := raw["follow_up"].(map[string]any)
+	if !ok {
+		t.Fatalf("follow_up has type %T", raw["follow_up"])
+	}
+	followUp["remediation"] = map[string]any{"state": "skipped", "reason": "not-configured"}
+	legacy, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "status.json")
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(path)
+	if err != nil {
+		t.Fatalf("reading retired remediation follow-up component: %v", err)
+	}
+	if got.FollowUp == nil || got.FollowUp.Notifications == nil ||
+		got.FollowUp.Notifications.State != FollowUpCompleted {
+		t.Fatalf("follow-up = %+v", got.FollowUp)
+	}
+	rewritten, err := json.Marshal(got.FollowUp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rewritten), "remediation") {
+		t.Fatalf("retired component was re-emitted: %s", rewritten)
+	}
+}
+
 func TestReadAcceptsPreviousExactCounterFreeStatusSchema(t *testing.T) {
 	status := testStatus(time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC))
 	status.SchemaVersion = 8
@@ -932,7 +976,6 @@ func TestFollowUpProgressRoundTripAndValidation(t *testing.T) {
 	status := testStatus(now)
 	status.FollowUp = &FollowUpProgress{
 		Notifications: &FollowUpComponentStatus{State: FollowUpCompleted},
-		Remediation:   &FollowUpComponentStatus{State: FollowUpCompleted},
 		AutomaticIssues: &FollowUpComponentStatus{
 			State: FollowUpSkipped, Reason: FollowUpReasonNotConfigured,
 		},

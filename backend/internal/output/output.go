@@ -36,6 +36,8 @@ var NonPublishedFiles = []string{
 	"fix_pr_state.json",
 	"fix_previews.json",
 	"notification_state.json",
+	// Retained so private ledger files left by the removed closed-loop
+	// remediation feature are never published from an existing data directory.
 	"remediation_state.json",
 	"remediation_prow_catalog.json",
 	// Retained so a stale file left in an existing data directory by a removed
@@ -157,6 +159,20 @@ func WriteAll(dir string, cfg *project.Config, dashboard models.Dashboard, detai
 	}
 	if err := WriteSearchIndex(dir, searchIndex); err != nil {
 		return err
+	}
+	return removeRetiredPublicFiles(dir)
+}
+
+// retiredPublicFiles are public projections no longer produced by any feature.
+// A normal refresh removes them so an upgraded deployment cannot keep serving
+// stale data.
+var retiredPublicFiles = []string{"remediations.json"}
+
+func removeRetiredPublicFiles(dir string) error {
+	for _, name := range retiredPublicFiles {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove retired public file %s: %w", name, err)
+		}
 	}
 	return nil
 }

@@ -2,16 +2,6 @@ import type { ActionEligibility, ActionReasonCode } from "../types/actions";
 import type { AIAnalysis, PatternLifecycle, PatternRefreshStatus, RemediationTarget } from "../types/dashboard";
 import { buildActionsReady } from "./buildFailures.js";
 
-const remediationExistsStatuses = new Set([
-  "open",
-  "awaiting_presubmit",
-  "presubmit_running",
-  "premerge_verified",
-  "merged",
-  "observing",
-  "verified_fixed",
-]);
-
 const stateCode: Record<ActionEligibility["state"], ActionReasonCode> = {
   actionable: "actionable",
   investigation_required: "investigation_required",
@@ -102,7 +92,6 @@ function targetIsComplete(target: RemediationTarget): boolean {
 
 export function patternActionEligibilityHint(
   targets: RemediationTarget[] | undefined,
-  remediationStatus?: string,
   lifecycle?: PatternLifecycle,
   systemic = true,
   refreshStatus?: PatternRefreshStatus,
@@ -118,9 +107,6 @@ export function patternActionEligibilityHint(
         ? "observing"
         : "verified_fixed";
     return eligibilityForCode(code, lifecycle?.reason ?? reasonMessages[code]);
-  }
-  if (remediationStatus && remediationExistsStatuses.has(remediationStatus)) {
-    return eligibilityForCode("already_present", "A remediation attempt already exists for this pattern.");
   }
   if (!targets?.length) return eligibilityForCode("contract_generation_failed");
   if (!targets.every(targetIsComplete)) return eligibilityForCode("contract_generation_failed");

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -342,6 +343,31 @@ func TestWriteAllPrunesStaleJobFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatalf("stale job file still exists: %v", err)
+	}
+}
+
+func TestWriteAllRemovesRetiredPublicProjection(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, "remediations.json")
+	if err := os.WriteFile(stale, []byte(`{"remediations":{"pattern":{}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	retained := filepath.Join(dir, "remediation_state.json")
+	if err := os.WriteFile(retained, []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAll(dir, sampleConfig(), sampleDashboard(), nil, models.FlakinessReport{}, models.SearchIndex{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("retired public projection still exists: %v", err)
+	}
+	if _, err := os.Stat(retained); err != nil {
+		t.Fatalf("retained private state was deleted: %v", err)
+	}
+	if !slices.Contains(NonPublishedFiles, "remediation_state.json") ||
+		!slices.Contains(NonPublishedFiles, "remediation_prow_catalog.json") {
+		t.Fatalf("legacy private files left the denylist: %v", NonPublishedFiles)
 	}
 }
 
