@@ -48,6 +48,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          labels: |
+            org.opencontainers.image.title=Aster
           tags: |
             type=semver,pattern={{raw}}
 
@@ -98,6 +100,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}/remote-fixer
+          labels: |
+            org.opencontainers.image.title=Aster Remote Fixer
           tags: |
             type=semver,pattern={{raw}}
 
@@ -149,6 +153,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}/agent-sandbox-fix-executor
+          labels: |
+            org.opencontainers.image.title=Aster Agent Sandbox Fix Executor
           tags: |
             type=semver,pattern={{raw}}
 
@@ -215,7 +221,9 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}/agent-sandbox-fix-executor
+          images: ghcr.io/${{ github.repository }}/agent-sandbox-analysis-executor
+          labels: |
+            org.opencontainers.image.title=Aster Agent Sandbox Analysis Executor
           tags: |
             type=sha,prefix=sha-
 
@@ -252,6 +260,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}/agent-sandbox-analysis-stager
+          labels: |
+            org.opencontainers.image.title=Aster Agent Sandbox Analysis Stager
           tags: |
             type=sha,prefix=sha-
 
