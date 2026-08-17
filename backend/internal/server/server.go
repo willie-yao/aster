@@ -82,9 +82,13 @@ type Options struct {
 	Actions ActionRunner
 	// DisableFixActions keeps issue and resolution actions available while
 	// withholding Fix PR routes and capability advertisement.
-	DisableFixActions              bool
-	AnalysisChat                   AnalysisChatRunner
-	AnalysisCorrections            AnalysisCorrectionRunner
+	DisableFixActions   bool
+	AnalysisChat        AnalysisChatRunner
+	AnalysisCorrections AnalysisCorrectionRunner
+	// PullRequestEscalation runs on-demand analysis for a pull request failure
+	// the deterministic pass could not explain. Nil withholds the routes and
+	// the capability.
+	PullRequestEscalation          PullRequestEscalationRunner
 	CausalRemediationInvestigation CausalRemediationInvestigationRunner
 	CausalFixPreview               CausalFixPreviewRunner
 	// ChatFix bridges one selected chat response into the existing fix preview.
@@ -179,6 +183,9 @@ type Features struct {
 	ChatFix              bool   `json:"chat_fix,omitempty"`
 	JUnitChatFix         bool   `json:"junit_chat_fix,omitempty"`
 	ChatFixMinConfidence string `json:"chat_fix_min_confidence,omitempty"`
+	// PullRequestEscalation enables on-demand analysis of a pull request
+	// failure the deterministic pass could not explain.
+	PullRequestEscalation bool `json:"pull_request_escalation,omitempty"`
 }
 
 // authRegistrar is implemented by authenticators that need their own routes
@@ -311,6 +318,23 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, guard(confirmAnalysisCorrectionHandler(opts.AnalysisCorrections))))
 		mux.Handle("POST /api/analysis-corrections/{id}/revoke",
 			auth.Middleware(opts.Auth, guard(revokeAnalysisCorrectionHandler(opts.AnalysisCorrections))))
+	}
+
+	// On-demand pull request escalation requires both auth and a runner. The
+	// deterministic verdicts stay public; only the analysis is gated.
+	if opts.Auth != nil && opts.PullRequestEscalation != nil {
+		caps.Features.PullRequestEscalation = true
+		timeout := opts.ActionTimeout
+		if timeout <= 0 {
+			timeout = defaultActionTimeout
+		}
+		trusted := trustedOriginSet(opts.TrustedOrigins)
+		guard := func(next http.Handler) http.Handler { return csrfGuard(trusted, next) }
+		path := "/api/pull-requests/{number}/checks/{jobID}/builds/{buildID}/escalation"
+		mux.Handle("POST "+path,
+			auth.Middleware(opts.Auth, guard(startPullRequestEscalationHandler(timeout, opts.PullRequestEscalation))))
+		mux.Handle("GET "+path,
+			auth.Middleware(opts.Auth, getPullRequestEscalationHandler(opts.PullRequestEscalation)))
 	}
 
 	// Write actions require both auth and an action runner.

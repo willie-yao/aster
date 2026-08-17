@@ -8,10 +8,12 @@ import Typography from "@mui/material/Typography";
 import { useId, useState } from "react";
 import { Link as RouterLink, useParams } from "react-router-dom";
 import { DetailSectionBand } from "../components/DetailSectionBand";
+import { EscalationPanel } from "../components/EscalationPanel";
 import { ErrorState } from "../components/ErrorState";
 import { LoadingState } from "../components/LoadingState";
 import { RunMetadata } from "../components/RunMetadata";
 import { StatusChip } from "../components/StatusChip";
+import { useCapabilities } from "../hooks/useCapabilities";
 import { usePullRequestDetail } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import {
@@ -20,6 +22,7 @@ import {
   checkState,
   checkStatusLabel,
   checkSummaryLine,
+  needsInvestigation,
   shortSHA,
   staleCheckCount,
   unexplainedCount,
@@ -145,7 +148,13 @@ function AttributionBanner({ attribution }: { attribution: FailureAttribution })
 
 // FailureItem reveals the full failure output on demand. It is only a
 // disclosure when there is a body to reveal, so a click never does nothing.
-function FailureItem({ failure }: { failure: PullRequestFailure }) {
+function FailureItem({
+  failure,
+  escalation,
+}: {
+  failure: PullRequestFailure;
+  escalation?: { pullNumber: number; jobID: string; buildID: string; enabled: boolean };
+}) {
   const [open, setOpen] = useState(false);
   const body = failure.failure_body?.trim();
   const bodyID = `failure-body-${useId()}`;
@@ -224,6 +233,17 @@ function FailureItem({ failure }: { failure: PullRequestFailure }) {
 
       <Box sx={{ px: { xs: 1.5, sm: 2 }, pb: 1.5 }}>
         {failure.attribution && <AttributionBanner attribution={failure.attribution} />}
+        {escalation && needsInvestigation(failure) && (
+          <EscalationPanel
+            enabled={escalation.enabled}
+            refValue={{
+              pullNumber: escalation.pullNumber,
+              jobID: escalation.jobID,
+              buildID: escalation.buildID,
+              testName: failure.name,
+            }}
+          />
+        )}
         {failure.failure_message && (
           <Box
             component="pre"
@@ -328,7 +348,15 @@ function ExternalLink({ href, label }: { href: string; label: string }) {
   );
 }
 
-function CheckCard({ check, linkToJob }: { check: PullRequestCheck; linkToJob: boolean }) {
+function CheckCard({
+  check,
+  linkToJob,
+  escalation,
+}: {
+  check: PullRequestCheck;
+  linkToJob: boolean;
+  escalation?: { pullNumber: number; enabled: boolean };
+}) {
   const state = checkState(check);
   const failures = check.failures ?? [];
   return (
@@ -379,7 +407,20 @@ function CheckCard({ check, linkToJob }: { check: PullRequestCheck; linkToJob: b
       </Box>
 
       {failures.map((failure, index) => (
-        <FailureItem key={`${failure.name}-${index}`} failure={failure} />
+        <FailureItem
+          key={`${failure.name}-${index}`}
+          failure={failure}
+          escalation={
+            escalation && !check.stale
+              ? {
+                  pullNumber: escalation.pullNumber,
+                  jobID: check.job_id,
+                  buildID: check.build_id,
+                  enabled: escalation.enabled,
+                }
+              : undefined
+          }
+        />
       ))}
 
       {check.failures_truncated && (
@@ -394,7 +435,15 @@ function CheckCard({ check, linkToJob }: { check: PullRequestCheck; linkToJob: b
   );
 }
 
-function ChecksSection({ detail, linkToJob }: { detail: PullRequestDetail; linkToJob: boolean }) {
+function ChecksSection({
+  detail,
+  linkToJob,
+  escalationEnabled,
+}: {
+  detail: PullRequestDetail;
+  linkToJob: boolean;
+  escalationEnabled: boolean;
+}) {
   const failing = detail.checks.filter((check) => checkState(check) === "FAILING");
   const stale = staleCheckCount(detail.checks);
   const unexplained = unexplainedCount(detail.checks);
@@ -427,7 +476,12 @@ function ChecksSection({ detail, linkToJob }: { detail: PullRequestDetail; linkT
       <DetailSectionBand title="Presubmit checks" metadata={metadata} />
       <Stack spacing={1.5} sx={{ mt: 1.5 }}>
         {detail.checks.map((check) => (
-          <CheckCard key={`${check.job_id}-${check.build_id}`} check={check} linkToJob={linkToJob} />
+          <CheckCard
+            key={`${check.job_id}-${check.build_id}`}
+            check={check}
+            linkToJob={linkToJob}
+            escalation={{ pullNumber: detail.number, enabled: escalationEnabled }}
+          />
         ))}
       </Stack>
     </Box>
@@ -439,6 +493,8 @@ export function PullRequestDetailPage() {
   const { data, loading, error } = usePullRequestDetail(number);
   const manifest = useManifest();
   const linkToJob = manifest.source?.include_presubmits ?? false;
+  const { features } = useCapabilities();
+  const escalationEnabled = features.pull_request_escalation ?? false;
 
   const breadcrumbs = (
     <>
@@ -554,7 +610,7 @@ export function PullRequestDetailPage() {
         links={[]}
       />
 
-      <ChecksSection detail={data} linkToJob={linkToJob} />
+      <ChecksSection detail={data} linkToJob={linkToJob} escalationEnabled={escalationEnabled} />
     </Stack>
   );
 }

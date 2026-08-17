@@ -44,6 +44,7 @@ var NonPublishedFiles = []string{
 	"action_request_state.json",
 	"action_preview_state.json",
 	"analysis_correction_state.json",
+	"pr_escalation_state.json",
 }
 
 // writeJSON writes indented JSON to path atomically, creating parent

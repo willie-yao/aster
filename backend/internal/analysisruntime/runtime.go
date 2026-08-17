@@ -220,6 +220,10 @@ type ServiceOptions struct {
 	ConsecutiveFailures map[string]int
 	TraceStore          *ai.TraceStore
 	GitHubReadToken     string
+	// Module overrides the analysis module. Nil selects the universal module
+	// the dashboard pass uses. A different module gets its own agentic cache
+	// namespace because the module name is part of the cache key.
+	Module ai.Module
 }
 
 type analysisChatBrowserFactory struct {
@@ -295,7 +299,11 @@ func (r *Runtime) NewService(opts ServiceOptions) (*ai.Service, error) {
 		return nil, fmt.Errorf("analysis storage backend is required")
 	}
 	cfg := r.Project.Config
-	service := ai.NewService(r.Client, universal.New(), r.Project.SystemPrompt, opts.ConsecutiveFailures)
+	module := opts.Module
+	if module == nil {
+		module = universal.New()
+	}
+	service := ai.NewService(r.Client, module, r.Project.SystemPrompt, opts.ConsecutiveFailures)
 	service.SetCacheGeneration(r.Project.CacheGenerationFingerprint)
 	if opts.TraceStore != nil {
 		service.SetTraceStore(opts.TraceStore)

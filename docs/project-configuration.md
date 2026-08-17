@@ -235,6 +235,45 @@ A few behaviors worth knowing:
 - A triage failure never aborts the pass. The previously written view is kept
   and the dashboard still publishes.
 
+### Optional AI escalation
+
+Every verdict above is computed without a model. When a failure stays
+`unexplained`, `touches_changed_code`, or `inconclusive`, a maintainer can
+escalate it for one on-demand analysis. Escalation is server-mode only and
+opt-in:
+
+```bash
+PULL_REQUEST_ESCALATION_ENABLED=true   # plus AI_TOKEN, AI_ENDPOINT, AI_MODEL
+```
+
+It requires `pull_requests.enabled`, an authenticated admin, and a server
+started with `-project-dir`. The Pages path never offers it.
+
+The contract is deliberately narrow:
+
+- **Only the residual set is eligible.** A failure the base branch, other pull
+  requests, or flakiness history already explained cannot be escalated, so the
+  free pass is the cost filter. A stale build is refused too, because change
+  context would describe a different revision.
+- **One escalation runs at a time**, no matter how many maintainers click. The
+  rest queue. Results are shared between admins rather than per-requester, so
+  two maintainers looking at the same failure do not each pay for an analysis.
+- **A failed escalation can be retried.** A provider error, a timeout, or a
+  restart that interrupted queued work leaves the failure retryable rather than
+  permanently un-analyzable. Replaying the same request key still returns the
+  original outcome instead of starting new work.
+- **The model never issues the pull request verdict.** It runs the ordinary
+  agentic failure analysis under a separate module, gated by the same critique
+  and judge rules, and is told explicitly not to claim the change caused the
+  failure. The changed-file list is supplied only to help it locate code.
+- **The analysis cache is isolated.** The module name is part of the agentic
+  cache key, so an escalation never returns the dashboard's analysis of the
+  same failure, or the reverse.
+- **Results are private and bounded.** They are stored in
+  `pr_escalation_state.json`, which is never published, retained under a cap,
+  and restored after a restart. An escalation that was in flight when the
+  process stopped comes back as never started rather than stuck running.
+
 ## Categories
 
 Categories are optional. Without them, the landing page renders one flat job

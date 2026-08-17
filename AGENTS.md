@@ -69,6 +69,7 @@ backend/                         Go 1.25
     patterns/                    Correlates analyzed failures across builds
     prtriage/                    Per-open-pull-request view of presubmit results
     prattribution/               Rules a pull request out of a failure from observed results
+    prescalation/                On-demand AI analysis for unexplained pull request failures
     output/                      Writes the JSON contract the frontend reads
     models/                      Shared wire-format types
     fetchprogress/               Persists safe aggregate fetch progress for operators
@@ -86,6 +87,7 @@ backend/                         Go 1.25
       tools/{filesystem,k8s,repotree}/  Function-calling tools exposed to the model
       skills/                    Diagnostic recipe registry (+ builtin/{prow,kubernetes})
       modules/universal/         Builds the per-failure seed prompt
+      modules/pullrequest/       Seed prompt plus pull request change context
     aiusage/                     Private token usage and cost accounting
     agentanalysis/               Private experimental Agent failure-analysis adapter
     analysisexecutor/            File-backed OpenCode analysis executor
