@@ -19,6 +19,55 @@ how to pin a consumer to a reviewed version.
 
 ## [Unreleased]
 
+## [0.9.0-rc.3] - 2026-08-17
+
+### Removed
+
+- **Orka and SRT runtimes.** The experimental Orka container/agent runtime and
+  the Anthropic Sandbox Runtime local process sandbox are gone. Agent Sandbox is
+  now the only coding-agent runtime. `analysisRuntime.type` accepts only
+  `inprocess`, and `ai.fix_prs.agent_runtime.type` accepts only `agent-sandbox`,
+  which is also the default. The removed `agent_runtime` fields are `model`,
+  `network_domains`, and the Orka-only `agent_ref`, `api`, `namespace`,
+  `version`, and `retries`. `allow_bash` now defaults to false and must be
+  false, and `critique_retries` is pinned to zero.
+- **Interactive source investigation.** Orka was its only backend, so the
+  `ai.source_investigation` project block, the
+  `server.chat.sourceInvestigation` chart values, the chat source-investigation
+  endpoints, and the dashboard panel were removed.
+- **Agent prompt authoring mode.** `aster onboard` now offers only `handoff`
+  (the default, which writes a reusable skill and reviewable prompt for the
+  operator's own coding agent) and `todo-template`. The `--prompt-agent-*`,
+  `--prompt-orka-*`, `--prompt-network-domain`, and `--require-prompt-draft`
+  flags were removed.
+
+### Changed
+
+- **Fix execution bounds have one source.** `max_turns`, `max_files`,
+  `timeout`, `output_limit_bytes`, and `allowed_commands` are configured only in
+  `project.yaml` under `ai.fix_prs.agent_runtime`. The chart derives the workload
+  environment and admission deadline from the inlined `project.config`, so the
+  matching `agentSandbox.fixRuntime` values were removed. A stale copy now fails
+  the schema; `upgrade.sh` strips those keys from candidate values during an
+  upgrade.
+- **Quality benchmarks relocated.** The opt-in model-quality benchmarks moved
+  from `backend/internal/e2e` to `backend/benchmarks`. `internal/e2e` now holds
+  only the hermetic pipeline regression test.
+
+### Added
+
+- **Pull request failure triage.** The dashboard gained a per-open-pull-request
+  view of presubmit results, including attribution against observed baselines
+  and reporting when a failure sits in changed code.
+
+### Fixed
+
+- **Conversation-scoped chat-to-fix eligibility.** Chat fix evidence is scoped to
+  the conversation rather than a single turn, and permanent ineligibility is
+  reported first.
+- **Durable file-link verification.** Transient GitHub failures no longer drop
+  published file links.
+
 ## [0.9.0-rc.2] - 2026-08-15
 
 ### Added
