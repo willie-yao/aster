@@ -52,3 +52,28 @@ func isValidUTF8(s string) bool {
 	}
 	return true
 }
+
+func TestTrimCredential(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    string
+		trimmed bool
+	}{
+		{"clean", "ghp_abc123", "ghp_abc123", false},
+		{"trailing newline", "ghp_abc123\n", "ghp_abc123", true},
+		{"trailing crlf", "ghp_abc123\r\n", "ghp_abc123", true},
+		{"leading space", " ghp_abc123", "ghp_abc123", true},
+		{"empty", "", "", false},
+		{"whitespace only", "\n", "", true},
+		{"inner space preserved", "a b", "a b", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, trimmed := TrimCredential(tc.in)
+			if got != tc.want || trimmed != tc.trimmed {
+				t.Errorf("TrimCredential(%q) = %q, %v; want %q, %v", tc.in, got, trimmed, tc.want, tc.trimmed)
+			}
+		})
+	}
+}

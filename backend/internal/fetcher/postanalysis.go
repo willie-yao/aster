@@ -41,7 +41,7 @@ func RunFinalizedSideEffects(ctx context.Context, opts FinalizedSideEffectsOptio
 	if err := project.ValidateAIProvider(provider); err != nil {
 		return err
 	}
-	aiToken := os.Getenv("AI_TOKEN")
+	aiToken := credentialEnv("AI_TOKEN")
 	enableAI := aiToken != "" && provider.Endpoint != "" && provider.Model != ""
 	client := &http.Client{Timeout: 30 * time.Second}
 	p := &pipeline{

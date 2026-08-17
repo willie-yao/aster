@@ -188,7 +188,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 
 	// AI_TOKEN authenticates the configured chat-completions endpoint.
 	enableAI := opts.EnableAI
-	aiToken := os.Getenv("AI_TOKEN")
+	aiToken := credentialEnv("AI_TOKEN")
 	if enableAI && aiToken == "" {
 		if opts.ShadowAnalysis.Enabled {
 			return nil, fmt.Errorf("agent analysis shadow requires AI_TOKEN for authoritative in-process analysis")
@@ -1375,12 +1375,12 @@ func (p *pipeline) processRemediations(ctx context.Context, patterns []models.Pa
 			}
 		}
 	}
-	token := os.Getenv("FIX_TOKEN")
+	token := credentialEnv("FIX_TOKEN")
 	if token == "" {
-		token = os.Getenv("BOT_TOKEN")
+		token = credentialEnv("BOT_TOKEN")
 	}
 	if token == "" {
-		token = os.Getenv("GITHUB_TOKEN")
+		token = credentialEnv("GITHUB_TOKEN")
 	}
 	if token == "" {
 		token = os.Getenv("ISSUE_TOKEN")

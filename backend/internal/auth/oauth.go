@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ghpr"
+	"github.com/willie-yao/aster/backend/internal/redact"
 )
 
 // GitHub OAuth endpoints, overridable in tests.
@@ -164,8 +165,11 @@ func (o *OAuth) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	token, grantedScope, err := o.exchange(r.Context(), code)
 	if err != nil {
-		log.Printf("auth: token exchange failed")
-		http.Error(w, "oauth authorization did not grant the configured access", http.StatusBadGateway)
+		// GitHub's reason (incorrect_client_credentials, redirect_uri_mismatch,
+		// ...) is the only thing that makes this diagnosable. It carries no
+		// secret, but scrub anyway in case a transport error embeds the URL.
+		log.Printf("auth: OAuth token exchange failed: %s", redact.Credentials(redact.URLs(err.Error())))
+		http.Error(w, "oauth token exchange failed", http.StatusBadGateway)
 		return
 	}
 	if err := validateGrantedScope(o.cfg.Scope, grantedScope); err != nil {

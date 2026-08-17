@@ -62,6 +62,39 @@ revoke the old OAuth App grant, and sign in again. The chart rejects legacy
 `scope`, `chatScope`, `privateRepositories`, `OAUTH_SCOPE`, and
 `OAUTH_PRIVATE_REPOSITORIES` controls instead of retaining broad access.
 
+## Login fails with "oauth token exchange failed"
+
+The server could not trade the authorization code for a token. The reason is
+logged verbatim from GitHub:
+
+```bash
+kubectl -n <namespace> logs deploy/<release>-server | grep "OAuth token exchange"
+```
+
+`incorrect_client_credentials` usually means the stored credential carries a
+stray newline. A Secret written with `echo` instead of `echo -n` keeps the
+trailing byte, so a 40-character client secret arrives as 41 and GitHub rejects
+it. The server trims surrounding whitespace and warns at startup:
+
+```
+⚠️  OAUTH_CLIENT_SECRET has leading or trailing whitespace; using the trimmed value.
+```
+
+Check every key, since the same mistake usually affects all of them. `BOT_TOKEN`
+is worth checking even when login works, because it breaks the write actions
+rather than sign-in:
+
+```bash
+kubectl -n <namespace> get secret <auth-secret> \
+  -o jsonpath='{.data.BOT_TOKEN}' | base64 -d | wc -c
+```
+
+Recreate the Secret with `printf %s` (not `echo`) to write the value cleanly.
+
+A `403` with "oauth authorization did not grant the configured access" is a
+different problem: the exchange succeeded but the grant was not exactly
+`read:user`. See the section above.
+
 ## No jobs were published
 
 A dashboard that loads with zero jobs has a valid frontend and manifest, but the

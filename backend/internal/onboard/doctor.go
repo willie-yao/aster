@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/textutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -455,6 +456,9 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 	}
 	if placeholder(values.AI.Token) && placeholder(values.AI.ExistingSecret) {
 		add("Kubernetes AI credential", DoctorWarn, "no token or existing Secret is declared in deploy/values.yaml", "Configure ai.existingSecret and have the organization Secret manager provision the required key.")
+	}
+	if _, trimmed := textutil.TrimCredential(values.AI.Token); trimmed {
+		add("Kubernetes AI credential", DoctorFail, "ai.token has leading or trailing whitespace", "Remove the surrounding whitespace. A credential with a stray newline is rejected by the endpoint as invalid, far from this file.")
 	}
 	return includePresubmits
 }
