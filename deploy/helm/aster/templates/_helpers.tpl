@@ -388,6 +388,27 @@ key, or bot token).
 {{- printf "%s-agent-sandbox-%s" (include "aster.fullname" .) (include "aster.releaseScope" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/*
+Fix-runtime execution bounds come from the consumer's project.yaml so they are
+configured exactly once. agentSandboxFixRuntime validation requires inline
+project.config whenever the fix runtime is enabled, so these always resolve.
+*/}}
+{{- define "aster.fixRuntimeProjectAgent" -}}
+{{- $project := fromYaml (default "" .Values.project.config) -}}
+{{- $fix := get (get $project "ai" | default dict) "fix_prs" | default dict -}}
+{{- get $fix "agent_runtime" | default dict | toYaml -}}
+{{- end -}}
+
+{{- define "aster.fixRuntimeTimeout" -}}
+{{- $agent := fromYaml (include "aster.fixRuntimeProjectAgent" .) -}}
+{{- default "10m" (get $agent "timeout") -}}
+{{- end -}}
+
+{{- define "aster.fixRuntimeOutputLimitBytes" -}}
+{{- $agent := fromYaml (include "aster.fixRuntimeProjectAgent" .) -}}
+{{- printf "%d" (int64 (default 524288 (get $agent "output_limit_bytes"))) -}}
+{{- end -}}
+
 {{/* Non-secret Agent Sandbox runtime environment shared by server and fetcher. */}}
 {{- define "aster.agentSandboxEnv" -}}
 - name: AGENT_SANDBOX_NAMESPACE
@@ -427,9 +448,9 @@ key, or bot token).
   value: {{ .Values.agentSandbox.fixRuntime.caBundle.sha256 | quote }}
 {{- end }}
 - name: AGENT_SANDBOX_TIMEOUT
-  value: {{ .Values.agentSandbox.fixRuntime.timeout | quote }}
+  value: {{ include "aster.fixRuntimeTimeout" . | quote }}
 - name: AGENT_SANDBOX_OUTPUT_LIMIT_BYTES
-  value: {{ printf "%d" (int64 .Values.agentSandbox.fixRuntime.outputLimitBytes) | quote }}
+  value: {{ include "aster.fixRuntimeOutputLimitBytes" . | quote }}
 - name: AGENT_SANDBOX_POLL_INTERVAL
   value: {{ .Values.agentSandbox.fixRuntime.pollInterval | quote }}
 - name: AGENT_SANDBOX_CPU_REQUEST
@@ -464,6 +485,11 @@ key, or bot token).
   {{- $projectFix := get $projectAI "fix_prs" | default dict -}}
   {{- $projectRuntime := get $projectFix "agent_runtime" | default dict -}}
   {{- $projectProvider := get $projectRuntime "model_provider" | default dict -}}
+  {{- $maxSteps := int (default 30 (get $projectRuntime "max_turns")) -}}
+  {{- $maxFiles := int (default 3 (get $projectFix "max_files")) -}}
+  {{- $fixTimeout := default "10m" (get $projectRuntime "timeout") -}}
+  {{- $outputLimitBytes := int64 (default 524288 (get $projectRuntime "output_limit_bytes")) -}}
+  {{- $allowedCommands := get $projectRuntime "allowed_commands" | default list -}}
   {{- if ne (default "agent-sandbox" (get $projectRuntime "type")) "agent-sandbox" -}}{{- fail "agentSandbox.fixRuntime requires project ai.fix_prs.agent_runtime.type=agent-sandbox" -}}{{- end -}}
   {{- if not (or .Values.server.actions.enabled (default false (get $projectFix "enabled"))) -}}{{- fail "agentSandbox.fixRuntime requires server.actions.enabled=true or project ai.fix_prs.enabled=true" -}}{{- end -}}
   {{- if .Values.server.actions.oauth.privateRepositories -}}{{- fail "agentSandbox.fixRuntime supports public repositories only; OAuth privateRepositories must be false" -}}{{- end -}}
@@ -523,47 +549,42 @@ key, or bot token).
       {{- if or (not $providerAuth.tokenKey) (gt (len $providerAuth.tokenKey) 253) (not (regexMatch "^[A-Za-z0-9._-]+$" $providerAuth.tokenKey)) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.auth.tokenKey is required for bearer auth and must be a valid Secret key" -}}{{- end -}}
     {{- end -}}
   {{- end -}}
-  {{- if not (regexMatch "^([1-9]|[12][0-9]|30)m$" (printf "%v" $cfg.timeout)) -}}{{- fail "agentSandbox.fixRuntime.timeout must use whole minutes from 1m through 30m" -}}{{- end -}}
+  {{- if not (regexMatch "^([1-9]|[12][0-9]|30)m$" (printf "%v" $fixTimeout)) -}}{{- fail "project ai.fix_prs.agent_runtime.timeout must use whole minutes from 1m through 30m" -}}{{- end -}}
   {{- $poll := printf "%v" $cfg.pollInterval -}}
   {{- if or (not (regexMatch "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ms|s)$" $poll)) (not (regexMatch "[1-9]" $poll)) -}}{{- fail "agentSandbox.fixRuntime.pollInterval must be a positive duration below 30s" -}}{{- end -}}
   {{- if regexMatch "^([3-9][0-9]|[1-9][0-9]{2,})s$" (durationRound $poll) -}}{{- fail "agentSandbox.fixRuntime.pollInterval must be below 30s" -}}{{- end -}}
-  {{- if or (lt (int64 $cfg.outputLimitBytes) 4096) (gt (int64 $cfg.outputLimitBytes) 1048576) -}}{{- fail "agentSandbox.fixRuntime.outputLimitBytes must be between 4096 and 1048576" -}}{{- end -}}
-  {{- $overallSeconds := mul (trimSuffix "m" (printf "%v" $cfg.timeout) | int) 60 -}}
-  {{- if ge (len $cfg.allowedCommands) (int $cfg.maxSteps) -}}{{- fail "agentSandbox.fixRuntime.maxSteps must reserve at least one coding-agent step after allowedCommands" -}}{{- end -}}
-  {{- range $index, $command := $cfg.allowedCommands -}}
+  {{- if or (lt $outputLimitBytes 4096) (gt $outputLimitBytes 1048576) -}}{{- fail "project ai.fix_prs.agent_runtime.output_limit_bytes must be between 4096 and 1048576" -}}{{- end -}}
+  {{- $overallSeconds := mul (trimSuffix "m" (printf "%v" $fixTimeout) | int) 60 -}}
+  {{- if ge (len $allowedCommands) $maxSteps -}}{{- fail "project ai.fix_prs.agent_runtime.max_turns must reserve at least one coding-agent step after allowed_commands" -}}{{- end -}}
+  {{- range $index, $command := $allowedCommands -}}
     {{- $argv := get $command "argv" | default list -}}
-    {{- if eq (len $argv) 0 -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d].argv must be non-empty" $index) -}}{{- end -}}
+    {{- if eq (len $argv) 0 -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d].argv must be non-empty" $index) -}}{{- end -}}
     {{- $totalBytes := 0 -}}
     {{- range $argIndex, $arg := $argv -}}
-      {{- if or (eq $arg "") (gt (len $arg) 1024) (regexMatch "[\r\n]" $arg) -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d].argv[%d] must be a bounded non-empty single-line string" $index $argIndex) -}}{{- end -}}
+      {{- if or (eq $arg "") (gt (len $arg) 1024) (regexMatch "[\r\n]" $arg) -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d].argv[%d] must be a bounded non-empty single-line string" $index $argIndex) -}}{{- end -}}
       {{- $totalBytes = add $totalBytes (len $arg) -}}
     {{- end -}}
-    {{- if gt $totalBytes 4096 -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d].argv exceeds 4096 bytes" $index) -}}{{- end -}}
+    {{- if gt $totalBytes 4096 -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d].argv exceeds 4096 bytes" $index) -}}{{- end -}}
     {{- $executable := lower (trim (first $argv)) -}}
-    {{- if or (contains "/" (first $argv)) (contains "\\" (first $argv)) -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d] must use a PATH-resolved executable" $index) -}}{{- end -}}
-    {{- if has $executable (list "sh" "bash" "dash" "zsh" "ksh" "fish" "cmd" "cmd.exe" "powershell" "pwsh") -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d] must not invoke a shell" $index) -}}{{- end -}}
-    {{- if has $executable (list "env" "busybox" "toybox") -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d] must not use a command dispatcher" $index) -}}{{- end -}}
-    {{- if has $executable (list "opencode" "fixexecutor") -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d] must not invoke a coding agent or executor" $index) -}}{{- end -}}
-    {{- if and (eq $executable "git") (ne (toJson $argv) (toJson (list "git" "diff" "--cached" "--check"))) -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d] git is reserved for the exact final diff check" $index) -}}{{- end -}}
+    {{- if or (contains "/" (first $argv)) (contains "\\" (first $argv)) -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d] must use a PATH-resolved executable" $index) -}}{{- end -}}
+    {{- if has $executable (list "sh" "bash" "dash" "zsh" "ksh" "fish" "cmd" "cmd.exe" "powershell" "pwsh") -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d] must not invoke a shell" $index) -}}{{- end -}}
+    {{- if has $executable (list "env" "busybox" "toybox") -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d] must not use a command dispatcher" $index) -}}{{- end -}}
+    {{- if has $executable (list "opencode" "fixexecutor") -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d] must not invoke a coding agent or executor" $index) -}}{{- end -}}
+    {{- if and (eq $executable "git") (ne (toJson $argv) (toJson (list "git" "diff" "--cached" "--check"))) -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d] git is reserved for the exact final diff check" $index) -}}{{- end -}}
     {{- $commandTimeout := printf "%v" (get $command "timeout") -}}
     {{- $commandSeconds := 0 -}}
     {{- if regexMatch "^[1-9][0-9]*s$" $commandTimeout -}}
-      {{- if gt (len $commandTimeout) 5 -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d].timeout exceeds the execution timeout" $index) -}}{{- end -}}
+      {{- if gt (len $commandTimeout) 5 -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d].timeout exceeds the execution timeout" $index) -}}{{- end -}}
       {{- $commandSeconds = trimSuffix "s" $commandTimeout | int -}}
     {{- else if regexMatch "^[1-9][0-9]*m$" $commandTimeout -}}
-      {{- if gt (len $commandTimeout) 3 -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d].timeout exceeds the execution timeout" $index) -}}{{- end -}}
+      {{- if gt (len $commandTimeout) 3 -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d].timeout exceeds the execution timeout" $index) -}}{{- end -}}
       {{- $commandSeconds = mul (trimSuffix "m" $commandTimeout | int) 60 -}}
     {{- else -}}
-      {{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d].timeout must use positive whole seconds or minutes" $index) -}}
+      {{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d].timeout must use positive whole seconds or minutes" $index) -}}
     {{- end -}}
-    {{- if gt $commandSeconds $overallSeconds -}}{{- fail (printf "agentSandbox.fixRuntime.allowedCommands[%d].timeout exceeds the execution timeout" $index) -}}{{- end -}}
+    {{- if gt $commandSeconds $overallSeconds -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d].timeout exceeds the execution timeout" $index) -}}{{- end -}}
   {{- end -}}
-  {{- if ne (toJson (get (last $cfg.allowedCommands) "argv")) (toJson (list "git" "diff" "--cached" "--check")) -}}{{- fail "agentSandbox.fixRuntime.allowedCommands must end with argv [git diff --cached --check]" -}}{{- end -}}
-  {{- if ne (toJson $cfg.allowedCommands) (toJson (get $projectRuntime "allowed_commands" | default list)) -}}{{- fail "agentSandbox.fixRuntime.allowedCommands must exactly match project agent_runtime.allowed_commands" -}}{{- end -}}
-  {{- if ne (int $cfg.maxSteps) (int (default 30 (get $projectRuntime "max_turns"))) -}}{{- fail "agentSandbox.fixRuntime.maxSteps must match project agent_runtime.max_turns" -}}{{- end -}}
-  {{- if ne (int $cfg.maxFiles) (int (default 3 (get $projectFix "max_files"))) -}}{{- fail "agentSandbox.fixRuntime.maxFiles must match project ai.fix_prs.max_files" -}}{{- end -}}
-  {{- if ne (printf "%v" $cfg.timeout) (printf "%v" (default "10m" (get $projectRuntime "timeout"))) -}}{{- fail "agentSandbox.fixRuntime.timeout must match project agent_runtime.timeout" -}}{{- end -}}
-  {{- if ne (int64 $cfg.outputLimitBytes) (int64 (default 524288 (get $projectRuntime "output_limit_bytes"))) -}}{{- fail "agentSandbox.fixRuntime.outputLimitBytes must match project agent_runtime.output_limit_bytes" -}}{{- end -}}
+  {{- if or (eq (len $allowedCommands) 0) (ne (toJson (get (last $allowedCommands) "argv")) (toJson (list "git" "diff" "--cached" "--check"))) -}}{{- fail "project ai.fix_prs.agent_runtime.allowed_commands must end with argv [git diff --cached --check]" -}}{{- end -}}
   {{- $projectProviderAuth := get $projectProvider "auth" | default dict -}}
   {{- if ne $credentialMode (default "direct" (get $projectProvider "credential_mode")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.credentialMode must match project agent_runtime.model_provider.credential_mode" -}}{{- end -}}
   {{- if ne $providerAPI (default "chat_completions" (get $projectProvider "api")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.api must match project agent_runtime.model_provider.api" -}}{{- end -}}

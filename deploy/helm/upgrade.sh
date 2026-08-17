@@ -244,16 +244,27 @@ if isinstance(server, dict):
             kept.append(entry)
         server["extraEnv"] = kept
 
+agent_sandbox = values.get("agentSandbox")
+if isinstance(agent_sandbox, dict):
+    fix_runtime = agent_sandbox.get("fixRuntime")
+    if isinstance(fix_runtime, dict):
+        # These execution bounds now come from project.yaml under
+        # ai.fix_prs.agent_runtime, so the chart no longer accepts copies here.
+        for key in ("maxSteps", "maxFiles", "timeout", "outputLimitBytes", "allowedCommands"):
+            if key in fix_runtime:
+                del fix_runtime[key]
+                removed.append(f"agentSandbox.fixRuntime.{key}")
+
 with open(candidate_path, "w", encoding="utf-8") as candidate_file:
     json.dump(values, candidate_file, indent=2, sort_keys=True)
     candidate_file.write("\n")
 
 if removed:
-    print("Removed deprecated OAuth controls from the candidate values:")
+    print("Removed deprecated controls from the candidate values:")
     for path in removed:
         print(f"  - {path}")
 else:
-    print("No deprecated OAuth controls were present in the candidate values.")
+    print("No deprecated controls were present in the candidate values.")
 PY
 chmod 600 "$candidate_values"
 

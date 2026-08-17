@@ -90,14 +90,9 @@ agentSandbox:
       key: ""
       # Lowercase SHA-256 of the exact ConfigMap data value.
       sha256: ""
-    # These duplicate project.yaml security bounds and must match exactly.
-    maxSteps: 30
-    maxFiles: 3
-    timeout: 10m
-    outputLimitBytes: 524288
-    allowedCommands:
-      - argv: [git, diff, --cached, --check]
-        timeout: 1m
+    # Execution bounds (max_turns, max_files, timeout, output_limit_bytes, and
+    # allowed_commands) come from the consumer's project.yaml under
+    # ai.fix_prs.agent_runtime, so they are configured exactly once.
     pollInterval: 250ms
     resources:
       requests:

@@ -233,13 +233,6 @@ agentSandbox:
         existingSecret: agent-sandbox-model
         tokenKey: AI_TOKEN
       publicCAPrivateDNS: false
-    maxSteps: 30
-    maxFiles: 3
-    timeout: 10m
-    outputLimitBytes: 1048576
-    allowedCommands:
-      - argv: [git, diff, --cached, --check]
-        timeout: 30s
     pollInterval: 250ms
     resources:
       requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
@@ -278,8 +271,49 @@ expect_fail agent-sandbox-reserved-env 'must not override reserved Agent Sandbox
   -f "$tmp/agent-sandbox.yaml" --set server.extraEnv[0].name=AGENT_SANDBOX_IMAGE --set server.extraEnv[0].value=attacker
 expect_fail agent-sandbox-project-runtime 'project ai.fix_prs.agent_runtime.type=agent-sandbox' \
   -f "$tmp/agent-sandbox.yaml" --set project.config='ai: {fix_prs: {agent_runtime: {type: legacy}}}'
+cat > "$tmp/project-agent-command.yaml" <<'PROJECT'
+id: test
+name: Test
+testgrid:
+  dashboard: test
+storage:
+  provider: local
+  base: .test-work/storage
+branding:
+  title: Test
+  base_path: /
+  site_url: https://example.test
+  source_repo:
+    owner: octocat
+    name: Hello-World
+ai:
+  fix_prs:
+    enabled: true
+    author_name: Fixture
+    author_email: fixture@example.test
+    max_files: 3
+    critique_retries: 0
+    agent_runtime:
+      type: agent-sandbox
+      max_turns: 30
+      allow_bash: false
+      timeout: 10m
+      output_limit_bytes: 1048576
+      allowed_commands:
+        - argv: [opencode, diff, --cached, --check]
+          timeout: 30s
+      model_provider:
+        credential_mode: direct
+        api: chat_completions
+        endpoint: https://api.githubcopilot.com/chat/completions
+        model: fixture-model
+        reasoning_effort: high
+        auth:
+          type: bearer
+PROJECT
+
 expect_fail agent-sandbox-command-agent 'must not invoke a coding agent or executor' \
-  -f "$tmp/agent-sandbox.yaml" --set-string agentSandbox.fixRuntime.allowedCommands[0].argv[0]=opencode
+  -f "$tmp/agent-sandbox.yaml" --set-file project.config="$tmp/project-agent-command.yaml"
 
 cat > "$tmp/analysis-shadow.yaml" <<'VALUES'
 mode: cron
