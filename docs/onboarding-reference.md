@@ -1,54 +1,19 @@
 # Onboarding reference
 
-This page documents discovery, automation, prompt authoring, validation, and the
-full `aster onboard` command surface. It includes advanced and experimental
-flags that do not belong in the first-run path. For a first project, start with
+This page documents advanced discovery, plan and apply automation, update
+behavior, and the `aster onboard` command surface. Start a first project with
 [Onboarding a project](onboarding-a-new-project.md).
 
-For a conversational agent workflow over the same command surface, see
-[Agent-driven setup and diagnostic authoring](agent-onboarding.md).
+Examples use the current release exactly. An installed `aster` binary from the
+same release can replace `go run`. Pages scaffolds also require an exact
+`-engine-ref`; Kubernetes image and chart versions are selected by deployment
+values and release commands.
 
-Commands that use `go run` below pin the current prerelease exactly. An
-installed `aster` CLI from the same release can be used instead. Use an exact
-stable tag once one is published; reserve commit pins for engine development.
-For Pages scaffolds, `-engine-ref` must also pin the generated reusable workflow.
-The flag does not select Kubernetes image tags or chart versions.
+## Discovery
 
-## Discovery behavior
+### Accepted repository forms
 
-When required flags are missing and stdin is an interactive terminal, the
-wizard:
-
-1. Detects the current Git `origin`, or accepts a GitHub repository directly.
-2. Reads bounded GitHub repository metadata.
-3. Reads Prow job definitions from one pinned `kubernetes/test-infra` revision.
-4. Finds jobs whose presubmit repository or `extra_refs` test the source repo.
-5. Ranks candidate TestGrid dashboards and lets the user edit the selection.
-6. Runs the real final job sweep and refuses a zero-job scaffold.
-7. Suggests editable identity, dashboard repository, deployment, and categories.
-8. Renders every file in memory and validates `project.yaml` with the real loader.
-9. Shows the complete plan and destination paths.
-10. Writes nothing until the final confirmation.
-
-The wizard uses the same discovery, category inference, templates, prompt
-builder, strict loader, local writer, and pull request writer as the fully
-flagged path. It does not maintain a separate scaffold generator.
-
-The interactive wizard uses keyboard forms. Use the arrow keys to move, Enter
-to accept a choice or prefilled input, Esc to clear the current text field, and
-`Ctrl+C` to cancel. When `TERM=dumb`,
-the wizard uses equivalent numbered and line-oriented prompts. Set
-`ACCESSIBLE=1` to select this mode in any terminal. Cancellation and EOF leave
-no scaffold. The final confirmation defaults to no.
-
-Repository metadata, Prow configuration, source files, job metadata, and model
-output are untrusted data. They cannot authorize commands, alter fixed
-instructions, or request credentials. Handoff mode serializes them only as
-reviewable context for the operator's own coding agent.
-
-## Accepted repository forms
-
-The wizard accepts:
+Source and dashboard repositories accept:
 
 ```text
 owner/name
@@ -57,95 +22,80 @@ ssh://git@github.com/owner/name.git
 git@github.com:owner/name.git
 ```
 
-If the current `origin` is a GitHub fork, the wizard can show the canonical
-upstream and use it for Prow discovery after confirmation. The source repository
-and dashboard destination remain separate: selecting the upstream for Prow
-discovery does not suggest creating the dashboard under the upstream owner.
+When the current `origin` is a fork, onboarding can use the confirmed canonical
+upstream for Prow discovery while keeping the dashboard destination separate.
+An explicit `-dashboard-repo` is never replaced by inference.
 
-The dashboard repository suggestion prefers the authenticated GitHub login when
-`GITHUB_TOKEN` can safely identify it. Otherwise it uses the owner of the Git
-remote that onboarding detected. If neither is available, the wizard leaves the
-owner empty and requires an explicit `owner/name`. An explicitly supplied
-`--dashboard-repo` is always preserved.
+For private repositories, export `GITHUB_TOKEN`. It is used for bounded GitHub
+API reads and is not printed, retained in the plan, or written to the scaffold.
 
-The optional short name starts empty. Repository initials are not reliable
-project abbreviations, so enter an established abbreviation explicitly when the
-project has one.
+### Read-only discovery
 
-For private repositories, export `GITHUB_TOKEN`. The token is used only for
-GitHub API access. It is not printed, retained in the plan, or written to the
-scaffold.
-
-## Read-only discovery
-
-Inspect automatic inference without rendering or writing files:
+Inspect inferred inputs without rendering files:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 \
   onboard discover \
   -source-repo owner/name
 ```
 
-Add `-json` for machine-readable output. The report includes:
+Add `-json` for machine-readable output. The report includes the normalized
+source repository, matching Prow jobs, ranked TestGrid candidates, suggested
+identity and dashboard destination, unresolved fields, and the pinned
+`kubernetes/test-infra` revision used for that discovery operation.
 
-- Normalized source repository and metadata source.
-- Default branch and visibility.
-- Matching Prow jobs.
-- Ranked TestGrid candidates.
-- Suggested project identity and dashboard repository.
-- Warnings and unresolved fields.
-- The pinned `kubernetes/test-infra` revision.
+The revision is not written as a permanent consumer pin by default. Set
+`discovery.test_infra_revision` after scaffolding only when a reproducible
+consumer must keep that exact catalog revision.
 
-This revision makes the discovery operation internally consistent but is not
-written as a permanent consumer pin by default. For a reproducible evaluation,
-copy it into `discovery.test_infra_revision` after scaffolding and before the
-first fetch or deployment, then run `onboard doctor` again. Normal dashboards
-can leave the field unset to follow current job configuration.
-
-Each TestGrid candidate separates direct source matches from the complete
-periodic, presubmit, and postsubmit tab counts. Direct source matches drive
-ranking. Dashboard totals describe the selected TestGrid dashboard.
-
-The fetcher ingests periodic jobs and optional presubmits. Postsubmit tabs are
-reported for transparent discovery totals, but postsubmit artifact ingestion is
-not supported.
+Discovery reads bounded repository metadata and one pinned Prow configuration,
+finds jobs whose presubmit repository or `extra_refs` match the source, ranks
+TestGrid candidates, and refuses a final zero-job scaffold. It reports periodic,
+presubmit, and postsubmit tab counts, but the fetcher ingests only periodic jobs
+and optional presubmits.
 
 Discovery does not render files, create repositories, change GitHub settings,
-or inspect a Kubernetes cluster.
+call a model provider, or inspect a Kubernetes cluster.
+
+### Interactive behavior
+
+When required flags are missing and stdin is a terminal, the wizard uses the
+same discovery, renderer, strict project loader, and writers as the flagged
+path. It shows the complete final plan and defaults the final confirmation to
+no. `Ctrl+C`, EOF, or cancellation leaves no scaffold.
+
+Set `ACCESSIBLE=1` or use `TERM=dumb` for numbered and line-oriented prompts.
+Repository metadata, Prow configuration, source files, and generated handoff
+context are untrusted data. They cannot authorize commands or request
+credentials.
 
 ## Deployment profiles
 
-`project.yaml` owns portable behavior and analysis policy. GitHub workflow
-inputs and Helm values own infrastructure, credentials, and execution tuning.
+`project.yaml` owns portable discovery, branding, and analysis policy.
+Workflows and Helm values own infrastructure, credentials, image selection,
+persistence, and runtime tuning.
 
 ### GitHub Pages
 
-Use Pages when artifacts are publicly readable, the model endpoint is reachable
-from GitHub Actions, and authenticated server features are not required.
-
-The generated workflow reads these repository settings when AI is enabled:
+Pages requires publicly readable artifacts and a provider reachable from the
+runner. When AI is enabled, the generated workflow reads:
 
 ```text
-AI_API       repository variable
-AI_ENDPOINT  repository variable
-AI_MODEL     repository variable
-AI_REASONING_EFFORT  optional repository variable
-AI_TOKEN     repository Secret
+AI_API                 repository variable
+AI_ENDPOINT            repository variable
+AI_MODEL               repository variable
+AI_REASONING_EFFORT    optional repository variable
+AI_TOKEN               repository Secret
 ```
 
-The wizard never writes these values to GitHub. Follow the generated
-`CHECKLIST.md` and [GitHub Actions and Pages](github-pages.md).
-
-Cluster-local, loopback, private-address, and insecure HTTP endpoints are not
-reachable safely from GitHub-hosted runners. The wizard warns before accepting
-such a Pages endpoint.
+Onboarding never writes these settings to GitHub. Cluster-local, loopback,
+private-address, and insecure HTTP endpoints are not safe Pages targets. See
+[GitHub Actions and Pages](github-pages.md).
 
 ### Kubernetes
 
-Use Kubernetes when the provider endpoint is private to the cluster, output and
-cache data need persistent shared storage, or server features are required.
-
-The generated bundle contains:
+Kubernetes supports private artifact or provider access, persistent shared
+state, and authenticated server features. The generated bundle contains:
 
 ```text
 project.yaml
@@ -154,105 +104,58 @@ deploy/values.yaml
 deploy/README.md
 ```
 
-The wizard seeds deployment values but does not inspect a cluster, choose a
-storage class, create a namespace or Secret, install Helm releases, or configure
-DNS and ingress. Follow the generated guide or the
-[Kubernetes quickstart](kubernetes.md).
+Onboarding does not inspect a cluster, choose a storage class, create a
+namespace or Secret, install Helm releases, or configure DNS and ingress. It
+configures authoritative in-process analysis only. Follow the generated guide
+and [Kubernetes quickstart](kubernetes.md).
 
-Standard onboarding configures the in-process analyzer. No external analysis
-runtime is installed, upgraded, or enabled by this command.
+## Prompt handoff
 
-## AI provider and prompt authoring
+Prompt authoring is separate from the deployed provider. `handoff` mode writes a
+TODO prompt, `PROMPT_HANDOFF.md`, and the bundled
+`.opencode/skills/system-prompt-generation/SKILL.md` without running a model.
+`todo-template` writes only `prompts/system.md`; `--no-prompt` is an alias.
 
-The deployed analysis provider and one-time prompt authoring are separate
-decisions. Provider presets configure deployed analysis only. Prompt authoring
-supports `handoff` and `todo-template`.
+Complete flagged runs and the wizard default to `handoff`. The handoff records a
+resolved commit when possible, otherwise a known branch or unresolved ref. It
+serializes repository and Prow metadata as untrusted review context. It never
+uses the deployed `AI_TOKEN`, `AI_ENDPOINT`, `AI_MODEL`, or
+`AI_REASONING_EFFORT`.
 
-Handoff mode writes the TODO template plus `PROMPT_HANDOFF.md` and the bundled
-`.opencode/skills/system-prompt-generation/SKILL.md` without running an agent.
-The handoff pins a commit when possible and otherwise records a known default
-branch or an unresolved ref without inventing a branch name. Repository and Prow
-metadata are serialized as untrusted data.
+`--prompt-timeout` bounds source resolution from `1m` through `2h` and defaults
+to `15m`. Review every generated architecture, artifact, transient, and failure
+claim. See [Writing the project prompt](writing-prompts.md).
 
-TODO-template mode writes only `prompts/system.md`. `--no-prompt` is an alias for
-this mode and cannot be combined with another explicit prompt mode.
+## Destination and updates
 
-Complete flag-based runs and the wizard default to handoff mode. The generated
-bundle is meant for the operator to run with their own coding agent, then review
-and copy the resulting `prompts/system.md` into the consumer repository.
+The consumer normally lives in its own repository, not in the monitored source
+repository. Local output must be empty or absent unless update mode is explicitly
+selected.
 
-Prompt preparation records a credential-free result in the plan: requested mode,
-final status, output type, and source-resolution status. No model output is
-included in the plan or safe warning.
+For an existing consumer, the first run without `-update-existing` lists
+conflicts and stops. After review, rerun with `-update-existing`. Engine-owned
+files may be replaced, but existing `prompts/system.md` and `skills/*.yaml` or
+`skills/*.yml` remain consumer-owned and are preserved. Replacing the prompt
+requires a separate diff, explicit approval, and a new plan with
+`-replace-consumer-owned`. Existing active skills are never replaced by setup.
 
-`--prompt-timeout` bounds prompt source resolution. It defaults to `15m` and
-accepts values from `1m` through `2h`. This option does not change the regular
-fetcher `--timeout` or the deployed project `ai.timeout`.
+The command never deletes stale or unrelated files.
 
-Generated prompts are drafts. Review every architecture, artifact, failure, and
-transient-classification claim before deployment.
+## Dry-run and reviewed plan application
 
-See [Writing the project prompt](writing-prompts.md).
-
-## Scaffold destination and local updates
-
-The scaffold belongs in the dashboard consumer repository, not inside the
-source repository. When onboarding detects the source from the current Git
-checkout, the interactive default is the sibling
-`../<dashboard-repository-name>`. For an explicitly supplied source without a
-detected checkout, the default remains a safe relative directory in the current
-working directory. `--out` always wins and may point to an existing checkout.
-
-Every local plan records `create`, `replace`, or `preserve` plus
-`engine_generated` or `consumer_owned` ownership before final confirmation.
-Without `--update-existing`, non-interactive onboarding refuses replacement of
-engine-generated files. Interactive onboarding offers:
-
-1. Choose another directory.
-2. Update known scaffold files.
-3. Cancel.
-
-Choosing another directory is the default. Update mode replaces only
-engine-generated files in the validated plan. Existing `prompts/system.md` and
-`skills/*.yaml` or `skills/*.yml` are consumer-owned and preserved by default.
-The plan records the existing prompt hash and the generated source-only candidate
-hash. Existing skills are always preserved.
-
-`--replace-consumer-owned` requires `--update-existing` and permits only an
-explicitly reviewed `prompts/system.md` replacement. It does not replace skills.
-Update mode preserves unrelated files, never deletes the destination, and leaves
-stale generated files untouched. Partial path conflicts, symbolic links, and
-unsafe paths are rejected. Local update flags cannot be combined with
-`--open-pr`.
-
-## Dry-run behavior
-
-`-dry-run` performs discovery, the real job sweep, source revision pinning,
-planning, rendering, destination checks, and strict configuration validation.
-It prints engine/source/catalog identities, the discovery digest, deployment
-rationale, prompt hashes, and the same create/replace/preserve plan without
-writing scaffold files or opening a pull request.
+`-dry-run` renders and validates the complete scaffold without writing it.
+`-plan-out` writes a private machine-readable plan outside the destination:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
-  -engine-ref v0.9.0-rc.2 \
-  -source-repo owner/source \
-  -dry-run
+aster onboard \
+  <complete-inputs> \
+  -dry-run \
+  -plan-out /private/path/onboard-plan.json
 ```
 
-An interactive dry run stops after review. A fully flagged dry run stays
-non-interactive.
-
-`-plan-out <path>` is valid only with `-dry-run`. It writes a versioned,
-credential-free artifact containing the exact rendered files and reviewed
-destination actions. The output prints a `sha256:` digest for that file. The
-path must not already exist. Local destinations are stored as canonical absolute
-paths with existing symlink ancestors resolved. Apply rechecks that target so a
-different working directory or retargeted ancestor cannot redirect the reviewed
-scaffold. The plan artifact must be outside the consumer destination and cannot
-represent an open-PR plan.
-
-Apply the exact reviewed artifact with no discovery or scaffold flags:
+The plan records exact engine, source, catalog, job, destination, prompt, and
+file-action identities plus a digest. After reviewing the plan, apply only that
+artifact:
 
 ```bash
 aster onboard \
@@ -263,33 +166,24 @@ aster onboard \
   -artifact-smoke-builds 1
 ```
 
-The command rejects a changed digest, malformed artifact, unsupported schema,
-symlinked plan file, invalid plan, or destination whose reviewed create, replace,
-preserve, ownership, or content state changed. After writing, it emits a
-deterministic file manifest, runs doctor, and performs a read-only artifact
-usability check for recent builds, `prowjob.json`, `started.json`,
-`build-log.txt`, JUnit, and `artifacts/`. When every sampled build lacks JUnit,
-the handoff warns that test-level granularity may be unavailable. The setup
-handoff also records first-class artifact-location and test-infra identities for
-diagnostic authoring without diagnosing failures.
+Application fails closed if the digest, schema, source identities, destination
+state, file ownership, or reviewed create, replace, and preserve actions changed.
+It rejects symlinked plan files. After writing, it emits a deterministic file
+manifest, runs doctor, and performs a bounded read-only artifact smoke check.
 
-For an existing scaffold, the first non-interactive run without
-`-update-existing` stops and lists engine-generated conflicts. After approval,
-rerun with `-update-existing` and `-plan-out`. Confirm that the prompt and skills
-are preserved. A prompt replacement needs a reviewed diff, separate approval,
-and a new plan with `-replace-consumer-owned`.
+The handoff records artifact location, test-infra identity, and whether sampled
+builds contain JUnit. It does not diagnose failures. Keep plan, result, and
+handoff artifacts outside the consumer destination.
 
 ## Non-interactive automation
 
-When every required value is supplied, `onboard` does not prompt. Add
-`-non-interactive` when automation must fail instead of prompting for a missing
-value.
+Add `-non-interactive` when missing values must fail rather than prompt.
 
 Pages example:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
-  -engine-ref v0.9.0-rc.2 \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 onboard \
+  -engine-ref v0.9.0-rc.3 \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -302,7 +196,7 @@ go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
 Kubernetes example:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 onboard \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -313,17 +207,8 @@ go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
   -out ./my-dashboard
 ```
 
-The Kubernetes example omits `-engine-ref` because Kubernetes image and chart
-versions are selected by the deployment values and release commands, not by the
-Pages workflow ref.
-
-For a project outside Kubernetes TestGrid, replace `-testgrid` with:
-
-```text
--bucket "<bucket>"
-```
-
-For a bounded evaluation, repeat `-exact-job` with bucket discovery:
+For direct bucket discovery, replace `-testgrid` with `-bucket`. A bounded exact
+job evaluation may repeat `-exact-job` with bucket discovery:
 
 ```text
 -bucket "kubernetes-ci-logs"
@@ -331,37 +216,21 @@ For a bounded evaluation, repeat `-exact-job` with bucket discovery:
 -exact-job "periodic-project-upgrade"
 ```
 
-Exact-job discovery validates the named direct bucket indexes and fails when a
-name is missing. It cannot be combined with `-testgrid`.
+Exact-job discovery fails when a named bucket index is absent and cannot be
+combined with `-testgrid`. Add `-gcsweb-base` when the bucket is served through
+gcsweb.
 
-Add `-gcsweb-base "https://gcsweb.example.net/s3"` when the bucket is served
-through gcsweb.
-
-For automation that should not emit a handoff bundle, select the template-only
-mode or use `--no-prompt`:
-
-```bash
-aster onboard \
-  -engine-ref v0.9.0-rc.2 \
-  -non-interactive \
-  -testgrid "<testgrid-dashboard>" \
-  -dashboard-repo "<owner>/<dashboard-repo>" \
-  -source-repo "<owner>/<source-repo>" \
-  --prompt-mode=todo-template
-```
-
-The deployed `AI_TOKEN` may be read only to prevent accidental serialization into
-nonsecret fields; it is never sent during prompt authoring.
+Use `--prompt-mode=todo-template` or `--no-prompt` when automation should not
+emit the prompt handoff bundle.
 
 ## Open a scaffold pull request
 
-`-open-pr` is explicit. It opens a pull request against an existing dashboard
-repository instead of writing a local directory.
+`-open-pr` is explicit and targets an existing dashboard repository:
 
 ```bash
 export GITHUB_TOKEN="..."
 aster onboard \
-  -engine-ref v0.9.0-rc.2 \
+  -engine-ref v0.9.0-rc.3 \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<existing-dashboard-repo>" \
@@ -369,89 +238,45 @@ aster onboard \
   -open-pr
 ```
 
-The command does not create the repository, enable Pages, or write variables and
-Secrets. `-open-pr -dry-run` plans the pull request without creating it.
+The command does not create the repository, enable Pages, write variables or
+Secrets, or deploy the result. `-open-pr -dry-run` plans the pull request without
+creating it. Agent-assisted setup normally uses local plan application first so
+doctor, artifact smoke, and handoff validation can run before a separately
+confirmed pull request.
 
-## Automatic inference limits
+## Inference limits
 
-The wizard does not infer settings that repository and Prow metadata cannot
-establish safely. It does not guess:
+Onboarding does not guess:
 
-- AI provider reachability.
-- Kubernetes context, namespace, or storage class.
-- Ingress, DNS, certificates, or OAuth.
-- Notification routing.
-- Secret values.
-- Optional feature runtime installation or configuration.
+- provider reachability or credential validity;
+- Kubernetes context, namespace, storage class, ingress, DNS, or certificates;
+- OAuth, notification routing, or Secret values;
+- optional Agent Sandbox feature installation;
+- a TestGrid dashboard or artifact bucket when no source match exists.
 
-If no Prow job or TestGrid annotation matches the source repository, the wizard
-asks for a TestGrid dashboard or artifact bucket. It does not invent one.
-
-## Validate an existing scaffold
-
-Run the read-only doctor after generation or while diagnosing an existing
-consumer:
+## Validate an existing consumer
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 \
   onboard doctor \
   -project-dir ./my-dashboard
 ```
 
-Doctor checks:
-
-- Strict `project.yaml` parsing.
-- A non-empty `prompts/system.md`.
-- Pages workflow target, effective project directory, AI inputs, and token map.
-- Kubernetes persistence, provider coordinates, and credential source.
-- The real Prow discovery sweep and a nonzero job count.
-
-Failures include the next corrective action and return a nonzero exit status.
-Warnings identify values that cannot be resolved offline, such as GitHub
-expressions, repository variables, or a provider token supplied at deployment.
-Doctor does not contact the model provider or inspect a Kubernetes cluster.
+Doctor checks strict project parsing, a non-empty prompt, Pages or Kubernetes
+coordinates, and a real nonzero Prow discovery sweep. Warnings identify values
+that cannot be resolved offline. It does not call the provider or inspect a
+Kubernetes cluster.
 
 ## Command surface
-
-Scaffolding and read-only validation remain under:
 
 ```text
 aster onboard
 aster onboard discover
 aster onboard doctor
-```
-
-Kubernetes bundle operations use:
-
-```text
 aster kubernetes install
 aster kubernetes upgrade
 ```
 
-These commands reuse the same project, prompt, and skill validation. A separate
-top-level executable is not required.
-
-## Review and deployment
-
-Before deployment:
-
-1. Confirm discovery, storage, branding, and source repository.
-2. Review inferred categories.
-3. Review every claim in `prompts/system.md`.
-4. Follow `CHECKLIST.md` or `deploy/README.md`.
-5. Deploy the smallest working configuration before optional automation.
-
-A successful first deployment has the expected branding in
-`data/manifest.json`, at least one job in `data/dashboard.json`, grounded
-analysis when AI is enabled, and healthy server endpoints in Kubernetes mode.
-
-Related guides:
-
-- [Onboarding quickstart](onboarding-a-new-project.md)
-- [GitHub Actions and Pages](github-pages.md)
-- [Kubernetes quickstart](kubernetes.md)
-- [Kubernetes operator reference](kubernetes-reference.md)
-- [Project configuration](project-configuration.md)
-- [Optional features](optional-features.md)
-- [Troubleshooting](troubleshooting.md)
-- [Complete documentation map](README.md)
+The Kubernetes commands reuse the same project, prompt, and skill validation.
+Deployment details belong in [Kubernetes quickstart](kubernetes.md) and the
+[Kubernetes operator reference](kubernetes-reference.md).

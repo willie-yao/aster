@@ -1,975 +1,240 @@
-# Agentic AI analysis (tool calling)
+# Agentic analysis
 
-For the concise implementation and ownership map, see
+Aster uses one authoritative failure-analysis path. For each failed test, the
+in-process analyzer lets the model inspect bounded artifacts and pinned source
+through read-only tools, then applies engine-owned quality gates before caching
+and publishing the result.
+
+There is no separate text-only mode. When AI is enabled, every analysis uses the
+tool and evidence loop. For the contributor control-flow map, see
 [In-process failure analyzer architecture](architecture/in-process-analyzer.md).
-This page is the detailed configuration, tuning, and operational reference.
-
-The agentic loop is the engine's single analysis approach: the LLM decides which
-artifacts to read instead of pre-fetching a fixed set. The model calls
-function-calling tools that browse the build's GCS artifact tree:
-`list_artifacts`, `read_artifact`, `tail_artifact`, `grep_artifact`,
-`find_artifacts`, and `verify_timeline` (which returns a log's timestamped
-events ordered in time, so the model can check causal ordering).
-Optional tier-2 tools add Kubernetes-shaped discovery (`discover_clusters`,
-`discover_controllers`, etc.).
-
-There is nothing to enable: if `-ai` is on and the endpoint supports
-function calling, every failure is analyzed by the agentic loop. The model
-browses everything itself via the registered tools; the per-failure prompt
-is just the failing test's context.
 
 ## Runtime ownership
 
-The fetcher and worker run the dashboard-owned `FailureAnalyzer` directly. The
-same Go implementation owns provider behavior, tools, evidence planning,
-critique, cache acceptance, private traces, and result schemas on Pages and
-Kubernetes. An optional Helm Agent shadow may run after authoritative
-publication, but it does not implement `FailureAnalyzer`, mutate a test result,
-or participate in cache or publication policy.
+The fetcher and worker call the dashboard-owned `FailureAnalyzer` directly on
+both GitHub Pages and Kubernetes. The same Go implementation owns:
 
-## Endpoint requirements
+- provider requests and tool schemas;
+- evidence planning and investigation bounds;
+- deterministic critique and semantic review;
+- cache identity and acceptance;
+- public analysis output;
+- private traces and usage accounting.
 
-Agentic analysis requires an OpenAI-compatible Chat Completions or Responses
-endpoint with function calling. Chat uses `tools` and `tool_calls`; Responses
-uses function-call and `function_call_output` items. Select the wire contract with
-`ai.api`. Verified providers:
+Optional Agent Sandbox analysis shadows run only after authoritative in-process
+publication. Their results stay private, do not seed the normal cache, and
+cannot change public JSON or actions.
 
-- **GitHub Copilot** (`api.githubcopilot.com`) - supported.
-- **OpenAI**: supported on models that expose function calling.
-- **Azure OpenAI** - supported on tool-calling-capable deployments.
-- **Ollama / vLLM / NIMs** - supported per-model; check your model card.
+## Requirements and configuration
 
-There is no tools-free fallback: an endpoint that rejects function calling
-surfaces as an explicit "AI analysis unavailable" summary in the dashboard
-rather than silently degrading.
+Analysis requires a configured endpoint and model that support OpenAI-compatible
+function calling. Unsupported tool calls produce an explicit unavailable result.
+See [AI providers](ai-providers.md) for protocol and credential setup.
 
-## Configuration
+Exact `project.yaml` fields and defaults belong in
+[Project configuration](project-configuration.md). The main operational controls
+are:
 
-Analysis-policy knobs are inlined directly under `ai:` in `project.yaml`. `endpoint` and
-`model` are required when AI is enabled (the engine has no default provider);
-every other project field is optional and runs with engine defaults when unset.
-The provider reasoning effort is deployment-owned through `AI_REASONING_EFFORT`
-or Helm `ai.reasoningEffort`, not a competing project field:
+| Control | Purpose |
+| --- | --- |
+| `ai.max_iters` | Bounds model and tool rounds for one failure. |
+| `ai.timeout` | Bounds one analysis wall-clock duration. |
+| `ai.min_tool_calls` | Requires a minimum number of investigation calls before finalization. |
+| `ai.min_gcs_bytes` | Requires content-bearing artifact reads, subject to bounded anti-thrash behavior. |
+| `ai.single_tool_call` | Restricts one tool call per assistant turn for model templates that require it. |
+| `ai.tools` | Selects registered read-only tool groups. |
+| `ai.concurrency` | Runs independent analyses in parallel. Keep it low for rate-limited providers. |
+| `ai.critique.*` | Selects bounded repair and cache acceptance policy. |
+| `ai.cache_generation` | Creates an intentional reversible reanalysis namespace. |
 
-```yaml
-ai:
-  endpoint: ...                 # required when AI is enabled; or env AI_ENDPOINT
-  model: ...                    # required when AI is enabled; or env AI_MODEL
-  # reasoning effort is deployment-owned: env AI_REASONING_EFFORT or Helm ai.reasoningEffort
-  source_repo:                  # optional read-only source, defaults to branding.source_repo
-    owner: my-org
-    name: my-project
-  consumer_skills:              # optional mounted-bundle requirement
-    required: false
-    minimum_count: 0
-  cache_generation: ""          # optional reversible full-reanalysis namespace
-  concurrency: 1                # parallel analyses (raise for endpoints you control)
-  max_iters: 15                 # tool-call rounds per failure
-  timeout: 5m                   # per-failure agentic wall-clock timeout
-  min_tool_calls: 2             # minimum tool calls before a final answer is accepted
-  min_gcs_bytes: 0              # minimum GCS bytes fetched before a final answer is accepted
-  single_tool_call: false       # send at most one tool call per turn (for single-tool-call-only models)
-  critique:
-    max_retries: 0              # default; positive values enable one bounded repair
-    cache_policy: advisory      # strict, hard, or advisory; omit to preserve legacy behavior
-  tools: [filesystem, k8s]      # registered tool groups exposed to the model
-```
+Start with defaults. Raise investigation floors only when observed analyses
+finalize without enough evidence. Enable `single_tool_call` only when the model
+or serving template rejects parallel tool calls.
 
-The defaults target a strong hosted model (Copilot / OpenAI / Claude) and are
-conservative enough that you almost never need to tune them. The further your
-model is from that (smaller context window, weaker tool calling, an
-open-weights chat template), the more of the optional guardrails you want on;
-see [Tuning by model tier](#tuning-by-model-tier) for recommended combinations
-and copy-paste presets. Each field below is the one-line summary; see
-[How it works](#how-it-works) for the underlying mechanics. The byte budgets (model output, compaction, and
-the GCS fetch ceiling) are **not** configurable: the first two auto-size from
-the endpoint's context window and the GCS ceiling is a fixed engine safety cap
-(see [Automatic budget sizing](#automatic-budget-sizing)).
-
-The effective tool selection also selects diagnostic profiles. The engine-owned
-Prow profile is always enabled. The provider-neutral Kubernetes profile is
-enabled with the `k8s` group or an individual `k8s.*` tool. Set
-`tools: [filesystem]` to opt out of Kubernetes recipes for projects where they
-do not apply. Consumer `skills/*.yaml` recipes join the selected built-ins in
-one merged contract.
-
-The merged recipes are sorted globally by priority descending and ID ascending,
-regardless of source. They are not inserted as ordered prompt layers. After the
-model produces a draft, only recipes whose triggers match that draft contribute
-procedures and required-evidence groups. Per-failure artifact reads satisfy
-those groups. No recipe can replace or override the universal engine contract.
-
-Deterministic critique findings also carry stable content-free rule IDs in the
-private trace. Current identifiers include `path.unsafe`,
-`citation.invalid_range`, `citation.missing`, `citation.quote_mismatch`, `citation.unread`,
-`claim.uncited_line`, `source.unverified`, `evidence.available_unread`,
-`evidence.unavailable`, `remediation.punt`, `transient.conflict`, and
-`structured.invalid`. These identifiers support policy calibration without
-retaining critique feedback, prompts, model responses, or artifact content.
-
-### `max_iters`
-
-Tool-call rounds per failure. Default `15`. Lower it first if the model loops
-without converging. Critique retries add iterations on top of this.
-
-### `timeout`
-
-Per-failure wall-clock cap. Default `5m`. Hitting it cancels the in-flight
-request and errors the analysis out (unlike a budget cap, which forces a
-graceful finalize), so set it generously for slow or contended endpoints.
-
-This is the only bound on an individual chat request: the engine sets no fixed
-per-request HTTP timeout, so a single slow response (e.g. a reasoning model's
-decode, or a self-hosted endpoint under load) is capped only by this value.
-Size it to comfortably exceed the slowest single response you expect, not just
-the whole-loop budget.
-
-### `min_tool_calls`
-
-Minimum tool calls before a final answer is accepted. Default `2`. Below-floor
-finals are published but not cached, so the next run retries. Raise it to `3`
-or higher for weaker open-weights models that finalize from the prompt alone.
-See [Investigation floors](#investigation-floors).
-
-### `min_gcs_bytes`
-
-Minimum bytes fetched from GCS before a final answer is accepted. Default `0`
-(no floor). Complements `min_tool_calls` because call count alone is gameable
-(a model can satisfy it with cheap `list_artifacts` calls or tiny reads).
-Complete coverage of a matched initial evidence plan also satisfies this floor,
-without relaxing any other gate. When the raw byte floor is the only remaining
-floor, the loop sends at most one additional byte-floor-only nudge. A result
-that still misses the byte target records `gcs_floor_retry_exhausted` so the
-same accepted analysis remains reusable. `200000` (200 KB) is a reasonable
-starting value for weaker models. See [Investigation floors](#investigation-floors).
-
-### `critique`
-
-The deterministic critique gate always runs. `max_retries`, which defaults to
-`0`, controls only eligibility for the single bounded deterministic repair
-operation. `0` evaluates the draft once but makes no critique repair model
-request. Positive values remain subject to context and time-headroom guards.
-
-`cache_policy` independently controls cache reuse. `strict` rejects actionable
-hard failures and soft warnings. `hard` rejects only hard safety, grounding, and
-correctness failures. `advisory` records findings without blocking cache reuse.
-If the field is omitted, existing behavior is preserved: zero retries resolve
-to `advisory`, and positive retries resolve to `strict`. Structural validation,
-publication sanitization, and critique-version validation remain mandatory for
-all policies. See [The critique gate](#the-critique-gate).
-
-### `single_tool_call`
-
-Send at most one tool call per assistant turn. Off by default. Required for
-endpoints whose chat template rejects multiple tool calls in one assistant
-message (e.g. the stock Llama 3.x Instruct template); leave it off for
-providers that support parallel tool calls (Copilot, OpenAI, Claude). See
-[Single tool call](#single-tool-call).
-
-### `tools`
-
-Which registered tool groups the model can call. Defaults to
-`[filesystem, k8s]`. Narrow to `[filesystem]` for non-Kubernetes projects
-whose artifact tree has no cluster resource YAMLs (the k8s tier-2 tools would
-return empty).
-
-### `concurrency`
-
-How many failures to analyze in parallel. Defaults to `1` (sequential). Raise
-only for endpoints you control; a shared, rate-limited provider can 429 under
-parallelism. See [Parallel analysis](#parallel-analysis).
-
----
-
-## Tuning by model tier
-
-The defaults assume a frontier hosted model. As you move to smaller or
-open-weights models, turn on the optional guardrails that compensate for the
-two things weaker models do worst: they finalize before they have investigated,
-and they emit punt-shaped or ungrounded answers. The knobs group by what each
-one compensates for:
-
-- **Investigation depth** (`min_tool_calls`, `min_gcs_bytes`): a weak model's
-  most common failure is finalizing from the prompt alone, or after a couple of
-  cheap `list_artifacts` calls. The floors reject a too-early final and
-  re-prompt. The critique gate and its evidence injection, which repair
-  punt-shaped fixes and hallucinated citations, always run, so you do not tune
-  them.
-- **Protocol quirks** (`single_tool_call`): some open-weights chat templates
-  reject more than one tool call per assistant turn.
-- **Throughput** (`concurrency`): a property of the *endpoint*, not the model.
-  Keep it `1` on a shared or rate-limited provider regardless of model tier;
-  raise it only for an endpoint you control.
-
-You never size the byte budgets yourself: the engine auto-sizes them from the
-endpoint's reported context window (see
-[Automatic budget sizing](#automatic-budget-sizing)), so a small-context model
-is handled automatically.
-
-### Smaller or weaker models: what to turn on
-
-In rough order of impact when stepping down from a frontier hosted model:
-
-1. **Raise the investigation floors.** The default `min_tool_calls: 2` already
-   forces two tool calls before a final; step up to `min_tool_calls: 3` and add
-   `min_gcs_bytes: 200000` (200 KB), then raise gradually if analyses still
-   finalize shallow. The byte floor matters because the call-count floor alone
-   is gameable with cheap listings (see
-   [Investigation floors](#investigation-floors)).
-2. **Set `single_tool_call: true` only if the model's chat template rejects
-   parallel tool calls.** Required for the stock Llama 3.x Instruct template
-   (it raises "This model only supports single tool-calls at once!", surfaced
-   as a 500). Leave it off for Qwen3-Coder, Copilot, OpenAI, and Claude, which
-   emit parallel calls cleanly; forcing it there only slows investigation.
-
-The critique gate and its evidence injection run on every model tier, so there
-is nothing to turn on for them: punt-shaped fixes and hallucinated citations
-are repaired automatically.
-
-### Settings by model tier
-
-| Option | Strong hosted (Claude / GPT / Copilot) | Strong open-weights, large ctx | Small / weak open-weights |
-|---|---|---|---|
-| `min_tool_calls` | `2` (default) | `5` | `3` |
-| `min_gcs_bytes` | off (`0`) | `500000` | `200000` |
-| `single_tool_call` | off | off | on *if template requires* |
-| `max_iters` | `15` (default) | `30` | `15` |
-| `concurrency` | `1` (shared provider) | `4` (dedicated endpoint) | endpoint-dependent |
-
-### Presets
-
-Every preset still requires `endpoint` and `model` (omitted below for brevity);
-set them in `project.yaml` or via `AI_ENDPOINT` / `AI_MODEL`. Set optional reasoning effort through `AI_REASONING_EFFORT` or Helm `ai.reasoningEffort`.
-
-**Strong hosted model** (e.g. Claude / GPT / Gemini via Copilot or OpenAI). The
-tuning defaults are enough here, so set just the endpoint, model, and tools. A
-frontier model investigates deeply and writes concrete fixes with only the
-default floors, and the provider is shared and rate-limited, so leave
-`concurrency` at `1`.
-
-```yaml
-ai:
-  endpoint: "https://api.githubcopilot.com/chat/completions"
-  model: "claude-sonnet-4.6"
-  tools: [filesystem, k8s]
-  # everything else defaults: min_tool_calls 2, concurrency 1,
-  # single_tool_call off.
-```
-
-**Strong open-weights, large context, dedicated endpoint** (e.g.
-Qwen3-Coder-480B at a 256K window on self-hosted vLLM / TRT-LLM / Dynamo). This
-is the Qwen dashboard. The endpoint is dedicated and batches concurrent
-requests, so concurrency pays off, and the raised floors keep a real
-investigation bar.
-
-```yaml
-ai:
-  concurrency: 4            # dedicated batching endpoint, ~4x faster cold fetch
-  max_iters: 30             # heavy-tail analyses were iteration-bound at 20
-  min_tool_calls: 5         # floors: keep a real investigation bar
-  min_gcs_bytes: 500000
-  tools: [filesystem, k8s]
-  # single_tool_call left off: Qwen3-Coder emits parallel tool calls cleanly.
-```
-
-**Small or weak open-weights, modest context** (e.g. a 32-40K Llama 3.x or a
-smaller MoE). Recommended starting point, then tune from the run telemetry
-(cached `tool_calls` / `gcs_bytes` and the critique pass rate).
-
-```yaml
-ai:
-  max_iters: 15             # default; raise only if analyses are iteration-bound
-  min_tool_calls: 3         # lower floor than the 480B; raise gradually
-  min_gcs_bytes: 200000
-  single_tool_call: true    # ONLY if the chat template rejects parallel calls
-                            # (stock Llama 3.x); drop it otherwise
-  tools: [filesystem, k8s]
-```
-
----
-
-## How it works
-
-The mechanics below are the dashboard-owned analyzer used by both Pages and
-Kubernetes deployments.
-
-### The loop at a glance
-
-Each failure is analyzed by a tool-calling loop. The engine seeds a prompt, then
-calls the model repeatedly: every turn the model either requests more tools (it
-keeps investigating) or returns a tools-free answer (it finalizes). The quality
-gates run only on the finalize branch and can push a weak answer back into the
-loop.
+## Tool and evidence loop
 
 ```mermaid
 flowchart TD
-    A[Test failure] --> B["Seed prompt:<br/>system + project knowledge<br/>+ ranked evidence plan<br/>+ artifact-tree listing + failing test"]
-    B --> C["Call model<br/>(chat/completions)"]
-    C --> D{"Did the model<br/>call tools?"}
-    D -->|"Yes: more evidence wanted"| E["Engine executes against GCS:<br/>list / read / tail / grep"]
-    E --> F["Append results to transcript;<br/>record which artifacts were read"]
+    A["Failed test"] --> B["Prompt, artifact seed, and ranked evidence plan"]
+    B --> C["Model request"]
+    C --> D{"Tool calls?"}
+    D -->|Yes| E["Execute read-only artifact, Kubernetes-shaped, or pinned-source tools"]
+    E --> F["Append bounded results and update the evidence ledger"]
     F --> C
-    D -->|"No: emits a final answer"| G{Quality gates}
-    G -->|"floors unmet"| H["Nudge to investigate further"]
-    H --> C
-    G -->|"critique fail:<br/>punt / hallucinated citation /<br/>missing skill evidence"| I["Feedback (+ injected evidence)"]
+    D -->|No| G["Parse structured draft"]
+    G --> H{"Current quality gates pass?"}
+    H -->|No| I["Bounded floor, critique, or semantic-review feedback"]
     I --> C
-    G -->|"pass"| J([Cache + publish analysis])
+    H -->|Yes| J["Cache and publish"]
 ```
 
-The model is a stateless endpoint, so the engine re-sends the whole transcript
-(`messages[]` plus the tool schemas) on every call and carries the memory itself.
-Tool calls are not a rejected output: they are the model continuing its
-investigation. The model may finalize on any turn; the prompt encourages drilling,
-the floors enforce a minimum, and `max_iters` / the evidence cap bound the maximum.
-The sections below detail each box.
-
-### Automatic budget sizing
-
-The agentic loop bounds how much tool output the model accumulates (the
-evidence cap) and reserves request headroom before every provider call.
-**Neither is configurable**. At startup it GETs the endpoint's `/v1/models`
-and reads the served model's `context_window` in tokens. The engine reserves
-space for provider framing, completion output, a finalization response, and
-evidence-ledger restoration. It then uses a deliberately conservative
-one-token-per-serialized-byte estimate for the request body, including Tool
-schemas. This overestimates normal prose and dense CI data rather than relying
-on a provider-specific tokenizer or an unsafe bytes-per-token average.
-
-The same guard applies to investigation turns, floor nudges, deterministic
-critique retries, evidence injection, semantic-judge retries, and forced
-finalization. Old tool-result bodies are compacted to recover room while
-preserving Tool-call/result pairs and the most recent repair instructions. If
-compaction cannot make a request fit, the loop does not send it. It publishes
-the best parseable draft when one exists, without caching it unless all current
-quality gates pass; otherwise it returns an AI-unavailable result. If an
-endpoint does not expose a context window, the engine uses a bounded fallback
-rather than disabling compaction.
-
-An operator with independent endpoint evidence can set
-`AI_CONTEXT_WINDOW_TOKENS` to the provider's total context limit. This takes
-precedence over `/v1/models` metadata without maintaining a model-name table or
-probing an overflow. For example, the current Copilot GPT-5 mini deployment
-uses `AI_CONTEXT_WINDOW_TOKENS=128000`. A supplied value must be at least
-9,217 tokens to leave usable request capacity after fixed headroom. Leave it
-unset when the true limit is not known so the runtime uses endpoint metadata
-when available, then the bounded fallback only when metadata is unavailable.
-
-The budgets are client-side on purpose: an OpenAI-compatible server
-(Dynamo / vLLM / TRT-LLM) enforces its window as a hard limit and can reject
-an oversized request, so the loop must compact or finalize before reaching it.
-Auto-sizing removes per-deployment hand-tuning.
-
-The compaction guard estimates each request from the system prompt, task,
-accumulated tool results, reasoning, and Tool schemas. It elides the oldest
-tool-result bodies to a short stub (head + a "re-call the tool if you need
-this" note). This keeps a long, critique-heavy investigation from
-overflowing the window mid-loop and failing with an empty analysis.
-
-### Artifact-tree seeding and evidence planning (always on)
-
-The engine fetches one bounded artifact-tree snapshot per uncached failure. It
-uses that same snapshot for the ranked evidence plan, the prompt's path seed,
-and complete-tree absence checks. The path seed lets the model start with
-the **exact** paths to pass to `read_artifact` / `tail_artifact` /
-`grep_artifact` instead of guessing leaf filenames. On weaker models,
-guessed-and-wrong paths are a leading cause of failed deep reads: the model
-navigates to the right directory but invents a filename that does not exist, so
-it never reaches the controller/machine log holding the upstream cause. Seeding
-the real tree removes the guessing. It is not configurable.
-
-The shared snapshot is bounded at 5,000 paths. The model-visible seed is bounded
-again by a path-count cap (currently 500 paths) **and** a byte cap sized to a
-fraction (~15%) of the conservative request budget. The same bounded fallback applies when neither an operator override nor
-endpoint metadata supplies a window (e.g. GitHub Copilot). Whichever seed limit binds first truncates the visible list, with a note
-pointing the model at `list_artifacts` for the rest. Before capping, the engine
-filters out non-text noise (images and archives such as `.png`,
-`.svg`, `.gz`, `.tar`, `.zip`) the model cannot usefully read, leaving more of
-the budget for diagnostic logs. The seed header also tells the model to read
-from the list directly and **not** spend tool calls on `list_artifacts` /
-`find_artifacts` rediscovering paths it already has. The path seed degrades to a
-no-op if the listing is empty or fails, while the loop proceeds with normal tools.
-
-Before iteration one, the engine also matches the bounded failure signal against
-the merged skill set and calls `skills.Set.Plan` with the same snapshot. The
-result is prepended as a bounded checklist in recipe, evidence-group, and ranked
-candidate order. Groups without candidates remain visible as unresolved. A
-truncated or failed snapshot marks the plan incomplete and never prevents the
-model from using normal artifact tools.
-
-The completed plan also provides a more direct depth signal than raw byte
-volume. The engine records `evidence_plan_covered` only when the initial tree
-scan succeeded without truncation, at least one recipe matched the bounded
-failure signal, every applicable group is satisfied or deterministically
-unavailable, and at least one group was satisfied by a successful non-empty
-`read_artifact`, `tail_artifact`, or `grep_artifact` result. A group is
-unavailable only when the complete initial tree has no matching candidate. A
-group with candidates remains unmet until a matching substantive read succeeds.
-When a group declares `content_any_of` or `content_all_of`, the same artifact
-must also provide positive content proof. Signals from different parallel files
-are never combined. A partial read can prove a positive match but cannot prove
-absence. A path may satisfy multiple groups only when it satisfies each group.
-Listing calls, failed reads, empty reads, unmatched failures, and unavailable
-skills never set the marker.
-
-The per-failure task prompt is bounded for the same reason: the failing test's
-junit **failure message** is clamped (head + tail, ~16 KB) before it is
-embedded, because some test families (e.g. AKS KubeRay) emit multi-hundred-KB
-to multi-MB ginkgo messages that would otherwise overflow the window on
-iteration 1 and fail the analysis with a 400. The agent can still read the full
-junit / build-log via its tools.
-
-### Prow job source context
-
-Each failure request carries compact Prow job metadata when it is available:
-the job name and type, the current `kubernetes/test-infra` configuration file,
-and the pinned test-infra revision used by dashboard discovery. The analyzer
-labels these values as untrusted metadata and quotes them before adding them to
-the task prompt.
-
-The source file and revision describe the current discovery snapshot, not
-necessarily the historical source revision that created an older failed run.
-`prowjob.json` remains authoritative for the effective pod spec, environment,
-arguments, refs, and test selection that actually executed. Current source
-metadata helps identify the likely edit location without replacing runtime
-evidence. Changes to the current discovery revision do not invalidate accepted
-analysis cache entries for the same build.
-
-## Investigation floors
-
-`min_tool_calls` and `min_gcs_bytes` are minimum-investigation floors. When
-the model returns a final answer below a floor, the loop appends a nudge
-("you have only made N tool calls / fetched N KB, investigate further before
-finalizing") and re-prompts. Below-floor finals are still published (so
-triage always shows SOMETHING) but are NOT written to the AI cache, so the
-next fetcher run retries the analysis fresh. `min_tool_calls` always applies.
-The byte floor is satisfied either by reaching `min_gcs_bytes` or by complete
-initial evidence-plan coverage. Coverage does not bypass critique, semantic
-review, prompt/model hashes, skill hashes, or any other acceptance gate.
-
-Why two floors: tool-call count alone is gameable. A weaker model can satisfy
-a calls floor with cheap `list_artifacts` calls or `read_artifact` requests on
-a default 8 KB length and still finalize without meaningful evidence (observed:
-6 tool calls returning 13 KB total, then a fabricated "no specific error found"
-root cause on a failure where a stronger model found the actual webhook x509
-cert mismatch from 9 MB of logs). The byte floor is measured against bytes
-actually pulled from GCS by `read_artifact`, `tail_artifact`, and
-`grep_artifact`; `list_artifacts` contributes 0. Bytes are a proxy for depth,
-not a guarantee of quality (a 500 KB grep with zero useful matches still
-satisfies the raw byte floor), so raise gradually rather than over-tuning.
-Evidence-plan coverage is narrower: a grep with no returned content does not
-cover a group even when it scanned many bytes.
-
-**Anti-thrash.** Progress is tracked per floor. A model that calls
-`list_artifacts` in a loop raises `tool_calls` but never `gcs_bytes`. Required
-Tool-call enforcement remains independent. Once it passes, the loop permits at
-most one retry whose sole remaining reason is the raw GCS byte floor. If the
-retry still misses the target, the accepted result records
-`gcs_floor_retry_exhausted: true` and can be cached. Old entries without that
-marker retain the normal byte-floor rule.
-
-**Cache invalidation (two layers).** Raising a floor on an existing project
-invalidates cached entries below it on the next fetcher run:
-
-- The agentic AI cache (`data/ai_cache.json`) is re-validated on each read;
-  pre-floor entries (no `tool_calls`/`gcs_bytes` field, default zero) are
-  treated as a miss for any non-zero floor. Entries below `min_gcs_bytes` are
-  reusable only when they carry `evidence_plan_covered: true` under the current
-  critique and skill contract, or `gcs_floor_retry_exhausted: true` from the
-  bounded byte-only retry. Old entries without either marker keep the byte-floor
-  behavior.
-- The build-cache test data (`data/jobs/*.json`) carries the prior run's
-  `AIAnalysis` on each failure. When the cached analysis falls below the
-  current floor and lacks both markers, the build-cache entry is also re-analyzed
-  rather than served as-is. Without this layer, pre-floor per-test analyses
-  would bypass the floor forever.
-
-### The critique gate
-
-A punt-detection gate that runs after the model produces a parseable
-tools-free final. Catches a residual failure mode in weaker models where
-`suggested_fix` is a diagnostic / information-gathering TODO list ("Check X.
-Verify Y. Investigate Z.") rather than a concrete remediation, despite the
-system prompt forbidding this shape. The check is a deterministic regex (see
-`backend/internal/ai/critique.go`); no extra LLM call.
-
-When the regex matches, the loop appends targeted feedback that quotes the
-offending suggested_fix back to the model, lists the exact phrases that
-tripped the gate, and re-states the two allowed shapes (concrete remediation
-OR the strict no-remediation escape hatch). It performs the bounded repair when
-`max_retries` is positive and the headroom guards admit it. Repair is bounded to
-evidence injection, at most one Tool-enabled turn when evidence is unresolved,
-and one forced finalization. Cache enforcement is independent of that repair
-budget. Before cache acceptance, the engine re-evaluates the exact
-deterministically sanitized published form. A hard-safe published form still
-runs the semantic judge when only soft warnings remain.
-
-**Coverage.** Critique evaluates parseable drafts in-loop, but deterministic
-repair runs once after draft selection. It injects evidence, optionally allows
-one Tool-enabled turn when evidence remains unresolved, then forces one final
-JSON response. It never reopens the general investigation loop.
-
-**Cache invalidation.** `strict`, `hard`, and `advisory` are evaluated from
-content-free rule IDs stored in the private cache. Existing passing entries do
-not need regeneration. Older objection-bearing entries without rule
-classification are rejected by `strict` and `hard` as
-`critique_unclassified`. Every policy rejects entries below the current
-`critique_version`.
-
-**Best-draft selection.** A repair never replaces an earlier draft merely
-because it arrived later. Selection evaluates the exact sanitized form that
-would be published, while retaining the unsanitized draft for repair feedback.
-A candidate must strictly dominate the selected draft:
-
-1. it cannot add a new hard-rule category or increase the hard-issue count;
-2. removing a hard issue is sufficient improvement, even when a soft warning
-   remains;
-3. without a hard improvement, it cannot add a punt or increase missing
-   available evidence;
-4. without a hard improvement, it must reduce at least one soft dimension;
-5. an equal-quality draft can replace the earlier draft only when new evidence
-   supports a materially changed root cause; this is recorded as
-   `candidate_evidence_backed_root_change`, not strict dominance;
-6. crossed tradeoffs and all other exact ties keep the earlier draft.
-
-When later evidence supports the same diagnosis, the engine refreshes the
-earlier draft before comparison so wording-only retries do not win. When new
-evidence drives a materially different diagnosis, the earlier draft keeps the
-published quality it had when emitted. This prevents evidence fetched for the
-new diagnosis from retroactively satisfying the old text.
-
-The tie rule has one semantic-review exception: a revision explicitly driven by
-semantic findings may replace an exactly equal-quality draft only after a
-bounded revision review passes. Before the tie is accepted, the monotonic guard
-compares high-confidence causal facts that share specific identity and error
-anchors with validated citations. Dropping such a fact without an equally strong
-supported replacement keeps the earlier draft. A semantic revision with a new
-hard failure that remains after publication sanitization is rejected before
-selection. Raw citation and source findings removed by that sanitization do not
-block a published-safe revision.
-
-A materially different `root_cause` can replace the selected draft only after
-a new non-empty artifact read or when the semantic review explicitly drove the
-revision. Otherwise the retry may improve wording, citations, and the suggested
-fix, but it cannot silently replace the diagnosis. Formatting-only root-cause
-changes are ignored; diagnosis-token additions, deletions, reordering, and
-negation are material. The selected attempt alone controls cache acceptance.
-
-Every best, fallback, and fallback-promotion decision is retained in the private
-trace with attempt numbers, raw and published hard and soft rule IDs, evidence
-revisions, root-cause-change and semantic-regression flags, supported-fact
-counts, strict-dominance status, acceptance, and a stable reason. Semantic trace
-events retain only allowlisted finding classes, stages, counts, and input size.
-Draft decisions displace older ordinary events when the per-analysis event cap
-is full. Draft text, evidence lines, and finding details are not stored in this
-decision telemetry.
-
-#### Hallucinated citation check
-
-Alongside the punt regex, critique runs a deterministic check that rejects a
-draft citing an artifact it never read (a confident, fluent root cause built
-on an artifact the agent never opened). It combines with the punt check into
-one retry message.
-
-The agentic loop records the path of every successful `read_artifact` /
-`tail_artifact` / `grep_artifact` call. Critique then scans the draft's
-`root_cause`, `summary`, `suggested_fix`, and each `relevant_files` entry for
-artifact-shaped tokens (`.log` files plus the known Prow artifacts:
-`build-log.txt`, `clone-log.txt`, `started.json`, `finished.json`,
-`prowjob.json`, `junit_*.xml`). Source files (`.go`, `.yaml`, generic `.json`)
-are excluded because they legitimately live in the source repo, not the
-artifact tree. A citation that includes a directory prefix must match a full
-read path exactly (catches the cross-machine basename-collision case: reading
-`machine-a/boot.log` then citing `machine-b/boot.log` fails). A bare basename
-matches any read with the same basename. Failed reads (tool returned
-`{"error": ...}`) do NOT count as reads, so a model cannot launder a citation
-by reading a non-existent file.
-
-The read-tracking maps are pre-allocated even before the first successful read,
-so the hallucination check is active from the first tools-free final.
-
-#### Missing artifact citation check
-
-When the agent has read non-empty artifact evidence, a causal draft must include
-at least one structured artifact citation. Critique uses its bounded Tool turn to
-request line-numbered evidence through `grep_artifact` when necessary, then
-forces a revised final response. A valid uncertainty statement still cites the
-strongest supported fact and explains which ownership or causal link remains
-unresolved.
-
-If the selected draft still has no validated artifact citation, `strict` and
-`hard` policy mark that failure's analysis unavailable for the current run
-instead of publishing or caching the unsupported causal diagnosis. `advisory`
-retains the finding in telemetry but preserves its existing publication and
-cache behavior. Evidence overflow remains exempt because no citation can be
-validated after the bounded evidence store is full.
-
-The analyzer treats this unavailable result as a completed policy outcome, not
-an execution failure.
-
-#### Skills and recipes
-
-The hallucination check catches structural hallucinations but not semantic
-ones. Skills add procedural investigation knowledge without expanding the
-universal system prompt. The engine loads one deterministic set containing:
-
-1. the always-on Prow profile,
-2. the Kubernetes profile when `k8s` tools are selected, and
-3. consumer recipes from `<project_dir>/skills/*.{yaml,yml}`.
-
-When a recipe trigger matches the model draft, the critique gate enforces that
-the agent has read the evidence groups declared by that recipe. Missing
-evidence appends a per-recipe feedback block and dynamically extends the retry
-budget. Procedures are diagnostic guidance only. They cannot override the
-system prompt, Tool constraints, result schema, or tool budget.
-
-For a missing group present in the initial plan, deterministic repair reads the
-highest-ranked usable candidate. It reads at most one artifact per group,
-de-duplicates paths across groups, and counts only non-empty successful reads.
-A group absent from the initial plan, or one without a usable candidate, falls
-back to one bounded artifact-tree walk. These are direct engine reads added to
-critique feedback, not synthetic model Tool calls. Strong-model drafts that
-already read the planned evidence do not trigger repair reads.
-
-Prow knowledge is engine-owned because every analyzed run follows the Prow
-artifact contract. Kubernetes knowledge is conditional because filesystem-only
-consumers may not have cluster dumps. Provider and project behavior remains in
-consumer recipes. Built-in IDs use the reserved `engine.` namespace, and any
-collision or malformed recipe is a startup error.
-
-Every cache entry carries the `skill_set_hash` fingerprint of the complete
-merged set. It records which recipes produced the analysis. Recipe edits and
-profile selection changes affect new analyses but do not invalidate reusable
-existing entries. Strengthening the enforced critique contract still requires a
-`critique_version` bump.
-
-**Inapplicable recipes do not block caching.** A recipe whose required
-evidence does not exist anywhere in the build's artifact tree is inapplicable
-to that build: the agent cannot read evidence the run never produced. When a
-matched recipe has a missing evidence group, the engine does one bounded
-recursive listing of the build tree and drops any group whose `any_of`
-patterns match no path in it. Only groups whose evidence **exists but was not
-read** remain a genuine miss. This check reuses the initial bounded tree
-snapshot. A truncated or failed snapshot disables the check because the engine
-cannot prove a path is absent, preserving the stricter behavior.
-
-See [`docs/skills.md`](skills.md) for the full schema, authoring guidance, and
-observability notes.
-
-### The semantic judge
-
-After a draft clears the deterministic critique gate, a second-line **semantic
-judge** checks reasoning defects the regex gate cannot see. The request contains
-a bounded digest of validated cited lines, specific errors already found, later
-success for the same operation, and applicable mandatory evidence that the draft
-did not use. The judge returns only allowlisted generic finding classes. It does
-not reread artifacts or redo the investigation.
-
-On findings, the engine drives one tools-free refinalization. A parseable
-revision may spend one additional bounded judge call that compares it with the
-prior draft. The revision must pass deterministic critique, the revision review,
-and a monotonic supported-cause guard. A revision that drops a validated,
-specific causal fact without an equally strong replacement is discarded even
-when its structural critique score is cleaner. The original deterministic-
-passing draft remains cacheable, while finding classes, revision outcomes, and
-content-free supported-fact counts remain visible in private telemetry.
-
-The initial judge is best-effort: transport or parse failure publishes the
-existing draft rather than blocking. A revision-review failure also preserves
-the earlier valid draft. At most one initial review, one refinalization, and one
-revision review run per analysis.
-
-The judge is currently always on for the agentic path (there is no config knob).
-Each analysis records whether the judge ran, objected, and drove a revision
-(`judge_ran` / `judge_objected` / `judge_revised` in the published analysis
-JSON), and the fetcher logs a per-pass roll-up (`⚖️ semantic judge: ran on N,
-objected on M, revised K`). Those signals exist so the judge's value can be
-measured before deciding whether to keep it unconditional, gate it behind a
-quality profile, or drop it.
-
-### Evidence injection
-
-The critique gate already detects when a draft cites an artifact the agent
-never read. Rather than only re-prompting the model to go read it, which weak
-models frequently ignore, the engine **fetches** each cited-but-unread artifact
-(the model already named the path), caps it, and embeds its content directly in
-the retry feedback: "here is what it actually shows; ground your root_cause in
-it or drop the claim." The fetched paths are marked read, so the next critique
-pass does not re-flag them.
-
-This converts an ignored "go read X" loop into "here is X", the single most
-common reason drafts fail critique on weaker models. It covers two buckets:
-artifacts the draft **cited but never read**, and evidence a **matched skill
-requires** for the claimed failure class. Full-path citations are fetched
-directly; bare-basename citations and skill-required patterns are resolved to
-real paths with a single bounded tree walk (so cost does not scale with the
-number of targets). The selected failing draft enters the single bounded repair operation. Evidence
-is injected before the optional Tool turn and the one forced finalization. An
-unparseable finalization retains the selected prior draft; it does not trigger
-another repair request. It adds the fetched bytes to
-the conversation, capped at a few artifacts per retry so the injection cannot
-blow the context window.
-Best-effort: a path that cannot be resolved or fetched is skipped and the
-plain-text feedback still applies. No cache-version interaction; it only
-changes the retry prompt.
-
-### Single tool call
-
-When enabled, the loop sends at most one tool call per assistant turn. Two
-mechanisms work together: the request sets the OpenAI
-`parallel_tool_calls: false` flag (so endpoints that honor it let the model
-pick its single best call at generation time), and as a fallback for endpoints
-that ignore the flag, the loop executes and echoes only the first tool call
-when several come back at once (the rest are dropped and can be re-requested on
-a later turn).
-
-Set this for endpoints whose chat template rejects multiple tool calls in one
-assistant message. The stock Llama 3.x Instruct template, for example, raises
-`This model only supports single tool-calls at once!` and the provider surfaces
-it as a 500 once a multi-tool-call assistant turn is replayed in history. This
-is a property of the model's own chat template (the Llama tool-calling format
-is one call per turn), not a provider bug, so the fix belongs in the loop.
-(Some trtllm/Dynamo builds accept `parallel_tool_calls: false` but ignore it,
-which is exactly why the client-side cap is also needed.) Leave it off for
-providers that support parallel tool calls so they keep their round-trip
-efficiency.
-
-### Cost and behavior
-
-Per failure, agentic analysis uses roughly 50-150k input tokens and runs for
-30-90 seconds wall clock. The exact numbers depend on artifact size and how
-deep the model digs.
-
-Hitting a byte-budget cap mid-loop triggers a forced finalize round: the
-engine drops the `tools` field and asks the model for its final JSON answer
-based on whatever it has seen so far. This always produces a usable analysis,
-since incomplete is better than absent. Hitting the `timeout`, by contrast,
-cancels the in-flight request and the analysis errors out for that failure.
-
-### Parallel analysis
-
-Failures are analyzed sequentially by default, so a full cold-cache fetch takes
-roughly `failures x 30-90s`. Each analysis is an independent sequence of model
-round-trips, so `concurrency: N` runs up to N investigations at once. A
-batching endpoint (self-hosted vLLM / TRT-LLM, which serve many requests on one
-GPU via continuous batching) absorbs this and wall-clock drops roughly in
-proportion until the endpoint saturates; 4-6 is a good starting point for a
-dedicated endpoint.
-
-Defaults to `1` (sequential): the engine has no request-level backoff, so a
-shared, rate-limited provider (e.g. GitHub Copilot) can return 429 under
-parallelism. The setting is independent of the fetcher's `-workers` flag, which
-parallelizes the artifact *fetch* phase, not analysis. Concurrency does not
-change results or cache semantics; the AI cache, per-build tool caches, and the
-tools-unsupported flag are all internally synchronized.
-
-### Private analysis traces
-
-The analysis harness writes `ai_traces.json` next to the AI cache. This is a
-private operational snapshot for debugging model and harness behavior. Each
-failure records bounded control-flow events for model requests, tool calls,
-context compaction, retries, floor nudges, deterministic critique, semantic
-judging, forced finalization, and completion.
-
-The trace intentionally excludes prompts, assistant text, reasoning items, tool
-arguments, tool output, and configured endpoint or model fields. Provider and
-harness failures are stored as fixed error codes, never free-form response
-bodies. Pattern traces add only structural parse counts, scan truncation,
-request stage, duration, repair outcome, and safe failure categories. They never
-store candidate text, prompts, provider bodies, tool content, private paths, or
-runtime identities. Identifiers are URL- and credential-redacted and byte-capped.
-A trace keeps at most 128 events, and the private store keeps a rolling window of up to
-500 completed failure traces. It admits only entries newer than the retained
-oldest trace and evicts oldest-first as needed to keep the saved file within the
-64 MiB loader limit. The persisted `retained_since` watermark prevents polling
-from reconstructing traces that were intentionally aged out.
-
-`ai_traces.json` is listed in `output.NonPublishedFiles`. The API server returns
-404 for it under `/data`, and the Pages workflow removes it before publication.
-Inspect it directly in a local output directory or on the Kubernetes shared
-volume. When admin authentication is enabled, server mode also exposes the
-decoded snapshot through `GET /api/analysis-traces` and the private **Traces**
-page. Exact query filters can correlate a response ID or a job/build/test tuple
-without exposing prompt or tool content.
-
-### Private Agent shadow ledger
-
-When the disabled-by-default Helm Agent shadow is enabled, it writes a separate
-`analysis_shadow.json` ledger on a dedicated PVC mounted only into the writer.
-The ledger stores bounded comparison fields, exact identities, attempts, retry
-configuration, deterministic critique telemetry, result validation, and cleanup
-state. Runtime timing separates Sandbox terminal observation, result
-availability, dashboard validation, and cleanup. It does not store prompts or
-artifact excerpt contents. The server never mounts or serves this claim, and the
-Pages path does not use it.
-
-Shadow outcomes distinguish `no_result`, `malformed_result`, `extra_file`,
-`deletion`, `rename`, `contract_violation`, `runtime_failure`, `timeout`,
-`cancellation`, and `cleanup_pending`. A valid result receives the existing
-deterministic critique privately without a repair or publication decision. The
-evidence-aware semantic judge is recorded as unavailable because its provider
-and state contract are not exposed to the shadow adapter.
-
-The in-process result remains authoritative. A shadow failure, ledger failure,
-or cleanup-pending Sandbox cannot change public JSON, private cache acceptance,
-pattern state, or GitHub actions. Agent token and cost fields remain explicitly
-unavailable unless an operator-owned usage source reports them. The ledger still
-pins the declared runtime, source, evidence, prompt contract, and configuration
-identity owned by the dashboard.
-
-### Private token and cost accounting
-
-The shared model transport records provider-reported input, cached-read input,
-cache-write input when a recognized field is present, output, and reasoning
-token metadata. Absent cache-write metadata remains distinct from a reported
-zero. Separate private ledgers cover scheduled analysis and authenticated server
-features. Cache hits record zero new token usage. Missing provider metadata
-remains unreported, and coding-agent work is marked external and unmetered
-rather than estimated from bytes or elapsed time. Agent Sandbox work that calls
-a consumer model gateway is reported as `model_gateway_excluded`, not as a
-generic external operation, because its runtime contract currently returns no
-gateway token counts to the server. Cost estimates use only operator-configured
-rates and are not provider invoices.
-
-Coverage states distinguish fully priced provider-reported usage, partial token
-usage, missing cache-write counts, missing cache-write pricing, external runtime
-work, model-gateway exclusions, legacy coverage gaps, and operations recorded
-before pricing was configured. Daily ledger model breakdowns store only a safe
-model identifier or a one-way fingerprint. They never store provider endpoints,
-prompts, responses, credentials, or repository content.
-
-### Cache semantics
-
-Agentic analyses are cached under `agentic:<module>:<job>:<build>:<hash>`. A
-reusable entry must match that key, be no more than 30 days old, contain a valid
-agentic result, meet the current investigation floors, and have passed at least
-the current critique version.
-
-Entries also carry fingerprints for the composed prompt, model and endpoint,
-and loaded skill set, plus the factual `evidence_plan_covered` and
-`gcs_floor_retry_exhausted` markers. These fingerprints are provenance only.
-Model, endpoint, prompt, skill, and transient-streak changes affect new analyses
-but do not invalidate an existing entry. Either marker can satisfy the GCS-byte
-floor. Set `ai.cache_generation` or `AI_CACHE_GENERATION` to a new non-empty value for
-an intentional full rebaseline. The value is hashed before it enters cache keys.
-Returning to a prior value reuses its unexpired entries. A manual cache clear
-remains available for emergency destructive cleanup.
-
-Cached agentic entries are scoped to a specific build because answers cite
-build-specific paths and line numbers; the same test failing in two different
-builds gets two separate agentic analyses.
-
-Under `critique.cache_policy: hard`, a result that exhausts bounded repair but
-still lacks a validated artifact citation is published as unavailable and gets a
-private six-hour cooldown marker. A matching model, prompt, skill set, cache
-generation, critique version, investigation floor, and consecutive-failure
-streak reuses that unavailable outcome without another provider request. The
-marker is not a successful analysis entry, never supplies `AIAnalysis`, and is
-removed when it expires or any identity field changes. Advisory and strict
-policies do not use this cooldown. This prevents a scheduled dashboard from
-paying for the same hard-policy failure every refresh while still retrying later
-the same day.
-
-After all individual analyses reach an accepted or unavailable terminal state,
-the fetcher persists `ai_cache.json` and `ai_traces.json` as a private analysis
-checkpoint before recurring-pattern correlation starts. This checkpoint is not
-public dashboard publication. If a later pattern or output stage fails, the next
-pass reloads the checkpoint from disk and applies the normal key, age,
-investigation-floor, critique, and malformed-state gates. Successful pattern cache
-entries are also persisted before a joined pattern error returns, so only the
-missing or invalid correlations rerun.
-
-### Pattern analysis
-
-After all individual analyses reach an accepted or unavailable terminal state,
-the engine runs one cached job-level causal-group correlation pass. A job
-qualifies only when at least three completed recent builds failed. Pending builds
-are skipped. The input contains one representative analyzed failure per failed
-build plus the ordered recent run window and available source revisions.
-
-Pattern prompt version 10 is analysis-only. The model must make exactly one
-`submit_causal_groups` function call containing only:
-
-- causal groups with exact build IDs, one root-cause summary, and confidence;
-- build IDs that remain unclassified; and
-- a concise overall summary.
-
-The contract rejects duplicate or unknown builds, incomplete coverage, empty
-causes, invalid confidence, unknown fields, and any remediation, suggested-fix,
-target, action, issue, or Fix PR field. Dashboard code derives
-`shared_cause`, `mixed_causes`, `unrelated`, or `insufficient_evidence`
-deterministically. It also derives the compatibility `systemic`, confidence,
-shared-root-cause, and shared-build fields without inventing remediation.
-
-The correlation cache key covers the prompt version, model input, representatives,
-ordered run window, and source identity. Pattern failures are isolated per job.
-Before public output, `patterns.MergeLastGood` publishes a fresh successful
-verdict, retains a prior valid verdict after an eligible failed refresh, or
-publishes no fabricated fallback when no prior verdict exists. Repeated active
-groups are aggregated into `flakiness.json` for **Needs Attention**.
-Observation-only recovery remains a separate recurring-pattern lifecycle and
-does not prove a source fix.
-
-Each published causal group receives an engine-derived ID and content hash. The
-hash covers the exact causal content and canonical build set, not remediation
-state. Repeated groups also receive a separate safe public remediation summary.
-New groups start at `not_investigated` with the explanation that no
-source-grounded implementation target has been verified. The job page shows this
-state in an always-visible **Remediation** section while keeping technical detail
-collapsed.
-
-The causal-group analyzer never investigates or proposes a fix. A separate,
-explicitly initiated read-only remediation investigation may inspect pinned source
-and classify the result, but it binds to the published pattern and causal-group
-hashes and uses its own private cache. The model returns bounded target
-hypotheses. Dashboard code validates their evidence, typed targets, engine-derived
-expected behavior, remediation safety policy, and current and failure-revision
-source state before it can derive a private verified proposal and safe public
-target summary. Model-authored relationship prose is non-authoritative. Even a
-public `actionable` summary does not grant action eligibility: causal-group
-patterns remain categorically blocked from File Issue, Fix PR, remediation
-tracking, resolution, and chat-fix by `models.PatternAllowsActions`.
-
-Individual failure source grounding remains unchanged. Per-build analysis may use
-read-only repository tools at an immutable revision and may publish source links.
-Those `relevant_files` are evidence only. They are not proven modification
-targets and are never promoted into causal-group remediation.
+The model can list, read, tail, grep, and find artifacts. Timeline verification
+orders timestamped events so causal claims can distinguish initiating failures
+from later cleanup noise. Optional Kubernetes-shaped tools navigate resources
+already present in the artifact tree; they do not connect to a live cluster.
+Pinned-source tools are read-only and available only when build metadata resolves
+an immutable repository revision.
+
+The analyzer has no shell, browser, portal, SSH, cluster write, repository write,
+or GitHub action capability.
+
+### Evidence planning
+
+Before the first provider call, the engine ranks evidence groups from the failure
+signal, selected diagnostic skills, and the bounded artifact tree. The model may
+follow that plan or inspect other available evidence. Coverage is factual: a
+group counts only when a content-bearing operation returns relevant data.
+
+Consumer `skills/*.yaml` can require evidence for a failure class. They extend
+the engine profile; they do not replace the project prompt or authorize actions.
+See [Diagnostic skills](skills.md).
+
+### Context and evidence bounds
+
+The engine obtains the model context limit when the endpoint reports it, reserves
+completion and protocol headroom, and conservatively accounts for the serialized
+request. Old tool results may be compacted while retaining call/result pairing,
+the evidence ledger, and current repair instructions. If a safe request cannot
+fit, the engine does not send it.
+
+Investigation floors run on the finalize branch:
+
+- `min_tool_calls` rejects a final that stopped before the required number of
+  calls.
+- `min_gcs_bytes` counts bytes returned by content-bearing artifact operations,
+  not directory listings.
+- Evidence-plan coverage can satisfy the byte-depth purpose when the required
+  evidence groups are actually covered.
+- A bounded byte-only retry prevents a weak model from looping indefinitely to
+  satisfy a raw byte target.
+
+Floors measure investigation effort, not correctness. Critique and semantic
+review remain independent.
+
+## Critique and semantic review
+
+Every parseable final is evaluated in its exact sanitized publication form.
+
+### Deterministic critique
+
+The deterministic judge rejects hard safety or grounding failures such as:
+
+- an investigation checklist presented as the remediation;
+- a citation to an artifact that was never read;
+- missing required artifact citations after evidence was read;
+- invalid source or artifact paths and ranges;
+- missing evidence required by an applicable diagnostic skill.
+
+When configured, one bounded repair operation can inject verified evidence,
+allow one tool-enabled turn when evidence remains unresolved, and force one
+structured finalization. It does not reopen an unlimited investigation loop.
+Cache acceptance is evaluated separately under the configured critique policy.
+
+### Semantic review
+
+The semantic judge evaluates causal and evidence quality after deterministic
+checks. It can request a bounded revision, but a later draft does not win merely
+because it is newer. Draft selection prevents new hard failures, unsupported
+root-cause changes, and regressions that drop high-confidence cited facts without
+an equally supported replacement.
+
+If a repair response is unusable, the engine can retain the best earlier
+parseable draft. Only the selected draft controls cache acceptance and
+publication.
+
+## Cache semantics
+
+A reusable entry must match the analysis key, be within the retention window,
+contain a valid current-format result, meet current investigation floors, and
+satisfy the current critique and semantic-review acceptance contract.
+
+Aster checks both places that may hold an analysis:
+
+1. the analysis attached to cached build data;
+2. the private agentic cache.
+
+This prevents an old build result from bypassing a newer floor or critique
+version. Cache hits do not call the provider and record zero new usage.
+
+Entries retain content-free provenance for the prompt, provider coordinates,
+model, and loaded skills. Those fingerprints describe how an entry was produced;
+changing them affects new analyses but does not automatically invalidate an
+otherwise reusable entry.
+
+Set `ai.cache_generation`, `AI_CACHE_GENERATION`, the Pages
+`ai-cache-generation` input, or Helm `analysisCache.generation` to a new
+non-empty value for an intentional full rebaseline. Returning to a previous
+value reuses its still-valid entries. Destructive cache clearing is an emergency
+operation, not the normal response to prompt or provider changes.
+
+## Pattern analysis
+
+Recurring-pattern analysis is a separate pass over published per-build results.
+It correlates failures across builds, validates structured causal groups, and
+publishes only engine-derived identities and safe causal content.
+
+A fresh valid verdict replaces the previous pattern. A fresh non-systemic
+verdict removes it. When an eligible refresh fails, the exact prior valid verdict
+may remain visible as `Last known good`; otherwise no fallback is fabricated.
+Retained patterns stay readable but cannot start notifications, issues, Fix
+previews, remediation attempts, or resolution changes.
+
+Causal groups are analysis-only. An authenticated server may run a separate,
+explicit read-only remediation investigation, but its public safe state does not
+grant File Issue or Fix PR eligibility. Individual build analyses may still link
+to verified pinned source as evidence.
+
+## Private operational data
+
+The analyzer writes private traces and usage ledgers beside the public output.
+They are excluded from `/data/*` and removed from Pages publication.
+
+Private traces retain bounded control-flow facts such as provider attempts, tool
+counts, compaction, floor nudges, critique stages, semantic-review stages,
+timeouts, and completion status. They do not retain prompts, assistant text,
+reasoning, tool arguments, tool output, credentials, endpoint URLs, or raw
+provider bodies. Authenticated server mode can expose the sanitized trace
+snapshot to administrators.
+
+Usage ledgers retain provider-reported token categories and operator-priced cost
+coverage. Missing metadata stays unavailable. They never estimate hidden usage
+or store prompts, responses, endpoints, credentials, or repository content.
+
+The optional analysis-shadow ledger is separate again. It records private
+content-free comparison, identity, lifecycle, validation, and cleanup facts.
+Shadow failure or cleanup state cannot change authoritative analysis, normal
+cache acceptance, pattern state, or actions.
 
 ## Troubleshooting
 
-- **No analyses are appearing.** Confirm the fetcher ran with `-ai` and
-  check the startup logs for `Agentic AI enabled (...)`. A failed tool
-  registry enable logs a warning and marks failures unavailable.
-- **Every failure logs "AI endpoint rejected tools".** The endpoint
-  doesn't support function calling; analyses surface as an "AI analysis
-  unavailable" summary. Switch to a function-calling endpoint.
-- **Costs spiked.** Lower `max_iters`, or analyze fewer builds. Inspect
-  the cached analyses for `mode: "agentic"` to estimate the bill.
-- **Model loops without finalizing.** Lower `max_iters` and check
-  whether the forced-finalize round produces a useful answer. If not,
-  the `prompts/system.md` may not give the model enough structure to
-  conclude; tighten its triage instructions.
+- **No analyses appear:** confirm AI is enabled and startup logs show the
+  configured agentic analyzer. Validate `project.yaml` and the non-empty project
+  prompt.
+- **Every analysis says the endpoint rejected tools:** select an endpoint and
+  model with function calling. There is no text-only fallback.
+- **Analyses finalize too early:** inspect private traces, then raise
+  `min_tool_calls` or `min_gcs_bytes` gradually. Do not use large floors as a
+  substitute for a clear project runbook.
+- **The model loops:** lower `max_iters`, verify the prompt gives a decisive
+  triage order, and check whether the provider correctly replays tool history.
+- **Requests exceed the context limit:** use a model with a larger window or
+  reduce project-prompt and artifact noise. The engine will not send a request
+  that its conservative guard considers unsafe.
+- **Provider throttling:** reduce `ai.concurrency`. It is independent of fetcher
+  artifact workers.
+- **Costs changed after a rollout:** inspect private usage coverage and traces.
+  Do not infer cost from bytes when the provider omitted usage metadata.
 
-## Implementation reference
+## Implementation map
 
-- `backend/internal/ai/agentic.go` - the tool-calling loop, finalize
-  round, and JSON repair.
-- `backend/internal/ai/critique.go` - the deterministic critique gate.
-- `backend/internal/ai/pattern.go` - the job-level cross-build pattern
-  correlation pass.
-- `backend/internal/ai/skills/` - the recipe-driven evidence layer.
-- `backend/internal/ai/modules/universal/` - the project-agnostic AI
-  module that builds the per-failure seed prompt.
-- `backend/internal/artifacts/` - the `Browser` interface and
-  `GCSBrowser` implementation backing the filesystem tools.
-
-### Last-known-good pattern publication
-
-Recurring-pattern failures are isolated per job. A fresh systemic verdict replaces the prior pattern, a fresh non-systemic verdict removes it, and an eligible failed refresh retains the exact prior verdict when one exists. Jobs with no prior valid verdict publish no fabricated fallback. Jobs that are removed or no longer eligible do not retain stale patterns.
-
-A provider or validation failure for one eligible job does not block current
-dashboard, JUnit, search, or individual-analysis publication. Context
-cancellation, checkpoint persistence failure, corrupt prior pattern identity,
-and output failure remain fatal.
-
-Freshness lives in `pattern_refresh`, outside `PatternAnalysis`, so retained IDs, content hashes, timestamps, build lists, chats, resolved state, and remediation references remain unchanged. Retained patterns are labeled `Last known good`. They remain readable, and pattern chat remains available only when every referenced build is still in the current job window. Retained patterns cannot create notifications, issues, fixes, remediation attempts, or resolved-state pruning.
+- `backend/internal/ai/agentic.go`: provider loop, finalization, repair, and draft
+  selection.
+- `backend/internal/ai/evidenceplan/`: ranked evidence planning.
+- `backend/internal/ai/skills/`: engine and consumer evidence recipes.
+- `backend/internal/ai/critique.go`: deterministic critique.
+- `backend/internal/ai/semantic.go`: semantic review.
+- `backend/internal/ai/service.go`, `cache.go`, and `cache_acceptance.go`: cache
+  identity and acceptance.
+- `backend/internal/ai/tools/`: read-only artifact, Kubernetes-shaped, and source
+  tools.
+- `backend/internal/aiusage/`: private usage accounting.

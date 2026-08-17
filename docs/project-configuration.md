@@ -434,8 +434,8 @@ dashboard publishes the expected jobs and analyses.
 
 Authenticated chat, File Issue, and Mark Resolved are server deployment features,
 not separate analysis runtimes. They do not require a Fix PR runtime.
-See [Optional features](optional-features.md) for deployment requirements and the
-recommended enablement order.
+See the [documentation feature map](README.md#optional-features) for deployment
+requirements and the recommended enablement order.
 
 The focused feature guides own their credential, admission, timeout, and
 security contracts. Avoid duplicating those settings into a first-run

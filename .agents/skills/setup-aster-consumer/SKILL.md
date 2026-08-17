@@ -50,8 +50,8 @@ fork coordinate because the generated workflow hardcodes
 The default published pair is:
 
 ```text
-<aster> = go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2
-<engine-ref> = v0.9.0-rc.2
+<aster> = go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3
+<engine-ref> = v0.9.0-rc.3
 ```
 
 For an explicitly requested exact release tag or full commit SHA, use that
@@ -106,7 +106,7 @@ checkout can be deployed by the reusable workflow.
 Outside an Aster checkout, use the default published command:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard ...
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 onboard ...
 ```
 
 Use one form consistently as `<aster>` for discovery, planning, application,

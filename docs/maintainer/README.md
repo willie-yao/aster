@@ -1,16 +1,16 @@
 # Maintainer references
 
-These documents describe disabled, private, or experimental implementation
-surfaces. They are not part of standard onboarding or first-run deployment.
-Each reference states its current authority and support status.
+These pages describe active private or experimental surfaces. User-facing
+configuration and deployment instructions remain in the main documentation
+index.
 
-- [Causal-group remediation investigation](remediation-investigation.md):
-  authenticated preview internals and benchmark contracts.
-- [Agent Sandbox OpenCode analyzer](agent-sandbox-opencode-analyzer.md):
-  private disabled deployment prototype.
-- [Agent Sandbox causal critic](agent-sandbox-causal-critic.md): stopped
-  experiment retained while its disabled implementation remains in the tree.
+- [Remediation investigation](remediation-investigation.md): private,
+  source-grounded causal-group investigation and benchmark contract.
+- [Agent Sandbox OpenCode analyzer](agent-sandbox-opencode-analyzer.md): active
+  private shadow evaluation of the non-authoritative analyzer.
 
-Current supported analysis ownership is documented in the
-[in-process analyzer architecture](../architecture/in-process-analyzer.md) and
-[ADR 0001](../architecture-decisions/0001-analysis-runtime-ownership.md).
+The Agent Sandbox causal-critic experiment stopped on August 10, 2026. Its
+chart and disabled implementation remain for inspection, but it must not be
+used for new evaluations. It never had publication, cache, or write authority.
+Current analyzer ownership is documented in
+[In-process failure analyzer architecture](../architecture/in-process-analyzer.md).

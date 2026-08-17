@@ -20,12 +20,8 @@ features. It does not replace the fetcher or worker as the owner of scheduled
 failure analysis.
 
 Optional Agent Sandbox analysis shadows run after an authoritative refresh and
-write private comparison ledgers. They do not replace the published result or
-participate in normal analysis cache acceptance.
-
-The Agent Sandbox OpenCode analyzer is a separate disabled-by-default deployment
-prototype. It is exercised manually or by explicit evaluation tests, not by the
-fetcher or worker. It has no public output or normal cache authority.
+write private comparison ledgers. They use the OpenCode analyzer boundary but do
+not replace the published result or participate in normal cache acceptance.
 
 ## End-to-end flow
 
@@ -269,20 +265,14 @@ data-serving path.
   Pattern actions keep their separate `PatternAllowsActions` gate. The coding
   agent, review, validation, and PR state are independent of failure-analysis
   tools and cache acceptance.
-- **Scheduled analysis shadows** use `agentanalysis.Runtime` from
-  `backend/internal/agentanalysis/runtime.go` and
-  `backend/internal/fetcher/shadow_analysis.go`, plus the separate
-  `backend/internal/causalcritic` path. They run after an authoritative refresh,
-  freeze bounded evidence, compare private results with the authoritative
-  snapshot, and write private ledgers. They cannot publish a replacement or
-  seed the normal cache.
-- **Agent Sandbox OpenCode analyzer** uses the workspace contracts under
-  `backend/internal/agentanalysis`, the read-only workspace stager in
+- **Agent Sandbox OpenCode analysis shadow** uses `agentanalysis.Runtime` and
+  `backend/internal/fetcher/shadow_analysis.go`, the workspace contracts under
+  `backend/internal/agentanalysis`, the read-only stager in
   `backend/internal/analysisstager`, and the executor in
-  `backend/internal/analysisexecutor`. It validates sealed source and artifact
-  workspaces, evidence handles, and one canonical result while retaining only
-  private content-free telemetry. The Helm option installs its security
-  boundary, but the fetcher and worker do not schedule analyzer workloads.
+  `backend/internal/analysisexecutor`. After authoritative publication, the
+  writer may freeze bounded evidence, schedule sampled Sandboxes, compare the
+  result privately, and append content-free lifecycle telemetry. The shadow
+  cannot publish a replacement or seed the normal cache.
 
 ## Contributor map
 
@@ -303,5 +293,4 @@ data-serving path.
 | Analysis chat and actions | `backend/internal/analysischat/`, `backend/internal/actions/` |
 | Remediation investigation authority | `backend/internal/remediationinvestigation/`, `backend/internal/remediationpolicy/`, `backend/internal/actionverify/`, `backend/internal/sourceinvestigation/` |
 | Fix PR runtime | `backend/internal/fixpr/`, `backend/internal/fixruntime/` |
-| Scheduled analysis shadows | `backend/internal/agentanalysis/runtime.go`, `backend/internal/fetcher/shadow_analysis.go`, `backend/internal/causalcritic/` |
-| Agent Sandbox analyzer prototype | `backend/internal/agentanalysis/workspace_analysis.go`, `backend/internal/agentanalysis/workspace_evidence_handles.go`, `backend/internal/agentanalysis/workspace_result_validation.go`, `backend/internal/analysisstager/`, `backend/internal/analysisexecutor/` |
+| Agent Sandbox analysis shadow | `backend/internal/agentanalysis/workspace_analysis.go`, `backend/internal/agentanalysis/workspace_evidence_handles.go`, `backend/internal/agentanalysis/workspace_result_validation.go`, `backend/internal/analysisstager/`, `backend/internal/analysisexecutor/` |

@@ -1,740 +1,234 @@
-# Server mode (Kubernetes-native)
+# Server mode
 
-The dashboard supports two deployment environments from one codebase:
+Kubernetes server mode serves the same public `/data/*.json` contract as GitHub
+Pages and adds authenticated APIs. The frontend probes `/api/capabilities` and
+enables only the features the server advertises. A static Pages deployment has
+no capability endpoint and remains read-only.
 
-- **Kubernetes-native (this page).** A small Go server (`backend/cmd/server`)
-  serves the dashboard and its JSON over HTTP alongside the inference stack,
-  reading from a shared volume a worker or CronJob writes. It adds a capability
-  descriptor and admin-gated interactive actions on top of the read contract.
-- **Static.** The fetcher writes JSON, GitHub Actions builds the SPA, and GitHub
-  Pages serves it. Public, cheap, no backend.
-
-Server mode is a strict superset of the static contract: it serves the exact
-same `/data/*.json` files the SPA already reads, then adds a capability
-descriptor the frontend uses to discover server-only features. The static path
-keeps working unchanged, and all `/data/*.json` schemas stay byte-compatible.
-
-The frontend requests `search-index.json` only after search is focused, opened,
-or used. Server mode negotiates gzip for eligible JSON, JavaScript, CSS, and
-text responses and sends `Vary: Accept-Encoding`. SSE streams, HEAD responses,
-range responses, no-body statuses, `no-transform` responses, and content that
-already has a `Content-Encoding` remain uncompressed. Existing cache headers
-and private-file filtering are preserved.
-
-Server responses also set a same-origin Content Security Policy, deny framing,
-disable MIME sniffing, limit referrer data, and disable unused browser device
-features with `Permissions-Policy`. Scripts, connections, images, and fonts are
-restricted to the dashboard origin, with `data:` allowed only for images. MUI
-and Emotion inject runtime style elements, so `style-src` currently includes
-`'unsafe-inline'`; `script-src` remains strict and the SPA contains no inline
-startup script.
-
-The server is independent of where the in-process analyzer ran. Pages and
-Kubernetes deployments produce the same `jobs/*.json`, so the server contract
-remains identical.
+The server reads data written by the authoritative in-process fetcher or worker.
+It does not own scheduled failure analysis and does not change the public data
+schema.
 
 ## Endpoints
 
 | Path | Purpose |
 | --- | --- |
-| `GET /data/*` | The fetcher output tree at read parity: `manifest.json`, `dashboard.json`, `jobs/*.json`, `flakiness.json` with its bounded build-failure index, `search-index.json`. |
-| `GET /api/capabilities` | Deploy descriptor with feature flags and safe engine version, commit, and image-tag identity. |
-| `GET /api/analysis-traces` | Admin-gated private trace snapshot. Exact filters: `job_id`, `build_id`, `test_name`, `outcome`, and `response_id`. |
-| `GET /api/fetch-status` | Admin-gated aggregate fetch progress, freshness, and next scheduled pass. `HEAD` is also supported. |
-| `GET /api/pattern-diagnostics` | Admin-gated sanitized recurring-pattern cooldown diagnostics. Contains only validation stages, fixed reason codes, counters, and hashed input identities. |
-| `GET /api/analysis-traces/download` | Admin-gated attachment form of the same filtered trace snapshot. |
-| `POST /api/analysis-chat/sessions` | Start an owner-bound conversation for one published test analysis. |
-| `POST /api/analysis-chat/sessions/lookup` | Restore the latest non-expired conversation owned by the signed-in admin for an exact analysis reference. |
-| `GET /api/analysis-chat/sessions/{id}` | Read the owning admin's current persisted conversation. |
-| `POST /api/analysis-chat/sessions/{id}/messages` | Ask one bounded follow-up question and wait for the final transcript. |
-| `POST /api/analysis-chat/sessions/{id}/messages/stream` | Start or reconnect to a turn over SSE progress events. |
+| `GET /data/*` | Public fetcher output such as `manifest.json`, `dashboard.json`, `jobs/*.json`, `flakiness.json`, and `search-index.json`. Private files and dot-prefixed directories are rejected. |
+| `GET /api/capabilities` | Safe deployment identity and feature flags used by the frontend. |
+| `GET /api/fetch-status` | Admin-only aggregate fetch progress, freshness, and recent pass summaries. `HEAD` is supported. |
+| `GET /api/pattern-diagnostics` | Admin-only sanitized recurring-pattern validation and cooldown diagnostics. |
+| `GET /api/analysis-traces` | Admin-only sanitized analysis traces with exact job, build, test, outcome, and response filters. |
+| `GET /api/analysis-traces/download` | Attachment form of the same filtered trace report. |
+| `GET /api/ai-usage` | Admin-only private usage report with optional date and feature filters. |
+| `GET /api/ai-usage/download` | Attachment form of the same usage report. |
+| `POST /api/analysis-chat/sessions` | Start an owner-bound chat for one current published analysis. |
+| `POST /api/analysis-chat/sessions/lookup` | Restore the owner's latest matching non-expired conversation. |
+| `GET /api/analysis-chat/sessions/{id}` | Read the owner's current conversation. |
+| `POST /api/analysis-chat/sessions/{id}/messages` | Run one bounded follow-up and return the final transcript. |
+| `POST /api/analysis-chat/sessions/{id}/messages/stream` | Start or reconnect to a turn through SSE progress. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/cancel` | Cancel one active owner-bound turn. |
-| `POST /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Start one authenticated, explicitly requested causal remediation investigation. Requires exact pattern and causal-group hashes plus `Idempotency-Key`. |
-| `GET /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Read the safe current status for one exact causal group. Requires exact hashes as query parameters. |
-| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/requests` | Admit one exact JUnit chat finding for persisted asynchronous Fix preview generation. Returns `202 Accepted` with an owner-bound action request. |
-| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview` | Generate a legacy pattern chat-to-fix preview synchronously. Requires the existing verified source fields. |
-| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/correction/preview` | Preview an evidence-backed proposed correction. |
-| `POST /api/analysis-corrections/confirm` | Explicitly confirm a preview token and publish the correction overlay. |
-| `POST /api/analysis-corrections/{id}/revoke` | Revoke a correction and restore the original analysis. |
-| `GET /healthz` | Liveness and readiness probe. |
-| `GET /` | The built SPA, when `-static-dir` is set, with deep-link fallback to `index.html`. |
-| `GET /api/failures/{id}/eligibility` | Admin-gated deterministic source preflight without draft generation. |
-| `POST /api/failures/{id}/create-issue/preview` | Admin-gated: render the exact GitHub issue for one failure without filing it. Enabled only when actions are configured. |
-| `POST /api/failures/{id}/propose-fix/preview` | Admin-gated: generate and render the exact draft fix PR for one failure without opening it. Registered only when `features.fix_prs` is true. |
-| `POST /api/actions/confirm` | Admin-gated: file the issue or open the PR previewed under the posted `{"token":...}`. |
-| `POST /api/failures/{id}/{action}/requests` | Create a persisted asynchronous issue or fix draft request. Pass `supersedes_request_id` to atomically replace an active request. |
-| `GET /api/action-requests/{id}` | Read the owning admin's pending, ready, failed, or confirmed request. |
-| `POST /api/action-requests/{id}/confirm` | Post the exact persisted ready draft. |
+| `POST /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Start an explicit read-only causal-group source investigation. |
+| `GET /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Read its safe current state. |
+| `GET /api/failures/{id}/eligibility` | Run deterministic action eligibility and pinned-source preflight without generating a draft. |
+| `POST /api/failures/{id}/create-issue/preview` | Preview an issue without filing it. |
+| `POST /api/failures/{id}/propose-fix/preview` | Preview a Fix PR without opening it. Registered only when Fix is enabled. |
+| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/requests` | Admit an exact-JUnit chat finding for asynchronous Fix preview generation. |
+| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview` | Legacy synchronous pattern chat-to-fix preview. |
+| `POST /api/failures/{id}/{action}/requests` | Create a persistent asynchronous issue or Fix draft request. |
+| `GET /api/action-requests/{id}` | Read the owner's pending, ready, failed, cancelled, or confirmed request. |
+| `POST /api/action-requests/{id}/confirm` | Confirm the exact persisted ready draft. |
 | `POST /api/action-requests/{id}/cancel` | Cancel a pending or ready request. |
-| `POST /api/failures/{id}/resolve` | Admin-gated: mark a recurring pattern resolved at its latest-build watermark. |
-| `POST /api/failures/{id}/unresolve` | Admin-gated: remove the resolved marker. |
-
-Analysis-chat message requests may include `"fix_intent": true` when the turn is
-being initiated specifically for an exact JUnit Fix flow. The server validates
-the current analysis identity, immutable configured source revision, and verified
-source paths before contacting the provider. Omit the field for normal analysis
-chat, which remains available when Fix source eligibility is absent.
-
-## Capability seam
-
-Recurring-pattern deterministic failures are retained in the private AI cache under an exact-input identity. Authenticated servers expose only the sanitized subset through `/api/pattern-diagnostics`: the final category, fixed validation stage and code, bounded parser counters, repair stage and count, and cooldown times. The endpoint never returns prompts, model responses, citations, artifact paths, repository source, or model prose. Legacy cooldown entries remain valid and appear without diagnostics until a new exact-input failure is recorded.
-
-The fetcher writes aggregate progress to `.fetch-status/status.json` and the last 20 terminal pass summaries to `.fetch-status/history.json` on the shared data volume. On POSIX filesystems the directory is mode `0700` and both files are mode `0600`. Some RWX filesystems enforce permissions at mount level, so an unsupported per-file `chmod` does not invalidate a successful atomic write. Private HTTP filtering remains mandatory, and the `/data/*` file server rejects the hidden directory. Authenticated servers expose the versioned aggregate status and an identity-free summary of the latest 10 passes through `/api/fetch-status`, with `Cache-Control: no-store`.
-
-Analysis progress separates accepted private-cache hits, compatible retained results, freshly completed analyses, and cache misses. Aggregate cache rejection categories cover missing, expired, below-floor, critique, or malformed entries. Recent-pass summaries include only pass type, timestamps, duration, aggregate reuse and Task counts, retries, outcome, and publication state. Pattern progress includes accepted cache hits, deterministic failures suppressed by cooldown, fresh retries after cooldown expiry, retained last-known-good counts, separate bounded full-attempt and transient retry counts, ambiguity-repair counts, repair outcomes, and a safe final failure category. Raw errors, Task mappings, run or pass IDs from history, artifact identities, prompts, provider bodies, and filesystem paths are not included. The frontend polls this endpoint without overlapping requests, backs off after failures, and stops polling when the component unmounts.
-
-Post-publication status can include a bounded `follow_up` object with `notifications`, `remediation`, `automatic_issues`, and `automatic_fix_prs`. Component states are `running`, `completed`, `skipped`, `disabled`, `failed`, or `cancelled`. Skip reasons are limited to `not-configured`, `no-work`, and `dependency-failed`. Failed components expose only fixed codes and summaries: `notification-credentials`, `notification-configuration`, `notification-delivery`, `notification-state-persistence`, `remediation-processing`, `automatic-issues`, and `automatic-fix-prs`. Raw SMTP, GitHub, runtime, URL, credential, and state errors are never persisted in fetch status or returned by the API.
-
-The frontend discovers its mode by probing `/api/capabilities`:
-
-- In static Pages mode the endpoint does not exist, the probe fails, and the
-  frontend stays in read-only static mode.
-- In server mode the descriptor is present, and the frontend lights up only the
-  features it advertises.
-
-Interactive features are additive and gated behind this descriptor, so the same
-build serves both targets. All `/data/*.json` schemas stay byte-compatible.
-
-## Analysis chat API
-
-The server can expose an authenticated, read-only conversation API for a single
-published test analysis or recurring failure pattern. Set `ANALYSIS_CHAT_ENABLED=1` with `-project-dir`,
-`AUTH_MODE`, `AI_TOKEN`, and the normal AI provider configuration. Chat mode
-disables GitHub actions by default and does not require `BOT_TOKEN`. Set
-`ACTIONS_ENABLED=1` only when the same server should expose write actions. The server
-then advertises `features.analysis_chat: true`. Static Pages deployments do not
-advertise or serve the API. In the Helm chart, set `server.chat.enabled=true`
-alongside `ai.enabled=true`; authentication uses the settings under
-`server.actions`, but write actions remain disabled.
-
-Create a session by posting the selected analysis identity with a unique
-`Idempotency-Key` header:
-
-```json
-{
-  "job_id": "periodic-demo",
-  "build_id": "123",
-  "test_name": "TestCluster",
-  "suite_name": "cluster lifecycle",
-  "class_name": "e2e",
-  "junit_file": "junit_01.xml",
-  "analysis_generated_at": "2026-07-23T12:00:00Z"
-}
-```
-
-`suite_name`, `class_name`, and `junit_file` disambiguate duplicate test
-names. `analysis_generated_at` is
-optional, but including it prevents a conversation from silently attaching to a
-newer analysis after the page was loaded. A mismatch returns `409 Conflict`.
-The lookup endpoint accepts the same reference and returns `204 No Content`
-when that admin has no live matching session. The dashboard uses it on mount so
-reloads and navigation restore the transcript from shared server storage.
-
-For an analyzed build failure that has no failed JUnit case, include the typed
-source and omit `junit_file`:
-
-```json
-{
-  "job_id": "periodic-demo",
-  "build_id": "123",
-  "test_name": "Prow job execution",
-  "source": "build",
-  "suite_name": "Prow",
-  "class_name": "job",
-  "analysis_generated_at": "2026-07-30T12:00:00Z"
-}
-```
-
-Build references require `source: "build"` and reject `junit_file`. Omitting
-`source` retains the legacy JUnit-reference contract and cannot resolve a build
-subject.
-
-For a recurring pattern, post its stable ID and complete content hash instead:
-
-```json
-{
-  "scope": "pattern",
-  "job_id": "periodic-demo",
-  "pattern_id": "4d8f...",
-  "pattern_hash": "8f6a..."
-}
-```
-
-Pattern sessions snapshot the published summary and legacy compatibility fields,
-plus bounded recurrence classification, causal groups, unclassified builds,
-lifecycle state and reason, and safe public remediation-investigation state.
-Private remediation evidence, prompts, source excerpts, provider data, usage,
-and target hypotheses are not copied into chat context. The read-only artifact
-tools expose at most three affected builds under
-`builds/<build-id>/<artifact-path>`. Selection first gives each repeated causal
-group one current build when capacity permits, then fills remaining slots with
-the newest shared builds. Every causal group remains in the textual context even
-when it has no artifact slot. A changed hash returns `409 Conflict`.
-Pattern conversations cannot be promoted as test-analysis corrections.
-Recurrence-classified causal-group patterns also remain blocked from chat-to-fix;
-only legacy action-capable pattern sessions can use the existing fix bridge.
-
-An exact failed JUnit session may use one successful assistant response for a Fix
-PR preview when that turn has at least one validated current-turn artifact
-citation. The server binds the project, job, build, canonical test identity,
-analysis generation and content hash, session, request, owner, repository,
-revision, and source-verification hash. It resolves the repository revision only
-from immutable build metadata, verifies the published source paths at that
-revision, and requires that revision to remain the target branch head during
-preview and confirmation. The coding runtime receives the selected analysis,
-chat answer, artifact citations, and verified source paths, but not the rest of
-the conversation or a GitHub credential. A changed analysis, response, citation,
-source path, repository, revision, or target branch invalidates the preview.
-The existing `/api/actions/confirm` request remains a separate explicit step.
-In the dashboard, a systemic recurring-pattern card with a published content
-hash renders the same **Chat with agent** control as a test analysis when at
-least one affected build remains in the current job data window. Pattern
-conversations use cross-build suggested questions, hide test-only correction
-controls, and link build-qualified citations back to the matching affected run
-when a web URL is available.
-Job-detail and flakiness writers always backfill the canonical content hash and
-preserve an existing stable pattern ID. This upgrades cached or older pattern
-results without clearing the analysis cache or rerunning pattern analysis.
-Older deployed JSON that still lacks the hash shows an explicit stale-data
-notice instead of silently hiding chat until the next controlled data refresh.
-
-Post `{"message":"What evidence supports this?"}` to the session's `messages`
-endpoint with a new `Idempotency-Key` for that question. Retrying either POST
-with the same key and the same body returns the original session state without
-creating another session or model turn. Reusing a key for different input
-returns `409 Conflict`.
-
-The JSON endpoint waits for the final transcript. The streaming endpoint emits
-validated internal progress followed by a `session` event. The frontend groups
-those phases into Investigating, Validating evidence, and Finalizing, with a
-separate cancelling state. Progress includes the turn start time, elapsed-time
-anchor, bounded validation retry count, and authoritative `turns_used` and
-`max_turns`. Reconnecting with the same idempotency key follows the already-running
-turn on any replica.
-
-The response contains the full transcript. User messages include the accepted
-request ID so the frontend can reconcile a response lost after the server
-committed it. Every assistant response requires `answer` and `citations`. An
-`assessment` of `supports`, `challenges`, or `inconclusive` is optional, as is a
-complete proposed revision for a challenges response. Normal follow-up answers
-do not need either optional field. Citations may be empty when the question is
-answerable from the published context. A question that explicitly asks to
-inspect artifacts, build logs, JUnit output, or test output must complete a
-content-bearing read, tail, or grep and return a validated citation. If the
-first draft does not acquire evidence, the agent receives one bounded
-Tool-enabled repair opportunity before the turn fails safely. A proposed
-revision does not alter `jobs/*.json` or the published analysis. When a grep
-result supplies source line numbers, the server verifies the selected range and
-reconstructs the exact public quote from current-turn evidence.
-While a turn is running, the owner-safe response also includes its request ID,
-question, phase, and update time. A reloaded client reconnects with the same
-request ID, and can still cancel it from another server replica.
-Every session response also includes `turns_used` and `max_turns`. These are the
-same admitted-attempt values used by server enforcement. Pending, successful,
-failed, cancelled, and unknown-outcome requests consume an attempt once. An
-idempotent replay does not consume another attempt, while an explicit retry with
-a new request ID does.
-
-Sessions are persisted under `ANALYSIS_CHAT_STATE_DIR`, bound to the
-authenticated login, limited to ten admitted attempts including failed turns,
-and expire after two hours of inactivity by default. A completed or failed turn
-refreshes the expiry. The state file is private and excluded
-from `/data/*`. Replicas coordinate short state transitions with an advisory
-lock on the shared filesystem, while model calls run without holding that lock.
-Session lookup resolves the current published analysis before matching the
-owner's latest transcript, so changed test timestamps and pattern hashes do not
-attach an older conversation.
-The shared RWX volume must support advisory file locking, atomic rename, and file and directory synchronization.
-The persisted file contains private transcripts and selected failure context, so
-volume access and backups must be treated as operator-private data.
-
-Application-generated terminal errors carry a private outcome header so the
-frontend can distinguish them from an ingress-generated `502` or `504` after a
-committed response. An in-flight turn carries a lease longer than the HTTP model
-timeout. If a pod
-dies before recording the result, another replica marks that request outcome
-unknown instead of running the same idempotency key twice. The client reloads
-the authoritative session before allowing an explicit retry. Startup cleanup,
-a lifecycle-bound periodic cleanup loop, and request-time cleanup remove
-expired sessions from the persisted file and release global and per-owner
-capacity.
-Finalization prefers a strict JSON Schema response and falls back to bounded
-plain-JSON extraction for compatible providers. At most one response-contract
-retry is admitted, and the retry receives only safe validation feedback. Model
-response parsing scans a bounded set of complete JSON objects, including fenced
-output and provider metadata wrappers, and validates each candidate against the
-strict response and evidence contracts. A previously validated draft may be
-retained when a later finalization response is unusable. Citation
-paths, quotes, and line ranges still require evidence read during that turn.
-
-Terminal failures use safe categories: provider request failed, model response
-could not be validated, evidence citation validation failed, request timed out,
-or request cancelled. Provider bodies, prompts, tokens, private paths, and
-artifact content are not returned. Content-free logs record the failure stage,
-model-call and provider-attempt counts, HTTP status, JSON candidate count, and
-validation category.
-State version 2 stores the active question as an additive optional field so old
-and new replicas can share the file during a rolling upgrade. An old writer may
-drop that field, in which case the new client follows the request by polling
-until it completes or becomes terminal. Version 1 files still migrate without
-dropping completed transcripts. The bridge also accepts the short-lived version
-3 format from the preceding release and rewrites it as version 2 without
-dropping the active question. Version 3 replicas already accept version 2, so
-the mixed rollout remains readable in both directions.
-
-Operational settings:
-
-| Environment variable | Default | Purpose |
-| --- | --- | --- |
-| `ANALYSIS_CHAT_STATE_DIR` | `<data-dir>/.analysis-chat` | Private persisted session state and lock file. A path beneath the public data root must use a dot-prefixed top-level directory. |
-| `ANALYSIS_CHAT_SESSION_TTL` | `2h` | Conversation retention. |
-| `ANALYSIS_CHAT_MAX_SESSIONS` | `128` | Deployment-wide live-session cap. |
-| `ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER` | `8` | Per-login live-session cap. |
-| `ANALYSIS_CHAT_MAX_ACTIVE_TURNS_PER_OWNER` | `2` | Concurrent background turns per login. |
-| `ANALYSIS_CHAT_REQUESTS_PER_MINUTE` | `10` | Newly admitted turns per login in a rolling minute. |
-| `ANALYSIS_CHAT_TIMEOUT` | `2m` | Background turn bound. Slow local providers may increase it up to `30m`. |
-
-The agent uses only the configured read-only filesystem and Kubernetes artifact
-tools. It has no shell, repository write, or GitHub action capability.
-Cancellation is idempotent for completed requests. A disconnected streaming
-client does not cancel the server-owned turn; it can reconnect with the same
-request ID. Server shutdown and explicit cancellation stop the background model
-context and persist a terminal cancelled outcome.
-
-## Causal remediation investigation API
-
-Set `CAUSAL_REMEDIATION_INVESTIGATION_ENABLED=true` to expose the authenticated
-read-only operation. This feature is independent of analysis chat and does not
-enable GitHub writes. It uses the existing AI provider, read-only artifact
-backend, analysis source repository, and `ai.fix_prs` destination allowlist.
-
-The POST body contains only `pattern_hash`, `causal_group_hash`, and an optional
-`refresh` boolean. The route provides the job, pattern, and causal-group IDs.
-`Idempotency-Key` is required. Requests fail closed when published hashes,
-lifecycle, builds, source revisions, provider identity, or destination policy no
-longer match current data. Starts are rejected while a fetch/watch refresh is
-running.
-
-One operation may actively investigate or verify at a time per server. Other
-exact cache keys remain queued. The overall operation is bounded by
-`CAUSAL_REMEDIATION_INVESTIGATION_TIMEOUT`, defaults to 10 minutes, and is
-cancelled during server shutdown. A restart loses in-memory queued and active
-state, but never persists or publishes a partial result. Completed private cache
-entries are reverified before their safe state is returned.
-
-The GET response contains only the causal-group ID and content hash, safe state,
-fixed concise reason, optional verified target identity, and completion time.
-States are `not_investigated`, `queued`, `investigating`, `verifying`,
-`actionable`, `already_fixed`, `external_dependency`,
-`environment_or_infrastructure`, `mitigation_only`, `insufficient_evidence`,
-`failed`, or `stale`. Evidence catalogs, excerpts, prompts, raw model output,
-traces, provider coordinates, usage, cache keys, and private errors are never
-returned.
-
-Capabilities advertise `causal_remediation_investigation` and
-`causal_remediation_investigation_authenticated`. File Issue and Fix PR remain
-blocked for causal-group patterns through `models.PatternAllowsActions`.
-
-Environment variables:
-
-| Environment variable | Default | Purpose |
-| --- | --- | --- |
-| `CAUSAL_REMEDIATION_INVESTIGATION_ENABLED` | `false` | Enable the authenticated start/status operation. |
-| `CAUSAL_REMEDIATION_INVESTIGATION_TIMEOUT` | `10m` | Bound queue wait, model investigation, and deterministic verification. Maximum 30m. |
-| `CAUSAL_REMEDIATION_INVESTIGATION_MAX_OPERATIONS` | `256` | Bound retained in-memory safe status records. |
-| `SOURCE_INVESTIGATION_GITHUB_TOKEN` | empty | Optional read-only source token for private repositories. |
-
-## Analysis correction overlays
-
-Set `ANALYSIS_CORRECTIONS_ENABLED=1` together with analysis chat to allow
-administrators to promote a structured `challenges` response. Only the agent's
-validated `proposed_revision` and verified citations are eligible. The server
-persists a private 15-minute preview, requires an explicit confirmation request,
-and writes active or revoked corrections to `analysis_corrections.json`.
-
-Corrections never modify `jobs/*.json`. The frontend applies an active correction
-only while the exact job, build, test identity, and `analysis_generated_at`
-still match. A newer generated analysis makes the overlay visibly stale and
-restores the generated conclusion. Revocation also restores the original while
-the private ledger retains proposer, confirmer, revoker, session, request, and
-audit timestamps.
-
-## Private analysis traces
-
-When admin authentication is configured, the server advertises
-`features.analysis_traces: true` and adds a **Traces** page. The page shows the
-bounded, content-free metadata from `ai_traces.json`, including response IDs,
-provider API mode, request duration and usage, tool names, compaction, critique,
-and finalization decisions. The trace API and download include content-free
-pattern candidate counts, scan truncation, safe stages, safe failure categories,
-and repair outcomes. Each trace links back to the matching test and build.
-
-Trace responses and downloads include the safe identity persisted by the
-fetcher or worker that produced the trace snapshot. This keeps the diagnostic
-artifact tied to its producer across server rollouts. Legacy files report an
-explicit `legacy` and `unknown` fallback instead of borrowing the serving
-process identity. Registry credentials and cluster metadata are never included.
-
-The API decodes the known trace schema rather than serving the file directly.
-Requests are capped at 64 MiB, responses use `Cache-Control: no-store`, and both
-endpoints require the same admin identity used by actions. A missing trace file
-returns 404 and the page renders an empty state. Static Pages deployments never
-advertise the feature and continue stripping `ai_traces.json` before publication.
-
-## Chat-to-fix bridge
-
-When analysis chat and write actions are both configured for the same source and
-Fix PR repository, the server advertises `features.chat_fix: true`. It advertises
-`features.fix_prs: true` only for Agent Sandbox and advertises
-`features.junit_chat_fix: true` when that runtime is configured.
-
-An exact JUnit client admits one successful assistant response for asynchronous
-preview generation:
-
-```http
-POST /api/analysis-chat/sessions/{sessionID}/requests/{chatRequestID}/fix/requests
-Content-Type: application/json
-
-{
-  "instruction": "<optional-maintainer-direction>"
-}
-```
-
-The request returns `202 Accepted` with an `analysis-fix` action request. The
-client reads its owner-bound state through `GET /api/action-requests/{id}` until
-it becomes `ready` or reaches a terminal failure. A ready request carries the
-normal confirmable fix preview and token.
-
-The exact JUnit form accepts only the optional instruction. Before returning,
-the server rebuilds the answer, proposed revision, and artifact citations from
-owner-bound private chat state. The response must belong to a test-scoped
-session, have completed successfully, include validated current-turn artifact
-citations, and still match the selected published analysis. Passing, skipped,
-build-level, unavailable, stale, ambiguous, or rejected analyses are not
-eligible.
-
-The server resolves the configured source repository and full commit from the
-selected build metadata. The chat session retains a full analysis content hash
-covering failure content, artifact citations, verified source links, critique
-state, and analysis provenance, plus that repository and revision. It verifies
-the published source paths at the pinned revision and requires the selected
-finding to name an explicit backticked source symbol. `actionverify`
-deterministically records whether each symbol is present in the bounded source,
-and the preview stores hashes of both the source snapshot and this grounding
-result. The source and Fix PR repositories must match. Preview generation also
-requires the pinned commit to remain the default-branch head. Confirmation
-rechecks the chat response hash, full analysis hash, source identity, source
-verification hash, symbol-grounding hash, destination configuration, and branch
-head before any GitHub write.
-
-After admission, generation runs under the action service's server-owned timeout
-instead of the initiating HTTP context. An Azure Front Door timeout, closed
-dialog, browser disconnect, or lost response therefore does not cancel an
-already admitted Agent Sandbox. The browser keeps the action request ID and
-optional maintainer instruction in same-origin session storage, reconnects by
-polling, and can safely repeat the same admission request if the initial response
-was lost. The server reuses the active or ready request with the same owner-bound
-preview-request hash rather than starting a second Sandbox.
-
-Generation receives only the bounded published analysis, selected answer,
-optional proposed revision, artifact citations, verified source paths and
-identity, and optional maintainer instruction. It never receives the complete
-transcript or a GitHub credential in the Agent Sandbox request. The executor runs
-the configured validators and final staged diff check. The server validates their
-complete ordered results and independently reconstructs the canonical patch at
-preview and confirmation without executing target code locally.
-
-Legacy action-capable recurring patterns keep the synchronous
-`/fix/preview` endpoint and their existing request fields:
-
-```json
-{
-  "pattern_id": "<recurring-pattern-id>",
-  "pattern_hash": "<recurring-pattern-hash>",
-  "source_request_id": "<successful-actionable-source-request-id>",
-  "instruction": "<optional-maintainer-direction>"
-}
-```
-
-That legacy form still requires `PatternAllowsActions`, shared-build membership,
-a completed verified actionable source result, and its validated remediation
-target. Causal-group patterns remain action-free.
-
-Post the ready exact JUnit preview token, or the legacy synchronous preview
-token, separately to `/api/actions/confirm` to open the exact reviewed draft.
-Preview and confirmation state remain owner-bound, CSRF-protected, persisted
-across replicas and restarts, and deduplicated by the existing Fix PR marker.
-Retrying one exact preview input reuses its persisted action-request and preview
-identities instead of creating duplicate Sandbox, preview, or PR state.
-
-The dashboard exposes **Use this finding in a fix proposal** for an exact failed
-JUnit analysis only after the selected response has current-turn artifact
-evidence, an explicit backticked source symbol, and published verified immutable
-source paths. It shows a safe reason when any requirement is missing. Legacy
-pattern chat keeps its existing pattern and source-result review UI.
-
-## Admin-gated actions
-
-The write endpoints let an admin file an issue or draft a fix PR for a specific
-failure on demand, reusing the same engines the scheduled fetch uses. They are
-off unless the server is started with `-project-dir` and `AUTH_MODE` selects an
-auth mechanism. When enabled, the server sets `features.actions: true` for
-resolve controls. It also sets `features.action_requests: true` when the action
-runner supports persistent drafts, which enables the issue and fix controls.
-
-Before rendering File issue or Propose fix, the frontend calls the authenticated
-eligibility endpoint. The server resolves the current published subject and runs
-the same deterministic pinned-source verification used by draft generation. The
-endpoint retains the coarse `state` field for older clients and adds a stable
-`code` explaining the decision. Codes include `recovered`, `observing`,
-`verified_fixed`, `retained_stale`, `non_systemic`, `evidence_unavailable`,
-`investigation_required`, `contract_generation_failed`, `unsafe_remediation`,
-`already_present`, and `source_verification_inconclusive`. The capability
-response advertises the supported code list. Synchronous action errors and
-persisted asynchronous requests use the same code contract, while older payloads
-without a code remain readable. A shared remediation policy also blocks destructive CRD
-conversion changes and any recommendation that falsely claims admission webhook
-cleanup disables or bypasses CRD conversion. Safe admission cleanup must preserve
-conversion availability. The endpoint does not call a model, create a Sandbox,
-persist an action request, or send draft-ready email. Draft endpoints, restored
-previews, and confirmation repeat the policy and remain authoritative.
-
-File issue and Mark resolved work in the standard server image. Agent Sandbox
-uses the smaller `remote-fixer` image because the dashboard needs git only to
-reconstruct and validate the returned patch.
-
-Systemic-pattern email links can deep-link into this flow with the public pattern
-id and requested action. The link itself is an inert GET. After authentication,
-the frontend requires an explicit **Generate draft** click before creating a
-persistent action request.
-
-The frontend review flow posts to `/api/failures/{id}/{action}/requests`, polls
-the returned request, and shows the exact issue or draft fix PR before anything
-is posted to GitHub. Refining a ready draft creates a replacement request and
-atomically cancels the superseded request. The old request exposes
-`superseded_by` so clients can recover the replacement after a lost response.
-Confirmation posts the persisted
-draft through `/api/action-requests/{id}/confirm`. Requests are bound to the
-admin who generated them and expire after 24 hours.
-
-The synchronous `*/preview` and `/api/actions/confirm` endpoints expose the same
-two-phase contract for direct API clients. Their preview token is single-use,
-expires after 15 minutes, and is bound to the admin who generated it.
-
-Two auth modes, both keeping the admin allowlist (`ADMIN_LOGINS`) and
-using a server-held `BOT_TOKEN` for optional GitHub writes:
-
-- **`oauth`**: the operator registers a GitHub OAuth App. Admins sign in with
-  GitHub using the identity-only `read:user` scope. The encrypted, httpOnly
-  session cookie stores the login but not the OAuth access token. A separate
-  `BOT_TOKEN` performs issue and pull request writes when actions are enabled.
-- **`proxy`**: an upstream SSO proxy (oauth2-proxy, IAP, ...) authenticates the
-  user and passes their identity in a trusted header (`AUTH_PROXY_HEADER`, e.g.
-  `X-Auth-Request-Email`). The same bot-token write model is used.
-
-The dashboard audit state records the initiating admin login. GitHub records the
-bot account as the issue or pull request actor. Scope the bot credential to only
-the repositories and operations required by the configured action targets.
-
-Successful synchronous issue and fix confirmations append a durable private
-record to `.action-write-audit/state.json`. Each record links the initiating and
-confirming login, action kind, failure and target repository, result URL,
-initiation and confirmation timestamps, and whether the result was written in
-the initial attempt or recovered through reconciliation. The file uses private
-permissions and contains no OAuth or bot token. Its dot-prefixed parent directory
-is rejected by both pre-v5 and current no-list handlers before basename checks,
-so the ledger remains private during a server rollback. Chat-to-fix uses the
-same preview and confirmation path, so it receives the same audit coverage.
-
-The `Authenticator` is a seam, so the two modes share one code path and a third
-mechanism can be added without touching the handlers. Sessions are stateless
-(encrypted cookie), CSRF is covered by a `SameSite=Lax` cookie plus an Origin
-check, and tokens are never logged or returned to the browser. Behind a reverse
-proxy that serves a public hostname but forwards a different `Host` to the
-server (e.g. Azure Front Door), the Origin check needs the public origin: in
-oauth mode the `OAUTH_REDIRECT_URL` host is trusted automatically, and
-`TRUSTED_ORIGINS` adds any others (required in proxy mode).
-
-### Auth endpoints (oauth mode)
-
-| Path | Purpose |
-| --- | --- |
-| `GET /api/auth/login` | Redirect to GitHub to sign in. |
-| `GET /api/auth/callback` | OAuth callback; establishes the session. |
-| `GET /api/auth/user` | The signed-in admin, or 401. |
+| `POST /api/actions/confirm` | Confirm a short-lived synchronous preview token. |
+| `POST /api/failures/{id}/resolve` | Mark an eligible recurring pattern resolved at its current watermark. |
+| `POST /api/failures/{id}/unresolve` | Remove the resolved marker. |
+| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/correction/preview` | Preview an evidence-backed analysis correction. |
+| `POST /api/analysis-corrections/confirm` | Confirm and publish the correction overlay. |
+| `POST /api/analysis-corrections/{id}/revoke` | Revoke the overlay and restore the original analysis. |
+| `GET /api/auth/login` | OAuth mode: start GitHub sign-in. |
+| `GET /api/auth/callback` | OAuth mode: establish the encrypted session. |
+| `GET /api/auth/user` | Return the signed-in admin or `401`. |
 | `POST /api/auth/logout` | Clear the session. |
+| `GET /healthz` | Liveness and readiness. |
+| `GET /` | Serve the built SPA with deep-link fallback when `-static-dir` is set. |
 
-### Setting up oauth mode
+## Capability contract
 
-1. Register a GitHub OAuth App at
-   <https://github.com/settings/developers> -> **New OAuth App** (or under an
-   org: **Settings -> Developer settings -> OAuth Apps**). Set:
-   - **Application name**: anything, e.g. `myproject-dashboard`.
-   - **Homepage URL**: your dashboard URL, e.g. `https://dashboard.example.com`
-     (or `http://localhost:8080` for local testing).
-   - **Authorization callback URL**: the dashboard URL plus
-     `/api/auth/callback`, e.g. `https://dashboard.example.com/api/auth/callback`
-     (or `http://localhost:8080/api/auth/callback` locally). This must match
-     `OAUTH_REDIRECT_URL` exactly.
-2. Click **Register application**, then **Generate a new client secret**. Copy
-   the client ID and secret.
-3. Generate a session key (any long random string), e.g.
-   `openssl rand -base64 32`.
-4. If actions are enabled, create a bot credential for `BOT_TOKEN`. Use the
-   narrowest token supported by the configured issue and fix modes. Fine-grained
-   tokens work for many direct-repository deployments; fork-based fixes may need
-   a classic PAT as described in [Fix PRs](fix-prs.md#identity-cla-and-the-token-read-this-first).
-   Chat only does not require this credential.
-5. Run the server with these env vars:
+`GET /api/capabilities` is the only frontend feature-discovery seam. It exposes
+safe engine identity and additive flags for authentication, chat, action
+requests, issue actions, Fix actions, corrections, traces, usage, and related
+server features. The UI must not infer write capability from a visible button or
+from `/data/*` content.
 
-   | Variable | Purpose |
-   | --- | --- |
-   | `AUTH_MODE=oauth` | Select OAuth login. |
-   | `OAUTH_CLIENT_ID` | The App's client ID. |
-   | `OAUTH_CLIENT_SECRET` | The App's client secret. |
-   | `OAUTH_REDIRECT_URL` | The callback URL registered above. |
-   | `SESSION_KEY` | Random secret seeding the session-cookie encryption. |
-   | `ADMIN_LOGINS` | Comma-separated GitHub logins allowed to act. |
-   | `BOT_TOKEN` | Required when actions are enabled. Server-held GitHub credential that performs writes. |
-   | `HSTS_ENABLED=1` | Optional; send `Strict-Transport-Security: max-age=31536000` when HTTPS is deployed. |
-   | `COOKIE_INSECURE=1` | Optional; allow the cookie over plain http for local testing only. |
-   | `TRUSTED_ORIGINS` | Optional; extra public origins the CSRF guard accepts (comma-separated) when behind a proxy. The `OAUTH_REDIRECT_URL` host is trusted automatically. |
+Interactive features are independently gated. Analysis chat can be enabled
+without GitHub writes. File Issue can be enabled without Fix. A server may expose
+read-only trace and status views while every action flag remains false.
 
-   ```bash
-   make build-server fe-build
-   AUTH_MODE=oauth COOKIE_INSECURE=1 \
-   OAUTH_CLIENT_ID=<client-id> OAUTH_CLIENT_SECRET=<client-secret> \
-   OAUTH_REDIRECT_URL=http://localhost:8080/api/auth/callback \
-   SESSION_KEY="$(openssl rand -base64 32)" ADMIN_LOGINS=your-login \
-   BOT_TOKEN=<write-token> \
-   ./bin/server -data-dir=frontend/public/data -static-dir=frontend/dist \
-     -project-dir=../myproject-dashboard
-   ```
+The server sends same-origin security headers, denies framing and MIME sniffing,
+limits referrer and device capabilities, and keeps scripts and connections on the
+dashboard origin. MUI runtime styles require inline styles; scripts remain
+strictly external.
 
-   Open <http://localhost:8080>, go to a failing job's pattern, click **Sign in
-   to file issues or fixes**, authorize, and the action buttons appear.
+## Authentication and origin protection
 
-   Helm deployments enable HSTS and secure OAuth cookies by default. The chart
-   accepts insecure cookies only through its explicit local-development value.
+Two authentication modes share the same admin allowlist:
 
-`OAUTH_SCOPE` and `OAUTH_PRIVATE_REPOSITORIES` are no longer supported. OAuth
-always requests `read:user`; grant repository access only to `BOT_TOKEN`. After
-upgrading from per-user repository scopes, every admin must sign out, revoke the
-old OAuth App grant, and sign in again. For a Helm `oauth.existingSecret`, add a
-`BOT_TOKEN` key before enabling actions.
+- `oauth`: a GitHub OAuth App identifies the user with `read:user`. The encrypted
+  httpOnly session cookie stores the login, not the OAuth access token.
+- `proxy`: a trusted upstream SSO proxy authenticates the user and passes the
+  identity in `AUTH_PROXY_HEADER`.
 
-Helm enables HSTS by default and rejects `HSTS_ENABLED` in `server.extraEnv`.
-Disabling HSTS requires an explicit local HTTP acknowledgement through
-`server.development.allowInsecureHTTP=true` or the local OAuth cookie setting.
-The standalone server remains HSTS-off by default so plain HTTP development
-continues to work.
+`ADMIN_LOGINS` controls who may use authenticated features. GitHub writes use a
+separate server-held `BOT_TOKEN`; the signed-in user's identity is never reused
+as the write credential. Audit records keep the initiating admin login, while
+GitHub records the bot or contributor identity that performed the write.
 
-
-The owner-binding change invalidates synchronous preview state versions 1
-through 4 and writes version 5. Generate new previews after upgrading. Rolling
-back to a pre-v5 server is fail-closed because that binary cannot read v5; roll
-forward or move the private `action_preview_state.json` aside before generating
-new previews. Do not reuse old previews after changing OAuth write credentials.
-
-### Setting up proxy mode
-
-Use this when an authenticating proxy (oauth2-proxy, Google IAP, ...) already
-sits in front of the server and injects the signed-in user in a header. The
-server trusts that header, so it must be reachable **only** through the proxy.
+Core settings:
 
 | Variable | Purpose |
 | --- | --- |
-| `AUTH_MODE=proxy` | Select proxy mode. |
-| `AUTH_PROXY_HEADER` | Header carrying the user, e.g. `X-Auth-Request-Email`. |
-| `BOT_TOKEN` | GitHub PAT that performs the writes (bot account). |
-| `ADMIN_LOGINS` | Required comma-separated allowlist of identities that may act. An empty list fails closed. |
-| `TRUSTED_ORIGINS` | Public origin(s) the CSRF guard accepts (comma-separated), e.g. `https://dash.example.net`. Required when the proxy's public host differs from the forwarded `Host`. |
+| `AUTH_MODE` | `oauth` or `proxy`. |
+| `ADMIN_LOGINS` | Comma-separated allowed identities. |
+| `SESSION_KEY` | Random key for encrypted session cookies. |
+| `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_REDIRECT_URL` | GitHub OAuth App coordinates. |
+| `AUTH_PROXY_HEADER` | Trusted identity header in proxy mode. |
+| `BOT_TOKEN` | Optional server-held GitHub write credential. It is not required for read-only chat. |
+| `TRUSTED_ORIGINS` | Additional exact public origins accepted for state-changing requests. |
 
-## Running locally
+Register the OAuth callback as the dashboard origin plus
+`/api/auth/callback`. `OAUTH_REDIRECT_URL` must match it exactly.
+
+State-changing requests are protected by a `SameSite=Lax` session cookie plus an
+Origin check. When a reverse proxy forwards a different `Host` than the public
+hostname, configure the public origin. OAuth mode trusts the origin in
+`OAUTH_REDIRECT_URL`; proxy mode normally needs `TRUSTED_ORIGINS` explicitly.
+Tokens are never returned to the browser or written to logs.
+
+## Analysis chat
+
+Enable chat only with authentication, the normal provider configuration, and a
+private state directory. Chat is read-only and does not require `BOT_TOKEN`.
+Static Pages deployments do not serve it.
+
+A session is bound to the signed-in owner and one exact current analysis
+identity. Each start or message uses a unique `Idempotency-Key`. Repeating the
+same key and body returns the original state; reusing the key for different
+input fails. Streaming clients may reconnect to an existing server-owned turn.
+Disconnecting does not cancel it, while explicit cancellation and server
+shutdown persist a terminal cancelled outcome.
+
+The model may use only the configured read-only artifact and pinned-source
+capabilities. It has no shell, GitHub write, repository write, or live cluster
+access. A question that explicitly asks for logs, JUnit, test output, or other
+artifact evidence must perform a content-bearing current-turn read and return a
+validated citation. Citation paths, ranges, and quotes are verified against the
+evidence read by that turn.
+
+A proposed correction or Fix finding is still inert model output. Corrections
+require their own preview and confirmation. Exact-JUnit Fix handoff requires the
+separate lifecycle in [Fix PR generation](fix-prs.md#exact-junit-analysis-handoff).
+
+Sessions are stored in private owner-bound state, have bounded admitted turns,
+and expire after inactivity. The state contains transcripts and selected failure
+context, so the RWX volume and backups are operator-private. Replicas require
+advisory locking, atomic rename, and file and directory synchronization.
+
+## Causal remediation investigation
+
+This optional authenticated operation investigates one published causal group
+against pinned source. It is read-only, idempotent, hash-bound, and independent
+of analysis chat. The request fails closed when the published pattern, group,
+build set, source revision, provider identity, or destination policy is stale.
+
+The public response contains only the group identity, safe state, fixed concise
+reason, optional verified target identity, and completion time. Raw source,
+evidence excerpts, prompts, model output, and private cache content remain
+private.
+
+Even an `actionable` investigation does not grant action authority. Causal-group
+patterns remain blocked from File Issue, Fix PR, remediation tracking, and
+resolution by the engine's action policy.
+
+## Admin-gated actions
+
+Actions are disabled unless authentication and a project directory are
+configured. The server first resolves the current published subject and runs the
+same deterministic eligibility, remediation-policy, and pinned-source checks used
+at preview and confirmation.
+
+The common lifecycle is:
+
+1. The owner explicitly requests a draft.
+2. The server creates an owner-bound persistent action request or short-lived
+   synchronous preview.
+3. The UI shows the exact issue or draft PR content and all warnings.
+4. The owner explicitly confirms that exact draft.
+5. The server repeats current-data and policy checks, then performs the write with
+   the configured credential.
+
+Persistent requests survive normal restarts when ready. Unfinished external
+runtime work is reconciled or marked failed. Requests are idempotent and may be
+atomically superseded by a replacement draft. Confirmation never regenerates
+content silently.
+
+File Issue and Mark Resolved use the standard server runtime. Fix generation is
+separate, experimental, and uses Agent Sandbox. Its source, patch, warning,
+regeneration, and confirmation contracts are in [Fix PR generation](fix-prs.md).
+
+Successful GitHub confirmations append a private write-audit record containing
+the initiating and confirming login, action kind, target, result URL, timestamps,
+and reconciliation status. Credentials are not stored.
+
+Email delivery after a draft becomes ready is optional and does not change who
+may review or confirm it. SMTP configuration belongs in
+[Notifications](notifications.md).
+
+## Analysis corrections
+
+A challenged chat response may propose a complete evidence-backed revision.
+Preview validates the current published analysis, correction content, and cited
+evidence without changing `jobs/*.json`. Confirmation publishes a separate
+overlay, and revocation restores the original result. Correction state is
+private operational data and does not rewrite the authoritative analysis cache.
+
+## Private data boundary
+
+Public `/data/*` serving uses an allowlist and rejects private files and hidden
+directories. Private state includes:
+
+- analysis chat transcripts and locks;
+- action requests, preview state, and write audit;
+- correction overlays;
+- analysis traces and pattern diagnostics;
+- fetch status and pass history;
+- AI usage ledgers;
+- remediation-investigation cache;
+- optional Agent Sandbox shadow ledgers.
+
+Authenticated APIs expose only sanitized, purpose-specific views. They never
+return provider credentials, OAuth tokens, bot tokens, prompts, raw model
+responses, unrestricted source, raw artifact content, or private filesystem
+paths.
+
+Usage reports preserve provider-reported versus unavailable token fields and use
+only operator-configured pricing. Trace and diagnostic views contain bounded
+control-flow codes, counts, durations, and safe identities. The server does not
+mount the private Agent Sandbox shadow ledger, and it never enters the public data
+path.
+
+## Run locally
+
+Fetch or copy dashboard data first, then run:
 
 ```bash
-# Fetch data first (see docs/development.md), then serve it:
-make serve                 # builds bin/server, serves frontend/public/data
-
-# Or serve a self-contained build (SPA + data from one origin):
-make build-server fe-build
-./bin/server -data-dir=frontend/public/data -static-dir=frontend/dist
+make serve
 ```
 
-Flags: `-addr` (default `:8080`), `-data-dir` (default `data`), `-static-dir`
-(optional built SPA; empty serves data and API only). Add `-project-dir` plus
-the `AUTH_MODE` env above to enable admin actions.
+For a self-contained local server with development authentication and action
+capabilities:
 
+```bash
+make dev-actions PROJECT_DIR=../<consumer-repo>
+```
 
-## Asynchronous action requests
-
-Email deep links, the in-page issue and fix buttons, and exact JUnit
-chat-to-fix previews use persistent action requests. Generation runs in the
-server process while request metadata and ready drafts are stored in
-`action_request_state.json`. The state file is not served under `/data`.
-Generic requests expire after 24 hours. Ready exact JUnit preview requests use
-the same 15-minute lifetime as their confirmation token. All requests are bound
-to the requesting authenticated login and require the current user's GitHub
-token only when generating or confirming. Raw GitHub tokens are never persisted.
-A server restart marks unfinished pending requests failed and reconciles any
-retained external runtime identity; ready drafts survive and remain reviewable.
-State version 7 adds the private pending exact-analysis context and the
-`analysis-fix` request kind. Older request kinds retain their existing migration
-behavior.
-
-When `notifications.email.action_links` is enabled and the server receives
-`EMAIL_SMTP_PASSWORD`, it emails the configured recipients after a draft becomes
-ready. The review link still requires the same authenticated login that created
-the request.
-
-## Pattern refresh freshness
-
-Each job detail includes additive `pattern_refresh` metadata with `current`, `retained`, `failed`, `not_applicable`, or `unavailable` state. `flakiness.json` carries aggregate counts and a job-status map. Freshness is outside `PatternAnalysis` and does not change pattern identity. Server write actions require `current` state and current evidence. Read-only pattern chat may use retained evidence only while every referenced build remains available.
-
-Analysis-only causal groups publish engine-derived group IDs and content hashes
-plus safe `remediation_investigations` summaries for repeated groups. The initial
-state is `not_investigated`. These summaries contain no raw source excerpts,
-prompts, traces, model responses, or action eligibility and are excluded from
-causal content hashes. There is no causal-group remediation-investigation API or
-capability yet, so the frontend renders status only and existing action endpoints
-continue to reject these patterns.
-
-## AI usage reporting
-
-When `ai.usage.enabled` and authentication are configured, `GET /api/ai-usage`
-merges the private fetcher and server ledgers. The default range is the latest
-30 UTC days. `start` and `end` use `YYYY-MM-DD`, and repeated `feature`
-parameters filter AI features. `GET /api/ai-usage/download` downloads the same
-filtered report. Cost nanounits are serialized as strings. Coverage is
-`complete`, `partial`, or `unavailable`. Additive coverage states identify
-partial token metadata, unreported or unpriced cache writes, external runtimes,
-model-gateway exclusions, legacy coverage gaps, and pricing added after an
-operation. Reports also include safe historical model totals when the source
-ledger recorded them.
-
-The report includes one row for every UTC day in the selected range, including
-explicit empty days. Daily rows carry exact token and request totals, per-feature
-breakdowns, recorded-cost status, current-rate repricing, coverage, and a marker
-for the current partial UTC day. Recorded estimates use the pricing stored with
-each operation. Current-rate estimates use the operator pricing configured when
-the report is requested. Mixed-currency recorded values are not added together;
-their status is `mixed_currency`, while current-rate repricing remains available
-in the current configured currency when token coverage permits it.
-
-
-## AI usage observability
-
-The authenticated report includes the selected model and operator-supplied
-`ai.usage.pricing` rule. Complete, partial, and unavailable coverage distinguish
-fully reported, incompletely reported, and absent token accounting. Raw ledgers
-remain inaccessible through `/data/*`. The JSON response and download preserve
-absent versus reported-zero cache-write counts, keep fetcher and server writers
-separate on disk, and never expose endpoints, prompts, model responses, or
-credentials.
-
-The authenticated Usage page renders the daily cost history as an accessible
-time-series chart plus an exact-value table. The chart is chronological. The
-table defaults to newest-first, can sort by UTC date, and expands each day into
-its feature totals. Narrow layouts use stacked daily cards rather than a clipped
-wide table. Empty and unavailable ranges render terminal messages rather than a
-permanent spinner.
+Development authentication is local-only. Do not expose it as a production
+identity mechanism.

@@ -1,58 +1,73 @@
 # Documentation
 
-Start with guided onboarding, then follow the deployment guide for your chosen
-platform. The remaining references are organized by the point at which most
-users need them.
+Choose the page for your task. First-time users should start with onboarding,
+then follow one deployment guide.
 
-## Get started
+## Start here
 
-- [Onboarding quickstart](onboarding-a-new-project.md)
-- [Onboarding command and behavior reference](onboarding-reference.md)
-- [Agent-driven setup and diagnostic authoring](agent-onboarding.md)
-- [Troubleshooting](troubleshooting.md)
+| Audience | Start page | Next reference |
+| --- | --- | --- |
+| Project contributor | [Onboarding a project](onboarding-a-new-project.md) | [Onboarding automation reference](onboarding-reference.md) |
+| GitHub Pages operator | [GitHub Actions and Pages](github-pages.md) | [Project configuration](project-configuration.md) |
+| Kubernetes contributor | [Kubernetes quickstart](kubernetes.md) | [Kubernetes operator reference](kubernetes-reference.md) |
+| Platform administrator | [Kubernetes platform setup](kubernetes-platform.md) | [Flux GitOps deployment](kubernetes-gitops.md) |
+| Aster contributor | [Development](development.md) | [Testing](testing.md) and [architecture](architecture/in-process-analyzer.md) |
+| Aster maintainer | [Maintainer references](maintainer/README.md) | [Releasing](releasing.md) |
 
-## Deploy
-
-- [GitHub Actions and Pages](github-pages.md)
-- [Kubernetes quickstart](kubernetes.md)
-- [Flux GitOps deployment](kubernetes-gitops.md)
-- [Kubernetes platform setup](kubernetes-platform.md)
-- [Kubernetes operator reference](kubernetes-reference.md)
+Use [Troubleshooting](troubleshooting.md) when an existing deployment is not
+producing expected data.
 
 ## Configure analysis
 
-- [Project configuration](project-configuration.md)
-- [AI providers](ai-providers.md)
-- [Writing the project prompt](writing-prompts.md)
-- [Agentic analysis](agentic.md)
-- [Custom diagnostic skills](skills.md)
+- [Project configuration](project-configuration.md) is the schema reference.
+- [Writing the project prompt](writing-prompts.md) owns prompt structure and
+  cache-generation guidance.
+- [AI providers](ai-providers.md) owns endpoint, model, credential, and protocol
+  compatibility.
+- [Agentic analysis](agentic.md) explains the authoritative tool and evidence
+  loop, quality gates, cache behavior, and operations.
+- [Diagnostic skills](skills.md) documents consumer-owned evidence recipes.
+
+## Deploy
+
+- [GitHub Actions and Pages](github-pages.md) is the public, read-only path.
+- [Kubernetes quickstart](kubernetes.md) is the common in-cluster path.
+- [Flux GitOps deployment](kubernetes-gitops.md) covers generated Flux bundles.
+- [Kubernetes platform setup](kubernetes-platform.md) defines platform ownership,
+  secure runtimes, networking, storage, and Secret boundaries.
+- [Kubernetes operator reference](kubernetes-reference.md) contains detailed
+  chart and lifecycle behavior.
+- [Server mode](server.md) covers endpoints, authentication, chat, and guarded
+  actions.
 
 ## Optional features
 
-- [Optional features overview](optional-features.md)
-- [Server, authentication, chat, and actions](server.md)
-- [Email notifications](notifications.md)
-- [GitHub issues](github-issues.md)
+Core onboarding enables failure analysis only. Add optional features after the
+basic dashboard is healthy.
 
-## Experimental maintainer references
+| Feature | Canonical guide | Boundary |
+| --- | --- | --- |
+| Analysis chat | [Server mode](server.md#analysis-chat) | Authenticated, read-only model conversation over published analysis. |
+| Causal remediation investigation | [Server mode](server.md#causal-remediation-investigation) | Explicit read-only source investigation. It does not enable issue or Fix actions for causal groups. |
+| File Issue and Mark Resolved | [Server mode](server.md#admin-gated-actions) and [GitHub issues](github-issues.md) | Authenticated preview or lifecycle action. GitHub writes use a server-held `BOT_TOKEN`. |
+| Email notifications | [Notifications](notifications.md) | SMTP credentials and routing stay deployment-owned. |
+| Fix PR generation | [Fix PR generation](fix-prs.md) | Experimental, confirmation-gated code writing through Agent Sandbox. |
+| Agent analysis shadow | [Agent Sandbox OpenCode analyzer](maintainer/agent-sandbox-opencode-analyzer.md) | Maintainer-only, private, and non-authoritative. |
 
-These references are for isolated evaluation and maintainer work. They are not
-part of standard onboarding.
+Recommended order:
 
-- [Experimental Fix PR generation](fix-prs.md)
-- [Maintainer reference index](maintainer/README.md)
-- [Causal-group remediation investigation](maintainer/remediation-investigation.md)
-- [Private Agent Sandbox OpenCode analyzer](maintainer/agent-sandbox-opencode-analyzer.md)
-- [Stopped Agent Sandbox causal critic](maintainer/agent-sandbox-causal-critic.md)
+1. Deploy the read-only dashboard and verify current jobs and analysis.
+2. Add authentication and analysis chat if maintainers need interactive review.
+3. Add notifications, issue drafting, or resolution controls as separate needs.
+4. Evaluate Fix PR generation only after the Agent Sandbox platform contract is
+   installed and reviewed.
+5. Run analysis shadows only as an isolated maintainer evaluation. Shadow output
+   never replaces the in-process result.
 
-## Architecture and decisions
+## Contribute and operate
 
-- [In-process failure analyzer architecture](architecture/in-process-analyzer.md)
-- [ADR 0001: Dashboard ownership of analysis policy](architecture-decisions/0001-analysis-runtime-ownership.md)
-
-## Development
-
-- [Contributing](../CONTRIBUTING.md)
-- [Local development](development.md)
+- [Development](development.md)
 - [Testing](testing.md)
 - [Releasing](releasing.md)
+- [Notifications](notifications.md)
+- [GitHub issues](github-issues.md)

@@ -47,7 +47,7 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 		"Run discovery as soon as the source is known", "Do not ask for a slug",
 		"separate workspaces, plans, handoffs", "fetch the canonical", "stale or fork-only local engine", "hard scope boundary",
 		"manifest/locations.json", "manifest/consumer-files.sha256", "reports/setup-summary.md",
-		"@v0.9.0-rc.2", "<engine-ref>", "-engine-ref <engine-ref>",
+		"@v0.9.0-rc.3", "<engine-ref>", "-engine-ref <engine-ref>",
 		"exact release tag or full commit SHA", "<engine-repository> = willie-yao/aster",
 		"<engine-repository-url> = https://github.com/willie-yao/aster",
 		"willie-yao/aster/.github/workflows/reusable-deploy.yml",
@@ -65,7 +65,7 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		"api-experimental", "rm -rf", "--no-verify", "backend/cmd/aster@latest",
-		"-engine-ref v0.9.0-rc.2", "recorded engine revision is the commit resolved from that exact ref",
+		"-engine-ref v0.9.0-rc.3", "recorded engine revision is the commit resolved from that exact ref",
 		"configured Aster Git remote", "configured GitHub remote", "available on the configured GitHub remote",
 	} {
 		if strings.Contains(text, forbidden) {
@@ -323,12 +323,12 @@ func onboardingRepoRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", ".."))
 }
 
-func TestAgentOnboardingDocsAdvertiseInstallableSkills(t *testing.T) {
+func TestOnboardingDocsAdvertiseInstallableSkills(t *testing.T) {
 	root := onboardingRepoRoot(t)
 	checks := map[string][]string{
 		"README.md": {
 			"$setup-aster-consumer",
-			"docs/agent-onboarding.md",
+			"docs/onboarding-a-new-project.md",
 		},
 		"docs/onboarding-a-new-project.md": {
 			"## Choose an onboarding method",
@@ -337,17 +337,12 @@ func TestAgentOnboardingDocsAdvertiseInstallableSkills(t *testing.T) {
 			"Non-interactive CLI", "#non-interactive-cli-onboarding",
 			"Manual setup", "#manual-setup",
 			"npx --yes skills@latest add willie-yao/aster",
+			"--skill setup-aster-consumer author-aster-diagnostics",
+			"Use $setup-aster-consumer",
 			"https://github.com/kubernetes-sigs/kueue", "template placeholders",
 			"$author-aster-diagnostics",
-		},
-		"docs/agent-onboarding.md": {
-			"--skill setup-aster-consumer author-aster-diagnostics",
-			"--agent codex",
-			"--global",
-			"Use $setup-aster-consumer", "The agent should not ask again", "-exact-job",
-			"manifest/consumer-files.sha256", "reports/setup-summary.md",
-			"Use $author-aster-diagnostics",
 			"npx --yes skills@latest update",
+			"GitHub settings, Secret writes, and cluster writes remain separate confirmation-gated actions",
 		},
 	}
 	for name, anchors := range checks {
