@@ -91,31 +91,6 @@ func TestBuildPlan_FlagDisabledAIPreservesProviderSeed(t *testing.T) {
 	}
 }
 
-func TestBuildPlan_DeferredDeploymentKeepsSeparatePromptAgent(t *testing.T) {
-	deps, _, _, _ := wizardDependencies("")
-	deps.prompts = &fakePromptBuilder{drafted: true}
-	disabled := false
-	opts := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", OutDir: "out",
-		AIEnabled: &disabled, deferDeploymentAI: true,
-		PromptMode: promptModeAgent, PromptAgentModel: "github-copilot/claude-sonnet-4.6",
-	}
-	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
-	if err != nil {
-		t.Fatalf("buildPlan: %v", err)
-	}
-	if plan.Deployment.AIEnabled || plan.Deployment.Endpoint != "" || plan.Deployment.Model != "" {
-		t.Fatalf("deferred deployment retained provider: %+v", plan.Deployment)
-	}
-	if plan.Prompt.Runtime != "opencode" || plan.Prompt.Model != opts.PromptAgentModel {
-		t.Fatalf("prompt agent = %+v", plan.Prompt)
-	}
-	if strings.Contains(plan.Files["deploy/values.yaml"], opts.PromptAgentModel) {
-		t.Fatalf("prompt agent leaked into deployment values:\n%s", plan.Files["deploy/values.yaml"])
-	}
-}
-
 func TestBuildPlan_DoesNotRetainCredentials(t *testing.T) {
 	deps, _, _, _ := wizardDependencies("")
 	opts := Options{

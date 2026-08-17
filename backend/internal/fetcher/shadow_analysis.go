@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"maps"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,8 +17,10 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/ai/skills"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/fixruntime"
+	"github.com/willie-yao/aster/backend/internal/githubsource"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	"github.com/willie-yao/aster/backend/internal/models"
-	"github.com/willie-yao/aster/backend/internal/orka"
 	"github.com/willie-yao/aster/backend/internal/prowbuild"
 	agentruntime "github.com/willie-yao/aster/backend/internal/runtime"
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
@@ -47,12 +48,8 @@ func normalizeShadowAnalysisOptions(cfg *ShadowAnalysisOptions) {
 	if cfg == nil {
 		return
 	}
-	cfg.Namespace = strings.TrimSpace(cfg.Namespace)
-	cfg.ResultAPI = strings.TrimSpace(cfg.ResultAPI)
-	cfg.AgentRef = strings.TrimSpace(cfg.AgentRef)
 	cfg.AgentVersion = strings.TrimSpace(cfg.AgentVersion)
-	cfg.GitSecret = strings.TrimSpace(cfg.GitSecret)
-	cfg.KubeContext = strings.TrimSpace(cfg.KubeContext)
+	cfg.ModelProvider = modelprovider.Normalize(cfg.ModelProvider)
 	cfg.LedgerPath = strings.TrimSpace(cfg.LedgerPath)
 	if cfg.LedgerPath != "" {
 		cfg.LedgerPath = filepath.Clean(cfg.LedgerPath)
@@ -69,12 +66,6 @@ func validateShadowAnalysisOptions(opts Options) error {
 		return fmt.Errorf("agent analysis shadow requires -ai")
 	case opts.AnalysisRuntime.Type != AnalysisRuntimeInProcess:
 		return fmt.Errorf("agent analysis shadow requires authoritative inprocess analysis")
-	case strings.TrimSpace(cfg.Namespace) == "":
-		return fmt.Errorf("agent analysis shadow namespace is required")
-	case strings.TrimSpace(cfg.ResultAPI) == "":
-		return fmt.Errorf("agent analysis shadow result API is required")
-	case strings.TrimSpace(cfg.AgentRef) == "":
-		return fmt.Errorf("agent analysis shadow Agent reference is required")
 	case strings.TrimSpace(cfg.AgentVersion) == "":
 		return fmt.Errorf("agent analysis shadow Agent version is required")
 	case strings.TrimSpace(cfg.LedgerPath) == "":
@@ -89,13 +80,14 @@ func validateShadowAnalysisOptions(opts Options) error {
 		return fmt.Errorf("agent analysis shadow timeout must be greater than zero and at most 30m")
 	case cfg.Retries < 0 || cfg.Retries > 2:
 		return fmt.Errorf("agent analysis shadow retries must be between 0 and 2")
+	case cfg.OutputLimitBytes < 4<<10 || cfg.OutputLimitBytes > 1<<20:
+		return fmt.Errorf("agent analysis shadow output limit must be between 4096 and 1048576")
 	}
 	if err := agentanalysis.ValidatePrivateLedgerPath(opts.OutDir, cfg.LedgerPath); err != nil {
 		return fmt.Errorf("agent analysis shadow private ledger: %w", err)
 	}
-	resultAPI, err := url.ParseRequestURI(cfg.ResultAPI)
-	if err != nil || resultAPI.Host == "" || resultAPI.User != nil || resultAPI.RawQuery != "" || resultAPI.Fragment != "" || resultAPI.Scheme != "http" && resultAPI.Scheme != "https" {
-		return fmt.Errorf("agent analysis shadow result API must be an absolute HTTP or HTTPS URL without credentials or query parameters")
+	if err := modelprovider.ValidateDeploymentEndpoint(cfg.ModelProvider); err != nil {
+		return fmt.Errorf("agent analysis shadow model provider: %w", err)
 	}
 	return nil
 }
@@ -203,13 +195,15 @@ func (p *pipeline) runShadowCandidate(ctx context.Context, candidate shadowCandi
 		now = p.shadowNow
 	}
 	createdAt := now().UTC()
+	runner, setupErr := p.ensureShadowRunner()
+	agentNamespace, agentRef := p.shadowAgentNamespace, p.shadowAgentRef
 	record := agentanalysis.ShadowRecord{
 		CreatedAt: createdAt.Format(time.RFC3339Nano), Subject: candidate.subject,
 		Source: candidate.source, Authoritative: candidate.authoritative,
 		RequestHash: candidate.requestHash, AuthoritativeHash: candidate.authoritativeHash,
 		Quality: agentanalysis.ShadowQuality{DeterministicStatus: "not_run", SemanticStatus: "unavailable", SemanticReason: "evidence_aware_semantic_judge_not_exposed"},
 		Provenance: agentanalysis.Provenance{
-			Runtime: "orka", AgentNamespace: cfg.Namespace, AgentRef: cfg.AgentRef, AgentVersion: cfg.AgentVersion, GitSecret: cfg.GitSecret,
+			Runtime: "agent-sandbox", AgentNamespace: agentNamespace, AgentRef: agentRef, AgentVersion: cfg.AgentVersion,
 			ContractVersion: agentanalysis.ContractVersion, ToolPolicyVersion: agentanalysis.ToolPolicyVersion,
 			SourceSHA: candidate.source.Revision, Timeout: cfg.Timeout.String(), MaxTurns: cfg.MaxTurns, Retries: cfg.Retries,
 		},
@@ -218,7 +212,7 @@ func (p *pipeline) runShadowCandidate(ctx context.Context, candidate shadowCandi
 	if p.aiProject.SkillSet != nil {
 		skillSetHash = p.aiProject.SkillSet.Hash()
 	}
-	record.AttemptHash = agentanalysis.AttemptIdentity(candidate.subject, candidate.requestHash, candidate.authoritativeHash, skillSetHash, candidate.source, cfg.Namespace, cfg.AgentRef, cfg.AgentVersion, cfg.GitSecret, cfg.Timeout, cfg.MaxTurns, cfg.Retries)
+	record.AttemptHash = agentanalysis.AttemptIdentity(candidate.subject, candidate.requestHash, candidate.authoritativeHash, skillSetHash, candidate.source, agentNamespace, agentRef, cfg.AgentVersion, "", cfg.Timeout, cfg.MaxTurns, cfg.Retries)
 	record.ID = agentanalysis.NewRecordID(candidate.subject, createdAt, record.AttemptHash)
 	claimed, ledgerErr := claim(p.opts.OutDir, cfg.LedgerPath, record)
 	if ledgerErr != nil {
@@ -247,7 +241,6 @@ func (p *pipeline) runShadowCandidate(ctx context.Context, candidate shadowCandi
 	record.Scan = &bundle.Scan
 	record.Evidence, record.PlanIDs = agentanalysis.EvidenceManifest(bundle)
 	record.ComparisonHash = agentanalysis.ComparisonIdentity(record.AttemptHash, bundle)
-	runner, setupErr := p.ensureShadowRunner()
 	if setupErr != nil || runner == nil {
 		record.Status, record.ErrorCode = agentanalysis.ShadowStatusSetupFailed, "runtime_setup"
 		record.TotalDurationMs = time.Since(started).Milliseconds()
@@ -257,11 +250,10 @@ func (p *pipeline) runShadowCandidate(ctx context.Context, candidate shadowCandi
 	}
 	generated, runErr := runner.Generate(shadowCtx, agentanalysis.Spec{
 		Repo:   agentruntime.RepoRef{Owner: candidate.source.Owner, Name: candidate.source.Name, Ref: candidate.source.Revision},
-		Bundle: bundle, SourceReader: orka.NewGitHubSourceReader("", os.Getenv("GITHUB_READ_TOKEN")), MaxTurns: cfg.MaxTurns, Timeout: cfg.Timeout,
+		Bundle: bundle, SourceReader: githubsource.NewReader("", os.Getenv("GITHUB_READ_TOKEN")), MaxTurns: cfg.MaxTurns, Timeout: cfg.Timeout,
 	})
 	record.Provenance = agentanalysis.ProvenanceFromResult(generated)
 	record.Provenance.ToolPolicyVersion = agentanalysis.ToolPolicyVersion
-	record.Provenance.GitSecret = cfg.GitSecret
 	record.CleanupPending = generated.CleanupPending
 	record.CleanupWork = generated.CleanupWork
 	if generated.Analysis.Summary != "" {
@@ -282,21 +274,22 @@ func (p *pipeline) runShadowCandidate(ctx context.Context, candidate shadowCandi
 	return true
 }
 
+// shadowSandboxEnvPrefix reserves the Agent Sandbox environment for the private
+// shadow analysis workload, keeping it distinct from the fix and critic runners.
+const shadowSandboxEnvPrefix = "AGENT_SANDBOX_ANALYSIS_SHADOW_"
+
 func (p *pipeline) ensureShadowRunner() (shadowAnalysisRunner, error) {
 	if p.shadowRunner != nil {
 		return p.shadowRunner, nil
 	}
 	cfg := p.opts.ShadowAnalysis
-	agent, err := orka.NewAgentRuntimeFromEnv(orka.FromEnvConfig{
-		Namespace: cfg.Namespace, AgentRef: cfg.AgentRef, GitSecret: cfg.GitSecret,
-		API: cfg.ResultAPI, Version: cfg.AgentVersion, MaxRetries: cfg.Retries,
-		Purpose: orka.AgentPurposeFailureAnalysis, KubeContext: cfg.KubeContext,
-	})
+	agent, err := fixruntime.NewAgentSandboxProviderRunnerFromEnv(shadowSandboxEnvPrefix, cfg.ModelProvider, cfg.Timeout, cfg.OutputLimitBytes)
 	if err != nil {
 		return nil, err
 	}
+	p.shadowAgentNamespace, p.shadowAgentRef = agent.Namespace(), agent.RuntimeIdentity()
 	p.shadowRunner = &agentanalysis.Runtime{
-		Agent: agent, Name: "orka", AgentNamespace: cfg.Namespace, AgentRef: cfg.AgentRef,
+		Agent: agent, Name: "agent-sandbox", AgentNamespace: p.shadowAgentNamespace, AgentRef: p.shadowAgentRef,
 		AgentVersion: cfg.AgentVersion, Retries: cfg.Retries,
 	}
 	return p.shadowRunner, nil

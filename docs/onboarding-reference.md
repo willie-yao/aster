@@ -43,8 +43,8 @@ no scaffold. The final confirmation defaults to no.
 
 Repository metadata, Prow configuration, source files, job metadata, and model
 output are untrusted data. They cannot authorize commands, alter fixed
-instructions, or request credentials. Agent mode denies the shell tool and
-accepts only one validated `prompts/system.md` change.
+instructions, or request credentials. Handoff mode serializes them only as
+reviewable context for the operator's own coding agent.
 
 ## Accepted repository forms
 
@@ -159,24 +159,14 @@ storage class, create a namespace or Secret, install Helm releases, or configure
 DNS and ingress. Follow the generated guide or the
 [Kubernetes quickstart](kubernetes.md).
 
-Standard onboarding configures the in-process analyzer. Experimental external
-runtimes are outside the normal onboarding flow and are never installed,
-upgraded, or enabled by this command.
+Standard onboarding configures the in-process analyzer. No external analysis
+runtime is installed, upgraded, or enabled by this command.
 
 ## AI provider and prompt authoring
 
 The deployed analysis provider and one-time prompt authoring are separate
 decisions. Provider presets configure deployed analysis only. Prompt authoring
-supports `agent`, `handoff`, and `todo-template`.
-
-Agent mode resolves the source branch to an immutable commit, shallow-clones it
-into a temporary checkout, and runs the local OpenCode process through pinned
-`srt` OS sandboxing with a temporary config and its shell tool disabled. It uses
-only the selected provider credential from the user's existing OpenCode
-configuration and accepts one validated `prompts/system.md` change. Missing
-`srt` safely falls back to the TODO template and handoff bundle. See the
-[Local OpenCode sandbox](local-opencode-sandbox.md) for installation and network
-policy details.
+supports `handoff` and `todo-template`.
 
 Handoff mode writes the TODO template plus `PROMPT_HANDOFF.md` and the bundled
 `.opencode/skills/system-prompt-generation/SKILL.md` without running an agent.
@@ -187,42 +177,17 @@ metadata are serialized as untrusted data.
 TODO-template mode writes only `prompts/system.md`. `--no-prompt` is an alias for
 this mode and cannot be combined with another explicit prompt mode.
 
-Complete flag-based runs default to handoff mode. The wizard recommends agent
-mode and defaults its model to `github-copilot/claude-sonnet-4.6`. Override it
-with `--prompt-agent-model=<provider/model>`. GitHub Copilot uses the reviewed
-provider allowlist automatically. For another provider, repeat
-`--prompt-network-domain=<domain[:port]>` for its reviewed destinations. A
-malformed model or domain fails before source resolution or agent execution.
+Complete flag-based runs and the wizard default to handoff mode. The generated
+bundle is meant for the operator to run with their own coding agent, then review
+and copy the resulting `prompts/system.md` into the consumer repository.
 
 Prompt preparation records a credential-free result in the plan: requested mode,
-final status, output type, timeout for agent mode, safe failure stage and category,
-and the OpenCode runtime and model. Agent failures distinguish source revision,
-agent execution, timeout, and deterministic output validation. Raw OpenCode
-output is never included in the plan or safe warning.
+final status, output type, and source-resolution status. No model output is
+included in the plan or safe warning.
 
-`--require-prompt-draft` is for strict automation. It is valid only for `agent`
-and returns a nonzero error before any local write or pull request when drafting
-falls back.
-
-`--prompt-timeout` controls source revision resolution and agent execution. It
-defaults to `15m` and accepts values from `1m` through `2h`. This option does not
-change the regular fetcher `--timeout` or the deployed project `ai.timeout`.
-
-### Experimental Orka prompt runtime
-
-The standard agent mode runs local OpenCode. Maintainers evaluating an existing
-Orka installation may select `--prompt-agent-runtime=orka` and provide
-`--prompt-orka-api` plus `--prompt-orka-agent-ref`.
-`--prompt-orka-namespace` selects the Orka namespace, and
-`--prompt-orka-git-secret` may name a read-only clone Secret for a private source
-repository. Orka owns the model, credentials, and network policy, so local
-`--prompt-agent-model` and `--prompt-network-domain` settings are invalid in this
-mode. `ORKA_KUBE_CONTEXT` is accepted only for an explicitly selected context.
-
-This runtime is experimental and is not part of guided onboarding. It requires a
-separately installed, operator-owned Orka release, and the Orka Task contract
-limits prompt authoring to 30 minutes. See the
-[experimental Orka maintainer reference](maintainer/orka.md).
+`--prompt-timeout` bounds prompt source resolution. It defaults to `15m` and
+accepts values from `1m` through `2h`. This option does not change the regular
+fetcher `--timeout` or the deployed project `ai.timeout`.
 
 Generated prompts are drafts. Review every architecture, artifact, failure, and
 transient-classification claim before deployment.
@@ -372,8 +337,8 @@ name is missing. It cannot be combined with `-testgrid`.
 Add `-gcsweb-base "https://gcsweb.example.net/s3"` when the bucket is served
 through gcsweb.
 
-For automation that must receive a validated agent-authored prompt rather than a
-handoff fallback, select agent mode and add the strict flag:
+For automation that should not emit a handoff bundle, select the template-only
+mode or use `--no-prompt`:
 
 ```bash
 aster onboard \
@@ -382,14 +347,11 @@ aster onboard \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
   -source-repo "<owner>/<source-repo>" \
-  --prompt-mode=agent \
-  --prompt-agent-model=github-copilot/claude-sonnet-4.6 \
-  --require-prompt-draft
+  --prompt-mode=todo-template
 ```
 
-The selected OpenCode provider must already be authenticated. The deployed
-`AI_TOKEN` may be read only to prevent accidental serialization into nonsecret
-fields; it is never sent during prompt authoring.
+The deployed `AI_TOKEN` may be read only to prevent accidental serialization into
+nonsecret fields; it is never sent during prompt authoring.
 
 ## Open a scaffold pull request
 
@@ -420,7 +382,7 @@ establish safely. It does not guess:
 - Ingress, DNS, certificates, or OAuth.
 - Notification routing.
 - Secret values.
-- Orka installation or runtime configuration.
+- Optional feature runtime installation or configuration.
 
 If no Prow job or TestGrid annotation matches the source repository, the wizard
 asks for a TestGrid dashboard or artifact bucket. It does not invent one.

@@ -230,6 +230,5 @@ configured. Interactive chat, File Issue, and Mark Resolved are Kubernetes
 server features and are not available on a static Pages site.
 
 Fix PR generation is experimental and is not part of the standard Pages
-workflow. It requires a preconfigured self-hosted runner with OpenCode, git, and
-the pinned `srt` sandbox. See [Experimental Fix PR generation](fix-prs.md) before
-evaluating it.
+workflow. It requires the Kubernetes-native Agent Sandbox runtime. See
+[Experimental Fix PR generation](fix-prs.md) before evaluating it.

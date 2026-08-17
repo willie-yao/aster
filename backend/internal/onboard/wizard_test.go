@@ -107,7 +107,6 @@ func (f fakeSourceRevisionResolver) Resolve(context.Context, Repo, string) (Sour
 
 type fakePromptBuilder struct {
 	content  string
-	drafted  bool
 	result   promptPreparationResult
 	results  []promptPreparationResult
 	err      error
@@ -128,11 +127,7 @@ func (f *fakePromptBuilder) Build(_ context.Context, opts Options, _ scaffoldDat
 		result = f.results[f.calls-1]
 	}
 	if result.Requested == "" {
-		if f.drafted {
-			result = promptPreparationResult{Requested: promptRequestAgent, Status: promptStatusAgentDraft, Output: promptOutputAgentDraft}
-		} else {
-			result = newTemplatePromptResult()
-		}
+		result = newTemplatePromptResult()
 	}
 	return f.content, result, f.err
 }
@@ -743,36 +738,6 @@ func TestBuildPlan_RejectsCredentialInRenderedFilesWithoutLeaking(t *testing.T) 
 	}
 	if strings.Contains(err.Error(), opts.GitHubToken) {
 		t.Fatalf("credential leaked into error: %v", err)
-	}
-}
-
-func TestBuildPlan_SeparatesPromptAgentAndDeploymentProvider(t *testing.T) {
-	deps, _, _, _ := wizardDependencies("")
-	prompts := &fakePromptBuilder{drafted: true}
-	deps.prompts = prompts
-	opts := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", OutDir: "out",
-		PromptMode: promptModeAgent, PromptAgentModel: "github-copilot/claude-sonnet-4.6",
-		DeploymentAIAPI: project.AIAPIResponses, DeploymentAIEndpoint: "https://deploy.example/v1/responses",
-		DeploymentAIModel: "deploy-model",
-	}
-	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
-	if err != nil {
-		t.Fatalf("buildPlan: %v", err)
-	}
-	if prompts.gotOpts.PromptAgentModel != opts.PromptAgentModel {
-		t.Fatalf("prompt agent = %+v", prompts.gotOpts)
-	}
-	if plan.Deployment.Endpoint != "https://deploy.example/v1/responses" || plan.Deployment.Model != "deploy-model" {
-		t.Fatalf("deployment provider = %+v", plan.Deployment)
-	}
-	if plan.Prompt.Runtime != "opencode" || plan.Prompt.Model != opts.PromptAgentModel {
-		t.Fatalf("prompt plan = %+v", plan.Prompt)
-	}
-	values := plan.Files["deploy/values.yaml"]
-	if !strings.Contains(values, "https://deploy.example/v1/responses") || strings.Contains(values, opts.PromptAgentModel) {
-		t.Fatalf("deployment values mixed providers:\n%s", values)
 	}
 }
 

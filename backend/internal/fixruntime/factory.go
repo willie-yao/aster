@@ -3,46 +3,22 @@ package fixruntime
 
 import (
 	"fmt"
-	"os"
 
-	"github.com/willie-yao/aster/backend/internal/orka"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/runtime"
 )
 
-// New returns the configured coding-agent runtime. The default OpenCode backend is local-development or trusted-CI only.
+// New returns the Agent Sandbox coding-agent runtime for fix PRs.
 func New(cfg *project.FixAgentRuntime) (runtime.AgentRuntime, error) {
-	if cfg == nil || cfg.Type == "" || cfg.Type == "opencode" {
-		return runtime.NewLocalAgent(), nil
+	if cfg == nil {
+		return nil, fmt.Errorf("fix runtime requires agent_runtime configuration")
 	}
-	if cfg.Type == "agent-sandbox" {
-		rt, err := NewAgentSandboxRuntimeFromEnv(cfg.ModelProvider.RuntimeConfig(), cfg.ParsedTimeout(), cfg.OutputLimitBytes)
-		if err != nil {
-			return nil, fmt.Errorf("agent sandbox fix backend unavailable: %w", err)
-		}
-		return rt, nil
-	}
-	if cfg.Type != "orka" {
+	if cfg.Type != "" && cfg.Type != "agent-sandbox" {
 		return nil, fmt.Errorf("unsupported fix runtime %q", cfg.Type)
 	}
-	maxRetries := 1
-	if cfg.OrkaRetries != nil {
-		maxRetries = *cfg.OrkaRetries
-	}
-	rt, err := orka.NewAgentRuntimeFromEnv(orka.FromEnvConfig{
-		Namespace:                        cfg.OrkaNamespace,
-		AgentRef:                         cfg.OrkaAgentRef,
-		API:                              cfg.OrkaAPI,
-		Version:                          cfg.OrkaVersion,
-		MaxRetries:                       maxRetries,
-		KubeContext:                      os.Getenv("ORKA_KUBE_CONTEXT"),
-		DelegatedServiceAccountName:      os.Getenv(orka.FixServiceAccountNameEnv),
-		DelegatedServiceAccountNamespace: os.Getenv(orka.FixServiceAccountNamespaceEnv),
-		PodName:                          os.Getenv(orka.PodNameEnv),
-		PodUID:                           os.Getenv(orka.PodUIDEnv),
-	})
+	rt, err := NewAgentSandboxRuntimeFromEnv(cfg.ModelProvider.RuntimeConfig(), cfg.ParsedTimeout(), cfg.OutputLimitBytes)
 	if err != nil {
-		return nil, fmt.Errorf("orka fix backend unavailable: %w", err)
+		return nil, fmt.Errorf("agent sandbox fix backend unavailable: %w", err)
 	}
 	return rt, nil
 }

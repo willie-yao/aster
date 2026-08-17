@@ -42,7 +42,7 @@ func validateCausalCriticOptions(opts Options) error {
 	case opts.AnalysisRuntime.Type != AnalysisRuntimeInProcess:
 		return fmt.Errorf("causal critic shadow requires authoritative inprocess analysis")
 	case opts.ShadowAnalysis.Enabled:
-		return fmt.Errorf("causal critic shadow cannot run with the Orka agent analysis shadow")
+		return fmt.Errorf("causal critic shadow cannot run with the agent analysis shadow")
 	case cfg.LedgerPath == "" || !filepath.IsAbs(cfg.LedgerPath):
 		return fmt.Errorf("causal critic shadow private ledger path must be absolute")
 	case cfg.MaxPerRun < 1 || cfg.MaxPerRun > 10:

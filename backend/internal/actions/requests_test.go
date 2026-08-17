@@ -1289,7 +1289,7 @@ func TestCancelRequestWaitsForRuntimeCleanup(t *testing.T) {
 	service.requests.Requests[id] = &actionRequest{
 		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestReady,
 			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
-		Runtime: &runtime.WorkRef{Backend: "orka", Namespace: "orka-system", Name: "fix-task", UID: "uid-one", ExecutionID: id},
+		Runtime: &runtime.WorkRef{Backend: "agent-sandbox", Namespace: "sandbox-system", Name: "fix-task", UID: "uid-one", ExecutionID: id},
 	}
 
 	type result struct {
@@ -1328,7 +1328,7 @@ func TestCancelRequestFailsWhenIdentityChanges(t *testing.T) {
 	service.requests.Requests[id] = &actionRequest{
 		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: requestKindAnalysisFix, Owner: "alice", Status: RequestReady,
 			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
-		Runtime: &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "old-uid", ExecutionID: id},
+		Runtime: &runtime.WorkRef{Backend: "agent-sandbox", Name: "fix-task", UID: "old-uid", ExecutionID: id},
 	}
 	view, err := service.CancelRequest(context.Background(), id, "alice")
 	if err != nil || view.Status != RequestFailed || view.Error == "" || view.ReasonCode != ReasonGenerationFailed ||
@@ -1347,7 +1347,7 @@ func TestRestartResumesRuntimeCleanup(t *testing.T) {
 		"restart-runtime": {
 			ActionRequestView: ActionRequestView{ID: "restart-runtime", FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestPending,
 				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
-			Runtime: &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: "restart-runtime"},
+			Runtime: &runtime.WorkRef{Backend: "agent-sandbox", Name: "fix-task", UID: "uid-one", ExecutionID: "restart-runtime"},
 		},
 	}}
 	data, _ := json.Marshal(state)
@@ -1401,7 +1401,7 @@ func TestRequestTimeoutUsesRuntimeCleanup(t *testing.T) {
 	go func() {
 		defer service.requestWG.Done()
 		service.generateRequestWith(id, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _, _ string) (PreviewResult, *previewEntry, error) {
-			if err := service.observeRuntimeWork(id)(ctx, runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: id}); err != nil {
+			if err := service.observeRuntimeWork(id)(ctx, runtime.WorkRef{Backend: "agent-sandbox", Name: "fix-task", UID: "uid-one", ExecutionID: id}); err != nil {
 				return PreviewResult{}, nil, err
 			}
 			<-ctx.Done()
@@ -1475,7 +1475,7 @@ func TestCleanupRetriesTransientFailure(t *testing.T) {
 	service.requests.Requests[id] = &actionRequest{
 		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestReady,
 			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
-		Runtime: &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: id},
+		Runtime: &runtime.WorkRef{Backend: "agent-sandbox", Name: "fix-task", UID: "uid-one", ExecutionID: id},
 	}
 	view, err := service.CancelRequest(context.Background(), id, "alice")
 	if err != nil || (view.Status != RequestCancelling && view.Status != RequestCancelled) {
@@ -1505,7 +1505,7 @@ func TestCleanupPendingGenerationTransitionsThroughCleanup(t *testing.T) {
 	go func() {
 		defer service.requestWG.Done()
 		service.generateRequestWith(id, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _, _ string) (PreviewResult, *previewEntry, error) {
-			if err := service.observeRuntimeWork(id)(ctx, runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: id}); err != nil {
+			if err := service.observeRuntimeWork(id)(ctx, runtime.WorkRef{Backend: "agent-sandbox", Name: "fix-task", UID: "uid-one", ExecutionID: id}); err != nil {
 				return PreviewResult{}, nil, err
 			}
 			return PreviewResult{}, nil, runtime.ErrCleanupPending
@@ -1582,7 +1582,7 @@ func TestCleanupRetriesAfterRuntimeBecomesAvailable(t *testing.T) {
 	service.requests.Requests[id] = &actionRequest{
 		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestReady,
 			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
-		Runtime: &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: id},
+		Runtime: &runtime.WorkRef{Backend: "agent-sandbox", Name: "fix-task", UID: "uid-one", ExecutionID: id},
 	}
 	view, err := service.CancelRequest(context.Background(), id, "alice")
 	if err != nil || view.Status != RequestCancelling {
@@ -1611,7 +1611,7 @@ func TestOverlappingCleanupWaitsForGenerationExit(t *testing.T) {
 	}()
 	time.Sleep(20 * time.Millisecond)
 	service.rmu.Lock()
-	service.requests.Requests[id].Runtime = &runtime.WorkRef{Backend: "orka", Name: "fix-task", UID: "uid-one", ExecutionID: id}
+	service.requests.Requests[id].Runtime = &runtime.WorkRef{Backend: "agent-sandbox", Name: "fix-task", UID: "uid-one", ExecutionID: id}
 	service.rmu.Unlock()
 	second, err := service.cleanupRequest(context.Background(), id)
 	if err != nil || second.Status != RequestCancelled {

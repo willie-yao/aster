@@ -28,7 +28,7 @@ const reasonMessages: Record<ActionReasonCode, string> = {
   retained_stale: "The displayed pattern is retained from an earlier successful correlation and cannot start an action.",
   non_systemic: "This result was classified as non-systemic and does not qualify for a recurring-pattern action.",
   evidence_unavailable: "Current published evidence is unavailable or no longer matches the selected action subject.",
-  investigation_required: "The published remediation requires source investigation before an issue or fix can be drafted.",
+  investigation_required: "The published remediation requires maintainer investigation before an issue or fix can be drafted.",
   no_reviewable_patch: "No reviewable patch was generated. Add a maintainer instruction and regenerate.",
   contract_generation_failed: "The action preview could not be generated from the current verified inputs.",
   unsafe_remediation: "The proposed remediation violates the deterministic safety policy and requires further investigation.",
@@ -143,10 +143,7 @@ export function buildActionEligibilityHint(
   return null;
 }
 
-export function actionEligibilityTitle(
-  eligibilityValue: ActionEligibility,
-  sourceInvestigationEnabled: boolean,
-): string {
+export function actionEligibilityTitle(eligibilityValue: ActionEligibility): string {
   const eligibility = normalizeActionEligibility(eligibilityValue);
   switch (eligibility.code) {
     case "actionable":
@@ -174,9 +171,7 @@ export function actionEligibilityTitle(
     case "generation_failed":
       return "Draft generation failed";
     case "investigation_required":
-      return sourceInvestigationEnabled
-        ? "Investigate source"
-        : "Source investigation is not configured";
+      return "Investigation required";
     default:
       return "Action unavailable";
   }

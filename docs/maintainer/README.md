@@ -10,8 +10,6 @@ Each reference states its current authority and support status.
   private disabled deployment prototype.
 - [Agent Sandbox causal critic](agent-sandbox-causal-critic.md): stopped
   experiment retained while its disabled implementation remains in the tree.
-- [Orka integrations](orka.md): experimental lifecycle, credential, and
-  evaluation reference.
 
 Current supported analysis ownership is documented in the
 [in-process analyzer architecture](../architecture/in-process-analyzer.md) and

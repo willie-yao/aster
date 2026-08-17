@@ -29,7 +29,7 @@ const presentations: Record<
   },
   investigating: {
     label: "Investigating",
-    message: "A bounded read-only source investigation is in progress.",
+    message: "A bounded read-only remediation investigation is in progress.",
   },
   verifying: {
     label: "Verifying",

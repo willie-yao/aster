@@ -239,8 +239,6 @@ func TestValidateOptions(t *testing.T) {
 		{"exact job without bucket", func(o *Options) { o.ExactJobs = []string{"periodic-job"} }, "requires --bucket"},
 		{"unsafe exact job", func(o *Options) { o.TestGrid = ""; o.Bucket = "b"; o.ExactJobs = []string{"../job"} }, "safe Prow job name"},
 		{"duplicate exact job", func(o *Options) { o.TestGrid = ""; o.Bucket = "b"; o.ExactJobs = []string{"job", "job"} }, "duplicates"},
-		{"required draft with no-prompt", func(o *Options) { o.NoPrompt = true; o.RequirePromptDraft = true }, "valid only"},
-		{"required draft without agent mode", func(o *Options) { o.RequirePromptDraft = true }, "valid only"},
 		{"update existing with open PR", func(o *Options) { o.UpdateExisting = true; o.OpenPR = true }, "cannot be combined"},
 		{"plan out without dry run", func(o *Options) { o.PlanOut = "plan.json" }, "requires --dry-run"},
 		{"plan out with open PR", func(o *Options) { o.DryRun = true; o.PlanOut = "plan.json"; o.OpenPR = true }, "cannot be combined"},
@@ -512,7 +510,7 @@ func TestScaffold_K8sStaysFocused(t *testing.T) {
 	}
 	for _, want := range []string{
 		"mode: watch", "type: inprocess", "imageTag: \"\"", "existingSecret: \"<existing-ai-secret>\"",
-		"# schedule:", "# namespace:", "chat:\n    enabled: false", "actions:\n    enabled: false",
+		"# schedule:", "chat:\n    enabled: false", "actions:\n    enabled: false",
 		"Active values below are settings a new consumer commonly owns", "No engine source checkout",
 		"verified-aster-path", "kubernetes doctor", "--chart-version \"$CHART_VERSION\"", "docs/kubernetes-platform.md",
 	} {

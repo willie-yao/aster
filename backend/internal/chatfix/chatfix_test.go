@@ -14,20 +14,19 @@ import (
 )
 
 type fakeChatStore struct {
-	candidate       analysischat.FixCandidate
-	candidateErr    error
-	onReturn        func()
-	sessionID       string
-	owner           string
-	requestID       string
-	patternID       string
-	patternHash     string
-	sourceRequestID string
+	candidate    analysischat.FixCandidate
+	candidateErr error
+	onReturn     func()
+	sessionID    string
+	owner        string
+	requestID    string
+	patternID    string
+	patternHash  string
 }
 
-func (f *fakeChatStore) FixCandidate(sessionID, owner, requestID, patternID, patternHash, sourceRequestID string) (analysischat.FixCandidate, error) {
+func (f *fakeChatStore) FixCandidate(sessionID, owner, requestID, patternID, patternHash string) (analysischat.FixCandidate, error) {
 	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
-	f.patternID, f.patternHash, f.sourceRequestID = patternID, patternHash, sourceRequestID
+	f.patternID, f.patternHash = patternID, patternHash
 	if f.onReturn != nil {
 		f.onReturn()
 	}
@@ -85,21 +84,11 @@ func TestPreviewChatFixBuildsSelectedContext(t *testing.T) {
 		AssistantAnswer:   "selected answer",
 		ProposedRevision:  &analysischat.Revision{RootCause: "new cause", SuggestedFix: "new fix"},
 		ArtifactCitations: []analysischat.Citation{{Path: "build-log.txt", LineStart: 4, LineEnd: 5, Quote: "failure"}},
-		SourceRequestID:   "source-request",
-		SourceRepository:  sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567"},
-		SourceRevision:    "0123456789abcdef0123456789abcdef01234567",
-		SourceResult: &sourceinvestigation.Result{
-			State:                     sourceinvestigation.StateActionableCodeChange,
-			Target:                    &models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "pkg/retry.go", Symbol: "retry", RequiredCall: "applyFix"},
-			TargetVerificationVersion: 1, Finding: "source finding", Confidence: sourceinvestigation.ConfidenceHigh,
-			Relationship: sourceinvestigation.RelationshipSupports, Direction: "modify retry",
-			Citations: []sourceinvestigation.Citation{{Path: "pkg/retry.go", LineStart: 10, LineEnd: 12, Quote: "retry", Verified: true}},
-		},
 	}}
 	fixes := &fakeFixPreviewer{}
 	service := NewService(chat, fixes)
 	preview, err := service.PreviewChatFix(
-		t.Context(), "session", "Alice", "chat-request", "pattern", "pattern-hash", "source-request", "user-token", "keep compatibility",
+		t.Context(), "session", "Alice", "chat-request", "pattern", "pattern-hash", "user-token", "keep compatibility",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +97,7 @@ func TestPreviewChatFixBuildsSelectedContext(t *testing.T) {
 		t.Fatalf("preview=%+v fixes=%+v", preview, fixes)
 	}
 	if chat.sessionID != "session" || chat.owner != "Alice" || chat.requestID != "chat-request" ||
-		chat.patternID != "pattern" || chat.patternHash != "pattern-hash" || chat.sourceRequestID != "source-request" {
+		chat.patternID != "pattern" || chat.patternHash != "pattern-hash" {
 		t.Fatalf("chat call = %+v", chat)
 	}
 	if fixes.pattern.SharedRootCause != "snapshot cause" || fixes.target.JobID != "periodic-x" ||
@@ -116,8 +105,7 @@ func TestPreviewChatFixBuildsSelectedContext(t *testing.T) {
 		t.Fatalf("target=%+v instruction=%q", fixes.target, fixes.instruction)
 	}
 	context := fixes.generationContext
-	if context.AssistantAnswer != "selected answer" || context.ProposedRevision == nil || len(context.ArtifactCitations) != 1 ||
-		context.Source == nil || context.Source.Finding != "source finding" || len(context.Source.Citations) != 1 {
+	if context.AssistantAnswer != "selected answer" || context.ProposedRevision == nil || len(context.ArtifactCitations) != 1 {
 		t.Fatalf("generation context = %+v", context)
 	}
 }
@@ -133,7 +121,7 @@ func TestPreviewChatFixStopsBeforeGenerationOnChatErrors(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			chat := &fakeChatStore{candidateErr: testCase.err}
 			fixes := &fakeFixPreviewer{}
-			_, err := NewService(chat, fixes).PreviewChatFix(t.Context(), "session", "alice", "request", "pattern", "pattern-hash", "source-request", "token", "")
+			_, err := NewService(chat, fixes).PreviewChatFix(t.Context(), "session", "alice", "request", "pattern", "pattern-hash", "token", "")
 			if !errors.Is(err, testCase.err) {
 				t.Fatalf("error = %v", err)
 			}
@@ -159,7 +147,7 @@ func TestPreviewChatFixRejectsInvalidSelectionBeforeReadingChat(t *testing.T) {
 			chat := &fakeChatStore{}
 			fixes := &fakeFixPreviewer{}
 			_, err := NewService(chat, fixes).PreviewChatFix(
-				t.Context(), "session", "alice", "request", testCase.patternID, testCase.patternHash, "", "token", testCase.instruction,
+				t.Context(), "session", "alice", "request", testCase.patternID, testCase.patternHash, "token", testCase.instruction,
 			)
 			if !errors.Is(err, analysischat.ErrInvalidRequest) {
 				t.Fatalf("error = %v", err)
@@ -182,10 +170,6 @@ func TestPreviewChatFixKeepsAtomicPatternSnapshotAfterPublishedReplacement(t *te
 			Analysis: analysischat.AnalysisRef{JobID: "periodic-x", BuildID: "123"},
 			Pattern:  original, AssistantAnswer: "selected answer",
 			ArtifactCitations: []analysischat.Citation{{Path: "build-log.txt", Quote: "failure"}},
-			SourceRequestID:   "source-request",
-			SourceRepository:  sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567"},
-			SourceRevision:    "0123456789abcdef0123456789abcdef01234567",
-			SourceResult:      &sourceinvestigation.Result{State: sourceinvestigation.StateActionableCodeChange, TargetVerificationVersion: 1, Target: &models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "pkg/retry.go", Symbol: "retry", RequiredCall: "applyFix"}, Finding: "source", Confidence: sourceinvestigation.ConfidenceHigh, Relationship: sourceinvestigation.RelationshipSupports, Direction: "modify retry", Citations: []sourceinvestigation.Citation{{Path: "pkg/retry.go", LineStart: 1, LineEnd: 1, Quote: "retry", Verified: true}}},
 		},
 		onReturn: func() {
 			published.SharedRootCause = "replacement cause"
@@ -193,7 +177,7 @@ func TestPreviewChatFixKeepsAtomicPatternSnapshotAfterPublishedReplacement(t *te
 	}
 	fixes := &fakeFixPreviewer{}
 	if _, err := NewService(chat, fixes).PreviewChatFix(
-		t.Context(), "session", "alice", "request", original.ID, original.ContentHash, "source-request", "token", "",
+		t.Context(), "session", "alice", "request", original.ID, original.ContentHash, "token", "",
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +196,7 @@ func TestPreviewChatFixRejectsAnalysisOnlyCausalGroup(t *testing.T) {
 	}}}
 	fixes := &fakeFixPreviewer{}
 	_, err := NewService(chat, fixes).PreviewChatFix(
-		t.Context(), "session", "Alice", "chat-request", "pattern", "pattern-hash", "source-request", "user-token", "",
+		t.Context(), "session", "Alice", "chat-request", "pattern", "pattern-hash", "user-token", "",
 	)
 	if !errors.Is(err, analysischat.ErrInvalidRequest) || fixes.called {
 		t.Fatalf("error=%v called=%t", err, fixes.called)
@@ -260,7 +244,7 @@ func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t
 func TestPreviewChatFixRejectsSynchronousExactJUnitGeneration(t *testing.T) {
 	fixes := &fakeFixPreviewer{}
 	_, err := NewService(&fakeChatStore{}, fixes).PreviewChatFix(
-		t.Context(), "session", "Alice", "request", "", "", "", "write-token", "",
+		t.Context(), "session", "Alice", "request", "", "", "write-token", "",
 	)
 	if !errors.Is(err, analysischat.ErrInvalidRequest) || fixes.called || fixes.requestCalled {
 		t.Fatalf("error=%v fixes=%+v", err, fixes)

@@ -21,7 +21,7 @@ request.
 - referenced per-build analyses and their artifact citations;
 - relevant files as evidence hints only;
 - source revisions available for each build;
-- one immutable repository revision for the bounded source investigation;
+- one immutable repository revision for bounded source verification;
 - project destination repositories, allowed paths, and exact validation commands as argv plus timeout;
 - consumer prompt and skill hashes;
 - provider/model fingerprint; and

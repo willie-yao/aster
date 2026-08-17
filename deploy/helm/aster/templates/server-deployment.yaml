@@ -1,11 +1,8 @@
-{{- include "aster.validateSourceInvestigation" . -}}
-{{- include "aster.validateFixRuntime" . -}}
 {{- include "aster.validateAgentSandboxFixRuntime" . -}}
 {{- include "aster.validateNetworkSecurity" . -}}
 {{- $actions := .Values.server.actions.enabled -}}
 {{- $chat := .Values.server.chat.enabled -}}
 {{- $corrections := .Values.server.chat.correctionsEnabled -}}
-{{- $source := .Values.server.chat.sourceInvestigation.enabled -}}
 {{- $remediation := .Values.server.remediationInvestigation.enabled -}}
 {{- $remediationFixPreview := .Values.server.remediationInvestigation.fixPreview.enabled -}}
 {{- $interactive := or $actions $chat $remediation -}}
@@ -15,7 +12,6 @@
 {{- $extraInsecureCookies := false -}}
 {{- $extraOAuthScope := false -}}
 {{- $extraOAuthPrivateRepositories := false -}}
-{{- $extraOrkaDelegation := "" -}}
 {{- range .Values.server.extraEnv -}}
 {{- if eq (default "" .name) "HSTS_ENABLED" -}}
 {{- $extraHSTS = true -}}
@@ -28,9 +24,6 @@
 {{- end -}}
 {{- if eq (default "" .name) "OAUTH_PRIVATE_REPOSITORIES" -}}
 {{- $extraOAuthPrivateRepositories = true -}}
-{{- end -}}
-{{- if has (default "" .name) (list "ORKA_FIX_SERVICE_ACCOUNT_NAME" "ORKA_FIX_SERVICE_ACCOUNT_NAMESPACE" "POD_NAME" "POD_UID") -}}
-{{- $extraOrkaDelegation = .name -}}
 {{- end -}}
 {{- end -}}
 {{- if $extraHSTS -}}
@@ -47,9 +40,6 @@
 {{- end -}}
 {{- if $extraOAuthPrivateRepositories -}}
 {{- fail "server.extraEnv must not set OAUTH_PRIVATE_REPOSITORIES; grant repository access to BOT_TOKEN instead" -}}
-{{- end -}}
-{{- if $extraOrkaDelegation -}}
-{{- fail (printf "server.extraEnv must not set reserved Orka delegation variable %s" $extraOrkaDelegation) -}}
 {{- end -}}
 {{- if and (not .Values.server.security.hsts.enabled) (not (or .Values.server.development.allowInsecureHTTP .Values.server.development.allowInsecureCookies)) -}}
 {{- fail "server.security.hsts.enabled=false requires explicit local HTTP acknowledgement through server.development.allowInsecureHTTP=true" -}}
@@ -83,15 +73,6 @@
 {{- end -}}
 {{- if and $corrections (not $chat) -}}
 {{- fail "server.chat.correctionsEnabled requires server.chat.enabled" -}}
-{{- end -}}
-{{- if and $source (not $chat) -}}
-{{- fail "server.chat.sourceInvestigation.enabled requires server.chat.enabled" -}}
-{{- end -}}
-{{- if and $source (le (int .Values.server.chat.sourceInvestigation.maxPerSession) 0) -}}
-{{- fail "server.chat.sourceInvestigation.maxPerSession must be positive" -}}
-{{- end -}}
-{{- if and $source (le (int .Values.server.chat.sourceInvestigation.maxActivePerOwner) 0) -}}
-{{- fail "server.chat.sourceInvestigation.maxActivePerOwner must be positive" -}}
 {{- end -}}
 {{- if and $chat (le (int .Values.server.chat.maxSessions) 0) -}}
 {{- fail "server.chat.maxSessions must be positive" -}}
@@ -141,13 +122,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if $source }}
-      serviceAccountName: {{ include "aster.orkaSourceServiceAccountName" . }}
-      automountServiceAccountToken: true
-      {{- else if and .Values.orka.fixRuntime.enabled $actions }}
-      serviceAccountName: {{ include "aster.orkaServiceAccountName" . }}
-      automountServiceAccountToken: true
-      {{- else if $agentSandboxActions }}
+      {{- if $agentSandboxActions }}
       serviceAccountName: {{ include "aster.agentSandboxClientServiceAccountName" . }}
       automountServiceAccountToken: true
       {{- else }}
@@ -157,10 +132,7 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: server
-          {{- if and .Values.orka.fixRuntime.enabled $actions }}
-          image: {{ include "aster.fixerImage" . }}
-          imagePullPolicy: {{ .Values.orka.fixRuntime.image.pullPolicy }}
-          {{- else if $agentSandboxActions }}
+          {{- if $agentSandboxActions }}
           image: {{ include "aster.agentSandboxDashboardImage" . }}
           imagePullPolicy: {{ .Values.agentSandbox.fixRuntime.dashboardImage.pullPolicy }}
           {{- else }}
@@ -189,34 +161,6 @@ spec:
             {{- if $agentSandboxActions }}
             {{- include "aster.agentSandboxEnv" . | nindent 12 }}
             {{- end }}
-            {{- if or $source (and .Values.orka.fixRuntime.enabled $actions) }}
-            - name: ORKA_API_TOKEN_FILE
-              value: /var/run/secrets/kubernetes.io/serviceaccount/token
-            {{- end }}
-            {{- if and $source $actions .Values.orka.fixRuntime.enabled }}
-            - name: ORKA_FIX_SERVICE_ACCOUNT_NAME
-              value: {{ include "aster.orkaServiceAccountName" . | quote }}
-            - name: ORKA_FIX_SERVICE_ACCOUNT_NAMESPACE
-              value: {{ .Release.Namespace | quote }}
-            - name: POD_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
-            - name: POD_UID
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.uid
-            {{- end }}
-            {{- if and (or $actions $remediation) (not $source) (or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName .Values.ai.existingSecret) }}
-            - name: SOURCE_INVESTIGATION_GITHUB_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "aster.githubReadSecret" . }}
-                  key: {{ .Values.ai.githubReadTokenSecretKey }}
-                  {{- if and (not .Values.ai.githubReadToken) (not .Values.ai.githubReadTokenSecretName) }}
-                  optional: true
-                  {{- end }}
-            {{- end }}
             {{- if $remediation }}
             - name: CAUSAL_REMEDIATION_INVESTIGATION_ENABLED
               value: "true"
@@ -235,26 +179,6 @@ spec:
             {{- if $corrections }}
             - name: ANALYSIS_CORRECTIONS_ENABLED
               value: "true"
-            {{- end }}
-            {{- if $source }}
-            - name: ANALYSIS_SOURCE_INVESTIGATION_ENABLED
-              value: "true"
-            - name: SOURCE_INVESTIGATION_ADMISSION_IDENTITY
-              value: {{ include "aster.orkaReleaseScope" . | quote }}
-            - name: ANALYSIS_SOURCE_INVESTIGATION_MAX_PER_SESSION
-              value: {{ .Values.server.chat.sourceInvestigation.maxPerSession | quote }}
-            - name: ANALYSIS_SOURCE_INVESTIGATION_MAX_ACTIVE_PER_OWNER
-              value: {{ .Values.server.chat.sourceInvestigation.maxActivePerOwner | quote }}
-            {{- if or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName .Values.ai.existingSecret }}
-            - name: SOURCE_INVESTIGATION_GITHUB_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "aster.githubReadSecret" . }}
-                  key: {{ .Values.ai.githubReadTokenSecretKey }}
-                  {{- if and (not .Values.ai.githubReadToken) (not .Values.ai.githubReadTokenSecretName) }}
-                  optional: true
-                  {{- end }}
-            {{- end }}
             {{- end }}
             - name: ANALYSIS_CHAT_STATE_DIR
               value: {{ printf "%s/.analysis-chat" .Values.persistence.mountPath | quote }}

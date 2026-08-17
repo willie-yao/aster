@@ -270,7 +270,7 @@ export function analysisChatAttemptStatus(attempt: AnalysisChatAttempt): { label
         case "citation":
           return { label: "Evidence citation validation failed", detail: "The response citations did not pass validation." };
         case "source":
-          return { label: "Source investigation failed", detail: "The source investigation could not complete this request." };
+          return { label: "Source verification failed", detail: "The source verification could not complete this request." };
         default:
           return { label: "Request failed", detail: "The analysis agent could not complete this request." };
       }

@@ -3,7 +3,11 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 upgrade=$root/deploy/helm/upgrade.sh
-tmp="${TMPDIR:-/tmp}/aster-upgrade-$$"
+tmp="$root/.test-work/aster-upgrade-$$"
+if [[ -e $tmp ]]; then
+  echo "scratch path already exists: $tmp" >&2
+  exit 1
+fi
 mkdir -p "$tmp/bin"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -45,6 +49,7 @@ case \$command in
       else
         tag=sha-1111111
       fi
+      remote_fixer_tag=\$tag
       cat <<MANIFEST
 apiVersion: apps/v1
 kind: Deployment
@@ -54,10 +59,8 @@ spec:
       containers:
         - name: engine
           image: ghcr.io/willie-yao/aster:\$tag
-        - name: fixer
-          image: ghcr.io/willie-yao/aster/fixer:\$tag
-      args:
-        - -orka-analysis-image=ghcr.io/willie-yao/aster/analyzer:\$tag
+        - name: remote-fixer
+          image: ghcr.io/willie-yao/aster/remote-fixer:\$remote_fixer_tag
       initContainers:
         - name: materializer
           image: busybox:1.36.1
@@ -107,9 +110,9 @@ PY_MERGE
         global.imageTag=*) tag=\${arg#global.imageTag=} ;;
       esac
     done
-    fixer_tag=\$tag
+    remote_fixer_tag=\$tag
     if [[ \${FAKE_MUTABLE_IMAGE:-false} == true ]]; then
-      fixer_tag=main
+      remote_fixer_tag=main
     fi
     cat <<MANIFEST
 apiVersion: apps/v1
@@ -120,10 +123,8 @@ spec:
       containers:
         - name: engine
           image: ghcr.io/willie-yao/aster:\$tag
-        - name: fixer
-          image: ghcr.io/willie-yao/aster/fixer:\$fixer_tag
-      args:
-        - -orka-analysis-image=ghcr.io/willie-yao/aster/analyzer:\$tag
+        - name: remote-fixer
+          image: ghcr.io/willie-yao/aster/remote-fixer:\$remote_fixer_tag
       initContainers:
         - name: materializer
           image: busybox:1.36.1
@@ -162,7 +163,7 @@ if [[ \${1:-} != manifest || \${2:-} != inspect || -z \${3:-} ]]; then
   exit 1
 fi
 printf '%s\n' "\$3" >> "$inspections"
-if [[ \${FAKE_IMAGE_FAILURE:-false} == true && \$3 == *'/analyzer:'* ]]; then
+if [[ \${FAKE_IMAGE_FAILURE:-false} == true && \$3 == *'/remote-fixer:'* ]]; then
   exit 1
 fi
 EOF_DOCKER
@@ -171,9 +172,7 @@ chmod +x "$tmp/bin/docker"
 cat > "$tmp/consumer-values.yaml" <<'VALUES'
 {
   "global": {"imageTag": ""},
-  "image": {"tag": ""},
-  "analysisRuntime": {"orkaContainer": {"image": {"tag": ""}}},
-  "orka": {"fixRuntime": {"image": {"tag": ""}}}
+  "image": {"tag": ""}
 }
 VALUES
 
@@ -229,8 +228,7 @@ grep -Fq 'server.actions.oauth.chatScope' "$tmp/upgrade-output"
 grep -Fq 'server.extraEnv[OAUTH_SCOPE]' "$tmp/upgrade-output"
 grep -Fxq 'busybox:1.36.1' "$inspections"
 grep -Fxq 'ghcr.io/willie-yao/aster:sha-deadbeef' "$inspections"
-grep -Fxq 'ghcr.io/willie-yao/aster/analyzer:sha-deadbeef' "$inspections"
-grep -Fxq 'ghcr.io/willie-yao/aster/fixer:sha-deadbeef' "$inspections"
+grep -Fxq 'ghcr.io/willie-yao/aster/remote-fixer:sha-deadbeef' "$inspections"
 grep -Fq 'Preserving analysis cache generation: cache-7' "$tmp/upgrade-output"
 grep -Fq 'Image changes:' "$tmp/upgrade-output"
 grep -Fq 'Helm revision: 17' "$tmp/upgrade-output"

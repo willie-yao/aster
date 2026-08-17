@@ -34,57 +34,9 @@ mode: watch
 analysisCache:
   generation: ""
 
-# Failure analysis runs in-process by default. The Orka container runtime is an
-# experimental Helm-only option for cron or watch mode. It is a lifecycle
-# sidegrade, not the recommended production mode, and has no compatibility
-# guarantee.
+# Failure analysis runs in-process next to the fetcher.
 analysisRuntime:
   type: inprocess
-  orkaContainer:
-    # Leave empty to create a retained release-scoped namespace for analyzer
-    # Tasks and only their model/state Secrets. Custom names must end in the
-    # release scope hash rendered by the chart.
-    namespace: ""
-    # Orka REST API used to retrieve durable Task results. Set this to the
-    # Service name of the installed Orka release.
-    api: http://orka.orka-system.svc.cluster.local:8080
-    # Set existingSecret to use a static Orka result API token from the
-    # dashboard namespace. Leave it empty to use the rotating projected token
-    # of the Orka runtime ServiceAccount.
-    apiAuth:
-      existingSecret: ""
-      tokenKey: token
-    maxConcurrentTasks: 2
-    pollInterval: 2s
-    # Must be at least the project ai.timeout plus two minutes for Task startup
-    # and encrypted result finalization. The fetcher validates this at startup.
-    taskTimeout: 20m
-    retries: 1
-    image:
-      repository: ghcr.io/willie-yao/aster/analyzer
-      # Defaults to global.imageTag, then .Chart.AppVersion, when empty.
-      # Container mode accepts only immutable sha-<hex> or full semantic-version
-      # tags.
-      tag: ""
-      # The pinned Orka controller uses IfNotPresent for container Tasks.
-      pullPolicy: IfNotPresent
-    # This Secret must already exist in the analysis namespace. The chart never
-    # copies provider credentials across namespaces.
-    modelAuth:
-      existingSecret: ""
-      tokenKey: token
-    # With existingSecret, create the same named Secret and key in both the
-    # dashboard and analysis namespaces. When empty, the chart creates and retains
-    # matching release-scoped AES-256 state key Secrets in both namespaces.
-    state:
-      existingSecret: ""
-      key: state-key
-    # Analyzer Tasks must stay on CPU nodes. An explicit agentpool selector is
-    # required, and accelerator selectors, affinity, or tolerations fail render.
-    nodeSelector:
-      agentpool: nodepool1
-    tolerations: []
-    affinity: {}
 
 # Agent Sandbox is a consumer-installed execution backend for private workloads.
 # The chart never installs the Agent Sandbox CRD/controller, a secure RuntimeClass,
@@ -103,7 +55,7 @@ agentSandbox:
       digest: ""
       pullPolicy: IfNotPresent
     # Minimal git-capable dashboard image used only to reconstruct and validate
-    # patches returned by Agent Sandbox. It does not contain OpenCode or srt.
+    # patches returned by Agent Sandbox. It does not contain OpenCode.
     dashboardImage:
       repository: ghcr.io/willie-yao/aster/remote-fixer
       # Defaults to global.imageTag, then .Chart.AppVersion, when empty.
@@ -269,75 +221,61 @@ agentSandbox:
         cpu: 500m
         memory: 256Mi
         ephemeral-storage: 32Mi
+  analysisShadow:
+    enabled: false
+    # Existing consumer-owned namespace containing private shadow Sandboxes.
+    namespace: ""
+    runtimeClassName: ""
+    image:
+      repository: ""
+      digest: ""
+      pullPolicy: IfNotPresent
+    workloadServiceAccount:
+      create: false
+      name: ""
+    agentVersion: v1
+    modelProvider:
+      # Direct mode is the default only after this shadow is explicitly enabled.
+      # Gateway mode preserves the tokenless consumer-operated gateway path.
+      credentialMode: direct
+      api: chat_completions
+      endpoint: ""
+      model: ""
+    timeout: 10m
+    retries: 0
+    outputLimitBytes: 65536
+    maxPerRun: 1
+    maxTurns: 12
+    pollInterval: 250ms
+    ledger:
+      # Existing private PVC. The chart does not create or share it with public data.
+      existingClaim: ""
+      mountPath: /private/analysis-shadow
+    networkPolicy:
+      # Required when enabled. For example, use cilium on AKS Cilium/Kata, where the
+      # Kubernetes NetworkPolicy service peer does not admit cross-node Kata traffic.
+      mode: kubernetes
+      enabled: false
+      gatewayNamespaceSelector: {}
+      gatewayPodSelector: {}
+      gatewayPort: 443
+      dnsNamespaceSelector:
+        kubernetes.io/metadata.name: kube-system
+      dnsPodSelector:
+        k8s-app: kube-dns
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+        ephemeral-storage: 256Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+        ephemeral-storage: 256Mi
   rbac:
     # Creates the namespace-scoped Role/RoleBinding and optionally the client SA.
     create: true
     clientServiceAccountName: ""
-
-# Orka Agent integrations are independent from the analysis runtime selector.
-orka:
-  namespace: orka-system
-  # Private experimental Agent analysis runs only after authoritative in-process
-  # publication. It never changes public output, caches, issues, fixes, patterns,
-  # or remediation. Enabling this does not install Orka or create an Agent.
-  agentAnalysisShadow:
-    enabled: false
-    # Orka REST API used to retrieve durable Task results.
-    api: http://orka.orka-system.svc.cluster.local:8080
-    # Declared provenance version. Use versioned Agent names and update this when
-    # the operator-owned Agent contract changes.
-    agentVersion: v1
-    # Existing dedicated ServiceAccount when orka.rbac.create=false.
-    serviceAccountName: ""
-    maxPerRun: 1
-    admission:
-      # Required when enabled. Admission permits only this exact Agent and repo.
-      agentRef: ""
-      repository:
-        owner: ""
-        name: ""
-      # Optional read-only clone Secret already present in orka.namespace.
-      gitSecret: ""
-      maxTurns: 12
-      timeout: 10m
-      retries: 0
-    # Dedicated private PVC mounted only into the worker or fetcher. The server
-    # never mounts this claim. Empty existingClaim creates a release-scoped PVC.
-    ledger:
-      existingClaim: ""
-      retain: true
-      accessMode: ReadWriteOnce
-      size: 1Gi
-      storageClass: ""
-  # Fix generation is separately configured in project.yaml.
-  fixRuntime:
-    # Enables Task RBAC, ServiceAccount token mounts, and the git-capable fixer
-    # image. The Agent and API are configured in project.yaml under
-    # ai.fix_prs.agent_runtime. When source investigation shares the server pod,
-    # the chart delegates a short-lived Pod-bound token for this runtime identity.
-    enabled: false
-    image:
-      repository: ghcr.io/willie-yao/aster/fixer
-      # Defaults to global.imageTag, then .Chart.AppVersion, when empty.
-      tag: ""
-      pullPolicy: IfNotPresent
-    # Required when enabled. These values duplicate the security-sensitive
-    # project.yaml settings so Kubernetes admission can fail closed before an
-    # Orka controller observes the Task.
-    admission:
-      agentRef: ""
-      repository:
-        owner: ""
-        name: ""
-      maxTurns: 30
-      allowBash: true
-      timeout: 10m
-      retries: 1
-  # Disable this when an operator provides the ServiceAccount and Orka Roles.
-  rbac:
-    create: true
-    serviceAccountName: ""
-
 
 # Shared volume holding fetcher output and the AI cache. It must be
 # ReadWriteMany so the CronJob (writer) and the server (reader) can mount it at
@@ -374,8 +312,8 @@ project:
   skills: {}
   # Mount path the fetcher reads as -project-dir.
   mountPath: /config
-  # Orka container analysis copies ConfigMap-backed symlinks into an emptyDir
-  # so the strict project bundle loader receives regular files.
+  # Copies ConfigMap-backed symlinks into an emptyDir so the strict project
+  # loader receives regular files.
   materializer:
     image:
       repository: busybox
@@ -419,10 +357,9 @@ fetcher:
   suspend: false
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
-  # CronJob pod restart policy. Empty selects Never for orka-container and
-  # OnFailure for in-process analysis. Task retries belong to Orka.
+  # CronJob pod restart policy. Empty selects OnFailure.
   restartPolicy: ""
-  # Job retry limit. -1 uses 0 for orka-container and the Kubernetes default otherwise.
+  # Job retry limit. -1 uses the Kubernetes default.
   backoffLimit: -1
   # Hard Job deadline in seconds. Set 0 to omit the deadline.
   activeDeadlineSeconds: 36000
@@ -432,13 +369,11 @@ fetcher:
   reconcileInterval: 1h
   buildsPerJob: 10
   workers: 5
-  # Bounds discovery and artifact fetching. Orka container analysis uses its
-  # per-Task timeout across Task waves; cron mode also has activeDeadlineSeconds.
+  # Bounds discovery and artifact fetching. Cron mode also has activeDeadlineSeconds.
   timeout: 30m
   includePresubmits: false
   # Extra environment variables (e.g. ISSUE_TOKEN, FIX_TOKEN,
-  # EMAIL_SMTP_PASSWORD) sourced from secrets or given inline. In Orka mode the
-  # ingest container receives these after pattern finalization. Standard
+  # EMAIL_SMTP_PASSWORD) sourced from secrets or given inline. Standard
   # core/v1 EnvVar entries.
   extraEnv: []
   resources: {}
@@ -487,23 +422,6 @@ server:
     timeout: 2m
     # Enables explicit review/confirmation of evidence-backed chat revisions.
     correctionsEnabled: false
-    sourceInvestigation:
-      enabled: false
-      # Keep this distinct from orka.rbac.serviceAccountName when fix actions
-      # share the server pod. The chart grants only exact fix-token minting.
-      serviceAccountName: ""
-      maxPerSession: 8
-      maxActivePerOwner: 1
-      # Required when enabled. Match ai.source_investigation in project.yaml.
-      admission:
-        agentRef: ""
-        repository:
-          owner: ""
-          name: ""
-        gitSecret: ""
-        maxTurns: 30
-        timeout: 10m
-        retries: 1
     sessionTTL: 2h
     maxSessions: 128
     maxSessionsPerOwner: 8

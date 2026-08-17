@@ -117,26 +117,6 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 			t.Fatalf("features = %+v", features)
 		}
 	})
-	t.Run("source investigation", func(t *testing.T) {
-		setDefaults(t)
-		t.Setenv("ANALYSIS_CHAT_ENABLED", "true")
-		t.Setenv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", "true")
-		features, err := interactiveFeaturesFromEnv()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !features.AnalysisChat || !features.SourceInvestigation || features.Actions {
-			t.Fatalf("features = %+v", features)
-		}
-	})
-	t.Run("source investigation requires chat", func(t *testing.T) {
-		setDefaults(t)
-		t.Setenv("ANALYSIS_CHAT_ENABLED", "false")
-		t.Setenv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", "true")
-		if _, err := interactiveFeaturesFromEnv(); err == nil {
-			t.Fatal("source investigation was accepted without chat")
-		}
-	})
 	t.Run("corrections require chat", func(t *testing.T) {
 		setDefaults(t)
 		t.Setenv("ANALYSIS_CHAT_ENABLED", "false")
@@ -230,14 +210,6 @@ func TestConfigureAuthenticatorOAuthUsesIdentityOnlyScope(t *testing.T) {
 	t.Setenv("BOT_TOKEN", "")
 	if err := configureAuthenticator(&server.Options{}, true); err == nil || !strings.Contains(err.Error(), "BOT_TOKEN") {
 		t.Fatalf("missing bot token error = %v", err)
-	}
-}
-
-func TestSourceInvestigationKubeContextUsesOrkaSelector(t *testing.T) {
-	t.Setenv("KUBECONTEXT", "wrong-cluster")
-	t.Setenv("ORKA_KUBE_CONTEXT", "source-cluster")
-	if got := sourceInvestigationKubeContext(); got != "source-cluster" {
-		t.Fatalf("source investigation kube context = %q", got)
 	}
 }
 
@@ -365,7 +337,7 @@ func TestExactJUnitChatFixEnabledRequiresOptInAgentSandbox(t *testing.T) {
 	}{
 		{name: "enabled agent sandbox", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"}}, want: true},
 		{name: "disabled", cfg: project.FixPRs{AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"}}},
-		{name: "local runtime", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "opencode"}}},
+		{name: "unsupported runtime", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "opencode"}}},
 		{name: "missing runtime", cfg: project.FixPRs{Enabled: true}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -386,10 +358,8 @@ func TestFixActionsEnabledDoesNotAdvertiseLocalRuntimeByDefault(t *testing.T) {
 		wantErr  string
 	}{
 		{name: "agent sandbox", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"}}, authMode: "oauth", want: true},
-		{name: "orka", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "orka"}}, authMode: "proxy", want: true},
-		{name: "local production", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "opencode"}}, authMode: "oauth"},
-		{name: "trusted local development", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "opencode"}}, authMode: "dev", trusted: "true", want: true},
-		{name: "trusted local outside dev", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "opencode"}}, authMode: "proxy", trusted: "true", wantErr: "AUTH_MODE=dev"},
+		{name: "default runtime", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{}}, authMode: "proxy", want: true},
+		{name: "unsupported runtime", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "opencode"}}, authMode: "oauth"},
 		{name: "disabled", cfg: project.FixPRs{AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"}}, authMode: "oauth"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

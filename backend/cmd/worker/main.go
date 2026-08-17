@@ -61,11 +61,8 @@ func parseOptions(args []string) (fetcher.Options, time.Duration, time.Duration,
 	fs.BoolVar(&opts.EnableAI, "ai", false, "enable AI-powered failure analysis")
 	fs.DurationVar(&watchInterval, "watch-interval", 5*time.Minute, "how often to refresh data reusing the cached job list")
 	fs.DurationVar(&reconcileInterval, "reconcile-interval", time.Hour, "how often to rediscover jobs and run a full pass")
-	analysisFlags := fetcher.BindAnalysisRuntimeFlags(fs, &opts)
+	fetcher.BindAnalysisRuntimeFlags(fs, &opts)
 	if err := fs.Parse(args); err != nil {
-		return fetcher.Options{}, 0, 0, err
-	}
-	if err := analysisFlags.DecodePlacement(&opts); err != nil {
 		return fetcher.Options{}, 0, 0, err
 	}
 	return opts, watchInterval, reconcileInterval, nil

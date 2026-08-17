@@ -386,7 +386,7 @@ jobs:
             "$d"/ai_usage_fetcher.json "$d"/ai_usage_server.json "$d"/issue_state.json \
             "$d"/fix_pr_state.json "$d"/fix_previews.json \
             "$d"/notification_state.json "$d"/remediation_state.json \
-            "$d"/remediation_prow_catalog.json "$d"/orka_analysis.json \
+            "$d"/remediation_prow_catalog.json \
             "$d"/action_request_state.json "$d"/action_preview_state.json \
             "$d"/analysis_correction_state.json \
             "$d"/.fetch-status/status.json "$d"/.fetch-status/status.json.tmp-* \

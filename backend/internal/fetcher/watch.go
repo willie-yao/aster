@@ -7,10 +7,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/willie-yao/aster/backend/internal/analysisruntime"
 	"github.com/willie-yao/aster/backend/internal/fetchprogress"
 	"github.com/willie-yao/aster/backend/internal/models"
-	"github.com/willie-yao/aster/backend/internal/orka"
 )
 
 type watchPipeline interface {
@@ -50,8 +48,7 @@ var realWatchClock = watchClock{
 func (p *pipeline) watchPass(ctx context.Context, jobs []models.ProwJob) error {
 	fetchCtx, cancel := context.WithTimeout(ctx, p.opts.Timeout)
 	defer cancel()
-	analysisCtx, _ := passExecutionContexts(ctx, fetchCtx, p.opts.AnalysisRuntime.Type)
-	result, err := p.refreshWithAnalysisContext(fetchCtx, analysisCtx, jobs)
+	result, err := p.refreshWithAnalysisContext(fetchCtx, fetchCtx, jobs)
 	if err == nil {
 		p.skipProgressSideEffects()
 		p.runShadowAnalysis(ctx, result)
@@ -70,7 +67,7 @@ func RunWatch(ctx context.Context, opts Options, watchInterval, reconcileInterva
 	p, err := setupPipeline(opts)
 	if err != nil {
 		progress.FinishFailure(fetchprogress.FailureSetup)
-		return haltSystemicWatchFailure(ctx, err)
+		return err
 	}
 	p.progress = progress
 	p.configureProgressAnalysisMetadata()
@@ -86,7 +83,7 @@ func RunWatch(ctx context.Context, opts Options, watchInterval, reconcileInterva
 		} else {
 			progress.CancelIfRunning()
 		}
-		return haltSystemicWatchFailure(ctx, err)
+		return err
 	}
 	return nil
 }
@@ -95,9 +92,6 @@ func runWatchLoop(ctx context.Context, p watchPipeline, watchInterval, reconcile
 	jobs, err := p.fullPass(ctx)
 	finishWatchProgress(p, err)
 	if err != nil {
-		if isSystemicWatchFailure(err) {
-			return err
-		}
 		log.Printf("⚠ initial pass failed: %v", err)
 	}
 
@@ -121,9 +115,6 @@ func runWatchLoop(ctx context.Context, p watchPipeline, watchInterval, reconcile
 			newJobs, err := p.fullPass(ctx)
 			finishWatchProgress(p, err)
 			if err != nil {
-				if isSystemicWatchFailure(err) {
-					return err
-				}
 				log.Printf("⚠ reconcile failed: %v", err)
 			} else {
 				jobs = newJobs
@@ -139,9 +130,6 @@ func runWatchLoop(ctx context.Context, p watchPipeline, watchInterval, reconcile
 			newJobs, err := p.fullPass(ctx)
 			finishWatchProgress(p, err)
 			if err != nil {
-				if isSystemicWatchFailure(err) {
-					return err
-				}
 				log.Printf("⚠ discovery retry failed: %v", err)
 			} else {
 				jobs = newJobs
@@ -155,9 +143,6 @@ func runWatchLoop(ctx context.Context, p watchPipeline, watchInterval, reconcile
 		err := p.watchPass(ctx, jobs)
 		finishWatchProgress(p, err)
 		if err != nil {
-			if isSystemicWatchFailure(err) {
-				return err
-			}
 			log.Printf("⚠ refresh failed: %v", err)
 		}
 		nextWatch = clock.now().Add(watchInterval)
@@ -181,17 +166,4 @@ func setWatchProgressSchedule(p watchPipeline, nextWatch, nextReconcile time.Tim
 	if progress, ok := p.(watchProgressPipeline); ok {
 		progress.setWatchSchedule(nextWatch, nextReconcile)
 	}
-}
-
-func isSystemicWatchFailure(err error) bool {
-	return analysisruntime.IsProjectBundleSourceError(err) || orka.IsResultAuthorizationError(err)
-}
-
-func haltSystemicWatchFailure(ctx context.Context, err error) error {
-	if err == nil || !isSystemicWatchFailure(err) {
-		return err
-	}
-	log.Printf("⛔ worker halted after systemic Orka failure; no further passes will be scheduled: %v", err)
-	<-ctx.Done()
-	return errors.Join(err, ctx.Err())
 }

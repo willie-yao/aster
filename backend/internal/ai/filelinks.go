@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/buildsource"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
@@ -25,6 +26,13 @@ import (
 // ecosystem. A path is resolved against the project's own source repo, then a
 // Go vanity import host via `?go-get=1` when the first segment is a host, then
 // an "owner/repo/path" GitHub reference. The first interpretation that verifies wins.
+//
+// The resolved map is part of the published analysis content hash, so it must
+// be a function of the analysis and its pinned revision alone. Three rules keep
+// it that way: an inconclusive check never counts as absence, a definite answer
+// at an immutable revision is resolved once and then reused by later publication
+// passes instead of re-queried, and an inconclusive check keeps whatever link a
+// previous pass already published for that path at that revision.
 
 // trailingParenRe strips a trailing parenthetical annotation, such as a line
 // annotation, before resolving. Mirrors the frontend's fileToUrl cleaning.
@@ -47,6 +55,46 @@ var goImportMetaRe = regexp.MustCompile(`(?s)<meta\s+name="go-import"\s+content=
 // maxLinkCandidates caps verification work per analysis against pathological
 // prose.
 const maxLinkCandidates = 60
+
+// LinkVerificationKeyPrefix namespaces persisted link verifications in the
+// private AI cache.
+const LinkVerificationKeyPrefix = "filelink:v1:"
+
+// linkAbsenceTTL bounds how long a recorded absence is trusted. A verified
+// presence at an immutable revision is permanent, but GitHub has been observed
+// serving spurious 404s, so absence is re-checked eventually rather than hiding
+// real evidence for the whole cache lifetime.
+const linkAbsenceTTL = 24 * time.Hour
+
+// linkVerification is the outcome of one file-existence check. Only 2xx and 404
+// are definite. A transport error, rate limit, or 5xx is unverified and must not
+// be recorded as "absent": FileLinks feeds the published analysis content hash,
+// so treating a transient GitHub failure as absence changes the identity of an
+// unchanged analysis and invalidates in-flight chat and fix sessions.
+type linkVerification uint8
+
+const (
+	linkUnverified linkVerification = iota
+	linkPresent
+	linkAbsent
+)
+
+// linkVerificationRecord is the persisted shape of one definite check.
+type linkVerificationRecord struct {
+	Present bool `json:"present"`
+}
+
+// LinkVerificationStore persists file-existence answers at immutable revisions
+// so a published link map does not depend on live GitHub availability.
+type LinkVerificationStore interface {
+	LoadLinkVerification(key string) (present bool, ok bool)
+	StoreLinkVerification(key string, present bool)
+}
+
+// LinkVerificationCacheKey names one persisted check at an immutable revision.
+func LinkVerificationCacheKey(owner, repo, revision, inRepoPath string) string {
+	return LinkVerificationKeyPrefix + owner + "/" + repo + "@" + revision + ":" + inRepoPath
+}
 
 // rawContentBase and goGetScheme are origins for file-existence checks and
 // vanity import resolution. Vars so tests can point them at a stub server.
@@ -87,6 +135,15 @@ func (r *FileLinkResolver) ResolveAtRef(ctx context.Context, client *http.Client
 	return r.service.resolveFileLinksAtRef(ctx, client, tc, ref)
 }
 
+// SetVerificationStore installs the durable store for immutable-revision
+// checks. Without it every publication pass re-verifies against GitHub.
+func (r *FileLinkResolver) SetVerificationStore(store LinkVerificationStore) {
+	if r == nil {
+		return
+	}
+	r.service.SetLinkVerificationStore(store)
+}
+
 // resolveFileLinks builds the verified GitHub link map for one analysis. It
 // gathers candidate source paths from relevant_files and the analysis prose,
 // resolves each to a verified GitHub blob URL, and returns only the paths that
@@ -102,6 +159,9 @@ func (s *Service) resolveFileLinksAtRef(ctx context.Context, client *http.Client
 	if tc.AIAnalysis == nil {
 		return links
 	}
+	// The incoming map is what a previous pass published for this analysis. It
+	// is the fallback when GitHub cannot answer for a path at an immutable ref.
+	published := tc.AIAnalysis.FileLinks
 
 	// Collect distinct candidate source paths from relevant files, source-search
 	// suggestions, and paths cited in the prose.
@@ -139,27 +199,51 @@ func (s *Service) resolveFileLinksAtRef(ctx context.Context, client *http.Client
 		if index >= maxLinkCandidates {
 			break
 		}
-		var url string
-		var ok bool
 		if ref != "" && ref != "HEAD" {
-			url, ok = s.resolveConfiguredSourceLinkAtRef(ctx, client, clean, ref)
-		} else {
-			url, ok = s.resolveSourceLink(ctx, client, clean)
+			url, verification := s.resolveConfiguredSourceLinkAtRef(ctx, client, clean, ref)
+			switch {
+			case verification == linkPresent:
+				links[clean] = url
+			case verification == linkUnverified:
+				// A once-verified path stays valid at an immutable revision, so
+				// keep the published link rather than letting a transient GitHub
+				// failure change this analysis's content hash.
+				if retained, ok := publishedLinkAtRef(published, clean, ref); ok {
+					links[clean] = retained
+				}
+			}
+			continue
 		}
-		if ok {
+		if url, ok := s.resolveSourceLink(ctx, client, clean); ok {
 			links[clean] = url
 		}
 	}
 	return links
 }
 
-func (s *Service) resolveConfiguredSourceLinkAtRef(ctx context.Context, client *http.Client, clean, ref string) (string, bool) {
-	path := normalizeConfiguredSourcePath(clean, s.sourceRepoOwner, s.sourceRepoName)
-	path, err := artifacts.SafePath(path)
-	if err != nil || path == "" || !s.verifyGitHubFileAtRef(ctx, client, s.sourceRepoOwner, s.sourceRepoName, ref, path) {
+// publishedLinkAtRef returns the already published link for a path when it is
+// pinned to the same immutable revision.
+func publishedLinkAtRef(published map[string]string, clean, ref string) (string, bool) {
+	if _, ok := buildsource.NormalizeRevision(ref); !ok {
 		return "", false
 	}
-	return blobURLAtRef(s.sourceRepoOwner, s.sourceRepoName, ref, path), true
+	link, ok := published[clean]
+	if !ok || !strings.Contains(link, "/blob/"+ref+"/") {
+		return "", false
+	}
+	return link, true
+}
+
+func (s *Service) resolveConfiguredSourceLinkAtRef(ctx context.Context, client *http.Client, clean, ref string) (string, linkVerification) {
+	path := normalizeConfiguredSourcePath(clean, s.sourceRepoOwner, s.sourceRepoName)
+	path, err := artifacts.SafePath(path)
+	if err != nil || path == "" {
+		return "", linkAbsent
+	}
+	if verification := s.verifyGitHubFileAtRef(ctx, client, s.sourceRepoOwner, s.sourceRepoName, ref, path); verification != linkPresent {
+		return "", verification
+	}
+	return blobURLAtRef(s.sourceRepoOwner, s.sourceRepoName, ref, path), linkPresent
 }
 
 func normalizeConfiguredSourcePath(clean, owner, repo string) string {
@@ -210,7 +294,7 @@ func (s *Service) resolveSourceLink(ctx context.Context, client *http.Client, cl
 	// directory whose name contains a dot, such as ".github/workflows", is not
 	// mistaken for a vanity host below.
 	if s.sourceRepoOwner != "" && s.sourceRepoName != "" &&
-		s.verifyGitHubFile(ctx, client, s.sourceRepoOwner, s.sourceRepoName, clean) {
+		s.verifyGitHubFile(ctx, client, s.sourceRepoOwner, s.sourceRepoName, clean) == linkPresent {
 		return blobURL(s.sourceRepoOwner, s.sourceRepoName, clean), true
 	}
 
@@ -219,13 +303,13 @@ func (s *Service) resolveSourceLink(ctx context.Context, client *http.Client, cl
 	if strings.Contains(segs[0], ".") {
 		if segs[0] == "github.com" && len(segs) >= 4 {
 			owner, repo, inRepo := segs[1], segs[2], strings.Join(segs[3:], "/")
-			if s.verifyGitHubFile(ctx, client, owner, repo, inRepo) {
+			if s.verifyGitHubFile(ctx, client, owner, repo, inRepo) == linkPresent {
 				return blobURL(owner, repo, inRepo), true
 			}
 			return "", false
 		}
 		if owner, repo, inRepo, ok := s.resolveVanity(ctx, client, clean); ok &&
-			s.verifyGitHubFile(ctx, client, owner, repo, inRepo) {
+			s.verifyGitHubFile(ctx, client, owner, repo, inRepo) == linkPresent {
 			return blobURL(owner, repo, inRepo), true
 		}
 		return "", false
@@ -234,7 +318,7 @@ func (s *Service) resolveSourceLink(ctx context.Context, client *http.Client, cl
 	// An explicit "owner/repo/path" GitHub reference.
 	if len(segs) >= 3 {
 		owner, repo, inRepo := segs[0], segs[1], strings.Join(segs[2:], "/")
-		if s.verifyGitHubFile(ctx, client, owner, repo, inRepo) {
+		if s.verifyGitHubFile(ctx, client, owner, repo, inRepo) == linkPresent {
 			return blobURL(owner, repo, inRepo), true
 		}
 	}
@@ -318,44 +402,97 @@ func ownerRepoFromGitHubURL(url string) (owner, repo string, ok bool) {
 }
 
 // verifyGitHubFile reports whether a file exists in a repo's default branch,
-// memoized per run by the raw URL.
-func (s *Service) verifyGitHubFile(ctx context.Context, client *http.Client, owner, repo, inRepoPath string) bool {
+// memoized per run by the probe URL.
+func (s *Service) verifyGitHubFile(ctx context.Context, client *http.Client, owner, repo, inRepoPath string) linkVerification {
 	return s.verifyGitHubFileAtRef(ctx, client, owner, repo, "HEAD", inRepoPath)
 }
 
-func (s *Service) verifyGitHubFileAtRef(ctx context.Context, client *http.Client, owner, repo, ref, inRepoPath string) bool {
+// verifyGitHubFileAtRef resolves one file-existence question. Definite answers
+// are memoized for the run and, at an immutable revision, persisted so later
+// publication passes reuse them instead of re-querying GitHub. An unverified
+// outcome is never recorded.
+func (s *Service) verifyGitHubFileAtRef(ctx context.Context, client *http.Client, owner, repo, ref, inRepoPath string) linkVerification {
 	inRepoPath = citationStripRE.ReplaceAllString(strings.TrimSpace(inRepoPath), "")
-	if s.githubReadToken != "" {
-		segments := strings.Split(inRepoPath, "/")
-		for i := range segments {
-			segments[i] = url.PathEscape(segments[i])
+	probeURL, useAPI := s.linkProbeURL(owner, repo, ref, inRepoPath)
+	if v, ok := s.linkVerifyCache.Load(probeURL); ok {
+		return v.(linkVerification)
+	}
+	persistKey := ""
+	if revision, ok := buildsource.NormalizeRevision(ref); ok {
+		persistKey = LinkVerificationCacheKey(owner, repo, revision, inRepoPath)
+		if store := s.linkVerifications(); store != nil {
+			if present, ok := store.LoadLinkVerification(persistKey); ok {
+				verification := linkAbsent
+				if present {
+					verification = linkPresent
+				}
+				s.linkVerifyCache.Store(probeURL, verification)
+				return verification
+			}
 		}
-		u := githubAPIBase + "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/contents/" + strings.Join(segments, "/") + "?ref=" + url.QueryEscape(ref)
-		if v, ok := s.linkVerifyCache.Load(u); ok {
-			return v.(bool)
+	}
+	verification := s.probeGitHubFile(ctx, client, probeURL, useAPI)
+	// Memoize every outcome for the run so one degraded endpoint cannot turn
+	// each citing analysis into another request, but persist only definite
+	// answers so an unverified probe never outlives this pass.
+	s.linkVerifyCache.Store(probeURL, verification)
+	if persistKey != "" && verification != linkUnverified {
+		if store := s.linkVerifications(); store != nil {
+			store.StoreLinkVerification(persistKey, verification == linkPresent)
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
-			return false
-		}
+	}
+	return verification
+}
+
+// linkProbeURL returns the existence-check URL for one file and whether it
+// addresses the authenticated contents API rather than the raw content host.
+func (s *Service) linkProbeURL(owner, repo, ref, inRepoPath string) (string, bool) {
+	if s.githubReadToken == "" {
+		return rawContentBase + "/" + owner + "/" + repo + "/" + ref + "/" + inRepoPath, false
+	}
+	segments := strings.Split(inRepoPath, "/")
+	for i := range segments {
+		segments[i] = url.PathEscape(segments[i])
+	}
+	return githubAPIBase + "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) +
+		"/contents/" + strings.Join(segments, "/") + "?ref=" + url.QueryEscape(ref), true
+}
+
+// probeGitHubFile issues one bounded existence check.
+func (s *Service) probeGitHubFile(ctx context.Context, client *http.Client, probeURL string, useAPI bool) linkVerification {
+	reqCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	method := http.MethodHead
+	if useAPI {
+		method = http.MethodGet
+	}
+	req, err := http.NewRequestWithContext(reqCtx, method, probeURL, nil)
+	if err != nil {
+		return linkUnverified
+	}
+	if useAPI {
 		req.Header.Set("Authorization", "Bearer "+s.githubReadToken)
 		req.Header.Set("Accept", "application/vnd.github.raw+json")
-		resp, err := client.Do(req)
-		if err != nil {
-			return false
-		}
-		defer resp.Body.Close()
-		exists := resp.StatusCode >= 200 && resp.StatusCode < 300
-		s.linkVerifyCache.Store(u, exists)
-		return exists
 	}
-	rawURL := rawContentBase + "/" + owner + "/" + repo + "/" + ref + "/" + inRepoPath
-	if v, ok := s.linkVerifyCache.Load(rawURL); ok {
-		return v.(bool)
+	resp, err := client.Do(req)
+	if err != nil {
+		return linkUnverified
 	}
-	exists := headOK(ctx, client, rawURL)
-	s.linkVerifyCache.Store(rawURL, exists)
-	return exists
+	defer resp.Body.Close()
+	return classifyLinkStatus(resp.StatusCode)
+}
+
+// classifyLinkStatus maps an HTTP status to a verification outcome. Only 404
+// proves absence; every other non-2xx status leaves the question open.
+func classifyLinkStatus(status int) linkVerification {
+	switch {
+	case status >= 200 && status < 300:
+		return linkPresent
+	case status == http.StatusNotFound:
+		return linkAbsent
+	default:
+		return linkUnverified
+	}
 }
 
 func blobURL(owner, repo, inRepoPath string) string {
@@ -364,20 +501,4 @@ func blobURL(owner, repo, inRepoPath string) string {
 
 func blobURLAtRef(owner, repo, ref, inRepoPath string) string {
 	return "https://github.com/" + owner + "/" + repo + "/blob/" + ref + "/" + inRepoPath
-}
-
-// headOK issues a bounded HEAD request and reports a 2xx response.
-func headOK(ctx context.Context, client *http.Client, url string) bool {
-	reqCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodHead, url, nil)
-	if err != nil {
-		return false
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }

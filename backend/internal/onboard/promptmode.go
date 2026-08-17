@@ -1,17 +1,13 @@
 package onboard
 
-import (
-	"fmt"
-	"strings"
-	"unicode"
-)
-
 const (
-	promptModeAgent    = "agent"
 	promptModeHandoff  = "handoff"
 	promptModeTemplate = "todo-template"
 )
 
+// effectivePromptMode selects the agent handoff bundle unless the caller asked
+// for the bare TODO template. Prompt generation itself is delegated to the
+// operator's own coding agent.
 func effectivePromptMode(opts Options) string {
 	if opts.NoPrompt {
 		return promptModeTemplate
@@ -20,15 +16,4 @@ func effectivePromptMode(opts Options) string {
 		return opts.PromptMode
 	}
 	return promptModeHandoff
-}
-
-func validatePromptAgentModel(model string) error {
-	model = strings.TrimSpace(model)
-	provider, name, ok := strings.Cut(model, "/")
-	if !ok || provider == "" || name == "" || strings.IndexFunc(model, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.IsControl(r)
-	}) >= 0 {
-		return fmt.Errorf("--prompt-agent-model must be an OpenCode provider/model reference")
-	}
-	return nil
 }

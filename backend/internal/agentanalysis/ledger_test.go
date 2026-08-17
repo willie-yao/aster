@@ -181,19 +181,19 @@ func TestProvenanceFromResultIncludesToolPolicyVersion(t *testing.T) {
 func TestAttemptIdentityIncludesRequestAndRuntimeContract(t *testing.T) {
 	subject := Subject{JobID: "job", BuildID: "1", TestName: "test"}
 	source := sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: strings.Repeat("a", 40)}
-	base := AttemptIdentity(subject, hashString("request"), hashString("authoritative"), hashString("skills"), source, "orka-system", "agent", "v1", "source-readonly", time.Minute, 12, 0)
-	changedPolicy := attemptIdentityWithPolicy(subject, hashString("request"), hashString("authoritative"), hashString("skills"), source, "orka-system", "agent", "v1", "source-readonly", time.Minute, 12, 0, "agent-analysis-tools-other")
+	base := AttemptIdentity(subject, hashString("request"), hashString("authoritative"), hashString("skills"), source, "sandbox-system", "agent", "v1", "source-readonly", time.Minute, 12, 0)
+	changedPolicy := attemptIdentityWithPolicy(subject, hashString("request"), hashString("authoritative"), hashString("skills"), source, "sandbox-system", "agent", "v1", "source-readonly", time.Minute, 12, 0, "agent-analysis-tools-other")
 	if changedPolicy == base {
 		t.Fatal("tool policy version did not change attempt identity")
 	}
 	variants := []string{
 		AttemptIdentity(subject, hashString("request"), hashString("authoritative"), hashString("skills"), source, "other-system", "agent", "v1", "source-readonly", time.Minute, 12, 0),
-		AttemptIdentity(subject, hashString("request"), hashString("authoritative"), hashString("skills"), source, "orka-system", "agent", "v1", "other-secret", time.Minute, 12, 0),
-		AttemptIdentity(subject, hashString("other-request"), hashString("authoritative"), hashString("skills"), source, "orka-system", "agent", "v1", "source-readonly", time.Minute, 12, 0),
-		AttemptIdentity(subject, hashString("request"), hashString("other-authoritative"), hashString("skills"), source, "orka-system", "agent", "v1", "source-readonly", time.Minute, 12, 0),
-		AttemptIdentity(subject, hashString("request"), hashString("authoritative"), hashString("skills"), source, "orka-system", "other", "v1", "source-readonly", time.Minute, 12, 0),
-		AttemptIdentity(subject, hashString("request"), hashString("authoritative"), hashString("skills"), source, "orka-system", "agent", "v2", "source-readonly", time.Minute, 12, 0),
-		AttemptIdentity(subject, hashString("request"), hashString("authoritative"), hashString("skills"), source, "orka-system", "agent", "v1", "source-readonly", 2*time.Minute, 12, 0),
+		AttemptIdentity(subject, hashString("request"), hashString("authoritative"), hashString("skills"), source, "sandbox-system", "agent", "v1", "other-secret", time.Minute, 12, 0),
+		AttemptIdentity(subject, hashString("other-request"), hashString("authoritative"), hashString("skills"), source, "sandbox-system", "agent", "v1", "source-readonly", time.Minute, 12, 0),
+		AttemptIdentity(subject, hashString("request"), hashString("other-authoritative"), hashString("skills"), source, "sandbox-system", "agent", "v1", "source-readonly", time.Minute, 12, 0),
+		AttemptIdentity(subject, hashString("request"), hashString("authoritative"), hashString("skills"), source, "sandbox-system", "other", "v1", "source-readonly", time.Minute, 12, 0),
+		AttemptIdentity(subject, hashString("request"), hashString("authoritative"), hashString("skills"), source, "sandbox-system", "agent", "v2", "source-readonly", time.Minute, 12, 0),
+		AttemptIdentity(subject, hashString("request"), hashString("authoritative"), hashString("skills"), source, "sandbox-system", "agent", "v1", "source-readonly", 2*time.Minute, 12, 0),
 	}
 	for i, variant := range variants {
 		if variant == base {

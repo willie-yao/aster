@@ -98,7 +98,7 @@
   "properties": {
     "global": {
       "type": "object",
-      "description": "Values shared by the engine, analyzer, and fixer images.",
+      "description": "Values shared by chart images.",
       "properties": {
         "imageTag": {
           "type": "string",
@@ -177,158 +177,13 @@
           "type": "string",
           "description": "Analysis runtime implementation.",
           "enum": [
-            "inprocess",
-            "orka-container"
-          ]
-        },
-        "orkaContainer": {
-          "type": "object",
-          "description": "Experimental Orka container analysis settings.",
-          "properties": {
-            "namespace": {
-              "type": "string",
-              "description": "Analysis namespace. Empty creates a retained release-scoped namespace."
-            },
-            "api": {
-              "type": "string",
-              "description": "Orka result API URL."
-            },
-            "apiAuth": {
-              "type": "object",
-              "description": "Orka result API authentication.",
-              "properties": {
-                "existingSecret": {
-                  "type": "string",
-                  "description": "Dashboard-namespace Secret containing a static Orka API token. Empty uses a projected ServiceAccount token."
-                },
-                "tokenKey": {
-                  "type": "string",
-                  "description": "Secret key containing the Orka API token."
-                }
-              },
-              "additionalProperties": false,
-              "required": [
-                "existingSecret",
-                "tokenKey"
-              ]
-            },
-            "maxConcurrentTasks": {
-              "type": "integer",
-              "description": "Maximum concurrent analyzer Tasks.",
-              "minimum": 1,
-              "maximum": 999
-            },
-            "pollInterval": {
-              "type": "string",
-              "description": "Interval between Orka Task status polls."
-            },
-            "taskTimeout": {
-              "type": "string",
-              "description": "Per-Task timeout. It must exceed the project AI timeout plus lifecycle margin."
-            },
-            "retries": {
-              "type": "integer",
-              "description": "Orka Task retry count.",
-              "minimum": 0,
-              "maximum": 99
-            },
-            "image": {
-              "type": "object",
-              "description": "Analyzer Task image.",
-              "properties": {
-                "repository": {
-                  "type": "string",
-                  "description": "Container image repository."
-                },
-                "tag": {
-                  "type": "string",
-                  "description": "Container image tag. An empty value follows the chart image fallback."
-                },
-                "pullPolicy": {
-                  "type": "string",
-                  "description": "Kubernetes image pull policy.",
-                  "enum": [
-                    "IfNotPresent"
-                  ]
-                }
-              },
-              "additionalProperties": false,
-              "required": [
-                "repository",
-                "tag",
-                "pullPolicy"
-              ]
-            },
-            "modelAuth": {
-              "type": "object",
-              "description": "Model credential reference in the analysis namespace.",
-              "properties": {
-                "existingSecret": {
-                  "type": "string",
-                  "description": "Existing model credential Secret name."
-                },
-                "tokenKey": {
-                  "type": "string",
-                  "description": "Secret key containing the model token."
-                }
-              },
-              "additionalProperties": false,
-              "required": [
-                "existingSecret",
-                "tokenKey"
-              ]
-            },
-            "state": {
-              "type": "object",
-              "description": "Encrypted analyzer state key configuration.",
-              "properties": {
-                "existingSecret": {
-                  "type": "string",
-                  "description": "Existing state Secret name in both dashboard and analysis namespaces."
-                },
-                "key": {
-                  "type": "string",
-                  "description": "Secret key containing the state key."
-                }
-              },
-              "additionalProperties": false,
-              "required": [
-                "existingSecret",
-                "key"
-              ]
-            },
-            "nodeSelector": {
-              "$ref": "#/definitions/stringMap"
-            },
-            "tolerations": {
-              "$ref": "#/definitions/tolerations"
-            },
-            "affinity": {
-              "$ref": "#/definitions/freeFormObject"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "namespace",
-            "api",
-            "apiAuth",
-            "maxConcurrentTasks",
-            "pollInterval",
-            "taskTimeout",
-            "retries",
-            "image",
-            "modelAuth",
-            "state",
-            "nodeSelector",
-            "tolerations",
-            "affinity"
+            "inprocess"
           ]
         }
       },
       "additionalProperties": false,
       "required": [
-        "type",
-        "orkaContainer"
+        "type"
       ]
     },
     "agentSandbox": {
@@ -1177,96 +1032,117 @@
             "clientServiceAccountName"
           ],
           "additionalProperties": false
-        }
-      },
-      "required": [
-        "fixRuntime",
-        "analyzer",
-        "causalCritic",
-        "rbac"
-      ],
-      "additionalProperties": false
-    },
-    "orka": {
-      "type": "object",
-      "description": "Orka integration shared by analysis, source investigation, and fix generation.",
-      "properties": {
-        "namespace": {
-          "type": "string",
-          "description": "Namespace of the separately installed Orka release."
         },
-        "agentAnalysisShadow": {
+        "analysisShadow": {
           "type": "object",
-          "description": "Private disabled-by-default Agent comparison after authoritative in-process analysis.",
           "properties": {
             "enabled": {
               "type": "boolean"
             },
-            "api": {
-              "type": "string",
-              "description": "Absolute Orka result API URL."
+            "namespace": {
+              "type": "string"
+            },
+            "runtimeClassName": {
+              "type": "string"
+            },
+            "image": {
+              "type": "object",
+              "properties": {
+                "repository": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "IfNotPresent"
+                  ]
+                }
+              },
+              "required": [
+                "repository",
+                "digest",
+                "pullPolicy"
+              ],
+              "additionalProperties": false
+            },
+            "workloadServiceAccount": {
+              "type": "object",
+              "properties": {
+                "create": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "create",
+                "name"
+              ],
+              "additionalProperties": false
             },
             "agentVersion": {
-              "type": "string",
-              "description": "Declared Agent contract version used in Task identity."
+              "type": "string"
             },
-            "serviceAccountName": {
-              "type": "string",
-              "description": "Existing dedicated shadow ServiceAccount when chart-managed RBAC is disabled."
+            "modelProvider": {
+              "type": "object",
+              "properties": {
+                "credentialMode": {
+                  "type": "string",
+                  "enum": [
+                    "direct",
+                    "gateway"
+                  ]
+                },
+                "api": {
+                  "type": "string",
+                  "enum": [
+                    "chat_completions"
+                  ]
+                },
+                "endpoint": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "credentialMode",
+                "api",
+                "endpoint",
+                "model"
+              ],
+              "additionalProperties": false
+            },
+            "timeout": {
+              "type": "string"
+            },
+            "retries": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2
+            },
+            "outputLimitBytes": {
+              "type": "integer",
+              "minimum": 4096,
+              "maximum": 1048576
             },
             "maxPerRun": {
               "type": "integer",
               "minimum": 1,
               "maximum": 10
             },
-            "admission": {
-              "type": "object",
-              "properties": {
-                "agentRef": {
-                  "type": "string"
-                },
-                "repository": {
-                  "type": "object",
-                  "properties": {
-                    "owner": {
-                      "type": "string"
-                    },
-                    "name": {
-                      "type": "string"
-                    }
-                  },
-                  "additionalProperties": false,
-                  "required": [
-                    "owner",
-                    "name"
-                  ]
-                },
-                "gitSecret": {
-                  "type": "string"
-                },
-                "maxTurns": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 1000
-                },
-                "timeout": {
-                  "type": "string"
-                },
-                "retries": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 2
-                }
-              },
-              "additionalProperties": false,
-              "required": [
-                "agentRef",
-                "repository",
-                "gitSecret",
-                "maxTurns",
-                "timeout",
-                "retries"
-              ]
+            "maxTurns": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "pollInterval": {
+              "type": "string"
             },
             "ledger": {
               "type": "object",
@@ -1274,175 +1150,150 @@
                 "existingClaim": {
                   "type": "string"
                 },
-                "retain": {
-                  "type": "boolean"
-                },
-                "accessMode": {
-                  "type": "string",
-                  "enum": [
-                    "ReadWriteOnce",
-                    "ReadWriteMany"
-                  ]
-                },
-                "size": {
-                  "type": "string"
-                },
-                "storageClass": {
+                "mountPath": {
                   "type": "string"
                 }
               },
-              "additionalProperties": false,
               "required": [
                 "existingClaim",
-                "retain",
-                "accessMode",
-                "size",
-                "storageClass"
-              ]
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "enabled",
-            "api",
-            "agentVersion",
-            "serviceAccountName",
-            "maxPerRun",
-            "admission",
-            "ledger"
-          ]
-        },
-        "fixRuntime": {
-          "type": "object",
-          "description": "Orka fix generation settings.",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable Orka RBAC and the git-capable fixer runtime."
+                "mountPath"
+              ],
+              "additionalProperties": false
             },
-            "image": {
+            "networkPolicy": {
               "type": "object",
-              "description": "Fixer image.",
               "properties": {
-                "repository": {
+                "mode": {
                   "type": "string",
-                  "description": "Container image repository."
-                },
-                "tag": {
-                  "type": "string",
-                  "description": "Container image tag. An empty value follows the chart image fallback."
-                },
-                "pullPolicy": {
-                  "type": "string",
-                  "description": "Kubernetes image pull policy.",
                   "enum": [
-                    "Always",
-                    "IfNotPresent",
-                    "Never"
+                    "kubernetes",
+                    "cilium"
                   ]
-                }
-              },
-              "additionalProperties": false,
-              "required": [
-                "repository",
-                "tag",
-                "pullPolicy"
-              ]
-            },
-            "admission": {
-              "type": "object",
-              "description": "Fail-closed admission contract for dashboard-created Orka fix Tasks.",
-              "properties": {
-                "agentRef": {
-                  "type": "string",
-                  "description": "Exact Orka Agent name allowed for fix generation."
                 },
-                "repository": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "gatewayNamespaceSelector": {
                   "type": "object",
-                  "description": "Exact GitHub repository allowed in fix Task workspaces.",
-                  "properties": {
-                    "owner": {
-                      "type": "string",
-                      "description": "Approved GitHub repository owner."
-                    },
-                    "name": {
-                      "type": "string",
-                      "description": "Approved GitHub repository name."
-                    }
-                  },
-                  "additionalProperties": false,
-                  "required": [
-                    "owner",
-                    "name"
-                  ]
+                  "additionalProperties": {
+                    "type": "string"
+                  }
                 },
-                "maxTurns": {
+                "gatewayPodSelector": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "gatewayPort": {
                   "type": "integer",
                   "minimum": 1,
-                  "maximum": 1000,
-                  "description": "Exact maximum agent turns allowed by admission."
+                  "maximum": 65535
                 },
-                "allowBash": {
-                  "type": "boolean",
-                  "description": "Exact Bash policy allowed by admission."
+                "dnsNamespaceSelector": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
                 },
-                "timeout": {
-                  "type": "string",
-                  "pattern": "^([1-9]|[12][0-9]|30)m$",
-                  "description": "Exact Task timeout, from 1m through 30m."
-                },
-                "retries": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 2,
-                  "description": "Exact Orka Task retry count allowed by admission."
+                "dnsPodSelector": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
                 }
               },
-              "additionalProperties": false,
               "required": [
-                "agentRef",
-                "repository",
-                "maxTurns",
-                "allowBash",
-                "timeout",
-                "retries"
-              ]
+                "mode",
+                "enabled",
+                "gatewayNamespaceSelector",
+                "gatewayPodSelector",
+                "gatewayPort",
+                "dnsNamespaceSelector",
+                "dnsPodSelector"
+              ],
+              "additionalProperties": false
+            },
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    },
+                    "ephemeral-storage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory",
+                    "ephemeral-storage"
+                  ],
+                  "additionalProperties": false
+                },
+                "limits": {
+                  "type": "object",
+                  "properties": {
+                    "cpu": {
+                      "type": "string"
+                    },
+                    "memory": {
+                      "type": "string"
+                    },
+                    "ephemeral-storage": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu",
+                    "memory",
+                    "ephemeral-storage"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "requests",
+                "limits"
+              ],
+              "additionalProperties": false
             }
           },
-          "additionalProperties": false,
           "required": [
             "enabled",
+            "namespace",
+            "runtimeClassName",
             "image",
-            "admission"
-          ]
-        },
-        "rbac": {
-          "type": "object",
-          "description": "Orka ServiceAccount and Role management.",
-          "properties": {
-            "create": {
-              "type": "boolean",
-              "description": "Create the dashboard Orka ServiceAccount and Roles."
-            },
-            "serviceAccountName": {
-              "type": "string",
-              "description": "Existing fix and analysis Orka ServiceAccount name when chart-managed RBAC is disabled."
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "create",
-            "serviceAccountName"
-          ]
+            "workloadServiceAccount",
+            "agentVersion",
+            "modelProvider",
+            "timeout",
+            "retries",
+            "outputLimitBytes",
+            "maxPerRun",
+            "maxTurns",
+            "pollInterval",
+            "ledger",
+            "networkPolicy",
+            "resources"
+          ],
+          "additionalProperties": false
         }
       },
-      "additionalProperties": false,
       "required": [
-        "namespace",
-        "agentAnalysisShadow",
         "fixRuntime",
+        "analyzer",
+        "causalCritic",
+        "analysisShadow",
         "rbac"
-      ]
+      ],
+      "additionalProperties": false
     },
     "persistence": {
       "type": "object",
@@ -1520,7 +1371,7 @@
         },
         "materializer": {
           "type": "object",
-          "description": "Project bundle materializer used by Orka container analysis.",
+          "description": "Project bundle materializer.",
           "properties": {
             "image": {
               "type": "object",
@@ -1857,90 +1708,6 @@
               "type": "boolean",
               "description": "Enable reviewed chat corrections."
             },
-            "sourceInvestigation": {
-              "type": "object",
-              "description": "Authenticated source investigation settings.",
-              "properties": {
-                "enabled": {
-                  "type": "boolean",
-                  "description": "Enable source investigation from analysis chat."
-                },
-                "serviceAccountName": {
-                  "type": "string",
-                  "description": "Existing source-investigation ServiceAccount name when chart-managed RBAC is disabled. Must differ from orka.rbac.serviceAccountName when fix actions share the server pod."
-                },
-                "maxPerSession": {
-                  "type": "integer",
-                  "description": "Maximum source investigations per chat session.",
-                  "minimum": 1
-                },
-                "maxActivePerOwner": {
-                  "type": "integer",
-                  "description": "Maximum active source investigations per owner.",
-                  "minimum": 1
-                },
-                "admission": {
-                  "type": "object",
-                  "description": "Fail-closed admission contract for source investigation Tasks.",
-                  "properties": {
-                    "agentRef": {
-                      "type": "string"
-                    },
-                    "repository": {
-                      "type": "object",
-                      "properties": {
-                        "owner": {
-                          "type": "string"
-                        },
-                        "name": {
-                          "type": "string"
-                        }
-                      },
-                      "additionalProperties": false,
-                      "required": [
-                        "owner",
-                        "name"
-                      ]
-                    },
-                    "gitSecret": {
-                      "type": "string",
-                      "description": "Exact read-only workspace Git Secret."
-                    },
-                    "maxTurns": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "maximum": 1000
-                    },
-                    "timeout": {
-                      "type": "string",
-                      "pattern": "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|\u00b5s|\u03bcs|ms|s|m|h)((([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|\u00b5s|\u03bcs|ms|s|m|h))*$"
-                    },
-                    "retries": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 2
-                    }
-                  },
-                  "additionalProperties": false,
-                  "required": [
-                    "agentRef",
-                    "repository",
-                    "gitSecret",
-                    "maxTurns",
-                    "timeout",
-                    "retries"
-                  ]
-                }
-              },
-              "additionalProperties": false,
-              "required": [
-                "enabled",
-                "serviceAccountName",
-                "maxPerSession",
-                "maxActivePerOwner",
-                "admission"
-              ]
-            },
             "sessionTTL": {
               "type": "string",
               "description": "Persisted chat session lifetime."
@@ -1971,7 +1738,6 @@
             "enabled",
             "timeout",
             "correctionsEnabled",
-            "sourceInvestigation",
             "sessionTTL",
             "maxSessions",
             "maxSessionsPerOwner",
@@ -2474,7 +2240,6 @@
     "analysisCache",
     "analysisRuntime",
     "agentSandbox",
-    "orka",
     "persistence",
     "project",
     "ai",

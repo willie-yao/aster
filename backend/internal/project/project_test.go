@@ -734,14 +734,9 @@ func TestEffectiveFixPRsDefaults(t *testing.T) {
 	if got.Fork == nil || *got.Fork != true {
 		t.Errorf("Fork default = %v, want true", got.Fork)
 	}
-	if got.CritiqueRetries == nil || *got.CritiqueRetries != 1 {
-		t.Errorf("CritiqueRetries default = %v, want 1", got.CritiqueRetries)
-	}
-	// An explicit critique_retries: 0 (disable) is preserved.
-	zero := 0
-	c.AI.FixPRs.CritiqueRetries = &zero
-	if got2 := c.EffectiveFixPRs(); got2.CritiqueRetries == nil || *got2.CritiqueRetries != 0 {
-		t.Errorf("explicit critique_retries=0 not preserved: %v", got2.CritiqueRetries)
+	// The one-shot agent-sandbox runtime pins critique retries to zero.
+	if got.CritiqueRetries == nil || *got.CritiqueRetries != 0 {
+		t.Errorf("CritiqueRetries default = %v, want 0", got.CritiqueRetries)
 	}
 	// An explicit fork: false is preserved.
 	f := false
@@ -760,11 +755,11 @@ func TestEffectiveFixPRs_AgentRuntimeDefaults(t *testing.T) {
 		}},
 	}
 	ar := c.EffectiveFixPRs().AgentRuntime
-	if ar == nil || ar.Type != "opencode" || ar.MaxTurns != 30 {
+	if ar == nil || ar.Type != "agent-sandbox" || ar.MaxTurns != 30 {
 		t.Fatalf("agent_runtime defaults wrong: %+v", ar)
 	}
-	if ar.AllowBash == nil || !*ar.AllowBash {
-		t.Errorf("allow_bash default = %v, want true", ar.AllowBash)
+	if ar.AllowBash == nil || *ar.AllowBash {
+		t.Errorf("allow_bash default = %v, want false", ar.AllowBash)
 	}
 	// An explicit allow_bash: false is preserved.
 	no := false
@@ -801,21 +796,6 @@ func TestEffectiveFixPRsPreservesAgentSandboxCommands(t *testing.T) {
 	effective.AllowedCommands[0].Argv[0] = "changed"
 	if got := config.AI.FixPRs.AgentRuntime.AllowedCommands[0].Argv[0]; got != "go" {
 		t.Fatalf("effective argv aliases source config: %q", got)
-	}
-}
-
-func TestEffectiveFixPRs_NilAgentRuntimeDefaultsToOpencode(t *testing.T) {
-	// A nil agent_runtime block means "opencode with defaults": the coding-agent
-	// generator is the only fix path, so the effective config always resolves.
-	c := &Config{
-		Branding: Branding{SourceRepo: SourceRepo{Owner: "o", Name: "n"}},
-		AI: &AI{FixPRs: &FixPRs{
-			Enabled: true, AuthorName: "J", AuthorEmail: "j@e.com",
-		}},
-	}
-	ar := c.EffectiveFixPRs().AgentRuntime
-	if ar == nil || ar.Type != "opencode" || ar.MaxTurns != 30 || ar.AllowBash == nil || !*ar.AllowBash {
-		t.Fatalf("nil agent_runtime should default to opencode: %+v", ar)
 	}
 }
 
@@ -863,12 +843,6 @@ func TestValidateFixPRsRequiresAuthor(t *testing.T) {
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{Type: "claude"}}}
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "agent_runtime.type") {
 		t.Errorf("expected unsupported agent_runtime.type error, got %v", err)
-	}
-	// opencode (and empty) agent_runtime.type is accepted.
-	c = base()
-	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{Type: "opencode", Timeout: "10m"}}}
-	if err := c.Validate(); err != nil {
-		t.Errorf("unexpected error for opencode agent_runtime: %v", err)
 	}
 	// A bad agent_runtime.timeout is rejected.
 	c = base()
@@ -1012,99 +986,6 @@ func TestValidateFixVerifyTimeout(t *testing.T) {
 	}
 }
 
-func TestEffectiveFixPRsOrkaRuntimeDefaults(t *testing.T) {
-	c := &Config{
-		Branding: Branding{SourceRepo: SourceRepo{Owner: "o", Name: "n"}},
-		AI: &AI{FixPRs: &FixPRs{
-			Enabled: true, AuthorName: "J", AuthorEmail: "j@e.com",
-			AgentRuntime: &FixAgentRuntime{Type: "orka", OrkaAgentRef: "opencode-fixer", OrkaAPI: "http://orka:8080"},
-		}},
-	}
-	got := c.EffectiveFixPRs().AgentRuntime
-	if got.OrkaNamespace != "orka-system" || got.OrkaVersion != "v1" || got.OrkaRetries == nil || *got.OrkaRetries != 1 {
-		t.Fatalf("Orka defaults = %+v", got)
-	}
-}
-
-func TestValidateFixPRsOrkaRuntime(t *testing.T) {
-	base := func() *Config {
-		c, err := parse(strings.NewReader(validYAML))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return c
-	}
-	c := base()
-	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{Type: "orka"}}}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "agent_ref and api") {
-		t.Fatalf("missing Orka config error = %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.OrkaAgentRef = "opencode-fixer"
-	c.AI.FixPRs.AgentRuntime.OrkaAPI = "http://orka:8080"
-	if err := c.Validate(); err != nil {
-		t.Fatalf("valid Orka runtime rejected: %v", err)
-	}
-	negativeRetries := -1
-	c.AI.FixPRs.AgentRuntime.OrkaRetries = &negativeRetries
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "retries") {
-		t.Fatalf("negative Orka retries error = %v", err)
-	}
-	tooManyRetries := 3
-	c.AI.FixPRs.AgentRuntime.OrkaRetries = &tooManyRetries
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "between 0 and 2") {
-		t.Fatalf("oversized Orka retries error = %v", err)
-	}
-	validRetries := 2
-	c.AI.FixPRs.AgentRuntime.OrkaRetries = &validRetries
-	c.AI.FixPRs.AgentRuntime.MaxTurns = 1001
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "between 1 and 1000") {
-		t.Fatalf("oversized Orka max turns error = %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.MaxTurns = 1000
-	c.AI.FixPRs.AgentRuntime.Timeout = "31m"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "whole minutes") {
-		t.Fatalf("oversized Orka timeout error = %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.Timeout = "90s"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "whole minutes") {
-		t.Fatalf("fractional-minute Orka timeout error = %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.Timeout = "0s"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "whole minutes") {
-		t.Fatalf("zero Orka timeout error = %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.Timeout = "30m"
-	if err := c.Validate(); err != nil {
-		t.Fatalf("Orka runtime boundary rejected: %v", err)
-	}
-}
-
-func TestValidateLocalFixRuntimeKeepsExistingBounds(t *testing.T) {
-	c := validConfig()
-	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{
-		Type: "opencode", MaxTurns: 1001, Timeout: "90s",
-	}}}
-	if err := c.Validate(); err != nil {
-		t.Fatalf("local runtime bounds changed: %v", err)
-	}
-}
-
-func TestEffectiveFixPRsOrkaTimeoutDefault(t *testing.T) {
-	c := &Config{AI: &AI{FixPRs: &FixPRs{AgentRuntime: &FixAgentRuntime{Type: "orka"}}}}
-	if got := c.EffectiveFixPRs().AgentRuntime.Timeout; got != "10m" {
-		t.Fatalf("Orka timeout default = %q, want 10m", got)
-	}
-}
-
-func TestEffectiveFixPRsPreservesZeroOrkaRetries(t *testing.T) {
-	zero := 0
-	c := &Config{AI: &AI{FixPRs: &FixPRs{AgentRuntime: &FixAgentRuntime{Type: "orka", OrkaRetries: &zero}}}}
-	got := c.EffectiveFixPRs().AgentRuntime
-	if got.OrkaRetries == nil || *got.OrkaRetries != 0 {
-		t.Fatalf("OrkaRetries = %v, want explicit zero", got.OrkaRetries)
-	}
-}
-
 func TestResolveAIProviderAPI(t *testing.T) {
 	cfg := &Config{AI: &AI{API: AIAPIResponses, Endpoint: "https://example/v1/responses", Model: "m"}}
 	got := cfg.ResolveAIProvider(AIAPIChatCompletions, "fallback", "fallback-model", " HIGH ")
@@ -1129,51 +1010,6 @@ func TestValidateRejectsUnknownAIAPI(t *testing.T) {
 	cfg.AI = &AI{API: "unknown"}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ai.api") {
 		t.Fatalf("Validate() error = %v", err)
-	}
-}
-
-func TestEffectiveSourceInvestigationDefaults(t *testing.T) {
-	cfg := &Config{AI: &AI{SourceInvestigation: &AnalysisSourceInvestigation{
-		AgentRef: " source-reader ", API: " http://orka:8080 ", GitSecret: " source-readonly ",
-	}}}
-	got := cfg.EffectiveSourceInvestigation()
-	if got.AgentRef != "source-reader" || got.API != "http://orka:8080" || got.Namespace != "orka-system" ||
-		got.Version != "v1" || got.Retries == nil || *got.Retries != 1 || got.MaxTurns != 30 || got.Timeout != "10m" {
-		t.Fatalf("source investigation defaults = %+v", got)
-	}
-}
-
-func TestValidateSourceInvestigation(t *testing.T) {
-	cfg := validConfig()
-	cfg.AI = &AI{SourceInvestigation: &AnalysisSourceInvestigation{}}
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "agent_ref and api") {
-		t.Fatalf("missing source config error = %v", err)
-	}
-	cfg.AI.SourceInvestigation.AgentRef = "reader"
-	cfg.AI.SourceInvestigation.API = "http://orka:8080"
-	cfg.AI.SourceInvestigation.GitSecret = "source-readonly"
-	cfg.AI.SourceInvestigation.Timeout = "15m"
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("valid source config rejected: %v", err)
-	}
-	cfg.AI.SourceInvestigation.Timeout = "31m"
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "at most 30m") {
-		t.Fatalf("oversized timeout error = %v", err)
-	}
-	cfg.AI.SourceInvestigation.Timeout = "15m"
-	retries := 3
-	cfg.AI.SourceInvestigation.Retries = &retries
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "between 0 and 2") {
-		t.Fatalf("oversized retries error = %v", err)
-	}
-	retries = 2
-	cfg.AI.SourceInvestigation.MaxTurns = 1001
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "between 1 and 1000") {
-		t.Fatalf("oversized max turns error = %v", err)
-	}
-	cfg.AI.SourceInvestigation.MaxTurns = 1000
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("source config boundary rejected: %v", err)
 	}
 }
 
@@ -1332,39 +1168,6 @@ func TestValidateAIUsage(t *testing.T) {
 	}
 }
 
-func TestFixAgentRuntimeNetworkDomains(t *testing.T) {
-	c := validConfig()
-	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{
-		Type: "opencode", NetworkDomains: []string{"Registry.Example.COM:443"},
-	}}}
-	if err := c.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	got := c.EffectiveFixPRs().AgentRuntime.NetworkDomains
-	if len(got) != 1 || got[0] != "registry.example.com:443" {
-		t.Fatalf("network domains = %v", got)
-	}
-
-	c.AI.FixPRs.AgentRuntime.NetworkDomains = []string{"https://user:secret@example.com"}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "network_domains") || strings.Contains(err.Error(), "secret") {
-		t.Fatalf("credential-bearing domain error = %v", err)
-	}
-
-	c.AI.FixPRs.AgentRuntime = &FixAgentRuntime{
-		Type: "orka", OrkaAgentRef: "agent", OrkaAPI: "http://orka.invalid", NetworkDomains: []string{"registry.example.com"},
-	}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "applies only") {
-		t.Fatalf("Orka network domains error = %v", err)
-	}
-
-	c.AI.FixPRs.AgentRuntime = &FixAgentRuntime{
-		Type: "orka", OrkaAgentRef: "agent", OrkaAPI: "http://orka.invalid", Model: "explicit-model",
-	}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "agent_runtime.model applies only") {
-		t.Fatalf("Orka model error = %v", err)
-	}
-}
-
 func TestValidateExactBucketJobs(t *testing.T) {
 	valid := validConfig()
 	valid.Discovery = Discovery{Source: DiscoveryBucket, ExactJobs: []string{"periodic-project-e2e", "ci_project.unit"}}
@@ -1507,16 +1310,6 @@ func TestValidateAgentSandboxFixRuntime(t *testing.T) {
 		t.Fatalf("agent-sandbox allow_bash error = %v", err)
 	}
 	c.AI.FixPRs.AgentRuntime.AllowBash = &no
-	c.AI.FixPRs.AgentRuntime.Model = "provider/model"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "model applies only") {
-		t.Fatalf("agent-sandbox model error = %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.Model = ""
-	c.AI.FixPRs.AgentRuntime.NetworkDomains = []string{"example.test:443"}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "network_domains") {
-		t.Fatalf("agent-sandbox network error = %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.NetworkDomains = nil
 	c.AI.FixPRs.AgentRuntime.AllowedCommands = nil
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "allowed_commands") {
 		t.Fatalf("agent-sandbox command policy error = %v", err)

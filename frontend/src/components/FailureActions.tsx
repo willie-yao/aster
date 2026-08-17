@@ -801,7 +801,7 @@ export function FailureActions({
       {!eligibilityLoading && eligibility && eligibility.state !== "actionable" && (
         <Alert role="status" severity={eligibility.state === "already_present" || eligibility.state === "recovered" ? "info" : "warning"} variant="outlined" sx={{ mt: 1 }}>
           <Typography variant="body2" sx={{ fontWeight: 650 }}>
-            {actionEligibilityTitle(eligibility, Boolean(features.source_investigation))}
+            {actionEligibilityTitle(eligibility)}
           </Typography>
           <Typography variant="body2">{eligibility.reason}</Typography>
         </Alert>

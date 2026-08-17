@@ -22,7 +22,6 @@ type fakeChatFixRunner struct {
 	requestID       string
 	patternID       string
 	patternHash     string
-	sourceRequestID string
 	userToken       string
 	instruction     string
 	replacesRequest string
@@ -116,10 +115,10 @@ func (r *blockingHTTPChatFixRunner) snapshot() (actions.ActionRequestView, int, 
 
 func (f *fakeChatFixRunner) PreviewChatFix(
 	_ context.Context,
-	sessionID, owner, requestID, patternID, patternHash, sourceRequestID, userToken, instruction string,
+	sessionID, owner, requestID, patternID, patternHash, userToken, instruction string,
 ) (actions.PreviewResult, error) {
 	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
-	f.patternID, f.patternHash, f.sourceRequestID = patternID, patternHash, sourceRequestID
+	f.patternID, f.patternHash = patternID, patternHash
 	f.userToken, f.instruction = userToken, instruction
 	if f.err != nil {
 		return actions.PreviewResult{}, f.err
@@ -171,7 +170,7 @@ func TestHandlerChatFixPreview(t *testing.T) {
 	req, err := http.NewRequest(
 		http.MethodPost,
 		server.URL+"/api/analysis-chat/sessions/session-1/requests/chat-1/fix/preview",
-		strings.NewReader(`{"pattern_id":"pattern-1","pattern_hash":"hash-1","source_request_id":"source-1","instruction":"keep compatibility"}`),
+		strings.NewReader(`{"pattern_id":"pattern-1","pattern_hash":"hash-1","instruction":"keep compatibility"}`),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -186,7 +185,7 @@ func TestHandlerChatFixPreview(t *testing.T) {
 		t.Fatalf("status = %d", response.StatusCode)
 	}
 	if runner.sessionID != "session-1" || runner.owner != "alice" || runner.requestID != "chat-1" ||
-		runner.patternID != "pattern-1" || runner.patternHash != "hash-1" || runner.sourceRequestID != "source-1" ||
+		runner.patternID != "pattern-1" || runner.patternHash != "hash-1" ||
 		runner.userToken != "tok" || runner.instruction != "keep compatibility" {
 		t.Fatalf("runner = %+v", runner)
 	}
@@ -209,7 +208,7 @@ func TestHandlerExactJUnitChatFixPreview(t *testing.T) {
 	if recorder.Code != http.StatusAccepted || !strings.Contains(recorder.Body.String(), `"id":"action-request"`) {
 		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if !runner.requestCreated || runner.patternID != "" || runner.patternHash != "" || runner.sourceRequestID != "" || runner.instruction != "keep the API stable" || runner.replacesRequest != "failed-request" {
+	if !runner.requestCreated || runner.patternID != "" || runner.patternHash != "" || runner.instruction != "keep the API stable" || runner.replacesRequest != "failed-request" {
 		t.Fatalf("runner = %+v", runner)
 	}
 }
@@ -390,7 +389,6 @@ func TestHandlerChatFixRejectsInvalidBodies(t *testing.T) {
 		`{"pattern_id":"pattern","pattern_hash":"hash","assistant_answer":"client text is forbidden"}`,
 		`{"pattern_id":"` + strings.Repeat("x", maxChatFixPatternBytes+1) + `","pattern_hash":"hash"}`,
 		`{"pattern_id":"pattern","pattern_hash":"` + strings.Repeat("x", maxChatFixPatternHash+1) + `"}`,
-		`{"pattern_id":"pattern","pattern_hash":"hash","source_request_id":"` + strings.Repeat("x", maxChatFixRequestIDBytes+1) + `"}`,
 		`{"pattern_id":"pattern","pattern_hash":"hash","instruction":"` + strings.Repeat("x", maxChatFixInputBytes+1) + `"}`,
 	} {
 		req := httptest.NewRequest(

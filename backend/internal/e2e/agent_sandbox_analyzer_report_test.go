@@ -743,3 +743,15 @@ func runAgentSandboxAnalyzerReportWithExpected(t *testing.T, inprocess, sandbox 
 	}
 	return report
 }
+
+func cloneReportRecord(record map[string]any) map[string]any {
+	clone := make(map[string]any, len(record))
+	for key, value := range record {
+		if values, ok := value.([]string); ok {
+			clone[key] = append([]string(nil), values...)
+			continue
+		}
+		clone[key] = value
+	}
+	return clone
+}

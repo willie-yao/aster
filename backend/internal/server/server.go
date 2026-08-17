@@ -85,7 +85,6 @@ type Options struct {
 	DisableFixActions              bool
 	AnalysisChat                   AnalysisChatRunner
 	AnalysisCorrections            AnalysisCorrectionRunner
-	SourceInvestigation            SourceInvestigationRunner
 	CausalRemediationInvestigation CausalRemediationInvestigationRunner
 	CausalFixPreview               CausalFixPreviewRunner
 	// ChatFix bridges one selected chat response into the existing fix preview.
@@ -94,8 +93,6 @@ type Options struct {
 	ActionTimeout time.Duration
 	// AnalysisChatTimeout bounds one conversation turn.
 	AnalysisChatTimeout time.Duration
-	// SourceInvestigationTimeout bounds one read-only source run.
-	SourceInvestigationTimeout time.Duration
 	// CausalRemediationRequestTimeout bounds synchronous start and status validation.
 	CausalRemediationRequestTimeout time.Duration
 	// AuthMode is advertised to the frontend: "oauth" (show a sign-in button),
@@ -175,7 +172,6 @@ type Features struct {
 	// AnalysisChat enables authenticated conversations about one published analysis.
 	AnalysisChat                                bool `json:"analysis_chat,omitempty"`
 	AnalysisCorrections                         bool `json:"analysis_corrections,omitempty"`
-	SourceInvestigation                         bool `json:"source_investigation,omitempty"`
 	CausalRemediationInvestigation              bool `json:"causal_remediation_investigation,omitempty"`
 	CausalRemediationInvestigationAuthenticated bool `json:"causal_remediation_investigation_authenticated,omitempty"`
 	CausalRemediationFixPreview                 bool `json:"causal_remediation_fix_preview,omitempty"`
@@ -208,9 +204,6 @@ func Handler(opts Options) (http.Handler, error) {
 		return nil, fmt.Errorf("server: data dir %q is not a directory", opts.DataDir)
 	}
 
-	if opts.SourceInvestigation != nil && opts.AnalysisChat == nil {
-		return nil, fmt.Errorf("server: source investigation requires analysis chat")
-	}
 	if opts.ChatFix != nil && (opts.AnalysisChat == nil || opts.Actions == nil) {
 		return nil, fmt.Errorf("server: chat fix requires analysis chat and actions")
 	}
@@ -266,24 +259,6 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, guard(streamAnalysisChatMessageHandler(timeout, opts.AnalysisChat))))
 		mux.Handle("POST /api/analysis-chat/sessions/{id}/requests/{requestID}/cancel",
 			auth.Middleware(opts.Auth, guard(cancelAnalysisChatMessageHandler(opts.AnalysisChat))))
-	}
-
-	if opts.Auth != nil && opts.SourceInvestigation != nil {
-		caps.Features.SourceInvestigation = true
-		timeout := opts.SourceInvestigationTimeout
-		if timeout <= 0 {
-			timeout = 10 * time.Minute
-		}
-		trusted := trustedOriginSet(opts.TrustedOrigins)
-		guard := func(next http.Handler) http.Handler { return csrfGuard(trusted, next) }
-		mux.Handle("POST /api/analysis-chat/sessions/{id}/source-investigations",
-			auth.Middleware(opts.Auth, guard(sourceInvestigationHandler(timeout, opts.SourceInvestigation))))
-		mux.Handle("POST /api/analysis-chat/sessions/{id}/source-investigations/stream",
-			auth.Middleware(opts.Auth, guard(streamSourceInvestigationHandler(timeout, opts.SourceInvestigation))))
-		mux.Handle("GET /api/analysis-chat/sessions/{id}/source-investigations/{requestID}",
-			auth.Middleware(opts.Auth, getSourceInvestigationHandler(opts.SourceInvestigation)))
-		mux.Handle("POST /api/analysis-chat/sessions/{id}/source-investigations/{requestID}/cancel",
-			auth.Middleware(opts.Auth, guard(cancelSourceInvestigationHandler(opts.SourceInvestigation))))
 	}
 
 	if opts.Auth != nil && opts.ChatFix != nil {

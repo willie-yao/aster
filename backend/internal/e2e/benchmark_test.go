@@ -1625,16 +1625,6 @@ func benchmarkAllowsUnavailable(bc benchCase, tc *models.TestCase, outcome bench
 	return bc.allowUnavailable && outcome == benchmarkOutcomeGroundedPolicyUnavailable && tc != nil && tc.AIAnalysis == nil && tc.AISummary != nil && !tc.AISummary.IsTransient
 }
 
-func benchmarkContainerOutcome(tc *models.TestCase) benchmarkOutcome {
-	if tc != nil && tc.AIAnalysis != nil {
-		return benchmarkOutcomeUsable
-	}
-	if tc != nil && tc.AISummary != nil && !tc.AISummary.IsTransient && strings.HasPrefix(tc.AISummary.Summary, "AI analysis unavailable: no validated artifact citation") {
-		return benchmarkOutcomeGroundedPolicyUnavailable
-	}
-	return benchmarkOutcomeUnknown
-}
-
 func TestBenchmarkAllowsUnavailable(t *testing.T) {
 	valid := &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: evidence remained inconclusive"}}
 	if !benchmarkAllowsUnavailable(benchCase{allowUnavailable: true}, valid, benchmarkOutcomeGroundedPolicyUnavailable) {

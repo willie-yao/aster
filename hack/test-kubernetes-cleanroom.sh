@@ -204,15 +204,12 @@ removed_or_moved_docs = [
     Path("docs/architecture/analysis-runtime-evaluation.md"),
     Path("docs/agent-sandbox-causal-critic.md"),
     Path("docs/agent-sandbox-opencode-analyzer.md"),
-    Path("docs/orka.md"),
     Path("docs/remediation-investigation.md"),
 ]
 removed_historical_plans = [
     Path("plan/design-overview-operator-console-1.md"),
     Path("plan/feature-agent-sandbox-critic-experiment-1.md"),
     Path("plan/feature-agent-sandbox-opencode-analyzer-experiment.md"),
-    Path("plan/feature-orka-onboarding-prompt-author-1.md"),
-    Path("plan/refactor-orka-agent-generation-1.md"),
 ]
 
 def require_removed_paths_absent(repository):

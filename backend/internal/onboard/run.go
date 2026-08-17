@@ -586,14 +586,7 @@ func printReview(out io.Writer, plan *Plan) {
 		fmt.Fprintf(out, "  Existing prompt:      %s\n", safeTerminal(plan.Prompt.ExistingSHA256))
 	}
 	fmt.Fprintf(out, "  Prompt requested:     %s\n", safeTerminal(plan.Prompt.RequestedMode))
-	if plan.Prompt.RequestedMode == string(promptRequestAgent) {
-		fmt.Fprintf(out, "  Prompt timeout:       %s\n", safeTerminal(plan.Prompt.Timeout))
-		coordinate := plan.Prompt.Model
-		if plan.Prompt.AgentRef != "" {
-			coordinate = plan.Prompt.AgentRef
-		}
-		fmt.Fprintf(out, "  Prompt agent:         %s, %s\n", safeTerminal(plan.Prompt.Runtime), safeTerminal(coordinate))
-	}
+
 	if plan.Prompt.FailureStage != "" {
 		fmt.Fprintf(out, "  Prompt failure:       %s (%s)\n", safeTerminal(promptPreparationStage(plan.Prompt.FailureStage).label()), safeTerminal(plan.Prompt.FailureCategory))
 		if plan.Prompt.FailureAction != "" {

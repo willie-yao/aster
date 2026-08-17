@@ -1195,22 +1195,6 @@ func TestWriteBenchmarkJSONLRecordsFailedTrials(t *testing.T) {
 			if result.TrialStatus != tc.status || result.Outcome != string(tc.wantOutcome) || result.Usable != tc.wantUsable || result.ModelRequestMade != tc.modelRequest {
 				t.Fatalf("result = %+v", result)
 			}
-			var inprocess map[string]any
-			if err := json.Unmarshal(data, &inprocess); err != nil {
-				t.Fatal(err)
-			}
-			_, shadow := validShadowReportRecords()
-			for _, field := range []string{"case_id", "repetition", "arm", "engine_commit", "fixture_sha256", "baseline_consumer_commit", "baseline_prompt_sha256", "project_sha256", "skill_set_hash", "provider_path", "transport_id", "api_mode", "model_label", "stable_id", "evidence_condition", "evidence_mode", "evidence_stage_sha256", "evidence_stage_ids", "source_revision", "human_score_rubric_version", "human_score_max", "human_score_dimensions", "signal_total"} {
-				shadow[field] = inprocess[field]
-			}
-			shadow["signal_hits"] = 0
-			output, err := runShadowReport(t, string(data), marshalJSONL(t, shadow))
-			if err != nil {
-				t.Fatalf("failed trial record was rejected by report: %v: %s", err, output)
-			}
-			if !strings.Contains(string(output), tc.status) {
-				t.Fatalf("report omitted trial status %q: %s", tc.status, output)
-			}
 		})
 	}
 }

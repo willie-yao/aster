@@ -55,19 +55,8 @@ type Options struct {
 	// enabled-by-default scaffold behavior.
 	AIEnabled *bool
 
-	// PromptMode selects agent, handoff, or todo-template.
+	// PromptMode selects handoff or todo-template.
 	PromptMode string
-	// PromptAgentModel is an OpenCode provider/model reference.
-	PromptAgentModel string
-	// PromptAgentRuntime selects local opencode or the Orka backend.
-	PromptAgentRuntime string
-	// PromptOrka fields configure the optional Orka prompt backend.
-	PromptOrkaAPI       string
-	PromptOrkaAgentRef  string
-	PromptOrkaNamespace string
-	PromptOrkaGitSecret string
-	// PromptNetworkDomains are additional reviewed provider destinations.
-	PromptNetworkDomains []string
 
 	// AIAPI selects chat_completions (default) or responses.
 	AIAPI string
@@ -97,8 +86,6 @@ type Options struct {
 	NoPrompt bool
 	// PromptTimeout bounds prompt authoring, including agent execution.
 	PromptTimeout time.Duration
-	// RequirePromptDraft fails before writes unless agent drafting succeeds.
-	RequirePromptDraft bool
 
 	// OpenPR opens a pull request against the dashboard repo with the scaffold
 	// instead of writing a local directory. Requires a GitHub token with write

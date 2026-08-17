@@ -80,7 +80,7 @@ func ReasonMessage(code ReasonCode) string {
 	case ReasonEvidenceUnavailable:
 		return "Current published evidence is unavailable or no longer matches the selected action subject."
 	case ReasonInvestigationRequired:
-		return "The published remediation requires source investigation before an issue or fix can be drafted."
+		return "The published remediation requires maintainer investigation before an issue or fix can be drafted."
 	case ReasonNoReviewablePatch:
 		return "No reviewable patch was generated. Add a maintainer instruction and regenerate."
 	case ReasonContractGenerationFailed:

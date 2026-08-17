@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -138,6 +139,59 @@ func (c *Cache) Entries(keys ...string) map[string]CacheEntry {
 		out[key] = entry
 	}
 	return out
+}
+
+// EntriesWithPrefix returns copies of unexpired entries whose key has prefix.
+func (c *Cache) EntriesWithPrefix(prefix string) map[string]CacheEntry {
+	out := map[string]CacheEntry{}
+	if c == nil || prefix == "" {
+		return out
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	for key, entry := range c.entries {
+		if !strings.HasPrefix(key, prefix) || !validCacheEntryTime(now, entry.CreatedAt) {
+			continue
+		}
+		entry.Data = append(json.RawMessage(nil), entry.Data...)
+		out[key] = entry
+	}
+	return out
+}
+
+// LoadLinkVerification returns a persisted file-existence answer. A recorded
+// absence is trusted only for linkAbsenceTTL so a spurious 404 self-heals.
+func (c *Cache) LoadLinkVerification(key string) (bool, bool) {
+	if c == nil {
+		return false, false
+	}
+	entry, ok := c.Lookup(key)
+	if !ok {
+		return false, false
+	}
+	var record linkVerificationRecord
+	if err := json.Unmarshal(entry.Data, &record); err != nil {
+		return false, false
+	}
+	now := time.Now()
+	if !validCacheEntryTime(now, entry.CreatedAt) {
+		return false, false
+	}
+	if !record.Present && now.Sub(entry.CreatedAt) > linkAbsenceTTL {
+		return false, false
+	}
+	return record.Present, true
+}
+
+// StoreLinkVerification persists one definite file-existence answer.
+func (c *Cache) StoreLinkVerification(key string, present bool) {
+	if c == nil {
+		return
+	}
+	if err := c.Set(key, linkVerificationRecord{Present: present}); err != nil {
+		log.Printf("Warning: failed to persist link verification %s: %v", key, err)
+	}
 }
 
 // Merge adds newer valid entries and reports whether the cache changed.

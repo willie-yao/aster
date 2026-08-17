@@ -3448,7 +3448,7 @@ procedure: Read the ranked logs.
 	}
 	for _, forbidden := range []string{"submit_analysis", "evidence_token", "required_evidence"} {
 		if strings.Contains(request, forbidden) {
-			t.Errorf("in-process request contains Orka term %q", forbidden)
+			t.Errorf("in-process request contains external-runtime term %q", forbidden)
 		}
 	}
 }
