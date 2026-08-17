@@ -17,6 +17,12 @@ const exactFixSourceRevision = "0123456789abcdef0123456789abcdef01234567"
 
 func exactFixService(t *testing.T, reply Reply, runnerErr error) (*Service, SessionView, string) {
 	t.Helper()
+	service, session, requestID, _ := exactFixServiceRunner(t, reply, runnerErr)
+	return service, session, requestID
+}
+
+func exactFixServiceRunner(t *testing.T, reply Reply, runnerErr error) (*Service, SessionView, string, *fakeRunner) {
+	t.Helper()
 	dir := t.TempDir()
 	detail := testDetail(analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z"))
 	detail.Runs[0].RepoRefs = map[string]string{"example/repo": exactFixSourceRevision}
@@ -44,7 +50,7 @@ func exactFixService(t *testing.T, reply Reply, runnerErr error) (*Service, Sess
 	if runnerErr != nil && sendErr == nil {
 		t.Fatal("failed chat turn unexpectedly succeeded")
 	}
-	return service, session, requestID
+	return service, session, requestID, runner
 }
 
 func TestServiceTestFixCandidateBindsExactOwnerAnalysisAndEvidence(t *testing.T) {
@@ -90,14 +96,142 @@ func TestServiceTestFixCandidateRejectsChangedAnalysisEvidenceAndSource(t *testi
 }
 
 func TestServiceTestFixCandidateRejectsContextOnlyAndFailedTurns(t *testing.T) {
-	service, session, requestID := exactFixService(t, Reply{Answer: "No artifact evidence was needed.", Assessment: "explains"}, nil)
+	service, session, requestID, runner := exactFixServiceRunner(t, Reply{Answer: "No artifact evidence was needed.", Assessment: "explains"}, nil)
 	if _, err := service.TestFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("context-only candidate error = %v", err)
+	}
+	secondRequestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "Alice", secondRequestID, "Which function should change?"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.TestFixCandidate(session.ID, "Alice", secondRequestID); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("ungrounded conversation candidate error = %v", err)
+	}
+	runner.mu.Lock()
+	turns := len(runner.turns)
+	runner.mu.Unlock()
+	if turns != 2 {
+		t.Fatalf("provider calls = %d", turns)
 	}
 
 	failed, failedSession, failedRequest := exactFixService(t, Reply{}, ErrProviderRequestFailed)
 	if _, err := failed.TestFixCandidate(failedSession.ID, "Alice", failedRequest); !errors.Is(err, ErrRequestNotFound) {
 		t.Fatalf("failed turn candidate error = %v", err)
+	}
+}
+
+func TestServiceTestFixPreflightReportsMissingSourcePathsForCitedAnswer(t *testing.T) {
+	service, session, requestID, runner := exactFixServiceRunner(t, Reply{
+		Answer: "The artifact shows the terminal branch never records Ready.", Assessment: "supports",
+		Citations: []Citation{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
+	}, nil)
+	err := service.PreflightTestFix(t.Context(), session.ID, "Alice", requestID)
+	if !errors.Is(err, ErrInvalidRequest) || !strings.Contains(err.Error(), "no verified immutable source paths") {
+		t.Fatalf("missing source path preflight error = %v", err)
+	}
+	runner.mu.Lock()
+	turns := len(runner.turns)
+	runner.mu.Unlock()
+	if turns != 1 {
+		t.Fatalf("provider calls = %d", turns)
+	}
+}
+
+func TestServiceTestFixCandidateAccumulatesConversationEvidence(t *testing.T) {
+	cited := Citation{Path: "artifacts/build-log.txt", LineStart: 42, LineEnd: 44, Quote: "terminal bootstrap failure"}
+	service, session, firstRequestID, runner := exactFixServiceRunner(t, Reply{
+		Answer: "The build log records the terminal bootstrap failure.", Assessment: "supports",
+		Citations: []Citation{cited},
+	}, nil)
+	runner.mu.Lock()
+	runner.reply = Reply{
+		Answer:     "The retry branch in `markReady` should stop requeueing that condition.",
+		Assessment: "supports",
+	}
+	runner.mu.Unlock()
+	secondRequestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "Alice", secondRequestID, "Which function should change to stop this?"); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := service.TestFixCandidate(session.ID, "Alice", secondRequestID)
+	if err != nil {
+		t.Fatalf("conversation-scoped candidate error = %v", err)
+	}
+	if candidate.RequestID != secondRequestID ||
+		candidate.AssistantAnswer != "The retry branch in `markReady` should stop requeueing that condition." ||
+		!slices.Equal(candidate.ArtifactCitations, []Citation{cited}) {
+		t.Fatalf("candidate = %+v", candidate)
+	}
+	first, err := service.TestFixCandidate(session.ID, "Alice", firstRequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ResponseHash == candidate.ResponseHash {
+		t.Fatal("promoted turns shared one response identity")
+	}
+
+	// A later turn and its evidence must not change an already promoted answer.
+	runner.mu.Lock()
+	runner.reply = Reply{
+		Answer: "The kubelet log agrees.", Assessment: "supports",
+		Citations: []Citation{{Path: "artifacts/kubelet.log", LineStart: 7, LineEnd: 7, Quote: "not ready"}},
+	}
+	runner.mu.Unlock()
+	if _, err := service.Send(t.Context(), session.ID, "Alice", testRequestID(t), "Does the kubelet log agree?"); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := service.TestFixCandidate(session.ID, "Alice", secondRequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.ResponseHash != candidate.ResponseHash || !slices.Equal(replayed.ArtifactCitations, candidate.ArtifactCitations) {
+		t.Fatalf("later turn changed the promoted response identity: %+v", replayed)
+	}
+	restarted, err := NewService(t.Context(), service.dataDir, &fakeRunner{}, Options{StateDir: service.opts.StateDir, PollInterval: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ConfigureSourceRepository(sourceinvestigation.Repository{Owner: "example", Name: "repo"}); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := restarted.TestFixCandidate(session.ID, "Alice", secondRequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.ResponseHash != candidate.ResponseHash || !slices.Equal(restored.ArtifactCitations, candidate.ArtifactCitations) {
+		t.Fatalf("restart changed the promoted response identity: %+v", restored)
+	}
+}
+
+func TestConversationCitationsBoundsOrderAndScope(t *testing.T) {
+	early := Citation{Path: "build-log.txt", LineStart: 1, LineEnd: 1, Quote: "early"}
+	shared := Citation{Path: "build-log.txt", LineStart: 2, LineEnd: 2, Quote: "shared"}
+	promoted := Citation{Path: "junit.xml", LineStart: 3, LineEnd: 3, Quote: "promoted"}
+	later := Citation{Path: "junit.xml", LineStart: 4, LineEnd: 4, Quote: "later"}
+	messages := []Message{
+		{Role: "user", RequestID: "one"},
+		{Role: "assistant", RequestID: "one", Citations: []Citation{early, shared}},
+		{Role: "user", RequestID: "two"},
+		{Role: "assistant", RequestID: "two", Citations: []Citation{promoted, shared}},
+		{Role: "user", RequestID: "three"},
+		{Role: "assistant", RequestID: "three", Citations: []Citation{later}},
+	}
+	got := conversationCitations(messages, "two")
+	if !slices.Equal(got, []Citation{promoted, shared, early}) {
+		t.Fatalf("accumulated citations = %+v", got)
+	}
+	if got := conversationCitations(messages, "missing"); got != nil {
+		t.Fatalf("unknown request citations = %+v", got)
+	}
+
+	overflow := []Message{{Role: "assistant", RequestID: "one"}, {Role: "assistant", RequestID: "two"}}
+	for i := 0; i < maxConversationFixCitations; i++ {
+		overflow[0].Citations = append(overflow[0].Citations, Citation{Path: "build-log.txt", LineStart: i + 1, LineEnd: i + 1, Quote: "old"})
+		overflow[1].Citations = append(overflow[1].Citations, Citation{Path: "junit.xml", LineStart: i + 1, LineEnd: i + 1, Quote: "new"})
+	}
+	bounded := conversationCitations(overflow, "two")
+	if len(bounded) != maxConversationFixCitations || !slices.Equal(bounded, overflow[1].Citations) {
+		t.Fatalf("bounded citations = %d entries: %+v", len(bounded), bounded)
 	}
 }
 

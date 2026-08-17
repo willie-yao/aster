@@ -1273,6 +1273,11 @@ func TestAnalysisChatArtifactEvidenceQuestionClassifier(t *testing.T) {
 		{question: "According to the published analysis, re-check the artifacts.", want: true},
 		{question: "Read the published analysis and then inspect the build logs.", want: true},
 		{question: "Check a different hypothesis.", want: false},
+		// The dashboard's fix-investigation prompts must require evidence.
+		{question: "What does the build log show at the failure?", want: true},
+		{question: "Which JUnit output supports this root cause?", want: true},
+		{question: "Read the artifacts and quote the exact failing line", want: true},
+		{question: "What in the logs contradicts this root cause?", want: true},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.question, func(t *testing.T) {

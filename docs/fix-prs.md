@@ -57,7 +57,8 @@ Sandbox. This path does not use a
 recurring pattern as action authority. It requires:
 
 - one failed JUnit case with a current accepted published analysis;
-- one owner-bound successful chat turn with validated artifact citations;
+- one owner-bound successful chat turn, and at least one validated artifact
+  citation from that turn or an earlier turn in the same conversation;
 - an exact repository and full commit resolved from build metadata;
 - published verified source links for that same repository and revision;
 - a selected finding that names an explicit backticked source symbol;
@@ -68,6 +69,24 @@ recurring pattern as action authority. It requires:
 The exact JUnit path uses the dashboard's immutable GitHub source reader and
 deterministic source verification. Legacy pattern chat-to-fix keeps its existing
 verified source and target requirements.
+
+Evidence is conversation-scoped, not per-turn. Each citation is still validated
+against artifacts read during the turn that produced it, but a later answer that
+reasons over evidence an earlier turn already validated stays fix-eligible
+without re-reading it. The request carries the accumulated citations from the
+promoted answer and the turns before it, most recent first and bounded to the
+citation limit fix generation accepts. Turns after the promoted answer are
+excluded, so continuing the conversation does not change an admitted request.
+
+An analysis with no verified immutable source path can never start a fix
+preview, so the chat reports that permanently unavailable state when it opens
+and disables **Start fix investigation** instead of reporting missing citations
+the user cannot fix by rephrasing. When the source is usable but the
+conversation is not yet grounded, the chat says so and asks for a question that
+requires reading an artifact. A fix investigation offers evidence-directed
+starting prompts for the same reason. Evidence gathering stays driven by the
+question rather than forced on every Fix-intent turn, so a scoping question that
+genuinely needs no artifact still gets an answer instead of a citation failure.
 
 The chat session persists a full authoritative analysis content hash that covers
 failure content, artifact citations, verified source links, critique state, and
