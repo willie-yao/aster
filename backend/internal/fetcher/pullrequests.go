@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ghpr"
+	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/prattribution"
+	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/prtriage"
 )
 
@@ -46,7 +49,9 @@ func (p *pipeline) refreshPullRequests(ctx context.Context, res *refreshResult) 
 	if res != nil {
 		baseline = prattribution.BuildBaseline(res.details, res.flakiness)
 	}
-	prattribution.Annotate(details, baseline)
+	changes := p.pullRequestChanges(ctx, client, repo, details)
+	prattribution.Annotate(details, baseline,
+		prattribution.Repository{Owner: repo.Owner, Name: repo.Name}, changes)
 
 	index.GeneratedAt = time.Now().UTC()
 	for i := range details {
@@ -69,4 +74,67 @@ func (p *pipeline) runPullRequestPass(ctx context.Context, res *refreshResult) {
 	if err := p.refreshPullRequests(ctx, res); err != nil {
 		log.Printf("⚠ Pull request triage failed, keeping the previous view: %v", err)
 	}
+}
+
+// changedFileLister fetches one pull request's changed files. It is a seam for
+// tests and is satisfied by *ghpr.Client.
+type changedFileLister interface {
+	ChangedFiles(ctx context.Context, owner, repo string, number int) (ghpr.ChangedFileSet, error)
+}
+
+// pullRequestChanges fetches changed files only for pull requests with a
+// failing check whose build tested the current head. A stale build describes a
+// different revision than the diff would, and attribution skips overlap for it,
+// so fetching would spend GitHub quota for nothing. A per-pull failure is
+// logged and skipped: without changed files attribution simply omits overlap.
+func (p *pipeline) pullRequestChanges(ctx context.Context, lister changedFileLister, repo project.SourceRepo, details []models.PullRequestDetail) map[int]prattribution.PullChanges {
+	var wanted []int
+	for _, detail := range details {
+		if comparableFailingCheck(detail) {
+			wanted = append(wanted, detail.Number)
+		}
+	}
+	if len(wanted) == 0 {
+		return map[int]prattribution.PullChanges{}
+	}
+
+	changes := make(map[int]prattribution.PullChanges, len(wanted))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, changedFilesWorkers)
+	for _, number := range wanted {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		go func(number int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			set, err := lister.ChangedFiles(ctx, repo.Owner, repo.Name, number)
+			if err != nil {
+				log.Printf("    ⚠ pr #%d: listing changed files: %v", number, err)
+				return
+			}
+			mu.Lock()
+			changes[number] = prattribution.NewPullChanges(set.Paths(), set.FilesTruncated)
+			mu.Unlock()
+		}(number)
+	}
+	wg.Wait()
+	return changes
+}
+
+// changedFilesWorkers bounds concurrent GitHub calls for changed files.
+const changedFilesWorkers = 4
+
+// comparableFailingCheck reports whether any failing check on the pull request
+// tested the current head, which is the only case overlap can be computed for.
+func comparableFailingCheck(detail models.PullRequestDetail) bool {
+	for _, check := range detail.Checks {
+		if !check.Passed && !check.Finished.IsZero() && !check.Stale && len(check.Failures) > 0 {
+			return true
+		}
+	}
+	return false
 }

@@ -136,6 +136,8 @@ export function attributionLabel(verdict: AttributionVerdict): string {
       return "Not this PR";
     case "known_flake":
       return "Known flake";
+    case "touches_changed_code":
+      return "Touches changed code";
     case "unexplained":
       return "Needs investigation";
     default:
@@ -154,6 +156,7 @@ export function attributionTone(
       return "info";
     case "known_flake":
       return "warning";
+    case "touches_changed_code":
     case "unexplained":
       return "error";
     default:
@@ -165,7 +168,12 @@ export function attributionTone(
 // what the pull request ledger counts.
 export function needsInvestigation(failure: PullRequestFailure): boolean {
   const verdict = failure.attribution?.verdict;
-  return verdict === undefined || verdict === "unexplained" || verdict === "inconclusive";
+  return (
+    verdict === undefined ||
+    verdict === "unexplained" ||
+    verdict === "touches_changed_code" ||
+    verdict === "inconclusive"
+  );
 }
 
 // unexplainedCount totals the failures across checks that the baseline could

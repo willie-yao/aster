@@ -201,6 +201,7 @@ A few behaviors worth knowing:
   | `pre_existing` | The same test is already failing on the base branch. |
   | `widespread` | The same job and test is failing on other open pull requests. |
   | `known_flake` | Flakiness history already classifies the test as flaky. |
+  | `touches_changed_code` | Nothing explains the failure and it fails in a file the pull request changes. |
   | `unexplained` | Nothing observed rules the pull request out, so it needs investigation. |
   | `inconclusive` | No base-branch data was available to compare against. |
 
@@ -209,6 +210,18 @@ A few behaviors worth knowing:
   failure. Cross-pull-request matching keys on job **and** test name, because a
   build-level failure carries the same generic name on every job and matching by
   name alone would correlate unrelated jobs.
+- `touches_changed_code` compares the source locations JUnit reported for the
+  failure against the pull request's changed files. Both sides are observed, so
+  the verdict states overlap and explicitly says overlap is not proof that the
+  change is responsible. Every frame in the failure body is considered, because
+  a stack often enters a shared framework in another repository before reaching
+  the repository under test. Overlap is skipped, and its absence never claimed,
+  when the failing build tested a different head than the pull request's current
+  one, when the changed-file list is truncated, or when it could not be fetched.
+  Failure locations inside a dependency, and version-qualified locations that
+  name a tagged copy rather than the checked-out tree, are never sites.
+  Source locations are recovered only for Go tests under module paths the engine
+  maps to a GitHub repository, so this verdict does not apply to every project.
 - A check whose build tested an older head than the pull request's current head
   is marked `stale`, so a green check on outdated code is not mistaken for a
   green check on the current one.

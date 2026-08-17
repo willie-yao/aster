@@ -71,6 +71,50 @@ func Resolve(build models.BuildInfo, owner, name string) (Source, bool) {
 	return Source{Owner: owner, Name: name, Revision: commit}, true
 }
 
+// ResolvePullHead resolves the pull request head commit a presubmit build
+// checked out.
+//
+// It is deliberately separate from Resolve. Resolve fails closed on the
+// composite presubmit ref Prow writes ("<base-ref>:<base-sha>,<pull>:<pull-sha>"),
+// and the write paths that open fix pull requests depend on that: a fix must
+// never be based on another pull request's head commit. Only read-only
+// pull-request analysis should call this.
+func ResolvePullHead(build models.BuildInfo, owner, name, pullNumber string) (Source, bool) {
+	owner, name = strings.TrimSpace(owner), strings.TrimSpace(name)
+	if owner == "" || name == "" {
+		return Source{}, false
+	}
+	revision, ok := PullHeadRevision(build.RepoRefs, owner+"/"+name, pullNumber)
+	if !ok {
+		return Source{}, false
+	}
+	return Source{Owner: owner, Name: name, Revision: revision}, true
+}
+
+// PullHeadRevision returns the revision a pull request contributed to a build's
+// repository refs. Prow records a presubmit checkout as
+// "<base-ref>:<base-sha>,<pull-number>:<pull-sha>", so the pull's own segment
+// carries the head. Reports false when refs do not name that pull's revision.
+func PullHeadRevision(refs map[string]string, repo, pullNumber string) (string, bool) {
+	repo, pullNumber = strings.TrimSpace(repo), strings.TrimSpace(pullNumber)
+	if repo == "" || pullNumber == "" {
+		return "", false
+	}
+	for name, value := range refs {
+		if !strings.EqualFold(strings.TrimSpace(name), repo) {
+			continue
+		}
+		for _, segment := range strings.Split(value, ",") {
+			ref, revision, found := strings.Cut(strings.TrimSpace(segment), ":")
+			if !found || strings.TrimSpace(ref) != pullNumber {
+				continue
+			}
+			return bareRevision(strings.TrimSpace(revision))
+		}
+	}
+	return "", false
+}
+
 // Branch returns the repository-specific tested branch when build metadata names one.
 func Branch(build models.BuildInfo, owner, name string) (string, bool) {
 	if _, ok := Resolve(build, owner, name); !ok {

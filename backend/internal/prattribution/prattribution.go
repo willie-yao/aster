@@ -94,15 +94,26 @@ type failureKey struct {
 }
 
 // Annotate attaches a deterministic attribution to every failing case in
-// details, in place.
-func Annotate(details []models.PullRequestDetail, baseline Baseline) {
+// details, in place. Overlap between a failure site and a pull request's
+// changed files refines an unexplained verdict; changes may be nil.
+func Annotate(details []models.PullRequestDetail, baseline Baseline, repo Repository, changes map[int]PullChanges) {
 	otherPulls := pullsByFailure(details)
 	for i := range details {
+		pullChanges := changes[details[i].Number]
 		for c := range details[i].Checks {
 			check := &details[i].Checks[c]
 			for f := range check.Failures {
 				failure := &check.Failures[f]
-				failure.Attribution = attribute(details[i].Number, check.JobName, failure.TestCase, baseline, otherPulls)
+				attribution := attribute(details[i].Number, check.JobName, failure.TestCase, baseline, otherPulls)
+				// Only the residual set benefits from overlap. A failure already
+				// explained by the base branch or by other pull requests is not
+				// made more explicable by touching changed code.
+				if attribution.Verdict == models.AttributionUnexplained {
+					if refined := changedCodeAttribution(attribution, failure.TestCase, repo, pullChanges, check.Stale); refined != nil {
+						attribution = refined
+					}
+				}
+				failure.Attribution = attribution
 			}
 		}
 	}

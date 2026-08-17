@@ -24,6 +24,9 @@ import (
 // apiBase is the GitHub REST API root, overridable per Client for tests.
 const apiBase = "https://api.github.com"
 
+// maxResponseBytes bounds a single GitHub API response body.
+const maxResponseBytes = 16 << 20
+
 // ErrWriteOutcomeUnknown means GitHub may have created a PR before the response was lost.
 var ErrWriteOutcomeUnknown = errors.New("pull request write outcome unknown")
 
@@ -444,7 +447,9 @@ func (c *Client) do(ctx context.Context, method, url string, body, out any, okSt
 		return &transportError{err: err}
 	}
 	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
+	// Response bodies carry contributor-authored content such as pull request
+	// diffs, so the read is bounded rather than trusting the remote length.
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	ok := false
 	for _, s := range okStatuses {
 		if resp.StatusCode == s {
