@@ -87,9 +87,11 @@ export function Layout() {
   const [dismissedFetchStrip, setDismissedFetchStrip] = useState<string | null>(null);
   usePageDocumentTitle(location.pathname, manifest.branding.title);
   const flakyActive = location.pathname === "/flaky" || location.pathname.startsWith("/flaky/");
+  const pullRequestsActive = location.pathname === "/pull-requests" || location.pathname.startsWith("/pull-requests/");
   const tracesActive = location.pathname === "/analysis-traces";
   const usageActive = location.pathname === "/ai-usage";
-  const overviewActive = !flakyActive && !tracesActive && !usageActive;
+  const overviewActive = !flakyActive && !pullRequestsActive && !tracesActive && !usageActive;
+  const pullRequestsEnabled = manifest.pull_requests?.enabled ?? false;
 
   return (
     <FetchStatusContext.Provider value={fetchStatus}>
@@ -224,6 +226,14 @@ export function Layout() {
               active={flakyActive}
               current={location.pathname === "/flaky"}
             />
+            {pullRequestsEnabled && (
+              <NavTab
+                to="/pull-requests"
+                label="Pull Requests"
+                active={pullRequestsActive}
+                current={location.pathname === "/pull-requests"}
+              />
+            )}
             {features.analysis_traces && (
               <NavTab to="/analysis-traces" label="Analysis Traces" active={tracesActive} current={tracesActive} />
             )}

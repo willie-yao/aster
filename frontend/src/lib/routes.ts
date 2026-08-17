@@ -29,3 +29,11 @@ export function buildFailurePath(jobID: string, buildID: string): string {
 export function actionRequestPath(requestID: string): string {
   return `/action-request/${routeSegment(requestID)}`;
 }
+
+export function pullRequestsPath(): string {
+  return "/pull-requests";
+}
+
+export function pullRequestPath(number: number): string {
+  return `${pullRequestsPath()}/${routeSegment(String(number))}`;
+}

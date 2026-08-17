@@ -7,6 +7,7 @@ import type {
   ResolvedState,
   SearchIndex,
 } from "../types/dashboard";
+import type { PullRequestDetail, PullRequestIndex } from "../types/pullRequests";
 import { jobDataFilename } from "../lib/utils";
 import { searchIndexPath } from "../lib/search";
 import { normalizeFlakinessReport, type FlakinessReportWire } from "../lib/flakinessReport";
@@ -77,6 +78,15 @@ export function useJobDetail(jobName: string | undefined) {
 
 export function useSearchIndex(activated: boolean) {
   return useJSON<SearchIndex>(searchIndexPath(activated));
+}
+
+export function usePullRequestIndex(enabled: boolean) {
+  return useJSON<PullRequestIndex>(enabled ? "pull-requests.json" : null);
+}
+
+export function usePullRequestDetail(number: string | undefined) {
+  const safe = number && /^\d+$/.test(number) ? number : null;
+  return useJSON<PullRequestDetail>(safe ? `pull-requests/${safe}.json` : null);
 }
 
 export function useResolved() {
