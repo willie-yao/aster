@@ -11,6 +11,10 @@ import (
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
+// maxConversationFixCitations bounds accumulated conversation evidence to the
+// citation limit fix generation accepts.
+const maxConversationFixCitations = 16
+
 // AnalysisSnapshot is the complete published analysis context shown to chat.
 type AnalysisSnapshot struct {
 	GeneratedAt   string
@@ -69,8 +73,9 @@ func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandi
 			return changed, ErrRequestNotFound
 		}
 		answer := assistantResponse(current.View.Messages, requestID)
-		if answer == nil || strings.TrimSpace(answer.Content) == "" || len(answer.Citations) == 0 {
-			return changed, fmt.Errorf("%w: request has no evidence-backed assistant answer", ErrInvalidRequest)
+		citations := conversationCitations(current.View.Messages, requestID)
+		if answer == nil || strings.TrimSpace(answer.Content) == "" || len(citations) == 0 {
+			return changed, fmt.Errorf("%w: conversation has no evidence-backed assistant answer", ErrInvalidRequest)
 		}
 		analysis := current.Resolved.TestCase.AIAnalysis
 		if analysis == nil {
@@ -79,7 +84,7 @@ func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandi
 		candidate = FixCandidate{
 			SessionID: current.View.ID, RequestID: requestID, Analysis: current.View.Analysis,
 			Original: analysisSnapshot(analysis), AssistantAnswer: strings.TrimSpace(answer.Content),
-			ProposedRevision: cloneRevision(answer.ProposedRevision), ArtifactCitations: slices.Clone(answer.Citations),
+			ProposedRevision: cloneRevision(answer.ProposedRevision), ArtifactCitations: citations,
 			AnalysisContentHash: current.Resolved.AnalysisHash, SourceRepositorySnapshot: current.Resolved.Source,
 		}
 		if binding, ok := current.FixSources[requestID]; ok {
@@ -194,8 +199,9 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 			return changed, ErrRequestNotFound
 		}
 		answer := assistantResponse(current.View.Messages, requestID)
-		if answer == nil || strings.TrimSpace(answer.Content) == "" || len(answer.Citations) == 0 {
-			return changed, fmt.Errorf("%w: request has no evidence-backed assistant answer", ErrInvalidRequest)
+		citations := conversationCitations(current.View.Messages, requestID)
+		if answer == nil || strings.TrimSpace(answer.Content) == "" || len(citations) == 0 {
+			return changed, fmt.Errorf("%w: conversation has no evidence-backed assistant answer", ErrInvalidRequest)
 		}
 		analysis := current.Resolved.TestCase.AIAnalysis
 		if analysis == nil {
@@ -208,7 +214,7 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 			Original:          analysisSnapshot(analysis),
 			AssistantAnswer:   strings.TrimSpace(answer.Content),
 			ProposedRevision:  cloneRevision(answer.ProposedRevision),
-			ArtifactCitations: slices.Clone(answer.Citations),
+			ArtifactCitations: citations,
 		}
 		if sourceRequestID == "" {
 			return changed, nil
@@ -303,17 +309,59 @@ func sameAnalysisSnapshot(left, right AnalysisSnapshot) bool {
 }
 
 func assistantResponse(messages []Message, requestID string) *Message {
+	if index := assistantResponseIndex(messages, requestID); index >= 0 {
+		return &messages[index]
+	}
+	return nil
+}
+
+func assistantResponseIndex(messages []Message, requestID string) int {
 	for i := range messages {
 		message := &messages[i]
 		if message.Role == "assistant" && message.RequestID == requestID {
-			return message
+			return i
 		}
-		if message.Role == "user" && message.RequestID == requestID && i+1 < len(messages) {
-			next := &messages[i+1]
-			if next.Role == "assistant" {
-				return next
-			}
+		if message.Role == "user" && message.RequestID == requestID && i+1 < len(messages) &&
+			messages[i+1].Role == "assistant" {
+			return i + 1
 		}
 	}
-	return nil
+	return -1
+}
+
+// conversationCitations returns the validated citations accumulated by the
+// conversation up to and including the promoted answer, most recent first.
+// Evidence validated in an earlier turn stays trustworthy, so a grounded
+// conversation does not have to re-read artifacts to keep a later answer
+// fix-eligible. Later turns are excluded so the promoted response identity
+// stays stable as the conversation continues.
+func conversationCitations(messages []Message, requestID string) []Citation {
+	index := assistantResponseIndex(messages, requestID)
+	if index < 0 {
+		return nil
+	}
+	seen := make(map[Citation]struct{}, maxConversationFixCitations)
+	citations := make([]Citation, 0, maxConversationFixCitations)
+	collect := func(message *Message) {
+		for _, citation := range message.Citations {
+			if len(citations) >= maxConversationFixCitations {
+				return
+			}
+			if _, ok := seen[citation]; ok {
+				continue
+			}
+			seen[citation] = struct{}{}
+			citations = append(citations, citation)
+		}
+	}
+	collect(&messages[index])
+	for i := index - 1; i >= 0; i-- {
+		if messages[i].Role == "assistant" {
+			collect(&messages[i])
+		}
+	}
+	if len(citations) == 0 {
+		return nil
+	}
+	return citations
 }

@@ -1,5 +1,5 @@
 import type { AuthStatus } from "../hooks/useAuth";
-import type { AnalysisChatReference } from "../types/analysisChat";
+import type { AnalysisChatMessage, AnalysisChatReference } from "../types/analysisChat";
 
 export interface ChatFixSourceRepository {
   owner: string;
@@ -39,6 +39,20 @@ export function chatFixVerifiedSourcePaths(
     }
   }
   return paths.sort();
+}
+
+// chatFixGroundedRequestIDs returns the requests whose answer may start a fix
+// preview because the conversation validated an artifact citation on that turn
+// or an earlier one. It mirrors the conversation-scoped server gate.
+export function chatFixGroundedRequestIDs(messages: AnalysisChatMessage[] | undefined): Set<string> {
+  const grounded = new Set<string>();
+  let cited = false;
+  for (const message of messages ?? []) {
+    if (message.role !== "assistant") continue;
+    if (message.citations?.length) cited = true;
+    if (cited && message.request_id) grounded.add(message.request_id);
+  }
+  return grounded;
 }
 
 export function fixInvestigationAvailable(

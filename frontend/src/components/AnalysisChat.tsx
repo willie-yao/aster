@@ -78,7 +78,7 @@ import type { AnalysisCorrectionPreview } from "../types/corrections";
 import type { PatternAnalysis } from "../types/dashboard";
 import type { SourceInvestigationView } from "../types/sourceInvestigation";
 import { ChatFixDialog, type ChatFixSourceSelection } from "./ChatFixDialog";
-import { chatFixVerifiedSourcePaths, fixInvestigationAvailable } from "../lib/chatFixEligibility";
+import { chatFixGroundedRequestIDs, chatFixVerifiedSourcePaths, fixInvestigationAvailable } from "../lib/chatFixEligibility";
 
 interface PendingTurn {
   sessionID: string;
@@ -100,6 +100,15 @@ const suggestedQuestions = [
   "What would disprove this root cause?",
   "Could this failure be transient?",
   "Check a different hypothesis",
+] as const;
+
+// Fix investigations need artifact-grounded turns, so these prompts name an
+// artifact source instead of relying on the published conclusion.
+const fixSuggestedQuestions = [
+  "What does the build log show at the failure?",
+  "Which JUnit output supports this root cause?",
+  "Read the artifacts and quote the exact failing line",
+  "What in the logs contradicts this root cause?",
 ] as const;
 
 const patternSuggestedQuestions = [
@@ -537,6 +546,7 @@ export function AnalysisChat({
   const analysisRefRef = useRef(analysisRef);
   const patternScope = analysisRef.scope === "pattern";
   const history = useMemo(() => session ? analysisChatHistory(session) : [], [session]);
+  const groundedRequestIDs = useMemo(() => chatFixGroundedRequestIDs(session?.messages), [session]);
   const recordProgress = useCallback((progress: AnalysisChatProgress) => {
     setProgressPhase(progress.phase);
     if (progress.started_at) setProgressStartedAt(progress.started_at);
@@ -762,7 +772,16 @@ export function AnalysisChat({
 
   const turnUsage = session ? analysisChatTurnUsage(session) : null;
   const turnLimitReached = analysisChatTurnLimitReached(session, pendingTurn !== null, turnLimitRejected);
-  const questions = patternScope ? patternSuggestedQuestions : suggestedQuestions;
+  const questions = patternScope
+    ? patternSuggestedQuestions
+    : fixIntentMode ? fixSuggestedQuestions : suggestedQuestions;
+  const exactJUnitAnalysis = !patternScope && analysisRef.source !== "build" && Boolean(analysisRef.junit_file);
+  const exactFixEnabled = Boolean(features.junit_chat_fix) && exactJUnitAnalysis;
+  const hasVerifiedSourcePaths = chatFixVerifiedSourcePaths(fileCtx.fileLinks, session?.source_repository).length > 0;
+  // No published file link means no verified source path can exist, which is
+  // conclusive before a session resolves the source repository.
+  const fixSourceUnavailable = exactFixEnabled &&
+    (session ? !hasVerifiedSourcePaths : Object.keys(fileCtx.fileLinks ?? {}).length === 0);
   const canStartFixInvestigation = fixInvestigationAvailable(
     analysisRef,
     Boolean(features.analysis_chat),
@@ -1236,9 +1255,11 @@ export function AnalysisChat({
 
         {canStartFixInvestigation && (
           <Box sx={{ px: 1, pb: 0.75 }}>
-            <Tooltip title={fixIntentMode
-              ? "Restore the latest normal analysis conversation"
-              : "Start a fresh evidence-backed chat. This does not create a branch or PR."}>
+            <Tooltip title={fixSourceUnavailable
+              ? "This analysis has no verified immutable source path, so a fix preview cannot be generated from it."
+              : fixIntentMode
+                ? "Restore the latest normal analysis conversation"
+                : "Start a fresh evidence-backed chat. This does not create a branch or PR."}>
               <span>
                 <Button
                   fullWidth
@@ -1246,7 +1267,7 @@ export function AnalysisChat({
                   variant={fixIntentMode ? "text" : "outlined"}
                   startIcon={<BuildOutlined />}
                   onClick={() => fixIntentMode ? returnToNormalChat() : void startFixInvestigation()}
-                  disabled={busy || pendingTurn !== null}
+                  disabled={busy || pendingTurn !== null || (fixSourceUnavailable && !fixIntentMode)}
                 >
                   {fixIntentMode ? "Return to normal chat" : "Start fix investigation"}
                 </Button>
@@ -1284,6 +1305,12 @@ export function AnalysisChat({
                 <Typography role="status" variant="body2" color="text.secondary" sx={{ py: 0.5 }}>
                   Restoring conversation...
                 </Typography>
+              )}
+              {fixSourceUnavailable && (
+                <Alert severity="info" variant="outlined">
+                  Fix preview is not possible for this analysis: it has no verified immutable source path pinned to
+                  the failing build's repository and commit. Questions still work, but no answer here can start a fix preview.
+                </Alert>
               )}
               {fixIntentMode && (
                 <Alert severity="info" variant="outlined">
@@ -1335,21 +1362,16 @@ export function AnalysisChat({
                   (sourceSelection.view.result?.state === "actionable_code_change" ||
                     sourceSelection.view.result?.state === "actionable_configuration_change") &&
                   Boolean(sourceSelection.view.result?.target);
-                const hasArtifactEvidence = Boolean(message.citations?.length);
-                const exactJUnitAnalysis = !patternScope && analysisRef.source !== "build" && Boolean(analysisRef.junit_file);
-                const hasVerifiedSourcePaths = chatFixVerifiedSourcePaths(
-                  fileCtx.fileLinks,
-                  session?.source_repository,
-                ).length > 0;
-                const exactFixEnabled = Boolean(features.junit_chat_fix) && exactJUnitAnalysis;
+                const hasArtifactEvidence = message.request_id
+                  ? groundedRequestIDs.has(message.request_id)
+                  : Boolean(message.citations?.length);
                 const exactFixEligible = exactFixEnabled && hasArtifactEvidence && hasVerifiedSourcePaths;
                 const legacyFixEligible = patternScope && Boolean(features.chat_fix) && hasArtifactEvidence &&
                   Boolean(fixPatterns.length && actionableSource);
                 let fixIneligibleReason: string | undefined;
-                if (exactFixEnabled && !hasArtifactEvidence) {
-                  fixIneligibleReason = "This response cannot start a fix preview because it has no validated artifact citation from this turn.";
-                } else if (exactFixEnabled && !hasVerifiedSourcePaths) {
-                  fixIneligibleReason = "Fix preview is unavailable because this analysis has no verified immutable source paths.";
+                if (exactFixEnabled && hasVerifiedSourcePaths && !hasArtifactEvidence) {
+                  fixIneligibleReason = "Fix preview is not possible yet: no answer in this conversation carries a validated artifact citation. " +
+                    "Ask something that requires reading an artifact, for example what the build log or JUnit file shows at the failure.";
                 }
                 return (
                   <AssistantMessage
