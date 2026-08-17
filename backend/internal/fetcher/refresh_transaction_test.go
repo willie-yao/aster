@@ -4,17 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,87 +22,12 @@ import (
 	"github.com/willie-yao/aster/backend/internal/issues"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/notify"
-	"github.com/willie-yao/aster/backend/internal/orka"
 	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/patterns"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/resolve"
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
-
-type resultLifecycleAnalyzer struct {
-	client    *orka.ResultClient
-	state     *analysisruntime.ContainerStateStore
-	dataDir   string
-	result    ai.FailureAnalysisResult
-	err       error
-	calls     atomic.Int64
-	mutate    bool
-	merge     bool
-	merged    chan struct{}
-	once      sync.Once
-	seeds     atomic.Int64
-	reuseSeed bool
-}
-
-func (a *resultLifecycleAnalyzer) Maintain(context.Context) error { return nil }
-
-func (a *resultLifecycleAnalyzer) StateStore() *analysisruntime.ContainerStateStore { return a.state }
-
-func (a *resultLifecycleAnalyzer) AnalyzeFailure(ctx context.Context, _ *http.Client, request ai.FailureAnalysisRequest) (ai.FailureAnalysisResult, error) {
-	a.calls.Add(1)
-	seedCount := 0
-	if a.state != nil {
-		seedCount = len(a.state.CacheSeed(request))
-		a.seeds.Add(int64(seedCount))
-	}
-	if a.reuseSeed && seedCount > 0 {
-		result := a.result
-		if result.Analysis != nil {
-			analysis := *result.Analysis
-			analysis.CacheHit = true
-			result.Analysis = &analysis
-		}
-		return result, nil
-	}
-	if a.mutate {
-		if err := os.WriteFile(filepath.Join(a.dataDir, ai.CacheFilename), []byte(`{"changed":true}`), 0o600); err != nil {
-			return ai.FailureAnalysisResult{}, err
-		}
-		if err := os.WriteFile(filepath.Join(a.dataDir, "ai_traces.json"), []byte(`{"version":1,"traces":null}`), 0o600); err != nil {
-			return ai.FailureAnalysisResult{}, err
-		}
-	}
-	if a.err != nil {
-		return ai.UnavailableFailureAnalysisResult(request.TestCase, a.err), a.err
-	}
-	_, ok, err := a.client.Result(ctx, "analysis", "succeeded-task")
-	if err != nil {
-		err = fmt.Errorf("read succeeded Task result: %w", err)
-		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
-	}
-	if !ok {
-		err := fmt.Errorf("succeeded Task result is unavailable")
-		return ai.UnavailableFailureAnalysisResult(request.TestCase, err), err
-	}
-	if a.merge {
-		identity := analysisruntime.NewContainerStateIdentity("analysis", "succeeded-task-"+request.Build.BuildID, request)
-		entry := ai.CacheEntry{Key: identity.CacheKey, CreatedAt: time.Now().UTC(), Data: json.RawMessage(`{"summary":"aborted"}`)}
-		if err := a.state.Merge(analysisruntime.ContainerAnalysisState{
-			Version: analysisruntime.ContainerStateVersion, TaskNamespace: identity.TaskNamespace,
-			TaskName: identity.TaskName, CacheKey: identity.CacheKey,
-			CacheEntries: map[string]ai.CacheEntry{identity.CacheKey: entry},
-		}); err != nil {
-			return ai.FailureAnalysisResult{}, err
-		}
-		a.once.Do(func() {
-			if a.merged != nil {
-				close(a.merged)
-			}
-		})
-	}
-	return a.result, nil
-}
 
 type countingNotifySender struct {
 	calls atomic.Int64
@@ -114,77 +36,6 @@ type countingNotifySender struct {
 func (s *countingNotifySender) Send(context.Context, notify.Message) error {
 	s.calls.Add(1)
 	return nil
-}
-
-func TestOrkaAuthorizationFailurePreservesRefreshState(t *testing.T) {
-	dataDir, bucketDir := installRefreshLifecycleFixture(t)
-	before := hashFileTree(t, dataDir)
-
-	var resultCalls atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		resultCalls.Add(1)
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte("private Orka response material"))
-	}))
-	defer server.Close()
-
-	state, err := analysisruntime.NewContainerStateStore(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	analyzer := &resultLifecycleAnalyzer{
-		client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir, mutate: true,
-	}
-	sender := &countingNotifySender{}
-	oldEmailSender := newEmailSender
-	newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return sender, nil }
-	t.Cleanup(func() { newEmailSender = oldEmailSender })
-
-	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
-	_, err = p.fullPass(t.Context())
-	if err == nil || !orka.IsResultAuthorizationError(err) {
-		t.Fatalf("fullPass error = %v", err)
-	}
-	if strings.Contains(err.Error(), "private Orka response material") {
-		t.Fatalf("error exposed response body: %v", err)
-	}
-	if resultCalls.Load() != 1 {
-		t.Fatalf("result calls = %d, want 1", resultCalls.Load())
-	}
-	if sender.calls.Load() != 0 {
-		t.Fatalf("notification sends = %d, want 0", sender.calls.Load())
-	}
-	after := hashFileTree(t, dataDir)
-	if !reflect.DeepEqual(after, before) {
-		t.Fatalf("data directory changed after aborted refresh\nbefore=%v\nafter=%v", before, after)
-	}
-}
-
-func TestWatchPassAuthorizationFailurePreservesRefreshState(t *testing.T) {
-	dataDir, bucketDir := installRefreshLifecycleFixture(t)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-	}))
-	defer server.Close()
-	state, err := analysisruntime.NewContainerStateStore(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	analyzer := &resultLifecycleAnalyzer{
-		client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir, mutate: true,
-	}
-	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
-	jobs, err := p.discover(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	before := hashFileTree(t, dataDir)
-	if err := p.watchPass(t.Context(), jobs); err == nil || !orka.IsResultAuthorizationError(err) {
-		t.Fatalf("watchPass error = %v", err)
-	}
-	if after := hashFileTree(t, dataDir); !reflect.DeepEqual(after, before) {
-		t.Fatalf("data directory changed after aborted watch pass\nbefore=%v\nafter=%v", before, after)
-	}
 }
 
 func TestWatchPassSkipsSideEffects(t *testing.T) {
@@ -208,146 +59,6 @@ func TestWatchPassSkipsSideEffects(t *testing.T) {
 	}
 }
 
-func TestOrkaProjectSetupFailurePreservesRefreshState(t *testing.T) {
-	dataDir, bucketDir := installRefreshLifecycleFixture(t)
-	before := hashFileTree(t, dataDir)
-	projectDir := t.TempDir()
-	projectTarget := filepath.Join(t.TempDir(), "project.yaml")
-	writeFixtureFile(t, filepath.Dir(projectTarget), filepath.Base(projectTarget), fmt.Sprintf(`id: test
-name: Test
-discovery:
-  source: bucket
-storage:
-  provider: local
-  base: %s
-branding:
-  title: Test
-  base_path: /
-  site_url: https://dashboard.example.test
-ai:
-  timeout: 5m
-  tools: [filesystem]
-`, bucketDir))
-	if err := os.Symlink(projectTarget, filepath.Join(projectDir, "project.yaml")); err != nil {
-		t.Fatal(err)
-	}
-	writeFixtureFile(t, projectDir, "prompts/system.md", "Investigate build artifacts.\n")
-
-	var patternCalls atomic.Int64
-	oldPatternAnalysis := analyzePatternsAcrossBuilds
-	analyzePatternsAcrossBuilds = func(context.Context, *ai.Service, []models.JobDetail, patterns.AnalyzeOptions) error {
-		patternCalls.Add(1)
-		return nil
-	}
-	sender := &countingNotifySender{}
-	oldEmailSender := newEmailSender
-	newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return sender, nil }
-	t.Cleanup(func() {
-		analyzePatternsAcrossBuilds = oldPatternAnalysis
-		newEmailSender = oldEmailSender
-	})
-
-	t.Setenv("AI_TOKEN", "dashboard-token")
-	t.Setenv("AI_ENDPOINT", "https://model.invalid/v1/chat/completions")
-	t.Setenv("AI_MODEL", "test-model")
-	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "65536")
-	t.Setenv(analysisruntime.ContainerStateKeyEnv, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x22}, 32)))
-	opts := validContainerAnalysisOptions()
-	opts.ProjectDir = projectDir
-	opts.OutDir = dataDir
-	opts.BuildsPerJob = 1
-	opts.Workers = 1
-	opts.Timeout = time.Minute
-
-	err := Run(t.Context(), opts)
-	if err == nil || !strings.Contains(err.Error(), "initialize Orka container analysis: validate project bundle source") {
-		t.Fatalf("Run error = %v", err)
-	}
-	if patternCalls.Load() != 0 {
-		t.Fatalf("pattern analysis calls = %d, want 0", patternCalls.Load())
-	}
-	if sender.calls.Load() != 0 {
-		t.Fatalf("notification sends = %d, want 0", sender.calls.Load())
-	}
-	after := hashFileTree(t, dataDir)
-	if !reflect.DeepEqual(after, before) {
-		t.Fatalf("data directory changed after project setup failure\nbefore=%v\nafter=%v", before, after)
-	}
-}
-
-func TestOrkaProjectSetupFailureAfterSchedulingRollsBackRefresh(t *testing.T) {
-	dataDir, bucketDir := installRefreshLifecycleFixture(t)
-	writeFixtureFile(t, bucketDir, "logs/periodic-test/1/artifacts/junit.xml", `<testsuite name="suite"><testcase name="fails-one" classname="suite"><failure message="failed">failed</failure></testcase><testcase name="fails-two" classname="suite"><failure message="failed">failed</failure></testcase></testsuite>`)
-	before := hashFileTree(t, dataDir)
-	projectDir := writeSymlinkedFetcherProject(t)
-	setupErr := analysisruntime.ValidateProjectBundleSource(projectDir)
-	if setupErr == nil || !analysisruntime.IsProjectBundleSourceError(setupErr) {
-		t.Fatalf("setup error = %v", setupErr)
-	}
-	state, err := analysisruntime.NewContainerStateStore(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	analyzer := &resultLifecycleAnalyzer{state: state, dataDir: dataDir, mutate: true, err: setupErr}
-	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
-	sender := &countingNotifySender{}
-	oldEmailSender := newEmailSender
-	newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return sender, nil }
-	var patternCalls atomic.Int64
-	oldPatternAnalysis := analyzePatternsAcrossBuilds
-	analyzePatternsAcrossBuilds = func(context.Context, *ai.Service, []models.JobDetail, patterns.AnalyzeOptions) error {
-		patternCalls.Add(1)
-		return nil
-	}
-	t.Cleanup(func() {
-		newEmailSender = oldEmailSender
-		analyzePatternsAcrossBuilds = oldPatternAnalysis
-	})
-
-	_, err = p.fullPass(t.Context())
-	if err == nil || !analysisruntime.IsProjectBundleSourceError(err) || !strings.Contains(err.Error(), "systemic Orka project setup failure") {
-		t.Fatalf("fullPass error = %v", err)
-	}
-	if analyzer.calls.Load() != 1 {
-		t.Fatalf("analyzer calls = %d, want 1", analyzer.calls.Load())
-	}
-	if patternCalls.Load() != 0 {
-		t.Fatalf("pattern analysis calls = %d, want 0", patternCalls.Load())
-	}
-	if sender.calls.Load() != 0 {
-		t.Fatalf("notification sends = %d, want 0", sender.calls.Load())
-	}
-	after := hashFileTree(t, dataDir)
-	if !reflect.DeepEqual(after, before) {
-		t.Fatalf("data directory changed after scheduled setup failure\nbefore=%v\nafter=%v", before, after)
-	}
-}
-
-func writeSymlinkedFetcherProject(t *testing.T) string {
-	t.Helper()
-	projectDir := t.TempDir()
-	projectTarget := filepath.Join(t.TempDir(), "project.yaml")
-	writeFixtureFile(t, filepath.Dir(projectTarget), filepath.Base(projectTarget), `id: test
-name: Test
-testgrid:
-  dashboard: test
-storage:
-  provider: local
-  base: /fixtures
-branding:
-  title: Test
-  base_path: /
-  site_url: https://dashboard.example.test
-ai:
-  tools: [filesystem]
-`)
-	if err := os.Symlink(projectTarget, filepath.Join(projectDir, "project.yaml")); err != nil {
-		t.Fatal(err)
-	}
-	writeFixtureFile(t, projectDir, "prompts/system.md", "Investigate build artifacts.\n")
-	return projectDir
-}
-
 func TestAIRefreshBackupsRemainPrivate(t *testing.T) {
 	dataDir, _ := installRefreshLifecycleFixture(t)
 	snapshot, err := captureAIRefreshState(dataDir)
@@ -369,62 +80,6 @@ func TestAIRefreshBackupsRemainPrivate(t *testing.T) {
 	}
 }
 
-func TestSuccessfulOrkaResultPublishesRefresh(t *testing.T) {
-	dataDir, bucketDir := installRefreshLifecycleFixture(t)
-	before := hashFileTree(t, dataDir)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"version":1}`})
-	}))
-	defer server.Close()
-
-	state, err := analysisruntime.NewContainerStateStore(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	analyzer := &resultLifecycleAnalyzer{
-		client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir,
-		result: ai.FailureAnalysisResult{
-			Summary: &models.AISummary{GeneratedAt: "2026-07-27T00:00:00Z", Summary: "analyzed"},
-			Analysis: &models.AIAnalysis{
-				GeneratedAt: "2026-07-27T00:00:00Z", RootCause: "configuration drift", Severity: "High",
-				SuggestedFix: "update the configuration", Mode: "agentic", EvidencePlanCovered: true,
-			},
-		},
-	}
-	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
-	p.opts.SkipSideEffects = true
-	configureRefreshLifecycleRuntime(t, p, dataDir)
-	p.progress = fetchprogress.New(dataDir, "sha-test")
-	p.progress.StartPass(fetchprogress.PassOneShot)
-	oldPatternAnalysis := analyzePatternsAcrossBuilds
-	analyzePatternsAcrossBuilds = func(_ context.Context, _ *ai.Service, _ []models.JobDetail, options patterns.AnalyzeOptions) error {
-		options.OnPlan(1)
-		options.OnAttempt(patterns.Attempt{Number: 1, FailureCategory: ai.PatternFailureAmbiguous})
-		options.OnAttempt(patterns.Attempt{Number: 2, Retry: true, Succeeded: true, Final: true})
-		return nil
-	}
-	t.Cleanup(func() { analyzePatternsAcrossBuilds = oldPatternAnalysis })
-
-	if _, err := p.fullPass(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	after := hashFileTree(t, dataDir)
-	if reflect.DeepEqual(after, before) {
-		t.Fatal("successful refresh did not publish output")
-	}
-	jobData, err := os.ReadFile(filepath.Join(dataDir, "jobs", models.JobDataFilename(models.JobIDFor(models.JobTypePeriodic, "", "periodic-test"))))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(jobData), `"root_cause": "configuration drift"`) {
-		t.Fatalf("published job detail does not contain successful analysis: %s", jobData)
-	}
-	patternProgress := p.progress.Snapshot().Patterns
-	if patternProgress.Attempts != 2 || patternProgress.Retries != 1 || patternProgress.Completed != 1 || patternProgress.Failed != 0 {
-		t.Fatalf("pattern progress = %+v", patternProgress)
-	}
-}
-
 func TestMissingIssueTokenDoesNotFailPublishedRefresh(t *testing.T) {
 	dataDir, bucketDir := installRefreshLifecycleFixture(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -432,12 +87,7 @@ func TestMissingIssueTokenDoesNotFailPublishedRefresh(t *testing.T) {
 	}))
 	defer server.Close()
 
-	state, err := analysisruntime.NewContainerStateStore(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
 	analyzer := &resultLifecycleAnalyzer{
-		client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir,
 		result: ai.FailureAnalysisResult{
 			Summary: &models.AISummary{GeneratedAt: "2026-08-07T00:00:00Z", Summary: "analyzed"},
 			Analysis: &models.AIAnalysis{
@@ -473,7 +123,7 @@ func TestMissingIssueTokenDoesNotFailPublishedRefresh(t *testing.T) {
 		analyzePatternsAcrossBuilds = oldPatternAnalysis
 	})
 
-	_, err = p.fullPass(t.Context())
+	_, err := p.fullPass(t.Context())
 	finishProgressPass(p.progress, err, false)
 	if err != nil {
 		t.Fatalf("fullPass error = %v", err)
@@ -507,12 +157,7 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"version":1}`})
 	}))
 	defer server.Close()
-	state, err := analysisruntime.NewContainerStateStore(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
 	analyzer := &resultLifecycleAnalyzer{
-		client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir, merge: true,
 		result: ai.FailureAnalysisResult{
 			Summary: &models.AISummary{GeneratedAt: "2026-07-27T00:00:00Z", Summary: "analyzed"},
 			Analysis: &models.AIAnalysis{
@@ -525,7 +170,7 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 	p.opts.BuildsPerJob = 3
 	p.opts.SkipSideEffects = true
 	configureRefreshLifecycleRuntime(t, p, dataDir)
-	staleRuntime := p.aiRuntime
+	analysisRuntimeBefore := p.aiRuntime
 	var persistedPatternRuntime *analysisruntime.Runtime
 	oldSaveRuntime := saveAnalysisRuntimeCache
 	saveAnalysisRuntimeCache = func(runtime *analysisruntime.Runtime) error {
@@ -557,8 +202,8 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 	if sender.calls.Load() != 0 {
 		t.Fatalf("notification sends = %d, want 0", sender.calls.Load())
 	}
-	if persistedPatternRuntime == nil || persistedPatternRuntime == staleRuntime {
-		t.Fatal("pattern persistence reused the stale pre-checkpoint runtime")
+	if persistedPatternRuntime == nil || persistedPatternRuntime != analysisRuntimeBefore {
+		t.Fatal("pattern persistence did not use the retained in-process runtime")
 	}
 	patternProgress := p.progress.Snapshot().Patterns
 	if patternProgress.Attempts != 2 || patternProgress.Retries != 1 || patternProgress.Completed != 0 || patternProgress.Failed != 1 ||
@@ -566,7 +211,7 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 		t.Fatalf("pattern progress = %+v", patternProgress)
 	}
 	after := hashFileTree(t, dataDir)
-	if after["dashboard.json"] == before["dashboard.json"] || after[ai.CacheFilename] == before[ai.CacheFilename] || after[output.AITraceFilename] == before[output.AITraceFilename] {
+	if after["dashboard.json"] == before["dashboard.json"] || after[output.AITraceFilename] == before[output.AITraceFilename] {
 		t.Fatalf("core publication or checkpoint did not advance: before=%v after=%v", before, after)
 	}
 	jobData, err := os.ReadFile(filepath.Join(dataDir, "jobs", models.JobDataFilename("periodic-test")))
@@ -595,159 +240,25 @@ func TestPatternFailurePreservesRefreshState(t *testing.T) {
 		t.Fatal("analysis checkpoint was not reported")
 	}
 
-	nextState, err := analysisruntime.NewContainerStateStore(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := ai.FailureAnalysisRequest{
-		JobID: "periodic-test", Build: models.BuildInfo{BuildID: "1", Result: "FAILURE"},
-		TestCase: models.TestCase{Name: "fails", Status: "failed", FailureMessage: "failed"},
-	}
-	if seed := nextState.CacheSeed(request); len(seed) != 1 {
-		t.Fatalf("checkpoint cache seed entries = %d, want 1", len(seed))
-	}
-	nextAnalyzer := &resultLifecycleAnalyzer{
-		client: orka.NewResultClient(server.URL, "token"), state: nextState, dataDir: dataDir, reuseSeed: true,
-		result: analyzer.result,
-	}
-	p.containerAnalyzer = nextAnalyzer
-	p.opts.SkipSideEffects = true
-	p.progress.StartPass(fetchprogress.PassOneShot)
-	analyzePatternsAcrossBuilds = func(context.Context, *ai.Service, []models.JobDetail, patterns.AnalyzeOptions) error { return nil }
-	resultCallsBefore := resultCalls.Load()
-	if _, err := p.fullPass(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if nextAnalyzer.seeds.Load() != 3 || resultCalls.Load() != resultCallsBefore {
-		t.Fatalf("checkpoint reuse seeds=%d result calls=%d before=%d", nextAnalyzer.seeds.Load(), resultCalls.Load(), resultCallsBefore)
-	}
 }
 
-func TestSystemicOrkaAuthorizationStopsScheduling(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-	}))
-	defer server.Close()
-	dataDir := t.TempDir()
-	state, err := analysisruntime.NewContainerStateStore(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	analyzer := &resultLifecycleAnalyzer{client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir}
-	p := &pipeline{
-		opts: Options{OutDir: dataDir, AnalysisRuntime: AnalysisRuntimeOptions{
-			Type: AnalysisRuntimeOrkaContainer, OrkaContainer: OrkaContainerAnalysisOptions{MaxConcurrent: 1},
-		}},
-		cfg: &project.Config{AI: &project.AI{Concurrency: 1}}, client: &http.Client{}, containerAnalyzer: analyzer,
-	}
-	details := []models.JobDetail{{Name: "job", JobID: "job", JobType: models.JobTypePeriodic}}
-	for i := 0; i < 8; i++ {
-		details[0].Runs = append(details[0].Runs, models.BuildResult{
-			BuildInfo: models.BuildInfo{BuildID: fmt.Sprint(i), Result: "FAILURE"},
-			TestCases: []models.TestCase{{Name: fmt.Sprintf("test-%d", i), Status: "failed", FailureMessage: "failed"}},
-		})
-	}
-	if err := p.analyzeFailuresWithAI(t.Context(), details, models.FlakinessReport{}); err == nil || !orka.IsResultAuthorizationError(err) {
-		t.Fatalf("analysis error = %v", err)
-	}
-	if got := analyzer.calls.Load(); got != 1 {
-		t.Fatalf("scheduled analyses = %d, want 1", got)
-	}
+// resultLifecycleAnalyzer is a deterministic in-process analyzer double used to
+// drive refresh-transaction failure and rollback paths.
+type resultLifecycleAnalyzer struct {
+	result ai.FailureAnalysisResult
+	err    error
+	calls  atomic.Int64
 }
 
-func TestAuthorizationRollbackInvalidatesMergedContainerState(t *testing.T) {
-	dataDir, bucketDir := installRefreshLifecycleFixture(t)
-	writeFixtureFile(t, bucketDir, "logs/periodic-test/1/artifacts/junit.xml", `<testsuite name="suite"><testcase name="fails-a" classname="suite"><failure message="failed">failed</failure></testcase><testcase name="fails-b" classname="suite"><failure message="failed">failed</failure></testcase></testsuite>`)
-	before := hashFileTree(t, dataDir)
-	merged := make(chan struct{})
-	var calls atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if calls.Add(1) == 1 {
-			_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"version":1}`})
-			return
-		}
-		<-merged
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer server.Close()
-	state, err := analysisruntime.NewContainerStateStore(dataDir)
-	if err != nil {
-		t.Fatal(err)
+func (a *resultLifecycleAnalyzer) AnalyzeFailure(context.Context, *http.Client, ai.FailureAnalysisRequest) (ai.FailureAnalysisResult, error) {
+	a.calls.Add(1)
+	if a.err != nil {
+		return ai.FailureAnalysisResult{}, a.err
 	}
-	analyzer := &resultLifecycleAnalyzer{
-		client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir,
-		merge: true, merged: merged,
-		result: ai.FailureAnalysisResult{
-			Summary: &models.AISummary{GeneratedAt: "2026-07-27T00:00:00Z", Summary: "analyzed"},
-			Analysis: &models.AIAnalysis{
-				GeneratedAt: "2026-07-27T00:00:00Z", RootCause: "configuration drift", Severity: "High",
-				SuggestedFix: "update configuration", Mode: "agentic", EvidencePlanCovered: true,
-			},
-		},
-	}
-	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
-	p.opts.AnalysisRuntime.OrkaContainer.MaxConcurrent = 2
-	if _, err := p.fullPass(t.Context()); err == nil || !orka.IsResultAuthorizationError(err) {
-		t.Fatalf("fullPass error = %v", err)
-	}
-	if p.containerAnalyzer != nil {
-		t.Fatal("aborted container analyzer remained cached")
-	}
-	if after := hashFileTree(t, dataDir); !reflect.DeepEqual(after, before) {
-		t.Fatalf("data directory changed after rollback\nbefore=%v\nafter=%v", before, after)
-	}
-
-	nextServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer nextServer.Close()
-	nextState, err := analysisruntime.NewContainerStateStore(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	nextAnalyzer := &resultLifecycleAnalyzer{client: orka.NewResultClient(nextServer.URL, "token"), state: nextState, dataDir: dataDir}
-	p.containerAnalyzer = nextAnalyzer
-	if _, err := p.fullPass(t.Context()); err == nil || !orka.IsResultAuthorizationError(err) {
-		t.Fatalf("next fullPass error = %v", err)
-	}
-	if nextAnalyzer.seeds.Load() != 0 {
-		t.Fatalf("next pass reused %d aborted cache entries", nextAnalyzer.seeds.Load())
-	}
+	return a.result, nil
 }
 
-func TestOrkaNonAuthorizationResultFailureRemainsNonfatal(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusBadGateway)
-	}))
-	defer server.Close()
-	dataDir := t.TempDir()
-	state, err := analysisruntime.NewContainerStateStore(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	analyzer := &resultLifecycleAnalyzer{client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir}
-	p := &pipeline{
-		opts: Options{OutDir: dataDir, AnalysisRuntime: AnalysisRuntimeOptions{
-			Type: AnalysisRuntimeOrkaContainer, OrkaContainer: OrkaContainerAnalysisOptions{MaxConcurrent: 1},
-		}},
-		cfg: &project.Config{AI: &project.AI{Concurrency: 1}}, client: &http.Client{}, containerAnalyzer: analyzer,
-	}
-	details := []models.JobDetail{{
-		Name: "job", JobID: "job", JobType: models.JobTypePeriodic,
-		Runs: []models.BuildResult{{
-			BuildInfo: models.BuildInfo{BuildID: "1", Result: "FAILURE"},
-			TestCases: []models.TestCase{{Name: "test", Status: "failed", FailureMessage: "failed"}},
-		}},
-	}}
-	if err := p.analyzeFailuresWithAI(t.Context(), details, models.FlakinessReport{}); err != nil {
-		t.Fatalf("analysis error = %v", err)
-	}
-	if details[0].Runs[0].TestCases[0].AISummary == nil {
-		t.Fatal("nonfatal unavailable analysis did not retain its summary")
-	}
-}
-
-func refreshLifecyclePipeline(t *testing.T, dataDir, bucketDir string, analyzer containerFailureAnalyzer) *pipeline {
+func refreshLifecyclePipeline(t *testing.T, dataDir, bucketDir string, analyzer ai.FailureAnalyzer) *pipeline {
 	t.Helper()
 	backend, err := storage.NewLocalBackend(bucketDir, "https://prow.example.test")
 	if err != nil {
@@ -763,15 +274,19 @@ func refreshLifecyclePipeline(t *testing.T, dataDir, bucketDir string, analyzer 
 			SMTP: project.EmailSMTP{Host: "smtp.example.test", Port: 25, TLS: project.EmailTLSNone},
 		}},
 	}
-	return &pipeline{
+	p := &pipeline{
 		opts: Options{
 			OutDir: dataDir, BuildsPerJob: 1, Workers: 1, Timeout: time.Minute,
-			AnalysisRuntime: AnalysisRuntimeOptions{
-				Type: AnalysisRuntimeOrkaContainer, OrkaContainer: OrkaContainerAnalysisOptions{MaxConcurrent: 1},
-			},
+			AnalysisRuntime: AnalysisRuntimeOptions{Type: AnalysisRuntimeInProcess},
 		},
-		cfg: cfg, client: &http.Client{}, backend: backend, enableAI: true, containerAnalyzer: analyzer,
+		cfg: cfg, client: &http.Client{}, backend: backend, enableAI: true,
 	}
+	if analyzer != nil {
+		old := newAnalysisAnalyzer
+		newAnalysisAnalyzer = func(*ai.Service) ai.FailureAnalyzer { return analyzer }
+		t.Cleanup(func() { newAnalysisAnalyzer = old })
+	}
+	return p
 }
 
 func configureRefreshLifecycleRuntime(t *testing.T, p *pipeline, dataDir string) {
@@ -901,12 +416,7 @@ func TestAnalysisCheckpointPersistenceFailureRestoresRefreshState(t *testing.T) 
 		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"version":1}`})
 	}))
 	defer server.Close()
-	state, err := analysisruntime.NewContainerStateStore(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
 	analyzer := &resultLifecycleAnalyzer{
-		client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir, merge: true,
 		result: ai.FailureAnalysisResult{
 			Summary: &models.AISummary{GeneratedAt: "2026-07-29T00:00:00Z", Summary: "analyzed"},
 			Analysis: &models.AIAnalysis{
@@ -916,15 +426,16 @@ func TestAnalysisCheckpointPersistenceFailureRestoresRefreshState(t *testing.T) 
 		},
 	}
 	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
+	configureRefreshLifecycleRuntime(t, p, dataDir)
 	want := errors.New("checkpoint disk full")
-	oldSave := saveContainerAnalysisState
-	saveContainerAnalysisState = func(*analysisruntime.ContainerStateStore) error { return want }
-	t.Cleanup(func() { saveContainerAnalysisState = oldSave })
+	oldSave := saveAnalysisRuntimeCache
+	saveAnalysisRuntimeCache = func(*analysisruntime.Runtime) error { return want }
+	t.Cleanup(func() { saveAnalysisRuntimeCache = oldSave })
 
-	if _, err := p.fullPass(t.Context()); !errors.Is(err, want) || !strings.Contains(err.Error(), "persisting completed container analysis") {
+	if _, err := p.fullPass(t.Context()); !errors.Is(err, want) || !strings.Contains(err.Error(), "persisting AI cache") {
 		t.Fatalf("fullPass error = %v", err)
 	}
-	if p.aiRuntime != nil || p.containerAnalyzer != nil {
+	if p.aiRuntime != nil {
 		t.Fatal("checkpoint failure retained in-memory AI state")
 	}
 	if after := hashFileTree(t, dataDir); !reflect.DeepEqual(after, before) {
@@ -933,10 +444,7 @@ func TestAnalysisCheckpointPersistenceFailureRestoresRefreshState(t *testing.T) 
 }
 
 func TestRollbackFailureInvalidatesInMemoryAnalysisState(t *testing.T) {
-	p := &pipeline{
-		aiRuntime:         &analysisruntime.Runtime{},
-		containerAnalyzer: &resultLifecycleAnalyzer{},
-	}
+	p := &pipeline{aiRuntime: &analysisruntime.Runtime{}}
 	transaction := &aiRefreshStateTransaction{files: []aiRefreshFileSnapshot{{
 		path: filepath.Join(t.TempDir(), ai.CacheFilename), backupPath: filepath.Join(t.TempDir(), "missing-backup"), exists: true,
 	}}}
@@ -945,7 +453,7 @@ func TestRollbackFailureInvalidatesInMemoryAnalysisState(t *testing.T) {
 	if !errors.Is(err, refreshErr) || !strings.Contains(err.Error(), "restoring AI refresh state") {
 		t.Fatalf("rollback error = %v", err)
 	}
-	if p.aiRuntime != nil || p.containerAnalyzer != nil {
+	if p.aiRuntime != nil {
 		t.Fatal("rollback failure retained in-memory AI state")
 	}
 }
@@ -972,8 +480,7 @@ func TestOutputFailureLeavesResolvedStateUnchanged(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"result": `{"version":1}`})
 	}))
 	defer server.Close()
-	state, _ := analysisruntime.NewContainerStateStore(dataDir)
-	analyzer := &resultLifecycleAnalyzer{client: orka.NewResultClient(server.URL, "token"), state: state, dataDir: dataDir, result: ai.FailureAnalysisResult{Summary: &models.AISummary{Summary: "analyzed"}, Analysis: &models.AIAnalysis{RootCause: "cause", Severity: "High", SuggestedFix: "fix", Mode: "agentic", EvidencePlanCovered: true}}}
+	analyzer := &resultLifecycleAnalyzer{result: ai.FailureAnalysisResult{Summary: &models.AISummary{Summary: "analyzed"}, Analysis: &models.AIAnalysis{RootCause: "cause", Severity: "High", SuggestedFix: "fix", Mode: "agentic", EvidencePlanCovered: true}}}
 	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
 	p.opts.BuildsPerJob = 3
 	p.opts.SkipSideEffects = true

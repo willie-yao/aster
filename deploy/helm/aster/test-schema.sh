@@ -3,8 +3,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 chart="$root/deploy/helm/aster"
-generated="$root/backend/internal/onboard/testdata/k8s-values.golden.yaml"
-tmp="${TMPDIR:-/tmp}/aster-schema-$$"
+tmp="$root/.test-work/aster-schema-$$"
 mkdir -p "$tmp"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -17,7 +16,7 @@ project:
       dashboard: schema-test
     storage:
       provider: local
-      base: /tmp
+      base: .test-work/storage
     branding:
       title: Schema Test
       base_path: /
@@ -50,9 +49,6 @@ expect_fail() {
 # The complete chart defaults must satisfy the schema before template validation.
 helm lint "$chart" > "$tmp/default.out" 2>&1
 
-# The onboarding scaffold is a supported chart values subset.
-expect_pass generated "$generated"
-
 cat > "$tmp/watch.yaml" <<'VALUES'
 mode: watch
 fetcher:
@@ -74,44 +70,53 @@ fetcher:
 VALUES
 expect_pass cron "$tmp/cron.yaml"
 
-cat > "$tmp/orka.yaml" <<'VALUES'
+cat > "$tmp/analysis-shadow.yaml" <<'VALUES'
 mode: cron
 ai:
   enabled: true
-  endpoint: https://model.example.test/v1/chat/completions
+  endpoint: https://api.githubcopilot.com/chat/completions
   model: fixture-model
   existingSecret: fixture-model-auth
-analysisRuntime:
-  type: orka-container
-  orkaContainer:
-    apiAuth:
-      existingSecret: fixture-orka-api
-    image:
-      tag: sha-deadbeef
-    modelAuth:
-      existingSecret: fixture-model-auth
-    nodeSelector:
-      agentpool: cpu-pool
-VALUES
-expect_pass orka "$tmp/orka.yaml"
-
-cat > "$tmp/shadow.yaml" <<'VALUES'
-ai:
-  enabled: true
-  endpoint: https://model.example.test/v1/chat/completions
-  model: fixture-model
-  existingSecret: fixture-model-auth
-orka:
-  agentAnalysisShadow:
+agentSandbox:
+  analysisShadow:
     enabled: true
+    namespace: analysis-shadow-eval
+    runtimeClassName: kata-vm-isolation
+    image:
+      repository: local/shadow-executor
+      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      pullPolicy: IfNotPresent
+    workloadServiceAccount:
+      create: true
+      name: shadow-workload
     agentVersion: v1
-    admission:
-      agentRef: analysis-agent
-      repository:
-        owner: example
-        name: repo
+    modelProvider:
+      credentialMode: direct
+      api: chat_completions
+      endpoint: https://api.githubcopilot.com/chat/completions
+      model: fixture-model
+    timeout: 10m
+    retries: 0
+    outputLimitBytes: 65536
+    maxPerRun: 1
+    maxTurns: 12
+    pollInterval: 250ms
+    ledger:
+      existingClaim: shadow-ledger
+      mountPath: /private/analysis-shadow
+    networkPolicy:
+      mode: kubernetes
+      enabled: true
+      gatewayNamespaceSelector: {kubernetes.io/metadata.name: platform}
+      gatewayPodSelector: {app: model-gateway}
+      gatewayPort: 443
+      dnsNamespaceSelector: {kubernetes.io/metadata.name: kube-system}
+      dnsPodSelector: {k8s-app: kube-dns}
+    resources:
+      requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
+      limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 256Mi}
 VALUES
-expect_pass shadow "$tmp/shadow.yaml"
+expect_pass analysis-shadow "$tmp/analysis-shadow.yaml"
 
 cat > "$tmp/oauth.yaml" <<'VALUES'
 ai:
@@ -233,27 +238,27 @@ ai:
 VALUES
 expect_fail invalid-api "$tmp/invalid-api.yaml" /ai/api
 
-cat > "$tmp/invalid-shadow-access.yaml" <<'VALUES'
-orka:
-  agentAnalysisShadow:
-    ledger:
-      accessMode: ReadOnlyMany
+cat > "$tmp/invalid-analysis-shadow-api.yaml" <<'VALUES'
+agentSandbox:
+  analysisShadow:
+    modelProvider:
+      api: responses
 VALUES
-expect_fail invalid-shadow-access "$tmp/invalid-shadow-access.yaml" /orka/agentAnalysisShadow/ledger/accessMode
+expect_fail invalid-analysis-shadow-api "$tmp/invalid-analysis-shadow-api.yaml" /agentSandbox/analysisShadow/modelProvider/api
 
-cat > "$tmp/invalid-shadow-bound.yaml" <<'VALUES'
-orka:
-  agentAnalysisShadow:
+cat > "$tmp/invalid-analysis-shadow-bound.yaml" <<'VALUES'
+agentSandbox:
+  analysisShadow:
     maxPerRun: 0
 VALUES
-expect_fail invalid-shadow-bound "$tmp/invalid-shadow-bound.yaml" /orka/agentAnalysisShadow/maxPerRun
+expect_fail invalid-analysis-shadow-bound "$tmp/invalid-analysis-shadow-bound.yaml" /agentSandbox/analysisShadow/maxPerRun
 
-cat > "$tmp/invalid-shadow-key.yaml" <<'VALUES'
-orka:
-  agentAnalysisShadow:
+cat > "$tmp/invalid-analysis-shadow-key.yaml" <<'VALUES'
+agentSandbox:
+  analysisShadow:
     modelSecret: forbidden
 VALUES
-expect_fail invalid-shadow-key "$tmp/invalid-shadow-key.yaml" /orka/agentAnalysisShadow
+expect_fail invalid-analysis-shadow-key "$tmp/invalid-analysis-shadow-key.yaml" /agentSandbox/analysisShadow
 
 cat > "$tmp/invalid-actions.yaml" <<'VALUES'
 server:
@@ -312,7 +317,7 @@ project:
       dashboard: schema-test
     storage:
       provider: local
-      base: /tmp
+      base: .test-work/storage
     branding:
       title: Schema Test
       base_path: /

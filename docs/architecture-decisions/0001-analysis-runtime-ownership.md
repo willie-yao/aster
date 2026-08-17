@@ -1,8 +1,10 @@
 # ADR 0001: Dashboard ownership of analysis policy
 
-See [Orka architecture in Aster](../maintainer/orka.md#architecture-and-lifecycle)
-for the current end-to-end component, credential, and state flows built on this
-decision.
+> **Status update (pre-v0.9):** The experimental container runtime described by
+> this ADR was removed before v0.9. `analysisRuntime.type` now accepts only
+> `inprocess`, and failure analysis always runs in-process next to the fetcher or
+> worker. The text below remains a historical record of the earlier decision and
+> evaluation.
 
 - Status: Accepted
 - Date: 2026-07-23
@@ -14,12 +16,12 @@ Aster originally supported two analysis execution paths:
 
 - The in-process analyzer ran the dashboard-owned agentic loop inside the
   fetcher or worker.
-- The Orka preview created `type: ai` Tasks that ran Orka's generic AI worker.
+- The container-runtime preview created `type: ai` Tasks that ran a generic AI worker.
 
-The dashboard requires a stricter analysis contract than the generic Orka AI
-worker provides for weaker models. Compatibility versions through v6 added
+The dashboard requires a stricter analysis contract than that generic AI worker
+provides for weaker models. Compatibility versions through v6 added
 provider fallback, bounded context retention, finalization gates, evidence
-repair, Tool selection, and result validation to a patch against pinned Orka
+repair, Tool selection, and result validation to a patch against pinned runtime
 worker internals.
 
 That patch had become a dashboard-specific agent runtime with its own source
@@ -32,8 +34,8 @@ Three changes established a cleaner boundary:
 1. `FailureAnalyzer` defines one dashboard-owned single-failure contract.
 2. Ranked evidence planning and deterministic repair run in the in-process
    analyzer.
-3. The container analyzer runs the same `FailureAnalyzer` inside an Orka
-   `type: container` Task without using Orka's AI worker, Provider, or Tool
+3. The container analyzer runs the same `FailureAnalyzer` inside that runtime's
+   `type: container` Task without using the generic AI worker, Provider, or Tool
    resources. The final evaluation below limits it to an experimental Helm
    lifecycle option.
 
@@ -47,17 +49,16 @@ runtime. It owns provider behavior, prompts, Tool schemas, diagnostic skills,
 ranked evidence planning and repair, critique, semantic review, cache acceptance,
 private traces, and result schemas.
 
-The patched Orka `type: ai` worker remains removed. No dashboard analysis policy
-may move into Orka worker patches, Providers, dynamic Tools, compatibility
+The patched `type: ai` worker remains removed. No dashboard analysis policy
+may move into worker patches, Providers, dynamic Tools, compatibility
 versions, or alternate finalization protocols.
 
 ### Experimental container execution
 
-Helm `mode: cron` deployments may opt into
-`analysisRuntime.type: orka-container`. This adapter submits one
-content-addressed Orka `type: container` Task per failure and runs the same
-dashboard-owned `FailureAnalyzer` in the dedicated analyzer image. Orka owns
-Task and Job lifecycle only.
+Helm `mode: cron` deployments could opt into the now-removed container runtime
+selector. This adapter submitted one content-addressed `type: container` Task
+per failure and ran the same dashboard-owned `FailureAnalyzer` in the dedicated
+analyzer image. That runtime owned Task and Job lifecycle only.
 
 The container runtime is Kubernetes-only, off by default, and has no backward
 compatibility guarantee. It is a sidegrade for concrete lifecycle or isolation
@@ -68,13 +69,13 @@ resource, not the private trace schema.
 
 ### Fix generation
 
-Orka fix generation remains supported through
-`ai.fix_prs.agent_runtime.type: orka`. It is an independent runtime boundary.
-Enabling container analysis does not enable or modify the fix runtime.
+The previously separate cluster fix-generation runtime was removed before
+v0.9. Enabling analysis has no effect on Fix PR generation, which now uses the
+Agent Sandbox runtime only.
 
 ### Placement
 
-Dashboard pods, analyzer Tasks, the Orka controller, and Orka helper workloads
+Dashboard pods, analyzer Tasks, the runtime controller, and helper workloads
 use CPU nodes. GPU nodes remain reserved for model serving and required GPU
 platform workloads.
 
@@ -116,7 +117,7 @@ The demonstrated benefits did not justify the extra control plane:
   Kubernetes Jobs.
 - Cancellation existed upstream as a Task status transition and Job termination,
   but the dashboard adapter did not expose it.
-- Durable results required a separately persistent Orka store. The test install
+- Durable results required a separately persistent result store. The test install
   used ephemeral SQLite and warned that results would be lost on restart.
 - Operator-visible Task history was not integrated into a supported dashboard
   workflow.
@@ -127,7 +128,7 @@ The retained experiment contained about 1,980 lines of production Go, 2,631
 lines of Go tests, and 312 lines of scripts. Most of that code implemented
 transport and persistence rather than analysis behavior. It also carried a
 96-KiB ConfigMap environment limit, encrypted state replay protection, concurrent
-state merging, Task-bound cleanup, cross-namespace RBAC, and a pinned Orka
+state merging, Task-bound cleanup, cross-namespace RBAC, and a pinned runtime
 controller lifecycle.
 
 During the final evaluation, cleanup of the old generic image path changed the
@@ -143,18 +144,18 @@ risk.
 
 - One dashboard-owned failure-analysis implementation and policy surface
 - In-process remains the simplest default for Pages and Kubernetes
-- A clean Orka lifecycle demonstration without worker patches or policy forks
+- A clean container lifecycle demonstration without worker patches or policy forks
 - Current raw cache fields, traces, Tool-use telemetry, and result schemas stay
   shared between runtimes
-- Orka remains useful for the independent fix-generation boundary
+- The independent fix-generation boundary moved to Agent Sandbox
 
 ### Costs
 
 - The experimental path adds bundle, result, encrypted state, RBAC, result API,
   retention, cleanup, image, and pinned-controller validation surfaces
-- Operators must create model credentials in the Orka namespace and keep
+- Operators must create model credentials in the runtime namespace and keep
   analyzer, controller, and helper placement on CPU nodes
-- Container execution is cron-only and depends on a durable Orka result service
+- Container execution is cron-only and depends on a durable result service
 - Every analysis contract change must be revalidated through the full container
   round trip and isolated kind harness
 
@@ -162,7 +163,7 @@ risk.
 
 ### Remove the container adapter entirely
 
-Rejected. The container boundary is a useful, clean Orka evaluation and
+Rejected. The container boundary is a useful, clean container evaluation and
 demonstration option, and some consumers may have a concrete per-failure
 isolation or Task lifecycle requirement. Keeping it experimental avoids claiming
 a production advantage that the evaluation did not show.
@@ -170,10 +171,10 @@ a production advantage that the evaluation did not show.
 ### Make the container adapter the recommended runtime
 
 Rejected. The result, bundle, persistence, encryption, retention, RBAC, and
-cleanup contracts make Orka a second control plane around ordinary Jobs. The
-measured model variance was larger than the runtime difference.
+cleanup contracts make that runtime a second control plane around ordinary Jobs.
+The measured model variance was larger than the runtime difference.
 
-### Restore the patched Orka AI worker
+### Restore the patched AI worker
 
 Rejected. It duplicated dashboard policy inside upstream worker internals and
 created a maintained compatibility fork.
@@ -181,4 +182,4 @@ created a maintained compatibility fork.
 ### Use AgentRuntime for failure analysis
 
 Rejected for failure analysis. AgentRuntime is a better fit for interactive code
-generation and remains available for Orka fix generation.
+generation.

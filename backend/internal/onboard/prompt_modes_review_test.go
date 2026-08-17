@@ -2,12 +2,8 @@ package onboard
 
 import (
 	"context"
-	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func testPromptModeOptions(mode string) Options {
@@ -76,207 +72,34 @@ func TestRunAppliesHandoffFiles(t *testing.T) {
 	}
 }
 
-func TestBuildPlanAgentDraftHasNoHandoffFiles(t *testing.T) {
-	deps, _, _, _ := wizardDependencies("")
-	deps.prompts = &fakePromptBuilder{result: promptPreparationResult{
-		Requested: promptRequestAgent,
-		Status:    promptStatusAgentDraft,
-		Output:    promptOutputAgentDraft,
-	}}
-	plan, err := buildPlan(context.Background(), testPromptModeOptions(promptModeAgent), planningContext{}, deps)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := validatePlan(plan); err != nil {
-		t.Fatalf("validatePlan: %v", err)
-	}
-	for _, path := range []string{"PROMPT_HANDOFF.md", ".opencode/skills/system-prompt-generation/SKILL.md"} {
-		if _, ok := plan.Files[path]; ok {
-			t.Fatalf("agent draft unexpectedly included %s", path)
-		}
-	}
-}
-
 func TestValidateOptionsRejectsNoPromptConflict(t *testing.T) {
-	opts := testPromptModeOptions(promptModeAgent)
+	opts := testPromptModeOptions(promptModeHandoff)
 	opts.NoPrompt = true
 	if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
-func TestValidateOptionsRejectsMalformedAgentModel(t *testing.T) {
-	opts := testPromptModeOptions(promptModeAgent)
-	opts.PromptAgentModel = "claude"
-	if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "provider/model") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestRequirePromptDraftSupportsOnlyAgent(t *testing.T) {
-	opts := testPromptModeOptions(promptModeAgent)
-	opts.RequirePromptDraft = true
-	if err := validateOptions(&opts); err != nil {
-		t.Fatalf("validateOptions: %v", err)
-	}
-
-	deps, _, _, _ := wizardDependencies("")
-	failure := &promptPreparationFailure{Stage: promptStageAgentExecution, Category: promptFailureAgentExecution}
-	deps.prompts = &fakePromptBuilder{result: promptPreparationResult{
-		Requested: promptRequestAgent,
-		Status:    promptStatusAgentFallback,
-		Output:    promptOutputTemplate,
-		Handoff:   "# handoff\n",
-		Failure:   failure,
-	}}
-	_, err := buildPlan(context.Background(), opts, planningContext{}, deps)
-	var strictErr *requiredPromptDraftError
-	if !errors.As(err, &strictErr) {
-		t.Fatalf("error = %v", err)
-	}
-
-	for _, mode := range []string{promptModeHandoff, promptModeTemplate} {
-		invalid := testPromptModeOptions(mode)
-		invalid.RequirePromptDraft = true
-		if err := validateOptions(&invalid); err == nil {
-			t.Fatalf("strict mode %q was accepted", mode)
-		}
-	}
-}
-
 func TestWizardPromptAuthoringKeepsSelectedMode(t *testing.T) {
 	tests := []struct {
 		mode         string
-		inputs       []string
 		wantNoPrompt bool
-		wantModel    string
 	}{
-		{mode: promptModeAgent, inputs: []string{usePromptDefault}, wantModel: defaultPromptAgentModel},
 		{mode: promptModeHandoff},
 		{mode: promptModeTemplate, wantNoPrompt: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.mode, func(t *testing.T) {
 			opts := Options{}
-			selects := []string{tt.mode}
-			if tt.mode == promptModeAgent {
-				selects = append(selects, promptRuntimeOpenCode)
-			}
-			ui := &queuedWizardUI{selects: selects, inputs: tt.inputs}
+			ui := &queuedWizardUI{selects: []string{tt.mode}}
 			if err := wizardPromptAuthoring(context.Background(), ui, &opts); err != nil {
 				t.Fatal(err)
 			}
-			if opts.PromptMode != tt.mode || opts.NoPrompt != tt.wantNoPrompt || opts.PromptAgentModel != tt.wantModel {
+			if opts.PromptMode != tt.mode || opts.NoPrompt != tt.wantNoPrompt {
 				t.Fatalf("opts = %+v", opts)
 			}
 			if len(ui.confirmPrompts) != 0 {
 				t.Fatalf("unexpected confirmation = %+v", ui.confirmPrompts)
-			}
-		})
-	}
-}
-
-func TestValidateOptionsRejectsInvalidPromptNetworkDomain(t *testing.T) {
-	opts := testPromptModeOptions(promptModeAgent)
-	opts.PromptAgentModel = defaultPromptAgentModel
-	opts.PromptNetworkDomains = []string{"https://user:secret@example.com"}
-	if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "prompt-network-domain") || strings.Contains(err.Error(), "secret") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestValidateOptionsNormalizesPromptNetworkDomains(t *testing.T) {
-	opts := testPromptModeOptions(promptModeAgent)
-	opts.PromptAgentModel = "other/model"
-	opts.PromptNetworkDomains = []string{"Provider.Example.COM:443", "provider.example.com:443"}
-	if err := validateOptions(&opts); err != nil {
-		t.Fatal(err)
-	}
-	if len(opts.PromptNetworkDomains) != 1 || opts.PromptNetworkDomains[0] != "provider.example.com:443" {
-		t.Fatalf("network domains = %v", opts.PromptNetworkDomains)
-	}
-}
-
-func TestValidateOptionsAcceptsOrkaPromptRuntime(t *testing.T) {
-	opts := testPromptModeOptions(promptModeAgent)
-	opts.PromptAgentRuntime = promptRuntimeOrka
-	opts.PromptOrkaAPI = "http://orka.example.test:8080"
-	opts.PromptOrkaAgentRef = "prompt-author"
-	opts.PromptOrkaNamespace = "orka-system"
-	opts.PromptOrkaGitSecret = "source-read"
-	if err := validateOptions(&opts); err != nil {
-		t.Fatal(err)
-	}
-	if effectivePromptAgentRuntime(opts) != promptRuntimeOrka {
-		t.Fatalf("runtime = %q", effectivePromptAgentRuntime(opts))
-	}
-}
-
-func TestValidateOptionsRejectsLocalPolicyForOrkaPromptRuntime(t *testing.T) {
-	opts := testPromptModeOptions(promptModeAgent)
-	opts.PromptAgentRuntime = promptRuntimeOrka
-	opts.PromptOrkaAPI = "http://orka.example.test:8080"
-	opts.PromptOrkaAgentRef = "prompt-author"
-	opts.PromptAgentModel = defaultPromptAgentModel
-	if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "apply only") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestValidateOptionsBoundsOrkaPromptTimeout(t *testing.T) {
-	opts := testPromptModeOptions(promptModeAgent)
-	opts.PromptAgentRuntime = promptRuntimeOrka
-	opts.PromptOrkaAPI = "http://orka.example.test:8080"
-	opts.PromptOrkaAgentRef = "prompt-author"
-	opts.PromptTimeout = 31 * time.Minute
-	if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "at most 30m") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestValidateOptionsUsesOrkaAPITerminology(t *testing.T) {
-	opts := testPromptModeOptions(promptModeAgent)
-	opts.PromptAgentRuntime = promptRuntimeOrka
-	opts.PromptOrkaAPI = "https://user:secret@orka.example.test"
-	opts.PromptOrkaAgentRef = "prompt-author"
-	err := validateOptions(&opts)
-	if err == nil || !strings.Contains(err.Error(), "--prompt-orka-api") || !strings.Contains(err.Error(), "ORKA_API_TOKEN") || strings.Contains(err.Error(), "AI_ENDPOINT") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestValidateOptionsRejectsOrkaAPIQueryAndFragment(t *testing.T) {
-	for _, api := range []string{"https://orka.example.test?tenant=x", "https://orka.example.test#results"} {
-		opts := testPromptModeOptions(promptModeAgent)
-		opts.PromptAgentRuntime = promptRuntimeOrka
-		opts.PromptOrkaAPI = api
-		opts.PromptOrkaAgentRef = "prompt-author"
-		if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "--prompt-orka-api") {
-			t.Fatalf("API %q error = %v", api, err)
-		}
-	}
-}
-
-func TestValidateOptionsRejectsOrkaTokenInPlanFields(t *testing.T) {
-	for _, setup := range []func(*testing.T){
-		func(t *testing.T) { t.Setenv("ORKA_API_TOKEN", "  orka-result-secret  ") },
-		func(t *testing.T) {
-			t.Setenv("ORKA_API_TOKEN", "")
-			path := filepath.Join(t.TempDir(), "token")
-			if err := os.WriteFile(path, []byte("orka-result-secret\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("ORKA_API_TOKEN_FILE", path)
-		},
-	} {
-		t.Run("source", func(t *testing.T) {
-			setup(t)
-			opts := testPromptModeOptions(promptModeAgent)
-			opts.PromptAgentRuntime = promptRuntimeOrka
-			opts.PromptOrkaAPI = "http://orka.example.test:8080"
-			opts.PromptOrkaAgentRef = "orka-result-secret"
-			if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "credential was supplied") || strings.Contains(err.Error(), "orka-result-secret") {
-				t.Fatalf("error = %v", err)
 			}
 		})
 	}

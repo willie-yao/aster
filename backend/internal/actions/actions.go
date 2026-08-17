@@ -742,12 +742,6 @@ func (s *Service) buildFixManagerForRepositoryAccess(
 	}
 	aiClient := s.aiClient()
 	ar := eff.AgentRuntime
-	if ar.Type == "opencode" && s.ai.API == ai.APIResponses {
-		return nil, fmt.Errorf("local fix runtime requires chat_completions; select a remote runtime to avoid the shared model endpoint")
-	}
-	if aiClient == nil && ar.Type == "opencode" {
-		return nil, fmt.Errorf("AI is not configured on the server; cannot draft a local fix")
-	}
 
 	critique, critiqueRetries, err := fixruntime.Critique(aiClient, eff.CritiqueRetries)
 	if err != nil {
@@ -803,16 +797,11 @@ func (s *Service) buildFixManagerForRepositoryAccess(
 	if err != nil {
 		return nil, fmt.Errorf("agent command policy: %w", err)
 	}
-	model := ar.Model
-	if model == "" {
-		model = s.ai.Model
-	}
 	gitToken := previewRepositoryToken(ar.Type, userToken, allowRepositoryToken)
 	opts.Agent = &fixpr.AgentConfig{
 		Runtime:               agentRuntime,
 		API:                   s.ai.API,
-		SharedModelEndpoint:   ar.Type == "opencode",
-		Model:                 model,
+		Model:                 s.ai.Model,
 		Endpoint:              s.ai.Endpoint,
 		ModelToken:            s.ai.Token,
 		MaxTurns:              ar.MaxTurns,
@@ -820,9 +809,8 @@ func (s *Service) buildFixManagerForRepositoryAccess(
 		ModelProvider:         ar.ModelProvider.RuntimeConfig(),
 		OutputLimitBytes:      ar.OutputLimitBytes,
 		AllowBash:             allowBash,
-		NetworkDomains:        ar.NetworkDomains,
 		CommandPolicy:         runtime.CommandPolicy{AllowShell: allowBash, Commands: commands},
-		RequireCommandResults: ar.Type == "agent-sandbox",
+		RequireCommandResults: true,
 		Timeout:               ar.ParsedTimeout(),
 		GitToken:              gitToken,
 		ExecutionID:           actionRequestID(ctx),
@@ -989,7 +977,7 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	}
 	sourceFiles := verifiedBuildSourceFiles(subject.Build, eff.Repo.Owner, eff.Repo.Name)
 	if len(sourceFiles) == 0 {
-		return PreviewResult{}, nil, fmt.Errorf("%w: repository source investigation did not identify a verified local path; create an issue or investigate source before proposing a fix", ErrPreviewRejected)
+		return PreviewResult{}, nil, fmt.Errorf("%w: repository source verification did not identify a verified local path; create an issue or investigate source before proposing a fix", ErrPreviewRejected)
 	}
 	destination, err := s.cfg.ResolveFixDestination("", "")
 	if err != nil {
@@ -1023,8 +1011,6 @@ func (s *Service) generateFixPreviewForPattern(
 	generationContext *fixpr.GenerationContext,
 ) (PreviewResult, *previewEntry, error) {
 	verificationPattern := pattern
-	sourceFiles := []string(nil)
-	sourceRepository := ""
 	if generationContext != nil {
 		if generationContext.ProposedRevision != nil {
 			verificationPattern.SuggestedFix = generationContext.ProposedRevision.SuggestedFix
@@ -1032,23 +1018,10 @@ func (s *Service) generateFixPreviewForPattern(
 				verificationPattern.RemediationTargets = []models.RemediationTarget{{Intent: models.RemediationIntentInvestigate}}
 			}
 		}
-		if generationContext.Source != nil {
-			sourceRepository = generationContext.Source.Repository
-			verificationPattern.RemediationTargets = []models.RemediationTarget{generationContext.Source.Target}
-			verificationPattern.SourceRef = generationContext.Source.Repository + "@" + generationContext.Source.Revision
-			verificationPattern.RelevantFiles = nil
-			verificationPattern.FileLinks = nil
-			for _, citation := range generationContext.Source.Citations {
-				sourceFiles = append(sourceFiles, citation.Path)
-			}
-		}
 	}
 	destination, targetRevision, err := s.fixDestinationForPattern(verificationPattern)
 	if err != nil {
 		return PreviewResult{}, nil, err
-	}
-	if sourceRepository != "" && !strings.EqualFold(sourceRepository, destination.Repo.Owner+"/"+destination.Repo.Name) {
-		return PreviewResult{}, nil, fmt.Errorf("%w: investigated repository does not match the configured fix target", ErrPreviewRejected)
 	}
 	policyText := ""
 	if generationContext != nil {
@@ -1056,13 +1029,10 @@ func (s *Service) generateFixPreviewForPattern(
 		if generationContext.ProposedRevision != nil {
 			parts = append(parts, generationContext.ProposedRevision.RootCause, generationContext.ProposedRevision.SuggestedFix)
 		}
-		if generationContext.Source != nil {
-			parts = append(parts, generationContext.Source.Finding)
-		}
 		policyText = strings.Join(parts, "\n")
 	}
 	subject := &ActionSubject{
-		Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern, SourceFiles: sourceFiles, PolicyText: policyText,
+		Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern, PolicyText: policyText,
 	}
 	if err := s.verifyRemediation(ctx, subject); err != nil {
 		return PreviewResult{}, nil, err
@@ -1081,6 +1051,9 @@ func (s *Service) generateFixPreviewForPattern(
 		for _, target := range verificationPattern.RemediationTargets {
 			generationPattern.RelevantFiles = append(generationPattern.RelevantFiles, target.Path)
 		}
+	}
+	if !fixpr.Eligible(generationPattern, s.cfg.EffectiveFixPRs().MinConfidence) {
+		return PreviewResult{}, nil, fmt.Errorf("%w: this failure is not auto-fixable (needs a systemic pattern with a suggested fix)", ErrPreviewRejected)
 	}
 	mgr, err := s.buildFixManagerFor(ctx, userToken, destination)
 	if err != nil {

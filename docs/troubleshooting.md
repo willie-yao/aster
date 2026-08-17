@@ -8,11 +8,8 @@ cases below.
 | `AI is enabled but no provider is configured` | `AI_ENDPOINT` or `AI_MODEL` is missing. | Set both repository variables, commit `ai.endpoint` and `ai.model`, or disable AI. |
 | `AI_TOKEN is not set, disabling AI analysis` | No bearer token was supplied. | Set `AI_TOKEN`. Use any non-empty placeholder for an unauthenticated endpoint. |
 | Missing or empty `prompts/system.md` | AI was enabled without a project prompt. | Add a non-empty prompt under `<project_dir>/prompts/system.md`. |
-| `required agent prompt draft was not produced` | `--require-prompt-draft` was set and agent prompt preparation safely fell back. | Read the safe stage and category, fix source access, OpenCode availability, authentication, or the generated output, then retry. |
-| Prompt authoring times out | Source revision resolution or agent execution exceeded the onboarding-specific budget. | Retry with `--prompt-timeout 30m` or use handoff mode. The fetcher timeout and project `ai.timeout` do not change onboarding prompt authoring. |
-| Prompt authoring falls back with a safe warning | Source revision resolution, `srt` availability, provider network policy, agent execution, or output validation failed. | Use the reported stage and action. Verify the pinned `srt` package, `SRT_BIN`, platform dependencies, and provider domains. Raw OpenCode output is not printed; use the generated handoff bundle for a manual retry. |
-| Orka prompt authoring falls back | The kube context, Orka API, Agent, result authorization, clone credential, or Task execution is unavailable. | Verify `--prompt-agent-runtime=orka`, the Orka flags, `ORKA_KUBE_CONTEXT`, result-token source, Agent readiness, and any read-only git Secret. The fallback remains reviewable and does not run local OpenCode. |
-| Orka prompt authoring reports cleanup pending | A valid prompt was produced, but exact Task deletion could not yet be confirmed. | Keep the prompt draft, inspect the reported namespace and Task name with operator credentials, and complete cleanup before retrying. |
+| Prompt authoring times out | Source revision resolution exceeded the onboarding-specific budget. | Retry with `--prompt-timeout 30m` or use `--prompt-mode=todo-template`. The fetcher timeout and project `ai.timeout` do not change onboarding prompt authoring. |
+| Prompt authoring falls back with a safe warning | Source revision resolution failed or timed out. | Use the reported stage and action, then review the generated handoff bundle or TODO template manually. |
 | Local onboarding refuses existing scaffold files | A planned engine-generated file already exists and update mode was not selected. | Choose another directory or rerun with `--update-existing` after review. Existing prompts and skills remain preserved unless a separately reviewed prompt plan uses `--replace-consumer-owned`. |
 | Onboarding warns about stale generated files | Files from an unselected deployment or prompt mode exist in the destination. | Review them manually. Onboarding leaves them untouched and never deletes them automatically. |
 | `AI endpoint rejected tools` | The endpoint or model does not support OpenAI-style function calling. | Enable the provider's tool-call parser or choose a tool-capable model. |
@@ -24,8 +21,8 @@ cases below.
 | Private endpoint times out | The GitHub-hosted runner cannot reach the network. | Use Kubernetes-native mode, a self-hosted runner, or `skip-fetch` with committed data. |
 | Analysis is generic | The project prompt lacks architecture, artifact layout, or real failure signatures. | Expand `prompts/system.md`. The update applies to new analyses; use an intentional cache rebaseline if existing entries must be replaced. |
 | Cached analysis came from the old provider | Existing reusable entries retain their provider provenance after a provider change. | Set a new cache generation for a reversible full rebaseline. |
-| `Propose fix` reports unavailable | The selected runtime prerequisites are missing or a required domain is not allowed. | Use the full fixer image for local OpenCode or `agentSandbox.fixRuntime.dashboardImage` for Agent Sandbox patch reconstruction. |
-| Agent shadow does not run or records a failed status | The exact comparison was already claimed, Task RBAC or admission denied creation, result authentication failed, output or citations were invalid, the private ledger claim was unavailable, or cleanup remains pending. | Inspect worker or fetcher logs, the shadow Task status, admission denial, Orka result API authorization for the dedicated shadow ServiceAccount, and the private `analysis_shadow.json` ledger. Do not clear authoritative cache or public data. |
+| `Propose fix` reports unavailable | The Agent Sandbox runtime is disabled, misconfigured, or its executor rejected the request. | Verify `agentSandbox.fixRuntime` Helm values, the executor image digest, provider Secret or gateway, allowed commands, and admission policy. |
+| Agent shadow does not run or records a failed status | The exact comparison was already claimed, Sandbox RBAC or admission denied creation, result validation failed, output or citations were invalid, the private ledger claim was unavailable, or cleanup remains pending. | Inspect worker or fetcher logs, the Sandbox status, admission denial, and the private `analysis_shadow.json` ledger. Do not clear authoritative cache or public data. |
 | Helm rejects `server.actions.oauth.scope`, `chatScope`, or `privateRepositories` | OAuth is identity-only and no longer carries repository access. | Use the guarded `deploy/helm/upgrade.sh`; it removes only known deprecated OAuth controls from its reviewed candidate. For a manual upgrade, remove the legacy keys and grant required repository access to `BOT_TOKEN`. |
 | OAuth actions report that `BOT_TOKEN` is missing or cannot access a repository | OAuth identifies the admin, but the bot credential performs writes. | Add `BOT_TOKEN` to the OAuth auth Secret and scope it to the configured action repositories and operations. |
 | Helm rejects `server.security.hsts.enabled=false` | HSTS cannot be disabled accidentally. | Keep HSTS enabled for deployments. For direct local HTTP only, set `server.development.allowInsecureHTTP=true`. |
@@ -126,8 +123,8 @@ Email action links require all of the following:
 - The recurring pattern still exists in the current job data.
 
 Opening the link only displays an intent prompt. Click **Generate draft** before
-the dashboard calls the preview API. Fix proposals also require `opencode` and
-git in the server image.
+the dashboard calls the preview API. Fix proposals require an enabled Agent
+Sandbox Fix runtime.
 
 
 ## Asynchronous draft stays pending or no ready email arrives

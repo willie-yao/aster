@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/fetchprogress"
 	"github.com/willie-yao/aster/backend/internal/models"
-	"github.com/willie-yao/aster/backend/internal/orka"
 )
 
 type fakeWatchPipeline struct {
@@ -168,7 +166,7 @@ func TestRunWatchLoopRetriesTransientFailureAfterCompletionInterval(t *testing.T
 	ctx, cancel := context.WithCancel(t.Context())
 	clock := &fakeWatchTime{now: time.Unix(0, 0), maxWaits: 2, cancel: cancel}
 	pipeline := &fakeWatchPipeline{
-		watchErrors: []error{&orka.ResultHTTPError{StatusCode: http.StatusServiceUnavailable}},
+		watchErrors: []error{errors.New("refresh unavailable")},
 		advance:     clock.advance,
 		passTime:    7 * time.Minute,
 	}
@@ -184,20 +182,6 @@ func TestRunWatchLoopRetriesTransientFailureAfterCompletionInterval(t *testing.T
 	}
 }
 
-func TestRunWatchLoopStopsSchedulingAfterAuthorizationFailure(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	clock := &fakeWatchTime{now: time.Unix(0, 0), maxWaits: 2, cancel: cancel}
-	pipeline := &fakeWatchPipeline{watchErrors: []error{&orka.ResultHTTPError{StatusCode: http.StatusForbidden}}}
-	err := runWatchLoop(ctx, pipeline, time.Minute, time.Hour, clock.clock())
-	if !orka.IsResultAuthorizationError(err) {
-		t.Fatalf("runWatchLoop error = %v", err)
-	}
-	if pipeline.watchCalls != 1 || len(clock.waits) != 1 {
-		t.Fatalf("watch calls=%d waits=%d, want one failed pass", pipeline.watchCalls, len(clock.waits))
-	}
-}
-
 func TestRunWatchLoopRetriesInitialFailureWithoutSideEffectsOnWatchPasses(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	clock := &fakeWatchTime{now: time.Unix(0, 0), maxWaits: 2, cancel: cancel}
@@ -209,15 +193,5 @@ func TestRunWatchLoopRetriesInitialFailureWithoutSideEffectsOnWatchPasses(t *tes
 	want := []string{"full", "full", "watch"}
 	if fmt.Sprint(pipeline.events) != fmt.Sprint(want) {
 		t.Fatalf("events = %v, want %v", pipeline.events, want)
-	}
-}
-
-func TestHaltSystemicWatchFailureWaitsForCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	authErr := &orka.ResultHTTPError{StatusCode: http.StatusUnauthorized}
-	err := haltSystemicWatchFailure(ctx, authErr)
-	if !orka.IsResultAuthorizationError(err) || !errors.Is(err, context.Canceled) {
-		t.Fatalf("halt error = %v", err)
 	}
 }

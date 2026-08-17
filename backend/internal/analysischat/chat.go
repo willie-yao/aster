@@ -49,12 +49,7 @@ var (
 	// ErrActiveTurnLimit means an owner has too many concurrent turns.
 	ErrActiveTurnLimit = errors.New("analysis chat active turn limit reached")
 	// ErrRateLimit means an owner exceeded the admitted turn rate.
-	ErrRateLimit = errors.New("analysis chat rate limit reached")
-	// ErrSourceInvestigationLimit means a session has too many source requests.
-	ErrSourceInvestigationLimit = errors.New("source investigation session limit reached")
-	// ErrSourceInvestigationActiveLimit means an owner has too many source Tasks.
-	ErrSourceInvestigationActiveLimit = errors.New("source investigation active limit reached")
-	// ErrIdempotencyConflict means a request key was reused for different input.
+	ErrRateLimit           = errors.New("analysis chat rate limit reached") // ErrIdempotencyConflict means a request key was reused for different input.
 	ErrIdempotencyConflict = errors.New("analysis chat idempotency key conflict")
 	// ErrRequestOutcomeUnknown means a replica died before recording a turn result.
 	ErrRequestOutcomeUnknown = errors.New("analysis chat request outcome unknown")
@@ -332,10 +327,8 @@ type resolvedAnalysis struct {
 type Service struct {
 	dataDir          string
 	runner           Runner
-	investigator     sourceinvestigation.Runner
 	testFixPreflight func(context.Context, sourceinvestigation.Repository, string, []string) (string, map[string]string, error)
 	sourceRepo       sourceinvestigation.Repository
-	sourceOpts       SourceInvestigationOptions
 	opts             Options
 	store            *sessionStore
 	lifecycle        context.Context
@@ -468,7 +461,6 @@ func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView,
 		CreateRequestHash:    requestHash,
 		CreateRequestVersion: createVersion,
 		Requests:             map[string]persistedRequest{},
-		Investigations:       map[string]persistedInvestigation{},
 		View: SessionView{
 			ID:        id,
 			Analysis:  resolved.ref,
@@ -592,10 +584,6 @@ func (s *Service) cleanup(state *persistedState, now time.Time) bool {
 			current.Requests = map[string]persistedRequest{}
 			changed = true
 		}
-		if current.Investigations == nil {
-			current.Investigations = map[string]persistedInvestigation{}
-			changed = true
-		}
 		retainedOutcome := false
 		if current.Active != nil && !now.Before(current.Active.ExpiresAt) {
 			active := current.Active
@@ -624,31 +612,13 @@ func (s *Service) cleanup(state *persistedState, now time.Time) bool {
 			retainedOutcome = true
 			changed = true
 		}
-		activeInvestigation := false
-		for requestID, record := range current.Investigations {
-			if activeSourceInvestigation(record) && !now.Before(record.LeaseExpires) {
-				record.View.Status = sourceinvestigation.StatusUnknown
-				record.View.Phase = ""
-				record.View.UpdatedAt = now.Format(time.RFC3339)
-				record.LeaseID = ""
-				record.LeaseExpires = time.Time{}
-				record.CancelRequest = false
-				record.Subject = sourceinvestigation.Subject{}
-				current.Investigations[requestID] = record
-				retainedOutcome = true
-				changed = true
-			}
-			if activeSourceInvestigation(record) {
-				activeInvestigation = true
-			}
-		}
 		if retainedOutcome {
 			retainedUntil := now.Add(s.opts.SessionTTL)
 			if current.ExpiresAt.Before(retainedUntil) {
 				extendSessionExpiry(current, retainedUntil)
 			}
 		}
-		if !now.Before(current.ExpiresAt) && current.Active == nil && !activeInvestigation {
+		if !now.Before(current.ExpiresAt) && current.Active == nil {
 			delete(state.Sessions, id)
 			changed = true
 		}

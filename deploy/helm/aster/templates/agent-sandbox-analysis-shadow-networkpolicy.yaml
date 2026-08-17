@@ -1,0 +1,78 @@
+{{- include "aster.validateAgentAnalysisShadow" . -}}
+{{- if and .Values.agentSandbox.analysisShadow.enabled .Values.agentSandbox.analysisShadow.networkPolicy.enabled }}
+{{- $cfg := .Values.agentSandbox.analysisShadow.networkPolicy -}}
+{{- if eq $cfg.mode "cilium" }}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "aster.agentAnalysisShadowAdmissionName" . }}
+  namespace: {{ .Values.agentSandbox.analysisShadow.namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analysis-shadow
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: prow-ai-dashboard/execution
+        operator: Exists
+  ingress: []
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: {{ index $cfg.dnsNamespaceSelector "kubernetes.io/metadata.name" | quote }}
+            {{- toYaml $cfg.dnsPodSelector | nindent 12 }}
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toEntities: [cluster]
+      toPorts:
+        - ports:
+            - port: {{ $cfg.gatewayPort | quote }}
+              protocol: TCP
+{{- else }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "aster.agentAnalysisShadowAdmissionName" . }}
+  namespace: {{ .Values.agentSandbox.analysisShadow.namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analysis-shadow
+spec:
+  podSelector:
+    matchExpressions:
+      - key: prow-ai-dashboard/execution
+        operator: Exists
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $cfg.dnsNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $cfg.dnsPodSelector | nindent 14 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $cfg.gatewayNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $cfg.gatewayPodSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $cfg.gatewayPort }}
+{{- end }}
+{{- end }}

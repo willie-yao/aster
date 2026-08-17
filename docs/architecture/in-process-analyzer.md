@@ -19,11 +19,9 @@ The Kubernetes API server serves published data and optional interactive
 features. It does not replace the fetcher or worker as the owner of scheduled
 failure analysis.
 
-The experimental Orka container placement is different from a shadow analyzer:
-it runs the same dashboard-owned `FailureAnalyzer` in a separate analyzer image.
-The optional Orka Agent shadow and Agent Sandbox causal critic run after an
-authoritative refresh and write private comparison ledgers. They do not replace
-the published result or participate in normal analysis cache acceptance.
+Optional Agent Sandbox analysis shadows run after an authoritative refresh and
+write private comparison ledgers. They do not replace the published result or
+participate in normal analysis cache acceptance.
 
 The Agent Sandbox OpenCode analyzer is a separate disabled-by-default deployment
 prototype. It is exercised manually or by explicit evaluation tests, not by the
@@ -76,9 +74,7 @@ fixed ownership order:
 The per-failure user message comes from
 `backend/internal/ai/modules/universal`. It contains bounded failure metadata,
 the failure message and body, and starting tool suggestions. The service adds
-bounded Prow job metadata. The experimental Orka container placement can also
-add same-build failure-cohort context when it groups equivalent failures for
-one representative Task. Normal in-process execution analyzes one test per
+bounded Prow job metadata. Normal in-process execution analyzes one test per
 request. After a private cache miss, the agentic loop prepends a bounded
 artifact-path seed and any ranked evidence plan.
 

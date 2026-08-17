@@ -15,7 +15,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -32,9 +31,9 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/issues"
 	"github.com/willie-yao/aster/backend/internal/junit"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/notify"
-	"github.com/willie-yao/aster/backend/internal/orka"
 	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/patterns"
 	"github.com/willie-yao/aster/backend/internal/patternstate"
@@ -51,46 +50,21 @@ import (
 
 // Options is the parsed invocation for a single fetcher run.
 // cmd/aster constructs it from flags before Run.
-const (
-	AnalysisRuntimeInProcess     = "inprocess"
-	AnalysisRuntimeOrkaContainer = "orka-container"
-)
+const AnalysisRuntimeInProcess = "inprocess"
 
-// OrkaContainerAnalysisOptions configure the experimental Helm analysis runtime.
-type OrkaContainerAnalysisOptions struct {
-	Namespace           string
-	ResultAPI           string
-	Image               string
-	ModelSecretName     string
-	ModelTokenKey       string
-	GitHubSecretName    string
-	GitHubTokenKey      string
-	StateSecretName     string
-	StateSecretKey      string
-	MaxConcurrent       int
-	PollInterval        time.Duration
-	TaskTimeout         time.Duration
-	Retries             int
-	ContextWindowTokens int
-	NodeSelector        map[string]string
-	Tolerations         []map[string]any
-	Affinity            map[string]any
-}
-
-// ShadowAnalysisOptions configure the private experimental Agent comparison path.
+// ShadowAnalysisOptions configure the private experimental Agent comparison
+// path. It runs on Agent Sandbox after authoritative in-process publication and
+// never changes public output.
 type ShadowAnalysisOptions struct {
-	Enabled      bool
-	Namespace    string
-	ResultAPI    string
-	AgentRef     string
-	AgentVersion string
-	GitSecret    string
-	KubeContext  string
-	LedgerPath   string
-	MaxPerRun    int
-	MaxTurns     int
-	Timeout      time.Duration
-	Retries      int
+	Enabled          bool
+	AgentVersion     string
+	LedgerPath       string
+	MaxPerRun        int
+	MaxTurns         int
+	Timeout          time.Duration
+	Retries          int
+	OutputLimitBytes int64
+	ModelProvider    modelprovider.Config
 }
 
 // CausalCriticOptions configure the private sampled Agent Sandbox review path.
@@ -105,8 +79,7 @@ type CausalCriticOptions struct {
 
 // AnalysisRuntimeOptions select where single-failure analysis runs.
 type AnalysisRuntimeOptions struct {
-	Type          string
-	OrkaContainer OrkaContainerAnalysisOptions
+	Type string
 }
 
 type Options struct {
@@ -131,12 +104,6 @@ type Options struct {
 	TraceEngine ai.TraceEngine
 }
 
-type containerFailureAnalyzer interface {
-	ai.FailureAnalyzer
-	Maintain(context.Context) error
-	StateStore() *analysisruntime.ContainerStateStore
-}
-
 // pipeline holds the resolved, reusable state for a run: config, storage, and
 // AI settings. It is built once by setupPipeline and drives one
 // or many passes (one-shot Run, or repeated passes in RunWatch).
@@ -152,7 +119,6 @@ type pipeline struct {
 	jobCatalog           *jobconfig.Catalog
 	aiRuntime            *analysisruntime.Runtime
 	usageRecorder        *aiusage.Recorder
-	containerAnalyzer    containerFailureAnalyzer
 	progress             *fetchprogress.Tracker
 	aiRefreshTransaction *aiRefreshStateTransaction
 	lastPatternOutcomes  map[string]patterns.JobOutcome
@@ -161,6 +127,8 @@ type pipeline struct {
 	shadowAppend         shadowLedgerAppender
 	shadowClaim          shadowLedgerClaimer
 	shadowNow            func() time.Time
+	shadowAgentNamespace string
+	shadowAgentRef       string
 	criticReviewer       causalcritic.Reviewer
 	criticFreeze         shadowEvidenceFreezer
 	criticNow            func() time.Time
@@ -208,11 +176,6 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	if err := validateAnalysisRuntimeOptions(opts); err != nil {
 		return nil, err
 	}
-	if opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
-		if err := analysisruntime.ValidateProjectBundleSource(opts.ProjectDir); err != nil {
-			return nil, fmt.Errorf("initialize Orka container analysis: %w", err)
-		}
-	}
 	cfg, err := project.Load(filepath.Join(opts.ProjectDir, "project.yaml"))
 	if err != nil {
 		return nil, fmt.Errorf("loading project config: %w", err)
@@ -233,9 +196,6 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		if opts.CausalCritic.Enabled {
 			return nil, fmt.Errorf("causal critic shadow requires AI_TOKEN for authoritative in-process analysis")
 		}
-		if opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
-			return nil, fmt.Errorf("orka-container analysis requires AI_TOKEN for the in-process cross-build pattern pass")
-		}
 		log.Println("Warning: -ai enabled but AI_TOKEN is not set, disabling AI analysis")
 		enableAI = false
 	}
@@ -248,43 +208,6 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		aiProject, err = analysisruntime.LoadProject(opts.ProjectDir, cfg, fallbacks)
 		if err != nil {
 			return nil, err
-		}
-		if opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
-			api := strings.ToLower(strings.TrimSpace(fallbacks.API))
-			if api == "" {
-				api = project.AIAPIChatCompletions
-			}
-			if strings.TrimSpace(fallbacks.Endpoint) == "" || strings.TrimSpace(fallbacks.Model) == "" {
-				return nil, fmt.Errorf("orka-container analysis requires AI_ENDPOINT and AI_MODEL from Helm ai settings")
-			}
-			if err := project.ValidateAIAPI(api); err != nil {
-				return nil, err
-			}
-			reasoningEffort := aiProject.Provider.ReasoningEffort
-			aiProject.Provider = project.AIProvider{API: api, Endpoint: fallbacks.Endpoint, Model: fallbacks.Model, ReasoningEffort: reasoningEffort}
-			if cfg.AI != nil && len(cfg.AI.Headers) > 0 {
-				return nil, fmt.Errorf("orka-container analysis does not transport ai.headers; use bearer-token modelAuth or a trusted proxy")
-			}
-			stateKey, _ := analysisruntime.ParseContainerStateKey(os.Getenv(analysisruntime.ContainerStateKeyEnv))
-			contextWindowTokens, _, err := ai.ParseContextWindowTokens(os.Getenv("AI_CONTEXT_WINDOW_TOKENS"))
-			if err != nil {
-				return nil, err
-			}
-			opts.AnalysisRuntime.OrkaContainer.ContextWindowTokens = contextWindowTokens
-			container := opts.AnalysisRuntime.OrkaContainer
-			if err := orka.ValidateContainerAnalyzerOptions(orka.ContainerAnalyzerOptions{
-				Namespace: container.Namespace, OrkaAPI: container.ResultAPI, Image: container.Image, ProjectDir: opts.ProjectDir, DataDir: opts.OutDir,
-				API: aiProject.Provider.API, Endpoint: aiProject.Provider.Endpoint, Model: aiProject.Provider.Model, ReasoningEffort: string(aiProject.Provider.ReasoningEffort), CacheGeneration: aiProject.CacheGeneration,
-				ModelSecretName: container.ModelSecretName, ModelTokenKey: container.ModelTokenKey,
-				GitHubSecretName: container.GitHubSecretName, GitHubTokenKey: container.GitHubTokenKey,
-				StateSecretName: container.StateSecretName, StateSecretKey: container.StateSecretKey, StateKey: stateKey,
-				ContextWindowTokens: container.ContextWindowTokens,
-				AnalysisTimeout:     cfg.AI.EffectiveAgentic().Timeout,
-				TaskTimeout:         container.TaskTimeout, PollInterval: container.PollInterval, MaxRetries: container.Retries,
-				MaxConcurrentTasks: container.MaxConcurrent, NodeSelector: container.NodeSelector, Tolerations: container.Tolerations, Affinity: container.Affinity,
-			}); err != nil {
-				return nil, fmt.Errorf("orka-container analysis: %w", err)
-			}
 		}
 		log.Printf("Loaded AI skills (profiles=%s engine=%d consumer=%d consumer_bundle=%t hash=%s)",
 			aiProject.ProfileSelection.String(), aiProject.SkillSet.EngineCount(), aiProject.SkillSet.ConsumerCount(),
@@ -326,8 +249,7 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 		return nil, err
 	}
 	p.completeProgressPhase()
-	analysisCtx, sideEffectCtx := passExecutionContexts(ctx, fetchCtx, p.opts.AnalysisRuntime.Type)
-	res, err := p.refreshWithAnalysisContext(fetchCtx, analysisCtx, jobs)
+	res, err := p.refreshWithAnalysisContext(fetchCtx, fetchCtx, jobs)
 	if err != nil {
 		return nil, err
 	}
@@ -338,19 +260,12 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 		return jobs, nil
 	}
 	p.startProgressPhase(fetchprogress.PhaseSideEffects)
-	if err := p.runSideEffects(sideEffectCtx, res); err != nil {
+	if err := p.runSideEffects(fetchCtx, res); err != nil {
 		p.invalidateAnalysisRuntime()
 		return nil, err
 	}
 	p.completeProgressPhase()
 	return jobs, nil
-}
-
-func passExecutionContexts(root, bounded context.Context, runtimeType string) (context.Context, context.Context) {
-	if runtimeType == AnalysisRuntimeOrkaContainer {
-		return root, root
-	}
-	return bounded, bounded
 }
 
 func validateAnalysisRuntimeOptions(opts Options) error {
@@ -360,63 +275,10 @@ func validateAnalysisRuntimeOptions(opts Options) error {
 	if err := validateCausalCriticOptions(opts); err != nil {
 		return err
 	}
-	switch opts.AnalysisRuntime.Type {
-	case AnalysisRuntimeInProcess:
-		return nil
-	case AnalysisRuntimeOrkaContainer:
-		if !opts.EnableAI {
-			return fmt.Errorf("orka-container analysis requires -ai")
-		}
-		cfg := opts.AnalysisRuntime.OrkaContainer
-		switch {
-		case strings.TrimSpace(cfg.Namespace) == "":
-			return fmt.Errorf("orka-container analysis namespace is required")
-		case strings.TrimSpace(cfg.ResultAPI) == "":
-			return fmt.Errorf("orka-container result API is required")
-		case strings.TrimSpace(cfg.Image) == "":
-			return fmt.Errorf("orka-container analyzer image is required")
-		case strings.TrimSpace(cfg.ModelSecretName) == "":
-			return fmt.Errorf("orka-container model Secret is required")
-		case strings.TrimSpace(cfg.ModelTokenKey) == "":
-			return fmt.Errorf("orka-container model token key is required")
-		case (strings.TrimSpace(cfg.GitHubSecretName) == "") != (strings.TrimSpace(cfg.GitHubTokenKey) == ""):
-			return fmt.Errorf("orka-container GitHub Secret name and token key must be configured together")
-		case strings.TrimSpace(cfg.StateSecretName) == "":
-			return fmt.Errorf("orka-container state Secret is required")
-		case strings.TrimSpace(cfg.StateSecretKey) == "":
-			return fmt.Errorf("orka-container state key is required")
-		case cfg.MaxConcurrent < 1:
-			return fmt.Errorf("orka-container max concurrent Tasks must be positive")
-		case cfg.PollInterval <= 0:
-			return fmt.Errorf("orka-container poll interval must be positive")
-		case cfg.PollInterval >= 30*time.Second:
-			return fmt.Errorf("orka-container poll interval must be less than 30s")
-		case cfg.TaskTimeout <= 0:
-			return fmt.Errorf("orka-container task timeout must be positive")
-		case cfg.Retries < 0:
-			return fmt.Errorf("orka-container retries must not be negative")
-		}
-		if _, err := analysisruntime.ParseContainerStateKey(os.Getenv(analysisruntime.ContainerStateKeyEnv)); err != nil {
-			return fmt.Errorf("orka-container state key: %w", err)
-		}
-		placement, err := json.Marshal(struct {
-			NodeSelector map[string]string `json:"nodeSelector"`
-			Tolerations  []map[string]any  `json:"tolerations"`
-			Affinity     map[string]any    `json:"affinity"`
-		}{cfg.NodeSelector, cfg.Tolerations, cfg.Affinity})
-		if err != nil {
-			return fmt.Errorf("orka-container placement: %w", err)
-		}
-		if strings.TrimSpace(cfg.NodeSelector["agentpool"]) == "" {
-			return fmt.Errorf("orka-container placement requires an explicit agentpool CPU selector")
-		}
-		if regexp.MustCompile(`(?i)(accelerator|nvidia|tesla|radeon|(^|[^a-z0-9])(gpu|a10|a100|h100|v100|p100|t4|l4|mi250|mi300)([^a-z0-9]|$))`).Match(placement) {
-			return fmt.Errorf("orka-container placement must not select or tolerate GPU nodes")
-		}
-		return nil
-	default:
+	if opts.AnalysisRuntime.Type != AnalysisRuntimeInProcess {
 		return fmt.Errorf("unsupported analysis runtime %q", opts.AnalysisRuntime.Type)
 	}
+	return nil
 }
 
 func (p *pipeline) setJobCatalog(catalog *jobconfig.Catalog) {
@@ -510,7 +372,6 @@ func (p *pipeline) rollbackAIRefresh(transaction *aiRefreshStateTransaction, ref
 }
 
 func (p *pipeline) invalidateAnalysisRuntime() {
-	p.containerAnalyzer = nil
 	p.aiRuntime = nil
 }
 
@@ -1133,16 +994,9 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	if err := project.ValidateAIProvider(provider); err != nil {
 		return false, fmt.Errorf("fix PRs: %w", err)
 	}
-	if eff.AgentRuntime.Type == "opencode" && provider.API == project.AIAPIResponses {
-		return false, fmt.Errorf("fix PRs: local runtime requires chat_completions or an Orka fix runtime")
-	}
 	var aiClient *ai.Client
 	if aiToken != "" && provider.Endpoint != "" && provider.Model != "" {
 		aiClient = ai.NewClientWithOptions(ai.Options{Token: aiToken, API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, ExtraHeaders: provider.Headers})
-	}
-	if eff.AgentRuntime.Type == "opencode" && aiClient == nil {
-		log.Println("Fix PRs: local runtime requires AI_TOKEN, endpoint, and model; skipping")
-		return false, fmt.Errorf("fix PRs: local runtime requires AI_TOKEN, endpoint, and model")
 	}
 
 	critique, critiqueRetries, err := fixruntime.Critique(aiClient, eff.CritiqueRetries)
@@ -1198,15 +1052,10 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 	if err != nil {
 		return false, fmt.Errorf("fix PR command policy: %w", err)
 	}
-	model := ar.Model
-	if model == "" {
-		model = aiModel(cfg)
-	}
 	fixOpts.Agent = &fixpr.AgentConfig{
 		Runtime:               agentRuntime,
 		API:                   aiAPI(cfg),
-		SharedModelEndpoint:   ar.Type == "opencode",
-		Model:                 model,
+		Model:                 aiModel(cfg),
 		Endpoint:              aiEndpoint(cfg),
 		ModelToken:            aiToken,
 		MaxTurns:              ar.MaxTurns,
@@ -1214,9 +1063,8 @@ func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.P
 		ModelProvider:         ar.ModelProvider.RuntimeConfig(),
 		OutputLimitBytes:      ar.OutputLimitBytes,
 		AllowBash:             allowBash,
-		NetworkDomains:        ar.NetworkDomains,
 		CommandPolicy:         runtime.CommandPolicy{AllowShell: allowBash, Commands: commands},
-		RequireCommandResults: ar.Type == "agent-sandbox",
+		RequireCommandResults: true,
 		Timeout:               ar.ParsedTimeout(),
 		GitToken:              repositoryToken(ar.Type, fixToken),
 	}

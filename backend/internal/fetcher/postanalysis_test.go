@@ -95,10 +95,16 @@ func (finalizedFakePR) ResolveBase(context.Context, string, string) (ghpr.Base, 
 
 type finalizedFakeAgent struct{}
 
-func (finalizedFakeAgent) Generate(context.Context, runtime.GenerateSpec) (runtime.GenerateResult, error) {
+func (finalizedFakeAgent) Generate(_ context.Context, spec runtime.GenerateSpec) (runtime.GenerateResult, error) {
+	results := make([]runtime.CommandResult, 0, len(spec.CommandPolicy.Commands))
+	for _, command := range spec.CommandPolicy.Commands {
+		results = append(results, runtime.CommandResult{Argv: command.Argv})
+	}
 	return runtime.GenerateResult{
-		Files: map[string]string{"config/fix.yaml": "fixed: true\n"},
-		Diff:  "diff --git a/config/fix.yaml b/config/fix.yaml\n+fixed: true\n",
+		Files:          map[string]string{"config/fix.yaml": "fixed: true\n"},
+		Diff:           "diff --git a/config/fix.yaml b/config/fix.yaml\n+fixed: true\n",
+		CommandResults: results,
+		BaseSHA:        spec.Repo.Ref,
 	}, nil
 }
 
@@ -193,9 +199,19 @@ ai:
     dry_run: true
     critique_retries: 0
     agent_runtime:
-      type: orka
-      agent_ref: test-fixer
-      api: http://orka.test
+      type: agent-sandbox
+      allow_bash: false
+      output_limit_bytes: 65536
+      allowed_commands:
+        - argv: [git, diff, --cached, --check]
+          timeout: 1m
+      model_provider:
+        credential_mode: direct
+        api: chat_completions
+        endpoint: https://models.invalid/v1/chat/completions
+        model: test-model
+        auth:
+          type: bearer
 `
 	if err := os.WriteFile(filepath.Join(projectDir, "project.yaml"), []byte(config), 0o644); err != nil {
 		t.Fatal(err)
@@ -245,7 +261,10 @@ func TestProcessFixPRsReportsPersistedReference(t *testing.T) {
 		AI: &project.AI{FixPRs: &project.FixPRs{
 			Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"},
 			AuthorName: "Test", AuthorEmail: "test@example.com", CritiqueRetries: &zero,
-			AgentRuntime: &project.FixAgentRuntime{Type: "orka"},
+			AgentRuntime: &project.FixAgentRuntime{
+				Type: "agent-sandbox", OutputLimitBytes: 64 << 10,
+				AllowedCommands: []project.FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "1m"}},
+			},
 		}},
 	}
 	t.Setenv("FIX_TOKEN", "test-token")
@@ -349,9 +368,19 @@ ai:
     dry_run: true
     critique_retries: 0
     agent_runtime:
-      type: orka
-      agent_ref: test-fixer
-      api: http://orka.test
+      type: agent-sandbox
+      allow_bash: false
+      output_limit_bytes: 65536
+      allowed_commands:
+        - argv: [git, diff, --cached, --check]
+          timeout: 1m
+      model_provider:
+        credential_mode: direct
+        api: chat_completions
+        endpoint: https://models.invalid/v1/chat/completions
+        model: test-model
+        auth:
+          type: bearer
 `
 	if err := os.WriteFile(filepath.Join(projectDir, "project.yaml"), []byte(config), 0o644); err != nil {
 		t.Fatal(err)
@@ -690,7 +719,10 @@ func TestRunSideEffectsSkipsFixAutomationWithoutStaticToken(t *testing.T) {
 		AI: &project.AI{FixPRs: &project.FixPRs{
 			Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"},
 			AuthorName: "Test", AuthorEmail: "test@example.com", CritiqueRetries: &zero,
-			AgentRuntime: &project.FixAgentRuntime{Type: "orka"},
+			AgentRuntime: &project.FixAgentRuntime{
+				Type: "agent-sandbox", OutputLimitBytes: 64 << 10,
+				AllowedCommands: []project.FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "1m"}},
+			},
 		}},
 	}
 	oldRuntime, oldManager := newBatchFixRuntime, newBatchFixManager

@@ -1,0 +1,66 @@
+{{- include "aster.validateAgentAnalysisShadow" . -}}
+{{- if .Values.agentSandbox.analysisShadow.enabled }}
+{{- $clientSA := include "aster.agentSandboxClientServiceAccountName" . -}}
+{{- $workloadSA := include "aster.agentAnalysisShadowWorkloadServiceAccountName" . -}}
+{{- if and .Values.agentSandbox.rbac.create (not .Values.agentSandbox.fixRuntime.enabled) (not .Values.agentSandbox.causalCritic.enabled) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $clientSA }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-client
+---
+{{- end }}
+{{- if .Values.agentSandbox.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "aster.agentAnalysisShadowAdmissionName" . }}
+  namespace: {{ .Values.agentSandbox.analysisShadow.namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analysis-shadow
+rules:
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "aster.agentAnalysisShadowAdmissionName" . }}
+  namespace: {{ .Values.agentSandbox.analysisShadow.namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analysis-shadow
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "aster.agentAnalysisShadowAdmissionName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $clientSA }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- if .Values.agentSandbox.analysisShadow.workloadServiceAccount.create }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $workloadSA }}
+  namespace: {{ .Values.agentSandbox.analysisShadow.namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analysis-shadow-workload
+automountServiceAccountToken: false
+{{- end }}
+{{- end }}
+

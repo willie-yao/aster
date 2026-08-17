@@ -391,7 +391,7 @@ func (s *Service) PreviewAnalysisFix(
 	sourceFiles := slices.Clone(subject.SourceFiles)
 	verification, err := s.verifyAnalysisSourceSnapshot(ctx, repository, sourceFiles)
 	if err != nil {
-		return PreviewResult{}, fmt.Errorf("%w: immutable source investigation failed", ErrPreviewRejected)
+		return PreviewResult{}, fmt.Errorf("%w: immutable source verification failed", ErrPreviewRejected)
 	}
 	findingText := input.AssistantAnswer
 	if input.ProposedRevision != nil {

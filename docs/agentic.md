@@ -34,10 +34,10 @@ endpoint with function calling. Chat uses `tools` and `tool_calls`; Responses
 uses function-call and `function_call_output` items. Select the wire contract with
 `ai.api`. Verified providers:
 
-- **GitHub Copilot** (`api.githubcopilot.com`) — supported.
+- **GitHub Copilot** (`api.githubcopilot.com`) - supported.
 - **OpenAI**: supported on models that expose function calling.
-- **Azure OpenAI** — supported on tool-calling-capable deployments.
-- **Ollama / vLLM / NIMs** — supported per-model; check your model card.
+- **Azure OpenAI** - supported on tool-calling-capable deployments.
+- **Ollama / vLLM / NIMs** - supported per-model; check your model card.
 
 There is no tools-free fallback: an endpoint that rejects function calling
 surfaces as an explicit "AI analysis unavailable" summary in the dashboard
@@ -425,7 +425,7 @@ Each failure request carries compact Prow job metadata when it is available:
 the job name and type, the current `kubernetes/test-infra` configuration file,
 and the pinned test-infra revision used by dashboard discovery. The analyzer
 labels these values as untrusted metadata and quotes them before adding them to
-the task prompt. The same request is serialized into Orka analyzer bundles.
+the task prompt.
 
 The source file and revision describe the current discovery snapshot, not
 necessarily the historical source revision that created an older failed run.
@@ -434,21 +434,6 @@ arguments, refs, and test selection that actually executed. Current source
 metadata helps identify the likely edit location without replacing runtime
 evidence. Changes to the current discovery revision do not invalidate accepted
 analysis cache entries for the same build.
-
-### Same-build failure cohorts
-
-After normal private-cache and retained-Task reuse, the Orka container runtime
-can group equivalent failed tests from the same job, build, JUnit file, and test
-class when their bounded failure messages and bodies match after conservative
-normalization. One representative Task investigates the shared signal. A
-validated result is written under each member's existing per-test cache key and
-applied to the other tests with `same_failure_reuse` provenance.
-
-Cohorts never cross builds, never include build-level subjects or empty failure
-signals, and do not replace per-test chat, correction, or action identity. If the
-representative fails or its result does not satisfy a member's current policy,
-that member falls back to an individual analyzer Task. Systemic project,
-authorization, or state-integrity failures remain fatal.
 
 ## Investigation floors
 
@@ -619,9 +604,8 @@ retains the finding in telemetry but preserves its existing publication and
 cache behavior. Evidence overflow remains exempt because no citation can be
 validated after the bounded evidence store is full.
 
-The container analyzer frames this unavailable result and exits successfully.
-It is a completed policy outcome, not an execution failure, so Orka does not
-repeat the entire analysis after bounded citation repair is exhausted.
+The analyzer treats this unavailable result as a completed policy outcome, not
+an execution failure.
 
 #### Skills and recipes
 
@@ -793,12 +777,12 @@ harness failures are stored as fixed error codes, never free-form response
 bodies. Pattern traces add only structural parse counts, scan truncation,
 request stage, duration, repair outcome, and safe failure categories. They never
 store candidate text, prompts, provider bodies, tool content, private paths, or
-Task identities. Identifiers are URL- and credential-redacted and byte-capped.
+runtime identities. Identifiers are URL- and credential-redacted and byte-capped.
 A trace keeps at most 128 events, and the private store keeps a rolling window of up to
 500 completed failure traces. It admits only entries newer than the retained
 oldest trace and evicts oldest-first as needed to keep the saved file within the
 64 MiB loader limit. The persisted `retained_since` watermark prevents polling
-from reconstructing Task traces that were intentionally aged out.
+from reconstructing traces that were intentionally aged out.
 
 `ai_traces.json` is listed in `output.NonPublishedFiles`. The API server returns
 404 for it under `/data`, and the Pages workflow removes it before publication.
@@ -814,10 +798,10 @@ When the disabled-by-default Helm Agent shadow is enabled, it writes a separate
 `analysis_shadow.json` ledger on a dedicated PVC mounted only into the writer.
 The ledger stores bounded comparison fields, exact identities, attempts, retry
 configuration, deterministic critique telemetry, result validation, and cleanup
-state. Runtime timing separates Task terminal observation, result availability,
-dashboard validation, and Task deletion. It does not store prompts or artifact
-excerpt contents. The server never mounts or serves this claim, and the Pages
-path does not use it.
+state. Runtime timing separates Sandbox terminal observation, result
+availability, dashboard validation, and cleanup. It does not store prompts or
+artifact excerpt contents. The server never mounts or serves this claim, and the
+Pages path does not use it.
 
 Shadow outcomes distinguish `no_result`, `malformed_result`, `extra_file`,
 `deletion`, `rename`, `contract_violation`, `runtime_failure`, `timeout`,
@@ -827,12 +811,11 @@ evidence-aware semantic judge is recorded as unavailable because its provider
 and state contract are not exposed to the shadow adapter.
 
 The in-process result remains authoritative. A shadow failure, ledger failure,
-or cleanup-pending Task cannot change public JSON, private cache acceptance,
+or cleanup-pending Sandbox cannot change public JSON, private cache acceptance,
 pattern state, or GitHub actions. Agent token and cost fields remain explicitly
-unavailable unless an operator-owned usage source reports them. The live Agent
-model and provider identities are also marked unavailable; the ledger still
-pins the declared Agent reference, version, runtime, source, evidence, prompt
-contract, and configuration identity owned by the dashboard.
+unavailable unless an operator-owned usage source reports them. The ledger still
+pins the declared runtime, source, evidence, prompt contract, and configuration
+identity owned by the dashboard.
 
 ### Private token and cost accounting
 
@@ -871,28 +854,6 @@ floor. Set `ai.cache_generation` or `AI_CACHE_GENERATION` to a new non-empty val
 an intentional full rebaseline. The value is hashed before it enters cache keys.
 Returning to a prior value reuses its unexpired entries. A manual cache clear
 remains available for emergency destructive cleanup.
-
-In Kubernetes container mode, the worker applies valid private cache entries
-before it constructs analyzer ConfigMaps or Tasks. The worker, analyzer, build
-reuse path, and compatible Task reuse path use the same key, age,
-investigation-floor, critique, and malformed-state checks. Analyzer image
-changes do not change the cache key. The in-process path can reuse analyses
-attached to prior `jobs/*.json` with cached completed builds. The container
-worker instead requires authenticated private-cache or compatible Task state and
-never promotes public JSON as a private cache entry or container cache seed.
-
-After a private cache miss, the worker may reuse a retained succeeded analyzer
-Task result from another image. Reuse requires the current work item, bundle
-digest, state-key fingerprint, analyzer contract, authenticated result, encrypted
-state identity, and every current quality floor to match. A reused result is
-promoted into the private cache and persisted by the normal analysis checkpoint.
-It is reported separately from exact Task adoption.
-
-`ContainerAnalyzerContractVersion` is the cross-image execution boundary. Bump
-it when transport, tool behavior, cache or result schemas, or analysis semantics
-change in a way that makes retained Task results incompatible and is not already
-covered by cache identity, investigation floors, or the critique version.
-Packaging, frontend, server, and unrelated image changes do not require a bump.
 
 Cached agentic entries are scoped to a specific build because answers cite
 build-specific paths and line numbers; the same test failing in two different
@@ -991,15 +952,15 @@ targets and are never promoted into causal-group remediation.
 
 ## Implementation reference
 
-- `backend/internal/ai/agentic.go` — the tool-calling loop, finalize
+- `backend/internal/ai/agentic.go` - the tool-calling loop, finalize
   round, and JSON repair.
-- `backend/internal/ai/critique.go` — the deterministic critique gate.
-- `backend/internal/ai/pattern.go` — the job-level cross-build pattern
+- `backend/internal/ai/critique.go` - the deterministic critique gate.
+- `backend/internal/ai/pattern.go` - the job-level cross-build pattern
   correlation pass.
-- `backend/internal/ai/skills/` — the recipe-driven evidence layer.
-- `backend/internal/ai/modules/universal/` — the project-agnostic AI
+- `backend/internal/ai/skills/` - the recipe-driven evidence layer.
+- `backend/internal/ai/modules/universal/` - the project-agnostic AI
   module that builds the per-failure seed prompt.
-- `backend/internal/artifacts/` — the `Browser` interface and
+- `backend/internal/artifacts/` - the `Browser` interface and
   `GCSBrowser` implementation backing the filesystem tools.
 
 ### Last-known-good pattern publication

@@ -16,6 +16,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/skills"
 	"github.com/willie-yao/aster/backend/internal/analysisruntime"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 	agentruntime "github.com/willie-yao/aster/backend/internal/runtime"
@@ -58,6 +59,15 @@ func shadowTestDetails(testNames ...string) []models.JobDetail {
 	}}
 }
 
+// shadowTestModelProvider is one normalized private shadow provider contract.
+func shadowTestModelProvider() modelprovider.Config {
+	return modelprovider.Normalize(modelprovider.Config{
+		CredentialMode: modelprovider.CredentialModeDirect, API: modelprovider.APIChatCompletions,
+		Endpoint: "https://models.invalid/v1/chat/completions", Model: "test-model",
+		Auth: modelprovider.Auth{Type: modelprovider.AuthTypeBearer},
+	})
+}
+
 func shadowTestPipeline(t *testing.T) *pipeline {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "public")
@@ -65,8 +75,9 @@ func shadowTestPipeline(t *testing.T) *pipeline {
 		opts: Options{
 			OutDir: out, EnableAI: true, AnalysisRuntime: AnalysisRuntimeOptions{Type: AnalysisRuntimeInProcess},
 			ShadowAnalysis: ShadowAnalysisOptions{
-				Enabled: true, Namespace: "orka-system", ResultAPI: "https://orka.invalid", AgentRef: "agent", AgentVersion: "v1",
+				Enabled: true, AgentVersion: "v1",
 				LedgerPath: filepath.Join(t.TempDir(), "private", "ledger.json"), MaxPerRun: 1, MaxTurns: 12, Timeout: time.Minute,
+				ModelProvider: shadowTestModelProvider(), OutputLimitBytes: 64 << 10,
 			},
 		},
 		cfg: &project.Config{AI: &project.AI{}, Storage: project.Storage{Bucket: "bucket"}},
@@ -221,8 +232,9 @@ func TestValidateShadowAnalysisOptions(t *testing.T) {
 	valid := Options{
 		EnableAI: true, OutDir: out, AnalysisRuntime: AnalysisRuntimeOptions{Type: AnalysisRuntimeInProcess},
 		ShadowAnalysis: ShadowAnalysisOptions{
-			Enabled: true, Namespace: "orka-system", ResultAPI: "https://orka.invalid", AgentRef: "agent", AgentVersion: "v1",
+			Enabled: true, AgentVersion: "v1",
 			LedgerPath: filepath.Join(t.TempDir(), "private", "ledger.json"), MaxPerRun: 1, MaxTurns: 12, Timeout: time.Minute,
+			ModelProvider: shadowTestModelProvider(), OutputLimitBytes: 64 << 10,
 		},
 	}
 	if err := validateAnalysisRuntimeOptions(valid); err != nil {
@@ -246,13 +258,13 @@ func TestValidateShadowAnalysisOptions(t *testing.T) {
 	if err := validateAnalysisRuntimeOptions(symlinked); err == nil || !strings.Contains(err.Error(), "inside public output") {
 		t.Fatalf("symlink ledger error = %v", err)
 	}
-	badAPI := valid
-	badAPI.ShadowAnalysis.ResultAPI = "https://user:secret@orka.invalid?token=secret"
-	if err := validateAnalysisRuntimeOptions(badAPI); err == nil || !strings.Contains(err.Error(), "absolute HTTP") {
-		t.Fatalf("API error = %v", err)
+	badProvider := valid
+	badProvider.ShadowAnalysis.ModelProvider.Endpoint = "http://models.invalid/v1/chat/completions"
+	if err := validateAnalysisRuntimeOptions(badProvider); err == nil {
+		t.Fatal("plaintext provider endpoint was accepted")
 	}
 	container := valid
-	container.AnalysisRuntime.Type = AnalysisRuntimeOrkaContainer
+	container.AnalysisRuntime.Type = "container"
 	if err := validateAnalysisRuntimeOptions(container); err == nil || !strings.Contains(err.Error(), "inprocess") {
 		t.Fatalf("container error = %v", err)
 	}
@@ -294,8 +306,9 @@ ai:
 	_, err := setupPipeline(Options{
 		ProjectDir: projectDir, OutDir: out, EnableAI: true, AnalysisRuntime: AnalysisRuntimeOptions{Type: AnalysisRuntimeInProcess},
 		ShadowAnalysis: ShadowAnalysisOptions{
-			Enabled: true, Namespace: "orka-system", ResultAPI: "https://orka.invalid", AgentRef: "agent", AgentVersion: "v1",
+			Enabled: true, AgentVersion: "v1",
 			LedgerPath: filepath.Join(t.TempDir(), "private", "ledger.json"), MaxPerRun: 1, MaxTurns: 12, Timeout: time.Minute,
+			ModelProvider: shadowTestModelProvider(), OutputLimitBytes: 64 << 10,
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "requires AI_TOKEN") {

@@ -27,7 +27,7 @@ const (
 type ChatFixRunner interface {
 	PreviewChatFix(
 		context.Context,
-		string, string, string, string, string, string, string, string,
+		string, string, string, string, string, string, string,
 	) (actions.PreviewResult, error)
 }
 
@@ -91,10 +91,9 @@ func previewChatFixHandler(timeout time.Duration, run ChatFixRunner) http.Handle
 			return
 		}
 		var body struct {
-			PatternID       string `json:"pattern_id"`
-			PatternHash     string `json:"pattern_hash"`
-			SourceRequestID string `json:"source_request_id"`
-			Instruction     string `json:"instruction"`
+			PatternID   string `json:"pattern_id"`
+			PatternHash string `json:"pattern_hash"`
+			Instruction string `json:"instruction"`
 		}
 		if err := decodeAnalysisChatBody(w, r, &body, maxChatFixBodyBytes); err != nil {
 			http.Error(w, "invalid chat fix request", http.StatusBadRequest)
@@ -102,13 +101,11 @@ func previewChatFixHandler(timeout time.Duration, run ChatFixRunner) http.Handle
 		}
 		body.PatternID = strings.TrimSpace(body.PatternID)
 		body.PatternHash = strings.TrimSpace(body.PatternHash)
-		body.SourceRequestID = strings.TrimSpace(body.SourceRequestID)
 		body.Instruction = strings.TrimSpace(body.Instruction)
-		legacyFields := body.PatternID != "" || body.PatternHash != "" || body.SourceRequestID != ""
-		legacyComplete := body.PatternID != "" && body.PatternHash != "" && body.SourceRequestID != ""
+		legacyFields := body.PatternID != "" || body.PatternHash != ""
+		legacyComplete := body.PatternID != "" && body.PatternHash != ""
 		if legacyFields && !legacyComplete || len(body.PatternID) > maxChatFixPatternBytes ||
-			len(body.PatternHash) > maxChatFixPatternHash || len(body.SourceRequestID) > maxChatFixRequestIDBytes ||
-			len(body.Instruction) > maxChatFixInputBytes {
+			len(body.PatternHash) > maxChatFixPatternHash || len(body.Instruction) > maxChatFixInputBytes {
 			http.Error(w, "invalid chat fix request", http.StatusBadRequest)
 			return
 		}
@@ -121,7 +118,6 @@ func previewChatFixHandler(timeout time.Duration, run ChatFixRunner) http.Handle
 			r.PathValue("requestID"),
 			body.PatternID,
 			body.PatternHash,
-			body.SourceRequestID,
 			identity.Token,
 			body.Instruction,
 		)
@@ -151,9 +147,9 @@ func writeChatFixError(w http.ResponseWriter, sessionID, login string, err error
 	case errors.Is(err, analysischat.ErrPatternChanged):
 		status, message = http.StatusConflict, analysischat.ErrPatternChanged.Error()
 	case errors.Is(err, analysischat.ErrRequestPending):
-		status, message = http.StatusConflict, "source investigation is pending"
+		status, message = http.StatusConflict, "analysis chat request is pending"
 	case errors.Is(err, analysischat.ErrRequestOutcomeUnknown):
-		status, message = http.StatusConflict, "source investigation outcome unknown"
+		status, message = http.StatusConflict, "analysis chat outcome unknown"
 	case errors.Is(err, analysischat.ErrInvalidRequest):
 		status, message = http.StatusBadRequest, "invalid fix proposal request"
 	case errors.Is(err, context.DeadlineExceeded):
@@ -162,7 +158,7 @@ func writeChatFixError(w http.ResponseWriter, sessionID, login string, err error
 		status, message = 499, "fix proposal cancelled"
 	case errors.Is(err, sourceinvestigation.ErrInvalidResult), errors.Is(err, sourceinvestigation.ErrUnavailable),
 		errors.Is(err, analysischat.ErrRequestFailed):
-		status, message = http.StatusUnprocessableEntity, "selected source investigation is not usable"
+		status, message = http.StatusUnprocessableEntity, "verified source input is not usable"
 	case errors.Is(err, actions.ErrPreviewRejected):
 		status, message = http.StatusUnprocessableEntity, "fix proposal could not be generated"
 	}

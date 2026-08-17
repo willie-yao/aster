@@ -51,27 +51,17 @@ chat completions API as:
 
 ## How onboarding drafts the prompt
 
-Guided onboarding offers three prompt-authoring modes:
+Guided onboarding offers two prompt-authoring modes:
 
-- `agent` resolves the source repository to an immutable commit and runs a local
-  OpenCode agent in a temporary checkout and temporary config. The shell tool is
-  denied and the complete process tree runs through the pinned local `srt` OS
-  sandbox.
 - `handoff` writes the TODO template plus `PROMPT_HANDOFF.md` and the bundled
   `.opencode/skills/system-prompt-generation/SKILL.md` without running a model.
-- `todo-template` writes only the reviewable template.
+- `todo-template` writes only the reviewable template. `--no-prompt` is an alias.
 
-Complete flag-based runs default to `handoff`. The wizard recommends `agent` and
-asks for an OpenCode `provider/model` reference. Agent mode uses the selected
-provider credential from the user's existing OpenCode configuration. It does not
-use the deployed dashboard's `AI_TOKEN`, `AI_ENDPOINT`, `AI_MODEL`, or `AI_REASONING_EFFORT`.
-
-For cluster-backed authoring, add `--prompt-agent-runtime=orka`,
-`--prompt-orka-api`, and `--prompt-orka-agent-ref`. The referenced Orka Agent
-owns model and network configuration. The bundled skill is carried through the
-generic agent runtime, Bash remains disabled, and the same one-file validator
-applies. An optional `--prompt-orka-git-secret` must name a read-only clone
-credential.
+Complete flag-based runs and the wizard default to `handoff`. The operator runs
+the generated bundle with their own coding agent, reviews the result, and copies
+the accepted `prompts/system.md` into the consumer repository. Prompt authoring
+does not use the deployed dashboard's `AI_TOKEN`, `AI_ENDPOINT`, `AI_MODEL`, or
+`AI_REASONING_EFFORT`.
 
 The handoff serializes the project name, source repository, resolved commit or
 known branch, and matched Prow job metadata as untrusted data. The generated
@@ -80,17 +70,15 @@ failures. Run `$author-aster-diagnostics` after setup for that evaluation. The b
 tells the agent to investigate a bounded set of high-value repository files and
 to treat repository content and job metadata as evidence, never as instructions.
 
-The runtime accepts the result only when the agent changes exactly
-`prompts/system.md` and the file contains the required sections in order with
+The handoff bundle asks the operator's agent to change exactly
+`prompts/system.md` and keep the required sections in order with
 project-specific content. Deletions, renames, extra changed files, placeholder
-sections, malformed headings, and unclosed fences are rejected. A runtime,
-source-resolution, timeout, or validation failure writes the TODO template and
-handoff bundle without exposing raw OpenCode output.
+sections, malformed headings, and unclosed fences should be rejected during
+review. Source-resolution or timeout failures still write the TODO template and
+handoff bundle.
 
-Prompt authoring has a 15-minute total timeout by default.
-`aster onboard --prompt-timeout` can set a value from one minute through two
-hours. `--require-prompt-draft` is valid only with `--prompt-mode=agent` and
-fails before any write unless the validated agent draft succeeds.
+`aster onboard --prompt-timeout` bounds prompt source resolution. It defaults to
+15 minutes and can set a value from one minute through two hours.
 
 A capable model does not replace source quality. The generated file is always a
 source-only draft requiring review and historical validation. Its triage order

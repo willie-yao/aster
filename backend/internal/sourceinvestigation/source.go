@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/willie-yao/aster/backend/internal/actionverify"
 	"github.com/willie-yao/aster/backend/internal/models"
@@ -26,18 +25,6 @@ var (
 )
 
 const (
-	StatusPending   = "pending"
-	StatusSucceeded = "succeeded"
-	StatusFailed    = "failed"
-	StatusUnknown   = "unknown"
-
-	PhaseQueued        = "queued"
-	PhaseCloning       = "cloning_source"
-	PhaseInvestigating = "investigating_source"
-	PhaseVerifying     = "verifying_citations"
-	PhaseFinalizing    = "finalizing"
-	PhaseCancelling    = "cancelling"
-
 	RelationshipSupports     = "supports"
 	RelationshipRefines      = "refines"
 	RelationshipContradicts  = "contradicts"
@@ -62,20 +49,6 @@ type Repository struct {
 	Revision string `json:"revision"`
 }
 
-// Subject is the immutable published-analysis and chat context for one run.
-type Subject struct {
-	SessionID           string           `json:"session_id"`
-	ChatRequestID       string           `json:"chat_request_id"`
-	Repository          Repository       `json:"repository"`
-	JobID               string           `json:"job_id"`
-	BuildPrefix         string           `json:"build_prefix"`
-	Build               models.BuildInfo `json:"build"`
-	TestCase            models.TestCase  `json:"test_case"`
-	Question            string           `json:"question"`
-	Answer              string           `json:"answer"`
-	AnalysisGeneratedAt string           `json:"analysis_generated_at"`
-}
-
 // Citation identifies a bounded source range at the pinned revision.
 type Citation struct {
 	Path      string `json:"path"`
@@ -98,46 +71,6 @@ type Result struct {
 	ElapsedMs                 int                       `json:"elapsed_ms,omitempty"`
 }
 
-// View is the owner-safe persisted request representation.
-type View struct {
-	ID            string  `json:"id"`
-	SessionID     string  `json:"session_id"`
-	ChatRequestID string  `json:"chat_request_id"`
-	Status        string  `json:"status"`
-	Phase         string  `json:"phase,omitempty"`
-	CreatedAt     string  `json:"created_at"`
-	UpdatedAt     string  `json:"updated_at"`
-	ExpiresAt     string  `json:"expires_at"`
-	Result        *Result `json:"result,omitempty"`
-}
-
-// Progress is a persisted, owner-safe investigation phase.
-type Progress struct {
-	RequestID string `json:"request_id"`
-	Phase     string `json:"phase"`
-	UpdatedAt string `json:"updated_at"`
-}
-
-// Request is one pinned source investigation run.
-type Request struct {
-	ID       string
-	Subject  Subject
-	Timeout  time.Duration
-	Progress func(string)
-}
-
-// ReportProgress records a non-sensitive phase when configured.
-func (r Request) ReportProgress(phase string) {
-	if r.Progress != nil && ValidPhase(phase) {
-		r.Progress(phase)
-	}
-}
-
-// Runner investigates one exact source revision without modifying it.
-type Runner interface {
-	Investigate(context.Context, Request) (Result, error)
-}
-
 // Reader reads one file from an exact repository revision.
 type Reader interface {
 	ReadFile(context.Context, Repository, string) (string, error)
@@ -147,16 +80,6 @@ type Reader interface {
 type TreeReader interface {
 	Reader
 	ListFiles(context.Context, Repository) ([]string, error)
-}
-
-// ValidPhase reports whether phase is safe to expose to an owner.
-func ValidPhase(phase string) bool {
-	switch phase {
-	case PhaseQueued, PhaseCloning, PhaseInvestigating, PhaseVerifying, PhaseFinalizing, PhaseCancelling:
-		return true
-	default:
-		return false
-	}
 }
 
 // ValidateRepository rejects mutable or ambiguous source revisions.

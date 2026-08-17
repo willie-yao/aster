@@ -293,11 +293,10 @@ func analysisChatErrorDetails(err error) (int, string, string) {
 	case errors.Is(err, analysischat.ErrInvalidRequest):
 		status, message, outcome = http.StatusBadRequest, "invalid analysis chat request", "rejected"
 	case errors.Is(err, analysischat.ErrSessionLimit), errors.Is(err, analysischat.ErrTurnLimit),
-		errors.Is(err, analysischat.ErrActiveTurnLimit), errors.Is(err, analysischat.ErrRateLimit),
-		errors.Is(err, analysischat.ErrSourceInvestigationLimit), errors.Is(err, analysischat.ErrSourceInvestigationActiveLimit):
+		errors.Is(err, analysischat.ErrActiveTurnLimit), errors.Is(err, analysischat.ErrRateLimit):
 		status, message, outcome = http.StatusTooManyRequests, "analysis chat limit reached", "rejected"
 	case errors.Is(err, sourceinvestigation.ErrInvalidResult), errors.Is(err, sourceinvestigation.ErrUnavailable):
-		status, message, outcome = http.StatusBadGateway, "source investigation could not complete the request", "failed"
+		status, message, outcome = http.StatusBadGateway, "analysis chat source validation failed", "failed"
 	case errors.Is(err, analysischat.ErrRequestFailed):
 		outcome = "failed"
 	case errors.Is(err, analysischat.ErrProviderRequestFailed):
@@ -322,7 +321,7 @@ func safeAnalysisChatError(err error) string {
 		return "model request failed"
 	}
 	if errors.Is(err, sourceinvestigation.ErrInvalidResult) || errors.Is(err, sourceinvestigation.ErrUnavailable) {
-		return "source investigation failed"
+		return "source validation failed"
 	}
 	reason := redact.URLs(strings.TrimSpace(err.Error()))
 	lower := strings.ToLower(reason)

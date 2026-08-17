@@ -26,7 +26,6 @@ users need them.
 - [Writing the project prompt](writing-prompts.md)
 - [Agentic analysis](agentic.md)
 - [Custom diagnostic skills](skills.md)
-- [Local OpenCode sandbox setup](local-opencode-sandbox.md)
 
 ## Optional features
 
@@ -45,7 +44,6 @@ part of standard onboarding.
 - [Causal-group remediation investigation](maintainer/remediation-investigation.md)
 - [Private Agent Sandbox OpenCode analyzer](maintainer/agent-sandbox-opencode-analyzer.md)
 - [Stopped Agent Sandbox causal critic](maintainer/agent-sandbox-causal-critic.md)
-- [Experimental Orka integrations](maintainer/orka.md)
 
 ## Architecture and decisions
 

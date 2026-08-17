@@ -75,9 +75,9 @@ make dev-actions PROJECT_DIR=../my-consumer
 This runs at <http://localhost:8080> with local development authentication. It
 serves a static build and has no HMR.
 
-File issue and Mark resolved work with a real `BOT_TOKEN`. Propose fix also needs
-OpenCode, git, the pinned `srt` package, and its platform dependencies. Set
-`SRT_BIN` to the package executable.
+File issue and Mark resolved work with a real `BOT_TOKEN`. Propose fix requires
+an enabled Agent Sandbox Fix runtime and is not exercised by the local
+`dev-actions` server alone.
 
 ## Kubernetes-native development
 

@@ -27,10 +27,9 @@ The consumer files have different owners:
 Do not copy Helm or workflow tuning into `project.yaml`. Do not put project
 identity or artifact routing into Helm values.
 
-Failure-analysis placement follows the same boundary. The supported in-process
-runtime is selected by the deployment. Experimental external runtime selectors
-are Helm infrastructure and are documented separately. Do not add an analysis
-runtime field to `project.yaml`; the `ai:` block owns analysis policy.
+Failure analysis always runs in-process next to the fetcher or worker. Do not
+add an analysis runtime field to `project.yaml`; the `ai:` block owns analysis
+policy.
 
 ## Minimal configuration
 
@@ -204,11 +203,6 @@ optional `AI_REASONING_EFFORT`, and `AI_TOKEN` from the deployment. For cache ge
 `AI_CACHE_GENERATION` overrides `ai.cache_generation`; empty preserves the
 historical cache-key shape. Generation values are limited to 64 characters and
 may contain alphanumerics, dot, underscore, and hyphen.
-The experimental Helm `orka-container` runtime is the exception: its API mode,
-endpoint, model, and optional effort come from Helm `ai.api`, `ai.endpoint`,
-`ai.model`, and `ai.reasoningEffort` so the fetcher pattern pass and analyzer
-Tasks use the same deployment coordinates.
-
 Most projects do not need analysis tuning. The defaults are designed to work
 without an `ai:` block. Add only the setting that a measured model or artifact
 constraint requires:
@@ -328,12 +322,9 @@ dashboard publishes the expected jobs and analyses.
 - `notifications.email`: [Email notifications](notifications.md)
 - `issues`: [GitHub issues](github-issues.md)
 - `ai.fix_prs`: [Experimental Fix PR generation](fix-prs.md)
-- `ai.source_investigation`: experimental Orka-backed source investigation for
-  authenticated analysis chat. See [Server mode](server.md#source-investigation-api)
-  and the [experimental Orka maintainer reference](maintainer/orka.md).
 
 Authenticated chat, File Issue, and Mark Resolved are server deployment features,
-not separate analysis runtimes. They do not require Orka or a Fix PR runtime.
+not separate analysis runtimes. They do not require a Fix PR runtime.
 See [Optional features](optional-features.md) for deployment requirements and the
 recommended enablement order.
 
@@ -358,14 +349,15 @@ python3 -c "import json; print(len(json.load(open('data/dashboard.json'))['jobs'
 
 ### Experimental Agent Sandbox fix runtime
 
-`ai.fix_prs.agent_runtime.type: agent-sandbox` selects the bounded OpenCode
-executor described in [Fix PR generation](fix-prs.md#agent-sandbox-opencode-executor).
-Agent Sandbox remains disabled by default. Once explicitly enabled, direct
-provider access is the default credential mode. The project owns generation
-bounds and the non-secret provider contract:
+`ai.fix_prs.agent_runtime.type` accepts only `agent-sandbox`, which is also the
+default. It selects the bounded OpenCode executor described in
+[Fix PR generation](fix-prs.md#agent-sandbox-opencode-executor). Agent Sandbox
+remains disabled by default. Once explicitly enabled, direct provider access is
+the default credential mode. The project owns generation bounds and the
+non-secret provider contract:
 
 - `max_turns`: total execution step budget;
-- `allow_bash`: must be `false`;
+- `allow_bash`: defaults to `false` and must be `false`;
 - `timeout`: positive and at most 30 minutes;
 - `output_limit_bytes`: 4096 through 1048576;
 - `allowed_commands`: structured post-generation validators with exact `argv`
@@ -381,7 +373,9 @@ bounds and the non-secret provider contract:
 - `model_provider.public_ca_private_dns`, which is valid only for an explicit
   gateway using a privately resolved public FQDN.
 
-Secret name and key are Helm deployment settings, not project settings. Direct
+Removed local and cluster backend fields (`model`, `network_domains`, `agent_ref`,
+`api`, `namespace`, `version`, and `retries`) are rejected. Secret name and key
+are Helm deployment settings, not project settings. Direct
 bearer mode requires `agentSandbox.fixRuntime.modelProvider.auth.existingSecret`
 and `tokenKey`. The Secret must already exist in the execution namespace and
 must hold a dedicated inference-only credential. The chart never creates,
@@ -395,7 +389,8 @@ argument that contains spaces remains one `argv` element. The generic executor
 supports only commands whose binaries are installed in that image.
 
 The Agent Sandbox runtime is one-shot generation followed by validation. A
-validator failure cannot trigger model repair, and `critique_retries` must be 0.
+validator failure cannot trigger model repair, `critique_retries` must be 0, and
+`ai.fix_prs.verify` is rejected for this runtime.
 
 Chat Completions uses `@ai-sdk/openai-compatible`. Responses uses
 `@ai-sdk/openai`, requests `store: false`, keeps complete conversation and tool

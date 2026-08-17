@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/evidenceplan"
 )
 
 const (
@@ -117,4 +118,14 @@ func validateResult(result ai.FailureAnalysisResult) error {
 		return fmt.Errorf("failure analysis result has an empty ai_summary.summary")
 	}
 	return nil
+}
+
+// CanonicalFailureAnalysisRequest strips volatile fields so the same failure
+// produces a stable request identity across builds.
+func CanonicalFailureAnalysisRequest(request ai.FailureAnalysisRequest) ai.FailureAnalysisRequest {
+	request.Build.JUnitURLs = nil
+	request.TestCase = evidenceplan.CanonicalTestCase(request.TestCase)
+	request.ProwJob = ai.CanonicalProwJobContext(request.ProwJob)
+	request.FailureCohort = ai.CanonicalFailureCohortContext(request.FailureCohort)
+	return request
 }

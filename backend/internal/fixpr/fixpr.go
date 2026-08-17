@@ -720,6 +720,13 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 
 // eligible filters to systemic patterns at or above minConfidence that carry a
 // concrete suggested fix, ranked highest-confidence first.
+// Eligible reports whether one pattern qualifies for fix generation under the
+// configured confidence floor. Callers use it to reject a request before
+// provisioning a coding-agent runtime.
+func Eligible(pattern models.PatternAnalysis, minConfidence string) bool {
+	return len(eligible([]models.PatternAnalysis{pattern}, minConfidence)) == 1
+}
+
 func eligible(patterns []models.PatternAnalysis, minConfidence string) []models.PatternAnalysis {
 	floor := confidenceRank(minConfidence)
 	var out []models.PatternAnalysis

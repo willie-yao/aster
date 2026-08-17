@@ -147,8 +147,8 @@ procedure: |
 
 ## Loading and composition
 
-Skills are loaded once at startup. The fetcher and Orka producer call the same
-merged loader with the same effective tool selection.
+Skills are loaded once at startup. The fetcher and worker call the same merged
+loader with the same effective tool selection.
 
 Loading is strict:
 

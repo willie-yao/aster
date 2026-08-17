@@ -21,7 +21,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/resolve"
-	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 	"github.com/willie-yao/aster/backend/internal/statefile"
 )
 
@@ -1616,98 +1615,6 @@ func TestVerifiedSourceFilesRequirePinnedRevision(t *testing.T) {
 	files := verifiedSourceFiles(links, "example", "repo", revision)
 	if len(files) != 1 || files[0] != "current.go" {
 		t.Fatalf("verified files = %v", files)
-	}
-}
-
-func TestContextSourceVerificationDropsPatternPathsFromAnotherRevision(t *testing.T) {
-	const oldRevision = "0123456789abcdef0123456789abcdef01234567"
-	const newRevision = "fedcba9876543210fedcba9876543210fedcba98"
-	pattern := systemicPattern()
-	pattern.SuggestedFix = "Implement ExistingFix."
-	pattern.RemediationTargets = []models.RemediationTarget{{Intent: models.RemediationIntentAddSymbol, Symbol: "ExistingFix", Path: "old.go"}}
-	pattern.SourceRef = "example/repo@" + oldRevision
-	pattern.RelevantFiles = []string{"old.go"}
-	pattern.FileLinks = map[string]string{
-		"old.go": "https://github.com/example/repo/blob/" + oldRevision + "/old.go",
-	}
-	cfg := &project.Config{AI: &project.AI{
-		SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"},
-		FixPRs:     &project.FixPRs{Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"}},
-	}}
-	service := NewService(cfg, t.TempDir(), AIConfig{})
-	var got actionverify.Input
-	service.sourceVerifier = func(_ context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
-		got = input
-		return actionverify.Result{State: actionverify.StateUnresolved}, nil
-	}
-	_, _, _ = service.generateFixPreviewForPattern(t.Context(), pattern, "token", "", &fixpr.GenerationContext{
-		AssistantAnswer:   "selected answer",
-		ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", Quote: "failure"}},
-		Source: &fixpr.SourceContext{
-			Repository: "example/repo", State: sourceinvestigation.StateActionableCodeChange,
-			Target:    models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "new.go", Symbol: "ExistingFix", RequiredCall: "ApplyFix"},
-			Revision:  newRevision,
-			Citations: []fixpr.Evidence{{Path: "new.go", LineStart: 1, LineEnd: 1, Quote: "package source"}},
-		},
-	})
-	if len(got.RelevantFiles) != 1 || got.RelevantFiles[0] != "new.go" {
-		t.Fatalf("verification files = %v", got.RelevantFiles)
-	}
-}
-
-func TestContextSourceRepositoryMustMatchFixTarget(t *testing.T) {
-	pattern := systemicPattern()
-	cfg := &project.Config{AI: &project.AI{
-		SourceRepo: &project.SourceRepo{Owner: "source", Name: "repo"},
-		FixPRs:     &project.FixPRs{Enabled: true, Repo: &project.SourceRepo{Owner: "fix", Name: "repo"}},
-	}}
-	service := NewService(cfg, t.TempDir(), AIConfig{})
-	_, _, err := service.generateFixPreviewForPattern(t.Context(), pattern, "token", "", &fixpr.GenerationContext{
-		AssistantAnswer: "answer", ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", Quote: "failure"}},
-		Source: &fixpr.SourceContext{Repository: "source/repo", State: sourceinvestigation.StateActionableCodeChange, Target: models.RemediationTarget{Intent: models.RemediationIntentModifySymbol, Path: "main.go", Symbol: "Fix", RequiredCall: "ApplyFix"}, Revision: "0123456789abcdef0123456789abcdef01234567", Finding: "finding", Citations: []fixpr.Evidence{{Path: "main.go", Quote: "Fix"}}},
-	})
-	if !errors.Is(err, ErrPreviewRejected) {
-		t.Fatalf("repository mismatch error = %v", err)
-	}
-}
-
-func TestContextSourceRoutesAllowlistedProwTarget(t *testing.T) {
-	const revision = "0123456789abcdef0123456789abcdef01234567"
-	pattern := systemicPattern()
-	path := "config/jobs/kubernetes-sigs/cluster-api-provider-azure/periodics.yaml"
-	cfg := &project.Config{AI: &project.AI{
-		SourceRepo: &project.SourceRepo{Owner: "example", Name: "source"},
-		FixPRs: &project.FixPRs{
-			Enabled: true,
-			Repo:    &project.SourceRepo{Owner: "example", Name: "source"},
-			AllowedRepositories: []project.FixRepository{{
-				Owner: "kubernetes", Name: "test-infra", PathPrefixes: []string{"config/jobs/kubernetes-sigs/cluster-api-provider-azure/"},
-			}},
-		},
-	}}
-	service := NewService(cfg, t.TempDir(), AIConfig{})
-	var got actionverify.Input
-	service.sourceVerifier = func(_ context.Context, _ actionverify.Reader, input actionverify.Input) (actionverify.Result, error) {
-		got = input
-		return actionverify.Result{State: actionverify.StateInconclusive, Reason: "stop after routing"}, nil
-	}
-	target := models.RemediationTarget{
-		Intent: models.RemediationIntentSetJobEnvironment, Repository: "kubernetes/test-infra", Revision: revision,
-		Path: path, Job: "periodic-capz", Container: "test", Name: "VERSION", Value: "v2",
-	}
-	_, _, err := service.generateFixPreviewForPattern(t.Context(), pattern, "token", "", &fixpr.GenerationContext{
-		AssistantAnswer: "answer", ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", Quote: "failure"}},
-		Source: &fixpr.SourceContext{
-			Repository: "kubernetes/test-infra", State: sourceinvestigation.StateActionableConfigurationChange,
-			Target: target, Revision: revision, Finding: "update the pinned job environment",
-			Citations: []fixpr.Evidence{{Path: path, Quote: "name: VERSION"}},
-		},
-	})
-	if !errors.Is(err, ErrRemediationInconclusive) {
-		t.Fatalf("error = %v, want verification stop after allowlisted routing", err)
-	}
-	if len(got.Targets) != 1 || got.Targets[0] != target {
-		t.Fatalf("verification input = %+v", got)
 	}
 }
 
