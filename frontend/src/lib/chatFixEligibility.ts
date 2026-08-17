@@ -25,9 +25,12 @@ function cleanRepositoryPath(value: string): string | null {
   return segments.length === 0 ? null : segments.join("/");
 }
 
-// chatFixVerifiedSourcePaths mirrors backend buildsource.VerifiedPaths: the
-// repository-local path comes from the blob URL, not from the file-link key,
-// because the key keeps the path as the analysis cited it.
+// chatFixVerifiedSourcePaths applies the backend buildsource.VerifiedPaths rule
+// to the canonical blob links the server generates: the repository-local path
+// comes from the URL, not from the file-link key, because the key keeps the
+// path as the analysis cited it. URL parsing here normalizes more than Go does,
+// so a malformed link can only make eligibility look available; the server
+// preflight still rejects it.
 export function chatFixVerifiedSourcePaths(
   fileLinks: Record<string, string> | undefined,
   repository: ChatFixSourceRepository | undefined,
