@@ -1,4 +1,4 @@
-package e2e
+package benchmarks
 
 import (
 	"context"
@@ -329,7 +329,7 @@ func TestRemediationModelCapabilityManifestAndPreflight(t *testing.T) {
 	if remediationinvestigation.HashText(manifest.ConsumerPrompt) != manifest.ConsumerPromptSHA256 {
 		t.Fatal("consumer prompt hash mismatch")
 	}
-	verifyFixtureHash(t, filepath.Join("..", "..", "..", manifest.Scorer.Path), manifest.Scorer.SHA256)
+	verifyFixtureHash(t, filepath.Join("..", "..", manifest.Scorer.Path), manifest.Scorer.SHA256)
 	verifyRemediationModelCapabilityPublicEvidence(t, manifest)
 	for _, capabilityCase := range manifest.Cases {
 		for _, build := range capabilityCase.Builds {
@@ -420,7 +420,7 @@ func TestRemediationModelCapabilityScorerRejectsIncompleteAndDuplicateTrials(t *
 		if err := file.Close(); err != nil {
 			t.Fatal(err)
 		}
-		args := []string{filepath.Join("..", "..", "..", "hack", "summarize-remediation-model-capability.py"), path}
+		args := []string{filepath.Join("..", "..", "hack", "summarize-remediation-model-capability.py"), path}
 		args = append(args, extraArgs...)
 		command := exec.CommandContext(t.Context(), "python3", args...)
 		output, err := command.CombinedOutput()

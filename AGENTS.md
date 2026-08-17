@@ -133,7 +133,10 @@ backend/                         Go 1.25
     buildsource/                 Immutable build repository source resolution
     redact/                      Scrubs sensitive values before logging
     textutil/                    Small shared string helpers
-    e2e/                         End-to-end pipeline, benchmark, and quality suites
+    e2e/                         Hermetic end-to-end pipeline regression test
+
+  benchmarks/                    Opt-in model-quality benchmarks; gated by RUN_*/BENCH_*
+                                 env vars and never run in CI
 
 frontend/                        React 19 + Vite 8 + MUI 9
   public/data/                   Fetcher writes JSON here; Vite serves it

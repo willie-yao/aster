@@ -1,4 +1,4 @@
-package e2e
+package benchmarks
 
 import (
 	"context"
@@ -727,7 +727,7 @@ func (b benchmarkBrowser) Grep(_ context.Context, file string, re *regexp.Regexp
 }
 
 func TestRemediationInvestigationPrivateCacheIsStrippedFromPages(t *testing.T) {
-	workflow, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "reusable-deploy.yml"))
+	workflow, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "reusable-deploy.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}

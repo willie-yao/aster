@@ -134,7 +134,7 @@ BENCH_CACHE_MODE=cold \
 BENCH_CACHE_DIR=<private-condition-cache> \
 BENCH_RESULTS_JSONL=<private-condition-results.jsonl> \
 BENCH_MODEL_LABEL=<anonymous-stable-label> \
-go test ./internal/e2e -run '^TestAIBenchmark$' -v -count=1 -timeout 60m
+go test ./benchmarks -run '^TestAIBenchmark$' -v -count=1 -timeout 60m
 ```
 
 Never place a token value directly in a report or command transcript. Use a

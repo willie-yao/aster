@@ -245,7 +245,7 @@ temporal trials and does not accept partial or replacement results.
 The committed manifest is:
 
 ```text
-backend/internal/e2e/testdata/benchmarks/remediation-investigation-v3.json
+backend/benchmarks/testdata/benchmarks/remediation-investigation-v3.json
 SHA-256: 84620efb7e127207d6891bdfaa8614cb9454213d0f1155d32b60a2cc97dace72
 ```
 
@@ -298,7 +298,7 @@ REMEDIATION_BENCH_REPETITIONS=2 \
 REMEDIATION_BENCH_RESULTS_JSONL=/private/path/stage-a.jsonl \
 AI_ENDPOINT=<configured-endpoint> \
 AI_MODEL=<configured-model> \
-go test ./internal/e2e -run '^TestRemediationInvestigationBenchmark$' -v -timeout 60m
+go test ./benchmarks -run '^TestRemediationInvestigationBenchmark$' -v -timeout 60m
 ```
 
 Require all six trials to complete a successful content-bearing source read,
@@ -316,7 +316,7 @@ REMEDIATION_BENCH_REPETITIONS=3 \
 REMEDIATION_BENCH_RESULTS_JSONL=/private/path/stage-b.jsonl \
 AI_ENDPOINT=<configured-endpoint> \
 AI_MODEL=<configured-model> \
-go test ./internal/e2e -run '^TestRemediationInvestigationBenchmark$' -v -timeout 120m
+go test ./benchmarks -run '^TestRemediationInvestigationBenchmark$' -v -timeout 120m
 ```
 
 Require 100% actionable precision, zero unsafe or wrong-repository acceptance,
@@ -328,7 +328,7 @@ real historical holdouts.
 The committed manifest is:
 
 ```text
-backend/internal/e2e/testdata/benchmarks/remediation-investigation-history-v1.json
+backend/benchmarks/testdata/benchmarks/remediation-investigation-history-v1.json
 SHA-256: 426ecf50a6f7773c55463eb6f920af4eef153d4c70facbd5234b57c0b199a094
 ```
 
@@ -350,7 +350,7 @@ RUN_REMEDIATION_INVESTIGATION_HISTORY_BENCHMARK=1 \
 REMEDIATION_HISTORY_RESULTS_JSONL=/private/path/stage-c.jsonl \
 AI_ENDPOINT=<configured-endpoint> \
 AI_MODEL=<configured-model> \
-go test ./internal/e2e -run '^TestRemediationInvestigationHistoricalBenchmark$' -v -timeout 120m
+go test ./benchmarks -run '^TestRemediationInvestigationHistoricalBenchmark$' -v -timeout 120m
 ```
 
 Require zero unsafe acceptance, no wrong-repository actionable target, every

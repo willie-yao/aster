@@ -1,4 +1,4 @@
-package e2e
+package benchmarks
 
 import (
 	"os"
@@ -34,7 +34,7 @@ func TestAgentSandboxFixExecutorImageIncludesValidationToolchain(t *testing.T) {
 
 func dockerfile(t *testing.T) string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "Dockerfile"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "Dockerfile"))
 	if err != nil {
 		t.Fatal(err)
 	}
