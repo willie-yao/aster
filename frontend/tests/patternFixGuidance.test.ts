@@ -123,6 +123,38 @@ test("build-sourced and JUnit-less failures never become fix targets", () => {
   );
 });
 
+test("a cause routes to the representative failure it was actually built from", () => {
+  const eligible = groundedRun.test_cases[0];
+  const higherSeverity = {
+    ...eligible,
+    name: "other",
+    ai_analysis: { ...analysis, severity: "critical", file_links: {} },
+  };
+
+  // The causal group's root cause comes from the highest-severity analyzed
+  // failure, so an unrelated eligible failure must not be offered in its place.
+  assert.equal(
+    causalGroupFixTarget(firstGroup, [{ ...groundedRun, test_cases: [higherSeverity, eligible] }]),
+    null,
+  );
+  assert.deepEqual(
+    causalGroupFixTarget(firstGroup, [
+      { ...groundedRun, test_cases: [{ ...higherSeverity, ai_analysis: { ...analysis, severity: "low", file_links: {} } }, eligible] },
+    ]),
+    { buildID: "208060", testName: "fails" },
+  );
+});
+
+test("an unanalyzed failure never becomes the representative", () => {
+  const eligible = groundedRun.test_cases[0];
+  const unanalyzed = { name: "other", status: "failed" as const, duration_seconds: 1, junit_file: "junit_01.xml" };
+
+  assert.deepEqual(causalGroupFixTarget(firstGroup, [{ ...groundedRun, test_cases: [unanalyzed, eligible] }]), {
+    buildID: "208060",
+    testName: "fails",
+  });
+});
+
 test("a cause only considers its own builds", () => {
   assert.equal(causalGroupFixTarget(singleBuildGroup, [groundedRun]), null);
   assert.deepEqual(causalGroupFixTarget(singleBuildGroup, [{ ...groundedRun, build_id: "209114" }]), {
@@ -135,7 +167,7 @@ test("a repeated test name only routes when the first occurrence is the eligible
   const eligible = groundedRun.test_cases[0];
   const retriedPass = { ...eligible, status: "passed" as const, ai_analysis: undefined };
 
-  // The detail page opens the first occurrence, so a shadowed eligible retry is
+  // The detail page opens the first occurrence, so a shadowed representative is
   // unreachable and must not be advertised.
   assert.equal(
     causalGroupFixTarget(firstGroup, [{ ...groundedRun, test_cases: [retriedPass, eligible] }]),
@@ -151,11 +183,21 @@ test("an occurrence hidden from the ledger still shadows the routing target", ()
   const eligible = groundedRun.test_cases[0];
   const skipped = { ...eligible, status: "skipped" as const, ai_analysis: undefined };
 
-  // executedResultTests drops skipped cases, but the detail page does not, so
-  // eligibility must be judged against the raw occurrence order.
+  // The ledger drops skipped cases, but the detail page does not, so
+  // reachability must be judged against the raw occurrence order.
   assert.equal(
     causalGroupFixTarget(firstGroup, [{ ...groundedRun, test_cases: [skipped, eligible] }]),
     null,
+  );
+});
+
+test("a cause falls through to another affected build when one has no reachable target", () => {
+  const eligible = groundedRun.test_cases[0];
+  const blockedRun = { ...groundedRun, test_cases: [{ ...eligible, ai_analysis: { ...analysis, file_links: {} } }] };
+
+  assert.deepEqual(
+    causalGroupFixTarget(firstGroup, [blockedRun, { ...groundedRun, build_id: "208726" }]),
+    { buildID: "208726", testName: "fails" },
   );
 });
 

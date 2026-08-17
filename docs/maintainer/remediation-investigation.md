@@ -395,19 +395,26 @@ single-use smoke.
 
 Because the operation is per causal group, the dashboard renders remediation
 state inside each causal group card rather than once per pattern. The UI reports
-why an operation cannot start instead of showing a pending-looking default:
+why an operation cannot start instead of showing a pending-looking default.
+Conditions are evaluated from the most permanent to the most deployment-scoped:
 
+- Causal group covering fewer than two builds: **Not eligible**, matching the
+  `>= 2` gate in `validate.go`, `resolver.go`, and
+  `models.WithDefaultPatternRemediationInvestigations`.
+- Causal group without an assigned id and content hash: **Not addressable**,
+  since no operation reference can be constructed.
 - Capability disabled or unauthenticated deploy: **Unavailable**, with no
   control. Only terminal verdicts survive the capability being off, so a real
   earlier result is still shown while a state that could only advance through
   the operation is not left looking pending.
-- Causal group covering fewer than two builds: **Not eligible**, matching the
-  `>= 2` gate in `validate.go`, `resolver.go`, and
-  `models.WithDefaultPatternRemediationInvestigations`. The card instead links to
-  the per-test Fix investigation, which is the correct path for a single-build
-  cause.
-- Causal group without an assigned id and content hash: **Not addressable**,
-  since no operation reference can be constructed.
+
+Separately, and only where a chat deploy advertises both `analysis_chat` and
+`junit_chat_fix`, each causal group card links to the per-test Fix investigation.
+The link targets the representative analyzed failure the causal group was built
+from, and only when that failure meets every Fix eligibility requirement and is
+the occurrence the test detail page will open. A single-build cause reaches Fix
+this way rather than through remediation. When no cause has a reachable target,
+one pattern-level fallback panel explains that instead.
 
 ## Experimental causal Fix PR preview
 

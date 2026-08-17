@@ -67,7 +67,7 @@ export function PatternFixGuidance({ jobID, buildID }: { jobID: string; buildID:
             Fix investigation unavailable
           </Typography>
           <Typography color="text.secondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
-            This recurring result contains multiple causes, so it cannot produce one shared issue or Fix PR.
+            This recurring result is grouped by cause, so it cannot produce one shared issue or Fix PR.
             No failed JUnit test in the affected builds meets the Fix investigation requirements yet, so no cause can start one either.
           </Typography>
           <Button
