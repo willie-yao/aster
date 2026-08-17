@@ -5,7 +5,7 @@ advanced chart configuration that do not belong in the first-run path. Start
 with the [Kubernetes quickstart](kubernetes.md) or the generated
 `deploy/README.md`.
 
-Failure analysis always runs in-process next to the worker or CronJob.
+Authoritative failure analysis always runs in-process next to the worker or CronJob.
 
 ## Why run in-cluster
 
@@ -347,19 +347,18 @@ curl -fsSI https://dashboard.example.com/ | grep -i '^strict-transport-security:
 Enable optional features only after the baseline writer, server, storage, and
 public data path are healthy.
 
-- [Server mode](server.md) covers authentication, capabilities, analysis chat,
-  and admin-gated actions.
-- [GitHub issues](github-issues.md) covers issue credentials and issue state.
-- [Email notifications](notifications.md) covers SMTP Secret references and
-  notification ownership.
-- [Fix PR generation](fix-prs.md) covers remediation policy, GitHub writes,
-  Agent Sandbox execution, and confirmation boundaries.
-- [Optional features](optional-features.md) provides the high-level feature
-  matrix.
+- [Server mode](server.md) owns authentication, capabilities, analysis chat,
+  read-only remediation investigation, and guarded action lifecycles.
+- [GitHub issues](github-issues.md) owns issue credentials and issue state.
+- [Notifications](notifications.md) owns SMTP credentials and routing.
+- [Fix PR generation](fix-prs.md) owns the code-writing workflow, GitHub identity,
+  warning, regeneration, and confirmation boundaries.
+- [Documentation index](README.md#optional-features) provides the short feature
+  map and recommended enablement order.
 
-These features retain private operational state on the shared volume. Their
-write credentials and identity configuration are separate from model-provider
-credentials.
+Optional features retain private operational state. Model credentials, OAuth
+identity, `BOT_TOKEN`, `FIX_TOKEN`, SMTP credentials, and Agent Sandbox provider
+credentials have separate owners and must not be reused interchangeably.
 
 ## Reusing external project configuration
 
@@ -378,198 +377,89 @@ ConfigMap ownership is required.
 ## Private operational files
 
 The shared volume contains public dashboard data and private operational state.
-The server blocks private files from `/data`, including:
+The server blocks private files from `/data`, including AI cache and traces,
+notifications and action state, chat transcripts, remediation investigation,
+private coverage catalogs, and usage ledgers. Pages publication strips them.
+Protect the PVC, backups, and server access.
 
-- AI cache and trace files.
-- Notification, issue, fix, and remediation state.
-- Chat sessions and private investigation state.
-- Private Prow coverage catalogs.
-- AI usage ledgers.
+The optional Agent analysis-shadow ledger lives on a separate private PVC outside
+the server data directory. The chart rejects reuse of the dashboard data claim.
+The server does not mount or serve the shadow ledger.
 
-Pages publication strips these files. Kubernetes operators must protect the PVC,
-backups, and server access.
+## Agent Sandbox Fix runtime
 
-The optional Agent shadow ledger is stricter: it lives on a separate private PVC
-outside the server data directory. It stores bounded comparison and cleanup
-telemetry and is never served through `/data` or an authenticated API.
+`agentSandbox.fixRuntime` is disabled by default. It connects Aster to a
+consumer-installed Agent Sandbox controller and never installs the controller,
+CRD, execution namespace, secure RuntimeClass, node infrastructure, provider
+Secret or gateway, or runtime image.
 
-When AI usage accounting is enabled, the worker writes
-`ai_usage_fetcher.json` and the server writes `ai_usage_server.json`. Both stay
-private. Review ownership before scaling a component that writes one of these
-ledgers.
+The project owns generation limits and exact validators under
+`ai.fix_prs.agent_runtime`. Helm owns the runtime namespace, immutable images,
+ServiceAccounts, network policy, provider Secret reference, CA trust, and
+platform resources. Those two configurations must agree. The schema rejects
+stale duplicate execution bounds under `agentSandbox.fixRuntime`.
+
+The Sandbox receives public pinned source and returns a patch plus ordered command
+results. It receives no GitHub credential or dashboard PVC. The dashboard uses
+the immutable `remote-fixer` image only to reapply and verify the patch at the
+pinned revision; it never runs target validation commands.
+
+Required platform properties:
+
+- a dedicated existing execution namespace;
+- a non-empty secure RuntimeClass accepted for hostile repository code;
+- separate client and tokenless workload ServiceAccounts;
+- immutable executor and dashboard image digests;
+- deny-by-default ingress and reviewed provider egress;
+- a dedicated inference credential or authenticated tokenless gateway;
+- exact admission identity, resource, mount, environment, and command policy.
+
+Direct bearer mode references one existing Secret key. The chart and dashboard
+do not read or print the value. Gateway mode keeps the executor tokenless but
+still requires gateway-side workload authorization. Optional CA bundles use the
+Fix-only ConfigMap, digest, RBAC, and mount contract. See
+[Kubernetes platform setup](kubernetes-platform.md#secure-runtime-contract) for
+the provider-neutral isolation boundary and [Fix PR generation](fix-prs.md) for
+the user workflow and configuration example.
+
+## Agent Sandbox analysis shadow
+
+`agentSandbox.analysisShadow` is an active maintainer evaluation surface that is
+disabled by default. After the authoritative in-process refresh publishes, the
+writer may sample a bounded number of failures, create Agent Sandbox analyzer
+workloads, compare their results privately, and append to a separate ledger.
+
+The shadow requires its own execution namespace, secure RuntimeClass, immutable
+executor image, client and tokenless workload ServiceAccounts, network policy,
+provider configuration, conservative limits, and private ledger PVC. Start with
+`maxPerRun: 1` and `retries: 0`. The chart rejects sharing the public dashboard
+claim or enabling incompatible Agent Sandbox experiments in the same release.
+
+Shadow output, lifecycle failures, and cleanup state cannot change public JSON,
+normal cache acceptance, patterns, corrections, or actions. The server never
+mounts the shadow claim. See the
+[Agent Sandbox OpenCode analyzer](maintainer/agent-sandbox-opencode-analyzer.md)
+for workspace, evidence, evaluation, telemetry, and cleanup contracts.
+
+The lower-level `agentSandbox.analyzer` values retain the isolated stager and
+executor security boundary for explicit maintainer validation. They do not make
+the analyzer authoritative or expose a public result path.
+
+## Agent Sandbox causal critic status
+
+The causal-critic experiment stopped on August 10, 2026. Its disabled chart and
+implementation remain for inspection but must not be enabled for new
+evaluations. It never published a replacement diagnosis, entered normal cache,
+or participated in write actions. Do not treat the retained resources as a
+supported runtime.
 
 ## Related references
 
 - [Kubernetes quickstart](kubernetes.md)
 - [Kubernetes platform setup](kubernetes-platform.md)
+- [Flux GitOps deployment](kubernetes-gitops.md)
 - [Platform chart README](../deploy/helm/aster-platform/README.md)
 - [Server mode](server.md)
 - [Project configuration](project-configuration.md)
 - [Troubleshooting](troubleshooting.md)
 - [Releasing](releasing.md)
-
-## Agent Sandbox Fix runtime
-
-The `agentSandbox.fixRuntime` chart section is disabled by default. It wires the
-dashboard to a consumer-installed Kubernetes SIG Agent Sandbox controller but
-never installs that controller or its CRD.
-
-Execution bounds are configured once, in the consumer's `project.yaml` under
-`ai.fix_prs.agent_runtime`: `max_turns`, `max_files`, `timeout`,
-`output_limit_bytes`, and `allowed_commands`. The chart reads them from the
-inlined `project.config` and renders the workload environment and the admission
-policy deadline from those values, so the Helm values do not repeat them. A
-stale copy left under `agentSandbox.fixRuntime` fails the schema; `upgrade.sh`
-strips those keys from candidate values during an upgrade.
-
-The Sandbox returns a patch and bounded command results rather than writing
-GitHub directly. The dashboard independently reapplies the patch to the pinned
-source revision and validates the exact ordered results, so the server and any
-scheduled fix reconciler use `agentSandbox.fixRuntime.dashboardImage`. The
-published `remote-fixer` image contains the normal engine binaries, SPA, CA
-certificates, git, and the pinned Go toolchain used to build the image. Dashboard
-processes do not execute target repository build, test, vet, or validation
-commands. The image intentionally omits OpenCode and model credentials.
-
-When enabled, the chart can create:
-
-- one dashboard client ServiceAccount in the release namespace;
-- one namespace-scoped Role and RoleBinding in the consumer-owned execution
-  namespace;
-- one tokenless workload ServiceAccount in that namespace; and
-- one fail-closed ValidatingAdmissionPolicy and binding for dashboard-created
-  v1beta1 Sandboxes.
-
-The Role permits only Sandbox create/get/list/watch/delete, Pod
-get/list/watch, and Pod-log get. When the optional public CA bundle is enabled,
-it also permits `get` on that one named ConfigMap in the execution namespace.
-It grants no Secret, ConfigMap list/watch, direct Pod creation, exec, attach,
-port-forward, Service, PVC, node, or cluster-admin access.
-
-The admission policy pins the requester, namespace, content-addressed identity,
-immutable executor image, RuntimeClass, workload ServiceAccount, Pod and
-container security contexts, `RuntimeDefault` AppArmor and seccomp, resource
-bounds, the exact request environment plus one direct-bearer Secret reference when configured, emptyDir-only storage, disabled Service/PVC
-behavior, and Delete policy and Pod deadline. AppArmor has no chart override and cannot be
-set to `Unconfined`.
-The request payload remains opaque base64 data to Kubernetes admission, so the
-engine separately validates its version, immutable SHA, provider mode, API,
-endpoint, auth contract, commands, bounds, and result contract before creation
-and after retrieval.
-
-A deployed configuration requires an HTTPS provider path and the
-[secure-runtime contract](kubernetes-platform.md#secure-runtime-contract),
-including compatible nodes that support the requested AppArmor policy. Agent
-Sandbox remains disabled by default. Once explicitly enabled, direct mode is the
-default; gateway mode is an explicit tokenless alternative.
-
-Direct bearer mode references one existing Secret in the execution namespace.
-The chart never creates, copies, reads, or prints it. Admission pins the exact
-Secret name, key, fixed `PROW_AI_MODEL_PROVIDER_TOKEN` environment variable, and
-auth mode. Direct unauthenticated and gateway modes render no Secret reference.
-Use a dedicated inference-only credential, never dashboard, repository, OAuth,
-or general GitHub credentials.
-
-Chat Completions uses `@ai-sdk/openai-compatible`; Responses uses
-`@ai-sdk/openai`. Provider endpoints must end with the operation path matching
-the selected API. With pinned OpenCode 1.18.2, Responses requires direct bearer
-auth. Tokenless gateway and direct unauthenticated modes remain available for
-Chat Completions.
-
-Private-CA model-provider gateways can use one platform-managed public
-certificate bundle without deriving an executor image:
-
-```yaml
-agentSandbox:
-  fixRuntime:
-    caBundle:
-      existingConfigMap: model-provider-ca
-      key: ca-bundle.pem
-      sha256: <64-lowercase-hex>
-```
-
-All three fields are required together. The ConfigMap contains public CA
-certificates, not credentials, and remains in the execution namespace. Before
-creating each Fix Sandbox, the dashboard performs one exact ConfigMap GET and
-validates the configured data key, the 256 KiB size bound, certificate-only PEM
-structure, absence of private keys, and the SHA-256 of the exact mounted bytes.
-The executor revalidates the mounted bytes before starting OpenCode. Admission
-pins the ConfigMap name, key, fixed read-only mount, `NODE_EXTRA_CA_CERTS`, and
-configured hash annotation. OpenCode 1.18.2 uses the bundle as extra Node trust,
-so system public roots remain available to Git and Go. A combined system bundle
-is not required for this contract.
-
-Operators may maintain the ConfigMap manually or with optional tooling such as
-trust-manager. Neither trust-manager nor cert-manager is installed by this chart
-or generated consumer deployment. CA rotation requires updating the ConfigMap,
-configured SHA-256,
-and application deployment identity before new Sandboxes are admitted. Publicly
-trusted gateways require no CA bundle configuration. A privately resolved
-public gateway FQDN with a publicly trusted certificate can set
-`modelProvider.publicCAPrivateDNS: true`. Direct mode leaves that setting false.
-Standard `runc` is supported only by the disposable local
-lifecycle evaluation and is not a hostile-code boundary. Docker Desktop kind
-omits AppArmor through test-only code in both the canonical preflight and
-Sandbox shapes; it does not validate production AppArmor enforcement.
-The consumer separately owns the execution namespace, Agent Sandbox release,
-RuntimeClass, node pools, provider Secret or gateway, image publication,
-registry access, egress enforcement, quotas, LimitRanges, and NetworkPolicies.
-
-## Agent Sandbox OpenCode analyzer
-
-The `agentSandbox.analyzer` chart section is a private, disabled-by-default
-deployment boundary for the thin OpenCode analyzer experiment. It does not wire
-the fetcher, worker, or server to create analyzer Sandboxes. The in-process
-analyzer remains authoritative.
-
-When enabled, the chart can create a dedicated analyzer client ServiceAccount,
-narrow Sandbox and Pod-log RBAC in a dedicated existing execution namespace, a
-tokenless workload ServiceAccount, a fail-closed admission policy, a
-deny-by-default network policy, and a one-Sandbox, one-Pod ResourceQuota. The
-quota does not duplicate cluster-owned RuntimeClass overhead. Admission pins the
-container resource bounds instead. The chart never creates the namespace,
-controller, RuntimeClass, pre-populated input PVC, provider Secret or gateway, or
-runtime images.
-
-The analyzer executor and stager images must use immutable SHA-256 digests. The
-admission policy pins both images, the exact read-only input PVC, the secure
-RuntimeClass and workload identity, resource bounds, AppArmor and seccomp, the
-single stager and executor shape, read-only source and artifact mounts, and the
-separate result-only writable volume. The executor never mounts the input PVC
-directly.
-
-Network policy denies ingress. Kubernetes policy mode permits DNS plus an
-internal provider selected by namespace and Pod labels. Cilium mode permits DNS
-plus either the configured internal Kubernetes Service or one exact external
-direct-provider FQDN and port. External direct providers therefore require
-Cilium mode. Responses also requires direct bearer auth with the pinned OpenCode
-provider. The provider or gateway must independently authenticate the analyzer
-workload. The quota assumes the namespace is dedicated to this experiment.
-
-See [Agent Sandbox OpenCode analyzer](maintainer/agent-sandbox-opencode-analyzer.md) for
-the workspace, result, authority, and benchmark boundaries.
-
-## Agent Sandbox causal critic (stopped experiment)
-
-The `agentSandbox.causalCritic` chart section is retained for existing
-maintainer inspection and defaults to disabled. The experiment stopped on
-August 10, 2026, and must not be enabled for new evaluations. It never published
-a replacement diagnosis or participated in a write action.
-
-The chart creates separate critic RBAC and a separate fail-closed admission
-policy. Critic Sandboxes use an immutable purpose-built image, a tokenless
-workload ServiceAccount, a secure RuntimeClass, no volumes, one request
-environment value, one container, and no public repository access. A required network policy
-denies ingress and public egress. Standard Kubernetes peer selection is the
-default. `mode: cilium` is available for Cilium-enabled target clusters with a
-secure runtime and limits egress to cluster DNS plus the configured
-cluster-internal gateway port; the gateway must separately authorize the critic ServiceAccount.
-
-The consumer must provide a separate private ledger PVC. The worker or fetcher
-mounts this claim, but the server and public data path do not. The gateway must
-authorize the critic workload through an infrastructure identity outside the
-executor process. Network reachability alone is not authentication.
-
-See the [stopped Agent Sandbox causal critic
-record](maintainer/agent-sandbox-causal-critic.md) for its result, finalization,
-and cleanup contracts.

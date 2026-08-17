@@ -1,28 +1,22 @@
 # Onboarding a project
 
-This is the guided quickstart for a first deployment. For every flag, discovery
-rule, prompt-authoring mode, update behavior, and automation contract, use the
-[complete onboarding reference](onboarding-reference.md).
+This quickstart creates the small consumer repository that points to the shared
+Aster engine. For every flag, update rule, plan artifact, and automation
+contract, use the [onboarding reference](onboarding-reference.md).
 
 ## Choose an onboarding method
 
-Every method creates the same small consumer configuration and can target either
-GitHub Pages or Kubernetes. Choose the workflow that best matches how you want
-to make and review the files.
+All methods create the same consumer contract and can target GitHub Pages or
+Kubernetes.
 
-| Method | Best for | Start here |
+| Method | Use it when | Start |
 | --- | --- | --- |
-| Interactive wizard | A first setup where you want the CLI to discover jobs and walk through each decision | [Run the interactive wizard](#interactive-wizard) |
-| Coding agent-assisted | A conversational setup where a coding agent runs the reviewed discovery, plan, apply, and handoff workflow | [Use a coding agent](#coding-agent-assisted-onboarding) or open the [complete agent guide](agent-onboarding.md) |
-| Non-interactive CLI | Scripts, repeatable automation, or operators who already know the required inputs | [Use the flagged CLI](#non-interactive-cli-onboarding) |
-| Manual setup | Full control over each consumer file without using the scaffold generator | [Create the files manually](#manual-setup) |
+| Interactive wizard | You want guided discovery and review. | [Interactive wizard](#interactive-wizard) |
+| Coding agent-assisted | You want an agent to run the same reviewed CLI plan and handoff. | [Coding agent-assisted onboarding](#coding-agent-assisted-onboarding) |
+| Non-interactive CLI | Inputs are known and the process must be repeatable. | [Non-interactive CLI onboarding](#non-interactive-cli-onboarding) |
+| Manual setup | You need to author every consumer file directly. | [Manual setup](#manual-setup) |
 
 ## What onboarding creates
-
-The wizard, coding-agent, and non-interactive paths use `aster onboard` to
-discover jobs, validate the result, and create a small consumer repository.
-Manual setup creates the same file contract directly. In every case, the
-consumer points at the shared engine instead of copying engine code.
 
 The common files are:
 
@@ -34,44 +28,31 @@ prompts/system.md
 deploy/values.yaml             # Kubernetes
 ```
 
-The generated scaffold also includes a short deployment guide. Pages receives
-`CHECKLIST.md`. Kubernetes receives `deploy/README.md`. Prompt handoff mode may
-add agent instructions for completing `prompts/system.md`.
+Pages scaffolds also include `CHECKLIST.md`. Kubernetes scaffolds include
+`deploy/README.md`. Handoff prompt mode adds reviewable instructions for
+completing `prompts/system.md`. The consumer owns these files; engine code stays
+in the Aster repository.
 
 ## Interactive wizard
 
-From a checkout of the source repository you want to monitor. No Aster source
-checkout is required:
+From the source repository whose jobs you want to monitor, run the current
+release exactly:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
-  -engine-ref v0.9.0-rc.2
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 onboard \
+  -engine-ref v0.9.0-rc.3
 ```
 
-The wizard detects the current GitHub `origin` where possible. It then walks you
-through:
+The wizard discovers matching Prow and TestGrid jobs, asks for the deployment
+and AI coordinates, renders every file in memory, validates the result, and
+shows the complete plan. The final confirmation defaults to no. Cancellation
+leaves the filesystem unchanged.
 
-1. Prow or TestGrid discovery.
-2. GitHub Pages or Kubernetes deployment.
-3. Project identity and dashboard destination.
-4. AI provider and prompt choices.
-5. The output directory or pull request target.
-
-`-engine-ref` pins a generated Pages workflow to the same exact release. It
-does not select Kubernetes image tags or chart versions.
-
-For a private repository, export `GITHUB_TOKEN` before starting. The token is
-used for GitHub API reads and is not written to the scaffold.
-
-Review the final plan before confirming. The default final answer is no, and
-cancellation leaves the filesystem unchanged.
+`-engine-ref` pins a generated Pages workflow to the same exact release. It does
+not select Kubernetes chart or image versions. For a private GitHub repository,
+export `GITHUB_TOKEN` for API reads. The token is not written to the scaffold.
 
 ## Coding agent-assisted onboarding
-
-Use a coding agent when you want the same engine-owned discovery and plan/apply
-workflow with conversational help resolving inputs, reviewing changes, and
-preparing the diagnostic-authoring handoff. The agent does not replace the
-engine CLI or hand-write scaffold files.
 
 Install the portable setup and diagnostic-authoring skills:
 
@@ -83,148 +64,121 @@ npx --yes skills@latest add willie-yao/aster \
   --yes
 ```
 
-Then ask the agent to use `$setup-aster-consumer`, for example:
+Then make one concrete request:
 
 ```text
 Use $setup-aster-consumer to create a Pages consumer for
 https://github.com/kubernetes-sigs/kueue.
 ```
 
-The setup skill runs read-only discovery, reviews an exact dry-run plan,
-preserves consumer-owned files during updates, applies only the reviewed plan,
-and validates the resulting consumer. It leaves template placeholders in the
-source-only prompt for review. After setup, `$author-aster-diagnostics` can improve
-the prompt from historical failures and propose inactive diagnostic recipes.
+The setup skill must use `aster onboard`, not hand-write the scaffold. It runs
+read-only discovery, prepares an exact dry-run plan, preserves consumer-owned
+prompt and skill files during updates, leaves source-only template placeholders
+for review, waits for confirmation before applying the reviewed plan, and
+validates the resulting consumer. Repository creation, pushes, pull requests,
+GitHub settings, Secret writes, and cluster writes remain separate confirmation-gated actions.
 
-See [Agent-driven setup and diagnostic authoring](agent-onboarding.md) for
-installation scopes, example requests, safety boundaries, update behavior, and
-the complete setup-to-authoring workflow.
+After setup, use `$author-aster-diagnostics` to evaluate representative
+historical failures, improve `prompts/system.md`, and place any proposed recipes
+under `proposals/skills/`. The authoring workflow does not activate recipes.
+
+Update installed global skills with:
+
+```bash
+npx --yes skills@latest update \
+  setup-aster-consumer author-aster-diagnostics \
+  --global \
+  --yes
+```
+
+Review skill changes before using them in an automated or write-enabled flow.
 
 ## Non-interactive CLI onboarding
 
-Use the flagged CLI when the source, discovery selector, consumer repository,
-deployment mode, and destination are already known. This is the direct path for
-scripts and repeatable automation without the interactive wizard or a coding
-agent.
+Use the flagged CLI when all required inputs are known. This example creates a
+Pages consumer:
 
-Start with a dry run and save the exact reviewed plan before applying it. See
-[Non-interactive automation](onboarding-reference.md#non-interactive-automation)
-and [Dry-run behavior](onboarding-reference.md#dry-run-behavior) for the required
-flags, plan digest, update safeguards, and machine-readable handoff outputs.
+```bash
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 onboard \
+  -engine-ref v0.9.0-rc.3 \
+  -non-interactive \
+  -testgrid "<testgrid-dashboard>" \
+  -dashboard-repo "<owner>/<dashboard-repo>" \
+  -source-repo "<owner>/<source-repo>" \
+  -artifact-access public \
+  -deployment-reason "Artifacts and provider are reachable from GitHub Actions." \
+  -out ./my-dashboard
+```
+
+For durable automation, use `-dry-run -plan-out`, review the digest, then apply
+that exact artifact with `-apply-plan` and `-plan-digest`. The
+[onboarding reference](onboarding-reference.md#dry-run-and-reviewed-plan-application)
+contains the complete contract.
 
 ## Review the generated files
 
-Before deployment, check:
+Before deployment, verify:
 
-- `project.yaml`: source repository, TestGrid dashboard or bucket, storage,
-  branding, and inferred job categories.
-- `prompts/system.md`: every project-specific architecture, artifact, failure,
-  and transient-classification claim.
-- `.github/workflows/deploy.yml` or `deploy/values.yaml`: provider coordinates,
-  credentials, persistence, and deployment-specific paths.
-- `CHECKLIST.md` or `deploy/README.md`: the remaining setup commands.
+1. `project.yaml` selects the expected jobs, storage, branding, source repository,
+   and analysis policy.
+2. `prompts/system.md` contains only grounded project knowledge and retains the
+   required runbook headings.
+3. The Pages workflow or Kubernetes values use the intended deployment path.
+4. Generated checklist items and placeholders have been resolved.
+5. No credential appears in a committed file.
 
-Generated prompts and categories are drafts. Keep unresolved details explicit
-instead of accepting plausible guesses. Do not commit provider tokens or other
-Secrets.
+Use [Project configuration](project-configuration.md) for exact fields and
+[Writing the project prompt](writing-prompts.md) for prompt ownership.
 
 ## Choose Pages or Kubernetes
 
-| Deployment | Choose it when | First deployment guide |
+| Deployment | Choose it when | Guide |
 | --- | --- | --- |
-| GitHub Pages | The dashboard is public and read-only, and artifacts and the model endpoint are reachable from the runner | [GitHub Actions and Pages](github-pages.md) |
-| Kubernetes | The model endpoint is private to the cluster, data needs shared persistence, or you want authenticated server features | [Kubernetes quickstart](kubernetes.md) |
+| GitHub Pages | The dashboard may be public and read-only, artifacts are public, and the model endpoint is reachable from GitHub Actions. | [GitHub Actions and Pages](github-pages.md) |
+| Kubernetes | Artifacts or the provider are private to the cluster, state needs shared persistence, or authenticated server features are required. | [Kubernetes quickstart](kubernetes.md) |
 
-Both paths use in-process analysis. New users do not need to choose or install an
-external runtime.
-
-Start with the smallest working deployment. Add authenticated chat, File Issue,
-Mark Resolved, notifications, or other optional features only after the expected
-jobs and analyses are visible. See [Optional features](optional-features.md).
+Standard onboarding configures authoritative in-process analysis. Fix PRs and
+Agent Sandbox shadows are separate opt-in features and are not required for a
+working dashboard.
 
 ## Manual setup
 
-Manual setup is a supported alternative when you prefer to create the consumer
-files yourself.
+Create the same consumer files directly when the generator is not appropriate.
+Start from:
 
-Create this minimal structure:
+- [`configs/example/project.yaml`](../configs/example/project.yaml)
+- [`configs/example/prompts/system.md`](../configs/example/prompts/system.md)
+- [Project configuration](project-configuration.md)
+- [GitHub Actions and Pages](github-pages.md) or
+  [Kubernetes quickstart](kubernetes.md)
 
-```text
-project.yaml
-prompts/system.md
-.github/workflows/deploy.yml   # GitHub Pages
-# or
-deploy/values.yaml             # Kubernetes
-```
+Do not copy engine code into the consumer repository.
 
-Use these references:
+## Validate with `onboard doctor`
 
-- [`configs/example/project.yaml`](../configs/example/project.yaml) for the
-  minimal required project fields.
-- [`configs/example/prompts/system.md`](../configs/example/prompts/system.md) for
-  the prompt file shape.
-- [Project configuration](project-configuration.md) for the strict schema.
-- [GitHub Actions and Pages](github-pages.md) for the reusable workflow.
-- [Kubernetes quickstart](kubernetes.md) for consumer values and the deployment
-  wrapper.
-- [CAPZ consumer example](https://github.com/willie-yao/capz-prow-ai-dashboard)
-  for a current public Pages consumer.
-
-`configs/example` is documentation-only. It contains placeholders and is not a
-ready-to-deploy project configuration. Replace the project identity, discovery,
-storage, branding, prompt, and deployment settings for your repository.
-
-When the files are ready, run:
+Run the read-only validator after generation and after meaningful edits:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 \
   onboard doctor \
   -project-dir ./my-dashboard
 ```
 
-## Validate with `onboard doctor`
-
-Run the same doctor command after any onboarding method. It checks:
-
-- Strict `project.yaml` parsing.
-- A non-empty `prompts/system.md`.
-- Pages workflow or Kubernetes values wiring.
-- AI provider coordinates and credential source.
-- The real Prow discovery sweep and a nonzero job count.
-
-Doctor is read-only. It does not call the model provider or inspect a Kubernetes
-cluster. Fix failures before deploying and review warnings that depend on
-external settings.
+Doctor validates the project and prompt, deployment coordinates, and a real
+nonzero Prow discovery sweep. It does not call the model provider or inspect a
+Kubernetes cluster.
 
 ## Deploy
 
-For Pages, complete `CHECKLIST.md` and follow
-[GitHub Actions and Pages](github-pages.md).
+Follow the generated `CHECKLIST.md` for Pages or `deploy/README.md` for
+Kubernetes. The canonical deployment guides are:
 
-For Kubernetes, the platform administrator first follows
-[Kubernetes platform setup](kubernetes-platform.md). The project contributor
-edits `deploy/values.yaml`, follows the generated `deploy/README.md`, and uses
-the [Kubernetes quickstart](kubernetes.md). A published CLI and chart release do
-not require an engine source checkout.
+- [GitHub Actions and Pages](github-pages.md)
+- [Kubernetes quickstart](kubernetes.md)
+- [Flux GitOps deployment](kubernetes-gitops.md)
+- [Kubernetes platform setup](kubernetes-platform.md)
 
-A successful first deployment shows the expected branding and jobs, publishes
-grounded analysis when AI is enabled, and serves healthy data endpoints. Keep
-optional automation disabled until that baseline works.
-
-## Complete reference
-
-Use the [onboarding reference](onboarding-reference.md) for:
-
-- Read-only discovery output and repository resolution.
-- Flagged, dry-run, and non-interactive usage.
-- Opening or updating a scaffold pull request.
-- Prompt-authoring modes, timeouts, and fallback behavior.
-- Complete doctor behavior and command contracts.
-
-For coding agent-assisted onboarding, use the
-[Coding agent-assisted onboarding](#coding-agent-assisted-onboarding) section or
-the [complete agent guide](agent-onboarding.md). For scripts and repeatable
-automation, use the [non-interactive CLI section](#non-interactive-cli-onboarding).
-
-The [documentation map](README.md) links the remaining
-deployment, analysis, operator, experimental, and contributor references.
+Deploy the smallest working read-only configuration first. Add chat,
+notifications, actions, Fix PRs, or maintainer shadows only after jobs and
+analysis are healthy. The [documentation index](README.md) owns the feature map
+and recommended enablement order.

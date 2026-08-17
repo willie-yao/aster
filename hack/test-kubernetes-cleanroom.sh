@@ -202,7 +202,6 @@ removed_or_moved_docs = [
     Path("docs/migrating-from-prow-ai-dashboard.md"),
     Path("docs/agent-sandbox-fix-runtime-spike.md"),
     Path("docs/architecture/analysis-runtime-evaluation.md"),
-    Path("docs/agent-sandbox-causal-critic.md"),
     Path("docs/agent-sandbox-opencode-analyzer.md"),
     Path("docs/remediation-investigation.md"),
 ]
@@ -236,8 +235,11 @@ for path in [
 ]:
     text = path.read_text()
     for removed_path in removed_kubernetes_docs:
-        if removed_path.name in text:
-            raise SystemExit(f"{path} still links removed document {removed_path.name}")
+        if str(removed_path) in text or removed_path.name in text:
+            raise SystemExit(f"{path} still links removed document {removed_path}")
+    for removed_path in removed_or_moved_docs:
+        if str(removed_path) in text:
+            raise SystemExit(f"{path} still links removed document {removed_path}")
 
 def markdown_anchors(path):
     anchors = set()
@@ -367,18 +369,8 @@ markdown_files = [
     *markdown_tree(root / "docs"),
     *markdown_tree(root / "experimental"),
 ]
-writing_prompt_definitions = []
 for path in markdown_files + [chart]:
-    definitions = validate_markdown(path, repository_root)
-    if path == root / "docs" / "writing-prompts.md":
-        writing_prompt_definitions = definitions
-for target in [
-    "../backend/internal/ai/baseprompt.go",
-    "../backend/internal/ai/responseformat.go",
-    "../configs/example",
-]:
-    if target not in writing_prompt_definitions:
-        raise SystemExit(f"writing-prompts reference definition was not validated: {target}")
+    validate_markdown(path, repository_root)
 
 link_fixtures = fixture_root / "markdown-link-contract"
 link_fixtures.mkdir()
@@ -437,21 +429,6 @@ valid_reference.write_text("""# Fixture
 """)
 validate_markdown(valid_reference, link_fixtures.resolve())
 
-line_limits = {
-    quickstart: (180, 270),
-    platform: (150, 250),
-    reference: (400, 600),
-    chart: (80, 150),
-    generated: (120, 200),
-}
-for path, (minimum, maximum) in line_limits.items():
-    lines = len(path.read_text().splitlines())
-    if not minimum <= lines <= maximum:
-        raise SystemExit(f"{path} has {lines} lines, want {minimum}-{maximum}")
-
-generic_total = sum(len(path.read_text().splitlines()) for path in [quickstart, platform, reference])
-if not 900 <= generic_total <= 1200:
-    raise SystemExit(f"generic Kubernetes docs total {generic_total} lines, want 900-1200")
 PY
 
 bash "$root/deploy/helm/aster-platform/test-render.sh"

@@ -54,7 +54,6 @@ def documentation_path(path: str) -> bool:
 BACKEND_DOCUMENTATION_PATHS = {
     "AGENTS.md",
     "README.md",
-    "docs/agent-onboarding.md",
     "docs/onboarding-a-new-project.md",
 }
 
@@ -387,13 +386,8 @@ def self_test() -> None:
         ("root documentation contract", ["README.md"], {"backend", "documentation"}),
         (
             "generic documentation",
-            ["docs/architecture-decisions/0001-analysis-runtime.md"],
+            ["docs/reference-example.md"],
             {"helm_static", "documentation"},
-        ),
-        (
-            "agent onboarding documentation",
-            ["docs/agent-onboarding.md"],
-            {"backend", "helm_static", "documentation"},
         ),
         (
             "shared onboarding documentation",

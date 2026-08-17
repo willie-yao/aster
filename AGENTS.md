@@ -94,7 +94,7 @@ backend/                         Go 1.25
     analysisstager/              Credential-free analyzer workspace stager
     agentsandbox/                Business-neutral Agent Sandbox lifecycle contract
     modelprovider/               Shared non-secret provider and credential-mode contract
-    causalcritic/                Private independent causal-review contracts and runtime
+    causalcritic/                Disabled stopped causal-review contracts and runtime
     criticexecutor/              Purpose-built read-only model-gateway critic executor
     analysisruntime/             Selects the failure-analysis runtime (in-process default)
     analysischat/                Bounded conversations about a published analysis
@@ -147,7 +147,6 @@ frontend/                        React 19 + Vite 8 + MUI 9
     components/ManifestProvider.tsx   Loads manifest.json
 configs/example/                 Docs-only minimal project.yaml + full reference
 deploy/helm/                     Helm chart for the Kubernetes-native mode
-docs/architecture-decisions/     ADRs; 0001 records analysis-runtime ownership
 Dockerfile                       Multi-stage image: fetcher + server + SPA
 docs/                            onboarding, deployment, configuration, AI,
                                  feature, troubleshooting, and contributor guides
@@ -381,8 +380,8 @@ live deploy.
 - `docs/project-configuration.md` - strict project.yaml field reference.
 - `docs/github-pages.md` - GitHub Actions and Pages deployment.
 - `docs/troubleshooting.md` - first-deploy failures and checks.
-- `docs/architecture/in-process-analyzer.md` - concise analyzer architecture and contributor map.
-- `docs/agentic.md` - agentic configuration, tool details, floors, and critique reference.
+- `docs/architecture/in-process-analyzer.md` - authoritative analyzer architecture and contributor map.
+- `docs/agentic.md` - authoritative analysis loop, quality gates, cache, and operations.
 - `docs/maintainer/remediation-investigation.md` - private causal-group investigation contracts, cache, and benchmark.
 - `docs/skills.md` - consumer-side recipe registry format + hashing.
 - `docs/writing-prompts.md` - how `prompts/system.md` slots into the

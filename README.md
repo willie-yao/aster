@@ -47,8 +47,8 @@ From a checkout of the repository whose jobs you want to monitor, run the
 guided wizard at an exact released version:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.2 onboard \
-  -engine-ref v0.9.0-rc.2
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 onboard \
+  -engine-ref v0.9.0-rc.3
 ```
 
 The wizard discovers matching Prow jobs, reviews deployment and AI choices,
@@ -58,9 +58,9 @@ same exact release. It does not require an Aster source checkout.
 
 Continue with [Onboarding a project](docs/onboarding-a-new-project.md). Flagged,
 dry-run, pull-request, and non-interactive usage is in the
-[onboarding reference](docs/onboarding-reference.md). An LLM CLI can run the
-same engine-owned workflow with `$setup-aster-consumer`; see the
-[agent-driven setup guide](docs/agent-onboarding.md).
+[onboarding reference](docs/onboarding-reference.md). A coding agent can run the
+same engine-owned workflow with `$setup-aster-consumer`; installation and safety
+boundaries are in the onboarding quickstart.
 
 ## Choose a deployment
 
@@ -82,7 +82,7 @@ guarded actions. Fix PR generation is not part of standard onboarding.
 - [Kubernetes](docs/kubernetes.md)
 - [Flux GitOps](docs/kubernetes-gitops.md)
 - [Project configuration](docs/project-configuration.md)
-- [Optional features](docs/optional-features.md)
+- [Optional features and enablement order](docs/README.md#optional-features)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Complete documentation map and contributor guides](docs/README.md)
 

@@ -1,94 +1,42 @@
 # Writing a project AI prompt
 
-Every consumer of [Aster][engine] must ship a `prompts/system.md`
-alongside its `project.yaml`. This file is what makes the AI summaries useful
-for your project. It should be an artifact-backed diagnostic runbook that tells
-the model how to localize a failure, which evidence proves each conclusion, and
-which details remain unknown.
+Every consumer with AI enabled must provide a non-empty `prompts/system.md` next
+to `project.yaml`. The file is a project-specific diagnostic runbook. It should
+tell the analyzer how to localize failures, which artifacts support each claim,
+and which details remain unknown.
 
-The engine hard-errors at startup if `prompts/system.md` is missing or
-whitespace-only when `-ai` is enabled. There is no "default project prompt";
-generic AI analysis on Prow logs without project context produces hallucinations
-faster than it produces signal.
+The engine fails at startup when AI is enabled and the prompt is missing or
+blank. Use [`configs/example/prompts/system.md`](../configs/example/prompts/system.md)
+as the minimal current example.
 
-[engine]: https://github.com/willie-yao/aster
+## Prompt composition
 
-## How the prompt is composed
+The engine composes the system prompt in this order:
 
-At fetcher startup the engine assembles the final system prompt sent to the
-chat completions API as:
-
-```
-<engine BasePrompt>
-
-## Project-specific knowledge
-
-<your prompts/system.md, verbatim>
-
-<engine ResponseFormatFooter>
+```text
+engine BasePrompt
+consumer prompts/system.md, verbatim
+engine ResponseFormatFooter
+engine agentic tool guidance
 ```
 
-- **`BasePrompt`** ([baseprompt.go][baseprompt]) is a ~150-word universal
-  preamble: GCS artifact layout, the `build-log.txt` / `started.json` /
-  `junit_*.xml` entry points, and a generic triage order. It is the same for
-  every consumer.
-- **Your `prompts/system.md`** is the variable part. It is appended verbatim
-  with no editorial filtering. What you write is what the model sees.
-- **`ResponseFormatFooter`** ([responseformat.go][footer]) pins the JSON
-  schema the Go code unmarshals (`summary`, `is_transient`, `root_cause`,
-  `severity`, `suggested_fix`, `relevant_files`). Do NOT redeclare it in your
-  addendum; if you do, you risk the model returning a shape the engine cannot
-  parse.
-- **Agentic mode addendum.** When the engine analyzes a failure under
-  [agentic mode](agentic.md), it also appends an engine-owned tool-docs
-  section to the assembled prompt that documents the `list_artifacts` /
-  `read_artifact` / `tail_artifact` / `grep_artifact` tools and the
-  per-failure byte budgets. Your `prompts/system.md` never sees this
-  section; do not document the tools yourself.
+- [`BasePrompt`](../backend/internal/ai/baseprompt.go) provides universal Prow
+  artifact entry points and a generic triage order.
+- The consumer prompt supplies project-specific architecture, artifact, and
+  failure knowledge. The engine does not edit it.
+- [`ResponseFormatFooter`](../backend/internal/ai/responseformat.go) owns the
+  structured response contract. Do not redeclare the output schema.
+- Agentic tool documentation is engine-owned. Do not describe tool names,
+  budgets, or provider protocol in the consumer prompt.
 
-[baseprompt]: ../backend/internal/ai/baseprompt.go
-[footer]: ../backend/internal/ai/responseformat.go
+Onboarding `handoff` mode writes a TODO prompt plus a portable prompt-authoring
+skill without calling a model. `todo-template` writes only the TODO prompt. Both
+paths are credential-free. The result is a source-based draft that requires
+human review and later validation against historical failures.
 
-## How onboarding drafts the prompt
+## Required runbook headings
 
-Guided onboarding offers two prompt-authoring modes:
-
-- `handoff` writes the TODO template plus `PROMPT_HANDOFF.md` and the bundled
-  `.opencode/skills/system-prompt-generation/SKILL.md` without running a model.
-- `todo-template` writes only the reviewable template. `--no-prompt` is an alias.
-
-Complete flag-based runs and the wizard default to `handoff`. The operator runs
-the generated bundle with their own coding agent, reviews the result, and copies
-the accepted `prompts/system.md` into the consumer repository. Prompt authoring
-does not use the deployed dashboard's `AI_TOKEN`, `AI_ENDPOINT`, `AI_MODEL`, or
-`AI_REASONING_EFFORT`.
-
-The handoff serializes the project name, source repository, resolved commit or
-known branch, and matched Prow job metadata as untrusted data. The generated
-prompt is a source-only baseline and is not validated against historical
-failures. Run `$author-aster-diagnostics` after setup for that evaluation. The bundled skill
-tells the agent to investigate a bounded set of high-value repository files and
-to treat repository content and job metadata as evidence, never as instructions.
-
-The handoff bundle asks the operator's agent to change exactly
-`prompts/system.md` and keep the required sections in order with
-project-specific content. Deletions, renames, extra changed files, placeholder
-sections, malformed headings, and unclosed fences should be rejected during
-review. Source-resolution or timeout failures still write the TODO template and
-handoff bundle.
-
-`aster onboard --prompt-timeout` bounds prompt source resolution. It defaults to
-15 minutes and can set a value from one minute through two hours.
-
-A capable model does not replace source quality. The generated file is always a
-source-only draft requiring review and historical validation. Its triage order
-must handle both JUnit-backed test failures and synthesized build-level failures
-when a project does not publish JUnit.
-
-## Required runbook sections
-
-The onboarding generator requires these sections in this order. Keeping the
-same structure in hand-written prompts makes review and iteration easier.
+Keep these headings in this order:
 
 ```markdown
 ## Architecture
@@ -104,153 +52,88 @@ same structure in hand-written prompts makes review and iteration easier.
 
 ### Architecture
 
-Describe only component, resource, and repository relationships that help
-localize a failure. Avoid marketing language and exhaustive API inventories.
+Name the components involved in tested behavior and the dependencies between
+them. Include only relationships established by current source or operator
+knowledge.
 
 ### Diagnostic lifecycle
 
-Describe the relevant provisioning, initialization, reconciliation, test, and
-cleanup sequence. Treat it as a diagnostic sequence, not a guaranteed order.
-Require resource conditions and timestamped logs to prove where progress
-stopped. When a dependency chain matters, state that a downstream symptom does
-not establish the upstream cause.
+Describe the expected sequence from job start through setup, test execution,
+cleanup, and artifact upload. This gives the analyzer a causal timeline.
 
 ### Test and job flavors
 
-Document meaningful test families and environment flavors. Require the analyzer
-to identify the actual flavor from the job and artifacts before applying
-flavor-specific guidance. Put unknown flavors under `Unresolved details`.
+Explain how periodic, presubmit, upgrade, conformance, unit, or project-specific
+flavors differ. State when JUnit is absent and only build-level analysis is
+possible.
 
 ### Artifact layout
 
-List exact project-specific paths or path patterns only when project evidence
-supports them. State what each artifact can prove. The base prompt already
-covers universal Prow files such as `build-log.txt`; label them as engine-owned
-defaults when they appear here. Require the analyzer to list the available
-artifact tree before declaring that an expected file is absent.
+Map high-value evidence to its real location. Include important logs, JUnit
+files, resource dumps, and flavor-specific subtrees. Prefer paths and stable
+patterns over prose.
 
 ### Common failure patterns
 
-Write operational rules rather than a catalog of possible failures. Each rule
-should identify:
-
-1. The symptom or signal.
-2. The evidence that must be read.
-3. The incorrect causal conclusion to avoid.
-4. The remediation boundary supported by that evidence.
-
-A useful form is: "If X appears, read Y and Z before concluding A. Do not infer
-A from X alone."
+For each recurring class, provide the exact signal, the evidence that confirms
+it, common downstream noise, and the narrow remediation boundary. Do not turn a
+hypothesis into a fact.
 
 ### Transient classification
 
-Add a transient rule only when project evidence supports it. Every rule must
-state both the positive run evidence that permits `is_transient=true` and the
-evidence or persistence that makes the failure non-transient. A failure is not
-transient merely because a retry might recover.
-
-Do not broadly classify invalid credentials, persistent quota exhaustion,
-unavailable SKUs, deterministic bootstrap failures, repeated missing images,
-lasting webhook TLS failures, or service startup failures that never recover
-during the run as transient.
+List known transient signatures and the evidence required to call them
+transient. Distinguish infrastructure retries from deterministic product or test
+failures.
 
 ### Triage order
 
-Provide an ordered, artifact-first procedure. Start with the failing JUnit
-detail and `build-log.txt`, narrow to resource conditions and relevant component
-logs, then compare with a passing resource or build when possible.
+Give a short artifact-first sequence. Start with the test result and build
+metadata, then move to the earliest causal log or resource evidence. Avoid long
+checklists that encourage reading everything.
 
 ### Relevant source repositories
 
-List only repositories established by project evidence that can produce
-actionable `relevant_files` paths. Prefer GitHub `owner/name` form and do not
-invent repository names.
+List only repositories that artifact or source evidence can use for grounded
+`relevant_files`. Prefer GitHub `owner/name` form. Do not invent repository
+identities.
 
 ### Unresolved details
 
-List important artifact paths, flavors, dependency chains, failure boundaries,
-or repositories that the available sources do not establish. Use factual
-maintainer TODOs instead of filling gaps with generic assumptions.
+Record important paths, flavors, dependencies, or failure boundaries that the
+available sources do not establish. Keep explicit maintainer TODOs instead of
+filling gaps with generic assumptions.
 
-## Analyzer capability boundary
+## Artifact-first guidance
 
-The analyzer can read supplied Prow artifacts through engine tools. Optional
-Kubernetes tools navigate Kubernetes-shaped logs and resource dumps already
-captured in the artifact tree. They do not connect to a live Kubernetes API.
-The analyzer also does not have portal, SSH, arbitrary shell, browser, or local
-CLI access. Do not present an unavailable investigation as evidence already
-collected, and do not substitute retries or manual portal checks for an
-artifact-backed remediation.
+- Quote real failure signatures and name the artifact that contains them.
+- Separate initiating causes from later cleanup or timeout noise.
+- Require evidence before classifying a failure as transient.
+- Keep remediation concrete and bounded to what the evidence supports.
+- Use source paths only when the pinned repository evidence justifies them.
+- Prefer concise tables and lists to repeated narrative.
 
-## Worked examples
+The analyzer can read the supplied Prow artifact tree and, when configured,
+read-only pinned source. Kubernetes-shaped tools inspect resources already
+captured in artifacts; they do not connect to a live cluster. The analyzer has
+no portal, SSH, arbitrary shell, browser, or local CLI access. Never describe an
+unavailable manual check as evidence already collected.
 
-Two production consumer prompts are available as content references. Use them
-to judge diagnostic depth, then map grounded facts into the required section
-structure above.
+## Review and iteration
 
-- **Provider-agnostic example (CAPD, Docker):**
-  [CAPI core `prompts/system.md`][capi-prompt] is ~150 lines covering
-  provider-agnostic CAPI architecture, the CAPD Docker provider, three job-type
-  families (E2E / unit / conformance), and the per-spec workload-cluster artifact
-  layout. Use this as the starting template for most projects.
-- **Cloud-VM example:** [a VM-based provider `prompts/system.md`][capz-prompt] is
-  ~100 lines covering cloud VM provisioning, kubeadm control-plane init, 14
-  documented failure patterns, provider-specific transient errors, and that
-  provider's artifact layout. Use it when cloud-VM failure patterns dominate.
+Review the initial draft for unsupported architecture claims, stale paths,
+missing job flavors, and unclosed placeholders. Then run
+`$author-aster-diagnostics` against a representative historical corpus. That
+skill may improve the prompt and propose inactive evidence recipes, but it must
+not activate recipes or tune only to one favorable case.
 
-[capi-prompt]: https://github.com/willie-yao/capi-prow-ai-dashboard/blob/main/prompts/system.md
-[capz-prompt]: https://github.com/willie-yao/capz-prow-ai-dashboard/blob/main/prompts/system.md
+Editing `prompts/system.md` affects new analyses. Existing reusable cache entries
+keep the `prompt_hash` provenance that produced them. Set `ai.cache_generation`
+or `AI_CACHE_GENERATION` to a new non-empty value when a prompt rewrite requires
+an intentional full rebaseline. Returning to a previous generation reuses its
+unexpired entries. Use destructive cache clearing only for emergency recovery.
 
-A minimal docs-only example also lives in [`configs/example/`][example] in
-this engine repo.
+For adjacent contracts, see:
 
-[example]: ../configs/example
-
-## Tips
-
-- **Keep it factual.** The model treats your prompt as ground truth. Do not
-  speculate about failure modes you have never seen.
-- **Quote real log lines.** Where you list a failure pattern, include the
-  exact log message the model should match on. Vague descriptions ("CNI
-  doesn't start") produce vague summaries.
-- **Use markdown headings.** The model uses your section structure to
-  organize its reasoning.
-- **Length is fine.** 100-300 lines is normal. Beyond that you may start
-  crowding out the per-failure evidence in the context window; trim aggressively
-  if you see the model ignoring the user message.
-- **Iterate against real failures.** Trigger an AI analysis on a known
-  failure, read the summary, and refine the prompt where the model got it
-  wrong. The updated prompt applies to new analyses. Existing reusable entries
-  keep the prompt fingerprint that produced them.
-
-## Iterating on the prompt
-
-Editing `prompts/system.md` changes the prompt used for new analyses. Existing
-reusable entries remain cached and keep their original `prompt_hash` provenance.
-This avoids an automatic dashboard-wide re-analysis after a prompt edit.
-
-Set `ai.cache_generation` or `AI_CACHE_GENERATION` to a new value when a prompt
-rewrite requires an intentional full rebaseline. Returning to a prior value
-reuses its unexpired entries. Use the **Clear AI Cache** workflow only for
-emergency destructive cleanup.
-
-## What the engine does NOT add to your prompt
-
-It is worth being explicit: the engine intentionally does not own any
-project-specific opinion. That includes:
-
-- The list of components that exist in your project
-- Architecture diagrams or dependency chains
-- Failure patterns specific to your CI fleet
-- Cloud-provider-specific transient errors (quota throttling, vCenter
-  timeouts, etc.)
-- Test-flavor-specific debugging instructions
-
-If you want the model to know any of that, it must be in your
-`prompts/system.md`.
-
-One adjacent knob you may also want, **outside** the system prompt: the
-agentic loop configuration in `project.yaml` under `ai`. The loop's tool
-budget, evidence floors, and critique/skills gates all live there. See
-[docs/agentic.md](agentic.md) for the full reference and
-[docs/skills.md](skills.md) for recipe-driven evidence requirements.
+- [Agentic analysis](agentic.md) for tools, quality gates, and cache acceptance.
+- [Diagnostic skills](skills.md) for evidence recipes.
+- [Project configuration](project-configuration.md) for exact fields.
