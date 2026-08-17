@@ -311,7 +311,10 @@ export function PatternBanner({
         <BriefingSection label="Causal groups">
           <Stack spacing={1.5}>
             {causalGroups.map((group, index) => (
-              <Box key={`${group.builds.join("-")}-${group.root_cause}`}>
+              // Keying on group identity ties the remediation component instance
+              // to one operation, so a refreshed group never inherits another
+              // group's in-flight status or preview.
+              <Box key={`${group.id ?? ""}:${group.content_hash ?? ""}:${group.builds.join("-")}-${group.root_cause}`}>
                 <RichText text={group.root_cause} steps fileCtx={patternFileCtx} />
                 <Stack
                   direction={{ xs: "column", sm: "row" }}

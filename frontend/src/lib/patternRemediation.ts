@@ -96,11 +96,21 @@ export function patternRemediationPresentation(
   };
 }
 
+// States that only advance while the remediation operation is available. With
+// the operation disabled they can never resolve, so reporting them verbatim
+// would leave a permanently pending card the user cannot act on.
+const unresolvableWithoutOperation = new Set<PatternRemediationInvestigationState>([
+  "not_investigated",
+  "queued",
+  "investigating",
+  "verifying",
+]);
+
 // causalRemediationBlockedReason reports why a causal group can never reach an
-// investigation, so the UI never presents "Not investigated" as if the user
+// investigation, so the UI never presents a pending-looking state as if the user
 // could act on it. Conditions are ordered from the most permanent to the most
-// deployment-scoped, and a published non-default state always wins because it
-// carries a real verdict.
+// deployment-scoped, and a terminal published verdict always wins because it
+// carries a real result that outlives the capability that produced it.
 export function causalRemediationBlockedReason(
   group: PatternCausalGroup,
   investigation: PatternRemediationInvestigationSummary | undefined,
@@ -112,8 +122,8 @@ export function causalRemediationBlockedReason(
   if (!group.id || !group.content_hash) {
     return { label: "Not addressable", message: unhashedRemediationReason };
   }
-  const state = investigation?.state ?? "not_investigated";
-  if (!investigationEnabled && state === "not_investigated") {
+  const { state } = patternRemediationPresentation(investigation);
+  if (!investigationEnabled && unresolvableWithoutOperation.has(state)) {
     return { label: "Unavailable", message: remediationUnavailableReason };
   }
   return null;

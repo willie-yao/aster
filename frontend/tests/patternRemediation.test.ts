@@ -112,6 +112,56 @@ test("a published verdict outlives the capability that produced it", () => {
   );
 });
 
+test("a disabled capability reports every unresolvable state as unavailable", () => {
+  const unresolvable: PatternRemediationInvestigationState[] = [
+    "not_investigated",
+    "queued",
+    "investigating",
+    "verifying",
+  ];
+
+  // Without the operation these can never advance, and the component neither
+  // polls nor offers a control, so reporting them verbatim strands the card.
+  for (const state of unresolvable) {
+    assert.deepEqual(
+      causalRemediationBlockedReason(
+        repeatedGroup,
+        { causal_group_id: "group-id", causal_group_hash: "group-hash", state },
+        false,
+      ),
+      { label: "Unavailable", message: remediationUnavailableReason },
+      state,
+    );
+  }
+
+  for (const state of states.filter((candidate) => !unresolvable.includes(candidate))) {
+    assert.equal(
+      causalRemediationBlockedReason(
+        repeatedGroup,
+        { causal_group_id: "group-id", causal_group_hash: "group-hash", state },
+        false,
+      ),
+      null,
+      state,
+    );
+  }
+});
+
+test("an unrecognized state is blocked exactly like the default it renders as", () => {
+  assert.deepEqual(
+    causalRemediationBlockedReason(
+      repeatedGroup,
+      {
+        causal_group_id: "group-id",
+        causal_group_hash: "group-hash",
+        state: "from_a_newer_engine" as PatternRemediationInvestigationState,
+      },
+      false,
+    ),
+    { label: "Unavailable", message: remediationUnavailableReason },
+  );
+});
+
 test("causal remediation renders per cause and keeps normal actions blocked", () => {
   const component = readFileSync(resolve(process.cwd(), "src/components/CausalGroupRemediation.tsx"), "utf8");
   const banner = readFileSync(resolve(process.cwd(), "src/components/PatternBanner.tsx"), "utf8");
@@ -139,4 +189,8 @@ test("causal remediation renders per cause and keeps normal actions blocked", ()
   assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupRemediation/);
   assert.equal(banner.match(/<CausalGroupRemediation/g)?.length, 1);
   assert.doesNotMatch(banner, /<PatternRemediation/);
+
+  // The card is keyed by group identity, so a refreshed group cannot inherit a
+  // previous group's in-flight status, preview, or idempotency key.
+  assert.match(banner, /key=\{`\$\{group\.id \?\? ""\}:\$\{group\.content_hash \?\? ""\}:/);
 });

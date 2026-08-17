@@ -30,7 +30,15 @@ export function causalGroupFixTarget(
   const affectedBuilds = new Set(group.builds);
   for (const run of runs) {
     if (!affectedBuilds.has(run.build_id)) continue;
-    const testCase = executedResultTests(run.test_cases).find(fixInvestigationEligible);
+    const occurrences = run.test_cases;
+    // The test detail page resolves a name to the first matching case in the
+    // build, so a later eligible occurrence of a repeated name is unreachable.
+    // Only offer a target the destination will actually open.
+    const testCase = executedResultTests(occurrences).find(
+      (candidate) =>
+        fixInvestigationEligible(candidate) &&
+        occurrences.find((occurrence) => occurrence.name === candidate.name) === candidate,
+    );
     if (testCase) return { buildID: run.build_id, testName: testCase.name };
   }
   return null;

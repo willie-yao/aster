@@ -60,7 +60,7 @@ const groundedRun: BuildResult = {
       status: "failed",
       duration_seconds: 1,
       junit_file: "junit_01.xml",
-      ai_analysis: { ...analysis, file_links: { "pkg/thing.go": "https://github.com/o/r/blob/sha/pkg/thing.go" } },
+      ai_analysis: { ...analysis, file_links: { "pkg/thing.go": "https://github.com/o/r/blob/4f2a9c1e83b7d0526ab1c94f7e3d81a06b5c2f97/pkg/thing.go" } },
     },
   ],
 };
@@ -131,6 +131,34 @@ test("a cause only considers its own builds", () => {
   });
 });
 
+test("a repeated test name only routes when the first occurrence is the eligible one", () => {
+  const eligible = groundedRun.test_cases[0];
+  const retriedPass = { ...eligible, status: "passed" as const, ai_analysis: undefined };
+
+  // The detail page opens the first occurrence, so a shadowed eligible retry is
+  // unreachable and must not be advertised.
+  assert.equal(
+    causalGroupFixTarget(firstGroup, [{ ...groundedRun, test_cases: [retriedPass, eligible] }]),
+    null,
+  );
+  assert.deepEqual(causalGroupFixTarget(firstGroup, [{ ...groundedRun, test_cases: [eligible, retriedPass] }]), {
+    buildID: "208060",
+    testName: "fails",
+  });
+});
+
+test("an occurrence hidden from the ledger still shadows the routing target", () => {
+  const eligible = groundedRun.test_cases[0];
+  const skipped = { ...eligible, status: "skipped" as const, ai_analysis: undefined };
+
+  // executedResultTests drops skipped cases, but the detail page does not, so
+  // eligibility must be judged against the raw occurrence order.
+  assert.equal(
+    causalGroupFixTarget(firstGroup, [{ ...groundedRun, test_cases: [skipped, eligible] }]),
+    null,
+  );
+});
+
 test("a single-build cause still gets the per-test fix route", () => {
   const singleBuild: PatternCausalGroup = { builds: ["209114"], root_cause: "second", confidence: "medium" };
   assert.deepEqual(causalGroupFixTarget(singleBuild, [{ ...groundedRun, build_id: "209114" }]), {
@@ -146,8 +174,8 @@ test("fix routing sits with each cause and stays behind the chat capabilities", 
   assert.match(banner, /const fixCapable = Boolean\(features\.analysis_chat && features\.junit_chat_fix\)/);
   assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupFixRouting jobID=\{jobID\} target=\{causalFixTargets\[index\]\} \/>/);
   assert.match(routing, /testRunPath\(jobID, target\.testName, target\.buildID\)/);
-  assert.match(routing, /Start a Fix investigation/);
-  assert.match(routing, /No failed test in these builds has a verified source path/);
+  assert.match(routing, /Open test for Fix investigation/);
+  assert.match(routing, /No failed JUnit test in these builds meets the Fix investigation requirements/);
 });
 
 test("the pattern-level panel is a fallback for causes with no eligible test", () => {
@@ -159,7 +187,7 @@ test("the pattern-level panel is a fallback for causes with no eligible test", (
   assert.ok(banner.indexOf("<PatternFixGuidance") < banner.indexOf("<AnalysisChat"));
   assert.equal(banner.match(/<PatternFixGuidance/g)?.length, 1);
   assert.match(guidance, /Fix investigation unavailable/);
-  assert.match(guidance, /No failed test in the affected builds has a verified source path/);
+  assert.match(guidance, /No failed JUnit test in the affected builds meets the Fix investigation requirements/);
   assert.match(guidance, /View failed tests/);
   assert.match(guidance, /jobRunPath\(jobID, buildID\)/);
   assert.match(guidance, /to=\{destination\}/);

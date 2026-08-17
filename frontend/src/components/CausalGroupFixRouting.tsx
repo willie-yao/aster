@@ -20,7 +20,7 @@ export function CausalGroupFixRouting({
   if (!target) {
     return (
       <Typography color="text.secondary" sx={{ mt: 1, ...overviewTypography.description }}>
-        No failed test in these builds has a verified source path, so a Fix investigation cannot start from this cause.
+        No failed JUnit test in these builds meets the Fix investigation requirements, so no Fix investigation can start from this cause.
       </Typography>
     );
   }
@@ -30,7 +30,7 @@ export function CausalGroupFixRouting({
       <Link
         component={RouterLink}
         to={testRunPath(jobID, target.testName, target.buildID)}
-        aria-label={`Start a Fix investigation from ${target.testName} in build ${target.buildID}`}
+        aria-label={`Open ${target.testName} in build ${target.buildID} for Fix investigation`}
         underline="none"
         sx={{
           minHeight: { xs: 44, sm: 32 },
@@ -49,7 +49,7 @@ export function CausalGroupFixRouting({
           },
         }}
       >
-        Start a Fix investigation
+        Open test for Fix investigation
       </Link>
       <Typography color="text.secondary" sx={{ mt: 0.5, ...overviewTypography.description }}>
         {target.testName} in build {target.buildID}

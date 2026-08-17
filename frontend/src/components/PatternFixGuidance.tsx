@@ -68,7 +68,7 @@ export function PatternFixGuidance({ jobID, buildID }: { jobID: string; buildID:
           </Typography>
           <Typography color="text.secondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
             This recurring result contains multiple causes, so it cannot produce one shared issue or Fix PR.
-            No failed test in the affected builds has a verified source path yet, so no cause can start one either.
+            No failed JUnit test in the affected builds meets the Fix investigation requirements yet, so no cause can start one either.
           </Typography>
           <Button
             component={RouterLink}

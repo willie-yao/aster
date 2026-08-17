@@ -398,8 +398,9 @@ state inside each causal group card rather than once per pattern. The UI reports
 why an operation cannot start instead of showing a pending-looking default:
 
 - Capability disabled or unauthenticated deploy: **Unavailable**, with no
-  control. A published non-default verdict still renders, so disabling the
-  capability does not hide an earlier real result.
+  control. Only terminal verdicts survive the capability being off, so a real
+  earlier result is still shown while a state that could only advance through
+  the operation is not left looking pending.
 - Causal group covering fewer than two builds: **Not eligible**, matching the
   `>= 2` gate in `validate.go`, `resolver.go`, and
   `models.WithDefaultPatternRemediationInvestigations`. The card instead links to
