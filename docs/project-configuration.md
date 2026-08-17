@@ -265,8 +265,9 @@ The contract is deliberately narrow:
   maintainers looking at the same failure do not each pay for an analysis.
 - **A failed escalation can be retried.** A provider error, a timeout, or a
   restart that interrupted queued work leaves the failure retryable rather than
-  permanently un-analyzable. Replaying the same request key still returns the
-  original outcome instead of starting new work.
+  permanently un-analyzable, and the dashboard offers a retry in place. Replaying
+  the same request key returns the subject's current state instead of starting
+  new work.
 - **The model never issues the pull request verdict.** It runs the ordinary
   agentic failure analysis under a separate module, gated by the same critique
   and judge rules, and is told explicitly not to claim the change caused the
@@ -277,7 +278,9 @@ The contract is deliberately narrow:
 - **Results are private and bounded.** They are stored in
   `pr_escalation_state.json`, which is never published, retained under a cap,
   and restored after a restart. An escalation that was in flight when the
-  process stopped comes back as never started rather than stuck running.
+  process stopped is never restored as running: it comes back as whatever
+  terminal state was last persisted for that failure, or as never started, and
+  either way it can be escalated again.
 
 ## Categories
 

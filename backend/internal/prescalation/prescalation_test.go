@@ -310,6 +310,17 @@ func (b *blockingResolver) Resolve(ctx context.Context, _ Ref) (Resolved, error)
 	return Resolved{}, ctx.Err()
 }
 
+// swallowingResolver reports success from a cancelled context, as the real
+// resolver can: a missing finished.json reads as a pending build, and a failed
+// changed-file listing is discarded because change context is optional.
+type swallowingResolver struct{ entered chan struct{} }
+
+func (s *swallowingResolver) Resolve(ctx context.Context, ref Ref) (Resolved, error) {
+	close(s.entered)
+	<-ctx.Done()
+	return Resolved{Ref: ref}, nil
+}
+
 // Resolution reads the artifact bucket and GitHub, so it is part of the
 // accepted lifetime rather than an unbounded prelude to it. Anything that ends
 // that lifetime must reach a request that is still resolving, or the admission
@@ -327,8 +338,9 @@ func TestResolutionObservesTheAcceptedLifetime(t *testing.T) {
 	t.Run("the escalation deadline bounds resolution", func(t *testing.T) {
 		service := newService(t, newBlockingResolver(), newFakeRunner(),
 			Options{Timeout: 50 * time.Millisecond})
-		if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); err == nil {
-			t.Fatal("want an error once the accepted lifetime expires")
+		_, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1")
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want the expired budget as the cause", err)
 		}
 		assertDrains(t, service)
 	})
@@ -345,24 +357,42 @@ func TestResolutionObservesTheAcceptedLifetime(t *testing.T) {
 			<-resolver.entered
 			cancel()
 		}()
-		if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); err == nil {
-			t.Fatal("want an error once the service is shutting down")
+		if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want the shutdown as the cause", err)
 		}
 		assertDrains(t, service)
 	})
 
+	// The caller's own deadline must survive as its own cause: the handler maps
+	// a timeout and a cancellation to different statuses.
 	t.Run("a departed caller cancels resolution", func(t *testing.T) {
 		resolver := newBlockingResolver()
 		service := newService(t, resolver, newFakeRunner(), Options{})
-		callerCtx, cancelCaller := context.WithCancel(context.Background())
-		go func() {
-			<-resolver.entered
-			cancelCaller()
-		}()
-		if _, err := service.Start(callerCtx, testRef("TestA"), "octocat", "req-1"); err == nil {
-			t.Fatal("want an error once the caller goes away")
+		callerCtx, cancelCaller := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancelCaller()
+		if _, err := service.Start(callerCtx, testRef("TestA"), "octocat", "req-1"); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want the caller's deadline as the cause", err)
 		}
 		assertDrains(t, service)
+	})
+
+	// A resolver that discards a cancellation must not be able to launch an
+	// analysis the requester is no longer waiting for.
+	t.Run("a swallowed cancellation still stops the escalation", func(t *testing.T) {
+		runner := newFakeRunner()
+		service := newService(t, &swallowingResolver{entered: make(chan struct{})}, runner,
+			Options{Timeout: 50 * time.Millisecond})
+		ref := testRef("TestA")
+		if _, err := service.Start(context.Background(), ref, "octocat", "req-1"); err == nil {
+			t.Fatal("want an error rather than a record built from a cut-off resolution")
+		}
+		assertDrains(t, service)
+		if view, _ := service.Get(ref); view.State != StateNotStarted {
+			t.Errorf("state = %q, want not_started", view.State)
+		}
+		if got := atomic.LoadInt32(&runner.maxSeen); got != 0 {
+			t.Errorf("runs = %d, want the cut-off resolution never to reach the runner", got)
+		}
 	})
 }
 
@@ -513,6 +543,12 @@ func TestCompletedResultsSurviveRestart(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	waitForState(t, service, testRef("TestA"), StateComplete)
+	// The state is visible before persistence completes, so drain first.
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer waitCancel()
+	if err := service.Wait(waitCtx); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
 
 	restarted := newService(t, &fakeResolver{}, newFakeRunner(), Options{Store: store})
 	view, err := restarted.Get(testRef("TestA"))

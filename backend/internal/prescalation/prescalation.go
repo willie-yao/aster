@@ -227,7 +227,7 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 			return View{}, ErrIdempotencyConflict
 		}
 		// The same key for the same subject is a replay of one request, so it
-		// returns that request's outcome rather than starting new work.
+		// returns the subject's current state rather than starting new work.
 		replay = true
 	}
 	if existing := s.records[identity]; existing != nil && (replay || !retryable(existing)) {
@@ -271,7 +271,20 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	resolved, err := s.resolver.Resolve(resolveCtx, ref)
 	stopPropagation()
 	cancelResolve()
-	if err != nil {
+	// A resolver can report success from partial reads: a missing finished.json
+	// reads as a pending build, and the changed-file lister is optional. So the
+	// budget and the caller are checked directly rather than trusted to surface
+	// as an error, or a cut-off resolution would launch an analysis. They are
+	// checked first because an expired budget is the operative fact, and
+	// because they carry the cause the operator needs.
+	switch {
+	case lifetime.Err() != nil:
+		release()
+		return View{}, lifetime.Err()
+	case ctx.Err() != nil:
+		release()
+		return View{}, ctx.Err()
+	case err != nil:
 		release()
 		return View{}, err
 	}
