@@ -245,6 +245,32 @@ test("failing counts name their units instead of an ambiguous ratio", () => {
   assert.match(ledger, /failing_tests === 1 \? "test" : "tests"/);
 });
 
+test("the whole ledger row is one clickable target", () => {
+  const ledger = source("src/components/PullRequestLedger.tsx");
+
+  // A stretched pseudo-element covers the row, so the row must establish the
+  // containing block for it.
+  assert.equal(ledger.match(/position: "relative"/g)?.length, 2);
+  assert.match(ledger, /"&::after": \{[\s\S]*?position: "absolute"[\s\S]*?inset: 0/);
+  assert.match(ledger, /cursor: "pointer"/);
+  // One link per row keeps the accessibility tree clean, and its name carries
+  // the title rather than a bare number.
+  assert.match(ledger, /aria-label=\{`Pull request \$\{pull\.number\}: \$\{pull\.title \|\| "Untitled"\}`\}/);
+  assert.equal(ledger.match(/component=\{RouterLink\}/g)?.length, 1);
+  assert.match(ledger, /"&:focus-visible::after"/);
+});
+
+test("a failing test only becomes a disclosure when there is output to reveal", () => {
+  const detail = source("src/pages/PullRequestDetailPage.tsx");
+
+  assert.match(detail, /const body = failure\.failure_body\?\.trim\(\)/);
+  assert.match(detail, /\{body \? \(/);
+  assert.match(detail, /aria-expanded=\{open\}/);
+  assert.match(detail, /aria-controls=\{bodyID\}/);
+  assert.match(detail, /\{open \? "Hide output" : "Show output"\}/);
+  assert.match(detail, /\{body && open && \(/);
+});
+
 test("outbound pull request links cannot reach the opener", () => {
   const detail = source("src/pages/PullRequestDetailPage.tsx");
   const externalLinks = detail.match(/target="_blank"/g) ?? [];

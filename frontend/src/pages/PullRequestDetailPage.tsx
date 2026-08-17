@@ -1,9 +1,11 @@
+import ExpandMore from "@mui/icons-material/ExpandMore";
 import OpenInNew from "@mui/icons-material/OpenInNew";
 import Box from "@mui/material/Box";
 import Breadcrumbs from "@mui/material/Breadcrumbs";
 import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
+import { useId, useState } from "react";
 import { Link as RouterLink, useParams } from "react-router-dom";
 import { DetailSectionBand } from "../components/DetailSectionBand";
 import { ErrorState } from "../components/ErrorState";
@@ -86,40 +88,131 @@ function OptionalBadge() {
   );
 }
 
+// FailureItem reveals the full failure output on demand. It is only a
+// disclosure when there is a body to reveal, so a click never does nothing.
 function FailureItem({ failure }: { failure: TestCase }) {
-  return (
-    <Box sx={{ minWidth: 0, px: { xs: 1.5, sm: 2 }, py: 1.25, borderTop: "1px solid", borderColor: "divider" }}>
+  const [open, setOpen] = useState(false);
+  const body = failure.failure_body?.trim();
+  const bodyID = `failure-body-${useId()}`;
+
+  const heading = (
+    <>
       <Typography
         title={failure.name}
-        sx={{
-          overflowWrap: "anywhere",
-          color: "text.primary",
-          ...overviewTypography.jobIdentifier,
-        }}
+        sx={{ minWidth: 0, overflowWrap: "anywhere", color: "text.primary", ...overviewTypography.jobIdentifier }}
       >
         {failure.name}
       </Typography>
-      {failure.failure_message && (
+      {body && (
         <Box
-          component="pre"
           sx={{
-            m: 0,
-            mt: 1,
-            p: 1.5,
-            borderRadius: "4px",
-            bgcolor: (theme) => soft(theme, "error", 0.08),
-            color: "error.main",
-            fontFamily: "monospace",
-            fontSize: "0.75rem",
-            lineHeight: 1.6,
-            whiteSpace: "pre-wrap",
-            overflowX: "auto",
-            maxHeight: 220,
+            display: "flex",
+            alignItems: "center",
+            gap: 0.25,
+            flexShrink: 0,
+            color: "text.secondary",
+            ...overviewTypography.description,
           }}
         >
-          {failure.failure_message}
+          {open ? "Hide output" : "Show output"}
+          <ExpandMore
+            sx={{
+              fontSize: 18,
+              transition: "transform 140ms ease",
+              transform: open ? "rotate(180deg)" : "none",
+            }}
+          />
         </Box>
       )}
+    </>
+  );
+
+  return (
+    <Box sx={{ minWidth: 0, borderTop: "1px solid", borderColor: "divider" }}>
+      {body ? (
+        <Box
+          component="button"
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          aria-controls={bodyID}
+          sx={{
+            width: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 1.5,
+            px: { xs: 1.5, sm: 2 },
+            py: 1.25,
+            border: "none",
+            bgcolor: "transparent",
+            textAlign: "left",
+            font: "inherit",
+            color: "inherit",
+            cursor: "pointer",
+            transition: "background-color 140ms ease",
+            "&:hover": { bgcolor: "surface.containerHigh" },
+            "&:focus-visible": {
+              outline: "2px solid",
+              outlineColor: "primary.main",
+              outlineOffset: -2,
+            },
+          }}
+        >
+          {heading}
+        </Box>
+      ) : (
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, px: { xs: 1.5, sm: 2 }, py: 1.25 }}>
+          {heading}
+        </Box>
+      )}
+
+      <Box sx={{ px: { xs: 1.5, sm: 2 }, pb: failure.failure_message || (body && open) ? 1.5 : 0 }}>
+        {failure.failure_message && (
+          <Box
+            component="pre"
+            sx={{
+              m: 0,
+              p: 1.5,
+              borderRadius: "4px",
+              bgcolor: (theme) => soft(theme, "error", 0.08),
+              color: "error.main",
+              fontFamily: "monospace",
+              fontSize: "0.75rem",
+              lineHeight: 1.6,
+              whiteSpace: "pre-wrap",
+              overflowX: "auto",
+              maxHeight: 220,
+            }}
+          >
+            {failure.failure_message}
+          </Box>
+        )}
+        {body && open && (
+          <Box
+            id={bodyID}
+            component="pre"
+            sx={{
+              m: 0,
+              mt: failure.failure_message ? 1 : 0,
+              p: 1.5,
+              borderRadius: "4px",
+              bgcolor: "surface.containerHigh",
+              color: "text.primary",
+              fontFamily: "monospace",
+              fontSize: "0.75rem",
+              lineHeight: 1.6,
+              whiteSpace: "pre-wrap",
+              overflowX: "auto",
+              maxHeight: 420,
+              border: "1px solid",
+              borderColor: "divider",
+            }}
+          >
+            {body}
+          </Box>
+        )}
+      </Box>
     </Box>
   );
 }

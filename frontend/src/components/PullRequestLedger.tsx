@@ -35,24 +35,35 @@ function failingValue(pull: PullRequestSummary): string {
   return `${jobs} · ${pull.failing_tests} ${pull.failing_tests === 1 ? "test" : "tests"}`;
 }
 
+// PullLink stretches over its row so the whole row is clickable. The visible
+// text stays the pull number, and the accessible name carries the title so the
+// row target is not announced as a bare number.
 function PullLink({ pull, compact }: { pull: PullRequestSummary; compact: boolean }) {
   return (
     <Link
       component={RouterLink}
       to={pullRequestPath(pull.number)}
       underline="none"
-      title={`#${pull.number}`}
+      aria-label={`Pull request ${pull.number}: ${pull.title || "Untitled"}`}
       sx={{
+        position: "static",
         minHeight: compact ? 44 : 0,
         display: compact ? "inline-flex" : "block",
         alignItems: compact ? "center" : undefined,
         color: "text.primary",
         ...overviewTypography.jobIdentifier,
         "&:hover": { color: "primary.main", textDecoration: "underline" },
-        "&:focus-visible": {
+        // Cover the row so any point in it activates this link.
+        "&::after": {
+          content: '""',
+          position: "absolute",
+          inset: 0,
+          zIndex: 1,
+        },
+        "&:focus-visible::after": {
           outline: "2px solid",
           outlineColor: "primary.main",
-          outlineOffset: 1,
+          outlineOffset: -2,
         },
       }}
     >
@@ -114,6 +125,7 @@ function DesktopRow({ pull }: { pull: PullRequestSummary }) {
     <Box
       role="row"
       sx={{
+        position: "relative",
         minHeight: overviewLayout.ledgerRowMinHeight,
         display: "grid",
         gridTemplateColumns: compactColumns,
@@ -125,6 +137,7 @@ function DesktopRow({ pull }: { pull: PullRequestSummary }) {
         borderBottom: "1px solid",
         borderColor: "divider",
         bgcolor: "surface.container",
+        cursor: "pointer",
         transition: "background-color 140ms ease",
         "&:hover": { bgcolor: "surface.containerHigh" },
         "&:focus-within": { boxShadow: "inset 2px 0 0 var(--mui-palette-primary-main)" },
@@ -172,6 +185,7 @@ function MobileRow({ pull }: { pull: PullRequestSummary }) {
     <Box
       role="listitem"
       sx={{
+        position: "relative",
         display: "grid",
         gridTemplateColumns: "minmax(0, 1fr) auto",
         gridTemplateAreas: '"pull state" "title title" "meta meta"',
@@ -183,6 +197,7 @@ function MobileRow({ pull }: { pull: PullRequestSummary }) {
         borderBottom: "1px solid",
         borderColor: "divider",
         bgcolor: "surface.container",
+        cursor: "pointer",
         transition: "background-color 140ms ease",
         "&:hover": { bgcolor: "surface.containerHigh" },
         "&:focus-within": { boxShadow: "inset 2px 0 0 var(--mui-palette-primary-main)" },
