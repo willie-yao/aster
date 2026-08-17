@@ -15,18 +15,25 @@ import { StatusChip } from "../components/StatusChip";
 import { usePullRequestDetail } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import {
+  attributionLabel,
+  attributionTone,
   checkState,
   checkStatusLabel,
   checkSummaryLine,
   shortSHA,
   staleCheckCount,
+  unexplainedCount,
 } from "../lib/pullRequests";
 import { jobPath, pullRequestsPath } from "../lib/routes";
 import { formatDuration } from "../lib/utils";
 import { soft } from "../theme";
 import { overviewTypography } from "../theme/overview";
-import type { PullRequestCheck, PullRequestDetail } from "../types/pullRequests";
-import type { TestCase } from "../types/dashboard";
+import type {
+  FailureAttribution,
+  PullRequestCheck,
+  PullRequestDetail,
+  PullRequestFailure,
+} from "../types/pullRequests";
 
 function formatTimestamp(value: string | undefined): string {
   if (!value) return "Not available";
@@ -88,9 +95,57 @@ function OptionalBadge() {
   );
 }
 
+// AttributionBanner states what the observed baseline says about a failure. It
+// leads the failure body because "already failing on main" changes whether the
+// rest is worth reading.
+function AttributionBanner({ attribution }: { attribution: FailureAttribution }) {
+  const tone = attributionTone(attribution.verdict);
+  const neutral = tone === "default";
+  return (
+    <Box
+      sx={{
+        mt: 1,
+        p: 1.25,
+        borderRadius: "4px",
+        border: "1px solid",
+        borderColor: neutral ? "divider" : (theme) => soft(theme, tone, 0.24),
+        bgcolor: neutral ? "surface.containerHigh" : (theme) => soft(theme, tone, 0.08),
+      }}
+    >
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flexWrap: "wrap" }}>
+        <Typography
+          component="span"
+          sx={{
+            color: neutral ? "text.secondary" : `${tone}.main`,
+            ...overviewTypography.tableHeading,
+            fontWeight: 700,
+          }}
+        >
+          {attributionLabel(attribution.verdict)}
+        </Typography>
+        <Typography component="span" color="text.secondary" sx={overviewTypography.description}>
+          {attribution.confidence} confidence
+        </Typography>
+      </Box>
+      <Typography color="text.primary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
+        {attribution.summary}
+      </Typography>
+      {attribution.evidence?.map((item, index) => (
+        <Typography
+          key={`${item.kind}-${index}`}
+          color="text.secondary"
+          sx={{ mt: 0.5, ...overviewTypography.description }}
+        >
+          {item.detail}
+        </Typography>
+      ))}
+    </Box>
+  );
+}
+
 // FailureItem reveals the full failure output on demand. It is only a
 // disclosure when there is a body to reveal, so a click never does nothing.
-function FailureItem({ failure }: { failure: TestCase }) {
+function FailureItem({ failure }: { failure: PullRequestFailure }) {
   const [open, setOpen] = useState(false);
   const body = failure.failure_body?.trim();
   const bodyID = `failure-body-${useId()}`;
@@ -167,12 +222,14 @@ function FailureItem({ failure }: { failure: TestCase }) {
         </Box>
       )}
 
-      <Box sx={{ px: { xs: 1.5, sm: 2 }, pb: failure.failure_message || (body && open) ? 1.5 : 0 }}>
+      <Box sx={{ px: { xs: 1.5, sm: 2 }, pb: 1.5 }}>
+        {failure.attribution && <AttributionBanner attribution={failure.attribution} />}
         {failure.failure_message && (
           <Box
             component="pre"
             sx={{
               m: 0,
+              mt: 1,
               p: 1.5,
               borderRadius: "4px",
               bgcolor: (theme) => soft(theme, "error", 0.08),
@@ -340,9 +397,11 @@ function CheckCard({ check, linkToJob }: { check: PullRequestCheck; linkToJob: b
 function ChecksSection({ detail, linkToJob }: { detail: PullRequestDetail; linkToJob: boolean }) {
   const failing = detail.checks.filter((check) => checkState(check) === "FAILING");
   const stale = staleCheckCount(detail.checks);
+  const unexplained = unexplainedCount(detail.checks);
   const metadata = [
     `${detail.checks.length} observed`,
     failing.length > 0 ? `${failing.length} failing` : null,
+    unexplained > 0 ? `${unexplained} needing investigation` : null,
     stale > 0 ? `${stale} stale` : null,
   ]
     .filter(Boolean)

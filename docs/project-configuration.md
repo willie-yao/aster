@@ -192,12 +192,31 @@ pull requests that are no longer open.
 
 A few behaviors worth knowing:
 
+- Each failing test carries a deterministic **attribution** that compares it
+  against observed results. No verdict claims a pull request caused a failure,
+  because comparing observations can rule a pull request out but cannot rule one
+  in. The verdicts are:
+
+  | Verdict | Meaning |
+  | --- | --- |
+  | `pre_existing` | The same test is already failing on the base branch. |
+  | `widespread` | The same job and test is failing on other open pull requests. |
+  | `known_flake` | Flakiness history already classifies the test as flaky. |
+  | `unexplained` | Nothing observed rules the pull request out, so it needs investigation. |
+  | `inconclusive` | No base-branch data was available to compare against. |
+
+  Attribution runs with no model calls. It reuses the base-branch job details and
+  flakiness report the same pass already produced, so it costs nothing per
+  failure. Cross-pull-request matching keys on job **and** test name, because a
+  build-level failure carries the same generic name on every job and matching by
+  name alone would correlate unrelated jobs.
 - A check whose build tested an older head than the pull request's current head
   is marked `stale`, so a green check on outdated code is not mistaken for a
   green check on the current one.
 - A job that fails without any failing JUnit case, such as a build or verify
   step, reports one synthesized `Prow job execution` failure so every failing
-  check names a subject.
+  check names a subject. Those failures are never compared against the base
+  branch by name, only against the same job on other pull requests.
 - A pull request whose builds have aged out of the bucket's retention window
   reports `UNKNOWN` with no checks. GitHub may still show statuses for those
   runs because commit statuses outlive the artifacts.

@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 
 import {
+  attributionLabel,
+  attributionTone,
   checkState,
   checkStatusLabel,
   checkSummaryLine,
@@ -12,14 +14,18 @@ import {
   pullRequestStateCounts,
   pullRequestStateFromParam,
   shortSHA,
+  needsInvestigation,
   staleCheckCount,
+  unexplainedCount,
   withPullRequestState,
 } from "../src/lib/pullRequests.js";
 import { pullRequestPath, pullRequestsPath } from "../src/lib/routes.js";
 import { pageTitleForPath } from "../src/lib/pageMetadata.js";
 import type {
+  AttributionVerdict,
   PullRequestCIState,
   PullRequestCheck,
+  PullRequestFailure,
   PullRequestSummary,
 } from "../src/types/pullRequests.js";
 
@@ -269,6 +275,77 @@ test("a failing test only becomes a disclosure when there is output to reveal", 
   assert.match(detail, /aria-controls=\{bodyID\}/);
   assert.match(detail, /\{open \? "Hide output" : "Show output"\}/);
   assert.match(detail, /\{body && open && \(/);
+});
+
+function attributed(verdict: AttributionVerdict | undefined): PullRequestFailure {
+  const base: PullRequestFailure = { name: "TestA", status: "failed", duration_seconds: 0 };
+  if (!verdict) return base;
+  return { ...base, attribution: { verdict, confidence: "high", summary: "" } };
+}
+
+test("verdict labels never assert that a pull request caused a failure", () => {
+  const labels: AttributionVerdict[] = [
+    "pre_existing",
+    "widespread",
+    "known_flake",
+    "unexplained",
+    "inconclusive",
+  ];
+  for (const verdict of labels) {
+    const label = attributionLabel(verdict);
+    assert.ok(label.length > 0, verdict);
+    assert.doesNotMatch(label, /caused|broke|your fault/i, verdict);
+  }
+  assert.equal(attributionLabel("pre_existing"), "Already failing on base");
+  assert.equal(attributionLabel("widespread"), "Not this PR");
+  assert.equal(attributionLabel("unexplained"), "Needs investigation");
+});
+
+test("verdicts that rule the pull request out are not styled as errors", () => {
+  assert.equal(attributionTone("pre_existing"), "info");
+  assert.equal(attributionTone("widespread"), "info");
+  assert.equal(attributionTone("known_flake"), "warning");
+  assert.equal(attributionTone("unexplained"), "error");
+  assert.equal(attributionTone("inconclusive"), "default");
+});
+
+test("only failures the baseline could not rule out need investigation", () => {
+  assert.equal(needsInvestigation(attributed("unexplained")), true);
+  assert.equal(needsInvestigation(attributed("inconclusive")), true);
+  assert.equal(needsInvestigation(attributed("pre_existing")), false);
+  assert.equal(needsInvestigation(attributed("widespread")), false);
+  assert.equal(needsInvestigation(attributed("known_flake")), false);
+  // An unattributed failure has not been ruled out, so it still counts.
+  assert.equal(needsInvestigation(attributed(undefined)), true);
+});
+
+test("the investigation count sums across every check", () => {
+  const checks: PullRequestCheck[] = [
+    {
+      job_name: "a", job_id: "a", build_id: "1", passed: false, started: "",
+      failures: [attributed("unexplained"), attributed("pre_existing")],
+    },
+    {
+      job_name: "b", job_id: "b", build_id: "2", passed: false, started: "",
+      failures: [attributed("widespread"), attributed("inconclusive")],
+    },
+    { job_name: "c", job_id: "c", build_id: "3", passed: true, started: "" },
+  ];
+  assert.equal(unexplainedCount(checks), 2);
+  assert.equal(unexplainedCount([]), 0);
+});
+
+test("the attribution banner leads each failure and cites its evidence", () => {
+  const detail = source("src/pages/PullRequestDetailPage.tsx");
+
+  assert.match(detail, /function AttributionBanner/);
+  assert.match(detail, /\{failure\.attribution && <AttributionBanner/);
+  assert.match(detail, /attribution\.evidence\?\.map/);
+  assert.match(detail, /\{attribution\.confidence\} confidence/);
+  // The banner precedes the failure output so a ruled-out failure reads first.
+  assert.ok(
+    detail.indexOf("<AttributionBanner") < detail.indexOf("{failure.failure_message &&"),
+  );
 });
 
 test("outbound pull request links cannot reach the opener", () => {

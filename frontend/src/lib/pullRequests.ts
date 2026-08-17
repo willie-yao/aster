@@ -1,6 +1,8 @@
 import type {
+  AttributionVerdict,
   PullRequestCIState,
   PullRequestCheck,
+  PullRequestFailure,
   PullRequestSummary,
 } from "../types/pullRequests";
 
@@ -121,4 +123,59 @@ export function checkSummaryLine(check: PullRequestCheck): string {
 // request's current one.
 export function staleCheckCount(checks: PullRequestCheck[]): number {
   return checks.filter((check) => check.stale).length;
+}
+
+// attributionLabel is the short chip text for a verdict. The wording avoids
+// asserting that a pull request caused a failure, because the deterministic
+// pass compares observations and cannot establish causation.
+export function attributionLabel(verdict: AttributionVerdict): string {
+  switch (verdict) {
+    case "pre_existing":
+      return "Already failing on base";
+    case "widespread":
+      return "Not this PR";
+    case "known_flake":
+      return "Known flake";
+    case "unexplained":
+      return "Needs investigation";
+    default:
+      return "Inconclusive";
+  }
+}
+
+// attributionTone maps a verdict to the palette the dashboard already uses for
+// severity. Verdicts that rule the pull request out are informational.
+export function attributionTone(
+  verdict: AttributionVerdict,
+): "info" | "warning" | "error" | "default" {
+  switch (verdict) {
+    case "pre_existing":
+    case "widespread":
+      return "info";
+    case "known_flake":
+      return "warning";
+    case "unexplained":
+      return "error";
+    default:
+      return "default";
+  }
+}
+
+// needsInvestigation reports whether a failure was left for a human, which is
+// what the pull request ledger counts.
+export function needsInvestigation(failure: PullRequestFailure): boolean {
+  const verdict = failure.attribution?.verdict;
+  return verdict === undefined || verdict === "unexplained" || verdict === "inconclusive";
+}
+
+// unexplainedCount totals the failures across checks that the baseline could
+// not rule out.
+export function unexplainedCount(checks: PullRequestCheck[]): number {
+  let total = 0;
+  for (const check of checks) {
+    for (const failure of check.failures ?? []) {
+      if (needsInvestigation(failure)) total += 1;
+    }
+  }
+  return total;
 }

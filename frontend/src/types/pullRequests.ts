@@ -20,6 +20,37 @@ export interface PullRequestSummary {
   failing_tests: number;
 }
 
+// AttributionVerdict explains whether a failure is specific to a pull request,
+// mirroring models.AttributionVerdict. No verdict asserts causation.
+export type AttributionVerdict =
+  | "pre_existing"
+  | "widespread"
+  | "known_flake"
+  | "unexplained"
+  | "inconclusive";
+
+export type AttributionConfidence = "high" | "medium" | "low";
+
+export interface AttributionEvidence {
+  kind: string;
+  detail: string;
+  job_id?: string;
+  test_name?: string;
+}
+
+export interface FailureAttribution {
+  verdict: AttributionVerdict;
+  confidence: AttributionConfidence;
+  summary: string;
+  evidence?: AttributionEvidence[];
+}
+
+// PullRequestFailure is one failing case with its deterministic attribution.
+// TestCase fields are inlined by the backend, so they stay at the top level.
+export interface PullRequestFailure extends TestCase {
+  attribution?: FailureAttribution;
+}
+
 export interface PullRequestCheck {
   job_name: string;
   job_id: string;
@@ -36,7 +67,7 @@ export interface PullRequestCheck {
   web_url?: string;
   build_log_url?: string;
   tests_failed?: number;
-  failures?: TestCase[];
+  failures?: PullRequestFailure[];
   // Set when the per-check storage cap dropped some failing cases.
   failures_truncated?: boolean;
 }

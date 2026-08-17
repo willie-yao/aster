@@ -632,6 +632,70 @@ type PullRequestSummary struct {
 	FailingTests int `json:"failing_tests"`
 }
 
+// AttributionVerdict explains whether a pull request failure is specific to
+// that pull request. Verdicts are derived from observed results only, so none
+// of them asserts that a pull request caused a failure.
+type AttributionVerdict string
+
+const (
+	// AttributionPreExisting means the same test is failing on the base branch,
+	// so the pull request did not introduce it.
+	AttributionPreExisting AttributionVerdict = "pre_existing"
+	// AttributionWidespread means the same job and test is failing on other open
+	// pull requests at the same time.
+	AttributionWidespread AttributionVerdict = "widespread"
+	// AttributionKnownFlake means the test's own history classifies it flaky
+	// independently of this pull request.
+	AttributionKnownFlake AttributionVerdict = "known_flake"
+	// AttributionUnexplained means no observed baseline explains the failure. It
+	// marks the failure as worth investigating, not as caused by the pull request.
+	AttributionUnexplained AttributionVerdict = "unexplained"
+	// AttributionInconclusive means there was not enough observed data to judge.
+	AttributionInconclusive AttributionVerdict = "inconclusive"
+)
+
+// Attribution confidence levels.
+const (
+	AttributionConfidenceHigh   = "high"
+	AttributionConfidenceMedium = "medium"
+	AttributionConfidenceLow    = "low"
+)
+
+// Attribution evidence kinds.
+const (
+	AttributionEvidenceBaseBranch  = "base_branch"
+	AttributionEvidenceOtherPulls  = "other_pull_requests"
+	AttributionEvidenceFlakiness   = "flakiness_history"
+	AttributionEvidenceNoBaseline  = "no_baseline"
+	AttributionEvidenceBuildFailer = "build_failure"
+)
+
+// AttributionEvidence is one observed fact supporting a verdict. Detail is
+// written for a maintainer to check the claim, not to persuade.
+type AttributionEvidence struct {
+	Kind   string `json:"kind"`
+	Detail string `json:"detail"`
+	// JobID and TestName point at the dashboard data backing the claim.
+	JobID    string `json:"job_id,omitempty"`
+	TestName string `json:"test_name,omitempty"`
+}
+
+// FailureAttribution is the deterministic judgment for one pull request failure.
+type FailureAttribution struct {
+	Verdict    AttributionVerdict    `json:"verdict"`
+	Confidence string                `json:"confidence"`
+	Summary    string                `json:"summary"`
+	Evidence   []AttributionEvidence `json:"evidence,omitempty"`
+}
+
+// PullRequestFailure is one failing case on a pull request check, with the
+// deterministic attribution attached. TestCase is embedded so the wire shape
+// keeps the fields every other failure surface already uses.
+type PullRequestFailure struct {
+	TestCase
+	Attribution *FailureAttribution `json:"attribution,omitempty"`
+}
+
 // PullRequestCheck is one presubmit job's newest observed build on a pull request.
 type PullRequestCheck struct {
 	JobName string `json:"job_name"`
@@ -652,8 +716,8 @@ type PullRequestCheck struct {
 	BuildLogURL string `json:"build_log_url,omitempty"`
 	// TestsFailed is the true failing-case count for the build. Failures holds
 	// at most PullRequestCheckFailureCap of them, so it can be shorter.
-	TestsFailed int        `json:"tests_failed,omitempty"`
-	Failures    []TestCase `json:"failures,omitempty"`
+	TestsFailed int                  `json:"tests_failed,omitempty"`
+	Failures    []PullRequestFailure `json:"failures,omitempty"`
 	// FailuresTruncated reports that the cap dropped some failing cases.
 	FailuresTruncated bool `json:"failures_truncated,omitempty"`
 }

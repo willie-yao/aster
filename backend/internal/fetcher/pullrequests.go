@@ -8,6 +8,7 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/output"
+	"github.com/willie-yao/aster/backend/internal/prattribution"
 	"github.com/willie-yao/aster/backend/internal/prtriage"
 )
 
@@ -22,8 +23,9 @@ func (p *pipeline) pullRequestsEnabled() bool {
 
 // refreshPullRequests rebuilds the pull request view and writes its output. It
 // reads presubmit definitions from the job catalog, so it must run after
-// discovery has populated one.
-func (p *pipeline) refreshPullRequests(ctx context.Context) error {
+// discovery has populated one. The refresh result supplies the base-branch
+// evidence that attribution compares each failure against.
+func (p *pipeline) refreshPullRequests(ctx context.Context, res *refreshResult) error {
 	if p.jobCatalog == nil {
 		return fmt.Errorf("job catalog unavailable, cannot resolve presubmits")
 	}
@@ -40,6 +42,12 @@ func (p *pipeline) refreshPullRequests(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var baseline prattribution.Baseline
+	if res != nil {
+		baseline = prattribution.BuildBaseline(res.details, res.flakiness)
+	}
+	prattribution.Annotate(details, baseline)
+
 	index.GeneratedAt = time.Now().UTC()
 	for i := range details {
 		details[i].GeneratedAt = index.GeneratedAt
@@ -54,11 +62,11 @@ func (p *pipeline) refreshPullRequests(ctx context.Context) error {
 // runPullRequestPass refreshes the pull request view without aborting the
 // surrounding pass. The dashboard must still publish when GitHub is
 // unreachable, so a failure keeps the previously written view.
-func (p *pipeline) runPullRequestPass(ctx context.Context) {
+func (p *pipeline) runPullRequestPass(ctx context.Context, res *refreshResult) {
 	if !p.pullRequestsEnabled() {
 		return
 	}
-	if err := p.refreshPullRequests(ctx); err != nil {
+	if err := p.refreshPullRequests(ctx, res); err != nil {
 		log.Printf("⚠ Pull request triage failed, keeping the previous view: %v", err)
 	}
 }

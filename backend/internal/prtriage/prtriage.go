@@ -226,7 +226,7 @@ func newestCheck(ctx context.Context, backend storage.Backend, pull ghpr.PullReq
 	// verify step. Stand in a build-level failure so the check still names a
 	// subject, matching how the job pipeline reports the same situation.
 	if failures.total == 0 && failures.complete && !failures.truncated {
-		failures.cases = []models.TestCase{models.NewProwJobExecutionFailure(info.DurationSeconds)}
+		failures.cases = []models.PullRequestFailure{{TestCase: models.NewProwJobExecutionFailure(info.DurationSeconds)}}
 		failures.total = 1
 	}
 	check.TestsFailed = failures.total
@@ -238,7 +238,7 @@ func newestCheck(ctx context.Context, backend storage.Backend, pull ghpr.PullReq
 // buildFailures is one build's failing cases plus the discovery status needed
 // to tell "no failures" apart from "failures could not be read".
 type buildFailures struct {
-	cases     []models.TestCase
+	cases     []models.PullRequestFailure
 	total     int
 	complete  bool
 	truncated bool
@@ -272,7 +272,7 @@ func failingCases(ctx context.Context, backend storage.Backend, loc prowbuild.Bu
 				continue
 			}
 			tc.FailureBody = textutil.Truncate(tc.FailureBody, maxFailureBodyBytes)
-			out.cases = append(out.cases, tc)
+			out.cases = append(out.cases, models.PullRequestFailure{TestCase: tc})
 		}
 	}
 	return out, nil

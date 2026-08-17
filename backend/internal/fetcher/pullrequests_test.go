@@ -31,7 +31,7 @@ func TestPullRequestsEnabled(t *testing.T) {
 
 func TestRefreshPullRequestsRequiresJobCatalog(t *testing.T) {
 	p := &pipeline{cfg: &project.Config{PullRequests: &project.PullRequests{Enabled: true}}}
-	if err := p.refreshPullRequests(context.Background()); err == nil {
+	if err := p.refreshPullRequests(context.Background(), nil); err == nil {
 		t.Fatal("want an error when no job catalog is available")
 	}
 }
@@ -40,7 +40,7 @@ func TestRefreshPullRequestsRequiresJobCatalog(t *testing.T) {
 // dashboard still publishes when GitHub or the catalog is unavailable.
 func TestRunPullRequestPassSwallowsFailures(t *testing.T) {
 	p := &pipeline{cfg: &project.Config{PullRequests: &project.PullRequests{Enabled: true}}}
-	p.runPullRequestPass(context.Background())
+	p.runPullRequestPass(context.Background(), nil)
 }
 
 func TestRunPullRequestPassSkipsWhenDisabled(t *testing.T) {
@@ -52,7 +52,7 @@ func TestRunPullRequestPassSkipsWhenDisabled(t *testing.T) {
 	}
 	t.Cleanup(func() { writePullRequestOutput = original })
 
-	(&pipeline{cfg: &project.Config{}}).runPullRequestPass(context.Background())
+	(&pipeline{cfg: &project.Config{}}).runPullRequestPass(context.Background(), nil)
 	if called {
 		t.Fatal("disabled triage must not write output")
 	}

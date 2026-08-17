@@ -331,7 +331,7 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 	if err != nil {
 		return nil, err
 	}
-	p.runPullRequestPass(fetchCtx)
+	p.runPullRequestPass(fetchCtx, res)
 	defer p.runShadowAnalysis(ctx, res)
 	defer p.runCausalCritic(fetchCtx, res)
 	if p.opts.SkipSideEffects {
