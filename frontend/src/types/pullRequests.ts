@@ -26,6 +26,7 @@ export type AttributionVerdict =
   | "pre_existing"
   | "widespread"
   | "known_flake"
+  | "touches_changed_code"
   | "unexplained"
   | "inconclusive";
 
@@ -36,6 +37,8 @@ export interface AttributionEvidence {
   detail: string;
   job_id?: string;
   test_name?: string;
+  // Repository-relative files the claim refers to.
+  paths?: string[];
 }
 
 export interface FailureAttribution {

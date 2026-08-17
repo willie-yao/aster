@@ -47,7 +47,7 @@ func observedBaseline(known ...string) Baseline {
 
 func annotateOne(t *testing.T, baseline Baseline, details []models.PullRequestDetail) *models.FailureAttribution {
 	t.Helper()
-	Annotate(details, baseline)
+	Annotate(details, baseline, Repository{}, nil)
 	got := details[0].Checks[0].Failures[0].Attribution
 	if got == nil {
 		t.Fatal("expected an attribution")
@@ -231,7 +231,7 @@ func TestAnnotateCoversEveryFailure(t *testing.T) {
 	details[0].Checks = append(details[0].Checks, models.PullRequestCheck{
 		JobName: "pull-project-verify", Failures: []models.PullRequestFailure{failure("TestC")},
 	})
-	Annotate(details, observedBaseline())
+	Annotate(details, observedBaseline(), Repository{}, nil)
 
 	for _, check := range details[0].Checks {
 		for _, f := range check.Failures {

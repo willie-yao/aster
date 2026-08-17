@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ghpr"
+	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/prattribution"
+	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/prtriage"
 )
 
@@ -46,7 +48,9 @@ func (p *pipeline) refreshPullRequests(ctx context.Context, res *refreshResult) 
 	if res != nil {
 		baseline = prattribution.BuildBaseline(res.details, res.flakiness)
 	}
-	prattribution.Annotate(details, baseline)
+	changes := p.pullRequestChanges(ctx, client, repo, details)
+	prattribution.Annotate(details, baseline,
+		prattribution.Repository{Owner: repo.Owner, Name: repo.Name}, changes)
 
 	index.GeneratedAt = time.Now().UTC()
 	for i := range details {
@@ -69,4 +73,30 @@ func (p *pipeline) runPullRequestPass(ctx context.Context, res *refreshResult) {
 	if err := p.refreshPullRequests(ctx, res); err != nil {
 		log.Printf("⚠ Pull request triage failed, keeping the previous view: %v", err)
 	}
+}
+
+// changedFileLister fetches one pull request's changed files. It is a seam for
+// tests and is satisfied by *ghpr.Client.
+type changedFileLister interface {
+	ChangedFiles(ctx context.Context, owner, repo string, number int) (ghpr.ChangedFileSet, error)
+}
+
+// pullRequestChanges fetches changed files only for pull requests that have a
+// failing check, because attribution is the only consumer and passing pull
+// requests would spend GitHub quota for nothing. A per-pull failure is logged
+// and skipped: without changed files attribution simply omits overlap.
+func (p *pipeline) pullRequestChanges(ctx context.Context, lister changedFileLister, repo project.SourceRepo, details []models.PullRequestDetail) map[int]prattribution.PullChanges {
+	changes := map[int]prattribution.PullChanges{}
+	for _, detail := range details {
+		if detail.ChecksFailing == 0 {
+			continue
+		}
+		set, err := lister.ChangedFiles(ctx, repo.Owner, repo.Name, detail.Number)
+		if err != nil {
+			log.Printf("    ⚠ pr #%d: listing changed files: %v", detail.Number, err)
+			continue
+		}
+		changes[detail.Number] = prattribution.NewPullChanges(set.Paths(), set.FilesTruncated)
+	}
+	return changes
 }

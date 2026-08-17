@@ -288,6 +288,7 @@ test("verdict labels never assert that a pull request caused a failure", () => {
     "pre_existing",
     "widespread",
     "known_flake",
+    "touches_changed_code",
     "unexplained",
     "inconclusive",
   ];
@@ -299,12 +300,15 @@ test("verdict labels never assert that a pull request caused a failure", () => {
   assert.equal(attributionLabel("pre_existing"), "Already failing on base");
   assert.equal(attributionLabel("widespread"), "Not this PR");
   assert.equal(attributionLabel("unexplained"), "Needs investigation");
+  // Overlap is descriptive, not causal.
+  assert.equal(attributionLabel("touches_changed_code"), "Touches changed code");
 });
 
 test("verdicts that rule the pull request out are not styled as errors", () => {
   assert.equal(attributionTone("pre_existing"), "info");
   assert.equal(attributionTone("widespread"), "info");
   assert.equal(attributionTone("known_flake"), "warning");
+  assert.equal(attributionTone("touches_changed_code"), "error");
   assert.equal(attributionTone("unexplained"), "error");
   assert.equal(attributionTone("inconclusive"), "default");
 });
@@ -315,6 +319,8 @@ test("only failures the baseline could not rule out need investigation", () => {
   assert.equal(needsInvestigation(attributed("pre_existing")), false);
   assert.equal(needsInvestigation(attributed("widespread")), false);
   assert.equal(needsInvestigation(attributed("known_flake")), false);
+  // Overlap sharpens a residual failure rather than resolving it.
+  assert.equal(needsInvestigation(attributed("touches_changed_code")), true);
   // An unattributed failure has not been ruled out, so it still counts.
   assert.equal(needsInvestigation(attributed(undefined)), true);
 });

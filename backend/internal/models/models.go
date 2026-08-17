@@ -647,6 +647,10 @@ const (
 	// AttributionKnownFlake means the test's own history classifies it flaky
 	// independently of this pull request.
 	AttributionKnownFlake AttributionVerdict = "known_flake"
+	// AttributionTouchesChangedCode means no baseline explains the failure and
+	// the test fails in a file this pull request modifies. It reports observed
+	// overlap between the failure site and the change, not causation.
+	AttributionTouchesChangedCode AttributionVerdict = "touches_changed_code"
 	// AttributionUnexplained means no observed baseline explains the failure. It
 	// marks the failure as worth investigating, not as caused by the pull request.
 	AttributionUnexplained AttributionVerdict = "unexplained"
@@ -668,6 +672,12 @@ const (
 	AttributionEvidenceFlakiness   = "flakiness_history"
 	AttributionEvidenceNoBaseline  = "no_baseline"
 	AttributionEvidenceBuildFailer = "build_failure"
+	// AttributionEvidenceChangedCode reports that the failure site is in a file
+	// the pull request modifies.
+	AttributionEvidenceChangedCode = "changed_code"
+	// AttributionEvidenceUnchangedCode reports that the failure site is not in
+	// any file the pull request modifies.
+	AttributionEvidenceUnchangedCode = "unchanged_code"
 )
 
 // AttributionEvidence is one observed fact supporting a verdict. Detail is
@@ -678,6 +688,8 @@ type AttributionEvidence struct {
 	// JobID and TestName point at the dashboard data backing the claim.
 	JobID    string `json:"job_id,omitempty"`
 	TestName string `json:"test_name,omitempty"`
+	// Paths lists the repository-relative files the claim refers to.
+	Paths []string `json:"paths,omitempty"`
 }
 
 // FailureAttribution is the deterministic judgment for one pull request failure.
