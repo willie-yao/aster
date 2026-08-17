@@ -37,6 +37,7 @@ type Config struct {
 	Storage              Storage        `yaml:"storage"    json:"storage"`
 	Discovery            Discovery      `yaml:"discovery,omitempty"  json:"discovery,omitempty"`
 	Branding             Branding       `yaml:"branding"   json:"branding"`
+	PullRequests         *PullRequests  `yaml:"pull_requests,omitempty" json:"pull_requests,omitempty"`
 	Categories           []CategoryRule `yaml:"categories,omitempty"            json:"categories,omitempty"`
 	CategoryDisplayOrder []string       `yaml:"category_display_order,omitempty" json:"category_display_order,omitempty"`
 	AI                   *AI            `yaml:"ai,omitempty"         json:"ai,omitempty"`
@@ -110,6 +111,20 @@ type Source struct {
 // Only used when discovery.source is "testgrid".
 type TestGrid struct {
 	Dashboard string `yaml:"dashboard" json:"dashboard"`
+}
+
+// PullRequests configures the open pull request triage view, which reports the
+// presubmit results already published for branding.source_repo's open pull
+// requests. It is opt-in because every pass costs one GitHub listing plus
+// per-check bucket reads.
+type PullRequests struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Max bounds how many open pull requests one pass triages, most recently
+	// updated first. Non-positive uses the engine default.
+	Max int `yaml:"max,omitempty" json:"max,omitempty"`
+	// BuildsPerJob is how many builds are listed per presubmit before the
+	// newest is selected. Non-positive uses the engine default.
+	BuildsPerJob int `yaml:"builds_per_job,omitempty" json:"builds_per_job,omitempty"`
 }
 
 // Storage configures the artifact store that holds the project's Prow builds.
@@ -1275,6 +1290,15 @@ func (c *Config) Validate() error {
 			missing = append(missing, fmt.Sprintf("discovery.exact_jobs[%d] duplicates %q", i, name))
 		}
 		seenExactJobs[trimmed] = true
+	}
+
+	if c.PullRequests != nil {
+		if c.PullRequests.Max < 0 {
+			missing = append(missing, "pull_requests.max must not be negative")
+		}
+		if c.PullRequests.BuildsPerJob < 0 {
+			missing = append(missing, "pull_requests.builds_per_job must not be negative")
+		}
 	}
 
 	switch c.Storage.Provider {

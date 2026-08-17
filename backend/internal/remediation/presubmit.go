@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/aggregator"
 	"github.com/willie-yao/aster/backend/internal/junit"
 	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/aster/backend/internal/prowbuild"
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
@@ -215,28 +215,7 @@ func verificationJobs(remediation *Remediation, coverage *CoverageCatalog) []Ver
 }
 
 func verificationJobAppliesToBranch(job VerificationJob, branch string) (bool, error) {
-	for _, pattern := range job.SkipBranches {
-		matches, err := regexp.MatchString(pattern, branch)
-		if err != nil {
-			return false, fmt.Errorf("invalid skip_branches selector for %s: %w", job.JobName, err)
-		}
-		if matches {
-			return false, nil
-		}
-	}
-	if len(job.Branches) == 0 {
-		return true, nil
-	}
-	for _, pattern := range job.Branches {
-		matches, err := regexp.MatchString(pattern, branch)
-		if err != nil {
-			return false, fmt.Errorf("invalid branches selector for %s: %w", job.JobName, err)
-		}
-		if matches {
-			return true, nil
-		}
-	}
-	return false, nil
+	return jobconfig.BranchSelectorMatches(job.JobName, job.Branches, job.SkipBranches, branch)
 }
 
 func verificationCoverageComplete(evidence Evidence, jobs []VerificationJob, coverage *CoverageCatalog) bool {

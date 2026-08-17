@@ -4,6 +4,8 @@ import { JobDetailPage } from "./pages/JobDetailPage";
 import { TestDetailPage } from "./pages/TestDetailPage";
 import { BuildFailurePage } from "./pages/BuildFailurePage";
 import { FlakinessPage } from "./pages/FlakinessPage";
+import { PullRequestsPage } from "./pages/PullRequestsPage";
+import { PullRequestDetailPage } from "./pages/PullRequestDetailPage";
 import { ActionRequestPage } from "./pages/ActionRequestPage";
 import { AnalysisTracesPage } from "./pages/AnalysisTracesPage";
 import { AIUsagePage } from "./pages/AIUsagePage";
@@ -26,6 +28,11 @@ export default function App() {
               <Route element={<Layout />}>
                 <Route index element={<DashboardPage />} />
                 <Route path="flaky" element={<FlakinessPage />} />
+                <Route path="pull-requests" element={<PullRequestsPage />} />
+                <Route
+                  path="pull-requests/:number"
+                  element={<PullRequestDetailPage />}
+                />
                 <Route path="analysis-traces" element={<AnalysisTracesPage />} />
                 <Route path="ai-usage" element={<AIUsagePage />} />
                 <Route path="job/:jobName" element={<JobDetailPage />} />

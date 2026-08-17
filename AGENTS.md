@@ -67,6 +67,8 @@ backend/                         Go 1.25
     junit/                       JUnit XML -> structured test cases
     aggregator/                  Per-job and per-test aggregate statistics
     patterns/                    Correlates analyzed failures across builds
+    prtriage/                    Per-open-pull-request view of presubmit results
+    prattribution/               Rules a pull request out of a failure from observed results
     output/                      Writes the JSON contract the frontend reads
     models/                      Shared wire-format types
     fetchprogress/               Persists safe aggregate fetch progress for operators

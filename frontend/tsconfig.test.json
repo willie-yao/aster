@@ -33,6 +33,8 @@
     "src/lib/actionRequests.ts",
     "src/lib/actionEligibility.ts",
     "src/lib/dashboardOverview.ts",
+    "src/lib/pullRequests.ts",
+    "src/types/pullRequests.ts",
     "src/lib/flakinessReport.ts",
     "src/lib/detailTitles.ts",
     "src/lib/jobDetail.ts",

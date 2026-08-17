@@ -11,6 +11,8 @@ import (
 // PullRequest is the lifecycle metadata needed by remediation reconciliation.
 type PullRequest struct {
 	Number         int
+	Title          string
+	Author         string
 	HTMLURL        string
 	State          string
 	Draft          bool
@@ -31,45 +33,89 @@ type PullRequestRef struct {
 	Repo string
 }
 
-// GetPullRequest returns current lifecycle and revision metadata.
-func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, number int) (PullRequest, error) {
-	var raw struct {
-		Number         int    `json:"number"`
-		HTMLURL        string `json:"html_url"`
-		State          string `json:"state"`
-		Draft          bool   `json:"draft"`
-		Merged         bool   `json:"merged"`
-		MergeCommitSHA string `json:"merge_commit_sha"`
-		CreatedAt      string `json:"created_at"`
-		UpdatedAt      string `json:"updated_at"`
-		ClosedAt       string `json:"closed_at"`
-		MergedAt       string `json:"merged_at"`
-		Head           struct {
-			SHA  string `json:"sha"`
-			Ref  string `json:"ref"`
-			Repo struct {
-				FullName string `json:"full_name"`
-			} `json:"repo"`
-		} `json:"head"`
-		Base struct {
-			SHA  string `json:"sha"`
-			Ref  string `json:"ref"`
-			Repo struct {
-				FullName string `json:"full_name"`
-			} `json:"repo"`
-		} `json:"base"`
-	}
-	if err := c.get(ctx, c.url(owner, repo, fmt.Sprintf("pulls/%d", number)), &raw); err != nil {
-		return PullRequest{}, err
-	}
+// pullRequestJSON is the subset of GitHub's pull request representation used by
+// both the single-pull and list endpoints.
+type pullRequestJSON struct {
+	Number         int    `json:"number"`
+	Title          string `json:"title"`
+	HTMLURL        string `json:"html_url"`
+	State          string `json:"state"`
+	Draft          bool   `json:"draft"`
+	Merged         bool   `json:"merged"`
+	MergeCommitSHA string `json:"merge_commit_sha"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
+	ClosedAt       string `json:"closed_at"`
+	MergedAt       string `json:"merged_at"`
+	User           struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	Head pullRequestRefJSON `json:"head"`
+	Base pullRequestRefJSON `json:"base"`
+}
+
+type pullRequestRefJSON struct {
+	SHA  string `json:"sha"`
+	Ref  string `json:"ref"`
+	Repo struct {
+		FullName string `json:"full_name"`
+	} `json:"repo"`
+}
+
+func (raw pullRequestJSON) toPullRequest() PullRequest {
 	return PullRequest{
-		Number: raw.Number, HTMLURL: raw.HTMLURL, State: strings.ToLower(raw.State),
+		Number: raw.Number, Title: raw.Title, Author: raw.User.Login,
+		HTMLURL: raw.HTMLURL, State: strings.ToLower(raw.State),
 		Draft: raw.Draft, Merged: raw.Merged, MergeCommitSHA: raw.MergeCommitSHA,
 		CreatedAt: parseGitHubTime(raw.CreatedAt), UpdatedAt: parseGitHubTime(raw.UpdatedAt),
 		ClosedAt: parseGitHubTime(raw.ClosedAt), MergedAt: parseGitHubTime(raw.MergedAt),
 		Head: PullRequestRef{SHA: raw.Head.SHA, Ref: raw.Head.Ref, Repo: raw.Head.Repo.FullName},
 		Base: PullRequestRef{SHA: raw.Base.SHA, Ref: raw.Base.Ref, Repo: raw.Base.Repo.FullName},
-	}, nil
+	}
+}
+
+// GetPullRequest returns current lifecycle and revision metadata.
+func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, number int) (PullRequest, error) {
+	var raw pullRequestJSON
+	if err := c.get(ctx, c.url(owner, repo, fmt.Sprintf("pulls/%d", number)), &raw); err != nil {
+		return PullRequest{}, err
+	}
+	return raw.toPullRequest(), nil
+}
+
+// pullRequestPageSize is GitHub's maximum page size for the pulls endpoint.
+const pullRequestPageSize = 100
+
+// maxPullRequestPages bounds pagination so an unexpectedly large repository
+// cannot stall a refresh pass.
+const maxPullRequestPages = 20
+
+// ListOpenPullRequests returns open, non-draft pull requests most recently
+// updated first, stopping at limit. A non-positive limit returns every open
+// non-draft pull request within the page bound.
+func (c *Client) ListOpenPullRequests(ctx context.Context, owner, repo string, limit int) ([]PullRequest, error) {
+	var out []PullRequest
+	for page := 1; page <= maxPullRequestPages; page++ {
+		query := fmt.Sprintf("pulls?state=open&sort=updated&direction=desc&per_page=%d&page=%d",
+			pullRequestPageSize, page)
+		var raws []pullRequestJSON
+		if err := c.get(ctx, c.url(owner, repo, query), &raws); err != nil {
+			return nil, fmt.Errorf("listing open pull requests for %s/%s: %w", owner, repo, err)
+		}
+		for _, raw := range raws {
+			if raw.Draft {
+				continue
+			}
+			out = append(out, raw.toPullRequest())
+			if limit > 0 && len(out) >= limit {
+				return out, nil
+			}
+		}
+		if len(raws) < pullRequestPageSize {
+			break
+		}
+	}
+	return out, nil
 }
 
 // CompareCommits reports whether head contains base in the same repository.

@@ -4,6 +4,8 @@ import { matchPath } from "react-router";
 const pageRoutes = [
   { path: "/", title: "Overview" },
   { path: "/flaky", title: "Failure Trends" },
+  { path: "/pull-requests", title: "Pull Requests" },
+  { path: "/pull-requests/:number", title: "Pull request checks" },
   { path: "/analysis-traces", title: "Analysis Traces" },
   { path: "/ai-usage", title: "AI Usage" },
   { path: "/job/:jobName", title: "Job details" },

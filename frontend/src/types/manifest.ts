@@ -22,6 +22,14 @@ export interface TestGrid {
   dashboard: string;
 }
 
+// PullRequestsManifest mirrors the optional pull_requests config block. The
+// nav tab and pull request routes are shown only when it is enabled.
+export interface PullRequestsManifest {
+  enabled: boolean;
+  max?: number;
+  builds_per_job?: number;
+}
+
 export interface Storage {
   provider: string;
   bucket: string;
@@ -57,6 +65,7 @@ export interface Manifest {
   testgrid: TestGrid;
   storage: Storage;
   branding: Branding;
+  pull_requests?: PullRequestsManifest;
   categories?: CategoryRule[];
   category_display_order?: string[];
   ai?: AIManifest;

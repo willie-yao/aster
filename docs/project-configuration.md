@@ -165,6 +165,63 @@ source:
   include_presubmits: true
 ```
 
+## Pull request triage
+
+The pull request view reports the presubmit results already published for the
+open pull requests of `branding.source_repo`. It answers "which of my open pull
+requests have failing tests, and which tests are they" without opening each one
+on GitHub. It is opt-in because every pass costs one GitHub listing plus
+per-check bucket reads.
+
+```yaml
+pull_requests:
+  enabled: true
+  # Optional bounds; omit to use the engine defaults.
+  max: 100            # open pull requests per pass, most recently updated first
+  builds_per_job: 3   # builds listed per presubmit before the newest is selected
+```
+
+This is independent of `source.include_presubmits`, which controls whether
+presubmits appear as rows in the main job dashboard. Pull request triage always
+resolves presubmits from the job catalog, so it works either way.
+
+Draft pull requests are excluded. Each pass writes `pull-requests.json` and one
+`pull-requests/<number>.json` per open pull request, and removes detail files for
+pull requests that are no longer open.
+
+A few behaviors worth knowing:
+
+- Each failing test carries a deterministic **attribution** that compares it
+  against observed results. No verdict claims a pull request caused a failure,
+  because comparing observations can rule a pull request out but cannot rule one
+  in. The verdicts are:
+
+  | Verdict | Meaning |
+  | --- | --- |
+  | `pre_existing` | The same test is already failing on the base branch. |
+  | `widespread` | The same job and test is failing on other open pull requests. |
+  | `known_flake` | Flakiness history already classifies the test as flaky. |
+  | `unexplained` | Nothing observed rules the pull request out, so it needs investigation. |
+  | `inconclusive` | No base-branch data was available to compare against. |
+
+  Attribution runs with no model calls. It reuses the base-branch job details and
+  flakiness report the same pass already produced, so it costs nothing per
+  failure. Cross-pull-request matching keys on job **and** test name, because a
+  build-level failure carries the same generic name on every job and matching by
+  name alone would correlate unrelated jobs.
+- A check whose build tested an older head than the pull request's current head
+  is marked `stale`, so a green check on outdated code is not mistaken for a
+  green check on the current one.
+- A job that fails without any failing JUnit case, such as a build or verify
+  step, reports one synthesized `Prow job execution` failure so every failing
+  check names a subject. Those failures are never compared against the base
+  branch by name, only against the same job on other pull requests.
+- A pull request whose builds have aged out of the bucket's retention window
+  reports `UNKNOWN` with no checks. GitHub may still show statuses for those
+  runs because commit statuses outlive the artifacts.
+- A triage failure never aborts the pass. The previously written view is kept
+  and the dashboard still publishes.
+
 ## Categories
 
 Categories are optional. Without them, the landing page renders one flat job
