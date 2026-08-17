@@ -378,7 +378,9 @@ jobs:
       # into dist/data/ at build; strip AI traces, the cache, and side-effect
       # state (they carry operational metadata, never dashboard data). The flat
       # files stay in sync with output.NonPublishedFiles; private status and
-      # remediation cache files are hidden in dot-directories.
+      # remediation-investigation cache files are hidden in dot-directories.
+      # remediations.json is a retired public projection stripped so a
+      # pre-fetched data directory cannot republish it.
       - name: Strip non-published data files
         run: |
           d=engine/frontend/dist/data
@@ -386,7 +388,7 @@ jobs:
             "$d"/ai_usage_fetcher.json "$d"/ai_usage_server.json "$d"/issue_state.json \
             "$d"/fix_pr_state.json "$d"/fix_previews.json \
             "$d"/notification_state.json "$d"/remediation_state.json \
-            "$d"/remediation_prow_catalog.json \
+            "$d"/remediation_prow_catalog.json "$d"/remediations.json \
             "$d"/orka_analysis.json \
             "$d"/action_request_state.json "$d"/action_preview_state.json \
             "$d"/analysis_correction_state.json \

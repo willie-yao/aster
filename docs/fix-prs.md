@@ -11,7 +11,7 @@ because it writes source code.
 
 Causal-group patterns remain analysis-only. A remediation investigation may
 publish a safe status, but it does not make a causal group eligible for File
-Issue, Fix PR, resolution, or remediation tracking.
+Issue, Fix PR, or resolution.
 
 ## Supported workflow
 
@@ -240,7 +240,9 @@ not through the public dashboard.
 ## Known limitations
 
 - A draft preview is not a correctness proof and never bypasses repository CI or
-  human review.
+  human review. Aster does not follow a merged pull request through Prow and
+  never certifies that it fixed the original failure. Later dashboard runs are
+  fresh observations, not proof attributed to a particular pull request.
 - Edited files are committed as regular files, so a reviewer must notice an
   unintended executable-bit change.
 - Local state plus GitHub search deduplication is not atomic across overlapping

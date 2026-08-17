@@ -10,7 +10,6 @@ import type {
   BuildResult,
   PatternAnalysis,
   PatternRefreshStatus,
-  RemediationObservation,
 } from "../types/dashboard";
 import type { AnalysisChatReference } from "../types/analysisChat";
 import {
@@ -21,8 +20,7 @@ import {
 } from "../lib/utils";
 import { RichText } from "./RichText";
 import { FailureActions } from "./FailureActions";
-import { useRemediations, useResolved } from "../hooks/useData";
-import { soft } from "../theme";
+import { useResolved } from "../hooks/useData";
 import { AnalysisChat } from "./AnalysisChat";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { patternChatAvailability, patternChatHasEvidenceBuild } from "../lib/patternChat";
@@ -33,25 +31,6 @@ import { overviewTypography } from "../theme/overview";
 import { PatternRemediation } from "./PatternRemediation";
 import { PatternFixGuidance } from "./PatternFixGuidance";
 import { patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
-
-function remediationStatusLabel(status: string): string {
-  const label = status.replaceAll("_", " ");
-  return label ? label[0].toUpperCase() + label.slice(1) : label;
-}
-
-function remediationStatusColor(status: string): "success" | "warning" | "error" | "info" {
-  if (status === "verified_fixed" || status === "premerge_verified") return "success";
-  if (
-    status === "still_failing_same_cause" ||
-    status === "failing_different_cause" ||
-    status === "presubmit_failed_same_cause" ||
-    status === "presubmit_failed_different_cause"
-  ) {
-    return "error";
-  }
-  if (status === "inconclusive") return "warning";
-  return "info";
-}
 
 function firstSentence(value: string): string {
   const match = value.trim().match(/^.*?[.!?](?:\s|$)/u);
@@ -91,22 +70,11 @@ export function PatternBanner({
   refreshStatus?: PatternRefreshStatus;
 }) {
   const { data: resolved } = useResolved();
-  const { data: remediations } = useRemediations();
   const { features } = useCapabilities();
   const analysisOnly = Boolean(pattern.recurrence_classification);
   const fixGuidanceBuildID = patternFixGuidanceBuildID(pattern, runs);
   const showFixGuidance = Boolean(jobID && fixGuidanceBuildID);
   const resolvedEntry = !analysisOnly && pattern.id ? resolved.resolved[pattern.id] : undefined;
-  const remediation = !analysisOnly && pattern.id ? remediations.remediations[pattern.id] : undefined;
-  const attempt = remediation?.attempt;
-  const latestObservation = attempt?.observations?.reduce((latest, observation) => {
-    if (!latest) return observation;
-    const buildOrder = observation.build_id.localeCompare(latest.build_id, undefined, { numeric: true });
-    if (buildOrder !== 0) return buildOrder > 0 ? observation : latest;
-    const observedAt = observation.completed_at ?? observation.started_at ?? "";
-    const latestObservedAt = latest.completed_at ?? latest.started_at ?? "";
-    return observedAt > latestObservedAt ? observation : latest;
-  }, undefined as RemediationObservation | undefined);
   const hasEvidenceBuild = patternChatHasEvidenceBuild(
     pattern,
     runs.map((run) => run.build_id),
@@ -142,7 +110,6 @@ export function PatternBanner({
   const lifecycleActive = patternLifecycleActive(lifecycle);
   const actionEligibility = patternActionEligibilityHint(
     pattern.remediation_targets,
-    attempt?.status,
     lifecycle,
     pattern.systemic,
     refreshStatus,
@@ -232,32 +199,18 @@ export function PatternBanner({
 
   const details = (
     <>
-      {(resolvedEntry || attempt) && (
+      {resolvedEntry && (
         <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
-          {resolvedEntry && (
-            <Chip
-              size="small"
-              label="Dismissed"
-              sx={{
-                borderRadius: "4px",
-                fontWeight: 650,
-                bgcolor: "action.selected",
-                color: "text.secondary",
-              }}
-            />
-          )}
-          {attempt && (
-            <Chip
-              size="small"
-              label={remediationStatusLabel(attempt.status)}
-              sx={{
-                borderRadius: "4px",
-                fontWeight: 650,
-                bgcolor: (theme) => soft(theme, remediationStatusColor(attempt.status), 0.16),
-                color: `${remediationStatusColor(attempt.status)}.main`,
-              }}
-            />
-          )}
+          <Chip
+            size="small"
+            label="Dismissed"
+            sx={{
+              borderRadius: "4px",
+              fontWeight: 650,
+              bgcolor: "action.selected",
+              color: "text.secondary",
+            }}
+          />
         </Stack>
       )}
 
@@ -266,30 +219,6 @@ export function PatternBanner({
           Dismissed by {resolvedEntry.resolved_by}
           {resolvedEntry.note ? `. ${resolvedEntry.note}` : ""}. It returns to the active view automatically if it recurs.
         </Typography>
-      )}
-
-      {attempt && (
-        <BriefingSection label="Remediation status">
-          <Typography component="p" sx={{ m: 0, ...overviewTypography.secondaryBody }}>
-            Attempt {attempt.number}: {remediationStatusLabel(attempt.status)}
-            {attempt.outcome_reason ? `. ${attempt.outcome_reason}` : ""}
-          </Typography>
-          <Stack direction="row" spacing={2} sx={{ mt: 0.5, flexWrap: "wrap", rowGap: 0.5 }}>
-            <Link href={attempt.url} target="_blank" rel="noreferrer">
-              Pull request #{attempt.pr_number}
-            </Link>
-            {remediation?.issue && (
-              <Link href={remediation.issue.url} target="_blank" rel="noreferrer">
-                Issue #{remediation.issue.number}
-              </Link>
-            )}
-            {latestObservation?.prow_url && (
-              <Link href={latestObservation.prow_url} target="_blank" rel="noreferrer">
-                Latest Prow observation
-              </Link>
-            )}
-          </Stack>
-        </BriefingSection>
       )}
 
       {staleNotice}
