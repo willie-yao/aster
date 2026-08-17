@@ -53,7 +53,6 @@ backend/                         Go 1.25
     aster/                      Public CLI and one-shot pipeline; Pages and the k8s CronJob
     worker/                      Continuous in-cluster watch loop (k8s mode: watch)
     server/                      API server: /data/* read parity, capabilities, actions
-    analyzer/                    Runs one failure analysis request (Orka container runtime)
     analysisexecutor/            Runs one file-backed OpenCode analysis workload
     analysisstager/              Copies one sealed analyzer snapshot into the workspace
     fixexecutor/                 Runs one credential-free Agent Sandbox fix workload
@@ -96,7 +95,7 @@ backend/                         Go 1.25
     analysisruntime/             Selects the failure-analysis runtime (in-process default)
     analysischat/                Bounded conversations about a published analysis
     corrections/                 Promotes reviewed chat revisions without mutating output
-    sourceinvestigation/         Read-only source investigation contracts
+    sourceinvestigation/         Read-only source verification helpers
     remediationinvestigation/    Frozen causal-group remediation investigation + private cache
     causalfixpreview/            Preview-only causal-group patch generation, reconstruction, and validation
     aitest/                      Record/replay chat-completions server for tests
@@ -122,7 +121,7 @@ backend/                         Go 1.25
     server/                      HTTP handler for the Kubernetes-native mode
     auth/                        Admin auth seam (dev / proxy / oauth)
     runtime/                     Swappable agent-execution abstraction
-    orka/                        Adapters for Orka lifecycle execution
+    githubsource/                Small read-only GitHub source reader
     kubernetesdeploy/            Installs a validated consumer bundle with Helm
     onboard/                     `aster onboard`: discovery, presets, doctor, scaffold
     project/                     project.yaml load + validate
@@ -389,7 +388,6 @@ live deploy.
 - `docs/kubernetes-platform.md` - platform ownership, prerequisites, and lifecycle.
 - `docs/kubernetes-reference.md` - architecture, modes, chart values, upgrades,
   and advanced Kubernetes operations.
-- `docs/maintainer/orka.md` - experimental Orka maintainer and evaluation reference.
 
 ## When in doubt
 

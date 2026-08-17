@@ -125,7 +125,6 @@ REMOTE_BACKEND_PREFIXES = (
     "backend/internal/models",
     "backend/internal/notify",
     "backend/internal/onboard",
-    "backend/internal/orka",
     "backend/internal/output",
     "backend/internal/patterns",
     "backend/internal/patternstate",
@@ -140,7 +139,6 @@ REMOTE_BACKEND_PREFIXES = (
     "backend/internal/resolve",
     "backend/internal/runtime",
     "backend/internal/server",
-    "backend/internal/sourceinvestigation",
     "backend/internal/statefile",
     "backend/internal/storage",
     "backend/internal/textutil",
@@ -168,7 +166,6 @@ ANALYSIS_BACKEND_PREFIXES = (
     "backend/internal/redact",
     "backend/internal/remediationpolicy",
     "backend/internal/runtime",
-    "backend/internal/sourceinvestigation",
     "backend/internal/statefile",
     "backend/internal/storage",
     "backend/internal/textutil",
@@ -195,7 +192,6 @@ CRITIC_BACKEND_PREFIXES = (
     "backend/internal/redact",
     "backend/internal/remediationpolicy",
     "backend/internal/runtime",
-    "backend/internal/sourceinvestigation",
     "backend/internal/statefile",
     "backend/internal/storage",
     "backend/internal/textutil",
@@ -362,11 +358,7 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
             result[image_test_paths[path]] = True
             matched = True
 
-        if path in {"deploy/analyzer.Dockerfile", "deploy/fixer.Dockerfile"}:
-            result["backend"] = True
-            matched = True
-
-        if path in {"hack/install-srt.sh", "hack/build-srt-seccomp.mjs"}:
+        if path == "deploy/fixer.Dockerfile":
             result["backend"] = True
             matched = True
 

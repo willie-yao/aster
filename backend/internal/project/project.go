@@ -417,10 +417,6 @@ type AI struct {
 	// repo for systemic recurring patterns. Off by default. Excluded from
 	// manifest.json.
 	FixPRs *FixPRs `yaml:"fix_prs,omitempty" json:"-"`
-
-	// SourceInvestigation configures optional read-only source inspection for
-	// authenticated analysis chat requests.
-	SourceInvestigation *AnalysisSourceInvestigation `yaml:"source_investigation,omitempty" json:"-"`
 }
 
 const (
@@ -577,52 +573,6 @@ func ValidateAIProvider(provider AIProvider) error {
 	return err
 }
 
-// AnalysisSourceInvestigation configures read-only source inspection for analysis chat.
-type AnalysisSourceInvestigation struct {
-	AgentRef  string `yaml:"agent_ref,omitempty" json:"-"`
-	API       string `yaml:"api,omitempty" json:"-"`
-	Namespace string `yaml:"namespace,omitempty" json:"-"`
-	GitSecret string `yaml:"git_secret,omitempty" json:"-"`
-	Version   string `yaml:"version,omitempty" json:"-"`
-	Retries   *int   `yaml:"retries,omitempty" json:"-"`
-	MaxTurns  int    `yaml:"max_turns,omitempty" json:"-"`
-	Timeout   string `yaml:"timeout,omitempty" json:"-"`
-}
-
-const (
-	maxSourceInvestigationRetries = 2
-	maxSourceInvestigationTurns   = 1000
-)
-
-// EffectiveSourceInvestigation resolves read-only source runtime defaults.
-func (c *Config) EffectiveSourceInvestigation() AnalysisSourceInvestigation {
-	out := AnalysisSourceInvestigation{}
-	if c != nil && c.AI != nil && c.AI.SourceInvestigation != nil {
-		out = *c.AI.SourceInvestigation
-	}
-	out.AgentRef = strings.TrimSpace(out.AgentRef)
-	out.API = strings.TrimSpace(out.API)
-	out.Namespace = strings.TrimSpace(out.Namespace)
-	out.GitSecret = strings.TrimSpace(out.GitSecret)
-	out.Version = strings.TrimSpace(out.Version)
-	if out.Namespace == "" {
-		out.Namespace = "orka-system"
-	}
-	if out.Version == "" {
-		out.Version = "v1"
-	}
-	if out.Retries == nil {
-		out.Retries = intPtr(1)
-	}
-	if out.MaxTurns <= 0 {
-		out.MaxTurns = 30
-	}
-	if strings.TrimSpace(out.Timeout) == "" {
-		out.Timeout = "10m"
-	}
-	return out
-}
-
 // FixPRs configures the agent-proposed fix-PR feature: when a systemic recurring
 // pattern carries a concrete remediation, the engine drafts a minimal code edit
 // and opens a draft PR against the source repo via fork-and-PR. Off by default;
@@ -695,21 +645,14 @@ type FixDestination struct {
 
 // FixAgentRuntime configures the coding-agent generator for fix PRs.
 type FixAgentRuntime struct {
-	// Type selects local-development "opencode" (default), "orka", or
-	// experimental "agent-sandbox".
+	// Type selects the coding-agent backend. Only "agent-sandbox" is supported.
 	Type string `yaml:"type,omitempty" json:"type,omitempty"`
-	// Model overrides the local opencode model. Orka takes its model from AgentRef.
-	Model string `yaml:"model,omitempty" json:"model,omitempty"`
 	// MaxTurns bounds the agent loop. Defaults to 30.
 	MaxTurns int `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
 	// AllowBash lets the agent run shell commands (build, tests) while fixing.
-	// Defaults to true.
+	// Agent Sandbox requires it to be false.
 	AllowBash *bool `yaml:"allow_bash,omitempty" json:"allow_bash,omitempty"`
-	// NetworkDomains are additional dependency registry domains for local
-	// OpenCode. The configured model endpoint host is added automatically.
-	NetworkDomains []string `yaml:"network_domains,omitempty" json:"network_domains,omitempty"`
 	// AllowedCommands are exact argv commands run after one-shot generation.
-	// Other runtimes reject this field.
 	AllowedCommands []FixAgentCommand `yaml:"allowed_commands,omitempty" json:"allowed_commands,omitempty"`
 	// ModelProvider is non-secret configuration for the Agent Sandbox provider.
 	ModelProvider FixModelProvider `yaml:"model_provider,omitempty" json:"model_provider,omitempty"`
@@ -718,12 +661,6 @@ type FixAgentRuntime struct {
 	// Timeout bounds the whole generation, e.g. "10m". Empty uses the Runtime
 	// default.
 	Timeout string `yaml:"timeout,omitempty" json:"-"`
-	// Orka fields are used only when Type is "orka".
-	OrkaAgentRef  string `yaml:"agent_ref,omitempty" json:"-"`
-	OrkaAPI       string `yaml:"api,omitempty" json:"-"`
-	OrkaNamespace string `yaml:"namespace,omitempty" json:"-"`
-	OrkaVersion   string `yaml:"version,omitempty" json:"-"`
-	OrkaRetries   *int   `yaml:"retries,omitempty" json:"-"`
 }
 
 // FixAgentCommand is one exact post-generation validation command.
@@ -904,16 +841,15 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 	}
 	out.AgentRuntime.Type = strings.TrimSpace(out.AgentRuntime.Type)
 	if out.AgentRuntime.Type == "" {
-		out.AgentRuntime.Type = "opencode"
+		out.AgentRuntime.Type = "agent-sandbox"
 	}
 	if out.AgentRuntime.MaxTurns <= 0 {
 		out.AgentRuntime.MaxTurns = 30
 	}
 	if out.AgentRuntime.AllowBash == nil {
-		value := out.AgentRuntime.Type != "agent-sandbox"
+		value := false
 		out.AgentRuntime.AllowBash = &value
 	}
-	out.AgentRuntime.NetworkDomains = append([]string(nil), out.AgentRuntime.NetworkDomains...)
 	out.AllowedRepositories = append([]FixRepository(nil), out.AllowedRepositories...)
 	for index := range out.AllowedRepositories {
 		out.AllowedRepositories[index].PathPrefixes = append([]string(nil), out.AllowedRepositories[index].PathPrefixes...)
@@ -928,9 +864,6 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 		commands[index] = FixAgentCommand{Argv: append([]string(nil), command.Argv...), Timeout: command.Timeout}
 	}
 	out.AgentRuntime.AllowedCommands = commands
-	if domains, err := agentruntime.NormalizeNetworkDomains(out.AgentRuntime.NetworkDomains); err == nil {
-		out.AgentRuntime.NetworkDomains = domains
-	}
 	if out.AgentRuntime.Type == "agent-sandbox" {
 		zero := 0
 		out.CritiqueRetries = &zero
@@ -946,24 +879,6 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 		out.AgentRuntime.ModelProvider.Endpoint = provider.Endpoint
 		out.AgentRuntime.ModelProvider.Model = provider.Model
 		out.AgentRuntime.ModelProvider.Auth.Type = provider.Auth.Type
-	}
-	if out.AgentRuntime.Type == "orka" {
-		out.AgentRuntime.OrkaAgentRef = strings.TrimSpace(out.AgentRuntime.OrkaAgentRef)
-		out.AgentRuntime.OrkaAPI = strings.TrimSpace(out.AgentRuntime.OrkaAPI)
-		out.AgentRuntime.OrkaNamespace = strings.TrimSpace(out.AgentRuntime.OrkaNamespace)
-		out.AgentRuntime.OrkaVersion = strings.TrimSpace(out.AgentRuntime.OrkaVersion)
-		if out.AgentRuntime.OrkaNamespace == "" {
-			out.AgentRuntime.OrkaNamespace = "orka-system"
-		}
-		if out.AgentRuntime.OrkaVersion == "" {
-			out.AgentRuntime.OrkaVersion = "v1"
-		}
-		if strings.TrimSpace(out.AgentRuntime.Timeout) == "" {
-			out.AgentRuntime.Timeout = "10m"
-		}
-		if out.AgentRuntime.OrkaRetries == nil {
-			out.AgentRuntime.OrkaRetries = intPtr(1)
-		}
 	}
 	return out
 }
@@ -1496,32 +1411,6 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-
-	if c.AI != nil && c.AI.SourceInvestigation != nil {
-		source := c.AI.SourceInvestigation
-		if strings.TrimSpace(source.AgentRef) == "" || strings.TrimSpace(source.API) == "" {
-			return fmt.Errorf("ai.source_investigation requires agent_ref and api")
-		}
-		if strings.TrimSpace(source.GitSecret) == "" {
-			return fmt.Errorf("ai.source_investigation requires git_secret with read-only clone credentials")
-		}
-		if source.Retries != nil && (*source.Retries < 0 || *source.Retries > maxSourceInvestigationRetries) {
-			return fmt.Errorf("ai.source_investigation.retries must be between 0 and %d", maxSourceInvestigationRetries)
-		}
-		if source.MaxTurns < 0 || source.MaxTurns > maxSourceInvestigationTurns {
-			return fmt.Errorf("ai.source_investigation.max_turns must be 0 or between 1 and %d", maxSourceInvestigationTurns)
-		}
-		if value := strings.TrimSpace(source.Timeout); value != "" {
-			timeout, err := time.ParseDuration(value)
-			if err != nil {
-				return fmt.Errorf("ai.source_investigation.timeout %q is not a valid duration", source.Timeout)
-			}
-			if timeout <= 0 || timeout > 30*time.Minute {
-				return fmt.Errorf("ai.source_investigation.timeout must be greater than zero and at most 30m")
-			}
-		}
-	}
-
 	// fix_prs targets a (usually community) source repo, so an enabled config
 	// must name the CLA-signed commit author and may not carry a partial repo.
 	if c.AI != nil && c.AI.FixPRs != nil {
@@ -1588,12 +1477,6 @@ func (c *Config) Validate() error {
 		}
 		if ar := f.AgentRuntime; ar != nil {
 			runtimeType := strings.TrimSpace(ar.Type)
-			if err := agentruntime.ValidateNetworkDomains(ar.NetworkDomains); err != nil {
-				return fmt.Errorf("ai.fix_prs.agent_runtime.network_domains: %w", err)
-			}
-			if ar.OrkaRetries != nil && *ar.OrkaRetries < 0 {
-				return fmt.Errorf("ai.fix_prs.agent_runtime.retries must be >= 0")
-			}
 			if ar.MaxTurns < 0 {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.max_turns must be >= 0")
 			}
@@ -1606,77 +1489,43 @@ func (c *Config) Validate() error {
 					return fmt.Errorf("ai.fix_prs.agent_runtime.timeout %q is not a valid duration", ar.Timeout)
 				}
 			}
-			switch runtimeType {
-			case "", "opencode":
-				if len(ar.AllowedCommands) > 0 || ar.ModelProvider != (FixModelProvider{}) || ar.OutputLimitBytes != 0 {
-					return fmt.Errorf("ai.fix_prs.agent_runtime allowed_commands, model_provider, and output_limit_bytes apply only to the agent-sandbox runtime")
-				}
-			case "agent-sandbox":
-				if f.Verify != nil && f.Verify.Enabled {
-					return fmt.Errorf("ai.fix_prs.verify is not allowed with agent-sandbox; use agent_runtime.allowed_commands")
-				}
-				if f.CritiqueRetries != nil && *f.CritiqueRetries != 0 {
-					return fmt.Errorf("ai.fix_prs.critique_retries must be 0 for the one-shot agent-sandbox runtime")
-				}
-				if strings.TrimSpace(ar.Model) != "" {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.model applies only to the local opencode runtime")
-				}
-				if len(ar.NetworkDomains) > 0 {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.network_domains applies only to the local opencode runtime")
-				}
-				if ar.AllowBash != nil && *ar.AllowBash {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.allow_bash must be false for the experimental agent-sandbox runtime")
-				}
-				if len(ar.AllowedCommands) == 0 {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.allowed_commands requires at least one exact command for the experimental agent-sandbox runtime")
-				}
-				overall := timeout
-				if !hasTimeout {
-					overall = 10 * time.Minute
-				}
-				commands, err := ar.RuntimeCommands(overall)
-				if err != nil {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.allowed_commands: %w", err)
-				}
-				if last := commands[len(commands)-1].Argv; !equalArgv(last, []string{"git", "diff", "--cached", "--check"}) {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.allowed_commands must end with argv [git diff --cached --check]")
-				}
-				if err := validateAgentSandboxModelProvider(ar.ModelProvider); err != nil {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.model_provider: %w", err)
-				}
-				if ar.OutputLimitBytes < 4<<10 || ar.OutputLimitBytes > 1<<20 {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.output_limit_bytes must be between 4096 and 1048576")
-				}
-				if ar.MaxTurns > 1000 {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.max_turns must be 0 or between 1 and 1000")
-				}
-				if hasTimeout && (timeout <= 0 || timeout > 30*time.Minute) {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.timeout must be greater than zero and at most 30m")
-				}
-			case "orka":
-				if len(ar.AllowedCommands) > 0 || ar.ModelProvider != (FixModelProvider{}) || ar.OutputLimitBytes != 0 {
-					return fmt.Errorf("ai.fix_prs.agent_runtime allowed_commands, model_provider, and output_limit_bytes apply only to the agent-sandbox runtime")
-				}
-				if strings.TrimSpace(ar.Model) != "" {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.model applies only to the local opencode runtime")
-				}
-				if len(ar.NetworkDomains) > 0 {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.network_domains applies only to the local opencode runtime")
-				}
-				if strings.TrimSpace(ar.OrkaAgentRef) == "" || strings.TrimSpace(ar.OrkaAPI) == "" {
-					return fmt.Errorf("ai.fix_prs.agent_runtime type %q requires agent_ref and api", "orka")
-				}
-				if ar.OrkaRetries != nil && *ar.OrkaRetries > 2 {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.retries must be between 0 and 2")
-				}
-				if ar.MaxTurns > 1000 {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.max_turns must be 0 or between 1 and 1000")
-				}
-				if hasTimeout && (timeout < time.Minute || timeout > 30*time.Minute || timeout%time.Minute != 0) {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.timeout must use whole minutes from 1m through 30m")
-				}
-			default:
-				return fmt.Errorf("ai.fix_prs.agent_runtime.type %q is not supported (want %q, %q, or %q)", ar.Type, "opencode", "orka", "agent-sandbox")
+			if runtimeType != "" && runtimeType != "agent-sandbox" {
+				return fmt.Errorf("ai.fix_prs.agent_runtime.type %q is not supported (want %q)", ar.Type, "agent-sandbox")
+			}
+			if f.Verify != nil && f.Verify.Enabled {
+				return fmt.Errorf("ai.fix_prs.verify is not allowed with agent-sandbox; use agent_runtime.allowed_commands")
+			}
+			if f.CritiqueRetries != nil && *f.CritiqueRetries != 0 {
+				return fmt.Errorf("ai.fix_prs.critique_retries must be 0 for the one-shot agent-sandbox runtime")
+			}
+			if ar.AllowBash != nil && *ar.AllowBash {
+				return fmt.Errorf("ai.fix_prs.agent_runtime.allow_bash must be false for the agent-sandbox runtime")
+			}
+			if len(ar.AllowedCommands) == 0 {
+				return fmt.Errorf("ai.fix_prs.agent_runtime.allowed_commands requires at least one exact command for the agent-sandbox runtime")
+			}
+			overall := timeout
+			if !hasTimeout {
+				overall = 10 * time.Minute
+			}
+			commands, err := ar.RuntimeCommands(overall)
+			if err != nil {
+				return fmt.Errorf("ai.fix_prs.agent_runtime.allowed_commands: %w", err)
+			}
+			if last := commands[len(commands)-1].Argv; !equalArgv(last, []string{"git", "diff", "--cached", "--check"}) {
+				return fmt.Errorf("ai.fix_prs.agent_runtime.allowed_commands must end with argv [git diff --cached --check]")
+			}
+			if err := validateAgentSandboxModelProvider(ar.ModelProvider); err != nil {
+				return fmt.Errorf("ai.fix_prs.agent_runtime.model_provider: %w", err)
+			}
+			if ar.OutputLimitBytes < 4<<10 || ar.OutputLimitBytes > 1<<20 {
+				return fmt.Errorf("ai.fix_prs.agent_runtime.output_limit_bytes must be between 4096 and 1048576")
+			}
+			if ar.MaxTurns > 1000 {
+				return fmt.Errorf("ai.fix_prs.agent_runtime.max_turns must be 0 or between 1 and 1000")
+			}
+			if hasTimeout && (timeout <= 0 || timeout > 30*time.Minute) {
+				return fmt.Errorf("ai.fix_prs.agent_runtime.timeout must be greater than zero and at most 30m")
 			}
 		}
 	}

@@ -71,9 +71,8 @@ Set the bearer token via the `AI_TOKEN` secret in the GitHub Actions workflow
 (see the [reusable workflow README](../README.md)). The token is sent as
 `Authorization: Bearer <AI_TOKEN>` unless an entry in `headers:` overrides it.
 
-Onboarding prompt authoring does not use these deployment credentials. Agent
-mode uses the selected credential from the user's existing OpenCode
-configuration; handoff and TODO-template modes do not run a model.
+Onboarding prompt authoring does not use these deployment credentials. Handoff
+and TODO-template modes do not run a model.
 
 ### Hiding the model identifier and endpoint URL from the public repo
 

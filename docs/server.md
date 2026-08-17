@@ -49,14 +49,10 @@ remains identical.
 | `POST /api/analysis-chat/sessions/{id}/messages` | Ask one bounded follow-up question and wait for the final transcript. |
 | `POST /api/analysis-chat/sessions/{id}/messages/stream` | Start or reconnect to a turn over SSE progress events. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/cancel` | Cancel one active owner-bound turn. |
-| `POST /api/analysis-chat/sessions/{id}/source-investigations` | Run one source investigation for a completed chat request and wait for the result. |
-| `POST /api/analysis-chat/sessions/{id}/source-investigations/stream` | Start or reconnect to a source investigation over SSE progress events. |
-| `GET /api/analysis-chat/sessions/{id}/source-investigations/{requestID}` | Read the persisted owner-bound investigation state. |
-| `POST /api/analysis-chat/sessions/{id}/source-investigations/{requestID}/cancel` | Cancel one active source investigation. |
 | `POST /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Start one authenticated, explicitly requested causal remediation investigation. Requires exact pattern and causal-group hashes plus `Idempotency-Key`. |
 | `GET /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Read the safe current status for one exact causal group. Requires exact hashes as query parameters. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/requests` | Admit one exact JUnit chat finding for persisted asynchronous Fix preview generation. Returns `202 Accepted` with an owner-bound action request. |
-| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview` | Generate a legacy pattern chat-to-fix preview synchronously. Requires the existing verified source investigation fields. |
+| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview` | Generate a legacy pattern chat-to-fix preview synchronously. Requires the existing verified source fields. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/correction/preview` | Preview an evidence-backed proposed correction. |
 | `POST /api/analysis-corrections/confirm` | Explicitly confirm a preview token and publish the correction overlay. |
 | `POST /api/analysis-corrections/{id}/revoke` | Revoke a correction and restore the original analysis. |
@@ -85,7 +81,7 @@ Recurring-pattern deterministic failures are retained in the private AI cache un
 
 The fetcher writes aggregate progress to `.fetch-status/status.json` and the last 20 terminal pass summaries to `.fetch-status/history.json` on the shared data volume. On POSIX filesystems the directory is mode `0700` and both files are mode `0600`. Some RWX filesystems enforce permissions at mount level, so an unsupported per-file `chmod` does not invalidate a successful atomic write. Private HTTP filtering remains mandatory, and the `/data/*` file server rejects the hidden directory. Authenticated servers expose the versioned aggregate status and an identity-free summary of the latest 10 passes through `/api/fetch-status`, with `Cache-Control: no-store`.
 
-Analysis progress separates accepted private-cache hits, compatible retained results, exact succeeded Task results reused during planning, Tasks created during the current pass, freshly completed analyses, and late Task adoption after planning. It also reports privacy-safe same-build failure-cohort candidates, potential Task savings, actual same-failure result reuse, and the largest cohort without exposing signatures or test identities. Aggregate cache rejection categories cover missing, expired, below-floor, critique, or malformed entries. Recent-pass summaries include only pass type, timestamps, duration, aggregate reuse and Task counts, retries, outcome, and publication state. Pattern progress includes accepted cache hits, deterministic failures suppressed by cooldown, fresh retries after cooldown expiry, retained last-known-good counts, separate bounded full-attempt and transient retry counts, ambiguity-repair counts, repair outcomes, and a safe final failure category. Raw errors, Task mappings, run or pass IDs from history, artifact identities, prompts, provider bodies, and filesystem paths are not included. The frontend polls this endpoint without overlapping requests, backs off after failures, and stops polling when the component unmounts.
+Analysis progress separates accepted private-cache hits, compatible retained results, freshly completed analyses, and cache misses. Aggregate cache rejection categories cover missing, expired, below-floor, critique, or malformed entries. Recent-pass summaries include only pass type, timestamps, duration, aggregate reuse and Task counts, retries, outcome, and publication state. Pattern progress includes accepted cache hits, deterministic failures suppressed by cooldown, fresh retries after cooldown expiry, retained last-known-good counts, separate bounded full-attempt and transient retry counts, ambiguity-repair counts, repair outcomes, and a safe final failure category. Raw errors, Task mappings, run or pass IDs from history, artifact identities, prompts, provider bodies, and filesystem paths are not included. The frontend polls this endpoint without overlapping requests, backs off after failures, and stops polling when the component unmounts.
 
 Post-publication status can include a bounded `follow_up` object with `notifications`, `remediation`, `automatic_issues`, and `automatic_fix_prs`. Component states are `running`, `completed`, `skipped`, `disabled`, `failed`, or `cancelled`. Skip reasons are limited to `not-configured`, `no-work`, and `dependency-failed`. Failed components expose only fixed codes and summaries: `notification-credentials`, `notification-configuration`, `notification-delivery`, `notification-state-persistence`, `remediation-processing`, `automatic-issues`, and `automatic-fix-prs`. Raw SMTP, GitHub, runtime, URL, credential, and state errors are never persisted in fetch status or returned by the API.
 
@@ -174,10 +170,9 @@ tools expose at most three affected builds under
 group one current build when capacity permits, then fills remaining slots with
 the newest shared builds. Every causal group remains in the textual context even
 when it has no artifact slot. A changed hash returns `409 Conflict`.
-Pattern conversations cannot be promoted as test-analysis corrections or start
-source investigation. Recurrence-classified causal-group patterns also remain
-blocked from chat-to-fix; only legacy action-capable pattern sessions can use the
-existing fix bridge.
+Pattern conversations cannot be promoted as test-analysis corrections.
+Recurrence-classified causal-group patterns also remain blocked from chat-to-fix;
+only legacy action-capable pattern sessions can use the existing fix bridge.
 
 An exact failed JUnit session may use one successful assistant response for a Fix
 PR preview when that turn has at least one validated current-turn artifact
@@ -195,8 +190,8 @@ In the dashboard, a systemic recurring-pattern card with a published content
 hash renders the same **Chat with agent** control as a test analysis when at
 least one affected build remains in the current job data window. Pattern
 conversations use cross-build suggested questions, hide test-only correction
-and source-investigation controls, and link build-qualified citations back to
-the matching affected run when a web URL is available.
+controls, and link build-qualified citations back to the matching affected run
+when a web URL is available.
 Job-detail and flakiness writers always backfill the canonical content hash and
 preserve an existing stable pattern ID. This upgrades cached or older pattern
 results without clearing the analysis cache or rerunning pattern analysis.
@@ -306,78 +301,6 @@ client does not cancel the server-owned turn; it can reconnect with the same
 request ID. Server shutdown and explicit cancellation stop the background model
 context and persist a terminal cancelled outcome.
 
-## Source investigation API
-
-See [Orka architecture and lifecycle](maintainer/orka.md#architecture-and-lifecycle) for
-how this read-only Agent path differs from container analysis and fix
-generation.
-
-Source investigation is an optional Kubernetes-native extension to analysis
-chat. Set `ANALYSIS_SOURCE_INVESTIGATION_ENABLED=1` and configure
-`ai.source_investigation` in `project.yaml`. The server then advertises
-`features.source_investigation: true`. Static Pages mode never serves or
-advertises this capability. The dashboard adds an **Investigate source** control
-to completed assistant responses and follows persisted progress over SSE. Users
-can reconnect to an interrupted stream, cancel an active Task, and review the
-verified finding and citations in the conversation.
-
-A source request starts from one completed chat request, not an arbitrary prompt.
-Post the chat request ID with a new `Idempotency-Key`:
-
-```json
-{"chat_request_id":"chat-request-123"}
-```
-
-The server binds the request to the authenticated session owner and snapshots the
-selected build, published analysis generation timestamp, chat question, and chat
-answer. It resolves the effective `ai.source_repo` only from that build's exact
-`repo_refs` entry. The revision must be a full commit SHA. The server never falls
-back to the decorated build commit, a branch name, or current `main`. It accepts a
-bare full SHA or Prow's unambiguous `ref:fullSHA` form. Composite presubmit refs
-are rejected because they do not identify the exact merged checkout. For sessions
-created before repository refs were persisted, the server re-reads the same job
-and build while requiring the original analysis timestamp to still match.
-
-The runtime creates an Orka agent Task at the pinned revision with Orka's enforced
-`orka.ai/agent-read-only` guard. Unsupported guarded runtimes fail before agent
-execution. The Task permits repository read tools, disables Bash and edit tools,
-and uses a workspace initializer so the read-only Git credential is not mounted
-into the agent container. A dedicated server ServiceAccount receives Task-only
-create, get, patch, and delete permissions. The runtime rejects any result that
-contains a workspace diff or push branch. It never receives `BOT_TOKEN` or
-`FIX_TOKEN`.
-
-The agent returns a bounded deterministic state (`already_present`,
-`actionable_code_change`, `actionable_configuration_change`, or `inconclusive`),
-validated remediation metadata when actionable, a finding, confidence,
-relationship to the published analysis, investigation direction, and source
-citations. Every citation path and
-line range is validated and its quote is checked against the same pinned GitHub
-revision before `verified: true` is persisted. Public repositories need no extra
-credential. Private repositories require a read-only token in
-`SOURCE_INVESTIGATION_GITHUB_TOKEN`; the Helm chart wires the configured
-GitHub read-token Secret. A missing file, changed quote, unsafe path, mutable
-revision, or unavailable verification source fails the request instead of
-presenting an unverified citation.
-
-Requests share the private analysis chat state file, owner binding, rolling rate
-limit, advisory lock, expiry, and replica-safe lease behavior. They continue
-after an SSE disconnect and expose only `queued`, `cloning_source`,
-`investigating_source`, `verifying_citations`, `finalizing`, or `cancelling`
-progress. Cancellation is idempotent and deletes the active Task on timeout or
-client cancellation. Before starting, the UI identifies the exact repository and
-commit when available and explains that source investigation starts a separate
-read-only coding-agent Task with a larger cost and security boundary.
-
-Additional settings:
-
-| Environment variable | Default | Purpose |
-| --- | --- | --- |
-| `ANALYSIS_SOURCE_INVESTIGATION_ENABLED` | `false` | Advertise and serve source investigation. Requires analysis chat. |
-| `ANALYSIS_SOURCE_INVESTIGATION_MAX_PER_SESSION` | `8` | Persisted source requests per chat session. |
-| `ANALYSIS_SOURCE_INVESTIGATION_MAX_ACTIVE_PER_OWNER` | `1` | Concurrent source Tasks per login. |
-| `SOURCE_INVESTIGATION_GITHUB_TOKEN` | empty | Optional read-only token for pinned citation verification in private GitHub repositories. |
-
 ## Causal remediation investigation API
 
 Set `CAUSAL_REMEDIATION_INVESTIGATION_ENABLED=true` to expose the authenticated
@@ -462,9 +385,8 @@ advertise the feature and continue stripping `ai_traces.json` before publication
 
 When analysis chat and write actions are both configured for the same source and
 Fix PR repository, the server advertises `features.chat_fix: true`. It advertises
-`features.fix_prs: true` only for Agent Sandbox, Orka, or an explicit trusted
-local-development opt-in, and advertises `features.junit_chat_fix: true` only
-when the Fix runtime is Agent Sandbox.
+`features.fix_prs: true` only for Agent Sandbox and advertises
+`features.junit_chat_fix: true` when that runtime is configured.
 
 An exact JUnit client admits one successful assistant response for asynchronous
 preview generation:
@@ -573,14 +495,13 @@ persisted asynchronous requests use the same code contract, while older payloads
 without a code remain readable. A shared remediation policy also blocks destructive CRD
 conversion changes and any recommendation that falsely claims admission webhook
 cleanup disables or bypasses CRD conversion. Safe admission cleanup must preserve
-conversion availability. The endpoint does not call a model, create an Orka Task,
+conversion availability. The endpoint does not call a model, create a Sandbox,
 persist an action request, or send draft-ready email. Draft endpoints, restored
 previews, and confirmation repeat the policy and remain authoritative.
 
-File issue and Mark resolved work in the standard server image. Local OpenCode
-uses the full fixer image because it needs git and the pinned `srt` sandbox.
-Agent Sandbox uses the smaller `remote-fixer` image because the dashboard needs
-git only to reconstruct and validate the returned patch.
+File issue and Mark resolved work in the standard server image. Agent Sandbox
+uses the smaller `remote-fixer` image because the dashboard needs git only to
+reconstruct and validate the returned patch.
 
 Systemic-pattern email links can deep-link into this flow with the public pattern
 id and requested action. The link itself is an inert GET. After authentication,

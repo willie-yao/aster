@@ -160,7 +160,7 @@ export function PatternRemediation({
       </Typography>
       {recurringGroups.length === 0 ? (
         <Typography sx={{ mt: 0.75 }}>
-          No recurring causal group was identified for source investigation.
+          No recurring causal group was identified for remediation investigation.
         </Typography>
       ) : (
         <Stack spacing={1.5} sx={{ mt: 0.75 }}>

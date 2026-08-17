@@ -66,7 +66,7 @@ the changelog.
    configuration still requires the resolved OCI digest.
    The git-only remote fixer is published at
    `ghcr.io/<owner>/aster/remote-fixer` for dashboard-side patch
-   reconstruction and contains neither OpenCode nor srt.
+   reconstruction and contains neither OpenCode nor model credentials.
 
 The `backend/` tag does not match the release or image workflow triggers, so it
 does not publish a second GitHub Release or duplicate OCI artifacts. To inspect

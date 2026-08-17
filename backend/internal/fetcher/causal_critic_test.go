@@ -112,9 +112,9 @@ func TestValidateCausalCriticOptions(t *testing.T) {
 	if err := validateAnalysisRuntimeOptions(direct); err == nil || !strings.Contains(err.Error(), "internal service DNS") {
 		t.Fatalf("direct provider error = %v", err)
 	}
-	orka := valid
-	orka.ShadowAnalysis.Enabled = true
-	if err := validateCausalCriticOptions(orka); err == nil || !strings.Contains(err.Error(), "cannot run") {
+	shadow := valid
+	shadow.ShadowAnalysis.Enabled = true
+	if err := validateCausalCriticOptions(shadow); err == nil || !strings.Contains(err.Error(), "cannot run") {
 		t.Fatalf("dual shadow error = %v", err)
 	}
 }

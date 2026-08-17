@@ -45,7 +45,6 @@ type persistedSession struct {
 	Requests             map[string]persistedRequest       `json:"requests,omitempty"`
 	FixSources           map[string]persistedTestFixSource `json:"fix_sources,omitempty"`
 	Active               *persistedActiveTurn              `json:"active,omitempty"`
-	Investigations       map[string]persistedInvestigation `json:"investigations,omitempty"`
 }
 
 type persistedResolvedAnalysis struct {
@@ -80,18 +79,6 @@ type persistedTestFixSource struct {
 	FailureRevision          string            `json:"failure_revision"`
 	GenerationBaseRevision   string            `json:"generation_base_revision"`
 	VerifiedSourceFileHashes map[string]string `json:"verified_source_file_hashes"`
-}
-
-type persistedInvestigation struct {
-	View          sourceinvestigation.View       `json:"view"`
-	InputHash     string                         `json:"input_hash"`
-	Subject       sourceinvestigation.Subject    `json:"subject"`
-	Repository    sourceinvestigation.Repository `json:"repository,omitempty"`
-	Revision      string                         `json:"revision,omitempty"`
-	FailureKind   string                         `json:"failure_kind,omitempty"`
-	LeaseID       string                         `json:"lease_id,omitempty"`
-	LeaseExpires  time.Time                      `json:"lease_expires,omitempty"`
-	CancelRequest bool                           `json:"cancel_requested,omitempty"`
 }
 
 type persistedActiveTurn struct {

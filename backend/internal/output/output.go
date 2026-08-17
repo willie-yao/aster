@@ -23,7 +23,7 @@ const (
 
 // NonPublishedFiles are operational files written into the output directory that
 // must not be served by the API server or deployed to the public Pages site:
-// the AI cache, Orka identity manifest, and operational side-effect state. The
+// the AI cache, private analysis state, and operational side-effect state. The
 // frontend never reads them; they carry operational metadata rather than
 // dashboard data. resolved.json is intentionally excluded from this list because
 // the frontend serves it to render resolved-failure state.
@@ -38,6 +38,8 @@ var NonPublishedFiles = []string{
 	"notification_state.json",
 	"remediation_state.json",
 	"remediation_prow_catalog.json",
+	// Retained so a stale file left in an existing data directory by a removed
+	// analysis runtime is never published.
 	"orka_analysis.json",
 	"action_request_state.json",
 	"action_preview_state.json",

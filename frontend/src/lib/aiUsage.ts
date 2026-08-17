@@ -1,4 +1,5 @@
 import type { AIUsageDaily, AIUsageFeature, AIUsageTotals } from "../types/usage";
+// source_investigation is retained for historical records only.
 export const featureLabels: Record<AIUsageFeature, string> = {
   failure_analysis: "Failure analysis", pattern_analysis: "Pattern analysis",
   analysis_chat: "Analysis chat", issue_draft: "Issue drafts", fix_preview: "Fix PR preview",

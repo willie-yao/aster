@@ -20,7 +20,7 @@ type AnalysisSnapshot struct {
 	RelevantFiles []string
 }
 
-// FixCandidate is one selected successful answer and optional source result.
+// FixCandidate is one selected successful answer.
 type FixCandidate struct {
 	SessionID                string
 	RequestID                string
@@ -29,10 +29,6 @@ type FixCandidate struct {
 	AssistantAnswer          string
 	ProposedRevision         *Revision
 	ArtifactCitations        []Citation
-	SourceRequestID          string
-	SourceRepository         sourceinvestigation.Repository
-	SourceRevision           string
-	SourceResult             *sourceinvestigation.Result
 	Pattern                  models.PatternAnalysis
 	ResponseHash             string
 	AnalysisContentHash      string
@@ -158,7 +154,7 @@ func fixCandidateResponseHash(candidate FixCandidate) (string, error) {
 }
 
 // FixCandidate returns one owner-bound evidence-backed assistant response.
-func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHash, sourceRequestID string) (FixCandidate, error) {
+func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHash string) (FixCandidate, error) {
 	owner = normalizeOwner(owner)
 	patternID = strings.TrimSpace(patternID)
 	patternHash = strings.TrimSpace(patternHash)
@@ -168,12 +164,6 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 	requestID, err := normalizeRequestID(requestID)
 	if err != nil {
 		return FixCandidate{}, err
-	}
-	if strings.TrimSpace(sourceRequestID) != "" {
-		sourceRequestID, err = normalizeRequestID(sourceRequestID)
-		if err != nil {
-			return FixCandidate{}, err
-		}
 	}
 	now := s.opts.Now().UTC()
 	ctx, cancel := s.store.context()
@@ -210,49 +200,7 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 			ProposedRevision:  cloneRevision(answer.ProposedRevision),
 			ArtifactCitations: slices.Clone(answer.Citations),
 		}
-		if sourceRequestID == "" {
-			return changed, nil
-		}
-		record, ok := current.Investigations[sourceRequestID]
-		if !ok || record.View.ChatRequestID != requestID {
-			return changed, ErrRequestNotFound
-		}
-		switch record.View.Status {
-		case sourceinvestigation.StatusPending:
-			return changed, ErrRequestPending
-		case sourceinvestigation.StatusUnknown:
-			return changed, ErrRequestOutcomeUnknown
-		case sourceinvestigation.StatusFailed:
-			return changed, sourceinvestigation.ErrUnavailable
-		case sourceinvestigation.StatusSucceeded:
-			if record.View.Result == nil || sourceinvestigation.ValidateVerifiedResult(*record.View.Result) != nil {
-				return changed, sourceinvestigation.ErrInvalidResult
-			}
-			if record.View.Result.State != sourceinvestigation.StateActionableCodeChange &&
-				record.View.Result.State != sourceinvestigation.StateActionableConfigurationChange {
-				return changed, fmt.Errorf("%w: source investigation is not actionable", sourceinvestigation.ErrInvalidResult)
-			}
-			if record.View.Result.Target == nil {
-				return changed, fmt.Errorf("%w: actionable source result has no target", sourceinvestigation.ErrInvalidResult)
-			}
-			if err := sourceinvestigation.ValidateRepository(record.Repository); err != nil {
-				return changed, fmt.Errorf("%w: source repository identity is invalid: %v", sourceinvestigation.ErrInvalidResult, err)
-			}
-			revision, ok := buildsource.NormalizeRevision(record.Revision)
-			if !ok {
-				return changed, sourceinvestigation.ErrUnavailable
-			}
-			if !strings.EqualFold(revision, record.Repository.Revision) {
-				return changed, fmt.Errorf("%w: source revision does not match the bound repository", sourceinvestigation.ErrInvalidResult)
-			}
-			candidate.SourceRequestID = sourceRequestID
-			candidate.SourceRepository = record.Repository
-			candidate.SourceRevision = revision
-			candidate.SourceResult = sourceinvestigation.CloneResult(record.View.Result)
-			return changed, nil
-		default:
-			return changed, fmt.Errorf("%w: source investigation has invalid status", ErrInvalidRequest)
-		}
+		return changed, nil
 	})
 	if err != nil {
 		return FixCandidate{}, err

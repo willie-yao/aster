@@ -36,7 +36,6 @@ export async function previewChatFix(
   chatRequestID: string,
   patternID: string | null,
   patternHash: string | null,
-  sourceRequestID: string | null,
   instruction: string,
   signal?: AbortSignal,
 ): Promise<ChatFixPreview> {
@@ -51,7 +50,6 @@ export async function previewChatFix(
       body: JSON.stringify({
         ...(patternID ? { pattern_id: patternID } : {}),
         ...(patternHash ? { pattern_hash: patternHash } : {}),
-        ...(sourceRequestID ? { source_request_id: sourceRequestID } : {}),
         ...(instruction.trim() ? { instruction: instruction.trim() } : {}),
       }),
     },

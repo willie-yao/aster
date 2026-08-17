@@ -73,8 +73,7 @@ same engine-owned workflow with `$setup-aster-consumer`; see the
 
 Both deployment paths use the supported in-process analyzer. Pages publishes
 static JSON and assets. Kubernetes adds a server for authentication, chat, and
-guarded actions. Experimental external runtimes and Fix PR generation are not
-part of standard onboarding.
+guarded actions. Fix PR generation is not part of standard onboarding.
 
 ## Documentation
 

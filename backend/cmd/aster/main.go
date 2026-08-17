@@ -56,13 +56,9 @@ func main() {
 	flag.BoolVar(&opts.IncludePresubmits, "include-presubmits", false, "include presubmit jobs in addition to periodics (ORed with project.yaml source.include_presubmits)")
 	flag.BoolVar(&opts.EnableAI, "ai", false, "enable AI-powered failure analysis")
 	flag.BoolVar(&opts.SkipSideEffects, "skip-side-effects", false, "write data without notifications, issues, or fix PRs")
-	analysisFlags := fetcher.BindAnalysisRuntimeFlags(flag.CommandLine, &opts)
+	fetcher.BindAnalysisRuntimeFlags(flag.CommandLine, &opts)
 	flag.Parse()
 
-	if err := analysisFlags.DecodePlacement(&opts); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(2)
-	}
 	opts.Version = version
 	opts.TraceEngine = ai.TraceEngine{Version: version, Commit: commit, ImageTag: imageTag}
 
@@ -233,19 +229,8 @@ func runOnboard(args []string) {
 	fs.StringVar(&opts.OutDir, "out", "", "dashboard consumer directory for the scaffold")
 	fs.BoolVar(&enableAI, "ai", true, "enable deployed AI failure analysis")
 	fs.BoolVar(&opts.NoPrompt, "no-prompt", false, "skip prompt authoring and always write the prompts/system.md TODO template")
-	fs.StringVar(&opts.PromptMode, "prompt-mode", "", "prompt authoring mode: agent, handoff, or todo-template")
-	fs.StringVar(&opts.PromptAgentRuntime, "prompt-agent-runtime", "", "agent prompt runtime: opencode (default) or orka")
-	fs.StringVar(&opts.PromptAgentModel, "prompt-agent-model", "", "OpenCode provider/model for agent prompt authoring")
-	fs.StringVar(&opts.PromptOrkaAPI, "prompt-orka-api", "", "Orka result API base URL for prompt authoring")
-	fs.StringVar(&opts.PromptOrkaAgentRef, "prompt-orka-agent-ref", "", "Orka Agent name for prompt authoring")
-	fs.StringVar(&opts.PromptOrkaNamespace, "prompt-orka-namespace", "", "Orka namespace for prompt authoring")
-	fs.StringVar(&opts.PromptOrkaGitSecret, "prompt-orka-git-secret", "", "optional read-only Orka git Secret for prompt authoring")
-	fs.Func("prompt-network-domain", "additional provider domain[:port] allowed during prompt authoring; repeat as needed", func(value string) error {
-		opts.PromptNetworkDomains = append(opts.PromptNetworkDomains, value)
-		return nil
-	})
-	fs.DurationVar(&opts.PromptTimeout, "prompt-timeout", onboard.DefaultPromptDraftTimeout, "total timeout for prompt authoring, including agent execution")
-	fs.BoolVar(&opts.RequirePromptDraft, "require-prompt-draft", false, "fail before writes unless agent prompt drafting succeeds")
+	fs.StringVar(&opts.PromptMode, "prompt-mode", "", "prompt authoring mode: handoff or todo-template")
+	fs.DurationVar(&opts.PromptTimeout, "prompt-timeout", onboard.DefaultPromptDraftTimeout, "total timeout for prompt source resolution")
 	fs.BoolVar(&opts.OpenPR, "open-pr", false, "open a PR against the dashboard repo instead of writing locally; needs GITHUB_TOKEN write access")
 	fs.BoolVar(&opts.UpdateExisting, "update-existing", false, "replace only known engine-generated files in an existing local scaffold")
 	fs.BoolVar(&opts.ReplaceConsumerOwned, "replace-consumer-owned", false, "with -update-existing, explicitly replace prompts/system.md; existing skills are always preserved")

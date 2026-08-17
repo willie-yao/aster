@@ -39,7 +39,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/corrections"
 	"github.com/willie-yao/aster/backend/internal/fixruntime"
 	"github.com/willie-yao/aster/backend/internal/notify"
-	"github.com/willie-yao/aster/backend/internal/orka"
 	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/remediationinvestigation"
@@ -209,11 +208,6 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 			return err
 		}
 	}
-	if features.SourceInvestigation {
-		if err := enableSourceInvestigation(opts, cfg, chatService); err != nil {
-			return err
-		}
-	}
 	if features.CausalRemediationInvestigation {
 		if err := enableCausalRemediationInvestigation(ctx, opts, cfg, projectDir, dataDir, usageRecorder); err != nil {
 			return err
@@ -228,8 +222,7 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 		analysisRepo := cfg.EffectiveAnalysisSourceRepo()
 		fixConfig := cfg.EffectiveFixPRs()
 		exactEnabled := exactJUnitChatFixEnabled(fixConfig) && !opts.DisableFixActions
-		legacyEnabled := features.SourceInvestigation && !opts.DisableFixActions
-		if (exactEnabled || legacyEnabled) && fixConfig.Repo != nil && strings.EqualFold(analysisRepo.Owner, fixConfig.Repo.Owner) && strings.EqualFold(analysisRepo.Name, fixConfig.Repo.Name) {
+		if exactEnabled && fixConfig.Repo != nil && strings.EqualFold(analysisRepo.Owner, fixConfig.Repo.Owner) && strings.EqualFold(analysisRepo.Name, fixConfig.Repo.Name) {
 			if exactEnabled {
 				if err := chatService.ConfigureTestFixPreflight(actionService.PreflightAnalysisFixSource); err != nil {
 					return fmt.Errorf("configuring exact JUnit Fix source preflight: %w", err)
@@ -240,7 +233,7 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 			actionService.ConfigureAnalysisPreviewValidator(bridge)
 			opts.Capabilities.Features.JUnitChatFix = exactEnabled
 			opts.Capabilities.Features.ChatFixMinConfidence = fixConfig.MinConfidence
-			log.Printf("🛠️ analysis chat fix previews enabled (exact_junit=%t legacy_pattern=%t)", exactEnabled, legacyEnabled)
+			log.Printf("🛠️ analysis chat fix previews enabled (exact_junit=%t)", exactEnabled)
 		} else {
 			log.Printf("🛠️ analysis chat fix previews disabled: no compatible runtime or source and fix repositories differ")
 		}
@@ -273,28 +266,13 @@ func fixActionsEnabled(fixConfig project.FixPRs, authMode string) (bool, error) 
 			return false, fmt.Errorf("ai.fix_prs.verify requires %s=true on a trusted development or CI host", engineruntime.TrustedLocalRuntimeEnv)
 		}
 	}
-	switch fixConfig.AgentRuntime.Type {
-	case "agent-sandbox", "orka":
-		return true, nil
-	case "", "opencode":
-		trusted, err := engineruntime.TrustedLocalRuntimeEnabled()
-		if err != nil {
-			return false, err
-		}
-		if trusted && authMode != "dev" {
-			return false, fmt.Errorf("%s requires AUTH_MODE=dev", engineruntime.TrustedLocalRuntimeEnv)
-		}
-		return trusted, nil
-	default:
-		return false, nil
-	}
+	return fixConfig.AgentRuntime.Type == "" || fixConfig.AgentRuntime.Type == "agent-sandbox", nil
 }
 
 type interactiveFeatures struct {
 	Actions                        bool
 	AnalysisChat                   bool
 	AnalysisCorrections            bool
-	SourceInvestigation            bool
 	CausalRemediationInvestigation bool
 	CausalRemediationFixPreview    bool
 }
@@ -310,13 +288,6 @@ func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
 	}
 	if correctionsEnabled && !chat {
 		return interactiveFeatures{}, fmt.Errorf("ANALYSIS_CORRECTIONS_ENABLED requires ANALYSIS_CHAT_ENABLED")
-	}
-	sourceEnabled, err := optionalBoolEnv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", false)
-	if err != nil {
-		return interactiveFeatures{}, err
-	}
-	if sourceEnabled && !chat {
-		return interactiveFeatures{}, fmt.Errorf("ANALYSIS_SOURCE_INVESTIGATION_ENABLED requires ANALYSIS_CHAT_ENABLED")
 	}
 	causalRemediation, err := optionalBoolEnv("CAUSAL_REMEDIATION_INVESTIGATION_ENABLED", false)
 	if err != nil {
@@ -335,7 +306,7 @@ func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
 	}
 	return interactiveFeatures{
 		Actions: actions, AnalysisChat: chat, AnalysisCorrections: correctionsEnabled,
-		SourceInvestigation: sourceEnabled, CausalRemediationInvestigation: causalRemediation, CausalRemediationFixPreview: causalPreview,
+		CausalRemediationInvestigation: causalRemediation, CausalRemediationFixPreview: causalPreview,
 	}, nil
 }
 
@@ -603,64 +574,6 @@ func causalRemediationTimeoutFromEnv() (time.Duration, error) {
 		return 0, fmt.Errorf("CAUSAL_REMEDIATION_INVESTIGATION_TIMEOUT must be greater than zero and at most %s", maxTimeout)
 	}
 	return timeout, nil
-}
-
-func sourceInvestigationKubeContext() string {
-	return os.Getenv("ORKA_KUBE_CONTEXT")
-}
-
-func enableSourceInvestigation(
-	opts *server.Options,
-	cfg *project.Config,
-	chatService *analysischat.Service,
-) error {
-	if chatService == nil {
-		return fmt.Errorf("source investigation requires analysis chat")
-	}
-	if cfg.AI == nil || cfg.AI.SourceInvestigation == nil {
-		return fmt.Errorf("source investigation requires ai.source_investigation in project.yaml")
-	}
-	runtimeConfig := cfg.EffectiveSourceInvestigation()
-	timeout, err := time.ParseDuration(runtimeConfig.Timeout)
-	if err != nil {
-		return fmt.Errorf("configuring source investigation timeout: %w", err)
-	}
-	runner, err := orka.NewSourceInvestigatorFromEnv(orka.SourceInvestigationFromEnvConfig{
-		Namespace:         runtimeConfig.Namespace,
-		AgentRef:          runtimeConfig.AgentRef,
-		API:               runtimeConfig.API,
-		GitSecret:         runtimeConfig.GitSecret,
-		Version:           runtimeConfig.Version,
-		MaxRetries:        *runtimeConfig.Retries,
-		MaxTurns:          runtimeConfig.MaxTurns,
-		AdmissionIdentity: strings.TrimSpace(os.Getenv("SOURCE_INVESTIGATION_ADMISSION_IDENTITY")),
-		KubeContext:       sourceInvestigationKubeContext(),
-		GitHubToken:       os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"),
-	})
-	if err != nil {
-		return fmt.Errorf("configuring source investigation runtime: %w", err)
-	}
-	serviceOpts := analysischat.SourceInvestigationOptions{
-		Timeout: timeout, LeaseTTL: timeout + 30*time.Second, MaxPerSession: 8, MaxActivePerOwner: 1,
-	}
-	serviceOpts.MaxPerSession, err = positiveIntEnv("ANALYSIS_SOURCE_INVESTIGATION_MAX_PER_SESSION", serviceOpts.MaxPerSession)
-	if err != nil {
-		return err
-	}
-	serviceOpts.MaxActivePerOwner, err = positiveIntEnv("ANALYSIS_SOURCE_INVESTIGATION_MAX_ACTIVE_PER_OWNER", serviceOpts.MaxActivePerOwner)
-	if err != nil {
-		return err
-	}
-	sourceRepo := cfg.EffectiveAnalysisSourceRepo()
-	if err := chatService.ConfigureSourceInvestigation(runner, sourceinvestigation.Repository{
-		Owner: sourceRepo.Owner, Name: sourceRepo.Name,
-	}, serviceOpts); err != nil {
-		return fmt.Errorf("configuring source investigation service: %w", err)
-	}
-	opts.SourceInvestigation = chatService
-	opts.SourceInvestigationTimeout = timeout
-	log.Printf("🔎 source investigation enabled (repo=%s/%s timeout=%s)", sourceRepo.Owner, sourceRepo.Name, timeout)
-	return nil
 }
 
 func analysisChatTimeoutFromEnv() (time.Duration, error) {

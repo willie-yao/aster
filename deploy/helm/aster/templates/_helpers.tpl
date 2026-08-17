@@ -59,18 +59,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s:%s" .Values.image.repository $tag -}}
 {{- end -}}
 
-{{/* Analyzer image used only by the experimental Orka container runtime. */}}
-{{- define "aster.analyzerImage" -}}
-{{- $tag := include "aster.resolvedImageTag" (list . .Values.analysisRuntime.orkaContainer.image.tag) -}}
-{{- printf "%s:%s" .Values.analysisRuntime.orkaContainer.image.repository $tag -}}
-{{- end -}}
-
-{{/* Git-capable engine image used by the opt-in fix runtime. */}}
-{{- define "aster.fixerImage" -}}
-{{- $tag := include "aster.resolvedImageTag" (list . .Values.orka.fixRuntime.image.tag) -}}
-{{- printf "%s:%s" .Values.orka.fixRuntime.image.repository $tag -}}
-{{- end -}}
-
 {{/* Minimal git-capable engine image used with Agent Sandbox. */}}
 {{- define "aster.agentSandboxDashboardImage" -}}
 {{- $image := .Values.agentSandbox.fixRuntime.dashboardImage -}}
@@ -78,27 +66,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s:%s" $image.repository $tag -}}
 {{- end -}}
 
-{{/*
-Small image used to materialize ConfigMap project files for container analysis.
-*/}}
+{{/* Small image used by tests that materialize ConfigMap project files. */}}
 {{- define "aster.projectMaterializerImage" -}}
 {{- printf "%s:%s" .Values.project.materializer.image.repository .Values.project.materializer.image.tag -}}
 {{- end -}}
 
-{{/*
-Release scope for cross-namespace Orka RBAC names.
-*/}}
-{{- define "aster.orkaReleaseScope" -}}
+{{/* Release scope for cross-namespace resource names. */}}
+{{- define "aster.releaseScope" -}}
 {{- printf "%s/%s" .Release.Namespace .Release.Name | sha256sum | trunc 8 -}}
-{{- end -}}
-
-{{- define "aster.orkaAnalysisNamespace" -}}
-{{- if .Values.analysisRuntime.orkaContainer.namespace -}}
-{{- .Values.analysisRuntime.orkaContainer.namespace -}}
-{{- else -}}
-{{- $base := include "aster.fullname" . | trunc 44 | trimSuffix "-" -}}
-{{- printf "%s-analysis-%s" $base (include "aster.orkaReleaseScope" .) -}}
-{{- end -}}
 {{- end -}}
 
 {{/*
@@ -212,156 +187,140 @@ Name of the Secret holding the AI token.
 {{- end -}}
 {{- end -}}
 
-{{/*
-Name of the ServiceAccount used by Orka fix generation.
-*/}}
-{{- define "aster.orkaServiceAccountName" -}}
-{{- if .Values.orka.rbac.serviceAccountName -}}
-{{- .Values.orka.rbac.serviceAccountName -}}
-{{- else -}}
-{{- printf "%s-orka" (include "aster.fullname" .) -}}
-{{- end -}}
+{{/* Immutable analysis shadow executor image. */}}
+{{- define "aster.agentAnalysisShadowExecutorImage" -}}
+{{- printf "%s@%s" .Values.agentSandbox.analysisShadow.image.repository .Values.agentSandbox.analysisShadow.image.digest -}}
 {{- end -}}
 
-{{/*
-Name of cross-namespace Orka RBAC resources. Include the source release scope
-because Helm release names are unique only within their own namespace.
-*/}}
-{{- define "aster.orkaRBACName" -}}
-{{- $base := include "aster.fullname" . | trunc 49 | trimSuffix "-" -}}
-{{- printf "%s-orka-%s" $base (include "aster.orkaReleaseScope" .) -}}
+{{/* Tokenless ServiceAccount used inside analysis shadow Sandboxes. */}}
+{{- define "aster.agentAnalysisShadowWorkloadServiceAccountName" -}}
+{{- .Values.agentSandbox.analysisShadow.workloadServiceAccount.name -}}
 {{- end -}}
 
-{{/* TokenRequest RBAC used to mint the isolated fix identity. */}}
-{{- define "aster.orkaFixTokenRBACName" -}}
-{{- $base := include "aster.fullname" . | trunc 40 | trimSuffix "-" -}}
-{{- printf "%s-fix-token-%s" $base (include "aster.orkaReleaseScope" .) -}}
-{{- end -}}
-
-{{/* Fix Task admission policy name. */}}
-{{- define "aster.orkaFixAdmissionName" -}}
-{{- $base := include "aster.fullname" . | trunc 39 | trimSuffix "-" -}}
-{{- printf "%s-fix-guard-%s" $base (include "aster.orkaReleaseScope" .) -}}
-{{- end -}}
-
-{{/* Source investigation Task admission policy name. */}}
-{{- define "aster.orkaSourceAdmissionName" -}}
-{{- $base := include "aster.fullname" . | trunc 36 | trimSuffix "-" -}}
-{{- printf "%s-source-guard-%s" $base (include "aster.orkaReleaseScope" .) -}}
-{{- end -}}
-
-{{/* Source investigation RBAC stays separate from fix-generation RBAC. */}}
-{{- define "aster.orkaSourceRBACName" -}}
-{{- $base := include "aster.fullname" . | trunc 39 | trimSuffix "-" -}}
-{{- printf "%s-source-%s" $base (include "aster.orkaReleaseScope" .) -}}
-{{- end -}}
-
-{{/* ServiceAccount used only by the web-facing source investigation runtime. */}}
-{{- define "aster.orkaSourceServiceAccountName" -}}
-{{- if .Values.server.chat.sourceInvestigation.serviceAccountName -}}
-{{- .Values.server.chat.sourceInvestigation.serviceAccountName -}}
-{{- else -}}
-{{- $base := include "aster.fullname" . | trunc 56 | trimSuffix "-" -}}
-{{- printf "%s-source" $base -}}
-{{- end -}}
-{{- end -}}
-
-{{/* Analysis RBAC stays separate from fix-generation RBAC. */}}
-{{- define "aster.orkaAnalysisRBACName" -}}
-{{- $base := include "aster.fullname" . | trunc 40 | trimSuffix "-" -}}
-{{- printf "%s-analysis-%s" $base (include "aster.orkaReleaseScope" .) -}}
-{{- end -}}
-
-{{- define "aster.orkaAnalysisAdmissionName" -}}
-{{- $base := include "aster.fullname" . | trunc 34 | trimSuffix "-" -}}
-{{- printf "%s-analysis-guard-%s" $base (include "aster.orkaReleaseScope" .) -}}
-{{- end -}}
-
-
-{{/* Dedicated ServiceAccount used only by Agent analysis shadow Tasks. */}}
-{{- define "aster.agentAnalysisShadowServiceAccountName" -}}
-{{- if .Values.orka.agentAnalysisShadow.serviceAccountName -}}
-{{- .Values.orka.agentAnalysisShadow.serviceAccountName -}}
-{{- else -}}
-{{- printf "%s-shadow" (include "aster.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-{{- end -}}
-
-{{/* Private shadow ledger PVC, never mounted by the server. */}}
-{{- define "aster.agentAnalysisShadowPVCName" -}}
-{{- if .Values.orka.agentAnalysisShadow.ledger.existingClaim -}}
-{{- .Values.orka.agentAnalysisShadow.ledger.existingClaim -}}
-{{- else -}}
-{{- printf "%s-shadow-ledger" (include "aster.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-{{- end -}}
-
-{{- define "aster.agentAnalysisShadowRBACName" -}}
-{{- $base := include "aster.fullname" . | trunc 37 | trimSuffix "-" -}}
-{{- printf "%s-shadow-%s" $base (include "aster.orkaReleaseScope" .) -}}
-{{- end -}}
-
+{{/* Cluster-scoped analysis shadow admission policy name. */}}
 {{- define "aster.agentAnalysisShadowAdmissionName" -}}
-{{- $base := include "aster.fullname" . | trunc 31 | trimSuffix "-" -}}
-{{- printf "%s-shadow-guard-%s" $base (include "aster.orkaReleaseScope" .) -}}
+{{- printf "%s-agent-sandbox-shadow-%s" (include "aster.fullname" .) (include "aster.releaseScope" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "aster.agentAnalysisShadowLedgerMountPath" -}}/private/agent-analysis-shadow{{- end -}}
-{{- define "aster.agentAnalysisShadowLedgerPath" -}}/private/agent-analysis-shadow/analysis_shadow.json{{- end -}}
+{{- define "aster.agentAnalysisShadowLedgerPath" -}}
+{{- printf "%s/analysis_shadow.json" (trimSuffix "/" .Values.agentSandbox.analysisShadow.ledger.mountPath) -}}
+{{- end -}}
 
-{{/* Validate the fail-closed Agent analysis shadow deployment contract. */}}
+{{/* Non-secret analysis shadow runtime environment for scheduled fetcher or worker. */}}
+{{- define "aster.agentAnalysisShadowEnv" -}}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_NAMESPACE
+  value: {{ .Values.agentSandbox.analysisShadow.namespace | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_IMAGE
+  value: {{ include "aster.agentAnalysisShadowExecutorImage" . | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_SERVICE_ACCOUNT
+  value: {{ include "aster.agentAnalysisShadowWorkloadServiceAccountName" . | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_RUNTIME_CLASS
+  value: {{ .Values.agentSandbox.analysisShadow.runtimeClassName | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_MODEL_PROVIDER_CREDENTIAL_MODE
+  value: {{ .Values.agentSandbox.analysisShadow.modelProvider.credentialMode | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_MODEL_PROVIDER_API
+  value: {{ .Values.agentSandbox.analysisShadow.modelProvider.api | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_MODEL_PROVIDER_ENDPOINT
+  value: {{ .Values.agentSandbox.analysisShadow.modelProvider.endpoint | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_MODEL_PROVIDER_MODEL
+  value: {{ .Values.agentSandbox.analysisShadow.modelProvider.model | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_MODEL_PROVIDER_AUTH_TYPE
+  value: "none"
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_MODEL_PROVIDER_PUBLIC_CA_PRIVATE_DNS
+  value: "false"
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_TIMEOUT
+  value: {{ .Values.agentSandbox.analysisShadow.timeout | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_OUTPUT_LIMIT_BYTES
+  value: {{ printf "%d" (int64 .Values.agentSandbox.analysisShadow.outputLimitBytes) | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_POLL_INTERVAL
+  value: {{ .Values.agentSandbox.analysisShadow.pollInterval | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_CPU_REQUEST
+  value: {{ index .Values.agentSandbox.analysisShadow.resources.requests "cpu" | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_CPU_LIMIT
+  value: {{ index .Values.agentSandbox.analysisShadow.resources.limits "cpu" | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_MEMORY_REQUEST
+  value: {{ index .Values.agentSandbox.analysisShadow.resources.requests "memory" | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_MEMORY_LIMIT
+  value: {{ index .Values.agentSandbox.analysisShadow.resources.limits "memory" | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_EPHEMERAL_STORAGE_LIMIT
+  value: {{ index .Values.agentSandbox.analysisShadow.resources.limits "ephemeral-storage" | quote }}
+{{- end -}}
+
+{{/* Validate the disabled-by-default private Agent analysis shadow. */}}
 {{- define "aster.validateAgentAnalysisShadow" -}}
-{{- if .Values.orka.agentAnalysisShadow.enabled -}}
-  {{- $cfg := .Values.orka.agentAnalysisShadow -}}
-  {{- $admission := $cfg.admission -}}
-  {{- if not .Values.ai.enabled -}}{{- fail "orka.agentAnalysisShadow.enabled requires ai.enabled=true" -}}{{- end -}}
-  {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "orka.agentAnalysisShadow.enabled requires analysisRuntime.type=inprocess" -}}{{- end -}}
-  {{- if .Values.orka.fixRuntime.enabled -}}{{- fail "orka.agentAnalysisShadow and orka.fixRuntime cannot be enabled together" -}}{{- end -}}
-  {{- if and (eq .Values.mode "cron") (ne .Values.fetcher.concurrencyPolicy "Forbid") -}}{{- fail "orka.agentAnalysisShadow requires fetcher.concurrencyPolicy=Forbid in cron mode" -}}{{- end -}}
-  {{- if not .Values.orka.namespace -}}{{- fail "orka.namespace is required when agentAnalysisShadow is enabled" -}}{{- end -}}
-  {{- if or (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" .Values.orka.namespace)) (gt (len .Values.orka.namespace) 63) -}}{{- fail "orka.namespace must be a lowercase DNS label of at most 63 characters" -}}{{- end -}}
-  {{- if not (regexMatch "^https?://[^/@?#]+(/[^?#]*)?$" $cfg.api) -}}{{- fail "orka.agentAnalysisShadow.api must be an absolute http or https URL without credentials" -}}{{- end -}}
-  {{- if or (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.agentVersion)) (gt (len $cfg.agentVersion) 30) -}}{{- fail "orka.agentAnalysisShadow.agentVersion must be a lowercase DNS label of at most 30 characters" -}}{{- end -}}
-  {{- if not $admission.agentRef -}}{{- fail "orka.agentAnalysisShadow.admission.agentRef is required" -}}{{- end -}}
-  {{- if or (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $admission.agentRef)) (gt (len $admission.agentRef) 253) -}}{{- fail "orka.agentAnalysisShadow.admission.agentRef must be a lowercase DNS name of at most 253 characters" -}}{{- end -}}
-  {{- if not $admission.repository.owner -}}{{- fail "orka.agentAnalysisShadow.admission.repository.owner is required" -}}{{- end -}}
-  {{- if not $admission.repository.name -}}{{- fail "orka.agentAnalysisShadow.admission.repository.name is required" -}}{{- end -}}
-  {{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$" $admission.repository.owner) -}}{{- fail "orka.agentAnalysisShadow.admission.repository.owner must be a GitHub owner name" -}}{{- end -}}
-  {{- if or (not (regexMatch "^[A-Za-z0-9_.-]+$" $admission.repository.name)) (hasSuffix ".git" $admission.repository.name) -}}{{- fail "orka.agentAnalysisShadow.admission.repository.name must be a GitHub repository name without .git" -}}{{- end -}}
-  {{- if and $admission.gitSecret (or (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $admission.gitSecret)) (gt (len $admission.gitSecret) 253)) -}}{{- fail "orka.agentAnalysisShadow.admission.gitSecret must be a lowercase Kubernetes object name of at most 253 characters" -}}{{- end -}}
-  {{- if and $admission.gitSecret (not (or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName)) -}}{{- fail "orka.agentAnalysisShadow.admission.gitSecret requires a dashboard-side GITHUB_READ_TOKEN Secret" -}}{{- end -}}
-  {{- $maxPerRun := printf "%v" $cfg.maxPerRun -}}
-  {{- if not (regexMatch "^([1-9]|10)$" $maxPerRun) -}}{{- fail "orka.agentAnalysisShadow.maxPerRun must be an integer from 1 to 10" -}}{{- end -}}
-  {{- $maxTurns := printf "%v" $admission.maxTurns -}}
-  {{- if not (regexMatch "^([1-9][0-9]{0,2}|1000)$" $maxTurns) -}}{{- fail "orka.agentAnalysisShadow.admission.maxTurns must be an integer from 1 to 1000" -}}{{- end -}}
-  {{- $retries := printf "%v" $admission.retries -}}
-  {{- if not (regexMatch "^[0-2]$" $retries) -}}{{- fail "orka.agentAnalysisShadow.admission.retries must be an integer from 0 to 2" -}}{{- end -}}
-  {{- if not (regexMatch "^([1-9]|[12][0-9]|30)m$" (printf "%v" $admission.timeout)) -}}{{- fail "orka.agentAnalysisShadow.admission.timeout must be whole minutes from 1m through 30m" -}}{{- end -}}
-  {{- if not (has $cfg.ledger.accessMode (list "ReadWriteOnce" "ReadWriteMany")) -}}{{- fail "orka.agentAnalysisShadow.ledger.accessMode must be ReadWriteOnce or ReadWriteMany" -}}{{- end -}}
-  {{- if not $cfg.ledger.size -}}{{- fail "orka.agentAnalysisShadow.ledger.size is required" -}}{{- end -}}
-  {{- if eq (include "aster.agentAnalysisShadowPVCName" .) (include "aster.pvcName" .) -}}{{- fail "orka.agentAnalysisShadow must use a PVC distinct from public dashboard data" -}}{{- end -}}
-  {{- if and (not .Values.orka.rbac.create) (not $cfg.serviceAccountName) -}}{{- fail "orka.agentAnalysisShadow.serviceAccountName is required when chart-managed Orka RBAC is disabled" -}}{{- end -}}
-  {{- if and $cfg.serviceAccountName (or (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.serviceAccountName)) (gt (len $cfg.serviceAccountName) 253)) -}}{{- fail "orka.agentAnalysisShadow.serviceAccountName must be a lowercase Kubernetes object name of at most 253 characters" -}}{{- end -}}
-  {{- if and .Values.server.chat.sourceInvestigation.enabled (eq (include "aster.agentAnalysisShadowServiceAccountName" .) (include "aster.orkaSourceServiceAccountName" .)) -}}{{- fail "Agent analysis shadow and source investigation require distinct ServiceAccounts" -}}{{- end -}}
-  {{- range .Values.fetcher.extraEnv -}}
-    {{- if has .name (list "ORKA_API_TOKEN" "ORKA_API_TOKEN_FILE" "GITHUB_READ_TOKEN" "AGENT_ANALYSIS_SHADOW_API_TOKEN") -}}{{- fail (printf "fetcher.extraEnv must not override reserved shadow credential variable %s" .name) -}}{{- end -}}
+{{- if .Values.agentSandbox.analysisShadow.enabled -}}
+  {{- $cfg := .Values.agentSandbox.analysisShadow -}}
+  {{- if not .Values.ai.enabled -}}{{- fail "agentSandbox.analysisShadow requires ai.enabled=true" -}}{{- end -}}
+  {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "agentSandbox.analysisShadow requires analysisRuntime.type=inprocess" -}}{{- end -}}
+  {{- if .Values.agentSandbox.fixRuntime.enabled -}}{{- fail "agentSandbox.analysisShadow cannot run with agentSandbox.fixRuntime" -}}{{- end -}}
+  {{- if .Values.agentSandbox.causalCritic.enabled -}}{{- fail "agentSandbox.analysisShadow cannot run with agentSandbox.causalCritic" -}}{{- end -}}
+  {{- if and (eq .Values.mode "cron") (ne .Values.fetcher.concurrencyPolicy "Forbid") -}}{{- fail "agentSandbox.analysisShadow requires fetcher.concurrencyPolicy=Forbid in cron mode" -}}{{- end -}}
+  {{- if not $cfg.namespace -}}{{- fail "agentSandbox.analysisShadow.namespace is required" -}}{{- end -}}
+  {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "agentSandbox.analysisShadow.namespace must differ from the dashboard release namespace" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.namespace) -}}{{- fail "agentSandbox.analysisShadow.namespace must be a lowercase DNS label" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.runtimeClassName) -}}{{- fail "agentSandbox.analysisShadow.runtimeClassName is required and must be a lowercase RuntimeClass name" -}}{{- end -}}
+  {{- if or (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.agentVersion)) (gt (len $cfg.agentVersion) 30) -}}{{- fail "agentSandbox.analysisShadow.agentVersion must be a lowercase DNS label of at most 30 characters" -}}{{- end -}}
+  {{- if not (regexMatch "^[^[:space:]@]+$" $cfg.image.repository) -}}{{- fail "agentSandbox.analysisShadow.image.repository is required without whitespace, credentials, or a digest" -}}{{- end -}}
+  {{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $cfg.image.digest) -}}{{- fail "agentSandbox.analysisShadow.image.digest must be an immutable sha256 digest" -}}{{- end -}}
+  {{- if ne $cfg.image.pullPolicy "IfNotPresent" -}}{{- fail "agentSandbox.analysisShadow.image.pullPolicy must be IfNotPresent" -}}{{- end -}}
+  {{- $workloadSA := include "aster.agentAnalysisShadowWorkloadServiceAccountName" . -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $workloadSA) -}}{{- fail "agentSandbox.analysisShadow.workloadServiceAccount.name is required and must be a lowercase object name" -}}{{- end -}}
+  {{- $clientSA := include "aster.agentSandboxClientServiceAccountName" . -}}
+  {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.clientServiceAccountName) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
+  {{- if not $cfg.ledger.existingClaim -}}{{- fail "agentSandbox.analysisShadow.ledger.existingClaim is required" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.ledger.existingClaim) -}}{{- fail "agentSandbox.analysisShadow.ledger.existingClaim must be a lowercase object name" -}}{{- end -}}
+  {{- if eq $cfg.ledger.existingClaim (include "aster.pvcName" .) -}}{{- fail "agentSandbox.analysisShadow must use a PVC distinct from public dashboard data" -}}{{- end -}}
+  {{- if not (hasPrefix "/private/" $cfg.ledger.mountPath) -}}{{- fail "agentSandbox.analysisShadow.ledger.mountPath must be under /private" -}}{{- end -}}
+  {{- if or (contains ".." $cfg.ledger.mountPath) (contains "//" $cfg.ledger.mountPath) -}}{{- fail "agentSandbox.analysisShadow.ledger.mountPath must be canonical" -}}{{- end -}}
+  {{- if or (hasPrefix .Values.persistence.mountPath $cfg.ledger.mountPath) (hasPrefix $cfg.ledger.mountPath .Values.persistence.mountPath) -}}{{- fail "agentSandbox.analysisShadow ledger must be separate from public dashboard persistence" -}}{{- end -}}
+  {{- $provider := $cfg.modelProvider -}}
+  {{- $credentialMode := default "direct" $provider.credentialMode -}}
+  {{- $providerAPI := default "chat_completions" $provider.api -}}
+  {{- if not (has $credentialMode (list "direct" "gateway")) -}}{{- fail "agentSandbox.analysisShadow.modelProvider.credentialMode must be direct or gateway" -}}{{- end -}}
+  {{- if ne $providerAPI "chat_completions" -}}{{- fail "agentSandbox.analysisShadow.modelProvider.api must be chat_completions" -}}{{- end -}}
+  {{- if not (regexMatch "^https://[^/@?#]+(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $provider.endpoint) -}}{{- fail "agentSandbox.analysisShadow.modelProvider.endpoint must be an absolute credential-free HTTPS URL" -}}{{- end -}}
+  {{- if and (eq $providerAPI "chat_completions") (not (hasSuffix "/chat/completions" (trimSuffix "/" $provider.endpoint))) -}}{{- fail "agentSandbox.analysisShadow.modelProvider chat_completions endpoint must end with /chat/completions" -}}{{- end -}}
+  {{- if or (not $provider.model) (gt (len $provider.model) 256) (contains "\n" $provider.model) (contains "\r" $provider.model) -}}{{- fail "agentSandbox.analysisShadow.modelProvider.model must be non-empty, at most 256 bytes, and single-line" -}}{{- end -}}
+  {{- if eq $credentialMode "gateway" -}}
+    {{- if not (regexMatch "^https://[^/@?#]+[.](svc([.]cluster[.]local)?|internal)(:[0-9]+)?(/[^?#]*)?$" $provider.endpoint) -}}{{- fail "agentSandbox.analysisShadow.modelProvider gateway endpoint must be an internal HTTPS service URL" -}}{{- end -}}
+  {{- end -}}
+  {{- $timeoutText := printf "%v" $cfg.timeout -}}
+  {{- $timeoutSeconds := 0 -}}
+  {{- if regexMatch "^[1-9][0-9]*s$" $timeoutText -}}
+    {{- if gt (len $timeoutText) 5 -}}{{- fail "agentSandbox.analysisShadow.timeout must be at most 30m" -}}{{- end -}}
+    {{- $timeoutSeconds = trimSuffix "s" $timeoutText | int -}}
+  {{- else if regexMatch "^[1-9][0-9]*m$" $timeoutText -}}
+    {{- if gt (len $timeoutText) 3 -}}{{- fail "agentSandbox.analysisShadow.timeout must be at most 30m" -}}{{- end -}}
+    {{- $timeoutSeconds = mul (trimSuffix "m" $timeoutText | int) 60 -}}
+  {{- else -}}
+    {{- fail "agentSandbox.analysisShadow.timeout must use positive whole seconds or minutes" -}}
+  {{- end -}}
+  {{- if gt $timeoutSeconds 1800 -}}{{- fail "agentSandbox.analysisShadow.timeout must be at most 30m" -}}{{- end -}}
+  {{- $poll := printf "%v" $cfg.pollInterval -}}
+  {{- if or (not (regexMatch "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ms|s)$" $poll)) (not (regexMatch "[1-9]" $poll)) -}}{{- fail "agentSandbox.analysisShadow.pollInterval must be a positive duration below 30s" -}}{{- end -}}
+  {{- if regexMatch "^([3-9][0-9]|[1-9][0-9]{2,})s$" (durationRound $poll) -}}{{- fail "agentSandbox.analysisShadow.pollInterval must be below 30s" -}}{{- end -}}
+  {{- if or (lt (int64 $cfg.outputLimitBytes) 4096) (gt (int64 $cfg.outputLimitBytes) 1048576) -}}{{- fail "agentSandbox.analysisShadow.outputLimitBytes must be between 4096 and 1048576" -}}{{- end -}}
+  {{- if or (lt (int $cfg.maxPerRun) 1) (gt (int $cfg.maxPerRun) 10) -}}{{- fail "agentSandbox.analysisShadow.maxPerRun must be between 1 and 10" -}}{{- end -}}
+  {{- if or (lt (int $cfg.maxTurns) 1) (gt (int $cfg.maxTurns) 1000) -}}{{- fail "agentSandbox.analysisShadow.maxTurns must be between 1 and 1000" -}}{{- end -}}
+  {{- if or (lt (int $cfg.retries) 0) (gt (int $cfg.retries) 2) -}}{{- fail "agentSandbox.analysisShadow.retries must be between 0 and 2" -}}{{- end -}}
+  {{- if ne (index $cfg.resources.requests "ephemeral-storage") (index $cfg.resources.limits "ephemeral-storage") -}}{{- fail "agentSandbox.analysisShadow ephemeral-storage request must equal its limit" -}}{{- end -}}
+  {{- if not $cfg.networkPolicy.enabled -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.enabled must be true" -}}{{- end -}}
+  {{- if not (has $cfg.networkPolicy.mode (list "kubernetes" "cilium")) -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.mode must be kubernetes or cilium" -}}{{- end -}}
+  {{- if eq $credentialMode "gateway" -}}
+    {{- if eq (len $cfg.networkPolicy.gatewayNamespaceSelector) 0 -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.gatewayNamespaceSelector is required for gateway mode" -}}{{- end -}}
+    {{- if eq (len $cfg.networkPolicy.gatewayPodSelector) 0 -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.gatewayPodSelector is required for gateway mode" -}}{{- end -}}
+  {{- end -}}
+  {{- if or (lt (int $cfg.networkPolicy.gatewayPort) 1) (gt (int $cfg.networkPolicy.gatewayPort) 65535) -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.gatewayPort is invalid" -}}{{- end -}}
+  {{- if or (eq (len $cfg.networkPolicy.dnsNamespaceSelector) 0) (eq (len $cfg.networkPolicy.dnsPodSelector) 0) -}}{{- fail "agentSandbox.analysisShadow DNS network selectors are required" -}}{{- end -}}
+  {{- if and (eq $cfg.networkPolicy.mode "cilium") (or (not (hasKey $cfg.networkPolicy.dnsNamespaceSelector "kubernetes.io/metadata.name")) (not (get $cfg.networkPolicy.dnsNamespaceSelector "kubernetes.io/metadata.name"))) -}}{{- fail "agentSandbox.analysisShadow cilium mode requires dnsNamespaceSelector.kubernetes.io/metadata.name" -}}{{- end -}}
+  {{- range $env := concat .Values.server.extraEnv .Values.fetcher.extraEnv -}}
+    {{- if hasPrefix "AGENT_SANDBOX_ANALYSIS_SHADOW_" (default "" $env.name) -}}{{- fail (printf "extraEnv must not override reserved analysis shadow variable %s" $env.name) -}}{{- end -}}
   {{- end -}}
 {{- end -}}
 {{- end -}}
 
-{{/* State key Secret shared by the dashboard and Orka namespaces. */}}
-{{- define "aster.orkaAnalysisStateSecret" -}}
-{{- if .Values.analysisRuntime.orkaContainer.state.existingSecret -}}
-{{- .Values.analysisRuntime.orkaContainer.state.existingSecret -}}
-{{- else -}}
-{{- $base := include "aster.fullname" . | trunc 39 | trimSuffix "-" -}}
-{{- printf "%s-analysis-state-%s" $base (include "aster.orkaReleaseScope" .) -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Validate AI provider configuration.
-*/}}
+{{/* Validate AI provider configuration. */}}
 {{- define "aster.validateAI" -}}
 {{- if not (has .Values.ai.api (list "chat_completions" "responses")) -}}
 {{- fail "ai.api must be chat_completions or responses" -}}
@@ -385,95 +344,10 @@ Validate AI provider configuration.
 {{- end -}}
 {{- end -}}
 
-{{/* Validate the fail-closed source investigation Task contract. */}}
-{{- define "aster.validateSourceInvestigation" -}}
-{{- if .Values.server.chat.sourceInvestigation.enabled -}}
-  {{- $cfg := .Values.server.chat.sourceInvestigation.admission -}}
-  {{- if not $cfg.agentRef -}}{{- fail "server.chat.sourceInvestigation.admission.agentRef is required" -}}{{- end -}}
-  {{- if not $cfg.repository.owner -}}{{- fail "server.chat.sourceInvestigation.admission.repository.owner is required" -}}{{- end -}}
-  {{- if not $cfg.repository.name -}}{{- fail "server.chat.sourceInvestigation.admission.repository.name is required" -}}{{- end -}}
-  {{- if not $cfg.gitSecret -}}{{- fail "server.chat.sourceInvestigation.admission.gitSecret is required and must be read-only" -}}{{- end -}}
-  {{- $goDurationPattern := "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|µs|μs|ms|s|m|h)((([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|µs|μs|ms|s|m|h))*$" -}}
-  {{- $timeout := printf "%v" $cfg.timeout -}}
-  {{- if or (not (regexMatch $goDurationPattern $timeout)) (not (regexMatch "[1-9]" $timeout)) -}}{{- fail "server.chat.sourceInvestigation.admission.timeout must be a positive Go duration" -}}{{- end -}}
-  {{- if and (not .Values.orka.rbac.create) (not .Values.server.chat.sourceInvestigation.serviceAccountName) -}}{{- fail "server.chat.sourceInvestigation.serviceAccountName is required when chart-managed Orka RBAC is disabled" -}}{{- end -}}
-{{- end -}}
-{{- end -}}
-
-{{/* Validate the fail-closed Orka fix Task contract. */}}
-{{- define "aster.validateFixRuntime" -}}
-{{- range $env := concat .Values.server.extraEnv .Values.fetcher.extraEnv -}}
-  {{- if eq (default "" $env.name) "TRUSTED_LOCAL_FIX_RUNTIME" -}}{{- fail "extraEnv must not set TRUSTED_LOCAL_FIX_RUNTIME; the local OpenCode Fix runtime is development-only" -}}{{- end -}}
-{{- end -}}
-{{- if and .Values.orka.fixRuntime.enabled .Values.agentSandbox.fixRuntime.enabled -}}{{- fail "agentSandbox.fixRuntime cannot be combined with Orka runtimes or source investigation" -}}{{- end -}}
-{{- if .Values.orka.fixRuntime.enabled -}}
-  {{- $cfg := .Values.orka.fixRuntime.admission -}}
-  {{- if not .Values.orka.namespace -}}{{- fail "orka.namespace is required when orka.fixRuntime.enabled=true" -}}{{- end -}}
-  {{- if not $cfg.agentRef -}}{{- fail "orka.fixRuntime.admission.agentRef is required when fixRuntime is enabled" -}}{{- end -}}
-  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.agentRef) -}}{{- fail "orka.fixRuntime.admission.agentRef must be a lowercase DNS name" -}}{{- end -}}
-  {{- if not $cfg.repository.owner -}}{{- fail "orka.fixRuntime.admission.repository.owner is required when fixRuntime is enabled" -}}{{- end -}}
-  {{- if not $cfg.repository.name -}}{{- fail "orka.fixRuntime.admission.repository.name is required when fixRuntime is enabled" -}}{{- end -}}
-  {{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$" $cfg.repository.owner) -}}{{- fail "orka.fixRuntime.admission.repository.owner must be a GitHub owner name" -}}{{- end -}}
-  {{- if not (regexMatch "^[A-Za-z0-9_.-]+$" $cfg.repository.name) -}}{{- fail "orka.fixRuntime.admission.repository.name must be a GitHub repository name" -}}{{- end -}}
-  {{- if hasSuffix ".git" $cfg.repository.name -}}{{- fail "orka.fixRuntime.admission.repository.name must not include .git" -}}{{- end -}}
-  {{- $maxTurns := printf "%v" $cfg.maxTurns -}}
-  {{- if not (regexMatch "^([1-9][0-9]{0,2}|1000)$" $maxTurns) -}}{{- fail "orka.fixRuntime.admission.maxTurns must be an integer from 1 to 1000" -}}{{- end -}}
-  {{- $retries := printf "%v" $cfg.retries -}}
-  {{- if not (regexMatch "^[0-2]$" $retries) -}}{{- fail "orka.fixRuntime.admission.retries must be an integer from 0 to 2" -}}{{- end -}}
-  {{- if not (regexMatch "^([1-9]|[12][0-9]|30)m$" (printf "%v" $cfg.timeout)) -}}{{- fail "orka.fixRuntime.admission.timeout must be whole minutes from 1m through 30m" -}}{{- end -}}
-  {{- if and .Values.server.actions.enabled .Values.server.chat.sourceInvestigation.enabled -}}
-    {{- $fixServiceAccount := include "aster.orkaServiceAccountName" . -}}
-    {{- $sourceServiceAccount := include "aster.orkaSourceServiceAccountName" . -}}
-    {{- if eq $fixServiceAccount $sourceServiceAccount -}}{{- fail "Orka fix generation and source investigation require distinct ServiceAccounts" -}}{{- end -}}
-  {{- end -}}
-  {{- if and (not .Values.orka.rbac.create) (not .Values.orka.rbac.serviceAccountName) -}}{{- fail "orka.rbac.serviceAccountName is required when chart-managed Orka RBAC is disabled" -}}{{- end -}}
-{{- end -}}
-{{- end -}}
-
-{{/* Validate the Helm-only failure analysis runtime. */}}
+{{/* Validate the failure analysis runtime. */}}
 {{- define "aster.validateAnalysisRuntime" -}}
-{{- $runtime := .Values.analysisRuntime.type -}}
-{{- if not (has $runtime (list "inprocess" "orka-container")) -}}
-{{- fail "analysisRuntime.type must be inprocess or orka-container" -}}
-{{- end -}}
-{{- if eq $runtime "orka-container" -}}
-  {{- $cfg := .Values.analysisRuntime.orkaContainer -}}
-  {{- $materializer := .Values.project.materializer.image -}}
-  {{- if not .Values.ai.enabled -}}{{- fail "analysisRuntime.type=orka-container requires ai.enabled=true" -}}{{- end -}}
-  {{- if not .Values.ai.endpoint -}}{{- fail "analysisRuntime.type=orka-container requires ai.endpoint" -}}{{- end -}}
-  {{- if not .Values.ai.model -}}{{- fail "analysisRuntime.type=orka-container requires ai.model" -}}{{- end -}}
-  {{- if not $materializer.repository -}}{{- fail "project.materializer.image.repository is required for Orka container analysis" -}}{{- end -}}
-  {{- if not $materializer.tag -}}{{- fail "project.materializer.image.tag is required for Orka container analysis" -}}{{- end -}}
-  {{- if not (regexMatch "^(sha-[0-9a-fA-F]{7,64}|v?[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?)$" $materializer.tag) -}}{{- fail "project.materializer.image.tag must be an immutable sha-<hex> or full semantic version" -}}{{- end -}}
-  {{- if ne $materializer.pullPolicy "IfNotPresent" -}}{{- fail "project.materializer.image.pullPolicy must be IfNotPresent" -}}{{- end -}}
-  {{- $analysisNamespace := include "aster.orkaAnalysisNamespace" . -}}
-  {{- if eq $analysisNamespace .Values.orka.namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace must be dedicated and differ from orka.namespace" -}}{{- end -}}
-  {{- if eq $analysisNamespace .Release.Namespace -}}{{- fail "analysisRuntime.orkaContainer.namespace must differ from the dashboard release namespace" -}}{{- end -}}
-  {{- if and $cfg.namespace (not (hasSuffix (printf "-%s" (include "aster.orkaReleaseScope" .)) $cfg.namespace)) -}}{{- fail "analysisRuntime.orkaContainer.namespace must be dedicated to this release and end with its release scope" -}}{{- end -}}
-  {{- if not (regexMatch "^https?://[^/@?#]+(/[^?#]*)?$" $cfg.api) -}}{{- fail "analysisRuntime.orkaContainer.api must be an absolute http or https URL without credentials" -}}{{- end -}}
-  {{- if and $cfg.apiAuth.existingSecret (not $cfg.apiAuth.tokenKey) -}}{{- fail "analysisRuntime.orkaContainer.apiAuth.tokenKey is required when apiAuth.existingSecret is set" -}}{{- end -}}
-  {{- if not $cfg.image.repository -}}{{- fail "analysisRuntime.orkaContainer.image.repository is required" -}}{{- end -}}
-  {{- $imageTag := include "aster.resolvedImageTag" (list . $cfg.image.tag) -}}
-  {{- if not $imageTag -}}{{- fail "analysisRuntime.orkaContainer.image.tag, global.imageTag, or Chart.appVersion is required" -}}{{- end -}}
-  {{- if not (regexMatch "^(sha-[0-9a-fA-F]{7,64}|v?[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?)$" $imageTag) -}}{{- fail "analysisRuntime.orkaContainer.image tag must be an immutable sha-<hex> or full semantic version" -}}{{- end -}}
-  {{- if ne $cfg.image.pullPolicy "IfNotPresent" -}}{{- fail "analysisRuntime.orkaContainer.image.pullPolicy must be IfNotPresent for the pinned Orka controller" -}}{{- end -}}
-  {{- if not $cfg.modelAuth.existingSecret -}}{{- fail "analysisRuntime.orkaContainer.modelAuth.existingSecret is required" -}}{{- end -}}
-  {{- if not $cfg.modelAuth.tokenKey -}}{{- fail "analysisRuntime.orkaContainer.modelAuth.tokenKey is required" -}}{{- end -}}
-  {{- if not $cfg.state.key -}}{{- fail "analysisRuntime.orkaContainer.state.key is required" -}}{{- end -}}
-  {{- $maxConcurrent := printf "%v" $cfg.maxConcurrentTasks -}}
-  {{- if not (regexMatch "^[1-9][0-9]{0,2}$" $maxConcurrent) -}}{{- fail "analysisRuntime.orkaContainer.maxConcurrentTasks must be an integer from 1 to 999" -}}{{- end -}}
-  {{- $retries := printf "%v" $cfg.retries -}}
-  {{- if not (regexMatch "^(0|[1-9][0-9]?)$" $retries) -}}{{- fail "analysisRuntime.orkaContainer.retries must be an integer from 0 to 99" -}}{{- end -}}
-  {{- $goDurationPattern := "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|µs|μs|ms|s|m|h)((([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|µs|μs|ms|s|m|h))*$" -}}
-  {{- $pollInterval := printf "%v" $cfg.pollInterval -}}
-  {{- if or (not (regexMatch $goDurationPattern $pollInterval)) (not (regexMatch "[1-9]" $pollInterval)) -}}{{- fail "analysisRuntime.orkaContainer.pollInterval must be a positive Go duration" -}}{{- end -}}
-  {{- $roundedPoll := durationRound $pollInterval -}}
-  {{- if regexMatch "(^([3-9][0-9]|[1-9][0-9]{2,})s$|[mh]$)" $roundedPoll -}}{{- fail "analysisRuntime.orkaContainer.pollInterval must be less than 30s" -}}{{- end -}}
-  {{- $taskTimeout := printf "%v" $cfg.taskTimeout -}}
-  {{- if or (not (regexMatch $goDurationPattern $taskTimeout)) (not (regexMatch "[1-9]" $taskTimeout)) -}}{{- fail "analysisRuntime.orkaContainer.taskTimeout must be a positive Go duration" -}}{{- end -}}
-  {{- if not (index $cfg.nodeSelector "agentpool") -}}{{- fail "analysisRuntime.orkaContainer.nodeSelector.agentpool must select an explicit CPU pool" -}}{{- end -}}
-  {{- $placement := printf "%s %s %s" (toJson $cfg.nodeSelector) (toJson $cfg.tolerations) (toJson $cfg.affinity) -}}
-  {{- if regexMatch "(?i)(accelerator|nvidia|tesla|radeon|(^|[^a-z0-9])(gpu|a10|a100|h100|v100|p100|t4|l4|mi250|mi300)([^a-z0-9]|$))" $placement -}}{{- fail "analysisRuntime.orkaContainer placement must not select or tolerate GPU nodes" -}}{{- end -}}
+{{- if ne .Values.analysisRuntime.type "inprocess" -}}
+{{- fail "analysisRuntime.type must be inprocess" -}}
 {{- end -}}
 {{- end -}}
 
@@ -511,7 +385,7 @@ key, or bot token).
 
 {{/* Cluster-scoped admission policy name, unique to the release. */}}
 {{- define "aster.agentSandboxAdmissionName" -}}
-{{- printf "%s-agent-sandbox-%s" (include "aster.fullname" .) (include "aster.orkaReleaseScope" .) | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-agent-sandbox-%s" (include "aster.fullname" .) (include "aster.releaseScope" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{/* Non-secret Agent Sandbox runtime environment shared by server and fetcher. */}}
@@ -590,10 +464,10 @@ key, or bot token).
   {{- $projectFix := get $projectAI "fix_prs" | default dict -}}
   {{- $projectRuntime := get $projectFix "agent_runtime" | default dict -}}
   {{- $projectProvider := get $projectRuntime "model_provider" | default dict -}}
-  {{- if ne (default "opencode" (get $projectRuntime "type")) "agent-sandbox" -}}{{- fail "agentSandbox.fixRuntime requires project ai.fix_prs.agent_runtime.type=agent-sandbox" -}}{{- end -}}
+  {{- if ne (default "agent-sandbox" (get $projectRuntime "type")) "agent-sandbox" -}}{{- fail "agentSandbox.fixRuntime requires project ai.fix_prs.agent_runtime.type=agent-sandbox" -}}{{- end -}}
   {{- if not (or .Values.server.actions.enabled (default false (get $projectFix "enabled"))) -}}{{- fail "agentSandbox.fixRuntime requires server.actions.enabled=true or project ai.fix_prs.enabled=true" -}}{{- end -}}
   {{- if .Values.server.actions.oauth.privateRepositories -}}{{- fail "agentSandbox.fixRuntime supports public repositories only; OAuth privateRepositories must be false" -}}{{- end -}}
-  {{- if or .Values.orka.fixRuntime.enabled .Values.orka.agentAnalysisShadow.enabled .Values.server.chat.sourceInvestigation.enabled (eq .Values.analysisRuntime.type "orka-container") -}}{{- fail "agentSandbox.fixRuntime cannot be combined with Orka runtimes or source investigation" -}}{{- end -}}
+  {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "agentSandbox.fixRuntime requires analysisRuntime.type=inprocess" -}}{{- end -}}
   {{- if not $cfg.namespace -}}{{- fail "agentSandbox.fixRuntime.namespace is required" -}}{{- end -}}
   {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "agentSandbox.fixRuntime.namespace must differ from the dashboard release namespace" -}}{{- end -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.namespace) -}}{{- fail "agentSandbox.fixRuntime.namespace must be a lowercase DNS label" -}}{{- end -}}
@@ -727,7 +601,7 @@ key, or bot token).
 
 {{/* Cluster-scoped analyzer admission policy name. */}}
 {{- define "aster.agentSandboxAnalyzerAdmissionName" -}}
-{{- printf "%s-agent-sandbox-analyzer-%s" (include "aster.fullname" .) (include "aster.orkaReleaseScope" .) | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-agent-sandbox-analyzer-%s" (include "aster.fullname" .) (include "aster.releaseScope" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{/* Validate the disabled-by-default private Agent Sandbox analyzer. */}}
@@ -735,7 +609,7 @@ key, or bot token).
 {{- if .Values.agentSandbox.analyzer.enabled -}}
   {{- $cfg := .Values.agentSandbox.analyzer -}}
   {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "agentSandbox.analyzer requires analysisRuntime.type=inprocess" -}}{{- end -}}
-  {{- if .Values.orka.agentAnalysisShadow.enabled -}}{{- fail "agentSandbox.analyzer cannot run with orka.agentAnalysisShadow" -}}{{- end -}}
+  {{- if .Values.agentSandbox.analysisShadow.enabled -}}{{- fail "agentSandbox.analyzer cannot run with agentSandbox.analysisShadow" -}}{{- end -}}
   {{- if not $cfg.namespace -}}{{- fail "agentSandbox.analyzer.namespace is required" -}}{{- end -}}
   {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "agentSandbox.analyzer.namespace must differ from the dashboard release namespace" -}}{{- end -}}
   {{- if and .Values.agentSandbox.fixRuntime.enabled (eq $cfg.namespace .Values.agentSandbox.fixRuntime.namespace) -}}{{- fail "agentSandbox.analyzer.namespace must differ from agentSandbox.fixRuntime.namespace" -}}{{- end -}}
@@ -844,7 +718,7 @@ key, or bot token).
 
 {{/* Cluster-scoped critic admission policy name. */}}
 {{- define "aster.agentSandboxCriticAdmissionName" -}}
-{{- printf "%s-agent-sandbox-critic-%s" (include "aster.fullname" .) (include "aster.orkaReleaseScope" .) | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-agent-sandbox-critic-%s" (include "aster.fullname" .) (include "aster.releaseScope" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{- define "aster.causalCriticLedgerPath" -}}
@@ -893,8 +767,7 @@ key, or bot token).
   {{- $cfg := .Values.agentSandbox.causalCritic -}}
   {{- if not .Values.ai.enabled -}}{{- fail "agentSandbox.causalCritic requires ai.enabled=true" -}}{{- end -}}
   {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "agentSandbox.causalCritic requires analysisRuntime.type=inprocess" -}}{{- end -}}
-  {{- if .Values.orka.agentAnalysisShadow.enabled -}}{{- fail "agentSandbox.causalCritic cannot run with orka.agentAnalysisShadow" -}}{{- end -}}
-  {{- if .Values.orka.fixRuntime.enabled -}}{{- fail "agentSandbox.causalCritic cannot run with orka.fixRuntime" -}}{{- end -}}
+  {{- if .Values.agentSandbox.analysisShadow.enabled -}}{{- fail "agentSandbox.causalCritic cannot run with agentSandbox.analysisShadow" -}}{{- end -}}
   {{- if .Values.agentSandbox.fixRuntime.enabled -}}{{- fail "agentSandbox.causalCritic cannot run with agentSandbox.fixRuntime" -}}{{- end -}}
   {{- if not $cfg.namespace -}}{{- fail "agentSandbox.causalCritic.namespace is required" -}}{{- end -}}
   {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "agentSandbox.causalCritic.namespace must differ from the dashboard release namespace" -}}{{- end -}}
@@ -967,6 +840,6 @@ key, or bot token).
 
 {{/* Whether any scheduled Agent Sandbox lifecycle needs the dashboard client identity. */}}
 {{- define "aster.agentSandboxScheduledEnabled" -}}
-{{- if .Values.agentSandbox.causalCritic.enabled -}}true
+{{- if or .Values.agentSandbox.causalCritic.enabled .Values.agentSandbox.analysisShadow.enabled -}}true
 {{- else -}}{{ include "aster.agentSandboxFixScheduledEnabled" . }}{{- end -}}
 {{- end -}}

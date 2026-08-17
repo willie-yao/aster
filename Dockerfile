@@ -1,5 +1,5 @@
-# Multi-stage build producing the default engine image plus specialized local
-# fixer, remote-fix, Agent Sandbox fix, and causal-critic targets.
+# Multi-stage build producing the default engine image plus specialized
+# remote-fix, Agent Sandbox fix, analyzer, and causal-critic targets.
 
 # Stage 1: build the SPA. Default base path "/" suits server mode.
 FROM node:20-alpine AS web
@@ -28,33 +28,6 @@ RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=$
 
 # Pinned Go toolchain copied into the Agent Sandbox Fix executor.
 FROM golang:1.25.12-alpine@sha256:56961d79ea8129efddcc0b8643fd8a5416b4e6228cfd477e3fd61deb2672c587 AS agent-sandbox-fix-go
-
-# Optional full engine image for local sandboxed OpenCode fix generation.
-FROM node:20-slim AS fixer-runtime
-ARG OPENCODE_VERSION=1.18.2
-COPY hack/install-srt.sh /usr/local/bin/install-srt
-COPY hack/build-srt-seccomp.mjs /usr/local/bin/build-srt-seccomp.mjs
-RUN apt-get update \
- && apt-get install -y --no-install-recommends bash bubblewrap ca-certificates curl gcc git libc6-dev libseccomp-dev ripgrep socat \
- && npm install -g "opencode-ai@${OPENCODE_VERSION}" \
- && install-srt /usr/local/share/aster/srt \
- && ln -s /usr/local/share/aster/srt/node_modules/.bin/srt /usr/local/bin/srt \
- && opencode --version \
- && node -e "if (require('/usr/local/share/aster/srt/node_modules/@anthropic-ai/sandbox-runtime/package.json').version !== '0.0.70') process.exit(1)" \
- && node -e "const fs=require('fs'); const arch={x64:'x64',arm64:'arm64'}[process.arch]; if (!arch || !fs.existsSync('/usr/local/share/aster/srt/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/'+arch+'/apply-seccomp')) process.exit(1)" \
- && apt-get purge -y --auto-remove curl gcc libc6-dev libseccomp-dev \
- && rm -rf /var/lib/apt/lists/*
-COPY --from=build /out/fetcher /usr/local/bin/fetcher
-COPY --from=build /out/worker /usr/local/bin/worker
-COPY --from=build /out/server /usr/local/bin/server
-COPY --from=web /src/frontend/dist /app/web
-ENV HOME=/tmp \
-    SRT_BIN=/usr/local/bin/srt
-USER 65532:65532
-LABEL org.opencontainers.image.source="https://github.com/willie-yao/aster" \
-      org.opencontainers.image.title="Aster Fixer Runtime" \
-      org.opencontainers.image.url="https://github.com/willie-yao/aster"
-ENTRYPOINT ["/usr/local/bin/server"]
 
 # OpenCode executor for consumer-installed Agent Sandbox.
 # OpenCode is inherited from its official image pinned by release and OCI digest.
@@ -133,7 +106,7 @@ LABEL org.opencontainers.image.source="https://github.com/willie-yao/aster" \
 ENTRYPOINT ["/usr/local/bin/criticexecutor"]
 
 # Minimal git-capable engine for reconstructing patches returned by remote fix
-# runtimes such as Agent Sandbox. It intentionally omits OpenCode and srt.
+# runtimes such as Agent Sandbox. It intentionally omits any coding-agent harness.
 FROM golang:1.25.12-alpine AS remote-fixer-runtime
 RUN apk add --no-cache ca-certificates git=2.54.0-r0 \
  && addgroup -g 65532 padnonroot \

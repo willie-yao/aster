@@ -67,12 +67,6 @@ extract_images() {
         gsub(/^\047|\047$/, "", image)
         print image
       }
-      if ($0 ~ /-orka-analysis-image=/) {
-        image = $0
-        sub(/^.*-orka-analysis-image=/, "", image)
-        sub(/["[:space:]].*$/, "", image)
-        print image
-      }
     }
   ' "$1" | sed '/^$/d' | sort -u
 }
@@ -166,7 +160,13 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 chart=$script_dir/aster
 [[ -f $chart/Chart.yaml ]] || fail "chart not found: $chart"
 
-tmp=$(mktemp -d)
+tmp_root=${ASTER_HELM_TMPDIR:-"$script_dir/../../.test-work"}
+mkdir -p "$tmp_root"
+tmp=$tmp_root/upgrade-$$
+if [[ -e $tmp ]]; then
+  fail "scratch path already exists: $tmp"
+fi
+mkdir "$tmp"
 trap 'rm -rf "$tmp"' EXIT
 chmod 700 "$tmp"
 current_values=$tmp/current-values.json

@@ -203,7 +203,7 @@ fetcher:
   buildsPerJob: 10
   # Concurrent artifact fetches. Increase only after checking storage limits.
   workers: 5
-  # Bounds discovery and artifact fetching. Orka Tasks have a separate timeout.
+  # Bounds discovery and artifact fetching.
   timeout: 120m
 
   # Watch-mode cadence. Cron settings below do not schedule a CronJob while
@@ -215,7 +215,7 @@ fetcher:
   # when switching to mode: cron.
   suspend: true
 
-  # Cron-mode settings. Deadlines and retries are separate from model or Orka
+  # Cron-mode settings. Deadlines and retries are separate from model
   # retries, and apply only when mode is cron.
   # schedule: "0 */6 * * *"
   # concurrencyPolicy: Forbid
@@ -232,87 +232,7 @@ fetcher:
 
 analysisRuntime:
   # inprocess is the recommended default.
-  # orka-container is an experimental opt-in lifecycle sidegrade.
   type: inprocess
-
-  # Enabling these fields does not install Orka. Install and operate a separate
-  # Orka release first. The model Secret must exist in the analysis namespace,
-  # taskTimeout must exceed the project AI timeout plus startup and result
-  # finalization time, and analyzer Tasks must use CPU placement.
-  #
-  # To use the experimental Orka container runtime, set type to orka-container
-  # and uncomment the needed fields inside this existing mapping.
-  orkaContainer:
-    # namespace: ""
-    # api: http://orka.orka-system.svc.cluster.local:8080
-    # apiAuth:
-    #   existingSecret: ""
-    #   tokenKey: token
-    # maxConcurrentTasks: 2
-    # pollInterval: 2s
-    # taskTimeout: 20m
-    # retries: 1
-    # Empty clears an older image-specific tag during upgrades.
-    image:
-      # repository: ghcr.io/willie-yao/aster/analyzer
-      tag: ""
-      # pullPolicy: IfNotPresent
-    # modelAuth:
-    #   existingSecret: "<model-secret-in-analysis-namespace>"
-    #   tokenKey: token
-    # state:
-    #   existingSecret: ""
-    #   key: state-key
-    # nodeSelector:
-    #   agentpool: "<cpu-agentpool>"
-    # tolerations: []
-    # affinity: {}
-
-# Fix generation is independent of analysisRuntime.type and must also be
-# configured in project.yaml. It remains disabled in the generated scaffold.
-orka:
-  namespace: orka-system
-
-  # Private experimental comparison after authoritative in-process analysis.
-  # This does not install Orka or create an Agent. Use a dedicated private PVC
-  # and a separate read-only Git credential for private repositories.
-  agentAnalysisShadow:
-    enabled: false
-    # api: http://orka.orka-system.svc.cluster.local:8080
-    # agentVersion: v1
-    # serviceAccountName: ""
-    # maxPerRun: 1
-    # admission:
-    #   agentRef: "<versioned-orka-agent-name>"
-    #   repository:
-    #     owner: "<github-owner>"
-    #     name: "<github-repository>"
-    #   gitSecret: ""
-    #   maxTurns: 12
-    #   timeout: 10m
-    #   retries: 0
-    # ledger:
-    #   existingClaim: ""
-    #   retain: true
-    #   accessMode: ReadWriteOnce
-    #   size: 1Gi
-    #   storageClass: ""
-
-  fixRuntime:
-    enabled: false
-    # Empty clears an older image-specific tag during upgrades.
-    image:
-      tag: ""
-    # Required before enabling. Match the effective project.yaml fix runtime.
-    # admission:
-    #   agentRef: "<orka-agent-name>"
-    #   repository:
-    #     owner: "<github-owner>"
-    #     name: "<github-repository>"
-    #   maxTurns: 30
-    #   allowBash: true
-    #   timeout: 10m
-    #   retries: 1
 
   # rbac:
   #   create: true

@@ -57,20 +57,19 @@ test("build action eligibility requires current quality and verified files", () 
 });
 
 test("action eligibility titles explain each state", () => {
-  assert.equal(actionEligibilityTitle(eligibilityForState("already_present"), false), "Remediation already exists");
-  assert.equal(actionEligibilityTitle(eligibilityForState("recovered"), false), "Watching recovery");
-  assert.equal(actionEligibilityTitle(eligibilityForState("more_evidence_required"), false), "Current evidence unavailable");
-  assert.equal(actionEligibilityTitle(eligibilityForState("investigation_required"), true), "Investigate source");
-  assert.equal(actionEligibilityTitle(eligibilityForState("investigation_required"), false), "Source investigation is not configured");
+  assert.equal(actionEligibilityTitle(eligibilityForState("already_present")), "Remediation already exists");
+  assert.equal(actionEligibilityTitle(eligibilityForState("recovered")), "Watching recovery");
+  assert.equal(actionEligibilityTitle(eligibilityForState("more_evidence_required")), "Current evidence unavailable");
+  assert.equal(actionEligibilityTitle(eligibilityForState("investigation_required")), "Investigation required");
 });
 
 
 test("structured action reasons distinguish safe blocked states", () => {
-  assert.equal(actionEligibilityTitle(eligibilityForCode("retained_stale"), false), "Using a retained analysis");
-  assert.equal(actionEligibilityTitle(eligibilityForCode("non_systemic"), false), "Not a recurring systemic pattern");
-  assert.equal(actionEligibilityTitle(eligibilityForCode("unsafe_remediation"), false), "Unsafe remediation blocked");
-  assert.equal(actionEligibilityTitle(eligibilityForCode("observing"), false), "Observing verified remediation");
-  assert.equal(actionEligibilityTitle(eligibilityForCode("verified_fixed"), false), "Verified fixed");
+  assert.equal(actionEligibilityTitle(eligibilityForCode("retained_stale")), "Using a retained analysis");
+  assert.equal(actionEligibilityTitle(eligibilityForCode("non_systemic")), "Not a recurring systemic pattern");
+  assert.equal(actionEligibilityTitle(eligibilityForCode("unsafe_remediation")), "Unsafe remediation blocked");
+  assert.equal(actionEligibilityTitle(eligibilityForCode("observing")), "Observing verified remediation");
+  assert.equal(actionEligibilityTitle(eligibilityForCode("verified_fixed")), "Verified fixed");
   assert.equal(patternActionEligibilityHint([actionableTarget], undefined, undefined, true, { state: "retained", evidence_available: true })?.code, "retained_stale");
   assert.equal(patternActionEligibilityHint([actionableTarget], undefined, undefined, false)?.code, "non_systemic");
 });

@@ -1,4 +1,4 @@
-.PHONY: all build build-server build-worker serve dev-actions image analyzer-image fixer-image remote-fixer-image agent-sandbox-fix-executor-image agent-sandbox-critic-executor-image agent-sandbox-analysis-executor-image agent-sandbox-analysis-stager-image test test-v e2e lint fmt tidy helm-check cleanroom-check check-repo-map \
+.PHONY: all build build-server build-worker serve dev-actions image remote-fixer-image agent-sandbox-fix-executor-image agent-sandbox-critic-executor-image agent-sandbox-analysis-executor-image agent-sandbox-analysis-stager-image test test-v e2e lint fmt tidy helm-check cleanroom-check check-repo-map \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check fe-test fe-lint \
        dist dist-ai clean clean-cache clean-all help
@@ -53,14 +53,7 @@ dev-actions: build-server fe-build
 image:
 	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(VERSION) .
 
-# Build the one-shot analyzer image used by experimental Orka container Tasks.
-analyzer-image:
-	docker build -f deploy/analyzer.Dockerfile -t $(IMAGE)/analyzer:$(VERSION) .
-
 # Build the sandboxed local OpenCode image for fix generation.
-fixer-image:
-	docker build --target fixer-runtime --build-arg VERSION=$(VERSION) -t $(IMAGE)/fixer:$(VERSION) .
-
 # Build the minimal git-capable image for remote fix runtimes.
 remote-fixer-image:
 	docker build --target remote-fixer-runtime --build-arg VERSION=$(VERSION) -t $(IMAGE)/remote-fixer:$(VERSION) .
@@ -188,7 +181,7 @@ dist-ai: fetch-data-ai fe-build
 
 # Clean build artifacts and generated data
 clean:
-	rm -rf bin/ frontend/dist frontend/public/data/dashboard.json frontend/public/data/jobs/ frontend/public/data/flakiness.json frontend/public/data/orka_analysis.json frontend/public/data/ai_traces.json frontend/public/data/ai_usage_fetcher.json frontend/public/data/ai_usage_server.json
+	rm -rf bin/ frontend/dist frontend/public/data/dashboard.json frontend/public/data/jobs/ frontend/public/data/flakiness.json frontend/public/data/ai_traces.json frontend/public/data/ai_usage_fetcher.json frontend/public/data/ai_usage_server.json
 
 # Clean AI analysis cache (forces re-analysis on next fetch)
 clean-cache:
@@ -233,8 +226,6 @@ help:
 	@echo "  dist               Full pipeline: build + fetch + frontend"
 	@echo "  dist-ai            Full pipeline with AI analysis"
 	@echo "  image              Build the container image (fetcher + server + SPA)"
-	@echo "  analyzer-image     Build the one-shot Orka container analyzer image"
-	@echo "  fixer-image        Build the sandboxed local OpenCode fix image"
 	@echo "  remote-fixer-image Build the minimal git-capable remote fix image"
 	@echo "  agent-sandbox-analysis-executor-image Build the file-backed analyzer executor image"
 	@echo "  agent-sandbox-analysis-stager-image  Build the credential-free analyzer stager image"

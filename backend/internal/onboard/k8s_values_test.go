@@ -42,7 +42,6 @@ func TestK8sValuesActiveConfiguration(t *testing.T) {
 
 	assertYAMLValue(t, root, "watch", "mode")
 	assertYAMLValue(t, root, "inprocess", "analysisRuntime", "type")
-	assertYAMLValue(t, root, false, "orka", "fixRuntime", "enabled")
 	assertYAMLValue(t, root, false, "server", "chat", "enabled")
 	assertYAMLValue(t, root, false, "server", "actions", "enabled")
 	assertYAMLValue(t, root, "ClusterIP", "server", "service", "type")
@@ -82,18 +81,12 @@ func TestK8sValuesActiveConfiguration(t *testing.T) {
 			t.Errorf("cron-only key fetcher.%s is active in the watch scaffold", cronOnly)
 		}
 	}
-	orkaContainer := yamlMapAt(t, root, "analysisRuntime", "orkaContainer")
-	if len(orkaContainer) != 1 {
-		t.Errorf("active analysisRuntime.orkaContainer = %#v, want only the upgrade-safe image tag", orkaContainer)
-	}
 }
 
 func TestK8sValuesDocumentsOptionalConfiguration(t *testing.T) {
 	values := renderK8sValuesForTest(t, k8sValuesFixtureData(true))
 	for _, want := range []string{
 		`# schedule: "0 */6 * * *"`,
-		`# namespace: ""`,
-		`#   existingSecret: "<model-secret-in-analysis-namespace>"`,
 		"# oauth:",
 		`#   # Include OAUTH_CLIENT_SECRET, SESSION_KEY, and BOT_TOKEN when actions are enabled.`,
 		`#   existingSecret: "<oauth-secret>"`,
@@ -112,7 +105,7 @@ func TestK8sValuesDocumentsOptionalConfiguration(t *testing.T) {
 			t.Errorf("generated values missing %q\n---\n%s", want, values)
 		}
 	}
-	for _, duplicateExample := range []string{"# orkaContainer:", "# ingress:"} {
+	for _, duplicateExample := range []string{"# ingress:"} {
 		if strings.Contains(values, duplicateExample) {
 			t.Errorf("optional example repeats active key %q\n---\n%s", duplicateExample, values)
 		}

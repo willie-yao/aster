@@ -73,11 +73,9 @@ import type {
 } from "../types/analysisChat";
 import { RichText } from "./RichText";
 import { AnalysisCorrectionDialog } from "./AnalysisCorrectionDialog";
-import { SourceInvestigationPanel } from "./SourceInvestigationPanel";
 import type { AnalysisCorrectionPreview } from "../types/corrections";
 import type { PatternAnalysis } from "../types/dashboard";
-import type { SourceInvestigationView } from "../types/sourceInvestigation";
-import { ChatFixDialog, type ChatFixSourceSelection } from "./ChatFixDialog";
+import { ChatFixDialog } from "./ChatFixDialog";
 import { chatFixVerifiedSourcePaths, fixInvestigationAvailable } from "../lib/chatFixEligibility";
 
 interface PendingTurn {
@@ -224,28 +222,20 @@ function AssistantMessage({
   message,
   fileCtx,
   correctionEnabled,
-  sourceInvestigationEnabled,
   chatFixEnabled,
   fixEligible,
   fixIneligibleReason,
-  sessionID,
-  sourceRepository,
   onReviewCorrection,
   onUseForFix,
-  onSourceInvestigationChange,
 }: {
   message: AnalysisChatMessage;
   fileCtx: FileToUrlContext;
   correctionEnabled: boolean;
-  sourceInvestigationEnabled: boolean;
   chatFixEnabled: boolean;
   fixEligible: boolean;
   fixIneligibleReason?: string;
-  sessionID: string;
-  sourceRepository?: { owner: string; name: string; revision: string };
   onReviewCorrection: (requestID: string) => void;
   onUseForFix: () => void;
-  onSourceInvestigationChange: (requestID: string | null, view: SourceInvestigationView | null) => void;
 }) {
   const assessment = message.assessment
     ? assessmentConfig[message.assessment]
@@ -393,14 +383,6 @@ function AssistantMessage({
           </Box>
         )}
 
-        {sourceInvestigationEnabled && message.request_id && (
-          <SourceInvestigationPanel
-            sessionID={sessionID}
-            chatRequestID={message.request_id}
-            repository={sourceRepository}
-            onInvestigationChange={onSourceInvestigationChange}
-          />
-        )}
 
         {chatFixEnabled && fixEligible && message.request_id && (
           <Button
@@ -526,7 +508,6 @@ export function AnalysisChat({
   const [correctionError, setCorrectionError] = useState<string | null>(null);
   const [fixMessage, setFixMessage] = useState<AnalysisChatMessage | null>(null);
   const [fixOpen, setFixOpen] = useState(false);
-  const [sourceSelections, setSourceSelections] = useState<Record<string, ChatFixSourceSelection>>({});
   const createRequestIDRef = useRef(newAnalysisChatRequestID());
   const restoreControllerRef = useRef<AbortController | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
@@ -594,7 +575,6 @@ export function AnalysisChat({
     setCorrectionError(null);
     setFixMessage(null);
     setFixOpen(false);
-    setSourceSelections({});
     createRequestIDRef.current = newAnalysisChatRequestID();
   }, [identity]);
 
@@ -800,7 +780,6 @@ export function AnalysisChat({
     setSession(null);
     setPendingTurn(null);
     setTurnLimitRejected(false);
-    setSourceSelections({});
     setFixMessage(null);
     setFixOpen(false);
     try {
@@ -842,7 +821,6 @@ export function AnalysisChat({
     setError(null);
     setContinueMode(false);
     setTurnLimitRejected(false);
-    setSourceSelections({});
     createRequestIDRef.current = newAnalysisChatRequestID();
     setRestoreEpoch((value) => value + 1);
   }
@@ -1101,22 +1079,6 @@ export function AnalysisChat({
     }
   }
 
-  function sourceInvestigationChanged(
-    chatRequestID: string,
-    requestID: string | null,
-    view: SourceInvestigationView | null,
-  ) {
-    setSourceSelections((current) => {
-      if (!requestID || !view) {
-        if (!(chatRequestID in current)) return current;
-        const next = { ...current };
-        delete next[chatRequestID];
-        return next;
-      }
-      return { ...current, [chatRequestID]: { requestID, view } };
-    });
-  }
-
   function openFix(message: AnalysisChatMessage) {
     if (authStatus === "anonymous") {
       signIn();
@@ -1330,11 +1292,6 @@ export function AnalysisChat({
                 if (message.role === "user") {
                   return <UserMessage key={entry.key} content={message.content} />;
                 }
-                const sourceSelection = message.request_id ? sourceSelections[message.request_id] : undefined;
-                const actionableSource = sourceSelection?.view.status === "succeeded" &&
-                  (sourceSelection.view.result?.state === "actionable_code_change" ||
-                    sourceSelection.view.result?.state === "actionable_configuration_change") &&
-                  Boolean(sourceSelection.view.result?.target);
                 const hasArtifactEvidence = Boolean(message.citations?.length);
                 const exactJUnitAnalysis = !patternScope && analysisRef.source !== "build" && Boolean(analysisRef.junit_file);
                 const hasVerifiedSourcePaths = chatFixVerifiedSourcePaths(
@@ -1344,7 +1301,7 @@ export function AnalysisChat({
                 const exactFixEnabled = Boolean(features.junit_chat_fix) && exactJUnitAnalysis;
                 const exactFixEligible = exactFixEnabled && hasArtifactEvidence && hasVerifiedSourcePaths;
                 const legacyFixEligible = patternScope && Boolean(features.chat_fix) && hasArtifactEvidence &&
-                  Boolean(fixPatterns.length && actionableSource);
+                  Boolean(fixPatterns.length);
                 let fixIneligibleReason: string | undefined;
                 if (exactFixEnabled && !hasArtifactEvidence) {
                   fixIneligibleReason = "This response cannot start a fix preview because it has no validated artifact citation from this turn.";
@@ -1357,17 +1314,11 @@ export function AnalysisChat({
                     message={message}
                     fileCtx={fileCtx}
                     correctionEnabled={!patternScope && Boolean(features.analysis_corrections)}
-                    sourceInvestigationEnabled={!patternScope && Boolean(features.source_investigation)}
                     chatFixEnabled={exactFixEnabled || Boolean(features.chat_fix && patternScope)}
                     fixEligible={exactFixEligible || legacyFixEligible}
                     fixIneligibleReason={fixIneligibleReason}
-                    sessionID={session?.id ?? ""}
-                    sourceRepository={session?.source_repository}
                     onReviewCorrection={(requestID) => void reviewCorrection(requestID)}
                     onUseForFix={() => openFix(message)}
-                    onSourceInvestigationChange={(requestID, view) =>
-                      sourceInvestigationChanged(message.request_id ?? "", requestID, view)
-                    }
                   />
                 );
               })}
@@ -1491,7 +1442,6 @@ export function AnalysisChat({
         sessionID={session?.id ?? ""}
         message={fixMessage}
         patterns={fixPatterns}
-        source={fixMessage?.request_id ? sourceSelections[fixMessage.request_id] ?? null : null}
         exactAnalysis={!patternScope}
         onClose={() => setFixOpen(false)}
       />

@@ -5,9 +5,7 @@ advanced chart configuration that do not belong in the first-run path. Start
 with the [Kubernetes quickstart](kubernetes.md) or the generated
 `deploy/README.md`.
 
-Orka is documented separately in the
-[experimental Orka maintainer reference](maintainer/orka.md). It is not required for the
-default in-process deployment.
+Failure analysis always runs in-process next to the worker or CronJob.
 
 ## Why run in-cluster
 
@@ -244,7 +242,7 @@ main operator controls.
 | `ai.contextWindowTokens` | Optional operator-provided provider context window. Set only with endpoint evidence. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Existing provider token Secret and key. |
 | `ai.githubReadTokenSecretName`, `ai.githubReadTokenSecretKey` | Optional separate read-only GitHub token for source grounding. |
-| `orka.agentAnalysisShadow.*` | Disabled private Agent comparison, exact admission identity, limits, and private ledger claim. |
+| `agentSandbox.analysisShadow.*` | Disabled private Agent comparison, exact admission identity, limits, and private ledger claim. |
 | `fetcher.schedule` | Cron schedule. Used only in cron mode. |
 | `fetcher.suspend` | Suspend CronJob starts. Keep true when preserving a safe cron rollback from watch mode. |
 | `fetcher.watchInterval`, `fetcher.reconcileInterval` | Watch refresh and full reconciliation cadence. |
@@ -409,7 +407,6 @@ ledgers.
 - [Project configuration](project-configuration.md)
 - [Troubleshooting](troubleshooting.md)
 - [Releasing](releasing.md)
-- [Experimental Orka maintainer reference](maintainer/orka.md)
 
 ## Agent Sandbox Fix runtime
 
@@ -424,7 +421,7 @@ scheduled fix reconciler use `agentSandbox.fixRuntime.dashboardImage`. The
 published `remote-fixer` image contains the normal engine binaries, SPA, CA
 certificates, git, and the pinned Go toolchain used to build the image. Dashboard
 processes do not execute target repository build, test, vet, or validation
-commands. The image intentionally omits OpenCode, srt, and model credentials.
+commands. The image intentionally omits OpenCode and model credentials.
 
 When enabled, the chart can create:
 

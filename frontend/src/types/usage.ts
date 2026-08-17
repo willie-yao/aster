@@ -1,3 +1,4 @@
+// source_investigation is retained for historical records only.
 export type AIUsageFeature =
   | "failure_analysis" | "pattern_analysis" | "analysis_chat" | "issue_draft"
   | "fix_preview" | "fix_critique" | "pr_template" | "source_investigation";

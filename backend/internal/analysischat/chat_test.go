@@ -1727,30 +1727,6 @@ func TestPatternChatRejectsTestOnlyExtensions(t *testing.T) {
 	}
 }
 
-func TestPatternChatRejectsSourceInvestigation(t *testing.T) {
-	dir := t.TempDir()
-	writeJobDetail(t, dir, patternDetail())
-	runner := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}
-	service, err := NewService(t.Context(), dir, runner, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pattern := recurringPattern()
-	session, err := service.Create(AnalysisRef{
-		Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash,
-	}, "alice", testRequestID(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	requestID := testRequestID(t)
-	if _, err := service.Send(t.Context(), session.ID, "alice", requestID, "question"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := service.sourceInvestigationSubject(session.ID, "alice", requestID); !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("source investigation error = %v", err)
-	}
-}
-
 func TestVersionOneCreateIdempotencyMigratesOnRetry(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))

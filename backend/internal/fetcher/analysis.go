@@ -17,7 +17,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/analysisruntime"
 	"github.com/willie-yao/aster/backend/internal/fetchprogress"
 	"github.com/willie-yao/aster/backend/internal/models"
-	"github.com/willie-yao/aster/backend/internal/orka"
 	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/patterns"
 	"github.com/willie-yao/aster/backend/internal/project"
@@ -25,21 +24,14 @@ import (
 )
 
 var (
-	saveContainerAnalysisState = func(store *analysisruntime.ContainerStateStore) error { return store.Save() }
-	saveAnalysisRuntimeCache   = func(runtime *analysisruntime.Runtime) error { return runtime.SaveCache() }
-	saveAnalysisTraceStore     = func(store *ai.TraceStore, path string) error { return store.Save(path) }
+	saveAnalysisRuntimeCache = func(runtime *analysisruntime.Runtime) error { return runtime.SaveCache() }
+	saveAnalysisTraceStore   = func(store *ai.TraceStore, path string) error { return store.Save(path) }
+	// newAnalysisAnalyzer selects the analyzer one pass runs against. Tests replace it.
+	newAnalysisAnalyzer = func(service *ai.Service) ai.FailureAnalyzer { return service }
 )
 
 type analysisPlanner interface {
 	NeedsAnalysis(context.Context, *http.Client, *models.BuildResult, *models.TestCase, int) bool
-}
-
-type exactResultReuser interface {
-	ReuseExactResult(context.Context, ai.FailureAnalysisRequest, ai.AgenticCachePolicy) (ai.FailureAnalysisResult, bool, error)
-}
-
-type compatibleResultReuser interface {
-	ReuseCompatibleResult(context.Context, ai.FailureAnalysisRequest, ai.AgenticCachePolicy) (ai.FailureAnalysisResult, bool, error)
 }
 
 type aiWork struct {
@@ -123,120 +115,6 @@ func analysisNeedsWork(tc *models.TestCase) bool {
 	return tc.AISummary == nil || tc.AIAnalysis == nil || tc.AIAnalysis.Mode != ai.AgenticMode || !tc.AIAnalysis.CritiquePassed
 }
 
-func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, work []aiWork, container containerFailureAnalyzer, planner *ai.Service, project *analysisruntime.Project, consecutiveMap map[string]int) ([]aiWork, fetchprogress.AnalysisPlan, error) {
-	plan := fetchprogress.AnalysisPlan{LogicalTotal: len(work)}
-	cacheGeneration := ""
-	if project != nil {
-		cacheGeneration = project.CacheGenerationFingerprint
-	}
-	queued := make([]aiWork, 0, len(work))
-	state := container.StateStore()
-	var linkResolver *ai.FileLinkResolver
-	var sourceOwner, sourceName string
-	if project != nil && project.Config != nil {
-		sourceRepo := project.AnalysisSource
-		if sourceRepo.Owner == "" || sourceRepo.Name == "" {
-			sourceRepo = project.Config.EffectiveAnalysisSourceRepo()
-		}
-		sourceOwner, sourceName = sourceRepo.Owner, sourceRepo.Name
-		linkResolver = ai.NewFileLinkResolver(sourceRepo.Owner, sourceRepo.Name, githubReadToken())
-		linkResolver.SetVerificationStore(state.LinkVerifications())
-	}
-	resolveLinks := func(item aiWork) map[string]string {
-		if linkResolver == nil || project == nil {
-			return map[string]string{}
-		}
-		if source, ok := ai.ResolveBuildSource(item.run.BuildInfo, sourceOwner, sourceName); ok {
-			return linkResolver.ResolveAtRef(ctx, httpClient, item.tc, source.Revision)
-		}
-		return map[string]string{}
-	}
-	for _, item := range work {
-		buildSubject := item.tc.Source == models.TestCaseSourceBuild
-		if buildSubject {
-			plan.BuildSubjects.LogicalTotal++
-		}
-		reason := ai.CacheRejectedMissing
-		var result ai.FailureAnalysisResult
-		if state != nil && planner != nil {
-			var err error
-			result, reason, err = state.AcceptCachedFailure(ctx, httpClient, item.request(consecutiveMap[item.jobID+"::"+item.tc.Name], cacheGeneration), planner)
-			if err != nil {
-				return nil, fetchprogress.AnalysisPlan{}, err
-			}
-		}
-		if reason == ai.CacheAccepted {
-			item.tc.AISummary = result.Summary
-			item.tc.AIAnalysis = result.Analysis
-			if item.tc.AIAnalysis != nil {
-				item.tc.AIAnalysis.FileLinks = resolveLinks(item)
-			}
-			plan.AcceptedCacheHits++
-			if buildSubject {
-				plan.BuildSubjects.Completed++
-				plan.BuildSubjects.AcceptedCacheHits++
-			}
-			continue
-		}
-		if reason == ai.CacheRejectedMissing && planner != nil {
-			request := item.request(consecutiveMap[item.jobID+"::"+item.tc.Name], cacheGeneration)
-			policy, err := analysisruntime.FailureCachePolicy(ctx, httpClient, request, planner)
-			if err != nil {
-				return nil, fetchprogress.AnalysisPlan{}, err
-			}
-			if reuser, ok := container.(exactResultReuser); ok {
-				result, reused, err := reuser.ReuseExactResult(ctx, request, policy)
-				if err != nil {
-					return nil, fetchprogress.AnalysisPlan{}, err
-				}
-				if reused {
-					item.tc.AISummary = result.Summary
-					item.tc.AIAnalysis = result.Analysis
-					if item.tc.AIAnalysis != nil {
-						item.tc.AIAnalysis.FileLinks = resolveLinks(item)
-					}
-					plan.ExactResultsReused++
-					if buildSubject {
-						plan.BuildSubjects.Completed++
-						plan.BuildSubjects.ExactResultsReused++
-					}
-					continue
-				}
-			}
-			if reuser, ok := container.(compatibleResultReuser); ok {
-				result, reused, err := reuser.ReuseCompatibleResult(ctx, request, policy)
-				if err != nil {
-					return nil, fetchprogress.AnalysisPlan{}, err
-				}
-				if reused {
-					item.tc.AISummary = result.Summary
-					item.tc.AIAnalysis = result.Analysis
-					if item.tc.AIAnalysis != nil {
-						item.tc.AIAnalysis.FileLinks = resolveLinks(item)
-					}
-					plan.CompatibleResultsReused++
-					if buildSubject {
-						plan.BuildSubjects.Completed++
-					}
-					continue
-				}
-			}
-		}
-		plan.CacheRejections.Add(string(reason))
-		if reason == ai.CacheRejectedMissing {
-			plan.NewWork++
-		} else {
-			plan.StaleWork++
-		}
-		if buildSubject {
-			plan.BuildSubjects.Queued++
-		}
-		queued = append(queued, item)
-	}
-	plan.Queued = len(queued)
-	return queued, plan, nil
-}
-
 func (p *pipeline) cacheGenerationFingerprint() string {
 	if p == nil || p.aiProject == nil {
 		return ""
@@ -255,40 +133,14 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 	planner := analysisruntime.NewReusePlanner(p.aiProject)
 	work := collectAIWork(ctx, p.client, details, consecutiveMap, planner)
 	logicalTotal := len(work)
-	var container containerFailureAnalyzer
 	var err error
-	if p.opts.AnalysisRuntime.Type == AnalysisRuntimeOrkaContainer {
-		container, err = p.ensureContainerAnalyzer()
-		if err != nil {
-			return fmt.Errorf("container analysis runtime setup: %w", err)
+	buildSubjects := 0
+	for i := range work {
+		if work[i].tc.Source == models.TestCaseSourceBuild {
+			buildSubjects++
 		}
-		if err := container.Maintain(ctx); err != nil {
-			return err
-		}
-		var plan fetchprogress.AnalysisPlan
-		work, plan, err = planContainerAnalysisWork(ctx, p.client, work, container, planner, p.aiProject, consecutiveMap)
-		if err != nil {
-			return fmt.Errorf("plan container analysis reuse: %w", err)
-		}
-		cohorts := analysisFailureCohortStats(work)
-		plan.SameFailureGroups = cohorts.Groups
-		plan.SameFailureCandidates = cohorts.Candidates
-		plan.PotentialTasksSaved = cohorts.PotentialTasksSaved
-		plan.LargestSameFailureGroup = cohorts.LargestGroup
-		if cohorts.Groups > 0 {
-			log.Printf("🧩 same-failure candidates: groups=%d subjects=%d potential_task_savings=%d largest_group=%d",
-				cohorts.Groups, cohorts.Candidates, cohorts.PotentialTasksSaved, cohorts.LargestGroup)
-		}
-		p.planProgressAnalysisWork(plan)
-	} else {
-		buildSubjects := 0
-		for i := range work {
-			if work[i].tc.Source == models.TestCaseSourceBuild {
-				buildSubjects++
-			}
-		}
-		p.planProgressAnalyses(len(work), buildSubjects)
 	}
+	p.planProgressAnalyses(len(work), buildSubjects)
 	p.completeProgressPhase()
 	p.startProgressPhase(fetchprogress.PhaseAnalysis)
 	if len(work) == 0 {
@@ -300,12 +152,6 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 			return nil
 		}
 		log.Println("🤖 All failure analysis results are ready from reuse")
-	} else if container != nil {
-		if preflight, ok := container.(interface{ Preflight(context.Context) error }); ok {
-			if err := preflight.Preflight(ctx); err != nil {
-				return err
-			}
-		}
 	}
 	if len(work) > 0 {
 		log.Printf("🤖 Analyzing %d failures with %s...", len(work), p.opts.AnalysisRuntime.Type)
@@ -316,9 +162,7 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 	var service *ai.Service
 	var traceStore *ai.TraceStore
 
-	if container != nil {
-		analyzer = container
-	} else {
+	{
 		runtime, err = p.ensureAnalysisRuntime(ctx)
 		if err != nil {
 			log.Printf("⚠ AI runtime setup failed: %v", err)
@@ -344,21 +188,10 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 			return nil
 		}
 		runtime.LogConfiguration()
-		analyzer = service
+		analyzer = newAnalysisAnalyzer(service)
 	}
 
-	executions := make([]analysisExecution, 0, len(work))
-	if container != nil {
-		executions = planAnalysisExecutions(work)
-	} else {
-		for _, item := range work {
-			executions = append(executions, analysisExecution{Work: []aiWork{item}})
-		}
-	}
 	concurrency := p.cfg.AnalysisConcurrency()
-	if container != nil {
-		concurrency = p.opts.AnalysisRuntime.OrkaContainer.MaxConcurrent
-	}
 	if concurrency > len(work) {
 		concurrency = len(work)
 	}
@@ -370,8 +203,6 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 	var judgeRan, judgeObjected, judgeRevised atomic.Int64
 	analysisCtx, cancelAnalysis := context.WithCancel(ctx)
 	defer cancelAnalysis()
-	var systemicOnce sync.Once
-	var systemicErr error
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 
@@ -406,109 +237,35 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		}
 		p.finishProgressAnalysis(item.tc.Source == models.TestCaseSourceBuild, outcome)
 	}
-	cancelStarted := func(execution analysisExecution) {
-		for _, item := range execution.Work {
-			p.finishProgressAnalysis(item.tc.Source == models.TestCaseSourceBuild, fetchprogress.OutcomeCancelled)
-		}
-	}
-
-	var scheduleExecution func(analysisExecution, bool)
-	scheduleExecution = func(execution analysisExecution, progressStarted bool) {
-		tokenHeld := false
-		if !progressStarted {
+	scheduleWork := func(item aiWork) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 			select {
 			case sem <- struct{}{}:
-				tokenHeld = true
 			case <-analysisCtx.Done():
+				p.finishProgressAnalysis(item.tc.Source == models.TestCaseSourceBuild, fetchprogress.OutcomeCancelled)
 				return
-			}
-			if analysisCtx.Err() != nil {
-				<-sem
-				return
-			}
-		}
-		wg.Add(1)
-		go func(tokenHeld bool) {
-			defer wg.Done()
-			if !tokenHeld {
-				select {
-				case sem <- struct{}{}:
-					tokenHeld = true
-				case <-analysisCtx.Done():
-					if progressStarted {
-						cancelStarted(execution)
-					}
-					return
-				}
 			}
 			defer func() { <-sem }()
 			if analysisCtx.Err() != nil {
-				if progressStarted {
-					cancelStarted(execution)
-				}
+				p.finishProgressAnalysis(item.tc.Source == models.TestCaseSourceBuild, fetchprogress.OutcomeCancelled)
 				return
 			}
-			if !progressStarted {
-				for _, item := range execution.Work {
-					p.startProgressAnalysis(item.tc.Source == models.TestCaseSourceBuild)
-				}
-			}
-
-			representative := execution.Work[0]
-			before := representative.tc.AISummary
-			request := analysisExecutionRequest(execution, consecutiveMap[representative.jobID+"::"+representative.tc.Name], p.cacheGenerationFingerprint())
+			p.startProgressAnalysis(item.tc.Source == models.TestCaseSourceBuild)
+			before := item.tc.AISummary
+			request := item.request(consecutiveMap[item.jobID+"::"+item.tc.Name], p.cacheGenerationFingerprint())
 			result, analyzeErr := analyzer.AnalyzeFailure(analysisCtx, p.client, request)
-			if systemic := systemicContainerAnalysisError(analyzeErr); systemic != nil {
-				finish(representative, before, result, analyzeErr, true)
-				for _, follower := range execution.Work[1:] {
-					p.finishProgressAnalysis(follower.tc.Source == models.TestCaseSourceBuild, fetchprogress.OutcomeCancelled)
-				}
-				systemicOnce.Do(func() {
-					systemicErr = systemic
-					cancelAnalysis()
-				})
-				return
-			}
-			if len(execution.Work) == 1 {
-				finish(representative, before, result, analyzeErr, true)
-				return
-			}
-			if errors.Is(analyzeErr, context.Canceled) || errors.Is(analyzeErr, context.DeadlineExceeded) {
-				finish(representative, before, result, analyzeErr, true)
-				for _, follower := range execution.Work[1:] {
-					p.finishProgressAnalysis(follower.tc.Source == models.TestCaseSourceBuild, fetchprogress.OutcomeCancelled)
-				}
-				return
-			}
-			if analyzeErr != nil {
-				for _, item := range execution.Work {
-					scheduleExecution(analysisExecution{Work: []aiWork{item}}, true)
-				}
-				return
-			}
-
-			finish(representative, before, result, nil, true)
-			for _, follower := range execution.Work[1:] {
-				shared, ok := prepareSameFailureReuse(analysisCtx, p.client, follower, result, container.StateStore(), planner, consecutiveMap[follower.jobID+"::"+follower.tc.Name], p.cacheGenerationFingerprint())
-				if ok {
-					finish(follower, follower.tc.AISummary, shared, nil, false)
-					p.recordProgressSameFailureReuse(1)
-					continue
-				}
-				scheduleExecution(analysisExecution{Work: []aiWork{follower}}, true)
-			}
-		}(tokenHeld)
+			finish(item, before, result, analyzeErr, true)
+		}()
 	}
-	for _, execution := range executions {
-		scheduleExecution(execution, false)
+	for _, item := range work {
+		scheduleWork(item)
 	}
 
 	wg.Wait()
 	p.cancelQueuedProgressAnalyses()
 	p.completeProgressPhase()
-	if systemicErr != nil {
-		return systemicErr
-	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -516,7 +273,7 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 	if n := judgeRan.Load(); n > 0 {
 		log.Printf("⚖️ semantic judge: ran on %d, objected on %d, revised %d", n, judgeObjected.Load(), judgeRevised.Load())
 	}
-	if err := p.persistIndividualAnalysisCheckpoint(container, runtime, traceStore); err != nil {
+	if err := p.persistIndividualAnalysisCheckpoint(runtime, traceStore); err != nil {
 		return err
 	}
 	if err := p.commitAnalysisCheckpoint(); err != nil {
@@ -524,31 +281,6 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 	}
 	p.markProgressAnalysisCheckpoint()
 	p.startProgressPhase(fetchprogress.PhasePatterns)
-
-	if container != nil {
-		// Container analysis wrote the checkpoint outside the retained runtime.
-		// Reload it before pattern cache writes so new individual entries survive.
-		p.aiRuntime = nil
-		runtime, err = p.ensureAnalysisRuntime(ctx)
-		if err != nil {
-			log.Printf("Warning: cross-build analysis runtime setup failed: %v", err)
-			p.skipProgressPatterns()
-			return nil
-		}
-		traceStore = container.StateStore().TraceStore()
-		service, err = runtime.NewService(analysisruntime.ServiceOptions{
-			Backend:             p.backend,
-			ConsecutiveFailures: consecutiveMap,
-			TraceStore:          traceStore,
-			GitHubReadToken:     githubReadToken(),
-		})
-		if err != nil {
-			log.Printf("Warning: cross-build analysis service setup failed: %v", err)
-			p.skipProgressPatterns()
-			return nil
-		}
-		runtime.LogConfiguration()
-	}
 
 	patternOptions := patterns.AnalyzeOptions{
 		OnPlan: func(total int) {
@@ -598,14 +330,7 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 	return nil
 }
 
-func (p *pipeline) persistIndividualAnalysisCheckpoint(container containerFailureAnalyzer, runtime *analysisruntime.Runtime, traces *ai.TraceStore) error {
-	if container != nil {
-		container.StateStore().SetTraceEngine(p.opts.TraceEngine)
-		if err := saveContainerAnalysisState(container.StateStore()); err != nil {
-			return fmt.Errorf("persisting completed container analysis: %w", err)
-		}
-		return nil
-	}
+func (p *pipeline) persistIndividualAnalysisCheckpoint(runtime *analysisruntime.Runtime, traces *ai.TraceStore) error {
 	return p.persistRuntimeAnalysisState(runtime, traces)
 }
 
@@ -636,53 +361,6 @@ func (p *pipeline) ensureAnalysisRuntime(ctx context.Context) (*analysisruntime.
 	}
 	p.aiRuntime = runtime
 	return p.aiRuntime, nil
-}
-
-func (p *pipeline) ensureContainerAnalyzer() (containerFailureAnalyzer, error) {
-	if p.containerAnalyzer != nil {
-		return p.containerAnalyzer, nil
-	}
-	stateKey, err := analysisruntime.ParseContainerStateKey(os.Getenv(analysisruntime.ContainerStateKeyEnv))
-	if err != nil {
-		return nil, err
-	}
-	cfg := p.opts.AnalysisRuntime.OrkaContainer
-	container, err := orka.NewContainerAnalyzer(orka.ContainerAnalyzerOptions{
-		Namespace:           cfg.Namespace,
-		OrkaAPI:             cfg.ResultAPI,
-		OrkaAPIToken:        os.Getenv("ORKA_ANALYSIS_API_TOKEN"),
-		Image:               cfg.Image,
-		ProjectDir:          p.opts.ProjectDir,
-		DataDir:             p.opts.OutDir,
-		API:                 p.aiProject.Provider.API,
-		Endpoint:            p.aiProject.Provider.Endpoint,
-		Model:               p.aiProject.Provider.Model,
-		CacheGeneration:     p.aiProject.CacheGeneration,
-		ModelSecretName:     cfg.ModelSecretName,
-		ModelTokenKey:       cfg.ModelTokenKey,
-		GitHubSecretName:    cfg.GitHubSecretName,
-		GitHubTokenKey:      cfg.GitHubTokenKey,
-		StateSecretName:     cfg.StateSecretName,
-		StateSecretKey:      cfg.StateSecretKey,
-		StateKey:            stateKey,
-		ContextWindowTokens: cfg.ContextWindowTokens,
-		AnalysisTimeout:     p.aiProject.Config.AI.EffectiveAgentic().Timeout,
-		TaskTimeout:         cfg.TaskTimeout,
-		PollInterval:        cfg.PollInterval,
-		MaxRetries:          cfg.Retries,
-		MaxConcurrentTasks:  cfg.MaxConcurrent,
-		NodeSelector:        cfg.NodeSelector,
-		Tolerations:         cfg.Tolerations,
-		Affinity:            cfg.Affinity,
-		Progress:            p.progress,
-		UsageRecorder:       p.usageRecorder,
-	})
-	if err != nil {
-		return nil, err
-	}
-	container.StateStore().SetTraceEngine(p.opts.TraceEngine)
-	p.containerAnalyzer = container
-	return p.containerAnalyzer, nil
 }
 
 var analyzePatternsAcrossBuilds = func(ctx context.Context, service *ai.Service, details []models.JobDetail, options patterns.AnalyzeOptions) error {

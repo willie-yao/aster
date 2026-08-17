@@ -20,7 +20,6 @@ import {
   BuildOutlined,
   CheckCircleOutlined,
   FactCheckOutlined,
-  SourceOutlined,
 } from "@mui/icons-material";
 import {
   cancelAnalysisChatFixRequest,
@@ -39,14 +38,8 @@ import { clearStoredChatFixRequest, readStoredChatFixRequest, storeChatFixReques
 import { soft } from "../theme";
 import type { AnalysisChatMessage } from "../types/analysisChat";
 import type { PatternAnalysis } from "../types/dashboard";
-import type { SourceInvestigationView } from "../types/sourceInvestigation";
 import { ActionDraftPreview } from "./ActionDraftPreview";
 import { RichText } from "./RichText";
-
-export interface ChatFixSourceSelection {
-  requestID: string;
-  view: SourceInvestigationView;
-}
 
 function EvidenceList({
   citations,
@@ -116,7 +109,6 @@ export function ChatFixDialog({
   sessionID,
   message,
   patterns,
-  source,
   exactAnalysis,
   onClose,
 }: {
@@ -124,7 +116,6 @@ export function ChatFixDialog({
   sessionID: string;
   message: AnalysisChatMessage | null;
   patterns: PatternAnalysis[];
-  source: ChatFixSourceSelection | null;
   exactAnalysis: boolean;
   onClose: () => void;
 }) {
@@ -150,7 +141,6 @@ export function ChatFixDialog({
     [patterns],
   );
   const selectedPattern = eligiblePatterns.find((pattern) => pattern.id === patternID) ?? null;
-  const sourceResult = source?.view.status === "succeeded" ? source.view.result : undefined;
   const requestPresentation = exactAnalysis && request ? chatFixRequestPresentation(request) : null;
 
   const firstPatternID = eligiblePatterns[0]?.id ?? "";
@@ -263,7 +253,6 @@ export function ChatFixDialog({
         message.request_id,
         patternID,
         selectedPattern?.content_hash ?? null,
-        sourceResult && source ? source.requestID : null,
         instruction,
         controller.signal,
       );
@@ -530,26 +519,12 @@ export function ChatFixDialog({
               )}
             </ContextSection>
 
-            {exactAnalysis ? (
-              <ContextSection title="Immutable source verification" icon={<SourceOutlined sx={{ fontSize: 17, color: "info.main" }} />}>
+            {exactAnalysis && (
+              <ContextSection title="Immutable source verification" icon={<FactCheckOutlined sx={{ fontSize: 17, color: "info.main" }} />}>
                 <Alert severity="info" variant="outlined">
                   The server resolves the exact repository revision from build metadata, verifies the published source paths at that revision, and rejects the preview if the target branch has moved.
                 </Alert>
               </ContextSection>
-            ) : sourceResult && source ? (
-              <ContextSection title="Required verified source investigation" icon={<SourceOutlined sx={{ fontSize: 17, color: "info.main" }} />}>
-                <Box sx={{ borderRadius: "10px", bgcolor: (theme) => soft(theme, "info", 0.06), p: 1.25 }}>
-                  <Typography variant="body2" sx={{ lineHeight: 1.6 }}>{sourceResult.finding}</Typography>
-                  {sourceResult.target?.path && (
-                    <Typography variant="caption" color="text.secondary">Target: {sourceResult.target.path}</Typography>
-                  )}
-                  {sourceResult.citations && sourceResult.citations.length > 0 && (
-                    <Box sx={{ mt: 1 }}><EvidenceList citations={sourceResult.citations} /></Box>
-                  )}
-                </Box>
-              </ContextSection>
-            ) : (
-              <Alert severity="warning">A completed actionable source investigation is required before fix generation.</Alert>
             )}
 
             <TextField
@@ -653,7 +628,7 @@ export function ChatFixDialog({
             color="warning"
             startIcon={busy === "preview" ? <CircularProgress size={16} color="inherit" /> : <BuildOutlined />}
             onClick={() => void generatePreview()}
-            disabled={busy !== null || (!exactAnalysis && (!patternID || !sourceResult || !source))}
+            disabled={busy !== null || (!exactAnalysis && !patternID)}
           >
             {busy === "preview" ? "Generating" : "Generate fix preview"}
           </Button>

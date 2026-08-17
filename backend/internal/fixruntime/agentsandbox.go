@@ -77,6 +77,14 @@ var (
 )
 
 // RuntimeIdentity fingerprints the normalized non-secret Sandbox workload configuration.
+// Namespace reports the Sandbox namespace this runtime submits workloads to.
+func (r *AgentSandboxRuntime) Namespace() string {
+	if r == nil {
+		return ""
+	}
+	return r.opts.Namespace
+}
+
 func (r *AgentSandboxRuntime) RuntimeIdentity() string {
 	if r == nil {
 		return ""

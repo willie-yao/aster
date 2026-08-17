@@ -81,8 +81,8 @@ must not be able to start generation or create an issue or PR merely by opening
 a URL.
 
 Do not enable `action_links` for a static Pages deployment. Pages has no action
-API or administrator authentication. Fix proposal links also require a server
-image that contains OpenCode, git, and the pinned `srt` sandbox.
+API or administrator authentication. Fix proposal links also require an enabled
+Agent Sandbox Fix runtime.
 
 ## SMTP security modes
 

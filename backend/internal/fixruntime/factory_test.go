@@ -2,7 +2,6 @@ package fixruntime
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,108 +10,8 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
-	"github.com/willie-yao/aster/backend/internal/orka"
 	"github.com/willie-yao/aster/backend/internal/project"
-	"github.com/willie-yao/aster/backend/internal/runtime"
 )
-
-func TestNewDefaultsToLocalAgent(t *testing.T) {
-	got, err := New(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := got.(*runtime.LocalAgentRuntime); !ok {
-		t.Fatalf("runtime = %T, want LocalAgentRuntime", got)
-	}
-}
-
-func TestNewOrkaRequiresConfiguration(t *testing.T) {
-	if _, err := New(&project.FixAgentRuntime{Type: "orka"}); err == nil {
-		t.Fatal("incomplete Orka runtime config was accepted")
-	}
-}
-
-func TestNewOrkaRejectsPartialDelegatedIdentity(t *testing.T) {
-	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
-	config := `apiVersion: v1
-kind: Config
-clusters:
-- name: test
-  cluster:
-    server: https://127.0.0.1:65535
-    insecure-skip-tls-verify: true
-users:
-- name: test
-  user:
-    token: test
-contexts:
-- name: test
-  context:
-    cluster: test
-    user: test
-current-context: test
-`
-	if err := os.WriteFile(kubeconfig, []byte(config), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("KUBECONFIG", kubeconfig)
-	t.Setenv("ORKA_FIX_SERVICE_ACCOUNT_NAME", "dashboard-fix")
-	_, err := New(&project.FixAgentRuntime{
-		Type: "orka", OrkaAgentRef: "fixer", OrkaAPI: "http://orka.invalid", OrkaNamespace: "orka-system",
-	})
-	if err == nil || !strings.Contains(err.Error(), "delegated ServiceAccount namespace is required") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestNewLocalRuntimeUsesSRTSandbox(t *testing.T) {
-	got, err := New(&project.FixAgentRuntime{Type: "opencode"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	local, ok := got.(*runtime.LocalAgentRuntime)
-	if !ok {
-		t.Fatalf("runtime = %T, want LocalAgentRuntime", got)
-	}
-	if _, ok := local.Sandbox.(*runtime.SRTSandbox); !ok {
-		t.Fatalf("sandbox = %T, want SRTSandbox", local.Sandbox)
-	}
-}
-
-func TestNewOrkaSelectionUnchanged(t *testing.T) {
-	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
-	config := `apiVersion: v1
-kind: Config
-clusters:
-- name: test
-  cluster:
-    server: https://127.0.0.1:65535
-    insecure-skip-tls-verify: true
-users:
-- name: test
-  user:
-    token: test
-contexts:
-- name: test
-  context:
-    cluster: test
-    user: test
-current-context: test
-`
-	if err := os.WriteFile(kubeconfig, []byte(config), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("KUBECONFIG", kubeconfig)
-	got, err := New(&project.FixAgentRuntime{
-		Type: "orka", OrkaAgentRef: "fixer", OrkaAPI: "http://orka.invalid", OrkaNamespace: "orka-system",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := got.(*orka.AgentRuntime); !ok {
-		t.Fatalf("runtime = %T, want Orka AgentRuntime", got)
-	}
-}
 
 func setAgentSandboxProviderEnv(t *testing.T, prefix string, provider modelprovider.Config, secret ProviderSecretRef, timeout string) {
 	t.Helper()
@@ -209,5 +108,14 @@ func TestNewAgentSandboxSelectionDoesNotUseAmbientKubeconfig(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "requires in-cluster Kubernetes configuration") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestNewRejectsUnsupportedRuntime(t *testing.T) {
+	if _, err := New(&project.FixAgentRuntime{Type: "opencode"}); err == nil {
+		t.Fatal("unsupported fix runtime was accepted")
+	}
+	if _, err := New(nil); err == nil {
+		t.Fatal("missing agent_runtime configuration was accepted")
 	}
 }

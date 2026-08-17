@@ -238,10 +238,6 @@ func TestServiceExactFixResolvesPreservedMutableBuildSourceBeforeProvider(t *tes
 	if err := service.PreflightTestFix(t.Context(), session.ID, "Alice", requestID); err != nil {
 		t.Fatalf("admitted idempotent Fix preflight error = %v", err)
 	}
-	subject, err := service.sourceInvestigationSubject(session.ID, "alice", requestID)
-	if err != nil || subject.Repository.Revision != detail.Runs[0].Commit {
-		t.Fatalf("source investigation subject = %+v, %v", subject, err)
-	}
 	candidate, err := service.TestFixCandidate(session.ID, "Alice", requestID)
 	if err != nil {
 		t.Fatal(err)

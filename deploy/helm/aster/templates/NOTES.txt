@@ -16,10 +16,10 @@ Server:           {{ include "aster.fullname" . }}-server
 AI reasoning:     {{ default "provider default" .Values.ai.reasoningEffort }}
 {{- end }}
 Shared volume:    {{ include "aster.pvcName" . }} ({{ .Values.persistence.accessMode }})
-{{- if .Values.orka.agentAnalysisShadow.enabled }}
+{{- if .Values.agentSandbox.analysisShadow.enabled }}
 Shadow analysis:  configured, authoritative runtime remains inprocess
-Shadow identity:  ServiceAccount {{ include "aster.agentAnalysisShadowServiceAccountName" . }}
-Private ledger:   {{ include "aster.agentAnalysisShadowPVCName" . }} (not mounted by server)
+Shadow namespace: {{ .Values.agentSandbox.analysisShadow.namespace }}
+Private ledger:   {{ .Values.agentSandbox.analysisShadow.ledger.existingClaim }} (not mounted by server)
 {{- end }}
 
 The server serves the SPA at / and the JSON contract at /data/*, with a

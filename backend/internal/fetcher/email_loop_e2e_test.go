@@ -68,9 +68,15 @@ func (emailLoopFixAgent) Generate(_ context.Context, spec runtimepkg.GenerateSpe
 	if spec.Repo.Ref != "base-sha" {
 		return runtimepkg.GenerateResult{}, fmt.Errorf("fix ref = %q", spec.Repo.Ref)
 	}
+	results := make([]runtimepkg.CommandResult, 0, len(spec.CommandPolicy.Commands))
+	for _, command := range spec.CommandPolicy.Commands {
+		results = append(results, runtimepkg.CommandResult{Argv: command.Argv})
+	}
 	return runtimepkg.GenerateResult{
-		Files: map[string]string{"config/fix.yaml": "fixed: true\n"},
-		Diff:  "diff --git a/config/fix.yaml b/config/fix.yaml\n+fixed: true\n",
+		Files:          map[string]string{"config/fix.yaml": "fixed: true\n"},
+		Diff:           "diff --git a/config/fix.yaml b/config/fix.yaml\n+fixed: true\n",
+		CommandResults: results,
+		BaseSHA:        spec.Repo.Ref,
 	}, nil
 }
 
@@ -212,7 +218,10 @@ func newEmailLoopScenario(t *testing.T) *emailLoopScenario {
 		AI: &project.AI{FixPRs: &project.FixPRs{
 			Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"},
 			AuthorName: "Test Maintainer", AuthorEmail: "maintainer@example.test", CritiqueRetries: &zero,
-			AgentRuntime: &project.FixAgentRuntime{Type: "orka"},
+			AgentRuntime: &project.FixAgentRuntime{
+				Type: "agent-sandbox", OutputLimitBytes: 64 << 10,
+				AllowedCommands: []project.FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "1m"}},
+			},
 		}},
 		Notifications: &project.Notifications{Email: &project.EmailNotifications{
 			Enabled: true, ActionLinks: true, From: "dashboard@example.test", To: []string{"maintainer@example.test"},
