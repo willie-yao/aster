@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,9 @@ var (
 	// ErrBusy marks a rejected start because another escalation is running.
 	ErrBusy = errors.New("another escalation is already running")
 )
+
+// maxIdempotencyKeysPerRecord bounds replay keys retained per retained record.
+const maxIdempotencyKeysPerRecord = 8
 
 // Ref identifies one failing test on one pull request check.
 type Ref struct {
@@ -131,6 +135,12 @@ type record struct {
 }
 
 // Service runs one escalation at a time and remembers recent results.
+//
+// Records are keyed by failure, not by requester, so every admin sees the same
+// escalation for the same failure. That is deliberate: escalation is the only
+// part of the feature that spends tokens, and per-admin isolation would let
+// several maintainers each pay for the same analysis. The owner is retained
+// only to scope replay keys.
 type Service struct {
 	ctx      context.Context
 	resolver Resolver
@@ -143,7 +153,10 @@ type Service struct {
 	mu          sync.Mutex
 	records     map[string]*record
 	idempotency map[string]string
-	wg          sync.WaitGroup
+	// saveMu serializes persistence so concurrent finishes cannot write
+	// snapshots out of order.
+	saveMu sync.Mutex
+	wg     sync.WaitGroup
 }
 
 // New constructs the service and restores any persisted results.
@@ -191,12 +204,19 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	idempotencyKey := owner + "\x00" + requestID
 
 	s.mu.Lock()
-	if previous, ok := s.idempotency[idempotencyKey]; ok && previous != identity {
-		s.mu.Unlock()
-		return View{}, ErrIdempotencyConflict
+	replay := false
+	if previous, ok := s.idempotency[idempotencyKey]; ok {
+		if previous != identity {
+			s.mu.Unlock()
+			return View{}, ErrIdempotencyConflict
+		}
+		// The same key for the same subject is a replay of one request, so it
+		// returns that request's outcome rather than starting new work.
+		replay = true
 	}
-	if existing := s.records[identity]; existing != nil {
+	if existing := s.records[identity]; existing != nil && (replay || !retryable(existing)) {
 		s.idempotency[idempotencyKey] = identity
+		s.pruneIdempotencyLocked()
 		view := existing.view
 		s.mu.Unlock()
 		return view, nil
@@ -211,8 +231,9 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	}
 
 	s.mu.Lock()
-	if existing := s.records[identity]; existing != nil {
+	if existing := s.records[identity]; existing != nil && !retryable(existing) {
 		s.idempotency[idempotencyKey] = identity
+		s.pruneIdempotencyLocked()
 		view := existing.view
 		s.mu.Unlock()
 		return view, nil
@@ -226,12 +247,20 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	s.records[identity] = rec
 	s.idempotency[idempotencyKey] = identity
 	s.pruneLocked()
+	s.pruneIdempotencyLocked()
 	view := rec.view
 	s.wg.Add(1)
 	s.mu.Unlock()
 
 	go s.run(rec, resolved)
 	return view, nil
+}
+
+// retryable reports whether a finished record may be started again. A failure
+// is a transient outcome, not a durable fact: a provider error, a timeout, or a
+// shutdown that interrupted queued work must not pin a subject forever.
+func retryable(rec *record) bool {
+	return !rec.running && rec.view.State == StateFailed
 }
 
 // Get returns the current state for a subject.
@@ -291,13 +320,29 @@ func (s *Service) finish(rec *record, view View) {
 	rec.view = view
 	rec.running = false
 	rec.updatedAt = now
-	snapshot := s.snapshotLocked()
-	store := s.opts.Store
 	s.mu.Unlock()
 
-	if store != nil {
-		// A persistence failure must not lose the in-memory result.
-		_ = store.Save(snapshot)
+	s.persist()
+}
+
+// persist writes the current results. Snapshot and write are serialized
+// together: the cancellation path in run finishes without holding the active
+// slot, so several goroutines can persist at once, and taking the snapshot
+// outside this lock would let an older snapshot overwrite a newer one.
+func (s *Service) persist() {
+	store := s.opts.Store
+	if store == nil {
+		return
+	}
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.mu.Lock()
+	snapshot := s.snapshotLocked()
+	s.mu.Unlock()
+	// A persistence failure must not lose the in-memory result, but it must be
+	// visible: the results silently stop surviving restarts otherwise.
+	if err := store.Save(snapshot); err != nil {
+		log.Printf("⚠ Persisting pull request escalation results failed: %v", err)
 	}
 }
 
@@ -334,6 +379,30 @@ func (s *Service) pruneLocked() {
 				delete(s.idempotency, key)
 			}
 		}
+	}
+}
+
+// pruneIdempotencyLocked bounds the replay index. Its entries outlive the
+// records they point at, and a client controls the key, so repeated requests
+// for one retained subject would otherwise grow the map without limit.
+func (s *Service) pruneIdempotencyLocked() {
+	limit := s.opts.MaxRecords * maxIdempotencyKeysPerRecord
+	if len(s.idempotency) <= limit {
+		return
+	}
+	// Entries whose record is already gone can never serve a replay.
+	for key, identity := range s.idempotency {
+		if _, ok := s.records[identity]; !ok {
+			delete(s.idempotency, key)
+		}
+	}
+	// Dropping a live entry only costs replay protection for that one key; the
+	// record itself still answers the request.
+	for key := range s.idempotency {
+		if len(s.idempotency) <= limit {
+			break
+		}
+		delete(s.idempotency, key)
 	}
 }
 

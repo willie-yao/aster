@@ -42,6 +42,10 @@ export function EscalationPanel({ refValue, enabled }: EscalationPanelProps) {
   // superseded key is ignored so a late reply cannot overwrite newer state.
   const requestKey = useRef<string | null>(null);
   const cancelled = useRef(false);
+  // Every read and write takes a generation. A response from an older
+  // generation is discarded, so a slow poll cannot overwrite a newer start and
+  // regress the panel to not_started.
+  const generation = useRef(0);
 
   useEffect(() => {
     cancelled.current = false;
@@ -51,11 +55,14 @@ export function EscalationPanel({ refValue, enabled }: EscalationPanelProps) {
   }, []);
 
   const load = useCallback(async () => {
+    const issued = ++generation.current;
     try {
       const next = await getEscalation(refValue);
-      if (!cancelled.current) setView(next);
+      if (!cancelled.current && issued === generation.current) setView(next);
     } catch (loadError) {
-      if (!cancelled.current) setError(errorMessage(loadError));
+      if (!cancelled.current && issued === generation.current) {
+        setError(errorMessage(loadError));
+      }
     }
   }, [refValue]);
 
@@ -75,11 +82,14 @@ export function EscalationPanel({ refValue, enabled }: EscalationPanelProps) {
     setError(null);
     const key = newIdempotencyKey();
     requestKey.current = key;
+    const issued = ++generation.current;
     try {
       const next = await startEscalation(refValue, key);
-      if (!cancelled.current && requestKey.current === key) setView(next);
+      if (!cancelled.current && requestKey.current === key && issued === generation.current) {
+        setView(next);
+      }
     } catch (startError) {
-      if (!cancelled.current && requestKey.current === key) {
+      if (!cancelled.current && requestKey.current === key && issued === generation.current) {
         setError(errorMessage(startError));
       }
     } finally {

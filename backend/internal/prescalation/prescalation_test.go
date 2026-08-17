@@ -383,3 +383,167 @@ func TestEligible(t *testing.T) {
 func contains(haystack, needle string) bool {
 	return strings.Contains(haystack, needle)
 }
+
+// persistCountingStore records the most recent snapshot written.
+type persistCountingStore struct {
+	mu   sync.Mutex
+	last map[string]View
+}
+
+func (c *persistCountingStore) Load() (map[string]View, error) { return map[string]View{}, nil }
+
+func (c *persistCountingStore) Save(results map[string]View) error {
+	// Real IO takes time, which is what opens the interleaving window.
+	time.Sleep(2 * time.Millisecond)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.last = map[string]View{}
+	for k, v := range results {
+		c.last[k] = v
+	}
+	return nil
+}
+
+func (c *persistCountingStore) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.last)
+}
+
+type instantRunner struct{}
+
+func (instantRunner) Run(context.Context, Resolved) (View, error) {
+	return View{State: StateComplete, RootCause: "ok"}, nil
+}
+
+// Cancelling the service wakes every queued escalation at once, and the
+// cancellation path finishes without holding the active slot. Persisting must
+// stay ordered so an older snapshot cannot overwrite a newer one.
+func TestConcurrentFinishesDoNotLosePersistedResults(t *testing.T) {
+	store := &persistCountingStore{}
+	ctx, cancel := context.WithCancel(context.Background())
+	service, err := New(ctx, &fakeResolver{}, instantRunner{}, Options{Store: store})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Occupy the single slot so the rest queue behind it.
+	blocked := make(chan struct{})
+	go func() {
+		service.active <- struct{}{}
+		<-blocked
+	}()
+	time.Sleep(20 * time.Millisecond)
+
+	const queued = 12
+	for i := 0; i < queued; i++ {
+		ref := Ref{PullNumber: 1, JobID: "j", BuildID: "b", TestName: fmt.Sprintf("Test%d", i)}
+		if _, err := service.Start(context.Background(), ref, "octocat", fmt.Sprintf("req-%d", i)); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	service.Wait()
+	close(blocked)
+
+	service.mu.Lock()
+	inMemory := len(service.records)
+	service.mu.Unlock()
+	if got := store.count(); got != inMemory {
+		t.Fatalf("persisted %d results but %d are in memory; a snapshot was overwritten", got, inMemory)
+	}
+}
+
+type failOnceRunner struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *failOnceRunner) Run(context.Context, Resolved) (View, error) {
+	f.mu.Lock()
+	f.calls++
+	first := f.calls == 1
+	f.mu.Unlock()
+	if first {
+		return View{}, errors.New("provider returned 503")
+	}
+	return View{State: StateComplete, RootCause: "recovered"}, nil
+}
+
+func (f *failOnceRunner) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+// A failure is a transient outcome, not a durable fact. A provider blip, a
+// timeout, or a shutdown that interrupted queued work must not pin a subject as
+// permanently un-analyzable, especially since the result is persisted.
+func TestAFailedEscalationCanBeRetried(t *testing.T) {
+	runner := &failOnceRunner{}
+	service := newService(t, &fakeResolver{}, runner, Options{})
+	ref := testRef("TestA")
+
+	if _, err := service.Start(context.Background(), ref, "octocat", "req-1"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForState(t, service, ref, StateFailed)
+
+	// The maintainer clicks Investigate again; the UI mints a fresh key.
+	if _, err := service.Start(context.Background(), ref, "octocat", "req-2"); err != nil {
+		t.Fatalf("retry Start: %v", err)
+	}
+	view := waitForState(t, service, ref, StateComplete)
+	if view.RootCause != "recovered" {
+		t.Fatalf("view = %+v, want the retried result", view)
+	}
+	if runner.count() != 2 {
+		t.Errorf("runner calls = %d, want the retry to reach the runner", runner.count())
+	}
+}
+
+// Replaying one request must not start new work, even after it failed. That is
+// what distinguishes a retry from a duplicate delivery.
+func TestReplayingTheSameKeyReturnsTheFailureWithoutRerunning(t *testing.T) {
+	runner := &failOnceRunner{}
+	service := newService(t, &fakeResolver{}, runner, Options{})
+	ref := testRef("TestA")
+
+	if _, err := service.Start(context.Background(), ref, "octocat", "req-1"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForState(t, service, ref, StateFailed)
+
+	view, err := service.Start(context.Background(), ref, "octocat", "req-1")
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if view.State != StateFailed {
+		t.Fatalf("replay state = %q, want the original failure", view.State)
+	}
+	if runner.count() != 1 {
+		t.Errorf("runner calls = %d, want no rerun on replay", runner.count())
+	}
+}
+
+// The replay index outlives the records it points at and its keys are client
+// controlled, so it needs its own bound.
+func TestIdempotencyIndexIsBounded(t *testing.T) {
+	runner := newFakeRunner()
+	close(runner.release)
+	service := newService(t, &fakeResolver{}, runner, Options{MaxRecords: 2})
+	ref := testRef("TestA")
+
+	for i := 0; i < 200; i++ {
+		if _, err := service.Start(context.Background(), ref, "octocat", fmt.Sprintf("req-%d", i)); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		waitForState(t, service, ref, StateComplete)
+	}
+	service.mu.Lock()
+	keys := len(service.idempotency)
+	service.mu.Unlock()
+	if keys > 2*maxIdempotencyKeysPerRecord {
+		t.Fatalf("idempotency entries = %d, want the bound respected", keys)
+	}
+}

@@ -55,6 +55,16 @@ test("a superseded escalation response cannot overwrite newer state", () => {
   assert.match(panel, /cancelled\.current = true/);
 });
 
+test("a slow poll cannot regress state behind a newer start", () => {
+  const panel = source("src/components/EscalationPanel.tsx");
+
+  // Reads and writes share a generation counter, so an older in-flight GET
+  // cannot overwrite a newer POST result and re-enable Investigate.
+  assert.match(panel, /const generation = useRef\(0\)/);
+  assert.match(panel, /const issued = \+\+generation\.current/);
+  assert.equal(panel.match(/issued === generation\.current/g)?.length, 4);
+});
+
 test("polling stops once the escalation reaches a terminal state", () => {
   const panel = source("src/components/EscalationPanel.tsx");
 

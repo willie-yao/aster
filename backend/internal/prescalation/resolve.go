@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,10 @@ type ChangedFileLister interface {
 type ChangedFileSet struct {
 	Files     []ChangedFile
 	Truncated bool
+	// HeadSHA is the pull request head the diff describes. The published data
+	// is a snapshot, so this is the only way to notice a force-push that landed
+	// after publication.
+	HeadSHA string
 }
 
 // ChangedFile is one changed file.
@@ -98,11 +103,20 @@ func (r *DataResolver) Resolve(ctx context.Context, ref Ref) (Resolved, error) {
 	}
 	if r.Lister != nil {
 		if set, err := r.Lister.ChangedFiles(ctx, r.Owner, r.Name, ref.PullNumber); err == nil {
-			subject.FilesTruncated = set.Truncated
-			for _, file := range set.Files {
-				subject.Files = append(subject.Files, pullrequest.ChangedFile{
-					Path: file.Path, Status: file.Status, Generated: file.Generated, Patch: file.Patch,
-				})
+			// A force-push after publication leaves the stored check looking
+			// current while the diff describes a different revision. Comparing
+			// against the failing build would be comparing two revisions, so
+			// the change context is dropped rather than silently mismatched.
+			if set.HeadSHA != "" && detail.HeadSHA != "" && !strings.EqualFold(set.HeadSHA, detail.HeadSHA) {
+				log.Printf("⏭ pr #%d moved to %s since publication; escalating without change context",
+					ref.PullNumber, set.HeadSHA)
+			} else {
+				subject.FilesTruncated = set.Truncated
+				for _, file := range set.Files {
+					subject.Files = append(subject.Files, pullrequest.ChangedFile{
+						Path: file.Path, Status: file.Status, Generated: file.Generated, Patch: file.Patch,
+					})
+				}
 			}
 		}
 	}

@@ -801,6 +801,11 @@ func (e escalationChangedFiles) ChangedFiles(ctx context.Context, owner, repo st
 		return prescalation.ChangedFileSet{}, err
 	}
 	out := prescalation.ChangedFileSet{Truncated: set.FilesTruncated}
+	// The head the diff describes lets the resolver notice a force-push that
+	// landed after the dashboard published this pull request.
+	if pull, err := e.client.GetPullRequest(ctx, owner, repo, number); err == nil {
+		out.HeadSHA = pull.Head.SHA
+	}
 	for _, file := range set.Files {
 		out.Files = append(out.Files, prescalation.ChangedFile{
 			Path: file.Path, Status: file.Status, Generated: file.Generated, Patch: file.Patch,

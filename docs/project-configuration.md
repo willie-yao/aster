@@ -256,7 +256,12 @@ The contract is deliberately narrow:
   free pass is the cost filter. A stale build is refused too, because change
   context would describe a different revision.
 - **One escalation runs at a time**, no matter how many maintainers click. The
-  rest queue.
+  rest queue. Results are shared between admins rather than per-requester, so
+  two maintainers looking at the same failure do not each pay for an analysis.
+- **A failed escalation can be retried.** A provider error, a timeout, or a
+  restart that interrupted queued work leaves the failure retryable rather than
+  permanently un-analyzable. Replaying the same request key still returns the
+  original outcome instead of starting new work.
 - **The model never issues the pull request verdict.** It runs the ordinary
   agentic failure analysis under a separate module, gated by the same critique
   and judge rules, and is told explicitly not to claim the change caused the
