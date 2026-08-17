@@ -189,20 +189,32 @@ func TestConcurrentStartsBoundResolverCalls(t *testing.T) {
 			}
 		}(i)
 	}
+	// Every caller must reach a decision before the gate opens, or an early
+	// release would let a rejected peer back in and understate the fan-out.
+	deadline := time.After(3 * time.Second)
+	for {
+		if resolver.calls()+int(atomic.LoadInt32(&busy)) >= callers {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("only %d of %d callers decided", resolver.calls()+int(atomic.LoadInt32(&busy)), callers)
+		case <-time.After(time.Millisecond):
+		}
+	}
 	// Every admitted caller is parked inside Resolve, so the resolver count is
 	// the number of requests that reached the expensive work.
-	time.Sleep(50 * time.Millisecond)
 	if got := resolver.calls(); got != bound {
 		t.Errorf("resolver calls = %d, want at most the queue bound %d", got, bound)
+	}
+	if got := atomic.LoadInt32(&busy); got != callers-bound {
+		t.Errorf("rejected starts = %d, want %d", got, callers-bound)
 	}
 	close(resolver.gate)
 	wg.Wait()
 
 	if got := resolver.calls(); got != bound {
-		t.Errorf("resolver calls = %d, want %d", got, bound)
-	}
-	if got := atomic.LoadInt32(&busy); got != callers-bound {
-		t.Errorf("rejected starts = %d, want %d", got, callers-bound)
+		t.Errorf("resolver calls after the gate opened = %d, want %d", got, bound)
 	}
 	close(runner.release)
 }
@@ -242,12 +254,13 @@ func TestAQueuedEscalationTimesOutWithoutRunning(t *testing.T) {
 	})
 
 	// Occupy the single slot so the escalation can never be admitted to it.
-	blocked := make(chan struct{})
+	held, blocked := make(chan struct{}), make(chan struct{})
 	go func() {
 		service.active <- struct{}{}
+		close(held)
 		<-blocked
 	}()
-	time.Sleep(20 * time.Millisecond)
+	<-held
 	defer close(blocked)
 
 	ref := testRef("TestA")
@@ -260,6 +273,12 @@ func TestAQueuedEscalationTimesOutWithoutRunning(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&runner.maxSeen); got != 0 {
 		t.Errorf("runs = %d, want the queued escalation never to reach the runner", got)
+	}
+	// The state is visible before persistence completes, so drain first.
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer waitCancel()
+	if err := service.Wait(waitCtx); err != nil {
+		t.Fatalf("Wait: %v", err)
 	}
 	// Only finished records are snapshotted and prunable, so persistence
 	// proves the record is no longer marked running.
@@ -544,12 +563,13 @@ func TestConcurrentFinishesDoNotLosePersistedResults(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	// Occupy the single slot so the rest queue behind it.
-	blocked := make(chan struct{})
+	held, blocked := make(chan struct{}), make(chan struct{})
 	go func() {
 		service.active <- struct{}{}
+		close(held)
 		<-blocked
 	}()
-	time.Sleep(20 * time.Millisecond)
+	<-held
 
 	const queued = 12
 	for i := 0; i < queued; i++ {
@@ -558,9 +578,12 @@ func TestConcurrentFinishesDoNotLosePersistedResults(t *testing.T) {
 			t.Fatalf("Start: %v", err)
 		}
 	}
-	time.Sleep(20 * time.Millisecond)
 	cancel()
-	service.Wait()
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer waitCancel()
+	if err := service.Wait(waitCtx); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
 	close(blocked)
 
 	service.mu.Lock()

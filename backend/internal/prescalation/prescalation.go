@@ -247,7 +247,14 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	default:
 		return View{}, ErrBusy
 	}
-	release := func() { <-s.admitted }
+	// The wait group covers the whole accepted lifetime, resolution included,
+	// so a shutdown drain does not miss work that has not reached its goroutine
+	// yet. It is released exactly once, by whoever ends up owning the token.
+	s.wg.Add(1)
+	release := func() {
+		<-s.admitted
+		s.wg.Done()
+	}
 
 	// Resolution happens outside the lock because it reads published state and
 	// GitHub. It also rejects failures the deterministic pass already explained.
@@ -277,10 +284,9 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	s.pruneLocked()
 	s.pruneIdempotencyLocked()
 	view := rec.view
-	s.wg.Add(1)
 	s.mu.Unlock()
 
-	go s.run(rec, resolved)
+	go s.run(rec, resolved, release)
 	return view, nil
 }
 
@@ -305,14 +311,28 @@ func (s *Service) Get(ref Ref) (View, error) {
 	return View{Ref: ref, State: StateNotStarted}, nil
 }
 
-// Wait blocks until in-flight escalations stop.
-func (s *Service) Wait() { s.wg.Wait() }
+// Wait blocks until every accepted escalation has persisted a terminal outcome,
+// or until ctx is done. Acceptance covers resolution too, so a shutdown drain
+// does not race a request that has not started running yet.
+func (s *Service) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
-func (s *Service) run(rec *record, resolved Resolved) {
-	defer s.wg.Done()
-	// The admission token is held until the escalation finishes, so a slot in
-	// the queue is freed only when the work it stands for is done.
-	defer func() { <-s.admitted }()
+func (s *Service) run(rec *record, resolved Resolved, release func()) {
+	// The admission token and its wait-group entry are held until the
+	// escalation has persisted its outcome, so a queue slot frees only when the
+	// work it stands for is done and a drain cannot end early.
+	defer release()
 
 	// The deadline starts here rather than after the slot is acquired, so queue
 	// time is bounded and visible instead of unbounded.
