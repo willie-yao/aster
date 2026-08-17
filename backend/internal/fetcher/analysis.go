@@ -140,6 +140,7 @@ func planContainerAnalysisWork(ctx context.Context, httpClient *http.Client, wor
 		}
 		sourceOwner, sourceName = sourceRepo.Owner, sourceRepo.Name
 		linkResolver = ai.NewFileLinkResolver(sourceRepo.Owner, sourceRepo.Name, githubReadToken())
+		linkResolver.SetVerificationStore(state.LinkVerifications())
 	}
 	resolveLinks := func(item aiWork) map[string]string {
 		if linkResolver == nil || project == nil {

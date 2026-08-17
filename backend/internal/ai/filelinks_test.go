@@ -3,11 +3,13 @@ package ai
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/aster/backend/internal/models"
 )
@@ -50,6 +52,14 @@ func withStub(t *testing.T, srv *httptest.Server) {
 	rawContentBase = srv.URL
 	goGetScheme = srv.URL + "/"
 	t.Cleanup(func() { rawContentBase, goGetScheme = oraw, ogg })
+}
+
+// withRawBase points raw content checks at a stub without touching go-get.
+func withRawBase(t *testing.T, base string) {
+	t.Helper()
+	old := rawContentBase
+	rawContentBase = base
+	t.Cleanup(func() { rawContentBase = old })
 }
 
 // TestResolveFileLinks_GenericResolution checks the generic resolver: project
@@ -210,5 +220,244 @@ func TestResolveFileLinksAtExactBuildCommitVerifiesSearchSuggestions(t *testing.
 	}
 	if len(requested) != 2 || !strings.HasSuffix(requested[0], "/internal/asomigration/labels.go") || !strings.HasSuffix(requested[1], "/missing/file.go") {
 		t.Fatalf("request order=%v", requested)
+	}
+}
+
+// linkTestCase builds a cache-hit analysis citing one source path, as a fresh
+// publication pass sees it before links are resolved.
+func linkTestCase(paths ...string) *models.TestCase {
+	return &models.TestCase{
+		Name: "[It] creates a cluster",
+		AIAnalysis: &models.AIAnalysis{
+			GeneratedAt: "2026-08-16T07:11:06Z", RootCause: "cni rollout timed out", SuggestedFix: "n/a",
+			Mode: AgenticMode, CritiquePassed: true, RelevantFiles: paths,
+		},
+	}
+}
+
+// TestVerifyGitHubFileAtRef_OnlyDefiniteAnswersArePersisted pins the tri-state
+// contract: a rate limit or a 5xx leaves the question open and must not reach
+// the durable store, while 2xx and 404 are definite. Every outcome is memoized
+// for the run so a degraded endpoint is probed once, not once per citation.
+func TestVerifyGitHubFileAtRef_OnlyDefiniteAnswersArePersisted(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	cases := []struct {
+		name      string
+		status    int
+		want      linkVerification
+		persisted bool
+	}{
+		{name: "rate limited", status: http.StatusForbidden, want: linkUnverified},
+		{name: "too many requests", status: http.StatusTooManyRequests, want: linkUnverified},
+		{name: "server error", status: http.StatusInternalServerError, want: linkUnverified},
+		{name: "bad gateway", status: http.StatusBadGateway, want: linkUnverified},
+		{name: "absent", status: http.StatusNotFound, want: linkAbsent, persisted: true},
+		{name: "present", status: http.StatusOK, want: linkPresent, persisted: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				atomic.AddInt32(&requests, 1)
+				w.WriteHeader(tc.status)
+			}))
+			defer srv.Close()
+			withRawBase(t, srv.URL)
+
+			store := NewCache("")
+			s := &Service{}
+			s.SetSourceRepo("o", "r")
+			s.SetLinkVerificationStore(store)
+
+			for range 2 {
+				if got := s.verifyGitHubFileAtRef(t.Context(), srv.Client(), "o", "r", sha, "test/e2e/cni.go"); got != tc.want {
+					t.Fatalf("verification = %v, want %v", got, tc.want)
+				}
+			}
+			if got := atomic.LoadInt32(&requests); got != 1 {
+				t.Errorf("issued %d probes for one path, want 1", got)
+			}
+			key := LinkVerificationCacheKey("o", "r", sha, "test/e2e/cni.go")
+			if _, persisted := store.LoadLinkVerification(key); persisted != tc.persisted {
+				t.Errorf("persisted = %v, want %v", persisted, tc.persisted)
+			}
+		})
+	}
+}
+
+// TestVerifyGitHubFileAtRef_TransportErrorIsUnverified covers a dial failure,
+// which the old boolean contract reported as "file absent".
+func TestVerifyGitHubFileAtRef_TransportErrorIsUnverified(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	client := srv.Client()
+	base := srv.URL
+	srv.Close()
+	withRawBase(t, base)
+
+	sha := strings.Repeat("a", 40)
+	store := NewCache("")
+	s := &Service{}
+	s.SetLinkVerificationStore(store)
+	if got := s.verifyGitHubFileAtRef(t.Context(), client, "o", "r", sha, "test/e2e/cni.go"); got != linkUnverified {
+		t.Fatalf("verification = %v, want linkUnverified", got)
+	}
+	if _, persisted := store.LoadLinkVerification(LinkVerificationCacheKey("o", "r", sha, "test/e2e/cni.go")); persisted {
+		t.Errorf("transport failure must not be persisted")
+	}
+}
+
+// TestResolveFileLinksAtRef_RecoversAfterUnverifiedPass checks that an
+// inconclusive pass leaves no residue: the next pass re-probes and, once the
+// answer is definite, the link is published and pinned.
+func TestResolveFileLinksAtRef_RecoversAfterUnverifiedPass(t *testing.T) {
+	sha := strings.Repeat("e", 40)
+	var healthy atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if !healthy.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	withRawBase(t, srv.URL)
+
+	store := NewCache("")
+	resolve := func() map[string]string {
+		r := NewFileLinkResolver("o", "r")
+		r.SetVerificationStore(store)
+		return r.ResolveAtRef(t.Context(), srv.Client(), linkTestCase("test/e2e/cni.go"), sha)
+	}
+	if links := resolve(); len(links) != 0 {
+		t.Fatalf("links = %v, want none while verification is unavailable", links)
+	}
+	healthy.Store(true)
+	want := "https://github.com/o/r/blob/" + sha + "/test/e2e/cni.go"
+	if links := resolve(); links["test/e2e/cni.go"] != want {
+		t.Fatalf("links = %v, want %s once verification recovers", links, want)
+	}
+}
+
+// TestResolveFileLinksAtRef_RetainsPublishedLinkWhenUnverified covers reuse of
+// an earlier result that already carries links: a path published at the same
+// immutable revision survives a pass where GitHub cannot answer, while a
+// verified absence still drops it.
+func TestResolveFileLinksAtRef_RetainsPublishedLinkWhenUnverified(t *testing.T) {
+	sha := strings.Repeat("b", 40)
+	published := "https://github.com/o/r/blob/" + sha + "/test/e2e/cni.go"
+	var status atomic.Int32
+	status.Store(http.StatusForbidden)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(int(status.Load()))
+	}))
+	defer srv.Close()
+	withRawBase(t, srv.URL)
+
+	resolve := func() map[string]string {
+		tc := linkTestCase("test/e2e/cni.go")
+		tc.AIAnalysis.FileLinks = map[string]string{"test/e2e/cni.go": published}
+		return NewFileLinkResolver("o", "r").ResolveAtRef(t.Context(), srv.Client(), tc, sha)
+	}
+	if links := resolve(); links["test/e2e/cni.go"] != published {
+		t.Fatalf("links = %v, want the published link retained", links)
+	}
+
+	status.Store(http.StatusNotFound)
+	if links := resolve(); len(links) != 0 {
+		t.Fatalf("links = %v, want a verified absence to drop the link", links)
+	}
+}
+
+// TestLoadLinkVerification_AbsenceExpires keeps a spurious 404 from hiding real
+// evidence for the whole cache lifetime, while a verified presence stays pinned.
+func TestLoadLinkVerification_AbsenceExpires(t *testing.T) {
+	store := NewCache("")
+	stale := time.Now().Add(-linkAbsenceTTL - time.Hour)
+	for _, tc := range []struct {
+		name    string
+		key     string
+		data    string
+		present bool
+		want    bool
+	}{
+		{name: "stale absence", key: "filelink:v1:absent", data: `{"present":false}`, want: false},
+		{name: "stale presence", key: "filelink:v1:present", data: `{"present":true}`, present: true, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := store.StoreEntry(CacheEntry{Key: tc.key, CreatedAt: stale, Data: []byte(tc.data)}); err != nil {
+				t.Fatal(err)
+			}
+			present, ok := store.LoadLinkVerification(tc.key)
+			if ok != tc.want || present != tc.present {
+				t.Fatalf("present=%v ok=%v, want present=%v ok=%v", present, ok, tc.present, tc.want)
+			}
+		})
+	}
+}
+
+// TestResolveFileLinksAtRef_StableContentHashAcrossFlakyPass reproduces the
+// reported failure: consecutive publications of one unchanged cache-hit
+// analysis must publish the same links, and so the same content hash, even
+// when GitHub stops answering between passes.
+func TestResolveFileLinksAtRef_StableContentHashAcrossFlakyPass(t *testing.T) {
+	sha := strings.Repeat("c", 40)
+	var healthy atomic.Bool
+	healthy.Store(true)
+	var requests int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		if !healthy.Load() {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	withRawBase(t, srv.URL)
+
+	store := NewCache(t.TempDir())
+	// Each pass builds a fresh resolver, as a new publication pass does.
+	publish := func() *models.TestCase {
+		tc := linkTestCase("test/e2e/cni.go", "test/e2e/azure_test.go")
+		r := NewFileLinkResolver("o", "r")
+		r.SetVerificationStore(store)
+		tc.AIAnalysis.FileLinks = r.ResolveAtRef(t.Context(), srv.Client(), tc, sha)
+		return tc
+	}
+
+	first := publish()
+	if len(first.AIAnalysis.FileLinks) != 2 {
+		t.Fatalf("first pass links = %v, want both paths", first.AIAnalysis.FileLinks)
+	}
+	afterFirst := atomic.LoadInt32(&requests)
+
+	healthy.Store(false)
+	second := publish()
+	if !maps.Equal(first.AIAnalysis.FileLinks, second.AIAnalysis.FileLinks) {
+		t.Fatalf("links changed across passes: %v then %v", first.AIAnalysis.FileLinks, second.AIAnalysis.FileLinks)
+	}
+	if got, want := models.TestAnalysisContentHash(*second), models.TestAnalysisContentHash(*first); got != want {
+		t.Fatalf("content hash = %s, want %s", got, want)
+	}
+	if got := atomic.LoadInt32(&requests); got != afterFirst {
+		t.Errorf("second pass issued %d extra GitHub requests, want 0", got-afterFirst)
+	}
+}
+
+// TestResolveFileLinksAtRef_DoesNotPersistMutableRefs keeps HEAD answers out of
+// the durable store, where they could go stale as the branch moves.
+func TestResolveFileLinksAtRef_DoesNotPersistMutableRefs(t *testing.T) {
+	srv, _ := newLinkStub(t, map[string]bool{"/o/r/HEAD/test/x.go": true}, nil)
+	withStub(t, srv)
+
+	store := NewCache("")
+	s := &Service{}
+	s.SetSourceRepo("o", "r")
+	s.SetLinkVerificationStore(store)
+	if links := s.resolveFileLinks(t.Context(), srv.Client(), linkTestCase("test/x.go")); len(links) != 1 {
+		t.Fatalf("links = %v, want the HEAD path resolved", links)
+	}
+	if len(store.EntriesWithPrefix(LinkVerificationKeyPrefix)) != 0 {
+		t.Errorf("HEAD verification must not be persisted")
 	}
 }
