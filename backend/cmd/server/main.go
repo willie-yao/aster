@@ -29,6 +29,7 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/actions"
 	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/modules/pullrequest"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/analysisruntime"
@@ -38,8 +39,10 @@ import (
 	"github.com/willie-yao/aster/backend/internal/chatfix"
 	"github.com/willie-yao/aster/backend/internal/corrections"
 	"github.com/willie-yao/aster/backend/internal/fixruntime"
+	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/notify"
 	"github.com/willie-yao/aster/backend/internal/output"
+	"github.com/willie-yao/aster/backend/internal/prescalation"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/remediationinvestigation"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
@@ -218,6 +221,11 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 			return err
 		}
 	}
+	if features.PullRequestEscalation {
+		if err := enablePullRequestEscalation(ctx, opts, cfg, projectDir, dataDir); err != nil {
+			return err
+		}
+	}
 	if actionService != nil && chatService != nil {
 		analysisRepo := cfg.EffectiveAnalysisSourceRepo()
 		fixConfig := cfg.EffectiveFixPRs()
@@ -275,6 +283,7 @@ type interactiveFeatures struct {
 	AnalysisCorrections            bool
 	CausalRemediationInvestigation bool
 	CausalRemediationFixPreview    bool
+	PullRequestEscalation          bool
 }
 
 func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
@@ -293,6 +302,10 @@ func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
 	if err != nil {
 		return interactiveFeatures{}, err
 	}
+	pullRequestEscalation, err := optionalBoolEnv("PULL_REQUEST_ESCALATION_ENABLED", false)
+	if err != nil {
+		return interactiveFeatures{}, err
+	}
 	causalPreview, err := optionalBoolEnv("CAUSAL_REMEDIATION_FIX_PREVIEW_ENABLED", false)
 	if err != nil {
 		return interactiveFeatures{}, err
@@ -307,6 +320,7 @@ func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
 	return interactiveFeatures{
 		Actions: actions, AnalysisChat: chat, AnalysisCorrections: correctionsEnabled,
 		CausalRemediationInvestigation: causalRemediation, CausalRemediationFixPreview: causalPreview,
+		PullRequestEscalation: pullRequestEscalation,
 	}, nil
 }
 
@@ -712,4 +726,95 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// enablePullRequestEscalation wires on-demand analysis for pull request
+// failures the deterministic pass could not explain. It reuses the analysis
+// runtime, so it needs the same AI configuration as any other analysis.
+func enablePullRequestEscalation(
+	ctx context.Context,
+	opts *server.Options,
+	cfg *project.Config,
+	projectDir, dataDir string,
+) error {
+	token := os.Getenv("AI_TOKEN")
+	if token == "" {
+		return fmt.Errorf("pull request escalation requires AI_TOKEN")
+	}
+	if cfg.PullRequests == nil || !cfg.PullRequests.Enabled {
+		return fmt.Errorf("pull request escalation requires pull_requests.enabled in project.yaml")
+	}
+	loaded, err := analysisruntime.LoadProject(projectDir, cfg, analysisruntime.ProviderFallbacks{
+		API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"),
+		ReasoningEffort: os.Getenv(project.AIReasoningEffortEnv),
+		CacheGeneration: os.Getenv(project.AICacheGenerationEnv),
+	})
+	if err != nil {
+		return fmt.Errorf("loading pull request escalation project: %w", err)
+	}
+	runtime, err := analysisruntime.New(ctx, analysisruntime.Options{
+		Token: token, DataDir: dataDir, Project: loaded,
+	})
+	if err != nil {
+		return fmt.Errorf("configuring pull request escalation runtime: %w", err)
+	}
+	backend, err := storage.New(cfg.StorageConfig(), &http.Client{Timeout: 30 * time.Second})
+	if err != nil {
+		return fmt.Errorf("configuring pull request escalation storage: %w", err)
+	}
+	repo := cfg.Branding.SourceRepo
+	githubToken := githubReadTokenFromEnv()
+	resolver := &prescalation.DataResolver{
+		DataDir: dataDir, Backend: backend,
+		Repo:  repo.Owner + "/" + repo.Name,
+		Owner: repo.Owner, Name: repo.Name,
+		Lister:          escalationChangedFiles{client: ghpr.NewClient(nil, githubToken)},
+		CacheGeneration: loaded.CacheGenerationFingerprint,
+	}
+	runner := &prescalation.AnalysisRunner{
+		NewAnalyzer: func(subject pullrequest.Subject) (ai.FailureAnalyzer, error) {
+			return runtime.NewService(analysisruntime.ServiceOptions{
+				Backend:         backend,
+				GitHubReadToken: githubToken,
+				Module:          pullrequest.New(subject),
+			})
+		},
+	}
+	service, err := prescalation.New(ctx, resolver, runner, prescalation.Options{
+		Store: prescalation.FileStore{Dir: dataDir},
+	})
+	if err != nil {
+		return fmt.Errorf("configuring pull request escalation: %w", err)
+	}
+	opts.PullRequestEscalation = service
+	log.Printf("🔬 pull request escalation enabled (repo=%s/%s)", repo.Owner, repo.Name)
+	return nil
+}
+
+// escalationChangedFiles adapts the GitHub client to the resolver's contract,
+// keeping prescalation free of a GitHub client dependency.
+type escalationChangedFiles struct{ client *ghpr.Client }
+
+func (e escalationChangedFiles) ChangedFiles(ctx context.Context, owner, repo string, number int) (prescalation.ChangedFileSet, error) {
+	set, err := e.client.ChangedFiles(ctx, owner, repo, number)
+	if err != nil {
+		return prescalation.ChangedFileSet{}, err
+	}
+	out := prescalation.ChangedFileSet{Truncated: set.FilesTruncated}
+	for _, file := range set.Files {
+		out.Files = append(out.Files, prescalation.ChangedFile{
+			Path: file.Path, Status: file.Status, Generated: file.Generated, Patch: file.Patch,
+		})
+	}
+	return out, nil
+}
+
+// githubReadTokenFromEnv mirrors the fetcher's token preference order.
+func githubReadTokenFromEnv() string {
+	for _, name := range []string{"GITHUB_READ_TOKEN", "BOT_TOKEN", "GITHUB_TOKEN"} {
+		if token := os.Getenv(name); token != "" {
+			return token
+		}
+	}
+	return ""
 }
