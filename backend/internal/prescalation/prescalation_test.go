@@ -443,7 +443,9 @@ func TestConcurrentFinishesDoNotLosePersistedResults(t *testing.T) {
 	}
 	time.Sleep(20 * time.Millisecond)
 	cancel()
-	service.Wait()
+	if err := service.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
 	close(blocked)
 
 	service.mu.Lock()
@@ -451,6 +453,28 @@ func TestConcurrentFinishesDoNotLosePersistedResults(t *testing.T) {
 	service.mu.Unlock()
 	if got := store.count(); got != inMemory {
 		t.Fatalf("persisted %d results but %d are in memory; a snapshot was overwritten", got, inMemory)
+	}
+}
+
+// Shutdown gives escalations a bounded budget to persist their results. Wait
+// must honor that budget rather than block the process until work finishes.
+func TestWaitReturnsWhenBudgetExpires(t *testing.T) {
+	runner := newFakeRunner()
+	service := newService(t, &fakeResolver{}, runner, Options{})
+	if _, err := service.Start(context.Background(), testRef("TestSlow"), "octocat", "req-1"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	<-runner.started
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := service.Wait(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Wait err = %v, want context.DeadlineExceeded", err)
+	}
+
+	close(runner.release)
+	if err := service.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait after release: %v", err)
 	}
 }
 
