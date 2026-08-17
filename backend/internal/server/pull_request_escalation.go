@@ -137,7 +137,7 @@ func pullRequestEscalationErrorDetails(err error) (int, string) {
 	case errors.Is(err, prescalation.ErrIdempotencyConflict):
 		return http.StatusConflict, "escalation idempotency key conflict"
 	case errors.Is(err, prescalation.ErrBusy):
-		return http.StatusConflict, "another escalation is already running"
+		return http.StatusConflict, "too many escalations are already in progress"
 	case errors.Is(err, context.DeadlineExceeded):
 		return http.StatusGatewayTimeout, "escalation request timed out"
 	case errors.Is(err, context.Canceled):

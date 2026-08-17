@@ -1,11 +1,14 @@
 // Package prescalation runs on-demand AI analysis for a single pull request
 // test failure that the deterministic pass could not explain.
 //
-// Escalation is admin-initiated, one at a time, and bounded. It exists only for
-// the residual set: failures the base branch, other pull requests, and
-// flakiness history all failed to account for. The analysis it runs is the
-// ordinary agentic failure analysis under a separate module, so it is gated by
-// the same critique and judge rules as every other analysis.
+// Escalation is admin-initiated, one at a time, and bounded. Admission is
+// reserved before any work happens, so the number of requests that reach the
+// artifact bucket and GitHub is capped by the queue bound rather than by how
+// many admins clicked. It exists only for the residual set: failures the base
+// branch, other pull requests, and flakiness history all failed to account for.
+// The analysis it runs is the ordinary agentic failure analysis under a
+// separate module, so it is gated by the same critique and judge rules as every
+// other analysis.
 package prescalation
 
 import (
@@ -38,8 +41,8 @@ var (
 	ErrUnavailable = errors.New("escalation is unavailable")
 	// ErrIdempotencyConflict marks a reused request ID for a different subject.
 	ErrIdempotencyConflict = errors.New("request id was already used for another failure")
-	// ErrBusy marks a rejected start because another escalation is running.
-	ErrBusy = errors.New("another escalation is already running")
+	// ErrBusy marks a rejected start because the escalation queue is full.
+	ErrBusy = errors.New("too many escalations are already in progress")
 )
 
 // maxIdempotencyKeysPerRecord bounds replay keys retained per retained record.
@@ -99,8 +102,13 @@ type Runner interface {
 
 // Options bound the service.
 type Options struct {
-	// Timeout bounds one escalation.
+	// Timeout bounds one escalation, counted from acceptance rather than from
+	// the moment it starts running, so queue time is bounded too.
 	Timeout time.Duration
+	// MaxQueued bounds accepted-but-unfinished escalations, including the one
+	// running. A start past the bound is rejected with ErrBusy instead of
+	// queueing, which caps the artifact and GitHub work escalation can trigger.
+	MaxQueued int
 	// MaxRecords bounds retained results before the oldest are pruned.
 	MaxRecords int
 	// Now is the clock, for tests.
@@ -112,6 +120,9 @@ type Options struct {
 func (o Options) normalized() Options {
 	if o.Timeout <= 0 {
 		o.Timeout = 10 * time.Minute
+	}
+	if o.MaxQueued <= 0 {
+		o.MaxQueued = 4
 	}
 	if o.MaxRecords <= 0 {
 		o.MaxRecords = 128
@@ -149,6 +160,10 @@ type Service struct {
 	// active is a single global slot, so escalation can never fan out into
 	// concurrent model traffic no matter how many admins click.
 	active chan struct{}
+	// admitted bounds accepted work. A token is taken before resolution, so
+	// the bucket reads and GitHub calls one escalation needs are capped the
+	// same way its model traffic is.
+	admitted chan struct{}
 
 	mu          sync.Mutex
 	records     map[string]*record
@@ -168,6 +183,7 @@ func New(ctx context.Context, resolver Resolver, runner Runner, opts Options) (*
 	s := &Service{
 		ctx: ctx, resolver: resolver, runner: runner, opts: opts,
 		active:      make(chan struct{}, 1),
+		admitted:    make(chan struct{}, opts.MaxQueued),
 		records:     map[string]*record{},
 		idempotency: map[string]string{},
 	}
@@ -223,10 +239,21 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	}
 	s.mu.Unlock()
 
+	// Admission is reserved before resolution, not after it. Resolution reads
+	// the artifact bucket and GitHub, so admitting afterwards would let every
+	// concurrent request pay that cost and only then queue.
+	select {
+	case s.admitted <- struct{}{}:
+	default:
+		return View{}, ErrBusy
+	}
+	release := func() { <-s.admitted }
+
 	// Resolution happens outside the lock because it reads published state and
 	// GitHub. It also rejects failures the deterministic pass already explained.
 	resolved, err := s.resolver.Resolve(ctx, ref)
 	if err != nil {
+		release()
 		return View{}, err
 	}
 
@@ -236,6 +263,7 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 		s.pruneIdempotencyLocked()
 		view := existing.view
 		s.mu.Unlock()
+		release()
 		return view, nil
 	}
 	now := s.opts.Now().UTC()
@@ -282,13 +310,23 @@ func (s *Service) Wait() { s.wg.Wait() }
 
 func (s *Service) run(rec *record, resolved Resolved) {
 	defer s.wg.Done()
+	// The admission token is held until the escalation finishes, so a slot in
+	// the queue is freed only when the work it stands for is done.
+	defer func() { <-s.admitted }()
+
+	// The deadline starts here rather than after the slot is acquired, so queue
+	// time is bounded and visible instead of unbounded.
+	ctx, cancel := context.WithTimeout(s.ctx, s.opts.Timeout)
+	defer cancel()
 
 	// Waiting for the single slot keeps queued work visible rather than
-	// rejecting it, while still admitting exactly one analysis at a time.
+	// rejecting it, while still admitting exactly one analysis at a time. A
+	// request that never reaches the slot within its budget finishes as failed,
+	// which leaves it retryable and prunable.
 	select {
 	case s.active <- struct{}{}:
-	case <-s.ctx.Done():
-		s.finish(rec, View{Ref: rec.view.Ref, State: StateFailed, Error: "escalation was cancelled"})
+	case <-ctx.Done():
+		s.finish(rec, View{Ref: rec.view.Ref, State: StateFailed, Error: safeError(ctx.Err())})
 		return
 	}
 	defer func() { <-s.active }()
@@ -298,8 +336,6 @@ func (s *Service) run(rec *record, resolved Resolved) {
 	rec.updatedAt = s.opts.Now().UTC()
 	s.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(s.ctx, s.opts.Timeout)
-	defer cancel()
 	view, err := s.runner.Run(ctx, resolved)
 	if err != nil {
 		s.finish(rec, View{Ref: rec.view.Ref, State: StateFailed, Error: safeError(err)})

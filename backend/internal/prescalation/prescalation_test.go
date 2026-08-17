@@ -19,14 +19,20 @@ func testRef(test string) Ref {
 
 type fakeResolver struct {
 	err error
-	mu  sync.Mutex
-	n   int
+	// gate, when non-nil, holds every resolution open so a test can observe how
+	// many requests reached the expensive work at once.
+	gate chan struct{}
+	mu   sync.Mutex
+	n    int
 }
 
 func (f *fakeResolver) Resolve(_ context.Context, ref Ref) (Resolved, error) {
 	f.mu.Lock()
 	f.n++
 	f.mu.Unlock()
+	if f.gate != nil {
+		<-f.gate
+	}
 	if f.err != nil {
 		return Resolved{}, f.err
 	}
@@ -135,7 +141,7 @@ func TestStartRunsOneEscalationToCompletion(t *testing.T) {
 // how many subjects are started.
 func TestOnlyOneEscalationRunsAtATime(t *testing.T) {
 	runner := newFakeRunner()
-	service := newService(t, &fakeResolver{}, runner, Options{})
+	service := newService(t, &fakeResolver{}, runner, Options{MaxQueued: 4})
 
 	for i := 0; i < 4; i++ {
 		ref := testRef(fmt.Sprintf("Test%d", i))
@@ -152,6 +158,117 @@ func TestOnlyOneEscalationRunsAtATime(t *testing.T) {
 	close(runner.release)
 	for i := 0; i < 4; i++ {
 		waitForState(t, service, testRef(fmt.Sprintf("Test%d", i)), StateComplete)
+	}
+}
+
+// The single slot bounds model traffic, but resolution reads the artifact
+// bucket and GitHub before any model call. Admission must be reserved first, or
+// every concurrent request pays that cost and only then queues.
+func TestConcurrentStartsBoundResolverCalls(t *testing.T) {
+	const (
+		bound   = 2
+		callers = 8
+	)
+	resolver := &fakeResolver{gate: make(chan struct{})}
+	runner := newFakeRunner()
+	service := newService(t, resolver, runner, Options{MaxQueued: bound})
+
+	var busy int32
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ref := testRef(fmt.Sprintf("Test%d", i))
+			_, err := service.Start(context.Background(), ref, "octocat", fmt.Sprintf("req-%d", i))
+			switch {
+			case errors.Is(err, ErrBusy):
+				atomic.AddInt32(&busy, 1)
+			case err != nil:
+				t.Errorf("Start: %v", err)
+			}
+		}(i)
+	}
+	// Every admitted caller is parked inside Resolve, so the resolver count is
+	// the number of requests that reached the expensive work.
+	time.Sleep(50 * time.Millisecond)
+	if got := resolver.calls(); got != bound {
+		t.Errorf("resolver calls = %d, want at most the queue bound %d", got, bound)
+	}
+	close(resolver.gate)
+	wg.Wait()
+
+	if got := resolver.calls(); got != bound {
+		t.Errorf("resolver calls = %d, want %d", got, bound)
+	}
+	if got := atomic.LoadInt32(&busy); got != callers-bound {
+		t.Errorf("rejected starts = %d, want %d", got, callers-bound)
+	}
+	close(runner.release)
+}
+
+// A rejected start did no work, so it must leave no trace a later request would
+// mistake for an escalation that already happened.
+func TestABusyStartIsNotRecorded(t *testing.T) {
+	runner := newFakeRunner()
+	service := newService(t, &fakeResolver{}, runner, Options{MaxQueued: 1})
+
+	if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	<-runner.started
+
+	if _, err := service.Start(context.Background(), testRef("TestB"), "octocat", "req-2"); !errors.Is(err, ErrBusy) {
+		t.Fatalf("err = %v, want ErrBusy", err)
+	}
+	view, err := service.Get(testRef("TestB"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if view.State != StateNotStarted {
+		t.Fatalf("state = %q, want not_started", view.State)
+	}
+	close(runner.release)
+}
+
+// Queue time counts against the escalation's own budget. A request that never
+// reaches the slot must finish rather than hold a goroutine and an unprunable
+// running record for the life of the process.
+func TestAQueuedEscalationTimesOutWithoutRunning(t *testing.T) {
+	store := &memoryStore{}
+	runner := newFakeRunner()
+	service := newService(t, &fakeResolver{}, runner, Options{
+		Timeout: 60 * time.Millisecond, MaxQueued: 2, Store: store,
+	})
+
+	// Occupy the single slot so the escalation can never be admitted to it.
+	blocked := make(chan struct{})
+	go func() {
+		service.active <- struct{}{}
+		<-blocked
+	}()
+	time.Sleep(20 * time.Millisecond)
+	defer close(blocked)
+
+	ref := testRef("TestA")
+	if _, err := service.Start(context.Background(), ref, "octocat", "req-1"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	view := waitForState(t, service, ref, StateFailed)
+	if view.Error != "escalation timed out" {
+		t.Errorf("error = %q, want the timeout message", view.Error)
+	}
+	if got := atomic.LoadInt32(&runner.maxSeen); got != 0 {
+		t.Errorf("runs = %d, want the queued escalation never to reach the runner", got)
+	}
+	// Only finished records are snapshotted and prunable, so persistence
+	// proves the record is no longer marked running.
+	restored, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := restored[ref.identity()]; !ok {
+		t.Error("the timed-out escalation should be a finished, prunable record")
 	}
 }
 
@@ -422,7 +539,7 @@ func (instantRunner) Run(context.Context, Resolved) (View, error) {
 func TestConcurrentFinishesDoNotLosePersistedResults(t *testing.T) {
 	store := &persistCountingStore{}
 	ctx, cancel := context.WithCancel(context.Background())
-	service, err := New(ctx, &fakeResolver{}, instantRunner{}, Options{Store: store})
+	service, err := New(ctx, &fakeResolver{}, instantRunner{}, Options{Store: store, MaxQueued: 12})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

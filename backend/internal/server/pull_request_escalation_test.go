@@ -214,6 +214,7 @@ func TestEscalationErrorsMapToStableStatuses(t *testing.T) {
 		{name: "invalid", err: prescalation.ErrInvalid, want: http.StatusBadRequest},
 		{name: "not eligible", err: prescalation.ErrNotEligible, want: http.StatusConflict},
 		{name: "idempotency conflict", err: prescalation.ErrIdempotencyConflict, want: http.StatusConflict},
+		{name: "busy", err: prescalation.ErrBusy, want: http.StatusConflict},
 		{name: "unavailable", err: prescalation.ErrUnavailable, want: http.StatusServiceUnavailable},
 	}
 	for _, tc := range cases {

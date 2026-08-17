@@ -255,9 +255,14 @@ The contract is deliberately narrow:
   requests, or flakiness history already explained cannot be escalated, so the
   free pass is the cost filter. A stale build is refused too, because change
   context would describe a different revision.
-- **One escalation runs at a time**, no matter how many maintainers click. The
-  rest queue. Results are shared between admins rather than per-requester, so
-  two maintainers looking at the same failure do not each pay for an analysis.
+- **One escalation runs at a time**, no matter how many maintainers click, and
+  only a few more may queue behind it. Admission is reserved before any artifact
+  or GitHub read, so a burst of clicks cannot fan out into upstream requests; a
+  start past the bound is rejected with `409` instead of queueing. Queue time
+  counts against the escalation timeout, so a request that never reaches the
+  slot fails as timed out rather than waiting indefinitely, and can be retried.
+  Results are shared between admins rather than per-requester, so two
+  maintainers looking at the same failure do not each pay for an analysis.
 - **A failed escalation can be retried.** A provider error, a timeout, or a
   restart that interrupted queued work leaves the failure retryable rather than
   permanently un-analyzable. Replaying the same request key still returns the
