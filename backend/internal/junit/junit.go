@@ -204,3 +204,71 @@ func ExtractFailureLocation(failureBody string) (location string, url string) {
 	url = fmt.Sprintf("https://github.com/%s/blob/%s/%s#L%s", ghRepo, ref, fullPath, line)
 	return location, url
 }
+
+// maxRepoFailurePaths bounds how many distinct source paths one failure body
+// contributes, since the body is untrusted test output.
+const maxRepoFailurePaths = 16
+
+// RepoFailurePaths returns the repository-relative Go source paths a failure
+// body attributes to ghRepo ("owner/name"), in first-seen order.
+//
+// It scans every location in the body rather than only the first, because a
+// Ginkgo stack commonly enters a shared framework in another repository before
+// reaching the repository under test. Version-qualified references are skipped:
+// they name a tagged dependency copy rather than the checked-out tree.
+func RepoFailurePaths(failureBody, ghRepo string) []string {
+	ghRepo = strings.TrimSpace(ghRepo)
+	if failureBody == "" || ghRepo == "" {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, match := range moduleLocationRe.FindAllStringSubmatch(failureBody, -1) {
+		modulePath, version, filePath := match[1], match[2], match[3]
+		if version != "" {
+			continue
+		}
+		subPath, ok := repoSubPath(modulePath, ghRepo)
+		if !ok {
+			continue
+		}
+		path := strings.TrimPrefix(subPath+filePath, "/")
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		out = append(out, path)
+		if len(out) >= maxRepoFailurePaths {
+			break
+		}
+	}
+	return out
+}
+
+// repoSubPath returns the module path's remainder after the longest known
+// prefix that maps to ghRepo. The prefix must end on a path boundary, because
+// "sigs.k8s.io/cluster-api" is a string prefix of
+// "sigs.k8s.io/cluster-api-provider-azure" but not a module prefix of it.
+func repoSubPath(modulePath, ghRepo string) (string, bool) {
+	best := -1
+	var subPath string
+	for prefix, repo := range knownRepos {
+		if !strings.EqualFold(repo, ghRepo) || !modulePrefixOf(modulePath, prefix) {
+			continue
+		}
+		if len(prefix) > best {
+			best, subPath = len(prefix), strings.TrimPrefix(modulePath, prefix)
+		}
+	}
+	return subPath, best >= 0
+}
+
+// modulePrefixOf reports whether prefix names modulePath itself or one of its
+// path segments' ancestors.
+func modulePrefixOf(modulePath, prefix string) bool {
+	if !strings.HasPrefix(modulePath, prefix) {
+		return false
+	}
+	rest := modulePath[len(prefix):]
+	return rest == "" || strings.HasPrefix(rest, "/")
+}

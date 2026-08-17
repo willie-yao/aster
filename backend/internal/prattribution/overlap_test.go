@@ -23,10 +23,16 @@ func locatedFailure(name, location, url string) models.PullRequestFailure {
 
 func annotateWithChanges(t *testing.T, failure models.PullRequestFailure, changes PullChanges) *models.FailureAttribution {
 	t.Helper()
+	// The base branch runs this test and it passes there, which is the
+	// high-confidence unexplained case overlap refines.
+	return annotateCase(t, failure, changes, observedBaseline(testName), false)
+}
+
+func annotateCase(t *testing.T, failure models.PullRequestFailure, changes PullChanges, baseline Baseline, stale bool) *models.FailureAttribution {
+	t.Helper()
 	details := []models.PullRequestDetail{detail(1, e2eJob, failure)}
-	// A baseline that observed the base branch but never ran this test keeps the
-	// verdict unexplained, which is the residual set overlap applies to.
-	Annotate(details, observedBaseline("some-other-test"), capzRepo, map[int]PullChanges{1: changes})
+	details[0].Checks[0].Stale = stale
+	Annotate(details, baseline, capzRepo, map[int]PullChanges{1: changes})
 	got := details[0].Checks[0].Failures[0].Attribution
 	if got == nil {
 		t.Fatal("expected an attribution")
@@ -42,11 +48,12 @@ func TestFailureInAChangedFileReportsOverlap(t *testing.T) {
 	if got.Verdict != models.AttributionTouchesChangedCode {
 		t.Fatalf("verdict = %q, want touches_changed_code", got.Verdict)
 	}
-	if len(got.Evidence) != 1 || got.Evidence[0].Kind != models.AttributionEvidenceChangedCode {
+	if !hasEvidence(got, models.AttributionEvidenceChangedCode) {
 		t.Fatalf("evidence = %+v", got.Evidence)
 	}
-	if len(got.Evidence[0].Paths) != 1 || got.Evidence[0].Paths[0] != e2eSitePath {
-		t.Errorf("paths = %v, want the overlapping file", got.Evidence[0].Paths)
+	last := got.Evidence[len(got.Evidence)-1]
+	if len(last.Paths) != 1 || last.Paths[0] != e2eSitePath {
+		t.Errorf("paths = %v, want the overlapping file", last.Paths)
 	}
 	// Overlap is an observation. The summary must hedge explicitly rather than
 	// assert that the change is responsible.
@@ -66,9 +73,83 @@ func TestFailureOutsideChangedFilesStaysUnexplained(t *testing.T) {
 	if got.Verdict != models.AttributionUnexplained {
 		t.Fatalf("verdict = %q, want unexplained", got.Verdict)
 	}
-	if len(got.Evidence) != 1 || got.Evidence[0].Kind != models.AttributionEvidenceUnchangedCode {
+	if !hasEvidence(got, models.AttributionEvidenceUnchangedCode) {
 		t.Fatalf("evidence = %+v, want an unchanged-code citation", got.Evidence)
 	}
+}
+
+// Overlap says nothing about baseline coverage, so it must not upgrade the
+// confidence the baseline assigned, nor discard the baseline's own reason.
+func TestOverlapKeepsBaselineConfidenceAndEvidence(t *testing.T) {
+	// A test the base branch never ran is unexplained at LOW confidence.
+	got := annotateCase(t,
+		locatedFailure(testName, "sigs.k8s.io/cluster-api-provider-azure/test/e2e/azure_test.go:412", e2eSiteURL),
+		NewPullChanges([]string{"docs/README.md"}, false),
+		observedBaseline("some-other-test"), false)
+
+	if got.Confidence != models.AttributionConfidenceLow {
+		t.Errorf("confidence = %q, want the baseline low confidence preserved", got.Confidence)
+	}
+	if !hasEvidence(got, models.AttributionEvidenceNoBaseline) {
+		t.Errorf("the baseline reason must survive: %+v", got.Evidence)
+	}
+	if !hasEvidence(got, models.AttributionEvidenceUnchangedCode) {
+		t.Errorf("the overlap finding must be appended: %+v", got.Evidence)
+	}
+}
+
+// A build that tested a different head than the diff describes cannot be
+// compared against it in either direction.
+func TestStaleChecksNeverClaimOverlapOrItsAbsence(t *testing.T) {
+	located := locatedFailure(testName, "sigs.k8s.io/cluster-api-provider-azure/test/e2e/azure_test.go:412", e2eSiteURL)
+
+	overlapping := annotateCase(t, located, NewPullChanges([]string{e2eSitePath}, false), observedBaseline(testName), true)
+	if overlapping.Verdict == models.AttributionTouchesChangedCode {
+		t.Error("a stale build must not claim overlap with the current diff")
+	}
+	absent := annotateCase(t, located, NewPullChanges([]string{"docs/README.md"}, false), observedBaseline(testName), true)
+	if hasEvidence(absent, models.AttributionEvidenceUnchangedCode) {
+		t.Error("a stale build must not claim the file was untouched")
+	}
+}
+
+// A Ginkgo stack commonly enters another repository's framework before reaching
+// the repository under test, so every frame must be considered.
+func TestOverlapUsesEveryFrameNotJustTheFirst(t *testing.T) {
+	failure := locatedFailure(testName,
+		// The first location is a cluster-api helper, as junit extraction records.
+		"sigs.k8s.io/cluster-api/test@v1.12.3/framework/controlplane_helpers.go:115",
+		"https://github.com/kubernetes-sigs/cluster-api/blob/v1.12.3/test/framework/controlplane_helpers.go#L115")
+	failure.FailureBody = "sigs.k8s.io/cluster-api/test@v1.12.3/framework/controlplane_helpers.go:115\n" +
+		"sigs.k8s.io/cluster-api-provider-azure/test/e2e/azure_test.go:412"
+
+	got := annotateCase(t, failure, NewPullChanges([]string{e2eSitePath}, false), observedBaseline(testName), false)
+
+	if got.Verdict != models.AttributionTouchesChangedCode {
+		t.Fatalf("verdict = %q, want the later in-repo frame to match", got.Verdict)
+	}
+}
+
+// A version-qualified location names a tagged dependency copy, not the tree.
+func TestVersionQualifiedSameRepoLocationIsNotASite(t *testing.T) {
+	failure := locatedFailure(testName,
+		"sigs.k8s.io/cluster-api-provider-azure@v1.12.3/test/e2e/azure_test.go:412",
+		"https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/v1.12.3/test/e2e/azure_test.go#L412")
+
+	got := annotateCase(t, failure, NewPullChanges([]string{e2eSitePath}, false), observedBaseline(testName), false)
+
+	if got.Verdict == models.AttributionTouchesChangedCode {
+		t.Fatal("a tagged dependency copy must not count as the pull request's code")
+	}
+}
+
+func hasEvidence(attribution *models.FailureAttribution, kind string) bool {
+	for _, evidence := range attribution.Evidence {
+		if evidence.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // A truncated changed-file list cannot rule the change out, because the
@@ -81,10 +162,8 @@ func TestTruncatedChangesNeverClaimAbsenceOfOverlap(t *testing.T) {
 	if got.Verdict != models.AttributionUnexplained {
 		t.Fatalf("verdict = %q", got.Verdict)
 	}
-	for _, evidence := range got.Evidence {
-		if evidence.Kind == models.AttributionEvidenceUnchangedCode {
-			t.Fatal("a truncated changed-file list must not claim the file was untouched")
-		}
+	if hasEvidence(got, models.AttributionEvidenceUnchangedCode) {
+		t.Fatal("a truncated changed-file list must not claim the file was untouched")
 	}
 }
 
@@ -119,10 +198,8 @@ func TestFailureWithoutALocationIsUnchanged(t *testing.T) {
 	if got.Verdict != models.AttributionUnexplained {
 		t.Fatalf("verdict = %q", got.Verdict)
 	}
-	for _, evidence := range got.Evidence {
-		if evidence.Kind == models.AttributionEvidenceChangedCode || evidence.Kind == models.AttributionEvidenceUnchangedCode {
-			t.Fatalf("no location means no overlap claim, got %+v", evidence)
-		}
+	if hasEvidence(got, models.AttributionEvidenceChangedCode) || hasEvidence(got, models.AttributionEvidenceUnchangedCode) {
+		t.Fatalf("no location means no overlap claim, got %+v", got.Evidence)
 	}
 }
 
@@ -134,10 +211,8 @@ func TestMissingChangedFilesLeaveTheBaselineVerdict(t *testing.T) {
 	if got.Verdict != models.AttributionUnexplained {
 		t.Fatalf("verdict = %q", got.Verdict)
 	}
-	for _, evidence := range got.Evidence {
-		if evidence.Kind == models.AttributionEvidenceUnchangedCode {
-			t.Fatal("an unfetched changed-file list must not claim the file was untouched")
-		}
+	if hasEvidence(got, models.AttributionEvidenceUnchangedCode) {
+		t.Fatal("an unfetched changed-file list must not claim the file was untouched")
 	}
 }
 
@@ -156,14 +231,19 @@ func TestOverlapDoesNotOverrideAnExplainedVerdict(t *testing.T) {
 	}
 }
 
-func TestNewPullChanges(t *testing.T) {
-	changes := NewPullChanges([]string{"a.go", "  b.go  ", "", "   "}, false)
+// Git permits leading and trailing spaces in a path, so changed paths are
+// stored exactly as GitHub reported them. Normalizing could invent a match.
+func TestNewPullChangesPreservesPathsExactly(t *testing.T) {
+	changes := NewPullChanges([]string{"a.go", " spaced.go ", ""}, false)
 
 	if !changes.Known() || len(changes.Paths) != 2 {
 		t.Fatalf("paths = %v", changes.Paths)
 	}
-	if !changes.Paths["b.go"] {
-		t.Error("surrounding whitespace should be trimmed")
+	if !changes.Paths[" spaced.go "] {
+		t.Error("the path should be stored verbatim")
+	}
+	if changes.Paths["spaced.go"] {
+		t.Error("a trimmed variant must not match")
 	}
 	var empty PullChanges
 	if empty.Known() {

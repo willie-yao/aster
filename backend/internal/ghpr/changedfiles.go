@@ -113,9 +113,11 @@ func newChangedFileSet(raws []changedFileJSON, truncated bool) ChangedFileSet {
 		raws = raws[:MaxChangedFiles]
 	}
 	set.Files = make([]ChangedFile, len(raws))
+	// Candidates carry their already-truncated patch so ordering reflects the
+	// bytes actually retained, not the raw size.
 	type candidate struct {
 		index int
-		size  int
+		patch string
 	}
 	var candidates []candidate
 	for i, raw := range raws {
@@ -134,22 +136,21 @@ func newChangedFileSet(raws []changedFileJSON, truncated bool) ChangedFileSet {
 			set.Files[i].PatchOmitted = true
 			continue
 		}
-		candidates = append(candidates, candidate{index: i, size: len(raw.Patch)})
+		candidates = append(candidates, candidate{index: i, patch: truncatePatch(raw.Patch)})
 	}
 	sort.Slice(candidates, func(a, b int) bool {
-		if candidates[a].size != candidates[b].size {
-			return candidates[a].size < candidates[b].size
+		if len(candidates[a].patch) != len(candidates[b].patch) {
+			return len(candidates[a].patch) < len(candidates[b].patch)
 		}
 		return raws[candidates[a].index].Filename < raws[candidates[b].index].Filename
 	})
 	for _, item := range candidates {
-		patch := truncatePatch(raws[item.index].Patch)
-		if set.PatchBytes+len(patch) > MaxPatchBytes {
+		if set.PatchBytes+len(item.patch) > MaxPatchBytes {
 			set.Files[item.index].PatchOmitted = true
 			continue
 		}
-		set.Files[item.index].Patch = patch
-		set.PatchBytes += len(patch)
+		set.Files[item.index].Patch = item.patch
+		set.PatchBytes += len(item.patch)
 	}
 	return set
 }

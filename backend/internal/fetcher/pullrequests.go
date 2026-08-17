@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ghpr"
@@ -81,22 +82,59 @@ type changedFileLister interface {
 	ChangedFiles(ctx context.Context, owner, repo string, number int) (ghpr.ChangedFileSet, error)
 }
 
-// pullRequestChanges fetches changed files only for pull requests that have a
-// failing check, because attribution is the only consumer and passing pull
-// requests would spend GitHub quota for nothing. A per-pull failure is logged
-// and skipped: without changed files attribution simply omits overlap.
+// pullRequestChanges fetches changed files only for pull requests with a
+// failing check whose build tested the current head. A stale build describes a
+// different revision than the diff would, and attribution skips overlap for it,
+// so fetching would spend GitHub quota for nothing. A per-pull failure is
+// logged and skipped: without changed files attribution simply omits overlap.
 func (p *pipeline) pullRequestChanges(ctx context.Context, lister changedFileLister, repo project.SourceRepo, details []models.PullRequestDetail) map[int]prattribution.PullChanges {
-	changes := map[int]prattribution.PullChanges{}
+	var wanted []int
 	for _, detail := range details {
-		if detail.ChecksFailing == 0 {
-			continue
+		if comparableFailingCheck(detail) {
+			wanted = append(wanted, detail.Number)
 		}
-		set, err := lister.ChangedFiles(ctx, repo.Owner, repo.Name, detail.Number)
-		if err != nil {
-			log.Printf("    ⚠ pr #%d: listing changed files: %v", detail.Number, err)
-			continue
-		}
-		changes[detail.Number] = prattribution.NewPullChanges(set.Paths(), set.FilesTruncated)
 	}
+	if len(wanted) == 0 {
+		return map[int]prattribution.PullChanges{}
+	}
+
+	changes := make(map[int]prattribution.PullChanges, len(wanted))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, changedFilesWorkers)
+	for _, number := range wanted {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		go func(number int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			set, err := lister.ChangedFiles(ctx, repo.Owner, repo.Name, number)
+			if err != nil {
+				log.Printf("    ⚠ pr #%d: listing changed files: %v", number, err)
+				return
+			}
+			mu.Lock()
+			changes[number] = prattribution.NewPullChanges(set.Paths(), set.FilesTruncated)
+			mu.Unlock()
+		}(number)
+	}
+	wg.Wait()
 	return changes
+}
+
+// changedFilesWorkers bounds concurrent GitHub calls for changed files.
+const changedFilesWorkers = 4
+
+// comparableFailingCheck reports whether any failing check on the pull request
+// tested the current head, which is the only case overlap can be computed for.
+func comparableFailingCheck(detail models.PullRequestDetail) bool {
+	for _, check := range detail.Checks {
+		if !check.Passed && !check.Finished.IsZero() && !check.Stale && len(check.Failures) > 0 {
+			return true
+		}
+	}
+	return false
 }

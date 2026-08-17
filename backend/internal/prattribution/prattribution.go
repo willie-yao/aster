@@ -109,7 +109,7 @@ func Annotate(details []models.PullRequestDetail, baseline Baseline, repo Reposi
 				// explained by the base branch or by other pull requests is not
 				// made more explicable by touching changed code.
 				if attribution.Verdict == models.AttributionUnexplained {
-					if refined := changedCodeAttribution(failure.TestCase, repo, pullChanges); refined != nil {
+					if refined := changedCodeAttribution(attribution, failure.TestCase, repo, pullChanges, check.Stale); refined != nil {
 						attribution = refined
 					}
 				}
