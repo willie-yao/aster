@@ -66,8 +66,12 @@ type Service struct {
 	patternRepo tools.RepoReader
 
 	// linkVerifyCache memoizes GitHub file-existence checks across all
-	// analyses in a run, keyed by "owner/repo/path" to existence.
+	// analyses in a run, keyed by the probe URL.
 	linkVerifyCache sync.Map
+
+	// linkVerifyStore persists definite file-existence checks at immutable
+	// revisions across runs. Nil falls back to the client's analysis cache.
+	linkVerifyStore LinkVerificationStore
 
 	// traceStore collects private, sanitized per-analysis control flow.
 	traceStore *TraceStore
@@ -135,6 +139,24 @@ func (s *Service) SetSourceRepo(owner, name string) {
 
 // SetGitHubReadToken installs the optional read-only source credential.
 func (s *Service) SetGitHubReadToken(token string) { s.githubReadToken = token }
+
+// SetLinkVerificationStore installs the durable store for file-existence checks
+// at immutable revisions. Defaults to the client's analysis cache.
+func (s *Service) SetLinkVerificationStore(store LinkVerificationStore) {
+	s.linkVerifyStore = store
+}
+
+// linkVerifications returns the durable link-verification store, or nil when
+// this Service has none.
+func (s *Service) linkVerifications() LinkVerificationStore {
+	if s.linkVerifyStore != nil {
+		return s.linkVerifyStore
+	}
+	if s.client != nil {
+		return s.client.cache
+	}
+	return nil
+}
 
 // SetPatternRepoReader installs the source-tree reader used by legacy
 // remediation verification. Safe to call once at fetcher startup.

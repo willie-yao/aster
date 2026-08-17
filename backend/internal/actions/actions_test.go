@@ -1960,13 +1960,11 @@ func TestRepositoryTokenExcludedFromAgentSandboxRuntime(t *testing.T) {
 	if got := repositoryToken("agent-sandbox", "github-write-token"); got != "" {
 		t.Fatalf("agent sandbox token = %q, want empty", got)
 	}
-	if got := repositoryToken("orka", "read-token"); got != "read-token" {
-		t.Fatalf("Orka token changed = %q", got)
+	if got := previewRepositoryToken("agent-sandbox", "github-write-token", true); got != "" {
+		t.Fatalf("agent sandbox preview token = %q, want empty", got)
 	}
-	for _, runtimeType := range []string{"opencode", "orka", "agent-sandbox"} {
-		if got := previewRepositoryToken(runtimeType, "github-write-token", false); got != "" {
-			t.Fatalf("exact analysis %s token = %q, want empty", runtimeType, got)
-		}
+	if got := previewRepositoryToken("agent-sandbox", "github-write-token", false); got != "" {
+		t.Fatalf("disallowed preview token = %q, want empty", got)
 	}
 }
 

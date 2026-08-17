@@ -299,7 +299,7 @@ func TestProcessFixPRsSkipsWithoutStaticToken(t *testing.T) {
 	cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{
 		Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"},
 		AuthorName: "Test", AuthorEmail: "test@example.com", CritiqueRetries: &zero,
-		AgentRuntime: &project.FixAgentRuntime{Type: "orka"},
+		AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"},
 	}}}
 	t.Setenv("FIX_TOKEN", "")
 	oldRuntime, oldManager := newBatchFixRuntime, newBatchFixManager
@@ -325,7 +325,7 @@ func TestProcessFixPRsSkipsWithoutStaticToken(t *testing.T) {
 func TestProcessFixPRsRejectsInvalidAIAPI(t *testing.T) {
 	cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{
 		Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"},
-		AgentRuntime: &project.FixAgentRuntime{Type: "orka"},
+		AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"},
 	}}}
 	t.Setenv("FIX_TOKEN", "test-token")
 	t.Setenv("AI_API", "invalid")

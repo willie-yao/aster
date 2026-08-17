@@ -20,8 +20,8 @@ func TestProfilesForTools(t *testing.T) {
 		{name: "filesystem only", tools: []string{"filesystem"}},
 		{name: "k8s group", tools: []string{"filesystem", "k8s"}, kubernetes: true},
 		{name: "in-process k8s tool", tools: []string{"filesystem", "k8s.discover_clusters"}, kubernetes: true},
-		{name: "orka k8s tool", tools: []string{"read-artifact", "discover-clusters"}, kubernetes: true},
-		{name: "orka underscored alias", tools: []string{"resolve_controller_log"}, kubernetes: true},
+		{name: "k8s tool", tools: []string{"read-artifact", "discover-clusters"}, kubernetes: true},
+		{name: "underscored alias", tools: []string{"resolve_controller_log"}, kubernetes: true},
 		{name: "explicit filesystem tool", tools: []string{"read-artifact"}},
 	}
 	for _, tt := range tests {
