@@ -81,7 +81,7 @@ export function PatternFixGuidance({ jobID, buildID }: { jobID: string; buildID:
           </Button>
           <Typography color="text.secondary" sx={{ mt: 1, ...overviewTypography.description }}>
             The pattern chat below helps compare causes across builds. A Fix investigation becomes available once an
-            individual failed test publishes verified source files.
+            individual failed JUnit test meets every Fix eligibility requirement.
           </Typography>
         </Box>
       </Stack>
