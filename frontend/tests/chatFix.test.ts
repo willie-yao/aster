@@ -100,6 +100,41 @@ test("exact JUnit source-path eligibility requires the bound repository and revi
   );
 });
 
+test("exact JUnit source-path eligibility derives the path from the blob URL like the server", () => {
+  const repository = {
+    owner: "kubernetes-sigs",
+    name: "cluster-api-provider-azure",
+    revision: "0123456789abcdef0123456789abcdef01234567",
+  };
+  const blob = (path: string) =>
+    `https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/0123456789abcdef0123456789abcdef01234567/${path}`;
+  // The analysis cites a repository-prefixed path, so the key and the URL path
+  // differ. buildsource.VerifiedPaths accepts it, so eligibility must too.
+  assert.deepEqual(
+    chatFixVerifiedSourcePaths(
+      { "cluster-api-provider-azure/test/e2e/cni.go": blob("test/e2e/cni.go") },
+      repository,
+    ),
+    ["test/e2e/cni.go"],
+  );
+  assert.deepEqual(
+    chatFixVerifiedSourcePaths({ "./test/e2e/cni.go": blob("test/./e2e/cni.go") }, repository),
+    ["test/e2e/cni.go"],
+  );
+  assert.deepEqual(
+    chatFixVerifiedSourcePaths({ a: blob("test/e2e/cni.go"), b: blob("test/e2e/cni.go") }, repository),
+    ["test/e2e/cni.go"],
+  );
+  assert.deepEqual(
+    chatFixVerifiedSourcePaths({ escaped: blob("test/e2e%2Fcni.go") }, repository),
+    ["test/e2e/cni.go"],
+  );
+  // Traversal and absolute paths stay rejected on both sides.
+  assert.deepEqual(chatFixVerifiedSourcePaths({ up: blob("../secrets.go") }, repository), []);
+  assert.deepEqual(chatFixVerifiedSourcePaths({ up: blob("test/../../secrets.go") }, repository), []);
+  assert.deepEqual(chatFixVerifiedSourcePaths({ backslash: blob("test%5Ce2e.go") }, repository), []);
+});
+
 test("exact JUnit fix dialog excludes pattern authority and keeps confirmation separate", () => {
   const dialog = source("src/components/ChatFixDialog.tsx");
   const api = source("src/lib/chatFix.ts");

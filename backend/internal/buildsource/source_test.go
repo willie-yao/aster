@@ -1,6 +1,7 @@
 package buildsource
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -105,5 +106,16 @@ func TestVerifiedPaths(t *testing.T) {
 	}, source)
 	if len(got) != 1 || got[0] != "pkg/controller.go" {
 		t.Fatalf("VerifiedPaths() = %v", got)
+	}
+	// The path comes from the blob URL, not the cited file-link key. Chat fix
+	// eligibility in the frontend mirrors this rule.
+	prefixed := VerifiedPaths(map[string]string{
+		"repo/pkg/controller.go": "https://github.com/example/repo/blob/" + sha + "/pkg/controller.go",
+		"./pkg/util.go":          "https://github.com/example/repo/blob/" + sha + "/pkg/./util.go",
+		"escaped.go":             "https://github.com/example/repo/blob/" + sha + "/pkg%2Fescaped.go",
+		"backslash.go":           "https://github.com/example/repo/blob/" + sha + "/pkg%5Cbackslash.go",
+	}, source)
+	if !slices.Equal(prefixed, []string{"pkg/controller.go", "pkg/escaped.go", "pkg/util.go"}) {
+		t.Fatalf("VerifiedPaths() = %v", prefixed)
 	}
 }
