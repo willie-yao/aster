@@ -145,8 +145,8 @@ evidence excerpts, prompts, model output, and private cache content remain
 private.
 
 Even an `actionable` investigation does not grant action authority. Causal-group
-patterns remain blocked from File Issue, Fix PR, remediation tracking, and
-resolution by the engine's action policy.
+patterns remain blocked from File Issue, Fix PR, and resolution by the engine's
+action policy.
 
 ## Admin-gated actions
 
