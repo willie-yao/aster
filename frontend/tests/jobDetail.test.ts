@@ -154,9 +154,8 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(pattern, /label="Source grounding"/);
   assert.match(pattern, /label="Affected builds"/);
   assert.match(pattern, /label="Related files"/);
-  assert.match(pattern, /<PatternRemediation/);
-  assert.match(pattern, /followUp=\{analysisOnly/);
-  assert.match(pattern, /investigations=\{pattern\.remediation_investigations\}/);
+  assert.match(pattern, /<CausalGroupRemediation/);
+  assert.match(pattern, /investigation=\{group\.content_hash \? remediationByHash\.get\(group\.content_hash\) : undefined\}/);
   assert.match(pattern, /patternID=\{pattern\.id\}/);
   assert.match(pattern, /patternHash=\{pattern\.content_hash\}/);
   assert.match(pattern, /Remediation present, verifying the fix/);

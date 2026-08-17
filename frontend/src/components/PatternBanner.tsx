@@ -28,9 +28,10 @@ import { patternActionEligibilityHint, patternLifecycleActive } from "../lib/act
 import { jobRunPath } from "../lib/routes";
 import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
-import { PatternRemediation } from "./PatternRemediation";
+import { CausalGroupRemediation } from "./CausalGroupRemediation";
+import { CausalGroupFixRouting } from "./CausalGroupFixRouting";
 import { PatternFixGuidance } from "./PatternFixGuidance";
-import { patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
+import { causalGroupFixTarget, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
 
 function firstSentence(value: string): string {
   const match = value.trim().match(/^.*?[.!?](?:\s|$)/u);
@@ -72,8 +73,19 @@ export function PatternBanner({
   const { data: resolved } = useResolved();
   const { features } = useCapabilities();
   const analysisOnly = Boolean(pattern.recurrence_classification);
+  const causalGroups = pattern.causal_groups ?? [];
+  // Fix investigations start from an individual failed test, so the routing is
+  // only offered where a chat session could actually run one.
+  const fixCapable = Boolean(features.analysis_chat && features.junit_chat_fix);
+  const causalFixTargets = causalGroups.map((group) =>
+    fixCapable ? causalGroupFixTarget(group, runs) : null,
+  );
+  const hasCausalFixTarget = causalFixTargets.some((target) => target !== null);
+  const remediationByHash = new Map(
+    (pattern.remediation_investigations ?? []).map((summary) => [summary.causal_group_hash, summary]),
+  );
   const fixGuidanceBuildID = patternFixGuidanceBuildID(pattern, runs);
-  const showFixGuidance = Boolean(jobID && fixGuidanceBuildID);
+  const showFixGuidance = Boolean(jobID && fixGuidanceBuildID && fixCapable && !hasCausalFixTarget);
   const resolvedEntry = !analysisOnly && pattern.id ? resolved.resolved[pattern.id] : undefined;
   const hasEvidenceBuild = patternChatHasEvidenceBuild(
     pattern,
@@ -224,11 +236,14 @@ export function PatternBanner({
       {staleNotice}
       {lifecycleNotice}
 
-      {pattern.causal_groups && pattern.causal_groups.length > 0 && (
+      {causalGroups.length > 0 && (
         <BriefingSection label="Causal groups">
           <Stack spacing={1.5}>
-            {pattern.causal_groups.map((group) => (
-              <Box key={`${group.builds.join("-")}-${group.root_cause}`}>
+            {causalGroups.map((group, index) => (
+              // Keying on group identity ties the remediation component instance
+              // to one operation, so a refreshed group never inherits another
+              // group's in-flight status or preview.
+              <Box key={`${group.id ?? ""}:${group.content_hash ?? ""}:${group.builds.join("-")}-${group.root_cause}`}>
                 <RichText text={group.root_cause} steps fileCtx={patternFileCtx} />
                 <Stack
                   direction={{ xs: "column", sm: "row" }}
@@ -268,6 +283,16 @@ export function PatternBanner({
                     ))}
                   </Stack>
                 </Stack>
+                {analysisOnly && (
+                  <CausalGroupRemediation
+                    group={group}
+                    investigation={group.content_hash ? remediationByHash.get(group.content_hash) : undefined}
+                    jobID={jobID}
+                    patternID={pattern.id}
+                    patternHash={pattern.content_hash}
+                  />
+                )}
+                {fixCapable && <CausalGroupFixRouting jobID={jobID} target={causalFixTargets[index]} />}
               </Box>
             ))}
           </Stack>
@@ -286,7 +311,7 @@ export function PatternBanner({
         </BriefingSection>
       )}
 
-      {!pattern.causal_groups?.length && pattern.systemic && pattern.shared_root_cause && (
+      {causalGroups.length === 0 && pattern.systemic && pattern.shared_root_cause && (
         <BriefingSection label="Root cause">
           <RichText text={pattern.shared_root_cause} steps fileCtx={patternFileCtx} />
         </BriefingSection>
@@ -306,7 +331,7 @@ export function PatternBanner({
         </BriefingSection>
       )}
 
-      {!pattern.causal_groups?.length && pattern.systemic && pattern.shared_builds && pattern.shared_builds.length > 0 && (
+      {causalGroups.length === 0 && pattern.systemic && pattern.shared_builds && pattern.shared_builds.length > 0 && (
         <BriefingSection label="Affected builds">
           <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
             {pattern.shared_builds.map((buildID) => (
@@ -373,7 +398,7 @@ export function PatternBanner({
 
   const actions = showFixGuidance || chatRef || (!analysisOnly && isCurrent && lifecycleActive && pattern.systemic && pattern.id) ? (
     <Stack spacing={1.25}>
-      {jobID && fixGuidanceBuildID && (
+      {showFixGuidance && jobID && fixGuidanceBuildID && (
         <PatternFixGuidance jobID={jobID} buildID={fixGuidanceBuildID} />
       )}
       {chatRef && (
@@ -407,15 +432,6 @@ export function PatternBanner({
       summary={<RichText text={pattern.summary} steps fileCtx={patternFileCtx} />}
       mobileSynopsis={firstSentence(pattern.shared_root_cause ?? pattern.summary)}
       details={details}
-      followUp={analysisOnly ? (
-        <PatternRemediation
-          groups={pattern.causal_groups ?? []}
-          investigations={pattern.remediation_investigations}
-          jobID={jobID}
-          patternID={pattern.id}
-          patternHash={pattern.content_hash}
-        />
-      ) : undefined}
       actions={actions}
     />
   );

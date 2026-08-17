@@ -1,4 +1,5 @@
 import type {
+  PatternCausalGroup,
   PatternRemediationInvestigationState,
   PatternRemediationInvestigationSummary,
 } from "../types/dashboard";
@@ -6,12 +7,25 @@ import type {
 export const notInvestigatedReason =
   "No source-grounded implementation target has been verified for this recurring cause.";
 
+export const singleBuildRemediationReason =
+  "Remediation investigation needs a cause repeated across at least two builds, so this single-build cause cannot be investigated.";
+
+export const unhashedRemediationReason =
+  "This causal group predates content hashing, so it cannot be addressed. Refresh the dashboard data to enable investigation.";
+
+export const remediationUnavailableReason =
+  "Remediation investigation is unavailable on this deployment.";
+
 export interface PatternRemediationPresentation {
   state: PatternRemediationInvestigationState;
   label: string;
   message: string;
-  futureAction?: "Investigate possible fix" | "Preview Fix PR";
   detail?: string;
+}
+
+export interface CausalRemediationBlockedReason {
+  label: string;
+  message: string;
 }
 
 const presentations: Record<
@@ -21,7 +35,6 @@ const presentations: Record<
   not_investigated: {
     label: "Not investigated",
     message: notInvestigatedReason,
-    futureAction: "Investigate possible fix",
   },
   queued: {
     label: "Queued",
@@ -38,7 +51,6 @@ const presentations: Record<
   actionable: {
     label: "Actionable",
     message: "A source-grounded implementation target passed deterministic verification.",
-    futureAction: "Preview Fix PR",
   },
   already_fixed: {
     label: "Already fixed",
@@ -63,7 +75,6 @@ const presentations: Record<
   failed: {
     label: "Investigation failed",
     message: "The read-only investigation did not produce a verified result. Published causal analysis is unchanged.",
-    futureAction: "Investigate possible fix",
   },
   stale: {
     label: "Stale",
@@ -83,4 +94,37 @@ export function patternRemediationPresentation(
     ...presentation,
     detail: detail && detail !== presentation.message ? detail : undefined,
   };
+}
+
+// States that only advance while the remediation operation is available. With
+// the operation disabled they can never resolve, so reporting them verbatim
+// would leave a permanently pending card the user cannot act on.
+const unresolvableWithoutOperation = new Set<PatternRemediationInvestigationState>([
+  "not_investigated",
+  "queued",
+  "investigating",
+  "verifying",
+]);
+
+// causalRemediationBlockedReason reports why a causal group can never reach an
+// investigation, so the UI never presents a pending-looking state as if the user
+// could act on it. Conditions are ordered from the most permanent to the most
+// deployment-scoped, and a terminal published verdict always wins because it
+// carries a real result that outlives the capability that produced it.
+export function causalRemediationBlockedReason(
+  group: PatternCausalGroup,
+  investigation: PatternRemediationInvestigationSummary | undefined,
+  investigationEnabled: boolean,
+): CausalRemediationBlockedReason | null {
+  if (group.builds.length < 2) {
+    return { label: "Not eligible", message: singleBuildRemediationReason };
+  }
+  if (!group.id || !group.content_hash) {
+    return { label: "Not addressable", message: unhashedRemediationReason };
+  }
+  const { state } = patternRemediationPresentation(investigation);
+  if (!investigationEnabled && unresolvableWithoutOperation.has(state)) {
+    return { label: "Unavailable", message: remediationUnavailableReason };
+  }
+  return null;
 }
