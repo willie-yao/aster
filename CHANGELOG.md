@@ -59,6 +59,7 @@ how to pin a consumer to a reviewed version.
 - **Pull request failure triage.** The dashboard gained a per-open-pull-request
   view of presubmit results, including attribution against observed baselines
   and reporting when a failure sits in changed code.
+- **Opt-in AI escalation for unexplained pull request failures.**
 
 ### Fixed
 
@@ -67,6 +68,10 @@ how to pin a consumer to a reviewed version.
   reported first.
 - **Durable file-link verification.** Transient GitHub failures no longer drop
   published file links.
+- **Release image identity.** Published images keep the title declared in their
+  Dockerfile stage instead of inheriting the repository name, so release image
+  verification passes. The Agent Sandbox analysis executor now publishes to its
+  own repository rather than over the fix executor.
 
 ## [0.9.0-rc.2] - 2026-08-15
 
