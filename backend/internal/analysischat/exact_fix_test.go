@@ -169,6 +169,38 @@ func TestServiceTestFixCandidateAccumulatesConversationEvidence(t *testing.T) {
 	if first.ResponseHash == candidate.ResponseHash {
 		t.Fatal("promoted turns shared one response identity")
 	}
+
+	// A later turn and its evidence must not change an already promoted answer.
+	runner.mu.Lock()
+	runner.reply = Reply{
+		Answer: "The kubelet log agrees.", Assessment: "supports",
+		Citations: []Citation{{Path: "artifacts/kubelet.log", LineStart: 7, LineEnd: 7, Quote: "not ready"}},
+	}
+	runner.mu.Unlock()
+	if _, err := service.Send(t.Context(), session.ID, "Alice", testRequestID(t), "Does the kubelet log agree?"); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := service.TestFixCandidate(session.ID, "Alice", secondRequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.ResponseHash != candidate.ResponseHash || !slices.Equal(replayed.ArtifactCitations, candidate.ArtifactCitations) {
+		t.Fatalf("later turn changed the promoted response identity: %+v", replayed)
+	}
+	restarted, err := NewService(t.Context(), service.dataDir, &fakeRunner{}, Options{StateDir: service.opts.StateDir, PollInterval: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ConfigureSourceRepository(sourceinvestigation.Repository{Owner: "example", Name: "repo"}); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := restarted.TestFixCandidate(session.ID, "Alice", secondRequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.ResponseHash != candidate.ResponseHash || !slices.Equal(restored.ArtifactCitations, candidate.ArtifactCitations) {
+		t.Fatalf("restart changed the promoted response identity: %+v", restored)
+	}
 }
 
 func TestConversationCitationsBoundsOrderAndScope(t *testing.T) {

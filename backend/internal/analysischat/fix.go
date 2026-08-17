@@ -333,8 +333,11 @@ func assistantResponseIndex(messages []Message, requestID string) int {
 // conversation up to and including the promoted answer, most recent first.
 // Evidence validated in an earlier turn stays trustworthy, so a grounded
 // conversation does not have to re-read artifacts to keep a later answer
-// fix-eligible. Later turns are excluded so the promoted response identity
-// stays stable as the conversation continues.
+// fix-eligible. Every accumulated citation was in the model's context when it
+// wrote the promoted answer, because turn history carries prior citations, and
+// recency-first truncation drops the same oldest turns history compaction
+// drops. Later turns are excluded so the promoted response identity stays
+// stable as the conversation continues.
 func conversationCitations(messages []Message, requestID string) []Citation {
 	index := assistantResponseIndex(messages, requestID)
 	if index < 0 {

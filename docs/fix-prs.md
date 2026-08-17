@@ -85,7 +85,12 @@ excluded, so continuing the conversation does not change an admitted request.
 An analysis with no verified immutable source path can never start a fix
 preview, so the chat reports that permanently unavailable state when it opens
 and disables **Start fix investigation** instead of reporting missing citations
-the user cannot fix by rephrasing.
+the user cannot fix by rephrasing. When the source is usable but the
+conversation is not yet grounded, the chat says so and asks for a question that
+requires reading an artifact. A fix investigation offers evidence-directed
+starting prompts for the same reason. Evidence gathering stays driven by the
+question rather than forced on every Fix-intent turn, so a scoping question that
+genuinely needs no artifact still gets an answer instead of a citation failure.
 
 The chat session persists a full authoritative analysis content hash that covers
 failure content, artifact citations, verified source links, critique state, and

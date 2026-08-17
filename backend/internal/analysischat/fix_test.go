@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -184,6 +185,34 @@ func TestServiceFixCandidateRejectsUngroundedAndStaleAnswers(t *testing.T) {
 	}
 	if _, err := service.FixCandidate(session.ID, "Alice", chatRequestID, fixCandidatePattern().ID, fixCandidatePattern().ContentHash, ""); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("ungrounded answer error = %v", err)
+	}
+}
+
+func TestServiceFixCandidateAccumulatesConversationEvidence(t *testing.T) {
+	service, session, _, _ := fixCandidateReadyService(t)
+	runner, ok := service.runner.(*fakeRunner)
+	if !ok {
+		t.Fatalf("runner = %T", service.runner)
+	}
+	runner.mu.Lock()
+	cited := slices.Clone(runner.reply.Citations)
+	runner.reply = Reply{Answer: "The retry guard in `markReady` should change.", Assessment: "challenges"}
+	runner.mu.Unlock()
+	secondRequestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "Alice", secondRequestID, "Which function should change?"); err != nil {
+		t.Fatal(err)
+	}
+	sourceRequestID := testRequestID(t)
+	if _, err := service.SourceInvestigation(t.Context(), session.ID, "Alice", sourceRequestID, secondRequestID); err != nil {
+		t.Fatal(err)
+	}
+	pattern := fixCandidatePattern()
+	candidate, err := service.FixCandidate(session.ID, "Alice", secondRequestID, pattern.ID, pattern.ContentHash, sourceRequestID)
+	if err != nil {
+		t.Fatalf("conversation-scoped legacy candidate error = %v", err)
+	}
+	if candidate.RequestID != secondRequestID || !slices.Equal(candidate.ArtifactCitations, cited) {
+		t.Fatalf("candidate = %+v", candidate)
 	}
 }
 

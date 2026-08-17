@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
-import { chatFixVerifiedSourcePaths, fixInvestigationAvailable } from "../src/lib/chatFixEligibility.js";
+import { chatFixGroundedRequestIDs, chatFixVerifiedSourcePaths, fixInvestigationAvailable } from "../src/lib/chatFixEligibility.js";
 import { chatFixRequestPresentation } from "../src/lib/chatFixPresentation.js";
 import {
   chatFixRequestStorageKey,
@@ -11,22 +11,55 @@ import {
   readStoredChatFixRequest,
   storeChatFixRequest,
 } from "../src/lib/chatFixRequestStorage.js";
-import type { AnalysisChatReference } from "../src/types/analysisChat.js";
+import type { AnalysisChatMessage, AnalysisChatReference } from "../src/types/analysisChat.js";
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
 }
 
-test("exact JUnit chat fix requires current-turn artifacts and verified source paths", () => {
+test("exact JUnit chat fix requires conversation evidence and verified source paths", () => {
   const chat = source("src/components/AnalysisChat.tsx");
   assert.match(chat, /features\.junit_chat_fix/);
   assert.match(chat, /analysisRef\.source !== "build"/);
   assert.match(chat, /analysisRef\.junit_file/);
-  assert.match(chat, /message\.citations\?\.length/);
+  assert.match(chat, /chatFixGroundedRequestIDs/);
   assert.match(chat, /chatFixVerifiedSourcePaths/);
   assert.doesNotMatch(chat, /hasExplicitSourceSymbol/);
-  assert.match(chat, /no validated artifact citation from this turn/);
-  assert.match(chat, /no verified immutable source paths/);
+  assert.doesNotMatch(chat, /citation from this turn/);
+  assert.match(chat, /no answer in this conversation carries a validated artifact citation/);
+  assert.match(chat, /no verified immutable source path/);
+});
+
+test("permanent source ineligibility is reported before the per-response citation reason", () => {
+  const chat = source("src/components/AnalysisChat.tsx");
+  assert.match(chat, /fixSourceUnavailable = exactFixEnabled/);
+  assert.match(chat, /\{fixSourceUnavailable && \(\s*<Alert/);
+  assert.match(chat, /exactFixEnabled && hasVerifiedSourcePaths && !hasArtifactEvidence/);
+  assert.match(chat, /disabled=\{busy \|\| pendingTurn !== null \|\| \(fixSourceUnavailable && !fixIntentMode\)\}/);
+  assert.match(chat, /fixIntentMode \? fixSuggestedQuestions : suggestedQuestions/);
+});
+
+test("chat fix grounding accumulates validated citations across the conversation", () => {
+  const answer = (requestID: string, cited: boolean): AnalysisChatMessage => ({
+    role: "assistant", request_id: requestID, content: "answer", created_at: "2026-08-17T00:00:00Z",
+    citations: cited ? [{ path: "build-log.txt", line_start: 4, line_end: 4, quote: "boom" }] : undefined,
+  });
+  const question = (requestID: string): AnalysisChatMessage => ({
+    role: "user", request_id: requestID, content: "question", created_at: "2026-08-17T00:00:00Z",
+  });
+
+  const grounded = chatFixGroundedRequestIDs([
+    question("one"), answer("one", true), question("two"), answer("two", false),
+  ]);
+  assert.deepEqual([...grounded].sort(), ["one", "two"]);
+
+  const later = chatFixGroundedRequestIDs([
+    question("one"), answer("one", false), question("two"), answer("two", true),
+  ]);
+  assert.deepEqual([...later], ["two"]);
+
+  assert.equal(chatFixGroundedRequestIDs([question("one"), answer("one", false)]).size, 0);
+  assert.equal(chatFixGroundedRequestIDs(undefined).size, 0);
 });
 
 test("exact JUnit source-path eligibility requires the bound repository and revision", () => {
