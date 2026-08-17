@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import { patternFixGuidanceBuildID } from "../src/lib/patternFixGuidance.js";
-import type { BuildResult, PatternAnalysis } from "../src/types/dashboard.js";
+import { causalGroupFixTarget, patternFixGuidanceBuildID } from "../src/lib/patternFixGuidance.js";
+import type { BuildResult, PatternAnalysis, PatternCausalGroup } from "../src/types/dashboard.js";
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
@@ -44,6 +44,30 @@ const junitRun: BuildResult = {
   tests_skipped: 0,
 };
 
+const analysis = {
+  generated_at: "2026-08-14T00:02:00Z",
+  model: "model",
+  root_cause: "cause",
+  severity: "high",
+  suggested_fix: "fix",
+};
+
+const groundedRun: BuildResult = {
+  ...junitRun,
+  test_cases: [
+    {
+      name: "fails",
+      status: "failed",
+      duration_seconds: 1,
+      junit_file: "junit_01.xml",
+      ai_analysis: { ...analysis, file_links: { "pkg/thing.go": "https://github.com/o/r/blob/sha/pkg/thing.go" } },
+    },
+  ],
+};
+
+const firstGroup = causalPattern.causal_groups![0];
+const singleBuildGroup = causalPattern.causal_groups![1];
+
 test("causal guidance selects an affected build with a failed JUnit test", () => {
   assert.equal(patternFixGuidanceBuildID(causalPattern, [junitRun]), "208060");
   assert.equal(patternFixGuidanceBuildID({ ...causalPattern, causal_groups: [] }, [junitRun]), null);
@@ -61,13 +85,81 @@ test("causal guidance selects an affected build with a failed JUnit test", () =>
   );
 });
 
-test("guidance is outside pattern chat and targets the affected build grid", () => {
+test("a cause routes to a failed test that can actually start a Fix investigation", () => {
+  assert.deepEqual(causalGroupFixTarget(firstGroup, [groundedRun]), {
+    buildID: "208060",
+    testName: "fails",
+  });
+});
+
+test("a failed test with no published file link is conclusively ineligible", () => {
+  assert.equal(causalGroupFixTarget(firstGroup, [junitRun]), null);
+  assert.equal(
+    causalGroupFixTarget(firstGroup, [
+      { ...groundedRun, test_cases: [{ ...groundedRun.test_cases[0], ai_analysis: { ...analysis, file_links: {} } }] },
+    ]),
+    null,
+  );
+});
+
+test("build-sourced and JUnit-less failures never become fix targets", () => {
+  assert.equal(
+    causalGroupFixTarget(firstGroup, [
+      { ...groundedRun, test_cases: [{ ...groundedRun.test_cases[0], source: "build" }] },
+    ]),
+    null,
+  );
+  assert.equal(
+    causalGroupFixTarget(firstGroup, [
+      { ...groundedRun, test_cases: [{ ...groundedRun.test_cases[0], junit_file: undefined }] },
+    ]),
+    null,
+  );
+  assert.equal(
+    causalGroupFixTarget(firstGroup, [
+      { ...groundedRun, test_cases: [{ ...groundedRun.test_cases[0], status: "passed" }] },
+    ]),
+    null,
+  );
+});
+
+test("a cause only considers its own builds", () => {
+  assert.equal(causalGroupFixTarget(singleBuildGroup, [groundedRun]), null);
+  assert.deepEqual(causalGroupFixTarget(singleBuildGroup, [{ ...groundedRun, build_id: "209114" }]), {
+    buildID: "209114",
+    testName: "fails",
+  });
+});
+
+test("a single-build cause still gets the per-test fix route", () => {
+  const singleBuild: PatternCausalGroup = { builds: ["209114"], root_cause: "second", confidence: "medium" };
+  assert.deepEqual(causalGroupFixTarget(singleBuild, [{ ...groundedRun, build_id: "209114" }]), {
+    buildID: "209114",
+    testName: "fails",
+  });
+});
+
+test("fix routing sits with each cause and stays behind the chat capabilities", () => {
+  const banner = source("src/components/PatternBanner.tsx");
+  const routing = source("src/components/CausalGroupFixRouting.tsx");
+
+  assert.match(banner, /const fixCapable = Boolean\(features\.analysis_chat && features\.junit_chat_fix\)/);
+  assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupFixRouting jobID=\{jobID\} target=\{causalFixTargets\[index\]\} \/>/);
+  assert.match(routing, /testRunPath\(jobID, target\.testName, target\.buildID\)/);
+  assert.match(routing, /Start a Fix investigation/);
+  assert.match(routing, /No failed test in these builds has a verified source path/);
+});
+
+test("the pattern-level panel is a fallback for causes with no eligible test", () => {
   const banner = source("src/components/PatternBanner.tsx");
   const guidance = source("src/components/PatternFixGuidance.tsx");
 
+  assert.match(banner, /const showFixGuidance = Boolean\(jobID && fixGuidanceBuildID && fixCapable && !hasCausalFixTarget\)/);
   assert.match(banner, /<PatternFixGuidance jobID=\{jobID\} buildID=\{fixGuidanceBuildID\} \/>/);
   assert.ok(banner.indexOf("<PatternFixGuidance") < banner.indexOf("<AnalysisChat"));
   assert.equal(banner.match(/<PatternFixGuidance/g)?.length, 1);
+  assert.match(guidance, /Fix investigation unavailable/);
+  assert.match(guidance, /No failed test in the affected builds has a verified source path/);
   assert.match(guidance, /View failed tests/);
   assert.match(guidance, /jobRunPath\(jobID, buildID\)/);
   assert.match(guidance, /to=\{destination\}/);
@@ -101,11 +193,13 @@ test("causal actions stay blocked while pattern chat and exact-JUnit Fix remain 
 
 test("guidance keeps a contained mobile action and points to the nearby test ledger", () => {
   const guidance = source("src/components/PatternFixGuidance.tsx");
+  const routing = source("src/components/CausalGroupFixRouting.tsx");
   const grid = source("src/components/TestResultsGrid.tsx");
 
   assert.match(guidance, /minWidth: 0/);
   assert.match(guidance, /maxWidth: "100%"/);
   assert.match(guidance, /minHeight: 44/);
   assert.match(guidance, /width: \{ xs: "100%", sm: "auto" \}/);
+  assert.match(routing, /minHeight: \{ xs: 44, sm: 32 \}/);
   assert.match(grid, /Choose a failed test from the Test results section below/);
 });

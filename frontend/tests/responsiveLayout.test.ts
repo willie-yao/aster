@@ -46,8 +46,8 @@ test("test analysis and run history reflow at mobile and zoom widths", () => {
   assert.match(pattern, /<AnalysisBriefing[\s\S]*mobileSynopsis/);
   assert.doesNotMatch(pattern, /className="ai-aurora"/);
   assert.match(briefing, /component="section"[\s\S]*minWidth: 0[\s\S]*maxWidth: "100%"/);
-  assert.match(briefing, /mobileNotice[\s\S]*followUp[\s\S]*DetailSectionBand title="Full analysis"/);
-  assert.match(pattern, /followUp=\{analysisOnly/);
+  assert.match(briefing, /mobileNotice[\s\S]*DetailSectionBand title="Full analysis"/);
+  assert.match(pattern, /<CausalGroupRemediation[\s\S]*group=\{group\}/);
   assert.match(testDetail, /overflowX: "clip"/);
   assert.match(testDetail, /failure_location[\s\S]*overflowWrap: "anywhere"/);
   assert.match(timeline, /width: "100%"[\s\S]*overflowX: "auto"[\s\S]*overflowY: "hidden"/);

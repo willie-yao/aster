@@ -393,6 +393,21 @@ an unverified target. That handoff remains deferred until the Claude and real
 historical gates pass and the exact final Fix executor passes a separate
 single-use smoke.
 
+Because the operation is per causal group, the dashboard renders remediation
+state inside each causal group card rather than once per pattern. The UI reports
+why an operation cannot start instead of showing a pending-looking default:
+
+- Capability disabled or unauthenticated deploy: **Unavailable**, with no
+  control. A published non-default verdict still renders, so disabling the
+  capability does not hide an earlier real result.
+- Causal group covering fewer than two builds: **Not eligible**, matching the
+  `>= 2` gate in `validate.go`, `resolver.go`, and
+  `models.WithDefaultPatternRemediationInvestigations`. The card instead links to
+  the per-test Fix investigation, which is the correct path for a single-build
+  cause.
+- Causal group without an assigned id and content hash: **Not addressable**,
+  since no operation reference can be constructed.
+
 ## Experimental causal Fix PR preview
 
 The v0.9 beta may separately enable `server.remediationInvestigation.fixPreview.enabled` after authenticated remediation investigation and an Agent Sandbox fix runtime are configured. The gate is disabled by default and advertises `causal_remediation_fix_preview` only when the server has authentication, remediation re-verification, and a fix runtime.
