@@ -172,6 +172,11 @@ func TestConcurrentStartsBoundResolverCalls(t *testing.T) {
 	resolver := &fakeResolver{gate: make(chan struct{})}
 	runner := newFakeRunner()
 	service := newService(t, resolver, runner, Options{MaxQueued: bound})
+	// Idempotent so a failed assertion cannot strand the parked callers.
+	openGate := sync.OnceFunc(func() { close(resolver.gate) })
+	defer openGate()
+	releaseRuns := sync.OnceFunc(func() { close(runner.release) })
+	defer releaseRuns()
 
 	var busy int32
 	var wg sync.WaitGroup
@@ -210,13 +215,13 @@ func TestConcurrentStartsBoundResolverCalls(t *testing.T) {
 	if got := atomic.LoadInt32(&busy); got != callers-bound {
 		t.Errorf("rejected starts = %d, want %d", got, callers-bound)
 	}
-	close(resolver.gate)
+	openGate()
 	wg.Wait()
 
 	if got := resolver.calls(); got != bound {
 		t.Errorf("resolver calls after the gate opened = %d, want %d", got, bound)
 	}
-	close(runner.release)
+	releaseRuns()
 }
 
 // A rejected start did no work, so it must leave no trace a later request would
@@ -289,6 +294,76 @@ func TestAQueuedEscalationTimesOutWithoutRunning(t *testing.T) {
 	if _, ok := restored[ref.identity()]; !ok {
 		t.Error("the timed-out escalation should be a finished, prunable record")
 	}
+}
+
+// blockingResolver stands in for the bucket and GitHub reads: it does nothing
+// until its context ends.
+type blockingResolver struct{ entered chan struct{} }
+
+func newBlockingResolver() *blockingResolver {
+	return &blockingResolver{entered: make(chan struct{})}
+}
+
+func (b *blockingResolver) Resolve(ctx context.Context, _ Ref) (Resolved, error) {
+	close(b.entered)
+	<-ctx.Done()
+	return Resolved{}, ctx.Err()
+}
+
+// Resolution reads the artifact bucket and GitHub, so it is part of the
+// accepted lifetime rather than an unbounded prelude to it. Anything that ends
+// that lifetime must reach a request that is still resolving, or the admission
+// token it holds outlives its budget and stalls a shutdown drain.
+func TestResolutionObservesTheAcceptedLifetime(t *testing.T) {
+	assertDrains := func(t *testing.T, service *Service) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := service.Wait(ctx); err != nil {
+			t.Fatalf("Wait: %v, want the admission token released", err)
+		}
+	}
+
+	t.Run("the escalation deadline bounds resolution", func(t *testing.T) {
+		service := newService(t, newBlockingResolver(), newFakeRunner(),
+			Options{Timeout: 50 * time.Millisecond})
+		if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); err == nil {
+			t.Fatal("want an error once the accepted lifetime expires")
+		}
+		assertDrains(t, service)
+	})
+
+	t.Run("shutdown cancels resolution", func(t *testing.T) {
+		resolver := newBlockingResolver()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		service, err := New(ctx, resolver, newFakeRunner(), Options{})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		go func() {
+			<-resolver.entered
+			cancel()
+		}()
+		if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); err == nil {
+			t.Fatal("want an error once the service is shutting down")
+		}
+		assertDrains(t, service)
+	})
+
+	t.Run("a departed caller cancels resolution", func(t *testing.T) {
+		resolver := newBlockingResolver()
+		service := newService(t, resolver, newFakeRunner(), Options{})
+		callerCtx, cancelCaller := context.WithCancel(context.Background())
+		go func() {
+			<-resolver.entered
+			cancelCaller()
+		}()
+		if _, err := service.Start(callerCtx, testRef("TestA"), "octocat", "req-1"); err == nil {
+			t.Fatal("want an error once the caller goes away")
+		}
+		assertDrains(t, service)
+	})
 }
 
 func TestStartIsIdempotentForTheSameSubject(t *testing.T) {
@@ -570,6 +645,7 @@ func TestConcurrentFinishesDoNotLosePersistedResults(t *testing.T) {
 		<-blocked
 	}()
 	<-held
+	defer close(blocked)
 
 	const queued = 12
 	for i := 0; i < queued; i++ {
@@ -584,7 +660,6 @@ func TestConcurrentFinishesDoNotLosePersistedResults(t *testing.T) {
 	if err := service.Wait(waitCtx); err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
-	close(blocked)
 
 	service.mu.Lock()
 	inMemory := len(service.records)

@@ -258,9 +258,9 @@ The contract is deliberately narrow:
 - **One escalation runs at a time**, no matter how many maintainers click, and
   only a few more may queue behind it. Admission is reserved before any artifact
   or GitHub read, so a burst of clicks cannot fan out into upstream requests; a
-  start past the bound is rejected with `409` instead of queueing. Queue time
-  counts against the escalation timeout, so a request that never reaches the
-  slot fails as timed out rather than waiting indefinitely, and can be retried.
+  start past the bound is rejected with `409` instead of queueing. One deadline
+  covers the whole accepted lifetime, so a request that never reaches the slot
+  fails as timed out rather than waiting indefinitely, and can be retried.
   Results are shared between admins rather than per-requester, so two
   maintainers looking at the same failure do not each pay for an analysis.
 - **A failed escalation can be retried.** A provider error, a timeout, or a

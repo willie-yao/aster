@@ -102,8 +102,8 @@ type Runner interface {
 
 // Options bound the service.
 type Options struct {
-	// Timeout bounds one escalation, counted from acceptance rather than from
-	// the moment it starts running, so queue time is bounded too.
+	// Timeout bounds one escalation's whole accepted lifetime: resolution,
+	// queue time, and the analysis itself.
 	Timeout time.Duration
 	// MaxQueued bounds accepted-but-unfinished escalations, including the one
 	// running. A start past the bound is rejected with ErrBusy instead of
@@ -251,14 +251,26 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	// so a shutdown drain does not miss work that has not reached its goroutine
 	// yet. It is released exactly once, by whoever ends up owning the token.
 	s.wg.Add(1)
+	// One deadline spans resolution, queue time, and the analysis, so the whole
+	// accepted lifetime is bounded rather than just the part after the slot is
+	// won. Rooting it in the service context means a shutdown also cancels work
+	// that has not started running yet.
+	lifetime, endLifetime := context.WithTimeout(s.ctx, s.opts.Timeout)
 	release := func() {
+		endLifetime()
 		<-s.admitted
 		s.wg.Done()
 	}
 
 	// Resolution happens outside the lock because it reads published state and
 	// GitHub. It also rejects failures the deterministic pass already explained.
-	resolved, err := s.resolver.Resolve(ctx, ref)
+	// It observes the caller's context too, so a client that goes away stops the
+	// bucket and GitHub work it asked for.
+	resolveCtx, cancelResolve := context.WithCancel(lifetime)
+	stopPropagation := context.AfterFunc(ctx, cancelResolve)
+	resolved, err := s.resolver.Resolve(resolveCtx, ref)
+	stopPropagation()
+	cancelResolve()
 	if err != nil {
 		release()
 		return View{}, err
@@ -286,7 +298,7 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	view := rec.view
 	s.mu.Unlock()
 
-	go s.run(rec, resolved, release)
+	go s.run(lifetime, rec, resolved, release)
 	return view, nil
 }
 
@@ -311,9 +323,10 @@ func (s *Service) Get(ref Ref) (View, error) {
 	return View{Ref: ref, State: StateNotStarted}, nil
 }
 
-// Wait blocks until every accepted escalation has persisted a terminal outcome,
-// or until ctx is done. Acceptance covers resolution too, so a shutdown drain
-// does not race a request that has not started running yet.
+// Wait blocks until every admitted escalation has released its slot, or until
+// ctx is done. Admission covers resolution too, so a shutdown drain does not
+// race a request that has not started running yet, and every escalation that
+// reached a record has persisted its outcome by the time Wait returns.
 func (s *Service) Wait(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
@@ -328,16 +341,12 @@ func (s *Service) Wait(ctx context.Context) error {
 	}
 }
 
-func (s *Service) run(rec *record, resolved Resolved, release func()) {
-	// The admission token and its wait-group entry are held until the
-	// escalation has persisted its outcome, so a queue slot frees only when the
-	// work it stands for is done and a drain cannot end early.
+func (s *Service) run(ctx context.Context, rec *record, resolved Resolved, release func()) {
+	// The admission token, its wait-group entry, and the accepted lifetime are
+	// held until the escalation has persisted its outcome, so a queue slot
+	// frees only when the work it stands for is done and a drain cannot end
+	// early.
 	defer release()
-
-	// The deadline starts here rather than after the slot is acquired, so queue
-	// time is bounded and visible instead of unbounded.
-	ctx, cancel := context.WithTimeout(s.ctx, s.opts.Timeout)
-	defer cancel()
 
 	// Waiting for the single slot keeps queued work visible rather than
 	// rejecting it, while still admitting exactly one analysis at a time. A
