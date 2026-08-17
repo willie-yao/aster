@@ -393,6 +393,31 @@ func (s *ContainerStateStore) TraceStore() *ai.TraceStore {
 	return s.traces
 }
 
+// LinkVerifications exposes durable file-link verification storage. The adapter
+// follows cache replacement in Merge, so callers may hold it for a whole pass.
+func (s *ContainerStateStore) LinkVerifications() ai.LinkVerificationStore {
+	if s == nil {
+		return nil
+	}
+	return containerLinkVerifications{store: s}
+}
+
+// containerLinkVerifications routes link verification through the store's lock
+// so it always reads and writes the current shared cache.
+type containerLinkVerifications struct{ store *ContainerStateStore }
+
+func (c containerLinkVerifications) LoadLinkVerification(key string) (bool, bool) {
+	c.store.mu.Lock()
+	defer c.store.mu.Unlock()
+	return c.store.cache.LoadLinkVerification(key)
+}
+
+func (c containerLinkVerifications) StoreLinkVerification(key string, present bool) {
+	c.store.mu.Lock()
+	defer c.store.mu.Unlock()
+	c.store.cache.StoreLinkVerification(key, present)
+}
+
 // Save persists the current shared trace and cache generation.
 func (s *ContainerStateStore) Save() error {
 	if s == nil {
@@ -455,6 +480,9 @@ func (s *ContainerStateStore) Merge(state ContainerAnalysisState) error {
 	traces.SetEngine(s.traceEngine)
 	cache := ai.NewCache(s.dataDir)
 	cache.Merge(state.CacheEntries)
+	// Link verifications resolved earlier in this pass live only in memory.
+	// Carry them across the cache reload so published links stay stable.
+	cache.Merge(s.cache.EntriesWithPrefix(ai.LinkVerificationKeyPrefix))
 	for _, entry := range s.staged {
 		if err := cache.StoreEntry(entry); err != nil {
 			return fmt.Errorf("preserve staged container cache entry: %w", err)
