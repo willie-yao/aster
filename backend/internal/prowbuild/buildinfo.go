@@ -8,6 +8,7 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/models"
@@ -127,4 +128,35 @@ func DiscoverJUnitPathsWithStatus(ctx context.Context, b storage.Backend, loc Bu
 	complete := treeErr == nil && !truncated
 	permanentlyTruncated := treeErr == nil && truncated
 	return paths, complete, permanentlyTruncated, nil
+}
+
+// pullRevisionRE matches a full commit SHA, optionally with Prow's 24-character
+// suffix for a synthesized merge commit.
+var pullRevisionRE = regexp.MustCompile(`^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$`)
+
+// PullHeadRevision returns the pull request head commit a presubmit build
+// checked out. Prow records composite presubmit refs as
+// "<base-ref>:<base-sha>,<pull-number>:<pull-sha>", so the pull's own segment
+// carries the head. Reports false when refs do not name that pull's revision.
+func PullHeadRevision(refs map[string]string, repo, pullNumber string) (string, bool) {
+	if repo == "" || pullNumber == "" {
+		return "", false
+	}
+	for name, value := range refs {
+		if !strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(repo)) {
+			continue
+		}
+		for _, segment := range strings.Split(value, ",") {
+			ref, revision, found := strings.Cut(strings.TrimSpace(segment), ":")
+			if !found || strings.TrimSpace(ref) != pullNumber {
+				continue
+			}
+			revision = strings.TrimSpace(revision)
+			if !pullRevisionRE.MatchString(revision) {
+				return "", false
+			}
+			return strings.ToLower(revision), true
+		}
+	}
+	return "", false
 }

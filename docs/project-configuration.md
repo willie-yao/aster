@@ -166,6 +166,44 @@ source:
   include_presubmits: true
 ```
 
+## Pull request triage
+
+The pull request view reports the presubmit results already published for the
+open pull requests of `branding.source_repo`. It answers "which of my open pull
+requests have failing tests, and which tests are they" without opening each one
+on GitHub. It is opt-in because every pass costs one GitHub listing plus
+per-check bucket reads.
+
+```yaml
+pull_requests:
+  enabled: true
+  # Optional bounds; omit to use the engine defaults.
+  max: 100            # open pull requests per pass, most recently updated first
+  builds_per_job: 3   # builds listed per presubmit before the newest is selected
+```
+
+This is independent of `source.include_presubmits`, which controls whether
+presubmits appear as rows in the main job dashboard. Pull request triage always
+resolves presubmits from the job catalog, so it works either way.
+
+Draft pull requests are excluded. Each pass writes `pull-requests.json` and one
+`pull-requests/<number>.json` per open pull request, and removes detail files for
+pull requests that are no longer open.
+
+A few behaviors worth knowing:
+
+- A check whose build tested an older head than the pull request's current head
+  is marked `stale`, so a green check on outdated code is not mistaken for a
+  green check on the current one.
+- A job that fails without any failing JUnit case, such as a build or verify
+  step, reports one synthesized `Prow job execution` failure so every failing
+  check names a subject.
+- A pull request whose builds have aged out of the bucket's retention window
+  reports `UNKNOWN` with no checks. GitHub may still show statuses for those
+  runs because commit statuses outlive the artifacts.
+- A triage failure never aborts the pass. The previously written view is kept
+  and the dashboard still publishes.
+
 ## Categories
 
 Categories are optional. Without them, the landing page renders one flat job

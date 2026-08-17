@@ -81,6 +81,51 @@ func WriteSearchIndex(dir string, index models.SearchIndex) error {
 	return writeJSON(filepath.Join(dir, "search-index.json"), index)
 }
 
+// PullRequestIndexFilename is the public open-pull-request index.
+const PullRequestIndexFilename = "pull-requests.json"
+
+// pullRequestDir holds the per-pull-request detail files.
+const pullRequestDir = "pull-requests"
+
+// WritePullRequestIndex writes pull-requests.json to dir.
+func WritePullRequestIndex(dir string, index models.PullRequestIndex) error {
+	if index.PullRequests == nil {
+		index.PullRequests = []models.PullRequestSummary{}
+	}
+	return writeJSON(filepath.Join(dir, PullRequestIndexFilename), index)
+}
+
+// WritePullRequestDetail writes one pull request's detail file under
+// dir/pull-requests.
+func WritePullRequestDetail(dir string, detail models.PullRequestDetail) error {
+	if detail.Checks == nil {
+		detail.Checks = []models.PullRequestCheck{}
+	}
+	return writeJSON(filepath.Join(dir, pullRequestDir, models.PullRequestDataFilename(detail.Number)), detail)
+}
+
+// WritePullRequests writes the index and every detail file, then removes detail
+// files for pull requests that are no longer open.
+func WritePullRequests(dir string, index models.PullRequestIndex, details []models.PullRequestDetail) error {
+	if err := WritePullRequestIndex(dir, index); err != nil {
+		return err
+	}
+	for _, detail := range details {
+		if err := WritePullRequestDetail(dir, detail); err != nil {
+			return err
+		}
+	}
+	return prunePullRequestDetails(dir, details)
+}
+
+func prunePullRequestDetails(dir string, details []models.PullRequestDetail) error {
+	expected := make(map[string]bool, len(details))
+	for _, detail := range details {
+		expected[models.PullRequestDataFilename(detail.Number)] = true
+	}
+	return pruneStaleJSON(filepath.Join(dir, pullRequestDir), expected, "pull request detail")
+}
+
 // WriteManifest writes manifest.json with the resolved project config so the
 // frontend knows its title, base path, and repo links at runtime.
 func WriteManifest(dir string, cfg *project.Config) error {
@@ -118,8 +163,13 @@ func pruneJobDetails(dir string, details []models.JobDetail) error {
 	for _, detail := range details {
 		expected[models.JobDataFilename(detail.JobID)] = true
 	}
-	jobsDir := filepath.Join(dir, "jobs")
-	entries, err := os.ReadDir(jobsDir)
+	return pruneStaleJSON(filepath.Join(dir, "jobs"), expected, "job detail")
+}
+
+// pruneStaleJSON removes .json files in dir that are not in expected. A missing
+// directory is not an error because nothing has been written there yet.
+func pruneStaleJSON(dir string, expected map[string]bool, label string) error {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -130,8 +180,8 @@ func pruneJobDetails(dir string, details []models.JobDetail) error {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" || expected[entry.Name()] {
 			continue
 		}
-		if err := os.Remove(filepath.Join(jobsDir, entry.Name())); err != nil {
-			return fmt.Errorf("remove stale job detail %s: %w", entry.Name(), err)
+		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil {
+			return fmt.Errorf("remove stale %s %s: %w", label, entry.Name(), err)
 		}
 	}
 	return nil

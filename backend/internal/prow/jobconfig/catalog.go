@@ -2,6 +2,7 @@ package jobconfig
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -90,6 +91,39 @@ func (j JobDefinition) TestsRepo(repo string) bool {
 		}
 	}
 	return false
+}
+
+// AppliesToBranch reports whether this job's branch selectors admit branch.
+func (j JobDefinition) AppliesToBranch(branch string) (bool, error) {
+	return BranchSelectorMatches(j.Name, j.Branches, j.SkipBranches, branch)
+}
+
+// BranchSelectorMatches applies Prow's branches and skip_branches regex
+// selectors. skip_branches wins, and an empty branches list admits every
+// branch. jobName only labels selector errors.
+func BranchSelectorMatches(jobName string, branches, skipBranches []string, branch string) (bool, error) {
+	for _, pattern := range skipBranches {
+		matches, err := regexp.MatchString(pattern, branch)
+		if err != nil {
+			return false, fmt.Errorf("invalid skip_branches selector for %s: %w", jobName, err)
+		}
+		if matches {
+			return false, nil
+		}
+	}
+	if len(branches) == 0 {
+		return true, nil
+	}
+	for _, pattern := range branches {
+		matches, err := regexp.MatchString(pattern, branch)
+		if err != nil {
+			return false, fmt.Errorf("invalid branches selector for %s: %w", jobName, err)
+		}
+		if matches {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ParseCatalog parses every periodic, presubmit, and postsubmit in one Prow YAML file.

@@ -331,6 +331,7 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 	if err != nil {
 		return nil, err
 	}
+	p.runPullRequestPass(fetchCtx)
 	defer p.runShadowAnalysis(ctx, res)
 	defer p.runCausalCritic(fetchCtx, res)
 	if p.opts.SkipSideEffects {
@@ -1442,15 +1443,7 @@ func eligibleForBuildFailure(result *models.BuildResult) bool {
 }
 
 func newBuildFailure(result *models.BuildResult) models.TestCase {
-	return models.TestCase{
-		Name:            "Prow job execution",
-		SuiteName:       "Prow",
-		ClassName:       "job",
-		Source:          models.TestCaseSourceBuild,
-		Status:          "failed",
-		DurationSeconds: result.DurationSeconds,
-		FailureMessage:  "The Prow job failed without reporting a failed JUnit test case. Investigate build-log.txt for the root cause.",
-	}
+	return models.NewProwJobExecutionFailure(result.DurationSeconds)
 }
 
 func configuredFixRepo(cfg *project.Config) string {

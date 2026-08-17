@@ -3,6 +3,7 @@ package models
 
 import (
 	"encoding/base64"
+	"strconv"
 	"time"
 )
 
@@ -47,6 +48,11 @@ func JobIDFor(jobType, repo, name string) string {
 // JobDataFilename returns the injective, URL-safe filename for one JobID.
 func JobDataFilename(jobID string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(jobID)) + ".json"
+}
+
+// PullRequestDataFilename returns the per-pull-request detail filename.
+func PullRequestDataFilename(number int) string {
+	return strconv.Itoa(number) + ".json"
 }
 
 // BuildInfo represents metadata for a single prow build.
@@ -200,7 +206,24 @@ type AIAnalysis struct {
 const (
 	// TestCaseSourceBuild identifies a build-level failure not represented by JUnit.
 	TestCaseSourceBuild = "build"
+	// ProwJobExecutionFailureName is the synthesized case that stands in for a
+	// Prow job that failed without reporting a failed JUnit test case.
+	ProwJobExecutionFailureName = "Prow job execution"
 )
+
+// NewProwJobExecutionFailure returns the build-level stand-in case for a failed
+// job with no failing JUnit case, so every failure has an analyzable subject.
+func NewProwJobExecutionFailure(durationSeconds float64) TestCase {
+	return TestCase{
+		Name:            ProwJobExecutionFailureName,
+		SuiteName:       "Prow",
+		ClassName:       "job",
+		Source:          TestCaseSourceBuild,
+		Status:          "failed",
+		DurationSeconds: durationSeconds,
+		FailureMessage:  "The Prow job failed without reporting a failed JUnit test case. Investigate build-log.txt for the root cause.",
+	}
+}
 
 // TestCase represents one test or build-level failure.
 type TestCase struct {
@@ -575,6 +598,85 @@ type BuildFailureSummary struct {
 	Provenance    string `json:"provenance,omitempty"`
 	BuildLogURL   string `json:"build_log_url,omitempty"`
 	JobDetailURL  string `json:"job_detail_url"`
+}
+
+// PullRequestCIState summarizes the presubmit results observed for one pull request.
+type PullRequestCIState string
+
+const (
+	PullRequestCIUnknown PullRequestCIState = "UNKNOWN"
+	PullRequestCIPending PullRequestCIState = "PENDING"
+	PullRequestCIPassing PullRequestCIState = "PASSING"
+	PullRequestCIFailing PullRequestCIState = "FAILING"
+)
+
+// PullRequestSummary is one open pull request's row in pull-requests.json.
+type PullRequestSummary struct {
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	Author  string `json:"author"`
+	Repo    string `json:"repo"`
+	BaseRef string `json:"base_ref"`
+	HeadSHA string `json:"head_sha"`
+	HTMLURL string `json:"html_url"`
+	// CreatedAt and UpdatedAt come from GitHub and drive staleness display.
+	CreatedAt time.Time          `json:"created_at"`
+	UpdatedAt time.Time          `json:"updated_at"`
+	CIState   PullRequestCIState `json:"ci_state"`
+	// ChecksObserved counts presubmits with at least one build for this pull
+	// request. ChecksFailing counts those whose newest build did not pass.
+	ChecksObserved int `json:"checks_observed"`
+	ChecksFailing  int `json:"checks_failing"`
+	// FailingTests totals the failing cases across every observed check,
+	// including cases omitted from the detail file by the per-check cap.
+	FailingTests int `json:"failing_tests"`
+}
+
+// PullRequestCheck is one presubmit job's newest observed build on a pull request.
+type PullRequestCheck struct {
+	JobName string `json:"job_name"`
+	JobID   string `json:"job_id"`
+	// Optional marks a presubmit that does not block merge.
+	Optional bool      `json:"optional,omitempty"`
+	BuildID  string    `json:"build_id"`
+	Passed   bool      `json:"passed"`
+	Result   string    `json:"result,omitempty"`
+	Started  time.Time `json:"started"`
+	Finished time.Time `json:"finished,omitempty"`
+	// TestedSHA is the pull request head this build checked out. Stale reports
+	// that it differs from the pull request's current head, so the result
+	// describes an older revision.
+	TestedSHA   string `json:"tested_sha,omitempty"`
+	Stale       bool   `json:"stale,omitempty"`
+	WebURL      string `json:"web_url,omitempty"`
+	BuildLogURL string `json:"build_log_url,omitempty"`
+	// TestsFailed is the true failing-case count for the build. Failures holds
+	// at most PullRequestCheckFailureCap of them, so it can be shorter.
+	TestsFailed int        `json:"tests_failed,omitempty"`
+	Failures    []TestCase `json:"failures,omitempty"`
+	// FailuresTruncated reports that the cap dropped some failing cases.
+	FailuresTruncated bool `json:"failures_truncated,omitempty"`
+}
+
+// PullRequestCheckFailureCap bounds the failing cases stored per check so one
+// badly broken e2e build cannot inflate a pull request detail file.
+const PullRequestCheckFailureCap = 50
+
+// PullRequestIndex is the top-level structure for pull-requests.json.
+type PullRequestIndex struct {
+	GeneratedAt time.Time `json:"generated_at"`
+	// Repo is the "org/repo" whose open pull requests were triaged.
+	Repo         string               `json:"repo"`
+	PullRequests []PullRequestSummary `json:"pull_requests"`
+}
+
+// PullRequestDetail is the per-pull-request structure for
+// pull-requests/{number}.json.
+type PullRequestDetail struct {
+	PullRequestSummary
+	GeneratedAt time.Time `json:"generated_at"`
+	// Checks are ordered failing-first so the detail page leads with signal.
+	Checks []PullRequestCheck `json:"checks"`
 }
 
 // FlakinessReport is the top-level structure for flakiness.json.

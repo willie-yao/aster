@@ -1782,3 +1782,59 @@ func TestValidateRejectsLegacyLocalVerifierWithAgentSandbox(t *testing.T) {
 		t.Fatalf("validation error = %v", err)
 	}
 }
+
+func TestValidate_PullRequests(t *testing.T) {
+	cases := []struct {
+		name         string
+		pullRequests *PullRequests
+		wantErr      bool
+	}{
+		{name: "absent"},
+		{name: "enabled with defaults", pullRequests: &PullRequests{Enabled: true}},
+		{name: "explicit bounds", pullRequests: &PullRequests{Enabled: true, Max: 25, BuildsPerJob: 5}},
+		{name: "negative max", pullRequests: &PullRequests{Enabled: true, Max: -1}, wantErr: true},
+		{name: "negative builds per job", pullRequests: &PullRequests{Enabled: true, BuildsPerJob: -1}, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.PullRequests = tc.pullRequests
+			err := cfg.Validate()
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("Validate error = %v, wantErr %t", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestParsePullRequestsBlock(t *testing.T) {
+	cfg, err := parse(strings.NewReader(`
+id: example
+name: Example
+testgrid:
+  dashboard: d
+storage:
+  provider: gcs
+  bucket: b
+branding:
+  title: t
+  base_path: /p
+  site_url: https://example.test/p
+  source_repo:
+    owner: example
+    name: project
+pull_requests:
+  enabled: true
+  max: 25
+  builds_per_job: 5
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.PullRequests == nil || !cfg.PullRequests.Enabled {
+		t.Fatalf("pull requests = %+v, want enabled", cfg.PullRequests)
+	}
+	if cfg.PullRequests.Max != 25 || cfg.PullRequests.BuildsPerJob != 5 {
+		t.Errorf("pull request bounds = %+v", cfg.PullRequests)
+	}
+}
