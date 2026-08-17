@@ -21,8 +21,8 @@ interface JobHealthTableProps {
 
 const desktopBreakpoint = "@media (min-width: 1024px)";
 const wideBreakpoint = "@media (min-width: 1200px)";
-const compactColumns = "minmax(210px, 2fr) 76px 174px 76px 78px 58px 82px";
-const wideColumns = "minmax(280px, 2.4fr) 104px 192px 88px 96px 64px 88px";
+const compactColumns = "minmax(210px, 2fr) 76px 288px 76px 78px 58px 82px";
+const wideColumns = "minmax(280px, 2.4fr) 104px 288px 88px 96px 64px 88px";
 const headers = ["Job", "Branch", "Recent runs", "Last 10 pass", "Last run", "Duration", "Current"];
 
 function jobValues(job: JobSummary) {

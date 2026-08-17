@@ -153,6 +153,61 @@ test("job health ledger keeps job and run links separate", () => {
   assert.doesNotMatch(html, /<a\b[^>]*>(?:(?!<\/a>)[\s\S])*<a\b/);
 });
 
+test("run sparkline shows every configured run up to its cap, oldest first", () => {
+  const runsOf = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      build_id: String(200 - i),
+      passed: i % 2 === 0,
+      timestamp: "2026-08-05T10:00:00Z",
+    }));
+  const sparklineRuns = (html: string) =>
+    [...html.matchAll(/aria-label="Run (\d+), /g)].map((match) => match[1]);
+
+  // Both surfaces render the mobile and desktop rows, so each run appears twice.
+  const ledger = sparklineRuns(
+    render(createElement(JobHealthTable, {
+      sections: [{ id: "capz-e2e", jobs: [job({ recent_runs: runsOf(10) })] }],
+    })),
+  );
+  assert.equal(ledger.length, 20);
+  // Newest run is rendered last so the sparkline reads left to right.
+  assert.deepEqual(ledger.slice(0, 10), ["191", "192", "193", "194", "195", "196", "197", "198", "199", "200"]);
+
+  // A deeper history is truncated to the newest runs rather than overflowing.
+  const capped = sparklineRuns(
+    render(createElement(JobHealthTable, {
+      sections: [{ id: "capz-e2e", jobs: [job({ recent_runs: runsOf(20) })] }],
+    })),
+  );
+  assert.equal(capped.length, 24);
+  assert.deepEqual(capped.slice(0, 12), ["189", "190", "191", "192", "193", "194", "195", "196", "197", "198", "199", "200"]);
+});
+
+test("overview columns reserve a full-size target for every run the sparkline caps at", () => {
+  const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
+  const sparkline = source("src/components/Sparkline.tsx");
+  const ledger = source("src/components/JobHealthTable.tsx");
+  const attention = source("src/components/NeedsAttention.tsx");
+  const number = (pattern: RegExp, text: string) => Number(pattern.exec(text)?.[1]);
+
+  const maxRuns = number(/const maxRuns = (\d+)/, sparkline);
+  const cell = number(/const desktopCell = (\d+)/, sparkline);
+  assert.ok(maxRuns >= 10, "projects configure at least 10 builds");
+  // Each dot is its own link, and they sit edge to edge, so the cell width is
+  // the spacing WCAG 2.5.8 measures between adjacent targets.
+  assert.ok(cell >= 24, "run links keep the minimum pointer target size");
+
+  // Every row shares one grid template, so the columns must reserve the cap.
+  const runsTrack = (declaration: RegExp) =>
+    number(/^minmax\([^)]*\)\s+\d+px\s+(\d+)px/, declaration.exec(ledger)![1]);
+  const reserved = maxRuns * cell;
+  assert.ok(runsTrack(/const compactColumns = "([^"]+)"/) >= reserved);
+  assert.ok(runsTrack(/const wideColumns = "([^"]+)"/) >= reserved);
+  // The attention evidence column also carries pr: 1.5 (12px) of padding.
+  const evidence = number(/gridTemplateColumns: "minmax\(0, 1fr\) (\d+)px"/, attention);
+  assert.ok(evidence >= reserved + 12);
+});
+
 test("detail run controls include result build and date context", () => {
   const run: BuildResult = {
     build_id: "123",
@@ -394,7 +449,9 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(health, /mix of passing and failing results/);
   assert.doesNotMatch(health, /borderRight:/);
   assert.match(search, /width: 44[\s\S]*height: 44[\s\S]*p: 0/);
-  assert.match(sparkline, /repeat\(4, 44px\)/);
+  assert.match(sparkline, /repeat\(auto-fill, 44px\)/);
+  assert.match(sparkline, /width: "100%"/);
+  assert.match(sparkline, /repeat\(\$\{columns\}, \$\{desktopCell\}px\)/);
   assert.match(sparkline, /width: 44[\s\S]*height: 44/);
   assert.match(sparkline, /formatAccessibleDate\(run\.timestamp\)/);
   assert.match(dashboard, /useSearchParams\(\)/);

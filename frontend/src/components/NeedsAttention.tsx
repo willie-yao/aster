@@ -159,7 +159,7 @@ export function FeaturedPatternRow({
         transition: "background-color 140ms ease",
         "&:hover, &:focus-within": { bgcolor: "surface.containerHigh" },
         [attentionDesktopBreakpoint]: {
-          gridTemplateColumns: "minmax(0, 1fr) 190px",
+          gridTemplateColumns: "minmax(0, 1fr) 300px",
           gridTemplateAreas: '"analysis evidence"',
           minHeight: lead ? 126 : 96,
         },
