@@ -1,8 +1,8 @@
-package e2e
+package benchmarks
 
 import "strings"
 
-const fixBenchmarkFixtureRoot = "backend/internal/e2e/testdata/fixbench"
+const fixBenchmarkFixtureRoot = "backend/benchmarks/testdata/fixbench"
 
 type fixBenchmarkCase struct {
 	Name                string

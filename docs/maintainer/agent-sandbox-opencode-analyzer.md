@@ -322,7 +322,7 @@ ANALYZER_BENCH_PREPARE_ONLY=1 \
 ANALYZER_BENCH_SOURCE_ROOT=<clean-source-checkout> \
 ANALYZER_BENCH_PREPARED_JSON=<private-prepared.json> \
 ANALYZER_BENCH_ARM_LABEL=arm-b \
-BENCH_MANIFEST=internal/e2e/testdata/benchmarks/cross-project-eval.json \
+BENCH_MANIFEST=benchmarks/testdata/benchmarks/cross-project-eval.json \
 BENCH_CASE=<case-id> \
 BENCH_PROJECT_DIR=<pinned-consumer> \
 BENCH_MODEL_LABEL=model-a \
@@ -337,7 +337,7 @@ AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_AUTH_SECRET_NAME=<existing-secret-if-beare
 AGENT_SANDBOX_ANALYSIS_MODEL_PROVIDER_AUTH_SECRET_KEY=<secret-key-if-bearer> \
 AGENT_SANDBOX_ANALYSIS_TIMEOUT=15m \
 AGENT_SANDBOX_ANALYSIS_OUTPUT_LIMIT_BYTES=262144 \
-go test ./internal/e2e -run '^TestAgentSandboxAnalyzerBenchmark$' -v -count=1
+go test ./benchmarks -run '^TestAgentSandboxAnalyzerBenchmark$' -v -count=1
 ```
 
 The prepared JSON contains the manifest hash plus the exact local source and
@@ -365,7 +365,7 @@ ANALYZER_BENCH_PREPARED_JSON=<private-prepared.json> \
 ANALYZER_BENCH_RESULTS_JSONL=<private-sandbox-results.jsonl> \
 ANALYZER_BENCH_ARM_LABEL=arm-b \
 BENCH_REPETITIONS=2 \
-BENCH_MANIFEST=internal/e2e/testdata/benchmarks/cross-project-eval.json \
+BENCH_MANIFEST=benchmarks/testdata/benchmarks/cross-project-eval.json \
 BENCH_CASE=<case-id> \
 BENCH_PROJECT_DIR=<pinned-consumer> \
 BENCH_MODEL_LABEL=model-a \
@@ -390,7 +390,7 @@ AGENT_SANDBOX_ANALYSIS_CPU_LIMIT=2 \
 AGENT_SANDBOX_ANALYSIS_MEMORY_REQUEST=512Mi \
 AGENT_SANDBOX_ANALYSIS_MEMORY_LIMIT=2Gi \
 AGENT_SANDBOX_ANALYSIS_EPHEMERAL_STORAGE_LIMIT=2Gi \
-go test ./internal/e2e -run '^TestAgentSandboxAnalyzerBenchmark$' -v -count=1 -timeout 60m
+go test ./benchmarks -run '^TestAgentSandboxAnalyzerBenchmark$' -v -count=1 -timeout 60m
 ```
 
 Run the in-process arm with `TestAIBenchmark`, the same case, consumer,
@@ -418,7 +418,7 @@ python3 hack/compare-agent-sandbox-analyzer-benchmark.py \
   --required-repetitions 2 \
   --blind-packets <private-blind-packets.json> \
   --blind-map <private-blind-map.json> \
-  --reference-manifest backend/internal/e2e/testdata/benchmarks/agent-sandbox-causal-references.json \
+  --reference-manifest backend/benchmarks/testdata/benchmarks/agent-sandbox-causal-references.json \
   --output-json <private-comparison.json>
 ```
 
@@ -488,7 +488,7 @@ python3 hack/compare-agent-sandbox-analyzer-benchmark.py \
   --blind-map-input <private-blind-map.json> \
   --blind-scores <private-blind-scores.json> \
   --score-freeze <private-score-freeze.json> \
-  --reference-manifest backend/internal/e2e/testdata/benchmarks/agent-sandbox-causal-references.json \
+  --reference-manifest backend/benchmarks/testdata/benchmarks/agent-sandbox-causal-references.json \
   --output-json <private-scored-comparison.json>
 ```
 

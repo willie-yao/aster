@@ -1,4 +1,4 @@
-package e2e
+package benchmarks
 
 import (
 	"encoding/json"
@@ -22,10 +22,10 @@ func TestAgentSandboxAnalyzerReport(t *testing.T) {
 	writeReportJSONL(t, inprocessPath, inprocess)
 	writeReportJSONL(t, sandboxPath, sandbox)
 	command := exec.Command(
-		"python3", filepath.Join("..", "..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
+		"python3", filepath.Join("..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
 		"--inprocess", inprocessPath,
 		"--sandbox", sandboxPath,
-		"--repo", filepath.Join("..", "..", ".."),
+		"--repo", filepath.Join("..", ".."),
 		"--holdout-case", "case",
 		"--expected-pairs", "3",
 		"--blind-packets", blindPackets,
@@ -98,7 +98,7 @@ func TestAgentSandboxAnalyzerReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	freezePath := filepath.Join(dir, "score-freeze.json")
-	freezeCommand := exec.Command("python3", filepath.Join("..", "..", "..", "hack", "freeze-agent-sandbox-blind-scores.py"), "--blind-packets", blindPackets, "--blind-scores", scoresPath, "--output", freezePath)
+	freezeCommand := exec.Command("python3", filepath.Join("..", "..", "hack", "freeze-agent-sandbox-blind-scores.py"), "--blind-packets", blindPackets, "--blind-scores", scoresPath, "--output", freezePath)
 	if output, err := freezeCommand.CombinedOutput(); err != nil {
 		t.Fatalf("freeze: %v: %s", err, output)
 	}
@@ -126,7 +126,7 @@ func TestAgentSandboxAnalyzerReport(t *testing.T) {
 			if err := os.WriteFile(malformedPath, encoded, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command("python3", filepath.Join("..", "..", "..", "hack", "freeze-agent-sandbox-blind-scores.py"), "--blind-packets", blindPackets, "--blind-scores", malformedPath, "--output", filepath.Join(dir, "bad-score-freeze.json"))
+			cmd := exec.Command("python3", filepath.Join("..", "..", "hack", "freeze-agent-sandbox-blind-scores.py"), "--blind-packets", blindPackets, "--blind-scores", malformedPath, "--output", filepath.Join(dir, "bad-score-freeze.json"))
 			if output, err := cmd.CombinedOutput(); err == nil {
 				t.Fatalf("malformed score freeze succeeded: %s", output)
 			}
@@ -151,7 +151,7 @@ func TestAgentSandboxAnalyzerReport(t *testing.T) {
 			if err := os.WriteFile(tamperedPacketsPath, data, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command("python3", filepath.Join("..", "..", "..", "hack", "freeze-agent-sandbox-blind-scores.py"), "--blind-packets", tamperedPacketsPath, "--blind-scores", scoresPath, "--output", filepath.Join(dir, "bad-freeze.json"))
+			cmd := exec.Command("python3", filepath.Join("..", "..", "hack", "freeze-agent-sandbox-blind-scores.py"), "--blind-packets", tamperedPacketsPath, "--blind-scores", scoresPath, "--output", filepath.Join(dir, "bad-freeze.json"))
 			if output, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(output), "packet_set_sha256") {
 				t.Fatalf("error=%v output=%s", err, output)
 			}
@@ -174,10 +174,10 @@ func TestAgentSandboxAnalyzerReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	scoredCommand := exec.Command(
-		"python3", filepath.Join("..", "..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
+		"python3", filepath.Join("..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
 		"--inprocess", inprocessPath,
 		"--sandbox", sandboxPath,
-		"--repo", filepath.Join("..", "..", ".."),
+		"--repo", filepath.Join("..", ".."),
 		"--holdout-case", "case",
 		"--expected-pairs", "3",
 		"--blind-map-input", blindMap,
@@ -212,7 +212,7 @@ func TestAgentSandboxAnalyzerReport(t *testing.T) {
 	if err := os.WriteFile(mutatedScoresPath, mutatedScoreData, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	mutatedScoreCommand := exec.Command("python3", filepath.Join("..", "..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"), "--inprocess", inprocessPath, "--sandbox", sandboxPath, "--repo", filepath.Join("..", "..", ".."), "--holdout-case", "case", "--expected-pairs", "3", "--blind-map-input", blindMap, "--blind-scores", mutatedScoresPath, "--score-freeze", freezePath, "--reference-manifest", references)
+	mutatedScoreCommand := exec.Command("python3", filepath.Join("..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"), "--inprocess", inprocessPath, "--sandbox", sandboxPath, "--repo", filepath.Join("..", ".."), "--holdout-case", "case", "--expected-pairs", "3", "--blind-map-input", blindMap, "--blind-scores", mutatedScoresPath, "--score-freeze", freezePath, "--reference-manifest", references)
 	mutatedScoreOutput, err := mutatedScoreCommand.CombinedOutput()
 	if err == nil || !strings.Contains(string(mutatedScoreOutput), "pre-unblinding score freeze") {
 		t.Fatalf("mutated score error=%v output=%s", err, mutatedScoreOutput)
@@ -236,10 +236,10 @@ func TestAgentSandboxAnalyzerReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	tamperedCommand := exec.Command(
-		"python3", filepath.Join("..", "..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
+		"python3", filepath.Join("..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
 		"--inprocess", inprocessPath,
 		"--sandbox", sandboxPath,
-		"--repo", filepath.Join("..", "..", ".."),
+		"--repo", filepath.Join("..", ".."),
 		"--blind-map-input", tamperedPath,
 		"--blind-scores", scoresPath,
 		"--score-freeze", freezePath,
@@ -310,10 +310,10 @@ func TestAgentSandboxAnalyzerReportRejectsIdentityMismatch(t *testing.T) {
 			writeReportJSONL(t, inprocessPath, inprocess)
 			writeReportJSONL(t, sandboxPath, sandbox)
 			command := exec.Command(
-				"python3", filepath.Join("..", "..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
+				"python3", filepath.Join("..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
 				"--inprocess", inprocessPath,
 				"--sandbox", sandboxPath,
-				"--repo", filepath.Join("..", "..", ".."),
+				"--repo", filepath.Join("..", ".."),
 			)
 			output, err := command.CombinedOutput()
 			if err == nil || !strings.Contains(string(output), test.expected) {
@@ -516,7 +516,7 @@ func TestAgentSandboxAnalyzerReportRejectsFullDiagnosisCreditForKueueReadinessNa
 	references := filepath.Join("testdata", "benchmarks", "agent-sandbox-causal-references.json")
 	writeReportJSONL(t, inprocessPath, inprocess)
 	writeReportJSONL(t, sandboxPath, sandbox)
-	command := exec.Command("python3", filepath.Join("..", "..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"), "--inprocess", inprocessPath, "--sandbox", sandboxPath, "--repo", filepath.Join("..", "..", ".."), "--expected-pairs", "3", "--blind-packets", packetsPath, "--blind-map", mapPath, "--reference-manifest", references)
+	command := exec.Command("python3", filepath.Join("..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"), "--inprocess", inprocessPath, "--sandbox", sandboxPath, "--repo", filepath.Join("..", ".."), "--expected-pairs", "3", "--blind-packets", packetsPath, "--blind-map", mapPath, "--reference-manifest", references)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("packets: %v: %s", err, output)
 	}
@@ -546,7 +546,7 @@ func TestAgentSandboxAnalyzerReportRejectsFullDiagnosisCreditForKueueReadinessNa
 		t.Fatal(err)
 	}
 	freezePath := filepath.Join(dir, "score-freeze.json")
-	freeze := exec.Command("python3", filepath.Join("..", "..", "..", "hack", "freeze-agent-sandbox-blind-scores.py"), "--blind-packets", packetsPath, "--blind-scores", scoresPath, "--output", freezePath)
+	freeze := exec.Command("python3", filepath.Join("..", "..", "hack", "freeze-agent-sandbox-blind-scores.py"), "--blind-packets", packetsPath, "--blind-scores", scoresPath, "--output", freezePath)
 	freezeOutput, err := freeze.CombinedOutput()
 	if err == nil || !strings.Contains(string(freezeOutput), "full diagnosis credit requires complete reference-aligned causal coverage") {
 		t.Fatalf("freeze error=%v output=%s", err, freezeOutput)
@@ -560,7 +560,7 @@ func TestAgentSandboxAnalyzerReportAcceptsTwoRepetitionCorrectedMatrix(t *testin
 	inprocessPath, sandboxPath := filepath.Join(dir, "inprocess.jsonl"), filepath.Join(dir, "sandbox.jsonl")
 	writeReportJSONL(t, inprocessPath, inprocess)
 	writeReportJSONL(t, sandboxPath, sandbox)
-	command := exec.Command("python3", filepath.Join("..", "..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"), "--inprocess", inprocessPath, "--sandbox", sandboxPath, "--repo", filepath.Join("..", "..", ".."), "--expected-pairs", "2", "--required-repetitions", "2", "--holdout-case", "case")
+	command := exec.Command("python3", filepath.Join("..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"), "--inprocess", inprocessPath, "--sandbox", sandboxPath, "--repo", filepath.Join("..", ".."), "--expected-pairs", "2", "--required-repetitions", "2", "--holdout-case", "case")
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("report: %v: %s", err, output)
@@ -575,7 +575,7 @@ func TestAgentSandboxAnalyzerReportAcceptsTwoRepetitionCorrectedMatrix(t *testin
 	}
 	writeReportJSONL(t, inprocessPath, allInprocess)
 	writeReportJSONL(t, sandboxPath, allSandbox)
-	extra := exec.Command("python3", filepath.Join("..", "..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"), "--inprocess", inprocessPath, "--sandbox", sandboxPath, "--repo", filepath.Join("..", "..", ".."), "--expected-pairs", "6", "--required-repetitions", "2", "--holdout-case", "case")
+	extra := exec.Command("python3", filepath.Join("..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"), "--inprocess", inprocessPath, "--sandbox", sandboxPath, "--repo", filepath.Join("..", ".."), "--expected-pairs", "6", "--required-repetitions", "2", "--holdout-case", "case")
 	extraOutput, err := extra.CombinedOutput()
 	if err != nil {
 		t.Fatalf("extra report: %v: %s", err, extraOutput)
@@ -726,10 +726,10 @@ func runAgentSandboxAnalyzerReportWithExpected(t *testing.T, inprocess, sandbox 
 	writeReportJSONL(t, inprocessPath, inprocess)
 	writeReportJSONL(t, sandboxPath, sandbox)
 	command := exec.Command(
-		"python3", filepath.Join("..", "..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
+		"python3", filepath.Join("..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
 		"--inprocess", inprocessPath,
 		"--sandbox", sandboxPath,
-		"--repo", filepath.Join("..", "..", ".."),
+		"--repo", filepath.Join("..", ".."),
 		"--holdout-case", "case",
 		"--expected-pairs", strconv.Itoa(expected),
 	)

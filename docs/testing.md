@@ -64,22 +64,26 @@ restart persistence, transition-email deduplication, and same-cause recurrence.
 A second bridge test proves the finalized pattern bridge reaches the same email
 side effects. Neither test sends real email, calls GitHub, or runs OpenCode.
 
-Fixtures live under `backend/internal/e2e/testdata`. Scrub secrets and private
+Fixtures live under `backend/internal/e2e/testdata`. Benchmark fixtures live
+separately under `backend/benchmarks/testdata`. Scrub secrets and private
 artifact content before committing a recording. The email-loop test writes its
 compact sequential artifacts into temporary directories instead of committing
 additional fixture trees.
 
 ## AI quality benchmark
 
-The opt-in benchmark runs real agentic analysis against labeled historical
-failures. Model output is nondeterministic, so it is not part of CI.
+The opt-in benchmarks live in `backend/benchmarks`, separate from the
+regression suite. They run real agentic analysis against labeled historical
+failures. Model output is nondeterministic, so they are not part of CI: every
+benchmark is gated behind its own `RUN_*` or `BENCH_*` environment variable and
+skips by default under `go test ./...`.
 
 ```bash
 cd backend
 RUN_AI_BENCHMARK=1 \
 AI_ENDPOINT=http://127.0.0.1:8000/v1/chat/completions \
 AI_MODEL=<model-id> AI_TOKEN=<token-or-placeholder> \
-  go test ./internal/e2e -run TestAIBenchmark -v -timeout 60m
+  go test ./benchmarks -run TestAIBenchmark -v -timeout 60m
 ```
 
 Set `BENCH_PROJECT_DIR` to a consumer repository to load its prompt and AI

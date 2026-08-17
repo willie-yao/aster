@@ -161,7 +161,7 @@ AGENT_SANDBOX_CRITIC_CPU_LIMIT=500m \
 AGENT_SANDBOX_CRITIC_MEMORY_REQUEST=64Mi \
 AGENT_SANDBOX_CRITIC_MEMORY_LIMIT=256Mi \
 AGENT_SANDBOX_CRITIC_EPHEMERAL_STORAGE_LIMIT=32Mi \
-go test ./internal/e2e -run TestAgentSandboxCausalCriticBenchmark -v -timeout 60m
+go test ./benchmarks -run TestAgentSandboxCausalCriticBenchmark -v -timeout 60m
 ```
 
 Generate a private JSON summary with:
@@ -170,7 +170,7 @@ Generate a private JSON summary with:
 RUN_AGENT_SANDBOX_CAUSAL_CRITIC_REPORT=1 \
 CRITIC_BENCH_RESULTS_JSONL=/private/critic.jsonl \
 CRITIC_BENCH_SUMMARY_JSON=/private/critic-summary.json \
-go test ./internal/e2e -run TestAgentSandboxCausalCriticBenchmarkReport -v
+go test ./benchmarks -run TestAgentSandboxCausalCriticBenchmarkReport -v
 ```
 
 Use repeated cold authoritative records. A successful Sandbox execution is not

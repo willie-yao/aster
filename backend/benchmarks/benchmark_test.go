@@ -1,4 +1,4 @@
-package e2e
+package benchmarks
 
 import (
 	"archive/tar"
@@ -48,7 +48,7 @@ import (
 //	AI_API=chat_completions \
 //	AI_ENDPOINT=http://127.0.0.1:8000/v1/chat/completions \
 //	AI_MODEL=moonshotai/Kimi-K2.7-Code AI_TOKEN=x \
-//	go test ./internal/e2e -run TestAIBenchmark -v -timeout 60m
+//	go test ./benchmarks -run TestAIBenchmark -v -timeout 60m
 //
 // Point BENCH_PROJECT_DIR at a consumer repo to load its real project.yaml AI
 // tuning and prompts/system.md so the run matches that live deploy exactly;
