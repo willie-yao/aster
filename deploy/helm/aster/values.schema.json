@@ -969,13 +969,17 @@
             "create": {
               "type": "boolean"
             },
-            "clientServiceAccountName": {
+            "fixClientServiceAccountName": {
+              "type": "string"
+            },
+            "scheduledClientServiceAccountName": {
               "type": "string"
             }
           },
           "required": [
             "create",
-            "clientServiceAccountName"
+            "fixClientServiceAccountName",
+            "scheduledClientServiceAccountName"
           ],
           "additionalProperties": false
         },

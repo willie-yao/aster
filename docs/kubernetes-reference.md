@@ -414,6 +414,15 @@ Required platform properties:
 - a dedicated inference credential or authenticated tokenless gateway;
 - exact admission identity, resource, mount, environment, and command policy.
 
+The Fix client ServiceAccount is separate from the scheduled client
+ServiceAccount that the worker and fetcher use for critic and shadow Sandboxes,
+so scheduled pods never hold Fix Sandbox authority. Both default names derive
+from the first 32 characters of the release fullname, so two releases sharing a
+namespace must have fullnames that differ within that prefix. Override them with
+`agentSandbox.rbac.fixClientServiceAccountName` and
+`agentSandbox.rbac.scheduledClientServiceAccountName`; the chart rejects values
+that resolve to the same ServiceAccount.
+
 Direct bearer mode references one existing Secret key. The chart and dashboard
 do not read or print the value. Gateway mode keeps the executor tokenless but
 still requires gateway-side workload authorization. Optional CA bundles use the

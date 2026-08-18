@@ -1,8 +1,9 @@
 {{- include "aster.validateAgentAnalysisShadow" . -}}
 {{- if .Values.agentSandbox.analysisShadow.enabled }}
-{{- $clientSA := include "aster.agentSandboxClientServiceAccountName" . -}}
+{{- $clientSA := include "aster.agentSandboxScheduledClientServiceAccountName" . -}}
 {{- $workloadSA := include "aster.agentAnalysisShadowWorkloadServiceAccountName" . -}}
-{{- if and .Values.agentSandbox.rbac.create (not .Values.agentSandbox.fixRuntime.enabled) (not .Values.agentSandbox.causalCritic.enabled) }}
+{{/* Critic shares this identity, so only one template may create it. */}}
+{{- if and .Values.agentSandbox.rbac.create (not .Values.agentSandbox.causalCritic.enabled) }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -10,7 +11,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "aster.labels" . | nindent 4 }}
-    app.kubernetes.io/component: agent-sandbox-client
+    app.kubernetes.io/component: agent-sandbox-scheduled-client
 ---
 {{- end }}
 {{- if .Values.agentSandbox.rbac.create }}

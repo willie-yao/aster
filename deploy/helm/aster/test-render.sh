@@ -239,7 +239,8 @@ agentSandbox:
       limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 256Mi}
   rbac:
     create: true
-    clientServiceAccountName: ""
+    fixClientServiceAccountName: ""
+    scheduledClientServiceAccountName: ""
 server:
   actions:
     enabled: true
@@ -255,7 +256,41 @@ grep -Fq 'kind: ValidatingAdmissionPolicy' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'apiGroups: ["agents.x-k8s.io"]' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'resources: ["sandboxes"]' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'resources: ["pods/log"]' "$tmp/agent-sandbox-render.yaml"
-grep -Fq 'serviceAccountName: test-prow-ai-dashboard-agent-sandbox-client' "$tmp/agent-sandbox-render.yaml"
+fix_client=test-prow-ai-dashboard-agent-sandbox-fix-client
+scheduled_client=test-prow-ai-dashboard-agent-sandbox-scheduled-client
+# Fix authority lives on a client identity the scheduled pods never use, so the
+# scheduled identity cannot appear anywhere in a Fix-only release.
+grep -Fq "serviceAccountName: $fix_client" "$tmp/agent-sandbox-render.yaml"
+if grep -Fq "$scheduled_client" "$tmp/agent-sandbox-render.yaml"; then
+  echo 'Fix release referenced the scheduled Agent Sandbox client ServiceAccount' >&2
+  exit 1
+fi
+grep -Fq "system:serviceaccount:dashboard-test:$fix_client" "$tmp/agent-sandbox-render.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" \
+  -s templates/agent-sandbox-fix-runtime-rbac.yaml > "$tmp/agent-sandbox-fix-rbac.yaml"
+grep -A3 -F 'subjects:' "$tmp/agent-sandbox-fix-rbac.yaml" | grep -Fq "name: $fix_client"
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" \
+  -s templates/worker-deployment.yaml > "$tmp/agent-sandbox-worker.yaml"
+grep -Fq 'automountServiceAccountToken: false' "$tmp/agent-sandbox-worker.yaml"
+if grep -Fq 'serviceAccountName:' "$tmp/agent-sandbox-worker.yaml"; then
+  echo 'Fix release gave the worker an Agent Sandbox client ServiceAccount' >&2
+  exit 1
+fi
+# A long release name must not truncate away the suffix that separates the two
+# identities, which would collapse them back into one ServiceAccount.
+long_release=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+helm template "$long_release" "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" \
+  > "$tmp/agent-sandbox-long-name.yaml"
+long_base=$(printf '%s' "$long_release-prow-ai-dashboard" | cut -c1-32)
+grep -Fq "serviceAccountName: $long_base-agent-sandbox-fix-client" "$tmp/agent-sandbox-long-name.yaml"
+if grep -Fq "$long_base-agent-sandbox-scheduled-client" "$tmp/agent-sandbox-long-name.yaml"; then
+  echo 'Long release name leaked the scheduled identity into a Fix release' >&2
+  exit 1
+fi
+expect_fail agent-sandbox-shared-client 'must resolve to different ServiceAccounts' \
+  -f "$tmp/agent-sandbox.yaml" \
+  --set agentSandbox.rbac.fixClientServiceAccountName=shared-client \
+  --set agentSandbox.rbac.scheduledClientServiceAccountName=shared-client
 grep -A1 -F 'name: AGENT_SANDBOX_MODEL_PROVIDER_REASONING_EFFORT' "$tmp/agent-sandbox-render.yaml" | grep -Fq 'value: "high"'
 grep -Fq "variables.container.env[1].name == 'PROW_AI_MODEL_PROVIDER_TOKEN'" "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'local/agent-sandbox-fix-executor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$tmp/agent-sandbox-render.yaml"
@@ -377,8 +412,15 @@ for expected in \
   'agent-sandbox-analysis-shadow'; do
   grep -Fq -- "$expected" "$tmp/analysis-shadow-render.yaml"
 done
-grep -Fq 'serviceAccountName: test-prow-ai-dashboard-agent-sandbox-client' "$tmp/analysis-shadow-render.yaml"
+grep -Fq "serviceAccountName: $scheduled_client" "$tmp/analysis-shadow-render.yaml"
 grep -Fq 'automountServiceAccountToken: true' "$tmp/analysis-shadow-render.yaml"
+if grep -Fq "$fix_client" "$tmp/analysis-shadow-render.yaml"; then
+  echo 'Analysis shadow release referenced the Fix Agent Sandbox client ServiceAccount' >&2
+  exit 1
+fi
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/analysis-shadow.yaml" \
+  -s templates/agent-sandbox-analysis-shadow-rbac.yaml > "$tmp/analysis-shadow-rbac.yaml"
+grep -A3 -F 'subjects:' "$tmp/analysis-shadow-rbac.yaml" | grep -Fq "name: $scheduled_client"
 expect_fail analysis-shadow-with-critic 'cannot run with agentSandbox.analysisShadow' \
   -f "$tmp/analysis-shadow.yaml" --set agentSandbox.causalCritic.enabled=true
 expect_fail analysis-shadow-reserved-env 'reserved analysis shadow variable' \
@@ -430,6 +472,15 @@ grep -Fq -- '-causal-critic-shadow' "$tmp/causal-critic-render.yaml"
 grep -Fq 'name: AGENT_SANDBOX_CRITIC_NAMESPACE' "$tmp/causal-critic-render.yaml"
 grep -Fq 'claimName: critic-ledger' "$tmp/causal-critic-render.yaml"
 grep -Fq 'kind: ValidatingAdmissionPolicy' "$tmp/causal-critic-render.yaml"
+grep -Fq "serviceAccountName: $scheduled_client" "$tmp/causal-critic-render.yaml"
+grep -Fq "system:serviceaccount:dashboard-test:$scheduled_client" "$tmp/causal-critic-render.yaml"
+if grep -Fq "$fix_client" "$tmp/causal-critic-render.yaml"; then
+  echo 'Causal critic release referenced the Fix Agent Sandbox client ServiceAccount' >&2
+  exit 1
+fi
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/causal-critic.yaml" \
+  -s templates/agent-sandbox-causal-critic-rbac.yaml > "$tmp/causal-critic-rbac.yaml"
+grep -A3 -F 'subjects:' "$tmp/causal-critic-rbac.yaml" | grep -Fq "name: $scheduled_client"
 expect_fail causal-critic-with-shadow 'cannot run with agentSandbox.analysisShadow' \
   -f "$tmp/causal-critic.yaml" --set agentSandbox.analysisShadow.enabled=true
 

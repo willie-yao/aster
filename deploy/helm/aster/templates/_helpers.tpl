@@ -265,9 +265,10 @@ Name of the Secret holding the AI token.
   {{- if ne $cfg.image.pullPolicy "IfNotPresent" -}}{{- fail "agentSandbox.analysisShadow.image.pullPolicy must be IfNotPresent" -}}{{- end -}}
   {{- $workloadSA := include "aster.agentAnalysisShadowWorkloadServiceAccountName" . -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $workloadSA) -}}{{- fail "agentSandbox.analysisShadow.workloadServiceAccount.name is required and must be a lowercase object name" -}}{{- end -}}
-  {{- $clientSA := include "aster.agentSandboxClientServiceAccountName" . -}}
-  {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.clientServiceAccountName) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
-  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
+  {{- $clientSA := include "aster.agentSandboxScheduledClientServiceAccountName" . -}}
+  {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.scheduledClientServiceAccountName) -}}{{- fail "agentSandbox.rbac.scheduledClientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.scheduledClientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
+  {{- include "aster.validateAgentSandboxClientIdentitySplit" . -}}
   {{- if not $cfg.ledger.existingClaim -}}{{- fail "agentSandbox.analysisShadow.ledger.existingClaim is required" -}}{{- end -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.ledger.existingClaim) -}}{{- fail "agentSandbox.analysisShadow.ledger.existingClaim must be a lowercase object name" -}}{{- end -}}
   {{- if eq $cfg.ledger.existingClaim (include "aster.pvcName" .) -}}{{- fail "agentSandbox.analysisShadow must use a PVC distinct from public dashboard data" -}}{{- end -}}
@@ -369,13 +370,42 @@ key, or bot token).
 {{- printf "%s@%s" .Values.agentSandbox.fixRuntime.image.repository .Values.agentSandbox.fixRuntime.image.digest -}}
 {{- end -}}
 
-{{/* Dashboard ServiceAccount allowed to manage only Fix Sandboxes. */}}
-{{- define "aster.agentSandboxClientServiceAccountName" -}}
-{{- if .Values.agentSandbox.rbac.clientServiceAccountName -}}
-{{- .Values.agentSandbox.rbac.clientServiceAccountName -}}
+{{/* Server ServiceAccount allowed to manage only Fix Sandboxes. */}}
+{{- define "aster.agentSandboxFixClientServiceAccountName" -}}
+{{- if .Values.agentSandbox.rbac.fixClientServiceAccountName -}}
+{{- .Values.agentSandbox.rbac.fixClientServiceAccountName -}}
 {{- else -}}
-{{- printf "%s-agent-sandbox-client" (include "aster.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-agent-sandbox-fix-client" (include "aster.agentSandboxClientNameBase" .) -}}
 {{- end -}}
+{{- end -}}
+
+{{/* Worker and fetcher ServiceAccount for scheduled critic and shadow Sandboxes. */}}
+{{- define "aster.agentSandboxScheduledClientServiceAccountName" -}}
+{{- if .Values.agentSandbox.rbac.scheduledClientServiceAccountName -}}
+{{- .Values.agentSandbox.rbac.scheduledClientServiceAccountName -}}
+{{- else -}}
+{{- printf "%s-agent-sandbox-scheduled-client" (include "aster.agentSandboxClientNameBase" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Shared prefix for the default client ServiceAccount names. Truncating the base
+rather than the finished name keeps the suffix that distinguishes the Fix
+identity from the scheduled one, which trunc 63 would otherwise eat on a long
+release name and collapse both to a single ServiceAccount. 32 is 63 minus the
+longest suffix, "-agent-sandbox-scheduled-client". Two releases sharing a
+namespace therefore need fullnames that differ within their first 32 characters,
+or the second install fails Helm ownership validation.
+*/}}
+{{- define "aster.agentSandboxClientNameBase" -}}
+{{- include "aster.fullname" . | trunc 32 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/* Fails when the two client identities resolve to the same ServiceAccount. */}}
+{{- define "aster.validateAgentSandboxClientIdentitySplit" -}}
+  {{- $fix := include "aster.agentSandboxFixClientServiceAccountName" . -}}
+  {{- $scheduled := include "aster.agentSandboxScheduledClientServiceAccountName" . -}}
+  {{- if eq $fix $scheduled -}}{{- fail "agentSandbox.rbac.fixClientServiceAccountName and agentSandbox.rbac.scheduledClientServiceAccountName must resolve to different ServiceAccounts" -}}{{- end -}}
 {{- end -}}
 
 {{/* Tokenless ServiceAccount used inside the executor Sandbox. */}}
@@ -512,9 +542,10 @@ project.config whenever the fix runtime is enabled, so these always resolve.
   {{- $workloadSA := include "aster.agentSandboxWorkloadServiceAccountName" . -}}
   {{- if not $workloadSA -}}{{- fail "agentSandbox.fixRuntime.workloadServiceAccount.name is required" -}}{{- end -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $workloadSA) -}}{{- fail "agentSandbox.fixRuntime.workloadServiceAccount.name must be a lowercase Kubernetes object name" -}}{{- end -}}
-  {{- $clientSA := include "aster.agentSandboxClientServiceAccountName" . -}}
-  {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.clientServiceAccountName) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
-  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
+  {{- $clientSA := include "aster.agentSandboxFixClientServiceAccountName" . -}}
+  {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.fixClientServiceAccountName) -}}{{- fail "agentSandbox.rbac.fixClientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.fixClientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
+  {{- include "aster.validateAgentSandboxClientIdentitySplit" . -}}
   {{- $provider := $cfg.modelProvider -}}
   {{- $credentialMode := default "direct" $provider.credentialMode -}}
   {{- $providerAPI := default "chat_completions" $provider.api -}}
@@ -799,9 +830,10 @@ project.config whenever the fix runtime is enabled, so these always resolve.
   {{- if ne $cfg.image.pullPolicy "IfNotPresent" -}}{{- fail "agentSandbox.causalCritic.image.pullPolicy must be IfNotPresent" -}}{{- end -}}
   {{- $workloadSA := include "aster.agentSandboxCriticWorkloadServiceAccountName" . -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $workloadSA) -}}{{- fail "agentSandbox.causalCritic.workloadServiceAccount.name is required and must be a lowercase object name" -}}{{- end -}}
-  {{- $clientSA := include "aster.agentSandboxClientServiceAccountName" . -}}
-  {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.clientServiceAccountName) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
-  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
+  {{- $clientSA := include "aster.agentSandboxScheduledClientServiceAccountName" . -}}
+  {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.scheduledClientServiceAccountName) -}}{{- fail "agentSandbox.rbac.scheduledClientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.scheduledClientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
+  {{- include "aster.validateAgentSandboxClientIdentitySplit" . -}}
   {{- if not $cfg.ledger.existingClaim -}}{{- fail "agentSandbox.causalCritic.ledger.existingClaim is required" -}}{{- end -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.ledger.existingClaim) -}}{{- fail "agentSandbox.causalCritic.ledger.existingClaim must be a lowercase object name" -}}{{- end -}}
   {{- if eq $cfg.ledger.existingClaim (include "aster.pvcName" .) -}}{{- fail "agentSandbox.causalCritic must use a PVC distinct from public dashboard data" -}}{{- end -}}

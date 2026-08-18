@@ -1,6 +1,6 @@
 {{- include "aster.validateAgentSandboxFixRuntime" . -}}
 {{- if .Values.agentSandbox.fixRuntime.enabled }}
-{{- $clientSA := include "aster.agentSandboxClientServiceAccountName" . -}}
+{{- $clientSA := include "aster.agentSandboxFixClientServiceAccountName" . -}}
 {{- $workloadSA := include "aster.agentSandboxWorkloadServiceAccountName" . -}}
 {{- if .Values.agentSandbox.rbac.create }}
 apiVersion: v1

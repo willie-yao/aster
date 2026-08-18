@@ -381,7 +381,8 @@ agentSandbox:
       limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 256Mi}
   rbac:
     create: true
-    clientServiceAccountName: ""
+    fixClientServiceAccountName: ""
+    scheduledClientServiceAccountName: ""
 VALUES
 expect_pass agent-sandbox "$tmp/agent-sandbox.yaml"
 

@@ -39,7 +39,7 @@ spec:
         app.kubernetes.io/component: worker
     spec:
       {{- if $agentSandboxScheduled }}
-      serviceAccountName: {{ include "aster.agentSandboxClientServiceAccountName" . }}
+      serviceAccountName: {{ include "aster.agentSandboxScheduledClientServiceAccountName" . }}
       {{- end }}
       automountServiceAccountToken: {{ ternary "true" "false" $agentSandboxScheduled }}
       {{- with .Values.imagePullSecrets }}

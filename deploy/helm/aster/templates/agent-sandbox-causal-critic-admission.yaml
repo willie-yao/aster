@@ -1,7 +1,7 @@
 {{- include "aster.validateAgentSandboxCausalCritic" . -}}
 {{- if .Values.agentSandbox.causalCritic.enabled }}
 {{- $cfg := .Values.agentSandbox.causalCritic -}}
-{{- $clientSA := include "aster.agentSandboxClientServiceAccountName" . -}}
+{{- $clientSA := include "aster.agentSandboxScheduledClientServiceAccountName" . -}}
 {{- $requester := printf "system:serviceaccount:%s:%s" .Release.Namespace $clientSA -}}
 {{- $image := include "aster.agentSandboxCriticExecutorImage" . -}}
 {{- $workloadSA := include "aster.agentSandboxCriticWorkloadServiceAccountName" . -}}

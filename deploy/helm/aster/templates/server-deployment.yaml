@@ -123,7 +123,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- if $agentSandboxActions }}
-      serviceAccountName: {{ include "aster.agentSandboxClientServiceAccountName" . }}
+      serviceAccountName: {{ include "aster.agentSandboxFixClientServiceAccountName" . }}
       automountServiceAccountToken: true
       {{- else }}
       automountServiceAccountToken: false

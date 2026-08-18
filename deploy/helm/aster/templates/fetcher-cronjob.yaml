@@ -55,7 +55,7 @@ spec:
         spec:
           restartPolicy: {{ $restartPolicy }}
           {{- if $agentSandboxScheduled }}
-          serviceAccountName: {{ include "aster.agentSandboxClientServiceAccountName" . }}
+          serviceAccountName: {{ include "aster.agentSandboxScheduledClientServiceAccountName" . }}
           {{- end }}
           automountServiceAccountToken: {{ ternary "true" "false" $agentSandboxScheduled }}
           {{- with .Values.imagePullSecrets }}

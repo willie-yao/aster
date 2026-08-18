@@ -304,7 +304,8 @@ agentSandbox:
       limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 256Mi}
   rbac:
     create: true
-    clientServiceAccountName: ""
+    fixClientServiceAccountName: ""
+    scheduledClientServiceAccountName: ""
 VALUES
 helm template production-eval deploy/helm/aster -n "$DASHBOARD_NAMESPACE" -f "$TMP_DIR/chart-values.yaml" --show-only templates/agent-sandbox-fix-runtime-rbac.yaml >"$TMP_DIR/rbac.yaml"
 helm template production-eval deploy/helm/aster -n "$DASHBOARD_NAMESPACE" -f "$TMP_DIR/chart-values.yaml" --show-only templates/agent-sandbox-fix-runtime-admission.yaml >"$TMP_DIR/admission-production.yaml"
@@ -346,7 +347,7 @@ mkdir -p "$FIXTURE_DIR"
   go test ./internal/fixruntime -run '^(TestWriteAgentSandboxEvaluationFixtures|TestAgentSandboxPreflightAndSandboxWorkloadParity)$' -count=1 -v
 ) >"$EVIDENCE_DIR/workload-shape-parity-test.log" 2>&1
 
-CLIENT_SA=production-eval-prow-ai-dashboard-agent-sandbox-client
+CLIENT_SA=production-eval-prow-ai-dashboard-agent-sandbox-fix-client
 requester="system:serviceaccount:${DASHBOARD_NAMESPACE}:${CLIENT_SA}"
 kubectl --kubeconfig "$ADMIN_KUBECONFIG" create --dry-run=server --as="$requester" -f "$FIXTURE_DIR/production-sandbox.json" -o json >"$EVIDENCE_DIR/production-apparmor-sandbox-dry-run.json"
 python3 - "$FIXTURE_DIR/production-sandbox.json" "$FIXTURE_DIR/local-sandbox.json" "$FIXTURE_DIR/local-preflight-pod.json" <<'PYSHAPE'
@@ -574,7 +575,7 @@ clusters:
     server: $server
     certificate-authority-data: $ca_data
 users:
-- name: agent-sandbox-client
+- name: agent-sandbox-fix-client
   user:
     token: $token
 contexts:
@@ -582,7 +583,7 @@ contexts:
   context:
     cluster: disposable
     namespace: $EXECUTION_NAMESPACE
-    user: agent-sandbox-client
+    user: agent-sandbox-fix-client
 current-context: disposable
 KUBECONFIG
 unset token ca_data server
