@@ -83,8 +83,10 @@ Successful content-bearing reads produce engine-issued evidence handles. The
 model selects handles in the structured result instead of authoring citation
 paths or quotes. The executor reconstructs canonical paths, line ranges, and
 quotations from the sealed workspace. A result without valid artifact grounding
-fails closed. Source-required cases also need a successful source read or grep
-and at least one accepted canonical source handle.
+remains private and preliminary when the structured content is otherwise safe.
+Source-required cases without accepted source grounding are also preliminary.
+These results never gain publication, cache, fallback, action, correction,
+remediation, or Fix authority.
 
 ## Executor and stager identities
 
@@ -126,9 +128,11 @@ The structured model result contains:
 - unresolved details.
 
 The executor replaces every selected handle with verified canonical evidence and
-then strictly validates the result. Malformed JSON, unsafe paths, impossible
-ranges, workspace mutation, credential exposure, output overflow, unexpected
-files, or missing artifact evidence are terminal failures.
+then validates the result. Malformed JSON, unsafe paths, impossible ranges,
+workspace mutation, credential exposure, output overflow, and unexpected files
+are terminal failures. Missing artifact or source grounding, dropped duplicate
+handles, canonicalized classification conflicts, and other safe quality defects
+produce a preliminary result with bounded warning codes.
 
 An empty suggested fix, no source citation, or no relevant source file is valid
 when the evidence supports only analysis. The shadow is not a remediation stage.

@@ -265,6 +265,32 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
         raise ReportError(f"{runtime} line {record['_line']} source-required case lacks source expectations")
     if record["signal_hits"] > record["signal_total"] or record["diagnosis_signal_hits"] > record["diagnosis_signal_total"] or record["forbidden_checks_passed"] > record["forbidden_checks_total"]:
         raise ReportError(f"{runtime} line {record['_line']} scoring numerators exceed denominators")
+
+    legacy_structured = record.get("usable") is True if runtime == "inprocess" else record.get("analysis_valid") is True
+    if "structured_valid" not in record:
+        record["structured_valid"] = legacy_structured
+    if "displayable" not in record:
+        record["displayable"] = record["structured_valid"]
+    if "analysis_disposition" not in record:
+        has_artifact_grounding = bool(record.get("evidence_citations")) or record.get("artifact_citation_count", 0) > 0
+        record["analysis_disposition"] = "grounded" if record["displayable"] and has_artifact_grounding else ("preliminary" if record["displayable"] else "")
+    if "disposition_warnings" not in record:
+        record["disposition_warnings"] = []
+    if "grounded" not in record:
+        record["grounded"] = record["analysis_disposition"] == "grounded"
+    if runtime == "inprocess" and "contract_violation" not in record:
+        record["contract_violation"] = record.get("trial_status") == "contract_violation"
+    for field in ("structured_valid", "displayable", "grounded"):
+        if not isinstance(record.get(field), bool):
+            raise ReportError(f"{runtime} line {record['_line']} field {field} must be boolean")
+    disposition = record.get("analysis_disposition")
+    warnings = record.get("disposition_warnings")
+    if disposition not in ("", "preliminary", "grounded") or not isinstance(warnings, list) or not all(isinstance(value, str) and value for value in warnings):
+        raise ReportError(f"{runtime} line {record['_line']} analysis disposition is invalid")
+    if record["structured_valid"] != record["displayable"] or record["displayable"] != (disposition != "") or record["grounded"] != (disposition == "grounded"):
+        raise ReportError(f"{runtime} line {record['_line']} analysis disposition fields are inconsistent")
+    if runtime == "inprocess" and not isinstance(record.get("contract_violation"), bool):
+        raise ReportError(f"inprocess line {record['_line']} contract_violation must be boolean")
     if runtime == "inprocess":
         if record.get("api_mode") != "chat_completions":
             raise ReportError(f"inprocess line {record['_line']} must use chat_completions")
@@ -584,22 +610,30 @@ def usage_metrics(records: list[dict[str, Any]], runtime: str) -> dict[str, Any]
 
 
 def inprocess_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
-    runtime_valid = [record for record in records if record["usable"]]
+    runtime_valid = [record for record in records if record["structured_valid"]]
     valid = [record for record in records if evidence_contract_result(record, "inprocess")[0]]
     statuses = [record["trial_status"] for record in records]
-    citation_trials = sum(bool(record.get("evidence_citations")) for record in valid)
+    citation_trials = sum(bool(record.get("evidence_citations")) for record in runtime_valid)
     source_trials = sum(bool(record.get("file_links")) for record in valid)
     metrics = {
         "trials": len(records),
         "runtime_valid_trials": len(runtime_valid),
         "runtime_valid_rate": rate(len(runtime_valid), len(records)),
+        "structured_valid_trials": sum(record["structured_valid"] for record in records),
+        "structured_valid_rate": rate(sum(record["structured_valid"] for record in records), len(records)),
+        "displayable_trials": sum(record["displayable"] for record in records),
+        "displayable_rate": rate(sum(record["displayable"] for record in records), len(records)),
+        "preliminary_trials": sum(record["analysis_disposition"] == "preliminary" for record in records),
+        "grounded_trials": sum(record["grounded"] for record in records),
+        "grounded_rate": rate(sum(record["grounded"] for record in records), len(records)),
+        "contract_warning_trials": sum(record["contract_violation"] for record in records),
         "valid_trials": len(valid),
         "valid_rate": rate(len(valid), len(records)),
-        "invalid_trials": sum(status in ("invalid_result", "contract_violation") for status in statuses),
+        "invalid_trials": sum(status == "invalid_result" for status in statuses),
         "no_result_trials": sum(status == "no_result" for status in statuses),
         "runtime_failure_trials": sum(status in ("runtime_failure", "timeout") for status in statuses),
         "artifact_citation_trials": citation_trials,
-        "artifact_citation_rate": rate(citation_trials, len(valid)),
+        "artifact_citation_rate": rate(citation_trials, len(runtime_valid)),
         "source_grounded_trials": source_trials,
         "source_grounded_rate": rate(source_trials, len(valid)),
         "signal_hits": sum(record["signal_hits"] for record in records),
@@ -629,15 +663,22 @@ def inprocess_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def sandbox_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
-    runtime_valid = [record for record in records if record["analysis_valid"]]
+    runtime_valid = [record for record in records if record["structured_valid"]]
     valid = [record for record in records if evidence_contract_result(record, "sandbox")[0]]
     statuses = [record["status"] for record in records]
-    citation_trials = sum(record["artifact_citation_count"] > 0 for record in valid)
+    citation_trials = sum(record["artifact_citation_count"] > 0 for record in runtime_valid)
     source_trials = sum(record["source_verified"] for record in valid)
     metrics = {
         "trials": len(records),
         "runtime_valid_trials": len(runtime_valid),
         "runtime_valid_rate": rate(len(runtime_valid), len(records)),
+        "structured_valid_trials": sum(record["structured_valid"] for record in records),
+        "structured_valid_rate": rate(sum(record["structured_valid"] for record in records), len(records)),
+        "displayable_trials": sum(record["displayable"] for record in records),
+        "displayable_rate": rate(sum(record["displayable"] for record in records), len(records)),
+        "preliminary_trials": sum(record["analysis_disposition"] == "preliminary" for record in records),
+        "grounded_trials": sum(record["grounded"] for record in records),
+        "grounded_rate": rate(sum(record["grounded"] for record in records), len(records)),
         "valid_trials": len(valid),
         "valid_rate": rate(len(valid), len(records)),
         "invalid_trials": sum(status == "invalid_result" for status in statuses),
@@ -645,7 +686,7 @@ def sandbox_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "runtime_failure_trials": sum(status in ("runtime_failure", "timeout", "cancellation") for status in statuses),
         "cleanup_pending_trials": sum(status == "cleanup_pending" for status in statuses),
         "artifact_citation_trials": citation_trials,
-        "artifact_citation_rate": rate(citation_trials, len(valid)),
+        "artifact_citation_rate": rate(citation_trials, len(runtime_valid)),
         "source_grounded_trials": source_trials,
         "source_grounded_rate": rate(source_trials, len(valid)),
         "signal_hits": sum(record["signal_hits"] for record in records),
@@ -784,7 +825,6 @@ def evaluate_criteria(inprocess: dict[str, Any], sandbox: dict[str, Any], per_ca
     evidence_complete = pairs == expected_pairs and holdouts_ok and evidence_modes_complete
     lifecycle_non_regression = (
         (sandbox["runtime_valid_rate"] or 0) >= (inprocess["runtime_valid_rate"] or 0)
-        and (sandbox["valid_rate"] or 0) >= (inprocess["valid_rate"] or 0)
         and sandbox["invalid_trials"] <= inprocess["invalid_trials"]
         and sandbox["no_result_trials"] <= inprocess["no_result_trials"]
         and sandbox["runtime_failure_trials"] <= inprocess["runtime_failure_trials"]
@@ -823,7 +863,6 @@ def evaluate_criteria(inprocess: dict[str, Any], sandbox: dict[str, Any], per_ca
         source_required = item["evidence_mode"] == "artifact_and_source"
         case_lifecycle = (
             (right["runtime_valid_rate"] or 0) >= (left["runtime_valid_rate"] or 0)
-            and (right["valid_rate"] or 0) >= (left["valid_rate"] or 0)
             and right["invalid_trials"] <= left["invalid_trials"]
             and right["no_result_trials"] <= left["no_result_trials"]
             and right["runtime_failure_trials"] <= left["runtime_failure_trials"]

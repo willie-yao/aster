@@ -39,6 +39,7 @@ export function buildFailureActionID(jobID: string, buildID: string): string {
 export function buildActionsReady(analysis: AIAnalysis | undefined, currentCritiqueVersion: number | undefined): boolean {
   return Boolean(
     analysis?.mode === "agentic" &&
+    analysis.disposition === "grounded" &&
     analysis.critique_passed &&
     currentCritiqueVersion != null &&
     (analysis.critique_version ?? 0) >= currentCritiqueVersion &&

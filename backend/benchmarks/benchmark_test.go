@@ -802,7 +802,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		selectedAttempt = selectedBenchmarkDraftAttempt(draftObservations, tc)
 	}
 	trialStatus := benchmarkTrialStatus(outcome, analysisErr, tc, snapshot)
-	if len(draftObservations) > 0 && selectedAttempt == 0 {
+	if len(draftObservations) > 0 && selectedAttempt == 0 && (tc == nil || tc.AIAnalysis == nil) {
 		trialStatus = "contract_violation"
 	}
 	stageReport := buildBenchmarkEvidenceStageReport(bc, preparation, evidenceCoverage, tc, draftObservations, selectedAttempt, traceSummary.modelRequests > 0, trialStatus)

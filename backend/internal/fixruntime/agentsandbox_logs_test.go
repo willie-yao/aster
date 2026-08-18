@@ -133,6 +133,16 @@ func TestKubeAgentSandboxPodLogsBoundsSuccessfulBody(t *testing.T) {
 	}
 }
 
+func TestKubeAgentSandboxPodLogsReportsEmptySuccessfulBody(t *testing.T) {
+	api := testPodLogAPI(t, http.StatusOK, nil, func(context.Context, string, string) string {
+		return "stager container failed with exit code 2"
+	})
+	_, err := api.PodLogs(context.Background(), "analysis", "analysis-1", 4096)
+	if err == nil || !strings.Contains(err.Error(), "logs for analysis/analysis-1 are empty") || !strings.Contains(err.Error(), "stager container failed") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestKubeAgentSandboxPodLogsBoundsSuccessfulReadError(t *testing.T) {
 	api := &kubeAgentSandboxAPI{
 		http: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {

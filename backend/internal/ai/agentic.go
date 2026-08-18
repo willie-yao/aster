@@ -25,6 +25,8 @@ import (
 // entry with any other mode is stale.
 const AgenticMode = "agentic"
 
+const preliminaryCacheTTL = 5 * time.Minute
+
 // ErrToolsUnsupported is returned from the agentic loop when the configured
 // provider rejects function-calling on the first call. There is no tools-free
 // fallback, so the affected failure is marked AI-unavailable for the run.
@@ -33,10 +35,13 @@ var ErrToolsUnsupported = errors.New("ai endpoint does not support function call
 // ErrContextHeadroom means no safe provider request could be formed after compaction.
 var ErrContextHeadroom = errors.New("agentic request exceeds context headroom")
 
-// ErrMissingArtifactCitation means a non-advisory analysis could not produce a
-// validated artifact citation after bounded repair, so no causal draft is safe
-// to publish for this run.
+// ErrMissingArtifactCitation is retained for callers that decode older private
+// benchmark records. Current analysis publishes safe ungrounded drafts as
+// preliminary instead of returning this error.
 var ErrMissingArtifactCitation = errors.New("no validated artifact citation supports the analysis")
+
+// ErrRejectedAnalysis means no safe structured analysis was available to publish.
+var ErrRejectedAnalysis = errors.New("analysis result failed the safe publication contract")
 
 // AgenticOptions is the resolved per-failure budget config. Build it once per
 // fetcher run via project.AI.EffectiveAgentic and reuse it.
@@ -876,6 +881,15 @@ func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt str
 		return nil, nil, false
 	}
 	stampAgenticTelemetry(result.Analysis, nil, in.Mode, true, start)
+	if !StampAnalysisDisposition(result.Analysis) {
+		return result.Summary, result.Analysis, true
+	}
+	if result.Analysis.Disposition == models.AnalysisDispositionPreliminary {
+		generatedAt, err := time.Parse(time.RFC3339, result.Analysis.GeneratedAt)
+		if err != nil || time.Since(generatedAt) > preliminaryCacheTTL {
+			return nil, nil, false
+		}
+	}
 	return result.Summary, result.Analysis, true
 }
 
@@ -1268,54 +1282,29 @@ agentLoop:
 		log.Printf("  ⚠ agentic repair: finalize did not parse; keeping selected draft")
 	}
 	if !ok {
-		recordTrace(loopCtx, TraceEvent{Kind: "finalize_recovery", Outcome: "synthesized"})
-		// Last resort: synthesize an analysisResponse from the raw text so the
-		// UI still has something to render. Do not cache this because a transient
-		// model glitch should not permanently poison the cache.
-		parsed = analysisResponse{
-			Summary:      firstSentence(finalContent),
-			RootCause:    finalContent,
-			Severity:     "Medium",
-			SuggestedFix: "Unable to parse structured response",
-		}
-		parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
-		parsed = state.preparePublishedAnalysis(parsed)
-		out := state.currentCritiqueOutcome(parsed)
-		state.setCritiqueOutcome(out)
-		if critiqueAcceptedForPolicy(out, effectiveCritiqueCachePolicy(in.Opts.CritiqueCachePolicy, in.Opts.CritiqueMaxRetries)) {
-			recordTrace(loopCtx, critiqueTraceEvent("published_warning", out))
-		} else {
-			recordTrace(loopCtx, critiqueTraceEvent("published_rejected", out))
-		}
-		if rejectMissingCitationPublication(state, in.Opts) {
-			recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "unavailable", ErrorCode: "missing_artifact_citation"})
-			return nil, nil, ErrMissingArtifactCitation
-		}
-		summary, analysis := c.buildOutputs(parsed)
-		stampAgenticTelemetry(analysis, state, in.Mode, false, start)
-		return summary, analysis, nil
+		recordTrace(loopCtx, TraceEvent{Kind: "finalize_recovery", Outcome: "rejected", ErrorCode: "invalid_structured_response"})
+		return nil, nil, ErrRejectedAnalysis
 	}
 
 	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, finalProviderItems, parsed, in.Opts, critiqueRetries, finalDraftObserved, draftPhase)
 	markGCSFloorRetryExhausted(loopCtx, state, in.Opts, gcsFloorOnlyRetries)
 	parsed = c.prepareCacheablePublishedAnalysis(loopCtx, state, messages, parsed, in.Opts)
-	if rejectMissingCitationPublication(state, in.Opts) {
-		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "unavailable", ErrorCode: "missing_artifact_citation"})
-		return nil, nil, ErrMissingArtifactCitation
-	}
 
 	state.notifyDraftSelection()
 	summary, analysis := c.buildOutputs(parsed)
+	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
+	if !StampAnalysisDisposition(analysis) {
+		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "rejected", ErrorCode: "unsafe_analysis"})
+		return nil, nil, ErrRejectedAnalysis
+	}
+	if analysis.Disposition == models.AnalysisDispositionPreliminary {
+		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "preliminary"})
+	} else {
+		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "grounded"})
+	}
 	c.cacheAcceptedAnalysis(loopCtx, cacheKey, parsed, analysis.GeneratedAt, state, in.Opts)
 	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 	return summary, analysis, nil
-}
-
-func rejectMissingCitationPublication(state *agentState, opts AgenticOptions) bool {
-	if state == nil || effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries) == CritiqueCachePolicyAdvisory {
-		return false
-	}
-	return slices.Contains(state.critiqueHardFailures, string(CritiqueRuleCitationMissing))
 }
 
 func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *agentState, messages []modelMessage, parsed analysisResponse, opts AgenticOptions) analysisResponse {
@@ -2534,17 +2523,17 @@ func cachePersistenceRejection(state *agentState, opts AgenticOptions) CacheReje
 	if floors.gcsUnmet {
 		return CacheRejectedEvidenceFloor
 	}
-	analysis := &models.AIAnalysis{
+	policyAnalysis := &models.AIAnalysis{
 		Mode: AgenticMode, CritiquePassed: state.critiquePassed, CritiqueVersion: currentCritiqueVersion,
 		CritiqueHardFailures: state.critiqueHardFailures, CritiqueSoftWarnings: state.critiqueSoftWarnings,
 		JudgeObjected: state.judgeObjected, JudgeRevised: state.judgeRevised,
 		JudgeResolutionKnown: true, JudgeRevisionRejected: state.judgeRevisionRejected,
 	}
 	policy := effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries)
-	if reason := critiqueCacheRejection(analysis, policy); reason != CacheAccepted {
+	if reason := critiqueCacheRejection(policyAnalysis, policy); reason != CacheAccepted {
 		return reason
 	}
-	return semanticCacheRejection(analysis)
+	return semanticCacheRejection(policyAnalysis)
 }
 
 // runFinalizeRound asks the model for one more no-tools response containing

@@ -79,6 +79,8 @@ export interface AIAnalysis {
   severity: string;
   suggested_fix: string;
   relevant_files?: string[];
+  disposition?: "preliminary" | "grounded";
+  disposition_warnings?: string[];
   // Verified GitHub links for cited source files keyed by cleaned path. When
   // present, this map is authoritative and absent files stay unlinked.
   file_links?: Record<string, string>;

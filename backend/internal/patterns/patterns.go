@@ -400,7 +400,7 @@ func RepresentativeAnalyzedFailure(run *models.BuildResult) *models.TestCase {
 	var representative *models.TestCase
 	for index := range run.TestCases {
 		testCase := &run.TestCases[index]
-		if testCase.Status != "failed" || testCase.AIAnalysis == nil {
+		if testCase.Status != "failed" || testCase.AIAnalysis == nil || !ai.IsGroundedAnalysis(testCase.AIAnalysis) {
 			continue
 		}
 		if representative == nil || severityRank(testCase.AIAnalysis.Severity) > severityRank(representative.AIAnalysis.Severity) {

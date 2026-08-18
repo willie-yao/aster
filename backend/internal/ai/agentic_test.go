@@ -486,7 +486,7 @@ func TestAgentic_FinalizeRound_JSONRepair(t *testing.T) {
 	}
 }
 
-func TestAgentic_BudgetExhausted_SynthesizesFallback(t *testing.T) {
+func TestAgentic_BudgetExhaustedRejectsUnstructuredFallback(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	// Round 1: model returns unparseable prose. Finalize round will also return unparseable prose.
@@ -496,23 +496,8 @@ func TestAgentic_BudgetExhausted_SynthesizesFallback(t *testing.T) {
 	client := newAgenticTestClient(t, srv.URL)
 	opts := AgenticOptions{MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:fallback", "sys", "user")
-	if err != nil {
-		t.Fatalf("expected fallback synthesis, not error, got: %v", err)
-	}
-	if summary == nil || analysis == nil {
-		t.Fatal("expected synthesized outputs")
-	}
-	if analysis.Mode != AgenticMode {
-		t.Errorf("mode = %q", analysis.Mode)
-	}
-	srv.push(200, chatRespFinal("still not json"))
-	srv.push(200, chatRespFinal("still not json"))
-	before := atomic.LoadInt32(&srv.calls)
-	if _, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:fallback", "sys", "user"); err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if atomic.LoadInt32(&srv.calls) == before {
-		t.Error("fallback should not have been cached (expected server hit on retry)")
+	if !errors.Is(err, ErrRejectedAnalysis) || summary != nil || analysis != nil {
+		t.Fatalf("result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
 	}
 }
 
@@ -4073,7 +4058,7 @@ func TestAgenticFinalizeUnexpectedToolCallRetainsDraft(t *testing.T) {
 	}
 }
 
-func TestAgenticFinalizeUnexpectedToolCallSynthesizesWithoutDraft(t *testing.T) {
+func TestAgenticFinalizeUnexpectedToolCallRejectsWithoutDraft(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	srv.push(200, chatRespFinal("not json"))
@@ -4084,21 +4069,18 @@ func TestAgenticFinalizeUnexpectedToolCallSynthesizesWithoutDraft(t *testing.T) 
 	ctx := withAnalysisTrace(context.Background(), trace)
 	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second})
 	_, analysis, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(ctx, in, "agentic:test:finalize-tool-synthesize", "sys", "user")
-	trace.Finish("success", err)
-	if err != nil {
-		t.Fatal(err)
+	trace.Finish("rejected", err)
+	if !errors.Is(err, ErrRejectedAnalysis) || analysis != nil {
+		t.Fatalf("analysis=%+v error=%v", analysis, err)
 	}
-	if analysis.SuggestedFix != "Unable to parse structured response" {
-		t.Fatalf("expected synthesized fallback: %+v", analysis)
-	}
-	var sawSynthesized bool
+	var sawRejected bool
 	for _, event := range store.Snapshot().Traces[0].Events {
-		if event.Kind == "finalize_recovery" && event.Outcome == "synthesized" {
-			sawSynthesized = true
+		if event.Kind == "finalize_recovery" && event.Outcome == "rejected" {
+			sawRejected = true
 		}
 	}
-	if !sawSynthesized {
-		t.Fatalf("missing synthesized recovery telemetry: %+v", store.Snapshot())
+	if !sawRejected {
+		t.Fatalf("missing rejected recovery telemetry: %+v", store.Snapshot())
 	}
 }
 
@@ -4290,11 +4272,11 @@ func TestAgentic_MissingCitationPublicationPolicy(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		policy    CritiqueCachePolicy
-		wantError bool
+		cacheable bool
 	}{
-		{name: "hard", policy: CritiqueCachePolicyHard, wantError: true},
-		{name: "strict", policy: CritiqueCachePolicyStrict, wantError: true},
-		{name: "advisory", policy: CritiqueCachePolicyAdvisory},
+		{name: "hard", policy: CritiqueCachePolicyHard},
+		{name: "strict", policy: CritiqueCachePolicyStrict},
+		{name: "advisory", policy: CritiqueCachePolicyAdvisory, cacheable: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			shrinkCallDelay(t)
@@ -4309,17 +4291,11 @@ func TestAgentic_MissingCitationPublicationPolicy(t *testing.T) {
 			}
 			key := "agentic:test:missing-citation-policy:" + tc.name
 			summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), key, "sys", "user")
-			if tc.wantError {
-				if !errors.Is(err, ErrMissingArtifactCitation) || summary != nil || analysis != nil {
-					t.Fatalf("result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
-				}
-				if _, ok := client.Cache().Get(key); ok {
-					t.Fatal("ungrounded analysis was cached")
-				}
-				return
+			if err != nil || summary == nil || analysis == nil || analysis.Disposition != models.AnalysisDispositionPreliminary || !slices.Contains(analysis.CritiqueHardFailures, string(CritiqueRuleCitationMissing)) || analysis.CachePersistenceAccepted != tc.cacheable {
+				t.Fatalf("result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
 			}
-			if err != nil || analysis == nil || !slices.Contains(analysis.CritiqueHardFailures, string(CritiqueRuleCitationMissing)) || !analysis.CachePersistenceAccepted {
-				t.Fatalf("advisory result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
+			if _, ok := client.Cache().Get(key); ok != tc.cacheable {
+				t.Fatalf("cache presence = %t, want %t", ok, tc.cacheable)
 			}
 		})
 	}
@@ -4327,12 +4303,11 @@ func TestAgentic_MissingCitationPublicationPolicy(t *testing.T) {
 
 func TestAgentic_SynthesizedFallbackMissingCitationPolicy(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		policy    CritiqueCachePolicy
-		wantError bool
+		name   string
+		policy CritiqueCachePolicy
 	}{
-		{name: "hard", policy: CritiqueCachePolicyHard, wantError: true},
-		{name: "strict", policy: CritiqueCachePolicyStrict, wantError: true},
+		{name: "hard", policy: CritiqueCachePolicyHard},
+		{name: "strict", policy: CritiqueCachePolicyStrict},
 		{name: "advisory", policy: CritiqueCachePolicyAdvisory},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4349,12 +4324,8 @@ func TestAgentic_SynthesizedFallbackMissingCitationPolicy(t *testing.T) {
 			}
 			key := "agentic:test:synthesized-missing-citation:" + tc.name
 			summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), key, "sys", "user")
-			if tc.wantError {
-				if !errors.Is(err, ErrMissingArtifactCitation) || summary != nil || analysis != nil {
-					t.Fatalf("result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
-				}
-			} else if err != nil || analysis == nil || !slices.Contains(analysis.CritiqueHardFailures, string(CritiqueRuleCitationMissing)) {
-				t.Fatalf("advisory result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
+			if !errors.Is(err, ErrRejectedAnalysis) || summary != nil || analysis != nil {
+				t.Fatalf("result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
 			}
 			if _, ok := client.Cache().Get(key); ok {
 				t.Fatal("synthesized fallback was cached")

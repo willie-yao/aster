@@ -1290,6 +1290,10 @@ func (k *kubeAgentSandboxAPI) PodLogs(ctx context.Context, namespace, podName st
 	if int64(len(data)) > limit {
 		return "", fmt.Errorf("pod logs response exceeds %d bytes", limit)
 	}
+	if strings.TrimSpace(string(data)) == "" {
+		lifecycle := k.podLogLifecycleContext(ctx, namespace, podName)
+		return "", fmt.Errorf("pod logs for %s/%s are empty: %s", namespace, podName, lifecycle)
+	}
 	return string(data), nil
 }
 

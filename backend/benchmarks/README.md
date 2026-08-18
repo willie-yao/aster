@@ -182,10 +182,18 @@ Draft telemetry records which supported causal facts a critique, evidence, or
 semantic retry retained, added, or dropped. It does not claim per-draft citation
 retention because the benchmark observer does not receive draft citations.
 `trial_status` distinguishes `valid_result`, `no_result`, `invalid_result`,
-`contract_violation`, `timeout`, and `runtime_failure`. The JSONL row is written
-before a failing trial stops the test. Comparison reports display this status,
-not the legacy analysis outcome, so a contract violation cannot appear as a
-normal usable trial.
+`contract_violation`, `timeout`, and `runtime_failure`. A parseable safe result
+remains `valid_result` when a bounded finalization repair or other contract
+warning occurred. The separate `contract_violation` boolean preserves that
+telemetry without converting displayable analysis into a lifecycle failure. The
+JSONL row is written before a failing trial stops the test.
+
+Both arms record `structured_valid`, `displayable`, `analysis_disposition`, and
+`grounded` separately. `preliminary` means safe structured content with unresolved
+evidence or quality warnings. The full evidence-contract result remains a stricter
+grounding and causal-alignment dimension. A miss there does not retroactively make
+the runtime result malformed. Action eligibility is not a benchmark quality metric;
+it requires authenticated request-time policy and confirmation outside either arm.
 
 `BENCH_EVIDENCE_CONDITION` defaults to `fixture-v1`. The benchmark-only
 `kueue-oracle-v1` condition is available only for the pinned Kueue API-version

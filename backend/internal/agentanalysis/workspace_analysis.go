@@ -229,7 +229,7 @@ func WorkspaceResultSchema() map[string]any {
 			"severity":              map[string]any{"type": "string", "enum": []string{"Critical", "High", "Medium", "Low", "Transient-Ignore"}},
 			"suggested_fix":         map[string]any{"type": "string"},
 			"relevant_file_ids":     map[string]any{"type": "array", "items": map[string]any{"type": "string", "pattern": "^source-[0-9]{3}$"}, "maxItems": maxRelevantFiles},
-			"artifact_evidence_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string", "pattern": "^artifact-[0-9]{3}$"}, "minItems": 1, "maxItems": maxEvidenceCitations},
+			"artifact_evidence_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string", "pattern": "^artifact-[0-9]{3}$"}, "maxItems": maxEvidenceCitations},
 			"source_evidence_ids":   map[string]any{"type": "array", "items": map[string]any{"type": "string", "pattern": "^source-[0-9]{3}$"}, "maxItems": maxSourceCitations},
 			"unresolved_details":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": maxUnresolvedDetails},
 		},
@@ -298,12 +298,7 @@ func ParseWorkspaceAnalysis(raw string, handles []WorkspaceEvidenceHandle, manif
 		analysis.EvidenceCitations = append(analysis.EvidenceCitations, models.EvidenceCitation{Path: handle.Path, LineStart: handle.LineStart, LineEnd: handle.LineEnd})
 	}
 	if len(analysis.EvidenceCitations) == 0 {
-		code := WorkspaceInvalidArtifactCount
-		if warnings[WorkspaceInvalidArtifactPath] {
-			code = WorkspaceInvalidArtifactPath
-		}
-		err := invalidWorkspaceResult(code)
-		return WorkspaceAnalysis{}, rejectedWorkspaceResult(err), err
+		warnings[WorkspaceInvalidArtifactCount] = true
 	}
 	for _, id := range parsed.SourceEvidenceIDs {
 		handle, ok := handlesByID[id]
@@ -322,8 +317,7 @@ func ParseWorkspaceAnalysis(raw string, handles []WorkspaceEvidenceHandle, manif
 		analysis.RelevantFiles = append(analysis.RelevantFiles, handle.Path)
 	}
 	if (len(parsed.SourceEvidenceIDs) > 0 || len(parsed.RelevantFileIDs) > 0) && len(analysis.SourceCitations) == 0 {
-		err := invalidWorkspaceResult(WorkspaceInvalidSourcePath)
-		return WorkspaceAnalysis{}, rejectedWorkspaceResult(err), err
+		warnings[WorkspaceInvalidSourcePath] = true
 	}
 	return canonicalizeWorkspaceAnalysisWithWarnings(analysis, manifest, artifactRoot, sourceRoot, false, warnings)
 }
@@ -434,9 +428,6 @@ func ValidateWorkspaceExecutionResult(result WorkspaceExecutionResult, request W
 	}
 	if result.Version != WorkspaceResultVersion || result.ContractVersion != WorkspaceContractVersion || result.RequestHash != request.Hash {
 		return result, fmt.Errorf("workspace execution result identity mismatch")
-	}
-	if request.RequireSourceEvidence && result.TerminalState == engineruntime.TerminalSucceeded && (result.OpenCodeTelemetry.SourceEvidenceStatus != WorkspaceSourceEvidenceAccepted || result.OpenCodeTelemetry.SourceEvidenceToolCalls < 1 || result.OpenCodeTelemetry.EvidenceHandles.AcceptedSourceHandleCount < 1) {
-		return result, fmt.Errorf("successful workspace execution is missing required source evidence")
 	}
 	if result.DurationMs < 0 || result.DurationMs > request.TimeoutSeconds*1000+WorkspacePostModelGrace.Milliseconds() {
 		return result, fmt.Errorf("workspace execution duration is outside the request bound")
@@ -554,7 +545,7 @@ grep tools to inspect paths not shown in this bounded sample.
 
 // FailureAnalysisResult maps a validated private result to the authoritative wire shape.
 func (analysis WorkspaceAnalysis) FailureAnalysisResult(generatedAt, model string, durationMs int64, usage WorkspaceUsage) ai.FailureAnalysisResult {
-	return ai.FailureAnalysisResult{
+	result := ai.FailureAnalysisResult{
 		Summary: &models.AISummary{GeneratedAt: generatedAt, Summary: analysis.Summary, IsTransient: analysis.IsTransient},
 		Analysis: &models.AIAnalysis{
 			GeneratedAt: generatedAt, Model: model, RootCause: analysis.RootCause, Severity: analysis.Severity,
@@ -564,11 +555,14 @@ func (analysis WorkspaceAnalysis) FailureAnalysisResult(generatedAt, model strin
 			ElapsedMs: int(durationMs),
 		},
 	}
+	result.Analysis.Disposition, result.Analysis.DispositionWarnings = WorkspaceAnalysisDisposition(analysis, WorkspaceResultValidation{Status: WorkspaceResultAccepted}, false)
+	return result
 }
 
 func verifyWorkspaceArtifactCitations(citations []models.EvidenceCitation, manifest WorkspaceManifest, root string, requireCanonical bool, warnings map[string]bool) ([]models.EvidenceCitation, error) {
 	if len(citations) == 0 {
-		return nil, invalidWorkspaceResult(WorkspaceInvalidArtifactCount)
+		warnings[WorkspaceInvalidArtifactCount] = true
+		return nil, nil
 	}
 	if len(citations) > maxEvidenceCitations {
 		warnings[WorkspaceInvalidArtifactCount] = true
@@ -607,9 +601,6 @@ func verifyWorkspaceArtifactCitations(citations []models.EvidenceCitation, manif
 		seen[citation.Path] = append(seen[citation.Path], [2]int{citation.LineStart, citation.LineEnd})
 		citation.Quote = quote
 		out = append(out, citation)
-	}
-	if len(out) == 0 {
-		return nil, invalidWorkspaceResult(WorkspaceInvalidArtifactCount)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Path != out[j].Path {

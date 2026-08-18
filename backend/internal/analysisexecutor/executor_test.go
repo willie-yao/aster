@@ -65,7 +65,7 @@ func TestExecuteRunsOneNativeSessionAndReturnsAnalysis(t *testing.T) {
 	}
 }
 
-func TestExecuteRejectsRequiredSourceFloorMissingFromRunner(t *testing.T) {
+func TestExecutePublishesPreliminaryWhenRequiredSourceIsMissing(t *testing.T) {
 	root, base := executorTestFixture(t)
 	request, err := agentanalysis.NewWorkspaceExecutionRequestWithSourceEvidence(base.Manifest, base.SourceModePolicy, true, base.ModelProvider, 5*time.Minute, base.MaxSteps, base.ModelContextTokens, base.ModelOutputTokens, base.OutputLimitBytes)
 	if err != nil {
@@ -81,7 +81,7 @@ func TestExecuteRejectsRequiredSourceFloorMissingFromRunner(t *testing.T) {
 			return value, nil
 		},
 	})
-	if result.TerminalState != engineruntime.TerminalFailed || result.Analysis != nil || result.OpenCodeTelemetry.FailureCode != "source_evidence_missing" {
+	if result.TerminalState != engineruntime.TerminalSucceeded || result.Analysis == nil || len(result.Analysis.SourceCitations) != 0 || len(result.Analysis.RelevantFiles) != 0 || result.ResultValidation.Status != agentanalysis.WorkspaceResultAcceptedWithWarnings || !slices.Contains(result.ResultValidation.Codes, agentanalysis.WorkspaceInvalidSourcePath) {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -130,7 +130,7 @@ func TestExecutePublishesCanonicalAnalysisWithValidationWarnings(t *testing.T) {
 	}
 }
 
-func TestExecuteRejectsUnsafeAnalysisWithPrivacySafeCode(t *testing.T) {
+func TestExecuteDropsUnknownEvidenceIDWithPrivacySafeWarning(t *testing.T) {
 	root, request := executorTestFixture(t)
 	const modelEvidenceID = "artifact-999"
 	result := Execute(t.Context(), request, Options{
@@ -141,7 +141,8 @@ func TestExecuteRejectsUnsafeAnalysisWithPrivacySafeCode(t *testing.T) {
 			return value, nil
 		},
 	})
-	if result.TerminalState != engineruntime.TerminalFailed || result.Analysis != nil || result.FailureReason != agentanalysis.WorkspaceResultRejectedReason || result.OpenCodeTelemetry.FailureCode != "analysis_result_invalid" || result.ResultValidation.Status != agentanalysis.WorkspaceResultRejected || !slices.Equal(result.ResultValidation.Codes, []string{agentanalysis.WorkspaceInvalidArtifactPath}) {
+	wantCodes := []string{agentanalysis.WorkspaceInvalidArtifactCount, agentanalysis.WorkspaceInvalidArtifactPath}
+	if result.TerminalState != engineruntime.TerminalSucceeded || result.Analysis == nil || len(result.Analysis.EvidenceCitations) != 0 || result.ResultValidation.Status != agentanalysis.WorkspaceResultAcceptedWithWarnings || !slices.Equal(result.ResultValidation.Codes, wantCodes) {
 		t.Fatalf("result=%+v", result)
 	}
 	data, err := json.Marshal(result)
@@ -149,7 +150,7 @@ func TestExecuteRejectsUnsafeAnalysisWithPrivacySafeCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	if bytes.Contains(data, []byte(modelEvidenceID)) || bytes.Contains(data, []byte("artifact-only-marker")) {
-		t.Fatalf("rejected result retained model or evidence content: %s", data)
+		t.Fatalf("canonical result retained model or dropped evidence content: %s", data)
 	}
 }
 
@@ -1177,28 +1178,33 @@ func TestRunOpenCodePhasesRejectsUnusableCorrectiveSourceEvidence(t *testing.T) 
 			}
 			initial := fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
 			corrected := strings.TrimSuffix(initial, "]") + fmt.Sprintf(`,{"info":{"role":"assistant"},"parts":[{"type":"step-start"},%s,{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, test.tool(sourcePath, sourceDir))
+			final := strings.TrimSuffix(corrected, "]") + fmt.Sprintf(`,{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},{"type":"step-finish","cost":0.2,"tokens":{"input":20,"output":4,"cache":{"read":2}}}]}]`, executorAnalysisJSON())
 			posts, gets := 0, 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.Method {
 				case http.MethodPost:
 					posts++
-					if posts > 2 {
-						t.Fatalf("finalization ran after unusable source evidence")
+					if posts == 3 {
+						fmt.Fprintf(w, `{"info":{"role":"assistant","structured":%s},"parts":[]}`, executorAnalysisJSON())
+					} else {
+						fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
 					}
-					fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
 				case http.MethodGet:
 					gets++
-					if gets == 1 {
+					switch gets {
+					case 1:
 						fmt.Fprint(w, initial)
-					} else {
+					case 2:
 						fmt.Fprint(w, corrected)
+					case 3:
+						fmt.Fprint(w, final)
 					}
 				}
 			}))
 			defer server.Close()
 			spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192, RequireSourceEvidence: true}
 			result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
-			if err == nil || posts != 2 || gets != 2 || result.Telemetry.FailureCode != "source_evidence_missing" || result.Telemetry.SourceEvidenceStatus != test.wantStatus || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.StructuredOutputToolCalls != 0 {
+			if err != nil || posts != 3 || gets != 3 || result.Telemetry.FailureCode != "" || result.Telemetry.SourceEvidenceStatus != test.wantStatus || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.StructuredOutputToolCalls != 1 {
 				t.Fatalf("posts=%d gets=%d result=%+v err=%v", posts, gets, result, err)
 			}
 		})
@@ -1313,28 +1319,33 @@ func TestRunOpenCodePhasesBoundsSourceCorrectionToOneTurn(t *testing.T) {
 	}
 	initial := fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
 	corrected := strings.TrimSuffix(initial, "]") + `,{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`
+	final := strings.TrimSuffix(corrected, "]") + fmt.Sprintf(`,{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},{"type":"step-finish","cost":0.2,"tokens":{"input":20,"output":4,"cache":{"read":2}}}]}]`, executorAnalysisJSON())
 	posts, gets := 0, 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
 			posts++
-			if posts > 2 {
-				t.Fatalf("more than one source correction was attempted")
+			if posts == 3 {
+				fmt.Fprintf(w, `{"info":{"role":"assistant","structured":%s},"parts":[]}`, executorAnalysisJSON())
+			} else {
+				fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
 			}
-			fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
 		case http.MethodGet:
 			gets++
-			if gets == 1 {
+			switch gets {
+			case 1:
 				fmt.Fprint(w, initial)
-			} else {
+			case 2:
 				fmt.Fprint(w, corrected)
+			case 3:
+				fmt.Fprint(w, final)
 			}
 		}
 	}))
 	defer server.Close()
 	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192, RequireSourceEvidence: true}
 	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
-	if err == nil || posts != 2 || gets != 2 || result.Telemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceToolSkipped || result.Telemetry.FailureCode != "source_evidence_missing" || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.StructuredOutputToolCalls != 0 {
+	if err != nil || posts != 3 || gets != 3 || result.Telemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceToolSkipped || result.Telemetry.FailureCode != "" || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.StructuredOutputToolCalls != 1 {
 		t.Fatalf("posts=%d gets=%d result=%+v err=%v", posts, gets, result, err)
 	}
 }
@@ -1478,7 +1489,7 @@ func TestPrimaryWorkspaceEvidenceFailureCodePrioritizesHardRejections(t *testing
 	}
 }
 
-func TestExecuteRequiresSourceEvidenceForSourceClaims(t *testing.T) {
+func TestExecuteDropsSourceClaimsWithoutSourceEvidence(t *testing.T) {
 	root, request := executorTestFixture(t)
 	result := Execute(t.Context(), request, Options{
 		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
@@ -1488,7 +1499,7 @@ func TestExecuteRequiresSourceEvidenceForSourceClaims(t *testing.T) {
 			return value, nil
 		},
 	})
-	if result.TerminalState != engineruntime.TerminalFailed || result.OpenCodeTelemetry.FailureCode != "source_evidence_unavailable" || !strings.Contains(result.FailureReason, "without successful source evidence") {
+	if result.TerminalState != engineruntime.TerminalSucceeded || result.Analysis == nil || len(result.Analysis.SourceCitations) != 0 || len(result.Analysis.RelevantFiles) != 0 || result.ResultValidation.Status != agentanalysis.WorkspaceResultAcceptedWithWarnings || !slices.Contains(result.ResultValidation.Codes, agentanalysis.WorkspaceInvalidSourcePath) {
 		t.Fatalf("result=%+v", result)
 	}
 }

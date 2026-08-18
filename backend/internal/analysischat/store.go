@@ -423,6 +423,7 @@ func persistResolved(resolved resolvedAnalysis, sourceRepo sourceinvestigation.R
 			Severity:      analysis.Severity,
 			SuggestedFix:  clampPersistedText(analysis.SuggestedFix, 16<<10),
 			RelevantFiles: boundedPersistedFiles(analysis.RelevantFiles),
+			Disposition:   analysis.Disposition,
 		}
 	}
 	if source, ok := resolveBuildSourceRepository(resolved.build, sourceRepo); ok {

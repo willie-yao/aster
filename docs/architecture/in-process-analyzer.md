@@ -23,6 +23,20 @@ Optional Agent Sandbox analysis shadows run after an authoritative refresh and
 write private comparison ledgers. They do not replace the published result or
 participate in normal analysis cache acceptance.
 
+Safe structured output has a separate publication disposition:
+
+- `preliminary` is displayable with bounded warnings but remains eligible for
+  reanalysis and cannot feed patterns, corrections, remediation, actions, or Fix;
+- `grounded` has verified artifact citations and no unresolved grounding or
+  quality warnings;
+- rejected output has no usable `AIAnalysis` and follows the existing unavailable
+  path.
+
+Action eligibility is never stored as analysis state. It is derived later from a
+grounded result plus the existing critique version, source verification,
+authentication, confirmation, deduplication, and Sandbox controls. Cache
+acceptance remains independent from safe publication.
+
 The disabled-by-default Agent Sandbox OpenCode analyzer is the implementation
 used by scheduled shadowing and explicit evaluation tests. The benchmark uses a
 pre-populated private input claim; scheduled shadowing uses a tokenless
@@ -59,10 +73,10 @@ flowchart TD
 ```
 
 The scheduling pass and `ai.Service.analyze` both revalidate an analysis already
-attached to a cached build. If it is stale, the service checks a private
-policy-unavailable cooldown when applicable, then the private agentic cache.
-Artifact-tree scanning, evidence-plan construction, and provider calls occur
-only after those reuse paths miss.
+attached to a cached build. Preliminary results remain reanalysis-eligible. The
+service checks the private agentic cache before artifact-tree scanning,
+evidence-plan construction, and provider calls. Normal cache policy is stricter
+than safe publication and can reject a preliminary result without hiding it.
 
 ## Prompt composition and skills
 

@@ -201,6 +201,11 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	PhaseTimingStatus            string                                 `json:"phase_timing_status"`
 	CleanupDurationMS            int64                                  `json:"cleanup_duration_ms,omitempty"`
 	AnalysisValid                bool                                   `json:"analysis_valid"`
+	AnalysisDisposition          string                                 `json:"analysis_disposition,omitempty"`
+	DispositionWarnings          []string                               `json:"disposition_warnings,omitempty"`
+	StructuredValid              bool                                   `json:"structured_valid"`
+	Displayable                  bool                                   `json:"displayable"`
+	Grounded                     bool                                   `json:"grounded"`
 	ResultValidationStatus       string                                 `json:"result_validation_status,omitempty"`
 	ResultValidationCodes        []string                               `json:"result_validation_codes,omitempty"`
 	ArtifactCitationCount        int                                    `json:"artifact_citation_count"`
@@ -722,7 +727,13 @@ func agentSandboxAnalyzerRecordForResult(
 	record.ResultValidationStatus = validation.Status
 	record.ResultValidationCodes = append([]string(nil), validation.Codes...)
 	analysis := result.Execution.Analysis
-	record.AnalysisValid = analysis != nil && result.Telemetry.FinalizationValid
+	if analysis != nil && result.Telemetry.FinalizationValid {
+		record.AnalysisDisposition, record.DispositionWarnings = agentanalysis.WorkspaceAnalysisDisposition(*analysis, validation, prepared.bc.evidenceMode == benchmarkEvidenceModeArtifactAndSource)
+	}
+	record.StructuredValid = record.AnalysisDisposition != ""
+	record.Displayable = record.StructuredValid
+	record.Grounded = record.AnalysisDisposition == models.AnalysisDispositionGrounded
+	record.AnalysisValid = record.StructuredValid
 	assessment := assessBenchmarkCase(prepared.bc, nil)
 	record.SignalTotal = assessment.total
 	record.DiagnosisSignalTotal = assessment.diagnosisTotal
@@ -753,7 +764,7 @@ func agentSandboxAnalyzerRecordForResult(
 		record.SourceVerified = record.SourceVerified && citation.Verified
 	}
 	record.SourceExpectationHits = agentSandboxAnalyzerSourceExpectationHits(prepared.bc.sourcePaths, record.SourceCitations)
-	testCase := workspaceAnalysisTestCase(*analysis)
+	testCase := workspaceAnalysisTestCase(*analysis, record.AnalysisDisposition, record.DispositionWarnings)
 	assessment = assessBenchmarkCase(prepared.bc, testCase)
 	record.SignalHits, record.SignalTotal = assessment.hits, assessment.total
 	record.DiagnosisSignalHits, record.DiagnosisSignalTotal = assessment.diagnosisHits, assessment.diagnosisTotal
@@ -862,7 +873,7 @@ func agentSandboxAnalyzerBenchmarkStatus(result agentanalysis.WorkspaceSandboxRe
 	}
 }
 
-func workspaceAnalysisTestCase(analysis agentanalysis.WorkspaceAnalysis) *models.TestCase {
+func workspaceAnalysisTestCase(analysis agentanalysis.WorkspaceAnalysis, disposition string, warnings []string) *models.TestCase {
 	return &models.TestCase{
 		Status:    "failed",
 		AISummary: &models.AISummary{Summary: analysis.Summary, IsTransient: analysis.IsTransient},
@@ -870,7 +881,8 @@ func workspaceAnalysisTestCase(analysis agentanalysis.WorkspaceAnalysis) *models
 			RootCause: analysis.RootCause, Severity: analysis.Severity, SuggestedFix: analysis.SuggestedFix,
 			RelevantFiles:     append([]string(nil), analysis.RelevantFiles...),
 			EvidenceCitations: append([]models.EvidenceCitation(nil), analysis.EvidenceCitations...),
-			Mode:              "agent-sandbox-opencode", CritiquePassed: false,
+			Mode:              "agent-sandbox-opencode", Disposition: disposition,
+			DispositionWarnings: append([]string(nil), warnings...), CritiquePassed: false,
 		},
 	}
 }

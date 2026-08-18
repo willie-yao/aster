@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/models"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )
 
@@ -86,14 +87,15 @@ func TestParseWorkspaceAnalysisOrdersCitationsWithoutWarning(t *testing.T) {
 	}
 }
 
-func TestParseWorkspaceAnalysisRejectsRelevantFileWithoutSourceEvidence(t *testing.T) {
+func TestParseWorkspaceAnalysisWarnsOnRelevantFileWithoutSourceEvidence(t *testing.T) {
 	sourceRoot, artifactRoot, manifest, handles := workspaceValidationFixture(t)
 	raw := workspaceValidationJSON(t, handles, func(value map[string]any) {
 		value["source_evidence_ids"] = []any{}
 		value["relevant_file_ids"] = []any{workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 3)}
 	})
-	_, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
-	if err == nil || validation.Status != WorkspaceResultRejected || !slices.Equal(validation.Codes, []string{WorkspaceInvalidSourcePath}) {
+	analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
+	wantCodes := []string{WorkspaceInvalidRelevantFile, WorkspaceInvalidSourcePath}
+	if err != nil || validation.Status != WorkspaceResultAcceptedWithWarnings || !slices.Equal(validation.Codes, wantCodes) || len(analysis.RelevantFiles) != 0 {
 		t.Fatalf("err=%v validation=%+v", err, validation)
 	}
 }
@@ -140,7 +142,6 @@ func TestParseWorkspaceAnalysisInspectsUnknownIDsBeyondRetainedBounds(t *testing
 
 func TestParseWorkspaceAnalysisRejectsHardFailuresWithCodes(t *testing.T) {
 	sourceRoot, artifactRoot, manifest, handles := workspaceValidationFixture(t)
-	sourceID := workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 3)
 	tests := []struct {
 		name string
 		code string
@@ -152,15 +153,6 @@ func TestParseWorkspaceAnalysisRejectsHardFailuresWithCodes(t *testing.T) {
 		}},
 		{name: "analysis text", code: WorkspaceInvalidAnalysisText, raw: func() string {
 			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["summary"] = "" })
-		}},
-		{name: "artifact count", code: WorkspaceInvalidArtifactCount, raw: func() string {
-			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["artifact_evidence_ids"] = []any{} })
-		}},
-		{name: "unknown artifact only", code: WorkspaceInvalidArtifactPath, raw: func() string {
-			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["artifact_evidence_ids"] = []any{"artifact-999"} })
-		}},
-		{name: "wrong-root artifact only", code: WorkspaceInvalidArtifactPath, raw: func() string {
-			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["artifact_evidence_ids"] = []any{sourceID} })
 		}},
 		{name: "classification", code: WorkspaceInvalidClassification, raw: func() string {
 			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["severity"] = "Unknown" })
@@ -176,6 +168,46 @@ func TestParseWorkspaceAnalysisRejectsHardFailuresWithCodes(t *testing.T) {
 				t.Fatalf("validator error retained model evidence ID: %q", err)
 			}
 		})
+	}
+}
+
+func TestParseWorkspaceAnalysisWarnsOnMissingArtifactGrounding(t *testing.T) {
+	sourceRoot, artifactRoot, manifest, handles := workspaceValidationFixture(t)
+	sourceID := workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 3)
+	for _, test := range []struct {
+		name  string
+		value []any
+		codes []string
+	}{
+		{name: "empty", value: []any{}, codes: []string{WorkspaceInvalidArtifactCount}},
+		{name: "unknown", value: []any{"artifact-999"}, codes: []string{WorkspaceInvalidArtifactCount, WorkspaceInvalidArtifactPath}},
+		{name: "wrong root", value: []any{sourceID}, codes: []string{WorkspaceInvalidArtifactCount, WorkspaceInvalidArtifactPath}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw := workspaceValidationJSON(t, handles, func(value map[string]any) { value["artifact_evidence_ids"] = test.value })
+			analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
+			if err != nil || validation.Status != WorkspaceResultAcceptedWithWarnings || !slices.Equal(validation.Codes, test.codes) || len(analysis.EvidenceCitations) != 0 {
+				t.Fatalf("analysis=%+v validation=%+v err=%v", analysis, validation, err)
+			}
+		})
+	}
+}
+
+func TestWorkspaceAnalysisDispositionSeparatesWarningsFromRejection(t *testing.T) {
+	analysis := WorkspaceAnalysis{
+		Summary: "summary", RootCause: "cause", Severity: "High",
+		EvidenceCitations: []models.EvidenceCitation{{Path: "logs/build.log", LineStart: 1, LineEnd: 1, Quote: "failure"}},
+	}
+	disposition, warnings := WorkspaceAnalysisDisposition(analysis, WorkspaceResultValidation{Status: WorkspaceResultAccepted}, false)
+	if disposition != models.AnalysisDispositionGrounded || len(warnings) != 0 {
+		t.Fatalf("grounded disposition=%q warnings=%v", disposition, warnings)
+	}
+	disposition, warnings = WorkspaceAnalysisDisposition(analysis, WorkspaceResultValidation{Status: WorkspaceResultAcceptedWithWarnings, Codes: []string{WorkspaceInvalidRelevantFile}}, true)
+	if disposition != models.AnalysisDispositionPreliminary || !slices.Equal(warnings, []string{models.AnalysisWarningSourceGrounding}) {
+		t.Fatalf("preliminary disposition=%q warnings=%v", disposition, warnings)
+	}
+	if disposition, _ := WorkspaceAnalysisDisposition(analysis, WorkspaceResultValidation{Status: WorkspaceResultRejected, Codes: []string{WorkspaceInvalidResultJSON}}, false); disposition != "" {
+		t.Fatalf("rejected disposition=%q", disposition)
 	}
 }
 
