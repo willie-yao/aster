@@ -742,6 +742,47 @@ ingress:
 	assertDoctorCheck(t, report, "external origin restriction", KubernetesDoctorFail)
 }
 
+// Read-only server features sign admins in through the same OAuth flow, so a
+// mismatched callback must fail even when no write action is enabled, and even
+// when server.actions.mode is left at the chart's oauth default.
+func TestKubernetesDoctorOAuthMismatchWithoutActions(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+	}{
+		{name: "explicit oauth mode", mode: "    mode: oauth\n"},
+		{name: "omitted mode uses the chart default", mode: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			values := strings.Replace(baselineValues(false), `server:
+  security:
+    hsts:
+      enabled: true
+  service:
+    type: ClusterIP
+`, `server:
+  security:
+    hsts:
+      enabled: true
+  pullRequestEscalation:
+    enabled: true
+  actions:
+`+test.mode+`    oauth:
+      redirectUrl: https://wrong.example/api/auth/callback
+      existingSecret: oauth
+  service:
+    type: ClusterIP
+`, 1)
+			dir := writeDoctorBundle(t, values)
+			cluster := baselineCluster(false)
+			cluster.secretNames["sample/oauth"] = true
+			report := runDoctorForTest(t, dir, "install", baselineDoctorRunner(), cluster)
+			assertDoctorCheck(t, report, "OAuth callback", KubernetesDoctorFail)
+		})
+	}
+}
+
 func TestKubernetesDoctorPublicLoadBalancerOriginEvidence(t *testing.T) {
 	tests := []struct {
 		name    string

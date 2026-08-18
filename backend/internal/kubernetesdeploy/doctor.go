@@ -708,7 +708,9 @@ func checkPublicOrigin(ctx context.Context, add func(string, KubernetesDoctorSta
 	} else {
 		add("secure cookies", KubernetesDoctorPass, "development insecure HTTP and cookie settings are disabled", "")
 	}
-	if values.Server.Actions.Enabled && values.Server.Actions.Mode == "oauth" {
+	// server.actions.mode defaults to oauth in the chart, so an omitted mode
+	// still signs admins in through the callback.
+	if values.serverInteractive() && firstNonempty(values.Server.Actions.Mode, "oauth") == "oauth" {
 		site := strings.TrimRight(strings.TrimSpace(cfg.Branding.SiteURL), "/")
 		want := site + "/api/auth/callback"
 		if site == "" || values.Server.Actions.OAuth.RedirectURL != want {
@@ -2722,6 +2724,15 @@ type kubernetesDoctorValues struct {
 				ExistingSecret string `yaml:"existingSecret"`
 			} `yaml:"proxy"`
 		} `yaml:"actions"`
+		Chat struct {
+			Enabled bool `yaml:"enabled"`
+		} `yaml:"chat"`
+		RemediationInvestigation struct {
+			Enabled bool `yaml:"enabled"`
+		} `yaml:"remediationInvestigation"`
+		PullRequestEscalation struct {
+			Enabled bool `yaml:"enabled"`
+		} `yaml:"pullRequestEscalation"`
 		Service struct {
 			Type                     string            `yaml:"type"`
 			LoadBalancerSourceRanges []string          `yaml:"loadBalancerSourceRanges"`
@@ -2736,4 +2747,12 @@ type kubernetesDoctorValues struct {
 	Ingress struct {
 		Enabled bool `yaml:"enabled"`
 	} `yaml:"ingress"`
+}
+
+// serverInteractive reports whether any admin-gated server feature is enabled,
+// mirroring the chart's aster.serverInteractive helper. Every one of them signs
+// admins in, so they share the OAuth callback contract.
+func (v kubernetesDoctorValues) serverInteractive() bool {
+	return v.Server.Actions.Enabled || v.Server.Chat.Enabled ||
+		v.Server.RemediationInvestigation.Enabled || v.Server.PullRequestEscalation.Enabled
 }

@@ -135,7 +135,7 @@ call site.
 {{- $internalEnabled := $internal.enabled | default false -}}
 {{- $internalAnnotations := $internal.annotations | default dict -}}
 {{- $publicAcknowledged := $service.publicOriginAcknowledged | default false -}}
-{{- $interactive := or .Values.server.actions.enabled .Values.server.chat.enabled .Values.server.remediationInvestigation.enabled -}}
+{{- $interactive := include "aster.serverInteractive" . -}}
 {{- if and (gt (len $ranges) 0) (ne $serviceType "LoadBalancer") -}}
 {{- fail "server.service.loadBalancerSourceRanges requires server.service.type=LoadBalancer" -}}
 {{- end -}}
@@ -158,10 +158,21 @@ call site.
 {{- fail "networkPolicy.ingress requires networkPolicy.enabled=true" -}}
 {{- end -}}
 {{- if and $interactive (eq $serviceType "LoadBalancer") (not $internalEnabled) (gt (len $ranges) 1) (not $publicAcknowledged) -}}
-{{- fail "authenticated actions or chat with multiple loadBalancerSourceRanges require publicOriginAcknowledged=true because the chart cannot prove their union is restricted" -}}
+{{- fail "authenticated server features with multiple loadBalancerSourceRanges require publicOriginAcknowledged=true because the chart cannot prove their union is restricted" -}}
 {{- end -}}
 {{- if and $interactive (eq $serviceType "LoadBalancer") (not $internalEnabled) (eq (len $ranges) 0) (not $publicAcknowledged) -}}
-{{- fail "authenticated actions or chat with a LoadBalancer require loadBalancerSourceRanges, internal.enabled, or publicOriginAcknowledged=true" -}}
+{{- fail "authenticated server features with a LoadBalancer require loadBalancerSourceRanges, internal.enabled, or publicOriginAcknowledged=true" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Whether any admin-gated server feature is enabled. Every one of them mounts the
+project config, selects an auth mode, and writes private state, so the server
+templates gate those on this single answer. Emits "true" or the empty string.
+*/}}
+{{- define "aster.serverInteractive" -}}
+{{- if or .Values.server.actions.enabled .Values.server.chat.enabled .Values.server.remediationInvestigation.enabled .Values.server.pullRequestEscalation.enabled -}}
+true
 {{- end -}}
 {{- end -}}
 

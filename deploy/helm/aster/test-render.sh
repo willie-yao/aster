@@ -161,6 +161,80 @@ if grep -Fq 'name: ACTIONS_ENABLED' "$tmp/remediation.yaml" || grep -Fq 'name: B
   exit 1
 fi
 expect_fail remediation-without-ai 'server.remediationInvestigation.enabled requires ai.enabled' --set server.remediationInvestigation.enabled=true --set server.actions.mode=proxy
+
+# Escalation alone must render every prerequisite the feature needs: the project
+# mount, an auth mode, the model credential, and an authenticated GitHub read.
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=true \
+  --set ai.endpoint=https://model.example.test/v1/chat/completions \
+  --set ai.model=fixture-model \
+  --set ai.token=test-token \
+  --set ai.githubReadTokenSecretName=read-token \
+  --set server.pullRequestEscalation.enabled=true \
+  --set server.actions.mode=proxy \
+  --show-only templates/server-deployment.yaml > "$tmp/escalation.yaml"
+grep -A1 -F 'name: PULL_REQUEST_ESCALATION_ENABLED' "$tmp/escalation.yaml" | grep -Fq 'value: "true"'
+grep -A1 -F 'name: AUTH_MODE' "$tmp/escalation.yaml" | grep -Fq 'value: "proxy"'
+grep -Fq 'name: AI_TOKEN' "$tmp/escalation.yaml"
+grep -Fq 'name: GITHUB_READ_TOKEN' "$tmp/escalation.yaml"
+grep -Fq -- '-project-dir=/config' "$tmp/escalation.yaml"
+if grep -Fq 'name: ACTIONS_ENABLED' "$tmp/escalation.yaml" || grep -Fq 'name: BOT_TOKEN' "$tmp/escalation.yaml"; then
+  echo 'escalation rendered write-action credentials' >&2
+  exit 1
+fi
+# Escalation persists its own state, so the shared volume must be writable.
+grep -A3 -F 'mountPath: /data' "$tmp/escalation.yaml" | grep -Fq 'readOnly: false'
+
+# Escalation must not leak a GitHub read token into a server that cannot use it.
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=true \
+  --set ai.endpoint=https://model.example.test/v1/chat/completions \
+  --set ai.model=fixture-model \
+  --set ai.token=test-token \
+  --set ai.githubReadTokenSecretName=read-token \
+  --set server.chat.enabled=true \
+  --set server.actions.mode=proxy \
+  --show-only templates/server-deployment.yaml > "$tmp/escalation-off.yaml"
+if grep -Fq 'name: PULL_REQUEST_ESCALATION_ENABLED' "$tmp/escalation-off.yaml" || grep -Fq 'name: GITHUB_READ_TOKEN' "$tmp/escalation-off.yaml"; then
+  echo 'chat-only render leaked escalation environment' >&2
+  exit 1
+fi
+
+expect_fail escalation-without-ai 'server.pullRequestEscalation.enabled requires ai.enabled' --set server.pullRequestEscalation.enabled=true --set server.actions.mode=proxy
+expect_fail escalation-raw-env 'server.extraEnv must not set PULL_REQUEST_ESCALATION_ENABLED' \
+  --set server.extraEnv[0].name=PULL_REQUEST_ESCALATION_ENABLED --set server.extraEnv[0].value=true
+# Escalation is an authenticated origin, so the public LoadBalancer guardrail
+# must cover it exactly as it covers actions, chat, and remediation.
+expect_fail escalation-public-load-balancer 'authenticated server features with a LoadBalancer require' \
+  --set ai.enabled=true \
+  --set ai.endpoint=https://model.example.test/v1/chat/completions \
+  --set ai.model=fixture-model \
+  --set ai.token=test-token \
+  --set server.pullRequestEscalation.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.service.type=LoadBalancer
+
+# The whole chart must install for escalation alone: the Deployment references
+# the OAuth auth Secret, so secret-auth.yaml has to render it too.
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=true \
+  --set ai.endpoint=https://model.example.test/v1/chat/completions \
+  --set ai.model=fixture-model \
+  --set ai.token=test-token \
+  --set server.pullRequestEscalation.enabled=true \
+  --set server.actions.mode=oauth \
+  --set server.actions.admins[0]=fixture \
+  --set server.actions.oauth.clientId=client-id \
+  --set server.actions.oauth.redirectUrl=https://dashboard.example.test/api/auth/callback \
+  --set server.actions.oauth.clientSecret=client-secret \
+  --set server.actions.oauth.sessionKey=session-key > "$tmp/escalation-oauth.yaml"
+grep -Fq 'name: test-prow-ai-dashboard-auth' "$tmp/escalation-oauth.yaml"
+grep -Fq 'SESSION_KEY: "session-key"' "$tmp/escalation-oauth.yaml"
+if grep -Fq 'BOT_TOKEN:' "$tmp/escalation-oauth.yaml"; then
+  echo 'escalation-only OAuth rendered a write credential' >&2
+  exit 1
+fi
+
 expect_fail invalid-runtime 'analysisRuntime.type must be inprocess' --set analysisRuntime.type=remote
 
 cat > "$tmp/agent-sandbox.yaml" <<'VALUES'

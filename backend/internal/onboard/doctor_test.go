@@ -171,6 +171,8 @@ func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
 		{name: "cluster ip with not in expression", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  ingress:\n    - from:\n        - namespaceSelector:\n            matchExpressions:\n              - key: blocked\n                operator: NotIn\n                values: [true]\n", want: DoctorWarn},
 		{name: "cluster ip with does not exist expression", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  ingress:\n    - from:\n        - namespaceSelector:\n            matchExpressions:\n              - key: blocked\n                operator: DoesNotExist\n", want: DoctorWarn},
 		{name: "chat cluster ip without network policy", originYAML: "server:\n  chat:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorWarn},
+		{name: "remediation cluster ip without network policy", originYAML: "server:\n  remediationInvestigation:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorWarn},
+		{name: "escalation cluster ip without network policy", originYAML: "server:\n  pullRequestEscalation:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorWarn},
 		{name: "unrestricted public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n", want: DoctorWarn},
 		{name: "chat public load balancer", originYAML: "server:\n  chat:\n    enabled: true\n  service:\n    type: LoadBalancer\n", want: DoctorWarn},
 		{name: "network policy only public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\nnetworkPolicy:\n  enabled: true\n", want: DoctorWarn},
@@ -191,6 +193,83 @@ func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
 				sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
 			})
 			if !hasDoctorCheck(report, "Kubernetes origin security", test.want) {
+				t.Fatalf("checks = %+v", report.Checks)
+			}
+		})
+	}
+}
+
+func TestDoctor_KubernetesPullRequestEscalation(t *testing.T) {
+	const aiValues = "ai:\n  enabled: true\n  api: chat_completions\n  endpoint: https://model.example.test/v1/chat/completions\n  model: fixture\n"
+	tests := []struct {
+		name        string
+		serverYAML  string
+		aiYAML      string
+		pullEnabled bool
+		want        DoctorStatus
+	}{
+		{name: "disabled", want: DoctorPass},
+		{name: "enabled without ai", serverYAML: "server:\n  pullRequestEscalation:\n    enabled: true\n", want: DoctorFail},
+		{name: "enabled without pull request triage", serverYAML: "server:\n  pullRequestEscalation:\n    enabled: true\n", aiYAML: aiValues, want: DoctorFail},
+		{name: "enabled without a read token", serverYAML: "server:\n  pullRequestEscalation:\n    enabled: true\n", aiYAML: aiValues, pullEnabled: true, want: DoctorWarn},
+		{
+			name:        "optional read token from an existing ai secret",
+			serverYAML:  "server:\n  pullRequestEscalation:\n    enabled: true\n",
+			aiYAML:      aiValues + "  existingSecret: shared-ai\n",
+			pullEnabled: true,
+			want:        DoctorWarn,
+		},
+		{
+			name:        "actions supply the bot token fallback",
+			serverYAML:  "server:\n  pullRequestEscalation:\n    enabled: true\n  actions:\n    enabled: true\n",
+			aiYAML:      aiValues,
+			pullEnabled: true,
+			want:        DoctorPass,
+		},
+		{
+			name:        "server extra env supplies a read token",
+			serverYAML:  "server:\n  pullRequestEscalation:\n    enabled: true\n  extraEnv:\n    - name: GITHUB_TOKEN\n      value: ghp-test\n",
+			aiYAML:      aiValues,
+			pullEnabled: true,
+			want:        DoctorPass,
+		},
+		{
+			name:        "an empty github token does not clear the bot token",
+			serverYAML:  "server:\n  pullRequestEscalation:\n    enabled: true\n  actions:\n    enabled: true\n  extraEnv:\n    - name: GITHUB_TOKEN\n",
+			aiYAML:      aiValues,
+			pullEnabled: true,
+			want:        DoctorPass,
+		},
+		{
+			name:        "server extra env clears the read token",
+			serverYAML:  "server:\n  pullRequestEscalation:\n    enabled: true\n  extraEnv:\n    - name: GITHUB_READ_TOKEN\n",
+			aiYAML:      aiValues + "  githubReadTokenSecretName: read-token\n",
+			pullEnabled: true,
+			want:        DoctorWarn,
+		},
+		{
+			name:        "fully configured",
+			serverYAML:  "server:\n  pullRequestEscalation:\n    enabled: true\n",
+			aiYAML:      aiValues + "  githubReadTokenSecretName: read-token\n",
+			pullEnabled: true,
+			want:        DoctorPass,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			values := "persistence:\n  storageClass: azurefile-csi\n  accessMode: ReadWriteMany\n" + test.aiYAML + test.serverYAML
+			projectYAML := doctorProjectYAML
+			if test.pullEnabled {
+				projectYAML += "pull_requests:\n  enabled: true\n"
+			}
+			report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+				files: doctorFiles(map[string]string{
+					"/consumer/deploy/values.yaml": values,
+					"/consumer/project.yaml":       projectYAML,
+				}),
+				sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+			})
+			if !hasDoctorCheck(report, "Kubernetes pull request escalation", test.want) {
 				t.Fatalf("checks = %+v", report.Checks)
 			}
 		})

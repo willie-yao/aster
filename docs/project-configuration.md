@@ -284,7 +284,22 @@ A few behaviors worth knowing:
 Every verdict above is computed without a model. When a failure stays
 `unexplained`, `touches_changed_code`, or `inconclusive`, a maintainer can
 escalate it for one on-demand analysis. Escalation is server-mode only and
-opt-in:
+opt-in. On the Kubernetes path, turn it on with the chart value:
+
+```yaml
+server:
+  pullRequestEscalation:
+    enabled: true
+```
+
+The chart renders `PULL_REQUEST_ESCALATION_ENABLED` from that value and refuses
+to install when `ai.enabled` is not set. Setting the raw variable through
+`server.extraEnv` is rejected. Escalation also needs the `server.actions.mode`
+authentication settings, exactly like chat and remediation investigation, and
+it neither enables writes nor requires `BOT_TOKEN`. Set
+`ai.githubReadTokenSecretName` so changed files are read authenticated rather
+than at the anonymous rate limit. Outside the chart the server reads the
+variable directly:
 
 ```bash
 PULL_REQUEST_ESCALATION_ENABLED=true   # plus AI_TOKEN, AI_ENDPOINT, AI_MODEL

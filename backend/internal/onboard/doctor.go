@@ -461,9 +461,16 @@ type doctorKubernetesValues struct {
 		Actions struct {
 			Enabled bool `yaml:"enabled"`
 		} `yaml:"actions"`
-		Chat struct {
+		ExtraEnv []doctorExtraEnv `yaml:"extraEnv"`
+		Chat     struct {
 			Enabled bool `yaml:"enabled"`
 		} `yaml:"chat"`
+		RemediationInvestigation struct {
+			Enabled bool `yaml:"enabled"`
+		} `yaml:"remediationInvestigation"`
+		PullRequestEscalation struct {
+			Enabled bool `yaml:"enabled"`
+		} `yaml:"pullRequestEscalation"`
 		Service struct {
 			Type                     string   `yaml:"type"`
 			LoadBalancerSourceRanges []string `yaml:"loadBalancerSourceRanges"`
@@ -592,6 +599,7 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 		add("Kubernetes storage", DoctorPass, "dynamic ReadWriteMany storage is configured", "")
 	}
 	checkKubernetesOrigin(add, values)
+	checkKubernetesPullRequestEscalation(add, values, cfg)
 	aiEnabled := values.AI.Enabled != nil && *values.AI.Enabled
 	if !aiEnabled {
 		add("Kubernetes AI", DoctorPass, "deployed AI analysis is disabled", "")
@@ -636,9 +644,69 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 	return profile
 }
 
+// serverReadTokenState is what the server will hold for escalation's GitHub
+// reads. It mirrors the chart's own GITHUB_READ_TOKEN block, the BOT_TOKEN that
+// enabled actions always render, and githubReadTokenFromEnv's preference order.
+func serverReadTokenState(values doctorKubernetesValues) envTokenState {
+	read, bot, github := chartReadTokenState(values), envTokenMissing, envTokenMissing
+	// The chart refuses to install enabled actions without a bot token, and the
+	// server mounts that key without optional, so the pod cannot start without it.
+	if values.Server.Actions.Enabled {
+		bot = envTokenPresent
+	}
+	// The chart appends server.extraEnv after its own entries and the last
+	// duplicate wins, so a later entry decides the final value. Each variable is
+	// resolved separately because the engine takes the first non-empty one.
+	for _, env := range values.Server.ExtraEnv {
+		switch strings.TrimSpace(env.Name) {
+		case "GITHUB_READ_TOKEN":
+			read = env.fold(read)
+		case "BOT_TOKEN":
+			bot = env.fold(bot)
+		case "GITHUB_TOKEN":
+			github = env.fold(github)
+		}
+	}
+	switch {
+	case read == envTokenPresent || bot == envTokenPresent || github == envTokenPresent:
+		return envTokenPresent
+	case read == envTokenOptional || bot == envTokenOptional || github == envTokenOptional:
+		return envTokenOptional
+	default:
+		return envTokenMissing
+	}
+}
+
+// checkKubernetesPullRequestEscalation reports the preconditions the chart
+// cannot see: escalation needs a model and the triage view it escalates from.
+func checkKubernetesPullRequestEscalation(add func(string, DoctorStatus, string, string), values doctorKubernetesValues, cfg *project.Config) {
+	const name = "Kubernetes pull request escalation"
+	if !values.Server.PullRequestEscalation.Enabled {
+		add(name, DoctorPass, "on-demand pull request escalation is disabled", "")
+		return
+	}
+	if values.AI.Enabled == nil || !*values.AI.Enabled {
+		add(name, DoctorFail, "server.pullRequestEscalation.enabled is set while ai.enabled is not", "Set ai.enabled with the provider endpoint and model, or disable server.pullRequestEscalation.enabled. The chart refuses to render this combination.")
+		return
+	}
+	if cfg.PullRequests == nil || !cfg.PullRequests.Enabled {
+		add(name, DoctorFail, "server.pullRequestEscalation.enabled is set while pull_requests.enabled is not", "Enable pull_requests in project.yaml. The server refuses to start otherwise, because escalation escalates a triaged pull request failure.")
+		return
+	}
+	switch serverReadTokenState(values) {
+	case envTokenMissing:
+		add(name, DoctorWarn, "no GitHub read token reaches the server", "Set ai.githubReadTokenSecretName so escalation reads changed files authenticated rather than at the anonymous 60 requests per hour limit.")
+	case envTokenOptional:
+		add(name, DoctorWarn, "the server's GitHub read token comes from an optional Secret key that may not exist", "Set ai.githubReadTokenSecretName, or confirm that ai.existingSecret carries ai.githubReadTokenSecretKey. A missing optional key silently falls back to anonymous reads.")
+	default:
+		add(name, DoctorPass, "escalation has a model, pull request triage, and a GitHub read token", "")
+	}
+}
+
 func checkKubernetesOrigin(add func(string, DoctorStatus, string, string), values doctorKubernetesValues) {
-	if !values.Server.Actions.Enabled && !values.Server.Chat.Enabled {
-		add("Kubernetes origin security", DoctorPass, "authenticated actions and chat are disabled", "")
+	if !values.Server.Actions.Enabled && !values.Server.Chat.Enabled &&
+		!values.Server.RemediationInvestigation.Enabled && !values.Server.PullRequestEscalation.Enabled {
+		add("Kubernetes origin security", DoctorPass, "authenticated server features are disabled", "")
 		return
 	}
 	serviceType := strings.TrimSpace(values.Server.Service.Type)

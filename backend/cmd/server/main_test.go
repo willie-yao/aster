@@ -59,6 +59,7 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "")
 		t.Setenv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", "")
 		t.Setenv("CAUSAL_REMEDIATION_INVESTIGATION_ENABLED", "")
+		t.Setenv("PULL_REQUEST_ESCALATION_ENABLED", "")
 		t.Setenv("ACTIONS_ENABLED", "")
 	}
 	t.Run("legacy actions default", func(t *testing.T) {
@@ -114,6 +115,29 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 			t.Fatal(err)
 		}
 		if features.Actions || !features.CausalRemediationInvestigation {
+			t.Fatalf("features = %+v", features)
+		}
+	})
+	t.Run("escalation defaults writes off", func(t *testing.T) {
+		setDefaults(t)
+		t.Setenv("PULL_REQUEST_ESCALATION_ENABLED", "true")
+		features, err := interactiveFeaturesFromEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if features.Actions || !features.PullRequestEscalation {
+			t.Fatalf("features = %+v", features)
+		}
+	})
+	t.Run("escalation and actions", func(t *testing.T) {
+		setDefaults(t)
+		t.Setenv("PULL_REQUEST_ESCALATION_ENABLED", "true")
+		t.Setenv("ACTIONS_ENABLED", "true")
+		features, err := interactiveFeaturesFromEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !features.Actions || !features.PullRequestEscalation {
 			t.Fatalf("features = %+v", features)
 		}
 	})
