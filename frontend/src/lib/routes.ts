@@ -37,3 +37,7 @@ export function pullRequestsPath(): string {
 export function pullRequestPath(number: number): string {
   return `${pullRequestsPath()}/${routeSegment(String(number))}`;
 }
+
+export function sharedFailurePath(id: string): string {
+  return `${pullRequestsPath()}/shared/${routeSegment(id)}`;
+}

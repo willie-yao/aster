@@ -6,7 +6,11 @@ import type {
   ResolvedState,
   SearchIndex,
 } from "../types/dashboard";
-import type { PullRequestDetail, PullRequestIndex } from "../types/pullRequests";
+import type {
+  PullRequestDetail,
+  PullRequestIndex,
+  SharedFailureIndex,
+} from "../types/pullRequests";
 import { jobDataFilename } from "../lib/utils";
 import { searchIndexPath } from "../lib/search";
 import { normalizeFlakinessReport, type FlakinessReportWire } from "../lib/flakinessReport";
@@ -81,6 +85,10 @@ export function useSearchIndex(activated: boolean) {
 
 export function usePullRequestIndex(enabled: boolean) {
   return useJSON<PullRequestIndex>(enabled ? "pull-requests.json" : null);
+}
+
+export function useSharedFailures(enabled: boolean) {
+  return useJSON<SharedFailureIndex>(enabled ? "pull-request-failures.json" : null);
 }
 
 export function usePullRequestDetail(number: string | undefined) {

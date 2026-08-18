@@ -385,6 +385,7 @@ jobs:
             "$d"/action_request_state.json "$d"/action_preview_state.json \
             "$d"/analysis_correction_state.json \
             "$d"/pr_escalation_state.json \
+            "$d"/shared_failure_escalation_state.json \
             "$d"/.fetch-status/status.json "$d"/.fetch-status/status.json.tmp-* \
             "$d"/.fetch-status/history.json "$d"/.fetch-status/history.json.tmp-* \
             "$d"/.remediation-investigations/cache.json \

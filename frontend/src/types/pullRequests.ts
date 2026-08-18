@@ -85,3 +85,45 @@ export interface PullRequestDetail extends PullRequestSummary {
   generated_at: string;
   checks: PullRequestCheck[];
 }
+
+// SharedFailureMember is one pull request reporting a shared failure, with the
+// build that observed it.
+export interface SharedFailureMember {
+  number: number;
+  title?: string;
+  author?: string;
+  html_url?: string;
+  build_id: string;
+  started: string;
+  finished?: string;
+  web_url?: string;
+  // A stale build tested an older head, so it cannot serve as evidence.
+  stale?: boolean;
+  // Members of one cluster can differ: a base branch that already fails the
+  // test explains the failure for that pull request before peers are consulted.
+  verdict?: AttributionVerdict;
+}
+
+// SharedFailure is one failing job and test observed across several open pull
+// requests, mirroring models.SharedFailure.
+export interface SharedFailure {
+  id: string;
+  base_ref: string;
+  job_name: string;
+  job_id: string;
+  test_name: string;
+  build_level?: boolean;
+  pull_requests: SharedFailureMember[];
+  // The member build window observed in the current pass. Neither bound is a
+  // claim about when the failure first appeared.
+  oldest_build_started: string;
+  newest_build_started: string;
+  // Set when no member can already be analyzed from its own pull request.
+  escalatable: boolean;
+}
+
+export interface SharedFailureIndex {
+  generated_at: string;
+  repo: string;
+  failures: SharedFailure[];
+}

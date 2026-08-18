@@ -6,6 +6,7 @@ import {
   buildFailurePath,
   jobPath,
   jobRunPath,
+  sharedFailurePath,
   testPath,
   testRunPath,
 } from "../src/lib/routes.js";
@@ -24,6 +25,10 @@ test("route parameters remain encoded inside same-origin app paths", () => {
   assert.equal(
     jobRunPath("periodic/capz", "build/123"),
     "/job/periodic%2Fcapz?run=build%2F123",
+  );
+  assert.equal(
+    sharedFailurePath("../../evil"),
+    "/pull-requests/shared/..%2F..%2Fevil",
   );
   assert.equal(
     testRunPath("periodic/capz", "[It] creates", "build/123"),

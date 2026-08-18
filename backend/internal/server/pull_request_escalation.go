@@ -24,8 +24,8 @@ const (
 
 // PullRequestEscalationRunner starts and reads on-demand pull request analysis.
 type PullRequestEscalationRunner interface {
-	Start(context.Context, prescalation.Ref, string, string) (prescalation.View, error)
-	Get(prescalation.Ref) (prescalation.View, error)
+	Start(context.Context, prescalation.Ref, string, string) (prescalation.PullRequestView, error)
+	Get(prescalation.Ref) (prescalation.PullRequestView, error)
 }
 
 func startPullRequestEscalationHandler(timeout time.Duration, runner PullRequestEscalationRunner) http.Handler {
