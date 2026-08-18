@@ -207,7 +207,23 @@ func New(ctx context.Context, resolver Resolver, runner Runner, opts Options) (*
 			if view.State == StateQueued || view.State == StateRunning {
 				continue
 			}
-			s.records[identity] = &record{view: view, updatedAt: opts.Now().UTC()}
+			// Completion time orders the restored set, so pruning it drops the
+			// genuinely oldest results rather than an arbitrary one.
+			updatedAt := view.CompletedAt
+			if updatedAt.IsZero() {
+				updatedAt = opts.Now().UTC()
+			}
+			s.records[identity] = &record{view: view, updatedAt: updatedAt}
+		}
+		// A store written under a larger bound holds more results than are
+		// retained now, and nothing else would bring it back down until the
+		// next escalation runs.
+		s.mu.Lock()
+		oversized := len(s.records) > opts.MaxRecords
+		s.pruneLocked()
+		s.mu.Unlock()
+		if oversized {
+			s.persist()
 		}
 	}
 	return s, nil

@@ -641,6 +641,57 @@ func TestAFullQueuesResultsAreAllRetained(t *testing.T) {
 	}
 }
 
+// A store written under a larger bound must not keep the service above its
+// retention cap forever: nothing else brings it down until an escalation runs.
+func TestAnOversizedRestoredStoreIsPruned(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	store := &memoryStore{results: map[string]View{}}
+	for i := 0; i < 6; i++ {
+		ref := testRef(fmt.Sprintf("Test%d", i))
+		store.results[ref.identity()] = View{
+			Ref: ref, State: StateComplete, RootCause: "done",
+			CompletedAt: base.Add(time.Duration(i) * time.Minute),
+		}
+	}
+	service := newService(t, &fakeResolver{}, newFakeRunner(), Options{MaxRecords: 2, MaxQueued: 1, Store: store})
+
+	service.mu.Lock()
+	retained := len(service.records)
+	service.mu.Unlock()
+	if retained != 2 {
+		t.Fatalf("restored records = %d, want the bound respected", retained)
+	}
+	// Completion time orders the eviction, so the newest results are the ones
+	// that survive.
+	for _, name := range []string{"Test4", "Test5"} {
+		if view, _ := service.Get(testRef(name)); view.State != StateComplete {
+			t.Errorf("%s state = %q, want the newest results retained", name, view.State)
+		}
+	}
+	// The pruned set is written back, so the file does not stay oversized.
+	persisted, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(persisted) != 2 {
+		t.Errorf("persisted records = %d, want the pruned snapshot", len(persisted))
+	}
+}
+
+// Retention tighter than the queue would evict results the instant they land,
+// so the queue is the floor.
+func TestRetentionIsNeverTighterThanTheQueue(t *testing.T) {
+	opts := Options{MaxQueued: 4, MaxRecords: 2}.normalized()
+	if opts.MaxRecords != 4 {
+		t.Fatalf("MaxRecords = %d, want it raised to the queue bound", opts.MaxRecords)
+	}
+	// A roomier retention setting is left alone.
+	opts = Options{MaxQueued: 4, MaxRecords: 50}.normalized()
+	if opts.MaxRecords != 50 {
+		t.Fatalf("MaxRecords = %d, want the configured value kept", opts.MaxRecords)
+	}
+}
+
 func TestEligible(t *testing.T) {
 	cases := []struct {
 		verdict models.AttributionVerdict
