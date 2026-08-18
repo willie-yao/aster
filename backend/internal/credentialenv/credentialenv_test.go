@@ -14,7 +14,26 @@ func contains(names []string, want string) bool {
 	return false
 }
 
+// isolateEnv snapshots every classified variable and restores it exactly,
+// including its unset state. Sanitize mutates the process environment, so a
+// test that touches an inherited variable would otherwise leak into the next.
+func isolateEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range append(append([]string{}, Trimmed...), Reported...) {
+		name := name
+		previous, existed := os.LookupEnv(name)
+		t.Cleanup(func() {
+			if existed {
+				os.Setenv(name, previous)
+				return
+			}
+			os.Unsetenv(name)
+		})
+	}
+}
+
 func TestSanitizeTrimsFixedFormatCredentials(t *testing.T) {
+	isolateEnv(t)
 	t.Setenv("OAUTH_CLIENT_SECRET", "secret40\n")
 	t.Setenv("BOT_TOKEN", "  ghp_tok  ")
 	t.Setenv("AI_TOKEN", "clean-token")
@@ -41,6 +60,7 @@ func TestSanitizeTrimsFixedFormatCredentials(t *testing.T) {
 // Trimming a free-form secret can change or weaken its meaning, so these are
 // reported and left exactly as configured.
 func TestSanitizeReportsFreeFormSecretsWithoutChangingThem(t *testing.T) {
+	isolateEnv(t)
 	t.Setenv("SESSION_KEY", "seed\n")
 	t.Setenv("EMAIL_SMTP_PASSWORD", " pw ")
 	t.Setenv("AUTH_PROXY_SECRET", "   ")
@@ -63,6 +83,7 @@ func TestSanitizeReportsFreeFormSecretsWithoutChangingThem(t *testing.T) {
 // Emptying AUTH_PROXY_SECRET would disable the shared-secret check entirely, so
 // a whitespace-only value must survive rather than silently weaken auth.
 func TestSanitizeNeverEmptiesProxySecret(t *testing.T) {
+	isolateEnv(t)
 	t.Setenv("AUTH_PROXY_SECRET", "  \n")
 	Sanitize()
 	if got := os.Getenv("AUTH_PROXY_SECRET"); got == "" {
@@ -73,6 +94,7 @@ func TestSanitizeNeverEmptiesProxySecret(t *testing.T) {
 // An unset variable must stay unset: creating it as empty would turn "not
 // configured" into "configured but blank".
 func TestSanitizeLeavesUnsetVariablesUnset(t *testing.T) {
+	isolateEnv(t)
 	os.Unsetenv("ISSUE_TOKEN")
 	Sanitize()
 	if _, ok := os.LookupEnv("ISSUE_TOKEN"); ok {
@@ -83,6 +105,7 @@ func TestSanitizeLeavesUnsetVariablesUnset(t *testing.T) {
 // A whitespace-only token collapses to empty so existing "is it configured"
 // checks treat it as missing rather than as a usable credential.
 func TestSanitizeCollapsesWhitespaceOnlyToken(t *testing.T) {
+	isolateEnv(t)
 	t.Setenv("FIX_TOKEN", "   \n")
 	Sanitize()
 	if got := os.Getenv("FIX_TOKEN"); got != "" {
