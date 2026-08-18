@@ -399,6 +399,10 @@ func (s *Service) finish(rec *record, view View) {
 	rec.view = view
 	rec.running = false
 	rec.updatedAt = now
+	// A full queue can leave more records retained than the bound allows, and
+	// they only become prunable now, so the bound is restored here rather than
+	// waiting for a later request that may never come.
+	s.pruneLocked()
 	s.mu.Unlock()
 
 	s.persist()

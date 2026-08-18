@@ -594,27 +594,29 @@ func TestRetentionIsBounded(t *testing.T) {
 	}
 }
 
-// Records cannot be pruned while they run, so a full queue can finish several
-// at once and leave the bound exceeded. The next start must bring it back down
-// rather than evicting one and stopping.
+// Records cannot be pruned while they run, so a full queue can finish together
+// and leave the bound exceeded. It must be restored without waiting for a later
+// request that may never come.
 func TestRetentionRecoversAfterAFullQueueFinishes(t *testing.T) {
 	runner := newFakeRunner()
-	close(runner.release)
 	service := newService(t, &fakeResolver{}, runner, Options{MaxRecords: 2, MaxQueued: 4})
 
+	// Holding the runner keeps all four records running, and therefore
+	// unprunable, until the queue is full.
 	for i := 0; i < 4; i++ {
 		ref := testRef(fmt.Sprintf("Test%d", i))
 		if _, err := service.Start(context.Background(), ref, "octocat", fmt.Sprintf("req-%d", i)); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
 	}
-	// Waiting per subject would race the pruning this test is about.
-	drain(t, service)
-
-	ref := testRef("TestNext")
-	if _, err := service.Start(context.Background(), ref, "octocat", "req-next"); err != nil {
-		t.Fatalf("Start: %v", err)
+	service.mu.Lock()
+	queued := len(service.records)
+	service.mu.Unlock()
+	if queued != 4 {
+		t.Fatalf("records while running = %d, want the full queue retained", queued)
 	}
+
+	close(runner.release)
 	drain(t, service)
 
 	service.mu.Lock()
