@@ -2,22 +2,17 @@ package fetcher
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/willie-yao/aster/backend/internal/fetchprogress"
-	"github.com/willie-yao/aster/backend/internal/fixpr"
-	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/issues"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
-	"github.com/willie-yao/aster/backend/internal/runtime"
 	"github.com/willie-yao/aster/backend/internal/statefile"
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
@@ -75,47 +70,18 @@ func TestLoadFinalizedDataRejectsMalformedJob(t *testing.T) {
 	}
 }
 
-type finalizedFakePR struct{}
-
-func (finalizedFakePR) OpenPR(context.Context, ghpr.Request) (string, error) {
-	return "https://github.com/example/repo/pull/7", nil
-}
-func (finalizedFakePR) SearchOpenPR(context.Context, string, string, string, string) (int, string, bool, error) {
-	return 0, "", false, nil
-}
-func (f finalizedFakePR) SearchAnyPR(ctx context.Context, owner, repo, token, marker string) (int, string, bool, error) {
-	return f.SearchOpenPR(ctx, owner, repo, token, marker)
-}
-
-func (finalizedFakePR) ResolveBase(context.Context, string, string) (ghpr.Base, error) {
-	return ghpr.Base{Branch: "main", HeadSHA: "base-sha", TreeSHA: "tree-sha"}, nil
-}
-
-type finalizedFakeAgent struct{}
-
-func (finalizedFakeAgent) Generate(_ context.Context, spec runtime.GenerateSpec) (runtime.GenerateResult, error) {
-	results := make([]runtime.CommandResult, 0, len(spec.CommandPolicy.Commands))
-	for _, command := range spec.CommandPolicy.Commands {
-		results = append(results, runtime.CommandResult{Argv: command.Argv})
-	}
-	return runtime.GenerateResult{
-		Files:          map[string]string{"config/fix.yaml": "fixed: true\n"},
-		Diff:           "diff --git a/config/fix.yaml b/config/fix.yaml\n+fixed: true\n",
-		CommandResults: results,
-		BaseSHA:        spec.Repo.Ref,
-	}, nil
-}
-
 type recordingScheduledIssueManager struct {
-	reconcileCalls int
-	saveCalls      int
-	reconcileErr   error
-	saveErr        error
+	recoverCalls int
+	saveCalls    int
+	recoverErr   error
+	saveErr      error
+	activeKeys   []string
 }
 
-func (m *recordingScheduledIssueManager) Reconcile(context.Context, []issues.IssueSpec) (issues.Stats, error) {
-	m.reconcileCalls++
-	return issues.Stats{}, m.reconcileErr
+func (m *recordingScheduledIssueManager) Recover(_ context.Context, activeKeys []string) (issues.Stats, error) {
+	m.recoverCalls++
+	m.activeKeys = activeKeys
+	return issues.Stats{}, m.recoverErr
 }
 
 func (m *recordingScheduledIssueManager) SaveState() error {
@@ -142,7 +108,7 @@ func TestProcessIssuesSkipsWithoutStaticToken(t *testing.T) {
 	}
 	t.Cleanup(func() { newBatchIssueManager = oldFactory })
 
-	if err := processIssues(t.Context(), automaticIssueTestConfig(), models.FlakinessReport{}, nil, "", false, t.TempDir(), nil); err != nil {
+	if err := processIssues(t.Context(), automaticIssueTestConfig(), models.FlakinessReport{}, nil, t.TempDir()); err != nil {
 		t.Fatalf("processIssues error = %v", err)
 	}
 }
@@ -154,256 +120,17 @@ func TestProcessIssuesRunsWithStaticToken(t *testing.T) {
 	newBatchIssueManager = func(*issues.Client, string, string, issues.Options) scheduledIssueManager { return manager }
 	t.Cleanup(func() { newBatchIssueManager = oldFactory })
 
-	if err := processIssues(t.Context(), automaticIssueTestConfig(), models.FlakinessReport{}, nil, "", false, t.TempDir(), nil); err != nil {
+	if err := processIssues(t.Context(), automaticIssueTestConfig(), models.FlakinessReport{}, nil, t.TempDir()); err != nil {
 		t.Fatalf("processIssues error = %v", err)
 	}
-	if manager.reconcileCalls != 1 || manager.saveCalls != 1 {
-		t.Fatalf("issue manager calls = reconcile %d save %d", manager.reconcileCalls, manager.saveCalls)
-	}
-}
-
-func TestRunFinalizedSideEffectsProducesFixPreview(t *testing.T) {
-	projectDir := t.TempDir()
-	dataDir := t.TempDir()
-	storageDir := t.TempDir()
-	config := `
-id: test
-name: Test Project
-testgrid:
-  dashboard: test
-storage:
-  provider: local
-  base: ` + storageDir + `
-branding:
-  title: Test
-  base_path: /
-  site_url: https://example.test
-  source_repo: {owner: example, name: repo}
-ai:
-  fix_prs:
-    enabled: true
-    author_name: Test
-    author_email: test@example.com
-    dry_run: true
-    critique_retries: 0
-    agent_runtime:
-      type: agent-sandbox
-      allow_bash: false
-      output_limit_bytes: 65536
-      allowed_commands:
-        - argv: [git, diff, --cached, --check]
-          timeout: 1m
-      model_provider:
-        credential_mode: direct
-        api: chat_completions
-        endpoint: https://models.invalid/v1/chat/completions
-        model: test-model
-        auth:
-          type: bearer
-`
-	if err := os.WriteFile(filepath.Join(projectDir, "project.yaml"), []byte(config), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := statefile.WriteJSON(filepath.Join(dataDir, "flakiness.json"), models.FlakinessReport{
-		RecurringPatterns: []models.PatternAnalysis{{
-			ID: "pattern", Subject: "job", Systemic: true, Confidence: "high",
-			SharedRootCause: "configuration is stale", SuggestedFix: "update config/fix.yaml", Summary: "recurring",
-		}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(dataDir, "jobs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("FIX_TOKEN", "test-token")
-	oldRuntime, oldManager := newBatchFixRuntime, newBatchFixManager
-	newBatchFixRuntime = func(*project.FixAgentRuntime) (runtime.AgentRuntime, error) { return finalizedFakeAgent{}, nil }
-	newBatchFixManager = func(_ string, stateFile string, opts fixpr.Options) *fixpr.Manager {
-		return fixpr.NewManager(finalizedFakePR{}, stateFile, opts)
-	}
-	t.Cleanup(func() {
-		newBatchFixRuntime, newBatchFixManager = oldRuntime, oldManager
-	})
-
-	if err := RunFinalizedSideEffects(context.Background(), FinalizedSideEffectsOptions{ProjectDir: projectDir, DataDir: dataDir}); err != nil {
-		t.Fatal(err)
-	}
-	var previews []fixpr.Preview
-	data, err := os.ReadFile(filepath.Join(dataDir, "fix_previews.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(data, &previews); err != nil {
-		t.Fatal(err)
-	}
-	if len(previews) != 1 || !strings.Contains(previews[0].Diff, "fixed: true") {
-		t.Fatalf("previews = %+v", previews)
-	}
-}
-
-func TestProcessFixPRsReportsPersistedReference(t *testing.T) {
-	zero := 0
-	cfg := &project.Config{
-		Name:     "Test Project",
-		Branding: project.Branding{SiteURL: "https://example.test"},
-		AI: &project.AI{FixPRs: &project.FixPRs{
-			Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"},
-			AuthorName: "Test", AuthorEmail: "test@example.com", CritiqueRetries: &zero,
-			AgentRuntime: &project.FixAgentRuntime{
-				Type: "agent-sandbox", OutputLimitBytes: 64 << 10,
-				AllowedCommands: []project.FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "1m"}},
-			},
-		}},
-	}
-	t.Setenv("FIX_TOKEN", "test-token")
-	oldRuntime, oldManager := newBatchFixRuntime, newBatchFixManager
-	newBatchFixRuntime = func(*project.FixAgentRuntime) (runtime.AgentRuntime, error) { return finalizedFakeAgent{}, nil }
-	newBatchFixManager = func(_ string, stateFile string, opts fixpr.Options) *fixpr.Manager {
-		return fixpr.NewManager(finalizedFakePR{}, stateFile, opts)
-	}
-	t.Cleanup(func() {
-		newBatchFixRuntime, newBatchFixManager = oldRuntime, oldManager
-	})
-	dataDir := t.TempDir()
-	pattern := models.PatternAnalysis{
-		ID: "pattern", JobID: "job", Subject: "job", Systemic: true, Confidence: "high",
-		SharedRootCause: "configuration is stale", SuggestedFix: "update config/fix.yaml", Summary: "recurring",
-	}
-	changed, err := processFixPRs(context.Background(), cfg, []models.PatternAnalysis{pattern}, "", dataDir, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !changed {
-		t.Fatal("persisted fix reference was not reported")
-	}
-	state := statefile.Load[fixpr.TrackedFix](filepath.Join(dataDir, "fix_pr_state.json"), "example/repo", "fix PRs")
-	if len(state.Tracked) != 1 {
-		t.Fatalf("tracked fixes = %+v", state.Tracked)
-	}
-}
-
-func TestProcessFixPRsSkipsWithoutStaticToken(t *testing.T) {
-	zero := 0
-	cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{
-		Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"},
-		AuthorName: "Test", AuthorEmail: "test@example.com", CritiqueRetries: &zero,
-		AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"},
-	}}}
-	t.Setenv("FIX_TOKEN", "")
-	oldRuntime, oldManager := newBatchFixRuntime, newBatchFixManager
-	newBatchFixRuntime = func(*project.FixAgentRuntime) (runtime.AgentRuntime, error) {
-		t.Fatal("fix runtime was created without FIX_TOKEN")
-		return nil, nil
-	}
-	newBatchFixManager = func(string, string, fixpr.Options) *fixpr.Manager {
-		t.Fatal("fix manager was created without FIX_TOKEN")
-		return nil
-	}
-	t.Cleanup(func() { newBatchFixRuntime, newBatchFixManager = oldRuntime, oldManager })
-
-	changed, err := processFixPRs(t.Context(), cfg, []models.PatternAnalysis{{
-		ID: "pattern", JobID: "job", Subject: "job", Systemic: true, Confidence: "high",
-		SharedRootCause: "configuration is stale", SuggestedFix: "update config/fix.yaml",
-	}}, "", t.TempDir(), nil)
-	if err != nil || changed {
-		t.Fatalf("processFixPRs changed=%t error=%v", changed, err)
-	}
-}
-
-func TestProcessFixPRsRejectsInvalidAIAPI(t *testing.T) {
-	cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{
-		Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"},
-		AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"},
-	}}}
-	t.Setenv("FIX_TOKEN", "test-token")
-	t.Setenv("AI_API", "invalid")
-	pattern := models.PatternAnalysis{ID: "pattern", Systemic: true, Confidence: "high"}
-	changed, err := processFixPRs(context.Background(), cfg, []models.PatternAnalysis{pattern}, "", t.TempDir(), nil)
-	if err == nil || !strings.Contains(err.Error(), `AI API "invalid" is invalid`) {
-		t.Fatalf("err = %v, want invalid AI API error", err)
-	}
-	if changed {
-		t.Fatal("invalid AI API changed fix state")
-	}
-}
-
-type failingFinalizedAgent struct{}
-
-func (failingFinalizedAgent) Generate(context.Context, runtime.GenerateSpec) (runtime.GenerateResult, error) {
-	return runtime.GenerateResult{}, errors.New("generation failed")
-}
-
-func TestProcessFixPRsPropagatesPatternFailure(t *testing.T) {
-	projectDir := t.TempDir()
-	config := `
-id: test
-name: Test Project
-testgrid:
-  dashboard: test
-storage:
-  provider: local
-  base: ` + t.TempDir() + `
-branding:
-  title: Test
-  base_path: /
-  site_url: https://example.test
-  source_repo: {owner: example, name: repo}
-ai:
-  fix_prs:
-    enabled: true
-    author_name: Test
-    author_email: test@example.com
-    dry_run: true
-    critique_retries: 0
-    agent_runtime:
-      type: agent-sandbox
-      allow_bash: false
-      output_limit_bytes: 65536
-      allowed_commands:
-        - argv: [git, diff, --cached, --check]
-          timeout: 1m
-      model_provider:
-        credential_mode: direct
-        api: chat_completions
-        endpoint: https://models.invalid/v1/chat/completions
-        model: test-model
-        auth:
-          type: bearer
-`
-	if err := os.WriteFile(filepath.Join(projectDir, "project.yaml"), []byte(config), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("FIX_TOKEN", "test-token")
-	oldRuntime, oldManager := newBatchFixRuntime, newBatchFixManager
-	newBatchFixRuntime = func(*project.FixAgentRuntime) (runtime.AgentRuntime, error) { return failingFinalizedAgent{}, nil }
-	newBatchFixManager = func(_ string, stateFile string, opts fixpr.Options) *fixpr.Manager {
-		return fixpr.NewManager(finalizedFakePR{}, stateFile, opts)
-	}
-	t.Cleanup(func() {
-		newBatchFixRuntime, newBatchFixManager = oldRuntime, oldManager
-	})
-
-	dataDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dataDir, "jobs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := statefile.WriteJSON(filepath.Join(dataDir, "flakiness.json"), models.FlakinessReport{
-		RecurringPatterns: []models.PatternAnalysis{{
-			ID: "pattern", Subject: "job", Systemic: true, Confidence: "high",
-			SharedRootCause: "configuration is stale", SuggestedFix: "update config/fix.yaml",
-		}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	err := RunFinalizedSideEffects(context.Background(), FinalizedSideEffectsOptions{ProjectDir: projectDir, DataDir: dataDir})
-	if err == nil || !strings.Contains(err.Error(), "generation failed") {
-		t.Fatalf("error = %v, want per-pattern generation failure", err)
+	if manager.recoverCalls != 1 || manager.saveCalls != 1 {
+		t.Fatalf("issue manager calls = recover %d save %d", manager.recoverCalls, manager.saveCalls)
 	}
 }
 
 func TestRunSideEffectsReportsSanitizedAutomaticIssueFailure(t *testing.T) {
 	t.Setenv("ISSUE_TOKEN", "test-token")
-	manager := &recordingScheduledIssueManager{reconcileErr: errors.New("private provider response with token=secret")}
+	manager := &recordingScheduledIssueManager{recoverErr: errors.New("private provider response with token=secret")}
 	oldFactory := newBatchIssueManager
 	newBatchIssueManager = func(*issues.Client, string, string, issues.Options) scheduledIssueManager { return manager }
 	t.Cleanup(func() { newBatchIssueManager = oldFactory })
@@ -431,74 +158,8 @@ func TestRunSideEffectsReportsSanitizedAutomaticIssueFailure(t *testing.T) {
 	}
 	issueStatus := status.FollowUp.AutomaticIssues
 	if issueStatus.State != fetchprogress.FollowUpFailed || issueStatus.Code != fetchprogress.FollowUpFailureAutomaticIssues ||
-		issueStatus.Summary != "Automatic issue reconciliation failed" || strings.Contains(issueStatus.Summary, "secret") {
+		issueStatus.Summary != "Issue recovery reconciliation failed" || strings.Contains(issueStatus.Summary, "secret") {
 		t.Fatalf("automatic issue status = %+v", issueStatus)
-	}
-}
-
-type countingRoundTripper struct {
-	calls atomic.Int64
-}
-
-func (t *countingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
-	t.calls.Add(1)
-	return nil, errors.New("unexpected network request")
-}
-
-func TestRunSideEffectsSkipsFixAutomationWithoutStaticToken(t *testing.T) {
-	t.Setenv("FIX_TOKEN", "")
-	zero := 0
-	cfg := &project.Config{
-		Name: "Test", Branding: project.Branding{SiteURL: "https://dashboard.example.test"},
-		AI: &project.AI{FixPRs: &project.FixPRs{
-			Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"},
-			AuthorName: "Test", AuthorEmail: "test@example.com", CritiqueRetries: &zero,
-			AgentRuntime: &project.FixAgentRuntime{
-				Type: "agent-sandbox", OutputLimitBytes: 64 << 10,
-				AllowedCommands: []project.FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "1m"}},
-			},
-		}},
-	}
-	oldRuntime, oldManager := newBatchFixRuntime, newBatchFixManager
-	newBatchFixRuntime = func(*project.FixAgentRuntime) (runtime.AgentRuntime, error) {
-		t.Fatal("fix runtime was created without FIX_TOKEN")
-		return nil, nil
-	}
-	newBatchFixManager = func(string, string, fixpr.Options) *fixpr.Manager {
-		t.Fatal("fix manager was created without FIX_TOKEN")
-		return nil
-	}
-	t.Cleanup(func() { newBatchFixRuntime, newBatchFixManager = oldRuntime, oldManager })
-
-	dataDir := t.TempDir()
-	backend, err := storage.NewLocalBackend(t.TempDir(), "https://prow.example.test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	transport := &countingRoundTripper{}
-	tracker := fetchprogress.New(dataDir, "sha-test")
-	tracker.StartPass(fetchprogress.PassOneShot)
-	tracker.StartPhase(fetchprogress.PhaseSideEffects)
-	p := &pipeline{
-		cfg: cfg, opts: Options{OutDir: dataDir}, backend: backend,
-		client: &http.Client{Transport: transport}, progress: tracker,
-	}
-	res := &refreshResult{flakiness: models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{{
-		ID: "pattern", JobID: "job", Subject: "job", Systemic: true, Confidence: "high",
-		SharedRootCause: "configuration is stale", SuggestedFix: "update config/fix.yaml",
-	}}}}
-
-	if err := p.runSideEffects(t.Context(), res); err != nil {
-		t.Fatalf("runSideEffects error = %v", err)
-	}
-	if transport.calls.Load() != 0 {
-		t.Fatalf("network calls = %d, want 0", transport.calls.Load())
-	}
-	status := tracker.Snapshot()
-	if status.FollowUp == nil || status.FollowUp.AutomaticFixPRs == nil ||
-		status.FollowUp.AutomaticFixPRs.State != fetchprogress.FollowUpSkipped ||
-		status.FollowUp.AutomaticFixPRs.Reason != fetchprogress.FollowUpReasonNotConfigured {
-		t.Fatalf("follow-up status = %+v", status.FollowUp)
 	}
 }
 
@@ -521,66 +182,10 @@ func TestProcessIssuesKeepsCurrentAnalysisOnlyPatternOpen(t *testing.T) {
 	details := []models.JobDetail{{
 		JobID: "job", PatternRefresh: &models.PatternRefreshStatus{State: models.PatternRefreshCurrent},
 	}}
-	if err := processIssues(t.Context(), automaticIssueTestConfig(), report, details, "", false, t.TempDir(), nil); err != nil {
+	if err := processIssues(t.Context(), automaticIssueTestConfig(), report, details, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	if !gotOptions.KeepOpenKeys[issues.KeyPrefixPattern+"job"] {
 		t.Fatalf("keep-open keys=%v", gotOptions.KeepOpenKeys)
-	}
-}
-
-type agentSandboxBatchAgent struct {
-	spec runtime.GenerateSpec
-}
-
-func (a *agentSandboxBatchAgent) Generate(_ context.Context, spec runtime.GenerateSpec) (runtime.GenerateResult, error) {
-	a.spec = spec
-	results := make([]runtime.CommandResult, len(spec.CommandPolicy.Commands))
-	for i, command := range spec.CommandPolicy.Commands {
-		results[i] = runtime.CommandResult{Argv: append([]string(nil), command.Argv...), ExitCode: 0, DurationMs: 1}
-	}
-	return runtime.GenerateResult{
-		BaseSHA: "base-sha", Files: map[string]string{"config/fix.yaml": "fixed: true\n"},
-		Diff: "diff --git a/config/fix.yaml b/config/fix.yaml\n+fixed: true\n", CommandResults: results,
-	}, nil
-}
-
-func TestProcessFixPRsAgentSandboxUsesExecutorVerification(t *testing.T) {
-	t.Setenv("FIX_TOKEN", "write-token")
-	t.Setenv(runtime.TrustedLocalRuntimeEnv, "")
-	zero := 0
-	cfg := &project.Config{
-		Name: "Test", Branding: project.Branding{SiteURL: "https://dashboard.example.test"},
-		AI: &project.AI{FixPRs: &project.FixPRs{
-			Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"}, DryRun: true,
-			AuthorName: "Test", AuthorEmail: "test@example.com", CritiqueRetries: &zero,
-			AgentRuntime: &project.FixAgentRuntime{
-				Type: "agent-sandbox", MaxTurns: 3, Timeout: "1m", OutputLimitBytes: 65536,
-				AllowedCommands: []project.FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}},
-			},
-		}},
-	}
-	agent := &agentSandboxBatchAgent{}
-	oldRuntime, oldManager := newBatchFixRuntime, newBatchFixManager
-	var captured fixpr.Options
-	newBatchFixRuntime = func(*project.FixAgentRuntime) (runtime.AgentRuntime, error) { return agent, nil }
-	newBatchFixManager = func(_ string, stateFile string, opts fixpr.Options) *fixpr.Manager {
-		captured = opts
-		return fixpr.NewManager(finalizedFakePR{}, stateFile, opts)
-	}
-	t.Cleanup(func() { newBatchFixRuntime, newBatchFixManager = oldRuntime, oldManager })
-
-	pattern := models.PatternAnalysis{
-		ID: "pattern", JobID: "job", Subject: "job", Systemic: true, Confidence: "high",
-		SharedRootCause: "configuration is stale", SuggestedFix: "update config/fix.yaml",
-	}
-	if changed, err := processFixPRs(t.Context(), cfg, []models.PatternAnalysis{pattern}, "", t.TempDir(), nil); err != nil || changed {
-		t.Fatalf("changed=%t error=%v", changed, err)
-	}
-	if captured.Verify != nil || captured.Agent == nil || !captured.Agent.RequireCommandResults {
-		t.Fatalf("captured options = %+v", captured)
-	}
-	if captured.Agent.GitToken != "" || agent.spec.Repo.Token != "" {
-		t.Fatalf("dashboard token entered Sandbox: config=%q spec=%q", captured.Agent.GitToken, agent.spec.Repo.Token)
 	}
 }

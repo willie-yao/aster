@@ -310,10 +310,6 @@ type Issues struct {
 	CommentOnRecovery *bool `yaml:"comment_on_recovery,omitempty" json:"comment_on_recovery,omitempty"`
 	// CloseOnRecovery also closes the issue on recovery. Defaults to false.
 	CloseOnRecovery bool `yaml:"close_on_recovery,omitempty" json:"close_on_recovery,omitempty"`
-	// MaxNewPerRun caps how many issues are created in a single fetch, a flood
-	// guard for when many patterns appear at once or local state is lost.
-	// Defaults to 5.
-	MaxNewPerRun int `yaml:"max_new_per_run,omitempty" json:"max_new_per_run,omitempty"`
 }
 
 // EffectiveIssues resolves the issues config with defaults applied. Safe on a
@@ -341,9 +337,6 @@ func (c *Config) EffectiveIssues() Issues {
 	if out.CommentOnRecovery == nil {
 		t := true
 		out.CommentOnRecovery = &t
-	}
-	if out.MaxNewPerRun <= 0 {
-		out.MaxNewPerRun = 5
 	}
 	return out
 }
@@ -588,13 +581,12 @@ func ValidateAIProvider(provider AIProvider) error {
 	return err
 }
 
-// FixPRs configures the agent-proposed fix-PR feature: when a systemic recurring
-// pattern carries a concrete remediation, the engine drafts a minimal code edit
-// and opens a draft PR against the source repo via fork-and-PR. Off by default;
-// the fetcher only acts when `enabled: true`, a FIX_TOKEN secret is present, and
-// the author identity is set, so a missing piece is a no-op rather than a deploy
-// failure. Targets a community repo, so the commit author must be a CLA-signed
-// identity (see docs/fix-prs.md).
+// FixPRs configures the agent-proposed fix-PR feature: when a maintainer asks
+// the dashboard for a fix, the engine drafts a minimal code edit and opens a
+// draft PR against the source repo via fork-and-PR. Generation is always
+// maintainer-initiated and separately confirmed; nothing opens a PR on a
+// schedule. Off by default. Targets a community repo, so the commit author must
+// be a CLA-signed identity (see docs/fix-prs.md).
 type FixPRs struct {
 	// Enabled turns the feature on for this consumer. Defaults to false.
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
@@ -620,14 +612,8 @@ type FixPRs struct {
 	// MaxFiles caps how many files a single proposed fix may touch. Defaults
 	// to 3 to keep changes minimal and reviewable.
 	MaxFiles int `yaml:"max_files,omitempty" json:"max_files,omitempty"`
-	// MaxNewPerRun caps how many fix PRs are opened in a single fetch.
-	// Defaults to 1.
-	MaxNewPerRun int `yaml:"max_new_per_run,omitempty" json:"max_new_per_run,omitempty"`
 	// Labels are applied to every fix PR. Defaults to ["ai-proposed-fix"].
 	Labels []string `yaml:"labels,omitempty" json:"labels,omitempty"`
-	// DryRun runs the full generation pipeline and records the proposed change
-	// without opening any PR. Defaults to false.
-	DryRun bool `yaml:"dry_run,omitempty" json:"dry_run,omitempty"`
 	// CritiqueRetries bounds how many times generation is re-prompted to resolve
 	// an LLM reviewer's objections before the fix is dropped. Defaults to 1; 0
 	// disables the review. Excluded from manifest.json.
@@ -837,9 +823,6 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 	}
 	if out.MaxFiles <= 0 {
 		out.MaxFiles = 3
-	}
-	if out.MaxNewPerRun <= 0 {
-		out.MaxNewPerRun = 1
 	}
 	if len(out.Labels) == 0 {
 		out.Labels = []string{"ai-proposed-fix"}

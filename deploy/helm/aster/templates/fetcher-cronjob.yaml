@@ -9,7 +9,6 @@
 {{- if eq .Values.mode "cron" }}
 {{- $shadow := .Values.agentSandbox.analysisShadow.enabled }}
 {{- $agentSandboxScheduled := eq (include "aster.agentSandboxScheduledEnabled" .) "true" }}
-{{- $agentSandboxFixScheduled := eq (include "aster.agentSandboxFixScheduledEnabled" .) "true" }}
 {{- $restartPolicy := .Values.fetcher.restartPolicy | default "OnFailure" }}
 {{- if not (or (eq $restartPolicy "Never") (eq $restartPolicy "OnFailure")) }}
   {{- fail "fetcher.restartPolicy must be Never or OnFailure" }}
@@ -67,13 +66,8 @@ spec:
             {{- toYaml .Values.podSecurityContext | nindent 12 }}
           containers:
             - name: fetcher
-              {{- if $agentSandboxFixScheduled }}
-              image: {{ include "aster.agentSandboxDashboardImage" . }}
-              imagePullPolicy: {{ .Values.agentSandbox.fixRuntime.dashboardImage.pullPolicy }}
-              {{- else }}
               image: {{ include "aster.image" . }}
               imagePullPolicy: {{ .Values.image.pullPolicy }}
-              {{- end }}
               command:
                 - /usr/local/bin/fetcher
                 - -project-dir={{ .Values.project.mountPath }}
@@ -112,9 +106,6 @@ spec:
                 - -causal-critic-shadow-gateway-protocol={{ .Values.agentSandbox.causalCritic.modelGateway.protocolVersion }}
                 {{- end }}
               env:
-                {{- if $agentSandboxFixScheduled }}
-                {{- include "aster.agentSandboxEnv" . | nindent 16 }}
-                {{- end }}
                 {{- if $shadow }}
                 {{- include "aster.agentAnalysisShadowEnv" . | nindent 16 }}
                 {{- end }}

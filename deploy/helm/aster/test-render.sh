@@ -259,8 +259,10 @@ grep -Fq 'serviceAccountName: test-prow-ai-dashboard-agent-sandbox-client' "$tmp
 grep -A1 -F 'name: AGENT_SANDBOX_MODEL_PROVIDER_REASONING_EFFORT' "$tmp/agent-sandbox-render.yaml" | grep -Fq 'value: "high"'
 grep -Fq "variables.container.env[1].name == 'PROW_AI_MODEL_PROVIDER_TOKEN'" "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'local/agent-sandbox-fix-executor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$tmp/agent-sandbox-render.yaml"
-if [ "$(grep -Fc 'image: local/remote-fixer:sha-abcdef0' "$tmp/agent-sandbox-render.yaml")" -ne 2 ]; then
-  echo 'Agent Sandbox did not select the remote fixer for server and worker' >&2
+# Fix generation is a maintainer-initiated server action, so only the server runs
+# the remote fixer. A scheduled pod picking it up would carry unused authority.
+if [ "$(grep -Fc 'image: local/remote-fixer:sha-abcdef0' "$tmp/agent-sandbox-render.yaml")" -ne 1 ]; then
+  echo 'Agent Sandbox did not select the remote fixer for the server alone' >&2
   exit 1
 fi
 if grep -Eq 'resources: \["(secrets|services|persistentvolumeclaims|pods/exec|pods/attach|nodes)"\]' "$tmp/agent-sandbox-render.yaml"; then

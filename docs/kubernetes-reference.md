@@ -357,7 +357,7 @@ public data path are healthy.
   map and recommended enablement order.
 
 Optional features retain private operational state. Model credentials, OAuth
-identity, `BOT_TOKEN`, `FIX_TOKEN`, SMTP credentials, and Agent Sandbox provider
+identity, `BOT_TOKEN`, `ISSUE_TOKEN`, SMTP credentials, and Agent Sandbox provider
 credentials have separate owners and must not be reused interchangeably.
 
 ## Reusing external project configuration

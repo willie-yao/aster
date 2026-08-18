@@ -90,7 +90,6 @@ const completedStatus: FetchProgressStatus = {
     notifications: { state: "completed" },
     remediation: { state: "completed" },
     automatic_issues: { state: "skipped", reason: "not-configured" },
-    automatic_fix_prs: { state: "disabled" },
   },
 };
 
@@ -142,7 +141,6 @@ const statusFixtures = {
       },
       remediation: { state: "completed" },
       automatic_issues: { state: "skipped", reason: "not-configured" },
-      automatic_fix_prs: { state: "disabled" },
     },
   }),
   missingAutomaticTokens: response("completed", completedStatus),
@@ -378,7 +376,6 @@ test("representative refresh fixtures keep publication, quality, and follow-up s
   const missingTokens = statusFixtures.missingAutomaticTokens.status?.follow_up;
   assert.equal(missingTokens?.automatic_issues?.state, "skipped");
   assert.equal(missingTokens?.automatic_issues?.reason, "not-configured");
-  assert.equal(missingTokens?.automatic_fix_prs?.state, "disabled");
   assert.deepEqual(fetchStatusWarningGroups(statusFixtures.missingAutomaticTokens.status!), []);
 
   assert.deepEqual(fetchStatusWarningGroups(statusFixtures.notificationFailure.status!), [

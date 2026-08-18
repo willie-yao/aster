@@ -24,8 +24,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/analysisruntime"
 	"github.com/willie-yao/aster/backend/internal/causalcritic"
 	"github.com/willie-yao/aster/backend/internal/fetchprogress"
-	"github.com/willie-yao/aster/backend/internal/fixpr"
-	"github.com/willie-yao/aster/backend/internal/fixruntime"
 	"github.com/willie-yao/aster/backend/internal/issues"
 	"github.com/willie-yao/aster/backend/internal/junit"
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
@@ -37,9 +35,9 @@ import (
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/aster/backend/internal/prowbuild"
-	"github.com/willie-yao/aster/backend/internal/repotemplate"
 	"github.com/willie-yao/aster/backend/internal/resolve"
 	"github.com/willie-yao/aster/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/statefile"
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
@@ -755,38 +753,16 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 		p.setProgressFollowUp(fetchprogress.FollowUpNotifications, fetchprogress.FollowUpDisabled, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
 	}
 
-	fixEnabled := cfg.AI != nil && cfg.AI.FixPRs != nil && cfg.AI.FixPRs.Enabled
-	switch {
-	case !fixEnabled:
-		p.setProgressFollowUp(fetchprogress.FollowUpAutomaticFixPRs, fetchprogress.FollowUpDisabled, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
-	case os.Getenv("FIX_TOKEN") == "":
-		log.Println("Fix PRs: enabled but FIX_TOKEN is unset; skipping automatic generation")
-		p.setProgressFollowUp(fetchprogress.FollowUpAutomaticFixPRs, fetchprogress.FollowUpSkipped, fetchprogress.FollowUpReasonNotConfigured, fetchprogress.FollowUpFailureNone)
-	default:
-		fixPatterns := currentActionablePatterns(flakinessReport.RecurringPatterns, details)
-		if len(fixPatterns) == 0 {
-			p.setProgressFollowUp(fetchprogress.FollowUpAutomaticFixPRs, fetchprogress.FollowUpSkipped, fetchprogress.FollowUpReasonNoWork, fetchprogress.FollowUpFailureNone)
-			break
-		}
-		p.setProgressFollowUp(fetchprogress.FollowUpAutomaticFixPRs, fetchprogress.FollowUpRunning, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
-		if _, err := processFixPRs(ctx, cfg, fixPatterns, p.aiToken, opts.OutDir, p.usageRecorder); err != nil {
-			sideEffectErrs = append(sideEffectErrs, err)
-			p.setProgressFollowUp(fetchprogress.FollowUpAutomaticFixPRs, fetchprogress.FollowUpFailed, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureAutomaticFixPRs)
-		} else {
-			p.setProgressFollowUp(fetchprogress.FollowUpAutomaticFixPRs, fetchprogress.FollowUpCompleted, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
-		}
-	}
-
 	issuesEnabled := cfg.Issues != nil && cfg.Issues.Enabled
 	switch {
 	case !issuesEnabled:
 		p.setProgressFollowUp(fetchprogress.FollowUpAutomaticIssues, fetchprogress.FollowUpDisabled, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
 	case os.Getenv("ISSUE_TOKEN") == "":
-		log.Println("Issues: enabled but ISSUE_TOKEN is unset; skipping automatic reconciliation")
+		log.Println("Issues: enabled but ISSUE_TOKEN is unset; skipping recovery reconciliation")
 		p.setProgressFollowUp(fetchprogress.FollowUpAutomaticIssues, fetchprogress.FollowUpSkipped, fetchprogress.FollowUpReasonNotConfigured, fetchprogress.FollowUpFailureNone)
 	default:
 		p.setProgressFollowUp(fetchprogress.FollowUpAutomaticIssues, fetchprogress.FollowUpRunning, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureNone)
-		if err := processIssues(ctx, cfg, flakinessReport, details, p.aiToken, p.enableAI, opts.OutDir, p.usageRecorder); err != nil {
+		if err := processIssues(ctx, cfg, flakinessReport, details, opts.OutDir); err != nil {
 			sideEffectErrs = append(sideEffectErrs, err)
 			p.setProgressFollowUp(fetchprogress.FollowUpAutomaticIssues, fetchprogress.FollowUpFailed, fetchprogress.FollowUpReasonNone, fetchprogress.FollowUpFailureAutomaticIssues)
 		} else {
@@ -796,32 +772,16 @@ func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error
 	return errors.Join(sideEffectErrs...)
 }
 
-func repositoryToken(runtimeType, token string) string {
-	if runtimeType == "agent-sandbox" {
-		return ""
-	}
-	return token
-}
-
-func fetcherUsageOutcome(err error) aiusage.Outcome {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return aiusage.OutcomeCancelled
-	}
-	if err != nil {
-		return aiusage.OutcomeError
-	}
-	return aiusage.OutcomeSuccess
-}
-
-// processIssues reconciles the project's highest-signal findings into GitHub
-// issues on the configured target repo. Gated on issues.enabled and ISSUE_TOKEN.
-func processIssues(ctx context.Context, cfg *project.Config, report models.FlakinessReport, details []models.JobDetail, aiToken string, enableAI bool, outDir string, usageRecorder *aiusage.Recorder) error {
+// processIssues closes or comments on tracked issues whose finding has
+// recovered. It never files new issues: creation is a maintainer-initiated
+// server action. Gated on issues.enabled and ISSUE_TOKEN.
+func processIssues(ctx context.Context, cfg *project.Config, report models.FlakinessReport, details []models.JobDetail, outDir string) error {
 	if cfg.Issues == nil || !cfg.Issues.Enabled {
 		return nil
 	}
 	token := os.Getenv("ISSUE_TOKEN")
 	if token == "" {
-		log.Println("Issues: enabled but ISSUE_TOKEN is unset; skipping automatic reconciliation")
+		log.Println("Issues: enabled but ISSUE_TOKEN is unset; skipping recovery reconciliation")
 		return nil
 	}
 	eff := cfg.EffectiveIssues()
@@ -830,6 +790,8 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 		return fmt.Errorf("issues: no target repo resolved")
 	}
 
+	// Active keys come from the same builder the server action files against, so
+	// a finding that is still failing is never treated as recovered.
 	specs := issues.BuildSpecs(issues.BuildInput{
 		Report:       report,
 		JobDetails:   details,
@@ -837,21 +799,9 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 		Labels:       eff.Labels,
 		DashboardURL: cfg.Branding.SiteURL,
 	})
-
-	// When AI is available, reformat issue bodies to follow the target repo's
-	// issue template. Falls back to the default body when no template exists.
-	var filler issues.TemplateFiller
-	if enableAI {
-		provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv))
-		aiClient := ai.NewClientWithOptions(ai.Options{
-			Token:           aiToken,
-			API:             provider.API,
-			Endpoint:        provider.Endpoint,
-			Model:           provider.Model,
-			ReasoningEffort: provider.ReasoningEffort,
-			ExtraHeaders:    provider.Headers,
-		})
-		filler = repotemplate.NewIssueFiller(token, aiClient, eff.Repo.Owner, eff.Repo.Name)
+	active := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		active = append(active, spec.Key)
 	}
 
 	client := issues.NewClient(token, eff.Repo.Owner, eff.Repo.Name)
@@ -870,168 +820,46 @@ func processIssues(ctx context.Context, cfg *project.Config, report models.Flaki
 		}
 		keepOpen[issues.KeyPrefixPattern+detail.JobID] = true
 	}
-	mgr := newBatchIssueManager(client, filepath.Join(outDir, "issue_state.json"), targetRepo, issues.Options{
-		CommentOnRecovery: eff.CommentOnRecovery == nil || *eff.CommentOnRecovery,
-		CloseOnRecovery:   eff.CloseOnRecovery,
-		MaxNewPerRun:      eff.MaxNewPerRun,
-		RecoverPrefixes:   issues.RecoverPrefixesFor(eff.Triggers),
-		KeepOpenKeys:      keepOpen,
-		TemplateFiller:    filler,
+	// The server files issues into this same state file, so load, recover, and
+	// save must be one locked sequence. Otherwise a recovery pass that loaded
+	// first can save over an issue filed meanwhile, dropping it from tracking so
+	// it is never closed.
+	stateFile := filepath.Join(outDir, "issue_state.json")
+	var err, saveErr error
+	lockErr := statefile.WithLock(stateFile, func() error {
+		mgr := newBatchIssueManager(client, stateFile, targetRepo, issues.Options{
+			CommentOnRecovery: eff.CommentOnRecovery == nil || *eff.CommentOnRecovery,
+			CloseOnRecovery:   eff.CloseOnRecovery,
+			RecoverPrefixes:   issues.RecoverPrefixesFor(eff.Triggers),
+			KeepOpenKeys:      keepOpen,
+		})
+		var stats issues.Stats
+		stats, err = mgr.Recover(ctx, active)
+		if err != nil {
+			log.Printf("Warning: issue recovery failed: %v", err)
+		} else if stats.Recovered > 0 {
+			log.Printf("🐙 Issues (%s/%s): %d recovered", eff.Repo.Owner, eff.Repo.Name, stats.Recovered)
+		}
+		saveErr = mgr.SaveState()
+		if saveErr != nil {
+			log.Printf("Warning: failed to save issue state: %v", saveErr)
+		}
+		return nil
 	})
-	ctx, usageOperation := aiusage.Begin(ctx, usageRecorder, aiusage.Metadata{
-		LogicalID: "scheduled-issues", Origin: aiusage.OriginFetcher, Feature: aiusage.FeatureIssueDraft,
-	})
-	stats, err := mgr.Reconcile(ctx, specs)
-	usageOperation.Finish(fetcherUsageOutcome(err))
-	if err != nil {
-		log.Printf("Warning: issue processing failed: %v", err)
-	} else {
-		log.Printf("🐙 Issues (%s/%s): %d filed, %d adopted, %d recovered",
-			eff.Repo.Owner, eff.Repo.Name, stats.Created, stats.Adopted, stats.Recovered)
+	if lockErr != nil {
+		log.Printf("Warning: issue recovery skipped: %v", lockErr)
+		return fmt.Errorf("issue recovery: %w", lockErr)
 	}
-	saveErr := mgr.SaveState()
-	if saveErr != nil {
-		log.Printf("Warning: failed to save issue state: %v", saveErr)
-	}
-	return errors.Join(wrapOptional("issue processing", err), wrapOptional("save issue state", saveErr))
-}
-
-var newBatchFixRuntime = fixruntime.New
-var newBatchFixManager = func(token, stateFile string, opts fixpr.Options) *fixpr.Manager {
-	return fixpr.NewManager(fixpr.NewClients(token), stateFile, opts)
+	return errors.Join(wrapOptional("issue recovery", err), wrapOptional("save issue state", saveErr))
 }
 
 type scheduledIssueManager interface {
-	Reconcile(context.Context, []issues.IssueSpec) (issues.Stats, error)
+	Recover(context.Context, []string) (issues.Stats, error)
 	SaveState() error
 }
 
 var newBatchIssueManager = func(client *issues.Client, stateFile, repo string, opts issues.Options) scheduledIssueManager {
 	return issues.NewManager(client, stateFile, repo, opts)
-}
-
-// processFixPRs drafts minimal fix PRs against the source repo for systemic
-// recurring patterns. Gated on ai.fix_prs.enabled and FIX_TOKEN (a CLA-signed
-// operator PAT). In dry-run it writes previews instead of opening PRs. Any
-// missing piece is a no-op.
-func processFixPRs(ctx context.Context, cfg *project.Config, patterns []models.PatternAnalysis, aiToken, outDir string, usageRecorder *aiusage.Recorder) (bool, error) {
-	if cfg.AI == nil || cfg.AI.FixPRs == nil || !cfg.AI.FixPRs.Enabled {
-		return false, nil
-	}
-	if len(patterns) == 0 {
-		return false, nil
-	}
-	eff := cfg.EffectiveFixPRs()
-	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
-		log.Println("Fix PRs: no source repo resolved (set ai.fix_prs.repo or branding.source_repo); skipping")
-		return false, fmt.Errorf("fix PRs: no source repo resolved")
-	}
-	fixToken := os.Getenv("FIX_TOKEN")
-	if fixToken == "" {
-		log.Println("Fix PRs: enabled but FIX_TOKEN is unset; skipping automatic generation")
-		return false, nil
-	}
-
-	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv))
-	if err := project.ValidateAIProvider(provider); err != nil {
-		return false, fmt.Errorf("fix PRs: %w", err)
-	}
-	var aiClient *ai.Client
-	if aiToken != "" && provider.Endpoint != "" && provider.Model != "" {
-		aiClient = ai.NewClientWithOptions(ai.Options{Token: aiToken, API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, ExtraHeaders: provider.Headers})
-	}
-
-	critique, critiqueRetries, err := fixruntime.Critique(aiClient, eff.CritiqueRetries)
-	if err != nil {
-		log.Printf("Fix PRs: %v; skipping", err)
-		return false, fmt.Errorf("fix PR critique: %w", err)
-	}
-	var prFiller fixpr.PRBodyFiller
-	if aiClient != nil {
-		prFiller = repotemplate.NewPRFiller(fixToken, aiClient, eff.Repo.Owner, eff.Repo.Name)
-	}
-
-	fixOpts := fixpr.Options{
-		SourceOwner:     eff.Repo.Owner,
-		SourceName:      eff.Repo.Name,
-		Fork:            eff.Fork == nil || *eff.Fork,
-		AuthorName:      eff.AuthorName,
-		AuthorEmail:     eff.AuthorEmail,
-		MinConfidence:   eff.MinConfidence,
-		MaxFiles:        eff.MaxFiles,
-		MaxNewPerRun:    eff.MaxNewPerRun,
-		Labels:          eff.Labels,
-		DryRun:          eff.DryRun,
-		PreviewFile:     filepath.Join(outDir, "fix_previews.json"),
-		DashboardURL:    cfg.Branding.SiteURL,
-		Critique:        critique,
-		CritiqueRetries: critiqueRetries,
-		PRFiller:        prFiller,
-	}
-	if eff.Verify != nil && eff.Verify.Enabled && eff.AgentRuntime.Type != "agent-sandbox" {
-		trusted, err := runtime.TrustedLocalRuntimeEnabled()
-		if err != nil {
-			return false, err
-		}
-		if !trusted {
-			return false, fmt.Errorf("fix PRs: local verification requires %s=true on a trusted development or CI host", runtime.TrustedLocalRuntimeEnv)
-		}
-		fixOpts.Verify = &fixpr.VerifyConfig{
-			Runtime:  runtime.NewLocal(),
-			Commands: eff.Verify.ParsedCommands(),
-			Timeout:  eff.Verify.ParsedTimeout(),
-			Token:    fixToken,
-		}
-	}
-	ar := eff.AgentRuntime
-	allowBash := ar.AllowBash == nil || *ar.AllowBash
-	agentRuntime, err := newBatchFixRuntime(ar)
-	if err != nil {
-		log.Printf("Fix PRs: %v; skipping", err)
-		return false, fmt.Errorf("fix PR runtime: %w", err)
-	}
-	commands, err := ar.RuntimeCommands(ar.ParsedTimeout())
-	if err != nil {
-		return false, fmt.Errorf("fix PR command policy: %w", err)
-	}
-	fixOpts.Agent = &fixpr.AgentConfig{
-		Runtime:               agentRuntime,
-		API:                   aiAPI(cfg),
-		Model:                 aiModel(cfg),
-		Endpoint:              aiEndpoint(cfg),
-		ModelToken:            aiToken,
-		MaxTurns:              ar.MaxTurns,
-		MaxFiles:              eff.MaxFiles,
-		ModelProvider:         ar.ModelProvider.RuntimeConfig(),
-		OutputLimitBytes:      ar.OutputLimitBytes,
-		AllowBash:             allowBash,
-		CommandPolicy:         runtime.CommandPolicy{AllowShell: allowBash, Commands: commands},
-		RequireCommandResults: true,
-		Timeout:               ar.ParsedTimeout(),
-		GitToken:              repositoryToken(ar.Type, fixToken),
-	}
-	mgr := newBatchFixManager(fixToken, filepath.Join(outDir, "fix_pr_state.json"), fixOpts)
-	ctx, usageOperation := aiusage.Begin(ctx, usageRecorder, aiusage.Metadata{
-		LogicalID: "scheduled-fix-prs", Origin: aiusage.OriginFetcher, Feature: aiusage.FeatureFixPreview,
-	})
-	stats, err := mgr.Reconcile(ctx, patterns)
-	usageOperation.Finish(fetcherUsageOutcome(err))
-	if err != nil {
-		log.Printf("Warning: fix-PR processing failed: %v", err)
-	} else if stats.Proposed+stats.Adopted+stats.Previewed > 0 {
-		log.Printf("🛠️ Fix PRs (%s/%s): %d proposed, %d adopted, %d previewed",
-			eff.Repo.Owner, eff.Repo.Name, stats.Proposed, stats.Adopted, stats.Previewed)
-	}
-	// Dry-run keeps no state (it re-previews each run).
-	var saveErr error
-	if !eff.DryRun {
-		saveErr = mgr.SaveState()
-		if saveErr != nil {
-			log.Printf("Warning: failed to save fix-PR state: %v", saveErr)
-		}
-	}
-	changed := !eff.DryRun && saveErr == nil && stats.Proposed+stats.Adopted > 0
-	return changed, errors.Join(wrapOptional("fix-PR processing", err), wrapOptional("save fix-PR state", saveErr))
 }
 
 func wrapOptional(operation string, err error) error {
@@ -1233,22 +1061,6 @@ func eligibleForBuildFailure(result *models.BuildResult) bool {
 
 func newBuildFailure(result *models.BuildResult) models.TestCase {
 	return models.NewProwJobExecutionFailure(result.DurationSeconds)
-}
-
-// currentActionablePatterns keeps recurring patterns that may start an action
-// and whose job produced a fresh pattern result this pass.
-func currentActionablePatterns(patterns []models.PatternAnalysis, details []models.JobDetail) []models.PatternAnalysis {
-	out := make([]models.PatternAnalysis, 0, len(patterns))
-	for _, pattern := range patterns {
-		if !models.PatternAllowsActions(pattern) {
-			continue
-		}
-		if len(details) > 0 && !models.PatternIsCurrent(details, pattern.JobID) {
-			continue
-		}
-		out = append(out, pattern)
-	}
-	return out
 }
 
 func configuredFixRepo(cfg *project.Config) string {

@@ -330,9 +330,6 @@ func TestValidate_Issues(t *testing.T) {
 		if !eff.HasTrigger(IssueTriggerPatterns) || !eff.HasTrigger(IssueTriggerPersistent) {
 			t.Errorf("triggers should default to both, got %v", eff.Triggers)
 		}
-		if eff.MaxNewPerRun != 5 {
-			t.Errorf("MaxNewPerRun default = %d, want 5", eff.MaxNewPerRun)
-		}
 	})
 }
 
@@ -717,7 +714,7 @@ func TestEffectiveFixPRsDefaults(t *testing.T) {
 	if got.Repo == nil || got.Repo.Owner != "kubernetes-sigs" || got.Repo.Name != "cluster-api-provider-azure" {
 		t.Errorf("Repo = %+v, want branding.source_repo", got.Repo)
 	}
-	if got.MinConfidence != "high" || got.MaxFiles != 3 || got.MaxNewPerRun != 1 {
+	if got.MinConfidence != "high" || got.MaxFiles != 3 {
 		t.Errorf("defaults wrong: %+v", got)
 	}
 	c.AI.FixPRs.MinConfidence = " Medium "

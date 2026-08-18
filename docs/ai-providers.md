@@ -223,7 +223,7 @@ present in the immutable executor image.
 The named bearer Secret must already exist in the execution namespace. Aster and
 the chart reference only its exact name and key; they do not create, copy, read,
 or print the value. Use a dedicated inference-only credential, never
-`BOT_TOKEN`, `FIX_TOKEN`, OAuth credentials, GitHub read credentials, or a general
+`BOT_TOKEN`, `ISSUE_TOKEN`, OAuth credentials, GitHub read credentials, or a general
 PAT. Admission rejects extra credential and environment shapes, and the executor
 rejects exact credential leakage from outputs and results.
 

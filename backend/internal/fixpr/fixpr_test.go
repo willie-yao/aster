@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -105,7 +104,7 @@ func systemicPattern(subject string) models.PatternAnalysis {
 }
 
 // newManager builds a Manager wired to a fake agent runtime (the fix generator)
-// and an approving reviewer. Tests can override opts before Reconcile.
+// and an approving reviewer. Tests can override opts before generating.
 func newManager(t *testing.T, pr prClient, agent *fakeAgentRuntime, opts Options) *Manager {
 	t.Helper()
 	opts.SourceOwner, opts.SourceName = "up", "stream"
@@ -114,9 +113,6 @@ func newManager(t *testing.T, pr prClient, agent *fakeAgentRuntime, opts Options
 	}
 	if opts.MaxFiles == 0 {
 		opts.MaxFiles = 2
-	}
-	if opts.MaxNewPerRun == 0 {
-		opts.MaxNewPerRun = 1
 	}
 	if opts.AuthorName == "" {
 		opts.AuthorName, opts.AuthorEmail = "Jane", "jane@example.com"
@@ -134,13 +130,25 @@ func newManager(t *testing.T, pr prClient, agent *fakeAgentRuntime, opts Options
 	return NewManager(pr, filepath.Join(t.TempDir(), "state.json"), opts)
 }
 
-func TestReconcile_DirectModeWhenForkFalse(t *testing.T) {
+// openPreview drafts a fix for one pattern and opens exactly that preview,
+// the path both the dashboard action and the chat fix flow take.
+func openPreview(t *testing.T, m *Manager, p models.PatternAnalysis) {
+	t.Helper()
+	generated, err := m.GeneratePreview(context.Background(), p, "")
+	if err != nil {
+		t.Fatalf("GeneratePreview: %v", err)
+	}
+	if _, err := m.OpenFromPreview(context.Background(), generated); err != nil {
+		t.Fatalf("OpenFromPreview: %v", err)
+	}
+}
+
+func TestOpenFromPreview_DirectModeWhenForkFalse(t *testing.T) {
 	pr := &fakePR{}
 	m := newManager(t, pr, goodAgent(), Options{})
 	m.opts.Fork = false // direct branch + same-repo PR (source repo you own)
-	if _, err := m.Reconcile(context.Background(), []models.PatternAnalysis{systemicPattern("etcd")}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	openPreview(t, m, systemicPattern("etcd"))
+
 	if len(pr.opened) != 1 {
 		t.Fatalf("expected 1 PR, got %d", len(pr.opened))
 	}
@@ -153,15 +161,13 @@ func TestReconcile_DirectModeWhenForkFalse(t *testing.T) {
 	}
 }
 
-func TestReconcile_OpensDraftForkPR(t *testing.T) {
+func TestOpenFromPreview_OpensDraftForkPR(t *testing.T) {
 	pr := &fakePR{}
 	m := newManager(t, pr, goodAgent(), Options{})
-	stats, err := m.Reconcile(context.Background(), []models.PatternAnalysis{systemicPattern("etcd")})
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if stats.Proposed != 1 || len(pr.opened) != 1 {
-		t.Fatalf("stats=%+v opened=%d, want 1 proposed", stats, len(pr.opened))
+	openPreview(t, m, systemicPattern("etcd"))
+
+	if len(pr.opened) != 1 {
+		t.Fatalf("opened=%d, want 1", len(pr.opened))
 	}
 	req := pr.opened[0]
 	if !req.Fork || !req.Draft || !req.SignOff {
@@ -178,70 +184,34 @@ func TestReconcile_OpensDraftForkPR(t *testing.T) {
 	}
 }
 
-func TestReconcile_DryRunWritesPreviewsNoPR(t *testing.T) {
-	pr := &fakePR{}
-	previewFile := filepath.Join(t.TempDir(), "fix_previews.json")
-	m := newManager(t, pr, goodAgent(), Options{DryRun: true, PreviewFile: previewFile})
-	stats, err := m.Reconcile(context.Background(), []models.PatternAnalysis{systemicPattern("etcd")})
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if stats.Previewed != 1 || stats.Proposed != 0 {
-		t.Errorf("stats=%+v, want 1 previewed 0 proposed", stats)
-	}
-	if len(pr.opened) != 0 {
-		t.Errorf("dry-run must not open a PR")
-	}
-	if _, err := os.Stat(previewFile); err != nil {
-		t.Errorf("previews file not written: %v", err)
-	}
-}
-
-func TestReconcile_SkipsTrackedAndAdoptsOpen(t *testing.T) {
-	pr := &fakePR{}
-	m := newManager(t, pr, goodAgent(), Options{})
-	p := systemicPattern("etcd")
-	m.state.Tracked[keyFor(p)] = TrackedFix{URL: "x", OpenedAt: now()}
-	stats, _ := m.Reconcile(context.Background(), []models.PatternAnalysis{p})
-	if stats.Proposed != 0 || len(pr.opened) != 0 {
-		t.Errorf("tracked pattern should be skipped: %+v", stats)
-	}
-
-	pr2 := &fakePR{searchFound: true, searchURL: "https://github.com/up/stream/pull/3"}
-	m2 := newManager(t, pr2, goodAgent(), Options{})
-	stats2, _ := m2.Reconcile(context.Background(), []models.PatternAnalysis{systemicPattern("etcd")})
-	if stats2.Adopted != 1 || len(pr2.opened) != 0 {
-		t.Errorf("expected adopt without opening: %+v", stats2)
-	}
-}
-
-func TestReconcile_FiltersIneligibleAndCap(t *testing.T) {
-	pr := &fakePR{}
-	m := newManager(t, pr, goodAgent(), Options{MaxNewPerRun: 1})
-
+func TestEligible_RejectsUnactionablePatterns(t *testing.T) {
 	notSystemic := systemicPattern("a")
 	notSystemic.Systemic = false
 	noFix := systemicPattern("b")
 	noFix.SuggestedFix = ""
 	lowConf := systemicPattern("c")
 	lowConf.Confidence = "low"
-	good1 := systemicPattern("etcd")
-	good2 := systemicPattern("webhook")
-	good2.SharedRootCause = "different cause"
 
-	stats, _ := m.Reconcile(context.Background(), []models.PatternAnalysis{notSystemic, noFix, lowConf, good1, good2})
-	if stats.Proposed != 1 || len(pr.opened) != 1 {
-		t.Errorf("expected exactly 1 proposal (cap), got %+v / %d", stats, len(pr.opened))
+	for name, pattern := range map[string]models.PatternAnalysis{
+		"not systemic":     notSystemic,
+		"no suggested fix": noFix,
+		"low confidence":   lowConf,
+	} {
+		if Eligible(pattern, "high") {
+			t.Errorf("%s pattern was eligible", name)
+		}
+	}
+	if !Eligible(systemicPattern("etcd"), "high") {
+		t.Error("systemic high-confidence pattern with a fix was not eligible")
 	}
 }
 
-func TestReconcile_PinsBaseAcrossReadAndCommit(t *testing.T) {
+func TestGeneratePreview_PinsBaseAcrossReadAndCommit(t *testing.T) {
 	pr := &fakePR{}
 	fa := goodAgent()
 	m := newManager(t, pr, fa, Options{})
-	if _, err := m.Reconcile(context.Background(), []models.PatternAnalysis{systemicPattern("etcd")}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	openPreview(t, m, systemicPattern("etcd"))
+
 	// The agent was invoked at the pinned base SHA, and OpenPR received the same
 	// base, so read and commit cannot straddle a mid-run push to the branch.
 	if fa.spec.Repo.Ref != "pinned-sha-123" {
@@ -252,18 +222,25 @@ func TestReconcile_PinsBaseAcrossReadAndCommit(t *testing.T) {
 	}
 }
 
-func TestReconcile_PartialSuccessTracksAndCounts(t *testing.T) {
+func TestOpenFromPreview_PartialSuccessStillTracks(t *testing.T) {
 	pr := &fakePR{openErr: errors.New("labeling failed"), openURL: "https://github.com/up/stream/pull/9"}
 	m := newManager(t, pr, goodAgent(), Options{})
 	p := systemicPattern("etcd")
-	stats, err := m.Reconcile(context.Background(), []models.PatternAnalysis{p})
-	if err == nil || !strings.Contains(err.Error(), "labeling failed") {
-		t.Fatalf("Reconcile error = %v, want follow-up failure", err)
+
+	generated, err := m.GeneratePreview(context.Background(), p, "")
+	if err != nil {
+		t.Fatalf("GeneratePreview: %v", err)
 	}
-	if stats.Proposed != 1 {
-		t.Errorf("partial success should count: %+v", stats)
+	// The PR exists, so a failed follow-up (labeling) must not fail the open or
+	// lose the tracking entry that prevents a duplicate PR next time.
+	url, err := m.OpenFromPreview(context.Background(), generated)
+	if err != nil {
+		t.Fatalf("OpenFromPreview error = %v, want the opened PR reported", err)
 	}
-	if _, tracked := m.state.Tracked[keyFor(p)]; !tracked {
+	if url != pr.openURL {
+		t.Errorf("url = %q, want %q", url, pr.openURL)
+	}
+	if _, tracked := m.state.Tracked[KeyFor(p)]; !tracked {
 		t.Errorf("partial-success PR should be tracked")
 	}
 }
@@ -327,7 +304,7 @@ func TestGeneratedFixSnapshotRoundTrip(t *testing.T) {
 
 func TestTrackedFixStoresPatternSnapshot(t *testing.T) {
 	pattern := systemicPattern("etcd")
-	fix := trackedFix("https://github.com/up/stream/pull/5", pattern)
+	fix := trackedGeneratedFix("https://github.com/up/stream/pull/5", &GeneratedFix{pattern: pattern})
 	if fix.Pattern.JobID != pattern.JobID || fix.Pattern.SharedRootCause != pattern.SharedRootCause {
 		t.Fatalf("tracked fix = %+v", fix)
 	}

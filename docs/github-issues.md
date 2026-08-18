@@ -1,42 +1,62 @@
-# Auto-filing GitHub issues
+# GitHub issues
 
 The dashboard can open and maintain GitHub issues for its highest-signal
 findings: **systemic recurring patterns** and **persistent test failures**. It
 is **off by default** and opt-in per project.
 
-Each finding maps to one issue. The engine reuses the same issue across runs
-(no duplicates), and when a finding stops recurring it posts a "recovered"
-comment (and optionally closes the issue).
+**A maintainer opens every issue.** Nothing files an issue on a schedule. An
+admin reviews a finding in the dashboard and clicks File issue; the engine then
+maintains that issue for them. Each finding maps to one issue, the engine reuses
+the same issue across runs (no duplicates), and when a finding stops recurring
+the scheduled pass posts a "recovered" comment and optionally closes it.
+
+This makes issues a **server-mode feature**. A static [Pages](github-pages.md)
+deployment has no authenticated action API, so it performs no GitHub writes at
+all; `issues.enabled` there has nothing to act on.
 
 ## What triggers an issue
 
-| Trigger | Source | Condition |
+| Trigger | Source | Condition | Can file? |
+|---|---|---|---|
+| `patterns` | cross-build pattern analysis | a job's recent failures share one **systemic** root cause | yes |
+| `persistent` | flakiness report | a test failed in **≥3 consecutive** runs | **no, recovery only** |
+
+`persistent` is retired for filing. The dashboard's File issue action covers
+systemic patterns and individual builds, so nothing creates a `persistent::`
+issue any more. Keep the trigger enabled if an earlier engine version filed
+persistent issues for you: it scopes recovery, so those issues still get their
+recovery comment and close when the test stops failing. Removing it from
+`triggers` leaves them open forever instead.
+
+Filing is scoped to the same list. With `triggers: [persistent]` the File issue
+action refuses a pattern, because recovery would never close what it filed.
+
+Both signals are already computed by the fetcher; issues are just a delivery
+channel for them, alongside optional [email notifications](notifications.md).
+
+## Credentials (read this first)
+
+Two credentials do two different jobs, and neither is the reusable workflow's
+`GITHUB_TOKEN`:
+
+| Operation | Where it runs | Credential |
 |---|---|---|
-| `patterns` | cross-build pattern analysis | a job's recent failures share one **systemic** root cause |
-| `persistent` | flakiness report | a test failed in **≥3 consecutive** runs |
+| File issue (maintainer-initiated) | dashboard server | `BOT_TOKEN` |
+| Comment and close on recovery | worker or fetcher | `ISSUE_TOKEN` |
 
-Both are already computed by the fetcher; issues are just a delivery channel for
-them, alongside optional [email notifications](notifications.md).
+Both need `issues: write` on the **target** repo, as a **fine-grained PAT** or a
+**GitHub App installation token**. To follow the target repo's issue template
+(see below), `BOT_TOKEN` also needs `contents: read`; without it,
+template-following is skipped and issues use the default body.
 
-## Permissions (read this first)
+You must actually have rights to open issues there. Filing bot issues on an
+upstream community repo is usually unwanted, so point `issues.repo` at a repo
+**you control** (your consumer repo, or a dedicated tracking repo) unless you
+specifically intend otherwise.
 
-The issue feature always uses the dedicated `ISSUE_TOKEN`. The reusable
-workflow's `GITHUB_TOKEN` is not passed to the issue manager. This remains true
-when the target is the consumer repository itself.
-
-- A **fine-grained PAT** or a **GitHub App installation token** with
-  `issues: write` on the **target** repo, provided as the `ISSUE_TOKEN` secret.
-  To follow the target repo's issue template (see below), the token also needs
-  `contents: read`; without it, template-following is skipped and issues use the
-  default body.
-- You must actually have rights to open issues there. Auto-filing bot issues on
-  an upstream community repo is usually unwanted, so point `issues.repo` at a
-  repo **you control** (your consumer repo, or a dedicated tracking repo) unless
-  you specifically intend otherwise.
-
-The feature is active only when **both** `issues.enabled: true` **and** a
-non-empty `ISSUE_TOKEN` are present. Either missing is a no-op, never a deploy
-failure. Per-issue API errors (403/404/rate limit) are logged and skipped.
+Recovery is active only when **both** `issues.enabled: true` **and** a non-empty
+`ISSUE_TOKEN` are present. Either missing is a no-op, never a deploy failure.
+Per-issue API errors (403/404/rate limit) are logged and skipped.
 
 ## Configuration
 
@@ -49,29 +69,16 @@ issues:
   repo:
     owner: "your-org"
     name: "your-tracking-repo"
-  triggers: [patterns, persistent]   # default: both
+  triggers: [patterns, persistent]   # default: both; persistent scopes recovery only
   labels: [prow-dashboard]           # default: [prow-dashboard]
   comment_on_recovery: true          # default true: comment when a finding clears
   close_on_recovery: false           # default false: leave the issue open
-  max_new_per_run: 5                 # default 5: cap issues created per fetch
 ```
 
-Wire the token in the deploy workflow:
-
-```yaml
-# .github/workflows/deploy.yml  (GitHub Actions + Pages path)
-jobs:
-  deploy:
-    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.9.0-rc.3
-    # ...
-    secrets:
-      ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
-```
-
-On the [Kubernetes-native](kubernetes-reference.md) path, set `ISSUE_TOKEN` on the worker
-instead, via `fetcher.extraEnv` in the Helm values (sourced from a Secret). The
-same scheduled auto-filing runs there; and an admin can additionally file a
-single issue on demand from the UI (see [server.md](server.md#admin-gated-actions)).
+Wire the credentials on the [Kubernetes-native](kubernetes-reference.md) path:
+set `BOT_TOKEN` on the server and `ISSUE_TOKEN` on the worker, via `extraEnv` in
+the Helm values (sourced from a Secret). Admins then file issues from the UI
+(see [server.md](server.md#admin-gated-actions)) and the worker maintains them.
 
 ## How dedup works
 
@@ -93,9 +100,9 @@ The engine tracks filed issues two ways, so it never opens a duplicate:
 
 ## Lifecycle
 
-- **New finding** → file an issue (title, AI root cause / suggested fix,
-  affected builds linked to the dashboard, the hidden marker), up to
-  `max_new_per_run` per fetch.
+- **New finding** → nothing happens until an admin clicks File issue, which
+  files it (title, AI root cause / suggested fix, affected builds linked to the
+  dashboard, the hidden marker).
 - **Still active** → do nothing (already tracked).
 - **Recovered** (no longer a pattern / no longer persistent) → post a recovery
   comment (if `comment_on_recovery`) and close the issue (if
@@ -123,7 +130,9 @@ flag to set.
 
 ## Implementation reference
 
-- `backend/internal/issues/`: the GitHub client, the reconciler (state +
-  repo-side dedup), and the spec builder that turns findings into issues.
-- Wired in `backend/internal/fetcher/fetcher.go` (Step 7), gated on
+- `backend/internal/issues/`: the GitHub client, `File` (state + repo-side
+  dedup) and `Recover` (comment and close), and the spec builder that turns
+  findings into issues.
+- `File` is called by `backend/internal/actions/` for the maintainer action.
+  `Recover` is called by `backend/internal/fetcher/fetcher.go`, gated on
   `issues.enabled` + `ISSUE_TOKEN`.

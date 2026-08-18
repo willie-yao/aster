@@ -18,6 +18,10 @@ import (
 // writes a temp file in the same directory and renames it into place, so a
 // concurrent reader (the server in Kubernetes-native mode) never observes a
 // half-written file. Parent directories are created as needed.
+//
+// Atomic replacement protects readers, not writers. Two processes that both
+// load, mutate, and save the same file still lose one update; hold WithLock
+// across the whole sequence when a second writer exists.
 func WriteJSON(path string, v any) error {
 	return writeJSON(path, v, writeOptions{parentPerm: 0o755, filePerm: 0o644}, defaultWriteOps())
 }

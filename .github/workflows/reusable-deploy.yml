@@ -103,12 +103,6 @@ on:
       EMAIL_SMTP_PASSWORD:
         description: "SMTP password for email notifications when notifications.email is enabled and smtp.username is set."
         required: false
-      ISSUE_TOKEN:
-        description: "GitHub token (PAT or App token) with issues:write on the target repo, for auto-filing issues when issues.enabled is set. Optional; omit to disable."
-        required: false
-      FIX_TOKEN:
-        description: "GitHub PAT of a CLA-signed identity that can fork the source repo and open PRs, for agent-proposed fix PRs when ai.fix_prs.enabled is set. Optional; omit to disable. See docs/fix-prs.md."
-        required: false
 
 permissions:
   contents: read
@@ -262,8 +256,6 @@ jobs:
           AI_CACHE_GENERATION: ${{ inputs.ai-cache-generation }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}
-          ISSUE_TOKEN: ${{ secrets.ISSUE_TOKEN }}
-          FIX_TOKEN: ${{ secrets.FIX_TOKEN }}
         run: |
           AI_FLAG=""
           if [ "${{ inputs.ai }}" = "true" ]; then

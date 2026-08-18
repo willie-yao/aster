@@ -5,7 +5,6 @@
 {{- if eq .Values.mode "watch" }}
 {{- $shadow := .Values.agentSandbox.analysisShadow.enabled }}
 {{- $agentSandboxScheduled := eq (include "aster.agentSandboxScheduledEnabled" .) "true" }}
-{{- $agentSandboxFixScheduled := eq (include "aster.agentSandboxFixScheduledEnabled" .) "true" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -51,13 +50,8 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: worker
-          {{- if $agentSandboxFixScheduled }}
-          image: {{ include "aster.agentSandboxDashboardImage" . }}
-          imagePullPolicy: {{ .Values.agentSandbox.fixRuntime.dashboardImage.pullPolicy }}
-          {{- else }}
           image: {{ include "aster.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          {{- end }}
           command:
             - /usr/local/bin/worker
             - -project-dir={{ .Values.project.mountPath }}
@@ -98,9 +92,6 @@ spec:
             - -causal-critic-shadow-gateway-protocol={{ .Values.agentSandbox.causalCritic.modelGateway.protocolVersion }}
             {{- end }}
           env:
-            {{- if $agentSandboxFixScheduled }}
-            {{- include "aster.agentSandboxEnv" . | nindent 12 }}
-            {{- end }}
             {{- if $shadow }}
             {{- include "aster.agentAnalysisShadowEnv" . | nindent 12 }}
             {{- end }}

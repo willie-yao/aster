@@ -235,12 +235,7 @@ export function fetchStatusPublishedThisPass(response: FetchStatusResponse): boo
 export function fetchStatusFollowUpFailureSummary(status: FetchProgressStatus): string | null {
   const components = status.follow_up;
   if (!components) return null;
-  for (const component of [
-    components.notifications,
-    components.remediation,
-    components.automatic_issues,
-    components.automatic_fix_prs,
-  ]) {
+  for (const component of [components.notifications, components.remediation, components.automatic_issues]) {
     if (component?.state === "failed" && component.summary) return component.summary;
   }
   return null;
@@ -281,7 +276,7 @@ export function fetchStatusWarningGroups(status: FetchProgressStatus): FetchStat
   const followUpItems: string[] = [];
   const followUp = status.follow_up;
   if (followUp) {
-    for (const component of [followUp.notifications, followUp.remediation, followUp.automatic_issues, followUp.automatic_fix_prs]) {
+    for (const component of [followUp.notifications, followUp.remediation, followUp.automatic_issues]) {
       if (component?.state === "failed" && component.summary && !followUpItems.includes(component.summary)) {
         followUpItems.push(component.summary);
       }
