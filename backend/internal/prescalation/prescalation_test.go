@@ -317,8 +317,8 @@ func (b *blockingResolver) Resolve(ctx context.Context, _ Ref) (Resolved, error)
 }
 
 // swallowingResolver reports success from a cancelled context, as the real
-// resolver can: a missing finished.json reads as a pending build, and a failed
-// changed-file listing is discarded because change context is optional.
+// resolver can: a failed changed-file listing is discarded because change
+// context is optional.
 type swallowingResolver struct{ entered chan struct{} }
 
 func (s *swallowingResolver) Resolve(ctx context.Context, ref Ref) (Resolved, error) {
@@ -663,9 +663,19 @@ func TestAnOversizedRestoredStoreIsPruned(t *testing.T) {
 	}
 	// Completion time orders the eviction, so the newest results are the ones
 	// that survive.
+	service.mu.Lock()
+	order := map[string]time.Time{}
+	for identity, rec := range service.records {
+		order[identity] = rec.updatedAt
+	}
+	service.mu.Unlock()
 	for _, name := range []string{"Test4", "Test5"} {
-		if view, _ := service.Get(testRef(name)); view.State != StateComplete {
+		ref := testRef(name)
+		if view, _ := service.Get(ref); view.State != StateComplete {
 			t.Errorf("%s state = %q, want the newest results retained", name, view.State)
+		}
+		if got := order[ref.identity()]; !got.Equal(store.results[ref.identity()].CompletedAt) {
+			t.Errorf("%s ordered by %v, want its completion time", name, got)
 		}
 	}
 	// The pruned set is written back, so the file does not stay oversized.
@@ -689,6 +699,26 @@ func TestRetentionIsNeverTighterThanTheQueue(t *testing.T) {
 	opts = Options{MaxQueued: 4, MaxRecords: 50}.normalized()
 	if opts.MaxRecords != 50 {
 		t.Fatalf("MaxRecords = %d, want the configured value kept", opts.MaxRecords)
+	}
+}
+
+// Draining claims every admission slot and keeps it, so a service that has been
+// waited out cannot start new work while the process is going away.
+func TestADrainedServiceAcceptsNoFurtherWork(t *testing.T) {
+	runner := newFakeRunner()
+	close(runner.release)
+	service := newService(t, &fakeResolver{}, runner, Options{MaxQueued: 2})
+
+	if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	drain(t, service)
+
+	if _, err := service.Start(context.Background(), testRef("TestB"), "octocat", "req-2"); !errors.Is(err, ErrBusy) {
+		t.Fatalf("err = %v, want ErrBusy after the drain", err)
+	}
+	if view, _ := service.Get(testRef("TestA")); view.State != StateComplete {
+		t.Errorf("state = %q, want the drained result readable", view.State)
 	}
 }
 

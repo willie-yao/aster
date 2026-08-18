@@ -170,7 +170,8 @@ type Service struct {
 	active chan struct{}
 	// admitted bounds accepted work. A token is taken before resolution, so
 	// the bucket reads and GitHub calls one escalation needs are capped the
-	// same way its model traffic is.
+	// same way its model traffic is. It doubles as the drain: holding every
+	// token means nothing is in flight and nothing more can start.
 	admitted chan struct{}
 
 	mu          sync.Mutex
@@ -179,7 +180,6 @@ type Service struct {
 	// saveMu serializes persistence so concurrent finishes cannot write
 	// snapshots out of order.
 	saveMu sync.Mutex
-	wg     sync.WaitGroup
 }
 
 // New constructs the service and restores any persisted results.
@@ -208,10 +208,12 @@ func New(ctx context.Context, resolver Resolver, runner Runner, opts Options) (*
 				continue
 			}
 			// Completion time orders the restored set, so pruning it drops the
-			// genuinely oldest results rather than an arbitrary one.
+			// genuinely oldest results rather than an arbitrary one. A record
+			// from an older state file may carry neither timestamp; unknown age
+			// sorts oldest so results with trustworthy times are kept first.
 			updatedAt := view.CompletedAt
 			if updatedAt.IsZero() {
-				updatedAt = opts.Now().UTC()
+				updatedAt = view.StartedAt
 			}
 			s.records[identity] = &record{view: view, updatedAt: updatedAt}
 		}
@@ -271,10 +273,9 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	default:
 		return View{}, ErrBusy
 	}
-	// The wait group covers the whole accepted lifetime, resolution included,
-	// so a shutdown drain does not miss work that has not reached its goroutine
-	// yet. It is released exactly once, by whoever ends up owning the token.
-	s.wg.Add(1)
+	// The token is released only once the work it stands for has finished, so
+	// holding it is what makes a drain meaningful. It is released exactly once,
+	// by whoever ends up owning it.
 	// One deadline spans resolution, queue time, and the analysis, so the whole
 	// accepted lifetime is bounded rather than just the part after the slot is
 	// won. Rooting it in the service context means a shutdown also cancels work
@@ -283,7 +284,6 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	release := func() {
 		endLifetime()
 		<-s.admitted
-		s.wg.Done()
 	}
 
 	// Resolution happens outside the lock because it reads published state and
@@ -295,12 +295,12 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	resolved, err := s.resolver.Resolve(resolveCtx, ref)
 	stopPropagation()
 	cancelResolve()
-	// A resolver can report success from partial reads: a missing finished.json
-	// reads as a pending build, and the changed-file lister is optional. So the
-	// budget and the caller are checked directly rather than trusted to surface
-	// as an error, or a cut-off resolution would launch an analysis. They are
-	// checked first because an expired budget is the operative fact, and
-	// because they carry the cause the operator needs.
+	// A resolver can report success from partial reads: the changed-file lister
+	// is optional, so a cancelled listing is discarded. So the budget and the
+	// caller are checked directly rather than trusted to surface as an error,
+	// or a cut-off resolution would launch an analysis. They are checked first
+	// because an expired budget is the operative fact, and because they carry
+	// the cause the operator needs.
 	switch {
 	case lifetime.Err() != nil:
 		release()
@@ -361,29 +361,28 @@ func (s *Service) Get(ref Ref) (View, error) {
 }
 
 // Wait blocks until every admitted escalation has released its slot, or until
-// ctx is done. Admission covers resolution too, so a shutdown drain does not
+// ctx is done. It then keeps those slots, so a drained service accepts no
+// further work. Admission covers resolution too, so a shutdown drain does not
 // race a request that has not started running yet, and every escalation that
 // reached a record has attempted to persist its outcome by the time Wait
 // returns.
 func (s *Service) Wait(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	// Claiming every token is the drain: a token is released only once the work
+	// it stands for has finished, so holding them all means nothing is left.
+	for i := 0; i < s.opts.MaxQueued; i++ {
+		select {
+		case s.admitted <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
+	return nil
 }
 
 func (s *Service) run(ctx context.Context, rec *record, resolved Resolved, release func()) {
-	// The admission token, its wait-group entry, and the accepted lifetime are
-	// held until the escalation has persisted its outcome, so a queue slot
-	// frees only when the work it stands for is done and a drain cannot end
-	// early.
+	// The admission token and the accepted lifetime are held until the
+	// escalation has persisted its outcome, so a queue slot frees only when the
+	// work it stands for is done and a drain cannot end early.
 	defer release()
 
 	// Waiting for the single slot keeps queued work visible rather than
