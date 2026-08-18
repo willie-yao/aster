@@ -88,7 +88,12 @@ type Options struct {
 	// PullRequestEscalation runs on-demand analysis for a pull request failure
 	// the deterministic pass could not explain. Nil withholds the routes and
 	// the capability.
-	PullRequestEscalation          PullRequestEscalationRunner
+	PullRequestEscalation PullRequestEscalationRunner
+	// SharedFailureEscalation runs one on-demand analysis for a failure
+	// observed across several pull requests. Nil withholds the routes and the
+	// capability, independently of PullRequestEscalation, so a controls surface
+	// is never advertised when its service failed to construct.
+	SharedFailureEscalation        SharedFailureEscalationRunner
 	CausalRemediationInvestigation CausalRemediationInvestigationRunner
 	CausalFixPreview               CausalFixPreviewRunner
 	// ChatFix bridges one selected chat response into the existing fix preview.
@@ -186,6 +191,10 @@ type Features struct {
 	// PullRequestEscalation enables on-demand analysis of a pull request
 	// failure the deterministic pass could not explain.
 	PullRequestEscalation bool `json:"pull_request_escalation,omitempty"`
+	// SharedFailureEscalation enables one on-demand analysis of a failure
+	// observed across several pull requests, which no single pull request can
+	// account for.
+	SharedFailureEscalation bool `json:"shared_failure_escalation,omitempty"`
 }
 
 // authRegistrar is implemented by authenticators that need their own routes
@@ -335,6 +344,24 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, guard(startPullRequestEscalationHandler(timeout, opts.PullRequestEscalation))))
 		mux.Handle("GET "+path,
 			auth.Middleware(opts.Auth, getPullRequestEscalationHandler(opts.PullRequestEscalation)))
+	}
+
+	// Shared failure escalation is gated on its own runner, so a pull request
+	// escalation service that constructed while this one did not never
+	// advertises controls this server cannot serve.
+	if opts.Auth != nil && opts.SharedFailureEscalation != nil {
+		caps.Features.SharedFailureEscalation = true
+		timeout := opts.ActionTimeout
+		if timeout <= 0 {
+			timeout = defaultActionTimeout
+		}
+		trusted := trustedOriginSet(opts.TrustedOrigins)
+		guard := func(next http.Handler) http.Handler { return csrfGuard(trusted, next) }
+		path := "/api/shared-failures/{id}/escalation"
+		mux.Handle("POST "+path,
+			auth.Middleware(opts.Auth, guard(startSharedFailureEscalationHandler(timeout, opts.SharedFailureEscalation))))
+		mux.Handle("GET "+path,
+			auth.Middleware(opts.Auth, getSharedFailureEscalationHandler(opts.SharedFailureEscalation)))
 	}
 
 	// Write actions require both auth and an action runner.

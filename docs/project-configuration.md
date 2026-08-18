@@ -217,9 +217,10 @@ verdict is the same either way. The toggle only adds every presubmit to the main
 job dashboard, enlarging each fetch and any enabled analysis. Enable it when you
 want that dashboard coverage, not to get triage.
 
-Draft pull requests are excluded. Each pass writes `pull-requests.json` and one
-`pull-requests/<number>.json` per open pull request, and removes detail files for
-pull requests that are no longer open.
+Draft pull requests are excluded. Each pass writes `pull-requests.json`, one
+`pull-requests/<number>.json` per open pull request, and
+`pull-request-failures.json` for the failures several pull requests share, and
+removes detail files for pull requests that are no longer open.
 
 A few behaviors worth knowing:
 
@@ -279,6 +280,35 @@ A few behaviors worth knowing:
 - A triage failure never aborts the pass. The previously written view is kept
   and the dashboard still publishes.
 
+### Shared failures
+
+`pull-request-failures.json` publishes the cross-pull-request correlation as a
+first-class object, so a failure that is nobody's fault in particular has
+somewhere to be investigated. Without it, a `widespread` verdict points the
+reader at a peer pull request whose page points back, and the trail ends.
+
+- A failure is published as **shared** once **two or more** open pull requests
+  report it. That is lower than the three a `widespread` verdict needs, because
+  this view answers "what is hitting several pull requests" rather than "is this
+  mine".
+- The correlation key is the same one attribution uses: **base branch, job name,
+  and test name**. The published `id` is a hash of that key, so it is stable
+  across passes and survives pull requests joining and leaving the failure.
+- Each member records its pull request, the build that observed the failure, and
+  the verdict that member received. Members can differ: a base branch that
+  already fails the test explains the failure for that pull request before peers
+  are consulted.
+- `oldest_build_started` and `newest_build_started` bound the member builds the
+  **current pass** observed. A pass sees only the newest build per check, so
+  neither is a claim about when the failure first appeared, and the view says so.
+- `escalatable` reports that no member can already be analyzed from its own pull
+  request. It is the cost filter: when one member offers per-pull-request
+  escalation, that cheaper path is used instead of a second one here.
+
+Clustering runs after attribution, costs no model calls, and is published on
+both deploy paths. The GitHub Pages path therefore gets the aggregate view with
+no server; only the analysis below needs one.
+
 ### Optional AI escalation
 
 Every verdict above is computed without a model. When a failure stays
@@ -314,16 +344,19 @@ The contract is deliberately narrow:
 
 - **Only the residual set is eligible.** A failure the base branch, other pull
   requests, or base-branch flakiness history already explained cannot be
-  escalated, so the free pass is the cost filter. A stale build is refused too,
-  because change context would describe a different revision.
+  escalated from its pull request, so the free pass is the cost filter. A stale
+  build is refused too, because change context would describe a different
+  revision.
 - **One escalation runs at a time**, no matter how many maintainers click, and
-  only a few more may queue behind it. Admission is reserved before any artifact
-  or GitHub read, so a burst of clicks cannot fan out into upstream requests; a
-  start past the bound is rejected with `409` instead of queueing. One deadline
-  covers the whole accepted lifetime, so a request that never reaches the slot
-  fails as timed out rather than waiting indefinitely, and can be retried.
-  Results are shared between admins rather than per-requester, so two
-  maintainers looking at the same failure do not each pay for an analysis.
+  only a few more may queue behind it. That slot is shared with shared failure
+  escalation below, so the two kinds cannot run an analysis each. Admission is
+  reserved before any artifact or GitHub read, so a burst of clicks cannot fan
+  out into upstream requests; a start past the bound is rejected with `409`
+  instead of queueing. One deadline covers the whole accepted lifetime, so a
+  request that never reaches the slot fails as timed out rather than waiting
+  indefinitely, and can be retried. Results are shared between admins rather
+  than per-requester, so two maintainers looking at the same failure do not each
+  pay for an analysis.
 - **A failed escalation can be retried.** A provider error, a timeout, or a
   restart that interrupted queued work leaves the failure retryable rather than
   permanently un-analyzable, and the dashboard offers a retry in place. While a
@@ -343,6 +376,48 @@ The contract is deliberately narrow:
   process stopped is never restored as running: it comes back as whatever
   terminal state was last persisted for that failure, or as never started, and
   either way it can be escalated again.
+
+### Escalating a shared failure
+
+The same environment variable enables one escalation per **shared failure**, so
+the `widespread` verdict links to an analysis instead of a peer pull request.
+The two services construct independently and advertise separate capabilities, so
+a server can offer one without the other.
+
+- **The subject is the failure, not a pull request.** It is keyed by the shared
+  failure's `id`, so one analysis serves every affected pull request and
+  membership changes do not re-run it. The identity carries no build, so a
+  finished result is checked against the build a new request would read,
+  compared by repository, pull request, and build together. It is reused while
+  that build is unchanged. Once the evidence moves on, the stored result stops
+  being served and the dashboard offers a fresh analysis instead, so the same
+  test failing again months later for a different reason is never answered with
+  the old analysis.
+- **Only a failure with no cheaper path is eligible.** A shared failure whose
+  `escalatable` flag is false is refused, because one of its pull requests can
+  analyze it directly.
+- **One build supplies the evidence.** Artifacts exist per build, so the newest
+  member build that finished and tested its pull request's current head is read.
+  The result is attributed to the shared failure rather than to that pull
+  request, and it records which build it read, because the newest usable build
+  moves between passes while the shared failure keeps one identity. When no
+  member has such a build, the request is refused as transient rather than as a
+  verdict.
+- **The model is told the failure is shared.** It runs under its own
+  `sharedfailure` module: no diff is supplied, the prompt names the affected
+  pull requests, and it is directed at the common cause and told not to
+  attribute the failure to any pull request. The prompt also states that
+  correlating on base branch, job, and test does not establish that the pull
+  requests are independent, since one may be stacked on another, so the model is
+  not biased away from a change that really is responsible. The module name is
+  part of the agentic cache key, so the analysis never collides with the
+  dashboard's or a single pull request's.
+- **Everything else matches per-pull-request escalation**: admission reserved
+  before any upstream read, results shared between admins, failures retryable,
+  and results stored privately in `shared_failure_escalation_state.json`. The
+  two kinds share one analysis slot, so the server still runs a single analysis
+  at a time rather than one per kind, though each kind keeps its own queue
+  bound.
 
 ## Categories
 

@@ -6,6 +6,7 @@ import { BuildFailurePage } from "./pages/BuildFailurePage";
 import { FlakinessPage } from "./pages/FlakinessPage";
 import { PullRequestsPage } from "./pages/PullRequestsPage";
 import { PullRequestDetailPage } from "./pages/PullRequestDetailPage";
+import { SharedFailurePage } from "./pages/SharedFailurePage";
 import { ActionRequestPage } from "./pages/ActionRequestPage";
 import { AnalysisTracesPage } from "./pages/AnalysisTracesPage";
 import { AIUsagePage } from "./pages/AIUsagePage";
@@ -29,6 +30,10 @@ export default function App() {
                 <Route index element={<DashboardPage />} />
                 <Route path="flaky" element={<FlakinessPage />} />
                 <Route path="pull-requests" element={<PullRequestsPage />} />
+                <Route
+                  path="pull-requests/shared/:id"
+                  element={<SharedFailurePage />}
+                />
                 <Route
                   path="pull-requests/:number"
                   element={<PullRequestDetailPage />}

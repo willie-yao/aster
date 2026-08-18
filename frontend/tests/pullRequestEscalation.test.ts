@@ -19,14 +19,17 @@ test("only in-progress escalation states are polled", () => {
 });
 
 test("escalation requests are same-origin and carry an idempotency key", () => {
+  // Both escalation kinds share one transport, so the credential and
+  // idempotency contract is asserted once, where it lives.
+  const shared = source("src/lib/escalation.ts");
   const client = source("src/lib/pullRequestEscalation.ts");
 
-  assert.match(client, /credentials: "same-origin"/);
-  assert.match(client, /"Idempotency-Key": idempotencyKey/);
+  assert.match(shared, /credentials: "same-origin"/);
+  assert.match(shared, /"Idempotency-Key": idempotencyKey/);
   // Every path segment is encoded; a Ginkgo test name goes in the body/query.
   assert.match(client, /encodeURIComponent\(ref\.jobID\)/);
   assert.match(client, /encodeURIComponent\(ref\.buildID\)/);
-  assert.match(client, /body: JSON\.stringify\(\{ test_name: ref\.testName \}\)/);
+  assert.match(client, /JSON\.stringify\(\{ test_name: ref\.testName \}\)/);
 });
 
 test("the escalation control is gated on the advertised capability", () => {
@@ -73,7 +76,11 @@ test("polling stops once the escalation reaches a terminal state", () => {
 });
 
 test("the escalation result does not claim the pull request caused the failure", () => {
+  // The panel is subject-agnostic, so each caller supplies the disclaimer that
+  // is true for its subject and the panel always renders one.
   const panel = source("src/components/EscalationPanel.tsx");
+  const page = source("src/pages/PullRequestDetailPage.tsx");
 
-  assert.match(panel, /does not\s*\n?\s*establish that the pull request caused it/);
+  assert.match(panel, /\{disclaimer\}/);
+  assert.match(page, /does not establish that the pull request caused it/);
 });

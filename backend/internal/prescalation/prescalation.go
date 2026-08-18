@@ -48,12 +48,45 @@ var (
 // maxIdempotencyKeysPerRecord bounds replay keys retained per retained record.
 const maxIdempotencyKeysPerRecord = 8
 
+// maxGetRevalidations bounds how many times one status read will follow a
+// record replaced while its evidence was being looked up. Replacement requires
+// a concurrent start, so this is never reached in practice; it exists so the
+// read cannot spin.
+const maxGetRevalidations = 3
+
 // Ref identifies one failing test on one pull request check.
 type Ref struct {
 	PullNumber int    `json:"pull_number"`
 	JobID      string `json:"job_id"`
 	BuildID    string `json:"build_id"`
 	TestName   string `json:"test_name"`
+}
+
+// subject constrains a reference that can key one escalation record. The
+// service is generic over it so a pull request failure and a failure shared
+// across several pull requests share one admission, single-flight, retry, and
+// persistence implementation instead of two copies of it.
+type subject[T any] interface {
+	normalized() (T, error)
+	identity() string
+}
+
+// evidenced is implemented by resolved work whose analysis describes a build
+// the service chose rather than one the reference names. A pull request
+// reference names its own build, so its record can never describe anything
+// else. A shared failure keeps one identity while the build under it moves on,
+// so its finished result has to be revalidated against the build a new request
+// would read, or the same test failing again months later for a different
+// reason would be answered with the old analysis forever.
+type evidenced interface {
+	evidence() EscalationEvidence
+}
+
+// revalidates reports whether this kind's finished results can go stale.
+func revalidates[W any]() bool {
+	var zero W
+	_, ok := any(zero).(evidenced)
+	return ok
 }
 
 func (r Ref) normalized() (Ref, error) {
@@ -74,34 +107,72 @@ func (r Ref) identity() string {
 	return fmt.Sprintf("%d\x00%s\x00%s\x00%s", r.PullNumber, r.JobID, r.BuildID, r.TestName)
 }
 
+// EscalationEvidence names the build whose artifacts one analysis read. It is
+// recorded for a subject whose evidence build is chosen rather than named by
+// the request, so a stored result still says which build it describes after the
+// choice would have landed on a different one.
+type EscalationEvidence struct {
+	// Repo and PullNumber accompany BuildID because a build is only addressed
+	// by all three: a build id is unique within one repository's pull request,
+	// not across a data directory that outlives a change of project.
+	Repo       string `json:"repo,omitempty"`
+	PullNumber int    `json:"pull_number,omitempty"`
+	BuildID    string `json:"build_id,omitempty"`
+}
+
+// sameBuild reports whether two evidence records name the same build.
+func (e EscalationEvidence) sameBuild(other EscalationEvidence) bool {
+	return e.Repo == other.Repo && e.PullNumber == other.PullNumber && e.BuildID == other.BuildID
+}
+
 // View is the public state of one escalation.
-type View struct {
-	Ref   Ref    `json:"ref"`
+type View[R any] struct {
+	Ref   R      `json:"ref"`
 	State string `json:"state"`
 	// RootCause, Severity, and Citations mirror the published analysis fields.
 	RootCause    string                    `json:"root_cause,omitempty"`
 	Severity     string                    `json:"severity,omitempty"`
 	SuggestedFix string                    `json:"suggested_fix,omitempty"`
 	Citations    []models.EvidenceCitation `json:"citations,omitempty"`
+	// Evidence names the build the analysis read, when the service chose it.
+	Evidence *EscalationEvidence `json:"evidence,omitempty"`
 	// Error is a safe message when State is failed.
 	Error       string    `json:"error,omitempty"`
 	StartedAt   time.Time `json:"started_at,omitempty"`
 	CompletedAt time.Time `json:"completed_at,omitempty"`
 }
 
+// PullRequestView is one pull request escalation's public state.
+type PullRequestView = View[Ref]
+
 // Resolver turns a Ref into the inputs one analysis needs, and reports whether
-// the failure is eligible for escalation.
-type Resolver interface {
-	Resolve(context.Context, Ref) (Resolved, error)
+// the failure is eligible for escalation. The resolved work is opaque to the
+// service, which only carries it from the resolver to the matching runner.
+type Resolver[R, W any] interface {
+	Resolve(context.Context, R) (W, error)
 }
 
 // Runner performs one analysis for a resolved subject.
-type Runner interface {
-	Run(context.Context, Resolved) (View, error)
+type Runner[R, W any] interface {
+	Run(context.Context, W) (View[R], error)
+}
+
+// Gate bounds concurrent analyses. Services can share one, so a server runs a
+// single analysis at a time no matter how many escalation kinds it offers.
+// Without sharing, each kind would carry its own slot and their model traffic
+// would add up.
+type Gate chan struct{}
+
+// NewGate builds a gate admitting n analyses at once.
+func NewGate(n int) Gate {
+	if n <= 0 {
+		n = 1
+	}
+	return make(Gate, n)
 }
 
 // Options bound the service.
-type Options struct {
+type Options[R any] struct {
 	// Timeout bounds one escalation's whole accepted lifetime: resolution,
 	// queue time, and the analysis itself.
 	Timeout time.Duration
@@ -116,10 +187,20 @@ type Options struct {
 	// Now is the clock, for tests.
 	Now func() time.Time
 	// Store persists completed results so they survive a restart. Optional.
-	Store Store
+	Store Store[R]
+	// CurrentEvidence reports the build a new request for this subject would
+	// read. A finished result is only reached through Start, which revalidates
+	// it, so without this a status read would keep serving an analysis of
+	// artifacts that no longer represent the failure and the caller would never
+	// be offered a way to ask again. It must not perform expensive work: status
+	// is polled. Nil disables the check.
+	CurrentEvidence func(R) (EscalationEvidence, bool)
+	// Gate bounds concurrent analyses. Nil gives this service its own single
+	// slot; pass one shared gate to bound several services together.
+	Gate Gate
 }
 
-func (o Options) normalized() Options {
+func (o Options[R]) normalized() Options[R] {
 	if o.Timeout <= 0 {
 		o.Timeout = 10 * time.Minute
 	}
@@ -138,17 +219,20 @@ func (o Options) normalized() Options {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
+	if o.Gate == nil {
+		o.Gate = NewGate(1)
+	}
 	return o
 }
 
 // Store persists completed escalations across restarts.
-type Store interface {
-	Load() (map[string]View, error)
-	Save(map[string]View) error
+type Store[R any] interface {
+	Load() (map[string]View[R], error)
+	Save(map[string]View[R]) error
 }
 
-type record struct {
-	view      View
+type record[R any] struct {
+	view      View[R]
 	running   bool
 	updatedAt time.Time
 }
@@ -160,22 +244,27 @@ type record struct {
 // part of the feature that spends tokens, and per-admin isolation would let
 // several maintainers each pay for the same analysis. The owner is retained
 // only to scope replay keys.
-type Service struct {
+type Service[R subject[R], W any] struct {
 	ctx      context.Context
-	resolver Resolver
-	runner   Runner
-	opts     Options
-	// active is a single global slot, so escalation can never fan out into
-	// concurrent model traffic no matter how many admins click.
-	active chan struct{}
+	resolver Resolver[R, W]
+	runner   Runner[R, W]
+	opts     Options[R]
+	// active is the analysis slot, shared with any other service given the
+	// same gate, so escalation can never fan out into concurrent model traffic
+	// no matter how many admins click or how many escalation kinds exist.
+	active Gate
 	// admitted bounds accepted work. A token is taken before resolution, so
 	// the bucket reads and GitHub calls one escalation needs are capped the
 	// same way its model traffic is. It doubles as the drain: holding every
 	// token means nothing is in flight and nothing more can start.
 	admitted chan struct{}
 
+	// revalidates is fixed by the work type: it reports whether a finished
+	// result has to be checked against current evidence before it is reused.
+	revalidates bool
+
 	mu          sync.Mutex
-	records     map[string]*record
+	records     map[string]*record[R]
 	idempotency map[string]string
 	// saveMu serializes persistence so concurrent finishes cannot write
 	// snapshots out of order.
@@ -186,16 +275,24 @@ type Service struct {
 }
 
 // New constructs the service and restores any persisted results.
-func New(ctx context.Context, resolver Resolver, runner Runner, opts Options) (*Service, error) {
+func New[R subject[R], W any](ctx context.Context, resolver Resolver[R, W], runner Runner[R, W], opts Options[R]) (*Service[R, W], error) {
 	if ctx == nil || resolver == nil || runner == nil {
 		return nil, fmt.Errorf("prescalation: ctx, resolver, and runner are required")
 	}
+	// A kind whose finished results can go stale needs a way to notice from a
+	// status read, or its results are only revalidated by a request no caller
+	// has a reason to make, and it strands them exactly as if the check did not
+	// exist. That is a wiring mistake, so it fails at construction.
+	if revalidates[W]() && opts.CurrentEvidence == nil {
+		return nil, fmt.Errorf("prescalation: this subject's evidence can move, so CurrentEvidence is required")
+	}
 	opts = opts.normalized()
-	s := &Service{
+	s := &Service[R, W]{
 		ctx: ctx, resolver: resolver, runner: runner, opts: opts,
-		active:      make(chan struct{}, 1),
+		revalidates: revalidates[W](),
+		active:      opts.Gate,
 		admitted:    make(chan struct{}, opts.MaxQueued),
-		records:     map[string]*record{},
+		records:     map[string]*record[R]{},
 		idempotency: map[string]string{},
 	}
 	if opts.Store != nil {
@@ -218,7 +315,7 @@ func New(ctx context.Context, resolver Resolver, runner Runner, opts Options) (*
 			if updatedAt.IsZero() {
 				updatedAt = view.StartedAt
 			}
-			s.records[identity] = &record{view: view, updatedAt: updatedAt}
+			s.records[identity] = &record[R]{view: view, updatedAt: updatedAt}
 		}
 		// A store written under a larger bound holds more results than are
 		// retained now, and nothing else would bring it back down until the
@@ -236,14 +333,14 @@ func New(ctx context.Context, resolver Resolver, runner Runner, opts Options) (*
 
 // Start begins one escalation, or returns the existing state for a subject that
 // is already running or already complete.
-func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (View, error) {
+func (s *Service[R, W]) Start(ctx context.Context, ref R, owner, requestID string) (View[R], error) {
 	ref, err := ref.normalized()
 	if err != nil {
-		return View{}, err
+		return View[R]{}, err
 	}
 	owner, requestID = strings.TrimSpace(owner), strings.TrimSpace(requestID)
 	if owner == "" || requestID == "" || len(owner) > 256 || len(requestID) > 256 {
-		return View{}, ErrInvalid
+		return View[R]{}, ErrInvalid
 	}
 	identity := ref.identity()
 	idempotencyKey := owner + "\x00" + requestID
@@ -253,13 +350,18 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	if previous, ok := s.idempotency[idempotencyKey]; ok {
 		if previous != identity {
 			s.mu.Unlock()
-			return View{}, ErrIdempotencyConflict
+			return View[R]{}, ErrIdempotencyConflict
 		}
 		// The same key for the same subject is a replay of one request, so it
 		// returns the subject's current state rather than starting new work.
 		replay = true
 	}
-	if existing := s.records[identity]; existing != nil && (replay || !retryable(existing)) {
+	// A replay and work already in flight are answered without resolving. A
+	// finished result is only answered here when it cannot drift; otherwise the
+	// request resolves first so the result can be checked against the build it
+	// would read now.
+	if existing := s.records[identity]; existing != nil &&
+		(replay || existing.running || (!retryable(existing) && !s.revalidates)) {
 		s.idempotency[idempotencyKey] = identity
 		s.pruneIdempotencyLocked()
 		view := existing.view
@@ -274,7 +376,7 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	select {
 	case s.admitted <- struct{}{}:
 	default:
-		return View{}, ErrBusy
+		return View[R]{}, ErrBusy
 	}
 	// The token is released only once the work it stands for has finished, so
 	// holding it is what makes a drain meaningful. It is released exactly once,
@@ -307,17 +409,17 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	switch {
 	case lifetime.Err() != nil:
 		release()
-		return View{}, lifetime.Err()
+		return View[R]{}, lifetime.Err()
 	case ctx.Err() != nil:
 		release()
-		return View{}, ctx.Err()
+		return View[R]{}, ctx.Err()
 	case err != nil:
 		release()
-		return View{}, err
+		return View[R]{}, err
 	}
 
 	s.mu.Lock()
-	if existing := s.records[identity]; existing != nil && !retryable(existing) {
+	if existing := s.records[identity]; existing != nil && !retryable(existing) && reusable(existing, resolved) {
 		s.idempotency[idempotencyKey] = identity
 		s.pruneIdempotencyLocked()
 		view := existing.view
@@ -326,8 +428,8 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 		return view, nil
 	}
 	now := s.opts.Now().UTC()
-	rec := &record{
-		view:      View{Ref: ref, State: StateQueued, StartedAt: now},
+	rec := &record[R]{
+		view:      View[R]{Ref: ref, State: StateQueued, StartedAt: now},
 		running:   true,
 		updatedAt: now,
 	}
@@ -342,25 +444,89 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	return view, nil
 }
 
+// reusable reports whether an existing record answers this request. Work still
+// in flight always does. A finished result does only while it still describes
+// the build a new request would read, so a shared failure is analyzed again
+// once its evidence build moves on.
+func reusable[R any, W any](rec *record[R], work W) bool {
+	if rec.running {
+		return true
+	}
+	ev, ok := any(work).(evidenced)
+	if !ok {
+		return true
+	}
+	return rec.view.Evidence != nil && rec.view.Evidence.sameBuild(ev.evidence())
+}
+
 // retryable reports whether a finished record may be started again. A failure
 // is a transient outcome, not a durable fact: a provider error, a timeout, or a
 // shutdown that interrupted queued work must not pin a subject forever.
-func retryable(rec *record) bool {
+func retryable[R any](rec *record[R]) bool {
 	return !rec.running && rec.view.State == StateFailed
 }
 
 // Get returns the current state for a subject.
-func (s *Service) Get(ref Ref) (View, error) {
+func (s *Service[R, W]) Get(ref R) (View[R], error) {
 	ref, err := ref.normalized()
 	if err != nil {
-		return View{}, err
+		return View[R]{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if rec := s.records[ref.identity()]; rec != nil {
-		return rec.view, nil
+	identity := ref.identity()
+	// The evidence lookup runs without the lock, so a start can replace the
+	// record underneath it. Each pass validates the record it actually read: a
+	// replacement is re-validated rather than trusted, because a completed
+	// result is terminal for the caller and would never be checked again.
+	for attempt := 0; attempt < maxGetRevalidations; attempt++ {
+		s.mu.Lock()
+		rec := s.records[identity]
+		if rec == nil {
+			s.mu.Unlock()
+			return View[R]{Ref: ref, State: StateNotStarted}, nil
+		}
+		view, running := rec.view, rec.running
+		s.mu.Unlock()
+
+		// Work in flight is current by construction, and a result describing
+		// the build a new request would read still answers.
+		if running || !s.staleEvidence(ref, view) {
+			return view, nil
+		}
+
+		s.mu.Lock()
+		unchanged := s.records[identity] == rec
+		s.mu.Unlock()
+		// The stale result is still the stored one, so it is reported as never
+		// started, which is what offers the caller a fresh analysis. The record
+		// stays until that analysis replaces it.
+		if unchanged {
+			return View[R]{Ref: ref, State: StateNotStarted}, nil
+		}
 	}
-	return View{Ref: ref, State: StateNotStarted}, nil
+	// Starts kept landing faster than status could be validated. Offering a
+	// fresh analysis is the safe answer, because the alternative is serving a
+	// result nothing has established is current.
+	return View[R]{Ref: ref, State: StateNotStarted}, nil
+}
+
+// staleEvidence reports whether a finished result describes a build that is no
+// longer the one a new request would read. Only a kind whose evidence build the
+// service chooses can go stale, and only a completed result carries evidence to
+// compare against.
+func (s *Service[R, W]) staleEvidence(ref R, view View[R]) bool {
+	if !s.revalidates || s.opts.CurrentEvidence == nil {
+		return false
+	}
+	if view.State != StateComplete || view.Evidence == nil {
+		return false
+	}
+	current, ok := s.opts.CurrentEvidence(ref)
+	// Without a current build nothing establishes that the result is stale, so
+	// it keeps answering rather than disappearing on a transient read failure.
+	if !ok {
+		return false
+	}
+	return !current.sameBuild(*view.Evidence)
 }
 
 // Wait blocks until every admitted escalation has released its slot, or until
@@ -369,7 +535,7 @@ func (s *Service) Get(ref Ref) (View, error) {
 // race a request that has not started running yet, and every escalation that
 // reached a record has attempted to persist its outcome by the time Wait
 // returns. It is safe to call more than once.
-func (s *Service) Wait(ctx context.Context) error {
+func (s *Service[R, W]) Wait(ctx context.Context) error {
 	// One drain at a time: concurrent callers each claiming part of the queue
 	// would stall each other short of the full set.
 	s.drainMu.Lock()
@@ -398,7 +564,7 @@ func (s *Service) Wait(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) run(ctx context.Context, rec *record, resolved Resolved, release func()) {
+func (s *Service[R, W]) run(ctx context.Context, rec *record[R], resolved W, release func()) {
 	// The admission token and the accepted lifetime are held until the
 	// escalation has persisted its outcome, so a queue slot frees only when the
 	// work it stands for is done and a drain cannot end early.
@@ -411,7 +577,7 @@ func (s *Service) run(ctx context.Context, rec *record, resolved Resolved, relea
 	select {
 	case s.active <- struct{}{}:
 	case <-ctx.Done():
-		s.finish(rec, View{Ref: rec.view.Ref, State: StateFailed, Error: safeError(ctx.Err())})
+		s.finish(rec, View[R]{Ref: rec.view.Ref, State: StateFailed, Error: safeError(ctx.Err())})
 		return
 	}
 	defer func() { <-s.active }()
@@ -423,7 +589,7 @@ func (s *Service) run(ctx context.Context, rec *record, resolved Resolved, relea
 
 	view, err := s.runner.Run(ctx, resolved)
 	if err != nil {
-		s.finish(rec, View{Ref: rec.view.Ref, State: StateFailed, Error: safeError(err)})
+		s.finish(rec, View[R]{Ref: rec.view.Ref, State: StateFailed, Error: safeError(err)})
 		return
 	}
 	view.Ref = rec.view.Ref
@@ -433,7 +599,7 @@ func (s *Service) run(ctx context.Context, rec *record, resolved Resolved, relea
 	s.finish(rec, view)
 }
 
-func (s *Service) finish(rec *record, view View) {
+func (s *Service[R, W]) finish(rec *record[R], view View[R]) {
 	now := s.opts.Now().UTC()
 	s.mu.Lock()
 	view.StartedAt = rec.view.StartedAt
@@ -450,7 +616,7 @@ func (s *Service) finish(rec *record, view View) {
 // together: the cancellation path in run finishes without holding the active
 // slot, so several goroutines can persist at once, and taking the snapshot
 // outside this lock would let an older snapshot overwrite a newer one.
-func (s *Service) persist() {
+func (s *Service[R, W]) persist() {
 	store := s.opts.Store
 	if store == nil {
 		return
@@ -468,8 +634,8 @@ func (s *Service) persist() {
 }
 
 // snapshotLocked copies completed results for persistence.
-func (s *Service) snapshotLocked() map[string]View {
-	out := make(map[string]View, len(s.records))
+func (s *Service[R, W]) snapshotLocked() map[string]View[R] {
+	out := make(map[string]View[R], len(s.records))
 	for identity, rec := range s.records {
 		if !rec.running {
 			out[identity] = rec.view
@@ -482,7 +648,7 @@ func (s *Service) snapshotLocked() map[string]View {
 // drops as many as it can: several escalations can finish between two starts,
 // and a single eviction per start would leave the bound exceeded until enough
 // later requests trickled it back down.
-func (s *Service) pruneLocked() {
+func (s *Service[R, W]) pruneLocked() {
 	for len(s.records) > s.opts.MaxRecords {
 		var oldestKey string
 		var oldest time.Time
@@ -510,7 +676,7 @@ func (s *Service) pruneLocked() {
 // pruneIdempotencyLocked bounds the replay index. Its entries outlive the
 // records they point at, and a client controls the key, so repeated requests
 // for one retained subject would otherwise grow the map without limit.
-func (s *Service) pruneIdempotencyLocked() {
+func (s *Service[R, W]) pruneIdempotencyLocked() {
 	limit := s.opts.MaxRecords * maxIdempotencyKeysPerRecord
 	if len(s.idempotency) <= limit {
 		return

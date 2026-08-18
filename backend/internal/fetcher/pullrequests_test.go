@@ -145,7 +145,7 @@ func TestRunPullRequestPassSwallowsFailures(t *testing.T) {
 func TestRunPullRequestPassSkipsWhenDisabled(t *testing.T) {
 	called := false
 	original := writePullRequestOutput
-	writePullRequestOutput = func(string, models.PullRequestIndex, []models.PullRequestDetail) error {
+	writePullRequestOutput = func(string, models.PullRequestIndex, []models.PullRequestDetail, models.SharedFailureIndex) error {
 		called = true
 		return nil
 	}

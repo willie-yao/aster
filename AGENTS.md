@@ -88,6 +88,7 @@ backend/                         Go 1.25
       skills/                    Diagnostic recipe registry (+ builtin/{prow,kubernetes})
       modules/universal/         Builds the per-failure seed prompt
       modules/pullrequest/       Seed prompt plus pull request change context
+      modules/sharedfailure/     Seed prompt plus the cross-pull-request correlation
     aiusage/                     Private token usage and cost accounting
     agentanalysis/               Private experimental Agent failure-analysis adapter
     analysisexecutor/            File-backed OpenCode analysis executor

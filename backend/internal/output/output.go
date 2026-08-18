@@ -47,6 +47,7 @@ var NonPublishedFiles = []string{
 	"action_preview_state.json",
 	"analysis_correction_state.json",
 	"pr_escalation_state.json",
+	"shared_failure_escalation_state.json",
 }
 
 // writeJSON writes indented JSON to path atomically, creating parent
@@ -109,9 +110,22 @@ func WritePullRequestDetail(dir string, detail models.PullRequestDetail) error {
 	return writeJSON(filepath.Join(dir, pullRequestDir, models.PullRequestDataFilename(detail.Number)), detail)
 }
 
-// WritePullRequests writes the index and every detail file, then removes detail
-// files for pull requests that are no longer open.
-func WritePullRequests(dir string, index models.PullRequestIndex, details []models.PullRequestDetail) error {
+// SharedFailureIndexFilename is the public index of failures observed across
+// several open pull requests.
+const SharedFailureIndexFilename = "pull-request-failures.json"
+
+// WriteSharedFailures writes pull-request-failures.json to dir.
+func WriteSharedFailures(dir string, index models.SharedFailureIndex) error {
+	if index.Failures == nil {
+		index.Failures = []models.SharedFailure{}
+	}
+	return writeJSON(filepath.Join(dir, SharedFailureIndexFilename), index)
+}
+
+// WritePullRequests writes the pull request index, every detail file, and the
+// shared failure index, then removes detail files for pull requests that are no
+// longer open.
+func WritePullRequests(dir string, index models.PullRequestIndex, details []models.PullRequestDetail, shared models.SharedFailureIndex) error {
 	if err := WritePullRequestIndex(dir, index); err != nil {
 		return err
 	}
@@ -119,6 +133,9 @@ func WritePullRequests(dir string, index models.PullRequestIndex, details []mode
 		if err := WritePullRequestDetail(dir, detail); err != nil {
 			return err
 		}
+	}
+	if err := WriteSharedFailures(dir, shared); err != nil {
+		return err
 	}
 	return prunePullRequestDetails(dir, details)
 }

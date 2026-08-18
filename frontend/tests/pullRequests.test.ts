@@ -345,7 +345,7 @@ test("the attribution banner leads each failure and cites its evidence", () => {
   const detail = source("src/pages/PullRequestDetailPage.tsx");
 
   assert.match(detail, /function AttributionBanner/);
-  assert.match(detail, /\{failure\.attribution && <AttributionBanner/);
+  assert.match(detail, /<AttributionBanner attribution=\{failure\.attribution\}/);
   assert.match(detail, /attribution\.evidence\?\.map/);
   assert.match(detail, /\{attribution\.confidence\} confidence/);
   // The banner precedes the failure output so a ruled-out failure reads first.
