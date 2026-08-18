@@ -339,7 +339,8 @@ func (s *Service) Get(ref Ref) (View, error) {
 // Wait blocks until every admitted escalation has released its slot, or until
 // ctx is done. Admission covers resolution too, so a shutdown drain does not
 // race a request that has not started running yet, and every escalation that
-// reached a record has persisted its outcome by the time Wait returns.
+// reached a record has attempted to persist its outcome by the time Wait
+// returns.
 func (s *Service) Wait(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
@@ -435,22 +436,26 @@ func (s *Service) snapshotLocked() map[string]View {
 	return out
 }
 
-// pruneLocked drops the oldest finished records past the retention bound.
+// pruneLocked drops the oldest finished records past the retention bound. It
+// drops as many as it can: several escalations can finish between two starts,
+// and a single eviction per start would leave the bound exceeded until enough
+// later requests trickled it back down.
 func (s *Service) pruneLocked() {
-	if len(s.records) <= s.opts.MaxRecords {
-		return
-	}
-	var oldestKey string
-	var oldest time.Time
-	for identity, rec := range s.records {
-		if rec.running {
-			continue
+	for len(s.records) > s.opts.MaxRecords {
+		var oldestKey string
+		var oldest time.Time
+		for identity, rec := range s.records {
+			if rec.running {
+				continue
+			}
+			if oldestKey == "" || rec.updatedAt.Before(oldest) {
+				oldestKey, oldest = identity, rec.updatedAt
+			}
 		}
-		if oldestKey == "" || rec.updatedAt.Before(oldest) {
-			oldestKey, oldest = identity, rec.updatedAt
+		// Everything left is still running, so nothing more can be dropped.
+		if oldestKey == "" {
+			return
 		}
-	}
-	if oldestKey != "" {
 		delete(s.records, oldestKey)
 		for key, identity := range s.idempotency {
 			if identity == oldestKey {

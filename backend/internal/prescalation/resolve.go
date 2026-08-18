@@ -95,6 +95,11 @@ func (r *DataResolver) Resolve(ctx context.Context, ref Ref) (Resolved, error) {
 	}
 	info, err := prowbuild.FetchBuildInfo(ctx, r.Backend, loc)
 	if err != nil {
+		// A cancelled or expired read says nothing about the build, so its
+		// cause is preserved rather than reported as an unavailable artifact.
+		if ctxErr := context.Cause(ctx); ctxErr != nil {
+			return Resolved{}, ctxErr
+		}
 		return Resolved{}, fmt.Errorf("%w: build metadata unavailable", ErrUnavailable)
 	}
 

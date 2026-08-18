@@ -32,7 +32,9 @@ type finishedJSON struct {
 }
 
 // FetchBuildInfo reads started.json and finished.json for the build at loc.
-// Missing or unreadable finished.json returns partial info with Result="PENDING".
+// Missing or unreadable finished.json returns partial info with Result="PENDING",
+// except when the read was cancelled or timed out, which says nothing about
+// whether the build finished.
 func FetchBuildInfo(ctx context.Context, b storage.Backend, loc BuildLocation) (*models.BuildInfo, error) {
 	buildPath := loc.BuildPath()
 
@@ -58,9 +60,15 @@ func FetchBuildInfo(ctx context.Context, b storage.Backend, loc BuildLocation) (
 		RepoRefs:    s.Repos,
 	}
 
-	// finished.json is absent while the build is still running.
+	// finished.json is absent while the build is still running. A cancelled or
+	// timed-out read is different: it reports nothing about the build, so it
+	// must not be recorded as pending. The client's own timeout surfaces as a
+	// deadline error too, so a nested bound is caught here as well.
 	finishedData, err := storage.ReadAll(ctx, b, buildPath+"finished.json")
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("fetching finished.json: %w", err)
+		}
 		info.Result = "PENDING"
 		return info, nil
 	}

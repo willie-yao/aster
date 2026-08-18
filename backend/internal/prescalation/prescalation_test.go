@@ -98,6 +98,16 @@ func newService(t *testing.T, resolver Resolver, runner Runner, opts Options) *S
 	return service
 }
 
+// drain blocks until every admitted escalation has released its slot.
+func drain(t *testing.T, service *Service) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := service.Wait(ctx); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+}
+
 func waitForState(t *testing.T, service *Service, ref Ref, want string) View {
 	t.Helper()
 	deadline := time.After(3 * time.Second)
@@ -280,11 +290,7 @@ func TestAQueuedEscalationTimesOutWithoutRunning(t *testing.T) {
 		t.Errorf("runs = %d, want the queued escalation never to reach the runner", got)
 	}
 	// The state is visible before persistence completes, so drain first.
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer waitCancel()
-	if err := service.Wait(waitCtx); err != nil {
-		t.Fatalf("Wait: %v", err)
-	}
+	drain(t, service)
 	// Only finished records are snapshotted and prunable, so persistence
 	// proves the record is no longer marked running.
 	restored, err := store.Load()
@@ -326,15 +332,6 @@ func (s *swallowingResolver) Resolve(ctx context.Context, ref Ref) (Resolved, er
 // that lifetime must reach a request that is still resolving, or the admission
 // token it holds outlives its budget and stalls a shutdown drain.
 func TestResolutionObservesTheAcceptedLifetime(t *testing.T) {
-	assertDrains := func(t *testing.T, service *Service) {
-		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if err := service.Wait(ctx); err != nil {
-			t.Fatalf("Wait: %v, want the admission token released", err)
-		}
-	}
-
 	t.Run("the escalation deadline bounds resolution", func(t *testing.T) {
 		service := newService(t, newBlockingResolver(), newFakeRunner(),
 			Options{Timeout: 50 * time.Millisecond})
@@ -342,7 +339,7 @@ func TestResolutionObservesTheAcceptedLifetime(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("err = %v, want the expired budget as the cause", err)
 		}
-		assertDrains(t, service)
+		drain(t, service)
 	})
 
 	t.Run("shutdown cancels resolution", func(t *testing.T) {
@@ -360,7 +357,7 @@ func TestResolutionObservesTheAcceptedLifetime(t *testing.T) {
 		if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v, want the shutdown as the cause", err)
 		}
-		assertDrains(t, service)
+		drain(t, service)
 	})
 
 	// The caller's own deadline must survive as its own cause: the handler maps
@@ -373,7 +370,7 @@ func TestResolutionObservesTheAcceptedLifetime(t *testing.T) {
 		if _, err := service.Start(callerCtx, testRef("TestA"), "octocat", "req-1"); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("err = %v, want the caller's deadline as the cause", err)
 		}
-		assertDrains(t, service)
+		drain(t, service)
 	})
 
 	// A resolver that discards a cancellation must not be able to launch an
@@ -386,7 +383,7 @@ func TestResolutionObservesTheAcceptedLifetime(t *testing.T) {
 		if _, err := service.Start(context.Background(), ref, "octocat", "req-1"); err == nil {
 			t.Fatal("want an error rather than a record built from a cut-off resolution")
 		}
-		assertDrains(t, service)
+		drain(t, service)
 		if view, _ := service.Get(ref); view.State != StateNotStarted {
 			t.Errorf("state = %q, want not_started", view.State)
 		}
@@ -544,11 +541,7 @@ func TestCompletedResultsSurviveRestart(t *testing.T) {
 	}
 	waitForState(t, service, testRef("TestA"), StateComplete)
 	// The state is visible before persistence completes, so drain first.
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer waitCancel()
-	if err := service.Wait(waitCtx); err != nil {
-		t.Fatalf("Wait: %v", err)
-	}
+	drain(t, service)
 
 	restarted := newService(t, &fakeResolver{}, newFakeRunner(), Options{Store: store})
 	view, err := restarted.Get(testRef("TestA"))
@@ -596,7 +589,38 @@ func TestRetentionIsBounded(t *testing.T) {
 	service.mu.Lock()
 	retained := len(service.records)
 	service.mu.Unlock()
-	if retained > 3 {
+	if retained > 2 {
+		t.Fatalf("retained records = %d, want the bound respected", retained)
+	}
+}
+
+// Records cannot be pruned while they run, so a full queue can finish several
+// at once and leave the bound exceeded. The next start must bring it back down
+// rather than evicting one and stopping.
+func TestRetentionRecoversAfterAFullQueueFinishes(t *testing.T) {
+	runner := newFakeRunner()
+	close(runner.release)
+	service := newService(t, &fakeResolver{}, runner, Options{MaxRecords: 2, MaxQueued: 4})
+
+	for i := 0; i < 4; i++ {
+		ref := testRef(fmt.Sprintf("Test%d", i))
+		if _, err := service.Start(context.Background(), ref, "octocat", fmt.Sprintf("req-%d", i)); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+	}
+	// Waiting per subject would race the pruning this test is about.
+	drain(t, service)
+
+	ref := testRef("TestNext")
+	if _, err := service.Start(context.Background(), ref, "octocat", "req-next"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	drain(t, service)
+
+	service.mu.Lock()
+	retained := len(service.records)
+	service.mu.Unlock()
+	if retained > 2 {
 		t.Fatalf("retained records = %d, want the bound respected", retained)
 	}
 }
@@ -691,11 +715,7 @@ func TestConcurrentFinishesDoNotLosePersistedResults(t *testing.T) {
 		}
 	}
 	cancel()
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer waitCancel()
-	if err := service.Wait(waitCtx); err != nil {
-		t.Fatalf("Wait: %v", err)
-	}
+	drain(t, service)
 
 	service.mu.Lock()
 	inMemory := len(service.records)

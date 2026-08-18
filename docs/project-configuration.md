@@ -265,9 +265,10 @@ The contract is deliberately narrow:
   maintainers looking at the same failure do not each pay for an analysis.
 - **A failed escalation can be retried.** A provider error, a timeout, or a
   restart that interrupted queued work leaves the failure retryable rather than
-  permanently un-analyzable, and the dashboard offers a retry in place. Replaying
-  the same request key returns the subject's current state instead of starting
-  new work.
+  permanently un-analyzable, and the dashboard offers a retry in place. While a
+  request key is still in the server's bounded replay index, replaying it
+  returns the subject's current state instead of starting new work; the index is
+  in memory, so a restart drops it.
 - **The model never issues the pull request verdict.** It runs the ordinary
   agentic failure analysis under a separate module, gated by the same critique
   and judge rules, and is told explicitly not to claim the change caused the
