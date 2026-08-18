@@ -577,9 +577,11 @@ func TestInFlightEscalationsAreNotRestoredAsRunning(t *testing.T) {
 func TestRetentionIsBounded(t *testing.T) {
 	runner := newFakeRunner()
 	close(runner.release)
-	service := newService(t, &fakeResolver{}, runner, Options{MaxRecords: 2, MaxQueued: 1})
+	// A queue of two keeps a start from racing the previous escalation's
+	// slot release, which happens just after its result becomes visible.
+	service := newService(t, &fakeResolver{}, runner, Options{MaxRecords: 3, MaxQueued: 2})
 
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 6; i++ {
 		ref := testRef(fmt.Sprintf("Test%d", i))
 		if _, err := service.Start(context.Background(), ref, "octocat", fmt.Sprintf("req-%d", i)); err != nil {
 			t.Fatalf("Start: %v", err)
@@ -589,7 +591,7 @@ func TestRetentionIsBounded(t *testing.T) {
 	service.mu.Lock()
 	retained := len(service.records)
 	service.mu.Unlock()
-	if retained > 2 {
+	if retained > 3 {
 		t.Fatalf("retained records = %d, want the bound respected", retained)
 	}
 }
@@ -643,39 +645,54 @@ func TestAFullQueuesResultsAreAllRetained(t *testing.T) {
 
 // A store written under a larger bound must not keep the service above its
 // retention cap forever: nothing else brings it down until an escalation runs.
+// Restored records carry no fresh timestamp, so their own times have to order
+// the eviction, and a record too old to carry one at all goes first.
 func TestAnOversizedRestoredStoreIsPruned(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	stored := map[string]View{
+		"Unknown":     {State: StateComplete, RootCause: "done"},
+		"StartedOnly": {State: StateComplete, RootCause: "done", StartedAt: base.Add(time.Minute)},
+		"Older":       {State: StateComplete, RootCause: "done", CompletedAt: base.Add(2 * time.Minute)},
+		"Newer":       {State: StateComplete, RootCause: "done", CompletedAt: base.Add(3 * time.Minute)},
+	}
 	store := &memoryStore{results: map[string]View{}}
-	for i := 0; i < 6; i++ {
-		ref := testRef(fmt.Sprintf("Test%d", i))
-		store.results[ref.identity()] = View{
-			Ref: ref, State: StateComplete, RootCause: "done",
-			CompletedAt: base.Add(time.Duration(i) * time.Minute),
-		}
+	for name, view := range stored {
+		ref := testRef(name)
+		view.Ref = ref
+		store.results[ref.identity()] = view
 	}
-	service := newService(t, &fakeResolver{}, newFakeRunner(), Options{MaxRecords: 2, MaxQueued: 1, Store: store})
+	service := newService(t, &fakeResolver{}, newFakeRunner(), Options{
+		MaxRecords: 3, MaxQueued: 1, Store: store,
+	})
 
-	service.mu.Lock()
-	retained := len(service.records)
-	service.mu.Unlock()
-	if retained != 2 {
-		t.Fatalf("restored records = %d, want the bound respected", retained)
-	}
-	// Completion time orders the eviction, so the newest results are the ones
-	// that survive.
 	service.mu.Lock()
 	order := map[string]time.Time{}
 	for identity, rec := range service.records {
 		order[identity] = rec.updatedAt
 	}
 	service.mu.Unlock()
-	for _, name := range []string{"Test4", "Test5"} {
+	if len(order) != 3 {
+		t.Fatalf("restored records = %d, want the bound respected", len(order))
+	}
+	// The record with no timestamp at all has unknown age, so it is dropped
+	// before results whose age is known.
+	if view, _ := service.Get(testRef("Unknown")); view.State != StateNotStarted {
+		t.Errorf("Unknown state = %q, want the undatable record pruned first", view.State)
+	}
+	// Completion time orders the rest, and a result that only recorded a start
+	// is ordered by that rather than treated as brand new.
+	want := map[string]time.Time{
+		"StartedOnly": base.Add(time.Minute),
+		"Older":       base.Add(2 * time.Minute),
+		"Newer":       base.Add(3 * time.Minute),
+	}
+	for name, at := range want {
 		ref := testRef(name)
 		if view, _ := service.Get(ref); view.State != StateComplete {
-			t.Errorf("%s state = %q, want the newest results retained", name, view.State)
+			t.Errorf("%s state = %q, want it retained", name, view.State)
 		}
-		if got := order[ref.identity()]; !got.Equal(store.results[ref.identity()].CompletedAt) {
-			t.Errorf("%s ordered by %v, want its completion time", name, got)
+		if got := order[ref.identity()]; !got.Equal(at) {
+			t.Errorf("%s ordered by %v, want %v", name, got, at)
 		}
 	}
 	// The pruned set is written back, so the file does not stay oversized.
@@ -683,7 +700,7 @@ func TestAnOversizedRestoredStoreIsPruned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(persisted) != 2 {
+	if len(persisted) != 3 {
 		t.Errorf("persisted records = %d, want the pruned snapshot", len(persisted))
 	}
 }
@@ -713,6 +730,8 @@ func TestADrainedServiceAcceptsNoFurtherWork(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	drain(t, service)
+	// Draining twice must not block on slots the first drain already holds.
+	drain(t, service)
 
 	if _, err := service.Start(context.Background(), testRef("TestB"), "octocat", "req-2"); !errors.Is(err, ErrBusy) {
 		t.Fatalf("err = %v, want ErrBusy after the drain", err)
@@ -720,6 +739,31 @@ func TestADrainedServiceAcceptsNoFurtherWork(t *testing.T) {
 	if view, _ := service.Get(testRef("TestA")); view.State != StateComplete {
 		t.Errorf("state = %q, want the drained result readable", view.State)
 	}
+}
+
+// A drain that gives up must hand back the slots it claimed, or the queue would
+// shrink for good and a later drain could never finish.
+func TestAnAbandonedDrainRestoresTheQueue(t *testing.T) {
+	runner := newFakeRunner()
+	service := newService(t, &fakeResolver{}, runner, Options{MaxQueued: 2})
+
+	// One escalation holds a slot open, so this drain cannot complete.
+	if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	<-runner.started
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := service.Wait(ctx); err == nil {
+		t.Fatal("want the drain to give up while an escalation is running")
+	}
+
+	// The abandoned drain released its claim, so the queue still has room.
+	if _, err := service.Start(context.Background(), testRef("TestB"), "octocat", "req-2"); err != nil {
+		t.Fatalf("Start after an abandoned drain: %v", err)
+	}
+	close(runner.release)
+	drain(t, service)
 }
 
 func TestEligible(t *testing.T) {
@@ -899,7 +943,7 @@ func TestReplayingTheSameKeyReturnsTheFailureWithoutRerunning(t *testing.T) {
 func TestIdempotencyIndexIsBounded(t *testing.T) {
 	runner := newFakeRunner()
 	close(runner.release)
-	service := newService(t, &fakeResolver{}, runner, Options{MaxRecords: 2, MaxQueued: 1})
+	service := newService(t, &fakeResolver{}, runner, Options{MaxRecords: 2, MaxQueued: 2})
 	ref := testRef("TestA")
 
 	for i := 0; i < 200; i++ {

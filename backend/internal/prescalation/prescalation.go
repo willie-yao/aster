@@ -180,6 +180,9 @@ type Service struct {
 	// saveMu serializes persistence so concurrent finishes cannot write
 	// snapshots out of order.
 	saveMu sync.Mutex
+	// drainMu serializes Wait, which claims the whole queue.
+	drainMu sync.Mutex
+	drained bool
 }
 
 // New constructs the service and restores any persisted results.
@@ -361,21 +364,37 @@ func (s *Service) Get(ref Ref) (View, error) {
 }
 
 // Wait blocks until every admitted escalation has released its slot, or until
-// ctx is done. It then keeps those slots, so a drained service accepts no
+// ctx is done. On success it keeps those slots, so a drained service accepts no
 // further work. Admission covers resolution too, so a shutdown drain does not
 // race a request that has not started running yet, and every escalation that
 // reached a record has attempted to persist its outcome by the time Wait
-// returns.
+// returns. It is safe to call more than once.
 func (s *Service) Wait(ctx context.Context) error {
+	// One drain at a time: concurrent callers each claiming part of the queue
+	// would stall each other short of the full set.
+	s.drainMu.Lock()
+	defer s.drainMu.Unlock()
+	if s.drained {
+		return nil
+	}
 	// Claiming every token is the drain: a token is released only once the work
 	// it stands for has finished, so holding them all means nothing is left.
-	for i := 0; i < s.opts.MaxQueued; i++ {
+	claimed := 0
+	for claimed < s.opts.MaxQueued {
 		select {
 		case s.admitted <- struct{}{}:
+			claimed++
 		case <-ctx.Done():
+			// A drain that gave up must hand back what it took, or the queue
+			// would stay permanently smaller and a later attempt could never
+			// finish.
+			for ; claimed > 0; claimed-- {
+				<-s.admitted
+			}
 			return ctx.Err()
 		}
 	}
+	s.drained = true
 	return nil
 }
 
