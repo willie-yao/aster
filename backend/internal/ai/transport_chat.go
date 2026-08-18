@@ -50,6 +50,7 @@ type chatCompletionsRequest struct {
 	ResponseFormat  *chatResponseFormat      `json:"response_format,omitempty"`
 	ToolChoice      *chatToolChoice          `json:"tool_choice,omitempty"`
 	ReasoningEffort ReasoningEffort          `json:"reasoning_effort,omitempty"`
+	MaxTokens       int                      `json:"max_tokens,omitempty"`
 
 	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
 }
@@ -114,6 +115,7 @@ func (t *chatCompletionsTransport) Complete(ctx context.Context, req modelReques
 		ResponseFormat:    encodeChatResponseFormat(req.ResponseFormat),
 		ToolChoice:        encodeChatToolChoice(req.ToolChoice),
 		ReasoningEffort:   req.ReasoningEffort,
+		MaxTokens:         req.MaxOutputTokens,
 		ParallelToolCalls: req.ParallelToolCalls,
 	})
 	if err != nil {

@@ -16,9 +16,6 @@ import (
 const (
 	defaultInputRoot     = "/input"
 	defaultWorkspaceRoot = "/workspace"
-	maxSourceFiles       = 100_000
-	maxSourceFileBytes   = int64(512 << 20)
-	maxSourceTotalBytes  = int64(2 << 30)
 )
 
 // Options configure one staging process.
@@ -31,6 +28,9 @@ type Options struct {
 func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, opts Options) error {
 	if err := agentanalysis.ValidateWorkspaceStageRequestIdentity(request); err != nil {
 		return err
+	}
+	if request.InputMode != agentanalysis.WorkspaceStageInputPVC {
+		return fmt.Errorf("workspace staging requires PVC input")
 	}
 	inputRoot := strings.TrimSpace(opts.InputRoot)
 	if inputRoot == "" {
@@ -48,6 +48,10 @@ func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, o
 	snapshotRoot := filepath.Join(inputRoot, request.ManifestHash)
 	sourceInput := filepath.Join(snapshotRoot, agentanalysis.WorkspaceSourceDir)
 	artifactInput := filepath.Join(snapshotRoot, agentanalysis.WorkspaceArtifactsDir)
+	artifacts, err := agentanalysis.ReadWorkspaceArtifactManifest(snapshotRoot, request)
+	if err != nil {
+		return err
+	}
 	gitDir, err := os.Lstat(filepath.Join(sourceInput, ".git"))
 	if err != nil || !gitDir.IsDir() || gitDir.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("staged source must contain a standalone Git directory")
@@ -55,13 +59,13 @@ func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, o
 	if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceInput, request.Source.Revision, request.InputSourceModePolicy); err != nil {
 		return fmt.Errorf("verify staged source: %w", err)
 	}
-	if err := agentanalysis.VerifyArtifactFiles(artifactInput, request.Artifacts); err != nil {
+	if err := agentanalysis.VerifyArtifactFiles(artifactInput, artifacts); err != nil {
 		return fmt.Errorf("verify staged artifacts: %w", err)
 	}
 	sourceOutput := filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir)
 	artifactOutput := filepath.Join(workspaceRoot, agentanalysis.WorkspaceArtifactsDir)
 	resultOutput := filepath.Join(workspaceRoot, agentanalysis.WorkspaceResultDir)
-	if _, _, err := inspectTree(ctx, sourceInput, maxSourceFiles, maxSourceFileBytes, maxSourceTotalBytes); err != nil {
+	if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, sourceInput); err != nil {
 		return fmt.Errorf("inspect staged source: %w", err)
 	}
 	if err := cloneSource(ctx, sourceInput, sourceOutput, request.Source.Revision); err != nil {
@@ -74,7 +78,7 @@ func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, o
 	if modePolicy != request.OutputSourceModePolicy {
 		return fmt.Errorf("copied source mode policy does not match the sealed request")
 	}
-	if _, _, err := copyTree(ctx, artifactInput, artifactOutput, len(request.Artifacts), 8<<20, 32<<20); err != nil {
+	if _, _, err := copyTree(ctx, artifactInput, artifactOutput, len(artifacts), 64<<20, 512<<20); err != nil {
 		return fmt.Errorf("copy staged artifacts: %w", err)
 	}
 	if err := os.Mkdir(resultOutput, 0o700); err != nil {
@@ -83,7 +87,7 @@ func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, o
 	if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceOutput, request.Source.Revision, request.OutputSourceModePolicy); err != nil {
 		return fmt.Errorf("verify copied source: %w", err)
 	}
-	if err := agentanalysis.VerifyArtifactFiles(artifactOutput, request.Artifacts); err != nil {
+	if err := agentanalysis.VerifyArtifactFiles(artifactOutput, artifacts); err != nil {
 		return fmt.Errorf("verify copied artifacts: %w", err)
 	}
 	return nil
@@ -135,56 +139,6 @@ func boundedOutput(value []byte) string {
 		text = text[:1024]
 	}
 	return text
-}
-
-func inspectTree(ctx context.Context, source string, maxFiles int, maxFileBytes, maxTotalBytes int64) (int, int64, error) {
-	info, err := os.Lstat(source)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return 0, 0, fmt.Errorf("source root is not a safe directory")
-	}
-	files := 0
-	var total int64
-	err = filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if path == source || entry.IsDir() {
-			return nil
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			relative, err := filepath.Rel(source, path)
-			if err != nil || relative == ".git" || strings.HasPrefix(relative, ".git"+string(filepath.Separator)) {
-				return fmt.Errorf("source Git metadata contains a symlink")
-			}
-			target, err := os.Readlink(path)
-			if err != nil || int64(len(target)) > maxFileBytes {
-				return fmt.Errorf("input tree contains an unsupported or oversized symlink")
-			}
-			files++
-			total += int64(len(target))
-			if files > maxFiles || total > maxTotalBytes {
-				return fmt.Errorf("input tree exceeds file or byte bounds")
-			}
-			return nil
-		}
-		fileInfo, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if !fileInfo.Mode().IsRegular() || fileInfo.Size() > maxFileBytes {
-			return fmt.Errorf("input tree contains an unsupported or oversized file")
-		}
-		files++
-		total += fileInfo.Size()
-		if files > maxFiles || total > maxTotalBytes {
-			return fmt.Errorf("input tree exceeds file or byte bounds")
-		}
-		return nil
-	})
-	return files, total, err
 }
 
 func copyTree(ctx context.Context, source, destination string, maxFiles int, maxFileBytes, maxTotalBytes int64) (int, int64, error) {

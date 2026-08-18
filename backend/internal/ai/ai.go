@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -31,6 +32,8 @@ type Client struct {
 	model              string
 	reasoningEffort    ReasoningEffort
 	reasoningEffortErr error
+	maxOutputTokens    int
+	maxOutputTokensErr error
 	cache              *Cache
 }
 
@@ -69,12 +72,19 @@ type Options struct {
 	// this for provider-specific routing headers or to override the default
 	// Authorization scheme.
 	ExtraHeaders map[string]string
+	// MaxOutputTokens is an optional request output cap. Zero preserves the
+	// provider default and historical production behavior.
+	MaxOutputTokens int
 }
 
 // NewClientWithOptions creates a Client from explicit options. Endpoint and
 // Model are used verbatim; callers are responsible for setting them.
 func NewClientWithOptions(opts Options) *Client {
 	reasoningEffort, reasoningEffortErr := modelprovider.NormalizeReasoningEffort(string(opts.ReasoningEffort))
+	var maxOutputTokensErr error
+	if opts.MaxOutputTokens < 0 || opts.MaxOutputTokens > 131072 {
+		maxOutputTokensErr = fmt.Errorf("max output tokens must be between 0 and 131072")
+	}
 	api := newHTTPAPIClient(opts.Endpoint, opts.Token, opts.ExtraHeaders)
 	apiMode := strings.ToLower(strings.TrimSpace(opts.API))
 	if apiMode == "" {
@@ -93,6 +103,7 @@ func NewClientWithOptions(opts Options) *Client {
 		api: api, transport: transport, apiMode: apiMode,
 		apiURL: opts.Endpoint, model: opts.Model,
 		reasoningEffort: reasoningEffort, reasoningEffortErr: reasoningEffortErr,
+		maxOutputTokens: opts.MaxOutputTokens, maxOutputTokensErr: maxOutputTokensErr,
 		cache: NewCache(opts.CacheDir),
 	}
 }
@@ -110,7 +121,9 @@ func (c *Client) APIMode() string { return c.apiMode }
 func (c *Client) ReasoningEffort() ReasoningEffort { return c.reasoningEffort }
 
 // ValidateConfiguration rejects unsupported client options before provider I/O.
-func (c *Client) ValidateConfiguration() error { return c.reasoningEffortErr }
+func (c *Client) ValidateConfiguration() error {
+	return errors.Join(c.reasoningEffortErr, c.maxOutputTokensErr)
+}
 
 // ModelFingerprint hashes the model, endpoint, and non-default API contract.
 func ModelFingerprint(apiMode, endpoint, model string) string {
@@ -137,7 +150,12 @@ func ModelFingerprintWithReasoningEffort(apiMode, endpoint, model string, reason
 
 // ModelFingerprint returns the current client's safe cache fingerprint.
 func (c *Client) ModelFingerprint() string {
-	return ModelFingerprintWithReasoningEffort(c.apiMode, c.apiURL, c.model, c.reasoningEffort)
+	fingerprint := ModelFingerprintWithReasoningEffort(c.apiMode, c.apiURL, c.model, c.reasoningEffort)
+	if c.maxOutputTokens == 0 {
+		return fingerprint
+	}
+	sum := sha256.Sum256([]byte(fingerprint + "\x00max_output_tokens=" + fmt.Sprintf("%d", c.maxOutputTokens)))
+	return hex.EncodeToString(sum[:8])
 }
 
 // modelFingerprint retains the package-local spelling used by older callers.

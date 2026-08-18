@@ -66,6 +66,16 @@ spec:
             {{- toYaml .Values.podSecurityContext | nindent 12 }}
           containers:
             - name: fetcher
+              {{- if $shadow }}
+              image: {{ include "aster.agentAnalysisShadowDashboardImage" . }}
+              imagePullPolicy: {{ .Values.agentSandbox.analysisShadow.dashboardImage.pullPolicy }}
+              {{- else if $agentSandboxFixScheduled }}
+              image: {{ include "aster.agentSandboxDashboardImage" . }}
+              imagePullPolicy: {{ .Values.agentSandbox.fixRuntime.dashboardImage.pullPolicy }}
+              {{- else }}
+              image: {{ include "aster.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              {{- end }}
               image: {{ include "aster.image" . }}
               imagePullPolicy: {{ .Values.image.pullPolicy }}
               command:
@@ -81,19 +91,26 @@ spec:
                 {{- if .Values.ai.enabled }}
                 - -ai
                 {{- end }}
+                {{- if gt (int .Values.ai.maxOutputTokens) 0 }}
+                - -ai-max-output-tokens={{ .Values.ai.maxOutputTokens }}
+                {{- end }}
                 {{- if $shadow }}
                 - -agent-analysis-shadow
-                - -agent-analysis-shadow-agent-version={{ .Values.agentSandbox.analysisShadow.agentVersion }}
                 - -agent-analysis-shadow-ledger={{ include "aster.agentAnalysisShadowLedgerPath" . }}
+                - -agent-analysis-shadow-input-root={{ .Values.agentSandbox.analysisShadow.input.localRoot }}
                 - -agent-analysis-shadow-max-per-run={{ .Values.agentSandbox.analysisShadow.maxPerRun }}
-                - -agent-analysis-shadow-max-turns={{ .Values.agentSandbox.analysisShadow.maxTurns }}
+                - -agent-analysis-shadow-max-steps={{ .Values.agentSandbox.analysisShadow.maxSteps }}
                 - -agent-analysis-shadow-timeout={{ .Values.agentSandbox.analysisShadow.timeout }}
-                - -agent-analysis-shadow-retries={{ .Values.agentSandbox.analysisShadow.retries }}
                 - -agent-analysis-shadow-output-limit-bytes={{ .Values.agentSandbox.analysisShadow.outputLimitBytes }}
+                - -agent-analysis-shadow-model-context-tokens={{ .Values.agentSandbox.analysisShadow.modelContextTokens }}
+                - -agent-analysis-shadow-model-output-tokens={{ .Values.agentSandbox.analysisShadow.modelOutputTokens }}
+                - -agent-analysis-shadow-require-source-evidence={{ .Values.agentSandbox.analysisShadow.requireSourceEvidence }}
                 - -agent-analysis-shadow-provider-endpoint={{ .Values.agentSandbox.analysisShadow.modelProvider.endpoint }}
                 - -agent-analysis-shadow-provider-model={{ .Values.agentSandbox.analysisShadow.modelProvider.model }}
                 - -agent-analysis-shadow-provider-api={{ .Values.agentSandbox.analysisShadow.modelProvider.api }}
                 - -agent-analysis-shadow-credential-mode={{ .Values.agentSandbox.analysisShadow.modelProvider.credentialMode }}
+                - -agent-analysis-shadow-provider-reasoning-effort={{ .Values.agentSandbox.analysisShadow.modelProvider.reasoningEffort }}
+                - -agent-analysis-shadow-provider-auth-type={{ .Values.agentSandbox.analysisShadow.modelProvider.auth.type }}
                 {{- end }}
                 {{- if .Values.agentSandbox.causalCritic.enabled }}
                 - -causal-critic-shadow
@@ -163,6 +180,8 @@ spec:
                 {{- if $shadow }}
                 - name: agent-analysis-shadow-ledger
                   mountPath: {{ .Values.agentSandbox.analysisShadow.ledger.mountPath }}
+                - name: agent-analysis-shadow-input
+                  mountPath: {{ .Values.agentSandbox.analysisShadow.input.localRoot }}
                 {{- end }}
                 {{- if .Values.agentSandbox.causalCritic.enabled }}
                 - name: causal-critic-ledger
@@ -195,6 +214,9 @@ spec:
             - name: agent-analysis-shadow-ledger
               persistentVolumeClaim:
                 claimName: {{ .Values.agentSandbox.analysisShadow.ledger.existingClaim }}
+            - name: agent-analysis-shadow-input
+              emptyDir:
+                sizeLimit: {{ .Values.agentSandbox.analysisShadow.input.localSizeLimit }}
             {{- end }}
             {{- if .Values.agentSandbox.causalCritic.enabled }}
             - name: causal-critic-ledger

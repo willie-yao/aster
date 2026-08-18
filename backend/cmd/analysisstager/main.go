@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/agentanalysis"
@@ -16,41 +17,94 @@ import (
 	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
-const requestEnv = "PROW_AI_ANALYSIS_STAGE_REQUEST_B64"
+const (
+	stageRequestEnv   = "PROW_AI_ANALYSIS_STAGE_REQUEST_B64"
+	publishRequestEnv = "PROW_AI_ANALYSIS_PUBLISH_REQUEST_B64"
+	cleanupRequestEnv = "PROW_AI_ANALYSIS_CLEANUP_REQUEST_B64"
+)
+
+var (
+	version  = "dev"
+	commit   = "dev"
+	imageTag = "dev"
+)
 
 func main() {
-	request, err := readRequest()
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Printf("analysisstager version=%s commit=%s image=%s go=%s\n", version, commit, imageTag, runtime.Version())
+		return
+	}
+	ctx := context.Background()
+	mode, err := selectedMode()
+	var output any
 	if err == nil {
-		err = analysisstager.Execute(context.Background(), request, analysisstager.Options{})
+		switch mode {
+		case "stage":
+			var request agentanalysis.WorkspaceStageRequest
+			err = readRequest(stageRequestEnv, &request)
+			if err == nil {
+				err = agentanalysis.ValidateWorkspaceStageRequestIdentity(request)
+			}
+			if err == nil {
+				err = analysisstager.Execute(ctx, request, analysisstager.Options{})
+			}
+			output = map[string]any{"version": 1, "status": "staged", "manifest_hash": request.ManifestHash}
+		case "publish":
+			var request agentanalysis.WorkspacePublishRequest
+			err = readRequest(publishRequestEnv, &request)
+			if err == nil {
+				output, err = analysisstager.Publish(ctx, request, analysisstager.PublishOptions{})
+			}
+		case "cleanup":
+			var request agentanalysis.WorkspaceCleanupRequest
+			err = readRequest(cleanupRequestEnv, &request)
+			if err == nil {
+				output, err = analysisstager.Cleanup(ctx, request, "")
+			}
+		}
 	}
 	if err != nil {
 		message := textutil.Truncate(strings.Join(strings.Fields(redact.Credentials(redact.URLs(err.Error()))), " "), 2048)
 		fmt.Fprintln(os.Stderr, "analysis staging failed: "+message)
 		os.Exit(1)
 	}
-	fmt.Println("analysis workspace staged")
+	if err := json.NewEncoder(os.Stdout).Encode(output); err != nil {
+		fmt.Fprintln(os.Stderr, "analysis staging failed: encode terminal result")
+		os.Exit(1)
+	}
 }
 
-func readRequest() (agentanalysis.WorkspaceStageRequest, error) {
-	encoded := strings.TrimSpace(os.Getenv(requestEnv))
-	if encoded == "" {
-		return agentanalysis.WorkspaceStageRequest{}, fmt.Errorf("%s is required", requestEnv)
+func selectedMode() (string, error) {
+	selected := ""
+	for _, item := range []struct{ mode, name string }{{"stage", stageRequestEnv}, {"publish", publishRequestEnv}, {"cleanup", cleanupRequestEnv}} {
+		mode, name := item.mode, item.name
+		if strings.TrimSpace(os.Getenv(name)) == "" {
+			continue
+		}
+		if selected != "" {
+			return "", fmt.Errorf("exactly one analysis staging request is required")
+		}
+		selected = mode
 	}
+	if selected == "" {
+		return "", fmt.Errorf("%s is required", stageRequestEnv)
+	}
+	return selected, nil
+}
+
+func readRequest(name string, target any) error {
+	encoded := strings.TrimSpace(os.Getenv(name))
 	data, err := base64.StdEncoding.Strict().DecodeString(encoded)
 	if err != nil {
-		return agentanalysis.WorkspaceStageRequest{}, fmt.Errorf("decode stage request: %w", err)
+		return fmt.Errorf("decode staging request: %w", err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	var request agentanalysis.WorkspaceStageRequest
-	if err := decoder.Decode(&request); err != nil {
-		return request, fmt.Errorf("parse stage request: %w", err)
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("parse staging request: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return request, fmt.Errorf("stage request contains trailing data")
+		return fmt.Errorf("staging request contains trailing data")
 	}
-	if err := agentanalysis.ValidateWorkspaceStageRequestIdentity(request); err != nil {
-		return request, err
-	}
-	return request, nil
+	return nil
 }

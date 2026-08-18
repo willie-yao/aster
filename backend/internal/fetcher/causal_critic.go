@@ -12,11 +12,16 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/agentanalysis"
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/skills"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/causalcritic"
 	"github.com/willie-yao/aster/backend/internal/fixruntime"
 	"github.com/willie-yao/aster/backend/internal/runtime"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
+
+type shadowEvidenceFreezer func(context.Context, artifacts.Browser, ai.FailureAnalysisRequest, sourceinvestigation.Repository, *skills.Set) (agentanalysis.EvidenceBundle, error)
 
 func normalizeCausalCriticOptions(cfg *CausalCriticOptions) {
 	if cfg == nil {

@@ -293,7 +293,7 @@ func TestAgentSandboxRunUsesStagedReadOnlyWorkspace(t *testing.T) {
 	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
 		Purpose: "analysis", ExecutionID: "request-1", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64",
 		Request: []byte(`{"version":1}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"manifest":"abc"}`)},
+		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"manifest":"abc"}`), ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -362,7 +362,7 @@ func TestAgentSandboxStagedWorkspaceRequiresStagerImage(t *testing.T) {
 	_, err := runtime.Run(t.Context(), agentsandbox.Spec{
 		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{}`),
 		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{}`)},
+		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{}`), ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)},
 	})
 	if err == nil || !strings.Contains(err.Error(), "stager image") {
 		t.Fatalf("error=%v", err)
@@ -376,10 +376,10 @@ func TestAgentSandboxWorkloadIdentityIncludesStageRequest(t *testing.T) {
 	left := agentsandbox.Spec{
 		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{"request":1}`),
 		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"stage":1}`)},
+		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"stage":1}`), ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)},
 	}
 	right := left
-	right.StagedWorkspace = &agentsandbox.StagedWorkspace{RequestEnv: left.StagedWorkspace.RequestEnv, Request: []byte(`{"stage":2}`)}
+	right.StagedWorkspace = &agentsandbox.StagedWorkspace{RequestEnv: left.StagedWorkspace.RequestEnv, Request: []byte(`{"stage":2}`), ManifestHash: left.StagedWorkspace.ManifestHash, IdentityHash: left.StagedWorkspace.IdentityHash}
 	if agentSandboxWorkloadHash(left, opts) == agentSandboxWorkloadHash(right, opts) {
 		t.Fatal("stage request did not affect workload identity")
 	}

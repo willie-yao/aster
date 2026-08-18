@@ -161,7 +161,7 @@ const (
 )
 
 // fixtureReleaseBase is the download root for benchmark-fixtures release assets.
-const fixtureReleaseBase = "https://github.com/willie-yao/aster/releases/download/benchmark-fixtures/"
+const fixtureReleaseBase = "https://github.com/willie-yao/prow-ai-dashboard/releases/download/benchmark-fixtures/"
 
 func mustRE(s string) *regexp.Regexp { return regexp.MustCompile(s) }
 
@@ -470,7 +470,7 @@ func TestAIBenchmark(t *testing.T) {
 		}
 	}
 
-	inputs := loadBenchmarkInputs(t, cases, apiMode, model)
+	inputs := loadBenchmarkInputs(t, cases, apiMode, endpoint, model)
 
 	repetitions := 1
 	if raw := strings.TrimSpace(os.Getenv("BENCH_REPETITIONS")); raw != "" {
@@ -690,12 +690,14 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	identity.EvidenceStageSHA256 = benchmarkEvidenceStageSHA256(bc.evidenceGroups)
 	identity.EffectivePromptSHA256 = sha256Hex([]byte(effectivePrompt))
 	identity.EffectiveInputSHA256 = benchmarkEffectiveInputSHA256(identity, agentic, cacheGeneration)
+	identity.ComparisonInputSHA256 = benchmarkComparisonInputSHA256(bc, identity)
 	if err := validateBenchmarkRunIdentity(identity); err != nil {
 		t.Fatal(err)
 	}
 	cacheDir := benchmarkCacheDir(t, bc, repetition, identity)
 	clientOptions := ai.Options{
 		Token: token, API: apiMode, Endpoint: endpoint, Model: model, ReasoningEffort: identity.ReasoningEffort, CacheDir: cacheDir,
+		MaxOutputTokens: identity.ModelOutputTokens,
 	}
 	client := ai.NewClientWithOptions(clientOptions)
 
@@ -740,9 +742,9 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	})
 	service.SetDraftSelectionObserver(func(attempt int) { selectedAttempt = attempt })
 
-	// Size the model/context budgets from the endpoint's window, matching the
-	// fetcher. Fall back to a static budget with compaction off when absent.
-	budgets := benchBudgets(t, client)
+	// Scored comparisons use the exact frozen model window. Unscored local runs
+	// retain endpoint detection and the bounded fallback.
+	budgets := benchBudgets(t, client, identity.ModelContextTokens)
 	service.EnableAgentic(ai.AgenticOptions{
 		MaxIters:            agentic.MaxIters,
 		ModelByteBudget:     budgets.ModelByteBudget,
@@ -972,7 +974,11 @@ type benchmarkTraceSummary struct {
 	modelFailures            int
 	toolFailures             int
 	inputTokens              int
+	cachedInputTokens        int
 	outputTokens             int
+	reasoningTokens          int
+	reportedRequests         int
+	providerAttemptsKnown    bool
 }
 
 const benchmarkHashPrefixLen = 12
@@ -1006,7 +1012,7 @@ func successfulBenchmarkToolUsage(snapshot ai.AnalysisTraceFile) benchmarkToolUs
 }
 
 func summarizeBenchmarkTrace(snapshot ai.AnalysisTraceFile) benchmarkTraceSummary {
-	summary := benchmarkTraceSummary{semanticJudgeOutcome: "not_run"}
+	summary := benchmarkTraceSummary{semanticJudgeOutcome: "not_run", providerAttemptsKnown: true}
 	for _, trace := range snapshot.Traces {
 		if trace.Truncated {
 			summary.truncated = true
@@ -1043,12 +1049,22 @@ func summarizeBenchmarkTrace(snapshot ai.AnalysisTraceFile) benchmarkTraceSummar
 				}
 			case "model_request":
 				summary.modelRequests++
-				summary.providerAttempts += max(event.Attempts, 1)
+				if event.Attempts > 0 {
+					summary.providerAttempts += event.Attempts
+				} else {
+					summary.providerAttempts++
+					summary.providerAttemptsKnown = false
+				}
 				if event.Outcome == "error" {
 					summary.modelFailures++
 				}
+				if event.UsageReported {
+					summary.reportedRequests++
+				}
 				summary.inputTokens += event.InputTokens
+				summary.cachedInputTokens += event.CachedInputTokens
 				summary.outputTokens += event.OutputTokens
+				summary.reasoningTokens += event.ReasoningTokens
 			case "tool_call":
 				if event.Outcome == "error" {
 					summary.toolFailures++
@@ -1860,11 +1876,19 @@ func extractTarGz(r io.Reader, dest string) error {
 // bounded request headroom as dashboard analysis.
 const benchGCSByteBudget = 1_000_000_000
 
-func benchBudgets(t *testing.T, client *ai.Client) ai.ContextBudgets {
+func benchBudgets(t *testing.T, client *ai.Client, frozenTokens int) ai.ContextBudgets {
 	t.Helper()
 	overrideTokens, overridden, err := ai.ParseContextWindowTokens(os.Getenv("AI_CONTEXT_WINDOW_TOKENS"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if frozenTokens > 0 {
+		if overridden && overrideTokens != frozenTokens {
+			t.Fatalf("AI_CONTEXT_WINDOW_TOKENS=%d differs from frozen BENCH_MODEL_CONTEXT_TOKENS=%d", overrideTokens, frozenTokens)
+		}
+		budgets := ai.DeriveContextBudgets(frozenTokens)
+		t.Logf("frozen benchmark context window: %d tokens; request_token_budget=%d reserved_tokens=%d", budgets.ContextWindowTokens, budgets.RequestTokenBudget, budgets.ContextWindowTokens-budgets.RequestTokenBudget)
+		return budgets
 	}
 	tokens := overrideTokens
 	detected := false
@@ -1881,6 +1905,14 @@ func benchBudgets(t *testing.T, client *ai.Client) ai.ContextBudgets {
 		t.Logf("context window unavailable; bounded fallback=%d tokens request_token_budget=%d", budgets.ContextWindowTokens, budgets.RequestTokenBudget)
 	}
 	return budgets
+}
+
+func TestBenchBudgetsUsesFrozenContextWithoutProviderDetection(t *testing.T) {
+	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "200000")
+	budgets := benchBudgets(t, nil, 200000)
+	if budgets.ContextWindowTokens != 200000 || budgets.RequestTokenBudget <= 0 {
+		t.Fatalf("budgets=%+v", budgets)
+	}
 }
 
 // defaultBenchAgentic mirrors the live CAPZ-Dynamo tuning so a default run

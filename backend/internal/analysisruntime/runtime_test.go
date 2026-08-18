@@ -314,3 +314,25 @@ ai:
 		t.Fatalf("planner source repo = %s/%s, want %s/%s", owner, name, sourceRepo.Owner, sourceRepo.Name)
 	}
 }
+
+func TestRuntimeAppliesOptionalComparisonOutputLimit(t *testing.T) {
+	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "200000")
+	configured := &Project{
+		Config:   &project.Config{AI: &project.AI{}},
+		Provider: project.AIProvider{API: ai.APIChatCompletions, Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"},
+	}
+	limited, err := New(t.Context(), Options{Project: configured, MaxOutputTokens: 8192})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if limited.MaxOutputTokens != 8192 {
+		t.Fatalf("max output tokens = %d", limited.MaxOutputTokens)
+	}
+	unlimited, err := New(t.Context(), Options{Project: configured})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unlimited.MaxOutputTokens != 0 {
+		t.Fatalf("default max output tokens = %d", unlimited.MaxOutputTokens)
+	}
+}

@@ -25,7 +25,11 @@ func TestExecuteStagesVerifiedWorkspace(t *testing.T) {
 	if count := strings.TrimSpace(runStagerGit(t, filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir), "rev-list", "HEAD", "--count")); count != "1" {
 		t.Fatalf("staged source history count=%s", count)
 	}
-	if err := agentanalysis.VerifyArtifactFiles(filepath.Join(workspaceRoot, agentanalysis.WorkspaceArtifactsDir), request.Artifacts); err != nil {
+	artifacts, err := agentanalysis.ReadWorkspaceArtifactManifest(filepath.Join(inputRoot, request.ManifestHash), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agentanalysis.VerifyArtifactFiles(filepath.Join(workspaceRoot, agentanalysis.WorkspaceArtifactsDir), artifacts); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(filepath.Join(workspaceRoot, agentanalysis.WorkspaceResultDir))
@@ -188,6 +192,9 @@ func stagerFixtureWithSourceSetupAndPolicies(t *testing.T, setup func(string), i
 	}
 	manifest, err := agentanalysis.NewWorkspaceManifest(failure, sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: revision}, "Inspect this project.", files)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agentanalysis.WriteWorkspaceArtifactManifest(pending, files); err != nil {
 		t.Fatal(err)
 	}
 	stage, err := agentanalysis.NewWorkspaceStageRequestWithSourceModePolicies(manifest, inputPolicy, outputPolicy)

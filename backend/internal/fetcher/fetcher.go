@@ -50,15 +50,17 @@ const AnalysisRuntimeInProcess = "inprocess"
 // path. It runs on Agent Sandbox after authoritative in-process publication and
 // never changes public output.
 type ShadowAnalysisOptions struct {
-	Enabled          bool
-	AgentVersion     string
-	LedgerPath       string
-	MaxPerRun        int
-	MaxTurns         int
-	Timeout          time.Duration
-	Retries          int
-	OutputLimitBytes int64
-	ModelProvider    modelprovider.Config
+	Enabled               bool
+	LedgerPath            string
+	InputRoot             string
+	MaxPerRun             int
+	MaxSteps              int
+	Timeout               time.Duration
+	OutputLimitBytes      int64
+	ModelContextTokens    int
+	ModelOutputTokens     int
+	RequireSourceEvidence bool
+	ModelProvider         modelprovider.Config
 }
 
 // CausalCriticOptions configure the private sampled Agent Sandbox review path.
@@ -90,6 +92,7 @@ type Options struct {
 	// enable presubmits.
 	IncludePresubmits bool
 	EnableAI          bool
+	AIMaxOutputTokens int
 	// SkipSideEffects writes dashboard data without notifications or GitHub writes.
 	SkipSideEffects bool
 	// Version is the engine version embedded at build time, logged at startup.
@@ -117,7 +120,9 @@ type pipeline struct {
 	aiRefreshTransaction *aiRefreshStateTransaction
 	lastPatternOutcomes  map[string]patterns.JobOutcome
 	shadowRunner         shadowAnalysisRunner
-	shadowFreeze         shadowEvidenceFreezer
+	shadowPublisher      shadowWorkspacePublisher
+	shadowPrepare        shadowWorkspacePreparer
+	shadowCleanup        shadowWorkspaceCleaner
 	shadowAppend         shadowLedgerAppender
 	shadowClaim          shadowLedgerClaimer
 	shadowNow            func() time.Time
@@ -208,6 +213,14 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		aiProject, err = analysisruntime.LoadProject(opts.ProjectDir, cfg, fallbacks)
 		if err != nil {
 			return nil, err
+		}
+		if opts.ShadowAnalysis.Enabled {
+			if err := validateShadowProviderParity(aiProject.Provider, opts.ShadowAnalysis.ModelProvider); err != nil {
+				return nil, err
+			}
+			if err := validateShadowContextParity(opts.ShadowAnalysis.ModelContextTokens); err != nil {
+				return nil, err
+			}
 		}
 		log.Printf("Loaded AI skills (profiles=%s engine=%d consumer=%d consumer_bundle=%t hash=%s)",
 			aiProject.ProfileSelection.String(), aiProject.SkillSet.EngineCount(), aiProject.SkillSet.ConsumerCount(),

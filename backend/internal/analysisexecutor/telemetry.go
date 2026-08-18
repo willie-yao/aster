@@ -73,9 +73,10 @@ type openCodePart struct {
 	Auto     *bool    `json:"auto"`
 	Overflow *bool    `json:"overflow"`
 	Tokens   *struct {
-		Input  *int `json:"input"`
-		Output *int `json:"output"`
-		Cache  *struct {
+		Input     *int `json:"input"`
+		Output    *int `json:"output"`
+		Reasoning *int `json:"reasoning"`
+		Cache     *struct {
 			Read *int `json:"read"`
 		} `json:"cache"`
 	} `json:"tokens"`
@@ -208,6 +209,9 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 				if !addTelemetryCount(&usage.InputTokens, *part.Tokens.Input) || !addTelemetryCount(&usage.CachedInputTokens, *part.Tokens.Cache.Read) || !addTelemetryCount(&usage.OutputTokens, *part.Tokens.Output) {
 					return unavailable, telemetry, facts, fmt.Errorf("telemetry token count is invalid")
 				}
+				if part.Tokens.Reasoning != nil && (!addTelemetryCount(&usage.ReasoningTokens, *part.Tokens.Reasoning) || *part.Tokens.Reasoning > *part.Tokens.Output) {
+					return unavailable, telemetry, facts, fmt.Errorf("telemetry reasoning token count is invalid")
+				}
 				if *part.Cost < 0 {
 					costKnown = false
 				} else {
@@ -256,9 +260,6 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 						return unavailable, telemetry, facts, err
 					}
 				case "error":
-					if len(part.State.Error) > maxOpenCodeFieldBytes {
-						return unavailable, telemetry, facts, fmt.Errorf("telemetry tool error exceeds the bound for %s (%d bytes)", part.Tool, len(part.State.Error))
-					}
 					aggregate.failures++
 					telemetry.ToolFailureCount++
 					if deniedToolError(part.State.Error) {

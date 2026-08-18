@@ -242,7 +242,7 @@ main operator controls.
 | `ai.contextWindowTokens` | Optional operator-provided provider context window. Set only with endpoint evidence. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Existing provider token Secret and key. |
 | `ai.githubReadTokenSecretName`, `ai.githubReadTokenSecretKey` | Read-only GitHub token for analysis source grounding and pull request triage. Rendered whether or not `ai.enabled` is set. Required for triage, which otherwise reads GitHub anonymously at 60 requests per hour. |
-| `agentSandbox.analysisShadow.*` | Disabled private Agent comparison, exact admission identity, limits, and private ledger claim. |
+| `agentSandbox.analysisShadow.*` | Disabled private WorkspaceSandboxRuntime comparison, immutable executor and stager images, namespace-local publisher and cleanup Jobs, exact provider and model limits, private input claim, and private ledger claim. |
 | `fetcher.schedule` | Cron schedule. Used only in cron mode. |
 | `fetcher.suspend` | Suspend CronJob starts. Keep true when preserving a safe cron rollback from watch mode. |
 | `fetcher.watchInterval`, `fetcher.reconcileInterval` | Watch refresh and full reconciliation cadence. |
@@ -280,10 +280,23 @@ backups to dashboard operators.
 Do not point multiple releases at the same claim. Do not delete a retained PVC
 until rollback and data-retention requirements are resolved.
 
-Agent analysis shadowing uses a second claim, defaulting to `ReadWriteOnce`,
-mounted only into the single writer at `/private/agent-analysis-shadow`. The
-chart rejects reuse of the public dashboard claim. The server never mounts the
-shadow claim, and Helm retains chart-managed shadow data by default.
+Agent analysis shadowing uses two private claims in different namespaces. The
+ledger claim is mounted only by the scheduled fetcher or worker and never by the
+server. The input claim exists in the dedicated analysis namespace. A tokenless
+publisher Job writes one leased content-addressed snapshot, is deleted, and only
+then may the Agent Sandbox mount the claim read-only. After Sandbox cleanup, a
+tokenless no-network cleanup Job deletes exactly that leased snapshot. The
+dashboard retains a separate verification copy in a dedicated size-limited
+`emptyDir` until result validation completes. Neither claim may be the public
+dashboard claim. The configured fetcher and Sandbox ephemeral-storage limits
+must match that volume bound.
+The publisher is public-source-only and receives no GitHub token or model
+credential. Before cloning, both publishers use the immutable GitHub tree API to
+enforce source file-count, per-file, and aggregate-byte bounds. Cilium policy
+must allow exactly `github.com`, `api.github.com`, plus the public
+artifact-storage FQDNs configured in `networkPolicy.stagingFQDNs`. The Agent
+Sandbox Pod does not receive those staging destinations; its egress remains
+limited to DNS and the configured model endpoint.
 
 ## Secure server origin topologies
 
@@ -441,10 +454,14 @@ writer may sample a bounded number of failures, create Agent Sandbox analyzer
 workloads, compare their results privately, and append to a separate ledger.
 
 The shadow requires its own execution namespace, secure RuntimeClass, immutable
-executor image, client and tokenless workload ServiceAccounts, network policy,
-provider configuration, conservative limits, and private ledger PVC. Start with
-`maxPerRun: 1` and `retries: 0`. The chart rejects sharing the public dashboard
-claim or enabling incompatible Agent Sandbox experiments in the same release.
+executor and stager images, client and tokenless workload ServiceAccounts,
+Cilium FQDN policy, provider configuration, dedicated bounded local input
+storage, conservative limits, and separate private input and ledger PVCs. Start
+with `maxPerRun: 1`. The chart rejects sharing the public dashboard claim or
+enabling incompatible Agent Sandbox experiments in the same release.
+`ai.contextWindowTokens` and `ai.maxOutputTokens` must explicitly match the
+shadow model limits so enabling the shadow does not silently rewrite
+authoritative provider configuration.
 
 Shadow output, lifecycle failures, and cleanup state cannot change public JSON,
 normal cache acceptance, patterns, corrections, or actions. The server never

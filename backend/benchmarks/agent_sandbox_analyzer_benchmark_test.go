@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,6 +22,8 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/agentanalysis"
 	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/skills"
+	"github.com/willie-yao/aster/backend/internal/analysisstager"
 	"github.com/willie-yao/aster/backend/internal/fixruntime"
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	"github.com/willie-yao/aster/backend/internal/models"
@@ -30,7 +33,9 @@ import (
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
-const agentSandboxAnalyzerBenchmarkRecordVersion = 5
+const agentSandboxAnalyzerBenchmarkRecordVersion = 8
+
+var benchmarkImmutableImageRE = regexp.MustCompile(`^[^[:space:]@]+@sha256:[0-9a-f]{64}$`)
 
 type agentSandboxAnalyzerBenchmarkConfig struct {
 	KubeContext        string
@@ -38,6 +43,7 @@ type agentSandboxAnalyzerBenchmarkConfig struct {
 	ProjectDir         string
 	ResultsPath        string
 	PreparedPath       string
+	InputRoot          string
 	ArmLabel           string
 	ModelLabel         string
 	ProviderPath       string
@@ -52,35 +58,61 @@ type agentSandboxAnalyzerBenchmarkConfig struct {
 	Repetitions        int
 	RepetitionBase     int
 	PrepareOnly        bool
+	ImageContract      agentSandboxAnalyzerImageContract
+}
+
+type agentSandboxAnalyzerImageContract struct {
+	Version          int    `json:"version"`
+	EngineCommit     string `json:"engine_commit"`
+	ImageTag         string `json:"image_tag"`
+	ExecutorImage    string `json:"executor_image"`
+	StagerImage      string `json:"stager_image"`
+	ExecutorRevision string `json:"executor_revision"`
+	StagerRevision   string `json:"stager_revision"`
+	ExecutorUser     string `json:"executor_user"`
+	StagerUser       string `json:"stager_user"`
+	ExecutorVersion  string `json:"executor_version"`
+	StagerVersion    string `json:"stager_version"`
+	OpenCodeVersion  string `json:"opencode_version"`
+	ContractSHA256   string `json:"contract_sha256"`
 }
 
 type agentSandboxAnalyzerPrepared struct {
-	Version                 int      `json:"version"`
-	CaseID                  string   `json:"case_id"`
-	StableID                string   `json:"stable_id"`
-	EvidenceMode            string   `json:"evidence_mode"`
-	SourceExpectationSHA256 string   `json:"source_expectation_sha256"`
-	EngineCommit            string   `json:"engine_commit"`
-	FixtureSHA256           string   `json:"fixture_sha256"`
-	BaselineConsumerCommit  string   `json:"baseline_consumer_commit"`
-	BaselinePromptSHA256    string   `json:"baseline_prompt_sha256"`
-	ProjectSHA256           string   `json:"project_sha256"`
-	SourceRevision          string   `json:"source_revision"`
-	SourceModePolicy        string   `json:"source_mode_policy"`
-	SourceRoot              string   `json:"source_root"`
-	ArtifactRoot            string   `json:"artifact_root"`
-	ManifestHash            string   `json:"manifest_hash"`
-	RequestHash             string   `json:"request_hash"`
-	StageHash               string   `json:"stage_hash"`
-	ArtifactFiles           int      `json:"artifact_files"`
-	ArtifactBytes           int64    `json:"artifact_bytes"`
-	ArtifactPaths           []string `json:"artifact_paths"`
-	WorkspacePromptHash     string   `json:"workspace_prompt_hash"`
-	ModelContextTokens      int      `json:"model_context_tokens"`
-	ModelOutputTokens       int      `json:"model_output_tokens"`
-	MaxSteps                int      `json:"max_steps"`
-	ModelLabel              string   `json:"model_label"`
-	ArmLabel                string   `json:"arm_label"`
+	Version                 int                      `json:"version"`
+	CaseID                  string                   `json:"case_id"`
+	StableID                string                   `json:"stable_id"`
+	EvidenceMode            string                   `json:"evidence_mode"`
+	SourceExpectationSHA256 string                   `json:"source_expectation_sha256"`
+	EngineCommit            string                   `json:"engine_commit"`
+	BenchmarkManifestSHA256 string                   `json:"benchmark_manifest_sha256"`
+	FixtureSHA256           string                   `json:"fixture_sha256"`
+	BaselineConsumerCommit  string                   `json:"baseline_consumer_commit"`
+	BaselinePromptSHA256    string                   `json:"baseline_prompt_sha256"`
+	ProjectSHA256           string                   `json:"project_sha256"`
+	EffectivePromptSHA256   string                   `json:"effective_prompt_sha256"`
+	SkillSetHash            string                   `json:"skill_set_hash"`
+	EffectiveInputSHA256    string                   `json:"effective_input_sha256"`
+	ComparisonInputSHA256   string                   `json:"comparison_input_sha256"`
+	ProviderConfigSHA256    string                   `json:"provider_config_sha256"`
+	ImageContractSHA256     string                   `json:"image_contract_sha256,omitempty"`
+	Pricing                 benchmarkPricingIdentity `json:"pricing"`
+	SourceRevision          string                   `json:"source_revision"`
+	LocalSourceModePolicy   string                   `json:"local_source_mode_policy"`
+	SourceModePolicy        string                   `json:"source_mode_policy"`
+	SourceRoot              string                   `json:"source_root"`
+	ArtifactRoot            string                   `json:"artifact_root"`
+	ManifestHash            string                   `json:"manifest_hash"`
+	RequestHash             string                   `json:"request_hash"`
+	StageHash               string                   `json:"stage_hash"`
+	ArtifactFiles           int                      `json:"artifact_files"`
+	ArtifactBytes           int64                    `json:"artifact_bytes"`
+	ArtifactPaths           []string                 `json:"artifact_paths"`
+	WorkspacePromptHash     string                   `json:"workspace_prompt_hash"`
+	ModelContextTokens      int                      `json:"model_context_tokens"`
+	ModelOutputTokens       int                      `json:"model_output_tokens"`
+	MaxSteps                int                      `json:"max_steps"`
+	ModelLabel              string                   `json:"model_label"`
+	ArmLabel                string                   `json:"arm_label"`
 }
 
 type agentSandboxAnalyzerCitation struct {
@@ -99,11 +131,17 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	Arm                          string                                 `json:"arm"`
 	ModelLabel                   string                                 `json:"model_label"`
 	EngineCommit                 string                                 `json:"engine_commit"`
+	BenchmarkManifestSHA256      string                                 `json:"benchmark_manifest_sha256"`
 	FixtureSHA256                string                                 `json:"fixture_sha256"`
 	BaselineConsumerCommit       string                                 `json:"baseline_consumer_commit"`
 	BaselinePromptSHA256         string                                 `json:"baseline_prompt_sha256"`
 	ProjectSHA256                string                                 `json:"project_sha256"`
+	EffectivePromptSHA256        string                                 `json:"effective_prompt_sha256"`
+	SkillSetHash                 string                                 `json:"skill_set_hash"`
+	EffectiveInputSHA256         string                                 `json:"effective_input_sha256"`
+	ComparisonInputSHA256        string                                 `json:"comparison_input_sha256"`
 	ProviderPath                 string                                 `json:"provider_path"`
+	ProviderConfigSHA256         string                                 `json:"provider_config_sha256"`
 	TransportID                  string                                 `json:"transport_id"`
 	APIMode                      string                                 `json:"api_mode"`
 	ReasoningEffort              string                                 `json:"reasoning_effort,omitempty"`
@@ -129,6 +167,12 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	ManifestHash                 string                                 `json:"manifest_hash"`
 	RequestHash                  string                                 `json:"request_hash"`
 	RuntimeIdentityHash          string                                 `json:"runtime_identity_hash"`
+	ImageContractSHA256          string                                 `json:"image_contract_sha256"`
+	ExecutorImage                string                                 `json:"executor_image"`
+	StagerImage                  string                                 `json:"stager_image"`
+	ExecutorAsterRevision        string                                 `json:"executor_aster_revision"`
+	StagerAsterRevision          string                                 `json:"stager_aster_revision"`
+	ExpectedOpenCodeVersion      string                                 `json:"expected_opencode_version"`
 	ExecutionID                  string                                 `json:"execution_id"`
 	SourceRevision               string                                 `json:"source_revision"`
 	SourceModePolicy             string                                 `json:"source_mode_policy"`
@@ -183,6 +227,7 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	InputTokens                  int                                    `json:"input_tokens"`
 	CachedInputTokens            int                                    `json:"cached_input_tokens"`
 	OutputTokens                 int                                    `json:"output_tokens"`
+	ReasoningTokens              int                                    `json:"reasoning_tokens"`
 	CostUSD                      string                                 `json:"cost_usd,omitempty"`
 	TokenUsageAvailable          bool                                   `json:"token_usage_available"`
 	CostAvailable                bool                                   `json:"cost_available"`
@@ -255,6 +300,7 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	HumanScoreRubricVersion      int                                    `json:"human_score_rubric_version"`
 	HumanScoreMax                int                                    `json:"human_score_max"`
 	HumanScoreDimensions         []string                               `json:"human_score_dimensions"`
+	Pricing                      benchmarkPricingIdentity               `json:"pricing"`
 }
 
 type agentSandboxAnalyzerPreparedCase struct {
@@ -286,6 +332,9 @@ func TestAgentSandboxAnalyzerBenchmark(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runner.ExecutorImage() != cfg.ImageContract.ExecutorImage || runner.StagerImage() != cfg.ImageContract.StagerImage {
+		t.Fatal("Agent Sandbox runtime images differ from the frozen image contract")
 	}
 	runtime := &agentanalysis.WorkspaceSandboxRuntime{
 		Sandbox: runner, Provider: cfg.Provider, SourceModePolicy: prepared.request.SourceModePolicy, Timeout: cfg.Timeout, OutputLimitBytes: cfg.OutputLimit,
@@ -339,20 +388,29 @@ func loadAgentSandboxAnalyzerBenchmarkConfig(t *testing.T) agentSandboxAnalyzerB
 		ArmLabel:     arm, ModelLabel: modelLabel, ProviderPath: require("BENCH_PROVIDER_PATH"), TransportID: transportID,
 		EngineCommit: benchmarkEngineCommit(t, !prepareOnly), Provider: provider, Timeout: timeout, OutputLimit: outputLimit,
 		MaxSteps:           agentSandboxAnalyzerBenchmarkInt(t, "ANALYZER_BENCH_MAX_STEPS", 20, 1, 100),
-		ModelContextTokens: agentSandboxAnalyzerBenchmarkInt(t, "ANALYZER_BENCH_MODEL_CONTEXT_TOKENS", 0, 8192, 2_000_000),
-		ModelOutputTokens:  agentSandboxAnalyzerBenchmarkInt(t, "ANALYZER_BENCH_MODEL_OUTPUT_TOKENS", 0, 1024, 131072),
+		ModelContextTokens: agentSandboxAnalyzerBenchmarkInt(t, "BENCH_MODEL_CONTEXT_TOKENS", 0, 8192, 2_000_000),
+		ModelOutputTokens:  agentSandboxAnalyzerBenchmarkInt(t, "BENCH_MODEL_OUTPUT_TOKENS", 0, 1024, 131072),
 		Repetitions:        agentSandboxAnalyzerBenchmarkInt(t, "BENCH_REPETITIONS", 1, 1, 10),
 		RepetitionBase:     benchmarkRepetitionStart(t), PrepareOnly: prepareOnly,
 	}
 	if cfg.ModelContextTokens == 0 || cfg.ModelOutputTokens == 0 {
-		t.Fatal("ANALYZER_BENCH_MODEL_CONTEXT_TOKENS and ANALYZER_BENCH_MODEL_OUTPUT_TOKENS are required from the configured model")
+		t.Fatal("BENCH_MODEL_CONTEXT_TOKENS and BENCH_MODEL_OUTPUT_TOKENS are required from the configured model")
 	}
 	if cfg.ModelOutputTokens > cfg.ModelContextTokens {
-		t.Fatal("ANALYZER_BENCH_MODEL_OUTPUT_TOKENS must not exceed the configured model context")
+		t.Fatal("BENCH_MODEL_OUTPUT_TOKENS must not exceed the configured model context")
 	}
 	if !prepareOnly {
 		cfg.KubeContext = require("ANALYZER_BENCH_KUBE_CONTEXT")
 		cfg.ResultsPath = require("ANALYZER_BENCH_RESULTS_JSONL")
+	} else {
+		cfg.InputRoot = require("ANALYZER_BENCH_INPUT_ROOT")
+	}
+	contractPath := strings.TrimSpace(os.Getenv("ANALYZER_BENCH_IMAGE_CONTRACT_JSON"))
+	if !prepareOnly && contractPath == "" {
+		t.Fatal("ANALYZER_BENCH_IMAGE_CONTRACT_JSON is required for scored execution")
+	}
+	if contractPath != "" {
+		cfg.ImageContract = readAgentSandboxAnalyzerImageContract(t, contractPath, cfg.EngineCommit)
 	}
 	return cfg
 }
@@ -386,7 +444,12 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 	if err := validateBenchmarkProjectDir(cfg.ProjectDir, bc); err != nil {
 		t.Fatalf("BENCH_PROJECT_DIR=%s: %v", cfg.ProjectDir, err)
 	}
-	_, consumerPrompt, err := project.LoadDir(cfg.ProjectDir)
+	projectConfig, consumerPrompt, err := project.LoadDir(cfg.ProjectDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentic := projectConfig.AI.EffectiveAgentic()
+	projectSkills, _, err := skills.LoadForTools(cfg.ProjectDir, agentic.Tools)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +461,7 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 	if !ok || len(source.Revision) != 40 {
 		t.Fatal("benchmark case does not resolve one lowercase 40-character source SHA")
 	}
-	sourceModePolicy, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), cfg.SourceRoot, source.Revision, sealed)
+	localSourceModePolicy, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), cfg.SourceRoot, source.Revision, sealed)
 	if err != nil {
 		t.Fatalf("verify ANALYZER_BENCH_SOURCE_ROOT=%s: %v", cfg.SourceRoot, err)
 	}
@@ -419,22 +482,53 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 		JobID: models.JobIDFor(bc.jobType, bc.repo, bc.jobName), BuildPrefix: loc.BuildPath(), Build: build,
 		TestCase: *benchTestCase(bc), ConsecutiveFailures: bc.consecutiveFailures,
 	}
-	manifest, err := agentanalysis.NewWorkspaceManifest(request, sourceinvestigation.Repository{
+	manifest, err := agentanalysis.NewWorkspaceManifestWithSkills(request, sourceinvestigation.Repository{
 		Owner: source.Owner, Name: source.Name, Revision: source.Revision,
-	}, consumerPrompt, files)
+	}, consumerPrompt, projectSkills, files)
 	if err != nil {
 		t.Fatal(err)
 	}
-	execution, err := agentanalysis.NewWorkspaceExecutionRequestWithSourceEvidence(manifest, sourceModePolicy, bc.evidenceMode == benchmarkEvidenceModeArtifactAndSource, cfg.Provider, cfg.Timeout, cfg.MaxSteps, cfg.ModelContextTokens, cfg.ModelOutputTokens, cfg.OutputLimit)
+	inputSourceModePolicy := localSourceModePolicy
+	if cfg.PrepareOnly {
+		inputSourceModePolicy, err = analysisstager.PublishPreparedSnapshot(t.Context(), cfg.InputRoot, manifest, cfg.SourceRoot, artifactRoot, localSourceModePolicy)
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if sealed != nil {
+		inputSourceModePolicy = agentanalysis.WorkspaceSourceModePolicy(sealed.SourceModePolicy)
+	}
+	execution, err := agentanalysis.NewWorkspaceExecutionRequestWithSourceEvidence(manifest, agentanalysis.WorkspaceSourceModePreserve, bc.evidenceMode == benchmarkEvidenceModeArtifactAndSource, cfg.Provider, cfg.Timeout, cfg.MaxSteps, cfg.ModelContextTokens, cfg.ModelOutputTokens, cfg.OutputLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stage, err := agentanalysis.NewWorkspaceStageRequestWithSourceModePolicies(manifest, sourceModePolicy, sourceModePolicy)
+	stage, err := agentanalysis.NewWorkspaceStageRequestWithSourceModePolicies(manifest, inputSourceModePolicy, agentanalysis.WorkspaceSourceModePreserve)
 	if err != nil {
 		t.Fatal(err)
 	}
 	projectData, err := os.ReadFile(filepath.Join(cfg.ProjectDir, "project.yaml"))
 	if err != nil {
+		t.Fatal(err)
+	}
+	cacheGeneration, err := benchmarkCacheGenerationFingerprint(projectConfig.AI.CacheGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := benchmarkRunIdentity{
+		Arm: cfg.ArmLabel, EngineCommit: cfg.EngineCommit, BaselineConsumerCommit: bc.consumerCommit, BaselinePromptSHA256: bc.promptSHA256,
+		BenchmarkManifestSHA256: benchmarkManifestIdentity(t),
+		FixtureSHA256:           bc.fixtureSHA256, ProjectSHA256: sha256Hex(projectData), EffectivePromptSHA256: manifest.EffectivePromptSHA256,
+		SkillSetHash: manifest.SkillSetHash, EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceStageSHA256: benchmarkEvidenceStageSHA256(bc.evidenceGroups),
+		APIMode: cfg.Provider.API, ReasoningEffort: ai.ReasoningEffort(cfg.Provider.ReasoningEffort), ProviderPath: cfg.ProviderPath,
+		ProviderConfigSHA256: benchmarkProviderConfigSHA256(cfg.Provider.API, cfg.Provider.Endpoint, cfg.Provider.Model, ai.ReasoningEffort(cfg.Provider.ReasoningEffort)), TransportID: cfg.TransportID,
+		ModelContextTokens: cfg.ModelContextTokens, ModelOutputTokens: cfg.ModelOutputTokens,
+	}
+	identity.Pricing, err = newBenchmarkPricingIdentity(projectConfig.AI.EffectiveUsage().Pricing)
+	if err != nil || identity.Pricing.SHA256 == "" {
+		t.Fatalf("benchmark pricing identity: %v", err)
+	}
+	identity.EffectiveInputSHA256 = benchmarkEffectiveInputSHA256(identity, agentic, cacheGeneration)
+	identity.ComparisonInputSHA256 = benchmarkComparisonInputSHA256(bc, identity)
+	if err := validateBenchmarkRunIdentity(identity); err != nil {
 		t.Fatal(err)
 	}
 	var artifactBytes int64
@@ -444,10 +538,12 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 		artifactPaths = append(artifactPaths, file.Path)
 	}
 	prepared := agentSandboxAnalyzerPrepared{
-		Version: 5, CaseID: bc.name, StableID: bc.stableID, EvidenceMode: bc.evidenceMode, SourceExpectationSHA256: benchmarkSourceExpectationSHA256(bc), EngineCommit: cfg.EngineCommit,
+		Version: 8, CaseID: bc.name, StableID: bc.stableID, EvidenceMode: bc.evidenceMode, SourceExpectationSHA256: benchmarkSourceExpectationSHA256(bc), EngineCommit: cfg.EngineCommit, BenchmarkManifestSHA256: identity.BenchmarkManifestSHA256,
 		FixtureSHA256: bc.fixtureSHA256, BaselineConsumerCommit: bc.consumerCommit,
-		BaselinePromptSHA256: bc.promptSHA256, ProjectSHA256: sha256Hex(projectData),
-		SourceRevision: source.Revision, SourceModePolicy: string(sourceModePolicy), SourceRoot: filepath.Clean(cfg.SourceRoot), ArtifactRoot: artifactRoot,
+		BaselinePromptSHA256: bc.promptSHA256, ProjectSHA256: identity.ProjectSHA256,
+		EffectivePromptSHA256: identity.EffectivePromptSHA256, SkillSetHash: identity.SkillSetHash, EffectiveInputSHA256: identity.EffectiveInputSHA256, ComparisonInputSHA256: identity.ComparisonInputSHA256,
+		ProviderConfigSHA256: identity.ProviderConfigSHA256, ImageContractSHA256: cfg.ImageContract.ContractSHA256, Pricing: identity.Pricing,
+		SourceRevision: source.Revision, LocalSourceModePolicy: string(localSourceModePolicy), SourceModePolicy: string(inputSourceModePolicy), SourceRoot: filepath.Clean(cfg.SourceRoot), ArtifactRoot: artifactRoot,
 		ManifestHash: manifest.Hash, RequestHash: execution.Hash, StageHash: stage.Hash,
 		ArtifactFiles: len(files), ArtifactBytes: artifactBytes, ArtifactPaths: artifactPaths,
 		WorkspacePromptHash: agentanalysis.WorkspaceSkillHash(), ModelContextTokens: cfg.ModelContextTokens, ModelOutputTokens: cfg.ModelOutputTokens, MaxSteps: cfg.MaxSteps, ModelLabel: cfg.ModelLabel, ArmLabel: cfg.ArmLabel,
@@ -487,7 +583,9 @@ func runAgentSandboxAnalyzerBenchmarkTrial(
 		}
 	}
 	elapsed := time.Since(started)
-	record := agentSandboxAnalyzerRecordForResult(cfg, prepared, repetition, executionID, runtime.RuntimeIdentity(), result, elapsed, runErr)
+	record := agentSandboxAnalyzerRecordForResult(
+		cfg, prepared, repetition, executionID, runtime.RuntimeIdentity(), runner.ExecutorImage(), runner.StagerImage(), result, elapsed, runErr,
+	)
 	writeAgentSandboxAnalyzerBenchmarkJSONL(t, cfg.ResultsPath, record)
 	if runErr != nil {
 		t.Logf("Agent Sandbox analyzer trial status=%s error=%v", record.Status, runErr)
@@ -498,7 +596,7 @@ func agentSandboxAnalyzerRecordForResult(
 	cfg agentSandboxAnalyzerBenchmarkConfig,
 	prepared agentSandboxAnalyzerPreparedCase,
 	repetition int,
-	executionID, runtimeIdentity string,
+	executionID, runtimeIdentity, executorImage, stagerImage string,
 	result agentanalysis.WorkspaceSandboxResult,
 	elapsed time.Duration,
 	runErr error,
@@ -508,9 +606,12 @@ func agentSandboxAnalyzerRecordForResult(
 		Version: agentSandboxAnalyzerBenchmarkRecordVersion,
 		CaseID:  prepared.bc.name, StableID: prepared.bc.stableID, Repetition: repetition,
 		Runtime: "agent-sandbox-opencode", Arm: cfg.ArmLabel, ModelLabel: cfg.ModelLabel,
-		EngineCommit: cfg.EngineCommit, FixtureSHA256: prepared.bc.fixtureSHA256,
+		EngineCommit: cfg.EngineCommit, BenchmarkManifestSHA256: prepared.prepared.BenchmarkManifestSHA256, FixtureSHA256: prepared.bc.fixtureSHA256,
 		BaselineConsumerCommit: prepared.bc.consumerCommit, BaselinePromptSHA256: prepared.bc.promptSHA256,
-		ProjectSHA256: prepared.prepared.ProjectSHA256, ProviderPath: cfg.ProviderPath, TransportID: cfg.TransportID,
+		ProjectSHA256: prepared.prepared.ProjectSHA256, EffectivePromptSHA256: prepared.prepared.EffectivePromptSHA256,
+		SkillSetHash: prepared.prepared.SkillSetHash, EffectiveInputSHA256: prepared.prepared.EffectiveInputSHA256,
+		ComparisonInputSHA256: prepared.prepared.ComparisonInputSHA256,
+		ProviderPath:          cfg.ProviderPath, ProviderConfigSHA256: prepared.prepared.ProviderConfigSHA256, TransportID: cfg.TransportID,
 		APIMode: cfg.Provider.API, ReasoningEffort: string(cfg.Provider.ReasoningEffort), EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceMode: prepared.bc.evidenceMode,
 		EvidenceContractStatus: "analysis_unavailable", SourceExpectationSHA256: benchmarkSourceExpectationSHA256(prepared.bc), SourceExpectationPaths: append([]string{}, prepared.bc.sourcePaths...),
 		SourceExpectationTotal: len(prepared.bc.sourcePaths), SourceSignalTotal: len(prepared.bc.sourceSignals),
@@ -518,7 +619,9 @@ func agentSandboxAnalyzerRecordForResult(
 		ContractVersion: agentanalysis.WorkspaceContractVersion, WorkspacePromptHash: agentanalysis.WorkspaceSkillHash(),
 		ModelContextTokens: prepared.request.ModelContextTokens, ModelOutputTokens: prepared.request.ModelOutputTokens, MaxSteps: prepared.request.MaxSteps,
 		ManifestHash: prepared.prepared.ManifestHash, RequestHash: prepared.prepared.RequestHash,
-		RuntimeIdentityHash: runtimeIdentity, ExecutionID: executionID, SourceRevision: prepared.prepared.SourceRevision, SourceModePolicy: prepared.prepared.SourceModePolicy,
+		RuntimeIdentityHash: runtimeIdentity, ImageContractSHA256: prepared.prepared.ImageContractSHA256, ExecutorImage: executorImage, StagerImage: stagerImage,
+		ExecutorAsterRevision: cfg.ImageContract.ExecutorRevision, StagerAsterRevision: cfg.ImageContract.StagerRevision, ExpectedOpenCodeVersion: cfg.ImageContract.OpenCodeVersion,
+		ExecutionID: executionID, SourceRevision: prepared.prepared.SourceRevision, SourceModePolicy: prepared.prepared.SourceModePolicy,
 		ArtifactFiles: prepared.prepared.ArtifactFiles, ArtifactBytes: prepared.prepared.ArtifactBytes,
 		Status: status, ErrorCode: code, FailureReason: boundedBenchmarkFailure(runErr),
 		ElapsedMS: max(elapsed.Milliseconds(), 0), RuntimeDurationMS: max(result.Execution.DurationMs, 0),
@@ -534,11 +637,11 @@ func agentSandboxAnalyzerRecordForResult(
 		TokenUsageAvailable: result.Telemetry.TokenUsageAvailable, CostAvailable: result.Telemetry.CostAvailable,
 		UsageStatus: result.Telemetry.UsageStatus, Resources: result.Resources,
 		HumanScoreRubricVersion: benchmarkHumanScoreRubricVersion, HumanScoreMax: benchmarkHumanScoreMax,
-		HumanScoreDimensions: append([]string(nil), benchmarkHumanScoreDimensions...),
+		HumanScoreDimensions: append([]string(nil), benchmarkHumanScoreDimensions...), Pricing: prepared.prepared.Pricing,
 	}
 	usage := result.Execution.Usage
 	record.ModelRequests, record.InputTokens = usage.ModelRequests, usage.InputTokens
-	record.CachedInputTokens, record.OutputTokens, record.CostUSD = usage.CachedInputTokens, usage.OutputTokens, usage.CostUSD
+	record.CachedInputTokens, record.OutputTokens, record.ReasoningTokens, record.CostUSD = usage.CachedInputTokens, usage.OutputTokens, usage.ReasoningTokens, usage.CostUSD
 	record.TokenUsageAvailable = usage.Available
 	record.CostAvailable = usage.CostAvailable
 	record.UsageStatus = usage.Status
@@ -791,7 +894,7 @@ func sealOrVerifyAgentSandboxAnalyzerSource(ctx context.Context, root, revision 
 	if sealed == nil {
 		return agentanalysis.ConfigurePreparedSourceModePolicy(ctx, root, revision)
 	}
-	policy := agentanalysis.WorkspaceSourceModePolicy(sealed.SourceModePolicy)
+	policy := agentanalysis.WorkspaceSourceModePolicy(sealed.LocalSourceModePolicy)
 	if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, root, revision, policy); err != nil {
 		return "", err
 	}
@@ -804,7 +907,7 @@ func readAgentSandboxAnalyzerPrepared(t *testing.T, path string) agentSandboxAna
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(data) == 0 || len(data) > 256<<10 {
+	if len(data) == 0 || len(data) > 1<<20 {
 		t.Fatal("prepared analyzer record is empty or oversized")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -816,10 +919,51 @@ func readAgentSandboxAnalyzerPrepared(t *testing.T, path string) agentSandboxAna
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		t.Fatal("prepared analyzer record has trailing data")
 	}
-	if prepared.Version != 5 || !validBenchmarkEvidenceMode(prepared.EvidenceMode) || !benchmarkSHA256RE.MatchString(prepared.SourceExpectationSHA256) {
+	if prepared.Version != 8 || !validBenchmarkEvidenceMode(prepared.EvidenceMode) || !benchmarkSHA256RE.MatchString(prepared.SourceExpectationSHA256) || !benchmarkSHA256RE.MatchString(prepared.ProviderConfigSHA256) || validateBenchmarkPricingIdentity(prepared.Pricing) != nil {
 		t.Fatal("prepared analyzer record version is invalid")
 	}
 	return prepared
+}
+
+func readAgentSandboxAnalyzerImageContract(t *testing.T, path, expectedCommit string) agentSandboxAnalyzerImageContract {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) == 0 || len(data) > 64<<10 {
+		t.Fatal("analysis image contract is empty or oversized")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var contract agentSandboxAnalyzerImageContract
+	if err := decoder.Decode(&contract); err != nil {
+		t.Fatal(err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		t.Fatal("analysis image contract has trailing data")
+	}
+	if contract.Version != 1 || contract.EngineCommit != expectedCommit || contract.ExecutorRevision != expectedCommit || contract.StagerRevision != expectedCommit ||
+		!benchmarkImmutableImageRE.MatchString(contract.ExecutorImage) || !benchmarkImmutableImageRE.MatchString(contract.StagerImage) ||
+		contract.ExecutorUser != "65532:65532" || contract.StagerUser != "65532:65532" || contract.OpenCodeVersion != "1.18.2" ||
+		contract.ImageTag == "" || strings.ContainsAny(contract.ImageTag, " \t\r\n") || !benchmarkSHA256RE.MatchString(contract.ContractSHA256) ||
+		!strings.Contains(contract.ExecutorVersion, "commit="+expectedCommit) || !strings.Contains(contract.StagerVersion, "commit="+expectedCommit) ||
+		!strings.Contains(contract.ExecutorVersion, "image="+contract.ImageTag) || !strings.Contains(contract.StagerVersion, "image="+contract.ImageTag) {
+		t.Fatal("analysis image contract identity is invalid")
+	}
+	payload := map[string]any{
+		"version": contract.Version, "engine_commit": contract.EngineCommit, "image_tag": contract.ImageTag,
+		"executor_image": contract.ExecutorImage, "stager_image": contract.StagerImage,
+		"executor_revision": contract.ExecutorRevision, "stager_revision": contract.StagerRevision,
+		"executor_user": contract.ExecutorUser, "stager_user": contract.StagerUser,
+		"executor_version": contract.ExecutorVersion, "stager_version": contract.StagerVersion,
+		"opencode_version": contract.OpenCodeVersion,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil || sha256Hex(encoded) != contract.ContractSHA256 {
+		t.Fatal("analysis image contract hash changed")
+	}
+	return contract
 }
 
 func writeAgentSandboxAnalyzerPrepared(t *testing.T, path string, prepared agentSandboxAnalyzerPrepared) {
@@ -841,6 +985,21 @@ func writeAgentSandboxAnalyzerPrepared(t *testing.T, path string, prepared agent
 
 func writeAgentSandboxAnalyzerBenchmarkJSONL(t *testing.T, path string, record agentSandboxAnalyzerBenchmarkRecord) {
 	t.Helper()
+	if record.Version != agentSandboxAnalyzerBenchmarkRecordVersion || !benchmarkImmutableImageRE.MatchString(record.ExecutorImage) || !benchmarkImmutableImageRE.MatchString(record.StagerImage) {
+		t.Fatal("Agent Sandbox analyzer runtime image identity is invalid")
+	}
+	if record.ExecutorAsterRevision != record.EngineCommit || record.StagerAsterRevision != record.EngineCommit || record.ExpectedOpenCodeVersion == "" {
+		t.Fatal("Agent Sandbox analyzer embedded runtime identity is invalid")
+	}
+	if !benchmarkSHA256RE.MatchString(record.ImageContractSHA256) {
+		t.Fatal("Agent Sandbox analyzer image contract identity is invalid")
+	}
+	if record.RequestShapeAvailable && record.OpenCodeVersion != record.ExpectedOpenCodeVersion {
+		t.Fatal("Agent Sandbox analyzer OpenCode version differs from the frozen image identity")
+	}
+	if !benchmarkSHA256RE.MatchString(record.ProviderConfigSHA256) || validateBenchmarkPricingIdentity(record.Pricing) != nil {
+		t.Fatal("Agent Sandbox analyzer provider or pricing identity is invalid")
+	}
 	if err := os.MkdirAll(filepath.Dir(filepath.Clean(path)), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -916,7 +1075,7 @@ func TestAgentSandboxAnalyzerExecutionRejectsChangedSourceModePolicy(t *testing.
 	if err != nil || policy != agentanalysis.WorkspaceSourceModePreserve {
 		t.Fatalf("policy=%q err=%v", policy, err)
 	}
-	sealed := agentSandboxAnalyzerPrepared{Version: 5, EvidenceMode: benchmarkEvidenceModeArtifactOnly, SourceModePolicy: string(policy)}
+	sealed := agentSandboxAnalyzerPrepared{Version: 8, EvidenceMode: benchmarkEvidenceModeArtifactOnly, LocalSourceModePolicy: string(policy), SourceModePolicy: string(policy)}
 	run("config", "--local", "core.filemode", "false")
 	if _, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), root, revision, &sealed); agentanalysis.SourceIntegrityCategory(err) != agentanalysis.SourceModePolicyChanged {
 		t.Fatalf("error=%v category=%q", err, agentanalysis.SourceIntegrityCategory(err))
@@ -1061,7 +1220,7 @@ func TestAgentSandboxAnalyzerRecordRetainsFailureUsage(t *testing.T) {
 		{name: "timeout", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{TerminalState: engineruntime.TerminalTimedOut, Usage: usage}}, err: context.DeadlineExceeded, wantStatus: "timeout"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			record := agentSandboxAnalyzerRecordForResult(cfg, prepared, 1, "execution", "runtime", test.result, time.Second, test.err)
+			record := agentSandboxAnalyzerRecordForResult(cfg, prepared, 1, "execution", "runtime", "registry.example.test/executor@sha256:"+strings.Repeat("a", 64), "registry.example.test/stager@sha256:"+strings.Repeat("b", 64), test.result, time.Second, test.err)
 			if record.AnalysisValid || record.Status != test.wantStatus || record.ModelRequests != 3 || record.InputTokens != 100 || record.CachedInputTokens != 20 || record.OutputTokens != 40 || record.CostUSD != "0.42" || !record.TokenUsageAvailable || !record.CostAvailable || record.UsageStatus != agentanalysis.WorkspaceTelemetryAvailable {
 				t.Fatalf("record = %+v", record)
 			}
@@ -1152,5 +1311,36 @@ func TestVerifyAgentSandboxAnalyzerSourceExpectations(t *testing.T) {
 	}
 	if err := verifyAgentSandboxAnalyzerSourceExpectations(root, []string{"missing.go"}); err == nil {
 		t.Fatal("missing source expectation was accepted")
+	}
+}
+
+func TestReadAgentSandboxAnalyzerImageContract(t *testing.T) {
+	commit := strings.Repeat("a", 40)
+	payload := map[string]any{
+		"version": 1, "engine_commit": commit, "image_tag": "sha-" + commit,
+		"executor_image":    "registry.example.test/executor@sha256:" + strings.Repeat("b", 64),
+		"stager_image":      "registry.example.test/stager@sha256:" + strings.Repeat("c", 64),
+		"executor_revision": commit, "stager_revision": commit,
+		"executor_user": "65532:65532", "stager_user": "65532:65532",
+		"executor_version": "analysisexecutor version=eval commit=" + commit + " image=sha-" + commit + " go=go1.25.12",
+		"stager_version":   "analysisstager version=eval commit=" + commit + " image=sha-" + commit + " go=go1.25.12",
+		"opencode_version": "1.18.2",
+	}
+	canonical, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload["contract_sha256"] = sha256Hex(canonical)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "image-contract.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	contract := readAgentSandboxAnalyzerImageContract(t, path, commit)
+	if contract.ContractSHA256 != payload["contract_sha256"] || contract.OpenCodeVersion != "1.18.2" {
+		t.Fatalf("contract=%+v", contract)
 	}
 }

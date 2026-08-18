@@ -24,6 +24,9 @@ metadata:
     {{- include "aster.labels" . | nindent 4 }}
     app.kubernetes.io/component: agent-sandbox-analysis-shadow
 rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "watch", "delete"]
   - apiGroups: ["agents.x-k8s.io"]
     resources: ["sandboxes"]
     verbs: ["create", "get", "list", "watch", "delete"]
@@ -64,4 +67,3 @@ metadata:
 automountServiceAccountToken: false
 {{- end }}
 {{- end }}
-

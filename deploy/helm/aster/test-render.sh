@@ -428,10 +428,17 @@ expect_fail agent-sandbox-command-agent 'must not invoke a coding agent or execu
 
 cat > "$tmp/analysis-shadow.yaml" <<'VALUES'
 mode: cron
+fetcher:
+  resources:
+    requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 3Gi}
+    limits: {cpu: "1", memory: 1Gi, ephemeral-storage: 3Gi}
 ai:
   enabled: true
-  endpoint: https://model.example.test/v1/chat/completions
+  endpoint: https://api.githubcopilot.com/chat/completions
   model: fixture-model
+  reasoningEffort: high
+  contextWindowTokens: 200000
+  maxOutputTokens: 8192
   token: test-token
 agentSandbox:
   analysisShadow:
@@ -442,50 +449,77 @@ agentSandbox:
       repository: local/shadow-executor
       digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
       pullPolicy: IfNotPresent
+    stagerImage:
+      repository: local/shadow-stager
+      digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      pullPolicy: IfNotPresent
+    dashboardImage:
+      repository: local/remote-fixer
+      tag: sha-1234567
+      pullPolicy: IfNotPresent
+    input:
+      existingClaim: shadow-input
+      localRoot: /analysis-shadow-input
+      localSizeLimit: 3Gi
     workloadServiceAccount:
       create: true
       name: shadow-workload
-    agentVersion: v1
     modelProvider:
       credentialMode: direct
       api: chat_completions
       endpoint: https://api.githubcopilot.com/chat/completions
       model: fixture-model
+      reasoningEffort: high
+      auth:
+        type: bearer
+        existingSecret: shadow-provider
+        tokenKey: AI_TOKEN
+      publicCAPrivateDNS: false
     timeout: 10m
-    retries: 1
-    outputLimitBytes: 65536
+    outputLimitBytes: 262144
     maxPerRun: 2
-    maxTurns: 20
+    maxSteps: 20
+    modelContextTokens: 200000
+    modelOutputTokens: 8192
+    requireSourceEvidence: true
     pollInterval: 250ms
     ledger:
       existingClaim: shadow-ledger
-      mountPath: /private/analysis-shadow
+      mountPath: /private/analysis-shadow-ledger
     networkPolicy:
-      mode: kubernetes
+      mode: cilium
       enabled: true
-      gatewayNamespaceSelector: {kubernetes.io/metadata.name: platform}
-      gatewayPodSelector: {app: model-gateway}
+      gatewayNamespaceSelector: {}
+      gatewayPodSelector: {}
       gatewayPort: 443
+      gatewayTargetPort: null
+      stagingFQDNs: [github.com, api.github.com, storage.googleapis.com]
       dnsNamespaceSelector: {kubernetes.io/metadata.name: kube-system}
       dnsPodSelector: {k8s-app: kube-dns}
+    quota:
+      enabled: true
     resources:
-      requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
-      limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 256Mi}
+      requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 3Gi}
+      limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 3Gi}
 VALUES
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/analysis-shadow.yaml" > "$tmp/analysis-shadow-render.yaml"
 for expected in \
   '-agent-analysis-shadow' \
-  '-agent-analysis-shadow-agent-version=v1' \
-  '-agent-analysis-shadow-ledger=/private/analysis-shadow/analysis_shadow.json' \
-  '-agent-analysis-shadow-max-turns=20' \
+  '-ai-max-output-tokens=8192' \
+  '-agent-analysis-shadow-ledger=/private/analysis-shadow-ledger/analysis_shadow.json' \
+  '-agent-analysis-shadow-input-root=/analysis-shadow-input' \
+  '-agent-analysis-shadow-max-steps=20' \
+  '-agent-analysis-shadow-model-context-tokens=200000' \
   '-agent-analysis-shadow-provider-endpoint=https://api.githubcopilot.com/chat/completions' \
-  'name: AGENT_SANDBOX_ANALYSIS_SHADOW_NAMESPACE' \
-  'value: "analysis-shadow-eval"' \
+  'name: AGENT_SANDBOX_ANALYSIS_SHADOW_STAGER_IMAGE' \
   'name: agent-analysis-shadow-ledger' \
   'claimName: shadow-ledger' \
+  'kind: ValidatingAdmissionPolicy' \
+  'kind: ResourceQuota' \
   'agent-sandbox-analysis-shadow'; do
   grep -Fq -- "$expected" "$tmp/analysis-shadow-render.yaml"
 done
+grep -Fq 'image: local/remote-fixer:sha-1234567' "$tmp/analysis-shadow-render.yaml"
 grep -Fq "serviceAccountName: $scheduled_client" "$tmp/analysis-shadow-render.yaml"
 grep -Fq 'automountServiceAccountToken: true' "$tmp/analysis-shadow-render.yaml"
 if grep -Fq "$fix_client" "$tmp/analysis-shadow-render.yaml"; then
@@ -568,6 +602,10 @@ agentSandbox:
       repository: local/analyzer
       digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
       pullPolicy: IfNotPresent
+    stagerImage:
+      repository: local/analyzer-stager
+      digest: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      pullPolicy: IfNotPresent
     input:
       existingClaim: analyzer-input
     clientServiceAccount:
@@ -600,14 +638,14 @@ agentSandbox:
     quota:
       enabled: true
     resources:
-      requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 2Gi}
-      limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 2Gi}
+      requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 3Gi}
+      limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 3Gi}
 VALUES
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/analyzer.yaml" > "$tmp/analyzer-render.yaml"
 grep -Fq 'agent-sandbox-analyzer' "$tmp/analyzer-render.yaml"
 grep -Fq 'kind: ResourceQuota' "$tmp/analyzer-render.yaml"
 grep -Fq 'analyzer-input' "$tmp/analyzer-render.yaml"
-expect_fail analyzer-with-shadow 'agentSandbox.analyzer cannot run with agentSandbox.analysisShadow' \
+expect_fail analyzer-with-shadow 'agentSandbox.analysisShadow cannot run with agentSandbox.analyzer' \
   -f "$tmp/analyzer.yaml" -f "$tmp/analysis-shadow.yaml"
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \

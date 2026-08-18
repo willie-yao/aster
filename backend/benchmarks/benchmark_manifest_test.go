@@ -564,6 +564,7 @@ type benchmarkJSONLResult struct {
 	ModelLabel                string                      `json:"model_label"`
 	Arm                       string                      `json:"arm"`
 	EngineCommit              string                      `json:"engine_commit"`
+	BenchmarkManifestSHA256   string                      `json:"benchmark_manifest_sha256"`
 	FixtureSHA256             string                      `json:"fixture_sha256,omitempty"`
 	BaselineConsumerCommit    string                      `json:"baseline_consumer_commit,omitempty"`
 	BaselinePromptSHA256      string                      `json:"baseline_prompt_sha256,omitempty"`
@@ -571,10 +572,15 @@ type benchmarkJSONLResult struct {
 	EffectivePromptSHA256     string                      `json:"effective_prompt_sha256"`
 	SkillSetHash              string                      `json:"skill_set_hash"`
 	EffectiveInputSHA256      string                      `json:"effective_input_sha256"`
+	ComparisonInputSHA256     string                      `json:"comparison_input_sha256"`
 	APIMode                   string                      `json:"api_mode"`
 	ReasoningEffort           string                      `json:"reasoning_effort,omitempty"`
 	ProviderPath              string                      `json:"provider_path,omitempty"`
+	ProviderConfigSHA256      string                      `json:"provider_config_sha256"`
 	TransportID               string                      `json:"transport_id,omitempty"`
+	ModelContextTokens        int                         `json:"model_context_tokens"`
+	ModelOutputTokens         int                         `json:"model_output_tokens"`
+	Pricing                   benchmarkPricingIdentity    `json:"pricing"`
 	EvidenceTelemetryVersion  int                         `json:"evidence_telemetry_version"`
 	EvidenceCondition         string                      `json:"evidence_condition"`
 	EvidenceMode              string                      `json:"evidence_mode"`
@@ -737,17 +743,20 @@ func benchmarkSourceExpectationHits(paths, relevantFiles []string, links map[str
 }
 
 type benchmarkJSONLTrace struct {
-	ModelRequests     int            `json:"model_requests"`
-	ProviderAttempts  int            `json:"provider_attempts"`
-	ModelFailures     int            `json:"model_failures"`
-	ToolCalls         int            `json:"tool_calls"`
-	ToolFailures      int            `json:"tool_failures"`
-	InputTokens       int            `json:"input_tokens"`
-	CachedInputTokens int            `json:"cached_input_tokens"`
-	OutputTokens      int            `json:"output_tokens"`
-	Finalize          map[string]int `json:"finalize"`
-	FinalizeRecovery  map[string]int `json:"finalize_recovery"`
-	Critique          map[string]int `json:"critique"`
+	ModelRequests         int            `json:"model_requests"`
+	ReportedRequests      int            `json:"reported_requests"`
+	ProviderAttempts      int            `json:"provider_attempts"`
+	ProviderAttemptsKnown bool           `json:"provider_attempts_known"`
+	ModelFailures         int            `json:"model_failures"`
+	ToolCalls             int            `json:"tool_calls"`
+	ToolFailures          int            `json:"tool_failures"`
+	InputTokens           int            `json:"input_tokens"`
+	CachedInputTokens     int            `json:"cached_input_tokens"`
+	OutputTokens          int            `json:"output_tokens"`
+	ReasoningTokens       int            `json:"reasoning_tokens"`
+	Finalize              map[string]int `json:"finalize"`
+	FinalizeRecovery      map[string]int `json:"finalize_recovery"`
+	Critique              map[string]int `json:"critique"`
 }
 
 func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, outcome benchmarkOutcome, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, providerRequestCap int, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification, identity benchmarkRunIdentity, evidenceCoverage benchmarkEvidenceCoverage, stageReport benchmarkEvidenceStageReport) {
@@ -760,6 +769,9 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	}
 	if err := validateBenchmarkRunIdentity(identity); err != nil {
 		t.Fatalf("benchmark run identity: %v", err)
+	}
+	if identity.ModelContextTokens != 0 && (!benchmarkSHA256RE.MatchString(identity.ProviderConfigSHA256) || validateBenchmarkPricingIdentity(identity.Pricing) != nil) {
+		t.Fatal("benchmark provider or pricing identity is incomplete")
 	}
 	if err := validateBenchmarkEvidenceStageReport(bc, stageReport); err != nil {
 		t.Fatalf("benchmark evidence stages: %v", err)
@@ -777,11 +789,12 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	}
 	result := benchmarkJSONLResult{
 		CaseID: bc.name, StableID: bc.stableID, Repetition: repetition, ModelLabel: label,
-		Arm: identity.Arm, EngineCommit: identity.EngineCommit, FixtureSHA256: identity.FixtureSHA256,
+		Arm: identity.Arm, EngineCommit: identity.EngineCommit, BenchmarkManifestSHA256: identity.BenchmarkManifestSHA256, FixtureSHA256: identity.FixtureSHA256,
 		BaselineConsumerCommit: identity.BaselineConsumerCommit, BaselinePromptSHA256: identity.BaselinePromptSHA256,
 		ProjectSHA256: identity.ProjectSHA256, EffectivePromptSHA256: identity.EffectivePromptSHA256,
-		SkillSetHash: identity.SkillSetHash, EffectiveInputSHA256: identity.EffectiveInputSHA256,
-		APIMode: identity.APIMode, ReasoningEffort: string(identity.ReasoningEffort), ProviderPath: identity.ProviderPath, TransportID: identity.TransportID,
+		SkillSetHash: identity.SkillSetHash, EffectiveInputSHA256: identity.EffectiveInputSHA256, ComparisonInputSHA256: identity.ComparisonInputSHA256,
+		APIMode: identity.APIMode, ReasoningEffort: string(identity.ReasoningEffort), ProviderPath: identity.ProviderPath, ProviderConfigSHA256: identity.ProviderConfigSHA256, TransportID: identity.TransportID,
+		ModelContextTokens: identity.ModelContextTokens, ModelOutputTokens: identity.ModelOutputTokens, Pricing: identity.Pricing,
 		EvidenceTelemetryVersion: 2, EvidenceCondition: stageReport.Condition, EvidenceMode: bc.evidenceMode,
 		SourceExpectationSHA256: benchmarkSourceExpectationSHA256(bc), SourceExpectationPaths: append([]string{}, bc.sourcePaths...), SourceExpectationTotal: len(bc.sourcePaths), SourceSignalTotal: len(bc.sourceSignals),
 		SourceEvidenceToolCalls: benchmarkSourceEvidenceToolCalls(toolUsage), FrozenEvidenceSHA256: stageReport.FrozenSHA256,
@@ -797,8 +810,11 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		SemanticJudgeOutcomes:  append([]string{}, traceSummary.semanticJudgeOutcomes...),
 		SemanticFindingClasses: append([]string{}, traceSummary.semanticFindingClasses...),
 		ProviderRequestCap:     providerRequestCap, TraceTruncated: traceSummary.truncated, CacheGeneration: cacheGeneration, CacheVerification: cacheVerification,
-		CritiqueCachePolicy:     string(critiquePolicy),
-		Trace:                   benchmarkJSONLTrace{Finalize: map[string]int{}, FinalizeRecovery: map[string]int{}, Critique: map[string]int{}},
+		CritiqueCachePolicy: string(critiquePolicy),
+		Trace: benchmarkJSONLTrace{
+			ProviderAttemptsKnown: true,
+			Finalize:              map[string]int{}, FinalizeRecovery: map[string]int{}, Critique: map[string]int{},
+		},
 		HumanScoreRubricVersion: benchmarkHumanScoreRubricVersion, HumanScoreMax: benchmarkHumanScoreMax,
 		HumanScoreDimensions: append([]string(nil), benchmarkHumanScoreDimensions...),
 	}
@@ -862,13 +878,22 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 			switch event.Kind {
 			case "model_request":
 				result.Trace.ModelRequests++
-				result.Trace.ProviderAttempts += max(event.Attempts, 1)
+				if event.Attempts > 0 {
+					result.Trace.ProviderAttempts += event.Attempts
+				} else {
+					result.Trace.ProviderAttempts++
+					result.Trace.ProviderAttemptsKnown = false
+				}
 				if event.Outcome == "error" {
 					result.Trace.ModelFailures++
+				}
+				if event.UsageReported {
+					result.Trace.ReportedRequests++
 				}
 				result.Trace.InputTokens += event.InputTokens
 				result.Trace.CachedInputTokens += event.CachedInputTokens
 				result.Trace.OutputTokens += event.OutputTokens
+				result.Trace.ReasoningTokens += event.ReasoningTokens
 			case "tool_call":
 				result.Trace.ToolCalls++
 				if event.Outcome == "error" {
@@ -1228,5 +1253,47 @@ func TestBenchmarkSourceExpectationSHA256(t *testing.T) {
 	}
 	if !benchmarkSHA256RE.MatchString(want) {
 		t.Fatalf("source expectation hash = %q", want)
+	}
+}
+
+func TestCAPZAgentSandboxEvaluationManifest(t *testing.T) {
+	cases, err := loadBenchmarkManifest("testdata/benchmarks/capz-agent-sandbox-eval.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCommits := map[string]string{
+		"ccm-dualstack-control-plane-routetable":      "1cefef491698494b19d2fac9895e37c94cab5d4e",
+		"flatcar-worker-dns-providerid":               "d8eb84399896fc136eb7aa703bfdeb3686d1bad1",
+		"apiversion-upgrade-clusterctl-aso-ratelimit": "7d3a0e1020ad88b7bd095fdf2c3802984af08002",
+	}
+	wantSources := map[string]string{
+		"ccm-dualstack-control-plane-routetable":      "c4a02ed36c22af00a2b228e6a9f02d1f2b2a42e0",
+		"flatcar-worker-dns-providerid":               "d8eb84399896fc136eb7aa703bfdeb3686d1bad1",
+		"apiversion-upgrade-clusterctl-aso-ratelimit": "7d3a0e1020ad88b7bd095fdf2c3802984af08002",
+	}
+	wantEvidenceModes := map[string]string{
+		"ccm-dualstack-control-plane-routetable":      benchmarkEvidenceModeArtifactAndSource,
+		"flatcar-worker-dns-providerid":               benchmarkEvidenceModeArtifactOnly,
+		"apiversion-upgrade-clusterctl-aso-ratelimit": benchmarkEvidenceModeArtifactOnly,
+	}
+	if len(cases) != len(wantCommits) {
+		t.Fatalf("cases = %d", len(cases))
+	}
+	for _, bc := range cases {
+		if bc.consumerCommit != "cabcef8e03b510467dac52682fa7e9b0f3e6692f" || bc.projectSHA256 != "1fc01fa1d2590c26b66a98faadb9daff567a4d325b6af3a14c765ed9f72d2e24" || bc.promptSHA256 != "817cea07bd6b4621ac99b362af20f899caeeb336e86c355fd6870792c6afa9b5" {
+			t.Fatalf("case %s consumer identity is invalid", bc.name)
+		}
+		build := models.BuildInfo{Commit: bc.commit, RepoVersion: bc.repoVersion, RepoRefs: maps.Clone(bc.repoRefs)}
+		source, ok := ai.ResolveBuildSource(build, bc.sourceRepo[0], bc.sourceRepo[1])
+		if bc.commit != wantCommits[bc.name] || bc.repoVersion != bc.commit || !ok || source.Revision != wantSources[bc.name] || bc.evidenceMode != wantEvidenceModes[bc.name] || bc.referenceDiagnosis == "" || bc.expectedTransient == nil {
+			t.Fatalf("case %s identity = %+v source=%+v", bc.name, bc, source)
+		}
+		if bc.evidenceMode == benchmarkEvidenceModeArtifactAndSource {
+			if !slices.Equal(bc.sourcePaths, []string{"api/v1beta1/azurecluster_default.go", "azure/scope/cluster.go"}) || len(bc.sourceSignals) != 2 {
+				t.Fatalf("case %s source expectations = paths %v signals %+v", bc.name, bc.sourcePaths, bc.sourceSignals)
+			}
+		} else if len(bc.sourcePaths) != 0 || len(bc.sourceSignals) != 0 {
+			t.Fatalf("case %s artifact-only source expectations = paths %v signals %+v", bc.name, bc.sourcePaths, bc.sourceSignals)
+		}
 	}
 }

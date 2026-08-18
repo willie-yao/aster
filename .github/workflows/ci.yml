@@ -233,11 +233,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build executor
-        run: docker build --target agent-sandbox-analysis-executor -t aster/agent-sandbox-analysis-executor:ci .
+        env:
+          SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: docker build --target agent-sandbox-analysis-executor --build-arg VERSION=ci --build-arg COMMIT="$SOURCE_REVISION" --build-arg IMAGE_TAG="sha-${SOURCE_REVISION}" -t aster/agent-sandbox-analysis-executor:ci .
       - name: Build stager
-        run: docker build --target agent-sandbox-analysis-stager -t aster/agent-sandbox-analysis-stager:ci .
+        env:
+          SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: docker build --target agent-sandbox-analysis-stager --build-arg VERSION=ci --build-arg COMMIT="$SOURCE_REVISION" --build-arg IMAGE_TAG="sha-${SOURCE_REVISION}" -t aster/agent-sandbox-analysis-stager:ci .
       - name: Test credential-free runtimes
-        run: hack/test-agent-sandbox-analysis-images.sh aster/agent-sandbox-analysis-executor:ci aster/agent-sandbox-analysis-stager:ci
+        env:
+          SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: hack/test-agent-sandbox-analysis-images.sh aster/agent-sandbox-analysis-executor:ci aster/agent-sandbox-analysis-stager:ci "$SOURCE_REVISION" "sha-${SOURCE_REVISION}"
 
   agent-sandbox-critic-executor-image:
     needs: changes

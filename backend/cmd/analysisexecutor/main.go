@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/agentanalysis"
@@ -17,7 +18,17 @@ import (
 
 const requestEnv = "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64"
 
+var (
+	version  = "dev"
+	commit   = "dev"
+	imageTag = "dev"
+)
+
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Printf("analysisexecutor version=%s commit=%s image=%s go=%s\n", version, commit, imageTag, runtime.Version())
+		return
+	}
 	request, err := readRequest()
 	if err != nil {
 		emit(agentanalysis.WorkspaceExecutionResult{
@@ -60,7 +71,7 @@ func readRequest() (agentanalysis.WorkspaceExecutionRequest, error) {
 func emit(result agentanalysis.WorkspaceExecutionResult) {
 	data, err := json.Marshal(result)
 	if err != nil {
-		fmt.Println(`{"version":1,"contract_version":"agent-analysis-workspace-v7","terminal_state":"failed","failure_reason":"encode execution result","usage":{"available":false}}`)
+		fmt.Println(`{"version":1,"contract_version":"agent-analysis-workspace-v8","terminal_state":"failed","failure_reason":"encode execution result","usage":{"available":false}}`)
 		return
 	}
 	fmt.Println(string(data))

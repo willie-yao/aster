@@ -1,8 +1,11 @@
 package agentanalysis
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,14 +73,13 @@ func TestWorkspaceStageRequestBindsManifest(t *testing.T) {
 	for name, mutate := range map[string]func(*WorkspaceStageRequest){
 		"manifest":           func(value *WorkspaceStageRequest) { value.ManifestHash = strings.Repeat("0", 64) },
 		"source":             func(value *WorkspaceStageRequest) { value.Source.Revision = strings.Repeat("1", 40) },
-		"artifacts":          func(value *WorkspaceStageRequest) { value.Artifacts[0].SHA256 = strings.Repeat("2", 64) },
+		"artifacts":          func(value *WorkspaceStageRequest) { value.ArtifactManifestSHA256 = strings.Repeat("2", 64) },
 		"build prefix":       func(value *WorkspaceStageRequest) { value.BuildPrefix = "other/" },
 		"input mode policy":  func(value *WorkspaceStageRequest) { value.InputSourceModePolicy = WorkspaceSourceModeIgnoreExecutable },
 		"output mode policy": func(value *WorkspaceStageRequest) { value.OutputSourceModePolicy = WorkspaceSourceModeIgnoreExecutable },
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := stage
-			candidate.Artifacts = slices.Clone(stage.Artifacts)
 			mutate(&candidate)
 			if err := ValidateWorkspaceStageRequest(candidate, manifest); err == nil {
 				t.Fatal("tampered stage request was accepted")
@@ -185,7 +187,7 @@ func TestWorkspaceExecutionRequestBindsPromptAndRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if execution.Version != 4 {
+	if execution.Version != WorkspaceRequestVersion {
 		t.Fatalf("workspace request version = %d", execution.Version)
 	}
 	encoded, err := json.Marshal(execution)
@@ -256,7 +258,7 @@ func TestWorkspaceExecutionRequestAcceptsResponsesWithoutVersionChange(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if responses.Version != 4 || responses.Hash == chat.Hash || responses.ModelProvider.API != "responses" {
+	if responses.Version != WorkspaceRequestVersion || responses.Hash == chat.Hash || responses.ModelProvider.API != "responses" {
 		t.Fatalf("chat=%+v responses=%+v", chat.ModelProvider, responses.ModelProvider)
 	}
 	highProvider := testResponsesProvider("https://api.openai.com/v1/responses", "test-model")
@@ -290,7 +292,7 @@ func TestWorkspaceExecutionRequestSourceEvidenceFloorIsHashed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if artifactOnly.RequireSourceEvidence || !sourceRequired.RequireSourceEvidence || artifactOnly.Hash == sourceRequired.Hash || sourceRequired.Version != 4 {
+	if artifactOnly.RequireSourceEvidence || !sourceRequired.RequireSourceEvidence || artifactOnly.Hash == sourceRequired.Hash || sourceRequired.Version != WorkspaceRequestVersion {
 		t.Fatalf("artifactOnly=%+v sourceRequired=%+v", artifactOnly, sourceRequired)
 	}
 	if _, err := NewWorkspaceExecutionRequestWithSourceEvidence(manifest, WorkspaceSourceModePreserve, true, provider, time.Minute, 4, 200000, 8192, 128<<10); err == nil {
@@ -719,5 +721,42 @@ func TestWorkspaceGitEnvironmentExcludesProviderCredential(t *testing.T) {
 		if strings.HasPrefix(value, "PROW_AI_MODEL_PROVIDER_TOKEN=") {
 			t.Fatal("workspace verifier inherited the provider credential")
 		}
+	}
+}
+
+func TestWorkspaceLargeArtifactManifestUsesCompactStageRequest(t *testing.T) {
+	_, _, request, source := workspaceTestInputs(t)
+	files := make([]WorkspaceFile, 0, maxWorkspaceFiles)
+	for index := 0; index < maxWorkspaceFiles; index++ {
+		files = append(files, WorkspaceFile{Path: fmt.Sprintf("artifacts/logs/%04d.log", index), Size: 1024, SHA256: strings.Repeat("a", 64)})
+	}
+	manifest, err := NewWorkspaceManifest(request, source, "Inspect this project.", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution, err := NewWorkspaceExecutionRequest(manifest, testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "model"), time.Minute, 20, 250000, 16384, 256<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, err := NewWorkspaceStageRequest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishStage, err := NewWorkspaceRemoteStageRequest(manifest, "https://storage.googleapis.com/bucket/build", WorkspaceSourceModePreserve)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publish, err := NewWorkspacePublishRequest(publishStage, files, "analysis-large-fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	executionJSON, _ := json.Marshal(execution)
+	stageJSON, _ := json.Marshal(stage)
+	publishJSON, _ := json.Marshal(publish)
+	if len(executionJSON) > maxWorkspaceRequestBytes || len(stageJSON) > maxWorkspaceStageBytes || len(publishJSON) > WorkspacePublishRawMaxBytes || base64.StdEncoding.EncodedLen(len(publishJSON)) > WorkspacePublishEncodedMaxBytes || bytes.Contains(stageJSON, []byte("artifacts/logs/0001.log")) {
+		t.Fatalf("encoded sizes execution=%d stage=%d publish=%d", len(executionJSON), len(stageJSON), len(publishJSON))
+	}
+	if stage.ArtifactFiles != len(files) || stage.ArtifactBytes != int64(len(files))*1024 || stage.ArtifactManifestSHA256 == "" {
+		t.Fatalf("stage=%+v", stage)
 	}
 }

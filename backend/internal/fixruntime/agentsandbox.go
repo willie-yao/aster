@@ -85,6 +85,22 @@ func (r *AgentSandboxRuntime) Namespace() string {
 	return r.opts.Namespace
 }
 
+// ExecutorImage returns the immutable executor image configured for this runtime.
+func (r *AgentSandboxRuntime) ExecutorImage() string {
+	if r == nil {
+		return ""
+	}
+	return normalizeAgentSandboxOptions(r.opts).Image
+}
+
+// StagerImage returns the immutable stager image configured for this runtime.
+func (r *AgentSandboxRuntime) StagerImage() string {
+	if r == nil {
+		return ""
+	}
+	return normalizeAgentSandboxOptions(r.opts).StagerImage
+}
+
 func (r *AgentSandboxRuntime) RuntimeIdentity() string {
 	if r == nil {
 		return ""
@@ -890,6 +906,9 @@ func (r *AgentSandboxRuntime) sandboxObjectForSpec(name string, spec agentsandbo
 	if spec.PreparedWorkspace != nil {
 		annotations[agentSandboxPreparedAnnotation] = spec.PreparedWorkspace.ManifestHash
 		annotations[agentSandboxPreparedIdentityAnnotation] = spec.PreparedWorkspace.IdentityHash
+	} else if spec.StagedWorkspace != nil {
+		annotations[agentSandboxPreparedAnnotation] = spec.StagedWorkspace.ManifestHash
+		annotations[agentSandboxPreparedIdentityAnnotation] = spec.StagedWorkspace.IdentityHash
 	}
 	return map[string]any{
 		"apiVersion": "agents.x-k8s.io/v1beta1",
@@ -1046,6 +1065,9 @@ func agentSandboxWorkloadHash(spec agentsandbox.Spec, opts AgentSandboxOptions) 
 	if spec.PreparedWorkspace != nil {
 		preparedHash = spec.PreparedWorkspace.ManifestHash
 		preparedIdentity = spec.PreparedWorkspace.IdentityHash
+	} else if spec.StagedWorkspace != nil {
+		preparedHash = spec.StagedWorkspace.ManifestHash
+		preparedIdentity = spec.StagedWorkspace.IdentityHash
 	}
 	metadata, _ := json.Marshal(struct {
 		Purpose              string `json:"purpose"`

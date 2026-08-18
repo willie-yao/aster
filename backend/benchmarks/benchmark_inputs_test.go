@@ -5,34 +5,51 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/ai/skills"
+	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 )
 
 type benchmarkRunIdentity struct {
-	Arm                    string
-	EngineCommit           string
-	BaselineConsumerCommit string
-	BaselinePromptSHA256   string
-	FixtureSHA256          string
-	ProjectSHA256          string
-	EffectivePromptSHA256  string
-	SkillSetHash           string
-	EffectiveInputSHA256   string
-	EvidenceCondition      string
-	FrozenEvidenceSHA256   string
-	EvidenceStageSHA256    string
-	APIMode                string
-	ReasoningEffort        ai.ReasoningEffort
-	ProviderPath           string
-	TransportID            string
+	Arm                     string
+	EngineCommit            string
+	BenchmarkManifestSHA256 string
+	BaselineConsumerCommit  string
+	BaselinePromptSHA256    string
+	FixtureSHA256           string
+	ProjectSHA256           string
+	EffectivePromptSHA256   string
+	SkillSetHash            string
+	EffectiveInputSHA256    string
+	ComparisonInputSHA256   string
+	EvidenceCondition       string
+	FrozenEvidenceSHA256    string
+	EvidenceStageSHA256     string
+	APIMode                 string
+	ReasoningEffort         ai.ReasoningEffort
+	ProviderPath            string
+	ProviderConfigSHA256    string
+	TransportID             string
+	ModelContextTokens      int
+	ModelOutputTokens       int
+	Pricing                 benchmarkPricingIdentity
+}
+
+type benchmarkPricingIdentity struct {
+	Currency              string `json:"currency"`
+	InputPerMillion       string `json:"input_per_million"`
+	CachedInputPerMillion string `json:"cached_input_per_million"`
+	OutputPerMillion      string `json:"output_per_million"`
+	SHA256                string `json:"sha256"`
 }
 
 type benchmarkInputs struct {
@@ -43,7 +60,7 @@ type benchmarkInputs struct {
 	identity        benchmarkRunIdentity
 }
 
-func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, model string) benchmarkInputs {
+func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, endpoint, model string) benchmarkInputs {
 	t.Helper()
 	variantDir := strings.TrimSpace(os.Getenv("BENCH_VARIANT_DIR"))
 	arm, err := benchmarkArm(variantDir != "")
@@ -75,8 +92,19 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, model string)
 			APIMode:           apiMode,
 			ReasoningEffort:   reasoningEffort,
 			ProviderPath:      providerPath,
-			TransportID:       transportID,
+			ProviderConfigSHA256: benchmarkProviderConfigSHA256(
+				apiMode, endpoint, model, reasoningEffort,
+			),
+			TransportID: transportID,
 		},
+	}
+	if resultsEnabled {
+		out.identity.BenchmarkManifestSHA256 = benchmarkManifestIdentity(t)
+		out.identity.ModelContextTokens = benchmarkRequiredInt(t, "BENCH_MODEL_CONTEXT_TOKENS", 8192, 2_000_000)
+		out.identity.ModelOutputTokens = benchmarkRequiredInt(t, "BENCH_MODEL_OUTPUT_TOKENS", 1024, 131072)
+		if out.identity.ModelOutputTokens > out.identity.ModelContextTokens {
+			t.Fatal("BENCH_MODEL_OUTPUT_TOKENS must not exceed BENCH_MODEL_CONTEXT_TOKENS")
+		}
 	}
 	skillProjectDir := t.TempDir()
 	baseDir := strings.TrimSpace(os.Getenv("BENCH_PROJECT_DIR"))
@@ -112,6 +140,10 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, model string)
 		}
 		out.systemPrompt = ai.ComposeSystemPrompt(prompt)
 		out.agentic = cfg.AI.EffectiveAgentic()
+		out.identity.Pricing, err = newBenchmarkPricingIdentity(cfg.AI.EffectiveUsage().Pricing)
+		if err != nil {
+			t.Fatalf("load benchmark pricing identity: %v", err)
+		}
 		configuredCacheGeneration := cfg.AI.CacheGeneration
 		out.cacheGeneration, err = benchmarkCacheGenerationFingerprint(configuredCacheGeneration)
 		if err != nil {
@@ -139,6 +171,9 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, model string)
 		if err != nil {
 			t.Fatalf("benchmark cache generation: %v", err)
 		}
+	}
+	if resultsEnabled && out.identity.Pricing.SHA256 == "" {
+		t.Fatal("BENCH_RESULTS_JSONL requires configured ai.usage.pricing")
 	}
 	projectSkills, _, err := skills.LoadForTools(skillProjectDir, out.agentic.Tools)
 	if err != nil {
@@ -180,14 +215,18 @@ func validateBenchmarkRunIdentity(identity benchmarkRunIdentity) error {
 		return fmt.Errorf("benchmark engine commit is invalid")
 	}
 	for name, value := range map[string]string{
-		"fixture SHA-256":          identity.FixtureSHA256,
-		"baseline prompt SHA-256":  identity.BaselinePromptSHA256,
-		"project SHA-256":          identity.ProjectSHA256,
-		"effective prompt SHA-256": identity.EffectivePromptSHA256,
-		"skill-set hash":           identity.SkillSetHash,
-		"effective input SHA-256":  identity.EffectiveInputSHA256,
-		"frozen evidence SHA-256":  identity.FrozenEvidenceSHA256,
-		"evidence stage SHA-256":   identity.EvidenceStageSHA256,
+		"fixture SHA-256":            identity.FixtureSHA256,
+		"benchmark manifest SHA-256": identity.BenchmarkManifestSHA256,
+		"baseline prompt SHA-256":    identity.BaselinePromptSHA256,
+		"project SHA-256":            identity.ProjectSHA256,
+		"effective prompt SHA-256":   identity.EffectivePromptSHA256,
+		"skill-set hash":             identity.SkillSetHash,
+		"effective input SHA-256":    identity.EffectiveInputSHA256,
+		"comparison input SHA-256":   identity.ComparisonInputSHA256,
+		"provider config SHA-256":    identity.ProviderConfigSHA256,
+		"pricing SHA-256":            identity.Pricing.SHA256,
+		"frozen evidence SHA-256":    identity.FrozenEvidenceSHA256,
+		"evidence stage SHA-256":     identity.EvidenceStageSHA256,
 	} {
 		if value != "" && !benchmarkSHA256RE.MatchString(value) {
 			return fmt.Errorf("benchmark %s is invalid", name)
@@ -214,10 +253,44 @@ func validateBenchmarkRunIdentity(identity benchmarkRunIdentity) error {
 	if identity.ProviderPath != "" && (len(identity.ProviderPath) > 160 || strings.ContainsAny(identity.ProviderPath, " \t\r\n")) {
 		return fmt.Errorf("benchmark provider path is invalid")
 	}
+	if identity.ProviderConfigSHA256 != "" && !benchmarkSHA256RE.MatchString(identity.ProviderConfigSHA256) {
+		return fmt.Errorf("benchmark provider config identity is invalid")
+	}
+	if identity.Pricing.SHA256 != "" {
+		if err := validateBenchmarkPricingIdentity(identity.Pricing); err != nil {
+			return err
+		}
+	}
 	if identity.TransportID != "" && (len(identity.TransportID) > 80 || strings.ContainsAny(identity.TransportID, " \t\r\n")) {
 		return fmt.Errorf("benchmark transport id is invalid")
 	}
+	if identity.ModelContextTokens != 0 && (identity.ModelContextTokens < 8192 || identity.ModelContextTokens > 2_000_000 || identity.ModelOutputTokens < 1024 || identity.ModelOutputTokens > identity.ModelContextTokens || identity.ModelOutputTokens > 131072) {
+		return fmt.Errorf("benchmark model limits are invalid")
+	}
 	return nil
+}
+
+func benchmarkRequiredInt(t *testing.T, name string, minimum, maximum int) int {
+	t.Helper()
+	raw := strings.TrimSpace(os.Getenv(name))
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < minimum || value > maximum {
+		t.Fatalf("%s must be between %d and %d", name, minimum, maximum)
+	}
+	return value
+}
+
+func benchmarkManifestIdentity(t *testing.T) string {
+	t.Helper()
+	path := strings.TrimSpace(os.Getenv("BENCH_MANIFEST"))
+	if path == "" {
+		t.Fatal("BENCH_MANIFEST is required for benchmark identity")
+	}
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		t.Fatalf("read BENCH_MANIFEST: %v", err)
+	}
+	return sha256Hex(data)
 }
 
 func benchmarkArm(variant bool) (string, error) {
@@ -255,30 +328,145 @@ func validateBenchmarkVariantDir(baseDir, variantDir string) error {
 	return nil
 }
 
-func benchmarkEffectiveInputSHA256(identity benchmarkRunIdentity, agentic project.Agentic, cacheGeneration string) string {
+func benchmarkProviderConfigSHA256(apiMode, endpoint, model string, reasoningEffort ai.ReasoningEffort) string {
 	data, err := json.Marshal(struct {
-		ProjectSHA256         string             `json:"project_sha256,omitempty"`
-		BaselinePromptSHA256  string             `json:"baseline_prompt_sha256,omitempty"`
-		EffectivePromptSHA256 string             `json:"effective_prompt_sha256"`
-		SkillSetHash          string             `json:"skill_set_hash"`
-		APIMode               string             `json:"api_mode"`
-		ReasoningEffort       ai.ReasoningEffort `json:"reasoning_effort,omitempty"`
-		ProviderPath          string             `json:"provider_path,omitempty"`
-		TransportID           string             `json:"transport_id,omitempty"`
-		EvidenceCondition     string             `json:"evidence_condition"`
-		FrozenEvidenceSHA256  string             `json:"frozen_evidence_sha256,omitempty"`
-		EvidenceStageSHA256   string             `json:"evidence_stage_sha256,omitempty"`
-		CacheGeneration       string             `json:"cache_generation,omitempty"`
-		Agentic               project.Agentic    `json:"agentic"`
+		API             string             `json:"api"`
+		Endpoint        string             `json:"endpoint"`
+		Model           string             `json:"model"`
+		ReasoningEffort ai.ReasoningEffort `json:"reasoning_effort,omitempty"`
 	}{
-		ProjectSHA256: identity.ProjectSHA256, BaselinePromptSHA256: identity.BaselinePromptSHA256,
+		API: strings.TrimSpace(apiMode), Endpoint: strings.TrimSpace(endpoint), Model: strings.TrimSpace(model), ReasoningEffort: reasoningEffort,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("marshal benchmark provider identity: %v", err))
+	}
+	return sha256Hex(data)
+}
+
+func newBenchmarkPricingIdentity(pricing project.AIUsagePricing) (benchmarkPricingIdentity, error) {
+	identity := benchmarkPricingIdentity{
+		Currency: strings.TrimSpace(pricing.Currency), InputPerMillion: strings.TrimSpace(pricing.InputPerMillion),
+		CachedInputPerMillion: strings.TrimSpace(pricing.CachedInputPerMillion), OutputPerMillion: strings.TrimSpace(pricing.OutputPerMillion),
+	}
+	if identity.Currency == "" && identity.InputPerMillion == "" && identity.CachedInputPerMillion == "" && identity.OutputPerMillion == "" {
+		return benchmarkPricingIdentity{}, nil
+	}
+	if identity.CachedInputPerMillion == "" {
+		identity.CachedInputPerMillion = identity.InputPerMillion
+	}
+	data, err := json.Marshal(map[string]string{
+		"currency": identity.Currency, "input_per_million": identity.InputPerMillion,
+		"cached_input_per_million": identity.CachedInputPerMillion, "output_per_million": identity.OutputPerMillion,
+	})
+	if err != nil {
+		return benchmarkPricingIdentity{}, err
+	}
+	identity.SHA256 = sha256Hex(data)
+	if err := validateBenchmarkPricingIdentity(identity); err != nil {
+		return benchmarkPricingIdentity{}, err
+	}
+	return identity, nil
+}
+
+func validateBenchmarkPricingIdentity(identity benchmarkPricingIdentity) error {
+	if len(identity.Currency) != 3 || identity.Currency != strings.ToUpper(identity.Currency) || identity.InputPerMillion == "" || identity.CachedInputPerMillion == "" || identity.OutputPerMillion == "" || !benchmarkSHA256RE.MatchString(identity.SHA256) {
+		return fmt.Errorf("benchmark pricing identity is invalid")
+	}
+	for _, value := range []string{identity.InputPerMillion, identity.CachedInputPerMillion, identity.OutputPerMillion} {
+		if _, err := strconv.ParseFloat(value, 64); err != nil || strings.HasPrefix(value, "-") || strings.ContainsAny(value, "eE+") {
+			return fmt.Errorf("benchmark pricing rate is invalid")
+		}
+	}
+	data, err := json.Marshal(map[string]string{
+		"currency": identity.Currency, "input_per_million": identity.InputPerMillion,
+		"cached_input_per_million": identity.CachedInputPerMillion, "output_per_million": identity.OutputPerMillion,
+	})
+	if err != nil || sha256Hex(data) != identity.SHA256 {
+		return fmt.Errorf("benchmark pricing identity hash changed")
+	}
+	return nil
+}
+
+func benchmarkEffectiveInputSHA256(identity benchmarkRunIdentity, agentic project.Agentic, cacheGeneration string) string {
+	var pricing *benchmarkPricingIdentity
+	if identity.Pricing.SHA256 != "" {
+		value := identity.Pricing
+		pricing = &value
+	}
+	data, err := json.Marshal(struct {
+		ProjectSHA256           string                    `json:"project_sha256,omitempty"`
+		FixtureSHA256           string                    `json:"fixture_sha256,omitempty"`
+		BenchmarkManifestSHA256 string                    `json:"benchmark_manifest_sha256,omitempty"`
+		BaselinePromptSHA256    string                    `json:"baseline_prompt_sha256,omitempty"`
+		EffectivePromptSHA256   string                    `json:"effective_prompt_sha256"`
+		SkillSetHash            string                    `json:"skill_set_hash"`
+		APIMode                 string                    `json:"api_mode"`
+		ReasoningEffort         ai.ReasoningEffort        `json:"reasoning_effort,omitempty"`
+		ProviderPath            string                    `json:"provider_path,omitempty"`
+		ProviderConfigSHA256    string                    `json:"provider_config_sha256,omitempty"`
+		TransportID             string                    `json:"transport_id,omitempty"`
+		ModelContextTokens      int                       `json:"model_context_tokens,omitempty"`
+		ModelOutputTokens       int                       `json:"model_output_tokens,omitempty"`
+		EvidenceCondition       string                    `json:"evidence_condition"`
+		FrozenEvidenceSHA256    string                    `json:"frozen_evidence_sha256,omitempty"`
+		EvidenceStageSHA256     string                    `json:"evidence_stage_sha256,omitempty"`
+		CacheGeneration         string                    `json:"cache_generation,omitempty"`
+		Agentic                 project.Agentic           `json:"agentic"`
+		Pricing                 *benchmarkPricingIdentity `json:"pricing,omitempty"`
+	}{
+		ProjectSHA256: identity.ProjectSHA256, FixtureSHA256: identity.FixtureSHA256, BenchmarkManifestSHA256: identity.BenchmarkManifestSHA256, BaselinePromptSHA256: identity.BaselinePromptSHA256,
 		EffectivePromptSHA256: identity.EffectivePromptSHA256, SkillSetHash: identity.SkillSetHash,
-		APIMode: identity.APIMode, ReasoningEffort: identity.ReasoningEffort, ProviderPath: identity.ProviderPath, TransportID: identity.TransportID,
+		APIMode: identity.APIMode, ReasoningEffort: identity.ReasoningEffort, ProviderPath: identity.ProviderPath, ProviderConfigSHA256: identity.ProviderConfigSHA256, TransportID: identity.TransportID,
+		ModelContextTokens: identity.ModelContextTokens, ModelOutputTokens: identity.ModelOutputTokens,
 		EvidenceCondition: identity.EvidenceCondition, FrozenEvidenceSHA256: identity.FrozenEvidenceSHA256, EvidenceStageSHA256: identity.EvidenceStageSHA256,
-		CacheGeneration: cacheGeneration, Agentic: agentic,
+		CacheGeneration: cacheGeneration, Agentic: agentic, Pricing: pricing,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("marshal benchmark input identity: %v", err))
+	}
+	return sha256Hex(data)
+}
+
+func benchmarkComparisonInputSHA256(bc benchCase, identity benchmarkRunIdentity) string {
+	build := models.BuildInfo{Commit: bc.commit, RepoVersion: bc.repoVersion, RepoRefs: maps.Clone(bc.repoRefs)}
+	source, _ := ai.ResolveBuildSource(build, bc.sourceRepo[0], bc.sourceRepo[1])
+	data, err := json.Marshal(struct {
+		StableID                string                   `json:"stable_id"`
+		FixtureSHA256           string                   `json:"fixture_sha256"`
+		BenchmarkManifestSHA256 string                   `json:"benchmark_manifest_sha256"`
+		ConsumerCommit          string                   `json:"consumer_commit"`
+		ProjectSHA256           string                   `json:"project_sha256"`
+		EffectivePromptSHA256   string                   `json:"effective_prompt_sha256"`
+		SkillSetHash            string                   `json:"skill_set_hash"`
+		SourceRevision          string                   `json:"source_revision"`
+		SourceOwner             string                   `json:"source_owner"`
+		SourceName              string                   `json:"source_name"`
+		JobName                 string                   `json:"job_name"`
+		BuildID                 string                   `json:"build_id"`
+		TestName                string                   `json:"test_name"`
+		TestSource              string                   `json:"test_source"`
+		JUnitFile               string                   `json:"junit_file"`
+		FailureMessageSHA256    string                   `json:"failure_message_sha256"`
+		ConsecutiveFailures     int                      `json:"consecutive_failures"`
+		APIMode                 string                   `json:"api_mode"`
+		ReasoningEffort         string                   `json:"reasoning_effort"`
+		ProviderPath            string                   `json:"provider_path"`
+		ProviderConfigSHA256    string                   `json:"provider_config_sha256"`
+		TransportID             string                   `json:"transport_id"`
+		ModelContextTokens      int                      `json:"model_context_tokens"`
+		ModelOutputTokens       int                      `json:"model_output_tokens"`
+		Pricing                 benchmarkPricingIdentity `json:"pricing"`
+	}{
+		StableID: bc.stableID, FixtureSHA256: bc.fixtureSHA256, BenchmarkManifestSHA256: identity.BenchmarkManifestSHA256, ConsumerCommit: bc.consumerCommit, ProjectSHA256: identity.ProjectSHA256,
+		EffectivePromptSHA256: identity.EffectivePromptSHA256, SkillSetHash: identity.SkillSetHash, SourceRevision: source.Revision, SourceOwner: source.Owner, SourceName: source.Name,
+		JobName: bc.jobName, BuildID: bc.buildID, TestName: bc.testName, TestSource: bc.testSource, JUnitFile: bc.junitFile,
+		FailureMessageSHA256: sha256Hex([]byte(bc.failureMsg)), ConsecutiveFailures: bc.consecutiveFailures,
+		APIMode: identity.APIMode, ReasoningEffort: string(identity.ReasoningEffort), ProviderPath: identity.ProviderPath, ProviderConfigSHA256: identity.ProviderConfigSHA256, TransportID: identity.TransportID,
+		ModelContextTokens: identity.ModelContextTokens, ModelOutputTokens: identity.ModelOutputTokens,
+		Pricing: identity.Pricing,
+	})
+	if err != nil {
+		panic(err)
 	}
 	return sha256Hex(data)
 }
@@ -415,7 +603,7 @@ func TestLoadBenchmarkInputsDoesNotAlterBaselineAnalysisInputs(t *testing.T) {
 	t.Setenv("BENCH_VARIANT_DIR", "")
 	t.Setenv("BENCH_ARM", "")
 
-	got := loadBenchmarkInputs(t, []benchCase{{}}, ai.APIChatCompletions, "model")
+	got := loadBenchmarkInputs(t, []benchCase{{}}, ai.APIChatCompletions, "https://provider.example.test/v1/chat/completions", "model")
 	cfg, prompt, err := project.LoadDir(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -452,7 +640,7 @@ func TestLoadBenchmarkInputsAppliesOnlyPromptAndSkillVariant(t *testing.T) {
 	t.Setenv("BENCH_VARIANT_DIR", variant)
 	t.Setenv("BENCH_ARM", "proposed-recipes")
 
-	got := loadBenchmarkInputs(t, []benchCase{{fixtureSHA256: strings.Repeat("a", 64)}}, ai.APIChatCompletions, "model")
+	got := loadBenchmarkInputs(t, []benchCase{{fixtureSHA256: strings.Repeat("a", 64)}}, ai.APIChatCompletions, "https://provider.example.test/v1/chat/completions", "model")
 	if got.identity.Arm != "proposed-recipes" || got.identity.ProjectSHA256 == "" || got.identity.EffectivePromptSHA256 == "" || got.identity.SkillSetHash == "" || got.identity.EffectiveInputSHA256 == "" {
 		t.Fatalf("variant identity is incomplete: %+v", got.identity)
 	}
