@@ -17,16 +17,16 @@ type fakeEscalationRunner struct {
 	gotRef   prescalation.Ref
 	gotOwner string
 	gotReq   string
-	view     prescalation.View
+	view     prescalation.PullRequestView
 	err      error
 }
 
-func (f *fakeEscalationRunner) Start(_ context.Context, ref prescalation.Ref, owner, requestID string) (prescalation.View, error) {
+func (f *fakeEscalationRunner) Start(_ context.Context, ref prescalation.Ref, owner, requestID string) (prescalation.PullRequestView, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.gotRef, f.gotOwner, f.gotReq = ref, owner, requestID
 	if f.err != nil {
-		return prescalation.View{}, f.err
+		return prescalation.PullRequestView{}, f.err
 	}
 	view := f.view
 	if view.State == "" {
@@ -36,12 +36,12 @@ func (f *fakeEscalationRunner) Start(_ context.Context, ref prescalation.Ref, ow
 	return view, nil
 }
 
-func (f *fakeEscalationRunner) Get(ref prescalation.Ref) (prescalation.View, error) {
+func (f *fakeEscalationRunner) Get(ref prescalation.Ref) (prescalation.PullRequestView, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.gotRef = ref
 	if f.err != nil {
-		return prescalation.View{}, f.err
+		return prescalation.PullRequestView{}, f.err
 	}
 	view := f.view
 	if view.State == "" {
@@ -196,7 +196,7 @@ func TestEscalationStartRejectsMalformedBodies(t *testing.T) {
 }
 
 func TestEscalationStartReportsTerminalStateAsOK(t *testing.T) {
-	runner := &fakeEscalationRunner{view: prescalation.View{State: prescalation.StateComplete}}
+	runner := &fakeEscalationRunner{view: prescalation.PullRequestView{State: prescalation.StateComplete}}
 	srv := escalationServer(t, runner)
 
 	resp := startEscalation(t, srv, `{"test_name":"TestA"}`, "req-1", "ok")
@@ -229,7 +229,7 @@ func TestEscalationErrorsMapToStableStatuses(t *testing.T) {
 }
 
 func TestEscalationGetReturnsCurrentState(t *testing.T) {
-	runner := &fakeEscalationRunner{view: prescalation.View{
+	runner := &fakeEscalationRunner{view: prescalation.PullRequestView{
 		State: prescalation.StateComplete, RootCause: "the node ran out of memory",
 	}}
 	srv := escalationServer(t, runner)
@@ -244,7 +244,7 @@ func TestEscalationGetReturnsCurrentState(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	var view prescalation.View
+	var view prescalation.PullRequestView
 	if err := json.NewDecoder(resp.Body).Decode(&view); err != nil {
 		t.Fatal(err)
 	}

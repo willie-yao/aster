@@ -52,14 +52,14 @@ type fakeRunner struct {
 	inFlight int32
 	maxSeen  int32
 	err      error
-	view     View
+	view     View[Ref]
 }
 
 func newFakeRunner() *fakeRunner {
 	return &fakeRunner{started: make(chan struct{}, 16), release: make(chan struct{})}
 }
 
-func (f *fakeRunner) Run(ctx context.Context, resolved Resolved) (View, error) {
+func (f *fakeRunner) Run(ctx context.Context, resolved Resolved) (View[Ref], error) {
 	current := atomic.AddInt32(&f.inFlight, 1)
 	for {
 		seen := atomic.LoadInt32(&f.maxSeen)
@@ -72,12 +72,12 @@ func (f *fakeRunner) Run(ctx context.Context, resolved Resolved) (View, error) {
 	select {
 	case <-f.release:
 	case <-ctx.Done():
-		return View{}, ctx.Err()
+		return View[Ref]{}, ctx.Err()
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return View{}, f.err
+		return View[Ref]{}, f.err
 	}
 	view := f.view
 	if view.State == "" {
@@ -87,7 +87,7 @@ func (f *fakeRunner) Run(ctx context.Context, resolved Resolved) (View, error) {
 	return view, nil
 }
 
-func newService(t *testing.T, resolver Resolver, runner Runner, opts Options) *Service {
+func newService(t *testing.T, resolver Resolver[Ref, Resolved], runner Runner[Ref, Resolved], opts Options[Ref]) *Service[Ref, Resolved] {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -99,7 +99,7 @@ func newService(t *testing.T, resolver Resolver, runner Runner, opts Options) *S
 }
 
 // drain blocks until every admitted escalation has released its slot.
-func drain(t *testing.T, service *Service) {
+func drain(t *testing.T, service *Service[Ref, Resolved]) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -108,7 +108,7 @@ func drain(t *testing.T, service *Service) {
 	}
 }
 
-func waitForState(t *testing.T, service *Service, ref Ref, want string) View {
+func waitForState(t *testing.T, service *Service[Ref, Resolved], ref Ref, want string) View[Ref] {
 	t.Helper()
 	deadline := time.After(3 * time.Second)
 	for {
@@ -129,7 +129,7 @@ func waitForState(t *testing.T, service *Service, ref Ref, want string) View {
 
 func TestStartRunsOneEscalationToCompletion(t *testing.T) {
 	runner := newFakeRunner()
-	service := newService(t, &fakeResolver{}, runner, Options{})
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{})
 
 	view, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1")
 	if err != nil {
@@ -151,7 +151,7 @@ func TestStartRunsOneEscalationToCompletion(t *testing.T) {
 // how many subjects are started.
 func TestOnlyOneEscalationRunsAtATime(t *testing.T) {
 	runner := newFakeRunner()
-	service := newService(t, &fakeResolver{}, runner, Options{MaxQueued: 4})
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{MaxQueued: 4})
 
 	for i := 0; i < 4; i++ {
 		ref := testRef(fmt.Sprintf("Test%d", i))
@@ -181,7 +181,7 @@ func TestConcurrentStartsBoundResolverCalls(t *testing.T) {
 	)
 	resolver := &fakeResolver{gate: make(chan struct{})}
 	runner := newFakeRunner()
-	service := newService(t, resolver, runner, Options{MaxQueued: bound})
+	service := newService(t, resolver, runner, Options[Ref]{MaxQueued: bound})
 	// Idempotent so a failed assertion cannot strand the parked callers.
 	openGate := sync.OnceFunc(func() { close(resolver.gate) })
 	defer openGate()
@@ -238,7 +238,7 @@ func TestConcurrentStartsBoundResolverCalls(t *testing.T) {
 // mistake for an escalation that already happened.
 func TestABusyStartIsNotRecorded(t *testing.T) {
 	runner := newFakeRunner()
-	service := newService(t, &fakeResolver{}, runner, Options{MaxQueued: 1})
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{MaxQueued: 1})
 
 	if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -264,7 +264,7 @@ func TestABusyStartIsNotRecorded(t *testing.T) {
 func TestAQueuedEscalationTimesOutWithoutRunning(t *testing.T) {
 	store := &memoryStore{}
 	runner := newFakeRunner()
-	service := newService(t, &fakeResolver{}, runner, Options{
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{
 		Timeout: 60 * time.Millisecond, MaxQueued: 2, Store: store,
 	})
 
@@ -334,7 +334,7 @@ func (s *swallowingResolver) Resolve(ctx context.Context, ref Ref) (Resolved, er
 func TestResolutionObservesTheAcceptedLifetime(t *testing.T) {
 	t.Run("the escalation deadline bounds resolution", func(t *testing.T) {
 		service := newService(t, newBlockingResolver(), newFakeRunner(),
-			Options{Timeout: 50 * time.Millisecond})
+			Options[Ref]{Timeout: 50 * time.Millisecond})
 		_, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1")
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("err = %v, want the expired budget as the cause", err)
@@ -346,7 +346,7 @@ func TestResolutionObservesTheAcceptedLifetime(t *testing.T) {
 		resolver := newBlockingResolver()
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		service, err := New(ctx, resolver, newFakeRunner(), Options{})
+		service, err := New(ctx, resolver, newFakeRunner(), Options[Ref]{})
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -364,7 +364,7 @@ func TestResolutionObservesTheAcceptedLifetime(t *testing.T) {
 	// a timeout and a cancellation to different statuses.
 	t.Run("a departed caller cancels resolution", func(t *testing.T) {
 		resolver := newBlockingResolver()
-		service := newService(t, resolver, newFakeRunner(), Options{})
+		service := newService(t, resolver, newFakeRunner(), Options[Ref]{})
 		callerCtx, cancelCaller := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancelCaller()
 		if _, err := service.Start(callerCtx, testRef("TestA"), "octocat", "req-1"); !errors.Is(err, context.DeadlineExceeded) {
@@ -378,7 +378,7 @@ func TestResolutionObservesTheAcceptedLifetime(t *testing.T) {
 	t.Run("a swallowed cancellation still stops the escalation", func(t *testing.T) {
 		runner := newFakeRunner()
 		service := newService(t, &swallowingResolver{entered: make(chan struct{})}, runner,
-			Options{Timeout: 50 * time.Millisecond})
+			Options[Ref]{Timeout: 50 * time.Millisecond})
 		ref := testRef("TestA")
 		if _, err := service.Start(context.Background(), ref, "octocat", "req-1"); err == nil {
 			t.Fatal("want an error rather than a record built from a cut-off resolution")
@@ -396,7 +396,7 @@ func TestResolutionObservesTheAcceptedLifetime(t *testing.T) {
 func TestStartIsIdempotentForTheSameSubject(t *testing.T) {
 	runner := newFakeRunner()
 	resolver := &fakeResolver{}
-	service := newService(t, resolver, runner, Options{})
+	service := newService(t, resolver, runner, Options[Ref]{})
 
 	for i := 0; i < 3; i++ {
 		if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); err != nil {
@@ -417,7 +417,7 @@ func TestStartIsIdempotentForTheSameSubject(t *testing.T) {
 func TestReusedRequestIDForAnotherSubjectIsRejected(t *testing.T) {
 	runner := newFakeRunner()
 	close(runner.release)
-	service := newService(t, &fakeResolver{}, runner, Options{})
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{})
 
 	if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -431,7 +431,7 @@ func TestReusedRequestIDForAnotherSubjectIsRejected(t *testing.T) {
 func TestStartRejectsMalformedRefsAndIdentity(t *testing.T) {
 	runner := newFakeRunner()
 	close(runner.release)
-	service := newService(t, &fakeResolver{}, runner, Options{})
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{})
 
 	cases := []struct {
 		name  string
@@ -458,7 +458,7 @@ func TestStartRejectsMalformedRefsAndIdentity(t *testing.T) {
 func TestResolverRejectionIsNotRecordedAsAnEscalation(t *testing.T) {
 	runner := newFakeRunner()
 	close(runner.release)
-	service := newService(t, &fakeResolver{err: ErrNotEligible}, runner, Options{})
+	service := newService(t, &fakeResolver{err: ErrNotEligible}, runner, Options[Ref]{})
 
 	if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); !errors.Is(err, ErrNotEligible) {
 		t.Fatalf("err = %v, want ErrNotEligible", err)
@@ -476,7 +476,7 @@ func TestRunnerFailureSurfacesASafeMessage(t *testing.T) {
 	runner := newFakeRunner()
 	runner.err = errors.New("model endpoint https://secret.internal/v1 returned 500 for token sk-abc123")
 	close(runner.release)
-	service := newService(t, &fakeResolver{}, runner, Options{})
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{})
 
 	if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -490,7 +490,7 @@ func TestRunnerFailureSurfacesASafeMessage(t *testing.T) {
 }
 
 func TestGetReportsNotStartedForAnUntouchedSubject(t *testing.T) {
-	service := newService(t, &fakeResolver{}, newFakeRunner(), Options{})
+	service := newService(t, &fakeResolver{}, newFakeRunner(), Options[Ref]{})
 
 	view, err := service.Get(testRef("TestA"))
 	if err != nil {
@@ -503,27 +503,27 @@ func TestGetReportsNotStartedForAnUntouchedSubject(t *testing.T) {
 
 type memoryStore struct {
 	mu      sync.Mutex
-	results map[string]View
+	results map[string]View[Ref]
 	loadErr error
 }
 
-func (m *memoryStore) Load() (map[string]View, error) {
+func (m *memoryStore) Load() (map[string]View[Ref], error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.loadErr != nil {
 		return nil, m.loadErr
 	}
-	out := map[string]View{}
+	out := map[string]View[Ref]{}
 	for k, v := range m.results {
 		out[k] = v
 	}
 	return out, nil
 }
 
-func (m *memoryStore) Save(results map[string]View) error {
+func (m *memoryStore) Save(results map[string]View[Ref]) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.results = map[string]View{}
+	m.results = map[string]View[Ref]{}
 	for k, v := range results {
 		m.results[k] = v
 	}
@@ -534,7 +534,7 @@ func TestCompletedResultsSurviveRestart(t *testing.T) {
 	store := &memoryStore{}
 	runner := newFakeRunner()
 	close(runner.release)
-	service := newService(t, &fakeResolver{}, runner, Options{Store: store})
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{Store: store})
 
 	if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -543,7 +543,7 @@ func TestCompletedResultsSurviveRestart(t *testing.T) {
 	// The state is visible before persistence completes, so drain first.
 	drain(t, service)
 
-	restarted := newService(t, &fakeResolver{}, newFakeRunner(), Options{Store: store})
+	restarted := newService(t, &fakeResolver{}, newFakeRunner(), Options[Ref]{Store: store})
 	view, err := restarted.Get(testRef("TestA"))
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -556,12 +556,12 @@ func TestCompletedResultsSurviveRestart(t *testing.T) {
 // A process that stopped mid-escalation left work that never finished, so it
 // must not come back looking perpetually in progress.
 func TestInFlightEscalationsAreNotRestoredAsRunning(t *testing.T) {
-	store := &memoryStore{results: map[string]View{
+	store := &memoryStore{results: map[string]View[Ref]{
 		testRef("TestA").identity(): {Ref: testRef("TestA"), State: StateRunning},
 		testRef("TestB").identity(): {Ref: testRef("TestB"), State: StateQueued},
 		testRef("TestC").identity(): {Ref: testRef("TestC"), State: StateComplete, RootCause: "done"},
 	}}
-	service := newService(t, &fakeResolver{}, newFakeRunner(), Options{Store: store})
+	service := newService(t, &fakeResolver{}, newFakeRunner(), Options[Ref]{Store: store})
 
 	for _, name := range []string{"TestA", "TestB"} {
 		view, _ := service.Get(testRef(name))
@@ -579,7 +579,7 @@ func TestRetentionIsBounded(t *testing.T) {
 	close(runner.release)
 	// A queue of two keeps a start from racing the previous escalation's
 	// slot release, which happens just after its result becomes visible.
-	service := newService(t, &fakeResolver{}, runner, Options{MaxRecords: 3, MaxQueued: 2})
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{MaxRecords: 3, MaxQueued: 2})
 
 	for i := 0; i < 6; i++ {
 		ref := testRef(fmt.Sprintf("Test%d", i))
@@ -602,7 +602,7 @@ func TestRetentionIsBounded(t *testing.T) {
 func TestAFullQueuesResultsAreAllRetained(t *testing.T) {
 	store := &memoryStore{}
 	runner := newFakeRunner()
-	service := newService(t, &fakeResolver{}, runner, Options{
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{
 		MaxRecords: 2, MaxQueued: 4, Store: store,
 	})
 
@@ -649,19 +649,19 @@ func TestAFullQueuesResultsAreAllRetained(t *testing.T) {
 // the eviction, and a record too old to carry one at all goes first.
 func TestAnOversizedRestoredStoreIsPruned(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	stored := map[string]View{
+	stored := map[string]View[Ref]{
 		"Unknown":     {State: StateComplete, RootCause: "done"},
 		"StartedOnly": {State: StateComplete, RootCause: "done", StartedAt: base.Add(time.Minute)},
 		"Older":       {State: StateComplete, RootCause: "done", CompletedAt: base.Add(2 * time.Minute)},
 		"Newer":       {State: StateComplete, RootCause: "done", CompletedAt: base.Add(3 * time.Minute)},
 	}
-	store := &memoryStore{results: map[string]View{}}
+	store := &memoryStore{results: map[string]View[Ref]{}}
 	for name, view := range stored {
 		ref := testRef(name)
 		view.Ref = ref
 		store.results[ref.identity()] = view
 	}
-	service := newService(t, &fakeResolver{}, newFakeRunner(), Options{
+	service := newService(t, &fakeResolver{}, newFakeRunner(), Options[Ref]{
 		MaxRecords: 3, MaxQueued: 1, Store: store,
 	})
 
@@ -708,12 +708,12 @@ func TestAnOversizedRestoredStoreIsPruned(t *testing.T) {
 // Retention tighter than the queue would evict results the instant they land,
 // so the queue is the floor.
 func TestRetentionIsNeverTighterThanTheQueue(t *testing.T) {
-	opts := Options{MaxQueued: 4, MaxRecords: 2}.normalized()
+	opts := Options[Ref]{MaxQueued: 4, MaxRecords: 2}.normalized()
 	if opts.MaxRecords != 4 {
 		t.Fatalf("MaxRecords = %d, want it raised to the queue bound", opts.MaxRecords)
 	}
 	// A roomier retention setting is left alone.
-	opts = Options{MaxQueued: 4, MaxRecords: 50}.normalized()
+	opts = Options[Ref]{MaxQueued: 4, MaxRecords: 50}.normalized()
 	if opts.MaxRecords != 50 {
 		t.Fatalf("MaxRecords = %d, want the configured value kept", opts.MaxRecords)
 	}
@@ -724,7 +724,7 @@ func TestRetentionIsNeverTighterThanTheQueue(t *testing.T) {
 func TestADrainedServiceAcceptsNoFurtherWork(t *testing.T) {
 	runner := newFakeRunner()
 	close(runner.release)
-	service := newService(t, &fakeResolver{}, runner, Options{MaxQueued: 2})
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{MaxQueued: 2})
 
 	if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -745,7 +745,7 @@ func TestADrainedServiceAcceptsNoFurtherWork(t *testing.T) {
 // shrink for good and a later drain could never finish.
 func TestAnAbandonedDrainRestoresTheQueue(t *testing.T) {
 	runner := newFakeRunner()
-	service := newService(t, &fakeResolver{}, runner, Options{MaxQueued: 2})
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{MaxQueued: 2})
 
 	// One escalation holds a slot open, so this drain cannot complete.
 	if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); err != nil {
@@ -799,17 +799,19 @@ func contains(haystack, needle string) bool {
 // persistCountingStore records the most recent snapshot written.
 type persistCountingStore struct {
 	mu   sync.Mutex
-	last map[string]View
+	last map[string]View[Ref]
 }
 
-func (c *persistCountingStore) Load() (map[string]View, error) { return map[string]View{}, nil }
+func (c *persistCountingStore) Load() (map[string]View[Ref], error) {
+	return map[string]View[Ref]{}, nil
+}
 
-func (c *persistCountingStore) Save(results map[string]View) error {
+func (c *persistCountingStore) Save(results map[string]View[Ref]) error {
 	// Real IO takes time, which is what opens the interleaving window.
 	time.Sleep(2 * time.Millisecond)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.last = map[string]View{}
+	c.last = map[string]View[Ref]{}
 	for k, v := range results {
 		c.last[k] = v
 	}
@@ -824,8 +826,8 @@ func (c *persistCountingStore) count() int {
 
 type instantRunner struct{}
 
-func (instantRunner) Run(context.Context, Resolved) (View, error) {
-	return View{State: StateComplete, RootCause: "ok"}, nil
+func (instantRunner) Run(context.Context, Resolved) (View[Ref], error) {
+	return View[Ref]{State: StateComplete, RootCause: "ok"}, nil
 }
 
 // Cancelling the service wakes every queued escalation at once, and the
@@ -834,7 +836,7 @@ func (instantRunner) Run(context.Context, Resolved) (View, error) {
 func TestConcurrentFinishesDoNotLosePersistedResults(t *testing.T) {
 	store := &persistCountingStore{}
 	ctx, cancel := context.WithCancel(context.Background())
-	service, err := New(ctx, &fakeResolver{}, instantRunner{}, Options{Store: store, MaxQueued: 12})
+	service, err := New(ctx, &fakeResolver{}, instantRunner{}, Options[Ref]{Store: store, MaxQueued: 12})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -870,7 +872,7 @@ func TestConcurrentFinishesDoNotLosePersistedResults(t *testing.T) {
 // must honor that budget rather than block the process until work finishes.
 func TestWaitReturnsWhenBudgetExpires(t *testing.T) {
 	runner := newFakeRunner()
-	service := newService(t, &fakeResolver{}, runner, Options{})
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{})
 	if _, err := service.Start(context.Background(), testRef("TestSlow"), "octocat", "req-1"); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -893,15 +895,15 @@ type failOnceRunner struct {
 	calls int
 }
 
-func (f *failOnceRunner) Run(context.Context, Resolved) (View, error) {
+func (f *failOnceRunner) Run(context.Context, Resolved) (View[Ref], error) {
 	f.mu.Lock()
 	f.calls++
 	first := f.calls == 1
 	f.mu.Unlock()
 	if first {
-		return View{}, errors.New("provider returned 503")
+		return View[Ref]{}, errors.New("provider returned 503")
 	}
-	return View{State: StateComplete, RootCause: "recovered"}, nil
+	return View[Ref]{State: StateComplete, RootCause: "recovered"}, nil
 }
 
 func (f *failOnceRunner) count() int {
@@ -915,7 +917,7 @@ func (f *failOnceRunner) count() int {
 // permanently un-analyzable, especially since the result is persisted.
 func TestAFailedEscalationCanBeRetried(t *testing.T) {
 	runner := &failOnceRunner{}
-	service := newService(t, &fakeResolver{}, runner, Options{})
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{})
 	ref := testRef("TestA")
 
 	if _, err := service.Start(context.Background(), ref, "octocat", "req-1"); err != nil {
@@ -940,7 +942,7 @@ func TestAFailedEscalationCanBeRetried(t *testing.T) {
 // what distinguishes a retry from a duplicate delivery.
 func TestReplayingTheSameKeyReturnsTheFailureWithoutRerunning(t *testing.T) {
 	runner := &failOnceRunner{}
-	service := newService(t, &fakeResolver{}, runner, Options{})
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{})
 	ref := testRef("TestA")
 
 	if _, err := service.Start(context.Background(), ref, "octocat", "req-1"); err != nil {
@@ -965,7 +967,7 @@ func TestReplayingTheSameKeyReturnsTheFailureWithoutRerunning(t *testing.T) {
 func TestIdempotencyIndexIsBounded(t *testing.T) {
 	runner := newFakeRunner()
 	close(runner.release)
-	service := newService(t, &fakeResolver{}, runner, Options{MaxRecords: 2, MaxQueued: 2})
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{MaxRecords: 2, MaxQueued: 2})
 	ref := testRef("TestA")
 
 	for i := 0; i < 200; i++ {

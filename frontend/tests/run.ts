@@ -27,4 +27,5 @@ import "./detailReadability.test.js";
 import "./dashboardOverview.test.js";
 import "./pullRequests.test.js";
 import "./pullRequestEscalation.test.js";
+import "./sharedFailures.test.js";
 import "./responsiveLayout.test.js";

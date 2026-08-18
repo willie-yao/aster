@@ -6,7 +6,8 @@ import { ErrorState } from "../components/ErrorState";
 import { LoadingState } from "../components/LoadingState";
 import { PullRequestFilters } from "../components/PullRequestFilters";
 import { PullRequestLedger } from "../components/PullRequestLedger";
-import { usePullRequestIndex } from "../hooks/useData";
+import { SharedFailureLedger } from "../components/SharedFailureLedger";
+import { usePullRequestIndex, useSharedFailures } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import {
   filterPullRequests,
@@ -16,6 +17,7 @@ import {
   withPullRequestState,
   type PullRequestStateFilter,
 } from "../lib/pullRequests";
+import { orderSharedFailures } from "../lib/sharedFailures";
 import { timeAgo } from "../lib/utils";
 import { overviewLayout, overviewTypography } from "../theme/overview";
 
@@ -50,6 +52,9 @@ export function PullRequestsPage() {
   const manifest = useManifest();
   const enabled = manifest.pull_requests?.enabled ?? false;
   const { data, loading, error } = usePullRequestIndex(enabled);
+  // Shared failures are supplementary, so a missing or failed load simply
+  // omits the section rather than blocking the ledger.
+  const { data: shared } = useSharedFailures(enabled);
   const [searchParams, setSearchParams] = useSearchParams();
   const stateFilter = pullRequestStateFromParam(searchParams.get("state"));
 
@@ -61,6 +66,10 @@ export function PullRequestsPage() {
   const filtered = useMemo(
     () => filterPullRequests(ordered, stateFilter),
     [ordered, stateFilter],
+  );
+  const sharedFailures = useMemo(
+    () => (shared ? orderSharedFailures(shared.failures) : []),
+    [shared],
   );
 
   function updateState(next: PullRequestStateFilter) {
@@ -110,6 +119,8 @@ export function PullRequestsPage() {
           Updated {timeAgo(data.generated_at)}
         </Typography>
       </Box>
+
+      <SharedFailureLedger failures={sharedFailures} />
 
       <Box component="section" aria-labelledby="pull-request-ledger-heading">
         <Box

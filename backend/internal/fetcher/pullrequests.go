@@ -71,15 +71,22 @@ func (p *pipeline) refreshPullRequests(ctx context.Context, res *refreshResult) 
 	changes := p.pullRequestChanges(ctx, client, repo, details)
 	prattribution.Annotate(details, res.attributionBaseline(),
 		prattribution.Repository{Owner: repo.Owner, Name: repo.Name}, changes)
+	// Clustering reads the verdicts Annotate just attached, so it runs after it.
+	shared := models.SharedFailureIndex{
+		Repo:     index.Repo,
+		Failures: prattribution.Clusters(details),
+	}
 
 	index.GeneratedAt = time.Now().UTC()
 	for i := range details {
 		details[i].GeneratedAt = index.GeneratedAt
 	}
-	if err := writePullRequestOutput(p.opts.OutDir, index, details); err != nil {
+	shared.GeneratedAt = index.GeneratedAt
+	if err := writePullRequestOutput(p.opts.OutDir, index, details, shared); err != nil {
 		return fmt.Errorf("writing pull request output: %w", err)
 	}
-	log.Printf("✅ Wrote %d open pull requests to %s", len(details), output.PullRequestIndexFilename)
+	log.Printf("✅ Wrote %d open pull requests and %d shared failures to %s",
+		len(details), len(shared.Failures), output.PullRequestIndexFilename)
 	return nil
 }
 

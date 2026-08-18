@@ -1,20 +1,17 @@
-// EscalationCitation is one artifact range supporting the analysis.
-export interface EscalationCitation {
-  path: string;
-  line_start?: number;
-  line_end?: number;
-  quote?: string;
-}
+import {
+  API_BASE,
+  postEscalation,
+  readEscalation,
+  type EscalationView,
+} from "./escalation.js";
 
-const API_BASE = import.meta.env?.BASE_URL ?? "/";
-
-// Escalation lifecycle states, mirroring the prescalation package.
-export type EscalationState =
-  | "not_started"
-  | "queued"
-  | "running"
-  | "complete"
-  | "failed";
+export type {
+  EscalationCitation,
+  EscalationEvidence,
+  EscalationState,
+  EscalationView,
+} from "./escalation.js";
+export { escalationActive } from "./escalation.js";
 
 export interface EscalationRef {
   pullNumber: number;
@@ -23,28 +20,14 @@ export interface EscalationRef {
   testName: string;
 }
 
-export interface EscalationView {
+// PullRequestEscalationView is one pull request escalation's state.
+export interface PullRequestEscalationView extends EscalationView {
   ref: {
     pull_number: number;
     job_id: string;
     build_id: string;
     test_name: string;
   };
-  state: EscalationState;
-  root_cause?: string;
-  severity?: string;
-  suggested_fix?: string;
-  citations?: EscalationCitation[];
-  error?: string;
-  started_at?: string;
-  completed_at?: string;
-}
-
-// activeEscalationStates are the states worth polling.
-const activeStates: EscalationState[] = ["queued", "running"];
-
-export function escalationActive(state: EscalationState | undefined): boolean {
-  return state !== undefined && activeStates.includes(state);
 }
 
 function endpoint(ref: EscalationRef): string {
@@ -55,31 +38,20 @@ function endpoint(ref: EscalationRef): string {
   );
 }
 
-export async function getEscalation(ref: EscalationRef): Promise<EscalationView> {
+export function getEscalation(ref: EscalationRef): Promise<PullRequestEscalationView> {
   const query = new URLSearchParams({ test: ref.testName });
-  const response = await fetch(`${endpoint(ref)}?${query}`, { credentials: "same-origin" });
-  if (!response.ok) throw new Error(await safeError(response));
-  return response.json() as Promise<EscalationView>;
+  return readEscalation<PullRequestEscalationView>(`${endpoint(ref)}?${query}`);
 }
 
-export async function startEscalation(
+export function startEscalation(
   ref: EscalationRef,
   idempotencyKey: string,
-): Promise<EscalationView> {
-  const response = await fetch(endpoint(ref), {
-    method: "POST",
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-      "Idempotency-Key": idempotencyKey,
-    },
-    body: JSON.stringify({ test_name: ref.testName }),
-  });
-  if (!response.ok) throw new Error(await safeError(response));
-  return response.json() as Promise<EscalationView>;
-}
-
-async function safeError(response: Response): Promise<string> {
-  const text = (await response.text()).trim();
-  return text || `Escalation request failed with HTTP ${response.status}.`;
+): Promise<PullRequestEscalationView> {
+  // A Ginkgo test name contains slashes and spaces, so it travels in the body
+  // rather than a path segment.
+  return postEscalation<PullRequestEscalationView>(
+    endpoint(ref),
+    idempotencyKey,
+    JSON.stringify({ test_name: ref.testName }),
+  );
 }
