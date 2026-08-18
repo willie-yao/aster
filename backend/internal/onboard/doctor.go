@@ -107,7 +107,6 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 
 	promptPath := filepath.Join(dir, "prompts", "system.md")
 	prompt, err := deps.files.ReadFile(promptPath)
-	includePresubmits := cfg.Source.IncludePresubmits
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		add("prompts/system.md", DoctorFail, "the required project prompt is missing", "Create a non-empty prompts/system.md and review its project-specific claims.")
@@ -130,25 +129,25 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 	if k8sErr != nil && !errors.Is(k8sErr, os.ErrNotExist) {
 		add("deployment", DoctorFail, fmt.Sprintf("cannot read %s", k8sPath), "Fix file permissions and rerun doctor.")
 	}
+	var profile doctorProfile
 	switch {
 	case pagesExists && k8sExists:
 		add("deployment", DoctorFail, "both Pages and Kubernetes deployment files are present", "Keep one first-run deployment profile and remove the unintended scaffold files.")
 	case pagesExists:
 		add("deployment", DoctorPass, "GitHub Pages profile detected", "")
-		profilePresubmits := checkPages(&report, pagesPath, dir, pages, cfg)
-		includePresubmits = includePresubmits || profilePresubmits
+		profile = checkPages(&report, pagesPath, dir, pages, cfg)
 	case k8sExists:
 		add("deployment", DoctorPass, "Kubernetes with Helm profile detected", "")
-		profilePresubmits := checkKubernetes(&report, k8s, cfg)
-		includePresubmits = includePresubmits || profilePresubmits
+		profile = checkKubernetes(&report, k8s, cfg)
 	default:
 		add("deployment", DoctorFail, "no supported deployment scaffold was found", "Restore .github/workflows/deploy.yml or deploy/values.yaml.")
 	}
+	profile.includePresubmits = profile.includePresubmits || cfg.Source.IncludePresubmits
 
-	checkPullRequestTriage(add, cfg, includePresubmits)
+	checkPullRequestTriage(add, cfg, profile)
 
 	discoveryCtx, cancel := context.WithTimeout(ctx, onboardingDiscoveryTimeout)
-	sweep, err := deps.sweeper.Discover(discoveryCtx, cfg, includePresubmits)
+	sweep, err := deps.sweeper.Discover(discoveryCtx, cfg, profile.includePresubmits)
 	cancel()
 	if err != nil {
 		action := "Verify the TestGrid dashboard or artifact bucket, GitHub access, and network connectivity, then rerun doctor."
@@ -161,19 +160,73 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 	return report
 }
 
+// doctorReadTokenSource is how a deployment supplies the read-only GitHub token
+// that pull request triage needs.
+type doctorReadTokenSource int
+
+const (
+	// readTokenUnknown means no deployment profile was inspected, or the profile
+	// runs no fetch, so doctor has nothing to say about the credential.
+	readTokenUnknown doctorReadTokenSource = iota
+	// readTokenAbsent means no deployment setting supplies the token, so triage
+	// reads GitHub anonymously.
+	readTokenAbsent
+	// readTokenShadowed means the deployment supplies the token and then blanks
+	// it with a fetcher.extraEnv entry that wins on ordering.
+	readTokenShadowed
+	// readTokenConfigured means the deployment names the token explicitly.
+	readTokenConfigured
+	// readTokenOptionalSecret means the token can only come from a Secret key
+	// mounted with optional: true, so an absent key is silently ignored.
+	readTokenOptionalSecret
+)
+
+// doctorProfile is the deployment-derived state that profile checks hand to the
+// shared checks running after them.
+type doctorProfile struct {
+	includePresubmits bool
+	readToken         doctorReadTokenSource
+}
+
 // checkPullRequestTriage reports how the consumer's settings relate to the pull
 // request triage view. Triage resolves presubmits from the job catalog, so
 // source.include_presubmits neither enables it nor improves its verdicts, while
 // enlarging the analyzed job set.
-func checkPullRequestTriage(add func(string, DoctorStatus, string, string), cfg *project.Config, includePresubmits bool) {
+func checkPullRequestTriage(add func(string, DoctorStatus, string, string), cfg *project.Config, profile doctorProfile) {
 	if cfg.PullRequests == nil {
 		// An explicit enabled: false is a decision, so only an absent block hints.
 		add("pull request triage", DoctorPass, "the optional pull request triage view is not configured",
 			"Set pull_requests.enabled: true to triage open pull requests of branding.source_repo. Its attribution verdicts are deterministic and cost no model calls.")
 	}
-	if includePresubmits {
+	if cfg.PullRequests != nil && cfg.PullRequests.Enabled {
+		checkPullRequestReadToken(add, profile.readToken)
+	}
+	if profile.includePresubmits {
 		add("source.include_presubmits", DoctorWarn, "presubmits join the dashboard job set, enlarging each fetch and any enabled analysis",
 			"Keep this on only if you want presubmit rows in the main dashboard. It is not required for pull request triage, which resolves presubmits from the job catalog either way.")
+	}
+}
+
+// checkPullRequestReadToken reports whether triage will read GitHub
+// authenticated. Anonymous reads are capped at 60 requests per hour, which one
+// pass over a busy repository exhausts, and the 403s that follow only surface
+// as a triage view that stops updating.
+func checkPullRequestReadToken(add func(string, DoctorStatus, string, string), source doctorReadTokenSource) {
+	const name = "pull request triage credential"
+	switch source {
+	case readTokenUnknown:
+		// No deployment profile was inspected, or it runs no fetch at all.
+	case readTokenConfigured:
+		add(name, DoctorPass, "the deployment supplies a read-only GitHub token", "")
+	case readTokenOptionalSecret:
+		add(name, DoctorWarn, "the read token comes from a Secret key mounted as optional, so a missing key silently falls back to anonymous reads",
+			"Confirm that Secret carries the key, or set ai.githubReadToken or ai.githubReadTokenSecretName so a missing key cannot pass unnoticed.")
+	case readTokenShadowed:
+		add(name, DoctorWarn, "a fetcher.extraEnv entry blanks the read token the chart renders, and extraEnv is appended last",
+			"Remove the empty GITHUB_READ_TOKEN or GITHUB_TOKEN entry from fetcher.extraEnv, or give it a value.")
+	default:
+		add(name, DoctorWarn, "pull request triage is enabled with no read-only GitHub token, so it reads GitHub anonymously at 60 requests per hour",
+			"Set ai.githubReadToken or ai.githubReadTokenSecretName so the fetcher receives GITHUB_READ_TOKEN. A token with no repository privileges is enough for a public source_repo.")
 	}
 }
 
@@ -211,7 +264,7 @@ func yamlBool(value any, defaultValue bool) (bool, bool) {
 	return false, false
 }
 
-func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowYAML []byte, cfg *project.Config) (includePresubmits bool) {
+func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowYAML []byte, cfg *project.Config) (profile doctorProfile) {
 	add := func(name string, status DoctorStatus, detail, action string) {
 		report.Checks = append(report.Checks, DoctorCheck{Name: name, Status: status, Detail: detail, Action: action})
 	}
@@ -236,11 +289,15 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 		add("Pages workflow", DoctorFail, "jobs.deploy.uses does not target the dashboard reusable-deploy workflow", "Restore the generated uses target for aster/.github/workflows/reusable-deploy.yml.")
 		return
 	}
+	// The reusable workflow passes the Actions GITHUB_TOKEN to the fetch step
+	// unconditionally, so a deploy job that reaches it reads GitHub
+	// authenticated regardless of the inputs it sets.
+	profile.readToken = readTokenConfigured
 	if value, ok := deploy.With["include-presubmits"]; ok {
 		if dynamicExpression(value) {
 			add("Pages presubmits", DoctorWarn, "include-presubmits is dynamic and cannot be resolved offline", "Confirm the expression enables presubmits when the dashboard depends on them.")
 		} else if parsed, valid := yamlBool(value, false); valid {
-			includePresubmits = parsed
+			profile.includePresubmits = parsed
 		} else {
 			add("Pages presubmits", DoctorFail, "include-presubmits is not a boolean", "Set jobs.deploy.with.include-presubmits to true or false.")
 		}
@@ -272,6 +329,8 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 		return
 	}
 	if skipFetch {
+		// No fetch runs, so triage never reads GitHub and the token is unused.
+		profile.readToken = readTokenUnknown
 		add("Pages AI", DoctorPass, "skip-fetch is enabled, so provider settings are unused", "")
 		return
 	}
@@ -322,7 +381,7 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 	add("Pages AI", DoctorPass, "deploy job resolves provider coordinates and token settings", "")
 	sort.Strings(externalValues)
 	add("Pages AI values", DoctorWarn, "offline doctor cannot read GitHub repository variable or secret values", "Confirm "+strings.Join(externalValues, ", ")+" are set in the dashboard repository.")
-	return includePresubmits
+	return profile
 }
 
 func dynamicExpression(value any) bool {
@@ -385,15 +444,18 @@ type doctorKubernetesValues struct {
 		AccessMode    string `yaml:"accessMode"`
 	} `yaml:"persistence"`
 	Fetcher struct {
-		IncludePresubmits bool `yaml:"includePresubmits"`
+		IncludePresubmits bool             `yaml:"includePresubmits"`
+		ExtraEnv          []doctorExtraEnv `yaml:"extraEnv"`
 	} `yaml:"fetcher"`
 	AI struct {
-		Enabled        *bool  `yaml:"enabled"`
-		API            string `yaml:"api"`
-		Endpoint       string `yaml:"endpoint"`
-		Model          string `yaml:"model"`
-		Token          string `yaml:"token"`
-		ExistingSecret string `yaml:"existingSecret"`
+		Enabled                   *bool  `yaml:"enabled"`
+		API                       string `yaml:"api"`
+		Endpoint                  string `yaml:"endpoint"`
+		Model                     string `yaml:"model"`
+		Token                     string `yaml:"token"`
+		ExistingSecret            string `yaml:"existingSecret"`
+		GitHubReadToken           string `yaml:"githubReadToken"`
+		GitHubReadTokenSecretName string `yaml:"githubReadTokenSecretName"`
 	} `yaml:"ai"`
 	Server struct {
 		Actions struct {
@@ -415,7 +477,99 @@ type doctorKubernetesValues struct {
 	NetworkPolicy doctorNetworkPolicyValues `yaml:"networkPolicy"`
 }
 
-func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Config) (includePresubmits bool) {
+// doctorExtraEnv is one fetcher.extraEnv entry, parsed far enough to tell
+// whether it actually supplies a value.
+type doctorExtraEnv struct {
+	Name      string `yaml:"name"`
+	Value     string `yaml:"value"`
+	ValueFrom *struct {
+		SecretKeyRef *struct {
+			Optional *bool `yaml:"optional"`
+		} `yaml:"secretKeyRef"`
+	} `yaml:"valueFrom"`
+}
+
+// envTokenState is what deploy/values.yaml guarantees about the value one
+// environment variable will hold.
+type envTokenState int
+
+const (
+	envTokenMissing envTokenState = iota
+	envTokenOptional
+	envTokenPresent
+)
+
+// state reports what the entry supplies. A name with neither a value nor a
+// source injects an empty string, which overrides anything rendered earlier.
+func (e doctorExtraEnv) state() envTokenState {
+	if strings.TrimSpace(e.Value) != "" {
+		return envTokenPresent
+	}
+	if ref := e.ValueFrom; ref != nil && ref.SecretKeyRef != nil {
+		if ref.SecretKeyRef.Optional != nil && *ref.SecretKeyRef.Optional {
+			return envTokenOptional
+		}
+		return envTokenPresent
+	}
+	return envTokenMissing
+}
+
+// fold applies this entry over what an earlier duplicate of the same name left.
+// Kubelet skips an optional Secret key that does not exist rather than clearing
+// the variable, so an optional entry cannot take away a value already set.
+func (e doctorExtraEnv) fold(prior envTokenState) envTokenState {
+	if state := e.state(); state != envTokenOptional || prior != envTokenPresent {
+		return state
+	}
+	return envTokenPresent
+}
+
+// chartReadTokenState is what the chart's own GITHUB_READ_TOKEN block supplies,
+// before any fetcher.extraEnv override.
+func chartReadTokenState(values doctorKubernetesValues) envTokenState {
+	if !placeholder(values.AI.GitHubReadToken) || !placeholder(values.AI.GitHubReadTokenSecretName) {
+		return envTokenPresent
+	}
+	// ai.existingSecret only reaches the fetcher when AI is on, and the chart
+	// mounts that key with optional: true.
+	if values.AI.Enabled != nil && *values.AI.Enabled && !placeholder(values.AI.ExistingSecret) {
+		return envTokenOptional
+	}
+	return envTokenMissing
+}
+
+// kubernetesReadTokenSource resolves what the fetcher will read, mirroring both
+// the chart's rendering conditions and the engine's env preference. Each
+// variable is resolved separately because GITHUB_TOKEN is only a fallback, not
+// an override of GITHUB_READ_TOKEN.
+func kubernetesReadTokenSource(values doctorKubernetesValues) doctorReadTokenSource {
+	chart := chartReadTokenState(values)
+	read, fallback := chart, envTokenMissing
+	// The chart appends fetcher.extraEnv after its own entries and the last
+	// duplicate wins, so a later entry decides the final value.
+	for _, env := range values.Fetcher.ExtraEnv {
+		switch strings.TrimSpace(env.Name) {
+		case "GITHUB_READ_TOKEN":
+			read = env.fold(read)
+		case "GITHUB_TOKEN":
+			fallback = env.fold(fallback)
+		}
+	}
+	// githubReadToken prefers GITHUB_READ_TOKEN and falls back to GITHUB_TOKEN,
+	// including when an optional Secret key left the preferred one unset.
+	switch {
+	case read == envTokenPresent || fallback == envTokenPresent:
+		return readTokenConfigured
+	case read == envTokenOptional || fallback == envTokenOptional:
+		return readTokenOptionalSecret
+	case chart != envTokenMissing:
+		return readTokenShadowed
+	default:
+		return readTokenAbsent
+	}
+}
+
+func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Config) (profile doctorProfile) {
 	add := func(name string, status DoctorStatus, detail, action string) {
 		report.Checks = append(report.Checks, DoctorCheck{Name: name, Status: status, Detail: detail, Action: action})
 	}
@@ -424,7 +578,8 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 		add("Kubernetes values", DoctorFail, err.Error(), "Fix deploy/values.yaml so it is valid YAML.")
 		return
 	}
-	includePresubmits = values.Fetcher.IncludePresubmits
+	profile.includePresubmits = values.Fetcher.IncludePresubmits
+	profile.readToken = kubernetesReadTokenSource(values)
 	if !placeholder(values.Persistence.ExistingClaim) {
 		add("Kubernetes storage", DoctorPass, "persistence.existingClaim is configured", "")
 	} else if values.Persistence.Enabled != nil && !*values.Persistence.Enabled {
@@ -478,7 +633,7 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 	if _, trimmed := textutil.TrimCredential(values.AI.Token); trimmed {
 		add("Kubernetes AI credential", DoctorFail, "ai.token has leading or trailing whitespace", "Remove the surrounding whitespace. A credential with a stray newline is rejected by the endpoint as invalid, far from this file.")
 	}
-	return includePresubmits
+	return profile
 }
 
 func checkKubernetesOrigin(add func(string, DoctorStatus, string, string), values doctorKubernetesValues) {

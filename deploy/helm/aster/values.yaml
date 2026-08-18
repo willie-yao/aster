@@ -333,11 +333,18 @@ ai:
   token: ""
   existingSecret: ""
   tokenSecretKey: AI_TOKEN
-  # githubReadToken grounds analysis on the configured ai.source_repo. It is
-  # optional for public repositories, which use anonymous GitHub reads. Prefer
-  # githubReadTokenSecretName in production. When the inline value is used, the
-  # chart creates a dedicated read-token Secret. For compatibility, an empty
-  # secret name with ai.existingSecret reads the key from the AI Secret.
+  # The read-only GitHub token, used by two independent features and rendered
+  # whether or not ai.enabled is true.
+  #   - Analysis source grounding on ai.source_repo. Optional for public
+  #     repositories, which fall back to anonymous GitHub reads.
+  #   - Pull request triage (pull_requests.enabled), which needs it regardless
+  #     of repository visibility. Anonymous reads are capped at 60 per hour and
+  #     one triage pass can exhaust that, leaving the view silently stale.
+  # For a public repository the token needs no repository privileges; it only
+  # lifts the rate limit. Prefer githubReadTokenSecretName in production. When
+  # the inline value is used, the chart creates a dedicated read-token Secret.
+  # For compatibility, an empty secret name with ai.existingSecret reads the key
+  # from the AI Secret, which is mounted optional so a missing key is ignored.
   githubReadToken: ""
   githubReadTokenSecretName: ""
   githubReadTokenSecretKey: GITHUB_READ_TOKEN

@@ -223,7 +223,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		return nil, fmt.Errorf("configuring AI usage accounting: %w", err)
 	}
 
-	return &pipeline{
+	p := &pipeline{
 		opts:              opts,
 		cfg:               cfg,
 		client:            client,
@@ -233,7 +233,9 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		aiProject:         aiProject,
 		usageRecorder:     usageRecorder,
 		includePresubmits: opts.IncludePresubmits || cfg.Source.IncludePresubmits,
-	}, nil
+	}
+	p.warnPullRequestTokenMissing()
+	return p, nil
 }
 
 // fullPass runs discovery, a data refresh, and side effects under the run

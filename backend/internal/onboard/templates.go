@@ -193,8 +193,13 @@ ai:
   existingSecret: {{if .AIEnabled}}"<existing-ai-secret>"{{else}}""{{end}}
   tokenSecretKey: AI_TOKEN
 
-  # Public repositories normally use anonymous source reads. Private source
-  # grounding should use a separate read-only GitHub credential Secret.
+  # The read-only GitHub token, used by two independent features and read
+  # whether or not ai.enabled is true. Analysis source grounding can fall back
+  # to anonymous reads on a public repository, but pull request triage
+  # (pull_requests.enabled) needs the token regardless of visibility: anonymous
+  # callers get 60 requests an hour and one triage pass can exhaust that,
+  # leaving the pull request view silently stale. For a public source_repo the
+  # token needs no repository privileges; it only lifts the rate limit.
   githubReadTokenSecretName: ""
   githubReadTokenSecretKey: GITHUB_READ_TOKEN
 

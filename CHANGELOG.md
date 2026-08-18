@@ -73,6 +73,24 @@ how to pin a consumer to a reviewed version.
 - **Filing an issue honors `issues.triggers`.** The File issue action always
   used the `patterns` trigger, so a project that disabled it could still file a
   pattern issue that scheduled recovery would never close.
+- **The Helm chart supplies `GITHUB_READ_TOKEN` without `ai.enabled`.** The
+  worker and fetcher rendered the read token only inside the AI block, and the
+  read-token Secret was gated on AI or server actions. Pull request triage reads
+  GitHub with no model calls, so `pull_requests.enabled: true` with
+  `ai.enabled: false` had no chart value that reached the fetcher, leaving it to
+  read anonymously at 60 requests per hour until triage silently stopped
+  updating. `ai.githubReadToken` and `ai.githubReadTokenSecretName` now apply
+  independently of `ai.enabled`. Renders with `ai.enabled: true` are unchanged.
+
+### Added
+
+- **Pull request triage reports a missing GitHub read token.** The fetcher logs
+  one startup warning when triage is enabled with neither `GITHUB_READ_TOKEN`
+  nor `GITHUB_TOKEN` set, and `aster onboard doctor` reports the same gap as a
+  `pull request triage credential` warning. Both name the anonymous 60 requests
+  per hour ceiling that one triage pass can exhaust. The credential is now
+  documented in the pull request triage configuration reference and in
+  troubleshooting.
 
 ### Changed
 

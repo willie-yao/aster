@@ -179,3 +179,31 @@ Sandbox Fix runtime.
 - Draft-ready email requires `EMAIL_SMTP_PASSWORD` in `server.extraEnv`, not only
   `fetcher.extraEnv`.
 - The review link is bound to the authenticated login that created the request.
+
+
+## Pull request triage stops updating
+
+Symptom: `pull-requests.json` keeps an old `generated_at` while the rest of the
+dashboard refreshes normally. The fetcher logs:
+
+```
+⚠ Pull request triage failed, keeping the previous view: ... 403 ...
+```
+
+The usual cause is anonymous GitHub reads. Triage calls the GitHub API on every
+pass, and without a token GitHub caps the deployment at 60 requests per hour,
+which one pass over a busy repository can spend on its own. A refresh failure
+never aborts the pass, so the dashboard still publishes the previous view.
+
+Look for this line in the startup logs, which is emitted once per process:
+
+```
+⚠ Pull request triage is enabled but neither GITHUB_READ_TOKEN nor GITHUB_TOKEN is set.
+```
+
+Fix it by setting `ai.githubReadToken` or `ai.githubReadTokenSecretName`, which
+apply whether or not `ai.enabled` is true. For a public `branding.source_repo`
+the token needs no repository privileges. `aster onboard doctor` reports the
+same gap as `pull request triage credential`. The Pages path already receives
+the Actions `GITHUB_TOKEN` from the reusable workflow, so this does not apply
+there. See [Pull request triage](project-configuration.md#pull-request-triage).

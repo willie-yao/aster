@@ -497,4 +497,62 @@ if [[ $(grep -Fc 'kind: Secret' "$tmp/github-read-secret.yaml") -ne 1 ]]; then
   exit 1
 fi
 
+# Pull request triage reads GitHub with no model calls, so the read token must
+# render independently of ai.enabled.
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=false \
+  --set ai.githubReadTokenSecretName=external-github-read \
+  --show-only templates/worker-deployment.yaml > "$tmp/triage-worker.yaml"
+grep -Fq 'GITHUB_READ_TOKEN' "$tmp/triage-worker.yaml"
+grep -Fq 'name: external-github-read' "$tmp/triage-worker.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=cron \
+  --set ai.enabled=false \
+  --set ai.githubReadTokenSecretName=external-github-read \
+  --show-only templates/fetcher-cronjob.yaml > "$tmp/triage-cronjob.yaml"
+grep -Fq 'GITHUB_READ_TOKEN' "$tmp/triage-cronjob.yaml"
+grep -Fq 'name: external-github-read' "$tmp/triage-cronjob.yaml"
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=false \
+  --set ai.githubReadToken=github-read-token \
+  --show-only templates/secret-github-read.yaml > "$tmp/triage-secret.yaml"
+if [[ $(grep -Fc 'kind: Secret' "$tmp/triage-secret.yaml") -ne 1 ]]; then
+  echo 'GitHub read token secret not rendered exactly once with ai.enabled=false' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=false \
+  --show-only templates/worker-deployment.yaml > "$tmp/triage-worker-unset.yaml"
+if grep -Fq 'GITHUB_READ_TOKEN' "$tmp/triage-worker-unset.yaml"; then
+  echo 'GITHUB_READ_TOKEN rendered without a configured read token' >&2
+  exit 1
+fi
+
+# ai.existingSecret may or may not carry the read key, so the chart mounts it
+# optional. An explicitly named Secret must stay required.
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=true \
+  --set ai.endpoint=https://model.example.test/v1/chat/completions \
+  --set ai.model=fixture-model \
+  --set ai.existingSecret=shared-ai \
+  --show-only templates/worker-deployment.yaml > "$tmp/triage-worker-existing.yaml"
+grep -Fq 'optional: true' "$tmp/triage-worker-existing.yaml"
+if grep -Fq 'optional: true' "$tmp/triage-worker.yaml"; then
+  echo 'an explicitly named read-token Secret was rendered optional' >&2
+  exit 1
+fi
+
+# With AI off the AI Secret is never deployed, so it must not be referenced.
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=false \
+  --set ai.existingSecret=shared-ai \
+  --show-only templates/worker-deployment.yaml > "$tmp/triage-worker-existing-off.yaml"
+if grep -Fq 'GITHUB_READ_TOKEN' "$tmp/triage-worker-existing-off.yaml"; then
+  echo 'ai.existingSecret was referenced for the read token while AI is disabled' >&2
+  exit 1
+fi
+
 echo 'Helm render checks passed.'

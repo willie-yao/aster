@@ -24,6 +24,18 @@ func (p *pipeline) pullRequestsEnabled() bool {
 	return p.cfg != nil && p.cfg.PullRequests != nil && p.cfg.PullRequests.Enabled
 }
 
+// warnPullRequestTokenMissing logs once at startup when triage is enabled with
+// no read token. Anonymous GitHub reads are capped at 60 requests per hour,
+// which a single pass over a busy repository exhausts, and the resulting 403s
+// only surface as a view that stops updating.
+func (p *pipeline) warnPullRequestTokenMissing() {
+	if !p.pullRequestsEnabled() || githubReadToken() != "" {
+		return
+	}
+	log.Println("⚠ Pull request triage is enabled but neither GITHUB_READ_TOKEN nor GITHUB_TOKEN is set. " +
+		"GitHub reads are anonymous and capped at 60 requests per hour, which one triage pass can exhaust.")
+}
+
 // attributionBaseline builds the base-branch evidence each failure is compared
 // against. It reads the base-only flakiness report rather than the published
 // one, so publishing presubmits cannot change a verdict. A nil result means the
