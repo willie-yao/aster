@@ -40,6 +40,7 @@
     "src/lib/detailTitles.ts",
     "src/lib/jobDetail.ts",
     "src/lib/testDetail.ts",
+    "src/lib/runtimeTrend.ts",
     "src/types/actions.ts"
   ]
 }
