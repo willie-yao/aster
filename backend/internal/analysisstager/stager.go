@@ -3,6 +3,8 @@ package analysisstager
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -72,9 +74,6 @@ func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, e
 	if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceInput, request.Source.Revision, request.InputSourceModePolicy); err != nil {
 		return fmt.Errorf("verify staged source: %w", err)
 	}
-	if err := agentanalysis.VerifyArtifactFiles(artifactInput, artifacts); err != nil {
-		return fmt.Errorf("verify staged artifacts: %w", err)
-	}
 	sourceOutput := filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir)
 	artifactOutput := filepath.Join(workspaceRoot, agentanalysis.WorkspaceArtifactsDir)
 	resultOutput := filepath.Join(workspaceRoot, agentanalysis.WorkspaceResultDir)
@@ -91,17 +90,11 @@ func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, e
 	if modePolicy != request.OutputSourceModePolicy {
 		return fmt.Errorf("copied source mode policy does not match the sealed request")
 	}
-	if _, _, err := copyTree(ctx, artifactInput, artifactOutput, len(artifacts), 64<<20, 512<<20); err != nil {
+	if err := copyArtifactTree(ctx, artifactInput, artifactOutput, artifacts); err != nil {
 		return fmt.Errorf("copy staged artifacts: %w", err)
 	}
 	if err := os.Mkdir(resultOutput, 0o700); err != nil {
 		return fmt.Errorf("create analysis result directory: %w", err)
-	}
-	if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceOutput, request.Source.Revision, request.OutputSourceModePolicy); err != nil {
-		return fmt.Errorf("verify copied source: %w", err)
-	}
-	if err := agentanalysis.VerifyArtifactFiles(artifactOutput, artifacts); err != nil {
-		return fmt.Errorf("verify copied artifacts: %w", err)
 	}
 	if err := agentanalysis.WriteWorkspaceExecutionRequestFile(requestRoot, execution); err != nil {
 		return fmt.Errorf("write workspace execution request: %w", err)
@@ -166,16 +159,19 @@ func boundedOutput(value []byte) string {
 	return text
 }
 
-func copyTree(ctx context.Context, source, destination string, maxFiles int, maxFileBytes, maxTotalBytes int64) (int, int64, error) {
+func copyArtifactTree(ctx context.Context, source, destination string, expected []agentanalysis.WorkspaceFile) error {
 	info, err := os.Lstat(source)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return 0, 0, fmt.Errorf("source root is not a safe directory")
+		return fmt.Errorf("source root is not a safe directory")
 	}
 	if err := os.Mkdir(destination, 0o700); err != nil {
-		return 0, 0, err
+		return err
 	}
-	files := 0
-	var total int64
+	files := make(map[string]agentanalysis.WorkspaceFile, len(expected))
+	for _, file := range expected {
+		files[file.Path] = file
+	}
+	copied := 0
 	err = filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -201,20 +197,31 @@ func copyTree(ctx context.Context, source, destination string, maxFiles int, max
 		if err != nil {
 			return err
 		}
-		if !fileInfo.Mode().IsRegular() || fileInfo.Size() > maxFileBytes {
-			return fmt.Errorf("input tree contains unsupported or oversized file %s", relative)
+		relative = filepath.ToSlash(relative)
+		sealed, ok := files[relative]
+		if !ok {
+			return fmt.Errorf("input tree contains unexpected file %s", relative)
 		}
-		files++
-		total += fileInfo.Size()
-		if files > maxFiles || total > maxTotalBytes {
-			return fmt.Errorf("input tree exceeds file or byte bounds")
+		if !fileInfo.Mode().IsRegular() || fileInfo.Size() != sealed.Size {
+			return fmt.Errorf("input tree file %s does not match the sealed manifest", relative)
 		}
-		return copyFile(path, target, fileInfo.Mode(), maxFileBytes)
+		if err := copyVerifiedArtifact(path, target, fileInfo.Mode(), sealed); err != nil {
+			return fmt.Errorf("copy %s: %w", relative, err)
+		}
+		delete(files, relative)
+		copied++
+		return nil
 	})
-	return files, total, err
+	if err != nil {
+		return err
+	}
+	if copied != len(expected) || len(files) != 0 {
+		return fmt.Errorf("input tree is missing sealed artifact files")
+	}
+	return nil
 }
 
-func copyFile(source, destination string, mode os.FileMode, limit int64) error {
+func copyVerifiedArtifact(source, destination string, mode os.FileMode, expected agentanalysis.WorkspaceFile) error {
 	input, err := os.Open(source)
 	if err != nil {
 		return err
@@ -228,13 +235,17 @@ func copyFile(source, destination string, mode os.FileMode, limit int64) error {
 	if err != nil {
 		return err
 	}
-	copied, copyErr := io.Copy(output, io.LimitReader(input, limit+1))
+	hash := sha256.New()
+	copied, copyErr := io.Copy(io.MultiWriter(output, hash), io.LimitReader(input, expected.Size+1))
 	closeErr := output.Close()
 	if copyErr != nil {
 		return copyErr
 	}
-	if copied > limit {
-		return fmt.Errorf("input file exceeds %d bytes", limit)
+	if closeErr != nil {
+		return closeErr
 	}
-	return closeErr
+	if copied != expected.Size || hex.EncodeToString(hash.Sum(nil)) != expected.SHA256 {
+		return fmt.Errorf("artifact bytes do not match the sealed manifest")
+	}
+	return nil
 }

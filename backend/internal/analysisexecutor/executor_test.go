@@ -929,6 +929,137 @@ func makeExecutorTreeReadOnly(t *testing.T, root string) func() {
 	}
 }
 
+func TestRecoverableOpenCodeEvidenceExhaustion(t *testing.T) {
+	baseError := agentanalysis.WorkspaceOpenCodeErrorTelemetry{
+		Available: true, Name: "APIError", HTTPStatusCode: http.StatusBadRequest,
+		RetryableKnown: true, Retryable: false, Classification: "api_bad_request",
+	}
+	baseTelemetry := agentanalysis.WorkspaceOpenCodeTelemetry{
+		Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable,
+		ProviderRequests: 16, ProviderRequestsKnown: true, StepsUsed: 15,
+	}
+	baseFacts := openCodeEvidenceFacts{
+		ArtifactToolCalls: 1,
+		EvidenceDiagnostics: agentanalysis.WorkspaceEvidenceHandleDiagnostics{
+			Status: agentanalysis.WorkspaceEvidenceHandlesAccepted, AcceptedArtifactHandleCount: 1,
+		},
+	}
+	baseSpec := OpenCodeSpec{MaxSteps: 20, RequireSourceEvidence: true}
+	makeError := func(value agentanalysis.WorkspaceOpenCodeErrorTelemetry) error {
+		return &openCodePromptError{name: value.Name, telemetry: value}
+	}
+	if !recoverableOpenCodeEvidenceExhaustion(makeError(baseError), baseTelemetry, baseFacts, baseSpec) {
+		t.Fatal("exact bounded exhaustion was not recoverable")
+	}
+	for _, test := range []struct {
+		name string
+		edit func(*agentanalysis.WorkspaceOpenCodeErrorTelemetry, *agentanalysis.WorkspaceOpenCodeTelemetry, *openCodeEvidenceFacts, *OpenCodeSpec)
+	}{
+		{name: "before bound", edit: func(_ *agentanalysis.WorkspaceOpenCodeErrorTelemetry, telemetry *agentanalysis.WorkspaceOpenCodeTelemetry, _ *openCodeEvidenceFacts, _ *OpenCodeSpec) {
+			telemetry.ProviderRequests--
+		}},
+		{name: "missing handle", edit: func(_ *agentanalysis.WorkspaceOpenCodeErrorTelemetry, _ *agentanalysis.WorkspaceOpenCodeTelemetry, facts *openCodeEvidenceFacts, _ *OpenCodeSpec) {
+			facts.EvidenceDiagnostics.AcceptedArtifactHandleCount = 0
+		}},
+		{name: "denied tool", edit: func(_ *agentanalysis.WorkspaceOpenCodeErrorTelemetry, telemetry *agentanalysis.WorkspaceOpenCodeTelemetry, _ *openCodeEvidenceFacts, _ *OpenCodeSpec) {
+			telemetry.DeniedToolCount = 1
+		}},
+		{name: "retryable", edit: func(providerError *agentanalysis.WorkspaceOpenCodeErrorTelemetry, _ *agentanalysis.WorkspaceOpenCodeTelemetry, _ *openCodeEvidenceFacts, _ *OpenCodeSpec) {
+			providerError.Retryable = true
+		}},
+		{name: "context overflow", edit: func(providerError *agentanalysis.WorkspaceOpenCodeErrorTelemetry, _ *agentanalysis.WorkspaceOpenCodeTelemetry, _ *openCodeEvidenceFacts, _ *OpenCodeSpec) {
+			providerError.ContextOverflow = true
+		}},
+		{name: "structured output", edit: func(_ *agentanalysis.WorkspaceOpenCodeErrorTelemetry, _ *agentanalysis.WorkspaceOpenCodeTelemetry, facts *openCodeEvidenceFacts, _ *OpenCodeSpec) {
+			facts.StructuredOutputCalls = 1
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			providerError, telemetry, facts, spec := baseError, baseTelemetry, baseFacts, baseSpec
+			test.edit(&providerError, &telemetry, &facts, &spec)
+			if recoverableOpenCodeEvidenceExhaustion(makeError(providerError), telemetry, facts, spec) {
+				t.Fatal("unsafe evidence failure was recoverable")
+			}
+		})
+	}
+}
+
+func TestRunOpenCodePhasesFinalizesAfterBoundedEvidenceExhaustion(t *testing.T) {
+	workDir := t.TempDir()
+	for _, dir := range []string{agentanalysis.WorkspaceSourceDir, agentanalysis.WorkspaceArtifactsDir} {
+		if err := os.Mkdir(filepath.Join(workDir, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifactPath := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir, "failure.log")
+	sourcePath := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir, "main.go")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var evidence strings.Builder
+	evidence.WriteByte('[')
+	for step := 0; step < 15; step++ {
+		if step > 0 {
+			evidence.WriteByte(',')
+		}
+		parts := `[{"type":"step-start"}`
+		if step == 0 {
+			parts += fmt.Sprintf(`,{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}}`, artifactPath)
+		}
+		parts += `,{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]`
+		fmt.Fprintf(&evidence, `{"info":{"role":"assistant"},"parts":%s}`, parts)
+	}
+	evidenceError := `{"name":"APIError","data":{"message":"bounded synthetic request","statusCode":400,"isRetryable":false,"responseBody":"synthetic"}}`
+	fmt.Fprintf(&evidence, `,{"info":{"role":"assistant","error":%s},"parts":[]}]`, evidenceError)
+	evidenceTelemetry := evidence.String()
+	correctedTelemetry := strings.TrimSuffix(evidenceTelemetry, "]") + fmt.Sprintf(`,{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, sourcePath)
+	finalTelemetry := strings.TrimSuffix(correctedTelemetry, "]") + fmt.Sprintf(`,{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},{"type":"step-finish","cost":0.2,"tokens":{"input":20,"output":4,"cache":{"read":2}}}]}]`, executorAnalysisJSON())
+	posts, gets := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			posts++
+			switch posts {
+			case 1:
+				fmt.Fprintf(w, `{"info":{"role":"assistant","error":%s},"parts":[]}`, evidenceError)
+			case 2:
+				fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
+			case 3:
+				fmt.Fprintf(w, `{"info":{"role":"assistant","structured":%s},"parts":[]}`, executorAnalysisJSON())
+			default:
+				t.Fatalf("unexpected post %d", posts)
+			}
+		case http.MethodGet:
+			gets++
+			switch gets {
+			case 1:
+				fmt.Fprint(w, evidenceTelemetry)
+			case 2:
+				fmt.Fprint(w, correctedTelemetry)
+			case 3:
+				fmt.Fprint(w, finalTelemetry)
+			default:
+				t.Fatalf("unexpected get %d", gets)
+			}
+		default:
+			t.Fatalf("method=%s", r.Method)
+		}
+	}))
+	defer server.Close()
+	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192, RequireSourceEvidence: true}
+	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetry := result.Telemetry
+	if posts != 3 || gets != 3 || len(result.Structured) == 0 || !telemetry.EvidencePhaseCompleted || !telemetry.EvidenceExhausted || telemetry.EvidenceStepBudget != 16 || telemetry.EvidenceExhaustedSteps != 15 || telemetry.EvidenceExhaustedRequests != 16 || telemetry.EvidenceExhaustionClass != "api_bad_request" || telemetry.EvidencePhaseSteps != 16 || telemetry.EvidencePhaseRequests != 17 || telemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceAccepted || !telemetry.SourceEvidenceCorrectiveTurn || !telemetry.FinalizationPhaseCompleted || telemetry.FinalizationPhaseSteps != 1 || telemetry.FinalizationPhaseRequests != 1 || telemetry.ProviderRequests != 18 || telemetry.StepsUsed != 17 || telemetry.StructuredOutputToolCalls != 1 {
+		t.Fatalf("posts=%d gets=%d result=%+v", posts, gets, result)
+	}
+}
+
 func TestRunOpenCodePhasesUsesOneSessionAndGatesFinalization(t *testing.T) {
 	workDir := t.TempDir()
 	for _, dir := range []string{agentanalysis.WorkspaceSourceDir, agentanalysis.WorkspaceArtifactsDir} {

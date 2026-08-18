@@ -152,3 +152,44 @@ func TestValidateWorkspaceOpenCodeTelemetryAllowsRejectedEvidenceDiagnosticsWhen
 func boolPointer(value bool) *bool {
 	return &value
 }
+
+func TestValidateWorkspaceOpenCodeTelemetryAllowsBoundedEvidenceExhaustion(t *testing.T) {
+	telemetry := WorkspaceOpenCodeTelemetry{
+		Available: true, Status: WorkspaceTelemetryAvailable, EventCount: 20,
+		ProviderRequests: 17, ProviderRequestsKnown: true, StepsUsed: 16,
+		RequestShape: validRequestShapeForTest(), StructuredOutputRetriesKnown: true,
+		Error: WorkspaceOpenCodeErrorTelemetry{
+			Available: true, Name: "APIError", HTTPStatusCode: 400,
+			RetryableKnown: true, Classification: "api_bad_request",
+		},
+		Tools:                  []WorkspaceToolTelemetry{{Name: "read", Count: 2}, {Name: "StructuredOutput", Count: 1}},
+		EvidencePhaseCompleted: true, EvidencePhaseSteps: 15, EvidencePhaseRequests: 16,
+		EvidenceStepBudget: 16, EvidenceExhausted: true,
+		EvidenceExhaustedSteps: 15, EvidenceExhaustedRequests: 16,
+		EvidenceExhaustionClass:   "api_bad_request",
+		ArtifactEvidenceToolCalls: 1, SourceEvidenceToolCalls: 1,
+		EvidenceReadCalls: 2, DuplicateReadCalls: 1,
+		EvidenceHandles: WorkspaceEvidenceHandleDiagnostics{
+			Status: WorkspaceEvidenceHandlesAccepted, ObservedRangeCount: 2,
+			AcceptedArtifactHandleCount: 1, AcceptedSourceHandleCount: 1,
+		},
+		FinalizationPhaseCompleted: true, FinalizationPhaseSteps: 1, FinalizationPhaseRequests: 1,
+		StructuredOutputToolCalls: 1,
+	}
+	if err := validateWorkspaceOpenCodeTelemetry(telemetry); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*WorkspaceOpenCodeTelemetry){
+		"wrong allocation":     func(value *WorkspaceOpenCodeTelemetry) { value.EvidenceStepBudget-- },
+		"wrong classification": func(value *WorkspaceOpenCodeTelemetry) { value.EvidenceExhaustionClass = "api_error" },
+		"duplicate overflow":   func(value *WorkspaceOpenCodeTelemetry) { value.DuplicateReadCalls = 3 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := telemetry
+			mutate(&value)
+			if err := validateWorkspaceOpenCodeTelemetry(value); err == nil {
+				t.Fatalf("invalid bounded exhaustion telemetry was accepted: %+v", value)
+			}
+		})
+	}
+}

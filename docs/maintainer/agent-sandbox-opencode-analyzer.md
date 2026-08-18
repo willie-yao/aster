@@ -65,12 +65,12 @@ reconstructs and validates the original request hash, cross-checks it against th
 stage request, and writes `request.json` with exclusive no-follow creation into a
 dedicated 1 MiB `emptyDir`. The executor receives that volume read-only and no
 longer receives the full request in an environment variable. The stager then
-verifies the compact artifact-index identity and copies the sealed snapshot into
-a fresh workspace. The executor verifies the request, revision, hashes, mount
-identity, and read-only state before and after OpenCode runs. Only `result/` and
-temporary executor state are writable. The dashboard validates the returned result again against its
-retained local copy. A second tokenless, no-network Job deletes exactly the leased
-remote snapshot.
+verifies the compact artifact-index identity and copies each artifact once while
+checking its sealed size and digest. The executor independently verifies the
+materialized workspace before the first provider request and again after
+OpenCode runs. Only `result/` and temporary executor state are writable. The
+dashboard validates the returned result again against its retained local copy. A
+second tokenless, no-network Job deletes exactly the leased remote snapshot.
 
 Preparation, remote publication, model execution, and cleanup use separate
 bounded contexts. The full configured analysis timeout starts only after both
@@ -91,8 +91,15 @@ instructions attached to an adjacent read.
 Successful content-bearing reads produce engine-issued evidence handles. The
 model selects handles in the structured result instead of authoring citation
 paths or quotes. The executor reconstructs canonical paths, line ranges, and
-quotations from the sealed workspace. A result without valid artifact grounding
-remains private and preliminary when the structured content is otherwise safe.
+quotations from the sealed workspace. If the evidence agent receives one
+non-retryable API 400 exactly at its allocated final request, the executor may
+continue into the separately reserved source-correction and finalization phases
+only when telemetry proves accepted artifact evidence, no denied tool, and no
+structured-output attempt. This is not a provider retry. The original failure,
+allocated and consumed steps, and recovery decision remain in private telemetry.
+Every earlier, retryable, context, policy, or ungrounded failure still stops the
+run. A result without valid artifact grounding remains private and preliminary
+when the structured content is otherwise safe.
 Source-required cases without accepted source grounding are also preliminary.
 These results never gain publication, cache, fallback, action, correction,
 remediation, or Fix authority.
@@ -260,8 +267,10 @@ operator's evidence policy.
 
 Telemetry may retain bounded counts and statuses for provider requests, token and
 cost availability, steps, tools, denials, context limits, structured-output
-status, validation, and cleanup. It may also retain safe model and protocol
-identity plus digests of schemas and request shape.
+status, bounded evidence exhaustion, exact duplicate successful read ranges,
+validation, and cleanup. Duplicate-read telemetry is observational and does not
+change the model-visible tool result. Telemetry may also retain safe model and
+protocol identity plus digests of schemas and request shape.
 
 It must not retain or print:
 

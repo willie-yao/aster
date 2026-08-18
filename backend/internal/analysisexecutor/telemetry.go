@@ -118,6 +118,9 @@ type openCodeEvidenceFacts struct {
 	EvidenceRejected       bool
 	EvidenceRetainedByRoot map[string]int
 	EvidencePathSafe       map[string]bool
+	EvidenceReadRanges     map[string]bool
+	EvidenceReadCalls      int
+	DuplicateReadCalls     int
 	ParseDeadline          time.Time
 }
 
@@ -324,6 +327,8 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 		value := tools[name]
 		telemetry.Tools = append(telemetry.Tools, agentanalysis.WorkspaceToolTelemetry{Name: name, Count: value.count, Failures: value.failures, Denied: value.denied})
 	}
+	telemetry.EvidenceReadCalls = facts.EvidenceReadCalls
+	telemetry.DuplicateReadCalls = facts.DuplicateReadCalls
 	if workDir != "" {
 		handles, diagnostics, err := agentanalysis.BuildWorkspaceEvidenceHandlesWithDeadline(workDir, facts.EvidenceRanges, facts.ParseDeadline)
 		diagnostics = mergeOpenCodeEvidenceDiagnostics(diagnostics, facts)
@@ -545,7 +550,18 @@ func recordOpenCodeEvidenceTool(facts *openCodeEvidenceFacts, tool string, raw j
 			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangePathInvalid, 1, 1, false, true)
 			break
 		}
-		appendOpenCodeEvidenceRange(facts, agentanalysis.WorkspaceEvidenceRange{Root: root, Path: displayRelative, LineStart: display.LineStart, LineEnd: display.LineEnd})
+		rangeValue := agentanalysis.WorkspaceEvidenceRange{Root: root, Path: displayRelative, LineStart: display.LineStart, LineEnd: display.LineEnd}
+		if facts.EvidenceReadRanges == nil {
+			facts.EvidenceReadRanges = map[string]bool{}
+		}
+		key := fmt.Sprintf("%s\x00%s\x00%d\x00%d", rangeValue.Root, rangeValue.Path, rangeValue.LineStart, rangeValue.LineEnd)
+		facts.EvidenceReadCalls++
+		if facts.EvidenceReadRanges[key] {
+			facts.DuplicateReadCalls++
+		} else {
+			facts.EvidenceReadRanges[key] = true
+		}
+		appendOpenCodeEvidenceRange(facts, rangeValue)
 		validEvidence = true
 	case "grep":
 		if matches == nil || *matches < 1 {
