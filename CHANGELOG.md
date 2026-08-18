@@ -84,6 +84,36 @@ how to pin a consumer to a reviewed version.
 
 ### Added
 
+- **Configurable attention thresholds.** A new optional `attention` section in
+  `project.yaml` exposes two knobs that were previously fixed. `persistent_after`
+  replaces the hardcoded consecutive-failure count of 3 that produces a
+  `persistent` classification; it defaults to 3, and changing it moves the
+  published classification, the flakiness report sections, the pull request
+  attribution `known_flake` baseline, and notification eligibility together.
+  `attention.low_pass_rate` adds a separate, opt-in selection rule that surfaces
+  a test whose pass rate over the window falls strictly below a configured
+  cutoff, so `threshold: 1.0` surfaces any test that failed at least once. The
+  rule never changes a test's `classification`. It publishes a new
+  `low_pass_rate` array in `flakiness.json`, whose entries carry their own
+  `window_runs` and `pass_rate` because `recent_runs` can narrow the measurement
+  below the window the entry's `fail_rate` covers, and the overview renders it
+  as its own Needs Attention group from the item budget the recent, persistent,
+  and flaky groups leave behind. Omitting the section leaves the rendered
+  dashboard unchanged; `flakiness.json` gains an always-present `low_pass_rate`
+  array that is empty when the rule is off, matching how the report's other
+  sections are published. A `min_runs` guard, defaulting to 5, keeps a single
+  failure out of two runs from being treated as signal. See
+  [attention thresholds](docs/project-configuration.md#attention-thresholds).
+
+  The notifier and issue recovery reconciliation no longer re-apply a literal
+  threshold of 3 on top of the report's `persistent_failures`. Re-checking it
+  would have silently dropped email for a consumer that lowered
+  `persistent_after`, and dropped a still-failing test from the active issue key
+  set, which recovery would then read as recovered and close. The consecutive
+  failure count handed to the AI analyzer is now computed from the runs
+  themselves rather than read off `persistent_failures`, so the engine-owned
+  transient critique keeps seeing the true streak whatever a project configures.
+
 - **Pull request triage reports a missing GitHub read token.** The fetcher logs
   one startup warning when triage is enabled with neither `GITHUB_READ_TOKEN`
   nor `GITHUB_TOKEN` set, and `aster onboard doctor` reports the same gap as a

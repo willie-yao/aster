@@ -456,7 +456,9 @@ func TestBuildSpecs_PatternsAndPersistent(t *testing.T) {
 		PersistentFailures: []models.TestFlakiness{
 			{JobID: "job-z", JobName: "job-z", TestName: "TestFoo", ConsecutiveFailures: 4,
 				LastFailure: &models.TestFailureInfo{BuildID: "999", FailureMessage: "boom"}},
-			{JobID: "job-w", JobName: "job-w", TestName: "TestBar", ConsecutiveFailures: 2}, // below floor
+			// The aggregator already applied the project's threshold, so a
+			// lower consecutive count here still belongs in the active set.
+			{JobID: "job-w", JobName: "job-w", TestName: "TestBar", ConsecutiveFailures: 2},
 		},
 	}
 	details := []models.JobDetail{{
@@ -477,12 +479,15 @@ func TestBuildSpecs_PatternsAndPersistent(t *testing.T) {
 		DashboardURL: "https://example.io/dash/",
 	})
 
-	if len(specs) != 2 {
-		t.Fatalf("got %d specs, want 2 (1 systemic pattern + 1 persistent>=3)", len(specs))
+	if len(specs) != 3 {
+		t.Fatalf("got %d specs, want 3 (1 systemic pattern + 2 persistent)", len(specs))
 	}
 	byKey := map[string]IssueSpec{}
 	for _, s := range specs {
 		byKey[s.Key] = s
+	}
+	if _, ok := byKey["persistent::job-w::TestBar"]; !ok {
+		t.Error("a report-supplied persistent failure was dropped by a hardcoded threshold")
 	}
 	pat, ok := byKey["pattern::job-x"]
 	if !ok {

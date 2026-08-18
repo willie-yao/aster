@@ -16,7 +16,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/skills"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/causalcritic"
-	"github.com/willie-yao/aster/backend/internal/models"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
@@ -134,7 +133,7 @@ func TestRunCausalCriticCandidateDoesNotConsumeQuotaBeforeClaim(t *testing.T) {
 		freezeCalls++
 		return agentanalysis.EvidenceBundle{}, errors.New("fixture evidence failure")
 	}
-	candidate := p.selectShadowCandidates(shadowTestDetails("TestFailure"), models.FlakinessReport{})[0]
+	candidate := p.selectShadowCandidates(shadowTestDetails("TestFailure"))[0]
 	if p.runCausalCriticCandidate(t.Context(), candidate) {
 		t.Fatal("evidence failure consumed critic quota")
 	}

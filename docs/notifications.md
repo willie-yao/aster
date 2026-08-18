@@ -6,8 +6,10 @@ full fetch pass or the watch worker's reconcile pass.
 
 ## Alert behavior
 
-A test enters the persistent set after at least three consecutive failures. The
-notifier sends:
+A test enters the persistent set after the configured number of consecutive
+failures, which defaults to three. See
+[attention thresholds](project-configuration.md#attention-thresholds) to change
+it. The notifier sends:
 
 - One email when a persistent failure first appears.
 - Another email if the latest error hash changes.

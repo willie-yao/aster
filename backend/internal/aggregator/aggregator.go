@@ -27,6 +27,43 @@ type FailureInfo struct {
 	ErrorHash           string
 }
 
+// defaultPersistentAfter is the consecutive failure count required for a
+// persistent classification when a project does not configure one.
+const defaultPersistentAfter = 3
+
+// Settings tunes classification and attention selection. The zero value uses
+// the engine defaults, so callers that do not care can pass Settings{}.
+type Settings struct {
+	// PersistentAfter is the consecutive failure count required for a
+	// persistent classification. Values below 1 fall back to the default.
+	PersistentAfter int
+	// LowPassRate optionally selects tests by pass rate. Nil disables the rule.
+	LowPassRate *LowPassRateRule
+}
+
+// LowPassRateRule selects tests whose pass rate over a window falls strictly
+// below Threshold. It is a selection rule and never alters a classification.
+type LowPassRateRule struct {
+	// Threshold is the exclusive pass-rate cutoff in [0, 1]. 1 selects every
+	// test that failed at least once; 0 selects none.
+	Threshold float64
+	// MinRuns is the number of runs in the window required before the rule
+	// applies.
+	MinRuns int
+	// RecentRuns limits the window to the newest N runs. Zero uses every run.
+	RecentRuns int
+	// MaxItems caps the selected set. Zero means unbounded.
+	MaxItems int
+}
+
+// persistentAfter resolves the configured consecutive-failure threshold.
+func (s Settings) persistentAfter() int {
+	if s.PersistentAfter > 0 {
+		return s.PersistentAfter
+	}
+	return defaultPersistentAfter
+}
+
 // ComputeJobSummary computes a JobSummary from newest-first build results.
 func ComputeJobSummary(job models.ProwJob, runs []models.BuildResult) models.JobSummary {
 	summary := models.JobSummary{
@@ -134,7 +171,7 @@ func ClassifyFailure(testName string, runs []models.BuildResult, threshold int) 
 
 func classifyOutcomes(outcomes []testOutcome, threshold int) FailureInfo {
 	if threshold <= 0 {
-		threshold = 3
+		threshold = defaultPersistentAfter
 	}
 	if len(outcomes) == 0 {
 		return FailureInfo{Classification: models.ClassificationOneOff}

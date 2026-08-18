@@ -78,7 +78,7 @@ func (p *pipeline) runCausalCritic(ctx context.Context, result *refreshResult) {
 			log.Printf("⚠ causal critic shadow cleanup retry: %v", err)
 		}
 	}
-	candidates := p.selectShadowCandidates(result.details, result.flakiness)
+	candidates := p.selectShadowCandidates(result.details)
 	if len(candidates) == 0 {
 		log.Printf("🧪 causal critic shadow: no eligible authoritative failures")
 		return

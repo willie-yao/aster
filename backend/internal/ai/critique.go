@@ -112,10 +112,12 @@ func findPunts(text string) []string {
 const currentCritiqueVersion = 9
 
 // transientPersistThreshold is the consecutive-failure count at or above which a
-// draft claiming is_transient=true is contradicted. It matches the engine's
-// persistent-failure definition (aggregator flakiness and patternMinFailedBuilds
-// both use 3): a genuine infrastructure flake does not recur identically across
-// three or more consecutive builds.
+// draft claiming is_transient=true is contradicted. It is an engine-owned
+// quality floor about flake physics, not the project's persistent-failure
+// definition: a genuine infrastructure flake does not recur identically across
+// three or more consecutive builds. It deliberately does not follow
+// attention.persistent_after, which only controls what a project classifies and
+// surfaces.
 const transientPersistThreshold = 3
 
 // artifactCitationRE matches strings in the model's prose that look like

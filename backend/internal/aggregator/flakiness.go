@@ -15,8 +15,8 @@ const (
 
 // ComputeTestFlakiness computes flakiness stats for one test across a job's runs.
 // Runs are expected newest-first.
-func ComputeTestFlakiness(testName, jobID, jobName string, runs []models.BuildResult) models.TestFlakiness {
-	return computeTestFlakiness(testName, jobID, jobName, outcomesForTest(testName, runs))
+func ComputeTestFlakiness(testName, jobID, jobName string, runs []models.BuildResult, settings Settings) models.TestFlakiness {
+	return computeTestFlakiness(testName, jobID, jobName, outcomesForTest(testName, runs), settings.persistentAfter())
 }
 
 type testOutcome struct {
@@ -79,7 +79,7 @@ func collectTestOutcomes(runs []models.BuildResult) map[string][]testOutcome {
 	return out
 }
 
-func computeTestFlakiness(testName, jobID, jobName string, outcomes []testOutcome) models.TestFlakiness {
+func computeTestFlakiness(testName, jobID, jobName string, outcomes []testOutcome, persistentAfter int) models.TestFlakiness {
 	tf := models.TestFlakiness{TestName: testName, JobName: jobName, JobID: jobID, TotalRuns: len(outcomes)}
 	if len(outcomes) == 0 {
 		return tf
@@ -110,7 +110,7 @@ func computeTestFlakiness(testName, jobID, jobName string, outcomes []testOutcom
 		}
 		tf.ConsecutiveFailures++
 	}
-	tf.Classification = classifyOutcomes(outcomes, 3).Classification
+	tf.Classification = classifyOutcomes(outcomes, persistentAfter).Classification
 
 	if tf.ConsecutiveFailures > 0 {
 		tf.FirstFailedAt = outcomes[tf.ConsecutiveFailures-1].started.UTC().Format(time.RFC3339)
@@ -170,14 +170,17 @@ func computeTestFlakiness(testName, jobID, jobName string, outcomes []testOutcom
 
 // ComputeFlakinessReport builds the full flakiness report across all jobs.
 // jobResults is keyed by JobID. jobs supplies the JobID-to-name lookup used by
-// the search index and notification dedupe key.
-func ComputeFlakinessReport(jobResults map[string][]models.BuildResult, jobs []models.ProwJob, now time.Time) models.FlakinessReport {
+// the search index and notification dedupe key. settings carries the project's
+// classification threshold and optional pass-rate selection rule.
+func ComputeFlakinessReport(jobResults map[string][]models.BuildResult, jobs []models.ProwJob, now time.Time, settings Settings) models.FlakinessReport {
 	jobName := make(map[string]string, len(jobs))
 	for _, j := range jobs {
 		jobName[j.JobID] = j.Name
 	}
 
+	persistentAfter := settings.persistentAfter()
 	var allFlaky []models.TestFlakiness
+	var lowPassRate []models.LowPassRateEntry
 
 	jobIDs := make([]string, 0, len(jobResults))
 	for jobID := range jobResults {
@@ -192,9 +195,18 @@ func ComputeFlakinessReport(jobResults map[string][]models.BuildResult, jobs []m
 		}
 		sort.Strings(testNames)
 		for _, testName := range testNames {
-			tf := computeTestFlakiness(testName, jobID, jobName[jobID], outcomesByTest[testName])
-			if tf.Failures > 0 {
-				allFlaky = append(allFlaky, tf)
+			outcomes := outcomesByTest[testName]
+			tf := computeTestFlakiness(testName, jobID, jobName[jobID], outcomes, persistentAfter)
+			if tf.Failures == 0 {
+				continue
+			}
+			allFlaky = append(allFlaky, tf)
+			// A test with no failures can never fall below a cutoff of at most
+			// 1, so the pass-rate rule only ever considers this same set.
+			if settings.LowPassRate != nil {
+				if entry, ok := lowPassRateEntry(tf, outcomes, *settings.LowPassRate); ok {
+					lowPassRate = append(lowPassRate, entry)
+				}
 			}
 		}
 	}
@@ -204,6 +216,7 @@ func ComputeFlakinessReport(jobResults map[string][]models.BuildResult, jobs []m
 		MostFlaky:          []models.TestFlakiness{},
 		PersistentFailures: []models.TestFlakiness{},
 		RecentlyBroken:     []models.TestFlakiness{},
+		LowPassRate:        []models.LowPassRateEntry{},
 		BuildFailures:      []models.BuildFailureSummary{},
 	}
 
@@ -231,7 +244,7 @@ func ComputeFlakinessReport(jobResults map[string][]models.BuildResult, jobs []m
 	// PersistentFailures is sorted by consecutive failure count.
 	var persistent []models.TestFlakiness
 	for _, tf := range allFlaky {
-		if tf.ConsecutiveFailures >= 3 {
+		if tf.ConsecutiveFailures >= persistentAfter {
 			persistent = append(persistent, tf)
 		}
 	}
@@ -267,7 +280,70 @@ func ComputeFlakinessReport(jobResults map[string][]models.BuildResult, jobs []m
 	})
 	report.RecentlyBroken = recentlyBroken
 
+	// LowPassRate is sorted worst-first so the weakest tests lead the section.
+	sort.Slice(lowPassRate, func(i, j int) bool {
+		if lowPassRate[i].PassRate != lowPassRate[j].PassRate {
+			return lowPassRate[i].PassRate < lowPassRate[j].PassRate
+		}
+		return testFlakinessLess(lowPassRate[i].TestFlakiness, lowPassRate[j].TestFlakiness)
+	})
+	if settings.LowPassRate != nil && settings.LowPassRate.MaxItems > 0 && len(lowPassRate) > settings.LowPassRate.MaxItems {
+		lowPassRate = lowPassRate[:settings.LowPassRate.MaxItems]
+	}
+	if lowPassRate != nil {
+		report.LowPassRate = lowPassRate
+	}
+
 	return report
+}
+
+// lowPassRateEntry reports whether a test qualifies for the pass-rate section.
+// The rate and the minimum-run guard share one window, so narrowing the window
+// cannot admit a test on thinner evidence than the guard requires. Outcomes are
+// expected newest-first.
+func lowPassRateEntry(tf models.TestFlakiness, outcomes []testOutcome, rule LowPassRateRule) (models.LowPassRateEntry, bool) {
+	window := outcomes
+	if rule.RecentRuns > 0 && rule.RecentRuns < len(window) {
+		window = window[:rule.RecentRuns]
+	}
+	if len(window) == 0 || len(window) < rule.MinRuns {
+		return models.LowPassRateEntry{}, false
+	}
+	passed := 0
+	for _, outcome := range window {
+		if outcome.passed {
+			passed++
+		}
+	}
+	rate := float64(passed) / float64(len(window))
+	if rate >= rule.Threshold {
+		return models.LowPassRateEntry{}, false
+	}
+	return models.LowPassRateEntry{TestFlakiness: tf, WindowRuns: len(window), PassRate: rate}, true
+}
+
+// ConsecutiveFailureCounts maps "jobID::testName" to each test's current
+// consecutive-failure streak over newest-first runs, omitting tests whose
+// latest run passed. It is deliberately independent of any classification
+// threshold: callers that gate on the true streak, such as the engine-owned AI
+// critique, must not inherit a project's attention.persistent_after.
+func ConsecutiveFailureCounts(details []models.JobDetail) map[string]int {
+	counts := make(map[string]int)
+	for _, detail := range details {
+		for testName, outcomes := range collectTestOutcomes(detail.Runs) {
+			streak := 0
+			for _, outcome := range outcomes {
+				if outcome.passed {
+					break
+				}
+				streak++
+			}
+			if streak > 0 {
+				counts[detail.JobID+"::"+testName] = streak
+			}
+		}
+	}
+	return counts
 }
 
 // CollectBuildFailures builds a bounded public index without changing test flakiness calculations.

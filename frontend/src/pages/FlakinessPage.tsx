@@ -18,6 +18,7 @@ import { useFlakinessReport } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import { useSharedFetchStatus } from "../hooks/useSharedFetchStatus";
 import { fetchStatusPresentation } from "../lib/fetchStatus";
+import { persistentAfter } from "../lib/attention";
 import { jobPath, testPath, testRunPath } from "../lib/routes";
 import { formatPercent, shortJobName, shortTestName, timeAgo } from "../lib/utils";
 import { overviewTypography } from "../theme/overview";
@@ -36,32 +37,36 @@ type TabDefinition = {
   tooltip: string;
 };
 
-const tabs: TabDefinition[] = [
-  {
-    label: "Flakiest tests",
-    value: "most_flaky",
-    tooltip:
-      "Tests that alternate between passing and failing. Sorted by flip rate, the percentage of runs where the result changed from the previous run.",
-  },
-  {
-    label: "Persistent failures",
-    value: "persistent",
-    tooltip:
-      "Tests with at least 3 consecutive failures, sorted by current streak length.",
-  },
-  {
-    label: "Recent failures",
-    value: "recently_broken",
-    tooltip:
-      "Tests whose current failure streak began within 48 hours of this published snapshot.",
-  },
-  {
-    label: "Build failures",
-    value: "build_failures",
-    tooltip:
-      "Build-level failures that were not reported as JUnit test cases. These remain separate from test flakiness and pass-rate calculations.",
-  },
-];
+// tabDefinitions is a function because the persistent tooltip must name the
+// project's configured threshold rather than a fixed count.
+function tabDefinitions(persistentAfter: number): TabDefinition[] {
+  return [
+    {
+      label: "Flakiest tests",
+      value: "most_flaky",
+      tooltip:
+        "Tests that alternate between passing and failing. Sorted by flip rate, the percentage of runs where the result changed from the previous run.",
+    },
+    {
+      label: "Persistent failures",
+      value: "persistent",
+      tooltip:
+        `Tests with at least ${persistentAfter} consecutive failures, sorted by current streak length.`,
+    },
+    {
+      label: "Recent failures",
+      value: "recently_broken",
+      tooltip:
+        "Tests whose current failure streak began within 48 hours of this published snapshot.",
+    },
+    {
+      label: "Build failures",
+      value: "build_failures",
+      tooltip:
+        "Build-level failures that were not reported as JUnit test cases. These remain separate from test flakiness and pass-rate calculations.",
+    },
+  ];
+}
 
 function classificationLabel(
   classification: TestFlakiness["classification"],
@@ -576,6 +581,7 @@ function EmptyCategory({ title }: { title: string }) {
 export function FlakinessPage() {
   const { data, loading, error } = useFlakinessReport();
   const fetchStatus = useSharedFetchStatus();
+  const manifest = useManifest();
   const [activeTab, setActiveTab] = useState<FailureTab>("most_flaky");
 
   if (loading) return <LoadingState />;
@@ -596,6 +602,7 @@ export function FlakinessPage() {
     recently_broken: data.recently_broken.length,
     build_failures: buildFailures.length,
   };
+  const tabs = tabDefinitions(persistentAfter(manifest));
   const activeDefinition = tabs.find((tab) => tab.value === activeTab) ?? tabs[0];
   const testItems = activeTab === "build_failures" ? [] : testListMap[activeTab];
   const activeCount = tabCounts[activeTab];

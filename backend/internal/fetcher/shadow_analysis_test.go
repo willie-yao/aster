@@ -176,13 +176,13 @@ func TestRunShadowAnalysisNeverMutatesAuthoritativeDetails(t *testing.T) {
 
 func TestSelectShadowCandidatesIsDeterministicAndBounded(t *testing.T) {
 	p := shadowTestPipeline(t)
-	first := p.selectShadowCandidates(shadowTestDetails("TestB", "TestA"), models.FlakinessReport{})
-	second := p.selectShadowCandidates(shadowTestDetails("TestA", "TestB"), models.FlakinessReport{})
+	first := p.selectShadowCandidates(shadowTestDetails("TestB", "TestA"))
+	second := p.selectShadowCandidates(shadowTestDetails("TestA", "TestB"))
 	if len(first) != 2 || len(second) != 2 || first[0].subject != second[0].subject || first[1].subject != second[1].subject {
 		t.Fatalf("first=%+v second=%+v", first, second)
 	}
 	details := shadowTestDetails("TestFailure")
-	candidate := p.selectShadowCandidates(details, models.FlakinessReport{})[0]
+	candidate := p.selectShadowCandidates(details)[0]
 	candidate.request.Build.RepoRefs["example/repo"] = strings.Repeat("b", 40)
 	if details[0].Runs[0].RepoRefs["example/repo"] != strings.Repeat("a", 40) {
 		t.Fatal("candidate request aliases authoritative RepoRefs")

@@ -76,6 +76,9 @@ func WriteFlakinessReport(dir string, report models.FlakinessReport) error {
 	if report.BuildFailures == nil {
 		report.BuildFailures = []models.BuildFailureSummary{}
 	}
+	if report.LowPassRate == nil {
+		report.LowPassRate = []models.LowPassRateEntry{}
+	}
 	report.RecurringPatterns, _ = models.BackfillPatternIdentities(report.RecurringPatterns)
 	report.RecurringPatterns = models.WithDefaultPatternRemediationInvestigations(report.RecurringPatterns)
 	return writeJSON(filepath.Join(dir, "flakiness.json"), report)

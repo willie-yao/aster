@@ -363,6 +363,68 @@ category_display_order: [e2e, conformance, other]
 
 Unmatched jobs use the reserved `other` category.
 
+## Attention thresholds
+
+`attention` is optional and tunes which failing tests the dashboard surfaces.
+Omitting it keeps the engine defaults, and every field below is independent.
+
+```yaml
+attention:
+  # Consecutive failures required for a `persistent` classification. Default 3.
+  persistent_after: 3
+  # Omit the whole block to leave the pass-rate rule off.
+  low_pass_rate:
+    threshold: 1.0    # required, 0 to 1
+    min_runs: 5       # default 5
+    recent_runs: 0    # 0 or omitted measures the full fetch window
+    max_items: 50     # default 50
+```
+
+### `persistent_after`
+
+This is a **classification** knob, not a display filter. Changing it moves
+every consumer of the classification at once:
+
+- a test's published `classification` (`persistent`, `flaky`, `one-off`)
+- the `persistent_failures` and `most_flaky` sections of `flakiness.json`
+- the `known_flake` verdict in pull request attribution, which reads the
+  base-branch flakiness history
+- email notification eligibility, which follows `persistent_failures`
+- which findings issue recovery treats as still active, which also follows
+  `persistent_failures`
+- the failing-versus-flaky styling in the UI
+
+Lowering it to `1` classifies a single failure as persistent, which is rarely
+what a project wants. Reach for `low_pass_rate` instead when the goal is to
+*see* more tests rather than to redefine what "persistent" means.
+
+### `low_pass_rate`
+
+This is a **selection** rule. It publishes a `low_pass_rate` section in
+`flakiness.json` that the Needs Attention band renders as its own group, and it
+never changes a test's `classification`.
+
+A test is selected when its pass rate over the window is strictly below
+`threshold`. So `threshold: 1.0` surfaces any test that failed at least once,
+and `threshold: 0` surfaces nothing.
+
+- `min_runs` is the evidence guard. One failure out of two runs is a 50% pass
+  rate but weak signal, so a test with fewer runs than this in the window is
+  never selected.
+- `recent_runs` narrows the measurement to the newest N runs of each test, so a
+  failure the test has since recovered from drops out. The guard applies to the
+  same narrowed window, which means `recent_runs` below `min_runs` selects
+  nothing. Each entry publishes its own `window_runs` and `pass_rate` because a
+  narrowed window disagrees with the entry's whole-window `fail_rate`.
+- `max_items` caps the published section. The overview renders at most ten test
+  alerts across all groups combined, and the pass-rate group only fills the
+  budget the recent, persistent, and flaky groups leave behind, so a large
+  dashboard cannot be flooded by this rule alone.
+
+`threshold: 1.0` is a reasonable setting for a project with mostly-green
+periodics that treats any failure as worth a look. Start with the default
+`min_runs` and tighten from there if the group stays noisy.
+
 ## Analysis configuration
 
 AI is optional at the fetcher level. When enabled, it needs a token, a non-empty

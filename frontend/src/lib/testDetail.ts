@@ -17,6 +17,7 @@ export interface TestHistorySummary {
 
 export function summarizeTestHistory(
   occurrences: TestHistoryOccurrence[],
+  persistentAfter: number,
 ): TestHistorySummary {
   let failed = 0;
   let passed = 0;
@@ -49,12 +50,14 @@ export function summarizeTestHistory(
 
   const executed = failed + passed;
   const failureRate = executed > 0 ? failed / executed : null;
+  // Mirrors the backend's classifyOutcomes: below the persistent threshold, a
+  // history with failures but no passes is one-off, not unclassified.
   const classification =
-    consecutiveFailures >= 3
+    consecutiveFailures >= persistentAfter
       ? `Persistent (${consecutiveFailures}×)`
       : failed > 1 && passed > 0
         ? "Flaky"
-        : failed === 1
+        : failed > 0
           ? "One-off failure"
           : null;
 

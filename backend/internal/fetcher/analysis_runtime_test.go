@@ -64,7 +64,7 @@ func TestAnalyzeFailuresInProcessCancellationDoesNotPersistCheckpoint(t *testing
 	t.Cleanup(func() { saveAnalysisRuntimeCache = oldSave })
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := p.analyzeFailuresWithAI(ctx, details, models.FlakinessReport{}); !errors.Is(err, context.Canceled) {
+	if err := p.analyzeFailuresWithAI(ctx, details); !errors.Is(err, context.Canceled) {
 		t.Fatalf("analysis error = %v", err)
 	}
 	if persistCalls != 0 {
