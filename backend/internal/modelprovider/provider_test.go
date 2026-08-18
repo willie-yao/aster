@@ -140,3 +140,30 @@ func TestCredentialGuard(t *testing.T) {
 		t.Fatal("streaming credential detection failed")
 	}
 }
+
+// The provider token comes from a Kubernetes Secret, so a trailing newline must
+// not reach OpenCode, where it surfaces only as a provider 401.
+func TestNewCredentialGuardTrimsTokenWhitespace(t *testing.T) {
+	config := Normalize(Config{Endpoint: "https://provider.example/v1/chat/completions", Model: "fixture", Auth: Auth{Type: AuthTypeBearer}})
+	guard, err := NewCredentialGuard(config, func(string) (string, bool) {
+		return "provider-token\n", true
+	})
+	if err != nil {
+		t.Fatalf("NewCredentialGuard: %v", err)
+	}
+	env := guard.Environment()
+	if len(env) != 1 || env[0] != TokenEnv+"=provider-token" {
+		t.Fatalf("Environment() = %v, want the trimmed token", env)
+	}
+}
+
+// A whitespace-only token is not a usable credential and must be rejected
+// rather than passed through as a blank bearer value.
+func TestNewCredentialGuardRejectsWhitespaceOnlyToken(t *testing.T) {
+	config := Normalize(Config{Endpoint: "https://provider.example/v1/chat/completions", Model: "fixture", Auth: Auth{Type: AuthTypeBearer}})
+	if _, err := NewCredentialGuard(config, func(string) (string, bool) {
+		return "   \n", true
+	}); err == nil {
+		t.Fatal("want an error for a whitespace-only credential")
+	}
+}

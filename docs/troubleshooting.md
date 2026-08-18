@@ -74,16 +74,23 @@ kubectl -n <namespace> logs deploy/<release>-server | grep "OAuth token exchange
 `incorrect_client_credentials` usually means the stored credential carries a
 stray newline. A Secret written with `echo` instead of `echo -n` keeps the
 trailing byte, so a 40-character client secret arrives as 41 and GitHub rejects
-it. Every binary trims surrounding whitespace from credential variables at
-startup and names each one it had to correct:
+it. Every binary inspects credential variables at startup and names each one
+that carries surrounding whitespace:
 
 ```
 ⚠️  OAUTH_CLIENT_SECRET had leading or trailing whitespace; using the trimmed value.
+⚠️  SESSION_KEY has leading or trailing whitespace and is used as written, ...
 ```
 
-Check every key, since the same mistake usually affects all of them. `BOT_TOKEN`
-is worth checking even when login works, because it breaks the write actions
-rather than sign-in:
+Fixed-format credentials (OAuth client credentials and bearer tokens) are
+trimmed, because whitespace is never valid in them. Free-form secrets
+(`SESSION_KEY`, `EMAIL_SMTP_PASSWORD`, `AUTH_PROXY_SECRET`) are reported but
+used exactly as configured: trimming them could change a working value, and an
+emptied `AUTH_PROXY_SECRET` would disable the shared-secret check outright.
+
+A warning on any one variable means the whole Secret was probably written with
+`echo`, so check every key. `BOT_TOKEN` is worth checking even when login works,
+because it breaks the write actions rather than sign-in:
 
 ```bash
 kubectl -n <namespace> get secret <auth-secret> \

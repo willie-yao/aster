@@ -198,6 +198,10 @@ func NewCredentialGuard(config Config, lookup func(string) (string, bool)) (Cred
 		return CredentialGuard{}, nil
 	}
 	value, ok := lookup(TokenEnv)
+	// The token arrives from a Kubernetes Secret, so it can carry a trailing
+	// newline. Trim before validating: the executor hands this exact value to
+	// OpenCode, where a stray byte surfaces only as a provider 401.
+	value = strings.TrimSpace(value)
 	if !ok || value == "" || !utf8.ValidString(value) || strings.ContainsRune(value, '\x00') {
 		return CredentialGuard{}, fmt.Errorf("provider credential environment is unavailable or invalid")
 	}
