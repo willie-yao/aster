@@ -342,12 +342,15 @@ live deploy.
 
 ## Commit conventions
 
-- **No backward-compat scaffolding by default.** While the engine is
-  under heavy development with a small known set of consumers, the
-  project prefers deleting dead code over maintaining compat branches.
-  When in doubt, grep for callers: if nothing in any consumer's
-  `project.yaml` or the engine code paths references a given branch, it
-  is a deletion candidate.
+- **No backward compatibility before v1.** Until the first v1 release,
+  breaking changes are allowed anywhere: Go APIs, `project.yaml` fields,
+  the JSON output contract, cache schemas, server endpoints, chart values,
+  and CLI flags. Do not add aliases, shims, deprecation windows, dual-read
+  fallbacks, or migration code for old state unless a maintainer explicitly
+  asks. Change the callers, delete the old path, and note the break in the
+  pull request description. When in doubt, grep for callers: if nothing in
+  any consumer's `project.yaml` or the engine code paths references a given
+  branch, it is a deletion candidate.
 - **Conventional, terse commit messages.** Use a single-line subject. Put the
   detailed rationale and verification in the pull request description.
 
@@ -397,8 +400,9 @@ live deploy.
 
 ## When in doubt
 
-The repo is under heavy development with only two internal consumers; we
-prefer deleting dead code over carrying compat branches. If you're unsure
-whether some scaffolding is still load-bearing, grep for callers - if
-nothing references it in either consumer's `project.yaml` or the engine
-code paths, it's a deletion candidate.
+The repo is pre-v1 and under heavy development with only two internal
+consumers. Breaking changes need no backward compatibility, and we prefer
+deleting dead code over carrying compat branches. If you're unsure whether
+some scaffolding is still load-bearing, grep for callers - if nothing
+references it in either consumer's `project.yaml` or the engine code paths,
+it's a deletion candidate.
