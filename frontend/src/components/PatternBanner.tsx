@@ -247,22 +247,69 @@ export function PatternBanner({
 
       {causalGroups.length > 0 && (
         <BriefingSection label="Causal groups">
-          <Stack spacing={1.5}>
+          {/* The gap between two causes is deliberately wider than any gap
+              inside one, so vertical rhythm expresses the hierarchy on its own. */}
+          <Stack spacing={2.5}>
             {causalGroups.map((group, index) => (
               // Keying on group identity ties the remediation component instance
               // to one operation, so a refreshed group never inherits another
               // group's in-flight status or preview.
-              <Box key={`${group.id ?? ""}:${group.content_hash ?? ""}:${group.builds.join("-")}-${group.root_cause}`}>
-                <RichText text={group.root_cause} steps fileCtx={patternFileCtx} />
-                <Stack
-                  direction={{ xs: "column", sm: "row" }}
-                  spacing={{ xs: 0.5, sm: 1 }}
-                  sx={{ mt: 0.5, alignItems: { sm: "center" } }}
+              <Box
+                key={`${group.id ?? ""}:${group.content_hash ?? ""}:${group.builds.join("-")}-${group.root_cause}`}
+                sx={{
+                  minWidth: 0,
+                  border: "1px solid",
+                  borderColor: "divider",
+                  borderRadius: "4px",
+                  bgcolor: "surface.containerLow",
+                  overflow: "hidden",
+                }}
+              >
+                <Box
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "auto minmax(0, 1fr)" },
+                    gridTemplateAreas: { xs: '"cause" "confidence"', sm: '"cause confidence"' },
+                    alignItems: "center",
+                    columnGap: 1.5,
+                    rowGap: 0.25,
+                    px: 1.5,
+                    py: 0.75,
+                    bgcolor: "surface.containerHigh",
+                    borderBottom: "1px solid",
+                    borderColor: "divider",
+                    boxShadow: "inset 3px 0 0 var(--mui-palette-primary-main)",
+                  }}
                 >
-                  <Typography color="text.secondary" sx={overviewTypography.data}>
-                    {group.confidence} confidence · Affected {group.builds.length === 1 ? "build" : "builds"}
+                  <Typography
+                    component="h4"
+                    sx={{ gridArea: "cause", minWidth: 0, ...overviewTypography.subsectionHeading }}
+                  >
+                    {causalGroups.length > 1 ? `Cause ${index + 1} of ${causalGroups.length}` : "Cause"}
                   </Typography>
-                  <Stack direction="row" spacing={0.75} sx={{ flexWrap: "wrap", rowGap: 0.75 }}>
+                  <Typography
+                    component="div"
+                    sx={{
+                      gridArea: "confidence",
+                      minWidth: 0,
+                      justifySelf: { xs: "start", sm: "end" },
+                      textAlign: { xs: "left", sm: "right" },
+                      color: "text.secondary",
+                      ...overviewTypography.data,
+                    }}
+                  >
+                    {group.confidence} confidence
+                  </Typography>
+                </Box>
+                <Box sx={{ px: 1.5, py: 1.5, minWidth: 0 }}>
+                  <RichText text={group.root_cause} steps fileCtx={patternFileCtx} />
+                  <Typography
+                    component="h5"
+                    sx={{ mt: 1.5, color: "text.secondary", ...overviewTypography.eyebrow }}
+                  >
+                    Affected {group.builds.length === 1 ? "build" : "builds"}
+                  </Typography>
+                  <Stack direction="row" spacing={0.75} sx={{ mt: 0.5, flexWrap: "wrap", rowGap: 0.75 }}>
                     {group.builds.map((buildID) => (
                       <Link
                         key={buildID}
@@ -291,17 +338,17 @@ export function PatternBanner({
                       </Link>
                     ))}
                   </Stack>
-                </Stack>
-                {analysisOnly && (
-                  <CausalGroupRemediation
-                    group={group}
-                    investigation={group.content_hash ? remediationByHash.get(group.content_hash) : undefined}
-                    jobID={jobID}
-                    patternID={pattern.id}
-                    patternHash={pattern.content_hash}
-                  />
-                )}
-                {fixCapable && <CausalGroupFixRouting jobID={jobID} target={causalFixTargets[index]} />}
+                  {analysisOnly && (
+                    <CausalGroupRemediation
+                      group={group}
+                      investigation={group.content_hash ? remediationByHash.get(group.content_hash) : undefined}
+                      jobID={jobID}
+                      patternID={pattern.id}
+                      patternHash={pattern.content_hash}
+                    />
+                  )}
+                  {fixCapable && <CausalGroupFixRouting jobID={jobID} target={causalFixTargets[index]} />}
+                </Box>
               </Box>
             ))}
           </Stack>

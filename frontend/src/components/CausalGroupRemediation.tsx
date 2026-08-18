@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ExpandMore } from "@mui/icons-material";
+import { CloudOff, ExpandMore } from "@mui/icons-material";
 import Accordion from "@mui/material/Accordion";
 import AccordionDetails from "@mui/material/AccordionDetails";
 import AccordionSummary from "@mui/material/AccordionSummary";
@@ -147,20 +147,26 @@ export function CausalGroupRemediation({
   const canPreview = !blocked && previewAvailable && authStatus === "authenticated" &&
     presentation.state === "actionable" && Boolean(view?.target);
 
+  // A missing deployment capability is not a verdict about this cause, so it
+  // gets its own chip treatment rather than sharing the outlined verdict style.
+  const capabilityBlocked = blocked?.scope === "deployment";
+
   return (
-    <Box aria-live="polite" sx={{ mt: 1 }}>
+    <Box aria-live="polite" sx={{ mt: 1.5 }}>
       <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}>
-        <Typography component="h4" color="text.secondary" sx={{ ...overviewTypography.data, m: 0 }}>
+        <Typography component="h5" sx={{ color: "text.secondary", ...overviewTypography.eyebrow, m: 0 }}>
           Remediation
         </Typography>
         <Chip
           label={blocked ? blocked.label : presentation.label}
           size="small"
+          icon={capabilityBlocked ? <CloudOff aria-hidden /> : undefined}
           color={!blocked && presentation.state === "actionable" ? "success" : "default"}
-          variant="outlined"
+          variant={capabilityBlocked ? "filled" : "outlined"}
+          sx={capabilityBlocked ? { bgcolor: "action.disabledBackground", color: "text.secondary" } : undefined}
         />
       </Stack>
-      <Typography color="text.secondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
+      <Typography sx={{ mt: 0.5, color: "text.secondary", ...overviewTypography.secondaryBody }}>
         {message}
       </Typography>
       {canStart && (

@@ -216,8 +216,31 @@ test("fix routing sits with each cause and stays behind the chat capabilities", 
   assert.match(banner, /const fixCapable = Boolean\(features\.analysis_chat && features\.junit_chat_fix\)/);
   assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupFixRouting jobID=\{jobID\} target=\{causalFixTargets\[index\]\} \/>/);
   assert.match(routing, /testRunPath\(jobID, target\.testName, target\.buildID\)/);
-  assert.match(routing, /Open test for Fix investigation/);
   assert.match(routing, /No failed JUnit test in these builds meets the Fix investigation requirements/);
+});
+
+test("fix routing reads as an action and names the test it opens", () => {
+  const routing = source("src/components/CausalGroupFixRouting.tsx");
+
+  // The old treatment was the monospace data token, which is exactly how build
+  // ID chips render a few lines above it in the same cause.
+  assert.match(routing, /<Button/);
+  assert.match(routing, /variant="outlined"/);
+  assert.match(routing, /startIcon=\{<AutoFixHigh aria-hidden \/>\}/);
+  assert.doesNotMatch(routing, /overviewTypography\.data/);
+  assert.doesNotMatch(routing, /bgcolor: "action\.selected"/);
+
+  // The subject is in the visible label, not in a caption below it that reads
+  // as if it belonged to the next cause.
+  assert.match(routing, /Open \{target\.testName\}/);
+  assert.match(routing, /in build \{target\.buildID\}/);
+  assert.doesNotMatch(routing, /\{target\.testName\} in build \{target\.buildID\}\s*<\/Typography>/);
+
+  // A long test name truncates inline, and the full value stays reachable.
+  assert.match(routing, /textOverflow: "ellipsis"/);
+  assert.match(routing, /const subject = `Open \$\{target\.testName\} in build \$\{target\.buildID\} for Fix investigation`/);
+  assert.match(routing, /title=\{subject\}/);
+  assert.match(routing, /aria-label=\{subject\}/);
 });
 
 test("the pattern-level panel is a fallback for causes with no eligible test", () => {
