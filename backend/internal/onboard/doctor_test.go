@@ -645,3 +645,25 @@ func TestDoctor_ProjectPresubmitsDoNotSkipDeploymentValidation(t *testing.T) {
 		t.Fatalf("project presubmits skipped deployment validation: %+v", report.Checks)
 	}
 }
+
+// A credential with surrounding whitespace is rejected by the endpoint as
+// invalid, with an error that names neither the file nor the field, so doctor
+// has to catch it here.
+func TestDoctor_KubernetesCredentialWhitespaceFails(t *testing.T) {
+	values := `persistence:
+  storageClass: fast
+  accessMode: ReadWriteMany
+ai:
+  enabled: true
+  endpoint: https://provider.example/v1/chat/completions
+  model: model
+  token: "sk-secret\n"
+`
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+		files:   doctorFiles(map[string]string{"/consumer/deploy/values.yaml": values}),
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	if !hasDoctorCheck(report, "Kubernetes AI credential", DoctorFail) {
+		t.Fatalf("checks = %+v", report.Checks)
+	}
+}

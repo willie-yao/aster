@@ -369,3 +369,64 @@ func TestOAuthMissingScope(t *testing.T) {
 		t.Fatalf("missing scope error = %v", err)
 	}
 }
+
+// stubTokenEndpointWith points the exchange at a stub returning body.
+func stubTokenEndpointWith(t *testing.T, body string) func() {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(body))
+	}))
+	orig := githubTokenURL
+	githubTokenURL = srv.URL + "/login/oauth/access_token"
+	return func() {
+		githubTokenURL = orig
+		srv.Close()
+	}
+}
+
+// callbackWithState drives handleCallback with a matching state cookie.
+func callbackWithState(o *OAuth) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/callback?code=c&state=s", nil)
+	req.AddCookie(&http.Cookie{Name: stateCookieName, Value: "s"})
+	rec := httptest.NewRecorder()
+	o.handleCallback(rec, req)
+	return rec
+}
+
+// A failed token exchange and a refused scope are different operator problems:
+// the first is a bad credential or unreachable endpoint, the second is a
+// GitHub-side grant. They must not report the same status or message.
+func TestOAuthCallbackDistinguishesExchangeFromScopeFailure(t *testing.T) {
+	o := testOAuth(t, []string{"alice"})
+
+	cleanup := stubTokenEndpointWith(t, `{"error":"incorrect_client_credentials"}`)
+	exchange := callbackWithState(o)
+	cleanup()
+	if exchange.Code != http.StatusBadGateway {
+		t.Errorf("exchange failure status = %d, want %d", exchange.Code, http.StatusBadGateway)
+	}
+
+	cleanup = stubTokenEndpointWith(t, `{"access_token":"t","scope":"read:user,repo"}`)
+	scope := callbackWithState(o)
+	cleanup()
+	if scope.Code != http.StatusForbidden {
+		t.Errorf("scope failure status = %d, want %d", scope.Code, http.StatusForbidden)
+	}
+
+	if strings.TrimSpace(exchange.Body.String()) == strings.TrimSpace(scope.Body.String()) {
+		t.Errorf("both failures report the same message %q", strings.TrimSpace(exchange.Body.String()))
+	}
+}
+
+// The exchange error must name GitHub's reason; it is the only thing that makes
+// a bad client secret diagnosable from a log line.
+func TestOAuthExchangeErrorNamesUpstreamReason(t *testing.T) {
+	cleanup := stubTokenEndpointWith(t, `{"error":"incorrect_client_credentials"}`)
+	defer cleanup()
+	o := testOAuth(t, []string{"alice"})
+	_, _, err := o.exchange(context.Background(), "code123")
+	if err == nil || !strings.Contains(err.Error(), "incorrect_client_credentials") {
+		t.Fatalf("exchange error = %v, want it to name incorrect_client_credentials", err)
+	}
+}

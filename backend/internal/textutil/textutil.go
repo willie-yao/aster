@@ -1,7 +1,20 @@
 // Package textutil holds small string helpers shared across packages.
 package textutil
 
-import "unicode/utf8"
+import (
+	"strings"
+	"unicode/utf8"
+)
+
+// TrimCredential removes surrounding whitespace from a secret value and reports
+// whether anything was removed. A Secret written with `echo` rather than
+// `echo -n` carries a trailing newline that remote APIs reject as a bad
+// credential, far from the misconfiguration and with no usable diagnostic.
+// Surrounding whitespace is never meaningful in a token, key, or client secret.
+func TrimCredential(value string) (string, bool) {
+	trimmed := strings.TrimSpace(value)
+	return trimmed, trimmed != value
+}
 
 // Truncate returns s unchanged when it is at most max bytes; otherwise it
 // returns the longest rune-aligned prefix that fits in max bytes followed by an

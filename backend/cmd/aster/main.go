@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/credentialenv"
 	"github.com/willie-yao/aster/backend/internal/fetcher"
 	"github.com/willie-yao/aster/backend/internal/kubernetesdeploy"
 	"github.com/willie-yao/aster/backend/internal/onboard"
@@ -34,6 +35,7 @@ var (
 )
 
 func main() {
+	credentialenv.SanitizeAndReport()
 	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version") {
 		fmt.Printf("aster version=%s commit=%s image_tag=%s\n", version, commit, imageTag)
 		return

@@ -38,6 +38,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/causalfixpreview"
 	"github.com/willie-yao/aster/backend/internal/chatfix"
 	"github.com/willie-yao/aster/backend/internal/corrections"
+	"github.com/willie-yao/aster/backend/internal/credentialenv"
 	"github.com/willie-yao/aster/backend/internal/fixruntime"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/notify"
@@ -58,6 +59,7 @@ var (
 )
 
 func main() {
+	credentialenv.SanitizeAndReport()
 	var (
 		addr       string
 		dataDir    string

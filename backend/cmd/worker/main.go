@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/credentialenv"
 	"github.com/willie-yao/aster/backend/internal/fetcher"
 )
 
@@ -27,6 +28,7 @@ var (
 )
 
 func main() {
+	credentialenv.SanitizeAndReport()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
