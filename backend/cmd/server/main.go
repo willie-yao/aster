@@ -133,18 +133,18 @@ func main() {
 			log.Printf("server: waiting for analysis chat turns: %v", err)
 		}
 	}
+	if waiter, ok := opts.PullRequestEscalation.(interface{ Wait(context.Context) error }); ok {
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer waitCancel()
+		if err := waiter.Wait(waitCtx); err != nil {
+			log.Printf("server: waiting for pull request escalations: %v", err)
+		}
+	}
 	if waiter, ok := opts.CausalRemediationInvestigation.(interface{ Wait(context.Context) error }); ok {
 		waitCtx, waitCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer waitCancel()
 		if err := waiter.Wait(waitCtx); err != nil {
 			log.Printf("server: waiting for causal remediation investigations: %v", err)
-		}
-	}
-	if waiter, ok := opts.PullRequestEscalation.(interface{ Wait(context.Context) error }); ok {
-		waitCtx, waitCancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer waitCancel()
-		if err := waiter.Wait(waitCtx); err != nil {
-			log.Printf("server: waiting for pull request escalations: %v", err)
 		}
 	}
 	if waiter, ok := opts.Actions.(interface{ Wait(context.Context) error }); ok {

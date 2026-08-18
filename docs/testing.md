@@ -56,11 +56,11 @@ The harness uses:
 - `internal/aitest.ScriptServer` for ordered deterministic model responses.
 - `internal/aitest.ReplayServer` for recorded request and response fixtures.
 
-`make e2e` also runs the hermetic email remediation loop in
-`internal/fetcher`. That scenario uses temporary Prow artifacts, a fake GitHub
-transport, a deterministic fix agent, and an in-memory email sender. It covers
-the recurring-pattern alert, fix tracking, presubmit and periodic verification,
-restart persistence, transition-email deduplication, and same-cause recurrence.
+`make e2e` also runs the hermetic email and fix-PR loop in `internal/fetcher`.
+That scenario uses temporary Prow artifacts, a fake GitHub transport, a
+deterministic fix agent, and an in-memory email sender. It covers the
+recurring-pattern alert, action links, fix tracking, and deduplication across
+repeated passes.
 A second bridge test proves the finalized pattern bridge reaches the same email
 side effects. Neither test sends real email, calls GitHub, or runs OpenCode.
 

@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -144,18 +146,18 @@ func TestExecuteRetainsBoundedValidationTimeout(t *testing.T) {
 	repository, sha := fixtureRepository(t)
 	binDir := t.TempDir()
 	tool := filepath.Join(binDir, "slow-validator-tree")
-	if err := os.WriteFile(tool, []byte("#!/bin/sh\nsleep 5 &\nwait\n"), 0o755); err != nil {
+	childPID := filepath.Join(binDir, "child.pid")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\nsleep 5 &\necho $! > \"$1\"\nwait\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	request := fixtureRequest(repository, sha)
 	request.MaxSteps = 3
 	request.CommandPolicy.Commands = []engineruntime.ExecutionCommand{
-		{Argv: []string{"slow-validator-tree"}, TimeoutSeconds: 1},
+		{Argv: []string{"slow-validator-tree", childPID}, TimeoutSeconds: 1},
 		{Argv: []string{"git", "diff", "--cached", "--check"}, TimeoutSeconds: 10},
 	}
 	modelRequests := 0
-	started := time.Now()
 	result := Execute(context.Background(), request, Options{
 		WorkspaceRoot: t.TempDir(),
 		RunOpenCode: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
@@ -163,18 +165,40 @@ func TestExecuteRetainsBoundedValidationTimeout(t *testing.T) {
 			return "", "", os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte("changed\n"), 0o644)
 		},
 	})
-	if elapsed := time.Since(started); elapsed > 3*time.Second {
-		t.Fatalf("bounded command timeout took %s", elapsed)
-	}
 	if result.TerminalState != engineruntime.TerminalSucceeded || modelRequests != 1 || len(result.CommandResults) != 2 {
 		t.Fatalf("result=%+v model requests=%d", result, modelRequests)
 	}
-	if first := result.CommandResults[0]; !first.TimedOut || first.ExitCode != -1 || first.DurationMs < 900 || first.DurationMs > 2_000 {
+	// The command backgrounds a 5s child, so a duration near its 1s timeout is
+	// what proves the timeout bounded the command itself.
+	if first := result.CommandResults[0]; !first.TimedOut || first.ExitCode != -1 || first.DurationMs < 900 || first.DurationMs > 2_500 {
 		t.Fatalf("timed out command = %+v", first)
 	}
 	if final := result.CommandResults[1]; final.TimedOut || final.ExitCode != 0 {
 		t.Fatalf("final command = %+v", final)
 	}
+	assertProcessExited(t, childPID)
+}
+
+// assertProcessExited fails unless the process recorded in pidFile is gone,
+// proving the timeout killed the command's whole process group.
+func assertProcessExited(t *testing.T, pidFile string) {
+	t.Helper()
+	recorded, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("read backgrounded child pid: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(recorded)))
+	if err != nil {
+		t.Fatalf("parse backgrounded child pid %q: %v", recorded, err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("backgrounded child %d survived the command timeout", pid)
 }
 
 func TestExecuteRejectsSignaledValidationCommand(t *testing.T) {

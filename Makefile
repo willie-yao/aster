@@ -82,10 +82,10 @@ test:
 test-v:
 	cd backend && go test ./... -count=1 -v
 
-# Run the hermetic pipeline and email-remediation end-to-end tests.
+# Run the hermetic pipeline and email/fix-PR end-to-end tests.
 e2e:
 	cd backend && go test ./internal/e2e/... -count=1 -v
-	cd backend && go test ./internal/fetcher -run '^TestEmailRemediationLoopE2E$$' -count=1 -v
+	cd backend && go test ./internal/fetcher -run '^TestEmailNotificationAndFixPRE2E$$' -count=1 -v
 
 # Run Go linter (requires golangci-lint)
 lint:

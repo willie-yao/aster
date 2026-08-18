@@ -583,22 +583,29 @@ func (s *Service) registerCleanupLocked(id string) bool {
 }
 
 func (s *Service) startCleanup(id string) {
-	s.rmu.Lock()
-	registered := s.registerCleanupLocked(id)
-	s.rmu.Unlock()
-	if registered {
+	if s.claimCleanup(id) {
 		s.launchCleanup(id)
 	}
 }
 
+// claimCleanup reserves the single-flight cleanup slot for a request.
+func (s *Service) claimCleanup(id string) bool {
+	s.rmu.Lock()
+	defer s.rmu.Unlock()
+	return s.registerCleanupLocked(id)
+}
+
+// releaseCleanup frees the slot taken by claimCleanup.
+func (s *Service) releaseCleanup(id string) {
+	s.rmu.Lock()
+	delete(s.requestCleanups, id)
+	s.rmu.Unlock()
+	s.requestWG.Done()
+}
+
 func (s *Service) launchCleanup(id string) {
 	go func() {
-		defer s.requestWG.Done()
-		defer func() {
-			s.rmu.Lock()
-			delete(s.requestCleanups, id)
-			s.rmu.Unlock()
-		}()
+		defer s.releaseCleanup(id)
 		backoff := 250 * time.Millisecond
 		for {
 			ctx, cancel := context.WithTimeout(context.Background(), defaultRuntimeCleanupTimeout)
@@ -1698,19 +1705,7 @@ func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRe
 		if view.Status != RequestCancelling {
 			return view, nil
 		}
-		view, cleanupErr := s.cleanupRequest(ctx, id)
-		current := s.currentRequestView(id)
-		if cleanupErr != nil && current.Status == RequestCancelling {
-			if errors.Is(cleanupErr, runtime.ErrWorkIdentityChanged) {
-				if !s.markCleanupBlocked(id) {
-					s.startCleanup(id)
-				}
-			} else {
-				s.startCleanup(id)
-			}
-			return s.currentRequestView(id), nil
-		}
-		return view, cleanupErr
+		return s.cleanupCancellingRequest(ctx, id)
 	}
 	if request.Status != RequestPending && request.Status != RequestReady {
 		status := request.Status
@@ -1743,19 +1738,35 @@ func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRe
 			return s.currentRequestView(id), err
 		}
 	}
-	view, cleanupErr := s.cleanupRequest(ctx, id)
-	current := s.currentRequestView(id)
-	if cleanupErr != nil && current.Status == RequestCancelling {
-		if errors.Is(cleanupErr, runtime.ErrWorkIdentityChanged) {
-			if !s.markCleanupBlocked(id) {
-				s.startCleanup(id)
-			}
-		} else {
-			s.startCleanup(id)
-		}
+	return s.cleanupCancellingRequest(ctx, id)
+}
+
+// cleanupCancellingRequest cleans up a cancelling request inline and hands it to
+// a retry goroutine when the inline attempt cannot finish. It takes the same
+// single-flight slot the retry goroutines use, so a runtime work ref is never
+// cleaned up twice concurrently.
+func (s *Service) cleanupCancellingRequest(ctx context.Context, id string) (ActionRequestView, error) {
+	if !s.claimCleanup(id) {
 		return s.currentRequestView(id), nil
 	}
-	return view, cleanupErr
+	retry := false
+	defer func() {
+		if retry {
+			// Hand the claim to the retry goroutine so the pending cleanup stays
+			// tracked by requestWG without the count dropping to zero.
+			s.launchCleanup(id)
+			return
+		}
+		s.releaseCleanup(id)
+	}()
+	view, err := s.cleanupRequest(ctx, id)
+	if err != nil && s.currentRequestView(id).Status == RequestCancelling {
+		retry = !errors.Is(err, runtime.ErrWorkIdentityChanged) || !s.markCleanupBlocked(id)
+		// Report the state observed before any retry starts so the response does
+		// not depend on how quickly the retry goroutine runs.
+		view, err = s.currentRequestView(id), nil
+	}
+	return view, err
 }
 
 func (s *Service) expireRequestsLocked(now time.Time) bool {

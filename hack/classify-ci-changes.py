@@ -131,7 +131,6 @@ REMOTE_BACKEND_PREFIXES = (
     "backend/internal/prow",
     "backend/internal/prowbuild",
     "backend/internal/redact",
-    "backend/internal/remediation",
     "backend/internal/remediationinvestigation",
     "backend/internal/remediationpolicy",
     "backend/internal/repotemplate",

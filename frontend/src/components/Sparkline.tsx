@@ -6,27 +6,38 @@ import { jobRunPath } from "../lib/routes";
 import { formatAccessibleDate } from "../lib/utils";
 import { dotColorFor } from "../theme";
 
+// Most run dots the overview renders. The backend keeps up to 20 recent runs,
+// but the ledger and attention columns reserve a fixed width per dot, so the
+// oldest runs are dropped rather than shrinking the targets.
+const maxRuns = 12;
+
+// Each dot is a link to its run, so keep targets 24px apart per WCAG 2.5.8.
+const desktopCell = 24;
+
 interface SparklineProps {
   runs: RunSummary[];
   jobID: string;
 }
 
 export function Sparkline({ runs, jobID }: SparklineProps) {
-  const recent = runs.slice(0, 8).reverse();
+  const recent = runs.slice(0, maxRuns).reverse();
+  const columns = Math.max(recent.length, 1);
 
   return (
     <Box
       sx={{
         display: "grid",
-        gridTemplateColumns: { xs: "repeat(4, 44px)", sm: "repeat(8, 44px)" },
+        // Touch-sized cells that wrap to as many rows as the container allows.
+        // auto-fill needs the definite width to resolve its column count.
+        gridTemplateColumns: "repeat(auto-fill, 44px)",
+        width: "100%",
         alignItems: "center",
         gap: 0,
+        // The columns reserve maxRuns * desktopCell, so fixed-width cells keep
+        // every run link at its full target size whatever depth is configured.
         "@media (min-width: 1024px)": {
-          gridTemplateColumns: "repeat(8, 20px)",
-          gap: "2px",
-        },
-        "@media (min-width: 1200px)": {
-          gridTemplateColumns: "repeat(8, 22px)",
+          gridTemplateColumns: `repeat(${columns}, ${desktopCell}px)`,
+          width: "auto",
         },
       }}
     >
@@ -48,8 +59,7 @@ export function Sparkline({ runs, jobID }: SparklineProps) {
                 alignItems: "center",
                 justifyContent: "center",
                 borderRadius: "4px",
-                "@media (min-width: 1024px)": { width: 20, height: 28 },
-                "@media (min-width: 1200px)": { width: 22 },
+                "@media (min-width: 1024px)": { width: desktopCell, height: 28 },
                 "&:hover": { bgcolor: "surface.containerHigh" },
                 "&:focus-visible": {
                   outline: "2px solid",

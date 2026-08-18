@@ -2,6 +2,7 @@
 package fetchprogress
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -109,7 +110,6 @@ type FollowUpComponent string
 
 const (
 	FollowUpNotifications   FollowUpComponent = "notifications"
-	FollowUpRemediation     FollowUpComponent = "remediation"
 	FollowUpAutomaticIssues FollowUpComponent = "automatic-issues"
 	FollowUpAutomaticFixPRs FollowUpComponent = "automatic-fix-prs"
 )
@@ -145,7 +145,6 @@ const (
 	FollowUpFailureNotificationConfiguration    FollowUpFailureCode = "notification-configuration"
 	FollowUpFailureNotificationDelivery         FollowUpFailureCode = "notification-delivery"
 	FollowUpFailureNotificationStatePersistence FollowUpFailureCode = "notification-state-persistence"
-	FollowUpFailureRemediation                  FollowUpFailureCode = "remediation-processing"
 	FollowUpFailureAutomaticIssues              FollowUpFailureCode = "automatic-issues"
 	FollowUpFailureAutomaticFixPRs              FollowUpFailureCode = "automatic-fix-prs"
 )
@@ -161,9 +160,30 @@ type FollowUpComponentStatus struct {
 // FollowUpProgress reports post-publication component outcomes.
 type FollowUpProgress struct {
 	Notifications   *FollowUpComponentStatus `json:"notifications,omitempty"`
-	Remediation     *FollowUpComponentStatus `json:"remediation,omitempty"`
 	AutomaticIssues *FollowUpComponentStatus `json:"automatic_issues,omitempty"`
 	AutomaticFixPRs *FollowUpComponentStatus `json:"automatic_fix_prs,omitempty"`
+	// Remediation is a deprecated component from the removed closed-loop
+	// remediation feature. It stays decodable so a status file written by an
+	// older engine still loads under strict decoding. It is never produced.
+	Remediation *FollowUpComponentStatus `json:"-"`
+}
+
+// UnmarshalJSON decodes follow-up progress, accepting the deprecated
+// remediation component written by older engine versions.
+func (p *FollowUpProgress) UnmarshalJSON(data []byte) error {
+	type followUpProgress FollowUpProgress
+	var raw struct {
+		followUpProgress
+		Remediation *FollowUpComponentStatus `json:"remediation,omitempty"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&raw); err != nil {
+		return err
+	}
+	*p = FollowUpProgress(raw.followUpProgress)
+	p.Remediation = raw.Remediation
+	return nil
 }
 
 // JobProgress tracks aggregate job completion.
@@ -559,7 +579,6 @@ func validFollowUp(progress *FollowUpProgress) bool {
 		return true
 	}
 	return validFollowUpComponent(progress.Notifications) &&
-		validFollowUpComponent(progress.Remediation) &&
 		validFollowUpComponent(progress.AutomaticIssues) &&
 		validFollowUpComponent(progress.AutomaticFixPRs)
 }
@@ -595,7 +614,7 @@ func validFollowUpFailureCode(code FollowUpFailureCode) bool {
 	switch code {
 	case FollowUpFailureNone, FollowUpFailureNotificationCredentials, FollowUpFailureNotificationConfiguration,
 		FollowUpFailureNotificationDelivery, FollowUpFailureNotificationStatePersistence,
-		FollowUpFailureRemediation, FollowUpFailureAutomaticIssues, FollowUpFailureAutomaticFixPRs:
+		FollowUpFailureAutomaticIssues, FollowUpFailureAutomaticFixPRs:
 		return true
 	default:
 		return false
@@ -613,8 +632,6 @@ func FollowUpFailureSummary(code FollowUpFailureCode) string {
 		return "Email notification delivery failed"
 	case FollowUpFailureNotificationStatePersistence:
 		return "Email notification state could not be saved"
-	case FollowUpFailureRemediation:
-		return "Remediation processing failed"
 	case FollowUpFailureAutomaticIssues:
 		return "Automatic issue reconciliation failed"
 	case FollowUpFailureAutomaticFixPRs:
@@ -1096,7 +1113,7 @@ func (t *Tracker) SkipSideEffects() {
 func (t *Tracker) SetFollowUp(component FollowUpComponent, state FollowUpState, reason FollowUpReason, code FollowUpFailureCode) {
 	t.update(true, func(status *Status) {
 		switch component {
-		case FollowUpNotifications, FollowUpRemediation, FollowUpAutomaticIssues, FollowUpAutomaticFixPRs:
+		case FollowUpNotifications, FollowUpAutomaticIssues, FollowUpAutomaticFixPRs:
 		default:
 			return
 		}
@@ -1110,8 +1127,6 @@ func (t *Tracker) SetFollowUp(component FollowUpComponent, state FollowUpState, 
 		switch component {
 		case FollowUpNotifications:
 			status.FollowUp.Notifications = value
-		case FollowUpRemediation:
-			status.FollowUp.Remediation = value
 		case FollowUpAutomaticIssues:
 			status.FollowUp.AutomaticIssues = value
 		case FollowUpAutomaticFixPRs:
@@ -1227,7 +1242,7 @@ func cancelRunningFollowUp(progress *FollowUpProgress) {
 		return
 	}
 	for _, component := range []*FollowUpComponentStatus{
-		progress.Notifications, progress.Remediation, progress.AutomaticIssues, progress.AutomaticFixPRs,
+		progress.Notifications, progress.AutomaticIssues, progress.AutomaticFixPRs,
 	} {
 		if component != nil && component.State == FollowUpRunning {
 			*component = FollowUpComponentStatus{State: FollowUpCancelled}
@@ -1301,7 +1316,6 @@ func cloneFollowUp(progress *FollowUpProgress) *FollowUpProgress {
 	}
 	clone := *progress
 	clone.Notifications = cloneFollowUpComponent(progress.Notifications)
-	clone.Remediation = cloneFollowUpComponent(progress.Remediation)
 	clone.AutomaticIssues = cloneFollowUpComponent(progress.AutomaticIssues)
 	clone.AutomaticFixPRs = cloneFollowUpComponent(progress.AutomaticFixPRs)
 	return &clone
