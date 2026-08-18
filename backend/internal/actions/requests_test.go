@@ -1319,6 +1319,51 @@ func TestCancelRequestWaitsForRuntimeCleanup(t *testing.T) {
 	}
 }
 
+func TestCancelRequestDoesNotDuplicateActiveRuntimeCleanup(t *testing.T) {
+	service, pattern := requestTestService(t)
+	fake := &fakeManagedAgentRuntime{started: make(chan struct{}), release: make(chan struct{})}
+	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	now := time.Now().UTC()
+	const id = "concurrent-cleanup"
+	service.requests.Requests[id] = &actionRequest{
+		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestCancelling,
+			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
+		Runtime: &runtime.WorkRef{Backend: "agent-sandbox", Namespace: "sandbox-system", Name: "fix-task", UID: "uid-one", ExecutionID: id},
+		Cleanup: &actionCleanupState{FinalStatus: RequestCancelled, RequestedAt: now.Format(time.RFC3339)},
+	}
+	service.startCleanup(id)
+	<-fake.started
+
+	type result struct {
+		view ActionRequestView
+		err  error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		view, err := service.CancelRequest(context.Background(), id, "alice")
+		resultCh <- result{view: view, err: err}
+	}()
+	select {
+	case got := <-resultCh:
+		if got.err != nil || got.view.Status != RequestCancelling {
+			t.Fatalf("concurrent cancellation view=%+v err=%v", got.view, got.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancellation started a second runtime cleanup")
+	}
+	close(fake.release)
+	waitRequest(t, service, id, "alice", RequestCancelled)
+	if err := service.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	refs := slices.Clone(fake.refs)
+	fake.mu.Unlock()
+	if len(refs) != 1 {
+		t.Fatalf("cleanup refs = %+v", refs)
+	}
+}
+
 func TestCancelRequestFailsWhenIdentityChanges(t *testing.T) {
 	service, pattern := requestTestService(t)
 	fake := &fakeManagedAgentRuntime{err: runtime.ErrWorkIdentityChanged}
