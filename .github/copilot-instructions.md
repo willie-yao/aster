@@ -9,6 +9,7 @@
 - Group findings by the underlying invariant. Before posting a comment, inspect parallel operations and surfaces for the same issue and identify all affected call sites together.
 - Distinguish required correctness fixes from optional hardening. Label optional suggestions clearly and do not present them as bugs.
 - Prefer an invariant-level recommendation over a sequence of local patches. Consider the new failure modes introduced by a suggested API or state-model change.
+- This repository is pre-v1 and makes no backward-compatibility guarantees. Do not flag a breaking change to a Go API, `project.yaml` field, JSON output contract, cache schema, server endpoint, chart value, or CLI flag solely because it breaks existing callers, consumers, or persisted state. Do not request aliases, shims, deprecation windows, dual-read fallbacks, or migration code for old state. Still report breaks that leave the repository internally inconsistent, such as unupdated call sites, tests, docs, or frontend consumers.
 
 ## Asynchronous and persistent workflows
 
