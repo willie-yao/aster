@@ -40,21 +40,27 @@ expected = {
     "upstream_revision": "70b56a0a93d366889cae950379cc9d2537148fa2",
     "source_archive_sha256": "13d277b405def808734be8ce4c6f68d3b40df866358556aefb48b5be90ea53c1",
     "models_dev_sha256": "2f6a5a4ab4d450e3ddabdbf0313e51bd76d51577ec1d7936326c484aded33b51",
+    "web_builder_image": "docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584",
+    "web_builder_node_version": "v24.19.0",
+    "web_builder_bun_image": "docker.io/oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4",
+    "web_builder_bun_sha256": "a8f9ebd1770ddc8e55dab7a68d4ec1ec1eebf374bb97cc65cf2c3cb373fc6791",
     "builder_image": "docker.io/oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0",
     "builder_bun_sha256": "500e6edbf321ddf490adcc55a6a01639993a07924616ab67492e1256c15557e2",
     "bun_version": "1.3.14",
-    "embedded_web_ui": False,
+    "embedded_web_ui": True,
     "patch_version": "aster-disable-project-instructions-v1",
     "patch_sha256": "48031f5d9a3c675406c43697682291efba78feb208c9f5dc2a977645aa41e6a3",
     "build_patch_version": "aster-single-target-build-v1",
-    "build_patch_sha256": "1d90634eebd407761327da845aa8cb3a72b18ea2dd33e6cd0f1904215db0b595",
+    "build_patch_sha256": "49c2e7435fb59199df817b36bd7f8c7bfbac5622b86fbadef6a3ea3f1095605d",
 }
 for key, value in expected.items():
     if manifest.get(key) != value:
         raise SystemExit(f"OpenCode runtime {key}={manifest.get(key)!r}, want {value!r}")
+if not isinstance(manifest.get("web_ui_sha256"), str) or len(manifest["web_ui_sha256"]) != 64:
+    raise SystemExit("OpenCode Web UI digest is invalid")
 if manifest.get("binary_sha256") != observed_binary_sha256:
     raise SystemExit("OpenCode runtime binary digest differs")
-if set(manifest) != set(expected) | {"binary_sha256"}:
+if set(manifest) != set(expected) | {"web_ui_sha256", "binary_sha256"}:
     raise SystemExit("OpenCode runtime manifest fields differ")
 PY
 
@@ -66,7 +72,7 @@ for label in \
   "io.aster.opencode.patch.version=aster-disable-project-instructions-v1" \
   "io.aster.opencode.patch.sha256=48031f5d9a3c675406c43697682291efba78feb208c9f5dc2a977645aa41e6a3" \
   "io.aster.opencode.build-patch.version=aster-single-target-build-v1" \
-  "io.aster.opencode.build-patch.sha256=1d90634eebd407761327da845aa8cb3a72b18ea2dd33e6cd0f1904215db0b595" \
+  "io.aster.opencode.build-patch.sha256=49c2e7435fb59199df817b36bd7f8c7bfbac5622b86fbadef6a3ea3f1095605d" \
   "io.aster.opencode.builder-bun.sha256=500e6edbf321ddf490adcc55a6a01639993a07924616ab67492e1256c15557e2"; do
   key=${label%%=*}
   want=${label#*=}
@@ -136,6 +142,11 @@ payload = {
     "opencode_upstream_revision": runtime["upstream_revision"],
     "opencode_source_archive_sha256": runtime["source_archive_sha256"],
     "opencode_models_dev_sha256": runtime["models_dev_sha256"],
+    "opencode_web_builder_image": runtime["web_builder_image"],
+    "opencode_web_builder_node_version": runtime["web_builder_node_version"],
+    "opencode_web_builder_bun_image": runtime["web_builder_bun_image"],
+    "opencode_web_builder_bun_sha256": runtime["web_builder_bun_sha256"],
+    "opencode_web_ui_sha256": runtime["web_ui_sha256"],
     "opencode_builder_image": runtime["builder_image"],
     "opencode_builder_bun_sha256": runtime["builder_bun_sha256"],
     "opencode_bun_version": runtime["bun_version"],

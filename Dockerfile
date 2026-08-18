@@ -31,6 +31,28 @@ FROM golang:1.25.12-alpine@sha256:56961d79ea8129efddcc0b8643fd8a5416b4e6228cfd47
 
 # Aster-pinned OpenCode analyzer runtime. The patch disables repository
 # instruction discovery when project configuration is disabled.
+FROM oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 AS opencode-analysis-web-bun
+FROM node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584 AS opencode-analysis-web-build
+ARG OPENCODE_UPSTREAM_REVISION=70b56a0a93d366889cae950379cc9d2537148fa2
+ARG OPENCODE_SOURCE_ARCHIVE_SHA256=13d277b405def808734be8ce4c6f68d3b40df866358556aefb48b5be90ea53c1
+ARG OPENCODE_NPM_REGISTRY=https://registry.npmjs.org/
+COPY --from=opencode-analysis-web-bun /usr/local/bin/bun /usr/local/bin/bun
+RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx \
+ && test "$(node --version)" = "v24.19.0" \
+ && test "$(bun --version)" = "1.3.14" \
+ && test "$(sha256sum /usr/local/bin/bun | cut -d' ' -f1)" = "a8f9ebd1770ddc8e55dab7a68d4ec1ec1eebf374bb97cc65cf2c3cb373fc6791"
+WORKDIR /src/opencode
+RUN curl -fsSL --retry 3 \
+      -o /tmp/opencode.tar.gz \
+      "https://codeload.github.com/anomalyco/opencode/tar.gz/${OPENCODE_UPSTREAM_REVISION}" \
+ && echo "${OPENCODE_SOURCE_ARCHIVE_SHA256}  /tmp/opencode.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/opencode.tar.gz --strip-components=1 \
+ && rm /tmp/opencode.tar.gz \
+ && bun install --frozen-lockfile --ignore-scripts --cafile=/etc/ssl/certs/ca-certificates.crt --registry="${OPENCODE_NPM_REGISTRY}" \
+ && OPENCODE_CHANNEL=latest bun run --cwd packages/app build \
+ && mkdir -p /out \
+ && find packages/app/dist -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1 > /out/web-ui.sha256
+
 FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS opencode-analysis-build
 ARG TARGETARCH
 ARG OPENCODE_UPSTREAM_VERSION=1.18.2
@@ -39,7 +61,7 @@ ARG OPENCODE_SOURCE_ARCHIVE_SHA256=13d277b405def808734be8ce4c6f68d3b40df86635855
 ARG OPENCODE_PATCH_VERSION=aster-disable-project-instructions-v1
 ARG OPENCODE_PATCH_SHA256=48031f5d9a3c675406c43697682291efba78feb208c9f5dc2a977645aa41e6a3
 ARG OPENCODE_BUILD_PATCH_VERSION=aster-single-target-build-v1
-ARG OPENCODE_BUILD_PATCH_SHA256=1d90634eebd407761327da845aa8cb3a72b18ea2dd33e6cd0f1904215db0b595
+ARG OPENCODE_BUILD_PATCH_SHA256=49c2e7435fb59199df817b36bd7f8c7bfbac5622b86fbadef6a3ea3f1095605d
 ARG OPENCODE_BUILDER_BUN_SHA256=500e6edbf321ddf490adcc55a6a01639993a07924616ab67492e1256c15557e2
 ARG OPENCODE_MODELS_DEV_SHA256=2f6a5a4ab4d450e3ddabdbf0313e51bd76d51577ec1d7936326c484aded33b51
 ARG OPENCODE_MODELS_DEV_GZIP_SHA256=3b34694d1de8b57bdd0cbcfae3b8376d8d9b56352a8655b9ab62a49ffbca785d
@@ -68,8 +90,10 @@ RUN echo "${OPENCODE_PATCH_SHA256}  /tmp/opencode.patch" | sha256sum -c - \
  && grep -Fq 'if (Flag.OPENCODE_DISABLE_PROJECT_CONFIG) return []' packages/opencode/src/session/instruction.ts \
  && grep -Fq 'const requestedTarget = process.env.OPENCODE_BUILD_TARGET' packages/opencode/script/build.ts \
  && bun install --filter opencode --frozen-lockfile --ignore-scripts --cafile=/etc/ssl/certs/ca-certificates.crt --registry="${OPENCODE_NPM_REGISTRY}"
+COPY --from=opencode-analysis-web-build /src/opencode/packages/app/dist /src/opencode/packages/app/dist
+COPY --from=opencode-analysis-web-build /out/web-ui.sha256 /tmp/web-ui.sha256
 RUN test "${TARGETARCH}" = "amd64" \
- && OPENCODE_VERSION="${OPENCODE_UPSTREAM_VERSION}" OPENCODE_BUILD_TARGET=linux-x64-baseline-musl MODELS_DEV_API_JSON=/tmp/models-dev-api.json ./packages/opencode/script/build.ts --skip-install --skip-embed-web-ui \
+ && OPENCODE_VERSION="${OPENCODE_UPSTREAM_VERSION}" OPENCODE_BUILD_TARGET=linux-x64-baseline-musl OPENCODE_PREBUILT_WEB_UI=1 MODELS_DEV_API_JSON=/tmp/models-dev-api.json ./packages/opencode/script/build.ts --skip-install \
  && install -D -m 0755 packages/opencode/dist/opencode-linux-x64-baseline-musl/bin/opencode /out/opencode \
  && test "$(/out/opencode --version)" = "${OPENCODE_UPSTREAM_VERSION}" \
  && binary_sha=$(sha256sum /out/opencode | cut -d' ' -f1) \
@@ -80,10 +104,15 @@ RUN test "${TARGETARCH}" = "amd64" \
       "  \"upstream_revision\": \"${OPENCODE_UPSTREAM_REVISION}\"," \
       "  \"source_archive_sha256\": \"${OPENCODE_SOURCE_ARCHIVE_SHA256}\"," \
       "  \"models_dev_sha256\": \"${OPENCODE_MODELS_DEV_SHA256}\"," \
+      '  "web_builder_image": "docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584",' \
+      '  "web_builder_node_version": "v24.19.0",' \
+      '  "web_builder_bun_image": "docker.io/oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4",' \
+      '  "web_builder_bun_sha256": "a8f9ebd1770ddc8e55dab7a68d4ec1ec1eebf374bb97cc65cf2c3cb373fc6791",' \
+      "  \"web_ui_sha256\": \"$(cat /tmp/web-ui.sha256)\"," \
       '  "builder_image": "docker.io/oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0",' \
       "  \"builder_bun_sha256\": \"${OPENCODE_BUILDER_BUN_SHA256}\"," \
       '  "bun_version": "1.3.14",' \
-      '  "embedded_web_ui": false,' \
+      '  "embedded_web_ui": true,' \
       "  \"patch_version\": \"${OPENCODE_PATCH_VERSION}\"," \
       "  \"patch_sha256\": \"${OPENCODE_PATCH_SHA256}\"," \
       "  \"build_patch_version\": \"${OPENCODE_BUILD_PATCH_VERSION}\"," \
@@ -132,7 +161,7 @@ ARG OPENCODE_SOURCE_ARCHIVE_SHA256=13d277b405def808734be8ce4c6f68d3b40df86635855
 ARG OPENCODE_PATCH_VERSION=aster-disable-project-instructions-v1
 ARG OPENCODE_PATCH_SHA256=48031f5d9a3c675406c43697682291efba78feb208c9f5dc2a977645aa41e6a3
 ARG OPENCODE_BUILD_PATCH_VERSION=aster-single-target-build-v1
-ARG OPENCODE_BUILD_PATCH_SHA256=1d90634eebd407761327da845aa8cb3a72b18ea2dd33e6cd0f1904215db0b595
+ARG OPENCODE_BUILD_PATCH_SHA256=49c2e7435fb59199df817b36bd7f8c7bfbac5622b86fbadef6a3ea3f1095605d
 ARG OPENCODE_BUILDER_BUN_SHA256=500e6edbf321ddf490adcc55a6a01639993a07924616ab67492e1256c15557e2
 ARG OPENCODE_MODELS_DEV_SHA256=2f6a5a4ab4d450e3ddabdbf0313e51bd76d51577ec1d7936326c484aded33b51
 USER root

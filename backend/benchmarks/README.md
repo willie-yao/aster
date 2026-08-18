@@ -404,5 +404,5 @@ canary inside the exact executor image. Native reads adjacent to nested
 content and citation reconstruction without attaching any instruction canary or
 loaded-instruction metadata to a provider request. The immutable image contract
 records the upstream commit and source digest, frozen models.dev digest, Bun
-builder identity, runtime and build-only patch identities, omitted embedded Web
-UI, and final binary digest.
+builder identity, runtime and build-only patch identities, embedded Web UI
+identity, and final binary digest.
