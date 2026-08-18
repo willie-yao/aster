@@ -16,7 +16,6 @@ import (
 var Trimmed = []string{
 	"AI_TOKEN",
 	"BOT_TOKEN",
-	"FIX_TOKEN",
 	"GITHUB_READ_TOKEN",
 	"GITHUB_TOKEN",
 	"ISSUE_TOKEN",

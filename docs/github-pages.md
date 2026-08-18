@@ -224,11 +224,11 @@ The SMTP host must be reachable from the selected runner. Keep
 no authenticated action API. See [Email notifications](notifications.md) for the
 project configuration and TLS modes.
 
+## A Pages deployment performs no GitHub writes
 
-Email notifications and automatic issues run during the fetch step when
-configured. Interactive chat, File Issue, and Mark Resolved are Kubernetes
-server features and are not available on a static Pages site.
-
-Fix PR generation is experimental and is not part of the standard Pages
-workflow. It requires the Kubernetes-native Agent Sandbox runtime. See
-[Experimental Fix PR generation](fix-prs.md) before evaluating it.
+Email notifications are the only outbound side effect of the fetch step. A
+static Pages site has no authenticated action API, so every GitHub write is a
+[Kubernetes-native](kubernetes.md) server feature: interactive chat, File Issue,
+Mark Resolved, and [Fix PR generation](fix-prs.md), which additionally requires
+the Agent Sandbox runtime. Setting `issues.enabled` or `ai.fix_prs.enabled` in a
+Pages consumer's `project.yaml` has nothing to act on.

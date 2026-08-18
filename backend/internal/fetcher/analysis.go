@@ -19,7 +19,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/patterns"
-	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/prowbuild"
 )
 
@@ -380,33 +379,15 @@ func failureLocationFile(loc string) string {
 	return patterns.FailureLocationFile(loc)
 }
 
-// aiAPI returns the configured model API. project.yaml wins over AI_API.
-func aiAPI(cfg *project.Config) string {
-	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv)).API
-}
-
-// aiEndpoint returns the configured AI chat-completions URL.
-// project.yaml wins over AI_ENDPOINT.
-func aiEndpoint(cfg *project.Config) string {
-	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv)).Endpoint
-}
-
 // githubReadToken returns the token for read-only GitHub source access.
-// GITHUB_READ_TOKEN is preferred;
-// FIX_TOKEN then GITHUB_TOKEN are reused as fallbacks so a deploy that already
-// has a fix-PR token or the Actions-provided token enables authenticated reads
-// without extra configuration.
+// GITHUB_READ_TOKEN is preferred; GITHUB_TOKEN is reused as a fallback so a
+// deploy that already has the Actions-provided token enables authenticated
+// reads without extra configuration.
 func githubReadToken() string {
-	for _, name := range []string{"GITHUB_READ_TOKEN", "FIX_TOKEN", "GITHUB_TOKEN"} {
+	for _, name := range []string{"GITHUB_READ_TOKEN", "GITHUB_TOKEN"} {
 		if t := os.Getenv(name); t != "" {
 			return t
 		}
 	}
 	return ""
-}
-
-// aiModel returns the configured AI model identifier.
-// project.yaml wins over AI_MODEL.
-func aiModel(cfg *project.Config) string {
-	return cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv)).Model
 }

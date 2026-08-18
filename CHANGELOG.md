@@ -19,6 +19,69 @@ how to pin a consumer to a reviewed version.
 
 ## [Unreleased]
 
+### Removed
+
+- **Unattended issue filing and fix-PR generation.** Nothing creates a GitHub
+  issue or pull request on a schedule any more. Aster's promise is guarded,
+  maintainer-controlled next steps, and a background pass that opened issues and
+  draft pull requests without anyone reviewing the finding first contradicted it.
+  Filing an issue and proposing a fix are now exclusively authenticated dashboard
+  actions, reviewed and confirmed by an admin. The scheduled pass keeps one
+  narrow write a maintainer cannot reasonably perform by hand: commenting on and
+  closing issues it already tracks whose finding has recovered.
+
+  **Breaking for consumers.** Three changes need a consumer edit:
+
+  - The reusable workflow no longer accepts the `FIX_TOKEN` or `ISSUE_TOKEN`
+    secrets. A consumer `deploy.yml` that passes either one fails with
+    `Invalid input`; delete those lines. Consumers using `secrets: inherit` need
+    no change. A GitHub Pages deployment now performs **no** GitHub writes at
+    all, so `issues.enabled` and `ai.fix_prs.enabled` have nothing to act on
+    there. Both features require the Kubernetes-native server.
+  - `FIX_TOKEN` is gone entirely. On Kubernetes, the server's `BOT_TOKEN`
+    performs issue and fix-PR writes, and the worker's `ISSUE_TOKEN` performs
+    issue recovery. `FIX_TOKEN` is also no longer a fallback for read-only
+    GitHub source access; set `GITHUB_READ_TOKEN` if you relied on that.
+  - `issues.max_new_per_run`, `ai.fix_prs.max_new_per_run`, and
+    `ai.fix_prs.dry_run` are removed from `project.yaml`. They only bounded the
+    scheduled generation that no longer exists, and `project.yaml` is decoded
+    strictly, so leaving them in place fails validation.
+
+  The `automatic_fix_prs` follow-up component is gone from the fetch status. A
+  status file written by an older engine still loads.
+
+- **The `persistent` issue trigger no longer files issues.** The dashboard's
+  File issue action builds specs for systemic patterns and individual builds,
+  never for persistent test failures, so the scheduled pass was the only thing
+  that created them. The trigger stays in `project.yaml` and keeps scoping
+  recovery: leave it enabled and persistent issues an earlier version filed
+  still get their recovery comment and close. The fetcher also still computes
+  which persistent findings are active, so no still-failing issue is closed
+  early.
+
+### Fixed
+
+- **Concurrent issue-state writes no longer lose a filing.** The server files
+  issues and the worker recovers them against the same `issue_state.json`, and
+  each ran an unlocked load, mutate, and save. A worker pass that loaded before
+  a filing could save over it, dropping the tracking entry so that issue was
+  never closed on recovery. Both sequences now hold an exclusive lock.
+- **Scheduled pods no longer request Fix authority.** With `ai.fix_prs.enabled`
+  the Helm chart gave the worker and fetcher the `remote-fixer` image, Agent
+  Sandbox environment, and the Sandbox client identity. Fix generation is
+  server-only, so those pods no longer carry that access.
+- **Filing an issue honors `issues.triggers`.** The File issue action always
+  used the `patterns` trigger, so a project that disabled it could still file a
+  pattern issue that scheduled recovery would never close.
+
+### Changed
+
+- **`issues.Manager` splits into `File` and `Recover`.** Each caller used exactly
+  one half of the old `Reconcile`, and merging them meant the dashboard action
+  passed options that only the scheduled pass read, and vice versa. `File` adopts
+  or creates issues for the given findings; `Recover` comments on and closes
+  tracked issues absent from the findings this run re-evaluated.
+
 ## [0.9.0-rc.4] - 2026-08-18
 
 ### Removed

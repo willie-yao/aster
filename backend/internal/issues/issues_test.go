@@ -183,13 +183,13 @@ func spec(key string) IssueSpec {
 	}
 }
 
-func TestReconcile_CreatesNewIssue(t *testing.T) {
+func TestFile_CreatesNewIssue(t *testing.T) {
 	f := newFakeGitHub(t)
 	m := newTestManager(t, f, defaultOpts())
 
-	stats, err := m.Reconcile(context.Background(), []IssueSpec{spec("pattern::job-a")})
+	stats, err := m.File(context.Background(), []IssueSpec{spec("pattern::job-a")})
 	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
+		t.Fatalf("File: %v", err)
 	}
 	if stats.Created != 1 {
 		t.Errorf("Created = %d, want 1", stats.Created)
@@ -202,16 +202,16 @@ func TestReconcile_CreatesNewIssue(t *testing.T) {
 	}
 }
 
-func TestReconcile_SkipsWhenAlreadyTracked(t *testing.T) {
+func TestFile_SkipsWhenAlreadyTracked(t *testing.T) {
 	f := newFakeGitHub(t)
 	m := newTestManager(t, f, defaultOpts())
 	s := []IssueSpec{spec("pattern::job-a")}
 
-	if _, err := m.Reconcile(context.Background(), s); err != nil {
+	if _, err := m.File(context.Background(), s); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	// Second reconcile with the same finding must not create a new issue.
-	stats, err := m.Reconcile(context.Background(), s)
+	// Filing the same finding again must not create a new issue.
+	stats, err := m.File(context.Background(), s)
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestReconcile_SkipsWhenAlreadyTracked(t *testing.T) {
 	}
 }
 
-func TestReconcile_AdoptsExistingWhenStateLost(t *testing.T) {
+func TestFile_AdoptsExistingWhenStateLost(t *testing.T) {
 	f := newFakeGitHub(t)
 	// Simulate a prior run: an open issue already carries this key's marker,
 	// but local state is empty (cache evicted).
@@ -231,9 +231,9 @@ func TestReconcile_AdoptsExistingWhenStateLost(t *testing.T) {
 	existing := f.seedOpenIssue("old body\n" + markerFor(key))
 	m := newTestManager(t, f, defaultOpts())
 
-	stats, err := m.Reconcile(context.Background(), []IssueSpec{spec(key)})
+	stats, err := m.File(context.Background(), []IssueSpec{spec(key)})
 	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
+		t.Fatalf("File: %v", err)
 	}
 	if stats.Created != 0 {
 		t.Errorf("Created = %d, want 0 (should adopt, not create)", stats.Created)
@@ -249,18 +249,18 @@ func TestReconcile_AdoptsExistingWhenStateLost(t *testing.T) {
 	}
 }
 
-func TestReconcile_RecoveryComments(t *testing.T) {
+func TestRecover_Comments(t *testing.T) {
 	f := newFakeGitHub(t)
 	m := newTestManager(t, f, defaultOpts())
 	key := "pattern::job-c"
 
-	if _, err := m.Reconcile(context.Background(), []IssueSpec{spec(key)}); err != nil {
+	if _, err := m.File(context.Background(), []IssueSpec{spec(key)}); err != nil {
 		t.Fatalf("file: %v", err)
 	}
 	num := m.state.Tracked[key].Number
 
 	// Missing finding triggers a recovery comment and untracks it.
-	stats, err := m.Reconcile(context.Background(), nil)
+	stats, err := m.Recover(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("recover: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestReconcile_RecoveryComments(t *testing.T) {
 		t.Errorf("recovery comments on #%d = %d, want 1", num, len(f.comments[num]))
 	}
 	// A subsequent empty run must not comment again.
-	if _, err := m.Reconcile(context.Background(), nil); err != nil {
+	if _, err := m.Recover(context.Background(), nil); err != nil {
 		t.Fatalf("third: %v", err)
 	}
 	if len(f.comments[num]) != 1 {
@@ -282,16 +282,16 @@ func TestReconcile_RecoveryComments(t *testing.T) {
 	}
 }
 
-func TestReconcile_RecoveryCloses(t *testing.T) {
+func TestRecover_Closes(t *testing.T) {
 	f := newFakeGitHub(t)
 	opts := defaultOpts()
 	opts.CloseOnRecovery = true
 	m := newTestManager(t, f, opts)
 	key := "pattern::job-d"
 
-	_, _ = m.Reconcile(context.Background(), []IssueSpec{spec(key)})
+	_, _ = m.File(context.Background(), []IssueSpec{spec(key)})
 	num := m.state.Tracked[key].Number
-	if _, err := m.Reconcile(context.Background(), nil); err != nil {
+	if _, err := m.Recover(context.Background(), nil); err != nil {
 		t.Fatalf("recover: %v", err)
 	}
 	if f.issues[num].State != "closed" {
@@ -299,35 +299,66 @@ func TestReconcile_RecoveryCloses(t *testing.T) {
 	}
 }
 
-func TestReconcile_KeepOpenSuppressesRecovery(t *testing.T) {
+func TestRecover_SkipsStillActiveFindings(t *testing.T) {
+	f := newFakeGitHub(t)
+	opts := defaultOpts()
+	opts.CloseOnRecovery = true
+	m := newTestManager(t, f, opts)
+	key := "pattern::job-active"
+
+	if _, err := m.File(context.Background(), []IssueSpec{spec(key)}); err != nil {
+		t.Fatalf("File: %v", err)
+	}
+	num := m.state.Tracked[key].Number
+
+	// The finding is still failing this run, so it must survive untouched.
+	stats, err := m.Recover(context.Background(), []string{key})
+	if err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	if stats.Recovered != 0 {
+		t.Errorf("Recovered = %d, want 0 (finding is still active)", stats.Recovered)
+	}
+	if _, ok := m.state.Tracked[key]; !ok {
+		t.Error("still-active finding must remain tracked")
+	}
+	if len(f.comments[num]) != 0 {
+		t.Errorf("comments = %d, want 0", len(f.comments[num]))
+	}
+	if f.issues[num].State == "closed" {
+		t.Error("still-active finding must not be closed")
+	}
+}
+
+func TestRecover_KeepOpenSuppressesRecovery(t *testing.T) {
 	f := newFakeGitHub(t)
 	opts := defaultOpts()
 	key := "pattern::job-pending"
 	opts.KeepOpenKeys = map[string]bool{key: true}
 	m := newTestManager(t, f, opts)
 
-	if _, err := m.Reconcile(context.Background(), []IssueSpec{spec(key)}); err != nil {
+	if _, err := m.File(context.Background(), []IssueSpec{spec(key)}); err != nil {
 		t.Fatalf("file: %v", err)
 	}
-	if _, err := m.Reconcile(context.Background(), nil); err != nil {
-		t.Fatalf("reconcile: %v", err)
+	if _, err := m.Recover(context.Background(), nil); err != nil {
+		t.Fatalf("recover: %v", err)
 	}
 	if _, ok := m.state.Tracked[key]; !ok {
 		t.Fatal("kept-open finding must remain tracked")
 	}
 }
 
-func TestReconcile_MaxNewPerRun(t *testing.T) {
+func TestFile_MaxNewPerRun(t *testing.T) {
 	f := newFakeGitHub(t)
 	opts := defaultOpts()
 	opts.MaxNewPerRun = 2
 	m := newTestManager(t, f, opts)
 
-	stats, err := m.Reconcile(context.Background(), []IssueSpec{
+	stats, err := m.File(context.Background(), []IssueSpec{
 		spec("k1"), spec("k2"), spec("k3"), spec("k4"),
 	})
 	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
+		t.Fatalf("File: %v", err)
 	}
 	if stats.Created != 2 {
 		t.Errorf("Created = %d, want 2 (capped)", stats.Created)
@@ -341,7 +372,7 @@ func TestState_RoundTrip(t *testing.T) {
 	f := newFakeGitHub(t)
 	path := filepath.Join(t.TempDir(), "s.json")
 	m := NewManager(newTestClient(f), path, "owner/repo", defaultOpts())
-	if _, err := m.Reconcile(context.Background(), []IssueSpec{spec("pattern::job-e")}); err != nil {
+	if _, err := m.File(context.Background(), []IssueSpec{spec("pattern::job-e")}); err != nil {
 		t.Fatalf("file: %v", err)
 	}
 	if err := m.SaveState(); err != nil {
@@ -352,9 +383,9 @@ func TestState_RoundTrip(t *testing.T) {
 	if _, ok := m2.state.Tracked["pattern::job-e"]; !ok {
 		t.Fatal("expected loaded state to contain the tracked key")
 	}
-	stats, err := m2.Reconcile(context.Background(), []IssueSpec{spec("pattern::job-e")})
+	stats, err := m2.File(context.Background(), []IssueSpec{spec("pattern::job-e")})
 	if err != nil {
-		t.Fatalf("reconcile2: %v", err)
+		t.Fatalf("file2: %v", err)
 	}
 	if stats.Created != 0 {
 		t.Errorf("Created after reload = %d, want 0", stats.Created)
@@ -377,32 +408,32 @@ func TestState_DiscardedOnRepoChange(t *testing.T) {
 	if _, ok := m.state.Tracked["pattern::job-a"]; ok {
 		t.Fatal("state from a different repo must be discarded on load")
 	}
-	stats, err := m.Reconcile(context.Background(), []IssueSpec{spec("pattern::job-a")})
+	stats, err := m.File(context.Background(), []IssueSpec{spec("pattern::job-a")})
 	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
+		t.Fatalf("File: %v", err)
 	}
 	if stats.Created != 1 {
 		t.Errorf("Created = %d, want 1 (stale cross-repo state ignored)", stats.Created)
 	}
 }
 
-func TestReconcile_RecoveryScopedToEnabledPrefixes(t *testing.T) {
+func TestRecover_ScopedToEnabledPrefixes(t *testing.T) {
 	f := newFakeGitHub(t)
 	opts := defaultOpts()
 	opts.RecoverPrefixes = []string{KeyPrefixPersistent} // patterns NOT recoverable
 	m := newTestManager(t, f, opts)
 	key := "pattern::job-a"
 
-	if _, err := m.Reconcile(context.Background(), []IssueSpec{spec(key)}); err != nil {
+	if _, err := m.File(context.Background(), []IssueSpec{spec(key)}); err != nil {
 		t.Fatalf("file: %v", err)
 	}
 	num := m.state.Tracked[key].Number
 
 	// Finding absent, but its prefix isn't in RecoverPrefixes (e.g. the
 	// patterns trigger is off / wasn't evaluated): must NOT comment or untrack.
-	stats, err := m.Reconcile(context.Background(), nil)
+	stats, err := m.Recover(context.Background(), nil)
 	if err != nil {
-		t.Fatalf("reconcile: %v", err)
+		t.Fatalf("recover: %v", err)
 	}
 	if stats.Recovered != 0 {
 		t.Errorf("Recovered = %d, want 0 (prefix not enabled)", stats.Recovered)
@@ -537,19 +568,18 @@ func TestMarker_StableAndKeyed(t *testing.T) {
 	}
 }
 
-// TestReconcile_SingleSpecNoRecoverPrefixes documents the on-demand actions
-// contract: filing one issue with no recover prefixes must not recover, close,
-// or drop any other tracked finding.
-func TestReconcile_SingleSpecNoRecoverPrefixes(t *testing.T) {
+// TestFile_SingleSpecDoesNotRecover documents the on-demand actions contract:
+// filing one issue must not recover, close, or drop any other tracked finding.
+func TestFile_SingleSpecDoesNotRecover(t *testing.T) {
 	f := newFakeGitHub(t)
-	m := newTestManager(t, f, Options{MaxNewPerRun: 1}) // no RecoverPrefixes
+	m := newTestManager(t, f, Options{MaxNewPerRun: 1})
 
 	// Pre-track an unrelated finding as if a prior batch run filed it.
 	m.state.Tracked["pattern::other-job"] = TrackedIssue{Number: 42, URL: "u", FirstFiledAt: now()}
 
-	stats, err := m.Reconcile(context.Background(), []IssueSpec{spec("pattern::job-a")})
+	stats, err := m.File(context.Background(), []IssueSpec{spec("pattern::job-a")})
 	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
+		t.Fatalf("File: %v", err)
 	}
 	if stats.Created != 1 {
 		t.Errorf("Created = %d, want 1", stats.Created)
@@ -563,22 +593,22 @@ func TestReconcile_SingleSpecNoRecoverPrefixes(t *testing.T) {
 }
 
 // stubFiller reformats to a template-like body that drops the marker, to prove
-// Reconcile re-adds it.
+// File re-adds it.
 type stubFiller struct{}
 
 func (stubFiller) FillIssue(_ context.Context, title, _ string) (string, string) {
 	return title + " (templated)", "**What happened**: filled from template"
 }
 
-func TestReconcile_TemplateFillerPreservesMarker(t *testing.T) {
+func TestFile_TemplateFillerPreservesMarker(t *testing.T) {
 	f := newFakeGitHub(t)
 	opts := defaultOpts()
 	opts.TemplateFiller = stubFiller{}
 	m := newTestManager(t, f, opts)
 
 	key := "pattern::job-a"
-	if _, err := m.Reconcile(context.Background(), []IssueSpec{spec(key)}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
+	if _, err := m.File(context.Background(), []IssueSpec{spec(key)}); err != nil {
+		t.Fatalf("File: %v", err)
 	}
 	// The created issue body must still carry the dedup marker so a later run
 	// adopts it instead of filing a duplicate.

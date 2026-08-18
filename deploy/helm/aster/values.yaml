@@ -367,7 +367,7 @@ fetcher:
   # Bounds discovery and artifact fetching. Cron mode also has activeDeadlineSeconds.
   timeout: 30m
   includePresubmits: false
-  # Extra environment variables (e.g. ISSUE_TOKEN, FIX_TOKEN,
+  # Extra environment variables (e.g. ISSUE_TOKEN for issue recovery,
   # EMAIL_SMTP_PASSWORD) sourced from secrets or given inline. Standard
   # core/v1 EnvVar entries.
   extraEnv: []

@@ -52,8 +52,10 @@ boundaries are in the onboarding quickstart.
 | No cluster to operate | [GitHub Actions and Pages](docs/github-pages.md) |
 
 Both deployment paths use the supported in-process analyzer. Pages publishes
-static JSON and assets. Kubernetes adds a server for authentication, chat, and
-guarded actions. Fix PR generation is not part of standard onboarding.
+static JSON and assets and performs no GitHub writes. Kubernetes adds a server
+for authentication, chat, and guarded actions. Every GitHub write is initiated
+by a maintainer; nothing files an issue or opens a pull request on a schedule.
+Fix PR generation is not part of standard onboarding.
 
 ## Documentation
 

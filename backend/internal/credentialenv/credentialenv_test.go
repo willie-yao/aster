@@ -106,10 +106,10 @@ func TestSanitizeLeavesUnsetVariablesUnset(t *testing.T) {
 // checks treat it as missing rather than as a usable credential.
 func TestSanitizeCollapsesWhitespaceOnlyToken(t *testing.T) {
 	isolateEnv(t)
-	t.Setenv("FIX_TOKEN", "   \n")
+	t.Setenv("BOT_TOKEN", "   \n")
 	Sanitize()
-	if got := os.Getenv("FIX_TOKEN"); got != "" {
-		t.Errorf("FIX_TOKEN = %q, want empty", got)
+	if got := os.Getenv("BOT_TOKEN"); got != "" {
+		t.Errorf("BOT_TOKEN = %q, want empty", got)
 	}
 }
 

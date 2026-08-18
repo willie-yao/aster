@@ -163,7 +163,7 @@ func BuildFailureID(jobID, buildID string) string {
 }
 
 type issuePreviewManager interface {
-	Reconcile(context.Context, []issues.IssueSpec) (issues.Stats, error)
+	File(context.Context, []issues.IssueSpec) (issues.Stats, error)
 	TrackedURL(string) (string, bool)
 	FindOpen(context.Context, string) (string, bool, error)
 	FindAny(context.Context, string) (string, bool, error)
@@ -453,9 +453,11 @@ func (s *Service) buildIssueSpecForPattern(pattern models.PatternAnalysis) (issu
 		return issues.IssueSpec{}, "", fmt.Errorf("no target repo resolved (set issues.repo or branding.source_repo)")
 	}
 	report := models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{pattern}}
+	// Honor the configured triggers: recovery is scoped to them, so filing an
+	// issue whose prefix is disabled would leave one that never closes.
 	specs := issues.BuildSpecs(issues.BuildInput{
 		Report:       report,
-		Triggers:     []string{project.IssueTriggerPatterns},
+		Triggers:     eff.Triggers,
 		Labels:       eff.Labels,
 		DashboardURL: s.cfg.Branding.SiteURL,
 	})
@@ -761,7 +763,6 @@ func (s *Service) buildFixManagerForRepositoryAccess(
 		AuthorEmail:     eff.AuthorEmail,
 		MinConfidence:   eff.MinConfidence,
 		MaxFiles:        eff.MaxFiles,
-		MaxNewPerRun:    1,
 		Labels:          eff.Labels,
 		DashboardURL:    s.cfg.Branding.SiteURL,
 		Critique:        critique,
@@ -1322,33 +1323,44 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 		if entry.targetRepo != eff.Repo.Owner+"/"+eff.Repo.Name {
 			return "", ErrPreviewTargetChanged
 		}
-		mgr := s.issueManagerFactory(userToken, eff.Repo.Owner, eff.Repo.Name)
-		if strings.HasPrefix(entry.failureID, "build::") {
-			if url, found, err := mgr.FindAny(ctx, entry.spec.Key); err != nil {
-				return "", fmt.Errorf("searching build issue: %w", err)
-			} else if found {
-				return url, nil
-			}
-		}
-		if _, err := mgr.Reconcile(ctx, []issues.IssueSpec{entry.spec}); err != nil {
-			if errors.Is(err, issues.ErrWriteOutcomeUnknown) {
-				return "", fmt.Errorf("%w: filing issue: %v", ErrPreviewOutcomeUnknown, err)
-			}
-			return "", fmt.Errorf("filing issue: %w", err)
-		}
-		url, ok := mgr.TrackedURL(entry.spec.Key)
-		if !ok {
-			return "", fmt.Errorf("issue was not filed")
-		}
-		if strings.HasPrefix(entry.failureID, "build::") || entry.analysisBinding != nil {
-			mgr.Forget(entry.spec.Key)
-		}
-		if err := mgr.SaveState(); err != nil {
+		// The worker recovers issues from this same state file, so load, file, and
+		// save must be one locked sequence or a concurrent recovery pass can save
+		// over this filing and lose its tracking entry.
+		var url string
+		if err := statefile.WithLock(filepath.Join(s.dataDir, "issue_state.json"), func() error {
+			mgr := s.issueManagerFactory(userToken, eff.Repo.Owner, eff.Repo.Name)
 			if strings.HasPrefix(entry.failureID, "build::") {
-				log.Printf("Warning: build issue state cleanup failed after creating %s: %v", url, err)
-				return url, nil
+				if found, ok, err := mgr.FindAny(ctx, entry.spec.Key); err != nil {
+					return fmt.Errorf("searching build issue: %w", err)
+				} else if ok {
+					url = found
+					return nil
+				}
 			}
-			return url, fmt.Errorf("saving issue state: %w", err)
+			if _, err := mgr.File(ctx, []issues.IssueSpec{entry.spec}); err != nil {
+				if errors.Is(err, issues.ErrWriteOutcomeUnknown) {
+					return fmt.Errorf("%w: filing issue: %v", ErrPreviewOutcomeUnknown, err)
+				}
+				return fmt.Errorf("filing issue: %w", err)
+			}
+			filed, ok := mgr.TrackedURL(entry.spec.Key)
+			if !ok {
+				return fmt.Errorf("issue was not filed")
+			}
+			url = filed
+			if strings.HasPrefix(entry.failureID, "build::") || entry.analysisBinding != nil {
+				mgr.Forget(entry.spec.Key)
+			}
+			if err := mgr.SaveState(); err != nil {
+				if strings.HasPrefix(entry.failureID, "build::") {
+					log.Printf("Warning: build issue state cleanup failed after creating %s: %v", url, err)
+					return nil
+				}
+				return fmt.Errorf("saving issue state: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return url, err
 		}
 		return url, nil
 	case gfKind:

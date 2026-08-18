@@ -979,7 +979,6 @@ func TestFollowUpProgressRoundTripAndValidation(t *testing.T) {
 		AutomaticIssues: &FollowUpComponentStatus{
 			State: FollowUpSkipped, Reason: FollowUpReasonNotConfigured,
 		},
-		AutomaticFixPRs: &FollowUpComponentStatus{State: FollowUpDisabled},
 	}
 	path := Path(t.TempDir())
 	if err := Write(path, status); err != nil {
@@ -1014,19 +1013,59 @@ func TestTrackerRecordsAndCancelsFollowUpComponents(t *testing.T) {
 	tracker.StartPass(PassOneShot)
 	tracker.StartPhase(PhaseSideEffects)
 	tracker.SetFollowUp(FollowUpNotifications, FollowUpFailed, FollowUpReasonNone, FollowUpFailureNotificationDelivery)
-	tracker.SetFollowUp(FollowUpAutomaticIssues, FollowUpSkipped, FollowUpReasonNotConfigured, FollowUpFailureNone)
-	tracker.SetFollowUp(FollowUpAutomaticFixPRs, FollowUpRunning, FollowUpReasonNone, FollowUpFailureNone)
+	tracker.SetFollowUp(FollowUpAutomaticIssues, FollowUpRunning, FollowUpReasonNone, FollowUpFailureNone)
 
 	before := tracker.Snapshot()
 	if before.FollowUp == nil || before.FollowUp.Notifications == nil ||
 		before.FollowUp.Notifications.Summary != "Email notification delivery failed" ||
-		before.FollowUp.AutomaticIssues.Reason != FollowUpReasonNotConfigured {
+		before.FollowUp.AutomaticIssues.State != FollowUpRunning {
 		t.Fatalf("follow-up progress = %+v", before.FollowUp)
 	}
 	tracker.FinishCancelled()
 	after := tracker.Snapshot()
-	if after.FollowUp.AutomaticFixPRs.State != FollowUpCancelled {
+	if after.FollowUp.AutomaticIssues.State != FollowUpCancelled {
 		t.Fatalf("cancelled follow-up progress = %+v", after.FollowUp)
+	}
+}
+
+// TestReadAcceptsRetiredFollowUpComponents proves a status file written by an
+// engine that still ran scheduled fix PRs loads under strict decoding.
+func TestReadAcceptsRetiredFollowUpComponents(t *testing.T) {
+	status := testStatus(time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC))
+	status.FollowUp = &FollowUpProgress{
+		AutomaticIssues: &FollowUpComponentStatus{State: FollowUpCompleted},
+	}
+	path := Path(t.TempDir())
+	if err := Write(path, status); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	followUp, ok := decoded["follow_up"].(map[string]any)
+	if !ok {
+		t.Fatalf("follow_up missing from %s", raw)
+	}
+	followUp["automatic_fix_prs"] = map[string]any{"state": "disabled"}
+	followUp["remediation"] = map[string]any{"state": "disabled"}
+	withRetired, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, withRetired, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read error = %v, want retired components accepted", err)
+	}
+	if got.FollowUp == nil || got.FollowUp.AutomaticIssues == nil || got.FollowUp.AutomaticIssues.State != FollowUpCompleted {
+		t.Fatalf("follow-up = %+v", got.FollowUp)
 	}
 }
 

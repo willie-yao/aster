@@ -2,7 +2,8 @@
 
 > **Status: experimental and disabled by default.** Agent Sandbox is the only
 > supported coding-agent runtime. Fix generation is not part of standard
-> onboarding and never merges a pull request.
+> onboarding, only ever starts from an explicit maintainer request, and never
+> merges a pull request.
 
 Aster can generate a minimal patch for an eligible recurring failure, exact
 failed build analysis, or exact-JUnit chat finding, then present a draft pull
@@ -90,7 +91,6 @@ confirmation and never silently regenerates content.
 | Process | Responsibility | Credentials and target code |
 | --- | --- | --- |
 | Dashboard server | Dispatches Agent Sandbox, reconstructs and validates the returned patch, persists the preview, and performs the separately confirmed GitHub write. | May hold OAuth, `BOT_TOKEN`, AI credentials, project data, and the shared data volume. It never executes target build, test, vet, or validation commands. |
-| Worker or fetcher | Dispatches scheduled Fix work when configured and validates the returned result. | May hold `FIX_TOKEN` and analysis credentials. They do not enter the Sandbox request. |
 | `remote-fixer` image | Provides dashboard binaries and git for canonical patch reconstruction. | Runs inside the normal dashboard Pod boundary. It does not execute target validation commands. |
 | Agent Sandbox executor | Clones the public pinned source, runs OpenCode once, stages the patch, runs exact validators, and emits one bounded result. | Receives no GitHub, OAuth, dashboard, or general repository credential. The dedicated provider credential is removed before validator execution. Target code runs only here. |
 
@@ -114,10 +114,9 @@ to a repository the configured credential cannot write.
 
 ## Identity, CLA, and the token
 
-Scheduled generation uses `FIX_TOKEN`; authenticated server previews and
-confirmations use the server-held `BOT_TOKEN`. Each must be a PAT for the
-contributor identity that creates the Fix branch and pull request. Neither is the
-GitHub Actions `GITHUB_TOKEN`.
+Previews and confirmations use the server-held `BOT_TOKEN`. It must be a PAT for
+the contributor identity that creates the Fix branch and pull request. It is not
+the GitHub Actions `GITHUB_TOKEN`.
 
 - Cross-fork public contribution commonly requires a classic PAT with
   `public_repo`; private repositories require the corresponding repository
@@ -130,8 +129,8 @@ GitHub Actions `GITHUB_TOKEN`.
 - The engine adds a matching `Signed-off-by` trailer.
 
 Use the narrowest credential that supports the selected mode. Do not put
-`FIX_TOKEN`, `BOT_TOKEN`, the model provider credential, OAuth credentials, or a
-general operator PAT inside Agent Sandbox.
+`BOT_TOKEN`, the model provider credential, OAuth credentials, or a general
+operator PAT inside Agent Sandbox.
 
 ## Required project configuration
 
@@ -143,7 +142,6 @@ ai:
     author_email: "jane@example.com"
     fork: true
     max_files: 3
-    max_new_per_run: 1
     critique_retries: 0
     agent_runtime:
       type: agent-sandbox
@@ -229,13 +227,8 @@ analysis, immutable source, and verified repository paths remain current.
 
 Hidden GitHub markers and private state deduplicate the same job and root-cause
 identity. Different causes on the same job may produce separate drafts.
-`max_new_per_run` bounds scheduled generation. Persistent preview and audit files
-are private operational state and are never served under `/data/*` or published
-to Pages.
-
-Dry-run mode may write local preview artifacts without forking, pushing, or
-opening a pull request. Review those artifacts in the private output directory,
-not through the public dashboard.
+Persistent preview and audit files are private operational state and are never
+served under `/data/*` or published to Pages.
 
 ## Known limitations
 
@@ -246,7 +239,7 @@ not through the public dashboard.
 - Edited files are committed as regular files, so a reviewer must notice an
   unintended executable-bit change.
 - Local state plus GitHub search deduplication is not atomic across overlapping
-  fetches. Serialize scheduled writers.
+  requests. Serialize concurrent writers.
 - A newly created fork may not be immediately ready for the first push. A later
   explicit retry can succeed after GitHub finishes populating it.
 - The generic executor supports only tools present in its immutable image.

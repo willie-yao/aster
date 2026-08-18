@@ -105,7 +105,7 @@ func persistentSpec(tf models.TestFlakiness, summary, rootCause, site string, la
 
 // footer appends the standard provenance line and the hidden dedup marker.
 func footer(key string) string {
-	return fmt.Sprintf("---\n_Filed automatically by Aster. It updates and resolves on its own as builds change._\n\n%s\n", markerFor(key))
+	return fmt.Sprintf("---\n_Filed from Aster by a maintainer. It resolves on its own as builds change._\n\n%s\n", markerFor(key))
 }
 
 func jobLink(site, jobID string) string {

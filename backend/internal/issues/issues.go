@@ -137,7 +137,7 @@ type Stats struct {
 
 // TrackedURL returns the issue URL recorded for a finding key, if one has been
 // filed or adopted. Used by on-demand callers to report the result after
-// Reconcile.
+// File.
 func (m *Manager) TrackedURL(key string) (string, bool) {
 	t, ok := m.state.Tracked[key]
 	return t.URL, ok
@@ -252,19 +252,23 @@ func ReviseBody(ctx context.Context, c Completer, spec IssueSpec, instruction st
 	return IssueSpec{Key: spec.Key, Title: spec.Title, Body: revised, Labels: spec.Labels}, nil
 }
 
-// Reconcile files issues for new findings, adopts a pre-existing open issue when
-// local state was lost, and comments/closes issues whose finding has recovered.
-// Per-finding API errors are collected while independent findings continue.
-func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, error) {
+// File adopts a pre-existing open issue when local state was lost, otherwise
+// creates one, for each spec that is not already tracked. Per-finding API errors
+// are collected while independent findings continue.
+func (m *Manager) File(ctx context.Context, specs []IssueSpec) (Stats, error) {
 	var stats Stats
-	var reconcileErrs []error
+	var fileErrs []error
 
-	current := make(map[string]IssueSpec, len(specs))
-	for _, s := range specs {
-		current[s.Key] = s
-	}
-
-	for key, spec := range current {
+	// Coalesce by key first so one finding cannot be filed twice from a single
+	// call: GitHub's issue search does not index a brand-new issue immediately,
+	// so a repeated key would not be caught by the adoption search below.
+	seen := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		key := spec.Key
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		if _, tracked := m.state.Tracked[key]; tracked {
 			continue
 		}
@@ -272,7 +276,7 @@ func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, erro
 		// issue from a prior run whose state was lost. Search before creating.
 		if num, urlStr, found, err := m.client.SearchOpenIssue(ctx, markerToken(key), markerFor(key)); err != nil {
 			log.Printf("  ⚠ issue search failed for %s: %v", key, err)
-			reconcileErrs = append(reconcileErrs, fmt.Errorf("search %s: %w", key, err))
+			fileErrs = append(fileErrs, fmt.Errorf("search %s: %w", key, err))
 			continue
 		} else if found {
 			m.state.Tracked[key] = TrackedIssue{Number: num, URL: urlStr, FirstFiledAt: now()}
@@ -281,14 +285,14 @@ func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, erro
 			continue
 		}
 		if stats.Created >= m.opts.MaxNewPerRun {
-			log.Printf("  ⓘ issue create cap (%d) reached; deferring %s to next run", m.opts.MaxNewPerRun, key)
+			log.Printf("  ⓘ issue create cap (%d) reached; deferring %s", m.opts.MaxNewPerRun, key)
 			continue
 		}
 		title, body := RenderSpec(ctx, m.opts.TemplateFiller, spec)
 		num, urlStr, err := m.client.CreateIssue(ctx, title, body, spec.Labels)
 		if err != nil {
 			log.Printf("  ⚠ failed to create issue for %s: %v", key, err)
-			reconcileErrs = append(reconcileErrs, fmt.Errorf("create %s: %w", key, err))
+			fileErrs = append(fileErrs, fmt.Errorf("create %s: %w", key, err))
 			continue
 		}
 		m.state.Tracked[key] = TrackedIssue{Number: num, URL: urlStr, FirstFiledAt: now()}
@@ -296,10 +300,23 @@ func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, erro
 		log.Printf("  📝 filed issue #%d for %s", num, key)
 	}
 
-	// Recover tracked findings that are absent from trigger namespaces evaluated
-	// by this run.
+	return stats, errors.Join(fileErrs...)
+}
+
+// Recover comments on and closes tracked issues whose finding is absent from
+// activeKeys, the findings this run re-evaluated. It never creates an issue.
+// Per-finding API errors are collected while independent findings continue.
+func (m *Manager) Recover(ctx context.Context, activeKeys []string) (Stats, error) {
+	var stats Stats
+	var recoverErrs []error
+
+	active := make(map[string]bool, len(activeKeys))
+	for _, key := range activeKeys {
+		active[key] = true
+	}
+
 	for key, tracked := range m.state.Tracked {
-		if _, stillActive := current[key]; stillActive {
+		if active[key] {
 			continue
 		}
 		if m.opts.KeepOpenKeys[key] {
@@ -311,14 +328,14 @@ func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, erro
 		if m.opts.CommentOnRecovery {
 			if err := m.client.CommentIssue(ctx, tracked.Number, recoveryComment()); err != nil {
 				log.Printf("  ⚠ failed to comment recovery on #%d (%s): %v", tracked.Number, key, err)
-				reconcileErrs = append(reconcileErrs, fmt.Errorf("comment recovery %s: %w", key, err))
+				recoverErrs = append(recoverErrs, fmt.Errorf("comment recovery %s: %w", key, err))
 				continue // keep tracking so we retry next run
 			}
 		}
 		if m.opts.CloseOnRecovery {
 			if err := m.client.CloseIssue(ctx, tracked.Number); err != nil {
 				log.Printf("  ⚠ failed to close #%d (%s): %v", tracked.Number, key, err)
-				reconcileErrs = append(reconcileErrs, fmt.Errorf("close recovery %s: %w", key, err))
+				recoverErrs = append(recoverErrs, fmt.Errorf("close recovery %s: %w", key, err))
 				continue
 			}
 		}
@@ -327,7 +344,7 @@ func (m *Manager) Reconcile(ctx context.Context, specs []IssueSpec) (Stats, erro
 		log.Printf("  ✅ marked issue #%d recovered for %s", tracked.Number, key)
 	}
 
-	return stats, errors.Join(reconcileErrs...)
+	return stats, errors.Join(recoverErrs...)
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }

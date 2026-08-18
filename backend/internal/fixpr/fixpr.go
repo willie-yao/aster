@@ -61,16 +61,8 @@ type Options struct {
 	MinConfidence string
 	// MaxFiles caps how many files a single fix may touch.
 	MaxFiles int
-	// MaxNewPerRun caps fix PRs opened (or previews produced) this run.
-	MaxNewPerRun int
 	// Labels are applied to each fix PR.
 	Labels []string
-	// DryRun proposes fixes without opening any PR; previews are written to
-	// PreviewFile and logged.
-	DryRun bool
-	// PreviewFile is where dry-run previews are written (JSON). Ignored unless
-	// DryRun is set.
-	PreviewFile string
 	// DashboardURL is linked in the PR body for context.
 	DashboardURL string
 	// Critique reviews the proposed change before a PR is opened; nil (or
@@ -203,37 +195,17 @@ func (f TrackedFix) HasPatternSnapshot() bool {
 	return f.Pattern.JobID != "" || f.Pattern.Subject != ""
 }
 
-func trackedFix(url string, pattern models.PatternAnalysis) TrackedFix {
-	return TrackedFix{URL: url, OpenedAt: now(), Pattern: pattern}
-}
-
 func trackedGeneratedFix(url string, fix *GeneratedFix) TrackedFix {
 	return TrackedFix{URL: url, OpenedAt: now(), Pattern: fix.pattern}
 }
 
-// Preview is a dry-run proposed fix (no PR opened).
+// Preview is a proposed fix, before any PR is opened.
 type Preview struct {
 	Subject   string            `json:"subject"`
 	Rationale string            `json:"rationale"`
 	Diff      string            `json:"diff"`
 	Files     map[string]string `json:"-"`
 	Verify    VerifyResult      `json:"verify"`
-}
-
-// Stats reports what a reconcile did, for logging.
-type Stats struct {
-	Proposed  int // PRs opened (draft mode)
-	Adopted   int // existing open PR adopted
-	Previewed int // dry-run previews produced
-	// Failures records why a fix was not opened for a pattern. The batch path
-	// logs and ignores these; on-demand callers surface the reason.
-	Failures []Failure
-}
-
-// Failure is a per-pattern reason a fix could not be proposed.
-type Failure struct {
-	Subject string
-	Reason  string
 }
 
 // NewClients builds the GitHub PR client from a token.
@@ -262,117 +234,6 @@ func (m *Manager) Forget(key string) {
 // SaveState writes the tracking state to disk.
 func (m *Manager) SaveState() error {
 	return m.state.Save(m.stateFile)
-}
-
-// Reconcile drafts fixes for eligible patterns. Per-pattern errors are collected
-// while independent patterns continue.
-func (m *Manager) Reconcile(ctx context.Context, patterns []models.PatternAnalysis) (Stats, error) {
-	var stats Stats
-	var previews []Preview
-	var reconcileErrs []error
-
-	work := eligible(patterns, m.opts.MinConfidence)
-	if len(work) == 0 {
-		return stats, nil
-	}
-
-	// Pin one upstream commit so the reads, edits, and commit share a snapshot.
-	base, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName)
-	if err != nil {
-		return stats, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
-	}
-	gen := func(ctx context.Context, p models.PatternAnalysis) (*proposedFix, error) {
-		return m.generate(ctx, p, base.HeadSHA, "", nil)
-	}
-
-	for _, p := range work {
-		if !patternTargetsRepository(p, m.opts.SourceOwner, m.opts.SourceName) {
-			reason := fmt.Sprintf("remediation targets belong to a different repository than %s/%s", m.opts.SourceOwner, m.opts.SourceName)
-			stats.Failures = append(stats.Failures, Failure{Subject: p.Subject, Reason: reason})
-			reconcileErrs = append(reconcileErrs, fmt.Errorf("generate fix for %q: %s", p.Subject, reason))
-			continue
-		}
-		key := KeyFor(p)
-
-		// Dry-run: propose without GitHub writes or state, capped per run.
-		if m.opts.DryRun {
-			if stats.Previewed >= m.opts.MaxNewPerRun {
-				break
-			}
-			fix, err := gen(ctx, p)
-			if err != nil {
-				log.Printf("  ⚠ fix generation failed for %q: %v", p.Subject, err)
-				stats.Failures = append(stats.Failures, Failure{Subject: p.Subject, Reason: err.Error()})
-				reconcileErrs = append(reconcileErrs, fmt.Errorf("generate preview for %q: %w", p.Subject, err))
-				continue
-			}
-			v := m.verify(ctx, base, fix.files, fix.executionVerification)
-			previews = append(previews, Preview{Subject: p.Subject, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: v})
-			stats.Previewed++
-			log.Printf("  🧪 fix preview for %q (%d file(s), verify=%s):\n%s", p.Subject, len(fix.files), v.Status, fix.diff)
-			continue
-		}
-
-		if _, tracked := m.state.Tracked[key]; tracked {
-			continue
-		}
-		// A prior run may have an open fix PR even if local state is lost.
-		if _, url, found, err := m.pr.SearchOpenPR(ctx, m.opts.SourceOwner, m.opts.SourceName, markerToken(key), markerFor(key)); err != nil {
-			log.Printf("  ⚠ fix-PR search failed for %s: %v", key, err)
-			stats.Failures = append(stats.Failures, Failure{Subject: p.Subject, Reason: err.Error()})
-			reconcileErrs = append(reconcileErrs, fmt.Errorf("search fix PR for %q: %w", p.Subject, err))
-			continue
-		} else if found {
-			m.state.Tracked[key] = trackedFix(url, p)
-			stats.Adopted++
-			log.Printf("  🔗 adopted existing fix PR for %q", p.Subject)
-			continue
-		}
-
-		if stats.Proposed >= m.opts.MaxNewPerRun {
-			log.Printf("  ⓘ fix-PR cap (%d) reached; deferring %q to next run", m.opts.MaxNewPerRun, p.Subject)
-			continue
-		}
-
-		fix, err := gen(ctx, p)
-		if err != nil {
-			log.Printf("  ⚠ fix generation failed for %q: %v", p.Subject, err)
-			stats.Failures = append(stats.Failures, Failure{Subject: p.Subject, Reason: err.Error()})
-			reconcileErrs = append(reconcileErrs, fmt.Errorf("generate fix for %q: %w", p.Subject, err))
-			continue
-		}
-
-		// Reformat the description to follow the repo PR template when configured.
-		v := m.verify(ctx, base, fix.files, fix.executionVerification)
-		_, body := m.renderBody(ctx, p, fix, v, key)
-
-		url, err := m.openPR(ctx, prTitle(p), body, fix.files, base)
-		if url == "" {
-			log.Printf("  ⚠ failed to open fix PR for %q: %v", p.Subject, err)
-			stats.Failures = append(stats.Failures, Failure{Subject: p.Subject, Reason: "opening the pull request failed"})
-			if err == nil {
-				err = fmt.Errorf("empty pull request URL")
-			}
-			reconcileErrs = append(reconcileErrs, fmt.Errorf("open fix PR for %q: %w", p.Subject, err))
-			continue
-		}
-		if err != nil {
-			// PR opened but a follow-up (e.g. labeling) failed; still track it.
-			log.Printf("  ⚠ fix PR opened with a warning for %q: %v", p.Subject, err)
-			reconcileErrs = append(reconcileErrs, fmt.Errorf("finish fix PR for %q: %w", p.Subject, err))
-		}
-		m.state.Tracked[key] = trackedFix(url, p)
-		stats.Proposed++
-		log.Printf("  🛠️ opened draft fix PR for %q: %s", p.Subject, url)
-	}
-
-	if m.opts.DryRun && len(previews) > 0 && m.opts.PreviewFile != "" {
-		if err := writePreviews(m.opts.PreviewFile, previews); err != nil {
-			log.Printf("Warning: failed to write fix previews: %v", err)
-			reconcileErrs = append(reconcileErrs, fmt.Errorf("write fix previews: %w", err))
-		}
-	}
-	return stats, errors.Join(reconcileErrs...)
 }
 
 // generate runs the fix generation for one pattern against ref. instruction is
@@ -745,12 +606,6 @@ func eligible(patterns []models.PatternAnalysis, minConfidence string) []models.
 	return out
 }
 
-// KeyFor is the dedup identity of a pattern: the job plus a fingerprint of the
-// shared root cause, so distinct causes on one job dedupe separately.
-func keyFor(p models.PatternAnalysis) string {
-	return KeyFor(p)
-}
-
 func KeyFor(p models.PatternAnalysis) string {
 	job := p.JobID
 	if strings.TrimSpace(job) == "" {
@@ -849,10 +704,6 @@ func confidenceRank(c string) int {
 	default:
 		return 0
 	}
-}
-
-func writePreviews(path string, previews []Preview) error {
-	return statefile.WriteJSON(path, previews)
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }

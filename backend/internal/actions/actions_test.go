@@ -1055,7 +1055,7 @@ type fakeIssuePreviewManager struct {
 	release      chan struct{}
 }
 
-func (f *fakeIssuePreviewManager) Reconcile(_ context.Context, specs []issues.IssueSpec) (issues.Stats, error) {
+func (f *fakeIssuePreviewManager) File(_ context.Context, specs []issues.IssueSpec) (issues.Stats, error) {
 	f.specs = append(f.specs, specs...)
 	if f.started != nil {
 		close(f.started)

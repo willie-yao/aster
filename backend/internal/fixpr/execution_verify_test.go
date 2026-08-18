@@ -44,8 +44,8 @@ func TestAgentSandboxPreviewAndConfirmationUseExecutorResults(t *testing.T) {
 	reconstructions := 0
 	manager := NewManager(pr, t.TempDir()+"/state.json", Options{
 		SourceOwner: "up", SourceName: "stream", AuthorName: "Jane", AuthorEmail: "jane@example.com",
-		MaxFiles: 3, MaxNewPerRun: 1,
-		Verify: &VerifyConfig{Runtime: panicVerifyRuntime{}, Commands: [][]string{{"go", "test", "./..."}}},
+		MaxFiles: 3,
+		Verify:   &VerifyConfig{Runtime: panicVerifyRuntime{}, Commands: [][]string{{"go", "test", "./..."}}},
 		Agent: &AgentConfig{
 			Runtime: agent, MaxFiles: 3, MaxTurns: 10, Timeout: time.Minute,
 			CommandPolicy: runtime.CommandPolicy{Commands: sandboxVerificationCommands()}, RequireCommandResults: true,

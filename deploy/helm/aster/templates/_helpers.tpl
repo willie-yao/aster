@@ -491,7 +491,7 @@ project.config whenever the fix runtime is enabled, so these always resolve.
   {{- $outputLimitBytes := int64 (default 524288 (get $projectRuntime "output_limit_bytes")) -}}
   {{- $allowedCommands := get $projectRuntime "allowed_commands" | default list -}}
   {{- if ne (default "agent-sandbox" (get $projectRuntime "type")) "agent-sandbox" -}}{{- fail "agentSandbox.fixRuntime requires project ai.fix_prs.agent_runtime.type=agent-sandbox" -}}{{- end -}}
-  {{- if not (or .Values.server.actions.enabled (default false (get $projectFix "enabled"))) -}}{{- fail "agentSandbox.fixRuntime requires server.actions.enabled=true or project ai.fix_prs.enabled=true" -}}{{- end -}}
+  {{- if not .Values.server.actions.enabled -}}{{- fail "agentSandbox.fixRuntime requires server.actions.enabled=true; Fix generation is a maintainer-initiated server action" -}}{{- end -}}
   {{- if .Values.server.actions.oauth.privateRepositories -}}{{- fail "agentSandbox.fixRuntime supports public repositories only; OAuth privateRepositories must be false" -}}{{- end -}}
   {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "agentSandbox.fixRuntime requires analysisRuntime.type=inprocess" -}}{{- end -}}
   {{- if not $cfg.namespace -}}{{- fail "agentSandbox.fixRuntime.namespace is required" -}}{{- end -}}
@@ -849,18 +849,9 @@ project.config whenever the fix runtime is enabled, so these always resolve.
 {{- end -}}
 {{- end -}}
 
-{{/* Whether scheduled/watch Fix PR reconciliation is enabled in project.yaml. */}}
-{{- define "aster.agentSandboxFixScheduledEnabled" -}}
-{{- if and .Values.agentSandbox.fixRuntime.enabled .Values.project.config -}}
-  {{- $project := fromYaml .Values.project.config -}}
-  {{- $projectAI := get $project "ai" | default dict -}}
-  {{- $projectFix := get $projectAI "fix_prs" | default dict -}}
-  {{- if (default false (get $projectFix "enabled")) -}}true{{- else -}}false{{- end -}}
-{{- else -}}false{{- end -}}
-{{- end -}}
-
-{{/* Whether any scheduled Agent Sandbox lifecycle needs the dashboard client identity. */}}
+{{/* Whether any scheduled Agent Sandbox lifecycle needs the dashboard client identity.
+Fix generation is server-only and maintainer-initiated, so it never applies here. */}}
 {{- define "aster.agentSandboxScheduledEnabled" -}}
 {{- if or .Values.agentSandbox.causalCritic.enabled .Values.agentSandbox.analysisShadow.enabled -}}true
-{{- else -}}{{ include "aster.agentSandboxFixScheduledEnabled" . }}{{- end -}}
+{{- else -}}false{{- end -}}
 {{- end -}}
