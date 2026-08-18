@@ -6,8 +6,10 @@
   </picture>
 </p>
 
+## **Aster**: **Automated Signal Triage, Explanation, and Remediation**.
+
 Aster is an evidence-first failure analysis and guarded-remediation engine for
-Prow and Kubernetes test infrastructure. It watches Prow and TestGrid jobs,
+[Prow](https://docs.prow.k8s.io/docs/overview/) and Kubernetes test infrastructure. It watches Prow and TestGrid jobs,
 investigates failures through bounded logs, test results, artifacts, history,
 and source evidence, and helps maintainers move from signal to explanation to a
 reviewed next step.
@@ -18,28 +20,6 @@ Aster is for maintainers and platform teams that already operate Prow jobs, or
 publish compatible job artifacts, and want a shared failure-analysis dashboard.
 It supports a public, read-only GitHub Pages deployment and a Kubernetes
 deployment with persistent data, authentication, chat, and guarded actions.
-
-## What Prow means here
-
-[Prow](https://docs.prow.k8s.io/docs/overview/) is Kubernetes-oriented CI and
-job infrastructure used to trigger, run, and report repository tests. Aster
-does not install Prow. It consumes Prow and TestGrid job configuration and build
-artifacts, so onboarding requires existing Prow jobs or compatible artifacts in
-a publicly readable GCS bucket.
-
-## Prerequisites
-
-Requirements depend on how you run and deploy Aster:
-
-- The released `aster` CLI does not require an Aster source checkout.
-- The `go run` path requires the Go version supported by this repository
-  (currently Go 1.25).
-- `gh` is needed only for GitHub-assisted repository, workflow, variable, or
-  Secret operations.
-- Node.js is needed only for frontend source development.
-- An AI endpoint and credential are needed only when AI analysis is enabled.
-- Kubernetes, Helm, and Flux are needed only for their respective deployment
-  paths. GitHub Pages needs none of them.
 
 ## Quickstart
 
@@ -85,12 +65,6 @@ guarded actions. Fix PR generation is not part of standard onboarding.
 - [Optional features and enablement order](docs/README.md#optional-features)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Complete documentation map and contributor guides](docs/README.md)
-
-## Name and mark
-
-**Aster** stands for **Automated Signal Triage, Explanation, and Remediation**.
-The mark combines a capital A, a forward-facing prow, and a central star,
-representing a useful signal and a clear, reviewed next action.
 
 ## License
 
