@@ -20,6 +20,12 @@ import (
 // same failure before the verdict is reported with high confidence.
 const widespreadHighConfidencePulls = 3
 
+// widespreadVerdictMinPulls is how many other pull requests must show the same
+// failure before it becomes a verdict at all. Two pull requests citing each
+// other is mutual and uncorroborated, and evidence that weak must not preempt
+// base-branch evidence or take the failure out of escalation.
+const widespreadVerdictMinPulls = 2
+
 // Baseline is the observed non-pull-request evidence for one pass.
 type Baseline struct {
 	// FailingOnBase maps test name to the base-branch jobs currently reporting
@@ -104,8 +110,11 @@ func newestRun(runs []models.BuildResult) models.BuildResult {
 
 // failureKey identifies one failing case across pull requests. Job name is part
 // of the key because a build-level failure carries the same generic test name on
-// every job, so matching on test name alone would correlate unrelated jobs.
+// every job, so matching on test name alone would correlate unrelated jobs. Base
+// ref is part of it because one job often runs on several release branches, and
+// matching without it correlates pull requests testing different code.
 type failureKey struct {
+	baseRef  string
 	jobName  string
 	testName string
 }
@@ -121,7 +130,10 @@ func Annotate(details []models.PullRequestDetail, baseline Baseline, repo Reposi
 			check := &details[i].Checks[c]
 			for f := range check.Failures {
 				failure := &check.Failures[f]
-				attribution := attribute(details[i].Number, check.JobName, failure.TestCase, baseline, otherPulls)
+				key := failureKey{
+					baseRef: details[i].BaseRef, jobName: check.JobName, testName: failure.Name,
+				}
+				attribution := attribute(details[i].Number, key, failure.TestCase, baseline, otherPulls)
 				// Only the residual set benefits from overlap. A failure already
 				// explained by the base branch or by other pull requests is not
 				// made more explicable by touching changed code.
@@ -142,7 +154,9 @@ func pullsByFailure(details []models.PullRequestDetail) map[failureKey][]int {
 	for _, detail := range details {
 		for _, check := range detail.Checks {
 			for _, failure := range check.Failures {
-				key := failureKey{jobName: check.JobName, testName: failure.Name}
+				key := failureKey{
+					baseRef: detail.BaseRef, jobName: check.JobName, testName: failure.Name,
+				}
 				index[key] = appendUniqueInt(index[key], detail.Number)
 			}
 		}
@@ -153,9 +167,13 @@ func pullsByFailure(details []models.PullRequestDetail) map[failureKey][]int {
 	return index
 }
 
-func attribute(number int, jobName string, tc models.TestCase, baseline Baseline, otherPulls map[failureKey][]int) *models.FailureAttribution {
+// attribute issues the verdict for one failing case. Evidence that rules the
+// pull request out is checked strongest first. Peers too few to carry a verdict
+// of their own are recorded on the verdict that does apply, except under
+// pre_existing, which returns before peers are consulted because a failure the
+// base branch already explains does not need them.
+func attribute(number int, key failureKey, tc models.TestCase, baseline Baseline, otherPulls map[failureKey][]int) *models.FailureAttribution {
 	buildLevel := tc.Source == models.TestCaseSourceBuild
-	others := peers(otherPulls[failureKey{jobName: jobName, testName: tc.Name}], number)
 
 	// The base branch is the strongest signal: the failure exists without this
 	// pull request. Build-level failures are skipped because their generic name
@@ -175,19 +193,30 @@ func attribute(number int, jobName string, tc models.TestCase, baseline Baseline
 		}
 	}
 
-	if len(others) > 0 {
+	others := peers(otherPulls[key], number)
+	if len(others) >= widespreadVerdictMinPulls {
 		return &models.FailureAttribution{
 			Verdict:    models.AttributionWidespread,
 			Confidence: widespreadConfidence(len(others)),
-			Summary:    fmt.Sprintf("%s is failing the same way on %s, so it is not specific to this pull request.", subject(buildLevel, jobName), pullList(others)),
-			Evidence: []models.AttributionEvidence{{
-				Kind:     models.AttributionEvidenceOtherPulls,
-				Detail:   fmt.Sprintf("The same %s failure was observed on %s during this pass.", jobName, pullList(others)),
-				TestName: tc.Name,
-			}},
+			Summary:    fmt.Sprintf("%s is failing the same way on %s as of this pass, so it is not specific to this pull request.", subject(buildLevel, key.jobName), pullList(others)),
+			Evidence:   []models.AttributionEvidence{peerEvidence(key, others)},
 		}
 	}
 
+	attribution := baselineVerdict(key, tc, buildLevel, baseline, others)
+	// Peers too few to carry a verdict are still an observation worth weighing,
+	// so they are reported rather than dropped.
+	if len(others) > 0 {
+		attribution.Evidence = append(attribution.Evidence, peerEvidence(key, others))
+	}
+	return attribution
+}
+
+// baselineVerdict judges a failure from base-branch evidence alone, once peers
+// have been ruled out as a verdict of their own. others is read only to keep the
+// prose honest, because two of these summaries would otherwise deny peers that
+// do exist.
+func baselineVerdict(key failureKey, tc models.TestCase, buildLevel bool, baseline Baseline, others []int) *models.FailureAttribution {
 	if !buildLevel {
 		if jobs := baseline.FlakyTests[tc.Name]; len(jobs) > 0 {
 			return &models.FailureAttribution{
@@ -220,7 +249,7 @@ func attribute(number int, jobName string, tc models.TestCase, baseline Baseline
 		return &models.FailureAttribution{
 			Verdict:    models.AttributionUnexplained,
 			Confidence: models.AttributionConfidenceLow,
-			Summary:    fmt.Sprintf("%s failed without reporting a failing test, and no other open pull request hit it. The build log is the only evidence.", jobName),
+			Summary:    buildLevelSummary(key.jobName, key.baseRef, others),
 			Evidence: []models.AttributionEvidence{{
 				Kind:   models.AttributionEvidenceBuildFailer,
 				Detail: "A build-level failure carries no test identity, so it cannot be compared against the base branch.",
@@ -231,7 +260,7 @@ func attribute(number int, jobName string, tc models.TestCase, baseline Baseline
 		return &models.FailureAttribution{
 			Verdict:    models.AttributionUnexplained,
 			Confidence: models.AttributionConfidenceHigh,
-			Summary:    "This test passes on the base branch and is not failing on other open pull requests, so it needs investigation on this pull request.",
+			Summary:    basePassingSummary(key.baseRef, others),
 			Evidence: []models.AttributionEvidence{{
 				Kind:     models.AttributionEvidenceBaseBranch,
 				Detail:   "The newest base-branch run reports this test as passing.",
@@ -251,6 +280,51 @@ func attribute(number int, jobName string, tc models.TestCase, baseline Baseline
 	}
 }
 
+// basePassingSummary states the residual verdict for a test the base branch runs
+// and passes. Peers below the widespread threshold are named rather than denied,
+// and the no-peer wording is scoped to the branch the comparison covered.
+func basePassingSummary(baseRef string, others []int) string {
+	if len(others) == 0 {
+		return fmt.Sprintf("This test passes on the base branch and is not failing on other open pull requests%s, so it needs investigation on this pull request.", baseRefScope(baseRef))
+	}
+	return fmt.Sprintf("This test passes on the base branch. It is also failing on %s, which is not enough to rule this pull request out, so it needs investigation.", pullList(others))
+}
+
+// buildLevelSummary states the residual verdict for a job that failed without
+// reporting a test. The peer wording drops the build-log claim, because a peer
+// is recorded as evidence alongside it.
+func buildLevelSummary(jobName, baseRef string, others []int) string {
+	if len(others) == 0 {
+		return fmt.Sprintf("%s failed without reporting a failing test, and no other open pull request%s hit it. The build log is the only evidence.", jobName, baseRefScope(baseRef))
+	}
+	return fmt.Sprintf("%s failed without reporting a failing test, and it also failed on %s, which is not enough to rule this pull request out.", jobName, pullList(others))
+}
+
+// baseRefScope qualifies a claim about other pull requests with the base branch
+// the comparison was bounded to. It is empty when the branch is unknown, which
+// is the only case where every open pull request was compared.
+func baseRefScope(baseRef string) string {
+	if baseRef == "" {
+		return ""
+	}
+	return " targeting " + baseRef
+}
+
+// peerEvidence records the other pull requests observed failing the same way.
+// The base branch bounding the comparison is named when known, so a reader can
+// see the scope of the correlation instead of inferring it.
+func peerEvidence(key failureKey, others []int) models.AttributionEvidence {
+	detail := fmt.Sprintf("The same %s failure was observed on %s during this pass.", key.jobName, pullList(others))
+	if key.baseRef != "" {
+		detail += fmt.Sprintf(" Only pull requests targeting %s were compared.", key.baseRef)
+	}
+	return models.AttributionEvidence{
+		Kind:     models.AttributionEvidenceOtherPulls,
+		Detail:   detail,
+		TestName: key.testName,
+	}
+}
+
 // subject names what failed, since a build-level failure has no useful test name.
 func subject(buildLevel bool, jobName string) string {
 	if buildLevel {
@@ -259,15 +333,13 @@ func subject(buildLevel bool, jobName string) string {
 	return "This test"
 }
 
+// widespreadConfidence grades the verdict by peer count. Callers gate on
+// widespreadVerdictMinPulls, so the count never reaches a low tier here.
 func widespreadConfidence(others int) string {
-	switch {
-	case others >= widespreadHighConfidencePulls:
+	if others >= widespreadHighConfidencePulls {
 		return models.AttributionConfidenceHigh
-	case others >= 2:
-		return models.AttributionConfidenceMedium
-	default:
-		return models.AttributionConfidenceLow
 	}
+	return models.AttributionConfidenceMedium
 }
 
 // peers returns the pull requests other than number.
