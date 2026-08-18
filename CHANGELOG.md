@@ -19,6 +19,55 @@ how to pin a consumer to a reviewed version.
 
 ## [Unreleased]
 
+## [0.9.0-rc.4] - 2026-08-18
+
+### Removed
+
+- **Closed-loop remediation and post-merge Prow verification.** The engine no
+  longer tracks a dashboard-created pull request through presubmit, pre-merge
+  verification, post-merge observation, and same-cause recurrence. The
+  `remediation` lifecycle package, its Prow catalog and evidence correlation,
+  the remediation transition emails, and the dashboard lifecycle surfaces are
+  gone. `remediations.json` is a retired public projection: a normal refresh now
+  deletes it so an upgraded deployment cannot keep serving stale lifecycle data,
+  and the Pages deploy strips it from a pre-fetched data directory. No
+  `project.yaml` field changed, so a consumer needs no configuration edit.
+
+### Fixed
+
+- **Remediation and fix routing are reported per causal group.** A recurring
+  pattern with several distinct causes previously showed one remediation verdict
+  above the whole group list and pointed "Fix a specific failure" at a grid of
+  affected builds without distinguishing which of them could actually support a
+  Fix investigation. Each cause now carries its own state and routes to its
+  representative analyzed failure, and causes that cannot produce a reviewable
+  patch say so instead of offering an unusable path.
+- **The overview sparkline renders every configured run.** Jobs whose recent
+  history was shorter than the configured window dropped trailing runs from the
+  reliability sparkline, so the overview could disagree with the job ledger.
+- **OAuth failures are diagnosable and credentials reject stray whitespace.**
+  Sign-in failures now report a specific cause instead of a generic error, and
+  credential environment variables are sanitized once at startup so a token with
+  a trailing newline fails fast with a clear message rather than as an opaque
+  provider or GitHub rejection. `aster onboard doctor` checks the same thing.
+- **Pull request escalation admission is bounded before resolution.** An
+  escalation is admitted against a bounded queue, drained on shutdown, and
+  bounded by the accepted escalation lifetime. A build with no finished metadata
+  is refused, an escalation whose resolution was cut off is rejected rather than
+  left pending, a failed escalation can be retried, and an oversized restored
+  store is pruned so a restart cannot exceed the retention bound.
+- **In-flight pull request escalations are awaited on shutdown**, so a server
+  stop no longer abandons an escalation that was mid-flight.
+- **Action request cleanup is single-flight**, removing a race that made CI
+  flaky and could let concurrent cleanups interleave.
+
+### Changed
+
+- **Documentation consolidated.** The docs tree was reorganized around the
+  current feature set and stale pages describing removed runtimes and the
+  closed-loop remediation lifecycle were deleted. `README.md` now introduces
+  Aster and its operating model directly.
+
 ## [0.9.0-rc.3] - 2026-08-17
 
 ### Removed
