@@ -1,6 +1,7 @@
 package prattribution
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -9,8 +10,9 @@ import (
 )
 
 const (
-	e2eJob   = "pull-project-e2e"
-	testName = "[It] creates a cluster"
+	e2eJob          = "pull-project-e2e"
+	basePeriodicJob = "periodic-project-e2e"
+	testName        = "[It] creates a cluster"
 )
 
 func failure(name string) models.PullRequestFailure {
@@ -57,7 +59,7 @@ func annotateOne(t *testing.T, baseline Baseline, details []models.PullRequestDe
 
 func TestBaseBranchFailureRulesOutThePullRequest(t *testing.T) {
 	baseline := observedBaseline(testName)
-	baseline.FailingOnBase[testName] = []string{"periodic-project-e2e"}
+	baseline.FailingOnBase[testName] = []string{basePeriodicJob}
 
 	got := annotateOne(t, baseline, []models.PullRequestDetail{detail(1, e2eJob, failure(testName))})
 
@@ -118,7 +120,7 @@ func TestWidespreadConfidenceScalesWithPeerCount(t *testing.T) {
 // main explains every pull request hitting it.
 func TestBaseBranchOutranksWidespread(t *testing.T) {
 	baseline := observedBaseline(testName)
-	baseline.FailingOnBase[testName] = []string{"periodic-project-e2e"}
+	baseline.FailingOnBase[testName] = []string{basePeriodicJob}
 	details := []models.PullRequestDetail{
 		detail(1, e2eJob, failure(testName)),
 		detail(2, e2eJob, failure(testName)),
@@ -130,7 +132,7 @@ func TestBaseBranchOutranksWidespread(t *testing.T) {
 
 func TestFlakyHistoryExplainsAnIsolatedFailure(t *testing.T) {
 	baseline := observedBaseline(testName)
-	baseline.FlakyTests[testName] = []string{"periodic-project-e2e"}
+	baseline.FlakyTests[testName] = []string{basePeriodicJob}
 
 	got := annotateOne(t, baseline, []models.PullRequestDetail{detail(1, e2eJob, failure(testName))})
 
@@ -176,8 +178,8 @@ func TestMissingBaseBranchDataIsInconclusive(t *testing.T) {
 // never be matched against the base branch or across unrelated jobs by name.
 func TestBuildLevelFailuresAreNotMatchedByName(t *testing.T) {
 	baseline := observedBaseline()
-	baseline.FailingOnBase[models.ProwJobExecutionFailureName] = []string{"periodic-project-e2e"}
-	baseline.FlakyTests[models.ProwJobExecutionFailureName] = []string{"periodic-project-e2e"}
+	baseline.FailingOnBase[models.ProwJobExecutionFailureName] = []string{basePeriodicJob}
+	baseline.FlakyTests[models.ProwJobExecutionFailureName] = []string{basePeriodicJob}
 	details := []models.PullRequestDetail{
 		detail(1, e2eJob, buildFailure()),
 		// A different job's build failure shares the name but is unrelated.
@@ -253,7 +255,7 @@ func TestBuildBaselineUsesTheNewestBaseBranchRunOnly(t *testing.T) {
 	}
 	// Runs are given oldest-first to prove ordering is derived, not assumed.
 	baseline := BuildBaseline([]models.JobDetail{{
-		Name: "periodic-project-e2e", JobType: models.JobTypePeriodic, Runs: []models.BuildResult{older, newer},
+		Name: basePeriodicJob, JobType: models.JobTypePeriodic, Runs: []models.BuildResult{older, newer},
 	}}, models.FlakinessReport{})
 
 	if !baseline.Observed || !baseline.KnownTests[testName] {
@@ -300,9 +302,97 @@ func TestBuildBaselineTakesOnlyFlakyClassifications(t *testing.T) {
 	}
 }
 
+func TestBuildBaselineIgnoresPresubmitFlakiness(t *testing.T) {
+	presubmitID := models.JobIDFor(models.JobTypePresubmit, "example/project", e2eJob)
+	details := []models.JobDetail{{
+		Name: basePeriodicJob, JobID: basePeriodicJob, JobType: models.JobTypePeriodic,
+		Runs: []models.BuildResult{{
+			BuildInfo: models.BuildInfo{BuildID: "1"},
+			TestCases: []models.TestCase{{Name: testName, Status: "passed"}},
+		}},
+	}, {
+		// A presubmit with no fetched runs must still be recognized.
+		Name: e2eJob, JobID: presubmitID, JobType: models.JobTypePresubmit,
+	}}
+	report := models.FlakinessReport{MostFlaky: []models.TestFlakiness{
+		{TestName: testName, JobName: e2eJob, JobID: presubmitID, Classification: models.ClassificationFlaky},
+		{TestName: testName, JobName: basePeriodicJob, JobID: basePeriodicJob, Classification: models.ClassificationFlaky},
+	}}
+
+	baseline := BuildBaseline(details, report)
+
+	got := baseline.FlakyTests[testName]
+	if len(got) != 1 || got[0] != basePeriodicJob {
+		t.Fatalf("FlakyTests[%q] = %v, want only the base-branch job", testName, got)
+	}
+}
+
+// JobIDFor deliberately keeps a periodic and a presubmit that share a name
+// distinct, so filtering presubmits must not take the periodic with them.
+func TestBuildBaselineKeepsSameNamedPeriodicFlakiness(t *testing.T) {
+	const shared = "project-e2e"
+	presubmitID := models.JobIDFor(models.JobTypePresubmit, "example/project", shared)
+	details := []models.JobDetail{{
+		Name: shared, JobID: models.JobIDFor(models.JobTypePeriodic, "", shared), JobType: models.JobTypePeriodic,
+		Runs: []models.BuildResult{{
+			BuildInfo: models.BuildInfo{BuildID: "1"},
+			TestCases: []models.TestCase{{Name: testName, Status: "passed"}},
+		}},
+	}, {
+		Name: shared, JobID: presubmitID, JobType: models.JobTypePresubmit,
+	}}
+	report := models.FlakinessReport{MostFlaky: []models.TestFlakiness{
+		{TestName: testName, JobName: shared, JobID: models.JobIDFor(models.JobTypePeriodic, "", shared), Classification: models.ClassificationFlaky},
+		{TestName: testName, JobName: shared, JobID: presubmitID, Classification: models.ClassificationFlaky},
+	}}
+
+	baseline := BuildBaseline(details, report)
+
+	if got := baseline.FlakyTests[testName]; len(got) != 1 || got[0] != shared {
+		t.Fatalf("FlakyTests[%q] = %v, want the periodic sharing the presubmit's name", testName, got)
+	}
+}
+
+// Attribution must not depend on source.include_presubmits, which decides only
+// whether presubmits are published as dashboard rows.
+func TestPublishedPresubmitsDoNotChangeAttribution(t *testing.T) {
+	presubmitID := models.JobIDFor(models.JobTypePresubmit, "example/project", e2eJob)
+	base := models.JobDetail{
+		Name: basePeriodicJob, JobID: basePeriodicJob, JobType: models.JobTypePeriodic,
+		Runs: []models.BuildResult{{
+			BuildInfo: models.BuildInfo{BuildID: "1"},
+			TestCases: []models.TestCase{{Name: testName, Status: "passed"}},
+		}},
+	}
+	presubmit := models.JobDetail{
+		Name: e2eJob, JobID: presubmitID, JobType: models.JobTypePresubmit,
+		Runs: []models.BuildResult{{
+			BuildInfo: models.BuildInfo{BuildID: "2"},
+			TestCases: []models.TestCase{{Name: testName, Status: "failed"}},
+		}},
+	}
+	presubmitFlake := models.TestFlakiness{
+		TestName: testName, JobName: e2eJob, JobID: presubmitID, Classification: models.ClassificationFlaky,
+	}
+
+	periodicsOnly := BuildBaseline([]models.JobDetail{base}, models.FlakinessReport{})
+	withPresubmits := BuildBaseline([]models.JobDetail{base, presubmit},
+		models.FlakinessReport{MostFlaky: []models.TestFlakiness{presubmitFlake}})
+
+	want := annotateOne(t, periodicsOnly, []models.PullRequestDetail{detail(1, e2eJob, failure(testName))})
+	got := annotateOne(t, withPresubmits, []models.PullRequestDetail{detail(1, e2eJob, failure(testName))})
+
+	if want.Verdict != models.AttributionUnexplained {
+		t.Fatalf("verdict = %q, want the escalation-eligible unexplained", want.Verdict)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("publishing presubmits changed the attribution:\nwith    = %+v\nwithout = %+v", got, want)
+	}
+}
+
 func TestBuildBaselineSkipsBuildLevelCasesFromTheBaseBranch(t *testing.T) {
 	baseline := BuildBaseline([]models.JobDetail{{
-		Name: "periodic-project-e2e", JobType: models.JobTypePeriodic,
+		Name: basePeriodicJob, JobType: models.JobTypePeriodic,
 		Runs: []models.BuildResult{{
 			BuildInfo: models.BuildInfo{BuildID: "1"},
 			TestCases: []models.TestCase{models.NewProwJobExecutionFailure(10)},

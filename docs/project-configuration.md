@@ -181,9 +181,12 @@ pull_requests:
   builds_per_job: 3   # builds listed per presubmit before the newest is selected
 ```
 
-This is independent of `source.include_presubmits`, which controls whether
-presubmits appear as rows in the main job dashboard. Pull request triage always
-resolves presubmits from the job catalog, so it works either way.
+`source.include_presubmits` is not a prerequisite for pull request triage, and
+turning it on does not improve attribution. Triage always resolves presubmits
+from the job catalog, and attribution reads base-branch history only, so a
+verdict is the same either way. The toggle only adds every presubmit to the main
+job dashboard, enlarging each fetch and any enabled analysis. Enable it when you
+want that dashboard coverage, not to get triage.
 
 Draft pull requests are excluded. Each pass writes `pull-requests.json` and one
 `pull-requests/<number>.json` per open pull request, and removes detail files for
@@ -200,16 +203,19 @@ A few behaviors worth knowing:
   | --- | --- |
   | `pre_existing` | The same test is already failing on the base branch. |
   | `widespread` | The same job and test is failing on other open pull requests. |
-  | `known_flake` | Flakiness history already classifies the test as flaky. |
+  | `known_flake` | Base-branch flakiness history already classifies the test as flaky. |
   | `touches_changed_code` | Nothing explains the failure and it fails in a file the pull request changes. |
   | `unexplained` | Nothing observed rules the pull request out, so it needs investigation. |
   | `inconclusive` | No base-branch data was available to compare against. |
 
-  Attribution runs with no model calls. It reuses the base-branch job details and
-  flakiness report the same pass already produced, so it costs nothing per
-  failure. Cross-pull-request matching keys on job **and** test name, because a
-  build-level failure carries the same generic name on every job and matching by
-  name alone would correlate unrelated jobs.
+  Attribution runs with no model calls. It reuses the job details the same pass
+  already produced plus a flakiness report recomputed over base-branch jobs only,
+  so it costs nothing per failure. Presubmit history is excluded from both,
+  because it describes other pull requests rather than the base branch, which is
+  why publishing presubmits never changes a verdict. Cross-pull-request matching
+  keys on job **and** test name, because a build-level failure carries the same
+  generic name on every job and matching by name alone would correlate unrelated
+  jobs.
 - `touches_changed_code` compares the source locations JUnit reported for the
   failure against the pull request's changed files. Both sides are observed, so
   the verdict states overlap and explicitly says overlap is not proof that the
@@ -252,9 +258,9 @@ started with `-project-dir`. The Pages path never offers it.
 The contract is deliberately narrow:
 
 - **Only the residual set is eligible.** A failure the base branch, other pull
-  requests, or flakiness history already explained cannot be escalated, so the
-  free pass is the cost filter. A stale build is refused too, because change
-  context would describe a different revision.
+  requests, or base-branch flakiness history already explained cannot be
+  escalated, so the free pass is the cost filter. A stale build is refused too,
+  because change context would describe a different revision.
 - **One escalation runs at a time**, no matter how many maintainers click, and
   only a few more may queue behind it. Admission is reserved before any artifact
   or GitHub read, so a burst of clicks cannot fan out into upstream requests; a

@@ -133,8 +133,14 @@ type pipeline struct {
 var writeAllOutput = output.WriteAll
 
 type refreshResult struct {
-	details   []models.JobDetail
+	details []models.JobDetail
+	// flakiness is the published report, ranked and truncated across every
+	// published job.
 	flakiness models.FlakinessReport
+	// baseFlakiness is the same computation over base-branch jobs only. Pull
+	// request attribution uses it so publishing presubmits cannot rank a
+	// base-branch flake out of the truncated report and change a verdict.
+	baseFlakiness models.FlakinessReport
 }
 
 // Run executes the full pipeline once: load, discover, fetch, aggregate,
@@ -466,6 +472,7 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 		jobResultMap[r.job.JobID] = r.runs
 	}
 	flakinessReport := aggregator.ComputeFlakinessReport(jobResultMap, jobs, now)
+	baseFlakiness := baseBranchFlakiness(jobResultMap, jobs, flakinessReport, now)
 	log.Printf("Flakiness report: %d most flaky, %d persistent, %d recently broken",
 		len(flakinessReport.MostFlaky), len(flakinessReport.PersistentFailures), len(flakinessReport.RecentlyBroken))
 
@@ -534,7 +541,30 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	p.markProgressPublished()
 	p.completeProgressPhase()
 
-	return &refreshResult{details: details, flakiness: flakinessReport}, nil
+	return &refreshResult{details: details, flakiness: flakinessReport, baseFlakiness: baseFlakiness}, nil
+}
+
+// baseBranchFlakiness recomputes the flakiness report over base-branch jobs
+// only. The published report ranks and truncates across every published job, so
+// presubmits can displace a base-branch flake from it. Attribution needs history
+// that does not move when the dashboard starts publishing presubmits.
+func baseBranchFlakiness(jobResults map[string][]models.BuildResult, jobs []models.ProwJob, published models.FlakinessReport, now time.Time) models.FlakinessReport {
+	baseJobs := make([]models.ProwJob, 0, len(jobs))
+	for _, job := range jobs {
+		if job.JobType != models.JobTypePresubmit {
+			baseJobs = append(baseJobs, job)
+		}
+	}
+	if len(baseJobs) == len(jobs) {
+		return published
+	}
+	baseResults := make(map[string][]models.BuildResult, len(baseJobs))
+	for _, job := range baseJobs {
+		if runs, ok := jobResults[job.JobID]; ok {
+			baseResults[job.JobID] = runs
+		}
+	}
+	return aggregator.ComputeFlakinessReport(baseResults, baseJobs, now)
 }
 
 type aiRefreshFileSnapshot struct {

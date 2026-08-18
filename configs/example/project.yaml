@@ -37,3 +37,8 @@ branding:
 #   source_repo:
 #     owner: "kubernetes-sigs"
 #     name: "your-project"
+
+# Optional: triage the open pull requests of branding.source_repo on a separate
+# page. Attribution is deterministic and costs no model calls.
+# pull_requests:
+#   enabled: true

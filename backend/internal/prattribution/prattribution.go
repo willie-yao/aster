@@ -37,16 +37,28 @@ type Baseline struct {
 }
 
 // BuildBaseline derives base-branch evidence from the periodic job details and
-// flakiness report the dashboard pass already produced.
+// flakiness report the dashboard pass already produced. Presubmit jobs are
+// excluded from every field so a verdict does not depend on whether the
+// dashboard publishes presubmits. Callers should supply a flakiness report
+// computed over base-branch jobs only, because a report ranked across every
+// published job can drop a base-branch flake before it reaches this filter.
 func BuildBaseline(details []models.JobDetail, flakiness models.FlakinessReport) Baseline {
 	baseline := Baseline{
 		FailingOnBase: map[string][]string{},
 		FlakyTests:    map[string][]string{},
 		KnownTests:    map[string]bool{},
 	}
+	// Flakiness entries carry no job type, so presubmit job IDs are collected
+	// here to filter the flakiness report below. Matching on the ID rather than
+	// the name keeps a periodic and a presubmit that share a name distinct.
+	presubmitJobs := map[string]bool{}
 	for _, detail := range details {
 		// Presubmit job details describe other pull requests, not the base branch.
-		if detail.JobType == models.JobTypePresubmit || len(detail.Runs) == 0 {
+		if detail.JobType == models.JobTypePresubmit {
+			presubmitJobs[detail.JobID] = true
+			continue
+		}
+		if len(detail.Runs) == 0 {
 			continue
 		}
 		baseline.Observed = true
@@ -66,6 +78,11 @@ func BuildBaseline(details []models.JobDetail, flakiness models.FlakinessReport)
 	} {
 		for _, entry := range group {
 			if entry.Classification != models.ClassificationFlaky {
+				continue
+			}
+			// Presubmit flakiness is measured across other pull requests, so it
+			// is not base-branch history. Peer failures have their own verdict.
+			if presubmitJobs[entry.JobID] {
 				continue
 			}
 			baseline.FlakyTests[entry.TestName] = appendUnique(baseline.FlakyTests[entry.TestName], entry.JobName)
