@@ -112,11 +112,11 @@ The shadow uses separate immutable images and identities:
 - The Sandbox Pod uses a separate tokenless workload ServiceAccount.
 
 The executor image records the upstream OpenCode 1.18.2 commit, source archive,
-frozen models.dev snapshot, Bun builder and binary, Aster runtime patch,
-build-only target-selection patch, and final binary digest. The executor verifies
-the manifest and binary before any provider request. The specialized analyzer
-binary omits the unused embedded Web UI. Runtime and build patches are stored
-under `hack/patches/`; the compressed models catalog is under `hack/opencode/`.
+frozen models.dev snapshot, pinned Web UI and musl compiler builders, Aster
+runtime patch, build-only target-selection patch, embedded Web UI digest, and
+final binary digest. The executor verifies the manifest and binary before any
+provider request. Runtime and build patches are stored under `hack/patches/`; the
+compressed models catalog is under `hack/opencode/`.
 
 Admission pins the stager and executor digests, RuntimeClass, ServiceAccounts,
 PVC identities, read-only mounts, resource bounds, security contexts, provider
