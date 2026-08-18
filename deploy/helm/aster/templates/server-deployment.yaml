@@ -5,13 +5,15 @@
 {{- $corrections := .Values.server.chat.correctionsEnabled -}}
 {{- $remediation := .Values.server.remediationInvestigation.enabled -}}
 {{- $remediationFixPreview := .Values.server.remediationInvestigation.fixPreview.enabled -}}
-{{- $interactive := or $actions $chat $remediation -}}
+{{- $escalation := .Values.server.pullRequestEscalation.enabled -}}
+{{- $interactive := include "aster.serverInteractive" . -}}
 {{- $agentSandboxActions := and .Values.agentSandbox.fixRuntime.enabled (or $actions $remediationFixPreview) -}}
 {{- $a := .Values.server.actions -}}
 {{- $extraHSTS := false -}}
 {{- $extraInsecureCookies := false -}}
 {{- $extraOAuthScope := false -}}
 {{- $extraOAuthPrivateRepositories := false -}}
+{{- $extraEscalation := false -}}
 {{- range .Values.server.extraEnv -}}
 {{- if eq (default "" .name) "HSTS_ENABLED" -}}
 {{- $extraHSTS = true -}}
@@ -24,6 +26,9 @@
 {{- end -}}
 {{- if eq (default "" .name) "OAUTH_PRIVATE_REPOSITORIES" -}}
 {{- $extraOAuthPrivateRepositories = true -}}
+{{- end -}}
+{{- if eq (default "" .name) "PULL_REQUEST_ESCALATION_ENABLED" -}}
+{{- $extraEscalation = true -}}
 {{- end -}}
 {{- end -}}
 {{- if $extraHSTS -}}
@@ -40,6 +45,9 @@
 {{- end -}}
 {{- if $extraOAuthPrivateRepositories -}}
 {{- fail "server.extraEnv must not set OAUTH_PRIVATE_REPOSITORIES; grant repository access to BOT_TOKEN instead" -}}
+{{- end -}}
+{{- if $extraEscalation -}}
+{{- fail "server.extraEnv must not set PULL_REQUEST_ESCALATION_ENABLED; use server.pullRequestEscalation.enabled" -}}
 {{- end -}}
 {{- if and (not .Values.server.security.hsts.enabled) (not (or .Values.server.development.allowInsecureHTTP .Values.server.development.allowInsecureCookies)) -}}
 {{- fail "server.security.hsts.enabled=false requires explicit local HTTP acknowledgement through server.development.allowInsecureHTTP=true" -}}
@@ -58,6 +66,9 @@
 {{- end -}}
 {{- if and $remediation (not .Values.ai.enabled) -}}
 {{- fail "server.remediationInvestigation.enabled requires ai.enabled" -}}
+{{- end -}}
+{{- if and $escalation (not .Values.ai.enabled) -}}
+{{- fail "server.pullRequestEscalation.enabled requires ai.enabled" -}}
 {{- end -}}
 {{- if and $remediation (le (int .Values.server.remediationInvestigation.maxOperations) 0) -}}
 {{- fail "server.remediationInvestigation.maxOperations must be positive" -}}
@@ -173,6 +184,10 @@ spec:
               value: "true"
             {{- end }}
             {{- end }}
+            {{- if $escalation }}
+            - name: PULL_REQUEST_ESCALATION_ENABLED
+              value: "true"
+            {{- end }}
             {{- if $chat }}
             - name: ANALYSIS_CHAT_ENABLED
               value: "true"
@@ -280,6 +295,17 @@ spec:
             - name: AI_CONTEXT_WINDOW_TOKENS
               value: {{ .Values.ai.contextWindowTokens | quote }}
             {{- end }}
+            {{- end }}
+            {{- /* Read-only GitHub token: escalation reads the pull request's changed files. */}}
+            {{- if and $escalation (or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName (and .Values.ai.enabled .Values.ai.existingSecret)) }}
+            - name: GITHUB_READ_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aster.githubReadSecret" . }}
+                  key: {{ .Values.ai.githubReadTokenSecretKey }}
+                  {{- if and (not .Values.ai.githubReadToken) (not .Values.ai.githubReadTokenSecretName) }}
+                  optional: true
+                  {{- end }}
             {{- end }}
             {{- end }}
             {{- with .Values.server.extraEnv }}

@@ -1928,6 +1928,20 @@
             "annotations"
           ]
         },
+        "pullRequestEscalation": {
+          "type": "object",
+          "description": "Authenticated on-demand pull request failure escalation settings.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable the authenticated read-only escalation of one unexplained pull request failure."
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ]
+        },
         "remediationInvestigation": {
           "type": "object",
           "description": "Authenticated on-demand causal remediation investigation settings.",
@@ -1979,6 +1993,7 @@
         "security",
         "development",
         "remediationInvestigation",
+        "pullRequestEscalation",
         "chat",
         "actions",
         "resources",

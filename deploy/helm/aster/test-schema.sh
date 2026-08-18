@@ -267,6 +267,20 @@ server:
 VALUES
 expect_fail invalid-actions "$tmp/invalid-actions.yaml" /server/actions/mode
 
+cat > "$tmp/invalid-escalation-key.yaml" <<'VALUES'
+server:
+  pullRequestEscalation:
+    mode: always
+VALUES
+expect_fail invalid-escalation-key "$tmp/invalid-escalation-key.yaml" /server/pullRequestEscalation
+
+cat > "$tmp/invalid-escalation-type.yaml" <<'VALUES'
+server:
+  pullRequestEscalation:
+    enabled: "yes"
+VALUES
+expect_fail invalid-escalation-type "$tmp/invalid-escalation-type.yaml" /server/pullRequestEscalation/enabled
+
 cat > "$tmp/invalid-type.yaml" <<'VALUES'
 fetcher:
   workers: "five"

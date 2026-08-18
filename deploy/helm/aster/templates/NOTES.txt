@@ -4,6 +4,7 @@
 {{- $internalEnabled := $internal.enabled | default false -}}
 {{- $sourceRanges := $service.loadBalancerSourceRanges | default list -}}
 {{- $publicAcknowledged := $service.publicOriginAcknowledged | default false -}}
+{{- $interactive := include "aster.serverInteractive" . -}}
 Aster is installed.
 
 {{- if eq .Values.mode "watch" }}
@@ -42,22 +43,22 @@ Service origin:
   LoadBalancer without an explicit chart-recognized origin restriction.
 {{- else }}
   NodePort exposes the server on every selected node. Prefer ClusterIP or an
-  explicitly restricted LoadBalancer for authenticated actions or chat.
+  explicitly restricted LoadBalancer for authenticated server features.
 {{- end }}
-{{- if and (or .Values.server.actions.enabled .Values.server.chat.enabled .Values.server.remediationInvestigation.enabled) (not .Values.networkPolicy.enabled) }}
-  Authenticated actions or chat are enabled while NetworkPolicy is disabled.
+{{- if and $interactive (not .Values.networkPolicy.enabled) }}
+  Authenticated server features are enabled while NetworkPolicy is disabled.
 {{- end }}
   Service annotations are pass-through configuration, not proof that the
   origin is unreachable. Verify the deployed network path directly.
 
-{{- if and (or .Values.server.actions.enabled .Values.server.chat.enabled .Values.server.remediationInvestigation.enabled) (eq .Values.server.actions.mode "oauth") }}
+{{- if and $interactive (eq .Values.server.actions.mode "oauth") }}
 OAuth access:
   GitHub OAuth uses the identity-only read:user scope.
 {{- if .Values.server.actions.enabled }}
   BOT_TOKEN performs issue and pull request writes. Scope that credential only
   to the configured action repositories and operations.
 {{- else }}
-  Chat-only OAuth does not mount BOT_TOKEN.
+  Read-only server features do not mount BOT_TOKEN.
 {{- end }}
   If this release previously requested repository access, every admin must sign
   out, revoke the old OAuth grant, and authorize the identity-only access.

@@ -393,7 +393,8 @@ server:
   port: 8080
   # Extra environment variables for the server container. Standard core/v1
   # EnvVar entries. Add EMAIL_SMTP_PASSWORD here for async draft-ready emails.
-  # HSTS_ENABLED and COOKIE_INSECURE are reserved by the chart.
+  # HSTS_ENABLED, COOKIE_INSECURE, and PULL_REQUEST_ESCALATION_ENABLED are
+  # reserved by the chart.
   extraEnv: []
   security:
     hsts:
@@ -416,6 +417,13 @@ server:
     fixPreview:
       # Experimental preview only. Never creates or confirms a GitHub PR.
       enabled: false
+  # Admin-gated on-demand analysis of a pull request failure the deterministic
+  # triage pass could not explain. Requires ai.enabled, pull_requests.enabled in
+  # project.yaml, and the authentication settings under actions. It does not
+  # enable writes or require BOT_TOKEN. Set ai.githubReadTokenSecretName so the
+  # server reads changed files authenticated rather than at the anonymous rate.
+  pullRequestEscalation:
+    enabled: false
   # Admin-gated read-only conversations about a published AI analysis.
   # Uses the authentication settings under actions, but does not enable writes
   # or require BOT_TOKEN. Sessions are persisted on the shared volume so server
@@ -497,7 +505,7 @@ server:
     internal:
       enabled: false
       annotations: {}
-    # A public LoadBalancer with authenticated actions or chat must either set
+    # A public LoadBalancer with authenticated server features must either set
     # source ranges, use internal.enabled, or explicitly acknowledge the risk.
     # Acknowledgement does not prove that the origin is unreachable directly.
     publicOriginAcknowledged: false

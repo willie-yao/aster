@@ -251,6 +251,7 @@ main operator controls.
 | `server.replicaCount` | Server replicas. Persistent private state requires a suitable shared filesystem. |
 | `server.chat.*` | Authenticated analysis conversation settings. |
 | `server.remediationInvestigation.*` | Explicit authenticated causal remediation start/status operation. Does not enable writes. |
+| `server.pullRequestEscalation.enabled` | Authenticated on-demand analysis of one unexplained pull request failure. Requires `ai.enabled` and `pull_requests.enabled` in `project.yaml`. Does not enable writes. |
 | `server.security.hsts.enabled` | Helm HSTS behavior. Keep enabled for deployed HTTPS origins. |
 | `server.development.allowInsecureHTTP` | Explicit local HTTP acknowledgement required to disable HSTS outside OAuth cookie testing. |
 | `server.development.allowInsecureCookies` | Local HTTP OAuth testing only. Never enable on a deployed dashboard. |
@@ -331,7 +332,8 @@ The public read endpoints `/data/*`, `/api/capabilities`, and `/healthz` remain
 unauthenticated. Authentication protects chat, private traces, and write
 actions.
 
-The chart rejects `HSTS_ENABLED` and `COOKIE_INSECURE` in `server.extraEnv`.
+The chart rejects `HSTS_ENABLED`, `COOKIE_INSECURE`, and
+`PULL_REQUEST_ESCALATION_ENABLED` in `server.extraEnv`.
 HSTS is enabled by default. Disabling it requires explicit local HTTP
 acknowledgement with `server.development.allowInsecureHTTP=true`; local OAuth
 may instead use `server.development.allowInsecureCookies=true`. Deployed

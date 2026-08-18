@@ -5,9 +5,9 @@
 //
 // Admin-gated interactive features are enabled when -project-dir is set and
 // AUTH_MODE selects an auth mechanism. ANALYSIS_CHAT_ENABLED enables read-only
-// chat. ACTIONS_ENABLED controls GitHub writes and defaults off when chat is
-// enabled, otherwise on for backward compatibility. BOT_TOKEN is required only
-// when write actions are enabled.
+// chat. ACTIONS_ENABLED controls GitHub writes and defaults off when any
+// read-only interactive feature is enabled, otherwise on. BOT_TOKEN is required
+// only when write actions are enabled.
 package main
 
 import (
@@ -322,7 +322,7 @@ func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
 	if causalPreview && !causalRemediation {
 		return interactiveFeatures{}, fmt.Errorf("CAUSAL_REMEDIATION_FIX_PREVIEW_ENABLED requires CAUSAL_REMEDIATION_INVESTIGATION_ENABLED")
 	}
-	actions, err := optionalBoolEnv("ACTIONS_ENABLED", !chat && !causalRemediation)
+	actions, err := optionalBoolEnv("ACTIONS_ENABLED", !chat && !causalRemediation && !pullRequestEscalation)
 	if err != nil {
 		return interactiveFeatures{}, err
 	}
