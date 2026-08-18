@@ -145,6 +145,8 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 		add("deployment", DoctorFail, "no supported deployment scaffold was found", "Restore .github/workflows/deploy.yml or deploy/values.yaml.")
 	}
 
+	checkPullRequestTriage(add, cfg, includePresubmits)
+
 	discoveryCtx, cancel := context.WithTimeout(ctx, onboardingDiscoveryTimeout)
 	sweep, err := deps.sweeper.Discover(discoveryCtx, cfg, includePresubmits)
 	cancel()
@@ -157,6 +159,22 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 		add("Prow discovery", DoctorPass, fmt.Sprintf("the real discovery sweep found %d job(s)", len(sweep.Jobs)), "")
 	}
 	return report
+}
+
+// checkPullRequestTriage reports how the consumer's settings relate to the pull
+// request triage view. Triage resolves presubmits from the job catalog, so
+// source.include_presubmits neither enables it nor improves its verdicts, while
+// enlarging the analyzed job set.
+func checkPullRequestTriage(add func(string, DoctorStatus, string, string), cfg *project.Config, includePresubmits bool) {
+	if cfg.PullRequests == nil {
+		// An explicit enabled: false is a decision, so only an absent block hints.
+		add("pull request triage", DoctorPass, "the optional pull request triage view is not configured",
+			"Set pull_requests.enabled: true to triage open pull requests of branding.source_repo. Its attribution verdicts are deterministic and cost no model calls.")
+	}
+	if includePresubmits {
+		add("source.include_presubmits", DoctorWarn, "presubmits join the dashboard job set, enlarging each fetch and any enabled analysis",
+			"Keep this on only if you want presubmit rows in the main dashboard. It is not required for pull request triage, which resolves presubmits from the job catalog either way.")
+	}
 }
 
 func findPagesWorkflow(files doctorFileSystem, projectDir string) (string, []byte, error) {

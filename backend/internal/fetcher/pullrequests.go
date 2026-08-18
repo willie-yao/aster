@@ -24,6 +24,17 @@ func (p *pipeline) pullRequestsEnabled() bool {
 	return p.cfg != nil && p.cfg.PullRequests != nil && p.cfg.PullRequests.Enabled
 }
 
+// attributionBaseline builds the base-branch evidence each failure is compared
+// against. It reads the base-only flakiness report rather than the published
+// one, so publishing presubmits cannot change a verdict. A nil result means the
+// dashboard pass produced nothing, which attribution reports as inconclusive.
+func (r *refreshResult) attributionBaseline() prattribution.Baseline {
+	if r == nil {
+		return prattribution.Baseline{}
+	}
+	return prattribution.BuildBaseline(r.details, r.baseFlakiness)
+}
+
 // refreshPullRequests rebuilds the pull request view and writes its output. It
 // reads presubmit definitions from the job catalog, so it must run after
 // discovery has populated one. The refresh result supplies the base-branch
@@ -45,12 +56,8 @@ func (p *pipeline) refreshPullRequests(ctx context.Context, res *refreshResult) 
 	if err != nil {
 		return err
 	}
-	var baseline prattribution.Baseline
-	if res != nil {
-		baseline = prattribution.BuildBaseline(res.details, res.flakiness)
-	}
 	changes := p.pullRequestChanges(ctx, client, repo, details)
-	prattribution.Annotate(details, baseline,
+	prattribution.Annotate(details, res.attributionBaseline(),
 		prattribution.Repository{Owner: repo.Owner, Name: repo.Name}, changes)
 
 	index.GeneratedAt = time.Now().UTC()

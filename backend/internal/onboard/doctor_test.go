@@ -667,3 +667,72 @@ ai:
 		t.Fatalf("checks = %+v", report.Checks)
 	}
 }
+
+// Pull request triage is undiscoverable from project.yaml alone, so doctor
+// points at it when the consumer has never made a decision about it.
+func TestDoctor_PullRequestTriageHint(t *testing.T) {
+	cases := []struct {
+		name        string
+		pullRequest string
+		want        bool
+	}{
+		{name: "absent", want: true},
+		{name: "explicitly disabled", pullRequest: "pull_requests:\n  enabled: false\n"},
+		{name: "enabled", pullRequest: "pull_requests:\n  enabled: true\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+				files: doctorFiles(map[string]string{
+					"/consumer/project.yaml":                 doctorProjectYAML + tc.pullRequest,
+					"/consumer/.github/workflows/deploy.yml": doctorPagesWorkflow,
+				}),
+				sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+			})
+			if got := hasDoctorCheck(report, "pull request triage", DoctorPass); got != tc.want {
+				t.Fatalf("hint present = %v, want %v: %+v", got, tc.want, report.Checks)
+			}
+			// A parse failure returns before any of this, which would make the
+			// silent cases pass for the wrong reason.
+			if !hasDoctorCheck(report, "Prow discovery", DoctorPass) {
+				t.Fatalf("doctor returned early: %+v", report.Checks)
+			}
+		})
+	}
+}
+
+// The warning has to reflect what actually runs, so it reads the value already
+// combined across project.yaml and the deployment profile.
+func TestDoctor_IncludePresubmitsWarning(t *testing.T) {
+	t.Run("silent by default", func(t *testing.T) {
+		report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+			files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": doctorPagesWorkflow}),
+			sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+		})
+		if hasDoctorCheck(report, "source.include_presubmits", DoctorWarn) {
+			t.Fatalf("checks = %+v", report.Checks)
+		}
+	})
+	t.Run("project.yaml", func(t *testing.T) {
+		report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+			files: doctorFiles(map[string]string{
+				"/consumer/project.yaml":                 doctorProjectYAML + "source:\n  include_presubmits: true\n",
+				"/consumer/.github/workflows/deploy.yml": doctorPagesWorkflow,
+			}),
+			sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "pull-job", JobType: models.JobTypePresubmit}}},
+		})
+		if !hasDoctorCheck(report, "source.include_presubmits", DoctorWarn) {
+			t.Fatalf("checks = %+v", report.Checks)
+		}
+	})
+	t.Run("deployment profile", func(t *testing.T) {
+		workflow := strings.Replace(doctorPagesWorkflow, "with:\n", "with:\n      include-presubmits: true\n", 1)
+		report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+			files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
+			sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "pull-job", JobType: models.JobTypePresubmit}}},
+		})
+		if !hasDoctorCheck(report, "source.include_presubmits", DoctorWarn) {
+			t.Fatalf("checks = %+v", report.Checks)
+		}
+	})
+}
