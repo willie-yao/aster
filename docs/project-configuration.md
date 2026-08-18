@@ -202,7 +202,7 @@ A few behaviors worth knowing:
   | Verdict | Meaning |
   | --- | --- |
   | `pre_existing` | The same test is already failing on the base branch. |
-  | `widespread` | The same job and test is failing on other open pull requests. |
+  | `widespread` | The same job and test is failing on at least two other open pull requests that target the same base branch. |
   | `known_flake` | Base-branch flakiness history already classifies the test as flaky. |
   | `touches_changed_code` | Nothing explains the failure and it fails in a file the pull request changes. |
   | `unexplained` | Nothing observed rules the pull request out, so it needs investigation. |
@@ -213,9 +213,18 @@ A few behaviors worth knowing:
   so it costs nothing per failure. Presubmit history is excluded from both,
   because it describes other pull requests rather than the base branch, which is
   why publishing presubmits never changes a verdict. Cross-pull-request matching
-  keys on job **and** test name, because a build-level failure carries the same
-  generic name on every job and matching by name alone would correlate unrelated
-  jobs.
+  keys on job name, test name, **and base branch**: a build-level failure carries
+  the same generic name on every job, so matching by name alone would correlate
+  unrelated jobs, and one job often runs on several release branches, so matching
+  without the base branch would correlate pull requests testing different code.
+- A single peer is recorded as **evidence** on the verdict that does apply rather
+  than issued as a `widespread` verdict of its own, except under `pre_existing`,
+  which is decided before peers are consulted because a failure the base branch
+  already explains does not need them. Two pull requests citing each other are
+  mutually uncorroborated, and evidence that weak must not preempt base-branch
+  evidence that the test passes, or take the failure out of escalation.
+  `widespread` is also a point-in-time comparison against the other pull
+  requests' newest builds in that pass, and its summary says so.
 - `touches_changed_code` compares the source locations JUnit reported for the
   failure against the pull request's changed files. Both sides are observed, so
   the verdict states overlap and explicitly says overlap is not proof that the

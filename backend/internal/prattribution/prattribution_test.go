@@ -32,6 +32,13 @@ func detail(number int, jobName string, failures ...models.PullRequestFailure) m
 	}
 }
 
+// detailOnBase is detail with an explicit base branch, for correlation tests.
+func detailOnBase(number int, baseRef, jobName string, failures ...models.PullRequestFailure) models.PullRequestDetail {
+	d := detail(number, jobName, failures...)
+	d.BaseRef = baseRef
+	return d
+}
+
 // observedBaseline reports base-branch data with no failures, which is the
 // common case a pull-request-specific failure is judged against.
 func observedBaseline(known ...string) Baseline {
@@ -55,6 +62,14 @@ func annotateOne(t *testing.T, baseline Baseline, details []models.PullRequestDe
 		t.Fatal("expected an attribution")
 	}
 	return got
+}
+
+func evidenceKinds(a *models.FailureAttribution) []string {
+	kinds := make([]string, len(a.Evidence))
+	for i, e := range a.Evidence {
+		kinds[i] = e.Kind
+	}
+	return kinds
 }
 
 func TestBaseBranchFailureRulesOutThePullRequest(t *testing.T) {
@@ -98,7 +113,6 @@ func TestWidespreadConfidenceScalesWithPeerCount(t *testing.T) {
 		peers int
 		want  string
 	}{
-		{name: "one peer", peers: 1, want: models.AttributionConfidenceLow},
 		{name: "two peers", peers: 2, want: models.AttributionConfidenceMedium},
 		{name: "three peers", peers: 3, want: models.AttributionConfidenceHigh},
 	}
@@ -124,9 +138,145 @@ func TestBaseBranchOutranksWidespread(t *testing.T) {
 	details := []models.PullRequestDetail{
 		detail(1, e2eJob, failure(testName)),
 		detail(2, e2eJob, failure(testName)),
+		detail(3, e2eJob, failure(testName)),
 	}
 	if got := annotateOne(t, baseline, details); got.Verdict != models.AttributionPreExisting {
 		t.Fatalf("verdict = %q, want pre_existing", got.Verdict)
+	}
+}
+
+// pre_existing is decided before peers are consulted, so it carries only the
+// base-branch fact. A failure the base branch already explains does not need
+// corroboration from other pull requests.
+func TestPreExistingDoesNotRecordPeers(t *testing.T) {
+	baseline := observedBaseline(testName)
+	baseline.FailingOnBase[testName] = []string{basePeriodicJob}
+	details := []models.PullRequestDetail{
+		detail(1, e2eJob, failure(testName)),
+		detail(2, e2eJob, failure(testName)),
+	}
+	got := annotateOne(t, baseline, details)
+
+	if kinds := evidenceKinds(got); !reflect.DeepEqual(kinds, []string{models.AttributionEvidenceBaseBranch}) {
+		t.Errorf("evidence kinds = %v, want only the base-branch fact", kinds)
+	}
+}
+
+// A single peer is mutual, uncorroborated citation: with exactly two pull
+// requests each cites the other and neither is independently confirmed. It must
+// not preempt base-branch evidence that the test passes, because widespread is
+// not escalation-eligible and the misclassification takes away the only
+// investigation tool the failure has.
+func TestSinglePeerDoesNotPreemptBaseBranchEvidence(t *testing.T) {
+	details := []models.PullRequestDetail{
+		detail(1, e2eJob, failure(testName)),
+		detail(2, e2eJob, failure(testName)),
+	}
+	got := annotateOne(t, observedBaseline(testName), details)
+
+	if got.Verdict != models.AttributionUnexplained || got.Confidence != models.AttributionConfidenceHigh {
+		t.Fatalf("attribution = %+v, want the escalation-eligible high-confidence unexplained", got)
+	}
+	// The peer is reported rather than dropped, so the summary must name it
+	// instead of claiming there is none.
+	if strings.Contains(got.Summary, "not failing on other open pull requests") {
+		t.Errorf("summary denies a peer that exists: %q", got.Summary)
+	}
+	if !strings.Contains(got.Summary, "#2") {
+		t.Errorf("summary should name the peer, got %q", got.Summary)
+	}
+	want := []string{models.AttributionEvidenceBaseBranch, models.AttributionEvidenceOtherPulls}
+	if kinds := evidenceKinds(got); !reflect.DeepEqual(kinds, want) {
+		t.Errorf("evidence kinds = %v, want the base-branch fact and the peer", kinds)
+	}
+}
+
+// One job often runs on several release branches. Correlating across them
+// compares pull requests testing different code.
+func TestPullRequestsOnDifferentBaseBranchesDoNotCorrelate(t *testing.T) {
+	details := []models.PullRequestDetail{
+		detailOnBase(1, "release-1.25", e2eJob, failure(testName)),
+		detailOnBase(2, "release-1.24", e2eJob, failure(testName)),
+		detailOnBase(3, "release-1.24", e2eJob, failure(testName)),
+	}
+	got := annotateOne(t, observedBaseline(testName), details)
+
+	if got.Verdict != models.AttributionUnexplained {
+		t.Fatalf("verdict = %q, want unexplained rather than a cross-branch correlation", got.Verdict)
+	}
+	for _, e := range got.Evidence {
+		if e.Kind == models.AttributionEvidenceOtherPulls {
+			t.Errorf("cited a peer on another base branch: %q", e.Detail)
+		}
+	}
+	// Peers exist, just not on this base branch, so the summary must scope its
+	// negative claim rather than deny them outright.
+	if !strings.Contains(got.Summary, "targeting release-1.25") {
+		t.Errorf("summary makes an unscoped claim about other pull requests: %q", got.Summary)
+	}
+}
+
+// The comparison is bounded to one base branch, so the evidence names which one
+// rather than leaving the scope for the reader to infer.
+func TestWidespreadEvidenceNamesTheComparedBaseBranch(t *testing.T) {
+	details := []models.PullRequestDetail{
+		detailOnBase(1, "release-1.25", e2eJob, failure(testName)),
+		detailOnBase(2, "release-1.25", e2eJob, failure(testName)),
+		detailOnBase(3, "release-1.25", e2eJob, failure(testName)),
+	}
+	got := annotateOne(t, observedBaseline(testName), details)
+
+	if got.Verdict != models.AttributionWidespread {
+		t.Fatalf("verdict = %q, want widespread", got.Verdict)
+	}
+	if len(got.Evidence) != 1 || !strings.Contains(got.Evidence[0].Detail, "release-1.25") {
+		t.Errorf("evidence should name the compared base branch, got %+v", got.Evidence)
+	}
+}
+
+// A verdict the base branch already explains must not move because an unrelated
+// pull request's presubmit went green between passes.
+func TestRemovingAPeerDoesNotChangeAnExplainedVerdict(t *testing.T) {
+	withPeer := annotateOne(t, observedBaseline(testName), []models.PullRequestDetail{
+		detail(1, e2eJob, failure(testName)),
+		detail(2, e2eJob, failure(testName)),
+	})
+	withoutPeer := annotateOne(t, observedBaseline(testName), []models.PullRequestDetail{
+		detail(1, e2eJob, failure(testName)),
+	})
+
+	if withPeer.Verdict != withoutPeer.Verdict || withPeer.Confidence != withoutPeer.Confidence {
+		t.Errorf("a peer leaving changed the verdict:\nwith    = %s/%s\nwithout = %s/%s",
+			withPeer.Verdict, withPeer.Confidence, withoutPeer.Verdict, withoutPeer.Confidence)
+	}
+}
+
+// The build-level summary claims no other pull request hit the failure, which
+// must not survive a peer reaching it.
+func TestBuildLevelSummaryDoesNotDenyASinglePeer(t *testing.T) {
+	details := []models.PullRequestDetail{
+		detail(1, e2eJob, buildFailure()),
+		detail(2, e2eJob, buildFailure()),
+	}
+	got := annotateOne(t, observedBaseline(), details)
+
+	if got.Verdict != models.AttributionUnexplained {
+		t.Fatalf("verdict = %q, want unexplained", got.Verdict)
+	}
+	if strings.Contains(got.Summary, "no other open pull request") {
+		t.Errorf("summary denies a peer that exists: %q", got.Summary)
+	}
+	if !strings.Contains(got.Summary, "#2") {
+		t.Errorf("summary should name the peer, got %q", got.Summary)
+	}
+	// The peer is recorded as evidence, so the build log is no longer the only
+	// evidence and the summary must not say it is.
+	if strings.Contains(got.Summary, "only evidence") {
+		t.Errorf("summary contradicts the peer evidence beside it: %q", got.Summary)
+	}
+	want := []string{models.AttributionEvidenceBuildFailer, models.AttributionEvidenceOtherPulls}
+	if kinds := evidenceKinds(got); !reflect.DeepEqual(kinds, want) {
+		t.Errorf("evidence kinds = %v, want the build-level fact and the peer", kinds)
 	}
 }
 
@@ -201,6 +351,7 @@ func TestBuildLevelFailuresCorrelateWithinTheSameJob(t *testing.T) {
 	details := []models.PullRequestDetail{
 		detail(1, e2eJob, buildFailure()),
 		detail(2, e2eJob, buildFailure()),
+		detail(3, e2eJob, buildFailure()),
 	}
 	got := annotateOne(t, observedBaseline(), details)
 
