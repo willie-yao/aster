@@ -1,0 +1,12 @@
+diff --git a/packages/opencode/src/session/instruction.ts b/packages/opencode/src/session/instruction.ts
+index 7f59355..09dd1f1 100644
+--- a/packages/opencode/src/session/instruction.ts
++++ b/packages/opencode/src/session/instruction.ts
+@@ -181,6 +181,7 @@ const layer: Layer.Layer<
+       filepath: string,
+       messageID: MessageID,
+     ) {
++      if (Flag.OPENCODE_DISABLE_PROJECT_CONFIG) return []
+       const sys = yield* systemPaths()
+       const already = extract(messages)
+       const results: { filepath: string; content: string }[] = []

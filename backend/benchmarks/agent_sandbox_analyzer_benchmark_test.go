@@ -62,19 +62,31 @@ type agentSandboxAnalyzerBenchmarkConfig struct {
 }
 
 type agentSandboxAnalyzerImageContract struct {
-	Version          int    `json:"version"`
-	EngineCommit     string `json:"engine_commit"`
-	ImageTag         string `json:"image_tag"`
-	ExecutorImage    string `json:"executor_image"`
-	StagerImage      string `json:"stager_image"`
-	ExecutorRevision string `json:"executor_revision"`
-	StagerRevision   string `json:"stager_revision"`
-	ExecutorUser     string `json:"executor_user"`
-	StagerUser       string `json:"stager_user"`
-	ExecutorVersion  string `json:"executor_version"`
-	StagerVersion    string `json:"stager_version"`
-	OpenCodeVersion  string `json:"opencode_version"`
-	ContractSHA256   string `json:"contract_sha256"`
+	Version                     int    `json:"version"`
+	EngineCommit                string `json:"engine_commit"`
+	ImageTag                    string `json:"image_tag"`
+	ExecutorImage               string `json:"executor_image"`
+	StagerImage                 string `json:"stager_image"`
+	ExecutorRevision            string `json:"executor_revision"`
+	StagerRevision              string `json:"stager_revision"`
+	ExecutorUser                string `json:"executor_user"`
+	StagerUser                  string `json:"stager_user"`
+	ExecutorVersion             string `json:"executor_version"`
+	StagerVersion               string `json:"stager_version"`
+	OpenCodeVersion             string `json:"opencode_version"`
+	OpenCodeUpstreamRevision    string `json:"opencode_upstream_revision"`
+	OpenCodeSourceArchiveSHA256 string `json:"opencode_source_archive_sha256"`
+	OpenCodeModelsDevSHA256     string `json:"opencode_models_dev_sha256"`
+	OpenCodeBuilderImage        string `json:"opencode_builder_image"`
+	OpenCodeBuilderBunSHA256    string `json:"opencode_builder_bun_sha256"`
+	OpenCodeBunVersion          string `json:"opencode_bun_version"`
+	OpenCodeEmbeddedWebUI       bool   `json:"opencode_embedded_web_ui"`
+	OpenCodePatchVersion        string `json:"opencode_patch_version"`
+	OpenCodePatchSHA256         string `json:"opencode_patch_sha256"`
+	OpenCodeBuildPatchVersion   string `json:"opencode_build_patch_version"`
+	OpenCodeBuildPatchSHA256    string `json:"opencode_build_patch_sha256"`
+	OpenCodeBinarySHA256        string `json:"opencode_binary_sha256"`
+	ContractSHA256              string `json:"contract_sha256"`
 }
 
 type agentSandboxAnalyzerPrepared struct {
@@ -173,6 +185,9 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	ExecutorAsterRevision        string                                 `json:"executor_aster_revision"`
 	StagerAsterRevision          string                                 `json:"stager_aster_revision"`
 	ExpectedOpenCodeVersion      string                                 `json:"expected_opencode_version"`
+	ExpectedOpenCodeRevision     string                                 `json:"expected_opencode_revision"`
+	ExpectedOpenCodePatchSHA256  string                                 `json:"expected_opencode_patch_sha256"`
+	OpenCodeBinarySHA256         string                                 `json:"opencode_binary_sha256"`
 	ExecutionID                  string                                 `json:"execution_id"`
 	SourceRevision               string                                 `json:"source_revision"`
 	SourceModePolicy             string                                 `json:"source_mode_policy"`
@@ -626,6 +641,7 @@ func agentSandboxAnalyzerRecordForResult(
 		ManifestHash: prepared.prepared.ManifestHash, RequestHash: prepared.prepared.RequestHash,
 		RuntimeIdentityHash: runtimeIdentity, ImageContractSHA256: prepared.prepared.ImageContractSHA256, ExecutorImage: executorImage, StagerImage: stagerImage,
 		ExecutorAsterRevision: cfg.ImageContract.ExecutorRevision, StagerAsterRevision: cfg.ImageContract.StagerRevision, ExpectedOpenCodeVersion: cfg.ImageContract.OpenCodeVersion,
+		ExpectedOpenCodeRevision: cfg.ImageContract.OpenCodeUpstreamRevision, ExpectedOpenCodePatchSHA256: cfg.ImageContract.OpenCodePatchSHA256, OpenCodeBinarySHA256: cfg.ImageContract.OpenCodeBinarySHA256,
 		ExecutionID: executionID, SourceRevision: prepared.prepared.SourceRevision, SourceModePolicy: prepared.prepared.SourceModePolicy,
 		ArtifactFiles: prepared.prepared.ArtifactFiles, ArtifactBytes: prepared.prepared.ArtifactBytes,
 		Status: status, ErrorCode: code, FailureReason: boundedBenchmarkFailure(runErr),
@@ -955,9 +971,14 @@ func readAgentSandboxAnalyzerImageContract(t *testing.T, path, expectedCommit st
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		t.Fatal("analysis image contract has trailing data")
 	}
-	if contract.Version != 1 || contract.EngineCommit != expectedCommit || contract.ExecutorRevision != expectedCommit || contract.StagerRevision != expectedCommit ||
+	if contract.Version != 2 || contract.EngineCommit != expectedCommit || contract.ExecutorRevision != expectedCommit || contract.StagerRevision != expectedCommit ||
 		!benchmarkImmutableImageRE.MatchString(contract.ExecutorImage) || !benchmarkImmutableImageRE.MatchString(contract.StagerImage) ||
 		contract.ExecutorUser != "65532:65532" || contract.StagerUser != "65532:65532" || contract.OpenCodeVersion != "1.18.2" ||
+		contract.OpenCodeUpstreamRevision != "70b56a0a93d366889cae950379cc9d2537148fa2" || contract.OpenCodeSourceArchiveSHA256 != "13d277b405def808734be8ce4c6f68d3b40df866358556aefb48b5be90ea53c1" ||
+		contract.OpenCodeModelsDevSHA256 != "2f6a5a4ab4d450e3ddabdbf0313e51bd76d51577ec1d7936326c484aded33b51" || contract.OpenCodeBuilderImage != "docker.io/oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0" ||
+		contract.OpenCodeBuilderBunSHA256 != "500e6edbf321ddf490adcc55a6a01639993a07924616ab67492e1256c15557e2" || contract.OpenCodeBunVersion != "1.3.14" || contract.OpenCodeEmbeddedWebUI || contract.OpenCodePatchVersion != "aster-disable-project-instructions-v1" ||
+		contract.OpenCodePatchSHA256 != "48031f5d9a3c675406c43697682291efba78feb208c9f5dc2a977645aa41e6a3" || contract.OpenCodeBuildPatchVersion != "aster-single-target-build-v1" ||
+		contract.OpenCodeBuildPatchSHA256 != "1d90634eebd407761327da845aa8cb3a72b18ea2dd33e6cd0f1904215db0b595" || !benchmarkSHA256RE.MatchString(contract.OpenCodeBinarySHA256) ||
 		contract.ImageTag == "" || strings.ContainsAny(contract.ImageTag, " \t\r\n") || !benchmarkSHA256RE.MatchString(contract.ContractSHA256) ||
 		!strings.Contains(contract.ExecutorVersion, "commit="+expectedCommit) || !strings.Contains(contract.StagerVersion, "commit="+expectedCommit) ||
 		!strings.Contains(contract.ExecutorVersion, "image="+contract.ImageTag) || !strings.Contains(contract.StagerVersion, "image="+contract.ImageTag) {
@@ -969,7 +990,12 @@ func readAgentSandboxAnalyzerImageContract(t *testing.T, path, expectedCommit st
 		"executor_revision": contract.ExecutorRevision, "stager_revision": contract.StagerRevision,
 		"executor_user": contract.ExecutorUser, "stager_user": contract.StagerUser,
 		"executor_version": contract.ExecutorVersion, "stager_version": contract.StagerVersion,
-		"opencode_version": contract.OpenCodeVersion,
+		"opencode_version": contract.OpenCodeVersion, "opencode_upstream_revision": contract.OpenCodeUpstreamRevision,
+		"opencode_source_archive_sha256": contract.OpenCodeSourceArchiveSHA256, "opencode_models_dev_sha256": contract.OpenCodeModelsDevSHA256,
+		"opencode_builder_image": contract.OpenCodeBuilderImage, "opencode_builder_bun_sha256": contract.OpenCodeBuilderBunSHA256,
+		"opencode_bun_version": contract.OpenCodeBunVersion, "opencode_embedded_web_ui": contract.OpenCodeEmbeddedWebUI, "opencode_patch_version": contract.OpenCodePatchVersion,
+		"opencode_patch_sha256": contract.OpenCodePatchSHA256, "opencode_build_patch_version": contract.OpenCodeBuildPatchVersion, "opencode_build_patch_sha256": contract.OpenCodeBuildPatchSHA256,
+		"opencode_binary_sha256": contract.OpenCodeBinarySHA256,
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil || sha256Hex(encoded) != contract.ContractSHA256 {
@@ -1000,7 +1026,8 @@ func writeAgentSandboxAnalyzerBenchmarkJSONL(t *testing.T, path string, record a
 	if record.Version != agentSandboxAnalyzerBenchmarkRecordVersion || !benchmarkImmutableImageRE.MatchString(record.ExecutorImage) || !benchmarkImmutableImageRE.MatchString(record.StagerImage) {
 		t.Fatal("Agent Sandbox analyzer runtime image identity is invalid")
 	}
-	if record.ExecutorAsterRevision != record.EngineCommit || record.StagerAsterRevision != record.EngineCommit || record.ExpectedOpenCodeVersion == "" {
+	if record.ExecutorAsterRevision != record.EngineCommit || record.StagerAsterRevision != record.EngineCommit || record.ExpectedOpenCodeVersion == "" ||
+		record.ExpectedOpenCodeRevision != "70b56a0a93d366889cae950379cc9d2537148fa2" || !benchmarkSHA256RE.MatchString(record.ExpectedOpenCodePatchSHA256) || !benchmarkSHA256RE.MatchString(record.OpenCodeBinarySHA256) {
 		t.Fatal("Agent Sandbox analyzer embedded runtime identity is invalid")
 	}
 	if !benchmarkSHA256RE.MatchString(record.ImageContractSHA256) {
@@ -1329,14 +1356,26 @@ func TestVerifyAgentSandboxAnalyzerSourceExpectations(t *testing.T) {
 func TestReadAgentSandboxAnalyzerImageContract(t *testing.T) {
 	commit := strings.Repeat("a", 40)
 	payload := map[string]any{
-		"version": 1, "engine_commit": commit, "image_tag": "sha-" + commit,
+		"version": 2, "engine_commit": commit, "image_tag": "sha-" + commit,
 		"executor_image":    "registry.example.test/executor@sha256:" + strings.Repeat("b", 64),
 		"stager_image":      "registry.example.test/stager@sha256:" + strings.Repeat("c", 64),
 		"executor_revision": commit, "stager_revision": commit,
 		"executor_user": "65532:65532", "stager_user": "65532:65532",
-		"executor_version": "analysisexecutor version=eval commit=" + commit + " image=sha-" + commit + " go=go1.25.12",
-		"stager_version":   "analysisstager version=eval commit=" + commit + " image=sha-" + commit + " go=go1.25.12",
-		"opencode_version": "1.18.2",
+		"executor_version":               "analysisexecutor version=eval commit=" + commit + " image=sha-" + commit + " go=go1.25.12",
+		"stager_version":                 "analysisstager version=eval commit=" + commit + " image=sha-" + commit + " go=go1.25.12",
+		"opencode_version":               "1.18.2",
+		"opencode_upstream_revision":     "70b56a0a93d366889cae950379cc9d2537148fa2",
+		"opencode_source_archive_sha256": "13d277b405def808734be8ce4c6f68d3b40df866358556aefb48b5be90ea53c1",
+		"opencode_models_dev_sha256":     "2f6a5a4ab4d450e3ddabdbf0313e51bd76d51577ec1d7936326c484aded33b51",
+		"opencode_builder_image":         "docker.io/oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0",
+		"opencode_builder_bun_sha256":    "500e6edbf321ddf490adcc55a6a01639993a07924616ab67492e1256c15557e2",
+		"opencode_bun_version":           "1.3.14",
+		"opencode_embedded_web_ui":       false,
+		"opencode_patch_version":         "aster-disable-project-instructions-v1",
+		"opencode_patch_sha256":          "48031f5d9a3c675406c43697682291efba78feb208c9f5dc2a977645aa41e6a3",
+		"opencode_build_patch_version":   "aster-single-target-build-v1",
+		"opencode_build_patch_sha256":    "1d90634eebd407761327da845aa8cb3a72b18ea2dd33e6cd0f1904215db0b595",
+		"opencode_binary_sha256":         strings.Repeat("d", 64),
 	}
 	canonical, err := json.Marshal(payload)
 	if err != nil {

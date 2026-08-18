@@ -232,6 +232,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
       - name: Build executor
         env:
           SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}

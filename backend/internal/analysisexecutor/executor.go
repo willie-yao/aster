@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -126,9 +125,6 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		recordSourceIntegrityFailure(&result, err)
 		return fail(stateForContext(ctx), err.Error())
 	}
-	if err := verifyReadSafeWorkspace(ctx, sourceRoot, request.Manifest.Artifacts); err != nil {
-		return fail(engineruntime.TerminalFailed, err.Error())
-	}
 
 	tempRoot := strings.TrimSpace(opts.TempRoot)
 	if tempRoot == "" {
@@ -151,12 +147,16 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		return fail(engineruntime.TerminalFailed, err.Error())
 	}
 	run := opts.RunOpenCode
-	if run == nil {
-		run = defaultRunOpenCode
-	}
 	bin := strings.TrimSpace(opts.OpenCodeBin)
 	if bin == "" {
 		bin = defaultOpenCodeBin
+	}
+	if run == nil {
+		if err := verifyOpenCodeRuntime(ctx, bin, defaultOpenCodeRuntimeManifest); err != nil {
+			result.OpenCodeTelemetry.FailureCode = "opencode_runtime_contract"
+			return fail(engineruntime.TerminalFailed, err.Error())
+		}
+		run = defaultRunOpenCode
 	}
 	runResult, runErr := run(ctx, OpenCodeSpec{Bin: bin, WorkDir: workspaceRoot, HomeDir: home, TempDir: temp, Provider: request.ModelProvider, Prompt: prompt, MaxSteps: request.MaxSteps, ModelContextTokens: request.ModelContextTokens, ModelOutputTokens: request.ModelOutputTokens, RequireSourceEvidence: request.RequireSourceEvidence})
 	if err := validateCredentialFreeOpenCodeRun(credential, runResult, runErr); err != nil {
@@ -1026,53 +1026,6 @@ func openCodeJSON(ctx context.Context, client *http.Client, method, endpoint str
 	return nil
 }
 
-func verifyReadSafeWorkspace(ctx context.Context, sourceRoot string, files []agentanalysis.WorkspaceFile) error {
-	for _, file := range files {
-		if openCodeInstructionPath(file.Path) {
-			return fmt.Errorf("artifact workspace contains an OpenCode instruction file")
-		}
-	}
-	command := exec.CommandContext(ctx, "git", "-C", sourceRoot, "ls-files", "-z")
-	command.Env = append(nonCredentialSubprocessEnvironment(), "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
-	stdout, err := command.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("inspect source instruction files: %w", err)
-	}
-	stderr := newBoundedCapture(4096)
-	command.Stderr = stderr
-	if err := command.Start(); err != nil {
-		return fmt.Errorf("inspect source instruction files: %w", err)
-	}
-	const sourceInstructionPathLimit = 8 << 20
-	output, readErr := io.ReadAll(io.LimitReader(stdout, sourceInstructionPathLimit+1))
-	if len(output) > sourceInstructionPathLimit {
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		return fmt.Errorf("source instruction path list exceeds the bound")
-	}
-	waitErr := command.Wait()
-	if readErr != nil || waitErr != nil {
-		return fmt.Errorf("inspect source instruction files: %v", errors.Join(readErr, waitErr))
-	}
-	for _, record := range bytes.Split(output, []byte{0}) {
-		if len(record) > 0 && openCodeInstructionPath(filepath.ToSlash(string(record))) {
-			return fmt.Errorf("source workspace contains an OpenCode instruction file")
-		}
-	}
-	return nil
-}
-
-func openCodeInstructionPath(value string) bool {
-	clean := strings.TrimPrefix(strings.ToLower(filepath.ToSlash(filepath.Clean(value))), "./")
-	base := path.Base(clean)
-	switch base {
-	case "agents.md", "claude.md", "context.md":
-		return true
-	default:
-		return false
-	}
-}
-
 func verifyPreparedMounts(workspaceRoot, manifestHash string) error {
 	data, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
@@ -1245,7 +1198,8 @@ func openCodeEnvironment(home, temp string, provider modelprovider.Config) ([]st
 		"XDG_CACHE_HOME=" + filepath.Join(home, ".cache"),
 		"XDG_STATE_HOME=" + filepath.Join(home, ".local", "state"),
 		"OPENCODE_CONFIG=" + filepath.Join(home, ".config", "opencode", "opencode.json"),
-		"OPENCODE_DISABLE_PROJECT_CONFIG=true", "OPENCODE_DISABLE_AUTOUPDATE=true", "OPENCODE_DISABLE_EXTERNAL_SKILLS=true",
+		"OPENCODE_DISABLE_PROJECT_CONFIG=true", "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=true",
+		"OPENCODE_DISABLE_AUTOUPDATE=true", "OPENCODE_DISABLE_EXTERNAL_SKILLS=true",
 		"GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_OPTIONAL_LOCKS=0",
 	}
 	for _, name := range []string{"PATH", "LANG", "LC_ALL", "LC_CTYPE", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS"} {

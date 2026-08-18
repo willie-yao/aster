@@ -392,8 +392,17 @@ Azure Files and Kata differential checks. Its JSON summary contains only
 content-free source integrity snapshots and aggregate tool telemetry.
 
 The provider-free evidence-handle scale harness is also in
-`internal/analysisexecutor`. It runs exact OpenCode 1.18.2 against a
-deterministic loopback TLS gateway and representative large source and artifact
-trees. Broad directory greps reproduce high-cardinality range handling. Its
-summary contains only bounded counts, status, truncation, usage availability,
-phase totals, and allowlisted warning or rejection codes.
+`internal/analysisexecutor`. It runs the exact Aster-pinned OpenCode 1.18.2
+runtime against a deterministic loopback TLS gateway and representative large
+source and artifact trees. Broad directory greps reproduce high-cardinality range
+handling. Its summary contains only bounded counts, status, truncation, usage
+availability, phase totals, and allowlisted warning or rejection codes.
+
+`hack/test-agent-sandbox-analysis-images.sh` additionally runs an instruction-file
+canary inside the exact executor image. Native reads adjacent to nested
+`AGENTS.md`, `CLAUDE.md`, and `CONTEXT.md` fixtures must preserve ordinary evidence
+content and citation reconstruction without attaching any instruction canary or
+loaded-instruction metadata to a provider request. The immutable image contract
+records the upstream commit and source digest, frozen models.dev digest, Bun
+builder identity, runtime and build-only patch identities, omitted embedded Web
+UI, and final binary digest.
