@@ -234,19 +234,6 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		return nil
 	}
 
-	agenticKey := s.agenticCacheKey(jobID, run.BuildID, tc.Name, tc.FailureMessage)
-	unavailableKey := PolicyUnavailableCacheKey(agenticKey)
-	cachePolicy := s.agenticCachePolicyFor(tc, promptHash, consecutiveFailures)
-	if LookupPolicyUnavailableCooldown(s.client.cache, unavailableKey, cachePolicy, time.Now()) {
-		err := ErrMissingArtifactCitation
-		log.Printf("  ⏭ Reusing grounded unavailable cooldown: %s", tc.Name)
-		s.setPolicyUnavailable(tc, err)
-		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "policy_unavailable_hit"})
-		trace.Finish("unavailable_cache_hit", err)
-		usageOutcome = aiusage.OutcomeCacheHit
-		return err
-	}
-
 	log.Printf("  🔍 Analyzing: %s [%s]", tc.Name, AgenticMode)
 
 	failureSignal := evidenceplan.FailureSignal(*tc)
@@ -271,18 +258,6 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 			usageOutcome = aiusage.OutcomeUnavailable
 			return unavailableErr
 		}
-		if errors.Is(err, ErrMissingArtifactCitation) {
-			log.Printf("  ⚠ AI analysis unavailable after citation policy: %v", err)
-			if cacheErr := storePolicyUnavailable(s.client.cache, unavailableKey, cachePolicy, time.Now().UTC()); cacheErr != nil {
-				log.Printf("Warning: failed to store grounded unavailable cooldown: %v", cacheErr)
-			} else if cachePolicy.CritiquePolicy == CritiqueCachePolicyHard {
-				recordTrace(ctx, TraceEvent{Kind: "cache_persistence", Outcome: "policy_unavailable"})
-			}
-			s.setPolicyUnavailable(tc, err)
-			trace.Finish("unavailable", err)
-			usageOutcome = aiusage.OutcomeUnavailable
-			return err
-		}
 		log.Printf("  ⚠ Agentic AI analysis failed for %s: %v", tc.Name, err)
 		s.setUnavailable(tc, err)
 		trace.Finish("error", err)
@@ -293,7 +268,6 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		}
 		return err
 	}
-	s.client.cache.Delete(unavailableKey)
 	tc.AISummary = summary
 	tc.AIAnalysis = analysis
 	if analysis != nil {
@@ -383,15 +357,6 @@ func (s *Service) toolCacheFor(buildPrefix string) *tools.Cache {
 	fresh := tools.NewBoundedCache(512, 64<<20)
 	actual, _ := s.toolCaches.LoadOrStore(buildPrefix, fresh)
 	return actual.(*tools.Cache)
-}
-
-func (s *Service) setPolicyUnavailable(tc *models.TestCase, err error) {
-	if tc == nil {
-		return
-	}
-	tc.AISummary = nil
-	tc.AIAnalysis = nil
-	s.setUnavailable(tc, err)
 }
 
 func (s *Service) setUnavailable(tc *models.TestCase, err error) {
@@ -504,6 +469,9 @@ func (s *Service) shouldReanalyzeWithPrompt(tc *models.TestCase, userPrompt stri
 
 func (s *Service) shouldReanalyzeWithPromptHash(tc *models.TestCase, promptHash string) bool {
 	if tc.AIAnalysis.Mode != AgenticMode {
+		return true
+	}
+	if tc.AIAnalysis.Disposition == models.AnalysisDispositionPreliminary {
 		return true
 	}
 	return s.belowCurrentAgenticFloor(tc, promptHash)

@@ -332,6 +332,14 @@ export function AiAnalysisPanel({
     </>
   );
 
+  const dispositionPanel = analysis.disposition === "preliminary" ? (
+    <Alert severity="warning" variant="outlined" sx={{ borderRadius: "4px" }}>
+      Preliminary analysis. The structured result is safe to review, but evidence or
+      quality checks remain unresolved. It cannot be used for corrections, remediation,
+      actions, or fixes.
+    </Alert>
+  ) : null;
+
   const rootCause = detailAppearance ? (
     <BriefingSection label="Root cause">
       <RichText text={displayedAnalysis.root_cause} steps fileCtx={fileCtx} />
@@ -465,6 +473,7 @@ export function AiAnalysisPanel({
   const content = (
     <Stack spacing={detailAppearance ? 2.25 : 2}>
       {statusRow}
+      {dispositionPanel}
       {correctionPanel}
       {rootCause}
       {suggestedFix}

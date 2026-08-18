@@ -201,10 +201,6 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		}
 		return fail(stateForContext(ctx), fmt.Sprintf("run OpenCode analyzer: %v", runErr))
 	}
-	if request.RequireSourceEvidence && (result.OpenCodeTelemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceAccepted || result.OpenCodeTelemetry.SourceEvidenceToolCalls < 1 || result.OpenCodeTelemetry.EvidenceHandles.AcceptedSourceHandleCount < 1) {
-		result.OpenCodeTelemetry.FailureCode = "source_evidence_missing"
-		return fail(engineruntime.TerminalFailed, "required source evidence is missing")
-	}
 	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(runResult.Structured), runResult.EvidenceHandles, request.Manifest, artifactRoot, sourceRoot)
 	result.ResultValidation = validation
 	if err != nil {
@@ -216,8 +212,13 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		return fail(engineruntime.TerminalFailed, "workspace evidence handles are invalid")
 	}
 	if (len(analysis.SourceCitations) > 0 || len(analysis.RelevantFiles) > 0) && result.OpenCodeTelemetry.SourceEvidenceToolCalls < 1 {
-		result.OpenCodeTelemetry.FailureCode = "source_evidence_unavailable"
-		return fail(engineruntime.TerminalFailed, "workspace analysis contains source claims without successful source evidence")
+		analysis.SourceCitations = nil
+		analysis.RelevantFiles = nil
+		validation.Status = agentanalysis.WorkspaceResultAcceptedWithWarnings
+		validation.Codes = append(validation.Codes, agentanalysis.WorkspaceInvalidSourcePath)
+		slices.Sort(validation.Codes)
+		validation.Codes = slices.Compact(validation.Codes)
+		result.ResultValidation = validation
 	}
 	if err := mountVerifier(workspaceRoot, request.Manifest.Hash); err != nil {
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("prepared mounts changed during result canonicalization: %v", err))
@@ -569,8 +570,7 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 			result.Telemetry.SourceEvidenceCorrectionReason = correctionReason
 		}
 		if sourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceAccepted {
-			result.Telemetry.FailureCode = "source_evidence_missing"
-			return result, fmt.Errorf("required source evidence is missing")
+			result.Telemetry.SourceEvidenceStatus = sourceEvidenceStatus
 		}
 	}
 	finalizationInstruction, err := agentanalysis.WorkspaceFinalizationInstruction(evidenceFacts.EvidenceHandles)

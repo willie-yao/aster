@@ -166,7 +166,7 @@ func TestCachedAgenticAnalysisMatchesSharedAcceptance(t *testing.T) {
 	now := time.Now().UTC()
 	const key = "agentic:universal:job:1:failure"
 	base := agenticCacheData{
-		analysisResponse: analysisResponse{Summary: "summary", RootCause: "root", SuggestedFix: "fix"},
+		analysisResponse: analysisResponse{Summary: "summary", RootCause: "root", Severity: "High", SuggestedFix: "fix"},
 		ToolCalls:        2, CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
 		SkillSetHash: "cached-skills",
 		ModelHash:    ModelFingerprint(APIChatCompletions, "https://old-model.invalid/v1/chat/completions", "old-model"),

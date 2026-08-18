@@ -763,7 +763,7 @@ func TestAgentSandboxAnalyzerReportSourceRequiredNeedsToolAndCitation(t *testing
 		t.Fatalf("sandbox summary = %+v", sandboxSummary)
 	}
 	criteria := report["criteria"].(map[string]any)
-	if criteria["lifecycle_non_regression"] != false || criteria["grounding_non_regression"] != false {
+	if criteria["lifecycle_non_regression"] != true || criteria["grounding_non_regression"] != false {
 		t.Fatalf("criteria = %+v", criteria)
 	}
 }

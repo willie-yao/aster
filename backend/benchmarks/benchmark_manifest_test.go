@@ -596,6 +596,12 @@ type benchmarkJSONLResult struct {
 	EvidenceStageIDs          []string                    `json:"evidence_stage_ids"`
 	ModelRequestMade          bool                        `json:"model_request_made"`
 	TrialStatus               string                      `json:"trial_status"`
+	ContractViolation         bool                        `json:"contract_violation"`
+	AnalysisDisposition       string                      `json:"analysis_disposition,omitempty"`
+	DispositionWarnings       []string                    `json:"disposition_warnings,omitempty"`
+	StructuredValid           bool                        `json:"structured_valid"`
+	Displayable               bool                        `json:"displayable"`
+	Grounded                  bool                        `json:"grounded"`
 	EvidenceStages            []benchmarkEvidenceStage    `json:"evidence_stages"`
 	EvidenceRevisions         []benchmarkEvidenceRevision `json:"evidence_revisions"`
 	EvidenceGroupsSelected    []string                    `json:"evidence_groups_selected,omitempty"`
@@ -800,6 +806,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		SourceEvidenceToolCalls: benchmarkSourceEvidenceToolCalls(toolUsage), FrozenEvidenceSHA256: stageReport.FrozenSHA256,
 		EvidenceStageSHA256: identity.EvidenceStageSHA256, EvidenceStageIDs: benchmarkEvidenceStageIDs(bc.evidenceGroups), ModelRequestMade: stageReport.ModelRequestMade,
 		TrialStatus: stageReport.TrialStatus, EvidenceStages: append([]benchmarkEvidenceStage{}, stageReport.Stages...),
+		ContractViolation:      benchmarkTraceHasContractViolation(snapshot),
 		EvidenceRevisions:      append([]benchmarkEvidenceRevision{}, stageReport.Revisions...),
 		EvidenceGroupsSelected: append([]string(nil), evidenceCoverage.selected...), EvidenceGroupsHit: append([]string(nil), evidenceCoverage.hit...), EvidenceGroupsMissed: append([]string(nil), evidenceCoverage.missed...),
 		EvidenceGroupSources: cloneBenchmarkEvidenceSources(evidenceCoverage.sources),
@@ -843,6 +850,11 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	}
 	if tc != nil && tc.AIAnalysis != nil && tc.AISummary != nil {
 		result.Usable = true
+		result.AnalysisDisposition = tc.AIAnalysis.Disposition
+		result.DispositionWarnings = append([]string(nil), tc.AIAnalysis.DispositionWarnings...)
+		result.StructuredValid = result.AnalysisDisposition != ""
+		result.Displayable = result.StructuredValid
+		result.Grounded = result.AnalysisDisposition == models.AnalysisDispositionGrounded
 		result.RootCause, result.SuggestedFix, result.Severity = tc.AIAnalysis.RootCause, tc.AIAnalysis.SuggestedFix, tc.AIAnalysis.Severity
 		result.GCSBytes = tc.AIAnalysis.GCSBytes
 		result.EvidencePlanCovered = tc.AIAnalysis.EvidencePlanCovered

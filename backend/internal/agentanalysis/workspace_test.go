@@ -142,7 +142,7 @@ func TestParseWorkspaceAnalysisValidatesCitationsAndMapsResult(t *testing.T) {
 	}
 }
 
-func TestParseWorkspaceAnalysisRejectsUngroundedPaths(t *testing.T) {
+func TestParseWorkspaceAnalysisWarnsOnUngroundedEvidenceIDs(t *testing.T) {
 	sourceRoot, artifactRoot, request, source := workspaceTestInputs(t)
 	files, err := SnapshotArtifactWorkspace(artifactRoot)
 	if err != nil {
@@ -155,8 +155,10 @@ func TestParseWorkspaceAnalysisRejectsUngroundedPaths(t *testing.T) {
 	handles := workspaceDefaultHandles(t, sourceRoot, artifactRoot)
 	for _, id := range []string{"artifact-999", workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 1)} {
 		raw := workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection(id)}, nil)
-		if _, _, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot); err == nil || WorkspaceInvalidResultCode(err) != WorkspaceInvalidArtifactPath {
-			t.Fatalf("evidence ID %q was accepted: %v", id, err)
+		analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
+		want := []string{WorkspaceInvalidArtifactCount, WorkspaceInvalidArtifactPath}
+		if err != nil || validation.Status != WorkspaceResultAcceptedWithWarnings || !slices.Equal(validation.Codes, want) || len(analysis.EvidenceCitations) != 0 {
+			t.Fatalf("evidence ID %q analysis=%+v validation=%+v err=%v", id, analysis, validation, err)
 		}
 	}
 }
@@ -630,16 +632,25 @@ func TestParseWorkspaceAnalysisRejectsAdversarialCitations(t *testing.T) {
 	handles := workspaceDefaultHandles(t, sourceRoot, artifactRoot)
 	valid := workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection(workspaceHandleID(t, handles, WorkspaceArtifactsDir, "logs/build.log", 2))}, nil)
 	tests := map[string]string{
-		"unknown evidence id": workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection("artifact-999")}, nil),
-		"wrong evidence root": workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection("source-001")}, nil),
-		"object selection":    strings.Replace(valid, `"artifact_evidence_ids":["artifact-002"]`, `"artifact_evidence_ids":[{"evidence_id":"artifact-002"}]`, 1),
-		"duplicate field":     strings.Replace(valid, `"summary":"summary"`, `"summary":"summary","summary":"other"`, 1),
-		"malformed":           `{"version":1`,
+		"object selection": strings.Replace(valid, `"artifact_evidence_ids":["artifact-002"]`, `"artifact_evidence_ids":[{"evidence_id":"artifact-002"}]`, 1),
+		"duplicate field":  strings.Replace(valid, `"summary":"summary"`, `"summary":"summary","summary":"other"`, 1),
+		"malformed":        `{"version":1`,
 	}
 	for name, raw := range tests {
 		t.Run(name, func(t *testing.T) {
 			if _, _, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot); err == nil {
 				t.Fatal("adversarial result was accepted")
+			}
+		})
+	}
+	for name, raw := range map[string]string{
+		"unknown evidence id": workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection("artifact-999")}, nil),
+		"wrong evidence root": workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection("source-001")}, nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
+			if err != nil || validation.Status != WorkspaceResultAcceptedWithWarnings || len(analysis.EvidenceCitations) != 0 {
+				t.Fatalf("analysis=%+v validation=%+v err=%v", analysis, validation, err)
 			}
 		})
 	}
