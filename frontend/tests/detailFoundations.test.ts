@@ -11,6 +11,7 @@ import { parseTestDisplayName } from "../src/lib/detailTitles.js";
 import type { BuildResult, TestCase } from "../src/types/dashboard.js";
 import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetchStatus.js";
 import type { AIUsageDaily } from "../src/types/usage.js";
+import type { RuntimeSummary } from "../src/lib/runtimeTrend.js";
 
 const vite = await createServer({
   root: process.cwd(),
@@ -38,6 +39,12 @@ const { MetricStrip } = (await vite.ssrLoadModule("/src/components/MetricStrip.t
   MetricStrip: (props: {
     label: string;
     items: Array<{ label: string; value: string; note?: string }>;
+  }) => ReturnType<typeof createElement>;
+};
+const { RuntimeTrend } = (await vite.ssrLoadModule("/src/components/RuntimeTrend.tsx")) as {
+  RuntimeTrend: (props: {
+    summary: RuntimeSummary;
+    subject: string;
   }) => ReturnType<typeof createElement>;
 };
 const { DaySummaryButton, HistoricalTable } = (await vite.ssrLoadModule("/src/components/AIUsageDaily.tsx")) as {
@@ -331,6 +338,52 @@ test("run history exposes square selected runs with date and result context", ()
   assert.match(html, /aria-pressed="true"/);
   assert.match(html, /aria-label="#124 · Passed · Aug 6, 2026"/);
   assert.match(html, />Selected #123 · Failed</);
+});
+
+test("runtime trend renders accessible empty and outlier states", () => {
+  const empty: RuntimeSummary = {
+    points: [],
+    sampleCount: 0,
+    medianSeconds: null,
+    p95Seconds: null,
+    madSeconds: null,
+    direction: "insufficient",
+    changeRatio: null,
+    latestOutlier: false,
+  };
+  const emptyHTML = render(
+    createElement(RuntimeTrend, { summary: empty, subject: "Unit tests" }),
+  );
+  assert.match(emptyHTML, /aria-label="Unit tests runtime trend"/);
+  assert.match(emptyHTML, /No completed runtime samples are available/);
+  assert.doesNotMatch(emptyHTML, /role="img"/);
+
+  const outlier: RuntimeSummary = {
+    points: [
+      { buildID: "1", timestamp: "2026-08-01T00:00:00Z", durationSeconds: 10, passed: true },
+      { buildID: "2", timestamp: "2026-08-02T00:00:00Z", durationSeconds: 10, passed: false },
+      { buildID: "3", timestamp: "2026-08-03T00:00:00Z", durationSeconds: 10, passed: true },
+      { buildID: "4", timestamp: "2026-08-04T00:00:00Z", durationSeconds: 10, passed: true },
+      { buildID: "5", timestamp: "2026-08-05T00:00:00Z", durationSeconds: 20, passed: true },
+    ],
+    sampleCount: 5,
+    medianSeconds: 10,
+    p95Seconds: 20,
+    madSeconds: 0,
+    direction: "increasing",
+    changeRatio: 1,
+    latestOutlier: true,
+  };
+  const outlierHTML = render(
+    createElement(RuntimeTrend, { summary: outlier, subject: "Unit tests" }),
+  );
+  assert.match(outlierHTML, /role="img"/);
+  assert.match(
+    outlierHTML,
+    /aria-label="Unit tests runtime history\.[^"]*Build 2, failed, 10s[^"]*Build 5, passed, 20s"/,
+  );
+  assert.match(outlierHTML, /observed outlier, not proof/);
+  assert.match(outlierHTML, /fill="var\(--mui-palette-success-main\)" stroke="var\(--mui-palette-warning-main\)"/);
 });
 
 test("mobile usage day disclosure names the accounting summary", () => {

@@ -19,6 +19,7 @@ import "./buildFailures.test.js";
 import "./buildFailurePage.test.js";
 import "./actionRequests.test.js";
 import "./actionEligibility.test.js";
+import "./runtimeTrend.test.js";
 
 import "./theme.test.js";
 import "./detailFoundations.test.js";

@@ -45,9 +45,11 @@ import { ErrorState } from "../components/ErrorState";
 import { TechnicalIdentity } from "../components/TechnicalIdentity";
 import { MetricStrip, type MetricStripItem } from "../components/MetricStrip";
 import { RunMetadata } from "../components/RunMetadata";
+import { RuntimeTrend } from "../components/RuntimeTrend";
 import { AnalysisBriefing } from "../components/AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
 import type { BuildResult, PatternAnalysis, TestCase } from "../types/dashboard";
+import { summarizeRuntime, testRuntimePoints } from "../lib/runtimeTrend";
 
 function normalizeMessage(message: string): string {
   return message
@@ -157,6 +159,10 @@ export function TestDetailPage() {
     }
     return null;
   }, [occurrences]);
+  const runtimeSummary = useMemo(
+    () => summarizeRuntime(testRuntimePoints(data?.runs ?? [], testName)),
+    [data?.runs, testName],
+  );
 
   const requestedBuildID = searchParams.get("run");
   const effectiveSelectedID =
@@ -334,6 +340,20 @@ export function TestDetailPage() {
       value: selectedTestCase
         ? formatDuration(selectedTestCase.duration_seconds)
         : "Not present",
+    },
+    {
+      label: "Median duration",
+      value:
+        runtimeSummary.medianSeconds !== null
+          ? formatDuration(runtimeSummary.medianSeconds)
+          : "Not available",
+    },
+    {
+      label: "95th percentile",
+      value:
+        runtimeSummary.p95Seconds !== null
+          ? formatDuration(runtimeSummary.p95Seconds)
+          : "Not available",
     },
   ];
 
@@ -956,6 +976,10 @@ export function TestDetailPage() {
             alignSelf: "start",
           }}
         >
+          <RuntimeTrend
+            summary={runtimeSummary}
+            subject={parsedTitle.displayName}
+          />
           {runHistory}
           {runMetadata}
         </Stack>

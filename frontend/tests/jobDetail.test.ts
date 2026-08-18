@@ -135,6 +135,9 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(page, /label: "Current"/);
   assert.match(page, /label: "Last 10 runs"/);
   assert.match(page, /label: "Recovery streak"/);
+  assert.match(page, /label: "Median duration"/);
+  assert.match(page, /label: "95th percentile"/);
+  assert.match(page, /<RuntimeTrend summary=\{runtimeSummary\} subject=\{displayName\}/);
   assert.match(page, /<RunMetadata[\s\S]*View in Prow[\s\S]*Build log/);
   assert.match(page, /<TestResultsGrid runs=\{runs\}/);
   assert.match(page, /<ResultLedger[\s\S]*executedCount[\s\S]*skippedCount/);

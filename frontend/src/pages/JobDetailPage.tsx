@@ -38,6 +38,7 @@ import { MetricStrip, type MetricStripItem } from "../components/MetricStrip";
 import { TechnicalIdentity } from "../components/TechnicalIdentity";
 import { RunMetadata } from "../components/RunMetadata";
 import { ResultLedger } from "../components/ResultLedger";
+import { RuntimeTrend } from "../components/RuntimeTrend";
 import { overviewTypography } from "../theme/overview";
 import {
   currentJobStatus,
@@ -49,6 +50,7 @@ import {
   summarizeResultTests,
   withJobDetailParam,
 } from "../lib/jobDetail";
+import { jobRuntimePoints, summarizeRuntime } from "../lib/runtimeTrend";
 import { initialProgressiveCount, nextProgressiveCount } from "../lib/progressive";
 
 function passRateColor(
@@ -187,16 +189,10 @@ export function JobDetailPage() {
     [data?.pass_rate_recent, runs],
   );
 
-  const avgDuration = useMemo(() => {
-    const completed = runs.filter(
-      (run) => run.result !== "PENDING" && run.duration_seconds != null,
-    );
-    if (completed.length === 0) return null;
-    return (
-      completed.reduce((sum, run) => sum + run.duration_seconds, 0) /
-      completed.length
-    );
-  }, [runs]);
+  const runtimeSummary = useMemo(
+    () => summarizeRuntime(jobRuntimePoints(runs)),
+    [runs],
+  );
 
   const selectedFilter = normalizeResultLedgerFilter(searchParams.get("results"));
   const resultQuery = searchParams.get("test") ?? "";
@@ -274,8 +270,18 @@ export function JobDetailPage() {
       : []),
     { label: "Runs", value: runs.length.toLocaleString() },
     {
-      label: "Average duration",
-      value: avgDuration !== null ? formatDuration(avgDuration) : "Not available",
+      label: "Median duration",
+      value:
+        runtimeSummary.medianSeconds !== null
+          ? formatDuration(runtimeSummary.medianSeconds)
+          : "Not available",
+    },
+    {
+      label: "95th percentile",
+      value:
+        runtimeSummary.p95Seconds !== null
+          ? formatDuration(runtimeSummary.p95Seconds)
+          : "Not available",
     },
     {
       label: "Last run",
@@ -544,6 +550,8 @@ export function JobDetailPage() {
             runHistory={runHistory}
             runMetadata={runMetadata}
           />
+
+          <RuntimeTrend summary={runtimeSummary} subject={displayName} />
 
           {crossRunGrid}
 
