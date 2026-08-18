@@ -522,6 +522,7 @@ done
 grep -Fq 'image: local/remote-fixer:sha-1234567' "$tmp/analysis-shadow-render.yaml"
 grep -Fq "serviceAccountName: $scheduled_client" "$tmp/analysis-shadow-render.yaml"
 grep -Fq 'automountServiceAccountToken: true' "$tmp/analysis-shadow-render.yaml"
+
 if grep -Fq "$fix_client" "$tmp/analysis-shadow-render.yaml"; then
   echo 'Analysis shadow release referenced the Fix Agent Sandbox client ServiceAccount' >&2
   exit 1
@@ -529,6 +530,15 @@ fi
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/analysis-shadow.yaml" \
   -s templates/agent-sandbox-analysis-shadow-rbac.yaml > "$tmp/analysis-shadow-rbac.yaml"
 grep -A3 -F 'subjects:' "$tmp/analysis-shadow-rbac.yaml" | grep -Fq "name: $scheduled_client"
+
+grep -Fq 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64_CHUNK_00' "$tmp/analysis-shadow-render.yaml"
+grep -Fq 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64_CHUNK_15' "$tmp/analysis-shadow-render.yaml"
+grep -Fq "v.name == 'request' && v.mountPath == '/analysis-request' && v.readOnly == true" "$tmp/analysis-shadow-render.yaml"
+if grep -Fq "variables.container.env[0].name == 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64'" "$tmp/analysis-shadow-render.yaml"; then
+  echo 'analysis shadow admission still allows the legacy executor request environment' >&2
+  exit 1
+fi
+
 expect_fail analysis-shadow-with-critic 'cannot run with agentSandbox.analysisShadow' \
   -f "$tmp/analysis-shadow.yaml" --set agentSandbox.causalCritic.enabled=true
 expect_fail analysis-shadow-reserved-env 'reserved analysis shadow variable' \
@@ -645,6 +655,12 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/ana
 grep -Fq 'agent-sandbox-analyzer' "$tmp/analyzer-render.yaml"
 grep -Fq 'kind: ResourceQuota' "$tmp/analyzer-render.yaml"
 grep -Fq 'analyzer-input' "$tmp/analyzer-render.yaml"
+grep -Fq 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64_CHUNK_00' "$tmp/analyzer-render.yaml"
+grep -Fq "v.name == 'request' && v.mountPath == '/analysis-request' && v.readOnly == true" "$tmp/analyzer-render.yaml"
+if grep -Fq "variables.container.env[0].name == 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64'" "$tmp/analyzer-render.yaml"; then
+  echo 'analyzer admission still allows the legacy executor request environment' >&2
+  exit 1
+fi
 expect_fail analyzer-with-shadow 'agentSandbox.analysisShadow cannot run with agentSandbox.analyzer' \
   -f "$tmp/analyzer.yaml" -f "$tmp/analysis-shadow.yaml"
 

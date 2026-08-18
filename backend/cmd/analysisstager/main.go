@@ -35,20 +35,28 @@ func main() {
 		return
 	}
 	ctx := context.Background()
-	mode, err := selectedMode()
+	mode, err := selectedMode(os.Args[1:])
 	var output any
 	if err == nil {
 		switch mode {
 		case "stage":
 			var request agentanalysis.WorkspaceStageRequest
 			err = readRequest(stageRequestEnv, &request)
+			var execution agentanalysis.WorkspaceExecutionRequest
 			if err == nil {
-				err = agentanalysis.ValidateWorkspaceStageRequestIdentity(request)
+				execution, err = readExecutionRequest()
 			}
 			if err == nil {
-				err = analysisstager.Execute(ctx, request, analysisstager.Options{})
+				err = analysisstager.Execute(ctx, request, execution, analysisstager.Options{})
 			}
-			output = map[string]any{"version": 1, "status": "staged", "manifest_hash": request.ManifestHash}
+			output = map[string]any{"version": 1, "status": "staged", "manifest_hash": request.ManifestHash, "request_hash": execution.Hash}
+		case "request":
+			var request agentanalysis.WorkspaceExecutionRequest
+			request, err = readExecutionRequest()
+			if err == nil {
+				err = analysisstager.WriteExecutionRequest(request, analysisstager.Options{})
+			}
+			output = map[string]any{"version": 1, "status": "written", "request_hash": request.Hash}
 		case "publish":
 			var request agentanalysis.WorkspacePublishRequest
 			err = readRequest(publishRequestEnv, &request)
@@ -74,7 +82,13 @@ func main() {
 	}
 }
 
-func selectedMode() (string, error) {
+func selectedMode(args []string) (string, error) {
+	if len(args) == 1 && args[0] == "request" {
+		return "request", nil
+	}
+	if len(args) != 0 {
+		return "", fmt.Errorf("analysis staging mode is invalid")
+	}
 	selected := ""
 	for _, item := range []struct{ mode, name string }{{"stage", stageRequestEnv}, {"publish", publishRequestEnv}, {"cleanup", cleanupRequestEnv}} {
 		mode, name := item.mode, item.name
@@ -107,4 +121,24 @@ func readRequest(name string, target any) error {
 		return fmt.Errorf("staging request contains trailing data")
 	}
 	return nil
+}
+
+func readExecutionRequest() (agentanalysis.WorkspaceExecutionRequest, error) {
+	data, err := agentanalysis.DecodeWorkspaceExecutionRequestChunks(os.LookupEnv)
+	if err != nil {
+		return agentanalysis.WorkspaceExecutionRequest{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var request agentanalysis.WorkspaceExecutionRequest
+	if err := decoder.Decode(&request); err != nil {
+		return request, fmt.Errorf("parse workspace execution request: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return request, fmt.Errorf("workspace execution request contains trailing data")
+	}
+	if err := agentanalysis.ValidateWorkspaceExecutionRequest(request); err != nil {
+		return request, err
+	}
+	return request, nil
 }

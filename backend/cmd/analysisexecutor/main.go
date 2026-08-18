@@ -1,22 +1,16 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"runtime"
-	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/agentanalysis"
 	"github.com/willie-yao/aster/backend/internal/analysisexecutor"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )
-
-const requestEnv = "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64"
 
 var (
 	version  = "dev"
@@ -29,7 +23,7 @@ func main() {
 		fmt.Printf("analysisexecutor version=%s commit=%s image=%s go=%s\n", version, commit, imageTag, runtime.Version())
 		return
 	}
-	request, err := readRequest()
+	request, err := readRequest(agentanalysis.WorkspaceExecutionRequestRoot)
 	if err != nil {
 		emit(agentanalysis.WorkspaceExecutionResult{
 			Version: agentanalysis.WorkspaceResultVersion, ContractVersion: agentanalysis.WorkspaceContractVersion,
@@ -44,28 +38,8 @@ func main() {
 	}
 }
 
-func readRequest() (agentanalysis.WorkspaceExecutionRequest, error) {
-	encoded := strings.TrimSpace(os.Getenv(requestEnv))
-	if encoded == "" {
-		return agentanalysis.WorkspaceExecutionRequest{}, fmt.Errorf("%s is required", requestEnv)
-	}
-	data, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return agentanalysis.WorkspaceExecutionRequest{}, fmt.Errorf("decode analysis request: %w", err)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var request agentanalysis.WorkspaceExecutionRequest
-	if err := decoder.Decode(&request); err != nil {
-		return request, fmt.Errorf("parse analysis request: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return request, fmt.Errorf("analysis request contains trailing data")
-	}
-	if err := agentanalysis.ValidateWorkspaceExecutionRequest(request); err != nil {
-		return request, err
-	}
-	return request, nil
+func readRequest(root string) (agentanalysis.WorkspaceExecutionRequest, error) {
+	return agentanalysis.ReadWorkspaceExecutionRequestFile(root)
 }
 
 func emit(result agentanalysis.WorkspaceExecutionResult) {

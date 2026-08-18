@@ -296,8 +296,10 @@ data-serving path.
   and request identities, then asks `analysispublisher` to run a tokenless
   namespace-local Job. That Job publishes the identical snapshot to private
   input storage and is deleted before the Agent Sandbox starts. The Sandbox
-  stager copies the input into a fresh read-only workspace, the executor returns
-  one bounded result, and the dashboard independently validates it against the
+  stager reconstructs the sealed request from bounded fixed chunks into a
+  dedicated request volume, validates it against the stage identity, and copies
+  the input into a fresh read-only workspace. The executor mounts the request and
+  workspace read-only, returns one bounded result, and the dashboard independently validates it against the
   retained local copy. A second tokenless Job removes the leased remote input.
   Only the private ledger is updated; public output and the authoritative cache
   cannot change.

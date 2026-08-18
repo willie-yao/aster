@@ -987,3 +987,25 @@ Fix generation is server-only and maintainer-initiated, so it never applies here
 {{- if or .Values.agentSandbox.causalCritic.enabled .Values.agentSandbox.analysisShadow.enabled -}}true
 {{- else -}}false{{- end -}}
 {{- end -}}
+
+{{/* Exact credential-free stager environment for one file-backed analysis request. */}}
+{{- define "aster.agentAnalysisRequestChunkAdmission" -}}
+{{- $parts := list "size(variables.stager.env) == 17" "variables.stager.env[0].name == 'PROW_AI_ANALYSIS_STAGE_REQUEST_B64'" "has(variables.stager.env[0].value)" "size(variables.stager.env[0].value) > 0" "size(variables.stager.env[0].value) <= 131072" "variables.stager.env[0].value.matches('^[A-Za-z0-9+/]+={0,2}$')" "!has(variables.stager.env[0].valueFrom)" -}}
+{{- range $index := until 16 -}}
+  {{- $position := add $index 1 -}}
+  {{- $name := printf "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64_CHUNK_%02d" $index -}}
+  {{- $parts = append $parts (printf "variables.stager.env[%d].name == '%s'" $position $name) -}}
+  {{- if eq $index 0 -}}
+    {{- $parts = append $parts (printf "has(variables.stager.env[%d].value) && size(variables.stager.env[%d].value) > 0" $position $position) -}}
+  {{- end -}}
+  {{- $parts = append $parts (printf "!has(variables.stager.env[%d].value) || size(variables.stager.env[%d].value) <= 65536" $position $position) -}}
+  {{- $parts = append $parts (printf "!has(variables.stager.env[%d].value) || variables.stager.env[%d].value.matches('^[A-Za-z0-9+/]+={0,2}$')" $position $position) -}}
+  {{- $parts = append $parts (printf "!has(variables.stager.env[%d].valueFrom)" $position) -}}
+  {{- if lt $index 15 -}}
+    {{- $next := add $position 1 -}}
+    {{- $parts = append $parts (printf "(has(variables.stager.env[%d].value) && size(variables.stager.env[%d].value) == 65536) || !has(variables.stager.env[%d].value) || size(variables.stager.env[%d].value) == 0" $position $position $next $next) -}}
+  {{- end -}}
+{{- end -}}
+{{- $parts = append $parts "(!has(variables.stager.envFrom) || size(variables.stager.envFrom) == 0)" -}}
+{{- join " && " $parts -}}
+{{- end -}}
