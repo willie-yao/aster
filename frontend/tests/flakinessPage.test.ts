@@ -99,7 +99,7 @@ test("focusable tabs own their visible names and descriptions", () => {
   assert.match(source, /label: "Persistent failures"/);
   assert.match(source, /label: "Recent failures"/);
   assert.match(source, /label: "Build failures"/);
-  assert.match(source, /at least 3 consecutive failures/);
+  assert.match(source, /at least \$\{persistentAfter\} consecutive failures/);
   assert.match(source, /within 48 hours of this published snapshot/);
   assert.match(source, /classification === "one-off"\) return "New failure streak"/);
   assert.doesNotMatch(source, /same error/);

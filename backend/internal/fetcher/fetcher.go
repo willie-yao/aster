@@ -471,10 +471,12 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 		}
 		jobResultMap[r.job.JobID] = r.runs
 	}
-	flakinessReport := aggregator.ComputeFlakinessReport(jobResultMap, jobs, now)
-	baseFlakiness := baseBranchFlakiness(jobResultMap, jobs, flakinessReport, now)
-	log.Printf("Flakiness report: %d most flaky, %d persistent, %d recently broken",
-		len(flakinessReport.MostFlaky), len(flakinessReport.PersistentFailures), len(flakinessReport.RecentlyBroken))
+	aggregatorSettings := attentionSettings(p.cfg)
+	flakinessReport := aggregator.ComputeFlakinessReport(jobResultMap, jobs, now, aggregatorSettings)
+	baseFlakiness := baseBranchFlakiness(jobResultMap, jobs, flakinessReport, now, aggregatorSettings)
+	log.Printf("Flakiness report: %d most flaky, %d persistent, %d recently broken, %d low pass rate",
+		len(flakinessReport.MostFlaky), len(flakinessReport.PersistentFailures),
+		len(flakinessReport.RecentlyBroken), len(flakinessReport.LowPassRate))
 
 	searchIndex := aggregator.BuildSearchIndex(jobResultMap, jobs, now)
 	log.Printf("Search index: %d entries", len(searchIndex.Entries))
@@ -482,7 +484,7 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 
 	if p.enableAI {
 		p.startProgressPhase(fetchprogress.PhaseAnalysisPlanning)
-		if err := p.analyzeFailuresWithAI(analysisCtx, details, flakinessReport); err != nil {
+		if err := p.analyzeFailuresWithAI(analysisCtx, details); err != nil {
 			return nil, err
 		}
 		p.completeProgressPhase()
@@ -548,7 +550,7 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 // only. The published report ranks and truncates across every published job, so
 // presubmits can displace a base-branch flake from it. Attribution needs history
 // that does not move when the dashboard starts publishing presubmits.
-func baseBranchFlakiness(jobResults map[string][]models.BuildResult, jobs []models.ProwJob, published models.FlakinessReport, now time.Time) models.FlakinessReport {
+func baseBranchFlakiness(jobResults map[string][]models.BuildResult, jobs []models.ProwJob, published models.FlakinessReport, now time.Time, settings aggregator.Settings) models.FlakinessReport {
 	baseJobs := make([]models.ProwJob, 0, len(jobs))
 	for _, job := range jobs {
 		if job.JobType != models.JobTypePresubmit {
@@ -564,7 +566,24 @@ func baseBranchFlakiness(jobResults map[string][]models.BuildResult, jobs []mode
 			baseResults[job.JobID] = runs
 		}
 	}
-	return aggregator.ComputeFlakinessReport(baseResults, baseJobs, now)
+	return aggregator.ComputeFlakinessReport(baseResults, baseJobs, now, settings)
+}
+
+// attentionSettings maps the project's attention config onto the aggregator's
+// neutral settings. Validate guarantees a configured rule carries a threshold,
+// so a nil one here means the consumer left the rule off.
+func attentionSettings(cfg *project.Config) aggregator.Settings {
+	attention := cfg.EffectiveAttention()
+	settings := aggregator.Settings{PersistentAfter: attention.PersistentAfter}
+	if rule := attention.LowPassRate; rule != nil && rule.Threshold != nil {
+		settings.LowPassRate = &aggregator.LowPassRateRule{
+			Threshold:  *rule.Threshold,
+			MinRuns:    rule.MinRuns,
+			RecentRuns: rule.RecentRuns,
+			MaxItems:   rule.MaxItems,
+		}
+	}
+	return settings
 }
 
 type aiRefreshFileSnapshot struct {

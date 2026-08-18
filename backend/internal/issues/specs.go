@@ -37,10 +37,12 @@ func BuildSpecs(in BuildInput) []IssueSpec {
 
 	if hasTrigger(in.Triggers, project.IssueTriggerPersistent) {
 		ai := buildAILookup(in.JobDetails)
+		// PersistentFailures is already filtered by the project's configured
+		// consecutive-failure threshold. Re-checking a literal here would drop
+		// a still-failing test from the active key set for a consumer that
+		// lowers attention.persistent_after, which recovery reconciliation
+		// would then read as recovered and close.
 		for _, tf := range in.Report.PersistentFailures {
-			if tf.ConsecutiveFailures < 3 {
-				continue
-			}
 			summary, rootCause := ai[aiKey(tf.JobID, tf.TestName)].Summary, ai[aiKey(tf.JobID, tf.TestName)].RootCause
 			specs = append(specs, persistentSpec(tf, summary, rootCause, site, in.Labels))
 		}

@@ -194,11 +194,21 @@ export interface BuildFailureSummary {
   job_detail_url: string;
 }
 
+export interface LowPassRateEntry extends TestFlakiness {
+  // Number of runs the pass rate was measured over. May be narrower than the
+  // window behind fail_rate when attention.low_pass_rate.recent_runs is set.
+  window_runs: number;
+  pass_rate: number;
+}
+
 export interface FlakinessReport {
   generated_at: string;
   most_flaky: TestFlakiness[];
   persistent_failures: TestFlakiness[];
   recently_broken: TestFlakiness[];
+  // Tests selected by the optional attention.low_pass_rate rule. Empty when
+  // the rule is not configured. Selection does not change classification.
+  low_pass_rate?: LowPassRateEntry[];
   build_failures: BuildFailureSummary[];
   recurring_patterns?: PatternAnalysis[];
   pattern_refresh?: PatternRefreshReport;

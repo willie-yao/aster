@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"net/mail"
 	"os"
@@ -42,6 +43,7 @@ type Config struct {
 	CategoryDisplayOrder []string       `yaml:"category_display_order,omitempty" json:"category_display_order,omitempty"`
 	AI                   *AI            `yaml:"ai,omitempty"         json:"ai,omitempty"`
 	Issues               *Issues        `yaml:"issues,omitempty"     json:"issues,omitempty"`
+	Attention            *Attention     `yaml:"attention,omitempty"  json:"attention,omitempty"`
 	Notifications        *Notifications `yaml:"notifications,omitempty" json:"-"`
 
 	// ShortNamePrefix is a display-only hint derived at fetch time.
@@ -349,6 +351,67 @@ func (i Issues) HasTrigger(name string) bool {
 		}
 	}
 	return false
+}
+
+const (
+	defaultPersistentAfter     = 3
+	defaultLowPassRateMinRuns  = 5
+	defaultLowPassRateMaxItems = 50
+)
+
+// Attention tunes which failing tests the dashboard surfaces for review.
+type Attention struct {
+	// PersistentAfter is the consecutive failure count required for a
+	// `persistent` classification. Defaults to 3. Raising or lowering it moves
+	// the published classification, the flakiness report sections, the pull
+	// request attribution baseline, and notification eligibility.
+	PersistentAfter int `yaml:"persistent_after,omitempty" json:"persistent_after,omitempty"`
+	// LowPassRate optionally surfaces tests by pass rate instead of by
+	// classification. Omitting it disables the rule entirely.
+	LowPassRate *LowPassRate `yaml:"low_pass_rate,omitempty" json:"low_pass_rate,omitempty"`
+}
+
+// LowPassRate selects tests for the attention list by pass rate. It is a
+// selection rule only: it never changes a test's published classification.
+type LowPassRate struct {
+	// Threshold is the exclusive pass-rate cutoff in [0, 1]. A test surfaces
+	// when its pass rate is strictly below this value, so 1 surfaces every test
+	// that failed at least once and 0 surfaces none. Required.
+	Threshold *float64 `yaml:"threshold" json:"threshold"`
+	// MinRuns is the number of non-skipped runs a test needs before the rule
+	// applies, so a single failure out of two runs is not treated as signal.
+	// Defaults to 5.
+	MinRuns int `yaml:"min_runs,omitempty" json:"min_runs,omitempty"`
+	// RecentRuns limits the pass rate to the newest N runs of the test.
+	// Unset measures over every run in the fetch window.
+	RecentRuns int `yaml:"recent_runs,omitempty" json:"recent_runs,omitempty"`
+	// MaxItems caps the published section. Defaults to 50.
+	MaxItems int `yaml:"max_items,omitempty" json:"max_items,omitempty"`
+}
+
+// EffectiveAttention resolves the attention config with defaults applied. Safe
+// on a nil receiver.
+func (c *Config) EffectiveAttention() Attention {
+	out := Attention{}
+	if c != nil && c.Attention != nil {
+		out = *c.Attention
+	}
+	if out.PersistentAfter <= 0 {
+		out.PersistentAfter = defaultPersistentAfter
+	}
+	if out.LowPassRate == nil {
+		return out
+	}
+	// Copy before defaulting so the caller's config is not mutated.
+	rule := *out.LowPassRate
+	if rule.MinRuns <= 0 {
+		rule.MinRuns = defaultLowPassRateMinRuns
+	}
+	if rule.MaxItems <= 0 {
+		rule.MaxItems = defaultLowPassRateMaxItems
+	}
+	out.LowPassRate = &rule
+	return out
 }
 
 const (
@@ -1281,6 +1344,29 @@ func (c *Config) Validate() error {
 		}
 		if c.PullRequests.BuildsPerJob < 0 {
 			missing = append(missing, "pull_requests.builds_per_job must not be negative")
+		}
+	}
+
+	if c.Attention != nil {
+		if c.Attention.PersistentAfter < 0 {
+			missing = append(missing, "attention.persistent_after must not be negative")
+		}
+		if rule := c.Attention.LowPassRate; rule != nil {
+			switch {
+			case rule.Threshold == nil:
+				missing = append(missing, "attention.low_pass_rate.threshold is required")
+			case math.IsNaN(*rule.Threshold) || *rule.Threshold < 0 || *rule.Threshold > 1:
+				missing = append(missing, "attention.low_pass_rate.threshold must be between 0 and 1")
+			}
+			if rule.MinRuns < 0 {
+				missing = append(missing, "attention.low_pass_rate.min_runs must not be negative")
+			}
+			if rule.RecentRuns < 0 {
+				missing = append(missing, "attention.low_pass_rate.recent_runs must not be negative")
+			}
+			if rule.MaxItems < 0 {
+				missing = append(missing, "attention.low_pass_rate.max_items must not be negative")
+			}
 		}
 	}
 

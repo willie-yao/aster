@@ -219,11 +219,12 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 	var stats Stats
 	var sendErrs []error
 
+	// PersistentFailures is already filtered by the project's configured
+	// consecutive-failure threshold, so re-checking a literal here would drop
+	// notifications for a consumer that lowers attention.persistent_after.
 	current := make(map[string]models.TestFlakiness)
 	for _, tf := range report.PersistentFailures {
-		if tf.ConsecutiveFailures >= 3 {
-			current[notificationKey(tf.JobID, tf.TestName)] = tf
-		}
+		current[notificationKey(tf.JobID, tf.TestName)] = tf
 	}
 
 	aiLookup := buildAILookup(jobDetails)

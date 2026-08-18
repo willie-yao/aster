@@ -541,6 +541,17 @@ type TestFlakiness struct {
 	DurationHistory     []DurationPoint       `json:"duration_history,omitempty"`
 }
 
+// LowPassRateEntry is a test selected by the configured pass-rate rule. It
+// carries its own window because attention.low_pass_rate.recent_runs can
+// narrow the measurement below the window the embedded FailRate covers.
+type LowPassRateEntry struct {
+	TestFlakiness
+	// WindowRuns is the number of runs the pass rate was measured over.
+	WindowRuns int `json:"window_runs"`
+	// PassRate is the fraction of passing runs in that window.
+	PassRate float64 `json:"pass_rate"`
+}
+
 // TestFailureInfo captures the most recent failure details.
 type TestFailureInfo struct {
 	BuildID        string `json:"build_id"`
@@ -857,11 +868,15 @@ type SharedFailureIndex struct {
 
 // FlakinessReport is the top-level structure for flakiness.json.
 type FlakinessReport struct {
-	GeneratedAt        string                `json:"generated_at"`
-	MostFlaky          []TestFlakiness       `json:"most_flaky"`
-	PersistentFailures []TestFlakiness       `json:"persistent_failures"`
-	RecentlyBroken     []TestFlakiness       `json:"recently_broken"`
-	BuildFailures      []BuildFailureSummary `json:"build_failures"`
+	GeneratedAt        string          `json:"generated_at"`
+	MostFlaky          []TestFlakiness `json:"most_flaky"`
+	PersistentFailures []TestFlakiness `json:"persistent_failures"`
+	RecentlyBroken     []TestFlakiness `json:"recently_broken"`
+	// LowPassRate holds tests selected by the optional
+	// attention.low_pass_rate rule. It is always present and empty when the
+	// rule is not configured. Selection does not change classification.
+	LowPassRate   []LowPassRateEntry    `json:"low_pass_rate"`
+	BuildFailures []BuildFailureSummary `json:"build_failures"`
 	// RecurringPatterns holds systemic job-level verdicts across all jobs.
 	// The home page uses these without loading every job file.
 	RecurringPatterns []PatternAnalysis    `json:"recurring_patterns,omitempty"`

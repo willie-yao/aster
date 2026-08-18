@@ -24,6 +24,7 @@ import { Link as RouterLink, useParams, useSearchParams } from "react-router-dom
 import { useJobDetail } from "../hooks/useData";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useManifest } from "../hooks/useManifest";
+import { persistentAfter } from "../lib/attention";
 import { jobPath, jobRunPath } from "../lib/routes";
 import {
   formatDuration,
@@ -181,7 +182,7 @@ export function TestDetailPage() {
   const failedOccurrences = presentOccurrences.filter(
     (occurrence) => occurrence.testCase?.status === "failed",
   );
-  const historySummary = summarizeTestHistory(occurrences);
+  const historySummary = summarizeTestHistory(occurrences, persistentAfter(manifest));
   const classification = historySummary.classification;
 
   const failureGroups = useMemo<FailureGroup[]>(() => {

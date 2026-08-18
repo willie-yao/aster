@@ -26,6 +26,6 @@ func BenchmarkComputeFlakinessReport(b *testing.B) {
 	jobs := []models.ProwJob{{JobID: "job", Name: "job"}}
 	b.ResetTimer()
 	for range b.N {
-		ComputeFlakinessReport(results, jobs, time.Now())
+		ComputeFlakinessReport(results, jobs, time.Now(), Settings{})
 	}
 }
