@@ -236,11 +236,13 @@ test("fix routing reads as an action and names the test it opens", () => {
   assert.match(routing, /in build \{target\.buildID\}/);
   assert.doesNotMatch(routing, /\{target\.testName\} in build \{target\.buildID\}\s*<\/Typography>/);
 
-  // A long test name truncates inline, and the full value stays reachable.
+  // A long test name truncates inline, and the full value stays reachable on
+  // hover and on keyboard focus rather than through a hover-only native title.
   assert.match(routing, /textOverflow: "ellipsis"/);
   assert.match(routing, /const subject = `Open \$\{target\.testName\} in build \$\{target\.buildID\} for Fix investigation`/);
-  assert.match(routing, /title=\{subject\}/);
+  assert.match(routing, /<Tooltip title=\{subject\}>/);
   assert.match(routing, /aria-label=\{subject\}/);
+  assert.doesNotMatch(routing, /title=\{subject\}\s*\n\s*aria-label/);
 });
 
 test("the pattern-level panel is a fallback for causes with no eligible test", () => {

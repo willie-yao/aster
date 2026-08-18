@@ -1,5 +1,6 @@
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { AutoFixHigh } from "@mui/icons-material";
 import { Link as RouterLink } from "react-router-dom";
@@ -28,45 +29,46 @@ export function CausalGroupFixRouting({
     );
   }
 
-  // The full subject also backs the title, so truncating the test name inline
-  // never hides which test the action opens.
+  // The visible test name truncates when it is long, so the full subject stays
+  // reachable through a tooltip that opens on hover and on keyboard focus.
   const subject = `Open ${target.testName} in build ${target.buildID} for Fix investigation`;
 
   return (
-    <Button
-      component={RouterLink}
-      to={testRunPath(jobID, target.testName, target.buildID)}
-      variant="outlined"
-      size="small"
-      startIcon={<AutoFixHigh aria-hidden />}
-      title={subject}
-      aria-label={subject}
-      sx={{
-        mt: 1.5,
-        minHeight: { xs: 44, sm: 32 },
-        maxWidth: "100%",
-        width: { xs: "100%", sm: "auto" },
-        justifyContent: "flex-start",
-        textAlign: "left",
-        textTransform: "none",
-        ...overviewTypography.secondaryBody,
-        fontWeight: 650,
-        "&:focus-visible": {
-          outline: "2px solid",
-          outlineColor: "primary.main",
-          outlineOffset: 2,
-        },
-      }}
-    >
-      <Box
-        component="span"
-        sx={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+    <Tooltip title={subject}>
+      <Button
+        component={RouterLink}
+        to={testRunPath(jobID, target.testName, target.buildID)}
+        variant="outlined"
+        size="small"
+        startIcon={<AutoFixHigh aria-hidden />}
+        aria-label={subject}
+        sx={{
+          mt: 1.5,
+          minHeight: { xs: 44, sm: 32 },
+          maxWidth: "100%",
+          width: { xs: "100%", sm: "auto" },
+          justifyContent: "flex-start",
+          textAlign: "left",
+          textTransform: "none",
+          ...overviewTypography.secondaryBody,
+          fontWeight: 650,
+          "&:focus-visible": {
+            outline: "2px solid",
+            outlineColor: "primary.main",
+            outlineOffset: 2,
+          },
+        }}
       >
-        Open {target.testName}
-      </Box>
-      <Box component="span" sx={{ flexShrink: 0, pl: 0.5 }}>
-        in build {target.buildID}
-      </Box>
-    </Button>
+        <Box
+          component="span"
+          sx={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+        >
+          Open {target.testName}
+        </Box>
+        <Box component="span" sx={{ flexShrink: 0, pl: 0.5 }}>
+          in build {target.buildID}
+        </Box>
+      </Button>
+    </Tooltip>
   );
 }

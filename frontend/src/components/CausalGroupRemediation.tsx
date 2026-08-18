@@ -188,14 +188,14 @@ export function CausalGroupRemediation({
             </Button>
             <Chip size="small" color="warning" variant="outlined" label="Experimental" />
           </Stack>
-          <Typography color="text.secondary" sx={{ mt: 0.5 }}>Generates a review preview only. No GitHub PR will be created.</Typography>
+          <Typography sx={{ mt: 0.5, color: "text.secondary" }}>Generates a review preview only. No GitHub PR will be created.</Typography>
         </Box>
       )}
       {fixPreview && (
         <Box sx={{ mt: 1, border: "1px solid", borderColor: "divider", borderRadius: 1, p: 1.5 }}>
           <Typography sx={{ fontWeight: 700 }}>{fixPreview.summary}</Typography>
-          <Typography color="text.secondary">Base: {fixPreview.base_revision}</Typography>
-          <Typography color="text.secondary">Changed files: {fixPreview.changed_files.join(", ")}</Typography>
+          <Typography sx={{ color: "text.secondary" }}>Base: {fixPreview.base_revision}</Typography>
+          <Typography sx={{ color: "text.secondary" }}>Changed files: {fixPreview.changed_files.join(", ")}</Typography>
           <Box component="pre" sx={{ overflowX: "auto", whiteSpace: "pre", fontSize: 12, mt: 1 }}>{fixPreview.diff}</Box>
         </Box>
       )}
@@ -215,7 +215,7 @@ export function CausalGroupRemediation({
             <Typography sx={overviewTypography.data}>Investigation details</Typography>
           </AccordionSummary>
           <AccordionDetails sx={{ pt: 0 }}>
-            <Typography color="text.secondary" sx={{ whiteSpace: "pre-line", overflowWrap: "anywhere" }}>
+            <Typography sx={{ color: "text.secondary", whiteSpace: "pre-line", overflowWrap: "anywhere" }}>
               {details}
             </Typography>
           </AccordionDetails>
