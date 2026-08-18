@@ -81,6 +81,13 @@ export function PatternBanner({
     fixCapable ? causalGroupFixTarget(group, runs) : null,
   );
   const hasCausalFixTarget = causalFixTargets.some((target) => target !== null);
+  // Two causes can route to the same test in different builds. The build is
+  // shown only there, so the common case stays short and every action stays
+  // distinguishable.
+  const fixTargetTestCounts = causalFixTargets.reduce((counts, target) => {
+    if (target) counts.set(target.testName, (counts.get(target.testName) ?? 0) + 1);
+    return counts;
+  }, new Map<string, number>());
   const remediationByHash = new Map(
     (pattern.remediation_investigations ?? []).map((summary) => [summary.causal_group_hash, summary]),
   );
@@ -347,7 +354,13 @@ export function PatternBanner({
                       patternHash={pattern.content_hash}
                     />
                   )}
-                  {fixCapable && <CausalGroupFixRouting jobID={jobID} target={causalFixTargets[index]} />}
+                  {fixCapable && (
+                    <CausalGroupFixRouting
+                      jobID={jobID}
+                      target={causalFixTargets[index]}
+                      showBuild={(fixTargetTestCounts.get(causalFixTargets[index]?.testName ?? "") ?? 0) > 1}
+                    />
+                  )}
                 </Box>
               </Box>
             ))}

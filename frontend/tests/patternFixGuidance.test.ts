@@ -214,7 +214,7 @@ test("fix routing sits with each cause and stays behind the chat capabilities", 
   const routing = source("src/components/CausalGroupFixRouting.tsx");
 
   assert.match(banner, /const fixCapable = Boolean\(features\.analysis_chat && features\.junit_chat_fix\)/);
-  assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupFixRouting jobID=\{jobID\} target=\{causalFixTargets\[index\]\} \/>/);
+  assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupFixRouting[\s\S]*target=\{causalFixTargets\[index\]\}/);
   assert.match(routing, /testRunPath\(jobID, target\.testName, target\.buildID\)/);
   assert.match(routing, /No failed JUnit test in these builds meets the Fix investigation requirements/);
 });
@@ -231,18 +231,37 @@ test("fix routing reads as an action and names the test it opens", () => {
   assert.doesNotMatch(routing, /bgcolor: "action\.selected"/);
 
   // The subject is in the visible label, not in a caption below it that reads
-  // as if it belonged to the next cause.
-  assert.match(routing, /Open \{target\.testName\}/);
-  assert.match(routing, /in build \{target\.buildID\}/);
+  // as if it belonged to the next cause, and it uses the same humanized title
+  // the test ledger shows rather than the raw JUnit name.
+  assert.match(routing, /parseTestDisplayName\(target\.testName\)\.displayName/);
+  assert.match(routing, /Fix: \{testName\}/);
   assert.doesNotMatch(routing, /\{target\.testName\} in build \{target\.buildID\}\s*<\/Typography>/);
 
   // A long test name truncates inline, and the full value stays reachable on
   // hover and on keyboard focus rather than through a hover-only native title.
   assert.match(routing, /textOverflow: "ellipsis"/);
-  assert.match(routing, /const subject = `Open \$\{target\.testName\} in build \$\{target\.buildID\} for Fix investigation`/);
+  assert.match(routing, /const subject = `Fix: \$\{testName\} in build \$\{target\.buildID\}`/);
   assert.match(routing, /<Tooltip title=\{subject\}>/);
   assert.match(routing, /aria-label=\{subject\}/);
   assert.doesNotMatch(routing, /title=\{subject\}\s*\n\s*aria-label/);
+});
+
+test("the build only joins the label where it is needed to tell two actions apart", () => {
+  const banner = source("src/components/PatternBanner.tsx");
+  const routing = source("src/components/CausalGroupFixRouting.tsx");
+
+  // Two causes can route to the same test in different builds. Paying 19 digits
+  // on every action to cover that case is what made the label unreadable.
+  assert.match(routing, /showBuild = false/);
+  assert.match(routing, /\{showBuild && \(/);
+  assert.match(banner, /const fixTargetTestCounts = causalFixTargets\.reduce/);
+  assert.match(banner, /counts\.set\(target\.testName, \(counts\.get\(target\.testName\) \?\? 0\) \+ 1\)/);
+  assert.match(banner, /showBuild=\{\(fixTargetTestCounts\.get\(causalFixTargets\[index\]\?\.testName \?\? ""\) \?\? 0\) > 1\}/);
+
+  // The accessible name keeps the build unconditionally, so it stays unique,
+  // and it still begins with the visible label (WCAG 2.5.3).
+  assert.match(routing, /aria-label=\{subject\}/);
+  assert.ok(routing.indexOf("const subject") < routing.indexOf("aria-label={subject}"));
 });
 
 test("the pattern-level panel is a fallback for causes with no eligible test", () => {

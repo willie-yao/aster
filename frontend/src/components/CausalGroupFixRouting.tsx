@@ -4,6 +4,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { AutoFixHigh } from "@mui/icons-material";
 import { Link as RouterLink } from "react-router-dom";
+import { parseTestDisplayName } from "../lib/detailTitles";
 import type { CausalGroupFixTarget } from "../lib/patternFixGuidance";
 import { testRunPath } from "../lib/routes";
 import { overviewTypography } from "../theme/overview";
@@ -15,9 +16,13 @@ import { overviewTypography } from "../theme/overview";
 export function CausalGroupFixRouting({
   jobID,
   target,
+  showBuild = false,
 }: {
   jobID?: string;
   target: CausalGroupFixTarget | null;
+  // Set when another cause on this briefing routes to the same test, which is
+  // the only case where the build is needed to tell two actions apart.
+  showBuild?: boolean;
 }) {
   if (!jobID) return null;
 
@@ -29,9 +34,12 @@ export function CausalGroupFixRouting({
     );
   }
 
-  // The visible test name truncates when it is long, so the full subject stays
-  // reachable through a tooltip that opens on hover and on keyboard focus.
-  const subject = `Open ${target.testName} in build ${target.buildID} for Fix investigation`;
+  // The same humanized title the test ledger uses, so the action names the test
+  // the way the rest of the page does instead of repeating the raw JUnit name.
+  const testName = parseTestDisplayName(target.testName).displayName;
+  // The accessible name always carries the build and always begins with the
+  // visible label, so it stays unique even where the label omits the build.
+  const subject = `Fix: ${testName} in build ${target.buildID}`;
 
   return (
     <Tooltip title={subject}>
@@ -63,11 +71,16 @@ export function CausalGroupFixRouting({
           component="span"
           sx={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
         >
-          Open {target.testName}
+          Fix: {testName}
         </Box>
-        <Box component="span" sx={{ flexShrink: 0, pl: 0.5 }}>
-          in build {target.buildID}
-        </Box>
+        {showBuild && (
+          // A non-breaking space keeps the rendered text and the DOM text in
+          // agreement, so the visible label really is a prefix of the
+          // accessible name rather than only looking like one.
+          <Box component="span" sx={{ flexShrink: 0 }}>
+            {`\u00a0in build ${target.buildID}`}
+          </Box>
+        )}
       </Button>
     </Tooltip>
   );
