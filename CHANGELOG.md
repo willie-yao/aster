@@ -19,6 +19,8 @@ how to pin a consumer to a reviewed version.
 
 ## [Unreleased]
 
+## [0.9.0-rc.5] - 2026-08-18
+
 ### Removed
 
 - **Unattended issue filing and fix-PR generation.** Nothing creates a GitHub
@@ -81,8 +83,63 @@ how to pin a consumer to a reviewed version.
   read anonymously at 60 requests per hour until triage silently stopped
   updating. `ai.githubReadToken` and `ai.githubReadTokenSecretName` now apply
   independently of `ai.enabled`. Renders with `ai.enabled: true` are unchanged.
+- **Pull request attribution no longer depends on `source.include_presubmits`.**
+  Attribution reused the flakiness report the same pass produced, which included
+  presubmit history whenever that toggle was on. A `known_flake` verdict could
+  therefore rest on other pull requests' builds rather than on the base branch,
+  so the same failure was attributed differently depending on an unrelated
+  dashboard setting. Flakiness for attribution is now recomputed over base-branch
+  jobs only, and a verdict is identical either way. The toggle still enlarges
+  each fetch and any enabled analysis, so `aster onboard doctor` now warns when
+  it is on and reports when the optional triage view is unconfigured.
+- **A lone peer pull request no longer preempts base-branch evidence.** A
+  `widespread` verdict needed just one other open pull request failing the same
+  job and test, so two pull requests citing each other were mutually excused and
+  the failure dropped out of escalation. It now requires at least two other open
+  pull requests, and cross-pull-request matching keys on the base branch as well
+  as job and test name, because one job often runs on several release branches. A
+  single peer is now recorded as evidence on whichever verdict does apply, except
+  under `pre_existing`, which is decided before peers are consulted.
+- **Doctor validates the OAuth callback for every admin-gated server feature.**
+  `aster kubernetes doctor` checked `server.actions.oauth.redirectUrl` only when
+  `server.actions.enabled` was set with an explicit `mode: oauth`. A chat,
+  remediation, or escalation deployment therefore passed with a callback that
+  would fail sign-in at runtime, as did any deployment leaving `mode` at the
+  chart's `oauth` default. The origin security check in `aster onboard doctor`
+  likewise ignored remediation and escalation. Both now cover every feature that
+  signs an admin in.
+- **The escalation panel no longer refetches without bound.** Its effect depended
+  on an object rebuilt on every render, so a pull request failure page polled
+  continuously instead of on an interval. It is now keyed on a stable subject.
 
 ### Added
+
+- **Shared pull request failures are published and can be diagnosed.** When the
+  same test failed across several open pull requests, triage detected the
+  correlation and then offered nowhere to investigate it: the grouping was
+  recomputed each pass and discarded, and a `widespread` verdict pointed at a
+  peer pull request whose page pointed back. Each pass now writes
+  `pull-request-failures.json`, keyed by the base branch, job name, and test name
+  attribution already correlates on, with a stable `id` that survives pull
+  requests joining and leaving. A failure is published as shared at two or more
+  open pull requests, deliberately lower than the three a `widespread` verdict
+  needs, because this view answers what is hitting several pull requests rather
+  than whether one pull request is at fault. Clustering costs no model calls and
+  ships on both deploy paths, so GitHub Pages gets the aggregate view with no
+  server.
+
+  On the Kubernetes server, one on-demand analysis can be run per shared failure
+  under `POST /api/shared-failures/{id}/escalation`, reported by a new
+  `shared_failure_escalation` capability. It is offered only when no member can
+  already be analyzed from its own pull request, so there is never a second, more
+  expensive path to the same answer, and both escalation kinds share one analysis
+  slot. It runs under a new `sharedfailure` prompt module with no diff and its own
+  cache namespace, and does not claim the affected changes are independent,
+  because correlating on base branch, job, and test cannot establish that. The
+  existing `server.pullRequestEscalation.enabled` value turns it on; there is no
+  separate switch. A shared failure analysis is served only while it still
+  describes the build a new request would read, so a superseded result is replaced
+  rather than kept as history.
 
 - **Pull request triage reports a missing GitHub read token.** The fetcher logs
   one startup warning when triage is enabled with neither `GITHUB_READ_TOKEN`
@@ -91,6 +148,15 @@ how to pin a consumer to a reviewed version.
   per hour ceiling that one triage pass can exhaust. The credential is now
   documented in the pull request triage configuration reference and in
   troubleshooting.
+- **`server.pullRequestEscalation.enabled` Helm value.** On-demand analysis of a
+  pull request failure deterministic triage could not explain had no chart value,
+  so a Kubernetes deployment could not turn it on without hand-editing the server
+  environment. It defaults to `false`, requires `ai.enabled` and
+  `pull_requests.enabled`, and enables no GitHub writes and no `BOT_TOKEN`.
+  `PULL_REQUEST_ESCALATION_ENABLED` is now reserved by the chart. `aster onboard
+  doctor` gains a `Kubernetes pull request escalation` check for the
+  preconditions the chart cannot see, including whether a GitHub read token
+  actually reaches the server rather than leaving it on anonymous reads.
 
 ### Changed
 
