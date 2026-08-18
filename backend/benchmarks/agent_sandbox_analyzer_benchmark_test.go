@@ -310,8 +310,15 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	EvidencePhaseCompleted       bool                                   `json:"evidence_phase_completed"`
 	EvidencePhaseSteps           int                                    `json:"evidence_phase_steps"`
 	EvidencePhaseRequests        int                                    `json:"evidence_phase_requests"`
+	EvidenceStepBudget           int                                    `json:"evidence_phase_allocated_steps,omitempty"`
+	EvidenceExhausted            bool                                   `json:"evidence_phase_bounded_exhaustion"`
+	EvidenceExhaustedSteps       int                                    `json:"evidence_phase_exhaustion_steps,omitempty"`
+	EvidenceExhaustedRequests    int                                    `json:"evidence_phase_exhaustion_requests,omitempty"`
+	EvidenceExhaustionClass      string                                 `json:"evidence_phase_exhaustion_classification,omitempty"`
 	ArtifactEvidenceToolCalls    int                                    `json:"artifact_evidence_tool_calls"`
 	SourceEvidenceToolCalls      int                                    `json:"source_evidence_tool_calls"`
+	EvidenceReadCalls            int                                    `json:"successful_evidence_read_calls"`
+	DuplicateReadCalls           int                                    `json:"duplicate_evidence_read_calls"`
 	FinalizationPhaseCompleted   bool                                   `json:"finalization_phase_completed"`
 	FinalizationPhaseSteps       int                                    `json:"finalization_phase_steps"`
 	FinalizationPhaseRequests    int                                    `json:"finalization_phase_requests"`
@@ -727,8 +734,15 @@ func agentSandboxAnalyzerRecordForResult(
 	record.EvidencePhaseCompleted = telemetry.EvidencePhaseCompleted
 	record.EvidencePhaseSteps = telemetry.EvidencePhaseSteps
 	record.EvidencePhaseRequests = telemetry.EvidencePhaseRequests
+	record.EvidenceStepBudget = telemetry.EvidenceStepBudget
+	record.EvidenceExhausted = telemetry.EvidenceExhausted
+	record.EvidenceExhaustedSteps = telemetry.EvidenceExhaustedSteps
+	record.EvidenceExhaustedRequests = telemetry.EvidenceExhaustedRequests
+	record.EvidenceExhaustionClass = telemetry.EvidenceExhaustionClass
 	record.ArtifactEvidenceToolCalls = telemetry.ArtifactEvidenceToolCalls
 	record.SourceEvidenceToolCalls = telemetry.SourceEvidenceToolCalls
+	record.EvidenceReadCalls = telemetry.EvidenceReadCalls
+	record.DuplicateReadCalls = telemetry.DuplicateReadCalls
 	record.FinalizationPhaseCompleted = telemetry.FinalizationPhaseCompleted
 	record.FinalizationPhaseSteps = telemetry.FinalizationPhaseSteps
 	record.FinalizationPhaseRequests = telemetry.FinalizationPhaseRequests

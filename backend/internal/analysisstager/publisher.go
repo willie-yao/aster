@@ -354,7 +354,7 @@ func PublishPreparedSnapshot(ctx context.Context, inputRoot string, manifest age
 	if err != nil {
 		return "", err
 	}
-	if _, _, err := copyTree(ctx, artifactRoot, filepath.Join(pending, agentanalysis.WorkspaceArtifactsDir), len(manifest.Artifacts), 64<<20, 512<<20); err != nil {
+	if err := copyArtifactTree(ctx, artifactRoot, filepath.Join(pending, agentanalysis.WorkspaceArtifactsDir), manifest.Artifacts); err != nil {
 		return "", err
 	}
 	if err := agentanalysis.WriteWorkspaceArtifactManifest(pending, manifest.Artifacts); err != nil {

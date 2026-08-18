@@ -344,6 +344,60 @@ func providerMessageTextBytes(raw json.RawMessage) (int, error) {
 	return total, nil
 }
 
+func TestOpenCode1182BoundedEvidenceExhaustionCompatibility(t *testing.T) {
+	bin := os.Getenv("OPENCODE_1_18_2_BIN")
+	if bin == "" {
+		t.Skip("set OPENCODE_1_18_2_BIN to the exact OpenCode 1.18.2 executable")
+	}
+	workDir := t.TempDir()
+	for _, dir := range []string{"source", "artifacts", "result"} {
+		if err := os.Mkdir(filepath.Join(workDir, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifactPath := filepath.Join(workDir, "artifacts", "failure.log")
+	if err := os.WriteFile(artifactPath, []byte("synthetic failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		switch calls {
+		case 1:
+			writeSyntheticOpenAIStream(t, w, "read", map[string]any{"filePath": "artifacts/failure.log"})
+		case 2:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":{"message":"synthetic bounded exhaustion"}}`)
+		case 3:
+			var structured any
+			if err := json.Unmarshal(compatibilityAnalysisJSON(), &structured); err != nil {
+				t.Fatal(err)
+			}
+			writeSyntheticOpenAIStream(t, w, "StructuredOutput", structured)
+		default:
+			t.Fatalf("unexpected provider request %d", calls)
+		}
+	}))
+	defer gateway.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	defer cancel()
+	spec := OpenCodeSpec{
+		Bin: bin, WorkDir: workDir, HomeDir: t.TempDir(), TempDir: t.TempDir(),
+		Provider: testGatewayProvider(gateway.URL+"/v1/chat/completions", "synthetic-model"),
+		Prompt:   "Read artifacts/failure.log and investigate the failure.", MaxSteps: 4,
+		ModelContextTokens: 200000, ModelOutputTokens: 8192,
+	}
+	result, err := defaultRunOpenCode(ctx, spec)
+	if err != nil {
+		t.Fatalf("err=%v result=%+v", err, result)
+	}
+	telemetry := result.Telemetry
+	if calls != 3 || len(result.Structured) == 0 || !telemetry.EvidencePhaseCompleted || !telemetry.EvidenceExhausted || telemetry.EvidenceStepBudget != 2 || telemetry.EvidenceExhaustionClass != "api_bad_request" || telemetry.EvidencePhaseSteps != 1 || telemetry.EvidencePhaseRequests != 2 || !telemetry.FinalizationPhaseCompleted || telemetry.FinalizationPhaseSteps != 1 || telemetry.FinalizationPhaseRequests != 1 || telemetry.ProviderRequests != 3 || telemetry.StepsUsed != 2 || telemetry.StructuredOutputToolCalls != 1 {
+		t.Fatalf("calls=%d result=%+v", calls, result)
+	}
+}
+
 func TestOpenCode1182TwoPhaseCompatibility(t *testing.T) {
 	bin := os.Getenv("OPENCODE_1_18_2_BIN")
 	if bin == "" {

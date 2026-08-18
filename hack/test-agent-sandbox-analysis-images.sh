@@ -105,7 +105,7 @@ docker run --rm --network none \
   -e OPENCODE_1_18_2_BIN=/usr/local/bin/opencode \
   -v "$tmpdir/analysisexecutor.test:/tmp/analysisexecutor.test:ro" \
   "$executor" \
-  -test.run '^TestOpenCode1182InstructionPolicyCompatibility$' -test.count=1 -test.v
+  -test.run '^TestOpenCode1182(InstructionPolicy|BoundedEvidenceExhaustion)Compatibility$' -test.count=1 -test.v
 
 if [[ -n "$contract_output" ]]; then
   [[ -n "$expected_commit" && -n "$expected_image_tag" ]] || { echo 'image contract requires expected commit and image tag' >&2; exit 1; }

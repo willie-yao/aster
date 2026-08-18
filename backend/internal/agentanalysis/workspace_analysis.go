@@ -170,8 +170,15 @@ type WorkspaceOpenCodeTelemetry struct {
 	EvidencePhaseCompleted         bool                               `json:"evidence_phase_completed,omitempty"`
 	EvidencePhaseSteps             int                                `json:"evidence_phase_steps,omitempty"`
 	EvidencePhaseRequests          int                                `json:"evidence_phase_requests,omitempty"`
+	EvidenceStepBudget             int                                `json:"evidence_phase_allocated_steps,omitempty"`
+	EvidenceExhausted              bool                               `json:"evidence_phase_bounded_exhaustion,omitempty"`
+	EvidenceExhaustedSteps         int                                `json:"evidence_phase_exhaustion_steps,omitempty"`
+	EvidenceExhaustedRequests      int                                `json:"evidence_phase_exhaustion_requests,omitempty"`
+	EvidenceExhaustionClass        string                             `json:"evidence_phase_exhaustion_classification,omitempty"`
 	ArtifactEvidenceToolCalls      int                                `json:"artifact_evidence_tool_calls,omitempty"`
 	SourceEvidenceToolCalls        int                                `json:"source_evidence_tool_calls,omitempty"`
+	EvidenceReadCalls              int                                `json:"successful_evidence_read_calls,omitempty"`
+	DuplicateReadCalls             int                                `json:"duplicate_evidence_read_calls,omitempty"`
 	SourceEvidenceStatus           string                             `json:"source_evidence_status,omitempty"`
 	SourceEvidenceCorrectiveTurn   bool                               `json:"source_evidence_corrective_turn,omitempty"`
 	SourceEvidenceCorrectionReason string                             `json:"source_evidence_correction_reason,omitempty"`
@@ -834,7 +841,7 @@ func validateWorkspaceOpenCodeTelemetry(telemetry WorkspaceOpenCodeTelemetry) er
 	if _, err := ai.NormalizeReasoningEffort(telemetry.ProviderReasoningEffort); err != nil {
 		return fmt.Errorf("workspace OpenCode provider reasoning effort is invalid")
 	}
-	if telemetry.EventCount < 0 || telemetry.ProviderRequests < 0 || telemetry.DeniedToolCount < 0 || telemetry.ToolFailureCount < 0 || telemetry.StepsUsed < 0 || telemetry.StructuredOutputRetries < 0 || telemetry.StructuredOutputErrors < 0 || telemetry.EvidencePhaseSteps < 0 || telemetry.EvidencePhaseRequests < 0 || telemetry.ArtifactEvidenceToolCalls < 0 || telemetry.SourceEvidenceToolCalls < 0 || telemetry.FinalizationPhaseSteps < 0 || telemetry.FinalizationPhaseRequests < 0 || telemetry.StructuredOutputToolCalls < 0 || !validWorkspaceFailureCode(telemetry.FailureCode) || !validWorkspaceSourceEvidenceStatus(telemetry.SourceEvidenceStatus) || !validWorkspaceSourceEvidenceCorrectionReason(telemetry.SourceEvidenceCorrectionReason) {
+	if telemetry.EventCount < 0 || telemetry.ProviderRequests < 0 || telemetry.DeniedToolCount < 0 || telemetry.ToolFailureCount < 0 || telemetry.StepsUsed < 0 || telemetry.StructuredOutputRetries < 0 || telemetry.StructuredOutputErrors < 0 || telemetry.EvidencePhaseSteps < 0 || telemetry.EvidencePhaseRequests < 0 || telemetry.EvidenceStepBudget < 0 || telemetry.EvidenceExhaustedSteps < 0 || telemetry.EvidenceExhaustedRequests < 0 || telemetry.ArtifactEvidenceToolCalls < 0 || telemetry.SourceEvidenceToolCalls < 0 || telemetry.EvidenceReadCalls < 0 || telemetry.DuplicateReadCalls < 0 || telemetry.DuplicateReadCalls > telemetry.EvidenceReadCalls || telemetry.FinalizationPhaseSteps < 0 || telemetry.FinalizationPhaseRequests < 0 || telemetry.StructuredOutputToolCalls < 0 || !validWorkspaceFailureCode(telemetry.FailureCode) || !validWorkspaceFailureCode(telemetry.EvidenceExhaustionClass) || !validWorkspaceSourceEvidenceStatus(telemetry.SourceEvidenceStatus) || !validWorkspaceSourceEvidenceCorrectionReason(telemetry.SourceEvidenceCorrectionReason) {
 		return fmt.Errorf("workspace OpenCode telemetry is invalid")
 	}
 	if telemetry.SourceEvidenceCorrectiveTurn != (telemetry.SourceEvidenceCorrectionReason != "") {
@@ -917,8 +924,15 @@ func validateWorkspaceOpenCodeTelemetry(telemetry WorkspaceOpenCodeTelemetry) er
 		if telemetry.EvidencePhaseSteps < 1 || telemetry.EvidencePhaseRequests < 1 || telemetry.ArtifactEvidenceToolCalls < 1 {
 			return fmt.Errorf("workspace OpenCode evidence phase telemetry is invalid")
 		}
-	} else if telemetry.EvidencePhaseSteps != 0 || telemetry.EvidencePhaseRequests != 0 || telemetry.ArtifactEvidenceToolCalls != 0 || telemetry.SourceEvidenceToolCalls != 0 {
+	} else if telemetry.EvidencePhaseSteps != 0 || telemetry.EvidencePhaseRequests != 0 || telemetry.EvidenceStepBudget != 0 || telemetry.EvidenceExhausted || telemetry.EvidenceExhaustedSteps != 0 || telemetry.EvidenceExhaustedRequests != 0 || telemetry.EvidenceExhaustionClass != "" || telemetry.ArtifactEvidenceToolCalls != 0 || telemetry.SourceEvidenceToolCalls != 0 {
 		return fmt.Errorf("workspace OpenCode evidence phase telemetry is inconsistent")
+	}
+	if telemetry.EvidenceExhausted {
+		if !telemetry.EvidencePhaseCompleted || telemetry.EvidenceStepBudget < 2 || telemetry.EvidenceExhaustedRequests != telemetry.EvidenceStepBudget || telemetry.EvidenceExhaustedSteps+1 != telemetry.EvidenceStepBudget || telemetry.EvidenceExhaustedSteps > telemetry.EvidencePhaseSteps || telemetry.EvidenceExhaustedRequests > telemetry.EvidencePhaseRequests || telemetry.EvidenceExhaustionClass != "api_bad_request" {
+			return fmt.Errorf("workspace OpenCode bounded evidence exhaustion telemetry is invalid")
+		}
+	} else if telemetry.EvidenceStepBudget != 0 || telemetry.EvidenceExhaustedSteps != 0 || telemetry.EvidenceExhaustedRequests != 0 || telemetry.EvidenceExhaustionClass != "" {
+		return fmt.Errorf("workspace OpenCode bounded evidence exhaustion telemetry is inconsistent")
 	}
 	if telemetry.FinalizationPhaseCompleted {
 		if !telemetry.EvidencePhaseCompleted || telemetry.FinalizationPhaseSteps < 1 || telemetry.FinalizationPhaseRequests < 1 {
@@ -930,7 +944,7 @@ func validateWorkspaceOpenCodeTelemetry(telemetry WorkspaceOpenCodeTelemetry) er
 	if telemetry.EvidencePhaseSteps+telemetry.FinalizationPhaseSteps > telemetry.StepsUsed || telemetry.EvidencePhaseRequests+telemetry.FinalizationPhaseRequests > telemetry.ProviderRequests {
 		return fmt.Errorf("workspace OpenCode phase telemetry exceeds totals")
 	}
-	if !telemetry.Available && (telemetry.EventCount != 0 || len(telemetry.Tools) != 0 || telemetry.DeniedToolCount != 0 || telemetry.ToolFailureCount != 0 || telemetry.StepsUsed != 0 || telemetry.StructuredOutputRetries != 0 || telemetry.StructuredOutputErrors != 0 || telemetry.EvidencePhaseCompleted || telemetry.EvidencePhaseSteps != 0 || telemetry.EvidencePhaseRequests != 0 || telemetry.ArtifactEvidenceToolCalls != 0 || telemetry.SourceEvidenceToolCalls != 0 || telemetry.FinalizationPhaseCompleted || telemetry.FinalizationPhaseSteps != 0 || telemetry.FinalizationPhaseRequests != 0 || telemetry.StructuredOutputToolCalls != 0) {
+	if !telemetry.Available && (telemetry.EventCount != 0 || len(telemetry.Tools) != 0 || telemetry.DeniedToolCount != 0 || telemetry.ToolFailureCount != 0 || telemetry.StepsUsed != 0 || telemetry.StructuredOutputRetries != 0 || telemetry.StructuredOutputErrors != 0 || telemetry.EvidencePhaseCompleted || telemetry.EvidencePhaseSteps != 0 || telemetry.EvidencePhaseRequests != 0 || telemetry.EvidenceStepBudget != 0 || telemetry.EvidenceExhausted || telemetry.EvidenceExhaustedSteps != 0 || telemetry.EvidenceExhaustedRequests != 0 || telemetry.EvidenceExhaustionClass != "" || telemetry.ArtifactEvidenceToolCalls != 0 || telemetry.SourceEvidenceToolCalls != 0 || telemetry.EvidenceReadCalls != 0 || telemetry.DuplicateReadCalls != 0 || telemetry.FinalizationPhaseCompleted || telemetry.FinalizationPhaseSteps != 0 || telemetry.FinalizationPhaseRequests != 0 || telemetry.StructuredOutputToolCalls != 0) {
 		return fmt.Errorf("unavailable workspace OpenCode telemetry must not contain event-derived values")
 	}
 	return nil

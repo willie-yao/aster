@@ -331,6 +331,44 @@ continuing to investigate.
 Output ONLY the JSON object: no prose, no explanation, no markdown fences.
 Your entire response must start with { and end with }.`
 
+const analysisFinalizeToolName = "submit_analysis"
+
+func analysisFinalizeFormat() ResponseFormat {
+	stringArray := func() map[string]any {
+		return map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+	}
+	return ResponseFormat{
+		Name:        analysisFinalizeToolName,
+		Description: "Submit one structured failure analysis.",
+		Schema: map[string]any{
+			"type": "object", "additionalProperties": false,
+			"properties": map[string]any{
+				"summary":            map[string]any{"type": "string"},
+				"is_transient":       map[string]any{"type": "boolean"},
+				"root_cause":         map[string]any{"type": "string"},
+				"severity":           map[string]any{"type": "string", "enum": []string{"Critical", "High", "Medium", "Low"}},
+				"suggested_fix":      map[string]any{"type": "string"},
+				"relevant_files":     stringArray(),
+				"search_suggestions": stringArray(),
+				"evidence_citations": map[string]any{
+					"type": "array", "maxItems": 20,
+					"items": map[string]any{
+						"type": "object", "additionalProperties": false,
+						"properties": map[string]any{
+							"path":       map[string]any{"type": "string"},
+							"line_start": map[string]any{"type": "integer", "minimum": 1},
+							"line_end":   map[string]any{"type": "integer", "minimum": 1},
+							"quote":      map[string]any{"type": "string"},
+						},
+						"required": []string{"path", "line_start", "line_end", "quote"},
+					},
+				},
+			},
+			"required": []string{"summary", "is_transient", "root_cause", "severity", "suggested_fix", "relevant_files", "search_suggestions", "evidence_citations"},
+		},
+	}
+}
+
 // formatFloorsNudge builds the user message appended after a tools-free
 // model response when one or both per-project floors are unmet. Mentions
 // only the axes that are actually unmet so a project configuring only
@@ -1041,6 +1079,21 @@ agentLoop:
 			return nil, nil, fmt.Errorf("agentic iter %d: empty choices", iter+1)
 		}
 		msg := resp.Message
+
+		if len(msg.ToolCalls) > 0 && msg.Content != nil {
+			if parsedCandidate, parsedOK := tryParseAnalysis(*msg.Content); parsedOK {
+				candidateCritique := critiqueDraftWithContent(parsedCandidate, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsedCandidate), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
+				if len(candidateCritique.MissingSkillEvidence) > 0 {
+					if treeSet := state.artifactTreeSet(); treeSet != nil {
+						pruneAbsentSkillEvidence(parsedCandidate, &candidateCritique, treeSet)
+					}
+				}
+				candidateDraft := state.newDraftCandidate(draftPhase, *msg.Content, msg.ProviderItems, parsedCandidate, candidateCritique)
+				semanticAccepted := draftPhase == "semantic_retry" && state.judgeObjected
+				state.considerFallbackDraft(candidateDraft, semanticAccepted)
+				recordTrace(loopCtx, TraceEvent{Kind: "draft_recovery", Outcome: "tool_bearing_candidate", SelectedAttempt: candidateDraft.attempt})
+			}
+		}
 
 		if len(msg.ToolCalls) == 0 {
 			candidate := ""
@@ -2536,14 +2589,22 @@ func cachePersistenceRejection(state *agentState, opts AgenticOptions) CacheReje
 	return semanticCacheRejection(policyAnalysis)
 }
 
-// runFinalizeRound asks the model for one more no-tools response containing
-// just the final JSON. Used when the agent ran out of iterations or returned
+// runFinalizeRound asks the model for one schema-constrained response containing
+// just the final analysis. Used when the agent ran out of iterations or returned
 // prose without parseable JSON. Returns raw content; callers handle unparseable
 // responses.
 func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, headroom contextHeadroom) (string, []json.RawMessage, bool) {
 	messages = append(messages, modelMessage{Role: "user", Content: strPtr(agForceFinalizePrompt)})
+	format := analysisFinalizeFormat()
+	toolDefs := []tools.Schema{{
+		Type: "function",
+		Function: tools.FunctionDecl{
+			Name: format.Name, Description: format.Description,
+			Parameters: format.Schema, Strict: true,
+		},
+	}}
 	var safe bool
-	messages, safe = prepareContextRequest(ctx, messages, 0, headroom, "finalize")
+	messages, safe = prepareContextRequest(ctx, messages, schemaPayloadBytes(toolDefs), headroom, "finalize")
 	if !safe {
 		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "headroom_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 		recordTrace(ctx, TraceEvent{Kind: "context_headroom", Outcome: "unavailable", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
@@ -2551,7 +2612,11 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 		return "", nil, false
 	}
 	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "requested"})
-	resp, err := c.callModel(ctx, messages, nil, nil)
+	parallel := false
+	resp, err := c.callModelRequest(ctx, modelRequest{
+		Model: c.model, Messages: messages, Tools: toolDefs,
+		ToolChoice: &ToolChoice{Name: format.Name}, ParallelToolCalls: &parallel,
+	})
 	if err != nil {
 		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "error", ErrorCode: "model_request_error"})
 		log.Printf("  ⚠ agentic finalize round failed: %v", err)
@@ -2562,16 +2627,20 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 		return "", resp.Message.ProviderItems, true
 	}
 	captureToolLoopContinuation(ctx, c, appendToolsFreeAssistant(messages, resp.Message))
-	if resp.Message.Content == nil {
-		code := "nil_content"
-		if len(resp.Message.ToolCalls) > 0 {
-			code = "unexpected_tool_call"
-		}
-		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty", ErrorCode: code})
-		return "", resp.Message.ProviderItems, true
+	if len(resp.Message.ToolCalls) == 1 && resp.Message.ToolCalls[0].Function.Name == format.Name {
+		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "success", Status: "forced_function"})
+		return resp.Message.ToolCalls[0].Function.Arguments, resp.Message.ProviderItems, true
 	}
-	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "success"})
-	return *resp.Message.Content, resp.Message.ProviderItems, true
+	if resp.Message.Content != nil {
+		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "success", Status: "plain_content"})
+		return *resp.Message.Content, resp.Message.ProviderItems, true
+	}
+	code := "nil_content"
+	if len(resp.Message.ToolCalls) > 0 {
+		code = "unexpected_tool_call"
+	}
+	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty", ErrorCode: code})
+	return "", resp.Message.ProviderItems, true
 }
 
 // tryParseAnalysis extracts and unmarshals the JSON answer, returning ok=false

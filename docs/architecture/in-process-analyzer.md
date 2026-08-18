@@ -165,9 +165,12 @@ remaining ineligible for cache persistence.
 
 Model output is never accepted directly. The current lifecycle is:
 
-1. A tools-free response is parsed into the `analysisResponse` JSON shape. If
-   the loop exhausts iterations or the response does not parse, a no-tools
-   finalize round requests JSON only.
+1. A tools-free response is parsed into the `analysisResponse` JSON shape.
+   Parseable JSON attached to a tool-bearing turn is retained only as a fallback
+   candidate while the requested tools still run. If the loop exhausts
+   iterations or the response does not parse, one finalization request forces
+   the exact `submit_analysis` function schema with ordinary investigation tools
+   absent.
 2. Deterministic critique checks citation integrity, unread paths, unsafe or
    unverified source paths, unsupported line claims, persistent-failure versus
    transient conflicts, remediation punts, and recipe-required evidence.
@@ -190,9 +193,12 @@ configured cache policy determines which classifications block reuse:
 records findings without making critique itself a cache barrier. Semantic review
 is separate; an unresolved semantic objection prevents cache acceptance.
 
-If finalization fails, the loop prefers an earlier parseable draft. Only when no
-parseable draft exists does it synthesize a bounded fallback, which is not
-cached. Non-advisory citation policy can instead make the result unavailable.
+If finalization fails, the loop prefers an earlier parseable draft, including a
+strict structured candidate attached to a tool-bearing turn. The selected draft
+still passes normal publication sanitization, critique classification, and
+analysis disposition. When no parseable draft exists, the result remains
+unavailable. Finalization recovery does not change pattern, correction,
+remediation, action, or Fix eligibility.
 
 ## Cache and current-floor revalidation
 

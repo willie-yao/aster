@@ -342,6 +342,31 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
         status = require_string(record, "status", runtime)
         if status not in SANDBOX_STATUSES:
             raise ReportError(f"sandbox line {record['_line']} status is invalid")
+        record.setdefault("evidence_phase_allocated_steps", 0)
+        record.setdefault("evidence_phase_bounded_exhaustion", False)
+        record.setdefault("evidence_phase_exhaustion_steps", 0)
+        record.setdefault("evidence_phase_exhaustion_requests", 0)
+        record.setdefault("evidence_phase_exhaustion_classification", "")
+        record.setdefault("successful_evidence_read_calls", 0)
+        record.setdefault("duplicate_evidence_read_calls", 0)
+        allocated_steps = require_integer(record, "evidence_phase_allocated_steps", runtime)
+        exhaustion_steps = require_integer(record, "evidence_phase_exhaustion_steps", runtime)
+        exhaustion_requests = require_integer(record, "evidence_phase_exhaustion_requests", runtime)
+        successful_reads = require_integer(record, "successful_evidence_read_calls", runtime)
+        duplicate_reads = require_integer(record, "duplicate_evidence_read_calls", runtime)
+        if duplicate_reads > successful_reads:
+            raise ReportError(f"sandbox line {record['_line']} duplicate evidence reads exceed successful reads")
+        bounded_exhaustion = record.get("evidence_phase_bounded_exhaustion")
+        if not isinstance(bounded_exhaustion, bool):
+            raise ReportError(f"sandbox line {record['_line']} bounded evidence exhaustion must be boolean")
+        exhaustion_classification = record.get("evidence_phase_exhaustion_classification", "")
+        if not isinstance(exhaustion_classification, str):
+            raise ReportError(f"sandbox line {record['_line']} bounded evidence exhaustion classification must be a string")
+        if bounded_exhaustion:
+            if allocated_steps < 2 or exhaustion_requests != allocated_steps or exhaustion_steps + 1 != allocated_steps or exhaustion_classification != "api_bad_request":
+                raise ReportError(f"sandbox line {record['_line']} bounded evidence exhaustion telemetry is incomplete")
+        elif allocated_steps != 0 or exhaustion_steps != 0 or exhaustion_requests != 0 or exhaustion_classification:
+            raise ReportError(f"sandbox line {record['_line']} bounded evidence exhaustion telemetry is inconsistent")
         for field in ("analysis_valid", "finalization_valid", "cleanup_completed", "source_verified"):
             if not isinstance(record.get(field), bool):
                 raise ReportError(f"sandbox line {record['_line']} field {field} must be boolean")
@@ -714,6 +739,13 @@ def sandbox_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "cleanup_completed_trials": sum(record["cleanup_completed"] for record in records),
         "cleanup_completed_rate": rate(sum(record["cleanup_completed"] for record in records), len(records)),
         "evidence_modes": evidence_mode_metrics(records, "sandbox"),
+        "bounded_evidence_exhaustion_trials": sum(record.get("evidence_phase_bounded_exhaustion") is True for record in records),
+        "successful_evidence_read_calls": sum(record.get("successful_evidence_read_calls", 0) for record in records),
+        "duplicate_evidence_read_calls": sum(record.get("duplicate_evidence_read_calls", 0) for record in records),
+        "duplicate_evidence_read_rate": rate(
+            sum(record.get("duplicate_evidence_read_calls", 0) for record in records),
+            sum(record.get("successful_evidence_read_calls", 0) for record in records),
+        ),
         "runtime_identity": {
             "executor_image": records[0]["executor_image"] if records else None,
             "stager_image": records[0]["stager_image"] if records else None,

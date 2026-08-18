@@ -144,6 +144,13 @@ type Provenance struct {
 	ModelOutputTokens           int      `json:"model_output_tokens,omitempty"`
 	ProviderRequests            int      `json:"provider_requests,omitempty"`
 	ProviderRequestsKnown       bool     `json:"provider_requests_known"`
+	EvidenceStepBudget          int      `json:"evidence_phase_allocated_steps,omitempty"`
+	EvidenceExhausted           bool     `json:"evidence_phase_bounded_exhaustion,omitempty"`
+	EvidenceExhaustedSteps      int      `json:"evidence_phase_exhaustion_steps,omitempty"`
+	EvidenceExhaustedRequests   int      `json:"evidence_phase_exhaustion_requests,omitempty"`
+	EvidenceExhaustionClass     string   `json:"evidence_phase_exhaustion_classification,omitempty"`
+	EvidenceReadCalls           int      `json:"successful_evidence_read_calls,omitempty"`
+	DuplicateReadCalls          int      `json:"duplicate_evidence_read_calls,omitempty"`
 	SchedulingAvailable         bool     `json:"scheduling_available"`
 	SchedulingMs                int64    `json:"scheduling_ms,omitempty"`
 	StagingAvailable            bool     `json:"staging_available"`
@@ -587,7 +594,7 @@ func validateShadowRecord(record ShadowRecord) (time.Time, error) {
 }
 
 func validShadowProvenance(value Provenance) bool {
-	for _, count := range []int{value.Attempts, value.InputTokens, value.CachedInputTokens, value.OutputTokens, value.ReasoningTokens, value.ProviderRequests} {
+	for _, count := range []int{value.Attempts, value.InputTokens, value.CachedInputTokens, value.OutputTokens, value.ReasoningTokens, value.ProviderRequests, value.EvidenceStepBudget, value.EvidenceExhaustedSteps, value.EvidenceExhaustedRequests, value.EvidenceReadCalls, value.DuplicateReadCalls} {
 		if count < 0 {
 			return false
 		}
@@ -601,7 +608,14 @@ func validShadowProvenance(value Provenance) bool {
 			return false
 		}
 	}
-	if value.CachedInputTokens > value.InputTokens || value.ReasoningTokens > value.OutputTokens {
+	if value.CachedInputTokens > value.InputTokens || value.ReasoningTokens > value.OutputTokens || value.DuplicateReadCalls > value.EvidenceReadCalls {
+		return false
+	}
+	if value.EvidenceExhausted {
+		if value.EvidenceStepBudget < 2 || value.EvidenceExhaustedRequests != value.EvidenceStepBudget || value.EvidenceExhaustedSteps+1 != value.EvidenceStepBudget || value.EvidenceExhaustionClass != "api_bad_request" {
+			return false
+		}
+	} else if value.EvidenceStepBudget != 0 || value.EvidenceExhaustedSteps != 0 || value.EvidenceExhaustedRequests != 0 || value.EvidenceExhaustionClass != "" {
 		return false
 	}
 	if value.CostAvailable != (value.CostUSD != "") || value.CostUSD != "" && !ledgerCostPattern.MatchString(value.CostUSD) {

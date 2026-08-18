@@ -521,3 +521,24 @@ func TestParseOpenCodeTelemetryTreatsZeroTokenUsageAsUnavailable(t *testing.T) {
 		t.Fatalf("usage=%+v telemetry=%+v", usage, telemetry)
 	}
 }
+
+func TestParseOpenCodeTelemetryCountsExactDuplicateEvidenceReads(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(artifactDir, "failure.log")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	message := fmt.Sprintf(`{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}`, artifactPath)
+	raw := []byte("[" + message + "," + message + "]")
+	_, telemetry, facts, err := parseOpenCodeTelemetryForWorkspace(raw, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if telemetry.EvidenceReadCalls != 2 || telemetry.DuplicateReadCalls != 1 || facts.EvidenceReadCalls != 2 || facts.DuplicateReadCalls != 1 || telemetry.EvidenceHandles.AcceptedArtifactHandleCount != 1 {
+		t.Fatalf("telemetry=%+v facts=%+v", telemetry, facts)
+	}
+}

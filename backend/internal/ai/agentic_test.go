@@ -4020,6 +4020,91 @@ func TestRepoToolReadDoesNotCountAsGCSEvidence(t *testing.T) {
 	}
 }
 
+func TestAgenticForcedFinalizeUsesExactAnalysisFunction(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal("not json"))
+	srv.push(200, chatRespToolCall("submit", analysisFinalizeToolName, map[string]interface{}{
+		"summary": "structured", "is_transient": false,
+		"root_cause": "controller configuration mismatch", "severity": "High",
+		"suggested_fix":  "Update the controller configuration.",
+		"relevant_files": []string{}, "search_suggestions": []string{}, "evidence_citations": []interface{}{},
+	}))
+
+	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+		MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second,
+	})
+	_, analysis, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(t.Context(), in, "agentic:test:forced-finalize", "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.RootCause != "controller configuration mismatch" {
+		t.Fatalf("forced function result not selected: %+v", analysis)
+	}
+	srv.mu.Lock()
+	requests := append([][]byte(nil), srv.requests...)
+	srv.mu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("provider requests = %d, want 2", len(requests))
+	}
+	var request struct {
+		Tools []struct {
+			Function struct {
+				Name   string `json:"name"`
+				Strict bool   `json:"strict"`
+			} `json:"function"`
+		} `json:"tools"`
+		ToolChoice struct {
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		} `json:"tool_choice"`
+	}
+	if err := json.Unmarshal(requests[1], &request); err != nil {
+		t.Fatal(err)
+	}
+	if len(request.Tools) != 1 || request.Tools[0].Function.Name != analysisFinalizeToolName || !request.Tools[0].Function.Strict || request.ToolChoice.Function.Name != analysisFinalizeToolName {
+		t.Fatalf("finalize request = %+v", request)
+	}
+}
+
+func TestAgenticToolBearingStructuredDraftSurvivesInvalidFinalize(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	fallback := `{"summary":"fallback","is_transient":false,"root_cause":"controller configuration mismatch","severity":"High","suggested_fix":"Update the controller configuration.","relevant_files":[]}`
+	srv.push(200, chatRespToolCallWithContent(fallback, "read", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespToolCall("unexpected", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	in := newTestAgenticInputs(t, &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("controller configuration mismatch\n")}}, AgenticOptions{
+		MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second,
+	})
+	_, analysis, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(ctx, in, "agentic:test:tool-bearing-draft", "sys", "user")
+	trace.Finish("success", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.RootCause != "controller configuration mismatch" {
+		t.Fatalf("tool-bearing draft not retained: %+v", analysis)
+	}
+	var sawCandidate, sawRetained bool
+	for _, event := range store.Snapshot().Traces[0].Events {
+		if event.Kind == "draft_recovery" && event.Outcome == "tool_bearing_candidate" {
+			sawCandidate = true
+		}
+		if event.Kind == "finalize_recovery" && event.Outcome == "retained_draft" {
+			sawRetained = true
+		}
+	}
+	if !sawCandidate || !sawRetained {
+		t.Fatalf("recovery telemetry missing: %+v", store.Snapshot())
+	}
+}
+
 func TestAgenticFinalizeUnexpectedToolCallRetainsDraft(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)

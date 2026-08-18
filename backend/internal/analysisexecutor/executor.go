@@ -451,6 +451,24 @@ func stopOpenCodeProcess(terminate func(), done <-chan error) {
 }
 
 func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec, version string, evidenceShape agentanalysis.WorkspaceOpenCodeRequestShape) (result OpenCodeRunResult, retErr error) {
+	var evidenceExhaustionRecovered bool
+	var evidenceExhaustionClassification string
+	var evidenceExhaustionSteps int
+	var evidenceExhaustionRequests int
+	var evidenceExhaustionError agentanalysis.WorkspaceOpenCodeErrorTelemetry
+	defer func() {
+		if !evidenceExhaustionRecovered {
+			return
+		}
+		result.Telemetry.EvidenceStepBudget = openCodeEvidenceStepAllocation(spec.MaxSteps, spec.RequireSourceEvidence)
+		result.Telemetry.EvidenceExhausted = true
+		result.Telemetry.EvidenceExhaustedSteps = evidenceExhaustionSteps
+		result.Telemetry.EvidenceExhaustedRequests = evidenceExhaustionRequests
+		result.Telemetry.EvidenceExhaustionClass = evidenceExhaustionClassification
+		if !result.Telemetry.Error.Available {
+			result.Telemetry.Error = evidenceExhaustionError
+		}
+	}()
 	credential, err := modelprovider.NewCredentialGuard(spec.Provider, os.LookupEnv)
 	if err != nil {
 		return result, err
@@ -479,7 +497,8 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 		result.Telemetry.EvidenceHandles = evidenceTelemetry.EvidenceHandles
 	}
 	applyOpenCodePromptError(&result, evidenceErr, 0, true, false)
-	if evidenceErr != nil {
+	recoverEvidenceExhaustion := evidenceTelemetryErr == nil && recoverableOpenCodeEvidenceExhaustion(evidenceErr, evidenceTelemetry, evidenceFacts, spec)
+	if evidenceErr != nil && !recoverEvidenceExhaustion {
 		return result, evidenceErr
 	}
 	if err := validateOpenCodeEvidencePhase(evidenceFacts, evidenceTelemetryErr); err != nil {
@@ -488,6 +507,17 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 			result.Telemetry.FailureCode = code
 		}
 		return result, err
+	}
+	if recoverEvidenceExhaustion {
+		var promptErr *openCodePromptError
+		if !errors.As(evidenceErr, &promptErr) {
+			return result, evidenceErr
+		}
+		evidenceExhaustionRecovered = true
+		evidenceExhaustionClassification = promptErr.telemetry.Classification
+		evidenceExhaustionSteps = evidenceTelemetry.StepsUsed
+		evidenceExhaustionRequests = evidenceTelemetry.ProviderRequests
+		evidenceExhaustionError = promptErr.telemetry
 	}
 	result.Telemetry.EvidencePhaseCompleted = true
 	result.Telemetry.EvidencePhaseSteps = evidenceTelemetry.StepsUsed
@@ -660,6 +690,29 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 		return result, fmt.Errorf("OpenCode analysis exceeded the step limit")
 	}
 	return result, nil
+}
+
+func openCodeEvidenceStepAllocation(maxSteps int, requireSourceEvidence bool) int {
+	reserved := openCodeFinalizationSteps
+	if requireSourceEvidence {
+		reserved += openCodeSourceEvidenceSteps
+	}
+	return max(maxSteps-reserved, 0)
+}
+
+func recoverableOpenCodeEvidenceExhaustion(err error, telemetry agentanalysis.WorkspaceOpenCodeTelemetry, facts openCodeEvidenceFacts, spec OpenCodeSpec) bool {
+	var promptErr *openCodePromptError
+	if !errors.As(err, &promptErr) {
+		return false
+	}
+	providerError := promptErr.telemetry
+	allocated := openCodeEvidenceStepAllocation(spec.MaxSteps, spec.RequireSourceEvidence)
+	return allocated >= 2 &&
+		providerError.Available && providerError.Name == "APIError" && providerError.HTTPStatusCode == http.StatusBadRequest &&
+		providerError.RetryableKnown && !providerError.Retryable && providerError.Classification == "api_bad_request" && !providerError.ContextOverflow &&
+		telemetry.Available && telemetry.ProviderRequestsKnown && telemetry.ProviderRequests == allocated && telemetry.StepsUsed+1 == allocated &&
+		telemetry.DeniedToolCount == 0 && facts.StructuredOutputCalls == 0 && facts.ArtifactToolCalls > 0 &&
+		facts.EvidenceDiagnostics.Status != agentanalysis.WorkspaceEvidenceHandlesRejected && facts.EvidenceDiagnostics.AcceptedArtifactHandleCount > 0
 }
 
 func primaryWorkspaceEvidenceFailureCode(value agentanalysis.WorkspaceEvidenceHandleDiagnostics) string {
@@ -1088,10 +1141,7 @@ func unescapeMountInfo(value string) string {
 }
 
 func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps, contextTokens, outputTokens int, requireSourceEvidence bool) error {
-	reservedSteps := openCodeFinalizationSteps
-	if requireSourceEvidence {
-		reservedSteps += openCodeSourceEvidenceSteps
-	}
+	reservedSteps := maxSteps - openCodeEvidenceStepAllocation(maxSteps, requireSourceEvidence)
 	if maxSteps <= reservedSteps {
 		return fmt.Errorf("OpenCode analysis has too few steps for reserved phases")
 	}
