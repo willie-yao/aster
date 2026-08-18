@@ -82,8 +82,8 @@ func TestResolveRefusesABuildWithNoFinishedMetadata(t *testing.T) {
 	resolver := fixture.resolver(t)
 
 	_, err := resolver.Resolve(context.Background(), testRef("TestA"))
-	if !errors.Is(err, ErrNotEligible) {
-		t.Fatalf("err = %v, want ErrNotEligible", err)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
 	}
 
 	// The same subject resolves once the build's outcome is readable.

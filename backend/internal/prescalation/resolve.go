@@ -100,8 +100,10 @@ func (r *DataResolver) Resolve(ctx context.Context, ref Ref) (Resolved, error) {
 	if info.Result == "PENDING" {
 		// finished.json was absent or unreadable, so the build either has not
 		// finished or its metadata could not be read within the budget. Both
-		// would have the analysis describe a build state nobody can vouch for.
-		return Resolved{}, fmt.Errorf("%w: the failing build has no finished metadata", ErrNotEligible)
+		// would have the analysis describe a build state nobody can vouch for,
+		// and both clear up on their own, so this is transient rather than a
+		// verdict about the failure.
+		return Resolved{}, fmt.Errorf("%w: the failing build has no finished metadata", ErrUnavailable)
 	}
 
 	subject := pullrequest.Subject{

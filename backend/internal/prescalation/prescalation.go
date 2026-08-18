@@ -109,7 +109,9 @@ type Options struct {
 	// running. A start past the bound is rejected with ErrBusy instead of
 	// queueing, which caps the artifact and GitHub work escalation can trigger.
 	MaxQueued int
-	// MaxRecords bounds retained results before the oldest are pruned.
+	// MaxRecords bounds retained results before the oldest are pruned. It is
+	// raised to MaxQueued when configured lower, since a running record cannot
+	// be pruned.
 	MaxRecords int
 	// Now is the clock, for tests.
 	Now func() time.Time
@@ -126,6 +128,12 @@ func (o Options) normalized() Options {
 	}
 	if o.MaxRecords <= 0 {
 		o.MaxRecords = 128
+	}
+	// A record cannot be pruned while it runs, so retention tighter than the
+	// queue would evict results the moment they land, losing analyses that
+	// were already paid for.
+	if o.MaxRecords < o.MaxQueued {
+		o.MaxRecords = o.MaxQueued
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -399,10 +407,6 @@ func (s *Service) finish(rec *record, view View) {
 	rec.view = view
 	rec.running = false
 	rec.updatedAt = now
-	// A full queue can leave more records retained than the bound allows, and
-	// they only become prunable now, so the bound is restored here rather than
-	// waiting for a later request that may never come.
-	s.pruneLocked()
 	s.mu.Unlock()
 
 	s.persist()

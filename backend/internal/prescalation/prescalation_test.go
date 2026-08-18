@@ -577,7 +577,7 @@ func TestInFlightEscalationsAreNotRestoredAsRunning(t *testing.T) {
 func TestRetentionIsBounded(t *testing.T) {
 	runner := newFakeRunner()
 	close(runner.release)
-	service := newService(t, &fakeResolver{}, runner, Options{MaxRecords: 2})
+	service := newService(t, &fakeResolver{}, runner, Options{MaxRecords: 2, MaxQueued: 1})
 
 	for i := 0; i < 5; i++ {
 		ref := testRef(fmt.Sprintf("Test%d", i))
@@ -594,12 +594,15 @@ func TestRetentionIsBounded(t *testing.T) {
 	}
 }
 
-// Records cannot be pruned while they run, so a full queue can finish together
-// and leave the bound exceeded. It must be restored without waiting for a later
-// request that may never come.
-func TestRetentionRecoversAfterAFullQueueFinishes(t *testing.T) {
+// Records cannot be pruned while they run, so retention tighter than the queue
+// would evict results the instant they land. A full queue's analyses were all
+// paid for, so every one of them must stay readable and persisted.
+func TestAFullQueuesResultsAreAllRetained(t *testing.T) {
+	store := &memoryStore{}
 	runner := newFakeRunner()
-	service := newService(t, &fakeResolver{}, runner, Options{MaxRecords: 2, MaxQueued: 4})
+	service := newService(t, &fakeResolver{}, runner, Options{
+		MaxRecords: 2, MaxQueued: 4, Store: store,
+	})
 
 	// Holding the runner keeps all four records running, and therefore
 	// unprunable, until the queue is full.
@@ -619,11 +622,22 @@ func TestRetentionRecoversAfterAFullQueueFinishes(t *testing.T) {
 	close(runner.release)
 	drain(t, service)
 
-	service.mu.Lock()
-	retained := len(service.records)
-	service.mu.Unlock()
-	if retained > 2 {
-		t.Fatalf("retained records = %d, want the bound respected", retained)
+	restored, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for i := 0; i < 4; i++ {
+		ref := testRef(fmt.Sprintf("Test%d", i))
+		view, err := service.Get(ref)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if view.State != StateComplete {
+			t.Errorf("Test%d state = %q, want the result to survive", i, view.State)
+		}
+		if _, ok := restored[ref.identity()]; !ok {
+			t.Errorf("Test%d was never persisted", i)
+		}
 	}
 }
 
@@ -804,7 +818,7 @@ func TestReplayingTheSameKeyReturnsTheFailureWithoutRerunning(t *testing.T) {
 func TestIdempotencyIndexIsBounded(t *testing.T) {
 	runner := newFakeRunner()
 	close(runner.release)
-	service := newService(t, &fakeResolver{}, runner, Options{MaxRecords: 2})
+	service := newService(t, &fakeResolver{}, runner, Options{MaxRecords: 2, MaxQueued: 1})
 	ref := testRef("TestA")
 
 	for i := 0; i < 200; i++ {
