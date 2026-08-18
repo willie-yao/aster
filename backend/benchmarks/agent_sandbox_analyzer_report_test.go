@@ -258,6 +258,64 @@ func TestAgentSandboxAnalyzerReport(t *testing.T) {
 	}
 }
 
+func TestAgentSandboxAnalyzerReportDefaultsOmittedJUnitTestSource(t *testing.T) {
+	inprocess, sandbox := validAgentSandboxAnalyzerReportRecords(t)
+	for index := range inprocess {
+		delete(inprocess[index], "test_source")
+		sandbox[index]["test_source"] = ""
+	}
+	dir := t.TempDir()
+	inprocessPath := filepath.Join(dir, "inprocess.jsonl")
+	sandboxPath := filepath.Join(dir, "sandbox.jsonl")
+	writeReportJSONL(t, inprocessPath, inprocess)
+	writeReportJSONL(t, sandboxPath, sandbox)
+	command := exec.Command(
+		"python3", filepath.Join("..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
+		"--inprocess", inprocessPath,
+		"--sandbox", sandboxPath,
+		"--repo", filepath.Join("..", ".."),
+		"--holdout-case", "case",
+		"--expected-pairs", "3",
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("report: %v: %s", err, output)
+	}
+}
+
+func TestAgentSandboxAnalyzerReportMarksInconsistentSandboxTokenTelemetryUnavailable(t *testing.T) {
+	inprocess, sandbox := validAgentSandboxAnalyzerReportRecords(t)
+	for index := range sandbox {
+		sandbox[index]["input_tokens"] = 10
+		sandbox[index]["cached_input_tokens"] = 20
+		sandbox[index]["token_usage_available"] = true
+	}
+	dir := t.TempDir()
+	inprocessPath := filepath.Join(dir, "inprocess.jsonl")
+	sandboxPath := filepath.Join(dir, "sandbox.jsonl")
+	writeReportJSONL(t, inprocessPath, inprocess)
+	writeReportJSONL(t, sandboxPath, sandbox)
+	command := exec.Command(
+		"python3", filepath.Join("..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
+		"--inprocess", inprocessPath,
+		"--sandbox", sandboxPath,
+		"--repo", filepath.Join("..", ".."),
+		"--holdout-case", "case",
+		"--expected-pairs", "3",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report: %v: %s", err, output)
+	}
+	var report map[string]any
+	if err := json.Unmarshal(output, &report); err != nil {
+		t.Fatal(err)
+	}
+	usage := report["agent_sandbox"].(map[string]any)
+	if usage["token_usage_trials"] != float64(0) || usage["token_usage_inconsistent_trials"] != float64(3) || usage["input_tokens"] != nil || usage["estimated_cost_usd_total"] != nil {
+		t.Fatalf("usage = %+v", usage)
+	}
+}
+
 func TestAgentSandboxAnalyzerReportRejectsIdentityMismatch(t *testing.T) {
 	for _, test := range []struct {
 		name     string

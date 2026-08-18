@@ -691,7 +691,7 @@ func TestOpenCode1182ResponsesTwoPhaseCompatibility(t *testing.T) {
 	if role := responseLastMessageRole(requests[2]); role != "user" {
 		t.Fatalf("final Responses message role = %q sequence=%v", role, responseInputRoleSequence(requests[2]))
 	}
-	if result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Usage.ModelRequests != 3 || !result.Usage.Available || result.Usage.InputTokens != 24 || result.Usage.CachedInputTokens != 6 || result.Usage.OutputTokens != 6 || !result.Telemetry.EvidencePhaseCompleted || !result.Telemetry.FinalizationPhaseCompleted || len(result.Structured) == 0 {
+	if result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Usage.ModelRequests != 3 || !result.Usage.Available || result.Usage.InputTokens != 30 || result.Usage.CachedInputTokens != 6 || result.Usage.OutputTokens != 6 || !result.Telemetry.EvidencePhaseCompleted || !result.Telemetry.FinalizationPhaseCompleted || len(result.Structured) == 0 {
 		t.Fatalf("Responses result=%+v", result)
 	}
 	wantHandles := []agentanalysis.WorkspaceEvidenceHandle{

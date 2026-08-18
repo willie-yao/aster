@@ -229,6 +229,8 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
     evidence_mode = record.get("evidence_mode")
     if evidence_mode not in EVIDENCE_MODES:
         raise ReportError(f"{runtime} line {record['_line']} field evidence_mode is invalid")
+    if "test_source" not in record:
+        record["test_source"] = ""
     if not isinstance(record.get("test_source"), str):
         raise ReportError(f"{runtime} line {record['_line']} field test_source must be a string")
     require_integer(record, "human_score_rubric_version", runtime, 1)
@@ -325,8 +327,10 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
         for field in ("provider_requests_known", "token_usage_available", "cost_available"):
             if not isinstance(record.get(field), bool):
                 raise ReportError(f"sandbox line {record['_line']} field {field} must be boolean")
-        if record["cached_input_tokens"] > record["input_tokens"] or record["reasoning_tokens"] > record["output_tokens"]:
-            raise ReportError(f"sandbox line {record['_line']} token telemetry is inconsistent")
+        record["_token_usage_consistent"] = (
+            record["cached_input_tokens"] <= record["input_tokens"]
+            and record["reasoning_tokens"] <= record["output_tokens"]
+        )
         if record["provider_requests_known"] and record["provider_requests"] < record["model_requests"]:
             raise ReportError(f"sandbox line {record['_line']} provider request telemetry is inconsistent")
         if record["analysis_valid"] and not record["finalization_valid"]:
@@ -488,7 +492,7 @@ def token_usage_available(record: dict[str, Any], runtime: str) -> bool:
             and trace["reported_requests"] == trace["model_requests"]
             and record.get("trace_truncated") is not True
         )
-    return record.get("token_usage_available") is True
+    return record.get("token_usage_available") is True and record.get("_token_usage_consistent") is True
 
 
 def estimated_cost_usd(record: dict[str, Any], runtime: str) -> Decimal | None:
@@ -530,6 +534,7 @@ def decimal_metrics(values: list[Decimal]) -> dict[str, Any]:
 def usage_metrics(records: list[dict[str, Any]], runtime: str) -> dict[str, Any]:
     usages = [record["trace"] if runtime == "inprocess" else record for record in records]
     token_records = [record for record in records if token_usage_available(record, runtime)]
+    token_usages = [record["trace"] if runtime == "inprocess" else record for record in token_records]
     provider_known = [
         usage["provider_attempts" if runtime == "inprocess" else "provider_requests"]
         for record, usage in zip(records, usages)
@@ -556,15 +561,16 @@ def usage_metrics(records: list[dict[str, Any]], runtime: str) -> dict[str, Any]
         "provider_attempts_coverage": rate(len(provider_known), len(records)),
         "provider_attempts": sum(provider_known),
         "provider_attempts_distribution": duration_metrics(provider_known),
-        "input_tokens": sum(usage["input_tokens"] for usage in usages),
-        "input_tokens_distribution": duration_metrics([usage["input_tokens"] for usage in usages]),
-        "cached_input_tokens": sum(usage["cached_input_tokens"] for usage in usages),
-        "cached_input_tokens_distribution": duration_metrics([usage["cached_input_tokens"] for usage in usages]),
-        "output_tokens": sum(usage["output_tokens"] for usage in usages),
-        "output_tokens_distribution": duration_metrics([usage["output_tokens"] for usage in usages]),
-        "reasoning_tokens": sum(usage["reasoning_tokens"] for usage in usages),
-        "reasoning_tokens_distribution": duration_metrics([usage["reasoning_tokens"] for usage in usages]),
+        "input_tokens": sum(usage["input_tokens"] for usage in token_usages) if token_usages else None,
+        "input_tokens_distribution": duration_metrics([usage["input_tokens"] for usage in token_usages]),
+        "cached_input_tokens": sum(usage["cached_input_tokens"] for usage in token_usages) if token_usages else None,
+        "cached_input_tokens_distribution": duration_metrics([usage["cached_input_tokens"] for usage in token_usages]),
+        "output_tokens": sum(usage["output_tokens"] for usage in token_usages) if token_usages else None,
+        "output_tokens_distribution": duration_metrics([usage["output_tokens"] for usage in token_usages]),
+        "reasoning_tokens": sum(usage["reasoning_tokens"] for usage in token_usages) if token_usages else None,
+        "reasoning_tokens_distribution": duration_metrics([usage["reasoning_tokens"] for usage in token_usages]),
         "token_usage_trials": len(token_records),
+        "token_usage_inconsistent_trials": sum(record.get("token_usage_available") is True and not token_usage_available(record, runtime) for record in records),
         "token_usage_coverage": rate(len(token_records), len(records)),
         "estimated_cost_available_trials": len(costs),
         "estimated_cost_coverage": rate(len(costs), len(records)),

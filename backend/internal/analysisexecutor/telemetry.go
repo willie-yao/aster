@@ -206,7 +206,8 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 					return unavailable, telemetry, facts, fmt.Errorf("telemetry step usage is incomplete")
 				}
 				usage.ModelRequests++
-				if !addTelemetryCount(&usage.InputTokens, *part.Tokens.Input) || !addTelemetryCount(&usage.CachedInputTokens, *part.Tokens.Cache.Read) || !addTelemetryCount(&usage.OutputTokens, *part.Tokens.Output) {
+				inputTokens := *part.Tokens.Input
+				if !addTelemetryCount(&inputTokens, *part.Tokens.Cache.Read) || !addTelemetryCount(&usage.InputTokens, inputTokens) || !addTelemetryCount(&usage.CachedInputTokens, *part.Tokens.Cache.Read) || !addTelemetryCount(&usage.OutputTokens, *part.Tokens.Output) {
 					return unavailable, telemetry, facts, fmt.Errorf("telemetry token count is invalid")
 				}
 				if part.Tokens.Reasoning != nil && (!addTelemetryCount(&usage.ReasoningTokens, *part.Tokens.Reasoning) || *part.Tokens.Reasoning > *part.Tokens.Output) {

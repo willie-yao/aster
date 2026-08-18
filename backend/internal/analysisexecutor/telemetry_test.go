@@ -27,7 +27,7 @@ func TestParseOpenCodeTelemetrySanitizesSuccessfulUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !usage.Available || usage.ModelRequests != 1 || usage.InputTokens != 100 || usage.CachedInputTokens != 40 || usage.OutputTokens != 25 || usage.ReasoningTokens != 7 || !usage.CostAvailable || usage.CostUSD != "0.12500000" {
+	if !usage.Available || usage.ModelRequests != 1 || usage.InputTokens != 140 || usage.CachedInputTokens != 40 || usage.OutputTokens != 25 || usage.ReasoningTokens != 7 || !usage.CostAvailable || usage.CostUSD != "0.12500000" {
 		t.Fatalf("usage=%+v", usage)
 	}
 	if !telemetry.Available || telemetry.ProviderRequests != 1 || !telemetry.ProviderRequestsKnown || telemetry.StepsUsed != 1 || telemetry.ToolFailureCount != 1 || telemetry.DeniedToolCount != 1 || len(telemetry.Tools) != 2 {
@@ -131,7 +131,7 @@ func TestParseOpenCodeTelemetryAggregatesMultipleSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usage.ModelRequests != 2 || usage.InputTokens != 100 || usage.CachedInputTokens != 12 || usage.OutputTokens != 12 || usage.CostUSD != "0.30000000" || telemetry.StepsUsed != 2 {
+	if usage.ModelRequests != 2 || usage.InputTokens != 112 || usage.CachedInputTokens != 12 || usage.OutputTokens != 12 || usage.CostUSD != "0.30000000" || telemetry.StepsUsed != 2 {
 		t.Fatalf("usage=%+v telemetry=%+v", usage, telemetry)
 	}
 }
@@ -340,7 +340,7 @@ func TestParseOpenCodeTelemetryPreservesUsageWithInvalidOptionalRange(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !usage.Available || usage.InputTokens != 3 || usage.CachedInputTokens != 1 || usage.OutputTokens != 2 || !telemetry.Available || facts.ArtifactToolCalls != 1 || facts.SourceToolCalls != 1 || len(facts.EvidenceHandles) != 1 || facts.EvidenceHandles[0].Root != agentanalysis.WorkspaceArtifactsDir {
+	if !usage.Available || usage.InputTokens != 4 || usage.CachedInputTokens != 1 || usage.OutputTokens != 2 || !telemetry.Available || facts.ArtifactToolCalls != 1 || facts.SourceToolCalls != 1 || len(facts.EvidenceHandles) != 1 || facts.EvidenceHandles[0].Root != agentanalysis.WorkspaceArtifactsDir {
 		t.Fatalf("usage=%+v telemetry=%+v facts=%+v", usage, telemetry, facts)
 	}
 	if telemetry.EvidenceHandles.Status != agentanalysis.WorkspaceEvidenceHandlesAcceptedWithWarnings || telemetry.EvidenceHandles.AcceptedArtifactHandleCount != 1 || telemetry.EvidenceHandles.AcceptedSourceHandleCount != 0 || telemetry.EvidenceHandles.DroppedRangeCount != 1 || !slices.Contains(telemetry.EvidenceHandles.Codes, agentanalysis.WorkspaceEvidenceRangeLineInvalid) {
