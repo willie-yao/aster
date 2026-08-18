@@ -31,6 +31,7 @@ Each request uses immutable prepared input:
 ```text
 source/       tracked source at one full commit SHA
 artifacts/    bounded failure artifacts
+request/      one bounded execution request mounted read-only
 result/       one writable canonical result location
 tmp/          isolated executor state
 ```
@@ -58,11 +59,16 @@ content-addressed snapshot to the private input claim. The publisher Job and Pod
 are both confirmed absent before the Sandbox starts. Ambiguous Job creates are
 recovered by deterministic name and exact workload identity, then deleted.
 
-The input claim is mounted read-only in the Sandbox. The stager verifies the
-compact artifact-index identity and copies the sealed snapshot into a fresh
-workspace. The executor verifies revision, hashes, mount identity, and read-only
-state before and after OpenCode runs. Only `result/` and temporary executor state
-are writable. The dashboard validates the returned result again against its
+The input claim is mounted read-only in the Sandbox. The credential-free stager
+receives the sealed execution request in 16 fixed Base64 chunks of at most 64 KiB,
+reconstructs and validates the original request hash, cross-checks it against the
+stage request, and writes `request.json` with exclusive no-follow creation into a
+dedicated 1 MiB `emptyDir`. The executor receives that volume read-only and no
+longer receives the full request in an environment variable. The stager then
+verifies the compact artifact-index identity and copies the sealed snapshot into
+a fresh workspace. The executor verifies the request, revision, hashes, mount
+identity, and read-only state before and after OpenCode runs. Only `result/` and
+temporary executor state are writable. The dashboard validates the returned result again against its
 retained local copy. A second tokenless, no-network Job deletes exactly the leased
 remote snapshot.
 

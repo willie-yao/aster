@@ -16,18 +16,26 @@ import (
 const (
 	defaultInputRoot     = "/input"
 	defaultWorkspaceRoot = "/workspace"
+	defaultRequestRoot   = agentanalysis.WorkspaceExecutionRequestRoot
 )
 
 // Options configure one staging process.
 type Options struct {
 	InputRoot     string
 	WorkspaceRoot string
+	RequestRoot   string
 }
 
 // Execute verifies one manifest-addressed snapshot and copies it into the workspace.
-func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, opts Options) error {
-	if err := agentanalysis.ValidateWorkspaceStageRequestIdentity(request); err != nil {
+func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, execution agentanalysis.WorkspaceExecutionRequest, opts Options) error {
+	if err := agentanalysis.ValidateWorkspaceExecutionRequest(execution); err != nil {
 		return err
+	}
+	if err := agentanalysis.ValidateWorkspaceStageRequest(request, execution.Manifest); err != nil {
+		return err
+	}
+	if execution.InputMode != agentanalysis.WorkspaceInputStaged || execution.SourceModePolicy != request.OutputSourceModePolicy {
+		return fmt.Errorf("workspace execution and stage requests are inconsistent")
 	}
 	if request.InputMode != agentanalysis.WorkspaceStageInputPVC {
 		return fmt.Errorf("workspace staging requires PVC input")
@@ -40,8 +48,13 @@ func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, o
 	if workspaceRoot == "" {
 		workspaceRoot = defaultWorkspaceRoot
 	}
+	requestRoot := strings.TrimSpace(opts.RequestRoot)
+	if requestRoot == "" {
+		requestRoot = defaultRequestRoot
+	}
 	inputRoot = filepath.Clean(inputRoot)
 	workspaceRoot = filepath.Clean(workspaceRoot)
+	requestRoot = filepath.Clean(requestRoot)
 	if err := requireEmptyDirectory(workspaceRoot); err != nil {
 		return err
 	}
@@ -90,7 +103,19 @@ func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, o
 	if err := agentanalysis.VerifyArtifactFiles(artifactOutput, artifacts); err != nil {
 		return fmt.Errorf("verify copied artifacts: %w", err)
 	}
+	if err := agentanalysis.WriteWorkspaceExecutionRequestFile(requestRoot, execution); err != nil {
+		return fmt.Errorf("write workspace execution request: %w", err)
+	}
 	return nil
+}
+
+// WriteExecutionRequest writes one validated request into the fixed request volume.
+func WriteExecutionRequest(request agentanalysis.WorkspaceExecutionRequest, opts Options) error {
+	requestRoot := strings.TrimSpace(opts.RequestRoot)
+	if requestRoot == "" {
+		requestRoot = defaultRequestRoot
+	}
+	return agentanalysis.WriteWorkspaceExecutionRequestFile(filepath.Clean(requestRoot), request)
 }
 
 func requireEmptyDirectory(root string) error {
