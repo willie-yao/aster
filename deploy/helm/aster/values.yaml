@@ -268,9 +268,12 @@ agentSandbox:
         memory: 512Mi
         ephemeral-storage: 256Mi
   rbac:
-    # Creates the namespace-scoped Role/RoleBinding and optionally the client SA.
+    # Creates the namespace-scoped Role/RoleBinding and optionally the client SAs.
     create: true
-    clientServiceAccountName: ""
+    # Server identity for Fix Sandboxes.
+    fixClientServiceAccountName: ""
+    # Worker and fetcher identity for scheduled critic and shadow Sandboxes.
+    scheduledClientServiceAccountName: ""
 
 # Shared volume holding fetcher output and the AI cache. It must be
 # ReadWriteMany so the CronJob (writer) and the server (reader) can mount it at

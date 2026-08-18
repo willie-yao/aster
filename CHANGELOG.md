@@ -76,6 +76,41 @@ how to pin a consumer to a reviewed version.
 
 ### Changed
 
+- **The Agent Sandbox client ServiceAccount splits in two.** One identity used to
+  back the server, the watch worker, and the cron fetcher, which made the subject
+  of the Fix Sandbox RoleBinding the same Kubernetes object as the identity the
+  scheduled causal critic and analysis shadow pods run under. The chart's
+  mutual-exclusion guards already prevent Fix from being enabled alongside either
+  scheduled feature, so no released configuration granted a scheduled pod Fix
+  authority. The shared name was still the wrong shape: with
+  `agentSandbox.rbac.create: false` an operator wiring RBAC out of band has one
+  name to bind, so a Fix grant made for one release silently covers a later
+  critic release running under the same name.
+
+  `agentSandbox.rbac.clientServiceAccountName` is replaced by
+  `agentSandbox.rbac.fixClientServiceAccountName` (server, Fix Sandboxes) and
+  `agentSandbox.rbac.scheduledClientServiceAccountName` (worker and fetcher,
+  critic and shadow Sandboxes). The default names change from
+  `<fullname>-agent-sandbox-client` to `<fullname>-agent-sandbox-fix-client` and
+  `<fullname>-agent-sandbox-scheduled-client`. A values file still setting the old
+  key is rejected by the schema, and a render whose two identities resolve to the
+  same name is rejected outright.
+
+  **Upgrading.** With `rbac.create: true` the upgrade creates the new
+  ServiceAccount and prunes the old one, and nothing else is required. With
+  `rbac.create: false` the two keys must name two **distinct** externally managed
+  ServiceAccounts. Do not point `scheduledClientServiceAccountName` at the
+  ServiceAccount that previously served both roles: it still carries the
+  out-of-band Fix RoleBinding, which would hand scheduled pods the exact Fix
+  authority this split removes. Create a fresh scheduled ServiceAccount, or drop
+  the Fix binding from the old one before any scheduled workload starts.
+
+  The upgrade is disruptive to Sandbox operations already in flight. RoleBinding
+  subjects and admission policy requesters switch to the new names as soon as the
+  release applies, while running pods keep the ServiceAccount token they started
+  with, so an active Fix, critic, or shadow Sandbox is denied until its pod is
+  replaced. Upgrade when no Sandbox operation is in progress.
+
 - **`issues.Manager` splits into `File` and `Recover`.** Each caller used exactly
   one half of the old `Reconcile`, and merging them meant the dashboard action
   passed options that only the scheduled pass read, and vice versa. `File` adopts

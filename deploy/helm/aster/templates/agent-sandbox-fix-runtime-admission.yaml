@@ -6,7 +6,7 @@
 {{- $directBearer := and (eq (default "direct" $provider.credentialMode) "direct") (eq (default "none" $provider.auth.type) "bearer") -}}
 {{- $ca := $cfg.caBundle -}}
 {{- $caEnabled := ne $ca.existingConfigMap "" -}}
-{{- $clientSA := include "aster.agentSandboxClientServiceAccountName" . -}}
+{{- $clientSA := include "aster.agentSandboxFixClientServiceAccountName" . -}}
 {{- $requester := printf "system:serviceaccount:%s:%s" .Release.Namespace $clientSA -}}
 {{- $image := include "aster.agentSandboxExecutorImage" . -}}
 {{- $workloadSA := include "aster.agentSandboxWorkloadServiceAccountName" . -}}
