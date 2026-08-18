@@ -1,0 +1,33 @@
+diff --git a/packages/opencode/script/build.ts b/packages/opencode/script/build.ts
+index 236838d..de0f633 100755
+--- a/packages/opencode/script/build.ts
++++ b/packages/opencode/script/build.ts
+@@ -113,8 +113,15 @@ const allTargets: {
+   },
+ ]
+ 
+-const targets = singleFlag
+-  ? allTargets.filter((item) => {
++const requestedTarget = process.env.OPENCODE_BUILD_TARGET
++const targets = requestedTarget
++  ? allTargets.filter(
++      (item) =>
++        [item.os, item.arch, item.avx2 === false ? "baseline" : undefined, item.abi].filter(Boolean).join("-") ===
++        requestedTarget,
++    )
++  : singleFlag
++    ? allTargets.filter((item) => {
+       if (item.os !== process.platform || item.arch !== process.arch) {
+         return false
+       }
+@@ -132,7 +139,9 @@ const targets = singleFlag
+ 
+       return true
+     })
+-  : allTargets
++    : allTargets
++
++if (targets.length !== 1 && requestedTarget) throw new Error(`Unknown OpenCode build target: ${requestedTarget}`)
+ 
+ await $`rm -rf dist`
+ 

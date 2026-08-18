@@ -483,6 +483,9 @@ func TestWriteOpenCodeConfigReservesSourceCorrectionAgent(t *testing.T) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatal(err)
 	}
+	if _, ok := config["instructions"]; ok {
+		t.Fatalf("OpenCode configuration contains instructions: %v", config["instructions"])
+	}
 	agents := config["agent"].(map[string]any)
 	if len(agents) != 3 {
 		t.Fatalf("agents=%v", agents)
@@ -726,23 +729,20 @@ func TestPinnedOpenCodeSessionPermissionPrecedence(t *testing.T) {
 	}
 }
 
-func TestVerifyReadSafeWorkspaceRejectsInstructionFiles(t *testing.T) {
-	root, _ := executorTestFixture(t)
-	sourceRoot := filepath.Join(root, agentanalysis.WorkspaceSourceDir)
-	for _, name := range []string{"AGENTS.md", "nested/CLAUDE.md", "logs/CONTEXT.md"} {
-		if err := verifyReadSafeWorkspace(t.Context(), sourceRoot, []agentanalysis.WorkspaceFile{{Path: name}}); err == nil {
-			t.Fatalf("artifact instruction file was accepted: %s", name)
-		}
-	}
-	if err := verifyReadSafeWorkspace(t.Context(), sourceRoot, []agentanalysis.WorkspaceFile{{Path: "nested/instructions.md"}}); err != nil {
-		t.Fatalf("benign similarly named file was rejected: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(sourceRoot, "AGENTS.md"), []byte("untrusted\n"), 0o600); err != nil {
+func TestOpenCodeEnvironmentDisablesProjectInstructions(t *testing.T) {
+	env, err := openCodeEnvironment(t.TempDir(), t.TempDir(), testGatewayProvider("https://provider.example/v1/chat/completions", "fixture-model"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	runExecutorGit(t, sourceRoot, "add", "AGENTS.md")
-	if err := verifyReadSafeWorkspace(t.Context(), sourceRoot, []agentanalysis.WorkspaceFile{{Path: "logs/build.log"}}); err == nil {
-		t.Fatal("tracked source instruction file was accepted")
+	for _, required := range []string{
+		"OPENCODE_DISABLE_PROJECT_CONFIG=true",
+		"OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=true",
+		"OPENCODE_DISABLE_AUTOUPDATE=true",
+		"OPENCODE_DISABLE_EXTERNAL_SKILLS=true",
+	} {
+		if !slices.Contains(env, required) {
+			t.Fatalf("OpenCode environment lacks %q: %v", required, env)
+		}
 	}
 }
 

@@ -81,9 +81,12 @@ normal production default when shadowing is disabled.
 
 OpenCode can use bounded native read, glob, and grep operations. Network fetch,
 repository writes, arbitrary shell, delegation, project configuration, and
-external skills are denied. Repository-controlled `AGENTS.md`, `CLAUDE.md`, and
-`CONTEXT.md` files are rejected before execution so workspace content cannot
-change the evaluator's instructions.
+external skills are denied. The analyzer uses an Aster-pinned OpenCode 1.18.2
+binary whose single source patch makes `OPENCODE_DISABLE_PROJECT_CONFIG` also
+disable dynamic `AGENTS.md`, `CLAUDE.md`, and `CONTEXT.md` discovery during native
+reads. Those files remain byte-identical ordinary source or artifact content.
+They reach the model only when the model explicitly reads them, never as ambient
+instructions attached to an adjacent read.
 
 Successful content-bearing reads produce engine-issued evidence handles. The
 model selects handles in the structured result instead of authoring citation
@@ -99,14 +102,21 @@ remediation, or Fix authority.
 The shadow uses separate immutable images and identities:
 
 - `analysisstager` prepares one sealed workspace snapshot.
-- `analysisexecutor` runs the pinned OpenCode analyzer and writes exactly one
-  canonical result.
+- `analysisexecutor` verifies the pinned OpenCode runtime manifest and binary
+  digest, runs the analyzer, and writes exactly one canonical result.
 - Scheduled shadowing also runs `analysisstager` as the namespace-local publisher
   and cleanup image. Those Jobs receive no provider, OAuth, bot, or GitHub
   credential.
 - The Aster writer creates and observes the Sandbox through a dedicated client
   ServiceAccount.
 - The Sandbox Pod uses a separate tokenless workload ServiceAccount.
+
+The executor image records the upstream OpenCode 1.18.2 commit, source archive,
+frozen models.dev snapshot, Bun builder and binary, Aster runtime patch,
+build-only target-selection patch, and final binary digest. The executor verifies
+the manifest and binary before any provider request. The specialized analyzer
+binary omits the unused embedded Web UI. Runtime and build patches are stored
+under `hack/patches/`; the compressed models catalog is under `hack/opencode/`.
 
 Admission pins the stager and executor digests, RuntimeClass, ServiceAccounts,
 PVC identities, read-only mounts, resource bounds, security contexts, provider
@@ -208,8 +218,11 @@ go test ./benchmarks -run TestAgentSandboxAnalyzerBenchmark -count=1
 Generate the private image contract with
 `hack/test-agent-sandbox-analysis-images.sh` after resolving immutable image
 digests. The contract binds both digests, OCI revisions, embedded `--version`
-output, runtime UID/GID, image tag, Go versions, and OpenCode 1.18.2 under one
-SHA-256. A final prepare-only pass must include the same contract before scored
+output, runtime UID/GID, image tag, Go versions, upstream OpenCode commit and
+source digest, frozen models.dev digest, builder identities, Aster patch identity,
+and final OpenCode binary digest under one SHA-256. The image test also runs the
+exact binary against a loopback instruction-file canary before writing the
+contract. A final prepare-only pass must include the same contract before scored
 execution.
 
 The in-process arm uses the same two `BENCH_MODEL_*` values directly. It does not
