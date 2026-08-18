@@ -1,9 +1,14 @@
 package fetcher
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,6 +40,91 @@ func TestPullRequestsEnabled(t *testing.T) {
 				t.Fatalf("pullRequestsEnabled = %t, want %t", got, tc.want)
 			}
 		})
+	}
+}
+
+// The warning is the only signal that anonymous GitHub reads will throttle
+// triage, so it must fire exactly when triage is on and no token is set.
+func TestWarnPullRequestTokenMissing(t *testing.T) {
+	enabled := &project.Config{PullRequests: &project.PullRequests{Enabled: true}}
+	cases := []struct {
+		name      string
+		cfg       *project.Config
+		readToken string
+		token     string
+		wantWarn  bool
+	}{
+		{name: "disabled", cfg: &project.Config{}},
+		{name: "disabled without token", cfg: nil},
+		{name: "enabled with read token", cfg: enabled, readToken: "r"},
+		{name: "enabled with fallback token", cfg: enabled, token: "t"},
+		{name: "enabled without token", cfg: enabled, wantWarn: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GITHUB_READ_TOKEN", tc.readToken)
+			t.Setenv("GITHUB_TOKEN", tc.token)
+
+			var buf bytes.Buffer
+			flags := log.Flags()
+			log.SetOutput(&buf)
+			log.SetFlags(0)
+			t.Cleanup(func() {
+				log.SetOutput(os.Stderr)
+				log.SetFlags(flags)
+			})
+
+			(&pipeline{cfg: tc.cfg}).warnPullRequestTokenMissing()
+
+			got := strings.Contains(buf.String(), "GITHUB_READ_TOKEN")
+			if got != tc.wantWarn {
+				t.Fatalf("warned = %t, want %t (log: %q)", got, tc.wantWarn, buf.String())
+			}
+		})
+	}
+}
+
+// setupPipeline runs once per process for both the one-shot and watch entry
+// points, so the warning must fire there rather than once per pass.
+func TestSetupPipelineWarnsWhenTriageHasNoToken(t *testing.T) {
+	projectDir := t.TempDir()
+	config := fmt.Sprintf(`id: test
+name: Test
+discovery:
+  source: bucket
+storage:
+  provider: local
+  base: %s
+branding:
+  title: Test
+  base_path: /
+  site_url: https://example.invalid
+  source_repo:
+    owner: example
+    name: repo
+pull_requests:
+  enabled: true
+`, t.TempDir())
+	if err := os.WriteFile(filepath.Join(projectDir, "project.yaml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GITHUB_READ_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	var buf bytes.Buffer
+	flags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(os.Stderr)
+		log.SetFlags(flags)
+	})
+
+	if _, err := setupPipeline(Options{ProjectDir: projectDir, OutDir: t.TempDir()}); err != nil {
+		t.Fatalf("setupPipeline: %v", err)
+	}
+	if !strings.Contains(buf.String(), "GITHUB_READ_TOKEN") {
+		t.Fatalf("setupPipeline did not warn: %q", buf.String())
 	}
 }
 

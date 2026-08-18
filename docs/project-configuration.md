@@ -181,6 +181,35 @@ pull_requests:
   builds_per_job: 3   # builds listed per presubmit before the newest is selected
 ```
 
+### Credentials (read this first)
+
+Triage reads the GitHub API on every pass, so it needs a read-only token:
+
+| Deployment | Where it runs | Credential |
+|---|---|---|
+| GitHub Pages | reusable workflow | `GITHUB_TOKEN`, already supplied |
+| Kubernetes | worker or fetcher | `GITHUB_READ_TOKEN` |
+
+`GITHUB_READ_TOKEN` is preferred and `GITHUB_TOKEN` is the fallback, so the
+Pages path is authenticated with no action from you. On the Kubernetes path,
+set `ai.githubReadToken` or `ai.githubReadTokenSecretName`; both apply whether
+or not `ai.enabled` is true, because triage costs no model calls.
+
+For a public `branding.source_repo` the token needs **no repository
+privileges**. Its only job is to lift the rate limit: GitHub allows anonymous
+callers 60 requests an hour against a shared per-IP budget, a personal access
+token 5,000, and the Actions `GITHUB_TOKEN` 1,000 per repository. One pass
+spends a paginated listing of open pull requests plus paginated changed-file
+reads for each pull request with a comparable failing check. On a busy
+repository a single pass exceeds 60 on its own, and the chart's default
+`fetcher.watchInterval: 5m` schedules 12 passes an hour. A Pages deploy runs on
+a cron, so its 1,000 is ample.
+
+Absence is never a startup error. The fetcher logs one warning at startup, then
+triage degrades to intermittent 403s while the dashboard keeps publishing, so
+the only symptom is a pull request view that stops updating. `aster onboard
+doctor` reports the same gap as a warning.
+
 `source.include_presubmits` is not a prerequisite for pull request triage, and
 turning it on does not improve attribution. Triage always resolves presubmits
 from the job catalog, and attribution reads base-branch history only, so a
@@ -253,7 +282,9 @@ PULL_REQUEST_ESCALATION_ENABLED=true   # plus AI_TOKEN, AI_ENDPOINT, AI_MODEL
 ```
 
 It requires `pull_requests.enabled`, an authenticated admin, and a server
-started with `-project-dir`. The Pages path never offers it.
+started with `-project-dir`. The Pages path never offers it. The server reads
+changed files with `GITHUB_READ_TOKEN`, `BOT_TOKEN`, or `GITHUB_TOKEN`, in that
+order, so the `BOT_TOKEN` that admin actions already require covers it.
 
 The contract is deliberately narrow:
 

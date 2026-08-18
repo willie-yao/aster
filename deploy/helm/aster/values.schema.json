@@ -1434,11 +1434,11 @@
         },
         "githubReadToken": {
           "type": "string",
-          "description": "Inline read-only GitHub source token. Prefer githubReadTokenSecretName."
+          "description": "Inline read-only GitHub token for analysis source grounding and pull request triage. Read whether or not ai.enabled is true. Prefer githubReadTokenSecretName."
         },
         "githubReadTokenSecretName": {
           "type": "string",
-          "description": "Existing read-only GitHub source credential Secret name."
+          "description": "Existing read-only GitHub credential Secret name, used for analysis source grounding and pull request triage. Read whether or not ai.enabled is true."
         },
         "githubReadTokenSecretKey": {
           "type": "string",

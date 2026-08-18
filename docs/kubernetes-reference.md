@@ -241,7 +241,7 @@ main operator controls.
 | `ai.reasoningEffort` | Optional provider reasoning effort. Empty uses the provider default. |
 | `ai.contextWindowTokens` | Optional operator-provided provider context window. Set only with endpoint evidence. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Existing provider token Secret and key. |
-| `ai.githubReadTokenSecretName`, `ai.githubReadTokenSecretKey` | Optional separate read-only GitHub token for source grounding. |
+| `ai.githubReadTokenSecretName`, `ai.githubReadTokenSecretKey` | Read-only GitHub token for analysis source grounding and pull request triage. Rendered whether or not `ai.enabled` is set. Required for triage, which otherwise reads GitHub anonymously at 60 requests per hour. |
 | `agentSandbox.analysisShadow.*` | Disabled private Agent comparison, exact admission identity, limits, and private ledger claim. |
 | `fetcher.schedule` | Cron schedule. Used only in cron mode. |
 | `fetcher.suspend` | Suspend CronJob starts. Keep true when preserving a safe cron rollback from watch mode. |

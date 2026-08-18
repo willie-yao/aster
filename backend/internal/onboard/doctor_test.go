@@ -235,6 +235,163 @@ func TestDoctor_DiscoveryErrorIsActionable(t *testing.T) {
 	t.Fatal("missing Prow discovery check")
 }
 
+// The read-token check is the only offline signal that triage will read GitHub
+// anonymously, so each way a deployment can supply the token must be resolved.
+func TestDoctor_PullRequestTriageCredential(t *testing.T) {
+	const triageProjectYAML = doctorProjectYAML + `pull_requests:
+  enabled: true
+`
+	const storage = `persistence:
+  storageClass: azurefile-csi
+  accessMode: ReadWriteMany
+`
+	cases := []struct {
+		name   string
+		values string
+		want   DoctorStatus
+		// detail distinguishes the three warn branches, which otherwise share a
+		// status and could pass through the wrong one.
+		detail string
+	}{
+		{name: "no token", values: storage + "ai:\n  enabled: false\n", want: DoctorWarn, detail: "reads GitHub anonymously"},
+		{name: "inline token", values: storage + "ai:\n  enabled: false\n  githubReadToken: ghp-test\n", want: DoctorPass},
+		{name: "secret name", values: storage + "ai:\n  enabled: false\n  githubReadTokenSecretName: gh-read\n", want: DoctorPass},
+		{name: "placeholder token", values: storage + "ai:\n  enabled: false\n  githubReadTokenSecretName: <your-secret>\n", want: DoctorWarn, detail: "reads GitHub anonymously"},
+		{name: "fetcher extraEnv", values: storage + "ai:\n  enabled: false\nfetcher:\n  extraEnv:\n    - name: GITHUB_READ_TOKEN\n      value: ghp-test\n", want: DoctorPass},
+		{name: "extraEnv secretKeyRef", values: storage + "ai:\n  enabled: false\nfetcher:\n  extraEnv:\n    - name: GITHUB_READ_TOKEN\n      valueFrom:\n        secretKeyRef:\n          name: gh\n          key: token\n", want: DoctorPass},
+		{name: "extraEnv optional secretKeyRef", values: storage + "ai:\n  enabled: false\nfetcher:\n  extraEnv:\n    - name: GITHUB_READ_TOKEN\n      valueFrom:\n        secretKeyRef:\n          name: gh\n          key: token\n          optional: true\n", want: DoctorWarn, detail: "mounted as optional"},
+		{name: "extraEnv empty value", values: storage + "ai:\n  enabled: false\n  githubReadTokenSecretName: gh-read\nfetcher:\n  extraEnv:\n    - name: GITHUB_READ_TOKEN\n      value: \"\"\n", want: DoctorWarn, detail: "blanks the read token"},
+		{name: "empty fallback does not shadow the chart token", values: storage + "ai:\n  enabled: false\n  githubReadTokenSecretName: gh-read\nfetcher:\n  extraEnv:\n    - name: GITHUB_TOKEN\n      value: \"\"\n", want: DoctorPass},
+		{name: "last duplicate wins", values: storage + "ai:\n  enabled: false\nfetcher:\n  extraEnv:\n    - name: GITHUB_READ_TOKEN\n      value: ghp-test\n    - name: GITHUB_READ_TOKEN\n      value: \"\"\n", want: DoctorWarn, detail: "reads GitHub anonymously"},
+		{name: "optional override cannot take away the chart token", values: storage + "ai:\n  enabled: false\n  githubReadTokenSecretName: gh-read\nfetcher:\n  extraEnv:\n    - name: GITHUB_READ_TOKEN\n      valueFrom:\n        secretKeyRef:\n          name: gh\n          key: token\n          optional: true\n", want: DoctorPass},
+		{name: "fallback rescues an optional preferred token", values: storage + "ai:\n  enabled: true\n  api: chat_completions\n  endpoint: https://model.example.test/v1/chat/completions\n  model: fixture\n  existingSecret: shared-ai\nfetcher:\n  extraEnv:\n    - name: GITHUB_TOKEN\n      value: ghp-test\n", want: DoctorPass},
+		{name: "unrelated extraEnv", values: storage + "ai:\n  enabled: false\nfetcher:\n  extraEnv:\n    - name: HTTPS_PROXY\n      value: http://proxy\n", want: DoctorWarn, detail: "reads GitHub anonymously"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files := doctorFiles(map[string]string{"/consumer/deploy/values.yaml": tc.values})
+			files["/consumer/project.yaml"] = triageProjectYAML
+			report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+				files:   files,
+				sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+			})
+			if report.HasFailures() {
+				t.Fatalf("unexpected failures: %+v", report.Checks)
+			}
+			if !hasDoctorCheck(report, "pull request triage credential", tc.want) {
+				t.Fatalf("want %s, checks = %+v", tc.want, report.Checks)
+			}
+			if tc.detail == "" {
+				return
+			}
+			for _, check := range report.Checks {
+				if check.Name == "pull request triage credential" && strings.Contains(check.Detail, tc.detail) {
+					return
+				}
+			}
+			t.Fatalf("want detail containing %q, checks = %+v", tc.detail, report.Checks)
+		})
+	}
+}
+
+// ai.existingSecret is mounted with optional: true, so doctor cannot prove the
+// key is present and must say so rather than passing the deployment.
+func TestDoctor_PullRequestTriageExistingSecretIsUnverifiable(t *testing.T) {
+	const triageProjectYAML = doctorProjectYAML + `pull_requests:
+  enabled: true
+`
+	values := `persistence:
+  storageClass: azurefile-csi
+  accessMode: ReadWriteMany
+ai:
+  enabled: true
+  api: chat_completions
+  endpoint: https://model.example.test/v1/chat/completions
+  model: fixture
+  existingSecret: shared-ai
+`
+	files := doctorFiles(map[string]string{"/consumer/deploy/values.yaml": values})
+	files["/consumer/project.yaml"] = triageProjectYAML
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+		files:   files,
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	if !hasDoctorCheck(report, "pull request triage credential", DoctorWarn) {
+		t.Fatalf("checks = %+v", report.Checks)
+	}
+}
+
+// The reusable workflow always passes the Actions token to the fetch step, so
+// Pages consumers must not be told to configure a credential they already have.
+func TestDoctor_PullRequestTriageCredentialPassesOnPages(t *testing.T) {
+	const triageProjectYAML = doctorProjectYAML + `pull_requests:
+  enabled: true
+`
+	files := doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": doctorPagesWorkflow})
+	files["/consumer/project.yaml"] = triageProjectYAML
+	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+		files:   files,
+		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+	})
+	if !hasDoctorCheck(report, "pull request triage credential", DoctorPass) {
+		t.Fatalf("checks = %+v", report.Checks)
+	}
+}
+
+// Triage that is off, a project with no deployment profile, or a Pages workflow
+// that never reaches the reusable deploy must not report on a credential doctor
+// does not use or cannot resolve.
+func TestDoctor_PullRequestTriageCredentialStaysSilent(t *testing.T) {
+	const triageProjectYAML = doctorProjectYAML + `pull_requests:
+  enabled: true
+`
+	cases := []struct {
+		name   string
+		triage bool
+		files  map[string]string
+	}{
+		{name: "triage disabled", files: map[string]string{"/consumer/deploy/values.yaml": "persistence:\n  existingClaim: data\nai:\n  enabled: false\n"}},
+		{name: "no deployment profile"},
+		{
+			name:   "pages workflow misses the reusable deploy",
+			triage: true,
+			files:  map[string]string{"/consumer/.github/workflows/deploy.yml": "jobs:\n  deploy:\n    uses: other/repo/.github/workflows/build.yml@main\n"},
+		},
+		{
+			name:   "pages workflow is not valid yaml",
+			triage: true,
+			files:  map[string]string{"/consumer/.github/workflows/deploy.yml": "jobs: [\n"},
+		},
+		{
+			name:   "pages skips the fetch entirely",
+			triage: true,
+			files: map[string]string{"/consumer/.github/workflows/deploy.yml": `jobs:
+  deploy:
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
+    with:
+      skip-fetch: true
+`},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files := doctorFiles(tc.files)
+			if tc.triage {
+				files["/consumer/project.yaml"] = triageProjectYAML
+			}
+			report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+				files:   files,
+				sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+			})
+			for _, check := range report.Checks {
+				if check.Name == "pull request triage credential" {
+					t.Fatalf("unexpected credential check: %+v", check)
+				}
+			}
+		})
+	}
+}
+
 func hasDoctorCheck(report DoctorReport, name string, status DoctorStatus) bool {
 	for _, check := range report.Checks {
 		if check.Name == name && check.Status == status {
