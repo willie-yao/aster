@@ -1428,6 +1428,9 @@ func fixDestinationFingerprint(eff project.FixPRs, destination project.FixDestin
 // Resolve marks a systemic pattern as resolved: it is hidden from the active
 // view until a failing build newer than the current watermark recurs. note is
 // an optional maintainer comment (e.g. the fixing PR). login attributes it.
+//
+// Resolution is a maintainer acknowledgement about the whole pattern, not a
+// remediation-contract action, so it stays available for causal-group results.
 func (s *Service) Resolve(failureID, login, note string) error {
 	return patternstate.WithLock(s.dataDir, func() error { return s.resolveUnlocked(failureID, login, note) })
 }
@@ -1436,9 +1439,6 @@ func (s *Service) resolveUnlocked(failureID, login, note string) error {
 	pa, err := s.findPattern(failureID)
 	if err != nil {
 		return err
-	}
-	if !models.PatternAllowsActions(*pa) {
-		return withReason(ReasonContractGenerationFailed, ErrRemediationInconclusive, "This causal-group result is analysis-only and cannot start an action.")
 	}
 	if !pa.Systemic {
 		return fmt.Errorf("only systemic recurring patterns can be resolved")
@@ -1463,6 +1463,10 @@ func (s *Service) resolveUnlocked(failureID, login, note string) error {
 }
 
 // Unresolve clears a pattern's resolved mark so it returns to the active view.
+// Clearing an acknowledgement can only un-hide a pattern, so it deliberately
+// does not require the pattern to still be published or freshly correlated: a
+// resolution outlives its pattern (see resolve.State.Prune) and must stay
+// clearable.
 func (s *Service) Unresolve(failureID string) error {
 	return patternstate.WithLock(s.dataDir, func() error { return s.unresolveUnlocked(failureID) })
 }
@@ -1470,13 +1474,6 @@ func (s *Service) Unresolve(failureID string) error {
 func (s *Service) unresolveUnlocked(failureID string) error {
 	if !resolve.Load(s.dataDir).IsResolved(failureID) {
 		return ErrNotFound
-	}
-	pattern, err := s.findPattern(failureID)
-	if err != nil {
-		return err
-	}
-	if !models.PatternAllowsActions(*pattern) {
-		return withReason(ReasonContractGenerationFailed, ErrRemediationInconclusive, "This causal-group result is analysis-only and cannot start an action.")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -7,11 +7,25 @@ import {
   eligibilityForState,
   normalizeActionEligibility,
   patternActionEligibilityHint,
+  patternDismissible,
+  patternDraftable,
   patternLifecycleActive,
   selectActionEligibility,
 } from "../src/lib/actionEligibility.js";
+import type { PatternAnalysis } from "../src/types/dashboard.js";
 
 const actionableTarget = { intent: "add_symbol" as const, path: "main.go", symbol: "MissingHelper" };
+
+const basePattern: PatternAnalysis = {
+  id: "pattern-1",
+  subject: "periodic-x",
+  generated_at: "2026-08-18T00:00:00Z",
+  builds_analyzed: 3,
+  systemic: true,
+  confidence: "high",
+  shared_builds: ["100", "250"],
+  summary: "etcd leader election times out",
+};
 
 test("pattern action eligibility handles deterministic blocked states", () => {
   assert.equal(patternActionEligibilityHint(undefined)?.code, "contract_generation_failed");
@@ -71,10 +85,66 @@ test("structured action reasons distinguish safe blocked states", () => {
   assert.equal(patternActionEligibilityHint([actionableTarget], undefined, false)?.code, "non_systemic");
 });
 
+test("pattern drafting stays independent of dismissal", () => {
+  const legacy: PatternAnalysis = { ...basePattern };
+
+  assert.equal(patternDraftable(legacy), true);
+  // Causal-group results publish per-cause remediation, not a pattern contract.
+  assert.equal(patternDraftable({ ...legacy, recurrence_classification: "shared_cause" }), false);
+  // A missing watermark blocks dismissal but must not block drafting.
+  assert.equal(patternDismissible({ ...legacy, shared_builds: [] }), false);
+  assert.equal(patternDraftable({ ...legacy, shared_builds: [] }), true);
+
+  assert.equal(patternDraftable({ ...legacy, systemic: false }), false);
+  assert.equal(patternDraftable({ ...legacy, id: undefined }), false);
+  assert.equal(patternDraftable({ ...legacy, lifecycle: { state: "observing", reason: "r" } }), false);
+  assert.equal(patternDraftable(legacy, { state: "retained", evidence_available: true }), false);
+});
+
 test("legacy eligibility payloads derive a compatible reason code", () => {
   const legacy = normalizeActionEligibility({ state: "investigation_required", reason: "legacy reason" });
   assert.equal(legacy.code, "investigation_required");
   assert.equal(legacy.reason, "legacy reason");
+});
+
+test("pattern dismissal never depends on the causal-group classification", () => {
+  // Every pattern the engine publishes carries a recurrence_classification, so
+  // keying visibility off it hid the control everywhere. This pins that it does
+  // not.
+  const causalGroup: PatternAnalysis = {
+    ...basePattern,
+    recurrence_classification: "shared_cause",
+    causal_groups: [{ builds: ["100", "250"], root_cause: "etcd timeout", confidence: "high" }],
+  };
+
+  assert.equal(patternDismissible(causalGroup), true);
+  assert.equal(patternDismissible({ ...causalGroup, recurrence_classification: "mixed_causes" }), true);
+  assert.equal(patternDismissible(basePattern), true);
+});
+
+test("pattern dismissal matches the gates the server enforces", () => {
+  const causalGroup: PatternAnalysis = { ...basePattern, recurrence_classification: "shared_cause" };
+
+  assert.equal(patternDismissible({ ...causalGroup, id: "" }), false);
+  assert.equal(patternDismissible({ ...causalGroup, id: undefined }), false);
+  assert.equal(patternDismissible({ ...causalGroup, systemic: false }), false);
+  for (const state of ["observing", "recovered", "verified_fixed"] as const) {
+    assert.equal(patternDismissible({ ...causalGroup, lifecycle: { state, reason: "r" } }), false);
+  }
+  assert.equal(patternDismissible({ ...causalGroup, lifecycle: { state: "active", reason: "r" } }), true);
+
+  // The server derives the recurrence watermark from shared_builds and refuses a
+  // pattern with no usable build history.
+  assert.equal(patternDismissible({ ...causalGroup, shared_builds: undefined }), false);
+  assert.equal(patternDismissible({ ...causalGroup, shared_builds: [] }), false);
+  assert.equal(patternDismissible({ ...causalGroup, shared_builds: ["not-a-build"] }), false);
+
+  // findPattern rejects a pattern whose refresh is not current or whose evidence
+  // has left the job window.
+  assert.equal(patternDismissible(causalGroup, { state: "current", evidence_available: true }), true);
+  assert.equal(patternDismissible(causalGroup, { state: "current", evidence_available: false }), false);
+  assert.equal(patternDismissible(causalGroup, { state: "retained", evidence_available: true }), false);
+  assert.equal(patternDismissible(causalGroup, { state: "failed", evidence_available: true }), false);
 });
 
 test("action eligibility explanations use a polite status surface", async () => {

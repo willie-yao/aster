@@ -1,5 +1,5 @@
 import type { ActionEligibility, ActionReasonCode } from "../types/actions";
-import type { AIAnalysis, PatternLifecycle, PatternRefreshStatus, RemediationTarget } from "../types/dashboard";
+import type { AIAnalysis, PatternAnalysis, PatternLifecycle, PatternRefreshStatus, RemediationTarget } from "../types/dashboard";
 import { buildActionsReady } from "./buildFailures.js";
 
 const stateCode: Record<ActionEligibility["state"], ActionReasonCode> = {
@@ -63,6 +63,49 @@ export function normalizeActionEligibility(value: ActionEligibility): ActionElig
 
 export function patternLifecycleActive(lifecycle: PatternLifecycle | undefined): boolean {
   return !lifecycle || lifecycle.state === "active";
+}
+
+// patternDismissible reports whether a maintainer can dismiss a pattern.
+// Dismissal acknowledges the whole pattern rather than starting a
+// remediation-contract action, so it deliberately ignores
+// recurrence_classification: causal-group results are dismissible too. The
+// remaining checks mirror the server, which needs a current refresh with
+// available evidence, a systemic and lifecycle-active pattern, and at least one
+// shared build to use as the recurrence watermark.
+export function patternDismissible(
+  pattern: PatternAnalysis,
+  refreshStatus?: PatternRefreshStatus,
+): boolean {
+  if (refreshStatus && (refreshStatus.state !== "current" || !refreshStatus.evidence_available)) {
+    return false;
+  }
+  return Boolean(
+    pattern.id &&
+    pattern.systemic &&
+    patternLifecycleActive(pattern.lifecycle) &&
+    // resolve.Watermark parses build ids as decimal integers. This is
+    // deliberately stricter (unsigned only): being wrong hides a control the
+    // server would have accepted, rather than offering one it will reject.
+    pattern.shared_builds?.some((buildID) => /^\d+$/.test(buildID.trim())),
+  );
+}
+
+// patternDraftable reports whether pattern-level issue and fix-PR drafting
+// applies. Causal-group results publish per-cause remediation instead of a
+// pattern-level remediation contract, so they never qualify. This is
+// independent of patternDismissible: a pattern can be draftable but not
+// dismissible, or the reverse.
+export function patternDraftable(
+  pattern: PatternAnalysis,
+  refreshStatus?: PatternRefreshStatus,
+): boolean {
+  return Boolean(
+    !pattern.recurrence_classification &&
+    (!refreshStatus || refreshStatus.state === "current") &&
+    pattern.id &&
+    pattern.systemic &&
+    patternLifecycleActive(pattern.lifecycle),
+  );
 }
 
 function targetIsComplete(target: RemediationTarget): boolean {

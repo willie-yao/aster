@@ -843,8 +843,14 @@ func TestStalePatternIsNotActionable(t *testing.T) {
 	if err := s.Resolve(pa.ID, "alice", ""); ReasonCodeOf(err) != ReasonRetainedStale {
 		t.Fatalf("Resolve error = %v code=%s", err, ReasonCodeOf(err))
 	}
-	if err := s.Unresolve(pa.ID); ReasonCodeOf(err) != ReasonRetainedStale {
-		t.Fatalf("Unresolve error = %v code=%s", err, ReasonCodeOf(err))
+	// Revoking an acknowledgement only un-hides a pattern, so it stays possible
+	// even once correlation goes stale. Otherwise a dismissal outlives the
+	// evidence that justified it with no way back.
+	if err := s.Unresolve(pa.ID); err != nil {
+		t.Fatalf("Unresolve error = %v", err)
+	}
+	if resolve.Load(dataDir).IsResolved(pa.ID) {
+		t.Fatal("stale pattern should be restorable")
 	}
 }
 
