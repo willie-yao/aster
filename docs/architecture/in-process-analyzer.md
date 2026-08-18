@@ -20,8 +20,15 @@ features. It does not replace the fetcher or worker as the owner of scheduled
 failure analysis.
 
 Optional Agent Sandbox analysis shadows run after an authoritative refresh and
-write private comparison ledgers. They use the OpenCode analyzer boundary but do
-not replace the published result or participate in normal cache acceptance.
+write private comparison ledgers. They do not replace the published result or
+participate in normal analysis cache acceptance.
+
+The disabled-by-default Agent Sandbox OpenCode analyzer is the implementation
+used by scheduled shadowing and explicit evaluation tests. The benchmark uses a
+pre-populated private input claim; scheduled shadowing uses a tokenless
+namespace-local publisher Job. Both paths share the same staged workspace,
+executor, result validation, and cleanup contract. Neither has public output or
+normal cache authority.
 
 ## End-to-end flow
 
@@ -269,14 +276,24 @@ data-serving path.
   Pattern actions keep their separate `PatternAllowsActions` gate. The coding
   agent, review, validation, and PR state are independent of failure-analysis
   tools and cache acceptance.
-- **Agent Sandbox OpenCode analysis shadow** uses `agentanalysis.Runtime` and
-  `backend/internal/fetcher/shadow_analysis.go`, the workspace contracts under
-  `backend/internal/agentanalysis`, the read-only stager in
-  `backend/internal/analysisstager`, and the executor in
-  `backend/internal/analysisexecutor`. After authoritative publication, the
-  writer may freeze bounded evidence, schedule sampled Sandboxes, compare the
-  result privately, and append content-free lifecycle telemetry. The shadow
-  cannot publish a replacement or seed the normal cache.
+- **Scheduled analysis shadows** use the same file-backed OpenCode contract as
+  the analyzer benchmark. After authoritative publication, the fetcher freezes
+  a local verification copy, computes the prompt, skill-plan, source, artifact,
+  and request identities, then asks `analysispublisher` to run a tokenless
+  namespace-local Job. That Job publishes the identical snapshot to private
+  input storage and is deleted before the Agent Sandbox starts. The Sandbox
+  stager copies the input into a fresh read-only workspace, the executor returns
+  one bounded result, and the dashboard independently validates it against the
+  retained local copy. A second tokenless Job removes the leased remote input.
+  Only the private ledger is updated; public output and the authoritative cache
+  cannot change.
+- **Agent Sandbox OpenCode analyzer** uses workspace contracts under
+  `backend/internal/agentanalysis`, namespace-local input lifecycle under
+  `backend/internal/analysispublisher`, the stager under
+  `backend/internal/analysisstager`, and the executor under
+  `backend/internal/analysisexecutor`. The benchmark and scheduled shadow share
+  this exact runtime and differ only in how the already frozen input is
+  published to the private claim.
 
 ## Contributor map
 
@@ -297,4 +314,5 @@ data-serving path.
 | Analysis chat and actions | `backend/internal/analysischat/`, `backend/internal/actions/` |
 | Remediation investigation authority | `backend/internal/remediationinvestigation/`, `backend/internal/remediationpolicy/`, `backend/internal/actionverify/`, `backend/internal/sourceinvestigation/` |
 | Fix PR runtime | `backend/internal/fixpr/`, `backend/internal/fixruntime/` |
-| Agent Sandbox analysis shadow | `backend/internal/agentanalysis/workspace_analysis.go`, `backend/internal/agentanalysis/workspace_evidence_handles.go`, `backend/internal/agentanalysis/workspace_result_validation.go`, `backend/internal/analysisstager/`, `backend/internal/analysisexecutor/` |
+| Scheduled analysis shadows | `backend/internal/fetcher/shadow_analysis.go`, `backend/internal/agentanalysis/workspace*.go`, `backend/internal/analysispublisher/`, `backend/internal/analysisstager/`, `backend/internal/analysisexecutor/` |
+| Agent Sandbox analyzer benchmark | `backend/benchmarks/agent_sandbox_analyzer_benchmark_test.go`, `hack/compare-agent-sandbox-analyzer-benchmark.py` |

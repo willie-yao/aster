@@ -2,6 +2,7 @@ package benchmarks
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,7 +42,7 @@ func TestAgentSandboxAnalyzerReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	criteria := report["criteria"].(map[string]any)
-	if criteria["recommendation"] != "continue_experiment_not_replacement" || criteria["automatic_quality_passed"] != true || criteria["quality_passed"] != false || criteria["simplicity_passed"] != true {
+	if criteria["shadow_comparison"] != "insufficient_evidence" || criteria["authoritative_analyzer"] != "inprocess_unchanged" || report["shadow_comparison"] != "insufficient_evidence" {
 		t.Fatalf("criteria = %+v", criteria)
 	}
 	evidenceModes := report["evidence_mode_coverage"].(map[string]any)
@@ -74,7 +75,7 @@ func TestAgentSandboxAnalyzerReport(t *testing.T) {
 	scoresPath := filepath.Join(dir, "blind-scores.json")
 	scores := map[string]any{
 		"version": 2, "packet_set_sha256": packetDoc.PacketSetSHA256, "reference_set_sha256": packetDoc.ReferenceSetSHA256, "rubric_version": benchmarkHumanScoreRubricVersion, "score_max": 10,
-		"dimensions": benchmarkHumanScoreDimensions,
+		"dimensions": benchmarkHumanScoreDimensions, "scoring_timestamp": "2026-08-18T00:00:00Z",
 		"scores": func() []map[string]any {
 			out := make([]map[string]any, 0, len(packetDoc.Packets))
 			for _, item := range packetDoc.Packets {
@@ -114,6 +115,7 @@ func TestAgentSandboxAnalyzerReport(t *testing.T) {
 		"invalid full credit": func(doc map[string]any) {
 			doc["scores"].([]any)[0].(map[string]any)["causal_assessment"].(map[string]any)["alignment"] = "missing"
 		},
+		"missing scoring timestamp": func(doc map[string]any) { delete(doc, "scoring_timestamp") },
 	} {
 		t.Run("freeze rejects malformed "+name, func(t *testing.T) {
 			var doc map[string]any
@@ -197,8 +199,13 @@ func TestAgentSandboxAnalyzerReport(t *testing.T) {
 	if blindQuality["packet_set_sha256"] != packetDoc.PacketSetSHA256 || blindQuality["reference_set_sha256"] != packetDoc.ReferenceSetSHA256 || blindQuality["score_set_sha256"] == "" {
 		t.Fatalf("blind quality identities = %+v", blindQuality)
 	}
-	if criteria["blind_quality_complete"] != true || criteria["blind_quality_passed"] != true || criteria["quality_passed"] != true {
+	if criteria["blind_quality_complete"] != true || criteria["blind_quality_non_regression"] != true || criteria["shadow_comparison"] != "insufficient_evidence" || criteria["evidence_complete"] != false {
 		t.Fatalf("scored criteria = %+v", criteria)
+	}
+	unresolved := report["unresolved_cases"].([]any)
+	caseScores := blindQuality["cases"].(map[string]any)["case"].(map[string]any)["agent_sandbox"].(map[string]any)
+	if len(unresolved) != 1 || unresolved[0] != "case" || caseScores["total_range"] == nil || caseScores["dimensions"].(map[string]any)["source_grounding"] == nil {
+		t.Fatalf("unresolved=%v case_scores=%+v", unresolved, caseScores)
 	}
 
 	var mutatedScores map[string]any
@@ -290,6 +297,24 @@ func TestAgentSandboxAnalyzerReportRejectsIdentityMismatch(t *testing.T) {
 			sandbox[1]["evidence_contract_status"] = "passed"
 		}, expected: "inprocess case case changes evidence_mode across repetitions"},
 		{name: "model label", mutate: func(_ []map[string]any, sandbox []map[string]any) { sandbox[0]["model_label"] = "model-b" }, expected: "differs in model_label"},
+		{name: "provider config", mutate: func(_ []map[string]any, sandbox []map[string]any) {
+			sandbox[0]["provider_config_sha256"] = strings.Repeat("0", 64)
+		}, expected: "differs in provider_config_sha256"},
+		{name: "matrix provider drift", mutate: func(inprocess []map[string]any, sandbox []map[string]any) {
+			inprocess[1]["provider_config_sha256"] = strings.Repeat("0", 64)
+			sandbox[1]["provider_config_sha256"] = strings.Repeat("0", 64)
+		}, expected: "benchmark matrix differs in provider_config_sha256"},
+		{name: "executor image drift", mutate: func(_ []map[string]any, sandbox []map[string]any) {
+			sandbox[1]["executor_image"] = "registry.example.test/executor@sha256:" + strings.Repeat("c", 64)
+		}, expected: "sandbox runtime or image identity changes"},
+		{name: "Sandbox max steps drift", mutate: func(_ []map[string]any, sandbox []map[string]any) {
+			sandbox[1]["max_steps"] = 40
+		}, expected: "sandbox runtime or image identity changes"},
+		{name: "embedded revision", mutate: func(_ []map[string]any, sandbox []map[string]any) {
+			sandbox[0]["executor_aster_revision"] = strings.Repeat("0", 40)
+		}, expected: "embedded Aster revision differs"},
+		{name: "OpenCode version", mutate: func(_ []map[string]any, sandbox []map[string]any) { sandbox[0]["opencode_version"] = "1.18.1" }, expected: "OpenCode version differs"},
+		{name: "OpenCode limits", mutate: func(_ []map[string]any, sandbox []map[string]any) { sandbox[0]["request_context_limit"] = 100000 }, expected: "request limits differ"},
 		{name: "rubric version", mutate: func(_ []map[string]any, sandbox []map[string]any) {
 			sandbox[0]["human_score_rubric_version"] = benchmarkHumanScoreRubricVersion + 1
 		}, expected: "differs in human_score_rubric_version"},
@@ -325,16 +350,28 @@ func TestAgentSandboxAnalyzerReportRejectsIdentityMismatch(t *testing.T) {
 
 func validAgentSandboxAnalyzerReportRecords(t *testing.T) ([]map[string]any, []map[string]any) {
 	t.Helper()
+	pricing := map[string]any{
+		"currency": "USD", "input_per_million": "3", "cached_input_per_million": "0.30", "output_per_million": "15",
+	}
+	pricingData, err := json.Marshal(pricing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pricing["sha256"] = sha256Hex(pricingData)
 	var inprocess []map[string]any
 	var sandbox []map[string]any
 	for repetition := 1; repetition <= 3; repetition++ {
 		common := map[string]any{
 			"case_id": "case", "stable_id": "0123456789abcdef0123", "repetition": repetition,
 			"model_label": "model-a", "engine_commit": strings.Repeat("a", 40),
-			"fixture_sha256": strings.Repeat("b", 64), "baseline_consumer_commit": strings.Repeat("c", 40),
+			"benchmark_manifest_sha256": strings.Repeat("6", 64),
+			"fixture_sha256":            strings.Repeat("b", 64), "baseline_consumer_commit": strings.Repeat("c", 40),
 			"baseline_prompt_sha256": strings.Repeat("d", 64), "project_sha256": strings.Repeat("e", 64),
-			"source_revision": strings.Repeat("f", 40), "provider_path": "provider/model", "transport_id": "transport-v1",
+			"effective_prompt_sha256": strings.Repeat("1", 64), "skill_set_hash": strings.Repeat("2", 64), "effective_input_sha256": strings.Repeat("3", 64),
+			"comparison_input_sha256": strings.Repeat("4", 64),
+			"source_revision":         strings.Repeat("f", 40), "provider_path": "provider/model", "provider_config_sha256": strings.Repeat("8", 64), "transport_id": "transport-v1",
 			"api_mode": "chat_completions", "evidence_condition": "fixture-v1", "evidence_mode": benchmarkEvidenceModeArtifactAndSource,
+			"model_context_tokens": 200000, "model_output_tokens": 8192, "pricing": pricing,
 			"source_expectation_sha256": strings.Repeat("9", 64), "source_expectation_paths": []string{"pkg/file.go"}, "source_expectation_hits": 1, "source_expectation_total": 1,
 			"source_signal_hits": 1, "source_signal_total": 1, "source_evidence_tool_calls": 1,
 			"job_name": "job", "build_id": "1", "test_name": "test", "test_source": "build",
@@ -348,7 +385,7 @@ func validAgentSandboxAnalyzerReportRecords(t *testing.T) ([]map[string]any, []m
 		}
 		left := cloneReportRecord(common)
 		left["arm"] = "baseline"
-		left["trial_status"] = "usable"
+		left["trial_status"] = "valid_result"
 		left["usable"] = true
 		left["summary"] = "private summary"
 		left["root_cause"] = "INPROCESS_PRIVATE_ROOT_CAUSE"
@@ -359,12 +396,23 @@ func validAgentSandboxAnalyzerReportRecords(t *testing.T) ([]map[string]any, []m
 		left["relevant_files"] = []string{"pkg/file.go"}
 		left["file_links"] = map[string]string{"pkg/file.go": "private"}
 		left["tool_names"] = []string{"read_artifact", "read_repo_file"}
-		left["trace"] = map[string]any{"model_requests": 2, "provider_attempts": 2, "input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 20}
+		left["trace"] = map[string]any{"model_requests": 2, "reported_requests": 2, "provider_attempts": 2, "provider_attempts_known": true, "input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 20, "reasoning_tokens": 4}
 		inprocess = append(inprocess, left)
 
 		right := cloneReportRecord(common)
 		right["version"] = agentSandboxAnalyzerBenchmarkRecordVersion
 		right["runtime"] = "agent-sandbox-opencode"
+		right["runtime_identity_hash"] = strings.Repeat("7", 64)
+		right["image_contract_sha256"] = strings.Repeat("5", 64)
+		right["executor_image"] = "registry.example.test/executor@sha256:" + strings.Repeat("a", 64)
+		right["stager_image"] = "registry.example.test/stager@sha256:" + strings.Repeat("b", 64)
+		right["executor_aster_revision"] = strings.Repeat("a", 40)
+		right["stager_aster_revision"] = strings.Repeat("a", 40)
+		right["expected_opencode_version"] = "1.18.2"
+		right["request_shape_available"] = true
+		right["opencode_version"] = "1.18.2"
+		right["request_context_limit"] = 200000
+		right["request_output_token_limit"] = 8192
 		right["arm"] = "arm-b"
 		right["status"] = "succeeded"
 		right["analysis_valid"] = true
@@ -389,9 +437,13 @@ func validAgentSandboxAnalyzerReportRecords(t *testing.T) ([]map[string]any, []m
 		right["cost_available"] = false
 		right["usage_status"] = "tokens_reported_cost_unavailable"
 		right["model_requests"] = 1
+		right["max_steps"] = 20
+		right["provider_requests"] = 1
+		right["provider_requests_known"] = true
 		right["input_tokens"] = 50
 		right["cached_input_tokens"] = 0
 		right["output_tokens"] = 10
+		right["reasoning_tokens"] = 2
 		sandbox = append(sandbox, right)
 	}
 	return inprocess, sandbox
@@ -541,7 +593,7 @@ func TestAgentSandboxAnalyzerReportRejectsFullDiagnosisCreditForKueueReadinessNa
 		scoreRows = append(scoreRows, map[string]any{"packet_id": item.PacketID, "arm": item.Arm, "scores": values, "causal_assessment": map[string]any{"alignment": "missing", "initiating_cause_found": false, "downstream_treated_as_primary": true, "required_chain_coverage": []string{}}})
 	}
 	scoresPath := filepath.Join(dir, "scores.json")
-	scoreData, _ := json.Marshal(map[string]any{"version": 2, "packet_set_sha256": packetDoc.PacketSetSHA256, "reference_set_sha256": packetDoc.ReferenceSetSHA256, "rubric_version": benchmarkHumanScoreRubricVersion, "score_max": 10, "dimensions": benchmarkHumanScoreDimensions, "scores": scoreRows})
+	scoreData, _ := json.Marshal(map[string]any{"version": 2, "packet_set_sha256": packetDoc.PacketSetSHA256, "reference_set_sha256": packetDoc.ReferenceSetSHA256, "rubric_version": benchmarkHumanScoreRubricVersion, "score_max": 10, "dimensions": benchmarkHumanScoreDimensions, "scoring_timestamp": "2026-08-18T00:00:00Z", "scores": scoreRows})
 	if err := os.WriteFile(scoresPath, scoreData, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -553,7 +605,7 @@ func TestAgentSandboxAnalyzerReportRejectsFullDiagnosisCreditForKueueReadinessNa
 	}
 }
 
-func TestAgentSandboxAnalyzerReportAcceptsTwoRepetitionCorrectedMatrix(t *testing.T) {
+func TestAgentSandboxAnalyzerReportRejectsIncompleteTwoRepetitionMatrix(t *testing.T) {
 	allInprocess, allSandbox := validAgentSandboxAnalyzerReportRecords(t)
 	inprocess, sandbox := allInprocess[:2], allSandbox[:2]
 	dir := t.TempDir()
@@ -570,7 +622,7 @@ func TestAgentSandboxAnalyzerReportAcceptsTwoRepetitionCorrectedMatrix(t *testin
 		t.Fatal(err)
 	}
 	criteria := report["criteria"].(map[string]any)
-	if criteria["evidence_complete"] != true || report["holdouts_complete"] != true {
+	if criteria["evidence_complete"] != false || report["holdouts_complete"] != true || criteria["evidence_modes_complete"] != false {
 		t.Fatalf("report=%s", output)
 	}
 	writeReportJSONL(t, inprocessPath, allInprocess)
@@ -622,7 +674,7 @@ func TestAgentSandboxAnalyzerReportArtifactOnlyDoesNotRequireSource(t *testing.T
 		t.Fatalf("sandbox summary = %+v", sandboxSummary)
 	}
 	criteria := report["criteria"].(map[string]any)
-	if criteria["automatic_quality_passed"] != true {
+	if criteria["shadow_comparison"] != "insufficient_evidence" || criteria["evidence_modes_complete"] != false {
 		t.Fatalf("criteria = %+v", criteria)
 	}
 }
@@ -653,7 +705,7 @@ func TestAgentSandboxAnalyzerReportSourceRequiredNeedsToolAndCitation(t *testing
 		t.Fatalf("sandbox summary = %+v", sandboxSummary)
 	}
 	criteria := report["criteria"].(map[string]any)
-	if criteria["automatic_quality_passed"] != false {
+	if criteria["lifecycle_non_regression"] != false || criteria["grounding_non_regression"] != false {
 		t.Fatalf("criteria = %+v", criteria)
 	}
 }
@@ -710,6 +762,167 @@ func TestAgentSandboxAnalyzerSixTrialReportRequiresBothEvidenceModes(t *testing.
 	criteria := report["criteria"].(map[string]any)
 	if report["evidence_modes_complete"] != false || criteria["evidence_complete"] != false || criteria["evidence_modes_required"] != true {
 		t.Fatalf("report = %+v", report)
+	}
+}
+
+func TestAgentSandboxAnalyzerReportMateriallyBetterRequiresRepeatedMultiCaseImprovement(t *testing.T) {
+	baseInprocess, baseSandbox := validAgentSandboxAnalyzerReportRecords(t)
+	caseIDs := []string{"case-source", "case-artifact-a", "case-artifact-b"}
+	var inprocess, sandbox []map[string]any
+	for caseIndex, caseID := range caseIDs {
+		for repetition := 1; repetition <= 3; repetition++ {
+			left := cloneReportRecord(baseInprocess[repetition-1])
+			right := cloneReportRecord(baseSandbox[repetition-1])
+			for _, record := range []map[string]any{left, right} {
+				record["case_id"] = caseID
+				record["stable_id"] = fmt.Sprintf("%020x", caseIndex+1)
+				record["comparison_input_sha256"] = strings.Repeat(fmt.Sprintf("%x", caseIndex+5), 64)
+			}
+			if caseID != "case-source" {
+				left["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
+				left["file_links"] = map[string]string{}
+				left["relevant_files"] = []string{}
+				right["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
+				right["source_verified"] = false
+				right["source_citation_count"] = 0
+				right["source_citations"] = []map[string]any{}
+				for _, record := range []map[string]any{left, right} {
+					record["source_expectation_sha256"] = strings.Repeat("0", 64)
+					record["source_expectation_paths"] = []string{}
+					record["source_expectation_hits"] = 0
+					record["source_expectation_total"] = 0
+					record["source_signal_hits"] = 0
+					record["source_signal_total"] = 0
+					record["source_evidence_tool_calls"] = 0
+				}
+				right["evidence_contract_passed"] = true
+				right["evidence_contract_status"] = "passed"
+			}
+			inprocess = append(inprocess, left)
+			sandbox = append(sandbox, right)
+		}
+	}
+	dir := t.TempDir()
+	inprocessPath, sandboxPath := filepath.Join(dir, "inprocess.jsonl"), filepath.Join(dir, "sandbox.jsonl")
+	packetsPath, mapPath := filepath.Join(dir, "packets.json"), filepath.Join(dir, "map.json")
+	referencesPath := filepath.Join(dir, "references.json")
+	writeReportJSONL(t, inprocessPath, inprocess)
+	writeReportJSONL(t, sandboxPath, sandbox)
+	writeTestCausalReferences(t, referencesPath, caseIDs)
+	packetCommand := exec.Command(
+		"python3", filepath.Join("..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
+		"--inprocess", inprocessPath, "--sandbox", sandboxPath, "--repo", filepath.Join("..", ".."),
+		"--expected-pairs", "9", "--required-repetitions", "3",
+		"--holdout-case", caseIDs[0], "--holdout-case", caseIDs[1], "--holdout-case", caseIDs[2],
+		"--blind-packets", packetsPath, "--blind-map", mapPath, "--reference-manifest", referencesPath,
+	)
+	if output, err := packetCommand.CombinedOutput(); err != nil {
+		t.Fatalf("packets: %v: %s", err, output)
+	}
+	var packetDoc struct {
+		PacketSetSHA256    string `json:"packet_set_sha256"`
+		ReferenceSetSHA256 string `json:"reference_set_sha256"`
+		Packets            []struct {
+			PacketID string `json:"packet_id"`
+			CaseID   string `json:"case_id"`
+			Arm      string `json:"arm"`
+		} `json:"packets"`
+	}
+	packetData, _ := os.ReadFile(packetsPath)
+	if err := json.Unmarshal(packetData, &packetDoc); err != nil {
+		t.Fatal(err)
+	}
+	var mapDoc struct {
+		Mapping []struct {
+			PacketID string `json:"packet_id"`
+			Arm      string `json:"arm"`
+			Runtime  string `json:"runtime"`
+		} `json:"mapping"`
+	}
+	mapData, _ := os.ReadFile(mapPath)
+	if err := json.Unmarshal(mapData, &mapDoc); err != nil {
+		t.Fatal(err)
+	}
+	caseByPacket := map[string]string{}
+	for _, packet := range packetDoc.Packets {
+		caseByPacket[packet.PacketID] = packet.CaseID
+	}
+	var scoreRows []map[string]any
+	for _, item := range mapDoc.Mapping {
+		values := map[string]int{}
+		for _, dimension := range benchmarkHumanScoreDimensions {
+			values[dimension] = 2
+		}
+		if (caseByPacket[item.PacketID] == "case-source" || caseByPacket[item.PacketID] == "case-artifact-a") && item.Runtime == "inprocess" {
+			values["diagnosis"] = 1
+		}
+		scoreRows = append(scoreRows, map[string]any{
+			"packet_id": item.PacketID, "arm": item.Arm, "scores": values,
+			"causal_assessment": map[string]any{"alignment": "aligned", "initiating_cause_found": true, "downstream_treated_as_primary": false, "required_chain_coverage": []string{"initiating-cause", "causal-link"}},
+		})
+	}
+	scoresPath := filepath.Join(dir, "scores.json")
+	scores := map[string]any{
+		"version": 2, "packet_set_sha256": packetDoc.PacketSetSHA256, "reference_set_sha256": packetDoc.ReferenceSetSHA256,
+		"rubric_version": benchmarkHumanScoreRubricVersion, "score_max": 10, "dimensions": benchmarkHumanScoreDimensions,
+		"scoring_timestamp": "2026-08-18T00:00:00Z", "scores": scoreRows,
+	}
+	scoreData, _ := json.Marshal(scores)
+	if err := os.WriteFile(scoresPath, scoreData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	freezePath := filepath.Join(dir, "freeze.json")
+	freeze := exec.Command("python3", filepath.Join("..", "..", "hack", "freeze-agent-sandbox-blind-scores.py"), "--blind-packets", packetsPath, "--blind-scores", scoresPath, "--output", freezePath)
+	if output, err := freeze.CombinedOutput(); err != nil {
+		t.Fatalf("freeze: %v: %s", err, output)
+	}
+	scored := exec.Command(
+		"python3", filepath.Join("..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
+		"--inprocess", inprocessPath, "--sandbox", sandboxPath, "--repo", filepath.Join("..", ".."),
+		"--expected-pairs", "9", "--required-repetitions", "3",
+		"--holdout-case", caseIDs[0], "--holdout-case", caseIDs[1], "--holdout-case", caseIDs[2],
+		"--blind-map-input", mapPath, "--blind-scores", scoresPath, "--score-freeze", freezePath, "--reference-manifest", referencesPath,
+	)
+	output, err := scored.CombinedOutput()
+	if err != nil {
+		t.Fatalf("scored report: %v: %s", err, output)
+	}
+	var report map[string]any
+	if err := json.Unmarshal(output, &report); err != nil {
+		t.Fatal(err)
+	}
+	criteria := report["criteria"].(map[string]any)
+	if report["shadow_comparison"] != "shadow_materially_better" || criteria["repeated_causal_improvement_across_multiple_cases"] != true || criteria["authoritative_analyzer"] != "inprocess_unchanged" {
+		t.Fatalf("criteria=%+v", criteria)
+	}
+	// Keep whole-matrix invalid counts equal while moving the Sandbox failure to
+	// the source-required case. Per-case gating must still prefer in-process.
+	sandbox[0]["status"] = "invalid_result"
+	sandbox[0]["analysis_valid"] = false
+	sandbox[0]["finalization_valid"] = false
+	sandbox[0]["evidence_contract_passed"] = false
+	sandbox[0]["evidence_contract_status"] = "analysis_unavailable"
+	inprocess[3]["usable"] = false
+	inprocess[3]["trial_status"] = "invalid_result"
+	writeReportJSONL(t, inprocessPath, inprocess)
+	writeReportJSONL(t, sandboxPath, sandbox)
+	regressed := exec.Command(
+		"python3", filepath.Join("..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"),
+		"--inprocess", inprocessPath, "--sandbox", sandboxPath, "--repo", filepath.Join("..", ".."),
+		"--expected-pairs", "9", "--required-repetitions", "3",
+		"--holdout-case", caseIDs[0], "--holdout-case", caseIDs[1], "--holdout-case", caseIDs[2],
+		"--blind-map-input", mapPath, "--blind-scores", scoresPath, "--score-freeze", freezePath, "--reference-manifest", referencesPath,
+	)
+	regressedOutput, err := regressed.CombinedOutput()
+	if err != nil {
+		t.Fatalf("regressed report: %v: %s", err, regressedOutput)
+	}
+	if err := json.Unmarshal(regressedOutput, &report); err != nil {
+		t.Fatal(err)
+	}
+	criteria = report["criteria"].(map[string]any)
+	if report["shadow_comparison"] != "inprocess_preferred" || criteria["per_case_quality_non_regression"] != false {
+		t.Fatalf("regressed criteria=%+v", criteria)
 	}
 }
 

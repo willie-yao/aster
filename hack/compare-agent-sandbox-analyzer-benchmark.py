@@ -10,6 +10,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import secrets
 import statistics
 import sys
@@ -18,16 +19,25 @@ from typing import Any
 PAIR_FIELDS = (
     "stable_id",
     "engine_commit",
+    "benchmark_manifest_sha256",
     "fixture_sha256",
     "baseline_consumer_commit",
     "baseline_prompt_sha256",
     "project_sha256",
+    "effective_prompt_sha256",
+    "skill_set_hash",
+    "effective_input_sha256",
+    "comparison_input_sha256",
     "source_revision",
     "provider_path",
+    "provider_config_sha256",
     "transport_id",
     "model_label",
     "api_mode",
     "reasoning_effort",
+    "model_context_tokens",
+    "model_output_tokens",
+    "pricing",
     "evidence_condition",
     "evidence_mode",
     "source_expectation_sha256",
@@ -45,12 +55,41 @@ PAIR_FIELDS = (
     "diagnosis_signal_total",
     "forbidden_checks_total",
 )
+MATRIX_FIELDS = (
+    "engine_commit",
+    "benchmark_manifest_sha256",
+    "baseline_consumer_commit",
+    "baseline_prompt_sha256",
+    "project_sha256",
+    "effective_prompt_sha256",
+    "skill_set_hash",
+    "provider_path",
+    "provider_config_sha256",
+    "transport_id",
+    "model_label",
+    "api_mode",
+    "reasoning_effort",
+    "model_context_tokens",
+    "model_output_tokens",
+    "pricing",
+    "evidence_condition",
+    "human_score_rubric_version",
+    "human_score_max",
+    "human_score_dimensions",
+)
 DIRECT_FILES = (
     "backend/internal/agentanalysis/workspace.go",
     "backend/internal/agentanalysis/workspace_analysis.go",
+    "backend/internal/agentanalysis/workspace_prepare.go",
+    "backend/internal/agentanalysis/workspace_publish.go",
+    "backend/internal/agentanalysis/workspace_shadow.go",
+    "backend/internal/agentanalysis/json_validation.go",
+    "backend/internal/agentanalysis/result_bounds.go",
     "backend/internal/agentanalysis/sandbox_runtime.go",
+    "backend/internal/fetcher/shadow_analysis.go",
 )
 DIRECT_DIRS = (
+    "backend/internal/analysispublisher",
     "backend/internal/analysisexecutor",
     "backend/internal/analysisstager",
     "backend/cmd/analysisexecutor",
@@ -66,6 +105,11 @@ FORBIDDEN_PHASE_SYMBOLS = (
     "RevisionReview",
 )
 EVIDENCE_MODES = ("artifact_only", "artifact_and_source")
+INPROCESS_STATUSES = ("valid_result", "no_result", "invalid_result", "contract_violation", "timeout", "runtime_failure")
+SANDBOX_STATUSES = ("succeeded", "cleanup_pending", "no_result", "invalid_result", "timeout", "cancellation", "runtime_failure")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+IMAGE_RE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 
 
 class ReportError(ValueError):
@@ -122,18 +166,46 @@ def require_integer(record: dict[str, Any], field: str, runtime: str, minimum: i
     return value
 
 
+def validate_pricing(record: dict[str, Any], runtime: str) -> dict[str, str]:
+    pricing = record.get("pricing")
+    required = ("currency", "input_per_million", "cached_input_per_million", "output_per_million", "sha256")
+    if not isinstance(pricing, dict) or set(pricing) != set(required):
+        raise ReportError(f"{runtime} line {record['_line']} pricing identity is incomplete")
+    if any(not isinstance(pricing[field], str) or not pricing[field] for field in required):
+        raise ReportError(f"{runtime} line {record['_line']} pricing identity is invalid")
+    if not re.fullmatch(r"[A-Z]{3}", pricing["currency"]) or not SHA256_RE.fullmatch(pricing["sha256"]):
+        raise ReportError(f"{runtime} line {record['_line']} pricing currency or hash is invalid")
+    for field in ("input_per_million", "cached_input_per_million", "output_per_million"):
+        try:
+            value = Decimal(pricing[field])
+        except InvalidOperation as exc:
+            raise ReportError(f"{runtime} line {record['_line']} pricing rate is invalid") from exc
+        if value < 0 or not value.is_finite():
+            raise ReportError(f"{runtime} line {record['_line']} pricing rate must be finite and non-negative")
+    canonical = {field: pricing[field] for field in required if field != "sha256"}
+    if hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()).hexdigest() != pricing["sha256"]:
+        raise ReportError(f"{runtime} line {record['_line']} pricing hash does not match the rates")
+    return pricing
+
+
 def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
     case_id = require_string(record, "case_id", runtime)
     repetition = require_integer(record, "repetition", runtime, 1)
     for field in (
         "stable_id",
         "engine_commit",
+        "benchmark_manifest_sha256",
         "fixture_sha256",
         "baseline_consumer_commit",
         "baseline_prompt_sha256",
         "project_sha256",
+        "effective_prompt_sha256",
+        "skill_set_hash",
+        "effective_input_sha256",
+        "comparison_input_sha256",
         "source_revision",
         "provider_path",
+        "provider_config_sha256",
         "transport_id",
         "model_label",
         "api_mode",
@@ -144,6 +216,13 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
         "test_name",
     ):
         require_string(record, field, runtime)
+    if not COMMIT_RE.fullmatch(record["engine_commit"]) or not COMMIT_RE.fullmatch(record["source_revision"]):
+        raise ReportError(f"{runtime} line {record['_line']} engine or source revision is invalid")
+    if not SHA256_RE.fullmatch(record["benchmark_manifest_sha256"]):
+        raise ReportError(f"{runtime} line {record['_line']} benchmark manifest hash is invalid")
+    if not SHA256_RE.fullmatch(record["provider_config_sha256"]):
+        raise ReportError(f"{runtime} line {record['_line']} provider configuration hash is invalid")
+    validate_pricing(record, runtime)
     source_expectation_sha256 = record["source_expectation_sha256"]
     if len(source_expectation_sha256) != 64 or any(char not in "0123456789abcdef" for char in source_expectation_sha256):
         raise ReportError(f"{runtime} line {record['_line']} source expectation SHA-256 is invalid")
@@ -158,6 +237,10 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
     if not isinstance(dimensions, list) or not dimensions or not all(isinstance(value, str) and value for value in dimensions):
         raise ReportError(f"{runtime} line {record['_line']} field human_score_dimensions must be a non-empty string array")
     require_integer(record, "elapsed_ms", runtime)
+    context_tokens = require_integer(record, "model_context_tokens", runtime, 8192)
+    output_tokens = require_integer(record, "model_output_tokens", runtime, 1024)
+    if output_tokens > context_tokens or output_tokens > 131072:
+        raise ReportError(f"{runtime} line {record['_line']} model limits are invalid")
     require_integer(record, "signal_hits", runtime)
     require_integer(record, "signal_total", runtime)
     require_integer(record, "diagnosis_signal_hits", runtime)
@@ -187,7 +270,9 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
             raise ReportError(f"inprocess line {record['_line']} must use fixture-v1 evidence")
         if not isinstance(record.get("usable"), bool):
             raise ReportError(f"inprocess line {record['_line']} field usable must be boolean")
-        require_string(record, "trial_status", runtime)
+        status = require_string(record, "trial_status", runtime)
+        if status not in INPROCESS_STATUSES:
+            raise ReportError(f"inprocess line {record['_line']} trial_status is invalid")
         links = record.get("file_links", {})
         relevant = record.get("relevant_files", [])
         if not isinstance(links, dict):
@@ -201,18 +286,49 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
         trace = record.get("trace")
         if not isinstance(trace, dict):
             raise ReportError(f"inprocess line {record['_line']} field trace must be an object")
+        for field in ("model_requests", "reported_requests", "provider_attempts", "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens"):
+            value = trace.get(field)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ReportError(f"inprocess line {record['_line']} trace field {field} must be a non-negative integer")
+        if not isinstance(trace.get("provider_attempts_known"), bool):
+            raise ReportError(f"inprocess line {record['_line']} provider-attempt availability is invalid")
+        if trace["reported_requests"] > trace["model_requests"] or trace["cached_input_tokens"] > trace["input_tokens"] or trace["reasoning_tokens"] > trace["output_tokens"]:
+            raise ReportError(f"inprocess line {record['_line']} request or token telemetry is inconsistent")
     else:
         if record.get("api_mode") != "chat_completions" or record.get("evidence_condition") != "fixture-v1":
             raise ReportError(f"sandbox line {record['_line']} must use chat_completions and fixture-v1 evidence")
-        if record.get("version") != 5 or record.get("runtime") != "agent-sandbox-opencode":
+        if record.get("version") != 8 or record.get("runtime") != "agent-sandbox-opencode":
             raise ReportError(f"sandbox line {record['_line']} has an unsupported record contract")
-        require_string(record, "status", runtime)
+        for field in ("runtime_identity_hash", "image_contract_sha256", "executor_image", "stager_image", "executor_aster_revision", "stager_aster_revision", "expected_opencode_version"):
+            require_string(record, field, runtime)
+        if not SHA256_RE.fullmatch(record["runtime_identity_hash"]) or not SHA256_RE.fullmatch(record["image_contract_sha256"]):
+            raise ReportError(f"sandbox line {record['_line']} runtime identity hash is invalid")
+        if not IMAGE_RE.fullmatch(record["executor_image"]) or not IMAGE_RE.fullmatch(record["stager_image"]):
+            raise ReportError(f"sandbox line {record['_line']} runtime image is not immutable")
+        if record["executor_aster_revision"] != record["engine_commit"] or record["stager_aster_revision"] != record["engine_commit"]:
+            raise ReportError(f"sandbox line {record['_line']} embedded Aster revision differs from engine_commit")
+        if record.get("request_shape_available") is True and record.get("opencode_version") != record["expected_opencode_version"]:
+            raise ReportError(f"sandbox line {record['_line']} OpenCode version differs from the frozen image identity")
+        if record.get("request_shape_available") is True and (record.get("request_context_limit") != context_tokens or record.get("request_output_token_limit") != output_tokens):
+            raise ReportError(f"sandbox line {record['_line']} OpenCode request limits differ from the frozen benchmark limits")
+        status = require_string(record, "status", runtime)
+        if status not in SANDBOX_STATUSES:
+            raise ReportError(f"sandbox line {record['_line']} status is invalid")
         for field in ("analysis_valid", "finalization_valid", "cleanup_completed", "source_verified"):
             if not isinstance(record.get(field), bool):
                 raise ReportError(f"sandbox line {record['_line']} field {field} must be boolean")
         require_integer(record, "artifact_citation_count", runtime)
         require_integer(record, "source_citation_count", runtime)
-        status = record["status"]
+        for field in ("model_requests", "provider_requests", "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens"):
+            require_integer(record, field, runtime)
+        require_integer(record, "max_steps", runtime, 1)
+        for field in ("provider_requests_known", "token_usage_available", "cost_available"):
+            if not isinstance(record.get(field), bool):
+                raise ReportError(f"sandbox line {record['_line']} field {field} must be boolean")
+        if record["cached_input_tokens"] > record["input_tokens"] or record["reasoning_tokens"] > record["output_tokens"]:
+            raise ReportError(f"sandbox line {record['_line']} token telemetry is inconsistent")
+        if record["provider_requests_known"] and record["provider_requests"] < record["model_requests"]:
+            raise ReportError(f"sandbox line {record['_line']} provider request telemetry is inconsistent")
         if record["analysis_valid"] and not record["finalization_valid"]:
             raise ReportError(f"sandbox line {record['_line']} valid analysis lacks valid finalization")
         if status == "succeeded" and (not record["analysis_valid"] or not record["cleanup_completed"]):
@@ -304,12 +420,22 @@ def evidence_mode_metrics(records: list[dict[str, Any]], runtime: str) -> dict[s
 def index_records(records: list[dict[str, Any]], runtime: str) -> dict[tuple[str, int], dict[str, Any]]:
     indexed: dict[tuple[str, int], dict[str, Any]] = {}
     case_modes: dict[str, str] = {}
+    sandbox_runtime_identity: tuple[Any, ...] | None = None
     for record in records:
         key = validate_record(record, runtime)
         mode = record["evidence_mode"]
         if key[0] in case_modes and case_modes[key[0]] != mode:
             raise ReportError(f"{runtime} case {key[0]} changes evidence_mode across repetitions")
         case_modes[key[0]] = mode
+        if runtime == "sandbox":
+            current_identity = (
+                record["executor_image"], record["stager_image"], record["executor_aster_revision"],
+                record["stager_aster_revision"], record["expected_opencode_version"], record["image_contract_sha256"], record.get("runtime_identity_hash"), record["max_steps"],
+            )
+            if sandbox_runtime_identity is None:
+                sandbox_runtime_identity = current_identity
+            elif current_identity != sandbox_runtime_identity:
+                raise ReportError("sandbox runtime or image identity changes across repetitions")
         if key in indexed:
             first = indexed[key]["_line"]
             raise ReportError(f"duplicate {runtime} record {key[0]}/rep-{key[1]:02d}; first seen on line {first}")
@@ -331,6 +457,15 @@ def validate_pairs(inprocess: dict[tuple[str, int], dict[str, Any]], sandbox: di
     return keys
 
 
+def validate_matrix_identity(keys: list[tuple[str, int]], inprocess: dict[tuple[str, int], dict[str, Any]], sandbox: dict[tuple[str, int], dict[str, Any]]) -> None:
+    first = inprocess[keys[0]]
+    for key in keys:
+        for runtime, record in (("inprocess", inprocess[key]), ("sandbox", sandbox[key])):
+            for field in MATRIX_FIELDS:
+                if record.get(field) != first.get(field):
+                    raise ReportError(f"benchmark matrix differs in {field} at {runtime} {key[0]}/rep-{key[1]:02d}")
+
+
 def percentile(values: list[int], quantile: float) -> int | None:
     if not values:
         return None
@@ -345,25 +480,116 @@ def rate(numerator: int, denominator: int) -> float | None:
     return round(numerator / denominator, 4)
 
 
+def token_usage_available(record: dict[str, Any], runtime: str) -> bool:
+    if runtime == "inprocess":
+        trace = record["trace"]
+        return (
+            trace["model_requests"] > 0
+            and trace["reported_requests"] == trace["model_requests"]
+            and record.get("trace_truncated") is not True
+        )
+    return record.get("token_usage_available") is True
+
+
+def estimated_cost_usd(record: dict[str, Any], runtime: str) -> Decimal | None:
+    if not token_usage_available(record, runtime):
+        return None
+    usage = record["trace"] if runtime == "inprocess" else record
+    pricing = record["pricing"]
+    input_tokens = Decimal(usage["input_tokens"] - usage["cached_input_tokens"])
+    cached_tokens = Decimal(usage["cached_input_tokens"])
+    output_tokens = Decimal(usage["output_tokens"])
+    return (
+        input_tokens * Decimal(pricing["input_per_million"])
+        + cached_tokens * Decimal(pricing["cached_input_per_million"])
+        + output_tokens * Decimal(pricing["output_per_million"])
+    ) / Decimal(1_000_000)
+
+
+def decimal_text(value: Decimal) -> str:
+    return format(value.quantize(Decimal("0.00000001")), "f")
+
+
+def decimal_metrics(values: list[Decimal]) -> dict[str, Any]:
+    if not values:
+        return {"min": None, "median": None, "max": None, "range": None}
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        median = ordered[midpoint]
+    else:
+        median = (ordered[midpoint - 1] + ordered[midpoint]) / Decimal(2)
+    return {
+        "min": decimal_text(ordered[0]),
+        "median": decimal_text(median),
+        "max": decimal_text(ordered[-1]),
+        "range": [decimal_text(ordered[0]), decimal_text(ordered[-1])],
+    }
+
+
+def usage_metrics(records: list[dict[str, Any]], runtime: str) -> dict[str, Any]:
+    usages = [record["trace"] if runtime == "inprocess" else record for record in records]
+    token_records = [record for record in records if token_usage_available(record, runtime)]
+    provider_known = [
+        usage["provider_attempts" if runtime == "inprocess" else "provider_requests"]
+        for record, usage in zip(records, usages)
+        if usage["provider_attempts_known" if runtime == "inprocess" else "provider_requests_known"] is True
+    ]
+    costs = [value for value in (estimated_cost_usd(record, runtime) for record in records) if value is not None]
+    provider_reported_costs: list[Decimal] = []
+    if runtime == "sandbox":
+        for record in records:
+            value = record.get("cost_usd")
+            if record.get("cost_available") is not True or not isinstance(value, str) or not value.strip():
+                continue
+            try:
+                parsed = Decimal(value)
+            except InvalidOperation as exc:
+                raise ReportError(f"sandbox line {record['_line']} field cost_usd is invalid") from exc
+            if parsed < 0 or not parsed.is_finite():
+                raise ReportError(f"sandbox line {record['_line']} field cost_usd must be finite and non-negative")
+            provider_reported_costs.append(parsed)
+    return {
+        "model_requests": sum(usage["model_requests"] for usage in usages),
+        "model_requests_distribution": duration_metrics([usage["model_requests"] for usage in usages]),
+        "provider_attempts_known_trials": len(provider_known),
+        "provider_attempts_coverage": rate(len(provider_known), len(records)),
+        "provider_attempts": sum(provider_known),
+        "provider_attempts_distribution": duration_metrics(provider_known),
+        "input_tokens": sum(usage["input_tokens"] for usage in usages),
+        "input_tokens_distribution": duration_metrics([usage["input_tokens"] for usage in usages]),
+        "cached_input_tokens": sum(usage["cached_input_tokens"] for usage in usages),
+        "cached_input_tokens_distribution": duration_metrics([usage["cached_input_tokens"] for usage in usages]),
+        "output_tokens": sum(usage["output_tokens"] for usage in usages),
+        "output_tokens_distribution": duration_metrics([usage["output_tokens"] for usage in usages]),
+        "reasoning_tokens": sum(usage["reasoning_tokens"] for usage in usages),
+        "reasoning_tokens_distribution": duration_metrics([usage["reasoning_tokens"] for usage in usages]),
+        "token_usage_trials": len(token_records),
+        "token_usage_coverage": rate(len(token_records), len(records)),
+        "estimated_cost_available_trials": len(costs),
+        "estimated_cost_coverage": rate(len(costs), len(records)),
+        "estimated_cost_currency": records[0]["pricing"]["currency"] if records else None,
+        "estimated_cost_usd_total": decimal_text(sum(costs, Decimal(0))) if costs else None,
+        "estimated_cost_usd_distribution": decimal_metrics(costs),
+        "provider_reported_cost_available_trials": len(provider_reported_costs),
+        "provider_reported_cost_usd_total": decimal_text(sum(provider_reported_costs, Decimal(0))) if provider_reported_costs else None,
+        "provider_reported_cost_usd_distribution": decimal_metrics(provider_reported_costs),
+    }
+
+
 def inprocess_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     runtime_valid = [record for record in records if record["usable"]]
     valid = [record for record in records if evidence_contract_result(record, "inprocess")[0]]
     statuses = [record["trial_status"] for record in records]
-    traces = [record["trace"] for record in records]
     citation_trials = sum(bool(record.get("evidence_citations")) for record in valid)
     source_trials = sum(bool(record.get("file_links")) for record in valid)
-    token_trials = sum(
-        isinstance(trace.get("input_tokens"), int)
-        and isinstance(trace.get("output_tokens"), int)
-        and (trace.get("input_tokens", 0) > 0 or trace.get("output_tokens", 0) > 0)
-        for trace in traces
-    )
-    return {
+    metrics = {
         "trials": len(records),
         "runtime_valid_trials": len(runtime_valid),
+        "runtime_valid_rate": rate(len(runtime_valid), len(records)),
         "valid_trials": len(valid),
         "valid_rate": rate(len(valid), len(records)),
-        "invalid_trials": sum(status == "contract_violation" for status in statuses),
+        "invalid_trials": sum(status in ("invalid_result", "contract_violation") for status in statuses),
         "no_result_trials": sum(status == "no_result" for status in statuses),
         "runtime_failure_trials": sum(status in ("runtime_failure", "timeout") for status in statuses),
         "artifact_citation_trials": citation_trials,
@@ -389,19 +615,11 @@ def inprocess_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
             sum(max(int(record.get("forbidden_checks_total", 0)), 0) for record in records),
         ),
         "latency_ms": latency_metrics(records),
-        "model_requests": sum(max(int(trace.get("model_requests", 0)), 0) for trace in traces),
-        "provider_attempts": sum(max(int(trace.get("provider_attempts", 0)), 0) for trace in traces),
-        "input_tokens": sum(max(int(trace.get("input_tokens", 0)), 0) for trace in traces),
-        "cached_input_tokens": sum(max(int(trace.get("cached_input_tokens", 0)), 0) for trace in traces),
-        "output_tokens": sum(max(int(trace.get("output_tokens", 0)), 0) for trace in traces),
-        "token_usage_trials": token_trials,
-        "token_usage_coverage": rate(token_trials, len(records)),
-        "cost_available_trials": 0,
-        "cost_coverage": 0.0,
-        "cost_status": "unavailable_from_inprocess_benchmark_record",
         "evidence_modes": evidence_mode_metrics(records, "inprocess"),
         "cleanup_status": "not_applicable_inprocess",
     }
+    metrics.update(usage_metrics(records, "inprocess"))
+    return metrics
 
 
 def sandbox_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -410,11 +628,10 @@ def sandbox_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     statuses = [record["status"] for record in records]
     citation_trials = sum(record["artifact_citation_count"] > 0 for record in valid)
     source_trials = sum(record["source_verified"] for record in valid)
-    token_trials = sum(record.get("token_usage_available") is True for record in records)
-    cost_trials = sum(record.get("cost_available") is True for record in records)
-    return {
+    metrics = {
         "trials": len(records),
         "runtime_valid_trials": len(runtime_valid),
+        "runtime_valid_rate": rate(len(runtime_valid), len(records)),
         "valid_trials": len(valid),
         "valid_rate": rate(len(valid), len(records)),
         "invalid_trials": sum(status == "invalid_result" for status in statuses),
@@ -449,20 +666,18 @@ def sandbox_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "finalization_valid_rate": rate(sum(record["finalization_valid"] for record in records), len(records)),
         "cleanup_completed_trials": sum(record["cleanup_completed"] for record in records),
         "cleanup_completed_rate": rate(sum(record["cleanup_completed"] for record in records), len(records)),
-        "model_requests": sum(record.get("model_requests", 0) for record in records),
-        "input_tokens": sum(record.get("input_tokens", 0) for record in records),
-        "cached_input_tokens": sum(record.get("cached_input_tokens", 0) for record in records),
-        "output_tokens": sum(record.get("output_tokens", 0) for record in records),
-        "token_usage_trials": token_trials,
-        "token_usage_coverage": rate(token_trials, len(records)),
-        "cost_available_trials": cost_trials,
-        "cost_coverage": rate(cost_trials, len(records)),
-        "cost_usd_total": sandbox_cost_total(records),
-        "cost_statuses": sorted({record.get("usage_status", "unknown") for record in records}),
         "evidence_modes": evidence_mode_metrics(records, "sandbox"),
+        "runtime_identity": {
+            "executor_image": records[0]["executor_image"] if records else None,
+            "stager_image": records[0]["stager_image"] if records else None,
+            "image_contract_sha256": records[0]["image_contract_sha256"] if records else None,
+            "executor_aster_revision": records[0]["executor_aster_revision"] if records else None,
+            "stager_aster_revision": records[0]["stager_aster_revision"] if records else None,
+            "opencode_version": records[0]["expected_opencode_version"] if records else None,
+        },
     }
-
-
+    metrics.update(usage_metrics(records, "sandbox"))
+    return metrics
 
 def sandbox_cost_total(records: list[dict[str, Any]]) -> str | None:
     total = Decimal("0")
@@ -492,6 +707,7 @@ def duration_metrics(values: list[int]) -> dict[str, int | None]:
         "median": int(statistics.median(clean)) if clean else None,
         "p95": percentile(clean, 0.95),
         "max": max(clean) if clean else None,
+        "range": [min(clean), max(clean)] if clean else None,
     }
 
 
@@ -549,70 +765,133 @@ def simplicity_metrics(repo_path: str) -> dict[str, Any]:
     }
 
 
-def evaluate_criteria(inprocess: dict[str, Any], sandbox: dict[str, Any], simplicity: dict[str, Any], pairs: int, expected_pairs: int, holdouts_ok: bool, blind_quality: dict[str, Any], evidence_modes_complete: bool, require_both_modes: bool) -> dict[str, Any]:
-    present_mode_rates = [
-        metrics["contract_pass_rate"]
-        for metrics in sandbox["evidence_modes"].values()
-        if metrics["trials"] > 0
-    ]
-    automatic_quality = (
-        sandbox["signal_rate"] is not None
-        and inprocess["signal_rate"] is not None
-        and sandbox["diagnosis_signal_rate"] is not None
-        and inprocess["diagnosis_signal_rate"] is not None
-        and sandbox["signal_rate"] + 0.05 >= inprocess["signal_rate"]
-        and sandbox["diagnosis_signal_rate"] + 0.05 >= inprocess["diagnosis_signal_rate"]
-        and (sandbox["valid_rate"] or 0) >= 0.95
-        and (sandbox["artifact_citation_rate"] or 0) >= 0.95
-        and present_mode_rates
-        and all((value or 0) >= 0.95 for value in present_mode_rates)
-        and (sandbox["transient_correct_rate"] or 0) + 0.05 >= (inprocess["transient_correct_rate"] or 0)
-        and (sandbox["forbidden_checks_pass_rate"] or 0) + 0.05 >= (inprocess["forbidden_checks_pass_rate"] or 0)
+def ratio_decimal(numerator: str | None, denominator: str | None) -> float | None:
+    if numerator is None or denominator is None:
+        return None
+    left, right = Decimal(numerator), Decimal(denominator)
+    if right <= 0:
+        return None
+    return round(float(left / right), 4)
+
+
+def evaluate_criteria(inprocess: dict[str, Any], sandbox: dict[str, Any], per_case: dict[str, Any], pairs: int, expected_pairs: int, holdouts_ok: bool, blind_quality: dict[str, Any], evidence_modes_complete: bool) -> dict[str, Any]:
+    evidence_complete = pairs == expected_pairs and holdouts_ok and evidence_modes_complete
+    lifecycle_non_regression = (
+        (sandbox["runtime_valid_rate"] or 0) >= (inprocess["runtime_valid_rate"] or 0)
+        and (sandbox["valid_rate"] or 0) >= (inprocess["valid_rate"] or 0)
+        and sandbox["invalid_trials"] <= inprocess["invalid_trials"]
+        and sandbox["no_result_trials"] <= inprocess["no_result_trials"]
+        and sandbox["runtime_failure_trials"] <= inprocess["runtime_failure_trials"]
+        and (sandbox["finalization_valid_rate"] or 0) == 1.0
         and (sandbox["cleanup_completed_rate"] or 0) == 1.0
     )
-    telemetry = (
-        (inprocess["token_usage_coverage"] or 0) >= 0.95
-        and (sandbox["token_usage_coverage"] or 0) >= 0.95
-        and (inprocess["cost_coverage"] or 0) >= 0.95
-        and (sandbox["cost_coverage"] or 0) >= 0.95
+    inprocess_source = inprocess["evidence_modes"]["artifact_and_source"]["contract_pass_rate"]
+    sandbox_source = sandbox["evidence_modes"]["artifact_and_source"]["contract_pass_rate"]
+    grounding_non_regression = (
+        (sandbox["artifact_citation_rate"] or 0) >= (inprocess["artifact_citation_rate"] or 0)
+        and inprocess_source is not None
+        and sandbox_source is not None
+        and sandbox_source >= inprocess_source
     )
-    evidence = pairs == expected_pairs and holdouts_ok and (evidence_modes_complete or not require_both_modes)
+    telemetry_complete = (
+        (inprocess["token_usage_coverage"] or 0) == 1.0
+        and (sandbox["token_usage_coverage"] or 0) == 1.0
+        and (inprocess["provider_attempts_coverage"] or 0) == 1.0
+        and (sandbox["provider_attempts_coverage"] or 0) == 1.0
+        and (inprocess["estimated_cost_coverage"] or 0) == 1.0
+        and (sandbox["estimated_cost_coverage"] or 0) == 1.0
+    )
+    latency_ratio = None
+    inprocess_latency = inprocess["latency_ms"]["median"]
+    sandbox_latency = sandbox["latency_ms"]["median"]
+    if isinstance(inprocess_latency, int) and inprocess_latency > 0 and isinstance(sandbox_latency, int):
+        latency_ratio = round(sandbox_latency / inprocess_latency, 4)
+    cost_ratio = ratio_decimal(sandbox["estimated_cost_usd_total"], inprocess["estimated_cost_usd_total"])
+    cost_latency_acceptable = (
+        latency_ratio is not None and latency_ratio <= 2.0
+        and cost_ratio is not None and cost_ratio <= 1.5
+    )
+    per_case_checks: dict[str, Any] = {}
+    for case_id, item in per_case.items():
+        left, right = item["inprocess"], item["agent_sandbox"]
+        source_required = item["evidence_mode"] == "artifact_and_source"
+        case_lifecycle = (
+            (right["runtime_valid_rate"] or 0) >= (left["runtime_valid_rate"] or 0)
+            and (right["valid_rate"] or 0) >= (left["valid_rate"] or 0)
+            and right["invalid_trials"] <= left["invalid_trials"]
+            and right["no_result_trials"] <= left["no_result_trials"]
+            and right["runtime_failure_trials"] <= left["runtime_failure_trials"]
+            and (right["finalization_valid_rate"] or 0) == 1.0
+            and (right["cleanup_completed_rate"] or 0) == 1.0
+        )
+        case_grounding = (right["artifact_citation_rate"] or 0) >= (left["artifact_citation_rate"] or 0)
+        if source_required:
+            left_source = left["evidence_modes"]["artifact_and_source"]["contract_pass_rate"]
+            right_source = right["evidence_modes"]["artifact_and_source"]["contract_pass_rate"]
+            case_grounding = case_grounding and left_source is not None and right_source is not None and right_source >= left_source
+        case_latency_ratio = None
+        if isinstance(left["latency_ms"]["median"], int) and left["latency_ms"]["median"] > 0 and isinstance(right["latency_ms"]["median"], int):
+            case_latency_ratio = round(right["latency_ms"]["median"] / left["latency_ms"]["median"], 4)
+        case_cost_ratio = ratio_decimal(right["estimated_cost_usd_total"], left["estimated_cost_usd_total"])
+        case_cost_latency = (
+            case_latency_ratio is not None and case_latency_ratio <= 2.0
+            and case_cost_ratio is not None and case_cost_ratio <= 1.5
+        )
+        per_case_checks[case_id] = {
+            "lifecycle_non_regression": case_lifecycle,
+            "grounding_non_regression": case_grounding,
+            "cost_latency_acceptable": case_cost_latency,
+            "latency_median_ratio": case_latency_ratio,
+            "estimated_cost_ratio": case_cost_ratio,
+        }
+    per_case_quality_non_regression = bool(per_case_checks) and all(
+        item["lifecycle_non_regression"] and item["grounding_non_regression"]
+        for item in per_case_checks.values()
+    )
+    per_case_cost_latency_acceptable = bool(per_case_checks) and all(
+        item["cost_latency_acceptable"] for item in per_case_checks.values()
+    )
     blind_complete = blind_quality.get("complete") is True
-    blind_passed = blind_quality.get("passed") is True
-    quality = automatic_quality and blind_complete and blind_passed
-    replacement_ready = evidence and quality and telemetry and simplicity["passed"]
-    if not evidence:
-        recommendation = "insufficient_evidence"
-    elif not automatic_quality or not simplicity["passed"]:
-        recommendation = "do_not_replace"
-    elif not blind_complete:
-        recommendation = "continue_experiment_not_replacement"
-    elif not blind_passed:
-        recommendation = "do_not_replace"
-    elif not telemetry:
-        recommendation = "continue_experiment_not_replacement"
+    blind_non_regression = blind_quality.get("non_regression") is True
+    repeated_causal_improvement = blind_quality.get("material_causal_improvement") is True
+    if not evidence_complete or not blind_complete or not telemetry_complete:
+        classification = "insufficient_evidence"
+    elif not lifecycle_non_regression or not grounding_non_regression or not per_case_quality_non_regression or not blind_non_regression:
+        classification = "inprocess_preferred"
+    elif repeated_causal_improvement and cost_latency_acceptable and per_case_cost_latency_acceptable:
+        classification = "shadow_materially_better"
     else:
-        recommendation = "replacement_candidate"
+        classification = "shadow_promising_for_more_evaluation"
     return {
-        "evidence_complete": evidence,
+        "evidence_complete": evidence_complete,
         "evidence_modes_complete": evidence_modes_complete,
-        "evidence_modes_required": require_both_modes,
-        "automatic_quality_passed": automatic_quality,
+        "evidence_modes_required": True,
+        "lifecycle_non_regression": lifecycle_non_regression,
+        "grounding_non_regression": grounding_non_regression,
+        "per_case_quality_non_regression": per_case_quality_non_regression,
+        "per_case_cost_latency_acceptable": per_case_cost_latency_acceptable,
+        "per_case_checks": per_case_checks,
         "blind_quality_complete": blind_complete,
-        "blind_quality_passed": blind_passed,
-        "quality_passed": quality,
-        "telemetry_passed": telemetry,
-        "simplicity_passed": simplicity["passed"],
-        "replacement_ready": replacement_ready,
-        "recommendation": recommendation,
+        "blind_quality_non_regression": blind_non_regression,
+        "repeated_causal_improvement_across_multiple_cases": repeated_causal_improvement,
+        "telemetry_complete": telemetry_complete,
+        "cost_latency_acceptable": cost_latency_acceptable,
+        "latency_median_ratio": latency_ratio,
+        "estimated_cost_ratio": cost_ratio,
+        "cost_latency_thresholds": {"max_latency_median_ratio": 2.0, "max_estimated_cost_ratio": 1.5},
+        "shadow_comparison": classification,
+        "authoritative_analyzer": "inprocess_unchanged",
     }
 
-
 def validate_holdouts(keys: list[tuple[str, int]], holdouts: list[str], required_repetitions: int) -> tuple[bool, dict[str, int]]:
+    if len(holdouts) != len(set(holdouts)):
+        raise ReportError("holdout cases must be unique")
+    actual_cases = {case_id for case_id, _ in keys}
+    requested_cases = set(holdouts)
     counts = {case_id: sum(key[0] == case_id for key in keys) for case_id in holdouts}
     if required_repetitions < 1:
         raise ReportError("required repetitions must be positive")
-    return bool(holdouts) and all(count == required_repetitions for count in counts.values()), counts
+    return requested_cases == actual_cases and all(count == required_repetitions for count in counts.values()), counts
 
 
 def write_private_json(path: str, value: Any) -> None:
@@ -738,11 +1017,42 @@ def write_blind_packets(path: str, map_path: str, references: dict[str, dict[str
     write_private_json(map_path, {"version": 2, "packet_set_sha256": packet_hash, "reference_set_sha256": reference_hash, "mapping": mapping})
 
 
+def blind_case_runtime_summary(rows: list[dict[str, Any]], dimensions: list[str]) -> dict[str, Any]:
+    totals = [row["total"] for row in rows]
+    alignments = {value: 0 for value in ("aligned", "partial", "missing", "contradicted")}
+    for row in rows:
+        alignments[row["causal_assessment"]["alignment"]] += 1
+    return {
+        "trials": len(rows),
+        "average_total": round(statistics.mean(totals), 4),
+        "median_total": round(statistics.median(totals), 4),
+        "total_range": [min(totals), max(totals)],
+        "dimensions": {
+            dimension: {
+                "average": round(statistics.mean(row["scores"][dimension] for row in rows), 4),
+                "median": round(statistics.median(row["scores"][dimension] for row in rows), 4),
+                "range": [min(row["scores"][dimension] for row in rows), max(row["scores"][dimension] for row in rows)],
+            }
+            for dimension in dimensions
+        },
+        "causal_assessment": {
+            "alignment_counts": alignments,
+            "initiating_cause_found_trials": sum(row["causal_assessment"]["initiating_cause_found"] for row in rows),
+            "downstream_treated_as_primary_trials": sum(row["causal_assessment"]["downstream_treated_as_primary"] for row in rows),
+            "full_causal_resolution_trials": sum(row["scores"]["diagnosis"] == 2 for row in rows),
+            "unresolved_trials": sum(row["scores"]["diagnosis"] < 2 for row in rows),
+        },
+    }
+
+
 def load_blind_quality(map_path: str, scores_path: str, freeze_path: str, references: dict[str, dict[str, Any]], reference_hash: str, keys: list[tuple[str, int]], inprocess: dict[tuple[str, int], dict[str, Any]], sandbox: dict[tuple[str, int], dict[str, Any]], rubric_version: int, score_max: int, dimensions: list[str]) -> dict[str, Any]:
     scores_doc = json.loads(Path(scores_path).read_text())
     freeze_doc = json.loads(Path(freeze_path).read_text())
     score_hash = hashlib.sha256(json.dumps(scores_doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    if freeze_doc.get("version") != 1 or freeze_doc.get("score_set_sha256") != score_hash or freeze_doc.get("packet_set_sha256") != scores_doc.get("packet_set_sha256") or freeze_doc.get("reference_set_sha256") != scores_doc.get("reference_set_sha256"):
+    scoring_timestamp = scores_doc.get("scoring_timestamp")
+    if not isinstance(scoring_timestamp, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z", scoring_timestamp):
+        raise ReportError("blind scores require one immutable UTC scoring_timestamp")
+    if freeze_doc.get("version") != 2 or freeze_doc.get("score_set_sha256") != score_hash or freeze_doc.get("packet_set_sha256") != scores_doc.get("packet_set_sha256") or freeze_doc.get("reference_set_sha256") != scores_doc.get("reference_set_sha256") or freeze_doc.get("scoring_timestamp") != scoring_timestamp:
         raise ReportError("blind scores do not match the pre-unblinding score freeze")
     mapping_doc = json.loads(Path(map_path).read_text())
     if mapping_doc.get("version") != 2 or scores_doc.get("version") != 2:
@@ -750,7 +1060,7 @@ def load_blind_quality(map_path: str, scores_path: str, freeze_path: str, refere
     if mapping_doc.get("reference_set_sha256") != reference_hash or scores_doc.get("reference_set_sha256") != reference_hash:
         raise ReportError("blind scores are not bound to this causal reference set")
     packet_hash = mapping_doc.get("packet_set_sha256")
-    if not isinstance(packet_hash, str) or len(packet_hash) != 64 or scores_doc.get("packet_set_sha256") != packet_hash:
+    if not isinstance(packet_hash, str) or not SHA256_RE.fullmatch(packet_hash) or scores_doc.get("packet_set_sha256") != packet_hash:
         raise ReportError("blind scores are not bound to this packet set")
     if scores_doc.get("rubric_version") != rubric_version or scores_doc.get("score_max") != score_max or scores_doc.get("dimensions") != dimensions:
         raise ReportError("blind score rubric identity does not match benchmark records")
@@ -762,6 +1072,7 @@ def load_blind_quality(map_path: str, scores_path: str, freeze_path: str, refere
         raise ReportError("blind map and scores must contain arrays")
     expected_packets = {f"{case_id}-rep-{repetition:02d}" for case_id, repetition in keys}
     case_by_packet = {f"{case_id}-rep-{repetition:02d}": case_id for case_id, repetition in keys}
+    repetition_by_packet = {f"{case_id}-rep-{repetition:02d}": repetition for case_id, repetition in keys}
     record_hashes: dict[tuple[str, str], str] = {}
     for case_id, repetition in keys:
         packet_id = f"{case_id}-rep-{repetition:02d}"
@@ -795,6 +1106,7 @@ def load_blind_quality(map_path: str, scores_path: str, freeze_path: str, refere
         raise ReportError("blind map packet_set_sha256 does not match its randomized assignment")
     totals = {"inprocess": [], "agent_sandbox": []}
     dimension_values = {runtime: {dimension: [] for dimension in dimensions} for runtime in totals}
+    scored_packets: dict[tuple[str, str], dict[str, Any]] = {}
     seen: set[tuple[str, str]] = set()
     for item in scores:
         if not isinstance(item, dict):
@@ -827,26 +1139,111 @@ def load_blind_quality(map_path: str, scores_path: str, freeze_path: str, refere
         if total > score_max:
             raise ReportError("blind score exceeds score_max")
         totals[runtime].append(total)
+        scored_packets[(key[0], runtime)] = {"total": total, "scores": values, "causal_assessment": assessment}
         seen.add(key)
     if seen != set(runtime_by_key):
         raise ReportError("blind scores are incomplete")
-    summary = {}
+    summary: dict[str, Any] = {}
     for runtime in totals:
         summary[runtime] = {
             "trials": len(totals[runtime]),
             "average_total": round(statistics.mean(totals[runtime]), 4),
             "median_total": round(statistics.median(totals[runtime]), 4),
+            "total_range": [min(totals[runtime]), max(totals[runtime])],
             "dimension_averages": {
                 dimension: round(statistics.mean(dimension_values[runtime][dimension]), 4)
                 for dimension in dimensions
             },
         }
-    passed = (
-        summary["agent_sandbox"]["average_total"] + 0.5 >= summary["inprocess"]["average_total"]
-        and summary["agent_sandbox"]["dimension_averages"]["diagnosis"] + 0.2
-        >= summary["inprocess"]["dimension_averages"]["diagnosis"]
+    cases: dict[str, Any] = {}
+    causal_improvement_cases: list[str] = []
+    causal_regression_cases: list[str] = []
+    for case_id in sorted({key[0] for key in keys}):
+        packet_ids = [f"{case_id}-rep-{repetition:02d}" for current_case, repetition in keys if current_case == case_id]
+        runtime_rows = {
+            runtime: [scored_packets[(packet_id, runtime)] for packet_id in packet_ids]
+            for runtime in totals
+        }
+        diagnosis_wins = sum(
+            scored_packets[(packet_id, "agent_sandbox")]["scores"]["diagnosis"]
+            > scored_packets[(packet_id, "inprocess")]["scores"]["diagnosis"]
+            for packet_id in packet_ids
+        )
+        diagnosis_losses = sum(
+            scored_packets[(packet_id, "agent_sandbox")]["scores"]["diagnosis"]
+            < scored_packets[(packet_id, "inprocess")]["scores"]["diagnosis"]
+            for packet_id in packet_ids
+        )
+        sandbox_diagnosis = statistics.mean(row["scores"]["diagnosis"] for row in runtime_rows["agent_sandbox"])
+        inprocess_diagnosis = statistics.mean(row["scores"]["diagnosis"] for row in runtime_rows["inprocess"])
+        repeated_improvement = diagnosis_wins >= 2 and sandbox_diagnosis > inprocess_diagnosis
+        if repeated_improvement:
+            causal_improvement_cases.append(case_id)
+        repeated_regression = diagnosis_losses >= 2 and sandbox_diagnosis < inprocess_diagnosis
+        if repeated_regression:
+            causal_regression_cases.append(case_id)
+        cases[case_id] = {
+            "repetitions": sorted(repetition_by_packet[packet_id] for packet_id in packet_ids),
+            "inprocess": blind_case_runtime_summary(runtime_rows["inprocess"], dimensions),
+            "agent_sandbox": blind_case_runtime_summary(runtime_rows["agent_sandbox"], dimensions),
+            "sandbox_diagnosis_wins": diagnosis_wins,
+            "sandbox_diagnosis_losses": diagnosis_losses,
+            "repeated_causal_improvement": repeated_improvement,
+            "repeated_causal_regression": repeated_regression,
+        }
+    non_regression = (
+        summary["agent_sandbox"]["average_total"] >= summary["inprocess"]["average_total"]
+        and summary["agent_sandbox"]["dimension_averages"]["diagnosis"] >= summary["inprocess"]["dimension_averages"]["diagnosis"]
+        and not causal_regression_cases
     )
-    return {"status": "scored", "complete": True, "passed": passed, "rubric_version": rubric_version, "score_max": score_max, "dimensions": dimensions, "packet_set_sha256": packet_hash, "reference_set_sha256": reference_hash, "score_set_sha256": score_hash, "arms": summary}
+    return {
+        "status": "scored", "complete": True, "non_regression": non_regression,
+        "material_causal_improvement": len(causal_improvement_cases) > 1,
+        "causal_improvement_cases": causal_improvement_cases,
+        "causal_regression_cases": causal_regression_cases,
+        "rubric_version": rubric_version, "score_max": score_max, "dimensions": dimensions,
+        "packet_set_sha256": packet_hash, "reference_set_sha256": reference_hash,
+        "score_set_sha256": score_hash, "scoring_timestamp": scoring_timestamp,
+        "arms": summary, "cases": cases,
+    }
+
+def build_per_case_report(keys: list[tuple[str, int]], inprocess: dict[tuple[str, int], dict[str, Any]], sandbox: dict[tuple[str, int], dict[str, Any]], blind_quality: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    blind_cases = blind_quality.get("cases", {}) if isinstance(blind_quality.get("cases"), dict) else {}
+    for case_id in sorted({key[0] for key in keys}):
+        case_keys = [key for key in keys if key[0] == case_id]
+        left = inprocess_metrics([inprocess[key] for key in case_keys])
+        right = sandbox_metrics([sandbox[key] for key in case_keys])
+        blind_case = blind_cases.get(case_id)
+        model_unresolved = any(
+            record.get("missing_must") or record.get("unresolved_details")
+            for key in case_keys
+            for record in (inprocess[key], sandbox[key])
+        )
+        blind_unresolved = not isinstance(blind_case, dict) or any(
+            blind_case[runtime]["causal_assessment"]["unresolved_trials"] > 0
+            for runtime in ("inprocess", "agent_sandbox")
+        )
+        unresolved = any(
+            metrics["invalid_trials"] or metrics["no_result_trials"] or metrics["runtime_failure_trials"]
+            for metrics in (left, right)
+        ) or model_unresolved or blind_unresolved
+        result[case_id] = {
+            "evidence_mode": inprocess[case_keys[0]]["evidence_mode"],
+            "repetitions": [key[1] for key in case_keys],
+            "inprocess": left,
+            "agent_sandbox": right,
+            "blind_quality": blind_case,
+            "model_unresolved": model_unresolved,
+            "blind_unresolved": blind_unresolved,
+            "quality_delta": {
+                "signal_rate": round((right["signal_rate"] or 0) - (left["signal_rate"] or 0), 4),
+                "diagnosis_signal_rate": round((right["diagnosis_signal_rate"] or 0) - (left["diagnosis_signal_rate"] or 0), 4),
+                "valid_rate": round((right["valid_rate"] or 0) - (left["valid_rate"] or 0), 4),
+            },
+            "unresolved": unresolved,
+        }
+    return result
 
 
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
@@ -855,6 +1252,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     inprocess = index_records(inprocess_records, "inprocess")
     sandbox = index_records(sandbox_records, "sandbox")
     keys = validate_pairs(inprocess, sandbox)
+    validate_matrix_identity(keys, inprocess, sandbox)
     holdouts_ok, holdout_counts = validate_holdouts(keys, args.holdout_case, args.required_repetitions)
     inprocess_summary = inprocess_metrics([inprocess[key] for key in keys])
     sandbox_summary = sandbox_metrics([sandbox[key] for key in keys])
@@ -866,7 +1264,11 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     reference_hash = ""
     if args.blind_packets or args.blind_map or args.blind_scores:
         references, reference_hash = load_case_references(args.reference_manifest, {key[0] for key in keys})
-    blind_quality = {"status": "not_scored", "complete": False, "passed": False, "rubric_version": rubric_version, "score_max": score_max, "dimensions": dimensions}
+    blind_quality = {
+        "status": "not_scored", "complete": False, "non_regression": False,
+        "material_causal_improvement": False, "causal_improvement_cases": [],
+        "rubric_version": rubric_version, "score_max": score_max, "dimensions": dimensions,
+    }
     if args.blind_scores:
         if not args.blind_map_input or not args.score_freeze:
             raise ReportError("--blind-scores requires --blind-map-input and --score-freeze")
@@ -881,34 +1283,48 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         for mode in EVIDENCE_MODES
     }
     evidence_modes_complete = all(item["trials"] > 0 for item in evidence_mode_coverage.values())
-    require_both_modes = args.expected_pairs == 6
+    per_case = build_per_case_report(keys, inprocess, sandbox, blind_quality)
     criteria = evaluate_criteria(
-        inprocess_summary, sandbox_summary, simplicity, len(keys), args.expected_pairs, holdouts_ok,
-        blind_quality, evidence_modes_complete, require_both_modes,
+        inprocess_summary, sandbox_summary, per_case, len(keys), args.expected_pairs, holdouts_ok,
+        blind_quality, evidence_modes_complete,
     )
     report = {
-        "version": 2,
+        "version": 3,
         "pair_count": len(keys),
+        "planned_operations": args.expected_pairs * 2,
+        "completed_operations": len(keys) * 2,
         "cases": sorted({key[0] for key in keys}),
         "repetitions": sorted({key[1] for key in keys}),
         "holdout_repetitions": holdout_counts,
         "holdouts_complete": holdouts_ok,
         "evidence_mode_coverage": evidence_mode_coverage,
         "evidence_modes_complete": evidence_modes_complete,
+        "provider_config_sha256": inprocess[keys[0]]["provider_config_sha256"],
+        "benchmark_manifest_sha256": inprocess[keys[0]]["benchmark_manifest_sha256"],
+        "pricing": inprocess[keys[0]]["pricing"],
         "inprocess": inprocess_summary,
         "agent_sandbox": sandbox_summary,
+        "per_case": per_case,
+        "unresolved_cases": [case_id for case_id, item in per_case.items() if item["unresolved"]],
         "quality_delta": {
             "signal_rate": round((sandbox_summary["signal_rate"] or 0) - (inprocess_summary["signal_rate"] or 0), 4),
             "diagnosis_signal_rate": round((sandbox_summary["diagnosis_signal_rate"] or 0) - (inprocess_summary["diagnosis_signal_rate"] or 0), 4),
             "valid_rate": round((sandbox_summary["valid_rate"] or 0) - (inprocess_summary["valid_rate"] or 0), 4),
         },
+        "architecture_difference": {
+            "comparison_type": "system_comparison_not_model_only_ab",
+            "inprocess": "dashboard-owned agentic function-calling loop over artifact and pinned-source tools",
+            "agent_sandbox": "frozen read-only workspace analyzed by OpenCode inside Agent Sandbox",
+        },
         "simplicity": simplicity,
         "blind_quality": blind_quality,
         "criteria": criteria,
+        "shadow_comparison": criteria["shadow_comparison"],
+        "authoritative_analyzer": "inprocess_unchanged",
         "limitations": [
-            "cost comparison remains unavailable until both runtimes report per-trial cost",
-            "replacement quality remains incomplete until independent blind scores are supplied",
-            "automatic regex signals do not replace causal-quality review",
+            "automatic regex signals remain separate from blinded causal-quality scoring",
+            "the comparison evaluates two analyzer systems with different tool runtimes, not only a model response",
+            "even shadow_materially_better does not authorize production replacement or publication",
         ],
     }
     if args.blind_packets or args.blind_map:
@@ -917,7 +1333,6 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         write_blind_packets(args.blind_packets, args.blind_map, references, reference_hash, keys, inprocess, sandbox)
         report["blind_packets_written"] = True
     return report
-
 
 def main() -> int:
     args = parse_args()

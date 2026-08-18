@@ -86,10 +86,13 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 	if err := ValidateWorkspaceStageRequest(spec.StageRequest, spec.Request.Manifest); err != nil {
 		return result, err
 	}
-	if spec.StageRequest.InputSourceModePolicy != spec.Request.SourceModePolicy || spec.StageRequest.OutputSourceModePolicy != spec.Request.SourceModePolicy {
-		return result, fmt.Errorf("workspace stage and execution source mode policies differ")
+	if spec.StageRequest.OutputSourceModePolicy != spec.Request.SourceModePolicy {
+		return result, fmt.Errorf("workspace stage output and execution source mode policies differ")
 	}
-	if err := VerifyPreparedSourceWorkspace(ctx, spec.SourceRoot, spec.Request.Manifest.Source.Revision, spec.Request.SourceModePolicy); err != nil {
+	if spec.Request.InputMode == WorkspaceInputStaged && spec.StageRequest.InputMode != WorkspaceStageInputPVC {
+		return result, fmt.Errorf("workspace Sandbox staging requires PVC input")
+	}
+	if err := VerifyPreparedSourceWorkspace(ctx, spec.SourceRoot, spec.Request.Manifest.Source.Revision, spec.StageRequest.InputSourceModePolicy); err != nil {
 		return result, err
 	}
 	if err := VerifyArtifactWorkspace(spec.ArtifactRoot, spec.Request.Manifest); err != nil {
@@ -103,7 +106,21 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 		Purpose: "analysis", ExecutionID: spec.ExecutionID,
 		RequestEnv: WorkspaceExecutionRequestEnv, Request: requestJSON,
 		Timeout: r.Timeout, OutputLimitBytes: r.OutputLimitBytes, WorkObserver: spec.WorkObserver,
-		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: spec.Request.Manifest.Hash, IdentityHash: spec.StageRequest.Hash},
+	}
+	switch spec.Request.InputMode {
+	case WorkspaceInputStaged:
+		stageJSON, err := json.Marshal(spec.StageRequest)
+		if err != nil {
+			return result, fmt.Errorf("encode workspace stage request: %w", err)
+		}
+		sandboxSpec.StagedWorkspace = &agentsandbox.StagedWorkspace{
+			RequestEnv: WorkspaceStageRequestEnv, Request: stageJSON,
+			ManifestHash: spec.Request.Manifest.Hash, IdentityHash: spec.StageRequest.Hash,
+		}
+	case WorkspaceInputPrepared:
+		sandboxSpec.PreparedWorkspace = &agentsandbox.PreparedWorkspace{ManifestHash: spec.Request.Manifest.Hash, IdentityHash: spec.StageRequest.Hash}
+	default:
+		return result, fmt.Errorf("workspace analysis input mode is invalid")
 	}
 	if err := agentsandbox.ValidateSpec(sandboxSpec); err != nil {
 		return result, err

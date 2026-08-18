@@ -1,0 +1,67 @@
+{{- include "aster.validateAgentAnalysisShadow" . -}}
+{{- if .Values.agentSandbox.analysisShadow.enabled }}
+{{- $cfg := .Values.agentSandbox.analysisShadow.networkPolicy -}}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "aster.agentAnalysisShadowPublisherAdmissionName" . }}-default-deny
+  namespace: {{ .Values.agentSandbox.analysisShadow.namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analysis-shadow-input
+spec:
+  endpointSelector: {}
+  ingress: []
+  egress: []
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "aster.agentAnalysisShadowPublisherAdmissionName" . }}-publish
+  namespace: {{ .Values.agentSandbox.analysisShadow.namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analysis-shadow-input
+spec:
+  endpointSelector:
+    matchLabels:
+      prow-ai-dashboard/purpose: analysis-input-publish
+  ingress: []
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: {{ index $cfg.dnsNamespaceSelector "kubernetes.io/metadata.name" | quote }}
+            {{- toYaml $cfg.dnsPodSelector | nindent 12 }}
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toFQDNs:
+        {{- range $fqdn := $cfg.stagingFQDNs }}
+        - matchName: {{ $fqdn | quote }}
+        {{- end }}
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "aster.agentAnalysisShadowPublisherAdmissionName" . }}-cleanup
+  namespace: {{ .Values.agentSandbox.analysisShadow.namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analysis-shadow-input
+spec:
+  endpointSelector:
+    matchLabels:
+      prow-ai-dashboard/purpose: analysis-input-cleanup
+  ingress: []
+  egress: []
+{{- end }}

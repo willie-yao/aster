@@ -16,7 +16,7 @@ available during that evidence phase. After at least one artifact read or focuse
 grep succeeds, the executor will request finalization in the same OpenCode
 session. Do not create or edit `result/analysis.json`; the executor creates the
 canonical result after validation. The result contract is
-`agent-analysis-workspace-v7`. The executor derives content-free evidence
+`agent-analysis-workspace-v8`. The executor derives content-free evidence
 IDs from successful read and grep calls. Finalization lists the available IDs.
 Select artifact IDs for `artifact_evidence_ids` and source IDs for
 `source_evidence_ids` and `relevant_file_ids`. Do not return paths, line ranges, or

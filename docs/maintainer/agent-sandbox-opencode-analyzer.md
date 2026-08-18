@@ -38,17 +38,40 @@ tmp/          isolated executor state
 Source verification accepts regular tracked files and tracked relative symlinks
 whose complete chain remains inside the checkout. It rejects absolute or escaping
 symlinks, submodules, unsupported index flags, dirty tracked files, and untracked
-or ignored files.
+or ignored files. Before either scheduled clone, the public GitHub tree API must
+prove no more than 100,000 files, 64 MiB per file, and 1 GiB of tracked content.
+The complete prepared source snapshot, including Git metadata, is capped at 1.5
+GiB.
 
 Artifacts are mechanically bounded and content-addressed. Paths are safe and
 sorted; each file, total file count, total bytes, size, and SHA-256 digest are
-sealed into the request. The shadow does not receive an unbounded bucket or live
-artifact backend.
+sealed into the request. The current contract admits at most 5,000 files, 64 MiB
+per file, and 512 MiB total. The CAPZ fixtures fit without selecting a favorable
+subset.
 
-Prepared source and artifact trees are mounted read-only. The stager copies the
-sealed snapshot into the isolated workspace shape required by the executor. The
-executor verifies revision, hashes, mount identity, and read-only state before
-and after OpenCode runs. Only `result/` and temporary executor state are writable.
+The explicit benchmark pre-populates a private input claim. Scheduled shadowing
+cannot mount dashboard-local storage across namespaces. It instead retains a
+local verification copy and creates a tokenless publisher Job in the dedicated
+analysis namespace. The Job fetches only the sealed public source revision and
+artifact paths, verifies every size and digest, and writes one leased
+content-addressed snapshot to the private input claim. The publisher Job and Pod
+are both confirmed absent before the Sandbox starts. Ambiguous Job creates are
+recovered by deterministic name and exact workload identity, then deleted.
+
+The input claim is mounted read-only in the Sandbox. The stager verifies the
+compact artifact-index identity and copies the sealed snapshot into a fresh
+workspace. The executor verifies revision, hashes, mount identity, and read-only
+state before and after OpenCode runs. Only `result/` and temporary executor state
+are writable. The dashboard validates the returned result again against its
+retained local copy. A second tokenless, no-network Job deletes exactly the leased
+remote snapshot.
+
+Preparation, remote publication, model execution, and cleanup use separate
+bounded contexts. The full configured analysis timeout starts only after both
+workspace copies are ready. Comparison mode applies the same explicit output
+token cap from `ai.maxOutputTokens` to the authoritative in-process client. The
+chart requires it to equal the shadow `modelOutputTokens`; zero remains the
+normal production default when shadowing is disabled.
 
 OpenCode can use bounded native read, glob, and grep operations. Network fetch,
 repository writes, arbitrary shell, delegation, project configuration, and
@@ -70,15 +93,20 @@ The shadow uses separate immutable images and identities:
 - `analysisstager` prepares one sealed workspace snapshot.
 - `analysisexecutor` runs the pinned OpenCode analyzer and writes exactly one
   canonical result.
+- Scheduled shadowing also runs `analysisstager` as the namespace-local publisher
+  and cleanup image. Those Jobs receive no provider, OAuth, bot, or GitHub
+  credential.
 - The Aster writer creates and observes the Sandbox through a dedicated client
   ServiceAccount.
 - The Sandbox Pod uses a separate tokenless workload ServiceAccount.
 
 Admission pins the stager and executor digests, RuntimeClass, ServiceAccounts,
 PVC identities, read-only mounts, resource bounds, security contexts, provider
-coordinates, and complete environment shape. The chart does not create the
+coordinates, and complete environment shape. Separate admission covers the
+publisher and cleanup Jobs. The chart renders default deny, exact publisher and
+model egress, quota, and narrowly scoped Job RBAC. It does not create the
 execution namespace, Agent Sandbox controller, RuntimeClass, provider Secret or
-gateway, prepared input PVC, or runtime images.
+gateway, private input PVC, or runtime images.
 
 Use only a dedicated inference credential. Direct bearer mode references one
 existing Secret key in the execution namespace. The chart and Aster processes do
@@ -114,7 +142,7 @@ they are not published.
 ```bash
 cd backend
 go test ./internal/agentanalysis ./internal/analysisexecutor \
-  ./internal/analysisstager ./internal/agentsandbox \
+  ./internal/analysisstager ./internal/analysispublisher ./internal/agentsandbox \
   ./cmd/analysisexecutor ./cmd/analysisstager -count=1
 go test ./... -count=1
 go vet ./...
@@ -133,12 +161,16 @@ provided and accepted:
 
 - an existing dedicated execution namespace;
 - an immutable executor image digest;
+- an immutable stager image digest;
+- an immutable git-capable dashboard image digest for public snapshot discovery;
 - a secure RuntimeClass for hostile repository code;
 - tokenless workload and dedicated client ServiceAccounts;
 - the required deny-by-default network policy;
-- an existing private shadow-ledger PVC distinct from the dashboard data PVC;
+- an existing private analysis-input PVC and private shadow-ledger PVC, both
+  distinct from the dashboard data PVC;
 - reviewed provider coordinates and a dedicated Secret or authenticated gateway;
-- conservative `maxPerRun`, timeout, turn, output, and resource limits.
+- exact publisher FQDNs, model context and output limits, and conservative
+  `maxPerRun`, timeout, turn, output, quota, and resource limits.
 
 Keep `retries: 0`. Start with `maxPerRun: 1`. The in-process analyzer must remain
 enabled and authoritative. Do not enable the stopped causal critic in the same
@@ -147,10 +179,31 @@ deployment.
 ### 3. Run matched cold comparisons
 
 Use the same pinned case manifest, consumer prompt, source revision, artifact
-snapshot, provider path, model, and repetition count for both arms. Run the
-in-process `TestAIBenchmark` arm and the Agent Sandbox
-`TestAgentSandboxAnalyzerBenchmark` arm from fresh state. Keep raw JSONL,
-prepared workspace metadata, blind packets, maps, and scores private.
+snapshot, provider path, model, reasoning effort, context limit, output limit,
+and repetition count for both arms. Run the in-process `TestAIBenchmark` arm and
+the Agent Sandbox `TestAgentSandboxAnalyzerBenchmark` arm from fresh state. Keep
+raw JSONL, prepared workspace metadata, blind packets, maps, and scores private.
+
+The Agent Sandbox arm must pin both runtime images and their embedded identity:
+
+```bash
+AGENT_SANDBOX_ANALYSIS_IMAGE='<executor>@sha256:<digest>' \
+AGENT_SANDBOX_ANALYSIS_STAGER_IMAGE='<stager>@sha256:<digest>' \
+ANALYZER_BENCH_IMAGE_CONTRACT_JSON='<private-image-contract.json>' \
+BENCH_MODEL_CONTEXT_TOKENS='<frozen-context-limit>' \
+BENCH_MODEL_OUTPUT_TOKENS='<frozen-output-limit>' \
+go test ./benchmarks -run TestAgentSandboxAnalyzerBenchmark -count=1
+```
+
+Generate the private image contract with
+`hack/test-agent-sandbox-analysis-images.sh` after resolving immutable image
+digests. The contract binds both digests, OCI revisions, embedded `--version`
+output, runtime UID/GID, image tag, Go versions, and OpenCode 1.18.2 under one
+SHA-256. A final prepare-only pass must include the same contract before scored
+execution.
+
+The in-process arm uses the same two `BENCH_MODEL_*` values directly. It does not
+perform provider-side context detection during a scored run.
 
 The comparison tooling must keep these dimensions separate:
 
@@ -169,13 +222,16 @@ missing usage metadata as zero.
 
 The writer appends one bounded private record to the separate shadow ledger. A
 record includes authoritative and shadow identities, result status, validation
-codes, comparison fields, attempts, timing, cleanup state, and content-free
-telemetry. Confirm that no shadow data appears under `/data/*` or any server API.
+codes, comparison fields, attempts, timing, publisher and cleanup state, and
+content-free telemetry. Confirm that no shadow data appears under `/data/*` or
+any server API.
 
-After each evaluation, verify Sandbox and Pod termination, result observation,
-workspace cleanup, and namespace quota recovery. A cleanup-pending record is a
-failed lifecycle result, not a successful analysis. Retain only the private
-artifacts required by the evaluation protocol and the operator's evidence policy.
+After each evaluation, verify publisher Job deletion before Sandbox creation,
+Sandbox and Pod termination, result observation, leased-input cleanup Job
+deletion, local workspace cleanup, and namespace quota recovery. A
+cleanup-pending record is a failed lifecycle result, not a successful analysis.
+Retain only the private artifacts required by the evaluation protocol and the
+operator's evidence policy.
 
 ## Private telemetry
 
@@ -200,8 +256,8 @@ count.
 
 - The shadow is sampled, private, and non-authoritative. It is not a rollout path
   for replacing the in-process analyzer.
-- The prepared workspace limits the available evidence and does not reproduce an
-  unbounded artifact browser.
+- The workspace contains the complete frozen fixture within explicit safety
+  bounds. It does not reproduce a live or unbounded artifact browser.
 - Pinned OpenCode protocol fixtures prove the tested transport shape, not live
   compatibility with every provider or model.
 - Secure RuntimeClass configuration, scheduling segregation, and NetworkPolicy

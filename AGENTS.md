@@ -94,6 +94,7 @@ backend/                         Go 1.25
       modules/sharedfailure/     Seed prompt plus the cross-pull-request correlation
     aiusage/                     Private token usage and cost accounting
     agentanalysis/               Private experimental Agent failure-analysis adapter
+    analysispublisher/           Namespace-local analyzer input Job lifecycle
     analysisexecutor/            File-backed OpenCode analysis executor
     analysisstager/              Credential-free analyzer workspace stager
     agentsandbox/                Business-neutral Agent Sandbox lifecycle contract

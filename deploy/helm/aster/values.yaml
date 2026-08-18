@@ -113,6 +113,10 @@ agentSandbox:
       repository: ""
       digest: ""
       pullPolicy: IfNotPresent
+    stagerImage:
+      repository: ""
+      digest: ""
+      pullPolicy: IfNotPresent
     input:
       # Existing read-only PVC populated outside the Sandbox. The chart never
       # creates, writes, or mounts it into dashboard workloads.
@@ -165,11 +169,11 @@ agentSandbox:
       requests:
         cpu: 250m
         memory: 512Mi
-        ephemeral-storage: 2Gi
+        ephemeral-storage: 3Gi
       limits:
         cpu: "2"
         memory: 2Gi
-        ephemeral-storage: 2Gi
+        ephemeral-storage: 3Gi
   causalCritic:
     enabled: false
     # Existing consumer-owned namespace containing private critic Sandboxes.
@@ -218,55 +222,87 @@ agentSandbox:
         ephemeral-storage: 32Mi
   analysisShadow:
     enabled: false
-    # Existing consumer-owned namespace containing private shadow Sandboxes.
+    # Existing dedicated namespace containing private shadow Sandboxes.
     namespace: ""
     runtimeClassName: ""
+    # Exact file-backed analyzer executor image.
     image:
       repository: ""
       digest: ""
       pullPolicy: IfNotPresent
+    # Exact init-container image that verifies and copies the private snapshot.
+    stagerImage:
+      repository: ""
+      digest: ""
+      pullPolicy: IfNotPresent
+    # Git-capable fetcher/worker image used only to prepare public source snapshots.
+    dashboardImage:
+      repository: ghcr.io/willie-yao/aster/remote-fixer
+      tag: ""
+      pullPolicy: IfNotPresent
+    input:
+      # Existing private PVC in the analysis namespace. A tokenless publisher
+      # Job writes one leased snapshot; Sandboxes mount it read-only.
+      existingClaim: ""
+      # Ephemeral dashboard-side copy retained through independent validation.
+      localRoot: /analysis-shadow-input
+      # Dedicated size-limited emptyDir for the frozen local verification copy.
+      localSizeLimit: 3Gi
     workloadServiceAccount:
       create: false
       name: ""
-    agentVersion: v1
     modelProvider:
-      # Direct mode is the default only after this shadow is explicitly enabled.
-      # Gateway mode preserves the tokenless consumer-operated gateway path.
       credentialMode: direct
       api: chat_completions
       endpoint: ""
       model: ""
-    timeout: 10m
-    retries: 0
-    outputLimitBytes: 65536
+      reasoningEffort: ""
+      auth:
+        type: none
+        existingSecret: ""
+        tokenKey: ""
+      publicCAPrivateDNS: false
+    timeout: 15m
+    outputLimitBytes: 262144
     maxPerRun: 1
-    maxTurns: 12
+    maxSteps: 20
+    # Required when enabled. Keep equal to ai.contextWindowTokens.
+    modelContextTokens: 0
+    modelOutputTokens: 0
+    requireSourceEvidence: true
     pollInterval: 250ms
     ledger:
-      # Existing private PVC. The chart does not create or share it with public data.
+      # Existing private PVC, distinct from public data and the input PVC.
       existingClaim: ""
-      mountPath: /private/analysis-shadow
+      mountPath: /private/analysis-shadow-ledger
     networkPolicy:
-      # Required when enabled. For example, use cilium on AKS Cilium/Kata, where the
-      # Kubernetes NetworkPolicy service peer does not admit cross-node Kata traffic.
-      mode: kubernetes
+      # Scheduled shadowing requires Cilium FQDN egress for public snapshot staging.
+      mode: cilium
       enabled: false
       gatewayNamespaceSelector: {}
       gatewayPodSelector: {}
       gatewayPort: 443
+      gatewayTargetPort: null
+      # Exact public FQDNs used only by the snapshot publisher Job.
+      stagingFQDNs:
+        - github.com
+        - api.github.com
+        - storage.googleapis.com
       dnsNamespaceSelector:
         kubernetes.io/metadata.name: kube-system
       dnsPodSelector:
         k8s-app: kube-dns
+    quota:
+      enabled: true
     resources:
       requests:
-        cpu: 100m
-        memory: 128Mi
-        ephemeral-storage: 256Mi
-      limits:
-        cpu: "1"
+        cpu: 250m
         memory: 512Mi
-        ephemeral-storage: 256Mi
+        ephemeral-storage: 3Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+        ephemeral-storage: 3Gi
   rbac:
     # Creates the namespace-scoped Role/RoleBinding and optionally the client SAs.
     create: true
@@ -333,6 +369,9 @@ ai:
   # /v1/models metadata or the engine's bounded fallback. For the current
   # Copilot GPT-5 mini deployment, set 128000.
   contextWindowTokens: 0
+  # Optional authoritative output-token cap. Zero preserves the provider default.
+  # Scheduled analysis shadowing requires this to equal its modelOutputTokens.
+  maxOutputTokens: 0
   token: ""
   existingSecret: ""
   tokenSecretKey: AI_TOKEN

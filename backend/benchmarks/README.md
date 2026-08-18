@@ -144,7 +144,7 @@ replacement decision with evidence revisions, strict-dominance state, and a
 stable acceptance or rejection reason. Decision events displace older ordinary
 trace events if the per-analysis cap is full. It does not contain draft text.
 
-Human review uses rubric version 1 with five dimensions scored from 0 to 2:
+Human review uses rubric version 2 with five dimensions scored from 0 to 2:
 diagnosis, artifact evidence, claim discipline, remediation, and source
 grounding. The maximum human score is 10. Every private JSONL row records the
 rubric version and maximum so report generation cannot describe the same totals
@@ -152,10 +152,11 @@ with a different denominator.
 
 Every private JSONL row also records the experiment arm, engine commit, fixture
 digest, pinned baseline consumer commit, effective project and prompt digests,
-merged skill-set hash, API mode, evidence condition, frozen-evidence digest when
-present, and one effective-input digest. Persistent cold-cache paths include the
-arm and effective-input digest, so separate arms and evidence conditions cannot
-silently share an analysis cache.
+merged skill-set hash, API mode, a sanitized provider-configuration digest,
+frozen pricing, evidence condition, frozen-evidence digest when present, and one
+effective-input digest. Persistent cold-cache paths include the arm and
+effective-input digest, so separate arms and evidence conditions cannot silently
+share an analysis cache.
 
 The trace summary reports the floor-nudge count and ordered reasons, context
 compaction and over-budget counts, the final semantic-judge event outcome,
@@ -258,7 +259,8 @@ the benchmark is a real regression gate rather than permanently red.
 
 Prow garbage-collects GCS artifacts on a rolling window, so each case's full
 artifact tree is snapshotted and published as a `.tar.gz` asset on the
-`benchmark-fixtures` release of this repo. By default the benchmark downloads
+historical `benchmark-fixtures` release in `willie-yao/prow-ai-dashboard`. By
+default the benchmark downloads
 the asset, extracts it to a local cache (`os.UserCacheDir()`), and reads it
 through the `local` storage provider, so the agent traverses the exact
 real directory structure. The download is cached across runs.
@@ -321,6 +323,30 @@ short-lived analyzer client kubeconfig. Use
 `hack/compare-agent-sandbox-analyzer-benchmark.py` to pair its private JSONL with
 `TestAIBenchmark` output and generate the content-free comparison.
 
+The CAPZ cohort is pinned in
+`testdata/benchmarks/capz-agent-sandbox-eval.json`. It contains the route-table,
+Flatcar DNS/providerID, and clusterctl/ASO cases plus exact consumer, fixture,
+source, prompt, and project identities. Set `BENCH_MODEL_CONTEXT_TOKENS` and
+`BENCH_MODEL_OUTPUT_TOKENS` identically for both arms. When private JSONL is
+enabled, the in-process client sends that explicit output cap; normal production
+callers retain the provider default. The route-table case also freezes two
+source expectations, so the nine-pair matrix contains both artifact-only and
+artifact-plus-source trials.
+
+Prepare one case without provider access by mounting the private analyzer input
+claim and setting `ANALYZER_BENCH_PREPARE_ONLY=1`,
+`ANALYZER_BENCH_INPUT_ROOT=<mounted-claim>`, and the exact standalone source
+clone. Preparation copies the complete frozen build tree, writes a compact
+hashed artifact index, and seals the request. Large cases are never reduced to
+a favorable subset.
+
+After immutable executor and stager digests are resolved, run
+`hack/test-agent-sandbox-analysis-images.sh` with its optional output path to
+create a private image-contract JSON. Repeat the prepare-only pass with
+`ANALYZER_BENCH_IMAGE_CONTRACT_JSON` set. Scored execution rejects a prepared
+record, runtime image, embedded Aster revision, UID/GID, image tag, Go version,
+or OpenCode version that differs from that contract.
+
 Blinded packets require
 `--reference-manifest backend/benchmarks/testdata/benchmarks/agent-sandbox-causal-references.json`.
 The packet set includes one runtime-neutral causal reference and full-credit rubric
@@ -334,7 +360,22 @@ blinded causal scores remain separate metrics.
 Freeze the blinded score file with
 `hack/freeze-agent-sandbox-blind-scores.py` before reading the runtime map, then
 pass the resulting `--score-freeze` file to the scored comparison. The comparison
-rejects a changed post-unblinding score file.
+rejects a changed post-unblinding score file. The score document must contain one
+UTC `scoring_timestamp`; the freeze binds that timestamp with the packet,
+reference, and score hashes.
+
+The scored report uses only these classifications:
+
+- `insufficient_evidence`
+- `inprocess_preferred`
+- `shadow_promising_for_more_evaluation`
+- `shadow_materially_better`
+
+It reports every case and distribution separately. It never recommends replacing
+the authoritative analyzer. `shadow_materially_better` requires no lifecycle,
+validity, citation, or source-grounding regression, repeated blinded causal
+improvement in more than one case, complete request/token/cost telemetry, bounded
+cost and latency, and complete cleanup.
 
 The provider-free analyzer integrity harness lives in
 `internal/analysisexecutor`. It is opt-in, uses a deterministic loopback TLS

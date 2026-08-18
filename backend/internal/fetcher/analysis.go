@@ -355,6 +355,7 @@ func (p *pipeline) ensureAnalysisRuntime(ctx context.Context) (*analysisruntime.
 	runtime, err := analysisruntime.New(ctx, analysisruntime.Options{
 		Token: p.aiToken, DataDir: p.opts.OutDir, Project: p.aiProject,
 		UsageRecorder: p.usageRecorder, UsageOrigin: aiusage.OriginFetcher,
+		MaxOutputTokens: p.opts.AIMaxOutputTokens,
 	})
 	if err != nil {
 		return nil, err

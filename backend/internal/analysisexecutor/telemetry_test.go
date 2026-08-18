@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -17,7 +18,7 @@ func TestParseOpenCodeTelemetrySanitizesSuccessfulUsage(t *testing.T) {
 		"info":{"role":"assistant","cost":0.125,"tokens":{"input":100,"output":25,"cache":{"read":40}},"private":"secret prompt"},
 		"parts":[
 			{"type":"step-start","snapshot":"private source"},
-			{"type":"step-finish","cost":0.125,"tokens":{"input":100,"output":25,"cache":{"read":40}}},
+			{"type":"step-finish","cost":0.125,"tokens":{"input":100,"output":25,"reasoning":7,"cache":{"read":40}}},
 			{"type":"tool","tool":"read","state":{"status":"completed","output":"artifact secret"}},
 			{"type":"tool","tool":"bash","state":{"status":"error","error":"Permission denied by policy","input":{"command":"secret"}}}
 		]
@@ -26,7 +27,7 @@ func TestParseOpenCodeTelemetrySanitizesSuccessfulUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !usage.Available || usage.ModelRequests != 1 || usage.InputTokens != 100 || usage.CachedInputTokens != 40 || usage.OutputTokens != 25 || !usage.CostAvailable || usage.CostUSD != "0.12500000" {
+	if !usage.Available || usage.ModelRequests != 1 || usage.InputTokens != 100 || usage.CachedInputTokens != 40 || usage.OutputTokens != 25 || usage.ReasoningTokens != 7 || !usage.CostAvailable || usage.CostUSD != "0.12500000" {
 		t.Fatalf("usage=%+v", usage)
 	}
 	if !telemetry.Available || telemetry.ProviderRequests != 1 || !telemetry.ProviderRequestsKnown || telemetry.StepsUsed != 1 || telemetry.ToolFailureCount != 1 || telemetry.DeniedToolCount != 1 || len(telemetry.Tools) != 2 {
@@ -63,11 +64,10 @@ func TestParseOpenCodeTelemetryRecordsStructuredAndContextErrors(t *testing.T) {
 	}
 }
 
-func TestParseOpenCodeTelemetryRejectsMalformedAndOversizedFields(t *testing.T) {
+func TestParseOpenCodeTelemetryRejectsMalformedPayloads(t *testing.T) {
 	for name, raw := range map[string][]byte{
-		"malformed":       []byte(`[{`),
-		"trailing":        []byte(`[] {}`),
-		"oversized error": []byte(`[{"info":{"role":"assistant","cost":0,"tokens":{"input":1,"output":1,"cache":{"read":0}}},"parts":[{"type":"step-start"},{"type":"step-finish","cost":0.1,"tokens":{"input":1,"output":1,"cache":{"read":0}}},{"type":"tool","tool":"read","state":{"status":"error","error":"` + strings.Repeat("x", maxOpenCodeFieldBytes+1) + `"}}]}]`),
+		"malformed": []byte(`[{`),
+		"trailing":  []byte(`[] {}`),
 	} {
 		t.Run(name, func(t *testing.T) {
 			usage, telemetry, err := parseOpenCodeTelemetry(raw)
@@ -75,6 +75,25 @@ func TestParseOpenCodeTelemetryRejectsMalformedAndOversizedFields(t *testing.T) 
 				t.Fatalf("usage=%+v telemetry=%+v err=%v", usage, telemetry, err)
 			}
 		})
+	}
+}
+
+func TestParseOpenCodeTelemetryAcceptsLongToolErrorsWithoutRetainingThem(t *testing.T) {
+	errorText := strings.Repeat("private provider detail ", 40) + "permission denied"
+	raw := []byte(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"step-finish","cost":0.1,"tokens":{"input":1,"output":1,"cache":{"read":0}}},{"type":"tool","tool":"read","state":{"status":"error","error":` + strconv.Quote(errorText) + `}}]}]`)
+	usage, telemetry, err := parseOpenCodeTelemetry(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !usage.Available || !telemetry.Available || telemetry.ToolFailureCount != 1 || telemetry.DeniedToolCount != 1 {
+		t.Fatalf("usage=%+v telemetry=%+v", usage, telemetry)
+	}
+	encoded, err := json.Marshal(telemetry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), errorText) || strings.Contains(string(encoded), "private provider detail") {
+		t.Fatal("sanitized telemetry retained the tool error")
 	}
 }
 

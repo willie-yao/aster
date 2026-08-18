@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -19,8 +20,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+var ledgerCostPattern = regexp.MustCompile(`^[0-9]+(?:[.][0-9]{1,12})?$`)
+
 const (
-	LedgerSchemaVersion     = 2
+	LedgerSchemaVersion     = 3
 	maxLedgerRecords        = 100
 	maxLedgerAttempts       = 4096
 	maxLedgerBytes          = 4 << 20
@@ -92,39 +95,80 @@ type EvidenceManifestEntry struct {
 
 // Provenance records the complete private runtime identity.
 type Provenance struct {
-	Runtime                   string `json:"runtime,omitempty"`
-	AgentNamespace            string `json:"agent_namespace,omitempty"`
-	AgentRef                  string `json:"agent_ref,omitempty"`
-	GitSecret                 string `json:"git_secret,omitempty"`
-	AgentVersion              string `json:"agent_version,omitempty"`
-	ContractVersion           string `json:"contract_version,omitempty"`
-	ToolPolicyVersion         string `json:"tool_policy_version,omitempty"`
-	EvidenceHash              string `json:"evidence_hash,omitempty"`
-	SkillHash                 string `json:"skill_hash,omitempty"`
-	SourceSHA                 string `json:"source_sha,omitempty"`
-	IdentityHash              string `json:"identity_hash,omitempty"`
-	ExecutionID               string `json:"execution_id,omitempty"`
-	Timeout                   string `json:"timeout,omitempty"`
-	MaxTurns                  int    `json:"max_turns,omitempty"`
-	Retries                   int    `json:"retries,omitempty"`
-	Attempts                  int    `json:"attempts,omitempty"`
-	RuntimeDurationMs         int64  `json:"runtime_duration_ms,omitempty"`
-	DurationMs                int64  `json:"duration_ms,omitempty"`
-	FinalizationDurationMs    int64  `json:"finalization_duration_ms,omitempty"`
-	TaskFinalized             bool   `json:"task_finalized,omitempty"`
-	TaskFinalizedMs           int64  `json:"task_finalized_ms,omitempty"`
-	ResultAvailable           bool   `json:"result_available,omitempty"`
-	ResultAvailableMs         int64  `json:"result_available_ms,omitempty"`
-	FinalizationChecked       bool   `json:"finalization_checked,omitempty"`
-	FinalizationValid         bool   `json:"finalization_valid,omitempty"`
-	CleanupCompleted          bool   `json:"cleanup_completed,omitempty"`
-	CleanupDurationMs         int64  `json:"cleanup_duration_ms,omitempty"`
-	TokenUsageAvailable       bool   `json:"token_usage_available"`
-	CostAvailable             bool   `json:"cost_available"`
-	UsageStatus               string `json:"usage_status,omitempty"`
-	ModelIdentityAvailable    bool   `json:"model_identity_available"`
-	ProviderIdentityAvailable bool   `json:"provider_identity_available"`
-	IdentityStatus            string `json:"identity_status,omitempty"`
+	Runtime                     string   `json:"runtime,omitempty"`
+	AgentNamespace              string   `json:"agent_namespace,omitempty"`
+	AgentRef                    string   `json:"agent_ref,omitempty"`
+	GitSecret                   string   `json:"git_secret,omitempty"`
+	AgentVersion                string   `json:"agent_version,omitempty"`
+	ContractVersion             string   `json:"contract_version,omitempty"`
+	ToolPolicyVersion           string   `json:"tool_policy_version,omitempty"`
+	EvidenceHash                string   `json:"evidence_hash,omitempty"`
+	SkillHash                   string   `json:"skill_hash,omitempty"`
+	SourceSHA                   string   `json:"source_sha,omitempty"`
+	IdentityHash                string   `json:"identity_hash,omitempty"`
+	ExecutionID                 string   `json:"execution_id,omitempty"`
+	Timeout                     string   `json:"timeout,omitempty"`
+	MaxTurns                    int      `json:"max_turns,omitempty"`
+	Retries                     int      `json:"retries,omitempty"`
+	Attempts                    int      `json:"attempts,omitempty"`
+	RuntimeDurationMs           int64    `json:"runtime_duration_ms,omitempty"`
+	DurationMs                  int64    `json:"duration_ms,omitempty"`
+	FinalizationDurationMs      int64    `json:"finalization_duration_ms,omitempty"`
+	TaskFinalized               bool     `json:"task_finalized,omitempty"`
+	TaskFinalizedMs             int64    `json:"task_finalized_ms,omitempty"`
+	ResultAvailable             bool     `json:"result_available,omitempty"`
+	ResultAvailableMs           int64    `json:"result_available_ms,omitempty"`
+	FinalizationChecked         bool     `json:"finalization_checked,omitempty"`
+	FinalizationValid           bool     `json:"finalization_valid,omitempty"`
+	CleanupCompleted            bool     `json:"cleanup_completed,omitempty"`
+	CleanupDurationMs           int64    `json:"cleanup_duration_ms,omitempty"`
+	TokenUsageAvailable         bool     `json:"token_usage_available"`
+	CostAvailable               bool     `json:"cost_available"`
+	UsageStatus                 string   `json:"usage_status,omitempty"`
+	InputTokens                 int      `json:"input_tokens,omitempty"`
+	CachedInputTokens           int      `json:"cached_input_tokens,omitempty"`
+	OutputTokens                int      `json:"output_tokens,omitempty"`
+	ReasoningTokens             int      `json:"reasoning_tokens,omitempty"`
+	CostUSD                     string   `json:"cost_usd,omitempty"`
+	ModelIdentityAvailable      bool     `json:"model_identity_available"`
+	ProviderIdentityAvailable   bool     `json:"provider_identity_available"`
+	IdentityStatus              string   `json:"identity_status,omitempty"`
+	ManifestHash                string   `json:"manifest_hash,omitempty"`
+	StageHash                   string   `json:"stage_hash,omitempty"`
+	EffectivePromptSHA256       string   `json:"effective_prompt_sha256,omitempty"`
+	SkillSetHash                string   `json:"skill_set_hash,omitempty"`
+	WorkspacePromptHash         string   `json:"workspace_prompt_hash,omitempty"`
+	InputMode                   string   `json:"input_mode,omitempty"`
+	MaxSteps                    int      `json:"max_steps,omitempty"`
+	ModelContextTokens          int      `json:"model_context_tokens,omitempty"`
+	ModelOutputTokens           int      `json:"model_output_tokens,omitempty"`
+	ProviderRequests            int      `json:"provider_requests,omitempty"`
+	ProviderRequestsKnown       bool     `json:"provider_requests_known"`
+	SchedulingAvailable         bool     `json:"scheduling_available"`
+	SchedulingMs                int64    `json:"scheduling_ms,omitempty"`
+	StagingAvailable            bool     `json:"staging_available"`
+	StagingMs                   int64    `json:"staging_ms,omitempty"`
+	ExecutionAvailable          bool     `json:"execution_available"`
+	ExecutionMs                 int64    `json:"execution_ms,omitempty"`
+	ResultPublicationAvailable  bool     `json:"result_publication_available"`
+	ResultPublicationMs         int64    `json:"result_publication_ms,omitempty"`
+	PhaseTimingStatus           string   `json:"phase_timing_status,omitempty"`
+	ProviderCredentialMode      string   `json:"provider_credential_mode,omitempty"`
+	ProviderAPI                 string   `json:"provider_api,omitempty"`
+	ProviderReasoningEffort     string   `json:"provider_reasoning_effort,omitempty"`
+	TerminalState               string   `json:"terminal_state,omitempty"`
+	OpenCodeFailureCode         string   `json:"opencode_failure_code,omitempty"`
+	OpenCodeErrorClassification string   `json:"opencode_error_classification,omitempty"`
+	ResultValidationStatus      string   `json:"result_validation_status,omitempty"`
+	ResultValidationCodes       []string `json:"result_validation_codes,omitempty"`
+	InputCleanupCompleted       bool     `json:"input_cleanup_completed,omitempty"`
+	PublisherRequestHash        string   `json:"publisher_request_hash,omitempty"`
+	PublisherJob                string   `json:"publisher_job,omitempty"`
+	PublisherPod                string   `json:"publisher_pod,omitempty"`
+	PublicationDurationMs       int64    `json:"publication_duration_ms,omitempty"`
+	CleanupJob                  string   `json:"input_cleanup_job,omitempty"`
+	CleanupPod                  string   `json:"input_cleanup_pod,omitempty"`
+	InputCleanupDurationMs      int64    `json:"input_cleanup_duration_ms,omitempty"`
 }
 
 // ShadowQuality records private critique and judge telemetry without changing authority.
@@ -142,26 +186,27 @@ type ShadowQuality struct {
 
 // ShadowRecord is one private comparison ledger entry.
 type ShadowRecord struct {
-	ID                string                         `json:"id"`
-	CreatedAt         string                         `json:"created_at"`
-	AttemptHash       string                         `json:"attempt_hash"`
-	ComparisonHash    string                         `json:"comparison_hash,omitempty"`
-	Status            ShadowStatus                   `json:"status"`
-	ErrorCode         string                         `json:"error_code,omitempty"`
-	Subject           Subject                        `json:"subject"`
-	Source            sourceinvestigation.Repository `json:"source"`
-	RequestHash       string                         `json:"request_hash"`
-	AuthoritativeHash string                         `json:"authoritative_hash"`
-	Authoritative     AuthoritativeSnapshot          `json:"authoritative"`
-	Shadow            *Analysis                      `json:"shadow,omitempty"`
-	Scan              *ArtifactScan                  `json:"scan,omitempty"`
-	Evidence          []EvidenceManifestEntry        `json:"evidence,omitempty"`
-	PlanIDs           []string                       `json:"plan_ids,omitempty"`
-	Provenance        Provenance                     `json:"provenance"`
-	Quality           ShadowQuality                  `json:"quality"`
-	TotalDurationMs   int64                          `json:"total_duration_ms,omitempty"`
-	CleanupPending    bool                           `json:"cleanup_pending,omitempty"`
-	CleanupWork       *agentruntime.WorkRef          `json:"cleanup_work,omitempty"`
+	ID                  string                         `json:"id"`
+	CreatedAt           string                         `json:"created_at"`
+	AttemptHash         string                         `json:"attempt_hash"`
+	ComparisonHash      string                         `json:"comparison_hash,omitempty"`
+	Status              ShadowStatus                   `json:"status"`
+	ErrorCode           string                         `json:"error_code,omitempty"`
+	Subject             Subject                        `json:"subject"`
+	Source              sourceinvestigation.Repository `json:"source"`
+	RequestHash         string                         `json:"request_hash"`
+	AuthoritativeHash   string                         `json:"authoritative_hash"`
+	Authoritative       AuthoritativeSnapshot          `json:"authoritative"`
+	Shadow              *WorkspaceAnalysis             `json:"shadow,omitempty"`
+	Scan                *ArtifactScan                  `json:"scan,omitempty"`
+	Evidence            []EvidenceManifestEntry        `json:"evidence,omitempty"`
+	PlanIDs             []string                       `json:"plan_ids,omitempty"`
+	Provenance          Provenance                     `json:"provenance"`
+	Quality             ShadowQuality                  `json:"quality"`
+	TotalDurationMs     int64                          `json:"total_duration_ms,omitempty"`
+	CleanupPending      bool                           `json:"cleanup_pending,omitempty"`
+	CleanupWork         *agentruntime.WorkRef          `json:"cleanup_work,omitempty"`
+	InputCleanupPending bool                           `json:"input_cleanup_pending,omitempty"`
 }
 
 // AttemptRecord retains a compact deduplication identity after detailed records are pruned.
@@ -222,42 +267,6 @@ func EvidenceManifest(bundle EvidenceBundle) ([]EvidenceManifestEntry, []string)
 		planIDs = append(planIDs, planned.ID)
 	}
 	return evidence, planIDs
-}
-
-// ProvenanceFromResult converts a runtime result to its content-free identity.
-func ProvenanceFromResult(result Result) Provenance {
-	return Provenance{
-		Runtime: result.Runtime, AgentNamespace: result.AgentNamespace, AgentRef: result.AgentRef, AgentVersion: result.AgentVersion,
-		ContractVersion: result.ContractVersion, ToolPolicyVersion: result.ToolPolicyVersion,
-		EvidenceHash: result.EvidenceHash, SkillHash: result.SkillHash,
-		SourceSHA: result.SourceSHA, IdentityHash: result.IdentityHash, ExecutionID: result.ExecutionID,
-		Timeout: result.Timeout.String(), MaxTurns: result.MaxTurns, Retries: result.Retries,
-		Attempts: result.Attempts, RuntimeDurationMs: result.Duration.Milliseconds(), FinalizationDurationMs: result.FinalizationDuration.Milliseconds(),
-		TaskFinalized: result.Telemetry.TaskFinalized, TaskFinalizedMs: result.Telemetry.TaskFinalizedMs,
-		ResultAvailable: result.Telemetry.ResultAvailable, ResultAvailableMs: result.Telemetry.ResultAvailableMs,
-		FinalizationChecked: result.Telemetry.FinalizationChecked, FinalizationValid: result.Telemetry.FinalizationValid,
-		CleanupCompleted: result.Telemetry.CleanupCompleted, CleanupDurationMs: result.Telemetry.CleanupDurationMs,
-		TokenUsageAvailable: result.Telemetry.TokenUsageAvailable, CostAvailable: result.Telemetry.CostAvailable, UsageStatus: result.Telemetry.UsageStatus,
-		ModelIdentityAvailable: false, ProviderIdentityAvailable: false, IdentityStatus: "agent_owned_identity_unavailable",
-	}
-}
-
-// AttemptIdentity fingerprints an authoritative result and runtime settings before evidence collection.
-func AttemptIdentity(subject Subject, requestHash, authoritativeHash, skillSetHash string, source sourceinvestigation.Repository, agentNamespace, agentRef, agentVersion, gitSecret string, timeout time.Duration, maxTurns, retries int) string {
-	return attemptIdentityWithPolicy(subject, requestHash, authoritativeHash, skillSetHash, source, agentNamespace, agentRef, agentVersion, gitSecret, timeout, maxTurns, retries, ToolPolicyVersion)
-}
-
-func attemptIdentityWithPolicy(subject Subject, requestHash, authoritativeHash, skillSetHash string, source sourceinvestigation.Repository, agentNamespace, agentRef, agentVersion, gitSecret string, timeout time.Duration, maxTurns, retries int, toolPolicyVersion string) string {
-	return hashString(strings.Join([]string{
-		ContractVersion, strings.TrimSpace(toolPolicyVersion), SkillHash(), requestHash, authoritativeHash, skillSetHash,
-		source.Owner, source.Name, source.Revision, subject.JobID, subject.BuildID, subject.TestName, subject.TestSource, subject.JUnitFile, subject.SuiteName, subject.ClassName,
-		strings.TrimSpace(agentNamespace), strings.TrimSpace(agentRef), strings.TrimSpace(agentVersion), strings.TrimSpace(gitSecret), timeout.String(), fmt.Sprintf("%d", maxTurns), fmt.Sprintf("%d", retries),
-	}, "\x00"))
-}
-
-// ComparisonIdentity adds the exact frozen evidence hash to one attempted identity.
-func ComparisonIdentity(attemptHash string, bundle EvidenceBundle) string {
-	return hashString(strings.Join([]string{attemptHash, bundle.Hash, bundle.SkillSetHash, bundle.Source.Revision}, "\x00"))
 }
 
 // NewRecordID returns a stable idempotency key for one attempted comparison.
@@ -495,10 +504,10 @@ func loadLedger(path string) (ShadowLedger, error) {
 	if err := json.Unmarshal(data, &ledger); err != nil {
 		return ShadowLedger{}, fmt.Errorf("parse agent analysis ledger: %w", err)
 	}
-	if ledger.SchemaVersion != 1 && ledger.SchemaVersion != LedgerSchemaVersion {
+	if ledger.SchemaVersion != 1 && ledger.SchemaVersion != 2 && ledger.SchemaVersion != LedgerSchemaVersion {
 		return ShadowLedger{}, fmt.Errorf("unsupported agent analysis ledger schema %d", ledger.SchemaVersion)
 	}
-	if ledger.SchemaVersion == 1 {
+	if ledger.SchemaVersion == 1 || ledger.SchemaVersion == 2 {
 		normalizeLegacyLedger(&ledger)
 	}
 	for _, attempt := range ledger.Attempts {
@@ -564,6 +573,9 @@ func validateShadowRecord(record ShadowRecord) (time.Time, error) {
 	if !validShadowQuality(record.Quality) {
 		return time.Time{}, fmt.Errorf("invalid shadow quality telemetry")
 	}
+	if !validShadowProvenance(record.Provenance) {
+		return time.Time{}, fmt.Errorf("invalid shadow provenance telemetry")
+	}
 	if err := sourceinvestigation.ValidateRepository(record.Source); err != nil {
 		return time.Time{}, err
 	}
@@ -572,6 +584,64 @@ func validateShadowRecord(record ShadowRecord) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("record time: %w", err)
 	}
 	return createdAt, nil
+}
+
+func validShadowProvenance(value Provenance) bool {
+	for _, count := range []int{value.Attempts, value.InputTokens, value.CachedInputTokens, value.OutputTokens, value.ReasoningTokens, value.ProviderRequests} {
+		if count < 0 {
+			return false
+		}
+	}
+	for _, duration := range []int64{
+		value.RuntimeDurationMs, value.DurationMs, value.FinalizationDurationMs, value.TaskFinalizedMs, value.ResultAvailableMs,
+		value.CleanupDurationMs, value.SchedulingMs, value.StagingMs, value.ExecutionMs, value.ResultPublicationMs,
+		value.PublicationDurationMs, value.InputCleanupDurationMs,
+	} {
+		if duration < 0 {
+			return false
+		}
+	}
+	if value.CachedInputTokens > value.InputTokens || value.ReasoningTokens > value.OutputTokens {
+		return false
+	}
+	if value.CostAvailable != (value.CostUSD != "") || value.CostUSD != "" && !ledgerCostPattern.MatchString(value.CostUSD) {
+		return false
+	}
+	for _, phase := range []struct {
+		available bool
+		duration  int64
+	}{
+		{value.SchedulingAvailable, value.SchedulingMs},
+		{value.StagingAvailable, value.StagingMs},
+		{value.ExecutionAvailable, value.ExecutionMs},
+		{value.ResultPublicationAvailable, value.ResultPublicationMs},
+	} {
+		if !phase.available && phase.duration != 0 {
+			return false
+		}
+	}
+	switch value.TerminalState {
+	case "", string(agentruntime.TerminalSucceeded), string(agentruntime.TerminalFailed), string(agentruntime.TerminalCancelled), string(agentruntime.TerminalTimedOut):
+	default:
+		return false
+	}
+	if !validWorkspaceFailureCode(value.OpenCodeFailureCode) || len(value.OpenCodeErrorClassification) > 64 {
+		return false
+	}
+	switch value.ResultValidationStatus {
+	case "", WorkspaceResultAccepted, WorkspaceResultAcceptedWithWarnings, WorkspaceResultRejected:
+	default:
+		return false
+	}
+	if len(value.ResultValidationCodes) > 32 {
+		return false
+	}
+	for _, code := range value.ResultValidationCodes {
+		if !validWorkspaceFailureCode(code) {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeShadowQuality(quality *ShadowQuality) {

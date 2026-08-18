@@ -859,7 +859,7 @@ func TestOpenCode1182ResponsesFailureModesAreSanitized(t *testing.T) {
 func compatibilityAnalysisJSON() []byte {
 	return []byte(`{
   "version": 1,
-  "contract_version": "agent-analysis-workspace-v7",
+  "contract_version": "agent-analysis-workspace-v8",
   "summary": "The synthetic failure is grounded.",
   "is_transient": false,
   "root_cause": "The artifact and source contain the same synthetic marker.",

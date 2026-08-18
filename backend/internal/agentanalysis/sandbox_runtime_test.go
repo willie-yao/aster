@@ -30,12 +30,16 @@ func TestWorkspaceSandboxRuntimeValidatesOneResult(t *testing.T) {
 	calls := 0
 	runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64), run: func(got agentsandbox.Spec) (agentsandbox.Result, error) {
 		calls++
-		if got.Purpose != "analysis" || got.RequestEnv != WorkspaceExecutionRequestEnv || got.PreparedWorkspace == nil || got.PreparedWorkspace.ManifestHash != spec.Request.Manifest.Hash || got.PreparedWorkspace.IdentityHash != spec.StageRequest.Hash || got.StagedWorkspace != nil {
+		if got.Purpose != "analysis" || got.RequestEnv != WorkspaceExecutionRequestEnv || got.PreparedWorkspace != nil || got.StagedWorkspace == nil || got.StagedWorkspace.RequestEnv != WorkspaceStageRequestEnv {
 			t.Fatalf("spec=%+v", got)
 		}
 		var request WorkspaceExecutionRequest
 		if err := json.Unmarshal(got.Request, &request); err != nil || request.Hash != spec.Request.Hash {
 			t.Fatalf("request=%+v err=%v", request, err)
+		}
+		var stage WorkspaceStageRequest
+		if err := json.Unmarshal(got.StagedWorkspace.Request, &stage); err != nil || stage.Hash != spec.StageRequest.Hash {
+			t.Fatalf("stage=%+v err=%v", stage, err)
 		}
 		data, _ := json.Marshal(validWorkspaceExecution(spec.Request))
 		return agentsandbox.Result{
@@ -196,7 +200,7 @@ func TestWorkspaceSandboxRuntimeRejectsSourceModePolicyMismatch(t *testing.T) {
 
 	runtime.SourceModePolicy = WorkspaceSourceModePreserve
 	spec.StageRequest, _ = NewWorkspaceStageRequestWithSourceModePolicies(spec.Request.Manifest, WorkspaceSourceModePreserve, WorkspaceSourceModeIgnoreExecutable)
-	if _, err := runtime.Analyze(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "stage and execution source mode policies differ") {
+	if _, err := runtime.Analyze(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "stage output and execution source mode policies differ") {
 		t.Fatalf("error=%v", err)
 	}
 }

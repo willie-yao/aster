@@ -12,7 +12,7 @@ func TestValidateSpec(t *testing.T) {
 		t.Fatal(err)
 	}
 	staged := valid
-	staged.StagedWorkspace = &StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"version":1}`)}
+	staged.StagedWorkspace = &StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"version":1}`), ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)}
 	if err := ValidateSpec(staged); err != nil {
 		t.Fatal(err)
 	}
