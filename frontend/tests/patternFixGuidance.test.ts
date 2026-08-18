@@ -253,12 +253,68 @@ test("causal actions stay blocked while pattern chat and exact-JUnit Fix remain 
   const banner = source("src/components/PatternBanner.tsx");
   const chat = source("src/components/AnalysisChat.tsx");
 
-  assert.match(banner, /!analysisOnly && isCurrent && lifecycleActive && pattern\.systemic && pattern\.id && \(/);
+  // Drafting stays tied to the remediation contract; dismissal must not be, and
+  // neither gate may suppress the other.
+  assert.match(banner, /const draftable = patternDraftable\(pattern, refreshStatus\)/);
+  assert.doesNotMatch(banner, /draftable = dismissible/);
+  assert.match(banner, /draftable=\{draftable\}/);
+  assert.match(banner, /eligibilityHint=\{draftable \? actionEligibility : null\}/);
   assert.match(banner, /<FailureActions/);
   assert.doesNotMatch(banner, />\s*Draft issue\s*</);
   assert.doesNotMatch(banner, />\s*Draft fix PR\s*</);
   assert.match(banner, /<AnalysisChat/);
   assert.match(chat, /Start fix investigation/);
+});
+
+test("pattern dismissal is reachable on the causal-group results the engine publishes", () => {
+  const banner = source("src/components/PatternBanner.tsx");
+  const actions = source("src/components/FailureActions.tsx");
+
+  // The regression: every published pattern carries a recurrence_classification,
+  // so gating the control on !analysisOnly hid it everywhere.
+  assert.match(banner, /const dismissible = patternDismissible\(pattern, refreshStatus\)/);
+  assert.match(banner, /\{showFailureActions && pattern\.id && \(/);
+  assert.doesNotMatch(banner, /!analysisOnly[^\n]*<FailureActions/);
+  // The dismissed state has to render for the same patterns it can be set on.
+  assert.match(banner, /const resolvedEntry = pattern\.id \? resolved\.resolved\[pattern\.id\] : undefined/);
+  // A dismissed pattern keeps its Restore control even once a fresh dismissal
+  // would be refused.
+  assert.match(banner, /const showFailureActions = draftable \|\| dismissible \|\| Boolean\(resolvedEntry\)/);
+  assert.match(banner, /dismissible=\{dismissible\}/);
+
+  // Only drafting is suppressed when draftable is false; dismissal is not.
+  assert.match(actions, /const drafting = draftable && features\.action_requests/);
+  assert.match(actions, /\{drafting && canStartActions && \(/);
+  assert.match(actions, /\{draftable && !eligibilityLoading && eligibility/);
+});
+
+test("restoring a pattern never falls back to a dismissal the server would refuse", () => {
+  const actions = source("src/components/FailureActions.tsx");
+  const banner = source("src/components/PatternBanner.tsx");
+
+  // Restore is gated on resolvable, but starting a NEW dismissal additionally
+  // needs dismissible, so a resolved pattern that no longer qualifies for a
+  // fresh dismissal can be restored without ever offering Dismiss.
+  assert.match(actions, /\{resolvable && \(isResolved \?/);
+  assert.match(actions, /\) : dismissible && \(/);
+  // A dismissal write outlives the pattern it started on, so a late response
+  // must not land on whichever failure the user navigated to.
+  assert.match(actions, /const startedFailureID = failureID;/);
+  assert.match(actions, /if \(activeFailureID\.current !== startedFailureID\) return;/);
+  assert.match(actions, /open=\{resolvable && dismissible && resolveOpen\}/);
+  // One owner holds resolved state. Two independent useResolved() copies could
+  // diverge and pair a "Dismissed" chip with a "Dismiss pattern" button.
+  assert.doesNotMatch(actions, /useResolved/);
+  assert.match(banner, /isResolved=\{Boolean\(resolvedEntry\)\}/);
+  assert.match(banner, /onResolvedChange=\{refetchResolved\}/);
+
+  // The read that follows a dismissal write keeps prior state and retries, so a
+  // transient failure cannot leave a stale control until remount.
+  const data = source("src/hooks/useData.ts");
+  assert.match(data, /if \(r\.status === 404\) return \{ resolved: \{\} \} as ResolvedState;/);
+  assert.match(data, /if \(!r\.ok\) throw new Error\(`resolved\.json: \$\{r\.status\}`\);/);
+  assert.match(data, /timer = window\.setTimeout\(load, Math\.min\(8000/);
+  assert.match(data, /const resolvedReadAttempts = \d+;/);
 });
 
 test("guidance keeps a contained mobile action and points to the nearby test ledger", () => {

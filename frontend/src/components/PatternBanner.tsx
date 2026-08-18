@@ -24,7 +24,7 @@ import { useResolved } from "../hooks/useData";
 import { AnalysisChat } from "./AnalysisChat";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { patternChatAvailability, patternChatHasEvidenceBuild } from "../lib/patternChat";
-import { patternActionEligibilityHint, patternLifecycleActive } from "../lib/actionEligibility";
+import { patternActionEligibilityHint, patternDismissible, patternDraftable, patternLifecycleActive } from "../lib/actionEligibility";
 import { jobRunPath } from "../lib/routes";
 import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
@@ -70,7 +70,7 @@ export function PatternBanner({
   runs?: BuildResult[];
   refreshStatus?: PatternRefreshStatus;
 }) {
-  const { data: resolved } = useResolved();
+  const { data: resolved, refetch: refetchResolved } = useResolved();
   const { features } = useCapabilities();
   const analysisOnly = Boolean(pattern.recurrence_classification);
   const causalGroups = pattern.causal_groups ?? [];
@@ -86,7 +86,7 @@ export function PatternBanner({
   );
   const fixGuidanceBuildID = patternFixGuidanceBuildID(pattern, runs);
   const showFixGuidance = Boolean(jobID && fixGuidanceBuildID && fixCapable && !hasCausalFixTarget);
-  const resolvedEntry = !analysisOnly && pattern.id ? resolved.resolved[pattern.id] : undefined;
+  const resolvedEntry = pattern.id ? resolved.resolved[pattern.id] : undefined;
   const hasEvidenceBuild = patternChatHasEvidenceBuild(
     pattern,
     runs.map((run) => run.build_id),
@@ -120,6 +120,15 @@ export function PatternBanner({
   const isCurrent = !refreshStatus || refreshStatus.state === "current";
   const lifecycle = pattern.lifecycle;
   const lifecycleActive = patternLifecycleActive(lifecycle);
+  // Dismissal acknowledges the whole pattern, so it is available even where the
+  // pattern-level remediation contract is not.
+  const dismissible = patternDismissible(pattern, refreshStatus);
+  // Drafting follows the remediation contract alone: the two gates are
+  // independent, so one must never suppress the other.
+  const draftable = patternDraftable(pattern, refreshStatus);
+  // A dismissed pattern always offers Restore, even where a fresh dismissal
+  // would now be refused: clearing an acknowledgement only un-hides a pattern.
+  const showFailureActions = draftable || dismissible || Boolean(resolvedEntry);
   const actionEligibility = patternActionEligibilityHint(
     pattern.remediation_targets,
     lifecycle,
@@ -396,7 +405,7 @@ export function PatternBanner({
     </>
   );
 
-  const actions = showFixGuidance || chatRef || (!analysisOnly && isCurrent && lifecycleActive && pattern.systemic && pattern.id) ? (
+  const actions = showFixGuidance || chatRef || showFailureActions ? (
     <Stack spacing={1.25}>
       {showFixGuidance && jobID && fixGuidanceBuildID && (
         <PatternFixGuidance jobID={jobID} buildID={fixGuidanceBuildID} />
@@ -410,10 +419,14 @@ export function PatternBanner({
           appearance="detail"
         />
       )}
-      {!analysisOnly && isCurrent && lifecycleActive && pattern.systemic && pattern.id && (
+      {showFailureActions && pattern.id && (
         <FailureActions
           failureID={pattern.id}
-          eligibilityHint={actionEligibility}
+          dismissible={dismissible}
+          isResolved={Boolean(resolvedEntry)}
+          draftable={draftable}
+          eligibilityHint={draftable ? actionEligibility : null}
+          onResolvedChange={refetchResolved}
           appearance="detail"
         />
       )}
