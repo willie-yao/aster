@@ -117,9 +117,9 @@ export function EscalationPanel({ refValue, enabled }: EscalationPanelProps) {
         <Typography component="span" color="text.secondary" sx={overviewTypography.tableHeading}>
           Deeper analysis
         </Typography>
-        {state === "not_started" && (
+        {(state === "not_started" || state === "failed") && (
           <Button size="small" variant="outlined" onClick={() => void onStart()} disabled={starting}>
-            {starting ? "Starting..." : "Investigate"}
+            {starting ? "Starting..." : state === "failed" ? "Retry" : "Investigate"}
           </Button>
         )}
         {active && (

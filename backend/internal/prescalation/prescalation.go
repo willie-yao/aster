@@ -1,11 +1,14 @@
 // Package prescalation runs on-demand AI analysis for a single pull request
 // test failure that the deterministic pass could not explain.
 //
-// Escalation is admin-initiated, one at a time, and bounded. It exists only for
-// the residual set: failures the base branch, other pull requests, and
-// flakiness history all failed to account for. The analysis it runs is the
-// ordinary agentic failure analysis under a separate module, so it is gated by
-// the same critique and judge rules as every other analysis.
+// Escalation is admin-initiated, one at a time, and bounded. Admission is
+// reserved before any work happens, so the number of requests that reach the
+// artifact bucket and GitHub is capped by the queue bound rather than by how
+// many admins clicked. It exists only for the residual set: failures the base
+// branch, other pull requests, and flakiness history all failed to account for.
+// The analysis it runs is the ordinary agentic failure analysis under a
+// separate module, so it is gated by the same critique and judge rules as every
+// other analysis.
 package prescalation
 
 import (
@@ -38,8 +41,8 @@ var (
 	ErrUnavailable = errors.New("escalation is unavailable")
 	// ErrIdempotencyConflict marks a reused request ID for a different subject.
 	ErrIdempotencyConflict = errors.New("request id was already used for another failure")
-	// ErrBusy marks a rejected start because another escalation is running.
-	ErrBusy = errors.New("another escalation is already running")
+	// ErrBusy marks a rejected start because the escalation queue is full.
+	ErrBusy = errors.New("too many escalations are already in progress")
 )
 
 // maxIdempotencyKeysPerRecord bounds replay keys retained per retained record.
@@ -99,9 +102,16 @@ type Runner interface {
 
 // Options bound the service.
 type Options struct {
-	// Timeout bounds one escalation.
+	// Timeout bounds one escalation's whole accepted lifetime: resolution,
+	// queue time, and the analysis itself.
 	Timeout time.Duration
-	// MaxRecords bounds retained results before the oldest are pruned.
+	// MaxQueued bounds accepted-but-unfinished escalations, including the one
+	// running. A start past the bound is rejected with ErrBusy instead of
+	// queueing, which caps the artifact and GitHub work escalation can trigger.
+	MaxQueued int
+	// MaxRecords bounds retained results before the oldest are pruned. It is
+	// raised to MaxQueued when configured lower, since a running record cannot
+	// be pruned.
 	MaxRecords int
 	// Now is the clock, for tests.
 	Now func() time.Time
@@ -113,8 +123,17 @@ func (o Options) normalized() Options {
 	if o.Timeout <= 0 {
 		o.Timeout = 10 * time.Minute
 	}
+	if o.MaxQueued <= 0 {
+		o.MaxQueued = 4
+	}
 	if o.MaxRecords <= 0 {
 		o.MaxRecords = 128
+	}
+	// A record cannot be pruned while it runs, so retention tighter than the
+	// queue would evict results the moment they land, losing analyses that
+	// were already paid for.
+	if o.MaxRecords < o.MaxQueued {
+		o.MaxRecords = o.MaxQueued
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -149,6 +168,11 @@ type Service struct {
 	// active is a single global slot, so escalation can never fan out into
 	// concurrent model traffic no matter how many admins click.
 	active chan struct{}
+	// admitted bounds accepted work. A token is taken before resolution, so
+	// the bucket reads and GitHub calls one escalation needs are capped the
+	// same way its model traffic is. It doubles as the drain: holding every
+	// token means nothing is in flight and nothing more can start.
+	admitted chan struct{}
 
 	mu          sync.Mutex
 	records     map[string]*record
@@ -156,7 +180,9 @@ type Service struct {
 	// saveMu serializes persistence so concurrent finishes cannot write
 	// snapshots out of order.
 	saveMu sync.Mutex
-	wg     sync.WaitGroup
+	// drainMu serializes Wait, which claims the whole queue.
+	drainMu sync.Mutex
+	drained bool
 }
 
 // New constructs the service and restores any persisted results.
@@ -168,6 +194,7 @@ func New(ctx context.Context, resolver Resolver, runner Runner, opts Options) (*
 	s := &Service{
 		ctx: ctx, resolver: resolver, runner: runner, opts: opts,
 		active:      make(chan struct{}, 1),
+		admitted:    make(chan struct{}, opts.MaxQueued),
 		records:     map[string]*record{},
 		idempotency: map[string]string{},
 	}
@@ -183,7 +210,25 @@ func New(ctx context.Context, resolver Resolver, runner Runner, opts Options) (*
 			if view.State == StateQueued || view.State == StateRunning {
 				continue
 			}
-			s.records[identity] = &record{view: view, updatedAt: opts.Now().UTC()}
+			// Completion time orders the restored set, so pruning it drops the
+			// genuinely oldest results rather than an arbitrary one. A record
+			// from an older state file may carry neither timestamp; unknown age
+			// sorts oldest so results with trustworthy times are kept first.
+			updatedAt := view.CompletedAt
+			if updatedAt.IsZero() {
+				updatedAt = view.StartedAt
+			}
+			s.records[identity] = &record{view: view, updatedAt: updatedAt}
+		}
+		// A store written under a larger bound holds more results than are
+		// retained now, and nothing else would bring it back down until the
+		// next escalation runs.
+		s.mu.Lock()
+		oversized := len(s.records) > opts.MaxRecords
+		s.pruneLocked()
+		s.mu.Unlock()
+		if oversized {
+			s.persist()
 		}
 	}
 	return s, nil
@@ -211,7 +256,7 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 			return View{}, ErrIdempotencyConflict
 		}
 		// The same key for the same subject is a replay of one request, so it
-		// returns that request's outcome rather than starting new work.
+		// returns the subject's current state rather than starting new work.
 		replay = true
 	}
 	if existing := s.records[identity]; existing != nil && (replay || !retryable(existing)) {
@@ -223,10 +268,51 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	}
 	s.mu.Unlock()
 
+	// Admission is reserved before resolution, not after it. Resolution reads
+	// the artifact bucket and GitHub, so admitting afterwards would let every
+	// concurrent request pay that cost and only then queue.
+	select {
+	case s.admitted <- struct{}{}:
+	default:
+		return View{}, ErrBusy
+	}
+	// The token is released only once the work it stands for has finished, so
+	// holding it is what makes a drain meaningful. It is released exactly once,
+	// by whoever ends up owning it.
+	// One deadline spans resolution, queue time, and the analysis, so the whole
+	// accepted lifetime is bounded rather than just the part after the slot is
+	// won. Rooting it in the service context means a shutdown also cancels work
+	// that has not started running yet.
+	lifetime, endLifetime := context.WithTimeout(s.ctx, s.opts.Timeout)
+	release := func() {
+		endLifetime()
+		<-s.admitted
+	}
+
 	// Resolution happens outside the lock because it reads published state and
 	// GitHub. It also rejects failures the deterministic pass already explained.
-	resolved, err := s.resolver.Resolve(ctx, ref)
-	if err != nil {
+	// It observes the caller's context too, so a client that goes away stops the
+	// bucket and GitHub work it asked for.
+	resolveCtx, cancelResolve := context.WithCancel(lifetime)
+	stopPropagation := context.AfterFunc(ctx, cancelResolve)
+	resolved, err := s.resolver.Resolve(resolveCtx, ref)
+	stopPropagation()
+	cancelResolve()
+	// A resolver can report success from partial reads: the changed-file lister
+	// is optional, so a cancelled listing is discarded. So the budget and the
+	// caller are checked directly rather than trusted to surface as an error,
+	// or a cut-off resolution would launch an analysis. They are checked first
+	// because an expired budget is the operative fact, and because they carry
+	// the cause the operator needs.
+	switch {
+	case lifetime.Err() != nil:
+		release()
+		return View{}, lifetime.Err()
+	case ctx.Err() != nil:
+		release()
+		return View{}, ctx.Err()
+	case err != nil:
+		release()
 		return View{}, err
 	}
 
@@ -236,6 +322,7 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 		s.pruneIdempotencyLocked()
 		view := existing.view
 		s.mu.Unlock()
+		release()
 		return view, nil
 	}
 	now := s.opts.Now().UTC()
@@ -249,10 +336,9 @@ func (s *Service) Start(ctx context.Context, ref Ref, owner, requestID string) (
 	s.pruneLocked()
 	s.pruneIdempotencyLocked()
 	view := rec.view
-	s.wg.Add(1)
 	s.mu.Unlock()
 
-	go s.run(rec, resolved)
+	go s.run(lifetime, rec, resolved, release)
 	return view, nil
 }
 
@@ -277,31 +363,55 @@ func (s *Service) Get(ref Ref) (View, error) {
 	return View{Ref: ref, State: StateNotStarted}, nil
 }
 
-// Wait blocks until in-flight escalations finish, which includes their attempt
-// to persist a terminal result. It returns ctx.Err() if ctx is done first.
+// Wait blocks until every admitted escalation has released its slot, or until
+// ctx is done. On success it keeps those slots, so a drained service accepts no
+// further work. Admission covers resolution too, so a shutdown drain does not
+// race a request that has not started running yet, and every escalation that
+// reached a record has attempted to persist its outcome by the time Wait
+// returns. It is safe to call more than once.
 func (s *Service) Wait(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
+	// One drain at a time: concurrent callers each claiming part of the queue
+	// would stall each other short of the full set.
+	s.drainMu.Lock()
+	defer s.drainMu.Unlock()
+	if s.drained {
 		return nil
-	case <-ctx.Done():
-		return ctx.Err()
 	}
+	// Claiming every token is the drain: a token is released only once the work
+	// it stands for has finished, so holding them all means nothing is left.
+	claimed := 0
+	for claimed < s.opts.MaxQueued {
+		select {
+		case s.admitted <- struct{}{}:
+			claimed++
+		case <-ctx.Done():
+			// A drain that gave up must hand back what it took, or the queue
+			// would stay permanently smaller and a later attempt could never
+			// finish.
+			for ; claimed > 0; claimed-- {
+				<-s.admitted
+			}
+			return ctx.Err()
+		}
+	}
+	s.drained = true
+	return nil
 }
 
-func (s *Service) run(rec *record, resolved Resolved) {
-	defer s.wg.Done()
+func (s *Service) run(ctx context.Context, rec *record, resolved Resolved, release func()) {
+	// The admission token and the accepted lifetime are held until the
+	// escalation has persisted its outcome, so a queue slot frees only when the
+	// work it stands for is done and a drain cannot end early.
+	defer release()
 
 	// Waiting for the single slot keeps queued work visible rather than
-	// rejecting it, while still admitting exactly one analysis at a time.
+	// rejecting it, while still admitting exactly one analysis at a time. A
+	// request that never reaches the slot within its budget finishes as failed,
+	// which leaves it retryable and prunable.
 	select {
 	case s.active <- struct{}{}:
-	case <-s.ctx.Done():
-		s.finish(rec, View{Ref: rec.view.Ref, State: StateFailed, Error: "escalation was cancelled"})
+	case <-ctx.Done():
+		s.finish(rec, View{Ref: rec.view.Ref, State: StateFailed, Error: safeError(ctx.Err())})
 		return
 	}
 	defer func() { <-s.active }()
@@ -311,8 +421,6 @@ func (s *Service) run(rec *record, resolved Resolved) {
 	rec.updatedAt = s.opts.Now().UTC()
 	s.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(s.ctx, s.opts.Timeout)
-	defer cancel()
 	view, err := s.runner.Run(ctx, resolved)
 	if err != nil {
 		s.finish(rec, View{Ref: rec.view.Ref, State: StateFailed, Error: safeError(err)})
@@ -370,22 +478,26 @@ func (s *Service) snapshotLocked() map[string]View {
 	return out
 }
 
-// pruneLocked drops the oldest finished records past the retention bound.
+// pruneLocked drops the oldest finished records past the retention bound. It
+// drops as many as it can: several escalations can finish between two starts,
+// and a single eviction per start would leave the bound exceeded until enough
+// later requests trickled it back down.
 func (s *Service) pruneLocked() {
-	if len(s.records) <= s.opts.MaxRecords {
-		return
-	}
-	var oldestKey string
-	var oldest time.Time
-	for identity, rec := range s.records {
-		if rec.running {
-			continue
+	for len(s.records) > s.opts.MaxRecords {
+		var oldestKey string
+		var oldest time.Time
+		for identity, rec := range s.records {
+			if rec.running {
+				continue
+			}
+			if oldestKey == "" || rec.updatedAt.Before(oldest) {
+				oldestKey, oldest = identity, rec.updatedAt
+			}
 		}
-		if oldestKey == "" || rec.updatedAt.Before(oldest) {
-			oldestKey, oldest = identity, rec.updatedAt
+		// Everything left is still running, so nothing more can be dropped.
+		if oldestKey == "" {
+			return
 		}
-	}
-	if oldestKey != "" {
 		delete(s.records, oldestKey)
 		for key, identity := range s.idempotency {
 			if identity == oldestKey {

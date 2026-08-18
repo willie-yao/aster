@@ -255,13 +255,20 @@ The contract is deliberately narrow:
   requests, or flakiness history already explained cannot be escalated, so the
   free pass is the cost filter. A stale build is refused too, because change
   context would describe a different revision.
-- **One escalation runs at a time**, no matter how many maintainers click. The
-  rest queue. Results are shared between admins rather than per-requester, so
-  two maintainers looking at the same failure do not each pay for an analysis.
+- **One escalation runs at a time**, no matter how many maintainers click, and
+  only a few more may queue behind it. Admission is reserved before any artifact
+  or GitHub read, so a burst of clicks cannot fan out into upstream requests; a
+  start past the bound is rejected with `409` instead of queueing. One deadline
+  covers the whole accepted lifetime, so a request that never reaches the slot
+  fails as timed out rather than waiting indefinitely, and can be retried.
+  Results are shared between admins rather than per-requester, so two
+  maintainers looking at the same failure do not each pay for an analysis.
 - **A failed escalation can be retried.** A provider error, a timeout, or a
   restart that interrupted queued work leaves the failure retryable rather than
-  permanently un-analyzable. Replaying the same request key still returns the
-  original outcome instead of starting new work.
+  permanently un-analyzable, and the dashboard offers a retry in place. While a
+  request key is still in the server's bounded replay index, replaying it
+  returns the subject's current state instead of starting new work; the index is
+  in memory, so a restart drops it.
 - **The model never issues the pull request verdict.** It runs the ordinary
   agentic failure analysis under a separate module, gated by the same critique
   and judge rules, and is told explicitly not to claim the change caused the
@@ -272,7 +279,9 @@ The contract is deliberately narrow:
 - **Results are private and bounded.** They are stored in
   `pr_escalation_state.json`, which is never published, retained under a cap,
   and restored after a restart. An escalation that was in flight when the
-  process stopped comes back as never started rather than stuck running.
+  process stopped is never restored as running: it comes back as whatever
+  terminal state was last persisted for that failure, or as never started, and
+  either way it can be escalated again.
 
 ## Categories
 
