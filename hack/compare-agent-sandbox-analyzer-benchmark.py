@@ -386,7 +386,7 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
         for field in ("task_finalized_ms", "result_available_ms", "cleanup_duration_ms", "runtime_duration_ms"):
             if field in record:
                 require_integer(record, field, runtime)
-        if record.get("task_finalized_ms", 0) and record.get("result_available_ms", 0) < record["task_finalized_ms"]:
+        if record.get("result_available") is True and record.get("task_finalized_ms", 0) and record.get("result_available_ms", 0) < record["task_finalized_ms"]:
             raise ReportError(f"sandbox line {record['_line']} result availability precedes finalization")
     return case_id, repetition
 
