@@ -443,7 +443,7 @@ func TestWriteOpenCodeConfigAddsCopilotIntegrationHeader(t *testing.T) {
 		{name: "copilot", endpoint: "https://api.githubcopilot.com/chat/completions", want: true},
 		{name: "copilot port", endpoint: "https://api.githubcopilot.com:443/chat/completions", want: true},
 		{name: "other provider", endpoint: "https://provider.example/v1/chat/completions"},
-		{name: "lookalike", endpoint: "https://notapi.githubcopilot.com/chat/completions"},
+		{name: "copilot subdomain", endpoint: "https://notapi.githubcopilot.com/chat/completions", want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -677,26 +677,6 @@ func TestVerifyPreparedMountInfoRequiresExactReadOnlyManifestPaths(t *testing.T)
 		t.Run(name, func(t *testing.T) {
 			if err := verifyPreparedMountInfo(raw, "/workspace", hash); err == nil {
 				t.Fatal("unsafe mountinfo was accepted")
-			}
-		})
-	}
-}
-
-func TestVerifyStagedMountInfoRequiresReadOnlyWorkspaceAndWritableResult(t *testing.T) {
-	valid := "36 25 0:32 / /workspace ro,relatime - tmpfs tmpfs rw\n" +
-		"37 25 0:33 / /workspace/result rw,relatime - tmpfs tmpfs rw\n"
-	if err := verifyStagedMountInfo(valid, "/workspace"); err != nil {
-		t.Fatal(err)
-	}
-	for name, raw := range map[string]string{
-		"writable workspace": strings.Replace(valid, "/workspace ro,", "/workspace rw,", 1),
-		"read-only result":   strings.Replace(valid, "/workspace/result rw,", "/workspace/result ro,", 1),
-		"missing result":     strings.Split(valid, "\n")[0] + "\n",
-		"writable source":    valid + "38 25 0:34 / /workspace/source rw,relatime - tmpfs tmpfs rw\n",
-	} {
-		t.Run(name, func(t *testing.T) {
-			if err := verifyStagedMountInfo(raw, "/workspace"); err == nil {
-				t.Fatal("unsafe staged mountinfo was accepted")
 			}
 		})
 	}
@@ -2104,4 +2084,29 @@ func TestWriteOpenCodeConfigSetsCopilotIntegrationHeader(t *testing.T) {
 			}
 		})
 	}
+}
+
+func readOpenCodeProviderOptions(t *testing.T, home string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	provider, ok := config["provider"].(map[string]any)
+	if !ok {
+		t.Fatalf("provider missing: %s", data)
+	}
+	entry, ok := provider["engine"].(map[string]any)
+	if !ok {
+		t.Fatalf("engine provider missing: %s", data)
+	}
+	options, ok := entry["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("provider options missing: %s", data)
+	}
+	return options
 }

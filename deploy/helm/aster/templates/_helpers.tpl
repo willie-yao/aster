@@ -323,7 +323,7 @@ Name of the Secret holding the AI token.
   {{- if or (hasPrefix .Values.persistence.mountPath $cfg.ledger.mountPath) (hasPrefix $cfg.ledger.mountPath .Values.persistence.mountPath) -}}{{- fail "agentSandbox.analysisShadow ledger must be separate from public dashboard persistence" -}}{{- end -}}
   {{- $workloadSA := include "aster.agentAnalysisShadowWorkloadServiceAccountName" . -}}
   {{- if or (gt (len $workloadSA) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $workloadSA)) -}}{{- fail "agentSandbox.analysisShadow.workloadServiceAccount.name is required and must be a lowercase object name" -}}{{- end -}}
-  {{- $clientSA := include "aster.agentSandboxClientServiceAccountName" . -}}
+  {{- $clientSA := include "aster.agentSandboxScheduledClientServiceAccountName" . -}}
   {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.clientServiceAccountName) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.clientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
   {{- $provider := $cfg.modelProvider -}}
