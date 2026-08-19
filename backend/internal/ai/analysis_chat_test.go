@@ -342,10 +342,10 @@ func TestAnalysisChatResponseTelemetryIsContentFree(t *testing.T) {
 			t.Fatalf("telemetry contains provider content %q", forbidden)
 		}
 	}
-	if got := analysisChatResponseAttempts(nil); got != 0 {
+	if got := modelResponseAttempts(nil); got != 0 {
 		t.Fatalf("nil response attempts = %d", got)
 	}
-	if got := analysisChatResponseAttempts(&modelResponse{}); got != 1 {
+	if got := modelResponseAttempts(&modelResponse{}); got != 1 {
 		t.Fatalf("response without metadata attempts = %d", got)
 	}
 }

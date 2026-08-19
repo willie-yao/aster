@@ -269,64 +269,54 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	}
 	loopCtx, cancel := context.WithTimeout(ctx, a.opts.Timeout)
 	defer cancel()
-	var parallelToolCalls *bool
-	if a.opts.SingleToolCall {
-		value := false
-		parallelToolCalls = &value
-	}
 
 	evidence := seedAnalysisChatEvidence(turn.History)
 	var fallback *analysisChatFallback
+	var accepted *analysischat.Reply
 	evidenceRevision := 0
-	modelCalls := 0
-	providerAttempts := 0
-	providerElapsedMs := 0
 	correctiveRounds := 0
-	maxLoopIters := a.opts.MaxIters
-	for iter := 0; iter < maxLoopIters; iter++ {
-		if iter > 0 && correctiveRounds == 0 {
-			turn.ReportProgress(analysischat.PhaseEvaluating)
-		}
-		messages, _ = compactMessages(messages, schemaBytes, a.opts.ContextByteBudget)
-		if size := requestSizeEstimate(messages, schemaBytes); size > a.opts.ContextByteBudget {
-			return analysischat.Reply{}, fmt.Errorf("analysis chat request exceeds the %d-byte context budget after compaction", a.opts.ContextByteBudget)
-		}
-		providerStart := time.Now()
-		response, err := a.client.callModel(loopCtx, messages, schemas, parallelToolCalls)
-		providerElapsedMs += int(time.Since(providerStart) / time.Millisecond)
-		modelCalls++
-		providerAttempts += analysisChatResponseAttempts(response)
-		if err != nil {
-			category := analysisChatRequestErrorCategory(err)
-			recordAnalysisChatResponseFailure(loopCtx, "tool_loop_request", modelCalls, providerAttempts, response, analysisChatParseStats{}, category)
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return analysischat.Reply{}, err
+
+	result, err := a.client.runToolLoop(loopCtx, toolLoopParams{
+		messages:            messages,
+		schemas:             schemas,
+		maxIters:            a.opts.MaxIters,
+		maxToolCalls:        a.opts.MaxToolCalls,
+		singleToolCall:      a.opts.SingleToolCall,
+		contextByteBudget:   a.opts.ContextByteBudget,
+		strictContextBudget: true,
+		dispatch: func(ctx context.Context, toolCall modelToolCall) (string, map[string]interface{}, tools.Result) {
+			// agentState owns the model and GCS byte budgets, so the loop sees
+			// no separate tool result to account for.
+			envelope, payload := dispatchAgenticToolWithPayload(ctx, state, toolCall)
+			return envelope, payload, tools.Result{}
+		},
+		progress: func(phase toolLoopPhase) {
+			switch phase {
+			case toolLoopPhaseTurn:
+				if correctiveRounds == 0 {
+					turn.ReportProgress(analysischat.PhaseEvaluating)
+				}
+			case toolLoopPhaseDispatch:
+				turn.ReportProgress(analysischat.PhaseReadingEvidence)
 			}
-			if iter == 0 && isToolsUnsupportedError(err) {
-				return analysischat.Reply{}, errors.Join(ErrToolsUnsupported, analysischat.ErrProviderRequestFailed)
+		},
+		// A turn that both calls tools and emits a valid answer keeps that
+		// answer as a fallback for a later round that cannot produce one.
+		onTurn: func(message modelMessage) {
+			if len(message.ToolCalls) == 0 || message.Content == nil || strings.TrimSpace(*message.Content) == "" {
+				return
 			}
-			return analysischat.Reply{}, analysischat.ErrProviderRequestFailed
-		}
-		if response == nil || !response.HasMessage {
-			recordAnalysisChatResponseFailure(loopCtx, "tool_loop_response", modelCalls, providerAttempts, response, analysisChatParseStats{}, "empty_response")
-			return analysischat.Reply{}, &analysischat.ValidationError{Gate: analysischat.GateCandidate}
-		}
-		message := response.Message
-		messageContent := ""
-		if message.Content != nil {
-			messageContent = *message.Content
-		}
-		if len(message.ToolCalls) > 0 && strings.TrimSpace(messageContent) != "" {
-			candidate, candidateStats, candidateErr := parseAnalysisChatReplyCandidates(messageContent, evidence)
+			candidate, candidateStats, candidateErr := parseAnalysisChatReplyCandidates(*message.Content, evidence)
 			if candidateErr == nil && candidateStats.EvidenceGate == "" {
 				fallback = &analysisChatFallback{reply: candidate, evidenceRevision: evidenceRevision}
 			}
-		}
-		if len(message.ToolCalls) == 0 {
+		},
+		onAnswer: func(answer toolLoopAnswer) toolLoopDecision {
 			turn.ReportProgress(analysischat.PhaseFinalizing)
-			reply, stats, validationErr := parseAnalysisChatReplyCandidates(messageContent, evidence)
+			reply, stats, validationErr := parseAnalysisChatReplyCandidates(answer.Content, evidence)
 			if validationErr == nil && stats.EvidenceGate == "" {
-				return completeAnalysisChatReply(reply, state, start, providerElapsedMs, correctiveRounds), nil
+				accepted = &reply
+				return toolLoopAccept()
 			}
 			category := stats.Category
 			detail := stats.EvidenceDetail
@@ -334,77 +324,65 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 				category = analysisChatValidationCategory(validationErr)
 				detail = validationErr.Error()
 			}
-			recordAnalysisChatResponseFailure(loopCtx, "tool_loop_validation", modelCalls, providerAttempts, response, stats, category)
+			recordAnalysisChatResponseFailure(
+				loopCtx, "tool_loop_validation", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, category,
+			)
 			// A failed gate re-enters the tool loop with the specific failure so
 			// the model can read the artifact it could not cite.
 			if correctiveRounds < analysisChatMaxCorrectiveRounds {
 				correctiveRounds++
-				maxLoopIters++
 				turn.ReportProgress(analysischat.PhaseValidationRetrying)
-				messages = append(messages,
-					modelMessage{Role: "assistant", Content: message.Content, ProviderItems: message.ProviderItems},
-					modelMessage{Role: "user", Content: strPtr(analysisChatCorrectivePrompt(detail))},
-				)
-				continue
+				return toolLoopCorrect(analysisChatCorrectivePrompt(detail)).granting()
 			}
 			if validationErr == nil {
 				recordAnalysisChatEvidenceStatus(loopCtx, analysisChatEvidenceUnverified, stats.EvidenceGate, "", evidenceRevision, analysisChatEvidenceBytes(evidence))
-				return completeAnalysisChatReply(reply, state, start, providerElapsedMs, correctiveRounds), nil
+				accepted = &reply
+				return toolLoopAccept()
 			}
 			if fallback.usable(evidenceRevision) {
-				recordAnalysisChatResponseFallback(loopCtx, "validation_retry", modelCalls, providerAttempts, response, stats, category)
-				return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, correctiveRounds), nil
+				recordAnalysisChatResponseFallback(
+					loopCtx, "validation_retry", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, category,
+				)
+				accepted = &fallback.reply
+				return toolLoopAccept()
 			}
-			return analysischat.Reply{}, analysisChatSafeValidationError(validationErr)
-		}
-
-		turn.ReportProgress(analysischat.PhaseReadingEvidence)
-		toolCalls, _ := limitToolCalls(message.ToolCalls, a.opts.SingleToolCall)
-		remainingToolCalls := a.opts.MaxToolCalls - state.calls
-		if remainingToolCalls <= 0 {
-			state.budgetExhausted = true
-			break
-		}
-		if len(toolCalls) > remainingToolCalls {
-			toolCalls = toolCalls[:remainingToolCalls]
-			state.budgetExhausted = true
-		}
-		echoCalls, skippedOutputs := continuationCalls(a.client.apiMode, message, toolCalls)
-		echo := modelMessage{Role: "assistant", ToolCalls: echoCalls, ProviderItems: message.ProviderItems}
-		if message.Content != nil {
-			echo.Content = message.Content
-		}
-		messages = append(messages, echo)
-		messages = append(messages, skippedOutputs...)
-		for _, toolCall := range toolCalls {
-			envelope, payload := dispatchAgenticToolWithPayload(loopCtx, state, toolCall)
+			return toolLoopStop(analysisChatSafeValidationError(validationErr))
+		},
+		onDispatch: func(dispatched *toolLoopDispatch) {
+			name := dispatched.Call.Function.Name
 			before := analysisChatEvidenceBytes(evidence)
-			recorded := recordAnalysisChatEvidence(evidence, toolCall, payload)
+			recorded := recordAnalysisChatEvidence(evidence, dispatched.Call, dispatched.Payload)
 			if !recorded {
 				state.budgetExhausted = true
-				envelope = toolErrJSON("analysis chat evidence budget exhausted; stop reading and finalize")
+				dispatched.Envelope = toolErrJSON("analysis chat evidence budget exhausted; stop reading and finalize")
 			}
 			after := analysisChatEvidenceBytes(evidence)
 			if after > before {
 				evidenceRevision++
-			} else if isContentFetchingTool(toolCall.Function.Name) {
+			} else if isContentFetchingTool(name) {
 				outcome := "empty"
-				if _, failed := payload["error"]; failed {
+				if _, failed := dispatched.Payload["error"]; failed {
 					outcome = "failed"
 				} else if !recorded {
 					outcome = "budget_exhausted"
 				}
-				recordAnalysisChatEvidenceStatus(
-					loopCtx, analysisChatEvidenceNoContent, outcome, toolCall.Function.Name, evidenceRevision, after,
-				)
+				recordAnalysisChatEvidenceStatus(loopCtx, analysisChatEvidenceNoContent, outcome, name, evidenceRevision, after)
 			}
-			state.modelBytes += len(envelope)
-			messages = append(messages, modelMessage{Role: "tool", ToolCallID: toolCall.ID, Content: strPtr(envelope)})
-		}
+			state.modelBytes += len(dispatched.Envelope)
+		},
+	})
+	if err != nil {
+		return analysischat.Reply{}, a.classifyAnalysisChatLoopError(loopCtx, result, err)
+	}
+	modelCalls := result.ModelCalls
+	providerAttempts := result.ProviderAttempts
+	providerElapsedMs := result.ProviderMs
+	if accepted != nil {
+		return completeAnalysisChatReply(*accepted, state, start, providerElapsedMs, correctiveRounds), nil
 	}
 
 	turn.ReportProgress(analysischat.PhaseFinalizing)
-	messages, err = prepareAnalysisChatFinalizeMessages(messages, a.opts.ContextByteBudget)
+	messages, err = prepareAnalysisChatFinalizeMessages(result.Messages, a.opts.ContextByteBudget)
 	if err != nil {
 		if fallback.usable(evidenceRevision) {
 			recordAnalysisChatResponseFallback(loopCtx, "finalize_context", modelCalls, providerAttempts, nil, analysisChatParseStats{}, "context_budget")
@@ -439,6 +417,49 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	}
 	recordAnalysisChatStructuredResponse(loopCtx, "success", "finalize", modelCalls, providerAttempts, structured, stats, "")
 	return completeAnalysisChatReply(reply, state, start, providerElapsedMs, correctiveRounds), nil
+}
+
+// classifyAnalysisChatLoopError maps a tool-loop failure onto the chat error
+// contract: context errors propagate unchanged, an endpoint without function
+// calling is reported alongside the provider failure, and anything the model
+// returned that chat cannot use becomes a validation gate.
+func (a *AnalysisChatAgent) classifyAnalysisChatLoopError(ctx context.Context, result toolLoopResult, err error) error {
+	if errors.Is(err, errToolLoopContextBudget) {
+		return fmt.Errorf("analysis chat request exceeds the %d-byte context budget after compaction", a.opts.ContextByteBudget)
+	}
+	var modelErr *toolLoopModelError
+	if errors.As(err, &modelErr) {
+		response := analysisChatStatusResponse(modelErr.httpStatus)
+		if modelErr.empty {
+			recordAnalysisChatResponseFailure(ctx, "tool_loop_response", result.ModelCalls, result.ProviderAttempts, response, analysisChatParseStats{}, "empty_response")
+			return &analysischat.ValidationError{Gate: analysischat.GateCandidate}
+		}
+		category := analysisChatRequestErrorCategory(modelErr.err)
+		recordAnalysisChatResponseFailure(ctx, "tool_loop_request", result.ModelCalls, result.ProviderAttempts, response, analysisChatParseStats{}, category)
+		if errors.Is(modelErr.err, context.Canceled) || errors.Is(modelErr.err, context.DeadlineExceeded) {
+			return modelErr.err
+		}
+		if modelErr.iter == 0 && isToolsUnsupportedError(modelErr.err) {
+			return errors.Join(ErrToolsUnsupported, analysischat.ErrProviderRequestFailed)
+		}
+		return analysischat.ErrProviderRequestFailed
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		recordAnalysisChatResponseFailure(
+			ctx, "tool_loop_request", result.ModelCalls, result.ProviderAttempts, nil,
+			analysisChatParseStats{}, analysisChatRequestErrorCategory(err),
+		)
+	}
+	return err
+}
+
+// analysisChatStatusResponse carries a bare HTTP status into the response
+// telemetry when the model turn produced no usable response.
+func analysisChatStatusResponse(status int) *modelResponse {
+	if status == 0 {
+		return nil
+	}
+	return &modelResponse{HTTPStatus: status}
 }
 
 func (a *AnalysisChatAgent) callAnalysisChatFinal(
@@ -493,16 +514,6 @@ func completeAnalysisChatReply(reply analysischat.Reply, state *agentState, star
 	reply.ProviderMs = providerMs
 	reply.ValidationRetries = validationRetries
 	return reply
-}
-
-func analysisChatResponseAttempts(response *modelResponse) int {
-	if response == nil {
-		return 0
-	}
-	if response.Attempts > 0 {
-		return response.Attempts
-	}
-	return 1
 }
 
 func analysisChatStructuredProviderFailure(err error) bool {

@@ -23,10 +23,14 @@ const (
 
 // toolLoopAnswer is one tools-free model turn handed to the decision hook.
 type toolLoopAnswer struct {
-	Content string
-	Message modelMessage
-	Iter    int
-	Calls   int
+	Content  string
+	Response *modelResponse
+	Iter     int
+	// Calls, ModelCalls, and ProviderAttempts are the loop's running counters
+	// at the moment of this answer, so a hook can report telemetry in place.
+	Calls            int
+	ModelCalls       int
+	ProviderAttempts int
 }
 
 // toolLoopDecision is what the caller wants after a tools-free answer: accept
@@ -57,6 +61,12 @@ func (d toolLoopDecision) forcing(name string) toolLoopDecision {
 	return d
 }
 
+// granting lets the corrective round run without spending an iteration.
+func (d toolLoopDecision) granting() toolLoopDecision {
+	d.grantIter = true
+	return d
+}
+
 func (d toolLoopDecision) corrective() bool { return !d.stop && d.prompt != "" }
 
 // toolLoopDispatch is one dispatched tool call and its outcome. The onDispatch
@@ -66,7 +76,9 @@ type toolLoopDispatch struct {
 	Forced   bool
 	Envelope string
 	Payload  map[string]interface{}
-	Result   tools.Result
+	// Result is the raw tool result when the dispatcher exposes one. It is
+	// zero for dispatchers that do their own byte accounting.
+	Result tools.Result
 }
 
 // toolLoopParams configures one run of the shared tool-calling loop. Only
@@ -94,6 +106,9 @@ type toolLoopParams struct {
 	onTurn func(modelMessage)
 	// onAnswer decides what to do with a tools-free answer. A nil hook accepts.
 	onAnswer func(toolLoopAnswer) toolLoopDecision
+	// onForcedTurn fires just before a turn pinned to one tool is issued, so a
+	// caller can count forced attempts that actually reach the model.
+	onForcedTurn func(tool string)
 	// onDispatch observes each dispatched call and may rewrite its envelope.
 	onDispatch func(*toolLoopDispatch)
 	// progress reports loop position for caller-side status reporting.
@@ -123,9 +138,10 @@ type toolLoopResult struct {
 // toolLoopModelError reports a failed or empty model turn so each caller can
 // classify it in its own vocabulary.
 type toolLoopModelError struct {
-	iter  int
-	empty bool
-	err   error
+	iter       int
+	empty      bool
+	httpStatus int
+	err        error
 }
 
 func (e *toolLoopModelError) Error() string {
@@ -143,8 +159,10 @@ var errToolLoopContextBudget = errors.New("tool loop: request exceeds the contex
 
 // runToolLoop drives the shared tool-calling round: compact, call the model,
 // hand a tools-free answer to onAnswer, otherwise dispatch this turn's tool
-// calls and repeat. It never finalizes; a caller that gets BudgetExhausted
-// decides how to wring an answer out of the returned Messages.
+// calls and repeat. A cancelled context surfaces through the model call, so
+// every failed turn reaches the caller with its counters intact. It never
+// finalizes; a caller that gets BudgetExhausted decides how to wring an answer
+// out of the returned Messages.
 func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLoopResult, error) {
 	maxIters := params.maxIters
 	if maxIters <= 0 {
@@ -162,10 +180,6 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 
 	forcedName := ""
 	for iter := 0; iter < maxIters; iter++ {
-		if err := ctx.Err(); err != nil {
-			result.Messages = messages
-			return result, err
-		}
 		if iter > 0 && params.progress != nil {
 			params.progress(toolLoopPhaseTurn)
 		}
@@ -189,6 +203,9 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 			request.ToolChoice = &ToolChoice{Name: forcedName}
 			parallel := false
 			request.ParallelToolCalls = &parallel
+			if params.onForcedTurn != nil {
+				params.onForcedTurn(forcedName)
+			}
 		}
 		providerStart := time.Now()
 		response, err := c.callModelRequest(ctx, request)
@@ -196,11 +213,15 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 		result.ModelCalls++
 		result.ProviderAttempts += modelResponseAttempts(response)
 		result.Messages = messages
+		httpStatus := 0
+		if response != nil {
+			httpStatus = response.HTTPStatus
+		}
 		if err != nil {
-			return result, &toolLoopModelError{iter: iter, err: err}
+			return result, &toolLoopModelError{iter: iter, httpStatus: httpStatus, err: err}
 		}
 		if response == nil || !response.HasMessage {
-			return result, &toolLoopModelError{iter: iter, empty: true}
+			return result, &toolLoopModelError{iter: iter, empty: true, httpStatus: httpStatus}
 		}
 		message := response.Message
 		if params.onTurn != nil {
@@ -215,7 +236,8 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 			decision := toolLoopAccept()
 			if params.onAnswer != nil {
 				decision = params.onAnswer(toolLoopAnswer{
-					Content: content, Message: message, Iter: iter, Calls: result.Calls,
+					Content: content, Response: response, Iter: iter, Calls: result.Calls,
+					ModelCalls: result.ModelCalls, ProviderAttempts: result.ProviderAttempts,
 				})
 			}
 			if decision.stop {

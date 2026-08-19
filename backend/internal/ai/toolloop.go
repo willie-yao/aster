@@ -149,7 +149,6 @@ func (c *Client) ToolLoop(
 				if !required.canForce() {
 					return toolLoopStop(required.exhaustedError())
 				}
-				required.beginForcedAttempt()
 				return toolLoopCorrect(pending.CorrectivePrompt).forcing(pending.Name)
 			}
 			// Require a minimum of investigation before accepting a final
@@ -161,6 +160,7 @@ func (c *Client) ToolLoop(
 			}
 			return toolLoopAccept()
 		},
+		onForcedTurn: func(string) { required.beginForcedAttempt() },
 		onDispatch: func(dispatched *toolLoopDispatch) {
 			required.observe(dispatched.Call.Function.Name, dispatched.Result)
 			_, hasError := dispatched.Result.Payload["error"]
