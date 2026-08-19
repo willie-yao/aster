@@ -28,6 +28,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/aster/backend/internal/ai/tools/k8s"
+	"github.com/willie-yao/aster/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
@@ -439,6 +440,24 @@ func TestFlatcarBenchmarkSignalsMatchReferenceDiagnosis(t *testing.T) {
 	}
 }
 
+func newBenchmarkToolRegistry() *tools.Registry {
+	registry := tools.NewRegistry()
+	filesystem.Register(registry)
+	k8s.Register(registry)
+	repotree.Register(registry)
+	return registry
+}
+
+func TestBenchmarkToolRegistryIncludesSourceTools(t *testing.T) {
+	registry := newBenchmarkToolRegistry()
+	for _, name := range []string{"grep_repo", "list_repo_tree", "read_repo_file"} {
+		schemas := registry.Schemas([]string{name})
+		if len(schemas) != 1 || schemas[0].Function.Name != name {
+			t.Fatalf("benchmark registry missing %s", name)
+		}
+	}
+}
+
 func TestAIBenchmark(t *testing.T) {
 	if os.Getenv("RUN_AI_BENCHMARK") == "" {
 		t.Skip("set RUN_AI_BENCHMARK=1 (plus AI_ENDPOINT/AI_MODEL) to run the AI quality benchmark")
@@ -706,9 +725,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		factory = benchmarkEvidenceFactory{inner: factory, recorder: evidenceRecorder}
 	}
 
-	registry := tools.NewRegistry()
-	filesystem.Register(registry)
-	k8s.Register(registry)
+	registry := newBenchmarkToolRegistry()
 	toolNames := agentic.Tools
 	if len(toolNames) == 0 {
 		toolNames = []string{"filesystem", "k8s"}
