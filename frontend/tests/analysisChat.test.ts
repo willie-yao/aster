@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
 import {
-  analysisChatCitationValidationMessage,
   analysisChatAttemptStatus,
   analysisChatFailureGuidance,
   analysisChatHistory,
   analysisChatProviderFailureMessage,
   analysisChatRequestState,
   analysisChatResponseValidationMessage,
+  analysisChatUnusableAnswerMessage,
   AnalysisChatAPIError,
   analysisChatProgressTurnUsage,
   analysisChatTurnLimitReached,
@@ -250,7 +250,6 @@ test("restored attempt history is safe, ordered, and does not duplicate successf
     { request_id: "cancelled", question: "Stop this", outcome: "cancelled", turn: 2 },
     { request_id: "provider", question: "Provider question", outcome: "failed", failure_kind: "provider", turn: 3 },
     { request_id: "validation", question: "Validation question", outcome: "failed", failure_kind: "validation", turn: 4 },
-    { request_id: "citation", question: "Citation question", outcome: "failed", failure_kind: "citation", turn: 5 },
     { request_id: "timeout", question: "Timeout question", outcome: "timed_out", turn: 6 },
     { request_id: "unknown", question: "Unknown question", outcome: "unknown", turn: 7 },
     { request_id: "pending", question: "Pending question", outcome: "pending", turn: 8 },
@@ -271,7 +270,6 @@ test("restored attempt history is safe, ordered, and does not duplicate successf
       "cancelled",
       "provider",
       "validation",
-      "citation",
       "timeout",
       "unknown",
       "pending",
@@ -286,7 +284,6 @@ test("restored attempt history is safe, ordered, and does not duplicate successf
       "Request cancelled",
       "Provider request failed",
       "Response validation failed",
-      "Evidence citation validation failed",
       "Request timed out",
       "Outcome unknown",
       "Request pending",
@@ -330,8 +327,8 @@ test("reconciliation releases terminal attempts and retains only pending request
 test("safe analysis chat failures include recovery guidance", () => {
   const cases = [
     [analysisChatProviderFailureMessage, "Try again in a moment"],
-    [analysisChatResponseValidationMessage, "Try a narrower question"],
-    [analysisChatCitationValidationMessage, "Try a narrower evidence question"],
+    [analysisChatResponseValidationMessage, "did not match the answer contract"],
+    [analysisChatUnusableAnswerMessage, "did not return an answer"],
   ] as const;
   for (const [message, guidance] of cases) {
     const rendered = analysisChatFailureGuidance(new AnalysisChatAPIError(502, message, "failed"));
