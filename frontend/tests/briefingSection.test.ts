@@ -91,7 +91,7 @@ test("analysis sections render as section elements so the rule can scope past ot
   assert.doesNotMatch(html, /<section[^>]*>\s*<div[^>]*class="[^"]*MuiStack/u);
 });
 
-test("every section after the first carries a rule, and the first does not", () => {
+test("every section preceded by another carries a rule, and the first does not", () => {
   const html = render();
 
   // All three sections share one generated class, so the differentiation can
@@ -104,8 +104,31 @@ test("every section after the first carries a rule, and the first does not", () 
   const sectionClass = classes[0].split(/\s+/u).find((name) => name.startsWith("css-"));
   assert.ok(sectionClass, "expected an emotion class on the section");
 
-  const rule = new RegExp(`\\.${sectionClass}:not\\(:first-of-type\\)\\{[^}]*border-top`, "u");
-  assert.match(html, rule);
+  // The rule keys on a preceding sibling section, not on position, so an
+  // intervening div or a future sibling section cannot change which block
+  // goes unruled. Emotion minifies the combinator, so allow optional spaces.
+  assert.match(
+    html,
+    new RegExp(`\\.briefing-section\\s*~\\s*\\.${sectionClass}\\{[^}]*border-top`, "u"),
+  );
+
+  // The unqualified rule for the same class must NOT carry a border, or every
+  // section including the first would be ruled and the scoped rule would be
+  // decorative. Anchored on a selector boundary so it cannot accidentally match
+  // the tail of the scoped rule above.
+  const base = new RegExp(`(?:^|[};])\\.${sectionClass}\\{([^}]*)\\}`, "u").exec(html);
+  if (base) assert.doesNotMatch(base[1], /border-top/u);
+});
+
+test("a non-section sibling precedes the first section, which is why position is not used", () => {
+  const html = render();
+
+  // The status row renders before the sections, so :first-child would have
+  // ruled "Root cause". This fixture keeps that ordering honest.
+  const firstSection = html.indexOf("<section");
+  const statusRow = html.indexOf("MuiStack-root");
+  assert.notEqual(statusRow, -1, "expected the status row to render");
+  assert.ok(statusRow < firstSection, "the status row must precede the first section");
 });
 
 test("severity is not repeated when the surrounding header already states it", () => {

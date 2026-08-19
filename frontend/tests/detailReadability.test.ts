@@ -158,13 +158,15 @@ test("a long section cannot run into the next one without a boundary", () => {
 
   // A root cause routinely runs several hundred pixels tall. The container gap
   // alone did not read as a boundary against a block that size.
-  assert.match(section, /"&:not\(:first-of-type\)":/);
+  assert.match(section, /\.\$\{briefingSectionClass\} ~ &/);
   assert.match(section, /borderTop: "1px solid"/);
   assert.match(section, /borderColor: "divider"/);
 
-  // Scoped to the section element, so a non-section sibling such as the status
-  // row never shifts which block counts as first.
-  assert.match(section, /component="section"/);
+  // Keying on a preceding sibling section rather than on position means an
+  // intervening div, or a future sibling that happens to be a section, cannot
+  // change which block goes unruled.
+  assert.match(section, /className=\{briefingSectionClass\}/);
+  assert.doesNotMatch(section, /first-of-type|first-child/);
 
   // The separation added on top of the container gap must exceed the gap
   // between a section's own label and its body, or the rhythm inverts.
@@ -175,7 +177,7 @@ test("a long section cannot run into the next one without a boundary", () => {
   assert.ok(pt > labelGap, `section padding ${pt} must exceed the label gap ${labelGap}`);
 });
 
-test("the severity chip is suppressed only where a header already states it", () => {
+test("the severity chip is suppressed exactly where a header already states it", () => {
   const panel = source("src/components/AiAnalysisPanel.tsx");
   const testDetail = source("src/pages/TestDetailPage.tsx");
   const table = source("src/components/TestCaseTable.tsx");
@@ -184,10 +186,17 @@ test("the severity chip is suppressed only where a header already states it", ()
   assert.match(panel, /severityInHeader = false/);
   assert.match(panel, /\{!severityInHeader && \(\s*<Chip/);
 
-  // Only the test detail page wraps the panel in a band that leads with the
-  // severity, so only it opts out.
+  // The test detail band always leads with the severity, so it always opts out.
   assert.match(testDetail, /severity\} severity ·/);
   assert.match(testDetail, /severityInHeader/);
+
+  // The build failure band states severity only once an analysis has landed,
+  // so it opts out conditionally, and carries the severity on BOTH breakpoints
+  // so suppressing the chip cannot leave mobile without a severity signal.
+  assert.match(buildFailure, /const headerSeverity = state === "succeeded"/);
+  assert.match(buildFailure, /severityInHeader=\{Boolean\(headerSeverity\)\}/);
+  assert.match(buildFailure, /mobileMetadata=\{`Build \$\{run\.build_id\}\$\{headerSeverity \? ` · \$\{headerSeverity\}` : ""\}`\}/);
+
+  // The inline table row has no header of its own, so it keeps the chip.
   assert.doesNotMatch(table, /severityInHeader/);
-  assert.doesNotMatch(buildFailure, /severityInHeader/);
 });
