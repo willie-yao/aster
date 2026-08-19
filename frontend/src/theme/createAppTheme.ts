@@ -46,6 +46,10 @@ function paletteFromTokens(t: ColorTokens): PaletteOptions {
       pass: t.dotPass,
       fail: t.dotFail,
     },
+    brand: {
+      from: t.brandFrom,
+      to: t.brandTo,
+    },
     surface: {
       main: t.surface,
       dim: t.surfaceDim,

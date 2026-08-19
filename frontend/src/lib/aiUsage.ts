@@ -90,8 +90,8 @@ export function chartCurrencyPolicy(recordedCurrency?: string, currentCurrency?:
 }
 export function chartSeriesDescription(hasRecorded: boolean, hasCurrent: boolean): string {
   const series = [];
-  if (hasRecorded) series.push("Solid blue shows recorded estimates.");
-  if (hasCurrent) series.push("Dashed amber shows current-rate estimates.");
+  if (hasRecorded) series.push("The solid line shows recorded estimates.");
+  if (hasCurrent) series.push("The dashed line shows current-rate estimates.");
   return `${series.join(" ")} Hover over the chart or focus it and use the left and right arrow keys to inspect dates. Exact daily values are listed in the ledger below.`.trim();
 }
 export function usageQuery(start: string, end: string, feature?: AIUsageFeature): string {

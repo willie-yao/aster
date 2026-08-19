@@ -22,7 +22,8 @@ steps. Do not describe Aster as autonomous repair, self-healing, or guaranteed
 root-cause detection.
 
 Use the opening of [`README.md`](README.md) as the source of truth for the
-public tagline, product description, and mark meaning.
+public tagline and product description, and [`docs/brand.md`](docs/brand.md) for
+the mark, palette, and asset rules.
 
 The data flow per scheduled deploy is:
 
