@@ -4421,3 +4421,13 @@ func TestAgentic_SynthesizedFallbackMissingCitationPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestEmitSourceEvidenceObservations(t *testing.T) {
+	var got []SourceEvidenceObservation
+	emitSourceEvidenceObservations(func(value SourceEvidenceObservation) { got = append(got, value) }, "read_repo_file", repotree.ReadObservation{Path: "pkg/a.go", LineStart: 2, LineEnd: 3})
+	emitSourceEvidenceObservations(func(value SourceEvidenceObservation) { got = append(got, value) }, "grep_repo", repotree.GrepObservation{Matches: []repotree.GrepMatchObservation{{Path: "pkg/b.go", LineStart: 4, LineEnd: 5}}})
+	emitSourceEvidenceObservations(func(value SourceEvidenceObservation) { got = append(got, value) }, "list_repo_tree", nil)
+	if len(got) != 2 || got[0].Path != "pkg/a.go" || got[1].Path != "pkg/b.go" {
+		t.Fatalf("observations=%+v", got)
+	}
+}

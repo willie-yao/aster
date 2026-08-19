@@ -17,6 +17,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/evidenceplan"
 	"github.com/willie-yao/aster/backend/internal/ai/skills"
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
@@ -97,6 +98,16 @@ type AgenticOptions struct {
 	// deterministic-critique unit tests are not perturbed by the extra call.
 	SemanticJudge bool
 }
+
+// SourceEvidenceObservation is private, content-free source range telemetry.
+type SourceEvidenceObservation struct {
+	Tool      string
+	Path      string
+	LineStart int
+	LineEnd   int
+}
+
+type SourceEvidenceObserver func(SourceEvidenceObservation)
 
 // DraftObservation is a value-only snapshot of one parseable analysis draft.
 // The quality benchmark uses it to compare retries from the same investigation
@@ -513,6 +524,7 @@ type agentState struct {
 	budgetExhausted    bool
 	draftObserver      DraftObserver
 	selectionObserver  DraftSelectionObserver
+	sourceObserver     SourceEvidenceObserver
 	traceCtx           context.Context
 	draftAttempt       int
 	bestDraft          *critiqueDraftCandidate
@@ -743,6 +755,8 @@ type AgenticInputs struct {
 	// DraftSelectionObserver reports the selected parseable attempt to the
 	// benchmark after production selection completes.
 	DraftSelectionObserver DraftSelectionObserver
+
+	SourceEvidenceObserver SourceEvidenceObserver
 }
 
 const (
@@ -965,6 +979,7 @@ func (c *Client) doAnalyzeAgentic(
 		promptHash:        effectiveAgenticPromptHash(in, sysPrompt),
 		draftObserver:     in.DraftObserver,
 		selectionObserver: in.DraftSelectionObserver,
+		sourceObserver:    in.SourceEvidenceObserver,
 	}
 	// Skills are consulted inside the always-on critique gate. Recipe presence
 	// is the opt-in; an empty set is a no-op.
@@ -2756,6 +2771,7 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 		}
 	}
 	if !toolFailed && s.repo != nil {
+		emitSourceEvidenceObservations(s.sourceObserver, tc.Function.Name, result.Observation)
 		for _, repoPath := range visibleRepoReadPaths(tc, visiblePayload) {
 			s.recordSourceRead(repoPath)
 		}
@@ -2826,6 +2842,20 @@ func isContentFetchingTool(name string) bool {
 
 func isRepoTool(name string) bool {
 	return name == "list_repo_tree" || name == "read_repo_file" || name == "grep_repo"
+}
+
+func emitSourceEvidenceObservations(observer SourceEvidenceObserver, tool string, observation any) {
+	if observer == nil {
+		return
+	}
+	switch value := observation.(type) {
+	case repotree.ReadObservation:
+		observer(SourceEvidenceObservation{Tool: tool, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd})
+	case repotree.GrepObservation:
+		for _, match := range value.Matches {
+			observer(SourceEvidenceObservation{Tool: tool, Path: match.Path, LineStart: match.LineStart, LineEnd: match.LineEnd})
+		}
+	}
 }
 
 func visibleRepoReadPaths(tc modelToolCall, payload map[string]interface{}) []string {
