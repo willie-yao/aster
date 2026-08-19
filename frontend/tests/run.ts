@@ -7,6 +7,7 @@ import "./patternChat.test.js";
 import "./patternRemediation.test.js";
 import "./patternFixGuidance.test.js";
 import "./causalFixRouting.test.js";
+import "./briefingSection.test.js";
 import "./upstreamCause.test.js";
 import "./patternDismissal.test.js";
 import "./pageMetadata.test.js";

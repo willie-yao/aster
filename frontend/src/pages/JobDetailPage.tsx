@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
+import { jobRunPath } from "../lib/routes";
 import Box from "@mui/material/Box";
 import Breadcrumbs from "@mui/material/Breadcrumbs";
 import ButtonBase from "@mui/material/ButtonBase";
@@ -555,7 +556,11 @@ export function JobDetailPage() {
             buildFailureAnalysis={buildFailureBriefing}
             runHistory={runHistory}
             runtimeTrend={
-              <RuntimeTrend summary={runtimeSummary} subject={displayName} />
+              <RuntimeTrend
+                summary={runtimeSummary}
+                subject={displayName}
+                runHref={(buildID) => jobRunPath(canonicalJobID, buildID)}
+              />
             }
             runMetadata={runMetadata}
           />

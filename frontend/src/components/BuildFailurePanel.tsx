@@ -84,6 +84,12 @@ export function BuildFailurePanel({
       }
     : undefined;
   const pendingState = state === "succeeded" ? "unavailable" : state;
+  // The briefing header states the severity only once an analysis has landed.
+  // It is carried on both breakpoints so the panel below can drop its chip
+  // without leaving mobile without a severity signal.
+  const headerSeverity = state === "succeeded"
+    ? `${failure.ai_analysis?.severity ?? "Unknown"} severity`
+    : null;
   const actionEligibility = buildActionEligibilityHint(
     failure.ai_analysis,
     features.analysis_critique_version,
@@ -161,6 +167,7 @@ export function BuildFailurePanel({
           fileCtx={fileCtx}
           chatRef={chatRef}
           appearance="detail"
+          severityInHeader={Boolean(headerSeverity)}
         />
       )}
     </Stack>
@@ -179,8 +186,8 @@ export function BuildFailurePanel({
       title={briefingTitle}
       mobileTitle={mobileBriefingTitle}
       icon={<AutoAwesome aria-hidden sx={{ fontSize: 18, color: "primary.main" }} />}
-      metadata={`Build ${run.build_id} · ${state === "succeeded" ? `${failure.ai_analysis?.severity ?? "Unknown"} severity` : stateText[pendingState].title}`}
-      mobileMetadata={`Build ${run.build_id}`}
+      metadata={`Build ${run.build_id} · ${headerSeverity ?? stateText[pendingState].title}`}
+      mobileMetadata={`Build ${run.build_id}${headerSeverity ? ` · ${headerSeverity}` : ""}`}
       mobileNotice={stateNotice}
       summary={(
         <Stack spacing={1.5}>

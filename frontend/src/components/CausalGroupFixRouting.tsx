@@ -35,7 +35,7 @@ export function CausalGroupFixRouting({
     // so name the repository instead of reporting an unexplained dead end.
     if (externalCause) return <UpstreamCauseNotice location={externalCause} />;
     return (
-      <Typography sx={{ mt: 1.5, color: "text.secondary", ...overviewTypography.description }}>
+      <Typography color="textSecondary" sx={{ mt: 1.5, ...overviewTypography.description }}>
         No failed JUnit test in these builds meets the Fix investigation requirements, so no Fix investigation can start from this cause.
       </Typography>
     );

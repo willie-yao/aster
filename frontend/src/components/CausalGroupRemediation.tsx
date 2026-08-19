@@ -154,7 +154,7 @@ export function CausalGroupRemediation({
   return (
     <Box aria-live="polite" sx={{ mt: 1.5 }}>
       <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}>
-        <Typography component="h5" sx={{ color: "text.secondary", ...overviewTypography.eyebrow, m: 0 }}>
+        <Typography color="textSecondary" component="h5" sx={{ ...overviewTypography.eyebrow, m: 0 }}>
           Remediation
         </Typography>
         <Chip
@@ -166,7 +166,7 @@ export function CausalGroupRemediation({
           sx={capabilityBlocked ? { bgcolor: "action.disabledBackground", color: "text.secondary" } : undefined}
         />
       </Stack>
-      <Typography sx={{ mt: 0.5, color: "text.secondary", ...overviewTypography.secondaryBody }}>
+      <Typography color="textSecondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
         {message}
       </Typography>
       {canStart && (
@@ -188,14 +188,14 @@ export function CausalGroupRemediation({
             </Button>
             <Chip size="small" color="warning" variant="outlined" label="Experimental" />
           </Stack>
-          <Typography sx={{ mt: 0.5, color: "text.secondary" }}>Generates a review preview only. No GitHub PR will be created.</Typography>
+          <Typography color="textSecondary" sx={{ mt: 0.5 }}>Generates a review preview only. No GitHub PR will be created.</Typography>
         </Box>
       )}
       {fixPreview && (
         <Box sx={{ mt: 1, border: "1px solid", borderColor: "divider", borderRadius: 1, p: 1.5 }}>
           <Typography sx={{ fontWeight: 700 }}>{fixPreview.summary}</Typography>
-          <Typography sx={{ color: "text.secondary" }}>Base: {fixPreview.base_revision}</Typography>
-          <Typography sx={{ color: "text.secondary" }}>Changed files: {fixPreview.changed_files.join(", ")}</Typography>
+          <Typography color="textSecondary">Base: {fixPreview.base_revision}</Typography>
+          <Typography color="textSecondary">Changed files: {fixPreview.changed_files.join(", ")}</Typography>
           <Box component="pre" sx={{ overflowX: "auto", whiteSpace: "pre", fontSize: 12, mt: 1 }}>{fixPreview.diff}</Box>
         </Box>
       )}
@@ -215,7 +215,7 @@ export function CausalGroupRemediation({
             <Typography sx={overviewTypography.data}>Investigation details</Typography>
           </AccordionSummary>
           <AccordionDetails sx={{ pt: 0 }}>
-            <Typography sx={{ color: "text.secondary", whiteSpace: "pre-line", overflowWrap: "anywhere" }}>
+            <Typography color="textSecondary" sx={{ whiteSpace: "pre-line", overflowWrap: "anywhere" }}>
               {details}
             </Typography>
           </AccordionDetails>

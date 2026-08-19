@@ -19,6 +19,7 @@ import {
   type FileToUrlContext,
 } from "../lib/utils";
 import { RichText } from "./RichText";
+import { BriefingSection } from "./BriefingSection";
 import { parseTestDisplayName } from "../lib/detailTitles";
 import { FailureActions } from "./FailureActions";
 import { useResolved } from "../hooks/useData";
@@ -37,27 +38,6 @@ import { causalGroupFixTarget, externalCause, patternExternalCause, patternFixGu
 function firstSentence(value: string): string {
   const match = value.trim().match(/^.*?[.!?](?:\s|$)/u);
   return match?.[0].trim() || value.trim();
-}
-
-function BriefingSection({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <Box>
-      <Typography
-        component="h3"
-        color="textSecondary"
-        sx={{ ...overviewTypography.subsectionHeading, fontSize: "14px", lineHeight: "20px" }}
-      >
-        {label}
-      </Typography>
-      <Box sx={{ mt: 0.75, fontSize: "16px", lineHeight: "25px" }}>{children}</Box>
-    </Box>
-  );
 }
 
 export function PatternBanner({
@@ -304,12 +284,12 @@ export function PatternBanner({
                   </Typography>
                   <Typography
                     component="div"
+                    color="textSecondary"
                     sx={{
                       gridArea: "confidence",
                       minWidth: 0,
                       justifySelf: { xs: "start", sm: "end" },
                       textAlign: { xs: "left", sm: "right" },
-                      color: "text.secondary",
                       ...overviewTypography.data,
                     }}
                   >
@@ -320,7 +300,8 @@ export function PatternBanner({
                   <RichText text={group.root_cause} steps fileCtx={patternFileCtx} />
                   <Typography
                     component="h5"
-                    sx={{ mt: 1.5, color: "text.secondary", ...overviewTypography.eyebrow }}
+                    color="textSecondary"
+                    sx={{ mt: 1.5, ...overviewTypography.eyebrow }}
                   >
                     Affected {group.builds.length === 1 ? "build" : "builds"}
                   </Typography>

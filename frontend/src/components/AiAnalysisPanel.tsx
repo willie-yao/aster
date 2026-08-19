@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -18,6 +18,7 @@ import type { AIAnalysis, PatternAnalysis } from "../types/dashboard";
 import type { AnalysisChatReference } from "../types/analysisChat";
 import { RichText } from "./RichText";
 import { LabeledBlock } from "./LabeledBlock";
+import { BriefingSection } from "./BriefingSection";
 import { AnalysisChat } from "./AnalysisChat";
 import { UpstreamCauseNotice } from "./UpstreamCauseNotice";
 import { externalCause } from "../lib/patternFixGuidance";
@@ -42,27 +43,6 @@ function severityAccent(severity: string): "error" | "warning" | "primary" {
   return "primary";
 }
 
-function DetailAnalysisSection({
-  label,
-  children,
-}: {
-  label: string;
-  children: ReactNode;
-}) {
-  return (
-    <Box>
-      <Typography
-        component="h3"
-        color="textSecondary"
-        sx={{ ...overviewTypography.subsectionHeading, fontSize: "14px", lineHeight: "20px" }}
-      >
-        {label}
-      </Typography>
-      <Box sx={{ mt: 0.75, fontSize: "16px", lineHeight: "25px" }}>{children}</Box>
-    </Box>
-  );
-}
-
 export function AiAnalysisPanel({
   analysis,
   fileCtx,
@@ -71,6 +51,7 @@ export function AiAnalysisPanel({
   fixPatterns = [],
   fixInvestigationEligible = false,
   appearance = "default",
+  severityInHeader = false,
 }: {
   analysis: AIAnalysis;
   fileCtx: FileToUrlContext;
@@ -79,6 +60,10 @@ export function AiAnalysisPanel({
   fixPatterns?: PatternAnalysis[];
   fixInvestigationEligible?: boolean;
   appearance?: "default" | "detail";
+  // Set when the surrounding header already states the severity, so the panel
+  // does not repeat it a few lines below. Callers without such a header leave
+  // this false and keep the chip as their only severity signal.
+  severityInHeader?: boolean;
 }) {
   const { data: corrections, error: correctionsLoadError, refetch } =
     useAnalysisCorrections();
@@ -172,21 +157,22 @@ export function AiAnalysisPanel({
           </Typography>
         </>
       )}
-      <Chip
-        size="small"
-        label={`Severity: ${displayedAnalysis.severity}`}
-        sx={{
-          borderRadius: "4px",
-          fontWeight: 600,
-          ...(severityColor !== "primary"
-            ? {
-                bgcolor: (theme) => soft(theme, severityColor, 0.16),
-                color: `${severityColor}.main`,
-              }
-            : { bgcolor: "action.selected", color: "text.secondary" }),
-        }}
-      />
-      {correctionActive && (
+      {!severityInHeader && (
+        <Chip
+          size="small"
+          label={`Severity: ${displayedAnalysis.severity}`}
+          sx={{
+            borderRadius: "4px",
+            fontWeight: 600,
+            ...(severityColor !== "primary"
+              ? {
+                  bgcolor: (theme) => soft(theme, severityColor, 0.16),
+                  color: `${severityColor}.main`,
+                }
+              : { bgcolor: "action.selected", color: "text.secondary" }),
+          }}
+        />
+      )}      {correctionActive && (
         <Chip
           size="small"
           color="success"
@@ -347,9 +333,9 @@ export function AiAnalysisPanel({
   );
 
   const rootCause = detailAppearance ? (
-    <DetailAnalysisSection label="Root cause">
+    <BriefingSection label="Root cause">
       <RichText text={displayedAnalysis.root_cause} steps fileCtx={fileCtx} />
-    </DetailAnalysisSection>
+    </BriefingSection>
   ) : (
     <LabeledBlock label="Root cause" accent={severityColor}>
       <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
@@ -359,9 +345,9 @@ export function AiAnalysisPanel({
   );
 
   const suggestedFix = detailAppearance ? (
-    <DetailAnalysisSection label="Suggested remediation">
+    <BriefingSection label="Suggested remediation">
       <RichText text={displayedAnalysis.suggested_fix} steps fileCtx={fileCtx} />
-    </DetailAnalysisSection>
+    </BriefingSection>
   ) : (
     <LabeledBlock label="Suggested remediation" accent="primary">
       <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.6 }}>
@@ -372,7 +358,7 @@ export function AiAnalysisPanel({
 
   const files = analysis.relevant_files && analysis.relevant_files.length > 0 ? (
     detailAppearance ? (
-      <DetailAnalysisSection label="Related files">
+      <BriefingSection label="Related files">
         <Stack spacing={0.5}>
           {[...analysis.relevant_files]
             .sort(
@@ -396,7 +382,7 @@ export function AiAnalysisPanel({
               );
             })}
         </Stack>
-      </DetailAnalysisSection>
+      </BriefingSection>
     ) : (
       <Box>
         <Typography
@@ -466,9 +452,9 @@ export function AiAnalysisPanel({
   const upstreamCause = externalCause(analysis.cause_location);
   const upstream = upstreamCause ? (
     detailAppearance ? (
-      <DetailAnalysisSection label="Cause is in a dependency">
+      <BriefingSection label="Cause is in a dependency">
         <UpstreamCauseNotice location={upstreamCause} />
-      </DetailAnalysisSection>
+      </BriefingSection>
     ) : (
       <LabeledBlock label="Cause is in a dependency" accent="primary">
         <UpstreamCauseNotice location={upstreamCause} />

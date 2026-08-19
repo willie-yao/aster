@@ -25,16 +25,15 @@ test("detail headings use the enlarged readable scale", () => {
 
 test("analysis briefing uses a calmer prose measure and rhythm", () => {
   const briefing = source("src/components/AnalysisBriefing.tsx");
-  const pattern = source("src/components/PatternBanner.tsx");
-  const analysis = source("src/components/AiAnalysisPanel.tsx");
+  const section = source("src/components/BriefingSection.tsx");
 
   assert.match(briefing, /maxWidth: "68ch"/);
   assert.match(briefing, /fontSize: "16px"/);
   assert.match(briefing, /lineHeight: "25px"/);
   assert.match(briefing, /fontWeight: 550/);
   assert.match(briefing, /gap: 2\.25/);
-  assert.match(pattern, /fontSize: "16px", lineHeight: "25px"/);
-  assert.match(analysis, /fontSize: "16px", lineHeight: "25px"/);
+  // Both pages now get the section body scale from the shared component.
+  assert.match(section, /fontSize: "16px", lineHeight: "25px"/);
 });
 
 test("detail strip dividers always use the quiet divider token", () => {
@@ -130,9 +129,116 @@ test("causal group rhythm and headings express the hierarchy", () => {
   );
 
   // Heading levels stay sequential: h3 section, h4 cause, h5 rows within it.
-  assert.match(pattern, /component="h3"/);
+  // The h3 now lives in the shared BriefingSection rather than in each page.
+  assert.match(source("src/components/BriefingSection.tsx"), /component="h3"/);
   assert.match(cause, /component="h4"/);
   assert.match(cause, /component="h5"[\s\S]*Affected \{group\.builds\.length === 1 \? "build" : "builds"\}/);
   assert.match(remediation, /component="h5"/);
   assert.doesNotMatch(remediation, /component="h4"/);
+});
+
+test("one shared component defines the briefing section treatment", () => {
+  const pattern = source("src/components/PatternBanner.tsx");
+  const panel = source("src/components/AiAnalysisPanel.tsx");
+
+  // These two were byte-identical copies, which is how the two pages drifted.
+  assert.match(pattern, /import \{ BriefingSection \} from "\.\/BriefingSection"/);
+  assert.match(panel, /import \{ BriefingSection \} from "\.\/BriefingSection"/);
+  assert.doesNotMatch(pattern, /^function BriefingSection\(/m);
+  assert.doesNotMatch(panel, /DetailAnalysisSection/);
+
+  // Both pages render their labelled blocks through it.
+  assert.match(pattern, /<BriefingSection label="Causal groups">/);
+  assert.match(panel, /<BriefingSection label="Root cause">/);
+  assert.match(panel, /<BriefingSection label="Suggested remediation">/);
+});
+
+test("a long section cannot run into the next one without a boundary", () => {
+  const section = source("src/components/BriefingSection.tsx");
+
+  // A root cause routinely runs several hundred pixels tall. The container gap
+  // alone did not read as a boundary against a block that size.
+  assert.match(section, /\.\$\{briefingSectionClass\} ~ &/);
+  assert.match(section, /borderTop: "1px solid"/);
+  assert.match(section, /borderColor: "divider"/);
+
+  // Keying on a preceding sibling section rather than on position means an
+  // intervening div, or a future sibling that happens to be a section, cannot
+  // change which block goes unruled.
+  assert.match(section, /className=\{briefingSectionClass\}/);
+  assert.doesNotMatch(section, /first-of-type|first-child/);
+
+  // The separation added on top of the container gap must exceed the gap
+  // between a section's own label and its body, or the rhythm inverts.
+  const pt = Number(/pt: ([\d.]+)/.exec(section)?.[1]);
+  const labelGap = Number(/mt: ([\d.]+)[^}]*fontSize: "16px"/.exec(section)?.[1]);
+  assert.ok(Number.isFinite(pt), "section top padding not found");
+  assert.ok(Number.isFinite(labelGap), "label-to-body gap not found");
+  assert.ok(pt > labelGap, `section padding ${pt} must exceed the label gap ${labelGap}`);
+});
+
+test("the runtime trend states its stats once and makes each sample reachable", () => {
+  const trend = source("src/components/RuntimeTrend.tsx");
+
+  // The band already reads "N samples · median X · p95 Y · <direction>", so a
+  // footer repeating those same three values a few hundred pixels below is
+  // duplication, not reinforcement.
+  assert.match(trend, /<DetailSectionBand title="Runtime trend" metadata=\{summaryText\} \/>/);
+  assert.doesNotMatch(trend, /Median: \{summary\.medianSeconds/);
+  assert.doesNotMatch(trend, /p95: \{summary\.p95Seconds/);
+  assert.doesNotMatch(trend, /Direction: \{trendLabel\(summary\)\}/);
+
+  // What replaces it explains the two dashed reference lines, which nothing
+  // else on the page identifies. The swatches repeat the chart's own dash
+  // patterns so the mapping does not rely on telling the colours apart.
+  assert.match(trend, /strokeDasharray="7 6"[\s\S]*strokeDasharray="7 6"/);
+  assert.match(trend, /strokeDasharray="3 5"[\s\S]*strokeDasharray="3 5"/);
+
+  // Every sample is a link to its run, matching how Sparkline already treats
+  // run dots, rather than an inert circle. The destination is supplied by the
+  // page so the test page keeps the reader on the test.
+  assert.match(trend, /component=\{RouterLink\}/);
+  assert.match(trend, /to=\{runHref\(sample\.buildID\)\}/);
+  assert.match(trend, /cursor: "pointer"/);
+  assert.match(trend, /"&:focus-visible"/);
+  assert.doesNotMatch(trend, /role="img"/);
+
+  const job = source("src/pages/JobDetailPage.tsx");
+  const testDetail = source("src/pages/TestDetailPage.tsx");
+  assert.match(job, /runHref=\{\(buildID\) => jobRunPath\(canonicalJobID, buildID\)\}/);
+  assert.match(testDetail, /runHref=\{\(buildID\) => testRunPath\(canonicalJobID, testName, buildID\)\}/);
+
+  // A long history reserves width per sample, so the plot must scroll rather
+  // than clip, and the drawing width must grow with it so the chart does not
+  // also scale taller. RunHistory directly above uses the same treatment.
+  assert.match(trend, /const width = Math\.max\(720, values\.length \* 32\)/);
+  assert.match(trend, /const minChartWidth = Math\.max\(320, values\.length \* 32\)/);
+  assert.match(trend, /overflowX: "auto"/);
+  assert.match(trend, /minWidth: minChartWidth/);
+  // Points run oldest to newest, so a scrolling chart opens on the latest run.
+  assert.match(trend, /node\.scrollLeft = node\.scrollWidth/);
+});
+
+test("the severity chip is suppressed exactly where a header already states it", () => {
+  const panel = source("src/components/AiAnalysisPanel.tsx");
+  const testDetail = source("src/pages/TestDetailPage.tsx");
+  const table = source("src/components/TestCaseTable.tsx");
+  const buildFailure = source("src/components/BuildFailurePanel.tsx");
+
+  assert.match(panel, /severityInHeader = false/);
+  assert.match(panel, /\{!severityInHeader && \(\s*<Chip/);
+
+  // The test detail band always leads with the severity, so it always opts out.
+  assert.match(testDetail, /severity\} severity ·/);
+  assert.match(testDetail, /severityInHeader/);
+
+  // The build failure band states severity only once an analysis has landed,
+  // so it opts out conditionally, and carries the severity on BOTH breakpoints
+  // so suppressing the chip cannot leave mobile without a severity signal.
+  assert.match(buildFailure, /const headerSeverity = state === "succeeded"/);
+  assert.match(buildFailure, /severityInHeader=\{Boolean\(headerSeverity\)\}/);
+  assert.match(buildFailure, /mobileMetadata=\{`Build \$\{run\.build_id\}\$\{headerSeverity \? ` · \$\{headerSeverity\}` : ""\}`\}/);
+
+  // The inline table row has no header of its own, so it keeps the chip.
+  assert.doesNotMatch(table, /severityInHeader/);
 });

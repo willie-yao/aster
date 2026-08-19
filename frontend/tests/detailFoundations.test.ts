@@ -45,6 +45,7 @@ const { RuntimeTrend } = (await vite.ssrLoadModule("/src/components/RuntimeTrend
   RuntimeTrend: (props: {
     summary: RuntimeSummary;
     subject: string;
+    runHref: (buildID: string) => string;
   }) => ReturnType<typeof createElement>;
 };
 const { DaySummaryButton, HistoricalTable } = (await vite.ssrLoadModule("/src/components/AIUsageDaily.tsx")) as {
@@ -353,7 +354,7 @@ test("runtime trend renders accessible empty and outlier states", () => {
     latestOutlier: false,
   };
   const emptyHTML = render(
-    createElement(RuntimeTrend, { summary: empty, subject: "Unit tests" }),
+    createElement(RuntimeTrend, { summary: empty, subject: "Unit tests", runHref: (id: string) => `/job/capz-e2e?run=${id}` }),
   );
   assert.match(emptyHTML, /aria-label="Unit tests runtime trend"/);
   assert.match(emptyHTML, /No completed runtime samples are available/);
@@ -376,15 +377,124 @@ test("runtime trend renders accessible empty and outlier states", () => {
     latestOutlier: true,
   };
   const outlierHTML = render(
-    createElement(RuntimeTrend, { summary: outlier, subject: "Unit tests" }),
+    createElement(
+      MemoryRouter,
+      null,
+      createElement(RuntimeTrend, { summary: outlier, subject: "Unit tests", runHref: (id: string) => `/job/capz-e2e?run=${id}` }),
+    ),
   );
-  assert.match(outlierHTML, /role="img"/);
-  assert.match(
-    outlierHTML,
-    /aria-label="Unit tests runtime history\.[^"]*Build 2, failed, 10s[^"]*Build 5, passed, 20s"/,
-  );
+  // The chart is no longer role="img": that made it atomic and hid the
+  // per-run links inside it from assistive technology.
+  assert.doesNotMatch(outlierHTML, /role="img"/);
+  assert.match(outlierHTML, /aria-label="Unit tests runtime history\. 5 samples · median 10s · p95 20s · Increasing 100%"/);
   assert.match(outlierHTML, /observed outlier, not proof/);
   assert.match(outlierHTML, /fill="var\(--mui-palette-success-main\)" stroke="var\(--mui-palette-warning-main\)"/);
+
+  // Each sample is its own link to that run, named for a screen reader, with a
+  // transparent target larger than the plotted dot.
+  const links = [...outlierHTML.matchAll(/<a[^>]*href="([^"]*)"[^>]*>/gu)];
+  assert.equal(links.length, 5);
+  assert.match(outlierHTML, /href="\/job\/capz-e2e\?run=2"/);
+  assert.match(outlierHTML, /aria-label="Open run 2, failed, 10s"/);
+  assert.match(outlierHTML, /<circle[^>]*r="17"[^>]*fill="transparent"/);
+});
+
+test("runtime targets shrink with the spacing so they never capture a neighbour's click", () => {
+  // builds: is consumer-tuned, so the point count is not fixed at the 12 the
+  // default window happens to produce. With a fixed radius, a longer history
+  // overlaps adjacent targets and a click lands on the wrong run.
+  const sample = (index: number) => ({
+    buildID: String(index),
+    timestamp: `2026-08-01T00:00:${String(index).padStart(2, "0")}Z`,
+    durationSeconds: 10,
+    passed: true,
+  });
+
+  for (const count of [2, 12, 20, 40]) {
+    const summary: RuntimeSummary = {
+      points: Array.from({ length: count }, (_, index) => sample(index)),
+      sampleCount: count,
+      medianSeconds: 10,
+      p95Seconds: 10,
+      madSeconds: 0,
+      direction: "stable",
+      changeRatio: 0,
+      latestOutlier: false,
+    };
+    const html = render(
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(RuntimeTrend, {
+          summary,
+          subject: "Unit tests",
+          runHref: (id: string) => `/job/capz-e2e?run=${id}`,
+        }),
+      ),
+    );
+
+    const radii = [...html.matchAll(/<circle cx="([\d.]+)" cy="[\d.]+" r="([\d.]+)" fill="transparent"/gu)];
+    assert.equal(radii.length, count, `expected ${count} hit targets`);
+
+    const radius = Number(radii[0][2]);
+    const centres = radii.map((match) => Number(match[1])).sort((left, right) => left - right);
+    const gap = count > 1 ? centres[1] - centres[0] : Infinity;
+
+    assert.ok(radius > 0, `hit radius must be positive at ${count} points`);
+    assert.ok(
+      radius * 2 < gap,
+      `at ${count} points the ${radius} radius target overlaps its neighbour ${gap} away`,
+    );
+
+    // Read the reserve the component actually emits rather than recomputing it,
+    // so removing the floor fails here. Without it a 40-run window puts centres
+    // ~10px apart in a narrow rail and WCAG 2.5.8 spacing fails.
+    const emitted = /min-width:(\d+)px;/u.exec(html);
+    assert.ok(emitted, `expected a minimum chart width at ${count} points`);
+    const reserve = Number(emitted[1]);
+
+    // The viewBox width must track the reserve, or widening the chart also
+    // scales it taller: a fixed 720-wide viewBox at a 1280px reserve renders
+    // roughly 320px tall instead of 180.
+    const viewBox = /viewBox="0 0 (\d+) (\d+)"/u.exec(html);
+    assert.ok(viewBox, `expected a viewBox at ${count} points`);
+    const [, drawWidth, drawHeight] = viewBox.map(Number);
+    assert.ok(
+      drawWidth >= reserve,
+      `at ${count} points the ${drawWidth} viewBox is narrower than the ${reserve}px reserve, so the chart grows to ${Math.round((reserve * drawHeight) / drawWidth)}px tall`,
+    );
+
+    const scale = reserve / drawWidth;
+    assert.ok(
+      gap * scale >= 24,
+      `at ${count} points the CSS spacing ${(gap * scale).toFixed(1)}px falls under 24px`,
+    );
+  }
+
+  // The visible marker must never own the hit area: an outlier is drawn larger
+  // than the target at long histories and would otherwise reach into its
+  // neighbour.
+  const html = render(
+    createElement(
+      MemoryRouter,
+      null,
+      createElement(RuntimeTrend, {
+        summary: {
+          points: Array.from({ length: 40 }, (_, index) => sample(index)),
+          sampleCount: 40,
+          medianSeconds: 10,
+          p95Seconds: 10,
+          madSeconds: 0,
+          direction: "stable",
+          changeRatio: 0,
+          latestOutlier: true,
+        },
+        subject: "Unit tests",
+        runHref: (id: string) => `/job/capz-e2e?run=${id}`,
+      }),
+    ),
+  );
+  assert.match(html, /pointer-events="none"/);
 });
 
 test("mobile usage day disclosure names the accounting summary", () => {
