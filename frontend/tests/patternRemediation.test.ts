@@ -73,7 +73,8 @@ test("technical reasons remain separate from the concise state message", () => {
 
 test("an unreachable investigation reports why instead of looking pending", () => {
   assert.deepEqual(causalRemediationBlockedReason(repeatedGroup, undefined, false), {
-    label: "Unavailable",
+    scope: "deployment",
+    label: "Unavailable on this deployment",
     message: remediationUnavailableReason,
   });
   assert.equal(causalRemediationBlockedReason(repeatedGroup, undefined, true), null);
@@ -83,6 +84,7 @@ test("a single-build cause is never eligible regardless of deployment", () => {
   const singleBuild: PatternCausalGroup = { ...repeatedGroup, builds: ["209114"] };
   for (const enabled of [true, false]) {
     assert.deepEqual(causalRemediationBlockedReason(singleBuild, undefined, enabled), {
+      scope: "cause",
       label: "Not eligible",
       message: singleBuildRemediationReason,
     });
@@ -96,6 +98,7 @@ test("blocked reasons report the permanent condition before the deployment one",
     confidence: "high",
   };
   assert.deepEqual(causalRemediationBlockedReason(unhashed, undefined, false), {
+    scope: "cause",
     label: "Not addressable",
     message: unhashedRemediationReason,
   });
@@ -129,7 +132,7 @@ test("a disabled capability reports every unresolvable state as unavailable", ()
         { causal_group_id: "group-id", causal_group_hash: "group-hash", state },
         false,
       ),
-      { label: "Unavailable", message: remediationUnavailableReason },
+      { scope: "deployment", label: "Unavailable on this deployment", message: remediationUnavailableReason },
       state,
     );
   }
@@ -158,7 +161,7 @@ test("an unrecognized state is blocked exactly like the default it renders as", 
       },
       false,
     ),
-    { label: "Unavailable", message: remediationUnavailableReason },
+    { scope: "deployment", label: "Unavailable on this deployment", message: remediationUnavailableReason },
   );
 });
 
@@ -184,6 +187,16 @@ test("causal remediation renders per cause and keeps normal actions blocked", ()
   assert.match(component, /const addressable = Boolean\(operationRef\) && group\.builds\.length >= 2/);
   assert.match(component, /const pollable = addressable && operationAvailable && authStatus === "authenticated"/);
   assert.match(component, /const details = blocked \? undefined :/);
+
+  // A missing deployment capability and a per-cause verdict mean unrelated
+  // things, so they must not render as the same chip.
+  assert.match(component, /const capabilityBlocked = blocked\?\.scope === "deployment"/);
+  assert.match(component, /icon=\{capabilityBlocked \? <CloudOff aria-hidden \/> : undefined\}/);
+  assert.match(component, /variant=\{capabilityBlocked \? "filled" : "outlined"\}/);
+
+  // Causes now carry their own h4 heading, so the remediation label sits one
+  // level below it rather than competing with it.
+  assert.match(component, /component="h5"[\s\S]*>\s*Remediation\s*</);
 
   // Remediation is decided per cause, so it renders inside the causal group card.
   assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupRemediation/);

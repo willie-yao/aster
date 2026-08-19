@@ -214,10 +214,59 @@ test("fix routing sits with each cause and stays behind the chat capabilities", 
   const routing = source("src/components/CausalGroupFixRouting.tsx");
 
   assert.match(banner, /const fixCapable = Boolean\(features\.analysis_chat && features\.junit_chat_fix\)/);
-  assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupFixRouting jobID=\{jobID\} target=\{causalFixTargets\[index\]\} \/>/);
+  assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupFixRouting[\s\S]*target=\{causalFixTargets\[index\]\}/);
   assert.match(routing, /testRunPath\(jobID, target\.testName, target\.buildID\)/);
-  assert.match(routing, /Open test for Fix investigation/);
   assert.match(routing, /No failed JUnit test in these builds meets the Fix investigation requirements/);
+});
+
+test("fix routing reads as an action and names the test it opens", () => {
+  const routing = source("src/components/CausalGroupFixRouting.tsx");
+
+  // The old treatment was the monospace data token, which is exactly how build
+  // ID chips render a few lines above it in the same cause.
+  assert.match(routing, /<Button/);
+  assert.match(routing, /variant="outlined"/);
+  assert.match(routing, /startIcon=\{<AutoFixHigh aria-hidden \/>\}/);
+  assert.doesNotMatch(routing, /overviewTypography\.data/);
+  assert.doesNotMatch(routing, /bgcolor: "action\.selected"/);
+
+  // The subject is in the visible label, not in a caption below it that reads
+  // as if it belonged to the next cause, and it uses the same humanized title
+  // the test ledger shows rather than the raw JUnit name.
+  assert.match(routing, /parseTestDisplayName\(target\.testName\)\.displayName/);
+  assert.match(routing, /Fix: \{testName\}/);
+  assert.doesNotMatch(routing, /\{target\.testName\} in build \{target\.buildID\}\s*<\/Typography>/);
+
+  // A long test name truncates inline, and the full value stays reachable on
+  // hover and on keyboard focus rather than through a hover-only native title.
+  assert.match(routing, /textOverflow: "ellipsis"/);
+  assert.match(routing, /<Tooltip title=\{subject\}>/);
+  assert.match(routing, /aria-label=\{subject\}/);
+  assert.doesNotMatch(routing, /title=\{subject\}\s*\n\s*aria-label/);
+});
+
+test("the build only joins the label where it is needed to tell two actions apart", () => {
+  const banner = source("src/components/PatternBanner.tsx");
+  const routing = source("src/components/CausalGroupFixRouting.tsx");
+
+  // Two causes can route to the same test in different builds. Paying 19 digits
+  // on every action to cover that case is what made the label unreadable.
+  assert.match(routing, /showBuild = false/);
+  assert.match(routing, /\{showBuild && \(/);
+  assert.match(banner, /showBuild=\{fixTargetNeedsBuild\[index\]\}/);
+
+  // Counting the DISPLAYED label, not the canonical name: two canonical names
+  // can humanize to one title, which would hide both builds and leave two
+  // identical buttons. causalFixRouting.test.ts proves the rendered result.
+  assert.match(banner, /parseTestDisplayName\(target\.testName\)\.displayName/);
+  assert.match(banner, /const fixTargetLabelCounts = fixTargetLabels\.reduce/);
+
+  // One suffix backs both strings, so the visible label cannot drift out of
+  // being a literal prefix of the accessible name.
+  assert.match(routing, /const buildSuffix = ` in build \$\{target\.buildID\}`/);
+  assert.match(routing, /const subject = `Fix: \$\{testName\}\$\{buildSuffix\}`/);
+  assert.match(routing, /whiteSpace: "pre"/);
+  assert.doesNotMatch(routing, /\\u00a0/);
 });
 
 test("the pattern-level panel is a fallback for causes with no eligible test", () => {

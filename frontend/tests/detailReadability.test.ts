@@ -78,3 +78,61 @@ test("AI summaries use readable body contrast instead of caption styling", () =>
   assert.match(table, /lineHeight: "20px"/);
   assert.match(table, /Likely transient/);
 });
+
+test("each cause is a bounded card with its own ordinal identity", () => {
+  const pattern = source("src/components/PatternBanner.tsx");
+  const causeStart = pattern.indexOf("causalGroups.map((group, index)");
+  const causeEnd = pattern.indexOf('label="Unclassified builds"');
+  const cause = pattern.slice(causeStart, causeEnd);
+
+  assert.notEqual(causeStart, -1);
+  assert.notEqual(causeEnd, -1);
+
+  // Without a container the only boundary between two multi-paragraph causes
+  // was 12px of whitespace, barely more than the gaps inside one cause.
+  assert.match(cause, /border: "1px solid"/);
+  assert.match(cause, /borderColor: "divider"/);
+  assert.match(cause, /borderRadius: "4px"/);
+  assert.match(cause, /bgcolor: "surface\.containerLow"/);
+
+  // The header band reuses the detail-band vocabulary and carries the ordinal
+  // plus the confidence, so neither reads as a continuation of the prose.
+  assert.match(cause, /bgcolor: "surface\.containerHigh"/);
+  assert.match(cause, /boxShadow: "inset 3px 0 0 var\(--mui-palette-primary-main\)"/);
+  assert.match(cause, /causalGroups\.length > 1 \? `Cause \$\{index \+ 1\} of \$\{causalGroups\.length\}` : "Cause"/);
+  assert.match(cause, /\{group\.confidence\} confidence/);
+
+  // The confidence row kept its xs column reflow; the band grid now owns it.
+  assert.match(cause, /gridTemplateAreas: \{ xs: '"cause" "confidence"', sm: '"cause confidence"' \}/);
+});
+
+test("causal group rhythm and headings express the hierarchy", () => {
+  const pattern = source("src/components/PatternBanner.tsx");
+  const remediation = source("src/components/CausalGroupRemediation.tsx");
+  const routing = source("src/components/CausalGroupFixRouting.tsx");
+  const cause = pattern.slice(
+    pattern.indexOf("causalGroups.map((group, index)"),
+    pattern.indexOf('label="Unclassified builds"'),
+  );
+
+  // The gap between two unrelated causes has to exceed every gap inside one,
+  // or the reader cannot tell a cause boundary from a paragraph boundary.
+  const between = Number(/<Stack spacing=\{([\d.]+)\}>\s*\n\s*\{causalGroups\.map/.exec(pattern)?.[1]);
+  const within = [cause, remediation, routing]
+    .flatMap((text) => [...text.matchAll(/\bmt: ([\d.]+)/g)])
+    .map((match) => Number(match[1]));
+
+  assert.ok(Number.isFinite(between), "inter-cause spacing not found");
+  assert.ok(within.length > 0, "intra-cause spacing not found");
+  assert.ok(
+    between > Math.max(...within),
+    `inter-cause spacing ${between} must exceed the widest intra-cause gap ${Math.max(...within)}`,
+  );
+
+  // Heading levels stay sequential: h3 section, h4 cause, h5 rows within it.
+  assert.match(pattern, /component="h3"/);
+  assert.match(cause, /component="h4"/);
+  assert.match(cause, /component="h5"[\s\S]*Affected \{group\.builds\.length === 1 \? "build" : "builds"\}/);
+  assert.match(remediation, /component="h5"/);
+  assert.doesNotMatch(remediation, /component="h4"/);
+});

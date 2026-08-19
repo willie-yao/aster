@@ -23,7 +23,13 @@ export interface PatternRemediationPresentation {
   detail?: string;
 }
 
+// A block is either a verdict about this one cause or a capability the whole
+// deployment lacks. The two mean unrelated things, so the scope travels with the
+// reason and the UI can present them differently.
+export type CausalRemediationBlockedScope = "cause" | "deployment";
+
 export interface CausalRemediationBlockedReason {
+  scope: CausalRemediationBlockedScope;
   label: string;
   message: string;
 }
@@ -117,14 +123,20 @@ export function causalRemediationBlockedReason(
   investigationEnabled: boolean,
 ): CausalRemediationBlockedReason | null {
   if (group.builds.length < 2) {
-    return { label: "Not eligible", message: singleBuildRemediationReason };
+    return { scope: "cause", label: "Not eligible", message: singleBuildRemediationReason };
   }
   if (!group.id || !group.content_hash) {
-    return { label: "Not addressable", message: unhashedRemediationReason };
+    return { scope: "cause", label: "Not addressable", message: unhashedRemediationReason };
   }
   const { state } = patternRemediationPresentation(investigation);
   if (!investigationEnabled && unresolvableWithoutOperation.has(state)) {
-    return { label: "Unavailable", message: remediationUnavailableReason };
+    // The label names the scope so it cannot be mistaken for a verdict about
+    // this cause when both appear on the same briefing.
+    return {
+      scope: "deployment",
+      label: "Unavailable on this deployment",
+      message: remediationUnavailableReason,
+    };
   }
   return null;
 }
