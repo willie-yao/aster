@@ -620,3 +620,53 @@ func TestExecuteClassifiesReviewScopeWithoutPatchContent(t *testing.T) {
 		}
 	}
 }
+
+// OpenCode reaches the provider directly, so it must send the same GitHub
+// Copilot integration header the in-process transport sends. Without it Copilot
+// rejects the request with an unexplained 403.
+func TestWriteOpenCodeConfigSetsCopilotIntegrationHeader(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		provider modelprovider.Config
+		want     bool
+	}{
+		{"copilot chat completions", testDirectBearerProvider("https://api.githubcopilot.com/chat/completions", "fixture-model"), true},
+		{"copilot responses", testResponsesProvider("https://api.githubcopilot.com/responses", "fixture-model"), true},
+		{"other provider", testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model"), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := writeOpenCodeConfig(home, tt.provider, 4); err != nil {
+				t.Fatal(err)
+			}
+			options := readOpenCodeProviderOptions(t, home)
+			headers, ok := options["headers"].(map[string]any)
+			if !tt.want {
+				if ok {
+					t.Fatalf("headers = %v, want none for %q", headers, tt.provider.Endpoint)
+				}
+				return
+			}
+			if !ok || headers[modelprovider.CopilotIntegrationHeader] != modelprovider.CopilotIntegrationID {
+				t.Fatalf("headers = %v, want %s", headers, modelprovider.CopilotIntegrationHeader)
+			}
+		})
+	}
+}
+
+func readOpenCodeProviderOptions(t *testing.T, home string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	options, ok := config["provider"].(map[string]any)["engine"].(map[string]any)["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("provider options missing: %s", data)
+	}
+	return options
+}

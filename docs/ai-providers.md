@@ -109,7 +109,8 @@ ai:
 `AI_TOKEN` is a PAT with the `copilot_chat` user permission. Model availability
 and reasoning-effort support vary by subscription and change over time. Aster
 adds `Copilot-Integration-Id: copilot-developer-cli` only for
-`*.githubcopilot.com` endpoints.
+`*.githubcopilot.com` endpoints, both for its own requests and for the sandbox
+executors that run the coding agent.
 
 ### OpenAI
 

@@ -296,20 +296,12 @@ func (c *httpAPIClient) setRequestHeaders(req *http.Request) {
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
-	if isCopilotEndpoint(c.endpoint) {
-		req.Header.Set("Copilot-Integration-Id", "copilot-developer-cli")
+	for name, value := range modelprovider.EndpointHeaders(c.endpoint) {
+		req.Header.Set(name, value)
 	}
 	for k, v := range c.extraHeaders {
 		req.Header.Set(k, v)
 	}
-}
-
-func isCopilotEndpoint(rawURL string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	return strings.HasSuffix(u.Hostname(), "githubcopilot.com")
 }
 
 func continuationCalls(api string, message modelMessage, kept []modelToolCall) ([]modelToolCall, []modelMessage) {

@@ -1154,6 +1154,9 @@ func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps, c
 	if provider.Auth.Type == modelprovider.AuthTypeBearer {
 		providerOptions["apiKey"] = "{env:" + modelprovider.TokenEnv + "}"
 	}
+	if headers := modelprovider.EndpointHeaders(provider.Endpoint); len(headers) > 0 {
+		providerOptions["headers"] = headers
+	}
 	evidencePermissions := map[string]any{
 		"*": "deny",
 		"read": map[string]any{

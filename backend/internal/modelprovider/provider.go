@@ -24,6 +24,11 @@ const (
 
 	// TokenEnv is the only provider credential environment variable admitted to an executor.
 	TokenEnv = "PROW_AI_MODEL_PROVIDER_TOKEN"
+
+	// CopilotIntegrationHeader identifies the calling integration to GitHub Copilot,
+	// which answers a request without it with an unexplained 403.
+	CopilotIntegrationHeader = "Copilot-Integration-Id"
+	CopilotIntegrationID     = "copilot-developer-cli"
 )
 
 var ErrCredentialExposure = errors.New("credential-bearing executor output rejected")
@@ -67,6 +72,21 @@ func Normalize(config Config) Config {
 		config.Auth.TokenEnv = TokenEnv
 	}
 	return config
+}
+
+// EndpointHeaders returns the headers every caller must send to this endpoint,
+// whether it runs in process or inside a sandbox executor. Keeping one
+// definition stops the two paths from diverging on the same provider.
+func EndpointHeaders(endpoint string) map[string]string {
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil {
+		return nil
+	}
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	if host == "githubcopilot.com" || strings.HasSuffix(host, ".githubcopilot.com") {
+		return map[string]string{CopilotIntegrationHeader: CopilotIntegrationID}
+	}
+	return nil
 }
 
 // ValidateOpenCode validates the Agent Sandbox OpenCode provider contract.
