@@ -1,7 +1,7 @@
 {{- include "aster.validateAgentAnalysisShadow" . -}}
 {{- if .Values.agentSandbox.analysisShadow.enabled }}
 {{- $cfg := .Values.agentSandbox.analysisShadow -}}
-{{- $clientSA := include "aster.agentSandboxClientServiceAccountName" . -}}
+{{- $clientSA := include "aster.agentSandboxScheduledClientServiceAccountName" . -}}
 {{- $requester := printf "system:serviceaccount:%s:%s" .Release.Namespace $clientSA -}}
 {{- $stagerImage := include "aster.agentAnalysisShadowStagerImage" . -}}
 {{- $workloadSA := include "aster.agentAnalysisShadowWorkloadServiceAccountName" . -}}

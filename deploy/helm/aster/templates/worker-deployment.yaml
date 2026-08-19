@@ -53,15 +53,10 @@ spec:
           {{- if $shadow }}
           image: {{ include "aster.agentAnalysisShadowDashboardImage" . }}
           imagePullPolicy: {{ .Values.agentSandbox.analysisShadow.dashboardImage.pullPolicy }}
-          {{- else if $agentSandboxFixScheduled }}
-          image: {{ include "aster.agentSandboxDashboardImage" . }}
-          imagePullPolicy: {{ .Values.agentSandbox.fixRuntime.dashboardImage.pullPolicy }}
           {{- else }}
           image: {{ include "aster.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- end }}
-          image: {{ include "aster.image" . }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
           command:
             - /usr/local/bin/worker
             - -project-dir={{ .Values.project.mountPath }}

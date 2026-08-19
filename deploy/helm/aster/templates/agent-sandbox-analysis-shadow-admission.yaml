@@ -4,7 +4,7 @@
 {{- $provider := $cfg.modelProvider -}}
 {{- $reasoningEffort := default "" $provider.reasoningEffort -}}
 {{- $directBearer := and (eq (default "direct" $provider.credentialMode) "direct") (eq (default "none" $provider.auth.type) "bearer") -}}
-{{- $clientSA := include "aster.agentSandboxClientServiceAccountName" . -}}
+{{- $clientSA := include "aster.agentSandboxScheduledClientServiceAccountName" . -}}
 {{- $requester := printf "system:serviceaccount:%s:%s" .Release.Namespace $clientSA -}}
 {{- $executorImage := include "aster.agentAnalysisShadowExecutorImage" . -}}
 {{- $stagerImage := include "aster.agentAnalysisShadowStagerImage" . -}}
