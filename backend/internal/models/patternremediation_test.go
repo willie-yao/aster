@@ -78,6 +78,39 @@ func TestPatternCausalGroupHashCanonicalizesBuildOrder(t *testing.T) {
 	}
 }
 
+// The durable signature must stay out of both hashes: folding it in would churn
+// every causal-group ID and make patterns.retainPriorPattern reject retained
+// patterns whose stored ContentHash predates the signature.
+func TestSignatureDoesNotChangeCausalHashesOrIdentity(t *testing.T) {
+	pattern := causalPattern()
+	groupHash := PatternCausalGroupHash(pattern.CausalGroups[0])
+	groupID := PatternCausalGroupID(pattern.ID, pattern.CausalGroups[0])
+	patternHash := PatternHash(pattern)
+	patternID := PatternID(pattern)
+
+	for index := range pattern.CausalGroups {
+		pattern.CausalGroups[index].Signature = "0123456789abcdef"
+	}
+	if after := PatternCausalGroupHash(pattern.CausalGroups[0]); after != groupHash {
+		t.Fatalf("signature changed group hash: before=%s after=%s", groupHash, after)
+	}
+	if after := PatternCausalGroupID(pattern.ID, pattern.CausalGroups[0]); after != groupID {
+		t.Fatalf("signature changed group id: before=%s after=%s", groupID, after)
+	}
+	if after := PatternHash(pattern); after != patternHash {
+		t.Fatalf("signature changed pattern hash: before=%s after=%s", patternHash, after)
+	}
+	if after := PatternID(pattern); after != patternID {
+		t.Fatalf("signature changed pattern id: before=%s after=%s", patternID, after)
+	}
+	if AssignPatternIdentity(&pattern); pattern.ContentHash != patternHash {
+		t.Fatalf("reassigned identity diverged: want=%s got=%s", patternHash, pattern.ContentHash)
+	}
+	if pattern.CausalGroups[0].Signature != "0123456789abcdef" {
+		t.Fatal("assigning identity dropped the signature")
+	}
+}
+
 func TestValidPatternRemediationInvestigationState(t *testing.T) {
 	states := []PatternRemediationInvestigationState{
 		PatternRemediationNotInvestigated,

@@ -210,6 +210,9 @@ export interface PatternCausalGroup {
   builds: string[];
   root_cause: string;
   confidence: "high" | "medium" | "low";
+  // Durable identity of this cause across build windows. Written by the engine
+  // for its own recurrence memory; the UI does not render it.
+  signature?: string;
 }
 
 export type PatternRecurrence =

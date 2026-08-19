@@ -41,10 +41,12 @@ import (
 	"github.com/willie-yao/aster/backend/internal/credentialenv"
 	"github.com/willie-yao/aster/backend/internal/fixruntime"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
+
 	"github.com/willie-yao/aster/backend/internal/notify"
 	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/prescalation"
 	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/recurrenceledger"
 	"github.com/willie-yao/aster/backend/internal/remediationinvestigation"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 	"github.com/willie-yao/aster/backend/internal/server"
@@ -544,6 +546,7 @@ func enableCausalRemediationInvestigation(
 	}
 	service, err := remediationinvestigation.NewOperationService(ctx, client, cache, resolver, remediationinvestigation.OperationOptions{
 		Timeout: timeout, MaxOperations: maxOperations, UsageRecorder: usageRecorder,
+		Ledger: recurrenceMemory{store: recurrenceledger.NewStore(dataDir)},
 	})
 	if err != nil {
 		return fmt.Errorf("configuring remediation investigation operation: %w", err)
@@ -552,6 +555,27 @@ func enableCausalRemediationInvestigation(
 	opts.CausalRemediationRequestTimeout = 45 * time.Second
 	log.Printf("🔎 causal remediation investigation enabled (timeout=%s max_operations=%d)", timeout, maxOperations)
 	return nil
+}
+
+// recurrenceMemory adapts the recurrence ledger to the investigation service's
+// seam. The adapter lives here so the ledger stays a small state package and does
+// not depend on the analysis stack.
+type recurrenceMemory struct{ store *recurrenceledger.Store }
+
+func (m recurrenceMemory) ClaimReuse(signature string) (remediationinvestigation.RecurrenceVerdict, bool, error) {
+	verdict, ok, err := m.store.ClaimReuse(signature)
+	if err != nil || !ok {
+		return remediationinvestigation.RecurrenceVerdict{}, false, err
+	}
+	return remediationinvestigation.RecurrenceVerdict{
+		State: verdict.State, Reason: verdict.Reason, RecordedAt: verdict.RecordedAt,
+	}, true, nil
+}
+
+func (m recurrenceMemory) RecordVerdict(signature string, verdict remediationinvestigation.RecurrenceVerdict) error {
+	return m.store.RecordVerdict(signature, recurrenceledger.Verdict{
+		State: verdict.State, Reason: verdict.Reason, RecordedAt: verdict.RecordedAt,
+	})
 }
 
 func enableCausalRemediationFixPreview(opts *server.Options, cfg *project.Config) error {

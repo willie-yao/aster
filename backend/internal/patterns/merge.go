@@ -49,6 +49,7 @@ func MergeLastGood(details []models.JobDetail, prior map[string]models.JobDetail
 				status.LastSuccessfulAt = detail.PatternAnalyses[j].GeneratedAt
 				status.EvidenceAvailable = models.PatternEvidenceAvailable(*detail, detail.PatternAnalyses[j])
 			}
+			ApplyCausalGroupSignatures(detail)
 			report.Current++
 		} else {
 			status.FailureCategory = string(outcome.FailureCategory)
@@ -82,11 +83,14 @@ func retainPriorPattern(detail *models.JobDetail, previous models.JobDetail, sta
 		}
 	}
 	status.LastSuccessfulAt = previous.PatternAnalyses[0].GeneratedAt
-	detail.PatternAnalyses = append([]models.PatternAnalysis(nil), previous.PatternAnalyses...)
+	// Deep copy: signature assignment writes into CausalGroups, and a shallow
+	// copy shares that backing array with the prior published snapshot.
+	detail.PatternAnalyses = models.ClonePatternAnalyses(previous.PatternAnalyses)
 	for index := range detail.PatternAnalyses {
 		models.RefreshRetainedPatternLifecycle(*detail, &detail.PatternAnalyses[index])
 		models.AssignPatternIdentity(&detail.PatternAnalyses[index])
 	}
+	BackfillCausalGroupSignatures(detail)
 	status.EvidenceAvailable = models.PatternEvidenceAvailable(*detail, detail.PatternAnalyses[0])
 	return nil
 }

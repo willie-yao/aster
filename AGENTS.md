@@ -67,6 +67,7 @@ backend/                         Go 1.25
     junit/                       JUnit XML -> structured test cases
     aggregator/                  Per-job and per-test aggregate statistics
     patterns/                    Correlates analyzed failures across builds
+    recurrenceledger/            Durable memory of recurring causes across build windows
     prtriage/                    Per-open-pull-request view of presubmit results
     prattribution/               Rules a pull request out of a failure from observed results
     prescalation/                On-demand AI analysis for unexplained pull request failures

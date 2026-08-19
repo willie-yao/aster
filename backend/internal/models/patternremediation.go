@@ -115,6 +115,12 @@ func WithDefaultPatternRemediationInvestigations(patterns []PatternAnalysis) []P
 	return out
 }
 
+// ClonePatternAnalyses deep copies the slices a caller may mutate, so writing to
+// one copy's causal groups never reaches another's backing array.
+func ClonePatternAnalyses(patterns []PatternAnalysis) []PatternAnalysis {
+	return clonePatternAnalyses(patterns)
+}
+
 func clonePatternAnalyses(patterns []PatternAnalysis) []PatternAnalysis {
 	out := append([]PatternAnalysis(nil), patterns...)
 	for index := range out {

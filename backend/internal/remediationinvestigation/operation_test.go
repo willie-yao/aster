@@ -19,12 +19,22 @@ import (
 type fakeOperationResolver struct {
 	resolved      map[string]ResolvedOperation
 	validateError error
-	refreshActive bool
-	refreshError  error
+	// publishValidateError fails Validate while leaving Resolve working, which is
+	// how a subject goes stale between resolution and publication.
+	publishValidateError error
+	refreshActive        bool
+	refreshError         error
+	resolveCalls         atomic.Int32
 }
 
-func (f *fakeOperationResolver) Validate(context.Context, OperationRef) error { return f.validateError }
+func (f *fakeOperationResolver) Validate(context.Context, OperationRef) error {
+	if f.publishValidateError != nil {
+		return f.publishValidateError
+	}
+	return f.validateError
+}
 func (f *fakeOperationResolver) Resolve(_ context.Context, ref OperationRef) (ResolvedOperation, error) {
+	f.resolveCalls.Add(1)
 	if f.validateError != nil {
 		return ResolvedOperation{}, f.validateError
 	}
