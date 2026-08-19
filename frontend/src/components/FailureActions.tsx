@@ -124,7 +124,7 @@ function DialogHeader({
         {subtitle && (
           <Typography
             variant="caption"
-            color="text.secondary"
+            color="textSecondary"
             sx={{ display: "block", mt: 0.25 }}
           >
             {subtitle}
@@ -821,7 +821,7 @@ export function FailureActions({
       {eligibilityLoading && (
         <Stack direction="row" spacing={1} role="status" sx={{ alignItems: "center", mt: 1 }}>
           <CircularProgress size={14} />
-          <Typography variant="caption" color="text.secondary">Checking action eligibility...</Typography>
+          <Typography variant="caption" color="textSecondary">Checking action eligibility...</Typography>
         </Stack>
       )}
 
@@ -863,13 +863,13 @@ export function FailureActions({
           }
         />
         <DialogContent dividers>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" color="textSecondary">
             Opening the email link did not create anything. Generate a draft
             now, then review the exact content before confirming any GitHub
             write.
           </Typography>
           {drafting && (
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
+            <Typography variant="body2" color="textSecondary" sx={{ mt: 1.5 }}>
               Generation continues in the background. If draft-ready email is
               configured, the dashboard emails you when the draft is ready.
             </Typography>
@@ -906,7 +906,7 @@ export function FailureActions({
           title="Dismiss pattern"
         />
         <DialogContent dividers>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
             Hides this recurring pattern from the active view. It reappears
             automatically if a newer failing build recurs.
           </Typography>
@@ -988,7 +988,7 @@ export function FailureActions({
                   <Typography variant="body2" sx={{ fontWeight: 600 }}>
                     {actionRequestProgressTitle(request, isFix)}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography variant="body2" color="textSecondary">
                     {actionRequestProgressDetail(request)}
                   </Typography>
                 </Box>
@@ -1025,7 +1025,7 @@ export function FailureActions({
                   <Typography variant="body2" sx={{ fontWeight: 600 }}>
                     Stopping runtime work
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography variant="body2" color="textSecondary">
                     This request remains active until the server confirms that
                     its runtime work has stopped.
                   </Typography>

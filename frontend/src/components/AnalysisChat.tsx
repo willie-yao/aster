@@ -215,13 +215,13 @@ function AttemptSummary({ attempt }: { attempt: AnalysisChatAttempt }) {
       {attempt.question
         ? <UserMessage content={attempt.question} />
         : (
-          <Typography variant="caption" color="text.secondary" sx={{ ml: { xs: 2, sm: 5 } }}>
+          <Typography variant="caption" color="textSecondary" sx={{ ml: { xs: 2, sm: 5 } }}>
             Question text is unavailable for this earlier attempt.
           </Typography>
         )}
       <Alert severity={severity} variant="outlined" sx={{ py: 0.25 }}>
         <Typography variant="body2" sx={{ fontWeight: 700 }}>{status.label}</Typography>
-        <Typography variant="caption" color="text.secondary">{status.detail}</Typography>
+        <Typography variant="caption" color="textSecondary">{status.detail}</Typography>
       </Alert>
     </Stack>
   );
@@ -292,7 +292,7 @@ function AssistantMessage({
           <Box>
             <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 0.75 }}>
               <FactCheckOutlined sx={{ fontSize: 16, color: "success.main" }} />
-              <Typography variant="label" color="text.secondary" sx={{ fontWeight: 700 }}>
+              <Typography variant="label" color="textSecondary" sx={{ fontWeight: 700 }}>
                 Evidence read this turn
               </Typography>
             </Stack>
@@ -326,7 +326,7 @@ function AssistantMessage({
                         </Typography>
                       )}
                       {lines && (
-                        <Typography component="span" variant="caption" color="text.secondary">
+                        <Typography component="span" variant="caption" color="textSecondary">
                           {lines}
                         </Typography>
                       )}
@@ -335,7 +335,7 @@ function AssistantMessage({
                       <Typography
                         component="blockquote"
                         variant="caption"
-                        color="text.secondary"
+                        color="textSecondary"
                         sx={{ m: 0, mt: 0.35, fontFamily: "monospace", lineHeight: 1.55 }}
                       >
                         “{citation.quote}”
@@ -365,13 +365,13 @@ function AssistantMessage({
               </Typography>
               <Chip size="small" label="Not published" color="warning" variant="outlined" sx={{ ml: "auto", height: 22 }} />
             </Stack>
-            <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontWeight: 700 }}>
+            <Typography variant="caption" color="textSecondary" sx={{ display: "block", fontWeight: 700 }}>
               Revised root cause
             </Typography>
             <Typography variant="body2" sx={{ mt: 0.25, lineHeight: 1.6 }}>
               <RichText text={message.proposed_revision.root_cause} steps fileCtx={fileCtx} />
             </Typography>
-            <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontWeight: 700, mt: 1.25 }}>
+            <Typography variant="caption" color="textSecondary" sx={{ display: "block", fontWeight: 700, mt: 1.25 }}>
               Revised remediation
             </Typography>
             <Typography variant="body2" sx={{ mt: 0.25, lineHeight: 1.6 }}>
@@ -462,8 +462,8 @@ function ThinkingState({
       </Stack>
       <Box sx={{ minWidth: 0, flex: 1 }}>
         <Typography variant="body2" sx={{ fontWeight: 650 }}>{copy.title}</Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{copy.detail}</Typography>
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" color="textSecondary" sx={{ display: "block" }}>{copy.detail}</Typography>
+        <Typography variant="caption" color="textSecondary">
           {elapsed !== null ? `${elapsed}s elapsed` : "Elapsed time unavailable"}
           {phase === "validation_retrying" && maxValidationRetries > 0
             ? ` · Validation retry ${validationRetries} of ${maxValidationRetries}` : ""}
@@ -1264,7 +1264,7 @@ export function AnalysisChat({
               }}
             >
               {restoring && (
-                <Typography role="status" variant="body2" color="text.secondary" sx={{ py: 0.5 }}>
+                <Typography role="status" variant="body2" color="textSecondary" sx={{ py: 0.5 }}>
                   Restoring conversation...
                 </Typography>
               )}
@@ -1285,7 +1285,7 @@ export function AnalysisChat({
                   <Typography variant="body2" sx={{ fontWeight: 650 }}>
                     {patternScope ? "Interrogate the pattern across builds." : "Interrogate the conclusion, not just the summary."}
                   </Typography>
-                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.35, mb: 1.25 }}>
+                  <Typography variant="caption" color="textSecondary" sx={{ display: "block", mt: 0.35, mb: 1.25 }}>
                     {patternScope
                       ? "Ask which builds agree, where they differ, or whether the shared cause holds up."
                       : "Ask for evidence, test another cause, or challenge what the agent missed."}
@@ -1441,7 +1441,7 @@ export function AnalysisChat({
               {turnUsage && (
                 <Typography
                   variant="caption"
-                  color="text.secondary"
+                  color="textSecondary"
                   sx={{ display: "block", mt: 0.75, textAlign: "right" }}
                 >
                   {`${turnUsage.used}/${turnUsage.max} attempts`}

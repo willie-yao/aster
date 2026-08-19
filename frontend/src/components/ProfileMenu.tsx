@@ -21,7 +21,7 @@ export function ProfileMenu() {
 
   if (mode !== "oauth" || status === "loading" || status === "unavailable") {
     return engine ? (
-      <Typography variant="caption" color="text.secondary" title={`Engine ${engine.commit} (${engine.image_tag})`}>
+      <Typography variant="caption" color="textSecondary" title={`Engine ${engine.commit} (${engine.image_tag})`}>
         Engine {engine.commit === "dev" ? "dev" : engine.commit.slice(0, 7)}
       </Typography>
     ) : null;
@@ -63,7 +63,7 @@ export function ProfileMenu() {
         transformOrigin={{ vertical: "top", horizontal: "right" }}
       >
         <Box sx={{ px: 2, py: 1 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+          <Typography variant="caption" color="textSecondary" sx={{ display: "block" }}>
             Signed in as
           </Typography>
           <Typography variant="body2" sx={{ fontWeight: 600 }}>
@@ -72,7 +72,7 @@ export function ProfileMenu() {
         </Box>
         {engine && (
           <Box sx={{ px: 2, pb: 1 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>Engine</Typography>
+            <Typography variant="caption" color="textSecondary" sx={{ display: "block" }}>Engine</Typography>
             <Typography variant="caption" sx={{ fontFamily: "monospace" }}>{engine.commit} · {engine.image_tag}</Typography>
           </Box>
         )}

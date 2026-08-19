@@ -119,7 +119,7 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
     else if (event.key === "ArrowLeft") selectDay(availableIndexes[Math.max(0, position < 0 ? availableIndexes.length - 1 : position - 1)] ?? null, event.currentTarget);
     else selectDay(availableIndexes[Math.min(availableIndexes.length - 1, position < 0 ? 0 : position + 1)] ?? null, event.currentTarget);
   };
-  if (availableIndexes.length === 0) return <Box sx={{ py: 5, textAlign: "center" }}><Typography color="text.secondary">No comparable single-currency daily cost values are available in this range.</Typography>{currencyPolicy.note && <Typography variant="caption" color="text.secondary">{currencyPolicy.note}</Typography>}</Box>;
+  if (availableIndexes.length === 0) return <Box sx={{ py: 5, textAlign: "center" }}><Typography color="textSecondary">No comparable single-currency daily cost values are available in this range.</Typography>{currencyPolicy.note && <Typography variant="caption" color="textSecondary">{currencyPolicy.note}</Typography>}</Box>;
   return <Box>
     <Box sx={{ overflowX: "auto", pb: .5 }}>
       <Box sx={{ position: "relative", minWidth: { xs: 720, md: 0 } }}>
@@ -163,16 +163,16 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
         <Typography variant="subtitle2" sx={{ fontFamily: "monospace" }}>{activeDay.date} UTC{activeDay.current_partial_utc ? " · Partial UTC day" : ""}</Typography>
         {recordedPath && <Typography variant="caption" component="div" sx={{ mt: .5 }}><Box component="span" sx={{ color: "primary.main" }}>●</Box> Recorded: {recordedCost(activeDay)}</Typography>}
         {currentPath && <Typography variant="caption" component="div"><Box component="span" sx={{ color: "warning.main" }}>■</Box> Current rate: {currentRateCost(activeDay)}</Typography>}
-        <Typography variant="caption" component="div" color="text.secondary">Coverage: {activeDay.coverage.status}{activeDay.coverage.states?.length ? ` · ${activeDay.coverage.states.map(coverageStateLabel).join(", ")}` : ""}</Typography>
+        <Typography variant="caption" component="div" color="textSecondary">Coverage: {activeDay.coverage.status}{activeDay.coverage.states?.length ? ` · ${activeDay.coverage.states.map(coverageStateLabel).join(", ")}` : ""}</Typography>
         </Box>}
       </Box>
     </Box>
     <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center", mt: .5 }}>
       {recordedPath && <Typography variant="caption"><Box component="span" sx={{ display: "inline-block", width: 22, borderTop: "3px solid", borderColor: "primary.main", mr: .8, verticalAlign: "middle" }} />Recorded estimate (solid)</Typography>}
       {currentPath && <Typography variant="caption"><Box component="span" sx={{ display: "inline-block", width: 22, borderTop: "3px dashed", borderColor: "warning.main", mr: .8, verticalAlign: "middle" }} />Current-rate estimate (dashed)</Typography>}
-      <Typography variant="caption" color="text.secondary">Hover to inspect. Keyboard: focus chart, then use ← and →.</Typography>
-      {rawMax === 0 && <Typography variant="caption" color="text.secondary">All reported values in this chart are {formatChartCost(0, chartCurrency)}.</Typography>}
-      {currencyPolicy.note && <Typography variant="caption" color="text.secondary" sx={{ flexBasis: "100%" }}>{currencyPolicy.note}</Typography>}
+      <Typography variant="caption" color="textSecondary">Hover to inspect. Keyboard: focus chart, then use ← and →.</Typography>
+      {rawMax === 0 && <Typography variant="caption" color="textSecondary">All reported values in this chart are {formatChartCost(0, chartCurrency)}.</Typography>}
+      {currencyPolicy.note && <Typography variant="caption" color="textSecondary" sx={{ flexBasis: "100%" }}>{currencyPolicy.note}</Typography>}
     </Box>
   </Box>;
 }
@@ -205,7 +205,7 @@ function PartialDaySignal() {
 
 function FeatureBreakdown({ day, currency }: { day: AIUsageDaily; currency?: string }) {
   if (day.features.length === 0) {
-    return <Typography color="text.secondary" sx={overviewTypography.secondaryBody}>No feature activity was recorded for this UTC day.</Typography>;
+    return <Typography color="textSecondary" sx={overviewTypography.secondaryBody}>No feature activity was recorded for this UTC day.</Typography>;
   }
   return (
     <Box>
@@ -299,7 +299,7 @@ export function DaySummaryButton({
         <Typography component="time" dateTime={day.date} sx={{ ...overviewTypography.data, fontWeight: 700 }}>{day.date}</Typography>
         {day.current_partial_utc && <PartialDaySignal />}
       </Box>
-      <Typography color="text.secondary" sx={{ gridArea: "summary", px: 1.5, pt: 0.25, ...overviewTypography.data }}>
+      <Typography color="textSecondary" sx={{ gridArea: "summary", px: 1.5, pt: 0.25, ...overviewTypography.data }}>
         {day.has_usage
           ? `${formatExactTokens(day.totals.operations)} operations · ${formatExactTokens(day.totals.model_requests)} requests · ${formatExactTokens(day.totals.cache_hits)} cache hits`
           : "No usage recorded"}
@@ -309,7 +309,7 @@ export function DaySummaryButton({
       </Typography>
       <Box sx={{ gridArea: "coverage", px: 1.5, pt: 0.25, pb: 1.25, minWidth: 0 }}>
         <UsageCoverageStatus status={day.coverage.status} />
-        <Typography component="span" color="text.secondary" sx={{ ml: 1, ...overviewTypography.description }}>
+        <Typography component="span" color="textSecondary" sx={{ ml: 1, ...overviewTypography.description }}>
           {coverageDetails(day)}
         </Typography>
       </Box>
@@ -386,7 +386,7 @@ export function HistoricalTable({ days }: { days: AIUsageDaily[] }) {
                     <TableCell align="right" sx={numericCell}>{currentRateCost(day)}</TableCell>
                     <TableCell sx={{ minWidth: 220 }}>
                       <UsageCoverageStatus status={day.coverage.status} />
-                      <Typography color="text.secondary" sx={{ mt: 0.25, ...overviewTypography.description }}>{coverageDetails(day)}</Typography>
+                      <Typography color="textSecondary" sx={{ mt: 0.25, ...overviewTypography.description }}>{coverageDetails(day)}</Typography>
                     </TableCell>
                   </TableRow>
                   {open && (
@@ -424,7 +424,7 @@ export function HistoricalTable({ days }: { days: AIUsageDaily[] }) {
                       ["Output", formatExactTokens(day.totals.output_tokens)],
                     ].map(([label, value]) => (
                       <Box key={label}>
-                        <Typography color="text.secondary" sx={overviewTypography.tableHeading}>{label}</Typography>
+                        <Typography color="textSecondary" sx={overviewTypography.tableHeading}>{label}</Typography>
                         <Typography sx={overviewTypography.data}>{value}</Typography>
                       </Box>
                     ))}
@@ -449,7 +449,7 @@ function FeatureMix({ data }: { data: AIUsageReport }) {
         <Box sx={{ minHeight: 140, display: "grid", placeItems: "center", px: 2, py: 3, textAlign: "center" }}>
           <Box>
             <Typography component="h3" sx={overviewTypography.categoryHeading}>No feature activity</Typography>
-            <Typography color="text.secondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>No provider-reported tokens were recorded for this selection.</Typography>
+            <Typography color="textSecondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>No provider-reported tokens were recorded for this selection.</Typography>
           </Box>
         </Box>
       ) : data.features.map((row) => {
@@ -487,7 +487,7 @@ export function AIUsageDailySections({
       <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
         <DetailSectionBand title="Daily cost chart" metadata={rangeMetadata} />
         <Box sx={{ px: { xs: 1.5, md: 2 }, py: 1.5 }}>
-          <Typography id="daily-cost-chart-summary" color="text.secondary" sx={{ mb: 1, ...overviewTypography.description }}>
+          <Typography id="daily-cost-chart-summary" color="textSecondary" sx={{ mb: 1, ...overviewTypography.description }}>
             UTC day boundaries for the selected range. The daily usage ledger below presents the same dates in newest-first order.
           </Typography>
           <DailyCostChart days={days} mixedCurrency={Boolean(data.mixed_currency)} />

@@ -70,13 +70,13 @@ function MemberRow({
           </Link>
           <Typography
             title={member.title}
-            color="text.primary"
+            color="textPrimary"
             sx={{ minWidth: 0, overflowWrap: "anywhere", ...overviewTypography.secondaryBody }}
           >
             {member.title || "Untitled pull request"}
           </Typography>
         </Box>
-        <Typography color="text.secondary" sx={{ mt: 0.25, ...overviewTypography.description }}>
+        <Typography color="textSecondary" sx={{ mt: 0.25, ...overviewTypography.description }}>
           {member.author ? `by ${member.author} · ` : ""}
           build {member.build_id}
           {member.verdict ? ` · ${attributionLabel(member.verdict)}` : ""}
@@ -121,7 +121,7 @@ function SharedFailureEscalation({ failure, enabled }: { failure: SharedFailure;
   const blocked = sharedFailureBlockedReason(failure);
   if (blocked) {
     return (
-      <Typography color="text.secondary" sx={{ mt: 1, ...overviewTypography.description }}>
+      <Typography color="textSecondary" sx={{ mt: 1, ...overviewTypography.description }}>
         {blocked}
       </Typography>
     );
@@ -163,13 +163,13 @@ export function SharedFailurePage() {
         aria-label="Breadcrumb"
         sx={{ display: { xs: "none", sm: "flex" }, ...overviewTypography.description }}
       >
-        <Link component={RouterLink} to="/" underline="none" color="text.secondary">
+        <Link component={RouterLink} to="/" underline="none" color="textSecondary">
           Overview
         </Link>
-        <Link component={RouterLink} to={pullRequestsPath()} underline="none" color="text.secondary">
+        <Link component={RouterLink} to={pullRequestsPath()} underline="none" color="textSecondary">
           Pull requests
         </Link>
-        <Typography color="text.primary" noWrap>
+        <Typography color="textPrimary" noWrap>
           Shared failure
         </Typography>
       </Breadcrumbs>
@@ -225,7 +225,7 @@ export function SharedFailurePage() {
         >
           {sharedFailureSubject(failure)}
         </Typography>
-        <Typography component="p" color="text.secondary" sx={{ m: 0, mt: 0.75, ...overviewTypography.secondaryBody }}>
+        <Typography component="p" color="textSecondary" sx={{ m: 0, mt: 0.75, ...overviewTypography.secondaryBody }}>
           Failing on {sharedFailureScope(failure)}
           {" · "}
           {linkToJob ? (
@@ -260,7 +260,7 @@ export function SharedFailurePage() {
           }
         />
         <Box sx={{ px: { xs: 1.5, sm: 2 }, py: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
-          <Typography color="text.secondary" sx={overviewTypography.secondaryBody}>
+          <Typography color="textSecondary" sx={overviewTypography.secondaryBody}>
             The same failure on several open pull requests usually has a cause
             they share rather than a cause in any one change. These pull
             requests were correlated only by base branch, job, and test, so they

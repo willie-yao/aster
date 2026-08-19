@@ -137,7 +137,7 @@ export function ResultLedger({
           <Typography
             component="div"
             role="status"
-            color="text.secondary"
+            color="textSecondary"
             sx={{ ...overviewTypography.data, whiteSpace: "nowrap" }}
           >
             {shownLabel}
@@ -152,7 +152,7 @@ export function ResultLedger({
       {children}
       <Typography
         component="p"
-        color="text.secondary"
+        color="textSecondary"
         sx={{ m: 0, px: 1.5, py: 1, borderTop: "1px solid", borderColor: "divider", ...overviewTypography.description }}
       >
         Skipped tests and successful setup/teardown cases are summarized above and are not included in this ledger.

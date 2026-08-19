@@ -57,7 +57,7 @@ export function MetricStrip({
         >
           <Typography
             component="span"
-            color="text.secondary"
+            color="textSecondary"
             sx={{ ...overviewTypography.tableHeading, fontSize: "12px" }}
           >
             {item.label}
@@ -80,7 +80,7 @@ export function MetricStrip({
           {item.note && (
             <Typography
               component="span"
-              color="text.secondary"
+              color="textSecondary"
               sx={{ mt: 0.25, ...overviewTypography.description, fontSize: "12.5px" }}
             >
               {item.note}

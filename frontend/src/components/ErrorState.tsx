@@ -31,7 +31,7 @@ export function ErrorState({
         {title}
       </Typography>
       {message && (
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" color="textSecondary">
           {message}
         </Typography>
       )}

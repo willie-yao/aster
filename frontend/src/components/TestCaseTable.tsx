@@ -121,21 +121,21 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
             bgcolor: "surface.containerHigh",
           }}
         >
-          <Typography component="div" color="text.secondary" sx={{ px: 1.5, ...overviewTypography.tableHeading }}>
+          <Typography component="div" color="textSecondary" sx={{ px: 1.5, ...overviewTypography.tableHeading }}>
             Status
           </Typography>
-          <Typography component="div" color="text.secondary" sx={{ px: 1.5, ...overviewTypography.tableHeading }}>
+          <Typography component="div" color="textSecondary" sx={{ px: 1.5, ...overviewTypography.tableHeading }}>
             Test name
           </Typography>
-          <Typography component="div" color="text.secondary" sx={{ px: 1.5, textAlign: "right", ...overviewTypography.tableHeading }}>
+          <Typography component="div" color="textSecondary" sx={{ px: 1.5, textAlign: "right", ...overviewTypography.tableHeading }}>
             Duration
           </Typography>
-          <Typography component="div" color="text.secondary" sx={{ px: 1.5, ...overviewTypography.tableHeading }}>
+          <Typography component="div" color="textSecondary" sx={{ px: 1.5, ...overviewTypography.tableHeading }}>
             Analysis
           </Typography>
           <Typography
             component="div"
-            color="text.secondary"
+            color="textSecondary"
             sx={{ px: 0.5, textAlign: "center", ...overviewTypography.tableHeading }}
           >
             Evidence
@@ -277,7 +277,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                     </Box>
                     <Typography
                       component="div"
-                      color="text.secondary"
+                      color="textSecondary"
                       sx={{
                         gridArea: "duration",
                         px: 1.5,
@@ -290,7 +290,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                     </Typography>
                     <Typography
                       component="span"
-                      color="primary.main"
+                      color="primary"
                       sx={{
                         gridArea: "analysis",
                         minHeight: 44,
@@ -463,7 +463,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                             },
                           }}
                         >
-                          <Typography variant="label" color="text.secondary">
+                          <Typography variant="label" color="textSecondary">
                             Stack trace
                           </Typography>
                         </AccordionSummary>
@@ -514,7 +514,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                           gap: 1,
                         }}
                       >
-                        <Typography variant="label" color="text.primary" sx={{ fontWeight: 700 }}>
+                        <Typography variant="label" color="textPrimary" sx={{ fontWeight: 700 }}>
                           Debug artifacts: {tc.cluster_artifacts.cluster_name}
                         </Typography>
 
@@ -590,7 +590,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                             >
                               <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
                                 <Dns sx={{ fontSize: 16, color: "text.secondary" }} />
-                                <Typography variant="label" color="text.secondary">
+                                <Typography variant="label" color="textSecondary">
                                   Machine logs ({tc.cluster_artifacts.machines.length} machines)
                                 </Typography>
                               </Box>

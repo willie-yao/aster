@@ -108,12 +108,12 @@ function metricLabel(tab: TestTab): string {
 function MetricCell({ label, value }: { label: string; value: string }) {
   return (
     <Box sx={{ minWidth: 0 }}>
-      <Typography component="div" color="text.secondary" sx={overviewTypography.tableHeading}>
+      <Typography component="div" color="textSecondary" sx={overviewTypography.tableHeading}>
         {label}
       </Typography>
       <Typography
         component="div"
-        color="text.primary"
+        color="textPrimary"
         sx={{ mt: 0.25, ...overviewTypography.data, fontWeight: 700 }}
       >
         {value}
@@ -242,7 +242,7 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: TestTab }) {
           </Link>
           {lastFailureMessage && (
             <Typography
-              color="text.secondary"
+              color="textSecondary"
               title={lastFailureMessage}
               sx={{
                 mt: 0.75,
@@ -337,7 +337,7 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: TestTab }) {
           <Stack spacing={2} sx={{ maxWidth: "74ch" }}>
             {lastFailureMessage && (
               <Box>
-                <Typography component="h3" color="text.secondary" sx={overviewTypography.subsectionHeading}>
+                <Typography component="h3" color="textSecondary" sx={overviewTypography.subsectionHeading}>
                   Last error
                 </Typography>
                 <Box
@@ -363,7 +363,7 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: TestTab }) {
 
             {item.error_patterns && item.error_patterns.length > 0 && (
               <Box>
-                <Typography component="h3" color="text.secondary" sx={overviewTypography.subsectionHeading}>
+                <Typography component="h3" color="textSecondary" sx={overviewTypography.subsectionHeading}>
                   Error patterns
                 </Typography>
                 <Box sx={{ mt: 0.75 }}>
@@ -380,14 +380,14 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: TestTab }) {
                         borderTopColor: "var(--mui-palette-divider)",
                       }}
                     >
-                      <Typography color="error.main" sx={{ ...overviewTypography.data, fontWeight: 700 }}>
+                      <Typography color="error" sx={{ ...overviewTypography.data, fontWeight: 700 }}>
                         {pattern.count}×
                       </Typography>
                       <Box sx={{ minWidth: 0 }}>
                         <Typography sx={{ fontSize: "14px", lineHeight: "20px" }}>
                           {pattern.normalized_message}
                         </Typography>
-                        <Typography color="text.secondary" sx={overviewTypography.description}>
+                        <Typography color="textSecondary" sx={overviewTypography.description}>
                           Example: {pattern.example_message}
                         </Typography>
                       </Box>
@@ -493,10 +493,10 @@ function BuildFailureRow({ item }: { item: BuildFailureSummary }) {
           <Typography sx={{ fontSize: "14px", lineHeight: "20px", fontWeight: 680 }}>
             {jobTitle}
           </Typography>
-          <Typography color="text.secondary" sx={{ mt: 0.25, ...overviewTypography.data, fontSize: "13px" }}>
+          <Typography color="textSecondary" sx={{ mt: 0.25, ...overviewTypography.data, fontSize: "13px" }}>
             Build {item.build_id}{item.started_at ? ` · ${timeAgo(item.started_at)}` : ""}
           </Typography>
-          <Typography id={summaryId} color="text.secondary" sx={{ mt: 0.75, fontSize: "13.5px", lineHeight: "20px" }}>
+          <Typography id={summaryId} color="textSecondary" sx={{ mt: 0.75, fontSize: "13.5px", lineHeight: "20px" }}>
             {summary}
           </Typography>
         </Link>
@@ -519,12 +519,12 @@ function BuildFailureRow({ item }: { item: BuildFailureSummary }) {
           }}
         >
           {item.provenance === "cache" && (
-            <Typography color="text.secondary" sx={overviewTypography.description}>
+            <Typography color="textSecondary" sx={overviewTypography.description}>
               Cached analysis
             </Typography>
           )}
           {item.is_transient && severity.toLowerCase() !== "transient" && (
-            <Typography color="info.main" sx={overviewTypography.description}>
+            <Typography color="info" sx={overviewTypography.description}>
               Transient
             </Typography>
           )}
@@ -571,7 +571,7 @@ function EmptyCategory({ title }: { title: string }) {
         textAlign: "center",
       }}
     >
-      <Typography color="text.secondary" sx={overviewTypography.categoryHeading}>
+      <Typography color="textSecondary" sx={overviewTypography.categoryHeading}>
         {title}
       </Typography>
     </Box>
@@ -639,7 +639,7 @@ export function FlakinessPage() {
               <Typography sx={{ ...overviewTypography.data, color: "text.primary" }}>
                 Published results
               </Typography>
-              <Typography color="text.secondary" sx={overviewTypography.description}>
+              <Typography color="textSecondary" sx={overviewTypography.description}>
                 Updated {timeAgo(data.generated_at)}
               </Typography>
             </Box>
@@ -664,10 +664,10 @@ export function FlakinessPage() {
                 <Typography sx={{ ...overviewTypography.data, color: "info.main" }}>
                   {refreshPresentation?.title ?? "Refresh in progress"}
                 </Typography>
-                <Typography color="text.secondary" sx={overviewTypography.description}>
+                <Typography color="textSecondary" sx={overviewTypography.description}>
                   {refreshPresentation?.detail ?? "Preparing the next published snapshot"}
                 </Typography>
-                <Typography color="text.secondary" sx={overviewTypography.description}>
+                <Typography color="textSecondary" sx={overviewTypography.description}>
                   {activeTab === "build_failures"
                     ? "Showing the last published build failures. A new snapshot is currently being prepared."
                     : "Published results remain available until the refresh completes."}
@@ -759,7 +759,7 @@ export function FlakinessPage() {
           metadata={`${activeCount} ${activeCount === 1 ? "item" : "items"}`}
         />
         <Typography
-          color="text.secondary"
+          color="textSecondary"
           sx={{
             px: 1.5,
             py: 1.25,

@@ -382,7 +382,7 @@ export function JobDetailPage() {
         </Typography>
         <Typography
           component="span"
-          color="text.secondary"
+          color="textSecondary"
           sx={{ ml: "auto", ...overviewTypography.data }}
         >
           {gridOpen ? "Hide grid" : "Show grid"}
@@ -448,7 +448,7 @@ export function JobDetailPage() {
         >
           Overview
         </Link>
-        <Typography variant="inherit" color="text.primary" noWrap>
+        <Typography variant="inherit" color="textPrimary" noWrap>
           {displayName}
         </Typography>
       </Breadcrumbs>
@@ -477,7 +477,7 @@ export function JobDetailPage() {
           </Typography>
           <Typography
             component="p"
-            color="text.secondary"
+            color="textSecondary"
             sx={{ m: 0, mt: 0.75, ...overviewTypography.secondaryBody }}
           >
             {lastRun ? `Last run ${timeAgo(lastRun.started)} · ` : ""}
@@ -543,7 +543,7 @@ export function JobDetailPage() {
             <Typography component="h2" sx={overviewTypography.majorHeading}>
               No runs found
             </Typography>
-            <Typography color="text.secondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
+            <Typography color="textSecondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
               This job has no recorded builds in the current window.
             </Typography>
           </Box>
@@ -597,7 +597,7 @@ export function JobDetailPage() {
               ) : (
                 <Typography
                   role="status"
-                  color="text.secondary"
+                  color="textSecondary"
                   sx={{ px: 1.5, py: 3, ...overviewTypography.secondaryBody }}
                 >
                   No executed tests match the current status and text filters.
@@ -614,7 +614,7 @@ export function JobDetailPage() {
                 {emptyTestResults?.kind === "pending" ? (
                   <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 1 }}>
                     <HourglassEmpty sx={{ fontSize: 20, color: "text.secondary" }} />
-                    <Typography color="text.secondary" sx={overviewTypography.secondaryBody}>
+                    <Typography color="textSecondary" sx={overviewTypography.secondaryBody}>
                       {emptyTestResults.detail}
                     </Typography>
                   </Box>
@@ -630,7 +630,7 @@ export function JobDetailPage() {
                         {emptyTestResults?.title ?? "No test cases available"}
                       </Typography>
                     </Box>
-                    <Typography color="text.secondary" sx={overviewTypography.secondaryBody}>
+                    <Typography color="textSecondary" sx={overviewTypography.secondaryBody}>
                       {emptyTestResults?.detail ?? "No test cases are available for this run."}
                     </Typography>
                     {selectedRun.build_log_url && (

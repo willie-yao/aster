@@ -64,12 +64,12 @@ export function RunMetadata({
               borderInlineStartColor: "var(--mui-palette-divider)",
             }}
           >
-            <Typography component="div" color="text.secondary" sx={overviewTypography.tableHeading}>
+            <Typography component="div" color="textSecondary" sx={overviewTypography.tableHeading}>
               {item.label}
             </Typography>
             <Typography
               component="div"
-              color="text.primary"
+              color="textPrimary"
               sx={{ mt: 0.25, ...overviewTypography.data, overflowWrap: "anywhere" }}
             >
               {item.value}

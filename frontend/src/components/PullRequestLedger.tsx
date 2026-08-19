@@ -90,7 +90,7 @@ function TitleCell({ pull }: { pull: PullRequestSummary }) {
       </Typography>
       <Typography
         variant="caption"
-        color="text.secondary"
+        color="textSecondary"
         sx={{
           display: "block",
           mt: 0.25,
@@ -110,10 +110,10 @@ function TitleCell({ pull }: { pull: PullRequestSummary }) {
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <Box sx={{ display: "inline-flex", alignItems: "baseline", gap: 0.5 }}>
-      <Typography variant="caption" component="span" color="text.secondary" sx={overviewTypography.description}>
+      <Typography variant="caption" component="span" color="textSecondary" sx={overviewTypography.description}>
         {label}
       </Typography>
-      <Typography variant="data" component="span" color="text.primary" sx={overviewTypography.data}>
+      <Typography variant="data" component="span" color="textPrimary" sx={overviewTypography.data}>
         {value}
       </Typography>
     </Box>
@@ -153,7 +153,7 @@ function DesktopRow({ pull }: { pull: PullRequestSummary }) {
       <Typography
         role="cell"
         variant="data"
-        color="text.secondary"
+        color="textSecondary"
         title={pull.base_ref}
         sx={{ gridArea: "base", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", ...overviewTypography.data }}
       >
@@ -165,12 +165,12 @@ function DesktopRow({ pull }: { pull: PullRequestSummary }) {
       <Typography
         role="cell"
         variant="data"
-        color={pull.checks_failing > 0 ? "error.main" : "text.secondary"}
+        color={pull.checks_failing > 0 ? "error" : "textSecondary"}
         sx={{ gridArea: "failing", ...overviewTypography.data }}
       >
         {failingValue(pull)}
       </Typography>
-      <Typography role="cell" variant="data" color="text.secondary" sx={{ gridArea: "updated", ...overviewTypography.data }}>
+      <Typography role="cell" variant="data" color="textSecondary" sx={{ gridArea: "updated", ...overviewTypography.data }}>
         {timeAgo(pull.updated_at)}
       </Typography>
       <Box role="cell" sx={{ gridArea: "state", justifySelf: "end" }}>
@@ -242,7 +242,7 @@ export function PullRequestLedger({ pulls }: { pulls: PullRequestSummary[] }) {
             <Typography
               key={header}
               role="columnheader"
-              color="text.secondary"
+              color="textSecondary"
               sx={{
                 ...overviewTypography.tableHeading,
                 justifySelf: index === headers.length - 1 ? "end" : "start",

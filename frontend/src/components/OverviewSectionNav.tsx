@@ -54,7 +54,7 @@ export function OverviewSectionNav() {
         bgcolor: "surface.container",
       }}
     >
-      <Typography variant="label" color="text.secondary" sx={{ mr: 0.5, ...overviewTypography.description }}>
+      <Typography variant="label" color="textSecondary" sx={{ mr: 0.5, ...overviewTypography.description }}>
         Jump to
       </Typography>
       {sections.map((section) => (

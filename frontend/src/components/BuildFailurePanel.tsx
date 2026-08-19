@@ -124,7 +124,7 @@ export function BuildFailurePanel({
           <Typography sx={overviewTypography.subsectionHeading}>
             {stateText[pendingState].title}
           </Typography>
-          <Typography color="text.secondary" sx={overviewTypography.secondaryBody}>
+          <Typography color="textSecondary" sx={overviewTypography.secondaryBody}>
             {stateText[pendingState].detail}
           </Typography>
         </Box>
@@ -151,7 +151,7 @@ export function BuildFailurePanel({
         </Link>
       )}
       {telemetry.length > 0 && (
-        <Typography color="text.secondary" sx={overviewTypography.data}>
+        <Typography color="textSecondary" sx={overviewTypography.data}>
           {telemetry.join(" · ")}
         </Typography>
       )}

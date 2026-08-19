@@ -70,7 +70,7 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
           id="job-health-heading"
           variant="label"
           component="h2"
-          color="text.secondary"
+          color="textSecondary"
           sx={overviewTypography.subsectionHeading}
         >
           Reliability over the last 10 runs
@@ -125,7 +125,7 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
                 </Typography>
                 {active && <Check aria-hidden="true" sx={{ fontSize: 15, color: "primary.main" }} />}
               </Box>
-              <Typography variant="data" component="span" color="text.secondary" sx={overviewTypography.data}>
+              <Typography variant="data" component="span" color="textSecondary" sx={overviewTypography.data}>
                 {percentage}% of jobs
               </Typography>
             </Box>

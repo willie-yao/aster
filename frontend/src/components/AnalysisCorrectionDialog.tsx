@@ -29,19 +29,19 @@ export function AnalysisCorrectionDialog({ preview, open, busy, error, onClose, 
       </DialogTitle>
       <DialogContent>
         {error && <Alert severity="error" variant="outlined" sx={{ mb: 2 }}>{error}</Alert>}
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
           This publishes a dashboard overlay. The original generated analysis remains preserved and can be restored.
         </Typography>
         <Stack spacing={2}>
           <Box>
-            <Typography variant="label" color="text.secondary">Original root cause</Typography>
+            <Typography variant="label" color="textSecondary">Original root cause</Typography>
             <Typography variant="body2" sx={{ mt: 0.5, whiteSpace: "pre-line" }}>{preview.original.root_cause}</Typography>
           </Box>
           <Box sx={{ border: "1px solid", borderColor: (theme) => soft(theme, "warning", 0.4), bgcolor: (theme) => soft(theme, "warning", 0.07), borderRadius: "10px", p: 1.5 }}>
-            <Typography variant="label" color="warning.main">Corrected root cause</Typography>
+            <Typography variant="label" color="warning">Corrected root cause</Typography>
             <Typography variant="body2" sx={{ mt: 0.5, whiteSpace: "pre-line" }}>{preview.proposed.root_cause}</Typography>
             <Divider sx={{ my: 1.5 }} />
-            <Typography variant="label" color="warning.main">Corrected remediation</Typography>
+            <Typography variant="label" color="warning">Corrected remediation</Typography>
             <Typography variant="body2" sx={{ mt: 0.5, whiteSpace: "pre-line" }}>{preview.proposed.suggested_fix}</Typography>
           </Box>
           <Box>
@@ -51,7 +51,7 @@ export function AnalysisCorrectionDialog({ preview, open, busy, error, onClose, 
             </Stack>
             <Stack spacing={0.75}>
               {preview.citations.map((citation, index) => (
-                <Typography key={`${citation.path}-${index}`} variant="caption" color="text.secondary" sx={{ fontFamily: "monospace" }}>
+                <Typography key={`${citation.path}-${index}`} variant="caption" color="textSecondary" sx={{ fontFamily: "monospace" }}>
                   {citation.path}{citation.line_start ? `, line ${citation.line_start}` : ""}: {citation.quote}
                 </Typography>
               ))}

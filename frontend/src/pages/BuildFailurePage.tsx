@@ -69,13 +69,13 @@ export function BuildFailurePage() {
         aria-label="Breadcrumb"
         sx={{ display: { xs: "none", sm: "flex" }, ...overviewTypography.description }}
       >
-        <Link component={RouterLink} to="/" underline="none" color="text.secondary">
+        <Link component={RouterLink} to="/" underline="none" color="textSecondary">
           Overview
         </Link>
-        <Link component={RouterLink} to={jobDestination} underline="none" color="text.secondary">
+        <Link component={RouterLink} to={jobDestination} underline="none" color="textSecondary">
           {displayName}
         </Link>
-        <Typography color="text.primary" noWrap>
+        <Typography color="textPrimary" noWrap>
           Build {buildId ?? "failure"}
         </Typography>
       </Breadcrumbs>
@@ -100,7 +100,7 @@ export function BuildFailurePage() {
           <Typography component="h1" sx={overviewTypography.majorHeading}>
             Build failure not found
           </Typography>
-          <Typography color="text.secondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
+          <Typography color="textSecondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
             The requested build failure is not present in the current window.
           </Typography>
         </Box>
@@ -150,7 +150,7 @@ export function BuildFailurePage() {
         </Typography>
         <Typography
           component="p"
-          color="text.secondary"
+          color="textSecondary"
           sx={{ m: 0, mt: 0.75, ...overviewTypography.secondaryBody }}
         >
           Failed before JUnit results

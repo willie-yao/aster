@@ -72,14 +72,14 @@ function IdentityRows({ items }: { items: TechnicalIdentityItem[] }) {
         >
           <Typography
             component="span"
-            color="text.secondary"
+            color="textSecondary"
             sx={{ ...overviewTypography.tableHeading, gridColumn: { xs: "1 / -1", sm: "auto" } }}
           >
             {item.label}
           </Typography>
           <Typography
             component="code"
-            color="text.primary"
+            color="textPrimary"
             sx={{ ...overviewTypography.data, overflowWrap: "anywhere" }}
           >
             {item.value}

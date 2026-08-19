@@ -118,7 +118,7 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
   if (runs.length === 0 || gridRows.length === 0) {
     return (
       <Panel sx={{ border: 0, borderRadius: 0, p: 3, textAlign: "center" }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" color="textSecondary">
           {runs.length === 0
             ? "No runs available."
             : "All tests passed across all runs; nothing to display."}
@@ -140,7 +140,7 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
           textAlign: "center",
         }}
       >
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" color="textSecondary">
           Choose a failed test from the Test results section below. View on desktop for the full comparison grid.
         </Typography>
       </Panel>
@@ -166,7 +166,7 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
             borderColor: "divider",
           }}
         >
-          <Typography role="status" color="text.secondary" sx={{ fontSize: "0.75rem" }}>
+          <Typography role="status" color="textSecondary" sx={{ fontSize: "0.75rem" }}>
             {summary}
           </Typography>
           <Box sx={{ ml: "auto", display: "flex", flexWrap: "wrap", gap: 1 }}>

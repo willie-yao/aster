@@ -153,7 +153,7 @@ export function RunHistory({
                 </Tooltip>
                 <Typography
                   component="span"
-                  color="text.secondary"
+                  color="textSecondary"
                   sx={{
                     mt: 0.75,
                     visibility: showDate ? "visible" : "hidden",
@@ -172,7 +172,7 @@ export function RunHistory({
       {selectedRun && (
         <Typography
           component="div"
-          color="text.secondary"
+          color="textSecondary"
           sx={{
             px: 1.5,
             py: 0.75,

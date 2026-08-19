@@ -55,7 +55,7 @@ export function DetailSectionBand({
       {metadata && (
         <Typography
           component="div"
-          color="text.secondary"
+          color="textSecondary"
           sx={{
             gridArea: "metadata",
             minWidth: 0,

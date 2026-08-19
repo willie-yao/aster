@@ -15,7 +15,7 @@ import { overviewTypography } from "../theme/overview";
 export function UpstreamCauseNotice({ location }: { location: AnalysisCauseLocation }) {
   return (
     <Box sx={{ mt: 1 }}>
-      <Typography color="text.secondary" sx={overviewTypography.description}>
+      <Typography color="textSecondary" sx={overviewTypography.description}>
         The cause is in{" "}
         <Link href={`https://github.com/${location.repository}`} target="_blank" rel="noopener noreferrer">
           {location.repository}
@@ -25,7 +25,7 @@ export function UpstreamCauseNotice({ location }: { location: AnalysisCauseLocat
         rather than the upstream change itself.
       </Typography>
       {location.files && location.files.length > 0 && (
-        <Typography color="text.secondary" sx={{ mt: 0.5, ...overviewTypography.description }}>
+        <Typography color="textSecondary" sx={{ mt: 0.5, ...overviewTypography.description }}>
           Reported location, unverified because Aster reads source only at the revision this project
           pinned:{" "}
           {location.files.map((file, index) => (

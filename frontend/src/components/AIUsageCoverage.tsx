@@ -39,7 +39,7 @@ function CoverageItem({ label, children }: { label: string; children: ReactNode 
         "&:not(:nth-of-type(3n + 1))": { borderInlineStart: { md: "1px solid" }, borderInlineStartColor: { md: "divider" } },
       }}
     >
-      <Typography color="text.secondary" sx={overviewTypography.tableHeading}>{label}</Typography>
+      <Typography color="textSecondary" sx={overviewTypography.tableHeading}>{label}</Typography>
       <Box sx={{ mt: 0.25, color: "text.primary", ...overviewTypography.data, overflowWrap: "anywhere" }}>{children}</Box>
     </Box>
   );
@@ -122,7 +122,7 @@ function AboutCoverage({ data }: { data: AIUsageReport }) {
           </Typography>
           {states.length > 0 && (
             <Box>
-              <Typography color="text.secondary" sx={overviewTypography.tableHeading}>Coverage states</Typography>
+              <Typography color="textSecondary" sx={overviewTypography.tableHeading}>Coverage states</Typography>
               <Box component="ul" sx={{ my: 0.5, pl: 2.5, color: "text.secondary", ...overviewTypography.description }}>
                 {states.map((state) => <li key={state}>{coverageStateLabel(state)}</li>)}
               </Box>

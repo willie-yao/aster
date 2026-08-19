@@ -140,17 +140,17 @@ function AttributionBanner({
         >
           {attributionLabel(attribution.verdict)}
         </Typography>
-        <Typography component="span" color="text.secondary" sx={overviewTypography.description}>
+        <Typography component="span" color="textSecondary" sx={overviewTypography.description}>
           {attribution.confidence} confidence
         </Typography>
       </Box>
-      <Typography color="text.primary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
+      <Typography color="textPrimary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
         {attribution.summary}
       </Typography>
       {attribution.evidence?.map((item, index) => (
         <Typography
           key={`${item.kind}-${index}`}
-          color="text.secondary"
+          color="textSecondary"
           sx={{ mt: 0.5, ...overviewTypography.description }}
         >
           {item.detail}
@@ -441,7 +441,7 @@ function CheckCard({
             {check.stale && <StaleBadge />}
             {check.optional && <OptionalBadge />}
           </Box>
-          <Typography color="text.secondary" sx={{ mt: 0.25, ...overviewTypography.description }}>
+          <Typography color="textSecondary" sx={{ mt: 0.25, ...overviewTypography.description }}>
             {checkSummaryLine(check)} · build {check.build_id} · {checkDuration(check)}
             {check.tested_sha ? ` · ${shortSHA(check.tested_sha)}` : ""}
           </Typography>
@@ -477,7 +477,7 @@ function CheckCard({
 
       {check.failures_truncated && (
         <Typography
-          color="text.secondary"
+          color="textSecondary"
           sx={{ px: { xs: 1.5, sm: 2 }, py: 1, borderTop: "1px solid", borderColor: "divider", ...overviewTypography.description }}
         >
           Showing the first {failures.length} of {check.tests_failed} failing tests.
@@ -515,7 +515,7 @@ function ChecksSection({
       <Box component="section" sx={{ minWidth: 0, bgcolor: "surface.container" }}>
         <DetailSectionBand title="Presubmit checks" metadata="None observed" />
         <Box sx={{ px: { xs: 1.5, sm: 2 }, py: 3, borderTop: "1px solid", borderColor: "divider" }}>
-          <Typography color="text.secondary" sx={overviewTypography.secondaryBody}>
+          <Typography color="textSecondary" sx={overviewTypography.secondaryBody}>
             No presubmit builds were found for this pull request. Prow removes build
             artifacts after its retention window, so GitHub may still show statuses
             for runs whose artifacts are gone.
@@ -573,13 +573,13 @@ export function PullRequestDetailPage() {
         aria-label="Breadcrumb"
         sx={{ display: { xs: "none", sm: "flex" }, ...overviewTypography.description }}
       >
-        <Link component={RouterLink} to="/" underline="none" color="text.secondary">
+        <Link component={RouterLink} to="/" underline="none" color="textSecondary">
           Overview
         </Link>
-        <Link component={RouterLink} to={pullRequestsPath()} underline="none" color="text.secondary">
+        <Link component={RouterLink} to={pullRequestsPath()} underline="none" color="textSecondary">
           Pull requests
         </Link>
-        <Typography color="text.primary" noWrap>
+        <Typography color="textPrimary" noWrap>
           #{number}
         </Typography>
       </Breadcrumbs>
@@ -631,7 +631,7 @@ export function PullRequestDetailPage() {
             sx={{ height: 26, fontSize: "13px" }}
           />
         </Box>
-        <Typography component="p" color="text.secondary" sx={{ m: 0, mt: 0.75, ...overviewTypography.secondaryBody }}>
+        <Typography component="p" color="textSecondary" sx={{ m: 0, mt: 0.75, ...overviewTypography.secondaryBody }}>
           {data.repo} #{data.number}
           {data.author ? ` opened by ${data.author}` : ""}
           {" · "}
