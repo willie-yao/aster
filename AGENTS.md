@@ -290,6 +290,11 @@ wrong; otherwise leave it alone so warm caches survive engine upgrades. See
 - **Logging:** `log.Printf` with a leading emoji/icon and the test or job
   identifier. See `service.go` for the canonical patterns
   (`🔍 Analyzing:`, `⏭ Skipping transient:`).
+- **`docs/` is for users, not design history.** Document current behavior and
+  how to use it. Do not add decision records, rationale for alternatives that
+  were considered and rejected, or migration narratives - those belong in the
+  issue or pull request. A change that only records a decision needs no docs
+  update at all.
 - **No new linting/build/test tools** without a strong reason. CI is
   intentionally minimal; staticcheck is run locally.
 

@@ -9,6 +9,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link as RouterLink, useLocation } from "react-router-dom";
 import { useResolved } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
+import { useAuth } from "../hooks/useAuth";
+import { useCapabilities } from "../hooks/useCapabilities";
 import {
   attentionGroupNoun,
   attentionGroups,
@@ -20,6 +22,7 @@ import {
   passRateSummary,
   persistOverviewHistoryState,
   readOverviewHistoryState,
+  unlistedDismissals,
   type AttentionGroup,
 } from "../lib/dashboardOverview";
 import { jobPath, testPath, testRunPath } from "../lib/routes";
@@ -31,8 +34,10 @@ import type {
   JobSummary,
   LowPassRateEntry,
   PatternAnalysis,
+  ResolvedEntry,
   TestFlakiness,
 } from "../types/dashboard";
+import { FailureActions } from "./FailureActions";
 import { Sparkline } from "./Sparkline";
 import { overviewLayout, overviewTypography } from "../theme/overview";
 
@@ -526,6 +531,116 @@ export function AttentionRow({
   );
 }
 
+// UnlistedDismissalRow renders a dismissal whose pattern has left the active
+// recurring set. The marker is retained deliberately, but the overview stops
+// showing the pattern, so this is the overview's restore path for it. It is the
+// only one for a pattern that aged out entirely.
+//
+// The row does not navigate: resolved.json records no job, and the overview
+// cannot tell whether the pattern is still published on a job page, so it has
+// no destination it can promise. That also keeps it out of AttentionRow, which
+// wraps the whole row in a link and would nest a button inside one.
+export function UnlistedDismissalRow({
+  failureID,
+  entry,
+  filePrefix,
+  onRestored,
+}: {
+  failureID: string;
+  entry: ResolvedEntry;
+  filePrefix: string;
+  onRestored: () => void;
+}) {
+  const subject = entry.subject ? shortJobName(entry.subject, filePrefix) : failureID;
+  const attribution = entry.resolved_by
+    ? `Dismissed by ${entry.resolved_by}`
+    : "Dismissed";
+  return (
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1fr)",
+        gridTemplateAreas: '"subject" "summary" "signal"',
+        alignItems: "center",
+        columnGap: 1.5,
+        rowGap: 0.5,
+        [attentionDesktopBreakpoint]: {
+          gridTemplateColumns: "minmax(210px, 1fr) minmax(280px, 2fr) 170px",
+          gridTemplateAreas: '"subject summary signal"',
+          rowGap: 0,
+        },
+        minHeight: 48,
+        px: 1,
+        py: 0.75,
+        borderTop: "1px solid",
+        borderColor: "divider",
+        borderRadius: "2px",
+      }}
+    >
+      <Typography
+        component="span"
+        title={subject}
+        sx={{
+          gridArea: "subject",
+          minWidth: 0,
+          // Muting is applied per text element rather than to the row, so the
+          // Restore control keeps full contrast and the note, already
+          // text.secondary, is not dimmed twice.
+          opacity: 0.72,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          ...overviewTypography.jobIdentifier,
+        }}
+      >
+        {subject}
+      </Typography>
+      <Box sx={{ gridArea: "summary", minWidth: 0 }}>
+        <Typography
+          variant="body2"
+          component="span"
+          sx={{ display: "block", opacity: 0.72, ...overviewTypography.secondaryBody }}
+        >
+          {attribution}. Its pattern is no longer among the active recurring failures.
+        </Typography>
+        {entry.note && (
+          <Typography
+            variant="caption"
+            component="span"
+            color="text.secondary"
+            title={entry.note}
+            sx={{
+              display: "block",
+              mt: 0.25,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              ...overviewTypography.description,
+            }}
+          >
+            {entry.note}
+          </Typography>
+        )}
+      </Box>
+      <Box
+        sx={{
+          gridArea: "signal",
+          display: "flex",
+          [attentionDesktopBreakpoint]: { justifyContent: "flex-end" },
+        }}
+      >
+        <FailureActions
+          failureID={failureID}
+          draftable={false}
+          dismissible={false}
+          isResolved
+          onResolvedChange={onRestored}
+        />
+      </Box>
+    </Box>
+  );
+}
+
 export function NeedsAttention({
   report,
   loading,
@@ -534,7 +649,10 @@ export function NeedsAttention({
 }: NeedsAttentionProps) {
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
-  const { data: resolved } = useResolved();
+  const { data: resolved, refetch: refetchResolved } = useResolved();
+  const { features } = useCapabilities();
+  const { status } = useAuth();
+  const canRestoreDismissals = Boolean(features.actions) && status === "authenticated";
   const location = useLocation();
   const [additionalOpen, setAdditionalOpen] = useState(
     () => readOverviewHistoryState(typeof window === "undefined" ? undefined : window.history.state).additionalOpen,
@@ -572,6 +690,13 @@ export function NeedsAttention({
           pattern.id && resolved.resolved[pattern.id],
       ),
     [report, resolved],
+  );
+
+  // Dismissals whose pattern has left the active recurring set. The overview
+  // stops showing them, so without this it offers no way to restore one.
+  const unlisted = useMemo(
+    () => unlistedDismissals(report, resolved, canRestoreDismissals),
+    [canRestoreDismissals, report, resolved],
   );
 
   const groups = useMemo<AttentionGroup[]>(
@@ -823,12 +948,12 @@ export function NeedsAttention({
         </>
       )}
 
-      {report && resolvedPatterns.length > 0 && (
+      {report && (resolvedPatterns.length > 0 || unlisted.length > 0) && (
         <Box component="section">
           <DisclosureButton
             label={disclosureLabel(
               resolvedOpen,
-              resolvedPatterns.length,
+              resolvedPatterns.length + unlisted.length,
               "dismissed pattern",
               "dismissed patterns",
             )}
@@ -853,6 +978,15 @@ export function NeedsAttention({
                 />
               );
             })}
+            {unlisted.map(([id, entry]) => (
+              <UnlistedDismissalRow
+                key={id}
+                failureID={id}
+                entry={entry}
+                filePrefix={filePrefix}
+                onRestored={refetchResolved}
+              />
+            ))}
           </Collapse>
         </Box>
       )}
