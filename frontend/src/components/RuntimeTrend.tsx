@@ -61,11 +61,15 @@ export function RuntimeTrend({ summary, subject, runHref }: RuntimeTrendProps) {
   const chart = pathFor(values, width, height, inset);
   const max = Math.max(...values, 1);
   // The chart stretches to its container and the run count is consumer-tuned,
-  // so the target shrinks with the spacing rather than overlapping its
-  // neighbours and capturing their clicks.
+  // so the target scales with the spacing and can never overlap its
+  // neighbours. The scroll container below keeps that spacing usable by
+  // holding a per-sample minimum width rather than compressing the plot.
   const spacing =
     values.length > 1 ? (width - inset * 2) / (values.length - 1) : width;
-  const hitRadius = Math.min(17, spacing / 2);
+  const hitRadius = Math.min(17, spacing * 0.45);
+  // Matches the fixed per-run width RunHistory reserves directly above this
+  // chart, so a long history scrolls instead of shrinking its targets.
+  const minChartWidth = Math.max(values.length * 32, 320);
   const referenceY = (value: number) =>
     inset + (height - inset * 2) - (value / max) * (height - inset * 2);
   const latestIndex = summary.points.length - 1;
@@ -101,13 +105,14 @@ export function RuntimeTrend({ summary, subject, runHref }: RuntimeTrendProps) {
         </Typography>
       ) : (
         <Stack spacing={1} sx={{ px: 1.5, py: 1.5 }}>
+          <Box sx={{ width: "100%", minWidth: 0, overflowX: "auto", overflowY: "hidden" }}>
           <Box
             component="svg"
             viewBox={`0 0 ${width} ${height}`}
             // Deliberately not an image role: that would make the chart atomic
             // and hide the per-run links inside it from assistive technology.
             aria-label={`${subject} runtime history. ${summaryText}`}
-            sx={{ width: "100%", height: "auto", minHeight: 140 }}
+            sx={{ width: "100%", minWidth: minChartWidth, height: "auto", minHeight: 140 }}
           >
             <title>{`${subject} runtime history. ${summaryText}`}</title>
             {summary.medianSeconds !== null && (
@@ -168,6 +173,10 @@ export function RuntimeTrend({ summary, subject, runHref }: RuntimeTrendProps) {
                       cx={point.x}
                       cy={point.y}
                       r={outlier ? 6 : 4}
+                      // The transparent target above owns the hit area, so a
+                      // large outlier marker cannot reach past it into the
+                      // neighbouring run's target.
+                      pointerEvents="none"
                       fill={
                         sample.passed
                           ? "var(--mui-palette-success-main)"
@@ -184,6 +193,7 @@ export function RuntimeTrend({ summary, subject, runHref }: RuntimeTrendProps) {
                 </Tooltip>
               );
             })}
+          </Box>
           </Box>
           <Box
             sx={{

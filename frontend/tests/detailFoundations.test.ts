@@ -442,10 +442,46 @@ test("runtime targets shrink with the spacing so they never capture a neighbour'
 
     assert.ok(radius > 0, `hit radius must be positive at ${count} points`);
     assert.ok(
-      radius * 2 <= gap + 0.001,
+      radius * 2 < gap,
       `at ${count} points the ${radius} radius target overlaps its neighbour ${gap} away`,
     );
+
+    // Read the reserve the component actually emits rather than recomputing it,
+    // so removing the floor fails here. Without it a 40-run window puts centres
+    // ~10px apart in a narrow rail and WCAG 2.5.8 spacing fails.
+    const emitted = /min-width:(\d+)px;/u.exec(html);
+    assert.ok(emitted, `expected a minimum chart width at ${count} points`);
+    const scale = Number(emitted[1]) / 720;
+    assert.ok(
+      gap * scale >= 24,
+      `at ${count} points the CSS spacing ${(gap * scale).toFixed(1)}px falls under 24px`,
+    );
   }
+
+  // The visible marker must never own the hit area: an outlier is drawn larger
+  // than the target at long histories and would otherwise reach into its
+  // neighbour.
+  const html = render(
+    createElement(
+      MemoryRouter,
+      null,
+      createElement(RuntimeTrend, {
+        summary: {
+          points: Array.from({ length: 40 }, (_, index) => sample(index)),
+          sampleCount: 40,
+          medianSeconds: 10,
+          p95Seconds: 10,
+          madSeconds: 0,
+          direction: "stable",
+          changeRatio: 0,
+          latestOutlier: true,
+        },
+        subject: "Unit tests",
+        runHref: (id: string) => `/job/capz-e2e?run=${id}`,
+      }),
+    ),
+  );
+  assert.match(html, /pointer-events="none"/);
 });
 
 test("mobile usage day disclosure names the accounting summary", () => {
