@@ -35,6 +35,17 @@ Do not add project-specific consumer configuration to this engine repository.
 Use a conventional, single-line commit subject. Put the detailed rationale and
 verification commands in the pull request description.
 
-Breaking changes to `project.yaml`, reusable workflow inputs, or published JSON
-need an entry under `CHANGELOG.md` `[Unreleased]`. Pure documentation corrections
-do not.
+Every pull request needs a `release-note` block in its description. The block is
+published verbatim in the release notes, so write it for someone upgrading
+Aster: what changed, and what it means for them. Multiple paragraphs are fine
+and often right. Call out breaking changes to `project.yaml`, reusable workflow
+inputs, or the published JSON explicitly.
+
+    ```release-note
+    Fix generation resolves its base from the failure's own branch, so a failure
+    on a release branch no longer opens a pull request against the default one.
+    ```
+
+Write `NONE` when the change has no effect a user would notice: tests,
+refactors, repo tooling, or documentation corrections. CI rejects a pull request
+whose description carries no block.

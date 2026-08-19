@@ -23,13 +23,24 @@ already published. Do not document `@v1` as usable until `v1.0.0` exists.
 See [CHANGELOG.md](../CHANGELOG.md) for what bumps major/minor/patch. Note that
 internal critique-version bumps and stronger investigation floors can force
 re-analysis on upgrade and are therefore at least a minor bump; call them out in
-the changelog.
+the release notes.
+
+## Release notes
+
+Each release has one notes file named for its tag, `changelog/<tag>.md`, listed
+in the `CHANGELOG.md` index. The file holds the notes body alone, without a
+version heading of its own.
+
+Notes are assembled from the `release-note` blocks of the pull requests merged
+since the previous tag. A prerelease covers everything since the previous tag; a
+stable release covers everything since the previous *stable* tag, so it tells the
+whole story of the versions that led up to it.
 
 ## Cutting a release
 
-1. Make sure `main` is green and the `## [Unreleased]` section of
-   `CHANGELOG.md` is up to date. Rename it to the version being released and add
-   a fresh `## [Unreleased]` above it.
+1. Make sure `main` is green. Write `changelog/<tag>.md` from the `release-note`
+   blocks merged since the previous tag, and add the release to the index in
+   `CHANGELOG.md`.
 2. Create the root and nested-module tags at the same reviewed commit, then
    push both without force:
    ```bash

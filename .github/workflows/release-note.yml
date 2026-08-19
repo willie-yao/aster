@@ -1,0 +1,31 @@
+name: Release note
+
+# The release-note block in a pull request body is the source of that change's
+# published release notes, so it is required before merge. Editing a description
+# does not fire `synchronize`, hence the explicit `edited` type.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-note-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test the release-note parser
+        run: python3 hack/check-release-note.py --self-test
+
+      - name: Check the release note
+        env:
+          # Read through the environment so the body is never interpolated into
+          # the shell.
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 hack/check-release-note.py --body-env PR_BODY
