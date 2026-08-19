@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "cases": [
     {
       "id": "secrets-store-csi-image-scan",
@@ -298,14 +298,19 @@
         }
       ],
       "evidence_mode": "artifact_and_source",
-      "source_paths": [
-        "test/k8s-integration/main.go"
-      ],
       "source_signals": [
         {
           "name": "identifies Windows snapshot test selection gap",
           "pattern": "(?is)(?:(?:GCE|Windows).{0,100}(?:skip|filter|selection).{0,180}(?:only|just).{0,80}(?:\\\\?\\[?LinuxOnly\\\\?\\]?|LinuxOnly)|(?:\\\\?\\[?LinuxOnly\\\\?\\]?|LinuxOnly).{0,180}(?:only|just).{0,100}(?:GCE|Windows)).{0,280}(?:snapshot|filesystem.?size|VolumeSnapshotDataSource)",
           "must": true
+        }
+      ],
+      "expected_source_ranges": [
+        {
+          "repository": "kubernetes-sigs/gcp-compute-persistent-disk-csi-driver",
+          "path": "test/k8s-integration/main.go",
+          "line_start": 638,
+          "line_end": 671
         }
       ]
     }

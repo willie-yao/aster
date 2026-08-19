@@ -115,16 +115,17 @@ type benchCase struct {
 	projectSHA256       string
 	promptSHA256        string
 	signals             []benchSignal
-	sourcePaths         []string
+	sourceRanges        []benchmarkSourceRange
 	sourceSignals       []benchSignal
 	// causeRepository is the "owner/repo" a correct analysis must hold
 	// responsible, and causeExternal whether that repository is a dependency
 	// rather than the project under test. Set both to score how reliably the
 	// model distinguishes an own-repo cause from an upstream one. causeFiles are
 	// paths the reported location must contain.
-	causeRepository      string
-	causeExternal        bool
-	causeFiles           []string
+	causeRepository string
+	causeExternal   bool
+	causeFiles      []string
+
 	evidenceGroups       []benchmarkEvidenceGroup
 	oracleEvidenceSHA256 string
 }
@@ -140,17 +141,22 @@ func validBenchmarkEvidenceMode(value string) bool {
 
 func benchmarkSourceExpectationSHA256(bc benchCase) string {
 	var input strings.Builder
-	for _, path := range bc.sourcePaths {
-		fmt.Fprintf(&input, "path\x00%s\n", path)
+	for _, value := range bc.sourceRanges {
+		fmt.Fprintf(&input, "range\x00%s\x00%s\x00%s\x00%d\x00%d\n", value.Repository, value.Revision, value.Path, value.LineStart, value.LineEnd)
 	}
 	for _, signal := range bc.sourceSignals {
-		negative := ""
-		if signal.negated != nil {
-			negative = signal.negated.String()
-		}
-		fmt.Fprintf(&input, "signal\x00%s\x00%s\x00%s\x00%t\n", signal.name, signal.re.String(), negative, signal.must)
+		fmt.Fprintf(&input, "signal\x00%s\x00%s\x00%s\n", signal.name, signal.re.String(), func() string {
+			if signal.negated == nil {
+				return ""
+			}
+			return signal.negated.String()
+		}())
 	}
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(input.String())))
+	if input.Len() == 0 {
+		return strings.Repeat("0", 64)
+	}
+	sum := sha256.Sum256([]byte(input.String()))
+	return fmt.Sprintf("%x", sum[:])
 }
 
 type benchmarkOutcome string
@@ -458,6 +464,22 @@ func TestBenchmarkToolRegistryIncludesSourceTools(t *testing.T) {
 	}
 }
 
+func validateScoredBenchmarkTraceEnvironment(resultsPath string, getenv func(string) string) error {
+	if strings.TrimSpace(resultsPath) != "" && strings.TrimSpace(getenv("AGENTIC_TRACE_TOOLS")) != "" {
+		return fmt.Errorf("AGENTIC_TRACE_TOOLS must be unset for scored benchmark execution")
+	}
+	return nil
+}
+
+func TestValidateScoredBenchmarkTraceEnvironment(t *testing.T) {
+	if err := validateScoredBenchmarkTraceEnvironment("results.jsonl", func(string) string { return "1" }); err == nil {
+		t.Fatal("scored benchmark accepted raw tool tracing")
+	}
+	if err := validateScoredBenchmarkTraceEnvironment("", func(string) string { return "1" }); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAIBenchmark(t *testing.T) {
 	if os.Getenv("RUN_AI_BENCHMARK") == "" {
 		t.Skip("set RUN_AI_BENCHMARK=1 (plus AI_ENDPOINT/AI_MODEL) to run the AI quality benchmark")
@@ -505,6 +527,9 @@ func TestAIBenchmark(t *testing.T) {
 	}
 	repetitionStart := benchmarkRepetitionStart(t)
 	resultsPath := strings.TrimSpace(os.Getenv("BENCH_RESULTS_JSONL"))
+	if err := validateScoredBenchmarkTraceEnvironment(resultsPath, os.Getenv); err != nil {
+		t.Fatal(err)
+	}
 	for _, bc := range cases {
 		bc := bc
 		for index := 0; index < repetitions; index++ {
@@ -758,6 +783,10 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		})
 	})
 	service.SetDraftSelectionObserver(func(attempt int) { selectedAttempt = attempt })
+	var sourceObservations []ai.SourceEvidenceObservation
+	service.SetSourceEvidenceObserver(func(observation ai.SourceEvidenceObservation) {
+		sourceObservations = append(sourceObservations, observation)
+	})
 
 	// Scored comparisons use the exact frozen model window. Unscored local runs
 	// retain endpoint detection and the bounded fallback.
@@ -795,6 +824,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 
 	snapshot := traceStore.Snapshot()
 	toolUsage := successfulBenchmarkToolUsage(snapshot)
+	toolUsage.sourceObservations = append([]ai.SourceEvidenceObservation(nil), sourceObservations...)
 	traceSummary := summarizeBenchmarkTrace(snapshot)
 	requestCap := deriveBenchmarkRequestCap(agentic, true)
 	t.Logf("provider request cap: configured_iterations=%d byte_floor_extensions=%d main_loop=%d forced_finalizations=%d critique_tool_turns=%d critique_finalizations=%d semantic_judges=%d semantic_finalizations=%d semantic_revision_reviews=%d per_operation=%d",
@@ -969,8 +999,9 @@ type benchmarkDraftScore struct {
 }
 
 type benchmarkToolUsage struct {
-	names  []string
-	counts []string
+	names              []string
+	counts             []string
+	sourceObservations []ai.SourceEvidenceObservation
 }
 
 type benchmarkTraceSummary struct {

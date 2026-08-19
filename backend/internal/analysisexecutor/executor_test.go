@@ -1824,7 +1824,6 @@ func TestWriteOpenCodeConfigUsesNativeResponsesProvider(t *testing.T) {
 	}
 }
 
-
 func TestRunOpenCodePhasesRecoversPersistedEvidenceAfterLocalEOF(t *testing.T) {
 	workDir := t.TempDir()
 	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
@@ -2075,6 +2074,8 @@ func TestOpenCodeProcessTrackerRecordsSignal(t *testing.T) {
 		t.Fatalf("state=%s known=%t signal=%s", state, known, signal)
 	}
 
+}
+
 func TestWriteOpenCodeConfigSetsCopilotIntegrationHeader(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
@@ -2103,6 +2104,4 @@ func TestWriteOpenCodeConfigSetsCopilotIntegrationHeader(t *testing.T) {
 			}
 		})
 	}
-}
-
 }

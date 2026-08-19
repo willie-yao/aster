@@ -58,8 +58,9 @@ The pinned baseline consumer commits are:
 - Kueue: `e4257c64fc9c5344b01919488fc76aa3fb0618b7`
 - GCP PD CSI: `f74fc047a1f6de10eec334207c4e58ce743bdcac`
 
-Its Secrets Store CSI and Kueue cases require a grounded diagnosis. The GCP PD
-CSI reference is medium confidence, so that case also accepts the engine's
+The Secrets Store CSI and Kueue cases are artifact-only. Their diagnoses must be
+grounded in the frozen build evidence and are not source-grounding controls. The
+GCP PD CSI reference is medium confidence, so that case also accepts the engine's
 grounded-policy unavailable result instead of rewarding an unsupported owner.
 
 Options:
@@ -211,17 +212,21 @@ JSONL also separates `diagnosis_signal_hits` from transient and forbidden-claim
 policy checks. This prevents a placeholder or abstaining answer from appearing
 moderately successful merely because it avoids forbidden claims.
 
-The telemetry never prints prompts, model response text, Tool arguments, Tool
-output, endpoints, model coordinates, credentials, or full hashes.
+Scored benchmark runs reject `AGENTIC_TRACE_TOOLS`, so retained telemetry never
+prints prompts, model response text, Tool arguments, Tool output, endpoints,
+model coordinates, credentials, or full hashes.
 
 Each frozen case declares an `evidence_mode`. `artifact_only` requires artifact
 evidence and canonical artifact citations but does not require a repository read.
-`artifact_and_source` additionally freezes expected source paths and source-backed
-diagnosis signals. It requires a successful source read or grep, verified canonical
-citations for every expected path, and all source-backed signals. Source citations,
-relevant files, or source-backed claims remain invalid without source evidence
-regardless of the case mode. The exact six-trial comparison reports both categories
-separately and is incomplete when either category is absent.
+`artifact_and_source` additionally freezes expected repository, revision, path,
+and line ranges plus source-backed diagnosis signals. The comparative requirement
+is complete content-read coverage of every frozen range plus all source-backed
+signals. Citation emission and verification are reported as per-arm capability
+telemetry only. They do not participate in cross-arm grounding or classification
+gates. Source citations, relevant files, or source-backed claims remain invalid
+without source evidence regardless of the case mode. The exact comparison reports
+both evidence categories separately and is incomplete when either category is
+absent.
 
 
 To separate retrieval from reasoning on the Kueue case, run the same cold trial
