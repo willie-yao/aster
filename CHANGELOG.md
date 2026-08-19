@@ -23,6 +23,7 @@ Each release has its own notes file, named for its tag. See
 [the release guide](docs/releasing.md#release-notes) for how those notes are
 assembled.
 
+- [v0.9.0-rc.8](changelog/v0.9.0-rc.8.md) - 2026-08-19
 - [v0.9.0-rc.7](changelog/v0.9.0-rc.7.md) - 2026-08-19
 - [v0.9.0-rc.6](changelog/v0.9.0-rc.6.md) - 2026-08-19
 - [v0.9.0-rc.5](changelog/v0.9.0-rc.5.md) - 2026-08-18
