@@ -21,10 +21,11 @@ import (
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
-const benchmarkManifestVersion = 4
+const benchmarkManifestVersion = 5
 
 var benchmarkCaseIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 var benchmarkStableIDRE = regexp.MustCompile(`^[0-9a-f]{20}$`)
+var benchmarkSourceIDRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 var benchmarkCommitRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 var benchmarkRepoRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 var benchmarkSHA256RE = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -264,8 +265,8 @@ type benchmarkManifestCase struct {
 	Commit               string                           `json:"commit"`
 	RepoVersion          string                           `json:"repo_version"`
 	RepoRefs             map[string]string                `json:"repo_refs"`
-	SourceOwner          string                           `json:"source_owner"`
-	SourceName           string                           `json:"source_name"`
+	SourceRefs           []benchmarkSourceRef             `json:"source_refs"`
+	PrimarySourceID      string                           `json:"primary_source_id"`
 	TestName             string                           `json:"test_name"`
 	TestSource           string                           `json:"test_source,omitempty"`
 	JUnitFile            string                           `json:"junit_file,omitempty"`
@@ -290,10 +291,10 @@ type benchmarkManifestCase struct {
 }
 
 type benchmarkManifestSourceRange struct {
-	Repository string `json:"repository"`
-	Path       string `json:"path"`
-	LineStart  int    `json:"line_start"`
-	LineEnd    int    `json:"line_end"`
+	SourceID  string `json:"source_id"`
+	Path      string `json:"path"`
+	LineStart int    `json:"line_start"`
+	LineEnd   int    `json:"line_end"`
 }
 
 type benchmarkManifestSignal struct {
@@ -370,16 +371,23 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 		if len(item.RepoRefs) == 0 || len(item.RepoRefs) > 8 {
 			return nil, fmt.Errorf("benchmark manifest case %q repo_refs count must be 1..8", item.ID)
 		}
-		sourceKey := item.SourceOwner + "/" + item.SourceName
-		if _, ok := item.RepoRefs[sourceKey]; !ok {
-			return nil, fmt.Errorf("benchmark manifest case %q repo_refs omit configured source", item.ID)
+		sourceRefs, err := canonicalBenchmarkSourceRefs(item.SourceRefs)
+		if err != nil {
+			return nil, fmt.Errorf("benchmark manifest case %q source refs: %w", item.ID, err)
+		}
+		primarySource, ok := benchmarkSourceRefByID(benchCase{sourceRefs: sourceRefs}, item.PrimarySourceID)
+		if !ok {
+			return nil, fmt.Errorf("benchmark manifest case %q primary_source_id is not configured", item.ID)
+		}
+		if revision, ok := item.RepoRefs[primarySource.Repository]; !ok || revision != primarySource.Revision {
+			return nil, fmt.Errorf("benchmark manifest case %q primary source must match repo_refs", item.ID)
 		}
 		for repo, ref := range item.RepoRefs {
 			if repo == "" || ref == "" || len(repo) > 256 || len(ref) > 256 || strings.ContainsAny(repo+ref, "\r\n\x00") {
 				return nil, fmt.Errorf("benchmark manifest case %q has invalid repo_refs", item.ID)
 			}
 		}
-		if item.Bucket == "" || item.JobName == "" || item.WebURL == "" || item.TestName == "" || item.FailureMessage == "" || item.SourceOwner == "" || item.SourceName == "" {
+		if item.Bucket == "" || item.JobName == "" || item.WebURL == "" || item.TestName == "" || item.FailureMessage == "" {
 			return nil, fmt.Errorf("benchmark manifest case %q is missing required identity", item.ID)
 		}
 		if item.TestSource != "" && item.TestSource != models.TestCaseSourceBuild {
@@ -390,7 +398,7 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 		}
 		for label, value := range map[string]string{
 			"bucket": item.Bucket, "job_name": item.JobName, "repo": item.Repo, "web_url": item.WebURL,
-			"source_owner": item.SourceOwner, "source_name": item.SourceName, "junit_file": item.JUnitFile,
+			"primary_source_id": item.PrimarySourceID, "junit_file": item.JUnitFile,
 		} {
 			if len(value) > 512 || strings.ContainsAny(value, "\r\n\x00") {
 				return nil, fmt.Errorf("benchmark manifest case %q has invalid %s", item.ID, label)
@@ -437,13 +445,12 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 		}
 		sourceRanges := make([]benchmarkSourceRange, 0, len(item.ExpectedSourceRanges))
 		for _, value := range item.ExpectedSourceRanges {
-			revision, ok := item.RepoRefs[value.Repository]
+			source, ok := benchmarkSourceRefByID(benchCase{sourceRefs: sourceRefs}, value.SourceID)
 			if !ok {
-				return nil, fmt.Errorf("benchmark manifest case %q source range repository is not pinned", item.ID)
+				return nil, fmt.Errorf("benchmark manifest case %q source range source_id %q is not configured", item.ID, value.SourceID)
 			}
-			sourceRanges = append(sourceRanges, benchmarkSourceRange{Repository: value.Repository, Revision: revision, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd})
+			sourceRanges = append(sourceRanges, benchmarkSourceRange{Repository: source.Repository, Revision: source.Revision, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd})
 		}
-		var err error
 		sourceRanges, err = canonicalBenchmarkExpectedSourceRanges(sourceRanges)
 		if err != nil {
 			return nil, fmt.Errorf("benchmark manifest case %q source ranges: %w", item.ID, err)
@@ -555,7 +562,8 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 			fixtureSHA256: item.FixtureSHA256, jobType: item.JobType, repo: item.Repo, jobName: item.JobName,
 			buildID: item.BuildID, pullNumber: item.PullNumber, webURL: item.WebURL,
 			commit: item.Commit, repoVersion: item.RepoVersion, repoRefs: maps.Clone(item.RepoRefs),
-			sourceRepo: [2]string{item.SourceOwner, item.SourceName}, testName: item.TestName, testSource: item.TestSource,
+			sourceRefs: sourceRefs, primarySourceID: item.PrimarySourceID,
+			sourceRepo: [2]string{strings.SplitN(primarySource.Repository, "/", 2)[0], strings.SplitN(primarySource.Repository, "/", 2)[1]}, testName: item.TestName, testSource: item.TestSource,
 			junitFile: item.JUnitFile, failureMsg: item.FailureMessage, consecutiveFailures: item.ConsecutiveFailures,
 			oppositeDiagnosis: item.OppositeDiagnosis, oppositeTransient: item.OppositeTransient,
 			referenceDiagnosis: item.ReferenceDiagnosis, referenceTransient: item.ReferenceTransient,
@@ -839,13 +847,12 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 			TransientConflict: observation.TransientConflict, ToolCalls: observation.ToolCalls, EvidenceReads: observation.EvidenceReads,
 		})
 	}
-	build := models.BuildInfo{Commit: bc.commit, RepoVersion: bc.repoVersion, RepoRefs: maps.Clone(bc.repoRefs)}
-	if source, ok := ai.ResolveBuildSource(build, bc.sourceRepo[0], bc.sourceRepo[1]); ok {
+	if source, ok := benchmarkPrimarySourceRef(bc); ok {
 		result.SourceRevision = source.Revision
 	} else {
 		result.SourceUnavailable = true
 	}
-	sourceReads, sourceReadErr := benchmarkSourceReadsFromInProcess(bc, toolUsage.sourceObservations)
+	sourceReads, sourceReadErr := benchmarkSourceReadsFromInProcess(bc, bc.primarySourceID, toolUsage.sourceObservations)
 	if sourceReadErr != nil {
 		t.Fatal(sourceReadErr)
 	}
@@ -973,7 +980,7 @@ func recordBenchmarkSemanticRevision(result *benchmarkJSONLResult, event ai.Trac
 
 func TestLoadBenchmarkManifest(t *testing.T) {
 	valid := `{
-  "version": 4,
+  "version": 5,
   "cases": [{
     "id": "case-one",
     "stable_id": "0123456789abcdef0123",
@@ -984,9 +991,9 @@ func TestLoadBenchmarkManifest(t *testing.T) {
     "web_url": "https://example.invalid/build/123456789/",
     "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "repo_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "repo_refs": {"example/project":"main"},
-    "source_owner": "example",
-    "source_name": "project",
+    "repo_refs": {"example/project":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    "source_refs": [{"id":"primary","repository":"example/project","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
+    "primary_source_id": "primary",
     "test_name": "Example test",
     "junit_file": "junit.xml",
     "failure_message": "failed",
@@ -1021,16 +1028,41 @@ func TestLoadBenchmarkManifest(t *testing.T) {
 		t.Fatalf("build cases = %+v", buildCases)
 	}
 
+	multiRef := strings.Replace(valid,
+		`"source_refs": [{"id":"primary","repository":"example/project","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]`,
+		`"source_refs": [{"id":"server","repository":"example/project","revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},{"id":"primary","repository":"example/project","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]`, 1)
+	multiRef = strings.Replace(multiRef, `"evidence_mode": "artifact_only"`, `"evidence_mode": "artifact_and_source", "expected_source_ranges": [{"source_id":"server","path":"source.go","line_start":10,"line_end":20}], "source_signals": [{"name":"source","pattern":"source","must":true}]`, 1)
+	multiRefPath := filepath.Join(t.TempDir(), "multi-ref-manifest.json")
+	if err := os.WriteFile(multiRefPath, []byte(multiRef), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	multiRefCases, err := loadBenchmarkManifest(multiRefPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(multiRefCases) != 1 || len(multiRefCases[0].sourceRefs) != 2 || multiRefCases[0].sourceRefs[0].ID != "primary" || multiRefCases[0].sourceRefs[1].ID != "server" || multiRefCases[0].sourceRanges[0].Revision != strings.Repeat("b", 40) {
+		t.Fatalf("multi-ref cases = %+v", multiRefCases)
+	}
+
 	for name, mutate := range map[string]func(string) string{
 		"unknown field": func(value string) string {
-			return strings.Replace(value, `"version": 4`, `"version": 4, "extra": true`, 1)
+			return strings.Replace(value, `"version": 5`, `"version": 5, "extra": true`, 1)
 		},
 		"bad stable id": func(value string) string { return strings.Replace(value, "0123456789abcdef0123", "model-name", 1) },
+		"unknown primary source": func(value string) string {
+			return strings.Replace(value, `"primary_source_id": "primary"`, `"primary_source_id": "missing"`, 1)
+		},
+		"duplicate source id": func(value string) string {
+			return strings.Replace(value, `"source_refs": [{"id":"primary","repository":"example/project","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]`, `"source_refs": [{"id":"primary","repository":"example/project","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"id":"primary","repository":"example/project","revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]`, 1)
+		},
+		"unknown range source": func(value string) string {
+			return strings.Replace(value, `"evidence_mode": "artifact_only"`, `"evidence_mode": "artifact_and_source", "expected_source_ranges": [{"source_id":"missing","path":"source.go","line_start":1,"line_end":1}], "source_signals": [{"name":"source","pattern":"source","must":true}]`, 1)
+		},
 		"bad evidence mode": func(value string) string {
 			return strings.Replace(value, `"evidence_mode": "artifact_only"`, `"evidence_mode": "all"`, 1)
 		},
 		"artifact only source expectations": func(value string) string {
-			return strings.Replace(value, `"evidence_mode": "artifact_only"`, `"evidence_mode": "artifact_only", "expected_source_ranges": [{"repository":"example/project","path":"source.go","line_start":1,"line_end":1}], "source_signals": [{"name":"source","pattern":"source","must":true}]`, 1)
+			return strings.Replace(value, `"evidence_mode": "artifact_only"`, `"evidence_mode": "artifact_only", "expected_source_ranges": [{"source_id":"primary","path":"source.go","line_start":1,"line_end":1}], "source_signals": [{"name":"source","pattern":"source","must":true}]`, 1)
 		},
 		"source required without expectations": func(value string) string {
 			return strings.Replace(value, `"evidence_mode": "artifact_only"`, `"evidence_mode": "artifact_and_source"`, 1)
@@ -1080,6 +1112,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	bc := benchCase{
 		name: "case-one", stableID: "0123456789abcdef0123", evidenceMode: benchmarkEvidenceModeArtifactAndSource, jobName: "job", buildID: "123", testName: "test", testSource: models.TestCaseSourceBuild,
 		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": strings.Repeat("a", 40)},
+		sourceRefs: []benchmarkSourceRef{{ID: "primary", Repository: "example/project", Revision: strings.Repeat("a", 40)}}, primarySourceID: "primary",
 		sourceRepo:    [2]string{"example", "project"},
 		signals:       []benchSignal{{name: "cause", re: regexp.MustCompile(`root cause`), must: true}},
 		sourceRanges:  []benchmarkSourceRange{{Repository: "example/project", Revision: strings.Repeat("a", 40), Path: "file.go", LineStart: 1, LineEnd: 2}},
@@ -1166,6 +1199,7 @@ func TestWriteBenchmarkJSONLRecordsGroundedUnavailableOutcome(t *testing.T) {
 	bc := benchCase{
 		name: "case-unavailable", stableID: "abcdef0123456789abcd", evidenceMode: benchmarkEvidenceModeArtifactOnly, jobName: "job", buildID: "123", testName: "test",
 		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": strings.Repeat("a", 40)},
+		sourceRefs: []benchmarkSourceRef{{ID: "primary", Repository: "example/project", Revision: strings.Repeat("a", 40)}}, primarySourceID: "primary",
 		sourceRepo: [2]string{"example", "project"}, allowUnavailable: true,
 	}
 	tc := &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: no validated artifact citation supports the analysis"}}
@@ -1191,6 +1225,7 @@ func TestWriteBenchmarkJSONLRecordsFailedTrials(t *testing.T) {
 	bc := benchCase{
 		name: "case-failed", stableID: "abcdef0123456789abcd", jobName: "job", buildID: "123", testName: "test",
 		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": strings.Repeat("a", 40)},
+		sourceRefs: []benchmarkSourceRef{{ID: "primary", Repository: "example/project", Revision: strings.Repeat("a", 40)}}, primarySourceID: "primary",
 		sourceRepo: [2]string{"example", "project"}, evidenceGroups: []benchmarkEvidenceGroup{group},
 		fixtureSHA256: strings.Repeat("f", 64), consumerCommit: strings.Repeat("1", 40), promptSHA256: strings.Repeat("2", 64), projectSHA256: strings.Repeat("3", 64),
 		signals: []benchSignal{{name: "cause", re: regexp.MustCompile(`cause`)}},
@@ -1258,12 +1293,19 @@ func TestRecordBenchmarkSemanticRevisionCountsUnparseableAndDeniedAsRejected(t *
 
 func TestBenchmarkSourceExpectationSHA256(t *testing.T) {
 	revision := strings.Repeat("a", 40)
-	base := benchCase{sourceRanges: []benchmarkSourceRange{{Repository: "owner/repo", Revision: revision, Path: "pkg/file.go", LineStart: 1, LineEnd: 2}}, sourceSignals: []benchSignal{{name: "source", re: regexp.MustCompile(`source claim`), must: true}}}
+	base := benchCase{
+		primarySourceID: "primary",
+		sourceRefs:      []benchmarkSourceRef{{ID: "primary", Repository: "owner/repo", Revision: revision}},
+		sourceRanges:    []benchmarkSourceRange{{Repository: "owner/repo", Revision: revision, Path: "pkg/file.go", LineStart: 1, LineEnd: 2}},
+		sourceSignals:   []benchSignal{{name: "source", re: regexp.MustCompile(`source claim`), must: true}},
+	}
 	want := benchmarkSourceExpectationSHA256(base)
 	for _, changed := range []benchCase{
-		{sourceRanges: []benchmarkSourceRange{{Repository: "owner/repo", Revision: revision, Path: "pkg/other.go", LineStart: 1, LineEnd: 2}}, sourceSignals: base.sourceSignals},
-		{sourceRanges: base.sourceRanges, sourceSignals: []benchSignal{{name: "other", re: regexp.MustCompile(`source claim`), must: true}}},
-		{sourceRanges: base.sourceRanges, sourceSignals: []benchSignal{{name: "source", re: regexp.MustCompile(`other claim`), must: true}}},
+		{primarySourceID: base.primarySourceID, sourceRefs: base.sourceRefs, sourceRanges: []benchmarkSourceRange{{Repository: "owner/repo", Revision: revision, Path: "pkg/other.go", LineStart: 1, LineEnd: 2}}, sourceSignals: base.sourceSignals},
+		{primarySourceID: base.primarySourceID, sourceRefs: base.sourceRefs, sourceRanges: base.sourceRanges, sourceSignals: []benchSignal{{name: "other", re: regexp.MustCompile(`source claim`), must: true}}},
+		{primarySourceID: base.primarySourceID, sourceRefs: base.sourceRefs, sourceRanges: base.sourceRanges, sourceSignals: []benchSignal{{name: "source", re: regexp.MustCompile(`other claim`), must: true}}},
+		{primarySourceID: "other", sourceRefs: base.sourceRefs, sourceRanges: base.sourceRanges, sourceSignals: base.sourceSignals},
+		{primarySourceID: base.primarySourceID, sourceRefs: []benchmarkSourceRef{{ID: "primary", Repository: "owner/repo", Revision: strings.Repeat("b", 40)}}, sourceRanges: base.sourceRanges, sourceSignals: base.sourceSignals},
 	} {
 		if got := benchmarkSourceExpectationSHA256(changed); got == want {
 			t.Fatalf("source expectation hash did not change: %s", got)
@@ -1271,6 +1313,16 @@ func TestBenchmarkSourceExpectationSHA256(t *testing.T) {
 	}
 	if !benchmarkSHA256RE.MatchString(want) {
 		t.Fatalf("source expectation hash = %q", want)
+	}
+	reordered := base
+	reordered.sourceRefs = []benchmarkSourceRef{
+		{ID: "secondary", Repository: "other/repo", Revision: strings.Repeat("c", 40)},
+		base.sourceRefs[0],
+	}
+	ordered := reordered
+	ordered.sourceRefs = []benchmarkSourceRef{base.sourceRefs[0], reordered.sourceRefs[0]}
+	if benchmarkSourceExpectationSHA256(reordered) != benchmarkSourceExpectationSHA256(ordered) {
+		t.Fatal("source expectation hash depends on source ref order")
 	}
 }
 
@@ -1301,8 +1353,7 @@ func TestCAPZAgentSandboxEvaluationManifest(t *testing.T) {
 		if bc.consumerCommit != "cabcef8e03b510467dac52682fa7e9b0f3e6692f" || bc.projectSHA256 != "1fc01fa1d2590c26b66a98faadb9daff567a4d325b6af3a14c765ed9f72d2e24" || bc.promptSHA256 != "817cea07bd6b4621ac99b362af20f899caeeb336e86c355fd6870792c6afa9b5" {
 			t.Fatalf("case %s consumer identity is invalid", bc.name)
 		}
-		build := models.BuildInfo{Commit: bc.commit, RepoVersion: bc.repoVersion, RepoRefs: maps.Clone(bc.repoRefs)}
-		source, ok := ai.ResolveBuildSource(build, bc.sourceRepo[0], bc.sourceRepo[1])
+		source, ok := benchmarkPrimarySourceRef(bc)
 		if bc.commit != wantCommits[bc.name] || bc.repoVersion != bc.commit || !ok || source.Revision != wantSources[bc.name] || bc.evidenceMode != wantEvidenceModes[bc.name] || bc.referenceDiagnosis == "" || bc.expectedTransient == nil {
 			t.Fatalf("case %s identity = %+v source=%+v", bc.name, bc, source)
 		}
