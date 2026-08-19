@@ -209,10 +209,14 @@ test("the runtime trend states its stats once and makes each sample reachable", 
   assert.match(testDetail, /runHref=\{\(buildID\) => testRunPath\(canonicalJobID, testName, buildID\)\}/);
 
   // A long history reserves width per sample, so the plot must scroll rather
-  // than clip. RunHistory directly above uses the same treatment.
-  assert.match(trend, /const minChartWidth = Math\.max\(values\.length \* 32, 320\)/);
+  // than clip, and the drawing width must grow with it so the chart does not
+  // also scale taller. RunHistory directly above uses the same treatment.
+  assert.match(trend, /const width = Math\.max\(720, values\.length \* 32\)/);
+  assert.match(trend, /const minChartWidth = Math\.max\(320, values\.length \* 32\)/);
   assert.match(trend, /overflowX: "auto"/);
   assert.match(trend, /minWidth: minChartWidth/);
+  // Points run oldest to newest, so a scrolling chart opens on the latest run.
+  assert.match(trend, /node\.scrollLeft = node\.scrollWidth/);
 });
 
 test("the severity chip is suppressed exactly where a header already states it", () => {

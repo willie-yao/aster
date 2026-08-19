@@ -2,6 +2,7 @@ import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
+import { useEffect, useRef } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import { DetailSectionBand } from "./DetailSectionBand";
 import { formatDuration } from "../lib/utils";
@@ -54,25 +55,33 @@ function pathFor(
 }
 
 export function RuntimeTrend({ summary, subject, runHref }: RuntimeTrendProps) {
-  const width = 720;
   const height = 180;
   const inset = 18;
   const values = summary.points.map((point) => point.durationSeconds);
+  // Two different widths. The drawing width sets the viewBox, so a long history
+  // widens the coordinate space instead of stretching a fixed one, which would
+  // scale the chart taller as it grows. The CSS reserve is what the scroll
+  // container honours, and it stays below the drawing width at short histories
+  // so the common case still fills its rail without scrolling.
+  const width = Math.max(720, values.length * 32);
+  const minChartWidth = Math.max(320, values.length * 32);
   const chart = pathFor(values, width, height, inset);
   const max = Math.max(...values, 1);
-  // The chart stretches to its container and the run count is consumer-tuned,
-  // so the target scales with the spacing and can never overlap its
-  // neighbours. The scroll container below keeps that spacing usable by
-  // holding a per-sample minimum width rather than compressing the plot.
+  const referenceY = (value: number) =>
+    inset + (height - inset * 2) - (value / max) * (height - inset * 2);
+  // The run count is consumer-tuned, so the target scales with the spacing and
+  // can never overlap its neighbours.
   const spacing =
     values.length > 1 ? (width - inset * 2) / (values.length - 1) : width;
   const hitRadius = Math.min(17, spacing * 0.45);
-  // Matches the fixed per-run width RunHistory reserves directly above this
-  // chart, so a long history scrolls instead of shrinking its targets.
-  const minChartWidth = Math.max(values.length * 32, 320);
-  const referenceY = (value: number) =>
-    inset + (height - inset * 2) - (value / max) * (height - inset * 2);
   const latestIndex = summary.points.length - 1;
+  // Points run oldest to newest, so a scrolling history would otherwise open on
+  // the oldest samples and hide the latest run and any outlier.
+  const scroller = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const node = scroller.current;
+    if (node) node.scrollLeft = node.scrollWidth;
+  }, [latestIndex, minChartWidth]);
   const summaryText = [
     `${summary.sampleCount} ${summary.sampleCount === 1 ? "sample" : "samples"}`,
     summary.medianSeconds === null
@@ -105,7 +114,7 @@ export function RuntimeTrend({ summary, subject, runHref }: RuntimeTrendProps) {
         </Typography>
       ) : (
         <Stack spacing={1} sx={{ px: 1.5, py: 1.5 }}>
-          <Box sx={{ width: "100%", minWidth: 0, overflowX: "auto", overflowY: "hidden" }}>
+          <Box ref={scroller} sx={{ width: "100%", minWidth: 0, overflowX: "auto", overflowY: "hidden" }}>
           <Box
             component="svg"
             viewBox={`0 0 ${width} ${height}`}

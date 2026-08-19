@@ -451,7 +451,20 @@ test("runtime targets shrink with the spacing so they never capture a neighbour'
     // ~10px apart in a narrow rail and WCAG 2.5.8 spacing fails.
     const emitted = /min-width:(\d+)px;/u.exec(html);
     assert.ok(emitted, `expected a minimum chart width at ${count} points`);
-    const scale = Number(emitted[1]) / 720;
+    const reserve = Number(emitted[1]);
+
+    // The viewBox width must track the reserve, or widening the chart also
+    // scales it taller: a fixed 720-wide viewBox at a 1280px reserve renders
+    // roughly 320px tall instead of 180.
+    const viewBox = /viewBox="0 0 (\d+) (\d+)"/u.exec(html);
+    assert.ok(viewBox, `expected a viewBox at ${count} points`);
+    const [, drawWidth, drawHeight] = viewBox.map(Number);
+    assert.ok(
+      drawWidth >= reserve,
+      `at ${count} points the ${drawWidth} viewBox is narrower than the ${reserve}px reserve, so the chart grows to ${Math.round((reserve * drawHeight) / drawWidth)}px tall`,
+    );
+
+    const scale = reserve / drawWidth;
     assert.ok(
       gap * scale >= 24,
       `at ${count} points the CSS spacing ${(gap * scale).toFixed(1)}px falls under 24px`,
