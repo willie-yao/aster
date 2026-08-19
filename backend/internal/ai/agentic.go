@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"path"
 	"regexp"
 	"slices"
@@ -20,7 +19,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/models"
-	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
 // AgenticMode is stored in models.AIAnalysis.Mode for agentic results. A cached
@@ -2648,25 +2646,18 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 	}
 
 	env := &tools.Env{
-		Browser:             s.browser,
-		Repo:                s.repo,
-		Cache:               s.cache,
-		WebURLBase:          s.webURLBase,
-		RemainingModelBytes: s.modelRemaining(),
-		RemainingGCSBytes:   s.gcsRemaining(),
+		Browser:    s.browser,
+		Repo:       s.repo,
+		Cache:      s.cache,
+		WebURLBase: s.webURLBase,
 	}
 	toolCtx := withEvidenceReadSource(ctx, EvidenceReadSourceModelTool)
-	result := s.registry.Dispatch(toolCtx, env, tc.Function.Name, json.RawMessage(tc.Function.Arguments))
+	result := dispatchToolCall(toolCtx, s.registry, env, tc, s.modelRemaining(), s.gcsRemaining())
 	if !isRepoTool(tc.Function.Name) {
 		s.gcsBytes += result.BytesFetched
 	}
 	if result.BudgetExhausted {
 		s.budgetExhausted = true
-	}
-	if result.Payload == nil {
-		// Defensive: registry promises a non-nil Payload, but never trust the
-		// edge case. Empty map is safer than a nil deref in toolEnvelopeJSON.
-		result.Payload = map[string]interface{}{}
 	}
 	_, toolFailed := result.Payload["error"]
 	toolOutcome := "success"
@@ -2711,16 +2702,6 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 			s.recordSourceRead(repoPath)
 		}
 		s.recordSourceContent(tc, visiblePayload)
-	}
-
-	// Optional per-tool-call trace for diagnosing investigation behavior.
-	// Off unless AGENTIC_TRACE_TOOLS is set, so production logs stay clean.
-	if os.Getenv("AGENTIC_TRACE_TOOLS") != "" {
-		flag := "ok"
-		if toolFailed {
-			flag = "ERROR"
-		}
-		log.Printf("    🔧 %s(%s) -> %d gcs bytes [%s]", tc.Function.Name, textutil.Truncate(tc.Function.Arguments, 140), result.BytesFetched, flag)
 	}
 
 	return envelope, result.Payload
