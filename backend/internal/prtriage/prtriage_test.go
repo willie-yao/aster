@@ -23,14 +23,15 @@ const (
 )
 
 type fakeLister struct {
-	pulls []ghpr.PullRequest
-	err   error
-	limit int
+	truncated bool
+	pulls     []ghpr.PullRequest
+	err       error
+	limit     int
 }
 
-func (f *fakeLister) ListOpenPullRequests(_ context.Context, _, _ string, limit int) ([]ghpr.PullRequest, error) {
+func (f *fakeLister) ListOpenPullRequests(_ context.Context, _, _ string, limit int) ([]ghpr.PullRequest, bool, error) {
 	f.limit = limit
-	return f.pulls, f.err
+	return f.pulls, f.truncated, f.err
 }
 
 func pull(number int, base, head string) ghpr.PullRequest {
@@ -126,11 +127,11 @@ func junitXML(failures []string) string {
 
 func collect(t *testing.T, backend storage.Backend, lister PullRequestLister, catalog *jobconfig.Catalog) (models.PullRequestIndex, []models.PullRequestDetail) {
 	t.Helper()
-	index, details, err := Collect(context.Background(), backend, lister, catalog, Options{Owner: "example", Repo: "project"})
+	result, err := Collect(context.Background(), backend, lister, catalog, Options{Owner: "example", Repo: "project"})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	return index, details
+	return result.Index, result.Details
 }
 
 func TestCollectReportsFailingChecksAndTests(t *testing.T) {
@@ -287,7 +288,7 @@ func TestCollectCapsStoredFailuresButKeepsTrueCount(t *testing.T) {
 
 func TestCollectPassesPullRequestLimit(t *testing.T) {
 	lister := &fakeLister{}
-	if _, _, err := Collect(context.Background(), writeBucket(t, nil), lister, catalogOf(),
+	if _, err := Collect(context.Background(), writeBucket(t, nil), lister, catalogOf(),
 		Options{Owner: "example", Repo: "project", MaxPullRequests: 5}); err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -312,7 +313,7 @@ func TestCollectRequiresOwnerRepoAndDependencies(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, _, err := Collect(context.Background(), tc.backend, tc.lister, catalogOf(), tc.opts); err == nil {
+			if _, err := Collect(context.Background(), tc.backend, tc.lister, catalogOf(), tc.opts); err == nil {
 				t.Fatal("want error")
 			}
 		})
@@ -321,7 +322,7 @@ func TestCollectRequiresOwnerRepoAndDependencies(t *testing.T) {
 
 func TestCollectPropagatesListerFailure(t *testing.T) {
 	lister := &fakeLister{err: fmt.Errorf("github unavailable")}
-	if _, _, err := Collect(context.Background(), writeBucket(t, nil), lister, catalogOf(),
+	if _, err := Collect(context.Background(), writeBucket(t, nil), lister, catalogOf(),
 		Options{Owner: "example", Repo: "project"}); err == nil {
 		t.Fatal("want the lister error to surface")
 	}

@@ -18,7 +18,7 @@ func detailFor(number int) models.PullRequestDetail {
 func TestWritePullRequestsWritesIndexAndDetails(t *testing.T) {
 	dir := t.TempDir()
 	index := models.PullRequestIndex{Repo: "example/project", PullRequests: []models.PullRequestSummary{{Number: 7}}}
-	if err := WritePullRequests(dir, index, []models.PullRequestDetail{detailFor(7)}, models.SharedFailureIndex{}); err != nil {
+	if err := WritePullRequests(dir, index, []models.PullRequestDetail{detailFor(7)}, models.SharedFailureIndex{}, nil); err != nil {
 		t.Fatalf("WritePullRequests: %v", err)
 	}
 
@@ -41,10 +41,10 @@ func TestWritePullRequestsWritesIndexAndDetails(t *testing.T) {
 func TestWritePullRequestsPrunesClosedPullRequests(t *testing.T) {
 	dir := t.TempDir()
 	both := []models.PullRequestDetail{detailFor(7), detailFor(8)}
-	if err := WritePullRequests(dir, models.PullRequestIndex{}, both, models.SharedFailureIndex{}); err != nil {
+	if err := WritePullRequests(dir, models.PullRequestIndex{}, both, models.SharedFailureIndex{}, nil); err != nil {
 		t.Fatalf("WritePullRequests: %v", err)
 	}
-	if err := WritePullRequests(dir, models.PullRequestIndex{}, []models.PullRequestDetail{detailFor(7)}, models.SharedFailureIndex{}); err != nil {
+	if err := WritePullRequests(dir, models.PullRequestIndex{}, []models.PullRequestDetail{detailFor(7)}, models.SharedFailureIndex{}, nil); err != nil {
 		t.Fatalf("WritePullRequests: %v", err)
 	}
 
@@ -95,7 +95,7 @@ func TestWritePullRequestsWritesSharedFailures(t *testing.T) {
 			Escalatable:  true,
 		}},
 	}
-	if err := WritePullRequests(dir, models.PullRequestIndex{}, nil, shared); err != nil {
+	if err := WritePullRequests(dir, models.PullRequestIndex{}, nil, shared, nil); err != nil {
 		t.Fatalf("WritePullRequests: %v", err)
 	}
 

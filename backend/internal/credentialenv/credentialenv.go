@@ -15,6 +15,7 @@ import (
 // trailing byte is always corruption and is safe to remove.
 var Trimmed = []string{
 	"AI_TOKEN",
+	"ASTER_APP_ID",
 	"BOT_TOKEN",
 	"GITHUB_READ_TOKEN",
 	"GITHUB_TOKEN",
@@ -30,6 +31,10 @@ var Trimmed = []string{
 // invalidates every live session. Surrounding whitespace here is still worth
 // naming, because it means the Secret was written with `echo` and the
 // fixed-format credentials beside it are probably corrupt too.
+//
+// ASTER_APP_PRIVATE_KEY is in neither list: a PEM legitimately ends with a
+// newline, so warning about it would fire on every correct deployment. The
+// parser trims it instead.
 var Reported = []string{
 	"AUTH_PROXY_SECRET",
 	"EMAIL_SMTP_PASSWORD",

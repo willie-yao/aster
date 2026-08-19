@@ -247,7 +247,7 @@ main operator controls.
 | `fetcher.suspend` | Suspend CronJob starts. Keep true when preserving a safe cron rollback from watch mode. |
 | `fetcher.watchInterval`, `fetcher.reconcileInterval` | Watch refresh and full reconciliation cadence. |
 | `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth, concurrency, and discovery or artifact budget. |
-| `fetcher.extraEnv` | Additional environment variables, preferably through `secretKeyRef`. |
+| `fetcher.extraEnv` | Additional environment variables, preferably through `secretKeyRef`. Carries `ISSUE_TOKEN` for issue recovery and `ASTER_APP_ID` / `ASTER_APP_PRIVATE_KEY` for the optional bot comment on new pull requests. |
 | `server.replicaCount` | Server replicas. Persistent private state requires a suitable shared filesystem. |
 | `server.chat.*` | Authenticated analysis conversation settings. |
 | `server.remediationInvestigation.*` | Explicit authenticated causal remediation start/status operation. Does not enable writes. |

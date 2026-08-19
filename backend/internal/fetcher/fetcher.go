@@ -236,6 +236,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		includePresubmits: opts.IncludePresubmits || cfg.Source.IncludePresubmits,
 	}
 	p.warnPullRequestTokenMissing()
+	p.warnCommentCredentialsMissing()
 	return p, nil
 }
 

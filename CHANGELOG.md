@@ -172,6 +172,44 @@ how to pin a consumer to a reviewed version.
   separate switch. A shared failure analysis is served only while it still
   describes the build a new request would read, so a superseded result is replaced
   rather than kept as history.
+- **Optional bot comment on new pull requests.** When enabled, the scheduled
+  pass posts one comment on each newly opened pull request of
+  `branding.source_repo`, linking to that pull request's dashboard triage page,
+  so contributors discover the evidence behind their presubmit failures without
+  being told the dashboard exists.
+
+  This reintroduces an unattended GitHub write, which the previous release
+  deliberately removed. It is scoped narrowly to keep that promise intact: it is
+  off by default, it stays in dry run until an operator explicitly sets
+  `dry_run: false`, and it never files an issue or opens a pull request. It only
+  links to a page the dashboard already published.
+
+  ```yaml
+  pull_requests:
+    enabled: true
+    comment:
+      enabled: true
+      dry_run: true     # default; logs the exact body and posts nothing
+      max_per_pass: 10  # default; hard cap on writes per pass
+  ```
+
+  Posting authenticates as a **GitHub App**, configured through the new
+  `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` credentials, so comments come from
+  a bot account rather than a person and the token is scoped to one repository
+  with `issues: write` and expires within the hour. The reusable workflow accepts
+  both as optional secrets; the Kubernetes path supplies them through
+  `fetcher.extraEnv`. Unlike the issue and fix-PR features, this one works on the
+  GitHub Pages path, which otherwise performs no GitHub writes.
+
+  A pull request is commented on at most once. Enabling the feature never
+  backfills work already in flight: the first pass records the repository's
+  highest pull request number and posts nothing. Every write is preceded by
+  reading that pull request directly to confirm it is still open, is not a draft,
+  is not one Aster opened itself, and carries no comment already. Commenting is
+  suppressed by `-skip-side-effects`, by a failed triage refresh, and when the
+  triage listing was truncated, since a comment promises a page the dashboard
+  publishes. There is no per-pull-request opt-out; disabling the feature is the
+  only opt-out.
 
 - **Pull request triage reports a missing GitHub read token.** The fetcher logs
   one startup warning when triage is enabled with neither `GITHUB_READ_TOKEN`

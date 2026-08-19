@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -130,7 +131,7 @@ pull_requests:
 
 func TestRefreshPullRequestsRequiresJobCatalog(t *testing.T) {
 	p := &pipeline{cfg: &project.Config{PullRequests: &project.PullRequests{Enabled: true}}}
-	if err := p.refreshPullRequests(context.Background(), nil); err == nil {
+	if _, err := p.refreshPullRequests(context.Background(), nil); err == nil {
 		t.Fatal("want an error when no job catalog is available")
 	}
 }
@@ -145,7 +146,7 @@ func TestRunPullRequestPassSwallowsFailures(t *testing.T) {
 func TestRunPullRequestPassSkipsWhenDisabled(t *testing.T) {
 	called := false
 	original := writePullRequestOutput
-	writePullRequestOutput = func(string, models.PullRequestIndex, []models.PullRequestDetail, models.SharedFailureIndex) error {
+	writePullRequestOutput = func(string, models.PullRequestIndex, []models.PullRequestDetail, models.SharedFailureIndex, map[int]bool) error {
 		called = true
 		return nil
 	}
@@ -254,4 +255,160 @@ func TestAttributionBaselineReadsTheBaseOnlyReport(t *testing.T) {
 	if got := res.attributionBaseline().FlakyTests[flakyTest]; len(got) != 0 {
 		t.Fatalf("FlakyTests[%q] = %v, want the base-only report to be authoritative", flakyTest, got)
 	}
+}
+
+// refusingTransport fails the test if any HTTP request is attempted.
+type refusingTransport struct{ t *testing.T }
+
+func (r refusingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.t.Helper()
+	r.t.Fatalf("unexpected GitHub request to %s", req.URL)
+	return nil, fmt.Errorf("unreachable")
+}
+
+// failingHTTPClient returns a client that turns any outbound call into a test
+// failure, which is how "no write was attempted" is proven rather than assumed.
+func failingHTTPClient(t *testing.T) *http.Client {
+	t.Helper()
+	return &http.Client{Transport: refusingTransport{t: t}}
+}
+
+// commentConfig builds a config with commenting in the given state.
+func commentConfig(triage, comment bool) *project.Config {
+	return &project.Config{
+		PullRequests: &project.PullRequests{
+			Enabled: triage,
+			Comment: &project.PullRequestComment{Enabled: comment},
+		},
+	}
+}
+
+// TestRunPullRequestCommentsDisabledMakesNoCall is the default-off guarantee:
+// with commenting unconfigured or disabled, the pass must not reach GitHub at
+// all. A transport that fails the test on use proves it rather than asserting
+// on a log line.
+func TestRunPullRequestCommentsDisabledMakesNoCall(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  *project.Config
+	}{
+		{name: "no pull request block", cfg: &project.Config{}},
+		{name: "triage on, comment block absent", cfg: &project.Config{PullRequests: &project.PullRequests{Enabled: true}}},
+		{name: "comment block present but disabled", cfg: commentConfig(true, false)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Credentials are present, so only the config gates the call.
+			t.Setenv("ASTER_APP_ID", "1")
+			t.Setenv("ASTER_APP_PRIVATE_KEY", "irrelevant")
+
+			p := &pipeline{cfg: tc.cfg, client: failingHTTPClient(t)}
+			p.runPullRequestComments(context.Background(), triageOutcome{})
+		})
+	}
+}
+
+// TestCommentOnPullRequestsRequiresAppCredentials proves the feature reports a
+// missing App rather than silently doing nothing or falling back to a personal
+// token, which would post as a human.
+func TestCommentOnPullRequestsRequiresAppCredentials(t *testing.T) {
+	t.Setenv("ASTER_APP_ID", "")
+	t.Setenv("ASTER_APP_PRIVATE_KEY", "")
+
+	p := &pipeline{cfg: commentConfig(true, true), client: failingHTTPClient(t)}
+	err := p.commentOnPullRequests(context.Background(), triageOutcome{})
+	if err == nil {
+		t.Fatal("expected an error when App credentials are unset")
+	}
+	if !strings.Contains(err.Error(), "ASTER_APP_ID") {
+		t.Fatalf("error = %v, want it to name the missing credential", err)
+	}
+}
+
+// TestWarnCommentCredentialsMissing checks the startup signal fires exactly
+// when commenting is enabled without an App.
+func TestWarnCommentCredentialsMissing(t *testing.T) {
+	cases := []struct {
+		name     string
+		cfg      *project.Config
+		appID    string
+		wantWarn bool
+	}{
+		{name: "disabled", cfg: &project.Config{}},
+		{name: "disabled with credentials", cfg: commentConfig(true, false), appID: "1"},
+		{name: "enabled with credentials", cfg: commentConfig(true, true), appID: "1"},
+		{name: "enabled without credentials", cfg: commentConfig(true, true), wantWarn: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ASTER_APP_ID", tc.appID)
+			t.Setenv("ASTER_APP_PRIVATE_KEY", "")
+
+			var buf bytes.Buffer
+			flags := log.Flags()
+			log.SetOutput(&buf)
+			log.SetFlags(0)
+			t.Cleanup(func() {
+				log.SetOutput(os.Stderr)
+				log.SetFlags(flags)
+			})
+
+			(&pipeline{cfg: tc.cfg}).warnCommentCredentialsMissing()
+
+			if got := strings.Contains(buf.String(), "ASTER_APP_ID"); got != tc.wantWarn {
+				t.Fatalf("warned = %t, want %t (log: %q)", got, tc.wantWarn, buf.String())
+			}
+		})
+	}
+}
+
+// TestRunPullRequestCommentsRespectsSkipSideEffects proves -skip-side-effects
+// suppresses commenting. It is documented as writing dashboard data without
+// GitHub writes, and a comment on a contributor's pull request is a GitHub
+// write like any other.
+func TestRunPullRequestCommentsRespectsSkipSideEffects(t *testing.T) {
+	t.Setenv("ASTER_APP_ID", "1")
+	t.Setenv("ASTER_APP_PRIVATE_KEY", "irrelevant")
+
+	p := &pipeline{
+		cfg:    commentConfig(true, true),
+		client: failingHTTPClient(t),
+		opts:   Options{SkipSideEffects: true},
+	}
+	p.runPullRequestComments(context.Background(), triageOutcome{})
+}
+
+// TestCommentCandidatesComeFromPublishedDetails proves candidates are built
+// from the pages this pass wrote, so a comment cannot link to a missing page.
+func TestCommentCandidatesComeFromPublishedDetails(t *testing.T) {
+	created := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	details := []models.PullRequestDetail{
+		{PullRequestSummary: models.PullRequestSummary{Number: 7, Author: "a", CreatedAt: created}},
+		{PullRequestSummary: models.PullRequestSummary{Number: 9, Author: "b", CreatedAt: created}},
+	}
+	got := commentCandidates(details)
+	if len(got) != 2 {
+		t.Fatalf("built %d candidates, want 2", len(got))
+	}
+	if got[0].Number != 7 || got[0].Author != "a" {
+		t.Fatalf("candidate = %+v, want the published detail's identity", got[0])
+	}
+	if got[1].Number != 9 {
+		t.Fatalf("candidate = %+v, want pull request 9", got[1])
+	}
+}
+
+// TestRunPullRequestPassSkipsCommentingWhenTriageFails proves a failed refresh
+// suppresses commenting: without a successful publish, the triage pages a
+// comment links to are missing or stale.
+func TestRunPullRequestPassSkipsCommentingWhenTriageFails(t *testing.T) {
+	t.Setenv("ASTER_APP_ID", "1")
+	t.Setenv("ASTER_APP_PRIVATE_KEY", "irrelevant")
+	// A nil job catalog makes refreshPullRequests fail before any GitHub call,
+	// and the refusing transport proves commenting never runs afterwards.
+	p := &pipeline{
+		cfg:    commentConfig(true, true),
+		client: failingHTTPClient(t),
+	}
+	p.runPullRequestPass(context.Background(), &refreshResult{})
 }

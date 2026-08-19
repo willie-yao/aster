@@ -201,10 +201,30 @@ func checkPullRequestTriage(add func(string, DoctorStatus, string, string), cfg 
 	if cfg.PullRequests != nil && cfg.PullRequests.Enabled {
 		checkPullRequestReadToken(add, profile.readToken)
 	}
+	checkPullRequestComment(add, cfg)
 	if profile.includePresubmits {
 		add("source.include_presubmits", DoctorWarn, "presubmits join the dashboard job set, enlarging each fetch and any enabled analysis",
 			"Keep this on only if you want presubmit rows in the main dashboard. It is not required for pull request triage, which resolves presubmits from the job catalog either way.")
 	}
+}
+
+// checkPullRequestComment reports the state of the engine's only unattended
+// GitHub write. A live comment pass writes to contributor threads without a
+// maintainer confirming each one, so leaving dry run is called out as the
+// deliberate step it is rather than passing silently.
+func checkPullRequestComment(add func(string, DoctorStatus, string, string), cfg *project.Config) {
+	const name = "pull request comments"
+	if !cfg.CommentEnabled() {
+		add(name, DoctorPass, "the bot comment on new pull requests is disabled", "")
+		return
+	}
+	if cfg.CommentDryRun() {
+		add(name, DoctorPass, "commenting is enabled in dry run, so bodies are logged and nothing is posted",
+			"Read a real pass's logged bodies before setting pull_requests.comment.dry_run: false.")
+		return
+	}
+	add(name, DoctorWarn, "commenting will post to every newly opened pull request without a maintainer confirming each one",
+		"Confirm you have reviewed a dry run's output, that ASTER_APP_ID and ASTER_APP_PRIVATE_KEY name a bot App, and that the App is installed on branding.source_repo.")
 }
 
 // checkPullRequestReadToken reports whether triage will read GitHub
