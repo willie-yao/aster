@@ -324,6 +324,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 				category = analysisChatValidationCategory(validationErr)
 				detail = validationErr.Error()
 			}
+			stats.ValidationDetail = detail
 			recordAnalysisChatResponseFailure(
 				loopCtx, "tool_loop_validation", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, category,
 			)
@@ -475,6 +476,10 @@ func (a *AnalysisChatAgent) callAnalysisChatFinal(
 			candidate, candidateStats, candidateErr := parseAnalysisChatReplyCandidates(raw, evidence)
 			if candidateErr == nil || analysisChatValidationRank(candidateStats.Category) >= analysisChatValidationRank(stats.Category) {
 				stats = candidateStats
+				stats.ValidationDetail = candidateStats.EvidenceDetail
+				if candidateErr != nil {
+					stats.ValidationDetail = candidateErr.Error()
+				}
 			}
 			validation := structuredValidationResult{
 				outcome: StructuredOutcomeAccepted, validatorCalled: true,
@@ -628,9 +633,17 @@ func recordAnalysisChatResponseTelemetryWithAttempt(
 	if response != nil {
 		httpStatus = response.HTTPStatus
 	}
+	// The detail is engine-generated rule text, so it is safe to log verbatim.
+	// It is only emitted for the category it describes, since an earlier
+	// candidate's detail survives in stats when a later provider or context
+	// failure reports a different category.
+	detail := ""
+	if stats.ValidationDetail != "" && category == stats.Category {
+		detail = fmt.Sprintf(" validation_detail=%q", stats.ValidationDetail)
+	}
 	log.Printf(
-		"analysis chat response: outcome=%s stage=%s structured_attempt=%s model_calls=%d provider_attempts=%d http_status=%d candidate_count=%d validation=%s",
-		outcome, stage, structuredAttempt, modelCalls, providerAttempts, httpStatus, stats.CandidateCount, category,
+		"analysis chat response: outcome=%s stage=%s structured_attempt=%s model_calls=%d provider_attempts=%d http_status=%d candidate_count=%d validation=%s%s",
+		outcome, stage, structuredAttempt, modelCalls, providerAttempts, httpStatus, stats.CandidateCount, category, detail,
 	)
 	recordTrace(ctx, TraceEvent{
 		Kind: "analysis_chat_response", Outcome: outcome, Status: stage, StructuredAttempt: structuredAttempt,

@@ -1,10 +1,13 @@
 package ai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -188,6 +191,9 @@ func TestAnalysisChatAgentRepairsUnreadCitation(t *testing.T) {
 
 func TestAnalysisChatAgentKeepsValidatedCitedDraftWhenFinalizeIsInvalid(t *testing.T) {
 	shrinkCallDelay(t)
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 	server := newScriptedChatServer(t)
 	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
 	valid := `{"answer":"The controller exit supports the published conclusion.","assessment":"supports","citations":[{"path":"build-log.txt","quote":"controller stopped"}],"proposed_revision":null}`
@@ -204,6 +210,10 @@ func TestAnalysisChatAgentKeepsValidatedCitedDraftWhenFinalizeIsInvalid(t *testi
 	}
 	if reply.Answer != "The controller exit supports the published conclusion." || reply.ToolCalls != 2 || len(reply.Citations) != 1 {
 		t.Fatalf("reply = %+v", reply)
+	}
+	// The finalize stage carries the rule its own candidates tripped.
+	if !strings.Contains(logs.String(), `validation_detail="no JSON response object found"`) {
+		t.Fatalf("finalize log missing the specific rule: %s", logs.String())
 	}
 }
 
@@ -305,6 +315,74 @@ func TestAnalysisChatAgentReturnsSafeProviderCategory(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "private provider body") {
 		t.Fatalf("provider error leaked response content: %v", err)
+	}
+}
+
+func TestAnalysisChatResponseLogsValidationDetail(t *testing.T) {
+	shrinkCallDelay(t)
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+	// A descriptive answer that omits citations entirely trips the contract.
+	uncited := `{"answer":"sentinel-answer-text","assessment":"inconclusive"}`
+	for range 4 {
+		server.push(200, chatRespFinal(uncited))
+	}
+	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("controller stopped\n")}}
+	agent := newAnalysisChatAgentForTest(t, server.URL, browser, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
+
+	_, err := agent.Reply(context.Background(), analysisChatTurn())
+	if !errors.Is(err, analysischat.ErrResponseValidationFailed) {
+		t.Fatalf("Reply error = %v", err)
+	}
+	if !strings.Contains(logs.String(), `validation=response_contract`) {
+		t.Fatalf("log missing the validation category: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), `validation_detail="response requires answer and citations"`) {
+		t.Fatalf("log missing the specific contract rule: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), "sentinel-answer-text") {
+		t.Fatalf("validation detail leaked model content: %s", logs.String())
+	}
+}
+
+func TestAnalysisChatResponseOmitsEmptyValidationDetail(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	recordAnalysisChatResponseFailure(
+		context.Background(), "tool_loop_request", 1, 1, &modelResponse{HTTPStatus: 500},
+		analysisChatParseStats{}, "provider_request",
+	)
+	if strings.Contains(logs.String(), "validation_detail") {
+		t.Fatalf("empty detail should be omitted: %s", logs.String())
+	}
+}
+
+func TestAnalysisChatResponseOmitsStaleValidationDetail(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	// A provider failure after a rejected candidate reports its own category
+	// while the earlier candidate's detail is still in stats.
+	recordAnalysisChatResponseFailure(
+		context.Background(), "finalize_request", 3, 3, &modelResponse{HTTPStatus: 200},
+		analysisChatParseStats{
+			Category:         analysisChatValidationContract,
+			ValidationDetail: "response requires answer and citations",
+		},
+		"provider_request",
+	)
+	if strings.Contains(logs.String(), "validation_detail") {
+		t.Fatalf("stale detail attributed to another category: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "validation=provider_request") {
+		t.Fatalf("log missing the reported category: %s", logs.String())
 	}
 }
 
