@@ -2268,4 +2268,11 @@ func TestExactAnalysisFixFailureClassificationIsPublicSafe(t *testing.T) {
 	if failure := analysisFixFailureView(unsafe); failure == nil || failure.Category != AnalysisFixFailureSafetyIntegrity {
 		t.Fatalf("unsafe failure = %+v", failure)
 	}
+
+	if code := analysisFixReasonCode(fixpr.AnalysisFailureProviderCredential); code != ReasonProviderCredentialRejected {
+		t.Fatalf("provider credential code = %s", code)
+	}
+	if ReasonMessage(ReasonProviderCredentialRejected) == ReasonMessage(ReasonGenerationFailed) {
+		t.Fatal("a provider credential rejection reports the generic generation failure message")
+	}
 }

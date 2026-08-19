@@ -17,6 +17,7 @@ export type ActionReasonCode =
   | "source_branch_unknown"
   | "source_revision_diverged"
   | "source_changed"
+  | "provider_credential_rejected"
   | "generation_failed";
 
 export interface ActionEligibility {
@@ -51,6 +52,7 @@ export interface ActionVerification {
 export type AnalysisFixFailureCategory =
   | "no_reviewable_patch"
   | "runtime_infrastructure"
+  | "provider_credential"
   | "result_contract"
   | "safety_integrity"
   | "source_changed"

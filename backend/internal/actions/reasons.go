@@ -27,6 +27,7 @@ const (
 	ReasonSourceBranchUnknown            ReasonCode = "source_branch_unknown"
 	ReasonSourceRevisionDiverged         ReasonCode = "source_revision_diverged"
 	ReasonSourceChanged                  ReasonCode = "source_changed"
+	ReasonProviderCredentialRejected     ReasonCode = "provider_credential_rejected"
 	ReasonGenerationFailed               ReasonCode = "generation_failed"
 )
 
@@ -47,6 +48,7 @@ var reasonCodeOrder = []ReasonCode{
 	ReasonSourceBranchUnknown,
 	ReasonSourceRevisionDiverged,
 	ReasonSourceChanged,
+	ReasonProviderCredentialRejected,
 	ReasonGenerationFailed,
 }
 
@@ -103,6 +105,8 @@ func ReasonMessage(code ReasonCode) string {
 		return "The failure commit is not an ancestor of its branch head, so a patch cannot be safely generated."
 	case ReasonSourceChanged:
 		return "A verified source path is unavailable or changed between the failure revision and its branch head."
+	case ReasonProviderCredentialRejected:
+		return "The model provider rejected the sandbox credential. Generation cannot succeed until the credential is fixed."
 	case ReasonGenerationFailed:
 		return "Draft generation did not complete successfully."
 	default:

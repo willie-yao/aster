@@ -3,7 +3,13 @@
 // URL whose path or query contains a secret.
 package redact
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
+
+// maxOperatorTextBytes bounds one sanitized operator log line.
+const maxOperatorTextBytes = 500
 
 // urlPattern matches an http or https URL up to the first whitespace, quote, or
 // angle bracket. Go's *url.Error embeds the full request URL in its message and
@@ -23,4 +29,22 @@ func URLs(s string) string {
 func Credentials(s string) string {
 	s = bearerPattern.ReplaceAllString(s, "Bearer [redacted]")
 	return credentialPattern.ReplaceAllString(s, "$1=[redacted]")
+}
+
+// OperatorText returns s as one bounded single-line value safe for a log line:
+// URLs and inline credentials are redacted, control characters become spaces,
+// and the result is truncated.
+func OperatorText(s string) string {
+	s = Credentials(URLs(strings.TrimSpace(s)))
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > maxOperatorTextBytes {
+		return s[:maxOperatorTextBytes] + "..."
+	}
+	return s
 }
