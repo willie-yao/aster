@@ -121,6 +121,11 @@ func (c *Client) ToolLoop(
 	env *tools.Env,
 	opts ToolLoopOptions,
 ) (string, error) {
+	// The generic loop reports a cancelled context without spending a model
+	// request on it.
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	schemas := reg.Schemas(enabled)
 	if len(schemas) == 0 {
 		return "", fmt.Errorf("tool loop: no tools enabled (got %v); resolve groups with Registry.Enable first", enabled)
@@ -371,5 +376,5 @@ func traceToolCall(tc modelToolCall, bytesFetched int, failed bool) {
 	if failed {
 		flag = "ERROR"
 	}
-	log.Printf("    🔧 %s(%s) -> %d gcs bytes [%s]", tc.Function.Name, textutil.Truncate(tc.Function.Arguments, 140), bytesFetched, flag)
+	log.Printf("    🔧 %s(%s) -> %d bytes [%s]", tc.Function.Name, textutil.Truncate(tc.Function.Arguments, 140), bytesFetched, flag)
 }
