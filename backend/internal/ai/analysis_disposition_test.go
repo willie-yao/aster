@@ -27,10 +27,15 @@ func TestAnalysisDisposition(t *testing.T) {
 			value.CritiquePassed = false
 			value.CritiqueHardFailures = []string{string(CritiqueRuleCitationMissing)}
 		}, disposition: models.AnalysisDispositionPreliminary, warnings: []string{models.AnalysisWarningArtifactGrounding}},
-		{name: "quality warning", mutate: func(value *models.AIAnalysis) {
+		{name: "unavailable evidence is advisory", mutate: func(value *models.AIAnalysis) {
 			value.CritiquePassed = false
 			value.CritiqueSoftWarnings = []string{string(CritiqueRuleEvidenceUnavailable)}
+		}, disposition: models.AnalysisDispositionGrounded, warnings: []string{models.AnalysisWarningInvestigation}},
+		{name: "available evidence unread", mutate: func(value *models.AIAnalysis) {
+			value.CritiquePassed = false
+			value.CritiqueSoftWarnings = []string{string(CritiqueRuleEvidenceAvailableUnread)}
 		}, disposition: models.AnalysisDispositionPreliminary, warnings: []string{models.AnalysisWarningInvestigation}},
+		{name: "budget exhausted", mutate: func(value *models.AIAnalysis) { value.BudgetExhausted = true }, disposition: models.AnalysisDispositionPreliminary, warnings: []string{models.AnalysisWarningInvestigation}},
 		{name: "source warning", mutate: func(value *models.AIAnalysis) {
 			value.CritiquePassed = false
 			value.CritiqueHardFailures = []string{string(CritiqueRuleSourceUnverified)}

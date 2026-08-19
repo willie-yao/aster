@@ -31,6 +31,7 @@ func AnalysisDisposition(analysis *models.AIAnalysis) (string, []string) {
 			grounded = false
 			warnings[models.AnalysisWarningSourceGrounding] = true
 		case CritiqueRuleTransientConflict:
+			grounded = false
 			warnings[models.AnalysisWarningClassification] = true
 		default:
 			return "", nil
@@ -38,7 +39,10 @@ func AnalysisDisposition(analysis *models.AIAnalysis) (string, []string) {
 	}
 	for _, rule := range analysis.CritiqueSoftWarnings {
 		switch CritiqueRuleID(rule) {
-		case CritiqueRuleEvidenceAvailableUnread, CritiqueRuleEvidenceUnavailable:
+		case CritiqueRuleEvidenceAvailableUnread:
+			grounded = false
+			warnings[models.AnalysisWarningInvestigation] = true
+		case CritiqueRuleEvidenceUnavailable:
 			warnings[models.AnalysisWarningInvestigation] = true
 		case CritiqueRuleRemediationPunt:
 			warnings[models.AnalysisWarningRemediation] = true
@@ -47,9 +51,11 @@ func AnalysisDisposition(analysis *models.AIAnalysis) (string, []string) {
 		}
 	}
 	if analysis.BudgetExhausted {
+		grounded = false
 		warnings[models.AnalysisWarningInvestigation] = true
 	}
 	if analysis.JudgeObjected && !analysis.JudgeRevised {
+		grounded = false
 		warnings[models.AnalysisWarningSemanticReview] = true
 	}
 	codes := make([]string, 0, len(warnings))
@@ -57,7 +63,7 @@ func AnalysisDisposition(analysis *models.AIAnalysis) (string, []string) {
 		codes = append(codes, code)
 	}
 	sort.Strings(codes)
-	if grounded && len(codes) == 0 {
+	if grounded {
 		return models.AnalysisDispositionGrounded, codes
 	}
 	return models.AnalysisDispositionPreliminary, codes
