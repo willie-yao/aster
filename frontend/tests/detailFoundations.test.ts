@@ -45,6 +45,8 @@ const { RuntimeTrend } = (await vite.ssrLoadModule("/src/components/RuntimeTrend
   RuntimeTrend: (props: {
     summary: RuntimeSummary;
     subject: string;
+    selectedBuildID?: string;
+    onSelect?: (buildID: string) => void;
   }) => ReturnType<typeof createElement>;
 };
 const { DaySummaryButton, HistoricalTable } = (await vite.ssrLoadModule("/src/components/AIUsageDaily.tsx")) as {
@@ -376,15 +378,33 @@ test("runtime trend renders accessible empty and outlier states", () => {
     latestOutlier: true,
   };
   const outlierHTML = render(
-    createElement(RuntimeTrend, { summary: outlier, subject: "Unit tests" }),
+    createElement(RuntimeTrend, {
+      summary: outlier,
+      subject: "Unit tests",
+      selectedBuildID: "3",
+      onSelect: () => {},
+    }),
   );
   assert.match(outlierHTML, /role="img"/);
   assert.match(
     outlierHTML,
-    /aria-label="Unit tests runtime history\.[^"]*Build 2, failed, 10s[^"]*Build 5, passed, 20s"/,
+    /aria-label="Unit tests runtime history\.[^"]*#2 · Failed · 10s[^"]*#5 · Passed · 20s[^"]*"/,
   );
   assert.match(outlierHTML, /observed outlier, not proof/);
   assert.match(outlierHTML, /fill="var\(--mui-palette-success-main\)" stroke="var\(--mui-palette-warning-main\)"/);
+  // Selection reads through the same ring Run history uses, and pointer
+  // affordance only appears once a selection handler is supplied.
+  assert.match(outlierHTML, /r="9" fill="none" stroke="var\(--mui-palette-primary-main\)"/);
+  assert.match(outlierHTML, /cursor:pointer/);
+  // The summary reads once, below the chart, instead of duplicating the band.
+  assert.match(outlierHTML, /Samples: 5/);
+  assert.equal(outlierHTML.match(/Direction: /g)?.length, 1);
+
+  const staticHTML = render(
+    createElement(RuntimeTrend, { summary: outlier, subject: "Unit tests" }),
+  );
+  assert.doesNotMatch(staticHTML, /cursor:pointer/);
+  assert.doesNotMatch(staticHTML, /r="9" fill="none"/);
 });
 
 test("mobile usage day disclosure names the accounting summary", () => {

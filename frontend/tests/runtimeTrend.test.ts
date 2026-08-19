@@ -4,6 +4,7 @@ import {
   jobRuntimePoints,
   median,
   nearestRankPercentile,
+  runtimeChartLayout,
   summarizeRuntime,
   testRuntimePoints,
   type RuntimePoint,
@@ -145,4 +146,36 @@ test("test runtime points include passed and failed but not skipped or absent", 
       ["3", 30, false],
     ],
   );
+});
+
+// Pointer targets must never overlap or hand a hover to a neighboring sample,
+// including at the dense sample counts a wide build window produces.
+test("runtime chart bands tile the width and hold their own sample", () => {
+  for (const count of [1, 2, 10, 60]) {
+    const values = Array.from({ length: count }, (_, index) => index + 1);
+    const layout = runtimeChartLayout(values, 720, 180, 18);
+
+    assert.equal(layout.points.length, count);
+    assert.equal(layout.points[0].bandX, 0);
+    const last = layout.points[count - 1];
+    assert.equal(last.bandX + last.bandWidth, 720);
+
+    layout.points.forEach((point, index) => {
+      assert.ok(point.bandWidth > 0, `count ${count} index ${index} width`);
+      assert.ok(
+        point.x >= point.bandX && point.x <= point.bandX + point.bandWidth,
+        `count ${count} index ${index} contains its point`,
+      );
+      if (index > 0) {
+        const previous = layout.points[index - 1];
+        assert.equal(
+          previous.bandX + previous.bandWidth,
+          point.bandX,
+          `count ${count} index ${index} adjoins without overlap`,
+        );
+      }
+    });
+  }
+
+  assert.deepEqual(runtimeChartLayout([], 720, 180, 18), { path: "", points: [] });
 });

@@ -555,7 +555,12 @@ export function JobDetailPage() {
             buildFailureAnalysis={buildFailureBriefing}
             runHistory={runHistory}
             runtimeTrend={
-              <RuntimeTrend summary={runtimeSummary} subject={displayName} />
+              <RuntimeTrend
+                summary={runtimeSummary}
+                subject={displayName}
+                selectedBuildID={selectedBuildId}
+                onSelect={handleSelectRun}
+              />
             }
             runMetadata={runMetadata}
           />

@@ -980,6 +980,8 @@ export function TestDetailPage() {
           <RuntimeTrend
             summary={runtimeSummary}
             subject={parsedTitle.displayName}
+            selectedBuildID={effectiveSelectedID ?? undefined}
+            onSelect={selectRun}
           />
           {runMetadata}
         </Stack>

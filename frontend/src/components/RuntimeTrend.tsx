@@ -1,14 +1,18 @@
 import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { DetailSectionBand } from "./DetailSectionBand";
-import { formatDuration } from "../lib/utils";
-import type { RuntimeSummary } from "../lib/runtimeTrend";
+import { formatAccessibleDate, formatDuration } from "../lib/utils";
+import { runtimeChartLayout } from "../lib/runtimeTrend";
+import type { RuntimePoint, RuntimeSummary } from "../lib/runtimeTrend";
 import { overviewTypography } from "../theme/overview";
 
 interface RuntimeTrendProps {
   summary: RuntimeSummary;
   subject: string;
+  selectedBuildID?: string;
+  onSelect?: (buildID: string) => void;
 }
 
 function trendLabel(summary: RuntimeSummary): string {
@@ -23,37 +27,21 @@ function trendLabel(summary: RuntimeSummary): string {
   return `${summary.direction === "increasing" ? "Increasing" : "Decreasing"} ${percent}%`;
 }
 
-function pathFor(
-  values: number[],
-  width: number,
-  height: number,
-  inset: number,
-): { path: string; points: Array<{ x: number; y: number }> } {
-  if (values.length === 0) return { path: "", points: [] };
-  const max = Math.max(...values, 1);
-  const plotWidth = width - inset * 2;
-  const plotHeight = height - inset * 2;
-  const points = values.map((value, index) => ({
-    x:
-      values.length === 1
-        ? width / 2
-        : inset + (index / (values.length - 1)) * plotWidth,
-    y: inset + plotHeight - (value / max) * plotHeight,
-  }));
-  return {
-    path: points
-      .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
-      .join(" "),
-    points,
-  };
+function sampleLabel(sample: RuntimePoint): string {
+  return `#${sample.buildID} · ${sample.passed ? "Passed" : "Failed"} · ${formatDuration(sample.durationSeconds)} · ${formatAccessibleDate(sample.timestamp)}`;
 }
 
-export function RuntimeTrend({ summary, subject }: RuntimeTrendProps) {
+export function RuntimeTrend({
+  summary,
+  subject,
+  selectedBuildID,
+  onSelect,
+}: RuntimeTrendProps) {
   const width = 720;
   const height = 180;
   const inset = 18;
   const values = summary.points.map((point) => point.durationSeconds);
-  const chart = pathFor(values, width, height, inset);
+  const chart = runtimeChartLayout(values, width, height, inset);
   const max = Math.max(...values, 1);
   const referenceY = (value: number) =>
     inset + (height - inset * 2) - (value / max) * (height - inset * 2);
@@ -68,12 +56,7 @@ export function RuntimeTrend({ summary, subject }: RuntimeTrendProps) {
   ]
     .filter(Boolean)
     .join(" · ");
-  const sampleDetails = summary.points
-    .map(
-      (sample) =>
-        `Build ${sample.buildID}, ${sample.passed ? "passed" : "failed"}, ${formatDuration(sample.durationSeconds)}`,
-    )
-    .join(". ");
+  const sampleDetails = summary.points.map(sampleLabel).join(". ");
 
   return (
     <Box
@@ -86,7 +69,7 @@ export function RuntimeTrend({ summary, subject }: RuntimeTrendProps) {
         borderColor: "divider",
       }}
     >
-      <DetailSectionBand title="Runtime trend" metadata={summaryText} />
+      <DetailSectionBand title="Runtime trend" />
       {summary.points.length === 0 ? (
         <Typography
           color="text.secondary"
@@ -96,6 +79,8 @@ export function RuntimeTrend({ summary, subject }: RuntimeTrendProps) {
         </Typography>
       ) : (
         <Stack spacing={1} sx={{ px: 1.5, py: 1.5 }}>
+          {/* Points are pointer-only: Run history exposes the same builds as
+              keyboard-operable controls, so the chart stays a single image. */}
           <Box
             component="svg"
             viewBox={`0 0 ${width} ${height}`}
@@ -137,28 +122,49 @@ export function RuntimeTrend({ summary, subject }: RuntimeTrendProps) {
             {chart.points.map((point, index) => {
               const sample = summary.points[index];
               const outlier = index === latestIndex && summary.latestOutlier;
+              const selected = sample.buildID === selectedBuildID;
               return (
-                <circle
-                  key={sample.buildID}
-                  cx={point.x}
-                  cy={point.y}
-                  r={outlier ? 6 : 4}
-                  fill={
-                    sample.passed
-                      ? "var(--mui-palette-success-main)"
-                      : "var(--mui-palette-error-main)"
-                  }
-                  stroke={
-                    outlier
-                      ? "var(--mui-palette-warning-main)"
-                      : "var(--mui-palette-background-default)"
-                  }
-                  strokeWidth={outlier ? 4 : 2}
-                >
-                  <title>
-                    {`Build ${sample.buildID}: ${sample.passed ? "passed" : "failed"}, ${formatDuration(sample.durationSeconds)}`}
-                  </title>
-                </circle>
+                <Tooltip key={sample.buildID} title={sampleLabel(sample)}>
+                  <Box
+                    component="g"
+                    onClick={onSelect ? () => onSelect(sample.buildID) : undefined}
+                    sx={{ cursor: onSelect ? "pointer" : "default" }}
+                  >
+                    {selected && (
+                      <circle
+                        cx={point.x}
+                        cy={point.y}
+                        r={9}
+                        fill="none"
+                        stroke="var(--mui-palette-primary-main)"
+                        strokeWidth={3}
+                      />
+                    )}
+                    <circle
+                      cx={point.x}
+                      cy={point.y}
+                      r={outlier ? 6 : 4}
+                      fill={
+                        sample.passed
+                          ? "var(--mui-palette-success-main)"
+                          : "var(--mui-palette-error-main)"
+                      }
+                      stroke={
+                        outlier
+                          ? "var(--mui-palette-warning-main)"
+                          : "var(--mui-palette-background-default)"
+                      }
+                      strokeWidth={outlier ? 4 : 2}
+                    />
+                    <rect
+                      x={point.bandX}
+                      y={0}
+                      width={point.bandWidth}
+                      height={height}
+                      fill="transparent"
+                    />
+                  </Box>
+                </Tooltip>
               );
             })}
           </Box>
@@ -172,6 +178,9 @@ export function RuntimeTrend({ summary, subject }: RuntimeTrendProps) {
               ...overviewTypography.description,
             }}
           >
+            <Box component="span">
+              Samples: {summary.sampleCount.toLocaleString()}
+            </Box>
             <Box component="span">Median: {summary.medianSeconds === null ? "Not available" : formatDuration(summary.medianSeconds)}</Box>
             <Box component="span">p95: {summary.p95Seconds === null ? "Not available" : formatDuration(summary.p95Seconds)}</Box>
             <Box component="span">Direction: {trendLabel(summary)}</Box>

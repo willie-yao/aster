@@ -132,6 +132,55 @@ export function summarizeRuntime(points: RuntimePoint[]): RuntimeSummary {
   };
 }
 
+export interface RuntimeChartPoint {
+  x: number;
+  y: number;
+  bandX: number;
+  bandWidth: number;
+}
+
+export interface RuntimeChartLayout {
+  path: string;
+  points: RuntimeChartPoint[];
+}
+
+// Bands split at the midpoints between neighboring samples, so every pointer
+// target holds exactly its own sample, tiles the full width, and stays as large
+// as the spacing allows however many samples the window holds.
+export function runtimeChartLayout(
+  values: number[],
+  width: number,
+  height: number,
+  inset: number,
+): RuntimeChartLayout {
+  if (values.length === 0) return { path: "", points: [] };
+  const max = Math.max(...values, 1);
+  const plotWidth = width - inset * 2;
+  const plotHeight = height - inset * 2;
+  const xs = values.map((_, index) =>
+    values.length === 1
+      ? width / 2
+      : inset + (index / (values.length - 1)) * plotWidth,
+  );
+  const edges = [
+    0,
+    ...xs.slice(1).map((x, index) => (xs[index] + x) / 2),
+    width,
+  ];
+  const points = values.map((value, index) => ({
+    x: xs[index],
+    y: inset + plotHeight - (value / max) * plotHeight,
+    bandX: edges[index],
+    bandWidth: edges[index + 1] - edges[index],
+  }));
+  return {
+    path: points
+      .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
+      .join(" "),
+    points,
+  };
+}
+
 export function jobRuntimePoints(runs: BuildResult[]): RuntimePoint[] {
   return chronological(
     runs
