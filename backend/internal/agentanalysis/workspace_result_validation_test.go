@@ -202,6 +202,12 @@ func TestWorkspaceAnalysisDispositionSeparatesWarningsFromRejection(t *testing.T
 	if disposition != models.AnalysisDispositionGrounded || len(warnings) != 0 {
 		t.Fatalf("grounded disposition=%q warnings=%v", disposition, warnings)
 	}
+	analysis.UnresolvedDetails = []string{"remediation pin was not verified"}
+	disposition, warnings = WorkspaceAnalysisDisposition(analysis, WorkspaceResultValidation{Status: WorkspaceResultAccepted}, false)
+	if disposition != models.AnalysisDispositionGrounded || !slices.Equal(warnings, []string{models.AnalysisWarningInvestigation}) {
+		t.Fatalf("advisory disposition=%q warnings=%v", disposition, warnings)
+	}
+	analysis.UnresolvedDetails = nil
 	disposition, warnings = WorkspaceAnalysisDisposition(analysis, WorkspaceResultValidation{Status: WorkspaceResultAcceptedWithWarnings, Codes: []string{WorkspaceInvalidRelevantFile}}, true)
 	if disposition != models.AnalysisDispositionPreliminary || !slices.Equal(warnings, []string{models.AnalysisWarningSourceGrounding}) {
 		t.Fatalf("preliminary disposition=%q warnings=%v", disposition, warnings)
