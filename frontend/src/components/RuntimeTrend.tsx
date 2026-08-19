@@ -1,14 +1,18 @@
 import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
+import { Link as RouterLink } from "react-router-dom";
 import { DetailSectionBand } from "./DetailSectionBand";
 import { formatDuration } from "../lib/utils";
+import { jobRunPath } from "../lib/routes";
 import type { RuntimeSummary } from "../lib/runtimeTrend";
 import { overviewTypography } from "../theme/overview";
 
 interface RuntimeTrendProps {
   summary: RuntimeSummary;
   subject: string;
+  jobID: string;
 }
 
 function trendLabel(summary: RuntimeSummary): string {
@@ -48,7 +52,7 @@ function pathFor(
   };
 }
 
-export function RuntimeTrend({ summary, subject }: RuntimeTrendProps) {
+export function RuntimeTrend({ summary, subject, jobID }: RuntimeTrendProps) {
   const width = 720;
   const height = 180;
   const inset = 18;
@@ -68,12 +72,6 @@ export function RuntimeTrend({ summary, subject }: RuntimeTrendProps) {
   ]
     .filter(Boolean)
     .join(" · ");
-  const sampleDetails = summary.points
-    .map(
-      (sample) =>
-        `Build ${sample.buildID}, ${sample.passed ? "passed" : "failed"}, ${formatDuration(sample.durationSeconds)}`,
-    )
-    .join(". ");
 
   return (
     <Box
@@ -99,8 +97,9 @@ export function RuntimeTrend({ summary, subject }: RuntimeTrendProps) {
           <Box
             component="svg"
             viewBox={`0 0 ${width} ${height}`}
-            role="img"
-            aria-label={`${subject} runtime history. ${summaryText}. ${sampleDetails}`}
+            // Deliberately not an image role: that would make the chart atomic
+            // and hide the per-run links inside it from assistive technology.
+            aria-label={`${subject} runtime history. ${summaryText}`}
             sx={{ width: "100%", height: "auto", minHeight: 140 }}
           >
             <title>{`${subject} runtime history. ${summaryText}`}</title>
@@ -137,28 +136,45 @@ export function RuntimeTrend({ summary, subject }: RuntimeTrendProps) {
             {chart.points.map((point, index) => {
               const sample = summary.points[index];
               const outlier = index === latestIndex && summary.latestOutlier;
+              const label = `Build ${sample.buildID}: ${sample.passed ? "passed" : "failed"}, ${formatDuration(sample.durationSeconds)}`;
               return (
-                <circle
-                  key={sample.buildID}
-                  cx={point.x}
-                  cy={point.y}
-                  r={outlier ? 6 : 4}
-                  fill={
-                    sample.passed
-                      ? "var(--mui-palette-success-main)"
-                      : "var(--mui-palette-error-main)"
-                  }
-                  stroke={
-                    outlier
-                      ? "var(--mui-palette-warning-main)"
-                      : "var(--mui-palette-background-default)"
-                  }
-                  strokeWidth={outlier ? 4 : 2}
-                >
-                  <title>
-                    {`Build ${sample.buildID}: ${sample.passed ? "passed" : "failed"}, ${formatDuration(sample.durationSeconds)}`}
-                  </title>
-                </circle>
+                <Tooltip key={sample.buildID} title={label}>
+                  <Box
+                    component={RouterLink}
+                    to={jobRunPath(jobID, sample.buildID)}
+                    aria-label={`Open run ${sample.buildID}, ${sample.passed ? "passed" : "failed"}, ${formatDuration(sample.durationSeconds)}`}
+                    sx={{
+                      cursor: "pointer",
+                      "&:focus-visible": {
+                        outline: "2px solid",
+                        outlineColor: "primary.main",
+                      },
+                    }}
+                  >
+                    {/* A transparent target keeps the pointer and keyboard hit
+                        area usable without enlarging the plotted dot. The chart
+                        scales with its container, so this clears 24 CSS px at
+                        common widths and stays well inside the spacing between
+                        adjacent runs on narrow ones. */}
+                    <circle cx={point.x} cy={point.y} r={17} fill="transparent" />
+                    <circle
+                      cx={point.x}
+                      cy={point.y}
+                      r={outlier ? 6 : 4}
+                      fill={
+                        sample.passed
+                          ? "var(--mui-palette-success-main)"
+                          : "var(--mui-palette-error-main)"
+                      }
+                      stroke={
+                        outlier
+                          ? "var(--mui-palette-warning-main)"
+                          : "var(--mui-palette-background-default)"
+                      }
+                      strokeWidth={outlier ? 4 : 2}
+                    />
+                  </Box>
+                </Tooltip>
               );
             })}
           </Box>
@@ -172,9 +188,36 @@ export function RuntimeTrend({ summary, subject }: RuntimeTrendProps) {
               ...overviewTypography.description,
             }}
           >
-            <Box component="span">Median: {summary.medianSeconds === null ? "Not available" : formatDuration(summary.medianSeconds)}</Box>
-            <Box component="span">p95: {summary.p95Seconds === null ? "Not available" : formatDuration(summary.p95Seconds)}</Box>
-            <Box component="span">Direction: {trendLabel(summary)}</Box>
+            {/* The band above states median, p95, and direction, so this row
+                explains what the reference lines mean instead of restating
+                their values. */}
+            <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.75 }}>
+              <Box
+                component="span"
+                aria-hidden
+                sx={{
+                  width: 18,
+                  borderTop: "2px dashed",
+                  borderColor: "text.secondary",
+                  opacity: 0.55,
+                }}
+              />
+              Median
+            </Box>
+            <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.75 }}>
+              <Box
+                component="span"
+                aria-hidden
+                sx={{
+                  width: 18,
+                  borderTop: "2px dashed",
+                  borderColor: "warning.main",
+                  opacity: 0.55,
+                }}
+              />
+              p95
+            </Box>
+            <Box component="span">Select a point to open that run</Box>
           </Box>
           {summary.latestOutlier && (
             <Typography color="warning" sx={overviewTypography.secondaryBody}>

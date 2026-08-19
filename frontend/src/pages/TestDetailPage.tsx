@@ -981,6 +981,7 @@ export function TestDetailPage() {
           <RuntimeTrend
             summary={runtimeSummary}
             subject={parsedTitle.displayName}
+            jobID={canonicalJobID}
           />
           {runMetadata}
         </Stack>

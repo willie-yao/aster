@@ -45,6 +45,7 @@ const { RuntimeTrend } = (await vite.ssrLoadModule("/src/components/RuntimeTrend
   RuntimeTrend: (props: {
     summary: RuntimeSummary;
     subject: string;
+    jobID: string;
   }) => ReturnType<typeof createElement>;
 };
 const { DaySummaryButton, HistoricalTable } = (await vite.ssrLoadModule("/src/components/AIUsageDaily.tsx")) as {
@@ -353,7 +354,7 @@ test("runtime trend renders accessible empty and outlier states", () => {
     latestOutlier: false,
   };
   const emptyHTML = render(
-    createElement(RuntimeTrend, { summary: empty, subject: "Unit tests" }),
+    createElement(RuntimeTrend, { summary: empty, subject: "Unit tests", jobID: "capz-e2e" }),
   );
   assert.match(emptyHTML, /aria-label="Unit tests runtime trend"/);
   assert.match(emptyHTML, /No completed runtime samples are available/);
@@ -376,15 +377,26 @@ test("runtime trend renders accessible empty and outlier states", () => {
     latestOutlier: true,
   };
   const outlierHTML = render(
-    createElement(RuntimeTrend, { summary: outlier, subject: "Unit tests" }),
+    createElement(
+      MemoryRouter,
+      null,
+      createElement(RuntimeTrend, { summary: outlier, subject: "Unit tests", jobID: "capz-e2e" }),
+    ),
   );
-  assert.match(outlierHTML, /role="img"/);
-  assert.match(
-    outlierHTML,
-    /aria-label="Unit tests runtime history\.[^"]*Build 2, failed, 10s[^"]*Build 5, passed, 20s"/,
-  );
+  // The chart is no longer role="img": that made it atomic and hid the
+  // per-run links inside it from assistive technology.
+  assert.doesNotMatch(outlierHTML, /role="img"/);
+  assert.match(outlierHTML, /aria-label="Unit tests runtime history\. 5 samples · median 10s · p95 20s · Increasing 100%"/);
   assert.match(outlierHTML, /observed outlier, not proof/);
   assert.match(outlierHTML, /fill="var\(--mui-palette-success-main\)" stroke="var\(--mui-palette-warning-main\)"/);
+
+  // Each sample is its own link to that run, named for a screen reader, with a
+  // transparent target larger than the plotted dot.
+  const links = [...outlierHTML.matchAll(/<a[^>]*href="([^"]*)"[^>]*>/gu)];
+  assert.equal(links.length, 5);
+  assert.match(outlierHTML, /href="\/job\/capz-e2e\?run=2"/);
+  assert.match(outlierHTML, /aria-label="Open run 2, failed, 10s"/);
+  assert.match(outlierHTML, /<circle[^>]*r="17"[^>]*fill="transparent"/);
 });
 
 test("mobile usage day disclosure names the accounting summary", () => {

@@ -177,6 +177,30 @@ test("a long section cannot run into the next one without a boundary", () => {
   assert.ok(pt > labelGap, `section padding ${pt} must exceed the label gap ${labelGap}`);
 });
 
+test("the runtime trend states its stats once and makes each sample reachable", () => {
+  const trend = source("src/components/RuntimeTrend.tsx");
+
+  // The band already reads "N samples · median X · p95 Y · <direction>", so a
+  // footer repeating those same three values a few hundred pixels below is
+  // duplication, not reinforcement.
+  assert.match(trend, /<DetailSectionBand title="Runtime trend" metadata=\{summaryText\} \/>/);
+  assert.doesNotMatch(trend, /Median: \{summary\.medianSeconds/);
+  assert.doesNotMatch(trend, /p95: \{summary\.p95Seconds/);
+  assert.doesNotMatch(trend, /Direction: \{trendLabel\(summary\)\}/);
+
+  // What replaces it explains the two dashed reference lines, which nothing
+  // else on the page identifies.
+  assert.match(trend, /borderTop: "2px dashed"/);
+
+  // Every sample is a link to its run, matching how Sparkline already treats
+  // run dots, rather than an inert circle.
+  assert.match(trend, /component=\{RouterLink\}/);
+  assert.match(trend, /to=\{jobRunPath\(jobID, sample\.buildID\)\}/);
+  assert.match(trend, /cursor: "pointer"/);
+  assert.match(trend, /"&:focus-visible"/);
+  assert.doesNotMatch(trend, /role="img"/);
+});
+
 test("the severity chip is suppressed exactly where a header already states it", () => {
   const panel = source("src/components/AiAnalysisPanel.tsx");
   const testDetail = source("src/pages/TestDetailPage.tsx");
