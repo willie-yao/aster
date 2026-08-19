@@ -36,11 +36,13 @@ def under_any(path: str, prefixes: tuple[str, ...]) -> bool:
 def documentation_path(path: str) -> bool:
     return (
         under(path, "docs")
+        or under(path, "changelog")
         or path.endswith("/README.md")
         or path
         in {
             ".gitignore",
             "AGENTS.md",
+            "CHANGELOG.md",
             "CODE_OF_CONDUCT",
             "CODE_OF_CONDUCT.md",
             "CONTRIBUTING.md",
@@ -413,6 +415,8 @@ def self_test() -> None:
             [".agents/skills/setup-aster-consumer/references/decisions.md"],
             {"backend", "documentation"},
         ),
+        ("release notes", ["changelog/v1.2.3.md"], {"documentation"}),
+        ("changelog index", ["CHANGELOG.md"], {"documentation"}),
         (".gitattributes release contract", [".gitattributes"], set(CLASSES)),
         (
             "frontend",
