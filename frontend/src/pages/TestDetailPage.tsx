@@ -976,11 +976,11 @@ export function TestDetailPage() {
             alignSelf: "start",
           }}
         >
+          {runHistory}
           <RuntimeTrend
             summary={runtimeSummary}
             subject={parsedTitle.displayName}
           />
-          {runHistory}
           {runMetadata}
         </Stack>
       </Box>

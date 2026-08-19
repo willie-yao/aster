@@ -88,11 +88,13 @@ export function JobDetailPrimaryLayout({
   patternAnalysis,
   buildFailureAnalysis,
   runHistory,
+  runtimeTrend,
   runMetadata,
 }: {
   patternAnalysis?: ReactNode;
   buildFailureAnalysis?: ReactNode;
   runHistory: ReactNode;
+  runtimeTrend: ReactNode;
   runMetadata: ReactNode;
 }) {
   if (!patternAnalysis && !buildFailureAnalysis) {
@@ -109,7 +111,10 @@ export function JobDetailPrimaryLayout({
           alignItems: "start",
         }}
       >
-        {runHistory}
+        <Stack spacing={2} sx={{ minWidth: 0 }}>
+          {runHistory}
+          {runtimeTrend}
+        </Stack>
         {runMetadata}
       </Box>
     );
@@ -144,6 +149,7 @@ export function JobDetailPrimaryLayout({
         }}
       >
         {runHistory}
+        {runtimeTrend}
         {runMetadata}
       </Box>
     </Box>
@@ -548,10 +554,11 @@ export function JobDetailPage() {
             patternAnalysis={patternAnalysis}
             buildFailureAnalysis={buildFailureBriefing}
             runHistory={runHistory}
+            runtimeTrend={
+              <RuntimeTrend summary={runtimeSummary} subject={displayName} />
+            }
             runMetadata={runMetadata}
           />
-
-          <RuntimeTrend summary={runtimeSummary} subject={displayName} />
 
           {crossRunGrid}
 
