@@ -45,7 +45,7 @@ const { RuntimeTrend } = (await vite.ssrLoadModule("/src/components/RuntimeTrend
   RuntimeTrend: (props: {
     summary: RuntimeSummary;
     subject: string;
-    jobID: string;
+    runHref: (buildID: string) => string;
   }) => ReturnType<typeof createElement>;
 };
 const { DaySummaryButton, HistoricalTable } = (await vite.ssrLoadModule("/src/components/AIUsageDaily.tsx")) as {
@@ -354,7 +354,7 @@ test("runtime trend renders accessible empty and outlier states", () => {
     latestOutlier: false,
   };
   const emptyHTML = render(
-    createElement(RuntimeTrend, { summary: empty, subject: "Unit tests", jobID: "capz-e2e" }),
+    createElement(RuntimeTrend, { summary: empty, subject: "Unit tests", runHref: (id: string) => `/job/capz-e2e?run=${id}` }),
   );
   assert.match(emptyHTML, /aria-label="Unit tests runtime trend"/);
   assert.match(emptyHTML, /No completed runtime samples are available/);
@@ -380,7 +380,7 @@ test("runtime trend renders accessible empty and outlier states", () => {
     createElement(
       MemoryRouter,
       null,
-      createElement(RuntimeTrend, { summary: outlier, subject: "Unit tests", jobID: "capz-e2e" }),
+      createElement(RuntimeTrend, { summary: outlier, subject: "Unit tests", runHref: (id: string) => `/job/capz-e2e?run=${id}` }),
     ),
   );
   // The chart is no longer role="img": that made it atomic and hid the
@@ -397,6 +397,55 @@ test("runtime trend renders accessible empty and outlier states", () => {
   assert.match(outlierHTML, /href="\/job\/capz-e2e\?run=2"/);
   assert.match(outlierHTML, /aria-label="Open run 2, failed, 10s"/);
   assert.match(outlierHTML, /<circle[^>]*r="17"[^>]*fill="transparent"/);
+});
+
+test("runtime targets shrink with the spacing so they never capture a neighbour's click", () => {
+  // builds: is consumer-tuned, so the point count is not fixed at the 12 the
+  // default window happens to produce. With a fixed radius, a longer history
+  // overlaps adjacent targets and a click lands on the wrong run.
+  const sample = (index: number) => ({
+    buildID: String(index),
+    timestamp: `2026-08-01T00:00:${String(index).padStart(2, "0")}Z`,
+    durationSeconds: 10,
+    passed: true,
+  });
+
+  for (const count of [2, 12, 20, 40]) {
+    const summary: RuntimeSummary = {
+      points: Array.from({ length: count }, (_, index) => sample(index)),
+      sampleCount: count,
+      medianSeconds: 10,
+      p95Seconds: 10,
+      madSeconds: 0,
+      direction: "stable",
+      changeRatio: 0,
+      latestOutlier: false,
+    };
+    const html = render(
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(RuntimeTrend, {
+          summary,
+          subject: "Unit tests",
+          runHref: (id: string) => `/job/capz-e2e?run=${id}`,
+        }),
+      ),
+    );
+
+    const radii = [...html.matchAll(/<circle cx="([\d.]+)" cy="[\d.]+" r="([\d.]+)" fill="transparent"/gu)];
+    assert.equal(radii.length, count, `expected ${count} hit targets`);
+
+    const radius = Number(radii[0][2]);
+    const centres = radii.map((match) => Number(match[1])).sort((left, right) => left - right);
+    const gap = count > 1 ? centres[1] - centres[0] : Infinity;
+
+    assert.ok(radius > 0, `hit radius must be positive at ${count} points`);
+    assert.ok(
+      radius * 2 <= gap + 0.001,
+      `at ${count} points the ${radius} radius target overlaps its neighbour ${gap} away`,
+    );
+  }
 });
 
 test("mobile usage day disclosure names the accounting summary", () => {

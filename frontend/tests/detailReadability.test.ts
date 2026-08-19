@@ -189,16 +189,24 @@ test("the runtime trend states its stats once and makes each sample reachable", 
   assert.doesNotMatch(trend, /Direction: \{trendLabel\(summary\)\}/);
 
   // What replaces it explains the two dashed reference lines, which nothing
-  // else on the page identifies.
-  assert.match(trend, /borderTop: "2px dashed"/);
+  // else on the page identifies. The swatches repeat the chart's own dash
+  // patterns so the mapping does not rely on telling the colours apart.
+  assert.match(trend, /strokeDasharray="7 6"[\s\S]*strokeDasharray="7 6"/);
+  assert.match(trend, /strokeDasharray="3 5"[\s\S]*strokeDasharray="3 5"/);
 
   // Every sample is a link to its run, matching how Sparkline already treats
-  // run dots, rather than an inert circle.
+  // run dots, rather than an inert circle. The destination is supplied by the
+  // page so the test page keeps the reader on the test.
   assert.match(trend, /component=\{RouterLink\}/);
-  assert.match(trend, /to=\{jobRunPath\(jobID, sample\.buildID\)\}/);
+  assert.match(trend, /to=\{runHref\(sample\.buildID\)\}/);
   assert.match(trend, /cursor: "pointer"/);
   assert.match(trend, /"&:focus-visible"/);
   assert.doesNotMatch(trend, /role="img"/);
+
+  const job = source("src/pages/JobDetailPage.tsx");
+  const testDetail = source("src/pages/TestDetailPage.tsx");
+  assert.match(job, /runHref=\{\(buildID\) => jobRunPath\(canonicalJobID, buildID\)\}/);
+  assert.match(testDetail, /runHref=\{\(buildID\) => testRunPath\(canonicalJobID, testName, buildID\)\}/);
 });
 
 test("the severity chip is suppressed exactly where a header already states it", () => {

@@ -25,7 +25,7 @@ import { useJobDetail } from "../hooks/useData";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useManifest } from "../hooks/useManifest";
 import { persistentAfter } from "../lib/attention";
-import { jobPath, jobRunPath } from "../lib/routes";
+import { jobPath, jobRunPath, testRunPath } from "../lib/routes";
 import {
   formatDuration,
   highlightStackTrace,
@@ -981,7 +981,7 @@ export function TestDetailPage() {
           <RuntimeTrend
             summary={runtimeSummary}
             subject={parsedTitle.displayName}
-            jobID={canonicalJobID}
+            runHref={(buildID) => testRunPath(canonicalJobID, testName, buildID)}
           />
           {runMetadata}
         </Stack>

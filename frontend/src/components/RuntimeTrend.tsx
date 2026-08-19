@@ -5,14 +5,15 @@ import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
 import { DetailSectionBand } from "./DetailSectionBand";
 import { formatDuration } from "../lib/utils";
-import { jobRunPath } from "../lib/routes";
 import type { RuntimeSummary } from "../lib/runtimeTrend";
 import { overviewTypography } from "../theme/overview";
 
 interface RuntimeTrendProps {
   summary: RuntimeSummary;
   subject: string;
-  jobID: string;
+  // Destination for one sample. The job page keeps the reader on the job and
+  // selects the run; the test page keeps them on the test.
+  runHref: (buildID: string) => string;
 }
 
 function trendLabel(summary: RuntimeSummary): string {
@@ -52,13 +53,19 @@ function pathFor(
   };
 }
 
-export function RuntimeTrend({ summary, subject, jobID }: RuntimeTrendProps) {
+export function RuntimeTrend({ summary, subject, runHref }: RuntimeTrendProps) {
   const width = 720;
   const height = 180;
   const inset = 18;
   const values = summary.points.map((point) => point.durationSeconds);
   const chart = pathFor(values, width, height, inset);
   const max = Math.max(...values, 1);
+  // The chart stretches to its container and the run count is consumer-tuned,
+  // so the target shrinks with the spacing rather than overlapping its
+  // neighbours and capturing their clicks.
+  const spacing =
+    values.length > 1 ? (width - inset * 2) / (values.length - 1) : width;
+  const hitRadius = Math.min(17, spacing / 2);
   const referenceY = (value: number) =>
     inset + (height - inset * 2) - (value / max) * (height - inset * 2);
   const latestIndex = summary.points.length - 1;
@@ -141,7 +148,7 @@ export function RuntimeTrend({ summary, subject, jobID }: RuntimeTrendProps) {
                 <Tooltip key={sample.buildID} title={label}>
                   <Box
                     component={RouterLink}
-                    to={jobRunPath(jobID, sample.buildID)}
+                    to={runHref(sample.buildID)}
                     aria-label={`Open run ${sample.buildID}, ${sample.passed ? "passed" : "failed"}, ${formatDuration(sample.durationSeconds)}`}
                     sx={{
                       cursor: "pointer",
@@ -156,7 +163,7 @@ export function RuntimeTrend({ summary, subject, jobID }: RuntimeTrendProps) {
                         scales with its container, so this clears 24 CSS px at
                         common widths and stays well inside the spacing between
                         adjacent runs on narrow ones. */}
-                    <circle cx={point.x} cy={point.y} r={17} fill="transparent" />
+                    <circle cx={point.x} cy={point.y} r={hitRadius} fill="transparent" />
                     <circle
                       cx={point.x}
                       cy={point.y}
@@ -190,31 +197,36 @@ export function RuntimeTrend({ summary, subject, jobID }: RuntimeTrendProps) {
           >
             {/* The band above states median, p95, and direction, so this row
                 explains what the reference lines mean instead of restating
-                their values. */}
+                their values. Each swatch repeats its line's dash pattern, so
+                the mapping does not depend on telling the colours apart. */}
             <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.75 }}>
-              <Box
-                component="span"
-                aria-hidden
-                sx={{
-                  width: 18,
-                  borderTop: "2px dashed",
-                  borderColor: "text.secondary",
-                  opacity: 0.55,
-                }}
-              />
+              <Box component="svg" aria-hidden width={20} height={8} viewBox="0 0 20 8">
+                <line
+                  x1={0}
+                  x2={20}
+                  y1={4}
+                  y2={4}
+                  stroke="var(--mui-palette-text-secondary)"
+                  strokeDasharray="7 6"
+                  strokeWidth={2}
+                  opacity="0.55"
+                />
+              </Box>
               Median
             </Box>
             <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.75 }}>
-              <Box
-                component="span"
-                aria-hidden
-                sx={{
-                  width: 18,
-                  borderTop: "2px dashed",
-                  borderColor: "warning.main",
-                  opacity: 0.55,
-                }}
-              />
+              <Box component="svg" aria-hidden width={20} height={8} viewBox="0 0 20 8">
+                <line
+                  x1={0}
+                  x2={20}
+                  y1={4}
+                  y2={4}
+                  stroke="var(--mui-palette-warning-main)"
+                  strokeDasharray="3 5"
+                  strokeWidth={2}
+                  opacity="0.55"
+                />
+              </Box>
               p95
             </Box>
             <Box component="span">Select a point to open that run</Box>
