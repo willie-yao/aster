@@ -70,7 +70,7 @@ func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandi
 		}
 		answer := assistantResponse(current.View.Messages, requestID)
 		citations := conversationCitations(current.View.Messages, requestID)
-		if answer == nil || strings.TrimSpace(answer.Content) == "" || len(citations) == 0 {
+		if answer == nil || answer.Unverified || strings.TrimSpace(answer.Content) == "" || len(citations) == 0 {
 			return changed, fmt.Errorf("%w: conversation has no evidence-backed assistant answer", ErrInvalidRequest)
 		}
 		analysis := current.Resolved.TestCase.AIAnalysis
@@ -190,7 +190,7 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 		}
 		answer := assistantResponse(current.View.Messages, requestID)
 		citations := conversationCitations(current.View.Messages, requestID)
-		if answer == nil || strings.TrimSpace(answer.Content) == "" || len(citations) == 0 {
+		if answer == nil || answer.Unverified || strings.TrimSpace(answer.Content) == "" || len(citations) == 0 {
 			return changed, fmt.Errorf("%w: conversation has no evidence-backed assistant answer", ErrInvalidRequest)
 		}
 		analysis := current.Resolved.TestCase.AIAnalysis

@@ -59,13 +59,61 @@ var (
 	ErrProviderRequestFailed = errors.New("analysis chat provider request failed")
 	// ErrResponseValidationFailed means the model response did not match the contract.
 	ErrResponseValidationFailed = errors.New("analysis chat model response could not be validated")
-	// ErrCitationValidationFailed means the response cited evidence it did not prove.
-	ErrCitationValidationFailed = errors.New("analysis chat evidence citation validation failed")
 	// ErrTurnLimit means the session has used its allowed turns.
 	ErrTurnLimit = errors.New("analysis chat turn limit reached")
 	// ErrInvalidRequest means a request field is missing, ambiguous, or too large.
 	ErrInvalidRequest = errors.New("invalid analysis chat request")
 )
+
+// Unverified reasons name the evidence gate an answer failed. They are a closed
+// engine-owned set and never carry model or provider text.
+const (
+	// UnverifiedCitation means a quote, line range, or citation count failed verification.
+	UnverifiedCitation = "citation"
+	// UnverifiedReference means a cited path was unsafe or was never read in this conversation.
+	UnverifiedReference = "reference"
+	// UnverifiedMissing means an evidence-claiming answer carried no citations.
+	UnverifiedMissing = "missing"
+)
+
+// ValidationGate names the response gate a hard validation failure tripped. It
+// is a closed engine-owned set safe to return to owners and operators.
+const (
+	GateCandidate = "candidate_selection"
+	GateJSON      = "json_validation"
+	GateContract  = "response_contract"
+)
+
+// ValidationError reports which response gate rejected a turn. It always
+// unwraps to ErrResponseValidationFailed.
+type ValidationError struct {
+	Gate string
+}
+
+func (e *ValidationError) Error() string { return GateMessage(e.Gate) }
+
+// GateMessage returns the owner-safe message for a response validation gate.
+func GateMessage(gate string) string {
+	switch gate {
+	case GateCandidate:
+		return "analysis chat model response did not contain a usable answer"
+	case GateJSON:
+		return "analysis chat model response was not valid JSON"
+	default:
+		return ErrResponseValidationFailed.Error()
+	}
+}
+
+func (e *ValidationError) Unwrap() error { return ErrResponseValidationFailed }
+
+// ValidationGateOf returns the gate a validation failure tripped, if any.
+func ValidationGateOf(err error) (string, bool) {
+	var validationErr *ValidationError
+	if errors.As(err, &validationErr) && validationErr.Gate != "" {
+		return validationErr.Gate, true
+	}
+	return "", false
+}
 
 const (
 	ScopeTest    = "test"
@@ -124,6 +172,8 @@ type Reply struct {
 	Assessment        string     `json:"assessment"`
 	Citations         []Citation `json:"citations,omitempty"`
 	ProposedRevision  *Revision  `json:"proposed_revision,omitempty"`
+	Unverified        bool       `json:"unverified,omitempty"`
+	UnverifiedReason  string     `json:"unverified_reason,omitempty"`
 	ToolCalls         int        `json:"tool_calls,omitempty"`
 	GCSBytes          int        `json:"gcs_bytes,omitempty"`
 	ElapsedMs         int        `json:"elapsed_ms,omitempty"`
@@ -139,6 +189,8 @@ type Message struct {
 	Assessment        string     `json:"assessment,omitempty"`
 	Citations         []Citation `json:"citations,omitempty"`
 	ProposedRevision  *Revision  `json:"proposed_revision,omitempty"`
+	Unverified        bool       `json:"unverified,omitempty"`
+	UnverifiedReason  string     `json:"unverified_reason,omitempty"`
 	ToolCalls         int        `json:"tool_calls,omitempty"`
 	GCSBytes          int        `json:"gcs_bytes,omitempty"`
 	ElapsedMs         int        `json:"elapsed_ms,omitempty"`
@@ -706,8 +758,6 @@ func requestFailureKind(err error) string {
 		return failureProvider
 	case errors.Is(err, ErrResponseValidationFailed):
 		return failureValidation
-	case errors.Is(err, ErrCitationValidationFailed):
-		return failureCitation
 	case errors.Is(err, sourceinvestigation.ErrInvalidResult), errors.Is(err, sourceinvestigation.ErrUnavailable):
 		return failureSource
 	default:
@@ -715,7 +765,7 @@ func requestFailureKind(err error) string {
 	}
 }
 
-func persistedRequestError(kind string) error {
+func persistedRequestError(kind, gate string) error {
 	switch kind {
 	case failureTimeout:
 		return context.DeadlineExceeded
@@ -726,9 +776,10 @@ func persistedRequestError(kind string) error {
 	case failureProvider:
 		return ErrProviderRequestFailed
 	case failureValidation:
+		if gate != "" {
+			return &ValidationError{Gate: gate}
+		}
 		return ErrResponseValidationFailed
-	case failureCitation:
-		return ErrCitationValidationFailed
 	default:
 		return ErrRequestFailed
 	}
@@ -1241,7 +1292,7 @@ func safeAttemptOutcome(status, failureKind string) (string, string) {
 			return failureCancelled, ""
 		case failureTimeout:
 			return "timed_out", ""
-		case failureProvider, failureValidation, failureCitation, failureSource, failureModel:
+		case failureProvider, failureValidation, failureSource, failureModel:
 			return requestFailed, failureKind
 		default:
 			return requestFailed, failureModel

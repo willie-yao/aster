@@ -122,10 +122,12 @@ shutdown persist a terminal cancelled outcome.
 
 The model may use only the configured read-only artifact and pinned-source
 capabilities. It has no shell, GitHub write, repository write, or live cluster
-access. A question that explicitly asks for logs, JUnit, test output, or other
-artifact evidence must perform a content-bearing current-turn read and return a
-validated citation. Citation paths, ranges, and quotes are verified against the
-evidence read by that turn.
+access. Citation paths, ranges, and quotes are verified against the artifacts the
+conversation actually read, including reads from earlier turns of the same
+conversation. An answer whose citations fail that check is still returned, with
+its unproven citations removed and the answer marked unverified so it is
+visually distinct in the UI. An unverified answer cannot start a Fix preview or
+a correction.
 
 A proposed correction or Fix finding is still inert model output. Corrections
 require their own preview and confirmation. Exact-JUnit Fix handoff requires the

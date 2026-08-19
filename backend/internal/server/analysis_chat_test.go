@@ -473,8 +473,8 @@ func TestWriteAnalysisChatErrorMapping(t *testing.T) {
 		{sourceinvestigation.ErrInvalidResult, http.StatusBadGateway, "analysis chat source validation failed", "failed"},
 		{analysischat.ErrRequestFailed, http.StatusBadGateway, "analysis chat could not complete the request", "failed"},
 		{analysischat.ErrProviderRequestFailed, http.StatusBadGateway, analysischat.ErrProviderRequestFailed.Error(), "failed"},
-		{analysischat.ErrResponseValidationFailed, http.StatusBadGateway, analysischat.ErrResponseValidationFailed.Error(), "failed"},
-		{analysischat.ErrCitationValidationFailed, http.StatusBadGateway, analysischat.ErrCitationValidationFailed.Error(), "failed"},
+		{analysischat.ErrResponseValidationFailed, http.StatusUnprocessableEntity, analysischat.ErrResponseValidationFailed.Error(), "failed"},
+		{&analysischat.ValidationError{Gate: analysischat.GateJSON}, http.StatusUnprocessableEntity, analysischat.GateMessage(analysischat.GateJSON), "failed"},
 		{context.DeadlineExceeded, http.StatusGatewayTimeout, "analysis chat request timed out", "failed"},
 		{errors.New("provider secret https://private.example/v1"), http.StatusBadGateway, "analysis chat could not complete the request", ""},
 	}
@@ -493,6 +493,24 @@ func TestWriteAnalysisChatErrorMapping(t *testing.T) {
 		if strings.Contains(recorder.Body.String(), "private.example") {
 			t.Fatal("provider URL leaked to response")
 		}
+	}
+}
+
+func TestAnalysisChatValidationGateReachesTheOwner(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeAnalysisChatError(recorder, "session", "alice", &analysischat.ValidationError{Gate: analysischat.GateJSON})
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	if got := recorder.Header().Get(analysisChatReasonHeader); got != analysischat.GateJSON {
+		t.Fatalf("reason header = %q", got)
+	}
+	if !strings.Contains(recorder.Body.String(), analysischat.GateMessage(analysischat.GateJSON)) {
+		t.Fatalf("body = %q", recorder.Body.String())
+	}
+	// The streaming path reports the same closed-enum reason.
+	if reason, ok := analysisChatReasonCode(&analysischat.ValidationError{Gate: analysischat.GateJSON}); !ok || reason != analysischat.GateJSON {
+		t.Fatalf("stream reason = %q ok = %t", reason, ok)
 	}
 }
 

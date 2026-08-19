@@ -19,7 +19,8 @@ export const analysisChatSessionBusyMessage = "analysis chat session is busy";
 export const analysisChatTurnLimitMessage = "analysis chat turn limit reached";
 export const analysisChatProviderFailureMessage = "analysis chat provider request failed";
 export const analysisChatResponseValidationMessage = "analysis chat model response could not be validated";
-export const analysisChatCitationValidationMessage = "analysis chat evidence citation validation failed";
+export const analysisChatUnusableAnswerMessage = "analysis chat model response did not contain a usable answer";
+export const analysisChatInvalidJSONMessage = "analysis chat model response was not valid JSON";
 
 export interface AnalysisChatMessageOptions {
   fixIntent?: boolean;
@@ -136,9 +137,11 @@ export function analysisChatFailureGuidance(error: unknown): string | null {
     case analysisChatProviderFailureMessage:
       return "The model provider could not complete the request. Try again in a moment.";
     case analysisChatResponseValidationMessage:
-      return "The model response could not be validated. Try a narrower question.";
-    case analysisChatCitationValidationMessage:
-      return "The response's evidence citations could not be validated. Try a narrower evidence question.";
+      return "The model response did not match the answer contract. Try a narrower question.";
+    case analysisChatUnusableAnswerMessage:
+      return "The model did not return an answer. Try rephrasing the question.";
+    case analysisChatInvalidJSONMessage:
+      return "The model reply could not be read. Try asking again.";
     default:
       return null;
   }
@@ -267,8 +270,6 @@ export function analysisChatAttemptStatus(attempt: AnalysisChatAttempt): { label
           return { label: "Provider request failed", detail: "The model provider could not complete this request." };
         case "validation":
           return { label: "Response validation failed", detail: "The model response did not pass validation." };
-        case "citation":
-          return { label: "Evidence citation validation failed", detail: "The response citations did not pass validation." };
         case "source":
           return { label: "Source verification failed", detail: "The source verification could not complete this request." };
         default:

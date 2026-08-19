@@ -70,6 +70,7 @@ import type {
   AnalysisChatProgressPhase,
   AnalysisChatReference,
   AnalysisChatSession,
+  AnalysisChatUnverifiedReason,
 } from "../types/analysisChat";
 import { RichText } from "./RichText";
 import { AnalysisCorrectionDialog } from "./AnalysisCorrectionDialog";
@@ -126,6 +127,12 @@ const assessmentConfig: Record<
   inconclusive: { label: "Evidence inconclusive", color: "default" },
 };
 
+const unverifiedReasonDetail: Record<AnalysisChatUnverifiedReason, string> = {
+  citation: "The quoted evidence did not match what the artifact tools returned.",
+  reference: "The cited artifact was never read in this conversation.",
+  missing: "The answer claimed artifact evidence but cited none.",
+};
+
 function isPendingAnalysisChatFailure(error: unknown): boolean {
   return error instanceof AnalysisChatAPIError &&
     error.status === 409 &&
@@ -161,6 +168,8 @@ function readableError(error: unknown): string {
           return "Too many analysis questions were started recently. Try again in a minute.";
         }
         return "The analysis chat service is at capacity. Try again later.";
+      case 422:
+        return "The model reply could not be read. Try asking again.";
       case 499:
         return "The analysis request was cancelled.";
       case 504:
@@ -249,13 +258,15 @@ function AssistantMessage({
   const assessment = message.assessment
     ? assessmentConfig[message.assessment]
     : assessmentConfig.explains;
+  const unverified = Boolean(message.unverified);
+  const accent = unverified ? "warning" : assessment.color === "default" ? "primary" : assessment.color;
   return (
     <Box
       sx={{
-        border: "1px solid",
-        borderColor: (theme) => soft(theme, assessment.color === "default" ? "primary" : assessment.color, 0.24),
+        border: unverified ? "2px dashed" : "1px solid",
+        borderColor: (theme) => soft(theme, accent, unverified ? 0.55 : 0.24),
         borderRadius: "12px",
-        bgcolor: (theme) => soft(theme, assessment.color === "default" ? "primary" : assessment.color, 0.045),
+        bgcolor: (theme) => soft(theme, accent, unverified ? 0.09 : 0.045),
         overflow: "hidden",
       }}
     >
@@ -270,13 +281,21 @@ function AssistantMessage({
         </Typography>
         <Chip
           size="small"
-          color={assessment.color}
-          variant="outlined"
-          label={assessment.label}
-          sx={{ ml: "auto", height: 24, fontSize: "0.68rem" }}
+          color={unverified ? "warning" : assessment.color}
+          variant={unverified ? "filled" : "outlined"}
+          icon={unverified ? <ReportProblemOutlined /> : undefined}
+          label={unverified ? "Unverified" : assessment.label}
+          sx={{ ml: "auto", height: 24, fontSize: "0.68rem", fontWeight: unverified ? 750 : undefined }}
         />
       </Stack>
       <Stack spacing={1.5} sx={{ p: 1.5 }}>
+        {unverified && (
+          <Typography variant="caption" sx={{ color: "warning.main", fontWeight: 650 }}>
+            {message.unverified_reason ? unverifiedReasonDetail[message.unverified_reason] : ""}
+            {" "}
+            Treat this answer as unproven and read the artifacts before acting on it.
+          </Typography>
+        )}
         <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.65 }}>
           <RichText text={message.content} steps fileCtx={fileCtx} />
         </Typography>
@@ -293,7 +312,7 @@ function AssistantMessage({
             <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 0.75 }}>
               <FactCheckOutlined sx={{ fontSize: 16, color: "success.main" }} />
               <Typography variant="label" color="textSecondary" sx={{ fontWeight: 700 }}>
-                Evidence read this turn
+                Verified evidence
               </Typography>
             </Stack>
             <Stack spacing={0.75}>
@@ -377,7 +396,7 @@ function AssistantMessage({
             <Typography variant="body2" sx={{ mt: 0.25, lineHeight: 1.6 }}>
               <RichText text={message.proposed_revision.suggested_fix} steps fileCtx={fileCtx} />
             </Typography>
-            {correctionEnabled && message.request_id && (
+            {correctionEnabled && !unverified && message.request_id && (
               <Button
                 size="small"
                 variant="outlined"
@@ -393,7 +412,7 @@ function AssistantMessage({
         )}
 
 
-        {chatFixEnabled && fixEligible && message.request_id && (
+        {chatFixEnabled && !unverified && fixEligible && message.request_id && (
           <Button
             size="small"
             variant="outlined"
@@ -405,7 +424,7 @@ function AssistantMessage({
             Use this finding in a fix proposal
           </Button>
         )}
-        {chatFixEnabled && !fixEligible && fixIneligibleReason && message.request_id && (
+        {chatFixEnabled && !unverified && !fixEligible && fixIneligibleReason && message.request_id && (
           <Alert severity="info" variant="outlined" sx={{ py: 0.25 }}>
             {fixIneligibleReason}
           </Alert>

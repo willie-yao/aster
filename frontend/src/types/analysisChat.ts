@@ -70,6 +70,8 @@ export interface AnalysisChatMessage {
   assessment?: AnalysisChatAssessment;
   citations?: AnalysisChatCitation[];
   proposed_revision?: AnalysisChatRevision;
+  unverified?: boolean;
+  unverified_reason?: AnalysisChatUnverifiedReason;
   tool_calls?: number;
   gcs_bytes?: number;
   elapsed_ms?: number;
@@ -90,8 +92,9 @@ export type AnalysisChatAttemptFailureKind =
   | "model"
   | "provider"
   | "validation"
-  | "citation"
   | "source";
+
+export type AnalysisChatUnverifiedReason = "citation" | "reference" | "missing";
 
 export interface AnalysisChatAttempt {
   request_id: string;

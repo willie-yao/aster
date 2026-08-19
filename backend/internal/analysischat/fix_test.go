@@ -301,3 +301,68 @@ func TestServicePatternFixCandidateRejectsDifferentPattern(t *testing.T) {
 		t.Fatalf("different pattern error = %v", err)
 	}
 }
+
+// An unverified answer carries no citations, so it can never start a fix.
+func TestServiceFixCandidateRejectsUnverifiedOnlyConversation(t *testing.T) {
+	dir := t.TempDir()
+	detail := testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-24T12:00:00Z"))
+	detail.PatternAnalyses = []models.PatternAnalysis{fixCandidatePattern()}
+	writeJobDetail(t, dir, detail)
+	service, err := NewService(t.Context(), dir, &fakeRunner{reply: Reply{
+		Answer:           "The retry path looks wrong, but the artifact did not prove it.",
+		Assessment:       "inconclusive",
+		Unverified:       true,
+		UnverifiedReason: UnverifiedCitation,
+	}}, Options{StateDir: filepath.Join(dir, ".private-chat"), PollInterval: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := service.Create(AnalysisRef{
+		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster",
+		AnalysisGeneratedAt: "2026-07-24T12:00:00Z",
+	}, "Alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := testRequestID(t)
+	view, err := service.Send(t.Context(), session.ID, "Alice", requestID, "Could the retry path be wrong?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := view.Messages[len(view.Messages)-1]
+	if !answer.Unverified || answer.UnverifiedReason != UnverifiedCitation || len(answer.Citations) != 0 {
+		t.Fatalf("persisted answer = %+v", answer)
+	}
+	pattern := fixCandidatePattern()
+	if _, err := service.FixCandidate(session.ID, "Alice", requestID, pattern.ID, pattern.ContentHash); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("unverified fix candidate error = %v", err)
+	}
+	if _, err := service.CorrectionCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("unverified correction candidate error = %v", err)
+	}
+}
+
+// Conversation-scoped citations must not launder an unverified answer into a fix.
+func TestServiceFixCandidateRejectsUnverifiedAnswerAfterCitedTurn(t *testing.T) {
+	service, session, _ := fixCandidateReadyService(t)
+	runner, ok := service.runner.(*fakeRunner)
+	if !ok {
+		t.Fatalf("runner = %T", service.runner)
+	}
+	runner.mu.Lock()
+	runner.reply = Reply{
+		Answer:           "The guard in `markReady` is probably wrong.",
+		Assessment:       "inconclusive",
+		Unverified:       true,
+		UnverifiedReason: UnverifiedReference,
+	}
+	runner.mu.Unlock()
+	secondRequestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "Alice", secondRequestID, "Which function should change?"); err != nil {
+		t.Fatal(err)
+	}
+	pattern := fixCandidatePattern()
+	if _, err := service.FixCandidate(session.ID, "Alice", secondRequestID, pattern.ID, pattern.ContentHash); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("unverified answer fix error = %v", err)
+	}
+}

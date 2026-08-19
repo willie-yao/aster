@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -23,10 +24,18 @@ const (
 type analysisChatParseStats struct {
 	CandidateCount int
 	Category       string
+	// EvidenceGate is set when the selected reply was degraded to unverified.
+	EvidenceGate string
+	// EvidenceDetail is engine-generated repair text for the corrective round.
+	EvidenceDetail string
 }
 
-type analysisChatReplyRequirements struct {
-	ArtifactEvidenceRequired bool
+// analysisChatEvidenceFailure is a soft gate failure. It degrades a reply to
+// unverified instead of rejecting the turn. Detail is engine-generated and
+// never carries model or provider output.
+type analysisChatEvidenceFailure struct {
+	Gate   string
+	Detail string
 }
 
 type analysisChatValidationError struct {
@@ -55,14 +64,9 @@ func parseAnalysisChatReply(raw string, evidence map[string]*analysisChatEvidenc
 	return reply, err
 }
 
-func parseAnalysisChatReplyCandidates(raw string, evidence map[string]*analysisChatEvidence) (analysischat.Reply, analysisChatParseStats, error) {
-	return parseAnalysisChatReplyCandidatesWithRequirements(raw, evidence, analysisChatReplyRequirements{})
-}
-
-func parseAnalysisChatReplyCandidatesWithRequirements(
+func parseAnalysisChatReplyCandidates(
 	raw string,
 	evidence map[string]*analysisChatEvidence,
-	requirements analysisChatReplyRequirements,
 ) (analysischat.Reply, analysisChatParseStats, error) {
 	stats := analysisChatParseStats{}
 	if strings.TrimSpace(raw) == "" {
@@ -95,8 +99,9 @@ func parseAnalysisChatReplyCandidatesWithRequirements(
 	}
 
 	type validCandidate struct {
-		reply analysischat.Reply
-		span  analysisChatJSONCandidate
+		reply   analysischat.Reply
+		failure *analysisChatEvidenceFailure
+		span    analysisChatJSONCandidate
 	}
 	type rejectedCandidate struct {
 		span         analysisChatJSONCandidate
@@ -107,13 +112,10 @@ func parseAnalysisChatReplyCandidatesWithRequirements(
 	rejected := make([]rejectedCandidate, 0, len(scan.candidates))
 	bestErr := newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response is not valid analysis-chat JSON"))
 	for _, candidate := range scan.candidates {
-		reply, err := decodeAnalysisChatReplyCandidate(candidate.value, evidence)
-		if err == nil {
-			err = validateAnalysisChatReplyRequirements(reply, evidence, requirements)
-		}
+		reply, failure, err := decodeAnalysisChatReplyCandidate(candidate.value, evidence)
 		if err == nil {
 			candidate.replyLike = true
-			valid = append(valid, validCandidate{reply: reply, span: candidate})
+			valid = append(valid, validCandidate{reply: reply, failure: failure, span: candidate})
 			continue
 		}
 		category := analysisChatValidationCategory(err)
@@ -123,6 +125,23 @@ func parseAnalysisChatReplyCandidatesWithRequirements(
 		if analysisChatValidationRank(category) > analysisChatValidationRank(analysisChatValidationCategory(bestErr)) {
 			bestErr = err
 		}
+	}
+
+	// A verified candidate wins over a degraded one. The degraded candidates join
+	// the rejected set so a trailing or enclosing one still invalidates the pick.
+	if clean := slices.DeleteFunc(slices.Clone(valid), func(candidate validCandidate) bool {
+		return candidate.failure != nil
+	}); len(clean) > 0 && len(clean) < len(valid) {
+		for _, candidate := range valid {
+			if candidate.failure != nil {
+				rejected = append(rejected, rejectedCandidate{
+					span:         candidate.span,
+					category:     analysisChatEvidenceCategory(candidate.failure.Gate),
+					contractLike: true,
+				})
+			}
+		}
+		valid = clean
 	}
 
 	switch len(valid) {
@@ -149,6 +168,11 @@ func parseAnalysisChatReplyCandidatesWithRequirements(
 				return analysischat.Reply{}, stats, newAnalysisChatValidationError(stats.Category, errors.New("response contains trailing unrelated JSON"))
 			}
 		}
+		if selected.failure != nil {
+			stats.Category = analysisChatEvidenceCategory(selected.failure.Gate)
+			stats.EvidenceGate = selected.failure.Gate
+			stats.EvidenceDetail = selected.failure.Detail
+		}
 		return selected.reply, stats, nil
 	default:
 		stats.Category = analysisChatValidationCandidate
@@ -156,27 +180,22 @@ func parseAnalysisChatReplyCandidatesWithRequirements(
 	}
 }
 
-func validateAnalysisChatReplyRequirements(
-	reply analysischat.Reply,
-	evidence map[string]*analysisChatEvidence,
-	requirements analysisChatReplyRequirements,
-) error {
-	if !requirements.ArtifactEvidenceRequired {
-		return nil
+// analysisChatEvidenceCategory maps a soft evidence gate to its telemetry category.
+func analysisChatEvidenceCategory(gate string) string {
+	if gate == analysischat.UnverifiedReference {
+		return analysisChatValidationReference
 	}
-	if len(evidence) == 0 || analysisChatEvidenceBytes(evidence) == 0 {
-		return newAnalysisChatValidationError(
-			analysisChatValidationCitation,
-			errors.New("this question requires content-bearing artifact evidence read during the current turn"),
-		)
-	}
-	if len(reply.Citations) == 0 {
-		return newAnalysisChatValidationError(
-			analysisChatValidationCitation,
-			errors.New("this question requires at least one validated artifact citation"),
-		)
-	}
-	return nil
+	return analysisChatValidationCitation
+}
+
+// degradeAnalysisChatReply strips unproven evidence from a reply and labels it
+// unverified so the answer still reaches the maintainer.
+func degradeAnalysisChatReply(reply *analysischat.Reply, failure *analysisChatEvidenceFailure) {
+	reply.Citations = nil
+	reply.ProposedRevision = nil
+	reply.Assessment = "inconclusive"
+	reply.Unverified = true
+	reply.UnverifiedReason = failure.Gate
 }
 
 func analysisChatValidationRank(category string) int {
@@ -214,7 +233,25 @@ func analysisChatCandidateLooksLikeReply(candidate string) bool {
 	return false
 }
 
-func decodeAnalysisChatReplyCandidate(candidate string, evidence map[string]*analysisChatEvidence) (analysischat.Reply, error) {
+// decodeAnalysisChatReplyCandidate validates one candidate. A contract failure
+// returns an error; an evidence failure returns the reply degraded to
+// unverified together with the gate that rejected it.
+func decodeAnalysisChatReplyCandidate(
+	candidate string,
+	evidence map[string]*analysisChatEvidence,
+) (analysischat.Reply, *analysisChatEvidenceFailure, error) {
+	reply, err := decodeAnalysisChatReplyContract(candidate)
+	if err != nil {
+		return analysischat.Reply{}, nil, err
+	}
+	failure := validateAnalysisChatCitations(&reply, evidence)
+	if failure != nil {
+		degradeAnalysisChatReply(&reply, failure)
+	}
+	return reply, failure, nil
+}
+
+func decodeAnalysisChatReplyContract(candidate string) (analysischat.Reply, error) {
 	fields, err := decodeAnalysisChatObject(candidate)
 	if err != nil {
 		return analysischat.Reply{}, err
@@ -283,70 +320,6 @@ func decodeAnalysisChatReplyCandidate(candidate string, evidence map[string]*ana
 			analysisChatValidationContract, errors.New("citations must be an array"),
 		)
 	}
-	if len(reply.Citations) > 20 {
-		return analysischat.Reply{}, newAnalysisChatValidationError(
-			analysisChatValidationCitation, errors.New("citations must contain at most 20 entries"),
-		)
-	}
-	for i := range reply.Citations {
-		citation := &reply.Citations[i]
-		citation.Path = strings.TrimSpace(citation.Path)
-		citation.Quote = strings.TrimSpace(citation.Quote)
-		safe, err := artifacts.SafePath(citation.Path)
-		if err != nil || safe == "" {
-			return analysischat.Reply{}, newAnalysisChatValidationError(
-				analysisChatValidationReference, fmt.Errorf("citation %d has an unsafe path", i+1),
-			)
-		}
-		artifactEvidence := evidence[safe]
-		if artifactEvidence == nil {
-			return analysischat.Reply{}, newAnalysisChatValidationError(
-				analysisChatValidationReference, fmt.Errorf("citation %d names an artifact not read during this turn", i+1),
-			)
-		}
-		citation.Path = safe
-		if citation.LineStart < 0 || citation.LineEnd < 0 ||
-			(citation.LineStart == 0) != (citation.LineEnd == 0) ||
-			citation.LineEnd > 0 && (citation.LineStart > citation.LineEnd || citation.LineEnd-citation.LineStart > 50) {
-			return analysischat.Reply{}, newAnalysisChatValidationError(
-				analysisChatValidationCitation, fmt.Errorf("citation %d has an invalid line range", i+1),
-			)
-		}
-		if citation.LineStart > 0 && len(artifactEvidence.Lines) > 0 {
-			quote, ok := analysisChatQuoteForRange(artifactEvidence.Lines, citation.LineStart, citation.LineEnd)
-			if !ok {
-				return analysischat.Reply{}, newAnalysisChatValidationError(
-					analysisChatValidationCitation, fmt.Errorf("citation %d line range was not returned by the cited artifact read", i+1),
-				)
-			}
-			citation.Quote = quote
-		}
-		if len(citation.Quote) < 4 {
-			return analysischat.Reply{}, newAnalysisChatValidationError(
-				analysisChatValidationCitation, fmt.Errorf("citation %d requires an exact quote of at least 4 bytes", i+1),
-			)
-		}
-		if len(citation.Quote) > 1000 {
-			return analysischat.Reply{}, newAnalysisChatValidationError(
-				analysisChatValidationCitation, fmt.Errorf("citation %d quote exceeds 1000 bytes", i+1),
-			)
-		}
-		if !analysisChatEvidenceContains(artifactEvidence, citation.Quote) {
-			return analysischat.Reply{}, newAnalysisChatValidationError(
-				analysisChatValidationCitation, fmt.Errorf("citation %d quote was not returned contiguously by the cited artifact read", i+1),
-			)
-		}
-		if citation.LineStart > 0 {
-			if len(artifactEvidence.Lines) == 0 {
-				citation.LineStart, citation.LineEnd = 0, 0
-			}
-		}
-	}
-	if (reply.Assessment == "supports" || reply.Assessment == "challenges") && len(reply.Citations) == 0 {
-		return analysischat.Reply{}, newAnalysisChatValidationError(
-			analysisChatValidationCitation, fmt.Errorf("a %s response requires artifact citations", reply.Assessment),
-		)
-	}
 	if reply.ProposedRevision != nil {
 		if reply.Assessment != "challenges" {
 			return analysischat.Reply{}, newAnalysisChatValidationError(
@@ -367,6 +340,83 @@ func decodeAnalysisChatReplyCandidate(candidate string, evidence map[string]*ana
 		}
 	}
 	return reply, nil
+}
+
+// validateAnalysisChatCitations verifies each citation against the conversation
+// evidence, normalizing the ones that pass. It returns the first soft gate
+// failure rather than an error, so the caller can repair or degrade the reply.
+func validateAnalysisChatCitations(
+	reply *analysischat.Reply,
+	evidence map[string]*analysisChatEvidence,
+) *analysisChatEvidenceFailure {
+	if len(reply.Citations) > 20 {
+		return &analysisChatEvidenceFailure{
+			Gate: analysischat.UnverifiedCitation, Detail: "citations must contain at most 20 entries",
+		}
+	}
+	for i := range reply.Citations {
+		citation := &reply.Citations[i]
+		citation.Path = strings.TrimSpace(citation.Path)
+		citation.Quote = strings.TrimSpace(citation.Quote)
+		safe, err := artifacts.SafePath(citation.Path)
+		if err != nil || safe == "" {
+			return &analysisChatEvidenceFailure{
+				Gate: analysischat.UnverifiedReference, Detail: fmt.Sprintf("citation %d has an unsafe path", i+1),
+			}
+		}
+		artifactEvidence := evidence[safe]
+		if artifactEvidence == nil {
+			return &analysisChatEvidenceFailure{
+				Gate:   analysischat.UnverifiedReference,
+				Detail: fmt.Sprintf("citation %d names an artifact not read during this conversation", i+1),
+			}
+		}
+		citation.Path = safe
+		if citation.LineStart < 0 || citation.LineEnd < 0 ||
+			(citation.LineStart == 0) != (citation.LineEnd == 0) ||
+			citation.LineEnd > 0 && (citation.LineStart > citation.LineEnd || citation.LineEnd-citation.LineStart > 50) {
+			return &analysisChatEvidenceFailure{
+				Gate: analysischat.UnverifiedCitation, Detail: fmt.Sprintf("citation %d has an invalid line range", i+1),
+			}
+		}
+		if citation.LineStart > 0 && len(artifactEvidence.Lines) > 0 {
+			quote, ok := analysisChatQuoteForRange(artifactEvidence.Lines, citation.LineStart, citation.LineEnd)
+			if !ok {
+				return &analysisChatEvidenceFailure{
+					Gate:   analysischat.UnverifiedCitation,
+					Detail: fmt.Sprintf("citation %d line range was not returned by the cited artifact read", i+1),
+				}
+			}
+			citation.Quote = quote
+		}
+		if len(citation.Quote) < 4 {
+			return &analysisChatEvidenceFailure{
+				Gate:   analysischat.UnverifiedCitation,
+				Detail: fmt.Sprintf("citation %d requires an exact quote of at least 4 bytes", i+1),
+			}
+		}
+		if len(citation.Quote) > 1000 {
+			return &analysisChatEvidenceFailure{
+				Gate: analysischat.UnverifiedCitation, Detail: fmt.Sprintf("citation %d quote exceeds 1000 bytes", i+1),
+			}
+		}
+		if !analysisChatEvidenceContains(artifactEvidence, citation.Quote) {
+			return &analysisChatEvidenceFailure{
+				Gate:   analysischat.UnverifiedCitation,
+				Detail: fmt.Sprintf("citation %d quote was not returned contiguously by the cited artifact read", i+1),
+			}
+		}
+		if citation.LineStart > 0 && len(artifactEvidence.Lines) == 0 {
+			citation.LineStart, citation.LineEnd = 0, 0
+		}
+	}
+	if (reply.Assessment == "supports" || reply.Assessment == "challenges") && len(reply.Citations) == 0 {
+		return &analysisChatEvidenceFailure{
+			Gate:   analysischat.UnverifiedMissing,
+			Detail: fmt.Sprintf("a %s response requires artifact citations", reply.Assessment),
+		}
+	}
+	return nil
 }
 
 func decodeAnalysisChatObject(raw string) (map[string]json.RawMessage, error) {

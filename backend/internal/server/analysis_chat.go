@@ -194,8 +194,8 @@ func streamAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRun
 			if outcome != "" {
 				payload["outcome"] = outcome
 			}
-			if code, ok := actions.ReasonCodeFrom(err); ok {
-				payload["reason"] = string(code)
+			if reason, ok := analysisChatReasonCode(err); ok {
+				payload["reason"] = reason
 			}
 			_ = writeAnalysisChatSSE(w, flusher, "error", payload)
 			return
@@ -268,8 +268,8 @@ func writeAnalysisChatError(w http.ResponseWriter, id, login string, err error) 
 	if outcome != "" {
 		w.Header().Set(analysisChatOutcomeHeader, outcome)
 	}
-	if code, ok := actions.ReasonCodeFrom(err); ok {
-		w.Header().Set(analysisChatReasonHeader, string(code))
+	if reason, ok := analysisChatReasonCode(err); ok {
+		w.Header().Set(analysisChatReasonHeader, reason)
 	}
 	// Rejections are as worth an operator line as failures: a 400 with a generic
 	// body is otherwise undiagnosable from the server side.
@@ -277,6 +277,16 @@ func writeAnalysisChatError(w http.ResponseWriter, id, login string, err error) 
 		log.Printf("analysis chat %s for %s: %s", id, login, safeAnalysisChatError(err))
 	}
 	http.Error(w, message, status)
+}
+
+// analysisChatReasonCode returns the stable machine-readable reason for a
+// failure: an action reason code, or the response gate a validation failure
+// tripped.
+func analysisChatReasonCode(err error) (string, bool) {
+	if code, ok := actions.ReasonCodeFrom(err); ok {
+		return string(code), true
+	}
+	return analysischat.ValidationGateOf(err)
 }
 
 func analysisChatErrorDetails(err error) (int, string, string) {
@@ -315,9 +325,12 @@ func analysisChatErrorDetails(err error) (int, string, string) {
 	case errors.Is(err, analysischat.ErrProviderRequestFailed):
 		status, message, outcome = http.StatusBadGateway, analysischat.ErrProviderRequestFailed.Error(), "failed"
 	case errors.Is(err, analysischat.ErrResponseValidationFailed):
-		status, message, outcome = http.StatusBadGateway, analysischat.ErrResponseValidationFailed.Error(), "failed"
-	case errors.Is(err, analysischat.ErrCitationValidationFailed):
-		status, message, outcome = http.StatusBadGateway, analysischat.ErrCitationValidationFailed.Error(), "failed"
+		// The provider answered; the content failed a local policy check, so
+		// this is not a gateway failure.
+		status, message, outcome = http.StatusUnprocessableEntity, analysischat.ErrResponseValidationFailed.Error(), "failed"
+		if gate, ok := analysischat.ValidationGateOf(err); ok {
+			message = analysischat.GateMessage(gate)
+		}
 	case errors.Is(err, context.DeadlineExceeded):
 		status, message, outcome = http.StatusGatewayTimeout, "analysis chat request timed out", "failed"
 	case errors.Is(err, context.Canceled):

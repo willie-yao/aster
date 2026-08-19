@@ -868,7 +868,6 @@ func TestServiceRestoresSafeFailureAttemptCategories(t *testing.T) {
 	}{
 		{name: "provider", err: fmt.Errorf("%w: token=provider-secret /private/provider/path", ErrProviderRequestFailed), want: ErrProviderRequestFailed, kind: failureProvider},
 		{name: "validation", err: fmt.Errorf("%w: raw model prompt", ErrResponseValidationFailed), want: ErrResponseValidationFailed, kind: failureValidation},
-		{name: "citation", err: fmt.Errorf("%w: private citation path", ErrCitationValidationFailed), want: ErrCitationValidationFailed, kind: failureCitation},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -939,13 +938,12 @@ func TestRequestFailureCategoriesRoundTrip(t *testing.T) {
 	}{
 		{ErrProviderRequestFailed, failureProvider},
 		{ErrResponseValidationFailed, failureValidation},
-		{ErrCitationValidationFailed, failureCitation},
 	}
 	for _, testCase := range cases {
 		if got := requestFailureKind(fmt.Errorf("wrapped: %w", testCase.err)); got != testCase.kind {
 			t.Errorf("requestFailureKind(%v) = %q, want %q", testCase.err, got, testCase.kind)
 		}
-		if got := persistedRequestError(testCase.kind); !errors.Is(got, testCase.err) {
+		if got := persistedRequestError(testCase.kind, ""); !errors.Is(got, testCase.err) {
 			t.Errorf("persistedRequestError(%q) = %v", testCase.kind, got)
 		}
 	}
@@ -2016,5 +2014,34 @@ func TestServicePatternChatRejectsOversizedCausalShape(t *testing.T) {
 	_, err = service.Create(AnalysisRef{Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash}, "Alice", testRequestID(t))
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestServiceReportsValidationGateToTheCaller(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	service, err := NewService(t.Context(), dir, &fakeRunner{err: &ValidationError{Gate: GateJSON}}, Options{
+		StateDir: filepath.Join(dir, ".private-chat"), PollInterval: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := service.Create(AnalysisRef{
+		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster",
+		AnalysisGeneratedAt: "2026-07-23T12:00:00Z",
+	}, "Alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := testRequestID(t)
+	_, sendErr := service.Send(t.Context(), session.ID, "Alice", requestID, "What does the log show?")
+	gate, ok := ValidationGateOf(sendErr)
+	if !errors.Is(sendErr, ErrResponseValidationFailed) || !ok || gate != GateJSON {
+		t.Fatalf("send error = %v gate = %q", sendErr, gate)
+	}
+	// The gate must survive the persisted idempotent replay too.
+	_, replayErr := service.Send(t.Context(), session.ID, "Alice", requestID, "What does the log show?")
+	if gate, ok := ValidationGateOf(replayErr); !ok || gate != GateJSON {
+		t.Fatalf("replayed error = %v gate = %q", replayErr, gate)
 	}
 }
