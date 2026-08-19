@@ -414,6 +414,11 @@ type PatternCausalGroup struct {
 	Builds      []string `json:"builds"`
 	RootCause   string   `json:"root_cause"`
 	Confidence  string   `json:"confidence"`
+	// Signature is the durable identity of this cause across time, derived from
+	// observed failure artifacts rather than model prose or the current build
+	// window. It is deliberately excluded from ContentHash and PatternHash so
+	// assigning it never churns pattern or causal-group identity.
+	Signature string `json:"signature,omitempty"`
 	// CauseLocation is the repository owning this cause. It is engine-derived
 	// from the member builds' analyses and is set only when they agree, so a
 	// group of mixed ownership stays unattributed rather than guessing.

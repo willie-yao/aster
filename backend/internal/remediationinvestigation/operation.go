@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -47,12 +48,37 @@ type OperationResolver interface {
 	RefreshActive() (bool, error)
 }
 
+// RecurrenceVerdict is one terminal answer for a recurring cause.
+type RecurrenceVerdict struct {
+	State models.PatternRemediationInvestigationState
+	// Reason is the safe published explanation recorded with the verdict.
+	Reason string
+	// RecordedAt is when the answer was actually reached, RFC 3339 UTC. It is
+	// surfaced as the completion time so a reused answer is not presented as a
+	// fresh investigation, and it lets the ledger keep the later-completed of two
+	// conclusions.
+	RecordedAt string
+}
+
+// RecurrenceLedger is durable memory of prior terminal verdicts, keyed by a
+// causal group's signature. Causal groups are recomputed from the current build
+// window every pass, so without it a cause that returns after aging out is
+// re-investigated at full model cost to reach an answer already on record.
+type RecurrenceLedger interface {
+	// ClaimReuse returns a prior answer and charges it against that verdict's
+	// bounded reuse budget, so no conclusion answers indefinitely.
+	ClaimReuse(signature string) (RecurrenceVerdict, bool, error)
+	RecordVerdict(signature string, verdict RecurrenceVerdict) error
+}
+
 // OperationOptions configure asynchronous causal remediation investigations.
 type OperationOptions struct {
 	Timeout       time.Duration
 	MaxOperations int
 	Now           func() time.Time
 	UsageRecorder *aiusage.Recorder
+	// Ledger supplies recurrence memory. When nil, every request is investigated.
+	Ledger RecurrenceLedger
 }
 
 func (o OperationOptions) normalized() OperationOptions {
@@ -71,6 +97,7 @@ func (o OperationOptions) normalized() OperationOptions {
 type operationRecord struct {
 	identity  string
 	cacheKey  string
+	signature string
 	ref       OperationRef
 	view      models.PatternRemediationInvestigationSummary
 	running   bool
@@ -137,7 +164,41 @@ func (s *OperationService) Start(ctx context.Context, ref OperationRef, owner, r
 	}
 	identity := operationIdentity(ref)
 	idempotencyKey := owner + "\x00" + requestID
+	now := s.opts.Now().UTC()
+	signature := strings.TrimSpace(resolved.Input.Group.Signature)
 
+	// Fast path: a request that only replays an idempotent result or joins an
+	// in-flight run needs no cache, ledger, or validation work, and must not be
+	// refused because one of those is unavailable.
+	if view, done, err := s.joinExisting(idempotencyKey, identity, cacheKey, refresh); done {
+		return view, err
+	}
+
+	// Resolved outside the mutex so neither the cache nor the ledger can stall
+	// Start and Get behind file I/O. A cause that recurred after aging out of the
+	// window gets a fresh cache key even though the question was already
+	// answered, so recurrence memory answers it. An exact frozen-input cache
+	// entry is a precise match for this input and always wins over a
+	// signature-level one, so memory is only consulted on a true cache miss.
+	var reused models.PatternRemediationInvestigationSummary
+	reusable := false
+	if !refresh && s.opts.Ledger != nil && signature != "" {
+		if _, cached, lookupErr := s.cache.Lookup(cacheKey); lookupErr != nil || !cached {
+			// A reused answer is published immediately, so it needs the same
+			// current-subject check a completing run performs before publishing.
+			// Running it before the claim avoids charging a reuse that is then
+			// discarded.
+			if err := s.validateBeforePublish(ctx, ref, resolved.Input); err != nil {
+				if errors.Is(err, ErrOperationStale) || errors.Is(err, ErrOperationInactive) {
+					return operationStaleView(ref, s.opts.Now()), nil
+				}
+				// A run would need this same validation to publish, so spending
+				// model budget now would only reach the same failure.
+				return models.PatternRemediationInvestigationSummary{}, fmt.Errorf("%w: publication state unavailable", ErrOperationUnavailable)
+			}
+			reused, reusable = s.claimReuse(ref, signature, now)
+		}
+	}
 	s.mu.Lock()
 	if previous, ok := s.idempotency[idempotencyKey]; ok {
 		if previous.identity != identity || previous.refresh != refresh {
@@ -156,9 +217,20 @@ func (s *OperationService) Start(ctx context.Context, ref OperationRef, owner, r
 		s.mu.Unlock()
 		return view, nil
 	}
-	now := s.opts.Now().UTC()
+	if reusable {
+		record := &operationRecord{
+			identity: identity, cacheKey: cacheKey, signature: signature, ref: ref,
+			view: cloneOperationView(reused), updatedAt: now,
+		}
+		s.byIdentity[identity] = record
+		s.byCacheKey[cacheKey] = record
+		s.idempotency[idempotencyKey] = idempotencyRecord{identity: identity, refresh: refresh}
+		s.pruneLocked()
+		s.mu.Unlock()
+		return reused, nil
+	}
 	record := &operationRecord{
-		identity: identity, cacheKey: cacheKey, ref: ref, running: true, updatedAt: now,
+		identity: identity, cacheKey: cacheKey, signature: signature, ref: ref, running: true, updatedAt: now,
 		view: operationPhaseView(ref, models.PatternRemediationQueued),
 	}
 	s.byIdentity[identity] = record
@@ -227,7 +299,7 @@ func (s *OperationService) Get(ctx context.Context, ref OperationRef) (models.Pa
 		return operationStaleView(ref, s.opts.Now()), nil
 	}
 	view := safeOperationView(ref, verified, entry.Provenance.CompletedAt)
-	s.storeRecovered(identity, cacheKey, ref, view)
+	s.storeRecovered(identity, cacheKey, strings.TrimSpace(resolved.Input.Group.Signature), ref, view)
 	return view, nil
 }
 
@@ -239,7 +311,7 @@ func (s *OperationService) run(record *operationRecord, resolved ResolvedOperati
 	case s.active <- struct{}{}:
 		defer func() { <-s.active }()
 	case <-ctx.Done():
-		s.finish(record, operationFailureView(record.ref, ctx.Err(), s.opts.Now()))
+		s.finish(record, operationFailureView(record.ref, ctx.Err(), s.opts.Now()), false)
 		return
 	}
 
@@ -254,7 +326,7 @@ func (s *OperationService) run(record *operationRecord, resolved ResolvedOperati
 	}
 	service, err := NewService(s.model, resolved.Source, s.cache, ServiceOptions{Timeout: s.opts.Timeout, Now: s.opts.Now, UsageRecorder: s.opts.UsageRecorder})
 	if err != nil {
-		s.finish(record, operationFailureView(record.ref, err, s.opts.Now()))
+		s.finish(record, operationFailureView(record.ref, err, s.opts.Now()), false)
 		return
 	}
 	run, err := service.Investigate(ctx, resolved.Input, resolved.Browser, refresh)
@@ -272,28 +344,28 @@ func (s *OperationService) run(record *operationRecord, resolved ResolvedOperati
 			if previousView != nil {
 				validationErr := s.validateBeforePublish(recoveryCtx, record.ref, resolved.Input)
 				if errors.Is(validationErr, ErrOperationStale) || errors.Is(validationErr, ErrOperationInactive) {
-					s.finish(record, operationStaleView(record.ref, s.opts.Now()))
+					s.finish(record, operationStaleView(record.ref, s.opts.Now()), false)
 					return
 				}
-				s.finish(record, *previousView)
+				s.finish(record, *previousView, false)
 				return
 			}
 		}
-		s.finish(record, operationFailureView(record.ref, err, s.opts.Now()))
+		s.finish(record, operationFailureView(record.ref, err, s.opts.Now()), false)
 		return
 	}
 
 	s.updatePhase(record, models.PatternRemediationVerifying)
 	verified, err := verifyOperationResult(ctx, resolved, run.Entry)
 	if err != nil {
-		s.finish(record, operationFailureView(record.ref, err, s.opts.Now()))
+		s.finish(record, operationFailureView(record.ref, err, s.opts.Now()), false)
 		return
 	}
 	if err := s.validateBeforePublish(ctx, record.ref, resolved.Input); err != nil {
-		s.finish(record, operationStaleView(record.ref, s.opts.Now()))
+		s.finish(record, operationStaleView(record.ref, s.opts.Now()), false)
 		return
 	}
-	s.finish(record, safeOperationView(record.ref, verified, run.Entry.Provenance.CompletedAt))
+	s.finish(record, safeOperationView(record.ref, verified, run.Entry.Provenance.CompletedAt), !run.CacheHit)
 }
 
 func verifyOperationResult(ctx context.Context, resolved ResolvedOperation, entry CacheEntry) (VerifiedResult, error) {
@@ -330,21 +402,85 @@ func (s *OperationService) updatePhase(record *operationRecord, state models.Pat
 	record.updatedAt = s.opts.Now().UTC()
 }
 
-func (s *OperationService) finish(record *operationRecord, view models.PatternRemediationInvestigationSummary) {
+// finish publishes the terminal view, and records it in durable memory only when
+// it came from a freshly computed, verified investigation. Recording a cache hit
+// or a recovered previous result would reset the bounded reuse budget without any
+// new work having happened, which would make the bound meaningless.
+//
+// The ledger write happens outside the mutex so a slow file write cannot stall
+// Start and Get.
+func (s *OperationService) finish(record *operationRecord, view models.PatternRemediationInvestigationSummary, investigated bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.byCacheKey[record.cacheKey] != record {
+	published := s.byCacheKey[record.cacheKey] == record
+	if published {
+		record.running = false
+		record.view = cloneOperationView(view)
+		record.updatedAt = s.opts.Now().UTC()
+	}
+	s.mu.Unlock()
+	if !published || !investigated || s.opts.Ledger == nil || record.signature == "" {
 		return
 	}
-	record.running = false
-	record.view = cloneOperationView(view)
-	record.updatedAt = s.opts.Now().UTC()
+	// Non-terminal states (failed, stale, in-flight) are ignored by the ledger.
+	verdict := RecurrenceVerdict{State: view.State, Reason: view.Reason, RecordedAt: view.CompletedAt}
+	if err := s.opts.Ledger.RecordVerdict(record.signature, verdict); err != nil {
+		log.Printf("Warning: failed to record remediation verdict in recurrence history: %v", err)
+	}
 }
 
-func (s *OperationService) storeRecovered(identity, cacheKey string, ref OperationRef, view models.PatternRemediationInvestigationSummary) {
+// joinExisting replays an idempotent result or joins an in-flight run without
+// touching the cache, the ledger, or publication validation. Callers re-check the
+// same conditions under the mutex after that work, since it can race.
+func (s *OperationService) joinExisting(idempotencyKey, identity, cacheKey string, refresh bool) (models.PatternRemediationInvestigationSummary, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	record := &operationRecord{identity: identity, cacheKey: cacheKey, ref: ref, view: cloneOperationView(view), updatedAt: s.opts.Now().UTC()}
+	if previous, ok := s.idempotency[idempotencyKey]; ok {
+		if previous.identity != identity || previous.refresh != refresh {
+			return models.PatternRemediationInvestigationSummary{}, true, ErrOperationIdempotencyConflict
+		}
+		if record := s.byIdentity[identity]; record != nil {
+			return cloneOperationView(record.view), true, nil
+		}
+	}
+	if record := s.byCacheKey[cacheKey]; record != nil && (record.running || !refresh) {
+		s.idempotency[idempotencyKey] = idempotencyRecord{identity: identity, refresh: refresh}
+		return cloneOperationView(record.view), true, nil
+	}
+	return models.PatternRemediationInvestigationSummary{}, false, nil
+}
+
+// claimReuse turns a prior terminal verdict for the same durable cause into a
+// completed result, so a recurrence does not re-spend model budget on a question
+// already answered. The claim is charged against the verdict's bounded reuse
+// budget; a failure to charge it yields no reuse, so an unaccounted answer is
+// never served. The original completion time is carried through so an old answer
+// is not presented as a fresh investigation.
+func (s *OperationService) claimReuse(ref OperationRef, signature string, now time.Time) (models.PatternRemediationInvestigationSummary, bool) {
+	if s.opts.Ledger == nil || signature == "" {
+		return models.PatternRemediationInvestigationSummary{}, false
+	}
+	verdict, ok, err := s.opts.Ledger.ClaimReuse(signature)
+	if err != nil {
+		log.Printf("Warning: failed to claim recurrence memory: %v", err)
+		return models.PatternRemediationInvestigationSummary{}, false
+	}
+	if !ok || !models.ValidPatternRemediationInvestigationState(verdict.State) {
+		return models.PatternRemediationInvestigationSummary{}, false
+	}
+	completedAt := strings.TrimSpace(verdict.RecordedAt)
+	if _, err := time.Parse(time.RFC3339, completedAt); err != nil {
+		completedAt = now.UTC().Format(time.RFC3339)
+	}
+	return models.PatternRemediationInvestigationSummary{
+		CausalGroupID: ref.CausalGroupID, CausalGroupHash: ref.CausalGroupHash,
+		State: verdict.State, Reason: verdict.Reason, CompletedAt: completedAt,
+	}, true
+}
+
+func (s *OperationService) storeRecovered(identity, cacheKey, signature string, ref OperationRef, view models.PatternRemediationInvestigationSummary) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record := &operationRecord{identity: identity, cacheKey: cacheKey, signature: signature, ref: ref, view: cloneOperationView(view), updatedAt: s.opts.Now().UTC()}
 	s.byIdentity[identity] = record
 	s.byCacheKey[cacheKey] = record
 	s.pruneLocked()

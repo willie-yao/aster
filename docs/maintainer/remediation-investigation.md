@@ -229,6 +229,111 @@ match. The private cache does not contain credentials, endpoints, raw prompts,
 raw model responses, transcripts, unrestricted source bundles, or raw tool
 payloads. No evidence-catalog contents are published in public causal data.
 
+## Recurrence memory
+
+The private cache above is keyed by the frozen input, which includes the causal
+group's current member builds. When those builds age out of the fetch window the
+group is regrouped with a new identity, so the same cause returns as a cache miss
+and the same question is re-investigated at full model cost.
+
+`backend/internal/recurrenceledger` closes that gap. It records recurrence history
+keyed by a durable signature that survives both regrouping and rewording:
+
+```text
+<data-dir>/recurrence_ledger.json
+```
+
+### Signature
+
+`patterns.CausalGroupSignature` hashes the job plus the dominant
+`(suite, class, test, failure-location file, normalized message)` tuple among the
+group's builds. Normalization is `aggregator.NormalizeErrorSignature`, which
+strips timestamps but **preserves numbers**, unlike the `NormalizeErrorMessage`
+the flakiness report uses: a status or exit code is often the only thing
+separating causes that need different answers, and collapsing `status 401` and
+`status 503` would let a conclusion about one apply to the other.
+
+No signature is derived, and therefore no memory is kept, when the failure has no
+message, when it is a build-level stand-in (`models.NewProwJobExecutionFailure`
+has a constant name and message), when no member build is still in the window, or
+when two causal groups on the same job resolve to the same signature. That last
+case means the signature does not identify a single cause, and both groups lose
+it: another investigation is cheap, a wrong answer is not.
+
+That collision check is **pass-local**. It sees only the groups present in one
+pass, so a signature that collided in an earlier pass and no longer does can carry
+a verdict recorded before the collision. Reuse being capped at three bounds what
+that costs.
+
+A group whose builds have all aged out keeps the signature it was published with,
+so a cause that returns is still recognized.
+
+The signature is published as an inert `signature` field on each causal group in
+`jobs/*.json` and `flakiness.json`, and is excluded from `PatternCausalGroupHash`
+and `PatternHash` so it never churns published identity.
+
+### Ledger
+
+Each entry records first seen, last seen, a count of distinct failing builds, a
+build-id watermark, and the most recent terminal verdict. Only builds strictly
+past the watermark advance recurrence, so a retained pattern re-observed every
+pass does not inflate its history. Counting relies on Prow build ids being
+increasing integers; opaque ids are recorded once and never advance the count.
+
+Retention runs before each pass observes, so a cause returning after 180 quiet
+days starts fresh rather than reviving a verdict too old to trust, and the file is
+capped at `MaxEntries`, evicting least-recently-seen causes.
+
+The fetcher records sightings inside the publication lock after output is written;
+the server records verdicts when an investigation finishes. Both mutate through
+`recurrenceledger.Update`, which holds a dedicated lock file rather than the
+pattern publication lock, so it is safe to call while publication is in progress.
+
+### Verdict reuse
+
+An exact frozen-input cache entry is a precise match for the request and always
+wins, so recurrence memory is consulted only when that cache misses, which is the
+case the ledger exists for. A recorded verdict for the same signature then answers
+the request without launching a run:
+
+| Verdict | Reused | Why |
+| --- | --- | --- |
+| `environment_or_infrastructure` | yes | A conclusion about the nature of the cause. |
+| `external_dependency` | yes | A conclusion about the nature of the cause. |
+| `mitigation_only` | yes | A conclusion about the nature of the cause. |
+| `actionable` | no | The target is pinned to a source revision and must be re-verified. |
+| `already_fixed` | no | The recurrence is itself evidence it is not fixed. |
+| `insufficient_evidence` | no | Describes what was available at the time; a later recurrence may carry better artifacts. |
+| in-flight, `failed`, `stale` | no | Not a conclusion. |
+
+Reuse is capped at `MaxVerdictReuses` (3) per verdict. That is a damage bound, not
+a solution to symptom-versus-cause aliasing: no artifact-derived identity can
+guarantee that an identical symptom has an identical cause, so a wrong reuse costs
+at most three suppressed investigations, and a conclusion is periodically
+re-checked. Only a freshly computed, verified investigation resets the budget; a
+cache hit or a recovered previous result is a republication, not new work. The
+claim and the charge happen together under the ledger lock.
+
+Other guards:
+
+- An `already_fixed` verdict is discarded as soon as a build past the watermark
+  arrives.
+- An explicit refresh always forces a fresh investigation.
+- A reused answer is re-validated against the current published subject, and
+  carries the completion time it was originally reached at.
+- A verdict that completed before the one on record is refused, so a run that
+  finishes late with an older conclusion does not displace a newer one.
+- Reuse refuses memory past the retention window on read, independently of whether
+  pruning has run.
+- A ledger write failure is logged without failing the operation.
+
+The file is private: it is in `output.NonPublishedFiles`, so the server refuses to
+serve it and the Pages workflow strips it before upload.
+
+The ledger informs analysis; it does not change published output. Surfacing
+recurrence counts in the dashboard, and re-scoping resolution to this durable
+identity, are separate changes.
+
 ## Private benchmark diagnostics
 
 The temporal capability runner may compute scorer-private, content-free signals

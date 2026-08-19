@@ -8,6 +8,7 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/recurrenceledger"
 	"github.com/willie-yao/aster/backend/internal/statefile"
 )
 
@@ -48,6 +49,7 @@ var NonPublishedFiles = []string{
 	"analysis_correction_state.json",
 	"pr_escalation_state.json",
 	"shared_failure_escalation_state.json",
+	recurrenceledger.FileName,
 }
 
 // writeJSON writes indented JSON to path atomically, creating parent

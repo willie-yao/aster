@@ -229,6 +229,22 @@ func NormalizeErrorMessage(msg string) string {
 	return s
 }
 
+// NormalizeErrorSignature normalizes an error message for durable identity rather
+// than display grouping. It strips timestamps and collapses whitespace like
+// NormalizeErrorMessage, but deliberately preserves numeric values: status codes,
+// exit codes, and error numbers are often the only thing distinguishing causes
+// that need different answers, and collapsing "status 401" and "status 503" into
+// one identity would let a conclusion about one be applied to the other.
+//
+// The cost is recall, not correctness. A message whose numbers vary between
+// builds yields a different identity each time, which means no memory and another
+// investigation.
+func NormalizeErrorSignature(msg string) string {
+	s := strings.TrimSpace(msg)
+	s = timestampRegex.ReplaceAllString(s, "<timestamp>")
+	return whitespaceRegex.ReplaceAllString(s, " ")
+}
+
 // HashError returns the first 8 hex characters of the SHA-256 hash of
 // the normalized message for use as a deduplication key.
 func HashError(normalizedMsg string) string {
