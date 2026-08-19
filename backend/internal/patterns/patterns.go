@@ -379,6 +379,7 @@ func GatherFailures(d *models.JobDetail) []ai.PatternFailure {
 			RootCause:          rep.AIAnalysis.RootCause,
 			SuggestedFix:       rep.AIAnalysis.SuggestedFix,
 			RelevantFiles:      rep.AIAnalysis.RelevantFiles,
+			CauseLocation:      rep.AIAnalysis.CauseLocation,
 			LocationFile:       FailureLocationFile(rep.FailureLocation),
 			ProwJobName:        d.Name,
 			ProwConfigFile:     d.ConfigFile,

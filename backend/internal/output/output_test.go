@@ -587,3 +587,34 @@ func TestPublicPatternOutputDefaultsRepeatedCausalGroupRemediation(t *testing.T)
 		t.Fatalf("input pattern mutated: %+v", pattern)
 	}
 }
+
+// TestWriteManifest_OmitsPullRequestCommentConfig keeps operational commenting
+// settings off the public site. The frontend has no use for them, and the
+// manifest is world-readable on the Pages path.
+func TestWriteManifest_OmitsPullRequestCommentConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfg := sampleConfig()
+	dryRun := false
+	cfg.PullRequests = &project.PullRequests{
+		Enabled: true,
+		Comment: &project.PullRequestComment{Enabled: true, DryRun: &dryRun, MaxPerPass: 25},
+	}
+	if err := WriteManifest(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	manifest := string(data)
+	for _, leaked := range []string{"comment", "dry_run", "max_per_pass"} {
+		if strings.Contains(manifest, leaked) {
+			t.Errorf("manifest publishes %q:\n%s", leaked, manifest)
+		}
+	}
+	// The triage toggle itself must still publish: the nav tab depends on it.
+	if !strings.Contains(manifest, "pull_requests") {
+		t.Errorf("manifest dropped pull_requests, which the frontend needs:\n%s", manifest)
+	}
+}

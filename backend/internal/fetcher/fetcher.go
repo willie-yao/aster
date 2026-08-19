@@ -35,6 +35,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/aster/backend/internal/prowbuild"
+	"github.com/willie-yao/aster/backend/internal/recurrenceledger"
 	"github.com/willie-yao/aster/backend/internal/resolve"
 	"github.com/willie-yao/aster/backend/internal/runtime"
 	"github.com/willie-yao/aster/backend/internal/statefile"
@@ -235,6 +236,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		includePresubmits: opts.IncludePresubmits || cfg.Source.IncludePresubmits,
 	}
 	p.warnPullRequestTokenMissing()
+	p.warnCommentCredentialsMissing()
 	return p, nil
 }
 
@@ -528,6 +530,7 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 		if err := writeAllOutput(opts.OutDir, cfg, dashboard, details, flakinessReport, searchIndex); err != nil {
 			return fmt.Errorf("writing output: %w", err)
 		}
+		recordRecurrence(opts.OutDir, causalGroupSightings(details), now)
 		if len(stagedReopened) > 0 {
 			if err := resolve.RemoveMatching(opts.OutDir, stagedReopened); err != nil {
 				log.Printf("Warning: failed to save resolved state after publication: %v", err)
@@ -546,8 +549,50 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	return &refreshResult{details: details, flakiness: flakinessReport, baseFlakiness: baseFlakiness}, nil
 }
 
-// baseBranchFlakiness recomputes the flakiness report over base-branch jobs
-// only. The published report ranks and truncates across every published job, so
+// recordRecurrence gives recurring causes memory that outlives the build window,
+// so a failure that returns is recognized as the same cause and an
+// already-answered investigation is not re-run. Pruning runs before observing, so
+// a cause returning after the retention window starts fresh rather than reviving
+// a verdict too old to trust. A failure to record never fails the pass: the next
+// one re-observes the same causes and the watermark keeps the counts correct, and
+// the server independently refuses expired memory on read.
+func recordRecurrence(outDir string, sightings []recurrenceledger.Sighting, now time.Time) {
+	err := recurrenceledger.Update(outDir, func(ledger *recurrenceledger.Ledger) bool {
+		pruned := ledger.Prune(now)
+		observed := ledger.Observe(sightings, now)
+		return pruned || observed
+	})
+	if err != nil {
+		log.Printf("Warning: failed to record recurrence history: %v", err)
+	}
+}
+
+// causalGroupSightings gathers every systemic cause observed this pass. Inactive
+// lifecycle states are included so a recovered cause keeps its history and is
+// still recognized if it comes back.
+func causalGroupSightings(details []models.JobDetail) []recurrenceledger.Sighting {
+	var out []recurrenceledger.Sighting
+	for i := range details {
+		detail := &details[i]
+		for _, pattern := range detail.PatternAnalyses {
+			if !pattern.Systemic {
+				continue
+			}
+			for _, group := range pattern.CausalGroups {
+				if group.Signature == "" {
+					continue
+				}
+				out = append(out, recurrenceledger.Sighting{
+					Signature: group.Signature, JobID: detail.JobID,
+					Subject: detail.Name, Builds: group.Builds,
+				})
+			}
+		}
+	}
+	return out
+}
+
+// baseBranchFlakiness recomputes the flakiness report over base-branch jobs// only. The published report ranks and truncates across every published job, so
 // presubmits can displace a base-branch flake from it. Attribution needs history
 // that does not move when the dashboard starts publishing presubmits.
 func baseBranchFlakiness(jobResults map[string][]models.BuildResult, jobs []models.ProwJob, published models.FlakinessReport, now time.Time, settings aggregator.Settings) models.FlakinessReport {

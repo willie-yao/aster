@@ -1,0 +1,126 @@
+<!doctype html>
+<!--
+  Source for docs/assets/aster-banner-{light,dark}.png.
+
+  The banner is rasterized rather than shipped as SVG because GitHub renders
+  README images in an isolated context that cannot load web fonts, so SVG text
+  silently falls back to a different face on every viewer's machine.
+
+  Regenerate (see docs/brand.md):
+    chrome --headless --screenshot=aster-banner-light.png \
+      --window-size=1280,300 --force-device-scale-factor=2 banner-src.html
+    chrome --headless --screenshot=aster-banner-dark.png \
+      --window-size=1280,300 --force-device-scale-factor=2 'banner-src.html?mode=dark'
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Aster banner source</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0 }
+      body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif }
+      .banner {
+        width: 1280px; height: 300px; padding: 0 76px;
+        position: relative; overflow: hidden;
+        display: flex; align-items: center;
+        background: var(--bg);
+      }
+      .mark { flex: 0 0 112px; width: 112px; margin-right: 38px; display: flex }
+      .text { position: relative; z-index: 2 }
+      .wordmark { font-size: 78px; font-weight: 800; letter-spacing: -3.3px; line-height: .95; color: var(--fg) }
+      .tagline { font-size: 27px; letter-spacing: -.4px; margin-top: 15px; color: var(--muted) }
+      .expansion { font-size: 18.5px; font-weight: 600; margin-top: 19px; color: var(--muted) }
+      .expansion b { font-weight: 800; color: var(--accent) }
+      /* Abstract TestGrid dot field. Bleeds off the right edge and fades left. */
+      .grid {
+        position: absolute; right: -24px; top: 0; height: 100%; z-index: 1;
+        display: flex; align-items: center; gap: 8px;
+        -webkit-mask-image: linear-gradient(to right, transparent 0%, rgba(0,0,0,.15) 38%, rgba(0,0,0,.6) 72%, rgba(0,0,0,.85) 100%);
+      }
+      .grid-col { display: flex; flex-direction: column; gap: 8px }
+      .cell { width: 12px; height: 12px; border-radius: 3px }
+    </style>
+  </head>
+  <body>
+    <div class="banner">
+      <div class="grid"></div>
+      <div class="mark">
+        <svg viewBox="0 0 64 64" width="100%" aria-hidden="true">
+          <defs>
+            <linearGradient id="asterMark" x1="0" y1="0" x2="0.35" y2="1">
+              <stop offset="0" stop-color="var(--brand)" />
+              <stop offset="1" stop-color="var(--brand-2)" />
+            </linearGradient>
+          </defs>
+          <path
+            d="M32 5.1 60 58.9 32 49.02 4 58.9Z M32 18.32 40.78 38.22 32 34.1 23.22 38.22Z"
+            fill="url(#asterMark)"
+            fill-rule="evenodd"
+          />
+        </svg>
+      </div>
+      <div class="text">
+        <div class="wordmark">Aster</div>
+        <div class="tagline">Turn failing tests into clear next steps.</div>
+        <div class="expansion">
+          <b>A</b>utomated <b>S</b>ignal <b>T</b>riage, <b>E</b>xplanation, and <b>R</b>emediation
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const dark = new URLSearchParams(location.search).get("mode") === "dark";
+
+      // Brand ramp and text tokens, matching frontend/src/theme/tokens.ts.
+      // Dark uses lightened stops so the mark holds contrast against #0d1117.
+      const theme = dark
+        ? { bg: "#0d1117", fg: "#e6edf3", muted: "#8b949e",
+            brand: "#a78bfa", brand2: "#f472b6", accent: "#c084fc" }
+        : { bg: "#ffffff", fg: "#1f2328", muted: "#59636e",
+            brand: "#7c3aed", brand2: "#ec4899", accent: "#7c3aed" };
+      const root = document.documentElement.style;
+      root.setProperty("--bg", theme.bg);
+      root.setProperty("--fg", theme.fg);
+      root.setProperty("--muted", theme.muted);
+      root.setProperty("--brand", theme.brand);
+      root.setProperty("--brand-2", theme.brand2);
+      root.setProperty("--accent", theme.accent);
+
+      // Lightened tints of dotPass / dotFail. The field is decorative and must
+      // stay subordinate to the wordmark, so it does not use the raw tokens.
+      const cell = dark
+        ? { pass: "#2ea043", fail: "#da3633", flake: "#bb8009", idle: "#1c2128" }
+        : { pass: "#57d364", fail: "#fa7970", flake: "#f5d669", idle: "#eaeef2" };
+
+      // Seeded LCG so the dot field is identical on every regeneration.
+      // Math.imul keeps the multiply in exact 32-bit integer space; plain `*`
+      // would exceed Number.MAX_SAFE_INTEGER and lose the low bits.
+      let seed = 7;
+      const next = () => {
+        seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
+        return seed / 0x7fffffff;
+      };
+
+      const grid = document.querySelector(".grid");
+      for (let col = 0; col < 16; col++) {
+        const column = document.createElement("div");
+        column.className = "grid-col";
+        for (let row = 0; row < 10; row++) {
+          const v = next();
+          // One contained failure cluster; the field is otherwise healthy.
+          const failRate = col >= 8 && col <= 10 ? 0.3 : 0.035;
+          const color =
+            v < failRate ? cell.fail
+            : v < failRate + 0.035 ? cell.flake
+            : v < 0.9 ? cell.pass
+            : cell.idle;
+          const box = document.createElement("div");
+          box.className = "cell";
+          box.style.background = color;
+          column.append(box);
+        }
+        grid.append(column);
+      }
+    </script>
+  </body>
+</html>

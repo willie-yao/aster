@@ -78,6 +78,25 @@ an immutable repository revision.
 The analyzer has no shell, browser, portal, SSH, cluster write, repository write,
 or GitHub action capability.
 
+### Cause ownership
+
+A build pins an immutable revision only for the project's own source repository,
+so only paths in that repository can be verified and published as linked
+evidence. When the responsible code lives in a dependency, the analysis records
+the owning repository and its reported paths separately.
+
+That location is reported, never acted on. The dependency paths stay unverified
+hints, are excluded from the verified-source contract, and change no write gate:
+issue and Fix generation still require the failure, analysis source, and
+destination to be the same repository at an immutable revision. A dependency
+cause is surfaced as an upstream diagnosis with the repository named, and its
+remediation says the change belongs upstream instead of offering project
+automation that cannot reach the defect.
+
+A recurring causal group reports ownership only when every build it covers
+reached the same conclusion. Mixed or missing ownership leaves the group
+unattributed.
+
 ### Evidence planning
 
 Before the first provider call, the engine ranks evidence groups from the failure

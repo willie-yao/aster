@@ -152,6 +152,14 @@ Even an `actionable` investigation does not grant action authority. Causal-group
 patterns remain blocked from File Issue, Fix PR, and resolution by the engine's
 action policy.
 
+Causal groups are recomputed from the current build window every pass, so a cause
+that ages out and returns would otherwise be re-investigated from scratch. The
+server consults a private recurrence ledger keyed by each group's durable
+signature and reuses a prior non-actionable verdict instead of re-spending model
+budget. Reuse is capped, an `actionable` or `already_fixed` verdict is never
+reused, and an explicit refresh always forces a fresh investigation. See
+[recurrence memory](maintainer/remediation-investigation.md#recurrence-memory).
+
 ## Admin-gated actions
 
 Actions are disabled unless authentication and a project directory are

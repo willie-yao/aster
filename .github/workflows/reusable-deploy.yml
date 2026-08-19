@@ -103,6 +103,12 @@ on:
       EMAIL_SMTP_PASSWORD:
         description: "SMTP password for email notifications when notifications.email is enabled and smtp.username is set."
         required: false
+      ASTER_APP_ID:
+        description: "GitHub App ID used to comment on new pull requests when pull_requests.comment.enabled is set. The App needs issues:write on branding.source_repo and must be installed there."
+        required: false
+      ASTER_APP_PRIVATE_KEY:
+        description: "PEM private key for ASTER_APP_ID. Commenting posts as the App's bot account, so no personal token is involved."
+        required: false
 
 permissions:
   contents: read
@@ -256,6 +262,8 @@ jobs:
           AI_CACHE_GENERATION: ${{ inputs.ai-cache-generation }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}
+          ASTER_APP_ID: ${{ secrets.ASTER_APP_ID }}
+          ASTER_APP_PRIVATE_KEY: ${{ secrets.ASTER_APP_PRIVATE_KEY }}
         run: |
           AI_FLAG=""
           if [ "${{ inputs.ai }}" = "true" ]; then
@@ -380,12 +388,14 @@ jobs:
             "$d"/ai_usage_fetcher.json "$d"/ai_usage_server.json "$d"/issue_state.json \
             "$d"/fix_pr_state.json "$d"/fix_previews.json \
             "$d"/notification_state.json "$d"/remediation_state.json \
+            "$d"/pr_comment_state.json "$d"/pr_comment_state.json.lock \
             "$d"/remediation_prow_catalog.json "$d"/remediations.json \
             "$d"/orka_analysis.json \
             "$d"/action_request_state.json "$d"/action_preview_state.json \
             "$d"/analysis_correction_state.json \
             "$d"/pr_escalation_state.json \
             "$d"/shared_failure_escalation_state.json \
+            "$d"/recurrence_ledger.json "$d"/.recurrence-ledger.lock \
             "$d"/.fetch-status/status.json "$d"/.fetch-status/status.json.tmp-* \
             "$d"/.fetch-status/history.json "$d"/.fetch-status/history.json.tmp-* \
             "$d"/.remediation-investigations/cache.json \

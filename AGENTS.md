@@ -22,7 +22,8 @@ steps. Do not describe Aster as autonomous repair, self-healing, or guaranteed
 root-cause detection.
 
 Use the opening of [`README.md`](README.md) as the source of truth for the
-public tagline, product description, and mark meaning.
+public tagline and product description, and [`docs/brand.md`](docs/brand.md) for
+the mark, palette, and asset rules.
 
 The data flow per scheduled deploy is:
 
@@ -67,9 +68,11 @@ backend/                         Go 1.25
     junit/                       JUnit XML -> structured test cases
     aggregator/                  Per-job and per-test aggregate statistics
     patterns/                    Correlates analyzed failures across builds
+    recurrenceledger/            Durable memory of recurring causes across build windows
     prtriage/                    Per-open-pull-request view of presubmit results
     prattribution/               Rules a pull request out of a failure from observed results
     prescalation/                On-demand AI analysis for unexplained pull request failures
+    prcomment/                   Opt-in bot comment on newly observed pull requests
     output/                      Writes the JSON contract the frontend reads
     models/                      Shared wire-format types
     fetchprogress/               Persists safe aggregate fetch progress for operators
@@ -118,6 +121,7 @@ backend/                         Go 1.25
     resolve/                     Admin-marked "resolved" recurring patterns
     patternstate/                Pattern publication + write-side validation
     ghpr/                        Opens PRs that add/update files in one commit
+    githubapp/                   Authenticates as a GitHub App installation
     repotemplate/                Fetches a repo's issue/PR markdown templates
     notify/                      SMTP email notifications
 

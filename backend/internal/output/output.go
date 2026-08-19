@@ -8,6 +8,7 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/recurrenceledger"
 	"github.com/willie-yao/aster/backend/internal/statefile"
 )
 
@@ -36,6 +37,7 @@ var NonPublishedFiles = []string{
 	"fix_pr_state.json",
 	"fix_previews.json",
 	"notification_state.json",
+	"pr_comment_state.json",
 	// Retained so private ledger files left by the removed closed-loop
 	// remediation feature are never published from an existing data directory.
 	"remediation_state.json",
@@ -48,6 +50,7 @@ var NonPublishedFiles = []string{
 	"analysis_correction_state.json",
 	"pr_escalation_state.json",
 	"shared_failure_escalation_state.json",
+	recurrenceledger.FileName,
 }
 
 // writeJSON writes indented JSON to path atomically, creating parent
@@ -128,7 +131,12 @@ func WriteSharedFailures(dir string, index models.SharedFailureIndex) error {
 // WritePullRequests writes the pull request index, every detail file, and the
 // shared failure index, then removes detail files for pull requests that are no
 // longer open.
-func WritePullRequests(dir string, index models.PullRequestIndex, details []models.PullRequestDetail, shared models.SharedFailureIndex) error {
+//
+// retain names pull requests whose detail file must survive pruning even when
+// they are absent from details. The engine posts public comments linking to
+// those pages, and a pull request drops out of details as soon as it closes, so
+// without this every commented pull request ends up with a broken link.
+func WritePullRequests(dir string, index models.PullRequestIndex, details []models.PullRequestDetail, shared models.SharedFailureIndex, retain map[int]bool) error {
 	if err := WritePullRequestIndex(dir, index); err != nil {
 		return err
 	}
@@ -140,13 +148,16 @@ func WritePullRequests(dir string, index models.PullRequestIndex, details []mode
 	if err := WriteSharedFailures(dir, shared); err != nil {
 		return err
 	}
-	return prunePullRequestDetails(dir, details)
+	return prunePullRequestDetails(dir, details, retain)
 }
 
-func prunePullRequestDetails(dir string, details []models.PullRequestDetail) error {
-	expected := make(map[string]bool, len(details))
+func prunePullRequestDetails(dir string, details []models.PullRequestDetail, retain map[int]bool) error {
+	expected := make(map[string]bool, len(details)+len(retain))
 	for _, detail := range details {
 		expected[models.PullRequestDataFilename(detail.Number)] = true
+	}
+	for number := range retain {
+		expected[models.PullRequestDataFilename(number)] = true
 	}
 	return pruneStaleJSON(filepath.Join(dir, pullRequestDir), expected, "pull request detail")
 }

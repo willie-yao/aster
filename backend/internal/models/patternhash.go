@@ -7,9 +7,10 @@ import (
 )
 
 type patternCausalGroupContent struct {
-	Builds     []string `json:"builds"`
-	RootCause  string   `json:"root_cause"`
-	Confidence string   `json:"confidence"`
+	Builds        []string               `json:"builds"`
+	RootCause     string                 `json:"root_cause"`
+	Confidence    string                 `json:"confidence"`
+	CauseLocation *AnalysisCauseLocation `json:"cause_location,omitempty"`
 }
 
 func patternCausalGroupContents(groups []PatternCausalGroup) []patternCausalGroupContent {
@@ -19,9 +20,10 @@ func patternCausalGroupContents(groups []PatternCausalGroup) []patternCausalGrou
 	out := make([]patternCausalGroupContent, len(groups))
 	for index, group := range groups {
 		out[index] = patternCausalGroupContent{
-			Builds:     group.Builds,
-			RootCause:  group.RootCause,
-			Confidence: group.Confidence,
+			Builds:        group.Builds,
+			RootCause:     group.RootCause,
+			Confidence:    group.Confidence,
+			CauseLocation: group.CauseLocation,
 		}
 	}
 	return out

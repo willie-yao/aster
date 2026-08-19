@@ -253,3 +253,64 @@ func TestNewRejectsInvalidReasoningEffortBeforeProviderIO(t *testing.T) {
 		t.Fatalf("provider requests = %d, want 0", requests.Load())
 	}
 }
+
+// TestReusePlannerMatchesAnalyzerPromptIdentity keeps scheduling and publication
+// on one prompt contract. The planner decides reuse by comparing prompt hashes,
+// so a planner configured differently from the analyzing service would treat
+// every published analysis as stale and reanalyze the whole corpus.
+func TestReusePlannerMatchesAnalyzerPromptIdentity(t *testing.T) {
+	dir := t.TempDir()
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(dir, "project.yaml"), `id: test
+name: Test
+testgrid:
+  dashboard: test
+storage:
+  provider: local
+  base: /fixtures
+branding:
+  title: Test
+  base_path: /
+  site_url: https://example.invalid
+  source_repo:
+    owner: example
+    name: project
+ai:
+  tools: [filesystem]
+`)
+	write(filepath.Join(dir, "prompts", "system.md"), "Investigate artifacts.\n")
+	cfg, err := project.Load(filepath.Join(dir, "project.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadProject(dir, cfg, ProviderFallbacks{
+		API: "chat_completions", Endpoint: "https://model.invalid/v1/chat/completions", Model: "model",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	planner := NewReusePlanner(loaded)
+	if planner == nil {
+		t.Fatal("planner was not created")
+	}
+	sourceRepo := loaded.AnalysisSource
+	if sourceRepo.Owner == "" || sourceRepo.Name == "" {
+		sourceRepo = cfg.EffectiveAnalysisSourceRepo()
+	}
+	if sourceRepo.Owner == "" || sourceRepo.Name == "" {
+		t.Fatal("test project resolved no analysis source repository")
+	}
+	owner, name := planner.SourceRepo()
+	if owner != sourceRepo.Owner || name != sourceRepo.Name {
+		t.Fatalf("planner source repo = %s/%s, want %s/%s", owner, name, sourceRepo.Owner, sourceRepo.Name)
+	}
+}

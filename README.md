@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/aster-banner-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="docs/assets/aster-banner-light.svg">
-    <img src="docs/assets/aster-banner-light.svg" alt="Aster. Turn failing tests into clear next steps.">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/aster-banner-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/aster-banner-light.png">
+    <img src="docs/assets/aster-banner-light.png" width="1280" alt="Aster. Turn failing tests into clear next steps. Automated Signal Triage, Explanation, and Remediation.">
   </picture>
 </p>
 

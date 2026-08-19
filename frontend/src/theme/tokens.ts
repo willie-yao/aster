@@ -1,5 +1,9 @@
 // Raw colors for the light and dark schemes. Both schemes expose the same
 // semantic surface and status keys through the MUI theme.
+//
+// The primary ramp is the brand violet; see docs/brand.md. Status keys
+// (secondary, tertiary, error, dot*) stay green/amber/red because they carry CI
+// meaning, not branding, and must not be restyled to match the brand.
 export interface ColorTokens {
   background: string;
   surface: string;
@@ -37,6 +41,9 @@ export interface ColorTokens {
   dotPass: string;
   dotFail: string;
 
+  brandFrom: string;
+  brandTo: string;
+
   outline: string;
   outlineVariant: string;
   surfaceTint: string;
@@ -56,9 +63,9 @@ export const darkTokens: ColorTokens = {
   onSurface: "#e6edf3",
   onSurfaceVariant: "#8b949e",
 
-  primary: "#2f81f7",
-  primaryDim: "#388bfd",
-  primaryContainer: "#58a6ff",
+  primary: "#a78bfa",
+  primaryDim: "#c4b5fd",
+  primaryContainer: "#ddd6fe",
   onPrimary: "#0d1117",
 
   secondary: "#3fb950",
@@ -79,9 +86,12 @@ export const darkTokens: ColorTokens = {
   dotPass: "#3fb950",
   dotFail: "#f85149",
 
+  brandFrom: "#a78bfa",
+  brandTo: "#f472b6",
+
   outline: "#8c959f",
   outlineVariant: "#30363d",
-  surfaceTint: "#2f81f7",
+  surfaceTint: "#a78bfa",
 };
 
 export const lightTokens: ColorTokens = {
@@ -98,9 +108,9 @@ export const lightTokens: ColorTokens = {
   onSurface: "#1f2328",
   onSurfaceVariant: "#59636e",
 
-  primary: "#0969da",
-  primaryDim: "#0550ae",
-  primaryContainer: "#54aeff",
+  primary: "#7c3aed",
+  primaryDim: "#6d28d9",
+  primaryContainer: "#c4b5fd",
   onPrimary: "#ffffff",
 
   secondary: "#1a7f37",
@@ -121,7 +131,10 @@ export const lightTokens: ColorTokens = {
   dotPass: "#1a7f37",
   dotFail: "#cf222e",
 
+  brandFrom: "#7c3aed",
+  brandTo: "#ec4899",
+
   outline: "#57606a",
   outlineVariant: "#d0d7de",
-  surfaceTint: "#0969da",
+  surfaceTint: "#7c3aed",
 };

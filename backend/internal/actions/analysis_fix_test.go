@@ -748,3 +748,49 @@ func TestAnalysisSourceCompatibilityRejectsUnreadableSourceArchive(t *testing.T)
 		t.Fatal("unreadable source archive was accepted")
 	}
 }
+
+// TestAnalysisActionSubjectIgnoresDependencyCauseOwnership proves that naming
+// an upstream cause never widens a write path. The action's source repository
+// is derived from the configured project and the build's pinned revision, and
+// its verified files come from the verified link map, so a dependency the
+// analysis blames cannot become a fix destination or contribute a file. This is
+// the production shape: the caller never supplies the repository.
+func TestAnalysisActionSubjectIgnoresDependencyCauseOwnership(t *testing.T) {
+	dir := t.TempDir()
+	detail := exactJUnitDetail()
+	detail.Runs[0].TestCases[0].AIAnalysis.CauseLocation = &models.AnalysisCauseLocation{
+		Repository: "kubernetes/kubernetes", External: true,
+		Files: []string{"pkg/kubelet/cm/devicemanager/manager.go"},
+	}
+	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
+
+	subject, err := NewService(exactAnalysisConfig(), dir, AIConfig{}).ResolveAnalysisActionSubject(exactIdentity())
+	if err != nil {
+		t.Fatalf("resolve = %v", err)
+	}
+	if subject.SourceRepository.Owner != "kubernetes-sigs" || subject.SourceRepository.Name != "cluster-api-provider-azure" {
+		t.Fatalf("dependency ownership changed the fix destination: %+v", subject.SourceRepository)
+	}
+	for _, file := range subject.SourceFiles {
+		if file == "pkg/kubelet/cm/devicemanager/manager.go" {
+			t.Fatalf("unverified dependency hint became a verified source file: %v", subject.SourceFiles)
+		}
+	}
+}
+
+// TestAnalysisSourceCompatibilityRejectsDependencyRepository covers the gate
+// itself: even asked directly, a repository other than the configured project's
+// is never an acceptable analysis source or fix destination.
+func TestAnalysisSourceCompatibilityRejectsDependencyRepository(t *testing.T) {
+	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}}
+	dependency := sourceinvestigation.Repository{Owner: "kubernetes", Name: "kubernetes", Revision: analysisFixRevision}
+	_, err := service.verifyAnalysisSourceCompatibility(
+		t.Context(), dependency, "", []string{"pkg/kubelet/cm/devicemanager/manager.go"}, "Update `GetDeviceRunContainerOptions`.")
+	if err == nil {
+		t.Fatal("a dependency repository was accepted as a fix destination")
+	}
+	if !strings.Contains(err.Error(), "do not match") {
+		t.Fatalf("rejection reason = %v", err)
+	}
+}

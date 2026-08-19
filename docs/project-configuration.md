@@ -308,6 +308,114 @@ reader at a peer pull request whose page points back, and the trail ends.
 Clustering runs after attribution, costs no model calls, and is published on
 both deploy paths. The GitHub Pages path therefore gets the aggregate view with
 no server; only the analysis below needs one.
+### Optional bot comment on new pull requests
+
+Aster can post one comment on each newly opened pull request, linking to that
+pull request's triage page. It reaches contributors who would never find the
+dashboard on their own, which is exactly why it needs care: it is the engine's
+**only unattended GitHub write**. Every other write is a maintainer confirming
+a previewed draft.
+
+It is therefore off by default, and turning it on does not post anything:
+
+```yaml
+pull_requests:
+  enabled: true
+  comment:
+    enabled: true
+    dry_run: true     # default; logs the exact body and posts nothing
+    max_per_pass: 10  # default; hard cap so a bug cannot fan out
+```
+
+`dry_run` is true unless you explicitly set it to `false`. Read a real pass's
+logged bodies before you change it.
+
+#### The posting identity
+
+Comments post as a **GitHub App**, so contributors see a bot account rather
+than a person, and the credential is scoped to one repository and expires
+hourly. There is no shared Aster bot: the engine runs inside your own
+infrastructure, so a shared identity would mean shipping one private key that
+could write to every consumer's repository.
+
+Create the App under the organization that owns `branding.source_repo`:
+
+1. Create a GitHub App with **Repository permissions → Issues → Read and
+   write** and **Pull requests → Read-only**, and nothing else. Pull request
+   comments go through the issues API, so `issues` is what grants the write;
+   pull request read access is only needed to see them on a private repository.
+   Subscribe to no events; the engine polls and has no webhook receiver.
+2. Install it on `branding.source_repo`.
+3. Generate a private key and note the App ID.
+
+Then supply both to the fetcher:
+
+| Deployment | Where |
+|---|---|
+| GitHub Pages | `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` repository secrets |
+| Kubernetes | `fetcher.extraEnv` entries sourced from a Secret |
+
+The App's bot login is its slug plus `[bot]`, for example `aster-capz[bot]`.
+The fetcher logs the resolved identity at the start of every commenting pass, so
+you can confirm who will post before enabling the write. Installation tokens are
+minted per pass, scoped to the single repository, and expire within the hour.
+
+#### What it will and will not comment on
+
+A comment is posted at most once per pull request, and only for pull requests
+whose triage page this pass just published, so a comment can never link to a
+page the dashboard did not generate. The pass skips:
+
+- **every pull request that existed when commenting was first enabled.** The
+  first pass records the repository's highest pull request number, posts
+  nothing, and only higher numbers are ever eligible. That bound is read from
+  GitHub rather than from the triage listing, so a draft or a rarely-updated
+  pull request outside the listing cannot be treated as new later. Numbers are
+  assigned monotonically, so no clock is involved.
+- pull requests the bot has already commented on
+- pull requests Aster opened itself, matched by the marker in its fix pull
+  request bodies rather than by author, since those are opened under a different
+  credential
+- draft pull requests
+- pull requests that closed, merged, or became drafts since the pass began
+- pull requests that have failed to post several times, so one unpostable
+  thread cannot occupy the cap forever
+- anything beyond `max_per_pass` in a single pass
+
+Deduplication does not trust local state, which matters because the Pages path
+keeps its data directory only in an Actions cache that expires. Three layers
+each cover the one before: the activation watermark makes everything that
+existed at enable time permanently ineligible, local records skip what this
+deployment already posted, and every write is preceded by reading that pull
+request directly, which is authoritative even when local state was lost.
+
+Pages for pull requests that have already been commented on are kept even after
+they close, so a comment cannot turn into a broken link the moment the pull
+request merges. Such a page stops being refreshed and shows its own generated
+timestamp. A reset data directory recovers those records from GitHub when commenting
+re-activates, so the routine expiry of the Pages build cache does not drop them.
+Records, and the pages they hold, are dropped after 90 days, which bounds both
+the state file and the published data directory. Expiring one cannot cause a
+second comment, because the pull request itself is the authoritative check.
+
+Commenting requires that the dashboard published a triage page for **every**
+open pull request. If the listing was truncated, no comment is posted and the
+pass says so, because pages outside the published set are pruned and the link
+would break. Raise `pull_requests.max` above the repository's open pull request
+count before enabling commenting. The watermark is still recorded in that state,
+so raising the cap later does not silently skip everything opened meanwhile.
+
+Commenting is a GitHub write, so `-skip-side-effects` suppresses it along with
+issues, fix pull requests, and notifications. A triage failure also suppresses
+it, because the pages a comment would link to were not refreshed.
+
+One caveat on the Pages path: comments are posted during the fetch step, before
+the site is built and deployed. If a later workflow step fails, a comment can
+point at a page that is not live until the next successful deploy republishes
+it.
+
+There is no per-pull-request opt-out. If contributors need one, disable the
+feature.
 
 ### Optional AI escalation
 

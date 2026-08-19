@@ -85,11 +85,11 @@ test("daily cost chart maps the rendered view box inside letterboxed containers"
 });
 
 test("daily cost chart descriptions match visible series", () => {
-  assert.match(chartSeriesDescription(true, false), /^Solid blue shows recorded estimates\./);
+  assert.match(chartSeriesDescription(true, false), /^The solid line shows recorded estimates\./);
   assert.doesNotMatch(chartSeriesDescription(true, false), /current-rate/);
-  assert.match(chartSeriesDescription(false, true), /^Dashed amber shows current-rate estimates\./);
+  assert.match(chartSeriesDescription(false, true), /^The dashed line shows current-rate estimates\./);
   assert.doesNotMatch(chartSeriesDescription(false, true), /recorded estimates/);
-  assert.match(chartSeriesDescription(true, true), /Solid blue.*Dashed amber/);
+  assert.match(chartSeriesDescription(true, true), /solid line.*dashed line/);
   assert.match(chartSeriesDescription(true, true), /ledger below/);
   assert.doesNotMatch(chartSeriesDescription(true, true), /table below/);
 });

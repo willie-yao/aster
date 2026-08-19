@@ -1,18 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
   <title id="title">Aster</title>
-  <rect x="2" y="2" width="60" height="60" rx="16" fill="#121826" />
-  <rect x="2.5" y="2.5" width="59" height="59" rx="15.5" fill="none" stroke="#3a465e" />
-  <g transform="translate(10.4 10.4) scale(1.8)" color="#6d8bff">
-    <path
-      d="M12 3.7 19.65 18.4 12 15.7l-7.65 2.7L12 3.7Z"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.85"
-      stroke-linejoin="round"
-    />
-    <path
-      d="M12 6.7c.35 2.13 1.45 3.25 3.55 3.6-2.1.35-3.2 1.47-3.55 3.6-.35-2.13-1.45-3.25-3.55-3.6 2.1-.35 3.2-1.47 3.55-3.6Z"
-      fill="currentColor"
-    />
-  </g>
+  <style>
+    /* Lightened stops on dark so the mark holds contrast against a dark tab strip. */
+    @media (prefers-color-scheme: dark) {
+      .from { stop-color: #a78bfa }
+      .to { stop-color: #f472b6 }
+    }
+  </style>
+  <defs>
+    <linearGradient id="asterMark" x1="0" y1="0" x2="0.35" y2="1">
+      <stop class="from" offset="0" stop-color="#7c3aed" />
+      <stop class="to" offset="1" stop-color="#ec4899" />
+    </linearGradient>
+  </defs>
+  <!-- Single evenodd path: the counter is a real hole, so the tab background shows through. -->
+  <path
+    d="M32 5.1 60 58.9 32 49.02 4 58.9Z M32 18.32 40.78 38.22 32 34.1 23.22 38.22Z"
+    fill="url(#asterMark)"
+    fill-rule="evenodd"
+  />
 </svg>

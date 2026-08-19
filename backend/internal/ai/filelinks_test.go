@@ -461,3 +461,140 @@ func TestResolveFileLinksAtRef_DoesNotPersistMutableRefs(t *testing.T) {
 		t.Errorf("HEAD verification must not be persisted")
 	}
 }
+
+// TestResolveFileLinks_DependencyStringsNeverResolveAgainstTheProject covers the
+// collision route: a dependency path, or a repository slug that is itself
+// path-shaped such as "nats-io/nats.go", must not be verified as a
+// project-relative path. If it were, a project file that happens to sit at the
+// same path would gain a verified link and become an actionable Fix source for
+// a file the analysis never meant.
+func TestResolveFileLinks_DependencyStringsNeverResolveAgainstTheProject(t *testing.T) {
+	// Both collide with a real file in the project repository.
+	exists := map[string]bool{
+		"/o/r/HEAD/test/e2e/framework/pod.go": true,
+		"/o/r/HEAD/nats-io/nats.go":           true,
+		"/o/r/HEAD/pkg/project_owned.go":      true,
+	}
+	srv, _ := newLinkStub(t, exists, nil)
+	withStub(t, srv)
+
+	s := &Service{}
+	s.SetSourceRepo("o", "r")
+	tc := &models.TestCase{AIAnalysis: &models.AIAnalysis{
+		RelevantFiles: []string{"pkg/project_owned.go"},
+		RootCause:     "the dependency nats-io/nats.go mishandles test/e2e/framework/pod.go",
+		SuggestedFix:  "Track the upstream change.",
+		CauseLocation: &models.AnalysisCauseLocation{
+			Repository: "nats-io/nats.go", External: true,
+			Files: []string{"test/e2e/framework/pod.go"},
+		},
+	}}
+
+	links := s.resolveFileLinks(context.Background(), srv.Client(), tc)
+
+	for _, foreign := range []string{"test/e2e/framework/pod.go", "nats-io/nats.go"} {
+		if link, ok := links[foreign]; ok {
+			t.Errorf("dependency string %q was verified as a project path: %s", foreign, link)
+		}
+	}
+	// A genuine project path in the same analysis still resolves.
+	if links["pkg/project_owned.go"] == "" {
+		t.Fatalf("project path lost its verified link: %v", links)
+	}
+}
+
+// TestResolveFileLinks_DependencyExclusionSurvivesEquivalentSpellings stops an
+// equivalent spelling of a dependency path from slipping past the exclusion.
+// The pinned-revision resolver strips a "./" prefix itself, so an exclusion
+// that compared raw strings would let that spelling through and verify the
+// dependency path against the project.
+func TestResolveFileLinks_DependencyExclusionSurvivesEquivalentSpellings(t *testing.T) {
+	const shared = "test/e2e/framework/pod.go"
+	sha := strings.Repeat("a", 40)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// The project genuinely contains a file at the same relative path.
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	withRawBase(t, srv.URL)
+
+	for _, spelling := range []string{shared, "./" + shared, "Test/E2E/Framework/Pod.go"} {
+		s := &Service{}
+		s.SetSourceRepo("o", "r")
+		tc := &models.TestCase{AIAnalysis: &models.AIAnalysis{
+			RelevantFiles: []string{spelling},
+			CauseLocation: &models.AnalysisCauseLocation{
+				Repository: "nats-io/nats.go", External: true, Files: []string{shared},
+			},
+		}}
+		for key, link := range s.resolveFileLinksAtRef(context.Background(), srv.Client(), tc, sha) {
+			t.Errorf("spelling %q produced a project link: %s -> %s", spelling, key, link)
+		}
+	}
+
+	// The same resolver still links a genuine project path in the same analysis.
+	s := &Service{}
+	s.SetSourceRepo("o", "r")
+	tc := &models.TestCase{AIAnalysis: &models.AIAnalysis{
+		RelevantFiles: []string{"pkg/project_owned.go"},
+		CauseLocation: &models.AnalysisCauseLocation{
+			Repository: "nats-io/nats.go", External: true, Files: []string{shared},
+		},
+	}}
+	if links := s.resolveFileLinksAtRef(context.Background(), srv.Client(), tc, sha); links["pkg/project_owned.go"] == "" {
+		t.Fatalf("project path lost its verified link: %v", links)
+	}
+}
+
+// TestResolveFileLinks_VerifiedProjectPathOutranksAnExternalHint covers the
+// contradictory case end to end. A path the analysis actually read from the
+// project at the pinned revision was proven to be a project file, so it keeps
+// its verified link; the model additionally listing it as a dependency file
+// does not unproved that read, and the structured ownership is what reports the
+// dependency.
+func TestResolveFileLinks_VerifiedProjectPathOutranksAnExternalHint(t *testing.T) {
+	const shared = "test/e2e/framework/pod.go"
+	exists := map[string]bool{"/o/r/HEAD/" + shared: true}
+	srv, _ := newLinkStub(t, exists, nil)
+	withStub(t, srv)
+
+	// normalizeCauseLocation drops a hint the project read proved, so the
+	// published location no longer claims the path is foreign.
+	location := normalizeCauseLocation(&models.AnalysisCauseLocation{
+		Repository: "nats-io/nats.go", Files: []string{shared},
+	}, "o", "r", []string{shared})
+
+	s := &Service{}
+	s.SetSourceRepo("o", "r")
+	tc := &models.TestCase{AIAnalysis: &models.AIAnalysis{
+		RelevantFiles: []string{shared}, CauseLocation: location,
+	}}
+
+	if links := s.resolveFileLinks(context.Background(), srv.Client(), tc); links[shared] == "" {
+		t.Fatalf("verified project read lost its link to a contradictory hint: %v", links)
+	}
+	if location == nil || !location.External || len(location.Files) != 0 {
+		t.Fatalf("published location = %+v, want external ownership with no contradictory hint", location)
+	}
+}
+
+// TestResolveFileLinks_ProjectCauseKeepsItsLinks confirms the exclusion is
+// scoped to dependency ownership and never suppresses an own-repo cause.
+func TestResolveFileLinks_ProjectCauseKeepsItsLinks(t *testing.T) {
+	exists := map[string]bool{"/o/r/HEAD/pkg/project_owned.go": true}
+	srv, _ := newLinkStub(t, exists, nil)
+	withStub(t, srv)
+
+	s := &Service{}
+	s.SetSourceRepo("o", "r")
+	tc := &models.TestCase{AIAnalysis: &models.AIAnalysis{
+		RelevantFiles: []string{"pkg/project_owned.go"},
+		CauseLocation: &models.AnalysisCauseLocation{
+			Repository: "o/r", Files: []string{"pkg/project_owned.go"},
+		},
+	}}
+
+	if links := s.resolveFileLinks(context.Background(), srv.Client(), tc); links["pkg/project_owned.go"] == "" {
+		t.Fatalf("project-owned cause lost its verified link: %v", links)
+	}
+}

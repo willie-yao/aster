@@ -8,6 +8,8 @@ import { Link as RouterLink, useLocation } from "react-router-dom";
 import { failedTestGridID } from "../lib/patternFixGuidance";
 import { jobRunPath } from "../lib/routes";
 import { overviewTypography } from "../theme/overview";
+import type { AnalysisCauseLocation } from "../types/dashboard";
+import { UpstreamCauseNotice } from "./UpstreamCauseNotice";
 
 function revealFailedTestGrid() {
   const target = document.getElementById(failedTestGridID);
@@ -30,7 +32,15 @@ function revealFailedTestGrid() {
   });
 }
 
-export function PatternFixGuidance({ jobID, buildID }: { jobID: string; buildID: string }) {
+export function PatternFixGuidance({
+  jobID,
+  buildID,
+  externalCause,
+}: {
+  jobID: string;
+  buildID: string;
+  externalCause?: AnalysisCauseLocation | null;
+}) {
   const location = useLocation();
   const destination = `${jobRunPath(jobID, buildID)}#${failedTestGridID}`;
 
@@ -64,12 +74,16 @@ export function PatternFixGuidance({ jobID, buildID }: { jobID: string; buildID:
         <InfoOutlined aria-hidden sx={{ mt: 0.25, flexShrink: 0, color: "info.main" }} />
         <Box sx={{ minWidth: 0 }}>
           <Typography id="pattern-fix-guidance-title" component="h3" sx={overviewTypography.subsectionHeading}>
-            Fix investigation unavailable
+            {externalCause ? "Cause is in a dependency" : "Fix investigation unavailable"}
           </Typography>
-          <Typography color="text.secondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
-            This recurring result is grouped by cause, so it cannot produce one shared issue or Fix PR.
-            No failed JUnit test in the affected builds meets the Fix investigation requirements yet, so no cause can start one either.
-          </Typography>
+          {externalCause ? (
+            <UpstreamCauseNotice location={externalCause} />
+          ) : (
+            <Typography color="text.secondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
+              This recurring result is grouped by cause, so it cannot produce one shared issue or Fix PR.
+              No failed JUnit test in the affected builds meets the Fix investigation requirements yet, so no cause can start one either.
+            </Typography>
+          )}
           <Button
             component={RouterLink}
             to={destination}
@@ -80,8 +94,9 @@ export function PatternFixGuidance({ jobID, buildID }: { jobID: string; buildID:
             View failed tests
           </Button>
           <Typography color="text.secondary" sx={{ mt: 1, ...overviewTypography.description }}>
-            The pattern chat below helps compare causes across builds. A Fix investigation becomes available once an
-            individual failed JUnit test meets every Fix eligibility requirement.
+            {externalCause
+              ? "The pattern chat below helps compare causes across builds and confirm the upstream diagnosis against the evidence."
+              : "The pattern chat below helps compare causes across builds. A Fix investigation becomes available once an individual failed JUnit test meets every Fix eligibility requirement."}
           </Typography>
         </Box>
       </Stack>
