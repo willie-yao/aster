@@ -71,6 +71,7 @@ backend/                         Go 1.25
     prtriage/                    Per-open-pull-request view of presubmit results
     prattribution/               Rules a pull request out of a failure from observed results
     prescalation/                On-demand AI analysis for unexplained pull request failures
+    prcomment/                   Opt-in bot comment on newly observed pull requests
     output/                      Writes the JSON contract the frontend reads
     models/                      Shared wire-format types
     fetchprogress/               Persists safe aggregate fetch progress for operators
@@ -119,6 +120,7 @@ backend/                         Go 1.25
     resolve/                     Admin-marked "resolved" recurring patterns
     patternstate/                Pattern publication + write-side validation
     ghpr/                        Opens PRs that add/update files in one commit
+    githubapp/                   Authenticates as a GitHub App installation
     repotemplate/                Fetches a repo's issue/PR markdown templates
     notify/                      SMTP email notifications
 

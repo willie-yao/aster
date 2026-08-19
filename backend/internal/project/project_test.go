@@ -1628,3 +1628,118 @@ pull_requests:
 		t.Errorf("pull request bounds = %+v", cfg.PullRequests)
 	}
 }
+
+func TestValidate_PullRequestComment(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantSub string
+	}{
+		{
+			name: "negative cap rejected",
+			mutate: func(c *Config) {
+				c.PullRequests = &PullRequests{Enabled: true, Comment: &PullRequestComment{MaxPerPass: -1}}
+			},
+			wantSub: "pull_requests.comment.max_per_pass",
+		},
+		{
+			name: "commenting without triage rejected",
+			mutate: func(c *Config) {
+				c.PullRequests = &PullRequests{Comment: &PullRequestComment{Enabled: true}}
+			},
+			wantSub: "requires pull_requests.enabled",
+		},
+		{
+			name: "commenting with triage accepted",
+			mutate: func(c *Config) {
+				c.PullRequests = &PullRequests{Enabled: true, Comment: &PullRequestComment{Enabled: true}}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validConfig()
+			tc.mutate(c)
+			err := c.Validate()
+			if tc.wantSub == "" {
+				if err != nil {
+					t.Fatalf("valid config rejected: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected an error containing %q", tc.wantSub)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("error = %v, want it to contain %q", err, tc.wantSub)
+			}
+		})
+	}
+}
+
+// TestCommentDryRunDefaultsOn pins the safety default: the engine's only
+// unattended write must never post because a field was omitted.
+func TestCommentDryRunDefaultsOn(t *testing.T) {
+	enabled := func(dryRun *bool) *Config {
+		c := validConfig()
+		c.PullRequests = &PullRequests{Enabled: true, Comment: &PullRequestComment{Enabled: true, DryRun: dryRun}}
+		return c
+	}
+	yes, no := true, false
+
+	cases := []struct {
+		name string
+		cfg  *Config
+		want bool
+	}{
+		{name: "comment unconfigured", cfg: validConfig(), want: true},
+		{name: "dry_run omitted", cfg: enabled(nil), want: true},
+		{name: "dry_run true", cfg: enabled(&yes), want: true},
+		{name: "dry_run explicitly false", cfg: enabled(&no), want: false},
+		{name: "disabled with dry_run false", cfg: func() *Config {
+			c := validConfig()
+			c.PullRequests = &PullRequests{Enabled: true, Comment: &PullRequestComment{DryRun: &no}}
+			return c
+		}(), want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.CommentDryRun(); got != tc.want {
+				t.Fatalf("CommentDryRun() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCommentEnabled(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  *Config
+		want bool
+	}{
+		{name: "nil config", cfg: nil, want: false},
+		{name: "no pull_requests block", cfg: validConfig(), want: false},
+		{name: "no comment block", cfg: func() *Config {
+			c := validConfig()
+			c.PullRequests = &PullRequests{Enabled: true}
+			return c
+		}(), want: false},
+		{name: "comment disabled", cfg: func() *Config {
+			c := validConfig()
+			c.PullRequests = &PullRequests{Enabled: true, Comment: &PullRequestComment{}}
+			return c
+		}(), want: false},
+		{name: "comment enabled", cfg: func() *Config {
+			c := validConfig()
+			c.PullRequests = &PullRequests{Enabled: true, Comment: &PullRequestComment{Enabled: true}}
+			return c
+		}(), want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.CommentEnabled(); got != tc.want {
+				t.Fatalf("CommentEnabled() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}

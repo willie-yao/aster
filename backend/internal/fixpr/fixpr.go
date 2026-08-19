@@ -620,6 +620,11 @@ func markerFor(key string) string {
 	return fmt.Sprintf("<!-- %s:%s -->", markerPrefix, markerToken(key))
 }
 
+// MarkerPrefix is the tag shared by every fix PR marker. It identifies pull
+// requests the engine opened regardless of which key they were opened for, and
+// regardless of the credential that opened them.
+func MarkerPrefix() string { return markerPrefix }
+
 // MarkerFor returns the hidden GitHub marker for a fix key.
 func MarkerFor(key string) string { return markerFor(key) }
 

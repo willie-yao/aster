@@ -39,7 +39,10 @@ const (
 
 // PullRequestLister enumerates the open pull requests to triage.
 type PullRequestLister interface {
-	ListOpenPullRequests(ctx context.Context, owner, repo string, limit int) ([]ghpr.PullRequest, error)
+	// ListOpenPullRequests returns the open pull requests to triage and whether
+	// the listing was cut short, so callers can tell a complete view from a
+	// capped one.
+	ListOpenPullRequests(ctx context.Context, owner, repo string, limit int) ([]ghpr.PullRequest, bool, error)
 }
 
 // Options bound one triage pass.
@@ -72,21 +75,30 @@ func (o Options) fullRepo() string { return o.Owner + "/" + o.Repo }
 // Collect returns the pull request index and one detail per open pull request.
 // Per-check bucket errors are logged and skipped so one unreadable build does
 // not fail the pass.
-func Collect(ctx context.Context, backend storage.Backend, lister PullRequestLister, catalog *jobconfig.Catalog, opts Options) (models.PullRequestIndex, []models.PullRequestDetail, error) {
+// Result is one triage pass's output.
+type Result struct {
+	Index   models.PullRequestIndex
+	Details []models.PullRequestDetail
+	// Truncated reports that more open pull requests exist than were triaged,
+	// so the published pages do not cover every open pull request.
+	Truncated bool
+}
+
+func Collect(ctx context.Context, backend storage.Backend, lister PullRequestLister, catalog *jobconfig.Catalog, opts Options) (Result, error) {
 	opts = opts.withDefaults()
 	if opts.Owner == "" || opts.Repo == "" {
-		return models.PullRequestIndex{}, nil, fmt.Errorf("prtriage: owner and repo are required")
+		return Result{}, fmt.Errorf("prtriage: owner and repo are required")
 	}
 	if backend == nil {
-		return models.PullRequestIndex{}, nil, fmt.Errorf("prtriage: storage backend is required")
+		return Result{}, fmt.Errorf("prtriage: storage backend is required")
 	}
 	if lister == nil {
-		return models.PullRequestIndex{}, nil, fmt.Errorf("prtriage: pull request lister is required")
+		return Result{}, fmt.Errorf("prtriage: pull request lister is required")
 	}
 
-	pulls, err := lister.ListOpenPullRequests(ctx, opts.Owner, opts.Repo, opts.MaxPullRequests)
+	pulls, truncated, err := lister.ListOpenPullRequests(ctx, opts.Owner, opts.Repo, opts.MaxPullRequests)
 	if err != nil {
-		return models.PullRequestIndex{}, nil, fmt.Errorf("prtriage: %w", err)
+		return Result{}, fmt.Errorf("prtriage: %w", err)
 	}
 	presubmits := presubmitsForRepo(catalog, opts.fullRepo())
 	log.Printf("🔀 Triaging %d open pull requests against %d presubmits in %s",
@@ -101,7 +113,11 @@ func Collect(ctx context.Context, backend storage.Backend, lister PullRequestLis
 		details = append(details, detail)
 		summaries = append(summaries, detail.PullRequestSummary)
 	}
-	return models.PullRequestIndex{Repo: opts.fullRepo(), PullRequests: summaries}, details, nil
+	return Result{
+		Index:     models.PullRequestIndex{Repo: opts.fullRepo(), PullRequests: summaries},
+		Details:   details,
+		Truncated: truncated,
+	}, nil
 }
 
 // presubmitsForRepo returns the catalog's presubmits for repo, ordered by name

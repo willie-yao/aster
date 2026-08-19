@@ -127,6 +127,44 @@ type PullRequests struct {
 	// BuildsPerJob is how many builds are listed per presubmit before the
 	// newest is selected. Non-positive uses the engine default.
 	BuildsPerJob int `yaml:"builds_per_job,omitempty" json:"builds_per_job,omitempty"`
+	// Comment optionally posts one bot comment on each newly observed pull
+	// request, linking to its triage page. It is operational configuration with
+	// no frontend consumer, so it stays out of the published manifest.
+	Comment *PullRequestComment `yaml:"comment,omitempty" json:"-"`
+}
+
+// PullRequestComment configures the bot comment posted once on each newly
+// observed pull request. This is the engine's only unattended GitHub write:
+// every other write is a maintainer confirming a previewed draft. It is
+// therefore off by default, and enabling it starts in dry run so an operator
+// sees the exact bodies before anything is posted.
+//
+// Posting authenticates as a GitHub App, so the comment comes from a real bot
+// account and the credential is scoped to one repository.
+type PullRequestComment struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// DryRun logs the comment that would be posted and performs no write.
+	// Unset means true, so turning the feature on never posts by itself.
+	DryRun *bool `yaml:"dry_run,omitempty" json:"dry_run,omitempty"`
+	// MaxPerPass caps comments posted in one pass so a bug cannot fan out
+	// across a repository. Non-positive uses the engine default.
+	MaxPerPass int `yaml:"max_per_pass,omitempty" json:"max_per_pass,omitempty"`
+}
+
+// CommentEnabled reports whether the pull request comment is configured on.
+func (c *Config) CommentEnabled() bool {
+	return c != nil && c.PullRequests != nil &&
+		c.PullRequests.Comment != nil && c.PullRequests.Comment.Enabled
+}
+
+// CommentDryRun reports whether commenting should log instead of post.
+// Anything short of an explicit "false" is a dry run.
+func (c *Config) CommentDryRun() bool {
+	if !c.CommentEnabled() {
+		return true
+	}
+	dryRun := c.PullRequests.Comment.DryRun
+	return dryRun == nil || *dryRun
 }
 
 // Storage configures the artifact store that holds the project's Prow builds.
@@ -1344,6 +1382,17 @@ func (c *Config) Validate() error {
 		}
 		if c.PullRequests.BuildsPerJob < 0 {
 			missing = append(missing, "pull_requests.builds_per_job must not be negative")
+		}
+		if comment := c.PullRequests.Comment; comment != nil {
+			if comment.MaxPerPass < 0 {
+				missing = append(missing, "pull_requests.comment.max_per_pass must not be negative")
+			}
+			// Commenting reads the same open pull request listing triage does,
+			// so enabling it without triage would post links to a page the
+			// dashboard never publishes.
+			if comment.Enabled && !c.PullRequests.Enabled {
+				missing = append(missing, "pull_requests.comment.enabled requires pull_requests.enabled")
+			}
 		}
 	}
 

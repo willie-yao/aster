@@ -42,6 +42,15 @@ branding:
 # page. Attribution is deterministic and costs no model calls.
 # pull_requests:
 #   enabled: true
+#   # Optional: post one comment on each newly opened pull request linking to
+#   # its triage page. This is the engine's only unattended GitHub write, so it
+#   # is off by default and stays in dry run until dry_run is explicitly false.
+#   # Posting authenticates as a GitHub App (ASTER_APP_ID and
+#   # ASTER_APP_PRIVATE_KEY) so the comment comes from a bot account.
+#   comment:
+#     enabled: true
+#     dry_run: true     # logs the exact body and posts nothing
+#     max_per_pass: 10  # hard cap per pass
 
 # Optional: tune which failing tests reach the Needs Attention band. Omitting
 # this section keeps the engine defaults. See docs/project-configuration.md.

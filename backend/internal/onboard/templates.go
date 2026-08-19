@@ -134,6 +134,11 @@ jobs:
       ai-reasoning-effort: ${{"{{"}} vars.AI_REASONING_EFFORT {{"}}"}}
     secrets:
       AI_TOKEN: ${{"{{"}} secrets.AI_TOKEN {{"}}"}}
+      # Only used when pull_requests.comment.enabled is set. A reusable workflow
+      # receives no secret it is not passed, so these are mapped whether or not
+      # commenting is on; unset secrets arrive empty and the feature stays off.
+      ASTER_APP_ID: ${{"{{"}} secrets.ASTER_APP_ID {{"}}"}}
+      ASTER_APP_PRIVATE_KEY: ${{"{{"}} secrets.ASTER_APP_PRIVATE_KEY {{"}}"}}
 `))
 
 var k8sValuesTmpl = template.Must(template.New("values.yaml").Funcs(yamlTemplateFuncs).Parse(
