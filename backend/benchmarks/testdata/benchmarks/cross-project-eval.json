@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "cases": [
     {
       "id": "secrets-store-csi-image-scan",
@@ -16,8 +16,14 @@
       "repo_refs": {
         "kubernetes-sigs/secrets-store-csi-driver": "267a6145f401911c1e13a6b3f68b4d47c7c645f7"
       },
-      "source_owner": "kubernetes-sigs",
-      "source_name": "secrets-store-csi-driver",
+      "source_refs": [
+        {
+          "id": "primary",
+          "repository": "kubernetes-sigs/secrets-store-csi-driver",
+          "revision": "267a6145f401911c1e13a6b3f68b4d47c7c645f7"
+        }
+      ],
+      "primary_source_id": "primary",
       "test_name": "Prow job execution",
       "test_source": "build",
       "failure_message": "Trivy image scan found fixable vulnerabilities and make image-scan exited with Error 1.",
@@ -94,8 +100,14 @@
       "repo_refs": {
         "kubernetes-sigs/kueue": "429fa288e738edd7e6f5638d71a40560c25f1906"
       },
-      "source_owner": "kubernetes-sigs",
-      "source_name": "kueue",
+      "source_refs": [
+        {
+          "id": "primary",
+          "repository": "kubernetes-sigs/kueue",
+          "revision": "429fa288e738edd7e6f5638d71a40560c25f1906"
+        }
+      ],
+      "primary_source_id": "primary",
       "test_name": "Prow job execution",
       "test_source": "build",
       "failure_message": "error: timed out waiting for the condition on deployments/kubeflow-trainer-controller-manager; make run-test-e2e-k8s-main-was failed.",
@@ -233,8 +245,14 @@
       "repo_refs": {
         "kubernetes-sigs/gcp-compute-persistent-disk-csi-driver": "542108f6279d571a4e2ab22656091d77b3df4449"
       },
-      "source_owner": "kubernetes-sigs",
-      "source_name": "gcp-compute-persistent-disk-csi-driver",
+      "source_refs": [
+        {
+          "id": "primary",
+          "repository": "kubernetes-sigs/gcp-compute-persistent-disk-csi-driver",
+          "revision": "542108f6279d571a4e2ab22656091d77b3df4449"
+        }
+      ],
+      "primary_source_id": "primary",
       "test_name": "[It] External Storage [Driver: csi-gcepd-sc-windows--pd-volumesnapshotclass] [Testpattern: Dynamic PV (default fs)] provisioning should provision correct filesystem size when restoring snapshot to larger size pvc [Feature:VolumeSnapshotDataSource]",
       "junit_file": "junit_pdcsi.xml",
       "failure_message": "[FAILED] Failed to obtain filesystem size of a volume mount: resolved empty volumeID for mountPath \"/mnt/volume1\" at provisioning.go:525.",
@@ -307,7 +325,7 @@
       ],
       "expected_source_ranges": [
         {
-          "repository": "kubernetes-sigs/gcp-compute-persistent-disk-csi-driver",
+          "source_id": "primary",
           "path": "test/k8s-integration/main.go",
           "line_start": 638,
           "line_end": 671

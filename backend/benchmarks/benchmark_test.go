@@ -73,6 +73,12 @@ type benchSignal struct {
 
 // benchCase pins one historical failure and the signals a correct root cause
 // should contain.
+type benchmarkSourceRef struct {
+	ID         string `json:"id"`
+	Repository string `json:"repository"`
+	Revision   string `json:"revision"`
+}
+
 type benchCase struct {
 	name         string
 	stableID     string
@@ -83,22 +89,24 @@ type benchCase struct {
 	// run extracts it and reads through the local storage provider, so the
 	// benchmark survives Prow garbage-collecting the original GCS artifacts. Set
 	// BENCH_USE_GCS=1 to read live GCS instead (only works before GC).
-	fixtureAsset  string
-	fixtureSHA256 string
-	jobType       string
-	repo          string // org/repo, required for presubmits
-	jobName       string
-	buildID       string
-	pullNumber    string
-	webURL        string
-	commit        string
-	repoVersion   string
-	repoRefs      map[string]string
-	sourceRepo    [2]string // owner, name for repo-relative file-link resolution
-	testName      string
-	testSource    string
-	junitFile     string
-	failureMsg    string
+	fixtureAsset    string
+	fixtureSHA256   string
+	jobType         string
+	repo            string // org/repo, required for presubmits
+	jobName         string
+	buildID         string
+	pullNumber      string
+	webURL          string
+	commit          string
+	repoVersion     string
+	repoRefs        map[string]string
+	sourceRefs      []benchmarkSourceRef
+	primarySourceID string
+	sourceRepo      [2]string // primary owner and name for analyzer configuration
+	testName        string
+	testSource      string
+	junitFile       string
+	failureMsg      string
 	// consecutiveFailures is how many consecutive builds this test had failed at
 	// the time of the snapshot. The live engine derives this from the flakiness
 	// report; the benchmark feeds it so the analysis (and the critique gate's
@@ -140,7 +148,16 @@ func validBenchmarkEvidenceMode(value string) bool {
 }
 
 func benchmarkSourceExpectationSHA256(bc benchCase) string {
+	if len(bc.sourceRefs) == 0 && len(bc.sourceRanges) == 0 && len(bc.sourceSignals) == 0 {
+		return strings.Repeat("0", 64)
+	}
 	var input strings.Builder
+	fmt.Fprintf(&input, "primary\x00%s\n", bc.primarySourceID)
+	sourceRefs := append([]benchmarkSourceRef(nil), bc.sourceRefs...)
+	sort.Slice(sourceRefs, func(i, j int) bool { return sourceRefs[i].ID < sourceRefs[j].ID })
+	for _, value := range sourceRefs {
+		fmt.Fprintf(&input, "source\x00%s\x00%s\x00%s\n", value.ID, value.Repository, value.Revision)
+	}
 	for _, value := range bc.sourceRanges {
 		fmt.Fprintf(&input, "range\x00%s\x00%s\x00%s\x00%d\x00%d\n", value.Repository, value.Revision, value.Path, value.LineStart, value.LineEnd)
 	}
@@ -151,9 +168,6 @@ func benchmarkSourceExpectationSHA256(bc benchCase) string {
 			}
 			return signal.negated.String()
 		}())
-	}
-	if input.Len() == 0 {
-		return strings.Repeat("0", 64)
 	}
 	sum := sha256.Sum256([]byte(input.String()))
 	return fmt.Sprintf("%x", sum[:])

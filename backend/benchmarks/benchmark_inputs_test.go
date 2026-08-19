@@ -5,17 +5,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/ai/skills"
-	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 )
 
@@ -428,8 +427,8 @@ func benchmarkEffectiveInputSHA256(identity benchmarkRunIdentity, agentic projec
 }
 
 func benchmarkComparisonInputSHA256(bc benchCase, identity benchmarkRunIdentity) string {
-	build := models.BuildInfo{Commit: bc.commit, RepoVersion: bc.repoVersion, RepoRefs: maps.Clone(bc.repoRefs)}
-	source, _ := ai.ResolveBuildSource(build, bc.sourceRepo[0], bc.sourceRepo[1])
+	sourceRefs := append([]benchmarkSourceRef(nil), bc.sourceRefs...)
+	sort.Slice(sourceRefs, func(i, j int) bool { return sourceRefs[i].ID < sourceRefs[j].ID })
 	data, err := json.Marshal(struct {
 		StableID                string                   `json:"stable_id"`
 		FixtureSHA256           string                   `json:"fixture_sha256"`
@@ -438,9 +437,8 @@ func benchmarkComparisonInputSHA256(bc benchCase, identity benchmarkRunIdentity)
 		ProjectSHA256           string                   `json:"project_sha256"`
 		EffectivePromptSHA256   string                   `json:"effective_prompt_sha256"`
 		SkillSetHash            string                   `json:"skill_set_hash"`
-		SourceRevision          string                   `json:"source_revision"`
-		SourceOwner             string                   `json:"source_owner"`
-		SourceName              string                   `json:"source_name"`
+		SourceRefs              []benchmarkSourceRef     `json:"source_refs"`
+		PrimarySourceID         string                   `json:"primary_source_id"`
 		JobName                 string                   `json:"job_name"`
 		BuildID                 string                   `json:"build_id"`
 		TestName                string                   `json:"test_name"`
@@ -458,7 +456,7 @@ func benchmarkComparisonInputSHA256(bc benchCase, identity benchmarkRunIdentity)
 		Pricing                 benchmarkPricingIdentity `json:"pricing"`
 	}{
 		StableID: bc.stableID, FixtureSHA256: bc.fixtureSHA256, BenchmarkManifestSHA256: identity.BenchmarkManifestSHA256, ConsumerCommit: bc.consumerCommit, ProjectSHA256: identity.ProjectSHA256,
-		EffectivePromptSHA256: identity.EffectivePromptSHA256, SkillSetHash: identity.SkillSetHash, SourceRevision: source.Revision, SourceOwner: source.Owner, SourceName: source.Name,
+		EffectivePromptSHA256: identity.EffectivePromptSHA256, SkillSetHash: identity.SkillSetHash, SourceRefs: sourceRefs, PrimarySourceID: bc.primarySourceID,
 		JobName: bc.jobName, BuildID: bc.buildID, TestName: bc.testName, TestSource: bc.testSource, JUnitFile: bc.junitFile,
 		FailureMessageSHA256: sha256Hex([]byte(bc.failureMsg)), ConsecutiveFailures: bc.consecutiveFailures,
 		APIMode: identity.APIMode, ReasoningEffort: string(identity.ReasoningEffort), ProviderPath: identity.ProviderPath, ProviderConfigSHA256: identity.ProviderConfigSHA256, TransportID: identity.TransportID,
@@ -779,5 +777,32 @@ func TestBenchmarkReasoningEffortFromEnvironment(t *testing.T) {
 	t.Setenv("AI_REASONING_EFFORT", " HIGH ")
 	if got := benchmarkReasoningEffort(t); got != ai.ReasoningEffortHigh {
 		t.Fatalf("reasoning effort = %q, want high", got)
+	}
+}
+
+func TestBenchmarkComparisonInputSHA256IncludesCanonicalSourceCatalog(t *testing.T) {
+	first := benchmarkSourceRef{ID: "client", Repository: "kubernetes/kubernetes", Revision: strings.Repeat("a", 40)}
+	second := benchmarkSourceRef{ID: "server", Repository: "kubernetes/kubernetes", Revision: strings.Repeat("b", 40)}
+	base := benchCase{
+		stableID:        "0123456789abcdef0123",
+		primarySourceID: "client",
+		sourceRefs:      []benchmarkSourceRef{first, second},
+	}
+	identity := benchmarkRunIdentity{}
+	want := benchmarkComparisonInputSHA256(base, identity)
+	reordered := base
+	reordered.sourceRefs = []benchmarkSourceRef{second, first}
+	if got := benchmarkComparisonInputSHA256(reordered, identity); got != want {
+		t.Fatalf("comparison hash changed with source catalog order: %s != %s", got, want)
+	}
+	changedRevision := base
+	changedRevision.sourceRefs = []benchmarkSourceRef{first, {ID: "server", Repository: "kubernetes/kubernetes", Revision: strings.Repeat("c", 40)}}
+	if got := benchmarkComparisonInputSHA256(changedRevision, identity); got == want {
+		t.Fatal("comparison hash ignored source revision change")
+	}
+	changedPrimary := base
+	changedPrimary.primarySourceID = "server"
+	if got := benchmarkComparisonInputSHA256(changedPrimary, identity); got == want {
+		t.Fatal("comparison hash ignored primary source change")
 	}
 }

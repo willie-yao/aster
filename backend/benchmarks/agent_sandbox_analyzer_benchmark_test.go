@@ -595,13 +595,17 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 	if err != nil {
 		t.Fatal(err)
 	}
+	source, ok := benchmarkPrimarySourceRef(bc)
+	if !ok {
+		t.Fatal("benchmark case does not resolve a primary source")
+	}
+	sourceOwner, sourceName, ok := strings.Cut(source.Repository, "/")
+	if !ok {
+		t.Fatal("benchmark primary source repository is invalid")
+	}
 	build := models.BuildInfo{
 		BuildID: bc.buildID, JobName: bc.jobName, PullNumber: bc.pullNumber, WebURL: bc.webURL,
 		Commit: bc.commit, RepoVersion: bc.repoVersion, RepoRefs: maps.Clone(bc.repoRefs),
-	}
-	source, ok := ai.ResolveBuildSource(build, bc.sourceRepo[0], bc.sourceRepo[1])
-	if !ok || len(source.Revision) != 40 {
-		t.Fatal("benchmark case does not resolve one lowercase 40-character source SHA")
 	}
 	localSourceModePolicy, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), cfg.SourceRoot, source.Revision, sealed)
 	if err != nil {
@@ -625,7 +629,7 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 		TestCase: *benchTestCase(bc), ConsecutiveFailures: bc.consecutiveFailures,
 	}
 	manifest, err := agentanalysis.NewWorkspaceManifestWithSkills(request, sourceinvestigation.Repository{
-		Owner: source.Owner, Name: source.Name, Revision: source.Revision,
+		Owner: sourceOwner, Name: sourceName, Revision: source.Revision,
 	}, consumerPrompt, projectSkills, files)
 	if err != nil {
 		t.Fatal(err)
@@ -846,7 +850,7 @@ func agentSandboxAnalyzerRecordForResult(
 	record.ExpectedSourceRanges = append([]benchmarkSourceRange{}, prepared.bc.sourceRanges...)
 	record.SourceReadRanges = []benchmarkSourceRead{}
 	record.SourceCitations = []benchmarkSourceCitation{}
-	sourceReads, sourceReadErr := benchmarkSourceReadsFromSandbox(prepared.bc, telemetry.SourceReads)
+	sourceReads, sourceReadErr := benchmarkSourceReadsFromSandbox(prepared.bc, prepared.bc.primarySourceID, telemetry.SourceReads)
 	if sourceReadErr == nil {
 		record.SourceReadRanges = sourceReads
 		record.SourceReadCount = len(sourceReads)
@@ -915,7 +919,12 @@ func agentSandboxAnalyzerRecordForResult(
 			Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd,
 		})
 	}
-	repository, revision := benchmarkSourceIdentity(prepared.bc)
+	repository, revision, sourceIdentityErr := benchmarkSourceIdentity(prepared.bc, prepared.bc.primarySourceID)
+	if sourceIdentityErr != nil {
+		record.EvidenceContractPassed = false
+		record.EvidenceContractStatus = "source_identity_invalid"
+		return record
+	}
 	for _, citation := range analysis.SourceCitations {
 		record.SourceCitations = append(record.SourceCitations, benchmarkSourceCitation{
 			benchmarkSourceRange: benchmarkSourceRange{Repository: repository, Revision: revision, Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd},
@@ -1046,7 +1055,10 @@ func workspaceAnalysisTestCase(analysis agentanalysis.WorkspaceAnalysis, disposi
 }
 
 func verifyAgentSandboxAnalyzerSourceExpectations(root string, bc benchCase) error {
-	repository, revision := benchmarkSourceIdentity(bc)
+	repository, revision, err := benchmarkSourceIdentity(bc, bc.primarySourceID)
+	if err != nil {
+		return err
+	}
 	for _, expected := range bc.sourceRanges {
 		if expected.Repository != repository || expected.Revision != revision {
 			return fmt.Errorf("expected source range identity is not staged")
@@ -1406,7 +1418,11 @@ func TestVerifyAgentSandboxAnalyzerSourceExpectations(t *testing.T) {
 		t.Fatal(err)
 	}
 	revision := strings.Repeat("a", 40)
-	base := benchCase{sourceRepo: [2]string{"owner", "repo"}, repoRefs: map[string]string{"owner/repo": revision}, sourceRanges: []benchmarkSourceRange{{Repository: "owner/repo", Revision: revision, Path: "pkg/file.go", LineStart: 1, LineEnd: 2}}}
+	base := benchCase{
+		sourceRepo: [2]string{"owner", "repo"}, repoRefs: map[string]string{"owner/repo": revision},
+		sourceRefs: []benchmarkSourceRef{{ID: "primary", Repository: "owner/repo", Revision: revision}}, primarySourceID: "primary",
+		sourceRanges: []benchmarkSourceRange{{Repository: "owner/repo", Revision: revision, Path: "pkg/file.go", LineStart: 1, LineEnd: 2}},
+	}
 	if err := verifyAgentSandboxAnalyzerSourceExpectations(root, base); err != nil {
 		t.Fatal(err)
 	}
