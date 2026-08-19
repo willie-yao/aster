@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"slices"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -31,6 +31,8 @@ import (
 	"github.com/willie-yao/aster/backend/internal/prowbuild"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
+	"gopkg.in/yaml.v3"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const agentSandboxAnalyzerBenchmarkRecordVersion = 8
@@ -167,9 +169,9 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	EvidenceContractPassed       bool                                   `json:"evidence_contract_passed"`
 	EvidenceContractStatus       string                                 `json:"evidence_contract_status"`
 	SourceExpectationSHA256      string                                 `json:"source_expectation_sha256"`
-	SourceExpectationPaths       []string                               `json:"source_expectation_paths"`
-	SourceExpectationHits        int                                    `json:"source_expectation_hits"`
-	SourceExpectationTotal       int                                    `json:"source_expectation_total"`
+	ExpectedSourceRanges         []benchmarkSourceRange                 `json:"expected_source_ranges"`
+	SourceReadCoverageHits       int                                    `json:"source_read_coverage_hits"`
+	SourceReadCoverageTotal      int                                    `json:"source_read_coverage_total"`
 	SourceSignalHits             int                                    `json:"source_signal_hits"`
 	SourceSignalTotal            int                                    `json:"source_signal_total"`
 	JobName                      string                                 `json:"job_name"`
@@ -199,6 +201,7 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	ArtifactFiles                int                                    `json:"artifact_files"`
 	ArtifactBytes                int64                                  `json:"artifact_bytes"`
 	Status                       string                                 `json:"status"`
+	TrialStatus                  string                                 `json:"trial_status"`
 	ErrorCode                    string                                 `json:"error_code,omitempty"`
 	FailureReason                string                                 `json:"failure_reason,omitempty"`
 	ElapsedMS                    int64                                  `json:"elapsed_ms"`
@@ -232,10 +235,12 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	ResultValidationStatus       string                                 `json:"result_validation_status,omitempty"`
 	ResultValidationCodes        []string                               `json:"result_validation_codes,omitempty"`
 	ArtifactCitationCount        int                                    `json:"artifact_citation_count"`
-	SourceCitationCount          int                                    `json:"source_citation_count"`
-	SourceVerified               bool                                   `json:"source_verified"`
+	SourceReadRanges             []benchmarkSourceRead                  `json:"source_read_ranges"`
+	SourceReadCount              int                                    `json:"source_read_count"`
+	SourceCitationEmitted        int                                    `json:"source_citation_emitted_count"`
+	SourceCitationVerified       int                                    `json:"source_citation_verified_count"`
 	EvidenceCitations            []agentSandboxAnalyzerCitation         `json:"evidence_citations,omitempty"`
-	SourceCitations              []agentSandboxAnalyzerCitation         `json:"source_citations,omitempty"`
+	SourceCitations              []benchmarkSourceCitation              `json:"source_citations"`
 	SignalHits                   int                                    `json:"signal_hits"`
 	SignalTotal                  int                                    `json:"signal_total"`
 	DiagnosisSignalHits          int                                    `json:"diagnosis_signal_hits"`
@@ -303,6 +308,14 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	ResponseBodyPresent          bool                                   `json:"response_body_present"`
 	ResponseBodyBytesBounded     int                                    `json:"response_body_bytes_bounded,omitempty"`
 	ResponseBodySHA256           string                                 `json:"response_body_sha256,omitempty"`
+	LocalTransportFailure        string                                 `json:"local_transport_failure,omitempty"`
+	LocalTransportPhase          string                                 `json:"local_transport_phase,omitempty"`
+	LocalTransportRecovered      bool                                   `json:"local_transport_recovered,omitempty"`
+	ServerProcessState           string                                 `json:"server_process_state,omitempty"`
+	ServerSignal                 string                                 `json:"server_signal,omitempty"`
+	CgroupOOMStatus              string                                 `json:"cgroup_oom_status,omitempty"`
+	OpenCodeStdoutBytes          int                                    `json:"opencode_stdout_bytes,omitempty"`
+	OpenCodeStderrBytes          int                                    `json:"opencode_stderr_bytes,omitempty"`
 	OpenCodeTools                []agentanalysis.WorkspaceToolTelemetry `json:"opencode_tools,omitempty"`
 	DeniedToolCount              int                                    `json:"denied_tool_count"`
 	ToolFailureCount             int                                    `json:"tool_failure_count"`
@@ -435,6 +448,12 @@ func loadAgentSandboxAnalyzerBenchmarkConfig(t *testing.T) agentSandboxAnalyzerB
 		t.Fatal("BENCH_MODEL_OUTPUT_TOKENS must not exceed the configured model context")
 	}
 	if !prepareOnly {
+		if err := validateScoredBenchmarkTraceEnvironment(require("ANALYZER_BENCH_RESULTS_JSONL"), os.Getenv); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateAgentSandboxAnalyzerBenchmarkResourceEnv(os.Getenv); err != nil {
+			t.Fatal(err)
+		}
 		cfg.KubeContext = require("ANALYZER_BENCH_KUBE_CONTEXT")
 		cfg.ResultsPath = require("ANALYZER_BENCH_RESULTS_JSONL")
 	} else {
@@ -448,6 +467,94 @@ func loadAgentSandboxAnalyzerBenchmarkConfig(t *testing.T) agentSandboxAnalyzerB
 		cfg.ImageContract = readAgentSandboxAnalyzerImageContract(t, contractPath, cfg.EngineCommit)
 	}
 	return cfg
+}
+
+func validateAgentSandboxAnalyzerBenchmarkResourceEnv(getenv func(string) string) error {
+	resources, err := agentSandboxAnalysisShadowChartResources()
+	if err != nil {
+		return err
+	}
+	for name, want := range map[string]resource.Quantity{
+		"CPU_REQUEST": resources.requests["cpu"], "CPU_LIMIT": resources.limits["cpu"],
+		"MEMORY_REQUEST": resources.requests["memory"], "MEMORY_LIMIT": resources.limits["memory"],
+		"EPHEMERAL_STORAGE_LIMIT": resources.limits["ephemeral-storage"],
+	} {
+		key := "AGENT_SANDBOX_ANALYSIS_" + name
+		got, err := resource.ParseQuantity(strings.TrimSpace(getenv(key)))
+		if err != nil || got.Cmp(want) != 0 {
+			return fmt.Errorf("%s differs from the Helm analysisShadow resource", key)
+		}
+	}
+	ephemeralRequest := resources.requests["ephemeral-storage"]
+	ephemeralLimit := resources.limits["ephemeral-storage"]
+	if ephemeralRequest.Cmp(ephemeralLimit) != 0 {
+		return fmt.Errorf("Helm analysisShadow ephemeral-storage request and limit differ")
+	}
+	return nil
+}
+
+type agentSandboxChartResources struct {
+	requests map[string]resource.Quantity
+	limits   map[string]resource.Quantity
+}
+
+func agentSandboxAnalysisShadowChartResources() (agentSandboxChartResources, error) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return agentSandboxChartResources{}, fmt.Errorf("resolve benchmark source path")
+	}
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "deploy", "helm", "aster", "values.yaml"))
+	if err != nil {
+		return agentSandboxChartResources{}, fmt.Errorf("read Helm values: %w", err)
+	}
+	var values struct {
+		AgentSandbox struct {
+			AnalysisShadow struct {
+				Resources struct {
+					Requests map[string]string `yaml:"requests"`
+					Limits   map[string]string `yaml:"limits"`
+				} `yaml:"resources"`
+			} `yaml:"analysisShadow"`
+		} `yaml:"agentSandbox"`
+	}
+	if err := yaml.Unmarshal(data, &values); err != nil {
+		return agentSandboxChartResources{}, fmt.Errorf("decode Helm values: %w", err)
+	}
+	parse := func(scope string, raw map[string]string) (map[string]resource.Quantity, error) {
+		out := map[string]resource.Quantity{}
+		for _, name := range []string{"cpu", "memory", "ephemeral-storage"} {
+			value, err := resource.ParseQuantity(strings.TrimSpace(raw[name]))
+			if err != nil {
+				return nil, fmt.Errorf("Helm analysisShadow resources.%s.%s is invalid", scope, name)
+			}
+			out[name] = value
+		}
+		return out, nil
+	}
+	requests, err := parse("requests", values.AgentSandbox.AnalysisShadow.Resources.Requests)
+	if err != nil {
+		return agentSandboxChartResources{}, err
+	}
+	limits, err := parse("limits", values.AgentSandbox.AnalysisShadow.Resources.Limits)
+	if err != nil {
+		return agentSandboxChartResources{}, err
+	}
+	return agentSandboxChartResources{requests: requests, limits: limits}, nil
+}
+
+func TestValidateAgentSandboxAnalyzerBenchmarkResourceEnv(t *testing.T) {
+	values := map[string]string{
+		"AGENT_SANDBOX_ANALYSIS_CPU_REQUEST": "250m", "AGENT_SANDBOX_ANALYSIS_CPU_LIMIT": "2000m",
+		"AGENT_SANDBOX_ANALYSIS_MEMORY_REQUEST": "512Mi", "AGENT_SANDBOX_ANALYSIS_MEMORY_LIMIT": "2Gi",
+		"AGENT_SANDBOX_ANALYSIS_EPHEMERAL_STORAGE_LIMIT": "3Gi",
+	}
+	if err := validateAgentSandboxAnalyzerBenchmarkResourceEnv(func(key string) string { return values[key] }); err != nil {
+		t.Fatal(err)
+	}
+	values["AGENT_SANDBOX_ANALYSIS_MEMORY_LIMIT"] = "512Mi"
+	if err := validateAgentSandboxAnalyzerBenchmarkResourceEnv(func(key string) string { return values[key] }); err == nil || !strings.Contains(err.Error(), "MEMORY_LIMIT") {
+		t.Fatalf("drifted resource was accepted: %v", err)
+	}
 }
 
 func agentSandboxAnalyzerBenchmarkCase(t *testing.T) benchCase {
@@ -500,7 +607,7 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 	if err != nil {
 		t.Fatalf("verify ANALYZER_BENCH_SOURCE_ROOT=%s: %v", cfg.SourceRoot, err)
 	}
-	if err := verifyAgentSandboxAnalyzerSourceExpectations(cfg.SourceRoot, bc.sourcePaths); err != nil {
+	if err := verifyAgentSandboxAnalyzerSourceExpectations(cfg.SourceRoot, bc); err != nil {
 		t.Fatalf("verify ANALYZER_BENCH_SOURCE_ROOT source expectations: %v", err)
 	}
 	loc := prowbuild.BuildLocation{
@@ -648,8 +755,8 @@ func agentSandboxAnalyzerRecordForResult(
 		ComparisonInputSHA256: prepared.prepared.ComparisonInputSHA256,
 		ProviderPath:          cfg.ProviderPath, ProviderConfigSHA256: prepared.prepared.ProviderConfigSHA256, TransportID: cfg.TransportID,
 		APIMode: cfg.Provider.API, ReasoningEffort: string(cfg.Provider.ReasoningEffort), EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceMode: prepared.bc.evidenceMode,
-		EvidenceContractStatus: "analysis_unavailable", SourceExpectationSHA256: benchmarkSourceExpectationSHA256(prepared.bc), SourceExpectationPaths: append([]string{}, prepared.bc.sourcePaths...),
-		SourceExpectationTotal: len(prepared.bc.sourcePaths), SourceSignalTotal: len(prepared.bc.sourceSignals),
+		EvidenceContractStatus: "analysis_unavailable", SourceExpectationSHA256: benchmarkSourceExpectationSHA256(prepared.bc), ExpectedSourceRanges: append([]benchmarkSourceRange{}, prepared.bc.sourceRanges...),
+		SourceReadRanges: []benchmarkSourceRead{}, SourceCitations: []benchmarkSourceCitation{}, SourceReadCoverageTotal: len(prepared.bc.sourceRanges), SourceSignalTotal: len(prepared.bc.sourceSignals),
 		JobName: prepared.bc.jobName, BuildID: prepared.bc.buildID, TestName: prepared.bc.testName, TestSource: prepared.bc.testSource,
 		ContractVersion: agentanalysis.WorkspaceContractVersion, WorkspacePromptHash: agentanalysis.WorkspaceSkillHash(),
 		ModelContextTokens: prepared.request.ModelContextTokens, ModelOutputTokens: prepared.request.ModelOutputTokens, MaxSteps: prepared.request.MaxSteps,
@@ -659,7 +766,7 @@ func agentSandboxAnalyzerRecordForResult(
 		ExpectedOpenCodeRevision: cfg.ImageContract.OpenCodeUpstreamRevision, ExpectedOpenCodePatchSHA256: cfg.ImageContract.OpenCodePatchSHA256, OpenCodeBinarySHA256: cfg.ImageContract.OpenCodeBinarySHA256,
 		ExecutionID: executionID, SourceRevision: prepared.prepared.SourceRevision, SourceModePolicy: prepared.prepared.SourceModePolicy,
 		ArtifactFiles: prepared.prepared.ArtifactFiles, ArtifactBytes: prepared.prepared.ArtifactBytes,
-		Status: status, ErrorCode: code, FailureReason: boundedBenchmarkFailure(runErr),
+		Status: status, TrialStatus: status, ErrorCode: code, FailureReason: boundedBenchmarkFailure(runErr),
 		ElapsedMS: max(elapsed.Milliseconds(), 0), RuntimeDurationMS: max(result.Execution.DurationMs, 0),
 		TaskFinalized: result.Telemetry.TaskFinalized, TaskFinalizedMS: result.Telemetry.TaskFinalizedMs,
 		ResultAvailable: result.Telemetry.ResultAvailable, ResultAvailableMS: result.Telemetry.ResultAvailableMs,
@@ -728,6 +835,23 @@ func agentSandboxAnalyzerRecordForResult(
 	record.ResponseBodyPresent = errorTelemetry.ResponseBodyPresent
 	record.ResponseBodyBytesBounded = errorTelemetry.ResponseBodyBytesBounded
 	record.ResponseBodySHA256 = errorTelemetry.ResponseBodySHA256
+	record.LocalTransportFailure = telemetry.LocalTransportFailure
+	record.LocalTransportPhase = telemetry.LocalTransportPhase
+	record.LocalTransportRecovered = telemetry.LocalTransportRecovered
+	record.ServerProcessState = telemetry.ServerProcessState
+	record.ServerSignal = telemetry.ServerSignal
+	record.CgroupOOMStatus = telemetry.CgroupOOMStatus
+	record.OpenCodeStdoutBytes = telemetry.StdoutBytes
+	record.OpenCodeStderrBytes = telemetry.StderrBytes
+	record.ExpectedSourceRanges = append([]benchmarkSourceRange{}, prepared.bc.sourceRanges...)
+	record.SourceReadRanges = []benchmarkSourceRead{}
+	record.SourceCitations = []benchmarkSourceCitation{}
+	sourceReads, sourceReadErr := benchmarkSourceReadsFromSandbox(prepared.bc, telemetry.SourceReads)
+	if sourceReadErr == nil {
+		record.SourceReadRanges = sourceReads
+		record.SourceReadCount = len(sourceReads)
+		record.SourceReadCoverageHits, record.SourceReadCoverageTotal = benchmarkExpectedSourceReadCoverage(prepared.bc.sourceRanges, sourceReads)
+	}
 	record.OpenCodeTools = append([]agentanalysis.WorkspaceToolTelemetry(nil), telemetry.Tools...)
 	record.DeniedToolCount = telemetry.DeniedToolCount
 	record.ToolFailureCount = telemetry.ToolFailureCount
@@ -791,18 +915,23 @@ func agentSandboxAnalyzerRecordForResult(
 			Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd,
 		})
 	}
+	repository, revision := benchmarkSourceIdentity(prepared.bc)
 	for _, citation := range analysis.SourceCitations {
-		record.SourceCitations = append(record.SourceCitations, agentSandboxAnalyzerCitation{
-			Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd, Verified: citation.Verified,
+		record.SourceCitations = append(record.SourceCitations, benchmarkSourceCitation{
+			benchmarkSourceRange: benchmarkSourceRange{Repository: repository, Revision: revision, Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd},
+			Emitted:              true, Verified: citation.Verified,
 		})
 	}
-	record.ArtifactCitationCount = len(record.EvidenceCitations)
-	record.SourceCitationCount = len(record.SourceCitations)
-	record.SourceVerified = record.SourceCitationCount > 0
-	for _, citation := range record.SourceCitations {
-		record.SourceVerified = record.SourceVerified && citation.Verified
+	canonicalSource, citationErr := canonicalBenchmarkSourceCitations(record.SourceCitations)
+	if citationErr == nil {
+		record.SourceCitations = canonicalSource
+	} else {
+		record.SourceCitations = []benchmarkSourceCitation{}
 	}
-	record.SourceExpectationHits = agentSandboxAnalyzerSourceExpectationHits(prepared.bc.sourcePaths, record.SourceCitations)
+	record.ArtifactCitationCount = len(record.EvidenceCitations)
+	emittedCount, verifiedCount := benchmarkSourceCitationCounts(record.SourceCitations)
+	record.SourceCitationEmitted = emittedCount
+	record.SourceCitationVerified = verifiedCount
 	testCase := workspaceAnalysisTestCase(*analysis, record.AnalysisDisposition, record.DispositionWarnings)
 	assessment = assessBenchmarkCase(prepared.bc, testCase)
 	record.SignalHits, record.SignalTotal = assessment.hits, assessment.total
@@ -825,7 +954,7 @@ func agentSandboxAnalyzerEvidenceContract(bc benchCase, record agentSandboxAnaly
 	if record.ArtifactCitationCount < 1 {
 		return false, "artifact_citation_missing"
 	}
-	hasSourceOutput := record.SourceCitationCount > 0 || len(record.RelevantFiles) > 0 || record.SourceSignalHits > 0
+	hasSourceOutput := record.SourceCitationEmitted > 0 || len(record.RelevantFiles) > 0 || record.SourceSignalHits > 0
 	if hasSourceOutput && record.SourceEvidenceToolCalls < 1 {
 		return false, "unsupported_source_claim"
 	}
@@ -833,33 +962,17 @@ func agentSandboxAnalyzerEvidenceContract(bc benchCase, record agentSandboxAnaly
 		if record.SourceEvidenceToolCalls < 1 {
 			return false, "source_evidence_missing"
 		}
-		if record.SourceCitationCount < 1 || !record.SourceVerified {
-			return false, "source_citation_missing"
+		if record.SourceReadCount < 1 {
+			return false, "source_content_not_read"
 		}
-		if record.SourceExpectationTotal < 1 || record.SourceExpectationHits != record.SourceExpectationTotal {
-			return false, "source_expectation_missing"
+		if record.SourceReadCoverageTotal < 1 || record.SourceReadCoverageHits != record.SourceReadCoverageTotal {
+			return false, "source_read_coverage_missing"
 		}
 		if record.SourceSignalTotal < 1 || record.SourceSignalHits != record.SourceSignalTotal {
 			return false, "source_diagnosis_missing"
 		}
 	}
 	return true, "passed"
-}
-
-func agentSandboxAnalyzerSourceExpectationHits(paths []string, citations []agentSandboxAnalyzerCitation) int {
-	verified := make(map[string]bool, len(citations))
-	for _, citation := range citations {
-		if citation.Verified {
-			verified[citation.Path] = true
-		}
-	}
-	hits := 0
-	for _, path := range paths {
-		if verified[path] {
-			hits++
-		}
-	}
-	return hits
 }
 
 func withoutCleanupPending(err error) error {
@@ -932,11 +1045,25 @@ func workspaceAnalysisTestCase(analysis agentanalysis.WorkspaceAnalysis, disposi
 	}
 }
 
-func verifyAgentSandboxAnalyzerSourceExpectations(root string, paths []string) error {
-	for _, path := range paths {
-		info, err := os.Lstat(filepath.Join(filepath.Clean(root), filepath.FromSlash(path)))
-		if err != nil || !info.Mode().IsRegular() {
-			return fmt.Errorf("expected source file %s is unavailable", path)
+func verifyAgentSandboxAnalyzerSourceExpectations(root string, bc benchCase) error {
+	repository, revision := benchmarkSourceIdentity(bc)
+	for _, expected := range bc.sourceRanges {
+		if expected.Repository != repository || expected.Revision != revision {
+			return fmt.Errorf("expected source range identity is not staged")
+		}
+		data, err := os.ReadFile(filepath.Join(filepath.Clean(root), filepath.FromSlash(expected.Path)))
+		if err != nil {
+			return fmt.Errorf("expected source file %s is unavailable", expected.Path)
+		}
+		lineCount := 0
+		if len(data) > 0 {
+			lineCount = 1 + bytes.Count(data, []byte{'\n'})
+			if data[len(data)-1] == '\n' {
+				lineCount--
+			}
+		}
+		if expected.LineEnd > lineCount {
+			return fmt.Errorf("expected source range %s:%d-%d exceeds the file", expected.Path, expected.LineStart, expected.LineEnd)
 		}
 	}
 	return nil
@@ -1162,9 +1289,9 @@ func TestAgentSandboxAnalyzerExecutionRejectsChangedSourceModePolicy(t *testing.
 }
 
 func TestAgentSandboxAnalyzerEvidenceContract(t *testing.T) {
-	base := agentSandboxAnalyzerBenchmarkRecord{
-		AnalysisValid: true, ArtifactEvidenceToolCalls: 1, ArtifactCitationCount: 1,
-	}
+	revision := strings.Repeat("a", 40)
+	expected := benchmarkSourceRange{Repository: "owner/repo", Revision: revision, Path: "pkg/file.go", LineStart: 1, LineEnd: 2}
+	base := agentSandboxAnalyzerBenchmarkRecord{AnalysisValid: true, ArtifactEvidenceToolCalls: 1, ArtifactCitationCount: 1}
 	for _, test := range []struct {
 		name   string
 		mode   string
@@ -1173,46 +1300,41 @@ func TestAgentSandboxAnalyzerEvidenceContract(t *testing.T) {
 		status string
 	}{
 		{name: "artifact only", mode: benchmarkEvidenceModeArtifactOnly, passed: true, status: "passed"},
-		{name: "source grounded", mode: benchmarkEvidenceModeArtifactAndSource, mutate: func(record *agentSandboxAnalyzerBenchmarkRecord) {
+		{name: "source read covered without citation", mode: benchmarkEvidenceModeArtifactAndSource, mutate: func(record *agentSandboxAnalyzerBenchmarkRecord) {
 			record.SourceEvidenceToolCalls = 1
-			record.SourceCitationCount = 1
-			record.SourceVerified = true
-			record.SourceExpectationHits, record.SourceExpectationTotal = 1, 1
+			record.SourceReadRanges = []benchmarkSourceRead{{benchmarkSourceRange: expected, Tool: "read", Outcome: "succeeded"}}
+			record.SourceReadCount = 1
+			record.SourceReadCoverageHits, record.SourceReadCoverageTotal = 1, 1
 			record.SourceSignalHits, record.SourceSignalTotal = 1, 1
 		}, passed: true, status: "passed"},
 		{name: "source evidence missing", mode: benchmarkEvidenceModeArtifactAndSource, passed: false, status: "source_evidence_missing"},
-		{name: "source citation missing", mode: benchmarkEvidenceModeArtifactAndSource, mutate: func(record *agentSandboxAnalyzerBenchmarkRecord) {
+		{name: "source content missing", mode: benchmarkEvidenceModeArtifactAndSource, mutate: func(record *agentSandboxAnalyzerBenchmarkRecord) {
 			record.SourceEvidenceToolCalls = 1
-			record.SourceExpectationHits, record.SourceExpectationTotal = 1, 1
+			record.SourceReadCoverageHits, record.SourceReadCoverageTotal = 1, 1
 			record.SourceSignalHits, record.SourceSignalTotal = 1, 1
-		}, passed: false, status: "source_citation_missing"},
-		{name: "source expectation missing", mode: benchmarkEvidenceModeArtifactAndSource, mutate: func(record *agentSandboxAnalyzerBenchmarkRecord) {
+		}, passed: false, status: "source_content_not_read"},
+		{name: "source range missing", mode: benchmarkEvidenceModeArtifactAndSource, mutate: func(record *agentSandboxAnalyzerBenchmarkRecord) {
 			record.SourceEvidenceToolCalls = 1
-			record.SourceCitationCount = 1
-			record.SourceVerified = true
-			record.SourceExpectationTotal = 1
+			record.SourceReadRanges = []benchmarkSourceRead{{benchmarkSourceRange: expected, Tool: "read", Outcome: "succeeded"}}
+			record.SourceReadCount = 1
+			record.SourceReadCoverageTotal = 1
 			record.SourceSignalHits, record.SourceSignalTotal = 1, 1
-		}, passed: false, status: "source_expectation_missing"},
+		}, passed: false, status: "source_read_coverage_missing"},
 		{name: "source diagnosis missing", mode: benchmarkEvidenceModeArtifactAndSource, mutate: func(record *agentSandboxAnalyzerBenchmarkRecord) {
 			record.SourceEvidenceToolCalls = 1
-			record.SourceCitationCount = 1
-			record.SourceVerified = true
-			record.SourceExpectationHits, record.SourceExpectationTotal = 1, 1
+			record.SourceReadRanges = []benchmarkSourceRead{{benchmarkSourceRange: expected, Tool: "read", Outcome: "succeeded"}}
+			record.SourceReadCount = 1
+			record.SourceReadCoverageHits, record.SourceReadCoverageTotal = 1, 1
 			record.SourceSignalTotal = 1
 		}, passed: false, status: "source_diagnosis_missing"},
 		{name: "artifact only source citation without read", mode: benchmarkEvidenceModeArtifactOnly, mutate: func(record *agentSandboxAnalyzerBenchmarkRecord) {
-			record.SourceCitationCount = 1
-			record.SourceVerified = true
+			record.SourceCitationEmitted = 1
 		}, passed: false, status: "unsupported_source_claim"},
 		{name: "artifact only relevant file without read", mode: benchmarkEvidenceModeArtifactOnly, mutate: func(record *agentSandboxAnalyzerBenchmarkRecord) {
 			record.RelevantFiles = []string{"pkg/file.go"}
 		}, passed: false, status: "unsupported_source_claim"},
-		{name: "artifact evidence missing", mode: benchmarkEvidenceModeArtifactOnly, mutate: func(record *agentSandboxAnalyzerBenchmarkRecord) {
-			record.ArtifactEvidenceToolCalls = 0
-		}, passed: false, status: "artifact_evidence_missing"},
-		{name: "artifact citation missing", mode: benchmarkEvidenceModeArtifactOnly, mutate: func(record *agentSandboxAnalyzerBenchmarkRecord) {
-			record.ArtifactCitationCount = 0
-		}, passed: false, status: "artifact_citation_missing"},
+		{name: "artifact evidence missing", mode: benchmarkEvidenceModeArtifactOnly, mutate: func(record *agentSandboxAnalyzerBenchmarkRecord) { record.ArtifactEvidenceToolCalls = 0 }, passed: false, status: "artifact_evidence_missing"},
+		{name: "artifact citation missing", mode: benchmarkEvidenceModeArtifactOnly, mutate: func(record *agentSandboxAnalyzerBenchmarkRecord) { record.ArtifactCitationCount = 0 }, passed: false, status: "artifact_citation_missing"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			record := base
@@ -1221,108 +1343,9 @@ func TestAgentSandboxAnalyzerEvidenceContract(t *testing.T) {
 			}
 			passed, status := agentSandboxAnalyzerEvidenceContract(benchCase{evidenceMode: test.mode}, record)
 			if passed != test.passed || status != test.status {
-				t.Fatalf("contract = %v %q, want %v %q", passed, status, test.passed, test.status)
+				t.Fatalf("contract = %t %q, want %t %q", passed, status, test.passed, test.status)
 			}
 		})
-	}
-}
-
-func TestWithoutCleanupPending(t *testing.T) {
-	other := errors.New("other")
-	for _, test := range []struct {
-		name string
-		err  error
-		want error
-	}{
-		{name: "direct", err: engineruntime.ErrCleanupPending},
-		{name: "wrapped", err: fmt.Errorf("wrapped: %w", engineruntime.ErrCleanupPending)},
-		{name: "joined", err: errors.Join(engineruntime.ErrCleanupPending, other), want: other},
-		{name: "unrelated", err: other, want: other},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			got := withoutCleanupPending(test.err)
-			if test.want == nil {
-				if got != nil {
-					t.Fatalf("error = %v, want nil", got)
-				}
-				return
-			}
-			if !errors.Is(got, test.want) || errors.Is(got, engineruntime.ErrCleanupPending) {
-				t.Fatalf("error = %v, want %v without cleanup pending", got, test.want)
-			}
-		})
-	}
-	valid := agentanalysis.WorkspaceSandboxResult{
-		Execution: agentanalysis.WorkspaceExecutionResult{Analysis: &agentanalysis.WorkspaceAnalysis{}},
-		Telemetry: engineruntime.GenerateTelemetry{FinalizationValid: true, CleanupCompleted: true},
-	}
-	status, _ := agentSandboxAnalyzerBenchmarkStatus(valid, withoutCleanupPending(fmt.Errorf("wrapped: %w", engineruntime.ErrCleanupPending)))
-	if status != "succeeded" {
-		t.Fatalf("post-retry status = %q", status)
-	}
-}
-
-func TestAgentSandboxAnalyzerRecordRetainsFailureUsage(t *testing.T) {
-	cfg := agentSandboxAnalyzerBenchmarkConfig{
-		ArmLabel: "arm-b", ModelLabel: "model-a", EngineCommit: strings.Repeat("a", 40),
-		ProviderPath: "provider/model", TransportID: "transport-v1",
-	}
-	prepared := agentSandboxAnalyzerPreparedCase{
-		prepared: agentSandboxAnalyzerPrepared{
-			ProjectSHA256: strings.Repeat("b", 64), ManifestHash: strings.Repeat("c", 64),
-			RequestHash: strings.Repeat("d", 64), SourceRevision: strings.Repeat("e", 40),
-		},
-		bc: benchCase{
-			name: "case", stableID: "stable", evidenceMode: benchmarkEvidenceModeArtifactOnly, fixtureSHA256: strings.Repeat("f", 64),
-			consumerCommit: strings.Repeat("1", 40), promptSHA256: strings.Repeat("2", 64),
-		},
-	}
-	usage := agentanalysis.WorkspaceUsage{
-		Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable, ModelRequests: 3, InputTokens: 100, CachedInputTokens: 20, OutputTokens: 40, CostAvailable: true, CostUSD: "0.42",
-	}
-	for _, test := range []struct {
-		name       string
-		result     agentanalysis.WorkspaceSandboxResult
-		err        error
-		wantStatus string
-		wantCode   string
-	}{
-		{name: "invalid", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{Usage: usage}, Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true, ResultAvailable: true}}, err: engineruntime.ErrMalformedResult, wantStatus: "invalid_result"},
-		{name: "validated invalid", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{TerminalState: engineruntime.TerminalFailed, FailureReason: agentanalysis.WorkspaceResultRejectedReason, ResultValidation: agentanalysis.WorkspaceResultValidation{Status: agentanalysis.WorkspaceResultRejected, Codes: []string{agentanalysis.WorkspaceInvalidArtifactPath}}, Usage: usage}, Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true, ResultAvailable: true, FinalizationValid: true}}, err: errors.New("rejected"), wantStatus: "invalid_result", wantCode: agentanalysis.WorkspaceInvalidArtifactPath},
-		{name: "no result", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{Usage: usage}, Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true}}, err: errors.New("missing"), wantStatus: "no_result"},
-		{name: "staging", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{Usage: usage}, Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true, FailurePhase: "staging", FailureCode: "stager_exit_nonzero"}}, err: engineruntime.ErrStaging, wantStatus: "runtime_failure", wantCode: "stager_exit_nonzero"},
-		{name: "timeout", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{TerminalState: engineruntime.TerminalTimedOut, Usage: usage}}, err: context.DeadlineExceeded, wantStatus: "timeout"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			record := agentSandboxAnalyzerRecordForResult(cfg, prepared, 1, "execution", "runtime", "registry.example.test/executor@sha256:"+strings.Repeat("a", 64), "registry.example.test/stager@sha256:"+strings.Repeat("b", 64), test.result, time.Second, test.err)
-			if record.AnalysisValid || record.Status != test.wantStatus || record.ModelRequests != 3 || record.InputTokens != 100 || record.CachedInputTokens != 20 || record.OutputTokens != 40 || record.CostUSD != "0.42" || !record.TokenUsageAvailable || !record.CostAvailable || record.UsageStatus != agentanalysis.WorkspaceTelemetryAvailable {
-				t.Fatalf("record = %+v", record)
-			}
-			if test.name == "staging" {
-				if record.ErrorCode != test.wantCode || record.LifecycleFailurePhase != "staging" || record.LifecycleFailureCode != test.wantCode || record.ExecutorStarted {
-					t.Fatalf("staging lifecycle = %+v", record)
-				}
-			} else if test.wantCode != "" && (record.ResultValidationStatus != agentanalysis.WorkspaceResultRejected || !slices.Equal(record.ResultValidationCodes, []string{test.wantCode})) {
-				t.Fatalf("result validation = %q %v", record.ResultValidationStatus, record.ResultValidationCodes)
-			}
-		})
-	}
-}
-
-func TestAgentSandboxAnalyzerBenchmarkExecutionID(t *testing.T) {
-	base := agentSandboxAnalyzerBenchmarkExecutionID(strings.Repeat("a", 64), strings.Repeat("b", 64), "arm-b", 1)
-	for _, changed := range []string{
-		agentSandboxAnalyzerBenchmarkExecutionID(strings.Repeat("c", 64), strings.Repeat("b", 64), "arm-b", 1),
-		agentSandboxAnalyzerBenchmarkExecutionID(strings.Repeat("a", 64), strings.Repeat("c", 64), "arm-b", 1),
-		agentSandboxAnalyzerBenchmarkExecutionID(strings.Repeat("a", 64), strings.Repeat("b", 64), "arm-c", 1),
-		agentSandboxAnalyzerBenchmarkExecutionID(strings.Repeat("a", 64), strings.Repeat("b", 64), "arm-b", 2),
-	} {
-		if changed == base {
-			t.Fatalf("execution identity did not change: %s", base)
-		}
-	}
-	if len(base) != len("analysis-bench-")+20 {
-		t.Fatalf("execution id = %q", base)
 	}
 }
 
@@ -1363,7 +1386,7 @@ func TestAgentSandboxAnalyzerBenchmarkRecordOmitsCitationQuotes(t *testing.T) {
 	record := agentSandboxAnalyzerBenchmarkRecord{
 		Version:           1,
 		EvidenceCitations: []agentSandboxAnalyzerCitation{{Path: "artifact.log", LineStart: 1, LineEnd: 1}},
-		SourceCitations:   []agentSandboxAnalyzerCitation{{Path: "pkg/file.go", LineStart: 2, LineEnd: 2, Verified: true}},
+		SourceCitations:   []benchmarkSourceCitation{{benchmarkSourceRange: benchmarkSourceRange{Repository: "owner/repo", Revision: strings.Repeat("a", 40), Path: "pkg/file.go", LineStart: 2, LineEnd: 2}, Emitted: true, Verified: true}},
 	}
 	data, err := json.Marshal(record)
 	if err != nil {
@@ -1379,16 +1402,20 @@ func TestVerifyAgentSandboxAnalyzerSourceExpectations(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "pkg"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "pkg", "file.go"), []byte("package pkg\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "pkg", "file.go"), []byte("line1\nline2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyAgentSandboxAnalyzerSourceExpectations(root, []string{"pkg/file.go"}); err != nil {
+	revision := strings.Repeat("a", 40)
+	base := benchCase{sourceRepo: [2]string{"owner", "repo"}, repoRefs: map[string]string{"owner/repo": revision}, sourceRanges: []benchmarkSourceRange{{Repository: "owner/repo", Revision: revision, Path: "pkg/file.go", LineStart: 1, LineEnd: 2}}}
+	if err := verifyAgentSandboxAnalyzerSourceExpectations(root, base); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyAgentSandboxAnalyzerSourceExpectations(root, []string{"pkg"}); err == nil {
-		t.Fatal("directory source expectation was accepted")
+	base.sourceRanges[0].LineEnd = 3
+	if err := verifyAgentSandboxAnalyzerSourceExpectations(root, base); err == nil {
+		t.Fatal("out-of-range source expectation was accepted")
 	}
-	if err := verifyAgentSandboxAnalyzerSourceExpectations(root, []string{"missing.go"}); err == nil {
+	base.sourceRanges[0] = benchmarkSourceRange{Repository: "owner/repo", Revision: revision, Path: "missing.go", LineStart: 1, LineEnd: 1}
+	if err := verifyAgentSandboxAnalyzerSourceExpectations(root, base); err == nil {
 		t.Fatal("missing source expectation was accepted")
 	}
 }

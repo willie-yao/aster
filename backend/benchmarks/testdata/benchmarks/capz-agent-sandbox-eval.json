@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "cases": [
     {
       "id": "ccm-dualstack-control-plane-routetable",
@@ -56,10 +56,6 @@
       "consumer_commit": "cabcef8e03b510467dac52682fa7e9b0f3e6692f",
       "project_sha256": "1fc01fa1d2590c26b66a98faadb9daff567a4d325b6af3a14c765ed9f72d2e24",
       "prompt_sha256": "817cea07bd6b4621ac99b362af20f899caeeb336e86c355fd6870792c6afa9b5",
-      "source_paths": [
-        "api/v1beta1/azurecluster_default.go",
-        "azure/scope/cluster.go"
-      ],
       "source_signals": [
         {
           "name": "identifies control-plane subnet default omits a route table",
@@ -70,6 +66,20 @@
           "name": "identifies route-table creation requires a non-empty subnet route-table name",
           "pattern": "(?is)(?:RouteTableSpecs|subnet\\.RouteTable\\.Name).{0,240}(?:non.?empty|not\\s+empty|!=\\s*\"\"|only.{0,40}(?:create|append|provision))",
           "must": true
+        }
+      ],
+      "expected_source_ranges": [
+        {
+          "repository": "kubernetes-sigs/cluster-api-provider-azure",
+          "path": "api/v1beta1/azurecluster_default.go",
+          "line_start": 197,
+          "line_end": 208
+        },
+        {
+          "repository": "kubernetes-sigs/cluster-api-provider-azure",
+          "path": "azure/scope/cluster.go",
+          "line_start": 378,
+          "line_end": 394
         }
       ]
     },

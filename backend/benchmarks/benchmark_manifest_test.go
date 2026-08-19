@@ -21,11 +21,12 @@ import (
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
-const benchmarkManifestVersion = 3
+const benchmarkManifestVersion = 4
 
 var benchmarkCaseIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 var benchmarkStableIDRE = regexp.MustCompile(`^[0-9a-f]{20}$`)
 var benchmarkCommitRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
+var benchmarkRepoRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 var benchmarkSHA256RE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type benchmarkManifest struct {
@@ -68,11 +69,11 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 			t.Fatalf("case %q evidence mode = %q, want %q", bc.name, bc.evidenceMode, expectedEvidenceModes[bc.name])
 		}
 		if bc.evidenceMode == benchmarkEvidenceModeArtifactAndSource {
-			if !slices.Equal(bc.sourcePaths, []string{"test/k8s-integration/main.go"}) || len(bc.sourceSignals) != 1 || bc.sourceSignals[0].name != "identifies Windows snapshot test selection gap" {
-				t.Fatalf("case %q source expectations = paths %v signals %+v", bc.name, bc.sourcePaths, bc.sourceSignals)
+			if len(bc.sourceRanges) != 1 || bc.sourceRanges[0].Path != "test/k8s-integration/main.go" || bc.sourceRanges[0].LineStart != 638 || bc.sourceRanges[0].LineEnd != 671 || len(bc.sourceSignals) != 1 || bc.sourceSignals[0].name != "identifies Windows snapshot test selection gap" {
+				t.Fatalf("case %q source expectations = ranges %v signals %+v", bc.name, bc.sourceRanges, bc.sourceSignals)
 			}
-		} else if len(bc.sourcePaths) != 0 || len(bc.sourceSignals) != 0 {
-			t.Fatalf("case %q artifact-only source expectations = paths %v signals %+v", bc.name, bc.sourcePaths, bc.sourceSignals)
+		} else if len(bc.sourceRanges) != 0 || len(bc.sourceSignals) != 0 {
+			t.Fatalf("case %q artifact-only source expectations = ranges %v signals %+v", bc.name, bc.sourceRanges, bc.sourceSignals)
 		}
 		evidenceModeCounts[bc.evidenceMode]++
 		if bc.fixtureAsset == "" || len(bc.fixtureSHA256) != 64 {
@@ -282,10 +283,17 @@ type benchmarkManifestCase struct {
 	ProjectSHA256        string                           `json:"project_sha256,omitempty"`
 	PromptSHA256         string                           `json:"prompt_sha256,omitempty"`
 	Signals              []benchmarkManifestSignal        `json:"signals"`
-	SourcePaths          []string                         `json:"source_paths,omitempty"`
+	ExpectedSourceRanges []benchmarkManifestSourceRange   `json:"expected_source_ranges,omitempty"`
 	SourceSignals        []benchmarkManifestSignal        `json:"source_signals,omitempty"`
 	EvidenceGroups       []benchmarkManifestEvidenceGroup `json:"evidence_groups,omitempty"`
 	OracleEvidenceSHA256 string                           `json:"oracle_evidence_sha256,omitempty"`
+}
+
+type benchmarkManifestSourceRange struct {
+	Repository string `json:"repository"`
+	Path       string `json:"path"`
+	LineStart  int    `json:"line_start"`
+	LineEnd    int    `json:"line_end"`
 }
 
 type benchmarkManifestSignal struct {
@@ -421,21 +429,24 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 			}
 			signals = append(signals, benchSignal{name: signal.Name, re: positive, negated: negative, must: signal.Must})
 		}
-		if item.EvidenceMode == benchmarkEvidenceModeArtifactOnly && (len(item.SourcePaths) > 0 || len(item.SourceSignals) > 0) {
+		if item.EvidenceMode == benchmarkEvidenceModeArtifactOnly && (len(item.ExpectedSourceRanges) > 0 || len(item.SourceSignals) > 0) {
 			return nil, fmt.Errorf("benchmark manifest artifact-only case %q cannot declare source expectations", item.ID)
 		}
-		if item.EvidenceMode == benchmarkEvidenceModeArtifactAndSource && (len(item.SourcePaths) == 0 || len(item.SourcePaths) > 8 || len(item.SourceSignals) == 0 || len(item.SourceSignals) > 8) {
+		if item.EvidenceMode == benchmarkEvidenceModeArtifactAndSource && (len(item.ExpectedSourceRanges) == 0 || len(item.ExpectedSourceRanges) > 8 || len(item.SourceSignals) == 0 || len(item.SourceSignals) > 8) {
 			return nil, fmt.Errorf("benchmark manifest source-required case %q has incomplete source expectations", item.ID)
 		}
-		sourcePaths := make([]string, 0, len(item.SourcePaths))
-		seenSourcePaths := map[string]bool{}
-		for _, path := range item.SourcePaths {
-			clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(path)))
-			if path == "" || clean != path || filepath.IsAbs(path) || path == "." || path == ".." || strings.HasPrefix(path, "../") || len(path) > 512 || seenSourcePaths[path] {
-				return nil, fmt.Errorf("benchmark manifest case %q has invalid source path", item.ID)
+		sourceRanges := make([]benchmarkSourceRange, 0, len(item.ExpectedSourceRanges))
+		for _, value := range item.ExpectedSourceRanges {
+			revision, ok := item.RepoRefs[value.Repository]
+			if !ok {
+				return nil, fmt.Errorf("benchmark manifest case %q source range repository is not pinned", item.ID)
 			}
-			seenSourcePaths[path] = true
-			sourcePaths = append(sourcePaths, path)
+			sourceRanges = append(sourceRanges, benchmarkSourceRange{Repository: value.Repository, Revision: revision, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd})
+		}
+		var err error
+		sourceRanges, err = canonicalBenchmarkExpectedSourceRanges(sourceRanges)
+		if err != nil {
+			return nil, fmt.Errorf("benchmark manifest case %q source ranges: %w", item.ID, err)
 		}
 		sourceSignals := make([]benchSignal, 0, len(item.SourceSignals))
 		for signalIndex, signal := range item.SourceSignals {
@@ -550,7 +561,7 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 			referenceDiagnosis: item.ReferenceDiagnosis, referenceTransient: item.ReferenceTransient,
 			allowUnavailable: item.AllowUnavailable, expectedTransient: item.ExpectedTransient, forbidden: forbidden,
 			consumerCommit: item.ConsumerCommit, projectSHA256: item.ProjectSHA256, promptSHA256: item.PromptSHA256,
-			signals: signals, sourcePaths: sourcePaths, sourceSignals: sourceSignals,
+			signals: signals, sourceRanges: sourceRanges, sourceSignals: sourceSignals,
 			evidenceGroups: evidenceGroups, oracleEvidenceSHA256: item.OracleEvidenceSHA256,
 		})
 	}
@@ -585,12 +596,17 @@ type benchmarkJSONLResult struct {
 	EvidenceCondition         string                      `json:"evidence_condition"`
 	EvidenceMode              string                      `json:"evidence_mode"`
 	SourceExpectationSHA256   string                      `json:"source_expectation_sha256"`
-	SourceExpectationPaths    []string                    `json:"source_expectation_paths"`
-	SourceExpectationHits     int                         `json:"source_expectation_hits"`
-	SourceExpectationTotal    int                         `json:"source_expectation_total"`
+	ExpectedSourceRanges      []benchmarkSourceRange      `json:"expected_source_ranges"`
+	SourceReadCoverageHits    int                         `json:"source_read_coverage_hits"`
+	SourceReadCoverageTotal   int                         `json:"source_read_coverage_total"`
 	SourceSignalHits          int                         `json:"source_signal_hits"`
 	SourceSignalTotal         int                         `json:"source_signal_total"`
 	SourceEvidenceToolCalls   int                         `json:"source_evidence_tool_calls"`
+	SourceReadRanges          []benchmarkSourceRead       `json:"source_read_ranges"`
+	SourceReadCount           int                         `json:"source_read_count"`
+	SourceCitations           []benchmarkSourceCitation   `json:"source_citations"`
+	SourceCitationEmitted     int                         `json:"source_citation_emitted_count"`
+	SourceCitationVerified    int                         `json:"source_citation_verified_count"`
 	FrozenEvidenceSHA256      string                      `json:"frozen_evidence_sha256,omitempty"`
 	EvidenceStageSHA256       string                      `json:"evidence_stage_sha256"`
 	EvidenceStageIDs          []string                    `json:"evidence_stage_ids"`
@@ -734,20 +750,6 @@ func benchmarkSourceEvidenceToolCalls(usage benchmarkToolUsage) int {
 	return calls
 }
 
-func benchmarkSourceExpectationHits(paths, relevantFiles []string, links map[string]string) int {
-	grounded := make(map[string]bool, len(relevantFiles))
-	for _, path := range relevantFiles {
-		grounded[path] = true
-	}
-	hits := 0
-	for _, path := range paths {
-		if grounded[path] && strings.TrimSpace(links[path]) != "" {
-			hits++
-		}
-	}
-	return hits
-}
-
 type benchmarkJSONLTrace struct {
 	ModelRequests         int            `json:"model_requests"`
 	ReportedRequests      int            `json:"reported_requests"`
@@ -802,7 +804,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		APIMode: identity.APIMode, ReasoningEffort: string(identity.ReasoningEffort), ProviderPath: identity.ProviderPath, ProviderConfigSHA256: identity.ProviderConfigSHA256, TransportID: identity.TransportID,
 		ModelContextTokens: identity.ModelContextTokens, ModelOutputTokens: identity.ModelOutputTokens, Pricing: identity.Pricing,
 		EvidenceTelemetryVersion: 2, EvidenceCondition: stageReport.Condition, EvidenceMode: bc.evidenceMode,
-		SourceExpectationSHA256: benchmarkSourceExpectationSHA256(bc), SourceExpectationPaths: append([]string{}, bc.sourcePaths...), SourceExpectationTotal: len(bc.sourcePaths), SourceSignalTotal: len(bc.sourceSignals),
+		SourceExpectationSHA256: benchmarkSourceExpectationSHA256(bc), ExpectedSourceRanges: append([]benchmarkSourceRange{}, bc.sourceRanges...), SourceReadCoverageTotal: len(bc.sourceRanges), SourceSignalTotal: len(bc.sourceSignals),
 		SourceEvidenceToolCalls: benchmarkSourceEvidenceToolCalls(toolUsage), FrozenEvidenceSHA256: stageReport.FrozenSHA256,
 		EvidenceStageSHA256: identity.EvidenceStageSHA256, EvidenceStageIDs: benchmarkEvidenceStageIDs(bc.evidenceGroups), ModelRequestMade: stageReport.ModelRequestMade,
 		TrialStatus: stageReport.TrialStatus, EvidenceStages: append([]benchmarkEvidenceStage{}, stageReport.Stages...),
@@ -811,7 +813,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		EvidenceGroupsSelected: append([]string(nil), evidenceCoverage.selected...), EvidenceGroupsHit: append([]string(nil), evidenceCoverage.hit...), EvidenceGroupsMissed: append([]string(nil), evidenceCoverage.missed...),
 		EvidenceGroupSources: cloneBenchmarkEvidenceSources(evidenceCoverage.sources),
 		JobName:              bc.jobName, BuildID: bc.buildID, CheckoutCommit: bc.commit, TestName: bc.testName, TestSource: bc.testSource, ElapsedMS: elapsed.Milliseconds(), Outcome: string(recordedOutcome),
-		FileLinks: map[string]string{}, SelectedAttempt: selectedAttempt,
+		FileLinks: map[string]string{}, SourceReadRanges: []benchmarkSourceRead{}, SourceCitations: []benchmarkSourceCitation{}, SelectedAttempt: selectedAttempt,
 		ToolNames: append([]string(nil), toolUsage.names...), ToolCounts: append([]string(nil), toolUsage.counts...),
 		FloorNudges: traceSummary.floorNudges, FloorNudgeReasons: append([]string(nil), traceSummary.floorNudgeReasons...),
 		SemanticJudgeOutcomes:  append([]string{}, traceSummary.semanticJudgeOutcomes...),
@@ -843,6 +845,13 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	} else {
 		result.SourceUnavailable = true
 	}
+	sourceReads, sourceReadErr := benchmarkSourceReadsFromInProcess(bc, toolUsage.sourceObservations)
+	if sourceReadErr != nil {
+		t.Fatal(sourceReadErr)
+	}
+	result.SourceReadRanges = sourceReads
+	result.SourceReadCount = len(sourceReads)
+	result.SourceReadCoverageHits, result.SourceReadCoverageTotal = benchmarkExpectedSourceReadCoverage(bc.sourceRanges, sourceReads)
 	if tc != nil && tc.AISummary != nil {
 		result.Summary = tc.AISummary.Summary
 		result.IsTransient = new(bool)
@@ -873,7 +882,6 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		result.SignalHits, result.SignalTotal = assessment.hits, assessment.total
 		result.DiagnosisSignalHits, result.DiagnosisSignalTotal = assessment.diagnosisHits, assessment.diagnosisTotal
 		result.SourceSignalHits, result.SourceSignalTotal = assessment.sourceHits, assessment.sourceTotal
-		result.SourceExpectationHits = benchmarkSourceExpectationHits(bc.sourcePaths, result.RelevantFiles, result.FileLinks)
 		result.TransientCorrect = assessment.transientCorrect
 		result.ForbiddenChecksPassed, result.ForbiddenChecksTotal = assessment.forbiddenPassed, assessment.forbiddenTotal
 		result.MissingMust = append(result.MissingMust, assessment.missingMust...)
@@ -965,7 +973,7 @@ func recordBenchmarkSemanticRevision(result *benchmarkJSONLResult, event ai.Trac
 
 func TestLoadBenchmarkManifest(t *testing.T) {
 	valid := `{
-  "version": 3,
+  "version": 4,
   "cases": [{
     "id": "case-one",
     "stable_id": "0123456789abcdef0123",
@@ -1015,14 +1023,14 @@ func TestLoadBenchmarkManifest(t *testing.T) {
 
 	for name, mutate := range map[string]func(string) string{
 		"unknown field": func(value string) string {
-			return strings.Replace(value, `"version": 3`, `"version": 3, "extra": true`, 1)
+			return strings.Replace(value, `"version": 4`, `"version": 4, "extra": true`, 1)
 		},
 		"bad stable id": func(value string) string { return strings.Replace(value, "0123456789abcdef0123", "model-name", 1) },
 		"bad evidence mode": func(value string) string {
 			return strings.Replace(value, `"evidence_mode": "artifact_only"`, `"evidence_mode": "all"`, 1)
 		},
 		"artifact only source expectations": func(value string) string {
-			return strings.Replace(value, `"evidence_mode": "artifact_only"`, `"evidence_mode": "artifact_only", "source_paths": ["source.go"], "source_signals": [{"name":"source","pattern":"source","must":true}]`, 1)
+			return strings.Replace(value, `"evidence_mode": "artifact_only"`, `"evidence_mode": "artifact_only", "expected_source_ranges": [{"repository":"example/project","path":"source.go","line_start":1,"line_end":1}], "source_signals": [{"name":"source","pattern":"source","must":true}]`, 1)
 		},
 		"source required without expectations": func(value string) string {
 			return strings.Replace(value, `"evidence_mode": "artifact_only"`, `"evidence_mode": "artifact_and_source"`, 1)
@@ -1071,10 +1079,10 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "results.jsonl")
 	bc := benchCase{
 		name: "case-one", stableID: "0123456789abcdef0123", evidenceMode: benchmarkEvidenceModeArtifactAndSource, jobName: "job", buildID: "123", testName: "test", testSource: models.TestCaseSourceBuild,
-		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": "main"},
+		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": strings.Repeat("a", 40)},
 		sourceRepo:    [2]string{"example", "project"},
 		signals:       []benchSignal{{name: "cause", re: regexp.MustCompile(`root cause`), must: true}},
-		sourcePaths:   []string{"file.go"},
+		sourceRanges:  []benchmarkSourceRange{{Repository: "example/project", Revision: strings.Repeat("a", 40), Path: "file.go", LineStart: 1, LineEnd: 2}},
 		sourceSignals: []benchSignal{{name: "source cause", re: regexp.MustCompile(`root cause`), must: true}},
 	}
 	tc := &models.TestCase{
@@ -1112,7 +1120,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		MatchedSkillIDs: []string{"skill-a"}, MissingGroups: []ai.CritiqueEvidenceGroupRef{{SkillID: "skill-a", GroupID: "group-a"}}, PuntCount: 1,
 	}}}
 	writeBenchmarkJSONL(t, path, bc, 2, tc, benchmarkOutcomeUsable, 3*time.Second, snapshot, observations, 1,
-		benchmarkToolUsage{names: []string{"read_artifact", "read_repo_file"}, counts: []string{"read_artifact=1", "read_repo_file=1"}},
+		benchmarkToolUsage{names: []string{"read_artifact", "read_repo_file"}, counts: []string{"read_artifact=1", "read_repo_file=1"}, sourceObservations: []ai.SourceEvidenceObservation{{Tool: "read_repo_file", Path: "file.go", LineStart: 1, LineEnd: 2}}},
 		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}, semanticJudgeOutcomes: []string{"draft:objected", "revision:passed", "revision:revised"}, semanticFindingClasses: []string{"specific_error_ignored"}}, 18, "generation", ai.CritiqueCachePolicyHard, cacheVerification,
 		benchmarkRunIdentity{Arm: "variant", EngineCommit: strings.Repeat("b", 40), FixtureSHA256: strings.Repeat("c", 64), BaselineConsumerCommit: strings.Repeat("d", 40), BaselinePromptSHA256: strings.Repeat("3", 64), ProjectSHA256: strings.Repeat("e", 64), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceStageSHA256: benchmarkEvidenceStageSHA256(bc.evidenceGroups), APIMode: ai.APIChatCompletions, ProviderPath: "github-copilot/claude-sonnet-4.6", TransportID: "copilot-structural-proxy-v1"}, benchmarkEvidenceCoverage{selected: []string{"initiating-error"}, hit: []string{"initiating-error"}, missed: []string{"secondary-evidence"}, sources: map[string][]string{"initiating-error": {"model_tool"}}}, benchmarkEvidenceStageReport{Condition: benchmarkEvidenceConditionFixture, ModelRequestMade: true, TrialStatus: "contract_violation"})
 	data, err := os.ReadFile(path)
@@ -1131,7 +1139,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || result.CritiquePassed == nil || !*result.CritiquePassed || !result.BudgetExhausted ||
 		result.FloorNudges != 1 || !slices.Equal(result.FloorNudgeReasons, []string{"gcs_bytes"}) ||
 		!slices.Equal(result.ToolNames, []string{"read_artifact", "read_repo_file"}) || !slices.Equal(result.ToolCounts, []string{"read_artifact=1", "read_repo_file=1"}) ||
-		result.SourceEvidenceToolCalls != 1 || result.SourceExpectationHits != 1 || result.SourceExpectationTotal != 1 || result.SourceSignalHits != 1 || result.SourceSignalTotal != 1 ||
+		result.SourceEvidenceToolCalls != 1 || result.SourceReadCoverageHits != 1 || result.SourceReadCoverageTotal != 1 || len(result.SourceReadRanges) != 1 || result.SourceReadRanges[0].Path != "file.go" || len(result.SourceCitations) != 0 || result.SourceSignalHits != 1 || result.SourceSignalTotal != 1 ||
 		!result.CacheVerification.LookupAccepted || !result.CacheVerification.LookupHit || result.CacheGeneration != "generation" ||
 		result.ProviderRequestCap != 18 || result.Trace.ProviderAttempts != 2 || result.TraceTruncated || result.CritiqueCachePolicy != string(ai.CritiqueCachePolicyHard) ||
 		result.HumanScoreRubricVersion != benchmarkHumanScoreRubricVersion || result.HumanScoreMax != 10 || len(result.Drafts) != 1 ||
@@ -1249,15 +1257,13 @@ func TestRecordBenchmarkSemanticRevisionCountsUnparseableAndDeniedAsRejected(t *
 }
 
 func TestBenchmarkSourceExpectationSHA256(t *testing.T) {
-	base := benchCase{
-		sourcePaths:   []string{"pkg/file.go"},
-		sourceSignals: []benchSignal{{name: "source", re: regexp.MustCompile(`source claim`), must: true}},
-	}
+	revision := strings.Repeat("a", 40)
+	base := benchCase{sourceRanges: []benchmarkSourceRange{{Repository: "owner/repo", Revision: revision, Path: "pkg/file.go", LineStart: 1, LineEnd: 2}}, sourceSignals: []benchSignal{{name: "source", re: regexp.MustCompile(`source claim`), must: true}}}
 	want := benchmarkSourceExpectationSHA256(base)
 	for _, changed := range []benchCase{
-		{sourcePaths: []string{"pkg/other.go"}, sourceSignals: base.sourceSignals},
-		{sourcePaths: base.sourcePaths, sourceSignals: []benchSignal{{name: "other", re: regexp.MustCompile(`source claim`), must: true}}},
-		{sourcePaths: base.sourcePaths, sourceSignals: []benchSignal{{name: "source", re: regexp.MustCompile(`other claim`), must: true}}},
+		{sourceRanges: []benchmarkSourceRange{{Repository: "owner/repo", Revision: revision, Path: "pkg/other.go", LineStart: 1, LineEnd: 2}}, sourceSignals: base.sourceSignals},
+		{sourceRanges: base.sourceRanges, sourceSignals: []benchSignal{{name: "other", re: regexp.MustCompile(`source claim`), must: true}}},
+		{sourceRanges: base.sourceRanges, sourceSignals: []benchSignal{{name: "source", re: regexp.MustCompile(`other claim`), must: true}}},
 	} {
 		if got := benchmarkSourceExpectationSHA256(changed); got == want {
 			t.Fatalf("source expectation hash did not change: %s", got)
@@ -1301,11 +1307,11 @@ func TestCAPZAgentSandboxEvaluationManifest(t *testing.T) {
 			t.Fatalf("case %s identity = %+v source=%+v", bc.name, bc, source)
 		}
 		if bc.evidenceMode == benchmarkEvidenceModeArtifactAndSource {
-			if !slices.Equal(bc.sourcePaths, []string{"api/v1beta1/azurecluster_default.go", "azure/scope/cluster.go"}) || len(bc.sourceSignals) != 2 {
-				t.Fatalf("case %s source expectations = paths %v signals %+v", bc.name, bc.sourcePaths, bc.sourceSignals)
+			if len(bc.sourceRanges) != 2 || bc.sourceRanges[0].Path != "api/v1beta1/azurecluster_default.go" || bc.sourceRanges[0].LineStart != 197 || bc.sourceRanges[1].Path != "azure/scope/cluster.go" || bc.sourceRanges[1].LineStart != 378 || len(bc.sourceSignals) != 2 {
+				t.Fatalf("case %s source expectations = ranges %v signals %+v", bc.name, bc.sourceRanges, bc.sourceSignals)
 			}
-		} else if len(bc.sourcePaths) != 0 || len(bc.sourceSignals) != 0 {
-			t.Fatalf("case %s artifact-only source expectations = paths %v signals %+v", bc.name, bc.sourcePaths, bc.sourceSignals)
+		} else if len(bc.sourceRanges) != 0 || len(bc.sourceSignals) != 0 {
+			t.Fatalf("case %s artifact-only source expectations = ranges %v signals %+v", bc.name, bc.sourceRanges, bc.sourceSignals)
 		}
 	}
 }

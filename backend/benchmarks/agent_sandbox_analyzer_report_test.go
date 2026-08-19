@@ -332,9 +332,9 @@ func TestAgentSandboxAnalyzerReportRejectsIdentityMismatch(t *testing.T) {
 		{name: "evidence mode", mutate: func(_ []map[string]any, sandbox []map[string]any) {
 			for index := range sandbox {
 				sandbox[index]["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
-				sandbox[index]["source_expectation_paths"] = []string{}
-				sandbox[index]["source_expectation_hits"] = 0
-				sandbox[index]["source_expectation_total"] = 0
+				sandbox[index]["expected_source_ranges"] = []string{}
+				sandbox[index]["source_read_coverage_hits"] = 0
+				sandbox[index]["source_read_coverage_total"] = 0
 				sandbox[index]["source_signal_hits"] = 0
 				sandbox[index]["source_signal_total"] = 0
 				sandbox[index]["evidence_contract_passed"] = true
@@ -345,9 +345,9 @@ func TestAgentSandboxAnalyzerReportRejectsIdentityMismatch(t *testing.T) {
 			inprocess[1]["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
 			sandbox[1]["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
 			for _, record := range []map[string]any{inprocess[1], sandbox[1]} {
-				record["source_expectation_paths"] = []string{}
-				record["source_expectation_hits"] = 0
-				record["source_expectation_total"] = 0
+				record["expected_source_ranges"] = []string{}
+				record["source_read_coverage_hits"] = 0
+				record["source_read_coverage_total"] = 0
 				record["source_signal_hits"] = 0
 				record["source_signal_total"] = 0
 			}
@@ -408,6 +408,11 @@ func TestAgentSandboxAnalyzerReportRejectsIdentityMismatch(t *testing.T) {
 
 func validAgentSandboxAnalyzerReportRecords(t *testing.T) ([]map[string]any, []map[string]any) {
 	t.Helper()
+	headOutput, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := strings.TrimSpace(string(headOutput))
 	pricing := map[string]any{
 		"currency": "USD", "input_per_million": "3", "cached_input_per_million": "0.30", "output_per_million": "15",
 	}
@@ -421,7 +426,7 @@ func validAgentSandboxAnalyzerReportRecords(t *testing.T) ([]map[string]any, []m
 	for repetition := 1; repetition <= 3; repetition++ {
 		common := map[string]any{
 			"case_id": "case", "stable_id": "0123456789abcdef0123", "repetition": repetition,
-			"model_label": "model-a", "engine_commit": strings.Repeat("a", 40),
+			"model_label": "model-a", "engine_commit": head,
 			"benchmark_manifest_sha256": strings.Repeat("6", 64),
 			"fixture_sha256":            strings.Repeat("b", 64), "baseline_consumer_commit": strings.Repeat("c", 40),
 			"baseline_prompt_sha256": strings.Repeat("d", 64), "project_sha256": strings.Repeat("e", 64),
@@ -430,8 +435,12 @@ func validAgentSandboxAnalyzerReportRecords(t *testing.T) ([]map[string]any, []m
 			"source_revision":         strings.Repeat("f", 40), "provider_path": "provider/model", "provider_config_sha256": strings.Repeat("8", 64), "transport_id": "transport-v1",
 			"api_mode": "chat_completions", "evidence_condition": "fixture-v1", "evidence_mode": benchmarkEvidenceModeArtifactAndSource,
 			"model_context_tokens": 200000, "model_output_tokens": 8192, "pricing": pricing,
-			"source_expectation_sha256": strings.Repeat("9", 64), "source_expectation_paths": []string{"pkg/file.go"}, "source_expectation_hits": 1, "source_expectation_total": 1,
+			"source_expectation_sha256": strings.Repeat("9", 64),
+			"expected_source_ranges":    []map[string]any{{"repository": "owner/repo", "revision": strings.Repeat("f", 40), "path": "pkg/file.go", "line_start": 1, "line_end": 1}},
+			"source_read_ranges":        []map[string]any{{"repository": "owner/repo", "revision": strings.Repeat("f", 40), "path": "pkg/file.go", "line_start": 1, "line_end": 1, "tool": "read_repo_file", "outcome": "succeeded"}},
+			"source_read_count":         1, "source_read_coverage_hits": 1, "source_read_coverage_total": 1,
 			"source_signal_hits": 1, "source_signal_total": 1, "source_evidence_tool_calls": 1,
+			"source_citations": []map[string]any{}, "source_citation_emitted_count": 0, "source_citation_verified_count": 0,
 			"job_name": "job", "build_id": "1", "test_name": "test", "test_source": "build",
 			"human_score_rubric_version": benchmarkHumanScoreRubricVersion, "human_score_max": 10, "human_score_dimensions": benchmarkHumanScoreDimensions,
 			"elapsed_ms": 1000 + repetition, "signal_hits": 4, "signal_total": 5,
@@ -459,13 +468,17 @@ func validAgentSandboxAnalyzerReportRecords(t *testing.T) ([]map[string]any, []m
 
 		right := cloneReportRecord(common)
 		right["version"] = agentSandboxAnalyzerBenchmarkRecordVersion
+		right["source_read_ranges"] = []map[string]any{{"repository": "owner/repo", "revision": strings.Repeat("f", 40), "path": "pkg/file.go", "line_start": 1, "line_end": 1, "tool": "read", "outcome": "succeeded"}}
+		right["source_citations"] = []map[string]any{{"repository": "owner/repo", "revision": strings.Repeat("f", 40), "path": "pkg/file.go", "line_start": 1, "line_end": 1, "emitted": true, "verified": true}}
+		right["source_citation_emitted_count"] = 1
+		right["source_citation_verified_count"] = 1
 		right["runtime"] = "agent-sandbox-opencode"
 		right["runtime_identity_hash"] = strings.Repeat("7", 64)
 		right["image_contract_sha256"] = strings.Repeat("5", 64)
 		right["executor_image"] = "registry.example.test/executor@sha256:" + strings.Repeat("a", 64)
 		right["stager_image"] = "registry.example.test/stager@sha256:" + strings.Repeat("b", 64)
-		right["executor_aster_revision"] = strings.Repeat("a", 40)
-		right["stager_aster_revision"] = strings.Repeat("a", 40)
+		right["executor_aster_revision"] = head
+		right["stager_aster_revision"] = head
 		right["expected_opencode_version"] = "1.18.2"
 		right["request_shape_available"] = true
 		right["opencode_version"] = "1.18.2"
@@ -473,12 +486,11 @@ func validAgentSandboxAnalyzerReportRecords(t *testing.T) ([]map[string]any, []m
 		right["request_output_token_limit"] = 8192
 		right["arm"] = "arm-b"
 		right["status"] = "succeeded"
+		right["trial_status"] = "succeeded"
 		right["analysis_valid"] = true
 		right["finalization_valid"] = true
 		right["cleanup_completed"] = true
-		right["source_verified"] = true
 		right["artifact_citation_count"] = 1
-		right["source_citation_count"] = 1
 		right["artifact_evidence_tool_calls"] = 1
 		right["source_evidence_tool_calls"] = 1
 		right["evidence_contract_passed"] = true
@@ -489,7 +501,6 @@ func validAgentSandboxAnalyzerReportRecords(t *testing.T) ([]map[string]any, []m
 		right["severity"] = "High"
 		right["is_transient"] = false
 		right["evidence_citations"] = []map[string]any{{"path": "artifact.log", "line_start": 1, "line_end": 1}}
-		right["source_citations"] = []map[string]any{{"path": "pkg/file.go", "line_start": 1, "line_end": 1, "verified": true}}
 		right["unresolved_details"] = []string{"private unknown"}
 		right["token_usage_available"] = true
 		right["cost_available"] = false
@@ -532,9 +543,9 @@ func assertBlindPacketSchemasMatch(t *testing.T, data []byte) {
 				t.Fatalf("packet %s citation omits %s", packetID, key)
 			}
 		}
-		source, ok := packet["source_references"].([]any)
+		source, ok := packet["source_content_reads"].([]any)
 		if !ok || len(source) == 0 {
-			t.Fatalf("packet %s source references are not populated", packetID)
+			t.Fatalf("packet %s source content reads are not populated", packetID)
 		}
 	}
 	for packetID, packets := range byPacket {
@@ -705,20 +716,20 @@ func TestAgentSandboxAnalyzerReportArtifactOnlyDoesNotRequireSource(t *testing.T
 		inprocess[index]["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
 		inprocess[index]["file_links"] = map[string]string{}
 		inprocess[index]["relevant_files"] = []string{}
-		inprocess[index]["source_expectation_paths"] = []string{}
-		inprocess[index]["source_expectation_hits"] = 0
-		inprocess[index]["source_expectation_total"] = 0
+		inprocess[index]["expected_source_ranges"] = []string{}
+		inprocess[index]["source_read_coverage_hits"] = 0
+		inprocess[index]["source_read_coverage_total"] = 0
 		inprocess[index]["source_signal_hits"] = 0
 		inprocess[index]["source_signal_total"] = 0
 		inprocess[index]["source_evidence_tool_calls"] = 0
 		sandbox[index]["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
-		sandbox[index]["source_expectation_paths"] = []string{}
-		sandbox[index]["source_expectation_hits"] = 0
-		sandbox[index]["source_expectation_total"] = 0
+		sandbox[index]["expected_source_ranges"] = []string{}
+		sandbox[index]["source_read_coverage_hits"] = 0
+		sandbox[index]["source_read_coverage_total"] = 0
 		sandbox[index]["source_signal_hits"] = 0
 		sandbox[index]["source_signal_total"] = 0
-		sandbox[index]["source_verified"] = false
-		sandbox[index]["source_citation_count"] = 0
+		sandbox[index]["source_citation_verified_count"] = 0
+		sandbox[index]["source_citation_emitted_count"] = 0
 		sandbox[index]["source_citations"] = []map[string]any{}
 		sandbox[index]["source_evidence_tool_calls"] = 0
 		sandbox[index]["evidence_contract_passed"] = true
@@ -728,7 +739,7 @@ func TestAgentSandboxAnalyzerReportArtifactOnlyDoesNotRequireSource(t *testing.T
 	sandboxSummary := report["agent_sandbox"].(map[string]any)
 	modes := sandboxSummary["evidence_modes"].(map[string]any)
 	artifactOnly := modes[benchmarkEvidenceModeArtifactOnly].(map[string]any)
-	if sandboxSummary["runtime_valid_trials"] != float64(3) || sandboxSummary["valid_trials"] != float64(3) || sandboxSummary["source_grounded_trials"] != float64(0) || artifactOnly["contract_pass_rate"] != float64(1) {
+	if sandboxSummary["runtime_valid_trials"] != float64(3) || sandboxSummary["valid_trials"] != float64(3) || sandboxSummary["complete_expected_source_coverage_trials"] != float64(0) || artifactOnly["contract_pass_rate"] != float64(1) {
 		t.Fatalf("sandbox summary = %+v", sandboxSummary)
 	}
 	criteria := report["criteria"].(map[string]any)
@@ -740,7 +751,12 @@ func TestAgentSandboxAnalyzerReportArtifactOnlyDoesNotRequireSource(t *testing.T
 func TestAgentSandboxAnalyzerReportSourceRequiredRejectsUnreadFileLink(t *testing.T) {
 	inprocess, sandbox := validAgentSandboxAnalyzerReportRecords(t)
 	inprocess[0]["relevant_files"] = []string{}
-	inprocess[0]["source_expectation_hits"] = 0
+	inprocess[0]["source_citations"] = []map[string]any{}
+	inprocess[0]["source_citation_emitted_count"] = 0
+	inprocess[0]["source_citation_verified_count"] = 0
+	inprocess[0]["source_read_ranges"] = []map[string]any{}
+	inprocess[0]["source_read_count"] = 0
+	inprocess[0]["source_read_coverage_hits"] = 0
 	report := runAgentSandboxAnalyzerReport(t, inprocess, sandbox)
 	inprocessSummary := report["inprocess"].(map[string]any)
 	modes := inprocessSummary["evidence_modes"].(map[string]any)
@@ -750,7 +766,7 @@ func TestAgentSandboxAnalyzerReportSourceRequiredRejectsUnreadFileLink(t *testin
 	}
 }
 
-func TestAgentSandboxAnalyzerReportSourceRequiredNeedsToolAndCitation(t *testing.T) {
+func TestAgentSandboxAnalyzerReportSourceRequiredNeedsTool(t *testing.T) {
 	inprocess, sandbox := validAgentSandboxAnalyzerReportRecords(t)
 	sandbox[0]["source_evidence_tool_calls"] = 0
 	sandbox[0]["evidence_contract_passed"] = false
@@ -763,7 +779,7 @@ func TestAgentSandboxAnalyzerReportSourceRequiredNeedsToolAndCitation(t *testing
 		t.Fatalf("sandbox summary = %+v", sandboxSummary)
 	}
 	criteria := report["criteria"].(map[string]any)
-	if criteria["lifecycle_non_regression"] != true || criteria["grounding_non_regression"] != false {
+	if criteria["lifecycle_non_regression"] != true || criteria["grounding_non_regression"] != true {
 		t.Fatalf("criteria = %+v", criteria)
 	}
 }
@@ -773,9 +789,9 @@ func TestAgentSandboxAnalyzerReportArtifactOnlyRejectsUnsupportedSourceOutput(t 
 	for index := range inprocess {
 		for _, record := range []map[string]any{inprocess[index], sandbox[index]} {
 			record["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
-			record["source_expectation_paths"] = []string{}
-			record["source_expectation_hits"] = 0
-			record["source_expectation_total"] = 0
+			record["expected_source_ranges"] = []string{}
+			record["source_read_coverage_hits"] = 0
+			record["source_read_coverage_total"] = 0
 			record["source_signal_hits"] = 0
 			record["source_signal_total"] = 0
 			record["source_evidence_tool_calls"] = 0
@@ -795,24 +811,24 @@ func TestAgentSandboxAnalyzerSixTrialReportRequiresBothEvidenceModes(t *testing.
 	for index := range inprocess {
 		for _, record := range []map[string]any{inprocess[index], sandbox[index]} {
 			record["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
-			record["source_expectation_paths"] = []string{}
-			record["source_expectation_hits"] = 0
-			record["source_expectation_total"] = 0
+			record["expected_source_ranges"] = []string{}
+			record["source_read_coverage_hits"] = 0
+			record["source_read_coverage_total"] = 0
 			record["source_signal_hits"] = 0
 			record["source_signal_total"] = 0
 			record["source_evidence_tool_calls"] = 0
 		}
 		inprocess[index]["file_links"] = map[string]string{}
 		sandbox[index]["source_citations"] = []map[string]any{}
-		sandbox[index]["source_citation_count"] = 0
-		sandbox[index]["source_verified"] = false
+		sandbox[index]["source_citation_emitted_count"] = 0
+		sandbox[index]["source_citation_verified_count"] = 0
 		sandbox[index]["evidence_contract_passed"] = true
 		sandbox[index]["evidence_contract_status"] = "passed"
 	}
 	for repetition := 4; repetition <= 6; repetition++ {
 		left := cloneReportRecord(inprocess[0])
 		right := cloneReportRecord(sandbox[0])
-		left["source_expectation_paths"], right["source_expectation_paths"] = []string{}, []string{}
+		left["expected_source_ranges"], right["expected_source_ranges"] = []string{}, []string{}
 		left["repetition"], right["repetition"] = repetition, repetition
 		inprocess, sandbox = append(inprocess, left), append(sandbox, right)
 	}
@@ -841,14 +857,14 @@ func TestAgentSandboxAnalyzerReportMateriallyBetterRequiresRepeatedMultiCaseImpr
 				left["file_links"] = map[string]string{}
 				left["relevant_files"] = []string{}
 				right["evidence_mode"] = benchmarkEvidenceModeArtifactOnly
-				right["source_verified"] = false
-				right["source_citation_count"] = 0
+				right["source_citation_verified_count"] = 0
+				right["source_citation_emitted_count"] = 0
 				right["source_citations"] = []map[string]any{}
 				for _, record := range []map[string]any{left, right} {
 					record["source_expectation_sha256"] = strings.Repeat("0", 64)
-					record["source_expectation_paths"] = []string{}
-					record["source_expectation_hits"] = 0
-					record["source_expectation_total"] = 0
+					record["expected_source_ranges"] = []string{}
+					record["source_read_coverage_hits"] = 0
+					record["source_read_coverage_total"] = 0
 					record["source_signal_hits"] = 0
 					record["source_signal_total"] = 0
 					record["source_evidence_tool_calls"] = 0
@@ -956,6 +972,7 @@ func TestAgentSandboxAnalyzerReportMateriallyBetterRequiresRepeatedMultiCaseImpr
 	// Keep whole-matrix invalid counts equal while moving the Sandbox failure to
 	// the source-required case. Per-case gating must still prefer in-process.
 	sandbox[0]["status"] = "invalid_result"
+	sandbox[0]["trial_status"] = "invalid_result"
 	sandbox[0]["analysis_valid"] = false
 	sandbox[0]["finalization_valid"] = false
 	sandbox[0]["evidence_contract_passed"] = false
@@ -1025,4 +1042,29 @@ func cloneReportRecord(record map[string]any) map[string]any {
 		clone[key] = value
 	}
 	return clone
+}
+
+func TestAgentSandboxAnalyzerReportRejectsMatrixCommitDifferentFromFinalHead(t *testing.T) {
+	inprocess, sandbox := validAgentSandboxAnalyzerReportRecords(t)
+	other := strings.Repeat("b", 40)
+	for index := range inprocess {
+		inprocess[index]["engine_commit"] = other
+		sandbox[index]["engine_commit"] = other
+		sandbox[index]["executor_aster_revision"] = other
+		sandbox[index]["stager_aster_revision"] = other
+	}
+	dir := t.TempDir()
+	inprocessPath := filepath.Join(dir, "inprocess.jsonl")
+	sandboxPath := filepath.Join(dir, "sandbox.jsonl")
+	packetsPath := filepath.Join(dir, "packets.json")
+	writeReportJSONL(t, inprocessPath, inprocess)
+	writeReportJSONL(t, sandboxPath, sandbox)
+	command := exec.Command("python3", filepath.Join("..", "..", "hack", "compare-agent-sandbox-analyzer-benchmark.py"), "--inprocess", inprocessPath, "--sandbox", sandboxPath, "--repo", filepath.Join("..", ".."), "--blind-packets", packetsPath)
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "differs from final_branch_head") {
+		t.Fatalf("report error = %v, output = %s", err, output)
+	}
+	if _, err := os.Stat(packetsPath); !os.IsNotExist(err) {
+		t.Fatalf("blind packets were written before exact-head validation: %v", err)
+	}
 }

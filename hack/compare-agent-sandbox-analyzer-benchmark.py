@@ -9,10 +9,11 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import secrets
 import statistics
+import subprocess
 import sys
 from typing import Any
 
@@ -41,8 +42,8 @@ PAIR_FIELDS = (
     "evidence_condition",
     "evidence_mode",
     "source_expectation_sha256",
-    "source_expectation_paths",
-    "source_expectation_total",
+    "expected_source_ranges",
+    "source_read_coverage_total",
     "source_signal_total",
     "job_name",
     "build_id",
@@ -188,6 +189,77 @@ def validate_pricing(record: dict[str, Any], runtime: str) -> dict[str, str]:
     return pricing
 
 
+def source_range_key(value: dict[str, Any]) -> tuple[Any, ...]:
+    return (value["repository"], value["revision"], value["path"], value["line_start"], value["line_end"])
+
+
+def validate_source_range(value: Any, runtime: str, line: int) -> None:
+    if not isinstance(value, dict) or set(value) != {"repository", "revision", "path", "line_start", "line_end"}:
+        raise ReportError(f"{runtime} line {line} source range is invalid")
+    repository, revision, path = value["repository"], value["revision"], value["path"]
+    start, end = value["line_start"], value["line_end"]
+    if not isinstance(repository, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or not isinstance(revision, str) or not COMMIT_RE.fullmatch(revision):
+        raise ReportError(f"{runtime} line {line} source range identity is invalid")
+    if not isinstance(path, str) or not path or str(PurePosixPath(path)) != path or path.startswith("/") or path == "." or path.startswith("../") or "\\" in path or ".." in PurePosixPath(path).parts:
+        raise ReportError(f"{runtime} line {line} source range path is invalid")
+    if not isinstance(start, int) or isinstance(start, bool) or not isinstance(end, int) or isinstance(end, bool) or start < 1 or end < start or end-start+1 > 2000:
+        raise ReportError(f"{runtime} line {line} source range lines are invalid")
+
+
+def validate_source_evidence(record: dict[str, Any], runtime: str) -> None:
+    expected = record.get("expected_source_ranges")
+    reads = record.get("source_read_ranges")
+    citations = record.get("source_citations")
+    if not isinstance(expected, list) or not isinstance(reads, list) or not isinstance(citations, list):
+        raise ReportError(f"{runtime} line {record['_line']} source evidence fields must be arrays")
+    for name, values, limit in (("expected_source_ranges", expected, 8), ("source_read_ranges", reads, 512)):
+        if len(values) > limit:
+            raise ReportError(f"{runtime} line {record['_line']} {name} exceeds the bound")
+        keys = []
+        for value in values:
+            payload = value if name == "expected_source_ranges" else {field: value.get(field) for field in ("repository", "revision", "path", "line_start", "line_end")} if isinstance(value, dict) else value
+            validate_source_range(payload, runtime, record["_line"])
+            keys.append(source_range_key(payload) + (() if name == "expected_source_ranges" else (value.get("tool"), value.get("outcome"))))
+            if name == "source_read_ranges" and (set(value) != {"repository", "revision", "path", "line_start", "line_end", "tool", "outcome"} or value.get("tool") not in ("read_repo_file", "grep_repo", "read", "grep") or value.get("outcome") != "succeeded"):
+                raise ReportError(f"{runtime} line {record['_line']} source read is invalid")
+        if keys != sorted(keys) or len(keys) != len(set(keys)):
+            raise ReportError(f"{runtime} line {record['_line']} {name} is not canonical")
+    if record.get("source_read_count") != len(reads):
+        raise ReportError(f"{runtime} line {record['_line']} source read count is inconsistent")
+    hits = source_read_coverage(expected, reads)
+    if record.get("source_read_coverage_hits") != hits or record.get("source_read_coverage_total") != len(expected):
+        raise ReportError(f"{runtime} line {record['_line']} source read coverage is inconsistent")
+    citation_keys = []
+    emitted = verified = 0
+    for citation in citations:
+        if not isinstance(citation, dict) or set(citation) != {"repository", "revision", "path", "line_start", "line_end", "emitted", "verified"}:
+            raise ReportError(f"{runtime} line {record['_line']} source citation is invalid")
+        validate_source_range({field: citation[field] for field in ("repository", "revision", "path", "line_start", "line_end")}, runtime, record["_line"])
+        if not isinstance(citation["emitted"], bool) or not isinstance(citation["verified"], bool) or citation["verified"] and not citation["emitted"]:
+            raise ReportError(f"{runtime} line {record['_line']} source citation flags are invalid")
+        citation_keys.append(source_range_key(citation))
+        emitted += int(citation["emitted"]); verified += int(citation["verified"])
+    if citation_keys != sorted(citation_keys) or len(citation_keys) != len(set(citation_keys)) or len(citations) > 64:
+        raise ReportError(f"{runtime} line {record['_line']} source citations are not canonical")
+    if record.get("source_citation_emitted_count") != emitted or record.get("source_citation_verified_count") != verified:
+        raise ReportError(f"{runtime} line {record['_line']} source citation counts are inconsistent")
+
+
+def source_read_coverage(expected: list[dict[str, Any]], reads: list[dict[str, Any]]) -> int:
+    hits = 0
+    for wanted in expected:
+        intervals = sorted((value["line_start"], value["line_end"]) for value in reads if all(value.get(field) == wanted[field] for field in ("repository", "revision", "path")) and value.get("outcome") == "succeeded")
+        covered = wanted["line_start"] - 1
+        for start, end in intervals:
+            if end < wanted["line_start"] or start > covered + 1:
+                continue
+            covered = max(covered, end)
+            if covered >= wanted["line_end"]:
+                hits += 1
+                break
+    return hits
+
+
 def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
     case_id = require_string(record, "case_id", runtime)
     repetition = require_integer(record, "repetition", runtime, 1)
@@ -249,19 +321,20 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
     require_integer(record, "diagnosis_signal_total", runtime)
     require_integer(record, "forbidden_checks_passed", runtime)
     require_integer(record, "forbidden_checks_total", runtime)
-    require_integer(record, "source_expectation_hits", runtime)
-    require_integer(record, "source_expectation_total", runtime)
+    require_integer(record, "source_read_coverage_hits", runtime)
+    require_integer(record, "source_read_coverage_total", runtime)
+    require_integer(record, "source_read_count", runtime)
+    require_integer(record, "source_citation_emitted_count", runtime)
+    require_integer(record, "source_citation_verified_count", runtime)
     require_integer(record, "source_signal_hits", runtime)
     require_integer(record, "source_signal_total", runtime)
     require_integer(record, "source_evidence_tool_calls", runtime)
-    source_paths = record.get("source_expectation_paths")
-    if not isinstance(source_paths, list) or len(source_paths) != record["source_expectation_total"] or not all(isinstance(value, str) and value for value in source_paths) or len(set(source_paths)) != len(source_paths):
-        raise ReportError(f"{runtime} line {record['_line']} source expectations are inconsistent")
-    if record["source_expectation_hits"] > record["source_expectation_total"] or record["source_signal_hits"] > record["source_signal_total"]:
+    validate_source_evidence(record, runtime)
+    if record["source_read_coverage_hits"] > record["source_read_coverage_total"] or record["source_signal_hits"] > record["source_signal_total"]:
         raise ReportError(f"{runtime} line {record['_line']} source scoring numerators exceed denominators")
-    if evidence_mode == "artifact_only" and (record["source_expectation_total"] != 0 or record["source_signal_total"] != 0):
+    if evidence_mode == "artifact_only" and (record["source_read_coverage_total"] != 0 or record["source_signal_total"] != 0):
         raise ReportError(f"{runtime} line {record['_line']} artifact-only case declares source expectations")
-    if evidence_mode == "artifact_and_source" and (record["source_expectation_total"] < 1 or record["source_signal_total"] < 1):
+    if evidence_mode == "artifact_and_source" and (record["source_read_coverage_total"] < 1 or record["source_signal_total"] < 1):
         raise ReportError(f"{runtime} line {record['_line']} source-required case lacks source expectations")
     if record["signal_hits"] > record["signal_total"] or record["diagnosis_signal_hits"] > record["diagnosis_signal_total"] or record["forbidden_checks_passed"] > record["forbidden_checks_total"]:
         raise ReportError(f"{runtime} line {record['_line']} scoring numerators exceed denominators")
@@ -303,14 +376,7 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
             raise ReportError(f"inprocess line {record['_line']} trial_status is invalid")
         links = record.get("file_links", {})
         relevant = record.get("relevant_files", [])
-        if not isinstance(links, dict):
-            raise ReportError(f"inprocess line {record['_line']} field file_links must be an object")
-        if not isinstance(relevant, list) or not all(isinstance(path, str) and path for path in relevant):
-            raise ReportError(f"inprocess line {record['_line']} field relevant_files must be a string array")
-        grounded = set(relevant)
-        expected_hits = sum(path in grounded and isinstance(links.get(path), str) and bool(links[path].strip()) for path in source_paths)
-        if record["source_expectation_hits"] != expected_hits:
-            raise ReportError(f"inprocess line {record['_line']} source expectation hits are inconsistent")
+        if not isinstance(links, dict) or not isinstance(relevant, list) or not all(isinstance(path, str) and path for path in relevant): raise ReportError(f"inprocess line {record['_line']} source diagnostics are invalid")
         trace = record.get("trace")
         if not isinstance(trace, dict):
             raise ReportError(f"inprocess line {record['_line']} field trace must be an object")
@@ -340,6 +406,8 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
         if record.get("request_shape_available") is True and (record.get("request_context_limit") != context_tokens or record.get("request_output_token_limit") != output_tokens):
             raise ReportError(f"sandbox line {record['_line']} OpenCode request limits differ from the frozen benchmark limits")
         status = require_string(record, "status", runtime)
+        if require_string(record, "trial_status", runtime) != status:
+            raise ReportError(f"sandbox line {record['_line']} trial_status differs from status")
         if status not in SANDBOX_STATUSES:
             raise ReportError(f"sandbox line {record['_line']} status is invalid")
         record.setdefault("evidence_phase_allocated_steps", 0)
@@ -367,11 +435,10 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
                 raise ReportError(f"sandbox line {record['_line']} bounded evidence exhaustion telemetry is incomplete")
         elif allocated_steps != 0 or exhaustion_steps != 0 or exhaustion_requests != 0 or exhaustion_classification:
             raise ReportError(f"sandbox line {record['_line']} bounded evidence exhaustion telemetry is inconsistent")
-        for field in ("analysis_valid", "finalization_valid", "cleanup_completed", "source_verified"):
+        for field in ("analysis_valid", "finalization_valid", "cleanup_completed"):
             if not isinstance(record.get(field), bool):
                 raise ReportError(f"sandbox line {record['_line']} field {field} must be boolean")
         require_integer(record, "artifact_citation_count", runtime)
-        require_integer(record, "source_citation_count", runtime)
         for field in ("model_requests", "provider_requests", "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens"):
             require_integer(record, field, runtime)
         require_integer(record, "max_steps", runtime, 1)
@@ -394,13 +461,6 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
         source = record.get("source_citations", [])
         if not isinstance(evidence, list) or len(evidence) != record["artifact_citation_count"]:
             raise ReportError(f"sandbox line {record['_line']} artifact citation count is inconsistent")
-        if not isinstance(source, list) or len(source) != record["source_citation_count"]:
-            raise ReportError(f"sandbox line {record['_line']} source citation count is inconsistent")
-        if record["source_verified"] != (bool(source) and all(isinstance(citation, dict) and citation.get("verified") is True for citation in source)):
-            raise ReportError(f"sandbox line {record['_line']} source verification is inconsistent")
-        verified_paths = {citation.get("path") for citation in source if isinstance(citation, dict) and citation.get("verified") is True}
-        if record["source_expectation_hits"] != sum(path in verified_paths for path in source_paths):
-            raise ReportError(f"sandbox line {record['_line']} source expectation hits are inconsistent")
         require_integer(record, "artifact_evidence_tool_calls", runtime)
         if not isinstance(record.get("evidence_contract_passed"), bool):
             raise ReportError(f"sandbox line {record['_line']} field evidence_contract_passed must be boolean")
@@ -418,41 +478,19 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
 
 def evidence_contract_result(record: dict[str, Any], runtime: str) -> tuple[bool, str]:
     if runtime == "inprocess":
-        if record.get("usable") is not True:
-            return False, "analysis_unavailable"
-        if not record.get("evidence_citations"):
-            return False, "artifact_citation_missing"
-        has_source_output = bool(record.get("file_links")) or bool(record.get("relevant_files")) or record.get("source_signal_hits", 0) > 0
-        if has_source_output and record.get("source_evidence_tool_calls", 0) < 1:
-            return False, "unsupported_source_claim"
-        if record.get("evidence_mode") == "artifact_and_source":
-            if record.get("source_evidence_tool_calls", 0) < 1:
-                return False, "source_evidence_missing"
-            if not record.get("file_links") or not record.get("relevant_files"):
-                return False, "source_citation_missing"
-            if record.get("source_expectation_hits") != record.get("source_expectation_total"):
-                return False, "source_expectation_missing"
-            if record.get("source_signal_hits") != record.get("source_signal_total"):
-                return False, "source_diagnosis_missing"
-        return True, "passed"
-    if record.get("analysis_valid") is not True:
-        return False, "analysis_unavailable"
-    if record.get("artifact_evidence_tool_calls", 0) < 1:
-        return False, "artifact_evidence_missing"
-    if record.get("artifact_citation_count", 0) < 1:
-        return False, "artifact_citation_missing"
+        if record.get("usable") is not True: return False, "analysis_unavailable"
+        if not record.get("evidence_citations"): return False, "artifact_citation_missing"
+    else:
+        if record.get("analysis_valid") is not True: return False, "analysis_unavailable"
+        if record.get("artifact_evidence_tool_calls", 0) < 1: return False, "artifact_evidence_missing"
+        if record.get("artifact_citation_count", 0) < 1: return False, "artifact_citation_missing"
     has_source_output = bool(record.get("source_citations")) or bool(record.get("relevant_files")) or record.get("source_signal_hits", 0) > 0
-    if has_source_output and record.get("source_evidence_tool_calls", 0) < 1:
-        return False, "unsupported_source_claim"
+    if has_source_output and record.get("source_evidence_tool_calls", 0) < 1: return False, "unsupported_source_claim"
     if record.get("evidence_mode") == "artifact_and_source":
-        if record.get("source_evidence_tool_calls", 0) < 1:
-            return False, "source_evidence_missing"
-        if record.get("source_citation_count", 0) < 1 or record.get("source_verified") is not True:
-            return False, "source_citation_missing"
-        if record.get("source_expectation_hits") != record.get("source_expectation_total"):
-            return False, "source_expectation_missing"
-        if record.get("source_signal_hits") != record.get("source_signal_total"):
-            return False, "source_diagnosis_missing"
+        if record.get("source_evidence_tool_calls", 0) < 1: return False, "source_evidence_missing"
+        if record.get("source_read_count", 0) < 1: return False, "source_content_not_read"
+        if record.get("source_read_coverage_hits") != record.get("source_read_coverage_total"): return False, "source_read_coverage_missing"
+        if record.get("source_signal_hits") != record.get("source_signal_total"): return False, "source_diagnosis_missing"
     return True, "passed"
 
 
@@ -639,7 +677,10 @@ def inprocess_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     valid = [record for record in records if evidence_contract_result(record, "inprocess")[0]]
     statuses = [record["trial_status"] for record in records]
     citation_trials = sum(bool(record.get("evidence_citations")) for record in runtime_valid)
-    source_trials = sum(bool(record.get("file_links")) for record in valid)
+    source_evaluated = [record for record in runtime_valid if record.get("source_read_coverage_total", 0) > 0]
+    source_trials = sum(record.get("source_read_coverage_hits") == record.get("source_read_coverage_total") for record in source_evaluated)
+    citation_emitted_trials = sum(record.get("source_citation_emitted_count", 0) > 0 for record in runtime_valid)
+    citation_verified_trials = sum(record.get("source_citation_verified_count", 0) > 0 for record in runtime_valid)
     metrics = {
         "trials": len(records),
         "runtime_valid_trials": len(runtime_valid),
@@ -659,8 +700,12 @@ def inprocess_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "runtime_failure_trials": sum(status in ("runtime_failure", "timeout") for status in statuses),
         "artifact_citation_trials": citation_trials,
         "artifact_citation_rate": rate(citation_trials, len(runtime_valid)),
-        "source_grounded_trials": source_trials,
-        "source_grounded_rate": rate(source_trials, len(valid)),
+        "complete_expected_source_coverage_trials": source_trials,
+        "expected_source_range_coverage_rate": rate(source_trials, len(source_evaluated)),
+        "source_citation_emitted_trials": citation_emitted_trials,
+        "source_citation_verified_trials": citation_verified_trials,
+        "source_citation_emitted_count": sum(record.get("source_citation_emitted_count", 0) for record in records),
+        "source_citation_verified_count": sum(record.get("source_citation_verified_count", 0) for record in records),
         "signal_hits": sum(record["signal_hits"] for record in records),
         "signal_total": sum(record["signal_total"] for record in records),
         "signal_rate": rate(sum(record["signal_hits"] for record in records), sum(record["signal_total"] for record in records)),
@@ -692,7 +737,10 @@ def sandbox_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     valid = [record for record in records if evidence_contract_result(record, "sandbox")[0]]
     statuses = [record["status"] for record in records]
     citation_trials = sum(record["artifact_citation_count"] > 0 for record in runtime_valid)
-    source_trials = sum(record["source_verified"] for record in valid)
+    source_evaluated = [record for record in runtime_valid if record.get("source_read_coverage_total", 0) > 0]
+    source_trials = sum(record.get("source_read_coverage_hits") == record.get("source_read_coverage_total") for record in source_evaluated)
+    citation_emitted_trials = sum(record.get("source_citation_emitted_count", 0) > 0 for record in runtime_valid)
+    citation_verified_trials = sum(record.get("source_citation_verified_count", 0) > 0 for record in runtime_valid)
     metrics = {
         "trials": len(records),
         "runtime_valid_trials": len(runtime_valid),
@@ -712,8 +760,12 @@ def sandbox_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "cleanup_pending_trials": sum(status == "cleanup_pending" for status in statuses),
         "artifact_citation_trials": citation_trials,
         "artifact_citation_rate": rate(citation_trials, len(runtime_valid)),
-        "source_grounded_trials": source_trials,
-        "source_grounded_rate": rate(source_trials, len(valid)),
+        "complete_expected_source_coverage_trials": source_trials,
+        "expected_source_range_coverage_rate": rate(source_trials, len(source_evaluated)),
+        "source_citation_emitted_trials": citation_emitted_trials,
+        "source_citation_verified_trials": citation_verified_trials,
+        "source_citation_emitted_count": sum(record.get("source_citation_emitted_count", 0) for record in records),
+        "source_citation_verified_count": sum(record.get("source_citation_verified_count", 0) for record in records),
         "signal_hits": sum(record["signal_hits"] for record in records),
         "signal_total": sum(record["signal_total"] for record in records),
         "signal_rate": rate(sum(record["signal_hits"] for record in records), sum(record["signal_total"] for record in records)),
@@ -863,8 +915,8 @@ def evaluate_criteria(inprocess: dict[str, Any], sandbox: dict[str, Any], per_ca
         and (sandbox["finalization_valid_rate"] or 0) == 1.0
         and (sandbox["cleanup_completed_rate"] or 0) == 1.0
     )
-    inprocess_source = inprocess["evidence_modes"]["artifact_and_source"]["contract_pass_rate"]
-    sandbox_source = sandbox["evidence_modes"]["artifact_and_source"]["contract_pass_rate"]
+    inprocess_source = inprocess["expected_source_range_coverage_rate"]
+    sandbox_source = sandbox["expected_source_range_coverage_rate"]
     grounding_non_regression = (
         (sandbox["artifact_citation_rate"] or 0) >= (inprocess["artifact_citation_rate"] or 0)
         and inprocess_source is not None
@@ -903,8 +955,8 @@ def evaluate_criteria(inprocess: dict[str, Any], sandbox: dict[str, Any], per_ca
         )
         case_grounding = (right["artifact_citation_rate"] or 0) >= (left["artifact_citation_rate"] or 0)
         if source_required:
-            left_source = left["evidence_modes"]["artifact_and_source"]["contract_pass_rate"]
-            right_source = right["evidence_modes"]["artifact_and_source"]["contract_pass_rate"]
+            left_source = left["expected_source_range_coverage_rate"]
+            right_source = right["expected_source_range_coverage_rate"]
             case_grounding = case_grounding and left_source is not None and right_source is not None and right_source >= left_source
         case_latency_ratio = None
         if isinstance(left["latency_ms"]["median"], int) and left["latency_ms"]["median"] > 0 and isinstance(right["latency_ms"]["median"], int):
@@ -1003,13 +1055,11 @@ def normalized_citations(record: dict[str, Any], field: str) -> list[dict[str, A
 def normalized_blind_analysis(record: dict[str, Any]) -> dict[str, Any]:
     relevant = record.get("relevant_files")
     if not isinstance(relevant, list):
-        links = record.get("file_links", {})
-        relevant = sorted(links) if isinstance(links, dict) else []
-    source = [citation["path"] for citation in normalized_citations(record, "source_citations")]
-    if not source:
-        links = record.get("file_links", {})
-        if isinstance(links, dict):
-            source = sorted(links)
+        relevant = []
+    source = [
+        {field: value.get(field) for field in ("repository", "revision", "path", "line_start", "line_end")}
+        for value in record.get("source_read_ranges", []) if isinstance(value, dict)
+    ]
     unresolved = record.get("unresolved_details", [])
     if not isinstance(unresolved, list):
         unresolved = []
@@ -1021,7 +1071,7 @@ def normalized_blind_analysis(record: dict[str, Any]) -> dict[str, Any]:
         "is_transient": record.get("is_transient"),
         "relevant_files": [value for value in relevant if isinstance(value, str)],
         "evidence_citations": normalized_citations(record, "evidence_citations"),
-        "source_references": source,
+        "source_content_reads": source,
         "unresolved_details": [value for value in unresolved if isinstance(value, str)],
     }
 
@@ -1330,6 +1380,13 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     sandbox = index_records(sandbox_records, "sandbox")
     keys = validate_pairs(inprocess, sandbox)
     validate_matrix_identity(keys, inprocess, sandbox)
+    matrix_engine_commit = inprocess[keys[0]]["engine_commit"]
+    try:
+        final_branch_head = subprocess.check_output(["git", "-C", args.repo, "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
+    except subprocess.CalledProcessError as exc:
+        raise ReportError("resolve final branch HEAD") from exc
+    if not COMMIT_RE.fullmatch(final_branch_head) or matrix_engine_commit != final_branch_head:
+        raise ReportError(f"matrix_engine_commit {matrix_engine_commit} differs from final_branch_head {final_branch_head}")
     holdouts_ok, holdout_counts = validate_holdouts(keys, args.holdout_case, args.required_repetitions)
     inprocess_summary = inprocess_metrics([inprocess[key] for key in keys])
     sandbox_summary = sandbox_metrics([sandbox[key] for key in keys])
@@ -1366,7 +1423,9 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         blind_quality, evidence_modes_complete,
     )
     report = {
-        "version": 3,
+        "version": 4,
+        "matrix_engine_commit": matrix_engine_commit,
+        "final_branch_head": final_branch_head,
         "pair_count": len(keys),
         "planned_operations": args.expected_pairs * 2,
         "completed_operations": len(keys) * 2,
@@ -1387,6 +1446,15 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             "signal_rate": round((sandbox_summary["signal_rate"] or 0) - (inprocess_summary["signal_rate"] or 0), 4),
             "diagnosis_signal_rate": round((sandbox_summary["diagnosis_signal_rate"] or 0) - (inprocess_summary["diagnosis_signal_rate"] or 0), 4),
             "valid_rate": round((sandbox_summary["valid_rate"] or 0) - (inprocess_summary["valid_rate"] or 0), 4),
+        },
+        "disposition_follow_up": {
+            "required": inprocess_summary["grounded_trials"] == 0 and sandbox_summary["grounded_trials"] == 0 and inprocess_summary["preliminary_trials"] == len(keys) and sandbox_summary["preliminary_trials"] == len(keys),
+            "reason": "both analyzers completed only preliminary investigation_incomplete analyses; diagnose the shared stopping condition before another scored matrix",
+        },
+        "source_citation_capabilities": {
+            "inprocess": {**{key: inprocess_summary[key] for key in ("source_citation_emitted_trials", "source_citation_verified_trials", "source_citation_emitted_count", "source_citation_verified_count")}, "verified_to_emitted_ratio": rate(inprocess_summary["source_citation_verified_count"], inprocess_summary["source_citation_emitted_count"])},
+            "agent_sandbox": {**{key: sandbox_summary[key] for key in ("source_citation_emitted_trials", "source_citation_verified_trials", "source_citation_emitted_count", "source_citation_verified_count")}, "verified_to_emitted_ratio": rate(sandbox_summary["source_citation_verified_count"], sandbox_summary["source_citation_emitted_count"])},
+            "comparative_gate": False,
         },
         "architecture_difference": {
             "comparison_type": "system_comparison_not_model_only_ab",
