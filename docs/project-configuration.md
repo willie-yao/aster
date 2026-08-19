@@ -308,13 +308,16 @@ reader at a peer pull request whose page points back, and the trail ends.
 Clustering runs after attribution, costs no model calls, and is published on
 both deploy paths. The GitHub Pages path therefore gets the aggregate view with
 no server; only the analysis below needs one.
+
 ### Optional bot comment on new pull requests
 
 Aster can post one comment on each newly opened pull request, linking to that
 pull request's triage page. It reaches contributors who would never find the
 dashboard on their own, which is exactly why it needs care: it is the engine's
-**only unattended GitHub write**. Every other write is a maintainer confirming
-a previewed draft.
+**only unattended write that contacts a contributor's pull request**. The
+scheduled pass also comments on, and when configured closes, issues it already
+tracks whose finding has recovered, but that write only touches issues a
+maintainer confirmed first.
 
 It is therefore off by default, and turning it on does not post anything:
 
@@ -406,8 +409,8 @@ count before enabling commenting. The watermark is still recorded in that state,
 so raising the cap later does not silently skip everything opened meanwhile.
 
 Commenting is a GitHub write, so `-skip-side-effects` suppresses it along with
-issues, fix pull requests, and notifications. A triage failure also suppresses
-it, because the pages a comment would link to were not refreshed.
+issue recovery and notifications. A triage failure also suppresses it, because
+the pages a comment would link to were not refreshed.
 
 One caveat on the Pages path: comments are posted during the fetch step, before
 the site is built and deployed. If a later workflow step fails, a comment can

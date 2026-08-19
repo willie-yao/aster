@@ -209,9 +209,10 @@ func checkPullRequestTriage(add func(string, DoctorStatus, string, string), cfg 
 }
 
 // checkPullRequestComment reports the state of the engine's only unattended
-// GitHub write. A live comment pass writes to contributor threads without a
-// maintainer confirming each one, so leaving dry run is called out as the
-// deliberate step it is rather than passing silently.
+// write that contacts a contributor's pull request. A live comment pass writes
+// to contributor threads without a maintainer confirming each one, so leaving
+// dry run is called out as the deliberate step it is rather than passing
+// silently.
 func checkPullRequestComment(add func(string, DoctorStatus, string, string), cfg *project.Config) {
 	const name = "pull request comments"
 	if !cfg.CommentEnabled() {

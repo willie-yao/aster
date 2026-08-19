@@ -1677,8 +1677,9 @@ func TestValidate_PullRequestComment(t *testing.T) {
 	}
 }
 
-// TestCommentDryRunDefaultsOn pins the safety default: the engine's only
-// unattended write must never post because a field was omitted.
+// TestCommentDryRunDefaultsOn pins the safety default: the only unattended
+// write that contacts a contributor's pull request must never post because a
+// field was omitted.
 func TestCommentDryRunDefaultsOn(t *testing.T) {
 	enabled := func(dryRun *bool) *Config {
 		c := validConfig()

@@ -104,7 +104,7 @@ on:
         description: "SMTP password for email notifications when notifications.email is enabled and smtp.username is set."
         required: false
       ASTER_APP_ID:
-        description: "GitHub App ID used to comment on new pull requests when pull_requests.comment.enabled is set. The App needs issues:write on branding.source_repo and must be installed there."
+        description: "GitHub App ID used to comment on new pull requests when pull_requests.comment.enabled is set. The App needs issues:write on branding.source_repo, plus pull requests read-only if that repository is private, and must be installed there."
         required: false
       ASTER_APP_PRIVATE_KEY:
         description: "PEM private key for ASTER_APP_ID. Commenting posts as the App's bot account, so no personal token is involved."

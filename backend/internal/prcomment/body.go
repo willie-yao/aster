@@ -1,9 +1,10 @@
 // Package prcomment posts one bot comment on each newly observed pull request,
 // linking to that pull request's triage page on the dashboard.
 //
-// This is the engine's only unattended GitHub write. Every other write is a
-// maintainer confirming a previewed draft, so the safeguards here are the point
-// of the package rather than incidental to it:
+// This is the engine's only unattended write that contacts a contributor's pull
+// request. Scheduled issue recovery also writes unattended, but only to issues a
+// maintainer already confirmed, so the safeguards here are the point of the
+// package rather than incidental to it:
 //
 //   - opt-in, and dry run until an operator explicitly turns the write on
 //   - an activation cutoff, so enabling it never backfills open pull requests

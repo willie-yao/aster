@@ -149,8 +149,8 @@ func (p *pipeline) runPullRequestComments(ctx context.Context, outcome triageOut
 	if !p.cfg.CommentEnabled() {
 		return
 	}
-	// Commenting is a GitHub write, so it obeys the same switch as issues,
-	// fix PRs, and notifications.
+	// Commenting is a GitHub write, so it obeys the same switch as issue
+	// recovery and notifications.
 	if p.opts.SkipSideEffects {
 		log.Println("💬 Skipping pull request comments: side effects are disabled")
 		return

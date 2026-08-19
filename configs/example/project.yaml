@@ -43,8 +43,9 @@ branding:
 # pull_requests:
 #   enabled: true
 #   # Optional: post one comment on each newly opened pull request linking to
-#   # its triage page. This is the engine's only unattended GitHub write, so it
-#   # is off by default and stays in dry run until dry_run is explicitly false.
+#   # its triage page. This is the engine's only unattended write that contacts
+#   # a contributor's pull request, so it is off by default and stays in dry run
+#   # until dry_run is explicitly false.
 #   # Posting authenticates as a GitHub App (ASTER_APP_ID and
 #   # ASTER_APP_PRIVATE_KEY) so the comment comes from a bot account.
 #   comment:

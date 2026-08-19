@@ -384,8 +384,9 @@ fetcher:
   # Commenting on new pull requests (pull_requests.comment.enabled in
   # project.yaml) is wired here too, via ASTER_APP_ID and
   # ASTER_APP_PRIVATE_KEY. It authenticates as a GitHub App so the comment
-  # comes from a bot account rather than a person, and the App needs only
-  # issues:write on branding.source_repo. Commenting stays in dry run until
+  # comes from a bot account rather than a person, and the App needs
+  # issues:write on branding.source_repo, plus pull requests read-only if that
+  # repository is private. Commenting stays in dry run until
   # pull_requests.comment.dry_run is explicitly false, so mounting these is
   # safe on its own. For example:
   #   extraEnv:
