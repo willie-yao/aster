@@ -145,7 +145,7 @@ func TestRunPullRequestPassSwallowsFailures(t *testing.T) {
 func TestRunPullRequestPassSkipsWhenDisabled(t *testing.T) {
 	called := false
 	original := writePullRequestOutput
-	writePullRequestOutput = func(string, models.PullRequestIndex, []models.PullRequestDetail) error {
+	writePullRequestOutput = func(string, models.PullRequestIndex, []models.PullRequestDetail, models.SharedFailureIndex) error {
 		called = true
 		return nil
 	}
@@ -186,8 +186,8 @@ func TestBaseBranchFlakinessSurvivesPresubmitRanking(t *testing.T) {
 		results[id] = flaky(fmt.Sprintf("[It] presubmit case %02d", i))
 	}
 
-	published := aggregator.ComputeFlakinessReport(results, jobs, now)
-	base := baseBranchFlakiness(results, jobs, published, now)
+	published := aggregator.ComputeFlakinessReport(results, jobs, now, aggregator.Settings{})
+	base := baseBranchFlakiness(results, jobs, published, now, aggregator.Settings{})
 
 	// Presubmit job IDs are repo-qualified, so they sort ahead of the periodic
 	// on the tiebreak and deterministically fill the truncated report.
@@ -214,8 +214,8 @@ func TestBaseBranchFlakinessReusesPublishedReport(t *testing.T) {
 		TestCases: []models.TestCase{{Name: flakyTest, Status: "failed"}},
 	}}}
 
-	published := aggregator.ComputeFlakinessReport(results, jobs, now)
-	if got := baseBranchFlakiness(results, jobs, published, now); !reflect.DeepEqual(got, published) {
+	published := aggregator.ComputeFlakinessReport(results, jobs, now, aggregator.Settings{})
+	if got := baseBranchFlakiness(results, jobs, published, now, aggregator.Settings{}); !reflect.DeepEqual(got, published) {
 		t.Fatal("base-branch report diverged from the published report with no presubmits")
 	}
 }

@@ -62,6 +62,16 @@ export interface AISummary {
   is_transient: boolean;
 }
 
+export interface AnalysisCauseLocation {
+  // Owning "owner/repo".
+  repository: string;
+  // True when the cause lives in a dependency rather than this project's repo.
+  external?: boolean;
+  // Path hints inside repository. Paths in a dependency are never read at a
+  // pinned revision, so they are hints and never appear in file_links.
+  files?: string[];
+}
+
 export interface AIAnalysis {
   generated_at: string;
   model: string;
@@ -72,6 +82,7 @@ export interface AIAnalysis {
   // Verified GitHub links for cited source files keyed by cleaned path. When
   // present, this map is authoritative and absent files stay unlinked.
   file_links?: Record<string, string>;
+  cause_location?: AnalysisCauseLocation;
   mode?: string;
   critique_passed?: boolean;
   critique_version?: number;
@@ -194,11 +205,21 @@ export interface BuildFailureSummary {
   job_detail_url: string;
 }
 
+export interface LowPassRateEntry extends TestFlakiness {
+  // Number of runs the pass rate was measured over. May be narrower than the
+  // window behind fail_rate when attention.low_pass_rate.recent_runs is set.
+  window_runs: number;
+  pass_rate: number;
+}
+
 export interface FlakinessReport {
   generated_at: string;
   most_flaky: TestFlakiness[];
   persistent_failures: TestFlakiness[];
   recently_broken: TestFlakiness[];
+  // Tests selected by the optional attention.low_pass_rate rule. Empty when
+  // the rule is not configured. Selection does not change classification.
+  low_pass_rate?: LowPassRateEntry[];
   build_failures: BuildFailureSummary[];
   recurring_patterns?: PatternAnalysis[];
   pattern_refresh?: PatternRefreshReport;
@@ -213,6 +234,7 @@ export interface PatternCausalGroup {
   // Durable identity of this cause across build windows. Written by the engine
   // for its own recurrence memory; the UI does not render it.
   signature?: string;
+  cause_location?: AnalysisCauseLocation;
 }
 
 export type PatternRecurrence =

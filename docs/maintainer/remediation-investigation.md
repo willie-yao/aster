@@ -508,18 +508,25 @@ Conditions are evaluated from the most permanent to the most deployment-scoped:
   `models.WithDefaultPatternRemediationInvestigations`.
 - Causal group without an assigned id and content hash: **Not addressable**,
   since no operation reference can be constructed.
-- Capability disabled or unauthenticated deploy: **Unavailable**, with no
-  control. Only terminal verdicts survive the capability being off, so a real
-  earlier result is still shown while a state that could only advance through
-  the operation is not left looking pending.
+- Capability disabled or unauthenticated deploy: **Unavailable on this
+  deployment**, with no control. Only terminal verdicts survive the capability
+  being off, so a real earlier result is still shown while a state that could
+  only advance through the operation is not left looking pending.
+
+The first two are verdicts about one cause; the third is a property of the whole
+deployment. `CausalRemediationBlockedReason.scope` carries that distinction, and
+the UI renders a deployment-scoped block as a filled chip with its own icon so it
+cannot be read as a verdict about the cause it sits in.
 
 Separately, and only where a chat deploy advertises both `analysis_chat` and
-`junit_chat_fix`, each causal group card links to the per-test Fix investigation.
-The link targets the representative analyzed failure the causal group was built
-from, and only when that failure meets every Fix eligibility requirement and is
-the occurrence the test detail page will open. A single-build cause reaches Fix
-this way rather than through remediation. When no cause has a reachable target,
-one pattern-level fallback panel explains that instead.
+`junit_chat_fix`, each causal group card offers an action that opens the per-test
+Fix investigation. The action targets the representative analyzed failure the
+causal group was built from, and only when that failure meets every Fix
+eligibility requirement and is the occurrence the test detail page will open. Its
+visible label names that test and build, so several causes on one briefing stay
+tellable apart. A single-build cause reaches Fix this way rather than through
+remediation. When no cause has a reachable target, one pattern-level fallback
+panel explains that instead.
 
 ## Experimental causal Fix PR preview
 

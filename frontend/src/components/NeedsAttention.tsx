@@ -10,13 +10,17 @@ import { Link as RouterLink, useLocation } from "react-router-dom";
 import { useResolved } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import {
+  attentionGroupNoun,
+  attentionGroups,
   attentionSignal,
   countLabel,
   disclosureLabel,
   MAX_OVERVIEW_PATTERNS,
   needsAttentionSummary,
+  passRateSummary,
   persistOverviewHistoryState,
   readOverviewHistoryState,
+  type AttentionGroup,
 } from "../lib/dashboardOverview";
 import { jobPath, testPath, testRunPath } from "../lib/routes";
 import { patternLifecycleActive } from "../lib/actionEligibility";
@@ -25,20 +29,15 @@ import { statusToMuiColor } from "../theme";
 import type {
   FlakinessReport,
   JobSummary,
+  LowPassRateEntry,
   PatternAnalysis,
   TestFlakiness,
 } from "../types/dashboard";
 import { Sparkline } from "./Sparkline";
 import { overviewLayout, overviewTypography } from "../theme/overview";
 
-const MAX_ITEMS = 10;
 const FEATURED_PATTERNS = 3;
 const attentionDesktopBreakpoint = "@media (min-width: 1024px)";
-
-interface ItemGroup {
-  label: string;
-  items: TestFlakiness[];
-}
 
 interface NeedsAttentionProps {
   report: FlakinessReport | null;
@@ -575,33 +574,10 @@ export function NeedsAttention({
     [report, resolved],
   );
 
-  const groups = useMemo<ItemGroup[]>(() => {
-    if (!report) return [];
-    const broken = report.recently_broken ?? [];
-    const persistent = report.persistent_failures ?? [];
-    const flaky = report.most_flaky ?? [];
-    const hasPrimary = broken.length > 0 || persistent.length > 0;
-
-    if (hasPrimary) {
-      let remaining = MAX_ITEMS;
-      const result: ItemGroup[] = [];
-      if (broken.length > 0) {
-        const items = broken.slice(0, remaining);
-        result.push({ label: "Recent failures", items });
-        remaining -= items.length;
-      }
-      if (persistent.length > 0 && remaining > 0) {
-        result.push({
-          label: "Persistent failures",
-          items: persistent.slice(0, remaining),
-        });
-      }
-      return result;
-    }
-    return flaky.length > 0
-      ? [{ label: "Flaky tests", items: flaky.slice(0, MAX_ITEMS) }]
-      : [];
-  }, [report]);
+  const groups = useMemo<AttentionGroup[]>(
+    () => attentionGroups(report, manifest.attention?.low_pass_rate?.threshold),
+    [manifest, report],
+  );
 
   const testAlerts = report
     ? groups.reduce((sum, group) => sum + group.items.length, 0)
@@ -754,17 +730,26 @@ export function NeedsAttention({
           )}
 
           {groups.map((group) => {
-            const progressive = group.label === "Persistent failures" || group.label === "Flaky tests";
-            const initialCount = group.label === "Persistent failures" ? 1 : group.label === "Flaky tests" ? 3 : group.items.length;
+            const progressive = group.kind !== "recent";
+            const initialCount = group.kind === "recent"
+              ? group.items.length
+              : group.kind === "persistent" ? 1 : 3;
             const open = expandedGroups[group.label] ?? false;
             const initialItems = progressive ? group.items.slice(0, initialCount) : group.items;
             const additionalItems = progressive ? group.items.slice(initialCount) : [];
             const controls = `attention-group-${group.label.toLowerCase().replace(/\s+/g, "-")}`;
-            const itemNoun = group.label === "Persistent failures"
-              ? ["additional persistent failure", "additional persistent failures"] as const
-              : ["additional flaky test", "additional flaky tests"] as const;
+            const itemNoun = attentionGroupNoun(group.kind);
             const renderItem = (item: TestFlakiness) => {
+              // The pass-rate group can select a test that has already
+              // recovered, so it reports the measured rate and the test's own
+              // classification instead of borrowing the failing styling.
+              const lowPassRate = group.kind === "lowPassRate"
+                ? (item as LowPassRateEntry)
+                : undefined;
               const failing = item.classification !== "flaky";
+              const statusColor = lowPassRate
+                ? item.classification === "persistent" ? "error" : "warning"
+                : failing ? "error" : "warning";
               const consecutive = item.consecutive_failures > 0
                 ? `${item.consecutive_failures} consecutive ${item.consecutive_failures === 1 ? "failure" : "failures"}`
                 : undefined;
@@ -781,9 +766,9 @@ export function NeedsAttention({
                   subject={subject}
                   summary={testName}
                   detail={item.last_failure?.failure_message}
-                  count={consecutive}
-                  signal={failing ? "Failing" : "Flaky"}
-                  statusColor={failing ? "error" : "warning"}
+                  count={lowPassRate ? passRateSummary(lowPassRate) : consecutive}
+                  signal={lowPassRate ? statusLabel(item.classification) : failing ? "Failing" : "Flaky"}
+                  statusColor={statusColor}
                 />
               );
             };

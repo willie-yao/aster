@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/willie-yao/aster/backend/internal/aggregator"
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/analysisruntime"
@@ -122,12 +123,12 @@ func (p *pipeline) cacheGenerationFingerprint() string {
 }
 
 // analyzeFailuresWithAI runs the dashboard-owned analyzer on every failed test.
-func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.JobDetail, flakinessReport models.FlakinessReport) error {
+func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.JobDetail) error {
 	p.lastPatternOutcomes = map[string]patterns.JobOutcome{}
-	consecutiveMap := make(map[string]int)
-	for _, tf := range flakinessReport.PersistentFailures {
-		consecutiveMap[tf.JobID+"::"+tf.TestName] = tf.ConsecutiveFailures
-	}
+	// Streaks come from the runs themselves, not from PersistentFailures, whose
+	// membership follows the project's configured threshold. The analyzer's
+	// engine-owned gates need the true count regardless of that setting.
+	consecutiveMap := aggregator.ConsecutiveFailureCounts(details)
 
 	planner := analysisruntime.NewReusePlanner(p.aiProject)
 	work := collectAIWork(ctx, p.client, details, consecutiveMap, planner)

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/agentanalysis"
+	"github.com/willie-yao/aster/backend/internal/aggregator"
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/ai/skills"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
@@ -96,7 +97,7 @@ func (p *pipeline) runShadowAnalysis(ctx context.Context, result *refreshResult)
 	if p == nil || !p.opts.ShadowAnalysis.Enabled || result == nil {
 		return
 	}
-	candidates := p.selectShadowCandidates(result.details, result.flakiness)
+	candidates := p.selectShadowCandidates(result.details)
 	if len(candidates) == 0 {
 		log.Printf("🧪 agent analysis shadow: no eligible pinned failures")
 		return
@@ -116,14 +117,13 @@ func (p *pipeline) runShadowAnalysis(ctx context.Context, result *refreshResult)
 	}
 }
 
-func (p *pipeline) selectShadowCandidates(details []models.JobDetail, report models.FlakinessReport) []shadowCandidate {
+func (p *pipeline) selectShadowCandidates(details []models.JobDetail) []shadowCandidate {
 	if p == nil || p.aiProject == nil || p.aiProject.Config == nil || p.aiProject.Config.AI == nil {
 		return nil
 	}
-	consecutive := map[string]int{}
-	for _, failure := range report.PersistentFailures {
-		consecutive[failure.JobID+"::"+failure.TestName] = failure.ConsecutiveFailures
-	}
+	// Streaks come from the runs themselves so the shadow analyzer sees the same
+	// true count as the primary path, independent of the project's threshold.
+	consecutive := aggregator.ConsecutiveFailureCounts(details)
 	owner, name := p.aiProject.AnalysisSource.Owner, p.aiProject.AnalysisSource.Name
 	var candidates []shadowCandidate
 	for di := range details {

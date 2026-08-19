@@ -206,6 +206,7 @@ func NewAgenticCacheEntry(key string, result FailureAnalysisResult, createdAt ti
 			SuggestedFix:      result.Analysis.SuggestedFix,
 			RelevantFiles:     append([]string(nil), result.Analysis.RelevantFiles...),
 			SearchSuggestions: append([]string(nil), result.Analysis.SearchSuggestions...),
+			CauseLocation:     result.Analysis.CauseLocation.Clone(),
 			EvidenceCitations: append([]models.EvidenceCitation(nil), result.Analysis.EvidenceCitations...),
 		},
 		GeneratedAt:            generatedAt,

@@ -304,6 +304,18 @@ Before finalizing, self-check:
 
 A confident "I found X by reading Y at line Z" answer always beats "you should check X". The difference between a useful diagnosis and a useless one is whether the agent did the drilling itself or passed the work back to the user.`
 
+// agenticSourceRepoSection names the project's own repository so the model can
+// classify a cause as this project's or a dependency's. Kept out of agToolDocs
+// because it varies per project.
+func agenticSourceRepoSection(owner, name string) string {
+	if strings.TrimSpace(owner) == "" || strings.TrimSpace(name) == "" {
+		return ""
+	}
+	return "\n\nThe project under test is the GitHub repository " + owner + "/" + name +
+		". Any repository-relative source path you read with the repository tools belongs to it." +
+		" Code from any other repository is a dependency this project only consumes."
+}
+
 // agForceFinalizePrompt is the user message that forces a JSON-only final round
 // when the model has exhausted iterations or returned text without valid JSON.
 const agForceFinalizePrompt = `Stop calling tools. Produce the final JSON
@@ -851,7 +863,7 @@ func effectiveAgenticPromptHash(in AgenticInputs, sysPrompt string) string {
 	if in.PromptHash != "" {
 		return in.PromptHash
 	}
-	return PromptFingerprint(sysPrompt + agToolDocs)
+	return PromptFingerprint(sysPrompt + agToolDocs + agenticSourceRepoSection(in.SourceOwner, in.SourceName))
 }
 
 func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt string, start time.Time) (*models.AISummary, *models.AIAnalysis, bool) {
@@ -921,7 +933,7 @@ func (c *Client) doAnalyzeAgentic(
 	state.analysisEvidence = map[string]*analysisChatEvidence{}
 	state.analysisEvidenceRevision = map[string]map[int]int{}
 
-	fullSysPrompt := sysPrompt + agToolDocs
+	fullSysPrompt := sysPrompt + agToolDocs + agenticSourceRepoSection(in.SourceOwner, in.SourceName)
 	state.initialArtifactTree = listInitialArtifactTree(ctx, in.Browser)
 	if seed := buildArtifactTreeSeed(state.initialArtifactTree.paths, state.initialArtifactTree.truncated, artifactTreeSeedBytes(in.Opts)); seed != "" {
 		userPrompt = prependPrompt(userPrompt, seed)
@@ -1450,14 +1462,21 @@ func (s *agentState) preparePublishedAnalysis(parsed analysisResponse) analysisR
 	}
 	parsed.RelevantFiles = compactPublishedStrings(verified, 50)
 	parsed.SearchSuggestions = compactPublishedStrings(suggestions, 50)
+	parsed.CauseLocation = normalizeCauseLocation(parsed.CauseLocation, s.sourceOwner, s.sourceName, parsed.RelevantFiles)
+	// A cause owned by a dependency cannot be remediated by this project's
+	// automation, so the generic fallback would be actively misleading there.
+	remediationFallback := ungroundedRemediationFallback
+	if parsed.CauseLocation != nil && parsed.CauseLocation.External {
+		remediationFallback = externalRemediationFallback(parsed.CauseLocation)
+	}
 	parsed.RootCause = s.removeUngroundedSourcePaths(parsed.RootCause, "", true)
 	parsed.Summary = s.removeUngroundedSourcePaths(parsed.Summary, "", true)
 	if s.hasUngroundedSourcePath(parsed.SuggestedFix, false) {
-		parsed.SuggestedFix = ungroundedRemediationFallback
+		parsed.SuggestedFix = remediationFallback
 	}
 	parsed.RootCause = s.removeUngroundedCLIFlags(parsed.RootCause, matchedSkills, "")
 	parsed.Summary = s.removeUngroundedCLIFlags(parsed.Summary, matchedSkills, "")
-	parsed.SuggestedFix = s.removeUngroundedCLIFlags(parsed.SuggestedFix, matchedSkills, ungroundedRemediationFallback)
+	parsed.SuggestedFix = s.removeUngroundedCLIFlags(parsed.SuggestedFix, matchedSkills, remediationFallback)
 	return parsed
 }
 

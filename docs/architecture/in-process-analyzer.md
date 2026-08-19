@@ -252,12 +252,16 @@ data-serving path.
   alter per-build analysis.
 - **Actions** are authenticated server operations over current published
   subjects with independent lifecycle and quality gates. File Issue and Fix PR
-  use preview-confirm workflows. Resolve and unresolve are direct lifecycle
-  state changes for action-eligible subjects. Asynchronous action requests have
-  their own request, confirmation, cancellation, and result state. Causal-group
-  patterns remain categorically analysis-only through
-  `models.PatternAllowsActions`, even after a remediation investigation reaches
-  the public `actionable` state.
+  use preview-confirm workflows. Resolve is a direct lifecycle state change
+  gated on a current, systemic, lifecycle-active pattern with a usable build
+  watermark rather than on the remediation contract, so a maintainer can dismiss
+  a causal-group pattern. Unresolve only revokes an existing acknowledgement, so
+  it requires nothing beyond an entry in `resolved.json` and never strands a
+  dismissal whose pattern went stale or aged out. Asynchronous action requests
+  have their own request, confirmation, cancellation, and result state.
+  Causal-group patterns remain categorically ineligible for File Issue and Fix
+  PR through `models.PatternAllowsActions`, even after a remediation
+  investigation reaches the public `actionable` state.
 - **Fix PR generation** consumes an eligible action subject and verified source
   through `backend/internal/fixpr` and `backend/internal/fixruntime`. Exact JUnit
   chat handoff binds one accepted published analysis and one cited owner-bound

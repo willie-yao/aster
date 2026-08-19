@@ -160,7 +160,10 @@ func TestRecoverySendsAndDeletesState(t *testing.T) {
 	}
 }
 
-func TestBelowThresholdIgnored(t *testing.T) {
+// TestLoweredThresholdNotifies pins that the notifier trusts the report's
+// PersistentFailures rather than re-applying a literal threshold, so a consumer
+// that lowers attention.persistent_after still receives email.
+func TestLoweredThresholdNotifies(t *testing.T) {
 	sender := &fakeSender{}
 	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
 	failure := persistentFailure("job-id", "job", "TestSomething", "hash", 2)
@@ -169,7 +172,7 @@ func TestBelowThresholdIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats != (Stats{}) || len(sender.messages) != 0 {
+	if stats.NewAlerts != 1 || len(sender.messages) != 1 {
 		t.Fatalf("stats=%+v messages=%d", stats, len(sender.messages))
 	}
 }

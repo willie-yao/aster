@@ -1,4 +1,4 @@
-import type { BuildResult, PatternAnalysis, PatternCausalGroup, TestCase } from "../types/dashboard";
+import type { AnalysisCauseLocation, BuildResult, PatternAnalysis, PatternCausalGroup, TestCase } from "../types/dashboard";
 import { executedResultTests } from "./jobDetail.js";
 
 export const failedTestGridID = "cross-run-test-grid";
@@ -79,4 +79,32 @@ function fixInvestigationEligible(testCase: TestCase): boolean {
     testCase.source !== "build" &&
     Boolean(testCase.junit_file) &&
     Object.keys(testCase.ai_analysis?.file_links ?? {}).length > 0;
+}
+
+// externalCause returns a cause location only when it names a dependency. A
+// cause in the project's own repository keeps the ordinary Fix route, so
+// ownership must never turn an own-repo failure into an upstream dead end.
+export function externalCause(
+  location: AnalysisCauseLocation | undefined,
+): AnalysisCauseLocation | null {
+  return location?.external && location.repository ? location : null;
+}
+
+// patternExternalCause returns the dependency a whole pattern points at, which
+// exists only when every cause it found agrees. Mixed ownership keeps the
+// generic guidance because no single upstream repository explains the pattern.
+// Repository comparison is case-insensitive to match the backend's merge.
+export function patternExternalCause(
+  pattern: PatternAnalysis,
+): AnalysisCauseLocation | null {
+  const groups = pattern.causal_groups ?? [];
+  if (groups.length === 0) return null;
+  const first = externalCause(groups[0].cause_location);
+  if (!first) return null;
+  const owner = first.repository.toLowerCase();
+  for (const group of groups.slice(1)) {
+    const location = externalCause(group.cause_location);
+    if (!location || location.repository.toLowerCase() !== owner) return null;
+  }
+  return first;
 }

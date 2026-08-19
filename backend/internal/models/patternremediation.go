@@ -36,13 +36,15 @@ func PatternCausalGroupHash(group PatternCausalGroup) string {
 	builds := append([]string(nil), group.Builds...)
 	slices.Sort(builds)
 	snapshot := struct {
-		Builds     []string `json:"builds"`
-		RootCause  string   `json:"root_cause"`
-		Confidence string   `json:"confidence"`
+		Builds        []string               `json:"builds"`
+		RootCause     string                 `json:"root_cause"`
+		Confidence    string                 `json:"confidence"`
+		CauseLocation *AnalysisCauseLocation `json:"cause_location,omitempty"`
 	}{
-		Builds:     builds,
-		RootCause:  strings.TrimSpace(group.RootCause),
-		Confidence: strings.TrimSpace(group.Confidence),
+		Builds:        builds,
+		RootCause:     strings.TrimSpace(group.RootCause),
+		Confidence:    strings.TrimSpace(group.Confidence),
+		CauseLocation: group.CauseLocation,
 	}
 	encoded, _ := json.Marshal(snapshot)
 	sum := sha256.Sum256(encoded)
@@ -127,6 +129,7 @@ func clonePatternAnalyses(patterns []PatternAnalysis) []PatternAnalysis {
 		out[index].CausalGroups = append([]PatternCausalGroup(nil), patterns[index].CausalGroups...)
 		for groupIndex := range out[index].CausalGroups {
 			out[index].CausalGroups[groupIndex].Builds = append([]string(nil), patterns[index].CausalGroups[groupIndex].Builds...)
+			out[index].CausalGroups[groupIndex].CauseLocation = patterns[index].CausalGroups[groupIndex].CauseLocation.Clone()
 		}
 		out[index].RemediationInvestigations = append([]PatternRemediationInvestigationSummary(nil), patterns[index].RemediationInvestigations...)
 	}

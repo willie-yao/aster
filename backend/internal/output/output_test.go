@@ -205,6 +205,75 @@ func TestWriteFlakinessReportBackfillsPatternIdentity(t *testing.T) {
 	}
 }
 
+// TestWriteFlakinessReportPublishesLowPassRateSection pins the published shape
+// of the optional pass-rate section: it is always present so consumers can tell
+// an empty rule from an old engine, and its entries flatten TestFlakiness
+// alongside the window the rate was measured over.
+func TestWriteFlakinessReportPublishesLowPassRateSection(t *testing.T) {
+	t.Run("empty when the rule is off", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := WriteFlakinessReport(dir, models.FlakinessReport{}); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "flakiness.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := raw["low_pass_rate"]
+		if !ok {
+			t.Fatal("low_pass_rate missing from flakiness.json")
+		}
+		if string(got) != "[]" {
+			t.Errorf("low_pass_rate = %s, want []", got)
+		}
+	})
+
+	t.Run("entries flatten the embedded test", func(t *testing.T) {
+		dir := t.TempDir()
+		report := models.FlakinessReport{LowPassRate: []models.LowPassRateEntry{{
+			TestFlakiness: models.TestFlakiness{
+				TestName: "TestA", JobName: "job", JobID: "job",
+				TotalRuns: 10, Failures: 1, Passes: 9, FailRate: 0.1,
+				Classification: models.ClassificationOneOff,
+			},
+			WindowRuns: 6,
+			PassRate:   0.5,
+		}}}
+		if err := WriteFlakinessReport(dir, report); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "flakiness.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var written struct {
+			LowPassRate []map[string]any `json:"low_pass_rate"`
+		}
+		if err := json.Unmarshal(data, &written); err != nil {
+			t.Fatal(err)
+		}
+		if len(written.LowPassRate) != 1 {
+			t.Fatalf("low_pass_rate = %d entries, want 1", len(written.LowPassRate))
+		}
+		entry := written.LowPassRate[0]
+		for key, want := range map[string]any{
+			"test_name":      "TestA",
+			"classification": string(models.ClassificationOneOff),
+			"fail_rate":      0.1,
+			"window_runs":    float64(6),
+			"pass_rate":      0.5,
+		} {
+			if entry[key] != want {
+				t.Errorf("entry[%q] = %v, want %v", key, entry[key], want)
+			}
+		}
+	})
+}
+
 func TestWriteAllKeepsPatternIdentityConsistent(t *testing.T) {
 	dir := t.TempDir()
 	pattern := models.PatternAnalysis{

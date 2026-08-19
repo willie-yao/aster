@@ -209,15 +209,81 @@ test("a single-build cause still gets the per-test fix route", () => {
   });
 });
 
+// Ownership must never cost a project-owned failure its Fix route, and an
+// eligible verified failure still wins over an upstream note.
+test("cause ownership does not change which failures can start a Fix investigation", () => {
+  const ownRepo: PatternCausalGroup = {
+    ...firstGroup,
+    cause_location: { repository: "kubernetes-sigs/cluster-api-provider-azure" },
+  };
+  const upstream: PatternCausalGroup = {
+    ...firstGroup,
+    cause_location: { repository: "kubernetes/kubernetes", external: true },
+  };
+
+  assert.deepEqual(causalGroupFixTarget(ownRepo, [groundedRun]), { buildID: "208060", testName: "fails" });
+  assert.deepEqual(causalGroupFixTarget(upstream, [groundedRun]), { buildID: "208060", testName: "fails" });
+  assert.equal(causalGroupFixTarget(ownRepo, [junitRun]), null);
+});
+
 test("fix routing sits with each cause and stays behind the chat capabilities", () => {
   const banner = source("src/components/PatternBanner.tsx");
   const routing = source("src/components/CausalGroupFixRouting.tsx");
 
   assert.match(banner, /const fixCapable = Boolean\(features\.analysis_chat && features\.junit_chat_fix\)/);
-  assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupFixRouting jobID=\{jobID\} target=\{causalFixTargets\[index\]\} \/>/);
+  assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupFixRouting[\s\S]*target=\{causalFixTargets\[index\]\}[\s\S]*externalCause=\{externalCause\(group\.cause_location\)\}/);
   assert.match(routing, /testRunPath\(jobID, target\.testName, target\.buildID\)/);
-  assert.match(routing, /Open test for Fix investigation/);
   assert.match(routing, /No failed JUnit test in these builds meets the Fix investigation requirements/);
+});
+
+test("fix routing reads as an action and names the test it opens", () => {
+  const routing = source("src/components/CausalGroupFixRouting.tsx");
+
+  // The old treatment was the monospace data token, which is exactly how build
+  // ID chips render a few lines above it in the same cause.
+  assert.match(routing, /<Button/);
+  assert.match(routing, /variant="outlined"/);
+  assert.match(routing, /startIcon=\{<AutoFixHigh aria-hidden \/>\}/);
+  assert.doesNotMatch(routing, /overviewTypography\.data/);
+  assert.doesNotMatch(routing, /bgcolor: "action\.selected"/);
+
+  // The subject is in the visible label, not in a caption below it that reads
+  // as if it belonged to the next cause, and it uses the same humanized title
+  // the test ledger shows rather than the raw JUnit name.
+  assert.match(routing, /parseTestDisplayName\(target\.testName\)\.displayName/);
+  assert.match(routing, /Fix: \{testName\}/);
+  assert.doesNotMatch(routing, /\{target\.testName\} in build \{target\.buildID\}\s*<\/Typography>/);
+
+  // A long test name truncates inline, and the full value stays reachable on
+  // hover and on keyboard focus rather than through a hover-only native title.
+  assert.match(routing, /textOverflow: "ellipsis"/);
+  assert.match(routing, /<Tooltip title=\{subject\}>/);
+  assert.match(routing, /aria-label=\{subject\}/);
+  assert.doesNotMatch(routing, /title=\{subject\}\s*\n\s*aria-label/);
+});
+
+test("the build only joins the label where it is needed to tell two actions apart", () => {
+  const banner = source("src/components/PatternBanner.tsx");
+  const routing = source("src/components/CausalGroupFixRouting.tsx");
+
+  // Two causes can route to the same test in different builds. Paying 19 digits
+  // on every action to cover that case is what made the label unreadable.
+  assert.match(routing, /showBuild = false/);
+  assert.match(routing, /\{showBuild && \(/);
+  assert.match(banner, /showBuild=\{fixTargetNeedsBuild\[index\]\}/);
+
+  // Counting the DISPLAYED label, not the canonical name: two canonical names
+  // can humanize to one title, which would hide both builds and leave two
+  // identical buttons. causalFixRouting.test.ts proves the rendered result.
+  assert.match(banner, /parseTestDisplayName\(target\.testName\)\.displayName/);
+  assert.match(banner, /const fixTargetLabelCounts = fixTargetLabels\.reduce/);
+
+  // One suffix backs both strings, so the visible label cannot drift out of
+  // being a literal prefix of the accessible name.
+  assert.match(routing, /const buildSuffix = ` in build \$\{target\.buildID\}`/);
+  assert.match(routing, /const subject = `Fix: \$\{testName\}\$\{buildSuffix\}`/);
+  assert.match(routing, /whiteSpace: "pre"/);
+  assert.doesNotMatch(routing, /\\u00a0/);
 });
 
 test("the pattern-level panel is a fallback for causes with no eligible test", () => {
@@ -225,7 +291,7 @@ test("the pattern-level panel is a fallback for causes with no eligible test", (
   const guidance = source("src/components/PatternFixGuidance.tsx");
 
   assert.match(banner, /const showFixGuidance = Boolean\(jobID && fixGuidanceBuildID && fixCapable && !hasCausalFixTarget\)/);
-  assert.match(banner, /<PatternFixGuidance jobID=\{jobID\} buildID=\{fixGuidanceBuildID\} \/>/);
+  assert.match(banner, /<PatternFixGuidance jobID=\{jobID\} buildID=\{fixGuidanceBuildID\} externalCause=\{patternUpstreamCause\} \/>/);
   assert.ok(banner.indexOf("<PatternFixGuidance") < banner.indexOf("<AnalysisChat"));
   assert.equal(banner.match(/<PatternFixGuidance/g)?.length, 1);
   assert.match(guidance, /Fix investigation unavailable/);
@@ -253,12 +319,68 @@ test("causal actions stay blocked while pattern chat and exact-JUnit Fix remain 
   const banner = source("src/components/PatternBanner.tsx");
   const chat = source("src/components/AnalysisChat.tsx");
 
-  assert.match(banner, /!analysisOnly && isCurrent && lifecycleActive && pattern\.systemic && pattern\.id && \(/);
+  // Drafting stays tied to the remediation contract; dismissal must not be, and
+  // neither gate may suppress the other.
+  assert.match(banner, /const draftable = patternDraftable\(pattern, refreshStatus\)/);
+  assert.doesNotMatch(banner, /draftable = dismissible/);
+  assert.match(banner, /draftable=\{draftable\}/);
+  assert.match(banner, /eligibilityHint=\{draftable \? actionEligibility : null\}/);
   assert.match(banner, /<FailureActions/);
   assert.doesNotMatch(banner, />\s*Draft issue\s*</);
   assert.doesNotMatch(banner, />\s*Draft fix PR\s*</);
   assert.match(banner, /<AnalysisChat/);
   assert.match(chat, /Start fix investigation/);
+});
+
+test("pattern dismissal is reachable on the causal-group results the engine publishes", () => {
+  const banner = source("src/components/PatternBanner.tsx");
+  const actions = source("src/components/FailureActions.tsx");
+
+  // The regression: every published pattern carries a recurrence_classification,
+  // so gating the control on !analysisOnly hid it everywhere.
+  assert.match(banner, /const dismissible = patternDismissible\(pattern, refreshStatus\)/);
+  assert.match(banner, /\{showFailureActions && pattern\.id && \(/);
+  assert.doesNotMatch(banner, /!analysisOnly[^\n]*<FailureActions/);
+  // The dismissed state has to render for the same patterns it can be set on.
+  assert.match(banner, /const resolvedEntry = pattern\.id \? resolved\.resolved\[pattern\.id\] : undefined/);
+  // A dismissed pattern keeps its Restore control even once a fresh dismissal
+  // would be refused.
+  assert.match(banner, /const showFailureActions = draftable \|\| dismissible \|\| Boolean\(resolvedEntry\)/);
+  assert.match(banner, /dismissible=\{dismissible\}/);
+
+  // Only drafting is suppressed when draftable is false; dismissal is not.
+  assert.match(actions, /const drafting = draftable && features\.action_requests/);
+  assert.match(actions, /\{drafting && canStartActions && \(/);
+  assert.match(actions, /\{draftable && !eligibilityLoading && eligibility/);
+});
+
+test("restoring a pattern never falls back to a dismissal the server would refuse", () => {
+  const actions = source("src/components/FailureActions.tsx");
+  const banner = source("src/components/PatternBanner.tsx");
+
+  // Restore is gated on resolvable, but starting a NEW dismissal additionally
+  // needs dismissible, so a resolved pattern that no longer qualifies for a
+  // fresh dismissal can be restored without ever offering Dismiss.
+  assert.match(actions, /\{resolvable && \(isResolved \?/);
+  assert.match(actions, /\) : dismissible && \(/);
+  // A dismissal write outlives the pattern it started on, so a late response
+  // must not land on whichever failure the user navigated to.
+  assert.match(actions, /const startedFailureID = failureID;/);
+  assert.match(actions, /if \(activeFailureID\.current !== startedFailureID\) return;/);
+  assert.match(actions, /open=\{resolvable && dismissible && resolveOpen\}/);
+  // One owner holds resolved state. Two independent useResolved() copies could
+  // diverge and pair a "Dismissed" chip with a "Dismiss pattern" button.
+  assert.doesNotMatch(actions, /useResolved/);
+  assert.match(banner, /isResolved=\{Boolean\(resolvedEntry\)\}/);
+  assert.match(banner, /onResolvedChange=\{refetchResolved\}/);
+
+  // The read that follows a dismissal write keeps prior state and retries, so a
+  // transient failure cannot leave a stale control until remount.
+  const data = source("src/hooks/useData.ts");
+  assert.match(data, /if \(r\.status === 404\) return \{ resolved: \{\} \} as ResolvedState;/);
+  assert.match(data, /if \(!r\.ok\) throw new Error\(`resolved\.json: \$\{r\.status\}`\);/);
+  assert.match(data, /timer = window\.setTimeout\(load, Math\.min\(8000/);
+  assert.match(data, /const resolvedReadAttempts = \d+;/);
 });
 
 test("guidance keeps a contained mobile action and points to the nearby test ledger", () => {

@@ -57,6 +57,20 @@ export interface AIManifest {
   skill_bundle?: SkillBundleManifest;
 }
 
+export interface LowPassRateManifest {
+  // Exclusive pass-rate cutoff in [0, 1]. 1 selects every test that failed at
+  // least once; 0 selects none.
+  threshold: number;
+  min_runs?: number;
+  recent_runs?: number;
+  max_items?: number;
+}
+
+export interface AttentionManifest {
+  persistent_after?: number;
+  low_pass_rate?: LowPassRateManifest;
+}
+
 export interface Manifest {
   id: string;
   name: string;
@@ -69,6 +83,7 @@ export interface Manifest {
   categories?: CategoryRule[];
   category_display_order?: string[];
   ai?: AIManifest;
+  attention?: AttentionManifest;
   // Display-only hint derived at fetch time: the longest periodic-<x>- prefix
   // shared by a majority of discovered periodic jobs. Used by shortJobName to
   // strip boilerplate from job names in the UI.

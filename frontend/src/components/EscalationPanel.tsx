@@ -3,13 +3,7 @@ import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import Typography from "@mui/material/Typography";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  escalationActive,
-  getEscalation,
-  startEscalation,
-  type EscalationRef,
-  type EscalationView,
-} from "../lib/pullRequestEscalation";
+import { escalationActive, type EscalationView } from "../lib/escalation";
 import { soft } from "../theme";
 import { overviewTypography } from "../theme/overview";
 
@@ -27,14 +21,37 @@ function errorMessage(error: unknown): string {
 }
 
 interface EscalationPanelProps {
-  refValue: EscalationRef;
+  /** Stable identity of the subject. Changing it reloads the panel. */
+  subjectKey: string;
+  /** Reads the subject's current escalation state. */
+  load: () => Promise<EscalationView>;
+  /** Starts one analysis for the subject. */
+  start: (idempotencyKey: string) => Promise<EscalationView>;
+  /** Trailing note stating what the analysis does and does not establish. */
+  disclaimer: string;
   /** Rendered only when the deploy advertises the capability. */
   enabled: boolean;
 }
 
 // EscalationPanel offers on-demand analysis for a failure the deterministic
-// pass could not explain, then renders the result.
-export function EscalationPanel({ refValue, enabled }: EscalationPanelProps) {
+// pass could not explain, then renders the result. It is subject-agnostic: the
+// caller supplies the identity and the two calls, so a single pull request
+// failure and a failure shared across several share one implementation.
+//
+// Remounting on subjectKey is what isolates one subject from the next. A panel
+// that stays mounted across a subject change would otherwise carry the previous
+// subject's result, its in-flight request key, and its disabled button into the
+// new one, and an in-flight start would land on the wrong subject.
+export function EscalationPanel(props: EscalationPanelProps) {
+  return <EscalationPanelForSubject key={props.subjectKey} {...props} />;
+}
+
+function EscalationPanelForSubject({
+  load,
+  start,
+  disclaimer,
+  enabled,
+}: EscalationPanelProps) {
   const [view, setView] = useState<EscalationView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -46,6 +63,13 @@ export function EscalationPanel({ refValue, enabled }: EscalationPanelProps) {
   // generation is discarded, so a slow poll cannot overwrite a newer start and
   // regress the panel to not_started.
   const generation = useRef(0);
+  // The callers build these inline per render, so holding the latest in a ref
+  // keeps the effects keyed on the subject instead of on callback identity. A
+  // dependency on the callbacks would refetch on every render.
+  const calls = useRef({ load, start });
+  useEffect(() => {
+    calls.current = { load, start };
+  });
 
   useEffect(() => {
     cancelled.current = false;
@@ -54,28 +78,28 @@ export function EscalationPanel({ refValue, enabled }: EscalationPanelProps) {
     };
   }, []);
 
-  const load = useCallback(async () => {
+  const reload = useCallback(async () => {
     const issued = ++generation.current;
     try {
-      const next = await getEscalation(refValue);
+      const next = await calls.current.load();
       if (!cancelled.current && issued === generation.current) setView(next);
     } catch (loadError) {
       if (!cancelled.current && issued === generation.current) {
         setError(errorMessage(loadError));
       }
     }
-  }, [refValue]);
+  }, []);
 
   useEffect(() => {
     if (!enabled) return;
-    void load();
-  }, [enabled, load]);
+    void reload();
+  }, [enabled, reload]);
 
   useEffect(() => {
     if (!enabled || !escalationActive(view?.state)) return;
-    const timer = setInterval(() => void load(), pollIntervalMs);
+    const timer = setInterval(() => void reload(), pollIntervalMs);
     return () => clearInterval(timer);
-  }, [enabled, load, view?.state]);
+  }, [enabled, reload, view?.state]);
 
   async function onStart() {
     setStarting(true);
@@ -84,7 +108,7 @@ export function EscalationPanel({ refValue, enabled }: EscalationPanelProps) {
     requestKey.current = key;
     const issued = ++generation.current;
     try {
-      const next = await startEscalation(refValue, key);
+      const next = await calls.current.start(key);
       if (!cancelled.current && requestKey.current === key && issued === generation.current) {
         setView(next);
       }
@@ -194,9 +218,14 @@ export function EscalationPanel({ refValue, enabled }: EscalationPanelProps) {
               ))}
             </Box>
           )}
+          {view.evidence?.build_id && (
+            <Typography color="text.secondary" sx={{ mt: 1, ...overviewTypography.description }}>
+              Read from build {view.evidence.build_id}
+              {view.evidence.pull_number ? ` on pull request #${view.evidence.pull_number}` : ""}.
+            </Typography>
+          )}
           <Typography color="text.secondary" sx={{ mt: 1, ...overviewTypography.description }}>
-            This analysis explains the failure from build artifacts. It does not
-            establish that the pull request caused it.
+            {disclaimer}
           </Typography>
         </Box>
       )}

@@ -29,6 +29,10 @@ schema.
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/cancel` | Cancel one active owner-bound turn. |
 | `POST /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Start an explicit read-only causal-group source investigation. |
 | `GET /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Read its safe current state. |
+| `POST /api/pull-requests/{number}/checks/{jobID}/builds/{buildID}/escalation` | Start one on-demand analysis of a pull request failure the deterministic pass could not explain. |
+| `GET /api/pull-requests/{number}/checks/{jobID}/builds/{buildID}/escalation` | Read that escalation's current state. |
+| `POST /api/shared-failures/{id}/escalation` | Start one on-demand analysis of a failure shared across several open pull requests. |
+| `GET /api/shared-failures/{id}/escalation` | Read that escalation's current state. |
 | `GET /api/failures/{id}/eligibility` | Run deterministic action eligibility and pinned-source preflight without generating a draft. |
 | `POST /api/failures/{id}/create-issue/preview` | Preview an issue without filing it. |
 | `POST /api/failures/{id}/propose-fix/preview` | Preview a Fix PR without opening it. Registered only when Fix is enabled. |
@@ -40,7 +44,7 @@ schema.
 | `POST /api/action-requests/{id}/cancel` | Cancel a pending or ready request. |
 | `POST /api/actions/confirm` | Confirm a short-lived synchronous preview token. |
 | `POST /api/failures/{id}/resolve` | Mark an eligible recurring pattern resolved at its current watermark. |
-| `POST /api/failures/{id}/unresolve` | Remove the resolved marker. |
+| `POST /api/failures/{id}/unresolve` | Remove the resolved marker. Requires only an existing marker, so a dismissal never strands. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/correction/preview` | Preview an evidence-backed analysis correction. |
 | `POST /api/analysis-corrections/confirm` | Confirm and publish the correction overlay. |
 | `POST /api/analysis-corrections/{id}/revoke` | Revoke the overlay and restore the original analysis. |

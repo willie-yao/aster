@@ -162,6 +162,12 @@ func (s *Service) resolveFileLinksAtRef(ctx context.Context, client *http.Client
 	// The incoming map is what a previous pass published for this analysis. It
 	// is the fallback when GitHub cannot answer for a path at an immutable ref.
 	published := tc.AIAnalysis.FileLinks
+	// Strings the analysis attributed to a dependency must never be resolved
+	// against the project's repository. Both a dependency path and a repository
+	// slug such as "nats-io/nats.go" are path-shaped, so a collision with a real
+	// project path would publish a verified link to an unrelated project file
+	// and make it an actionable Fix source.
+	foreign := foreignSourceCandidates(tc.AIAnalysis.CauseLocation)
 
 	// Collect distinct candidate source paths from relevant files, source-search
 	// suggestions, and paths cited in the prose.
@@ -173,6 +179,9 @@ func (s *Service) resolveFileLinksAtRef(ctx context.Context, client *http.Client
 		// URL; only source files are verified as GitHub links here.
 		if clean == "" || !sourceExtRe.MatchString(clean) ||
 			strings.HasPrefix(clean, "artifacts/") || strings.HasPrefix(clean, "clusters/") {
+			return
+		}
+		if foreign[canonicalLinkCandidate(clean)] {
 			return
 		}
 		if _, ok := seen[clean]; ok {
@@ -219,6 +228,33 @@ func (s *Service) resolveFileLinksAtRef(ctx context.Context, client *http.Client
 		}
 	}
 	return links
+}
+
+// canonicalLinkCandidate reduces a cited path to the form the project-relative
+// resolvers ultimately use, so equality checks against it cannot be defeated by
+// an equivalent spelling such as a "./" prefix.
+func canonicalLinkCandidate(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimPrefix(value, "./")
+	return strings.TrimPrefix(value, "/")
+}
+
+// foreignSourceCandidates returns the canonical strings an analysis attributed
+// to a dependency, which must never be verified as project-relative paths. A
+// project-owned location contributes nothing: its files are already the
+// analysis's verified project reads.
+func foreignSourceCandidates(location *models.AnalysisCauseLocation) map[string]bool {
+	if location == nil || !location.External {
+		return nil
+	}
+	out := make(map[string]bool, len(location.Files)+1)
+	if location.Repository != "" {
+		out[canonicalLinkCandidate(location.Repository)] = true
+	}
+	for _, file := range location.Files {
+		out[canonicalLinkCandidate(file)] = true
+	}
+	return out
 }
 
 // publishedLinkAtRef returns the already published link for a path when it is

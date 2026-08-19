@@ -148,17 +148,7 @@ func (r *DataResolver) Resolve(ctx context.Context, ref Ref) (Resolved, error) {
 // Eligible reports whether a failure's deterministic verdict leaves room for
 // analysis. Escalation exists only for the residual set.
 func Eligible(attribution *models.FailureAttribution) bool {
-	if attribution == nil {
-		return true
-	}
-	switch attribution.Verdict {
-	case models.AttributionUnexplained,
-		models.AttributionTouchesChangedCode,
-		models.AttributionInconclusive:
-		return true
-	default:
-		return false
-	}
+	return attribution.NeedsInvestigation()
 }
 
 func (r *DataResolver) loadDetail(number int) (models.PullRequestDetail, error) {
@@ -198,22 +188,29 @@ type AnalysisRunner struct {
 }
 
 // Run performs the analysis and projects it into a public view.
-func (r *AnalysisRunner) Run(ctx context.Context, resolved Resolved) (View, error) {
+func (r *AnalysisRunner) Run(ctx context.Context, resolved Resolved) (View[Ref], error) {
 	if r.NewAnalyzer == nil {
-		return View{}, ErrUnavailable
+		return View[Ref]{}, ErrUnavailable
 	}
 	analyzer, err := r.NewAnalyzer(resolved.Subject)
 	if err != nil {
-		return View{}, fmt.Errorf("%w: analyzer unavailable", ErrUnavailable)
+		return View[Ref]{}, fmt.Errorf("%w: analyzer unavailable", ErrUnavailable)
 	}
-	result, err := analyzer.AnalyzeFailure(ctx, nil, resolved.Request)
+	return analysisView[Ref](ctx, analyzer, resolved.Request)
+}
+
+// analysisView runs one analysis and projects its result into a public view.
+// Both escalation kinds run the ordinary agentic analysis under their own
+// module, so only the subject differs and the projection is shared.
+func analysisView[R any](ctx context.Context, analyzer ai.FailureAnalyzer, request ai.FailureAnalysisRequest) (View[R], error) {
+	result, err := analyzer.AnalyzeFailure(ctx, nil, request)
 	if err != nil {
-		return View{}, err
+		return View[R]{}, err
 	}
 	if result.Analysis == nil {
-		return View{State: StateFailed, Error: "the analysis produced no result"}, nil
+		return View[R]{State: StateFailed, Error: "the analysis produced no result"}, nil
 	}
-	return View{
+	return View[R]{
 		State:        StateComplete,
 		RootCause:    strings.TrimSpace(result.Analysis.RootCause),
 		Severity:     result.Analysis.Severity,

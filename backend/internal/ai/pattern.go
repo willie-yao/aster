@@ -50,6 +50,10 @@ type PatternFailure struct {
 	SuggestedFix string
 	// RelevantFiles are the source files this build's analysis implicated.
 	RelevantFiles []string
+	// CauseLocation is the repository this build's analysis held responsible.
+	// It is engine-derived context, not model input: the correlation prompt
+	// stays evidence-only and ownership is merged deterministically afterwards.
+	CauseLocation *models.AnalysisCauseLocation
 	// LocationFile is the failing test's source file. It is published as
 	// supporting context but kept out of the prompt and pattern cache key.
 	LocationFile string
@@ -391,7 +395,7 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 				}
 				s.client.cache.Delete(failureKey)
 				usageOutcome = aiusage.OutcomeCacheHit
-				return buildPatternAnalysis(subject, len(failures), cachedData.Response, collectRelevantFiles(failures)), nil
+				return buildPatternAnalysis(subject, len(failures), cachedData.Response, failures), nil
 			}
 		}
 		if cached, stats, err := parsePatternResponseWithStats(string(raw), buildIDs); err == nil {
@@ -401,7 +405,7 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 			s.client.cache.Delete(failureKey)
 			usageOutcome = aiusage.OutcomeCacheHit
 			recordPatternParseTrace(ctx, "cache", stats, nil)
-			return buildPatternAnalysis(subject, len(failures), cached, collectRelevantFiles(failures)), nil
+			return buildPatternAnalysis(subject, len(failures), cached, failures), nil
 		}
 	}
 
@@ -438,7 +442,7 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 		return nil, err
 	}
 	_ = s.client.cache.Set(key, patternCacheData{Version: patternCacheVersion, Response: parsed})
-	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures)), nil
+	return buildPatternAnalysis(subject, len(failures), parsed, failures), nil
 }
 
 func (s *Service) patternFailureNow() time.Time {
@@ -525,7 +529,7 @@ func ParsePatternResult(subject string, failures []PatternFailure, result string
 	if err != nil {
 		return nil, err
 	}
-	return buildPatternAnalysis(subject, len(failures), parsed, collectRelevantFiles(failures)), nil
+	return buildPatternAnalysis(subject, len(failures), parsed, failures), nil
 }
 
 // toolFreePatternVerdict forces one exact causal-group function call.
@@ -1046,13 +1050,19 @@ func collectRelevantFiles(failures []PatternFailure) []string {
 }
 
 // buildPatternAnalysis converts causal groups into the published model.
-func buildPatternAnalysis(subject string, builds int, p patternResponse, relevantFiles []string) *models.PatternAnalysis {
+func buildPatternAnalysis(subject string, builds int, p patternResponse, failures []PatternFailure) *models.PatternAnalysis {
+	relevantFiles := collectRelevantFiles(failures)
+	locationByBuild := make(map[string]*models.AnalysisCauseLocation, len(failures))
+	for _, failure := range failures {
+		locationByBuild[failure.BuildID] = failure.CauseLocation
+	}
 	groups := make([]models.PatternCausalGroup, 0, len(p.Groups))
 	repeated := make([]patternCausalGroup, 0, len(p.Groups))
 	sharedBuilds := make([]string, 0, builds)
 	for _, group := range p.Groups {
 		groups = append(groups, models.PatternCausalGroup{
 			Builds: append([]string(nil), group.Builds...), RootCause: group.RootCause, Confidence: group.Confidence,
+			CauseLocation: groupCauseLocation(group.Builds, locationByBuild),
 		})
 		if len(group.Builds) < 2 {
 			continue
@@ -1104,6 +1114,21 @@ func buildPatternAnalysis(subject string, builds int, p patternResponse, relevan
 		Systemic:           systemic, Confidence: confidence, SharedRootCause: rootCause, SharedBuilds: sharedBuilds,
 		Summary: strings.TrimSpace(p.Summary), RelevantFiles: relevantFiles,
 	}
+}
+
+// groupCauseLocation derives one causal group's owning repository from the
+// analyses of the builds it covers. A build the correlation named but that has
+// no analysis contributes no ownership, which keeps the group unattributed
+// rather than extrapolating from a subset.
+func groupCauseLocation(builds []string, byBuild map[string]*models.AnalysisCauseLocation) *models.AnalysisCauseLocation {
+	if len(builds) == 0 {
+		return nil
+	}
+	locations := make([]*models.AnalysisCauseLocation, 0, len(builds))
+	for _, build := range builds {
+		locations = append(locations, byBuild[build])
+	}
+	return MergeCauseLocations(locations)
 }
 
 func patternConfidenceRank(confidence string) int {

@@ -2,7 +2,10 @@
 package models
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -105,6 +108,33 @@ type EvidenceCitation struct {
 	Quote     string `json:"quote"`
 }
 
+// AnalysisCauseLocation names the repository that owns a diagnosed cause. It
+// makes ownership a field rather than an inference buried in prose, so a cause
+// living in a dependency can be reported as an upstream diagnosis instead of a
+// dead end.
+type AnalysisCauseLocation struct {
+	// Repository is the owning "owner/repo".
+	Repository string `json:"repository"`
+	// External marks a cause owned by a dependency rather than by the project's
+	// own source repository.
+	External bool `json:"external,omitempty"`
+	// Files are path hints inside Repository. A build pins an immutable revision
+	// only for the project's own repo, so paths in a dependency can never be
+	// verified here and stay hints. They are deliberately kept out of FileLinks,
+	// which is the verified-source contract the Fix gates depend on.
+	Files []string `json:"files,omitempty"`
+}
+
+// Clone returns a deep copy so callers cannot alias the file hints.
+func (l *AnalysisCauseLocation) Clone() *AnalysisCauseLocation {
+	if l == nil {
+		return nil
+	}
+	out := *l
+	out.Files = slices.Clone(l.Files)
+	return &out
+}
+
 // AIAnalysis is a deep AI-generated root cause analysis.
 type AIAnalysis struct {
 	GeneratedAt string `json:"generated_at"`
@@ -119,6 +149,9 @@ type AIAnalysis struct {
 	RelevantFiles     []string           `json:"relevant_files,omitempty"`
 	SearchSuggestions []string           `json:"search_suggestions,omitempty"`
 	EvidenceCitations []EvidenceCitation `json:"evidence_citations,omitempty"`
+	// CauseLocation records which repository owns the diagnosed cause. Absent
+	// when the analysis did not establish ownership.
+	CauseLocation *AnalysisCauseLocation `json:"cause_location,omitempty"`
 	// Mode records the analysis pipeline. Cache gates reject non-agentic entries.
 	Mode string `json:"mode,omitempty"`
 	// ToolCalls is the number of agent tool invocations made during this
@@ -386,6 +419,10 @@ type PatternCausalGroup struct {
 	// window. It is deliberately excluded from ContentHash and PatternHash so
 	// assigning it never churns pattern or causal-group identity.
 	Signature string `json:"signature,omitempty"`
+	// CauseLocation is the repository owning this cause. It is engine-derived
+	// from the member builds' analyses and is set only when they agree, so a
+	// group of mixed ownership stays unattributed rather than guessing.
+	CauseLocation *AnalysisCauseLocation `json:"cause_location,omitempty"`
 }
 
 // PatternAnalysis is a job-level correlation across recent failed builds.
@@ -542,6 +579,17 @@ type TestFlakiness struct {
 	FirstFailedAt       string                `json:"first_failed_at,omitempty"`
 	ErrorPatterns       []ErrorPattern        `json:"error_patterns,omitempty"`
 	DurationHistory     []DurationPoint       `json:"duration_history,omitempty"`
+}
+
+// LowPassRateEntry is a test selected by the configured pass-rate rule. It
+// carries its own window because attention.low_pass_rate.recent_runs can
+// narrow the measurement below the window the embedded FailRate covers.
+type LowPassRateEntry struct {
+	TestFlakiness
+	// WindowRuns is the number of runs the pass rate was measured over.
+	WindowRuns int `json:"window_runs"`
+	// PassRate is the fraction of passing runs in that window.
+	PassRate float64 `json:"pass_rate"`
 }
 
 // TestFailureInfo captures the most recent failure details.
@@ -705,6 +753,27 @@ type FailureAttribution struct {
 	Evidence   []AttributionEvidence `json:"evidence,omitempty"`
 }
 
+// VerdictNeedsInvestigation reports whether a verdict leaves a failure for a
+// human, which is also what makes it eligible for per-pull-request analysis.
+// A verdict that rules the pull request out answers the question already.
+func VerdictNeedsInvestigation(verdict AttributionVerdict) bool {
+	switch verdict {
+	case AttributionUnexplained, AttributionTouchesChangedCode, AttributionInconclusive:
+		return true
+	default:
+		return false
+	}
+}
+
+// NeedsInvestigation reports whether the failure was left for a human. A
+// failure with no attribution has not been judged, so it counts as unresolved.
+func (a *FailureAttribution) NeedsInvestigation() bool {
+	if a == nil {
+		return true
+	}
+	return VerdictNeedsInvestigation(a.Verdict)
+}
+
 // PullRequestFailure is one failing case on a pull request check, with the
 // deterministic attribution attached. TestCase is embedded so the wire shape
 // keeps the fields every other failure surface already uses.
@@ -760,13 +829,94 @@ type PullRequestDetail struct {
 	Checks []PullRequestCheck `json:"checks"`
 }
 
+// SharedFailureMinPulls is how many open pull requests must report the same
+// failure before it is published as a shared failure. Two is the smallest
+// count that makes a failure shared at all. It is deliberately lower than the
+// threshold a widespread verdict needs, because the aggregate view answers
+// "what is hitting several pull requests" rather than "is this mine".
+const SharedFailureMinPulls = 2
+
+// SharedFailureID returns the stable identifier for one shared failure. The
+// tuple is the same one cross-pull-request correlation keys on, and it is
+// hashed because a test name is long, arbitrary, and a poor URL segment.
+func SharedFailureID(baseRef, jobName, testName string) string {
+	sum := sha256.Sum256([]byte(baseRef + "\x00" + jobName + "\x00" + testName))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// SharedFailureMember is one pull request reporting a shared failure, along
+// with the build that observed it.
+type SharedFailureMember struct {
+	Number  int    `json:"number"`
+	Title   string `json:"title,omitempty"`
+	Author  string `json:"author,omitempty"`
+	HTMLURL string `json:"html_url,omitempty"`
+	BuildID string `json:"build_id"`
+	// Started is the member build's start time. Finished is zero while it runs.
+	Started  time.Time `json:"started"`
+	Finished time.Time `json:"finished,omitempty"`
+	WebURL   string    `json:"web_url,omitempty"`
+	// Stale marks a build that tested an older head than the pull request's
+	// current one, so it cannot serve as evidence.
+	Stale bool `json:"stale,omitempty"`
+	// Verdict is the deterministic attribution this member received. Members of
+	// one cluster can differ, because a base branch that already fails the test
+	// explains the failure for that pull request before peers are consulted.
+	Verdict AttributionVerdict `json:"verdict,omitempty"`
+}
+
+// SharedFailure is one failing job and test observed across several open pull
+// requests. It is the published form of the cross-pull-request correlation
+// attribution already computes, so a failure that is nobody's fault in
+// particular still has somewhere to be investigated.
+type SharedFailure struct {
+	// ID addresses the failure in routes and API paths.
+	ID string `json:"id"`
+	// BaseRef, JobName, and TestName are the correlation key. Base ref is part
+	// of it because one job often runs on several release branches, and job
+	// name because a build-level failure carries the same generic test name on
+	// every job.
+	BaseRef  string `json:"base_ref"`
+	JobName  string `json:"job_name"`
+	JobID    string `json:"job_id"`
+	TestName string `json:"test_name"`
+	// BuildLevel marks a job that failed without reporting a failing test.
+	BuildLevel bool `json:"build_level,omitempty"`
+	// PullRequests are the affected pull requests, ordered by number.
+	PullRequests []SharedFailureMember `json:"pull_requests"`
+	// OldestBuildStarted and NewestBuildStarted bound the member builds this
+	// pass observed. They describe the current pass only: a pass sees the
+	// newest build per check, so neither is a claim about when the failure
+	// first appeared.
+	OldestBuildStarted time.Time `json:"oldest_build_started"`
+	NewestBuildStarted time.Time `json:"newest_build_started"`
+	// Escalatable reports that no member can already be analyzed through
+	// per-pull-request escalation, which is what makes the shared failure the
+	// only remaining way to investigate it.
+	Escalatable bool `json:"escalatable"`
+}
+
+// SharedFailureIndex is the top-level structure for pull-request-failures.json.
+type SharedFailureIndex struct {
+	GeneratedAt time.Time `json:"generated_at"`
+	// Repo is the "org/repo" whose open pull requests were correlated.
+	Repo string `json:"repo"`
+	// Failures are ordered widest-first so the view leads with what is hitting
+	// the most pull requests.
+	Failures []SharedFailure `json:"failures"`
+}
+
 // FlakinessReport is the top-level structure for flakiness.json.
 type FlakinessReport struct {
-	GeneratedAt        string                `json:"generated_at"`
-	MostFlaky          []TestFlakiness       `json:"most_flaky"`
-	PersistentFailures []TestFlakiness       `json:"persistent_failures"`
-	RecentlyBroken     []TestFlakiness       `json:"recently_broken"`
-	BuildFailures      []BuildFailureSummary `json:"build_failures"`
+	GeneratedAt        string          `json:"generated_at"`
+	MostFlaky          []TestFlakiness `json:"most_flaky"`
+	PersistentFailures []TestFlakiness `json:"persistent_failures"`
+	RecentlyBroken     []TestFlakiness `json:"recently_broken"`
+	// LowPassRate holds tests selected by the optional
+	// attention.low_pass_rate rule. It is always present and empty when the
+	// rule is not configured. Selection does not change classification.
+	LowPassRate   []LowPassRateEntry    `json:"low_pass_rate"`
+	BuildFailures []BuildFailureSummary `json:"build_failures"`
 	// RecurringPatterns holds systemic job-level verdicts across all jobs.
 	// The home page uses these without loading every job file.
 	RecurringPatterns []PatternAnalysis    `json:"recurring_patterns,omitempty"`

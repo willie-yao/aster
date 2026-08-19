@@ -19,7 +19,7 @@ all; `issues.enabled` there has nothing to act on.
 | Trigger | Source | Condition | Can file? |
 |---|---|---|---|
 | `patterns` | cross-build pattern analysis | a job's recent failures share one **systemic** root cause | yes |
-| `persistent` | flakiness report | a test failed in **≥3 consecutive** runs | **no, recovery only** |
+| `persistent` | flakiness report | a test failed in as many consecutive runs as [`attention.persistent_after`](project-configuration.md#attention-thresholds) requires, default 3 | **no, recovery only** |
 
 `persistent` is retired for filing. The dashboard's File issue action covers
 systemic patterns and individual builds, so nothing creates a `persistent::`

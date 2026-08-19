@@ -42,3 +42,11 @@ branding:
 # page. Attribution is deterministic and costs no model calls.
 # pull_requests:
 #   enabled: true
+
+# Optional: tune which failing tests reach the Needs Attention band. Omitting
+# this section keeps the engine defaults. See docs/project-configuration.md.
+# attention:
+#   # Surface any test that failed at least once, given enough runs to judge.
+#   low_pass_rate:
+#     threshold: 1.0
+#     min_runs: 5

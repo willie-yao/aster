@@ -30,6 +30,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/actions"
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/ai/modules/pullrequest"
+	"github.com/willie-yao/aster/backend/internal/ai/modules/sharedfailure"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/analysisruntime"
@@ -142,6 +143,13 @@ func main() {
 		defer waitCancel()
 		if err := waiter.Wait(waitCtx); err != nil {
 			log.Printf("server: waiting for pull request escalations: %v", err)
+		}
+	}
+	if waiter, ok := opts.SharedFailureEscalation.(interface{ Wait(context.Context) error }); ok {
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer waitCancel()
+		if err := waiter.Wait(waitCtx); err != nil {
+			log.Printf("server: waiting for shared failure escalations: %v", err)
 		}
 	}
 	if waiter, ok := opts.CausalRemediationInvestigation.(interface{ Wait(context.Context) error }); ok {
@@ -813,14 +821,53 @@ func enablePullRequestEscalation(
 			})
 		},
 	}
-	service, err := prescalation.New(ctx, resolver, runner, prescalation.Options{
-		Store: prescalation.FileStore{Dir: dataDir},
+	// Both escalation kinds share one analysis slot, so the server runs a
+	// single analysis at a time rather than one per kind.
+	gate := prescalation.NewGate(1)
+	service, err := prescalation.New(ctx, resolver, runner, prescalation.Options[prescalation.Ref]{
+		Store: prescalation.FileStore[prescalation.Ref]{Dir: dataDir, Name: prescalation.StateFileName},
+		Gate:  gate,
 	})
 	if err != nil {
 		return fmt.Errorf("configuring pull request escalation: %w", err)
 	}
 	opts.PullRequestEscalation = service
 	log.Printf("🔬 pull request escalation enabled (repo=%s/%s)", repo.Owner, repo.Name)
+
+	clusterResolver := &prescalation.ClusterResolver{
+		DataDir: dataDir, Backend: backend,
+		Repo:            repo.Owner + "/" + repo.Name,
+		CacheGeneration: loaded.CacheGenerationFingerprint,
+	}
+	clusterRunner := &prescalation.ClusterAnalysisRunner{
+		NewAnalyzer: func(subject sharedfailure.Subject) (ai.FailureAnalyzer, error) {
+			return runtime.NewService(analysisruntime.ServiceOptions{
+				Backend:         backend,
+				GitHubReadToken: githubToken,
+				Module:          sharedfailure.New(subject),
+			})
+		},
+	}
+	clusterService, err := prescalation.New(ctx, clusterResolver, clusterRunner,
+		prescalation.Options[prescalation.ClusterRef]{
+			Store: prescalation.FileStore[prescalation.ClusterRef]{
+				Dir: dataDir, Name: prescalation.ClusterStateFileName,
+			},
+			Gate: gate,
+			// A finished shared failure analysis is only revalidated when a
+			// request reaches Start, so status reads need their own way to
+			// notice the evidence build has moved.
+			CurrentEvidence: clusterResolver.CurrentEvidence,
+		})
+	if err != nil {
+		// Pull request escalation is already wired and useful on its own, so a
+		// shared failure service that cannot start withholds only its own
+		// controls rather than taking both down.
+		log.Printf("⚠ Shared failure escalation is unavailable: %v", err)
+		return nil
+	}
+	opts.SharedFailureEscalation = clusterService
+	log.Printf("🔬 shared failure escalation enabled (repo=%s/%s)", repo.Owner, repo.Name)
 	return nil
 }
 

@@ -6,7 +6,11 @@ import type {
   ResolvedState,
   SearchIndex,
 } from "../types/dashboard";
-import type { PullRequestDetail, PullRequestIndex } from "../types/pullRequests";
+import type {
+  PullRequestDetail,
+  PullRequestIndex,
+  SharedFailureIndex,
+} from "../types/pullRequests";
 import { jobDataFilename } from "../lib/utils";
 import { searchIndexPath } from "../lib/search";
 import { normalizeFlakinessReport, type FlakinessReportWire } from "../lib/flakinessReport";
@@ -83,10 +87,19 @@ export function usePullRequestIndex(enabled: boolean) {
   return useJSON<PullRequestIndex>(enabled ? "pull-requests.json" : null);
 }
 
+export function useSharedFailures(enabled: boolean) {
+  return useJSON<SharedFailureIndex>(enabled ? "pull-request-failures.json" : null);
+}
+
 export function usePullRequestDetail(number: string | undefined) {
   const safe = number && /^\d+$/.test(number) ? number : null;
   return useJSON<PullRequestDetail>(safe ? `pull-requests/${safe}.json` : null);
 }
+
+// resolvedReadAttempts bounds the retries of one resolved-state read. A read
+// that follows a dismissal write must eventually land: leaving the pre-mutation
+// set in place would show a stale control until the view is remounted.
+const resolvedReadAttempts = 5;
 
 export function useResolved() {
   const [data, setData] = useState<ResolvedState>({ resolved: {} });
@@ -95,21 +108,39 @@ export function useResolved() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${DATA_BASE}/resolved.json`, { cache: "no-store" })
-      // A missing file (static mode, or nothing resolved yet) is normal: treat
-      // it as an empty set rather than an error.
-      .then((r) => (r.ok ? r.json() : { resolved: {} }))
-      .then((d: ResolvedState) => {
-        if (!cancelled) setData(d?.resolved ? d : { resolved: {} });
-      })
-      .catch(() => {
-        if (!cancelled) setData({ resolved: {} });
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    let timer: number | undefined;
+    let attempt = 0;
+
+    function load() {
+      fetch(`${DATA_BASE}/resolved.json`, { cache: "no-store" })
+        .then((r) => {
+          // A missing file (static mode, or nothing resolved yet) is normal:
+          // treat it as an empty set rather than an error.
+          if (r.status === 404) return { resolved: {} } as ResolvedState;
+          if (!r.ok) throw new Error(`resolved.json: ${r.status}`);
+          return r.json() as Promise<ResolvedState>;
+        })
+        .then((d: ResolvedState) => {
+          if (cancelled) return;
+          setData(d?.resolved ? d : { resolved: {} });
+          setLoading(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          // Keep what we already have rather than reporting an empty set, and
+          // retry so a transient failure resolves itself.
+          if (attempt >= resolvedReadAttempts - 1) {
+            setLoading(false);
+            return;
+          }
+          timer = window.setTimeout(load, Math.min(8000, 500 * 2 ** attempt++));
+        });
+    }
+
+    load();
     return () => {
       cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [nonce]);
 

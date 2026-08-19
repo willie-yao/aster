@@ -91,12 +91,13 @@ type semanticJudgeResult struct {
 }
 
 type semanticJudgeDraft struct {
-	IsTransient       bool                      `json:"is_transient"`
-	Summary           string                    `json:"summary"`
-	RootCause         string                    `json:"root_cause"`
-	SuggestedFix      string                    `json:"suggested_fix"`
-	RelevantFiles     []string                  `json:"relevant_files,omitempty"`
-	EvidenceCitations []models.EvidenceCitation `json:"evidence_citations,omitempty"`
+	IsTransient       bool                          `json:"is_transient"`
+	Summary           string                        `json:"summary"`
+	RootCause         string                        `json:"root_cause"`
+	SuggestedFix      string                        `json:"suggested_fix"`
+	RelevantFiles     []string                      `json:"relevant_files,omitempty"`
+	CauseLocation     *models.AnalysisCauseLocation `json:"cause_location,omitempty"`
+	EvidenceCitations []models.EvidenceCitation     `json:"evidence_citations,omitempty"`
 }
 
 type semanticEvidenceLine struct {
@@ -358,6 +359,7 @@ func boundedSemanticDraft(parsed analysisResponse, evidence map[string]*analysis
 		RootCause:         semanticClamp(parsed.RootCause, semanticJudgeMaxRootCauseBytes),
 		SuggestedFix:      semanticClamp(parsed.SuggestedFix, semanticJudgeMaxSuggestedFixBytes),
 		RelevantFiles:     compactPublishedStrings(parsed.RelevantFiles, 12),
+		CauseLocation:     parsed.CauseLocation.Clone(),
 		EvidenceCitations: citations,
 	}
 }

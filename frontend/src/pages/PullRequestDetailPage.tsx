@@ -14,7 +14,7 @@ import { LoadingState } from "../components/LoadingState";
 import { RunMetadata } from "../components/RunMetadata";
 import { StatusChip } from "../components/StatusChip";
 import { useCapabilities } from "../hooks/useCapabilities";
-import { usePullRequestDetail } from "../hooks/useData";
+import { usePullRequestDetail, useSharedFailures } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import {
   attributionLabel,
@@ -27,7 +27,13 @@ import {
   staleCheckCount,
   unexplainedCount,
 } from "../lib/pullRequests";
-import { jobPath, pullRequestsPath } from "../lib/routes";
+import {
+  getEscalation,
+  startEscalation,
+  type EscalationRef,
+} from "../lib/pullRequestEscalation";
+import { findSharedFailureFor } from "../lib/sharedFailures";
+import { jobPath, pullRequestsPath, sharedFailurePath } from "../lib/routes";
 import { formatDuration } from "../lib/utils";
 import { soft } from "../theme";
 import { overviewTypography } from "../theme/overview";
@@ -36,6 +42,7 @@ import type {
   PullRequestCheck,
   PullRequestDetail,
   PullRequestFailure,
+  SharedFailure,
 } from "../types/pullRequests";
 
 function formatTimestamp(value: string | undefined): string {
@@ -100,8 +107,15 @@ function OptionalBadge() {
 
 // AttributionBanner states what the observed baseline says about a failure. It
 // leads the failure body because "already failing on main" changes whether the
-// rest is worth reading.
-function AttributionBanner({ attribution }: { attribution: FailureAttribution }) {
+// rest is worth reading. When the same failure is on other pull requests, it
+// links to the shared view rather than leaving the reader at a peer's page.
+function AttributionBanner({
+  attribution,
+  cluster,
+}: {
+  attribution: FailureAttribution;
+  cluster?: SharedFailure;
+}) {
   const tone = attributionTone(attribution.verdict);
   const neutral = tone === "default";
   return (
@@ -142,7 +156,36 @@ function AttributionBanner({ attribution }: { attribution: FailureAttribution })
           {item.detail}
         </Typography>
       ))}
+      {cluster && (
+        <Link
+          component={RouterLink}
+          to={sharedFailurePath(cluster.id)}
+          underline="none"
+          sx={{ display: "inline-block", mt: 0.75, ...overviewTypography.description }}
+        >
+          Investigate this across all {cluster.pull_requests.length} pull requests
+        </Link>
+      )}
     </Box>
+  );
+}
+
+// PullRequestEscalation binds the shared panel to one pull request failure.
+function PullRequestEscalation({
+  refValue,
+  enabled,
+}: {
+  refValue: EscalationRef;
+  enabled: boolean;
+}) {
+  return (
+    <EscalationPanel
+      enabled={enabled}
+      subjectKey={`${refValue.pullNumber}\u0000${refValue.jobID}\u0000${refValue.buildID}\u0000${refValue.testName}`}
+      load={() => getEscalation(refValue)}
+      start={(key) => startEscalation(refValue, key)}
+      disclaimer="This analysis explains the failure from build artifacts. It does not establish that the pull request caused it."
+    />
   );
 }
 
@@ -150,9 +193,11 @@ function AttributionBanner({ attribution }: { attribution: FailureAttribution })
 // disclosure when there is a body to reveal, so a click never does nothing.
 function FailureItem({
   failure,
+  cluster,
   escalation,
 }: {
   failure: PullRequestFailure;
+  cluster?: SharedFailure;
   escalation?: { pullNumber: number; jobID: string; buildID: string; enabled: boolean };
 }) {
   const [open, setOpen] = useState(false);
@@ -232,9 +277,11 @@ function FailureItem({
       )}
 
       <Box sx={{ px: { xs: 1.5, sm: 2 }, pb: 1.5 }}>
-        {failure.attribution && <AttributionBanner attribution={failure.attribution} />}
+        {failure.attribution && (
+          <AttributionBanner attribution={failure.attribution} cluster={cluster} />
+        )}
         {escalation && needsInvestigation(failure) && (
-          <EscalationPanel
+          <PullRequestEscalation
             enabled={escalation.enabled}
             refValue={{
               pullNumber: escalation.pullNumber,
@@ -351,10 +398,14 @@ function ExternalLink({ href, label }: { href: string; label: string }) {
 function CheckCard({
   check,
   linkToJob,
+  baseRef,
+  clusters,
   escalation,
 }: {
   check: PullRequestCheck;
   linkToJob: boolean;
+  baseRef: string;
+  clusters: SharedFailure[];
   escalation?: { pullNumber: number; enabled: boolean };
 }) {
   const state = checkState(check);
@@ -410,6 +461,7 @@ function CheckCard({
         <FailureItem
           key={`${failure.name}-${index}`}
           failure={failure}
+          cluster={findSharedFailureFor(clusters, baseRef, check.job_name, failure.name)}
           escalation={
             escalation && !check.stale
               ? {
@@ -438,10 +490,12 @@ function CheckCard({
 function ChecksSection({
   detail,
   linkToJob,
+  clusters,
   escalationEnabled,
 }: {
   detail: PullRequestDetail;
   linkToJob: boolean;
+  clusters: SharedFailure[];
   escalationEnabled: boolean;
 }) {
   const failing = detail.checks.filter((check) => checkState(check) === "FAILING");
@@ -480,6 +534,8 @@ function ChecksSection({
             key={`${check.job_id}-${check.build_id}`}
             check={check}
             linkToJob={linkToJob}
+            baseRef={detail.base_ref}
+            clusters={clusters}
             escalation={{ pullNumber: detail.number, enabled: escalationEnabled }}
           />
         ))}
@@ -493,6 +549,10 @@ export function PullRequestDetailPage() {
   const { data, loading, error } = usePullRequestDetail(number);
   const manifest = useManifest();
   const linkToJob = manifest.source?.include_presubmits ?? false;
+  const pullRequestsEnabled = manifest.pull_requests?.enabled ?? false;
+  // Shared failures are supporting context, so a missing or failed load simply
+  // omits the cluster links rather than blocking the page.
+  const { data: shared } = useSharedFailures(pullRequestsEnabled);
   const { features } = useCapabilities();
   const escalationEnabled = features.pull_request_escalation ?? false;
 
@@ -610,7 +670,12 @@ export function PullRequestDetailPage() {
         links={[]}
       />
 
-      <ChecksSection detail={data} linkToJob={linkToJob} escalationEnabled={escalationEnabled} />
+      <ChecksSection
+        detail={data}
+        linkToJob={linkToJob}
+        clusters={shared?.failures ?? []}
+        escalationEnabled={escalationEnabled}
+      />
     </Stack>
   );
 }

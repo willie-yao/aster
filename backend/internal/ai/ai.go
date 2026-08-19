@@ -269,14 +269,15 @@ func modelsURLFor(chatURL string) (string, bool) {
 // Combines the headline summary, transient classification, and deep root-cause
 // fields in a single response so the list view and detail view always agree.
 type analysisResponse struct {
-	Summary           string                    `json:"summary"`
-	IsTransient       bool                      `json:"is_transient"`
-	RootCause         string                    `json:"root_cause"`
-	Severity          string                    `json:"severity"`
-	SuggestedFix      string                    `json:"suggested_fix"`
-	RelevantFiles     []string                  `json:"relevant_files"`
-	SearchSuggestions []string                  `json:"search_suggestions,omitempty"`
-	EvidenceCitations []models.EvidenceCitation `json:"evidence_citations,omitempty"`
+	Summary           string                        `json:"summary"`
+	IsTransient       bool                          `json:"is_transient"`
+	RootCause         string                        `json:"root_cause"`
+	Severity          string                        `json:"severity"`
+	SuggestedFix      string                        `json:"suggested_fix"`
+	RelevantFiles     []string                      `json:"relevant_files"`
+	SearchSuggestions []string                      `json:"search_suggestions,omitempty"`
+	CauseLocation     *models.AnalysisCauseLocation `json:"cause_location,omitempty"`
+	EvidenceCitations []models.EvidenceCitation     `json:"evidence_citations,omitempty"`
 }
 
 // proseFields returns RootCause + Summary + SuggestedFix + RelevantFiles
@@ -311,6 +312,7 @@ func buildOutputs(parsed analysisResponse, model, modelHash string, now time.Tim
 		SuggestedFix:      parsed.SuggestedFix,
 		RelevantFiles:     parsed.RelevantFiles,
 		SearchSuggestions: parsed.SearchSuggestions,
+		CauseLocation:     parsed.CauseLocation.Clone(),
 		EvidenceCitations: parsed.EvidenceCitations,
 	}
 	return summary, analysis

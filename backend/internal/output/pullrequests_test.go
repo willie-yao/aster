@@ -18,7 +18,7 @@ func detailFor(number int) models.PullRequestDetail {
 func TestWritePullRequestsWritesIndexAndDetails(t *testing.T) {
 	dir := t.TempDir()
 	index := models.PullRequestIndex{Repo: "example/project", PullRequests: []models.PullRequestSummary{{Number: 7}}}
-	if err := WritePullRequests(dir, index, []models.PullRequestDetail{detailFor(7)}); err != nil {
+	if err := WritePullRequests(dir, index, []models.PullRequestDetail{detailFor(7)}, models.SharedFailureIndex{}); err != nil {
 		t.Fatalf("WritePullRequests: %v", err)
 	}
 
@@ -41,10 +41,10 @@ func TestWritePullRequestsWritesIndexAndDetails(t *testing.T) {
 func TestWritePullRequestsPrunesClosedPullRequests(t *testing.T) {
 	dir := t.TempDir()
 	both := []models.PullRequestDetail{detailFor(7), detailFor(8)}
-	if err := WritePullRequests(dir, models.PullRequestIndex{}, both); err != nil {
+	if err := WritePullRequests(dir, models.PullRequestIndex{}, both, models.SharedFailureIndex{}); err != nil {
 		t.Fatalf("WritePullRequests: %v", err)
 	}
-	if err := WritePullRequests(dir, models.PullRequestIndex{}, []models.PullRequestDetail{detailFor(7)}); err != nil {
+	if err := WritePullRequests(dir, models.PullRequestIndex{}, []models.PullRequestDetail{detailFor(7)}, models.SharedFailureIndex{}); err != nil {
 		t.Fatalf("WritePullRequests: %v", err)
 	}
 
@@ -82,5 +82,47 @@ func readJSON(t *testing.T, path string, out any) {
 	}
 	if err := json.Unmarshal(data, out); err != nil {
 		t.Fatalf("unmarshal %s: %v", path, err)
+	}
+}
+
+func TestWritePullRequestsWritesSharedFailures(t *testing.T) {
+	dir := t.TempDir()
+	shared := models.SharedFailureIndex{
+		Repo: "example/project",
+		Failures: []models.SharedFailure{{
+			ID: "abc123", BaseRef: "main", JobName: "pull-project-e2e", TestName: "[It] creates a cluster",
+			PullRequests: []models.SharedFailureMember{{Number: 7}, {Number: 8}},
+			Escalatable:  true,
+		}},
+	}
+	if err := WritePullRequests(dir, models.PullRequestIndex{}, nil, shared); err != nil {
+		t.Fatalf("WritePullRequests: %v", err)
+	}
+
+	var got models.SharedFailureIndex
+	readJSON(t, filepath.Join(dir, SharedFailureIndexFilename), &got)
+	if len(got.Failures) != 1 || got.Failures[0].ID != "abc123" {
+		t.Fatalf("shared failures = %+v", got.Failures)
+	}
+	if len(got.Failures[0].PullRequests) != 2 {
+		t.Errorf("members = %+v, want both pull requests", got.Failures[0].PullRequests)
+	}
+}
+
+func TestWriteSharedFailuresNormalizesNilList(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteSharedFailures(dir, models.SharedFailureIndex{}); err != nil {
+		t.Fatalf("WriteSharedFailures: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, SharedFailureIndexFilename))
+	if err != nil {
+		t.Fatalf("read index: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if string(raw["failures"]) != "[]" {
+		t.Errorf("failures = %s, want []", raw["failures"])
 	}
 }

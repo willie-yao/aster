@@ -12,7 +12,8 @@ because it writes source code.
 
 Causal-group patterns remain analysis-only. A remediation investigation may
 publish a safe status, but it does not make a causal group eligible for File
-Issue, Fix PR, or resolution.
+Issue or Fix PR. Dismissing a pattern is a maintainer acknowledgement rather
+than a remediation-contract action, so it stays available for causal groups.
 
 ## Supported workflow
 

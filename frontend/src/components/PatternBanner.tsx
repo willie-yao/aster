@@ -19,19 +19,20 @@ import {
   type FileToUrlContext,
 } from "../lib/utils";
 import { RichText } from "./RichText";
+import { parseTestDisplayName } from "../lib/detailTitles";
 import { FailureActions } from "./FailureActions";
 import { useResolved } from "../hooks/useData";
 import { AnalysisChat } from "./AnalysisChat";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { patternChatAvailability, patternChatHasEvidenceBuild } from "../lib/patternChat";
-import { patternActionEligibilityHint, patternLifecycleActive } from "../lib/actionEligibility";
+import { patternActionEligibilityHint, patternDismissible, patternDraftable, patternLifecycleActive } from "../lib/actionEligibility";
 import { jobRunPath } from "../lib/routes";
 import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
 import { CausalGroupRemediation } from "./CausalGroupRemediation";
 import { CausalGroupFixRouting } from "./CausalGroupFixRouting";
 import { PatternFixGuidance } from "./PatternFixGuidance";
-import { causalGroupFixTarget, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
+import { causalGroupFixTarget, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
 
 function firstSentence(value: string): string {
   const match = value.trim().match(/^.*?[.!?](?:\s|$)/u);
@@ -70,7 +71,7 @@ export function PatternBanner({
   runs?: BuildResult[];
   refreshStatus?: PatternRefreshStatus;
 }) {
-  const { data: resolved } = useResolved();
+  const { data: resolved, refetch: refetchResolved } = useResolved();
   const { features } = useCapabilities();
   const analysisOnly = Boolean(pattern.recurrence_classification);
   const causalGroups = pattern.causal_groups ?? [];
@@ -81,12 +82,26 @@ export function PatternBanner({
     fixCapable ? causalGroupFixTarget(group, runs) : null,
   );
   const hasCausalFixTarget = causalFixTargets.some((target) => target !== null);
+  // The build joins the label only where two causes would otherwise render the
+  // same visible text. Counting the displayed label rather than the canonical
+  // name matters: two canonical names can humanize to one display title.
+  const fixTargetLabels = causalFixTargets.map((target) =>
+    target ? parseTestDisplayName(target.testName).displayName : null,
+  );
+  const fixTargetLabelCounts = fixTargetLabels.reduce((counts, label) => {
+    if (label) counts.set(label, (counts.get(label) ?? 0) + 1);
+    return counts;
+  }, new Map<string, number>());
+  const fixTargetNeedsBuild = fixTargetLabels.map(
+    (label) => label !== null && (fixTargetLabelCounts.get(label) ?? 0) > 1,
+  );
   const remediationByHash = new Map(
     (pattern.remediation_investigations ?? []).map((summary) => [summary.causal_group_hash, summary]),
   );
   const fixGuidanceBuildID = patternFixGuidanceBuildID(pattern, runs);
+  const patternUpstreamCause = patternExternalCause(pattern);
   const showFixGuidance = Boolean(jobID && fixGuidanceBuildID && fixCapable && !hasCausalFixTarget);
-  const resolvedEntry = !analysisOnly && pattern.id ? resolved.resolved[pattern.id] : undefined;
+  const resolvedEntry = pattern.id ? resolved.resolved[pattern.id] : undefined;
   const hasEvidenceBuild = patternChatHasEvidenceBuild(
     pattern,
     runs.map((run) => run.build_id),
@@ -120,6 +135,15 @@ export function PatternBanner({
   const isCurrent = !refreshStatus || refreshStatus.state === "current";
   const lifecycle = pattern.lifecycle;
   const lifecycleActive = patternLifecycleActive(lifecycle);
+  // Dismissal acknowledges the whole pattern, so it is available even where the
+  // pattern-level remediation contract is not.
+  const dismissible = patternDismissible(pattern, refreshStatus);
+  // Drafting follows the remediation contract alone: the two gates are
+  // independent, so one must never suppress the other.
+  const draftable = patternDraftable(pattern, refreshStatus);
+  // A dismissed pattern always offers Restore, even where a fresh dismissal
+  // would now be refused: clearing an acknowledgement only un-hides a pattern.
+  const showFailureActions = draftable || dismissible || Boolean(resolvedEntry);
   const actionEligibility = patternActionEligibilityHint(
     pattern.remediation_targets,
     lifecycle,
@@ -238,22 +262,69 @@ export function PatternBanner({
 
       {causalGroups.length > 0 && (
         <BriefingSection label="Causal groups">
-          <Stack spacing={1.5}>
+          {/* The gap between two causes is deliberately wider than any gap
+              inside one, so vertical rhythm expresses the hierarchy on its own. */}
+          <Stack spacing={2.5}>
             {causalGroups.map((group, index) => (
               // Keying on group identity ties the remediation component instance
               // to one operation, so a refreshed group never inherits another
               // group's in-flight status or preview.
-              <Box key={`${group.id ?? ""}:${group.content_hash ?? ""}:${group.builds.join("-")}-${group.root_cause}`}>
-                <RichText text={group.root_cause} steps fileCtx={patternFileCtx} />
-                <Stack
-                  direction={{ xs: "column", sm: "row" }}
-                  spacing={{ xs: 0.5, sm: 1 }}
-                  sx={{ mt: 0.5, alignItems: { sm: "center" } }}
+              <Box
+                key={`${group.id ?? ""}:${group.content_hash ?? ""}:${group.builds.join("-")}-${group.root_cause}`}
+                sx={{
+                  minWidth: 0,
+                  border: "1px solid",
+                  borderColor: "divider",
+                  borderRadius: "4px",
+                  bgcolor: "surface.containerLow",
+                  overflow: "hidden",
+                }}
+              >
+                <Box
+                  sx={{
+                    display: "grid",
+                    gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "auto minmax(0, 1fr)" },
+                    gridTemplateAreas: { xs: '"cause" "confidence"', sm: '"cause confidence"' },
+                    alignItems: "center",
+                    columnGap: 1.5,
+                    rowGap: 0.25,
+                    px: 1.5,
+                    py: 0.75,
+                    bgcolor: "surface.containerHigh",
+                    borderBottom: "1px solid",
+                    borderColor: "divider",
+                    boxShadow: "inset 3px 0 0 var(--mui-palette-primary-main)",
+                  }}
                 >
-                  <Typography color="text.secondary" sx={overviewTypography.data}>
-                    {group.confidence} confidence · Affected {group.builds.length === 1 ? "build" : "builds"}
+                  <Typography
+                    component="h4"
+                    sx={{ gridArea: "cause", minWidth: 0, ...overviewTypography.subsectionHeading }}
+                  >
+                    {causalGroups.length > 1 ? `Cause ${index + 1} of ${causalGroups.length}` : "Cause"}
                   </Typography>
-                  <Stack direction="row" spacing={0.75} sx={{ flexWrap: "wrap", rowGap: 0.75 }}>
+                  <Typography
+                    component="div"
+                    sx={{
+                      gridArea: "confidence",
+                      minWidth: 0,
+                      justifySelf: { xs: "start", sm: "end" },
+                      textAlign: { xs: "left", sm: "right" },
+                      color: "text.secondary",
+                      ...overviewTypography.data,
+                    }}
+                  >
+                    {group.confidence} confidence
+                  </Typography>
+                </Box>
+                <Box sx={{ px: 1.5, py: 1.5, minWidth: 0 }}>
+                  <RichText text={group.root_cause} steps fileCtx={patternFileCtx} />
+                  <Typography
+                    component="h5"
+                    sx={{ mt: 1.5, color: "text.secondary", ...overviewTypography.eyebrow }}
+                  >
+                    Affected {group.builds.length === 1 ? "build" : "builds"}
+                  </Typography>
+                  <Stack direction="row" spacing={0.75} sx={{ mt: 0.5, flexWrap: "wrap", rowGap: 0.75 }}>
                     {group.builds.map((buildID) => (
                       <Link
                         key={buildID}
@@ -282,17 +353,24 @@ export function PatternBanner({
                       </Link>
                     ))}
                   </Stack>
-                </Stack>
-                {analysisOnly && (
-                  <CausalGroupRemediation
-                    group={group}
-                    investigation={group.content_hash ? remediationByHash.get(group.content_hash) : undefined}
-                    jobID={jobID}
-                    patternID={pattern.id}
-                    patternHash={pattern.content_hash}
-                  />
-                )}
-                {fixCapable && <CausalGroupFixRouting jobID={jobID} target={causalFixTargets[index]} />}
+                  {analysisOnly && (
+                    <CausalGroupRemediation
+                      group={group}
+                      investigation={group.content_hash ? remediationByHash.get(group.content_hash) : undefined}
+                      jobID={jobID}
+                      patternID={pattern.id}
+                      patternHash={pattern.content_hash}
+                    />
+                  )}
+                  {fixCapable && (
+                    <CausalGroupFixRouting
+                      jobID={jobID}
+                      target={causalFixTargets[index]}
+                      showBuild={fixTargetNeedsBuild[index]}
+                      externalCause={externalCause(group.cause_location)}
+                    />
+                  )}
+                </Box>
               </Box>
             ))}
           </Stack>
@@ -396,10 +474,10 @@ export function PatternBanner({
     </>
   );
 
-  const actions = showFixGuidance || chatRef || (!analysisOnly && isCurrent && lifecycleActive && pattern.systemic && pattern.id) ? (
+  const actions = showFixGuidance || chatRef || showFailureActions ? (
     <Stack spacing={1.25}>
       {showFixGuidance && jobID && fixGuidanceBuildID && (
-        <PatternFixGuidance jobID={jobID} buildID={fixGuidanceBuildID} />
+        <PatternFixGuidance jobID={jobID} buildID={fixGuidanceBuildID} externalCause={patternUpstreamCause} />
       )}
       {chatRef && (
         <AnalysisChat
@@ -410,10 +488,14 @@ export function PatternBanner({
           appearance="detail"
         />
       )}
-      {!analysisOnly && isCurrent && lifecycleActive && pattern.systemic && pattern.id && (
+      {showFailureActions && pattern.id && (
         <FailureActions
           failureID={pattern.id}
-          eligibilityHint={actionEligibility}
+          dismissible={dismissible}
+          isResolved={Boolean(resolvedEntry)}
+          draftable={draftable}
+          eligibilityHint={draftable ? actionEligibility : null}
+          onResolvedChange={refetchResolved}
           appearance="detail"
         />
       )}

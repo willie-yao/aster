@@ -27,7 +27,6 @@ import {
 } from "@mui/icons-material";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useAuth } from "../hooks/useAuth";
-import { useResolved } from "../hooks/useData";
 import { soft } from "../theme";
 import { useSearchParams } from "react-router-dom";
 import { ActionDraftPreview } from "./ActionDraftPreview";
@@ -139,21 +138,39 @@ function DialogHeader({
 export function FailureActions({
   failureID,
   resolvable = true,
+  dismissible = true,
+  isResolved = false,
+  draftable = true,
   eligibilityHint = null,
   appearance = "default",
+  onResolvedChange,
 }: {
   failureID: string;
   resolvable?: boolean;
+  // dismissible gates starting a NEW dismissal. Restoring stays available
+  // whenever the pattern reads as dismissed, so a pattern cannot be stranded in
+  // the dismissed state once it no longer qualifies for a fresh dismissal.
+  dismissible?: boolean;
+  // isResolved and onResolvedChange come from the owner, which holds the single
+  // copy of resolved state. Reading it here too would let the two views
+  // disagree when their independent fetches diverge.
+  isResolved?: boolean;
+  draftable?: boolean;
   eligibilityHint?: ActionEligibility | null;
   appearance?: "default" | "detail";
+  onResolvedChange?: () => void;
 }) {
   const { features } = useCapabilities();
   const { status, signIn, login, mode } = useAuth();
   const detailAppearance = appearance === "detail";
+  // Drafting covers issue and fix-PR generation. draftable is false where the
+  // pattern-level remediation contract does not apply (causal-group results),
+  // leaving dismissal as the only action.
+  const drafting = draftable && features.action_requests;
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedFailure = searchParams.get("failure");
   const requestedLinkedAction = requestedAction(searchParams.get("action"));
-  const linkedAction = requestedLinkedAction === "propose-fix" && !features.fix_prs
+  const linkedAction = !draftable || (requestedLinkedAction === "propose-fix" && !features.fix_prs)
     ? null
     : requestedLinkedAction;
   const [reviewIntent, setReviewIntent] = useState<Action | null>(null);
@@ -176,7 +193,7 @@ export function FailureActions({
     [eligibilityHint, failureID, fetchedEligibility],
   );
   const eligibilityLoading =
-    status === "authenticated" && features.actions && !hasEligibilityHint && eligibility === null;
+    draftable && status === "authenticated" && features.actions && !hasEligibilityHint && eligibility === null;
   const requestID = request?.id;
   const requestStatus = request?.status;
   const activeFailureID = useRef(failureID);
@@ -184,7 +201,6 @@ export function FailureActions({
   const activeAction = useRef<Action | null>(null);
   const storageOwner = actionRequestStorageOwner(login, mode);
 
-  const { data: resolved, refetch: refetchResolved } = useResolved();
   const [resolveOpen, setResolveOpen] = useState(false);
   const [note, setNote] = useState("");
   const [resolveBusy, setResolveBusy] = useState(false);
@@ -207,10 +223,14 @@ export function FailureActions({
     setInstruction("");
     setError(null);
     setUrl(null);
+    setResolveOpen(false);
+    setNote("");
+    setResolveBusy(false);
+    setResolveError(null);
   }, [failureID]);
 
   useEffect(() => {
-    if (status !== "authenticated" || hasEligibilityHint || !features.actions) return;
+    if (status !== "authenticated" || hasEligibilityHint || !features.actions || !draftable) return;
     if (!features.action_eligibility) {
       setFetchedEligibility({
         failureID,
@@ -248,7 +268,7 @@ export function FailureActions({
         });
       })
     return () => controller.abort();
-  }, [failureID, features.action_eligibility, features.actions, hasEligibilityHint, status]);
+  }, [failureID, features.action_eligibility, features.actions, draftable, hasEligibilityHint, status]);
 
   const canStartActions = eligibility?.state === "actionable";
 
@@ -256,7 +276,7 @@ export function FailureActions({
   // intent dialog that requires an explicit click before a request is created.
   useEffect(() => {
     if (
-      !features.action_requests ||
+      !drafting ||
       status !== "authenticated" ||
       linkedFailure !== failureID ||
       !linkedAction ||
@@ -275,7 +295,7 @@ export function FailureActions({
     eligibility,
     eligibilityLoading,
     failureID,
-    features.action_requests,
+    drafting,
     linkedAction,
     linkedFailure,
     searchParams,
@@ -285,7 +305,7 @@ export function FailureActions({
 
   useEffect(() => {
     if (
-      !features.action_requests ||
+      !drafting ||
       status !== "authenticated" ||
       !storageOwner
     ) {
@@ -351,11 +371,11 @@ export function FailureActions({
     return () => {
       cancelled = true;
     };
-  }, [failureID, features.action_requests, features.fix_prs, login, status, storageOwner]);
+  }, [drafting, failureID, features.fix_prs, login, status, storageOwner]);
 
   useEffect(() => {
     if (
-      !features.action_requests ||
+      !drafting ||
       status !== "authenticated" ||
       !storageOwner ||
       !request ||
@@ -364,11 +384,11 @@ export function FailureActions({
       return;
     }
     syncStoredActionRequest(window.sessionStorage, storageOwner, request);
-  }, [failureID, features.action_requests, request, status, storageOwner]);
+  }, [drafting, failureID, request, status, storageOwner]);
 
   useEffect(() => {
     if (
-      !features.action_requests ||
+      !drafting ||
       status !== "authenticated" ||
       !requestID ||
       !requestStatus ||
@@ -421,7 +441,7 @@ export function FailureActions({
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [features.action_requests, requestID, requestStatus, status]);
+  }, [drafting, requestID, requestStatus, status]);
 
   if (
     !features.actions ||
@@ -440,9 +460,9 @@ export function FailureActions({
         startIcon={<GitHub sx={{ fontSize: 18 }} />}
         onClick={signIn}
       >
-        {features.action_requests && linkedFailure === failureID && linkedAction
+        {drafting && linkedFailure === failureID && linkedAction
           ? `Sign in to review ${linkedAction === "propose-fix" ? "a fix proposal" : "an issue draft"}`
-          : features.action_requests
+          : drafting
             ? features.fix_prs ? "Sign in to file issues or fixes" : "Sign in to file issues"
             : "Sign in to manage this failure"}
       </Button>
@@ -661,12 +681,16 @@ export function FailureActions({
     setError(null);
   }
 
+  // A dismissal write outlives the pattern it started on, so its result is
+  // applied only while this component still shows that failure. The refresh
+  // itself always runs: the write landed regardless of where the user now is.
   async function submitResolve() {
+    const startedFailureID = failureID;
     setResolveBusy(true);
     setResolveError(null);
     try {
       const res = await fetch(
-        `${API_BASE}api/failures/${encodeURIComponent(failureID)}/resolve`,
+        `${API_BASE}api/failures/${encodeURIComponent(startedFailureID)}/resolve`,
         {
           method: "POST",
           credentials: "same-origin",
@@ -677,37 +701,40 @@ export function FailureActions({
       if (!res.ok) {
         throw new Error(await actionErrorMessage(res));
       }
+      onResolvedChange?.();
+      if (activeFailureID.current !== startedFailureID) return;
       setResolveOpen(false);
       setNote("");
-      refetchResolved();
     } catch (e) {
+      if (activeFailureID.current !== startedFailureID) return;
       setResolveError(e instanceof Error ? e.message : String(e));
     } finally {
-      setResolveBusy(false);
+      if (activeFailureID.current === startedFailureID) setResolveBusy(false);
     }
   }
 
   async function unresolve() {
+    const startedFailureID = failureID;
     setResolveBusy(true);
     setResolveError(null);
     try {
       const res = await fetch(
-        `${API_BASE}api/failures/${encodeURIComponent(failureID)}/unresolve`,
+        `${API_BASE}api/failures/${encodeURIComponent(startedFailureID)}/unresolve`,
         { method: "POST", credentials: "same-origin" },
       );
       if (!res.ok) {
         throw new Error(await actionErrorMessage(res));
       }
-      refetchResolved();
+      onResolvedChange?.();
     } catch (e) {
+      if (activeFailureID.current !== startedFailureID) return;
       setResolveError(e instanceof Error ? e.message : String(e));
     } finally {
-      setResolveBusy(false);
+      if (activeFailureID.current === startedFailureID) setResolveBusy(false);
     }
   }
 
   const isFix = action === "propose-fix";
-  const isResolved = !!resolved.resolved[failureID];
   const verificationTitle = request
     ? actionRequestVerificationTitle(request)
     : null;
@@ -737,7 +764,7 @@ export function FailureActions({
           }),
         }}
       >
-        {features.action_requests && canStartActions && (
+        {drafting && canStartActions && (
           <>
             <Button
               size="small"
@@ -774,7 +801,7 @@ export function FailureActions({
           >
             Restore pattern
           </Button>
-        ) : (
+        ) : dismissible && (
           <Button
             size="small"
             variant={detailAppearance ? "text" : "outlined"}
@@ -798,7 +825,7 @@ export function FailureActions({
         </Stack>
       )}
 
-      {!eligibilityLoading && eligibility && eligibility.state !== "actionable" && (
+      {draftable && !eligibilityLoading && eligibility && eligibility.state !== "actionable" && (
         <Alert role="status" severity={eligibility.state === "already_present" || eligibility.state === "recovered" ? "info" : "warning"} variant="outlined" sx={{ mt: 1 }}>
           <Typography variant="body2" sx={{ fontWeight: 650 }}>
             {actionEligibilityTitle(eligibility)}
@@ -841,7 +868,7 @@ export function FailureActions({
             now, then review the exact content before confirming any GitHub
             write.
           </Typography>
-          {features.action_requests && (
+          {drafting && (
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
               Generation continues in the background. If draft-ready email is
               configured, the dashboard emails you when the draft is ready.
@@ -867,7 +894,7 @@ export function FailureActions({
       </Dialog>
 
       <Dialog
-        open={resolvable && resolveOpen}
+        open={resolvable && dismissible && resolveOpen}
         onClose={resolveBusy ? undefined : () => setResolveOpen(false)}
         maxWidth="sm"
         fullWidth
