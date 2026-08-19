@@ -19,6 +19,7 @@ import {
   type FileToUrlContext,
 } from "../lib/utils";
 import { RichText } from "./RichText";
+import { parseTestDisplayName } from "../lib/detailTitles";
 import { FailureActions } from "./FailureActions";
 import { useResolved } from "../hooks/useData";
 import { AnalysisChat } from "./AnalysisChat";
@@ -81,13 +82,19 @@ export function PatternBanner({
     fixCapable ? causalGroupFixTarget(group, runs) : null,
   );
   const hasCausalFixTarget = causalFixTargets.some((target) => target !== null);
-  // Two causes can route to the same test in different builds. The build is
-  // shown only there, so the common case stays short and every action stays
-  // distinguishable.
-  const fixTargetTestCounts = causalFixTargets.reduce((counts, target) => {
-    if (target) counts.set(target.testName, (counts.get(target.testName) ?? 0) + 1);
+  // The build joins the label only where two causes would otherwise render the
+  // same visible text. Counting the displayed label rather than the canonical
+  // name matters: two canonical names can humanize to one display title.
+  const fixTargetLabels = causalFixTargets.map((target) =>
+    target ? parseTestDisplayName(target.testName).displayName : null,
+  );
+  const fixTargetLabelCounts = fixTargetLabels.reduce((counts, label) => {
+    if (label) counts.set(label, (counts.get(label) ?? 0) + 1);
     return counts;
   }, new Map<string, number>());
+  const fixTargetNeedsBuild = fixTargetLabels.map(
+    (label) => label !== null && (fixTargetLabelCounts.get(label) ?? 0) > 1,
+  );
   const remediationByHash = new Map(
     (pattern.remediation_investigations ?? []).map((summary) => [summary.causal_group_hash, summary]),
   );
@@ -358,7 +365,7 @@ export function PatternBanner({
                     <CausalGroupFixRouting
                       jobID={jobID}
                       target={causalFixTargets[index]}
-                      showBuild={(fixTargetTestCounts.get(causalFixTargets[index]?.testName ?? "") ?? 0) > 1}
+                      showBuild={fixTargetNeedsBuild[index]}
                     />
                   )}
                 </Box>

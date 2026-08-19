@@ -37,9 +37,10 @@ export function CausalGroupFixRouting({
   // The same humanized title the test ledger uses, so the action names the test
   // the way the rest of the page does instead of repeating the raw JUnit name.
   const testName = parseTestDisplayName(target.testName).displayName;
-  // The accessible name always carries the build and always begins with the
-  // visible label, so it stays unique even where the label omits the build.
-  const subject = `Fix: ${testName} in build ${target.buildID}`;
+  // One suffix backs both the accessible name and the optional visible segment,
+  // so the visible label is always a literal prefix of the accessible name.
+  const buildSuffix = ` in build ${target.buildID}`;
+  const subject = `Fix: ${testName}${buildSuffix}`;
 
   return (
     <Tooltip title={subject}>
@@ -74,11 +75,10 @@ export function CausalGroupFixRouting({
           Fix: {testName}
         </Box>
         {showBuild && (
-          // A non-breaking space keeps the rendered text and the DOM text in
-          // agreement, so the visible label really is a prefix of the
-          // accessible name rather than only looking like one.
-          <Box component="span" sx={{ flexShrink: 0 }}>
-            {`\u00a0in build ${target.buildID}`}
+          // whiteSpace: "pre" keeps the suffix's leading space, so the rendered
+          // text carries the same separator the accessible name does.
+          <Box component="span" sx={{ flexShrink: 0, whiteSpace: "pre" }}>
+            {buildSuffix}
           </Box>
         )}
       </Button>

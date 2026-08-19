@@ -240,7 +240,6 @@ test("fix routing reads as an action and names the test it opens", () => {
   // A long test name truncates inline, and the full value stays reachable on
   // hover and on keyboard focus rather than through a hover-only native title.
   assert.match(routing, /textOverflow: "ellipsis"/);
-  assert.match(routing, /const subject = `Fix: \$\{testName\} in build \$\{target\.buildID\}`/);
   assert.match(routing, /<Tooltip title=\{subject\}>/);
   assert.match(routing, /aria-label=\{subject\}/);
   assert.doesNotMatch(routing, /title=\{subject\}\s*\n\s*aria-label/);
@@ -254,14 +253,20 @@ test("the build only joins the label where it is needed to tell two actions apar
   // on every action to cover that case is what made the label unreadable.
   assert.match(routing, /showBuild = false/);
   assert.match(routing, /\{showBuild && \(/);
-  assert.match(banner, /const fixTargetTestCounts = causalFixTargets\.reduce/);
-  assert.match(banner, /counts\.set\(target\.testName, \(counts\.get\(target\.testName\) \?\? 0\) \+ 1\)/);
-  assert.match(banner, /showBuild=\{\(fixTargetTestCounts\.get\(causalFixTargets\[index\]\?\.testName \?\? ""\) \?\? 0\) > 1\}/);
+  assert.match(banner, /showBuild=\{fixTargetNeedsBuild\[index\]\}/);
 
-  // The accessible name keeps the build unconditionally, so it stays unique,
-  // and it still begins with the visible label (WCAG 2.5.3).
-  assert.match(routing, /aria-label=\{subject\}/);
-  assert.ok(routing.indexOf("const subject") < routing.indexOf("aria-label={subject}"));
+  // Counting the DISPLAYED label, not the canonical name: two canonical names
+  // can humanize to one title, which would hide both builds and leave two
+  // identical buttons. causalFixRouting.test.ts proves the rendered result.
+  assert.match(banner, /parseTestDisplayName\(target\.testName\)\.displayName/);
+  assert.match(banner, /const fixTargetLabelCounts = fixTargetLabels\.reduce/);
+
+  // One suffix backs both strings, so the visible label cannot drift out of
+  // being a literal prefix of the accessible name.
+  assert.match(routing, /const buildSuffix = ` in build \$\{target\.buildID\}`/);
+  assert.match(routing, /const subject = `Fix: \$\{testName\}\$\{buildSuffix\}`/);
+  assert.match(routing, /whiteSpace: "pre"/);
+  assert.doesNotMatch(routing, /\\u00a0/);
 });
 
 test("the pattern-level panel is a fallback for causes with no eligible test", () => {
