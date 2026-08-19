@@ -61,6 +61,7 @@ const { JobDetailPrimaryLayout } = (await vite.ssrLoadModule("/src/pages/JobDeta
     patternAnalysis?: ReturnType<typeof createElement>;
     buildFailureAnalysis?: ReturnType<typeof createElement>;
     runHistory: ReturnType<typeof createElement>;
+    runtimeTrend: ReturnType<typeof createElement>;
     runMetadata: ReturnType<typeof createElement>;
   }) => ReturnType<typeof createElement>;
 };
@@ -423,10 +424,10 @@ test("metric strip retains qualification notes without changing its shared geome
 
 test("job detail primary layout keeps analysis before the run rail in every state", () => {
   const cases = [
-    { name: "pattern and build", pattern: true, build: true, order: ["Pattern analysis", "Build analysis", "Run history", "Run metadata"] },
-    { name: "pattern only", pattern: true, build: false, order: ["Pattern analysis", "Run history", "Run metadata"] },
-    { name: "build only", pattern: false, build: true, order: ["Build analysis", "Run history", "Run metadata"] },
-    { name: "neither", pattern: false, build: false, order: ["Run history", "Run metadata"] },
+    { name: "pattern and build", pattern: true, build: true, order: ["Pattern analysis", "Build analysis", "Run history", "Runtime trend", "Run metadata"] },
+    { name: "pattern only", pattern: true, build: false, order: ["Pattern analysis", "Run history", "Runtime trend", "Run metadata"] },
+    { name: "build only", pattern: false, build: true, order: ["Build analysis", "Run history", "Runtime trend", "Run metadata"] },
+    { name: "neither", pattern: false, build: false, order: ["Run history", "Runtime trend", "Run metadata"] },
   ];
 
   for (const tc of cases) {
@@ -434,6 +435,7 @@ test("job detail primary layout keeps analysis before the run rail in every stat
       patternAnalysis: tc.pattern ? createElement("section", null, "Pattern analysis") : undefined,
       buildFailureAnalysis: tc.build ? createElement("section", null, "Build analysis") : undefined,
       runHistory: createElement("section", null, "Run history"),
+      runtimeTrend: createElement("section", null, "Runtime trend"),
       runMetadata: createElement("section", null, "Run metadata"),
     }));
 

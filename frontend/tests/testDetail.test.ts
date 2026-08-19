@@ -111,7 +111,7 @@ test("test detail preserves technical identity and selected-run routing", () => 
   assert.match(page, /<RunHistory[\s\S]*onSelect=\{selectRun\}/);
   assert.match(page, /label: "Median duration"/);
   assert.match(page, /label: "95th percentile"/);
-  assert.match(page, /<RuntimeTrend[\s\S]*summary=\{runtimeSummary\}/);
+  assert.match(page, /\{runHistory\}[\s\S]*<RuntimeTrend[\s\S]*summary=\{runtimeSummary\}[\s\S]*\{runMetadata\}/);
   assert.match(page, /const runMetadata = selectedRun \?/);
   assert.match(page, /value: selectedTestCase[\s\S]*: "Not present"/);
   assert.match(page, /View in Prow/);
