@@ -19,8 +19,49 @@ how to pin a consumer to a reviewed version.
 
 ## [Unreleased]
 
+## [0.9.0-rc.7] - 2026-08-19
+
 ### Fixed
 
+- **Fix generation was usually rejected on any branch but the repository
+  default.** Resolving the generation base always read the repository's default
+  branch, so a failure on a release branch resolved a base on `main` and the
+  source compatibility check refused the branch mismatch before it ever compared
+  commits. The only failure that slipped through was one whose commit happened
+  to be the default branch's current head. The base is now resolved from the
+  failure's own branch, and the pull request opens against that branch instead
+  of the default one. Branch names arriving from build metadata are screened for
+  unsafe ref syntax and escaped before they reach the API path.
+
+  Rejections are also legible now. The source checks attach stable reason codes
+  (`source_branch_unknown`, `source_revision_diverged`, `source_changed`). A
+  rejected preflight returns the code in the `X-Analysis-Chat-Reason` header
+  with a human-readable message in place of a bare "invalid analysis chat
+  request", and an error raised once a chat stream is already running carries
+  the same code in its SSE payload. The underlying cause is no longer dropped
+  when preflight fails, and 4xx rejections are logged server-side alongside 5xx
+  failures, so a refusal can be diagnosed from the server rather than guessed at.
+
+  **Breaking (internal Go API).** `ghpr.Client.ResolveBase` takes a branch
+  argument; an empty string keeps the previous default-branch behavior.
+- **A dismissed pattern that aged out could not be restored.** Dismissing a
+  recurring pattern retains the marker deliberately, because correlation can
+  miss for a single pass and dropping the marker would return the pattern to the
+  active view unbidden. But the overview reads only the active recurring set, so
+  a dismissal whose pattern left that set stopped being shown there. A pattern
+  whose lifecycle moved to recovered, observing, or verified fixed still offered
+  Restore on its own banner; one that aged out entirely had no Restore path
+  anywhere. The dismissed-patterns disclosure now lists both and offers Restore.
+- **Semantic text and status colors rendered as default body text.** MUI 9
+  resolves `color` as a styled variant rather than a system prop, so a dotted
+  palette path such as `color="text.secondary"` or `color="error.main"` silently
+  emitted no CSS. Components now use the canonical variant names, and an ESLint
+  rule rejects literal dotted palette paths in the `color` prop so the failure
+  mode cannot return silently.
+- **Runtime trends were not anchored to run history.** The test detail page
+  rendered the trend charts above run history, displacing the primary content,
+  and the job detail page rendered them outside its run-history rail. Both now
+  render directly beneath run history.
 - **Docs and comments understated the engine's unattended GitHub writes.**
   Several places called the optional bot comment on new pull requests the
   engine's "only unattended GitHub write", and the README, the Pages guide, and
@@ -42,7 +83,8 @@ how to pin a consumer to a reviewed version.
   `branding.source_repo` also needs pull requests read-only. Both now match the
   reference.
 
-  All three items are documentation and comments only, with no behavior change.
+  Those last three items are documentation and comments only, with no behavior
+  change.
 
 ## [0.9.0-rc.6] - 2026-08-19
 

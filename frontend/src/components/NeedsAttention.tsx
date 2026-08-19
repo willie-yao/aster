@@ -607,7 +607,7 @@ export function UnlistedDismissalRow({
           <Typography
             variant="caption"
             component="span"
-            color="text.secondary"
+            color="textSecondary"
             title={entry.note}
             sx={{
               display: "block",
