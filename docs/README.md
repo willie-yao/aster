@@ -69,5 +69,6 @@ Recommended order:
 - [Development](development.md)
 - [Testing](testing.md)
 - [Releasing](releasing.md)
+- [Brand](brand.md)
 - [Notifications](notifications.md)
 - [GitHub issues](github-issues.md)

@@ -153,27 +153,20 @@ export function Layout() {
                 justifyContent: "center",
                 width: 32,
                 height: 32,
-                borderRadius: "4px",
                 flexShrink: 0,
-                bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh,
-                border: "1px solid",
-                borderColor: "divider",
               }}
             >
-              <SvgIcon
-                viewBox="0 0 24 24"
-                fill="none"
-                sx={{ fontSize: 20, color: "primary.main", fill: "none" }}
-              >
+              <SvgIcon viewBox="0 0 64 64" sx={{ fontSize: 30 }}>
+                <defs>
+                  <linearGradient id="asterMark" x1="0" y1="0" x2="0.35" y2="1">
+                    <stop offset="0" stopColor="var(--mui-palette-brand-from)" />
+                    <stop offset="1" stopColor="var(--mui-palette-brand-to)" />
+                  </linearGradient>
+                </defs>
                 <path
-                  d="M12 3.7 19.65 18.4 12 15.7l-7.65 2.7L12 3.7Z"
-                  stroke="currentColor"
-                  strokeWidth={1.85}
-                  strokeLinejoin="round"
-                />
-                <path
-                  d="M12 6.7c.35 2.13 1.45 3.25 3.55 3.6-2.1.35-3.2 1.47-3.55 3.6-.35-2.13-1.45-3.25-3.55-3.6 2.1-.35 3.2-1.47 3.55-3.6Z"
-                  fill="currentColor"
+                  d="M32 5.1 60 58.9 32 49.02 4 58.9Z M32 18.32 40.78 38.22 32 34.1 23.22 38.22Z"
+                  fill="url(#asterMark)"
+                  fillRule="evenodd"
                 />
               </SvgIcon>
             </Box>

@@ -26,20 +26,39 @@ await vite.close();
 const { defaultTheme, darkTokens, lightTokens } = themeModule;
 const { overviewTypography, overviewLayout } = overviewModule;
 
-test("operator console palette uses graphite surfaces and Azure blue", () => {
+test("operator console palette uses graphite surfaces and brand violet", () => {
   assert.equal(darkTokens.background, "#0d1117");
   assert.equal(darkTokens.surfaceContainer, "#161b22");
   assert.equal(darkTokens.outlineVariant, "#30363d");
-  assert.equal(darkTokens.primary, "#2f81f7");
-  assert.equal(darkTokens.primaryDim, "#388bfd");
+  assert.equal(darkTokens.primary, "#a78bfa");
+  assert.equal(darkTokens.primaryDim, "#c4b5fd");
   assert.equal(darkTokens.tertiaryDim, "#a9791b");
   assert.equal(darkTokens.onPrimary, "#0d1117");
   assert.equal(darkTokens.onSecondary, "#0d1117");
   assert.equal(lightTokens.background, "#f6f8fa");
   assert.equal(lightTokens.surfaceContainer, "#ffffff");
   assert.equal(lightTokens.outlineVariant, "#d0d7de");
-  assert.equal(lightTokens.primary, "#0969da");
+  assert.equal(lightTokens.primary, "#7c3aed");
   assert.equal(lightTokens.tertiaryDim, "#7d4e00");
+});
+
+test("brand gradient stops are exposed and distinct from status colors", () => {
+  assert.equal(lightTokens.brandFrom, "#7c3aed");
+  assert.equal(lightTokens.brandTo, "#ec4899");
+  assert.equal(darkTokens.brandFrom, "#a78bfa");
+  assert.equal(darkTokens.brandTo, "#f472b6");
+  // palette.brand is a module augmentation; this config does not compile the
+  // theme sources, so read it the same way the typography variants are read.
+  const palette = defaultTheme.palette as unknown as {
+    brand: { from: string; to: string };
+  };
+  assert.equal(palette.brand.from, darkTokens.brandFrom);
+  assert.equal(palette.brand.to, darkTokens.brandTo);
+  // Status colors carry CI meaning and must not be restyled to the brand.
+  assert.equal(lightTokens.dotPass, "#1a7f37");
+  assert.equal(lightTokens.dotFail, "#cf222e");
+  assert.equal(darkTokens.dotPass, "#3fb950");
+  assert.equal(darkTokens.dotFail, "#f85149");
 });
 
 test("operator console theme keeps compact technical typography", () => {

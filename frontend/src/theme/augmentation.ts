@@ -24,14 +24,23 @@ export interface DotPalette {
   fail: string;
 }
 
+// The two stops of the brand gradient. Reserved for identity surfaces such as
+// the header mark; it carries no status meaning and must not encode state.
+export interface BrandPalette {
+  from: string;
+  to: string;
+}
+
 declare module "@mui/material/styles" {
   interface Palette {
     surface: SurfacePalette;
     dot: DotPalette;
+    brand: BrandPalette;
   }
   interface PaletteOptions {
     surface?: Partial<SurfacePalette>;
     dot?: Partial<DotPalette>;
+    brand?: Partial<BrandPalette>;
   }
 
   interface TypographyVariants {
