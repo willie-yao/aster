@@ -5,7 +5,8 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { createServer } from "vite";
-import type { PatternAnalysis, PatternRefreshStatus } from "../src/types/dashboard.js";
+import { unlistedDismissals } from "../src/lib/dashboardOverview.js";
+import type { FlakinessReport, PatternAnalysis, PatternRefreshStatus, ResolvedEntry } from "../src/types/dashboard.js";
 import type { AuthState } from "../src/hooks/useAuth.js";
 import type { Capabilities } from "../src/types/capabilities.js";
 
@@ -21,6 +22,14 @@ const { PatternBanner } = (await vite.ssrLoadModule("/src/components/PatternBann
     pattern: PatternAnalysis;
     jobID?: string;
     refreshStatus?: PatternRefreshStatus;
+  }) => ReturnType<typeof createElement>;
+};
+const { UnlistedDismissalRow } = (await vite.ssrLoadModule("/src/components/NeedsAttention.tsx")) as {
+  UnlistedDismissalRow: (props: {
+    failureID: string;
+    entry: ResolvedEntry;
+    filePrefix: string;
+    onRestored: () => void;
   }) => ReturnType<typeof createElement>;
 };
 const { CapabilitiesContext } = (await vite.ssrLoadModule("/src/hooks/useCapabilities.ts")) as {
@@ -148,4 +157,108 @@ test("the pattern-level eligibility notice stays with the legacy contract", () =
   // The same notice is suppressed on a causal-group result, where pattern-level
   // drafting does not apply and per-cause remediation is shown instead.
   assert.doesNotMatch(render(causalGroupPattern()), /Preview generation failed/);
+});
+
+// A dismissal whose pattern has left the active recurring set is retained by
+// the fetcher but disappears from the overview, so the dismissed-patterns
+// disclosure lists it with the restore path.
+
+function reportWith(ids: string[]): FlakinessReport {
+  return {
+    generated_at: "2026-08-18T00:00:00Z",
+    most_flaky: [],
+    persistent_failures: [],
+    recently_broken: [],
+    build_failures: [],
+    recurring_patterns: ids.map((id) => causalGroupPattern({ id })),
+  };
+}
+
+function dismissal(overrides: Partial<ResolvedEntry> = {}): ResolvedEntry {
+  return {
+    resolved_at: "2026-08-17T00:00:00Z",
+    resolved_by: "willie-yao",
+    watermark: "250",
+    subject: "periodic-capz-e2e-main",
+    ...overrides,
+  };
+}
+
+// recurring_patterns comes from patterns.CollectRecurring, which publishes only
+// systemic, lifecycle-active patterns and does not truncate. So an id missing
+// from it is either a pattern that aged out or one whose lifecycle moved on,
+// and the overview, which reads nothing else, cannot tell them apart.
+test("only dismissals absent from the active recurring set are listed as unlisted", () => {
+  const report = reportWith(["pattern-1"]);
+  const state = { resolved: { "pattern-1": dismissal(), "pattern-gone": dismissal() } };
+
+  assert.deepEqual(
+    unlistedDismissals(report, state, true).map(([id]) => id),
+    ["pattern-gone"],
+  );
+});
+
+test("unlisted dismissals are withheld where they could not be restored", () => {
+  const state = { resolved: { "pattern-gone": dismissal() } };
+
+  // An unread report cannot distinguish an unlisted pattern from an unread one.
+  assert.deepEqual(unlistedDismissals(null, state, true), []);
+  // Restoring is the only thing a viewer can do with one, so a read-only or
+  // signed-out viewer is shown nothing rather than a row that cannot act.
+  assert.deepEqual(unlistedDismissals(reportWith([]), state, false), []);
+});
+
+function renderUnlisted(
+  entry: ResolvedEntry,
+  auth: AuthState = admin,
+  capabilities = serverCapabilities,
+): string {
+  const tree: ReactNode = createElement(
+    ThemeProvider,
+    { theme: defaultTheme },
+    createElement(
+      MemoryRouter,
+      null,
+      createElement(
+        CapabilitiesContext.Provider,
+        { value: capabilities },
+        createElement(
+          AuthContext.Provider,
+          { value: auth },
+          createElement(UnlistedDismissalRow, {
+            failureID: "pattern-gone",
+            entry,
+            filePrefix: "",
+            onRestored: () => {},
+          }),
+        ),
+      ),
+    ),
+  );
+  return renderToStaticMarkup(tree);
+}
+
+test("an unlisted dismissal offers Restore and explains why it has no analysis", () => {
+  const html = renderUnlisted(dismissal({ note: "fixed upstream in kubernetes/kubernetes#1" }));
+
+  assert.match(html, /Restore pattern/);
+  assert.match(html, /Dismissed by willie-yao/);
+  assert.match(html, /no longer among the active recurring failures/);
+  assert.match(html, /fixed upstream/);
+  // The pattern left the active set, so there is nothing to dismiss again and
+  // no pattern-level analysis to draft from.
+  assert.doesNotMatch(html, /Dismiss pattern/);
+  assert.doesNotMatch(html, /Draft issue/);
+  // resolved.json records no job and the overview cannot confirm the pattern is
+  // still published anywhere, so the row has no destination to offer. That also
+  // keeps the Restore button out of a surrounding link.
+  assert.doesNotMatch(html, /<a /);
+});
+
+test("restoring an unlisted dismissal stays behind admin auth and the actions capability", () => {
+  const anonymous: AuthState = { ...admin, status: "anonymous", login: null };
+  assert.doesNotMatch(renderUnlisted(dismissal(), anonymous), /Restore pattern/);
+
+  const readOnly: Capabilities = { mode: "static", features: { actions: false } };
+  assert.doesNotMatch(renderUnlisted(dismissal(), admin, readOnly), /Restore pattern/);
 });

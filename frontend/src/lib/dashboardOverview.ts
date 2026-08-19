@@ -1,4 +1,11 @@
-import type { FlakinessReport, JobSummary, LowPassRateEntry, TestFlakiness } from "../types/dashboard";
+import type {
+  FlakinessReport,
+  JobSummary,
+  LowPassRateEntry,
+  ResolvedEntry,
+  ResolvedState,
+  TestFlakiness,
+} from "../types/dashboard";
 
 export const MAX_OVERVIEW_PATTERNS = 5;
 
@@ -226,4 +233,31 @@ export function orderedDashboardBranches(jobs: JobSummary[]): string[] {
     }
     return a.localeCompare(b);
   });
+}
+
+// unlistedDismissals selects dismissals whose pattern has left the active
+// recurring set, paired with their id. Such a marker is retained on purpose
+// (correlation can miss for a single pass, and dropping it would return the
+// pattern to the active view unbidden), but the overview stops showing it, so
+// the dismissed-patterns disclosure offers it here.
+//
+// This covers a pattern that aged out entirely and one whose lifecycle moved to
+// recovered, observing, or verified fixed. The overview reads only the
+// recurring set, which is already filtered to active patterns, so it cannot
+// distinguish the two, and a lifecycle-inactive pattern keeps its own banner
+// where Restore is also offered.
+//
+// Restoring is the only thing a viewer can do with one, so they are selected
+// only where that is possible. A report that has not loaded yields none: it
+// cannot tell an unlisted pattern from an unread one.
+export function unlistedDismissals(
+  report: FlakinessReport | null,
+  resolved: ResolvedState,
+  canRestore: boolean,
+): [string, ResolvedEntry][] {
+  if (!report || !canRestore) return [];
+  const published = new Set(
+    (report.recurring_patterns ?? []).map((pattern) => pattern.id).filter(Boolean),
+  );
+  return Object.entries(resolved.resolved ?? {}).filter(([id]) => !published.has(id));
 }
