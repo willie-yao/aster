@@ -70,8 +70,8 @@ whole story of the versions that led up to it.
      charts are packaged, pushed, and attached successfully.
 
    In parallel, `.github/workflows/image.yml` publishes only the exact release
-   tag for the application, remote fixer, and Agent Sandbox Fix executor. Other
-   image targets remain manual-only and use commit-addressed tags. The Fix
+   tag for the application, remote fixer, and Agent Sandbox Fix executor. The
+   analysis executor and stager are manual-only. The Fix
    executor is published for `linux/amd64` at
    `ghcr.io/<owner>/aster/agent-sandbox-fix-executor`; deployed Agent Sandbox
    configuration still requires the resolved OCI digest.
@@ -111,6 +111,27 @@ when you must patch an older major after `main` has moved on:
 
 Do not pre-create empty release branches; create `release-N.x` only when there
 is a real backport to make.
+
+## Building images from a branch
+
+To deploy a commit without cutting a release, run the `Image` workflow manually
+(Actions -> Image -> Run workflow) against the branch you want. It publishes the
+application, remote fixer, and Agent Sandbox Fix executor at
+`sha-<short>` for that commit, leaving release tags and the `vMAJOR` alias
+untouched.
+
+```bash
+gh workflow run image.yml --ref main
+```
+
+Use the resulting `sha-<short>` tag to pin a deployment for testing. The Agent
+Sandbox Fix executor is still pinned by digest, so resolve it after the run:
+
+```bash
+docker buildx imagetools inspect \
+  ghcr.io/<owner>/aster/agent-sandbox-fix-executor:sha-<short> \
+  --format '{{.Manifest.Digest}}'
+```
 
 ## Rolling back
 
