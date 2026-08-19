@@ -29,6 +29,7 @@ type requestSnapshot struct {
 	View        SessionView
 	Status      string
 	FailureKind string
+	FailureGate string
 	Progress    Progress
 }
 
@@ -157,7 +158,7 @@ func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question 
 				result.View = s.sessionView(current)
 				return changed, nil
 			case requestFailed:
-				return changed, persistedRequestError(previous.FailureKind)
+				return changed, persistedRequestError(previous.FailureKind, previous.FailureGate)
 			case requestUnknown:
 				return changed, ErrRequestOutcomeUnknown
 			default:
@@ -289,6 +290,7 @@ func (s *Service) finishTurn(id, owner, requestID, leaseID, question string, rep
 		if runErr != nil {
 			previous.Status = requestFailed
 			previous.FailureKind = requestFailureKind(runErr)
+			previous.FailureGate, _ = ValidationGateOf(runErr)
 			current.Requests[requestID] = previous
 			return true, nil
 		}
@@ -297,6 +299,7 @@ func (s *Service) finishTurn(id, owner, requestID, leaseID, question string, rep
 			Message{
 				Role: "assistant", RequestID: requestID, Content: reply.Answer, Assessment: reply.Assessment,
 				Citations: slices.Clone(reply.Citations), ProposedRevision: cloneRevision(reply.ProposedRevision),
+				Unverified: reply.Unverified, UnverifiedReason: reply.UnverifiedReason,
 				ToolCalls: reply.ToolCalls, GCSBytes: reply.GCSBytes, ElapsedMs: reply.ElapsedMs,
 				ProviderMs: reply.ProviderMs, ValidationRetries: reply.ValidationRetries,
 				CreatedAt: stamp,
@@ -344,7 +347,7 @@ func (s *Service) waitForRequest(
 		case requestSucceeded:
 			return snapshot.View, nil
 		case requestFailed:
-			return SessionView{}, persistedRequestError(snapshot.FailureKind)
+			return SessionView{}, persistedRequestError(snapshot.FailureKind, snapshot.FailureGate)
 		case requestUnknown:
 			return SessionView{}, ErrRequestOutcomeUnknown
 		}
@@ -377,6 +380,7 @@ func (s *Service) requestSnapshot(id, owner, requestID string) (requestSnapshot,
 		}
 		snapshot.Status = request.Status
 		snapshot.FailureKind = request.FailureKind
+		snapshot.FailureGate = request.FailureGate
 		if request.Status == requestSucceeded {
 			snapshot.View = s.sessionView(current)
 		}

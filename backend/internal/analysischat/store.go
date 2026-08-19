@@ -70,6 +70,7 @@ type persistedRequest struct {
 	Question     string `json:"question,omitempty"`
 	Status       string `json:"status"`
 	FailureKind  string `json:"failure_kind,omitempty"`
+	FailureGate  string `json:"failure_gate,omitempty"`
 	Turn         int    `json:"turn,omitempty"`
 	CreatedAt    string `json:"created_at,omitempty"`
 	UpdatedAt    string `json:"updated_at,omitempty"`
@@ -102,7 +103,6 @@ const (
 	failureModel      = "model"
 	failureProvider   = "provider"
 	failureValidation = "validation"
-	failureCitation   = "citation"
 	failureTimeout    = "timeout"
 	failureCancelled  = "cancelled"
 	failureSource     = "source"
