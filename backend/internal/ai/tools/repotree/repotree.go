@@ -150,6 +150,46 @@ func (*listTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}}
 }
 
+// ReadObservation identifies complete source lines returned by read_repo_file.
+type ReadObservation struct {
+	Path               string
+	LineStart, LineEnd int
+}
+
+func completeReadLineRange(content string, offset, end int) (int, int, bool) {
+	if offset < 0 || end <= offset || end > len(content) {
+		return 0, 0, false
+	}
+	start := offset
+	if start > 0 && content[start-1] != '\n' {
+		if next := strings.IndexByte(content[start:end], '\n'); next >= 0 {
+			start += next + 1
+		} else {
+			return 0, 0, false
+		}
+	}
+	finish := end
+	if finish < len(content) && finish > 0 && content[finish-1] != '\n' {
+		if prior := strings.LastIndexByte(content[start:finish], '\n'); prior >= 0 {
+			finish = start + prior + 1
+		} else {
+			return 0, 0, false
+		}
+	}
+	if finish <= start || strings.TrimSpace(content[start:finish]) == "" {
+		return 0, 0, false
+	}
+	lineStart := 1 + strings.Count(content[:start], "\n")
+	lineEnd := lineStart + strings.Count(content[start:finish], "\n")
+	if strings.HasSuffix(content[start:finish], "\n") {
+		lineEnd--
+	}
+	if lineEnd < lineStart {
+		lineEnd = lineStart
+	}
+	return lineStart, lineEnd, true
+}
+
 type readTool struct{}
 
 func (*readTool) Name() string  { return "read_repo_file" }
@@ -208,7 +248,7 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		end = size
 	}
 	slice := content[offset:end]
-	return tools.Result{
+	result := tools.Result{
 		BytesFetched: len(slice), ContentBytes: len(slice),
 		Payload: map[string]interface{}{
 			"path":      args.Path,
@@ -218,6 +258,10 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 			"content":   slice,
 		},
 	}
+	if lineStart, lineEnd, ok := completeReadLineRange(content, offset, end); ok {
+		result.Observation = ReadObservation{Path: args.Path, LineStart: lineStart, LineEnd: lineEnd}
+	}
+	return result
 }
 
 // GrepMatchObservation identifies one canonical source range returned by grep_repo.

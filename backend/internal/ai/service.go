@@ -88,6 +88,7 @@ type Service struct {
 
 	// draftSelectionObserver reports which parseable attempt production selected.
 	draftSelectionObserver DraftSelectionObserver
+	sourceEvidenceObserver SourceEvidenceObserver
 }
 
 // NewService constructs a Service. systemPrompt is the full composed prompt and
@@ -189,6 +190,10 @@ func (s *Service) SetDraftObserver(observer DraftObserver) {
 // SetDraftSelectionObserver installs the optional benchmark selection hook.
 func (s *Service) SetDraftSelectionObserver(observer DraftSelectionObserver) {
 	s.draftSelectionObserver = observer
+}
+
+func (s *Service) SetSourceEvidenceObserver(observer SourceEvidenceObserver) {
+	s.sourceEvidenceObserver = observer
 }
 
 // Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case
@@ -335,6 +340,7 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 		FailureSignal:          failureSignal,
 		DraftObserver:          s.draftObserver,
 		DraftSelectionObserver: s.draftSelectionObserver,
+		SourceEvidenceObserver: s.sourceEvidenceObserver,
 		PromptHash:             promptHash,
 	}
 	return s.client.doAnalyzeAgentic(ctx, in, cacheKey, s.systemPrompt, userPrompt)

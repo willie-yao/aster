@@ -213,3 +213,20 @@ func mustJSON(v map[string]interface{}) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
 }
+
+func TestCompleteReadLineRange(t *testing.T) {
+	content := "first\nsecond\nthird"
+	for _, tc := range []struct {
+		offset, end, start, finish int
+		ok                         bool
+	}{
+		{0, len(content), 1, 3, true},
+		{2, 13, 2, 2, true},
+		{1, 4, 0, 0, false},
+	} {
+		start, finish, ok := completeReadLineRange(content, tc.offset, tc.end)
+		if start != tc.start || finish != tc.finish || ok != tc.ok {
+			t.Fatalf("%+v got %d %d %t", tc, start, finish, ok)
+		}
+	}
+}
