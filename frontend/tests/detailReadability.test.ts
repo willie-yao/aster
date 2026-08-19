@@ -25,16 +25,15 @@ test("detail headings use the enlarged readable scale", () => {
 
 test("analysis briefing uses a calmer prose measure and rhythm", () => {
   const briefing = source("src/components/AnalysisBriefing.tsx");
-  const pattern = source("src/components/PatternBanner.tsx");
-  const analysis = source("src/components/AiAnalysisPanel.tsx");
+  const section = source("src/components/BriefingSection.tsx");
 
   assert.match(briefing, /maxWidth: "68ch"/);
   assert.match(briefing, /fontSize: "16px"/);
   assert.match(briefing, /lineHeight: "25px"/);
   assert.match(briefing, /fontWeight: 550/);
   assert.match(briefing, /gap: 2\.25/);
-  assert.match(pattern, /fontSize: "16px", lineHeight: "25px"/);
-  assert.match(analysis, /fontSize: "16px", lineHeight: "25px"/);
+  // Both pages now get the section body scale from the shared component.
+  assert.match(section, /fontSize: "16px", lineHeight: "25px"/);
 });
 
 test("detail strip dividers always use the quiet divider token", () => {
@@ -130,9 +129,65 @@ test("causal group rhythm and headings express the hierarchy", () => {
   );
 
   // Heading levels stay sequential: h3 section, h4 cause, h5 rows within it.
-  assert.match(pattern, /component="h3"/);
+  // The h3 now lives in the shared BriefingSection rather than in each page.
+  assert.match(source("src/components/BriefingSection.tsx"), /component="h3"/);
   assert.match(cause, /component="h4"/);
   assert.match(cause, /component="h5"[\s\S]*Affected \{group\.builds\.length === 1 \? "build" : "builds"\}/);
   assert.match(remediation, /component="h5"/);
   assert.doesNotMatch(remediation, /component="h4"/);
+});
+
+test("one shared component defines the briefing section treatment", () => {
+  const pattern = source("src/components/PatternBanner.tsx");
+  const panel = source("src/components/AiAnalysisPanel.tsx");
+
+  // These two were byte-identical copies, which is how the two pages drifted.
+  assert.match(pattern, /import \{ BriefingSection \} from "\.\/BriefingSection"/);
+  assert.match(panel, /import \{ BriefingSection \} from "\.\/BriefingSection"/);
+  assert.doesNotMatch(pattern, /^function BriefingSection\(/m);
+  assert.doesNotMatch(panel, /DetailAnalysisSection/);
+
+  // Both pages render their labelled blocks through it.
+  assert.match(pattern, /<BriefingSection label="Causal groups">/);
+  assert.match(panel, /<BriefingSection label="Root cause">/);
+  assert.match(panel, /<BriefingSection label="Suggested remediation">/);
+});
+
+test("a long section cannot run into the next one without a boundary", () => {
+  const section = source("src/components/BriefingSection.tsx");
+
+  // A root cause routinely runs several hundred pixels tall. The container gap
+  // alone did not read as a boundary against a block that size.
+  assert.match(section, /"&:not\(:first-of-type\)":/);
+  assert.match(section, /borderTop: "1px solid"/);
+  assert.match(section, /borderColor: "divider"/);
+
+  // Scoped to the section element, so a non-section sibling such as the status
+  // row never shifts which block counts as first.
+  assert.match(section, /component="section"/);
+
+  // The separation added on top of the container gap must exceed the gap
+  // between a section's own label and its body, or the rhythm inverts.
+  const pt = Number(/pt: ([\d.]+)/.exec(section)?.[1]);
+  const labelGap = Number(/mt: ([\d.]+)[^}]*fontSize: "16px"/.exec(section)?.[1]);
+  assert.ok(Number.isFinite(pt), "section top padding not found");
+  assert.ok(Number.isFinite(labelGap), "label-to-body gap not found");
+  assert.ok(pt > labelGap, `section padding ${pt} must exceed the label gap ${labelGap}`);
+});
+
+test("the severity chip is suppressed only where a header already states it", () => {
+  const panel = source("src/components/AiAnalysisPanel.tsx");
+  const testDetail = source("src/pages/TestDetailPage.tsx");
+  const table = source("src/components/TestCaseTable.tsx");
+  const buildFailure = source("src/components/BuildFailurePanel.tsx");
+
+  assert.match(panel, /severityInHeader = false/);
+  assert.match(panel, /\{!severityInHeader && \(\s*<Chip/);
+
+  // Only the test detail page wraps the panel in a band that leads with the
+  // severity, so only it opts out.
+  assert.match(testDetail, /severity\} severity ·/);
+  assert.match(testDetail, /severityInHeader/);
+  assert.doesNotMatch(table, /severityInHeader/);
+  assert.doesNotMatch(buildFailure, /severityInHeader/);
 });

@@ -507,6 +507,7 @@ export function TestDetailPage() {
             analysis_generated_at: selectedTestCase.ai_analysis.generated_at,
           }}
           appearance="detail"
+          severityInHeader
         />
       )}
       collapseDetailsOnMobile={false}
