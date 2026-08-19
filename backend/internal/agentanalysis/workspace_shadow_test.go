@@ -2,6 +2,7 @@ package agentanalysis
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -29,12 +30,14 @@ func TestWorkspaceProvenanceRetainsBoundedLifecycleTelemetry(t *testing.T) {
 			TaskFinalized: true, TaskFinalizedMs: 8000, ResultAvailable: true, ResultAvailableMs: 8500,
 			SchedulingAvailable: true, SchedulingMs: 100, StagingAvailable: true, StagingMs: 200,
 			ExecutionAvailable: true, ExecutionMs: 7000, PublicationAvailable: true, PublicationMs: 300,
-			PhaseTimingStatus: "available", FinalizationChecked: true, CleanupCompleted: true, CleanupDurationMs: 400,
+			PhaseTimingStatus: "available", FailurePhase: "execution", FailureCode: "executor_failed", ExecutorStarted: true,
+			FinalizationChecked: true, CleanupCompleted: true, CleanupDurationMs: 400,
 		},
 	}
 	got := ProvenanceFromWorkspaceResult(result, request, stage, strings.Repeat("f", 64))
 	if got.InputTokens != 100 || got.CachedInputTokens != 20 || got.OutputTokens != 40 || got.ReasoningTokens != 10 || got.CostUSD != "0.001" ||
 		got.SchedulingMs != 100 || got.StagingMs != 200 || got.ExecutionMs != 7000 || got.ResultPublicationMs != 300 || got.PhaseTimingStatus != "available" ||
+		got.LifecycleFailurePhase != "execution" || got.LifecycleFailureCode != "executor_failed" || !got.ExecutorStarted ||
 		got.TerminalState != string(engineruntime.TerminalFailed) || got.OpenCodeFailureCode != "provider_error" || got.OpenCodeErrorClassification != "http_error" ||
 		got.ResultValidationStatus != WorkspaceResultRejected || len(got.ResultValidationCodes) != 1 || got.ResultValidationCodes[0] != WorkspaceInvalidArtifactPath {
 		t.Fatalf("provenance=%+v", got)
@@ -52,4 +55,14 @@ func TestWorkspaceProvenanceRetainsBoundedLifecycleTelemetry(t *testing.T) {
 
 func repositoryForTelemetryTest() sourceinvestigation.Repository {
 	return sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: strings.Repeat("1", 40)}
+}
+
+func TestResolveWorkspaceShadowStatusClassifiesStagingFailure(t *testing.T) {
+	result := WorkspaceSandboxResult{Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true, FailurePhase: "staging", FailureCode: "stager_exit_nonzero"}}
+	if got := ResolveWorkspaceShadowStatus(result, errors.Join(engineruntime.ErrStaging, errors.New("diagnostic unavailable"))); got != ShadowStatusRuntimeFailed {
+		t.Fatalf("status=%q", got)
+	}
+	if result.Execution.Analysis != nil {
+		t.Fatal("staging failure populated analysis")
+	}
 }

@@ -30,8 +30,11 @@ type fakeAgentSandboxAPI struct {
 	object                   map[string]any
 	state                    sandboxState
 	logs                     string
+	logsByContainer          map[string]string
+	logContainers            []string
 	createErr                error
 	logsErr                  error
+	logsErrByContainer       map[string]error
 	deleteErr                error
 	deleted                  bool
 	keepStateIdentity        bool
@@ -94,8 +97,19 @@ func (f *fakeAgentSandboxAPI) Delete(_ context.Context, _, _, uid string) error 
 	return nil
 }
 
-func (f *fakeAgentSandboxAPI) PodLogs(_ context.Context, _, _ string, _ int64) (string, error) {
-	return f.logs, f.logsErr
+func (f *fakeAgentSandboxAPI) PodLogs(_ context.Context, _, _, container string, _ int64) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.logContainers = append(f.logContainers, container)
+	logs := f.logs
+	if value, ok := f.logsByContainer[container]; ok {
+		logs = value
+	}
+	err := f.logsErr
+	if value, ok := f.logsErrByContainer[container]; ok {
+		err = value
+	}
+	return logs, err
 }
 
 func (f *fakeAgentSandboxAPI) PodExists(_ context.Context, _, _ string) (bool, error) {
@@ -300,6 +314,9 @@ func TestAgentSandboxRunUsesStagedReadOnlyWorkspace(t *testing.T) {
 	}
 	if result.Output != `{"terminal_state":"succeeded"}` || !result.Telemetry.CleanupCompleted {
 		t.Fatalf("result=%+v", result)
+	}
+	if !reflect.DeepEqual(api.logContainers, []string{agentSandboxContainerName}) {
+		t.Fatalf("log containers=%v", api.logContainers)
 	}
 	pod := api.object["spec"].(map[string]any)["podTemplate"].(map[string]any)["spec"].(map[string]any)
 	containers := pod["containers"].([]any)
@@ -1446,5 +1463,64 @@ func TestAgentSandboxAnalysisStagerCannotReceiveProviderToken(t *testing.T) {
 		if entry["name"] == modelprovider.TokenEnv || entry["valueFrom"] != nil {
 			t.Fatalf("stager environment contains credential reference: %+v", entry)
 		}
+	}
+}
+
+func TestAgentSandboxRunClassifiesStagerFailureBeforeExecutorLogs(t *testing.T) {
+	api := &fakeAgentSandboxAPI{
+		state: sandboxState{
+			Exists: true, UID: "uid-1", PodName: "analysis-request-1", Finished: true, FinishedReason: "PodFailed",
+			StagerFailureCode: "stager_exit_nonzero", StagerExitCode: 1, StagerReason: "Error",
+		},
+		logsByContainer: map[string]string{
+			agentSandboxStagerName: "analysis staging failed: verify staged source: source_untracked_files Authorization: Bearer secret-token https://secret.example/request",
+		},
+		logsErrByContainer: map[string]error{agentSandboxContainerName: errors.New("executor logs must not be read")},
+	}
+	opts := testAgentSandboxOptions()
+	opts.StagerImage = "stager:test"
+	opts.StagerInputClaim = "analysis-input"
+	runtime := newAgentSandboxRuntimeForTest(api, opts)
+	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
+		Purpose: "analysis", ExecutionID: "request-1", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64",
+		Request: []byte(`{"version":1}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"manifest":"abc"}`), ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)},
+	})
+	if !errors.Is(err, engineruntime.ErrStaging) {
+		t.Fatalf("result=%+v error=%v", result, err)
+	}
+	if result.Output != "" || result.Telemetry.FailurePhase != "staging" || result.Telemetry.FailureCode != "stager_exit_nonzero" || result.Telemetry.ExecutorStarted {
+		t.Fatalf("result=%+v", result)
+	}
+	if !strings.Contains(err.Error(), "diagnostic=source_untracked_files") || strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "secret.example") {
+		t.Fatalf("unsafe or incomplete error=%v", err)
+	}
+	if !reflect.DeepEqual(api.logContainers, []string{agentSandboxStagerName}) || !result.Telemetry.CleanupCompleted || !api.deleted {
+		t.Fatalf("log containers=%v telemetry=%+v deleted=%v", api.logContainers, result.Telemetry, api.deleted)
+	}
+}
+
+func TestAgentSandboxRunCleansUpWhenStagerDiagnosticIsUnavailable(t *testing.T) {
+	api := &fakeAgentSandboxAPI{
+		state: sandboxState{
+			Exists: true, UID: "uid-1", PodName: "analysis-request-1", Finished: true, FinishedReason: "PodFailed",
+			StagerFailureCode: "stager_image_pull", StagerExitCode: -1, StagerReason: "ImagePullBackOff",
+		},
+		logsErrByContainer: map[string]error{agentSandboxStagerName: errors.New("Authorization: Bearer secret-token https://secret.example/log")},
+	}
+	opts := testAgentSandboxOptions()
+	opts.StagerImage = "stager:test"
+	opts.StagerInputClaim = "analysis-input"
+	runtime := newAgentSandboxRuntimeForTest(api, opts)
+	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
+		Purpose: "analysis", ExecutionID: "request-1", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64",
+		Request: []byte(`{"version":1}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"manifest":"abc"}`), ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)},
+	})
+	if !errors.Is(err, engineruntime.ErrStaging) || !strings.Contains(err.Error(), "diagnostic=unavailable") {
+		t.Fatalf("result=%+v error=%v", result, err)
+	}
+	if strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "secret.example") || !result.Telemetry.CleanupCompleted || !api.deleted {
+		t.Fatalf("error=%v telemetry=%+v deleted=%v", err, result.Telemetry, api.deleted)
 	}
 }

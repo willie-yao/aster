@@ -219,6 +219,9 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	PublicationAvailable         bool                                   `json:"publication_available"`
 	PublicationMS                int64                                  `json:"publication_ms"`
 	PhaseTimingStatus            string                                 `json:"phase_timing_status"`
+	LifecycleFailurePhase        string                                 `json:"lifecycle_failure_phase,omitempty"`
+	LifecycleFailureCode         string                                 `json:"lifecycle_failure_code,omitempty"`
+	ExecutorStarted              bool                                   `json:"executor_started"`
 	CleanupDurationMS            int64                                  `json:"cleanup_duration_ms,omitempty"`
 	AnalysisValid                bool                                   `json:"analysis_valid"`
 	AnalysisDisposition          string                                 `json:"analysis_disposition,omitempty"`
@@ -666,7 +669,8 @@ func agentSandboxAnalyzerRecordForResult(
 		StagingAvailable: result.Telemetry.StagingAvailable, StagingMS: result.Telemetry.StagingMs,
 		ExecutionAvailable: result.Telemetry.ExecutionAvailable, ExecutionMS: result.Telemetry.ExecutionMs,
 		PublicationAvailable: result.Telemetry.PublicationAvailable, PublicationMS: result.Telemetry.PublicationMs,
-		PhaseTimingStatus:   result.Telemetry.PhaseTimingStatus,
+		PhaseTimingStatus: result.Telemetry.PhaseTimingStatus, LifecycleFailurePhase: result.Telemetry.FailurePhase,
+		LifecycleFailureCode: result.Telemetry.FailureCode, ExecutorStarted: result.Telemetry.ExecutorStarted,
 		TokenUsageAvailable: result.Telemetry.TokenUsageAvailable, CostAvailable: result.Telemetry.CostAvailable,
 		UsageStatus: result.Telemetry.UsageStatus, Resources: result.Resources,
 		HumanScoreRubricVersion: benchmarkHumanScoreRubricVersion, HumanScoreMax: benchmarkHumanScoreMax,
@@ -891,6 +895,12 @@ func agentSandboxAnalyzerBenchmarkStatus(result agentanalysis.WorkspaceSandboxRe
 		return "timeout", "timeout"
 	case errors.Is(err, context.Canceled) || errors.Is(err, engineruntime.ErrCancelled) || result.Execution.TerminalState == engineruntime.TerminalCancelled:
 		return "cancellation", "cancellation"
+	case errors.Is(err, engineruntime.ErrStaging):
+		code := result.Telemetry.FailureCode
+		if code == "" {
+			code = "staging_failure"
+		}
+		return "runtime_failure", code
 	case result.Telemetry.TaskFinalized && !result.Telemetry.ResultAvailable:
 		return "no_result", "no_result"
 	case result.Telemetry.ResultAvailable && !result.Telemetry.FinalizationValid:
@@ -1280,6 +1290,7 @@ func TestAgentSandboxAnalyzerRecordRetainsFailureUsage(t *testing.T) {
 		{name: "invalid", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{Usage: usage}, Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true, ResultAvailable: true}}, err: engineruntime.ErrMalformedResult, wantStatus: "invalid_result"},
 		{name: "validated invalid", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{TerminalState: engineruntime.TerminalFailed, FailureReason: agentanalysis.WorkspaceResultRejectedReason, ResultValidation: agentanalysis.WorkspaceResultValidation{Status: agentanalysis.WorkspaceResultRejected, Codes: []string{agentanalysis.WorkspaceInvalidArtifactPath}}, Usage: usage}, Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true, ResultAvailable: true, FinalizationValid: true}}, err: errors.New("rejected"), wantStatus: "invalid_result", wantCode: agentanalysis.WorkspaceInvalidArtifactPath},
 		{name: "no result", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{Usage: usage}, Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true}}, err: errors.New("missing"), wantStatus: "no_result"},
+		{name: "staging", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{Usage: usage}, Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true, FailurePhase: "staging", FailureCode: "stager_exit_nonzero"}}, err: engineruntime.ErrStaging, wantStatus: "runtime_failure", wantCode: "stager_exit_nonzero"},
 		{name: "timeout", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{TerminalState: engineruntime.TerminalTimedOut, Usage: usage}}, err: context.DeadlineExceeded, wantStatus: "timeout"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1287,7 +1298,11 @@ func TestAgentSandboxAnalyzerRecordRetainsFailureUsage(t *testing.T) {
 			if record.AnalysisValid || record.Status != test.wantStatus || record.ModelRequests != 3 || record.InputTokens != 100 || record.CachedInputTokens != 20 || record.OutputTokens != 40 || record.CostUSD != "0.42" || !record.TokenUsageAvailable || !record.CostAvailable || record.UsageStatus != agentanalysis.WorkspaceTelemetryAvailable {
 				t.Fatalf("record = %+v", record)
 			}
-			if test.wantCode != "" && (record.ResultValidationStatus != agentanalysis.WorkspaceResultRejected || !slices.Equal(record.ResultValidationCodes, []string{test.wantCode})) {
+			if test.name == "staging" {
+				if record.ErrorCode != test.wantCode || record.LifecycleFailurePhase != "staging" || record.LifecycleFailureCode != test.wantCode || record.ExecutorStarted {
+					t.Fatalf("staging lifecycle = %+v", record)
+				}
+			} else if test.wantCode != "" && (record.ResultValidationStatus != agentanalysis.WorkspaceResultRejected || !slices.Equal(record.ResultValidationCodes, []string{test.wantCode})) {
 				t.Fatalf("result validation = %q %v", record.ResultValidationStatus, record.ResultValidationCodes)
 			}
 		})
@@ -1329,6 +1344,7 @@ func TestAgentSandboxAnalyzerBenchmarkStatus(t *testing.T) {
 			return r
 		}(), err: engineruntime.ErrCleanupPending, want: "cleanup_pending"},
 		{name: "no result", result: agentanalysis.WorkspaceSandboxResult{Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true}}, err: errors.New("missing"), want: "no_result"},
+		{name: "staging", result: agentanalysis.WorkspaceSandboxResult{Telemetry: engineruntime.GenerateTelemetry{TaskFinalized: true, FailurePhase: "staging", FailureCode: "stager_exit_nonzero"}}, err: engineruntime.ErrStaging, want: "runtime_failure"},
 		{name: "invalid", result: agentanalysis.WorkspaceSandboxResult{Telemetry: engineruntime.GenerateTelemetry{ResultAvailable: true}}, err: engineruntime.ErrMalformedResult, want: "invalid_result"},
 		{name: "validated failure envelope", result: agentanalysis.WorkspaceSandboxResult{Execution: agentanalysis.WorkspaceExecutionResult{TerminalState: engineruntime.TerminalFailed, FailureReason: "workspace analysis result rejected", ResultValidation: agentanalysis.WorkspaceResultValidation{Status: agentanalysis.WorkspaceResultRejected, Codes: []string{agentanalysis.WorkspaceInvalidArtifactLineRange}}}, Telemetry: engineruntime.GenerateTelemetry{ResultAvailable: true, FinalizationValid: true}}, err: errors.New("workspace analysis failed"), want: "invalid_result"},
 		{name: "timeout", result: agentanalysis.WorkspaceSandboxResult{}, err: context.DeadlineExceeded, want: "timeout"},

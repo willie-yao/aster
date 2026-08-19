@@ -73,11 +73,15 @@ func Publish(ctx context.Context, request agentanalysis.WorkspacePublishRequest,
 		if err := verifyLease(final, request.LeaseID); err != nil {
 			return result, err
 		}
-		if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, filepath.Join(final, agentanalysis.WorkspaceSourceDir)); err != nil {
+		sourceRoot := filepath.Join(final, agentanalysis.WorkspaceSourceDir)
+		if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, sourceRoot); err != nil {
 			return result, err
 		}
-		policy, err := agentanalysis.ConfigurePreparedSourceModePolicy(ctx, filepath.Join(final, agentanalysis.WorkspaceSourceDir), request.Stage.Source.Revision)
+		policy, err := agentanalysis.ReadPreparedSourceModePolicy(ctx, sourceRoot)
 		if err != nil {
+			return result, err
+		}
+		if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceRoot, request.Stage.Source.Revision, policy); err != nil {
 			return result, err
 		}
 		if _, err := agentanalysis.ReadWorkspaceArtifactManifest(final, request.Stage); err != nil {
@@ -275,13 +279,21 @@ func verifyLease(root, leaseID string) error {
 }
 
 func lockSnapshot(root, manifestHash string) (*os.File, error) {
+	return openSnapshotLock(root, manifestHash, unix.O_CREAT|unix.O_RDWR, unix.LOCK_EX)
+}
+
+func lockSnapshotReadOnly(root, manifestHash string) (*os.File, error) {
+	return openSnapshotLock(root, manifestHash, unix.O_RDONLY, unix.LOCK_SH)
+}
+
+func openSnapshotLock(root, manifestHash string, openFlags, lockMode int) (*os.File, error) {
 	path := filepath.Join(root, "."+manifestHash+".lock")
-	fd, err := unix.Open(path, unix.O_CREAT|unix.O_RDWR|unix.O_NOFOLLOW, 0o600)
+	fd, err := unix.Open(path, openFlags|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, err
 	}
 	file := os.NewFile(uintptr(fd), path)
-	if err := unix.Flock(fd, unix.LOCK_EX); err != nil {
+	if err := unix.Flock(fd, lockMode); err != nil {
 		file.Close()
 		return nil, err
 	}
@@ -331,10 +343,21 @@ func PublishPreparedSnapshot(ctx context.Context, inputRoot string, manifest age
 		if _, err := agentanalysis.ReadWorkspaceArtifactManifest(final, stage); err != nil {
 			return "", err
 		}
-		if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, filepath.Join(final, agentanalysis.WorkspaceSourceDir)); err != nil {
+		sourceRoot := filepath.Join(final, agentanalysis.WorkspaceSourceDir)
+		if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, sourceRoot); err != nil {
 			return "", err
 		}
-		return agentanalysis.ConfigurePreparedSourceModePolicy(ctx, filepath.Join(final, agentanalysis.WorkspaceSourceDir), manifest.Source.Revision)
+		policy, err := agentanalysis.ReadPreparedSourceModePolicy(ctx, sourceRoot)
+		if err != nil {
+			return "", err
+		}
+		if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceRoot, manifest.Source.Revision, policy); err != nil {
+			return "", err
+		}
+		if err := agentanalysis.VerifyArtifactFiles(filepath.Join(final, agentanalysis.WorkspaceArtifactsDir), manifest.Artifacts); err != nil {
+			return "", err
+		}
+		return policy, nil
 	} else if !os.IsNotExist(err) {
 		return "", err
 	}

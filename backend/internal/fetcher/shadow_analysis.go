@@ -364,6 +364,9 @@ func (p *pipeline) runShadowCandidate(ctx context.Context, candidate shadowCandi
 	}
 	if record.Status != agentanalysis.ShadowStatusSucceeded {
 		record.ErrorCode = string(record.Status)
+		if record.Status == agentanalysis.ShadowStatusRuntimeFailed && generated.Telemetry.FailureCode != "" {
+			record.ErrorCode = generated.Telemetry.FailureCode
+		}
 	}
 	record.TotalDurationMs = time.Since(started).Milliseconds()
 	p.appendShadowRecord(record)
