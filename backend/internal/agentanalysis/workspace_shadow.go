@@ -89,8 +89,12 @@ func ProvenanceFromWorkspaceResult(result WorkspaceSandboxResult, request Worksp
 		LifecycleFailureCode: telemetry.FailureCode, ExecutorStarted: telemetry.ExecutorStarted, ProviderCredentialMode: telemetry.ProviderCredentialMode,
 		ProviderAPI: telemetry.ProviderAPI, ProviderReasoningEffort: telemetry.ProviderReasoningEffort,
 		TerminalState: string(result.Execution.TerminalState), OpenCodeFailureCode: openCode.FailureCode,
-		OpenCodeErrorClassification: openCode.Error.Classification, ResultValidationStatus: result.Execution.ResultValidation.Status,
-		ResultValidationCodes: slices.Clone(result.Execution.ResultValidation.Codes),
+		OpenCodeErrorClassification: openCode.Error.Classification, OpenCodeLocalTransport: openCode.LocalTransportFailure,
+		OpenCodeLocalPhase: openCode.LocalTransportPhase, OpenCodeLocalRecovered: openCode.LocalTransportRecovered,
+		OpenCodeServerProcessState: openCode.ServerProcessState, OpenCodeServerSignal: openCode.ServerSignal,
+		OpenCodeCgroupOOMStatus: openCode.CgroupOOMStatus,
+		ResultValidationStatus:  result.Execution.ResultValidation.Status,
+		ResultValidationCodes:   slices.Clone(result.Execution.ResultValidation.Codes),
 	}
 }
 

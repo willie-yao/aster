@@ -102,6 +102,14 @@ type WorkspaceToolTelemetry struct {
 	Denied   int    `json:"denied,omitempty"`
 }
 
+// WorkspaceSourceReadTelemetry is one content-free successful source read.
+type WorkspaceSourceReadTelemetry struct {
+	Tool      string `json:"tool"`
+	Path      string `json:"path"`
+	LineStart int    `json:"line_start"`
+	LineEnd   int    `json:"line_end"`
+}
+
 // WorkspaceOpenCodeRequestShape records bounded engine-owned request facts.
 type WorkspaceOpenCodeRequestShape struct {
 	Available                  bool   `json:"available"`
@@ -161,6 +169,7 @@ type WorkspaceOpenCodeTelemetry struct {
 	RequestShape                   WorkspaceOpenCodeRequestShape      `json:"request_shape"`
 	Error                          WorkspaceOpenCodeErrorTelemetry    `json:"error"`
 	Tools                          []WorkspaceToolTelemetry           `json:"tools,omitempty"`
+	SourceReads                    []WorkspaceSourceReadTelemetry     `json:"source_reads,omitempty"`
 	DeniedToolCount                int                                `json:"denied_tool_count,omitempty"`
 	ToolFailureCount               int                                `json:"tool_failure_count,omitempty"`
 	StepsUsed                      int                                `json:"steps_used,omitempty"`
@@ -190,6 +199,14 @@ type WorkspaceOpenCodeTelemetry struct {
 	ContextLimit                   bool                               `json:"context_limit,omitempty"`
 	TimedOut                       bool                               `json:"timed_out,omitempty"`
 	FailureCode                    string                             `json:"failure_code,omitempty"`
+	LocalTransportFailure          string                             `json:"local_transport_failure,omitempty"`
+	LocalTransportPhase            string                             `json:"local_transport_phase,omitempty"`
+	LocalTransportRecovered        bool                               `json:"local_transport_recovered,omitempty"`
+	ServerProcessState             string                             `json:"server_process_state,omitempty"`
+	ServerSignal                   string                             `json:"server_signal,omitempty"`
+	CgroupOOMStatus                string                             `json:"cgroup_oom_status,omitempty"`
+	StdoutBytes                    int                                `json:"stdout_bytes,omitempty"`
+	StderrBytes                    int                                `json:"stderr_bytes,omitempty"`
 	StdoutTruncated                bool                               `json:"stdout_truncated,omitempty"`
 	StderrTruncated                bool                               `json:"stderr_truncated,omitempty"`
 }
@@ -841,11 +858,29 @@ func validateWorkspaceOpenCodeTelemetry(telemetry WorkspaceOpenCodeTelemetry) er
 	if _, err := ai.NormalizeReasoningEffort(telemetry.ProviderReasoningEffort); err != nil {
 		return fmt.Errorf("workspace OpenCode provider reasoning effort is invalid")
 	}
-	if telemetry.EventCount < 0 || telemetry.ProviderRequests < 0 || telemetry.DeniedToolCount < 0 || telemetry.ToolFailureCount < 0 || telemetry.StepsUsed < 0 || telemetry.StructuredOutputRetries < 0 || telemetry.StructuredOutputErrors < 0 || telemetry.EvidencePhaseSteps < 0 || telemetry.EvidencePhaseRequests < 0 || telemetry.EvidenceStepBudget < 0 || telemetry.EvidenceExhaustedSteps < 0 || telemetry.EvidenceExhaustedRequests < 0 || telemetry.ArtifactEvidenceToolCalls < 0 || telemetry.SourceEvidenceToolCalls < 0 || telemetry.EvidenceReadCalls < 0 || telemetry.DuplicateReadCalls < 0 || telemetry.DuplicateReadCalls > telemetry.EvidenceReadCalls || telemetry.FinalizationPhaseSteps < 0 || telemetry.FinalizationPhaseRequests < 0 || telemetry.StructuredOutputToolCalls < 0 || !validWorkspaceFailureCode(telemetry.FailureCode) || !validWorkspaceFailureCode(telemetry.EvidenceExhaustionClass) || !validWorkspaceSourceEvidenceStatus(telemetry.SourceEvidenceStatus) || !validWorkspaceSourceEvidenceCorrectionReason(telemetry.SourceEvidenceCorrectionReason) {
+	if telemetry.EventCount < 0 || telemetry.ProviderRequests < 0 || telemetry.DeniedToolCount < 0 || telemetry.ToolFailureCount < 0 || telemetry.StepsUsed < 0 || telemetry.StructuredOutputRetries < 0 || telemetry.StructuredOutputErrors < 0 || telemetry.EvidencePhaseSteps < 0 || telemetry.EvidencePhaseRequests < 0 || telemetry.EvidenceStepBudget < 0 || telemetry.EvidenceExhaustedSteps < 0 || telemetry.EvidenceExhaustedRequests < 0 || telemetry.ArtifactEvidenceToolCalls < 0 || telemetry.SourceEvidenceToolCalls < 0 || telemetry.EvidenceReadCalls < 0 || telemetry.DuplicateReadCalls < 0 || telemetry.DuplicateReadCalls > telemetry.EvidenceReadCalls || telemetry.FinalizationPhaseSteps < 0 || telemetry.FinalizationPhaseRequests < 0 || telemetry.StructuredOutputToolCalls < 0 || telemetry.StdoutBytes < 0 || telemetry.StderrBytes < 0 || !validWorkspaceFailureCode(telemetry.FailureCode) || !validWorkspaceFailureCode(telemetry.EvidenceExhaustionClass) || !validWorkspaceFailureCode(telemetry.LocalTransportFailure) || !validWorkspaceLocalTransportPhase(telemetry.LocalTransportPhase) || !validWorkspaceServerProcessState(telemetry.ServerProcessState) || !validWorkspaceServerSignal(telemetry.ServerSignal) || !validWorkspaceCgroupOOMStatus(telemetry.CgroupOOMStatus) || !validWorkspaceSourceEvidenceStatus(telemetry.SourceEvidenceStatus) || !validWorkspaceSourceEvidenceCorrectionReason(telemetry.SourceEvidenceCorrectionReason) {
 		return fmt.Errorf("workspace OpenCode telemetry is invalid")
 	}
 	if telemetry.SourceEvidenceCorrectiveTurn != (telemetry.SourceEvidenceCorrectionReason != "") {
 		return fmt.Errorf("workspace OpenCode source evidence correction telemetry is inconsistent")
+	}
+	if telemetry.LocalTransportRecovered && (telemetry.LocalTransportFailure == "" || telemetry.LocalTransportPhase == "") {
+		return fmt.Errorf("workspace OpenCode recovered local transport telemetry is incomplete")
+	}
+	if telemetry.LocalTransportFailure == "" && (telemetry.LocalTransportPhase != "" || telemetry.ServerProcessState != "" || telemetry.ServerSignal != "" || telemetry.CgroupOOMStatus != "") {
+		return fmt.Errorf("workspace OpenCode local transport telemetry is inconsistent")
+	}
+	if telemetry.ServerSignal != "" && telemetry.ServerProcessState != "signaled" {
+		return fmt.Errorf("workspace OpenCode server signal telemetry is inconsistent")
+	}
+	if telemetry.StdoutBytes > 65537 || telemetry.StderrBytes > 65537 {
+		return fmt.Errorf("workspace OpenCode process telemetry exceeds the bound")
+	}
+	if telemetry.CgroupOOMStatus != "" && telemetry.LocalTransportFailure == "" {
+		return fmt.Errorf("workspace OpenCode cgroup telemetry lacks a local transport failure")
+	}
+	if telemetry.FailureCode == "opencode_cgroup_oom" && (telemetry.CgroupOOMStatus != WorkspaceCgroupOOMObserved || telemetry.ServerProcessState != "signaled" || telemetry.ServerSignal != "sigkill") {
+		return fmt.Errorf("workspace OpenCode cgroup OOM classification is unsupported")
 	}
 	switch telemetry.SourceEvidenceStatus {
 	case WorkspaceSourceEvidenceAccepted:
@@ -862,6 +897,20 @@ func validateWorkspaceOpenCodeTelemetry(telemetry WorkspaceOpenCodeTelemetry) er
 		if telemetry.SourceEvidenceCorrectiveTurn || telemetry.SourceEvidenceToolCalls != 0 || telemetry.EvidenceHandles.AcceptedSourceHandleCount != 0 {
 			return fmt.Errorf("unavailable workspace source tool telemetry is inconsistent")
 		}
+	}
+	if len(telemetry.SourceReads) > 512 {
+		return fmt.Errorf("workspace OpenCode source read telemetry exceeds the bound")
+	}
+	seenSourceReads := map[string]bool{}
+	for _, read := range telemetry.SourceReads {
+		if (read.Tool != "read" && read.Tool != "grep") || !safeWorkspaceSourcePath(read.Path) || read.LineStart < 1 || read.LineEnd < read.LineStart || read.LineEnd-read.LineStart+1 > 2000 {
+			return fmt.Errorf("workspace OpenCode source read telemetry is invalid")
+		}
+		key := fmt.Sprintf("%s\x00%s\x00%d\x00%d", read.Tool, read.Path, read.LineStart, read.LineEnd)
+		if seenSourceReads[key] {
+			return fmt.Errorf("workspace OpenCode source read telemetry is duplicated")
+		}
+		seenSourceReads[key] = true
 	}
 	if err := validateWorkspaceOpenCodeRequestShape(telemetry.RequestShape); err != nil {
 		return err
@@ -1160,6 +1209,48 @@ func validWorkspaceSourceEvidenceStatus(value string) bool {
 func validWorkspaceSourceEvidenceCorrectionReason(value string) bool {
 	switch value {
 	case "", WorkspaceSourceToolSkipped, WorkspaceSourceToolFailed, WorkspaceSourceEvidenceUnusable:
+		return true
+	default:
+		return false
+	}
+}
+
+func validWorkspaceLocalTransportPhase(value string) bool {
+	switch value {
+	case "", "startup", "schema", "session_create", "evidence", "source_correction", "finalization", "telemetry_fetch":
+		return true
+	default:
+		return false
+	}
+}
+
+func validWorkspaceServerProcessState(value string) bool {
+	switch value {
+	case "", "running", "exited_zero", "exited_nonzero", "signaled", "outcome_unavailable":
+		return true
+	default:
+		return false
+	}
+}
+
+func validWorkspaceServerSignal(value string) bool {
+	switch value {
+	case "", "sigkill", "sigterm", "sigabrt", "sigsegv", "sigbus", "sigill", "sigquit", "sigint", "sigpipe", "sigxcpu", "sigxfsz", "signal_other":
+		return true
+	default:
+		return false
+	}
+}
+
+const (
+	WorkspaceCgroupOOMUnavailable = "unavailable"
+	WorkspaceCgroupOOMNotObserved = "not_observed"
+	WorkspaceCgroupOOMObserved    = "observed"
+)
+
+func validWorkspaceCgroupOOMStatus(value string) bool {
+	switch value {
+	case "", WorkspaceCgroupOOMUnavailable, WorkspaceCgroupOOMNotObserved, WorkspaceCgroupOOMObserved:
 		return true
 	default:
 		return false

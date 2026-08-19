@@ -28,6 +28,7 @@ const (
 type boundedCapture struct {
 	mu        sync.Mutex
 	remaining int
+	observed  int
 	truncated bool
 }
 
@@ -36,6 +37,10 @@ func newBoundedCapture(limit int) *boundedCapture { return &boundedCapture{remai
 func (b *boundedCapture) Write(data []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.observed += len(data)
+	if b.observed > maxOpenCodeStreamBytes {
+		b.observed = maxOpenCodeStreamBytes + 1
+	}
 	if len(data) > b.remaining {
 		b.truncated = true
 		b.remaining = 0
@@ -51,10 +56,17 @@ func (b *boundedCapture) Truncated() bool {
 	return b.truncated
 }
 
+func (b *boundedCapture) BytesObserved() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.observed
+}
+
 type openCodeMessage struct {
 	Info struct {
-		Role  string                 `json:"role"`
-		Error *openCodeErrorEnvelope `json:"error"`
+		Role       string                 `json:"role"`
+		Structured json.RawMessage        `json:"structured"`
+		Error      *openCodeErrorEnvelope `json:"error"`
 	} `json:"info"`
 	Parts []openCodePart `json:"parts"`
 }
@@ -109,6 +121,7 @@ type openCodeEvidenceFacts struct {
 	NonStructuredToolCalls int
 	StructuredOutputCalls  int
 	EvidenceRanges         []agentanalysis.WorkspaceEvidenceRange
+	SourceReads            []agentanalysis.WorkspaceSourceReadTelemetry
 	EvidenceHandles        []agentanalysis.WorkspaceEvidenceHandle
 	EvidenceDiagnostics    agentanalysis.WorkspaceEvidenceHandleDiagnostics
 	EvidenceExtraObserved  int
@@ -329,6 +342,9 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 	}
 	telemetry.EvidenceReadCalls = facts.EvidenceReadCalls
 	telemetry.DuplicateReadCalls = facts.DuplicateReadCalls
+	if !facts.EvidenceRejected {
+		telemetry.SourceReads = canonicalOpenCodeSourceReads(facts.SourceReads)
+	}
 	if workDir != "" {
 		handles, diagnostics, err := agentanalysis.BuildWorkspaceEvidenceHandlesWithDeadline(workDir, facts.EvidenceRanges, facts.ParseDeadline)
 		diagnostics = mergeOpenCodeEvidenceDiagnostics(diagnostics, facts)
@@ -562,6 +578,9 @@ func recordOpenCodeEvidenceTool(facts *openCodeEvidenceFacts, tool string, raw j
 			facts.EvidenceReadRanges[key] = true
 		}
 		appendOpenCodeEvidenceRange(facts, rangeValue)
+		if root == agentanalysis.WorkspaceSourceDir {
+			appendOpenCodeSourceRead(facts, tool, rangeValue)
+		}
 		validEvidence = true
 	case "grep":
 		if matches == nil || *matches < 1 {
@@ -578,6 +597,9 @@ func recordOpenCodeEvidenceTool(facts *openCodeEvidenceFacts, tool string, raw j
 		}
 		valid, invalid, rejected, parseErr := openCodeGrepEvidenceRanges(output, workDir, root, facts, facts.ParseDeadline, func(value agentanalysis.WorkspaceEvidenceRange) {
 			appendOpenCodeEvidenceRange(facts, value)
+			if root == agentanalysis.WorkspaceSourceDir {
+				appendOpenCodeSourceRead(facts, tool, value)
+			}
 		})
 		if parseErr != nil {
 			return parseErr
@@ -600,6 +622,43 @@ func recordOpenCodeEvidenceTool(facts *openCodeEvidenceFacts, tool string, raw j
 		}
 	}
 	return nil
+}
+
+func appendOpenCodeSourceRead(facts *openCodeEvidenceFacts, tool string, value agentanalysis.WorkspaceEvidenceRange) {
+	if facts == nil || len(facts.SourceReads) >= maxOpenCodeEvidenceRangesPerRoot {
+		if facts != nil {
+			facts.EvidenceRejected = true
+			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangeOverflow, 1, 1, true, false)
+		}
+		return
+	}
+	facts.SourceReads = append(facts.SourceReads, agentanalysis.WorkspaceSourceReadTelemetry{Tool: tool, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd})
+}
+
+func canonicalOpenCodeSourceReads(values []agentanalysis.WorkspaceSourceReadTelemetry) []agentanalysis.WorkspaceSourceReadTelemetry {
+	seen := map[string]bool{}
+	out := make([]agentanalysis.WorkspaceSourceReadTelemetry, 0, len(values))
+	for _, value := range values {
+		key := fmt.Sprintf("%s\x00%s\x00%d\x00%d", value.Tool, value.Path, value.LineStart, value.LineEnd)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, value)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Path != out[j].Path {
+			return out[i].Path < out[j].Path
+		}
+		if out[i].LineStart != out[j].LineStart {
+			return out[i].LineStart < out[j].LineStart
+		}
+		if out[i].LineEnd != out[j].LineEnd {
+			return out[i].LineEnd < out[j].LineEnd
+		}
+		return out[i].Tool < out[j].Tool
+	})
+	return out
 }
 
 func openCodeGrepEvidenceRanges(output, workDir, wantRoot string, facts *openCodeEvidenceFacts, deadline time.Time, retain func(agentanalysis.WorkspaceEvidenceRange)) (int, int, bool, error) {
