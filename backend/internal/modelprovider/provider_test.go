@@ -167,3 +167,35 @@ func TestNewCredentialGuardRejectsWhitespaceOnlyToken(t *testing.T) {
 		t.Fatal("want an error for a whitespace-only credential")
 	}
 }
+
+// GitHub Copilot answers a request without its integration header with an
+// unexplained 403, so every caller of that endpoint must send it.
+func TestEndpointHeaders(t *testing.T) {
+	copilot := map[string]string{CopilotIntegrationHeader: CopilotIntegrationID}
+	tests := []struct {
+		endpoint string
+		want     map[string]string
+	}{
+		{"https://api.githubcopilot.com/chat/completions", copilot},
+		{"https://api.githubcopilot.com:443/responses", copilot},
+		{"https://API.GitHubCopilot.com./chat/completions", copilot},
+		{"https://githubcopilot.com/chat/completions", copilot},
+		{"https://notgithubcopilot.com/chat/completions", nil},
+		{"https://api.openai.com/v1/chat/completions", nil},
+		{"https://gateway.example.svc/v1/chat/completions", nil},
+		{"http://localhost:11434/v1/chat/completions", nil},
+		{"://broken", nil},
+	}
+	for _, tt := range tests {
+		got := EndpointHeaders(tt.endpoint)
+		if len(got) != len(tt.want) {
+			t.Errorf("EndpointHeaders(%q) = %v, want %v", tt.endpoint, got, tt.want)
+			continue
+		}
+		for name, value := range tt.want {
+			if got[name] != value {
+				t.Errorf("EndpointHeaders(%q)[%s] = %q, want %q", tt.endpoint, name, got[name], value)
+			}
+		}
+	}
+}

@@ -455,6 +455,9 @@ func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps in
 	if provider.Auth.Type == modelprovider.AuthTypeBearer {
 		providerOptions["apiKey"] = "{env:" + modelprovider.TokenEnv + "}"
 	}
+	if headers := modelprovider.EndpointHeaders(provider.Endpoint); len(headers) > 0 {
+		providerOptions["headers"] = headers
+	}
 	modelOptions := map[string]any{"limit": map[string]any{"context": 128000, "output": 8192}}
 	if provider.ReasoningEffort != "" {
 		modelOptions["options"] = map[string]any{"reasoningEffort": string(provider.ReasoningEffort)}

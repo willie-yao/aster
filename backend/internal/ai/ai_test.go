@@ -174,26 +174,6 @@ func TestNewClientWithOptionsOverrides(t *testing.T) {
 	}
 }
 
-func TestIsCopilotEndpoint(t *testing.T) {
-	tests := []struct {
-		url  string
-		want bool
-	}{
-		{"https://api.githubcopilot.com/chat/completions", true},
-		{"https://api.githubcopilot.com:443/chat/completions", true},
-		{"https://api.openai.com/v1/chat/completions", false},
-		{"https://integrate.api.nvidia.com/v1/chat/completions", false},
-		{"https://my.openai.azure.com/openai/deployments/gpt4/chat/completions", false},
-		{"http://localhost:11434/v1/chat/completions", false},
-		{"://broken", false},
-	}
-	for _, tt := range tests {
-		if got := isCopilotEndpoint(tt.url); got != tt.want {
-			t.Errorf("isCopilotEndpoint(%q) = %v, want %v", tt.url, got, tt.want)
-		}
-	}
-}
-
 // TestCopilotHeaderSkippedForNonCopilotEndpoint verifies the integration
 // header isn't sent when the configured endpoint isn't api.githubcopilot.com.
 func TestCopilotHeaderSkippedForNonCopilotEndpoint(t *testing.T) {
