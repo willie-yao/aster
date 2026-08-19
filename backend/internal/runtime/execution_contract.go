@@ -79,7 +79,19 @@ const (
 	ExecutionFailureRuntime         ExecutionFailureCode = "runtime"
 	ExecutionFailureReviewScope     ExecutionFailureCode = "review_scope"
 	ExecutionFailureSafetyIntegrity ExecutionFailureCode = "safety_integrity"
+	// ExecutionFailureProviderCredential means the model provider rejected the
+	// execution credential, which no retry can recover from.
+	ExecutionFailureProviderCredential ExecutionFailureCode = "provider_credential"
 )
+
+func supportedExecutionFailureCode(code ExecutionFailureCode) bool {
+	switch code {
+	case ExecutionFailureRuntime, ExecutionFailureReviewScope, ExecutionFailureSafetyIntegrity, ExecutionFailureProviderCredential:
+		return true
+	default:
+		return false
+	}
+}
 
 // CommandResult records one allowed command execution.
 type CommandResult struct {
@@ -260,7 +272,7 @@ func (r ExecutionResult) Validate(request ExecutionRequest) error {
 		if r.TerminalState != TerminalFailed && r.FailureCode != "" {
 			return fmt.Errorf("terminal state %q cannot carry failure code %q", r.TerminalState, r.FailureCode)
 		}
-		if r.TerminalState == TerminalFailed && r.FailureCode != "" && r.FailureCode != ExecutionFailureRuntime && r.FailureCode != ExecutionFailureReviewScope && r.FailureCode != ExecutionFailureSafetyIntegrity {
+		if r.TerminalState == TerminalFailed && r.FailureCode != "" && !supportedExecutionFailureCode(r.FailureCode) {
 			return fmt.Errorf("execution failure code %q is not supported", r.FailureCode)
 		}
 	default:

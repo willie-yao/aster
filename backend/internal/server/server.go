@@ -646,18 +646,7 @@ func safeOperatorError(err error) string {
 	if err == nil {
 		return "unknown error"
 	}
-	value := redact.Credentials(redact.URLs(strings.TrimSpace(err.Error())))
-	value = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return ' '
-		}
-		return r
-	}, value)
-	value = strings.Join(strings.Fields(value), " ")
-	if len(value) > 500 {
-		value = value[:500] + "..."
-	}
-	return value
+	return redact.OperatorText(err.Error())
 }
 
 type actionEligibilityFunc func(context.Context, string) (actions.Eligibility, error)

@@ -20,6 +20,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/issues"
 	"github.com/willie-yao/aster/backend/internal/patternstate"
 	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/redact"
 	"github.com/willie-yao/aster/backend/internal/remediationpolicy"
 	"github.com/willie-yao/aster/backend/internal/runtime"
 	"github.com/willie-yao/aster/backend/internal/statefile"
@@ -1292,6 +1293,32 @@ func (s *Service) generateAnalysisFixRequest(id, userToken string) {
 	})
 }
 
+// logGenerationFailure records why one draft generation failed. The runtime
+// wraps the executor's failure reason into the error chain, so this is where an
+// operator recovers a sandbox-side cause such as a rejected provider credential.
+func logGenerationFailure(id string, code ReasonCode, failure *AnalysisFixFailureView, err error) {
+	detail := "no additional detail"
+	if cause := generationFailureCause(err); cause != nil {
+		detail = redact.OperatorText(cause.Error())
+	}
+	category := "unknown"
+	if failure != nil && failure.Category != "" {
+		category = string(failure.Category)
+	}
+	log.Printf("action request %s: generation failed (reason=%s category=%s): %s", id, code, category, detail)
+}
+
+// generationFailureCause returns the private cause behind a classified action
+// error. A classified error reports the static operator message, so the cause is
+// the only place the underlying diagnosis survives.
+func generationFailureCause(err error) error {
+	var reasonErr *ReasonError
+	if errors.As(err, &reasonErr) && reasonErr.Cause != nil {
+		return reasonErr.Cause
+	}
+	return err
+}
+
 func (s *Service) generateRequestOperation(id string, generate requestOperationGenerator) {
 	ctx, cancel := context.WithTimeout(withActionRequestID(context.Background(), id), s.requestTimeout)
 	needsCleanup := false
@@ -1363,6 +1390,7 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 		if ctx.Err() != nil {
 			failure = &AnalysisFixFailureView{Category: AnalysisFixFailureTimedOut, TerminalState: runtime.TerminalTimedOut}
 		}
+		logGenerationFailure(id, reasonCode, failure, err)
 		_, transitionErr := s.transitionToCleanupWithFailure(id, RequestFailed, reason, reasonCode, failure)
 		if transitionErr == nil {
 			needsCleanup = true
@@ -1396,6 +1424,7 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 		} else {
 			request.Failure = nil
 		}
+		logGenerationFailure(id, request.ReasonCode, request.Failure, err)
 		if fallbackPreview {
 			request.Warning = draftRefinementWarning
 			request.Preview = &preview

@@ -14,6 +14,7 @@ type AnalysisFailureCategory string
 const (
 	AnalysisFailureNoReviewablePatch     AnalysisFailureCategory = "no_reviewable_patch"
 	AnalysisFailureRuntimeInfrastructure AnalysisFailureCategory = "runtime_infrastructure"
+	AnalysisFailureProviderCredential    AnalysisFailureCategory = "provider_credential"
 	AnalysisFailureResultContract        AnalysisFailureCategory = "result_contract"
 	AnalysisFailureSafetyIntegrity       AnalysisFailureCategory = "safety_integrity"
 	AnalysisFailureSourceChanged         AnalysisFailureCategory = "source_changed"
@@ -62,6 +63,8 @@ func classifyAnalysisRuntimeFailure(result runtime.GenerateResult, err error) An
 		return AnalysisFailureTimedOut
 	case errors.Is(err, context.Canceled), errors.Is(err, runtime.ErrCancelled), result.TerminalState == runtime.TerminalCancelled:
 		return AnalysisFailureCancelled
+	case result.FailureCode == runtime.ExecutionFailureProviderCredential:
+		return AnalysisFailureProviderCredential
 	case errors.Is(err, runtime.ErrMalformedResult), errors.Is(err, runtime.ErrResultContract):
 		return AnalysisFailureResultContract
 	case errors.Is(err, runtime.ErrResultDeletion), errors.Is(err, runtime.ErrResultRename), errors.Is(err, runtime.ErrResultExtraFile), result.FailureCode == runtime.ExecutionFailureSafetyIntegrity:

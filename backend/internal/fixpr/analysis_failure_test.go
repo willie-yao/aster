@@ -313,6 +313,12 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 			err:    runtime.ErrUnavailable,
 		},
 		{
+			name: "provider credential", maxFiles: 2, want: AnalysisFailureProviderCredential,
+			result: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureProviderCredential,
+				CommandResults: results},
+			err: errors.New("agent Sandbox execution failed: model provider rejected the sandbox credential (HTTP 403)"),
+		},
+		{
 			name: "review scope wire outcome", maxFiles: 2, want: AnalysisFailureNoReviewablePatch,
 			result: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureReviewScope,
 				CommandResults: results},

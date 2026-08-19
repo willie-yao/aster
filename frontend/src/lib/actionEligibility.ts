@@ -27,6 +27,8 @@ const reasonMessages: Record<ActionReasonCode, string> = {
   source_branch_unknown: "The build does not report a resolvable source branch, so a generation base cannot be established.",
   source_revision_diverged: "The failure commit is not an ancestor of its branch head, so a patch cannot be safely generated.",
   source_changed: "A verified source path is unavailable or changed between the failure revision and its branch head.",
+  provider_credential_rejected:
+    "The model provider rejected the sandbox credential. Generation cannot succeed until the credential is fixed.",
   generation_failed: "Draft generation did not complete successfully.",
 };
 
@@ -202,6 +204,8 @@ export function actionEligibilityTitle(eligibilityValue: ActionEligibility): str
       return "Source verification inconclusive";
     case "generation_failed":
       return "Draft generation failed";
+    case "provider_credential_rejected":
+      return "Model provider credential rejected";
     case "investigation_required":
       return "Investigation required";
     default:

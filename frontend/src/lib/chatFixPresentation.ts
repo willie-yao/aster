@@ -39,6 +39,8 @@ function hardFailureMessage(request: ChatFixRequest): string {
   switch (request.failure?.category) {
     case "runtime_infrastructure":
       return "Fix preview generation failed in the isolated runtime.";
+    case "provider_credential":
+      return "The model provider rejected the sandbox credential. Fix the credential before requesting another preview.";
     case "result_contract":
       return "Fix preview generation returned an invalid result contract.";
     case "safety_integrity":

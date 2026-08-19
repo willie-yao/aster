@@ -184,7 +184,12 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 		if err := credential.CheckStrings(agentErr.Error()); err != nil {
 			return compactFailure(request, now().Sub(started), engineruntime.ExecutionFailureSafetyIntegrity, err)
 		}
-		return finish(stateForContext(ctx), safeOpenCodeFailure(agentErr))
+		state := stateForContext(ctx)
+		if reason, rejected := providerCredentialRejection(stdout); rejected && state == engineruntime.TerminalFailed {
+			result.FailureCode = engineruntime.ExecutionFailureProviderCredential
+			return finish(state, reason)
+		}
+		return finish(state, safeOpenCodeFailure(agentErr))
 	}
 	head, stderr, err = runCommand(ctx, work, gitEnvironment(home, temp), maxCapturedStream, "git", "rev-parse", "HEAD")
 	if err != nil || strings.TrimSpace(head) != request.ExpectedBaseSHA {

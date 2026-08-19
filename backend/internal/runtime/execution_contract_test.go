@@ -287,6 +287,20 @@ func TestExecutionResultAcceptsBoundedReviewScopeFailure(t *testing.T) {
 	}
 }
 
+func TestExecutionResultAcceptsProviderCredentialFailure(t *testing.T) {
+	request := executionRequest()
+	result := executionResult()
+	result.TerminalState = TerminalFailed
+	result.FailureReason = "model provider rejected the sandbox credential (HTTP 403)"
+	result.FailureCode = ExecutionFailureProviderCredential
+	result.ChangedFiles = nil
+	result.Files = map[string]string{}
+	result.Diff = ""
+	if err := result.Validate(request); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExecutionRequestAcceptsResponsesWithoutContractVersionChange(t *testing.T) {
 	request := executionRequest()
 	request.ModelProvider = modelprovider.Normalize(modelprovider.Config{

@@ -1,10 +1,12 @@
 package actions
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -460,6 +462,41 @@ func TestAnalysisFixRequestTimeoutFailsAndCleansRuntime(t *testing.T) {
 	if after, err := service.GetRequest(created.ID, "alice"); err != nil || after.Status != RequestFailed || after.Preview != nil ||
 		after.Failure == nil || after.Failure.Category != AnalysisFixFailureTimedOut {
 		t.Fatalf("post-timeout=%+v err=%v", after, err)
+	}
+}
+
+func TestAnalysisFixRequestReportsProviderCredentialRejection(t *testing.T) {
+	service, _ := requestTestService(t)
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	service.analysisRequestGenerator = func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error) {
+		return PreviewResult{}, classifiedAnalysisFixFailure(
+			ReasonProviderCredentialRejected, AnalysisFixFailureProviderCredential, runtime.TerminalFailed,
+			errors.New("agent fix generation: agent Sandbox execution failed: model provider rejected the sandbox credential (HTTP 403) "+
+				"from https://gateway.internal/v1 with Bearer ghp-fixture-secret"),
+		)
+	}
+	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := waitRequest(t, service, created.ID, "alice", RequestFailed)
+	if final.ReasonCode != ReasonProviderCredentialRejected || final.Failure == nil ||
+		final.Failure.Category != AnalysisFixFailureProviderCredential {
+		t.Fatalf("final = %+v", final)
+	}
+	if final.Error != ReasonMessage(ReasonProviderCredentialRejected) || final.Error == ReasonMessage(ReasonGenerationFailed) {
+		t.Fatalf("error = %q", final.Error)
+	}
+	logged := logs.String()
+	if !strings.Contains(logged, "model provider rejected the sandbox credential (HTTP 403)") ||
+		!strings.Contains(logged, string(ReasonProviderCredentialRejected)) {
+		t.Fatalf("log = %q", logged)
+	}
+	if strings.Contains(logged, "ghp-fixture-secret") || strings.Contains(logged, "gateway.internal") {
+		t.Fatalf("log disclosed private material: %q", logged)
 	}
 }
 

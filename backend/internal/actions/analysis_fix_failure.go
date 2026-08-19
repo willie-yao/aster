@@ -14,6 +14,7 @@ type AnalysisFixFailureCategory string
 const (
 	AnalysisFixFailureNoReviewablePatch     AnalysisFixFailureCategory = "no_reviewable_patch"
 	AnalysisFixFailureRuntimeInfrastructure AnalysisFixFailureCategory = "runtime_infrastructure"
+	AnalysisFixFailureProviderCredential    AnalysisFixFailureCategory = "provider_credential"
 	AnalysisFixFailureResultContract        AnalysisFixFailureCategory = "result_contract"
 	AnalysisFixFailureSafetyIntegrity       AnalysisFixFailureCategory = "safety_integrity"
 	AnalysisFixFailureSourceChanged         AnalysisFixFailureCategory = "source_changed"
@@ -93,6 +94,8 @@ func analysisFixReasonCode(category fixpr.AnalysisFailureCategory) ReasonCode {
 		return ReasonUnsafeRemediation
 	case fixpr.AnalysisFailureSourceChanged:
 		return ReasonEvidenceUnavailable
+	case fixpr.AnalysisFailureProviderCredential:
+		return ReasonProviderCredentialRejected
 	default:
 		return ReasonGenerationFailed
 	}

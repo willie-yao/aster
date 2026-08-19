@@ -155,6 +155,7 @@ export function actionRequestReasonTitle(request: ActionRequest): string | null 
     case "source_branch_unknown": return "Source branch unresolved";
     case "source_revision_diverged": return "Failure commit diverged from its branch";
     case "source_changed": return "Verified source changed";
+    case "provider_credential_rejected": return "Model provider credential rejected";
     case "generation_failed": return "Draft generation failed";
     default: return null;
   }
