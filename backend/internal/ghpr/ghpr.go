@@ -73,7 +73,7 @@ func NewClient(httpClient *http.Client, token string) *Client {
 }
 
 // Request describes a PR to open: a file-set committed to a new branch off the
-// repo's default branch, then a PR back to it.
+// base branch, then a PR back to it.
 type Request struct {
 	Owner string
 	Repo  string
@@ -97,12 +97,13 @@ type Request struct {
 	SignOff     bool
 	// Fork opens the PR via fork-and-PR: the branch is pushed to a fork under the
 	// token's identity (created on demand) and the PR is opened cross-fork
-	// against Owner/Repo's default branch. For proposing changes to a repo the
+	// against Owner/Repo's base branch. For proposing changes to a repo the
 	// token can't write to.
 	Fork bool
-	// Base pins the commit the change is built on. When set, OpenPR commits
-	// against it instead of re-resolving the default branch, so a caller that
-	// read content at a specific commit commits against the same snapshot.
+	// Base pins the commit the change is built on, and the branch the PR opens
+	// against. When set, OpenPR commits against it instead of re-resolving the
+	// default branch, so a caller that read content at a specific commit commits
+	// against the same snapshot.
 	Base *Base
 }
 
@@ -113,17 +114,20 @@ type Base struct {
 	TreeSHA string
 }
 
-// ResolveBase returns the repo's current default-branch base.
-func (c *Client) ResolveBase(ctx context.Context, owner, repo string) (Base, error) {
-	branch, head, tree, err := c.baseRef(ctx, owner, repo)
+// ResolveBase returns the repo's current base for one branch. An empty branch
+// resolves the repo's default branch. A failure on a release branch has to
+// resolve that branch, not the default one, or its commit compares as diverged.
+func (c *Client) ResolveBase(ctx context.Context, owner, repo, branch string) (Base, error) {
+	resolved, head, tree, err := c.baseRef(ctx, owner, repo, branch)
 	if err != nil {
 		return Base{}, err
 	}
-	return Base{Branch: branch, HeadSHA: head, TreeSHA: tree}, nil
+	return Base{Branch: resolved, HeadSHA: head, TreeSHA: tree}, nil
 }
 
 // OpenPR commits the request's files to a new branch and opens a PR against the
-// repo's default branch. Returns the PR's html URL.
+// request's base branch, defaulting to the repo's default branch. Returns the
+// PR's html URL.
 func (c *Client) OpenPR(ctx context.Context, req Request) (string, error) {
 	if c.token == "" {
 		return "", fmt.Errorf("opening a PR needs a GitHub token with write access to %s/%s", req.Owner, req.Repo)
@@ -154,7 +158,7 @@ func (c *Client) OpenPR(ctx context.Context, req Request) (string, error) {
 		branch, headSHA, baseTree = req.Base.Branch, req.Base.HeadSHA, req.Base.TreeSHA
 	} else {
 		var err error
-		branch, headSHA, baseTree, err = c.baseRef(ctx, req.Owner, req.Repo)
+		branch, headSHA, baseTree, err = c.baseRef(ctx, req.Owner, req.Repo, "")
 		if err != nil {
 			return "", err
 		}
@@ -311,25 +315,34 @@ func (c *Client) url(owner, repo, suffix string) string {
 	return fmt.Sprintf("%s/repos/%s/%s/%s", c.base, owner, repo, suffix)
 }
 
-// baseRef returns the repo's default branch, its head commit SHA, and the SHA
-// of the tree that commit points at.
-func (c *Client) baseRef(ctx context.Context, owner, repo string) (branch, headSHA, treeSHA string, err error) {
-	var repoInfo struct {
-		DefaultBranch string `json:"default_branch"`
+// baseRef returns a branch, its head commit SHA, and the SHA of the tree that
+// commit points at. An empty branch resolves the repo's default branch.
+func (c *Client) baseRef(ctx context.Context, owner, repo, branch string) (resolved, headSHA, treeSHA string, err error) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		var repoInfo struct {
+			DefaultBranch string `json:"default_branch"`
+		}
+		if err = c.get(ctx, c.url(owner, repo, ""), &repoInfo); err != nil {
+			return "", "", "", err
+		}
+		if repoInfo.DefaultBranch == "" {
+			return "", "", "", fmt.Errorf("repo %s/%s has no default branch; initialize it (e.g. add a README) before opening a PR", owner, repo)
+		}
+		branch = repoInfo.DefaultBranch
 	}
-	if err = c.get(ctx, c.url(owner, repo, ""), &repoInfo); err != nil {
-		return "", "", "", err
-	}
-	if repoInfo.DefaultBranch == "" {
-		return "", "", "", fmt.Errorf("repo %s/%s has no default branch; initialize it (e.g. add a README) before opening a PR", owner, repo)
+	// The branch can come from build metadata, so it is untrusted input in an
+	// API path.
+	if !validBranchName(branch) {
+		return "", "", "", fmt.Errorf("branch name is not a valid git ref")
 	}
 	var ref struct {
 		Object struct {
 			SHA string `json:"sha"`
 		} `json:"object"`
 	}
-	if err = c.get(ctx, c.url(owner, repo, "git/ref/heads/"+repoInfo.DefaultBranch), &ref); err != nil {
-		return "", "", "", fmt.Errorf("reading %s head (is the repo empty? initialize it first): %w", repoInfo.DefaultBranch, err)
+	if err = c.get(ctx, c.url(owner, repo, "git/ref/heads/"+escapeRefPath(branch)), &ref); err != nil {
+		return "", "", "", fmt.Errorf("reading %s head (does the branch exist? is the repo empty?): %w", branch, err)
 	}
 	var commit struct {
 		Tree struct {
@@ -339,7 +352,38 @@ func (c *Client) baseRef(ctx context.Context, owner, repo string) (branch, headS
 	if err = c.get(ctx, c.url(owner, repo, "git/commits/"+ref.Object.SHA), &commit); err != nil {
 		return "", "", "", err
 	}
-	return repoInfo.DefaultBranch, ref.Object.SHA, commit.Tree.SHA, nil
+	return branch, ref.Object.SHA, commit.Tree.SHA, nil
+}
+
+// validBranchName applies the git ref rules that matter for a branch used as an
+// API path. Every component is checked: a "." component would be normalized
+// away by the server, resolving a different branch than the caller named.
+func validBranchName(branch string) bool {
+	if branch == "" || len(branch) > 255 || strings.HasPrefix(branch, "-") || strings.Contains(branch, "@{") {
+		return false
+	}
+	for _, r := range branch {
+		if r <= ' ' || r == 0x7f || strings.ContainsRune("~^:?*[\\", r) {
+			return false
+		}
+	}
+	for _, component := range strings.Split(branch, "/") {
+		if component == "" || strings.HasPrefix(component, ".") ||
+			strings.HasSuffix(component, ".") || strings.HasSuffix(component, ".lock") {
+			return false
+		}
+	}
+	return true
+}
+
+// escapeRefPath escapes each segment of a branch so a name like release/1.25
+// keeps its separators.
+func escapeRefPath(branch string) string {
+	segments := strings.Split(branch, "/")
+	for i, segment := range segments {
+		segments[i] = url.PathEscape(segment)
+	}
+	return strings.Join(segments, "/")
 }
 
 // createTree builds a new tree from baseTree with the request's files added.

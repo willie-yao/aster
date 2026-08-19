@@ -35,15 +35,16 @@ func (f *fakeCompleter) Complete(_ context.Context, system, user string) (string
 
 // fakePR records OpenPR calls and serves a configurable SearchOpenPR result.
 type fakePR struct {
-	opened         []ghpr.Request
-	openErr        error
-	openURL        string
-	searchURL      string
-	searchFound    bool
-	searchAnyCalls int
-	base           ghpr.Base
-	bases          []ghpr.Base
-	resolveCalls   int
+	opened          []ghpr.Request
+	openErr         error
+	openURL         string
+	searchURL       string
+	searchFound     bool
+	searchAnyCalls  int
+	base            ghpr.Base
+	bases           []ghpr.Base
+	resolveCalls    int
+	resolveBranches []string
 }
 
 func (f *fakePR) OpenPR(_ context.Context, req ghpr.Request) (string, error) {
@@ -66,7 +67,8 @@ func (f *fakePR) SearchAnyPR(ctx context.Context, owner, repo, token, marker str
 	return f.SearchOpenPR(ctx, owner, repo, token, marker)
 }
 
-func (f *fakePR) ResolveBase(_ context.Context, _, _ string) (ghpr.Base, error) {
+func (f *fakePR) ResolveBase(_ context.Context, _, _, branch string) (ghpr.Base, error) {
+	f.resolveBranches = append(f.resolveBranches, branch)
 	if len(f.bases) > 0 {
 		index := f.resolveCalls
 		if index >= len(f.bases) {

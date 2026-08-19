@@ -37,6 +37,7 @@ type AnalysisFailure struct {
 	ProposedRevision         *RevisionContext
 	ArtifactCitations        []Evidence
 	SourceRepository         string
+	SourceBranch             string
 	FailureRevision          string
 	GenerationBaseRevision   string
 	VerifiedSourceFileHashes map[string]string
@@ -54,7 +55,7 @@ func (m *Manager) GenerateAnalysisPreview(ctx context.Context, failure AnalysisF
 	if !strings.EqualFold(failure.SourceRepository, wantRepo) {
 		return nil, fmt.Errorf("verified source repository does not match fix repository %s", wantRepo)
 	}
-	base, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName)
+	base, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName, failure.SourceBranch)
 	if err != nil {
 		return nil, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
 	}
@@ -75,7 +76,7 @@ func (m *Manager) GenerateAnalysisPreview(ctx context.Context, failure AnalysisF
 		description = m.opts.PRFiller.FillBody(ctx, description)
 	}
 	body := analysisFailurePRBody(failure, fix, verified, key, m.opts.DashboardURL, description)
-	current, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName)
+	current, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName, failure.SourceBranch)
 	if err != nil {
 		return nil, fmt.Errorf("rechecking current generation base: %w", err)
 	}

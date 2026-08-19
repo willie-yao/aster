@@ -356,3 +356,35 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 		})
 	}
 }
+
+// A release-branch failure has to generate against, and open against, its own
+// branch. Resolving the default branch drafts a patch for the wrong snapshot.
+func TestAnalysisPreviewPinsAndTargetsFailureBranch(t *testing.T) {
+	releaseHead := "8caa35df8680f64693a3f76ea3d35c2349ab4828"
+	failure := validAnalysisFailure()
+	failure.SourceBranch = "release-1.25"
+	failure.GenerationBaseRevision = releaseHead
+	pr := &fakePR{base: ghpr.Base{Branch: "release-1.25", HeadSHA: releaseHead, TreeSHA: "releasetree"}}
+	agent := goodAgent()
+	manager := newManager(t, pr, agent, Options{})
+
+	fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.spec.Repo.Ref != releaseHead {
+		t.Fatalf("generation ref = %s, want the release branch head", agent.spec.Repo.Ref)
+	}
+	url, err := manager.OpenFromPreview(t.Context(), fix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.opened) != 1 || pr.opened[0].Base == nil || pr.opened[0].Base.Branch != "release-1.25" {
+		t.Fatalf("url=%q opened=%+v", url, pr.opened)
+	}
+	for _, branch := range pr.resolveBranches {
+		if branch != "release-1.25" {
+			t.Fatalf("resolved branches = %v, want only the failure branch", pr.resolveBranches)
+		}
+	}
+}

@@ -99,7 +99,8 @@ func (s *Service) PreflightTestFix(ctx context.Context, sessionID, owner, reques
 	repository := sourceinvestigation.Repository{Owner: sourceRepository.Owner, Name: sourceRepository.Name, Revision: sourceRepository.Revision}
 	generationBase, hashes, err := s.testFixPreflight(ctx, repository, sourceBranch, files)
 	if err != nil {
-		return fmt.Errorf("%w: exact JUnit Fix source compatibility failed", ErrInvalidRequest)
+		// Keep the cause so the caller can report why the Fix was rejected.
+		return fmt.Errorf("%w: exact JUnit Fix source compatibility failed: %w", ErrInvalidRequest, err)
 	}
 	binding := persistedTestFixSource{
 		FailureRevision: sourceRepository.Revision, GenerationBaseRevision: generationBase,

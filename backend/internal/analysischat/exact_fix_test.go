@@ -338,8 +338,13 @@ func TestServiceExactFixResolvesPreservedMutableBuildSourceBeforeProvider(t *tes
 		t.Fatalf("source repository = %+v", session.SourceRepository)
 	}
 	requestID := testRequestID(t)
-	if err := service.PreflightTestFix(t.Context(), session.ID, "Alice", requestID); !errors.Is(err, ErrInvalidRequest) {
+	err = service.PreflightTestFix(t.Context(), session.ID, "Alice", requestID)
+	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("source drift preflight error = %v", err)
+	}
+	// The cause has to survive so the caller can report why the Fix was rejected.
+	if !errors.Is(err, sourcePreflightErr) {
+		t.Fatalf("source drift preflight discarded its cause: %v", err)
 	}
 	runner.mu.Lock()
 	providerCalls := len(runner.turns)

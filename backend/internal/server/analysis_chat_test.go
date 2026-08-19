@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/actions"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
@@ -586,5 +588,49 @@ func TestHandlerAnalysisChatAcceptsPatternReference(t *testing.T) {
 	}
 	if runner.createdRef.Scope != analysischat.ScopePattern || runner.createdRef.PatternID != "pattern-1" || runner.createdRef.PatternHash != "hash-1" {
 		t.Fatalf("created ref = %+v", runner.createdRef)
+	}
+}
+
+// A Fix preflight rejection used to return a bare 400 with no server-side log
+// line, so the reason was computed and then discarded.
+func TestAnalysisChatRejectionIsDiagnosable(t *testing.T) {
+	rejection := fmt.Errorf("%w: exact JUnit Fix source compatibility failed: %w", analysischat.ErrInvalidRequest,
+		&actions.ReasonError{Code: actions.ReasonSourceRevisionDiverged, Reason: "the failure commit diverged", Cause: actions.ErrPreviewRejected})
+
+	var logged strings.Builder
+	previous := log.Writer()
+	log.SetOutput(&logged)
+	defer log.SetOutput(previous)
+
+	recorder := httptest.NewRecorder()
+	writeAnalysisChatError(recorder, "session-1", "alice", rejection)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	if got := recorder.Header().Get(analysisChatReasonHeader); got != string(actions.ReasonSourceRevisionDiverged) {
+		t.Errorf("reason header = %q", got)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, actions.ReasonMessage(actions.ReasonSourceRevisionDiverged)) {
+		t.Errorf("body = %q, want the specific reason", body)
+	}
+	if !strings.Contains(logged.String(), "session-1") || !strings.Contains(logged.String(), "source compatibility failed") {
+		t.Errorf("log = %q, want an operator line for the rejection", logged.String())
+	}
+}
+
+func TestAnalysisChatUnclassifiedRejectionHasNoReasonHeader(t *testing.T) {
+	previous := log.Writer()
+	log.SetOutput(&strings.Builder{})
+	defer log.SetOutput(previous)
+
+	recorder := httptest.NewRecorder()
+	writeAnalysisChatError(recorder, "session-1", "alice", analysischat.ErrInvalidRequest)
+
+	if got := recorder.Header().Get(analysisChatReasonHeader); got != "" {
+		t.Errorf("reason header = %q, want none", got)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, "invalid analysis chat request") {
+		t.Errorf("body = %q", body)
 	}
 }

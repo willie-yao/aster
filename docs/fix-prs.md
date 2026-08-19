@@ -56,8 +56,15 @@ name an explicit backticked source symbol and satisfy all of these requirements:
 - deterministic source verification can check the selected symbol and source
   snapshot;
 - the configured Fix destination matches the analyzed repository;
-- the pinned revision is still the target default-branch head when generation
-  starts.
+- the pinned revision is still the head of the failure's own branch when
+  generation starts, or an ancestor of it with every verified path unchanged.
+
+The generation base is resolved for the branch the build reports, so a failure on
+a release branch is investigated and patched against that release branch. A
+failure whose commit has diverged from its branch head, or whose build reports no
+resolvable branch, is rejected before the provider call with a reason code
+(`source_revision_diverged`, `source_branch_unknown`, or `source_changed`)
+returned in `X-Analysis-Chat-Reason` and recorded in the server log.
 
 Evidence is conversation-scoped. A later answer may reuse evidence validated by
 an earlier turn in the same conversation, but turns after the promoted answer do
@@ -110,8 +117,11 @@ processes validate retained command results but do not replay them.
 - `false`: push a branch directly to a repository the credential may write and
   open a same-repository draft PR.
 
-The PR targets the source repository's default branch. A branch is never pushed
-to a repository the configured credential cannot write.
+The PR targets the branch the change was generated against: the failure's own
+branch for an exact JUnit analysis (so a `release-1.25` failure opens a
+`release-1.25` pull request), and the source repository's default branch
+otherwise. A branch is never pushed to a repository the configured credential
+cannot write.
 
 ## Identity, CLA, and the token
 
