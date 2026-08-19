@@ -778,8 +778,9 @@ func clearAnalysisTrace(outDir string) error {
 	return err
 }
 
-// runSideEffects handles notifications, issue filing, and draft PRs. These are
-// gated on their own env tokens and return joined operational errors.
+// runSideEffects handles email notifications and recovery on tracked issues.
+// It files no issues and opens no pull requests. These are gated on their own
+// env tokens and return joined operational errors.
 func (p *pipeline) runSideEffects(ctx context.Context, res *refreshResult) error {
 	cfg, opts := p.cfg, p.opts
 	details := res.details

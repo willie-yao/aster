@@ -134,8 +134,9 @@ type PullRequests struct {
 }
 
 // PullRequestComment configures the bot comment posted once on each newly
-// observed pull request. This is the engine's only unattended GitHub write:
-// every other write is a maintainer confirming a previewed draft. It is
+// observed pull request. This is the engine's only unattended write that
+// contacts a contributor's pull request: scheduled issue recovery also writes
+// unattended, but only to issues a maintainer already confirmed. It is
 // therefore off by default, and enabling it starts in dry run so an operator
 // sees the exact bodies before anything is posted.
 //

@@ -19,6 +19,31 @@ how to pin a consumer to a reviewed version.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Docs and comments understated the engine's unattended GitHub writes.**
+  Several places called the optional bot comment on new pull requests the
+  engine's "only unattended GitHub write", and the README, the Pages guide, and
+  the issues guide said a GitHub Pages deployment performs no GitHub writes at
+  all. Both claims are wrong: the scheduled pass also comments on, and when
+  configured closes, issues it already tracks whose finding has recovered, and
+  the bot comment runs in the fetch step, so it works on Pages whenever
+  `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` are supplied. The affected
+  reference, example config, guides, and Go doc comments now state the accurate
+  claim. Both write paths remain opt-in and off by default.
+- **`-skip-side-effects` was described in terms of writes the pass no longer
+  makes.** The flag help, `runSideEffects`, and the reference all enumerated
+  "issue filing" and "fix PRs", which the scheduled pass stopped doing when
+  unattended filing was removed. They now name what it actually suppresses:
+  notifications, tracked-issue recovery, and pull request comments.
+- **GitHub App permission guidance disagreed with itself.** The chart values and
+  the reusable workflow input said the commenting App needs `issues:write` and
+  nothing else, while the reference correctly notes that a private
+  `branding.source_repo` also needs pull requests read-only. Both now match the
+  reference.
+
+  All three items are documentation and comments only, with no behavior change.
+
 ## [0.9.0-rc.6] - 2026-08-19
 
 ### Added

@@ -224,11 +224,19 @@ The SMTP host must be reachable from the selected runner. Keep
 no authenticated action API. See [Email notifications](notifications.md) for the
 project configuration and TLS modes.
 
-## A Pages deployment performs no GitHub writes
+## A Pages deployment performs no maintainer-initiated GitHub writes
 
-Email notifications are the only outbound side effect of the fetch step. A
-static Pages site has no authenticated action API, so every GitHub write is a
-[Kubernetes-native](kubernetes.md) server feature: interactive chat, File Issue,
-Mark Resolved, and [Fix PR generation](fix-prs.md), which additionally requires
-the Agent Sandbox runtime. Setting `issues.enabled` or `ai.fix_prs.enabled` in a
-Pages consumer's `project.yaml` has nothing to act on.
+A static Pages site has no authenticated action API, so the guarded dashboard
+actions are all [Kubernetes-native](kubernetes.md) server features: interactive
+chat, File Issue, Mark Resolved, and [Fix PR generation](fix-prs.md), which
+additionally requires the Agent Sandbox runtime. Of those, File Issue and Fix PR
+generation are the GitHub writes; chat is read-only and Mark Resolved updates
+local state. Setting `issues.enabled` or `ai.fix_prs.enabled` in a Pages
+consumer's `project.yaml` has nothing to act on.
+
+One unattended write does run here, because it happens in the fetch step rather
+than the server: the optional bot comment on newly opened pull requests, which
+posts only when `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` are supplied as
+secrets. It is off by default and stays in dry run until `dry_run` is explicitly
+false. See
+[the reference](project-configuration.md#optional-bot-comment-on-new-pull-requests).

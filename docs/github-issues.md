@@ -11,8 +11,8 @@ the same issue across runs (no duplicates), and when a finding stops recurring
 the scheduled pass posts a "recovered" comment and optionally closes it.
 
 This makes issues a **server-mode feature**. A static [Pages](github-pages.md)
-deployment has no authenticated action API, so it performs no GitHub writes at
-all; `issues.enabled` there has nothing to act on.
+deployment has no authenticated action API, so nothing can file an issue there
+and `issues.enabled` has nothing to act on.
 
 ## What triggers an issue
 
