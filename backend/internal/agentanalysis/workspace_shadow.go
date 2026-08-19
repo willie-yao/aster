@@ -85,7 +85,8 @@ func ProvenanceFromWorkspaceResult(result WorkspaceSandboxResult, request Worksp
 		StagingAvailable: telemetry.StagingAvailable, StagingMs: telemetry.StagingMs,
 		ExecutionAvailable: telemetry.ExecutionAvailable, ExecutionMs: telemetry.ExecutionMs,
 		ResultPublicationAvailable: telemetry.PublicationAvailable, ResultPublicationMs: telemetry.PublicationMs,
-		PhaseTimingStatus: telemetry.PhaseTimingStatus, ProviderCredentialMode: telemetry.ProviderCredentialMode,
+		PhaseTimingStatus: telemetry.PhaseTimingStatus, LifecycleFailurePhase: telemetry.FailurePhase,
+		LifecycleFailureCode: telemetry.FailureCode, ExecutorStarted: telemetry.ExecutorStarted, ProviderCredentialMode: telemetry.ProviderCredentialMode,
 		ProviderAPI: telemetry.ProviderAPI, ProviderReasoningEffort: telemetry.ProviderReasoningEffort,
 		TerminalState: string(result.Execution.TerminalState), OpenCodeFailureCode: openCode.FailureCode,
 		OpenCodeErrorClassification: openCode.Error.Classification, ResultValidationStatus: result.Execution.ResultValidation.Status,
@@ -111,6 +112,9 @@ func ResolveWorkspaceShadowStatus(result WorkspaceSandboxResult, err error) Shad
 			return ShadowStatusSucceeded
 		}
 		return ShadowStatusCleanupPending
+	}
+	if errors.Is(err, engineruntime.ErrStaging) {
+		return ShadowStatusRuntimeFailed
 	}
 	if result.Execution.ResultValidation.Status == WorkspaceResultRejected || errors.Is(err, engineruntime.ErrResultContract) {
 		return ShadowStatusContractViolation

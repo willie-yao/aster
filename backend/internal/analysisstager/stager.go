@@ -60,6 +60,11 @@ func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, e
 	if err := requireEmptyDirectory(workspaceRoot); err != nil {
 		return err
 	}
+	lock, err := lockSnapshotReadOnly(inputRoot, request.ManifestHash)
+	if err != nil {
+		return fmt.Errorf("lock staged snapshot: %w", err)
+	}
+	defer unlockSnapshot(lock)
 	snapshotRoot := filepath.Join(inputRoot, request.ManifestHash)
 	sourceInput := filepath.Join(snapshotRoot, agentanalysis.WorkspaceSourceDir)
 	artifactInput := filepath.Join(snapshotRoot, agentanalysis.WorkspaceArtifactsDir)

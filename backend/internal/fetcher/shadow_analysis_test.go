@@ -133,18 +133,20 @@ func successfulShadowResult() agentanalysis.WorkspaceSandboxResult {
 
 func TestRunShadowAnalysisNeverMutatesAuthoritativeDetails(t *testing.T) {
 	tests := []struct {
-		name       string
-		result     agentanalysis.WorkspaceSandboxResult
-		runErr     error
-		prepareErr error
-		setupErr   error
-		cleanupErr error
-		wantStatus agentanalysis.ShadowStatus
+		name          string
+		result        agentanalysis.WorkspaceSandboxResult
+		runErr        error
+		prepareErr    error
+		setupErr      error
+		cleanupErr    error
+		wantStatus    agentanalysis.ShadowStatus
+		wantErrorCode string
 	}{
 		{name: "success", result: successfulShadowResult(), wantStatus: agentanalysis.ShadowStatusSucceeded},
 		{name: "malformed", result: agentanalysis.WorkspaceSandboxResult{Telemetry: agentruntime.GenerateTelemetry{TaskFinalized: true, ResultAvailable: true}}, runErr: agentruntime.ErrMalformedResult, wantStatus: agentanalysis.ShadowStatusMalformedResult},
 		{name: "timeout", runErr: context.DeadlineExceeded, wantStatus: agentanalysis.ShadowStatusTimeout},
 		{name: "no result", result: agentanalysis.WorkspaceSandboxResult{Telemetry: agentruntime.GenerateTelemetry{TaskFinalized: true}}, wantStatus: agentanalysis.ShadowStatusNoResult},
+		{name: "staging failure", result: agentanalysis.WorkspaceSandboxResult{Telemetry: agentruntime.GenerateTelemetry{TaskFinalized: true, FailurePhase: "staging", FailureCode: "source_untracked_files"}}, runErr: agentruntime.ErrStaging, wantStatus: agentanalysis.ShadowStatusRuntimeFailed, wantErrorCode: "source_untracked_files"},
 		{name: "cleanup pending", result: func() agentanalysis.WorkspaceSandboxResult {
 			value := successfulShadowResult()
 			value.Telemetry.CleanupCompleted = false
@@ -187,6 +189,9 @@ func TestRunShadowAnalysisNeverMutatesAuthoritativeDetails(t *testing.T) {
 			}
 			if len(records) != 1 || records[0].Status != test.wantStatus {
 				t.Fatalf("records = %+v", records)
+			}
+			if test.wantErrorCode != "" && records[0].ErrorCode != test.wantErrorCode {
+				t.Fatalf("error code=%q want=%q", records[0].ErrorCode, test.wantErrorCode)
 			}
 			for name, want := range publicSentinels {
 				got, err := os.ReadFile(filepath.Join(p.opts.OutDir, name))

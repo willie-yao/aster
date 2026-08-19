@@ -66,6 +66,18 @@ func configurePreparedSourceModePolicy(ctx context.Context, root, revision strin
 	return policy, nil
 }
 
+// ReadPreparedSourceModePolicy returns the sealed repository-local mode policy.
+func ReadPreparedSourceModePolicy(ctx context.Context, root string) (WorkspaceSourceModePolicy, error) {
+	value, err := preparedSourceFileMode(ctx, filepath.Clean(root))
+	if err != nil {
+		return "", err
+	}
+	if value {
+		return WorkspaceSourceModePreserve, nil
+	}
+	return WorkspaceSourceModeIgnoreExecutable, nil
+}
+
 // SetPreparedSourceModePolicy writes only repository-local core.filemode.
 func SetPreparedSourceModePolicy(ctx context.Context, root string, policy WorkspaceSourceModePolicy) error {
 	if !validWorkspaceSourceModePolicy(policy) {

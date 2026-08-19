@@ -29,6 +29,9 @@ var ErrWorkIdentityChanged = errors.New("runtime work identity changed")
 // ErrCleanupPending means external runtime cleanup could not be confirmed yet.
 var ErrCleanupPending = errors.New("runtime cleanup is still pending")
 
+// ErrStaging means the external runtime could not materialize its sealed workspace.
+var ErrStaging = errors.New("runtime staging failed")
+
 // ErrMalformedResult means the external runtime returned an unreadable result envelope.
 var ErrMalformedResult = errors.New("runtime result is malformed")
 

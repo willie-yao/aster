@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/aster/backend/internal/agentanalysis"
 	"github.com/willie-yao/aster/backend/internal/ai"
@@ -54,7 +55,7 @@ func TestPublishAndCleanupRemoteSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	inputRoot := t.TempDir()
-	result, err := Publish(t.Context(), publish, PublishOptions{
+	publishOptions := PublishOptions{
 		InputRoot: inputRoot, Client: server.Client(),
 		ValidateSource: func(context.Context, *http.Client, sourceinvestigation.Repository) error { return nil },
 		PrepareSource: func(ctx context.Context, destination, _, _, expected string) error {
@@ -67,7 +68,8 @@ func TestPublishAndCleanupRemoteSnapshot(t *testing.T) {
 			}
 			return nil
 		},
-	})
+	}
+	result, err := Publish(t.Context(), publish, publishOptions)
 	if err != nil || result.Status != "published" || result.ManifestHash != manifest.Hash {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -78,12 +80,43 @@ func TestPublishAndCleanupRemoteSnapshot(t *testing.T) {
 	if err := agentanalysis.VerifyArtifactFiles(filepath.Join(root, agentanalysis.WorkspaceArtifactsDir), files); err != nil {
 		t.Fatal(err)
 	}
+	configPath := filepath.Join(root, agentanalysis.WorkspaceSourceDir, ".git", "config")
+	sealedTime := time.Unix(946684800, 0)
+	if err := os.Chtimes(configPath, sealedTime, sealedTime); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Publish(t.Context(), publish, publishOptions); err != nil {
+		t.Fatalf("reuse published snapshot: %v", err)
+	}
+	if info, err := os.Stat(configPath); err != nil || !info.ModTime().Equal(sealedTime) {
+		t.Fatalf("published source was mutated on reuse: info=%v err=%v", info, err)
+	}
 	wrong, _ := agentanalysis.NewWorkspaceCleanupRequest(manifest.Hash, "analysis-lease-other")
 	if _, err := Cleanup(t.Context(), wrong, inputRoot); err == nil {
 		t.Fatal("wrong lease cleanup succeeded")
 	}
 	cleanup, _ := agentanalysis.NewWorkspaceCleanupRequest(manifest.Hash, "analysis-lease-1")
-	cleaned, err := Cleanup(t.Context(), cleanup, inputRoot)
+	readLock, err := lockSnapshotReadOnly(inputRoot, manifest.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type cleanupOutcome struct {
+		result CleanupResult
+		err    error
+	}
+	cleanupDone := make(chan cleanupOutcome, 1)
+	go func() {
+		cleaned, cleanupErr := Cleanup(t.Context(), cleanup, inputRoot)
+		cleanupDone <- cleanupOutcome{result: cleaned, err: cleanupErr}
+	}()
+	select {
+	case outcome := <-cleanupDone:
+		t.Fatalf("cleanup did not wait for staging lock: %+v", outcome)
+	case <-time.After(50 * time.Millisecond):
+	}
+	unlockSnapshot(readLock)
+	outcome := <-cleanupDone
+	cleaned, err := outcome.result, outcome.err
 	if err != nil || cleaned.Status != "deleted" {
 		t.Fatalf("cleanup=%+v err=%v", cleaned, err)
 	}

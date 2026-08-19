@@ -160,6 +160,9 @@ type Provenance struct {
 	ResultPublicationAvailable  bool     `json:"result_publication_available"`
 	ResultPublicationMs         int64    `json:"result_publication_ms,omitempty"`
 	PhaseTimingStatus           string   `json:"phase_timing_status,omitempty"`
+	LifecycleFailurePhase       string   `json:"lifecycle_failure_phase,omitempty"`
+	LifecycleFailureCode        string   `json:"lifecycle_failure_code,omitempty"`
+	ExecutorStarted             bool     `json:"executor_started,omitempty"`
 	ProviderCredentialMode      string   `json:"provider_credential_mode,omitempty"`
 	ProviderAPI                 string   `json:"provider_api,omitempty"`
 	ProviderReasoningEffort     string   `json:"provider_reasoning_effort,omitempty"`

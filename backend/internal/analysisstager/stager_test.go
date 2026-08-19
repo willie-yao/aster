@@ -153,6 +153,32 @@ func TestExecuteRequiresEmptyWorkspace(t *testing.T) {
 	}
 }
 
+func TestPublishPreparedSnapshotRejectsContaminatedReuse(t *testing.T) {
+	fixture := stagerFixture(t)
+	snapshot := filepath.Join(fixture.inputRoot, fixture.stage.ManifestHash)
+	inputRoot := t.TempDir()
+	if _, err := PublishPreparedSnapshot(
+		t.Context(), inputRoot, fixture.execution.Manifest,
+		filepath.Join(snapshot, agentanalysis.WorkspaceSourceDir),
+		filepath.Join(snapshot, agentanalysis.WorkspaceArtifactsDir),
+		fixture.stage.InputSourceModePolicy,
+	); err != nil {
+		t.Fatal(err)
+	}
+	extra := filepath.Join(inputRoot, fixture.stage.ManifestHash, agentanalysis.WorkspaceArtifactsDir, "unexpected.log")
+	if err := os.WriteFile(extra, []byte("unexpected\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PublishPreparedSnapshot(
+		t.Context(), inputRoot, fixture.execution.Manifest,
+		filepath.Join(snapshot, agentanalysis.WorkspaceSourceDir),
+		filepath.Join(snapshot, agentanalysis.WorkspaceArtifactsDir),
+		fixture.stage.InputSourceModePolicy,
+	); err == nil || !strings.Contains(err.Error(), "sealed manifest") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 type stagerTestFixture struct {
 	inputRoot     string
 	workspaceRoot string
@@ -246,6 +272,11 @@ func stagerFixtureWithSourceSetupAndPolicies(t *testing.T, setup func(string), i
 	if err := os.Rename(pending, filepath.Join(inputRoot, manifest.Hash)); err != nil {
 		t.Fatal(err)
 	}
+	lock, err := lockSnapshot(inputRoot, manifest.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlockSnapshot(lock)
 	return stagerTestFixture{inputRoot: inputRoot, workspaceRoot: t.TempDir(), requestRoot: t.TempDir(), stage: stage, execution: execution}
 }
 
