@@ -530,6 +530,11 @@ fi
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/analysis-shadow.yaml" \
   -s templates/agent-sandbox-analysis-shadow-rbac.yaml > "$tmp/analysis-shadow-rbac.yaml"
 grep -A3 -F 'subjects:' "$tmp/analysis-shadow-rbac.yaml" | grep -Fq "name: $scheduled_client"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/analysis-shadow.yaml" \
+  --set agentSandbox.rbac.create=false \
+  --set agentSandbox.rbac.scheduledClientServiceAccountName=external-scheduled \
+  > "$tmp/analysis-shadow-external-rbac.yaml"
+grep -Fq 'serviceAccountName: external-scheduled' "$tmp/analysis-shadow-external-rbac.yaml"
 
 grep -Fq 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64_CHUNK_00' "$tmp/analysis-shadow-render.yaml"
 grep -Fq 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64_CHUNK_15' "$tmp/analysis-shadow-render.yaml"
