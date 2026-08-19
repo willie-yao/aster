@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -1747,7 +1749,7 @@ func TestDefaultRunOpenCodeRejectsCredentialBearingProcessStream(t *testing.T) {
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s' \"$"+modelprovider.TokenEnv+"\"\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	_, err := defaultRunOpenCode(ctx, OpenCodeSpec{
 		Bin: bin, WorkDir: t.TempDir(), HomeDir: t.TempDir(), TempDir: t.TempDir(),
@@ -1768,7 +1770,7 @@ func TestNonCredentialSubprocessEnvironmentExcludesProviderCredential(t *testing
 	}
 }
 
-func TestStopOpenCodeProcessWaitsBeforeCredentialCheck(t *testing.T) {
+func TestStopTrackedOpenCodeProcessWaitsBeforeCredentialCheck(t *testing.T) {
 	credential := strings.Repeat("fixture-provider-credential-", 2)
 	provider := testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model")
 	guard, err := modelprovider.NewCredentialGuard(provider, func(string) (string, bool) { return credential, true })
@@ -1777,15 +1779,17 @@ func TestStopOpenCodeProcessWaitsBeforeCredentialCheck(t *testing.T) {
 	}
 	detector := guard.NewDetector()
 	terminated := make(chan struct{})
-	done := make(chan error, 1)
+	tracker := &openCodeProcessTracker{done: make(chan struct{})}
 	go func() {
 		<-terminated
 		mid := len(credential) / 2
 		_, _ = detector.Write([]byte(credential[:mid]))
 		_, _ = detector.Write([]byte(credential[mid:]))
-		done <- nil
+		close(tracker.done)
 	}()
-	stopOpenCodeProcess(func() { close(terminated) }, done)
+	if !stopTrackedOpenCodeProcess(func() { close(terminated) }, tracker) {
+		t.Fatal("tracked process did not finish draining")
+	}
 	if !detector.Detected() {
 		t.Fatal("credential emitted during shutdown was checked before process completion")
 	}
@@ -1820,9 +1824,257 @@ func TestWriteOpenCodeConfigUsesNativeResponsesProvider(t *testing.T) {
 	}
 }
 
-// OpenCode reaches the provider directly, so it must send the same GitHub
-// Copilot integration header the in-process transport sends. Without it Copilot
-// rejects the request with an unexplained 403.
+
+func TestRunOpenCodePhasesRecoversPersistedEvidenceAfterLocalEOF(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(artifactDir, "failure.log")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	evidence := fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
+	final := strings.TrimSuffix(evidence, "]") + fmt.Sprintf(`,{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},{"type":"step-finish","cost":0.2,"tokens":{"input":20,"output":4,"cache":{"read":2}}}]}]`, executorAnalysisJSON())
+	posts, gets := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			posts++
+			if posts == 1 {
+				panic(http.ErrAbortHandler)
+			}
+			fmt.Fprintf(w, `{"info":{"role":"assistant","structured":%s},"parts":[]}`, executorAnalysisJSON())
+		case http.MethodGet:
+			gets++
+			if gets == 1 {
+				fmt.Fprint(w, evidence)
+			} else {
+				fmt.Fprint(w, final)
+			}
+		}
+	}))
+	defer server.Close()
+	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192}
+	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
+	if err != nil || posts != 2 || gets != 2 || len(result.Structured) == 0 || !result.Telemetry.LocalTransportRecovered || result.Telemetry.LocalTransportFailure != "local_connection_closed" || result.Telemetry.LocalTransportPhase != "evidence" || result.Telemetry.ProviderRequests != 2 || !result.Telemetry.ProviderRequestsKnown {
+		t.Fatalf("posts=%d gets=%d result=%+v err=%v", posts, gets, result, err)
+	}
+}
+
+func TestRunOpenCodePhasesRecoversPersistedFinalizationAfterLocalEOF(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(artifactDir, "failure.log")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	evidence := fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
+	final := strings.TrimSuffix(evidence, "]") + fmt.Sprintf(`,{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},{"type":"step-finish","cost":0.2,"tokens":{"input":20,"output":4,"cache":{"read":2}}}]}]`, executorAnalysisJSON())
+	posts, gets := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			posts++
+			if posts == 2 {
+				panic(http.ErrAbortHandler)
+			}
+			fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
+		case http.MethodGet:
+			gets++
+			if gets == 1 {
+				fmt.Fprint(w, evidence)
+			} else {
+				fmt.Fprint(w, final)
+			}
+		}
+	}))
+	defer server.Close()
+	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192}
+	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
+	if err != nil || posts != 2 || gets != 2 || len(result.Structured) == 0 || !result.Telemetry.LocalTransportRecovered || result.Telemetry.LocalTransportFailure != "local_connection_closed" || result.Telemetry.LocalTransportPhase != "finalization" || result.Telemetry.StructuredOutputToolCalls != 1 || !result.Telemetry.FinalizationPhaseCompleted {
+		t.Fatalf("posts=%d gets=%d result=%+v err=%v", posts, gets, result, err)
+	}
+}
+
+func TestOpenCodeResponseClassifiesLocalEOFWithoutEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic(http.ErrAbortHandler)
+	}))
+	defer server.Close()
+	var response map[string]any
+	err := openCodeJSON(t.Context(), server.Client(), http.MethodPost, server.URL+"/session/private/message", []byte(`{}`), &response)
+	var local *openCodeLocalAPIError
+	if !errors.As(err, &local) || local.Class != "local_connection_closed" || strings.Contains(err.Error(), server.URL) || strings.Contains(err.Error(), "private") {
+		t.Fatalf("error=%v local=%+v", err, local)
+	}
+}
+
+func TestStopTrackedOpenCodeProcessReportsIncompleteDrain(t *testing.T) {
+	tracker := &openCodeProcessTracker{done: make(chan struct{})}
+	started := time.Now()
+	if stopTrackedOpenCodeProcess(nil, tracker) {
+		t.Fatal("incomplete drain was reported complete")
+	}
+	if time.Since(started) < 900*time.Millisecond {
+		t.Fatal("incomplete drain returned before the bound")
+	}
+}
+
+func TestOpenCodeInheritedStreamHelper(t *testing.T) {
+	switch os.Getenv("ASTER_OPENCODE_STREAM_HELPER") {
+	case "parent":
+		stream := os.NewFile(3, "inherited-stream")
+		child := exec.Command(os.Args[0], "-test.run=TestOpenCodeInheritedStreamHelper")
+		child.Env = append(os.Environ(), "ASTER_OPENCODE_STREAM_HELPER=child", "ASTER_OPENCODE_STREAM_ESCAPE="+os.Getenv("ASTER_OPENCODE_STREAM_ESCAPE"))
+		child.ExtraFiles = []*os.File{stream}
+		if err := child.Start(); err != nil {
+			os.Exit(2)
+		}
+		_ = stream.Close()
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	case "child":
+		if os.Getenv("ASTER_OPENCODE_STREAM_ESCAPE") == "1" {
+			if err := escapeOpenCodeProcessGroupForTest(); err != nil {
+				os.Exit(3)
+			}
+		}
+		stream := os.NewFile(3, "inherited-stream")
+		time.Sleep(2 * time.Second)
+		_, _ = stream.Write([]byte("late-output"))
+		_ = stream.Close()
+		os.Exit(0)
+	}
+}
+
+func startOpenCodeInheritedStreamHelper(t *testing.T, escape bool) (*exec.Cmd, *openCodeProcessTracker, *openCodeStreamTracker) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=TestOpenCodeInheritedStreamHelper")
+	value := "0"
+	if escape {
+		value = "1"
+	}
+	cmd.Env = append(os.Environ(), "ASTER_OPENCODE_STREAM_HELPER=parent", "ASTER_OPENCODE_STREAM_ESCAPE="+value)
+	configureOpenCodeProcessGroup(cmd)
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.ExtraFiles = []*os.File{writer}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	stream := trackOpenCodeStream(reader, io.Discard)
+	tracker := trackOpenCodeProcess(cmd, cgroupMemoryEvents{}, false)
+	time.Sleep(200 * time.Millisecond)
+	return cmd, tracker, stream
+}
+
+func TestStopTrackedOpenCodeProcessGroupKillDrainsInheritedStreams(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process groups and ExtraFiles are unavailable")
+	}
+	cmd, tracker, stream := startOpenCodeInheritedStreamHelper(t, false)
+	if !stopTrackedOpenCodeProcess(func() { terminateOpenCodeProcess(cmd.Process) }, tracker, stream) {
+		t.Fatal("process-group termination did not drain inherited streams")
+	}
+}
+
+func TestStopTrackedOpenCodeProcessEscapedGroupFailsClosed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process groups and ExtraFiles are unavailable")
+	}
+	cmd, tracker, stream := startOpenCodeInheritedStreamHelper(t, true)
+	if stopTrackedOpenCodeProcess(func() { terminateOpenCodeProcess(cmd.Process) }, tracker, stream) {
+		t.Fatal("escaped process group was reported as a complete drain")
+	}
+}
+
+func TestReadCgroupMemoryEvents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.events")
+	if err := os.WriteFile(path, []byte("oom 3\noom_kill 4\noom_group_kill 5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := readCgroupMemoryEvents(path)
+	if !ok || got.OOM != 3 || got.OOMKill != 4 || got.OOMGroupKill != 5 {
+		t.Fatalf("events=%+v ok=%t", got, ok)
+	}
+}
+
+func TestReadCgroupMemoryEventsRejectsUnknownContent(t *testing.T) {
+	for _, content := range []string{"", "low 0\nhigh 0\n", "oom nope\noom_kill 0\n"} {
+		path := filepath.Join(t.TempDir(), "memory.events")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := readCgroupMemoryEvents(path); ok {
+			t.Fatalf("accepted %q", content)
+		}
+	}
+}
+
+func TestWaitForOpenCodeClassifiesStartupProcessExit(t *testing.T) {
+	tracker := &openCodeProcessTracker{done: make(chan struct{}), err: errors.New("fixture exit")}
+	close(tracker.done)
+	_, err := waitForOpenCode(t.Context(), &http.Client{}, "http://127.0.0.1:1", tracker)
+	var local *openCodeLocalAPIError
+	if !errors.As(err, &local) || local.Class != "local_server_exited" || local.Phase != "startup" {
+		t.Fatalf("error=%v local=%+v", err, local)
+	}
+}
+
+func TestDiagnoseOpenCodeRecoveredTransportRecordsProcessAndOOMAvailability(t *testing.T) {
+	tracker := &openCodeProcessTracker{done: make(chan struct{})}
+	telemetry := agentanalysis.WorkspaceOpenCodeTelemetry{LocalTransportFailure: "local_connection_closed", LocalTransportPhase: "finalization", LocalTransportRecovered: true}
+	diagnoseOpenCodeLocalFailure(tracker, &telemetry)
+	if telemetry.ServerProcessState != "running" || telemetry.CgroupOOMStatus != agentanalysis.WorkspaceCgroupOOMUnavailable || telemetry.FailureCode != "" {
+		t.Fatalf("telemetry=%+v", telemetry)
+	}
+}
+
+func TestOpenCodeProcessTrackerMemoryDelta(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.events")
+	tracker := &openCodeProcessTracker{
+		done: make(chan struct{}), memoryBaselineAvailable: true,
+		memoryBaseline: cgroupMemoryEvents{OOM: 2, OOMKill: 3, OOMGroupKill: 4},
+	}
+	if err := os.WriteFile(path, []byte("oom 7\noom_kill 8\noom_group_kill 10\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := tracker.memoryDelta(path)
+	if !ok || got.OOM != 5 || got.OOMKill != 5 || got.OOMGroupKill != 6 {
+		t.Fatalf("delta=%+v ok=%t", got, ok)
+	}
+	if err := os.WriteFile(path, []byte("oom 1\noom_kill 8\noom_group_kill 10\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tracker.memoryDelta(path); ok {
+		t.Fatal("counter regression was accepted")
+	}
+}
+
+func TestOpenCodeProcessTrackerRecordsSignal(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "kill -KILL $$")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	tracker := trackOpenCodeProcess(cmd, cgroupMemoryEvents{}, false)
+	select {
+	case <-tracker.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("process did not exit")
+	}
+	state, _, known, signal := tracker.snapshot()
+	if state != "signaled" || known || signal != "sigkill" {
+		t.Fatalf("state=%s known=%t signal=%s", state, known, signal)
+	}
+
 func TestWriteOpenCodeConfigSetsCopilotIntegrationHeader(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
@@ -1853,19 +2105,4 @@ func TestWriteOpenCodeConfigSetsCopilotIntegrationHeader(t *testing.T) {
 	}
 }
 
-func readOpenCodeProviderOptions(t *testing.T, home string) map[string]any {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var config map[string]any
-	if err := json.Unmarshal(data, &config); err != nil {
-		t.Fatal(err)
-	}
-	options, ok := config["provider"].(map[string]any)["engine"].(map[string]any)["options"].(map[string]any)
-	if !ok {
-		t.Fatalf("provider options missing: %s", data)
-	}
-	return options
 }

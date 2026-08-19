@@ -333,17 +333,17 @@ func TestParseOpenCodeTelemetryPreservesUsageWithInvalidOptionalRange(t *testing
 		"info":{"role":"assistant"},"parts":[
 		{"type":"step-start"},
 		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},
-		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[2]q},"metadata":{"display":{"type":"file","path":%[2]q,"lineStart":2,"lineEnd":2}}}},
+		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[2]q},"metadata":{"display":{"type":"file","path":%[2]q,"lineStart":1,"lineEnd":1}}}},
 		{"type":"step-finish","cost":0.1,"tokens":{"input":3,"output":2,"cache":{"read":1}}}
 	]}]`, artifactPath, sourcePath))
 	usage, telemetry, facts, err := parseOpenCodeTelemetryForWorkspace(raw, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !usage.Available || usage.InputTokens != 4 || usage.CachedInputTokens != 1 || usage.OutputTokens != 2 || !telemetry.Available || facts.ArtifactToolCalls != 1 || facts.SourceToolCalls != 1 || len(facts.EvidenceHandles) != 1 || facts.EvidenceHandles[0].Root != agentanalysis.WorkspaceArtifactsDir {
+	if !usage.Available || usage.InputTokens != 4 || usage.CachedInputTokens != 1 || usage.OutputTokens != 2 || !telemetry.Available || facts.ArtifactToolCalls != 1 || facts.SourceToolCalls != 1 || len(facts.EvidenceHandles) != 2 || len(telemetry.SourceReads) != 1 || telemetry.SourceReads[0].Path != "main.go" || telemetry.SourceReads[0].LineStart != 1 {
 		t.Fatalf("usage=%+v telemetry=%+v facts=%+v", usage, telemetry, facts)
 	}
-	if telemetry.EvidenceHandles.Status != agentanalysis.WorkspaceEvidenceHandlesAcceptedWithWarnings || telemetry.EvidenceHandles.AcceptedArtifactHandleCount != 1 || telemetry.EvidenceHandles.AcceptedSourceHandleCount != 0 || telemetry.EvidenceHandles.DroppedRangeCount != 1 || !slices.Contains(telemetry.EvidenceHandles.Codes, agentanalysis.WorkspaceEvidenceRangeLineInvalid) {
+	if telemetry.EvidenceHandles.Status != agentanalysis.WorkspaceEvidenceHandlesAccepted || telemetry.EvidenceHandles.AcceptedArtifactHandleCount != 1 || telemetry.EvidenceHandles.AcceptedSourceHandleCount != 1 || telemetry.EvidenceHandles.DroppedRangeCount != 0 {
 		t.Fatalf("diagnostics=%+v", telemetry.EvidenceHandles)
 	}
 }

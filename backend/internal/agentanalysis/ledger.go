@@ -169,6 +169,12 @@ type Provenance struct {
 	TerminalState               string   `json:"terminal_state,omitempty"`
 	OpenCodeFailureCode         string   `json:"opencode_failure_code,omitempty"`
 	OpenCodeErrorClassification string   `json:"opencode_error_classification,omitempty"`
+	OpenCodeLocalTransport      string   `json:"opencode_local_transport,omitempty"`
+	OpenCodeLocalPhase          string   `json:"opencode_local_phase,omitempty"`
+	OpenCodeLocalRecovered      bool     `json:"opencode_local_recovered,omitempty"`
+	OpenCodeServerProcessState  string   `json:"opencode_server_process_state,omitempty"`
+	OpenCodeServerSignal        string   `json:"opencode_server_signal,omitempty"`
+	OpenCodeCgroupOOMStatus     string   `json:"opencode_cgroup_oom_status,omitempty"`
 	ResultValidationStatus      string   `json:"result_validation_status,omitempty"`
 	ResultValidationCodes       []string `json:"result_validation_codes,omitempty"`
 	InputCleanupCompleted       bool     `json:"input_cleanup_completed,omitempty"`
@@ -642,7 +648,9 @@ func validShadowProvenance(value Provenance) bool {
 	default:
 		return false
 	}
-	if !validWorkspaceFailureCode(value.OpenCodeFailureCode) || len(value.OpenCodeErrorClassification) > 64 {
+	if !validWorkspaceFailureCode(value.OpenCodeFailureCode) || len(value.OpenCodeErrorClassification) > 64 ||
+		!validWorkspaceFailureCode(value.OpenCodeLocalTransport) || !validWorkspaceLocalTransportPhase(value.OpenCodeLocalPhase) ||
+		!validWorkspaceServerProcessState(value.OpenCodeServerProcessState) || !validWorkspaceServerSignal(value.OpenCodeServerSignal) || !validWorkspaceCgroupOOMStatus(value.OpenCodeCgroupOOMStatus) {
 		return false
 	}
 	switch value.ResultValidationStatus {
