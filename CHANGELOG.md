@@ -19,7 +19,77 @@ how to pin a consumer to a reviewed version.
 
 ## [Unreleased]
 
+## [0.9.0-rc.6] - 2026-08-19
+
 ### Added
+
+- **Optional bot comment on newly opened pull requests.** A contributor had no
+  way to learn the dashboard was triaging their pull request or where the
+  evidence lived. Enabling `pull_requests.comment` posts one comment per newly
+  opened pull request linking to its triage page. It is the only unattended
+  GitHub write that contacts a contributor's pull request, so it is off by
+  default, and it stays in dry run, logging the exact body and posting nothing,
+  until `dry_run` is explicitly `false`. `max_per_pass` bounds write attempts per
+  pass and defaults to 10. `comment.enabled` without `pull_requests.enabled`
+  fails validation.
+
+  Posting authenticates as a GitHub App through `ASTER_APP_ID` and
+  `ASTER_APP_PRIVATE_KEY`, so the comment comes from a bot account rather than a
+  person. The App needs Issues read and write on `branding.source_repo`, since
+  pull request comments go through the issues API, plus Pull requests read-only
+  if that repository is private. Dry run takes the same path and stops only at
+  the write, so it resolves the App identity too and reports the credentials as
+  missing without them. Enabling commenting with no credentials mounted logs a
+  warning and leaves the rest of the pass unaffected.
+
+  Several rails bound the blast radius. A watermark recorded on the first pass
+  makes every pull request older than it permanently ineligible, so enabling the
+  feature never backfills. Drafts never reach triage, and a pull request opened
+  by the commenting App itself is filtered out when candidates are selected.
+  Before each write the engine re-reads the pull request and skips it unless it
+  is still open, is still not a draft, carries no comment from the bot already,
+  and is not one of Aster's own fix pull requests, which are opened under a
+  different credential and so are recognized by their marker rather than by
+  author. That final read rather than local state is authoritative, so a lost
+  state file cannot double-post, and a read that cannot prove the absence of an
+  existing comment fails closed. A pull request whose posts fail three times is
+  abandoned. If the triage listing was truncated, commenting is refused outright
+  rather than risk linking to a page that was not published. State lives in
+  `pr_comment_state.json`, which is excluded from the published output.
+
+- **Runtime trends on job and test detail pages.** Both pages showed one run at a
+  time or a single mean duration, so a gradual slowdown was invisible. They now
+  chart runtime across the current fetch window with median, p95, a direction
+  over the window's halves, and outlier flagging on the latest run. Computed in
+  the browser from data already fetched, so no new configuration and no new
+  published fields.
+
+- **The dashboard names the upstream repository when a dependency causes a
+  failure.** A failure rooted in a dependency reported that fix investigation was
+  unavailable and dropped the paths it had identified, which read as a dead end.
+  Analyses and causal groups now carry an optional `cause_location` naming the
+  owning repository, linking it when it is on GitHub, and listing the file paths
+  the model identified, explicitly marked unverified because they were not read
+  from that repository. A causal group's identity covers `cause_location` only
+  once one is present, so causal groups built from cached analyses keep their
+  identities and their remediation-investigation bindings on upgrade. A later
+  fresh analysis that does name a location changes that group's identity, which
+  orphans the group's existing binding and re-establishes it on the next
+  investigation. Analysis identity itself does change on upgrade, so an
+  analysis-chat Fix or an unconfirmed Fix preview started before the upgrade is
+  rejected as stale and has to be started again. The analysis cache is
+  unaffected: the critique version is unchanged, so nothing is re-analyzed.
+
+- **Recurring failures keep a durable memory across build windows.** A cause that
+  disappeared from the window and came back was investigated from scratch at full
+  model cost, and its earlier verdict was lost. A private ledger now records each
+  cause's signature, first and last sighting, and occurrence count, and reuses a
+  previous terminal verdict when the frozen-input cache misses. Only verdicts that
+  recurrence cannot contradict are reused, each at most three times; an actionable
+  or insufficient-evidence verdict is always re-derived. Causal groups publish
+  their `signature`, deliberately excluded from the identity hashes so the ledger
+  cannot churn pattern identity. The ledger is stored in `recurrence_ledger.json`
+  and is excluded from the published output.
 
 - **Configurable attention thresholds.** A new optional `attention` section in
   `project.yaml` exposes two knobs that were previously fixed. `persistent_after`
@@ -50,6 +120,34 @@ how to pin a consumer to a reviewed version.
   failure count handed to the AI analyzer is now computed from the runs
   themselves rather than read off `persistent_failures`, so the engine-owned
   transient critique keeps seeing the true streak whatever a project configures.
+
+### Changed
+
+- **A new brand mark and color ramp.** The mark was assembled from two stock
+  icons and blurred into an indistinct shape at favicon size. It is replaced by a
+  single custom mark carrying a violet-to-pink ramp, and the docs identity and
+  the app's blue primary are unified on that same violet. Status colors are
+  unchanged, and a test now pins them so the brand ramp cannot drift into them.
+
+- **Causal groups read as separate causes with an explicit Fix action.** Multiple
+  causes ran together visually, and the control that routes to Fix was styled as a
+  monospace chip that read like a data token rather than something to click. Each
+  cause is now a titled card, and the routing control is a labeled button naming
+  the humanized test rather than the raw JUnit name. A remediation state that is
+  off for the whole deployment is now visually distinct from one that does not
+  apply to a single cause.
+
+### Fixed
+
+- **Dismissing a pattern is reachable again on causal-group results.** Two
+  independent gates, one in the dashboard and one in the server, each hid or
+  refused dismissal for any pattern carrying a recurrence classification, which
+  every published causal-group result does. Acknowledging such a pattern removed
+  it from Needs Attention while its detail page still showed it as undismissed,
+  and restoring it was impossible. Dismissal is now gated separately from
+  drafting an issue or a fix, so it stays available where drafting is not, and
+  restoring no longer requires the pattern to still be published, which used to
+  strand a dismissal once the pattern aged out.
 
 ## [0.9.0-rc.5] - 2026-08-18
 
@@ -172,45 +270,6 @@ how to pin a consumer to a reviewed version.
   separate switch. A shared failure analysis is served only while it still
   describes the build a new request would read, so a superseded result is replaced
   rather than kept as history.
-- **Optional bot comment on new pull requests.** When enabled, the scheduled
-  pass posts one comment on each newly opened pull request of
-  `branding.source_repo`, linking to that pull request's dashboard triage page,
-  so contributors discover the evidence behind their presubmit failures without
-  being told the dashboard exists.
-
-  This reintroduces an unattended GitHub write, which the previous release
-  deliberately removed. It is scoped narrowly to keep that promise intact: it is
-  off by default, it stays in dry run until an operator explicitly sets
-  `dry_run: false`, and it never files an issue or opens a pull request. It only
-  links to a page the dashboard already published.
-
-  ```yaml
-  pull_requests:
-    enabled: true
-    comment:
-      enabled: true
-      dry_run: true     # default; logs the exact body and posts nothing
-      max_per_pass: 10  # default; hard cap on writes per pass
-  ```
-
-  Posting authenticates as a **GitHub App**, configured through the new
-  `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` credentials, so comments come from
-  a bot account rather than a person and the token is scoped to one repository
-  with `issues: write` and expires within the hour. The reusable workflow accepts
-  both as optional secrets; the Kubernetes path supplies them through
-  `fetcher.extraEnv`. Unlike the issue and fix-PR features, this one works on the
-  GitHub Pages path, which otherwise performs no GitHub writes.
-
-  A pull request is commented on at most once. Enabling the feature never
-  backfills work already in flight: the first pass records the repository's
-  highest pull request number and posts nothing. Every write is preceded by
-  reading that pull request directly to confirm it is still open, is not a draft,
-  is not one Aster opened itself, and carries no comment already. Commenting is
-  suppressed by `-skip-side-effects`, by a failed triage refresh, and when the
-  triage listing was truncated, since a comment promises a page the dashboard
-  publishes. There is no per-pull-request opt-out; disabling the feature is the
-  only opt-out.
-
 - **Pull request triage reports a missing GitHub read token.** The fetcher logs
   one startup warning when triage is enabled with neither `GITHUB_READ_TOKEN`
   nor `GITHUB_TOKEN` set, and `aster onboard doctor` reports the same gap as a
