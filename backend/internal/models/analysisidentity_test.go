@@ -27,3 +27,37 @@ func TestTestAnalysisContentHashTracksAnalysisAndSourceEvidence(t *testing.T) {
 		t.Fatal("changed artifact evidence retained analysis hash")
 	}
 }
+
+// TestTestAnalysisContentHashTracksCauseOwnership keeps actions bound to the
+// ownership the maintainer was shown: an upstream verdict and a project verdict
+// are different content even when every other field matches.
+func TestTestAnalysisContentHashTracksCauseOwnership(t *testing.T) {
+	base := TestCase{Name: "TestCluster", Status: "failed", JUnitFile: "junit.xml", AIAnalysis: &AIAnalysis{
+		GeneratedAt: "2026-08-13T01:00:00Z", RootCause: "cause", Severity: "High", SuggestedFix: "fix",
+	}}
+	unattributed := TestAnalysisContentHash(base)
+
+	withOwner := func(location *AnalysisCauseLocation) string {
+		changed := base
+		analysis := *base.AIAnalysis
+		analysis.CauseLocation = location
+		changed.AIAnalysis = &analysis
+		return TestAnalysisContentHash(changed)
+	}
+
+	external := withOwner(&AnalysisCauseLocation{Repository: "kubernetes/kubernetes", External: true})
+	project := withOwner(&AnalysisCauseLocation{Repository: "kubernetes-sigs/cluster-api-provider-azure"})
+	withFile := withOwner(&AnalysisCauseLocation{
+		Repository: "kubernetes/kubernetes", External: true,
+		Files: []string{"pkg/kubelet/cm/devicemanager/manager.go"},
+	})
+
+	for name, hash := range map[string]string{"external": external, "project": project, "with file": withFile} {
+		if hash == unattributed {
+			t.Errorf("%s ownership retained the unattributed hash", name)
+		}
+	}
+	if external == project || external == withFile {
+		t.Fatalf("distinct ownership collided: external=%s project=%s withFile=%s", external, project, withFile)
+	}
+}

@@ -1037,6 +1037,7 @@ func clonePatternAnalyses(patterns []models.PatternAnalysis) []models.PatternAna
 		out[i].CausalGroups = slices.Clone(patterns[i].CausalGroups)
 		for groupIndex := range out[i].CausalGroups {
 			out[i].CausalGroups[groupIndex].Builds = slices.Clone(patterns[i].CausalGroups[groupIndex].Builds)
+			out[i].CausalGroups[groupIndex].CauseLocation = patterns[i].CausalGroups[groupIndex].CauseLocation.Clone()
 		}
 		out[i].UnclassifiedBuilds = slices.Clone(patterns[i].UnclassifiedBuilds)
 		out[i].RemediationTargets = slices.Clone(patterns[i].RemediationTargets)
@@ -1283,6 +1284,7 @@ func cloneTestCase(testCase models.TestCase) models.TestCase {
 		analysis.SearchSuggestions = slices.Clone(analysis.SearchSuggestions)
 		analysis.EvidenceCitations = slices.Clone(analysis.EvidenceCitations)
 		analysis.FileLinks = maps.Clone(analysis.FileLinks)
+		analysis.CauseLocation = analysis.CauseLocation.Clone()
 		testCase.AIAnalysis = &analysis
 	}
 	return testCase

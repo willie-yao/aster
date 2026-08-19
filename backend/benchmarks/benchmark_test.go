@@ -102,20 +102,28 @@ type benchCase struct {
 	// the time of the snapshot. The live engine derives this from the flakiness
 	// report; the benchmark feeds it so the analysis (and the critique gate's
 	// transient-vs-persistent check) see the real persistence signal.
-	consecutiveFailures  int
-	oppositeDiagnosis    string
-	oppositeTransient    bool
-	referenceDiagnosis   string
-	referenceTransient   bool
-	allowUnavailable     bool
-	expectedTransient    *bool
-	forbidden            []benchSignal
-	consumerCommit       string
-	projectSHA256        string
-	promptSHA256         string
-	signals              []benchSignal
-	sourcePaths          []string
-	sourceSignals        []benchSignal
+	consecutiveFailures int
+	oppositeDiagnosis   string
+	oppositeTransient   bool
+	referenceDiagnosis  string
+	referenceTransient  bool
+	allowUnavailable    bool
+	expectedTransient   *bool
+	forbidden           []benchSignal
+	consumerCommit      string
+	projectSHA256       string
+	promptSHA256        string
+	signals             []benchSignal
+	sourcePaths         []string
+	sourceSignals       []benchSignal
+	// causeRepository is the "owner/repo" a correct analysis must hold
+	// responsible, and causeExternal whether that repository is a dependency
+	// rather than the project under test. Set both to score how reliably the
+	// model distinguishes an own-repo cause from an upstream one. causeFiles are
+	// paths the reported location must contain.
+	causeRepository      string
+	causeExternal        bool
+	causeFiles           []string
 	evidenceGroups       []benchmarkEvidenceGroup
 	oracleEvidenceSHA256 string
 }
@@ -1548,6 +1556,52 @@ type benchmarkSignalResult struct {
 	required bool
 }
 
+// benchmarkOwnershipExpectation scores the structured repository a correct
+// analysis must hold responsible. Ownership is a field rather than prose, so it
+// is checked against the published location instead of the scored text.
+type benchmarkOwnershipExpectation struct {
+	name       string
+	repository string
+	external   bool
+	file       string
+}
+
+func (e benchmarkOwnershipExpectation) satisfiedBy(location *models.AnalysisCauseLocation) bool {
+	if location == nil || !strings.EqualFold(location.Repository, e.repository) || location.External != e.external {
+		return false
+	}
+	if e.file == "" {
+		return true
+	}
+	return slices.ContainsFunc(location.Files, func(candidate string) bool {
+		return strings.EqualFold(candidate, e.file)
+	})
+}
+
+func benchmarkOwnershipExpectations(bc benchCase) []benchmarkOwnershipExpectation {
+	if bc.causeRepository == "" {
+		return nil
+	}
+	kind := "own repository"
+	if bc.causeExternal {
+		kind = "dependency"
+	}
+	out := []benchmarkOwnershipExpectation{{
+		name:       "cause owned by " + kind + " " + bc.causeRepository,
+		repository: bc.causeRepository,
+		external:   bc.causeExternal,
+	}}
+	for _, file := range bc.causeFiles {
+		out = append(out, benchmarkOwnershipExpectation{
+			name:       "cause location names " + file,
+			repository: bc.causeRepository,
+			external:   bc.causeExternal,
+			file:       file,
+		})
+	}
+	return out
+}
+
 type benchmarkAssessment struct {
 	hits             int
 	total            int
@@ -1572,6 +1626,9 @@ func assessBenchmarkCase(bc benchCase, tc *models.TestCase) benchmarkAssessment 
 	if bc.expectedTransient != nil {
 		assessment.total++
 	}
+	ownershipExpectations := benchmarkOwnershipExpectations(bc)
+	assessment.total += len(ownershipExpectations)
+	assessment.diagnosisTotal += len(ownershipExpectations)
 	if tc == nil || tc.AISummary == nil {
 		return assessment
 	}
@@ -1616,6 +1673,16 @@ func assessBenchmarkCase(bc benchCase, tc *models.TestCase) benchmarkAssessment 
 			assessment.forbiddenPassed++
 		} else {
 			assessment.missingMust = append(assessment.missingMust, name)
+		}
+	}
+	for _, expectation := range ownershipExpectations {
+		hit := expectation.satisfiedBy(tc.AIAnalysis.CauseLocation)
+		assessment.results = append(assessment.results, benchmarkSignalResult{name: expectation.name, hit: hit, required: true})
+		if hit {
+			assessment.hits++
+			assessment.diagnosisHits++
+		} else {
+			assessment.missingMust = append(assessment.missingMust, expectation.name)
 		}
 	}
 	return assessment

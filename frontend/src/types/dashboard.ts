@@ -62,6 +62,16 @@ export interface AISummary {
   is_transient: boolean;
 }
 
+export interface AnalysisCauseLocation {
+  // Owning "owner/repo".
+  repository: string;
+  // True when the cause lives in a dependency rather than this project's repo.
+  external?: boolean;
+  // Path hints inside repository. Paths in a dependency are never read at a
+  // pinned revision, so they are hints and never appear in file_links.
+  files?: string[];
+}
+
 export interface AIAnalysis {
   generated_at: string;
   model: string;
@@ -72,6 +82,7 @@ export interface AIAnalysis {
   // Verified GitHub links for cited source files keyed by cleaned path. When
   // present, this map is authoritative and absent files stay unlinked.
   file_links?: Record<string, string>;
+  cause_location?: AnalysisCauseLocation;
   mode?: string;
   critique_passed?: boolean;
   critique_version?: number;
@@ -220,6 +231,7 @@ export interface PatternCausalGroup {
   builds: string[];
   root_cause: string;
   confidence: "high" | "medium" | "low";
+  cause_location?: AnalysisCauseLocation;
 }
 
 export type PatternRecurrence =

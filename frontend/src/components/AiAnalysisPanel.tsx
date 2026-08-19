@@ -19,6 +19,8 @@ import type { AnalysisChatReference } from "../types/analysisChat";
 import { RichText } from "./RichText";
 import { LabeledBlock } from "./LabeledBlock";
 import { AnalysisChat } from "./AnalysisChat";
+import { UpstreamCauseNotice } from "./UpstreamCauseNotice";
+import { externalCause } from "../lib/patternFixGuidance";
 import { soft } from "../theme";
 import { useAnalysisCorrections } from "../hooks/useData";
 import { useCapabilities } from "../hooks/useCapabilities";
@@ -459,12 +461,28 @@ export function AiAnalysisPanel({
     />
   ) : null;
 
+  // An external cause explains why this analysis has no verified project file
+  // and cannot start a Fix investigation, so it belongs beside the remediation.
+  const upstreamCause = externalCause(analysis.cause_location);
+  const upstream = upstreamCause ? (
+    detailAppearance ? (
+      <DetailAnalysisSection label="Cause is in a dependency">
+        <UpstreamCauseNotice location={upstreamCause} />
+      </DetailAnalysisSection>
+    ) : (
+      <LabeledBlock label="Cause is in a dependency" accent="primary">
+        <UpstreamCauseNotice location={upstreamCause} />
+      </LabeledBlock>
+    )
+  ) : null;
+
   const content = (
     <Stack spacing={detailAppearance ? 2.25 : 2}>
       {statusRow}
       {correctionPanel}
       {rootCause}
       {suggestedFix}
+      {upstream}
       {files}
       {chat}
     </Stack>

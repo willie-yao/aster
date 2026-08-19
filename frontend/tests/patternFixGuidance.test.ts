@@ -209,12 +209,29 @@ test("a single-build cause still gets the per-test fix route", () => {
   });
 });
 
+// Ownership must never cost a project-owned failure its Fix route, and an
+// eligible verified failure still wins over an upstream note.
+test("cause ownership does not change which failures can start a Fix investigation", () => {
+  const ownRepo: PatternCausalGroup = {
+    ...firstGroup,
+    cause_location: { repository: "kubernetes-sigs/cluster-api-provider-azure" },
+  };
+  const upstream: PatternCausalGroup = {
+    ...firstGroup,
+    cause_location: { repository: "kubernetes/kubernetes", external: true },
+  };
+
+  assert.deepEqual(causalGroupFixTarget(ownRepo, [groundedRun]), { buildID: "208060", testName: "fails" });
+  assert.deepEqual(causalGroupFixTarget(upstream, [groundedRun]), { buildID: "208060", testName: "fails" });
+  assert.equal(causalGroupFixTarget(ownRepo, [junitRun]), null);
+});
+
 test("fix routing sits with each cause and stays behind the chat capabilities", () => {
   const banner = source("src/components/PatternBanner.tsx");
   const routing = source("src/components/CausalGroupFixRouting.tsx");
 
   assert.match(banner, /const fixCapable = Boolean\(features\.analysis_chat && features\.junit_chat_fix\)/);
-  assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupFixRouting[\s\S]*target=\{causalFixTargets\[index\]\}/);
+  assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupFixRouting[\s\S]*target=\{causalFixTargets\[index\]\}[\s\S]*externalCause=\{externalCause\(group\.cause_location\)\}/);
   assert.match(routing, /testRunPath\(jobID, target\.testName, target\.buildID\)/);
   assert.match(routing, /No failed JUnit test in these builds meets the Fix investigation requirements/);
 });
@@ -274,7 +291,7 @@ test("the pattern-level panel is a fallback for causes with no eligible test", (
   const guidance = source("src/components/PatternFixGuidance.tsx");
 
   assert.match(banner, /const showFixGuidance = Boolean\(jobID && fixGuidanceBuildID && fixCapable && !hasCausalFixTarget\)/);
-  assert.match(banner, /<PatternFixGuidance jobID=\{jobID\} buildID=\{fixGuidanceBuildID\} \/>/);
+  assert.match(banner, /<PatternFixGuidance jobID=\{jobID\} buildID=\{fixGuidanceBuildID\} externalCause=\{patternUpstreamCause\} \/>/);
   assert.ok(banner.indexOf("<PatternFixGuidance") < banner.indexOf("<AnalysisChat"));
   assert.equal(banner.match(/<PatternFixGuidance/g)?.length, 1);
   assert.match(guidance, /Fix investigation unavailable/);

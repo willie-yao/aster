@@ -6,8 +6,10 @@ import { AutoFixHigh } from "@mui/icons-material";
 import { Link as RouterLink } from "react-router-dom";
 import { parseTestDisplayName } from "../lib/detailTitles";
 import type { CausalGroupFixTarget } from "../lib/patternFixGuidance";
+import type { AnalysisCauseLocation } from "../types/dashboard";
 import { testRunPath } from "../lib/routes";
 import { overviewTypography } from "../theme/overview";
+import { UpstreamCauseNotice } from "./UpstreamCauseNotice";
 
 // CausalGroupFixRouting points one cause at a failed test that can actually
 // start a Fix investigation, and says so plainly when no such test exists. The
@@ -17,16 +19,21 @@ export function CausalGroupFixRouting({
   jobID,
   target,
   showBuild = false,
+  externalCause,
 }: {
   jobID?: string;
   target: CausalGroupFixTarget | null;
   // Set when another cause on this briefing routes to the same test, which is
   // the only case where the build is needed to tell two actions apart.
   showBuild?: boolean;
+  externalCause?: AnalysisCauseLocation | null;
 }) {
   if (!jobID) return null;
 
   if (!target) {
+    // A cause owned by a dependency is a real diagnosis, not missing evidence,
+    // so name the repository instead of reporting an unexplained dead end.
+    if (externalCause) return <UpstreamCauseNotice location={externalCause} />;
     return (
       <Typography sx={{ mt: 1.5, color: "text.secondary", ...overviewTypography.description }}>
         No failed JUnit test in these builds meets the Fix investigation requirements, so no Fix investigation can start from this cause.

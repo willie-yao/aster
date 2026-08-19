@@ -137,6 +137,12 @@ func (s *Service) SetSourceRepo(owner, name string) {
 	s.sourceRepoName = name
 }
 
+// SourceRepo returns the configured analysis source repository. It is part of
+// the effective prompt identity, so scheduling and publication must agree on it.
+func (s *Service) SourceRepo() (owner, name string) {
+	return s.sourceRepoOwner, s.sourceRepoName
+}
+
 // SetGitHubReadToken installs the optional read-only source credential.
 func (s *Service) SetGitHubReadToken(token string) { s.githubReadToken = token }
 
@@ -504,7 +510,11 @@ func (s *Service) shouldReanalyzeWithPromptHash(tc *models.TestCase, promptHash 
 }
 
 func (s *Service) analysisPromptHash(tc *models.TestCase, userPrompt string) string {
-	effectiveSystemPrompt := s.systemPrompt + agToolDocs
+	// The repository section is part of the prompt actually sent, and it decides
+	// how the model classifies cause ownership. Repointing the project's source
+	// repo must therefore invalidate cached analyses rather than reuse a
+	// classification made against the previous repository.
+	effectiveSystemPrompt := s.systemPrompt + agToolDocs + agenticSourceRepoSection(s.sourceRepoOwner, s.sourceRepoName)
 	if tc != nil && tc.Source == models.TestCaseSourceBuild && userPrompt != "" {
 		return PromptFingerprint(effectiveSystemPrompt + "\x00" + userPrompt)
 	}
