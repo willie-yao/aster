@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -100,6 +101,10 @@ type ToolLoopOptions struct {
 // not a byte budget, so this is effectively "no budget pressure".
 const toolLoopBudget = 1 << 30
 
+// toolLoopNudgePrompt pushes a model that answered from the prompt alone back
+// into the tools before its answer is accepted.
+const toolLoopNudgePrompt = "Investigate with the tools before answering: grep and read the relevant files, then give your final JSON."
+
 // ToolLoop runs a bounded, read-only tool-calling loop and returns the model's
 // final tools-free message. It is domain-agnostic: the caller supplies the tool
 // registry, the enabled tool names, and a tools.Env carrying whatever backend
@@ -116,146 +121,80 @@ func (c *Client) ToolLoop(
 	env *tools.Env,
 	opts ToolLoopOptions,
 ) (string, error) {
-	maxIters := opts.MaxIters
-	if maxIters <= 0 {
-		maxIters = 8
-	}
-
-	messages := []modelMessage{
-		{Role: "system", Content: strPtr(sys)},
-		{Role: "user", Content: strPtr(user)},
+	// The generic loop reports a cancelled context without spending a model
+	// request on it.
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	schemas := reg.Schemas(enabled)
 	if len(schemas) == 0 {
 		return "", fmt.Errorf("tool loop: no tools enabled (got %v); resolve groups with Registry.Enable first", enabled)
 	}
-	schemaBytes := schemaPayloadBytes(schemas)
 	required, err := newRequiredToolState(opts.RequiredTools, schemas)
 	if err != nil {
 		return "", err
 	}
 
-	var parallelToolCalls *bool
-	if opts.SingleToolCall {
-		f := false
-		parallelToolCalls = &f
-	}
-
-	calls := 0
 	nudged := false
-	forceRequired := false
-	for iter := 0; iter < maxIters; iter++ {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		if opts.ContextByteBudget > 0 {
-			var elided int
-			messages, elided = compactMessages(messages, schemaBytes, opts.ContextByteBudget)
-			if elided > 0 {
-				log.Printf("  ✂ tool loop: elided %d message(s) to fit ~%d-byte window", elided, opts.ContextByteBudget)
-			}
-		}
-		request := modelRequest{
-			Model: c.model, Messages: messages, Tools: schemas,
-			ParallelToolCalls: parallelToolCalls,
-		}
-		forcedName := ""
-		if forceRequired {
-			pending := required.pending()
-			if pending == nil {
-				return "", fmt.Errorf("tool loop: required-tool state is inconsistent")
-			}
-			required.beginForcedAttempt()
-			forcedName = pending.Name
-			request.ToolChoice = &ToolChoice{Name: forcedName}
-			parallel := false
-			request.ParallelToolCalls = &parallel
-			forceRequired = false
-		}
-		resp, err := c.callModelRequest(ctx, request)
-		if err != nil {
-			if iter == 0 && isToolsUnsupportedError(err) {
-				return "", fmt.Errorf("%w: %v", ErrToolsUnsupported, err)
-			}
-			return "", fmt.Errorf("tool loop iter %d: %w", iter+1, err)
-		}
-		if !resp.HasMessage {
-			return "", fmt.Errorf("tool loop iter %d: empty choices", iter+1)
-		}
-		msg := resp.Message
-
-		if len(msg.ToolCalls) == 0 {
+	result, err := c.runToolLoop(ctx, toolLoopParams{
+		messages: []modelMessage{
+			{Role: "system", Content: strPtr(sys)},
+			{Role: "user", Content: strPtr(user)},
+		},
+		schemas:           schemas,
+		maxIters:          opts.MaxIters,
+		singleToolCall:    opts.SingleToolCall,
+		contextByteBudget: opts.ContextByteBudget,
+		dispatch: func(ctx context.Context, tc modelToolCall) (string, map[string]interface{}, tools.Result) {
+			envelope, result := dispatchToolLoop(ctx, reg, env, tc)
+			return envelope, result.Payload, result
+		},
+		onAnswer: func(answer toolLoopAnswer) toolLoopDecision {
 			if pending := required.pending(); pending != nil {
 				if !required.canForce() {
-					return "", required.exhaustedError()
+					return toolLoopStop(required.exhaustedError())
 				}
-				messages = appendToolsFreeAssistant(messages, msg)
-				messages = append(messages, modelMessage{Role: "user", Content: strPtr(pending.CorrectivePrompt)})
-				forceRequired = true
-				continue
+				return toolLoopCorrect(pending.CorrectivePrompt).forcing(pending.Name)
 			}
 			// Require a minimum of investigation before accepting a final
 			// answer, nudging once so a model that finalizes from the prompt
 			// alone still goes and reads the source first.
-			if opts.MinToolCalls > 0 && calls < opts.MinToolCalls && !nudged {
+			if opts.MinToolCalls > 0 && answer.Calls < opts.MinToolCalls && !nudged {
 				nudged = true
-				if msg.Content != nil {
-					messages = append(messages, modelMessage{Role: "assistant", Content: msg.Content, ProviderItems: msg.ProviderItems})
-				}
-				messages = append(messages, modelMessage{
-					Role:    "user",
-					Content: strPtr("Investigate with the tools before answering: grep and read the relevant files, then give your final JSON."),
-				})
-				continue
+				return toolLoopCorrect(toolLoopNudgePrompt)
 			}
-			messages = appendToolsFreeAssistant(messages, msg)
-			captureToolLoopContinuation(ctx, c, messages)
-			if msg.Content != nil {
-				return *msg.Content, nil
-			}
-			return "", nil
-		}
-
-		toolCalls, dropped := limitToolCalls(msg.ToolCalls, opts.SingleToolCall || forcedName != "")
-		if dropped > 0 {
-			log.Printf("  ⤵ single_tool_call: executing 1 of %d tool calls, dropping %d", len(msg.ToolCalls), dropped)
-		}
-		echoCalls, skippedOutputs := continuationCalls(c.apiMode, msg, toolCalls)
-		echo := modelMessage{Role: "assistant", ToolCalls: echoCalls, ProviderItems: msg.ProviderItems}
-		if msg.Content != nil {
-			echo.Content = msg.Content
-		}
-		messages = append(messages, echo)
-
-		messages = append(messages, skippedOutputs...)
-
-		for _, tc := range toolCalls {
-			payload, result := dispatchToolLoop(ctx, reg, env, tc)
-			calls++
-			required.observe(tc.Function.Name, result)
-			_, hasError := result.Payload["error"]
+			return toolLoopAccept()
+		},
+		onForcedTurn: func(string) { required.beginForcedAttempt() },
+		onDispatch: func(dispatched *toolLoopDispatch) {
+			required.observe(dispatched.Call.Function.Name, dispatched.Result)
+			_, hasError := dispatched.Result.Payload["error"]
 			if opts.Observe != nil {
 				opts.Observe(ToolLoopEvent{
-					Name: tc.Function.Name, Path: toolLoopPath(tc.Function.Arguments),
-					BytesFetched: result.BytesFetched, ContentBytes: result.ContentBytes, Error: hasError,
-					BudgetExhausted: result.BudgetExhausted, Forced: forcedName != "",
+					Name: dispatched.Call.Function.Name, Path: toolLoopPath(dispatched.Call.Function.Arguments),
+					BytesFetched: dispatched.Result.BytesFetched, ContentBytes: dispatched.Result.ContentBytes,
+					Error: hasError, BudgetExhausted: dispatched.Result.BudgetExhausted, Forced: dispatched.Forced,
 				})
 			}
 			if opts.ObservePrivate != nil {
 				opts.ObservePrivate(ToolLoopPrivateEvent{
-					Name: tc.Function.Name, Error: hasError, BudgetExhausted: result.BudgetExhausted,
-					Forced: forcedName != "", Observation: result.Observation,
+					Name: dispatched.Call.Function.Name, Error: hasError,
+					BudgetExhausted: dispatched.Result.BudgetExhausted,
+					Forced:          dispatched.Forced, Observation: dispatched.Result.Observation,
 				})
 			}
-			messages = append(messages, modelMessage{
-				Role:       "tool",
-				ToolCallID: tc.ID,
-				Content:    strPtr(payload),
-			})
+		},
+	})
+	if err != nil {
+		var modelErr *toolLoopModelError
+		if errors.As(err, &modelErr) && modelErr.iter == 0 && isToolsUnsupportedError(modelErr.err) {
+			return "", fmt.Errorf("%w: %v", ErrToolsUnsupported, modelErr.err)
 		}
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
+		return "", err
+	}
+	if !result.BudgetExhausted {
+		captureToolLoopContinuation(ctx, c, result.Messages)
+		return result.Content, nil
 	}
 	if required.pending() != nil {
 		return "", required.exhaustedError()
@@ -265,9 +204,9 @@ func (c *Client) ToolLoop(
 	// finalize round with tools omitted so the caller still gets a response.
 	headroom := contextHeadroomFor(AgenticOptions{ContextByteBudget: opts.ContextByteBudget})
 	if opts.PropagateFinalizeError {
-		return c.runToolLoopFinalizeRound(ctx, messages, headroom)
+		return c.runToolLoopFinalizeRound(ctx, result.Messages, headroom)
 	}
-	final, _, safe := c.runFinalizeRound(ctx, messages, headroom)
+	final, _, safe := c.runFinalizeRound(ctx, result.Messages, headroom)
 	if !safe {
 		return "", ErrContextHeadroom
 	}
@@ -399,19 +338,43 @@ func toolLoopPath(arguments string) string {
 // capped JSON payload to hand back to the model. Tools that gate on remaining
 // bytes see a large budget since the loop bounds work by iteration count.
 func dispatchToolLoop(ctx context.Context, reg *tools.Registry, env *tools.Env, tc modelToolCall) (string, tools.Result) {
-	env.RemainingModelBytes = toolLoopBudget
-	env.RemainingGCSBytes = toolLoopBudget
-	result := reg.Dispatch(ctx, env, tc.Function.Name, json.RawMessage(tc.Function.Arguments))
-	if result.Payload == nil {
-		result.Payload = map[string]interface{}{}
-	}
-	if os.Getenv("AGENTIC_TRACE_TOOLS") != "" {
-		flag := "ok"
-		if _, hasErr := result.Payload["error"]; hasErr {
-			flag = "ERROR"
-		}
-		log.Printf("    🔧 %s(%s) [%s]", tc.Function.Name, textutil.Truncate(tc.Function.Arguments, 140), flag)
-	}
+	result := dispatchToolCall(ctx, reg, env, tc, toolLoopBudget, toolLoopBudget)
 	out, _ := json.Marshal(result.Payload)
 	return capJSON(string(out)), result
+}
+
+// dispatchToolCall runs one registry tool under the given byte limits and
+// returns its result with a non-nil payload. Envelope shaping and any
+// budget accounting belong to the caller.
+func dispatchToolCall(
+	ctx context.Context,
+	reg *tools.Registry,
+	env *tools.Env,
+	tc modelToolCall,
+	modelLimit, gcsLimit int,
+) tools.Result {
+	env.RemainingModelBytes = modelLimit
+	env.RemainingGCSBytes = gcsLimit
+	result := reg.Dispatch(ctx, env, tc.Function.Name, json.RawMessage(tc.Function.Arguments))
+	if result.Payload == nil {
+		// Defensive: registry promises a non-nil Payload, but never trust the
+		// edge case. Empty map is safer than a nil deref downstream.
+		result.Payload = map[string]interface{}{}
+	}
+	_, failed := result.Payload["error"]
+	traceToolCall(tc, result.BytesFetched, failed)
+	return result
+}
+
+// traceToolCall logs one dispatch when AGENTIC_TRACE_TOOLS is set, so
+// production logs stay clean by default.
+func traceToolCall(tc modelToolCall, bytesFetched int, failed bool) {
+	if os.Getenv("AGENTIC_TRACE_TOOLS") == "" {
+		return
+	}
+	flag := "ok"
+	if failed {
+		flag = "ERROR"
+	}
+	log.Printf("    🔧 %s(%s) -> %d bytes [%s]", tc.Function.Name, textutil.Truncate(tc.Function.Arguments, 140), bytesFetched, flag)
 }
