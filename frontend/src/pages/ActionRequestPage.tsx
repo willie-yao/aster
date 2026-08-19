@@ -57,7 +57,7 @@ function ActionRequestPageFrame({
           <Link component={RouterLink} to="/" color="inherit" underline="hover">
             Overview
           </Link>
-          <Typography variant="inherit" color="text.primary">
+          <Typography variant="inherit" color="textPrimary">
             Draft review
           </Typography>
         </Breadcrumbs>
@@ -299,7 +299,7 @@ export function ActionRequestPage() {
           <Typography variant="h5" component="h2" sx={{ mb: 1 }}>
             Sign in to review this draft
           </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
+          <Typography variant="body2" color="textSecondary" sx={{ mb: 2.5 }}>
             Drafts are bound to the maintainer who requested them.
           </Typography>
           <Button variant="contained" startIcon={<GitHub />} onClick={signIn}>
@@ -365,7 +365,7 @@ export function ActionRequestPage() {
             <Typography variant="h5" component="h2">
               {isFix ? "Review draft fix PR" : "Review issue draft"}
             </Typography>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" color="textSecondary">
               Requested by {request.owner}
             </Typography>
           </Box>
@@ -434,7 +434,7 @@ export function ActionRequestPage() {
                   <Typography variant="body2" sx={{ fontWeight: 600 }}>
                     {actionRequestProgressTitle(request, isFix)}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography variant="body2" color="textSecondary">
                     {actionRequestProgressDetail(request)}
                   </Typography>
                 </Box>
@@ -460,7 +460,7 @@ export function ActionRequestPage() {
                   <Typography variant="body2" sx={{ fontWeight: 600 }}>
                     Stopping runtime work
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography variant="body2" color="textSecondary">
                     The request remains active until the server confirms that
                     its runtime work has stopped.
                   </Typography>

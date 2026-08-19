@@ -28,7 +28,7 @@ export function LabeledBlock({
     >
       <Typography
         variant="label"
-        color="text.secondary"
+        color="textSecondary"
         sx={{ fontWeight: 600, display: "block", mb: 0.75, textTransform: "uppercase" }}
       >
         {label}

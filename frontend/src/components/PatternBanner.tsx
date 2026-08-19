@@ -50,7 +50,7 @@ function BriefingSection({
     <Box>
       <Typography
         component="h3"
-        color="text.secondary"
+        color="textSecondary"
         sx={{ ...overviewTypography.subsectionHeading, fontSize: "14px", lineHeight: "20px" }}
       >
         {label}
@@ -206,7 +206,7 @@ export function PatternBanner({
       )}
       {jobID && lifecycle.passing_builds && lifecycle.passing_builds.length > 0 && (
         <Stack direction="row" spacing={1} sx={{ mt: 0.75, alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}>
-          <Typography variant="caption" color="text.secondary">Verified passing runs:</Typography>
+          <Typography variant="caption" color="textSecondary">Verified passing runs:</Typography>
           {lifecycle.passing_builds.map((buildID) => (
             <Link key={buildID} component={RouterLink} to={jobRunPath(jobID, buildID)} sx={overviewTypography.data}>
               {buildID}
@@ -216,7 +216,7 @@ export function PatternBanner({
       )}
       {jobID && lifecycle.recovery_builds && lifecycle.recovery_builds.length > 0 && (
         <Stack direction="row" spacing={1} sx={{ mt: 0.75, alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}>
-          <Typography variant="caption" color="text.secondary">Observed passing runs:</Typography>
+          <Typography variant="caption" color="textSecondary">Observed passing runs:</Typography>
           {lifecycle.recovery_builds.map((buildID) => (
             <Link key={buildID} component={RouterLink} to={jobRunPath(jobID, buildID)} sx={overviewTypography.data}>
               {buildID}
@@ -251,7 +251,7 @@ export function PatternBanner({
       )}
 
       {resolvedEntry && (
-        <Typography color="text.secondary" sx={overviewTypography.description}>
+        <Typography color="textSecondary" sx={overviewTypography.description}>
           Dismissed by {resolvedEntry.resolved_by}
           {resolvedEntry.note ? `. ${resolvedEntry.note}` : ""}. It returns to the active view automatically if it recurs.
         </Typography>

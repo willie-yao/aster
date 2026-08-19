@@ -38,10 +38,10 @@ function jobValues(job: JobSummary) {
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <Box sx={{ display: "inline-flex", alignItems: "baseline", gap: 0.5 }}>
-      <Typography variant="caption" component="span" color="text.secondary" sx={overviewTypography.description}>
+      <Typography variant="caption" component="span" color="textSecondary" sx={overviewTypography.description}>
         {label}
       </Typography>
-      <Typography variant="data" component="span" color="text.primary" sx={overviewTypography.data}>
+      <Typography variant="data" component="span" color="textPrimary" sx={overviewTypography.data}>
         {value}
       </Typography>
     </Box>
@@ -80,7 +80,7 @@ function JobLink({ job, compact }: { job: JobSummary; compact: boolean }) {
       {!compact && job.description && (
         <Typography
           variant="caption"
-          color="text.secondary"
+          color="textSecondary"
           title={job.description}
           sx={{
             display: "none",
@@ -127,13 +127,13 @@ function DesktopJobRow({ job }: { job: JobSummary }) {
       }}
     >
       <Box role="cell" sx={{ gridArea: "job", minWidth: 0 }}><JobLink job={job} compact={false} /></Box>
-      <Typography role="cell" variant="data" color="text.secondary" title={job.branch} sx={{ gridArea: "branch", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", ...overviewTypography.data }}>
+      <Typography role="cell" variant="data" color="textSecondary" title={job.branch} sx={{ gridArea: "branch", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", ...overviewTypography.data }}>
         {job.branch || "Not set"}
       </Typography>
       <Box role="cell" sx={{ gridArea: "runs", minWidth: 0 }}><Sparkline runs={job.recent_runs} jobID={job.job_id} /></Box>
       <Typography role="cell" variant="data" sx={{ gridArea: "pass", ...overviewTypography.data }}>{formatPercent(job.pass_rate_recent)}</Typography>
-      <Typography role="cell" variant="data" color="text.secondary" sx={{ gridArea: "last", ...overviewTypography.data }}>{lastRun}</Typography>
-      <Typography role="cell" variant="data" color="text.secondary" sx={{ gridArea: "duration", ...overviewTypography.data }}>{duration}</Typography>
+      <Typography role="cell" variant="data" color="textSecondary" sx={{ gridArea: "last", ...overviewTypography.data }}>{lastRun}</Typography>
+      <Typography role="cell" variant="data" color="textSecondary" sx={{ gridArea: "duration", ...overviewTypography.data }}>{duration}</Typography>
       <Box role="cell" sx={{ gridArea: "status", justifySelf: "end" }}>
         <StatusChip status={job.current_status} sx={{ height: 26, fontSize: "13px" }} />
       </Box>
@@ -197,7 +197,7 @@ function CategoryBand({ section, headingID }: { section: JobHealthSection; headi
       <Typography id={headingID} variant="headline" component="h3" sx={overviewTypography.categoryHeading}>
         {section.label}
       </Typography>
-      <Typography variant="data" color="text.secondary" sx={overviewTypography.data}>
+      <Typography variant="data" color="textSecondary" sx={overviewTypography.data}>
         {section.jobs.length} {section.jobs.length === 1 ? "job" : "jobs"}
       </Typography>
     </Box>
@@ -224,7 +224,7 @@ export function JobHealthTable({ sections }: JobHealthTableProps) {
       <Box role="table" aria-label="Job health" sx={{ display: "none", borderBlock: "1px solid", borderColor: "divider", bgcolor: "surface.container", [desktopBreakpoint]: { display: "block" } }}>
         <Box role="row" sx={{ display: "grid", gridTemplateColumns: compactColumns, alignItems: "center", columnGap: 1, px: 1.5, py: 1, minHeight: 42, borderBottom: "1px solid", borderColor: "divider", bgcolor: "surface.containerHigh", [wideBreakpoint]: { gridTemplateColumns: wideColumns, columnGap: 1.5, px: 2 } }}>
           {headers.map((header) => (
-            <Typography key={header} role="columnheader" variant="label" color="text.secondary" sx={overviewTypography.tableHeading}>
+            <Typography key={header} role="columnheader" variant="label" color="textSecondary" sx={overviewTypography.tableHeading}>
               {header}
             </Typography>
           ))}

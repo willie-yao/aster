@@ -144,7 +144,7 @@ function stateIcon(response: FetchStatusResponse, size = 18, severity?: "info" |
 function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <Box sx={{ display: "grid", gridTemplateColumns: "minmax(110px, auto) minmax(0, 1fr)", gap: 2 }}>
-      <Typography variant="caption" color="text.secondary">
+      <Typography variant="caption" color="textSecondary">
         {label}
       </Typography>
       <Typography variant="body2" sx={{ textAlign: "right", overflowWrap: "anywhere" }}>
@@ -366,7 +366,7 @@ function MacroStageProgress({ stages }: { stages: FetchMacroStagePresentation[] 
           <Typography variant="caption" sx={{ display: "block", color: "text.primary", fontWeight: 700, lineHeight: 1.2 }}>
             {stage.label}
           </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontSize: "0.6875rem", lineHeight: 1.2, mt: 0.25 }}>
+          <Typography variant="caption" color="textSecondary" sx={{ display: "block", fontSize: "0.6875rem", lineHeight: 1.2, mt: 0.25 }}>
             {stage.stateLabel}
           </Typography>
         </Box>
@@ -392,7 +392,7 @@ function CopyableDebugRow({ label, value }: { label: string; value: string }) {
 
   return (
     <Box sx={{ display: "grid", gridTemplateColumns: "minmax(96px, auto) minmax(0, 1fr) auto", gap: 1, alignItems: "center" }}>
-      <Typography variant="caption" color="text.secondary">{label}</Typography>
+      <Typography variant="caption" color="textSecondary">{label}</Typography>
       <Typography component="code" variant="caption" sx={{ textAlign: "right", overflowWrap: "anywhere" }}>{value}</Typography>
       <Button
         size="small"
@@ -517,13 +517,13 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
               {stateIcon(response, 20, presentation.severity)}
             </Box>
             <Box sx={{ minWidth: 0, flex: 1 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontWeight: 700 }}>
+              <Typography variant="caption" color="textSecondary" sx={{ display: "block", fontWeight: 700 }}>
                 Data refresh
               </Typography>
               <Typography variant="subtitle2" sx={{ fontWeight: 700, mt: 0.125 }}>
                 {presentation.title}
               </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+              <Typography variant="body2" color="textSecondary" sx={{ mt: 0.25 }}>
                 {presentation.detail}
               </Typography>
             </Box>
@@ -565,7 +565,7 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
                       {group.label}
                     </Typography>
                     {group.items.map((item) => (
-                      <Typography key={item} variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.45 }}>
+                      <Typography key={item} variant="caption" color="textSecondary" sx={{ display: "block", lineHeight: 1.45 }}>
                         {item}
                       </Typography>
                     ))}
@@ -593,7 +593,7 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
           </Stack>
 
           {status.last_successful_publication_at && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1.25, lineHeight: 1.5 }}>
+            <Typography variant="caption" color="textSecondary" sx={{ display: "block", mt: 1.25, lineHeight: 1.5 }}>
               {availabilityMessage}
             </Typography>
           )}
@@ -740,7 +740,7 @@ export function FetchStatusStrip({ response, dismissedKey, onDismiss }: FetchSta
           </Typography>
           <Typography
             variant="caption"
-            color="text.secondary"
+            color="textSecondary"
             sx={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
           >
             {presentation.detail}

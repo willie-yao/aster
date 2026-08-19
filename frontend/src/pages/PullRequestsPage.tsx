@@ -39,7 +39,7 @@ function EmptyState({ repo }: { repo: string }) {
       <Typography variant="h5" component="h1" sx={{ fontWeight: 700 }}>
         No open pull requests
       </Typography>
-      <Typography color="text.secondary" sx={{ mt: 1.5 }}>
+      <Typography color="textSecondary" sx={{ mt: 1.5 }}>
         {repo || "The configured repository"} has no open non-draft pull requests,
         or the last refresh could not reach GitHub. Draft pull requests are always
         excluded.
@@ -111,11 +111,11 @@ export function PullRequestsPage() {
           <Typography variant="h4" component="h1" sx={overviewTypography.pageHeadline}>
             Pull Request Triage
           </Typography>
-          <Typography color="text.secondary" sx={{ mt: 0.75, ...overviewTypography.secondaryBody }}>
+          <Typography color="textSecondary" sx={{ mt: 0.75, ...overviewTypography.secondaryBody }}>
             Presubmit results for open pull requests in {data.repo}
           </Typography>
         </Box>
-        <Typography variant="data" color="text.secondary" sx={{ justifySelf: "end", ...overviewTypography.data }}>
+        <Typography variant="data" color="textSecondary" sx={{ justifySelf: "end", ...overviewTypography.data }}>
           Updated {timeAgo(data.generated_at)}
         </Typography>
       </Box>
@@ -154,7 +154,7 @@ export function PullRequestsPage() {
 
         {filtered.length === 0 ? (
           <Box sx={{ py: 8, textAlign: "center" }}>
-            <Typography color="text.secondary">No pull requests match filters</Typography>
+            <Typography color="textSecondary">No pull requests match filters</Typography>
           </Box>
         ) : (
           <PullRequestLedger pulls={filtered} />

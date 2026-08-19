@@ -9,7 +9,7 @@ export function NotFoundPage() {
       <Typography variant="h4" component="h1">
         Page not found
       </Typography>
-      <Typography color="text.secondary" sx={{ mt: 1.5 }}>
+      <Typography color="textSecondary" sx={{ mt: 1.5 }}>
         The requested dashboard page does not exist.
       </Typography>
       <Link component={RouterLink} to="/" sx={{ display: "inline-block", mt: 2 }}>

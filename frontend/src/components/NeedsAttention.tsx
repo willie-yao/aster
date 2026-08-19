@@ -104,7 +104,7 @@ export function DisclosureButton({
       <Typography
         variant="label"
         component="span"
-        color="text.secondary"
+        color="textSecondary"
         sx={overviewTypography.subsectionHeading}
       >
         {label}
@@ -236,7 +236,7 @@ export function FeaturedPatternRow({
           </Typography>
           <Typography
             component="span"
-            color="text.secondary"
+            color="textSecondary"
             sx={{ display: "block", ...overviewTypography.description }}
           >
             {job?.category || "Recurring pattern"} ·{" "}
@@ -315,14 +315,14 @@ export function FeaturedPatternRow({
         </Typography>
         <Typography
           variant="data"
-          color="text.secondary"
+          color="textSecondary"
           sx={{ display: "block", mt: 0.25, ...overviewTypography.data }}
         >
           {countLabel(pattern.builds_analyzed, "build")}
         </Typography>
         <Typography
           variant="caption"
-          color="text.secondary"
+          color="textSecondary"
           sx={{ display: "block", mt: 0.25, ...overviewTypography.description }}
         >
           {signal}
@@ -444,7 +444,7 @@ export function AttentionRow({
           <Typography
             variant="caption"
             component="span"
-            color="text.secondary"
+            color="textSecondary"
             title={detail}
             sx={{
               display: "block",
@@ -462,7 +462,7 @@ export function AttentionRow({
       <Typography
         variant="data"
         component="span"
-        color="text.secondary"
+        color="textSecondary"
         sx={{
           gridArea: "count",
           display: "none",
@@ -476,7 +476,7 @@ export function AttentionRow({
       <Typography
         variant="caption"
         component="span"
-        color={statusColor ? `${statusColor}.main` : "text.secondary"}
+        color={statusColor ?? "textSecondary"}
         sx={{
           gridArea: "signal",
           display: "none",
@@ -504,7 +504,7 @@ export function AttentionRow({
             <Typography
               variant="data"
               component="span"
-              color="text.secondary"
+              color="textSecondary"
               sx={overviewTypography.data}
             >
               {count}
@@ -514,7 +514,7 @@ export function AttentionRow({
             <Typography
               variant="caption"
               component="span"
-              color={statusColor ? `${statusColor}.main` : "text.secondary"}
+              color={statusColor ?? "textSecondary"}
               sx={overviewTypography.description}
             >
               {signal}
@@ -635,7 +635,7 @@ export function NeedsAttention({
         </Typography>
         <Typography
           variant="data"
-          color="text.secondary"
+          color="textSecondary"
           sx={{ gridArea: "summary", justifySelf: { sm: "end" }, ...overviewTypography.data }}
         >
           {summary}
@@ -643,13 +643,13 @@ export function NeedsAttention({
       </Box>
 
       {loading && (
-        <Typography color="text.secondary" sx={{ px: 1.5, py: 2, ...overviewTypography.secondaryBody }}>
+        <Typography color="textSecondary" sx={{ px: 1.5, py: 2, ...overviewTypography.secondaryBody }}>
           Attention data is loading.
         </Typography>
       )}
 
       {!loading && (error || !report) && (
-        <Typography color="text.secondary" sx={{ px: 1.5, py: 2, ...overviewTypography.secondaryBody }}>
+        <Typography color="textSecondary" sx={{ px: 1.5, py: 2, ...overviewTypography.secondaryBody }}>
           Attention data is unavailable.
         </Typography>
       )}
@@ -666,7 +666,7 @@ export function NeedsAttention({
           </Typography>
           <Typography
             variant="body2"
-            color="text.secondary"
+            color="textSecondary"
             sx={overviewTypography.primaryBody}
           >
             No published test-level or recurring-pattern alerts need attention.
@@ -791,12 +791,12 @@ export function NeedsAttention({
                   <Typography
                     variant="label"
                     component="h3"
-                    color="text.secondary"
+                    color="textSecondary"
                     sx={overviewTypography.subsectionHeading}
                   >
                     {group.label}
                   </Typography>
-                  <Typography variant="data" color="text.secondary" sx={overviewTypography.data}>
+                  <Typography variant="data" color="textSecondary" sx={overviewTypography.data}>
                     {group.items.length}
                   </Typography>
                 </Box>

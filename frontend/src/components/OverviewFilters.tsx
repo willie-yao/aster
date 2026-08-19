@@ -119,7 +119,7 @@ export function OverviewFilters({
 
       <Typography
         variant="data"
-        color="text.secondary"
+        color="textSecondary"
         sx={{ justifySelf: { xs: "start", sm: "end" }, ...overviewTypography.data }}
       >
         {matchingJobs} {matchingJobs === 1 ? "job" : "jobs"}

@@ -194,7 +194,7 @@ function CopyIdentifier({ label, value }: { label: string; value: string }) {
 function TraceEventOutcome({ outcome }: { outcome?: string }) {
   if (!outcome) {
     return (
-      <Typography component="span" color="text.secondary" sx={overviewTypography.data} aria-label="No outcome reported">
+      <Typography component="span" color="textSecondary" sx={overviewTypography.data} aria-label="No outcome reported">
         Not reported
       </Typography>
     );
@@ -273,7 +273,7 @@ function TraceEventLedger({ events }: { events: AnalysisTraceEvent[] }) {
           }}
         >
           {["Seq", "Elapsed", "Event kind", "Outcome", "Details"].map((label) => (
-            <Typography key={label} role="columnheader" color="text.secondary" sx={overviewTypography.tableHeading}>
+            <Typography key={label} role="columnheader" color="textSecondary" sx={overviewTypography.tableHeading}>
               {label}
             </Typography>
           ))}
@@ -349,7 +349,7 @@ function TraceSummaryRow({ item }: { item: AnalysisTraceLedgerItem }) {
           >
             {item.displayTitle}
           </Typography>
-          <Typography title={trace.job_id} color="text.secondary" sx={{ mt: 0.25, ...overviewTypography.data, overflowWrap: "anywhere" }}>
+          <Typography title={trace.job_id} color="textSecondary" sx={{ mt: 0.25, ...overviewTypography.data, overflowWrap: "anywhere" }}>
             {item.displayJob}
           </Typography>
         </Box>
@@ -367,7 +367,7 @@ function TraceSummaryRow({ item }: { item: AnalysisTraceLedgerItem }) {
           {trace.events.length}
         </Typography>
         <Typography
-          color="text.secondary"
+          color="textSecondary"
           sx={{
             gridArea: "mobileMeta",
             display: { xs: "block", md: "none" },
@@ -456,7 +456,7 @@ export function AnalysisTraceLedger({ items }: { items: AnalysisTraceLedgerItem[
         }}
       >
         {["Outcome", "Test", "Build", "API mode", "Duration", "Events", ""].map((label, index) => (
-          <Typography key={`${label}-${index}`} color="text.secondary" sx={{ px: 1.25, ...overviewTypography.tableHeading }}>
+          <Typography key={`${label}-${index}`} color="textSecondary" sx={{ px: 1.25, ...overviewTypography.tableHeading }}>
             {label}
           </Typography>
         ))}

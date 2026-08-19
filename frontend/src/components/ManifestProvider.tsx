@@ -36,10 +36,10 @@ export function ManifestProvider({ children }: { children: ReactNode }) {
           <Typography variant="h6" component="h1" gutterBottom>
             Failed to load dashboard config
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" color="textSecondary">
             {error}
           </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>
             Expected file:{" "}
             <Box component="code" sx={{ fontFamily: "monospace" }}>
               data/manifest.json

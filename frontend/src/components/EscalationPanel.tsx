@@ -138,7 +138,7 @@ function EscalationPanelForSubject({
       }}
     >
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
-        <Typography component="span" color="text.secondary" sx={overviewTypography.tableHeading}>
+        <Typography component="span" color="textSecondary" sx={overviewTypography.tableHeading}>
           Deeper analysis
         </Typography>
         {(state === "not_started" || state === "failed") && (
@@ -149,7 +149,7 @@ function EscalationPanelForSubject({
         {active && (
           <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.75 }}>
             <CircularProgress size={14} />
-            <Typography component="span" color="text.secondary" sx={overviewTypography.description}>
+            <Typography component="span" color="textSecondary" sx={overviewTypography.description}>
               {state === "queued" ? "Queued behind another analysis" : "Investigating"}
             </Typography>
           </Box>
@@ -157,13 +157,13 @@ function EscalationPanelForSubject({
       </Box>
 
       {error && (
-        <Typography color="error.main" sx={{ mt: 0.75, ...overviewTypography.description }}>
+        <Typography color="error" sx={{ mt: 0.75, ...overviewTypography.description }}>
           {error}
         </Typography>
       )}
 
       {state === "failed" && (
-        <Typography color="error.main" sx={{ mt: 0.75, ...overviewTypography.description }}>
+        <Typography color="error" sx={{ mt: 0.75, ...overviewTypography.description }}>
           {view?.error || "The analysis could not complete."}
         </Typography>
       )}
@@ -176,13 +176,13 @@ function EscalationPanelForSubject({
             </Typography>
           )}
           {view.suggested_fix && (
-            <Typography color="text.secondary" sx={{ mt: 0.75, whiteSpace: "pre-wrap", ...overviewTypography.description }}>
+            <Typography color="textSecondary" sx={{ mt: 0.75, whiteSpace: "pre-wrap", ...overviewTypography.description }}>
               {view.suggested_fix}
             </Typography>
           )}
           {(view.citations?.length ?? 0) > 0 && (
             <Box sx={{ mt: 1 }}>
-              <Typography color="text.secondary" sx={overviewTypography.tableHeading}>
+              <Typography color="textSecondary" sx={overviewTypography.tableHeading}>
                 Evidence
               </Typography>
               {view.citations?.map((citation, index) => (
@@ -219,12 +219,12 @@ function EscalationPanelForSubject({
             </Box>
           )}
           {view.evidence?.build_id && (
-            <Typography color="text.secondary" sx={{ mt: 1, ...overviewTypography.description }}>
+            <Typography color="textSecondary" sx={{ mt: 1, ...overviewTypography.description }}>
               Read from build {view.evidence.build_id}
               {view.evidence.pull_number ? ` on pull request #${view.evidence.pull_number}` : ""}.
             </Typography>
           )}
-          <Typography color="text.secondary" sx={{ mt: 1, ...overviewTypography.description }}>
+          <Typography color="textSecondary" sx={{ mt: 1, ...overviewTypography.description }}>
             {disclaimer}
           </Typography>
         </Box>

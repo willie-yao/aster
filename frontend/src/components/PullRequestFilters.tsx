@@ -98,7 +98,7 @@ export function PullRequestFilters({
 
       <Typography
         variant="data"
-        color="text.secondary"
+        color="textSecondary"
         sx={{ justifySelf: { xs: "start", sm: "end" }, ...overviewTypography.data }}
       >
         {matching} {matching === 1 ? "pull request" : "pull requests"}

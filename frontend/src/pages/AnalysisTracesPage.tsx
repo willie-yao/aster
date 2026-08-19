@@ -108,7 +108,7 @@ function TracePrivacyDisclosure() {
       <Collapse in={open} timeout="auto">
         <Typography
           id={contentID}
-          color="text.secondary"
+          color="textSecondary"
           sx={{ px: 1.5, py: 1.5, borderTop: "1px solid", borderColor: "divider", ...overviewTypography.secondaryBody }}
         >
           Traces contain private, content-free runtime metadata. Prompts, tool arguments, tool results, credentials, diagnostic content, and billing records are never shown.
@@ -138,7 +138,7 @@ function EmptyTraceSection({ activeFilters, onClear }: { activeFilters: number; 
           <Typography component="h2" sx={{ ...overviewTypography.majorHeading, fontSize: "20px" }}>
             No matching traces
           </Typography>
-          <Typography color="text.secondary" sx={{ mt: 0.75, maxWidth: 620, ...overviewTypography.primaryBody }}>
+          <Typography color="textSecondary" sx={{ mt: 0.75, maxWidth: 620, ...overviewTypography.primaryBody }}>
             {activeFilters > 0
               ? "No retained trace matches the current URL filters. Clear all filters to return to the retained trace ledger."
               : "Run an in-process AI analysis to publish private runtime metadata here."}
@@ -159,7 +159,7 @@ function ErrorTraceSection() {
     <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
       <DetailSectionBand title="Trace ledger" metadata="Unavailable" />
       <Box sx={{ minHeight: 150, display: "grid", placeItems: "center", px: 2, py: 3, textAlign: "center" }}>
-        <Typography color="text.secondary" sx={overviewTypography.primaryBody}>
+        <Typography color="textSecondary" sx={overviewTypography.primaryBody}>
           The retained trace ledger could not be loaded.
         </Typography>
       </Box>
@@ -176,7 +176,7 @@ function PrivateAccessSection({ onSignIn }: { onSignIn: () => void }) {
           <Typography component="h2" sx={{ ...overviewTypography.majorHeading, fontSize: "20px" }}>
             Operator sign-in required
           </Typography>
-          <Typography color="text.secondary" sx={{ mt: 0.75, maxWidth: 620, ...overviewTypography.primaryBody }}>
+          <Typography color="textSecondary" sx={{ mt: 0.75, maxWidth: 620, ...overviewTypography.primaryBody }}>
             Analysis traces contain private execution metadata and are available only to authenticated dashboard administrators.
           </Typography>
           <Button type="button" variant="contained" onClick={onSignIn} sx={{ mt: 2.5, minHeight: 44, borderRadius: "4px" }}>

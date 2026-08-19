@@ -89,7 +89,7 @@ export function RuntimeTrend({ summary, subject }: RuntimeTrendProps) {
       <DetailSectionBand title="Runtime trend" metadata={summaryText} />
       {summary.points.length === 0 ? (
         <Typography
-          color="text.secondary"
+          color="textSecondary"
           sx={{ px: 1.5, py: 2, ...overviewTypography.secondaryBody }}
         >
           No completed runtime samples are available in the current build window.
@@ -177,7 +177,7 @@ export function RuntimeTrend({ summary, subject }: RuntimeTrendProps) {
             <Box component="span">Direction: {trendLabel(summary)}</Box>
           </Box>
           {summary.latestOutlier && (
-            <Typography color="warning.main" sx={overviewTypography.secondaryBody}>
+            <Typography color="warning" sx={overviewTypography.secondaryBody}>
               The latest runtime is unusually high compared with this subject&apos;s
               recent history. This is an observed outlier, not proof of a regression&apos;s
               cause.

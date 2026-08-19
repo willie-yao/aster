@@ -19,5 +19,22 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // MUI 9 resolves `color` as a styled variant rather than a system prop,
+      // so a dotted palette path silently emits no CSS. See issue #65.
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'JSXAttribute[name.name="color"] Literal[value=/[a-zA-Z]\\.|\\.[a-zA-Z]/]',
+          message:
+            'A dotted palette path in the `color` prop emits no CSS in MUI 9. Use the variant name (color="textSecondary", color="error") or sx={{ color: "text.secondary" }}.',
+        },
+        {
+          selector: 'JSXAttribute[name.name="color"] TemplateElement[value.raw=/\\./]',
+          message:
+            'A dotted palette path in the `color` prop emits no CSS in MUI 9. Build the variant name instead (color={status ?? "textSecondary"}).',
+        },
+      ],
+    },
   },
 ])

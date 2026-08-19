@@ -92,7 +92,7 @@ function PrivateAccessSection({ onSignIn }: { onSignIn: () => void }) {
       <Box sx={{ minHeight: 236, display: "grid", placeItems: "center", px: 2, py: 4, textAlign: "center" }}>
         <Box>
           <Typography component="h2" sx={{ ...overviewTypography.majorHeading, fontSize: "20px" }}>Operator sign-in required</Typography>
-          <Typography color="text.secondary" sx={{ mt: 0.75, maxWidth: 620, ...overviewTypography.primaryBody }}>
+          <Typography color="textSecondary" sx={{ mt: 0.75, maxWidth: 620, ...overviewTypography.primaryBody }}>
             Provider usage and estimate data is private operational accounting information available only to authenticated dashboard administrators.
           </Typography>
           <Button type="button" variant="contained" onClick={onSignIn} sx={{ mt: 2.5, minHeight: 44, borderRadius: "4px" }}>
@@ -111,7 +111,7 @@ function UnavailableSection({ title, message }: { title: string; message: string
       <Box sx={{ minHeight: 180, display: "grid", placeItems: "center", px: 2, py: 4, textAlign: "center" }}>
         <Box>
           <Typography component="h2" sx={{ ...overviewTypography.majorHeading, fontSize: "20px" }}>{title}</Typography>
-          <Typography color="text.secondary" sx={{ mt: 0.75, maxWidth: 620, ...overviewTypography.primaryBody }}>{message}</Typography>
+          <Typography color="textSecondary" sx={{ mt: 0.75, maxWidth: 620, ...overviewTypography.primaryBody }}>{message}</Typography>
         </Box>
       </Box>
     </Box>

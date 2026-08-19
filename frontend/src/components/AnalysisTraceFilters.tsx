@@ -97,7 +97,7 @@ function FilterFields({
             Clear all
           </Button>
           <Typography
-            color="text.secondary"
+            color="textSecondary"
             sx={{ ml: { md: "auto" }, width: { xs: "100%", md: "auto" }, ...overviewTypography.description }}
           >
             Download JSON uses the current URL filters.
@@ -166,7 +166,7 @@ export function AnalysisTraceFilters({
         <Typography component="h2" sx={overviewTypography.majorHeading}>
           Filters
         </Typography>
-        <Typography color="text.secondary" sx={overviewTypography.data}>
+        <Typography color="textSecondary" sx={overviewTypography.data}>
           {activeFilterLabel(activeCount)}
         </Typography>
         <ChevronRight

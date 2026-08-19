@@ -188,7 +188,7 @@ export function AIUsageFilters({
         <Typography component="h2" sx={overviewTypography.majorHeading}>Usage filters</Typography>
         <Typography
           title={summary}
-          color="text.secondary"
+          color="textSecondary"
           sx={{
             maxWidth: 190,
             overflow: "hidden",

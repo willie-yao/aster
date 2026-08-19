@@ -37,7 +37,7 @@ export function SharedFailureLedger({ failures }: { failures: SharedFailure[] })
         >
           Shared failures
         </Typography>
-        <Typography variant="data" color="text.secondary" sx={overviewTypography.data}>
+        <Typography variant="data" color="textSecondary" sx={overviewTypography.data}>
           {failures.length === 1 ? "1 failure" : `${failures.length} failures`}
         </Typography>
       </Box>
@@ -72,17 +72,17 @@ export function SharedFailureLedger({ failures }: { failures: SharedFailure[] })
             <Box sx={{ minWidth: 0 }}>
               <Typography
                 title={sharedFailureSubject(failure)}
-                color="text.primary"
+                color="textPrimary"
                 sx={{ minWidth: 0, overflowWrap: "anywhere", ...overviewTypography.jobIdentifier }}
               >
                 {sharedFailureSubject(failure)}
               </Typography>
-              <Typography color="text.secondary" sx={{ mt: 0.25, ...overviewTypography.description }}>
+              <Typography color="textSecondary" sx={{ mt: 0.25, ...overviewTypography.description }}>
                 {failure.job_name} · {sharedFailureScope(failure)}
               </Typography>
             </Box>
             <Typography
-              color="error.main"
+              color="error"
               sx={{ justifySelf: { xs: "start", sm: "end" }, whiteSpace: "nowrap", ...overviewTypography.data }}
             >
               {failure.pull_requests.length} PRs

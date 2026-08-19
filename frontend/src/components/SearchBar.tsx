@@ -372,19 +372,19 @@ export function SearchBar() {
           <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
             {loading ? (
               <Box sx={{ px: 4, py: 3, textAlign: "center" }}>
-                <Typography variant="body2" color="text.secondary" role="status">
+                <Typography variant="body2" color="textSecondary" role="status">
                   Loading search index...
                 </Typography>
               </Box>
             ) : error ? (
               <Box sx={{ px: 4, py: 3, textAlign: "center" }}>
-                <Typography variant="body2" color="text.secondary">
+                <Typography variant="body2" color="textSecondary">
                   Search is temporarily unavailable.
                 </Typography>
               </Box>
             ) : results.length === 0 ? (
               <Box sx={{ px: 4, py: 3, textAlign: "center" }}>
-                <Typography variant="body2" color="text.secondary">
+                <Typography variant="body2" color="textSecondary">
                   No results
                 </Typography>
               </Box>

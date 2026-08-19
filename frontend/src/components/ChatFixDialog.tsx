@@ -64,7 +64,7 @@ function EvidenceList({
                 {citation.path}
               </Typography>
               {lines && (
-                <Typography variant="caption" color="text.secondary">
+                <Typography variant="caption" color="textSecondary">
                   {lines}
                 </Typography>
               )}
@@ -73,7 +73,7 @@ function EvidenceList({
               <Typography
                 component="blockquote"
                 variant="caption"
-                color="text.secondary"
+                color="textSecondary"
                 sx={{ m: 0, mt: 0.3, fontFamily: "monospace", lineHeight: 1.5 }}
               >
                 “{citation.quote}”
@@ -403,7 +403,7 @@ export function ChatFixDialog({
           <Typography variant="headline" component="span" sx={{ display: "block", fontSize: "1.125rem" }}>
             Use this finding in a fix proposal
           </Typography>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" color="textSecondary">
             Review the exact context before the coding agent sees it.
           </Typography>
         </Box>
@@ -456,18 +456,18 @@ export function ChatFixDialog({
                 <Box sx={{ borderRadius: "10px", bgcolor: "action.selected", px: 1.5, py: 1.25 }}>
                   <Typography variant="body2" sx={{ fontWeight: 700 }}>{selectedPattern.subject}</Typography>
                   {selectedPattern.shared_root_cause && (
-                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.55, lineHeight: 1.55 }}>
+                    <Typography variant="body2" color="textSecondary" sx={{ mt: 0.55, lineHeight: 1.55 }}>
                       <RichText text={selectedPattern.shared_root_cause} steps />
                     </Typography>
                   )}
                   {selectedPattern.suggested_fix && (
-                    <Typography variant="caption" color="primary.main" sx={{ display: "block", mt: 0.8, fontWeight: 700 }}>
+                    <Typography variant="caption" color="primary" sx={{ display: "block", mt: 0.8, fontWeight: 700 }}>
                       Direction: {selectedPattern.suggested_fix}
                     </Typography>
                   )}
                   {selectedPattern.relevant_files && selectedPattern.relevant_files.length > 0 && (
                     <Box sx={{ mt: 1 }}>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontWeight: 700, mb: 0.45 }}>
+                      <Typography variant="caption" color="textSecondary" sx={{ display: "block", fontWeight: 700, mb: 0.45 }}>
                         Agent starting files
                       </Typography>
                       <Box
@@ -504,14 +504,14 @@ export function ChatFixDialog({
               </Box>
               {message.proposed_revision && (
                 <Box sx={{ mt: 1.2, borderRadius: "10px", bgcolor: (theme) => soft(theme, "warning", 0.07), p: 1.25 }}>
-                  <Typography variant="caption" color="warning.main" sx={{ fontWeight: 750 }}>Evidence-backed revision</Typography>
+                  <Typography variant="caption" color="warning" sx={{ fontWeight: 750 }}>Evidence-backed revision</Typography>
                   <Typography variant="body2" sx={{ mt: 0.45 }}>{message.proposed_revision.root_cause}</Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.45 }}>{message.proposed_revision.suggested_fix}</Typography>
+                  <Typography variant="body2" color="textSecondary" sx={{ mt: 0.45 }}>{message.proposed_revision.suggested_fix}</Typography>
                 </Box>
               )}
               {message.citations && message.citations.length > 0 && (
                 <Box sx={{ mt: 1.2 }}>
-                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontWeight: 700, mb: 0.65 }}>
+                  <Typography variant="caption" color="textSecondary" sx={{ display: "block", fontWeight: 700, mb: 0.65 }}>
                     Verified artifact evidence
                   </Typography>
                   <EvidenceList citations={message.citations} />
@@ -563,7 +563,7 @@ export function ChatFixDialog({
                     ? "Generating the fix preview"
                     : "Verifying the fix request"}
               </Typography>
-              <Typography variant="caption" color="text.secondary">
+              <Typography variant="caption" color="textSecondary">
                 {exactAnalysis
                   ? "Generation continues in the background. You can close this dialog and return later."
                   : "The coding agent is using only the reviewed context."}

@@ -53,7 +53,7 @@ function DetailAnalysisSection({
     <Box>
       <Typography
         component="h3"
-        color="text.secondary"
+        color="textSecondary"
         sx={{ ...overviewTypography.subsectionHeading, fontSize: "14px", lineHeight: "20px" }}
       >
         {label}
@@ -167,7 +167,7 @@ export function AiAnalysisPanel({
       {!detailAppearance && (
         <>
           <AutoAwesome sx={{ fontSize: 20, color: "primary.main" }} />
-          <Typography variant="label" sx={{ fontWeight: 600 }} color="primary.main">
+          <Typography variant="label" sx={{ fontWeight: 600 }} color="primary">
             AI analysis
           </Typography>
         </>
@@ -309,7 +309,7 @@ export function AiAnalysisPanel({
                 borderColor: "divider",
               }}
             >
-              <Typography variant="caption" color="text.secondary">
+              <Typography variant="caption" color="textSecondary">
                 {correctionActive
                   ? "Original root cause"
                   : "Corrected root cause"}
@@ -324,7 +324,7 @@ export function AiAnalysisPanel({
               </Typography>
               <Typography
                 variant="caption"
-                color="text.secondary"
+                color="textSecondary"
                 sx={{ display: "block", mt: 1 }}
               >
                 {correctionActive
@@ -401,7 +401,7 @@ export function AiAnalysisPanel({
       <Box>
         <Typography
           variant="label"
-          color="text.secondary"
+          color="textSecondary"
           sx={{ fontWeight: 600, display: "block", mb: 0.5 }}
         >
           Related files

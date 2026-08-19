@@ -229,18 +229,18 @@ export function TestDetailPage() {
     return (
       <Stack spacing={3}>
         <Breadcrumbs separator="›" aria-label="Breadcrumb">
-          <Link component={RouterLink} to="/" color="text.secondary" underline="hover">
+          <Link component={RouterLink} to="/" color="textSecondary" underline="hover">
             Overview
           </Link>
           <Link
             component={RouterLink}
             to={jobPath(canonicalJobID)}
-            color="text.secondary"
+            color="textSecondary"
             underline="hover"
           >
             {jobDisplayName}
           </Link>
-          <Typography color="text.primary" noWrap>
+          <Typography color="textPrimary" noWrap>
             {parsedTitle.displayName}
           </Typography>
         </Breadcrumbs>
@@ -258,7 +258,7 @@ export function TestDetailPage() {
           <Typography component="h1" sx={overviewTypography.majorHeading}>
             Test not found
           </Typography>
-          <Typography color="text.secondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
+          <Typography color="textSecondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
             This test is not present in the current job window.
           </Typography>
         </Box>
@@ -470,7 +470,7 @@ export function TestDetailPage() {
   ) : (
     <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
       <DetailSectionBand title="Run metadata" metadata="Unavailable" />
-      <Typography color="text.secondary" sx={{ px: 1.5, py: 2, ...overviewTypography.secondaryBody }}>
+      <Typography color="textSecondary" sx={{ px: 1.5, py: 2, ...overviewTypography.secondaryBody }}>
         Select a published run to inspect its metadata.
       </Typography>
     </Box>
@@ -527,7 +527,7 @@ export function TestDetailPage() {
   ) : (
     <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
       <DetailSectionBand title="Analysis briefing" metadata="Unavailable" />
-      <Typography color="text.secondary" sx={{ px: 1.5, py: 2, ...overviewTypography.secondaryBody }}>
+      <Typography color="textSecondary" sx={{ px: 1.5, py: 2, ...overviewTypography.secondaryBody }}>
         {selectedTestCase?.status === "passed"
           ? "No failure analysis is needed for this passing result."
           : selectedTestCase
@@ -593,7 +593,7 @@ export function TestDetailPage() {
               <Place sx={{ fontSize: 15 }} /> Failure location <OpenInNew sx={{ fontSize: 14 }} />
             </Link>
           ) : selectedTestCase.failure_location ? (
-            <Typography component="code" color="text.secondary" sx={{ ...overviewTypography.data, overflowWrap: "anywhere" }}>
+            <Typography component="code" color="textSecondary" sx={{ ...overviewTypography.data, overflowWrap: "anywhere" }}>
               {selectedTestCase.failure_location}
             </Typography>
           ) : null}
@@ -682,7 +682,7 @@ export function TestDetailPage() {
               <Stack spacing={1}>
                 {clusterArtifacts.machines.map((machine) => (
                   <Box key={machine.name}>
-                    <Typography component="code" color="text.secondary" sx={overviewTypography.data}>
+                    <Typography component="code" color="textSecondary" sx={overviewTypography.data}>
                       {machine.name}
                     </Typography>
                     <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, mt: 0.5 }}>
@@ -737,7 +737,7 @@ export function TestDetailPage() {
         aria-label="Breadcrumb"
         sx={{ display: { xs: "none", sm: "flex" }, ...overviewTypography.description }}
       >
-        <Link component={RouterLink} to="/" underline="none" color="text.secondary">
+        <Link component={RouterLink} to="/" underline="none" color="textSecondary">
           Overview
         </Link>
         <Link
@@ -748,11 +748,11 @@ export function TestDetailPage() {
               : jobPath(canonicalJobID)
           }
           underline="none"
-          color="text.secondary"
+          color="textSecondary"
         >
           {jobDisplayName}
         </Link>
-        <Typography color="text.primary" noWrap sx={{ maxWidth: 420 }}>
+        <Typography color="textPrimary" noWrap sx={{ maxWidth: 420 }}>
           {parsedTitle.displayName}
         </Typography>
       </Breadcrumbs>
@@ -791,7 +791,7 @@ export function TestDetailPage() {
           </Typography>
           <Typography
             component="p"
-            color="text.secondary"
+            color="textSecondary"
             sx={{ m: 0, mt: 0.75, ...overviewTypography.secondaryBody }}
           >
             {headerMetadata}
@@ -857,11 +857,11 @@ export function TestDetailPage() {
                     borderColor: "divider",
                   }}
                 >
-                  <Typography color="error.main" sx={{ ...overviewTypography.data, fontWeight: 700 }}>
+                  <Typography color="error" sx={{ ...overviewTypography.data, fontWeight: 700 }}>
                     {group.count} of {failedOccurrences.length}
                   </Typography>
                   <Typography
-                    color="text.secondary"
+                    color="textSecondary"
                     title={group.sampleMessage}
                     sx={{
                       ...overviewTypography.description,
