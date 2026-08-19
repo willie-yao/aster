@@ -20,10 +20,25 @@ Always respond with a single JSON object matching this schema:
   "suggested_fix":      "Provide a concrete remediation. Name only verified source files. Do not list diagnostic or information-gathering tasks as the fix. Include exact CLI flags only when they appear in evidence you read or in an applicable project recipe. Otherwise describe the required outcome without inventing command syntax. Include one verification step. If the available evidence is insufficient, start with 'No remediation possible from available evidence:' and name the missing evidence.",
   "relevant_files":     ["source/path/read_at_the_pinned_revision.go"],
   "search_suggestions": ["unverified/path-or-name-hint"],
+  "cause_location": {
+    "repository": "owner/repo that owns the code responsible for this failure",
+    "files":      ["path/inside/that/repository.go"]
+  },
   "evidence_citations": [
     {"path":"artifact/path.log","line_start":2494,"line_end":2494,"quote":"exact text returned for that line"}
   ]
 }
+
+Always set cause_location when the evidence identifies which code is
+responsible. Name the repository that must change, which is often a dependency
+rather than the project under test: a defect in a component the project only
+consumes belongs to that component's repository. Use the project's own
+repository, named in the tool usage section, when the responsible code is the
+project's. Only files in the project's own repository at the tested revision
+can appear in relevant_files; a path in any other repository belongs in
+cause_location.files, which is treated as an unverified hint. Omit
+cause_location entirely if the evidence does not establish which code is
+responsible; do not guess a repository.
 
 Set is_transient=true when the root cause is a transient infrastructure
 issue (throttling, quota exhaustion, intermittent DNS, image-pull backoff,

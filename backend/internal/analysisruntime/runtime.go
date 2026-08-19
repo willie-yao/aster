@@ -399,6 +399,15 @@ func NewReusePlanner(project *Project) *ai.Service {
 	})
 	service := ai.NewService(client, universal.New(), project.SystemPrompt, nil)
 	service.SetCacheGeneration(project.CacheGenerationFingerprint)
+	// The planner decides reuse by comparing prompt hashes, so it must resolve
+	// the source repository exactly as the analyzing service does. A planner
+	// that omitted it would hash a different prompt and treat every published
+	// analysis as stale.
+	sourceRepo := project.AnalysisSource
+	if sourceRepo.Owner == "" || sourceRepo.Name == "" {
+		sourceRepo = project.Config.EffectiveAnalysisSourceRepo()
+	}
+	service.SetSourceRepo(sourceRepo.Owner, sourceRepo.Name)
 	eff := project.Config.AI.EffectiveAgentic()
 	service.EnableAgentic(ai.AgenticOptions{
 		MinToolCalls:        eff.MinToolCalls,

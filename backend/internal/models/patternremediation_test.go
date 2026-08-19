@@ -102,3 +102,38 @@ func TestValidPatternRemediationInvestigationState(t *testing.T) {
 		t.Fatal("unknown state accepted")
 	}
 }
+
+// TestPatternCausalGroupHashTracksCauseOwnership keeps a remediation binding
+// tied to the ownership shown with the cause.
+func TestPatternCausalGroupHashTracksCauseOwnership(t *testing.T) {
+	group := PatternCausalGroup{Builds: []string{"2", "1"}, RootCause: "cause", Confidence: "high"}
+	unattributed := PatternCausalGroupHash(group)
+
+	external := group
+	external.CauseLocation = &AnalysisCauseLocation{Repository: "kubernetes/kubernetes", External: true}
+	project := group
+	project.CauseLocation = &AnalysisCauseLocation{Repository: "kubernetes-sigs/cluster-api-provider-azure"}
+
+	if PatternCausalGroupHash(external) == unattributed || PatternCausalGroupHash(project) == unattributed ||
+		PatternCausalGroupHash(external) == PatternCausalGroupHash(project) {
+		t.Fatal("causal group ownership did not change the content hash")
+	}
+}
+
+// TestClonePatternAnalysesDeepCopiesCauseOwnership stops a public projection
+// from sharing file hints with the pattern it was derived from.
+func TestClonePatternAnalysesDeepCopiesCauseOwnership(t *testing.T) {
+	original := []PatternAnalysis{{CausalGroups: []PatternCausalGroup{{
+		Builds:        []string{"1"},
+		CauseLocation: &AnalysisCauseLocation{Repository: "kubernetes/kubernetes", External: true, Files: []string{"pkg/one.go"}},
+	}}}}
+
+	cloned := clonePatternAnalyses(original)
+	cloned[0].CausalGroups[0].CauseLocation.Files[0] = "mutated"
+	cloned[0].CausalGroups[0].CauseLocation.Repository = "other/repo"
+
+	source := original[0].CausalGroups[0].CauseLocation
+	if source.Files[0] != "pkg/one.go" || source.Repository != "kubernetes/kubernetes" {
+		t.Fatalf("clone aliased the original cause location: %+v", source)
+	}
+}

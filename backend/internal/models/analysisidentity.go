@@ -25,6 +25,7 @@ func TestAnalysisContentHash(testCase TestCase) string {
 		ModelHash, PromptHash, CacheGeneration                string
 		RelevantFiles, FileLinks                              []string
 		Citations                                             []EvidenceCitation
+		CauseLocation                                         *AnalysisCauseLocation
 		CritiquePassed                                        bool
 		CritiqueVersion                                       int
 	}{
@@ -33,6 +34,7 @@ func TestAnalysisContentHash(testCase TestCase) string {
 		analysis.GeneratedAt, analysis.RootCause, analysis.Severity, analysis.SuggestedFix, analysis.Mode,
 		analysis.ModelHash, analysis.PromptHash, analysis.CacheGeneration,
 		slices.Clone(analysis.RelevantFiles), fileLinks, slices.Clone(analysis.EvidenceCitations),
+		analysis.CauseLocation,
 		analysis.CritiquePassed, analysis.CritiqueVersion,
 	})
 	sum := sha256.Sum256(payload)

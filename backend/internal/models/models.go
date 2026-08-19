@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -107,6 +108,33 @@ type EvidenceCitation struct {
 	Quote     string `json:"quote"`
 }
 
+// AnalysisCauseLocation names the repository that owns a diagnosed cause. It
+// makes ownership a field rather than an inference buried in prose, so a cause
+// living in a dependency can be reported as an upstream diagnosis instead of a
+// dead end.
+type AnalysisCauseLocation struct {
+	// Repository is the owning "owner/repo".
+	Repository string `json:"repository"`
+	// External marks a cause owned by a dependency rather than by the project's
+	// own source repository.
+	External bool `json:"external,omitempty"`
+	// Files are path hints inside Repository. A build pins an immutable revision
+	// only for the project's own repo, so paths in a dependency can never be
+	// verified here and stay hints. They are deliberately kept out of FileLinks,
+	// which is the verified-source contract the Fix gates depend on.
+	Files []string `json:"files,omitempty"`
+}
+
+// Clone returns a deep copy so callers cannot alias the file hints.
+func (l *AnalysisCauseLocation) Clone() *AnalysisCauseLocation {
+	if l == nil {
+		return nil
+	}
+	out := *l
+	out.Files = slices.Clone(l.Files)
+	return &out
+}
+
 // AIAnalysis is a deep AI-generated root cause analysis.
 type AIAnalysis struct {
 	GeneratedAt string `json:"generated_at"`
@@ -121,6 +149,9 @@ type AIAnalysis struct {
 	RelevantFiles     []string           `json:"relevant_files,omitempty"`
 	SearchSuggestions []string           `json:"search_suggestions,omitempty"`
 	EvidenceCitations []EvidenceCitation `json:"evidence_citations,omitempty"`
+	// CauseLocation records which repository owns the diagnosed cause. Absent
+	// when the analysis did not establish ownership.
+	CauseLocation *AnalysisCauseLocation `json:"cause_location,omitempty"`
 	// Mode records the analysis pipeline. Cache gates reject non-agentic entries.
 	Mode string `json:"mode,omitempty"`
 	// ToolCalls is the number of agent tool invocations made during this
@@ -383,6 +414,10 @@ type PatternCausalGroup struct {
 	Builds      []string `json:"builds"`
 	RootCause   string   `json:"root_cause"`
 	Confidence  string   `json:"confidence"`
+	// CauseLocation is the repository owning this cause. It is engine-derived
+	// from the member builds' analyses and is set only when they agree, so a
+	// group of mixed ownership stays unattributed rather than guessing.
+	CauseLocation *AnalysisCauseLocation `json:"cause_location,omitempty"`
 }
 
 // PatternAnalysis is a job-level correlation across recent failed builds.

@@ -32,7 +32,7 @@ import { overviewTypography } from "../theme/overview";
 import { CausalGroupRemediation } from "./CausalGroupRemediation";
 import { CausalGroupFixRouting } from "./CausalGroupFixRouting";
 import { PatternFixGuidance } from "./PatternFixGuidance";
-import { causalGroupFixTarget, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
+import { causalGroupFixTarget, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
 
 function firstSentence(value: string): string {
   const match = value.trim().match(/^.*?[.!?](?:\s|$)/u);
@@ -99,6 +99,7 @@ export function PatternBanner({
     (pattern.remediation_investigations ?? []).map((summary) => [summary.causal_group_hash, summary]),
   );
   const fixGuidanceBuildID = patternFixGuidanceBuildID(pattern, runs);
+  const patternUpstreamCause = patternExternalCause(pattern);
   const showFixGuidance = Boolean(jobID && fixGuidanceBuildID && fixCapable && !hasCausalFixTarget);
   const resolvedEntry = pattern.id ? resolved.resolved[pattern.id] : undefined;
   const hasEvidenceBuild = patternChatHasEvidenceBuild(
@@ -366,6 +367,7 @@ export function PatternBanner({
                       jobID={jobID}
                       target={causalFixTargets[index]}
                       showBuild={fixTargetNeedsBuild[index]}
+                      externalCause={externalCause(group.cause_location)}
                     />
                   )}
                 </Box>
@@ -475,7 +477,7 @@ export function PatternBanner({
   const actions = showFixGuidance || chatRef || showFailureActions ? (
     <Stack spacing={1.25}>
       {showFixGuidance && jobID && fixGuidanceBuildID && (
-        <PatternFixGuidance jobID={jobID} buildID={fixGuidanceBuildID} />
+        <PatternFixGuidance jobID={jobID} buildID={fixGuidanceBuildID} externalCause={patternUpstreamCause} />
       )}
       {chatRef && (
         <AnalysisChat
