@@ -78,27 +78,40 @@ function render(severityInHeader?: boolean): string {
   );
 }
 
-test("analysis sections render as section elements so the rule can scope past other siblings", () => {
+// styleSheet joins the contents of every emitted <style> block, so rules can be
+// matched without guessing at the boundary between markup and CSS. Matching
+// against the raw HTML is what silently made an earlier version of the
+// base-rule assertion skip itself.
+function styleSheet(html: string): string {
+  return [...html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gu)]
+    .map((match) => match[1])
+    .join("\n");
+}
+
+test("analysis sections render as section elements carrying the marker class", () => {
   const html = render();
-  const sections = html.match(/<section\b/gu) ?? [];
+  const sections = [...html.matchAll(/<section class="([^"]+)"/gu)].map((match) => match[1]);
 
   // Root cause, Suggested remediation, Related files.
   assert.equal(sections.length, 3);
 
-  // The status row and the chat panel are divs, so scoping the rule to the
-  // section element is what keeps "first" meaning the first labelled block
-  // rather than the first child.
-  assert.doesNotMatch(html, /<section[^>]*>\s*<div[^>]*class="[^"]*MuiStack/u);
+  // The sibling rule keys on this class, so every section must carry it or the
+  // rule silently stops applying while the selector assertion still passes.
+  for (const classes of sections) {
+    assert.ok(
+      classes.split(/\s+/u).includes("briefing-section"),
+      `expected the marker class on every section, got ${JSON.stringify(classes)}`,
+    );
+  }
 });
 
 test("every section preceded by another carries a rule, and the first does not", () => {
   const html = render();
+  const css = styleSheet(html);
 
   // All three sections share one generated class, so the differentiation can
-  // only come from the selector. If a future change moved the border onto the
-  // element itself, the first section would gain a stray rule.
+  // only come from the selector.
   const classes = [...html.matchAll(/<section class="([^"]+)"/gu)].map((match) => match[1]);
-  assert.equal(classes.length, 3);
   assert.equal(new Set(classes).size, 1);
 
   const sectionClass = classes[0].split(/\s+/u).find((name) => name.startsWith("css-"));
@@ -108,16 +121,15 @@ test("every section preceded by another carries a rule, and the first does not",
   // intervening div or a future sibling section cannot change which block
   // goes unruled. Emotion minifies the combinator, so allow optional spaces.
   assert.match(
-    html,
+    css,
     new RegExp(`\\.briefing-section\\s*~\\s*\\.${sectionClass}\\{[^}]*border-top`, "u"),
   );
 
-  // The unqualified rule for the same class must NOT carry a border, or every
-  // section including the first would be ruled and the scoped rule would be
-  // decorative. Anchored on a selector boundary so it cannot accidentally match
-  // the tail of the scoped rule above.
-  const base = new RegExp(`(?:^|[};])\\.${sectionClass}\\{([^}]*)\\}`, "u").exec(html);
-  if (base) assert.doesNotMatch(base[1], /border-top/u);
+  // The unqualified rule must NOT carry a border, or every section including
+  // the first would be ruled and the scoped rule would be decorative.
+  const base = new RegExp(`(?:^|[};])\\.${sectionClass}\\{([^}]*)\\}`, "mu").exec(css);
+  assert.ok(base, `expected an unqualified rule for .${sectionClass}`);
+  assert.doesNotMatch(base[1], /border-top/u);
 });
 
 test("a non-section sibling precedes the first section, which is why position is not used", () => {
