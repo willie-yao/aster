@@ -16,6 +16,9 @@ import (
 type fakeGitHub struct {
 	*httptest.Server
 	defaultBranch string // empty => repo has no default branch (uninitialized)
+	branchHeads   map[string]string
+	refRequests   []string
+	repoGETCount  int
 	createdTree   map[string]string
 	createdBranch string
 	commitAuthor  map[string]any
@@ -66,9 +69,16 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, forkMetadata("forker", "r", "main", "o/r"))
 	case r.Method == http.MethodGet && strings.HasSuffix(p, "/repos/o/r"):
+		f.repoGETCount++
 		writeJSON(w, 200, map[string]any{"default_branch": f.defaultBranch})
 	case r.Method == http.MethodGet && strings.Contains(p, "/git/ref/heads/"):
-		if f.defaultBranch == "" {
+		_, branch, _ := strings.Cut(p, "/git/ref/heads/")
+		f.refRequests = append(f.refRequests, branch)
+		if sha, ok := f.branchHeads[branch]; ok {
+			writeJSON(w, 200, map[string]any{"object": map[string]any{"sha": sha}})
+			return
+		}
+		if f.defaultBranch == "" || branch != f.defaultBranch {
 			http.Error(w, "not found", 404)
 			return
 		}
@@ -397,5 +407,77 @@ func TestCreatePRMissingIdentityIsOutcomeUnknown(t *testing.T) {
 	client.base = srv.URL
 	if _, _, err := client.createPR(t.Context(), "o", "r", "title", "body", "head", "main", true); !errors.Is(err, ErrWriteOutcomeUnknown) {
 		t.Fatalf("missing identity error = %v", err)
+	}
+}
+
+// A failure on a release branch has to resolve that branch's head, not the
+// default branch's, or its commit compares as diverged.
+func TestResolveBaseResolvesRequestedBranch(t *testing.T) {
+	f := newFakeGitHub(t, "main")
+	f.branchHeads = map[string]string{"release-1.25": "releasesha"}
+
+	base, err := testClient(f).ResolveBase(t.Context(), "o", "r", "release-1.25")
+	if err != nil {
+		t.Fatalf("ResolveBase: %v", err)
+	}
+	if base.Branch != "release-1.25" || base.HeadSHA != "releasesha" || base.TreeSHA != "basetree" {
+		t.Fatalf("base = %+v", base)
+	}
+	if f.repoGETCount != 0 {
+		t.Errorf("repo metadata reads = %d, want no default-branch lookup", f.repoGETCount)
+	}
+}
+
+func TestResolveBaseDefaultsToDefaultBranch(t *testing.T) {
+	f := newFakeGitHub(t, "main")
+
+	base, err := testClient(f).ResolveBase(t.Context(), "o", "r", "")
+	if err != nil {
+		t.Fatalf("ResolveBase: %v", err)
+	}
+	if base.Branch != "main" || base.HeadSHA != "basesha" {
+		t.Fatalf("base = %+v", base)
+	}
+	if f.repoGETCount != 1 {
+		t.Errorf("repo metadata reads = %d, want 1", f.repoGETCount)
+	}
+}
+
+// The branch comes from build metadata, so an unsafe name must be rejected
+// before it reaches an API path.
+func TestResolveBaseRejectsUnsafeBranch(t *testing.T) {
+	for _, branch := range []string{
+		"../../other", "release/../main", "./main", "foo/./main", "main/.", ".hidden", "main branch",
+		"feature?x", "-dash", "a.lock", "nested/a.lock", "trailing.", "with\\backslash", "with:colon",
+		"with~tilde", "with^caret", "with*star", "double//slash", "/leading", "trailing/", "main@{1}", "with\x7fdel",
+	} {
+		t.Run(branch, func(t *testing.T) {
+			f := newFakeGitHub(t, "main")
+			if _, err := testClient(f).ResolveBase(t.Context(), "o", "r", branch); err == nil {
+				t.Fatalf("branch %q was accepted", branch)
+			}
+			if len(f.refRequests) != 0 || f.repoGETCount != 0 {
+				t.Errorf("unsafe branch reached GitHub: refs=%v repo_reads=%d", f.refRequests, f.repoGETCount)
+			}
+		})
+	}
+}
+
+func TestResolveBaseEscapesBranchSegments(t *testing.T) {
+	// release/1.25 keeps its separator; feature#1 must be escaped or the
+	// unescaped # truncates the API path into a fragment.
+	for _, branch := range []string{"release/1.25", "feature#1", "fix%20thing"} {
+		t.Run(branch, func(t *testing.T) {
+			f := newFakeGitHub(t, "main")
+			f.branchHeads = map[string]string{branch: "branchsha"}
+
+			base, err := testClient(f).ResolveBase(t.Context(), "o", "r", branch)
+			if err != nil {
+				t.Fatalf("ResolveBase: %v", err)
+			}
+			if base.Branch != branch || base.HeadSHA != "branchsha" {
+				t.Fatalf("base = %+v", base)
+			}
+		})
 	}
 }

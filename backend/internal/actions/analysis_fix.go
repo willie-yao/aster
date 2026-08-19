@@ -107,7 +107,7 @@ type sourceSnapshotReader interface {
 type sourceSnapshotReaderFactory func(sourceinvestigation.Repository) sourceSnapshotReader
 
 type analysisSourceRevisionClient interface {
-	ResolveBase(context.Context, string, string) (ghpr.Base, error)
+	ResolveBase(context.Context, string, string, string) (ghpr.Base, error)
 	CompareCommits(context.Context, string, string, string, string) (bool, string, error)
 }
 
@@ -213,6 +213,11 @@ func (s *Service) PreflightAnalysisFixSource(
 ) (string, map[string]string, error) {
 	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, repo, targetBranch, files, "")
 	if err != nil {
+		// Keep an explicitly classified rejection so the caller can tell the
+		// operator why, instead of collapsing every cause into one message.
+		if code, ok := ReasonCodeFrom(err); ok {
+			return "", nil, withReason(code, ErrPreviewRejected, err.Error())
+		}
 		return "", nil, fmt.Errorf("%w: exact JUnit Fix relevant source changed", ErrPreviewRejected)
 	}
 	return compatibility.GenerationBaseRevision, cloneStringMap(compatibility.VerifiedSourceFileHashes), nil
@@ -224,6 +229,7 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 	if err := sourceinvestigation.ValidateRepository(failureRepo); err != nil {
 		return analysisSourceCompatibility{}, err
 	}
+	targetBranch = strings.TrimSpace(targetBranch)
 	if s.cfg == nil {
 		return analysisSourceCompatibility{}, fmt.Errorf("project configuration is unavailable")
 	}
@@ -244,7 +250,7 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 	if client == nil {
 		client = ghpr.NewClient(nil, s.ai.SourceToken)
 	}
-	base, err := client.ResolveBase(ctx, failureRepo.Owner, failureRepo.Name)
+	base, err := client.ResolveBase(ctx, failureRepo.Owner, failureRepo.Name, targetBranch)
 	if err != nil {
 		return analysisSourceCompatibility{}, fmt.Errorf("resolving current generation base: %w", err)
 	}
@@ -253,15 +259,18 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 		return analysisSourceCompatibility{}, fmt.Errorf("generation base is not an immutable full commit")
 	}
 	if !strings.EqualFold(failureRevision, generationBase) {
-		if strings.TrimSpace(targetBranch) == "" || base.Branch != strings.TrimSpace(targetBranch) {
-			return analysisSourceCompatibility{}, fmt.Errorf("failure revision target branch does not match the generation base branch")
+		if targetBranch == "" {
+			return analysisSourceCompatibility{}, withReason(ReasonSourceBranchUnknown, ErrPreviewRejected, "")
+		}
+		if base.Branch != targetBranch {
+			return analysisSourceCompatibility{}, fmt.Errorf("resolved generation base branch does not match the failure branch")
 		}
 		contains, _, err := client.CompareCommits(ctx, failureRepo.Owner, failureRepo.Name, failureRevision, generationBase)
 		if err != nil {
 			return analysisSourceCompatibility{}, fmt.Errorf("checking failure revision ancestry: %w", err)
 		}
 		if !contains {
-			return analysisSourceCompatibility{}, fmt.Errorf("failure revision is not an ancestor of the generation base")
+			return analysisSourceCompatibility{}, withReason(ReasonSourceRevisionDiverged, ErrPreviewRejected, "")
 		}
 	}
 	files, err = normalizeAnalysisSourceFiles(files)
@@ -288,17 +297,20 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 	for _, file := range files {
 		failureContent, found, err := failureReader.ReadFile(ctx, file)
 		if err != nil || !found {
-			return analysisSourceCompatibility{}, fmt.Errorf("verified source path is unavailable at the failure revision")
+			return analysisSourceCompatibility{}, withReason(ReasonSourceChanged, ErrPreviewRejected,
+				"a verified source path is unavailable at the failure revision")
 		}
 		generationContent := failureContent
 		if !sameRevision {
 			generationContent, found, err = generationReader.ReadFile(ctx, file)
 			if err != nil || !found {
-				return analysisSourceCompatibility{}, fmt.Errorf("verified source path is unavailable at the generation base")
+				return analysisSourceCompatibility{}, withReason(ReasonSourceChanged, ErrPreviewRejected,
+					"a verified source path is unavailable at the generation base")
 			}
 		}
 		if failureContent != generationContent {
-			return analysisSourceCompatibility{}, fmt.Errorf("verified source path changed at the generation base")
+			return analysisSourceCompatibility{}, withReason(ReasonSourceChanged, ErrPreviewRejected,
+				"a verified source path changed between the failure revision and the generation base")
 		}
 		sum := sha256.Sum256([]byte(failureContent))
 		hashes[file] = hex.EncodeToString(sum[:])
@@ -414,6 +426,9 @@ func (s *Service) PreviewAnalysisFix(
 	targetBranch, _ := buildsource.Branch(subject.Build, repository.Owner, repository.Name)
 	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, repository, targetBranch, sourceFiles, findingText)
 	if err != nil {
+		if code, ok := ReasonCodeFrom(err); ok {
+			return PreviewResult{}, withReason(code, ErrPreviewRejected, err.Error())
+		}
 		return PreviewResult{}, fmt.Errorf("%w: relevant source or selected symbol changed", ErrPreviewRejected)
 	}
 	if input.GenerationBaseRevision != "" &&
@@ -477,6 +492,7 @@ func (s *Service) PreviewAnalysisFix(
 		AssistantAnswer: input.AssistantAnswer, ChatResponseHash: input.ChatResponseHash, PreviewRequestHash: input.PreviewRequestHash,
 		ProposedRevision:  input.ProposedRevision,
 		ArtifactCitations: slices.Clone(input.ArtifactCitations), SourceRepository: repository.Owner + "/" + repository.Name,
+		SourceBranch:    targetBranch,
 		FailureRevision: repository.Revision, GenerationBaseRevision: compatibility.GenerationBaseRevision,
 		VerifiedSourceFileHashes: cloneStringMap(compatibility.VerifiedSourceFileHashes),
 		SourceFiles:              slices.Clone(sourceFiles), SourceVerification: verification,

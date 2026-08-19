@@ -31,7 +31,7 @@ func (m *Manager) GenerateBuildPreview(ctx context.Context, failure BuildFailure
 	if len(failure.SourceFiles) == 0 {
 		return nil, fmt.Errorf("repository source verification did not identify a verified local path")
 	}
-	base, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName)
+	base, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName, "")
 	if err != nil {
 		return nil, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
 	}

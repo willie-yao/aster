@@ -24,6 +24,9 @@ const reasonMessages: Record<ActionReasonCode, string> = {
   unsafe_remediation: "The proposed remediation violates the deterministic safety policy and requires further investigation.",
   already_present: "The grounded source already contains the proposed remediation.",
   source_verification_inconclusive: "Pinned-source verification was inconclusive; investigate the grounded source before starting an action.",
+  source_branch_unknown: "The build does not report a resolvable source branch, so a generation base cannot be established.",
+  source_revision_diverged: "The failure commit is not an ancestor of its branch head, so a patch cannot be safely generated.",
+  source_changed: "A verified source path is unavailable or changed between the failure revision and its branch head.",
   generation_failed: "Draft generation did not complete successfully.",
 };
 

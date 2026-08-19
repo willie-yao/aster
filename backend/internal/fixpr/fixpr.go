@@ -44,7 +44,7 @@ type prClient interface {
 	OpenPR(ctx context.Context, req ghpr.Request) (string, error)
 	SearchOpenPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (int, string, bool, error)
 	SearchAnyPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (int, string, bool, error)
-	ResolveBase(ctx context.Context, owner, repo string) (ghpr.Base, error)
+	ResolveBase(ctx context.Context, owner, repo, branch string) (ghpr.Base, error)
 }
 
 // Options tunes the reconcile.
@@ -441,7 +441,7 @@ func (m *Manager) generatePreview(ctx context.Context, p models.PatternAnalysis,
 	if !patternTargetsRepository(p, m.opts.SourceOwner, m.opts.SourceName) {
 		return nil, fmt.Errorf("remediation targets do not match fix repository %s/%s", m.opts.SourceOwner, m.opts.SourceName)
 	}
-	base, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName)
+	base, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName, "")
 	if err != nil {
 		return nil, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
 	}
@@ -553,7 +553,7 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 		return url, nil
 	}
 	if gf.requireBaseCurrent {
-		current, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName)
+		current, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName, gf.base.Branch)
 		if err != nil {
 			return "", fmt.Errorf("checking current fix base: %w", err)
 		}

@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -145,13 +146,22 @@ func (r *mapSourceReader) ReadSourceArchive(context.Context) (actionverify.Archi
 }
 
 type fakeAnalysisSourceRevisionClient struct {
-	base         ghpr.Base
-	contains     bool
-	compareCalls int
+	base           ghpr.Base
+	branchBases    map[string]ghpr.Base
+	contains       bool
+	compareCalls   int
+	branchRequests []string
 }
 
-func (f *fakeAnalysisSourceRevisionClient) ResolveBase(context.Context, string, string) (ghpr.Base, error) {
-	return f.base, nil
+func (f *fakeAnalysisSourceRevisionClient) ResolveBase(_ context.Context, _, _, branch string) (ghpr.Base, error) {
+	f.branchRequests = append(f.branchRequests, branch)
+	if base, ok := f.branchBases[branch]; ok {
+		return base, nil
+	}
+	if branch == "" || branch == f.base.Branch {
+		return f.base, nil
+	}
+	return ghpr.Base{}, fmt.Errorf("branch %s not found", branch)
 }
 
 func (f *fakeAnalysisSourceRevisionClient) CompareCommits(context.Context, string, string, string, string) (bool, string, error) {
@@ -792,5 +802,110 @@ func TestAnalysisSourceCompatibilityRejectsDependencyRepository(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "do not match") {
 		t.Fatalf("rejection reason = %v", err)
+	}
+}
+
+const capzReleaseBaseRevision = "8caa35df8680f64693a3f76ea3d35c2349ab4828"
+
+// A release-branch failure has to resolve its own branch head. Resolving the
+// default branch instead compares a diverged commit and rejects every fix.
+func TestAnalysisSourceCompatibilityResolvesReleaseBranchBase(t *testing.T) {
+	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+	client := &fakeAnalysisSourceRevisionClient{
+		base:        ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "maintree"},
+		branchBases: map[string]ghpr.Base{"release-1.25": {Branch: "release-1.25", HeadSHA: capzReleaseBaseRevision, TreeSHA: "releasetree"}},
+		contains:    true,
+	}
+	service.sourceRevisionClient = client
+	content := "package securitygroups\nfunc Reconcile() {}\n"
+	readers := map[string]sourceSnapshotReader{
+		capzFailureRevision:     &mapSourceReader{files: map[string]string{"azure/services/securitygroups/spec.go": content}},
+		capzReleaseBaseRevision: &mapSourceReader{files: map[string]string{"azure/services/securitygroups/spec.go": content}},
+	}
+	service.sourceReaderFactory = func(repo sourceinvestigation.Repository) sourceSnapshotReader { return readers[repo.Revision] }
+	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision}
+
+	compatibility, err := service.verifyAnalysisSourceCompatibility(
+		t.Context(), repo, "release-1.25", []string{"azure/services/securitygroups/spec.go"}, "Update `Reconcile`.",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compatibility.GenerationBaseRevision != capzReleaseBaseRevision {
+		t.Fatalf("generation base = %s, want the release branch head", compatibility.GenerationBaseRevision)
+	}
+	if !slices.Equal(client.branchRequests, []string{"release-1.25"}) {
+		t.Errorf("resolved branches = %v, want only the failure branch", client.branchRequests)
+	}
+}
+
+// The ancestry guard is what makes the resolved base safe, so it has to keep
+// rejecting a revision the branch has genuinely moved away from.
+func TestAnalysisSourceCompatibilityRejectsDivergedReleaseRevision(t *testing.T) {
+	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
+		base:        ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "maintree"},
+		branchBases: map[string]ghpr.Base{"release-1.25": {Branch: "release-1.25", HeadSHA: capzReleaseBaseRevision, TreeSHA: "releasetree"}},
+	}
+	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader {
+		return &mapSourceReader{files: map[string]string{"azure/services/securitygroups/spec.go": "package securitygroups\n"}}
+	}
+	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision}
+
+	_, err := service.verifyAnalysisSourceCompatibility(
+		t.Context(), repo, "release-1.25", []string{"azure/services/securitygroups/spec.go"}, "",
+	)
+	if code, ok := ReasonCodeFrom(err); !ok || code != ReasonSourceRevisionDiverged {
+		t.Fatalf("err = %v code = %q ok = %t", err, code, ok)
+	}
+}
+
+func TestAnalysisSourceCompatibilityRejectsUnknownBranch(t *testing.T) {
+	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+	client := &fakeAnalysisSourceRevisionClient{
+		base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "maintree"}, contains: true,
+	}
+	service.sourceRevisionClient = client
+	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader {
+		return &mapSourceReader{files: map[string]string{"azure/services/securitygroups/spec.go": "package securitygroups\n"}}
+	}
+	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision}
+
+	_, err := service.verifyAnalysisSourceCompatibility(
+		t.Context(), repo, "", []string{"azure/services/securitygroups/spec.go"}, "",
+	)
+	if code, ok := ReasonCodeFrom(err); !ok || code != ReasonSourceBranchUnknown {
+		t.Fatalf("err = %v code = %q ok = %t", err, code, ok)
+	}
+	if client.compareCalls != 0 {
+		t.Errorf("compare calls = %d, want no ancestry check without a branch", client.compareCalls)
+	}
+}
+
+// The chat preflight is the only caller that reports a rejection to an
+// operator, so it must not collapse a classified cause into one message.
+func TestPreflightAnalysisFixSourcePreservesReasonCode(t *testing.T) {
+	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
+		base:        ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "maintree"},
+		branchBases: map[string]ghpr.Base{"release-1.25": {Branch: "release-1.25", HeadSHA: capzReleaseBaseRevision, TreeSHA: "releasetree"}},
+		contains:    true,
+	}
+	service.sourceReaderFactory = func(repo sourceinvestigation.Repository) sourceSnapshotReader {
+		if repo.Revision == capzFailureRevision {
+			return &mapSourceReader{files: map[string]string{"azure/services/securitygroups/spec.go": "package securitygroups\nfunc Reconcile() {}\n"}}
+		}
+		return &mapSourceReader{files: map[string]string{"azure/services/securitygroups/spec.go": "package securitygroups\n// rewritten\n"}}
+	}
+	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision}
+
+	_, _, err := service.PreflightAnalysisFixSource(
+		t.Context(), repo, "release-1.25", []string{"azure/services/securitygroups/spec.go"},
+	)
+	if !errors.Is(err, ErrPreviewRejected) {
+		t.Fatalf("err = %v, want a preview rejection", err)
+	}
+	if code, ok := ReasonCodeFrom(err); !ok || code != ReasonSourceChanged {
+		t.Fatalf("code = %q ok = %t", code, ok)
 	}
 }

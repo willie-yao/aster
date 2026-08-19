@@ -24,6 +24,9 @@ const (
 	ReasonUnsafeRemediation              ReasonCode = "unsafe_remediation"
 	ReasonAlreadyPresent                 ReasonCode = "already_present"
 	ReasonSourceVerificationInconclusive ReasonCode = "source_verification_inconclusive"
+	ReasonSourceBranchUnknown            ReasonCode = "source_branch_unknown"
+	ReasonSourceRevisionDiverged         ReasonCode = "source_revision_diverged"
+	ReasonSourceChanged                  ReasonCode = "source_changed"
 	ReasonGenerationFailed               ReasonCode = "generation_failed"
 )
 
@@ -41,6 +44,9 @@ var reasonCodeOrder = []ReasonCode{
 	ReasonUnsafeRemediation,
 	ReasonAlreadyPresent,
 	ReasonSourceVerificationInconclusive,
+	ReasonSourceBranchUnknown,
+	ReasonSourceRevisionDiverged,
+	ReasonSourceChanged,
 	ReasonGenerationFailed,
 }
 
@@ -91,6 +97,12 @@ func ReasonMessage(code ReasonCode) string {
 		return "The grounded source already contains the proposed remediation."
 	case ReasonSourceVerificationInconclusive:
 		return "Pinned-source verification was inconclusive; investigate the grounded source before starting an action."
+	case ReasonSourceBranchUnknown:
+		return "The build does not report a resolvable source branch, so a generation base cannot be established."
+	case ReasonSourceRevisionDiverged:
+		return "The failure commit is not an ancestor of its branch head, so a patch cannot be safely generated."
+	case ReasonSourceChanged:
+		return "A verified source path is unavailable or changed between the failure revision and its branch head."
 	case ReasonGenerationFailed:
 		return "Draft generation did not complete successfully."
 	default:
@@ -98,26 +110,28 @@ func ReasonMessage(code ReasonCode) string {
 	}
 }
 
-type reasonError struct {
-	code   ReasonCode
-	reason string
-	cause  error
+// ReasonError is an action error that carries a stable reason code. Callers
+// outside the package classify a rejection by matching it with errors.As.
+type ReasonError struct {
+	Code   ReasonCode
+	Reason string
+	Cause  error
 }
 
-func (e *reasonError) Error() string {
-	if strings.TrimSpace(e.reason) != "" {
-		return e.reason
+func (e *ReasonError) Error() string {
+	if strings.TrimSpace(e.Reason) != "" {
+		return e.Reason
 	}
-	return ReasonMessage(e.code)
+	return ReasonMessage(e.Code)
 }
 
-func (e *reasonError) Unwrap() error { return e.cause }
+func (e *ReasonError) Unwrap() error { return e.Cause }
 
 func withReason(code ReasonCode, cause error, reason string) error {
 	if strings.TrimSpace(reason) == "" {
 		reason = ReasonMessage(code)
 	}
-	return &reasonError{code: code, reason: reason, cause: cause}
+	return &ReasonError{Code: code, Reason: reason, Cause: cause}
 }
 
 // ReasonCodeOf classifies an action error without exposing private details.
@@ -125,9 +139,8 @@ func ReasonCodeOf(err error) ReasonCode {
 	if err == nil {
 		return ReasonActionable
 	}
-	var reasonErr *reasonError
-	if errors.As(err, &reasonErr) {
-		return reasonErr.code
+	if code, ok := ReasonCodeFrom(err); ok {
+		return code
 	}
 	switch {
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrRequestNotFound), errors.Is(err, ErrPreviewNotFound):
@@ -143,6 +156,17 @@ func ReasonCodeOf(err error) ReasonCode {
 	default:
 		return ReasonGenerationFailed
 	}
+}
+
+// ReasonCodeFrom returns a reason code only when one was explicitly attached.
+// Callers that must distinguish a classified rejection from an unclassified
+// error use this instead of ReasonCodeOf, which always returns a code.
+func ReasonCodeFrom(err error) (ReasonCode, bool) {
+	var reasonErr *ReasonError
+	if errors.As(err, &reasonErr) && validReasonCode(reasonErr.Code) {
+		return reasonErr.Code, true
+	}
+	return "", false
 }
 
 func reasonErrorForCode(code ReasonCode, reason string) error {

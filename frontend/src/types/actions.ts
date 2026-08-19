@@ -14,6 +14,9 @@ export type ActionReasonCode =
   | "unsafe_remediation"
   | "already_present"
   | "source_verification_inconclusive"
+  | "source_branch_unknown"
+  | "source_revision_diverged"
+  | "source_changed"
   | "generation_failed";
 
 export interface ActionEligibility {

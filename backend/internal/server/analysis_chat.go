@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/actions"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/auth"
 	"github.com/willie-yao/aster/backend/internal/redact"
@@ -60,6 +61,7 @@ func findAnalysisChatSessionHandler(run AnalysisChatRunner) http.Handler {
 const (
 	analysisChatIdempotencyHeader     = "Idempotency-Key"
 	analysisChatOutcomeHeader         = "X-Analysis-Chat-Outcome"
+	analysisChatReasonHeader          = "X-Analysis-Chat-Reason"
 	defaultAnalysisChatTimeout        = 2 * time.Minute
 	maxAnalysisChatReferenceBodyBytes = 128 << 10
 	maxAnalysisChatMessageBodyBytes   = 32 << 10
@@ -185,12 +187,15 @@ func streamAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRun
 		session, err := run.Stream(ctx, r.PathValue("id"), identity.Login, requestID, body.Message, emit)
 		if err != nil {
 			status, message, outcome := analysisChatErrorDetails(err)
-			if status >= 500 {
+			if status >= http.StatusBadRequest {
 				log.Printf("analysis chat %s for %s: %s", r.PathValue("id"), identity.Login, safeAnalysisChatError(err))
 			}
 			payload := map[string]any{"status": status, "message": message}
 			if outcome != "" {
 				payload["outcome"] = outcome
+			}
+			if code, ok := actions.ReasonCodeFrom(err); ok {
+				payload["reason"] = string(code)
 			}
 			_ = writeAnalysisChatSSE(w, flusher, "error", payload)
 			return
@@ -263,7 +268,12 @@ func writeAnalysisChatError(w http.ResponseWriter, id, login string, err error) 
 	if outcome != "" {
 		w.Header().Set(analysisChatOutcomeHeader, outcome)
 	}
-	if status >= 500 {
+	if code, ok := actions.ReasonCodeFrom(err); ok {
+		w.Header().Set(analysisChatReasonHeader, string(code))
+	}
+	// Rejections are as worth an operator line as failures: a 400 with a generic
+	// body is otherwise undiagnosable from the server side.
+	if status >= http.StatusBadRequest {
 		log.Printf("analysis chat %s for %s: %s", id, login, safeAnalysisChatError(err))
 	}
 	http.Error(w, message, status)
@@ -292,6 +302,9 @@ func analysisChatErrorDetails(err error) (int, string, string) {
 		status, message, outcome = http.StatusConflict, "analysis chat outcome is unknown", "unknown"
 	case errors.Is(err, analysischat.ErrInvalidRequest):
 		status, message, outcome = http.StatusBadRequest, "invalid analysis chat request", "rejected"
+		if code, ok := actions.ReasonCodeFrom(err); ok {
+			message = actions.ReasonMessage(code)
+		}
 	case errors.Is(err, analysischat.ErrSessionLimit), errors.Is(err, analysischat.ErrTurnLimit),
 		errors.Is(err, analysischat.ErrActiveTurnLimit), errors.Is(err, analysischat.ErrRateLimit):
 		status, message, outcome = http.StatusTooManyRequests, "analysis chat limit reached", "rejected"

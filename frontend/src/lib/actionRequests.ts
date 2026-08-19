@@ -152,6 +152,9 @@ export function actionRequestReasonTitle(request: ActionRequest): string | null 
     case "unsafe_remediation": return "Unsafe remediation blocked";
     case "already_present": return "Remediation already exists";
     case "source_verification_inconclusive": return "Source verification inconclusive";
+    case "source_branch_unknown": return "Source branch unresolved";
+    case "source_revision_diverged": return "Failure commit diverged from its branch";
+    case "source_changed": return "Verified source changed";
     case "generation_failed": return "Draft generation failed";
     default: return null;
   }
