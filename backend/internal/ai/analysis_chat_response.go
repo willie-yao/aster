@@ -28,6 +28,9 @@ type analysisChatParseStats struct {
 	EvidenceGate string
 	// EvidenceDetail is engine-generated repair text for the corrective round.
 	EvidenceDetail string
+	// ValidationDetail names the specific rule a failed turn tripped. It is
+	// engine-generated and never carries model or provider output.
+	ValidationDetail string
 }
 
 // analysisChatEvidenceFailure is a soft gate failure. It degrades a reply to
