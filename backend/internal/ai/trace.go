@@ -94,6 +94,25 @@ type DraftDecisionTrace struct {
 	ReplacementReason               string   `json:"replacement_reason"`
 }
 
+// EvidencePlanGroupTrace names one initial-plan evidence group without content.
+type EvidencePlanGroupTrace struct {
+	SkillID string `json:"skill_id"`
+	GroupID string `json:"group_id,omitempty"`
+}
+
+// EvidencePlanTrace records content-free coverage of the initial ranked
+// evidence plan at one decision point. UnreadGroups is the set the gate could
+// still act on: unmet plan groups plus any group the draft's own prose newly
+// required, both restricted to groups with a candidate path in this build.
+type EvidencePlanTrace struct {
+	Applicable     int                      `json:"applicable"`
+	Satisfied      int                      `json:"satisfied"`
+	Unavailable    int                      `json:"unavailable"`
+	Unmet          int                      `json:"unmet"`
+	DraftTriggered int                      `json:"draft_triggered,omitempty"`
+	UnreadGroups   []EvidencePlanGroupTrace `json:"unread_groups,omitempty"`
+}
+
 // TraceEvent is one bounded, content-free analysis event.
 type TraceEvent struct {
 	Sequence                      int                 `json:"sequence"`
@@ -144,6 +163,7 @@ type TraceEvent struct {
 	SemanticFindings              []string            `json:"semantic_findings,omitempty"`
 	CacheRejectionReason          string              `json:"cache_rejection_reason,omitempty"`
 	DraftDecision                 *DraftDecisionTrace `json:"draft_decision,omitempty"`
+	EvidencePlan                  *EvidencePlanTrace  `json:"evidence_plan,omitempty"`
 	RetryAdmitted                 bool                `json:"retry_admitted,omitempty"`
 	RetryDeniedReason             string              `json:"retry_denied_reason,omitempty"`
 	InitialIssueCount             int                 `json:"initial_issue_count,omitempty"`
@@ -319,6 +339,9 @@ func (s *TraceSession) Record(event TraceEvent) {
 		decision.CandidatePublishedSoftRules = append([]string(nil), decision.CandidatePublishedSoftRules...)
 		event.DraftDecision = &decision
 	}
+	if event.EvidencePlan != nil {
+		event.EvidencePlan = sanitizeEvidencePlanTrace(*event.EvidencePlan)
+	}
 	event.Sequence = nextTraceSequence(s.trace.Events)
 	if len(s.trace.Events) < analysisTraceMaxEvents {
 		s.trace.Events = append(s.trace.Events, event)
@@ -336,6 +359,31 @@ func (s *TraceSession) Record(event TraceEvent) {
 		s.trace.Events[len(s.trace.Events)-1] = event
 		return
 	}
+}
+
+// analysisTraceMaxEvidenceGroups bounds the group refs retained per event so a
+// large plan cannot inflate a trace.
+const analysisTraceMaxEvidenceGroups = 8
+
+func sanitizeEvidencePlanTrace(plan EvidencePlanTrace) *EvidencePlanTrace {
+	groups := plan.UnreadGroups
+	if len(groups) > analysisTraceMaxEvidenceGroups {
+		groups = groups[:analysisTraceMaxEvidenceGroups]
+	}
+	out := EvidencePlanTrace{
+		Applicable:     plan.Applicable,
+		Satisfied:      plan.Satisfied,
+		Unavailable:    plan.Unavailable,
+		Unmet:          plan.Unmet,
+		DraftTriggered: plan.DraftTriggered,
+	}
+	for _, group := range groups {
+		out.UnreadGroups = append(out.UnreadGroups, EvidencePlanGroupTrace{
+			SkillID: traceText(group.SkillID),
+			GroupID: traceText(group.GroupID),
+		})
+	}
+	return &out
 }
 
 func sanitizeSemanticFindingClasses(values []string) []string {

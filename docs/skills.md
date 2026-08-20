@@ -58,9 +58,11 @@ constraints, the result schema, or the tool budget. The critique gate wraps
 procedures with this boundary.
 
 The analyzer matches the bounded failure signal before iteration one, resolves
-ranked candidates with `skills.Set.Plan`, and prepends the bounded plan. The gate
-uses those candidates for deterministic critique repair, with a bounded tree-walk
-fallback for unresolved or newly matched groups.
+ranked candidates with `skills.Set.Plan`, and prepends the bounded plan. Groups
+that still have a candidate but no substantive read are returned with each tool
+result and reopen a tools-free answer, so the agent finishes the plan before it
+finalizes. The gate uses those same candidates for deterministic critique repair,
+with a bounded tree-walk fallback for unresolved or newly matched groups.
 
 ## When to author a skill
 

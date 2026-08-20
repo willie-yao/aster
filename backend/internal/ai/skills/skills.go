@@ -297,6 +297,14 @@ func (s *Set) Plan(text string, artifactPaths []string, maxCandidates int) []Pla
 	return planned
 }
 
+// PlanGroupRef identifies one applicable initial-plan evidence group.
+type PlanGroupRef struct {
+	SkillID        string   `json:"skill_id"`
+	GroupID        string   `json:"group_id"`
+	Description    string   `json:"description,omitempty"`
+	CandidatePaths []string `json:"candidate_paths,omitempty"`
+}
+
 // PlanCoverage classifies every applicable initial evidence group. An unavailable
 // group has no matching candidate in a complete artifact-tree scan. An unmet
 // group has a candidate but no successful substantive matching read.
@@ -305,6 +313,11 @@ type PlanCoverage struct {
 	Satisfied   int
 	Unavailable int
 	Unmet       int
+
+	// UnmetGroups and UnavailableGroups name the groups behind the counts so
+	// callers can address them without recomputing the plan.
+	UnmetGroups       []PlanGroupRef
+	UnavailableGroups []PlanGroupRef
 }
 
 // Covered reports whether all available groups were satisfied and at least one
@@ -346,6 +359,7 @@ func (s *Set) PlanCoverageWithContent(text string, plan []PlannedSkill, reads ma
 		planned, ok := plannedSkills[skill.ID]
 		if !ok {
 			coverage.Unmet++
+			coverage.UnmetGroups = append(coverage.UnmetGroups, PlanGroupRef{SkillID: skill.ID})
 			continue
 		}
 		plannedGroups := make(map[string]PlannedEvidenceGroup, len(planned.RequiredEvidence))
@@ -357,15 +371,19 @@ func (s *Set) PlanCoverageWithContent(text string, plan []PlannedSkill, reads ma
 				continue
 			}
 			coverage.Applicable++
+			ref := PlanGroupRef{SkillID: skill.ID, GroupID: group.ID, Description: group.Description}
 			plannedGroup, ok := plannedGroups[group.ID]
 			if !ok {
 				coverage.Unmet++
+				coverage.UnmetGroups = append(coverage.UnmetGroups, ref)
 				continue
 			}
 			if len(plannedGroup.CandidatePaths) == 0 {
 				coverage.Unavailable++
+				coverage.UnavailableGroups = append(coverage.UnavailableGroups, ref)
 				continue
 			}
+			ref.CandidatePaths = append([]string(nil), plannedGroup.CandidatePaths...)
 			candidates := make(map[string]bool, len(plannedGroup.CandidatePaths))
 			for _, candidate := range plannedGroup.CandidatePaths {
 				if normalized := normalizeEvidencePath(candidate); normalized != "" {
@@ -376,6 +394,7 @@ func (s *Set) PlanCoverageWithContent(text string, plan []PlannedSkill, reads ma
 				coverage.Satisfied++
 			} else {
 				coverage.Unmet++
+				coverage.UnmetGroups = append(coverage.UnmetGroups, ref)
 			}
 		}
 	}

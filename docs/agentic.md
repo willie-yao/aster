@@ -63,7 +63,7 @@ flowchart TD
     F --> C
     D -->|No| G["Parse structured draft"]
     G --> H{"Current quality gates pass?"}
-    H -->|No| I["Bounded floor, critique, or semantic-review feedback"]
+    H -->|No| I["Bounded floor, evidence-plan, critique, or semantic-review feedback"]
     I --> C
     H -->|Yes| J["Cache and publish"]
 ```
@@ -104,6 +104,16 @@ signal, selected diagnostic skills, and the bounded artifact tree. The model may
 follow that plan or inspect other available evidence. Coverage is factual: a
 group counts only when a content-bearing operation returns relevant data.
 
+The plan stays visible while the model works. Every tool result that still has
+outstanding groups returns `unread_evidence_groups`, and a tools-free answer that
+leaves an available group unread reopens the investigation with the group and its
+candidate paths named. Groups the draft's own wording newly required are included,
+so a diagnosis that shifts mid-investigation still gets its evidence read. The
+reopen is bounded: it stops once the model stops making progress, after a small
+number of attempts, or when time, context, or byte budgets run short. A group with
+no candidate in the build is deterministically unavailable and never reopens the
+loop.
+
 Consumer `skills/*.yaml` can require evidence for a failure class. They extend
 the engine profile; they do not replace the project prompt or authorize actions.
 See [Diagnostic skills](skills.md).
@@ -127,8 +137,9 @@ Investigation floors run on the finalize branch:
 - A bounded byte-only retry prevents a weak model from looping indefinitely to
   satisfy a raw byte target.
 
-Floors measure investigation effort, not correctness. Critique and semantic
-review remain independent.
+Floors measure investigation effort, not correctness. Evidence-plan coverage is
+a separate gate that measures whether the available evidence was actually read.
+Critique and semantic review remain independent of both.
 
 ## Critique and semantic review
 
@@ -209,11 +220,11 @@ The analyzer writes private traces and usage ledgers beside the public output.
 They are excluded from `/data/*` and removed from Pages publication.
 
 Private traces retain bounded control-flow facts such as provider attempts, tool
-counts, compaction, floor nudges, critique stages, semantic-review stages,
-timeouts, and completion status. They do not retain prompts, assistant text,
-reasoning, tool arguments, tool output, credentials, endpoint URLs, or raw
-provider bodies. Authenticated server mode can expose the sanitized trace
-snapshot to administrators.
+counts, compaction, floor nudges, evidence-plan coverage and the group IDs it
+reopened for, critique stages, semantic-review stages, timeouts, and completion
+status. They do not retain prompts, assistant text, reasoning, tool arguments,
+tool output, credentials, endpoint URLs, or raw provider bodies. Authenticated
+server mode can expose the sanitized trace snapshot to administrators.
 
 Usage ledgers retain provider-reported token categories and operator-priced cost
 coverage. Missing metadata stays unavailable. They never estimate hidden usage
@@ -231,9 +242,10 @@ cache acceptance, pattern state, or actions.
   prompt.
 - **Every analysis says the endpoint rejected tools:** select an endpoint and
   model with function calling. There is no text-only fallback.
-- **Analyses finalize too early:** inspect private traces, then raise
-  `min_tool_calls` or `min_gcs_bytes` gradually. Do not use large floors as a
-  substitute for a clear project runbook.
+- **Analyses finalize too early:** inspect the `evidence_plan` events in private
+  traces to see which groups were left unread and why the loop stopped reopening.
+  Then raise `min_tool_calls` or `min_gcs_bytes` gradually. Do not use large
+  floors as a substitute for a clear project runbook.
 - **The model loops:** lower `max_iters`, verify the prompt gives a decisive
   triage order, and check whether the provider correctly replays tool history.
 - **Requests exceed the context limit:** use a model with a larger window or
