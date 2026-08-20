@@ -105,9 +105,9 @@ func TestOpenCode1182InstructionPolicyCompatibility(t *testing.T) {
 				{Name: "read", Arguments: map[string]any{"filePath": "artifacts/root.log"}},
 				{Name: "read", Arguments: map[string]any{"filePath": "artifacts/nested/nested.log"}},
 				{Name: "read", Arguments: map[string]any{"filePath": "artifacts/nested/deeper/deep.log"}},
-				{Name: "read", Arguments: map[string]any{"filePath": "source/root.go"}},
-				{Name: "read", Arguments: map[string]any{"filePath": "source/nested/nested.go"}},
-				{Name: "read", Arguments: map[string]any{"filePath": "source/nested/deeper/deep.go"}},
+				{Name: "read", Arguments: map[string]any{"filePath": "sources/primary/root.go"}},
+				{Name: "read", Arguments: map[string]any{"filePath": "sources/primary/nested/nested.go"}},
+				{Name: "read", Arguments: map[string]any{"filePath": "sources/primary/nested/deeper/deep.go"}},
 			})
 		case 2:
 			writeSyntheticOpenAIText(t, w, "Ordinary evidence inspected.")
@@ -169,7 +169,7 @@ func TestOpenCode1182InstructionPolicyCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(result.Structured), result.EvidenceHandles, manifest, artifactRoot, sourceRoot)
+	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(result.Structured), result.EvidenceHandles, manifest, artifactRoot, filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir))
 	if err != nil {
 		t.Fatal(err)
 	}
