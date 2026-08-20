@@ -223,32 +223,7 @@ func degradeAnalysisChatReply(reply *analysischat.Reply, failure *analysisChatEv
 // citation already does instead of discarding a usable answer. The salvaged
 // reply carries no evidence, so it cannot start a fix or a correction.
 func salvageAnalysisChatReply(raw string) (analysischat.Reply, bool) {
-	scan := scanAnalysisChatJSONCandidates(raw)
-	answer := ""
-	// A response that is mostly JSON was an attempt at the contract, so its
-	// answer field is the answer. A response that is mostly prose is the answer,
-	// even when it quotes a JSON path, a manifest, or its own earlier draft.
-	if analysisChatJSONShaped(raw, scan) {
-		for _, candidate := range scan.candidates {
-			var fields struct {
-				Answer string `json:"answer"`
-			}
-			if rejectAnalysisChatDuplicateFields(candidate.value) != nil ||
-				json.Unmarshal([]byte(candidate.value), &fields) != nil {
-				continue
-			}
-			// Two different answers in one response mean the model wrapped a
-			// draft around its conclusion, and picking either is a guess.
-			if found := strings.TrimSpace(fields.Answer); found != "" && found != answer {
-				if answer != "" {
-					return analysischat.Reply{}, false
-				}
-				answer = found
-			}
-		}
-	} else {
-		answer = strings.TrimSpace(raw)
-	}
+	answer := analysisChatSalvagedAnswer(raw)
 	if answer == "" {
 		return analysischat.Reply{}, false
 	}
@@ -257,32 +232,46 @@ func salvageAnalysisChatReply(raw string) (analysischat.Reply, bool) {
 	return reply, true
 }
 
-// analysisChatJSONShaped reports whether a response was an attempt at the JSON
-// contract rather than prose, by how much of it sits inside JSON spans. An
-// unclosed object counts to the end of the response, so a truncated reply is
-// shaped even though it produced no candidate.
-func analysisChatJSONShaped(raw string, scan analysisChatCandidateScan) bool {
-	spans := make([][2]int, 0, len(scan.candidates)+len(scan.incomplete))
+// analysisChatSalvagedAnswer unwraps a response that is nothing but the reply
+// object down to its answer, and otherwise keeps the response whole. Anything
+// the model wrote outside that object is part of its answer: a patch, a command,
+// or the conclusion it reached after an earlier draft. Unwrapping then would
+// show one buried field and hide the rest.
+func analysisChatSalvagedAnswer(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	scan := scanAnalysisChatJSONCandidates(raw)
+	wrapped := false
 	for _, candidate := range scan.candidates {
-		spans = append(spans, [2]int{candidate.start, candidate.end})
+		if candidate.value == trimmed {
+			wrapped = true
+			break
+		}
 	}
-	for _, fragment := range scan.incomplete {
-		spans = append(spans, [2]int{fragment.start, len(raw) - 1})
+	if !wrapped {
+		return trimmed
 	}
-	sort.Slice(spans, func(i, j int) bool { return spans[i][0] < spans[j][0] })
-	covered, end := 0, -1
-	for _, span := range spans {
-		if span[1] <= end {
+	answer := ""
+	for _, candidate := range scan.candidates {
+		var fields struct {
+			Answer string `json:"answer"`
+		}
+		if rejectAnalysisChatDuplicateFields(candidate.value) != nil ||
+			json.Unmarshal([]byte(candidate.value), &fields) != nil {
 			continue
 		}
-		if span[0] > end {
-			covered += span[1] - span[0] + 1
-		} else {
-			covered += span[1] - end
+		// Two different answers mean the model wrapped a draft around its
+		// conclusion, so the whole response goes back rather than a guess.
+		if found := strings.TrimSpace(fields.Answer); found != "" && found != answer {
+			if answer != "" {
+				return trimmed
+			}
+			answer = found
 		}
-		end = span[1]
 	}
-	return covered*2 > len(strings.TrimSpace(raw))
+	if answer == "" {
+		return trimmed
+	}
+	return answer
 }
 
 func analysisChatValidationRank(category string) int {

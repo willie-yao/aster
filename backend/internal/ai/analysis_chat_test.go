@@ -234,9 +234,13 @@ func TestAnalysisChatAgentRejectsStaleValidatedDraft(t *testing.T) {
 	}}
 	agent := newAnalysisChatAgentForTest(t, server.URL, browser, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
 
-	_, err := agent.Reply(context.Background(), analysisChatTurn())
-	if !errors.Is(err, analysischat.ErrResponseValidationFailed) {
+	reply, err := agent.Reply(context.Background(), analysisChatTurn())
+	if err != nil {
 		t.Fatalf("Reply error = %v", err)
+	}
+	// The stale draft must not be the answer, and what survives is unverified.
+	if strings.Contains(reply.Answer, "The first log supports") || !reply.Unverified {
+		t.Fatalf("stale draft was returned: %+v", reply)
 	}
 }
 
@@ -252,9 +256,13 @@ func TestAnalysisChatAgentNeverKeepsDraftWithInvalidCitations(t *testing.T) {
 	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("controller stopped\n")}}
 	agent := newAnalysisChatAgentForTest(t, server.URL, browser, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
 
-	_, err := agent.Reply(context.Background(), analysisChatTurn())
-	if !errors.Is(err, analysischat.ErrResponseValidationFailed) {
+	reply, err := agent.Reply(context.Background(), analysisChatTurn())
+	if err != nil {
 		t.Fatalf("Reply error = %v", err)
+	}
+	// A draft whose citations never verified must not become the answer.
+	if strings.Contains(reply.Answer, "The log supports the conclusion.") || !reply.Unverified {
+		t.Fatalf("unverifiable draft was returned: %+v", reply)
 	}
 }
 
@@ -288,21 +296,20 @@ func TestAnalysisChatAgentKeepsValidDraftWhenFinalizeRequestFails(t *testing.T) 
 	}
 }
 
-func TestAnalysisChatAgentReturnsSafeValidationCategory(t *testing.T) {
-	shrinkCallDelay(t)
-	server := newScriptedChatServer(t)
-	// A truncated object is not prose, so it cannot be salvaged and the turn
-	// must still fail without carrying model text into the error.
-	for range 4 {
-		server.push(200, chatRespFinal(`{"answer":"unfinished"`))
-	}
-	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
-
-	_, err := agent.Reply(context.Background(), analysisChatTurn())
+// Only a closed engine-owned gate reaches the owner, never the text the model
+// or the provider produced.
+func TestAnalysisChatSafeValidationErrorCarriesNoModelText(t *testing.T) {
+	err := analysisChatSafeValidationError(newAnalysisChatValidationError(
+		analysisChatValidationJSON, errors.New("sentinel-model-text"),
+	))
 	if !errors.Is(err, analysischat.ErrResponseValidationFailed) {
-		t.Fatalf("Reply error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
-	if strings.Contains(err.Error(), "unfinished") {
+	gate, ok := analysischat.ValidationGateOf(err)
+	if !ok || gate != analysischat.GateJSON {
+		t.Fatalf("gate = %q ok = %t", gate, ok)
+	}
+	if strings.Contains(err.Error(), "sentinel-model-text") {
 		t.Fatalf("validation error leaked model content: %v", err)
 	}
 }
@@ -1879,9 +1886,9 @@ func TestSalvageAnalysisChatReply(t *testing.T) {
 			want: `The provider returned {"citations":null}; that is why validation failed.`,
 		},
 		{
-			name: "draft object followed by a prose conclusion",
-			raw:  "{\"draft\":{\"answer\":\"maybe timeout\"}}\nFinal conclusion: the container was OOMKilled.",
-			want: "{\"draft\":{\"answer\":\"maybe timeout\"}}\nFinal conclusion: the container was OOMKilled.",
+			name: "prose carrying a patch",
+			raw:  "Apply this to stop the retries:\n{\"spec\":{\"template\":{\"spec\":{\"restartPolicy\":\"Never\"}}}}",
+			want: "Apply this to stop the retries:\n{\"spec\":{\"template\":{\"spec\":{\"restartPolicy\":\"Never\"}}}}",
 		},
 		{
 			name: "contract failure keeps the answer field",
@@ -1893,11 +1900,21 @@ func TestSalvageAnalysisChatReply(t *testing.T) {
 			raw:  `{"result":{"answer":"the node never joined","citations":[]}}`,
 			want: "the node never joined",
 		},
-		{name: "two different answers", raw: `{"draft":{"answer":"maybe timeout"},"final":{"answer":"actually OOM"}}`},
-		{name: "duplicate answer keys", raw: `{"answer":"maybe timeout","answer":"actually OOM","citations":[]}`},
-		{name: "truncated reply object", raw: `{"answer":"unfinished"`},
-		{name: "rejected json with no answer", raw: `{"conclusion":"unknown"}`},
-		{name: "fenced json with no answer", raw: "```json\n{\"conclusion\":\"unknown\"}\n```"},
+		{
+			name: "draft object followed by a prose conclusion",
+			raw:  "{\"draft\":{\"answer\":\"maybe timeout\"}}\nFinal conclusion: the container was OOMKilled.",
+			want: "{\"draft\":{\"answer\":\"maybe timeout\"}}\nFinal conclusion: the container was OOMKilled.",
+		},
+		{
+			name: "two different answers keep the whole response",
+			raw:  `{"draft":{"answer":"maybe timeout"},"final":{"answer":"actually OOM"}}`,
+			want: `{"draft":{"answer":"maybe timeout"},"final":{"answer":"actually OOM"}}`,
+		},
+		{
+			name: "duplicate answer keys keep the whole response",
+			raw:  `{"answer":"maybe timeout","answer":"actually OOM","citations":[]}`,
+			want: `{"answer":"maybe timeout","answer":"actually OOM","citations":[]}`,
+		},
 		{name: "empty", raw: "  "},
 	}
 	for _, testCase := range tests {
