@@ -1,11 +1,14 @@
 name: Image
 
 # Release tags publish the exact immutable application, remote-fixer, and Agent
-# Sandbox Fix executor identities. A manual run publishes those same three
-# targets under a commit-addressed sha-<short> tag, so a branch can be deployed
-# without cutting a release. The analysis executor and stager stay manual-only.
+# Sandbox Fix executor identities. A push to main or a manual run publishes those
+# same three targets under a commit-addressed sha-<short> tag, so any main commit
+# is deployable without cutting a release. The analysis executor and stager stay
+# manual-only.
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*.*.*"
   workflow_dispatch:
@@ -35,7 +38,8 @@ jobs:
     if: >-
       always() &&
       (needs.tag-pair.result == 'success' || needs.tag-pair.result == 'skipped') &&
-      (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
+      (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' ||
+       github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,7 +60,7 @@ jobs:
             org.opencontainers.image.title=Aster
           tags: |
             type=semver,pattern={{raw}}
-            type=sha,prefix=sha-,enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=sha,prefix=sha-,enable=${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
 
       - name: Build identity
         id: build_identity
@@ -91,7 +95,8 @@ jobs:
     if: >-
       always() &&
       (needs.tag-pair.result == 'success' || needs.tag-pair.result == 'skipped') &&
-      (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
+      (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' ||
+       github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -112,7 +117,7 @@ jobs:
             org.opencontainers.image.title=Aster Remote Fixer
           tags: |
             type=semver,pattern={{raw}}
-            type=sha,prefix=sha-,enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=sha,prefix=sha-,enable=${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
 
       - name: Build identity
         id: build_identity
@@ -148,7 +153,8 @@ jobs:
     if: >-
       always() &&
       (needs.tag-pair.result == 'success' || needs.tag-pair.result == 'skipped') &&
-      (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
+      (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' ||
+       github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -169,7 +175,7 @@ jobs:
             org.opencontainers.image.title=Aster Agent Sandbox Fix Executor
           tags: |
             type=semver,pattern={{raw}}
-            type=sha,prefix=sha-,enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=sha,prefix=sha-,enable=${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
 
       - name: Build identity
         id: build_identity
