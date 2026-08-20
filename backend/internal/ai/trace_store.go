@@ -193,7 +193,7 @@ func traceAdvances(current, next AnalysisTrace) bool {
 
 func terminalTraceOutcome(outcome string) bool {
 	switch outcome {
-	case "success", "succeeded", "failed", "cancelled", "rejected", "error", "unavailable", "ai_cache_hit", "build_cache_hit":
+	case "success", "succeeded", "failed", "cancelled", "rejected", "error", "unavailable":
 		return true
 	}
 	return false

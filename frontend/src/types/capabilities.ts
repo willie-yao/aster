@@ -10,7 +10,7 @@ export interface CapabilityFeatures {
   action_requests?: boolean;
   action_eligibility?: boolean;
   action_eligibility_reason_codes?: string[];
-  analysis_traces?: boolean;
+  analysis_health?: boolean;
   ai_usage?: boolean;
   fetch_status?: boolean;
   pattern_diagnostics?: boolean;

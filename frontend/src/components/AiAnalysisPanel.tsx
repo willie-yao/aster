@@ -10,16 +10,15 @@ import {
   AutoAwesome,
   HistoryOutlined,
   PublishedWithChangesOutlined,
-  Terminal,
   UndoOutlined,
 } from "@mui/icons-material";
-import { Link as RouterLink } from "react-router-dom";
 import type { AIAnalysis, PatternAnalysis } from "../types/dashboard";
 import type { AnalysisChatReference } from "../types/analysisChat";
 import { RichText } from "./RichText";
 import { LabeledBlock } from "./LabeledBlock";
 import { BriefingSection } from "./BriefingSection";
 import { AnalysisChat } from "./AnalysisChat";
+import { AnalysisTraceInspector, type AnalysisTraceReference } from "./AnalysisTraceInspector";
 import { UpstreamCauseNotice } from "./UpstreamCauseNotice";
 import { externalCause } from "../lib/patternFixGuidance";
 import { soft } from "../theme";
@@ -46,7 +45,7 @@ function severityAccent(severity: string): "error" | "warning" | "primary" {
 export function AiAnalysisPanel({
   analysis,
   fileCtx,
-  traceHref,
+  traceRef,
   chatRef,
   fixPatterns = [],
   fixInvestigationEligible = false,
@@ -55,7 +54,7 @@ export function AiAnalysisPanel({
 }: {
   analysis: AIAnalysis;
   fileCtx: FileToUrlContext;
-  traceHref?: string;
+  traceRef?: AnalysisTraceReference;
   chatRef?: AnalysisChatReference;
   fixPatterns?: PatternAnalysis[];
   fixInvestigationEligible?: boolean;
@@ -197,22 +196,6 @@ export function AiAnalysisPanel({
           label="Correction revoked"
           sx={{ borderRadius: "4px" }}
         />
-      )}
-      {traceHref && (
-        <Button
-          component={RouterLink}
-          to={traceHref}
-          size="small"
-          startIcon={<Terminal sx={{ fontSize: 16 }} />}
-          sx={{
-            ml: { sm: "auto" },
-            minHeight: 36,
-            borderRadius: "4px",
-            textTransform: "none",
-          }}
-        >
-          Inspect trace
-        </Button>
       )}
     </Stack>
   );
@@ -471,6 +454,12 @@ export function AiAnalysisPanel({
       {upstream}
       {files}
       {chat}
+      {traceRef && (
+        <AnalysisTraceInspector
+          key={`${traceRef.job_id}|${traceRef.build_id}|${traceRef.test_name}`}
+          reference={traceRef}
+        />
+      )}
     </Stack>
   );
 

@@ -170,8 +170,8 @@ type Features struct {
 	ActionEligibility bool `json:"action_eligibility,omitempty"`
 	// ActionEligibilityReasonCodes lists the stable machine-readable reason contract.
 	ActionEligibilityReasonCodes []string `json:"action_eligibility_reason_codes,omitempty"`
-	// AnalysisTraces enables the private analysis-trace API and UI.
-	AnalysisTraces bool `json:"analysis_traces,omitempty"`
+	// AnalysisHealth enables the private analysis-health API and UI.
+	AnalysisHealth bool `json:"analysis_health,omitempty"`
 	// FetchStatus enables the private aggregate fetch progress API and banner.
 	FetchStatus bool `json:"fetch_status,omitempty"`
 	// PatternDiagnostics enables private sanitized recurring-pattern rejection metadata.
@@ -234,16 +234,16 @@ func Handler(opts Options) (http.Handler, error) {
 	caps := opts.Capabilities
 	if opts.Auth != nil {
 		caps.Auth = &AuthInfo{Mode: opts.AuthMode, LoginURL: opts.LoginURL}
-		caps.Features.AnalysisTraces = true
+		caps.Features.AnalysisHealth = true
 		caps.Features.FetchStatus = true
 		caps.Features.PatternDiagnostics = true
 		if reg, ok := opts.Auth.(authRegistrar); ok {
 			reg.Register(mux)
 		}
-		mux.Handle("GET /api/analysis-traces",
-			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, false)))
-		mux.Handle("GET /api/analysis-traces/download",
-			auth.Middleware(opts.Auth, analysisTracesHandler(opts.DataDir, true)))
+		mux.Handle("GET /api/analysis-health",
+			auth.Middleware(opts.Auth, analysisHealthHandler(opts.DataDir, false)))
+		mux.Handle("GET /api/analysis-health/download",
+			auth.Middleware(opts.Auth, analysisHealthHandler(opts.DataDir, true)))
 		if opts.AIUsageEnabled {
 			caps.Features.AIUsage = true
 			mux.Handle("GET /api/ai-usage", auth.Middleware(opts.Auth, aiUsageHandler(opts.DataDir, false, time.Now, opts.AIUsageModel, opts.AIUsagePricingRule, opts.AIUsagePricing)))

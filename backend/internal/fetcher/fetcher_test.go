@@ -10,28 +10,37 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/aster/backend/internal/prowbuild"
+	"github.com/willie-yao/aster/backend/internal/statefile"
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
-func TestClearAnalysisTrace(t *testing.T) {
+func TestLoadAnalysisTraceStoreRestoresRetainedLedger(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, output.AITraceFilename)
-	if err := os.WriteFile(path, []byte(`{"traces":[]}`), 0o644); err != nil {
+	retained := ai.AnalysisTrace{
+		JobID: "job", BuildID: "1", TestName: "test", Outcome: "error",
+		StartedAt: "2026-01-01T00:00:00Z", RecordedAt: "2026-01-01T00:00:00Z",
+	}
+	if err := statefile.WriteJSON(path, ai.AnalysisTraceFile{Version: 1, Traces: []ai.AnalysisTrace{retained}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := clearAnalysisTrace(dir); err != nil {
+	if got := len(loadAnalysisTraceStore(path).Snapshot().Traces); got != 1 {
+		t.Fatalf("restored %d traces, want 1", got)
+	}
+	if got := len(loadAnalysisTraceStore(filepath.Join(dir, "missing.json")).Snapshot().Traces); got != 0 {
+		t.Fatalf("missing snapshot restored %d traces, want 0", got)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("trace file still exists: %v", err)
-	}
-	if err := clearAnalysisTrace(dir); err != nil {
-		t.Fatalf("missing trace file: %v", err)
+	if got := len(loadAnalysisTraceStore(path).Snapshot().Traces); got != 0 {
+		t.Fatalf("corrupt snapshot restored %d traces, want 0", got)
 	}
 }
 

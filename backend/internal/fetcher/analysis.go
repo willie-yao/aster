@@ -172,7 +172,7 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 			p.skipProgressPatterns()
 			return nil
 		}
-		traceStore = ai.NewTraceStore()
+		traceStore = loadAnalysisTraceStore(filepath.Join(p.opts.OutDir, output.AITraceFilename))
 		service, err = runtime.NewService(analysisruntime.ServiceOptions{
 			Backend:             p.backend,
 			ConsecutiveFailures: consecutiveMap,
@@ -332,6 +332,18 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 
 func (p *pipeline) persistIndividualAnalysisCheckpoint(runtime *analysisruntime.Runtime, traces *ai.TraceStore) error {
 	return p.persistRuntimeAnalysisState(runtime, traces)
+}
+
+// loadAnalysisTraceStore restores the retained trace ledger so the bounded
+// rolling window spans fetch runs. A corrupt snapshot starts an empty ledger
+// rather than failing the pass.
+func loadAnalysisTraceStore(path string) *ai.TraceStore {
+	store, err := ai.LoadTraceStore(path)
+	if err != nil {
+		log.Printf("Warning: failed to load retained AI traces: %v", err)
+		return ai.NewTraceStore()
+	}
+	return store
 }
 
 func (p *pipeline) persistRuntimeAnalysisState(runtime *analysisruntime.Runtime, traces *ai.TraceStore) error {

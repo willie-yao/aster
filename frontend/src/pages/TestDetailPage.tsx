@@ -307,11 +307,13 @@ export function TestDetailPage() {
       }
     : {};
 
-  const traceHref =
-    selectedRun && selectedTestCase && features.analysis_traces
-      ? `/analysis-traces?job_id=${encodeURIComponent(canonicalJobID)}` +
-        `&build_id=${encodeURIComponent(selectedRun.build_id)}` +
-        `&test_name=${encodeURIComponent(testName)}`
+  const traceRef =
+    selectedRun && selectedTestCase
+      ? {
+          job_id: canonicalJobID,
+          build_id: selectedRun.build_id,
+          test_name: testName,
+        }
       : undefined;
 
   const metricItems: MetricStripItem[] = [
@@ -494,7 +496,7 @@ export function TestDetailPage() {
         <AiAnalysisPanel
           analysis={selectedTestCase.ai_analysis}
           fileCtx={selectedFileContext}
-          traceHref={traceHref}
+          traceRef={traceRef}
           fixPatterns={fixPatterns}
           fixInvestigationEligible={selectedTestCase.status === "failed"}
           chatRef={{

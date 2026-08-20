@@ -15,9 +15,12 @@ import (
 )
 
 const (
-	analysisTraceVersion       = 1
-	analysisTraceMaxEvents     = 128
-	analysisTraceMaxTraces     = 500
+	analysisTraceVersion   = 1
+	analysisTraceMaxEvents = 128
+	// analysisTraceMaxTraces bounds the rolling window the ledger retains across
+	// fetch runs. Cache hits are not recorded, so this counts fresh analyses and
+	// keeps the whole-file admin fetch to a workable size.
+	analysisTraceMaxTraces     = 250
 	analysisTraceMaxText       = 256
 	analysisTraceMaxResponseID = 2048
 )
@@ -355,6 +358,18 @@ func nextTraceSequence(events []TraceEvent) int {
 		return 1
 	}
 	return events[len(events)-1].Sequence + 1
+}
+
+// Discard ends the session without storing it. Cache hits reuse an existing
+// verdict and record no new evidence, so keeping them would evict real
+// analyses from the bounded ledger.
+func (s *TraceSession) Discard() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.finished = true
+	s.mu.Unlock()
 }
 
 // Finish completes the trace and transfers it to the store.

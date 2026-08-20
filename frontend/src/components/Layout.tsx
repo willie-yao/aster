@@ -88,9 +88,9 @@ export function Layout() {
   usePageDocumentTitle(location.pathname, manifest.branding.title);
   const flakyActive = location.pathname === "/flaky" || location.pathname.startsWith("/flaky/");
   const pullRequestsActive = location.pathname === "/pull-requests" || location.pathname.startsWith("/pull-requests/");
-  const tracesActive = location.pathname === "/analysis-traces";
+  const healthActive = location.pathname === "/analysis-health";
   const usageActive = location.pathname === "/ai-usage";
-  const overviewActive = !flakyActive && !pullRequestsActive && !tracesActive && !usageActive;
+  const overviewActive = !flakyActive && !pullRequestsActive && !healthActive && !usageActive;
   const pullRequestsEnabled = manifest.pull_requests?.enabled ?? false;
 
   return (
@@ -227,8 +227,8 @@ export function Layout() {
                 current={location.pathname === "/pull-requests"}
               />
             )}
-            {features.analysis_traces && (
-              <NavTab to="/analysis-traces" label="Analysis Traces" active={tracesActive} current={tracesActive} />
+            {features.analysis_health && (
+              <NavTab to="/analysis-health" label="Analysis Health" active={healthActive} current={healthActive} />
             )}
             {features.ai_usage && (
               <NavTab to="/ai-usage" label="AI Usage" active={usageActive} current={usageActive} />

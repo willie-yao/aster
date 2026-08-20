@@ -14,7 +14,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const authAvailable =
     Boolean(auth) &&
     (features.actions ||
-      Boolean(features.analysis_traces) ||
+      Boolean(features.analysis_health) ||
       Boolean(features.analysis_chat) ||
       Boolean(features.fetch_status) ||
       Boolean(features.causal_remediation_investigation_authenticated));

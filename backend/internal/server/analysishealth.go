@@ -16,7 +16,7 @@ import (
 
 const maxAnalysisTraceFileBytes = 64 << 20
 
-func analysisTracesHandler(dataDir string, attachment bool) http.Handler {
+func analysisHealthHandler(dataDir string, attachment bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth.SetPrivateResponseHeaders(w.Header())
 		traces, err := readAnalysisTraces(filepath.Join(dataDir, output.AITraceFilename))
@@ -33,7 +33,7 @@ func analysisTracesHandler(dataDir string, attachment bool) http.Handler {
 		ensureAnalysisTraceEngine(&traces)
 		w.Header().Set("Content-Type", "application/json")
 		if attachment {
-			w.Header().Set("Content-Disposition", `attachment; filename="analysis-traces.json"`)
+			w.Header().Set("Content-Disposition", `attachment; filename="analysis-health.json"`)
 		}
 		_ = json.NewEncoder(w).Encode(traces)
 	})

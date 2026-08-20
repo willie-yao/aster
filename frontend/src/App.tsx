@@ -8,7 +8,7 @@ import { PullRequestsPage } from "./pages/PullRequestsPage";
 import { PullRequestDetailPage } from "./pages/PullRequestDetailPage";
 import { SharedFailurePage } from "./pages/SharedFailurePage";
 import { ActionRequestPage } from "./pages/ActionRequestPage";
-import { AnalysisTracesPage } from "./pages/AnalysisTracesPage";
+import { AnalysisHealthPage } from "./pages/AnalysisHealthPage";
 import { AIUsagePage } from "./pages/AIUsagePage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { Layout } from "./components/Layout";
@@ -38,7 +38,7 @@ export default function App() {
                   path="pull-requests/:number"
                   element={<PullRequestDetailPage />}
                 />
-                <Route path="analysis-traces" element={<AnalysisTracesPage />} />
+                <Route path="analysis-health" element={<AnalysisHealthPage />} />
                 <Route path="ai-usage" element={<AIUsagePage />} />
                 <Route path="job/:jobName" element={<JobDetailPage />} />
                 <Route

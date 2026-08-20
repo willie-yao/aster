@@ -228,8 +228,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	promptHash := s.analysisPromptHash(tc, basePrompt)
 	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyzeWithPromptHash(tc, promptHash) {
 		s.refreshBuildFileLinks(ctx, httpClient, run, tc)
-		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "build_hit"})
-		trace.Finish("build_cache_hit", nil)
+		trace.Discard()
 		usageOutcome = aiusage.OutcomeCacheHit
 		return nil
 	}
@@ -241,8 +240,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		err := ErrMissingArtifactCitation
 		log.Printf("  ⏭ Reusing grounded unavailable cooldown: %s", tc.Name)
 		s.setPolicyUnavailable(tc, err)
-		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "policy_unavailable_hit"})
-		trace.Finish("unavailable_cache_hit", err)
+		trace.Discard()
 		usageOutcome = aiusage.OutcomeCacheHit
 		return err
 	}
@@ -301,8 +299,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		s.refreshBuildFileLinks(ctx, httpClient, run, tc)
 	}
 	if analysis != nil && analysis.CacheHit {
-		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "ai_hit"})
-		trace.Finish("ai_cache_hit", nil)
+		trace.Discard()
 		usageOutcome = aiusage.OutcomeCacheHit
 	} else {
 		trace.Finish("success", nil)
