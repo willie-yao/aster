@@ -738,3 +738,41 @@ func TestFailureCachePolicyNormalizesZeroConsecutiveFailures(t *testing.T) {
 		t.Fatalf("zero policy = %+v, one policy = %+v", zero, one)
 	}
 }
+
+func TestSourceCatalogForBuildUsesStablePrimaryID(t *testing.T) {
+	service := &Service{sourceRepoOwner: "example", sourceRepoName: "project"}
+	revision := strings.Repeat("a", 40)
+	run := &models.BuildResult{BuildInfo: models.BuildInfo{
+		RepoRefs: map[string]string{"example/project": revision},
+	}}
+	catalog, err := service.sourceCatalogForBuild(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if catalog == nil || catalog.PrimaryID() != tools.PrimarySourceID {
+		t.Fatalf("catalog=%+v primary=%q", catalog, catalog.PrimaryID())
+	}
+	primary, ok := catalog.Primary()
+	if !ok || primary.ID != tools.PrimarySourceID || primary.Owner != "example" || primary.Name != "project" || primary.Revision != revision {
+		t.Fatalf("primary=%+v ok=%t", primary, ok)
+	}
+}
+
+func TestSourceCatalogForBuildUsesConfiguredMultiSourceCatalog(t *testing.T) {
+	catalog, err := tools.NewSourceCatalog("project", []tools.RepoSource{
+		{ID: "project", Owner: "example", Name: "project", Revision: strings.Repeat("a", 40), Reader: &fakeSourceRepo{}},
+		{ID: "upstream", Owner: "upstream", Name: "dependency", Revision: strings.Repeat("b", 40), Reader: &fakeSourceRepo{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{}
+	service.SetAnalysisSourceCatalog(catalog)
+	got, err := service.sourceCatalogForBuild(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != catalog || len(got.Sources()) != 2 || got.PrimaryID() != "project" {
+		t.Fatalf("catalog=%+v", got)
+	}
+}

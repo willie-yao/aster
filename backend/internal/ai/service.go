@@ -58,9 +58,10 @@ type Service struct {
 
 	// sourceRepoOwner/Name identify the configured analysis GitHub repo for resolving
 	// repo-relative file citations. Empty until SetSourceRepo.
-	sourceRepoOwner string
-	sourceRepoName  string
-	githubReadToken string
+	sourceRepoOwner       string
+	sourceRepoName        string
+	githubReadToken       string
+	analysisSourceCatalog *tools.SourceCatalog
 
 	// patternRepo supports source verification for legacy remediation contracts.
 	patternRepo tools.RepoReader
@@ -136,6 +137,12 @@ func (s *Service) SetSkills(set *skills.Set) {
 func (s *Service) SetSourceRepo(owner, name string) {
 	s.sourceRepoOwner = owner
 	s.sourceRepoName = name
+}
+
+// SetAnalysisSourceCatalog installs an exact multi-source catalog for internal callers.
+// The primary source remains authoritative for project-owned paths.
+func (s *Service) SetAnalysisSourceCatalog(catalog *tools.SourceCatalog) {
+	s.analysisSourceCatalog = catalog
 }
 
 // SourceRepo returns the configured analysis source repository. It is part of
@@ -230,7 +237,11 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	basePrompt := s.baseFailurePrompt(ctx, httpClient, run, tc, consecutiveFailures)
 	userPrompt := prependPrompt(basePrompt, renderProwJobContext(prowJob))
 	userPrompt = prependPrompt(userPrompt, renderFailureCohortContext(failureCohort))
-	promptHash := s.analysisPromptHash(tc, basePrompt)
+	sources, err := s.sourceCatalogForBuild(run)
+	if err != nil {
+		return err
+	}
+	promptHash := s.analysisPromptHashWithSources(tc, basePrompt, sources)
 	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyzeWithPromptHash(tc, promptHash) {
 		s.refreshBuildFileLinks(ctx, httpClient, run, tc)
 		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "build_hit"})
@@ -252,7 +263,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		usageOutcome = aiusage.OutcomeUnavailable
 		return err
 	}
-	summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt, failureSignal, consecutiveFailures, promptHash)
+	summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt, failureSignal, consecutiveFailures, promptHash, sources)
 	if err != nil {
 		if errors.Is(err, ErrToolsUnsupported) {
 			s.toolsUnsupported.Store(true)
@@ -300,9 +311,24 @@ func (s *Service) refreshBuildFileLinks(ctx context.Context, client *http.Client
 	}
 }
 
+func (s *Service) sourceCatalogForBuild(run *models.BuildResult) (*tools.SourceCatalog, error) {
+	if s.analysisSourceCatalog != nil {
+		return s.analysisSourceCatalog, nil
+	}
+	if run == nil {
+		return nil, nil
+	}
+	source, ok := ResolveBuildSource(run.BuildInfo, s.sourceRepoOwner, s.sourceRepoName)
+	if !ok {
+		return nil, nil
+	}
+	reader := NewGitHubRepoReader(source.Owner, source.Name, source.Revision, s.githubReadToken)
+	return tools.NewPrimarySourceCatalog(source.Owner, source.Name, source.Revision, reader)
+}
+
 // runAgentic does the per-failure agentic call setup. Kept separate so
 // Analyze stays readable.
-func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, userPrompt, failureSignal string, consecutiveFailures int, promptHash string) (*models.AISummary, *models.AIAnalysis, error) {
+func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, userPrompt, failureSignal string, consecutiveFailures int, promptHash string, sources *tools.SourceCatalog) (*models.AISummary, *models.AIAnalysis, error) {
 	if s.browserFactory == nil {
 		return nil, nil, fmt.Errorf("agentic mode enabled but no browser factory configured")
 	}
@@ -319,9 +345,7 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 			enabledTools = append(enabledTools, name)
 		}
 	}
-	var repo tools.RepoReader
-	if source, ok := ResolveBuildSource(run.BuildInfo, s.sourceRepoOwner, s.sourceRepoName); ok {
-		repo = NewGitHubRepoReader(source.Owner, source.Name, source.Revision, s.githubReadToken)
+	if sources != nil {
 		enabledTools = append(enabledTools, "grep_repo", "list_repo_tree", "read_repo_file")
 	}
 	in := AgenticInputs{
@@ -329,9 +353,9 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 		Opts:                   opts,
 		Registry:               s.registry,
 		EnabledTools:           enabledTools,
-		Repo:                   repo,
-		SourceOwner:            s.sourceRepoOwner,
-		SourceName:             s.sourceRepoName,
+		Sources:                sources,
+		ProjectOwner:           s.sourceRepoOwner,
+		ProjectName:            s.sourceRepoName,
 		Cache:                  cache,
 		WebURLBase:             run.WebURL,
 		Mode:                   AgenticMode,
@@ -400,7 +424,8 @@ func (s *Service) NeedsAnalysis(ctx context.Context, httpClient *http.Client, ru
 	}
 	consecutiveFailures = max(1, consecutiveFailures)
 	basePrompt := s.baseFailurePrompt(ctx, httpClient, run, tc, consecutiveFailures)
-	return s.shouldReanalyzeWithPromptHash(tc, s.analysisPromptHash(tc, basePrompt))
+	sources, _ := s.sourceCatalogForBuild(run)
+	return s.shouldReanalyzeWithPromptHash(tc, s.analysisPromptHashWithSources(tc, basePrompt, sources))
 }
 
 // FailureCachePolicy returns the current private-cache contract for one failure.
@@ -410,7 +435,8 @@ func (s *Service) FailureCachePolicy(ctx context.Context, httpClient *http.Clien
 	}
 	consecutiveFailures = max(1, consecutiveFailures)
 	basePrompt := s.baseFailurePrompt(ctx, httpClient, run, tc, consecutiveFailures)
-	return s.agenticCachePolicyFor(tc, s.analysisPromptHash(tc, basePrompt), consecutiveFailures)
+	sources, _ := s.sourceCatalogForBuild(run)
+	return s.agenticCachePolicyFor(tc, s.analysisPromptHashWithSources(tc, basePrompt, sources), consecutiveFailures)
 }
 
 func (s *Service) baseFailurePrompt(ctx context.Context, httpClient *http.Client, run *models.BuildResult, tc *models.TestCase, consecutiveFailures int) string {
@@ -484,11 +510,15 @@ func (s *Service) shouldReanalyzeWithPromptHash(tc *models.TestCase, promptHash 
 }
 
 func (s *Service) analysisPromptHash(tc *models.TestCase, userPrompt string) string {
+	return s.analysisPromptHashWithSources(tc, userPrompt, nil)
+}
+
+func (s *Service) analysisPromptHashWithSources(tc *models.TestCase, userPrompt string, sources *tools.SourceCatalog) string {
 	// The repository section is part of the prompt actually sent, and it decides
 	// how the model classifies cause ownership. Repointing the project's source
 	// repo must therefore invalidate cached analyses rather than reuse a
 	// classification made against the previous repository.
-	effectiveSystemPrompt := s.systemPrompt + agToolDocs + agenticSourceRepoSection(s.sourceRepoOwner, s.sourceRepoName)
+	effectiveSystemPrompt := s.systemPrompt + agToolDocs + agenticSourceContextSection(sources, s.sourceRepoOwner, s.sourceRepoName)
 	if tc != nil && tc.Source == models.TestCaseSourceBuild && userPrompt != "" {
 		return PromptFingerprint(effectiveSystemPrompt + "\x00" + userPrompt)
 	}

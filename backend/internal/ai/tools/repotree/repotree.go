@@ -1,14 +1,14 @@
 // Package repotree implements read-only agent tools over a source repository's
 // file tree. They mirror the shape of the filesystem tools (which read a
-// build's GCS artifact tree) but read a GitHub repo at a fixed ref via
-// tools.Env.Repo, so the agent can locate the file a fix should touch by
+// build's GCS artifact tree) but read one selected immutable source from
+// tools.Env.Sources, so the agent can locate the file a fix should touch by
 // grepping and reading real source instead of guessing from a path list.
 //
 // Tools:
 //
-//	list_repo_tree(path)              - immediate children of a directory
-//	read_repo_file(path, offset, len) - byte-range read of one file
-//	grep_repo(pattern, path_glob?)    - RE2 search over a bounded file set
+//	list_repo_tree(source_id, path)              - immediate children of a directory
+//	read_repo_file(source_id, path, offset, len) - byte-range read of one file
+//	grep_repo(source_id, pattern, path_glob?)    - RE2 search over a bounded file set
 //
 // Reads go through GitHub's REST API (one call per file), which is rate-limited
 // and higher-latency than GCS, so grep_repo is bounded: it fetches at most
@@ -20,6 +20,7 @@ package repotree
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -38,7 +39,7 @@ const (
 	grepMaxHits          = 100
 	grepEvidenceMaxHits  = 64
 	grepEvidenceMaxBytes = 2048
-	treeCacheKey         = "repotree/tree"
+	treeCachePfx         = "repotree/tree/"
 	fileCachePfx         = "repotree/file/"
 )
 
@@ -49,33 +50,55 @@ func Register(r *tools.Registry) {
 	r.Register(&grepTool{})
 }
 
-// tree returns the repo's blob paths at the bound ref, memoized in the Cache.
-func tree(ctx context.Context, env *tools.Env) ([]string, error) {
+// source resolves a required source selector without touching a reader.
+func source(env *tools.Env, sourceID string) (tools.RepoSource, error) {
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return tools.RepoSource{}, fmt.Errorf("source_id is required")
+	}
+	if env == nil {
+		return tools.RepoSource{}, fmt.Errorf("source catalog is unavailable")
+	}
+	if env.Sources == nil {
+		if sourceID == tools.PrimarySourceID && env.Repo != nil {
+			return tools.RepoSource{ID: tools.PrimarySourceID, Reader: env.Repo}, nil
+		}
+		return tools.RepoSource{}, fmt.Errorf("source catalog is unavailable")
+	}
+	selected, ok := env.Sources.Source(sourceID)
+	if !ok {
+		return tools.RepoSource{}, fmt.Errorf("unknown source_id %q", sourceID)
+	}
+	return selected, nil
+}
+
+// tree returns one source's blob paths, memoized in the Cache.
+func tree(ctx context.Context, env *tools.Env, selected tools.RepoSource) ([]string, error) {
+	key := treeCachePfx + selected.ID
 	if env.Cache != nil {
-		if v, ok := env.Cache.Get(treeCacheKey); ok {
+		if v, ok := env.Cache.Get(key); ok {
 			return strings.Split(v, "\n"), nil
 		}
 	}
-	paths, err := env.Repo.ListTree(ctx)
+	paths, err := selected.Reader.ListTree(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if env.Cache != nil && len(paths) > 0 {
-		env.Cache.Set(treeCacheKey, strings.Join(paths, "\n"))
+		env.Cache.Set(key, strings.Join(paths, "\n"))
 	}
 	return paths, nil
 }
 
-// readFile returns a file's full content at the bound ref, memoized in the
-// Cache. The bool is false (no error) when the file does not exist.
-func readFile(ctx context.Context, env *tools.Env, path string) (string, bool, error) {
-	key := fileCachePfx + path
+// readFile returns one selected source file, memoized in the Cache.
+func readFile(ctx context.Context, env *tools.Env, selected tools.RepoSource, path string) (string, bool, error) {
+	key := fileCachePfx + selected.ID + "/" + path
 	if env.Cache != nil {
 		if v, ok := env.Cache.Get(key); ok {
 			return v, true, nil
 		}
 	}
-	content, found, err := env.Repo.ReadFile(ctx, path)
+	content, found, err := selected.Reader.ReadFile(ctx, path)
 	if err != nil || !found {
 		return "", found, err
 	}
@@ -98,12 +121,13 @@ func (*listTool) Schema() tools.Schema {
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
+					"source_id": map[string]interface{}{"type": "string", "description": "Stable source ID from the system prompt. Use primary for a single project source."},
 					"path": map[string]interface{}{
 						"type":        "string",
 						"description": "Directory path relative to the repo root, e.g. \"\" for root, \"config/\", \"pkg/cloud/\".",
 					},
 				},
-				"required": []string{"path"},
+				"required": []string{"source_id", "path"},
 			},
 		},
 	}
@@ -111,12 +135,17 @@ func (*listTool) Schema() tools.Schema {
 
 func (*listTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessage) tools.Result {
 	var args struct {
-		Path string `json:"path"`
+		SourceID string `json:"source_id"`
+		Path     string `json:"path"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return tools.ErrPayload("invalid arguments: " + err.Error())
 	}
-	paths, err := tree(ctx, env)
+	selected, err := source(env, args.SourceID)
+	if err != nil {
+		return tools.ErrPayload(err.Error())
+	}
+	paths, err := tree(ctx, env, selected)
 	if err != nil {
 		return tools.ErrPayload(err.Error())
 	}
@@ -144,14 +173,16 @@ func (*listTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	sort.Strings(dirs)
 	sort.Strings(files)
 	return tools.Result{Payload: map[string]interface{}{
-		"dir":   prefix,
-		"dirs":  dirs,
-		"files": files,
+		"source_id": selected.ID,
+		"dir":       prefix,
+		"dirs":      dirs,
+		"files":     files,
 	}}
 }
 
 // ReadObservation identifies complete source lines returned by read_repo_file.
 type ReadObservation struct {
+	SourceID           string
 	Path               string
 	LineStart, LineEnd int
 }
@@ -203,11 +234,12 @@ func (*readTool) Schema() tools.Schema {
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"path":   map[string]interface{}{"type": "string", "description": "File path relative to the repo root."},
-					"offset": map[string]interface{}{"type": "integer", "description": "Byte offset to start from (default 0).", "default": 0},
-					"length": map[string]interface{}{"type": "integer", "description": "Bytes to read (default 8192, max 16384).", "default": 8192},
+					"source_id": map[string]interface{}{"type": "string", "description": "Stable source ID from the system prompt. Use primary for a single project source."},
+					"path":      map[string]interface{}{"type": "string", "description": "File path relative to the repo root."},
+					"offset":    map[string]interface{}{"type": "integer", "description": "Byte offset to start from (default 0).", "default": 0},
+					"length":    map[string]interface{}{"type": "integer", "description": "Bytes to read (default 8192, max 16384).", "default": 8192},
 				},
-				"required": []string{"path"},
+				"required": []string{"source_id", "path"},
 			},
 		},
 	}
@@ -215,14 +247,19 @@ func (*readTool) Schema() tools.Schema {
 
 func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessage) tools.Result {
 	var args struct {
-		Path   string        `json:"path"`
-		Offset tools.FlexInt `json:"offset"`
-		Length tools.FlexInt `json:"length"`
+		SourceID string        `json:"source_id"`
+		Path     string        `json:"path"`
+		Offset   tools.FlexInt `json:"offset"`
+		Length   tools.FlexInt `json:"length"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return tools.ErrPayload("invalid arguments: " + err.Error())
 	}
-	content, found, err := readFile(ctx, env, args.Path)
+	selected, err := source(env, args.SourceID)
+	if err != nil {
+		return tools.ErrPayload(err.Error())
+	}
+	content, found, err := readFile(ctx, env, selected, args.Path)
 	if err != nil {
 		return tools.ErrPayload(err.Error())
 	}
@@ -251,6 +288,7 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	result := tools.Result{
 		BytesFetched: len(slice), ContentBytes: len(slice),
 		Payload: map[string]interface{}{
+			"source_id": selected.ID,
 			"path":      args.Path,
 			"file_size": size,
 			"offset":    offset,
@@ -259,13 +297,14 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		},
 	}
 	if lineStart, lineEnd, ok := completeReadLineRange(content, offset, end); ok {
-		result.Observation = ReadObservation{Path: args.Path, LineStart: lineStart, LineEnd: lineEnd}
+		result.Observation = ReadObservation{SourceID: selected.ID, Path: args.Path, LineStart: lineStart, LineEnd: lineEnd}
 	}
 	return result
 }
 
 // GrepMatchObservation identifies one canonical source range returned by grep_repo.
 type GrepMatchObservation struct {
+	SourceID  string
 	Path      string
 	LineStart int
 	LineEnd   int
@@ -289,12 +328,13 @@ func (*grepTool) Schema() tools.Schema {
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
+					"source_id":     map[string]interface{}{"type": "string", "description": "Stable source ID from the system prompt. Use primary for a single project source."},
 					"pattern":       map[string]interface{}{"type": "string", "description": "RE2 regex (Go syntax). Use (?i) prefix for case-insensitive."},
 					"path_glob":     map[string]interface{}{"type": "string", "description": "Restrict to files whose path matches this substring or *-glob. Strongly recommended; a broad search is capped at 40 files.", "default": ""},
 					"context_lines": map[string]interface{}{"type": "integer", "description": "Lines of context before/after each match (default 2, max 5).", "default": 2},
 					"max_matches":   map[string]interface{}{"type": "integer", "description": "Max matches to return (default 30, max 100).", "default": 30},
 				},
-				"required": []string{"pattern"},
+				"required": []string{"source_id", "pattern"},
 			},
 		},
 	}
@@ -302,6 +342,7 @@ func (*grepTool) Schema() tools.Schema {
 
 func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessage) tools.Result {
 	var args struct {
+		SourceID     string        `json:"source_id"`
 		Pattern      string        `json:"pattern"`
 		PathGlob     string        `json:"path_glob"`
 		ContextLines tools.FlexInt `json:"context_lines"`
@@ -309,6 +350,10 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return tools.ErrPayload("invalid arguments: " + err.Error())
+	}
+	selected, err := source(env, args.SourceID)
+	if err != nil {
+		return tools.ErrPayload(err.Error())
 	}
 	re, err := regexp.Compile(args.Pattern)
 	if err != nil {
@@ -329,7 +374,7 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		maxMatches = grepMaxHits
 	}
 
-	paths, err := tree(ctx, env)
+	paths, err := tree(ctx, env, selected)
 	if err != nil {
 		return tools.ErrPayload(err.Error())
 	}
@@ -356,7 +401,7 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 			truncatedFiles = true
 			break
 		}
-		content, found, ferr := readFile(ctx, env, p)
+		content, found, ferr := readFile(ctx, env, selected, p)
 		if ferr != nil || !found {
 			continue
 		}
@@ -387,7 +432,7 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 			if hi <= len(fullLines) {
 				fullMatch := strings.Join(fullLines[lo:hi], "\n")
 				if strings.TrimSpace(fullMatch) != "" && len(fullMatch) <= grepEvidenceMaxBytes && len(observations) < grepEvidenceMaxHits {
-					observations = append(observations, GrepMatchObservation{Path: p, LineStart: lo + 1, LineEnd: hi})
+					observations = append(observations, GrepMatchObservation{SourceID: selected.ID, Path: p, LineStart: lo + 1, LineEnd: hi})
 				}
 			}
 			contentBytes += len(strings.Join(context, "\n"))
@@ -402,6 +447,7 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}
 
 	payload := map[string]interface{}{
+		"source_id":     selected.ID,
 		"pattern":       args.Pattern,
 		"path_glob":     args.PathGlob,
 		"files_scanned": scanned,

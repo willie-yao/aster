@@ -56,6 +56,15 @@ func (r *fakeSourceRepo) ReadFile(_ context.Context, path string) (string, bool,
 	return content, ok, nil
 }
 
+func testSourceCatalog(t *testing.T, primaryID string, sources ...tools.RepoSource) *tools.SourceCatalog {
+	t.Helper()
+	catalog, err := tools.NewSourceCatalog(primaryID, sources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
+}
+
 // newTestAgenticInputs builds per-call agentic inputs for tests.
 func newTestAgenticInputs(t *testing.T, browser artifacts.Browser, opts AgenticOptions) AgenticInputs {
 	t.Helper()
@@ -4002,12 +4011,16 @@ func TestRepoToolReadDoesNotCountAsGCSEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := &agentState{
-		repo:     &fakeSourceRepo{files: map[string]string{"test/e2e/capi_test.go": "package e2e\n"}},
+		sources: testSourceCatalog(t, tools.PrimarySourceID, tools.RepoSource{
+			ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: strings.Repeat("1", 40),
+			Reader: &fakeSourceRepo{files: map[string]string{"test/e2e/capi_test.go": "package e2e\n"}},
+		}),
+		sourceOwner: "example", sourceName: "project",
 		registry: registry, enabledTools: enabled, cache: tools.NewCache(),
 		opts: AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000}, startTime: time.Now(),
 		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
 	}
-	arguments, _ := json.Marshal(map[string]interface{}{"path": "test/e2e/capi_test.go"})
+	arguments, _ := json.Marshal(map[string]interface{}{"source_id": tools.PrimarySourceID, "path": "test/e2e/capi_test.go"})
 	dispatchAgenticTool(context.Background(), state, modelToolCall{ID: "repo", Type: "function", Function: modelFunction{Name: "read_repo_file", Arguments: string(arguments)}})
 	if state.gcsBytes != 0 {
 		t.Fatalf("repo bytes counted as GCS: %d", state.gcsBytes)
@@ -4295,9 +4308,12 @@ func TestAgentic_PublishedSanitizationCanSatisfyCritiqueAndCache(t *testing.T) {
 		Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
 	}
 	in := newTestAgenticInputs(t, &fakeBrowser{}, opts)
-	in.SourceOwner = "example"
-	in.SourceName = "project"
-	in.Repo = &fakeSourceRepo{files: map[string]string{"other.go": "package example"}}
+	in.ProjectOwner = "example"
+	in.ProjectName = "project"
+	in.Sources = testSourceCatalog(t, tools.PrimarySourceID, tools.RepoSource{
+		ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: strings.Repeat("1", 40),
+		Reader: &fakeSourceRepo{files: map[string]string{"other.go": "package example"}},
+	})
 	const key = "agentic:test:published-sanitization-cache"
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
 	if err != nil {
@@ -4424,10 +4440,91 @@ func TestAgentic_SynthesizedFallbackMissingCitationPolicy(t *testing.T) {
 
 func TestEmitSourceEvidenceObservations(t *testing.T) {
 	var got []SourceEvidenceObservation
-	emitSourceEvidenceObservations(func(value SourceEvidenceObservation) { got = append(got, value) }, "read_repo_file", repotree.ReadObservation{Path: "pkg/a.go", LineStart: 2, LineEnd: 3})
-	emitSourceEvidenceObservations(func(value SourceEvidenceObservation) { got = append(got, value) }, "grep_repo", repotree.GrepObservation{Matches: []repotree.GrepMatchObservation{{Path: "pkg/b.go", LineStart: 4, LineEnd: 5}}})
+	emitSourceEvidenceObservations(func(value SourceEvidenceObservation) { got = append(got, value) }, "read_repo_file", repotree.ReadObservation{SourceID: "client", Path: "pkg/a.go", LineStart: 2, LineEnd: 3})
+	emitSourceEvidenceObservations(func(value SourceEvidenceObservation) { got = append(got, value) }, "grep_repo", repotree.GrepObservation{Matches: []repotree.GrepMatchObservation{{SourceID: "server", Path: "pkg/b.go", LineStart: 4, LineEnd: 5}}})
 	emitSourceEvidenceObservations(func(value SourceEvidenceObservation) { got = append(got, value) }, "list_repo_tree", nil)
-	if len(got) != 2 || got[0].Path != "pkg/a.go" || got[1].Path != "pkg/b.go" {
+	if len(got) != 2 || got[0].SourceID != "client" || got[0].Path != "pkg/a.go" || got[1].SourceID != "server" || got[1].Path != "pkg/b.go" {
 		t.Fatalf("observations=%+v", got)
+	}
+}
+
+func TestAgenticSourceCatalogSectionEnumeratesOrderedImmutableSources(t *testing.T) {
+	catalog := testSourceCatalog(t, "project",
+		tools.RepoSource{ID: "server", Owner: "kubernetes", Name: "kubernetes", Revision: strings.Repeat("2", 40), Reader: &fakeSourceRepo{}},
+		tools.RepoSource{ID: "project", Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: &fakeSourceRepo{}},
+		tools.RepoSource{ID: "client", Owner: "kubernetes", Name: "kubernetes", Revision: strings.Repeat("3", 40), Reader: &fakeSourceRepo{}},
+	)
+	got := agenticSourceCatalogSection(catalog)
+	for _, want := range []string{
+		"source_id `client`: kubernetes/kubernetes @ " + strings.Repeat("3", 40),
+		"source_id `project`: example/project @ " + strings.Repeat("1", 40) + " (primary project source)",
+		"source_id `server`: kubernetes/kubernetes @ " + strings.Repeat("2", 40),
+		"Use the matching source_id in every repository tool call",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("source catalog prompt missing %q:\n%s", want, got)
+		}
+	}
+	if !(strings.Index(got, "source_id `client`") < strings.Index(got, "source_id `project`") && strings.Index(got, "source_id `project`") < strings.Index(got, "source_id `server`")) {
+		t.Fatalf("source catalog prompt is not canonical: %s", got)
+	}
+}
+
+func TestEffectiveAgenticPromptHashIncludesCanonicalSourceCatalog(t *testing.T) {
+	reader := &fakeSourceRepo{}
+	first := testSourceCatalog(t, "project",
+		tools.RepoSource{ID: "server", Owner: "kubernetes", Name: "kubernetes", Revision: strings.Repeat("2", 40), Reader: reader},
+		tools.RepoSource{ID: "project", Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: reader},
+	)
+	reordered := testSourceCatalog(t, "project",
+		tools.RepoSource{ID: "project", Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: reader},
+		tools.RepoSource{ID: "server", Owner: "kubernetes", Name: "kubernetes", Revision: strings.Repeat("2", 40), Reader: reader},
+	)
+	changed := testSourceCatalog(t, "project",
+		tools.RepoSource{ID: "project", Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: reader},
+		tools.RepoSource{ID: "server", Owner: "kubernetes", Name: "kubernetes", Revision: strings.Repeat("4", 40), Reader: reader},
+	)
+	firstHash := effectiveAgenticPromptHash(AgenticInputs{Sources: first}, "system")
+	if got := effectiveAgenticPromptHash(AgenticInputs{Sources: reordered}, "system"); got != firstHash {
+		t.Fatalf("catalog input order changed hash: first=%q reordered=%q", firstHash, got)
+	}
+	if got := effectiveAgenticPromptHash(AgenticInputs{Sources: changed}, "system"); got == firstHash {
+		t.Fatal("source revision did not change prompt hash")
+	}
+}
+
+func TestRepoReadsObserveAllSourcesButOnlyPrimaryGroundsProjectPaths(t *testing.T) {
+	registry := tools.NewRegistry()
+	repotree.Register(registry)
+	enabled, err := registry.Enable([]string{"repotree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var observations []SourceEvidenceObservation
+	state := &agentState{
+		sources: testSourceCatalog(t, "project",
+			tools.RepoSource{ID: "project", Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: &fakeSourceRepo{files: map[string]string{"same.go": "project\n"}}},
+			tools.RepoSource{ID: "dependency", Owner: "upstream", Name: "dependency", Revision: strings.Repeat("2", 40), Reader: &fakeSourceRepo{files: map[string]string{"same.go": "dependency\n"}}},
+		),
+		sourceOwner: "example", sourceName: "project",
+		registry: registry, enabledTools: enabled, cache: tools.NewCache(),
+		opts: AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000}, startTime: time.Now(),
+		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}, readSourceFull: map[string]bool{},
+		sourceObserver: func(value SourceEvidenceObservation) { observations = append(observations, value) },
+	}
+	call := func(sourceID string) {
+		arguments, _ := json.Marshal(map[string]interface{}{"source_id": sourceID, "path": "same.go"})
+		dispatchAgenticTool(context.Background(), state, modelToolCall{ID: sourceID, Type: "function", Function: modelFunction{Name: "read_repo_file", Arguments: string(arguments)}})
+	}
+	call("dependency")
+	if state.readSourceFull["same.go"] {
+		t.Fatal("dependency read grounded a project-owned relevant file")
+	}
+	call("project")
+	if !state.readSourceFull["same.go"] {
+		t.Fatalf("primary read was not recorded: %v", state.readSourceFull)
+	}
+	if len(observations) != 2 || observations[0].SourceID != "dependency" || observations[1].SourceID != "project" {
+		t.Fatalf("observations=%+v", observations)
 	}
 }
