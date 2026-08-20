@@ -441,9 +441,12 @@ func (s *Service) watchCancellation(
 	for {
 		requested, valid, err := s.cancellationRequested(id, owner, requestID, leaseID)
 		if err == nil && (!valid || requested) {
-			if requested {
-				cancel()
-			}
+			// A cancelled request, a discarded session, and a lost lease all
+			// mean this turn can no longer publish its answer, so stop the
+			// model work rather than burn the rest of the turn timeout. This is
+			// the durable path: it also reaches a turn owned by another replica
+			// and one deleted before it registered its local cancel function.
+			cancel()
 			return
 		}
 		select {

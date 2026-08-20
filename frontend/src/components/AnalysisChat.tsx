@@ -5,6 +5,10 @@ import Button from "@mui/material/Button";
 import ButtonBase from "@mui/material/ButtonBase";
 import Chip from "@mui/material/Chip";
 import Collapse from "@mui/material/Collapse";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogTitle from "@mui/material/DialogTitle";
 import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
 import Link from "@mui/material/Link";
@@ -22,6 +26,7 @@ import {
   PsychologyAltOutlined,
   PublishedWithChangesOutlined,
   ReportProblemOutlined,
+  RestartAltOutlined,
   StopCircleOutlined,
 } from "@mui/icons-material";
 import { useAuth } from "../hooks/useAuth";
@@ -45,6 +50,7 @@ import {
   cancelAnalysisChatRequest,
   clearAnalysisChatPendingIntent,
   createAnalysisChatSession,
+  deleteAnalysisChatSession,
   findAnalysisChatSession,
   isAmbiguousAnalysisChatFailure,
   isAnalysisChatOAuthExpired,
@@ -556,11 +562,14 @@ export function AnalysisChat({
   const [correctionError, setCorrectionError] = useState<string | null>(null);
   const [fixMessage, setFixMessage] = useState<AnalysisChatMessage | null>(null);
   const [fixOpen, setFixOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const createRequestIDRef = useRef(newAnalysisChatRequestID());
   const restoreControllerRef = useRef<AbortController | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const cancelControllerRef = useRef<AbortController | null>(null);
   const correctionControllerRef = useRef<AbortController | null>(null);
+  const resetControllerRef = useRef<AbortController | null>(null);
   const identityRef = useRef("");
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const analysisRefRef = useRef(analysisRef);
@@ -603,6 +612,7 @@ export function AnalysisChat({
     controllerRef.current?.abort();
     cancelControllerRef.current?.abort();
     correctionControllerRef.current?.abort();
+    resetControllerRef.current?.abort();
     setExpanded(false);
     setQuestion("");
     setSession(null);
@@ -623,6 +633,8 @@ export function AnalysisChat({
     setCorrectionError(null);
     setFixMessage(null);
     setFixOpen(false);
+    setResetOpen(false);
+    setResetting(false);
     createRequestIDRef.current = newAnalysisChatRequestID();
   }, [identity]);
 
@@ -688,7 +700,7 @@ export function AnalysisChat({
           setPendingTurn(null);
           setQuestion("");
           setContinueMode(false);
-          setError("The restored request ended without an answer and its intent cannot be recovered safely. Start a new conversation.");
+          setError("The restored request ended without an answer and its intent cannot be recovered safely. Select New conversation to start over.");
         } else {
           setPendingTurn(null);
           setQuestion(restoredTurn.question);
@@ -783,6 +795,7 @@ export function AnalysisChat({
     controllerRef.current?.abort();
     cancelControllerRef.current?.abort();
     correctionControllerRef.current?.abort();
+    resetControllerRef.current?.abort();
   }, []);
 
   if (!features.analysis_chat) return null;
@@ -867,7 +880,7 @@ export function AnalysisChat({
           return;
         }
         setQuestion("");
-        setError("The restored request ended without an answer and its intent cannot be recovered safely. Start a new conversation.");
+        setError("The restored request ended without an answer and its intent cannot be recovered safely. Select New conversation to start over.");
         return;
       }
       setQuestion("");
@@ -1047,6 +1060,64 @@ export function AnalysisChat({
       if (cancelControllerRef.current === controller) {
         cancelControllerRef.current = null;
         if (identityRef.current === cancelIdentity) setCancelling(false);
+      }
+    }
+  }
+
+  async function startNewConversation() {
+    if (resetting || restoring || busy) return;
+    const resetIdentity = identity;
+    const discarded = session;
+    resetControllerRef.current?.abort();
+    // A cancel that resolves after the reset would resubmit against the
+    // discarded session, and a correction preview would reopen its dialog over
+    // the fresh conversation.
+    cancelControllerRef.current?.abort();
+    correctionControllerRef.current?.abort();
+    const controller = new AbortController();
+    resetControllerRef.current = controller;
+    setResetting(true);
+    try {
+      if (discarded) {
+        if (pendingTurn) {
+          clearAnalysisChatPendingIntent(analysisChatIntentStorage(), pendingTurn.sessionID, pendingTurn.requestID);
+        }
+        await deleteAnalysisChatSession(discarded.id, controller.signal);
+      }
+      if (identityRef.current !== resetIdentity) return;
+      // The next question creates a replacement session, so a fresh create key
+      // is what keeps that create from being deduped against the discarded one.
+      createRequestIDRef.current = newAnalysisChatRequestID();
+      setSession(null);
+      setQuestion("");
+      setError(null);
+      setPendingTurn(null);
+      setContinueMode(false);
+      setTurnLimitRejected(false);
+      setProgressPhase("queued");
+      setProgressStartedAt(undefined);
+      setValidationRetries(0);
+      setMaxValidationRetries(0);
+      setCancelling(false);
+      setCorrectionPreview(null);
+      setCorrectionOpen(false);
+      setCorrectionError(null);
+      setFixMessage(null);
+      setFixOpen(false);
+      setResetOpen(false);
+    } catch (resetError) {
+      if (resetError instanceof Error && resetError.name === "AbortError") return;
+      if (identityRef.current !== resetIdentity) return;
+      if (isAnalysisChatOAuthExpired(resetError, authMode)) {
+        signIn();
+        return;
+      }
+      setResetOpen(false);
+      setError(readableError(resetError));
+    } finally {
+      if (resetControllerRef.current === controller) {
+        resetControllerRef.current = null;
+        if (identityRef.current === resetIdentity) setResetting(false);
       }
     }
   }
@@ -1311,7 +1382,7 @@ export function AnalysisChat({
             <Box sx={{ px: { xs: 1.25, sm: 1.5 }, pb: 1.5 }}>
               {turnLimitReached ? (
                 <Alert severity="info" variant="outlined">
-                  This conversation reached its attempt limit.
+                  This conversation reached its attempt limit. Start a new conversation to keep asking.
                 </Alert>
               ) : (
                 <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
@@ -1388,14 +1459,29 @@ export function AnalysisChat({
                   )}
                 </Stack>
               )}
-              {turnUsage && !detailAppearance && (
-                <Typography
-                  variant="caption"
-                  color="textSecondary"
-                  sx={{ display: "block", mt: 0.75, textAlign: "right" }}
+              {session && (
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  sx={{ alignItems: "center", justifyContent: "space-between", mt: 0.75 }}
                 >
-                  {`${turnUsage.used}/${turnUsage.max} attempts`}
-                </Typography>
+                  <Button
+                    size="small"
+                    variant="text"
+                    color="inherit"
+                    startIcon={<RestartAltOutlined />}
+                    onClick={() => setResetOpen(true)}
+                    disabled={restoring || busy || resetting}
+                    sx={{ color: "text.secondary", fontSize: "0.75rem" }}
+                  >
+                    New conversation
+                  </Button>
+                  {turnUsage && !detailAppearance && (
+                    <Typography variant="caption" color="textSecondary">
+                      {`${turnUsage.used}/${turnUsage.max} attempts`}
+                    </Typography>
+                  )}
+                </Stack>
               )}
             </Box>
           </Box>
@@ -1417,6 +1503,29 @@ export function AnalysisChat({
         exactAnalysis={!patternScope}
         onClose={() => setFixOpen(false)}
       />
+      <Dialog open={resetOpen} onClose={resetting ? undefined : () => setResetOpen(false)} fullWidth maxWidth="xs">
+        <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <RestartAltOutlined color="warning" />
+          Start a new conversation
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="textSecondary">
+            This discards the current conversation and its attempts. The transcript cannot be recovered, and the
+            published analysis is unchanged.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button onClick={() => setResetOpen(false)} disabled={resetting}>Keep conversation</Button>
+          <Button
+            variant="contained"
+            color="warning"
+            onClick={() => void startNewConversation()}
+            disabled={resetting || restoring || busy}
+          >
+            {resetting ? "Discarding" : "Discard and start new"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

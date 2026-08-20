@@ -600,6 +600,131 @@ func TestServiceBusySessionCompletesAcrossExpiry(t *testing.T) {
 	}
 }
 
+func TestServiceDeleteDiscardsConversationAndReleasesCapacity(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	service, err := NewService(t.Context(), dir, &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}, Options{
+		MaxSessions: 2, MaxSessionsPerOwner: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
+	created, err := service.Create(ref, "alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "question"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Delete(created.ID, "bob"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("other owner Delete error = %v", err)
+	}
+	if err := service.Delete(created.ID, "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Get(created.ID, "alice"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("Get after delete error = %v", err)
+	}
+	if _, err := service.Find(ref, "alice"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("Find after delete error = %v", err)
+	}
+	if err := service.Delete(created.ID, "alice"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("repeat Delete error = %v", err)
+	}
+	replacement, err := service.Create(ref, "alice", testRequestID(t))
+	if err != nil {
+		t.Fatalf("delete did not release owner capacity: %v", err)
+	}
+	if replacement.ID == created.ID || len(replacement.Messages) != 0 || replacement.TurnsUsed != 0 {
+		t.Fatalf("replacement session = %+v", replacement)
+	}
+}
+
+func TestServiceDeleteCancelsInFlightTurn(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	runner := &fakeRunner{
+		reply:   Reply{Answer: "answer", Assessment: "explains"},
+		started: make(chan struct{}, 1), release: make(chan struct{}),
+	}
+	service, err := NewService(t.Context(), dir, runner, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
+	created, err := service.Create(ref, "alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "in flight")
+		done <- err
+	}()
+	<-runner.started
+	if err := service.Delete(created.ID, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	// The waiter observes the discarded session instead of polling the turn out.
+	if err := <-done; !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("in-flight Send after delete error = %v", err)
+	}
+	close(runner.release)
+	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := service.Wait(waitCtx); err != nil {
+		t.Fatalf("cancelled turn did not unwind: %v", err)
+	}
+	if _, err := service.Get(created.ID, "alice"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("cancelled turn resurrected the session: %v", err)
+	}
+}
+
+// A delete handled by another replica cannot reach the running turn's local
+// cancel function, so the turn has to stop by observing the discarded session.
+func TestServiceDeleteFromAnotherInstanceStopsRunningTurn(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	runner := &fakeRunner{
+		reply:   Reply{Answer: "answer", Assessment: "explains"},
+		started: make(chan struct{}, 1), release: make(chan struct{}),
+	}
+	// A turn timeout far longer than the test budget means only cancellation
+	// can end the turn.
+	first, err := NewService(t.Context(), dir, runner, Options{
+		PollInterval: 5 * time.Millisecond, TurnTimeout: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := first.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-cross-delete")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := first.Send(context.Background(), created.ID, "alice", "turn-cross-delete", "in flight")
+		done <- err
+	}()
+	<-runner.started
+	if err := second.Delete(created.ID, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("in-flight Send after remote delete error = %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := first.Wait(waitCtx); err != nil {
+		t.Fatalf("remotely discarded turn kept running: %v", err)
+	}
+}
+
 func TestServiceResolvesTrimmedPublishedTestName(t *testing.T) {
 	dir := t.TempDir()
 	testCase := analyzedTest(" TestCluster ", "junit.xml", "2026-07-23T12:00:00Z")

@@ -37,6 +37,9 @@ type fakeAnalysisChatRunner struct {
 	cancelID         string
 	cancelOwner      string
 	cancelRequestID  string
+	deleteErr        error
+	deleteID         string
+	deleteOwner      string
 	sendDelay        time.Duration
 	view             analysischat.SessionView
 }
@@ -106,6 +109,11 @@ func (f *fakeAnalysisChatRunner) PreflightTestFix(_ context.Context, _, _, _ str
 func (f *fakeAnalysisChatRunner) Cancel(id, owner, requestID string) error {
 	f.cancelID, f.cancelOwner, f.cancelRequestID = id, owner, requestID
 	return f.cancelErr
+}
+
+func (f *fakeAnalysisChatRunner) Delete(id, owner string) error {
+	f.deleteID, f.deleteOwner = id, owner
+	return f.deleteErr
 }
 
 func TestHandlerAnalysisChatFlow(t *testing.T) {
@@ -213,6 +221,50 @@ func TestHandlerAnalysisChatFlow(t *testing.T) {
 	_ = cancelled.Body.Close()
 	if runner.cancelID != "session-1" || runner.cancelOwner != "alice" || runner.cancelRequestID != "request-flow" {
 		t.Fatalf("cancel runner id=%q owner=%q request=%q", runner.cancelID, runner.cancelOwner, runner.cancelRequestID)
+	}
+
+	discarded := request(http.MethodDelete, "/api/analysis-chat/sessions/session-1", "")
+	if discarded.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status=%d body=%s", discarded.StatusCode, readBody(t, discarded))
+	}
+	_ = discarded.Body.Close()
+	if runner.deleteID != "session-1" || runner.deleteOwner != "alice" {
+		t.Fatalf("delete runner id=%q owner=%q", runner.deleteID, runner.deleteOwner)
+	}
+}
+
+func TestHandlerAnalysisChatDeleteGuardsOwnershipAndOrigin(t *testing.T) {
+	handler, err := Handler(Options{
+		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+		AnalysisChat: &fakeAnalysisChatRunner{deleteErr: analysischat.ErrSessionNotFound},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, testCase := range []struct {
+		name   string
+		auth   string
+		origin string
+		want   int
+	}{
+		{name: "unauthenticated", want: http.StatusUnauthorized},
+		{name: "cross origin", auth: "ok", origin: "https://evil.example", want: http.StatusForbidden},
+		{name: "unknown session", auth: "ok", want: http.StatusNotFound},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodDelete, "https://dashboard.example/api/analysis-chat/sessions/session-1", nil)
+			if testCase.auth != "" {
+				req.Header.Set("Authorization", testCase.auth)
+			}
+			if testCase.origin != "" {
+				req.Header.Set("Origin", testCase.origin)
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			if recorder.Code != testCase.want {
+				t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
+			}
+		})
 	}
 }
 

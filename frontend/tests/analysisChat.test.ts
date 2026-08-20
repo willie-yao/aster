@@ -14,6 +14,7 @@ import {
   analysisChatTurnLimitReached,
   analysisChatTurnUsage,
   clearAnalysisChatPendingIntent,
+  deleteAnalysisChatSession,
   findAnalysisChatSession,
   isAnalysisChatOAuthExpired,
   loadAnalysisChatPendingIntent,
@@ -90,6 +91,36 @@ test("missing or expired server sessions restore as empty", async () => {
   globalThis.fetch = async () => new Response(null, { status: 204 });
 
   assert.equal(await findAnalysisChatSession(analysis), null);
+});
+
+test("discarding a conversation deletes the session and tolerates one already gone", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  let status = 204;
+  globalThis.fetch = async (input, init) => {
+    requests.push({ url: String(input), init });
+    return new Response(null, { status });
+  };
+
+  await deleteAnalysisChatSession("session-1");
+  status = 404;
+  await deleteAnalysisChatSession("session-1");
+
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.equal(request.url, "/api/analysis-chat/sessions/session-1");
+    assert.equal(request.init?.method, "DELETE");
+    assert.equal(request.init?.credentials, "same-origin");
+    assert.equal(request.init?.cache, "no-store");
+  }
+});
+
+test("a failed discard surfaces the API error instead of clearing the conversation", async () => {
+  globalThis.fetch = async () => new Response("analysis chat could not complete the request", { status: 502 });
+
+  await assert.rejects(
+    () => deleteAnalysisChatSession("session-1"),
+    (error: unknown) => error instanceof AnalysisChatAPIError && error.status === 502,
+  );
 });
 
 test("synchronous messages serialize the message and nothing else", async () => {

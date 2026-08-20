@@ -347,6 +347,25 @@ export async function getAnalysisChatSession(
   return parseResponse(response);
 }
 
+// Discarding a conversation is irreversible. A session the server no longer
+// knows about is already in the desired end state, so 404 counts as success.
+export async function deleteAnalysisChatSession(
+  sessionID: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE}api/analysis-chat/sessions/${encodeURIComponent(sessionID)}`,
+    {
+      method: "DELETE",
+      credentials: "same-origin",
+      cache: "no-store",
+      signal,
+    },
+  );
+  if (response.ok || response.status === 404) return;
+  throw await apiError(response);
+}
+
 export async function sendAnalysisChatMessage(
   sessionID: string,
   message: string,
