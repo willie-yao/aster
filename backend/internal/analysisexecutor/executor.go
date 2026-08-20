@@ -746,9 +746,6 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 	finalizationNativeTools := max(facts.NonStructuredToolCalls-evidenceFacts.NonStructuredToolCalls, 0)
 	replaceEvidenceError := finalErr != nil && sameOpenCodeErrorIdentity(telemetry.Error, evidenceTelemetry.Error)
 	applyOpenCodePromptError(&result, finalErr, evidenceTelemetry.ProviderRequests, evidenceTelemetry.ProviderRequestsKnown, replaceEvidenceError)
-	if replaceEvidenceError {
-		result.Usage = agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable}
-	}
 	if finalErr != nil {
 		return result, finalErr
 	}

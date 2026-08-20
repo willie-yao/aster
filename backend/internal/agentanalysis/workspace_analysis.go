@@ -81,6 +81,7 @@ const (
 	WorkspacePostModelGraceMax = 2 * WorkspaceMaxSources * WorkspaceSourceVerificationTimeout
 
 	WorkspaceTelemetryAvailable   = "available"
+	WorkspaceTelemetryPartial     = "partial"
 	WorkspaceTelemetryUnavailable = "unavailable"
 	WorkspaceTelemetryMalformed   = "malformed"
 	WorkspaceTelemetryTruncated   = "truncated"
@@ -911,7 +912,7 @@ func validateWorkspaceUsage(usage WorkspaceUsage) error {
 		return fmt.Errorf("workspace execution usage is invalid")
 	}
 	if usage.Available {
-		if usage.Status != WorkspaceTelemetryAvailable || usage.ModelRequests < 1 {
+		if (usage.Status != WorkspaceTelemetryAvailable && usage.Status != WorkspaceTelemetryPartial) || usage.ModelRequests < 1 {
 			return fmt.Errorf("available workspace usage is invalid")
 		}
 		if usage.CostAvailable != (usage.CostUSD != "") {

@@ -219,7 +219,8 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 			case "step-finish":
 				messageFinishes++
 				if part.Tokens == nil || part.Tokens.Input == nil || part.Tokens.Output == nil || part.Tokens.Cache == nil || part.Tokens.Cache.Read == nil || part.Cost == nil {
-					return unavailable, telemetry, facts, fmt.Errorf("telemetry step usage is incomplete")
+					incompleteUsage = true
+					continue
 				}
 				usage.ModelRequests++
 				inputTokens := *part.Tokens.Input
@@ -323,9 +324,13 @@ func parseOpenCodeTelemetryForWorkspace(raw []byte, workDir string) (agentanalys
 	if usage.ModelRequests > telemetry.StepsUsed || (telemetry.StepsUsed == 0 && !telemetry.Error.Available) {
 		return unavailable, telemetry, facts, fmt.Errorf("telemetry step usage is inconsistent")
 	}
-	if incompleteUsage || telemetry.StepsUsed == 0 || usage.InputTokens == 0 && usage.OutputTokens == 0 {
+	if telemetry.StepsUsed == 0 || usage.ModelRequests == 0 || usage.InputTokens == 0 && usage.OutputTokens == 0 {
 		usage = agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable}
 	} else {
+		if incompleteUsage {
+			usage.Status = agentanalysis.WorkspaceTelemetryPartial
+			costKnown = false
+		}
 		usage.CostAvailable = costKnown && positiveCost
 		if usage.CostAvailable {
 			usage.CostUSD = strconv.FormatFloat(cost, 'f', 8, 64)

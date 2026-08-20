@@ -137,7 +137,7 @@ func TestParseOpenCodeTelemetryAggregatesMultipleSteps(t *testing.T) {
 	}
 }
 
-func TestParseOpenCodeTelemetryRejectsMissingStepUsageFields(t *testing.T) {
+func TestParseOpenCodeTelemetryMarksMissingStepUsageUnavailable(t *testing.T) {
 	parts := []string{
 		`{"type":"step-finish","cost":0.1}`,
 		`{"type":"step-finish","cost":0.1,"tokens":{"output":1,"cache":{"read":0}}}`,
@@ -148,7 +148,7 @@ func TestParseOpenCodeTelemetryRejectsMissingStepUsageFields(t *testing.T) {
 	for _, part := range parts {
 		raw := []byte(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},` + part + `]}]`)
 		usage, telemetry, err := parseOpenCodeTelemetry(raw)
-		if err == nil || usage.Available || telemetry.Available {
+		if err != nil || usage.Available || usage.Status != agentanalysis.WorkspaceTelemetryUnavailable || !telemetry.Available {
 			t.Fatalf("part=%s usage=%+v telemetry=%+v err=%v", part, usage, telemetry, err)
 		}
 	}
@@ -186,7 +186,7 @@ func TestParseOpenCodeTelemetryPreservesRecoveryAfterIncompleteStep(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usage.Available || usage.ModelRequests != 0 || !telemetry.Available || telemetry.StepsUsed != 2 || !telemetry.ContextLimit {
+	if !usage.Available || usage.Status != agentanalysis.WorkspaceTelemetryPartial || usage.ModelRequests != 1 || usage.InputTokens != 23 || usage.OutputTokens != 5 || !telemetry.Available || telemetry.StepsUsed != 2 || !telemetry.ContextLimit {
 		t.Fatalf("usage=%+v telemetry=%+v", usage, telemetry)
 	}
 }
