@@ -15,6 +15,13 @@ import (
 // citation limit fix generation accepts.
 const maxConversationFixCitations = 16
 
+// maxConversationFixQuoteBytes bounds the quote bytes one fix request carries.
+// Fix generation rejects an oversized context outright, so the budget holds the
+// citation contribution at what the per-quote cap alone used to allow. A larger
+// individual quote is therefore free: it spends this budget faster instead of
+// pushing generation over its limit.
+const maxConversationFixQuoteBytes = 16000
+
 // AnalysisSnapshot is the complete published analysis context shown to chat.
 type AnalysisSnapshot struct {
 	GeneratedAt   string
@@ -296,15 +303,23 @@ func conversationCitations(messages []Message, requestID string) []Citation {
 	}
 	seen := make(map[Citation]struct{}, maxConversationFixCitations)
 	citations := make([]Citation, 0, maxConversationFixCitations)
+	quoteBytes := 0
 	collect := func(message *Message) {
 		for _, citation := range message.Citations {
-			if len(citations) >= maxConversationFixCitations {
+			if len(citations) >= maxConversationFixCitations || quoteBytes >= maxConversationFixQuoteBytes {
 				return
 			}
 			if _, ok := seen[citation]; ok {
 				continue
 			}
+			// Collection runs newest-first, so exhausting the budget drops the
+			// oldest evidence rather than truncating a quote, which would break
+			// the verification the citation carries.
+			if quoteBytes+len(citation.Quote) > maxConversationFixQuoteBytes {
+				continue
+			}
 			seen[citation] = struct{}{}
+			quoteBytes += len(citation.Quote)
 			citations = append(citations, citation)
 		}
 	}

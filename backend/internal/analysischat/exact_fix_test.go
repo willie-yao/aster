@@ -3,6 +3,7 @@ package analysischat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -497,5 +498,36 @@ func TestServiceExactFixDoesNotSalvagePersistedAmbiguousSource(t *testing.T) {
 	}
 	if _, err := restarted.TestFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrAnalysisChanged) {
 		t.Fatalf("ambiguous persisted source error = %v", err)
+	}
+}
+
+// Fix generation rejects an oversized context outright, so a long conversation
+// must drop its oldest evidence rather than hand generation a context it cannot
+// use. Quotes are never truncated, because that would break their verification.
+func TestConversationCitationsBoundsTotalQuoteBytes(t *testing.T) {
+	messages := make([]Message, 0, 8)
+	for i := range 8 {
+		messages = append(messages,
+			Message{Role: "user", RequestID: fmt.Sprintf("r%d", i)},
+			Message{Role: "assistant", RequestID: fmt.Sprintf("r%d", i), Citations: []Citation{
+				{Path: fmt.Sprintf("log-%d.txt", i), Quote: strings.Repeat("q", 2000)},
+				{Path: fmt.Sprintf("other-%d.txt", i), Quote: strings.Repeat("z", 2000)},
+			}},
+		)
+	}
+	got := conversationCitations(messages, "r7")
+	total := 0
+	for _, citation := range got {
+		total += len(citation.Quote)
+		if len(citation.Quote) != 2000 {
+			t.Fatalf("a quote was truncated to %d bytes", len(citation.Quote))
+		}
+	}
+	if total > maxConversationFixQuoteBytes {
+		t.Fatalf("selected %d quote bytes, over the %d budget", total, maxConversationFixQuoteBytes)
+	}
+	// The selected answer's own evidence must survive the budget.
+	if len(got) == 0 || got[0].Path != "log-7.txt" {
+		t.Fatalf("newest evidence was dropped: %+v", got)
 	}
 }
