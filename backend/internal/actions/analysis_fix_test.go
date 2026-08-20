@@ -586,7 +586,7 @@ func TestPreviewAnalysisFixRejectsPreflightGenerationBaseDriftBeforeSandbox(t *t
 		AssistantAnswer:   "Update `reconcileDelete`.",
 		ArtifactCitations: []fixpr.Evidence{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
 	}, "alice", "github-write-token", "")
-	if !errors.Is(err, ErrPreviewRejected) || !strings.Contains(err.Error(), "Fix-intended source preflight") {
+	if !errors.Is(err, ErrPreviewRejected) || !strings.Contains(err.Error(), "fix-request source preflight") {
 		t.Fatalf("unbound advancement error = %v", err)
 	}
 }

@@ -519,8 +519,9 @@ the UI renders a deployment-scoped block as a filled chip with its own icon so i
 cannot be read as a verdict about the cause it sits in.
 
 Separately, and only where a chat deploy advertises both `analysis_chat` and
-`junit_chat_fix`, each causal group card offers an action that opens the per-test
-Fix investigation. The action targets the representative analyzed failure the
+`junit_chat_fix`, each causal group card offers an action that opens the
+representative test's detail page, where its analysis chat can start a fix
+proposal. The action targets the representative analyzed failure the
 causal group was built from, and only when that failure meets every Fix
 eligibility requirement and is the occurrence the test detail page will open. Its
 visible label names that test and build, so several causes on one briefing stay

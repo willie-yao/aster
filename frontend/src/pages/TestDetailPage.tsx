@@ -498,7 +498,6 @@ export function TestDetailPage() {
           fileCtx={selectedFileContext}
           traceRef={traceRef}
           fixPatterns={fixPatterns}
-          fixInvestigationEligible={selectedTestCase.status === "failed"}
           chatRef={{
             job_id: canonicalJobID,
             build_id: selectedRun?.build_id ?? "",

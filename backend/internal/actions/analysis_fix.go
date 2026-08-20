@@ -207,7 +207,7 @@ func osReadFile(dataDir, jobID string) ([]byte, error) {
 	return os.ReadFile(filepath.Join(dataDir, "jobs", models.JobDataFilename(jobID)))
 }
 
-// PreflightAnalysisFixSource checks relevant source drift before a Fix-intended provider turn.
+// PreflightAnalysisFixSource checks relevant source drift when a fix request pins its source.
 func (s *Service) PreflightAnalysisFixSource(
 	ctx context.Context, repo sourceinvestigation.Repository, targetBranch string, files []string,
 ) (string, map[string]string, error) {
@@ -446,7 +446,7 @@ func (s *Service) PreviewAnalysisFix(
 		return PreviewResult{}, ErrPreviewTargetChanged
 	}
 	if input.GenerationBaseRevision == "" && !strings.EqualFold(repository.Revision, compatibility.GenerationBaseRevision) {
-		return PreviewResult{}, fmt.Errorf("%w: branch advancement requires a Fix-intended source preflight", ErrPreviewRejected)
+		return PreviewResult{}, fmt.Errorf("%w: branch advancement requires a fix-request source preflight", ErrPreviewRejected)
 	}
 	if err := s.setRequestStage(ctx, RequestStageDrafting); err != nil {
 		return PreviewResult{}, err

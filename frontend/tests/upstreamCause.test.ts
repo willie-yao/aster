@@ -124,13 +124,13 @@ test("a cause with no fix target names the dependency instead of a dead end", ()
   assert.match(html, /unverified/);
   assert.match(html, /does not open\s+pull requests in a dependency/);
   assert.match(html, /project-side mitigation/);
-  assert.doesNotMatch(html, /meets the Fix investigation requirements/);
+  assert.doesNotMatch(html, /meets the Fix eligibility requirements/);
 });
 
 test("a cause with no upstream owner keeps the existing generic message", () => {
   const html = render(createElement(CausalGroupFixRouting, { jobID: "job", target: null, externalCause: null }));
 
-  assert.match(html, /No failed JUnit test in these builds meets the Fix investigation requirements/);
+  assert.match(html, /No failed JUnit test in these builds meets the Fix eligibility requirements/);
   assert.doesNotMatch(html, /dependency/);
 });
 
@@ -141,12 +141,12 @@ test("the pattern panel names the dependency instead of reporting unavailability
   assert.match(upstream, /Cause is in a dependency/);
   assert.match(upstream, /kubernetes\/kubernetes/);
   assert.match(upstream, /pkg\/kubelet\/cm\/devicemanager\/manager\.go/);
-  assert.doesNotMatch(upstream, /Fix investigation unavailable/);
+  assert.doesNotMatch(upstream, /Fix proposal unavailable/);
   // The evidence route stays available so the reader can confirm the diagnosis.
   assert.match(upstream, /View failed tests/);
 
   const generic = render(createElement(PatternFixGuidance, { jobID: "job", buildID: "208060" }));
-  assert.match(generic, /Fix investigation unavailable/);
-  assert.match(generic, /No failed JUnit test in the affected builds meets the Fix investigation requirements/);
+  assert.match(generic, /Fix proposal unavailable/);
+  assert.match(generic, /No failed JUnit test in the affected builds meets the Fix eligibility requirements/);
   assert.doesNotMatch(generic, /dependency/);
 });

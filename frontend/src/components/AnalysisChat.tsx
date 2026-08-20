@@ -42,7 +42,6 @@ import {
   analysisChatTurnLimitMessage,
   analysisChatTurnUsage,
   AnalysisChatAPIError,
-  beginAnalysisChatFixInvestigation,
   cancelAnalysisChatRequest,
   clearAnalysisChatPendingIntent,
   createAnalysisChatSession,
@@ -78,13 +77,13 @@ import { AnalysisCorrectionDialog } from "./AnalysisCorrectionDialog";
 import type { AnalysisCorrectionPreview } from "../types/corrections";
 import type { PatternAnalysis } from "../types/dashboard";
 import { ChatFixDialog } from "./ChatFixDialog";
-import { chatFixGroundedRequestIDs, chatFixVerifiedSourcePaths, fixInvestigationAvailable } from "../lib/chatFixEligibility";
+import { chatFixGroundedRequestIDs, chatFixVerifiedSourcePaths } from "../lib/chatFixEligibility";
 
 interface PendingTurn {
   sessionID: string;
   requestID: string;
   question: string;
-  fixIntent?: boolean;
+  requestRecorded?: boolean;
 }
 
 function analysisChatIntentStorage(): Storage | null {
@@ -95,20 +94,13 @@ function analysisChatIntentStorage(): Storage | null {
   }
 }
 
+// The first prompt names an artifact source, because an artifact-grounded turn
+// is what produces verified citations and makes an answer fix-eligible.
 const suggestedQuestions = [
+  "What does the build log show at the failure?",
   "What evidence supports this conclusion?",
   "What would disprove this root cause?",
   "Could this failure be transient?",
-  "Check a different hypothesis",
-] as const;
-
-// Fix investigations need artifact-grounded turns, so these prompts name an
-// artifact source instead of relying on the published conclusion.
-const fixSuggestedQuestions = [
-  "What does the build log show at the failure?",
-  "Which JUnit output supports this root cause?",
-  "Read the artifacts and quote the exact failing line",
-  "What in the logs contradicts this root cause?",
 ] as const;
 
 const patternSuggestedQuestions = [
@@ -505,14 +497,12 @@ export function AnalysisChat({
   analysisRef,
   fileCtx,
   fixPatterns = [],
-  fixInvestigationEligible = false,
   onCorrectionChanged,
   appearance = "default",
 }: {
   analysisRef: AnalysisChatReference;
   fileCtx: FileToUrlContext;
   fixPatterns?: PatternAnalysis[];
-  fixInvestigationEligible?: boolean;
   onCorrectionChanged?: () => void;
   appearance?: "default" | "detail";
 }) {
@@ -528,8 +518,6 @@ export function AnalysisChat({
   const [turnLimitRejected, setTurnLimitRejected] = useState(false);
   const [pendingTurn, setPendingTurn] = useState<PendingTurn | null>(null);
   const [continueMode, setContinueMode] = useState(false);
-  const [fixIntentMode, setFixIntentMode] = useState(false);
-  const [restoreEpoch, setRestoreEpoch] = useState(0);
   const [progressPhase, setProgressPhase] = useState<AnalysisChatProgressPhase>("queued");
   const [progressStartedAt, setProgressStartedAt] = useState<string | undefined>();
   const [validationRetries, setValidationRetries] = useState(0);
@@ -597,7 +585,6 @@ export function AnalysisChat({
     setTurnLimitRejected(false);
     setPendingTurn(null);
     setContinueMode(false);
-    setFixIntentMode(false);
     setProgressPhase("queued");
     setProgressStartedAt(undefined);
     setValidationRetries(0);
@@ -636,7 +623,7 @@ export function AnalysisChat({
         setRestoring(false);
         if (!restored?.active) return;
 
-        const restoredFixIntent = loadAnalysisChatPendingIntent(
+        const restoredRecorded = loadAnalysisChatPendingIntent(
           analysisChatIntentStorage(),
           restoreIdentity,
           restored.id,
@@ -646,9 +633,8 @@ export function AnalysisChat({
           sessionID: restored.id,
           requestID: restored.active.request_id,
           question: restored.active.question ?? "",
-          fixIntent: restoredFixIntent,
+          requestRecorded: restoredRecorded,
         };
-        if (restoredFixIntent === true) setFixIntentMode(true);
         setPendingTurn(restoredTurn);
         setQuestion(restoredTurn.question);
         setProgressPhase(restored.active.phase);
@@ -656,7 +642,7 @@ export function AnalysisChat({
         const updated = await resumeAnalysisChatTurn(
           restored,
           recordProgress,
-          { fixIntent: restoredFixIntent, signal: controller.signal },
+          { requestRecorded: restoredRecorded, signal: controller.signal },
         );
         if (identityRef.current !== restoreIdentity) return;
         setSession(updated);
@@ -671,7 +657,7 @@ export function AnalysisChat({
           if (restoredTurn) clearAnalysisChatPendingIntent(analysisChatIntentStorage(), restoredTurn.sessionID, restoredTurn.requestID);
           setPendingTurn(null);
           setError(null);
-        } else if (restoredTurn?.fixIntent === undefined) {
+        } else if (restoredTurn?.requestRecorded === undefined) {
           setPendingTurn(null);
           setQuestion("");
           setContinueMode(false);
@@ -690,7 +676,7 @@ export function AnalysisChat({
         let reconcileError: unknown;
         if (restoredTurn) {
           clearAnalysisChatPendingIntent(analysisChatIntentStorage(), restoredTurn.sessionID, restoredTurn.requestID);
-          restoredTurn = { ...restoredTurn, fixIntent: undefined };
+          restoredTurn = { ...restoredTurn, requestRecorded: undefined };
           try {
             const result = await reconcileAnalysisChatTurn(
               restoredTurn.sessionID,
@@ -756,7 +742,7 @@ export function AnalysisChat({
       }
     })();
     return () => controller.abort();
-  }, [authMode, authStatus, features.analysis_chat, identity, recordProgress, restoreEpoch, signIn]);
+  }, [authMode, authStatus, features.analysis_chat, identity, recordProgress, signIn]);
 
   useEffect(() => {
     if (!expanded || (history.length === 0 && !busy)) return;
@@ -776,9 +762,7 @@ export function AnalysisChat({
 
   const turnUsage = session ? analysisChatTurnUsage(session) : null;
   const turnLimitReached = analysisChatTurnLimitReached(session, pendingTurn !== null, turnLimitRejected);
-  const questions = patternScope
-    ? patternSuggestedQuestions
-    : fixIntentMode ? fixSuggestedQuestions : suggestedQuestions;
+  const questions = patternScope ? patternSuggestedQuestions : suggestedQuestions;
   const exactJUnitAnalysis = !patternScope && analysisRef.source !== "build" && Boolean(analysisRef.junit_file);
   const exactFixEnabled = Boolean(features.junit_chat_fix) && exactJUnitAnalysis;
   const hasVerifiedSourcePaths = chatFixVerifiedSourcePaths(fileCtx.fileLinks, session?.source_repository).length > 0;
@@ -786,91 +770,9 @@ export function AnalysisChat({
   // conclusive before a session resolves the source repository.
   const fixSourceUnavailable = exactFixEnabled &&
     (session ? !hasVerifiedSourcePaths : Object.keys(fileCtx.fileLinks ?? {}).length === 0);
-  const canStartFixInvestigation = fixInvestigationAvailable(
-    analysisRef,
-    Boolean(features.analysis_chat),
-    Boolean(features.junit_chat_fix),
-    authStatus,
-    fixInvestigationEligible,
-  );
-
-  async function startFixInvestigation() {
-    if (authStatus === "anonymous") {
-      signIn();
-      return;
-    }
-    if (authStatus !== "authenticated" || busy || pendingTurn) return;
-
-    const startIdentity = identity;
-    controllerRef.current?.abort();
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    const started = beginAnalysisChatFixInvestigation(
-      analysisRef,
-      () => {
-        restoreControllerRef.current?.abort();
-        restoreControllerRef.current = null;
-      },
-      controller.signal,
-    );
-    createRequestIDRef.current = started.requestID;
-    setExpanded(true);
-    setRestoring(true);
-    setBusy(true);
-    setError(null);
-    setContinueMode(false);
-    setFixIntentMode(true);
-    setSession(null);
-    setPendingTurn(null);
-    setTurnLimitRejected(false);
-    setFixMessage(null);
-    setFixOpen(false);
-    try {
-      const created = await started.session;
-      if (identityRef.current !== startIdentity) return;
-      setSession(created);
-    } catch (createError) {
-      if (createError instanceof Error && createError.name === "AbortError") return;
-      if (identityRef.current !== startIdentity) return;
-      if (isAnalysisChatOAuthExpired(createError, authMode)) {
-        signIn();
-        return;
-      }
-      if (isAmbiguousAnalysisChatFailure(createError)) {
-        setContinueMode(true);
-        setError("The new Fix conversation may have been created. Enter a question and select Continue to reconnect safely.");
-      } else {
-        setFixIntentMode(false);
-        setError(readableError(createError));
-      }
-    } finally {
-      if (controllerRef.current === controller) {
-        controllerRef.current = null;
-        if (identityRef.current === startIdentity) {
-          setRestoring(false);
-          setBusy(false);
-        }
-      }
-    }
-  }
-
-  function returnToNormalChat() {
-    if (busy || pendingTurn) return;
-    restoreControllerRef.current?.abort();
-    controllerRef.current?.abort();
-    setFixIntentMode(false);
-    setSession(null);
-    setQuestion("");
-    setError(null);
-    setContinueMode(false);
-    setTurnLimitRejected(false);
-    createRequestIDRef.current = newAnalysisChatRequestID();
-    setRestoreEpoch((value) => value + 1);
-  }
 
   async function submit(nextQuestion?: string) {
     const value = (nextQuestion ?? pendingTurn?.question ?? question).trim();
-    const selectedFixIntent = pendingTurn ? pendingTurn.fixIntent : fixIntentMode;
     if (!value || busy || restoring || turnLimitReached) return;
     if (pendingTurn && pendingTurn.question !== value) {
       setError("The previous question may still be running. Select Continue before asking another question.");
@@ -908,7 +810,7 @@ export function AnalysisChat({
           sessionID: activeSession.id,
           requestID: newAnalysisChatRequestID(),
           question: value,
-          fixIntent: selectedFixIntent ?? false,
+          requestRecorded: true,
         };
         setPendingTurn(activeTurn);
         setQuestion(value);
@@ -916,20 +818,20 @@ export function AnalysisChat({
           analysisIdentity: identity,
           sessionID: activeTurn.sessionID,
           requestID: activeTurn.requestID,
-          fixIntent: activeTurn.fixIntent ?? false,
+          requestRecorded: activeTurn.requestRecorded ?? true,
         });
       }
-      const updated = activeTurn.fixIntent === undefined
+      const updated = activeTurn.requestRecorded === undefined
         ? await resumeAnalysisChatTurn(activeSession, recordProgress, { signal: controller.signal })
         : await streamAnalysisChatMessage(
           activeTurn.sessionID,
           activeTurn.question,
           activeTurn.requestID,
           recordProgress,
-          { fixIntent: activeTurn.fixIntent, signal: controller.signal },
+          { requestRecorded: activeTurn.requestRecorded, signal: controller.signal },
         );
       setSession(updated);
-      if (activeTurn.fixIntent === undefined) {
+      if (activeTurn.requestRecorded === undefined) {
         const requestState = analysisChatRequestState(updated, activeTurn.requestID);
         clearAnalysisChatPendingIntent(analysisChatIntentStorage(), activeTurn.sessionID, activeTurn.requestID);
         setPendingTurn(null);
@@ -946,7 +848,7 @@ export function AnalysisChat({
       setPendingTurn(null);
     } catch (requestError) {
       if (requestError instanceof Error && requestError.name === "AbortError") return;
-      const observedTurn = activeTurn ? { ...activeTurn, fixIntent: undefined } : null;
+      const observedTurn = activeTurn ? { ...activeTurn, requestRecorded: undefined } : null;
       if (activeTurn) {
         clearAnalysisChatPendingIntent(analysisChatIntentStorage(), activeTurn.sessionID, activeTurn.requestID);
       }
@@ -1276,31 +1178,6 @@ export function AnalysisChat({
           </IconButton>
         </Stack>
 
-        {canStartFixInvestigation && (
-          <Box sx={{ px: detailAppearance ? 1.5 : 1, py: 0.75 }}>
-            <Tooltip title={fixSourceUnavailable
-              ? "This analysis has no verified immutable source path, so a fix preview cannot be generated from it."
-              : fixIntentMode
-                ? "Restore the latest normal analysis conversation"
-                : "Start a fresh evidence-backed chat. This does not create a branch or PR."}>
-              <span>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={<BuildOutlined />}
-                  onClick={() => fixIntentMode ? returnToNormalChat() : void startFixInvestigation()}
-                  disabled={busy || pendingTurn !== null || (fixSourceUnavailable && !fixIntentMode)}
-                  // Left-aligned and self-sized so it reads as a control beside
-                  // the other actions rather than a banner spanning the panel.
-                  sx={{ textTransform: "none", minHeight: 32 }}
-                >
-                  {fixIntentMode ? "Return to normal chat" : "Start fix investigation"}
-                </Button>
-              </span>
-            </Tooltip>
-          </Box>
-        )}
-
         <Collapse in={expanded} appear>
           <Box id="analysis-chat-content">
             <Stack
@@ -1335,12 +1212,6 @@ export function AnalysisChat({
                 <Alert severity="info" variant="outlined">
                   Fix preview is not possible for this analysis: it has no verified immutable source path pinned to
                   the failing build's repository and commit. Questions still work, but no answer here can start a fix preview.
-                </Alert>
-              )}
-              {fixIntentMode && (
-                <Alert severity="info" variant="outlined">
-                  This fresh Fix investigation requires evidence-backed source eligibility. It does not create a branch or PR.
-                  Use a successful finding in a separate fix proposal when you are ready.
                 </Alert>
               )}
               {!restoring && history.length === 0 && !busy && !pendingTurn && !turnLimitReached && (

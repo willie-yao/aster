@@ -59,7 +59,7 @@ export function PatternBanner({
   const { features } = useCapabilities();
   const analysisOnly = Boolean(pattern.recurrence_classification);
   const causalGroups = pattern.causal_groups ?? [];
-  // Fix investigations start from an individual failed test, so the routing is
+  // Fix proposals start from an individual failed test, so the routing is
   // only offered where a chat session could actually run one.
   const fixCapable = Boolean(features.analysis_chat && features.junit_chat_fix);
   const causalFixTargets = causalGroups.map((group) =>

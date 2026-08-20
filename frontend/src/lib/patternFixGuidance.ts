@@ -22,7 +22,7 @@ export function patternFixGuidanceBuildID(
 }
 
 // causalGroupFixTarget returns the failure a cause is actually built from, when
-// that failure can start a Fix investigation. Returns null when the cause offers
+// that failure can start a fix proposal. Returns null when the cause offers
 // no reachable target.
 export function causalGroupFixTarget(
   group: PatternCausalGroup,

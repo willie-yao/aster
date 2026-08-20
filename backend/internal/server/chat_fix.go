@@ -34,10 +34,10 @@ type ChatFixRunner interface {
 // ChatFixRequestRunner admits exact JUnit chat-to-fix previews for durable
 // asynchronous generation.
 type ChatFixRequestRunner interface {
-	CreateAnalysisFixRequest(string, string, string, string, string, ...string) (actions.ActionRequestView, error)
+	CreateAnalysisFixRequest(context.Context, string, string, string, string, string, ...string) (actions.ActionRequestView, error)
 }
 
-func createAnalysisChatFixRequestHandler(run ChatFixRequestRunner) http.Handler {
+func createAnalysisChatFixRequestHandler(timeout time.Duration, run ChatFixRequestRunner) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFrom(r.Context())
 		if !ok {
@@ -58,7 +58,12 @@ func createAnalysisChatFixRequestHandler(run ChatFixRequestRunner) http.Handler 
 			http.Error(w, "invalid chat fix request", http.StatusBadRequest)
 			return
 		}
+		// Pinning the source makes network calls, so bound them like every other
+		// action rather than letting the client dictate how long they run.
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
 		view, err := run.CreateAnalysisFixRequest(
+			ctx,
 			r.PathValue("id"), identity.Login, r.PathValue("requestID"), identity.Token, body.Instruction, body.ReplacesRequestID,
 		)
 		if err != nil {
@@ -150,8 +155,9 @@ func writeChatFixError(w http.ResponseWriter, sessionID, login string, err error
 		status, message = http.StatusConflict, "analysis chat request is pending"
 	case errors.Is(err, analysischat.ErrRequestOutcomeUnknown):
 		status, message = http.StatusConflict, "analysis chat outcome unknown"
-	case errors.Is(err, analysischat.ErrInvalidRequest):
-		status, message = http.StatusBadRequest, "invalid fix proposal request"
+	// The specific causes come first: source pinning wraps its failures with
+	// ErrInvalidRequest, so a generic 400 would otherwise shadow a timeout, a
+	// cancellation, or an unusable source.
 	case errors.Is(err, context.DeadlineExceeded):
 		status, message = http.StatusGatewayTimeout, "fix proposal timed out"
 	case errors.Is(err, context.Canceled):
@@ -161,6 +167,8 @@ func writeChatFixError(w http.ResponseWriter, sessionID, login string, err error
 		status, message = http.StatusUnprocessableEntity, "verified source input is not usable"
 	case errors.Is(err, actions.ErrPreviewRejected):
 		status, message = http.StatusUnprocessableEntity, "fix proposal could not be generated"
+	case errors.Is(err, analysischat.ErrInvalidRequest):
+		status, message = http.StatusBadRequest, "invalid fix proposal request"
 	}
 	if status >= 500 || status == http.StatusUnprocessableEntity {
 		log.Printf("chat fix preview failed for %s (by %s): %s", sessionID, login, safeOperatorError(err))

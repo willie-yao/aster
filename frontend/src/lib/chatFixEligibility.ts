@@ -1,5 +1,4 @@
-import type { AuthStatus } from "../hooks/useAuth";
-import type { AnalysisChatMessage, AnalysisChatReference } from "../types/analysisChat";
+import type { AnalysisChatMessage } from "../types/analysisChat";
 
 export interface ChatFixSourceRepository {
   owner: string;
@@ -77,16 +76,4 @@ export function chatFixGroundedRequestIDs(messages: AnalysisChatMessage[] | unde
     if (cited && message.request_id) grounded.add(message.request_id);
   }
   return grounded;
-}
-
-export function fixInvestigationAvailable(
-  analysis: AnalysisChatReference,
-  analysisChatEnabled: boolean,
-  junitChatFixEnabled: boolean,
-  authStatus: AuthStatus,
-  analysisEligible: boolean,
-): boolean {
-  return analysisEligible && analysisChatEnabled && junitChatFixEnabled &&
-    (authStatus === "authenticated" || authStatus === "anonymous") &&
-    analysis.scope !== "pattern" && analysis.source !== "build" && Boolean(analysis.junit_file);
 }

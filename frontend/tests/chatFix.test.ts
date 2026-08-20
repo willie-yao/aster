@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
-import { chatFixGroundedRequestIDs, chatFixVerifiedSourcePaths, fixInvestigationAvailable } from "../src/lib/chatFixEligibility.js";
+import { chatFixGroundedRequestIDs, chatFixVerifiedSourcePaths } from "../src/lib/chatFixEligibility.js";
 import { chatFixRequestPresentation } from "../src/lib/chatFixPresentation.js";
 import {
   chatFixRequestStorageKey,
@@ -11,7 +11,7 @@ import {
   readStoredChatFixRequest,
   storeChatFixRequest,
 } from "../src/lib/chatFixRequestStorage.js";
-import type { AnalysisChatMessage, AnalysisChatReference } from "../src/types/analysisChat.js";
+import type { AnalysisChatMessage } from "../src/types/analysisChat.js";
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
@@ -35,8 +35,10 @@ test("permanent source ineligibility is reported before the per-response citatio
   assert.match(chat, /fixSourceUnavailable = exactFixEnabled/);
   assert.match(chat, /\{fixSourceUnavailable && \(\s*<Alert/);
   assert.match(chat, /exactFixEnabled && hasVerifiedSourcePaths && !hasArtifactEvidence/);
-  assert.match(chat, /disabled=\{busy \|\| pendingTurn !== null \|\| \(fixSourceUnavailable && !fixIntentMode\)\}/);
-  assert.match(chat, /fixIntentMode \? fixSuggestedQuestions : suggestedQuestions/);
+  // Ineligibility is reported without gating a mode, and the one question set
+  // leads with an artifact-grounded prompt so answers can become fix-eligible.
+  assert.match(chat, /questions = patternScope \? patternSuggestedQuestions : suggestedQuestions/);
+  assert.match(chat, /"What does the build log show at the failure\?"/);
 });
 
 test("chat fix grounding accumulates validated citations across the conversation", () => {
@@ -187,44 +189,22 @@ test("exact JUnit fix request storage rejects malformed request identities", () 
   assert.equal(readStoredChatFixRequest(storage, "session", "chat-request"), null);
 });
 
-test("Fix investigation control is limited to exact JUnit chat capability", () => {
-  const exact: AnalysisChatReference = {
-    scope: "test", job_id: "job", build_id: "1", test_name: "Test", junit_file: "junit.xml",
-  };
-  const pattern: AnalysisChatReference = { scope: "pattern", job_id: "job", pattern_id: "pattern", pattern_hash: "hash" };
-  const build: AnalysisChatReference = {
-    scope: "test", job_id: "job", build_id: "1", test_name: "Prow job execution", source: "build",
-  };
-  assert.equal(fixInvestigationAvailable(exact, true, true, "authenticated", true), true);
-  assert.equal(fixInvestigationAvailable(exact, true, true, "anonymous", true), true);
-  assert.equal(fixInvestigationAvailable(exact, true, false, "authenticated", true), false);
-  assert.equal(fixInvestigationAvailable(pattern, true, true, "authenticated", true), false);
-  assert.equal(fixInvestigationAvailable(build, true, true, "authenticated", true), false);
-  assert.equal(fixInvestigationAvailable(exact, true, true, "loading", true), false);
-  assert.equal(fixInvestigationAvailable(exact, true, true, "unavailable", true), false);
-  assert.equal(fixInvestigationAvailable(exact, true, true, "authenticated", false), false);
-});
-
-test("Fix investigation starts a fresh session and keeps preview separate", () => {
+test("one chat serves questions and fix proposals with no separate mode", () => {
   const chat = source("src/components/AnalysisChat.tsx");
-  assert.match(chat, /Start fix investigation/);
-  const start = chat.slice(chat.indexOf("async function startFixInvestigation"), chat.indexOf("function returnToNormalChat"));
-  assert.match(start, /beginAnalysisChatFixInvestigation\(/);
-  assert.match(start, /restoreControllerRef\.current\?\.abort\(\)/);
-  assert.match(start, /createRequestIDRef\.current = started\.requestID/);
-  assert.match(start, /const created = await started\.session/);
-  assert.match(start, /setSession\(null\)/);
-  assert.doesNotMatch(start, /findAnalysisChatSession/);
-  assert.doesNotMatch(start, /previewChatFix|confirmChatFix|openFix/);
-  assert.match(chat, /fixIntent: activeTurn\.fixIntent/);
-  assert.match(chat, /Return to normal chat/);
-  assert.match(chat, /does not create a branch or PR/);
+  // The mode, its toggle, and its fresh-session reset are gone.
+  assert.doesNotMatch(chat, /Start fix investigation|Return to normal chat/);
+  assert.doesNotMatch(chat, /fixIntentMode|startFixInvestigation|returnToNormalChat/);
+  assert.doesNotMatch(chat, /beginAnalysisChatFixInvestigation/);
+  // A finding in the one conversation still opens a fix proposal.
+  assert.match(chat, /onUseForFix=\{\(\) => openFix\(message\)\}/);
+  // Source ineligibility is still surfaced without entering a mode.
+  assert.match(chat, /fixSourceUnavailable/);
 });
 
-test("anonymous Fix investigation uses the existing OAuth sign-in path", () => {
+test("anonymous fix proposal uses the existing OAuth sign-in path", () => {
   const chat = source("src/components/AnalysisChat.tsx");
   const api = source("src/lib/analysisChat.ts");
-  assert.match(chat, /async function startFixInvestigation\(\)[\s\S]*authStatus === "anonymous"[\s\S]*signIn\(\)/);
+  assert.match(chat, /function openFix\([\s\S]*authStatus === "anonymous"[\s\S]*signIn\(\)/);
   assert.match(api, /credentials: "same-origin"/);
   assert.match(chat, /isAnalysisChatOAuthExpired\(effectiveError, authMode\)[\s\S]*signIn\(\)/);
   assert.doesNotMatch(chat + api, /document\.cookie|Authorization.*Bearer|session[_-]?key/i);
