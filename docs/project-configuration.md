@@ -341,15 +341,31 @@ hourly. There is no shared Aster bot: the engine runs inside your own
 infrastructure, so a shared identity would mean shipping one private key that
 could write to every consumer's repository.
 
-Create the App under the organization that owns `branding.source_repo`:
+Create the App under any account you control. It does **not** have to be owned
+by the organization that owns `branding.source_repo`:
 
 1. Create a GitHub App with **Repository permissions → Issues → Read and
    write** and **Pull requests → Read-only**, and nothing else. Pull request
    comments go through the issues API, so `issues` is what grants the write;
    pull request read access is only needed to see them on a private repository.
-   Subscribe to no events; the engine polls and has no webhook receiver.
+   Subscribe to no events; the engine polls and has no webhook receiver. Set
+   **Where can this GitHub App be installed** to any account if the App and the
+   repository are owned by different accounts.
 2. Install it on `branding.source_repo`.
 3. Generate a private key and note the App ID.
+
+**Installing the App requires admin access to `branding.source_repo`, and that
+is the real prerequisite.** Creating the App requires nothing special. A
+repository admin can normally install it, though organization policy can
+restrict installation to organization owners. Monitoring a repository you do not
+administer, which is the common case for an upstream project, therefore needs
+one of its maintainers to install the App for you.
+
+Until it is installed the commenting pass cannot mint a token, so it logs the
+failure and posts nothing. Dry run guards the step after installation: it logs
+the exact bodies, so you and the repository's maintainers can read them before
+any contributor sees one. User-token authentication is not supported for this
+feature.
 
 Then supply both to the fetcher:
 
