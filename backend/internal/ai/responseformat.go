@@ -47,4 +47,16 @@ rather than a real bug in the code under test. If the failure matches a
 transient class the project-specific knowledge calls out, set
 is_transient=true even if you could keep digging for a deeper chain;
 infrastructure flake is not a code bug. Reserve is_transient=false for
-failures that are a genuine defect or that match no known transient class.`
+failures that are a genuine defect or that match no known transient class.
+
+is_transient answers whether a rerun is likely to pass, not whether anyone
+can act on the failure, so a transient verdict never empties suggested_fix.
+When the evidence you already read shows a durable resilience improvement
+that would have absorbed the flake (a missing retry or backoff on a
+retryable status, a wait or timeout budget shorter than the observed
+duration, a missing readiness guard), state that improvement as
+suggested_fix, and set cause_location when that evidence establishes the
+repository that owns it. Do not invent one: when the evidence supports no such
+improvement, use the same 'No remediation possible from available evidence:'
+prefix. Never restate the transient verdict as the remediation, and
+never flip is_transient to false merely to justify naming a fix.`
