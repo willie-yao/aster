@@ -353,6 +353,21 @@ export interface JobDetail {
   runs: BuildResult[];
   pattern_analyses?: PatternAnalysis[];
   pattern_refresh?: PatternRefreshStatus;
+  // Durable history for the failure signatures this window shows. Correlation
+  // only ever sees one window, so this is where an infrequent flake's real age
+  // comes from.
+  failure_recurrence?: FailureRecurrence[];
+}
+
+// FailureRecurrence is one failure signature's history across build windows.
+// occurrences counts distinct failing builds over the cause's lifetime, so it
+// exceeds builds whenever the cause predates the current window.
+export interface FailureRecurrence {
+  signature: string;
+  occurrences: number;
+  first_seen: string;
+  last_seen: string;
+  builds?: string[];
 }
 
 export interface SearchEntry {

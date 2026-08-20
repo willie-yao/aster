@@ -36,6 +36,8 @@ const (
 	// RetentionWindow drops causes that have not failed for this long.
 	RetentionWindow = 180 * 24 * time.Hour
 	// MaxEntries bounds the file, evicting least-recently-seen causes first.
+	// Counting-only entries outnumber verdict-bearing ones, so eviction gives
+	// them up first (see evictOverCapacity).
 	MaxEntries = 2000
 	// MaxVerdictReuses bounds how often one conclusion may answer without a fresh
 	// investigation. No artifact-derived identity can guarantee that an identical
@@ -114,7 +116,8 @@ func (l *Ledger) Save(dir string) error {
 
 // Observe records sightings and reports whether anything changed. Recurrence
 // advances only for builds strictly newer than the stored watermark, so a
-// retained pattern re-observed every pass does not inflate its own history.
+// retained pattern re-observed every pass does not inflate its own history. The
+// entry cap is enforced afterwards, so a pass cannot leave the file oversized.
 func (l *Ledger) Observe(sightings []Sighting, now time.Time) bool {
 	changed := false
 	stamp := now.UTC().Format(time.RFC3339)
@@ -158,7 +161,11 @@ func (l *Ledger) Observe(sightings []Sighting, now time.Time) bool {
 		}
 		l.Entries[signature] = entry
 	}
-	return changed
+	// Capacity is enforced after observing, not only in Prune. Recurrence gives
+	// every distinct failure shape an entry, so a pass can add more than it
+	// pruned and the cap would otherwise never bind.
+	evicted := l.evictOverCapacity()
+	return changed || evicted
 }
 
 // RecordVerdict stores the terminal answer a run reached, creating the entry when
@@ -244,6 +251,13 @@ func (l *Ledger) evictOverCapacity() bool {
 	}
 	sort.Slice(signatures, func(i, j int) bool {
 		left, right := l.Entries[signatures[i]], l.Entries[signatures[j]]
+		// A recorded verdict is the expensive half of this memory: it cost an
+		// investigation and it answers the cause when it returns after a gap.
+		// Counting-only entries are far more numerous, since every distinct
+		// failure shape gets one, so they are given up first regardless of age.
+		if (left.Verdict != nil) != (right.Verdict != nil) {
+			return left.Verdict == nil
+		}
 		if left.LastSeen != right.LastSeen {
 			return left.LastSeen < right.LastSeen
 		}
