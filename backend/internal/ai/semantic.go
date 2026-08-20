@@ -1291,5 +1291,6 @@ func semanticRevisionRejected(decision draftReplacementDecision, candidate *crit
 		decision.reason == draftReasonCandidateSemanticFindings ||
 		decision.reason == draftReasonCandidateSemanticUnavailable ||
 		decision.reason == draftReasonCandidateDropsSupportedCause ||
+		decision.reason == draftReasonCandidatePolicyUnaccepted ||
 		!critiqueQualityAcceptedForPolicy(candidate.quality, policy)
 }

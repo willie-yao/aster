@@ -3122,6 +3122,9 @@ func TestAgentic_EvidenceInjection_PrefetchesSkillEvidence(t *testing.T) {
 	round2 := `{"summary":"deep","is_transient":false,"root_cause":"x509 webhook failure grounded in the cert-manager config","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 1; reapply.","relevant_files":[]}`
 	srv.push(200, chatRespFinal(round1))
 	srv.push(200, chatRespFinal(round2))
+	// The evidence gate reopens the first draft because the skill-required
+	// artifact exists and was never read. The repair injection follows.
+	srv.push(200, chatRespFinal(round2))
 
 	set := loadSkillsForTest(t, map[string]string{
 		"webhook": `
@@ -3150,7 +3153,14 @@ required_evidence:
 	}
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
-	if len(srv.requests) < 2 || !strings.Contains(string(srv.requests[1]), "SKILL_MARKER") {
+	injected := false
+	for _, request := range srv.requests {
+		if strings.Contains(string(request), "SKILL_MARKER") {
+			injected = true
+			break
+		}
+	}
+	if !injected {
 		t.Errorf("retry should embed the skill-required evidence content")
 	}
 }
@@ -3323,6 +3333,10 @@ func TestAgentic_SkillEvidencePresentButUnread_ZeroRetriesDoesNotRepair(t *testi
 	srv := newScriptedChatServer(t)
 	final := `{"summary":"webhook cert","is_transient":false,"root_cause":"x509 webhook validation failure prevented cluster creation","severity":"High","suggested_fix":"Regenerate the webhook serving certificate and redeploy the controller.","relevant_files":[]}`
 	srv.push(200, chatRespFinal(final))
+	// The evidence gate reopens the draft once because the required artifact
+	// exists and was never read. It asks the model to read it; it never fetches
+	// evidence itself, which is what the zero retry budget governs.
+	srv.push(200, chatRespFinal(final))
 
 	client := newAgenticTestClient(t, srv.URL)
 	set := loadAgenticSkillsForTest(t, map[string]string{
@@ -3358,17 +3372,20 @@ required_evidence:
 	if analysis.CritiquePassed {
 		t.Error("max_retries=0 unexpectedly repaired missing evidence")
 	}
-	if got := atomic.LoadInt32(&srv.calls); got != 1 {
-		t.Fatalf("call count = %d, want 1", got)
+	if got := atomic.LoadInt32(&srv.calls); got != 2 {
+		t.Fatalf("call count = %d, want 2 (initial draft plus one evidence nudge)", got)
 	}
 	if len(browser.tailCalls) != 0 {
 		t.Fatalf("zero retry budget fetched repair evidence: %v", browser.tailCalls)
 	}
-	if len(observations) != 1 {
-		t.Fatalf("observations = %d, want only the initial draft: %+v", len(observations), observations)
+	if len(observations) != 2 {
+		t.Fatalf("observations = %d, want the initial draft and the nudged retry: %+v", len(observations), observations)
 	}
 	if observations[0].Phase != "initial" || observations[0].MissingGroupCount != 1 || observations[0].EvidenceReads != 0 {
 		t.Errorf("initial observation = %+v", observations[0])
+	}
+	if observations[1].Phase != "evidence_retry" || observations[1].MissingGroupCount != 1 || observations[1].EvidenceReads != 0 {
+		t.Errorf("nudged observation = %+v", observations[1])
 	}
 }
 
@@ -3416,6 +3433,9 @@ func TestChatClient_BoundedByContextNotFixedTimeout(t *testing.T) {
 func TestAgentic_InitialEvidencePlanUsesOneTreeListing(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"independent bug","severity":"Low","suggested_fix":"Update config.yaml and redeploy.","relevant_files":[]}`))
+	// The evidence gate reopens the first tools-free answer because the ranked
+	// group is unread. The second answer is accepted without another listing.
 	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"independent bug","severity":"Low","suggested_fix":"Update config.yaml and redeploy.","relevant_files":[]}`))
 
 	set := loadAgenticSkillsForTest(t, map[string]string{

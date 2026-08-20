@@ -202,6 +202,7 @@ const (
 	draftReasonCandidateEvidenceBackedRoot  = "candidate_evidence_backed_root_change"
 	draftReasonCandidateSemanticFindings    = "candidate_has_semantic_findings"
 	draftReasonCandidateSemanticUnavailable = "candidate_semantic_review_unavailable"
+	draftReasonCandidatePolicyUnaccepted    = "candidate_not_accepted_for_policy"
 	draftReasonCandidateDropsSupportedCause = "candidate_drops_supported_cause"
 	draftReasonCandidateNotBetter           = "candidate_not_strictly_better"
 	draftReasonTiePreservesEarlier          = "tie_preserves_earlier"
@@ -307,7 +308,7 @@ tools field of this request for names, descriptions, and parameters).
 4. Drill into the most relevant named resources. If your current best causal lead depends on a specific resource (a failing Machine, Pod, Node, VM, container, controller, or owning workload), read that resource's own artifacts before finalizing. Do not chase every resource name mentioned in passing; pick the 1-3 most directly tied to the failure. Examples: a failing resource X → read its manifest/status conditions, events, owner-controller log filtered for "X", and any resource-specific runtime logs. The project-specific section names the exact artifact paths these live at. Stopping at the first plausible symptom is the most common failure mode of this tool; treat each symptom as a lead, not the answer. Before settling on a cause, compare specific request/list/watch/assertion failures with repeated timeout, readiness, and cleanup noise. Prefer a specific failure only when its timing and mechanism explain the downstream symptom. Treat a later successful operation as counterevidence against assigning that component ownership; if no other cited error proves ownership, keep the remaining boundary unresolved.
 5. Investigation is YOUR job, not the user's. suggested_fix must be a concrete remediation action (a code change, config edit, command to run, retry, redeploy, rollback, operational fix). It must NOT be a diagnostic or information-gathering task. If the sentence's primary purpose is to learn more (check, verify, investigate, ensure, inspect, examine, confirm, audit, review, look into, determine), it belongs in your tool work BEFORE finalizing, not in suggested_fix. A "then validate by ..." clause is fine, but only after a concrete remediation. If after following the directly relevant artifact leads you still cannot identify a concrete remediation, say so explicitly in suggested_fix and include all three of: (a) the strongest fact you established, (b) the specific artifacts/logs you consulted, (c) the exact missing evidence that prevents a remediation. Do not invoke this escape hatch if any standard remediation or best-evidence operational action is supported by the artifacts you read.
 6. Cite actual paths and quoted log lines in your final answer. Do not speculate; if evidence is incomplete, state what is known and what remains unclear.
-7. Watch the remaining_model_bytes and remaining_gcs_bytes returned with each tool result; stop browsing and produce the final JSON answer before they hit zero.
+7. Watch the remaining_model_bytes and remaining_gcs_bytes returned with each tool result; stop browsing and produce the final JSON answer before they hit zero. A tool result that also returns unread_evidence_groups is telling you the required evidence plan still has groups you have not read; read one of their candidate paths before finalizing, or state in root_cause why that evidence is not present in this build.
 8. When repository tools are available, establish the runtime cause from build artifacts first. Then use read_repo_file or grep_repo at the tested commit to trace the project caller or verify a source file before naming it.
 
 Before finalizing, self-check:
@@ -315,6 +316,7 @@ Before finalizing, self-check:
 - If I set is_transient=true, did I still name the durable resilience improvement the evidence supports, or state that none is supported?
 - For an overloaded symptom (cert/x509, webhook or join timeout, connection refused, context deadline), did I check whether it recovered or has a specific upstream cause before deciding is_transient?
 - Did I identify the earliest upstream cause of a non-transient failure, not just the terminal symptom?
+- Did I clear every group the tool results reported in unread_evidence_groups, or explain why that evidence is absent?
 - For a non-transient failure, did I read the artifacts for the 1-3 named resources most central to it?
 - Is suggested_fix a remediation action, not a request for more investigation?
 
@@ -435,6 +437,138 @@ func formatFloorsNudge(state *agentState, opts AgenticOptions) string {
 5. Cite specific file paths and log line numbers in your root_cause. Include enough evidence to explain the causal chain, not just the surface error.
 
 If after this investigation the evidence is genuinely inconclusive, say so explicitly in root_cause rather than speculating.`, strings.Join(unmet, " and "))
+}
+
+const (
+	// maxEvidenceNudges bounds how many times the loop reopens a finalize
+	// attempt because available planned evidence is still unread.
+	maxEvidenceNudges = 2
+	// evidenceNudgeMaxGroups bounds how many unread groups one nudge names.
+	evidenceNudgeMaxGroups = 3
+	// evidenceNudgeMaxCandidates bounds candidate paths listed per named group.
+	evidenceNudgeMaxCandidates = 3
+)
+
+// evidenceGateOutcome is the recorded reason the finalize branch either
+// reopened the investigation or accepted the draft with evidence still unread.
+type evidenceGateOutcome string
+
+const (
+	evidenceGateNudge           evidenceGateOutcome = "nudge"
+	evidenceGateCovered         evidenceGateOutcome = "covered"
+	evidenceGateNoProgress      evidenceGateOutcome = "no_progress"
+	evidenceGateNudgeBudget     evidenceGateOutcome = "nudge_budget"
+	evidenceGateBudgetExhausted evidenceGateOutcome = "budget_exhausted"
+	evidenceGateTimeHeadroom    evidenceGateOutcome = "time_headroom"
+)
+
+// evidenceGate is the anti-thrash state for reopening a finalize attempt while
+// available planned evidence remains unread.
+type evidenceGate struct {
+	nudges           int
+	nudgedAtRevision int
+}
+
+// decide reports whether the loop should reopen the investigation for the
+// unread groups, and why. Only groups with resolved candidate paths are
+// actionable; a group with no candidate is deterministically unavailable.
+func (g *evidenceGate) decide(state *agentState, unread []skills.PlanGroupRef) (evidenceGateOutcome, []skills.PlanGroupRef) {
+	actionable := make([]skills.PlanGroupRef, 0, len(unread))
+	for _, group := range unread {
+		if len(group.CandidatePaths) > 0 {
+			actionable = append(actionable, group)
+		}
+	}
+	switch {
+	case len(actionable) == 0:
+		return evidenceGateCovered, nil
+	case state.budgetExhausted:
+		return evidenceGateBudgetExhausted, actionable
+	case g.nudges >= maxEvidenceNudges:
+		return evidenceGateNudgeBudget, actionable
+	case state.evidenceRevision <= g.nudgedAtRevision:
+		return evidenceGateNoProgress, actionable
+	case time.Until(state.deadline) < 2*state.recentModelRequest+critiqueFinalizationReserve:
+		return evidenceGateTimeHeadroom, actionable
+	}
+	return evidenceGateNudge, actionable
+}
+
+func (g *evidenceGate) recordNudge(state *agentState) {
+	g.nudges++
+	g.nudgedAtRevision = state.evidenceRevision
+}
+
+// draftTriggeredEvidenceGroups returns critique-required groups the initial
+// plan never surfaced, because the recipe fired on the draft's own prose rather
+// than on the failure signal. Candidates are resolved from the bounded artifact
+// tree so the nudge can name real paths; a group with no candidate is dropped.
+func (s *agentState) draftTriggeredEvidenceGroups(out critiqueOutcome, planned []skills.PlanGroupRef) []skills.PlanGroupRef {
+	if len(out.MissingSkillEvidence) == 0 {
+		return nil
+	}
+	seen := make(map[[2]string]bool, len(planned))
+	for _, group := range planned {
+		seen[[2]string{group.SkillID, group.GroupID}] = true
+	}
+	var refs []skills.PlanGroupRef
+	for _, miss := range out.MissingSkillEvidence {
+		for _, group := range miss.Missing {
+			key := [2]string{miss.Skill.ID, group.ID}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			candidates := group.CandidatePaths(s.initialFailureSignal, s.initialArtifactTree.paths, evidenceplan.CandidatePathLimit)
+			if len(candidates) == 0 {
+				continue
+			}
+			refs = append(refs, skills.PlanGroupRef{
+				SkillID:        miss.Skill.ID,
+				GroupID:        group.ID,
+				Description:    group.Description,
+				CandidatePaths: candidates,
+			})
+		}
+	}
+	return refs
+}
+
+// formatEvidenceNudge names the unread evidence groups and their ranked
+// candidate paths so the model can finish the plan it was given.
+func formatEvidenceNudge(groups []skills.PlanGroupRef) string {
+	if len(groups) > evidenceNudgeMaxGroups {
+		groups = groups[:evidenceNudgeMaxGroups]
+	}
+	var b strings.Builder
+	b.WriteString("You attempted to finalize while required evidence for this failure class is still unread. Read at least one candidate path from every group below with read_artifact, tail_artifact, or grep_artifact before producing the final JSON:\n")
+	for _, group := range groups {
+		label := strings.TrimSpace(group.Description)
+		if label == "" {
+			label = group.GroupID
+		}
+		candidates := group.CandidatePaths
+		if len(candidates) > evidenceNudgeMaxCandidates {
+			candidates = candidates[:evidenceNudgeMaxCandidates]
+		}
+		fmt.Fprintf(&b, "\n- %s (%s): %s", group.GroupID, label, strings.Join(candidates, ", "))
+	}
+	b.WriteString("\n\nA candidate path is a starting point, not the whole answer: if it does not contain the evidence, use list_artifacts or find_artifacts on the relevant subtree. Do not repeat reads you have already made. If the evidence genuinely is not present in this build, say so explicitly in root_cause instead of leaving the group unexplained.")
+	return b.String()
+}
+
+func evidencePlanTraceEvent(outcome evidenceGateOutcome, coverage skills.PlanCoverage, unread []skills.PlanGroupRef, draftTriggered int) TraceEvent {
+	plan := &EvidencePlanTrace{
+		Applicable:     coverage.Applicable,
+		Satisfied:      coverage.Satisfied,
+		Unavailable:    coverage.Unavailable,
+		Unmet:          coverage.Unmet,
+		DraftTriggered: draftTriggered,
+	}
+	for _, group := range unread {
+		plan.UnreadGroups = append(plan.UnreadGroups, EvidencePlanGroupTrace{SkillID: group.SkillID, GroupID: group.GroupID})
+	}
+	return TraceEvent{Kind: "evidence_plan", Outcome: string(outcome), EvidencePlan: plan}
 }
 
 // agenticCacheData is the on-disk shape of a cached agentic analysis. Embeds
@@ -682,14 +816,21 @@ func (s *agentState) artifactTreeSet() map[string]bool {
 	return set
 }
 
+// planCoverage classifies the initial ranked evidence plan against the content
+// reads made so far. Returns a zero value when the artifact-tree scan was
+// incomplete, since only a complete scan can prove a group unavailable.
+func (s *agentState) planCoverage() skills.PlanCoverage {
+	if s == nil || s.skillSet == nil || s.initialArtifactTree.failed || s.initialArtifactTree.truncated {
+		return skills.PlanCoverage{}
+	}
+	return s.skillSet.PlanCoverageWithContent(s.initialFailureSignal, s.initialEvidencePlan, s.evidenceArtifactsFull, s.evidenceContentByPath)
+}
+
 // evidencePlanCovered reports whether the complete initial ranked plan was
 // satisfied by non-empty content reads. It is deliberately narrower than the
 // critique gate, which may match additional recipes against the final draft.
 func (s *agentState) evidencePlanCovered() bool {
-	if s == nil || s.skillSet == nil || s.initialArtifactTree.failed || s.initialArtifactTree.truncated {
-		return false
-	}
-	return s.skillSet.CoversPlanWithContent(s.initialFailureSignal, s.initialEvidencePlan, s.evidenceArtifactsFull, s.evidenceContentByPath)
+	return s.planCoverage().Covered()
 }
 
 func (s *agentState) modelRemaining() int { return s.opts.ModelByteBudget - s.modelBytes }
@@ -1078,6 +1219,11 @@ func (c *Client) doAnalyzeAgentic(
 	nudgedAtCalls := -1
 	nudgedAtGCSBytes := -1
 
+	// Available evidence from the initial ranked plan keeps the loop open, with
+	// the same anti-thrash discipline as the floor nudge. Sentinel -1 makes the
+	// first tools-free answer eligible even before any evidence was recorded.
+	evidence := evidenceGate{nudgedAtRevision: -1}
+
 	// critiqueRetries is shared by every deterministic critique repair path.
 	// Each admitted retry may extend maxIters so an in-loop repair has room for
 	// follow-up tool calls plus a re-emit.
@@ -1124,6 +1270,16 @@ agentLoop:
 			// Detect "tools not supported" on the first call only.
 			if iter == 0 && isToolsUnsupportedError(err) {
 				return nil, nil, fmt.Errorf("%w: %v", ErrToolsUnsupported, err)
+			}
+			// A retained parseable draft is better output than losing the whole
+			// analysis to one failed follow-up request.
+			if fallback := state.promoteFallbackDraft(); fallback != nil {
+				finalContent = fallback.content
+				finalProviderItems = fallback.providerItems
+				finalDraftObserved = true
+				recordTrace(loopCtx, TraceEvent{Kind: "draft_recovery", Outcome: "model_request_error", SelectedAttempt: fallback.attempt})
+				log.Printf("  ⚠ agentic request failed (%v); publishing the best prior draft", err)
+				break agentLoop
 			}
 			return nil, nil, fmt.Errorf("agentic iter %d: %w", iter+1, err)
 		}
@@ -1229,6 +1385,66 @@ agentLoop:
 					recordTrace(loopCtx, TraceEvent{Kind: "floor_nudge", Outcome: "retry", Status: floors.traceStatus(), ToolCallCount: state.calls, Bytes: state.gcsBytes})
 					log.Printf("  ↻ agentic nudge: tool_calls=%d/min=%d, gcs_kb=%d/min=%d, asking model to investigate further",
 						state.calls, in.Opts.MinToolCalls, state.gcsBytes/1024, in.Opts.MinGCSBytes/1024)
+					continue
+				}
+			}
+
+			// Evidence gate. The initial ranked plan already resolved candidate
+			// paths for every applicable group; a group with candidates that the
+			// model never read is available evidence left unread, so reopen the
+			// investigation instead of finalizing on a partial picture. Groups
+			// the draft's own prose newly required are included, since the plan
+			// never had the chance to show them. Floors measure effort; this
+			// measures whether the available evidence was actually consulted.
+			coverage := state.planCoverage()
+			unreadGroups := coverage.UnmetGroups
+			draftTriggered := 0
+			if parsedOK {
+				extra := state.draftTriggeredEvidenceGroups(candidateCritique, unreadGroups)
+				draftTriggered = len(extra)
+				unreadGroups = append(unreadGroups, extra...)
+			}
+			if coverage.Applicable > 0 || len(unreadGroups) > 0 {
+				outcome, unread := evidence.decide(state, unreadGroups)
+				recordTrace(loopCtx, evidencePlanTraceEvent(outcome, coverage, unread, draftTriggered))
+				if outcome == evidenceGateNudge {
+					// Seed the selected draft before reopening. Otherwise a later,
+					// worse draft becomes the first candidate the critique gate
+					// sees and wins against an empty selection.
+					if candidateDraft != nil {
+						state.considerDraft(candidateDraft, draftPhase == "semantic_retry" && state.judgeObjected)
+					}
+					echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
+					if msg.Content != nil {
+						echo.Content = msg.Content
+					}
+					messages = append(messages, echo, modelMessage{
+						Role:    "user",
+						Content: strPtr(formatEvidenceNudge(unread)),
+					})
+					var fits bool
+					messages, fits = prepareContextRequest(loopCtx, messages, schemaBytes, headroom, "evidence_nudge")
+					if !fits {
+						if fallback := state.promoteFallbackDraft(); fallback != nil {
+							finalContent = fallback.content
+							finalProviderItems = fallback.providerItems
+						} else {
+							finalContent = candidate
+							finalProviderItems = msg.ProviderItems
+						}
+						finalDraftObserved = parsedOK
+						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
+						recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
+						break agentLoop
+					}
+					// Leave room for the tools-enabled response when the nudge lands
+					// on the configured iteration boundary.
+					if iter+1 >= maxIters {
+						maxIters++
+					}
+					evidence.recordNudge(state)
+					draftPhase = "evidence_retry"
+					log.Printf("  ↻ agentic evidence nudge: %d evidence group(s) still unread, asking model to read them before finalizing", len(unread))
 					continue
 				}
 			}
@@ -2161,6 +2377,11 @@ func decideDraftReplacement(current, candidate *critiqueDraftCandidate, semantic
 	if semanticAccepted && !critiqueQualityAcceptedForPolicy(candidate.quality, policy) {
 		if candidate.quality.HardIssueCount > 0 {
 			decision.reason = draftReasonCandidatePublishedHard
+		} else {
+			// A revision the semantic judge passed can still be blocked by a
+			// retained soft rule such as unread available evidence. Name that
+			// distinctly so telemetry does not read as "not better".
+			decision.reason = draftReasonCandidatePolicyUnaccepted
 		}
 		return decision
 	}
@@ -2817,7 +3038,38 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 		}
 	}
 
+	// Keep the ranked evidence plan alive across turns. Computed after the read
+	// is recorded so a group the model just satisfied is not reported unread,
+	// and dropped when it would push the envelope past the per-call budget.
+	if visiblePayload != nil {
+		if unread := s.unreadEvidenceGroupIDs(); len(unread) > 0 {
+			result.Payload["unread_evidence_groups"] = unread
+			if rebuilt := toolEnvelopeJSON(s, result.Payload); len(rebuilt) <= agenticToolBudget {
+				envelope = rebuilt
+			} else {
+				delete(result.Payload, "unread_evidence_groups")
+			}
+		}
+	}
+
 	return envelope, result.Payload
+}
+
+// unreadEvidenceGroupIDs names the initial-plan groups that have a candidate
+// path in this build but no substantive read yet. Bounded so the reminder
+// cannot meaningfully grow a tool result.
+func (s *agentState) unreadEvidenceGroupIDs() []string {
+	var out []string
+	for _, group := range s.planCoverage().UnmetGroups {
+		if group.GroupID == "" || len(group.CandidatePaths) == 0 {
+			continue
+		}
+		out = append(out, group.GroupID)
+		if len(out) == evidenceNudgeMaxGroups {
+			break
+		}
+	}
+	return out
 }
 
 func analysisEvidenceLineSnapshot(evidence map[string]*analysisChatEvidence, rawPath string) map[int]string {
