@@ -436,7 +436,12 @@ func loadAgentSandboxAnalyzerBenchmarkConfig(t *testing.T) agentSandboxAnalyzerB
 		t.Fatal("BENCH_TRANSPORT_ID must be stable and contain no whitespace")
 	}
 	cfg := agentSandboxAnalyzerBenchmarkConfig{
-		SourceRoot: require("ANALYZER_BENCH_SOURCE_ROOT"), FixtureArchive: strings.TrimSpace(os.Getenv("BENCH_FIXTURE_ARCHIVE")), ProjectDir: require("BENCH_PROJECT_DIR"),
+		SourceRoot: func() string {
+			if value := strings.TrimSpace(os.Getenv("BENCH_SOURCE_ROOT")); value != "" {
+				return value
+			}
+			return require("ANALYZER_BENCH_SOURCE_ROOT")
+		}(), FixtureArchive: strings.TrimSpace(os.Getenv("BENCH_FIXTURE_ARCHIVE")), ProjectDir: require("BENCH_PROJECT_DIR"),
 		PreparedPath: require("ANALYZER_BENCH_PREPARED_JSON"),
 		ArmLabel:     arm, ModelLabel: modelLabel, ProviderPath: require("BENCH_PROVIDER_PATH"), TransportID: transportID,
 		EngineCommit: benchmarkEngineCommit(t, !prepareOnly), Provider: provider, Timeout: timeout, OutputLimit: outputLimit,

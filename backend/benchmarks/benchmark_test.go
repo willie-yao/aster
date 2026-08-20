@@ -806,7 +806,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 			if !ok {
 				t.Fatalf("invalid source repository %q", ref.Repository)
 			}
-			sources = append(sources, tools.RepoSource{ID: ref.ID, Owner: owner, Name: name, Revision: ref.Revision, Reader: ai.NewGitHubRepoReader(owner, name, ref.Revision, "")})
+			sources = append(sources, tools.RepoSource{ID: ref.ID, Owner: owner, Name: name, Revision: ref.Revision, Reader: benchmarkRepoReader(t, ref)})
 		}
 		catalog, err := tools.NewSourceCatalog(bc.primarySourceID, sources)
 		if err != nil {
@@ -2240,4 +2240,59 @@ func TestAssessBenchmarkCaseSeparatesDiagnosisAndPolicyChecks(t *testing.T) {
 	if got.hits != 4 || got.total != 5 || got.diagnosisHits != 1 || got.diagnosisTotal != 2 || got.transientCorrect == nil || !*got.transientCorrect || got.forbiddenPassed != 1 || got.forbiddenTotal != 1 || !slices.Equal(got.missingMust, []string{"cause-b"}) {
 		t.Fatalf("assessment = %+v", got)
 	}
+}
+
+type benchmarkLocalRepoReader struct{ root string }
+
+func (r benchmarkLocalRepoReader) ListTree(ctx context.Context) ([]string, error) {
+	command := exec.CommandContext(ctx, "git", "-C", r.root, "ls-files", "-z")
+	data, err := command.Output()
+	if err != nil {
+		return nil, err
+	}
+	parts := bytes.Split(data, []byte{0})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if len(part) > 0 {
+			out = append(out, filepath.ToSlash(string(part)))
+		}
+	}
+	return out, nil
+}
+
+func (r benchmarkLocalRepoReader) ReadFile(_ context.Context, path string) (string, bool, error) {
+	clean, err := artifacts.SafePath(path)
+	if err != nil {
+		return "", false, err
+	}
+	data, err := os.ReadFile(filepath.Join(r.root, filepath.FromSlash(clean)))
+	if os.IsNotExist(err) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if len(data) > 4<<20 {
+		return "", false, fmt.Errorf("benchmark source file exceeds bound")
+	}
+	return string(data), true, nil
+}
+
+func benchmarkRepoReader(t *testing.T, ref benchmarkSourceRef) tools.RepoReader {
+	t.Helper()
+	root := strings.TrimSpace(os.Getenv("BENCH_SOURCE_ROOT"))
+	if root == "" {
+		owner, name, _ := strings.Cut(ref.Repository, "/")
+		return ai.NewGitHubRepoReader(owner, name, ref.Revision, "")
+	}
+	root = filepath.Join(filepath.Clean(root), ref.ID)
+	head, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	if err != nil || strings.TrimSpace(string(head)) != ref.Revision {
+		t.Fatalf("benchmark source %s revision mismatch", ref.ID)
+	}
+	status, err := exec.Command("git", "-C", root, "status", "--porcelain", "--untracked-files=all").Output()
+	if err != nil || len(status) != 0 {
+		t.Fatalf("benchmark source %s is not clean", ref.ID)
+	}
+	return benchmarkLocalRepoReader{root: root}
 }
