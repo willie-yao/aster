@@ -101,6 +101,7 @@ type AgenticOptions struct {
 
 // SourceEvidenceObservation is private, content-free source range telemetry.
 type SourceEvidenceObservation struct {
+	SourceID  string
 	Tool      string
 	Path      string
 	LineStart int
@@ -318,16 +319,47 @@ Before finalizing, self-check:
 
 A confident "I found X by reading Y at line Z" answer always beats "you should check X". The difference between a useful diagnosis and a useless one is whether the agent did the drilling itself or passed the work back to the user.`
 
-// agenticSourceRepoSection names the project's own repository so the model can
-// classify a cause as this project's or a dependency's. Kept out of agToolDocs
-// because it varies per project.
+// agenticSourceCatalogSection enumerates immutable source selectors and marks
+// the project-owned primary source.
+func agenticSourceCatalogSection(catalog *tools.SourceCatalog) string {
+	if catalog == nil {
+		return ""
+	}
+	primary, ok := catalog.Primary()
+	if !ok {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\nThe project under test is the GitHub repository ")
+	b.WriteString(primary.Owner + "/" + primary.Name)
+	b.WriteString(". Source tools require a source_id from this immutable source catalog:")
+	for _, source := range catalog.Sources() {
+		b.WriteString("\n- source_id `")
+		b.WriteString(source.ID)
+		b.WriteString("`: ")
+		b.WriteString(source.Owner + "/" + source.Name + " @ " + source.Revision)
+		if source.ID == catalog.PrimaryID() {
+			b.WriteString(" (primary project source)")
+		}
+	}
+	b.WriteString("\nUse the matching source_id in every repository tool call. Only repository-relative paths read from the primary project source can be published as project-owned relevant_files. Other catalog entries are dependencies this project only consumes.")
+	return b.String()
+}
+
+func agenticSourceContextSection(catalog *tools.SourceCatalog, owner, name string) string {
+	if catalog != nil {
+		return agenticSourceCatalogSection(catalog)
+	}
+	return agenticSourceRepoSection(owner, name)
+}
+
+// agenticSourceRepoSection names the project when no immutable source is available.
 func agenticSourceRepoSection(owner, name string) string {
 	if strings.TrimSpace(owner) == "" || strings.TrimSpace(name) == "" {
 		return ""
 	}
 	return "\n\nThe project under test is the GitHub repository " + owner + "/" + name +
-		". Any repository-relative source path you read with the repository tools belongs to it." +
-		" Code from any other repository is a dependency this project only consumes."
+		". Code from any other repository is a dependency this project only consumes."
 }
 
 // agForceFinalizePrompt is the user message that forces a JSON-only final round
@@ -511,7 +543,7 @@ func evalFloors(state *agentState, opts AgenticOptions) floorStatus {
 
 type agentState struct {
 	browser            artifacts.Browser
-	repo               tools.RepoReader
+	sources            *tools.SourceCatalog
 	opts               AgenticOptions
 	registry           *tools.Registry
 	enabledTools       []string
@@ -720,9 +752,9 @@ func (s *agentState) setCritiqueOutcome(out critiqueOutcome) {
 //   - Mode is stamped on the returned AIAnalysis and defaults to AgenticMode.
 type AgenticInputs struct {
 	Browser      artifacts.Browser
-	Repo         tools.RepoReader
-	SourceOwner  string
-	SourceName   string
+	Sources      *tools.SourceCatalog
+	ProjectOwner string
+	ProjectName  string
 	Opts         AgenticOptions
 	Registry     *tools.Registry
 	EnabledTools []string
@@ -918,7 +950,7 @@ func effectiveAgenticPromptHash(in AgenticInputs, sysPrompt string) string {
 	if in.PromptHash != "" {
 		return in.PromptHash
 	}
-	return PromptFingerprint(sysPrompt + agToolDocs + agenticSourceRepoSection(in.SourceOwner, in.SourceName))
+	return PromptFingerprint(sysPrompt + agToolDocs + agenticSourceContextSection(in.Sources, in.ProjectOwner, in.ProjectName))
 }
 
 func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt string, start time.Time) (*models.AISummary, *models.AIAnalysis, bool) {
@@ -967,9 +999,7 @@ func (c *Client) doAnalyzeAgentic(
 
 	state := &agentState{
 		browser:           in.Browser,
-		repo:              in.Repo,
-		sourceOwner:       in.SourceOwner,
-		sourceName:        in.SourceName,
+		sources:           in.Sources,
 		opts:              in.Opts,
 		registry:          in.Registry,
 		enabledTools:      in.EnabledTools,
@@ -991,14 +1021,20 @@ func (c *Client) doAnalyzeAgentic(
 	// nil-disables contract would skip the worst-case hallucination scenario.
 	state.readArtifactsFull = map[string]bool{}
 	state.readArtifactsBase = map[string]bool{}
-	if in.Repo != nil {
+	state.sourceOwner = in.ProjectOwner
+	state.sourceName = in.ProjectName
+	if in.Sources != nil {
 		state.readSourceFull = map[string]bool{}
+		if primary, ok := in.Sources.Primary(); ok {
+			state.sourceOwner = primary.Owner
+			state.sourceName = primary.Name
+		}
 	}
 	state.evidenceArtifactsFull = map[string]bool{}
 	state.analysisEvidence = map[string]*analysisChatEvidence{}
 	state.analysisEvidenceRevision = map[string]map[int]int{}
 
-	fullSysPrompt := sysPrompt + agToolDocs + agenticSourceRepoSection(in.SourceOwner, in.SourceName)
+	fullSysPrompt := sysPrompt + agToolDocs + agenticSourceContextSection(in.Sources, in.ProjectOwner, in.ProjectName)
 	state.initialArtifactTree = listInitialArtifactTree(ctx, in.Browser)
 	if seed := buildArtifactTreeSeed(state.initialArtifactTree.paths, state.initialArtifactTree.truncated, artifactTreeSeedBytes(in.Opts)); seed != "" {
 		userPrompt = prependPrompt(userPrompt, seed)
@@ -2720,7 +2756,7 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 
 	env := &tools.Env{
 		Browser:    s.browser,
-		Repo:       s.repo,
+		Sources:    s.sources,
 		Cache:      s.cache,
 		WebURLBase: s.webURLBase,
 	}
@@ -2770,12 +2806,14 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 			}
 		}
 	}
-	if !toolFailed && s.repo != nil {
+	if !toolFailed && s.sources != nil {
 		emitSourceEvidenceObservations(s.sourceObserver, tc.Function.Name, result.Observation)
-		for _, repoPath := range visibleRepoReadPaths(tc, visiblePayload) {
-			s.recordSourceRead(repoPath)
+		if extractToolSourceID(tc.Function.Arguments) == s.sources.PrimaryID() {
+			for _, repoPath := range visibleRepoReadPaths(tc, visiblePayload) {
+				s.recordSourceRead(repoPath)
+			}
+			s.recordSourceContent(tc, visiblePayload)
 		}
-		s.recordSourceContent(tc, visiblePayload)
 	}
 
 	return envelope, result.Payload
@@ -2850,10 +2888,10 @@ func emitSourceEvidenceObservations(observer SourceEvidenceObserver, tool string
 	}
 	switch value := observation.(type) {
 	case repotree.ReadObservation:
-		observer(SourceEvidenceObservation{Tool: tool, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd})
+		observer(SourceEvidenceObservation{SourceID: value.SourceID, Tool: tool, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd})
 	case repotree.GrepObservation:
 		for _, match := range value.Matches {
-			observer(SourceEvidenceObservation{Tool: tool, Path: match.Path, LineStart: match.LineStart, LineEnd: match.LineEnd})
+			observer(SourceEvidenceObservation{SourceID: match.SourceID, Tool: tool, Path: match.Path, LineStart: match.LineStart, LineEnd: match.LineEnd})
 		}
 	}
 }
@@ -2890,6 +2928,19 @@ func visibleRepoReadPaths(tc modelToolCall, payload map[string]interface{}) []st
 // extractToolPathArg pulls the "path" field out of a content-fetching tool's
 // args. Returns "" on parse error or missing field. All content-fetching tools
 // use the same `{"path": "..."}` arg shape.
+func extractToolSourceID(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	var args struct {
+		SourceID string `json:"source_id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(args.SourceID)
+}
+
 func extractToolPathArg(raw string) string {
 	if raw == "" {
 		return ""
