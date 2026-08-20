@@ -338,7 +338,8 @@ func (p *pipeline) runShadowCandidate(ctx context.Context, candidate shadowCandi
 	scan, evidence, planIDs := agentanalysis.WorkspaceEvidenceManifest(prepared.Manifest)
 	record.Scan, record.Evidence, record.PlanIDs = &scan, evidence, planIDs
 	record.ComparisonHash = agentanalysis.WorkspaceComparisonIdentity(record.AttemptHash, prepared.Manifest, request, stage, publishRequest.Hash)
-	analysisCtx, cancelAnalysis := context.WithTimeout(ctx, cfg.Timeout)
+	analysisTimeout := cfg.Timeout + agentanalysis.WorkspacePostModelGraceForSources(len(prepared.Manifest.Sources)) + 5*time.Second
+	analysisCtx, cancelAnalysis := context.WithTimeout(ctx, analysisTimeout)
 	generated, runErr := runner.Analyze(analysisCtx, agentanalysis.WorkspaceSandboxSpec{
 		Request: request, StageRequest: stage, SourceRoot: prepared.SourceRoot, ArtifactRoot: prepared.ArtifactRoot, ExecutionID: record.ID,
 	})

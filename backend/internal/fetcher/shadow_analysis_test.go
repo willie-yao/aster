@@ -319,8 +319,8 @@ func TestShadowAnalysisTimeoutStartsAfterPreparationAndPublication(t *testing.T)
 	p.shadowPublisher = &fakeShadowPublisher{publishDelay: 100 * time.Millisecond}
 	p.shadowAppend = func(string, string, agentanalysis.ShadowRecord) error { return nil }
 	p.runShadowAnalysis(t.Context(), &refreshResult{details: shadowTestDetails("TestFailure")})
-	if runner.deadlineRemaining < 1800*time.Millisecond {
-		t.Fatalf("analysis deadline remaining = %v, want a fresh shadow timeout", runner.deadlineRemaining)
+	if runner.deadlineRemaining < 66*time.Second {
+		t.Fatalf("analysis deadline remaining = %v, want model timeout plus finalization grace", runner.deadlineRemaining)
 	}
 }
 

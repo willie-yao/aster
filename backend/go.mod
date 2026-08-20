@@ -9,6 +9,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.2
 	charm.land/huh/v2 v2.0.3
 	github.com/muesli/cancelreader v0.2.2
+	golang.org/x/sync v0.19.0
 	golang.org/x/sys v0.42.0
 	golang.org/x/term v0.30.0
 	k8s.io/api v0.34.1
@@ -59,7 +60,6 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/oauth2 v0.27.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 	golang.org/x/time v0.9.0 // indirect
 	google.golang.org/protobuf v1.36.5 // indirect
