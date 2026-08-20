@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
@@ -763,20 +764,21 @@ func benchmarkSourceEvidenceToolCalls(usage benchmarkToolUsage) int {
 }
 
 type benchmarkJSONLTrace struct {
-	ModelRequests         int            `json:"model_requests"`
-	ReportedRequests      int            `json:"reported_requests"`
-	ProviderAttempts      int            `json:"provider_attempts"`
-	ProviderAttemptsKnown bool           `json:"provider_attempts_known"`
-	ModelFailures         int            `json:"model_failures"`
-	ToolCalls             int            `json:"tool_calls"`
-	ToolFailures          int            `json:"tool_failures"`
-	InputTokens           int            `json:"input_tokens"`
-	CachedInputTokens     int            `json:"cached_input_tokens"`
-	OutputTokens          int            `json:"output_tokens"`
-	ReasoningTokens       int            `json:"reasoning_tokens"`
-	Finalize              map[string]int `json:"finalize"`
-	FinalizeRecovery      map[string]int `json:"finalize_recovery"`
-	Critique              map[string]int `json:"critique"`
+	ModelRequests         int                         `json:"model_requests"`
+	ReportedRequests      int                         `json:"reported_requests"`
+	ProviderAttempts      int                         `json:"provider_attempts"`
+	ProviderAttemptsKnown bool                        `json:"provider_attempts_known"`
+	ModelFailures         int                         `json:"model_failures"`
+	ToolCalls             int                         `json:"tool_calls"`
+	ToolFailures          int                         `json:"tool_failures"`
+	InputTokens           int                         `json:"input_tokens"`
+	CachedInputTokens     int                         `json:"cached_input_tokens"`
+	OutputTokens          int                         `json:"output_tokens"`
+	ReasoningTokens       int                         `json:"reasoning_tokens"`
+	Finalize              map[string]int              `json:"finalize"`
+	FinalizeRecovery      map[string]int              `json:"finalize_recovery"`
+	Critique              map[string]int              `json:"critique"`
+	GrepCalls             []tools.GrepCallObservation `json:"grep_calls"`
 }
 
 func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, outcome benchmarkOutcome, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, providerRequestCap int, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification, identity benchmarkRunIdentity, evidenceCoverage benchmarkEvidenceCoverage, stageReport benchmarkEvidenceStageReport) {
@@ -834,7 +836,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		CritiqueCachePolicy: string(critiquePolicy),
 		Trace: benchmarkJSONLTrace{
 			ProviderAttemptsKnown: true,
-			Finalize:              map[string]int{}, FinalizeRecovery: map[string]int{}, Critique: map[string]int{},
+			Finalize:              map[string]int{}, FinalizeRecovery: map[string]int{}, Critique: map[string]int{}, GrepCalls: []tools.GrepCallObservation{},
 		},
 		HumanScoreRubricVersion: benchmarkHumanScoreRubricVersion, HumanScoreMax: benchmarkHumanScoreMax,
 		HumanScoreDimensions: append([]string(nil), benchmarkHumanScoreDimensions...),
@@ -932,6 +934,11 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 				result.Trace.ToolCalls++
 				if event.Outcome == "error" {
 					result.Trace.ToolFailures++
+				}
+				if event.Grep != nil {
+					call := *event.Grep
+					call.ReturnedRanges = append([]tools.GrepRangeObservation(nil), call.ReturnedRanges...)
+					result.Trace.GrepCalls = append(result.Trace.GrepCalls, call)
 				}
 			case "finalize":
 				result.Trace.Finalize[event.Outcome+":"+event.ErrorCode]++
@@ -1135,7 +1142,11 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	}
 	snapshot := ai.AnalysisTraceFile{Traces: []ai.AnalysisTrace{{Events: []ai.TraceEvent{
 		{Kind: "model_request", Outcome: "success", Attempts: 2, InputTokens: 10, CachedInputTokens: 4, OutputTokens: 2},
-		{Kind: "tool_call", Outcome: "success"},
+		{Kind: "tool_call", Tool: "grep_repo", Outcome: "success", Grep: &tools.GrepCallObservation{
+			SelectorID: "primary", PathFilter: "*.go", PathFilterSupplied: true, PathFilterLength: 4,
+			ContextLines: 2, MaxMatches: 30, MatchCount: 0, FilesScanned: 4, Outcome: tools.GrepOutcomeZeroMatches,
+			ReturnedRanges: []tools.GrepRangeObservation{},
+		}},
 		{Kind: "finalize", Outcome: "empty", ErrorCode: "unexpected_tool_call"},
 		{Kind: "finalize_recovery", Outcome: "retained_draft"},
 		{Kind: "critique", Outcome: "objected", CritiquePunts: 1},
@@ -1176,6 +1187,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	}
 	if !slices.Equal(result.EvidenceGroupsSelected, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsHit, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsMissed, []string{"secondary-evidence"}) || !slices.Equal(result.EvidenceGroupSources["initiating-error"], []string{"model_tool"}) || result.EvidenceTelemetryVersion != 2 || result.EvidenceCondition != benchmarkEvidenceConditionFixture || result.EvidenceStageSHA256 != benchmarkEvidenceStageSHA256(bc.evidenceGroups) || !result.ModelRequestMade || result.TrialStatus != "contract_violation" || result.EvidenceStages == nil || result.EvidenceRevisions == nil || result.ModelLabel != "model-a" || result.Arm != "variant" || result.EngineCommit != strings.Repeat("b", 40) || result.FixtureSHA256 != strings.Repeat("c", 64) || result.BaselineConsumerCommit != strings.Repeat("d", 40) || result.BaselinePromptSHA256 != strings.Repeat("3", 64) || result.ProjectSHA256 != strings.Repeat("e", 64) || result.EffectivePromptSHA256 != strings.Repeat("f", 64) || result.SkillSetHash != strings.Repeat("1", 64) || result.EffectiveInputSHA256 != strings.Repeat("2", 64) || result.APIMode != ai.APIChatCompletions || result.ProviderPath != "github-copilot/claude-sonnet-4.6" || result.TransportID != "copilot-structural-proxy-v1" || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.IsTransient == nil || *result.IsTransient || result.SignalHits != 2 || result.SignalTotal != 2 || result.DiagnosisSignalHits != 2 || result.DiagnosisSignalTotal != 2 || result.TransientCorrect != nil || result.ForbiddenChecksPassed != 0 || result.ForbiddenChecksTotal != 0 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
 		result.Trace.Finalize["empty:unexpected_tool_call"] != 1 || result.Trace.Critique["punts"] != 1 || result.GCSBytes != 42 ||
+		len(result.Trace.GrepCalls) != 1 || result.Trace.GrepCalls[0].Outcome != tools.GrepOutcomeZeroMatches || result.Trace.GrepCalls[0].ContextLines != 2 || result.Trace.GrepCalls[0].FilesScanned != 4 ||
 		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || result.CritiquePassed == nil || !*result.CritiquePassed || !result.BudgetExhausted ||
 		result.FloorNudges != 1 || !slices.Equal(result.FloorNudgeReasons, []string{"gcs_bytes"}) ||
 		!slices.Equal(result.ToolNames, []string{"read_artifact", "read_repo_file"}) || !slices.Equal(result.ToolCounts, []string{"read_artifact=1", "read_repo_file=1"}) ||

@@ -3,6 +3,7 @@ package repotree
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -168,6 +169,64 @@ func TestGrepRepoReturnsPrivateCanonicalMatchRanges(t *testing.T) {
 	}
 	if result.ContentBytes == 0 {
 		t.Fatal("content-bearing grep reported zero content bytes")
+	}
+}
+
+func TestGrepRepoContextLinesDefaultAndExplicitZero(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		args         map[string]interface{}
+		want         GrepMatchObservation
+		contextLines int
+	}{
+		{
+			name:         "omitted",
+			args:         map[string]interface{}{"source_id": tools.PrimarySourceID, "pattern": "timeout bug", "path_glob": "*.go"},
+			want:         GrepMatchObservation{SourceID: tools.PrimarySourceID, Path: "pkg/cloud/services/vm.go", LineStart: 1, LineEnd: 4},
+			contextLines: 2,
+		},
+		{
+			name:         "explicit zero",
+			args:         map[string]interface{}{"source_id": tools.PrimarySourceID, "pattern": "timeout bug", "path_glob": "*.go", "context_lines": 0},
+			want:         GrepMatchObservation{SourceID: tools.PrimarySourceID, Path: "pkg/cloud/services/vm.go", LineStart: 3, LineEnd: 3},
+			contextLines: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := (&grepTool{}).Dispatch(context.Background(), envFor(sampleRepo()), mustJSON(tc.args))
+			observation, ok := result.Observation.(GrepObservation)
+			if !ok || len(observation.Matches) != 1 || observation.Matches[0] != tc.want {
+				t.Fatalf("observation=%T %+v, want %+v", result.Observation, result.Observation, tc.want)
+			}
+			call := observation.Call
+			wantRanges := []tools.GrepRangeObservation{{SelectorID: tc.want.SourceID, Path: tc.want.Path, LineStart: tc.want.LineStart, LineEnd: tc.want.LineEnd}}
+			if call.SelectorID != tools.PrimarySourceID || call.PathFilter != "*.go" || call.ContextLines != tc.contextLines || call.MaxMatches != 30 || call.MatchCount != 1 || call.Outcome != tools.GrepOutcomeMatched || !reflect.DeepEqual(call.ReturnedRanges, wantRanges) {
+				t.Fatalf("call=%+v, want ranges %+v", call, wantRanges)
+			}
+		})
+	}
+}
+
+func TestGrepRepoRetainsZeroMatchAndErrorTelemetry(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		args    map[string]interface{}
+		outcome string
+	}{
+		{name: "zero matches", args: map[string]interface{}{"source_id": tools.PrimarySourceID, "pattern": "missing", "path_glob": "*.go"}, outcome: tools.GrepOutcomeZeroMatches},
+		{name: "invalid regex", args: map[string]interface{}{"source_id": tools.PrimarySourceID, "pattern": "(", "path_glob": "*.go"}, outcome: tools.GrepOutcomeError},
+		{name: "unknown source", args: map[string]interface{}{"source_id": "unknown", "pattern": "match", "path_glob": "*.go"}, outcome: tools.GrepOutcomeError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := (&grepTool{}).Dispatch(context.Background(), envFor(sampleRepo()), mustJSON(tc.args))
+			observation, ok := result.Observation.(GrepObservation)
+			if !ok || observation.Call.Outcome != tc.outcome || observation.Call.MatchCount != 0 || len(observation.Call.ReturnedRanges) != 0 {
+				t.Fatalf("observation=%T %+v", result.Observation, result.Observation)
+			}
+			if observation.Call.PathFilter != "*.go" || observation.Call.ContextLines != 2 || observation.Call.MaxMatches != 30 {
+				t.Fatalf("call=%+v", observation.Call)
+			}
+		})
 	}
 }
 

@@ -3007,19 +3007,19 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 	if !agenticToolEnabled(s.enabledTools, tc.Function.Name) {
 		message := fmt.Sprintf("tool %q is not enabled for this analysis", tc.Function.Name)
 		payload := map[string]interface{}{"error": message}
-		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "disabled"})
+		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "disabled", Grep: undispatchedGrepObservation(tc)})
 		return toolErrJSON(message), payload
 	}
 	if s.modelRemaining() <= 0 {
 		s.budgetExhausted = true
-		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "model_budget_exhausted"})
+		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "model_budget_exhausted", Grep: undispatchedGrepObservation(tc)})
 		message := "model byte budget exhausted; produce final JSON now"
 		payload := map[string]interface{}{"error": message}
 		return toolErrJSON(message), payload
 	}
 	if !isRepoTool(tc.Function.Name) && s.gcsRemaining() <= 0 {
 		s.budgetExhausted = true
-		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "gcs_budget_exhausted"})
+		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "gcs_budget_exhausted", Grep: undispatchedGrepObservation(tc)})
 		message := "GCS byte budget exhausted; produce final JSON now"
 		payload := map[string]interface{}{"error": message}
 		return toolErrJSON(message), payload
@@ -3044,7 +3044,14 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 	if toolFailed {
 		toolOutcome = "error"
 	}
-	recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: toolOutcome, Bytes: result.BytesFetched})
+	grep := grepCallObservation(result.Observation)
+	if grep == nil {
+		grep = undispatchedGrepObservation(tc)
+	}
+	if grep != nil && toolFailed {
+		grep.Outcome = tools.GrepOutcomeError
+	}
+	recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: toolOutcome, Bytes: result.BytesFetched, Grep: grep})
 	envelope := toolEnvelopeJSON(s, result.Payload)
 	visiblePayload := modelVisibleToolPayload(envelope)
 
@@ -3102,6 +3109,62 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 	}
 
 	return envelope, result.Payload
+}
+
+func grepCallObservation(observation any) *tools.GrepCallObservation {
+	var value tools.GrepCallObservation
+	switch observation := observation.(type) {
+	case tools.GrepCallObservation:
+		value = observation
+	case repotree.GrepObservation:
+		value = observation.Call
+	default:
+		return nil
+	}
+	value.ReturnedRanges = append([]tools.GrepRangeObservation(nil), value.ReturnedRanges...)
+	return &value
+}
+
+func undispatchedGrepObservation(tc modelToolCall) *tools.GrepCallObservation {
+	switch tc.Function.Name {
+	case "grep_artifact":
+		args := struct {
+			Path         string        `json:"path"`
+			ContextLines tools.FlexInt `json:"context_lines"`
+			MaxMatches   tools.FlexInt `json:"max_matches"`
+		}{ContextLines: -1}
+		_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+		contextLines, maxMatches := tools.EffectiveGrepLimits(args.ContextLines, args.MaxMatches)
+		path, err := artifacts.SafePath(args.Path)
+		if err != nil {
+			path = args.Path
+		}
+		filter, supplied, length, redacted := tools.ContentFreePathFilter(path)
+		return &tools.GrepCallObservation{
+			SelectorID: "artifact-workspace", PathFilter: filter, PathFilterSupplied: supplied,
+			PathFilterLength: length, PathFilterRedacted: redacted,
+			ContextLines: contextLines, MaxMatches: maxMatches, Outcome: tools.GrepOutcomeError,
+			ReturnedRanges: []tools.GrepRangeObservation{},
+		}
+	case "grep_repo":
+		args := struct {
+			SourceID     string        `json:"source_id"`
+			PathGlob     string        `json:"path_glob"`
+			ContextLines tools.FlexInt `json:"context_lines"`
+			MaxMatches   tools.FlexInt `json:"max_matches"`
+		}{ContextLines: -1}
+		_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+		contextLines, maxMatches := tools.EffectiveGrepLimits(args.ContextLines, args.MaxMatches)
+		filter, supplied, length, redacted := tools.ContentFreePathFilter(args.PathGlob)
+		return &tools.GrepCallObservation{
+			SelectorID: tools.ContentFreeSelectorID(args.SourceID), PathFilter: filter, PathFilterSupplied: supplied,
+			PathFilterLength: length, PathFilterRedacted: redacted,
+			ContextLines: contextLines, MaxMatches: maxMatches, Outcome: tools.GrepOutcomeError,
+			ReturnedRanges: []tools.GrepRangeObservation{},
+		}
+	default:
+		return nil
+	}
 }
 
 // unreadEvidenceGroupIDs names the initial-plan groups that have a candidate

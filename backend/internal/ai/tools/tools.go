@@ -59,7 +59,8 @@ type Result struct {
 	BytesFetched    int
 	ContentBytes    int
 	// Observation carries caller-private structured metadata that is never
-	// serialized into the tool response or content-free telemetry.
+	// serialized into the tool response. Callers may map content-free fields
+	// into private telemetry.
 	Observation any
 }
 
