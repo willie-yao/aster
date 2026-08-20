@@ -59,8 +59,8 @@ import {
 } from "../lib/analysisChat";
 import { fileToUrl, type FileToUrlContext } from "../lib/utils";
 import { AnalysisCorrectionAPIError, confirmAnalysisCorrection, previewAnalysisCorrection } from "../lib/analysisCorrections";
-import { soft } from "../theme";
-import { overviewLayout, overviewTypography } from "../theme/overview";
+import { soft, softChipSx } from "../theme";
+import { overviewLayout, overviewTypography, sectionBandSx } from "../theme/overview";
 import type {
   AnalysisChatAssessment,
   AnalysisChatAttempt,
@@ -191,7 +191,7 @@ function UserMessage({ content }: { content: string }) {
         // A squared block with the page's own surface and divider, rather than
         // an asymmetric chat bubble. The left accent is what marks it as the
         // reader's turn, so the shape does not have to.
-        borderRadius: "4px",
+        borderRadius: 1,
         bgcolor: "surface.containerHigh",
         border: "1px solid",
         borderColor: "divider",
@@ -262,7 +262,7 @@ function AssistantMessage({
       sx={{
         border: unverified ? "2px dashed" : "1px solid",
         borderColor: (theme) => soft(theme, accent, unverified ? 0.55 : 0.24),
-        borderRadius: "4px",
+        borderRadius: 1,
         bgcolor: (theme) => soft(theme, accent, unverified ? 0.09 : 0.045),
         overflow: "hidden",
       }}
@@ -278,11 +278,19 @@ function AssistantMessage({
         </Typography>
         <Chip
           size="small"
-          color={unverified ? "warning" : assessment.color}
-          variant={unverified ? "filled" : "outlined"}
           icon={unverified ? <ReportProblemOutlined /> : undefined}
           label={unverified ? "Unverified" : assessment.label}
-          sx={{ ml: "auto", height: 24, fontSize: "0.68rem", fontWeight: unverified ? 750 : undefined }}
+          sx={(theme) => ({
+            ml: "auto",
+            height: 22,
+            fontSize: "0.68rem",
+            // A verdict is a label, not a control, so it is tinted rather than
+            // outlined. Only an unverified answer keeps a filled chip's weight.
+            ...(unverified
+              ? { bgcolor: "warning.main", color: "warning.contrastText", fontWeight: 750 }
+              : { fontWeight: 600, ...softChipSx(theme, accent) }),
+            "& .MuiChip-icon": { color: "inherit", fontSize: 15 },
+          })}
         />
       </Stack>
       <Stack spacing={1.5} sx={{ p: 1.5 }}>
@@ -297,11 +305,20 @@ function AssistantMessage({
           <RichText text={message.content} steps fileCtx={fileCtx} />
         </Typography>
         {(message.elapsed_ms || message.provider_ms || message.validation_retries) && (
-          <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: "wrap" }}>
-            {message.elapsed_ms ? <Chip size="small" variant="outlined" label={`${(message.elapsed_ms / 1000).toFixed(1)}s total`} /> : null}
-            {message.provider_ms ? <Chip size="small" variant="outlined" label={`${(message.provider_ms / 1000).toFixed(1)}s provider`} /> : null}
-            {message.validation_retries ? <Chip size="small" color="warning" variant="outlined" label={`${message.validation_retries} response-contract repair`} /> : null}
-          </Stack>
+          // Timings are data, so they read as the same monospace run the rest
+          // of the dashboard uses, not as a row of bordered chips.
+          <Typography component="div" color="textSecondary" sx={overviewTypography.data}>
+            {[
+              message.elapsed_ms ? `${(message.elapsed_ms / 1000).toFixed(1)}s total` : null,
+              message.provider_ms ? `${(message.provider_ms / 1000).toFixed(1)}s provider` : null,
+            ].filter(Boolean).join(" · ")}
+            {message.validation_retries ? (
+              <Box component="span" sx={{ color: "warning.main" }}>
+                {(message.elapsed_ms || message.provider_ms) ? " · " : ""}
+                {`${message.validation_retries} response-contract repair`}
+              </Box>
+            ) : null}
+          </Typography>
         )}
 
         {message.citations && message.citations.length > 0 && (
@@ -367,7 +384,7 @@ function AssistantMessage({
         {message.proposed_revision && (
           <Box
             sx={{
-              borderRadius: "4px",
+              borderRadius: 1,
               border: "1px solid",
               borderColor: (theme) => soft(theme, "warning", 0.35),
               bgcolor: (theme) => soft(theme, "warning", 0.07),
@@ -379,7 +396,17 @@ function AssistantMessage({
               <Typography variant="label" sx={{ fontWeight: 750 }}>
                 Proposed revision
               </Typography>
-              <Chip size="small" label="Not published" color="warning" variant="outlined" sx={{ ml: "auto", height: 22 }} />
+              <Chip
+                size="small"
+                label="Not published"
+                sx={(theme) => ({
+                  ml: "auto",
+                  height: 22,
+                  fontSize: "0.68rem",
+                  fontWeight: 600,
+                  ...softChipSx(theme, "warning"),
+                })}
+              />
             </Stack>
             <Typography variant="caption" color="textSecondary" sx={{ display: "block", fontWeight: 700 }}>
               Revised root cause
@@ -396,11 +423,11 @@ function AssistantMessage({
             {correctionEnabled && !unverified && message.request_id && (
               <Button
                 size="small"
-                variant="outlined"
+                variant="text"
                 color="warning"
-                startIcon={<PublishedWithChangesOutlined />}
+                startIcon={<PublishedWithChangesOutlined sx={{ fontSize: 17 }} />}
                 onClick={() => onReviewCorrection(message.request_id!)}
-                sx={{ mt: 1.5 }}
+                sx={{ mt: 1.5, ml: -0.5 }}
               >
                 Review correction
               </Button>
@@ -412,11 +439,10 @@ function AssistantMessage({
         {chatFixEnabled && !unverified && fixEligible && message.request_id && (
           <Button
             size="small"
-            variant="outlined"
-            color="warning"
-            startIcon={<BuildOutlined />}
+            variant="text"
+            startIcon={<BuildOutlined sx={{ fontSize: 17 }} />}
             onClick={onUseForFix}
-            sx={{ alignSelf: "flex-start" }}
+            sx={{ alignSelf: "flex-start", ml: -0.5 }}
           >
             Use this finding in a fix proposal
           </Button>
@@ -461,7 +487,7 @@ function ThinkingState({
   const elapsed = Number.isFinite(started) ? Math.max(0, Math.floor((now - started) / 1000)) : null;
   return (
     <Stack role="status" aria-live="polite" direction="row" spacing={1.25} sx={{
-      alignItems: "center", borderRadius: "4px", px: 1.5, py: 1.25,
+      alignItems: "center", borderRadius: 1, px: 1.5, py: 1.25,
       bgcolor: (theme) => soft(theme, "primary", 0.055),
     }}>
       <Stack direction="row" spacing={0.4} aria-hidden="true">
@@ -1043,20 +1069,11 @@ export function AnalysisChat({
   }
 
   return (
-    <Box
-      sx={{
-        mt: detailAppearance ? 0 : 0.5,
-        ...(detailAppearance && {
-          "& .MuiAlert-root, & .MuiInputBase-root, & .MuiButton-root, & .MuiIconButton-root, & .MuiChip-root": {
-            borderRadius: "4px",
-          },
-        }),
-      }}
-    >
+    <Box sx={{ mt: detailAppearance ? 0 : 0.5 }}>
       {!detailAppearance && <Divider sx={{ mb: 1.5 }} />}
       <Box
         sx={{
-          borderRadius: detailAppearance ? "4px" : "14px",
+          borderRadius: 1,
           border: detailAppearance ? 0 : "1px solid",
           borderColor: (theme) => soft(theme, "primary", 0.3),
           bgcolor: detailAppearance ? "transparent" : (theme) => soft(theme, "primary", 0.025),
@@ -1075,9 +1092,8 @@ export function AnalysisChat({
             // transparent bar with a tinted icon tile.
             ...(detailAppearance && {
               minHeight: overviewLayout.categoryBandMinHeight,
-              bgcolor: "surface.containerHigh",
               borderBlock: "1px solid",
-              boxShadow: "inset 3px 0 0 var(--mui-palette-primary-main)",
+              ...sectionBandSx(),
             }),
             borderBottom: expanded || detailAppearance ? "1px solid" : 0,
             borderColor: "divider",
@@ -1107,7 +1123,7 @@ export function AnalysisChat({
                 flex: 1,
                 justifyContent: "flex-start",
                 gap: 1,
-                borderRadius: detailAppearance ? "4px" : "10px",
+                borderRadius: 1,
                 minHeight: 44,
                 px: 0.5,
                 py: 0.75,
@@ -1123,7 +1139,7 @@ export function AnalysisChat({
                   height: detailAppearance ? 20 : 30,
                   display: "grid",
                   placeItems: "center",
-                  borderRadius: detailAppearance ? "4px" : "9px",
+                  borderRadius: 1,
                   bgcolor: detailAppearance ? "transparent" : (theme) => soft(theme, "primary", 0.14),
                   color: "primary.main",
                   flexShrink: 0,
@@ -1319,7 +1335,7 @@ export function AnalysisChat({
                     slotProps={{
                       input: {
                         sx: {
-                          borderRadius: detailAppearance ? "4px" : "10px",
+                          borderRadius: 1,
                           bgcolor: "background.paper",
                           fontSize: "0.875rem",
                         },
@@ -1337,7 +1353,7 @@ export function AnalysisChat({
                         sx={{
                           width: 48,
                           height: 48,
-                          borderRadius: detailAppearance ? "4px" : "10px",
+                          borderRadius: 1,
                           bgcolor: "primary.main",
                           color: "primary.contrastText",
                           "&:hover": { bgcolor: "primary.dark" },
@@ -1358,7 +1374,7 @@ export function AnalysisChat({
                           sx={{
                             width: 48,
                             height: 48,
-                            borderRadius: detailAppearance ? "4px" : "10px",
+                            borderRadius: 1,
                             border: "1px solid",
                             borderColor: "divider",
                             color: "text.secondary",

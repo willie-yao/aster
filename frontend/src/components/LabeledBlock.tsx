@@ -19,7 +19,7 @@ export function LabeledBlock({
   return (
     <Box
       sx={{
-        borderRadius: "10px",
+        borderRadius: 1,
         borderLeft: "3px solid",
         borderColor: (t) => soft(t, accent, 0.5),
         bgcolor: (t) => (t.vars ?? t).palette.surface.containerLow,

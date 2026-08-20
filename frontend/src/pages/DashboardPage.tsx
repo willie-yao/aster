@@ -39,7 +39,7 @@ function EmptyDashboardState({ generatedAt }: { generatedAt: string }) {
         p: { xs: 3, sm: 5 },
         border: "1px solid",
         borderColor: "divider",
-        borderRadius: "6px",
+        borderRadius: 1,
         bgcolor: "surface.container",
         textAlign: "center",
       }}

@@ -4,13 +4,14 @@ import Button from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
-import DialogTitle from "@mui/material/DialogTitle";
 import Divider from "@mui/material/Divider";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { FactCheckOutlined, PublishedWithChangesOutlined } from "@mui/icons-material";
 import type { AnalysisCorrectionPreview } from "../types/corrections";
 import { soft } from "../theme";
+import { DialogHeader } from "./ActionDialog";
+import { dialogGutter, dialogPaperSx } from "../theme/overview";
 
 export function AnalysisCorrectionDialog({ preview, open, busy, error, onClose, onConfirm }: {
   preview: AnalysisCorrectionPreview | null;
@@ -22,12 +23,19 @@ export function AnalysisCorrectionDialog({ preview, open, busy, error, onClose, 
 }) {
   if (!preview) return null;
   return (
-    <Dialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth="md">
-      <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-        <PublishedWithChangesOutlined color="warning" />
-        Confirm analysis correction
-      </DialogTitle>
-      <DialogContent>
+    <Dialog
+      open={open}
+      onClose={busy ? undefined : onClose}
+      fullWidth
+      maxWidth="md"
+      slotProps={{ paper: { sx: dialogPaperSx } }}
+    >
+      <DialogHeader
+        icon={<PublishedWithChangesOutlined sx={{ fontSize: 18 }} />}
+        accent="warning"
+        title="Confirm analysis correction"
+      />
+      <DialogContent dividers sx={{ px: dialogGutter, py: 2 }}>
         {error && <Alert severity="error" variant="outlined" sx={{ mb: 2 }}>{error}</Alert>}
         <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
           This publishes a dashboard overlay. The original generated analysis remains preserved and can be restored.
@@ -37,7 +45,7 @@ export function AnalysisCorrectionDialog({ preview, open, busy, error, onClose, 
             <Typography variant="label" color="textSecondary">Original root cause</Typography>
             <Typography variant="body2" sx={{ mt: 0.5, whiteSpace: "pre-line" }}>{preview.original.root_cause}</Typography>
           </Box>
-          <Box sx={{ border: "1px solid", borderColor: (theme) => soft(theme, "warning", 0.4), bgcolor: (theme) => soft(theme, "warning", 0.07), borderRadius: "10px", p: 1.5 }}>
+          <Box sx={{ border: "1px solid", borderColor: (theme) => soft(theme, "warning", 0.4), bgcolor: (theme) => soft(theme, "warning", 0.07), borderRadius: 1, p: 1.5 }}>
             <Typography variant="label" color="warning">Corrected root cause</Typography>
             <Typography variant="body2" sx={{ mt: 0.5, whiteSpace: "pre-line" }}>{preview.proposed.root_cause}</Typography>
             <Divider sx={{ my: 1.5 }} />
@@ -59,8 +67,8 @@ export function AnalysisCorrectionDialog({ preview, open, busy, error, onClose, 
           </Box>
         </Stack>
       </DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2.5 }}>
-        <Button onClick={onClose} disabled={busy}>Cancel</Button>
+      <DialogActions sx={{ px: dialogGutter, py: 2 }}>
+        <Button color="inherit" onClick={onClose} disabled={busy}>Cancel</Button>
         <Button variant="contained" color="warning" onClick={onConfirm} disabled={busy}>
           {busy ? "Publishing correction" : "Publish correction"}
         </Button>

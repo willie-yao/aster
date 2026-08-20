@@ -226,15 +226,19 @@ test("the chat wears the page's section band instead of its own chat styling", (
   // would otherwise satisfy these assertions on its own.
   const header = chat.slice(
     chat.indexOf("{!detailAppearance && <Divider"),
-    chat.indexOf("canStartFixInvestigation &&"),
+    chat.indexOf("<Collapse in={expanded}"),
   );
   assert.ok(header.length > 0, "chat header block not found");
+  assert.ok(
+    header.length < chat.length / 2,
+    "chat header slice ran past its end anchor and no longer scopes these assertions",
+  );
 
   // On a detail page the chat is a peer of Run history and Runtime trend, so
-  // its header carries the same surface and accent those bands use.
-  assert.match(header, /bgcolor: "surface\.containerHigh"/);
-  assert.match(header, /boxShadow: "inset 3px 0 0 var\(--mui-palette-primary-main\)"/);
-  assert.match(band, /boxShadow: "inset 3px 0 0 var\(--mui-palette-primary-main\)"/);
+  // its header carries the same surface and accent those bands use, read from
+  // the one helper rather than restated per surface.
+  assert.match(header, /sectionBandSx\(\)/);
+  assert.match(band, /sectionBandSx\(\)/);
   assert.match(header, /minHeight: overviewLayout\.categoryBandMinHeight/);
   assert.match(header, /overviewTypography\.categoryHeading/);
 
@@ -243,8 +247,11 @@ test("the chat wears the page's section band instead of its own chat styling", (
   assert.doesNotMatch(chat, /borderRadius: "10px 10px 3px 10px"/);
 
   // Chips were the one control the radius reset did not reach, so they
-  // rendered as 16px pills beside 4px chips everywhere else.
-  assert.match(chat, /MuiChip-root": \{\s*borderRadius: "4px"/s);
+  // rendered as pills beside the squared chips everywhere else. The reset is
+  // gone now: the theme token itself is the page radius, so no surface has to
+  // drag MUI primitives back to it.
+  assert.doesNotMatch(chat, /MuiChip-root": \{\s*borderRadius/s);
+  assert.match(source("src/theme/createAppTheme.ts"), /shape: \{ borderRadius: 4 \}/);
 
   // The attempts counter belongs in the band metadata slot, not floating at
   // the bottom of the panel, and must not appear in both.
@@ -255,10 +262,9 @@ test("the chat wears the page's section band instead of its own chat styling", (
   // wraps the toggle rather than sitting within it.
   assert.match(header, /component=\{detailAppearance \? "h3" : "div"\}[\s\S]*<ButtonBase/);
 
-  // Every container in the conversation squares to the page's single radius.
-  // These are plain Box/Stack elements, so the MUI descendant reset above
-  // cannot reach them and they have to be squared at the source.
-  assert.doesNotMatch(chat, /borderRadius: "1[02]px"/);
+  // Every container in the conversation squares to the page's single radius,
+  // including the ones that used to round themselves off a detail page.
+  assert.doesNotMatch(chat, /borderRadius: "\d+px"/);
 });
 
 test("the severity chip is suppressed exactly where a header already states it", () => {

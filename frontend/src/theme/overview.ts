@@ -75,3 +75,29 @@ export const overviewLayout = {
   categoryBandMinHeight: 44,
   ledgerRowMinHeight: 52,
 } as const;
+
+/**
+ * The header band shared by detail sections and action dialogs: a raised
+ * surface ruled off from its body and marked with an accent edge. Keeping one
+ * definition is what stops an overlay from reading as a different product.
+ */
+export function sectionBandSx(accent: "primary" | "warning" = "primary") {
+  return {
+    bgcolor: "surface.containerHigh",
+    borderColor: "divider",
+    boxShadow: `inset 3px 0 0 var(--mui-palette-${accent}-main)`,
+  } as const;
+}
+
+/**
+ * Gutter shared by every action dialog's title, content, and actions. Dialogs
+ * sit over dense detail pages, so they stay close to the page's own rhythm.
+ */
+export const dialogGutter = 2.5;
+
+/** Squared, flat dialog surface. Radius comes from the theme. */
+export const dialogPaperSx = {
+  border: "1px solid",
+  borderColor: "divider",
+  backgroundImage: "none",
+} as const;

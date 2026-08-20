@@ -95,6 +95,9 @@ const { TestCaseTable, EvidenceSourceLink } = (await vite.ssrLoadModule("/src/co
 const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
   defaultTheme: Theme;
 };
+const { RichText } = (await vite.ssrLoadModule("/src/components/RichText.tsx")) as {
+  RichText: (props: { text: string; steps?: boolean }) => ReturnType<typeof createElement>;
+};
 await vite.close();
 
 function render(element: ReturnType<typeof createElement>): string {
@@ -663,9 +666,17 @@ test("expanded evidence source links keep context and a 44px target", () => {
 
 test("shared detail foundations follow the Overview structural language", () => {
   const band = readFileSync(resolve(process.cwd(), "src/components/DetailSectionBand.tsx"), "utf8");
+  const overview = readFileSync(resolve(process.cwd(), "src/theme/overview.ts"), "utf8");
   const history = readFileSync(resolve(process.cwd(), "src/components/RunHistory.tsx"), "utf8");
 
-  assert.match(band, /boxShadow: "inset 3px 0 0 var\(--mui-palette-primary-main\)"/);
+  // Detail sections and action dialogs read the accent edge from one helper,
+  // so an overlay cannot drift into looking like a different product.
+  assert.match(overview, /boxShadow: `inset 3px 0 0 var\(--mui-palette-\$\{accent\}-main\)`/);
+  assert.match(band, /sectionBandSx\(\)/);
+  assert.match(
+    readFileSync(resolve(process.cwd(), "src/components/ActionDialog.tsx"), "utf8"),
+    /sectionBandSx\(accent\)/,
+  );
   assert.match(band, /gridTemplateAreas: \{ xs: '"title" "metadata"'/);
   assert.match(history, /width: \{ xs: 44, sm: 32 \}/);
   assert.match(history, /height: \{ xs: 44, sm: 32 \}/);
@@ -673,4 +684,30 @@ test("shared detail foundations follow the Overview structural language", () => 
   assert.match(history, /outlineColor: isSelected \? "primary\.main" : "transparent"/);
   assert.match(history, /boxShadow: "0 0 0 5px var\(--mui-palette-background-default\), 0 0 0 7px var\(--mui-palette-text-primary\)"/);
   assert.match(history, /Scroll runs ↔/);
+});
+
+test("analysis prose renders bold emphasis instead of printing its asterisks", () => {
+  const html = render(createElement(RichText, {
+    text: "The build log shows **16:19:54** and then **FAILED** at the end.",
+    steps: true,
+  }));
+
+  assert.doesNotMatch(html, /\*\*/);
+  assert.match(html, /<strong[^>]*>16:19:54<\/strong>/);
+  assert.match(html, /<strong[^>]*>FAILED<\/strong>/);
+
+  // A lone asterisk is arithmetic or a glob, not emphasis, so it stays verbatim.
+  const literal = render(createElement(RichText, { text: "match a*b and 2 * 3" }));
+  assert.match(literal, /a\*b/);
+  assert.doesNotMatch(literal, /<strong/);
+
+  // Bold and code nest either way round. Splitting on one before the other
+  // used to leave the loser's markers sitting in the prose.
+  const boldOverCode = render(createElement(RichText, { text: "**run `go test` now**" }));
+  assert.doesNotMatch(boldOverCode, /\*\*/);
+  assert.match(boldOverCode, /<strong[^>]*>[\s\S]*<code[^>]*>go test<\/code>[\s\S]*<\/strong>/);
+
+  const codeOverBold = render(createElement(RichText, { text: "glob `test/e2e/**/*.go` here" }));
+  assert.match(codeOverBold, /<code[^>]*>test\/e2e\/\*\*\/\*\.go<\/code>/);
+  assert.doesNotMatch(codeOverBold, /<strong/);
 });
