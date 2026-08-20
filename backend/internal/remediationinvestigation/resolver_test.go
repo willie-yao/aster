@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -227,4 +229,36 @@ func writePublishedJob(t *testing.T, dataDir string, detail models.JobDetail) {
 
 func slicesEqual(left, right []string) bool {
 	return len(left) == len(right) && strings.Join(left, "\x00") == strings.Join(right, "\x00")
+}
+
+// TestFrozenCausalGroupDropsReportedRemediation keeps the briefing's unverified
+// suggestion out of the frozen investigation input. Leaving it in would change
+// the input digest whenever the suggestion was refreshed, marking a running
+// investigation stale even though its cause never changed, and would show an
+// unverified fix to the model whose job is to derive a verified one itself.
+func TestFrozenCausalGroupDropsReportedRemediation(t *testing.T) {
+	group := models.PatternCausalGroup{
+		Builds: []string{"1", "2"}, RootCause: "etcd learner never joined", Confidence: "high",
+		Remediation: &models.PatternCausalGroupRemediation{SuggestedFix: "Raise the join budget.", BuildID: "1"},
+	}
+
+	frozen := frozenCausalGroup(group)
+	if frozen.Remediation != nil {
+		t.Fatalf("the reported remediation reached the frozen group: %+v", frozen.Remediation)
+	}
+	// The caller's group is display state the briefing still needs.
+	if group.Remediation == nil {
+		t.Error("freezing cleared the caller's remediation")
+	}
+	if frozen.RootCause != group.RootCause || !slices.Equal(frozen.Builds, group.Builds) {
+		t.Errorf("freezing altered the cause itself: %+v", frozen)
+	}
+
+	// Two refreshes that differ only in the suggestion must freeze identically,
+	// so the digest built from this group cannot drift.
+	other := group
+	other.Remediation = &models.PatternCausalGroupRemediation{SuggestedFix: "Add a readiness guard.", BuildID: "2"}
+	if !reflect.DeepEqual(frozenCausalGroup(other), frozen) {
+		t.Error("a remediation-only refresh changed the frozen group")
+	}
 }

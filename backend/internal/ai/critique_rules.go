@@ -45,6 +45,7 @@ const (
 	CritiqueRuleEvidenceUnavailable     CritiqueRuleID = "evidence.unavailable"
 	CritiqueRuleRemediationPunt         CritiqueRuleID = "remediation.punt"
 	CritiqueRuleTransientConflict       CritiqueRuleID = "transient.conflict"
+	CritiqueRuleRerunOnlyRemediation    CritiqueRuleID = "remediation.rerun_only"
 	CritiqueRuleStructuredInvalid       CritiqueRuleID = "structured.invalid"
 	CritiqueRuleSourceUnverified        CritiqueRuleID = "source.unverified"
 )
@@ -75,6 +76,9 @@ func (o critiqueOutcome) RuleIDs() []CritiqueRuleID {
 	}
 	if o.TransientPersistCount > 0 {
 		rules[CritiqueRuleTransientConflict] = true
+	}
+	if o.RerunOnlyRemediation {
+		rules[CritiqueRuleRerunOnlyRemediation] = true
 	}
 	out := make([]CritiqueRuleID, 0, len(rules))
 	for rule := range rules {
@@ -129,7 +133,8 @@ func knownCritiqueRule(rule CritiqueRuleID) bool {
 		CritiqueRuleCitationQuoteMismatch, CritiqueRuleCitationUnread,
 		CritiqueRuleCitationMissing, CritiqueRuleClaimUncitedLine, CritiqueRuleEvidenceAvailableUnread,
 		CritiqueRuleEvidenceUnavailable, CritiqueRuleRemediationPunt,
-		CritiqueRuleTransientConflict, CritiqueRuleStructuredInvalid,
+		CritiqueRuleTransientConflict, CritiqueRuleRerunOnlyRemediation,
+		CritiqueRuleStructuredInvalid,
 		CritiqueRuleSourceUnverified:
 		return true
 	default:

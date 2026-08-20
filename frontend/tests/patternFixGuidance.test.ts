@@ -291,7 +291,7 @@ test("the pattern-level panel is a fallback for causes with no eligible test", (
   const guidance = source("src/components/PatternFixGuidance.tsx");
 
   assert.match(banner, /const showFixGuidance = Boolean\(jobID && fixGuidanceBuildID && fixCapable && !hasCausalFixTarget\)/);
-  assert.match(banner, /<PatternFixGuidance jobID=\{jobID\} buildID=\{fixGuidanceBuildID\} externalCause=\{patternUpstreamCause\} \/>/);
+  assert.match(banner, /<PatternFixGuidance jobID=\{jobID\} buildID=\{fixGuidanceBuildID\} externalCause=\{patternUpstreamCause\} chatAvailable=\{Boolean\(chatRef\)\} \/>/);
   assert.ok(banner.indexOf("<PatternFixGuidance") < banner.indexOf("<AnalysisChat"));
   assert.equal(banner.match(/<PatternFixGuidance/g)?.length, 1);
   assert.match(guidance, /Fix proposal unavailable/);
@@ -394,4 +394,32 @@ test("guidance keeps a contained mobile action and points to the nearby test led
   assert.match(guidance, /width: \{ xs: "100%", sm: "auto" \}/);
   assert.match(routing, /minHeight: \{ xs: 44, sm: 32 \}/);
   assert.match(grid, /Choose a failed test from the Test results section below/);
+});
+
+test("a cause opens the build its displayed suggestion came from", () => {
+  const otherBuild: BuildResult = { ...groundedRun, build_id: "208726" };
+  const runs = [groundedRun, otherBuild];
+
+  // Without a reported remediation the first eligible member still wins.
+  assert.deepEqual(causalGroupFixTarget(firstGroup, runs), { buildID: "208060", testName: "fails" });
+
+  // With one, the button opens the same analysis the briefing quoted, so the
+  // two surfaces cannot disagree about which build the fix came from.
+  assert.deepEqual(
+    causalGroupFixTarget(
+      { ...firstGroup, remediation: { suggested_fix: "Raise the budget.", build_id: "208726" } },
+      runs,
+    ),
+    { buildID: "208726", testName: "fails" },
+  );
+
+  // A suggestion from a build that cannot start a Fix investigation falls back
+  // rather than leaving the cause with no route at all.
+  assert.deepEqual(
+    causalGroupFixTarget(
+      { ...firstGroup, remediation: { suggested_fix: "Raise the budget.", build_id: "208726" } },
+      [groundedRun, { ...otherBuild, test_cases: [] }],
+    ),
+    { buildID: "208060", testName: "fails" },
+  );
 });

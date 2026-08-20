@@ -36,10 +36,14 @@ export function PatternFixGuidance({
   jobID,
   buildID,
   externalCause,
+  chatAvailable,
 }: {
   jobID: string;
   buildID: string;
   externalCause?: AnalysisCauseLocation | null;
+  // Pattern chat needs a systemic pattern, which this panel does not, so the
+  // chat sentence is only rendered where a chat is actually on the page.
+  chatAvailable?: boolean;
 }) {
   const location = useLocation();
   const destination = `${jobRunPath(jobID, buildID)}#${failedTestGridID}`;
@@ -80,7 +84,7 @@ export function PatternFixGuidance({
             <UpstreamCauseNotice location={externalCause} />
           ) : (
             <Typography color="textSecondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
-              This recurring result is grouped by cause, so it cannot produce one shared issue or Fix PR.
+              This result is grouped by cause, so it cannot produce one shared issue or Fix PR.
               No failed JUnit test in the affected builds meets the Fix eligibility requirements yet, so no cause can start one either.
             </Typography>
           )}
@@ -94,9 +98,10 @@ export function PatternFixGuidance({
             View failed tests
           </Button>
           <Typography color="textSecondary" sx={{ mt: 1, ...overviewTypography.description }}>
-            {externalCause
-              ? "The pattern chat below helps compare causes across builds and confirm the upstream diagnosis against the evidence."
-              : "The pattern chat below helps compare causes across builds. A fix proposal becomes available once an individual failed JUnit test meets every Fix eligibility requirement."}
+            {chatAvailable && (externalCause
+              ? "The pattern chat below helps compare causes across builds and confirm the upstream diagnosis against the evidence. "
+              : "The pattern chat below helps compare causes across builds. ")}
+            {!externalCause && "A fix proposal becomes available once an individual failed JUnit test meets every Fix eligibility requirement."}
           </Typography>
         </Box>
       </Stack>

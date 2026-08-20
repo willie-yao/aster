@@ -282,7 +282,11 @@ func TestPathQualifiedAndBareLineClaimsRequireCitations(t *testing.T) {
 			t.Fatalf("unsupported claim %q survived as %q", text, sanitized.RootCause)
 		}
 	}
-	valid := analysisResponse{RootCause: "The failure is at build-log.txt:2494.", EvidenceCitations: []models.EvidenceCitation{citation}}
+	valid := analysisResponse{
+		RootCause:         "The failure is at build-log.txt:2494.",
+		SuggestedFix:      "Add the missing readiness guard to the controller.",
+		EvidenceCitations: []models.EvidenceCitation{citation},
+	}
 	if out := critiqueDraftWithContent(valid, nil, nil, nil, nil, nil, 0, analysisCitationContext{Evidence: evidence}); !out.Passed {
 		t.Fatalf("valid path-qualified claim failed: %+v", out)
 	}
@@ -311,11 +315,12 @@ func TestSourceLineClaimsCannotUseArtifactCitations(t *testing.T) {
 
 func TestEvidenceOverflowOnlyBlocksLineAwareDrafts(t *testing.T) {
 	context := analysisCitationContext{Full: true}
-	plain := analysisResponse{RootCause: "The controller failed after the API became unavailable."}
+	fix := "Add the missing readiness guard to the controller."
+	plain := analysisResponse{RootCause: "The controller failed after the API became unavailable.", SuggestedFix: fix}
 	if out := critiqueDraftWithContent(plain, nil, nil, nil, nil, nil, 0, context); !out.Passed {
 		t.Fatalf("plain draft was blocked by unused evidence overflow: %+v", out)
 	}
-	lineAware := analysisResponse{RootCause: "The controller failed at line 42."}
+	lineAware := analysisResponse{RootCause: "The controller failed at line 42.", SuggestedFix: fix}
 	if out := critiqueDraftWithContent(lineAware, nil, nil, nil, nil, nil, 0, context); out.Passed || len(out.CitationIssues) == 0 {
 		t.Fatalf("line-aware draft ignored evidence overflow: %+v", out)
 	}

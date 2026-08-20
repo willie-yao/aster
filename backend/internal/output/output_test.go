@@ -572,7 +572,8 @@ func TestPublicPatternOutputDefaultsRepeatedCausalGroupRemediation(t *testing.T)
 	}
 	jobPattern := writtenDetail.PatternAnalyses[0]
 	reportPattern := writtenReport.RecurringPatterns[0]
-	if len(jobPattern.RemediationInvestigations) != 1 || len(reportPattern.RemediationInvestigations) != 1 {
+	if len(jobPattern.RemediationInvestigations) != len(jobPattern.CausalGroups) ||
+		len(reportPattern.RemediationInvestigations) != len(reportPattern.CausalGroups) {
 		t.Fatalf("job summaries=%+v report summaries=%+v", jobPattern.RemediationInvestigations, reportPattern.RemediationInvestigations)
 	}
 	jobSummary := jobPattern.RemediationInvestigations[0]

@@ -2145,6 +2145,9 @@ func critiqueHardIssueCount(out critiqueOutcome) int {
 	if out.TransientPersistCount > 0 {
 		n++
 	}
+	if out.RerunOnlyRemediation {
+		n++
+	}
 	return n
 }
 

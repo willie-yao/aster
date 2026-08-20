@@ -124,7 +124,7 @@ func (r *PublishedResolver) Resolve(ctx context.Context, ref OperationRef) (Reso
 		PatternID: published.pattern.ID, PatternHash: published.pattern.ContentHash,
 		CausalGroupID: published.group.ID, CausalGroupHash: published.group.ContentHash,
 		JobID: published.detail.JobID, JobName: published.detail.Name,
-		Recurrence: published.pattern.Recurrence, Group: published.group,
+		Recurrence: published.pattern.Recurrence, Group: frozenCausalGroup(published.group),
 		Builds: buildRefs, Analyses: analysisRefs, RelevantFiles: slices.Clone(published.relevantFiles),
 		InvestigationSource: current, DestinationPolicy: policy,
 		ConsumerPrompt: r.consumerPrompt, ConsumerPromptHash: HashText(r.consumerPrompt),
@@ -199,7 +199,7 @@ func (r *PublishedResolver) loadPublished(_ context.Context, ref OperationRef) (
 			break
 		}
 	}
-	if group == nil || group.ContentHash != ref.CausalGroupHash || models.PatternCausalGroupHash(*group) != ref.CausalGroupHash || len(group.Builds) < 2 {
+	if group == nil || group.ContentHash != ref.CausalGroupHash || models.PatternCausalGroupHash(*group) != ref.CausalGroupHash || len(group.Builds) == 0 {
 		return publishedSubject{}, ErrOperationStale
 	}
 
@@ -303,6 +303,17 @@ func buildPrefixFor(detail models.JobDetail, run models.BuildResult) (string, er
 		JobLocation: prowbuild.JobLocation{JobType: detail.JobType, Repo: detail.Repo},
 		JobName:     detail.Name, BuildID: run.BuildID, PullNumber: run.PullNumber,
 	}).BuildPath(), nil
+}
+
+// frozenCausalGroup drops the display-only fields from the group an
+// investigation freezes. The reported remediation is an unverified suggestion
+// carried for the briefing: including it would change the input digest on a
+// refresh that did not change the cause, marking a running investigation stale,
+// and would put an unverified fix in front of the model whose whole job is to
+// derive a verified one independently.
+func frozenCausalGroup(group models.PatternCausalGroup) models.PatternCausalGroup {
+	group.Remediation = nil
+	return group
 }
 
 func canonicalRelevantFiles(values []string) ([]string, error) {

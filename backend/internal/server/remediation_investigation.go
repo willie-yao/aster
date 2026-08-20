@@ -115,9 +115,9 @@ func causalRemediationErrorDetails(err error) (int, string) {
 	case errors.Is(err, remediationinvestigation.ErrOperationNotFound):
 		return http.StatusNotFound, "remediation investigation subject not found"
 	case errors.Is(err, remediationinvestigation.ErrOperationStale):
-		return http.StatusConflict, "the displayed recurring cause is stale"
+		return http.StatusConflict, "the displayed cause is stale"
 	case errors.Is(err, remediationinvestigation.ErrOperationInactive):
-		return http.StatusConflict, "the recurring cause is no longer active"
+		return http.StatusConflict, "the cause is no longer active"
 	case errors.Is(err, remediationinvestigation.ErrOperationRefreshRunning):
 		return http.StatusConflict, "dashboard refresh is in progress"
 	case errors.Is(err, remediationinvestigation.ErrOperationIdempotencyConflict):

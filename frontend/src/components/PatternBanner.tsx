@@ -33,6 +33,7 @@ import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
 import { CausalGroupRemediation } from "./CausalGroupRemediation";
 import { CausalGroupFixRouting } from "./CausalGroupFixRouting";
+import { CausalGroupReportedFix } from "./CausalGroupReportedFix";
 import { PatternFixGuidance } from "./PatternFixGuidance";
 import { causalGroupFixTarget, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
 import { describeRecurrence, recurrenceForBuilds } from "../lib/recurrence";
@@ -58,6 +59,11 @@ export function PatternBanner({
   const { data: resolved, refetch: refetchResolved } = useResolved();
   const { features } = useCapabilities();
   const analysisOnly = Boolean(pattern.recurrence_classification);
+  // Mirrors the resolver's pattern-level gate: the investigation runs only on a
+  // pattern the engine classified as recurring and systemic.
+  const remediationPatternEligible =
+    pattern.systemic &&
+    (pattern.recurrence_classification === "shared_cause" || pattern.recurrence_classification === "mixed_causes");
   const causalGroups = pattern.causal_groups ?? [];
   // Fix proposals start from an individual failed test, so the routing is
   // only offered where a chat session could actually run one.
@@ -352,6 +358,8 @@ export function PatternBanner({
                       jobID={jobID}
                       patternID={pattern.id}
                       patternHash={pattern.content_hash}
+                      patternEligible={remediationPatternEligible}
+                      chatAvailable={Boolean(chatRef)}
                     />
                   )}
                   {fixCapable && (
@@ -362,6 +370,9 @@ export function PatternBanner({
                       externalCause={externalCause(group.cause_location)}
                     />
                   )}
+                  {/* Published data, so this stays available where the Fix and
+                      remediation-investigation capabilities are not. */}
+                  <CausalGroupReportedFix remediation={group.remediation} fileCtx={patternFileCtx} />
                 </Box>
               </Box>
             ))}
@@ -469,7 +480,7 @@ export function PatternBanner({
   const actions = showFixGuidance || chatRef || showFailureActions ? (
     <Stack spacing={1.25}>
       {showFixGuidance && jobID && fixGuidanceBuildID && (
-        <PatternFixGuidance jobID={jobID} buildID={fixGuidanceBuildID} externalCause={patternUpstreamCause} />
+        <PatternFixGuidance jobID={jobID} buildID={fixGuidanceBuildID} externalCause={patternUpstreamCause} chatAvailable={Boolean(chatRef)} />
       )}
       {chatRef && (
         <AnalysisChat

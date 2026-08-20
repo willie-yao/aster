@@ -173,7 +173,8 @@ Model output is never accepted directly. The current lifecycle is:
    absent.
 2. Deterministic critique checks citation integrity, unread paths, unsafe or
    unverified source paths, unsupported line claims, persistent-failure versus
-   transient conflicts, remediation punts, and recipe-required evidence.
+   transient conflicts, remediations that leave nothing to act on, remediation
+   punts, and recipe-required evidence.
 3. When permitted by retry, time, context, and evidence budgets, critique can
    inject bounded missing evidence, allow another tool turn, and request a
    revised structured draft.

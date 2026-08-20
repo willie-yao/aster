@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const patternRemediationNotInvestigatedReason = "No source-grounded implementation target has been verified for this recurring cause."
+const patternRemediationNotInvestigatedReason = "No source-grounded implementation target has been verified for this cause."
 
 // ValidPatternRemediationInvestigationState reports whether state is public-safe.
 func ValidPatternRemediationInvestigationState(state PatternRemediationInvestigationState) bool {
@@ -98,9 +98,6 @@ func WithDefaultPatternRemediationInvestigations(patterns []PatternAnalysis) []P
 		}
 		summaries := make([]PatternRemediationInvestigationSummary, 0, len(pattern.CausalGroups))
 		for _, group := range pattern.CausalGroups {
-			if len(group.Builds) < 2 {
-				continue
-			}
 			summary, ok := existing[group.ContentHash]
 			if !ok {
 				summary = PatternRemediationInvestigationSummary{
@@ -130,6 +127,10 @@ func clonePatternAnalyses(patterns []PatternAnalysis) []PatternAnalysis {
 		for groupIndex := range out[index].CausalGroups {
 			out[index].CausalGroups[groupIndex].Builds = append([]string(nil), patterns[index].CausalGroups[groupIndex].Builds...)
 			out[index].CausalGroups[groupIndex].CauseLocation = patterns[index].CausalGroups[groupIndex].CauseLocation.Clone()
+			if remediation := patterns[index].CausalGroups[groupIndex].Remediation; remediation != nil {
+				clone := *remediation
+				out[index].CausalGroups[groupIndex].Remediation = &clone
+			}
 		}
 		out[index].RemediationInvestigations = append([]PatternRemediationInvestigationSummary(nil), patterns[index].RemediationInvestigations...)
 	}

@@ -328,3 +328,71 @@ func TestParsePatternResultPublishesAnalysisOnlyFields(t *testing.T) {
 		t.Fatalf("relevant files=%v", pattern.RelevantFiles)
 	}
 }
+
+// TestGroupRemediationCarriesMostSevereMember verifies a causal group reports
+// the remediation its own member analyses produced, taken from the most severe
+// member so the action matches the failure the cause is built from.
+func TestGroupRemediationCarriesMostSevereMember(t *testing.T) {
+	byBuild := map[string]PatternFailure{
+		"1": {BuildID: "1", Severity: "Low", SuggestedFix: "  Widen the readiness probe.  "},
+		"2": {BuildID: "2", Severity: "Critical", SuggestedFix: "Add retry-on-conflict for 409."},
+		"3": {BuildID: "3", Severity: "High", SuggestedFix: "Raise the join budget."},
+	}
+
+	got := groupRemediation([]string{"1", "2", "3"}, byBuild)
+	if got == nil {
+		t.Fatal("a group whose members proposed fixes reported none")
+	}
+	if got.BuildID != "2" {
+		t.Errorf("BuildID = %q, want the most severe member %q", got.BuildID, "2")
+	}
+	// The carried text is one member's verbatim fix, trimmed but never merged.
+	if got.SuggestedFix != "Add retry-on-conflict for 409." {
+		t.Errorf("SuggestedFix = %q, want the most severe member's fix", got.SuggestedFix)
+	}
+}
+
+// TestGroupRemediationSkipsMembersWithoutAFix verifies a member that proposed
+// nothing cannot win the selection, and that a group with no proposal anywhere
+// stays unreported rather than inventing one.
+func TestGroupRemediationSkipsMembersWithoutAFix(t *testing.T) {
+	byBuild := map[string]PatternFailure{
+		"1": {BuildID: "1", Severity: "Critical", SuggestedFix: "   "},
+		"2": {BuildID: "2", Severity: "Low", SuggestedFix: "Widen the readiness probe."},
+	}
+	got := groupRemediation([]string{"1", "2"}, byBuild)
+	if got == nil || got.BuildID != "2" {
+		t.Fatalf("a blank fix on the most severe member suppressed the group remediation: %+v", got)
+	}
+
+	empty := map[string]PatternFailure{"1": {BuildID: "1", Severity: "High"}}
+	if got := groupRemediation([]string{"1"}, empty); got != nil {
+		t.Errorf("a group with no proposed fix reported %+v", got)
+	}
+	// A build the correlation named but that carries no analysis contributes
+	// nothing, the same way ownership merging treats a missing member.
+	if got := groupRemediation([]string{"absent"}, byBuild); got != nil {
+		t.Errorf("an unanalyzed build produced a remediation: %+v", got)
+	}
+	if got := groupRemediation(nil, byBuild); got != nil {
+		t.Errorf("an empty group produced a remediation: %+v", got)
+	}
+}
+
+// TestGroupRemediationIsExcludedFromCausalGroupIdentity verifies refreshing the
+// displayed suggestion never churns causal-group identity, which would
+// invalidate a remediation investigation already running against the cause.
+func TestGroupRemediationIsExcludedFromCausalGroupIdentity(t *testing.T) {
+	base := models.PatternCausalGroup{
+		Builds: []string{"1", "2"}, RootCause: "etcd learner never joined", Confidence: "high",
+	}
+	withFix := base
+	withFix.Remediation = &models.PatternCausalGroupRemediation{SuggestedFix: "Raise the budget.", BuildID: "1"}
+
+	if models.PatternCausalGroupHash(base) != models.PatternCausalGroupHash(withFix) {
+		t.Error("the reported remediation changed the causal-group content hash")
+	}
+	if models.PatternCausalGroupID("p", base) != models.PatternCausalGroupID("p", withFix) {
+		t.Error("the reported remediation changed the causal-group ID")
+	}
+}

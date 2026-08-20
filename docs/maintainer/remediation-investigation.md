@@ -503,11 +503,11 @@ state inside each causal group card rather than once per pattern. The UI reports
 why an operation cannot start instead of showing a pending-looking default.
 Conditions are evaluated from the most permanent to the most deployment-scoped:
 
-- Causal group covering fewer than two builds: **Not eligible**, matching the
-  `>= 2` gate in `validate.go`, `resolver.go`, and
-  `models.WithDefaultPatternRemediationInvestigations`.
 - Causal group without an assigned id and content hash: **Not addressable**,
   since no operation reference can be constructed.
+- Causal group inside a pattern the engine did not classify as recurring and
+  systemic: **Not eligible**, matching the pattern-level gate in `resolver.go`.
+  The cause itself may cover any number of builds, including one.
 - Capability disabled or unauthenticated deploy: **Unavailable on this
   deployment**, with no control. Only terminal verdicts survive the capability
   being off, so a real earlier result is still shown while a state that could

@@ -403,7 +403,7 @@ func RepresentativeAnalyzedFailure(run *models.BuildResult) *models.TestCase {
 		if testCase.Status != "failed" || testCase.AIAnalysis == nil || !ai.IsGroundedAnalysis(testCase.AIAnalysis) {
 			continue
 		}
-		if representative == nil || severityRank(testCase.AIAnalysis.Severity) > severityRank(representative.AIAnalysis.Severity) {
+		if representative == nil || models.SeverityRank(testCase.AIAnalysis.Severity) > models.SeverityRank(representative.AIAnalysis.Severity) {
 			representative = testCase
 		}
 	}
@@ -446,21 +446,4 @@ func FailureLocationFile(loc string) string {
 	}
 	file, _, _ := strings.Cut(loc, ":")
 	return file
-}
-
-func severityRank(sev string) int {
-	switch strings.ToLower(strings.TrimSpace(sev)) {
-	case "critical":
-		return 5
-	case "high":
-		return 4
-	case "medium":
-		return 3
-	case "low":
-		return 2
-	case "transient-ignore":
-		return 1
-	default:
-		return 0
-	}
 }

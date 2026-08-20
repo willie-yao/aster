@@ -214,7 +214,7 @@ func (v *Verifier) verifyHypothesis(ctx context.Context, input FrozenInput, hypo
 	return VerifiedResult{
 		VerificationVersion: VerificationVersion,
 		Classification:      ClassificationActionable,
-		Reason:              "The typed target is absent from current source and every available failure revision, with bounded evidence linking it to the recurring cause.",
+		Reason:              "The typed target is absent from current source and every available failure revision, with bounded evidence linking it to the cause.",
 		Proposal:            &proposal,
 		CurrentSource:       &current,
 		FailureSources:      failureStates,
@@ -302,7 +302,7 @@ func verifyCachedEvidence(ctx context.Context, source sourceinvestigation.TreeRe
 	}
 	for _, buildID := range input.Group.Builds {
 		if !coveredBuilds[buildID] {
-			return fmt.Errorf("build %s lacks verified recurring evidence", buildID)
+			return fmt.Errorf("build %s lacks verified failure evidence", buildID)
 		}
 	}
 	return nil
@@ -374,8 +374,13 @@ func verifyStructuralRelationship(ctx context.Context, source sourceinvestigatio
 			}
 		}
 	}
-	if len(buildsWithIdentifier) < 2 {
-		return fmt.Errorf("fewer than two causal-group builds contain the exact target identifier")
+	// Corroboration scales with the group. A cause seen in several builds must
+	// show the target in two of them; a cause seen once can only ever ground it
+	// in that one build, and demanding two there would leave every single-build
+	// cause permanently unverifiable.
+	required := min(2, len(input.Group.Builds))
+	if len(buildsWithIdentifier) < required {
+		return fmt.Errorf("the exact target identifier appears in fewer than %d of the causal group's builds", required)
 	}
 	return nil
 }

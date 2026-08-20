@@ -344,3 +344,34 @@ func TestNonActionablePromptCannotIntroduceTarget(t *testing.T) {
 		}
 	}
 }
+
+// TestValidateFrozenInputAcceptsSingleBuildCause verifies a cause observed in
+// one build can be investigated. A cause seen once can still be a real defect,
+// so eligibility follows the cause rather than how many builds happened to hit
+// it. The pattern-level recurrence requirement is unchanged.
+func TestValidateFrozenInputAcceptsSingleBuildCause(t *testing.T) {
+	input := testFrozenInput()
+	group := models.PatternCausalGroup{
+		Builds: []string{"2"}, RootCause: "a required call is missing", Confidence: "high",
+	}
+	group.ContentHash = models.PatternCausalGroupHash(group)
+	group.ID = models.PatternCausalGroupID(input.PatternID, group)
+	input.Group = group
+	input.CausalGroupID, input.CausalGroupHash = group.ID, group.ContentHash
+	input.Builds = input.Builds[:1]
+	input.Analyses = input.Analyses[:1]
+
+	if err := ValidateFrozenInput(input); err != nil {
+		t.Fatalf("a single-build cause was rejected: %v", err)
+	}
+
+	// A cause with no builds at all still has nothing to investigate.
+	empty := input
+	empty.Group.Builds = nil
+	empty.Group.ContentHash = models.PatternCausalGroupHash(empty.Group)
+	empty.Group.ID = models.PatternCausalGroupID(empty.PatternID, empty.Group)
+	empty.CausalGroupID, empty.CausalGroupHash = empty.Group.ID, empty.Group.ContentHash
+	if err := ValidateFrozenInput(empty); err == nil {
+		t.Error("a cause with no builds was accepted")
+	}
+}

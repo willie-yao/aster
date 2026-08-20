@@ -188,7 +188,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 	structuredTelemetry := structuredCompletionTelemetry{available: true}
 	targetTelemetry := structuredCompletionTelemetry{available: true}
 	if !ledger.gatePassed() {
-		assessment := insufficientEvidenceAssessment(catalog, "The bounded investigation did not read recurring-build evidence, pinned source content, and one content-bearing repository grep.")
+		assessment := insufficientEvidenceAssessment(catalog, "The bounded investigation did not read failure-build evidence, pinned source content, and one content-bearing repository grep.")
 		result.NonActionable = &assessment
 	} else {
 		finalPrompt, err := renderFinalPrompt(input, memo, catalog)
@@ -330,12 +330,12 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 }
 
 func evidenceSystemPrompt(consumerPrompt string) string {
-	base := `You are conducting a bounded, read-only remediation investigation for one frozen recurring causal group.
+	base := `You are conducting a bounded, read-only remediation investigation for one frozen causal group.
 Use only the artifact and repository tools provided. The artifact browser is restricted to the exact causal-group builds. The repository tools are restricted to one immutable source revision.
 Do not regroup, add, or remove builds. You may challenge the claimed cause, but state that explicitly.
 Do not edit files, run shell commands, create branches, open issues, create pull requests, or choose another repository or revision.
 Evidence gate: before returning a memo, you MUST call read_repo_file and receive non-empty pinned source content, then call grep_repo and inspect at least one non-empty match. Author the grep query from exact identifiers in the failure evidence and source you read, such as job names, environment names, symbols, calls, and configuration values. A memo without both a content-bearing source read and content-bearing repository grep is discarded.
-Inspect recurring-build evidence and pinned source. Relevant files are hints, not proven targets. Return a concise evidence memo for a separate structured finalization phase only after both source-evidence requirements are satisfied.`
+Inspect failure-build evidence and pinned source. Relevant files are hints, not proven targets. Return a concise evidence memo for a separate structured finalization phase only after both source-evidence requirements are satisfied.`
 	if strings.TrimSpace(consumerPrompt) == "" {
 		return base
 	}

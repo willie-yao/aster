@@ -428,7 +428,7 @@ func TestAgentic_CacheHit(t *testing.T) {
 func TestAgentic_CacheHit_TransientVerdictAfterPersistence(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	transient := `{"summary":"flaky","is_transient":true,"root_cause":"infra","severity":"Low","suggested_fix":"re-run","relevant_files":[]}`
+	transient := `{"summary":"flaky","is_transient":true,"root_cause":"infra","severity":"Low","suggested_fix":"Add retry-on-conflict handling for the transient API error.","relevant_files":[]}`
 	srv.push(200, chatRespFinal(transient))
 
 	client := newAgenticTestClient(t, srv.URL)

@@ -628,3 +628,67 @@ func TestVerifierRejectsFabricatedProwEnvironmentValue(t *testing.T) {
 		t.Fatalf("results=%+v", results)
 	}
 }
+
+// TestVerifierAcceptsSingleBuildCause verifies a cause observed in one build can
+// still reach a verified target. Corroboration scales with the group: demanding
+// the identifier in two builds would leave every single-build cause permanently
+// unverifiable while still appearing investigable, which is worse than the
+// honest ineligibility it replaced.
+func TestVerifierAcceptsSingleBuildCause(t *testing.T) {
+	source := "package controllers\nfunc reconcile() error { return nil }\nfunc applyFix() {}\n"
+
+	input := testFrozenInput()
+	input.InvestigationSource.Revision = currentRevision
+	input.Group.Builds = []string{"2"}
+	input.Group.ContentHash = models.PatternCausalGroupHash(input.Group)
+	input.Group.ID = models.PatternCausalGroupID(input.PatternID, input.Group)
+	input.CausalGroupID, input.CausalGroupHash = input.Group.ID, input.Group.ContentHash
+	input.Builds = input.Builds[:1]
+	input.Analyses = input.Analyses[:1]
+	input.Builds[0].Source = &sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: testRevision}
+	input.Analyses[0].SourceRepository = input.Builds[0].Source
+	input.Analyses[0].RelevantFiles = []string{"controllers/reconcile.go"}
+	input.Analyses[0].RootCause = "reconcile is missing the required applyFix call"
+	input.RelevantFiles = []string{"controllers/reconcile.go"}
+	if err := ValidateFrozenInput(input); err != nil {
+		t.Fatalf("single-build input is not valid: %v", err)
+	}
+
+	browser := fakeBrowser{files: map[string]string{"builds/2/log.txt": "reconcile missing applyFix transition\n"}}
+	catalog := evidenceCatalogForFixture(input, "controllers/reconcile.go", source, browser.files)
+	result := Result{
+		Version: ResultVersion,
+		Hypotheses: []TargetHypothesis{{
+			Target: &RequiredCallCandidate{
+				Kind: CandidateRequiredCall, Path: "controllers/reconcile.go", ContainingSymbol: "reconcile", RequiredCall: "applyFix",
+			},
+			EvidenceIDs: evidenceIDs(catalog), RelationshipReason: "the reconcile path omits applyFix",
+		}},
+	}
+	verifier, err := NewVerifier(revisionSource{files: map[string]map[string]string{
+		sourceKey(input.InvestigationSource): {"controllers/reconcile.go": source},
+		sourceKey(*input.Builds[0].Source):   {"controllers/reconcile.go": source},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := CacheKey(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := CacheEntry{
+		Key: key, Result: result, ResultDigest: ResultDigest(result),
+		EvidenceCatalog: catalog, EvidenceCatalogDigest: EvidenceCatalogDigest(catalog),
+		Provenance: NewProvenance(input, "model", "chat_completions", "", EvidenceStats{
+			ToolCalls: 3, SourceReads: 1, ArtifactReads: 1,
+		}, Metrics{ModelRequests: 2}, time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)),
+	}
+
+	verified, err := verifier.Verify(t.Context(), input, entry, browser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Classification != ClassificationActionable || verified.Proposal == nil {
+		t.Fatalf("a single-build cause could not reach a verified target: %+v", verified)
+	}
+}

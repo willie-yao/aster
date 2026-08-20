@@ -39,10 +39,10 @@ func ValidateFrozenInput(input FrozenInput) error {
 		return fmt.Errorf("pattern and causal-group hashes must be hexadecimal digests")
 	}
 	if input.Recurrence != models.PatternRecurrenceSharedCause && input.Recurrence != models.PatternRecurrenceMixedCauses {
-		return fmt.Errorf("recurrence %q does not identify a recurring causal group", input.Recurrence)
+		return fmt.Errorf("recurrence %q does not identify a recurring pattern", input.Recurrence)
 	}
-	if len(input.Group.Builds) < 2 || len(input.Group.Builds) > 50 {
-		return fmt.Errorf("causal group must contain 2-50 builds")
+	if len(input.Group.Builds) < 1 || len(input.Group.Builds) > 50 {
+		return fmt.Errorf("causal group must contain 1-50 builds")
 	}
 	if input.Group.ID != input.CausalGroupID || input.Group.ContentHash != input.CausalGroupHash {
 		return fmt.Errorf("causal-group identity does not match the frozen subject")
