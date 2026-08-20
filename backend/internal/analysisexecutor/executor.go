@@ -113,10 +113,12 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	resultRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceResultDir)
 	mountVerifier := opts.MountVerifier
 	if mountVerifier == nil {
-		mountVerifier = verifyPreparedMounts
+		mountVerifier = func(workspaceRoot, manifestHash string) error {
+			return verifyWorkspaceMounts(workspaceRoot, manifestHash, request.InputMode)
+		}
 	}
 	if err := mountVerifier(workspaceRoot, request.Manifest.Hash); err != nil {
-		return fail(engineruntime.TerminalFailed, fmt.Sprintf("verify prepared mounts: %v", err))
+		return fail(engineruntime.TerminalFailed, fmt.Sprintf("verify workspace mounts: %v", err))
 	}
 	if err := prepareResultRoot(resultRoot); err != nil {
 		return fail(engineruntime.TerminalFailed, err.Error())
@@ -182,7 +184,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	result.Usage = runResult.Usage
 	result.OpenCodeTelemetry = runResult.Telemetry
 	if err := mountVerifier(workspaceRoot, request.Manifest.Hash); err != nil {
-		return fail(engineruntime.TerminalFailed, fmt.Sprintf("prepared mounts changed during analysis: %v", err))
+		return fail(engineruntime.TerminalFailed, fmt.Sprintf("workspace mounts changed during analysis: %v", err))
 	}
 	if ctx.Err() != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -221,7 +223,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		result.ResultValidation = validation
 	}
 	if err := mountVerifier(workspaceRoot, request.Manifest.Hash); err != nil {
-		return fail(engineruntime.TerminalFailed, fmt.Sprintf("prepared mounts changed during result canonicalization: %v", err))
+		return fail(engineruntime.TerminalFailed, fmt.Sprintf("workspace mounts changed during result canonicalization: %v", err))
 	}
 	if err := verifyInputsBounded(request, sourcesRoot, artifactRoot); err != nil {
 		recordSourceIntegrityFailure(&result, err)
@@ -1153,7 +1155,7 @@ func openCodeJSON(ctx context.Context, client *http.Client, method, endpoint str
 	return nil
 }
 
-func verifyPreparedMounts(workspaceRoot, manifestHash string) error {
+func verifyWorkspaceMounts(workspaceRoot, manifestHash, inputMode string) error {
 	data, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
 		return err
@@ -1161,7 +1163,14 @@ func verifyPreparedMounts(workspaceRoot, manifestHash string) error {
 	if len(data) > 1<<20 {
 		return fmt.Errorf("mountinfo exceeds the bound")
 	}
-	return verifyPreparedMountInfo(string(data), workspaceRoot, manifestHash)
+	switch inputMode {
+	case agentanalysis.WorkspaceInputPrepared:
+		return verifyPreparedMountInfo(string(data), workspaceRoot, manifestHash)
+	case agentanalysis.WorkspaceInputStaged:
+		return verifyStagedMountInfo(string(data), workspaceRoot)
+	default:
+		return fmt.Errorf("workspace input mode is invalid")
+	}
 }
 
 func verifyPreparedMountInfo(raw, workspaceRoot, manifestHash string) error {
@@ -1199,6 +1208,21 @@ func verifyPreparedMountInfo(raw, workspaceRoot, manifestHash string) error {
 		}
 	}
 	return nil
+}
+
+func verifyStagedMountInfo(raw, workspaceRoot string) error {
+	mountPoint := filepath.Clean(workspaceRoot)
+	for _, line := range strings.Split(raw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 10 || unescapeMountInfo(fields[4]) != mountPoint {
+			continue
+		}
+		if !mountOption(fields[5], "ro") {
+			return fmt.Errorf("mount %s is not the expected read-only staged workspace", mountPoint)
+		}
+		return nil
+	}
+	return fmt.Errorf("mount %s is unavailable", mountPoint)
 }
 
 func mountOption(value, want string) bool {

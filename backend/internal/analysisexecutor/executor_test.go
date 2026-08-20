@@ -696,6 +696,43 @@ func pinnedOpenCodePermission(permission string, rules ...pinnedPermissionRule) 
 	return "ask"
 }
 
+func TestVerifyStagedMountInfoRequiresReadOnlyWorkspace(t *testing.T) {
+	valid := "127 120 0:32 /local/workspace /workspace ro,relatime master:52 - virtiofs none rw\n"
+	if err := verifyStagedMountInfo(valid, "/workspace"); err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range map[string]string{
+		"writable":    strings.Replace(valid, "ro,relatime", "rw,relatime", 1),
+		"nested only": "128 120 0:32 /local/workspace/sources /workspace/sources ro,relatime - virtiofs none rw\n",
+		"wrong mount": strings.Replace(valid, "/workspace ro", "/other ro", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := verifyStagedMountInfo(raw, "/workspace"); err == nil {
+				t.Fatal("unsafe mountinfo was accepted")
+			}
+		})
+	}
+}
+
+func TestVerifyWorkspaceMountInfoUsesInputMode(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	prepared := "36 25 0:32 /" + hash + "/sources /workspace/sources ro,relatime - ext4 /dev/sda ro\n" +
+		"37 25 0:32 /" + hash + "/artifacts /workspace/artifacts ro,relatime - ext4 /dev/sda ro\n"
+	staged := "127 120 0:32 /local/workspace /workspace ro,relatime master:52 - virtiofs none rw\n"
+	if err := verifyPreparedMountInfo(prepared, "/workspace", hash); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyStagedMountInfo(staged, "/workspace"); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPreparedMountInfo(staged, "/workspace", hash); err == nil {
+		t.Fatal("staged workspace passed prepared mount verification")
+	}
+	if err := verifyStagedMountInfo(prepared, "/workspace"); err == nil {
+		t.Fatal("prepared workspace passed staged mount verification")
+	}
+}
+
 func TestPinnedOpenCodeSessionPermissionPrecedence(t *testing.T) {
 	agent := []pinnedPermissionRule{{permission: "*", action: "deny"}, {permission: "read", action: "allow"}, {permission: "bash", action: "deny"}}
 	denySession := []pinnedPermissionRule{{permission: "read", action: "deny"}}
