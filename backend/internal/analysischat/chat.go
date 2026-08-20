@@ -74,6 +74,9 @@ const (
 	UnverifiedReference = "reference"
 	// UnverifiedMissing means an evidence-claiming answer carried no citations.
 	UnverifiedMissing = "missing"
+	// UnverifiedFormat means the answer did not follow the response contract, so
+	// no evidence could be verified. The answer text is still shown.
+	UnverifiedFormat = "format"
 )
 
 // ValidationGate names the response gate a hard validation failure tripped. It

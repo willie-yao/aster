@@ -45,14 +45,14 @@ others. Assessment is optional and, when present, must be "supports",
 "challenges", "inconclusive", or null. proposed_revision is optional and may be a
 complete root_cause and suggested_fix object only when assessment is
 "challenges". Normal follow-up answers should omit both optional fields.
-Citations must name artifacts read during this conversation and include an exact
-quote. Copy the quote from the tool output without re-wrapping it: keep the
-original text and line breaks, and do not shorten or paraphrase it. Leading
-indentation and colour codes may be dropped. Quote only the passage that
-supports the answer, and use line_start and line_end only when a tool returned
-source line numbers. An answer whose citations cannot be verified is returned to the
-maintainer labelled unverified, so cite only evidence the tools actually
-returned. Output JSON only.`
+Citations must name artifacts read during this conversation. The quote locates
+the passage: copy enough of the tool output to identify one passage and no other,
+and the engine replaces it with the exact text the tool returned. Wrapping,
+indentation, and colour codes do not matter. A quote so short or so common that
+it matches several passages cannot be resolved. Use line_start and line_end only
+when a tool returned source line numbers. An answer whose citations cannot be
+verified is returned to the maintainer labelled unverified, so cite only evidence
+the tools actually returned. Output JSON only.`
 
 const analysisChatToolDocs = `
 
@@ -356,6 +356,13 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 				accepted = &fallback.reply
 				return toolLoopAccept()
 			}
+			if salvaged, ok := salvageAnalysisChatReply(answer.Content); ok {
+				recordAnalysisChatResponseDegraded(
+					loopCtx, "tool_loop_validation", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, category,
+				)
+				accepted = &salvaged
+				return toolLoopAccept()
+			}
 			return toolLoopStop(analysisChatSafeValidationError(validationErr))
 		},
 		onDispatch: func(dispatched *toolLoopDispatch) {
@@ -413,7 +420,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	}
 	providerStart := time.Now()
 	finalCtx := WithStructuredCompletionPhase(loopCtx, "analysis_chat_finalize")
-	reply, stats, structured, err := a.callAnalysisChatFinal(finalCtx, messages, evidence)
+	reply, stats, raw, structured, err := a.callAnalysisChatFinal(finalCtx, messages, evidence)
 	providerElapsedMs += int(time.Since(providerStart) / time.Millisecond)
 	modelCalls += structured.modelCalls()
 	providerAttempts += structured.providerAttempts()
@@ -426,6 +433,10 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		if fallback.usable(evidenceRevision) {
 			recordAnalysisChatStructuredResponse(loopCtx, "fallback", "finalize", modelCalls, providerAttempts, structured, stats, category)
 			return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, correctiveRounds), nil
+		}
+		if salvaged, ok := salvageAnalysisChatReply(raw); ok {
+			recordAnalysisChatStructuredResponse(loopCtx, "degraded", "finalize", modelCalls, providerAttempts, structured, stats, category)
+			return completeAnalysisChatReply(salvaged, state, start, providerElapsedMs, correctiveRounds), nil
 		}
 		recordAnalysisChatStructuredResponse(loopCtx, "error", "finalize", modelCalls, providerAttempts, structured, stats, category)
 		if analysisChatStructuredProviderFailure(err) {
@@ -483,19 +494,24 @@ func analysisChatStatusResponse(status int) *modelResponse {
 	return &modelResponse{HTTPStatus: status}
 }
 
+// callAnalysisChatFinal runs the structured finalize ladder. It also returns the
+// raw content behind the reported stats so a validation failure can still be
+// salvaged into an unverified answer.
 func (a *AnalysisChatAgent) callAnalysisChatFinal(
 	ctx context.Context,
 	messages []modelMessage,
 	evidence map[string]*analysisChatEvidence,
-) (analysischat.Reply, analysisChatParseStats, structuredMessagesResult, error) {
+) (analysischat.Reply, analysisChatParseStats, string, structuredMessagesResult, error) {
 	var reply analysischat.Reply
 	var stats analysisChatParseStats
+	var reported string
 	result, err := a.client.completeStructuredMessagesWithMetadata(
 		ctx, messages, analysisChatStructuredFormat(), analysisChatMaxResponseBytes, true,
 		func(raw string) structuredValidationResult {
 			candidate, candidateStats, candidateErr := parseAnalysisChatReplyCandidates(raw, evidence)
 			if candidateErr == nil || analysisChatValidationRank(candidateStats.Category) >= analysisChatValidationRank(stats.Category) {
 				stats = candidateStats
+				reported = raw
 				stats.ValidationDetail = candidateStats.EvidenceDetail
 				if candidateErr != nil {
 					stats.ValidationDetail = candidateErr.Error()
@@ -520,7 +536,7 @@ func (a *AnalysisChatAgent) callAnalysisChatFinal(
 			return validation
 		},
 	)
-	return reply, stats, result, err
+	return reply, stats, reported, result, err
 }
 
 type analysisChatFallback struct {
@@ -609,6 +625,20 @@ func recordAnalysisChatResponseFallback(
 	category string,
 ) {
 	recordAnalysisChatResponseTelemetry(ctx, "fallback", stage, modelCalls, providerAttempts, response, stats, category)
+}
+
+// recordAnalysisChatResponseDegraded reports a turn whose answer was salvaged
+// from a failed response contract and returned marked unverified, so the log
+// separates a shown answer from one the maintainer never saw.
+func recordAnalysisChatResponseDegraded(
+	ctx context.Context,
+	stage string,
+	modelCalls, providerAttempts int,
+	response *modelResponse,
+	stats analysisChatParseStats,
+	category string,
+) {
+	recordAnalysisChatResponseTelemetry(ctx, "degraded", stage, modelCalls, providerAttempts, response, stats, category)
 }
 
 func recordAnalysisChatResponseTelemetry(
@@ -1182,84 +1212,123 @@ func analysisChatEvidenceContexts(value any) []string {
 	}
 }
 
-// analysisChatDisplayNoise matches SGR escape sequences, the colour and style
-// codes Prow build logs carry in volume and models routinely drop when quoting.
-// Only SGR is matched: other CSI sequences such as cursor movement can change
-// where text renders, so a quote that drops one must fail closed.
-var analysisChatDisplayNoise = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-
-// analysisChatNormalizeQuote strips escape sequences and leading indentation.
-// Both are presentation that models routinely drop when quoting a log, and
-// rejecting an otherwise exact quote over them marks a good answer unverified.
-// Trailing and interior whitespace are preserved, because those can change what
-// a line means. A quote proves the text appeared in the artifact; a citation's
-// line range is what recovers the exact bytes.
-func analysisChatNormalizeQuote(text string) string {
-	lines := strings.Split(analysisChatDisplayNoise.ReplaceAllString(text, ""), "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimLeft(line, " \t")
+// attributeAnalysisChatQuote resolves a model-supplied locator against the text
+// the tools actually returned and hands back the engine's own copy of it,
+// expanded to whole lines. It also reports how many distinct passages the
+// locator names, capped at two: a locator that could mean either of them is not
+// evidence, so the caller marks the citation unverified rather than attributing
+// the wrong passage.
+func attributeAnalysisChatQuote(evidence *analysisChatEvidence, locator string) (string, int) {
+	want := normalizeCitationText(locator)
+	if evidence == nil || want == "" {
+		return "", 0
 	}
-	return strings.Join(lines, "\n")
-}
-
-// analysisChatReflowQuote collapses every whitespace run. It is used only to
-// explain why a quote failed, never to accept one, so that a mismatch can be
-// reported as a reformatting problem rather than as invented text.
-func analysisChatReflowQuote(text string) string {
-	return strings.Join(strings.Fields(analysisChatDisplayNoise.ReplaceAllString(text, "")), " ")
-}
-
-// analysisChatQuoteMismatch names why a quote did not verify, using a closed set
-// so the repair text can be specific without echoing model output.
-func analysisChatQuoteMismatch(evidence *analysisChatEvidence, quote string) string {
-	if analysisChatEvidenceSpansSegments(evidence, quote) {
-		return "joined"
-	}
-	if evidence != nil {
-		reflowed := analysisChatReflowQuote(quote)
-		if reflowed != "" {
-			for _, segment := range evidence.Segments {
-				if strings.Contains(analysisChatReflowQuote(segment), reflowed) {
-					return "reflowed"
-				}
+	attributed := ""
+	matches := 0
+	for _, segment := range evidence.Segments {
+		lines := strings.Split(segment, "\n")
+		normalized := make([]string, len(lines))
+		for i, line := range lines {
+			normalized[i] = normalizeCitationText(line)
+		}
+		for start := range lines {
+			// A blank start line would attribute the same passage with a leading
+			// empty line, which reads as a second distinct meaning.
+			if normalized[start] == "" {
+				continue
+			}
+			end, ok := analysisChatQuoteRun(normalized, start, want)
+			if !ok {
+				continue
+			}
+			// A repeated line resolves to the same text wherever it matched, so
+			// only a genuinely different passage counts as a second meaning.
+			quote := strings.Join(lines[start:end+1], "\n")
+			if matches == 0 {
+				attributed = quote
+				matches = 1
+				continue
+			}
+			if quote != attributed {
+				return attributed, 2
 			}
 		}
 	}
-	return "absent"
+	return attributed, matches
+}
+
+// analysisChatQuoteRun returns the last line of the shortest run starting at
+// start whose normalized text contains want. Only a match that begins inside the
+// start line counts: one that begins later belongs to the run starting there, so
+// each passage is attributed once and the search stays linear in the evidence.
+func analysisChatQuoteRun(normalized []string, start int, want string) (int, bool) {
+	var joined strings.Builder
+	head := len(normalized[start])
+	limit := len(want) + head
+	for end := start; end < len(normalized) && end-start < analysisChatMaxQuoteLines; end++ {
+		if normalized[end] == "" {
+			continue
+		}
+		if joined.Len() > 0 {
+			joined.WriteByte(' ')
+		}
+		joined.WriteString(normalized[end])
+		if joined.Len() >= len(want) {
+			switch at := strings.Index(joined.String(), want); {
+			case at >= 0 && at < head:
+				return end, true
+			case at >= head:
+				return 0, false
+			}
+		}
+		if joined.Len() >= limit {
+			return 0, false
+		}
+	}
+	return 0, false
+}
+
+// clampAnalysisChatQuote trims an attributed quote to the downstream budget,
+// dropping whole trailing lines so what remains is still text a tool returned,
+// and reports how many lines survived. Invalid bytes are replaced first, because
+// the text comes from raw artifact content rather than from a decoded response.
+func clampAnalysisChatQuote(quote string) (string, int) {
+	quote = strings.ToValidUTF8(quote, "")
+	lines := strings.Split(quote, "\n")
+	if len(quote) <= analysisChatMaxQuoteBytes {
+		return quote, len(lines)
+	}
+	kept, keptLines := 0, 0
+	for i, line := range lines {
+		next := kept + len(line)
+		if i > 0 {
+			next++
+		}
+		if next > analysisChatMaxQuoteBytes {
+			break
+		}
+		kept, keptLines = next, i+1
+	}
+	if keptLines == 0 {
+		return strings.ToValidUTF8(quote[:analysisChatMaxQuoteBytes], ""), 1
+	}
+	return quote[:kept], keptLines
 }
 
 func analysisChatEvidenceContains(evidence *analysisChatEvidence, quote string) bool {
 	if evidence == nil {
 		return false
 	}
-	normalized := analysisChatNormalizeQuote(quote)
+	normalized := normalizeCitationText(quote)
 	if normalized == "" {
 		return false
 	}
 	for _, segment := range evidence.Segments {
-		if strings.Contains(analysisChatNormalizeQuote(segment), normalized) {
+		if strings.Contains(normalizeCitationText(segment), normalized) {
 			return true
 		}
 	}
 	return false
-}
-
-// analysisChatEvidenceSpansSegments reports whether a quote is absent from every
-// single evidence segment but present across two or more concatenated, so the
-// repair text can tell "you edited the quote" apart from "you joined passages".
-func analysisChatEvidenceSpansSegments(evidence *analysisChatEvidence, quote string) bool {
-	if evidence == nil || len(evidence.Segments) < 2 {
-		return false
-	}
-	normalized := analysisChatNormalizeQuote(quote)
-	if normalized == "" {
-		return false
-	}
-	joined := make([]string, 0, len(evidence.Segments))
-	for _, segment := range evidence.Segments {
-		joined = append(joined, analysisChatNormalizeQuote(segment))
-	}
-	return strings.Contains(strings.Join(joined, "\n"), normalized)
 }
 
 func analysisChatQuoteForRange(lines map[int]string, start, end int) (string, bool) {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
@@ -233,9 +234,13 @@ func TestAnalysisChatAgentRejectsStaleValidatedDraft(t *testing.T) {
 	}}
 	agent := newAnalysisChatAgentForTest(t, server.URL, browser, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
 
-	_, err := agent.Reply(context.Background(), analysisChatTurn())
-	if !errors.Is(err, analysischat.ErrResponseValidationFailed) {
+	reply, err := agent.Reply(context.Background(), analysisChatTurn())
+	if err != nil {
 		t.Fatalf("Reply error = %v", err)
+	}
+	// The stale draft must not be the answer, and what survives is unverified.
+	if strings.Contains(reply.Answer, "The first log supports") || !reply.Unverified {
+		t.Fatalf("stale draft was returned: %+v", reply)
 	}
 }
 
@@ -251,9 +256,13 @@ func TestAnalysisChatAgentNeverKeepsDraftWithInvalidCitations(t *testing.T) {
 	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("controller stopped\n")}}
 	agent := newAnalysisChatAgentForTest(t, server.URL, browser, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
 
-	_, err := agent.Reply(context.Background(), analysisChatTurn())
-	if !errors.Is(err, analysischat.ErrResponseValidationFailed) {
+	reply, err := agent.Reply(context.Background(), analysisChatTurn())
+	if err != nil {
 		t.Fatalf("Reply error = %v", err)
+	}
+	// A draft whose citations never verified must not become the answer.
+	if strings.Contains(reply.Answer, "The log supports the conclusion.") || !reply.Unverified {
+		t.Fatalf("unverifiable draft was returned: %+v", reply)
 	}
 }
 
@@ -287,20 +296,20 @@ func TestAnalysisChatAgentKeepsValidDraftWhenFinalizeRequestFails(t *testing.T) 
 	}
 }
 
-func TestAnalysisChatAgentReturnsSafeValidationCategory(t *testing.T) {
-	shrinkCallDelay(t)
-	server := newScriptedChatServer(t)
-	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
-	server.push(200, chatRespFinal(`still not JSON`))
-	server.push(200, chatRespFinal(`still not JSON`))
-	server.push(200, chatRespFinal(`still not JSON`))
-	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
-
-	_, err := agent.Reply(context.Background(), analysisChatTurn())
+// Only a closed engine-owned gate reaches the owner, never the text the model
+// or the provider produced.
+func TestAnalysisChatSafeValidationErrorCarriesNoModelText(t *testing.T) {
+	err := analysisChatSafeValidationError(newAnalysisChatValidationError(
+		analysisChatValidationJSON, errors.New("sentinel-model-text"),
+	))
 	if !errors.Is(err, analysischat.ErrResponseValidationFailed) {
-		t.Fatalf("Reply error = %v", err)
+		t.Fatalf("error = %v", err)
 	}
-	if strings.Contains(err.Error(), "unfinished") {
+	gate, ok := analysischat.ValidationGateOf(err)
+	if !ok || gate != analysischat.GateJSON {
+		t.Fatalf("gate = %q ok = %t", gate, ok)
+	}
+	if strings.Contains(err.Error(), "sentinel-model-text") {
 		t.Fatalf("validation error leaked model content: %v", err)
 	}
 }
@@ -417,15 +426,23 @@ func TestAnalysisChatResponseLogsValidationDetail(t *testing.T) {
 	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("controller stopped\n")}}
 	agent := newAnalysisChatAgentForTest(t, server.URL, browser, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
 
-	_, err := agent.Reply(context.Background(), analysisChatTurn())
-	if !errors.Is(err, analysischat.ErrResponseValidationFailed) {
+	reply, err := agent.Reply(context.Background(), analysisChatTurn())
+	if err != nil {
 		t.Fatalf("Reply error = %v", err)
+	}
+	// The answer survives as unverified, and the log still names the rule it
+	// tripped without echoing the model's text.
+	if reply.Answer != "sentinel-answer-text" || reply.UnverifiedReason != analysischat.UnverifiedFormat {
+		t.Fatalf("reply = %+v", reply)
 	}
 	if !strings.Contains(logs.String(), `validation=response_contract`) {
 		t.Fatalf("log missing the validation category: %s", logs.String())
 	}
 	if !strings.Contains(logs.String(), `validation_detail="response requires answer and citations"`) {
 		t.Fatalf("log missing the specific contract rule: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "outcome=degraded") {
+		t.Fatalf("log missing the degraded outcome: %s", logs.String())
 	}
 	if strings.Contains(logs.String(), "sentinel-answer-text") {
 		t.Fatalf("validation detail leaked model content: %s", logs.String())
@@ -917,7 +934,50 @@ func TestAnalysisChatCitationWithoutLineRangeStillRequiresExactQuote(t *testing.
 	}}
 	raw := `{"answer":"x","citations":[{"path":"build-log.txt","quote":"the controller exited"}]}`
 	if analysisChatReplyVerified(parseAnalysisChatReply(raw, evidence)) {
-		t.Fatal("mismatched quote without a verified line range was accepted")
+		t.Fatal("quote naming no recorded passage was accepted")
+	}
+}
+
+// The model supplies a locator; the engine answers with its own recorded text,
+// so what the maintainer reads is what a tool returned rather than what the
+// model retyped.
+func TestAnalysisChatCitationQuoteIsAttributedFromEvidence(t *testing.T) {
+	recorded := "  \x1b[31mE0412 controller stopped\x1b[0m\n    reason: timeout"
+	evidence := map[string]*analysisChatEvidence{"build-log.txt": {
+		Segments: []string{"unrelated preamble\n" + recorded + "\ntrailing noise"},
+	}}
+	raw := `{"answer":"x","citations":[{"path":"build-log.txt","quote":"E0412 controller stopped reason: timeout"}]}`
+	reply, err := parseAnalysisChatReply(raw, evidence)
+	if err != nil || reply.Unverified {
+		t.Fatalf("re-wrapped locator was not verified: err=%v reply=%+v", err, reply)
+	}
+	if reply.Citations[0].Quote != recorded {
+		t.Fatalf("attributed quote = %q, want %q", reply.Citations[0].Quote, recorded)
+	}
+}
+
+// A locator that names two different passages cannot be resolved to one of
+// them, so the citation is unverified rather than silently attributed to the
+// first match. The same locator naming one repeated line is unambiguous,
+// because the attributed text is the same wherever it matched.
+func TestAnalysisChatCitationRejectsAmbiguousLocator(t *testing.T) {
+	ambiguous := map[string]*analysisChatEvidence{"build-log.txt": {
+		Segments: []string{"reconcile failed for node-a", "reconcile failed for node-b"},
+	}}
+	raw := `{"answer":"x","citations":[{"path":"build-log.txt","quote":"reconcile failed"}],"assessment":null,"proposed_revision":null}`
+	reply, stats, err := parseAnalysisChatReplyCandidates(raw, ambiguous)
+	if err != nil {
+		t.Fatalf("unexpected hard error: %v", err)
+	}
+	if !reply.Unverified || !strings.Contains(stats.EvidenceDetail, "matches more than one passage") {
+		t.Fatalf("reply=%+v detail=%q", reply, stats.EvidenceDetail)
+	}
+	repeated := map[string]*analysisChatEvidence{"build-log.txt": {
+		Segments: []string{"reconcile failed\nnode ready\nreconcile failed"},
+	}}
+	resolved, err := parseAnalysisChatReply(raw, repeated)
+	if err != nil || resolved.Unverified || resolved.Citations[0].Quote != "reconcile failed" {
+		t.Fatalf("repeated line was not resolved: err=%v reply=%+v", err, resolved)
 	}
 }
 
@@ -951,80 +1011,51 @@ func TestAnalysisChatEvidenceNormalizationKeepsTheGuarantee(t *testing.T) {
 		"echo safe \\ \nrm file",
 		"if authorized:\n    grant()\ndeny()",
 	}}
-	rejected := map[string]string{
-		"skips content":    "line one alpha\nline three omega",
-		"reorders content": "line three omega\nline one alpha",
-		"invents content":  "line one alpha and then nothing happened",
-		// Collapsing newlines would let two separate lines read as one.
-		"joins separate lines": "line one alpha line two middle",
-		// Trailing whitespace can change what a line means.
+	// Wrapping, indentation, and spacing are presentation the model routinely
+	// drops. The engine answers with its own recorded text, so a sloppy locator
+	// never changes what the maintainer reads.
+	for name, locator := range map[string]string{
+		"contiguous span":           "line one alpha\nline two middle",
+		"whole segment":             "line one alpha\nline two middle\nline three omega",
+		"single line":               "line two middle",
+		"drops indentation":         "if authorized:\ngrant()\ndeny()",
+		"joins lines onto one":      "line one alpha line two middle",
 		"drops trailing whitespace": "echo safe \\\nrm file",
-	}
-	for name, quote := range rejected {
-		if analysisChatEvidenceContains(evidence, quote) {
-			t.Fatalf("%s: quote was accepted", name)
-		}
-	}
-	accepted := map[string]string{
-		"contiguous span": "line one alpha\nline two middle",
-		"whole segment":   "line one alpha\nline two middle\nline three omega",
-		"single line":     "line two middle",
-		// Leading indentation is presentation that models drop when quoting.
-		"drops indentation": "if authorized:\ngrant()\ndeny()",
-	}
-	for name, quote := range accepted {
-		if !analysisChatEvidenceContains(evidence, quote) {
-			t.Fatalf("%s: quote was rejected", name)
-		}
-	}
-}
-
-func TestAnalysisChatQuoteMismatchNamesTheReason(t *testing.T) {
-	evidence := &analysisChatEvidence{Segments: []string{
-		"first passage line\nsecond passage line",
-		"another read entirely",
-	}}
-	for reason, quote := range map[string]string{
-		// Re-wrapping collapses the line break the artifact had.
-		"reflowed": "first passage line second passage line",
-		"joined":   "second passage line\nanother read entirely",
-		"absent":   "text the tools never returned",
 	} {
-		if got := analysisChatQuoteMismatch(evidence, quote); got != reason {
-			t.Fatalf("mismatch for %q = %q, want %q", quote, got, reason)
+		quote, matches := attributeAnalysisChatQuote(evidence, locator)
+		if matches != 1 {
+			t.Fatalf("%s: matches = %d", name, matches)
+		}
+		if !slices.Contains(evidence.Segments, quote) && !strings.Contains(evidence.Segments[0], quote) &&
+			!strings.Contains(evidence.Segments[2], quote) {
+			t.Fatalf("%s: attributed quote %q is not recorded text", name, quote)
+		}
+	}
+	for name, locator := range map[string]string{
+		"skips content":          "line one alpha\nline three omega",
+		"reorders content":       "line three omega\nline one alpha",
+		"invents content":        "line one alpha and then nothing happened",
+		"spans separate reads":   "line three omega\necho safe",
+		"is entirely whitespace": "   \n  ",
+	} {
+		if _, matches := attributeAnalysisChatQuote(evidence, locator); matches != 0 {
+			t.Fatalf("%s: quote was attributed", name)
 		}
 	}
 }
 
-func TestAnalysisChatEvidenceDistinguishesEditedFromJoinedQuotes(t *testing.T) {
+func TestAnalysisChatEvidenceRejectsQuotesSpanningSeparateReads(t *testing.T) {
 	evidence := &analysisChatEvidence{Segments: []string{"first snippet", "second snippet"}}
-	if analysisChatEvidenceSpansSegments(evidence, "invented text") {
-		t.Fatal("fabricated quote reported as joining passages")
-	}
-	if !analysisChatEvidenceSpansSegments(evidence, "first snippet\nsecond snippet") {
-		t.Fatal("quote joined from two passages was not detected")
-	}
-
 	one := map[string]*analysisChatEvidence{"build-log.txt": evidence}
-	_, joinedStats, err := parseAnalysisChatReplyCandidates(
+	_, stats, err := parseAnalysisChatReplyCandidates(
 		`{"answer":"x","citations":[{"path":"build-log.txt","quote":"first snippet\nsecond snippet"}],"assessment":null,"proposed_revision":null}`,
 		one,
 	)
 	if err != nil {
 		t.Fatalf("unexpected hard error: %v", err)
 	}
-	if !strings.Contains(joinedStats.EvidenceDetail, "joins separate passages") {
-		t.Fatalf("joined quote detail = %q", joinedStats.EvidenceDetail)
-	}
-	_, editedStats, err := parseAnalysisChatReplyCandidates(
-		`{"answer":"x","citations":[{"path":"build-log.txt","quote":"invented text"}],"assessment":null,"proposed_revision":null}`,
-		one,
-	)
-	if err != nil {
-		t.Fatalf("unexpected hard error: %v", err)
-	}
-	if !strings.Contains(editedStats.EvidenceDetail, "quote text the tools returned") {
-		t.Fatalf("edited quote detail = %q", editedStats.EvidenceDetail)
+	if !strings.Contains(stats.EvidenceDetail, "quote text the tools returned") {
+		t.Fatalf("joined quote detail = %q", stats.EvidenceDetail)
 	}
 }
 
@@ -1797,11 +1828,33 @@ func TestAnalysisChatFollowUpCitesEarlierTurnEvidence(t *testing.T) {
 	}
 }
 
-func TestAnalysisChatUnparseableAnswerReportsGate(t *testing.T) {
+// A prose answer is a formatting failure, not a reasoning one. It reaches the
+// maintainer marked unverified instead of being discarded.
+func TestAnalysisChatProseAnswerDegradesToUnverified(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
 	for i := 0; i < 6; i++ {
-		server.push(200, chatRespFinal("no json here"))
+		server.push(200, chatRespFinal("The controller log stops at 12:04, so look there."))
+	}
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
+
+	reply, err := agent.Reply(t.Context(), analysisChatTurn())
+	if err != nil {
+		t.Fatalf("Reply error = %v", err)
+	}
+	if !reply.Unverified || reply.UnverifiedReason != analysischat.UnverifiedFormat {
+		t.Fatalf("reply = %+v", reply)
+	}
+	if reply.Answer != "The controller log stops at 12:04, so look there." || len(reply.Citations) != 0 {
+		t.Fatalf("salvaged answer = %+v", reply)
+	}
+}
+
+func TestAnalysisChatEmptyAnswerReportsGate(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	for i := 0; i < 6; i++ {
+		server.push(200, chatRespFinal("   "))
 	}
 	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
 
@@ -1812,6 +1865,96 @@ func TestAnalysisChatUnparseableAnswerReportsGate(t *testing.T) {
 	gate, ok := analysischat.ValidationGateOf(err)
 	if !ok || gate != analysischat.GateCandidate {
 		t.Fatalf("gate = %q ok = %t", gate, ok)
+	}
+}
+
+func TestSalvageAnalysisChatReply(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "prose", raw: "the node never joined", want: "the node never joined"},
+		{
+			name: "prose quoting a JSON path",
+			raw:  "run kubectl -o jsonpath='{.status.phase}': the pod never went Ready",
+			want: "run kubectl -o jsonpath='{.status.phase}': the pod never went Ready",
+		},
+		{
+			name: "prose quoting a contract key",
+			raw:  `The provider returned {"citations":null}; that is why validation failed.`,
+			want: `The provider returned {"citations":null}; that is why validation failed.`,
+		},
+		{
+			name: "prose carrying a patch",
+			raw:  "Apply this to stop the retries:\n{\"spec\":{\"template\":{\"spec\":{\"restartPolicy\":\"Never\"}}}}",
+			want: "Apply this to stop the retries:\n{\"spec\":{\"template\":{\"spec\":{\"restartPolicy\":\"Never\"}}}}",
+		},
+		{
+			name: "contract failure keeps the answer field",
+			raw:  `{"answer":"the node never joined","citations":[],"confidence":0.9}`,
+			want: "the node never joined",
+		},
+		{
+			name: "nested answer beside another field",
+			raw:  `{"draft":{"answer":"maybe timeout"},"final":"container was OOMKilled"}`,
+			want: `{"draft":{"answer":"maybe timeout"},"final":"container was OOMKilled"}`,
+		},
+		{
+			name: "metadata wrapper keeps the whole response",
+			raw:  `{"result":{"answer":"the node never joined","citations":[]}}`,
+			want: `{"result":{"answer":"the node never joined","citations":[]}}`,
+		},
+		{
+			name: "draft object followed by a prose conclusion",
+			raw:  "{\"draft\":{\"answer\":\"maybe timeout\"}}\nFinal conclusion: the container was OOMKilled.",
+			want: "{\"draft\":{\"answer\":\"maybe timeout\"}}\nFinal conclusion: the container was OOMKilled.",
+		},
+		{
+			name: "two different answers keep the whole response",
+			raw:  `{"draft":{"answer":"maybe timeout"},"final":{"answer":"actually OOM"}}`,
+			want: `{"draft":{"answer":"maybe timeout"},"final":{"answer":"actually OOM"}}`,
+		},
+		{
+			name: "duplicate answer keys keep the whole response",
+			raw:  `{"answer":"maybe timeout","answer":"actually OOM","citations":[]}`,
+			want: `{"answer":"maybe timeout","answer":"actually OOM","citations":[]}`,
+		},
+		{name: "empty", raw: "  "},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			reply, ok := salvageAnalysisChatReply(testCase.raw)
+			if ok != (testCase.want != "") {
+				t.Fatalf("salvaged = %t", ok)
+			}
+			if !ok {
+				return
+			}
+			if reply.Answer != testCase.want || !reply.Unverified ||
+				reply.UnverifiedReason != analysischat.UnverifiedFormat || reply.Assessment != "inconclusive" {
+				t.Fatalf("reply = %+v", reply)
+			}
+		})
+	}
+}
+
+// Narration alongside a tool call is not an answer. Salvage runs only on a
+// tools-free turn, so "let me check the log" never becomes the reply.
+func TestAnalysisChatNarrationIsNotSalvaged(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCallWithContent(
+		"Let me check the controller log.", "call-1", "read_artifact",
+		map[string]interface{}{"path": "build-log.txt"},
+	))
+	for i := 0; i < 6; i++ {
+		server.push(200, chatRespFinal("   "))
+	}
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 3, Timeout: time.Second})
+
+	if _, err := agent.Reply(t.Context(), analysisChatTurn()); !errors.Is(err, analysischat.ErrResponseValidationFailed) {
+		t.Fatalf("Reply error = %v", err)
 	}
 }
 
@@ -1856,42 +1999,112 @@ func TestAnalysisChatQuoteCapFitsDownstreamBudgets(t *testing.T) {
 	}
 }
 
-func TestAnalysisChatQuoteCapBoundary(t *testing.T) {
-	body := strings.Repeat("x", analysisChatMaxQuoteBytes)
-	evidence := map[string]*analysisChatEvidence{"log.txt": {Segments: []string{body + "y"}}}
-	at := `{"answer":"a","citations":[{"path":"log.txt","quote":"` + body + `"}],"assessment":null,"proposed_revision":null}`
-	if _, stats, err := parseAnalysisChatReplyCandidates(at, evidence); err != nil || stats.EvidenceGate != "" {
-		t.Fatalf("a quote at the cap was rejected: gate=%q err=%v", stats.EvidenceGate, err)
-	}
-	over := `{"answer":"a","citations":[{"path":"log.txt","quote":"` + body + `y"}],"assessment":null,"proposed_revision":null}`
-	_, stats, err := parseAnalysisChatReplyCandidates(over, evidence)
+// A citation whose passage does not fit the recording budget is unverified.
+// Storing only its head would show the maintainer text that no longer covers
+// what the citation claimed.
+func TestAnalysisChatQuoteTooLongToRecordIsUnverified(t *testing.T) {
+	line := strings.Repeat("x", 900)
+	evidence := map[string]*analysisChatEvidence{"log.txt": {
+		Segments: []string{line + "\n" + line + "\n" + line},
+	}}
+	raw := `{"answer":"a","citations":[{"path":"log.txt","quote":"` + line + ` ` + line + ` ` + line + `"}],"assessment":null,"proposed_revision":null}`
+	reply, stats, err := parseAnalysisChatReplyCandidates(raw, evidence)
 	if err != nil {
 		t.Fatalf("unexpected hard error: %v", err)
 	}
-	if !strings.Contains(stats.EvidenceDetail, "exceeds 2000 bytes") {
-		t.Fatalf("over-cap detail = %q", stats.EvidenceDetail)
+	if !reply.Unverified || !strings.Contains(stats.EvidenceDetail, "too long to record") {
+		t.Fatalf("reply=%+v detail=%q", reply, stats.EvidenceDetail)
 	}
 }
 
-// Colour codes and indentation are presentation, but cursor movement changes
-// where text renders, so only the first two may be dropped from a quote.
+// A cited line range that does not fit narrows to the lines that do, so the
+// stored text and the cited lines still describe each other. Narrowing past the
+// passage the model pointed at leaves nothing to verify.
+func TestAnalysisChatQuoteCapNarrowsTheCitedRange(t *testing.T) {
+	line := strings.Repeat("x", 900)
+	evidence := map[string]*analysisChatEvidence{"log.txt": {
+		Segments: []string{line + "\n" + line + "\n" + line},
+		Lines:    map[int]string{10: line, 11: line, 12: line},
+	}}
+	raw := `{"answer":"a","citations":[{"path":"log.txt","line_start":10,"line_end":12,"quote":"` + line[:20] + `"}],"assessment":null,"proposed_revision":null}`
+	reply, stats, err := parseAnalysisChatReplyCandidates(raw, evidence)
+	if err != nil || stats.EvidenceGate != "" {
+		t.Fatalf("an over-cap range was rejected: gate=%q err=%v", stats.EvidenceGate, err)
+	}
+	citation := reply.Citations[0]
+	if citation.Quote != line+"\n"+line || citation.LineStart != 10 || citation.LineEnd != 11 {
+		t.Fatalf("clamped citation = %+v", citation)
+	}
+	long := strings.Repeat("x", 1000)
+	dropped := map[string]*analysisChatEvidence{"log.txt": {
+		Segments: []string{long + "\n" + long + "\nFATAL: OOM"},
+		Lines:    map[int]string{10: long, 11: long, 12: "FATAL: OOM"},
+	}}
+	raw = `{"answer":"a","citations":[{"path":"log.txt","line_start":10,"line_end":12,"quote":"FATAL: OOM"}],"assessment":null,"proposed_revision":null}`
+	reply, stats, err = parseAnalysisChatReplyCandidates(raw, dropped)
+	if err != nil {
+		t.Fatalf("unexpected hard error: %v", err)
+	}
+	if !reply.Unverified || !strings.Contains(stats.EvidenceDetail, "too long to record") {
+		t.Fatalf("narrowing past the cited passage stayed verified: reply=%+v detail=%q", reply, stats.EvidenceDetail)
+	}
+}
+
+// A quote of nothing but colour codes normalizes away, and an empty locator
+// would otherwise match any passage.
+func TestAnalysisChatCitationRejectsEmptyNormalizedQuote(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{"log.txt": {Segments: []string{"controller stopped"}}}
+	raw := `{"answer":"a","citations":[{"path":"log.txt","quote":"\u001b[31m"}],"assessment":null,"proposed_revision":null}`
+	reply, _, err := parseAnalysisChatReplyCandidates(raw, evidence)
+	if err != nil {
+		t.Fatalf("unexpected hard error: %v", err)
+	}
+	if !reply.Unverified {
+		t.Fatalf("colour-code-only quote was verified: %+v", reply)
+	}
+	if normalizedQuoteInRange(map[int]string{1: "controller stopped"}, 1, 1, "\x1b[31m") {
+		t.Fatal("colour-code-only analyzer quote matched a range")
+	}
+}
+
+// A single line longer than the cap has no line boundary to trim on, so it is
+// cut on a rune boundary instead of rejecting the citation.
+func TestAnalysisChatQuoteCapClampsOneLongLine(t *testing.T) {
+	line := strings.Repeat("é", analysisChatMaxQuoteBytes)
+	quote, kept := clampAnalysisChatQuote(line)
+	if len(quote) > analysisChatMaxQuoteBytes || !strings.HasPrefix(line, quote) || kept != 1 {
+		t.Fatalf("clamped quote length = %d kept = %d", len(quote), kept)
+	}
+	if !utf8.ValidString(quote) {
+		t.Fatal("clamped quote is not valid UTF-8")
+	}
+	// Artifact bytes are not guaranteed to be valid UTF-8, and the quote is now
+	// the engine's copy of them rather than decoded model text.
+	if quote, _ := clampAnalysisChatQuote("controller \xff stopped"); !utf8.ValidString(quote) {
+		t.Fatalf("under-cap quote is not valid UTF-8: %q", quote)
+	}
+}
+
+// Colour codes are presentation, but cursor movement changes where text
+// renders, so only the first may be dropped from a locator.
 func TestAnalysisChatEvidenceSeparatesPresentationFromPositioning(t *testing.T) {
 	evidence := &analysisChatEvidence{Segments: []string{
 		"  \x1b[38;5;9mstatus: failed\n    reason: timeout",
 		"cursor=\x1b[2Amoved",
 	}}
-	if !analysisChatEvidenceContains(evidence, "status: failed\nreason: timeout") {
-		t.Fatal("quote dropping colour codes and indentation was rejected")
+	if _, matches := attributeAnalysisChatQuote(evidence, "status: failed\nreason: timeout"); matches != 1 {
+		t.Fatal("locator dropping colour codes and indentation was rejected")
 	}
-	if analysisChatEvidenceContains(evidence, "cursor=moved") {
-		t.Fatal("quote dropping a cursor-movement sequence was accepted")
+	if _, matches := attributeAnalysisChatQuote(evidence, "cursor=moved"); matches != 0 {
+		t.Fatal("locator dropping a cursor-movement sequence was accepted")
 	}
 }
 
 func TestAnalysisChatPromptStatesTheQuoteRules(t *testing.T) {
 	for _, want := range []string{
-		"keep the\noriginal text and line breaks",
-		"Leading\nindentation and colour codes may be dropped",
+		"copy enough of the tool output to identify one passage and no other",
+		"the engine replaces it with the exact text the tool returned",
+		"matches several passages cannot be resolved",
 	} {
 		if !strings.Contains(analysisChatResponseFormat, want) {
 			t.Fatalf("prompt does not state %q", want)
