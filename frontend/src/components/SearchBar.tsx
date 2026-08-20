@@ -364,7 +364,6 @@ export function SearchBar() {
             left: mobileExpanded ? 16 : { md: 0 },
             right: mobileExpanded ? 16 : { xs: 0, md: "auto" },
             width: mobileExpanded ? "auto" : { xs: "min(28rem, calc(100vw - 32px))", md: "28rem" },
-            borderRadius: "6px",
             overflow: "hidden",
             zIndex: (theme) => theme.zIndex.modal,
           }}

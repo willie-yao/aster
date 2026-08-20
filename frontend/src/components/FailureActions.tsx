@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
@@ -13,7 +12,6 @@ import CircularProgress from "@mui/material/CircularProgress";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
-import DialogTitle from "@mui/material/DialogTitle";
 import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
@@ -27,9 +25,10 @@ import {
 } from "@mui/icons-material";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useAuth } from "../hooks/useAuth";
-import { soft } from "../theme";
 import { useSearchParams } from "react-router-dom";
 import { ActionDraftPreview } from "./ActionDraftPreview";
+import { DialogHeader } from "./ActionDialog";
+import { dialogGutter, dialogPaperSx } from "../theme/overview";
 import type {
   Action,
   ActionEligibility,
@@ -73,67 +72,6 @@ function requestStateError(request: ActionRequest): string | null {
 }
 
 const API_BASE = import.meta.env.BASE_URL;
-
-const dialogPaperSx = {
-  borderRadius: "16px",
-  border: "1px solid",
-  borderColor: "divider",
-  backgroundImage: "none",
-} as const;
-
-function DialogHeader({
-  icon,
-  accent,
-  title,
-  subtitle,
-}: {
-  icon: ReactNode;
-  accent: "primary" | "warning";
-  title: string;
-  subtitle?: string;
-}) {
-  return (
-    <DialogTitle
-      sx={{ display: "flex", alignItems: "center", gap: 1.5, px: 3, py: 2.25 }}
-    >
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: 38,
-          height: 38,
-          borderRadius: "11px",
-          flexShrink: 0,
-          color: `${accent}.main`,
-          bgcolor: (t) => soft(t, accent, 0.15),
-          border: "1px solid",
-          borderColor: (t) => soft(t, accent, 0.3),
-        }}
-      >
-        {icon}
-      </Box>
-      <Box sx={{ minWidth: 0 }}>
-        <Typography
-          variant="headline"
-          component="span"
-          sx={{ display: "block", fontSize: "1.125rem", lineHeight: 1.2 }}
-        >
-          {title}
-        </Typography>
-        {subtitle && (
-          <Typography
-            variant="caption"
-            color="textSecondary"
-            sx={{ display: "block", mt: 0.25 }}
-          >
-            {subtitle}
-          </Typography>
-        )}
-      </Box>
-    </DialogTitle>
-  );
-}
 
 export function FailureActions({
   failureID,
@@ -850,9 +788,9 @@ export function FailureActions({
         <DialogHeader
           icon={
             reviewIntent === "propose-fix" ? (
-              <Build sx={{ fontSize: 20 }} />
+              <Build sx={{ fontSize: 18 }} />
             ) : (
-              <BugReport sx={{ fontSize: 20 }} />
+              <BugReport sx={{ fontSize: 18 }} />
             )
           }
           accent="warning"
@@ -862,7 +800,7 @@ export function FailureActions({
               : "Generate an issue draft?"
           }
         />
-        <DialogContent dividers>
+        <DialogContent dividers sx={{ px: dialogGutter, py: 2 }}>
           <Typography variant="body2" color="textSecondary">
             Opening the email link did not create anything. Generate a draft
             now, then review the exact content before confirming any GitHub
@@ -875,7 +813,7 @@ export function FailureActions({
             </Typography>
           )}
         </DialogContent>
-        <DialogActions sx={{ px: 3, py: 2 }}>
+        <DialogActions sx={{ px: dialogGutter, py: 2 }}>
           <Button
             onClick={dismissReviewIntent}
             color="inherit"
@@ -884,7 +822,6 @@ export function FailureActions({
           </Button>
           <Button
             variant="contained"
-            color="warning"
             disableElevation
             onClick={generateRequestedDraft}
           >
@@ -901,11 +838,11 @@ export function FailureActions({
         slotProps={{ paper: { sx: dialogPaperSx } }}
       >
         <DialogHeader
-          icon={<VisibilityOffOutlined sx={{ fontSize: 20 }} />}
+          icon={<VisibilityOffOutlined sx={{ fontSize: 18 }} />}
           accent="primary"
           title="Dismiss pattern"
         />
-        <DialogContent dividers>
+        <DialogContent dividers sx={{ px: dialogGutter, py: 2 }}>
           <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
             Hides this recurring pattern from the active view. It reappears
             automatically if a newer failing build recurs.
@@ -922,7 +859,7 @@ export function FailureActions({
             onChange={(e) => setNote(e.target.value)}
           />
         </DialogContent>
-        <DialogActions sx={{ px: 3, py: 2 }}>
+        <DialogActions sx={{ px: dialogGutter, py: 2 }}>
           <Button
             onClick={() => setResolveOpen(false)}
             disabled={resolveBusy}
@@ -966,16 +903,16 @@ export function FailureActions({
         <DialogHeader
           icon={
             isFix ? (
-              <Build sx={{ fontSize: 20 }} />
+              <Build sx={{ fontSize: 18 }} />
             ) : (
-              <BugReport sx={{ fontSize: 20 }} />
+              <BugReport sx={{ fontSize: 18 }} />
             )
           }
           accent="warning"
           title={isFix ? "Review draft fix PR" : "Review issue draft"}
           subtitle={`Review the exact ${isFix ? "pull request" : "issue"} before it is opened on GitHub`}
         />
-        <DialogContent dividers sx={{ px: 3, py: 2.5 }}>
+        <DialogContent dividers sx={{ px: dialogGutter, py: 2 }}>
           {(busy === "preview" || request?.status === "pending") && (
             <Box>
               <Stack
@@ -1011,7 +948,6 @@ export function FailureActions({
             <Box
               role="status"
               sx={{
-                borderRadius: "12px",
                 bgcolor: (theme) =>
                   (theme.vars ?? theme).palette.surface.containerLow,
                 border: "1px solid",
@@ -1038,7 +974,7 @@ export function FailureActions({
             <Alert
               severity="error"
               variant="outlined"
-              sx={{ mb: 2, borderRadius: "10px" }}
+              sx={{ mb: 2 }}
             >
               <Typography variant="body2">{error}</Typography>
             </Alert>
@@ -1053,7 +989,7 @@ export function FailureActions({
                     : "warning"
               }
               variant="outlined"
-              sx={{ mb: 2, borderRadius: "10px" }}
+              sx={{ mb: 2 }}
             >
               <Typography variant="body2" sx={{ fontWeight: 600 }}>
                 {verificationTitle}
@@ -1067,7 +1003,7 @@ export function FailureActions({
             <Alert
               severity="warning"
               variant="outlined"
-              sx={{ mb: 2, borderRadius: "10px" }}
+              sx={{ mb: 2 }}
             >
               <Typography variant="body2">{request.warning}</Typography>
             </Alert>
@@ -1130,7 +1066,7 @@ export function FailureActions({
             </Stack>
           )}
         </DialogContent>
-        <DialogActions sx={{ px: 3, py: 2 }}>
+        <DialogActions sx={{ px: dialogGutter, py: 2 }}>
           <Button
             onClick={close}
             disabled={busy !== null}

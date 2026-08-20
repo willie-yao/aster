@@ -17,7 +17,7 @@ const sectionLabelSx = {
 } as const;
 
 const previewBoxSx = {
-  borderRadius: "10px",
+  borderRadius: 1,
   border: "1px solid",
   borderColor: "divider",
   bgcolor: (theme: Theme) => (theme.vars ?? theme).palette.surface.containerLow,
@@ -49,7 +49,7 @@ function VerifyBadge({
         display: "flex",
         alignItems: "center",
         gap: 1,
-        borderRadius: "10px",
+        borderRadius: 1,
         border: "1px solid",
         borderColor: (theme) => soft(theme, accent, 0.3),
         bgcolor: (theme) => soft(theme, accent, 0.12),
@@ -95,7 +95,7 @@ export function ActionDraftPreview({ preview }: { preview: ActionPreview }) {
         <Typography sx={sectionLabelSx}>Title</Typography>
         <Box
           sx={{
-            borderRadius: "10px",
+            borderRadius: 1,
             border: "1px solid",
             borderColor: "divider",
             bgcolor: (theme) =>

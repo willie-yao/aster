@@ -62,7 +62,9 @@ test("brand gradient stops are exposed and distinct from status colors", () => {
 });
 
 test("operator console theme keeps compact technical typography", () => {
-  assert.equal(defaultTheme.shape.borderRadius, 6);
+  // One radius for the whole app. Surfaces that need a squarer or rounder
+  // corner say so locally; nothing has to override the default back to 4px.
+  assert.equal(defaultTheme.shape.borderRadius, 4);
   const data = (defaultTheme.typography as unknown as { data: { fontFamily?: string } }).data;
   assert.match(String(data.fontFamily), /ui-monospace/);
   assert.equal(defaultTheme.typography.h4.fontSize, "1.75rem");
@@ -88,4 +90,61 @@ test("overview typography uses the approved compact readable scale", () => {
   assert.equal(overviewLayout.majorBandMinHeight, 48);
   assert.equal(overviewLayout.categoryBandMinHeight, 44);
   assert.equal(overviewLayout.ledgerRowMinHeight, 52);
+});
+
+// Chip is the one MUI primitive that hardcodes a pill rather than reading
+// shape.borderRadius, so the whole app renders pills if this override is lost.
+test("chips square to the shape token instead of rendering as pills", () => {
+  const root = defaultTheme.components?.MuiChip?.styleOverrides?.root;
+  assert.equal(typeof root, "function");
+  const resolved = (root as (p: { theme: Theme }) => { borderRadius: number })({ theme: defaultTheme });
+  assert.equal(resolved.borderRadius, defaultTheme.shape.borderRadius);
+});
+
+// A tinted status chip lifts its own background toward its accent, which is
+// what pushed `main` under 4.5:1 in light mode. Both schemes are checked here
+// because the failure only appeared in one of them.
+test("tinted status chips keep their label readable in both schemes", () => {
+  const hex = (h: string) => ({
+    r: parseInt(h.slice(1, 3), 16),
+    g: parseInt(h.slice(3, 5), 16),
+    b: parseInt(h.slice(5, 7), 16),
+  });
+  type RGB = ReturnType<typeof hex>;
+  const over = (fg: RGB, a: number, bg: RGB): RGB => ({
+    r: fg.r * a + bg.r * (1 - a),
+    g: fg.g * a + bg.g * (1 - a),
+    b: fg.b * a + bg.b * (1 - a),
+  });
+  const luminance = (c: RGB) => {
+    const f = (v: number) => {
+      const s = v / 255;
+      return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
+  };
+  const contrast = (a: RGB, b: RGB) => {
+    const [l1, l2] = [luminance(a), luminance(b)];
+    return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+  };
+
+  const schemes = {
+    light: { tokens: lightTokens, label: (accent: string) => lightTokens[`${accent}Dim`] },
+    dark: { tokens: darkTokens, label: (accent: string) => darkTokens[accent] },
+  };
+  const accents = { primary: "primary", success: "secondary", warning: "tertiary" } as const;
+
+  for (const [name, scheme] of Object.entries(schemes)) {
+    for (const [chipColor, tokenKey] of Object.entries(accents)) {
+      const accent = hex(scheme.tokens[tokenKey]);
+      // The chip sits on the assistant message, itself tinted at 0.045.
+      const bubble = over(accent, 0.045, hex(scheme.tokens.surfaceContainer));
+      const chipBackground = over(accent, 0.16, bubble);
+      const ratio = contrast(hex(scheme.label(tokenKey)), chipBackground);
+      assert.ok(
+        ratio >= 4.5,
+        `${name} ${chipColor} chip label contrast ${ratio.toFixed(2)} is below 4.5:1`,
+      );
+    }
+  }
 });

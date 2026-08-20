@@ -6,7 +6,6 @@ import CircularProgress from "@mui/material/CircularProgress";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
-import DialogTitle from "@mui/material/DialogTitle";
 import FormControl from "@mui/material/FormControl";
 import InputLabel from "@mui/material/InputLabel";
 import Link from "@mui/material/Link";
@@ -35,10 +34,11 @@ import {
 import { chatFixRequestPresentation } from "../lib/chatFixPresentation";
 import { actionRequestIsPollable } from "../lib/actionRequests";
 import { clearStoredChatFixRequest, readStoredChatFixRequest, storeChatFixRequest } from "../lib/chatFixRequestStorage";
-import { soft } from "../theme";
 import type { AnalysisChatMessage } from "../types/analysisChat";
 import type { PatternAnalysis } from "../types/dashboard";
 import { ActionDraftPreview } from "./ActionDraftPreview";
+import { DialogHeader } from "./ActionDialog";
+import { dialogGutter, dialogPaperSx } from "../theme/overview";
 import { RichText } from "./RichText";
 
 function EvidenceList({
@@ -372,44 +372,15 @@ export function ChatFixDialog({
       onClose={busy && !(exactAnalysis && busy === "preview") ? undefined : close}
       maxWidth="md"
       fullWidth
-      slotProps={{
-        paper: {
-          sx: {
-            borderRadius: "16px",
-            border: "1px solid",
-            borderColor: "divider",
-            backgroundImage: "none",
-          },
-        },
-      }}
+      slotProps={{ paper: { sx: dialogPaperSx } }}
     >
-      <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1.25, px: 3, py: 2.25 }}>
-        <Box
-          sx={{
-            width: 38,
-            height: 38,
-            display: "grid",
-            placeItems: "center",
-            borderRadius: "11px",
-            color: "warning.main",
-            bgcolor: (theme) => soft(theme, "warning", 0.13),
-            border: "1px solid",
-            borderColor: (theme) => soft(theme, "warning", 0.28),
-          }}
-        >
-          <BuildOutlined sx={{ fontSize: 20 }} />
-        </Box>
-        <Box>
-          <Typography variant="headline" component="span" sx={{ display: "block", fontSize: "1.125rem" }}>
-            Use this finding in a fix proposal
-          </Typography>
-          <Typography variant="caption" color="textSecondary">
-            Review the exact context before the coding agent sees it.
-          </Typography>
-        </Box>
-      </DialogTitle>
+      <DialogHeader
+        icon={<BuildOutlined sx={{ fontSize: 18 }} />}
+        title="Use this finding in a fix proposal"
+        subtitle="Review the exact context before the coding agent sees it."
+      />
 
-      <DialogContent dividers sx={{ px: 3, py: 2.5 }}>
+      <DialogContent dividers sx={{ px: dialogGutter, py: 2 }}>
         {error && <Alert severity="error" variant="outlined" sx={{ mb: 2 }}>{error}</Alert>}
         {observationMessage && <Alert severity="info" variant="outlined" sx={{ mb: 2 }}>{observationMessage}</Alert>}
         {url && (
@@ -453,7 +424,7 @@ export function ChatFixDialog({
                 </FormControl>
               )}
               {selectedPattern && (
-                <Box sx={{ borderRadius: "10px", bgcolor: "action.selected", px: 1.5, py: 1.25 }}>
+                <Box sx={{ borderRadius: 1, bgcolor: "action.selected", px: 1.5, py: 1.25 }}>
                   <Typography variant="body2" sx={{ fontWeight: 700 }}>{selectedPattern.subject}</Typography>
                   {selectedPattern.shared_root_cause && (
                     <Typography variant="body2" color="textSecondary" sx={{ mt: 0.55, lineHeight: 1.55 }}>
@@ -472,7 +443,7 @@ export function ChatFixDialog({
                       </Typography>
                       <Box
                         sx={{
-                          borderRadius: "8px",
+                          borderRadius: 1,
                           bgcolor: "background.paper",
                           border: "1px solid",
                           borderColor: "divider",
@@ -503,7 +474,7 @@ export function ChatFixDialog({
                 </Typography>
               </Box>
               {message.proposed_revision && (
-                <Box sx={{ mt: 1.2, borderRadius: "10px", bgcolor: (theme) => soft(theme, "warning", 0.07), p: 1.25 }}>
+                <Box sx={{ mt: 1.2, borderRadius: 1, bgcolor: "action.selected", p: 1.25 }}>
                   <Typography variant="caption" color="warning" sx={{ fontWeight: 750 }}>Evidence-backed revision</Typography>
                   <Typography variant="body2" sx={{ mt: 0.45 }}>{message.proposed_revision.root_cause}</Typography>
                   <Typography variant="body2" color="textSecondary" sx={{ mt: 0.45 }}>{message.proposed_revision.suggested_fix}</Typography>
@@ -541,7 +512,6 @@ export function ChatFixDialog({
             {requestPresentation?.canRegenerate && (
               <Button
                 variant="outlined"
-                color="warning"
                 onClick={() => void regeneratePreview()}
                 disabled={busy !== null || !instruction.trim() || instruction.trim() === submittedInstruction.trim()}
                 sx={{ alignSelf: "flex-start" }}
@@ -605,7 +575,6 @@ export function ChatFixDialog({
                 />
                 <Button
                   variant="outlined"
-                  color="warning"
                   onClick={() => void regeneratePreview()}
                   disabled={busy !== null || !instruction.trim() || instruction.trim() === submittedInstruction.trim()}
                   sx={{ alignSelf: "flex-start" }}
@@ -618,14 +587,13 @@ export function ChatFixDialog({
         )}
       </DialogContent>
 
-      <DialogActions sx={{ px: 3, py: 2 }}>
-        <Button onClick={close} disabled={busy !== null && !(exactAnalysis && busy === "preview")}>
+      <DialogActions sx={{ px: dialogGutter, py: 2 }}>
+        <Button color="inherit" onClick={close} disabled={busy !== null && !(exactAnalysis && busy === "preview")}>
           {url ? "Done" : exactAnalysis && busy === "preview" ? "Close" : "Cancel"}
         </Button>
         {!request && !preview && !url && (
           <Button
             variant="contained"
-            color="warning"
             startIcon={busy === "preview" ? <CircularProgress size={16} color="inherit" /> : <BuildOutlined />}
             onClick={() => void generatePreview()}
             disabled={busy !== null || (!exactAnalysis && !patternID)}
@@ -636,7 +604,6 @@ export function ChatFixDialog({
         {request?.status === "ready" && request.preview && !preview && !url && (
           <Button
             variant="contained"
-            color="warning"
             startIcon={<BuildOutlined />}
             onClick={() => setPreview(request.preview ?? null)}
             disabled={busy !== null}

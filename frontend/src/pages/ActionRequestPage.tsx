@@ -36,7 +36,7 @@ import {
   syncStoredActionRequest,
 } from "../lib/actionRequests";
 import { actionRequestPath } from "../lib/routes";
-import { soft } from "../theme";
+import { overviewLayout, overviewTypography, sectionBandSx } from "../theme/overview";
 
 const API_BASE = import.meta.env.BASE_URL;
 
@@ -333,39 +333,27 @@ export function ActionRequestPage() {
 
   return (
     <ActionRequestPageFrame breadcrumbs>
-      <Panel sx={{ borderRadius: "16px", overflow: "hidden" }}>
+      <Panel sx={{ overflow: "hidden" }}>
         <Box
           sx={{
             display: "flex",
             alignItems: "center",
-            gap: 1.5,
-            px: { xs: 2, sm: 3 },
-            py: 2.25,
+            gap: 1,
+            minHeight: overviewLayout.majorBandMinHeight,
+            px: { xs: 2, sm: 2.5 },
+            py: 1.5,
             borderBottom: "1px solid",
-            borderColor: "divider",
+            ...sectionBandSx("warning"),
           }}
         >
-          <Box
-            sx={{
-              display: "grid",
-              placeItems: "center",
-              width: 40,
-              height: 40,
-              borderRadius: "11px",
-              color: "warning.main",
-              bgcolor: (theme) => soft(theme, "warning", 0.15),
-              border: "1px solid",
-              borderColor: (theme) => soft(theme, "warning", 0.3),
-              flexShrink: 0,
-            }}
-          >
-            {isFix ? <Build /> : <BugReport />}
+          <Box sx={{ display: "flex", color: "warning.main", flexShrink: 0 }}>
+            {isFix ? <Build sx={{ fontSize: 18 }} /> : <BugReport sx={{ fontSize: 18 }} />}
           </Box>
           <Box sx={{ minWidth: 0, flex: 1 }}>
-            <Typography variant="h5" component="h2">
+            <Typography component="h2" sx={overviewTypography.majorHeading}>
               {isFix ? "Review draft fix PR" : "Review issue draft"}
             </Typography>
-            <Typography variant="body2" color="textSecondary">
+            <Typography variant="caption" color="textSecondary" sx={{ display: "block" }}>
               Requested by {request.owner}
             </Typography>
           </Box>
@@ -385,7 +373,7 @@ export function ActionRequestPage() {
           />
         </Box>
 
-        <Box sx={{ px: { xs: 2, sm: 3 }, py: 2.5 }}>
+        <Box sx={{ px: { xs: 2, sm: 2.5 }, py: 2.5 }}>
           {error && (
             <Alert severity="error" variant="outlined" sx={{ mb: 2 }}>
               {error}
@@ -420,7 +408,7 @@ export function ActionRequestPage() {
           {request.status === "pending" && (
             <Box
               sx={{
-                borderRadius: "12px",
+                borderRadius: 1,
                 bgcolor: (theme) =>
                   (theme.vars ?? theme).palette.surface.containerLow,
                 border: "1px solid",
@@ -446,7 +434,7 @@ export function ActionRequestPage() {
             <Box
               role="status"
               sx={{
-                borderRadius: "12px",
+                borderRadius: 1,
                 bgcolor: (theme) =>
                   (theme.vars ?? theme).palette.surface.containerLow,
                 border: "1px solid",
@@ -542,7 +530,7 @@ export function ActionRequestPage() {
             display: "flex",
             justifyContent: "flex-end",
             gap: 1,
-            px: { xs: 2, sm: 3 },
+            px: { xs: 2, sm: 2.5 },
             py: 2,
             borderTop: "1px solid",
             borderColor: "divider",

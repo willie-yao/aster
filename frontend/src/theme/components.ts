@@ -39,6 +39,9 @@ export function buildComponents(): Components<Theme> {
     },
     MuiChip: {
       styleOverrides: {
+        // Chip is the one primitive that hardcodes a pill instead of reading
+        // shape.borderRadius, so it is squared here rather than per surface.
+        root: ({ theme }) => ({ borderRadius: theme.shape.borderRadius }),
         label: { fontWeight: 600 },
       },
     },

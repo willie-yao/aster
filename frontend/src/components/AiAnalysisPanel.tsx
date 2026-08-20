@@ -21,7 +21,7 @@ import { AnalysisChat } from "./AnalysisChat";
 import { AnalysisTraceInspector, type AnalysisTraceReference } from "./AnalysisTraceInspector";
 import { UpstreamCauseNotice } from "./UpstreamCauseNotice";
 import { externalCause } from "../lib/patternFixGuidance";
-import { soft } from "../theme";
+import { soft, softChipSx } from "../theme";
 import { useAnalysisCorrections } from "../hooks/useData";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useAuth } from "../hooks/useAuth";
@@ -158,16 +158,12 @@ export function AiAnalysisPanel({
         <Chip
           size="small"
           label={`Severity: ${displayedAnalysis.severity}`}
-          sx={{
-            borderRadius: "4px",
+          sx={(theme) => ({
             fontWeight: 600,
             ...(severityColor !== "primary"
-              ? {
-                  bgcolor: (theme) => soft(theme, severityColor, 0.16),
-                  color: `${severityColor}.main`,
-                }
+              ? softChipSx(theme, severityColor)
               : { bgcolor: "action.selected", color: "text.secondary" }),
-          }}
+          })}
         />
       )}      {correctionActive && (
         <Chip
@@ -175,7 +171,7 @@ export function AiAnalysisPanel({
           color="success"
           variant="outlined"
           label="Maintainer corrected"
-          sx={{ borderRadius: "4px" }}
+         
         />
       )}
       {correctionStale && (
@@ -184,7 +180,7 @@ export function AiAnalysisPanel({
           color="warning"
           variant="outlined"
           label="Correction stale"
-          sx={{ borderRadius: "4px" }}
+         
         />
       )}
       {correction?.status === "revoked" && (
@@ -192,7 +188,7 @@ export function AiAnalysisPanel({
           size="small"
           variant="outlined"
           label="Correction revoked"
-          sx={{ borderRadius: "4px" }}
+         
         />
       )}
     </Stack>
@@ -201,7 +197,7 @@ export function AiAnalysisPanel({
   const correctionPanel = (
     <>
       {(correctionError || correctionsLoadError) && (
-        <Alert severity="error" variant="outlined" sx={{ borderRadius: "4px" }}>
+        <Alert severity="error" variant="outlined">
           {correctionError ?? correctionsLoadError}
         </Alert>
       )}
@@ -210,7 +206,7 @@ export function AiAnalysisPanel({
           sx={{
             border: "1px solid",
             borderColor: correctionActive ? "success.main" : "divider",
-            borderRadius: detailAppearance ? "4px" : "10px",
+            borderRadius: 1,
             p: 1.25,
             bgcolor: detailAppearance
               ? "transparent"
@@ -244,7 +240,7 @@ export function AiAnalysisPanel({
               size="small"
               startIcon={<HistoryOutlined />}
               onClick={() => setShowOriginal((value) => !value)}
-              sx={{ ml: { sm: "auto" }, borderRadius: "4px" }}
+              sx={{ ml: { sm: "auto" } }}
             >
               {showOriginal
                 ? "Hide details"
@@ -261,7 +257,7 @@ export function AiAnalysisPanel({
                   startIcon={<UndoOutlined />}
                   onClick={() => void revokeCorrection()}
                   disabled={revokeBusy}
-                  sx={{ borderRadius: "4px" }}
+                 
                 >
                   {revokeBusy ? "Revoking" : "Revoke"}
                 </Button>
@@ -314,7 +310,7 @@ export function AiAnalysisPanel({
   );
 
   const dispositionPanel = analysis.disposition === "preliminary" ? (
-    <Alert severity="warning" variant="outlined" sx={{ borderRadius: "4px" }}>
+    <Alert severity="warning" variant="outlined">
       Preliminary analysis. The structured result is safe to review, but evidence or
       quality checks remain unresolved. It cannot be used for corrections, remediation,
       actions, or fixes.
@@ -485,7 +481,7 @@ export function AiAnalysisPanel({
         minWidth: 0,
         maxWidth: "100%",
         overflowWrap: "anywhere",
-        borderRadius: "12px",
+        borderRadius: 1,
         bgcolor: (theme) => soft(theme, "primary", 0.05),
         p: { xs: 2, sm: 2.5 },
       }}

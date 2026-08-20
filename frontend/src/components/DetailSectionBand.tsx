@@ -2,7 +2,7 @@ import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import type { ReactNode } from "react";
 import type { SxProps, Theme } from "@mui/material/styles";
-import { overviewLayout, overviewTypography } from "../theme/overview";
+import { overviewLayout, overviewTypography, sectionBandSx } from "../theme/overview";
 
 interface DetailSectionBandProps {
   title: string;
@@ -38,10 +38,8 @@ export function DetailSectionBand({
           rowGap: 0.25,
           px: 1.5,
           py: 1,
-          bgcolor: "surface.containerHigh",
           borderBlock: "1px solid",
-          borderColor: "divider",
-          boxShadow: "inset 3px 0 0 var(--mui-palette-primary-main)",
+          ...sectionBandSx(),
         },
         ...(sx ? (Array.isArray(sx) ? sx : [sx]) : []),
       ]}

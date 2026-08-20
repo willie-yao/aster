@@ -130,7 +130,7 @@ export function createAppTheme(
       light: { palette: paletteFromTokens(tokens.light) },
       dark: { palette: paletteFromTokens(tokens.dark) },
     },
-    shape: { borderRadius: 6 },
+    shape: { borderRadius: 4 },
     typography,
     components: buildComponents(),
   });
