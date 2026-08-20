@@ -1874,6 +1874,16 @@ func TestSalvageAnalysisChatReply(t *testing.T) {
 			want: "run kubectl -o jsonpath='{.status.phase}': the pod never went Ready",
 		},
 		{
+			name: "prose quoting a contract key",
+			raw:  `The provider returned {"citations":null}; that is why validation failed.`,
+			want: `The provider returned {"citations":null}; that is why validation failed.`,
+		},
+		{
+			name: "draft object followed by a prose conclusion",
+			raw:  "{\"draft\":{\"answer\":\"maybe timeout\"}}\nFinal conclusion: the container was OOMKilled.",
+			want: "{\"draft\":{\"answer\":\"maybe timeout\"}}\nFinal conclusion: the container was OOMKilled.",
+		},
+		{
 			name: "contract failure keeps the answer field",
 			raw:  `{"answer":"the node never joined","citations":[],"confidence":0.9}`,
 			want: "the node never joined",
@@ -1884,8 +1894,10 @@ func TestSalvageAnalysisChatReply(t *testing.T) {
 			want: "the node never joined",
 		},
 		{name: "two different answers", raw: `{"draft":{"answer":"maybe timeout"},"final":{"answer":"actually OOM"}}`},
+		{name: "duplicate answer keys", raw: `{"answer":"maybe timeout","answer":"actually OOM","citations":[]}`},
 		{name: "truncated reply object", raw: `{"answer":"unfinished"`},
 		{name: "rejected json with no answer", raw: `{"conclusion":"unknown"}`},
+		{name: "fenced json with no answer", raw: "```json\n{\"conclusion\":\"unknown\"}\n```"},
 		{name: "empty", raw: "  "},
 	}
 	for _, testCase := range tests {
@@ -1984,14 +1996,15 @@ func TestAnalysisChatQuoteTooLongToRecordIsUnverified(t *testing.T) {
 }
 
 // A cited line range that does not fit narrows to the lines that do, so the
-// stored text and the cited lines still describe each other.
+// stored text and the cited lines still describe each other. Narrowing past the
+// passage the model pointed at leaves nothing to verify.
 func TestAnalysisChatQuoteCapNarrowsTheCitedRange(t *testing.T) {
 	line := strings.Repeat("x", 900)
 	evidence := map[string]*analysisChatEvidence{"log.txt": {
 		Segments: []string{line + "\n" + line + "\n" + line},
 		Lines:    map[int]string{10: line, 11: line, 12: line},
 	}}
-	raw := `{"answer":"a","citations":[{"path":"log.txt","line_start":10,"line_end":12,"quote":"ignored"}],"assessment":null,"proposed_revision":null}`
+	raw := `{"answer":"a","citations":[{"path":"log.txt","line_start":10,"line_end":12,"quote":"` + line[:20] + `"}],"assessment":null,"proposed_revision":null}`
 	reply, stats, err := parseAnalysisChatReplyCandidates(raw, evidence)
 	if err != nil || stats.EvidenceGate != "" {
 		t.Fatalf("an over-cap range was rejected: gate=%q err=%v", stats.EvidenceGate, err)
@@ -1999,6 +2012,36 @@ func TestAnalysisChatQuoteCapNarrowsTheCitedRange(t *testing.T) {
 	citation := reply.Citations[0]
 	if citation.Quote != line+"\n"+line || citation.LineStart != 10 || citation.LineEnd != 11 {
 		t.Fatalf("clamped citation = %+v", citation)
+	}
+	long := strings.Repeat("x", 1000)
+	dropped := map[string]*analysisChatEvidence{"log.txt": {
+		Segments: []string{long + "\n" + long + "\nFATAL: OOM"},
+		Lines:    map[int]string{10: long, 11: long, 12: "FATAL: OOM"},
+	}}
+	raw = `{"answer":"a","citations":[{"path":"log.txt","line_start":10,"line_end":12,"quote":"FATAL: OOM"}],"assessment":null,"proposed_revision":null}`
+	reply, stats, err = parseAnalysisChatReplyCandidates(raw, dropped)
+	if err != nil {
+		t.Fatalf("unexpected hard error: %v", err)
+	}
+	if !reply.Unverified || !strings.Contains(stats.EvidenceDetail, "too long to record") {
+		t.Fatalf("narrowing past the cited passage stayed verified: reply=%+v detail=%q", reply, stats.EvidenceDetail)
+	}
+}
+
+// A quote of nothing but colour codes normalizes away, and an empty locator
+// would otherwise match any passage.
+func TestAnalysisChatCitationRejectsEmptyNormalizedQuote(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{"log.txt": {Segments: []string{"controller stopped"}}}
+	raw := `{"answer":"a","citations":[{"path":"log.txt","quote":"\u001b[31m"}],"assessment":null,"proposed_revision":null}`
+	reply, _, err := parseAnalysisChatReplyCandidates(raw, evidence)
+	if err != nil {
+		t.Fatalf("unexpected hard error: %v", err)
+	}
+	if !reply.Unverified {
+		t.Fatalf("colour-code-only quote was verified: %+v", reply)
+	}
+	if normalizedQuoteInRange(map[int]string{1: "controller stopped"}, 1, 1, "\x1b[31m") {
+		t.Fatal("colour-code-only analyzer quote matched a range")
 	}
 }
 

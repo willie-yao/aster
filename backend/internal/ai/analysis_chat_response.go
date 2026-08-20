@@ -224,37 +224,30 @@ func degradeAnalysisChatReply(reply *analysischat.Reply, failure *analysisChatEv
 // reply carries no evidence, so it cannot start a fix or a correction.
 func salvageAnalysisChatReply(raw string) (analysischat.Reply, bool) {
 	scan := scanAnalysisChatJSONCandidates(raw)
-	trimmed := strings.TrimSpace(raw)
 	answer := ""
-	rejectedShape := false
-	for _, candidate := range scan.candidates {
-		// A response that is nothing but one JSON object is a failed attempt at
-		// the contract, not prose the maintainer can read.
-		rejectedShape = rejectedShape || candidate.value == trimmed ||
-			analysisChatCandidateLooksLikeReply(candidate.value)
-		var fields struct {
-			Answer string `json:"answer"`
-		}
-		if json.Unmarshal([]byte(candidate.value), &fields) != nil {
-			continue
-		}
-		// Two different answers in one response mean the model wrapped a draft
-		// around its conclusion, and picking either is a guess.
-		if found := strings.TrimSpace(fields.Answer); found != "" && found != answer {
-			if answer != "" {
-				return analysischat.Reply{}, false
+	// A response that is mostly JSON was an attempt at the contract, so its
+	// answer field is the answer. A response that is mostly prose is the answer,
+	// even when it quotes a JSON path, a manifest, or its own earlier draft.
+	if analysisChatJSONShaped(raw, scan) {
+		for _, candidate := range scan.candidates {
+			var fields struct {
+				Answer string `json:"answer"`
 			}
-			answer = found
+			if rejectAnalysisChatDuplicateFields(candidate.value) != nil ||
+				json.Unmarshal([]byte(candidate.value), &fields) != nil {
+				continue
+			}
+			// Two different answers in one response mean the model wrapped a
+			// draft around its conclusion, and picking either is a guess.
+			if found := strings.TrimSpace(fields.Answer); found != "" && found != answer {
+				if answer != "" {
+					return analysischat.Reply{}, false
+				}
+				answer = found
+			}
 		}
-	}
-	for _, fragment := range scan.incomplete {
-		rejectedShape = rejectedShape || analysisChatCandidateLooksLikeReply(raw[fragment.start:])
-	}
-	// Prose is still an answer, even when it quotes a JSON path or a manifest.
-	// A truncated reply object is a broken response rather than prose, so it
-	// keeps failing instead of showing the maintainer a JSON fragment.
-	if answer == "" && !rejectedShape {
-		answer = trimmed
+	} else {
+		answer = strings.TrimSpace(raw)
 	}
 	if answer == "" {
 		return analysischat.Reply{}, false
@@ -262,6 +255,34 @@ func salvageAnalysisChatReply(raw string) (analysischat.Reply, bool) {
 	reply := analysischat.Reply{Answer: clampAnalysisChatText(answer, analysisChatMaxAnswerBytes)}
 	degradeAnalysisChatReply(&reply, &analysisChatEvidenceFailure{Gate: analysischat.UnverifiedFormat})
 	return reply, true
+}
+
+// analysisChatJSONShaped reports whether a response was an attempt at the JSON
+// contract rather than prose, by how much of it sits inside JSON spans. An
+// unclosed object counts to the end of the response, so a truncated reply is
+// shaped even though it produced no candidate.
+func analysisChatJSONShaped(raw string, scan analysisChatCandidateScan) bool {
+	spans := make([][2]int, 0, len(scan.candidates)+len(scan.incomplete))
+	for _, candidate := range scan.candidates {
+		spans = append(spans, [2]int{candidate.start, candidate.end})
+	}
+	for _, fragment := range scan.incomplete {
+		spans = append(spans, [2]int{fragment.start, len(raw) - 1})
+	}
+	sort.Slice(spans, func(i, j int) bool { return spans[i][0] < spans[j][0] })
+	covered, end := 0, -1
+	for _, span := range spans {
+		if span[1] <= end {
+			continue
+		}
+		if span[0] > end {
+			covered += span[1] - span[0] + 1
+		} else {
+			covered += span[1] - end
+		}
+		end = span[1]
+	}
+	return covered*2 > len(strings.TrimSpace(raw))
 }
 
 func analysisChatValidationRank(category string) int {
@@ -439,11 +460,20 @@ func validateAnalysisChatCitations(
 				Gate: analysischat.UnverifiedCitation, Detail: fmt.Sprintf("citation %d has an invalid line range", i+1),
 			}
 		}
-		if len(citation.Quote) < 4 {
+		locator := normalizeCitationText(citation.Quote)
+		// A quote of nothing but colour codes normalizes away and would match
+		// any passage.
+		if len(citation.Quote) < 4 || locator == "" {
 			return &analysisChatEvidenceFailure{
 				Gate:   analysischat.UnverifiedCitation,
 				Detail: fmt.Sprintf("citation %d requires a quote of at least 4 bytes from the artifact", i+1),
 			}
+		}
+		tooLong := &analysisChatEvidenceFailure{
+			Gate: analysischat.UnverifiedCitation,
+			Detail: fmt.Sprintf(
+				"citation %d quote is too long to record; quote the passage that supports the answer", i+1,
+			),
 		}
 		// A line range pins the passage on its own, so it is the attribution.
 		// Without one the quote is a locator the engine resolves, and a locator
@@ -457,8 +487,12 @@ func validateAnalysisChatCitations(
 				}
 			}
 			// A range too long to record narrows to the lines that fit, so the
-			// stored text and the cited lines still describe each other.
+			// stored text and the cited lines still describe each other. What
+			// survives has to still cover the passage the model pointed at.
 			clamped, kept := clampAnalysisChatQuote(quote)
+			if clamped != quote && !strings.Contains(normalizeCitationText(clamped), locator) {
+				return tooLong
+			}
 			citation.Quote = clamped
 			citation.LineEnd = citation.LineStart + kept - 1
 			continue
@@ -483,13 +517,8 @@ func validateAnalysisChatCitations(
 		clamped, _ := clampAnalysisChatQuote(quote)
 		// Recording only part of the passage would leave the maintainer reading
 		// text that no longer covers what the citation claimed.
-		if !strings.Contains(normalizeCitationText(clamped), normalizeCitationText(citation.Quote)) {
-			return &analysisChatEvidenceFailure{
-				Gate: analysischat.UnverifiedCitation,
-				Detail: fmt.Sprintf(
-					"citation %d quote is too long to record; quote the passage that supports the answer", i+1,
-				),
-			}
+		if !strings.Contains(normalizeCitationText(clamped), locator) {
+			return tooLong
 		}
 		citation.Quote = clamped
 		citation.LineStart, citation.LineEnd = 0, 0
