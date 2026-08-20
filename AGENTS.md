@@ -364,6 +364,28 @@ live deploy.
   branch, it is a deletion candidate.
 - **Conventional, terse commit messages.** Use a single-line subject. Put the
   detailed rationale and verification in the pull request description.
+- **Every pull request needs a `release-note` block.** CI
+  (`.github/workflows/release-note.yml`) fails without one, and the block
+  supplies that change's release-note text. `.github/PULL_REQUEST_TEMPLATE.md`
+  carries it and the rest of the expected sections, and is the canonical author
+  guidance; `hack/check-release-note.py` is what actually enforces it.
+
+  The description must hold **exactly one** backtick-fenced block whose info
+  string is `release-note`. The four-backtick wrapper below keeps its inner
+  example from being counted.
+
+  ````
+  ```release-note
+  What changed, and what it means for someone upgrading Aster.
+  ```
+  ````
+
+  Write it for someone upgrading Aster, not for a reviewer: the symptom, then
+  the cause, then the fix, as finished prose rather than a summary of the diff.
+  Call out breaking changes explicitly. Use `NONE` when nothing a user would
+  notice changed: tests, refactors, repo tooling, or documentation corrections.
+  The checker rejects missing, duplicate, empty, or unterminated blocks and
+  unclosed HTML comments.
 
 ## Common pitfalls
 
