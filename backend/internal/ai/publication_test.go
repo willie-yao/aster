@@ -337,7 +337,7 @@ func TestCappedToolPayloadCannotGroundHiddenEvidence(t *testing.T) {
 	visible := modelVisibleToolPayload(toolEnvelopeJSON(state, payload))
 	evidence := map[string]*analysisChatEvidence{}
 	call := modelToolCall{Function: modelFunction{Name: "grep_artifact", Arguments: `{"path":"build-log.txt"}`}}
-	recordAnalysisChatEvidence(evidence, call, visible)
+	recordAnalysisChatEvidence(evidence, call, visible, analysisChatEvidenceFallbackMaxBytes)
 	if issue := evidenceCitationIssue(models.EvidenceCitation{Path: "build-log.txt", LineStart: 2494, LineEnd: 2494, Quote: "hidden evidence"}, evidence); issue == "" {
 		t.Fatal("hidden capped evidence was accepted")
 	}

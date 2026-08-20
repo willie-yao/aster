@@ -741,6 +741,7 @@ type agentState struct {
 	analysisEvidence         map[string]*analysisChatEvidence
 	analysisEvidenceRevision map[string]map[int]int
 	analysisEvidenceFull     bool
+	analysisEvidenceBudget   int
 	// sourceContentByPath retains bounded repo-tool snippets for CLI grounding.
 	// Neither map is copied into caches, traces, or public output.
 	sourceContentByPath map[string][]string
@@ -1175,6 +1176,7 @@ func (c *Client) doAnalyzeAgentic(
 	state.evidenceArtifactsFull = map[string]bool{}
 	state.analysisEvidence = map[string]*analysisChatEvidence{}
 	state.analysisEvidenceRevision = map[string]map[int]int{}
+	state.analysisEvidenceBudget = analysisChatEvidenceBudget(state.opts.ContextByteBudget)
 
 	fullSysPrompt := sysPrompt + agToolDocs + agenticSourceContextSection(in.Sources, in.ProjectOwner, in.ProjectName)
 	state.initialArtifactTree = listInitialArtifactTree(ctx, in.Browser)
@@ -3012,7 +3014,7 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 			if p := extractToolPathArg(tc.Function.Arguments); p != "" && visiblePayload != nil {
 				s.recordSuccessfulRead(p)
 				beforeLines := analysisEvidenceLineSnapshot(s.analysisEvidence, p)
-				if !recordAnalysisChatEvidence(s.analysisEvidence, tc, visiblePayload) {
+				if _, roomLeft := recordAnalysisChatEvidence(s.analysisEvidence, tc, visiblePayload, s.analysisEvidenceBudget); !roomLeft {
 					s.analysisEvidenceFull = true
 				}
 				visibleSnippets := toolResultSnippets(tc.Function.Name, visiblePayload)

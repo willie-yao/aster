@@ -201,6 +201,16 @@ type modelEntry struct {
 		MaxRequestContextLength int `json:"max_request_context_length"`
 		MaxModelLen             int `json:"max_model_len"`
 	} `json:"metadata"`
+	Capabilities struct {
+		Limits struct {
+			// MaxPromptTokens is the prompt-side ceiling. GitHub Copilot also
+			// reports a larger total window, but the prompt share of it varies
+			// from half to nearly all depending on the model, so the total
+			// cannot be used to size a request.
+			MaxPromptTokens        int `json:"max_prompt_tokens"`
+			MaxContextWindowTokens int `json:"max_context_window_tokens"`
+		} `json:"limits"`
+	} `json:"capabilities"`
 }
 
 // contextTokens returns the entry's reported context window in tokens, checking
@@ -211,6 +221,10 @@ func (m modelEntry) contextTokens() int {
 		m.MaxModelLen,
 		m.Metadata.MaxRequestContextLength,
 		m.Metadata.MaxModelLen,
+		// Prompt tokens before the total window: a model whose prompt share is
+		// half its window would otherwise be sized at twice what it accepts.
+		m.Capabilities.Limits.MaxPromptTokens,
+		m.Capabilities.Limits.MaxContextWindowTokens,
 	} {
 		if v > 0 {
 			return v

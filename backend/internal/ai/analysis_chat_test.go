@@ -860,7 +860,7 @@ func TestAnalysisChatCitationLineValidation(t *testing.T) {
 		Name: "grep_artifact", Arguments: `{"path":"build-log.txt"}`,
 	}}, map[string]interface{}{"matches": []interface{}{map[string]interface{}{
 		"line": float64(42), "context": []interface{}{"  41: before", "> 42: controller stopped", "  43: after"},
-	}}})
+	}}}, analysisChatEvidenceFallbackMaxBytes)
 	valid := `{"answer":"The controller stopped.","assessment":"supports","citations":[{"path":"build-log.txt","line_start":42,"line_end":42,"quote":"controller stopped"}],"proposed_revision":null}`
 	reply, err := parseAnalysisChatReply(valid, evidence)
 	if err != nil {
@@ -1162,21 +1162,60 @@ func TestParseAnalysisChatReplyHandlesDeepMetadataWrapper(t *testing.T) {
 	}
 }
 
-func TestAnalysisChatEvidenceOverflowIsAtomic(t *testing.T) {
+// A read that overruns the budget is rejected whole, because the model-visible
+// envelope is replaced when it does not fit: retaining part of it would index
+// text the model never received and could not cite. The remaining room is
+// reported so the model can retry a narrower range instead of giving up.
+func TestAnalysisChatEvidenceOverflowIsAtomicAndReportsRoom(t *testing.T) {
+	const budget = 200
 	evidence := map[string]*analysisChatEvidence{
-		"build-log.txt": {Segments: []string{strings.Repeat("a", analysisChatEvidenceMaxBytes-3)}, Bytes: analysisChatEvidenceMaxBytes - 3, Lines: map[int]string{}},
+		"build-log.txt": {Segments: []string{strings.Repeat("a", 150)}, Bytes: 150, Lines: map[int]string{}},
 	}
-	beforeSegments := len(evidence["build-log.txt"].Segments)
 	beforeBytes := evidence["build-log.txt"].Bytes
-	ok := recordAnalysisChatEvidence(evidence, modelToolCall{Function: modelFunction{
+	beforeSegments := len(evidence["build-log.txt"].Segments)
+
+	roomLeft, recorded := recordAnalysisChatEvidence(evidence, modelToolCall{Function: modelFunction{
 		Name: "read_artifact", Arguments: `{"path":"build-log.txt"}`,
-	}}, map[string]interface{}{"content": "four"})
-	if ok {
-		t.Fatal("overflowing evidence read was accepted")
+	}}, map[string]interface{}{"content": strings.Repeat("b", 100)}, budget)
+
+	if recorded {
+		t.Fatal("an overflowing read was accepted")
+	}
+	if roomLeft != budget-beforeBytes {
+		t.Fatalf("roomLeft = %d, want %d", roomLeft, budget-beforeBytes)
 	}
 	entry := evidence["build-log.txt"]
 	if entry.Bytes != beforeBytes || len(entry.Segments) != beforeSegments {
 		t.Fatalf("overflow mutated evidence: bytes=%d segments=%d", entry.Bytes, len(entry.Segments))
+	}
+	// A read that fits is still recorded, and reports the room it left.
+	roomLeft, recorded = recordAnalysisChatEvidence(evidence, modelToolCall{Function: modelFunction{
+		Name: "read_artifact", Arguments: `{"path":"build-log.txt"}`,
+	}}, map[string]interface{}{"content": strings.Repeat("c", 40)}, budget)
+	if !recorded || roomLeft != budget-190 {
+		t.Fatalf("fitting read: recorded=%v roomLeft=%d", recorded, roomLeft)
+	}
+}
+
+func TestAnalysisChatEvidenceBudgetTracksContextBudget(t *testing.T) {
+	// No configured budget keeps the conservative fallback.
+	if got := analysisChatEvidenceBudget(0); got != analysisChatEvidenceFallbackMaxBytes {
+		t.Fatalf("fallback budget = %d", got)
+	}
+	// A larger configured window buys proportionally larger reads.
+	small := analysisChatEvidenceBudget(244880)
+	large := analysisChatEvidenceBudget(994880)
+	if large <= small {
+		t.Fatalf("budget does not track the context budget: small=%d large=%d", small, large)
+	}
+	// A million-token window must clear the artifact sizes this exists for,
+	// well past the fallback that could not hold a controller log.
+	if large < 3*analysisChatEvidenceFallbackMaxBytes {
+		t.Fatalf("large-window budget = %d", large)
+	}
+	// A tiny configured budget never drops below the fallback.
+	if got := analysisChatEvidenceBudget(1000); got != analysisChatEvidenceFallbackMaxBytes {
+		t.Fatalf("small context budget = %d", got)
 	}
 }
 
@@ -1699,7 +1738,7 @@ func TestSeedAnalysisChatEvidenceRestoresProvenCitations(t *testing.T) {
 			{Path: "junit.xml", LineStart: 7, LineEnd: 9, Quote: "one line only"},
 		}},
 	}
-	evidence := seedAnalysisChatEvidence(history)
+	evidence := seedAnalysisChatEvidence(history, 0)
 	if len(evidence) != 2 {
 		t.Fatalf("evidence = %+v", evidence)
 	}
@@ -1725,7 +1764,7 @@ func TestSeedAnalysisChatEvidenceBoundsCarriedBytes(t *testing.T) {
 			{Path: fmt.Sprintf("build-%d.log", i), Quote: quote},
 		}})
 	}
-	if bytes := analysisChatEvidenceBytes(seedAnalysisChatEvidence(history)); bytes > analysisChatSeedMaxBytes {
+	if bytes := analysisChatEvidenceBytes(seedAnalysisChatEvidence(history, 0)); bytes > analysisChatSeedBudget(0) {
 		t.Fatalf("seeded bytes = %d", bytes)
 	}
 }

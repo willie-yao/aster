@@ -278,7 +278,8 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	loopCtx, cancel := context.WithTimeout(ctx, a.opts.Timeout)
 	defer cancel()
 
-	evidence := seedAnalysisChatEvidence(turn.History)
+	evidence := seedAnalysisChatEvidence(turn.History, a.opts.ContextByteBudget)
+	evidenceBudget := analysisChatEvidenceBudget(a.opts.ContextByteBudget)
 	var fallback *analysisChatFallback
 	var accepted *analysischat.Reply
 	evidenceRevision := 0
@@ -360,10 +361,21 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		onDispatch: func(dispatched *toolLoopDispatch) {
 			name := dispatched.Call.Function.Name
 			before := analysisChatEvidenceBytes(evidence)
-			recorded := recordAnalysisChatEvidence(evidence, dispatched.Call, dispatched.Payload)
+			roomLeft, recorded := recordAnalysisChatEvidence(
+				evidence, dispatched.Call, dispatched.Payload, evidenceBudget,
+			)
 			if !recorded {
 				state.budgetExhausted = true
-				dispatched.Envelope = toolErrJSON("analysis chat evidence budget exhausted; stop reading and finalize")
+				// Say what is left so the model narrows its next read instead of
+				// stopping, which left it with nothing to cite.
+				if roomLeft > 0 {
+					dispatched.Envelope = toolErrJSON(fmt.Sprintf(
+						"analysis chat evidence budget nearly exhausted; %d bytes remain for this artifact, so read a narrower range or finalize",
+						roomLeft,
+					))
+				} else {
+					dispatched.Envelope = toolErrJSON("analysis chat evidence budget exhausted; stop reading and finalize")
+				}
 			}
 			after := analysisChatEvidenceBytes(evidence)
 			if after > before {
@@ -958,15 +970,37 @@ func analysisChatContext(turn analysischat.Turn) (string, error) {
 		"\n\nAnswer follow-up questions only about this selected analysis and build.", nil
 }
 
-const analysisChatEvidenceMaxBytes = 128 << 10
+// analysisChatEvidenceFallbackMaxBytes bounds one artifact when no context
+// budget is known. Deployments that configure a context window get a budget
+// derived from it instead, so a larger window actually buys larger reads.
+const analysisChatEvidenceFallbackMaxBytes = 128 << 10
 
-// analysisChatSeedMaxBytes bounds the evidence carried forward from earlier
-// turns, and analysisChatSeedMaxPathBytes keeps a seeded artifact from filling
-// its own budget so the current turn can still read it.
-const (
-	analysisChatSeedMaxBytes     = 256 << 10
-	analysisChatSeedMaxPathBytes = analysisChatEvidenceMaxBytes / 4
-)
+// analysisChatEvidenceBudget sizes how much of one artifact a conversation may
+// hold. It tracks the model's own context budget, because a fixed cap stops a
+// model from reading a log it has ample room for.
+func analysisChatEvidenceBudget(contextByteBudget int) int {
+	if contextByteBudget <= 0 {
+		return analysisChatEvidenceFallbackMaxBytes
+	}
+	// Half the request budget: large enough for a controller log, while leaving
+	// room for the conversation, the published analysis, and the answer.
+	budget := contextByteBudget / 2
+	if budget < analysisChatEvidenceFallbackMaxBytes {
+		return analysisChatEvidenceFallbackMaxBytes
+	}
+	return budget
+}
+
+// analysisChatSeedBudget bounds the evidence carried forward from earlier turns,
+// and analysisChatSeedPathBudget keeps a seeded artifact from filling its own
+// budget so the current turn can still read it.
+func analysisChatSeedBudget(contextByteBudget int) int {
+	return analysisChatEvidenceBudget(contextByteBudget) * 2
+}
+
+func analysisChatSeedPathBudget(contextByteBudget int) int {
+	return analysisChatEvidenceBudget(contextByteBudget) / 4
+}
 
 type analysisChatEvidence struct {
 	Segments []string
@@ -980,8 +1014,10 @@ var analysisChatContextLineRE = regexp.MustCompile(`^[> ]\s*(\d+):\s?(.*)$`)
 // citations earlier turns already proved, so a follow-up can cite an artifact
 // read before this turn. Recent turns are seeded first because they are the
 // ones a follow-up is most likely to revisit.
-func seedAnalysisChatEvidence(history []analysischat.Message) map[string]*analysisChatEvidence {
+func seedAnalysisChatEvidence(history []analysischat.Message, contextByteBudget int) map[string]*analysisChatEvidence {
 	evidence := map[string]*analysisChatEvidence{}
+	seedBudget := analysisChatSeedBudget(contextByteBudget)
+	seedPathBudget := analysisChatSeedPathBudget(contextByteBudget)
 	seeded := 0
 	for _, message := range slices.Backward(history) {
 		if message.Role != "assistant" {
@@ -989,7 +1025,7 @@ func seedAnalysisChatEvidence(history []analysischat.Message) map[string]*analys
 		}
 		for _, citation := range message.Citations {
 			quote := strings.TrimSpace(citation.Quote)
-			if quote == "" || seeded+len(quote) > analysisChatSeedMaxBytes {
+			if quote == "" || seeded+len(quote) > seedBudget {
 				continue
 			}
 			path, err := artifacts.SafePath(citation.Path)
@@ -1001,7 +1037,7 @@ func seedAnalysisChatEvidence(history []analysischat.Message) map[string]*analys
 				entry = &analysisChatEvidence{Lines: map[int]string{}}
 				evidence[path] = entry
 			}
-			if entry.Bytes+len(quote) > analysisChatSeedMaxPathBytes {
+			if entry.Bytes+len(quote) > seedPathBudget {
 				continue
 			}
 			appendAnalysisChatEvidenceCandidate(entry, quote)
@@ -1038,16 +1074,16 @@ func analysisChatEvidenceBytes(evidence map[string]*analysisChatEvidence) int {
 	return total
 }
 
-func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolCall modelToolCall, payload map[string]interface{}) bool {
+func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolCall modelToolCall, payload map[string]interface{}, maxBytes int) (int, bool) {
 	if evidence == nil || !isContentFetchingTool(toolCall.Function.Name) {
-		return true
+		return 0, true
 	}
 	if _, failed := payload["error"]; failed {
-		return true
+		return 0, true
 	}
 	path, err := artifacts.SafePath(extractToolPathArg(toolCall.Function.Arguments))
 	if err != nil || path == "" {
-		return true
+		return 0, true
 	}
 	candidate := &analysisChatEvidence{Lines: map[int]string{}}
 	switch toolCall.Function.Name {
@@ -1075,15 +1111,22 @@ func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolC
 		}
 	}
 	if candidate.Bytes == 0 {
-		return true
+		return 0, true
 	}
 	entry := evidence[path]
 	existingBytes := 0
 	if entry != nil {
 		existingBytes = entry.Bytes
 	}
-	if existingBytes+candidate.Bytes > analysisChatEvidenceMaxBytes {
-		return false
+	// Evidence is rejected whole. The model-visible envelope is replaced when a
+	// read does not fit, so retaining part of it would index text the model
+	// never received and could not cite.
+	remaining := maxBytes - existingBytes
+	if candidate.Bytes > remaining {
+		if remaining < 0 {
+			remaining = 0
+		}
+		return remaining, false
 	}
 	if entry == nil {
 		entry = &analysisChatEvidence{Lines: map[int]string{}}
@@ -1094,7 +1137,7 @@ func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolC
 	for line, text := range candidate.Lines {
 		entry.Lines[line] = text
 	}
-	return true
+	return maxBytes - entry.Bytes, true
 }
 
 func appendAnalysisChatEvidenceCandidate(evidence *analysisChatEvidence, text string) {
