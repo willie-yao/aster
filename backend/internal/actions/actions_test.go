@@ -21,6 +21,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/resolve"
+	"github.com/willie-yao/aster/backend/internal/runtime"
 	"github.com/willie-yao/aster/backend/internal/statefile"
 )
 
@@ -2274,5 +2275,35 @@ func TestExactAnalysisFixFailureClassificationIsPublicSafe(t *testing.T) {
 	}
 	if ReasonMessage(ReasonProviderCredentialRejected) == ReasonMessage(ReasonGenerationFailed) {
 		t.Fatal("a provider credential rejection reports the generic generation failure message")
+	}
+
+	noChange := fixpr.AnalysisFailureDiagnostic{
+		Category: fixpr.AnalysisFailureNoReviewablePatch, Detail: fixpr.AnalysisFailureDetailNoRepositoryChange,
+		TerminalState: runtime.TerminalSucceeded,
+	}
+	if message := analysisFixFailureMessage(noChange); message != "The coding agent completed without changing repository files." {
+		t.Fatalf("no-change message = %q", message)
+	}
+	tooBroad := fixpr.AnalysisFailureDiagnostic{
+		Category: fixpr.AnalysisFailureNoReviewablePatch, Detail: fixpr.AnalysisFailureDetailReviewScopeExceeded,
+	}
+	if message := analysisFixFailureMessage(tooBroad); message != "The coding agent returned changes outside the allowed review scope." {
+		t.Fatalf("too-broad message = %q", message)
+	}
+	public := withReason(ReasonNoReviewablePatch, errors.New("private runtime output"), "The coding agent completed without changing repository files.")
+	failure := &AnalysisFixFailureView{
+		Category: AnalysisFixFailureNoReviewablePatch, Detail: AnalysisFixFailureDetailNoRepositoryChange,
+		TerminalState: runtime.TerminalSucceeded,
+	}
+	if message := generationFailureMessage(true, ReasonNoReviewablePatch, failure, public); message != public.Error() || strings.Contains(message, "private runtime output") {
+		t.Fatalf("public generation failure message = %q", message)
+	}
+	if message := generationFailureMessage(false, ReasonNoReviewablePatch, failure, public); message != ReasonMessage(ReasonNoReviewablePatch) {
+		t.Fatalf("non-analysis generation failure message = %q", message)
+	}
+	private := errors.New("private runtime output")
+	runtimeFailure := &AnalysisFixFailureView{Category: AnalysisFixFailureRuntimeInfrastructure, TerminalState: runtime.TerminalFailed}
+	if message := generationFailureMessage(true, ReasonGenerationFailed, runtimeFailure, private); message != ReasonMessage(ReasonGenerationFailed) || strings.Contains(message, private.Error()) {
+		t.Fatalf("private generation failure message = %q", message)
 	}
 }

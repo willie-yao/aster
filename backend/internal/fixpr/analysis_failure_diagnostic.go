@@ -22,9 +22,18 @@ const (
 	AnalysisFailureTimedOut              AnalysisFailureCategory = "timed_out"
 )
 
+// AnalysisFailureDetail distinguishes safe outcomes within one failure category.
+type AnalysisFailureDetail string
+
+const (
+	AnalysisFailureDetailNoRepositoryChange  AnalysisFailureDetail = "no_repository_change"
+	AnalysisFailureDetailReviewScopeExceeded AnalysisFailureDetail = "review_scope_exceeded"
+)
+
 // AnalysisFailureDiagnostic retains only public-safe exact-JUnit failure metadata.
 type AnalysisFailureDiagnostic struct {
 	Category       AnalysisFailureCategory
+	Detail         AnalysisFailureDetail
 	TerminalState  runtime.TerminalState
 	CommandResults []runtime.CommandResult
 	ChangedFiles   []string
@@ -48,11 +57,26 @@ func AnalysisFailureDiagnosticOf(err error) (AnalysisFailureDiagnostic, bool) {
 }
 
 func newAnalysisGenerationError(category AnalysisFailureCategory, agent *AgentConfig, result runtime.GenerateResult, cause error) error {
-	diagnostic := AnalysisFailureDiagnostic{Category: category, TerminalState: result.TerminalState}
+	diagnostic := AnalysisFailureDiagnostic{
+		Category: category, Detail: analysisFailureDetail(category, result, cause), TerminalState: result.TerminalState,
+	}
 	if agent != nil && agent.RequireCommandResults && runtime.ValidateCommandResults(agent.CommandPolicy.Commands, result.CommandResults) == nil {
 		diagnostic.CommandResults = cloneCommandResults(result.CommandResults)
 	}
 	return &analysisGenerationError{diagnostic: diagnostic, cause: cause}
+}
+
+func analysisFailureDetail(category AnalysisFailureCategory, result runtime.GenerateResult, cause error) AnalysisFailureDetail {
+	if category != AnalysisFailureNoReviewablePatch {
+		return ""
+	}
+	if errors.Is(cause, runtime.ErrResultScope) || result.FailureCode == runtime.ExecutionFailureReviewScope || len(result.Files) > 0 {
+		return AnalysisFailureDetailReviewScopeExceeded
+	}
+	if result.TerminalState == runtime.TerminalSucceeded {
+		return AnalysisFailureDetailNoRepositoryChange
+	}
+	return ""
 }
 
 func classifyAnalysisRuntimeFailure(result runtime.GenerateResult, err error) AnalysisFailureCategory {
@@ -76,7 +100,7 @@ func classifyAnalysisRuntimeFailure(result runtime.GenerateResult, err error) An
 
 func cloneAnalysisFailureDiagnostic(in AnalysisFailureDiagnostic) AnalysisFailureDiagnostic {
 	return AnalysisFailureDiagnostic{
-		Category: in.Category, TerminalState: in.TerminalState,
+		Category: in.Category, Detail: in.Detail, TerminalState: in.TerminalState,
 		CommandResults: cloneCommandResults(in.CommandResults), ChangedFiles: slices.Clone(in.ChangedFiles),
 	}
 }

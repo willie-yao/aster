@@ -237,14 +237,28 @@ test("exact JUnit request presentation separates recoverable hard and observatio
   };
   const recoverable = chatFixRequestPresentation({
     ...base, status: "failed", reason_code: "no_reviewable_patch",
-    error: "No reviewable patch was generated. Add a maintainer instruction and regenerate.",
+    error: "The coding agent completed without changing repository files.",
+    failure: { category: "no_reviewable_patch", detail: "no_repository_change", terminal_state: "succeeded" },
   });
   assert.deepEqual(recoverable, {
     severity: "warning",
-    message: "No reviewable patch was generated. Add a maintainer instruction and regenerate.",
+    message: "The coding agent completed without changing repository files. If the remedy belongs in this repository, add a more specific maintainer instruction and regenerate. If it is external or operational, no patch can be generated.",
     canRegenerate: true,
     shouldObserve: false,
   });
+  const tooBroad = chatFixRequestPresentation({
+    ...base, status: "failed", reason_code: "no_reviewable_patch",
+    error: "The coding agent returned changes outside the allowed review scope.",
+    failure: { category: "no_reviewable_patch", detail: "review_scope_exceeded", terminal_state: "failed" },
+  });
+  assert.equal(tooBroad?.message, "The coding agent returned changes outside the allowed review scope. Add a narrower maintainer instruction and regenerate.");
+  assert.equal(tooBroad?.canRegenerate, true);
+  const reasonOnly = chatFixRequestPresentation({
+    ...base, status: "failed", reason_code: "no_reviewable_patch",
+    error: "No reviewable patch was generated.",
+  });
+  assert.equal(reasonOnly?.severity, "error");
+  assert.equal(reasonOnly?.canRegenerate, false);
   const hard = chatFixRequestPresentation({
     ...base, status: "failed", reason_code: "unsafe_remediation", error: "Unsafe remediation blocked.",
     failure: { category: "safety_integrity" },
@@ -260,7 +274,7 @@ test("exact JUnit request presentation separates recoverable hard and observatio
 test("exact JUnit regeneration is one explicit replacement with changed feedback", () => {
   const dialog = source("src/components/ChatFixDialog.tsx");
   const regenerate = dialog.slice(dialog.indexOf("async function regeneratePreview"), dialog.indexOf("async function confirm"));
-  assert.match(regenerate, /recoverableTerminal = request\.status === "failed" && request\.reason_code === "no_reviewable_patch"/);
+  assert.match(regenerate, /recoverableTerminal = request\.status === "failed" && request\.failure\?\.category === "no_reviewable_patch"/);
   assert.match(regenerate, /if \(!recoverableTerminal\) \{[\s\S]*cancelAnalysisChatFixRequest/);
   assert.equal((regenerate.match(/createAnalysisChatFixRequest\(/g) ?? []).length, 1);
   assert.match(regenerate, /recoverableTerminal \? request\.id : undefined/);

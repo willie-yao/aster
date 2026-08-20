@@ -1319,6 +1319,13 @@ func generationFailureCause(err error) error {
 	return err
 }
 
+func generationFailureMessage(analysisRequest bool, code ReasonCode, failure *AnalysisFixFailureView, err error) string {
+	if analysisRequest && code == ReasonNoReviewablePatch && failure != nil && failure.Category == AnalysisFixFailureNoReviewablePatch {
+		return err.Error()
+	}
+	return ReasonMessage(code)
+}
+
 func (s *Service) generateRequestOperation(id string, generate requestOperationGenerator) {
 	ctx, cancel := context.WithTimeout(withActionRequestID(context.Background(), id), s.requestTimeout)
 	needsCleanup := false
@@ -1429,7 +1436,7 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 			request.Warning = draftRefinementWarning
 			request.Preview = &preview
 		} else {
-			request.Error = ReasonMessage(request.ReasonCode)
+			request.Error = generationFailureMessage(analysisRequest, request.ReasonCode, request.Failure, err)
 		}
 	} else {
 		request.Status = RequestReady

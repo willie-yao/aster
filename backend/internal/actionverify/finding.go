@@ -2,6 +2,9 @@ package actionverify
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"slices"
 	"sort"
 	"strings"
@@ -26,7 +29,7 @@ const (
 	findingWarningPolicyConcern = "Selected finding prose triggered a text-only remediation policy concern."
 	findingWarningNoSymbol      = "No uniquely declared source symbol was found in the verified files."
 	findingWarningAmbiguous     = "Multiple plausible local symbols exist in the verified files."
-	findingWarningExternal      = "Some backticked technical identifiers are explanatory and are not declared in the verified files."
+	findingWarningUnresolved    = "Backticked identifiers not declared in the verified files"
 )
 
 // VerifyFindingSource grounds exact-JUnit finding symbols in verified source files.
@@ -42,8 +45,8 @@ func VerifyFindingSource(proposal string, relevantFiles []string, sourceFiles ma
 	if remediationpolicy.RelationshipTextWarning(proposal) != "" {
 		result.Warnings = append(result.Warnings, findingWarningPolicyConcern)
 	}
-	missing := false
-	ambiguous := false
+	counts := make(map[string]int, len(symbols))
+	paths := make(map[string]string, len(symbols))
 	for _, file := range files {
 		content, ok := sourceFiles[file]
 		if !ok {
@@ -52,40 +55,31 @@ func VerifyFindingSource(proposal string, relevantFiles []string, sourceFiles ma
 		if !strings.HasSuffix(file, ".go") {
 			continue
 		}
-		for _, symbol := range symbols {
-			declared, err := declaresSymbol(file, content, symbol)
-			if err != nil {
-				return FindingResult{}, fmt.Errorf("verified source %s could not be parsed", file)
+		declarations, err := findingSymbolDeclarationCounts(file, content, symbols)
+		if err != nil {
+			return FindingResult{}, fmt.Errorf("verified source %s could not be parsed", file)
+		}
+		for symbol, count := range declarations {
+			if count == 0 {
+				continue
 			}
-			if declared {
-				result.Symbols = append(result.Symbols, FindingSymbol{Name: symbol, Path: file})
+			previous := counts[symbol]
+			counts[symbol] += count
+			if previous == 0 && count == 1 {
+				paths[symbol] = file
+			} else {
+				delete(paths, symbol)
 			}
 		}
 	}
-	counts := make(map[string]int, len(symbols))
-	for _, grounded := range result.Symbols {
-		counts[grounded.Name]++
-	}
-	result.Symbols = result.Symbols[:0]
+	missing := make([]string, 0, len(symbols))
+	ambiguous := false
 	for _, symbol := range symbols {
 		switch counts[symbol] {
 		case 0:
-			missing = true
+			missing = append(missing, symbol)
 		case 1:
-			for _, file := range files {
-				content, ok := sourceFiles[file]
-				if !ok {
-					continue
-				}
-				declared, err := declaresSymbol(file, content, symbol)
-				if err != nil {
-					return FindingResult{}, fmt.Errorf("verified source %s could not be parsed", file)
-				}
-				if declared {
-					result.Symbols = append(result.Symbols, FindingSymbol{Name: symbol, Path: file})
-					break
-				}
-			}
+			result.Symbols = append(result.Symbols, FindingSymbol{Name: symbol, Path: paths[symbol]})
 		default:
 			ambiguous = true
 		}
@@ -99,8 +93,8 @@ func VerifyFindingSource(proposal string, relevantFiles []string, sourceFiles ma
 	if ambiguous {
 		result.Warnings = append(result.Warnings, findingWarningAmbiguous)
 	}
-	if missing {
-		result.Warnings = append(result.Warnings, findingWarningExternal)
+	if len(missing) > 0 {
+		result.Warnings = append(result.Warnings, findingMissingSymbolsWarning(missing))
 	}
 	sort.Slice(result.Symbols, func(i, j int) bool {
 		if result.Symbols[i].Name != result.Symbols[j].Name {
@@ -109,4 +103,59 @@ func VerifyFindingSource(proposal string, relevantFiles []string, sourceFiles ma
 		return result.Symbols[i].Path < result.Symbols[j].Path
 	})
 	return result, nil
+}
+
+func findingSymbolDeclarationCounts(filePath, content string, symbols []string) (map[string]int, error) {
+	targets := make(map[string]bool, len(symbols))
+	for _, symbol := range symbols {
+		targets[symbol] = true
+	}
+	counts := make(map[string]int, len(symbols))
+	file, err := parser.ParseFile(token.NewFileSet(), filePath, content, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, declaration := range file.Decls {
+		switch value := declaration.(type) {
+		case *ast.FuncDecl:
+			if targets[value.Name.Name] {
+				counts[value.Name.Name]++
+			}
+		case *ast.GenDecl:
+			for _, spec := range value.Specs {
+				switch item := spec.(type) {
+				case *ast.TypeSpec:
+					if targets[item.Name.Name] {
+						counts[item.Name.Name]++
+					}
+					structure, ok := item.Type.(*ast.StructType)
+					if !ok {
+						continue
+					}
+					for _, field := range structure.Fields.List {
+						for _, name := range field.Names {
+							if targets[name.Name] {
+								counts[name.Name]++
+							}
+						}
+					}
+				case *ast.ValueSpec:
+					for _, name := range item.Names {
+						if targets[name.Name] {
+							counts[name.Name]++
+						}
+					}
+				}
+			}
+		}
+	}
+	return counts, nil
+}
+
+func findingMissingSymbolsWarning(symbols []string) string {
+	quoted := make([]string, len(symbols))
+	for index, symbol := range symbols {
+		quoted[index] = "`" + symbol + "`"
+	}
+	return findingWarningUnresolved + ": " + strings.Join(quoted, ", ") + "."
 }

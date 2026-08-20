@@ -16,27 +16,22 @@ export function chatFixRequestPresentation(request: ChatFixRequest): ChatFixRequ
       shouldObserve: true,
     };
   }
-  if (request.status === "failed" && request.reason_code === "no_reviewable_patch") {
-    return {
-      severity: "warning",
-      message: request.error || "No reviewable patch was generated. Add a maintainer instruction and regenerate.",
-      canRegenerate: true,
-      shouldObserve: false,
-    };
-  }
   if (request.status === "failed") {
+    const canRegenerate = request.failure?.category === "no_reviewable_patch";
     return {
-      severity: "error",
-      message: hardFailureMessage(request),
-      canRegenerate: false,
+      severity: canRegenerate ? "warning" : "error",
+      message: failureMessage(request),
+      canRegenerate,
       shouldObserve: false,
     };
   }
   return null;
 }
 
-function hardFailureMessage(request: ChatFixRequest): string {
+function failureMessage(request: ChatFixRequest): string {
   switch (request.failure?.category) {
+    case "no_reviewable_patch":
+      return noReviewablePatchMessage(request);
     case "runtime_infrastructure":
       return "Fix preview generation failed in the isolated runtime.";
     case "provider_credential":
@@ -54,4 +49,15 @@ function hardFailureMessage(request: ChatFixRequest): string {
     default:
       return request.error || "Fix preview generation failed a safety, integrity, or runtime check.";
   }
+}
+
+function noReviewablePatchMessage(request: ChatFixRequest): string {
+  const detail = request.error || "The coding agent did not return a reviewable repository change.";
+  if (request.failure?.detail === "review_scope_exceeded") {
+    return `${detail} Add a narrower maintainer instruction and regenerate.`;
+  }
+  if (request.failure?.detail === "no_repository_change") {
+    return `${detail} If the remedy belongs in this repository, add a more specific maintainer instruction and regenerate. If it is external or operational, no patch can be generated.`;
+  }
+  return `${detail} Regenerate only if a different instruction could produce a reviewable repository change.`;
 }
