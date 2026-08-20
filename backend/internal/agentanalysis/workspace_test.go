@@ -771,3 +771,139 @@ func TestWorkspaceLargeArtifactManifestUsesCompactStageRequest(t *testing.T) {
 		t.Fatalf("stage=%+v", stage)
 	}
 }
+
+func TestWorkspaceManifestCanonicalizesMultipleSources(t *testing.T) {
+	_, artifactRoot, request, source := workspaceTestInputs(t)
+	files, err := SnapshotArtifactWorkspace(artifactRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := WorkspaceSourceRef{ID: "client", Repository: source}
+	server := WorkspaceSourceRef{ID: "server", Repository: source}
+	server.Repository.Revision = strings.Repeat("b", 40)
+	first, err := NewWorkspaceManifestWithSources(request, []WorkspaceSourceRef{server, client}, "Inspect this project.", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewWorkspaceManifestWithSources(request, []WorkspaceSourceRef{client, server}, "Inspect this project.", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Hash != second.Hash || !slices.Equal(first.Sources, []WorkspaceSourceRef{client, server}) {
+		t.Fatalf("first=%+v second=%+v", first.Sources, second.Sources)
+	}
+	encoded, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := wire["sources"]; !ok {
+		t.Fatal("multi-source wire field is absent")
+	}
+	if _, ok := wire["source"]; ok {
+		t.Fatal("legacy singular source wire field remains")
+	}
+	changed := server
+	changed.Repository.Revision = strings.Repeat("c", 40)
+	third, err := NewWorkspaceManifestWithSources(request, []WorkspaceSourceRef{client, changed}, "Inspect this project.", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Hash == first.Hash {
+		t.Fatal("source catalog revision did not change the manifest hash")
+	}
+}
+
+func TestWorkspaceManifestRejectsInvalidSourceCatalogs(t *testing.T) {
+	_, artifactRoot, request, source := workspaceTestInputs(t)
+	files, err := SnapshotArtifactWorkspace(artifactRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := WorkspaceSourceRef{ID: "primary", Repository: source}
+	for name, sources := range map[string][]WorkspaceSourceRef{
+		"empty":              nil,
+		"invalid ID":         {{ID: "Client_Latest", Repository: source}},
+		"duplicate ID":       {valid, valid},
+		"duplicate identity": {valid, {ID: "secondary", Repository: source}},
+		"too many": func() []WorkspaceSourceRef {
+			result := make([]WorkspaceSourceRef, 0, WorkspaceMaxSources+1)
+			for index := 0; index <= WorkspaceMaxSources; index++ {
+				repository := source
+				repository.Revision = fmt.Sprintf("%040x", index+1)
+				result = append(result, WorkspaceSourceRef{ID: fmt.Sprintf("source-%d", index), Repository: repository})
+			}
+			return result
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewWorkspaceManifestWithSources(request, sources, "Inspect this project.", files); err == nil {
+				t.Fatal("invalid source catalog was accepted")
+			}
+		})
+	}
+}
+
+func TestWorkspaceStageRequestCarriesPerSourcePolicies(t *testing.T) {
+	_, artifactRoot, request, source := workspaceTestInputs(t)
+	files, err := SnapshotArtifactWorkspace(artifactRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := source
+	other.Revision = strings.Repeat("b", 40)
+	manifest, err := NewWorkspaceManifestWithSources(request, []WorkspaceSourceRef{
+		{ID: "client", Repository: source},
+		{ID: "server", Repository: other},
+	}, "Inspect this project.", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := []WorkspaceSourceMode{{SourceID: "client", Policy: WorkspaceSourceModePreserve}, {SourceID: "server", Policy: WorkspaceSourceModeIgnoreExecutable}}
+	output := []WorkspaceSourceMode{{SourceID: "client", Policy: WorkspaceSourceModeIgnoreExecutable}, {SourceID: "server", Policy: WorkspaceSourceModePreserve}}
+	stage, err := NewWorkspaceStageRequestWithPolicies(manifest, input, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(stage.Sources, manifest.Sources) || !slices.Equal(stage.InputSourceModePolicies, input) || !slices.Equal(stage.OutputSourceModePolicies, output) {
+		t.Fatalf("stage=%+v", stage)
+	}
+	tampered := stage
+	tampered.OutputSourceModePolicies = slices.Clone(stage.OutputSourceModePolicies)
+	tampered.OutputSourceModePolicies[1].SourceID = "client"
+	if err := ValidateWorkspaceStageRequest(tampered, manifest); err == nil {
+		t.Fatal("non-canonical per-source policies were accepted")
+	}
+}
+
+func TestWorkspaceManifestWireRejectsLegacySingularSource(t *testing.T) {
+	_, artifactRoot, request, source := workspaceTestInputs(t)
+	files, err := SnapshotArtifactWorkspace(artifactRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := NewWorkspaceManifest(request, source, "Inspect this project.", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	wire["source"] = wire["sources"].([]any)[0].(map[string]any)["repository"]
+	data, err = json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded WorkspaceManifest
+	if err := json.Unmarshal(data, &decoded); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("error=%v", err)
+	}
+}

@@ -21,10 +21,10 @@ func TestExecuteStagesVerifiedWorkspace(t *testing.T) {
 	if err := Execute(context.Background(), fixture.stage, fixture.execution, fixture.options()); err != nil {
 		t.Fatal(err)
 	}
-	if err := agentanalysis.VerifySourceWorkspace(context.Background(), filepath.Join(fixture.workspaceRoot, agentanalysis.WorkspaceSourceDir), fixture.stage.Source.Revision); err != nil {
+	if err := agentanalysis.VerifySourceWorkspace(context.Background(), stagerSourceRoot(fixture.workspaceRoot, "primary"), fixture.stage.Source.Revision); err != nil {
 		t.Fatal(err)
 	}
-	if count := strings.TrimSpace(runStagerGit(t, filepath.Join(fixture.workspaceRoot, agentanalysis.WorkspaceSourceDir), "rev-list", "HEAD", "--count")); count != "1" {
+	if count := strings.TrimSpace(runStagerGit(t, stagerSourceRoot(fixture.workspaceRoot, "primary"), "rev-list", "HEAD", "--count")); count != "1" {
 		t.Fatalf("staged source history count=%s", count)
 	}
 	artifacts, err := agentanalysis.ReadWorkspaceArtifactManifest(filepath.Join(fixture.inputRoot, fixture.stage.ManifestHash), fixture.stage)
@@ -65,7 +65,7 @@ func TestExecuteStagesIgnorePolicyInputToPreservePolicyOutput(t *testing.T) {
 			t.Fatal(err)
 		}
 	}, agentanalysis.WorkspaceSourceModeIgnoreExecutable, agentanalysis.WorkspaceSourceModePreserve)
-	inputSource := filepath.Join(fixture.inputRoot, fixture.stage.ManifestHash, agentanalysis.WorkspaceSourceDir)
+	inputSource := stagerSourceRoot(filepath.Join(fixture.inputRoot, fixture.stage.ManifestHash), "primary")
 	if mode := strings.Fields(runStagerGit(t, inputSource, "ls-files", "--stage", "script.sh"))[0]; mode != "100755" {
 		t.Fatalf("input index mode=%s", mode)
 	}
@@ -75,7 +75,7 @@ func TestExecuteStagesIgnorePolicyInputToPreservePolicyOutput(t *testing.T) {
 	if err := Execute(t.Context(), fixture.stage, fixture.execution, fixture.options()); err != nil {
 		t.Fatal(err)
 	}
-	outputSource := filepath.Join(fixture.workspaceRoot, agentanalysis.WorkspaceSourceDir)
+	outputSource := stagerSourceRoot(fixture.workspaceRoot, "primary")
 	if err := agentanalysis.VerifyPreparedSourceWorkspace(t.Context(), outputSource, fixture.stage.Source.Revision, agentanalysis.WorkspaceSourceModePreserve); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestExecuteStagesTrackedInternalSourceSymlink(t *testing.T) {
 	if err := Execute(t.Context(), fixture.stage, fixture.execution, fixture.options()); err != nil {
 		t.Fatal(err)
 	}
-	target, err := os.Readlink(filepath.Join(fixture.workspaceRoot, agentanalysis.WorkspaceSourceDir, "controller-link.go"))
+	target, err := os.Readlink(filepath.Join(stagerSourceRoot(fixture.workspaceRoot, "primary"), "controller-link.go"))
 	if err != nil || target != filepath.Join("pkg", "controller.go") {
 		t.Fatalf("staged symlink target=%q err=%v", target, err)
 	}
@@ -123,7 +123,7 @@ func TestExecuteRejectsChangedArtifactInput(t *testing.T) {
 
 func TestExecuteRejectsSourceSymlink(t *testing.T) {
 	fixture := stagerFixture(t)
-	sourceRoot := filepath.Join(fixture.inputRoot, fixture.stage.ManifestHash, agentanalysis.WorkspaceSourceDir)
+	sourceRoot := stagerSourceRoot(filepath.Join(fixture.inputRoot, fixture.stage.ManifestHash), "primary")
 	if err := os.Symlink("pkg/controller.go", filepath.Join(sourceRoot, "linked.go")); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestExecuteRejectsSourceSymlink(t *testing.T) {
 
 func TestExecuteRejectsSourceGitMetadataSymlink(t *testing.T) {
 	fixture := stagerFixture(t)
-	sourceRoot := filepath.Join(fixture.inputRoot, fixture.stage.ManifestHash, agentanalysis.WorkspaceSourceDir)
+	sourceRoot := stagerSourceRoot(filepath.Join(fixture.inputRoot, fixture.stage.ManifestHash), "primary")
 	if err := os.Symlink(filepath.Join("..", "..", "pkg", "controller.go"), filepath.Join(sourceRoot, ".git", "unsafe-link")); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestPublishPreparedSnapshotRejectsContaminatedReuse(t *testing.T) {
 	inputRoot := t.TempDir()
 	if _, err := PublishPreparedSnapshot(
 		t.Context(), inputRoot, fixture.execution.Manifest,
-		filepath.Join(snapshot, agentanalysis.WorkspaceSourceDir),
+		stagerSourceRoot(snapshot, "primary"),
 		filepath.Join(snapshot, agentanalysis.WorkspaceArtifactsDir),
 		fixture.stage.InputSourceModePolicy,
 	); err != nil {
@@ -171,7 +171,7 @@ func TestPublishPreparedSnapshotRejectsContaminatedReuse(t *testing.T) {
 	}
 	if _, err := PublishPreparedSnapshot(
 		t.Context(), inputRoot, fixture.execution.Manifest,
-		filepath.Join(snapshot, agentanalysis.WorkspaceSourceDir),
+		stagerSourceRoot(snapshot, "primary"),
 		filepath.Join(snapshot, agentanalysis.WorkspaceArtifactsDir),
 		fixture.stage.InputSourceModePolicy,
 	); err == nil || !strings.Contains(err.Error(), "sealed manifest") {
@@ -205,7 +205,7 @@ func stagerFixtureWithSourceSetupAndPolicies(t *testing.T, setup func(string), i
 	t.Helper()
 	inputRoot := t.TempDir()
 	pending := filepath.Join(inputRoot, "pending")
-	sourceRoot := filepath.Join(pending, agentanalysis.WorkspaceSourceDir)
+	sourceRoot := stagerSourceRoot(pending, "primary")
 	artifactRoot := filepath.Join(pending, agentanalysis.WorkspaceArtifactsDir)
 	if err := os.MkdirAll(filepath.Join(sourceRoot, "pkg"), 0o700); err != nil {
 		t.Fatal(err)
@@ -280,6 +280,10 @@ func stagerFixtureWithSourceSetupAndPolicies(t *testing.T, setup func(string), i
 	return stagerTestFixture{inputRoot: inputRoot, workspaceRoot: t.TempDir(), requestRoot: t.TempDir(), stage: stage, execution: execution}
 }
 
+func stagerSourceRoot(root, sourceID string) string {
+	return filepath.Join(root, agentanalysis.WorkspaceSourcesDir, sourceID)
+}
+
 func runStagerGit(t *testing.T, root string, args ...string) string {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", root}, args...)...)
@@ -288,4 +292,95 @@ func runStagerGit(t *testing.T, root string, args ...string) string {
 		t.Fatalf("git %v: %v: %s", args, err, output)
 	}
 	return string(output)
+}
+
+func TestExecuteStagesMultipleSourcesAtDistinctRevisions(t *testing.T) {
+	inputRoot := t.TempDir()
+	pending := filepath.Join(inputRoot, "pending")
+	artifactRoot := filepath.Join(pending, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(filepath.Join(artifactRoot, "logs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactRoot, "logs", "build.log"), []byte("deterministic failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clientRevision := createStagerSource(t, stagerSourceRoot(pending, "client"), "client")
+	serverRevision := createStagerSource(t, stagerSourceRoot(pending, "server"), "server")
+	files, err := agentanalysis.SnapshotArtifactWorkspace(artifactRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := ai.FailureAnalysisRequest{
+		JobID: "periodic::job", BuildPrefix: "logs/job/1/",
+		Build:    models.BuildInfo{BuildID: "1", JobName: "job", RepoRefs: map[string]string{"example/repo": clientRevision}},
+		TestCase: models.TestCase{Name: "TestFailure", Status: "failed", FailureMessage: "deterministic failure"},
+	}
+	manifest, err := agentanalysis.NewWorkspaceManifestWithSources(failure, []agentanalysis.WorkspaceSourceRef{
+		{ID: "server", Repository: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: serverRevision}},
+		{ID: "client", Repository: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: clientRevision}},
+	}, "Inspect this project.", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agentanalysis.WriteWorkspaceArtifactManifest(pending, files); err != nil {
+		t.Fatal(err)
+	}
+	stage, err := agentanalysis.NewWorkspaceStageRequest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := modelprovider.Normalize(modelprovider.Config{
+		CredentialMode: modelprovider.CredentialModeGateway, API: "chat_completions",
+		Endpoint: "https://gateway.example.svc.cluster.local/v1/chat/completions", Model: "fixture",
+		Auth: modelprovider.Auth{Type: modelprovider.AuthTypeNone},
+	})
+	execution, err := agentanalysis.NewWorkspaceExecutionRequest(manifest, provider, time.Minute, 20, 200000, 8192, 128<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := filepath.Join(inputRoot, manifest.Hash)
+	if err := os.Rename(pending, final); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := lockSnapshot(inputRoot, manifest.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlockSnapshot(lock)
+	workspaceRoot := t.TempDir()
+	requestRoot := t.TempDir()
+	if err := Execute(t.Context(), stage, execution, Options{InputRoot: inputRoot, WorkspaceRoot: workspaceRoot, RequestRoot: requestRoot}); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]struct {
+		revision string
+		marker   string
+	}{"client": {clientRevision, "client"}, "server": {serverRevision, "server"}} {
+		root := stagerSourceRoot(workspaceRoot, id)
+		if err := agentanalysis.VerifyPreparedSourceWorkspace(t.Context(), root, want.revision, agentanalysis.WorkspaceSourceModePreserve); err != nil {
+			t.Fatalf("verify %s: %v", id, err)
+		}
+		data, err := os.ReadFile(filepath.Join(root, "identity.txt"))
+		if err != nil || strings.TrimSpace(string(data)) != want.marker {
+			t.Fatalf("source %s content=%q err=%v", id, data, err)
+		}
+	}
+}
+
+func createStagerSource(t *testing.T, root, marker string) string {
+	t.Helper()
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "identity.txt"), []byte(marker+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"config", "user.name", "Test"}, {"config", "user.email", "test@example.com"}, {"config", "commit.gpgsign", "false"}, {"add", "."}, {"commit", "-qm", marker}} {
+		runStagerGit(t, root, args...)
+	}
+	revision := strings.TrimSpace(runStagerGit(t, root, "rev-parse", "HEAD"))
+	if err := agentanalysis.SetPreparedSourceModePolicy(t.Context(), root, agentanalysis.WorkspaceSourceModePreserve); err != nil {
+		t.Fatal(err)
+	}
+	return revision
 }

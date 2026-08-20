@@ -180,3 +180,22 @@ func TestPublisherRequestNamesAreContentAddressed(t *testing.T) {
 		t.Fatalf("cleanup=%+v err=%v", cleanup, err)
 	}
 }
+
+func TestValidPublishedSourceModes(t *testing.T) {
+	valid := []agentanalysis.WorkspaceSourceMode{{SourceID: "client", Policy: agentanalysis.WorkspaceSourceModePreserve}, {SourceID: "server", Policy: agentanalysis.WorkspaceSourceModeIgnoreExecutable}}
+	if !validPublishedSourceModes(valid) {
+		t.Fatal("valid source modes were rejected")
+	}
+	for name, policies := range map[string][]agentanalysis.WorkspaceSourceMode{
+		"empty":          nil,
+		"invalid ID":     {{SourceID: "Client", Policy: agentanalysis.WorkspaceSourceModePreserve}},
+		"unsorted":       {{SourceID: "server", Policy: agentanalysis.WorkspaceSourceModePreserve}, {SourceID: "client", Policy: agentanalysis.WorkspaceSourceModePreserve}},
+		"invalid policy": {{SourceID: "client", Policy: "other"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if validPublishedSourceModes(policies) {
+				t.Fatal("invalid source modes were accepted")
+			}
+		})
+	}
+}

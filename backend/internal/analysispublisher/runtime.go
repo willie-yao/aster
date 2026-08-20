@@ -60,10 +60,11 @@ type Options struct {
 
 // Result records one completed namespace-local Job.
 type Result struct {
-	JobName     string
-	PodName     string
-	Duration    time.Duration
-	Publication agentanalysis.WorkspaceSourceModePolicy
+	JobName            string
+	PodName            string
+	Duration           time.Duration
+	Publication        agentanalysis.WorkspaceSourceModePolicy
+	SourceModePolicies []agentanalysis.WorkspaceSourceMode
 }
 
 // Runtime creates and removes one exact bounded Job at a time.
@@ -215,20 +216,21 @@ func (r *Runtime) run(ctx context.Context, name, purpose, envName string, reques
 	}
 	if purpose == "publish" {
 		var published struct {
-			Version          int                                     `json:"version"`
-			Status           string                                  `json:"status"`
-			ManifestHash     string                                  `json:"manifest_hash"`
-			SourceModePolicy agentanalysis.WorkspaceSourceModePolicy `json:"source_mode_policy"`
+			Version            int                                 `json:"version"`
+			Status             string                              `json:"status"`
+			ManifestHash       string                              `json:"manifest_hash"`
+			SourceModePolicies []agentanalysis.WorkspaceSourceMode `json:"source_mode_policies"`
 		}
 		decoder := json.NewDecoder(bytes.NewReader(logs))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&published); err != nil || published.Version != 1 || published.Status != "published" || published.ManifestHash != manifestHash || (published.SourceModePolicy != agentanalysis.WorkspaceSourceModePreserve && published.SourceModePolicy != agentanalysis.WorkspaceSourceModeIgnoreExecutable) {
+		if err := decoder.Decode(&published); err != nil || published.Version != 2 || published.Status != "published" || published.ManifestHash != manifestHash || !validPublishedSourceModes(published.SourceModePolicies) {
 			return result, fmt.Errorf("analysis input publisher result is invalid")
 		}
 		if err := decoder.Decode(&struct{}{}); err != io.EOF {
 			return result, fmt.Errorf("analysis input publisher result has trailing data")
 		}
-		result.Publication = published.SourceModePolicy
+		result.SourceModePolicies = published.SourceModePolicies
+		result.Publication = published.SourceModePolicies[0].Policy
 	} else {
 		var cleaned struct {
 			Version      int    `json:"version"`
@@ -245,6 +247,20 @@ func (r *Runtime) run(ctx context.Context, name, purpose, envName string, reques
 		}
 	}
 	return result, nil
+}
+
+func validPublishedSourceModes(policies []agentanalysis.WorkspaceSourceMode) bool {
+	if len(policies) < 1 || len(policies) > agentanalysis.WorkspaceMaxSources {
+		return false
+	}
+	previous := ""
+	for _, policy := range policies {
+		if len(validation.IsDNS1123Label(policy.SourceID)) > 0 || policy.SourceID <= previous || (policy.Policy != agentanalysis.WorkspaceSourceModePreserve && policy.Policy != agentanalysis.WorkspaceSourceModeIgnoreExecutable) {
+			return false
+		}
+		previous = policy.SourceID
+	}
+	return true
 }
 
 func (r *Runtime) deleteJob(ctx context.Context, name string, uid types.UID) error {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/agentanalysis"
@@ -36,7 +37,7 @@ func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, e
 	if err := agentanalysis.ValidateWorkspaceStageRequest(request, execution.Manifest); err != nil {
 		return err
 	}
-	if execution.InputMode != agentanalysis.WorkspaceInputStaged || execution.SourceModePolicy != request.OutputSourceModePolicy {
+	if execution.InputMode != agentanalysis.WorkspaceInputStaged || !slices.Equal(execution.SourceModePolicies, request.OutputSourceModePolicies) {
 		return fmt.Errorf("workspace execution and stage requests are inconsistent")
 	}
 	if request.InputMode != agentanalysis.WorkspaceStageInputPVC {
@@ -66,34 +67,49 @@ func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, e
 	}
 	defer unlockSnapshot(lock)
 	snapshotRoot := filepath.Join(inputRoot, request.ManifestHash)
-	sourceInput := filepath.Join(snapshotRoot, agentanalysis.WorkspaceSourceDir)
+	sourcesInput := filepath.Join(snapshotRoot, agentanalysis.WorkspaceSourcesDir)
 	artifactInput := filepath.Join(snapshotRoot, agentanalysis.WorkspaceArtifactsDir)
 	artifacts, err := agentanalysis.ReadWorkspaceArtifactManifest(snapshotRoot, request)
 	if err != nil {
 		return err
 	}
-	gitDir, err := os.Lstat(filepath.Join(sourceInput, ".git"))
-	if err != nil || !gitDir.IsDir() || gitDir.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("staged source must contain a standalone Git directory")
+	for _, source := range request.Sources {
+		sourceInput := filepath.Join(sourcesInput, source.ID)
+		gitDir, err := os.Lstat(filepath.Join(sourceInput, ".git"))
+		if err != nil || !gitDir.IsDir() || gitDir.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("staged source %s must contain a standalone Git directory", source.ID)
+		}
+		inputPolicy, _ := agentanalysis.WorkspaceSourceModeFor(request.InputSourceModePolicies, source.ID)
+		if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceInput, source.Repository.Revision, inputPolicy); err != nil {
+			return fmt.Errorf("verify staged source %s: %w", source.ID, err)
+		}
 	}
-	if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceInput, request.Source.Revision, request.InputSourceModePolicy); err != nil {
-		return fmt.Errorf("verify staged source: %w", err)
+	if err := agentanalysis.ValidateAggregateWorkspaceSources(ctx, sourcesInput); err != nil {
+		return fmt.Errorf("inspect staged sources: %w", err)
 	}
-	sourceOutput := filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir)
+	sourcesOutput := filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourcesDir)
 	artifactOutput := filepath.Join(workspaceRoot, agentanalysis.WorkspaceArtifactsDir)
 	resultOutput := filepath.Join(workspaceRoot, agentanalysis.WorkspaceResultDir)
-	if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, sourceInput); err != nil {
-		return fmt.Errorf("inspect staged source: %w", err)
+	if err := os.Mkdir(sourcesOutput, 0o700); err != nil {
+		return fmt.Errorf("create copied sources root: %w", err)
 	}
-	if err := cloneSource(ctx, sourceInput, sourceOutput, request.Source.Revision); err != nil {
-		return fmt.Errorf("clone staged source: %w", err)
+	for _, source := range request.Sources {
+		sourceInput := filepath.Join(sourcesInput, source.ID)
+		sourceOutput := filepath.Join(sourcesOutput, source.ID)
+		if err := cloneSource(ctx, sourceInput, sourceOutput, source.Repository.Revision); err != nil {
+			return fmt.Errorf("clone staged source %s: %w", source.ID, err)
+		}
+		modePolicy, err := agentanalysis.ConfigurePreparedSourceModePolicy(ctx, sourceOutput, source.Repository.Revision)
+		if err != nil {
+			return fmt.Errorf("configure copied source %s mode policy: %w", source.ID, err)
+		}
+		expectedPolicy, _ := agentanalysis.WorkspaceSourceModeFor(request.OutputSourceModePolicies, source.ID)
+		if modePolicy != expectedPolicy {
+			return fmt.Errorf("copied source %s mode policy does not match the sealed request", source.ID)
+		}
 	}
-	modePolicy, err := agentanalysis.ConfigurePreparedSourceModePolicy(ctx, sourceOutput, request.Source.Revision)
-	if err != nil {
-		return fmt.Errorf("configure copied source mode policy: %w", err)
-	}
-	if modePolicy != request.OutputSourceModePolicy {
-		return fmt.Errorf("copied source mode policy does not match the sealed request")
+	if err := agentanalysis.ValidateAggregateWorkspaceSources(ctx, sourcesOutput); err != nil {
+		return fmt.Errorf("inspect copied sources: %w", err)
 	}
 	if err := copyArtifactTree(ctx, artifactInput, artifactOutput, artifacts); err != nil {
 		return fmt.Errorf("copy staged artifacts: %w", err)

@@ -2,6 +2,7 @@ package agentanalysis
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,4 +143,111 @@ func workspacePrepareSourceRepository(t *testing.T) (string, string) {
 		t.Fatal(err)
 	}
 	return root, strings.TrimSpace(string(output))
+}
+
+func TestPrepareWorkspaceInputsStagesSameRepositoryAtTwoRevisions(t *testing.T) {
+	repository, firstRevision, secondRevision := workspacePrepareSourceRepositoryWithTwoRevisions(t)
+	set := workspacePrepareSkillSet(t)
+	publicDir := filepath.Join(t.TempDir(), "public")
+	inputRoot := filepath.Join(t.TempDir(), "private-input")
+	request := ai.FailureAnalysisRequest{
+		JobID: "periodic::fixture", BuildPrefix: "logs/fixture/1/",
+		Build:    models.BuildInfo{BuildID: "1", JobName: "fixture", RepoRefs: map[string]string{"example/repo": secondRevision}},
+		TestCase: models.TestCase{Name: "fixture", Status: "failed", FailureMessage: "deterministic failure"},
+	}
+	prepared, err := PrepareWorkspaceInputs(t.Context(), request, []WorkspaceSourceRef{
+		{ID: "server", Repository: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: firstRevision}},
+		{ID: "client", Repository: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: secondRevision}},
+	}, WorkspacePreparationOptions{
+		PublicOutputDir: publicDir, InputRoot: inputRoot, ConsumerPrompt: "Inspect this project.", SkillSet: set,
+		Browser: workspacePrepareBrowser{files: map[string][]byte{"logs/failure.log": []byte("deterministic failure\n")}},
+		PrepareSource: func(ctx context.Context, destination string, source sourceinvestigation.Repository) (WorkspaceSourceModePolicy, error) {
+			if output, err := exec.CommandContext(ctx, "git", "clone", "--quiet", "--no-hardlinks", repository, destination).CombinedOutput(); err != nil {
+				t.Fatalf("clone source: %v: %s", err, output)
+			}
+			if output, err := exec.CommandContext(ctx, "git", "-C", destination, "checkout", "--quiet", "--detach", source.Revision).CombinedOutput(); err != nil {
+				t.Fatalf("checkout source: %v: %s", err, output)
+			}
+			return ConfigurePreparedSourceModePolicy(ctx, destination, source.Revision)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.Sources) != 2 || prepared.Sources[0].ID != "client" || prepared.Sources[1].ID != "server" {
+		t.Fatalf("sources=%+v", prepared.Sources)
+	}
+	wantRevisions := map[string]string{"client": secondRevision, "server": firstRevision}
+	for _, source := range prepared.Sources {
+		if err := VerifyPreparedSourceWorkspace(t.Context(), source.Root, wantRevisions[source.ID], source.ModePolicy); err != nil {
+			t.Fatalf("verify %s: %v", source.ID, err)
+		}
+		if filepath.Dir(source.Root) != prepared.SourcesRoot {
+			t.Fatalf("source %s root=%s sourcesRoot=%s", source.ID, source.Root, prepared.SourcesRoot)
+		}
+	}
+}
+
+func TestValidateAggregateWorkspaceSourcesRejectsCatalogOverflow(t *testing.T) {
+	root := t.TempDir()
+	for index := 0; index < 2; index++ {
+		sourceRoot := filepath.Join(root, fmt.Sprintf("source-%d", index))
+		if err := os.Mkdir(sourceRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		file, err := os.Create(filepath.Join(sourceRoot, "large.bin"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Truncate(WorkspaceSourceMaxSnapshotBytes/2 + 1); err != nil {
+			file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ValidateAggregateWorkspaceSources(t.Context(), root); err == nil || !strings.Contains(err.Error(), "aggregate") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func workspacePrepareSkillSet(t *testing.T) *skills.Set {
+	t.Helper()
+	projectDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(projectDir, "skills"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "skills", "failure.yaml"), []byte(`id: fixture.failure
+triggers: ["deterministic failure"]
+procedure: Read the failure log and preserve uncertainty.
+required_evidence:
+  - id: failure-log
+    any_of: ["failure[.]log$"]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	set, _, err := skills.LoadForTools(projectDir, []string{"filesystem"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return set
+}
+
+func workspacePrepareSourceRepositoryWithTwoRevisions(t *testing.T) (string, string, string) {
+	t.Helper()
+	root, first := workspacePrepareSourceRepository(t)
+	if err := os.WriteFile(filepath.Join(root, "controller.go"), []byte("package fixture\n\nconst Version = 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "controller.go"}, {"commit", "-qm", "second"}} {
+		if output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	output, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root, first, strings.TrimSpace(string(output))
 }

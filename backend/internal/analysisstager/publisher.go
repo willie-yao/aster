@@ -25,10 +25,11 @@ var githubName = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 // PublicationResult is the sanitized terminal publisher record.
 type PublicationResult struct {
-	Version          int                                     `json:"version"`
-	Status           string                                  `json:"status"`
-	ManifestHash     string                                  `json:"manifest_hash"`
-	SourceModePolicy agentanalysis.WorkspaceSourceModePolicy `json:"source_mode_policy"`
+	Version            int                                     `json:"version"`
+	Status             string                                  `json:"status"`
+	ManifestHash       string                                  `json:"manifest_hash"`
+	SourceModePolicies []agentanalysis.WorkspaceSourceMode     `json:"source_mode_policies"`
+	SourceModePolicy   agentanalysis.WorkspaceSourceModePolicy `json:"-"`
 }
 
 // CleanupResult is the sanitized terminal cleanup record.
@@ -73,15 +74,23 @@ func Publish(ctx context.Context, request agentanalysis.WorkspacePublishRequest,
 		if err := verifyLease(final, request.LeaseID); err != nil {
 			return result, err
 		}
-		sourceRoot := filepath.Join(final, agentanalysis.WorkspaceSourceDir)
-		if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, sourceRoot); err != nil {
-			return result, err
+		sourcesRoot := filepath.Join(final, agentanalysis.WorkspaceSourcesDir)
+		policies := make([]agentanalysis.WorkspaceSourceMode, 0, len(request.Stage.Sources))
+		for _, source := range request.Stage.Sources {
+			sourceRoot := filepath.Join(sourcesRoot, source.ID)
+			if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, sourceRoot); err != nil {
+				return result, err
+			}
+			policy, err := agentanalysis.ReadPreparedSourceModePolicy(ctx, sourceRoot)
+			if err != nil {
+				return result, err
+			}
+			if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceRoot, source.Repository.Revision, policy); err != nil {
+				return result, err
+			}
+			policies = append(policies, agentanalysis.WorkspaceSourceMode{SourceID: source.ID, Policy: policy})
 		}
-		policy, err := agentanalysis.ReadPreparedSourceModePolicy(ctx, sourceRoot)
-		if err != nil {
-			return result, err
-		}
-		if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceRoot, request.Stage.Source.Revision, policy); err != nil {
+		if err := agentanalysis.ValidateAggregateWorkspaceSources(ctx, sourcesRoot); err != nil {
 			return result, err
 		}
 		if _, err := agentanalysis.ReadWorkspaceArtifactManifest(final, request.Stage); err != nil {
@@ -90,7 +99,7 @@ func Publish(ctx context.Context, request agentanalysis.WorkspacePublishRequest,
 		if err := agentanalysis.VerifyArtifactFiles(filepath.Join(final, agentanalysis.WorkspaceArtifactsDir), request.Artifacts); err != nil {
 			return result, err
 		}
-		return PublicationResult{Version: 1, Status: "published", ManifestHash: request.Stage.ManifestHash, SourceModePolicy: policy}, nil
+		return publicationResult(request.Stage.ManifestHash, policies), nil
 	} else if !os.IsNotExist(err) {
 		return result, err
 	}
@@ -104,28 +113,40 @@ func Publish(ctx context.Context, request agentanalysis.WorkspacePublishRequest,
 			return agentanalysis.ValidatePublicGitHubSourceTree(ctx, client, "https://api.github.com", source)
 		}
 	}
-	source := sourceinvestigation.Repository{Owner: request.Stage.Source.Owner, Name: request.Stage.Source.Name, Revision: request.Stage.Source.Revision}
-	if err := validateSource(ctx, client, source); err != nil {
-		return result, fmt.Errorf("validate publisher source bounds: %w", err)
+	for _, source := range request.Stage.Sources {
+		if err := validateSource(ctx, client, source.Repository); err != nil {
+			return result, fmt.Errorf("validate publisher source %s bounds: %w", source.ID, err)
+		}
 	}
 	pending, err := os.MkdirTemp(root, ".publish-")
 	if err != nil {
 		return result, err
 	}
 	defer os.RemoveAll(pending)
-	sourceRoot := filepath.Join(pending, agentanalysis.WorkspaceSourceDir)
+	sourcesRoot := filepath.Join(pending, agentanalysis.WorkspaceSourcesDir)
+	if err := os.Mkdir(sourcesRoot, 0o700); err != nil {
+		return result, err
+	}
 	prepareSource := opts.PrepareSource
 	if prepareSource == nil {
 		prepareSource = clonePublicSource
 	}
-	if err := prepareSource(ctx, sourceRoot, request.Stage.Source.Owner, request.Stage.Source.Name, request.Stage.Source.Revision); err != nil {
-		return result, err
+	policies := make([]agentanalysis.WorkspaceSourceMode, 0, len(request.Stage.Sources))
+	for _, source := range request.Stage.Sources {
+		sourceRoot := filepath.Join(sourcesRoot, source.ID)
+		if err := prepareSource(ctx, sourceRoot, source.Repository.Owner, source.Repository.Name, source.Repository.Revision); err != nil {
+			return result, err
+		}
+		if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, sourceRoot); err != nil {
+			return result, fmt.Errorf("validate publisher source %s snapshot: %w", source.ID, err)
+		}
+		policy, err := agentanalysis.ConfigurePreparedSourceModePolicy(ctx, sourceRoot, source.Repository.Revision)
+		if err != nil {
+			return result, err
+		}
+		policies = append(policies, agentanalysis.WorkspaceSourceMode{SourceID: source.ID, Policy: policy})
 	}
-	if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, sourceRoot); err != nil {
-		return result, fmt.Errorf("validate publisher source snapshot: %w", err)
-	}
-	policy, err := agentanalysis.ConfigurePreparedSourceModePolicy(ctx, sourceRoot, request.Stage.Source.Revision)
-	if err != nil {
+	if err := agentanalysis.ValidateAggregateWorkspaceSources(ctx, sourcesRoot); err != nil {
 		return result, err
 	}
 	artifactRoot := filepath.Join(pending, agentanalysis.WorkspaceArtifactsDir)
@@ -141,7 +162,7 @@ func Publish(ctx context.Context, request agentanalysis.WorkspacePublishRequest,
 	if err := os.Rename(pending, final); err != nil {
 		return result, fmt.Errorf("publish analyzer snapshot: %w", err)
 	}
-	return PublicationResult{Version: 1, Status: "published", ManifestHash: request.Stage.ManifestHash, SourceModePolicy: policy}, nil
+	return publicationResult(request.Stage.ManifestHash, policies), nil
 }
 
 // Cleanup removes one exact leased snapshot.
@@ -308,83 +329,150 @@ func unlockSnapshot(file *os.File) {
 	_ = file.Close()
 }
 
-// PublishPreparedSnapshot copies one already verified local snapshot into private input storage.
+// PublishPreparedSnapshot copies one single-source local snapshot into private input storage.
 func PublishPreparedSnapshot(ctx context.Context, inputRoot string, manifest agentanalysis.WorkspaceManifest, sourceRoot, artifactRoot string, sourceMode agentanalysis.WorkspaceSourceModePolicy) (agentanalysis.WorkspaceSourceModePolicy, error) {
-	if err := agentanalysis.ValidateWorkspaceManifest(manifest); err != nil {
+	if len(manifest.Sources) != 1 {
+		return "", fmt.Errorf("single-source publication requires exactly one manifest source")
+	}
+	policies, err := PublishPreparedSourcesSnapshot(ctx, inputRoot, manifest, []agentanalysis.WorkspacePreparedSource{{ID: manifest.Sources[0].ID, Root: sourceRoot, ModePolicy: sourceMode}}, artifactRoot)
+	if err != nil {
 		return "", err
+	}
+	return policies[0].Policy, nil
+}
+
+// PublishPreparedSourcesSnapshot copies verified local sources into private input storage.
+func PublishPreparedSourcesSnapshot(ctx context.Context, inputRoot string, manifest agentanalysis.WorkspaceManifest, sources []agentanalysis.WorkspacePreparedSource, artifactRoot string) ([]agentanalysis.WorkspaceSourceMode, error) {
+	if err := agentanalysis.ValidateWorkspaceManifest(manifest); err != nil {
+		return nil, err
+	}
+	if len(sources) != len(manifest.Sources) {
+		return nil, fmt.Errorf("prepared source count does not match manifest")
 	}
 	inputRoot = filepath.Clean(inputRoot)
 	if err := requireSafeInputRoot(inputRoot); err != nil {
-		return "", err
+		return nil, err
 	}
-	if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceRoot, manifest.Source.Revision, sourceMode); err != nil {
-		return "", err
-	}
-	if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, sourceRoot); err != nil {
-		return "", err
+	inputPolicies := make([]agentanalysis.WorkspaceSourceMode, 0, len(sources))
+	for index, source := range sources {
+		expected := manifest.Sources[index]
+		if source.ID != expected.ID {
+			return nil, fmt.Errorf("prepared sources are not canonical")
+		}
+		if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, source.Root, expected.Repository.Revision, source.ModePolicy); err != nil {
+			return nil, err
+		}
+		if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, source.Root); err != nil {
+			return nil, err
+		}
+		inputPolicies = append(inputPolicies, agentanalysis.WorkspaceSourceMode{SourceID: source.ID, Policy: source.ModePolicy})
 	}
 	if err := agentanalysis.VerifyArtifactFiles(artifactRoot, manifest.Artifacts); err != nil {
-		return "", err
+		return nil, err
 	}
 	lock, err := lockSnapshot(inputRoot, manifest.Hash)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer unlockSnapshot(lock)
 	final := filepath.Join(inputRoot, manifest.Hash)
 	if info, err := os.Lstat(final); err == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("prepared snapshot target is invalid")
+			return nil, fmt.Errorf("prepared snapshot target is invalid")
 		}
-		stage, err := agentanalysis.NewWorkspaceStageRequestWithSourceModePolicies(manifest, sourceMode, agentanalysis.WorkspaceSourceModePreserve)
+		stage, err := agentanalysis.NewWorkspaceStageRequestWithPolicies(manifest, inputPolicies, workspacePreserveModes(manifest.Sources))
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if _, err := agentanalysis.ReadWorkspaceArtifactManifest(final, stage); err != nil {
-			return "", err
+			return nil, err
 		}
-		sourceRoot := filepath.Join(final, agentanalysis.WorkspaceSourceDir)
-		if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, sourceRoot); err != nil {
-			return "", err
-		}
-		policy, err := agentanalysis.ReadPreparedSourceModePolicy(ctx, sourceRoot)
+		published, err := readPublishedSourceModes(ctx, final, manifest)
 		if err != nil {
-			return "", err
-		}
-		if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceRoot, manifest.Source.Revision, policy); err != nil {
-			return "", err
+			return nil, err
 		}
 		if err := agentanalysis.VerifyArtifactFiles(filepath.Join(final, agentanalysis.WorkspaceArtifactsDir), manifest.Artifacts); err != nil {
-			return "", err
+			return nil, err
 		}
-		return policy, nil
+		return published, nil
 	} else if !os.IsNotExist(err) {
-		return "", err
+		return nil, err
 	}
 	pending, err := os.MkdirTemp(inputRoot, ".prepared-")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer os.RemoveAll(pending)
-	destinationSource := filepath.Join(pending, agentanalysis.WorkspaceSourceDir)
-	if err := cloneSource(ctx, sourceRoot, destinationSource, manifest.Source.Revision); err != nil {
-		return "", err
+	destinationSources := filepath.Join(pending, agentanalysis.WorkspaceSourcesDir)
+	if err := os.Mkdir(destinationSources, 0o700); err != nil {
+		return nil, err
 	}
-	if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, destinationSource); err != nil {
-		return "", err
+	published := make([]agentanalysis.WorkspaceSourceMode, 0, len(sources))
+	for index, source := range sources {
+		expected := manifest.Sources[index]
+		destination := filepath.Join(destinationSources, expected.ID)
+		if err := cloneSource(ctx, source.Root, destination, expected.Repository.Revision); err != nil {
+			return nil, err
+		}
+		if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, destination); err != nil {
+			return nil, err
+		}
+		mode, err := agentanalysis.ConfigurePreparedSourceModePolicy(ctx, destination, expected.Repository.Revision)
+		if err != nil {
+			return nil, err
+		}
+		published = append(published, agentanalysis.WorkspaceSourceMode{SourceID: expected.ID, Policy: mode})
 	}
-	publishedMode, err := agentanalysis.ConfigurePreparedSourceModePolicy(ctx, destinationSource, manifest.Source.Revision)
-	if err != nil {
-		return "", err
+	if err := agentanalysis.ValidateAggregateWorkspaceSources(ctx, destinationSources); err != nil {
+		return nil, err
 	}
 	if err := copyArtifactTree(ctx, artifactRoot, filepath.Join(pending, agentanalysis.WorkspaceArtifactsDir), manifest.Artifacts); err != nil {
-		return "", err
+		return nil, err
 	}
 	if err := agentanalysis.WriteWorkspaceArtifactManifest(pending, manifest.Artifacts); err != nil {
-		return "", err
+		return nil, err
 	}
 	if err := os.Rename(pending, final); err != nil {
-		return "", err
+		return nil, err
 	}
-	return publishedMode, nil
+	return published, nil
+}
+
+func readPublishedSourceModes(ctx context.Context, root string, manifest agentanalysis.WorkspaceManifest) ([]agentanalysis.WorkspaceSourceMode, error) {
+	policies := make([]agentanalysis.WorkspaceSourceMode, 0, len(manifest.Sources))
+	sourcesRoot := filepath.Join(root, agentanalysis.WorkspaceSourcesDir)
+	for _, source := range manifest.Sources {
+		sourceRoot := filepath.Join(sourcesRoot, source.ID)
+		if err := agentanalysis.ValidateWorkspaceSourceSnapshot(ctx, sourceRoot); err != nil {
+			return nil, err
+		}
+		policy, err := agentanalysis.ReadPreparedSourceModePolicy(ctx, sourceRoot)
+		if err != nil {
+			return nil, err
+		}
+		if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceRoot, source.Repository.Revision, policy); err != nil {
+			return nil, err
+		}
+		policies = append(policies, agentanalysis.WorkspaceSourceMode{SourceID: source.ID, Policy: policy})
+	}
+	if err := agentanalysis.ValidateAggregateWorkspaceSources(ctx, sourcesRoot); err != nil {
+		return nil, err
+	}
+	return policies, nil
+}
+
+func workspacePreserveModes(sources []agentanalysis.WorkspaceSourceRef) []agentanalysis.WorkspaceSourceMode {
+	modes := make([]agentanalysis.WorkspaceSourceMode, 0, len(sources))
+	for _, source := range sources {
+		modes = append(modes, agentanalysis.WorkspaceSourceMode{SourceID: source.ID, Policy: agentanalysis.WorkspaceSourceModePreserve})
+	}
+	return modes
+}
+
+func publicationResult(manifestHash string, policies []agentanalysis.WorkspaceSourceMode) PublicationResult {
+	result := PublicationResult{Version: 2, Status: "published", ManifestHash: manifestHash, SourceModePolicies: policies}
+	if len(policies) > 0 {
+		result.SourceModePolicy = policies[0].Policy
+	}
+	return result
 }

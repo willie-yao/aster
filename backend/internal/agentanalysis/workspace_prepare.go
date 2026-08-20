@@ -24,13 +24,22 @@ import (
 
 var githubRepositoryPart = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
+// WorkspacePreparedSource identifies one prepared immutable checkout.
+type WorkspacePreparedSource struct {
+	ID         string
+	Root       string
+	ModePolicy WorkspaceSourceModePolicy
+}
+
 // WorkspacePreparedInput is one private content-addressed analyzer snapshot.
 type WorkspacePreparedInput struct {
 	Root             string
-	SourceRoot       string
+	SourcesRoot      string
+	Sources          []WorkspacePreparedSource
 	ArtifactRoot     string
-	SourceModePolicy WorkspaceSourceModePolicy
 	Manifest         WorkspaceManifest
+	SourceRoot       string
+	SourceModePolicy WorkspaceSourceModePolicy
 }
 
 // WorkspacePreparationOptions configure one private input snapshot.
@@ -46,6 +55,11 @@ type WorkspacePreparationOptions struct {
 
 // NewWorkspaceManifestWithSkills seals the current skill-set identity and matched plan.
 func NewWorkspaceManifestWithSkills(request ai.FailureAnalysisRequest, source sourceinvestigation.Repository, consumerPrompt string, skillSet *skills.Set, files []WorkspaceFile) (WorkspaceManifest, error) {
+	return NewWorkspaceManifestWithSourcesAndSkills(request, []WorkspaceSourceRef{{ID: "primary", Repository: source}}, consumerPrompt, skillSet, files)
+}
+
+// NewWorkspaceManifestWithSourcesAndSkills seals a multi-source skill-set input.
+func NewWorkspaceManifestWithSourcesAndSkills(request ai.FailureAnalysisRequest, sources []WorkspaceSourceRef, consumerPrompt string, skillSet *skills.Set, files []WorkspaceFile) (WorkspaceManifest, error) {
 	if skillSet == nil || strings.TrimSpace(skillSet.Hash()) == "" {
 		return WorkspaceManifest{}, fmt.Errorf("%w: workspace skill set is required", ErrInvalidBundle)
 	}
@@ -54,11 +68,16 @@ func NewWorkspaceManifestWithSkills(request ai.FailureAnalysisRequest, source so
 		paths = append(paths, file.Path)
 	}
 	plan := skillSet.Plan(evidenceplan.FailureSignal(request.TestCase), paths, evidenceplan.CandidatePathLimit)
-	return newWorkspaceManifest(request, source, consumerPrompt, skillSet.Hash(), plan, files)
+	return newWorkspaceManifest(request, sources, consumerPrompt, skillSet.Hash(), plan, files)
 }
 
-// PrepareWorkspaceInput freezes exact source and artifact inputs outside public output.
+// PrepareWorkspaceInput freezes one exact source and artifact input outside public output.
 func PrepareWorkspaceInput(ctx context.Context, request ai.FailureAnalysisRequest, source sourceinvestigation.Repository, opts WorkspacePreparationOptions) (WorkspacePreparedInput, error) {
+	return PrepareWorkspaceInputs(ctx, request, []WorkspaceSourceRef{{ID: "primary", Repository: source}}, opts)
+}
+
+// PrepareWorkspaceInputs freezes exact source and artifact inputs outside public output.
+func PrepareWorkspaceInputs(ctx context.Context, request ai.FailureAnalysisRequest, sources []WorkspaceSourceRef, opts WorkspacePreparationOptions) (WorkspacePreparedInput, error) {
 	root, err := resolvePrivateInputRoot(opts.PublicOutputDir, opts.InputRoot, true)
 	if err != nil {
 		return WorkspacePreparedInput{}, err
@@ -68,6 +87,10 @@ func PrepareWorkspaceInput(ctx context.Context, request ai.FailureAnalysisReques
 	}
 	if opts.SkillSet == nil || strings.TrimSpace(opts.SkillSet.Hash()) == "" {
 		return WorkspacePreparedInput{}, fmt.Errorf("workspace skill set is required")
+	}
+	canonicalSources, err := canonicalWorkspaceSources(sources)
+	if err != nil {
+		return WorkspacePreparedInput{}, err
 	}
 	pending, err := os.MkdirTemp(root, ".pending-")
 	if err != nil {
@@ -82,27 +105,40 @@ func PrepareWorkspaceInput(ctx context.Context, request ai.FailureAnalysisReques
 	if err := os.Chmod(pending, 0o700); err != nil && !unsupportedWorkspacePermission(err) {
 		return WorkspacePreparedInput{}, err
 	}
-	sourceRoot := filepath.Join(pending, WorkspaceSourceDir)
+	sourcesRoot := filepath.Join(pending, WorkspaceSourcesDir)
+	if err := os.Mkdir(sourcesRoot, 0o700); err != nil {
+		return WorkspacePreparedInput{}, err
+	}
 	artifactRoot := filepath.Join(pending, WorkspaceArtifactsDir)
 	prepareSource := opts.PrepareSource
+	validateSource := opts.ValidateSource
 	if prepareSource == nil {
-		validateSource := opts.ValidateSource
 		if validateSource == nil {
 			validateSource = func(ctx context.Context, source sourceinvestigation.Repository) error {
 				return ValidatePublicGitHubSourceTree(ctx, nil, "https://api.github.com", source)
 			}
 		}
-		if err := validateSource(ctx, source); err != nil {
-			return WorkspacePreparedInput{}, fmt.Errorf("validate workspace source bounds: %w", err)
-		}
 		prepareSource = preparePublicGitHubSource
 	}
-	modePolicy, err := prepareSource(ctx, sourceRoot, source)
-	if err != nil {
-		return WorkspacePreparedInput{}, fmt.Errorf("prepare workspace source: %w", err)
+	preparedSources := make([]WorkspacePreparedSource, 0, len(canonicalSources))
+	for _, source := range canonicalSources {
+		if validateSource != nil {
+			if err := validateSource(ctx, source.Repository); err != nil {
+				return WorkspacePreparedInput{}, fmt.Errorf("validate workspace source %s bounds: %w", source.ID, err)
+			}
+		}
+		sourceRoot := filepath.Join(sourcesRoot, source.ID)
+		modePolicy, err := prepareSource(ctx, sourceRoot, source.Repository)
+		if err != nil {
+			return WorkspacePreparedInput{}, fmt.Errorf("prepare workspace source %s: %w", source.ID, err)
+		}
+		if err := ValidateWorkspaceSourceSnapshot(ctx, sourceRoot); err != nil {
+			return WorkspacePreparedInput{}, fmt.Errorf("validate workspace source %s snapshot: %w", source.ID, err)
+		}
+		preparedSources = append(preparedSources, WorkspacePreparedSource{ID: source.ID, Root: sourceRoot, ModePolicy: modePolicy})
 	}
-	if err := ValidateWorkspaceSourceSnapshot(ctx, sourceRoot); err != nil {
-		return WorkspacePreparedInput{}, fmt.Errorf("validate workspace source snapshot: %w", err)
+	if err := ValidateAggregateWorkspaceSources(ctx, sourcesRoot); err != nil {
+		return WorkspacePreparedInput{}, err
 	}
 	if err := materializeWorkspaceArtifacts(ctx, opts.Browser, artifactRoot); err != nil {
 		return WorkspacePreparedInput{}, err
@@ -111,24 +147,44 @@ func PrepareWorkspaceInput(ctx context.Context, request ai.FailureAnalysisReques
 	if err != nil {
 		return WorkspacePreparedInput{}, err
 	}
-	manifest, err := NewWorkspaceManifestWithSkills(request, source, opts.ConsumerPrompt, opts.SkillSet, files)
+	manifest, err := NewWorkspaceManifestWithSourcesAndSkills(request, canonicalSources, opts.ConsumerPrompt, opts.SkillSet, files)
 	if err != nil {
 		return WorkspacePreparedInput{}, err
 	}
+	modes := preparedSourceModes(preparedSources)
 	lock, err := lockWorkspaceInput(root, manifest.Hash)
 	if err != nil {
 		return WorkspacePreparedInput{}, err
 	}
 	defer unlockWorkspaceInput(lock)
 	finalRoot := filepath.Join(root, manifest.Hash)
-	if err := publishWorkspaceSnapshot(ctx, pending, finalRoot, manifest, modePolicy); err != nil {
+	if err := publishWorkspaceSnapshot(ctx, pending, finalRoot, manifest, modes); err != nil {
 		return WorkspacePreparedInput{}, err
 	}
 	cleanupPending = false
-	return WorkspacePreparedInput{
-		Root: finalRoot, SourceRoot: filepath.Join(finalRoot, WorkspaceSourceDir), ArtifactRoot: filepath.Join(finalRoot, WorkspaceArtifactsDir),
-		SourceModePolicy: modePolicy, Manifest: manifest,
-	}, nil
+	result := WorkspacePreparedInput{
+		Root: finalRoot, SourcesRoot: filepath.Join(finalRoot, WorkspaceSourcesDir), ArtifactRoot: filepath.Join(finalRoot, WorkspaceArtifactsDir),
+		Sources: preparedSourcesAtRoot(preparedSources, finalRoot), Manifest: manifest,
+	}
+	result.SourceRoot = result.Sources[0].Root
+	result.SourceModePolicy = result.Sources[0].ModePolicy
+	return result, nil
+}
+
+func preparedSourceModes(sources []WorkspacePreparedSource) []WorkspaceSourceMode {
+	modes := make([]WorkspaceSourceMode, 0, len(sources))
+	for _, source := range sources {
+		modes = append(modes, WorkspaceSourceMode{SourceID: source.ID, Policy: source.ModePolicy})
+	}
+	return modes
+}
+
+func preparedSourcesAtRoot(sources []WorkspacePreparedSource, root string) []WorkspacePreparedSource {
+	result := make([]WorkspacePreparedSource, 0, len(sources))
+	for _, source := range sources {
+		result = append(result, WorkspacePreparedSource{ID: source.ID, Root: filepath.Join(root, WorkspaceSourcesDir, source.ID), ModePolicy: source.ModePolicy})
+	}
+	return result
 }
 
 // ValidatePrivateInputRoot rejects input storage that resolves inside public output.
@@ -280,12 +336,21 @@ func materializeWorkspaceArtifacts(ctx context.Context, browser artifacts.Browse
 	return nil
 }
 
-func publishWorkspaceSnapshot(ctx context.Context, pending, final string, manifest WorkspaceManifest, modePolicy WorkspaceSourceModePolicy) error {
+func publishWorkspaceSnapshot(ctx context.Context, pending, final string, manifest WorkspaceManifest, modes []WorkspaceSourceMode) error {
+	if err := validateWorkspaceSourceModes(manifest.Sources, modes); err != nil {
+		return err
+	}
 	if info, err := os.Lstat(final); err == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("workspace input target is invalid")
 		}
-		if err := VerifyPreparedSourceWorkspace(ctx, filepath.Join(final, WorkspaceSourceDir), manifest.Source.Revision, modePolicy); err != nil {
+		for _, source := range manifest.Sources {
+			mode, _ := WorkspaceSourceModeFor(modes, source.ID)
+			if err := VerifyPreparedSourceWorkspace(ctx, filepath.Join(final, WorkspaceSourcesDir, source.ID), source.Repository.Revision, mode); err != nil {
+				return fmt.Errorf("verify workspace source %s: %w", source.ID, err)
+			}
+		}
+		if err := ValidateAggregateWorkspaceSources(ctx, filepath.Join(final, WorkspaceSourcesDir)); err != nil {
 			return err
 		}
 		return VerifyArtifactWorkspace(filepath.Join(final, WorkspaceArtifactsDir), manifest)
@@ -294,6 +359,57 @@ func publishWorkspaceSnapshot(ctx context.Context, pending, final string, manife
 	}
 	if err := os.Rename(pending, final); err != nil {
 		return fmt.Errorf("publish workspace input: %w", err)
+	}
+	return nil
+}
+
+// ValidateAggregateWorkspaceSources enforces one bound across the complete source catalog.
+func ValidateAggregateWorkspaceSources(ctx context.Context, root string) error {
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("workspace sources root is not a safe directory")
+	}
+	files := 0
+	var total int64
+	err = filepath.WalkDir(root, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if current == root || entry.IsDir() {
+			return nil
+		}
+		var size int64
+		if entry.Type()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(current)
+			if err != nil {
+				return err
+			}
+			size = int64(len(target))
+		} else {
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("workspace sources contain an unsupported file")
+			}
+			size = info.Size()
+		}
+		files++
+		total += size
+		if files > WorkspaceSourceMaxFiles || total > WorkspaceSourceMaxSnapshotBytes {
+			return fmt.Errorf("workspace sources exceed aggregate file or byte bounds")
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if files == 0 {
+		return fmt.Errorf("workspace sources contain no files")
 	}
 	return nil
 }
