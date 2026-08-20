@@ -313,3 +313,100 @@ func TestMergeLastGoodAssignsAndPreservesSignatures(t *testing.T) {
 		t.Fatalf("retained signature=%q, want the published %q", got, assigned)
 	}
 }
+
+// A flake's message routinely carries a number that changes every run, such as a
+// Ginkgo timeout duration. The recurrence identity has to survive that or every
+// occurrence looks like a brand new cause and no history ever accumulates.
+func TestBuildRecurrenceSignatureSurvivesVaryingNumbers(t *testing.T) {
+	detail := signatureJob("job-1",
+		failedBuild{"10", "TestReconcile", "Timed out after 3600.001s waiting for 3 machines"},
+		failedBuild{"11", "TestReconcile", "Timed out after 3612.487s waiting for 2 machines"},
+	)
+	first := BuildRecurrenceSignature(detail, &detail.Runs[0])
+	if first == "" {
+		t.Fatal("no recurrence signature derived from an analyzed failure")
+	}
+	if second := BuildRecurrenceSignature(detail, &detail.Runs[1]); second != first {
+		t.Fatalf("signature=%q, want %q despite the varying numbers", second, first)
+	}
+	// The verdict-bearing identity must stay strict, or a conclusion about one
+	// failure could be reused to answer a materially different one.
+	if CausalGroupSignature(detail, groupOf("10")) == CausalGroupSignature(detail, groupOf("11")) {
+		t.Fatal("the causal group signature collapsed numbers, so a verdict could answer the wrong failure")
+	}
+}
+
+func TestBuildRecurrenceSignatureSeparatesDistinctFailures(t *testing.T) {
+	detail := signatureJob("job-1",
+		failedBuild{"10", "TestReconcile", "context deadline exceeded"},
+		failedBuild{"11", "TestReconcile", "connection refused"},
+		failedBuild{"12", "TestDelete", "context deadline exceeded"},
+	)
+	seen := map[string]bool{}
+	for i := range detail.Runs {
+		signature := BuildRecurrenceSignature(detail, &detail.Runs[i])
+		if signature == "" {
+			t.Fatalf("build %s produced no signature", detail.Runs[i].BuildID)
+		}
+		if seen[signature] {
+			t.Fatalf("build %s reused signature %q of a different failure", detail.Runs[i].BuildID, signature)
+		}
+		seen[signature] = true
+	}
+}
+
+// A signature only means anything if it rests on discriminating evidence, so a
+// failure that carries none must stay unidentified rather than collapse every
+// such build in the job onto one shared identity.
+func TestBuildRecurrenceSignatureSkipsFailuresWithoutEvidence(t *testing.T) {
+	standIn := models.NewProwJobExecutionFailure(12)
+	standIn.AISummary = &models.AISummary{Summary: "failure"}
+	standIn.AIAnalysis = &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic"}
+
+	for name, run := range map[string]models.BuildResult{
+		"build level stand in": {
+			BuildInfo: models.BuildInfo{BuildID: "10", Result: "FAILURE"},
+			TestCases: []models.TestCase{standIn},
+		},
+		"unanalyzed failure": {
+			BuildInfo: models.BuildInfo{BuildID: "11", Result: "FAILURE"},
+			TestCases: []models.TestCase{{Name: "TestReconcile", Status: "failed", FailureMessage: "boom"}},
+		},
+		"no failure message": {
+			BuildInfo: models.BuildInfo{BuildID: "12", Result: "FAILURE"},
+			TestCases: []models.TestCase{{
+				Name: "TestReconcile", Status: "failed",
+				AIAnalysis: &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic"},
+			}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			detail := models.JobDetail{Name: "job-1", JobID: "job-1", Runs: []models.BuildResult{run}}
+			if got := BuildRecurrenceSignature(detail, &detail.Runs[0]); got != "" {
+				t.Fatalf("signature=%q, want empty without discriminating evidence", got)
+			}
+		})
+	}
+}
+
+// A message with no digits normalizes identically under both rules, so only a
+// domain separates them. Without it the two identities share one ledger entry and
+// a causal group's builds inflate the count published for recurrence.
+func TestBuildRecurrenceSignatureNeverCollidesWithTheVerdictIdentity(t *testing.T) {
+	for name, message := range map[string]string{
+		"no digits":   "context deadline exceeded",
+		"with digits": "connection refused on port 6443",
+	} {
+		t.Run(name, func(t *testing.T) {
+			detail := signatureJob("job-1", failedBuild{"10", "TestReconcile", message})
+			group := CausalGroupSignature(detail, groupOf("10"))
+			recurrence := BuildRecurrenceSignature(detail, &detail.Runs[0])
+			if group == "" || recurrence == "" {
+				t.Fatalf("group=%q recurrence=%q, want both derived", group, recurrence)
+			}
+			if group == recurrence {
+				t.Fatalf("both identities are %q, so one ledger entry serves two purposes", group)
+			}
+		})
+	}
+}

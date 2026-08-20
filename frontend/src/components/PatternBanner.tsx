@@ -8,6 +8,7 @@ import { Link as RouterLink } from "react-router-dom";
 import { AutoAwesome } from "@mui/icons-material";
 import type {
   BuildResult,
+  FailureRecurrence,
   PatternAnalysis,
   PatternRefreshStatus,
 } from "../types/dashboard";
@@ -34,6 +35,7 @@ import { CausalGroupRemediation } from "./CausalGroupRemediation";
 import { CausalGroupFixRouting } from "./CausalGroupFixRouting";
 import { PatternFixGuidance } from "./PatternFixGuidance";
 import { causalGroupFixTarget, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
+import { describeRecurrence, recurrenceForBuilds } from "../lib/recurrence";
 
 function firstSentence(value: string): string {
   const match = value.trim().match(/^.*?[.!?](?:\s|$)/u);
@@ -45,11 +47,13 @@ export function PatternBanner({
   jobID,
   runs = [],
   refreshStatus,
+  recurrence,
 }: {
   pattern: PatternAnalysis;
   jobID?: string;
   runs?: BuildResult[];
   refreshStatus?: PatternRefreshStatus;
+  recurrence?: FailureRecurrence[];
 }) {
   const { data: resolved, refetch: refetchResolved } = useResolved();
   const { features } = useCapabilities();
@@ -60,6 +64,11 @@ export function PatternBanner({
   const fixCapable = Boolean(features.analysis_chat && features.junit_chat_fix);
   const causalFixTargets = causalGroups.map((group) =>
     fixCapable ? causalGroupFixTarget(group, runs) : null,
+  );
+  // Correlation only ever sees the current window, so a cause it reports as new
+  // may have been failing for months.
+  const causalRecurrence = causalGroups.map((group) =>
+    recurrenceForBuilds(recurrence, group.builds),
   );
   const hasCausalFixTarget = causalFixTargets.some((target) => target !== null);
   // The build joins the label only where two causes would otherwise render the
@@ -294,6 +303,8 @@ export function PatternBanner({
                     }}
                   >
                     {group.confidence} confidence
+                    {causalRecurrence[index] &&
+                      ` · ${describeRecurrence(causalRecurrence[index])}`}
                   </Typography>
                 </Box>
                 <Box sx={{ px: 1.5, py: 1.5, minWidth: 0 }}>

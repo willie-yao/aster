@@ -422,3 +422,29 @@ func TestCurrentJobStatus(t *testing.T) {
 		})
 	}
 }
+
+// Display grouping tolerates a partially normalized message, but counting
+// recurrence does not: a duration or elapsed counter glued to its unit changes on
+// every run, and any identity that keeps it reports a long-lived flake as new.
+func TestNormalizeErrorRecurrence_CollapsesNumbersGluedToUnits(t *testing.T) {
+	for name, pair := range map[string][2]string{
+		"ginkgo timeout":  {"Timed out after 3600.001s.", "Timed out after 3612.487s."},
+		"elapsed millis":  {"took 1823ms", "took 1904ms"},
+		"generated name":  {"pod worker-7-abc not ready", "pod worker-12-abc not ready"},
+		"gomega mismatch": {"Expected\n  <int>: 2\nto equal\n  <int>: 3", "Expected\n  <int>: 1\nto equal\n  <int>: 3"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			first, second := NormalizeErrorRecurrence(pair[0]), NormalizeErrorRecurrence(pair[1])
+			if first != second {
+				t.Fatalf("normalized %q and %q to %q and %q, want one identity", pair[0], pair[1], first, second)
+			}
+		})
+	}
+}
+
+// Collapsing numbers must not collapse genuinely different failures.
+func TestNormalizeErrorRecurrence_KeepsDistinctMessagesApart(t *testing.T) {
+	if NormalizeErrorRecurrence("connection refused") == NormalizeErrorRecurrence("context deadline exceeded") {
+		t.Fatal("two unrelated messages share one recurrence identity")
+	}
+}

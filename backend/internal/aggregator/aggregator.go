@@ -229,6 +229,30 @@ func NormalizeErrorMessage(msg string) string {
 	return s
 }
 
+// numberRunRegex matches a run of digits with optional decimal groups anywhere in
+// a token, including one glued to a unit or identifier such as "3600.001s",
+// "1823ms", or "worker-7".
+var numberRunRegex = regexp.MustCompile(`\d+(?:\.\d+)*`)
+
+// NormalizeErrorRecurrence normalizes an error message for counting how long a
+// failure has been recurring. It collapses every run of digits, unlike
+// NormalizeErrorMessage, whose word-boundary matching leaves numbers glued to a
+// unit or identifier intact ("3600.001s" survives as "<num>001s").
+//
+// Recall is the whole point here. Durations, elapsed counters, and generated
+// names change on every run, so any identity that preserves them reports a
+// long-lived flake as a brand new cause each time it fails. Over-grouping costs a
+// count that is too generous; under-grouping costs the history entirely.
+//
+// It is deliberately not used for durable verdict identity, which needs the
+// opposite trade-off. See NormalizeErrorSignature.
+func NormalizeErrorRecurrence(msg string) string {
+	s := strings.TrimSpace(msg)
+	s = timestampRegex.ReplaceAllString(s, "<timestamp>")
+	s = numberRunRegex.ReplaceAllString(s, "<num>")
+	return whitespaceRegex.ReplaceAllString(s, " ")
+}
+
 // NormalizeErrorSignature normalizes an error message for durable identity rather
 // than display grouping. It strips timestamps and collapses whitespace like
 // NormalizeErrorMessage, but deliberately preserves numeric values: status codes,

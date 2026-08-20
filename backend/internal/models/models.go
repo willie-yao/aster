@@ -342,6 +342,24 @@ type JobDetail struct {
 	// Empty unless the job failed in enough builds for pattern analysis.
 	PatternAnalyses []PatternAnalysis     `json:"pattern_analyses,omitempty"`
 	PatternRefresh  *PatternRefreshStatus `json:"pattern_refresh,omitempty"`
+	// FailureRecurrence projects durable recurrence memory for the failure
+	// signatures observed in this window. Correlation is window-local and needs
+	// several failures in one window, so a rare flake never forms a pattern;
+	// this carries the history it does have regardless.
+	FailureRecurrence []FailureRecurrence `json:"failure_recurrence,omitempty"`
+}
+
+// FailureRecurrence is the durable history of one failure signature, spanning
+// build windows. Occurrences counts distinct failing builds attributed to the
+// signature over its lifetime, so it exceeds Builds whenever the cause has been
+// failing for longer than the current window reaches.
+type FailureRecurrence struct {
+	Signature   string `json:"signature"`
+	Occurrences int    `json:"occurrences"`
+	FirstSeen   string `json:"first_seen"`
+	LastSeen    string `json:"last_seen"`
+	// Builds are the builds in the current window carrying this signature.
+	Builds []string `json:"builds,omitempty"`
 }
 
 // PatternRefreshState describes the current job-level correlation result.
