@@ -104,12 +104,99 @@ func findPunts(text string) []string {
 	return out
 }
 
+// noRemediationPrefix is the sanctioned escape hatch for a draft whose evidence
+// supports no remediation. ResponseFormatFooter pins the exact wording.
+const noRemediationPrefix = "no remediation possible from available evidence:"
+
+const rerunVerbs = `re-?run|re-?try|re-?submit|re-?queue|re-?trigger`
+
+// rerunTargets are the things a rerun instruction names. Restricting the rerun
+// branch to these keeps a real fix that merely opens with a retry verb
+// ("Retry HTTP 429 responses with backoff") from reading as rerun-only.
+const rerunTargets = `(?:the\s+|this\s+|that\s+|failed\s+|failing\s+|whole\s+)*` +
+	`(?:jobs?|tests?|builds?|runs?|presubmits?|pipelines?|workflows?|suites?|specs?|ci|it|this|that)`
+
+// transientQualifiers are the filler words allowed between the verb and the
+// classification, so a concrete remediation cannot hide inside that span.
+const transientQualifiers = `just|only|simply|purely|likely|probably|clearly|apparently|very|most|a|an|the|some|known`
+
+// transientClassifications name the verdict a restatement can carry.
+const transientClassifications = `flake|flaky|transient|infrastructure|infra|environment(?:al)?`
+
+// rerunOnlyClauses are the clause shapes that carry no durable remediation: a
+// rerun instruction, an explicit "nothing to do", or a restatement of a
+// transient verdict. Every branch is terminal, consuming its entire clause, so
+// any concrete continuation keeps a clause out of this set however it opens.
+const rerunOnlyClauses = `(?:please\s+|simply\s+|just\s+)?(?:` + rerunVerbs + `)(?:\s+` + rerunTargets + `)?\W*` +
+	`|` + rerunTargets + `\s+(?:should|shall|can|could|may|must|needs?\s+to)\s+(?:be\s+)?(?:` + rerunVerbs + `)\W*` +
+	`|no\s+(?:action|fix|remediation|change|code\s+change)s?\s*(?:is|are|was|were)?\s*(?:needed|required|necessary|possible)?\W*` +
+	`|nothing\s+to\s+(?:do|fix)(?:\s+here)?\W*` +
+	`|none\b\W*|n/?a\b\W*` +
+	`|(?:this|the)\s+(?:failure|test|job|error|issue)?\s*(?:is|was)` +
+	`(?:\s+(?:` + transientQualifiers + `))*` +
+	`\s+(?:` + transientClassifications + `)` +
+	`(?:\s+(?:` + transientClassifications + `|issue|error|problem|failure|noise))*\W*`
+
+var rerunOnlyClauseRE = regexp.MustCompile(`(?i)^\W*(?:` + rerunOnlyClauses + `)$`)
+
+// clauseBoundaryRE splits on sentence punctuation only at a real boundary, so a
+// version or decimal literal such as "v1.13.4" stays inside one clause.
+var clauseBoundaryRE = regexp.MustCompile(`[;\n]|[.!?]+(?:\s|$)`)
+
+// rerunOnlyRemediation reports whether a remediation leaves nothing to act on.
+// A rerun instruction is not a remediation for any verdict: when a rerun would
+// pass, the maintainer is still handed nothing durable, and when it would not,
+// the instruction is simply wrong.
+func rerunOnlyRemediation(fix string) bool {
+	trimmed := strings.TrimSpace(fix)
+	if trimmed == "" {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, noRemediationPrefix) {
+		return escapeHatchIsBare(lower)
+	}
+	return everyClauseRerunOnly(trimmed)
+}
+
+// escapeHatchIsBare reports whether the escape hatch carries no account at all.
+// Completeness of that account is the prompt's job; length is not evidence of
+// it, so a terse but real account is accepted.
+func escapeHatchIsBare(lower string) bool {
+	detail := strings.TrimSpace(lower[len(noRemediationPrefix):])
+	return detail == "" || everyClauseRerunOnly(detail)
+}
+
+func everyClauseRerunOnly(text string) bool {
+	clauses := remediationClauses(text)
+	if len(clauses) == 0 {
+		return true
+	}
+	for _, clause := range clauses {
+		if !rerunOnlyClauseRE.MatchString(clause) {
+			return false
+		}
+	}
+	return true
+}
+
+// remediationClauses splits a remediation into sentence-like clauses.
+func remediationClauses(text string) []string {
+	out := make([]string, 0, 4)
+	for _, field := range clauseBoundaryRE.Split(text, -1) {
+		if trimmed := strings.TrimSpace(field); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
 // currentCritiqueVersion is the schema version of the critique contract.
 // Bumped on material strengthening of the gate so cache entries from a
 // weaker version are invalidated on read. Cosmetic prompt-shape changes
 // do not bump; only behavior changes that make an existing cached answer
 // invalid under today's contract.
-const currentCritiqueVersion = 9
+const currentCritiqueVersion = 10
 
 // transientPersistThreshold is the consecutive-failure count at or above which a
 // draft claiming is_transient=true is contradicted. It is an engine-owned
@@ -297,6 +384,10 @@ type critiqueOutcome struct {
 	// claimed is_transient=true on a persistent failure. Zero when the check
 	// did not fire.
 	TransientPersistCount int
+
+	// RerunOnlyRemediation means the draft's remediation leaves nothing to act
+	// on and it did not use the sanctioned escape hatch.
+	RerunOnlyRemediation bool
 }
 
 // skillEvidenceMiss bundles one matched recipe with the evidence groups it
@@ -315,6 +406,9 @@ func (o critiqueOutcome) Matches() []string {
 		n++
 	}
 	if o.TransientPersistCount > 0 {
+		n++
+	}
+	if o.RerunOnlyRemediation {
 		n++
 	}
 	if n == 0 {
@@ -339,6 +433,9 @@ func (o critiqueOutcome) Matches() []string {
 	}
 	if o.TransientPersistCount > 0 {
 		out = append(out, fmt.Sprintf("transient-but-persistent(%dx)", o.TransientPersistCount))
+	}
+	if o.RerunOnlyRemediation {
+		out = append(out, "rerun-only-remediation")
 	}
 	return out
 }
@@ -455,6 +552,11 @@ func critiqueDraftWithContent(parsed analysisResponse, readsFull, readsBase map[
 		transientPersist = consecutiveFailures
 	}
 
+	// A rerun instruction is not a remediation for any verdict. Suppressed when
+	// the persistence contradiction fired, whose feedback tells the model to drop
+	// the transient verdict, so the two never ask for opposite things at once.
+	rerunOnlyRemediationFlag := transientPersist == 0 && rerunOnlyRemediation(parsed.SuggestedFix)
+
 	var citationIssues []string
 	missingArtifactCitation := false
 	missingArtifactCitationNeedsTool := false
@@ -473,8 +575,9 @@ func critiqueDraftWithContent(parsed analysisResponse, readsFull, readsBase map[
 		UnreadCitations:                  unread,
 		MissingSkillEvidence:             missingSkillEv,
 		TransientPersistCount:            transientPersist,
+		RerunOnlyRemediation:             rerunOnlyRemediationFlag,
 	}
-	if len(puntMatches) == 0 && len(unread) == 0 && len(citationIssues) == 0 && !missingArtifactCitation && len(missingSkillEv) == 0 && transientPersist == 0 {
+	if len(puntMatches) == 0 && len(unread) == 0 && len(citationIssues) == 0 && !missingArtifactCitation && len(missingSkillEv) == 0 && transientPersist == 0 && !rerunOnlyRemediationFlag {
 		out.Passed = true
 		return out
 	}
@@ -770,7 +873,7 @@ func pruneAbsentSkillEvidence(parsed analysisResponse, out *critiqueOutcome, tre
 	}
 	out.MissingSkillEvidence = kept
 	out.UnavailableSkillEvidence = unavailable
-	if len(out.PuntMatches) == 0 && len(out.UnreadCitations) == 0 && len(out.CitationIssues) == 0 && !out.MissingArtifactCitation && len(out.MissingSkillEvidence) == 0 && out.TransientPersistCount == 0 {
+	if len(out.PuntMatches) == 0 && len(out.UnreadCitations) == 0 && len(out.CitationIssues) == 0 && !out.MissingArtifactCitation && len(out.MissingSkillEvidence) == 0 && out.TransientPersistCount == 0 && !out.RerunOnlyRemediation {
 		out.Passed = true
 		out.Feedback = ""
 	} else {
@@ -805,6 +908,9 @@ func formatCritiqueFeedback(parsed analysisResponse, out critiqueOutcome) string
 	if out.TransientPersistCount > 0 {
 		sections = append(sections, formatTransientPersistSection(out.TransientPersistCount))
 	}
+	if out.RerunOnlyRemediation {
+		sections = append(sections, formatRerunOnlyRemediationSection(parsed.IsTransient))
+	}
 
 	sections = append(sections, `Re-emit your JSON addressing every issue above. Do NOT re-emit the same draft. If you re-emit the same issues, your answer will be rejected again.`)
 
@@ -828,6 +934,27 @@ Before re-emitting:
 3. Be wary of end-of-run noise: credential-expiry, resource-cleanup (janitor) errors, and DNS-no-longer-resolves messages appear AFTER the test already failed and are symptoms of teardown, not the cause. Anchor your root cause on the EARLIEST anomaly, not the loudest or latest error.
 4. Re-emit with is_transient=false and a concrete root_cause and suggested_fix grounded in the specific artifact evidence you read.`,
 		consecutive)
+}
+
+// formatRerunOnlyRemediationSection is the feedback for a draft whose
+// remediation leaves nothing to act on. A transient draft keeps its verdict,
+// because reclassifying infrastructure flake as a real bug is the outcome this
+// feedback must not cause.
+func formatRerunOnlyRemediationSection(transient bool) string {
+	opening := `Your suggested_fix leaves nothing to act on. A rerun instruction is not a remediation: when a rerun would pass, the maintainer is still handed nothing durable, and when it would not, the instruction is simply wrong.`
+	target := `Name the concrete code or configuration correction the artifacts you already read support.`
+	if transient {
+		opening += ` is_transient reports that a rerun is likely to pass; it does not report that nobody can act. Keep the transient verdict, and do NOT reclassify infrastructure flake as a real bug.`
+		target = `Name the durable resilience improvement the artifacts you already read support: a missing retry or backoff on a retryable status, a wait or timeout budget shorter than the observed duration, or a missing readiness guard.`
+	}
+	return opening + `
+
+Before re-emitting, do exactly one of:
+
+1. ` + target + ` Set cause_location when the evidence establishes the repository that owns it. When it belongs to the project's own repository, verify the file before naming it in relevant_files.
+2. If the evidence genuinely supports no such change, start suggested_fix with "No remediation possible from available evidence:" and name (a) the strongest fact you established, (b) the artifacts you consulted, and (c) the exact missing evidence.
+
+Do not re-emit a rerun instruction or a restatement of the verdict as the remediation.`
 }
 
 // formatPuntSection is the punt-detection feedback, extracted so the

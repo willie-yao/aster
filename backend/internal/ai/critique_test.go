@@ -3,6 +3,7 @@ package ai
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -97,7 +98,7 @@ func TestPuntRE_SanityTable(t *testing.T) {
 func TestCritiqueDraft_TransientButPersistent(t *testing.T) {
 	transient := analysisResponse{
 		IsTransient:  true,
-		SuggestedFix: "Re-run the job; this is an infrastructure flake.",
+		SuggestedFix: "Add retry-on-conflict handling for HTTP 409 in the DaemonSet applier.",
 	}
 
 	// Below threshold: a transient verdict on a non-persistent failure passes.
@@ -139,6 +140,141 @@ func TestCritiqueDraft_NonTransientPersistentPasses(t *testing.T) {
 	}
 	if out := critiqueDraft(real, nil, nil, nil, transientPersistThreshold+5); !out.Passed {
 		t.Errorf("non-transient persistent failure should pass, got %v", out.Matches())
+	}
+}
+
+// TestCritiqueDraft_RerunOnlyRemediation verifies the remediation contract: a
+// rerun instruction is not a remediation for any verdict, so a rerun-only or
+// empty fix is rejected while a concrete resilience fix and a substantive
+// escape hatch are accepted.
+func TestCritiqueDraft_RerunOnlyRemediation(t *testing.T) {
+	cases := []struct {
+		name        string
+		transient   bool
+		fix         string
+		wantFlagged bool
+	}{
+		{name: "empty", transient: true, wantFlagged: true},
+		{name: "whitespace only", transient: true, fix: "   \n ", wantFlagged: true},
+		{name: "rerun", transient: true, fix: "Re-run the job.", wantFlagged: true},
+		{name: "rerun and restatement", transient: true, fix: "Re-run the job; this is an infrastructure flake.", wantFlagged: true},
+		{name: "retry the test", transient: true, fix: "Retry the failed test.", wantFlagged: true},
+		{name: "passive rerun", transient: true, fix: "The job should be rerun.", wantFlagged: true},
+		{name: "none", transient: true, fix: "None.", wantFlagged: true},
+		{name: "no action needed", transient: true, fix: "No action needed.", wantFlagged: true},
+		{name: "no fix is needed", transient: true, fix: "No fix is needed.", wantFlagged: true},
+		{name: "no change is needed", transient: true, fix: "No change is needed.", wantFlagged: true},
+		{name: "nothing to do", transient: true, fix: "Nothing to do here.", wantFlagged: true},
+		{name: "nothing to fix", transient: true, fix: "Nothing to fix.", wantFlagged: true},
+		{name: "restatement only", transient: true, fix: "The failure is transient.", wantFlagged: true},
+		// The rule is not transient-only, so flipping the verdict cannot evade it.
+		{name: "non-transient rerun", fix: "Re-run the job.", wantFlagged: true},
+		{name: "non-transient empty", wantFlagged: true},
+		// A bare escape hatch is the same dead end wearing the sanctioned words.
+		{name: "bare escape hatch", transient: true, fix: "No remediation possible from available evidence:", wantFlagged: true},
+		{
+			name: "escape hatch wrapping a rerun", transient: true,
+			fix: "No remediation possible from available evidence: re-run the job.", wantFlagged: true,
+		},
+		{
+			name: "concrete resilience fix", transient: true,
+			fix: "Add retry-on-conflict handling for HTTP 409 in the CNI DaemonSet applier.",
+		},
+		{
+			// Opens with a retry verb but names a non-rerun object, so it is a
+			// code change rather than an instruction to run the job again.
+			name: "retry as a code change", transient: true,
+			fix: "Retry HTTP 429 responses three times with exponential backoff in the API client.",
+		},
+		{
+			name: "no code change but concrete edit", transient: true,
+			fix: "No code change is required, but raise the workflow timeout from 30m to 60m.",
+		},
+		{
+			// An em-dash continuation is still a concrete edit, so the no-action
+			// branch must not swallow it.
+			name: "no action with dash continuation", transient: true,
+			fix: "No action is needed in the application—the workflow needs a 60-minute timeout.",
+		},
+		{
+			name: "restatement continuing into a fix", transient: true,
+			fix: "This failure is transient because retry-on-conflict is missing and should be added.",
+		},
+		{
+			// A concrete fix stated before a trailing verdict must not be
+			// consumed by the restatement branch.
+			name: "fix before trailing verdict", transient: true,
+			fix: "This failure is mitigated by extending the timeout to 60 minutes and is therefore transient.",
+		},
+		{
+			name: "fix before otherwise transient", transient: true,
+			fix: "This failure is prevented by adding retry-on-conflict handling but is otherwise transient.",
+		},
+		{
+			// A real fix that mentions a rerun as its verification step must not
+			// be mistaken for a rerun-only remediation.
+			name: "concrete fix with rerun validation", transient: true,
+			fix: "Raise the kubeadm join budget in the test template from 3600s to 5400s, then validate by re-running the job.",
+		},
+		{
+			name: "substantive escape hatch", transient: true,
+			fix: "No remediation possible from available evidence: the throttling response is proven by the API log, but no retry or budget setting appears in any artifact read.",
+		},
+		{
+			// A terse escape hatch still carries a real account, so length alone
+			// must not decide completeness.
+			name: "concise escape hatch", transient: true,
+			fix: "No remediation possible from available evidence: 429 in api.log; client code absent.",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := critiqueDraft(analysisResponse{IsTransient: tc.transient, SuggestedFix: tc.fix}, nil, nil, nil, 0)
+			if out.RerunOnlyRemediation != tc.wantFlagged {
+				t.Fatalf("RerunOnlyRemediation = %v, want %v (matches=%v)", out.RerunOnlyRemediation, tc.wantFlagged, out.Matches())
+			}
+			if !tc.wantFlagged {
+				return
+			}
+			if out.Passed {
+				t.Error("a flagged draft must not pass critique")
+			}
+			if !slices.Contains(out.RuleIDs(), CritiqueRuleRerunOnlyRemediation) {
+				t.Errorf("RuleIDs = %v, want %q", out.RuleIDs(), CritiqueRuleRerunOnlyRemediation)
+			}
+			if !slices.Contains(out.Matches(), "rerun-only-remediation") {
+				t.Errorf("Matches = %v, want the rerun-only-remediation token", out.Matches())
+			}
+			if !strings.Contains(out.Feedback, "No remediation possible from available evidence:") {
+				t.Errorf("feedback should offer the escape hatch, got %q", out.Feedback)
+			}
+			// Only a transient draft is told to keep its verdict. Saying so on a
+			// non-transient draft would be meaningless, and dropping it on a
+			// transient one would invite reclassifying infra flake as a real bug.
+			keepsVerdict := strings.Contains(out.Feedback, "Keep the transient verdict")
+			if keepsVerdict != tc.transient {
+				t.Errorf("feedback keep-verdict = %v, want %v: %q", keepsVerdict, tc.transient, out.Feedback)
+			}
+		})
+	}
+}
+
+// TestCritiqueDraft_RerunOnlyRemediationYieldsToPersistence verifies the two
+// remediation rules do not both fire. Above the persistence threshold the model
+// is told to drop the transient verdict, so also telling it to keep that verdict
+// would be contradictory feedback in one message.
+func TestCritiqueDraft_RerunOnlyRemediationYieldsToPersistence(t *testing.T) {
+	draft := analysisResponse{IsTransient: true, SuggestedFix: "Re-run the job."}
+	out := critiqueDraft(draft, nil, nil, nil, transientPersistThreshold)
+	if out.RerunOnlyRemediation {
+		t.Error("the no-remediation rule must yield to the persistence contradiction")
+	}
+	if out.TransientPersistCount != transientPersistThreshold {
+		t.Errorf("TransientPersistCount = %d, want %d", out.TransientPersistCount, transientPersistThreshold)
+	}
+	if strings.Contains(out.Feedback, "Keep the transient verdict") {
+		t.Error("feedback must not tell the model to keep a verdict it is being asked to drop")
 	}
 }
 
@@ -203,12 +339,19 @@ func TestCritiqueDraft_FeedbackDeduplicatesMatches(t *testing.T) {
 	}
 }
 
-// TestCritiqueDraft_EmptySuggestedFixPasses verifies empty suggested_fix passes
-// this punt-pattern check.
-func TestCritiqueDraft_EmptySuggestedFixPasses(t *testing.T) {
+// TestCritiqueDraft_EmptySuggestedFixPunt verifies an empty suggested_fix is not
+// a punt, since there is no diagnostic checklist to flag, but that it is still
+// rejected because an analysis with no remediation hands the maintainer nothing.
+func TestCritiqueDraft_EmptySuggestedFixPunt(t *testing.T) {
 	out := critiqueDraft(analysisResponse{SuggestedFix: ""}, nil, nil, nil, 0)
-	if !out.Passed {
-		t.Errorf("empty suggested_fix should pass critique, got %+v", out)
+	if len(out.PuntMatches) != 0 {
+		t.Errorf("empty suggested_fix should not match the punt patterns, got %v", out.PuntMatches)
+	}
+	if !out.RerunOnlyRemediation {
+		t.Error("empty suggested_fix should be rejected as leaving nothing to act on")
+	}
+	if out.Passed {
+		t.Error("empty suggested_fix should not pass critique")
 	}
 }
 

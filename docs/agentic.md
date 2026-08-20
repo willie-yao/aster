@@ -150,6 +150,7 @@ Every parseable final is evaluated in its exact sanitized publication form.
 The deterministic judge rejects hard safety or grounding failures such as:
 
 - an investigation checklist presented as the remediation;
+- a remediation that leaves nothing to act on, such as a rerun instruction;
 - a citation to an artifact that was never read;
 - missing required artifact citations after evidence was read;
 - invalid source or artifact paths and ranges;
