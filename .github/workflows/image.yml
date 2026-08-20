@@ -261,7 +261,7 @@ jobs:
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
-            IMAGE_TAG=sha-${{ github.sha }}
+            IMAGE_TAG=${{ steps.meta.outputs.version }}
           cache-from: type=gha,scope=agent-sandbox-analysis-executor
           cache-to: type=gha,mode=max,scope=agent-sandbox-analysis-executor
 
@@ -303,6 +303,6 @@ jobs:
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
-            IMAGE_TAG=sha-${{ github.sha }}
+            IMAGE_TAG=${{ steps.meta.outputs.version }}
           cache-from: type=gha,scope=agent-sandbox-analysis-stager
           cache-to: type=gha,mode=max,scope=agent-sandbox-analysis-stager

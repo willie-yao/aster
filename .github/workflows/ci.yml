@@ -239,15 +239,21 @@ jobs:
       - name: Build executor
         env:
           SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: docker build --target agent-sandbox-analysis-executor --build-arg VERSION=ci --build-arg COMMIT="$SOURCE_REVISION" --build-arg IMAGE_TAG="sha-${SOURCE_REVISION}" -t aster/agent-sandbox-analysis-executor:ci .
+        run: |
+          image_tag="sha-${SOURCE_REVISION::7}"
+          docker build --target agent-sandbox-analysis-executor --build-arg VERSION=ci --build-arg COMMIT="$SOURCE_REVISION" --build-arg IMAGE_TAG="$image_tag" -t aster/agent-sandbox-analysis-executor:ci .
       - name: Build stager
         env:
           SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: docker build --target agent-sandbox-analysis-stager --build-arg VERSION=ci --build-arg COMMIT="$SOURCE_REVISION" --build-arg IMAGE_TAG="sha-${SOURCE_REVISION}" -t aster/agent-sandbox-analysis-stager:ci .
+        run: |
+          image_tag="sha-${SOURCE_REVISION::7}"
+          docker build --target agent-sandbox-analysis-stager --build-arg VERSION=ci --build-arg COMMIT="$SOURCE_REVISION" --build-arg IMAGE_TAG="$image_tag" -t aster/agent-sandbox-analysis-stager:ci .
       - name: Test credential-free runtimes
         env:
           SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: hack/test-agent-sandbox-analysis-images.sh aster/agent-sandbox-analysis-executor:ci aster/agent-sandbox-analysis-stager:ci "$SOURCE_REVISION" "sha-${SOURCE_REVISION}"
+        run: |
+          image_tag="sha-${SOURCE_REVISION::7}"
+          hack/test-agent-sandbox-analysis-images.sh aster/agent-sandbox-analysis-executor:ci aster/agent-sandbox-analysis-stager:ci "$SOURCE_REVISION" "$image_tag"
 
   agent-sandbox-critic-executor-image:
     needs: changes
