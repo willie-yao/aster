@@ -49,7 +49,6 @@ export function AiAnalysisPanel({
   traceHref,
   chatRef,
   fixPatterns = [],
-  fixInvestigationEligible = false,
   appearance = "default",
   severityInHeader = false,
 }: {
@@ -58,7 +57,6 @@ export function AiAnalysisPanel({
   traceHref?: string;
   chatRef?: AnalysisChatReference;
   fixPatterns?: PatternAnalysis[];
-  fixInvestigationEligible?: boolean;
   appearance?: "default" | "detail";
   // Set when the surrounding header already states the severity, so the panel
   // does not repeat it a few lines below. Callers without such a header leave
@@ -449,14 +447,13 @@ export function AiAnalysisPanel({
       analysisRef={chatRef}
       fileCtx={fileCtx}
       fixPatterns={fixPatterns}
-      fixInvestigationEligible={fixInvestigationEligible}
       onCorrectionChanged={refetch}
       appearance={detailAppearance ? "detail" : "default"}
     />
   ) : null;
 
   // An external cause explains why this analysis has no verified project file
-  // and cannot start a Fix investigation, so it belongs beside the remediation.
+  // and cannot start a fix proposal, so it belongs beside the remediation.
   const upstreamCause = externalCause(analysis.cause_location);
   const upstream = upstreamCause ? (
     detailAppearance ? (

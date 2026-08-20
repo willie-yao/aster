@@ -13,7 +13,6 @@ import {
   analysisChatProgressTurnUsage,
   analysisChatTurnLimitReached,
   analysisChatTurnUsage,
-  beginAnalysisChatFixInvestigation,
   clearAnalysisChatPendingIntent,
   findAnalysisChatSession,
   isAnalysisChatOAuthExpired,
@@ -93,40 +92,7 @@ test("missing or expired server sessions restore as empty", async () => {
   assert.equal(await findAnalysisChatSession(analysis), null);
 });
 
-test("Fix investigation aborts restore and creates only fresh sessions", async () => {
-  const requests: Array<{ url: string; id: string | null }> = [];
-  let restoreAborted = false;
-  globalThis.fetch = async (input, init) => {
-    assert.equal(restoreAborted, true);
-    requests.push({
-      url: String(input),
-      id: new Headers(init?.headers).get("Idempotency-Key"),
-    });
-    assert.equal(init?.method, "POST");
-    assert.equal(init?.credentials, "same-origin");
-    assert.deepEqual(JSON.parse(String(init?.body)), analysis);
-    return new Response(JSON.stringify(session), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  };
-
-  const first = beginAnalysisChatFixInvestigation(analysis, () => { restoreAborted = true; });
-  await first.session;
-  restoreAborted = false;
-  const second = beginAnalysisChatFixInvestigation(analysis, () => { restoreAborted = true; });
-  await second.session;
-
-  assert.notEqual(first.requestID, second.requestID);
-  assert.deepEqual(requests.map((request) => request.url), [
-    "/api/analysis-chat/sessions",
-    "/api/analysis-chat/sessions",
-  ]);
-  assert.deepEqual(requests.map((request) => request.id), [first.requestID, second.requestID]);
-  assert.equal(requests.some((request) => /preview|confirm/.test(request.url)), false);
-});
-
-test("normal and Fix-intended synchronous messages serialize only the requested intent", async () => {
+test("synchronous messages serialize the message and nothing else", async () => {
   const bodies: unknown[] = [];
   globalThis.fetch = async (_input, init) => {
     assert.equal(init?.credentials, "same-origin");
@@ -135,12 +101,13 @@ test("normal and Fix-intended synchronous messages serialize only the requested 
   };
 
   await sendAnalysisChatMessage("session-1", "normal", "request-normal");
-  await sendAnalysisChatMessage("session-1", "fix", "request-fix", { fixIntent: true });
+  await sendAnalysisChatMessage("session-1", "second", "request-second");
 
-  assert.deepEqual(bodies, [{ message: "normal" }, { message: "fix", fix_intent: true }]);
+  // One kind of turn, so the body carries the message and nothing else.
+  assert.deepEqual(bodies, [{ message: "normal" }, { message: "second" }]);
 });
 
-test("normal and Fix-intended streams serialize intent and reuse one request identity", async () => {
+test("streams serialize the message and reuse one request identity", async () => {
   const completed: AnalysisChatSession = { ...session, active: undefined };
   const events = `event: session\ndata: ${JSON.stringify(completed)}\n\n`;
   const bodies: unknown[] = [];
@@ -152,13 +119,13 @@ test("normal and Fix-intended streams serialize intent and reuse one request ide
   };
 
   await streamAnalysisChatMessage("session-1", "normal", "request-normal", () => {});
-  await streamAnalysisChatMessage("session-1", "fix", "request-fix", () => {}, { fixIntent: true });
+  await streamAnalysisChatMessage("session-1", "second", "request-second", () => {});
 
-  assert.deepEqual(bodies, [{ message: "normal" }, { message: "fix", fix_intent: true }]);
-  assert.deepEqual(ids, ["request-normal", "request-fix"]);
+  assert.deepEqual(bodies, [{ message: "normal" }, { message: "second" }]);
+  assert.deepEqual(ids, ["request-normal", "request-second"]);
 });
 
-test("ambiguous Fix stream recovery preserves intent without changing the request ID", async () => {
+test("ambiguous stream recovery retries without changing the request ID", async () => {
   const completed: AnalysisChatSession = { ...session, active: undefined };
   const events = `event: session\ndata: ${JSON.stringify(completed)}\n\n`;
   const requests: Array<{ id: string | null; body: unknown }> = [];
@@ -171,20 +138,20 @@ test("ambiguous Fix stream recovery preserves intent without changing the reques
     return new Response(events, { status: 200, headers: { "Content-Type": "text/event-stream" } });
   };
 
-  await streamAnalysisChatMessage("session-1", "fix", "request-fix", () => {}, { fixIntent: true });
+  await streamAnalysisChatMessage("session-1", "ask", "request-ask", () => {});
 
   assert.equal(requests.length, 2);
   assert.deepEqual(requests, [
-    { id: "request-fix", body: { message: "fix", fix_intent: true } },
-    { id: "request-fix", body: { message: "fix", fix_intent: true } },
+    { id: "request-ask", body: { message: "ask" } },
+    { id: "request-ask", body: { message: "ask" } },
   ]);
 });
 
-test("Fix-intent preflight failure is not retried or downgraded to normal chat", async () => {
+test("a rejected turn is not retried", async () => {
   let calls = 0;
   globalThis.fetch = async (_input, init) => {
     calls++;
-    assert.deepEqual(JSON.parse(String(init?.body)), { message: "fix", fix_intent: true });
+    assert.deepEqual(JSON.parse(String(init?.body)), { message: "ask" });
     return new Response("invalid analysis chat request", {
       status: 400,
       headers: { "X-Analysis-Chat-Outcome": "rejected" },
@@ -192,13 +159,13 @@ test("Fix-intent preflight failure is not retried or downgraded to normal chat",
   };
 
   await assert.rejects(
-    streamAnalysisChatMessage("session-1", "fix", "request-fix", () => {}, { fixIntent: true }),
+    streamAnalysisChatMessage("session-1", "ask", "request-ask", () => {}),
     (error: unknown) => error instanceof AnalysisChatAPIError && error.status === 400,
   );
   assert.equal(calls, 1);
 });
 
-test("pending-turn intent storage retains only request identity and intent", () => {
+test("pending-turn storage retains only request identity and recording state", () => {
   const values = new Map<string, string>();
   const storage = {
     getItem: (key: string) => values.get(key) ?? null,
@@ -206,7 +173,7 @@ test("pending-turn intent storage retains only request identity and intent", () 
     removeItem: (key: string) => { values.delete(key); },
   };
   saveAnalysisChatPendingIntent(storage, {
-    analysisIdentity: "analysis", sessionID: "session-1", requestID: "request-fix", fixIntent: true,
+    analysisIdentity: "analysis", sessionID: "session-1", requestID: "request-fix", requestRecorded: true,
   });
   assert.equal(loadAnalysisChatPendingIntent(storage, "analysis", "session-1", "request-fix"), true);
   assert.equal(loadAnalysisChatPendingIntent(storage, "other", "session-1", "request-fix"), undefined);
@@ -371,14 +338,14 @@ test("reload during a turn reconnects the persisted request", async () => {
   };
   const phases: string[] = [];
 
-  const restored = await resumeAnalysisChatTurn(active, (value) => phases.push(value.phase), { fixIntent: false });
+  const restored = await resumeAnalysisChatTurn(active, (value) => phases.push(value.phase), { requestRecorded: false });
 
   assert.equal(restored.active, undefined);
   assert.equal(restored.messages[1]?.request_id, "request-active");
   assert.deepEqual(phases, ["reading_evidence", "finalizing"]);
 });
 
-test("reload during a Fix-intended turn reconnects with Fix intent", async () => {
+test("reload during a recorded turn reconnects with the same request identity", async () => {
   const active: AnalysisChatSession = {
     ...session, messages: [], active: {
       request_id: "request-fix", question: "What should change?", phase: "reading_evidence", updated_at: "2026-07-26T12:03:00Z",
@@ -386,12 +353,12 @@ test("reload during a Fix-intended turn reconnects with Fix intent", async () =>
   };
   const events = `event: session\ndata: ${JSON.stringify({ ...session, active: undefined })}\n\n`;
   globalThis.fetch = async (_input, init) => {
-    assert.deepEqual(JSON.parse(String(init?.body)), { message: "What should change?", fix_intent: true });
+    assert.deepEqual(JSON.parse(String(init?.body)), { message: "What should change?" });
     assert.equal(new Headers(init?.headers).get("Idempotency-Key"), "request-fix");
     return new Response(events, { status: 200, headers: { "Content-Type": "text/event-stream" } });
   };
 
-  await resumeAnalysisChatTurn(active, () => {}, { fixIntent: true });
+  await resumeAnalysisChatTurn(active, () => {}, { requestRecorded: true });
 });
 
 test("deterministic reconnect failure observes an admitted request without a second POST", async () => {
@@ -413,7 +380,7 @@ test("deterministic reconnect failure observes an admitted request without a sec
     const method = init?.method ?? "GET";
     calls.push(`${method} ${String(input)}`);
     if (method === "POST") {
-      assert.deepEqual(JSON.parse(String(init?.body)), { message: "What should change?", fix_intent: true });
+      assert.deepEqual(JSON.parse(String(init?.body)), { message: "What should change?" });
       return new Response("analysis chat source revision changed", { status: 400 });
     }
     if (calls.length === 2) {
@@ -423,7 +390,7 @@ test("deterministic reconnect failure observes an admitted request without a sec
   };
 
   await assert.rejects(
-    resumeAnalysisChatTurn(active, () => {}, { fixIntent: true }),
+    resumeAnalysisChatTurn(active, () => {}, { requestRecorded: true }),
     (error: unknown) => error instanceof AnalysisChatAPIError && error.status === 400,
   );
   const reconciled = await reconcileAnalysisChatTurn("session-1", "request-fix", () => {}, { pollDelayMs: 0 });
@@ -449,7 +416,7 @@ test("OAuth expiry is recognized for lookup and active-turn restoration", async 
     },
   };
   await assert.rejects(
-    resumeAnalysisChatTurn(active, () => {}, { fixIntent: true }),
+    resumeAnalysisChatTurn(active, () => {}, { requestRecorded: true }),
     (error: unknown) => isAnalysisChatOAuthExpired(error, "oauth"),
   );
   assert.equal(isAnalysisChatOAuthExpired(new AnalysisChatAPIError(401, "unauthorized"), "dev"), false);

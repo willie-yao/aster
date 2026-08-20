@@ -216,7 +216,10 @@ func TestHandlerAnalysisChatFlow(t *testing.T) {
 	}
 }
 
-func TestHandlerAnalysisChatFixIntentPreflightsBeforeProvider(t *testing.T) {
+// Asking a question must not depend on source verification, so the message
+// endpoints neither accept a fix intent nor preflight the source. The source is
+// pinned when a fix request is created instead.
+func TestHandlerAnalysisChatMessagesNeverPreflightSource(t *testing.T) {
 	runner := &fakeAnalysisChatRunner{preflightErr: fmt.Errorf("%w: source unavailable", analysischat.ErrInvalidRequest)}
 	handler, err := Handler(Options{
 		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev", AnalysisChat: runner,
@@ -234,18 +237,20 @@ func TestHandlerAnalysisChatFixIntentPreflightsBeforeProvider(t *testing.T) {
 		return recorder
 	}
 
-	failed := request("/api/analysis-chat/sessions/session-1/messages", `{"message":"find Fix evidence","fix_intent":true}`, "fix-sync")
-	if failed.Code != http.StatusBadRequest || runner.preflightCalls != 1 || runner.gotMessage != "" {
-		t.Fatalf("sync preflight status=%d calls=%d message=%q body=%q", failed.Code, runner.preflightCalls, runner.gotMessage, failed.Body.String())
-	}
-	failed = request("/api/analysis-chat/sessions/session-1/messages/stream", `{"message":"find Fix evidence","fix_intent":true}`, "fix-stream")
-	if failed.Code != http.StatusBadRequest || runner.preflightCalls != 2 || runner.gotMessage != "" {
-		t.Fatalf("stream preflight status=%d calls=%d message=%q body=%q", failed.Code, runner.preflightCalls, runner.gotMessage, failed.Body.String())
-	}
-
+	// A question succeeds even though source verification would fail.
 	normal := request("/api/analysis-chat/sessions/session-1/messages", `{"message":"explain only"}`, "normal")
-	if normal.Code != http.StatusOK || runner.preflightCalls != 2 || runner.gotMessage != "explain only" {
-		t.Fatalf("normal chat status=%d calls=%d message=%q body=%q", normal.Code, runner.preflightCalls, runner.gotMessage, normal.Body.String())
+	if normal.Code != http.StatusOK || runner.preflightCalls != 0 || runner.gotMessage != "explain only" {
+		t.Fatalf("chat status=%d preflights=%d message=%q body=%q", normal.Code, runner.preflightCalls, runner.gotMessage, normal.Body.String())
+	}
+	// The retired field is rejected rather than silently ignored.
+	for _, path := range []string{
+		"/api/analysis-chat/sessions/session-1/messages",
+		"/api/analysis-chat/sessions/session-1/messages/stream",
+	} {
+		rejected := request(path, `{"message":"ask","fix_intent":true}`, "retired-"+path)
+		if rejected.Code != http.StatusBadRequest || runner.preflightCalls != 0 {
+			t.Fatalf("%s status=%d preflights=%d", path, rejected.Code, runner.preflightCalls)
+		}
 	}
 }
 

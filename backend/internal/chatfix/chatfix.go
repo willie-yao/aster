@@ -17,6 +17,7 @@ import (
 type chatStore interface {
 	FixCandidate(sessionID, owner, requestID, patternID, patternHash string) (analysischat.FixCandidate, error)
 	TestFixCandidate(sessionID, owner, requestID string) (analysischat.FixCandidate, error)
+	PreflightTestFix(ctx context.Context, sessionID, owner, requestID string) error
 }
 
 type fixPreviewer interface {
@@ -89,7 +90,7 @@ func (s *Service) PreviewChatFix(
 // CreateAnalysisFixRequest admits one exact JUnit chat finding for durable
 // background preview generation.
 func (s *Service) CreateAnalysisFixRequest(
-	sessionID, owner, requestID, userToken, instruction string, replacesRequestIDs ...string,
+	ctx context.Context, sessionID, owner, requestID, userToken, instruction string, replacesRequestIDs ...string,
 ) (actions.ActionRequestView, error) {
 	instruction = strings.TrimSpace(instruction)
 	if len(instruction) > 4096 {
@@ -97,6 +98,11 @@ func (s *Service) CreateAnalysisFixRequest(
 	}
 	if s.requests == nil {
 		return actions.ActionRequestView{}, fmt.Errorf("%w: asynchronous exact JUnit fix previews are unavailable", analysischat.ErrInvalidRequest)
+	}
+	// Pin the source the patch will be generated against. Chat turns do not do
+	// this, so that asking a question never depends on source verification.
+	if err := s.chat.PreflightTestFix(ctx, sessionID, owner, requestID); err != nil {
+		return actions.ActionRequestView{}, err
 	}
 	candidate, err := s.chat.TestFixCandidate(sessionID, owner, requestID)
 	if err != nil {

@@ -85,7 +85,7 @@ test("causal guidance selects an affected build with a failed JUnit test", () =>
   );
 });
 
-test("a cause routes to a failed test that can actually start a Fix investigation", () => {
+test("a cause routes to a failed test that can actually start a fix proposal", () => {
   assert.deepEqual(causalGroupFixTarget(firstGroup, [groundedRun]), {
     buildID: "208060",
     testName: "fails",
@@ -211,7 +211,7 @@ test("a single-build cause still gets the per-test fix route", () => {
 
 // Ownership must never cost a project-owned failure its Fix route, and an
 // eligible verified failure still wins over an upstream note.
-test("cause ownership does not change which failures can start a Fix investigation", () => {
+test("cause ownership does not change which failures can start a fix proposal", () => {
   const ownRepo: PatternCausalGroup = {
     ...firstGroup,
     cause_location: { repository: "kubernetes-sigs/cluster-api-provider-azure" },
@@ -233,7 +233,7 @@ test("fix routing sits with each cause and stays behind the chat capabilities", 
   assert.match(banner, /const fixCapable = Boolean\(features\.analysis_chat && features\.junit_chat_fix\)/);
   assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupFixRouting[\s\S]*target=\{causalFixTargets\[index\]\}[\s\S]*externalCause=\{externalCause\(group\.cause_location\)\}/);
   assert.match(routing, /testRunPath\(jobID, target\.testName, target\.buildID\)/);
-  assert.match(routing, /No failed JUnit test in these builds meets the Fix investigation requirements/);
+  assert.match(routing, /No failed JUnit test in these builds meets the Fix eligibility requirements/);
 });
 
 test("fix routing reads as an action and names the test it opens", () => {
@@ -294,8 +294,8 @@ test("the pattern-level panel is a fallback for causes with no eligible test", (
   assert.match(banner, /<PatternFixGuidance jobID=\{jobID\} buildID=\{fixGuidanceBuildID\} externalCause=\{patternUpstreamCause\} \/>/);
   assert.ok(banner.indexOf("<PatternFixGuidance") < banner.indexOf("<AnalysisChat"));
   assert.equal(banner.match(/<PatternFixGuidance/g)?.length, 1);
-  assert.match(guidance, /Fix investigation unavailable/);
-  assert.match(guidance, /No failed JUnit test in the affected builds meets the Fix investigation requirements/);
+  assert.match(guidance, /Fix proposal unavailable/);
+  assert.match(guidance, /No failed JUnit test in the affected builds meets the Fix eligibility requirements/);
   assert.match(guidance, /View failed tests/);
   assert.match(guidance, /jobRunPath\(jobID, buildID\)/);
   assert.match(guidance, /to=\{destination\}/);
@@ -329,7 +329,7 @@ test("causal actions stay blocked while pattern chat and exact-JUnit Fix remain 
   assert.doesNotMatch(banner, />\s*Draft issue\s*</);
   assert.doesNotMatch(banner, />\s*Draft fix PR\s*</);
   assert.match(banner, /<AnalysisChat/);
-  assert.match(chat, /Start fix investigation/);
+  assert.match(chat, /Use this finding in a fix proposal/);
 });
 
 test("pattern dismissal is reachable on the causal-group results the engine publishes", () => {

@@ -38,11 +38,12 @@ separate gates. The engine never approves or merges the pull request.
 
 ## Exact JUnit analysis handoff
 
-Authenticated server deployments can start a fresh owner-bound Fix investigation
-for one exact failed JUnit analysis. This is separate from normal analysis chat.
-The server performs immutable source and verified-path preflight before the
-provider call. Starting the chat does not create a patch, branch, or pull
-request.
+Authenticated server deployments can turn one exact failed JUnit analysis into a
+fix proposal from the analysis chat. There is one conversation: ask questions,
+and any answer with verified citations can start a proposal. Asking a question
+never creates a patch, branch, or pull request, and never depends on source
+verification. The server pins the immutable source revision and verified paths
+when the proposal is requested.
 
 After a successful cited response, **Use this finding in a fix proposal** admits
 a separate persistent asynchronous preview request. The selected finding must

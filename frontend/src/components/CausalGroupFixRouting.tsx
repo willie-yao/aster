@@ -12,7 +12,7 @@ import { overviewTypography } from "../theme/overview";
 import { UpstreamCauseNotice } from "./UpstreamCauseNotice";
 
 // CausalGroupFixRouting points one cause at a failed test that can actually
-// start a Fix investigation, and says so plainly when no such test exists. The
+// start a fix proposal, and says so plainly when no such test exists. The
 // visible label names the test it opens, so several causes on one briefing stay
 // tellable apart without reading the surrounding prose.
 export function CausalGroupFixRouting({
@@ -36,7 +36,7 @@ export function CausalGroupFixRouting({
     if (externalCause) return <UpstreamCauseNotice location={externalCause} />;
     return (
       <Typography color="textSecondary" sx={{ mt: 1.5, ...overviewTypography.description }}>
-        No failed JUnit test in these builds meets the Fix investigation requirements, so no Fix investigation can start from this cause.
+        No failed JUnit test in these builds meets the Fix eligibility requirements, so no fix proposal can start from this cause.
       </Typography>
     );
   }

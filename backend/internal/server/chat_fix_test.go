@@ -27,6 +27,7 @@ type fakeChatFixRunner struct {
 	replacesRequest string
 	err             error
 	requestCreated  bool
+	deadline        time.Time
 }
 
 type blockingHTTPChatFixRunner struct {
@@ -46,7 +47,7 @@ func newBlockingHTTPChatFixRunner() *blockingHTTPChatFixRunner {
 }
 
 func (r *blockingHTTPChatFixRunner) CreateAnalysisFixRequest(
-	_, owner, _, _, _ string, _ ...string,
+	_ context.Context, _, owner, _, _, _ string, _ ...string,
 ) (actions.ActionRequestView, error) {
 	r.mu.Lock()
 	if r.request.ID != "" {
@@ -127,8 +128,9 @@ func (f *fakeChatFixRunner) PreviewChatFix(
 }
 
 func (f *fakeChatFixRunner) CreateAnalysisFixRequest(
-	sessionID, owner, requestID, userToken, instruction string, replaces ...string,
+	ctx context.Context, sessionID, owner, requestID, userToken, instruction string, replaces ...string,
 ) (actions.ActionRequestView, error) {
+	f.deadline, _ = ctx.Deadline()
 	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
 	f.userToken, f.instruction, f.requestCreated = userToken, instruction, true
 	if len(replaces) > 0 {
@@ -447,3 +449,31 @@ var _ ActionRunner = (*blockingHTTPChatFixRunner)(nil)
 var _ ActionRequestRunner = (*blockingHTTPChatFixRunner)(nil)
 var _ ChatFixRunner = (*blockingHTTPChatFixRunner)(nil)
 var _ ChatFixRequestRunner = (*blockingHTTPChatFixRunner)(nil)
+
+// Pinning the source makes network calls, so the request must carry a server
+// deadline rather than inheriting an unbounded client context.
+func TestHandlerExactJUnitChatFixRequestBoundsSourcePinning(t *testing.T) {
+	runner := &fakeChatFixRunner{}
+	handler, err := Handler(Options{
+		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+		Actions: &fakeRunner{}, AnalysisChat: &fakeAnalysisChatRunner{}, ChatFix: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/analysis-chat/sessions/session/requests/request/fix/requests",
+		strings.NewReader(`{"instruction":"make it retry"}`),
+	)
+	req.Header.Set("Authorization", "ok")
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if !runner.requestCreated {
+		t.Fatal("fix request was not admitted")
+	}
+	if runner.deadline.IsZero() {
+		t.Fatal("source pinning ran without a server deadline")
+	}
+}

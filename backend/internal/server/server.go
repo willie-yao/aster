@@ -292,7 +292,7 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, guard(previewChatFixHandler(timeout, opts.ChatFix))))
 		if requests, ok := opts.ChatFix.(ChatFixRequestRunner); ok {
 			mux.Handle("POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/requests",
-				auth.Middleware(opts.Auth, guard(createAnalysisChatFixRequestHandler(requests))))
+				auth.Middleware(opts.Auth, guard(createAnalysisChatFixRequestHandler(timeout, requests))))
 		}
 	}
 

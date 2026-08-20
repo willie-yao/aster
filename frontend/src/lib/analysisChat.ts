@@ -23,7 +23,7 @@ export const analysisChatUnusableAnswerMessage = "analysis chat model response d
 export const analysisChatInvalidJSONMessage = "analysis chat model response was not valid JSON";
 
 export interface AnalysisChatMessageOptions {
-  fixIntent?: boolean;
+  requestRecorded?: boolean;
   signal?: AbortSignal;
 }
 
@@ -31,10 +31,6 @@ export interface AnalysisChatResumeOptions extends AnalysisChatMessageOptions {
   pollDelayMs?: number;
 }
 
-export interface AnalysisChatFixInvestigationStart {
-  requestID: string;
-  session: Promise<AnalysisChatSession>;
-}
 
 export interface AnalysisChatReconciliation {
   session: AnalysisChatSession;
@@ -45,7 +41,7 @@ export interface AnalysisChatPendingIntent {
   analysisIdentity: string;
   sessionID: string;
   requestID: string;
-  fixIntent: boolean;
+  requestRecorded: boolean;
 }
 
 interface AnalysisChatIntentStorage {
@@ -80,8 +76,8 @@ export function loadAnalysisChatPendingIntent(
     if (!raw) return undefined;
     const value = JSON.parse(raw) as Partial<AnalysisChatPendingIntent>;
     if (value.analysisIdentity !== analysisIdentity || value.sessionID !== sessionID || value.requestID !== requestID ||
-      typeof value.fixIntent !== "boolean") return undefined;
-    return value.fixIntent;
+      typeof value.requestRecorded !== "boolean") return undefined;
+    return value.requestRecorded;
   } catch {
     return undefined;
   }
@@ -319,18 +315,6 @@ export async function createAnalysisChatSession(
   return parseResponse(response);
 }
 
-export function beginAnalysisChatFixInvestigation(
-  analysis: AnalysisChatReference,
-  abortRestore: () => void,
-  signal?: AbortSignal,
-): AnalysisChatFixInvestigationStart {
-  abortRestore();
-  const requestID = newAnalysisChatRequestID();
-  return {
-    requestID,
-    session: createAnalysisChatSession(analysis, requestID, signal),
-  };
-}
 
 export async function findAnalysisChatSession(
   analysis: AnalysisChatReference,
@@ -377,16 +361,12 @@ export async function sendAnalysisChatMessage(
       cache: "no-store",
       signal: options.signal,
       headers: { "Content-Type": "application/json", "Idempotency-Key": requestID },
-      body: JSON.stringify(analysisChatMessageBody(message, options.fixIntent)),
+      body: JSON.stringify({ message }),
     },
   );
   return parseResponse(response);
 }
 
-
-function analysisChatMessageBody(message: string, fixIntent?: boolean): { message: string; fix_intent?: true } {
-  return fixIntent ? { message, fix_intent: true } : { message };
-}
 
 interface AnalysisChatStreamError {
   status: number;
@@ -425,7 +405,7 @@ export async function resumeAnalysisChatTurn(
   const active = session.active;
   if (!active) return session;
   onProgress(active);
-  if (active.question?.trim() && options.fixIntent !== undefined) {
+  if (active.question?.trim() && options.requestRecorded !== undefined) {
     return streamAnalysisChatMessage(session.id, active.question, active.request_id, onProgress, options);
   }
 
@@ -471,7 +451,7 @@ async function streamAnalysisChatMessageOnce(
       cache: "no-store",
       signal: options.signal,
       headers: { "Content-Type": "application/json", "Idempotency-Key": requestID },
-      body: JSON.stringify(analysisChatMessageBody(message, options.fixIntent)),
+      body: JSON.stringify({ message }),
     },
   );
   if (!response.ok) throw await apiError(response);

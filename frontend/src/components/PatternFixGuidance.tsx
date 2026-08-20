@@ -74,14 +74,14 @@ export function PatternFixGuidance({
         <InfoOutlined aria-hidden sx={{ mt: 0.25, flexShrink: 0, color: "info.main" }} />
         <Box sx={{ minWidth: 0 }}>
           <Typography id="pattern-fix-guidance-title" component="h3" sx={overviewTypography.subsectionHeading}>
-            {externalCause ? "Cause is in a dependency" : "Fix investigation unavailable"}
+            {externalCause ? "Cause is in a dependency" : "Fix proposal unavailable"}
           </Typography>
           {externalCause ? (
             <UpstreamCauseNotice location={externalCause} />
           ) : (
             <Typography color="textSecondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
               This recurring result is grouped by cause, so it cannot produce one shared issue or Fix PR.
-              No failed JUnit test in the affected builds meets the Fix investigation requirements yet, so no cause can start one either.
+              No failed JUnit test in the affected builds meets the Fix eligibility requirements yet, so no cause can start one either.
             </Typography>
           )}
           <Button
@@ -96,7 +96,7 @@ export function PatternFixGuidance({
           <Typography color="textSecondary" sx={{ mt: 1, ...overviewTypography.description }}>
             {externalCause
               ? "The pattern chat below helps compare causes across builds and confirm the upstream diagnosis against the evidence."
-              : "The pattern chat below helps compare causes across builds. A Fix investigation becomes available once an individual failed JUnit test meets every Fix eligibility requirement."}
+              : "The pattern chat below helps compare causes across builds. A fix proposal becomes available once an individual failed JUnit test meets every Fix eligibility requirement."}
           </Typography>
         </Box>
       </Stack>

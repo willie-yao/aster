@@ -14,14 +14,35 @@ import (
 )
 
 type fakeChatStore struct {
-	candidate    analysischat.FixCandidate
-	candidateErr error
-	onReturn     func()
-	sessionID    string
-	owner        string
-	requestID    string
-	patternID    string
-	patternHash  string
+	candidate             analysischat.FixCandidate
+	candidateErr          error
+	preflightErr          error
+	preflighted           bool
+	pinnedFailureRevision string
+	pinnedGenerationBase  string
+	onReturn              func()
+	sessionID             string
+	owner                 string
+	requestID             string
+	patternID             string
+	patternHash           string
+}
+
+func (f *fakeChatStore) PreflightTestFix(_ context.Context, sessionID, owner, requestID string) error {
+	f.preflighted = true
+	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
+	if f.preflightErr != nil {
+		return f.preflightErr
+	}
+	// Pinning the source is what produces the binding the candidate carries, so
+	// the fake supplies it only once preflight has run.
+	if f.pinnedFailureRevision != "" {
+		f.candidate.FailureRevision = f.pinnedFailureRevision
+	}
+	if f.pinnedGenerationBase != "" {
+		f.candidate.GenerationBaseRevision = f.pinnedGenerationBase
+	}
+	return nil
 }
 
 func (f *fakeChatStore) FixCandidate(sessionID, owner, requestID, patternID, patternHash string) (analysischat.FixCandidate, error) {
@@ -221,7 +242,7 @@ func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t
 		ProposedRevision:  &analysischat.Revision{RootCause: "terminal branch omits Ready", SuggestedFix: "record Ready"},
 	}}
 	fixes := &fakeFixPreviewer{}
-	request, err := NewService(chat, fixes).CreateAnalysisFixRequest("session", "Alice", "request", "write-token", "keep compatibility")
+	request, err := NewService(chat, fixes).CreateAnalysisFixRequest(context.Background(), "session", "Alice", "request", "write-token", "keep compatibility")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,5 +307,46 @@ func TestExactPreviewRequestHashChangesWithRegenerationFeedback(t *testing.T) {
 	second := exactPreviewRequestHash(candidate, "retry conflicts")
 	if first == second || first != exactPreviewRequestHash(candidate, " keep compatibility ") {
 		t.Fatalf("hashes first=%q second=%q", first, second)
+	}
+}
+
+// The chat turn no longer pins the source, so the fix request must, and it must
+// do so BEFORE building the candidate. Pinning afterwards would rebuild the
+// weaker path this change removed, so the pin has to reach the action input.
+func TestCreateAnalysisFixRequestPinsSourceBeforeBuildingCandidate(t *testing.T) {
+	chat := &fakeChatStore{
+		pinnedFailureRevision: "0123456789abcdef0123456789abcdef01234567",
+		pinnedGenerationBase:  "fedcba9876543210fedcba9876543210fedcba98",
+		candidate: analysischat.FixCandidate{
+			SessionID: "session-1", RequestID: "request-1",
+			Analysis: analysischat.AnalysisRef{Scope: analysischat.ScopeTest, JobID: "job", BuildID: "1", TestName: "Test"},
+		},
+	}
+	fixes := &fakeFixPreviewer{}
+	if _, err := NewService(chat, fixes).CreateAnalysisFixRequest(
+		context.Background(), "session-1", "Alice", "request-1", "token", "make it retry",
+	); err != nil {
+		t.Fatalf("CreateAnalysisFixRequest error = %v", err)
+	}
+	if !chat.preflighted {
+		t.Fatal("fix request did not pin the source")
+	}
+	if fixes.analysisInput.FailureRevision != chat.pinnedFailureRevision ||
+		fixes.analysisInput.GenerationBaseRevision != chat.pinnedGenerationBase {
+		t.Fatalf("pinned source did not reach the fix request: %+v", fixes.analysisInput)
+	}
+}
+
+func TestCreateAnalysisFixRequestRejectsIneligibleSource(t *testing.T) {
+	chat := &fakeChatStore{preflightErr: analysischat.ErrAnalysisChanged}
+	fixes := &fakeFixPreviewer{}
+	_, err := NewService(chat, fixes).CreateAnalysisFixRequest(
+		context.Background(), "session-1", "Alice", "request-1", "token", "make it retry",
+	)
+	if !errors.Is(err, analysischat.ErrAnalysisChanged) {
+		t.Fatalf("CreateAnalysisFixRequest error = %v", err)
+	}
+	if fixes.requestCalled {
+		t.Fatal("a fix request was admitted despite an ineligible source")
 	}
 }
