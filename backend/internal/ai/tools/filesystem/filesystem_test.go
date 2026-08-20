@@ -142,6 +142,22 @@ func TestGrepArtifactRetainsContentFreeCallTelemetry(t *testing.T) {
 	}
 }
 
+func TestGrepArtifactRedactsPlainFilterButRetainsCanonicalRange(t *testing.T) {
+	browser := &fakeBrowser{
+		files: map[string][]byte{"Makefile": []byte("target:\n")},
+		grepResult: &artifacts.GrepResult{
+			FileSize: 8, TotalMatches: 1, BytesScanned: 8,
+			Matches: []artifacts.GrepMatch{{LineNo: 1, Context: []string{"> 1: target:"}}},
+		},
+	}
+	raw, _ := json.Marshal(map[string]interface{}{"path": "Makefile", "pattern": "target"})
+	result := (&grepTool{}).Dispatch(context.Background(), &tools.Env{Browser: browser}, raw)
+	observation := result.Observation.(tools.GrepCallObservation)
+	if observation.PathFilter != "" || !observation.PathFilterRedacted || len(observation.ReturnedRanges) != 1 || observation.ReturnedRanges[0].Path != "Makefile" {
+		t.Fatalf("observation=%+v", observation)
+	}
+}
+
 func TestGrepArtifactRetainsZeroMatchAndErrorTelemetry(t *testing.T) {
 	for _, tc := range []struct {
 		name         string

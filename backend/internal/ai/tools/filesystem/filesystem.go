@@ -265,7 +265,7 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	if res.TotalMatches > 0 {
 		observation.Outcome = tools.GrepOutcomeMatched
 	}
-	observation.ReturnedRanges = artifactGrepRanges(observation.PathFilter, res.Matches)
+	observation.ReturnedRanges = artifactGrepRanges(canonicalArtifactGrepPath(args.Path), res.Matches)
 	return tools.Result{
 		BytesFetched: int(res.BytesScanned),
 		Payload: map[string]interface{}{
@@ -280,8 +280,8 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 }
 
 func artifactGrepObservation(path string, contextLines, maxMatches int) tools.GrepCallObservation {
-	canonical, err := artifacts.SafePath(path)
-	if err != nil {
+	canonical := canonicalArtifactGrepPath(path)
+	if canonical == "" {
 		canonical = path
 	}
 	filter, supplied, length, redacted := tools.ContentFreePathFilter(canonical)
@@ -291,6 +291,14 @@ func artifactGrepObservation(path string, contextLines, maxMatches int) tools.Gr
 		ContextLines: contextLines, MaxMatches: maxMatches, Outcome: tools.GrepOutcomeError,
 		ReturnedRanges: []tools.GrepRangeObservation{},
 	}
+}
+
+func canonicalArtifactGrepPath(path string) string {
+	canonical, err := artifacts.SafePath(path)
+	if err != nil {
+		return ""
+	}
+	return canonical
 }
 
 func artifactGrepError(observation tools.GrepCallObservation, message string) tools.Result {
