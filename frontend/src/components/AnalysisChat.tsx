@@ -61,6 +61,7 @@ import {
 import { fileToUrl, type FileToUrlContext } from "../lib/utils";
 import { AnalysisCorrectionAPIError, confirmAnalysisCorrection, previewAnalysisCorrection } from "../lib/analysisCorrections";
 import { soft } from "../theme";
+import { overviewLayout, overviewTypography } from "../theme/overview";
 import type {
   AnalysisChatAssessment,
   AnalysisChatAttempt,
@@ -186,10 +187,14 @@ function UserMessage({ content }: { content: string }) {
     <Box
       sx={{
         ml: { xs: 2, sm: 5 },
-        borderRadius: "10px 10px 3px 10px",
-        bgcolor: (theme) => soft(theme, "primary", 0.12),
+        // A squared block with the page's own surface and divider, rather than
+        // an asymmetric chat bubble. The left accent is what marks it as the
+        // reader's turn, so the shape does not have to.
+        borderRadius: "4px",
+        bgcolor: "surface.containerHigh",
         border: "1px solid",
-        borderColor: (theme) => soft(theme, "primary", 0.22),
+        borderColor: "divider",
+        boxShadow: "inset 3px 0 0 var(--mui-palette-primary-main)",
         px: 1.5,
         py: 1.1,
       }}
@@ -1121,7 +1126,7 @@ export function AnalysisChat({
       sx={{
         mt: detailAppearance ? 0 : 0.5,
         ...(detailAppearance && {
-          "& .MuiAlert-root, & .MuiInputBase-root, & .MuiButton-root, & .MuiIconButton-root": {
+          "& .MuiAlert-root, & .MuiInputBase-root, & .MuiButton-root, & .MuiIconButton-root, & .MuiChip-root": {
             borderRadius: "4px",
           },
         }),
@@ -1142,9 +1147,18 @@ export function AnalysisChat({
           spacing={0.25}
           sx={{
             alignItems: "center",
-            px: 1,
-            py: 0.5,
-            borderBottom: expanded ? "1px solid" : 0,
+            px: detailAppearance ? 1.5 : 1,
+            py: detailAppearance ? 0.5 : 0.5,
+            // On a detail page the chat is a peer of Run history and Runtime
+            // trend, so it wears the same section band as they do instead of a
+            // transparent bar with a tinted icon tile.
+            ...(detailAppearance && {
+              minHeight: overviewLayout.categoryBandMinHeight,
+              bgcolor: "surface.containerHigh",
+              borderBlock: "1px solid",
+              boxShadow: "inset 3px 0 0 var(--mui-palette-primary-main)",
+            }),
+            borderBottom: expanded || detailAppearance ? "1px solid" : 0,
             borderColor: "divider",
           }}
         >
@@ -1169,8 +1183,8 @@ export function AnalysisChat({
           >
             <Box
               sx={{
-                width: 30,
-                height: 30,
+                width: detailAppearance ? 20 : 30,
+                height: detailAppearance ? 20 : 30,
                 display: "grid",
                 placeItems: "center",
                 borderRadius: detailAppearance ? "4px" : "9px",
@@ -1179,12 +1193,26 @@ export function AnalysisChat({
                 flexShrink: 0,
               }}
             >
-              <PsychologyAltOutlined sx={{ fontSize: 19 }} />
+              <PsychologyAltOutlined sx={{ fontSize: detailAppearance ? 18 : 19 }} />
             </Box>
-            <Typography variant="body2" sx={{ fontWeight: 750 }}>
+            <Typography
+              component={detailAppearance ? "h3" : "span"}
+              sx={detailAppearance
+                ? { ...overviewTypography.categoryHeading, m: 0 }
+                : { fontSize: "0.875rem", fontWeight: 750 }}
+            >
               Chat with agent
             </Typography>
           </ButtonBase>
+          {detailAppearance && turnUsage && (
+            <Typography
+              component="span"
+              color="textSecondary"
+              sx={{ ...overviewTypography.data, flexShrink: 0, whiteSpace: "nowrap" }}
+            >
+              {`${turnUsage.used}/${turnUsage.max} attempts`}
+            </Typography>
+          )}
           <Tooltip title="This conversation does not change the published analysis">
             <IconButton
               disableRipple
@@ -1216,7 +1244,7 @@ export function AnalysisChat({
         </Stack>
 
         {canStartFixInvestigation && (
-          <Box sx={{ px: 1, pb: 0.75 }}>
+          <Box sx={{ px: detailAppearance ? 1.5 : 1, py: 0.75 }}>
             <Tooltip title={fixSourceUnavailable
               ? "This analysis has no verified immutable source path, so a fix preview cannot be generated from it."
               : fixIntentMode
@@ -1224,12 +1252,16 @@ export function AnalysisChat({
                 : "Start a fresh evidence-backed chat. This does not create a branch or PR."}>
               <span>
                 <Button
-                  fullWidth
+                  fullWidth={!detailAppearance}
                   size="small"
-                  variant={fixIntentMode ? "text" : "outlined"}
+                  variant="outlined"
                   startIcon={<BuildOutlined />}
                   onClick={() => fixIntentMode ? returnToNormalChat() : void startFixInvestigation()}
                   disabled={busy || pendingTurn !== null || (fixSourceUnavailable && !fixIntentMode)}
+                  // Left-aligned and self-sized on a detail page, so it reads as
+                  // a control beside the other actions rather than a banner
+                  // spanning the panel.
+                  sx={detailAppearance ? { textTransform: "none", minHeight: 32 } : undefined}
                 >
                   {fixIntentMode ? "Return to normal chat" : "Start fix investigation"}
                 </Button>
@@ -1438,7 +1470,7 @@ export function AnalysisChat({
                   )}
                 </Stack>
               )}
-              {turnUsage && (
+              {turnUsage && !detailAppearance && (
                 <Typography
                   variant="caption"
                   color="textSecondary"

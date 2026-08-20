@@ -219,6 +219,39 @@ test("the runtime trend states its stats once and makes each sample reachable", 
   assert.match(trend, /node\.scrollLeft = node\.scrollWidth/);
 });
 
+test("the chat wears the page's section band instead of its own chat styling", () => {
+  const chat = source("src/components/AnalysisChat.tsx");
+  const band = source("src/components/DetailSectionBand.tsx");
+  // Scope to the header, since UserMessage below carries the same accent and
+  // would otherwise satisfy these assertions on its own.
+  const header = chat.slice(
+    chat.indexOf("{!detailAppearance && <Divider"),
+    chat.indexOf("canStartFixInvestigation &&"),
+  );
+  assert.ok(header.length > 0, "chat header block not found");
+
+  // On a detail page the chat is a peer of Run history and Runtime trend, so
+  // its header carries the same surface and accent those bands use.
+  assert.match(header, /bgcolor: "surface\.containerHigh"/);
+  assert.match(header, /boxShadow: "inset 3px 0 0 var\(--mui-palette-primary-main\)"/);
+  assert.match(band, /boxShadow: "inset 3px 0 0 var\(--mui-palette-primary-main\)"/);
+  assert.match(header, /minHeight: overviewLayout\.categoryBandMinHeight/);
+  assert.match(header, /overviewTypography\.categoryHeading/);
+
+  // The asymmetric bubble was the strongest consumer-chat signal on a page
+  // that squares every other container.
+  assert.doesNotMatch(chat, /borderRadius: "10px 10px 3px 10px"/);
+
+  // Chips were the one control the radius reset did not reach, so they
+  // rendered as 16px pills beside 4px chips everywhere else.
+  assert.match(chat, /MuiChip-root": \{\s*borderRadius: "4px"/s);
+
+  // The attempts counter belongs in the band metadata slot, not floating at
+  // the bottom of the panel, and must not appear in both.
+  assert.match(header, /detailAppearance && turnUsage/);
+  assert.match(chat, /turnUsage && !detailAppearance/);
+});
+
 test("the severity chip is suppressed exactly where a header already states it", () => {
   const panel = source("src/components/AiAnalysisPanel.tsx");
   const testDetail = source("src/pages/TestDetailPage.tsx");
