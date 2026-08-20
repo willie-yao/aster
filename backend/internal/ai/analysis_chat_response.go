@@ -233,45 +233,22 @@ func salvageAnalysisChatReply(raw string) (analysischat.Reply, bool) {
 }
 
 // analysisChatSalvagedAnswer unwraps a response that is nothing but the reply
-// object down to its answer, and otherwise keeps the response whole. Anything
-// the model wrote outside that object is part of its answer: a patch, a command,
-// or the conclusion it reached after an earlier draft. Unwrapping then would
-// show one buried field and hide the rest.
+// object down to its own answer, and otherwise keeps the response whole.
+// Anything else the model wrote is part of its answer: a patch, a command, or
+// the conclusion it reached after an earlier draft. Reaching into a nested
+// object then would show one buried field and hide the rest.
 func analysisChatSalvagedAnswer(raw string) string {
 	trimmed := strings.TrimSpace(raw)
-	scan := scanAnalysisChatJSONCandidates(raw)
-	wrapped := false
-	for _, candidate := range scan.candidates {
-		if candidate.value == trimmed {
-			wrapped = true
-			break
-		}
+	var fields struct {
+		Answer string `json:"answer"`
 	}
-	if !wrapped {
+	if rejectAnalysisChatDuplicateFields(trimmed) != nil || json.Unmarshal([]byte(trimmed), &fields) != nil {
 		return trimmed
 	}
-	answer := ""
-	for _, candidate := range scan.candidates {
-		var fields struct {
-			Answer string `json:"answer"`
-		}
-		if rejectAnalysisChatDuplicateFields(candidate.value) != nil ||
-			json.Unmarshal([]byte(candidate.value), &fields) != nil {
-			continue
-		}
-		// Two different answers mean the model wrapped a draft around its
-		// conclusion, so the whole response goes back rather than a guess.
-		if found := strings.TrimSpace(fields.Answer); found != "" && found != answer {
-			if answer != "" {
-				return trimmed
-			}
-			answer = found
-		}
+	if answer := strings.TrimSpace(fields.Answer); answer != "" {
+		return answer
 	}
-	if answer == "" {
-		return trimmed
-	}
-	return answer
+	return trimmed
 }
 
 func analysisChatValidationRank(category string) int {

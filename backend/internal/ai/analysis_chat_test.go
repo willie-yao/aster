@@ -1896,9 +1896,14 @@ func TestSalvageAnalysisChatReply(t *testing.T) {
 			want: "the node never joined",
 		},
 		{
-			name: "metadata wrapper around one answer",
+			name: "nested answer beside another field",
+			raw:  `{"draft":{"answer":"maybe timeout"},"final":"container was OOMKilled"}`,
+			want: `{"draft":{"answer":"maybe timeout"},"final":"container was OOMKilled"}`,
+		},
+		{
+			name: "metadata wrapper keeps the whole response",
 			raw:  `{"result":{"answer":"the node never joined","citations":[]}}`,
-			want: "the node never joined",
+			want: `{"result":{"answer":"the node never joined","citations":[]}}`,
 		},
 		{
 			name: "draft object followed by a prose conclusion",
