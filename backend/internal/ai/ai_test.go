@@ -305,6 +305,34 @@ func TestDetectContextWindowTokens(t *testing.T) {
 		}
 	})
 
+	t.Run("GitHub Copilot capabilities.limits", func(t *testing.T) {
+		// The exact shape api.githubcopilot.com/models returns. The prompt
+		// ceiling is preferred over the larger total window, because a request
+		// sized at the window would exceed what the model accepts.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"data":[{"id":"claude-sonnet-4.6","capabilities":{"limits":{"max_context_window_tokens":1000000,"max_prompt_tokens":936000,"max_output_tokens":64000}}}]}`))
+		}))
+		defer srv.Close()
+		c := NewClientWithOptions(Options{Endpoint: srv.URL + "/v1/chat/completions", Model: "claude-sonnet-4.6", Token: "x"})
+		got, ok := c.DetectContextWindowTokens(context.Background())
+		if !ok || got != 936000 {
+			t.Errorf("got (%d,%v), want (936000,true)", got, ok)
+		}
+	})
+
+	t.Run("prompt ceiling wins over a much larger window", func(t *testing.T) {
+		// gpt-4o class: the prompt share is half the advertised window.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"data":[{"id":"gpt-4o","capabilities":{"limits":{"max_context_window_tokens":128000,"max_prompt_tokens":64000}}}]}`))
+		}))
+		defer srv.Close()
+		c := NewClientWithOptions(Options{Endpoint: srv.URL + "/v1/chat/completions", Model: "gpt-4o", Token: "x"})
+		got, ok := c.DetectContextWindowTokens(context.Background())
+		if !ok || got != 64000 {
+			t.Errorf("got (%d,%v), want (64000,true)", got, ok)
+		}
+	})
+
 	t.Run("Ray Serve metadata.max_request_context_length", func(t *testing.T) {
 		// The exact shape Ray Serve's build_openai_app returns.
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
