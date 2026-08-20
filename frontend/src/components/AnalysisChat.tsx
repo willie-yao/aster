@@ -1189,7 +1189,6 @@ export function AnalysisChat({
                 maxHeight: { xs: "min(62vh, 560px)", sm: "min(70vh, 680px)" },
                 minHeight: 0,
                 overflowY: "auto",
-                overscrollBehavior: "contain",
                 scrollbarGutter: "stable",
                 scrollbarWidth: "thin",
                 scrollbarColor: (theme) => `${theme.palette.divider} transparent`,
