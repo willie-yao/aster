@@ -177,6 +177,10 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	ExpectedSourceRanges         []benchmarkSourceRange                 `json:"expected_source_ranges"`
 	SourceReadCoverageHits       int                                    `json:"source_read_coverage_hits"`
 	SourceReadCoverageTotal      int                                    `json:"source_read_coverage_total"`
+	SourceReadCoveredLines       int                                    `json:"source_read_covered_lines"`
+	SourceReadExpectedLines      int                                    `json:"source_read_expected_lines"`
+	SourceReadPartialRatio       float64                                `json:"source_read_partial_coverage_ratio"`
+	SourceReadRangeCoverage      []benchmarkSourceRangeCoverage         `json:"source_read_range_coverage"`
 	SourceSignalHits             int                                    `json:"source_signal_hits"`
 	SourceSignalTotal            int                                    `json:"source_signal_total"`
 	JobName                      string                                 `json:"job_name"`
@@ -268,6 +272,7 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	ReasoningTokens              int                                    `json:"reasoning_tokens"`
 	CostUSD                      string                                 `json:"cost_usd,omitempty"`
 	TokenUsageAvailable          bool                                   `json:"token_usage_available"`
+	TokenUsagePartial            bool                                   `json:"token_usage_partial"`
 	CostAvailable                bool                                   `json:"cost_available"`
 	UsageStatus                  string                                 `json:"usage_status"`
 	OpenCodeTelemetryAvailable   bool                                   `json:"opencode_telemetry_available"`
@@ -825,7 +830,8 @@ func agentSandboxAnalyzerRecordForResult(
 	usage := result.Execution.Usage
 	record.ModelRequests, record.InputTokens = usage.ModelRequests, usage.InputTokens
 	record.CachedInputTokens, record.OutputTokens, record.ReasoningTokens, record.CostUSD = usage.CachedInputTokens, usage.OutputTokens, usage.ReasoningTokens, usage.CostUSD
-	record.TokenUsageAvailable = usage.Available
+	record.TokenUsageAvailable = usage.Available && usage.Status == agentanalysis.WorkspaceTelemetryAvailable
+	record.TokenUsagePartial = usage.Available && usage.Status == agentanalysis.WorkspaceTelemetryPartial
 	record.CostAvailable = usage.CostAvailable
 	record.UsageStatus = usage.Status
 	telemetry := result.Execution.OpenCodeTelemetry
@@ -889,7 +895,10 @@ func agentSandboxAnalyzerRecordForResult(
 	if sourceReadErr == nil {
 		record.SourceReadRanges = sourceReads
 		record.SourceReadCount = len(sourceReads)
-		record.SourceReadCoverageHits, record.SourceReadCoverageTotal = benchmarkExpectedSourceReadCoverage(prepared.bc.sourceRanges, sourceReads)
+		coverage := benchmarkExpectedSourceReadCoverage(prepared.bc.sourceRanges, sourceReads)
+		record.SourceReadCoverageHits, record.SourceReadCoverageTotal = coverage.Hits, coverage.Total
+		record.SourceReadCoveredLines, record.SourceReadExpectedLines = coverage.CoveredLines, coverage.ExpectedLines
+		record.SourceReadPartialRatio, record.SourceReadRangeCoverage = coverage.CoverageRatio, coverage.Ranges
 	}
 	record.OpenCodeTools = append([]agentanalysis.WorkspaceToolTelemetry(nil), telemetry.Tools...)
 	record.DeniedToolCount = telemetry.DeniedToolCount

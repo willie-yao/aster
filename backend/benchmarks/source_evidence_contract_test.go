@@ -2,6 +2,7 @@ package benchmarks
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -184,13 +185,36 @@ func validateBenchmarkSourceRange(value benchmarkSourceRange) error {
 	return nil
 }
 
-func benchmarkExpectedSourceReadCoverage(expected []benchmarkSourceRange, reads []benchmarkSourceRead) (int, int) {
-	hits := 0
+type benchmarkSourceRangeCoverage struct {
+	Repository    string  `json:"repository"`
+	Revision      string  `json:"revision"`
+	Path          string  `json:"path"`
+	LineStart     int     `json:"line_start"`
+	LineEnd       int     `json:"line_end"`
+	CoveredLines  int     `json:"covered_lines"`
+	ExpectedLines int     `json:"expected_lines"`
+	CoverageRatio float64 `json:"coverage_ratio"`
+}
+
+type benchmarkSourceReadCoverage struct {
+	Hits          int                            `json:"hits"`
+	Total         int                            `json:"total"`
+	CoveredLines  int                            `json:"covered_lines"`
+	ExpectedLines int                            `json:"expected_lines"`
+	CoverageRatio float64                        `json:"coverage_ratio"`
+	Ranges        []benchmarkSourceRangeCoverage `json:"ranges"`
+}
+
+func benchmarkExpectedSourceReadCoverage(expected []benchmarkSourceRange, reads []benchmarkSourceRead) benchmarkSourceReadCoverage {
+	result := benchmarkSourceReadCoverage{Total: len(expected)}
 	for _, want := range expected {
 		var intervals [][2]int
 		for _, read := range reads {
 			if read.Repository == want.Repository && read.Revision == want.Revision && read.Path == want.Path && read.Outcome == "succeeded" {
-				intervals = append(intervals, [2]int{read.LineStart, read.LineEnd})
+				start, end := max(read.LineStart, want.LineStart), min(read.LineEnd, want.LineEnd)
+				if start <= end {
+					intervals = append(intervals, [2]int{start, end})
+				}
 			}
 		}
 		sort.Slice(intervals, func(i, j int) bool {
@@ -199,21 +223,31 @@ func benchmarkExpectedSourceReadCoverage(expected []benchmarkSourceRange, reads 
 			}
 			return intervals[i][1] < intervals[j][1]
 		})
-		coveredThrough := want.LineStart - 1
+		covered, through := 0, want.LineStart-1
 		for _, interval := range intervals {
-			if interval[1] < want.LineStart || interval[0] > coveredThrough+1 {
+			if interval[1] <= through {
 				continue
 			}
-			if interval[0] <= coveredThrough+1 && interval[1] > coveredThrough {
-				coveredThrough = interval[1]
+			start := max(interval[0], through+1)
+			if start > interval[1] {
+				continue
 			}
-			if coveredThrough >= want.LineEnd {
-				hits++
-				break
-			}
+			covered += interval[1] - start + 1
+			through = interval[1]
 		}
+		expectedLines := want.LineEnd - want.LineStart + 1
+		ratio := float64(covered) / float64(expectedLines)
+		if covered == expectedLines {
+			result.Hits++
+		}
+		result.CoveredLines += covered
+		result.ExpectedLines += expectedLines
+		result.Ranges = append(result.Ranges, benchmarkSourceRangeCoverage{Repository: want.Repository, Revision: want.Revision, Path: want.Path, LineStart: want.LineStart, LineEnd: want.LineEnd, CoveredLines: covered, ExpectedLines: expectedLines, CoverageRatio: ratio})
 	}
-	return hits, len(expected)
+	if result.ExpectedLines > 0 {
+		result.CoverageRatio = float64(result.CoveredLines) / float64(result.ExpectedLines)
+	}
+	return result
 }
 
 func benchmarkSourceCitationCounts(values []benchmarkSourceCitation) (emitted, verified int) {
@@ -275,11 +309,22 @@ func TestBenchmarkExpectedSourceReadCoverage(t *testing.T) {
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			hits, total := benchmarkExpectedSourceReadCoverage(expected, test.reads)
-			if hits != test.hits || total != 1 {
-				t.Fatalf("coverage = %d/%d, want %d/1", hits, total, test.hits)
+			coverage := benchmarkExpectedSourceReadCoverage(expected, test.reads)
+			if coverage.Hits != test.hits || coverage.Total != 1 {
+				t.Fatalf("coverage = %d/%d, want %d/1", coverage.Hits, coverage.Total, test.hits)
 			}
 		})
+	}
+}
+
+func TestBenchmarkSourceReadPartialCoverageIsArmIndependent(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	expected := []benchmarkSourceRange{{Repository: "owner/repo", Revision: revision, Path: "pkg/file.go", LineStart: 10, LineEnd: 20}}
+	reads := []benchmarkSourceRead{{benchmarkSourceRange: benchmarkSourceRange{Repository: "owner/repo", Revision: revision, Path: "pkg/file.go", LineStart: 12, LineEnd: 16}, Tool: "read", Outcome: "succeeded"}}
+	left := benchmarkExpectedSourceReadCoverage(expected, reads)
+	right := benchmarkExpectedSourceReadCoverage(expected, append([]benchmarkSourceRead(nil), reads...))
+	if !reflect.DeepEqual(left, right) || left.Hits != 0 || left.CoveredLines != 5 || left.ExpectedLines != 11 || left.CoverageRatio != 5.0/11.0 || len(left.Ranges) != 1 || left.Ranges[0].CoverageRatio != 5.0/11.0 {
+		t.Fatalf("coverage left=%+v right=%+v", left, right)
 	}
 }
 
@@ -359,9 +404,9 @@ func TestBenchmarkSourceObservationsNormalizeBySourceID(t *testing.T) {
 		if len(reads) != 1 || reads[0].Repository != "kubernetes/kubernetes" || reads[0].Revision != serverRevision {
 			t.Fatalf("%s reads = %+v", name, reads)
 		}
-		hits, total := benchmarkExpectedSourceReadCoverage([]benchmarkSourceRange{{Repository: "kubernetes/kubernetes", Revision: serverRevision, Path: "pkg/file.go", LineStart: 10, LineEnd: 20}}, reads)
-		if hits != 1 || total != 1 {
-			t.Fatalf("%s coverage = %d/%d", name, hits, total)
+		coverage := benchmarkExpectedSourceReadCoverage([]benchmarkSourceRange{{Repository: "kubernetes/kubernetes", Revision: serverRevision, Path: "pkg/file.go", LineStart: 10, LineEnd: 20}}, reads)
+		if coverage.Hits != 1 || coverage.Total != 1 {
+			t.Fatalf("%s coverage = %d/%d", name, coverage.Hits, coverage.Total)
 		}
 	}
 	if _, err := benchmarkSourceReadsFromInProcess(bc, []ai.SourceEvidenceObservation{{SourceID: "unknown", Tool: "read_repo_file", Path: "x", LineStart: 1, LineEnd: 1}}); err == nil {

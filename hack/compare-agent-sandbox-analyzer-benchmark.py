@@ -229,6 +229,11 @@ def validate_source_evidence(record: dict[str, Any], runtime: str) -> None:
     hits = source_read_coverage(expected, reads)
     if record.get("source_read_coverage_hits") != hits or record.get("source_read_coverage_total") != len(expected):
         raise ReportError(f"{runtime} line {record['_line']} source read coverage is inconsistent")
+    partial = source_read_partial_coverage(expected, reads)
+    partial_fields = ("source_read_covered_lines", "source_read_expected_lines", "source_read_partial_coverage_ratio", "source_read_range_coverage")
+    if any(field in record for field in partial_fields):
+        if record.get("source_read_covered_lines") != partial[0] or record.get("source_read_expected_lines") != partial[1] or record.get("source_read_partial_coverage_ratio") != partial[2] or record.get("source_read_range_coverage") != partial[3]:
+            raise ReportError(f"{runtime} line {record['_line']} diagnostic source coverage is inconsistent")
     citation_keys = []
     emitted = verified = 0
     for citation in citations:
@@ -258,6 +263,30 @@ def source_read_coverage(expected: list[dict[str, Any]], reads: list[dict[str, A
                 hits += 1
                 break
     return hits
+
+
+def source_read_partial_coverage(expected: list[dict[str, Any]], reads: list[dict[str, Any]]) -> tuple[int, int, float, list[dict[str, Any]]]:
+    covered_total = expected_total = 0
+    ranges = []
+    for wanted in expected:
+        intervals = sorted((max(value["line_start"], wanted["line_start"]), min(value["line_end"], wanted["line_end"])) for value in reads if all(value.get(field) == wanted[field] for field in ("repository", "revision", "path")) and value.get("outcome") == "succeeded" and max(value["line_start"], wanted["line_start"]) <= min(value["line_end"], wanted["line_end"]))
+        covered = 0; through = wanted["line_start"] - 1
+        for start, end in intervals:
+            if end <= through: continue
+            start = max(start, through + 1)
+            if start <= end:
+                covered += end - start + 1; through = end
+        total = wanted["line_end"] - wanted["line_start"] + 1
+        covered_total += covered; expected_total += total
+        ranges.append({**wanted, "covered_lines": covered, "expected_lines": total, "coverage_ratio": covered / total})
+    return covered_total, expected_total, covered_total / expected_total if expected_total else 0.0, ranges
+
+
+def diagnostic_source_coverage(records: list[dict[str, Any]]) -> dict[str, Any]:
+    selected = [record for record in records if "source_read_covered_lines" in record]
+    covered = sum(record["source_read_covered_lines"] for record in selected)
+    expected = sum(record["source_read_expected_lines"] for record in selected)
+    return {"diagnostic_only": True, "trials": len(selected), "covered_lines": covered, "expected_lines": expected, "coverage_ratio": rate(covered, expected), "comparative_gate": False}
 
 
 def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
@@ -702,6 +731,7 @@ def inprocess_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "artifact_citation_rate": rate(citation_trials, len(runtime_valid)),
         "complete_expected_source_coverage_trials": source_trials,
         "expected_source_range_coverage_rate": rate(source_trials, len(source_evaluated)),
+        "partial_source_coverage": diagnostic_source_coverage(runtime_valid),
         "source_citation_emitted_trials": citation_emitted_trials,
         "source_citation_verified_trials": citation_verified_trials,
         "source_citation_emitted_count": sum(record.get("source_citation_emitted_count", 0) for record in records),
@@ -762,6 +792,7 @@ def sandbox_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "artifact_citation_rate": rate(citation_trials, len(runtime_valid)),
         "complete_expected_source_coverage_trials": source_trials,
         "expected_source_range_coverage_rate": rate(source_trials, len(source_evaluated)),
+        "partial_source_coverage": diagnostic_source_coverage(runtime_valid),
         "source_citation_emitted_trials": citation_emitted_trials,
         "source_citation_verified_trials": citation_verified_trials,
         "source_citation_emitted_count": sum(record.get("source_citation_emitted_count", 0) for record in records),
