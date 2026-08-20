@@ -1087,6 +1087,11 @@ func TestAgentSandboxRunTimeoutUsesPurposeSpecificGrace(t *testing.T) {
 	if got := agentSandboxRunTimeout(analysis); got != time.Minute+agentanalysis.WorkspacePostModelGrace+5*time.Second {
 		t.Fatalf("analysis run timeout = %s", got)
 	}
+	custom := analysis
+	custom.FinalizationGrace = 2 * time.Minute
+	if got := agentSandboxRunTimeout(custom); got != 3*time.Minute+5*time.Second {
+		t.Fatalf("custom analysis run timeout = %s", got)
+	}
 	fix := base
 	fix.Purpose = "fix"
 	if got := agentSandboxRunTimeout(fix); got != time.Minute+agentSandboxResultGrace+5*time.Second {
@@ -1157,6 +1162,19 @@ func TestAgentSandboxWorkloadIdentityIncludesPreparedManifest(t *testing.T) {
 	right.PreparedWorkspace = &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("b", 64), IdentityHash: strings.Repeat("c", 64)}
 	if agentSandboxWorkloadHash(left, opts) == agentSandboxWorkloadHash(right, opts) {
 		t.Fatal("prepared manifest did not affect workload identity")
+	}
+}
+
+func TestAgentSandboxWorkloadIdentityIncludesFinalizationGrace(t *testing.T) {
+	opts := testAgentSandboxOptions()
+	left := agentsandbox.Spec{
+		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{"request":1}`),
+		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
+	}
+	right := left
+	right.FinalizationGrace = 2 * time.Minute
+	if agentSandboxWorkloadHash(left, opts) == agentSandboxWorkloadHash(right, opts) {
+		t.Fatal("finalization grace did not affect workload identity")
 	}
 }
 

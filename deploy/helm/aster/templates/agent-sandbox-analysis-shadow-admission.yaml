@@ -16,7 +16,9 @@
 {{- else -}}
   {{- $timeoutSeconds = trimSuffix "s" $timeoutText | int -}}
 {{- end -}}
-{{- $activeDeadline := add $timeoutSeconds 15 -}}
+{{- $sourceGraceSeconds := 60 -}}
+{{- $minActiveDeadline := add $timeoutSeconds $sourceGraceSeconds -}}
+{{- $maxActiveDeadline := add $timeoutSeconds (mul 8 $sourceGraceSeconds) -}}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -75,7 +77,7 @@ spec:
       message: "dashboard analysis shadow Pod metadata is fixed"
     - expression: {{ printf "variables.pod.serviceAccountName == %s && (!has(variables.pod.serviceAccount) || variables.pod.serviceAccount == '') && has(variables.pod.automountServiceAccountToken) && variables.pod.automountServiceAccountToken == false && variables.pod.runtimeClassName == %s" (toJson $workloadSA) (toJson $cfg.runtimeClassName) | quote }}
       message: "dashboard analysis shadow identity and RuntimeClass must match configured values"
-    - expression: {{ printf "variables.pod.restartPolicy == 'Never' && variables.pod.activeDeadlineSeconds == %d && variables.pod.terminationGracePeriodSeconds == 5 && has(variables.pod.enableServiceLinks) && variables.pod.enableServiceLinks == false" $activeDeadline | quote }}
+    - expression: {{ printf "variables.pod.restartPolicy == 'Never' && variables.pod.activeDeadlineSeconds >= %d && variables.pod.activeDeadlineSeconds <= %d && (variables.pod.activeDeadlineSeconds - %d) %% %d == 0 && variables.pod.terminationGracePeriodSeconds == 5 && has(variables.pod.enableServiceLinks) && variables.pod.enableServiceLinks == false" $minActiveDeadline $maxActiveDeadline $timeoutSeconds $sourceGraceSeconds | quote }}
       message: "dashboard analysis shadow Pod lifecycle must match configured bounds"
     - expression: "(!has(variables.pod.hostNetwork) || variables.pod.hostNetwork == false) && (!has(variables.pod.hostPID) || variables.pod.hostPID == false) && (!has(variables.pod.hostIPC) || variables.pod.hostIPC == false) && (!has(variables.pod.shareProcessNamespace) || variables.pod.shareProcessNamespace == false) && !has(variables.pod.hostUsers) && (!has(variables.pod.hostAliases) || size(variables.pod.hostAliases) == 0) && !has(variables.pod.dnsPolicy) && !has(variables.pod.dnsConfig) && !has(variables.pod.setHostnameAsFQDN)"
       message: "dashboard analysis shadow Sandboxes must not join host namespaces or override DNS"

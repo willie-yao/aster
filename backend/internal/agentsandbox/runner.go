@@ -49,6 +49,7 @@ type Spec struct {
 	RequestEnv        string
 	Request           []byte
 	Timeout           time.Duration
+	FinalizationGrace time.Duration
 	OutputLimitBytes  int64
 	WritableWorkspace bool
 	StagedWorkspace   *StagedWorkspace
@@ -93,6 +94,9 @@ func ValidateSpec(spec Spec) error {
 	}
 	if spec.Timeout <= 0 || spec.Timeout > 30*time.Minute {
 		return fmt.Errorf("agent sandbox timeout must be greater than zero and at most 30m")
+	}
+	if spec.FinalizationGrace < 0 || spec.FinalizationGrace > 10*time.Minute {
+		return fmt.Errorf("agent sandbox finalization grace must be between zero and 10m")
 	}
 	if spec.OutputLimitBytes < 4<<10 || spec.OutputLimitBytes > 1<<20 {
 		return fmt.Errorf("agent sandbox output limit must be between 4096 and 1048576")

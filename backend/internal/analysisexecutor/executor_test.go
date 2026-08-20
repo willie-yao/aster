@@ -605,8 +605,14 @@ func TestSourceVerificationTimeoutCoversBoundedNetworkStorage(t *testing.T) {
 	if agentanalysis.WorkspaceSourceVerificationTimeout != 30*time.Second {
 		t.Fatalf("source verification timeout = %s", agentanalysis.WorkspaceSourceVerificationTimeout)
 	}
-	if agentanalysis.WorkspacePostModelGrace < 2*agentanalysis.WorkspaceSourceVerificationTimeout {
-		t.Fatalf("post-model grace = %s", agentanalysis.WorkspacePostModelGrace)
+	if got := agentanalysis.WorkspaceSourceVerificationTimeoutForSources(2); got != time.Minute {
+		t.Fatalf("two-source verification timeout = %s", got)
+	}
+	if got := agentanalysis.WorkspacePostModelGraceForSources(2); got != 2*time.Minute {
+		t.Fatalf("two-source post-model grace = %s", got)
+	}
+	if got := agentanalysis.WorkspacePostModelGraceForSources(agentanalysis.WorkspaceMaxSources); got != agentanalysis.WorkspacePostModelGraceMax {
+		t.Fatalf("maximum post-model grace = %s", got)
 	}
 }
 

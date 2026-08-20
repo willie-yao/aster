@@ -30,6 +30,8 @@ func TestValidateSpec(t *testing.T) {
 		func(s *Spec) { s.Request = nil },
 		func(s *Spec) { s.Request = []byte{0xff} },
 		func(s *Spec) { s.Timeout = 0 },
+		func(s *Spec) { s.FinalizationGrace = -time.Second },
+		func(s *Spec) { s.FinalizationGrace = 10*time.Minute + time.Second },
 		func(s *Spec) { s.OutputLimitBytes = 1024 },
 		func(s *Spec) { s.ExecutionID = strings.Repeat("x", 129) },
 		func(s *Spec) { s.StagedWorkspace = &StagedWorkspace{RequestEnv: s.RequestEnv, Request: []byte(`{}`)} },

@@ -73,10 +73,12 @@ type WorkspaceAnalysis struct {
 }
 
 const (
-	// WorkspaceSourceVerificationTimeout bounds one complete source verification pass.
+	// WorkspaceSourceVerificationTimeout bounds one source verification.
 	WorkspaceSourceVerificationTimeout = 30 * time.Second
-	// WorkspacePostModelGrace bounds both post-model source verification passes.
+	// WorkspacePostModelGrace preserves the single-source compatibility bound.
 	WorkspacePostModelGrace = 2 * WorkspaceSourceVerificationTimeout
+	// WorkspacePostModelGraceMax bounds both passes across the largest source catalog.
+	WorkspacePostModelGraceMax = 2 * WorkspaceMaxSources * WorkspaceSourceVerificationTimeout
 
 	WorkspaceTelemetryAvailable   = "available"
 	WorkspaceTelemetryUnavailable = "unavailable"
@@ -89,6 +91,22 @@ const (
 	WorkspaceSourceToolFailed       = "source_tool_failed"
 	WorkspaceSourceEvidenceUnusable = "source_evidence_unusable"
 )
+
+// WorkspaceSourceVerificationTimeoutForSources bounds one catalog verification pass.
+func WorkspaceSourceVerificationTimeoutForSources(sourceCount int) time.Duration {
+	if sourceCount < 1 {
+		sourceCount = 1
+	}
+	if sourceCount > WorkspaceMaxSources {
+		sourceCount = WorkspaceMaxSources
+	}
+	return time.Duration(sourceCount) * WorkspaceSourceVerificationTimeout
+}
+
+// WorkspacePostModelGraceForSources bounds both post-model verification passes.
+func WorkspacePostModelGraceForSources(sourceCount int) time.Duration {
+	return 2 * WorkspaceSourceVerificationTimeoutForSources(sourceCount)
+}
 
 // WorkspaceUsage records provider telemetry when the runtime exposes it.
 type WorkspaceUsage struct {
@@ -436,6 +454,15 @@ func MarshalWorkspaceAnalysis(analysis WorkspaceAnalysis) ([]byte, error) {
 
 // VerifyWorkspaceSources verifies every immutable source and its sealed mode policy.
 func VerifyWorkspaceSources(ctx context.Context, sourcesRoot string, sources []WorkspaceSourceRef, policies []WorkspaceSourceMode) error {
+	return verifyWorkspaceSources(ctx, sourcesRoot, sources, policies, 0, VerifyPreparedSourceWorkspace)
+}
+
+// VerifyWorkspaceSourcesBounded gives each source an independent verification deadline.
+func VerifyWorkspaceSourcesBounded(ctx context.Context, sourcesRoot string, sources []WorkspaceSourceRef, policies []WorkspaceSourceMode) error {
+	return verifyWorkspaceSources(ctx, sourcesRoot, sources, policies, WorkspaceSourceVerificationTimeout, VerifyPreparedSourceWorkspace)
+}
+
+func verifyWorkspaceSources(ctx context.Context, sourcesRoot string, sources []WorkspaceSourceRef, policies []WorkspaceSourceMode, sourceTimeout time.Duration, verify func(context.Context, string, string, WorkspaceSourceModePolicy) error) error {
 	if len(sources) < 1 || len(sources) > WorkspaceMaxSources {
 		return fmt.Errorf("workspace source catalog is invalid")
 	}
@@ -444,8 +471,15 @@ func VerifyWorkspaceSources(ctx context.Context, sourcesRoot string, sources []W
 		if !ok {
 			return fmt.Errorf("workspace source %s mode policy is unavailable", source.ID)
 		}
+		verifyCtx := ctx
+		cancel := func() {}
+		if sourceTimeout > 0 {
+			verifyCtx, cancel = context.WithTimeout(ctx, sourceTimeout)
+		}
 		root := filepath.Join(sourcesRoot, source.ID)
-		if err := VerifyPreparedSourceWorkspace(ctx, root, source.Repository.Revision, policy); err != nil {
+		err := verify(verifyCtx, root, source.Repository.Revision, policy)
+		cancel()
+		if err != nil {
 			return fmt.Errorf("verify workspace source %s: %w", source.ID, err)
 		}
 	}
@@ -481,7 +515,7 @@ func ValidateWorkspaceExecutionResult(result WorkspaceExecutionResult, request W
 	if result.Version != WorkspaceResultVersion || result.ContractVersion != WorkspaceContractVersion || result.RequestHash != request.Hash {
 		return result, fmt.Errorf("workspace execution result identity mismatch")
 	}
-	if result.DurationMs < 0 || result.DurationMs > request.TimeoutSeconds*1000+WorkspacePostModelGrace.Milliseconds() {
+	if result.DurationMs < 0 || result.DurationMs > request.TimeoutSeconds*1000+WorkspacePostModelGraceForSources(len(request.Manifest.Sources)).Milliseconds() {
 		return result, fmt.Errorf("workspace execution duration is outside the request bound")
 	}
 	if err := validateWorkspaceUsage(result.Usage); err != nil {

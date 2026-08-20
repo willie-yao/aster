@@ -124,7 +124,8 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 	sandboxSpec := agentsandbox.Spec{
 		Purpose: "analysis", ExecutionID: spec.ExecutionID,
 		RequestEnv: WorkspaceExecutionRequestEnv, Request: requestJSON,
-		Timeout: r.Timeout, OutputLimitBytes: r.OutputLimitBytes, WorkObserver: spec.WorkObserver,
+		Timeout: r.Timeout, FinalizationGrace: WorkspacePostModelGraceForSources(len(spec.Request.Manifest.Sources)),
+		OutputLimitBytes: r.OutputLimitBytes, WorkObserver: spec.WorkObserver,
 	}
 	switch spec.Request.InputMode {
 	case WorkspaceInputStaged:

@@ -539,6 +539,7 @@ grep -Fq 'serviceAccountName: external-scheduled' "$tmp/analysis-shadow-external
 grep -Fq 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64_CHUNK_00' "$tmp/analysis-shadow-render.yaml"
 grep -Fq 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64_CHUNK_15' "$tmp/analysis-shadow-render.yaml"
 grep -Fq "v.name == 'request' && v.mountPath == '/analysis-request' && v.readOnly == true" "$tmp/analysis-shadow-render.yaml"
+grep -Fq "variables.pod.activeDeadlineSeconds >= 660 && variables.pod.activeDeadlineSeconds <= 1080 && (variables.pod.activeDeadlineSeconds - 600) % 60 == 0" "$tmp/analysis-shadow-render.yaml"
 if grep -Fq "variables.container.env[0].name == 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64'" "$tmp/analysis-shadow-render.yaml"; then
   echo 'analysis shadow admission still allows the legacy executor request environment' >&2
   exit 1
@@ -662,6 +663,7 @@ grep -Fq 'kind: ResourceQuota' "$tmp/analyzer-render.yaml"
 grep -Fq 'analyzer-input' "$tmp/analyzer-render.yaml"
 grep -Fq 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64_CHUNK_00' "$tmp/analyzer-render.yaml"
 grep -Fq "v.name == 'request' && v.mountPath == '/analysis-request' && v.readOnly == true" "$tmp/analyzer-render.yaml"
+grep -Fq "variables.pod.activeDeadlineSeconds >= 960 && variables.pod.activeDeadlineSeconds <= 1380 && (variables.pod.activeDeadlineSeconds - 900) % 60 == 0" "$tmp/analyzer-render.yaml"
 if grep -Fq "variables.container.env[0].name == 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64'" "$tmp/analyzer-render.yaml"; then
   echo 'analyzer admission still allows the legacy executor request environment' >&2
   exit 1

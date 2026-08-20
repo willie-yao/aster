@@ -26,12 +26,39 @@ func (f fakeWorkspaceSandbox) Run(_ context.Context, spec agentsandbox.Spec) (ag
 func (fakeWorkspaceSandbox) Cleanup(context.Context, engineruntime.WorkRef) error { return nil }
 func (f fakeWorkspaceSandbox) RuntimeIdentity() string                            { return f.identity }
 
+func TestVerifyWorkspaceSourcesUsesIndependentDeadlines(t *testing.T) {
+	sources := []WorkspaceSourceRef{{ID: "first"}, {ID: "second"}}
+	policies := []WorkspaceSourceMode{{SourceID: "first", Policy: WorkspaceSourceModePreserve}, {SourceID: "second", Policy: WorkspaceSourceModePreserve}}
+	calls := 0
+	verify := func(ctx context.Context, root, _ string, _ WorkspaceSourceModePolicy) error {
+		calls++
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("source verification context has no deadline")
+		}
+		remaining := time.Until(deadline)
+		if remaining < WorkspaceSourceVerificationTimeout-100*time.Millisecond || remaining > WorkspaceSourceVerificationTimeout {
+			t.Fatalf("source %s deadline=%s", filepath.Base(root), remaining)
+		}
+		if calls == 1 {
+			time.Sleep(50 * time.Millisecond)
+		}
+		return nil
+	}
+	if err := verifyWorkspaceSources(t.Context(), t.TempDir(), sources, policies, WorkspaceSourceVerificationTimeout, verify); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls=%d", calls)
+	}
+}
+
 func TestWorkspaceSandboxRuntimeValidatesOneResult(t *testing.T) {
 	runtime, spec := workspaceSandboxFixture(t)
 	calls := 0
 	runtime.Sandbox = fakeWorkspaceSandbox{identity: strings.Repeat("c", 64), run: func(got agentsandbox.Spec) (agentsandbox.Result, error) {
 		calls++
-		if got.Purpose != "analysis" || got.RequestEnv != WorkspaceExecutionRequestEnv || got.PreparedWorkspace != nil || got.StagedWorkspace == nil || got.StagedWorkspace.RequestEnv != WorkspaceStageRequestEnv {
+		if got.Purpose != "analysis" || got.RequestEnv != WorkspaceExecutionRequestEnv || got.FinalizationGrace != WorkspacePostModelGraceForSources(len(spec.Request.Manifest.Sources)) || got.PreparedWorkspace != nil || got.StagedWorkspace == nil || got.StagedWorkspace.RequestEnv != WorkspaceStageRequestEnv {
 			t.Fatalf("spec=%+v", got)
 		}
 		var request WorkspaceExecutionRequest

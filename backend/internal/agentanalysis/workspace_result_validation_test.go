@@ -326,7 +326,7 @@ func TestValidateWorkspaceExecutionResultAllowsPostModelGrace(t *testing.T) {
 	result.TerminalState = engineruntime.TerminalFailed
 	result.FailureReason = "source verification completed"
 	result.Analysis = nil
-	result.DurationMs = spec.Request.TimeoutSeconds*1000 + WorkspacePostModelGrace.Milliseconds()
+	result.DurationMs = spec.Request.TimeoutSeconds*1000 + WorkspacePostModelGraceForSources(len(spec.Request.Manifest.Sources)).Milliseconds()
 	if _, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourcesRoot); err != nil {
 		t.Fatalf("duration at post-model grace was rejected: %v", err)
 	}

@@ -271,9 +271,12 @@ func verifyInputs(ctx context.Context, request agentanalysis.WorkspaceExecutionR
 }
 
 func verifyInputsBounded(request agentanalysis.WorkspaceExecutionRequest, sourcesRoot, artifactRoot string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), agentanalysis.WorkspaceSourceVerificationTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), agentanalysis.WorkspaceSourceVerificationTimeoutForSources(len(request.Manifest.Sources)))
 	defer cancel()
-	return verifyInputs(ctx, request, sourcesRoot, artifactRoot)
+	if err := agentanalysis.VerifyWorkspaceSourcesBounded(ctx, sourcesRoot, request.Manifest.Sources, request.SourceModePolicies); err != nil {
+		return err
+	}
+	return agentanalysis.VerifyArtifactWorkspace(artifactRoot, request.Manifest)
 }
 
 func writeCanonicalResult(root string, data []byte, limit int64) error {

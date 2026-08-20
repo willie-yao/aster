@@ -66,8 +66,15 @@ func agentSandboxResultGraceForPurpose(purpose string) time.Duration {
 	return agentSandboxResultGrace
 }
 
+func agentSandboxResultGraceForSpec(spec agentsandbox.Spec) time.Duration {
+	if spec.FinalizationGrace > 0 {
+		return spec.FinalizationGrace
+	}
+	return agentSandboxResultGraceForPurpose(spec.Purpose)
+}
+
 func agentSandboxRunTimeout(spec agentsandbox.Spec) time.Duration {
-	return spec.Timeout + agentSandboxResultGraceForPurpose(spec.Purpose) + 5*time.Second
+	return spec.Timeout + agentSandboxResultGraceForSpec(spec) + 5*time.Second
 }
 
 var (
@@ -897,7 +904,7 @@ func (r *AgentSandboxRuntime) waitTerminal(ctx context.Context, work enginerunti
 }
 
 func (r *AgentSandboxRuntime) sandboxObjectForSpec(name string, spec agentsandbox.Spec, contractHash []byte, executionID string) map[string]any {
-	shutdown := r.now().Add(spec.Timeout + defaultSandboxCleanupTimeout).UTC().Format(time.RFC3339)
+	shutdown := r.now().Add(spec.Timeout + agentSandboxResultGraceForSpec(spec) + defaultSandboxCleanupTimeout).UTC().Format(time.RFC3339)
 	labels := map[string]any{
 		"app.kubernetes.io/managed-by": "prow-ai-dashboard",
 		"agents.x-k8s.io/created-by":   "prow-ai-dashboard",
@@ -1084,16 +1091,21 @@ func agentSandboxWorkloadHash(spec agentsandbox.Spec, opts AgentSandboxOptions) 
 		preparedHash = spec.StagedWorkspace.ManifestHash
 		preparedIdentity = spec.StagedWorkspace.IdentityHash
 	}
+	finalizationGrace := ""
+	if spec.FinalizationGrace > 0 {
+		finalizationGrace = spec.FinalizationGrace.String()
+	}
 	metadata, _ := json.Marshal(struct {
 		Purpose              string `json:"purpose"`
 		RequestEnv           string `json:"request_env"`
 		Timeout              string `json:"timeout"`
+		FinalizationGrace    string `json:"finalization_grace,omitempty"`
 		OutputLimitBytes     int64  `json:"output_limit_bytes"`
 		WritableWorkspace    bool   `json:"writable_workspace"`
 		StageRequestEnv      string `json:"stage_request_env,omitempty"`
 		PreparedManifestHash string `json:"prepared_manifest_hash,omitempty"`
 		PreparedIdentityHash string `json:"prepared_identity_hash,omitempty"`
-	}{spec.Purpose, spec.RequestEnv, spec.Timeout.String(), spec.OutputLimitBytes, spec.WritableWorkspace, stageEnv, preparedHash, preparedIdentity})
+	}{spec.Purpose, spec.RequestEnv, spec.Timeout.String(), finalizationGrace, spec.OutputLimitBytes, spec.WritableWorkspace, stageEnv, preparedHash, preparedIdentity})
 	request := append(append(append([]byte(nil), metadata...), 0), spec.Request...)
 	if spec.StagedWorkspace != nil {
 		request = append(request, 0)
