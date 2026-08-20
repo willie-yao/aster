@@ -26,8 +26,10 @@ func TestContentFreePathFilter(t *testing.T) {
 	if value != "config/*.yaml" || !supplied || length != len("config/*.yaml") || redacted {
 		t.Fatalf("safe filter=%q supplied=%t length=%d redacted=%t", value, supplied, length, redacted)
 	}
-	value, supplied, length, redacted = ContentFreePathFilter("find the secret config please")
-	if value != "" || !supplied || length == 0 || !redacted {
-		t.Fatalf("prose filter=%q supplied=%t length=%d redacted=%t", value, supplied, length, redacted)
+	for _, prose := range []string{"find the secret config please", "find-the-private-failure-please", "find_the_private_failure_please"} {
+		value, supplied, length, redacted = ContentFreePathFilter(prose)
+		if value != "" || !supplied || length == 0 || !redacted {
+			t.Fatalf("prose filter=%q value=%q supplied=%t length=%d redacted=%t", prose, value, supplied, length, redacted)
+		}
 	}
 }

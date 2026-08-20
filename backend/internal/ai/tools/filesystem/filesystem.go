@@ -245,8 +245,10 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	if err != nil {
 		return artifactGrepError(observation, "invalid regex: "+err.Error())
 	}
+	observation.FilesAttempted = 1
 	res, err := env.Browser.Grep(ctx, args.Path, re, contextLines, maxMatches, 1000, env.RemainingGCSBytes)
 	if err != nil {
+		observation.FileReadErrors = 1
 		return artifactGrepError(observation, err.Error())
 	}
 	matches := make([]map[string]interface{}, 0, len(res.Matches))

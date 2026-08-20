@@ -383,22 +383,24 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}
 	var hits []hit
 	var observations []GrepMatchObservation
-	scanned, fetched, bytes, contentBytes := 0, 0, 0, 0
+	var telemetryRanges []tools.GrepRangeObservation
+	scanned, attempted, readErrors, bytes, contentBytes := 0, 0, 0, 0, 0
 	truncatedFiles := false
 
 	for _, p := range paths {
 		if globRE != nil && !globRE.MatchString(p) {
 			continue
 		}
-		if fetched >= maxGrepFiles {
+		if attempted >= maxGrepFiles {
 			truncatedFiles = true
 			break
 		}
+		attempted++
 		content, found, ferr := readFile(ctx, env, selected, p)
 		if ferr != nil || !found {
+			readErrors++
 			continue
 		}
-		fetched++
 		canonicalContent := strings.ReplaceAll(content, "\r\n", "\n")
 		fullLines := strings.Split(canonicalContent, "\n")
 		body := content
@@ -428,6 +430,9 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 			}
 			context := lines[lo:hi]
 			hits = append(hits, hit{Path: p, Line: i + 1, Context: context})
+			telemetryRanges = append(telemetryRanges, tools.GrepRangeObservation{
+				SelectorID: selected.ID, Path: p, LineStart: lo + 1, LineEnd: hi,
+			})
 			if hi <= len(fullLines) {
 				fullMatch := strings.Join(fullLines[lo:hi], "\n")
 				if strings.TrimSpace(fullMatch) != "" && len(fullMatch) <= grepEvidenceMaxBytes && len(observations) < grepEvidenceMaxHits {
@@ -446,19 +451,23 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}
 
 	payload := map[string]interface{}{
-		"source_id":     selected.ID,
-		"pattern":       args.Pattern,
-		"path_glob":     args.PathGlob,
-		"files_scanned": scanned,
-		"total_matches": len(hits),
-		"matches":       hits,
+		"source_id":        selected.ID,
+		"pattern":          args.Pattern,
+		"path_glob":        args.PathGlob,
+		"files_attempted":  attempted,
+		"files_scanned":    scanned,
+		"file_read_errors": readErrors,
+		"total_matches":    len(hits),
+		"matches":          hits,
 	}
 	if truncatedFiles {
 		payload["truncated"] = true
 		payload["truncated_reason"] = "max_files"
 	}
 	observation.Call.MatchCount = len(hits)
+	observation.Call.FilesAttempted = attempted
 	observation.Call.FilesScanned = scanned
+	observation.Call.FileReadErrors = readErrors
 	observation.Call.FileScanTruncated = truncatedFiles
 	observation.Call.ResultTruncated = truncatedFiles || len(hits) >= maxMatches
 	observation.Call.Outcome = tools.GrepOutcomeZeroMatches
@@ -466,10 +475,9 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		observation.Call.Outcome = tools.GrepOutcomeMatched
 	}
 	observation.Matches = observations
-	for _, match := range observations {
-		observation.Call.ReturnedRanges = append(observation.Call.ReturnedRanges, tools.GrepRangeObservation{
-			SelectorID: match.SourceID, Path: match.Path, LineStart: match.LineStart, LineEnd: match.LineEnd,
-		})
+	observation.Call.ReturnedRanges = telemetryRanges
+	if attempted > 0 && readErrors == attempted {
+		return repoGrepError(observation, "repository files could not be read")
 	}
 	return tools.Result{
 		BytesFetched: bytes, ContentBytes: contentBytes, Payload: payload,

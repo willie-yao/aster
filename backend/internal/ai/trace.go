@@ -410,7 +410,9 @@ func sanitizeGrepCallObservation(observation tools.GrepCallObservation) *tools.G
 	out.ContextLines = max(observation.ContextLines, 0)
 	out.MaxMatches = max(observation.MaxMatches, 0)
 	out.MatchCount = max(observation.MatchCount, 0)
+	out.FilesAttempted = max(observation.FilesAttempted, 0)
 	out.FilesScanned = max(observation.FilesScanned, 0)
+	out.FileReadErrors = max(observation.FileReadErrors, 0)
 	switch observation.Outcome {
 	case tools.GrepOutcomeMatched, tools.GrepOutcomeZeroMatches, tools.GrepOutcomeError:
 	default:

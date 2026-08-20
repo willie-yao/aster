@@ -3,6 +3,7 @@ package filesystem
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -143,20 +144,28 @@ func TestGrepArtifactRetainsContentFreeCallTelemetry(t *testing.T) {
 
 func TestGrepArtifactRetainsZeroMatchAndErrorTelemetry(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		pattern string
-		outcome string
+		name         string
+		pattern      string
+		outcome      string
+		browserError bool
 	}{
 		{name: "zero matches", pattern: "missing", outcome: tools.GrepOutcomeZeroMatches},
 		{name: "invalid regex", pattern: "(", outcome: tools.GrepOutcomeError},
+		{name: "browser error", pattern: "match", outcome: tools.GrepOutcomeError, browserError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("line\n")}}
+			if tc.browserError {
+				browser.grepErr = errors.New("read failed")
+			}
 			raw, _ := json.Marshal(map[string]interface{}{"path": "build-log.txt", "pattern": tc.pattern})
 			result := (&grepTool{}).Dispatch(context.Background(), &tools.Env{Browser: browser}, raw)
 			observation, ok := result.Observation.(tools.GrepCallObservation)
 			if !ok || observation.Outcome != tc.outcome || observation.MatchCount != 0 || len(observation.ReturnedRanges) != 0 {
 				t.Fatalf("observation=%T %+v", result.Observation, result.Observation)
+			}
+			if tc.browserError && (observation.FilesAttempted != 1 || observation.FileReadErrors != 1) {
+				t.Fatalf("browser error observation=%+v", observation)
 			}
 		})
 	}

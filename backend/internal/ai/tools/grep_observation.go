@@ -31,7 +31,9 @@ type GrepCallObservation struct {
 	ContextLines       int                    `json:"context_lines"`
 	MaxMatches         int                    `json:"max_matches"`
 	MatchCount         int                    `json:"match_count"`
+	FilesAttempted     int                    `json:"files_attempted"`
 	FilesScanned       int                    `json:"files_scanned"`
+	FileReadErrors     int                    `json:"file_read_errors"`
 	FileScanTruncated  bool                   `json:"file_scan_truncated,omitempty"`
 	ResultTruncated    bool                   `json:"result_truncated,omitempty"`
 	Outcome            string                 `json:"outcome"`
@@ -64,7 +66,7 @@ func ContentFreePathFilter(raw string) (value string, supplied bool, length int,
 		return "", false, 0, false
 	}
 	length = len(value)
-	if length > 256 || !contentFreePathFilterRE.MatchString(value) || strings.HasPrefix(value, "/") || strings.Contains(value, "..") {
+	if length > 256 || !contentFreePathFilterRE.MatchString(value) || strings.HasPrefix(value, "/") || strings.Contains(value, "..") || !strings.ContainsAny(value, "/*.") {
 		return "", true, length, true
 	}
 	return value, true, length, false
