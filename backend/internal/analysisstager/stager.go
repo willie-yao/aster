@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	defaultInputRoot     = "/input"
-	defaultWorkspaceRoot = "/workspace"
-	defaultRequestRoot   = agentanalysis.WorkspaceExecutionRequestRoot
+	maxConcurrentStageOperations = 2
+	defaultInputRoot             = "/input"
+	defaultWorkspaceRoot         = "/workspace"
+	defaultRequestRoot           = agentanalysis.WorkspaceExecutionRequestRoot
 )
 
 // Options configure one staging process.
@@ -76,6 +77,7 @@ func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, e
 		return err
 	}
 	verifyGroup, verifyCtx := errgroup.WithContext(ctx)
+	verifyGroup.SetLimit(maxConcurrentStageOperations)
 	for _, source := range request.Sources {
 		source := source
 		verifyGroup.Go(func() error {
@@ -104,6 +106,7 @@ func Execute(ctx context.Context, request agentanalysis.WorkspaceStageRequest, e
 		return fmt.Errorf("create copied sources root: %w", err)
 	}
 	copyGroup, copyCtx := errgroup.WithContext(ctx)
+	copyGroup.SetLimit(maxConcurrentStageOperations)
 	for _, source := range request.Sources {
 		source := source
 		copyGroup.Go(func() error {

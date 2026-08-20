@@ -384,3 +384,9 @@ func createStagerSource(t *testing.T, root, marker string) string {
 	}
 	return revision
 }
+
+func TestStageConcurrencyMatchesResourceBound(t *testing.T) {
+	if maxConcurrentStageOperations != 2 {
+		t.Fatalf("stage concurrency=%d", maxConcurrentStageOperations)
+	}
+}
