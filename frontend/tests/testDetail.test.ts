@@ -127,7 +127,7 @@ test("test detail uses the approved analysis and evidence composition", () => {
   assert.match(page, /icon=\{<AutoAwesome/);
   assert.match(page, /collapseDetailsOnMobile=\{false\}/);
   assert.match(page, /<AiAnalysisPanel[\s\S]*appearance="detail"/);
-  assert.match(page, /traceHref=\{traceHref\}/);
+  assert.match(page, /traceRef=\{traceRef\}/);
   assert.match(page, /fixPatterns=\{fixPatterns\}/);
   assert.match(page, /patternLifecycleActive\(pattern\.lifecycle\)/);
   assert.match(page, /chatRef=\{\{/);

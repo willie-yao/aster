@@ -244,8 +244,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	promptHash := s.analysisPromptHashWithSources(tc, basePrompt, sources)
 	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyzeWithPromptHash(tc, promptHash) {
 		s.refreshBuildFileLinks(ctx, httpClient, run, tc)
-		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "build_hit"})
-		trace.Finish("build_cache_hit", nil)
+		trace.Discard()
 		usageOutcome = aiusage.OutcomeCacheHit
 		return nil
 	}
@@ -291,8 +290,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		s.refreshBuildFileLinks(ctx, httpClient, run, tc)
 	}
 	if analysis != nil && analysis.CacheHit {
-		recordTrace(ctx, TraceEvent{Kind: "cache", Outcome: "ai_hit"})
-		trace.Finish("ai_cache_hit", nil)
+		trace.Discard()
 		usageOutcome = aiusage.OutcomeCacheHit
 	} else {
 		trace.Finish("success", nil)

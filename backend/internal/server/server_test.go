@@ -267,7 +267,7 @@ func TestEnsureAnalysisTraceEngineUsesLegacyFallback(t *testing.T) {
 	}
 }
 
-func TestHandler_AnalysisTracesAuthenticatedAndFiltered(t *testing.T) {
+func TestHandler_AnalysisHealthAuthenticatedAndFiltered(t *testing.T) {
 	dataDir := t.TempDir()
 	producer := ai.TraceEngine{Version: "v1.2.3", Commit: "0123456789abcdef", ImageTag: "sha-0123456"}
 	traces := ai.AnalysisTraceFile{Version: 1, GeneratedAt: "2026-07-22T00:00:00Z", Engine: &producer, Traces: []ai.AnalysisTrace{
@@ -284,7 +284,7 @@ func TestHandler_AnalysisTracesAuthenticatedAndFiltered(t *testing.T) {
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/analysis-traces")
+	resp, err := http.Get(srv.URL + "/api/analysis-health")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestHandler_AnalysisTracesAuthenticatedAndFiltered(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/analysis-traces?job_id=job-b&response_id=resp-b", nil)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/analysis-health?job_id=job-b&response_id=resp-b", nil)
 	req.Header.Set("Authorization", "ok")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
@@ -314,13 +314,13 @@ func TestHandler_AnalysisTracesAuthenticatedAndFiltered(t *testing.T) {
 		t.Fatalf("trace producer = %+v", got.Engine)
 	}
 
-	req, _ = http.NewRequest(http.MethodGet, srv.URL+"/api/analysis-traces/download", nil)
+	req, _ = http.NewRequest(http.MethodGet, srv.URL+"/api/analysis-health/download", nil)
 	req.Header.Set("Authorization", "ok")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := resp.Header.Get("Content-Disposition"); got != `attachment; filename="analysis-traces.json"` {
+	if got := resp.Header.Get("Content-Disposition"); got != `attachment; filename="analysis-health.json"` {
 		t.Fatalf("Content-Disposition = %q", got)
 	}
 	_ = resp.Body.Close()
@@ -334,12 +334,12 @@ func TestHandler_AnalysisTracesAuthenticatedAndFiltered(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	if !caps.Features.AnalysisTraces || caps.Features.Actions || caps.Auth == nil {
+	if !caps.Features.AnalysisHealth || caps.Features.Actions || caps.Auth == nil {
 		t.Fatalf("capabilities = %+v", caps)
 	}
 }
 
-func TestHandler_AnalysisTracesMissing(t *testing.T) {
+func TestHandler_AnalysisHealthMissing(t *testing.T) {
 	dataDir := t.TempDir()
 	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev"})
 	if err != nil {
@@ -347,7 +347,7 @@ func TestHandler_AnalysisTracesMissing(t *testing.T) {
 	}
 	srv := httptest.NewServer(h)
 	defer srv.Close()
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/analysis-traces", nil)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/analysis-health", nil)
 	req.Header.Set("Authorization", "ok")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -392,7 +392,7 @@ func TestHandler_Capabilities(t *testing.T) {
 	if got.Engine.Version != "dev" || got.Engine.Commit != "dev" || got.Engine.ImageTag != "dev" {
 		t.Fatalf("Engine = %+v, want dev fallback", got.Engine)
 	}
-	if got.Features.Actions || got.Features.AnalysisTraces {
+	if got.Features.Actions || got.Features.AnalysisHealth {
 		t.Errorf("Features = %+v, want all false at read parity", got.Features)
 	}
 }

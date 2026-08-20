@@ -17,8 +17,8 @@ schema.
 | `GET /api/capabilities` | Safe deployment identity and feature flags used by the frontend. |
 | `GET /api/fetch-status` | Admin-only aggregate fetch progress, freshness, and recent pass summaries. `HEAD` is supported. |
 | `GET /api/pattern-diagnostics` | Admin-only sanitized recurring-pattern validation and cooldown diagnostics. |
-| `GET /api/analysis-traces` | Admin-only sanitized analysis traces with exact job, build, test, outcome, and response filters. |
-| `GET /api/analysis-traces/download` | Attachment form of the same filtered trace report. |
+| `GET /api/analysis-health` | Admin-only sanitized analysis runtime records with exact job, build, test, outcome, and response filters. |
+| `GET /api/analysis-health/download` | Attachment form of the same filtered report. |
 | `GET /api/ai-usage` | Admin-only private usage report with optional date and feature filters. |
 | `GET /api/ai-usage/download` | Attachment form of the same usage report. |
 | `POST /api/analysis-chat/sessions` | Start an owner-bound chat for one current published analysis. |

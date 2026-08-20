@@ -18,7 +18,14 @@ export interface AnalysisTraceEvent {
   elided?: number;
   retry?: number;
   issue_count?: number;
+  critique_rules?: string[];
+  semantic_findings?: string[];
+  cache_rejection_reason?: string;
+  structured_phase?: string;
+  structured_attempt?: string;
+  structured_outcome?: string;
   error_code?: string;
+  validation_code?: string;
 }
 
 export interface AnalysisTrace {
@@ -26,7 +33,10 @@ export interface AnalysisTrace {
   build_id: string;
   test_name: string;
   api_mode: string;
+  model?: string;
+  reasoning_effort?: string;
   started_at: string;
+  recorded_at?: string;
   elapsed_ms: number;
   outcome: string;
   error_code?: string;
@@ -34,10 +44,17 @@ export interface AnalysisTrace {
   events: AnalysisTraceEvent[];
 }
 
+export interface AnalysisTraceEngine {
+  version: string;
+  commit: string;
+  image_tag: string;
+}
+
 export interface AnalysisTraceFile {
   version: number;
   generated_at: string;
   retained_since?: string;
   dropped_traces?: number;
+  engine?: AnalysisTraceEngine;
   traces: AnalysisTrace[];
 }

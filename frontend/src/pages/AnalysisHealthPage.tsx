@@ -20,6 +20,14 @@ import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useManifest } from "../hooks/useManifest";
 import {
+  analysisHealthCounts,
+  analysisHealthSeverities,
+  analysisHealthSeverityDescriptions,
+  analysisHealthSeverityLabels,
+  rankAnalysisHealth,
+  type AnalysisHealthSeverity,
+} from "../lib/analysisHealth";
+import {
   analysisTraceActiveFilterCount,
   analysisTraceResponseIDs,
 } from "../lib/analysisTraces";
@@ -31,7 +39,7 @@ import type { AnalysisTraceFile } from "../types/traces";
 
 const API_BASE = import.meta.env.BASE_URL;
 
-function AnalysisTracesPageFrame({
+function AnalysisHealthPageFrame({
   children,
   action,
 }: {
@@ -51,7 +59,7 @@ function AnalysisTracesPageFrame({
         }}
       >
         <Typography component="h1" sx={{ gridArea: "title", ...overviewTypography.pageHeadline }}>
-          Analysis Traces
+          Analysis Health
         </Typography>
         {action && <Box sx={{ gridArea: "action", justifySelf: { xs: "start", sm: "end" }, alignSelf: "end" }}>{action}</Box>}
       </Box>
@@ -111,37 +119,37 @@ function TracePrivacyDisclosure() {
           color="textSecondary"
           sx={{ px: 1.5, py: 1.5, borderTop: "1px solid", borderColor: "divider", ...overviewTypography.secondaryBody }}
         >
-          Traces contain private, content-free runtime metadata. Prompts, tool arguments, tool results, credentials, diagnostic content, and billing records are never shown.
+          Health is derived from private, content-free runtime metadata. Prompts, tool arguments, tool results, credentials, diagnostic content, and billing records are never shown. Cached analyses are omitted because they record no new evidence.
         </Typography>
       </Collapse>
     </Box>
   );
 }
 
-function LoadingTraceSection() {
+function LoadingHealthSection() {
   return (
-    <Box component="section" aria-busy="true" aria-label="Loading analysis traces" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
-      <DetailSectionBand title="Trace ledger" metadata="Loading" />
+    <Box component="section" aria-busy="true" aria-label="Loading analysis health" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
+      <DetailSectionBand title="Analysis health" metadata="Loading" />
       <Box sx={{ minHeight: 180, display: "grid", placeItems: "center" }}>
-        <CircularProgress size={28} aria-label="Loading traces" />
+        <CircularProgress size={28} aria-label="Loading analysis health" />
       </Box>
     </Box>
   );
 }
 
-function EmptyTraceSection({ activeFilters, onClear }: { activeFilters: number; onClear: () => void }) {
+function EmptyHealthSection({ activeFilters, onClear }: { activeFilters: number; onClear: () => void }) {
   return (
     <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
-      <DetailSectionBand title="Trace ledger" metadata="0 matching traces" />
+      <DetailSectionBand title="Analysis health" metadata="0 retained analyses" />
       <Box sx={{ minHeight: 220, display: "grid", placeItems: "center", px: 2, py: 4, textAlign: "center" }}>
         <Box>
           <Typography component="h2" sx={{ ...overviewTypography.majorHeading, fontSize: "20px" }}>
-            No matching traces
+            No retained analyses
           </Typography>
           <Typography color="textSecondary" sx={{ mt: 0.75, maxWidth: 620, ...overviewTypography.primaryBody }}>
             {activeFilters > 0
-              ? "No retained trace matches the current URL filters. Clear all filters to return to the retained trace ledger."
-              : "Run an in-process AI analysis to publish private runtime metadata here."}
+              ? "No retained analysis matches the current URL filters. Clear all filters to return to the retained ledger."
+              : "Analyses served entirely from cache are not retained. This fills in once the pipeline runs a fresh analysis."}
           </Typography>
           {activeFilters > 0 && (
             <Button type="button" variant="contained" onClick={onClear} sx={{ mt: 2.5, minHeight: 44, borderRadius: "4px" }}>
@@ -154,13 +162,13 @@ function EmptyTraceSection({ activeFilters, onClear }: { activeFilters: number; 
   );
 }
 
-function ErrorTraceSection() {
+function ErrorHealthSection() {
   return (
     <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
-      <DetailSectionBand title="Trace ledger" metadata="Unavailable" />
+      <DetailSectionBand title="Analysis health" metadata="Unavailable" />
       <Box sx={{ minHeight: 150, display: "grid", placeItems: "center", px: 2, py: 3, textAlign: "center" }}>
         <Typography color="textSecondary" sx={overviewTypography.primaryBody}>
-          The retained trace ledger could not be loaded.
+          The retained analysis ledger could not be loaded.
         </Typography>
       </Box>
     </Box>
@@ -177,10 +185,10 @@ function PrivateAccessSection({ onSignIn }: { onSignIn: () => void }) {
             Operator sign-in required
           </Typography>
           <Typography color="textSecondary" sx={{ mt: 0.75, maxWidth: 620, ...overviewTypography.primaryBody }}>
-            Analysis traces contain private execution metadata and are available only to authenticated dashboard administrators.
+            Analysis health is derived from private execution metadata and is available only to authenticated dashboard administrators.
           </Typography>
           <Button type="button" variant="contained" onClick={onSignIn} sx={{ mt: 2.5, minHeight: 44, borderRadius: "4px" }}>
-            Sign in to inspect traces
+            Sign in to inspect analysis health
           </Button>
         </Box>
       </Box>
@@ -188,12 +196,24 @@ function PrivateAccessSection({ onSignIn }: { onSignIn: () => void }) {
   );
 }
 
-export function AnalysisTracesPage() {
+function AllHealthySection() {
+  return (
+    <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
+      <DetailSectionBand title="Nothing needs attention" metadata="All retained analyses completed cleanly" />
+      <Typography color="textSecondary" sx={{ px: 1.5, py: 2, ...overviewTypography.primaryBody }}>
+        No retained analysis failed, was degraded, or needed a retry. Healthy analyses are listed below.
+      </Typography>
+    </Box>
+  );
+}
+
+export function AnalysisHealthPage() {
   const { features } = useCapabilities();
   const auth = useAuth();
   const manifest = useManifest();
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.toString();
+  const [showHealthy, setShowHealthy] = useState(false);
   const [loaded, setLoaded] = useState<{
     key: string | null;
     data: AnalysisTraceFile | null;
@@ -205,9 +225,9 @@ export function AnalysisTracesPage() {
   });
 
   useEffect(() => {
-    if (!features.analysis_traces || auth.status !== "authenticated") return;
+    if (!features.analysis_health || auth.status !== "authenticated") return;
     const controller = new AbortController();
-    fetch(`${API_BASE}api/analysis-traces${query ? `?${query}` : ""}`, {
+    fetch(`${API_BASE}api/analysis-health${query ? `?${query}` : ""}`, {
       credentials: "same-origin",
       signal: controller.signal,
     })
@@ -228,92 +248,90 @@ export function AnalysisTracesPage() {
           setLoaded({
             key: query,
             data: null,
-            error: err instanceof Error ? err.message : "Unable to load traces",
+            error: err instanceof Error ? err.message : "Unable to load analysis health",
           });
         }
       });
     return () => controller.abort();
-  }, [auth.status, features.analysis_traces, query]);
+  }, [auth.status, features.analysis_health, query]);
 
   const data = loaded.key === query ? loaded.data : null;
   const error = loaded.key === query ? loaded.error : null;
   const loading = auth.status === "authenticated" && loaded.key !== query;
   const activeFilters = analysisTraceActiveFilterCount(searchParams);
 
-  const totals = useMemo(() => {
-    const traces = data?.traces ?? [];
-    let modelRequests = 0;
-    let toolCalls = 0;
-    const responseIDs = new Set<string>();
-    for (const trace of traces) {
-      for (const event of trace.events) {
-        if (event.kind === "model_request") modelRequests++;
-        if (event.kind === "tool_call") toolCalls++;
-        if (event.response_id) responseIDs.add(event.response_id);
-      }
-    }
-    return {
-      traces: traces.length,
-      modelRequests,
-      toolCalls,
-      responseIDs: responseIDs.size,
-    };
-  }, [data]);
-
-  const ledgerItems = useMemo<AnalysisTraceLedgerItem[]>(() => {
+  const groups = useMemo(() => {
     const prefix = manifest.short_name_prefix ?? "";
-    return (data?.traces ?? []).map((trace) => ({
-      trace,
-      displayTitle: parseTestDisplayName(trace.test_name).displayName,
-      displayJob: shortJobName(trace.job_id, prefix),
-      testHref: testRunPath(trace.job_id, trace.test_name, trace.build_id),
-      responseIDs: analysisTraceResponseIDs(trace),
-    }));
+    const ranked = rankAnalysisHealth(data?.traces ?? [], (trace) => trace);
+    const counts = analysisHealthCounts(ranked);
+    const bySeverity = new Map<AnalysisHealthSeverity, AnalysisTraceLedgerItem[]>(
+      analysisHealthSeverities.map((severity) => [severity, []]),
+    );
+    for (const { item: trace, verdict } of ranked) {
+      bySeverity.get(verdict.severity)?.push({
+        trace,
+        verdict,
+        displayTitle: parseTestDisplayName(trace.test_name).displayName,
+        displayJob: shortJobName(trace.job_id, prefix),
+        testHref: testRunPath(trace.job_id, trace.test_name, trace.build_id),
+        responseIDs: analysisTraceResponseIDs(trace),
+      });
+    }
+    return { total: ranked.length, counts, bySeverity };
   }, [data, manifest.short_name_prefix]);
 
   function clearFilters() {
     setSearchParams(new URLSearchParams());
   }
 
-  if (!features.analysis_traces) {
+  if (!features.analysis_health) {
     return (
-      <AnalysisTracesPageFrame>
-        <TraceNotice severity="info" title="Private analysis traces are not available in this deployment." />
-      </AnalysisTracesPageFrame>
+      <AnalysisHealthPageFrame>
+        <TraceNotice severity="info" title="Private analysis health is not available in this deployment." />
+      </AnalysisHealthPageFrame>
     );
   }
 
   if (auth.status === "loading") {
     return (
-      <AnalysisTracesPageFrame>
+      <AnalysisHealthPageFrame>
         <Box component="section" aria-busy="true" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
           <DetailSectionBand title="Private operator access" metadata="Checking session" />
           <Box sx={{ minHeight: 180, display: "grid", placeItems: "center" }}>
             <CircularProgress size={28} aria-label="Checking authentication" />
           </Box>
         </Box>
-      </AnalysisTracesPageFrame>
+      </AnalysisHealthPageFrame>
     );
   }
 
   if (auth.status === "anonymous") {
     return (
-      <AnalysisTracesPageFrame>
+      <AnalysisHealthPageFrame>
         <PrivateAccessSection onSignIn={auth.signIn} />
-      </AnalysisTracesPageFrame>
+      </AnalysisHealthPageFrame>
     );
   }
 
-  const downloadHref = `${API_BASE}api/analysis-traces/download${query ? `?${query}` : ""}`;
+  const downloadHref = `${API_BASE}api/analysis-health/download${query ? `?${query}` : ""}`;
+  const attention = groups.counts.failed + groups.counts.degraded;
   const metricItems: MetricStripItem[] = [
-    { label: "Traces", value: totals.traces },
-    { label: "Model requests", value: totals.modelRequests },
-    { label: "Tool calls", value: totals.toolCalls },
-    { label: "Response IDs", value: totals.responseIDs },
+    {
+      label: "Needs attention",
+      value: attention,
+      color: attention > 0 ? "error.main" : "success.main",
+    },
+    { label: "Failed", value: groups.counts.failed, color: groups.counts.failed > 0 ? "error.main" : "text.primary" },
+    { label: "Degraded", value: groups.counts.degraded, color: groups.counts.degraded > 0 ? "warning.main" : "text.primary" },
+    { label: "Recovered", value: groups.counts.retried },
   ];
+  const problemSeverities: AnalysisHealthSeverity[] = analysisHealthSeverities.filter(
+    (severity) => severity !== "healthy" && (groups.bySeverity.get(severity)?.length ?? 0) > 0,
+  );
+  const healthyItems = groups.bySeverity.get("healthy") ?? [];
 
   return (
-    <AnalysisTracesPageFrame
+    <AnalysisHealthPageFrame
       action={
         <Button
           component="a"
@@ -333,33 +351,70 @@ export function AnalysisTracesPage() {
         onClear={clearFilters}
       />
 
-      <MetricStrip items={metricItems} label="Trace metrics" />
+      <MetricStrip items={metricItems} label="Analysis health metrics" />
 
       {data?.dropped_traces ? (
-        <TraceNotice severity="warning" title={`${data.dropped_traces} traces were dropped by the bounded recorder.`}>
+        <TraceNotice severity="warning" title={`${data.dropped_traces} analyses were dropped by the bounded recorder.`}>
           {data.retained_since
-            ? `Entries recorded before ${new Date(data.retained_since).toLocaleString()} are outside the retained window. Current retained traces remain available below.`
-            : "Current retained traces remain available below."}
+            ? `Entries recorded before ${new Date(data.retained_since).toLocaleString()} are outside the retained window. Current retained analyses remain available below.`
+            : "Current retained analyses remain available below."}
         </TraceNotice>
       ) : null}
 
       {error && (
-        <TraceNotice severity="error" title="Failed to load traces">
+        <TraceNotice severity="error" title="Failed to load analysis health">
           {error}
         </TraceNotice>
       )}
 
       {loading ? (
-        <LoadingTraceSection />
+        <LoadingHealthSection />
       ) : error ? (
-        <ErrorTraceSection />
-      ) : ledgerItems.length > 0 ? (
-        <AnalysisTraceLedger items={ledgerItems} />
+        <ErrorHealthSection />
+      ) : groups.total === 0 ? (
+        <EmptyHealthSection activeFilters={activeFilters} onClear={clearFilters} />
       ) : (
-        <EmptyTraceSection activeFilters={activeFilters} onClear={clearFilters} />
+        <>
+          {problemSeverities.length === 0 ? (
+            <AllHealthySection />
+          ) : (
+            problemSeverities.map((severity) => (
+              <AnalysisTraceLedger
+                key={severity}
+                title={analysisHealthSeverityLabels[severity]}
+                description={analysisHealthSeverityDescriptions[severity]}
+                items={groups.bySeverity.get(severity) ?? []}
+              />
+            ))
+          )}
+
+          {healthyItems.length > 0 && (
+            <Box>
+              <Button
+                type="button"
+                variant="outlined"
+                onClick={() => setShowHealthy((value) => !value)}
+                aria-expanded={showHealthy}
+                sx={{ minHeight: 44, borderRadius: "4px" }}
+              >
+                {showHealthy ? "Hide" : "Show"} {healthyItems.length} healthy{" "}
+                {healthyItems.length === 1 ? "analysis" : "analyses"}
+              </Button>
+              <Collapse in={showHealthy} timeout="auto" unmountOnExit>
+                <Box sx={{ mt: 1.5 }}>
+                  <AnalysisTraceLedger
+                    title={analysisHealthSeverityLabels.healthy}
+                    description={analysisHealthSeverityDescriptions.healthy}
+                    items={healthyItems}
+                  />
+                </Box>
+              </Collapse>
+            </Box>
+          )}
+        </>
       )}
 
       <TracePrivacyDisclosure />
-    </AnalysisTracesPageFrame>
+    </AnalysisHealthPageFrame>
   );
 }

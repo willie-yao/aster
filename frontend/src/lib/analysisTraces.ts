@@ -24,9 +24,9 @@ export function analysisTraceActiveFilterCount(params: URLSearchParams): number 
 
 export function traceTone(outcome?: string): TraceTone {
   const value = outcome?.toLowerCase() ?? "";
-  if (/(success|succeeded|passed|hit|completed|revised)/.test(value)) return "success";
-  if (/(retry|objected|truncated|over_budget|uncached)/.test(value)) return "warning";
-  if (/(error|failed|cancelled|unavailable|rejected|exhausted)/.test(value)) return "error";
+  if (/(success|succeeded|passed|completed|accepted|revised)/.test(value)) return "success";
+  if (/(retry|objected|truncated|denied|over_budget|uncached)/.test(value)) return "warning";
+  if (/(error|failed|cancelled|unavailable|rejected|exhausted|empty)/.test(value)) return "error";
   return "neutral";
 }
 
@@ -69,6 +69,10 @@ export function analysisTraceEventDetails(event: AnalysisTraceEvent): string[] {
   if (event.issue_count) {
     details.push(`${event.issue_count} issue${event.issue_count === 1 ? "" : "s"}`);
   }
+  if (event.critique_rules?.length) details.push(`rules ${event.critique_rules.join(", ")}`);
+  if (event.semantic_findings?.length) details.push(`findings ${event.semantic_findings.join(", ")}`);
+  if (event.cache_rejection_reason) details.push(`not cached: ${event.cache_rejection_reason}`);
+  if (event.validation_code) details.push(event.validation_code);
   if (event.error_code) details.push(event.error_code);
   return details;
 }

@@ -19,7 +19,7 @@ test("mobile branding link keeps an accessible home name", () => {
     /<Typography[\s\S]*?display: \{ xs: "none", sm: "block" \}/,
   );
   assert.match(layout, /label="Failure Trends"/);
-  assert.match(layout, /label="Analysis Traces"/);
+  assert.match(layout, /label="Analysis Health"/);
   assert.match(layout, /label="AI Usage"/);
 });
 

@@ -135,8 +135,8 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 		t.Errorf("expected cached root cause to be preserved, got %q", tc.AIAnalysis.RootCause)
 	}
 	got := traces.Snapshot()
-	if len(got.Traces) != 1 || got.Traces[0].Outcome != "build_cache_hit" || len(got.Traces[0].Events) != 1 || got.Traces[0].Events[0].Outcome != "build_hit" {
-		t.Fatalf("trace = %+v", got)
+	if len(got.Traces) != 0 {
+		t.Fatalf("cache hit recorded a trace: %+v", got)
 	}
 	usageSnapshot := usage.Snapshot()
 	if len(usageSnapshot.Days) != 1 || usageSnapshot.Days[0].Totals.CacheHits != 1 || usageSnapshot.RecentOperations[0].Feature != aiusage.FeatureFailureAnalysis {

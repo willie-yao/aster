@@ -394,9 +394,6 @@ func (p *pipeline) invalidateAnalysisRuntime() {
 
 func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.Context, jobs []models.ProwJob) (*refreshResult, error) {
 	cfg, opts := p.cfg, p.opts
-	if err := clearAnalysisTrace(opts.OutDir); err != nil {
-		log.Printf("Warning: failed to clear stale AI traces: %v", err)
-	}
 
 	// Fetch each job's builds. Cached completed builds are reused.
 	priorDetails, err := loadPublishedJobDetails(opts.OutDir)
@@ -887,14 +884,6 @@ func (p *pipeline) commitAnalysisCheckpoint() error {
 		return nil
 	}
 	return p.aiRefreshTransaction.CommitAnalysisCheckpoint()
-}
-
-func clearAnalysisTrace(outDir string) error {
-	err := os.Remove(filepath.Join(outDir, output.AITraceFilename))
-	if os.IsNotExist(err) {
-		return nil
-	}
-	return err
 }
 
 // runSideEffects handles email notifications and recovery on tracked issues.

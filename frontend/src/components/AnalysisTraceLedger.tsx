@@ -9,6 +9,11 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
 import {
+  analysisHealthSeverityLabels,
+  type AnalysisHealthSeverity,
+  type AnalysisHealthVerdict,
+} from "../lib/analysisHealth";
+import {
   analysisTraceEventDetails,
   formatTraceDuration,
   traceStatusLabel,
@@ -21,6 +26,7 @@ import { overviewTypography } from "../theme/overview";
 
 export interface AnalysisTraceLedgerItem {
   trace: AnalysisTrace;
+  verdict: AnalysisHealthVerdict;
   displayTitle: string;
   displayJob: string;
   testHref: string;
@@ -34,8 +40,14 @@ const toneColor: Record<TraceTone, "success.main" | "warning.main" | "error.main
   neutral: "text.secondary",
 };
 
-export function TraceStatusSignal({ value }: { value?: string }) {
-  const tone = traceTone(value);
+const severityTone: Record<AnalysisHealthSeverity, TraceTone> = {
+  failed: "error",
+  degraded: "warning",
+  retried: "warning",
+  healthy: "success",
+};
+
+function Signal({ tone, label }: { tone: TraceTone; label: string }) {
   return (
     <Box
       component="span"
@@ -51,9 +63,17 @@ export function TraceStatusSignal({ value }: { value?: string }) {
       }}
     >
       <Box component="span" aria-hidden="true" sx={{ width: 8, height: 8, borderRadius: "2px", bgcolor: "currentColor", flexShrink: 0 }} />
-      {traceStatusLabel(value)}
+      {label}
     </Box>
   );
+}
+
+export function TraceStatusSignal({ value }: { value?: string }) {
+  return <Signal tone={traceTone(value)} label={traceStatusLabel(value)} />;
+}
+
+export function TraceHealthSignal({ severity }: { severity: AnalysisHealthSeverity }) {
+  return <Signal tone={severityTone[severity]} label={analysisHealthSeverityLabels[severity]} />;
 }
 
 export function TraceNotice({
@@ -286,9 +306,96 @@ function TraceEventLedger({ events }: { events: AnalysisTraceEvent[] }) {
   );
 }
 
+/** Lists why an analysis was flagged, capped so a row stays scannable. */
+export function TraceReasons({ reasons, limit }: { reasons: string[]; limit?: number }) {
+  if (reasons.length === 0) {
+    return (
+      <Typography color="textSecondary" sx={overviewTypography.data}>
+        Completed without intervention
+      </Typography>
+    );
+  }
+  const shown = limit === undefined ? reasons : reasons.slice(0, limit);
+  const hidden = reasons.length - shown.length;
+  return (
+    <Typography color="textSecondary" sx={{ ...overviewTypography.data, overflowWrap: "anywhere" }}>
+      {shown.join(" · ")}
+      {hidden > 0 ? ` · +${hidden} more` : ""}
+    </Typography>
+  );
+}
+
+/**
+ * Expanded body for one trace: identifiers, any recorder notice, and the event
+ * ledger. Shared by the health page and the inline test-detail inspector.
+ */
+export function TraceDetailBody({
+  trace,
+  responseIDs,
+  testHref,
+}: {
+  trace: AnalysisTrace;
+  responseIDs: string[];
+  testHref?: string;
+}) {
+  const noticeTitle = trace.error_code && trace.truncated
+    ? "Trace error and truncated recording"
+    : trace.error_code
+      ? "Trace error"
+      : "Trace truncated";
+
+  return (
+    <>
+      <Stack
+        direction="row"
+        sx={{ minWidth: 0, minHeight: 56, alignItems: "center", gap: 1, flexWrap: "wrap", px: 1.5, py: 1 }}
+      >
+        {testHref && (
+          <Button
+            component={RouterLink}
+            to={testHref}
+            variant="outlined"
+            endIcon={<OpenInNew sx={{ fontSize: 15 }} />}
+            sx={{ minHeight: { xs: 44, md: 36 }, borderRadius: "4px" }}
+          >
+            Open test run
+          </Button>
+        )}
+        <CopyIdentifier label="Build" value={trace.build_id} />
+        {responseIDs.map((responseID, index) => (
+          <CopyIdentifier
+            key={responseID}
+            label={responseIDs.length === 1 ? "Response" : `Response ${index + 1}`}
+            value={responseID}
+          />
+        ))}
+      </Stack>
+
+      {(trace.error_code || trace.truncated) && (
+        <Box sx={{ px: 1.5, pb: 1.5 }}>
+          <TraceNotice severity={trace.error_code ? "error" : "warning"} title={noticeTitle}>
+            {trace.error_code && (
+              <>
+                Error code: <Box component="code" sx={overviewTypography.data}>{trace.error_code}</Box>
+                {trace.truncated ? ". " : ""}
+              </>
+            )}
+            {trace.truncated ? "The bounded recorder omitted later events." : null}
+          </TraceNotice>
+        </Box>
+      )}
+
+      <TraceEventLedger events={trace.events} />
+    </>
+  );
+}
+
+const ledgerColumns = "104px minmax(200px, 1.4fr) minmax(180px, 1.2fr) 78px 58px 40px";
+
 function traceSummaryLabel(item: AnalysisTraceLedgerItem, open: boolean): string {
-  const trace = item.trace;
-  return `${open ? "Collapse" : "Expand"} ${traceStatusLabel(trace.outcome)} trace for ${item.displayTitle}. Job ${item.displayJob}. Build ${trace.build_id}. API mode ${trace.api_mode}. ${formatTraceDuration(trace.elapsed_ms)}. ${trace.events.length} ${trace.events.length === 1 ? "event" : "events"}.`;
+  const { trace, verdict } = item;
+  const reasons = verdict.reasons.length ? ` ${verdict.reasons.join(". ")}.` : "";
+  return `${open ? "Collapse" : "Expand"} ${analysisHealthSeverityLabels[verdict.severity]} analysis for ${item.displayTitle}. Job ${item.displayJob}. Build ${trace.build_id}.${reasons} ${formatTraceDuration(trace.elapsed_ms)}. ${trace.events.length} ${trace.events.length === 1 ? "event" : "events"}.`;
 }
 
 function TraceSummaryRow({ item }: { item: AnalysisTraceLedgerItem }) {
@@ -296,11 +403,6 @@ function TraceSummaryRow({ item }: { item: AnalysisTraceLedgerItem }) {
   const generatedID = useId();
   const contentID = `analysis-trace-${generatedID.replaceAll(":", "")}`;
   const trace = item.trace;
-  const traceNoticeTitle = trace.error_code && trace.truncated
-    ? "Trace error and truncated recording"
-    : trace.error_code
-      ? "Trace error"
-      : "Trace truncated";
 
   return (
     <Box component="article" sx={{ minWidth: 0, bgcolor: "surface.container", borderTop: "1px solid", borderColor: "divider" }}>
@@ -314,10 +416,10 @@ function TraceSummaryRow({ item }: { item: AnalysisTraceLedgerItem }) {
           width: "100%",
           minHeight: { xs: 44, md: 72 },
           display: "grid",
-          gridTemplateColumns: { xs: "minmax(0, 1fr) 44px", md: "96px minmax(210px, 1.5fr) minmax(170px, 1fr) 152px 78px 58px 40px" },
+          gridTemplateColumns: { xs: "minmax(0, 1fr) 44px", md: ledgerColumns },
           gridTemplateAreas: {
-            xs: '"outcome chevron" "title chevron" "build chevron" "mobileMeta chevron"',
-            md: '"outcome title build api duration events chevron"',
+            xs: '"severity chevron" "title chevron" "reasons chevron" "mobileMeta chevron"',
+            md: '"severity title reasons duration events chevron"',
           },
           alignItems: "center",
           color: "text.primary",
@@ -330,8 +432,8 @@ function TraceSummaryRow({ item }: { item: AnalysisTraceLedgerItem }) {
           },
         }}
       >
-        <Box sx={{ gridArea: "outcome", minWidth: 0, px: { xs: 1.5, md: 1.25 }, pt: { xs: 1.25, md: 0 } }}>
-          <TraceStatusSignal value={trace.outcome} />
+        <Box sx={{ gridArea: "severity", minWidth: 0, px: { xs: 1.5, md: 1.25 }, pt: { xs: 1.25, md: 0 } }}>
+          <TraceHealthSignal severity={item.verdict.severity} />
         </Box>
         <Box sx={{ gridArea: "title", minWidth: 0, px: { xs: 1.5, md: 1.25 }, py: { xs: 0.5, md: 1.25 } }}>
           <Typography
@@ -350,16 +452,12 @@ function TraceSummaryRow({ item }: { item: AnalysisTraceLedgerItem }) {
             {item.displayTitle}
           </Typography>
           <Typography title={trace.job_id} color="textSecondary" sx={{ mt: 0.25, ...overviewTypography.data, overflowWrap: "anywhere" }}>
-            {item.displayJob}
+            {item.displayJob} · {trace.build_id}
           </Typography>
         </Box>
-        <Typography sx={{ gridArea: "build", minWidth: 0, px: { xs: 1.5, md: 1.25 }, pb: { xs: 0.25, md: 0 }, ...overviewTypography.data, overflowWrap: "anywhere" }}>
-          <Box component="span" sx={{ display: { xs: "inline", md: "none" } }}>Build </Box>
-          {trace.build_id}
-        </Typography>
-        <Typography sx={{ gridArea: "api", display: { xs: "none", md: "block" }, minWidth: 0, px: 1.25, ...overviewTypography.data, overflowWrap: "anywhere" }}>
-          {trace.api_mode}
-        </Typography>
+        <Box sx={{ gridArea: "reasons", minWidth: 0, px: { xs: 1.5, md: 1.25 }, pb: { xs: 0.25, md: 0 } }}>
+          <TraceReasons reasons={item.verdict.reasons} limit={2} />
+        </Box>
         <Typography sx={{ gridArea: "duration", display: { xs: "none", md: "block" }, minWidth: 0, px: 1.25, ...overviewTypography.data }}>
           {formatTraceDuration(trace.elapsed_ms)}
         </Typography>
@@ -378,7 +476,7 @@ function TraceSummaryRow({ item }: { item: AnalysisTraceLedgerItem }) {
             overflowWrap: "anywhere",
           }}
         >
-          {trace.api_mode} · {formatTraceDuration(trace.elapsed_ms)} · {trace.events.length} {trace.events.length === 1 ? "event" : "events"}
+          {formatTraceDuration(trace.elapsed_ms)} · {trace.events.length} {trace.events.length === 1 ? "event" : "events"}
         </Typography>
         <Box sx={{ gridArea: "chevron", alignSelf: "stretch", display: "grid", placeItems: "center", color: "text.secondary" }}>
           <ChevronRight
@@ -393,76 +491,57 @@ function TraceSummaryRow({ item }: { item: AnalysisTraceLedgerItem }) {
         </Box>
       </ButtonBase>
 
-      <Collapse in={open} timeout="auto">
+      <Collapse in={open} timeout="auto" unmountOnExit>
         <Box id={contentID} sx={{ minWidth: 0, bgcolor: "surface.containerLow", borderTop: "1px solid", borderColor: "divider" }}>
-          <Stack
-            direction="row"
-            sx={{ minWidth: 0, minHeight: 56, alignItems: "center", gap: 1, flexWrap: "wrap", px: 1.5, py: 1 }}
-          >
-            <Button
-              component={RouterLink}
-              to={item.testHref}
-              variant="outlined"
-              endIcon={<OpenInNew sx={{ fontSize: 15 }} />}
-              sx={{ minHeight: { xs: 44, md: 36 }, borderRadius: "4px" }}
-            >
-              Open test run
-            </Button>
-            <CopyIdentifier label="Build" value={trace.build_id} />
-            {item.responseIDs.map((responseID, index) => (
-              <CopyIdentifier
-                key={responseID}
-                label={item.responseIDs.length === 1 ? "Response" : `Response ${index + 1}`}
-                value={responseID}
-              />
-            ))}
-          </Stack>
-
-          {(trace.error_code || trace.truncated) && (
-            <Box sx={{ px: 1.5, pb: 1.5 }}>
-              <TraceNotice severity={trace.error_code ? "error" : "warning"} title={traceNoticeTitle}>
-                {trace.error_code && (
-                  <>
-                    Error code: <Box component="code" sx={overviewTypography.data}>{trace.error_code}</Box>
-                    {trace.truncated ? ". " : ""}
-                  </>
-                )}
-                {trace.truncated ? "The bounded recorder omitted later events." : null}
-              </TraceNotice>
-            </Box>
-          )}
-
-          <TraceEventLedger events={trace.events} />
+          <TraceDetailBody trace={trace} responseIDs={item.responseIDs} testHref={item.testHref} />
         </Box>
       </Collapse>
     </Box>
   );
 }
 
-export function AnalysisTraceLedger({ items }: { items: AnalysisTraceLedgerItem[] }) {
+export function AnalysisTraceLedger({
+  items,
+  title,
+  metadata,
+  description,
+}: {
+  items: AnalysisTraceLedgerItem[];
+  title: string;
+  metadata?: string;
+  description?: string;
+}) {
   return (
-    <Box component="section" aria-label="Trace ledger" sx={{ minWidth: 0, bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
-      <DetailSectionBand title="Trace ledger" metadata={`${items.length} ${items.length === 1 ? "trace" : "traces"}`} />
+    <Box component="section" aria-label={title} sx={{ minWidth: 0, bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
+      <DetailSectionBand
+        title={title}
+        metadata={metadata ?? `${items.length} ${items.length === 1 ? "analysis" : "analyses"}`}
+      />
+      {description && (
+        <Typography color="textSecondary" sx={{ px: 1.5, pt: 1.25, ...overviewTypography.secondaryBody }}>
+          {description}
+        </Typography>
+      )}
       <Box
         aria-hidden="true"
         sx={{
           minHeight: 38,
           display: { xs: "none", md: "grid" },
-          gridTemplateColumns: "96px minmax(210px, 1.5fr) minmax(170px, 1fr) 152px 78px 58px 40px",
+          gridTemplateColumns: ledgerColumns,
           alignItems: "center",
           px: 0,
           borderBottom: "1px solid",
           borderColor: "divider",
         }}
       >
-        {["Outcome", "Test", "Build", "API mode", "Duration", "Events", ""].map((label, index) => (
+        {["Health", "Test", "Why", "Duration", "Events", ""].map((label, index) => (
           <Typography key={`${label}-${index}`} color="textSecondary" sx={{ px: 1.25, ...overviewTypography.tableHeading }}>
             {label}
           </Typography>
         ))}
       </Box>
       {items.map((item, index) => (
-        <TraceSummaryRow key={`${item.trace.job_id}-${item.trace.build_id}-${item.trace.test_name}-${index}`} item={item} />
+        <TraceSummaryRow key={`${item.trace.job_id}-${item.trace.build_id}-${item.trace.test_name}-${item.trace.started_at}-${index}`} item={item} />
       ))}
     </Box>
   );
