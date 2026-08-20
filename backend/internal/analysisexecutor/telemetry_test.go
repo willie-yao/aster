@@ -1,6 +1,7 @@
 package analysisexecutor
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -271,7 +272,7 @@ func TestParseOpenCodeTelemetryValidatesToolStates(t *testing.T) {
 func TestParseOpenCodeTelemetryClassifiesBoundedEvidenceTools(t *testing.T) {
 	workDir := t.TempDir()
 	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
-	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary")
 	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +305,7 @@ func TestParseOpenCodeTelemetryClassifiesBoundedEvidenceTools(t *testing.T) {
 	}
 	wantHandles := []agentanalysis.WorkspaceEvidenceHandle{
 		{ID: "artifact-001", Root: agentanalysis.WorkspaceArtifactsDir, Path: "failure.log", LineStart: 1, LineEnd: 1},
-		{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, Path: "main.go", LineStart: 1, LineEnd: 1},
+		{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, SourceID: "primary", Path: "main.go", LineStart: 1, LineEnd: 1},
 	}
 	if !slices.Equal(facts.EvidenceHandles, wantHandles) {
 		t.Fatalf("handles=%+v want=%+v", facts.EvidenceHandles, wantHandles)
@@ -314,7 +315,7 @@ func TestParseOpenCodeTelemetryClassifiesBoundedEvidenceTools(t *testing.T) {
 func TestParseOpenCodeTelemetryPreservesUsageWithInvalidOptionalRange(t *testing.T) {
 	workDir := t.TempDir()
 	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
-	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary")
 	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -540,5 +541,57 @@ func TestParseOpenCodeTelemetryCountsExactDuplicateEvidenceReads(t *testing.T) {
 	}
 	if telemetry.EvidenceReadCalls != 2 || telemetry.DuplicateReadCalls != 1 || facts.EvidenceReadCalls != 2 || facts.DuplicateReadCalls != 1 || telemetry.EvidenceHandles.AcceptedArtifactHandleCount != 1 {
 		t.Fatalf("telemetry=%+v facts=%+v", telemetry, facts)
+	}
+}
+
+func TestParseOpenCodeTelemetrySeparatesMultiSourceReads(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "failure.log"), []byte("failure marker\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]string{}
+	for _, id := range []string{"client", "server"} {
+		root := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, id)
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(root, "same.go")
+		if err := os.WriteFile(path, []byte("package "+id+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		paths[id] = path
+	}
+	raw := []byte(fmt.Sprintf(`[{
+		"info":{"role":"assistant"},"parts":[
+		{"type":"step-start"},
+		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},
+		{"type":"tool","tool":"grep","state":{"status":"completed","input":{"path":%[2]q},"output":%[3]q,"metadata":{"matches":1}}},
+		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[4]q},"metadata":{"display":{"type":"file","path":%[4]q,"lineStart":1,"lineEnd":1}}}},
+		{"type":"step-finish","cost":0.1,"tokens":{"input":1,"output":1,"cache":{"read":0}}}
+	]}]`, filepath.Join(artifactDir, "failure.log"), paths["client"], paths["client"]+":\n  Line 1: package client", paths["server"]))
+	_, telemetry, facts, err := parseOpenCodeTelemetryForWorkspace(raw, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantReads := []agentanalysis.WorkspaceSourceReadTelemetry{
+		{SourceID: "client", Tool: "grep", Path: "same.go", LineStart: 1, LineEnd: 1},
+		{SourceID: "server", Tool: "read", Path: "same.go", LineStart: 1, LineEnd: 1},
+	}
+	if !slices.Equal(telemetry.SourceReads, wantReads) || !slices.Equal(facts.SourceReads, wantReads) {
+		t.Fatalf("telemetry=%+v facts=%+v", telemetry.SourceReads, facts.SourceReads)
+	}
+	if len(facts.EvidenceHandles) != 3 || facts.EvidenceHandles[1].SourceID != "client" || facts.EvidenceHandles[2].SourceID != "server" {
+		t.Fatalf("handles=%+v", facts.EvidenceHandles)
+	}
+	encoded, err := json.Marshal(telemetry.SourceReads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("package client")) || bytes.Contains(encoded, []byte("package server")) {
+		t.Fatalf("source read telemetry retained content: %s", encoded)
 	}
 }

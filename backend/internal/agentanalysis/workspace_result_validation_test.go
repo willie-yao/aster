@@ -241,7 +241,7 @@ func workspaceValidationFixture(t *testing.T) (string, string, WorkspaceManifest
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sourceRoot, artifactRoot, manifest, workspaceDefaultHandles(t, sourceRoot, artifactRoot)
+	return workspaceTestSourcesRoot(t, sourceRoot), artifactRoot, manifest, workspaceDefaultHandles(t, sourceRoot, artifactRoot)
 }
 
 func workspaceValidationJSON(t *testing.T, handles []WorkspaceEvidenceHandle, mutate func(map[string]any)) string {
@@ -270,7 +270,7 @@ func TestValidateWorkspaceExecutionResultRequiresSourceEvidenceFloor(t *testing.
 	result.OpenCodeTelemetry.EvidenceHandles = WorkspaceEvidenceHandleDiagnostics{
 		Status: WorkspaceEvidenceHandlesAccepted, ObservedRangeCount: 2, AcceptedArtifactHandleCount: 1, AcceptedSourceHandleCount: 1,
 	}
-	if _, err := ValidateWorkspaceExecutionResult(result, request, base.ArtifactRoot, base.SourceRoot); err != nil {
+	if _, err := ValidateWorkspaceExecutionResult(result, request, base.ArtifactRoot, base.SourcesRoot); err != nil {
 		t.Fatalf("valid source floor was rejected: %v", err)
 	}
 	for _, mutate := range []func(*WorkspaceExecutionResult){
@@ -284,7 +284,7 @@ func TestValidateWorkspaceExecutionResultRequiresSourceEvidenceFloor(t *testing.
 	} {
 		changed := result
 		mutate(&changed)
-		if _, err := ValidateWorkspaceExecutionResult(changed, request, base.ArtifactRoot, base.SourceRoot); err == nil {
+		if _, err := ValidateWorkspaceExecutionResult(changed, request, base.ArtifactRoot, base.SourcesRoot); err == nil {
 			t.Fatalf("missing source floor was accepted: %+v", changed.OpenCodeTelemetry)
 		}
 	}
@@ -315,7 +315,7 @@ func TestValidateWorkspaceExecutionResultAcceptsRejectedCorrectiveSourceHandle(t
 		Status: WorkspaceEvidenceHandlesAccepted, ObservedRangeCount: 2, AcceptedArtifactHandleCount: 1, AcceptedSourceHandleCount: 1,
 	}
 	result.OpenCodeTelemetry.FailureCode = "source_evidence_missing"
-	if _, err := ValidateWorkspaceExecutionResult(result, request, base.ArtifactRoot, base.SourceRoot); err != nil {
+	if _, err := ValidateWorkspaceExecutionResult(result, request, base.ArtifactRoot, base.SourcesRoot); err != nil {
 		t.Fatalf("failed corrective result was rejected: %v", err)
 	}
 }
@@ -327,11 +327,11 @@ func TestValidateWorkspaceExecutionResultAllowsPostModelGrace(t *testing.T) {
 	result.FailureReason = "source verification completed"
 	result.Analysis = nil
 	result.DurationMs = spec.Request.TimeoutSeconds*1000 + WorkspacePostModelGrace.Milliseconds()
-	if _, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourceRoot); err != nil {
+	if _, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourcesRoot); err != nil {
 		t.Fatalf("duration at post-model grace was rejected: %v", err)
 	}
 	result.DurationMs++
-	if _, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourceRoot); err == nil {
+	if _, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourcesRoot); err == nil {
 		t.Fatal("duration beyond post-model grace was accepted")
 	}
 }
@@ -342,7 +342,7 @@ func TestValidateWorkspaceExecutionResultPreservesPostModelValidation(t *testing
 	result.TerminalState = engineruntime.TerminalFailed
 	result.FailureReason = "source evidence unavailable"
 	result.Analysis = nil
-	validated, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourceRoot)
+	validated, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourcesRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,12 +352,12 @@ func TestValidateWorkspaceExecutionResultPreservesPostModelValidation(t *testing
 
 	result.ResultValidation = WorkspaceResultValidation{Status: WorkspaceResultRejected, Codes: []string{WorkspaceInvalidArtifactPath}}
 	result.FailureReason = WorkspaceResultRejectedReason
-	validated, err = ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourceRoot)
+	validated, err = ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourcesRoot)
 	if err != nil || validated.ResultValidation.Status != WorkspaceResultRejected {
 		t.Fatalf("validated=%+v err=%v", validated, err)
 	}
 	result.FailureReason = "private/model/path.log"
-	if _, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourceRoot); err == nil {
+	if _, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourcesRoot); err == nil {
 		t.Fatal("rejected result with non-generic failure reason was accepted")
 	}
 }

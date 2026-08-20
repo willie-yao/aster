@@ -105,7 +105,7 @@ func (r *AgentSandboxRuntime) sandboxWorkloadPodSpec(spec agentsandbox.Spec) map
 		manifestHash := spec.PreparedWorkspace.ManifestHash
 		requestEnv := analysisExecutionRequestChunkEnvironment(spec.Request)
 		container["volumeMounts"] = []any{
-			map[string]any{"name": "input", "mountPath": agentsandbox.StagedWorkspaceSourcePath, "subPath": manifestHash + "/" + agentanalysis.WorkspaceSourceDir, "readOnly": true},
+			map[string]any{"name": "input", "mountPath": agentsandbox.StagedWorkspaceSourcesPath, "subPath": manifestHash + "/" + agentanalysis.WorkspaceSourcesDir, "readOnly": true},
 			map[string]any{"name": "input", "mountPath": agentsandbox.StagedWorkspaceArtifactsPath, "subPath": manifestHash + "/" + agentanalysis.WorkspaceArtifactsDir, "readOnly": true},
 			map[string]any{"name": "request", "mountPath": agentanalysis.WorkspaceExecutionRequestRoot, "readOnly": true},
 			map[string]any{"name": "result", "mountPath": agentsandbox.StagedWorkspaceResultPath},

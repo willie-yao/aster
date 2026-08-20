@@ -498,12 +498,12 @@ func TestOpenCode1182TwoPhaseCompatibility(t *testing.T) {
 	}
 	wantHandles := []agentanalysis.WorkspaceEvidenceHandle{
 		{ID: "artifact-001", Root: agentanalysis.WorkspaceArtifactsDir, Path: "failure.log", LineStart: 1, LineEnd: 1},
-		{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, Path: "main.go", LineStart: 1, LineEnd: 1},
+		{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, SourceID: "primary", Path: "main.go", LineStart: 1, LineEnd: 1},
 	}
 	if !slices.Equal(result.EvidenceHandles, wantHandles) {
 		t.Fatalf("evidence handles=%+v want=%+v", result.EvidenceHandles, wantHandles)
 	}
-	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourceDir))
+	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir))
 }
 
 func TestOpenCode1182RequiredSourceCorrectionCompatibility(t *testing.T) {
@@ -588,7 +588,7 @@ func TestOpenCode1182RequiredSourceCorrectionCompatibility(t *testing.T) {
 	if result.Telemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceAccepted || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.SourceEvidenceCorrectionReason != agentanalysis.WorkspaceSourceToolSkipped || result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Telemetry.EvidencePhaseSteps != 4 || result.Telemetry.FinalizationPhaseSteps != 1 || result.Telemetry.StepsUsed != 5 || result.Usage.ModelRequests != 5 {
 		t.Fatalf("result=%+v", result)
 	}
-	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourceDir))
+	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir))
 }
 
 type syntheticOpenAIToolCall struct {
@@ -750,12 +750,12 @@ func TestOpenCode1182ResponsesTwoPhaseCompatibility(t *testing.T) {
 	}
 	wantHandles := []agentanalysis.WorkspaceEvidenceHandle{
 		{ID: "artifact-001", Root: agentanalysis.WorkspaceArtifactsDir, Path: "failure.log", LineStart: 1, LineEnd: 1},
-		{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, Path: "main.go", LineStart: 1, LineEnd: 1},
+		{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, SourceID: "primary", Path: "main.go", LineStart: 1, LineEnd: 1},
 	}
 	if !slices.Equal(result.EvidenceHandles, wantHandles) {
 		t.Fatalf("Responses evidence handles=%+v want=%+v", result.EvidenceHandles, wantHandles)
 	}
-	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourceDir))
+	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir))
 }
 
 type syntheticResponsesToolCall struct {
@@ -926,7 +926,7 @@ func compatibilityAnalysisJSON() []byte {
 }`)
 }
 
-func assertCompatibilityAnalysis(t *testing.T, result OpenCodeRunResult, artifactRoot, sourceRoot string) {
+func assertCompatibilityAnalysis(t *testing.T, result OpenCodeRunResult, artifactRoot, sourcesRoot string) {
 	t.Helper()
 	files, err := agentanalysis.SnapshotArtifactWorkspace(artifactRoot)
 	if err != nil {
@@ -940,7 +940,7 @@ func assertCompatibilityAnalysis(t *testing.T, result OpenCodeRunResult, artifac
 	if err != nil {
 		t.Fatal(err)
 	}
-	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(result.Structured), result.EvidenceHandles, manifest, artifactRoot, sourceRoot)
+	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(result.Structured), result.EvidenceHandles, manifest, artifactRoot, sourcesRoot)
 	if err != nil {
 		t.Fatal(err)
 	}

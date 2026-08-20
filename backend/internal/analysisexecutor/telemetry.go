@@ -414,15 +414,19 @@ func appendOpenCodeEvidenceRange(facts *openCodeEvidenceFacts, value agentanalys
 	facts.EvidenceRanges = append(facts.EvidenceRanges, value)
 }
 
-func openCodeEvidencePathIsSafe(facts *openCodeEvidenceFacts, workDir, root, relative, absolute string) bool {
+func openCodeEvidencePathIsSafe(facts *openCodeEvidenceFacts, workDir, root, sourceID, relative, absolute string) bool {
 	if facts.EvidencePathSafe == nil {
 		facts.EvidencePathSafe = map[string]bool{}
 	}
-	key := root + "\x00" + relative
+	key := root + "\x00" + sourceID + "\x00" + relative
 	if safe, ok := facts.EvidencePathSafe[key]; ok {
 		return safe
 	}
-	base, err := filepath.EvalSymlinks(filepath.Join(workDir, root))
+	base := filepath.Join(workDir, root)
+	if root == agentanalysis.WorkspaceSourceDir {
+		base = filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, sourceID)
+	}
+	base, err := filepath.EvalSymlinks(base)
 	if err != nil {
 		facts.EvidencePathSafe[key] = false
 		return false
@@ -497,7 +501,7 @@ func openCodeEvidenceToolRoot(tool string, raw json.RawMessage, workDir string) 
 	if tool == "grep" {
 		candidate = input.Path
 	}
-	root, _, _, ok := openCodeEvidenceLocation(workDir, candidate, true)
+	root, _, _, _, ok := openCodeEvidenceLocation(workDir, candidate, true)
 	if !ok {
 		return ""
 	}
@@ -528,12 +532,12 @@ func recordOpenCodeEvidenceTool(facts *openCodeEvidenceFacts, tool string, raw j
 			return nil
 		}
 	}
-	root, relative, absolute, ok := openCodeEvidenceLocation(workDir, candidate, true)
+	root, sourceID, relative, absolute, ok := openCodeEvidenceLocation(workDir, candidate, true)
 	if !ok {
 		recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangePathInvalid, 1, 1, false, true)
 		return nil
 	}
-	if !openCodeEvidencePathIsSafe(facts, workDir, root, relative, absolute) {
+	if !openCodeEvidencePathIsSafe(facts, workDir, root, sourceID, relative, absolute) {
 		recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangePathInvalid, 1, 1, false, true)
 		return nil
 	}
@@ -548,29 +552,29 @@ func recordOpenCodeEvidenceTool(facts *openCodeEvidenceFacts, tool string, raw j
 			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangeLineInvalid, 1, 1, false, false)
 			break
 		}
-		displayRoot, displayRelative, displayAbsolute, displayOK := openCodeEvidenceLocation(workDir, display.Path, false)
-		if !displayOK || displayRoot != root {
+		displayRoot, displaySourceID, displayRelative, displayAbsolute, displayOK := openCodeEvidenceLocation(workDir, display.Path, false)
+		if !displayOK || displayRoot != root || displaySourceID != sourceID {
 			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangePathInvalid, 1, 1, false, true)
 			break
 		}
-		if !openCodeEvidencePathIsSafe(facts, workDir, displayRoot, displayRelative, displayAbsolute) {
+		if !openCodeEvidencePathIsSafe(facts, workDir, displayRoot, displaySourceID, displayRelative, displayAbsolute) {
 			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangePathInvalid, 1, 1, false, true)
 			break
 		}
 		info, statErr := os.Stat(absolute)
 		if statErr != nil || !info.Mode().IsRegular() {
-			appendOpenCodeEvidenceRange(facts, agentanalysis.WorkspaceEvidenceRange{Root: root, Path: relative, LineStart: display.LineStart, LineEnd: display.LineEnd})
+			appendOpenCodeEvidenceRange(facts, agentanalysis.WorkspaceEvidenceRange{Root: root, SourceID: sourceID, Path: relative, LineStart: display.LineStart, LineEnd: display.LineEnd})
 			break
 		}
 		if !sameOpenCodeEvidenceFile(absolute, displayAbsolute) {
 			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangePathInvalid, 1, 1, false, true)
 			break
 		}
-		rangeValue := agentanalysis.WorkspaceEvidenceRange{Root: root, Path: displayRelative, LineStart: display.LineStart, LineEnd: display.LineEnd}
+		rangeValue := agentanalysis.WorkspaceEvidenceRange{Root: root, SourceID: sourceID, Path: displayRelative, LineStart: display.LineStart, LineEnd: display.LineEnd}
 		if facts.EvidenceReadRanges == nil {
 			facts.EvidenceReadRanges = map[string]bool{}
 		}
-		key := fmt.Sprintf("%s\x00%s\x00%d\x00%d", rangeValue.Root, rangeValue.Path, rangeValue.LineStart, rangeValue.LineEnd)
+		key := fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d", rangeValue.Root, rangeValue.SourceID, rangeValue.Path, rangeValue.LineStart, rangeValue.LineEnd)
 		facts.EvidenceReadCalls++
 		if facts.EvidenceReadRanges[key] {
 			facts.DuplicateReadCalls++
@@ -595,7 +599,7 @@ func recordOpenCodeEvidenceTool(facts *openCodeEvidenceFacts, tool string, raw j
 			recordOpenCodeEvidenceIssue(facts, agentanalysis.WorkspaceEvidenceRangeOverflow, 513, 513, true, false)
 			break
 		}
-		valid, invalid, rejected, parseErr := openCodeGrepEvidenceRanges(output, workDir, root, facts, facts.ParseDeadline, func(value agentanalysis.WorkspaceEvidenceRange) {
+		valid, invalid, rejected, parseErr := openCodeGrepEvidenceRanges(output, workDir, root, sourceID, facts, facts.ParseDeadline, func(value agentanalysis.WorkspaceEvidenceRange) {
 			appendOpenCodeEvidenceRange(facts, value)
 			if root == agentanalysis.WorkspaceSourceDir {
 				appendOpenCodeSourceRead(facts, tool, value)
@@ -632,14 +636,14 @@ func appendOpenCodeSourceRead(facts *openCodeEvidenceFacts, tool string, value a
 		}
 		return
 	}
-	facts.SourceReads = append(facts.SourceReads, agentanalysis.WorkspaceSourceReadTelemetry{Tool: tool, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd})
+	facts.SourceReads = append(facts.SourceReads, agentanalysis.WorkspaceSourceReadTelemetry{SourceID: value.SourceID, Tool: tool, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd})
 }
 
 func canonicalOpenCodeSourceReads(values []agentanalysis.WorkspaceSourceReadTelemetry) []agentanalysis.WorkspaceSourceReadTelemetry {
 	seen := map[string]bool{}
 	out := make([]agentanalysis.WorkspaceSourceReadTelemetry, 0, len(values))
 	for _, value := range values {
-		key := fmt.Sprintf("%s\x00%s\x00%d\x00%d", value.Tool, value.Path, value.LineStart, value.LineEnd)
+		key := fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d", value.SourceID, value.Tool, value.Path, value.LineStart, value.LineEnd)
 		if seen[key] {
 			continue
 		}
@@ -647,6 +651,9 @@ func canonicalOpenCodeSourceReads(values []agentanalysis.WorkspaceSourceReadTele
 		out = append(out, value)
 	}
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].SourceID != out[j].SourceID {
+			return out[i].SourceID < out[j].SourceID
+		}
 		if out[i].Path != out[j].Path {
 			return out[i].Path < out[j].Path
 		}
@@ -661,7 +668,7 @@ func canonicalOpenCodeSourceReads(values []agentanalysis.WorkspaceSourceReadTele
 	return out
 }
 
-func openCodeGrepEvidenceRanges(output, workDir, wantRoot string, facts *openCodeEvidenceFacts, deadline time.Time, retain func(agentanalysis.WorkspaceEvidenceRange)) (int, int, bool, error) {
+func openCodeGrepEvidenceRanges(output, workDir, wantRoot, wantSourceID string, facts *openCodeEvidenceFacts, deadline time.Time, retain func(agentanalysis.WorkspaceEvidenceRange)) (int, int, bool, error) {
 	currentPath := ""
 	valid := 0
 	invalid := 0
@@ -688,13 +695,13 @@ func openCodeGrepEvidenceRanges(output, workDir, wantRoot string, facts *openCod
 				continue
 			}
 			valid++
-			retain(agentanalysis.WorkspaceEvidenceRange{Root: wantRoot, Path: currentPath, LineStart: lineNumber, LineEnd: lineNumber})
+			retain(agentanalysis.WorkspaceEvidenceRange{Root: wantRoot, SourceID: wantSourceID, Path: currentPath, LineStart: lineNumber, LineEnd: lineNumber})
 			continue
 		}
 		if strings.HasSuffix(line, ":") && !strings.HasPrefix(line, " ") {
 			candidate := strings.TrimSuffix(line, ":")
-			root, relative, absolute, ok := openCodeEvidenceLocation(workDir, candidate, false)
-			if !ok || root != wantRoot || !openCodeEvidencePathIsSafe(facts, workDir, root, relative, absolute) {
+			root, sourceID, relative, absolute, ok := openCodeEvidenceLocation(workDir, candidate, false)
+			if !ok || root != wantRoot || sourceID != wantSourceID || !openCodeEvidencePathIsSafe(facts, workDir, root, sourceID, relative, absolute) {
 				return valid, invalid, true, nil
 			}
 			currentPath = relative
@@ -703,24 +710,36 @@ func openCodeGrepEvidenceRanges(output, workDir, wantRoot string, facts *openCod
 	return valid, invalid, false, nil
 }
 
-func openCodeEvidenceLocation(workDir, candidate string, allowDirectory bool) (string, string, string, bool) {
+func openCodeEvidenceLocation(workDir, candidate string, allowDirectory bool) (string, string, string, string, bool) {
 	candidate = strings.TrimSpace(candidate)
 	if candidate == "" {
-		return "", "", "", false
+		return "", "", "", "", false
 	}
 	if !filepath.IsAbs(candidate) {
 		candidate = filepath.Join(workDir, candidate)
 	}
 	candidate = filepath.Clean(candidate)
-	for _, root := range []string{agentanalysis.WorkspaceArtifactsDir, agentanalysis.WorkspaceSourceDir} {
-		base := filepath.Clean(filepath.Join(workDir, root))
-		relative, err := filepath.Rel(base, candidate)
-		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || relative == "." && !allowDirectory {
-			continue
-		}
-		return root, filepath.ToSlash(relative), candidate, true
+	artifactBase := filepath.Clean(filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir))
+	if relative, err := filepath.Rel(artifactBase, candidate); err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && (relative != "." || allowDirectory) {
+		return agentanalysis.WorkspaceArtifactsDir, "", filepath.ToSlash(relative), candidate, true
 	}
-	return "", "", "", false
+	sourcesBase := filepath.Clean(filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir))
+	relative, err := filepath.Rel(sourcesBase, candidate)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || relative == "." {
+		return "", "", "", "", false
+	}
+	parts := strings.Split(filepath.ToSlash(relative), "/")
+	if len(parts) < 1 || !agentanalysis.ValidWorkspaceSourceID(parts[0]) {
+		return "", "", "", "", false
+	}
+	repositoryRelative := strings.Join(parts[1:], "/")
+	if repositoryRelative == "" && !allowDirectory {
+		return "", "", "", "", false
+	}
+	if repositoryRelative == "" {
+		repositoryRelative = "."
+	}
+	return agentanalysis.WorkspaceSourceDir, parts[0], repositoryRelative, candidate, true
 }
 
 func sameOpenCodeEvidenceFile(left, right string) bool {

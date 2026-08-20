@@ -84,7 +84,7 @@ func TestProviderFreeEvidenceHandleScaleHarness(t *testing.T) {
 			})
 		case calls == providerFreeOverflowGreps+1:
 			writeSyntheticOpenAIStream(t, w, "read", map[string]any{
-				"filePath": filepath.ToSlash(filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir, sourcePath)), "offset": 1, "limit": 80,
+				"filePath": filepath.ToSlash(filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourcesDir, "primary", sourcePath)), "offset": 1, "limit": 80,
 			})
 		case calls == providerFreeOverflowGreps+2:
 			writeSyntheticOpenAIText(t, w, "Evidence inspected.")

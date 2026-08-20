@@ -1127,7 +1127,7 @@ func TestAgentSandboxPreparedWorkspaceUsesImmutableInputMounts(t *testing.T) {
 		t.Fatalf("mounts=%+v", mounts)
 	}
 	want := map[string]string{
-		agentsandbox.StagedWorkspaceSourcePath:    manifestHash + "/source",
+		agentsandbox.StagedWorkspaceSourcesPath:   manifestHash + "/sources",
 		agentsandbox.StagedWorkspaceArtifactsPath: manifestHash + "/artifacts",
 	}
 	for _, raw := range mounts {

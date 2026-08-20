@@ -126,7 +126,7 @@ func TestParseWorkspaceAnalysisValidatesCitationsAndMapsResult(t *testing.T) {
 	value["relevant_file_ids"] = []string{sourceID}
 	value["unresolved_details"] = []string{"The caller configuration is unavailable."}
 	data, _ := json.Marshal(value)
-	analysis, validation, err := ParseWorkspaceAnalysis(string(data), handles, manifest, artifactRoot, sourceRoot)
+	analysis, validation, err := ParseWorkspaceAnalysis(string(data), handles, manifest, artifactRoot, workspaceTestSourcesRoot(t, sourceRoot))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestParseWorkspaceAnalysisWarnsOnUngroundedEvidenceIDs(t *testing.T) {
 	handles := workspaceDefaultHandles(t, sourceRoot, artifactRoot)
 	for _, id := range []string{"artifact-999", workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 1)} {
 		raw := workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection(id)}, nil)
-		analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
+		analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, workspaceTestSourcesRoot(t, sourceRoot))
 		want := []string{WorkspaceInvalidArtifactCount, WorkspaceInvalidArtifactPath}
 		if err != nil || validation.Status != WorkspaceResultAcceptedWithWarnings || !slices.Equal(validation.Codes, want) || len(analysis.EvidenceCitations) != 0 {
 			t.Fatalf("evidence ID %q analysis=%+v validation=%+v err=%v", id, analysis, validation, err)
@@ -610,7 +610,7 @@ func TestParseWorkspaceAnalysisCanonicalizesExactRanges(t *testing.T) {
 	}
 	handles := workspaceTestHandles(t, sourceRoot, artifactRoot, WorkspaceEvidenceRange{Root: WorkspaceArtifactsDir, Path: "crlf.log", LineStart: 1, LineEnd: 2})
 	raw := workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection("artifact-001"), workspaceCitationSelection("artifact-002")}, nil)
-	analysis, _, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
+	analysis, _, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, workspaceTestSourcesRoot(t, sourceRoot))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -638,7 +638,7 @@ func TestParseWorkspaceAnalysisRejectsAdversarialCitations(t *testing.T) {
 	}
 	for name, raw := range tests {
 		t.Run(name, func(t *testing.T) {
-			if _, _, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot); err == nil {
+			if _, _, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, workspaceTestSourcesRoot(t, sourceRoot)); err == nil {
 				t.Fatal("adversarial result was accepted")
 			}
 		})
@@ -648,7 +648,7 @@ func TestParseWorkspaceAnalysisRejectsAdversarialCitations(t *testing.T) {
 		"wrong evidence root": workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection("source-001")}, nil),
 	} {
 		t.Run(name, func(t *testing.T) {
-			analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
+			analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, workspaceTestSourcesRoot(t, sourceRoot))
 			if err != nil || validation.Status != WorkspaceResultAcceptedWithWarnings || len(analysis.EvidenceCitations) != 0 {
 				t.Fatalf("analysis=%+v validation=%+v err=%v", analysis, validation, err)
 			}
@@ -668,12 +668,12 @@ func TestValidateWorkspaceAnalysisRejectsNonCanonicalQuote(t *testing.T) {
 	}
 	handles := workspaceDefaultHandles(t, sourceRoot, artifactRoot)
 	raw := workspaceModelAnalysisJSON(WorkspaceContractVersion, []any{workspaceCitationSelection(workspaceHandleID(t, handles, WorkspaceArtifactsDir, "logs/build.log", 2))}, nil)
-	analysis, _, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
+	analysis, _, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, workspaceTestSourcesRoot(t, sourceRoot))
 	if err != nil {
 		t.Fatal(err)
 	}
 	analysis.EvidenceCitations[0].Quote = "paraphrase"
-	if _, _, err := ValidateWorkspaceAnalysis(analysis, manifest, artifactRoot, sourceRoot); err == nil {
+	if _, _, err := ValidateWorkspaceAnalysis(analysis, manifest, artifactRoot, workspaceTestSourcesRoot(t, sourceRoot)); err == nil {
 		t.Fatal("non-canonical quote was accepted")
 	}
 }
@@ -709,15 +709,15 @@ func TestParseWorkspaceAnalysisDropsSourceSymlinkAliasOverlap(t *testing.T) {
 	}
 	handles := workspaceTestHandles(t, sourceRoot, artifactRoot,
 		WorkspaceEvidenceRange{Root: WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 2, LineEnd: 2},
-		WorkspaceEvidenceRange{Root: WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 1, LineEnd: 1},
-		WorkspaceEvidenceRange{Root: WorkspaceSourceDir, Path: "pkg/alias.go", LineStart: 1, LineEnd: 1},
+		WorkspaceEvidenceRange{Root: WorkspaceSourceDir, SourceID: "primary", Path: "pkg/controller.go", LineStart: 1, LineEnd: 1},
+		WorkspaceEvidenceRange{Root: WorkspaceSourceDir, SourceID: "primary", Path: "pkg/alias.go", LineStart: 1, LineEnd: 1},
 	)
 	evidence := []any{workspaceCitationSelection(workspaceHandleID(t, handles, WorkspaceArtifactsDir, "logs/build.log", 2))}
 	sourceCitations := []any{
 		workspaceCitationSelection(workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 1)),
 		workspaceCitationSelection(workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/alias.go", 1)),
 	}
-	analysis, validation, err := ParseWorkspaceAnalysis(workspaceModelAnalysisJSON(WorkspaceContractVersion, evidence, sourceCitations), handles, manifest, artifactRoot, sourceRoot)
+	analysis, validation, err := ParseWorkspaceAnalysis(workspaceModelAnalysisJSON(WorkspaceContractVersion, evidence, sourceCitations), handles, manifest, artifactRoot, workspaceTestSourcesRoot(t, sourceRoot))
 	if err != nil {
 		t.Fatal(err)
 	}

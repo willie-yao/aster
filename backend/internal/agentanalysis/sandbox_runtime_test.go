@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,7 +13,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/agentsandbox"
 	"github.com/willie-yao/aster/backend/internal/models"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
-	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 type fakeWorkspaceSandbox struct {
@@ -226,7 +227,7 @@ func workspaceSandboxFixture(t *testing.T) (*WorkspaceSandboxRuntime, WorkspaceS
 		t.Fatal(err)
 	}
 	runtime := &WorkspaceSandboxRuntime{Provider: gateway, Timeout: time.Minute, OutputLimitBytes: 128 << 10}
-	spec := WorkspaceSandboxSpec{Request: request, StageRequest: stage, SourceRoot: sourceRoot, ArtifactRoot: artifactRoot, ExecutionID: "analysis-1"}
+	spec := WorkspaceSandboxSpec{Request: request, StageRequest: stage, SourcesRoot: workspaceTestSourcesRoot(t, sourceRoot), ArtifactRoot: artifactRoot, ExecutionID: "analysis-1"}
 	return runtime, spec
 }
 
@@ -235,7 +236,7 @@ func validWorkspaceExecution(request WorkspaceExecutionRequest) WorkspaceExecuti
 		Summary: "The controller rejected the request.", RootCause: "The specific failure occurred before cleanup.", Severity: "High",
 		SuggestedFix: "Correct the request before retrying.", RelevantFiles: []string{"pkg/controller.go"},
 		EvidenceCitations: []models.EvidenceCitation{{Path: "logs/build.log", LineStart: 2, LineEnd: 2, Quote: "artifact-only-marker specific failure"}},
-		SourceCitations:   []sourceinvestigation.Citation{{Path: "pkg/controller.go", LineStart: 3, LineEnd: 3, Quote: "func reconcile() {}", Verified: true}},
+		SourceCitations:   []WorkspaceSourceCitation{{SourceID: "primary", Path: "pkg/controller.go", LineStart: 3, LineEnd: 3, Quote: "func reconcile() {}", Verified: true}},
 	}
 	return WorkspaceExecutionResult{
 		Version: WorkspaceResultVersion, ContractVersion: WorkspaceContractVersion, RequestHash: request.Hash,
@@ -245,5 +246,55 @@ func validWorkspaceExecution(request WorkspaceExecutionRequest) WorkspaceExecuti
 			EvidencePhaseCompleted: true, EvidencePhaseSteps: 1, EvidencePhaseRequests: 1, ArtifactEvidenceToolCalls: 1, SourceEvidenceToolCalls: 1,
 			FinalizationPhaseCompleted: true, FinalizationPhaseSteps: 1, FinalizationPhaseRequests: 1, StructuredOutputToolCalls: 1,
 		},
+	}
+}
+
+func TestWorkspaceSandboxRuntimeVerifiesEverySource(t *testing.T) {
+	runtime, spec := workspaceSandboxFixture(t)
+	primaryRoot := filepath.Join(spec.SourcesRoot, "primary")
+	dependencyRoot := filepath.Join(spec.SourcesRoot, "dependency")
+	if err := copyWorkspaceTestTree(primaryRoot, dependencyRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dependencyRoot, "pkg", "controller.go"), []byte("package dependency\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runWorkspaceGit(t, dependencyRoot, "add", "pkg/controller.go")
+	runWorkspaceGit(t, dependencyRoot, "commit", "-qm", "dependency revision")
+	dependencyRevision := strings.TrimSpace(runWorkspaceGit(t, dependencyRoot, "rev-parse", "HEAD"))
+	primary := spec.Request.Manifest.Sources[0]
+	_, err := NewWorkspaceManifestWithSources(spec.Request.Manifest.Request, []WorkspaceSourceRef{
+		{ID: "dependency", Repository: primary.Repository},
+		{ID: "primary", Repository: primary.Repository},
+	}, spec.Request.Manifest.ConsumerPrompt, spec.Request.Manifest.Artifacts)
+	if err == nil {
+		t.Fatal("duplicate source revisions were accepted")
+	}
+	dependency := primary.Repository
+	dependency.Revision = dependencyRevision
+	manifest, err := NewWorkspaceManifestWithSources(spec.Request.Manifest.Request, []WorkspaceSourceRef{
+		{ID: "dependency", Repository: dependency},
+		{ID: "primary", Repository: primary.Repository},
+	}, spec.Request.Manifest.ConsumerPrompt, spec.Request.Manifest.Artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec.Request, err = NewWorkspaceExecutionRequest(manifest, runtime.Provider, runtime.Timeout, 20, 200000, 8192, runtime.OutputLimitBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec.StageRequest, err = NewWorkspaceStageRequest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dependencyRoot, "pkg", "controller.go"), []byte("package changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime.Sandbox = fakeWorkspaceSandbox{run: func(agentsandbox.Spec) (agentsandbox.Result, error) {
+		t.Fatal("sandbox ran before every source was verified")
+		return agentsandbox.Result{}, nil
+	}}
+	if _, err := runtime.Analyze(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "verify workspace source dependency") {
+		t.Fatalf("error=%v", err)
 	}
 }

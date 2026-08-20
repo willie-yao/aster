@@ -53,7 +53,7 @@ func TestProviderFreeSourceIntegrityHarness(t *testing.T) {
 	revision := requiredHarnessEnv(t, "PROVIDER_FREE_SOURCE_REVISION")
 	modePolicy := agentanalysis.WorkspaceSourceModePolicy(requiredHarnessEnv(t, "PROVIDER_FREE_SOURCE_MODE_POLICY"))
 
-	sourceRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir)
+	sourceRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourcesDir, "primary")
 	artifactRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceArtifactsDir)
 	files, err := agentanalysis.SnapshotArtifactWorkspace(artifactRoot)
 	if err != nil {
@@ -79,9 +79,9 @@ func TestProviderFreeSourceIntegrityHarness(t *testing.T) {
 		case 1:
 			writeSyntheticOpenAIStream(t, w, "read", map[string]any{"filePath": filepath.ToSlash(filepath.Join(workspaceRoot, agentanalysis.WorkspaceArtifactsDir, artifactPath)), "offset": 1, "limit": 80})
 		case 2:
-			writeSyntheticOpenAIStream(t, w, "read", map[string]any{"filePath": filepath.ToSlash(filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir, expectedSource)), "offset": 630, "limit": 80})
+			writeSyntheticOpenAIStream(t, w, "read", map[string]any{"filePath": filepath.ToSlash(filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourcesDir, "primary", expectedSource)), "offset": 630, "limit": 80})
 		case 3:
-			writeSyntheticOpenAIStream(t, w, "grep", map[string]any{"pattern": grepPattern, "path": filepath.ToSlash(filepath.Dir(filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir, expectedSource))), "include": filepath.Base(expectedSource)})
+			writeSyntheticOpenAIStream(t, w, "grep", map[string]any{"pattern": grepPattern, "path": filepath.ToSlash(filepath.Dir(filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourcesDir, "primary", expectedSource))), "include": filepath.Base(expectedSource)})
 		case 4:
 			writeSyntheticOpenAIText(t, w, "Evidence inspected.")
 		case 5:

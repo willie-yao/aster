@@ -17,7 +17,7 @@ const (
 
 	StagedWorkspaceRoot          = "/workspace"
 	StagedWorkspaceInputPath     = "/input"
-	StagedWorkspaceSourcePath    = "/workspace/source"
+	StagedWorkspaceSourcesPath   = "/workspace/sources"
 	StagedWorkspaceArtifactsPath = "/workspace/artifacts"
 	StagedWorkspaceResultPath    = "/workspace/result"
 )

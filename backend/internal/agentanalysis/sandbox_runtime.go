@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,10 +24,21 @@ const (
 type WorkspaceSandboxSpec struct {
 	Request      WorkspaceExecutionRequest
 	StageRequest WorkspaceStageRequest
+	SourcesRoot  string
 	SourceRoot   string
 	ArtifactRoot string
 	ExecutionID  string
 	WorkObserver engineruntime.WorkObserver
+}
+
+func workspaceSandboxSourcesRoot(spec WorkspaceSandboxSpec) (string, error) {
+	if root := strings.TrimSpace(spec.SourcesRoot); root != "" {
+		return filepath.Clean(root), nil
+	}
+	if root := strings.TrimSpace(spec.SourceRoot); root != "" && len(spec.Request.Manifest.Sources) == 1 {
+		return filepath.Dir(filepath.Clean(root)), nil
+	}
+	return "", fmt.Errorf("workspace Sandbox sources root is required")
 }
 
 // WorkspaceSandboxResult combines one validated analysis with lifecycle facts.
@@ -77,8 +90,10 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 	if err := ValidateWorkspaceExecutionRequest(spec.Request); err != nil {
 		return result, err
 	}
-	if spec.Request.SourceModePolicy != r.sourceModePolicy() {
-		return result, fmt.Errorf("workspace analysis request does not match configured source mode policy")
+	for _, policy := range spec.Request.SourceModePolicies {
+		if policy.Policy != r.sourceModePolicy() {
+			return result, fmt.Errorf("workspace analysis request does not match configured source mode policy")
+		}
 	}
 	if spec.Request.ModelProvider != r.Provider || time.Duration(spec.Request.TimeoutSeconds)*time.Second != r.Timeout || spec.Request.OutputLimitBytes != r.OutputLimitBytes {
 		return result, fmt.Errorf("workspace analysis request does not match configured provider, timeout, or output limit")
@@ -86,13 +101,17 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 	if err := ValidateWorkspaceStageRequest(spec.StageRequest, spec.Request.Manifest); err != nil {
 		return result, err
 	}
-	if spec.StageRequest.OutputSourceModePolicy != spec.Request.SourceModePolicy {
+	if !slices.Equal(spec.StageRequest.OutputSourceModePolicies, spec.Request.SourceModePolicies) {
 		return result, fmt.Errorf("workspace stage output and execution source mode policies differ")
 	}
 	if spec.Request.InputMode == WorkspaceInputStaged && spec.StageRequest.InputMode != WorkspaceStageInputPVC {
 		return result, fmt.Errorf("workspace Sandbox staging requires PVC input")
 	}
-	if err := VerifyPreparedSourceWorkspace(ctx, spec.SourceRoot, spec.Request.Manifest.Source.Revision, spec.StageRequest.InputSourceModePolicy); err != nil {
+	sourcesRoot, err := workspaceSandboxSourcesRoot(spec)
+	if err != nil {
+		return result, err
+	}
+	if err := VerifyWorkspaceSources(ctx, sourcesRoot, spec.Request.Manifest.Sources, spec.StageRequest.InputSourceModePolicies); err != nil {
 		return result, err
 	}
 	if err := VerifyArtifactWorkspace(spec.ArtifactRoot, spec.Request.Manifest); err != nil {
@@ -143,7 +162,7 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 	if err != nil {
 		return result, errors.Join(fmt.Errorf("%w: workspace analysis result: %v", engineruntime.ErrMalformedResult, err), runErr)
 	}
-	parsed, err = ValidateWorkspaceExecutionResult(parsed, spec.Request, spec.ArtifactRoot, spec.SourceRoot)
+	parsed, err = ValidateWorkspaceExecutionResult(parsed, spec.Request, spec.ArtifactRoot, sourcesRoot)
 	if err != nil {
 		return result, errors.Join(fmt.Errorf("%w: workspace analysis result: %v", engineruntime.ErrResultContract, err), runErr)
 	}

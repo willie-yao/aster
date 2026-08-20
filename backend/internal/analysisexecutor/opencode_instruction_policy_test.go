@@ -28,7 +28,7 @@ func TestOpenCode1182InstructionPolicyCompatibility(t *testing.T) {
 		t.Skip("set OPENCODE_1_18_2_BIN to the exact patched OpenCode 1.18.2 executable")
 	}
 	workDir := t.TempDir()
-	sourceRoot := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+	sourceRoot := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary")
 	artifactRoot := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
 	for _, dir := range []string{
 		filepath.Join(sourceRoot, "nested", "deeper"),

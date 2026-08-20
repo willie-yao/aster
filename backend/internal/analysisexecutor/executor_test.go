@@ -173,7 +173,7 @@ func TestExecuteRejectsInvalidEngineEvidenceHandlesSeparately(t *testing.T) {
 
 func TestExecuteVerifiesReadOnlyPreparedSource(t *testing.T) {
 	root, request := executorTestFixture(t)
-	sourceRoot := filepath.Join(root, agentanalysis.WorkspaceSourceDir)
+	sourceRoot := filepath.Join(root, agentanalysis.WorkspaceSourcesDir, "primary")
 	restore := makeExecutorTreeReadOnly(t, sourceRoot)
 	defer restore()
 	result := Execute(t.Context(), request, Options{
@@ -208,13 +208,13 @@ func TestExecuteRejectsSourceMutation(t *testing.T) {
 	result := Execute(context.Background(), request, Options{
 		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
 		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
-			if err := os.WriteFile(filepath.Join(root, agentanalysis.WorkspaceSourceDir, "pkg", "controller.go"), []byte("package changed\n"), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(root, agentanalysis.WorkspaceSourcesDir, "primary", "pkg", "controller.go"), []byte("package changed\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			return testOpenCodeResult(), nil
 		},
 	})
-	if result.TerminalState != engineruntime.TerminalFailed || result.FailureReason != "workspace changed during analysis: "+agentanalysis.SourceWorktreeContentChanged || result.OpenCodeTelemetry.FailureCode != agentanalysis.SourceWorktreeContentChanged {
+	if result.TerminalState != engineruntime.TerminalFailed || result.FailureReason != "workspace changed during analysis: verify workspace source primary: "+agentanalysis.SourceWorktreeContentChanged || result.OpenCodeTelemetry.FailureCode != agentanalysis.SourceWorktreeContentChanged {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -224,13 +224,13 @@ func TestExecuteRejectsSourceModeMutation(t *testing.T) {
 	result := Execute(context.Background(), request, Options{
 		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
 		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
-			if err := os.Chmod(filepath.Join(root, agentanalysis.WorkspaceSourceDir, "pkg", "controller.go"), 0o700); err != nil {
+			if err := os.Chmod(filepath.Join(root, agentanalysis.WorkspaceSourcesDir, "primary", "pkg", "controller.go"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			return testOpenCodeResult(), nil
 		},
 	})
-	if result.TerminalState != engineruntime.TerminalFailed || result.FailureReason != "workspace changed during analysis: "+agentanalysis.SourceWorktreeModeChanged || result.OpenCodeTelemetry.FailureCode != agentanalysis.SourceWorktreeModeChanged {
+	if result.TerminalState != engineruntime.TerminalFailed || result.FailureReason != "workspace changed during analysis: verify workspace source primary: "+agentanalysis.SourceWorktreeModeChanged || result.OpenCodeTelemetry.FailureCode != agentanalysis.SourceWorktreeModeChanged {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -413,7 +413,7 @@ func TestWriteOpenCodeConfigSeparatesEvidenceAndFinalizationPermissions(t *testi
 		t.Fatalf("evidence permissions=%v", evidencePermissions)
 	}
 	read := evidencePermissions["read"].(map[string]any)
-	if read["*"] != "deny" || read["artifacts/*"] != "allow" || read["source/*"] != "allow" || read["*/artifacts/*"] != "allow" || read["*/source/*"] != "allow" || len(read) != 5 {
+	if read["*"] != "deny" || read["artifacts/*"] != "allow" || read["sources/*"] != "allow" || read["*/artifacts/*"] != "allow" || read["*/sources/*"] != "allow" || len(read) != 5 {
 		t.Fatalf("read permissions=%v", read)
 	}
 	bash := evidencePermissions["bash"].(map[string]any)
@@ -500,7 +500,7 @@ func TestWriteOpenCodeConfigReservesSourceCorrectionAgent(t *testing.T) {
 	}
 	permissions := source["permission"].(map[string]any)
 	read := permissions["read"].(map[string]any)
-	if permissions["*"] != "deny" || permissions["grep"] != "allow" || permissions["StructuredOutput"] != "deny" || permissions["glob"] != "deny" || read["*"] != "deny" || read["source/*"] != "allow" || read["*/source/*"] != "allow" || len(read) != 3 {
+	if permissions["*"] != "deny" || permissions["grep"] != "allow" || permissions["StructuredOutput"] != "deny" || permissions["glob"] != "deny" || read["*"] != "deny" || read["sources/*"] != "allow" || read["*/sources/*"] != "allow" || len(read) != 3 {
 		t.Fatalf("source permissions=%v", permissions)
 	}
 	for _, denied := range []string{"bash", "edit", "write", "apply_patch", "webfetch", "websearch", "task", "skill", "external_directory"} {
@@ -513,7 +513,7 @@ func TestWriteOpenCodeConfigReservesSourceCorrectionAgent(t *testing.T) {
 func executorTestFixture(t *testing.T) (string, agentanalysis.WorkspaceExecutionRequest) {
 	t.Helper()
 	root := t.TempDir()
-	sourceRoot := filepath.Join(root, agentanalysis.WorkspaceSourceDir)
+	sourceRoot := filepath.Join(root, agentanalysis.WorkspaceSourcesDir, "primary")
 	artifactRoot := filepath.Join(root, agentanalysis.WorkspaceArtifactsDir)
 	if err := os.MkdirAll(filepath.Join(sourceRoot, "pkg"), 0o700); err != nil {
 		t.Fatal(err)
@@ -562,9 +562,9 @@ func testOpenCodeResult() OpenCodeRunResult {
 			{ID: "artifact-001", Root: agentanalysis.WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 1, LineEnd: 1},
 			{ID: "artifact-002", Root: agentanalysis.WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 2, LineEnd: 2},
 			{ID: "artifact-003", Root: agentanalysis.WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 3, LineEnd: 3},
-			{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 1, LineEnd: 1},
-			{ID: "source-002", Root: agentanalysis.WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 2, LineEnd: 2},
-			{ID: "source-003", Root: agentanalysis.WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 3, LineEnd: 3},
+			{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, SourceID: "primary", Path: "pkg/controller.go", LineStart: 1, LineEnd: 1},
+			{ID: "source-002", Root: agentanalysis.WorkspaceSourceDir, SourceID: "primary", Path: "pkg/controller.go", LineStart: 2, LineEnd: 2},
+			{ID: "source-003", Root: agentanalysis.WorkspaceSourceDir, SourceID: "primary", Path: "pkg/controller.go", LineStart: 3, LineEnd: 3},
 		},
 		Usage: agentanalysis.WorkspaceUsage{Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable, ModelRequests: 2, InputTokens: 10, OutputTokens: 5, CostAvailable: true, CostUSD: "0.01000000"},
 		Telemetry: agentanalysis.WorkspaceOpenCodeTelemetry{
@@ -578,7 +578,7 @@ func testOpenCodeResult() OpenCodeRunResult {
 func executorAnalysisJSON() []byte {
 	return []byte(`{
   "version": 1,
-  "contract_version": "agent-analysis-workspace-v8",
+  "contract_version": "agent-analysis-workspace-v9",
   "summary": "The controller rejected the request.",
   "is_transient": false,
   "root_cause": "The specific failure occurred before cleanup.",
@@ -659,12 +659,12 @@ func TestOpenCodeFailureCodePrefersContextLimit(t *testing.T) {
 
 func TestVerifyPreparedMountInfoRequiresExactReadOnlyManifestPaths(t *testing.T) {
 	hash := strings.Repeat("a", 64)
-	valid := "36 25 0:32 /" + hash + "/source /workspace/source ro,relatime - ext4 /dev/sda ro\n" +
+	valid := "36 25 0:32 /" + hash + "/sources /workspace/sources ro,relatime - ext4 /dev/sda ro\n" +
 		"37 25 0:32 /" + hash + "/artifacts /workspace/artifacts ro,relatime - ext4 /dev/sda ro\n"
 	if err := verifyPreparedMountInfo(valid, "/workspace", hash); err != nil {
 		t.Fatal(err)
 	}
-	kata := "129 120 0:40 / /workspace/source ro,relatime - virtiofs none rw\n" +
+	kata := "129 120 0:40 / /workspace/sources ro,relatime - virtiofs none rw\n" +
 		"131 120 0:41 / /workspace/artifacts ro,relatime - virtiofs none rw\n"
 	if err := verifyPreparedMountInfo(kata, "/workspace", hash); err != nil {
 		t.Fatal(err)
@@ -835,7 +835,7 @@ func TestExecuteGenericFailureLowerBoundSatisfiesResultContract(t *testing.T) {
 	if result.TerminalState != engineruntime.TerminalFailed || result.OpenCodeTelemetry.FailureCode != "http_error" || result.OpenCodeTelemetry.Error.Available || result.OpenCodeTelemetry.ProviderRequestsKnown {
 		t.Fatalf("result=%+v", result)
 	}
-	validated, err := agentanalysis.ValidateWorkspaceExecutionResult(result, request, filepath.Join(root, agentanalysis.WorkspaceArtifactsDir), filepath.Join(root, agentanalysis.WorkspaceSourceDir))
+	validated, err := agentanalysis.ValidateWorkspaceExecutionResult(result, request, filepath.Join(root, agentanalysis.WorkspaceArtifactsDir), filepath.Join(root, agentanalysis.WorkspaceSourcesDir, "primary"))
 	if err != nil {
 		t.Fatalf("generic lower-bound result failed validation: %v", err)
 	}
@@ -968,13 +968,14 @@ func TestRecoverableOpenCodeEvidenceExhaustion(t *testing.T) {
 
 func TestRunOpenCodePhasesFinalizesAfterBoundedEvidenceExhaustion(t *testing.T) {
 	workDir := t.TempDir()
-	for _, dir := range []string{agentanalysis.WorkspaceSourceDir, agentanalysis.WorkspaceArtifactsDir} {
-		if err := os.Mkdir(filepath.Join(workDir, dir), 0o700); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), 0o700); err != nil {
+		t.Fatal(err)
 	}
 	artifactPath := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir, "failure.log")
-	sourcePath := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir, "main.go")
+	sourcePath := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary", "main.go")
 	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1044,13 +1045,14 @@ func TestRunOpenCodePhasesFinalizesAfterBoundedEvidenceExhaustion(t *testing.T) 
 
 func TestRunOpenCodePhasesUsesOneSessionAndGatesFinalization(t *testing.T) {
 	workDir := t.TempDir()
-	for _, dir := range []string{agentanalysis.WorkspaceSourceDir, agentanalysis.WorkspaceArtifactsDir} {
-		if err := os.Mkdir(filepath.Join(workDir, dir), 0o700); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), 0o700); err != nil {
+		t.Fatal(err)
 	}
 	artifactPath := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir, "failure.log")
-	sourcePath := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir, "main.go")
+	sourcePath := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary", "main.go")
 	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1126,7 +1128,7 @@ func TestRunOpenCodePhasesArtifactOnlySkipsSourceCorrection(t *testing.T) {
 	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourceDir), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	artifactPath := filepath.Join(artifactDir, "failure.log")
@@ -1175,7 +1177,7 @@ func TestRunOpenCodePhasesArtifactOnlySkipsSourceCorrection(t *testing.T) {
 func TestRunOpenCodePhasesInterceptsArtifactOnlyFinalizationForSourceEvidence(t *testing.T) {
 	workDir := t.TempDir()
 	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
-	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary")
 	for _, dir := range []string{artifactDir, sourceDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
@@ -1275,7 +1277,7 @@ func TestRunOpenCodePhasesRejectsUnusableCorrectiveSourceEvidence(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			workDir := t.TempDir()
 			artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
-			sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+			sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary")
 			for _, dir := range []string{artifactDir, sourceDir} {
 				if err := os.MkdirAll(dir, 0o700); err != nil {
 					t.Fatal(err)
@@ -1327,7 +1329,7 @@ func TestRunOpenCodePhasesRejectsUnusableCorrectiveSourceEvidence(t *testing.T) 
 func TestRunOpenCodePhasesRejectsArtifactAccessDuringSourceCorrection(t *testing.T) {
 	workDir := t.TempDir()
 	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
-	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary")
 	for _, dir := range []string{artifactDir, sourceDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
@@ -1384,7 +1386,7 @@ func TestRunOpenCodePhasesPreservesCorrectionTelemetryWhenTranscriptUnavailable(
 			if err := os.MkdirAll(artifactDir, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourceDir), 0o700); err != nil {
+			if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			artifactPath := filepath.Join(artifactDir, "failure.log")
@@ -1423,7 +1425,7 @@ func TestRunOpenCodePhasesBoundsSourceCorrectionToOneTurn(t *testing.T) {
 	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourceDir), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	artifactPath := filepath.Join(artifactDir, "failure.log")
@@ -1543,7 +1545,7 @@ func TestRunOpenCodePhasesPreservesPromptErrorWhenFinalTranscriptMalformed(t *te
 
 func TestRunOpenCodePhasesStopsBeforeFinalizationWithoutArtifactEvidence(t *testing.T) {
 	workDir := t.TempDir()
-	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary")
 	if err := os.MkdirAll(sourceDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -2109,4 +2111,45 @@ func readOpenCodeProviderOptions(t *testing.T, home string) map[string]any {
 		t.Fatalf("provider options missing: %s", data)
 	}
 	return options
+}
+
+func TestExecuteRejectsSecondarySourceMutation(t *testing.T) {
+	root, base := executorTestFixture(t)
+	dependencyRoot := filepath.Join(root, agentanalysis.WorkspaceSourcesDir, "dependency")
+	if err := os.MkdirAll(filepath.Join(dependencyRoot, "pkg"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dependencyRoot, "pkg", "controller.go"), []byte("package dependency\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runExecutorGit(t, dependencyRoot, "init", "-q")
+	runExecutorGit(t, dependencyRoot, "config", "user.name", "Test")
+	runExecutorGit(t, dependencyRoot, "config", "user.email", "test@example.com")
+	runExecutorGit(t, dependencyRoot, "config", "commit.gpgsign", "false")
+	runExecutorGit(t, dependencyRoot, "add", ".")
+	runExecutorGit(t, dependencyRoot, "commit", "-qm", "dependency fixture")
+	dependencyRevision := strings.TrimSpace(runExecutorGit(t, dependencyRoot, "rev-parse", "HEAD"))
+	manifest, err := agentanalysis.NewWorkspaceManifestWithSources(base.Manifest.Request, []agentanalysis.WorkspaceSourceRef{
+		{ID: "dependency", Repository: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: dependencyRevision}},
+		{ID: "primary", Repository: base.Manifest.Sources[0].Repository},
+	}, base.Manifest.ConsumerPrompt, base.Manifest.Artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := agentanalysis.NewWorkspaceExecutionRequest(manifest, base.ModelProvider, time.Duration(base.TimeoutSeconds)*time.Second, base.MaxSteps, base.ModelContextTokens, base.ModelOutputTokens, base.OutputLimitBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
+			if err := os.WriteFile(filepath.Join(dependencyRoot, "pkg", "controller.go"), []byte("package changed\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return testOpenCodeResult(), nil
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalFailed || result.OpenCodeTelemetry.FailureCode != agentanalysis.SourceWorktreeContentChanged || !strings.Contains(result.FailureReason, "verify workspace source dependency") {
+		t.Fatalf("result=%+v", result)
+	}
 }

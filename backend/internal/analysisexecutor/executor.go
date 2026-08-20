@@ -108,7 +108,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		workspaceRoot = defaultWorkspaceRoot
 	}
 	workspaceRoot = filepath.Clean(workspaceRoot)
-	sourceRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir)
+	sourcesRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourcesDir)
 	artifactRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceArtifactsDir)
 	resultRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceResultDir)
 	mountVerifier := opts.MountVerifier
@@ -121,7 +121,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	if err := prepareResultRoot(resultRoot); err != nil {
 		return fail(engineruntime.TerminalFailed, err.Error())
 	}
-	if err := verifyInputs(ctx, request, sourceRoot, artifactRoot); err != nil {
+	if err := verifyInputs(ctx, request, sourcesRoot, artifactRoot); err != nil {
 		recordSourceIntegrityFailure(&result, err)
 		return fail(stateForContext(ctx), err.Error())
 	}
@@ -191,7 +191,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		}
 		return fail(stateForContext(ctx), fmt.Sprintf("run OpenCode analyzer: %v", ctx.Err()))
 	}
-	if err := verifyInputsBounded(request, sourceRoot, artifactRoot); err != nil {
+	if err := verifyInputsBounded(request, sourcesRoot, artifactRoot); err != nil {
 		recordSourceIntegrityFailure(&result, err)
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("workspace changed during analysis: %v", err))
 	}
@@ -201,7 +201,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		}
 		return fail(stateForContext(ctx), fmt.Sprintf("run OpenCode analyzer: %v", runErr))
 	}
-	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(runResult.Structured), runResult.EvidenceHandles, request.Manifest, artifactRoot, sourceRoot)
+	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(runResult.Structured), runResult.EvidenceHandles, request.Manifest, artifactRoot, sourcesRoot)
 	result.ResultValidation = validation
 	if err != nil {
 		if validation.Status == agentanalysis.WorkspaceResultRejected {
@@ -223,7 +223,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	if err := mountVerifier(workspaceRoot, request.Manifest.Hash); err != nil {
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("prepared mounts changed during result canonicalization: %v", err))
 	}
-	if err := verifyInputsBounded(request, sourceRoot, artifactRoot); err != nil {
+	if err := verifyInputsBounded(request, sourcesRoot, artifactRoot); err != nil {
 		recordSourceIntegrityFailure(&result, err)
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("workspace changed during result canonicalization: %v", err))
 	}
@@ -248,7 +248,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		result.OpenCodeTelemetry.FailureCode = "credential_exposure"
 		return fail(engineruntime.TerminalFailed, err.Error())
 	}
-	validated, err := agentanalysis.ValidateWorkspaceExecutionResult(result, request, artifactRoot, sourceRoot)
+	validated, err := agentanalysis.ValidateWorkspaceExecutionResult(result, request, artifactRoot, sourcesRoot)
 	if err != nil {
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("validate analyzer result: %v", err))
 	}
@@ -261,17 +261,17 @@ func recordSourceIntegrityFailure(result *agentanalysis.WorkspaceExecutionResult
 	}
 }
 
-func verifyInputs(ctx context.Context, request agentanalysis.WorkspaceExecutionRequest, sourceRoot, artifactRoot string) error {
-	if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceRoot, request.Manifest.Source.Revision, request.SourceModePolicy); err != nil {
+func verifyInputs(ctx context.Context, request agentanalysis.WorkspaceExecutionRequest, sourcesRoot, artifactRoot string) error {
+	if err := agentanalysis.VerifyWorkspaceSources(ctx, sourcesRoot, request.Manifest.Sources, request.SourceModePolicies); err != nil {
 		return err
 	}
 	return agentanalysis.VerifyArtifactWorkspace(artifactRoot, request.Manifest)
 }
 
-func verifyInputsBounded(request agentanalysis.WorkspaceExecutionRequest, sourceRoot, artifactRoot string) error {
+func verifyInputsBounded(request agentanalysis.WorkspaceExecutionRequest, sourcesRoot, artifactRoot string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), agentanalysis.WorkspaceSourceVerificationTimeout)
 	defer cancel()
-	return verifyInputs(ctx, request, sourceRoot, artifactRoot)
+	return verifyInputs(ctx, request, sourcesRoot, artifactRoot)
 }
 
 func writeCanonicalResult(root string, data []byte, limit int64) error {
@@ -1166,7 +1166,7 @@ func verifyPreparedMounts(workspaceRoot, manifestHash string) error {
 
 func verifyPreparedMountInfo(raw, workspaceRoot, manifestHash string) error {
 	expected := map[string]string{
-		filepath.Clean(filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir)):    "/" + manifestHash + "/source",
+		filepath.Clean(filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourcesDir)):   "/" + manifestHash + "/sources",
 		filepath.Clean(filepath.Join(workspaceRoot, agentanalysis.WorkspaceArtifactsDir)): "/" + manifestHash + "/artifacts",
 	}
 	seen := map[string]bool{}
@@ -1237,7 +1237,7 @@ func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps, c
 	evidencePermissions := map[string]any{
 		"*": "deny",
 		"read": map[string]any{
-			"*": "deny", "artifacts/*": "allow", "source/*": "allow", "*/artifacts/*": "allow", "*/source/*": "allow",
+			"*": "deny", "artifacts/*": "allow", "sources/*": "allow", "*/artifacts/*": "allow", "*/sources/*": "allow",
 		},
 		"glob": "allow", "grep": "allow",
 		"bash": map[string]any{
@@ -1272,7 +1272,7 @@ func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps, c
 		sourceEvidencePermissions := map[string]any{
 			"*": "deny",
 			"read": map[string]any{
-				"*": "deny", "source/*": "allow", "*/source/*": "allow",
+				"*": "deny", "sources/*": "allow", "*/sources/*": "allow",
 			},
 			"grep": "allow", "StructuredOutput": "deny",
 			"glob": "deny", "bash": "deny", "edit": "deny", "write": "deny", "apply_patch": "deny",

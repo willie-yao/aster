@@ -19,7 +19,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/models"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
-	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 //go:embed skill/workspace-analysis.md
@@ -50,17 +49,27 @@ func WorkspaceSourceEvidenceAgentPrompt() string {
 // WorkspaceFinalizerPrompt returns the static StructuredOutput-only guidance.
 func WorkspaceFinalizerPrompt() string { return strings.TrimSpace(workspaceAnalysisFinalizer) }
 
+// WorkspaceSourceCitation is one verified private citation tied to an immutable source.
+type WorkspaceSourceCitation struct {
+	SourceID  string `json:"source_id"`
+	Path      string `json:"path"`
+	LineStart int    `json:"line_start"`
+	LineEnd   int    `json:"line_end"`
+	Quote     string `json:"quote"`
+	Verified  bool   `json:"verified"`
+}
+
 // WorkspaceAnalysis is one validated file-backed OpenCode result.
 type WorkspaceAnalysis struct {
-	Summary           string                         `json:"summary"`
-	IsTransient       bool                           `json:"is_transient"`
-	RootCause         string                         `json:"root_cause"`
-	Severity          string                         `json:"severity"`
-	SuggestedFix      string                         `json:"suggested_fix"`
-	RelevantFiles     []string                       `json:"relevant_files,omitempty"`
-	EvidenceCitations []models.EvidenceCitation      `json:"evidence_citations"`
-	SourceCitations   []sourceinvestigation.Citation `json:"source_citations,omitempty"`
-	UnresolvedDetails []string                       `json:"unresolved_details,omitempty"`
+	Summary           string                    `json:"summary"`
+	IsTransient       bool                      `json:"is_transient"`
+	RootCause         string                    `json:"root_cause"`
+	Severity          string                    `json:"severity"`
+	SuggestedFix      string                    `json:"suggested_fix"`
+	RelevantFiles     []string                  `json:"relevant_files,omitempty"`
+	EvidenceCitations []models.EvidenceCitation `json:"evidence_citations"`
+	SourceCitations   []WorkspaceSourceCitation `json:"source_citations,omitempty"`
+	UnresolvedDetails []string                  `json:"unresolved_details,omitempty"`
 }
 
 const (
@@ -104,6 +113,7 @@ type WorkspaceToolTelemetry struct {
 
 // WorkspaceSourceReadTelemetry is one content-free successful source read.
 type WorkspaceSourceReadTelemetry struct {
+	SourceID  string `json:"source_id"`
 	Tool      string `json:"tool"`
 	Path      string `json:"path"`
 	LineStart int    `json:"line_start"`
@@ -271,7 +281,7 @@ func WorkspaceResultSchemaHash() string {
 }
 
 // ParseWorkspaceAnalysis validates one schema-constrained result against mounted files.
-func ParseWorkspaceAnalysis(raw string, handles []WorkspaceEvidenceHandle, manifest WorkspaceManifest, artifactRoot, sourceRoot string) (WorkspaceAnalysis, WorkspaceResultValidation, error) {
+func ParseWorkspaceAnalysis(raw string, handles []WorkspaceEvidenceHandle, manifest WorkspaceManifest, artifactRoot, sourcesRoot string) (WorkspaceAnalysis, WorkspaceResultValidation, error) {
 	if err := ValidateWorkspaceManifest(manifest); err != nil {
 		return WorkspaceAnalysis{}, WorkspaceResultValidation{}, err
 	}
@@ -330,11 +340,11 @@ func ParseWorkspaceAnalysis(raw string, handles []WorkspaceEvidenceHandle, manif
 			warnings[WorkspaceInvalidSourcePath] = true
 			continue
 		}
-		analysis.SourceCitations = append(analysis.SourceCitations, sourceinvestigation.Citation{Path: handle.Path, LineStart: handle.LineStart, LineEnd: handle.LineEnd})
+		analysis.SourceCitations = append(analysis.SourceCitations, WorkspaceSourceCitation{SourceID: handle.SourceID, Path: handle.Path, LineStart: handle.LineStart, LineEnd: handle.LineEnd})
 	}
 	for _, id := range parsed.RelevantFileIDs {
 		handle, ok := handlesByID[id]
-		if !ok || handle.Root != WorkspaceSourceDir {
+		if !ok || handle.Root != WorkspaceSourceDir || handle.SourceID != "primary" {
 			warnings[WorkspaceInvalidRelevantFile] = true
 			continue
 		}
@@ -343,19 +353,19 @@ func ParseWorkspaceAnalysis(raw string, handles []WorkspaceEvidenceHandle, manif
 	if (len(parsed.SourceEvidenceIDs) > 0 || len(parsed.RelevantFileIDs) > 0) && len(analysis.SourceCitations) == 0 {
 		warnings[WorkspaceInvalidSourcePath] = true
 	}
-	return canonicalizeWorkspaceAnalysisWithWarnings(analysis, manifest, artifactRoot, sourceRoot, false, warnings)
+	return canonicalizeWorkspaceAnalysisWithWarnings(analysis, manifest, artifactRoot, sourcesRoot, false, warnings)
 }
 
 // ValidateWorkspaceAnalysis rechecks canonical output against the sealed workspace.
-func ValidateWorkspaceAnalysis(analysis WorkspaceAnalysis, manifest WorkspaceManifest, artifactRoot, sourceRoot string) (WorkspaceAnalysis, WorkspaceResultValidation, error) {
-	return canonicalizeWorkspaceAnalysis(analysis, manifest, artifactRoot, sourceRoot, true)
+func ValidateWorkspaceAnalysis(analysis WorkspaceAnalysis, manifest WorkspaceManifest, artifactRoot, sourcesRoot string) (WorkspaceAnalysis, WorkspaceResultValidation, error) {
+	return canonicalizeWorkspaceAnalysis(analysis, manifest, artifactRoot, sourcesRoot, true)
 }
 
-func canonicalizeWorkspaceAnalysis(analysis WorkspaceAnalysis, manifest WorkspaceManifest, artifactRoot, sourceRoot string, requireCanonical bool) (WorkspaceAnalysis, WorkspaceResultValidation, error) {
-	return canonicalizeWorkspaceAnalysisWithWarnings(analysis, manifest, artifactRoot, sourceRoot, requireCanonical, map[string]bool{})
+func canonicalizeWorkspaceAnalysis(analysis WorkspaceAnalysis, manifest WorkspaceManifest, artifactRoot, sourcesRoot string, requireCanonical bool) (WorkspaceAnalysis, WorkspaceResultValidation, error) {
+	return canonicalizeWorkspaceAnalysisWithWarnings(analysis, manifest, artifactRoot, sourcesRoot, requireCanonical, map[string]bool{})
 }
 
-func canonicalizeWorkspaceAnalysisWithWarnings(analysis WorkspaceAnalysis, manifest WorkspaceManifest, artifactRoot, sourceRoot string, requireCanonical bool, warnings map[string]bool) (WorkspaceAnalysis, WorkspaceResultValidation, error) {
+func canonicalizeWorkspaceAnalysisWithWarnings(analysis WorkspaceAnalysis, manifest WorkspaceManifest, artifactRoot, sourcesRoot string, requireCanonical bool, warnings map[string]bool) (WorkspaceAnalysis, WorkspaceResultValidation, error) {
 	if err := ValidateWorkspaceManifest(manifest); err != nil {
 		return WorkspaceAnalysis{}, WorkspaceResultValidation{}, err
 	}
@@ -368,11 +378,11 @@ func canonicalizeWorkspaceAnalysisWithWarnings(analysis WorkspaceAnalysis, manif
 	if err != nil {
 		return WorkspaceAnalysis{}, rejectedWorkspaceResult(err), err
 	}
-	analysis.SourceCitations, err = verifyWorkspaceSourceCitations(analysis.SourceCitations, sourceRoot, requireCanonical, warnings)
+	analysis.SourceCitations, err = verifyWorkspaceSourceCitations(analysis.SourceCitations, manifest, sourcesRoot, requireCanonical, warnings)
 	if err != nil {
 		return WorkspaceAnalysis{}, rejectedWorkspaceResult(err), err
 	}
-	analysis.RelevantFiles, err = workspaceRelevantFiles(analysis.RelevantFiles, analysis.SourceCitations, sourceRoot, warnings)
+	analysis.RelevantFiles, err = workspaceRelevantFiles(analysis.RelevantFiles, analysis.SourceCitations, sourcesRoot, warnings)
 	if err != nil {
 		return WorkspaceAnalysis{}, rejectedWorkspaceResult(err), err
 	}
@@ -424,6 +434,24 @@ func MarshalWorkspaceAnalysis(analysis WorkspaceAnalysis) ([]byte, error) {
 	return json.Marshal(envelope)
 }
 
+// VerifyWorkspaceSources verifies every immutable source and its sealed mode policy.
+func VerifyWorkspaceSources(ctx context.Context, sourcesRoot string, sources []WorkspaceSourceRef, policies []WorkspaceSourceMode) error {
+	if len(sources) < 1 || len(sources) > WorkspaceMaxSources {
+		return fmt.Errorf("workspace source catalog is invalid")
+	}
+	for _, source := range sources {
+		policy, ok := WorkspaceSourceModeFor(policies, source.ID)
+		if !ok {
+			return fmt.Errorf("workspace source %s mode policy is unavailable", source.ID)
+		}
+		root := filepath.Join(sourcesRoot, source.ID)
+		if err := VerifyPreparedSourceWorkspace(ctx, root, source.Repository.Revision, policy); err != nil {
+			return fmt.Errorf("verify workspace source %s: %w", source.ID, err)
+		}
+	}
+	return nil
+}
+
 // DecodeWorkspaceExecutionResult decodes one strict executor log result.
 func DecodeWorkspaceExecutionResult(raw string) (WorkspaceExecutionResult, error) {
 	raw = strings.TrimSpace(raw)
@@ -446,7 +474,7 @@ func DecodeWorkspaceExecutionResult(raw string) (WorkspaceExecutionResult, error
 }
 
 // ValidateWorkspaceExecutionResult validates identity, lifecycle, and citations.
-func ValidateWorkspaceExecutionResult(result WorkspaceExecutionResult, request WorkspaceExecutionRequest, artifactRoot, sourceRoot string) (WorkspaceExecutionResult, error) {
+func ValidateWorkspaceExecutionResult(result WorkspaceExecutionResult, request WorkspaceExecutionRequest, artifactRoot, sourcesRoot string) (WorkspaceExecutionResult, error) {
 	if err := ValidateWorkspaceExecutionRequest(request); err != nil {
 		return result, err
 	}
@@ -462,6 +490,11 @@ func ValidateWorkspaceExecutionResult(result WorkspaceExecutionResult, request W
 	if err := validateWorkspaceOpenCodeTelemetry(result.OpenCodeTelemetry); err != nil {
 		return result, err
 	}
+	for _, read := range result.OpenCodeTelemetry.SourceReads {
+		if _, ok := WorkspaceSource(request.Manifest.Sources, read.SourceID); !ok {
+			return result, fmt.Errorf("workspace OpenCode source read references an unknown source")
+		}
+	}
 	switch result.TerminalState {
 	case engineruntime.TerminalSucceeded:
 		if strings.TrimSpace(result.FailureReason) != "" || result.Analysis == nil {
@@ -473,13 +506,13 @@ func ValidateWorkspaceExecutionResult(result WorkspaceExecutionResult, request W
 		if !result.OpenCodeTelemetry.EvidencePhaseCompleted || !result.OpenCodeTelemetry.FinalizationPhaseCompleted || result.OpenCodeTelemetry.ArtifactEvidenceToolCalls < 1 || result.OpenCodeTelemetry.StructuredOutputToolCalls != 1 {
 			return result, fmt.Errorf("successful workspace execution is missing required phase telemetry")
 		}
-		if err := VerifyPreparedSourceWorkspace(context.Background(), sourceRoot, request.Manifest.Source.Revision, request.SourceModePolicy); err != nil {
+		if err := VerifyWorkspaceSources(context.Background(), sourcesRoot, request.Manifest.Sources, request.SourceModePolicies); err != nil {
 			return result, err
 		}
 		if err := VerifyArtifactWorkspace(artifactRoot, request.Manifest); err != nil {
 			return result, err
 		}
-		analysis, validation, err := ValidateWorkspaceAnalysis(*result.Analysis, request.Manifest, artifactRoot, sourceRoot)
+		analysis, validation, err := ValidateWorkspaceAnalysis(*result.Analysis, request.Manifest, artifactRoot, sourcesRoot)
 		if err != nil {
 			return result, err
 		}
@@ -514,6 +547,10 @@ func WorkspaceInstruction(request WorkspaceExecutionRequest, workspaceRoot strin
 	if err != nil {
 		return "", err
 	}
+	sources, err := json.MarshalIndent(request.Manifest.Sources, "", "  ")
+	if err != nil {
+		return "", err
+	}
 	artifactPaths := make([]string, 0, min(len(request.Manifest.Artifacts), 256))
 	for _, file := range request.Manifest.Artifacts {
 		candidate := append(append([]string(nil), artifactPaths...), file.Path)
@@ -533,12 +570,13 @@ func WorkspaceInstruction(request WorkspaceExecutionRequest, workspaceRoot strin
 	}
 	sourceRequirement := ""
 	if request.RequireSourceEvidence {
-		sourceRequirement = "\nRequired source grounding:\nInspect relevant source under source/ with at least one successful content-bearing read or focused grep before finalization. The executor requires a canonical source evidence handle. This requirement does not identify which file or diagnosis is correct.\n"
+		sourceRequirement = "\nRequired source grounding:\nInspect relevant source under sources/<source_id>/ with at least one successful content-bearing read or focused grep before finalization. The executor requires a canonical source evidence handle. This requirement does not identify which file or diagnosis is correct.\n"
 	}
 	instruction := fmt.Sprintf(`%s%s
 
 Workspace root: %s
-Source revision: %s
+Source catalog (read only under sources/<id>/):
+%s
 Artifact manifest hash: %s
 
 Failure metadata:
@@ -560,7 +598,7 @@ Available artifact paths:
 %s
 Artifact path sample: %d of %d files. Use read-only directory listing and focused
 grep tools to inspect paths not shown in this bounded sample.
-`, strings.TrimSpace(workspaceAnalysisSkill), sourceRequirement, workspaceRoot, request.Manifest.Source.Revision, request.Manifest.Hash, failure, request.Manifest.ConsumerPrompt, skillPlan, paths, len(artifactPaths), len(request.Manifest.Artifacts))
+`, strings.TrimSpace(workspaceAnalysisSkill), sourceRequirement, workspaceRoot, sources, request.Manifest.Hash, failure, request.Manifest.ConsumerPrompt, skillPlan, paths, len(artifactPaths), len(request.Manifest.Artifacts))
 	if len(instruction) > maxAgentPromptBytes || !utf8.ValidString(instruction) {
 		return "", fmt.Errorf("workspace analysis instruction exceeds %d bytes", maxAgentPromptBytes)
 	}
@@ -638,17 +676,20 @@ func verifyWorkspaceArtifactCitations(citations []models.EvidenceCitation, manif
 	return out, nil
 }
 
-func verifyWorkspaceSourceCitations(citations []sourceinvestigation.Citation, root string, requireCanonical bool, warnings map[string]bool) ([]sourceinvestigation.Citation, error) {
+func verifyWorkspaceSourceCitations(citations []WorkspaceSourceCitation, manifest WorkspaceManifest, sourcesRoot string, requireCanonical bool, warnings map[string]bool) ([]WorkspaceSourceCitation, error) {
 	if len(citations) > maxSourceCitations {
 		warnings[WorkspaceInvalidSourceCount] = true
 	}
-	out := make([]sourceinvestigation.Citation, 0, len(citations))
+	out := make([]WorkspaceSourceCitation, 0, len(citations))
 	seen := map[string][][2]int{}
 	for _, citation := range citations {
+		citation.SourceID = strings.TrimSpace(citation.SourceID)
 		citation.Path = strings.TrimSpace(citation.Path)
-		if !safeWorkspaceSourcePath(citation.Path) {
+		source, ok := WorkspaceSource(manifest.Sources, citation.SourceID)
+		if !ok || !safeWorkspaceSourcePath(citation.Path) {
 			return nil, invalidWorkspaceResult(WorkspaceInvalidSourcePath)
 		}
+		root := filepath.Join(sourcesRoot, source.ID)
 		content, err := readWorkspaceText(root, citation.Path, maxWorkspaceFileBytes)
 		if err != nil {
 			return nil, invalidWorkspaceResult(WorkspaceInvalidSourcePath)
@@ -657,6 +698,7 @@ func verifyWorkspaceSourceCitations(citations []sourceinvestigation.Citation, ro
 		if err != nil {
 			return nil, invalidWorkspaceResult(WorkspaceInvalidSourcePath)
 		}
+		identity = source.ID + "\x00" + identity
 		quote, err := canonicalWorkspaceQuote(content, citation.LineStart, citation.LineEnd)
 		if err != nil {
 			return nil, invalidWorkspaceResult(WorkspaceInvalidSourceLineRange)
@@ -678,6 +720,9 @@ func verifyWorkspaceSourceCitations(citations []sourceinvestigation.Citation, ro
 		out = append(out, citation)
 	}
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].SourceID != out[j].SourceID {
+			return out[i].SourceID < out[j].SourceID
+		}
 		if out[i].Path != out[j].Path {
 			return out[i].Path < out[j].Path
 		}
@@ -713,13 +758,17 @@ func overlapsWorkspaceCitation(ranges [][2]int, lineStart, lineEnd int) bool {
 	return false
 }
 
-func workspaceRelevantFiles(files []string, citations []sourceinvestigation.Citation, root string, warnings map[string]bool) ([]string, error) {
+func workspaceRelevantFiles(files []string, citations []WorkspaceSourceCitation, sourcesRoot string, warnings map[string]bool) ([]string, error) {
 	if len(files) > maxRelevantFiles {
 		warnings[WorkspaceInvalidRelevantFile] = true
 	}
+	primaryRoot := filepath.Join(sourcesRoot, "primary")
 	grounded := map[string]bool{}
 	for _, citation := range citations {
-		identity, err := resolvedWorkspaceIdentity(root, citation.Path)
+		if citation.SourceID != "primary" {
+			continue
+		}
+		identity, err := resolvedWorkspaceIdentity(primaryRoot, citation.Path)
 		if err != nil {
 			return nil, invalidWorkspaceResult(WorkspaceInvalidSourcePath)
 		}
@@ -732,7 +781,7 @@ func workspaceRelevantFiles(files []string, citations []sourceinvestigation.Cita
 		if !safeWorkspaceSourcePath(file) {
 			return nil, invalidWorkspaceResult(WorkspaceInvalidRelevantFile)
 		}
-		identity, err := resolvedWorkspaceIdentity(root, file)
+		identity, err := resolvedWorkspaceIdentity(primaryRoot, file)
 		if err != nil {
 			return nil, invalidWorkspaceResult(WorkspaceInvalidRelevantFile)
 		}
@@ -903,10 +952,10 @@ func validateWorkspaceOpenCodeTelemetry(telemetry WorkspaceOpenCodeTelemetry) er
 	}
 	seenSourceReads := map[string]bool{}
 	for _, read := range telemetry.SourceReads {
-		if (read.Tool != "read" && read.Tool != "grep") || !safeWorkspaceSourcePath(read.Path) || read.LineStart < 1 || read.LineEnd < read.LineStart || read.LineEnd-read.LineStart+1 > 2000 {
+		if !ValidWorkspaceSourceID(read.SourceID) || (read.Tool != "read" && read.Tool != "grep") || !safeWorkspaceSourcePath(read.Path) || read.LineStart < 1 || read.LineEnd < read.LineStart || read.LineEnd-read.LineStart+1 > 2000 {
 			return fmt.Errorf("workspace OpenCode source read telemetry is invalid")
 		}
-		key := fmt.Sprintf("%s\x00%s\x00%d\x00%d", read.Tool, read.Path, read.LineStart, read.LineEnd)
+		key := fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d", read.SourceID, read.Tool, read.Path, read.LineStart, read.LineEnd)
 		if seenSourceReads[key] {
 			return fmt.Errorf("workspace OpenCode source read telemetry is duplicated")
 		}
