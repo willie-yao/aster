@@ -17,6 +17,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/evidenceplan"
 	"github.com/willie-yao/aster/backend/internal/ai/skills"
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
@@ -24,6 +25,8 @@ import (
 // AgenticMode is stored in models.AIAnalysis.Mode for agentic results. A cached
 // entry with any other mode is stale.
 const AgenticMode = "agentic"
+
+const preliminaryCacheTTL = 5 * time.Minute
 
 // ErrToolsUnsupported is returned from the agentic loop when the configured
 // provider rejects function-calling on the first call. There is no tools-free
@@ -33,10 +36,13 @@ var ErrToolsUnsupported = errors.New("ai endpoint does not support function call
 // ErrContextHeadroom means no safe provider request could be formed after compaction.
 var ErrContextHeadroom = errors.New("agentic request exceeds context headroom")
 
-// ErrMissingArtifactCitation means a non-advisory analysis could not produce a
-// validated artifact citation after bounded repair, so no causal draft is safe
-// to publish for this run.
+// ErrMissingArtifactCitation is retained for callers that decode older private
+// benchmark records. Current analysis publishes safe ungrounded drafts as
+// preliminary instead of returning this error.
 var ErrMissingArtifactCitation = errors.New("no validated artifact citation supports the analysis")
+
+// ErrRejectedAnalysis means no safe structured analysis was available to publish.
+var ErrRejectedAnalysis = errors.New("analysis result failed the safe publication contract")
 
 // AgenticOptions is the resolved per-failure budget config. Build it once per
 // fetcher run via project.AI.EffectiveAgentic and reuse it.
@@ -92,6 +98,17 @@ type AgenticOptions struct {
 	// deterministic-critique unit tests are not perturbed by the extra call.
 	SemanticJudge bool
 }
+
+// SourceEvidenceObservation is private, content-free source range telemetry.
+type SourceEvidenceObservation struct {
+	SourceID  string
+	Tool      string
+	Path      string
+	LineStart int
+	LineEnd   int
+}
+
+type SourceEvidenceObserver func(SourceEvidenceObservation)
 
 // DraftObservation is a value-only snapshot of one parseable analysis draft.
 // The quality benchmark uses it to compare retries from the same investigation
@@ -303,16 +320,47 @@ Before finalizing, self-check:
 
 A confident "I found X by reading Y at line Z" answer always beats "you should check X". The difference between a useful diagnosis and a useless one is whether the agent did the drilling itself or passed the work back to the user.`
 
-// agenticSourceRepoSection names the project's own repository so the model can
-// classify a cause as this project's or a dependency's. Kept out of agToolDocs
-// because it varies per project.
+// agenticSourceCatalogSection enumerates immutable source selectors and marks
+// the project-owned primary source.
+func agenticSourceCatalogSection(catalog *tools.SourceCatalog) string {
+	if catalog == nil {
+		return ""
+	}
+	primary, ok := catalog.Primary()
+	if !ok {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\nThe project under test is the GitHub repository ")
+	b.WriteString(primary.Owner + "/" + primary.Name)
+	b.WriteString(". Source tools require a source_id from this immutable source catalog:")
+	for _, source := range catalog.Sources() {
+		b.WriteString("\n- source_id `")
+		b.WriteString(source.ID)
+		b.WriteString("`: ")
+		b.WriteString(source.Owner + "/" + source.Name + " @ " + source.Revision)
+		if source.ID == catalog.PrimaryID() {
+			b.WriteString(" (primary project source)")
+		}
+	}
+	b.WriteString("\nUse the matching source_id in every repository tool call. Only repository-relative paths read from the primary project source can be published as project-owned relevant_files. Other catalog entries are dependencies this project only consumes.")
+	return b.String()
+}
+
+func agenticSourceContextSection(catalog *tools.SourceCatalog, owner, name string) string {
+	if catalog != nil {
+		return agenticSourceCatalogSection(catalog)
+	}
+	return agenticSourceRepoSection(owner, name)
+}
+
+// agenticSourceRepoSection names the project when no immutable source is available.
 func agenticSourceRepoSection(owner, name string) string {
 	if strings.TrimSpace(owner) == "" || strings.TrimSpace(name) == "" {
 		return ""
 	}
 	return "\n\nThe project under test is the GitHub repository " + owner + "/" + name +
-		". Any repository-relative source path you read with the repository tools belongs to it." +
-		" Code from any other repository is a dependency this project only consumes."
+		". Code from any other repository is a dependency this project only consumes."
 }
 
 // agForceFinalizePrompt is the user message that forces a JSON-only final round
@@ -326,6 +374,44 @@ continuing to investigate.
 
 Output ONLY the JSON object: no prose, no explanation, no markdown fences.
 Your entire response must start with { and end with }.`
+
+const analysisFinalizeToolName = "submit_analysis"
+
+func analysisFinalizeFormat() ResponseFormat {
+	stringArray := func() map[string]any {
+		return map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+	}
+	return ResponseFormat{
+		Name:        analysisFinalizeToolName,
+		Description: "Submit one structured failure analysis.",
+		Schema: map[string]any{
+			"type": "object", "additionalProperties": false,
+			"properties": map[string]any{
+				"summary":            map[string]any{"type": "string"},
+				"is_transient":       map[string]any{"type": "boolean"},
+				"root_cause":         map[string]any{"type": "string"},
+				"severity":           map[string]any{"type": "string", "enum": []string{"Critical", "High", "Medium", "Low"}},
+				"suggested_fix":      map[string]any{"type": "string"},
+				"relevant_files":     stringArray(),
+				"search_suggestions": stringArray(),
+				"evidence_citations": map[string]any{
+					"type": "array", "maxItems": 20,
+					"items": map[string]any{
+						"type": "object", "additionalProperties": false,
+						"properties": map[string]any{
+							"path":       map[string]any{"type": "string"},
+							"line_start": map[string]any{"type": "integer", "minimum": 1},
+							"line_end":   map[string]any{"type": "integer", "minimum": 1},
+							"quote":      map[string]any{"type": "string"},
+						},
+						"required": []string{"path", "line_start", "line_end", "quote"},
+					},
+				},
+			},
+			"required": []string{"summary", "is_transient", "root_cause", "severity", "suggested_fix", "relevant_files", "search_suggestions", "evidence_citations"},
+		},
+	}
+}
 
 // formatFloorsNudge builds the user message appended after a tools-free
 // model response when one or both per-project floors are unmet. Mentions
@@ -458,7 +544,7 @@ func evalFloors(state *agentState, opts AgenticOptions) floorStatus {
 
 type agentState struct {
 	browser            artifacts.Browser
-	repo               tools.RepoReader
+	sources            *tools.SourceCatalog
 	opts               AgenticOptions
 	registry           *tools.Registry
 	enabledTools       []string
@@ -471,6 +557,7 @@ type agentState struct {
 	budgetExhausted    bool
 	draftObserver      DraftObserver
 	selectionObserver  DraftSelectionObserver
+	sourceObserver     SourceEvidenceObserver
 	traceCtx           context.Context
 	draftAttempt       int
 	bestDraft          *critiqueDraftCandidate
@@ -666,9 +753,9 @@ func (s *agentState) setCritiqueOutcome(out critiqueOutcome) {
 //   - Mode is stamped on the returned AIAnalysis and defaults to AgenticMode.
 type AgenticInputs struct {
 	Browser      artifacts.Browser
-	Repo         tools.RepoReader
-	SourceOwner  string
-	SourceName   string
+	Sources      *tools.SourceCatalog
+	ProjectOwner string
+	ProjectName  string
 	Opts         AgenticOptions
 	Registry     *tools.Registry
 	EnabledTools []string
@@ -701,6 +788,8 @@ type AgenticInputs struct {
 	// DraftSelectionObserver reports the selected parseable attempt to the
 	// benchmark after production selection completes.
 	DraftSelectionObserver DraftSelectionObserver
+
+	SourceEvidenceObserver SourceEvidenceObserver
 }
 
 const (
@@ -862,7 +951,7 @@ func effectiveAgenticPromptHash(in AgenticInputs, sysPrompt string) string {
 	if in.PromptHash != "" {
 		return in.PromptHash
 	}
-	return PromptFingerprint(sysPrompt + agToolDocs + agenticSourceRepoSection(in.SourceOwner, in.SourceName))
+	return PromptFingerprint(sysPrompt + agToolDocs + agenticSourceContextSection(in.Sources, in.ProjectOwner, in.ProjectName))
 }
 
 func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt string, start time.Time) (*models.AISummary, *models.AIAnalysis, bool) {
@@ -877,6 +966,15 @@ func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt str
 		return nil, nil, false
 	}
 	stampAgenticTelemetry(result.Analysis, nil, in.Mode, true, start)
+	if !StampAnalysisDisposition(result.Analysis) {
+		return result.Summary, result.Analysis, true
+	}
+	if result.Analysis.Disposition == models.AnalysisDispositionPreliminary {
+		generatedAt, err := time.Parse(time.RFC3339, result.Analysis.GeneratedAt)
+		if err != nil || time.Since(generatedAt) > preliminaryCacheTTL {
+			return nil, nil, false
+		}
+	}
 	return result.Summary, result.Analysis, true
 }
 
@@ -902,9 +1000,7 @@ func (c *Client) doAnalyzeAgentic(
 
 	state := &agentState{
 		browser:           in.Browser,
-		repo:              in.Repo,
-		sourceOwner:       in.SourceOwner,
-		sourceName:        in.SourceName,
+		sources:           in.Sources,
 		opts:              in.Opts,
 		registry:          in.Registry,
 		enabledTools:      in.EnabledTools,
@@ -914,6 +1010,7 @@ func (c *Client) doAnalyzeAgentic(
 		promptHash:        effectiveAgenticPromptHash(in, sysPrompt),
 		draftObserver:     in.DraftObserver,
 		selectionObserver: in.DraftSelectionObserver,
+		sourceObserver:    in.SourceEvidenceObserver,
 	}
 	// Skills are consulted inside the always-on critique gate. Recipe presence
 	// is the opt-in; an empty set is a no-op.
@@ -925,14 +1022,20 @@ func (c *Client) doAnalyzeAgentic(
 	// nil-disables contract would skip the worst-case hallucination scenario.
 	state.readArtifactsFull = map[string]bool{}
 	state.readArtifactsBase = map[string]bool{}
-	if in.Repo != nil {
+	state.sourceOwner = in.ProjectOwner
+	state.sourceName = in.ProjectName
+	if in.Sources != nil {
 		state.readSourceFull = map[string]bool{}
+		if primary, ok := in.Sources.Primary(); ok {
+			state.sourceOwner = primary.Owner
+			state.sourceName = primary.Name
+		}
 	}
 	state.evidenceArtifactsFull = map[string]bool{}
 	state.analysisEvidence = map[string]*analysisChatEvidence{}
 	state.analysisEvidenceRevision = map[string]map[int]int{}
 
-	fullSysPrompt := sysPrompt + agToolDocs + agenticSourceRepoSection(in.SourceOwner, in.SourceName)
+	fullSysPrompt := sysPrompt + agToolDocs + agenticSourceContextSection(in.Sources, in.ProjectOwner, in.ProjectName)
 	state.initialArtifactTree = listInitialArtifactTree(ctx, in.Browser)
 	if seed := buildArtifactTreeSeed(state.initialArtifactTree.paths, state.initialArtifactTree.truncated, artifactTreeSeedBytes(in.Opts)); seed != "" {
 		userPrompt = prependPrompt(userPrompt, seed)
@@ -1028,6 +1131,21 @@ agentLoop:
 			return nil, nil, fmt.Errorf("agentic iter %d: empty choices", iter+1)
 		}
 		msg := resp.Message
+
+		if len(msg.ToolCalls) > 0 && msg.Content != nil {
+			if parsedCandidate, parsedOK := tryParseAnalysis(*msg.Content); parsedOK {
+				candidateCritique := critiqueDraftWithContent(parsedCandidate, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsedCandidate), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
+				if len(candidateCritique.MissingSkillEvidence) > 0 {
+					if treeSet := state.artifactTreeSet(); treeSet != nil {
+						pruneAbsentSkillEvidence(parsedCandidate, &candidateCritique, treeSet)
+					}
+				}
+				candidateDraft := state.newDraftCandidate(draftPhase, *msg.Content, msg.ProviderItems, parsedCandidate, candidateCritique)
+				semanticAccepted := draftPhase == "semantic_retry" && state.judgeObjected
+				state.considerFallbackDraft(candidateDraft, semanticAccepted)
+				recordTrace(loopCtx, TraceEvent{Kind: "draft_recovery", Outcome: "tool_bearing_candidate", SelectedAttempt: candidateDraft.attempt})
+			}
+		}
 
 		if len(msg.ToolCalls) == 0 {
 			candidate := ""
@@ -1269,54 +1387,29 @@ agentLoop:
 		log.Printf("  ⚠ agentic repair: finalize did not parse; keeping selected draft")
 	}
 	if !ok {
-		recordTrace(loopCtx, TraceEvent{Kind: "finalize_recovery", Outcome: "synthesized"})
-		// Last resort: synthesize an analysisResponse from the raw text so the
-		// UI still has something to render. Do not cache this because a transient
-		// model glitch should not permanently poison the cache.
-		parsed = analysisResponse{
-			Summary:      firstSentence(finalContent),
-			RootCause:    finalContent,
-			Severity:     "Medium",
-			SuggestedFix: "Unable to parse structured response",
-		}
-		parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
-		parsed = state.preparePublishedAnalysis(parsed)
-		out := state.currentCritiqueOutcome(parsed)
-		state.setCritiqueOutcome(out)
-		if critiqueAcceptedForPolicy(out, effectiveCritiqueCachePolicy(in.Opts.CritiqueCachePolicy, in.Opts.CritiqueMaxRetries)) {
-			recordTrace(loopCtx, critiqueTraceEvent("published_warning", out))
-		} else {
-			recordTrace(loopCtx, critiqueTraceEvent("published_rejected", out))
-		}
-		if rejectMissingCitationPublication(state, in.Opts) {
-			recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "unavailable", ErrorCode: "missing_artifact_citation"})
-			return nil, nil, ErrMissingArtifactCitation
-		}
-		summary, analysis := c.buildOutputs(parsed)
-		stampAgenticTelemetry(analysis, state, in.Mode, false, start)
-		return summary, analysis, nil
+		recordTrace(loopCtx, TraceEvent{Kind: "finalize_recovery", Outcome: "rejected", ErrorCode: "invalid_structured_response"})
+		return nil, nil, ErrRejectedAnalysis
 	}
 
 	parsed = c.applyPostLoopCritique(loopCtx, state, messages, finalContent, finalProviderItems, parsed, in.Opts, critiqueRetries, finalDraftObserved, draftPhase)
 	markGCSFloorRetryExhausted(loopCtx, state, in.Opts, gcsFloorOnlyRetries)
 	parsed = c.prepareCacheablePublishedAnalysis(loopCtx, state, messages, parsed, in.Opts)
-	if rejectMissingCitationPublication(state, in.Opts) {
-		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "unavailable", ErrorCode: "missing_artifact_citation"})
-		return nil, nil, ErrMissingArtifactCitation
-	}
 
 	state.notifyDraftSelection()
 	summary, analysis := c.buildOutputs(parsed)
+	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
+	if !StampAnalysisDisposition(analysis) {
+		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "rejected", ErrorCode: "unsafe_analysis"})
+		return nil, nil, ErrRejectedAnalysis
+	}
+	if analysis.Disposition == models.AnalysisDispositionPreliminary {
+		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "preliminary"})
+	} else {
+		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "grounded"})
+	}
 	c.cacheAcceptedAnalysis(loopCtx, cacheKey, parsed, analysis.GeneratedAt, state, in.Opts)
 	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 	return summary, analysis, nil
-}
-
-func rejectMissingCitationPublication(state *agentState, opts AgenticOptions) bool {
-	if state == nil || effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries) == CritiqueCachePolicyAdvisory {
-		return false
-	}
-	return slices.Contains(state.critiqueHardFailures, string(CritiqueRuleCitationMissing))
 }
 
 func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *agentState, messages []modelMessage, parsed analysisResponse, opts AgenticOptions) analysisResponse {
@@ -2535,27 +2628,35 @@ func cachePersistenceRejection(state *agentState, opts AgenticOptions) CacheReje
 	if floors.gcsUnmet {
 		return CacheRejectedEvidenceFloor
 	}
-	analysis := &models.AIAnalysis{
+	policyAnalysis := &models.AIAnalysis{
 		Mode: AgenticMode, CritiquePassed: state.critiquePassed, CritiqueVersion: currentCritiqueVersion,
 		CritiqueHardFailures: state.critiqueHardFailures, CritiqueSoftWarnings: state.critiqueSoftWarnings,
 		JudgeObjected: state.judgeObjected, JudgeRevised: state.judgeRevised,
 		JudgeResolutionKnown: true, JudgeRevisionRejected: state.judgeRevisionRejected,
 	}
 	policy := effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries)
-	if reason := critiqueCacheRejection(analysis, policy); reason != CacheAccepted {
+	if reason := critiqueCacheRejection(policyAnalysis, policy); reason != CacheAccepted {
 		return reason
 	}
-	return semanticCacheRejection(analysis)
+	return semanticCacheRejection(policyAnalysis)
 }
 
-// runFinalizeRound asks the model for one more no-tools response containing
-// just the final JSON. Used when the agent ran out of iterations or returned
+// runFinalizeRound asks the model for one schema-constrained response containing
+// just the final analysis. Used when the agent ran out of iterations or returned
 // prose without parseable JSON. Returns raw content; callers handle unparseable
 // responses.
 func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, headroom contextHeadroom) (string, []json.RawMessage, bool) {
 	messages = append(messages, modelMessage{Role: "user", Content: strPtr(agForceFinalizePrompt)})
+	format := analysisFinalizeFormat()
+	toolDefs := []tools.Schema{{
+		Type: "function",
+		Function: tools.FunctionDecl{
+			Name: format.Name, Description: format.Description,
+			Parameters: format.Schema, Strict: true,
+		},
+	}}
 	var safe bool
-	messages, safe = prepareContextRequest(ctx, messages, 0, headroom, "finalize")
+	messages, safe = prepareContextRequest(ctx, messages, schemaPayloadBytes(toolDefs), headroom, "finalize")
 	if !safe {
 		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "headroom_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 		recordTrace(ctx, TraceEvent{Kind: "context_headroom", Outcome: "unavailable", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
@@ -2563,7 +2664,11 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 		return "", nil, false
 	}
 	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "requested"})
-	resp, err := c.callModel(ctx, messages, nil, nil)
+	parallel := false
+	resp, err := c.callModelRequest(ctx, modelRequest{
+		Model: c.model, Messages: messages, Tools: toolDefs,
+		ToolChoice: &ToolChoice{Name: format.Name}, ParallelToolCalls: &parallel,
+	})
 	if err != nil {
 		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "error", ErrorCode: "model_request_error"})
 		log.Printf("  ⚠ agentic finalize round failed: %v", err)
@@ -2574,16 +2679,20 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 		return "", resp.Message.ProviderItems, true
 	}
 	captureToolLoopContinuation(ctx, c, appendToolsFreeAssistant(messages, resp.Message))
-	if resp.Message.Content == nil {
-		code := "nil_content"
-		if len(resp.Message.ToolCalls) > 0 {
-			code = "unexpected_tool_call"
-		}
-		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty", ErrorCode: code})
-		return "", resp.Message.ProviderItems, true
+	if len(resp.Message.ToolCalls) == 1 && resp.Message.ToolCalls[0].Function.Name == format.Name {
+		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "success", Status: "forced_function"})
+		return resp.Message.ToolCalls[0].Function.Arguments, resp.Message.ProviderItems, true
 	}
-	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "success"})
-	return *resp.Message.Content, resp.Message.ProviderItems, true
+	if resp.Message.Content != nil {
+		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "success", Status: "plain_content"})
+		return *resp.Message.Content, resp.Message.ProviderItems, true
+	}
+	code := "nil_content"
+	if len(resp.Message.ToolCalls) > 0 {
+		code = "unexpected_tool_call"
+	}
+	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty", ErrorCode: code})
+	return "", resp.Message.ProviderItems, true
 }
 
 // tryParseAnalysis extracts and unmarshals the JSON answer, returning ok=false
@@ -2648,7 +2757,7 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 
 	env := &tools.Env{
 		Browser:    s.browser,
-		Repo:       s.repo,
+		Sources:    s.sources,
 		Cache:      s.cache,
 		WebURLBase: s.webURLBase,
 	}
@@ -2698,11 +2807,14 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 			}
 		}
 	}
-	if !toolFailed && s.repo != nil {
-		for _, repoPath := range visibleRepoReadPaths(tc, visiblePayload) {
-			s.recordSourceRead(repoPath)
+	if !toolFailed && s.sources != nil {
+		emitSourceEvidenceObservations(s.sourceObserver, tc.Function.Name, result.Observation)
+		if extractToolSourceID(tc.Function.Arguments) == s.sources.PrimaryID() {
+			for _, repoPath := range visibleRepoReadPaths(tc, visiblePayload) {
+				s.recordSourceRead(repoPath)
+			}
+			s.recordSourceContent(tc, visiblePayload)
 		}
-		s.recordSourceContent(tc, visiblePayload)
 	}
 
 	return envelope, result.Payload
@@ -2771,6 +2883,20 @@ func isRepoTool(name string) bool {
 	return name == "list_repo_tree" || name == "read_repo_file" || name == "grep_repo"
 }
 
+func emitSourceEvidenceObservations(observer SourceEvidenceObserver, tool string, observation any) {
+	if observer == nil {
+		return
+	}
+	switch value := observation.(type) {
+	case repotree.ReadObservation:
+		observer(SourceEvidenceObservation{SourceID: value.SourceID, Tool: tool, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd})
+	case repotree.GrepObservation:
+		for _, match := range value.Matches {
+			observer(SourceEvidenceObservation{SourceID: match.SourceID, Tool: tool, Path: match.Path, LineStart: match.LineStart, LineEnd: match.LineEnd})
+		}
+	}
+}
+
 func visibleRepoReadPaths(tc modelToolCall, payload map[string]interface{}) []string {
 	if payload == nil {
 		return nil
@@ -2803,6 +2929,19 @@ func visibleRepoReadPaths(tc modelToolCall, payload map[string]interface{}) []st
 // extractToolPathArg pulls the "path" field out of a content-fetching tool's
 // args. Returns "" on parse error or missing field. All content-fetching tools
 // use the same `{"path": "..."}` arg shape.
+func extractToolSourceID(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	var args struct {
+		SourceID string `json:"source_id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(args.SourceID)
+}
+
 func extractToolPathArg(raw string) string {
 	if raw == "" {
 		return ""

@@ -2,6 +2,7 @@ package agentanalysis
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,12 +15,12 @@ func TestBuildWorkspaceEvidenceHandlesUsesObservedLinesOnly(t *testing.T) {
 	sourceRoot, artifactRoot, _, _ := workspaceTestInputs(t)
 	handles := workspaceTestHandles(t, sourceRoot, artifactRoot,
 		WorkspaceEvidenceRange{Root: WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 2, LineEnd: 3},
-		WorkspaceEvidenceRange{Root: WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 3, LineEnd: 3},
+		WorkspaceEvidenceRange{Root: WorkspaceSourceDir, SourceID: "primary", Path: "pkg/controller.go", LineStart: 3, LineEnd: 3},
 	)
 	want := []WorkspaceEvidenceHandle{
 		{ID: "artifact-001", Root: WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 2, LineEnd: 2},
 		{ID: "artifact-002", Root: WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 3, LineEnd: 3},
-		{ID: "source-001", Root: WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 3, LineEnd: 3},
+		{ID: "source-001", Root: WorkspaceSourceDir, SourceID: "primary", Path: "pkg/controller.go", LineStart: 3, LineEnd: 3},
 	}
 	if !slices.Equal(handles, want) {
 		t.Fatalf("handles=%+v want=%+v", handles, want)
@@ -28,7 +29,7 @@ func TestBuildWorkspaceEvidenceHandlesUsesObservedLinesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, value := range []string{"artifact-001", "artifacts/logs/build.log line 2", "source-001", "source/pkg/controller.go line 3"} {
+	for _, value := range []string{"artifact-001", "artifacts/logs/build.log line 2", "source-001", "sources/primary/pkg/controller.go line 3"} {
 		if !strings.Contains(instruction, value) {
 			t.Fatalf("instruction missing %q: %s", value, instruction)
 		}
@@ -41,7 +42,11 @@ func TestBuildWorkspaceEvidenceHandlesUsesObservedLinesOnly(t *testing.T) {
 func TestBuildWorkspaceEvidenceHandlesReportsBoundedDiagnostics(t *testing.T) {
 	sourceRoot, artifactRoot, _, _ := workspaceTestInputs(t)
 	workspaceRoot := t.TempDir()
-	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
+	sourcesRoot := filepath.Join(workspaceRoot, WorkspaceSourcesDir)
+	if err := os.Mkdir(sourcesRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(sourceRoot, filepath.Join(sourcesRoot, "primary")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
@@ -63,9 +68,7 @@ func TestBuildWorkspaceEvidenceHandlesReportsBoundedDiagnostics(t *testing.T) {
 func TestBuildWorkspaceEvidenceHandlesClassifiesRejectedRanges(t *testing.T) {
 	sourceRoot, artifactRoot, _, _ := workspaceTestInputs(t)
 	workspaceRoot := t.TempDir()
-	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
-		t.Fatal(err)
-	}
+	linkWorkspaceTestSource(t, workspaceRoot, sourceRoot)
 	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
 		t.Fatal(err)
 	}
@@ -98,9 +101,7 @@ func TestBuildWorkspaceEvidenceHandlesPrioritizesFocusedRanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	workspaceRoot := t.TempDir()
-	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
-		t.Fatal(err)
-	}
+	linkWorkspaceTestSource(t, workspaceRoot, sourceRoot)
 	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
 		t.Fatal(err)
 	}
@@ -123,9 +124,7 @@ func TestBuildWorkspaceEvidenceHandlesPrioritizesFocusedRanges(t *testing.T) {
 func TestBuildWorkspaceEvidenceHandlesDeduplicatesObservedRanges(t *testing.T) {
 	sourceRoot, artifactRoot, _, _ := workspaceTestInputs(t)
 	workspaceRoot := t.TempDir()
-	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
-		t.Fatal(err)
-	}
+	linkWorkspaceTestSource(t, workspaceRoot, sourceRoot)
 	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
 		t.Fatal(err)
 	}
@@ -142,9 +141,7 @@ func TestBuildWorkspaceEvidenceHandlesDeduplicatesObservedRanges(t *testing.T) {
 func TestBuildWorkspaceEvidenceHandlesDeduplicatesOverlappingRanges(t *testing.T) {
 	sourceRoot, artifactRoot, _, _ := workspaceTestInputs(t)
 	workspaceRoot := t.TempDir()
-	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
-		t.Fatal(err)
-	}
+	linkWorkspaceTestSource(t, workspaceRoot, sourceRoot)
 	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
 		t.Fatal(err)
 	}
@@ -163,9 +160,7 @@ func TestBuildWorkspaceEvidenceHandlesDeduplicatesOverlappingRanges(t *testing.T
 func TestBuildWorkspaceEvidenceHandlesRejectsUnsafeRangeBeyondCap(t *testing.T) {
 	sourceRoot, artifactRoot, _, _ := workspaceTestInputs(t)
 	workspaceRoot := t.TempDir()
-	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
-		t.Fatal(err)
-	}
+	linkWorkspaceTestSource(t, workspaceRoot, sourceRoot)
 	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
 		t.Fatal(err)
 	}
@@ -183,9 +178,7 @@ func TestBuildWorkspaceEvidenceHandlesRejectsUnsafeRangeBeyondCap(t *testing.T) 
 func TestBuildWorkspaceEvidenceHandlesPreservesSourceAfterArtifactOverflow(t *testing.T) {
 	sourceRoot, artifactRoot, _, _ := workspaceTestInputs(t)
 	workspaceRoot := t.TempDir()
-	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
-		t.Fatal(err)
-	}
+	linkWorkspaceTestSource(t, workspaceRoot, sourceRoot)
 	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +186,7 @@ func TestBuildWorkspaceEvidenceHandlesPreservesSourceAfterArtifactOverflow(t *te
 	for index := range maxWorkspaceEvidenceRanges + 1 {
 		ranges[index] = WorkspaceEvidenceRange{Root: WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 1, LineEnd: 1}
 	}
-	ranges[len(ranges)-1] = WorkspaceEvidenceRange{Root: WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 3, LineEnd: 3}
+	ranges[len(ranges)-1] = WorkspaceEvidenceRange{Root: WorkspaceSourceDir, SourceID: "primary", Path: "pkg/controller.go", LineStart: 3, LineEnd: 3}
 	handles, diagnostics, err := BuildWorkspaceEvidenceHandles(workspaceRoot, ranges)
 	if err != nil {
 		t.Fatal(err)
@@ -207,9 +200,7 @@ func TestBuildWorkspaceEvidenceHandlesPreservesSourceAfterArtifactOverflow(t *te
 func TestBuildWorkspaceEvidenceHandlesRejectsEscapingSymlinkBeyondCap(t *testing.T) {
 	sourceRoot, artifactRoot, _, _ := workspaceTestInputs(t)
 	workspaceRoot := t.TempDir()
-	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
-		t.Fatal(err)
-	}
+	linkWorkspaceTestSource(t, workspaceRoot, sourceRoot)
 	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
 		t.Fatal(err)
 	}
@@ -234,16 +225,14 @@ func TestBuildWorkspaceEvidenceHandlesRejectsEscapingSymlinkBeyondCap(t *testing
 func TestBuildWorkspaceEvidenceHandlesKeepsValidArtifactWithInvalidOptionalSource(t *testing.T) {
 	sourceRoot, artifactRoot, _, _ := workspaceTestInputs(t)
 	workspaceRoot := t.TempDir()
-	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
-		t.Fatal(err)
-	}
+	linkWorkspaceTestSource(t, workspaceRoot, sourceRoot)
 	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
 		t.Fatal(err)
 	}
 	handles, diagnostics, err := BuildWorkspaceEvidenceHandles(workspaceRoot, []WorkspaceEvidenceRange{
 		{Root: WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 1, LineEnd: 1},
-		{Root: WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 99, LineEnd: 99},
-		{Root: WorkspaceSourceDir, Path: "pkg/missing.go", LineStart: 1, LineEnd: 1},
+		{Root: WorkspaceSourceDir, SourceID: "primary", Path: "pkg/controller.go", LineStart: 99, LineEnd: 99},
+		{Root: WorkspaceSourceDir, SourceID: "primary", Path: "pkg/missing.go", LineStart: 1, LineEnd: 1},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -284,9 +273,7 @@ func TestBuildWorkspaceEvidenceHandlesCachesSharedFileContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	workspaceRoot := t.TempDir()
-	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
-		t.Fatal(err)
-	}
+	linkWorkspaceTestSource(t, workspaceRoot, sourceRoot)
 	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
 		t.Fatal(err)
 	}
@@ -310,9 +297,7 @@ func TestBuildWorkspaceEvidenceHandlesCachesSharedFileContent(t *testing.T) {
 func TestBuildWorkspaceEvidenceHandlesHonorsDeadline(t *testing.T) {
 	sourceRoot, artifactRoot, _, _ := workspaceTestInputs(t)
 	workspaceRoot := t.TempDir()
-	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
-		t.Fatal(err)
-	}
+	linkWorkspaceTestSource(t, workspaceRoot, sourceRoot)
 	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
 		t.Fatal(err)
 	}
@@ -332,9 +317,7 @@ func TestBuildWorkspaceEvidenceHandlesStopsWhenDeadlineExpiresDuringCanonicaliza
 		t.Fatal(err)
 	}
 	workspaceRoot := t.TempDir()
-	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
-		t.Fatal(err)
-	}
+	linkWorkspaceTestSource(t, workspaceRoot, sourceRoot)
 	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
 		t.Fatal(err)
 	}
@@ -377,17 +360,15 @@ func TestIndexWorkspaceEvidenceFileBoundsShortLineMemory(t *testing.T) {
 func TestBuildWorkspaceEvidenceHandlesRejectsUnsafeRanges(t *testing.T) {
 	sourceRoot, artifactRoot, _, _ := workspaceTestInputs(t)
 	workspaceRoot := t.TempDir()
-	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
-		t.Fatal(err)
-	}
+	linkWorkspaceTestSource(t, workspaceRoot, sourceRoot)
 	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
 		t.Fatal(err)
 	}
 	for _, ranges := range [][]WorkspaceEvidenceRange{
 		{{Root: WorkspaceArtifactsDir, Path: "../escape.log", LineStart: 1, LineEnd: 1}},
-		{{Root: WorkspaceSourceDir, Path: ".git/config", LineStart: 1, LineEnd: 1}},
+		{{Root: WorkspaceSourceDir, SourceID: "primary", Path: ".git/config", LineStart: 1, LineEnd: 1}},
 		{{Root: WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 0, LineEnd: 1}},
-		{{Root: WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 1, LineEnd: 99}},
+		{{Root: WorkspaceSourceDir, SourceID: "primary", Path: "pkg/controller.go", LineStart: 1, LineEnd: 99}},
 	} {
 		if _, _, err := BuildWorkspaceEvidenceHandles(workspaceRoot, ranges); err == nil {
 			t.Fatalf("ranges were accepted: %+v", ranges)
@@ -395,19 +376,89 @@ func TestBuildWorkspaceEvidenceHandlesRejectsUnsafeRanges(t *testing.T) {
 	}
 }
 
+func workspaceTestSourcesRoot(t *testing.T, sourceRoot string) string {
+	t.Helper()
+	workspaceRoot := t.TempDir()
+	sourcesRoot := filepath.Join(workspaceRoot, WorkspaceSourcesDir)
+	primaryRoot := filepath.Join(sourcesRoot, "primary")
+	if err := copyWorkspaceTestTree(sourceRoot, primaryRoot); err != nil {
+		t.Fatal(err)
+	}
+	return sourcesRoot
+}
+
+func copyWorkspaceTestTree(sourceRoot, targetRoot string) error {
+	return filepath.WalkDir(sourceRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(sourceRoot, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(targetRoot, relative)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return os.MkdirAll(target, info.Mode().Perm())
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			value, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(value, target)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported test source entry %s", relative)
+		}
+		input, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer input.Close()
+		output, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(output, input)
+		closeErr := output.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	})
+}
+
+func linkWorkspaceTestSource(t *testing.T, workspaceRoot, sourceRoot string) {
+	t.Helper()
+	sourcesRoot := filepath.Join(workspaceRoot, WorkspaceSourcesDir)
+	if err := os.MkdirAll(sourcesRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(sourceRoot, filepath.Join(sourcesRoot, "primary")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func workspaceDefaultHandles(t *testing.T, sourceRoot, artifactRoot string) []WorkspaceEvidenceHandle {
 	t.Helper()
 	return workspaceTestHandles(t, sourceRoot, artifactRoot,
 		WorkspaceEvidenceRange{Root: WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 1, LineEnd: 3},
-		WorkspaceEvidenceRange{Root: WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 1, LineEnd: 3},
+		WorkspaceEvidenceRange{Root: WorkspaceSourceDir, SourceID: "primary", Path: "pkg/controller.go", LineStart: 1, LineEnd: 3},
 	)
 }
 
 func workspaceTestHandles(t *testing.T, sourceRoot, artifactRoot string, ranges ...WorkspaceEvidenceRange) []WorkspaceEvidenceHandle {
 	t.Helper()
 	workspaceRoot := t.TempDir()
-	if err := os.Symlink(sourceRoot, filepath.Join(workspaceRoot, WorkspaceSourceDir)); err != nil {
-		t.Fatal(err)
+	linkWorkspaceTestSource(t, workspaceRoot, sourceRoot)
+	for index := range ranges {
+		if ranges[index].Root == WorkspaceSourceDir && ranges[index].SourceID == "" {
+			ranges[index].SourceID = "primary"
+		}
 	}
 	if err := os.Symlink(artifactRoot, filepath.Join(workspaceRoot, WorkspaceArtifactsDir)); err != nil {
 		t.Fatal(err)

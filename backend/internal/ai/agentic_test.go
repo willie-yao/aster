@@ -56,6 +56,15 @@ func (r *fakeSourceRepo) ReadFile(_ context.Context, path string) (string, bool,
 	return content, ok, nil
 }
 
+func testSourceCatalog(t *testing.T, primaryID string, sources ...tools.RepoSource) *tools.SourceCatalog {
+	t.Helper()
+	catalog, err := tools.NewSourceCatalog(primaryID, sources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
+}
+
 // newTestAgenticInputs builds per-call agentic inputs for tests.
 func newTestAgenticInputs(t *testing.T, browser artifacts.Browser, opts AgenticOptions) AgenticInputs {
 	t.Helper()
@@ -486,7 +495,7 @@ func TestAgentic_FinalizeRound_JSONRepair(t *testing.T) {
 	}
 }
 
-func TestAgentic_BudgetExhausted_SynthesizesFallback(t *testing.T) {
+func TestAgentic_BudgetExhaustedRejectsUnstructuredFallback(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	// Round 1: model returns unparseable prose. Finalize round will also return unparseable prose.
@@ -496,23 +505,8 @@ func TestAgentic_BudgetExhausted_SynthesizesFallback(t *testing.T) {
 	client := newAgenticTestClient(t, srv.URL)
 	opts := AgenticOptions{MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:fallback", "sys", "user")
-	if err != nil {
-		t.Fatalf("expected fallback synthesis, not error, got: %v", err)
-	}
-	if summary == nil || analysis == nil {
-		t.Fatal("expected synthesized outputs")
-	}
-	if analysis.Mode != AgenticMode {
-		t.Errorf("mode = %q", analysis.Mode)
-	}
-	srv.push(200, chatRespFinal("still not json"))
-	srv.push(200, chatRespFinal("still not json"))
-	before := atomic.LoadInt32(&srv.calls)
-	if _, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:fallback", "sys", "user"); err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if atomic.LoadInt32(&srv.calls) == before {
-		t.Error("fallback should not have been cached (expected server hit on retry)")
+	if !errors.Is(err, ErrRejectedAnalysis) || summary != nil || analysis != nil {
+		t.Fatalf("result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
 	}
 }
 
@@ -4038,12 +4032,16 @@ func TestRepoToolReadDoesNotCountAsGCSEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := &agentState{
-		repo:     &fakeSourceRepo{files: map[string]string{"test/e2e/capi_test.go": "package e2e\n"}},
+		sources: testSourceCatalog(t, tools.PrimarySourceID, tools.RepoSource{
+			ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: strings.Repeat("1", 40),
+			Reader: &fakeSourceRepo{files: map[string]string{"test/e2e/capi_test.go": "package e2e\n"}},
+		}),
+		sourceOwner: "example", sourceName: "project",
 		registry: registry, enabledTools: enabled, cache: tools.NewCache(),
 		opts: AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000}, startTime: time.Now(),
 		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
 	}
-	arguments, _ := json.Marshal(map[string]interface{}{"path": "test/e2e/capi_test.go"})
+	arguments, _ := json.Marshal(map[string]interface{}{"source_id": tools.PrimarySourceID, "path": "test/e2e/capi_test.go"})
 	dispatchAgenticTool(context.Background(), state, modelToolCall{ID: "repo", Type: "function", Function: modelFunction{Name: "read_repo_file", Arguments: string(arguments)}})
 	if state.gcsBytes != 0 {
 		t.Fatalf("repo bytes counted as GCS: %d", state.gcsBytes)
@@ -4053,6 +4051,91 @@ func TestRepoToolReadDoesNotCountAsGCSEvidence(t *testing.T) {
 	}
 	if len(state.evidenceArtifactsFull) != 0 {
 		t.Fatalf("repo read satisfied artifact evidence: %v", state.evidenceArtifactsFull)
+	}
+}
+
+func TestAgenticForcedFinalizeUsesExactAnalysisFunction(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal("not json"))
+	srv.push(200, chatRespToolCall("submit", analysisFinalizeToolName, map[string]interface{}{
+		"summary": "structured", "is_transient": false,
+		"root_cause": "controller configuration mismatch", "severity": "High",
+		"suggested_fix":  "Update the controller configuration.",
+		"relevant_files": []string{}, "search_suggestions": []string{}, "evidence_citations": []interface{}{},
+	}))
+
+	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+		MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second,
+	})
+	_, analysis, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(t.Context(), in, "agentic:test:forced-finalize", "sys", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.RootCause != "controller configuration mismatch" {
+		t.Fatalf("forced function result not selected: %+v", analysis)
+	}
+	srv.mu.Lock()
+	requests := append([][]byte(nil), srv.requests...)
+	srv.mu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("provider requests = %d, want 2", len(requests))
+	}
+	var request struct {
+		Tools []struct {
+			Function struct {
+				Name   string `json:"name"`
+				Strict bool   `json:"strict"`
+			} `json:"function"`
+		} `json:"tools"`
+		ToolChoice struct {
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		} `json:"tool_choice"`
+	}
+	if err := json.Unmarshal(requests[1], &request); err != nil {
+		t.Fatal(err)
+	}
+	if len(request.Tools) != 1 || request.Tools[0].Function.Name != analysisFinalizeToolName || !request.Tools[0].Function.Strict || request.ToolChoice.Function.Name != analysisFinalizeToolName {
+		t.Fatalf("finalize request = %+v", request)
+	}
+}
+
+func TestAgenticToolBearingStructuredDraftSurvivesInvalidFinalize(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	fallback := `{"summary":"fallback","is_transient":false,"root_cause":"controller configuration mismatch","severity":"High","suggested_fix":"Update the controller configuration.","relevant_files":[]}`
+	srv.push(200, chatRespToolCallWithContent(fallback, "read", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespToolCall("unexpected", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	in := newTestAgenticInputs(t, &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("controller configuration mismatch\n")}}, AgenticOptions{
+		MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second,
+	})
+	_, analysis, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(ctx, in, "agentic:test:tool-bearing-draft", "sys", "user")
+	trace.Finish("success", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.RootCause != "controller configuration mismatch" {
+		t.Fatalf("tool-bearing draft not retained: %+v", analysis)
+	}
+	var sawCandidate, sawRetained bool
+	for _, event := range store.Snapshot().Traces[0].Events {
+		if event.Kind == "draft_recovery" && event.Outcome == "tool_bearing_candidate" {
+			sawCandidate = true
+		}
+		if event.Kind == "finalize_recovery" && event.Outcome == "retained_draft" {
+			sawRetained = true
+		}
+	}
+	if !sawCandidate || !sawRetained {
+		t.Fatalf("recovery telemetry missing: %+v", store.Snapshot())
 	}
 }
 
@@ -4094,7 +4177,7 @@ func TestAgenticFinalizeUnexpectedToolCallRetainsDraft(t *testing.T) {
 	}
 }
 
-func TestAgenticFinalizeUnexpectedToolCallSynthesizesWithoutDraft(t *testing.T) {
+func TestAgenticFinalizeUnexpectedToolCallRejectsWithoutDraft(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	srv.push(200, chatRespFinal("not json"))
@@ -4105,21 +4188,18 @@ func TestAgenticFinalizeUnexpectedToolCallSynthesizesWithoutDraft(t *testing.T) 
 	ctx := withAnalysisTrace(context.Background(), trace)
 	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{MaxIters: 1, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second})
 	_, analysis, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(ctx, in, "agentic:test:finalize-tool-synthesize", "sys", "user")
-	trace.Finish("success", err)
-	if err != nil {
-		t.Fatal(err)
+	trace.Finish("rejected", err)
+	if !errors.Is(err, ErrRejectedAnalysis) || analysis != nil {
+		t.Fatalf("analysis=%+v error=%v", analysis, err)
 	}
-	if analysis.SuggestedFix != "Unable to parse structured response" {
-		t.Fatalf("expected synthesized fallback: %+v", analysis)
-	}
-	var sawSynthesized bool
+	var sawRejected bool
 	for _, event := range store.Snapshot().Traces[0].Events {
-		if event.Kind == "finalize_recovery" && event.Outcome == "synthesized" {
-			sawSynthesized = true
+		if event.Kind == "finalize_recovery" && event.Outcome == "rejected" {
+			sawRejected = true
 		}
 	}
-	if !sawSynthesized {
-		t.Fatalf("missing synthesized recovery telemetry: %+v", store.Snapshot())
+	if !sawRejected {
+		t.Fatalf("missing rejected recovery telemetry: %+v", store.Snapshot())
 	}
 }
 
@@ -4249,9 +4329,12 @@ func TestAgentic_PublishedSanitizationCanSatisfyCritiqueAndCache(t *testing.T) {
 		Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
 	}
 	in := newTestAgenticInputs(t, &fakeBrowser{}, opts)
-	in.SourceOwner = "example"
-	in.SourceName = "project"
-	in.Repo = &fakeSourceRepo{files: map[string]string{"other.go": "package example"}}
+	in.ProjectOwner = "example"
+	in.ProjectName = "project"
+	in.Sources = testSourceCatalog(t, tools.PrimarySourceID, tools.RepoSource{
+		ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: strings.Repeat("1", 40),
+		Reader: &fakeSourceRepo{files: map[string]string{"other.go": "package example"}},
+	})
 	const key = "agentic:test:published-sanitization-cache"
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
 	if err != nil {
@@ -4311,11 +4394,11 @@ func TestAgentic_MissingCitationPublicationPolicy(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		policy    CritiqueCachePolicy
-		wantError bool
+		cacheable bool
 	}{
-		{name: "hard", policy: CritiqueCachePolicyHard, wantError: true},
-		{name: "strict", policy: CritiqueCachePolicyStrict, wantError: true},
-		{name: "advisory", policy: CritiqueCachePolicyAdvisory},
+		{name: "hard", policy: CritiqueCachePolicyHard},
+		{name: "strict", policy: CritiqueCachePolicyStrict},
+		{name: "advisory", policy: CritiqueCachePolicyAdvisory, cacheable: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			shrinkCallDelay(t)
@@ -4330,17 +4413,11 @@ func TestAgentic_MissingCitationPublicationPolicy(t *testing.T) {
 			}
 			key := "agentic:test:missing-citation-policy:" + tc.name
 			summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), key, "sys", "user")
-			if tc.wantError {
-				if !errors.Is(err, ErrMissingArtifactCitation) || summary != nil || analysis != nil {
-					t.Fatalf("result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
-				}
-				if _, ok := client.Cache().Get(key); ok {
-					t.Fatal("ungrounded analysis was cached")
-				}
-				return
+			if err != nil || summary == nil || analysis == nil || analysis.Disposition != models.AnalysisDispositionPreliminary || !slices.Contains(analysis.CritiqueHardFailures, string(CritiqueRuleCitationMissing)) || analysis.CachePersistenceAccepted != tc.cacheable {
+				t.Fatalf("result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
 			}
-			if err != nil || analysis == nil || !slices.Contains(analysis.CritiqueHardFailures, string(CritiqueRuleCitationMissing)) || !analysis.CachePersistenceAccepted {
-				t.Fatalf("advisory result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
+			if _, ok := client.Cache().Get(key); ok != tc.cacheable {
+				t.Fatalf("cache presence = %t, want %t", ok, tc.cacheable)
 			}
 		})
 	}
@@ -4348,12 +4425,11 @@ func TestAgentic_MissingCitationPublicationPolicy(t *testing.T) {
 
 func TestAgentic_SynthesizedFallbackMissingCitationPolicy(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		policy    CritiqueCachePolicy
-		wantError bool
+		name   string
+		policy CritiqueCachePolicy
 	}{
-		{name: "hard", policy: CritiqueCachePolicyHard, wantError: true},
-		{name: "strict", policy: CritiqueCachePolicyStrict, wantError: true},
+		{name: "hard", policy: CritiqueCachePolicyHard},
+		{name: "strict", policy: CritiqueCachePolicyStrict},
 		{name: "advisory", policy: CritiqueCachePolicyAdvisory},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4370,12 +4446,8 @@ func TestAgentic_SynthesizedFallbackMissingCitationPolicy(t *testing.T) {
 			}
 			key := "agentic:test:synthesized-missing-citation:" + tc.name
 			summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), key, "sys", "user")
-			if tc.wantError {
-				if !errors.Is(err, ErrMissingArtifactCitation) || summary != nil || analysis != nil {
-					t.Fatalf("result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
-				}
-			} else if err != nil || analysis == nil || !slices.Contains(analysis.CritiqueHardFailures, string(CritiqueRuleCitationMissing)) {
-				t.Fatalf("advisory result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
+			if !errors.Is(err, ErrRejectedAnalysis) || summary != nil || analysis != nil {
+				t.Fatalf("result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
 			}
 			if _, ok := client.Cache().Get(key); ok {
 				t.Fatal("synthesized fallback was cached")
@@ -4384,5 +4456,96 @@ func TestAgentic_SynthesizedFallbackMissingCitationPolicy(t *testing.T) {
 				t.Fatalf("model calls = %d, want 3", got)
 			}
 		})
+	}
+}
+
+func TestEmitSourceEvidenceObservations(t *testing.T) {
+	var got []SourceEvidenceObservation
+	emitSourceEvidenceObservations(func(value SourceEvidenceObservation) { got = append(got, value) }, "read_repo_file", repotree.ReadObservation{SourceID: "client", Path: "pkg/a.go", LineStart: 2, LineEnd: 3})
+	emitSourceEvidenceObservations(func(value SourceEvidenceObservation) { got = append(got, value) }, "grep_repo", repotree.GrepObservation{Matches: []repotree.GrepMatchObservation{{SourceID: "server", Path: "pkg/b.go", LineStart: 4, LineEnd: 5}}})
+	emitSourceEvidenceObservations(func(value SourceEvidenceObservation) { got = append(got, value) }, "list_repo_tree", nil)
+	if len(got) != 2 || got[0].SourceID != "client" || got[0].Path != "pkg/a.go" || got[1].SourceID != "server" || got[1].Path != "pkg/b.go" {
+		t.Fatalf("observations=%+v", got)
+	}
+}
+
+func TestAgenticSourceCatalogSectionEnumeratesOrderedImmutableSources(t *testing.T) {
+	catalog := testSourceCatalog(t, "project",
+		tools.RepoSource{ID: "server", Owner: "kubernetes", Name: "kubernetes", Revision: strings.Repeat("2", 40), Reader: &fakeSourceRepo{}},
+		tools.RepoSource{ID: "project", Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: &fakeSourceRepo{}},
+		tools.RepoSource{ID: "client", Owner: "kubernetes", Name: "kubernetes", Revision: strings.Repeat("3", 40), Reader: &fakeSourceRepo{}},
+	)
+	got := agenticSourceCatalogSection(catalog)
+	for _, want := range []string{
+		"source_id `client`: kubernetes/kubernetes @ " + strings.Repeat("3", 40),
+		"source_id `project`: example/project @ " + strings.Repeat("1", 40) + " (primary project source)",
+		"source_id `server`: kubernetes/kubernetes @ " + strings.Repeat("2", 40),
+		"Use the matching source_id in every repository tool call",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("source catalog prompt missing %q:\n%s", want, got)
+		}
+	}
+	if !(strings.Index(got, "source_id `client`") < strings.Index(got, "source_id `project`") && strings.Index(got, "source_id `project`") < strings.Index(got, "source_id `server`")) {
+		t.Fatalf("source catalog prompt is not canonical: %s", got)
+	}
+}
+
+func TestEffectiveAgenticPromptHashIncludesCanonicalSourceCatalog(t *testing.T) {
+	reader := &fakeSourceRepo{}
+	first := testSourceCatalog(t, "project",
+		tools.RepoSource{ID: "server", Owner: "kubernetes", Name: "kubernetes", Revision: strings.Repeat("2", 40), Reader: reader},
+		tools.RepoSource{ID: "project", Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: reader},
+	)
+	reordered := testSourceCatalog(t, "project",
+		tools.RepoSource{ID: "project", Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: reader},
+		tools.RepoSource{ID: "server", Owner: "kubernetes", Name: "kubernetes", Revision: strings.Repeat("2", 40), Reader: reader},
+	)
+	changed := testSourceCatalog(t, "project",
+		tools.RepoSource{ID: "project", Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: reader},
+		tools.RepoSource{ID: "server", Owner: "kubernetes", Name: "kubernetes", Revision: strings.Repeat("4", 40), Reader: reader},
+	)
+	firstHash := effectiveAgenticPromptHash(AgenticInputs{Sources: first}, "system")
+	if got := effectiveAgenticPromptHash(AgenticInputs{Sources: reordered}, "system"); got != firstHash {
+		t.Fatalf("catalog input order changed hash: first=%q reordered=%q", firstHash, got)
+	}
+	if got := effectiveAgenticPromptHash(AgenticInputs{Sources: changed}, "system"); got == firstHash {
+		t.Fatal("source revision did not change prompt hash")
+	}
+}
+
+func TestRepoReadsObserveAllSourcesButOnlyPrimaryGroundsProjectPaths(t *testing.T) {
+	registry := tools.NewRegistry()
+	repotree.Register(registry)
+	enabled, err := registry.Enable([]string{"repotree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var observations []SourceEvidenceObservation
+	state := &agentState{
+		sources: testSourceCatalog(t, "project",
+			tools.RepoSource{ID: "project", Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: &fakeSourceRepo{files: map[string]string{"same.go": "project\n"}}},
+			tools.RepoSource{ID: "dependency", Owner: "upstream", Name: "dependency", Revision: strings.Repeat("2", 40), Reader: &fakeSourceRepo{files: map[string]string{"same.go": "dependency\n"}}},
+		),
+		sourceOwner: "example", sourceName: "project",
+		registry: registry, enabledTools: enabled, cache: tools.NewCache(),
+		opts: AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000}, startTime: time.Now(),
+		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}, readSourceFull: map[string]bool{},
+		sourceObserver: func(value SourceEvidenceObservation) { observations = append(observations, value) },
+	}
+	call := func(sourceID string) {
+		arguments, _ := json.Marshal(map[string]interface{}{"source_id": sourceID, "path": "same.go"})
+		dispatchAgenticTool(context.Background(), state, modelToolCall{ID: sourceID, Type: "function", Function: modelFunction{Name: "read_repo_file", Arguments: string(arguments)}})
+	}
+	call("dependency")
+	if state.readSourceFull["same.go"] {
+		t.Fatal("dependency read grounded a project-owned relevant file")
+	}
+	call("project")
+	if !state.readSourceFull["same.go"] {
+		t.Fatalf("primary read was not recorded: %v", state.readSourceFull)
+	}
+	if len(observations) != 2 || observations[0].SourceID != "dependency" || observations[1].SourceID != "project" {
+		t.Fatalf("observations=%+v", observations)
 	}
 }

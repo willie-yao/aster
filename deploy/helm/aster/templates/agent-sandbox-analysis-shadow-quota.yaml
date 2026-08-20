@@ -1,0 +1,16 @@
+{{- include "aster.validateAgentAnalysisShadow" . -}}
+{{- if and .Values.agentSandbox.analysisShadow.enabled .Values.agentSandbox.analysisShadow.quota.enabled }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "aster.agentAnalysisShadowAdmissionName" . }}
+  namespace: {{ .Values.agentSandbox.analysisShadow.namespace }}
+  labels:
+    {{- include "aster.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-analysis-shadow
+spec:
+  hard:
+    count/sandboxes.agents.x-k8s.io: "1"
+    count/jobs.batch: "1"
+    count/pods: "1"
+{{- end }}

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 const (
@@ -154,4 +156,60 @@ func hasDuplicateStrings(values []string) bool {
 		}
 	}
 	return false
+}
+
+// WorkspaceAnalysisDisposition maps one accepted workspace result to the public
+// display disposition without granting publication or action authority.
+func WorkspaceAnalysisDisposition(analysis WorkspaceAnalysis, validation WorkspaceResultValidation, requireSourceEvidence bool) (string, []string) {
+	if validation.Status == WorkspaceResultRejected || validation.Status == "" {
+		return "", nil
+	}
+	warnings := map[string]bool{}
+	grounded := len(analysis.EvidenceCitations) > 0
+	if !grounded {
+		warnings[models.AnalysisWarningArtifactGrounding] = true
+	}
+	if requireSourceEvidence {
+		verified := len(analysis.SourceCitations) > 0
+		for _, citation := range analysis.SourceCitations {
+			verified = verified && citation.Verified
+		}
+		if !verified {
+			grounded = false
+			warnings[models.AnalysisWarningSourceGrounding] = true
+		}
+	}
+	for _, code := range validation.Codes {
+		switch code {
+		case WorkspaceInvalidArtifactCount, WorkspaceInvalidArtifactPath,
+			WorkspaceInvalidArtifactLineRange, WorkspaceInvalidArtifactOverlap:
+			grounded = false
+			warnings[models.AnalysisWarningArtifactGrounding] = true
+		case WorkspaceInvalidSourceCount, WorkspaceInvalidSourcePath,
+			WorkspaceInvalidSourceLineRange, WorkspaceInvalidSourceOverlap,
+			WorkspaceInvalidRelevantFile:
+			grounded = false
+			warnings[models.AnalysisWarningSourceGrounding] = true
+		case WorkspaceInvalidClassification:
+			grounded = false
+			warnings[models.AnalysisWarningClassification] = true
+		case WorkspaceInvalidAnalysisText:
+			grounded = false
+			warnings[models.AnalysisWarningInvestigation] = true
+		default:
+			return "", nil
+		}
+	}
+	if len(analysis.UnresolvedDetails) > 0 {
+		warnings[models.AnalysisWarningInvestigation] = true
+	}
+	codes := make([]string, 0, len(warnings))
+	for code := range warnings {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	if grounded {
+		return models.AnalysisDispositionGrounded, codes
+	}
+	return models.AnalysisDispositionPreliminary, codes
 }

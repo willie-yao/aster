@@ -175,6 +175,10 @@ func TestPreparedSourceModePolicyStillRejectsMutations(t *testing.T) {
 
 func TestPreparedSourceModePolicyMismatchIsRejected(t *testing.T) {
 	root, policy, _, revision := preparedModeFixture(t)
+	readPolicy, err := ReadPreparedSourceModePolicy(t.Context(), root)
+	if err != nil || readPolicy != policy {
+		t.Fatalf("read policy=%q err=%v want=%q", readPolicy, err, policy)
+	}
 	if policy != WorkspaceSourceModeIgnoreExecutable {
 		t.Fatalf("policy=%q", policy)
 	}

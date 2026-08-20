@@ -58,8 +58,9 @@ The pinned baseline consumer commits are:
 - Kueue: `e4257c64fc9c5344b01919488fc76aa3fb0618b7`
 - GCP PD CSI: `f74fc047a1f6de10eec334207c4e58ce743bdcac`
 
-Its Secrets Store CSI and Kueue cases require a grounded diagnosis. The GCP PD
-CSI reference is medium confidence, so that case also accepts the engine's
+The Secrets Store CSI and Kueue cases are artifact-only. Their diagnoses must be
+grounded in the frozen build evidence and are not source-grounding controls. The
+GCP PD CSI reference is medium confidence, so that case also accepts the engine's
 grounded-policy unavailable result instead of rewarding an unsupported owner.
 
 Options:
@@ -144,7 +145,7 @@ replacement decision with evidence revisions, strict-dominance state, and a
 stable acceptance or rejection reason. Decision events displace older ordinary
 trace events if the per-analysis cap is full. It does not contain draft text.
 
-Human review uses rubric version 1 with five dimensions scored from 0 to 2:
+Human review uses rubric version 2 with five dimensions scored from 0 to 2:
 diagnosis, artifact evidence, claim discipline, remediation, and source
 grounding. The maximum human score is 10. Every private JSONL row records the
 rubric version and maximum so report generation cannot describe the same totals
@@ -152,10 +153,11 @@ with a different denominator.
 
 Every private JSONL row also records the experiment arm, engine commit, fixture
 digest, pinned baseline consumer commit, effective project and prompt digests,
-merged skill-set hash, API mode, evidence condition, frozen-evidence digest when
-present, and one effective-input digest. Persistent cold-cache paths include the
-arm and effective-input digest, so separate arms and evidence conditions cannot
-silently share an analysis cache.
+merged skill-set hash, API mode, a sanitized provider-configuration digest,
+frozen pricing, evidence condition, frozen-evidence digest when present, and one
+effective-input digest. Persistent cold-cache paths include the arm and
+effective-input digest, so separate arms and evidence conditions cannot silently
+share an analysis cache.
 
 The trace summary reports the floor-nudge count and ordered reasons, context
 compaction and over-budget counts, the final semantic-judge event outcome,
@@ -181,10 +183,18 @@ Draft telemetry records which supported causal facts a critique, evidence, or
 semantic retry retained, added, or dropped. It does not claim per-draft citation
 retention because the benchmark observer does not receive draft citations.
 `trial_status` distinguishes `valid_result`, `no_result`, `invalid_result`,
-`contract_violation`, `timeout`, and `runtime_failure`. The JSONL row is written
-before a failing trial stops the test. Comparison reports display this status,
-not the legacy analysis outcome, so a contract violation cannot appear as a
-normal usable trial.
+`contract_violation`, `timeout`, and `runtime_failure`. A parseable safe result
+remains `valid_result` when a bounded finalization repair or other contract
+warning occurred. The separate `contract_violation` boolean preserves that
+telemetry without converting displayable analysis into a lifecycle failure. The
+JSONL row is written before a failing trial stops the test.
+
+Both arms record `structured_valid`, `displayable`, `analysis_disposition`, and
+`grounded` separately. `preliminary` means safe structured content with unresolved
+evidence or quality warnings. The full evidence-contract result remains a stricter
+grounding and causal-alignment dimension. A miss there does not retroactively make
+the runtime result malformed. Action eligibility is not a benchmark quality metric;
+it requires authenticated request-time policy and confirmation outside either arm.
 
 `BENCH_EVIDENCE_CONDITION` defaults to `fixture-v1`. The benchmark-only
 `kueue-oracle-v1` condition is available only for the pinned Kueue API-version
@@ -202,17 +212,21 @@ JSONL also separates `diagnosis_signal_hits` from transient and forbidden-claim
 policy checks. This prevents a placeholder or abstaining answer from appearing
 moderately successful merely because it avoids forbidden claims.
 
-The telemetry never prints prompts, model response text, Tool arguments, Tool
-output, endpoints, model coordinates, credentials, or full hashes.
+Scored benchmark runs reject `AGENTIC_TRACE_TOOLS`, so retained telemetry never
+prints prompts, model response text, Tool arguments, Tool output, endpoints,
+model coordinates, credentials, or full hashes.
 
 Each frozen case declares an `evidence_mode`. `artifact_only` requires artifact
 evidence and canonical artifact citations but does not require a repository read.
-`artifact_and_source` additionally freezes expected source paths and source-backed
-diagnosis signals. It requires a successful source read or grep, verified canonical
-citations for every expected path, and all source-backed signals. Source citations,
-relevant files, or source-backed claims remain invalid without source evidence
-regardless of the case mode. The exact six-trial comparison reports both categories
-separately and is incomplete when either category is absent.
+`artifact_and_source` additionally freezes expected repository, revision, path,
+and line ranges plus source-backed diagnosis signals. The comparative requirement
+is complete content-read coverage of every frozen range plus all source-backed
+signals. Citation emission and verification are reported as per-arm capability
+telemetry only. They do not participate in cross-arm grounding or classification
+gates. Source citations, relevant files, or source-backed claims remain invalid
+without source evidence regardless of the case mode. The exact comparison reports
+both evidence categories separately and is incomplete when either category is
+absent.
 
 
 To separate retrieval from reasoning on the Kueue case, run the same cold trial
@@ -258,7 +272,8 @@ the benchmark is a real regression gate rather than permanently red.
 
 Prow garbage-collects GCS artifacts on a rolling window, so each case's full
 artifact tree is snapshotted and published as a `.tar.gz` asset on the
-`benchmark-fixtures` release of this repo. By default the benchmark downloads
+historical `benchmark-fixtures` release in `willie-yao/prow-ai-dashboard`. By
+default the benchmark downloads
 the asset, extracts it to a local cache (`os.UserCacheDir()`), and reads it
 through the `local` storage provider, so the agent traverses the exact
 real directory structure. The download is cached across runs.
@@ -321,6 +336,30 @@ short-lived analyzer client kubeconfig. Use
 `hack/compare-agent-sandbox-analyzer-benchmark.py` to pair its private JSONL with
 `TestAIBenchmark` output and generate the content-free comparison.
 
+The CAPZ cohort is pinned in
+`testdata/benchmarks/capz-agent-sandbox-eval.json`. It contains the route-table,
+Flatcar DNS/providerID, and clusterctl/ASO cases plus exact consumer, fixture,
+source, prompt, and project identities. Set `BENCH_MODEL_CONTEXT_TOKENS` and
+`BENCH_MODEL_OUTPUT_TOKENS` identically for both arms. When private JSONL is
+enabled, the in-process client sends that explicit output cap; normal production
+callers retain the provider default. The route-table case also freezes two
+source expectations, so the nine-pair matrix contains both artifact-only and
+artifact-plus-source trials.
+
+Prepare one case without provider access by mounting the private analyzer input
+claim and setting `ANALYZER_BENCH_PREPARE_ONLY=1`,
+`ANALYZER_BENCH_INPUT_ROOT=<mounted-claim>`, and the exact standalone source
+clone. Preparation copies the complete frozen build tree, writes a compact
+hashed artifact index, and seals the request. Large cases are never reduced to
+a favorable subset.
+
+After immutable executor and stager digests are resolved, run
+`hack/test-agent-sandbox-analysis-images.sh` with its optional output path to
+create a private image-contract JSON. Repeat the prepare-only pass with
+`ANALYZER_BENCH_IMAGE_CONTRACT_JSON` set. Scored execution rejects a prepared
+record, runtime image, embedded Aster revision, UID/GID, image tag, Go version,
+or OpenCode version that differs from that contract.
+
 Blinded packets require
 `--reference-manifest backend/benchmarks/testdata/benchmarks/agent-sandbox-causal-references.json`.
 The packet set includes one runtime-neutral causal reference and full-credit rubric
@@ -334,7 +373,22 @@ blinded causal scores remain separate metrics.
 Freeze the blinded score file with
 `hack/freeze-agent-sandbox-blind-scores.py` before reading the runtime map, then
 pass the resulting `--score-freeze` file to the scored comparison. The comparison
-rejects a changed post-unblinding score file.
+rejects a changed post-unblinding score file. The score document must contain one
+UTC `scoring_timestamp`; the freeze binds that timestamp with the packet,
+reference, and score hashes.
+
+The scored report uses only these classifications:
+
+- `insufficient_evidence`
+- `inprocess_preferred`
+- `shadow_promising_for_more_evaluation`
+- `shadow_materially_better`
+
+It reports every case and distribution separately. It never recommends replacing
+the authoritative analyzer. `shadow_materially_better` requires no lifecycle,
+validity, citation, or source-grounding regression, repeated blinded causal
+improvement in more than one case, complete request/token/cost telemetry, bounded
+cost and latency, and complete cleanup.
 
 The provider-free analyzer integrity harness lives in
 `internal/analysisexecutor`. It is opt-in, uses a deterministic loopback TLS
@@ -343,8 +397,17 @@ Azure Files and Kata differential checks. Its JSON summary contains only
 content-free source integrity snapshots and aggregate tool telemetry.
 
 The provider-free evidence-handle scale harness is also in
-`internal/analysisexecutor`. It runs exact OpenCode 1.18.2 against a
-deterministic loopback TLS gateway and representative large source and artifact
-trees. Broad directory greps reproduce high-cardinality range handling. Its
-summary contains only bounded counts, status, truncation, usage availability,
-phase totals, and allowlisted warning or rejection codes.
+`internal/analysisexecutor`. It runs the exact Aster-pinned OpenCode 1.18.2
+runtime against a deterministic loopback TLS gateway and representative large
+source and artifact trees. Broad directory greps reproduce high-cardinality range
+handling. Its summary contains only bounded counts, status, truncation, usage
+availability, phase totals, and allowlisted warning or rejection codes.
+
+`hack/test-agent-sandbox-analysis-images.sh` additionally runs an instruction-file
+canary inside the exact executor image. Native reads adjacent to nested
+`AGENTS.md`, `CLAUDE.md`, and `CONTEXT.md` fixtures must preserve ordinary evidence
+content and citation reconstruction without attaching any instruction canary or
+loaded-instruction metadata to a provider request. The immutable image contract
+records the upstream commit and source digest, frozen models.dev digest, Bun
+builder identity, runtime and build-only patch identities, embedded Web UI
+identity, and final binary digest.

@@ -49,6 +49,7 @@ type WorkspaceEvidenceHandleDiagnostics struct {
 // WorkspaceEvidenceRange is one exact file range observed by a successful tool.
 type WorkspaceEvidenceRange struct {
 	Root      string
+	SourceID  string
 	Path      string
 	LineStart int
 	LineEnd   int
@@ -58,6 +59,7 @@ type WorkspaceEvidenceRange struct {
 type WorkspaceEvidenceHandle struct {
 	ID        string
 	Root      string
+	SourceID  string
 	Path      string
 	LineStart int
 	LineEnd   int
@@ -127,6 +129,8 @@ func buildWorkspaceEvidenceHandles(workspaceRoot string, ranges []WorkspaceEvide
 		switch {
 		case !validWorkspaceEvidenceRoot(observed.Root):
 			return reject(WorkspaceEvidenceRangeRootInvalid, "workspace evidence range root is invalid")
+		case !validWorkspaceEvidenceSourceID(observed.Root, observed.SourceID):
+			return reject(WorkspaceEvidenceRangeRootInvalid, "workspace evidence range source id is invalid")
 		case !safeWorkspaceSourcePath(observed.Path):
 			return reject(WorkspaceEvidenceRangePathInvalid, "workspace evidence range path is invalid")
 		case observed.LineStart < 1 || observed.LineEnd < observed.LineStart:
@@ -134,10 +138,10 @@ func buildWorkspaceEvidenceHandles(workspaceRoot string, ranges []WorkspaceEvide
 			addCode(WorkspaceEvidenceRangeLineInvalid)
 			continue
 		}
-		pathKey := observed.Root + "\x00" + observed.Path
+		pathKey := observed.Root + "\x00" + observed.SourceID + "\x00" + observed.Path
 		validation, ok := validatedPaths[pathKey]
 		if !ok {
-			root := filepath.Join(workspaceRoot, observed.Root)
+			root := workspaceEvidenceFilesystemRoot(workspaceRoot, observed.Root, observed.SourceID)
 			_, info, exists, err := resolveSourcePathWithinRoot(root, filepath.FromSlash(observed.Path), map[string]bool{}, 0)
 			validation.hard = err != nil
 			validation.valid = err == nil && exists && info != nil && info.Mode().IsRegular()
@@ -204,7 +208,7 @@ func buildWorkspaceEvidenceHandles(workspaceRoot string, ranges []WorkspaceEvide
 			addCode(WorkspaceEvidenceHandleTruncated)
 			continue
 		}
-		rangeKey := observed.Root + "\x00" + observed.Path + "\x00" + strconv.Itoa(observed.LineStart) + "\x00" + strconv.Itoa(observed.LineEnd)
+		rangeKey := observed.Root + "\x00" + observed.SourceID + "\x00" + observed.Path + "\x00" + strconv.Itoa(observed.LineStart) + "\x00" + strconv.Itoa(observed.LineEnd)
 		if seenRanges[rangeKey] {
 			dropRange()
 			addCode(WorkspaceEvidenceHandleDuplicate)
@@ -212,7 +216,7 @@ func buildWorkspaceEvidenceHandles(workspaceRoot string, ranges []WorkspaceEvide
 		}
 		seenRanges[rangeKey] = true
 
-		pathKey := observed.Root + "\x00" + observed.Path
+		pathKey := observed.Root + "\x00" + observed.SourceID + "\x00" + observed.Path
 		cachedFile, cached := contentCache[pathKey]
 		if !cached {
 			validation := validatedPaths[pathKey]
@@ -222,7 +226,7 @@ func buildWorkspaceEvidenceHandles(workspaceRoot string, ranges []WorkspaceEvide
 				addCode(WorkspaceEvidenceHandleTruncated)
 				continue
 			}
-			root := filepath.Join(workspaceRoot, observed.Root)
+			root := workspaceEvidenceFilesystemRoot(workspaceRoot, observed.Root, observed.SourceID)
 			var err error
 			content, err := readText(root, observed.Path, maxWorkspaceFileBytes)
 			if err != nil {
@@ -265,7 +269,7 @@ func buildWorkspaceEvidenceHandles(workspaceRoot string, ranges []WorkspaceEvide
 				addCode(WorkspaceEvidenceHandleTruncated)
 				break
 			}
-			key := observed.Root + "\x00" + observed.Path + "\x00" + strconv.Itoa(line)
+			key := observed.Root + "\x00" + observed.SourceID + "\x00" + observed.Path + "\x00" + strconv.Itoa(line)
 			if seenLines[key] {
 				addCode(WorkspaceEvidenceHandleDuplicate)
 				continue
@@ -277,7 +281,7 @@ func buildWorkspaceEvidenceHandles(workspaceRoot string, ranges []WorkspaceEvide
 			}
 			seenLines[key] = true
 			counts[observed.Root]++
-			handles = append(handles, WorkspaceEvidenceHandle{Root: observed.Root, Path: observed.Path, LineStart: line, LineEnd: line})
+			handles = append(handles, WorkspaceEvidenceHandle{Root: observed.Root, SourceID: observed.SourceID, Path: observed.Path, LineStart: line, LineEnd: line})
 		}
 		if len(handles) == before {
 			dropRange()
@@ -286,6 +290,9 @@ func buildWorkspaceEvidenceHandles(workspaceRoot string, ranges []WorkspaceEvide
 	sort.Slice(handles, func(i, j int) bool {
 		if handles[i].Root != handles[j].Root {
 			return handles[i].Root < handles[j].Root
+		}
+		if handles[i].SourceID != handles[j].SourceID {
+			return handles[i].SourceID < handles[j].SourceID
 		}
 		if handles[i].Path != handles[j].Path {
 			return handles[i].Path < handles[j].Path
@@ -373,7 +380,7 @@ func workspaceEvidenceLine(file workspaceEvidenceFileIndex, line int) string {
 
 // WorkspaceSourceEvidenceCorrectionInstruction requests one bounded source investigation.
 func WorkspaceSourceEvidenceCorrectionInstruction() string {
-	return `Required source grounding is not yet usable. Continue the evidence investigation with a focused, content-bearing read or grep under source/. Use only the failure metadata and artifact findings already inspected to choose relevant source. Do not inspect more artifacts, use StructuredOutput, or provide the final analysis. Respond briefly after the source operation completes.`
+	return `Required source grounding is not yet usable. Continue the evidence investigation with a focused, content-bearing read or grep under sources/<source_id>/. Use only the failure metadata and artifact findings already inspected to choose relevant source. Do not inspect more artifacts, use StructuredOutput, or provide the final analysis. Respond briefly after the source operation completes.`
 }
 
 // WorkspaceFinalizationInstruction binds citation IDs to evidence already seen.
@@ -386,7 +393,7 @@ func WorkspaceFinalizationInstruction(handles []WorkspaceEvidenceHandle) (string
 	for _, handle := range handles {
 		mount := WorkspaceArtifactsDir
 		if handle.Root == WorkspaceSourceDir {
-			mount = WorkspaceSourceDir
+			mount = filepath.ToSlash(filepath.Join(WorkspaceSourcesDir, handle.SourceID))
 		} else {
 			artifactCount++
 		}
@@ -413,13 +420,13 @@ func validateWorkspaceEvidenceHandles(handles []WorkspaceEvidenceHandle) error {
 	seenRanges := map[string]bool{}
 	lastID := ""
 	for _, handle := range handles {
-		if !validWorkspaceEvidenceRoot(handle.Root) || !validWorkspaceEvidenceID(handle.ID, handle.Root) || !safeWorkspaceSourcePath(handle.Path) || handle.LineStart < 1 || handle.LineEnd != handle.LineStart || seenIDs[handle.ID] {
+		if !validWorkspaceEvidenceRoot(handle.Root) || !validWorkspaceEvidenceSourceID(handle.Root, handle.SourceID) || !validWorkspaceEvidenceID(handle.ID, handle.Root) || !safeWorkspaceSourcePath(handle.Path) || handle.LineStart < 1 || handle.LineEnd != handle.LineStart || seenIDs[handle.ID] {
 			return fmt.Errorf("workspace evidence handle is invalid")
 		}
 		if lastID != "" && handle.ID <= lastID {
 			return fmt.Errorf("workspace evidence handles are not canonical")
 		}
-		key := handle.Root + "\x00" + handle.Path + "\x00" + strconv.Itoa(handle.LineStart)
+		key := handle.Root + "\x00" + handle.SourceID + "\x00" + handle.Path + "\x00" + strconv.Itoa(handle.LineStart)
 		if seenRanges[key] {
 			return fmt.Errorf("workspace evidence handle range is duplicated")
 		}
@@ -428,6 +435,23 @@ func validateWorkspaceEvidenceHandles(handles []WorkspaceEvidenceHandle) error {
 		lastID = handle.ID
 	}
 	return nil
+}
+
+func workspaceEvidenceFilesystemRoot(workspaceRoot, root, sourceID string) string {
+	if root == WorkspaceSourceDir {
+		return filepath.Join(workspaceRoot, WorkspaceSourcesDir, sourceID)
+	}
+	return filepath.Join(workspaceRoot, root)
+}
+
+// ValidWorkspaceSourceID reports whether an ID can select one staged source.
+func ValidWorkspaceSourceID(value string) bool { return workspaceSourceID.MatchString(value) }
+
+func validWorkspaceEvidenceSourceID(root, sourceID string) bool {
+	if root == WorkspaceSourceDir {
+		return ValidWorkspaceSourceID(sourceID)
+	}
+	return sourceID == ""
 }
 
 func validWorkspaceEvidenceRoot(value string) bool {

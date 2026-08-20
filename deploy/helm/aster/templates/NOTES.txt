@@ -21,6 +21,7 @@ Shared volume:    {{ include "aster.pvcName" . }} ({{ .Values.persistence.access
 Shadow analysis:  configured, authoritative runtime remains inprocess
 Shadow namespace: {{ .Values.agentSandbox.analysisShadow.namespace }}
 Private ledger:   {{ .Values.agentSandbox.analysisShadow.ledger.existingClaim }} (not mounted by server)
+Private input:    {{ .Values.agentSandbox.analysisShadow.input.existingClaim }} (publisher write, Sandbox read-only, cleanup Job delete)
 {{- end }}
 
 The server serves the SPA at / and the JSON contract at /data/*, with a

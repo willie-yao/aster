@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 // CorrectionCandidate is the immutable structured revision eligible for review.
@@ -62,6 +64,9 @@ func (s *Service) CorrectionCandidate(id, owner, requestID string) (CorrectionCa
 		if analysis == nil {
 			return changed, ErrAnalysisNotFound
 		}
+		if analysis.Disposition != models.AnalysisDispositionGrounded {
+			return changed, fmt.Errorf("%w: preliminary analyses cannot be promoted as corrections", ErrInvalidRequest)
+		}
 		candidate = CorrectionCandidate{
 			SessionID: current.View.ID,
 			RequestID: requestID,
@@ -85,7 +90,7 @@ func (s *Service) ValidateCorrectionCandidate(candidate CorrectionCandidate) err
 		return err
 	}
 	analysis := resolved.testCase.AIAnalysis
-	if analysis == nil || strings.TrimSpace(analysis.RootCause) != candidate.Original.RootCause ||
+	if analysis == nil || analysis.Disposition != models.AnalysisDispositionGrounded || strings.TrimSpace(analysis.RootCause) != candidate.Original.RootCause ||
 		strings.TrimSpace(analysis.SuggestedFix) != candidate.Original.SuggestedFix {
 		return ErrAnalysisChanged
 	}

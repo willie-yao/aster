@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -194,5 +195,71 @@ func TestErrPayloadEnvelope(t *testing.T) {
 	res := ErrPayload("boom")
 	if res.Payload["error"] != "boom" {
 		t.Errorf("ErrPayload payload = %v, want {error:boom}", res.Payload)
+	}
+}
+
+type catalogReader struct{}
+
+func (catalogReader) ListTree(context.Context) ([]string, error) { return nil, nil }
+func (catalogReader) ReadFile(context.Context, string) (string, bool, error) {
+	return "", false, nil
+}
+
+func TestSourceCatalogCanonicalOrderAndPrimary(t *testing.T) {
+	catalog, err := NewSourceCatalog("project", []RepoSource{
+		{ID: "server", Owner: "kubernetes", Name: "kubernetes", Revision: strings.Repeat("2", 40), Reader: catalogReader{}},
+		{ID: "project", Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: catalogReader{}},
+		{ID: "client", Owner: "kubernetes", Name: "kubernetes", Revision: strings.Repeat("3", 40), Reader: catalogReader{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := catalog.Sources()
+	if len(got) != 3 || got[0].ID != "client" || got[1].ID != "project" || got[2].ID != "server" {
+		t.Fatalf("sources=%+v", got)
+	}
+	primary, ok := catalog.Primary()
+	if !ok || primary.ID != "project" || catalog.PrimaryID() != "project" {
+		t.Fatalf("primary=%+v ok=%t id=%q", primary, ok, catalog.PrimaryID())
+	}
+}
+
+func TestSourceCatalogValidation(t *testing.T) {
+	reader := catalogReader{}
+	base := RepoSource{ID: "project", Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: reader}
+	cases := []struct {
+		name    string
+		primary string
+		sources []RepoSource
+	}{
+		{name: "missing primary", primary: "other", sources: []RepoSource{base}},
+		{name: "invalid id", primary: "Project", sources: []RepoSource{{ID: "Project", Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: reader}}},
+		{name: "duplicate id", primary: "project", sources: []RepoSource{base, {ID: "project", Owner: "example", Name: "other", Revision: strings.Repeat("2", 40), Reader: reader}}},
+		{name: "duplicate revision", primary: "project", sources: []RepoSource{base, {ID: "mirror", Owner: "EXAMPLE", Name: "PROJECT", Revision: strings.Repeat("1", 40), Reader: reader}}},
+		{name: "missing reader", primary: "project", sources: []RepoSource{{ID: "project", Owner: "example", Name: "project", Revision: strings.Repeat("1", 40)}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NewSourceCatalog(tc.primary, tc.sources); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+	tooMany := make([]RepoSource, maxRepoSources+1)
+	for i := range tooMany {
+		tooMany[i] = RepoSource{ID: "source-" + string(rune('a'+i)), Owner: "example", Name: "repo-" + string(rune('a'+i)), Revision: strings.Repeat("a", 40), Reader: reader}
+	}
+	if _, err := NewSourceCatalog(tooMany[0].ID, tooMany); err == nil {
+		t.Fatal("expected source catalog bound error")
+	}
+}
+
+func TestSourceCatalogAllowsSameRepositoryAtDifferentRevisions(t *testing.T) {
+	catalog, err := NewSourceCatalog("client", []RepoSource{
+		{ID: "client", Owner: "kubernetes", Name: "kubernetes", Revision: strings.Repeat("1", 40), Reader: catalogReader{}},
+		{ID: "server", Owner: "kubernetes", Name: "kubernetes", Revision: strings.Repeat("2", 40), Reader: catalogReader{}},
+	})
+	if err != nil || len(catalog.Sources()) != 2 {
+		t.Fatalf("catalog=%+v err=%v", catalog, err)
 	}
 }

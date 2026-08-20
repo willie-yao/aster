@@ -72,10 +72,17 @@ expect_pass cron "$tmp/cron.yaml"
 
 cat > "$tmp/analysis-shadow.yaml" <<'VALUES'
 mode: cron
+fetcher:
+  resources:
+    requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 3Gi}
+    limits: {cpu: "1", memory: 1Gi, ephemeral-storage: 3Gi}
 ai:
   enabled: true
   endpoint: https://api.githubcopilot.com/chat/completions
   model: fixture-model
+  reasoningEffort: high
+  contextWindowTokens: 200000
+  maxOutputTokens: 8192
   existingSecret: fixture-model-auth
 agentSandbox:
   analysisShadow:
@@ -86,35 +93,58 @@ agentSandbox:
       repository: local/shadow-executor
       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       pullPolicy: IfNotPresent
+    stagerImage:
+      repository: local/shadow-stager
+      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      pullPolicy: IfNotPresent
+    dashboardImage:
+      repository: local/remote-fixer
+      tag: sha-1234567
+      pullPolicy: IfNotPresent
+    input:
+      existingClaim: shadow-input
+      localRoot: /analysis-shadow-input
+      localSizeLimit: 3Gi
     workloadServiceAccount:
       create: true
       name: shadow-workload
-    agentVersion: v1
     modelProvider:
       credentialMode: direct
       api: chat_completions
       endpoint: https://api.githubcopilot.com/chat/completions
       model: fixture-model
+      reasoningEffort: high
+      auth:
+        type: bearer
+        existingSecret: shadow-provider
+        tokenKey: AI_TOKEN
+      publicCAPrivateDNS: false
     timeout: 10m
-    retries: 0
-    outputLimitBytes: 65536
+    outputLimitBytes: 262144
     maxPerRun: 1
-    maxTurns: 12
+    maxSteps: 20
+    modelContextTokens: 200000
+    modelOutputTokens: 8192
+    requireSourceEvidence: true
     pollInterval: 250ms
     ledger:
       existingClaim: shadow-ledger
-      mountPath: /private/analysis-shadow
+      mountPath: /private/analysis-shadow-ledger
     networkPolicy:
-      mode: kubernetes
+      mode: cilium
       enabled: true
-      gatewayNamespaceSelector: {kubernetes.io/metadata.name: platform}
-      gatewayPodSelector: {app: model-gateway}
+      gatewayNamespaceSelector: {}
+      gatewayPodSelector: {}
       gatewayPort: 443
+      gatewayTargetPort: null
+      stagingFQDNs: [github.com, api.github.com, storage.googleapis.com]
       dnsNamespaceSelector: {kubernetes.io/metadata.name: kube-system}
       dnsPodSelector: {k8s-app: kube-dns}
+    quota:
+      enabled: true
     resources:
-      requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
-      limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 256Mi}
+      requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 3Gi}
+      limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 3Gi}
 VALUES
 expect_pass analysis-shadow "$tmp/analysis-shadow.yaml"
 
@@ -242,7 +272,7 @@ cat > "$tmp/invalid-analysis-shadow-api.yaml" <<'VALUES'
 agentSandbox:
   analysisShadow:
     modelProvider:
-      api: responses
+      api: completions
 VALUES
 expect_fail invalid-analysis-shadow-api "$tmp/invalid-analysis-shadow-api.yaml" /agentSandbox/analysisShadow/modelProvider/api
 
@@ -410,6 +440,10 @@ agentSandbox:
       repository: local/analyzer
       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       pullPolicy: IfNotPresent
+    stagerImage:
+      repository: local/analyzer-stager
+      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      pullPolicy: IfNotPresent
     input:
       existingClaim: analyzer-input
     clientServiceAccount:
@@ -442,8 +476,8 @@ agentSandbox:
     quota:
       enabled: true
     resources:
-      requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 2Gi}
-      limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 2Gi}
+      requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 3Gi}
+      limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 3Gi}
 VALUES
 expect_pass agent-sandbox-analyzer "$tmp/agent-sandbox-analyzer.yaml"
 

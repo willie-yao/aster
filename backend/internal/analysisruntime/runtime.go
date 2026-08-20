@@ -119,11 +119,12 @@ func LoadProject(projectDir string, cfg *project.Config, fallbacks ProviderFallb
 
 // Options configure reusable model and Tool runtime state.
 type Options struct {
-	Token         string
-	DataDir       string
-	Project       *Project
-	UsageRecorder *aiusage.Recorder
-	UsageOrigin   aiusage.Origin
+	Token           string
+	DataDir         string
+	Project         *Project
+	UsageRecorder   *aiusage.Recorder
+	UsageOrigin     aiusage.Origin
+	MaxOutputTokens int
 }
 
 // Runtime holds reusable model, cache, budget, and Tool registry state.
@@ -135,6 +136,7 @@ type Runtime struct {
 	ContextByteBudget   int
 	ContextWindowTokens int
 	RequestTokenBudget  int
+	MaxOutputTokens     int
 	Project             *Project
 	UsageRecorder       *aiusage.Recorder
 	UsageOrigin         aiusage.Origin
@@ -153,6 +155,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		Model:           opts.Project.Provider.Model,
 		ReasoningEffort: opts.Project.Provider.ReasoningEffort,
 		ExtraHeaders:    opts.Project.Provider.Headers,
+		MaxOutputTokens: opts.MaxOutputTokens,
 	})
 	if err := client.ValidateConfiguration(); err != nil {
 		return nil, err
@@ -192,6 +195,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		ContextByteBudget:   budgets.ContextByteBudget,
 		ContextWindowTokens: budgets.ContextWindowTokens,
 		RequestTokenBudget:  budgets.RequestTokenBudget,
+		MaxOutputTokens:     opts.MaxOutputTokens,
 		Project:             opts.Project,
 		UsageRecorder:       opts.UsageRecorder,
 		UsageOrigin:         opts.UsageOrigin,

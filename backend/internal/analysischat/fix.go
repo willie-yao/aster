@@ -77,6 +77,9 @@ func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandi
 		if analysis == nil {
 			return changed, ErrAnalysisNotFound
 		}
+		if analysis.Disposition != models.AnalysisDispositionGrounded {
+			return changed, fmt.Errorf("%w: preliminary analyses cannot create fixes", ErrInvalidRequest)
+		}
 		candidate = FixCandidate{
 			SessionID: current.View.ID, RequestID: requestID, Analysis: current.View.Analysis,
 			Original: analysisSnapshot(analysis), AssistantAnswer: strings.TrimSpace(answer.Content),
@@ -102,7 +105,7 @@ func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandi
 	}
 	analysis := resolved.testCase.AIAnalysis
 	currentSource, sourceOK := resolveBuildSourceRepository(resolved.build, candidate.SourceRepositorySnapshot)
-	if analysis == nil || candidate.AnalysisContentHash == "" || models.TestAnalysisContentHash(resolved.testCase) != candidate.AnalysisContentHash ||
+	if analysis == nil || analysis.Disposition != models.AnalysisDispositionGrounded || candidate.AnalysisContentHash == "" || models.TestAnalysisContentHash(resolved.testCase) != candidate.AnalysisContentHash ||
 		!sameAnalysisSnapshot(candidate.Original, analysisSnapshot(analysis)) || sourceinvestigation.ValidateRepository(candidate.SourceRepositorySnapshot) != nil ||
 		!sourceOK || currentSource != candidate.SourceRepositorySnapshot {
 		return FixCandidate{}, ErrAnalysisChanged

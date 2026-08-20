@@ -4,32 +4,198 @@
     "secrets-store-csi-image-scan": {
       "reference_diagnosis": "The pinned image contains the reported vulnerable dependency versions, Trivy reports fixed MEDIUM or higher vulnerabilities, and the repository's image-scan policy intentionally fails on those fixed findings.",
       "required_chain": [
-        {"id": "affected-installed-versions", "text": "Identify the installed dependency versions reported as vulnerable."},
-        {"id": "fixed-trivy-findings", "text": "Identify the Trivy findings and available fixed versions."},
-        {"id": "scan-policy-failure", "text": "Treat the configured image-scan failure policy as the initiating mechanism."}
+        {
+          "id": "affected-installed-versions",
+          "text": "Identify the installed dependency versions reported as vulnerable."
+        },
+        {
+          "id": "fixed-trivy-findings",
+          "text": "Identify the Trivy findings and available fixed versions."
+        },
+        {
+          "id": "scan-policy-failure",
+          "text": "Treat the configured image-scan failure policy as the initiating mechanism."
+        }
       ],
-      "downstream_noise": ["The terminal command failure is an expected consequence of the scan policy, not an unrelated infrastructure failure."]
+      "downstream_noise": [
+        "The terminal command failure is an expected consequence of the scan policy, not an unrelated infrastructure failure."
+      ]
     },
     "kueue-was-podgroup-api-mismatch": {
       "reference_diagnosis": "The API server serves scheduling.k8s.io/v1alpha3 while the fetched Kubernetes scheduler requests v1beta1 PodGroups. The v1beta1 request is unavailable or returns 404, scheduler handlers do not synchronize, the workload remains unscheduled, and the deployment timeout is downstream.",
       "required_chain": [
-        {"id": "served-v1alpha3", "text": "Identify that scheduling.k8s.io/v1alpha3 is served."},
-        {"id": "requested-v1beta1", "text": "Identify the scheduler's v1beta1 PodGroup request."},
-        {"id": "unavailable-api-response", "text": "Identify the unavailable or 404 v1beta1 API response."},
-        {"id": "scheduler-sync-failure", "text": "Connect the API mismatch to scheduler handler synchronization failure."},
-        {"id": "timeout-downstream", "text": "Treat the terminal deployment timeout as downstream rather than primary."}
+        {
+          "id": "served-v1alpha3",
+          "text": "Identify that scheduling.k8s.io/v1alpha3 is served."
+        },
+        {
+          "id": "requested-v1beta1",
+          "text": "Identify the scheduler's v1beta1 PodGroup request."
+        },
+        {
+          "id": "unavailable-api-response",
+          "text": "Identify the unavailable or 404 v1beta1 API response."
+        },
+        {
+          "id": "scheduler-sync-failure",
+          "text": "Connect the API mismatch to scheduler handler synchronization failure."
+        },
+        {
+          "id": "timeout-downstream",
+          "text": "Treat the terminal deployment timeout as downstream rather than primary."
+        }
       ],
-      "downstream_noise": ["Kind node readiness and dependency deployment timeouts cannot receive full diagnosis credit unless the PodGroup mismatch chain is established."]
+      "downstream_noise": [
+        "Kind node readiness and dependency deployment timeouts cannot receive full diagnosis credit unless the PodGroup mismatch chain is established."
+      ]
     },
     "gcp-pd-csi-windows-mount-visibility": {
       "reference_diagnosis": "The CSI driver reports successful stage and publish operations and the Windows target pod becomes Running and Ready, but the mounted path is absent inside the container. Ownership remains unresolved at the publish-to-container visibility boundary.",
       "required_chain": [
-        {"id": "publish-succeeded", "text": "Preserve the successful NodePublishVolume evidence."},
-        {"id": "target-pod-ready", "text": "Preserve that the target pod became Running and Ready."},
-        {"id": "container-path-missing", "text": "Identify that the expected mount path is absent inside the Windows container."},
-        {"id": "boundary-unresolved", "text": "Keep ownership unresolved between test volumeMount, kubelet/container runtime, and CSI-proxy visibility boundaries."}
+        {
+          "id": "publish-succeeded",
+          "text": "Preserve the successful NodePublishVolume evidence."
+        },
+        {
+          "id": "target-pod-ready",
+          "text": "Preserve that the target pod became Running and Ready."
+        },
+        {
+          "id": "container-path-missing",
+          "text": "Identify that the expected mount path is absent inside the Windows container."
+        },
+        {
+          "id": "boundary-unresolved",
+          "text": "Keep ownership unresolved between test volumeMount, kubelet/container runtime, and CSI-proxy visibility boundaries."
+        }
       ],
-      "downstream_noise": ["Do not assign the failure to the CSI driver after successful publish without evidence that contradicts that success."]
+      "downstream_noise": [
+        "Do not assign the failure to the CSI driver after successful publish without evidence that contradicts that success."
+      ]
+    },
+    "kubectl-skew-stable2-latest-kubeproxy-version": {
+      "reference_diagnosis": "The job pairs a release-1.35 stable e2e test with the latest kubectl client. The stable test still requires kubectl describe node output to contain Kube-Proxy Version, while the latest test and kubectl describe implementation no longer emit or require that field after the deprecated nodeInfo kubeProxyVersion value was retired. The deterministic assertion failure is therefore a client and test version-skew contract mismatch, not evidence of kube-proxy or node-health failure.",
+      "required_chain": [
+        {
+          "id": "mixed-version-job",
+          "text": "Identify that the job runs the stable release-1.35 e2e test against the latest kubectl client."
+        },
+        {
+          "id": "stable-test-requires-field",
+          "text": "Identify that the stable test requires Kube-Proxy Version in kubectl describe node output."
+        },
+        {
+          "id": "latest-client-omits-field",
+          "text": "Identify that the latest test and kubectl describe implementation omit the retired Kube-Proxy Version field."
+        },
+        {
+          "id": "version-skew-assertion",
+          "text": "Connect the removed output field to the stable test assertion failure as a client and test version-skew mismatch."
+        },
+        {
+          "id": "health-not-primary",
+          "text": "Reject kube-proxy or node health as the initiating cause without independent health evidence."
+        },
+        {
+          "id": "persistent-not-flake",
+          "text": "Preserve that the identical repeated failures are deterministic rather than transient."
+        }
+      ],
+      "downstream_noise": [
+        "The missing display field and terminal Ginkgo failure do not establish a kube-proxy daemon or node-readiness failure."
+      ]
+    },
+    "ccm-dualstack-control-plane-routetable": {
+      "reference_diagnosis": "The dual-stack CAPZ workload is persistently broken because the control-plane subnet has no route table for worker pod CIDRs. Control-plane traffic cannot reach the Calico APIService, and namespace termination and node-resource timeouts are downstream. The corrective ownership is CAPZ AzureCluster subnet routing rather than the cloud-provider-azure test.",
+      "required_chain": [
+        {
+          "id": "persistent-not-flake",
+          "text": "Establish that repeated failures make this systemic rather than transient."
+        },
+        {
+          "id": "missing-control-plane-route-table",
+          "text": "Identify the absent control-plane subnet route table or equivalent missing route to worker pod CIDRs as the initiating cause."
+        },
+        {
+          "id": "calico-api-unreachable",
+          "text": "Connect the routing gap to Calico APIService or discovery unreachability."
+        },
+        {
+          "id": "namespace-timeouts-downstream",
+          "text": "Treat namespace termination and generic condition timeouts as downstream symptoms."
+        },
+        {
+          "id": "capz-ownership",
+          "text": "Place corrective ownership in CAPZ or AzureCluster subnet routing rather than the cloud-provider-azure assertion."
+        }
+      ],
+      "downstream_noise": [
+        "Generic wait timeouts, namespace cleanup failures, and node-resource assertions cannot receive full diagnosis credit unless the control-plane routing chain is established."
+      ]
+    },
+    "flatcar-worker-dns-providerid": {
+      "reference_diagnosis": "The Flatcar worker VM and Node exist and become Ready, but the Node remains cloud-provider uninitialized without a providerID. cloud-node-manager cannot reach the Kubernetes API Service because kube-proxy never synchronizes after DNS lookup uses [::1]:53 and receives connection refused. The next run passes, making this a concrete transient bootstrap failure.",
+      "required_chain": [
+        {
+          "id": "worker-node-exists",
+          "text": "Preserve that the worker Node exists or registers instead of claiming it was never created."
+        },
+        {
+          "id": "providerid-missing",
+          "text": "Identify the missing providerID or cloud-provider uninitialized state."
+        },
+        {
+          "id": "cloud-node-manager-api-failure",
+          "text": "Connect the missing providerID to cloud-node-manager API Service reachability failure."
+        },
+        {
+          "id": "kube-proxy-unsynchronized",
+          "text": "Connect API Service reachability to kube-proxy synchronization failure."
+        },
+        {
+          "id": "loopback-dns-refused",
+          "text": "Identify the loopback resolver [::1]:53 connection refusal as the initiating bootstrap failure."
+        },
+        {
+          "id": "transient-confirmed",
+          "text": "Classify it as transient using the successful following run with unchanged versions."
+        }
+      ],
+      "downstream_noise": [
+        "The MachineDeployment timeout and missing providerID are downstream and must not replace the DNS and kube-proxy causal chain."
+      ]
+    },
+    "apiversion-upgrade-clusterctl-aso-ratelimit": {
+      "reference_diagnosis": "During clusterctl provider upgrade, the Azure Service Operator controller is scaled down before object discovery completes. Its CRD conversion webhook becomes unreachable, so listing ASO resource CRDs retries until the client rate limiter reaches the context deadline. The rate-limit deadline is downstream of the conversion-webhook sequencing failure.",
+      "required_chain": [
+        {
+          "id": "clusterctl-upgrade",
+          "text": "Identify clusterctl provider upgrade as the failing operation."
+        },
+        {
+          "id": "aso-scaled-down",
+          "text": "Identify that the ASO controller is scaled down during upgrade sequencing."
+        },
+        {
+          "id": "conversion-webhook-unreachable",
+          "text": "Connect the scale-down to an unreachable or connection-refused ASO conversion webhook."
+        },
+        {
+          "id": "aso-crd-listing-fails",
+          "text": "Connect the webhook outage to VirtualNetworksSubnet or ManagedClustersAgentPool CRD object-list failures."
+        },
+        {
+          "id": "deadline-downstream",
+          "text": "Treat retries, rate limiting, and context deadline as downstream rather than the initiating cause."
+        },
+        {
+          "id": "persistent-not-flake",
+          "text": "Preserve that the repeated failure is systemic rather than transient."
+        }
+      ],
+      "downstream_noise": [
+        "The client-side rate limiter and context deadline cannot receive full diagnosis credit without the ASO scale-down and conversion-webhook chain."
+      ]
     }
   }
 }

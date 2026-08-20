@@ -135,6 +135,22 @@ func (l *AnalysisCauseLocation) Clone() *AnalysisCauseLocation {
 	return &out
 }
 
+const (
+	// AnalysisDispositionPreliminary identifies a safe structured analysis that
+	// still has unresolved grounding or quality warnings.
+	AnalysisDispositionPreliminary = "preliminary"
+	// AnalysisDispositionGrounded identifies an analysis with verified artifact
+	// grounding and no unresolved grounding defect.
+	AnalysisDispositionGrounded = "grounded"
+
+	AnalysisWarningArtifactGrounding = "artifact_grounding_incomplete"
+	AnalysisWarningSourceGrounding   = "source_grounding_incomplete"
+	AnalysisWarningInvestigation     = "investigation_incomplete"
+	AnalysisWarningRemediation       = "remediation_incomplete"
+	AnalysisWarningClassification    = "classification_conflict"
+	AnalysisWarningSemanticReview    = "semantic_review_unresolved"
+)
+
 // AIAnalysis is a deep AI-generated root cause analysis.
 type AIAnalysis struct {
 	GeneratedAt string `json:"generated_at"`
@@ -149,9 +165,17 @@ type AIAnalysis struct {
 	RelevantFiles     []string           `json:"relevant_files,omitempty"`
 	SearchSuggestions []string           `json:"search_suggestions,omitempty"`
 	EvidenceCitations []EvidenceCitation `json:"evidence_citations,omitempty"`
+
 	// CauseLocation records which repository owns the diagnosed cause. Absent
 	// when the analysis did not establish ownership.
 	CauseLocation *AnalysisCauseLocation `json:"cause_location,omitempty"`
+
+	// Disposition separates safe displayability from grounding and action policy.
+	// Action eligibility is derived separately and is never stored here.
+	Disposition string `json:"disposition,omitempty"`
+	// DispositionWarnings contains bounded, non-sensitive warning codes.
+	DispositionWarnings []string `json:"disposition_warnings,omitempty"`
+
 	// Mode records the analysis pipeline. Cache gates reject non-agentic entries.
 	Mode string `json:"mode,omitempty"`
 	// ToolCalls is the number of agent tool invocations made during this

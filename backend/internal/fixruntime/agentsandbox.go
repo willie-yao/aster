@@ -56,6 +56,7 @@ const (
 	defaultSandboxMemoryRequest            = "128Mi"
 	defaultSandboxMemoryLimit              = "512Mi"
 	defaultSandboxDiskLimit                = "256Mi"
+	agentSandboxStagerLogLimit             = int64(4 << 10)
 )
 
 func agentSandboxResultGraceForPurpose(purpose string) time.Duration {
@@ -65,8 +66,15 @@ func agentSandboxResultGraceForPurpose(purpose string) time.Duration {
 	return agentSandboxResultGrace
 }
 
+func agentSandboxResultGraceForSpec(spec agentsandbox.Spec) time.Duration {
+	if spec.FinalizationGrace > 0 {
+		return spec.FinalizationGrace
+	}
+	return agentSandboxResultGraceForPurpose(spec.Purpose)
+}
+
 func agentSandboxRunTimeout(spec agentsandbox.Spec) time.Duration {
-	return spec.Timeout + agentSandboxResultGraceForPurpose(spec.Purpose) + 5*time.Second
+	return spec.Timeout + agentSandboxResultGraceForSpec(spec) + 5*time.Second
 }
 
 var (
@@ -83,6 +91,22 @@ func (r *AgentSandboxRuntime) Namespace() string {
 		return ""
 	}
 	return r.opts.Namespace
+}
+
+// ExecutorImage returns the immutable executor image configured for this runtime.
+func (r *AgentSandboxRuntime) ExecutorImage() string {
+	if r == nil {
+		return ""
+	}
+	return normalizeAgentSandboxOptions(r.opts).Image
+}
+
+// StagerImage returns the immutable stager image configured for this runtime.
+func (r *AgentSandboxRuntime) StagerImage() string {
+	if r == nil {
+		return ""
+	}
+	return normalizeAgentSandboxOptions(r.opts).StagerImage
 }
 
 func (r *AgentSandboxRuntime) RuntimeIdentity() string {
@@ -180,6 +204,10 @@ type sandboxState struct {
 	ExecutionStartedAt  time.Time
 	ExecutionFinishedAt time.Time
 	TimingStatus        string
+	StagerFailureCode   string
+	StagerExitCode      int64
+	StagerReason        string
+	ExecutorStarted     bool
 }
 
 // agentSandboxAPI is the low-level lifecycle seam intended for a future shared
@@ -189,7 +217,7 @@ type agentSandboxAPI interface {
 	Create(context.Context, string, map[string]any) (sandboxState, error)
 	State(context.Context, string, string) (sandboxState, error)
 	Delete(context.Context, string, string, string) error
-	PodLogs(context.Context, string, string, int64) (string, error)
+	PodLogs(context.Context, string, string, string, int64) (string, error)
 	PodExists(context.Context, string, string) (bool, error)
 	ExecutionPods(context.Context, string, string) ([]string, error)
 }
@@ -712,12 +740,22 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	result.Telemetry.StagingMs = durationMilliseconds(terminal.StageStartedAt, terminal.StageFinishedAt)
 	result.Telemetry.ExecutionAvailable = !terminal.ExecutionStartedAt.IsZero() && !terminal.ExecutionFinishedAt.IsZero()
 	result.Telemetry.ExecutionMs = durationMilliseconds(terminal.ExecutionStartedAt, terminal.ExecutionFinishedAt)
+	result.Telemetry.ExecutorStarted = terminal.ExecutorStarted
 	result.Telemetry.PhaseTimingStatus = terminal.TimingStatus
 	if result.Telemetry.SchedulingAvailable && result.Telemetry.StagingAvailable && result.Telemetry.ExecutionAvailable {
 		result.Telemetry.PhaseTimingStatus = "available"
 	}
+	if terminal.StagerFailureCode != "" && !terminal.ExecutorStarted {
+		result.Telemetry.FailurePhase = "staging"
+		result.Telemetry.FailureCode = terminal.StagerFailureCode
+		diagnostic := "unavailable"
+		if logs, logErr := r.api.PodLogs(runCtx, r.opts.Namespace, terminal.PodName, agentSandboxStagerName, agentSandboxStagerLogLimit); logErr == nil {
+			diagnostic = stagerDiagnosticCategory(logs)
+		}
+		return result, agentSandboxStagingError(terminal, diagnostic)
+	}
 
-	logs, err := r.api.PodLogs(runCtx, r.opts.Namespace, terminal.PodName, spec.OutputLimitBytes)
+	logs, err := r.api.PodLogs(runCtx, r.opts.Namespace, terminal.PodName, agentSandboxContainerName, spec.OutputLimitBytes)
 	if err != nil {
 		return result, fmt.Errorf("%w: read agent Sandbox result: %v", engineruntime.ErrMalformedResult, err)
 	}
@@ -866,7 +904,7 @@ func (r *AgentSandboxRuntime) waitTerminal(ctx context.Context, work enginerunti
 }
 
 func (r *AgentSandboxRuntime) sandboxObjectForSpec(name string, spec agentsandbox.Spec, contractHash []byte, executionID string) map[string]any {
-	shutdown := r.now().Add(spec.Timeout + defaultSandboxCleanupTimeout).UTC().Format(time.RFC3339)
+	shutdown := r.now().Add(spec.Timeout + agentSandboxResultGraceForSpec(spec) + defaultSandboxCleanupTimeout).UTC().Format(time.RFC3339)
 	labels := map[string]any{
 		"app.kubernetes.io/managed-by": "prow-ai-dashboard",
 		"agents.x-k8s.io/created-by":   "prow-ai-dashboard",
@@ -890,6 +928,9 @@ func (r *AgentSandboxRuntime) sandboxObjectForSpec(name string, spec agentsandbo
 	if spec.PreparedWorkspace != nil {
 		annotations[agentSandboxPreparedAnnotation] = spec.PreparedWorkspace.ManifestHash
 		annotations[agentSandboxPreparedIdentityAnnotation] = spec.PreparedWorkspace.IdentityHash
+	} else if spec.StagedWorkspace != nil {
+		annotations[agentSandboxPreparedAnnotation] = spec.StagedWorkspace.ManifestHash
+		annotations[agentSandboxPreparedIdentityAnnotation] = spec.StagedWorkspace.IdentityHash
 	}
 	return map[string]any{
 		"apiVersion": "agents.x-k8s.io/v1beta1",
@@ -1046,17 +1087,25 @@ func agentSandboxWorkloadHash(spec agentsandbox.Spec, opts AgentSandboxOptions) 
 	if spec.PreparedWorkspace != nil {
 		preparedHash = spec.PreparedWorkspace.ManifestHash
 		preparedIdentity = spec.PreparedWorkspace.IdentityHash
+	} else if spec.StagedWorkspace != nil {
+		preparedHash = spec.StagedWorkspace.ManifestHash
+		preparedIdentity = spec.StagedWorkspace.IdentityHash
+	}
+	finalizationGrace := ""
+	if spec.FinalizationGrace > 0 {
+		finalizationGrace = spec.FinalizationGrace.String()
 	}
 	metadata, _ := json.Marshal(struct {
 		Purpose              string `json:"purpose"`
 		RequestEnv           string `json:"request_env"`
 		Timeout              string `json:"timeout"`
+		FinalizationGrace    string `json:"finalization_grace,omitempty"`
 		OutputLimitBytes     int64  `json:"output_limit_bytes"`
 		WritableWorkspace    bool   `json:"writable_workspace"`
 		StageRequestEnv      string `json:"stage_request_env,omitempty"`
 		PreparedManifestHash string `json:"prepared_manifest_hash,omitempty"`
 		PreparedIdentityHash string `json:"prepared_identity_hash,omitempty"`
-	}{spec.Purpose, spec.RequestEnv, spec.Timeout.String(), spec.OutputLimitBytes, spec.WritableWorkspace, stageEnv, preparedHash, preparedIdentity})
+	}{spec.Purpose, spec.RequestEnv, spec.Timeout.String(), finalizationGrace, spec.OutputLimitBytes, spec.WritableWorkspace, stageEnv, preparedHash, preparedIdentity})
 	request := append(append(append([]byte(nil), metadata...), 0), spec.Request...)
 	if spec.StagedWorkspace != nil {
 		request = append(request, 0)
@@ -1238,9 +1287,12 @@ func (k *kubeAgentSandboxAPI) Delete(ctx context.Context, namespace, name, uid s
 	return err
 }
 
-func (k *kubeAgentSandboxAPI) PodLogs(ctx context.Context, namespace, podName string, limit int64) (string, error) {
+func (k *kubeAgentSandboxAPI) PodLogs(ctx context.Context, namespace, podName, container string, limit int64) (string, error) {
+	if container != agentSandboxContainerName && container != agentSandboxStagerName {
+		return "", fmt.Errorf("pod log container is invalid")
+	}
 	endpoint := k.host + "/api/v1/namespaces/" + url.PathEscape(namespace) + "/pods/" + url.PathEscape(podName) + "/log"
-	query := url.Values{"container": {agentSandboxContainerName}, "limitBytes": {fmt.Sprintf("%d", limit+1)}}
+	query := url.Values{"container": {container}, "limitBytes": {fmt.Sprintf("%d", limit+1)}}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+query.Encode(), nil)
 	if err != nil {
 		return "", fmt.Errorf("construct Pod log request: %w", err)
@@ -1254,12 +1306,12 @@ func (k *kubeAgentSandboxAPI) PodLogs(ctx context.Context, namespace, podName st
 		lifecycle := k.podLogLifecycleContext(ctx, namespace, podName)
 		body, bodyErr := readBoundedKubernetesBody(response.Body)
 		if errors.Is(bodyErr, errKubernetesErrorBodyOversized) {
-			return "", fmt.Errorf("pod logs for %s/%s unavailable: %s; Kubernetes API HTTP %d status response exceeds %d bytes", namespace, podName, lifecycle, response.StatusCode, maxKubernetesErrorBodyBytes)
+			return "", fmt.Errorf("pod logs for %s/%s container %s unavailable: %s; Kubernetes API HTTP %d status response exceeds %d bytes", namespace, podName, container, lifecycle, response.StatusCode, maxKubernetesErrorBodyBytes)
 		}
 		if bodyErr != nil {
-			return "", fmt.Errorf("pod logs for %s/%s unavailable: %s; read Kubernetes API HTTP %d status response: %s", namespace, podName, lifecycle, response.StatusCode, safeKubernetesDiagnostic(bodyErr.Error()))
+			return "", fmt.Errorf("pod logs for %s/%s container %s unavailable: %s; read Kubernetes API HTTP %d status response: %s", namespace, podName, container, lifecycle, response.StatusCode, safeKubernetesDiagnostic(bodyErr.Error()))
 		}
-		return "", fmt.Errorf("pod logs for %s/%s unavailable: %s; Kubernetes API HTTP %d: %s", namespace, podName, lifecycle, response.StatusCode, kubernetesStatusDetail(body))
+		return "", fmt.Errorf("pod logs for %s/%s container %s unavailable: %s; Kubernetes API HTTP %d: %s", namespace, podName, container, lifecycle, response.StatusCode, kubernetesStatusDetail(body))
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, limit+2))
 	if err != nil {
@@ -1267,6 +1319,10 @@ func (k *kubeAgentSandboxAPI) PodLogs(ctx context.Context, namespace, podName st
 	}
 	if int64(len(data)) > limit {
 		return "", fmt.Errorf("pod logs response exceeds %d bytes", limit)
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		lifecycle := k.podLogLifecycleContext(ctx, namespace, podName)
+		return "", fmt.Errorf("pod logs for %s/%s container %s are empty: %s", namespace, podName, container, lifecycle)
 	}
 	return string(data), nil
 }
@@ -1310,6 +1366,8 @@ func enrichSandboxStateWithPod(state *sandboxState, pod map[string]any) {
 	}
 	state.StageStartedAt, state.StageFinishedAt = containerTiming(pod, "initContainerStatuses", agentSandboxStagerName)
 	state.ExecutionStartedAt, state.ExecutionFinishedAt = containerTiming(pod, "containerStatuses", agentSandboxContainerName)
+	state.StagerFailureCode, state.StagerExitCode, state.StagerReason = stagerFailureState(pod)
+	state.ExecutorStarted = !state.ExecutionStartedAt.IsZero()
 	state.TimingStatus = "timestamps_incomplete"
 }
 

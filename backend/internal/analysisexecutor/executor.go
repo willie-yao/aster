@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -109,25 +108,24 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		workspaceRoot = defaultWorkspaceRoot
 	}
 	workspaceRoot = filepath.Clean(workspaceRoot)
-	sourceRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir)
+	sourcesRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourcesDir)
 	artifactRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceArtifactsDir)
 	resultRoot := filepath.Join(workspaceRoot, agentanalysis.WorkspaceResultDir)
 	mountVerifier := opts.MountVerifier
 	if mountVerifier == nil {
-		mountVerifier = verifyPreparedMounts
+		mountVerifier = func(workspaceRoot, manifestHash string) error {
+			return verifyWorkspaceMounts(workspaceRoot, manifestHash, request.InputMode)
+		}
 	}
 	if err := mountVerifier(workspaceRoot, request.Manifest.Hash); err != nil {
-		return fail(engineruntime.TerminalFailed, fmt.Sprintf("verify prepared mounts: %v", err))
+		return fail(engineruntime.TerminalFailed, fmt.Sprintf("verify workspace mounts: %v", err))
 	}
 	if err := prepareResultRoot(resultRoot); err != nil {
 		return fail(engineruntime.TerminalFailed, err.Error())
 	}
-	if err := verifyInputs(ctx, request, sourceRoot, artifactRoot); err != nil {
+	if err := verifyInputs(ctx, request, sourcesRoot, artifactRoot); err != nil {
 		recordSourceIntegrityFailure(&result, err)
 		return fail(stateForContext(ctx), err.Error())
-	}
-	if err := verifyReadSafeWorkspace(ctx, sourceRoot, request.Manifest.Artifacts); err != nil {
-		return fail(engineruntime.TerminalFailed, err.Error())
 	}
 
 	tempRoot := strings.TrimSpace(opts.TempRoot)
@@ -151,12 +149,16 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		return fail(engineruntime.TerminalFailed, err.Error())
 	}
 	run := opts.RunOpenCode
-	if run == nil {
-		run = defaultRunOpenCode
-	}
 	bin := strings.TrimSpace(opts.OpenCodeBin)
 	if bin == "" {
 		bin = defaultOpenCodeBin
+	}
+	if run == nil {
+		if err := verifyOpenCodeRuntime(ctx, bin, defaultOpenCodeRuntimeManifest); err != nil {
+			result.OpenCodeTelemetry.FailureCode = "opencode_runtime_contract"
+			return fail(engineruntime.TerminalFailed, err.Error())
+		}
+		run = defaultRunOpenCode
 	}
 	runResult, runErr := run(ctx, OpenCodeSpec{Bin: bin, WorkDir: workspaceRoot, HomeDir: home, TempDir: temp, Provider: request.ModelProvider, Prompt: prompt, MaxSteps: request.MaxSteps, ModelContextTokens: request.ModelContextTokens, ModelOutputTokens: request.ModelOutputTokens, RequireSourceEvidence: request.RequireSourceEvidence})
 	if err := validateCredentialFreeOpenCodeRun(credential, runResult, runErr); err != nil {
@@ -182,7 +184,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 	result.Usage = runResult.Usage
 	result.OpenCodeTelemetry = runResult.Telemetry
 	if err := mountVerifier(workspaceRoot, request.Manifest.Hash); err != nil {
-		return fail(engineruntime.TerminalFailed, fmt.Sprintf("prepared mounts changed during analysis: %v", err))
+		return fail(engineruntime.TerminalFailed, fmt.Sprintf("workspace mounts changed during analysis: %v", err))
 	}
 	if ctx.Err() != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -191,7 +193,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		}
 		return fail(stateForContext(ctx), fmt.Sprintf("run OpenCode analyzer: %v", ctx.Err()))
 	}
-	if err := verifyInputsBounded(request, sourceRoot, artifactRoot); err != nil {
+	if err := verifyInputsBounded(request, sourcesRoot, artifactRoot); err != nil {
 		recordSourceIntegrityFailure(&result, err)
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("workspace changed during analysis: %v", err))
 	}
@@ -201,11 +203,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		}
 		return fail(stateForContext(ctx), fmt.Sprintf("run OpenCode analyzer: %v", runErr))
 	}
-	if request.RequireSourceEvidence && (result.OpenCodeTelemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceAccepted || result.OpenCodeTelemetry.SourceEvidenceToolCalls < 1 || result.OpenCodeTelemetry.EvidenceHandles.AcceptedSourceHandleCount < 1) {
-		result.OpenCodeTelemetry.FailureCode = "source_evidence_missing"
-		return fail(engineruntime.TerminalFailed, "required source evidence is missing")
-	}
-	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(runResult.Structured), runResult.EvidenceHandles, request.Manifest, artifactRoot, sourceRoot)
+	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(runResult.Structured), runResult.EvidenceHandles, request.Manifest, artifactRoot, sourcesRoot)
 	result.ResultValidation = validation
 	if err != nil {
 		if validation.Status == agentanalysis.WorkspaceResultRejected {
@@ -216,13 +214,18 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		return fail(engineruntime.TerminalFailed, "workspace evidence handles are invalid")
 	}
 	if (len(analysis.SourceCitations) > 0 || len(analysis.RelevantFiles) > 0) && result.OpenCodeTelemetry.SourceEvidenceToolCalls < 1 {
-		result.OpenCodeTelemetry.FailureCode = "source_evidence_unavailable"
-		return fail(engineruntime.TerminalFailed, "workspace analysis contains source claims without successful source evidence")
+		analysis.SourceCitations = nil
+		analysis.RelevantFiles = nil
+		validation.Status = agentanalysis.WorkspaceResultAcceptedWithWarnings
+		validation.Codes = append(validation.Codes, agentanalysis.WorkspaceInvalidSourcePath)
+		slices.Sort(validation.Codes)
+		validation.Codes = slices.Compact(validation.Codes)
+		result.ResultValidation = validation
 	}
 	if err := mountVerifier(workspaceRoot, request.Manifest.Hash); err != nil {
-		return fail(engineruntime.TerminalFailed, fmt.Sprintf("prepared mounts changed during result canonicalization: %v", err))
+		return fail(engineruntime.TerminalFailed, fmt.Sprintf("workspace mounts changed during result canonicalization: %v", err))
 	}
-	if err := verifyInputsBounded(request, sourceRoot, artifactRoot); err != nil {
+	if err := verifyInputsBounded(request, sourcesRoot, artifactRoot); err != nil {
 		recordSourceIntegrityFailure(&result, err)
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("workspace changed during result canonicalization: %v", err))
 	}
@@ -247,7 +250,7 @@ func Execute(parent context.Context, request agentanalysis.WorkspaceExecutionReq
 		result.OpenCodeTelemetry.FailureCode = "credential_exposure"
 		return fail(engineruntime.TerminalFailed, err.Error())
 	}
-	validated, err := agentanalysis.ValidateWorkspaceExecutionResult(result, request, artifactRoot, sourceRoot)
+	validated, err := agentanalysis.ValidateWorkspaceExecutionResult(result, request, artifactRoot, sourcesRoot)
 	if err != nil {
 		return fail(engineruntime.TerminalFailed, fmt.Sprintf("validate analyzer result: %v", err))
 	}
@@ -260,17 +263,20 @@ func recordSourceIntegrityFailure(result *agentanalysis.WorkspaceExecutionResult
 	}
 }
 
-func verifyInputs(ctx context.Context, request agentanalysis.WorkspaceExecutionRequest, sourceRoot, artifactRoot string) error {
-	if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, sourceRoot, request.Manifest.Source.Revision, request.SourceModePolicy); err != nil {
+func verifyInputs(ctx context.Context, request agentanalysis.WorkspaceExecutionRequest, sourcesRoot, artifactRoot string) error {
+	if err := agentanalysis.VerifyWorkspaceSources(ctx, sourcesRoot, request.Manifest.Sources, request.SourceModePolicies); err != nil {
 		return err
 	}
 	return agentanalysis.VerifyArtifactWorkspace(artifactRoot, request.Manifest)
 }
 
-func verifyInputsBounded(request agentanalysis.WorkspaceExecutionRequest, sourceRoot, artifactRoot string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), agentanalysis.WorkspaceSourceVerificationTimeout)
+func verifyInputsBounded(request agentanalysis.WorkspaceExecutionRequest, sourcesRoot, artifactRoot string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), agentanalysis.WorkspaceSourceVerificationTimeoutForSources(len(request.Manifest.Sources)))
 	defer cancel()
-	return verifyInputs(ctx, request, sourceRoot, artifactRoot)
+	if err := agentanalysis.VerifyWorkspaceSourcesBounded(ctx, sourcesRoot, request.Manifest.Sources, request.SourceModePolicies); err != nil {
+		return err
+	}
+	return agentanalysis.VerifyArtifactWorkspace(artifactRoot, request.Manifest)
 }
 
 func writeCanonicalResult(root string, data []byte, limit int64) error {
@@ -367,6 +373,7 @@ func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (result OpenCode
 		return result, fmt.Errorf("release OpenCode port: %w", err)
 	}
 	cmd := exec.CommandContext(ctx, bin, "serve", "--hostname", "127.0.0.1", "--port", fmt.Sprint(port))
+	configureOpenCodeProcessGroup(cmd)
 	cmd.Dir = spec.WorkDir
 	env, err := openCodeEnvironment(spec.HomeDir, spec.TempDir, spec.Provider)
 	if err != nil {
@@ -381,21 +388,55 @@ func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (result OpenCode
 	stderr := newBoundedCapture(maxOpenCodeStreamBytes)
 	stdoutCredential := credential.NewDetector()
 	stderrCredential := credential.NewDetector()
-	cmd.Stdout = io.MultiWriter(stdout, stdoutCredential)
-	cmd.Stderr = io.MultiWriter(stderr, stderrCredential)
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		return result, fmt.Errorf("create OpenCode stdout pipe: %w", err)
+	}
+	stderrReader, stderrWriter, err := os.Pipe()
+	if err != nil {
+		_ = stdoutReader.Close()
+		_ = stdoutWriter.Close()
+		return result, fmt.Errorf("create OpenCode stderr pipe: %w", err)
+	}
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stderrWriter
+	memoryBaseline, memoryBaselineAvailable := readCgroupMemoryEvents("/sys/fs/cgroup/memory.events")
 	if err := cmd.Start(); err != nil {
+		_ = stdoutReader.Close()
+		_ = stdoutWriter.Close()
+		_ = stderrReader.Close()
+		_ = stderrWriter.Close()
 		return result, err
 	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
+	stdoutStream := trackOpenCodeStream(stdoutReader, io.MultiWriter(stdout, stdoutCredential))
+	stderrStream := trackOpenCodeStream(stderrReader, io.MultiWriter(stderr, stderrCredential))
+	tracker := trackOpenCodeProcess(cmd, memoryBaseline, memoryBaselineAvailable)
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	client := &http.Client{}
 	defer func() {
-		stopOpenCodeProcess(func() {
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-			}
-		}, done)
+		if retErr != nil {
+			recordOpenCodeLocalTransport(&result.Telemetry, retErr, false)
+		}
+		if result.Telemetry.LocalTransportFailure != "" {
+			diagnoseOpenCodeLocalFailure(tracker, &result.Telemetry)
+		}
+		drained := stopTrackedOpenCodeProcess(func() {
+			terminateOpenCodeProcess(cmd.Process)
+		}, tracker, stdoutStream, stderrStream)
+		result.Telemetry.StdoutBytes = stdout.BytesObserved()
+		result.Telemetry.StderrBytes = stderr.BytesObserved()
 		result.Telemetry.StdoutTruncated = stdout.Truncated()
 		result.Telemetry.StderrTruncated = stderr.Truncated()
+		if !drained {
+			result = OpenCodeRunResult{
+				Usage:     agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable},
+				Telemetry: agentanalysis.WorkspaceOpenCodeTelemetry{Status: agentanalysis.WorkspaceTelemetryUnavailable, StructuredOutputRetriesKnown: true, FailureCode: "stream_drain_incomplete"},
+			}
+			retErr = errors.New("OpenCode stream drain did not complete")
+			return
+		}
 		if stdoutCredential.Detected() || stderrCredential.Detected() {
 			result = OpenCodeRunResult{
 				Usage:     agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable},
@@ -404,20 +445,20 @@ func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (result OpenCode
 			retErr = modelprovider.ErrCredentialExposure
 		}
 	}()
-	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-	client := &http.Client{}
-	version, err := waitForOpenCode(ctx, client, baseURL, done)
+	version, err := waitForOpenCode(ctx, client, baseURL, tracker)
 	if err != nil {
 		return result, err
 	}
 	evidenceShape := newOpenCodeEvidenceRequestShape(spec, version)
 	toolCount, digest, sourceToolsAvailable, schemaErr := fetchOpenCodeNativeToolSchemaDigest(ctx, client, baseURL, spec)
+	schemaErr = annotateOpenCodeLocalPhase(schemaErr, "schema")
 	if err := applyOpenCodeNativeToolSchema(&evidenceShape, &result.Telemetry, spec.RequireSourceEvidence, sourceToolsAvailable, toolCount, digest, schemaErr); err != nil {
 		result.Telemetry.RequestShape = evidenceShape
 		return result, err
 	}
 	result.Telemetry.RequestShape = evidenceShape
 	sessionID, err := createOpenCodeSession(ctx, client, baseURL, spec.WorkDir)
+	err = annotateOpenCodeLocalPhase(err, "session_create")
 	if err != nil {
 		return result, err
 	}
@@ -439,17 +480,34 @@ func applyOpenCodeNativeToolSchema(shape *agentanalysis.WorkspaceOpenCodeRequest
 	return fmt.Errorf("OpenCode source tool catalog unavailable: %w", schemaErr)
 }
 
-func stopOpenCodeProcess(terminate func(), done <-chan error) {
-	if terminate != nil {
-		terminate()
-	}
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-	}
-}
-
 func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec, version string, evidenceShape agentanalysis.WorkspaceOpenCodeRequestShape) (result OpenCodeRunResult, retErr error) {
+	var recoveredLocalFailure string
+	var recoveredLocalPhase string
+	defer func() {
+		if recoveredLocalFailure != "" {
+			result.Telemetry.LocalTransportFailure = recoveredLocalFailure
+			result.Telemetry.LocalTransportPhase = recoveredLocalPhase
+			result.Telemetry.LocalTransportRecovered = true
+		}
+	}()
+	var evidenceExhaustionRecovered bool
+	var evidenceExhaustionClassification string
+	var evidenceExhaustionSteps int
+	var evidenceExhaustionRequests int
+	var evidenceExhaustionError agentanalysis.WorkspaceOpenCodeErrorTelemetry
+	defer func() {
+		if !evidenceExhaustionRecovered {
+			return
+		}
+		result.Telemetry.EvidenceStepBudget = openCodeEvidenceStepAllocation(spec.MaxSteps, spec.RequireSourceEvidence)
+		result.Telemetry.EvidenceExhausted = true
+		result.Telemetry.EvidenceExhaustedSteps = evidenceExhaustionSteps
+		result.Telemetry.EvidenceExhaustedRequests = evidenceExhaustionRequests
+		result.Telemetry.EvidenceExhaustionClass = evidenceExhaustionClassification
+		if !result.Telemetry.Error.Available {
+			result.Telemetry.Error = evidenceExhaustionError
+		}
+	}()
 	credential, err := modelprovider.NewCredentialGuard(spec.Provider, os.LookupEnv)
 	if err != nil {
 		return result, err
@@ -458,6 +516,7 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 	result.Telemetry = agentanalysis.WorkspaceOpenCodeTelemetry{Status: agentanalysis.WorkspaceTelemetryUnavailable, StructuredOutputRetriesKnown: true, RequestShape: evidenceShape}
 	evidenceErr := promptOpenCodeEvidence(ctx, client, baseURL, sessionID, spec)
 	evidenceRaw, evidenceRawErr := fetchOpenCodeTelemetryRaw(ctx, client, baseURL, sessionID, spec.WorkDir)
+	evidenceRawErr = annotateOpenCodeLocalPhase(evidenceRawErr, "telemetry_fetch")
 	if evidenceRawErr == nil {
 		if err := credential.CheckBytes(evidenceRaw); err != nil {
 			result.Telemetry.FailureCode = "credential_exposure"
@@ -477,16 +536,36 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 		result.Telemetry.RequestShape = evidenceShape
 		result.Telemetry.EvidenceHandles = evidenceTelemetry.EvidenceHandles
 	}
-	applyOpenCodePromptError(&result, evidenceErr, 0, true, false)
-	if evidenceErr != nil {
+	evidencePhaseErr := validateOpenCodeEvidencePhase(evidenceFacts, evidenceTelemetryErr)
+	if persistedOpenCodePhase(evidenceErr, evidenceTelemetryErr, evidenceTelemetry.ProviderRequests, 0) && evidencePhaseErr == nil {
+		if local, ok := recoverableOpenCodeLocalEOF(evidenceErr); ok {
+			recoveredLocalFailure, recoveredLocalPhase = local.Class, local.Phase
+		}
+		evidenceErr = nil
+	} else {
+		applyOpenCodePromptError(&result, evidenceErr, 0, true, false)
+	}
+	recoverEvidenceExhaustion := evidenceTelemetryErr == nil && recoverableOpenCodeEvidenceExhaustion(evidenceErr, evidenceTelemetry, evidenceFacts, spec)
+	if evidenceErr != nil && !recoverEvidenceExhaustion {
 		return result, evidenceErr
 	}
-	if err := validateOpenCodeEvidencePhase(evidenceFacts, evidenceTelemetryErr); err != nil {
+	if evidencePhaseErr != nil {
 		result.Telemetry.FailureCode = "evidence_unavailable"
 		if code := primaryWorkspaceEvidenceFailureCode(evidenceFacts.EvidenceDiagnostics); code != "" {
 			result.Telemetry.FailureCode = code
 		}
-		return result, err
+		return result, evidencePhaseErr
+	}
+	if recoverEvidenceExhaustion {
+		var promptErr *openCodePromptError
+		if !errors.As(evidenceErr, &promptErr) {
+			return result, evidenceErr
+		}
+		evidenceExhaustionRecovered = true
+		evidenceExhaustionClassification = promptErr.telemetry.Classification
+		evidenceExhaustionSteps = evidenceTelemetry.StepsUsed
+		evidenceExhaustionRequests = evidenceTelemetry.ProviderRequests
+		evidenceExhaustionError = promptErr.telemetry
 	}
 	result.Telemetry.EvidencePhaseCompleted = true
 	result.Telemetry.EvidencePhaseSteps = evidenceTelemetry.StepsUsed
@@ -517,6 +596,7 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 			result.Telemetry.SourceEvidenceCorrectionReason = correctionReason
 			correctionErr := promptOpenCodeSourceEvidence(ctx, client, baseURL, sessionID, spec, correctionInstruction)
 			correctedRaw, correctedRawErr := fetchOpenCodeTelemetryRaw(ctx, client, baseURL, sessionID, spec.WorkDir)
+			correctedRawErr = annotateOpenCodeLocalPhase(correctedRawErr, "telemetry_fetch")
 			if correctedRawErr == nil {
 				if err := credential.CheckBytes(correctedRaw); err != nil {
 					result.Telemetry.FailureCode = "credential_exposure"
@@ -541,7 +621,14 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 			result.Telemetry.RequestShape = correctionShape
 			result.Telemetry.SourceEvidenceCorrectiveTurn = true
 			result.Telemetry.SourceEvidenceCorrectionReason = correctionReason
-			applyOpenCodePromptError(&result, correctionErr, evidenceTelemetry.ProviderRequests, evidenceTelemetry.ProviderRequestsKnown, false)
+			if persistedOpenCodePhase(correctionErr, correctedTelemetryErr, correctedTelemetry.ProviderRequests, evidenceTelemetry.ProviderRequests) {
+				if local, ok := recoverableOpenCodeLocalEOF(correctionErr); ok {
+					recoveredLocalFailure, recoveredLocalPhase = local.Class, local.Phase
+				}
+				correctionErr = nil
+			} else {
+				applyOpenCodePromptError(&result, correctionErr, evidenceTelemetry.ProviderRequests, evidenceTelemetry.ProviderRequestsKnown, false)
+			}
 			if correctionErr != nil {
 				return result, correctionErr
 			}
@@ -569,8 +656,7 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 			result.Telemetry.SourceEvidenceCorrectionReason = correctionReason
 		}
 		if sourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceAccepted {
-			result.Telemetry.FailureCode = "source_evidence_missing"
-			return result, fmt.Errorf("required source evidence is missing")
+			result.Telemetry.SourceEvidenceStatus = sourceEvidenceStatus
 		}
 	}
 	finalizationInstruction, err := agentanalysis.WorkspaceFinalizationInstruction(evidenceFacts.EvidenceHandles)
@@ -592,6 +678,7 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 	}
 	result.Structured = structured
 	finalRaw, finalRawErr := fetchOpenCodeTelemetryRaw(ctx, client, baseURL, sessionID, spec.WorkDir)
+	finalRawErr = annotateOpenCodeLocalPhase(finalRawErr, "telemetry_fetch")
 	if finalRawErr == nil {
 		if err := credential.CheckBytes(finalRaw); err != nil {
 			result.Telemetry.FailureCode = "credential_exposure"
@@ -615,6 +702,20 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 		return result, fmt.Errorf("OpenCode finalization telemetry unavailable: %w", finalRawErr)
 	}
 	usage, telemetry, facts, telemetryErr := parseOpenCodeTelemetryForWorkspace(finalRaw, spec.WorkDir)
+	if persistedOpenCodePhase(finalErr, telemetryErr, telemetry.ProviderRequests, evidenceTelemetry.ProviderRequests) {
+		finalizationNativeTools := max(facts.NonStructuredToolCalls-evidenceFacts.NonStructuredToolCalls, 0)
+		structuredCalls := max(facts.StructuredOutputCalls-evidenceFacts.StructuredOutputCalls, 0)
+		if validateOpenCodeFinalizationPhase(structuredCalls, finalizationNativeTools) == nil {
+			if recovered, recoverErr := recoverOpenCodeStructuredOutput(finalRaw); recoverErr == nil {
+				structured = recovered
+				result.Structured = recovered
+				if local, ok := recoverableOpenCodeLocalEOF(finalErr); ok {
+					recoveredLocalFailure, recoveredLocalPhase = local.Class, local.Phase
+				}
+				finalErr = nil
+			}
+		}
+	}
 	if telemetryErr != nil {
 		result.Telemetry.RequestShape = finalShape
 		applyOpenCodePromptError(&result, finalErr, evidenceTelemetry.ProviderRequests, evidenceTelemetry.ProviderRequestsKnown, true)
@@ -645,9 +746,6 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 	finalizationNativeTools := max(facts.NonStructuredToolCalls-evidenceFacts.NonStructuredToolCalls, 0)
 	replaceEvidenceError := finalErr != nil && sameOpenCodeErrorIdentity(telemetry.Error, evidenceTelemetry.Error)
 	applyOpenCodePromptError(&result, finalErr, evidenceTelemetry.ProviderRequests, evidenceTelemetry.ProviderRequestsKnown, replaceEvidenceError)
-	if replaceEvidenceError {
-		result.Usage = agentanalysis.WorkspaceUsage{Status: agentanalysis.WorkspaceTelemetryUnavailable}
-	}
 	if finalErr != nil {
 		return result, finalErr
 	}
@@ -660,6 +758,29 @@ func runOpenCodePhases(ctx context.Context, client *http.Client, baseURL, sessio
 		return result, fmt.Errorf("OpenCode analysis exceeded the step limit")
 	}
 	return result, nil
+}
+
+func openCodeEvidenceStepAllocation(maxSteps int, requireSourceEvidence bool) int {
+	reserved := openCodeFinalizationSteps
+	if requireSourceEvidence {
+		reserved += openCodeSourceEvidenceSteps
+	}
+	return max(maxSteps-reserved, 0)
+}
+
+func recoverableOpenCodeEvidenceExhaustion(err error, telemetry agentanalysis.WorkspaceOpenCodeTelemetry, facts openCodeEvidenceFacts, spec OpenCodeSpec) bool {
+	var promptErr *openCodePromptError
+	if !errors.As(err, &promptErr) {
+		return false
+	}
+	providerError := promptErr.telemetry
+	allocated := openCodeEvidenceStepAllocation(spec.MaxSteps, spec.RequireSourceEvidence)
+	return allocated >= 2 &&
+		providerError.Available && providerError.Name == "APIError" && providerError.HTTPStatusCode == http.StatusBadRequest &&
+		providerError.RetryableKnown && !providerError.Retryable && providerError.Classification == "api_bad_request" && !providerError.ContextOverflow &&
+		telemetry.Available && telemetry.ProviderRequestsKnown && telemetry.ProviderRequests == allocated && telemetry.StepsUsed+1 == allocated &&
+		telemetry.DeniedToolCount == 0 && facts.StructuredOutputCalls == 0 && facts.ArtifactToolCalls > 0 &&
+		facts.EvidenceDiagnostics.Status != agentanalysis.WorkspaceEvidenceHandlesRejected && facts.EvidenceDiagnostics.AcceptedArtifactHandleCount > 0
 }
 
 func primaryWorkspaceEvidenceFailureCode(value agentanalysis.WorkspaceEvidenceHandleDiagnostics) string {
@@ -789,7 +910,7 @@ func applyOpenCodePromptError(result *OpenCodeRunResult, err error, priorProvide
 
 const maxOpenCodeAPIResponseBytes = 1 << 20
 
-func waitForOpenCode(ctx context.Context, client *http.Client, baseURL string, done <-chan error) (string, error) {
+func waitForOpenCode(ctx context.Context, client *http.Client, baseURL string, tracker *openCodeProcessTracker) (string, error) {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -804,10 +925,13 @@ func waitForOpenCode(ctx context.Context, client *http.Client, baseURL string, d
 			return health.Version, nil
 		}
 		select {
-		case err := <-done:
-			return "", fmt.Errorf("OpenCode server exited before readiness: %v", err)
+		case <-tracker.done:
+			state, code, known, signal := tracker.snapshot()
+			cause := fmt.Errorf("OpenCode server exited before readiness: state=%s exit_code=%d known=%t signal=%s", state, code, known, signal)
+			return "", &openCodeLocalAPIError{Class: "local_server_exited", Phase: "startup", Cause: cause}
 		case <-ctx.Done():
-			return "", ctx.Err()
+			err := newOpenCodeLocalAPIError(ctx.Err())
+			return "", annotateOpenCodeLocalPhase(err, "startup")
 		case <-ticker.C:
 		}
 	}
@@ -827,7 +951,7 @@ func createOpenCodeSession(ctx context.Context, client *http.Client, baseURL, wo
 }
 
 func promptOpenCodeEvidence(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec) error {
-	response, err := promptOpenCodeMessage(ctx, client, baseURL, sessionID, spec, openCodeEvidenceAgent, spec.Prompt, false)
+	response, err := promptOpenCodeMessage(ctx, client, baseURL, sessionID, spec, "evidence", openCodeEvidenceAgent, spec.Prompt, false)
 	if err != nil {
 		return err
 	}
@@ -838,7 +962,7 @@ func promptOpenCodeEvidence(ctx context.Context, client *http.Client, baseURL, s
 }
 
 func promptOpenCodeSourceEvidence(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec, instruction string) error {
-	response, err := promptOpenCodeMessage(ctx, client, baseURL, sessionID, spec, openCodeSourceEvidenceAgent, instruction, false)
+	response, err := promptOpenCodeMessage(ctx, client, baseURL, sessionID, spec, "source_correction", openCodeSourceEvidenceAgent, instruction, false)
 	if err != nil {
 		return err
 	}
@@ -854,7 +978,7 @@ func promptOpenCodeFinalization(ctx context.Context, client *http.Client, baseUR
 }
 
 func promptOpenCodeFinalizationWithMessage(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec, instruction string) ([]byte, []byte, error) {
-	response, err := promptOpenCodeMessage(ctx, client, baseURL, sessionID, spec, openCodeFinalizationAgent, instruction, true)
+	response, err := promptOpenCodeMessage(ctx, client, baseURL, sessionID, spec, "finalization", openCodeFinalizationAgent, instruction, true)
 	message, marshalErr := json.Marshal(response)
 	if marshalErr != nil {
 		return nil, nil, fmt.Errorf("encode OpenCode finalization response")
@@ -877,7 +1001,7 @@ type openCodePromptResponse struct {
 	Parts json.RawMessage `json:"parts"`
 }
 
-func promptOpenCodeMessage(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec, agent, prompt string, structured bool) (openCodePromptResponse, error) {
+func promptOpenCodeMessage(ctx context.Context, client *http.Client, baseURL, sessionID string, spec OpenCodeSpec, phase, agent, prompt string, structured bool) (openCodePromptResponse, error) {
 	payload := map[string]any{
 		"agent": agent,
 		"model": map[string]any{"providerID": "engine", "modelID": spec.Provider.Model},
@@ -893,6 +1017,7 @@ func promptOpenCodeMessage(ctx context.Context, client *http.Client, baseURL, se
 	var response openCodePromptResponse
 	endpoint := baseURL + "/session/" + url.PathEscape(sessionID) + "/message?directory=" + url.QueryEscape(spec.WorkDir)
 	if err := openCodeJSON(ctx, client, http.MethodPost, endpoint, body, &response); err != nil {
+		err = annotateOpenCodeLocalPhase(err, phase)
 		return response, fmt.Errorf("prompt OpenCode session: %w", err)
 	}
 	responseJSON, err := json.Marshal(response)
@@ -964,6 +1089,10 @@ func telemetryStatusForError(err error) string {
 }
 
 func openCodeFailureCode(err error) string {
+	var localErr *openCodeLocalAPIError
+	if errors.As(err, &localErr) {
+		return localErr.Class
+	}
 	var sessionErr *openCodePromptError
 	if errors.As(err, &sessionErr) {
 		if sessionErr.telemetry.ContextOverflow {
@@ -994,12 +1123,12 @@ func openCodeResponse(ctx context.Context, client *http.Client, method, endpoint
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, newOpenCodeLocalAPIError(err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return nil, err
+		return nil, newOpenCodeLocalAPIError(err)
 	}
 	if int64(len(data)) > limit {
 		return nil, fmt.Errorf("OpenCode API response exceeded the bound")
@@ -1026,54 +1155,7 @@ func openCodeJSON(ctx context.Context, client *http.Client, method, endpoint str
 	return nil
 }
 
-func verifyReadSafeWorkspace(ctx context.Context, sourceRoot string, files []agentanalysis.WorkspaceFile) error {
-	for _, file := range files {
-		if openCodeInstructionPath(file.Path) {
-			return fmt.Errorf("artifact workspace contains an OpenCode instruction file")
-		}
-	}
-	command := exec.CommandContext(ctx, "git", "-C", sourceRoot, "ls-files", "-z")
-	command.Env = append(nonCredentialSubprocessEnvironment(), "GIT_OPTIONAL_LOCKS=0", "GIT_CONFIG_NOSYSTEM=1")
-	stdout, err := command.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("inspect source instruction files: %w", err)
-	}
-	stderr := newBoundedCapture(4096)
-	command.Stderr = stderr
-	if err := command.Start(); err != nil {
-		return fmt.Errorf("inspect source instruction files: %w", err)
-	}
-	const sourceInstructionPathLimit = 8 << 20
-	output, readErr := io.ReadAll(io.LimitReader(stdout, sourceInstructionPathLimit+1))
-	if len(output) > sourceInstructionPathLimit {
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		return fmt.Errorf("source instruction path list exceeds the bound")
-	}
-	waitErr := command.Wait()
-	if readErr != nil || waitErr != nil {
-		return fmt.Errorf("inspect source instruction files: %v", errors.Join(readErr, waitErr))
-	}
-	for _, record := range bytes.Split(output, []byte{0}) {
-		if len(record) > 0 && openCodeInstructionPath(filepath.ToSlash(string(record))) {
-			return fmt.Errorf("source workspace contains an OpenCode instruction file")
-		}
-	}
-	return nil
-}
-
-func openCodeInstructionPath(value string) bool {
-	clean := strings.TrimPrefix(strings.ToLower(filepath.ToSlash(filepath.Clean(value))), "./")
-	base := path.Base(clean)
-	switch base {
-	case "agents.md", "claude.md", "context.md":
-		return true
-	default:
-		return false
-	}
-}
-
-func verifyPreparedMounts(workspaceRoot, manifestHash string) error {
+func verifyWorkspaceMounts(workspaceRoot, manifestHash, inputMode string) error {
 	data, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
 		return err
@@ -1081,12 +1163,19 @@ func verifyPreparedMounts(workspaceRoot, manifestHash string) error {
 	if len(data) > 1<<20 {
 		return fmt.Errorf("mountinfo exceeds the bound")
 	}
-	return verifyPreparedMountInfo(string(data), workspaceRoot, manifestHash)
+	switch inputMode {
+	case agentanalysis.WorkspaceInputPrepared:
+		return verifyPreparedMountInfo(string(data), workspaceRoot, manifestHash)
+	case agentanalysis.WorkspaceInputStaged:
+		return verifyStagedMountInfo(string(data), workspaceRoot)
+	default:
+		return fmt.Errorf("workspace input mode is invalid")
+	}
 }
 
 func verifyPreparedMountInfo(raw, workspaceRoot, manifestHash string) error {
 	expected := map[string]string{
-		filepath.Clean(filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourceDir)):    "/" + manifestHash + "/source",
+		filepath.Clean(filepath.Join(workspaceRoot, agentanalysis.WorkspaceSourcesDir)):   "/" + manifestHash + "/sources",
 		filepath.Clean(filepath.Join(workspaceRoot, agentanalysis.WorkspaceArtifactsDir)): "/" + manifestHash + "/artifacts",
 	}
 	seen := map[string]bool{}
@@ -1121,6 +1210,21 @@ func verifyPreparedMountInfo(raw, workspaceRoot, manifestHash string) error {
 	return nil
 }
 
+func verifyStagedMountInfo(raw, workspaceRoot string) error {
+	mountPoint := filepath.Clean(workspaceRoot)
+	for _, line := range strings.Split(raw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 10 || unescapeMountInfo(fields[4]) != mountPoint {
+			continue
+		}
+		if !mountOption(fields[5], "ro") {
+			return fmt.Errorf("mount %s is not the expected read-only staged workspace", mountPoint)
+		}
+		return nil
+	}
+	return fmt.Errorf("mount %s is unavailable", mountPoint)
+}
+
 func mountOption(value, want string) bool {
 	for _, option := range strings.Split(value, ",") {
 		if option == want {
@@ -1135,10 +1239,7 @@ func unescapeMountInfo(value string) string {
 }
 
 func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps, contextTokens, outputTokens int, requireSourceEvidence bool) error {
-	reservedSteps := openCodeFinalizationSteps
-	if requireSourceEvidence {
-		reservedSteps += openCodeSourceEvidenceSteps
-	}
+	reservedSteps := maxSteps - openCodeEvidenceStepAllocation(maxSteps, requireSourceEvidence)
 	if maxSteps <= reservedSteps {
 		return fmt.Errorf("OpenCode analysis has too few steps for reserved phases")
 	}
@@ -1160,7 +1261,7 @@ func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps, c
 	evidencePermissions := map[string]any{
 		"*": "deny",
 		"read": map[string]any{
-			"*": "deny", "artifacts/*": "allow", "source/*": "allow", "*/artifacts/*": "allow", "*/source/*": "allow",
+			"*": "deny", "artifacts/*": "allow", "sources/*": "allow", "*/artifacts/*": "allow", "*/sources/*": "allow",
 		},
 		"glob": "allow", "grep": "allow",
 		"bash": map[string]any{
@@ -1195,7 +1296,7 @@ func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps, c
 		sourceEvidencePermissions := map[string]any{
 			"*": "deny",
 			"read": map[string]any{
-				"*": "deny", "source/*": "allow", "*/source/*": "allow",
+				"*": "deny", "sources/*": "allow", "*/sources/*": "allow",
 			},
 			"grep": "allow", "StructuredOutput": "deny",
 			"glob": "deny", "bash": "deny", "edit": "deny", "write": "deny", "apply_patch": "deny",
@@ -1245,7 +1346,8 @@ func openCodeEnvironment(home, temp string, provider modelprovider.Config) ([]st
 		"XDG_CACHE_HOME=" + filepath.Join(home, ".cache"),
 		"XDG_STATE_HOME=" + filepath.Join(home, ".local", "state"),
 		"OPENCODE_CONFIG=" + filepath.Join(home, ".config", "opencode", "opencode.json"),
-		"OPENCODE_DISABLE_PROJECT_CONFIG=true", "OPENCODE_DISABLE_AUTOUPDATE=true", "OPENCODE_DISABLE_EXTERNAL_SKILLS=true",
+		"OPENCODE_DISABLE_PROJECT_CONFIG=true", "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=true",
+		"OPENCODE_DISABLE_AUTOUPDATE=true", "OPENCODE_DISABLE_EXTERNAL_SKILLS=true",
 		"GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_OPTIONAL_LOCKS=0",
 	}
 	for _, name := range []string{"PATH", "LANG", "LC_ALL", "LC_CTYPE", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS"} {

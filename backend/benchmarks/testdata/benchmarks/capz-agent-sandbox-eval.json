@@ -1,0 +1,219 @@
+{
+  "version": 5,
+  "cases": [
+    {
+      "id": "ccm-dualstack-control-plane-routetable",
+      "bucket": "kubernetes-ci-logs",
+      "fixture_asset": "ccm-dualstack-capz-6358.tar.gz",
+      "fixture_sha256": "179dcf40be61d6c8f4e1369793ec2b0c8c73eda0a0eb0fa5d832e488418c832f",
+      "job_type": "presubmit",
+      "repo": "kubernetes-sigs/cloud-provider-azure",
+      "job_name": "pull-cloud-provider-azure-e2e-ccm-dualstack-capz-1-30",
+      "build_id": "2062345846720040960",
+      "pull_number": "10388",
+      "web_url": "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/pr-logs/pull/kubernetes-sigs_cloud-provider-azure/10388/pull-cloud-provider-azure-e2e-ccm-dualstack-capz-1-30/2062345846720040960/",
+      "commit": "1cefef491698494b19d2fac9895e37c94cab5d4e",
+      "repo_version": "1cefef491698494b19d2fac9895e37c94cab5d4e",
+      "repo_refs": {
+        "kubernetes-sigs/cloud-provider-azure": "1cefef491698494b19d2fac9895e37c94cab5d4e",
+        "kubernetes-sigs/cluster-api-provider-azure": "c4a02ed36c22af00a2b228e6a9f02d1f2b2a42e0"
+      },
+      "source_refs": [
+        {
+          "id": "job",
+          "repository": "kubernetes-sigs/cloud-provider-azure",
+          "revision": "1cefef491698494b19d2fac9895e37c94cab5d4e"
+        },
+        {
+          "id": "primary",
+          "repository": "kubernetes-sigs/cluster-api-provider-azure",
+          "revision": "c4a02ed36c22af00a2b228e6a9f02d1f2b2a42e0"
+        }
+      ],
+      "primary_source_id": "primary",
+      "test_name": "[It] Azure node resources should set node provider id correctly [Node]",
+      "junit_file": "junit_01.xml",
+      "failure_message": "Unexpected error: <wait.errInterrupted>: timed out waiting for the condition { cause: <*errors.errorString>{ s: \"timed out waiting for the condition\", }, } occurred",
+      "evidence_mode": "artifact_and_source",
+      "consecutive_failures": 9,
+      "reference_diagnosis": "The dual-stack CAPZ workload is a persistent control-plane routing failure. The control-plane subnet has no route table for worker pod CIDRs, so Calico API discovery is unreachable and namespace termination and node-resource timeouts are downstream. The fix belongs in CAPZ AzureCluster subnet routing behavior, not the cloud-provider-azure test.",
+      "reference_is_transient": false,
+      "expected_transient": false,
+      "signals": [
+        {
+          "name": "not a transient flake",
+          "pattern": "(?i)systemic|persistent|not\\s+(?:a\\s+)?(?:transient|flake)|real\\s+(?:bug|issue|regression)|deterministic",
+          "must": true
+        },
+        {
+          "name": "control-plane networking involvement",
+          "pattern": "(?i)control[\\s_-]?plane|api[\\s_-]?server|subnet|network|routing?|connectivity",
+          "must": true
+        },
+        {
+          "name": "identifies CAPZ or AzureCluster as fix site",
+          "pattern": "(?i)cluster-api-provider-azure|capz|azurecluster"
+        },
+        {
+          "name": "traces downstream Calico or namespace cascade",
+          "pattern": "(?i)calico|apiservice|namespace|terminating|discovery"
+        },
+        {
+          "name": "pinpoints the control-plane route table",
+          "pattern": "(?i)route[\\s_-]?table"
+        }
+      ],
+      "stable_id": "5579818fcf7c13640e38",
+      "consumer_commit": "cabcef8e03b510467dac52682fa7e9b0f3e6692f",
+      "project_sha256": "1fc01fa1d2590c26b66a98faadb9daff567a4d325b6af3a14c765ed9f72d2e24",
+      "prompt_sha256": "817cea07bd6b4621ac99b362af20f899caeeb336e86c355fd6870792c6afa9b5",
+      "source_signals": [
+        {
+          "name": "identifies control-plane subnet default omits a route table",
+          "pattern": "(?is)(?:setControlPlaneSubnetDefaults|control.?plane.{0,120}subnet).{0,240}(?:route.?table).{0,160}(?:missing|empty|unset|omit|not\\s+(?:set|defaulted|created))|(?:route.?table).{0,160}(?:missing|empty|unset|omit|not\\s+(?:set|defaulted|created)).{0,240}(?:setControlPlaneSubnetDefaults|control.?plane.{0,120}subnet)",
+          "must": true
+        },
+        {
+          "name": "identifies route-table creation requires a non-empty subnet route-table name",
+          "pattern": "(?is)(?:RouteTableSpecs|subnet\\.RouteTable\\.Name).{0,240}(?:non.?empty|not\\s+empty|!=\\s*\"\"|only.{0,40}(?:create|append|provision))",
+          "must": true
+        }
+      ],
+      "expected_source_ranges": [
+        {
+          "source_id": "primary",
+          "path": "api/v1beta1/azurecluster_default.go",
+          "line_start": 197,
+          "line_end": 208
+        },
+        {
+          "source_id": "primary",
+          "path": "azure/scope/cluster.go",
+          "line_start": 378,
+          "line_end": 394
+        }
+      ]
+    },
+    {
+      "id": "flatcar-worker-dns-providerid",
+      "bucket": "kubernetes-ci-logs",
+      "fixture_asset": "flatcar-sysext-dns-providerid.tar.gz",
+      "fixture_sha256": "8ed886395742d145c014be4b6a2dc38b3ddf3db0ad6e7a5740da10eea80a1945",
+      "job_type": "periodic",
+      "job_name": "periodic-cluster-api-provider-azure-e2e-v1beta1-release-1-24",
+      "build_id": "2073261474372915200",
+      "web_url": "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/periodic-cluster-api-provider-azure-e2e-v1beta1-release-1-24/2073261474372915200/",
+      "commit": "d8eb84399896fc136eb7aa703bfdeb3686d1bad1",
+      "repo_version": "d8eb84399896fc136eb7aa703bfdeb3686d1bad1",
+      "repo_refs": {
+        "kubernetes-sigs/cluster-api-provider-azure": "d8eb84399896fc136eb7aa703bfdeb3686d1bad1"
+      },
+      "source_refs": [
+        {
+          "id": "primary",
+          "repository": "kubernetes-sigs/cluster-api-provider-azure",
+          "revision": "d8eb84399896fc136eb7aa703bfdeb3686d1bad1"
+        }
+      ],
+      "primary_source_id": "primary",
+      "test_name": "[It] Workload cluster creation Creating a Flatcar sysext cluster [OPTIONAL] With Flatcar control-plane and worker nodes",
+      "junit_file": "junit.e2e_suite.1.xml",
+      "failure_message": "Timed out after 1500.000s. Timed out waiting for 1 nodes to be created for MachineDeployment capz-e2e-asfxe1/capz-e2e-asfxe1-flatcar-sysext-md-0. Expected 0 to equal 1",
+      "evidence_mode": "artifact_only",
+      "consecutive_failures": 1,
+      "opposite_diagnosis": "The worker Node did not exist. Its providerID was set. cloud-node-manager reached the API Service.",
+      "reference_diagnosis": "The Flatcar worker VM and Node existed and became Ready, but the Node remained cloud-provider uninitialized with no providerID. cloud-node-manager could not reach the Kubernetes API Service ClusterIP because kube-proxy failed to synchronize after DNS lookup used the loopback resolver [::1]:53 and received connection refused. The following run passed, so this is a concrete transient bootstrap failure.",
+      "reference_is_transient": true,
+      "expected_transient": true,
+      "signals": [
+        {
+          "name": "recognizes the worker Node existed",
+          "pattern": "(?is)(?:worker\\s+)?node(?:\\s+object)?\\s+(?:exist(?:ed|s)?|registered|created|ready|became\\s+ready)",
+          "must": true,
+          "negated": "(?is)\\b(?:no|not|never)\\b.{0,80}(?:worker\\s+)?node"
+        },
+        {
+          "name": "identifies missing providerID or cloud-provider initialization",
+          "pattern": "(?is)(?:missing|empty|unset|absent|without|no)\\s+(?:the\\s+)?provider.?id|cloud.?provider.{0,80}uninitialized",
+          "must": true
+        },
+        {
+          "name": "identifies cloud-node-manager API reachability failure",
+          "pattern": "(?is)cloud-node-manager.{0,240}(?:10\\.96\\.0\\.1|api(?:server)?|cluster.?ip|kubernetes\\s+service).{0,160}(?:refus|timeout|unreachable|failed|crash)|cloud-node-manager.{0,240}(?:refus|timeout|unreachable|failed|crash).{0,160}(?:10\\.96\\.0\\.1|api(?:server)?|cluster.?ip)",
+          "must": true
+        },
+        {
+          "name": "traces kube-proxy synchronization failure",
+          "pattern": "(?is)kube-proxy.*(?:sync|watch|list|api|dns|lookup|resolve|service)"
+        },
+        {
+          "name": "pinpoints loopback DNS refusal",
+          "pattern": "(?is)(?:\\[?::1\\]?|loopback).*(?:53|dns|resolv|refus)|(?:dns|resolv|nameserver).*(?:\\[?::1\\]?|connection refused)"
+        }
+      ],
+      "stable_id": "d385dde20c8e8320db9c",
+      "consumer_commit": "cabcef8e03b510467dac52682fa7e9b0f3e6692f",
+      "project_sha256": "1fc01fa1d2590c26b66a98faadb9daff567a4d325b6af3a14c765ed9f72d2e24",
+      "prompt_sha256": "817cea07bd6b4621ac99b362af20f899caeeb336e86c355fd6870792c6afa9b5"
+    },
+    {
+      "id": "apiversion-upgrade-clusterctl-aso-ratelimit",
+      "bucket": "kubernetes-ci-logs",
+      "fixture_asset": "apiversion-upgrade-aso-clusterctl.tar.gz",
+      "fixture_sha256": "74e87df63463559f917e22723e86757b6ea1027fe6b27cab4b07fa5a4647dca2",
+      "job_type": "periodic",
+      "job_name": "periodic-cluster-api-provider-azure-apiversion-upgrade-main",
+      "build_id": "2074603331648491520",
+      "web_url": "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/periodic-cluster-api-provider-azure-apiversion-upgrade-main/2074603331648491520/",
+      "commit": "7d3a0e1020ad88b7bd095fdf2c3802984af08002",
+      "repo_version": "7d3a0e1020ad88b7bd095fdf2c3802984af08002",
+      "repo_refs": {
+        "kubernetes-sigs/cluster-api-provider-azure": "7d3a0e1020ad88b7bd095fdf2c3802984af08002"
+      },
+      "source_refs": [
+        {
+          "id": "primary",
+          "repository": "kubernetes-sigs/cluster-api-provider-azure",
+          "revision": "7d3a0e1020ad88b7bd095fdf2c3802984af08002"
+        }
+      ],
+      "primary_source_id": "primary",
+      "test_name": "[It] Running the Cluster API E2E tests API Version Upgrade upgrade from the latest version of v1beta1 to current, and scale workload clusters created in the old version Should create a management cluster and then upgrade all the providers",
+      "junit_file": "junit.e2e_suite.1.xml",
+      "failure_message": "failed to run clusterctl upgrade Unexpected error: failed to list objects for the \"network.azure.com/v1api20201101, Kind=VirtualNetworksSubnet\" GroupVersionKind: action failed after 9 attempts: client rate limiter Wait returned an error: context deadline exceeded",
+      "evidence_mode": "artifact_only",
+      "consecutive_failures": 7,
+      "reference_diagnosis": "During clusterctl provider upgrade, the Azure Service Operator controller is scaled down before object discovery completes. Its CRD conversion webhook becomes unreachable, so listing ASO VirtualNetworksSubnet and ManagedClustersAgentPool objects retries until the client rate limiter reaches the context deadline. The deadline is downstream of the conversion-webhook sequencing failure, which is persistent rather than transient.",
+      "reference_is_transient": false,
+      "expected_transient": false,
+      "signals": [
+        {
+          "name": "identifies clusterctl upgrade step",
+          "pattern": "(?i)clusterctl\\s+upgrade|management[\\s_-]?cluster.*upgrade|provider.*upgrade",
+          "must": true
+        },
+        {
+          "name": "identifies ASO CRD listing failure",
+          "pattern": "(?i)service\\s?operator|\\baso\\b|azure\\.com|virtualnetworkssubnet|managedclustersagentpool|crd",
+          "must": true
+        },
+        {
+          "name": "names rate limiter or deadline",
+          "pattern": "(?i)rate[\\s_-]?limit|context deadline|timed?\\s?out|9 attempts"
+        },
+        {
+          "name": "recognizes persistent failure",
+          "pattern": "(?i)systemic|persistent|not\\s+(?:a\\s+)?(?:transient|flake)|recurring|scal"
+        },
+        {
+          "name": "pinpoints conversion webhook scale-down",
+          "pattern": "(?i)conversion\\s?webhook|scal(?:e|ed|ing)\\s?down|connection refused|webhook.*(?:unreachable|refused|down)"
+        }
+      ],
+      "stable_id": "84397b5b63389a76e3fe",
+      "consumer_commit": "cabcef8e03b510467dac52682fa7e9b0f3e6692f",
+      "project_sha256": "1fc01fa1d2590c26b66a98faadb9daff567a4d325b6af3a14c765ed9f72d2e24",
+      "prompt_sha256": "817cea07bd6b4621ac99b362af20f899caeeb336e86c355fd6870792c6afa9b5"
+    }
+  ]
+}

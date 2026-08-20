@@ -203,6 +203,16 @@ Name of the Secret holding the AI token.
 {{- printf "%s@%s" .Values.agentSandbox.analysisShadow.image.repository .Values.agentSandbox.analysisShadow.image.digest -}}
 {{- end -}}
 
+{{- define "aster.agentAnalysisShadowStagerImage" -}}
+{{- printf "%s@%s" .Values.agentSandbox.analysisShadow.stagerImage.repository .Values.agentSandbox.analysisShadow.stagerImage.digest -}}
+{{- end -}}
+
+{{- define "aster.agentAnalysisShadowDashboardImage" -}}
+{{- $image := .Values.agentSandbox.analysisShadow.dashboardImage -}}
+{{- $tag := include "aster.resolvedImageTag" (list . $image.tag) -}}
+{{- printf "%s:%s" $image.repository $tag -}}
+{{- end -}}
+
 {{/* Tokenless ServiceAccount used inside analysis shadow Sandboxes. */}}
 {{- define "aster.agentAnalysisShadowWorkloadServiceAccountName" -}}
 {{- .Values.agentSandbox.analysisShadow.workloadServiceAccount.name -}}
@@ -211,6 +221,10 @@ Name of the Secret holding the AI token.
 {{/* Cluster-scoped analysis shadow admission policy name. */}}
 {{- define "aster.agentAnalysisShadowAdmissionName" -}}
 {{- printf "%s-agent-sandbox-shadow-%s" (include "aster.fullname" .) (include "aster.releaseScope" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "aster.agentAnalysisShadowPublisherAdmissionName" -}}
+{{- printf "%s-analysis-input-%s" (include "aster.fullname" .) (include "aster.releaseScope" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{- define "aster.agentAnalysisShadowLedgerPath" -}}
@@ -223,6 +237,12 @@ Name of the Secret holding the AI token.
   value: {{ .Values.agentSandbox.analysisShadow.namespace | quote }}
 - name: AGENT_SANDBOX_ANALYSIS_SHADOW_IMAGE
   value: {{ include "aster.agentAnalysisShadowExecutorImage" . | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_STAGER_IMAGE
+  value: {{ include "aster.agentAnalysisShadowStagerImage" . | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_STAGER_INPUT_CLAIM
+  value: {{ .Values.agentSandbox.analysisShadow.input.existingClaim | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_STAGING_FQDNS
+  value: {{ join "," .Values.agentSandbox.analysisShadow.networkPolicy.stagingFQDNs | quote }}
 - name: AGENT_SANDBOX_ANALYSIS_SHADOW_SERVICE_ACCOUNT
   value: {{ include "aster.agentAnalysisShadowWorkloadServiceAccountName" . | quote }}
 - name: AGENT_SANDBOX_ANALYSIS_SHADOW_RUNTIME_CLASS
@@ -235,10 +255,16 @@ Name of the Secret holding the AI token.
   value: {{ .Values.agentSandbox.analysisShadow.modelProvider.endpoint | quote }}
 - name: AGENT_SANDBOX_ANALYSIS_SHADOW_MODEL_PROVIDER_MODEL
   value: {{ .Values.agentSandbox.analysisShadow.modelProvider.model | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_MODEL_PROVIDER_REASONING_EFFORT
+  value: {{ .Values.agentSandbox.analysisShadow.modelProvider.reasoningEffort | quote }}
 - name: AGENT_SANDBOX_ANALYSIS_SHADOW_MODEL_PROVIDER_AUTH_TYPE
-  value: "none"
+  value: {{ .Values.agentSandbox.analysisShadow.modelProvider.auth.type | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_MODEL_PROVIDER_AUTH_SECRET_NAME
+  value: {{ .Values.agentSandbox.analysisShadow.modelProvider.auth.existingSecret | quote }}
+- name: AGENT_SANDBOX_ANALYSIS_SHADOW_MODEL_PROVIDER_AUTH_SECRET_KEY
+  value: {{ .Values.agentSandbox.analysisShadow.modelProvider.auth.tokenKey | quote }}
 - name: AGENT_SANDBOX_ANALYSIS_SHADOW_MODEL_PROVIDER_PUBLIC_CA_PRIVATE_DNS
-  value: "false"
+  value: {{ .Values.agentSandbox.analysisShadow.modelProvider.publicCAPrivateDNS | quote }}
 - name: AGENT_SANDBOX_ANALYSIS_SHADOW_TIMEOUT
   value: {{ .Values.agentSandbox.analysisShadow.timeout | quote }}
 - name: AGENT_SANDBOX_ANALYSIS_SHADOW_OUTPUT_LIMIT_BYTES
@@ -265,12 +291,11 @@ Name of the Secret holding the AI token.
   {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "agentSandbox.analysisShadow requires analysisRuntime.type=inprocess" -}}{{- end -}}
   {{- if .Values.agentSandbox.fixRuntime.enabled -}}{{- fail "agentSandbox.analysisShadow cannot run with agentSandbox.fixRuntime" -}}{{- end -}}
   {{- if .Values.agentSandbox.causalCritic.enabled -}}{{- fail "agentSandbox.analysisShadow cannot run with agentSandbox.causalCritic" -}}{{- end -}}
+  {{- if .Values.agentSandbox.analyzer.enabled -}}{{- fail "agentSandbox.analysisShadow cannot run with agentSandbox.analyzer" -}}{{- end -}}
   {{- if and (eq .Values.mode "cron") (ne .Values.fetcher.concurrencyPolicy "Forbid") -}}{{- fail "agentSandbox.analysisShadow requires fetcher.concurrencyPolicy=Forbid in cron mode" -}}{{- end -}}
-  {{- if not $cfg.namespace -}}{{- fail "agentSandbox.analysisShadow.namespace is required" -}}{{- end -}}
+  {{- if or (gt (len $cfg.namespace) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.namespace)) -}}{{- fail "agentSandbox.analysisShadow.namespace is required and must be a lowercase DNS label" -}}{{- end -}}
   {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "agentSandbox.analysisShadow.namespace must differ from the dashboard release namespace" -}}{{- end -}}
-  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.namespace) -}}{{- fail "agentSandbox.analysisShadow.namespace must be a lowercase DNS label" -}}{{- end -}}
-  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.runtimeClassName) -}}{{- fail "agentSandbox.analysisShadow.runtimeClassName is required and must be a lowercase RuntimeClass name" -}}{{- end -}}
-  {{- if or (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.agentVersion)) (gt (len $cfg.agentVersion) 30) -}}{{- fail "agentSandbox.analysisShadow.agentVersion must be a lowercase DNS label of at most 30 characters" -}}{{- end -}}
+  {{- if or (gt (len $cfg.runtimeClassName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.runtimeClassName)) -}}{{- fail "agentSandbox.analysisShadow.runtimeClassName is required and must be a lowercase RuntimeClass name" -}}{{- end -}}
   {{- if not (regexMatch "^[^[:space:]@]+$" $cfg.image.repository) -}}{{- fail "agentSandbox.analysisShadow.image.repository is required without whitespace, credentials, or a digest" -}}{{- end -}}
   {{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $cfg.image.digest) -}}{{- fail "agentSandbox.analysisShadow.image.digest must be an immutable sha256 digest" -}}{{- end -}}
   {{- if ne $cfg.image.pullPolicy "IfNotPresent" -}}{{- fail "agentSandbox.analysisShadow.image.pullPolicy must be IfNotPresent" -}}{{- end -}}
@@ -280,30 +305,57 @@ Name of the Secret holding the AI token.
   {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.scheduledClientServiceAccountName) -}}{{- fail "agentSandbox.rbac.scheduledClientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.scheduledClientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
   {{- include "aster.validateAgentSandboxClientIdentitySplit" . -}}
+  {{- if not (regexMatch "^[^[:space:]@]+$" $cfg.stagerImage.repository) -}}{{- fail "agentSandbox.analysisShadow.stagerImage.repository is required without whitespace, credentials, or a digest" -}}{{- end -}}
+  {{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $cfg.stagerImage.digest) -}}{{- fail "agentSandbox.analysisShadow.stagerImage.digest must be an immutable sha256 digest" -}}{{- end -}}
+  {{- if ne $cfg.stagerImage.pullPolicy "IfNotPresent" -}}{{- fail "agentSandbox.analysisShadow.stagerImage.pullPolicy must be IfNotPresent" -}}{{- end -}}
+  {{- if not (regexMatch "^[^[:space:]@]+$" $cfg.dashboardImage.repository) -}}{{- fail "agentSandbox.analysisShadow.dashboardImage.repository is required without whitespace, credentials, or a digest" -}}{{- end -}}
+  {{- $dashboardTag := include "aster.resolvedImageTag" (list . $cfg.dashboardImage.tag) -}}
+  {{- if not (regexMatch "^(sha-[0-9a-fA-F]{7,64}|v?[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?)$" $dashboardTag) -}}{{- fail "agentSandbox.analysisShadow.dashboardImage tag must be an immutable sha-<hex> or full semantic version" -}}{{- end -}}
+  {{- if ne $cfg.dashboardImage.pullPolicy "IfNotPresent" -}}{{- fail "agentSandbox.analysisShadow.dashboardImage.pullPolicy must be IfNotPresent" -}}{{- end -}}
+  {{- if or (gt (len $cfg.input.existingClaim) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.input.existingClaim)) -}}{{- fail "agentSandbox.analysisShadow.input.existingClaim is required and must be a lowercase PVC name" -}}{{- end -}}
+  {{- if or (not (hasPrefix "/" $cfg.input.localRoot)) (eq $cfg.input.localRoot "/") (contains ".." $cfg.input.localRoot) (contains "//" $cfg.input.localRoot) (hasPrefix "/tmp" $cfg.input.localRoot) (hasPrefix "/private" $cfg.input.localRoot) -}}{{- fail "agentSandbox.analysisShadow.input.localRoot must be a dedicated canonical absolute path outside /tmp and /private" -}}{{- end -}}
+  {{- if not (regexMatch "^([3-9]|[1-9][0-9]+)Gi$" $cfg.input.localSizeLimit) -}}{{- fail "agentSandbox.analysisShadow.input.localSizeLimit must be at least 3Gi" -}}{{- end -}}
   {{- if not $cfg.ledger.existingClaim -}}{{- fail "agentSandbox.analysisShadow.ledger.existingClaim is required" -}}{{- end -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.ledger.existingClaim) -}}{{- fail "agentSandbox.analysisShadow.ledger.existingClaim must be a lowercase object name" -}}{{- end -}}
-  {{- if eq $cfg.ledger.existingClaim (include "aster.pvcName" .) -}}{{- fail "agentSandbox.analysisShadow must use a PVC distinct from public dashboard data" -}}{{- end -}}
+  {{- if eq $cfg.ledger.existingClaim (include "aster.pvcName" .) -}}{{- fail "agentSandbox.analysisShadow ledger must use a PVC distinct from public dashboard data" -}}{{- end -}}
   {{- if not (hasPrefix "/private/" $cfg.ledger.mountPath) -}}{{- fail "agentSandbox.analysisShadow.ledger.mountPath must be under /private" -}}{{- end -}}
   {{- if or (contains ".." $cfg.ledger.mountPath) (contains "//" $cfg.ledger.mountPath) -}}{{- fail "agentSandbox.analysisShadow.ledger.mountPath must be canonical" -}}{{- end -}}
   {{- if or (hasPrefix .Values.persistence.mountPath $cfg.ledger.mountPath) (hasPrefix $cfg.ledger.mountPath .Values.persistence.mountPath) -}}{{- fail "agentSandbox.analysisShadow ledger must be separate from public dashboard persistence" -}}{{- end -}}
+  {{- $workloadSA := include "aster.agentAnalysisShadowWorkloadServiceAccountName" . -}}
+  {{- if or (gt (len $workloadSA) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $workloadSA)) -}}{{- fail "agentSandbox.analysisShadow.workloadServiceAccount.name is required and must be a lowercase object name" -}}{{- end -}}
+  {{- $clientSA := include "aster.agentSandboxScheduledClientServiceAccountName" . -}}
+  {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.scheduledClientServiceAccountName) -}}{{- fail "agentSandbox.rbac.scheduledClientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.scheduledClientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
   {{- $provider := $cfg.modelProvider -}}
   {{- $credentialMode := default "direct" $provider.credentialMode -}}
   {{- $providerAPI := default "chat_completions" $provider.api -}}
+  {{- $providerAuth := $provider.auth -}}
+  {{- $authType := default "none" $providerAuth.type -}}
   {{- if not (has $credentialMode (list "direct" "gateway")) -}}{{- fail "agentSandbox.analysisShadow.modelProvider.credentialMode must be direct or gateway" -}}{{- end -}}
-  {{- if ne $providerAPI "chat_completions" -}}{{- fail "agentSandbox.analysisShadow.modelProvider.api must be chat_completions" -}}{{- end -}}
+  {{- if not (has $providerAPI (list "chat_completions" "responses")) -}}{{- fail "agentSandbox.analysisShadow.modelProvider.api must be chat_completions or responses" -}}{{- end -}}
+  {{- if not (has (default "" $provider.reasoningEffort) (list "" "none" "low" "medium" "high" "xhigh")) -}}{{- fail "agentSandbox.analysisShadow.modelProvider.reasoningEffort must be empty, none, low, medium, high, or xhigh" -}}{{- end -}}
   {{- if not (regexMatch "^https://[^/@?#]+(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $provider.endpoint) -}}{{- fail "agentSandbox.analysisShadow.modelProvider.endpoint must be an absolute credential-free HTTPS URL" -}}{{- end -}}
   {{- if and (eq $providerAPI "chat_completions") (not (hasSuffix "/chat/completions" (trimSuffix "/" $provider.endpoint))) -}}{{- fail "agentSandbox.analysisShadow.modelProvider chat_completions endpoint must end with /chat/completions" -}}{{- end -}}
+  {{- if and (eq $providerAPI "responses") (not (hasSuffix "/responses" (trimSuffix "/" $provider.endpoint))) -}}{{- fail "agentSandbox.analysisShadow.modelProvider responses endpoint must end with /responses" -}}{{- end -}}
   {{- if or (not $provider.model) (gt (len $provider.model) 256) (contains "\n" $provider.model) (contains "\r" $provider.model) -}}{{- fail "agentSandbox.analysisShadow.modelProvider.model must be non-empty, at most 256 bytes, and single-line" -}}{{- end -}}
+  {{- if not (has $authType (list "none" "bearer")) -}}{{- fail "agentSandbox.analysisShadow.modelProvider.auth.type must be none or bearer" -}}{{- end -}}
+  {{- if and (eq $providerAPI "responses") (or (ne $credentialMode "direct") (ne $authType "bearer")) -}}{{- fail "agentSandbox.analysisShadow responses requires direct bearer auth" -}}{{- end -}}
+  {{- if $provider.publicCAPrivateDNS -}}{{- fail "agentSandbox.analysisShadow.modelProvider.publicCAPrivateDNS is not supported" -}}{{- end -}}
   {{- if eq $credentialMode "gateway" -}}
-    {{- if not (regexMatch "^https://[^/@?#]+[.](svc([.]cluster[.]local)?|internal)(:[0-9]+)?(/[^?#]*)?$" $provider.endpoint) -}}{{- fail "agentSandbox.analysisShadow.modelProvider gateway endpoint must be an internal HTTPS service URL" -}}{{- end -}}
+    {{- if ne $authType "none" -}}{{- fail "agentSandbox.analysisShadow gateway mode requires auth.type=none" -}}{{- end -}}
+    {{- if or $providerAuth.existingSecret $providerAuth.tokenKey -}}{{- fail "agentSandbox.analysisShadow gateway mode must not set Secret fields" -}}{{- end -}}
+    {{- if not (regexMatch "^https://[^/]+[.](svc|svc[.]cluster[.]local|internal)(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $provider.endpoint) -}}{{- fail "agentSandbox.analysisShadow gateway endpoint must use internal service DNS" -}}{{- end -}}
+  {{- else if eq $authType "none" -}}
+    {{- if or $providerAuth.existingSecret $providerAuth.tokenKey -}}{{- fail "agentSandbox.analysisShadow auth.type=none must not set Secret fields" -}}{{- end -}}
+  {{- else -}}
+    {{- if or (not $providerAuth.existingSecret) (gt (len $providerAuth.existingSecret) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $providerAuth.existingSecret)) -}}{{- fail "agentSandbox.analysisShadow bearer auth requires a valid existing Secret name" -}}{{- end -}}
+    {{- if or (not $providerAuth.tokenKey) (gt (len $providerAuth.tokenKey) 253) (not (regexMatch "^[A-Za-z0-9._-]+$" $providerAuth.tokenKey)) -}}{{- fail "agentSandbox.analysisShadow bearer auth requires a valid Secret key" -}}{{- end -}}
   {{- end -}}
   {{- $timeoutText := printf "%v" $cfg.timeout -}}
   {{- $timeoutSeconds := 0 -}}
   {{- if regexMatch "^[1-9][0-9]*s$" $timeoutText -}}
-    {{- if gt (len $timeoutText) 5 -}}{{- fail "agentSandbox.analysisShadow.timeout must be at most 30m" -}}{{- end -}}
     {{- $timeoutSeconds = trimSuffix "s" $timeoutText | int -}}
   {{- else if regexMatch "^[1-9][0-9]*m$" $timeoutText -}}
-    {{- if gt (len $timeoutText) 3 -}}{{- fail "agentSandbox.analysisShadow.timeout must be at most 30m" -}}{{- end -}}
     {{- $timeoutSeconds = mul (trimSuffix "m" $timeoutText | int) 60 -}}
   {{- else -}}
     {{- fail "agentSandbox.analysisShadow.timeout must use positive whole seconds or minutes" -}}
@@ -314,18 +366,48 @@ Name of the Secret holding the AI token.
   {{- if regexMatch "^([3-9][0-9]|[1-9][0-9]{2,})s$" (durationRound $poll) -}}{{- fail "agentSandbox.analysisShadow.pollInterval must be below 30s" -}}{{- end -}}
   {{- if or (lt (int64 $cfg.outputLimitBytes) 4096) (gt (int64 $cfg.outputLimitBytes) 1048576) -}}{{- fail "agentSandbox.analysisShadow.outputLimitBytes must be between 4096 and 1048576" -}}{{- end -}}
   {{- if or (lt (int $cfg.maxPerRun) 1) (gt (int $cfg.maxPerRun) 10) -}}{{- fail "agentSandbox.analysisShadow.maxPerRun must be between 1 and 10" -}}{{- end -}}
-  {{- if or (lt (int $cfg.maxTurns) 1) (gt (int $cfg.maxTurns) 1000) -}}{{- fail "agentSandbox.analysisShadow.maxTurns must be between 1 and 1000" -}}{{- end -}}
-  {{- if or (lt (int $cfg.retries) 0) (gt (int $cfg.retries) 2) -}}{{- fail "agentSandbox.analysisShadow.retries must be between 0 and 2" -}}{{- end -}}
-  {{- if ne (index $cfg.resources.requests "ephemeral-storage") (index $cfg.resources.limits "ephemeral-storage") -}}{{- fail "agentSandbox.analysisShadow ephemeral-storage request must equal its limit" -}}{{- end -}}
-  {{- if not $cfg.networkPolicy.enabled -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.enabled must be true" -}}{{- end -}}
-  {{- if not (has $cfg.networkPolicy.mode (list "kubernetes" "cilium")) -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.mode must be kubernetes or cilium" -}}{{- end -}}
-  {{- if eq $credentialMode "gateway" -}}
-    {{- if eq (len $cfg.networkPolicy.gatewayNamespaceSelector) 0 -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.gatewayNamespaceSelector is required for gateway mode" -}}{{- end -}}
-    {{- if eq (len $cfg.networkPolicy.gatewayPodSelector) 0 -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.gatewayPodSelector is required for gateway mode" -}}{{- end -}}
+  {{- if or (lt (int $cfg.maxSteps) 5) (gt (int $cfg.maxSteps) 100) -}}{{- fail "agentSandbox.analysisShadow.maxSteps must be between 5 and 100" -}}{{- end -}}
+  {{- if or (lt (int $cfg.modelContextTokens) 8192) (gt (int $cfg.modelContextTokens) 2000000) -}}{{- fail "agentSandbox.analysisShadow.modelContextTokens must be between 8192 and 2000000" -}}{{- end -}}
+  {{- if or (lt (int $cfg.modelOutputTokens) 1024) (gt (int $cfg.modelOutputTokens) (int $cfg.modelContextTokens)) (gt (int $cfg.modelOutputTokens) 131072) -}}{{- fail "agentSandbox.analysisShadow.modelOutputTokens is invalid" -}}{{- end -}}
+  {{- if or (lt (int .Values.ai.contextWindowTokens) 8192) (ne (int $cfg.modelContextTokens) (int .Values.ai.contextWindowTokens)) -}}{{- fail "agentSandbox.analysisShadow.modelContextTokens must equal ai.contextWindowTokens" -}}{{- end -}}
+  {{- if ne (int $cfg.modelOutputTokens) (int .Values.ai.maxOutputTokens) -}}{{- fail "agentSandbox.analysisShadow.modelOutputTokens must equal ai.maxOutputTokens" -}}{{- end -}}
+  {{- range $scope, $resources := $cfg.resources -}}
+    {{- range $resource := list "cpu" "memory" "ephemeral-storage" -}}
+      {{- if not (index $resources $resource) -}}{{- fail (printf "agentSandbox.analysisShadow.resources.%s.%s is required" $scope $resource) -}}{{- end -}}
+    {{- end -}}
   {{- end -}}
+  {{- if ne (index $cfg.resources.requests "ephemeral-storage") (index $cfg.resources.limits "ephemeral-storage") -}}{{- fail "agentSandbox.analysisShadow ephemeral-storage request must equal its limit" -}}{{- end -}}
+  {{- if ne (index $cfg.resources.limits "ephemeral-storage") $cfg.input.localSizeLimit -}}{{- fail "agentSandbox.analysisShadow workspace ephemeral-storage must equal input.localSizeLimit" -}}{{- end -}}
+  {{- if or (not (index .Values.fetcher.resources.requests "ephemeral-storage")) (not (index .Values.fetcher.resources.limits "ephemeral-storage")) -}}{{- fail "agentSandbox.analysisShadow requires fetcher ephemeral-storage requests and limits" -}}{{- end -}}
+  {{- if or (ne (index .Values.fetcher.resources.requests "ephemeral-storage") $cfg.input.localSizeLimit) (ne (index .Values.fetcher.resources.limits "ephemeral-storage") $cfg.input.localSizeLimit) -}}{{- fail "agentSandbox.analysisShadow fetcher ephemeral-storage must equal input.localSizeLimit" -}}{{- end -}}
+  {{- if not $cfg.networkPolicy.enabled -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.enabled must be true" -}}{{- end -}}
+  {{- if ne $cfg.networkPolicy.mode "cilium" -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.mode must be cilium for isolated public snapshot staging" -}}{{- end -}}
   {{- if or (lt (int $cfg.networkPolicy.gatewayPort) 1) (gt (int $cfg.networkPolicy.gatewayPort) 65535) -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.gatewayPort is invalid" -}}{{- end -}}
+  {{- $gatewayTargetPort := int $cfg.networkPolicy.gatewayPort -}}
+  {{- if and (hasKey $cfg.networkPolicy "gatewayTargetPort") (ne (index $cfg.networkPolicy "gatewayTargetPort") nil) -}}{{- $gatewayTargetPort = int (index $cfg.networkPolicy "gatewayTargetPort") -}}{{- end -}}
+  {{- if or (lt $gatewayTargetPort 1) (gt $gatewayTargetPort 65535) -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.gatewayTargetPort is invalid" -}}{{- end -}}
+  {{- $providerAuthority := regexFind "^https://[^/]+" $provider.endpoint -}}
+  {{- $explicitProviderPort := regexFind ":[0-9]+$" $providerAuthority -}}
+  {{- $endpointProviderPort := 443 -}}
+  {{- if $explicitProviderPort -}}{{- $endpointProviderPort = trimPrefix ":" $explicitProviderPort | int -}}{{- end -}}
+  {{- if ne (int $cfg.networkPolicy.gatewayPort) $endpointProviderPort -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.gatewayPort must match modelProvider.endpoint" -}}{{- end -}}
   {{- if or (eq (len $cfg.networkPolicy.dnsNamespaceSelector) 0) (eq (len $cfg.networkPolicy.dnsPodSelector) 0) -}}{{- fail "agentSandbox.analysisShadow DNS network selectors are required" -}}{{- end -}}
   {{- if and (eq $cfg.networkPolicy.mode "cilium") (or (not (hasKey $cfg.networkPolicy.dnsNamespaceSelector "kubernetes.io/metadata.name")) (not (get $cfg.networkPolicy.dnsNamespaceSelector "kubernetes.io/metadata.name"))) -}}{{- fail "agentSandbox.analysisShadow cilium mode requires dnsNamespaceSelector.kubernetes.io/metadata.name" -}}{{- end -}}
+  {{- if or (eq (len $cfg.networkPolicy.stagingFQDNs) 0) (not (has "github.com" $cfg.networkPolicy.stagingFQDNs)) -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.stagingFQDNs must include github.com" -}}{{- end -}}
+  {{- if not (has "api.github.com" $cfg.networkPolicy.stagingFQDNs) -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.stagingFQDNs must include api.github.com for bounded source-tree inspection" -}}{{- end -}}
+  {{- range $fqdn := $cfg.networkPolicy.stagingFQDNs -}}
+    {{- if not (regexMatch "^([A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?[.])+[A-Za-z]{2,}$" $fqdn) -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.stagingFQDNs contains an invalid DNS name" -}}{{- end -}}
+  {{- end -}}
+  {{- $providerInternal := regexMatch "^https://[^/]+[.](svc|svc[.]cluster[.]local|internal)(:[0-9]+)?/" $provider.endpoint -}}
+  {{- if $providerInternal -}}
+    {{- if eq (len $cfg.networkPolicy.gatewayNamespaceSelector) 0 -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.gatewayNamespaceSelector is required for an internal provider" -}}{{- end -}}
+    {{- if eq (len $cfg.networkPolicy.gatewayPodSelector) 0 -}}{{- fail "agentSandbox.analysisShadow.networkPolicy.gatewayPodSelector is required for an internal provider" -}}{{- end -}}
+  {{- else -}}
+    {{- if ne $credentialMode "direct" -}}{{- fail "agentSandbox.analysisShadow external providers require direct credential mode" -}}{{- end -}}
+    {{- if not (regexMatch "^https://([A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?[.])+[A-Za-z]{2,}(:[0-9]+)?/" $provider.endpoint) -}}{{- fail "agentSandbox.analysisShadow external direct providers require a DNS FQDN" -}}{{- end -}}
+    {{- if ne $cfg.networkPolicy.mode "cilium" -}}{{- fail "agentSandbox.analysisShadow external direct providers require networkPolicy.mode=cilium" -}}{{- end -}}
+  {{- end -}}
+  {{- if not $cfg.quota.enabled -}}{{- fail "agentSandbox.analysisShadow.quota.enabled must be true" -}}{{- end -}}
   {{- range $env := concat .Values.server.extraEnv .Values.fetcher.extraEnv -}}
     {{- if hasPrefix "AGENT_SANDBOX_ANALYSIS_SHADOW_" (default "" $env.name) -}}{{- fail (printf "extraEnv must not override reserved analysis shadow variable %s" $env.name) -}}{{- end -}}
   {{- end -}}
@@ -648,6 +730,10 @@ project.config whenever the fix runtime is enabled, so these always resolve.
 {{- printf "%s@%s" .Values.agentSandbox.analyzer.executorImage.repository .Values.agentSandbox.analyzer.executorImage.digest -}}
 {{- end -}}
 
+{{- define "aster.agentSandboxAnalyzerStagerImage" -}}
+{{- printf "%s@%s" .Values.agentSandbox.analyzer.stagerImage.repository .Values.agentSandbox.analyzer.stagerImage.digest -}}
+{{- end -}}
+
 {{/* Dedicated ServiceAccount allowed to manage only analyzer Sandboxes. */}}
 {{- define "aster.agentSandboxAnalyzerClientServiceAccountName" -}}
 {{- if .Values.agentSandbox.analyzer.clientServiceAccount.name -}}
@@ -681,6 +767,9 @@ project.config whenever the fix runtime is enabled, so these always resolve.
   {{- if or (gt (len $cfg.runtimeClassName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.runtimeClassName)) -}}{{- fail "agentSandbox.analyzer.runtimeClassName is required and must be a lowercase RuntimeClass name" -}}{{- end -}}
   {{- if not (regexMatch "^[^[:space:]@]+$" $cfg.executorImage.repository) -}}{{- fail "agentSandbox.analyzer.executorImage.repository is required without whitespace, credentials, or a digest" -}}{{- end -}}
   {{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $cfg.executorImage.digest) -}}{{- fail "agentSandbox.analyzer.executorImage.digest must be an immutable sha256 digest" -}}{{- end -}}
+  {{- if not (regexMatch "^[^[:space:]@]+$" $cfg.stagerImage.repository) -}}{{- fail "agentSandbox.analyzer.stagerImage.repository is required without whitespace, credentials, or a digest" -}}{{- end -}}
+  {{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $cfg.stagerImage.digest) -}}{{- fail "agentSandbox.analyzer.stagerImage.digest must be an immutable sha256 digest" -}}{{- end -}}
+  {{- if ne $cfg.stagerImage.pullPolicy "IfNotPresent" -}}{{- fail "agentSandbox.analyzer.stagerImage.pullPolicy must be IfNotPresent" -}}{{- end -}}
   {{- if or (gt (len $cfg.input.existingClaim) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.input.existingClaim)) -}}{{- fail "agentSandbox.analyzer.input.existingClaim is required and must be a lowercase PVC name" -}}{{- end -}}
   {{- if and .Values.persistence.existingClaim (eq $cfg.input.existingClaim .Values.persistence.existingClaim) -}}{{- fail "agentSandbox.analyzer.input.existingClaim must differ from the public dashboard data PVC" -}}{{- end -}}
   {{- $workloadSA := include "aster.agentSandboxAnalyzerWorkloadServiceAccountName" . -}}
@@ -897,4 +986,26 @@ Fix generation is server-only and maintainer-initiated, so it never applies here
 {{- define "aster.agentSandboxScheduledEnabled" -}}
 {{- if or .Values.agentSandbox.causalCritic.enabled .Values.agentSandbox.analysisShadow.enabled -}}true
 {{- else -}}false{{- end -}}
+{{- end -}}
+
+{{/* Exact credential-free stager environment for one file-backed analysis request. */}}
+{{- define "aster.agentAnalysisRequestChunkAdmission" -}}
+{{- $parts := list "size(variables.stager.env) == 17" "variables.stager.env[0].name == 'PROW_AI_ANALYSIS_STAGE_REQUEST_B64'" "has(variables.stager.env[0].value)" "size(variables.stager.env[0].value) > 0" "size(variables.stager.env[0].value) <= 131072" "variables.stager.env[0].value.matches('^[A-Za-z0-9+/]+={0,2}$')" "!has(variables.stager.env[0].valueFrom)" -}}
+{{- range $index := until 16 -}}
+  {{- $position := add $index 1 -}}
+  {{- $name := printf "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64_CHUNK_%02d" $index -}}
+  {{- $parts = append $parts (printf "variables.stager.env[%d].name == '%s'" $position $name) -}}
+  {{- if eq $index 0 -}}
+    {{- $parts = append $parts (printf "has(variables.stager.env[%d].value) && size(variables.stager.env[%d].value) > 0" $position $position) -}}
+  {{- end -}}
+  {{- $parts = append $parts (printf "!has(variables.stager.env[%d].value) || size(variables.stager.env[%d].value) <= 65536" $position $position) -}}
+  {{- $parts = append $parts (printf "!has(variables.stager.env[%d].value) || variables.stager.env[%d].value.matches('^[A-Za-z0-9+/]+={0,2}$')" $position $position) -}}
+  {{- $parts = append $parts (printf "!has(variables.stager.env[%d].valueFrom)" $position) -}}
+  {{- if lt $index 15 -}}
+    {{- $next := add $position 1 -}}
+    {{- $parts = append $parts (printf "(has(variables.stager.env[%d].value) && size(variables.stager.env[%d].value) == 65536) || !has(variables.stager.env[%d].value) || size(variables.stager.env[%d].value) == 0" $position $position $next $next) -}}
+  {{- end -}}
+{{- end -}}
+{{- $parts = append $parts "(!has(variables.stager.envFrom) || size(variables.stager.envFrom) == 0)" -}}
+{{- join " && " $parts -}}
 {{- end -}}

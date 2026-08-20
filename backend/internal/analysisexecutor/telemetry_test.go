@@ -1,11 +1,13 @@
 package analysisexecutor
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -17,7 +19,7 @@ func TestParseOpenCodeTelemetrySanitizesSuccessfulUsage(t *testing.T) {
 		"info":{"role":"assistant","cost":0.125,"tokens":{"input":100,"output":25,"cache":{"read":40}},"private":"secret prompt"},
 		"parts":[
 			{"type":"step-start","snapshot":"private source"},
-			{"type":"step-finish","cost":0.125,"tokens":{"input":100,"output":25,"cache":{"read":40}}},
+			{"type":"step-finish","cost":0.125,"tokens":{"input":100,"output":25,"reasoning":7,"cache":{"read":40}}},
 			{"type":"tool","tool":"read","state":{"status":"completed","output":"artifact secret"}},
 			{"type":"tool","tool":"bash","state":{"status":"error","error":"Permission denied by policy","input":{"command":"secret"}}}
 		]
@@ -26,7 +28,7 @@ func TestParseOpenCodeTelemetrySanitizesSuccessfulUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !usage.Available || usage.ModelRequests != 1 || usage.InputTokens != 100 || usage.CachedInputTokens != 40 || usage.OutputTokens != 25 || !usage.CostAvailable || usage.CostUSD != "0.12500000" {
+	if !usage.Available || usage.ModelRequests != 1 || usage.InputTokens != 140 || usage.CachedInputTokens != 40 || usage.OutputTokens != 25 || usage.ReasoningTokens != 7 || !usage.CostAvailable || usage.CostUSD != "0.12500000" {
 		t.Fatalf("usage=%+v", usage)
 	}
 	if !telemetry.Available || telemetry.ProviderRequests != 1 || !telemetry.ProviderRequestsKnown || telemetry.StepsUsed != 1 || telemetry.ToolFailureCount != 1 || telemetry.DeniedToolCount != 1 || len(telemetry.Tools) != 2 {
@@ -63,11 +65,10 @@ func TestParseOpenCodeTelemetryRecordsStructuredAndContextErrors(t *testing.T) {
 	}
 }
 
-func TestParseOpenCodeTelemetryRejectsMalformedAndOversizedFields(t *testing.T) {
+func TestParseOpenCodeTelemetryRejectsMalformedPayloads(t *testing.T) {
 	for name, raw := range map[string][]byte{
-		"malformed":       []byte(`[{`),
-		"trailing":        []byte(`[] {}`),
-		"oversized error": []byte(`[{"info":{"role":"assistant","cost":0,"tokens":{"input":1,"output":1,"cache":{"read":0}}},"parts":[{"type":"step-start"},{"type":"step-finish","cost":0.1,"tokens":{"input":1,"output":1,"cache":{"read":0}}},{"type":"tool","tool":"read","state":{"status":"error","error":"` + strings.Repeat("x", maxOpenCodeFieldBytes+1) + `"}}]}]`),
+		"malformed": []byte(`[{`),
+		"trailing":  []byte(`[] {}`),
 	} {
 		t.Run(name, func(t *testing.T) {
 			usage, telemetry, err := parseOpenCodeTelemetry(raw)
@@ -75,6 +76,25 @@ func TestParseOpenCodeTelemetryRejectsMalformedAndOversizedFields(t *testing.T) 
 				t.Fatalf("usage=%+v telemetry=%+v err=%v", usage, telemetry, err)
 			}
 		})
+	}
+}
+
+func TestParseOpenCodeTelemetryAcceptsLongToolErrorsWithoutRetainingThem(t *testing.T) {
+	errorText := strings.Repeat("private provider detail ", 40) + "permission denied"
+	raw := []byte(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"step-finish","cost":0.1,"tokens":{"input":1,"output":1,"cache":{"read":0}}},{"type":"tool","tool":"read","state":{"status":"error","error":` + strconv.Quote(errorText) + `}}]}]`)
+	usage, telemetry, err := parseOpenCodeTelemetry(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !usage.Available || !telemetry.Available || telemetry.ToolFailureCount != 1 || telemetry.DeniedToolCount != 1 {
+		t.Fatalf("usage=%+v telemetry=%+v", usage, telemetry)
+	}
+	encoded, err := json.Marshal(telemetry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), errorText) || strings.Contains(string(encoded), "private provider detail") {
+		t.Fatal("sanitized telemetry retained the tool error")
 	}
 }
 
@@ -112,12 +132,12 @@ func TestParseOpenCodeTelemetryAggregatesMultipleSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usage.ModelRequests != 2 || usage.InputTokens != 100 || usage.CachedInputTokens != 12 || usage.OutputTokens != 12 || usage.CostUSD != "0.30000000" || telemetry.StepsUsed != 2 {
+	if usage.ModelRequests != 2 || usage.InputTokens != 112 || usage.CachedInputTokens != 12 || usage.OutputTokens != 12 || usage.CostUSD != "0.30000000" || telemetry.StepsUsed != 2 {
 		t.Fatalf("usage=%+v telemetry=%+v", usage, telemetry)
 	}
 }
 
-func TestParseOpenCodeTelemetryRejectsMissingStepUsageFields(t *testing.T) {
+func TestParseOpenCodeTelemetryMarksMissingStepUsageUnavailable(t *testing.T) {
 	parts := []string{
 		`{"type":"step-finish","cost":0.1}`,
 		`{"type":"step-finish","cost":0.1,"tokens":{"output":1,"cache":{"read":0}}}`,
@@ -128,7 +148,7 @@ func TestParseOpenCodeTelemetryRejectsMissingStepUsageFields(t *testing.T) {
 	for _, part := range parts {
 		raw := []byte(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},` + part + `]}]`)
 		usage, telemetry, err := parseOpenCodeTelemetry(raw)
-		if err == nil || usage.Available || telemetry.Available {
+		if err != nil || usage.Available || usage.Status != agentanalysis.WorkspaceTelemetryUnavailable || !telemetry.Available {
 			t.Fatalf("part=%s usage=%+v telemetry=%+v err=%v", part, usage, telemetry, err)
 		}
 	}
@@ -166,7 +186,7 @@ func TestParseOpenCodeTelemetryPreservesRecoveryAfterIncompleteStep(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usage.Available || usage.ModelRequests != 0 || !telemetry.Available || telemetry.StepsUsed != 2 || !telemetry.ContextLimit {
+	if !usage.Available || usage.Status != agentanalysis.WorkspaceTelemetryPartial || usage.ModelRequests != 1 || usage.InputTokens != 23 || usage.OutputTokens != 5 || !telemetry.Available || telemetry.StepsUsed != 2 || !telemetry.ContextLimit {
 		t.Fatalf("usage=%+v telemetry=%+v", usage, telemetry)
 	}
 }
@@ -252,7 +272,7 @@ func TestParseOpenCodeTelemetryValidatesToolStates(t *testing.T) {
 func TestParseOpenCodeTelemetryClassifiesBoundedEvidenceTools(t *testing.T) {
 	workDir := t.TempDir()
 	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
-	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary")
 	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +305,7 @@ func TestParseOpenCodeTelemetryClassifiesBoundedEvidenceTools(t *testing.T) {
 	}
 	wantHandles := []agentanalysis.WorkspaceEvidenceHandle{
 		{ID: "artifact-001", Root: agentanalysis.WorkspaceArtifactsDir, Path: "failure.log", LineStart: 1, LineEnd: 1},
-		{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, Path: "main.go", LineStart: 1, LineEnd: 1},
+		{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, SourceID: "primary", Path: "main.go", LineStart: 1, LineEnd: 1},
 	}
 	if !slices.Equal(facts.EvidenceHandles, wantHandles) {
 		t.Fatalf("handles=%+v want=%+v", facts.EvidenceHandles, wantHandles)
@@ -295,7 +315,7 @@ func TestParseOpenCodeTelemetryClassifiesBoundedEvidenceTools(t *testing.T) {
 func TestParseOpenCodeTelemetryPreservesUsageWithInvalidOptionalRange(t *testing.T) {
 	workDir := t.TempDir()
 	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
-	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary")
 	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -314,17 +334,17 @@ func TestParseOpenCodeTelemetryPreservesUsageWithInvalidOptionalRange(t *testing
 		"info":{"role":"assistant"},"parts":[
 		{"type":"step-start"},
 		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},
-		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[2]q},"metadata":{"display":{"type":"file","path":%[2]q,"lineStart":2,"lineEnd":2}}}},
+		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[2]q},"metadata":{"display":{"type":"file","path":%[2]q,"lineStart":1,"lineEnd":1}}}},
 		{"type":"step-finish","cost":0.1,"tokens":{"input":3,"output":2,"cache":{"read":1}}}
 	]}]`, artifactPath, sourcePath))
 	usage, telemetry, facts, err := parseOpenCodeTelemetryForWorkspace(raw, workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !usage.Available || usage.InputTokens != 3 || usage.CachedInputTokens != 1 || usage.OutputTokens != 2 || !telemetry.Available || facts.ArtifactToolCalls != 1 || facts.SourceToolCalls != 1 || len(facts.EvidenceHandles) != 1 || facts.EvidenceHandles[0].Root != agentanalysis.WorkspaceArtifactsDir {
+	if !usage.Available || usage.InputTokens != 4 || usage.CachedInputTokens != 1 || usage.OutputTokens != 2 || !telemetry.Available || facts.ArtifactToolCalls != 1 || facts.SourceToolCalls != 1 || len(facts.EvidenceHandles) != 2 || len(telemetry.SourceReads) != 1 || telemetry.SourceReads[0].Path != "main.go" || telemetry.SourceReads[0].LineStart != 1 {
 		t.Fatalf("usage=%+v telemetry=%+v facts=%+v", usage, telemetry, facts)
 	}
-	if telemetry.EvidenceHandles.Status != agentanalysis.WorkspaceEvidenceHandlesAcceptedWithWarnings || telemetry.EvidenceHandles.AcceptedArtifactHandleCount != 1 || telemetry.EvidenceHandles.AcceptedSourceHandleCount != 0 || telemetry.EvidenceHandles.DroppedRangeCount != 1 || !slices.Contains(telemetry.EvidenceHandles.Codes, agentanalysis.WorkspaceEvidenceRangeLineInvalid) {
+	if telemetry.EvidenceHandles.Status != agentanalysis.WorkspaceEvidenceHandlesAccepted || telemetry.EvidenceHandles.AcceptedArtifactHandleCount != 1 || telemetry.EvidenceHandles.AcceptedSourceHandleCount != 1 || telemetry.EvidenceHandles.DroppedRangeCount != 0 {
 		t.Fatalf("diagnostics=%+v", telemetry.EvidenceHandles)
 	}
 }
@@ -500,5 +520,78 @@ func TestParseOpenCodeTelemetryTreatsZeroTokenUsageAsUnavailable(t *testing.T) {
 	}
 	if usage.Available || usage.Status != agentanalysis.WorkspaceTelemetryUnavailable || usage.ModelRequests != 0 || telemetry.ProviderRequests != 1 || !telemetry.ProviderRequestsKnown {
 		t.Fatalf("usage=%+v telemetry=%+v", usage, telemetry)
+	}
+}
+
+func TestParseOpenCodeTelemetryCountsExactDuplicateEvidenceReads(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(artifactDir, "failure.log")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	message := fmt.Sprintf(`{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}`, artifactPath)
+	raw := []byte("[" + message + "," + message + "]")
+	_, telemetry, facts, err := parseOpenCodeTelemetryForWorkspace(raw, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if telemetry.EvidenceReadCalls != 2 || telemetry.DuplicateReadCalls != 1 || facts.EvidenceReadCalls != 2 || facts.DuplicateReadCalls != 1 || telemetry.EvidenceHandles.AcceptedArtifactHandleCount != 1 {
+		t.Fatalf("telemetry=%+v facts=%+v", telemetry, facts)
+	}
+}
+
+func TestParseOpenCodeTelemetrySeparatesMultiSourceReads(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "failure.log"), []byte("failure marker\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]string{}
+	for _, id := range []string{"client", "server"} {
+		root := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, id)
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(root, "same.go")
+		if err := os.WriteFile(path, []byte("package "+id+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		paths[id] = path
+	}
+	raw := []byte(fmt.Sprintf(`[{
+		"info":{"role":"assistant"},"parts":[
+		{"type":"step-start"},
+		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},
+		{"type":"tool","tool":"grep","state":{"status":"completed","input":{"path":%[2]q},"output":%[3]q,"metadata":{"matches":1}}},
+		{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[4]q},"metadata":{"display":{"type":"file","path":%[4]q,"lineStart":1,"lineEnd":1}}}},
+		{"type":"step-finish","cost":0.1,"tokens":{"input":1,"output":1,"cache":{"read":0}}}
+	]}]`, filepath.Join(artifactDir, "failure.log"), paths["client"], paths["client"]+":\n  Line 1: package client", paths["server"]))
+	_, telemetry, facts, err := parseOpenCodeTelemetryForWorkspace(raw, workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantReads := []agentanalysis.WorkspaceSourceReadTelemetry{
+		{SourceID: "client", Tool: "grep", Path: "same.go", LineStart: 1, LineEnd: 1},
+		{SourceID: "server", Tool: "read", Path: "same.go", LineStart: 1, LineEnd: 1},
+	}
+	if !slices.Equal(telemetry.SourceReads, wantReads) || !slices.Equal(facts.SourceReads, wantReads) {
+		t.Fatalf("telemetry=%+v facts=%+v", telemetry.SourceReads, facts.SourceReads)
+	}
+	if len(facts.EvidenceHandles) != 3 || facts.EvidenceHandles[1].SourceID != "client" || facts.EvidenceHandles[2].SourceID != "server" {
+		t.Fatalf("handles=%+v", facts.EvidenceHandles)
+	}
+	encoded, err := json.Marshal(telemetry.SourceReads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("package client")) || bytes.Contains(encoded, []byte("package server")) {
+		t.Fatalf("source read telemetry retained content: %s", encoded)
 	}
 }

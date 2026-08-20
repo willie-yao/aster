@@ -1,7 +1,15 @@
 {{- include "aster.validateAgentAnalysisShadow" . -}}
 {{- if and .Values.agentSandbox.analysisShadow.enabled .Values.agentSandbox.analysisShadow.networkPolicy.enabled }}
 {{- $cfg := .Values.agentSandbox.analysisShadow.networkPolicy -}}
+{{- $gatewayTargetPort := int $cfg.gatewayPort -}}
+{{- if and (hasKey $cfg "gatewayTargetPort") (ne (index $cfg "gatewayTargetPort") nil) -}}
+  {{- $gatewayTargetPort = int (index $cfg "gatewayTargetPort") -}}
+{{- end -}}
 {{- if eq $cfg.mode "cilium" }}
+{{- $providerAuthority := trimPrefix "https://" (regexFind "^https://[^/]+" .Values.agentSandbox.analysisShadow.modelProvider.endpoint) -}}
+{{- $providerHost := regexReplaceAll ":[0-9]+$" $providerAuthority "" -}}
+{{- $providerParts := splitList "." $providerHost -}}
+{{- $providerInternalService := regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?[.][a-z0-9]([-a-z0-9]*[a-z0-9])?[.]svc([.]cluster[.]local)?$" $providerHost -}}
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -12,9 +20,8 @@ metadata:
     app.kubernetes.io/component: agent-sandbox-analysis-shadow
 spec:
   endpointSelector:
-    matchExpressions:
-      - key: prow-ai-dashboard/execution
-        operator: Exists
+    matchLabels:
+      prow-ai-dashboard/purpose: analysis
   ingress: []
   egress:
     - toEndpoints:
@@ -30,11 +37,23 @@ spec:
           rules:
             dns:
               - matchPattern: "*"
-    - toEntities: [cluster]
+    {{- if $providerInternalService }}
+    - toServices:
+        - k8sService:
+            serviceName: {{ index $providerParts 0 | quote }}
+            namespace: {{ index $providerParts 1 | quote }}
+      toPorts:
+        - ports:
+            - port: {{ $gatewayTargetPort | quote }}
+              protocol: TCP
+    {{- else }}
+    - toFQDNs:
+        - matchName: {{ $providerHost | quote }}
       toPorts:
         - ports:
             - port: {{ $cfg.gatewayPort | quote }}
               protocol: TCP
+    {{- end }}
 {{- else }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -46,9 +65,8 @@ metadata:
     app.kubernetes.io/component: agent-sandbox-analysis-shadow
 spec:
   podSelector:
-    matchExpressions:
-      - key: prow-ai-dashboard/execution
-        operator: Exists
+    matchLabels:
+      prow-ai-dashboard/purpose: analysis
   policyTypes: [Ingress, Egress]
   ingress: []
   egress:
@@ -73,6 +91,6 @@ spec:
               {{- toYaml $cfg.gatewayPodSelector | nindent 14 }}
       ports:
         - protocol: TCP
-          port: {{ $cfg.gatewayPort }}
+          port: {{ $gatewayTargetPort }}
 {{- end }}
 {{- end }}
