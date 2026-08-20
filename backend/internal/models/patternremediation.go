@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const patternRemediationNotInvestigatedReason = "No source-grounded implementation target has been verified for this recurring cause."
+const patternRemediationNotInvestigatedReason = "No source-grounded implementation target has been verified for this cause."
 
 // ValidPatternRemediationInvestigationState reports whether state is public-safe.
 func ValidPatternRemediationInvestigationState(state PatternRemediationInvestigationState) bool {
@@ -98,9 +98,6 @@ func WithDefaultPatternRemediationInvestigations(patterns []PatternAnalysis) []P
 		}
 		summaries := make([]PatternRemediationInvestigationSummary, 0, len(pattern.CausalGroups))
 		for _, group := range pattern.CausalGroups {
-			if len(group.Builds) < 2 {
-				continue
-			}
 			summary, ok := existing[group.ContentHash]
 			if !ok {
 				summary = PatternRemediationInvestigationSummary{

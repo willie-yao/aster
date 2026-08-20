@@ -65,7 +65,7 @@ func writeCausalFixPreviewError(w http.ResponseWriter, err error) {
 	case errors.Is(err, causalfixpreview.ErrValidation):
 		status, message = http.StatusUnprocessableEntity, "generated patch failed validation"
 	case errors.Is(err, remediationinvestigation.ErrOperationStale), errors.Is(err, remediationinvestigation.ErrOperationInactive):
-		status, message = http.StatusConflict, "the displayed recurring cause is stale"
+		status, message = http.StatusConflict, "the displayed cause is stale"
 	}
 	http.Error(w, message, status)
 }

@@ -48,7 +48,7 @@ type OperationResolver interface {
 	RefreshActive() (bool, error)
 }
 
-// RecurrenceVerdict is one terminal answer for a recurring cause.
+// RecurrenceVerdict is one terminal answer for a cause.
 type RecurrenceVerdict struct {
 	State models.PatternRemediationInvestigationState
 	// Reason is the safe published explanation recorded with the verdict.
@@ -560,7 +560,7 @@ func operationPhaseView(ref OperationRef, state models.PatternRemediationInvesti
 	reason := ""
 	switch state {
 	case models.PatternRemediationNotInvestigated:
-		reason = "No source-grounded implementation target has been verified for this recurring cause."
+		reason = "No source-grounded implementation target has been verified for this cause."
 	case models.PatternRemediationQueued:
 		reason = "The read-only remediation investigation is queued."
 	case models.PatternRemediationInvestigating:
@@ -591,7 +591,7 @@ func operationStaleView(ref OperationRef, now time.Time) models.PatternRemediati
 	return models.PatternRemediationInvestigationSummary{
 		CausalGroupID: ref.CausalGroupID, CausalGroupHash: ref.CausalGroupHash,
 		State:       models.PatternRemediationStale,
-		Reason:      "The displayed recurring cause is no longer the current active causal group. Refresh the dashboard before investigating again.",
+		Reason:      "The displayed cause is no longer the current active causal group. Refresh the dashboard before investigating again.",
 		CompletedAt: now.UTC().Format(time.RFC3339),
 	}
 }
@@ -608,10 +608,10 @@ func safeOperationView(ref OperationRef, result VerifiedResult, completedAt stri
 		reason = "Current source already contains the deterministically verified remediation."
 	case ClassificationExternalDependency:
 		state = models.PatternRemediationExternalDependency
-		reason = "The recurring cause was verified outside the allowed destination repository."
+		reason = "The cause was verified outside the allowed destination repository."
 	case ClassificationEnvironmentOrInfrastructure:
 		state = models.PatternRemediationEnvironmentOrInfrastructure
-		reason = "The recurring cause does not resolve to a verified repository change."
+		reason = "The cause does not resolve to a verified repository change."
 	case ClassificationMitigationOnly:
 		state = models.PatternRemediationMitigationOnly
 		reason = "The available response is an operational mitigation, not a durable implementation target."

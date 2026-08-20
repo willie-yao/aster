@@ -7,8 +7,8 @@ import {
   notInvestigatedReason,
   patternRemediationPresentation,
   remediationUnavailableReason,
-  singleBuildRemediationReason,
   unhashedRemediationReason,
+  unrecurringPatternRemediationReason,
 } from "../src/lib/patternRemediation.js";
 import type {
   PatternCausalGroup,
@@ -80,15 +80,14 @@ test("an unreachable investigation reports why instead of looking pending", () =
   assert.equal(causalRemediationBlockedReason(repeatedGroup, undefined, true), null);
 });
 
-test("a single-build cause is never eligible regardless of deployment", () => {
+test("a single-build cause is investigable, gated only by the deployment", () => {
   const singleBuild: PatternCausalGroup = { ...repeatedGroup, builds: ["209114"] };
-  for (const enabled of [true, false]) {
-    assert.deepEqual(causalRemediationBlockedReason(singleBuild, undefined, enabled), {
-      scope: "cause",
-      label: "Not eligible",
-      message: singleBuildRemediationReason,
-    });
-  }
+  assert.equal(causalRemediationBlockedReason(singleBuild, undefined, true), null);
+  assert.deepEqual(causalRemediationBlockedReason(singleBuild, undefined, false), {
+    scope: "deployment",
+    label: "Unavailable on this deployment",
+    message: remediationUnavailableReason,
+  });
 });
 
 test("blocked reasons report the permanent condition before the deployment one", () => {
@@ -183,9 +182,10 @@ test("causal remediation renders per cause and keeps normal actions blocked", ()
   assert.match(component, /const canStart = !blocked &&/);
   assert.match(component, /const canPreview = !blocked &&/);
 
-  // A blocked cause never polls the operation and discloses nothing.
-  assert.match(component, /const addressable = Boolean\(operationRef\) && group\.builds\.length >= 2/);
-  assert.match(component, /const pollable = addressable && operationAvailable && authStatus === "authenticated"/);
+  // A blocked cause never polls the operation and discloses nothing. Build
+  // count no longer gates this: a cause seen once is investigable too.
+  assert.match(component, /const addressable = Boolean\(operationRef\)/);
+  assert.match(component, /const pollable = !blocked && addressable && operationAvailable && authStatus === "authenticated"/);
   assert.match(component, /const details = blocked \? undefined :/);
 
   // A missing deployment capability and a per-cause verdict mean unrelated
@@ -206,4 +206,18 @@ test("causal remediation renders per cause and keeps normal actions blocked", ()
   // The card is keyed by group identity, so a refreshed group cannot inherit a
   // previous group's in-flight status, preview, or idempotency key.
   assert.match(banner, /key=\{`\$\{group\.id \?\? ""\}:\$\{group\.content_hash \?\? ""\}:/);
+});
+
+test("a cause in an unclassified pattern is reported instead of offered", () => {
+  // The resolver runs the investigation only on a recurring, systemic pattern,
+  // so a cause inside an unclassified one must not be offered a control the
+  // server would reject.
+  assert.deepEqual(causalRemediationBlockedReason(repeatedGroup, undefined, true, false), {
+    scope: "cause",
+    label: "Not eligible",
+    message: unrecurringPatternRemediationReason,
+  });
+  // Pattern eligibility defaults to true so existing callers are unaffected.
+  assert.equal(causalRemediationBlockedReason(repeatedGroup, undefined, true), null);
+  assert.equal(causalRemediationBlockedReason(repeatedGroup, undefined, true, true), null);
 });

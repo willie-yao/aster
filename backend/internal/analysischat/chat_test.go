@@ -1968,7 +1968,9 @@ func TestServicePatternChatPersistsCurrentCausalContext(t *testing.T) {
 		!slices.Equal(turn.Pattern.UnclassifiedBuilds, []string{"99"}) || turn.Pattern.Lifecycle == nil || turn.Pattern.Lifecycle.State != models.PatternLifecycleObserving {
 		t.Fatalf("restored pattern = %+v", turn.Pattern)
 	}
-	if len(turn.Pattern.RemediationInvestigations) != 2 || turn.Pattern.RemediationInvestigations[0].State != models.PatternRemediationActionable ||
+	// One summary per cause now, including the single-build one, with the
+	// investigated verdict preserved on the cause it belongs to.
+	if len(turn.Pattern.RemediationInvestigations) != 3 || turn.Pattern.RemediationInvestigations[0].State != models.PatternRemediationActionable ||
 		turn.Pattern.RemediationInvestigations[1].State != models.PatternRemediationNotInvestigated {
 		t.Fatalf("restored remediation = %+v", turn.Pattern.RemediationInvestigations)
 	}

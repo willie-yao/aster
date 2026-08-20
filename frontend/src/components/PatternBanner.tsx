@@ -59,6 +59,11 @@ export function PatternBanner({
   const { data: resolved, refetch: refetchResolved } = useResolved();
   const { features } = useCapabilities();
   const analysisOnly = Boolean(pattern.recurrence_classification);
+  // Mirrors the resolver's pattern-level gate: the investigation runs only on a
+  // pattern the engine classified as recurring and systemic.
+  const remediationPatternEligible =
+    pattern.systemic &&
+    (pattern.recurrence_classification === "shared_cause" || pattern.recurrence_classification === "mixed_causes");
   const causalGroups = pattern.causal_groups ?? [];
   // Fix proposals start from an individual failed test, so the routing is
   // only offered where a chat session could actually run one.
@@ -353,6 +358,7 @@ export function PatternBanner({
                       jobID={jobID}
                       patternID={pattern.id}
                       patternHash={pattern.content_hash}
+                      patternEligible={remediationPatternEligible}
                     />
                   )}
                   {fixCapable && (

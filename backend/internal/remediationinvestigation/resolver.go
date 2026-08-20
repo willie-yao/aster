@@ -199,7 +199,7 @@ func (r *PublishedResolver) loadPublished(_ context.Context, ref OperationRef) (
 			break
 		}
 	}
-	if group == nil || group.ContentHash != ref.CausalGroupHash || models.PatternCausalGroupHash(*group) != ref.CausalGroupHash || len(group.Builds) < 2 {
+	if group == nil || group.ContentHash != ref.CausalGroupHash || models.PatternCausalGroupHash(*group) != ref.CausalGroupHash || len(group.Builds) == 0 {
 		return publishedSubject{}, ErrOperationStale
 	}
 

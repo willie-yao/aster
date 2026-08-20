@@ -5,13 +5,13 @@ import type {
 } from "../types/dashboard";
 
 export const notInvestigatedReason =
-  "No source-grounded implementation target has been verified for this recurring cause.";
-
-export const singleBuildRemediationReason =
-  "Remediation investigation needs a cause repeated across at least two builds, so this single-build cause cannot be investigated.";
+  "No source-grounded implementation target has been verified for this cause.";
 
 export const unhashedRemediationReason =
   "This causal group predates content hashing, so it cannot be addressed. Refresh the dashboard data to enable investigation.";
+
+export const unrecurringPatternRemediationReason =
+  "Remediation investigation runs on a recurring pattern, and these failures were not classified as one, so this cause cannot be investigated yet.";
 
 export const remediationUnavailableReason =
   "Remediation investigation is unavailable on this deployment.";
@@ -64,11 +64,11 @@ const presentations: Record<
   },
   external_dependency: {
     label: "External dependency",
-    message: "The recurring cause belongs to a dependency outside the allowed destination repository.",
+    message: "The cause belongs to a dependency outside the allowed destination repository.",
   },
   environment_or_infrastructure: {
     label: "Environment or infrastructure",
-    message: "The recurring cause does not resolve to a verified repository change.",
+    message: "The cause does not resolve to a verified repository change.",
   },
   mitigation_only: {
     label: "Mitigation only",
@@ -84,7 +84,7 @@ const presentations: Record<
   },
   stale: {
     label: "Stale",
-    message: "This recurring cause is no longer the current active causal group. Refresh the dashboard before investigating again.",
+    message: "This cause is no longer the current active causal group. Refresh the dashboard before investigating again.",
   },
 };
 
@@ -117,16 +117,22 @@ const unresolvableWithoutOperation = new Set<PatternRemediationInvestigationStat
 // could act on it. Conditions are ordered from the most permanent to the most
 // deployment-scoped, and a terminal published verdict always wins because it
 // carries a real result that outlives the capability that produced it.
+//
+// patternEligible mirrors the pattern-level requirement the resolver enforces:
+// the investigation runs only on a recurring pattern, so a cause inside an
+// unclassified one is reported here rather than offered as a control the server
+// would reject.
 export function causalRemediationBlockedReason(
   group: PatternCausalGroup,
   investigation: PatternRemediationInvestigationSummary | undefined,
   investigationEnabled: boolean,
+  patternEligible = true,
 ): CausalRemediationBlockedReason | null {
-  if (group.builds.length < 2) {
-    return { scope: "cause", label: "Not eligible", message: singleBuildRemediationReason };
-  }
   if (!group.id || !group.content_hash) {
     return { scope: "cause", label: "Not addressable", message: unhashedRemediationReason };
+  }
+  if (!patternEligible) {
+    return { scope: "cause", label: "Not eligible", message: unrecurringPatternRemediationReason };
   }
   const { state } = patternRemediationPresentation(investigation);
   if (!investigationEnabled && unresolvableWithoutOperation.has(state)) {

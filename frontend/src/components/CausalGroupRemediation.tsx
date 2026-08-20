@@ -41,12 +41,17 @@ export function CausalGroupRemediation({
   jobID,
   patternID,
   patternHash,
+  patternEligible,
 }: {
   group: PatternCausalGroup;
   investigation?: PatternRemediationInvestigationSummary;
   jobID?: string;
   patternID?: string;
   patternHash?: string;
+  // The resolver runs the investigation only on a recurring pattern, so a
+  // cause inside an unclassified one must not be offered a control the server
+  // would reject.
+  patternEligible?: boolean;
 }) {
   const { features } = useCapabilities();
   const { status: authStatus, signIn } = useAuth();
@@ -68,12 +73,14 @@ export function CausalGroupRemediation({
     [groupHash, groupID, jobID, patternHash, patternID],
   );
 
-  const blocked = causalRemediationBlockedReason(group, view, operationAvailable);
+  const blocked = causalRemediationBlockedReason(group, view, operationAvailable, patternEligible);
   const presentation = patternRemediationPresentation(view);
   const message = blocked ? blocked.message : presentation.message;
   const active = activeStates.has(presentation.state);
-  const addressable = Boolean(operationRef) && group.builds.length >= 2;
-  const pollable = addressable && operationAvailable && authStatus === "authenticated";
+  const addressable = Boolean(operationRef);
+  // A blocked cause never polls: the server would reject the operation, so
+  // asking for its status would be a request that can only ever fail.
+  const pollable = !blocked && addressable && operationAvailable && authStatus === "authenticated";
 
   useEffect(() => {
     setView(investigation);

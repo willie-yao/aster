@@ -16,22 +16,31 @@ func causalPattern() PatternAnalysis {
 	return pattern
 }
 
-func TestWithDefaultPatternRemediationInvestigationsDefaultsRepeatedGroups(t *testing.T) {
+// TestWithDefaultPatternRemediationInvestigationsDefaultsEveryCausalGroup
+// verifies every cause gets a summary, including a single-build one. A cause
+// observed once can still resolve to a real defect, so eligibility follows the
+// cause rather than how many builds happened to hit it.
+func TestWithDefaultPatternRemediationInvestigationsDefaultsEveryCausalGroup(t *testing.T) {
 	pattern := causalPattern()
 	out := WithDefaultPatternRemediationInvestigations([]PatternAnalysis{pattern})
-	if len(out[0].RemediationInvestigations) != 1 {
+	if len(out[0].RemediationInvestigations) != len(out[0].CausalGroups) {
 		t.Fatalf("summaries=%+v", out[0].RemediationInvestigations)
 	}
-	summary := out[0].RemediationInvestigations[0]
-	group := out[0].CausalGroups[0]
-	if group.ID == "" || group.ContentHash == "" {
-		t.Fatalf("group identity=%+v", group)
+	for index, summary := range out[0].RemediationInvestigations {
+		group := out[0].CausalGroups[index]
+		if group.ID == "" || group.ContentHash == "" {
+			t.Fatalf("group identity=%+v", group)
+		}
+		if summary.CausalGroupID != group.ID || summary.CausalGroupHash != group.ContentHash {
+			t.Fatalf("summary=%+v group=%+v", summary, group)
+		}
+		if summary.State != PatternRemediationNotInvestigated || summary.Reason != patternRemediationNotInvestigatedReason {
+			t.Fatalf("summary=%+v", summary)
+		}
 	}
-	if summary.CausalGroupID != group.ID || summary.CausalGroupHash != group.ContentHash {
-		t.Fatalf("summary=%+v group=%+v", summary, group)
-	}
-	if summary.State != PatternRemediationNotInvestigated || summary.Reason != patternRemediationNotInvestigatedReason {
-		t.Fatalf("summary=%+v", summary)
+	// The single-build cause is the one this used to skip entirely.
+	if got := len(out[0].CausalGroups[1].Builds); got != 1 {
+		t.Fatalf("expected a single-build cause in the fixture, got %d builds", got)
 	}
 	if len(pattern.RemediationInvestigations) != 0 || pattern.CausalGroups[0].Builds[0] != "2" {
 		t.Fatalf("input mutated: %+v", pattern)
