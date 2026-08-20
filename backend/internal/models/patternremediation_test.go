@@ -170,3 +170,22 @@ func TestClonePatternAnalysesDeepCopiesCauseOwnership(t *testing.T) {
 		t.Fatalf("clone aliased the original cause location: %+v", source)
 	}
 }
+
+// TestClonePatternAnalysesDeepCopiesReportedRemediation stops a public
+// projection from sharing the reported fix with the pattern it came from, so
+// sanitizing one copy cannot reach through to another.
+func TestClonePatternAnalysesDeepCopiesReportedRemediation(t *testing.T) {
+	original := []PatternAnalysis{{CausalGroups: []PatternCausalGroup{{
+		Builds:      []string{"1"},
+		Remediation: &PatternCausalGroupRemediation{SuggestedFix: "Raise the join budget.", BuildID: "1"},
+	}}}}
+
+	cloned := clonePatternAnalyses(original)
+	cloned[0].CausalGroups[0].Remediation.SuggestedFix = "mutated"
+	cloned[0].CausalGroups[0].Remediation.BuildID = "9"
+
+	source := original[0].CausalGroups[0].Remediation
+	if source.SuggestedFix != "Raise the join budget." || source.BuildID != "1" {
+		t.Fatalf("clone aliased the original reported remediation: %+v", source)
+	}
+}

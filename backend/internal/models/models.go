@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -465,6 +466,44 @@ type PatternCausalGroup struct {
 	// from the member builds' analyses and is set only when they agree, so a
 	// group of mixed ownership stays unattributed rather than guessing.
 	CauseLocation *AnalysisCauseLocation `json:"cause_location,omitempty"`
+	// Remediation is the action this cause's own member analyses reported. Like
+	// Signature it is excluded from ContentHash, so refreshing the displayed
+	// suggestion never churns causal-group identity or invalidates a
+	// remediation investigation already running against the same cause.
+	Remediation *PatternCausalGroupRemediation `json:"remediation,omitempty"`
+}
+
+// PatternCausalGroupRemediation is the remediation a causal group's member
+// analyses reported, carried through so a cause is never shown without the
+// action its own evidence supports. It is engine-derived from the per-failure
+// analyses; the correlation model is prompted to return no remediation field.
+// It is a suggestion, not a verified target: acting on a cause still goes
+// through the remediation investigation and its deterministic verification.
+type PatternCausalGroupRemediation struct {
+	// SuggestedFix is carried verbatim from one member analysis rather than
+	// merged, because free text cannot be combined across builds the way
+	// repository ownership can. BuildID names the build it came from.
+	SuggestedFix string `json:"suggested_fix"`
+	BuildID      string `json:"build_id"`
+}
+
+// SeverityRank orders analysis severities so the most serious failure in a set
+// can be picked deterministically. Unknown severities rank lowest.
+func SeverityRank(severity string) int {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "critical":
+		return 5
+	case "high":
+		return 4
+	case "medium":
+		return 3
+	case "low":
+		return 2
+	case "transient-ignore":
+		return 1
+	default:
+		return 0
+	}
 }
 
 // PatternAnalysis is a job-level correlation across recent failed builds.

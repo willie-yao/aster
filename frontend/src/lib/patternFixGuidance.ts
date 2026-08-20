@@ -29,7 +29,14 @@ export function causalGroupFixTarget(
   runs: BuildResult[],
 ): CausalGroupFixTarget | null {
   const affectedBuilds = new Set(group.builds);
-  for (const run of runs) {
+  // The briefing shows the suggested fix from one specific build, so open that
+  // build's analysis when it can start a Fix investigation. Otherwise any
+  // eligible member still gives the user a way in.
+  const preferred = group.remediation?.build_id;
+  const ordered = preferred
+    ? [...runs].sort((a, b) => Number(b.build_id === preferred) - Number(a.build_id === preferred))
+    : runs;
+  for (const run of ordered) {
     if (!affectedBuilds.has(run.build_id)) continue;
     const occurrences = run.test_cases;
     const representative = representativeAnalyzedFailure(occurrences);

@@ -237,6 +237,15 @@ export interface PatternCausalGroup {
   // for its own recurrence memory; the UI does not render it.
   signature?: string;
   cause_location?: AnalysisCauseLocation;
+  // The action this cause's own member analyses reported. A suggestion, not a
+  // verified target: acting on a cause still goes through the remediation
+  // investigation, which verifies deterministically.
+  remediation?: PatternCausalGroupRemediation;
+}
+
+export interface PatternCausalGroupRemediation {
+  suggested_fix: string;
+  build_id: string;
 }
 
 export type PatternRecurrence =

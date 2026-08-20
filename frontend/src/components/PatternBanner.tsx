@@ -33,6 +33,7 @@ import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
 import { CausalGroupRemediation } from "./CausalGroupRemediation";
 import { CausalGroupFixRouting } from "./CausalGroupFixRouting";
+import { CausalGroupReportedFix } from "./CausalGroupReportedFix";
 import { PatternFixGuidance } from "./PatternFixGuidance";
 import { causalGroupFixTarget, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
 import { describeRecurrence, recurrenceForBuilds } from "../lib/recurrence";
@@ -362,6 +363,9 @@ export function PatternBanner({
                       externalCause={externalCause(group.cause_location)}
                     />
                   )}
+                  {/* Published data, so this stays available where the Fix and
+                      remediation-investigation capabilities are not. */}
+                  <CausalGroupReportedFix remediation={group.remediation} fileCtx={patternFileCtx} />
                 </Box>
               </Box>
             ))}

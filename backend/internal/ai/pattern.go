@@ -1053,8 +1053,10 @@ func collectRelevantFiles(failures []PatternFailure) []string {
 func buildPatternAnalysis(subject string, builds int, p patternResponse, failures []PatternFailure) *models.PatternAnalysis {
 	relevantFiles := collectRelevantFiles(failures)
 	locationByBuild := make(map[string]*models.AnalysisCauseLocation, len(failures))
+	failureByBuild := make(map[string]PatternFailure, len(failures))
 	for _, failure := range failures {
 		locationByBuild[failure.BuildID] = failure.CauseLocation
+		failureByBuild[failure.BuildID] = failure
 	}
 	groups := make([]models.PatternCausalGroup, 0, len(p.Groups))
 	repeated := make([]patternCausalGroup, 0, len(p.Groups))
@@ -1063,6 +1065,7 @@ func buildPatternAnalysis(subject string, builds int, p patternResponse, failure
 		groups = append(groups, models.PatternCausalGroup{
 			Builds: append([]string(nil), group.Builds...), RootCause: group.RootCause, Confidence: group.Confidence,
 			CauseLocation: groupCauseLocation(group.Builds, locationByBuild),
+			Remediation:   groupRemediation(group.Builds, failureByBuild),
 		})
 		if len(group.Builds) < 2 {
 			continue
@@ -1129,6 +1132,32 @@ func groupCauseLocation(builds []string, byBuild map[string]*models.AnalysisCaus
 		locations = append(locations, byBuild[build])
 	}
 	return MergeCauseLocations(locations)
+}
+
+// groupRemediation carries the remediation reported by the causal group's most
+// severe analyzed member. Free text cannot be merged across builds the way
+// ownership can, so one build's fix is carried verbatim and named rather than
+// combined into a claim no single analysis made. Builds are walked in order and
+// ties keep the first, so the choice is deterministic.
+func groupRemediation(builds []string, byBuild map[string]PatternFailure) *models.PatternCausalGroupRemediation {
+	var best PatternFailure
+	found := false
+	for _, build := range builds {
+		failure, ok := byBuild[build]
+		if !ok || strings.TrimSpace(failure.SuggestedFix) == "" {
+			continue
+		}
+		if !found || models.SeverityRank(failure.Severity) > models.SeverityRank(best.Severity) {
+			best, found = failure, true
+		}
+	}
+	if !found {
+		return nil
+	}
+	return &models.PatternCausalGroupRemediation{
+		SuggestedFix: strings.TrimSpace(best.SuggestedFix),
+		BuildID:      best.BuildID,
+	}
 }
 
 func patternConfidenceRank(confidence string) int {
